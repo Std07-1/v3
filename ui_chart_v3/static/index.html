@@ -21,6 +21,11 @@
       min-height: 100vh;
     }
 
+    body.ui-debug-off #diag,
+    body.ui-debug-off .follow-toggle {
+      display: none;
+    }
+
     #diag {
       position: absolute;
       top: 6px;
@@ -88,14 +93,14 @@
       display: inline-flex;
       flex-direction: column;
       gap: 6px;
-      padding: 8px 10px;
+      padding: 7px 9px;
       border-radius: 12px;
       border: 1px solid rgba(0, 0, 0, 0.12);
       background: rgba(255, 255, 255, 0.3);
       backdrop-filter: blur(10px);
       font-size: 12px;
       color: #111;
-      max-width: 220px;
+      max-width: 200px;
       pointer-events: auto;
     }
 
@@ -288,7 +293,7 @@
       padding: 8px;
       border-radius: 14px;
       border: 1px solid rgba(0, 0, 0, 0.12);
-      background: rgba(255, 255, 255, 0.2);
+      background: rgba(255, 255, 255, 0.12);
       color: #111;
       box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
       display: none;
@@ -307,9 +312,9 @@
       left: 0;
       z-index: 29;
       pointer-events: auto;
-      width: var(--hud-width, 168px);
-      min-width: var(--hud-width, 168px);
-      max-width: var(--hud-width, 168px);
+      width: var(--hud-width, 160px);
+      min-width: var(--hud-width, 160px);
+      max-width: var(--hud-width, 160px);
       display: none;
     }
 
@@ -406,7 +411,7 @@
     }
 
     body.dark .tool-menu {
-      background: rgba(11, 15, 20, 0.6);
+      background: rgba(11, 15, 20, 0.28);
       color: #d5d5d5;
       border-color: rgba(43, 56, 70, 0.8);
       box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
@@ -580,7 +585,7 @@
 
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
   <script src="/chart_adapter_lite.js?v=20260204-11"></script>
-  <script src="/app.js?v=20260204-21"></script>
+  <script src="/app.js?v=20260204-24"></script>
 </body>
 
 </html>

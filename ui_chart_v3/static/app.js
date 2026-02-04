@@ -17,10 +17,7 @@ const elDiagBars = document.getElementById('diag-bars');
 const elDiagError = document.getElementById('diag-error');
 const elDiagUtc = document.getElementById('diag-utc');
 const elDiag = document.getElementById('diag');
-const elLastbarInline = document.getElementById('lastbar-inline');
-const elDrawer = document.getElementById('top-drawer');
 const elDrawerHandle = document.getElementById('drawer-handle');
-const elDrawerContent = document.getElementById('drawer-content');
 const elFloatingTools = document.getElementById('floating-tools');
 const elHudMenuSymbol = document.getElementById('hud-menu-symbol');
 const elHudMenuTf = document.getElementById('hud-menu-tf');
@@ -165,6 +162,7 @@ async function loadUiConfig() {
 
 function applyUiDebug() {
   const show = Boolean(uiDebugEnabled);
+  document.body.classList.toggle('ui-debug-off', !show);
   if (elDiag) elDiag.style.display = show ? '' : 'none';
   if (elFollow) elFollow.closest('.follow-toggle')?.style.setProperty('display', show ? '' : 'none');
 }
@@ -260,6 +258,10 @@ function openHudMenu(selectId) {
   const select = document.getElementById(selectId);
   const menu = selectId === 'symbol' ? elHudMenuSymbol : elHudMenuTf;
   if (!select || !menu) return;
+  if (menu.classList.contains('open')) {
+    closeHudMenus();
+    return;
+  }
   closeAllToolMenus();
   buildHudMenu(select, menu);
   menu.classList.add('open');
@@ -450,16 +452,6 @@ function attachHudWheelControls() {
   }
 }
 
-function updateDrawerOffset() {
-  if (!elDrawer || !elDrawerContent) return;
-  const applyOffset = () => {
-    const isCollapsed = elDrawer.classList.contains('collapsed');
-    const offset = isCollapsed ? 0 : elDrawerContent.getBoundingClientRect().height;
-    document.documentElement.style.setProperty('--drawer-offset', `${Math.round(offset)}px`);
-  };
-  applyOffset();
-  requestAnimationFrame(() => applyOffset());
-}
 
 async function loadSymbols() {
   const data = await apiGet('/api/symbols');
@@ -541,6 +533,9 @@ async function pollLatest() {
 
   try {
     const data = await apiGet(`/api/latest?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=500&after_open_ms=${lastOpenMs}`);
+    diag.lastError = '';
+    diag.pollAt = Date.now();
+    updateDiag(tf);
     const bars = data.bars || [];
     if (bars.length === 0) return;
 
@@ -625,13 +620,11 @@ async function init() {
   updateToolbarValue('tf');
   updateHudValues();
   updateStreamingIndicator();
-  updateDrawerOffset();
   resetPolling();
   updateUtcNow();
   setInterval(updateUtcNow, 1000);
 
   window.addEventListener('resize', () => {
-    updateDrawerOffset();
     syncHudMenuWidth();
   });
 

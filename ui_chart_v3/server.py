@@ -33,6 +33,20 @@ def _safe_int(v: str | None, default: int) -> int:
         return default
 
 
+def _parse_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("1", "true", "yes", "y", "on"):
+            return True
+        if v in ("0", "false", "no", "n", "off", ""):
+            return False
+    return default
+
+
 def _sym_dir(symbol: str) -> str:
     return symbol.replace("/", "_")
 
@@ -169,7 +183,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 try:
                     with open(config_path, encoding="utf-8") as f:
                         cfg = json.load(f)
-                    ui_debug = bool(cfg.get("ui_debug", True))
+                    ui_debug = _parse_bool(cfg.get("ui_debug", True), True)
                 except Exception:
                     ui_debug = True
             self._json(200, {"ok": True, "ui_debug": ui_debug})
