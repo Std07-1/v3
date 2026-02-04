@@ -222,6 +222,11 @@
       align-items: center;
     }
 
+    .toolbar-group[data-select="symbol"],
+    .toolbar-group[data-select="tf"] {
+      position: static;
+    }
+
     .tool-button {
       display: inline-flex;
       align-items: center;
@@ -234,6 +239,11 @@
       font-size: 12px;
       line-height: 1;
       backdrop-filter: blur(6px);
+    }
+
+    .toolbar-group[data-select="symbol"] .tool-button,
+    .toolbar-group[data-select="tf"] .tool-button {
+      display: none;
     }
 
     .tool-icon {
@@ -274,16 +284,48 @@
       position: absolute;
       top: calc(100% + 6px);
       left: 0;
-      min-width: 140px;
-      padding: 6px;
-      border-radius: 12px;
+      min-width: 150px;
+      padding: 8px;
+      border-radius: 14px;
       border: 1px solid rgba(0, 0, 0, 0.12);
-      background: rgba(255, 255, 255, 0.6);
+      background: rgba(255, 255, 255, 0.2);
       color: #111;
       box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
       display: none;
       z-index: 20;
-      backdrop-filter: blur(10px);
+      backdrop-filter: blur(12px);
+      max-height: 156px;
+      overflow-y: auto;
+      scrollbar-width: none;
+      -webkit-mask-image: linear-gradient(to bottom, transparent, #000 12px, #000 calc(100% - 12px), transparent);
+      mask-image: linear-gradient(to bottom, transparent, #000 12px, #000 calc(100% - 12px), transparent);
+    }
+
+    .hud-menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      z-index: 29;
+      pointer-events: auto;
+      width: var(--hud-width, 168px);
+      min-width: var(--hud-width, 168px);
+      max-width: var(--hud-width, 168px);
+      display: none;
+    }
+
+    .hud-menu.open {
+      display: block;
+    }
+
+    .toolbar-group[data-select="symbol"] .tool-menu,
+    .toolbar-group[data-select="tf"] .tool-menu {
+      top: calc(100% + 6px);
+      left: 0;
+    }
+
+    .tool-menu::-webkit-scrollbar {
+      width: 0;
+      height: 0;
     }
 
     .toolbar-group.open .tool-menu {
@@ -292,9 +334,9 @@
 
     .tool-option {
       width: 100%;
-      padding: 6px 8px;
+      padding: 8px 10px;
       border: 0;
-      border-radius: 8px;
+      border-radius: 10px;
       background: transparent;
       text-align: left;
       color: inherit;
@@ -439,6 +481,9 @@
         </div>
       </div>
 
+      <div id="hud-menu-symbol" class="tool-menu hud-menu" role="listbox"></div>
+      <div id="hud-menu-tf" class="tool-menu hud-menu" role="listbox"></div>
+
       <div id="floating-tools" class="floating-tools">
         <div class="toolbar-group" data-select="symbol">
           <button class="tool-button" type="button" aria-label="Symbol">
@@ -535,7 +580,7 @@
 
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
   <script src="/chart_adapter_lite.js?v=20260204-11"></script>
-  <script src="/app.js?v=20260204-17"></script>
+  <script src="/app.js?v=20260204-21"></script>
 </body>
 
 </html>

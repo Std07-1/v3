@@ -22,6 +22,8 @@ const elDrawer = document.getElementById('top-drawer');
 const elDrawerHandle = document.getElementById('drawer-handle');
 const elDrawerContent = document.getElementById('drawer-content');
 const elFloatingTools = document.getElementById('floating-tools');
+const elHudMenuSymbol = document.getElementById('hud-menu-symbol');
+const elHudMenuTf = document.getElementById('hud-menu-tf');
 const elHud = document.getElementById('hud');
 const elHudSymbol = document.getElementById('hud-symbol');
 const elHudTf = document.getElementById('hud-tf');
@@ -133,6 +135,14 @@ function updateHudValues() {
     elHudTf.textContent = nextTf;
     lastHudTf = nextTf;
   }
+  syncHudMenuWidth();
+}
+
+function syncHudMenuWidth() {
+  if (!elHud || !elHud.parentElement) return;
+  const width = Math.round(elHud.getBoundingClientRect().width || 0);
+  if (!width) return;
+  elHud.parentElement.style.setProperty('--hud-width', `${width}px`);
 }
 
 async function apiGet(url) {
@@ -235,12 +245,38 @@ function getToolbarGroup(selectId) {
   return document.querySelector(`.toolbar-group[data-select="${selectId}"], .toolbar-group[data-toggle="${selectId}"]`);
 }
 
+function openToolbarMenu(selectId) {
+  const group = getToolbarGroup(selectId);
+  if (!group) return;
+  if (elFloatingTools) {
+    elFloatingTools.classList.remove('is-hidden');
+  }
+  closeAllToolMenus(selectId);
+  buildToolbarMenu(selectId);
+  group.classList.add('open');
+}
+
+function openHudMenu(selectId) {
+  const select = document.getElementById(selectId);
+  const menu = selectId === 'symbol' ? elHudMenuSymbol : elHudMenuTf;
+  if (!select || !menu) return;
+  closeAllToolMenus();
+  buildHudMenu(select, menu);
+  menu.classList.add('open');
+}
+
+function closeHudMenus() {
+  if (elHudMenuSymbol) elHudMenuSymbol.classList.remove('open');
+  if (elHudMenuTf) elHudMenuTf.classList.remove('open');
+}
+
 function closeAllToolMenus(exceptId = null) {
   for (const id of TOOLBAR_MENU_IDS) {
     if (id === exceptId) continue;
     const group = getToolbarGroup(id);
     if (group) group.classList.remove('open');
   }
+  closeHudMenus();
 }
 
 function updateToolbarValue(selectId) {
@@ -303,6 +339,32 @@ function buildToolbarMenu(selectId) {
   updateToolbarValue(selectId);
 }
 
+function buildHudMenu(select, menu) {
+  menu.innerHTML = '';
+  const options = Array.from(select.options || []);
+  if (options.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'tool-option';
+    empty.textContent = '—';
+    menu.appendChild(empty);
+    return;
+  }
+  for (const opt of options) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tool-option';
+    btn.dataset.value = opt.value;
+    btn.textContent = opt.textContent;
+    if (opt.value === select.value) btn.classList.add('active');
+    btn.addEventListener('click', () => {
+      select.value = opt.value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      closeHudMenus();
+    });
+    menu.appendChild(btn);
+  }
+}
+
 function setupToolbarSelect(selectId) {
   const select = document.getElementById(selectId);
   const group = getToolbarGroup(selectId);
@@ -317,7 +379,7 @@ function setupToolbarSelect(selectId) {
         select.dispatchEvent(new Event('change', { bubbles: true }));
         updateToolbarValue(selectId);
       });
-    } else {
+    } else if (selectId !== 'symbol' && selectId !== 'tf') {
       button.addEventListener('click', (event) => {
         event.stopPropagation();
         const isOpen = group.classList.contains('open');
@@ -349,6 +411,7 @@ function initToolbars() {
     });
   }
   attachHudWheelControls();
+  syncHudMenuWidth();
 }
 
 function cycleSelectValue(select, direction) {
@@ -367,6 +430,11 @@ function attachHudWheelControls() {
       const direction = event.deltaY > 0 ? 1 : -1;
       cycleSelectValue(elSymbol, direction);
     }, { passive: false });
+    elHudSymbol.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openHudMenu('symbol');
+    });
   }
   if (elHudTf) {
     elHudTf.addEventListener('wheel', (event) => {
@@ -374,6 +442,11 @@ function attachHudWheelControls() {
       const direction = event.deltaY > 0 ? 1 : -1;
       cycleSelectValue(elTf, direction);
     }, { passive: false });
+    elHudTf.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openHudMenu('tf');
+    });
   }
 }
 
@@ -559,6 +632,7 @@ async function init() {
 
   window.addEventListener('resize', () => {
     updateDrawerOffset();
+    syncHudMenuWidth();
   });
 
   if (elReload) {
