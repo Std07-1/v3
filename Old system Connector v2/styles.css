@@ -1,0 +1,2012 @@
+* {
+    box-sizing: border-box;
+}
+
+:root {
+    --chart-height: 700px;
+}
+
+body {
+    margin: 0;
+    font-family: "Segoe UI", Tahoma, sans-serif;
+    background: #0b0c10;
+    color: #f5f5f5;
+}
+
+.ui-view {
+    display: block;
+}
+
+.ui-view--hidden {
+    display: none;
+}
+
+.chart-slot {
+    display: block;
+}
+
+.mobile-header {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid #1f2833;
+    background: #11131a;
+}
+
+.mobile-header__left,
+.mobile-header__right {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 10px;
+}
+
+.mobile-header__symbol {
+    font-weight: 700;
+    letter-spacing: 0.2px;
+}
+
+.mobile-header__price {
+    font-variant-numeric: tabular-nums;
+}
+
+.mobile-header__delta {
+    font-variant-numeric: tabular-nums;
+    opacity: 0.9;
+}
+
+.mobile-header__state {
+    font-variant-numeric: tabular-nums;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid #1f2833;
+    background: #11131a;
+    color: #f5f5f5;
+    opacity: 0.95;
+    font-size: 0.85rem;
+    line-height: 1.2;
+    max-width: 44vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* FAB прибрано: mobile-v2 керується через “⋮” */
+
+.mobile-icon-btn {
+    border: 1px solid #3a3f4b;
+    background: #1f2833;
+    color: #f5f5f5;
+    border-radius: 10px;
+    padding: 8px 10px;
+    cursor: pointer;
+}
+
+.bottom-nav {
+    display: none;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border-top: 1px solid #1f2833;
+    background: #11131a;
+    padding: 8px 10px;
+    gap: 10px;
+    justify-content: space-between;
+    z-index: 50;
+}
+
+.bottom-nav__btn {
+    flex: 1;
+    border: 1px solid #3a3f4b;
+    background: #1f2833;
+    color: #f5f5f5;
+    border-radius: 12px;
+    padding: 10px 8px;
+    cursor: pointer;
+}
+
+.bottom-nav__btn[aria-current="page"] {
+    border-color: #304055;
+}
+
+.filters-drawer {
+    display: none;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: #11131a;
+    border-top: 1px solid #1f2833;
+    z-index: 60;
+}
+
+.tf-sheet {
+    display: none;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: #11131a;
+    border-top: 1px solid #1f2833;
+    z-index: 60;
+}
+
+.tf-sheet.is-open {
+    display: block;
+}
+
+.filters-drawer.is-open {
+    display: block;
+}
+
+.filters-drawer__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-bottom: 1px solid #1f2833;
+}
+
+.filters-drawer__title {
+    font-weight: 700;
+}
+
+.filters-drawer__body {
+    padding: 12px;
+    display: grid;
+    gap: 14px;
+}
+
+.filters-group {
+    display: grid;
+    gap: 10px;
+}
+
+.filters-group--grid {
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.drawer-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.filters-label {
+    display: block;
+    opacity: 0.85;
+    margin-bottom: 6px;
+}
+
+.tf-sheet__body {
+    padding: 10px 12px;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.tf-chip {
+    border: 1px solid #3a3f4b;
+    background: #1f2833;
+    color: #f5f5f5;
+    border-radius: 10px;
+    padding: 8px 6px;
+    font-weight: 700;
+    font-size: 0.82rem;
+    letter-spacing: 0.02em;
+}
+
+.tf-chip:active {
+    transform: translateY(1px);
+}
+
+.card-overview-events .card-title {
+    margin-bottom: 10px;
+}
+
+.overview-events-list {
+    display: grid;
+    gap: 8px;
+}
+
+.overview-event {
+    display: grid;
+    grid-template-columns: 72px 1fr auto;
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid #1f2833;
+    border-radius: 12px;
+    background: #131722;
+}
+
+.overview-event__time {
+    font-variant-numeric: tabular-nums;
+    opacity: 0.85;
+}
+
+.overview-event__title {
+    font-weight: 650;
+}
+
+.overview-event__price {
+    font-variant-numeric: tabular-nums;
+    opacity: 0.9;
+}
+
+@media (min-width: 769px) {
+    #view-overview {
+        display: none;
+    }
+
+    #view-chart {
+        display: contents;
+    }
+
+    #chart-slot {
+        display: contents;
+    }
+}
+
+.app-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.45rem 0.75rem;
+    border-bottom: 1px solid #1f2833;
+    background: #11131a;
+}
+
+.desktop-header__left {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.75rem;
+    min-width: 0;
+}
+
+.desktop-header__core {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    font-variant-numeric: tabular-nums;
+    min-width: 0;
+}
+
+.desktop-header__symbol {
+    font-weight: 650;
+    letter-spacing: 0.02em;
+}
+
+.desktop-header__price {
+    font-weight: 650;
+}
+
+.desktop-header__state {
+    color: #9da5b4;
+    max-width: 34vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.desktop-header__delta {
+    color: #9da5b4;
+    white-space: nowrap;
+}
+
+.desktop-header__right {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.6rem;
+    min-width: 0;
+}
+
+.header-left {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.5rem;
+}
+
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+header label {
+    margin-right: 0.25rem;
+    font-weight: 600;
+}
+
+header select,
+header button {
+    margin-right: 0.5rem;
+    padding: 0.25rem 0.55rem;
+    min-height: 32px;
+    border-radius: 4px;
+    border: 1px solid #3a3f4b;
+    background: #1f2833;
+    color: #f5f5f5;
+}
+
+.app-header label,
+.app-header select,
+.app-header button {
+    font-size: 0.85rem;
+    line-height: 1.1;
+}
+
+header button {
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+
+header button:hover {
+    background: #304055;
+}
+
+header button:focus-visible,
+header select:focus-visible {
+    outline: 2px solid rgba(91, 118, 183, 0.9);
+    outline-offset: 2px;
+}
+
+.status-pill {
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-weight: 600;
+    margin-right: 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.header-primary-status .status-pill,
+.header-right .status-pill {
+    margin-right: 0;
+}
+
+.status-pill--meta {
+    color: #9da5b4;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+    font-variant-numeric: tabular-nums;
+}
+
+.status-pill__label {
+    opacity: 0.9;
+    margin-right: 0.35rem;
+}
+
+.status-pill__value {
+    color: #d1d4dc;
+}
+
+.status-connected {
+    background: rgba(40, 167, 69, 0.2);
+    color: #28a745;
+}
+
+.status-disconnected {
+    background: rgba(220, 53, 69, 0.25);
+    color: #ff6b6b;
+}
+
+.status-reconnecting {
+    background: rgba(255, 193, 7, 0.25);
+    color: #ffc107;
+}
+
+.status-stale {
+    background: rgba(108, 117, 125, 0.25);
+    color: #ced4da;
+}
+
+.status-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.85rem;
+    color: #9da5b4;
+}
+
+.status-meta--secondary {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem 0.6rem;
+}
+
+.status-meta__item {
+    white-space: nowrap;
+}
+
+.app-main {
+    padding: 0.55rem;
+    padding-top: 0.3rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 0.35rem;
+}
+
+/* Нижні таблиці/панелі — лише для debug_ui=1. */
+.debug-only {
+    display: none;
+}
+
+body.debug-ui .debug-only {
+    display: block;
+}
+
+/* Desktop/Prod Chart: у debug=off віддаємо всю робочу висоту під чарт. */
+body.ui-view-chart:not(.debug-ui) {
+    height: 100vh;
+    min-height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+body.ui-view-chart:not(.debug-ui) .app-main {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+body.ui-view-chart:not(.debug-ui) .card-chart {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+body.ui-view-chart:not(.debug-ui) .chart-overlay-shell {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+body.ui-view-chart:not(.debug-ui) .chart-demo-container {
+    height: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.summary {
+    grid-column: 1 / -1;
+    background: #131722;
+    border: 1px solid #1f2833;
+    border-radius: 4px;
+    padding: 0.25rem;
+}
+
+body.summary-collapsed .summary {
+    display: none !important;
+}
+
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.15rem 0.3rem;
+}
+
+.label {
+    display: block;
+    font-size: 0.7rem;
+    color: #9da5b4;
+    line-height: 1.1;
+}
+
+.value {
+    font-size: 0.85rem;
+    font-weight: 600;
+    line-height: 1.15;
+}
+
+.summary-hint {
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1.15;
+    color: #9da5b4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.summary-badge {
+    display: inline-block;
+    padding: 0.06rem 0.32rem;
+    border-radius: 999px;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    background-color: #1f2933;
+    color: #e5e7eb;
+}
+
+.summary-badge--up {
+    background-color: #064e3b;
+    color: #bbf7d0;
+}
+
+.summary-badge--down {
+    background-color: #7f1d1d;
+    color: #fee2e2;
+}
+
+.summary-badge--long {
+    background-color: #065f46;
+    color: #a7f3d0;
+}
+
+.summary-badge--short {
+    background-color: #7f1d1d;
+    color: #fecaca;
+}
+
+.summary-badge--manipulation {
+    background-color: #4b5563;
+    color: #f9fafb;
+}
+
+.summary-badge--distribution,
+.summary-badge--accumulation {
+    background-color: #111827;
+    color: #e5e7eb;
+}
+
+.summary-badge--dev_up {
+    background-color: rgba(34, 197, 94, 0.15);
+    color: #a7f3d0;
+}
+
+.summary-badge--dev_down {
+    background-color: rgba(248, 113, 113, 0.15);
+    color: #fecaca;
+}
+
+.panel {
+    background: #131722;
+    border: 1px solid #1f2833;
+    border-radius: 6px;
+    padding: 0.25rem 0.45rem 0.45rem;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+
+    /* Типографіка (стандарт):
+       A: "Символ" (заголовки)
+       B: "Символ" (лейбли/хедери)
+       C: "символ" (значення/контент)
+    */
+    --typo-a-size: 0.95rem;
+    --typo-b-size: 0.72rem;
+    --typo-c-size: 0.82rem;
+}
+
+.panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.panel-header h3 {
+    margin: 0;
+    font-size: var(--typo-a-size);
+    font-weight: 700;
+    line-height: 1.15;
+}
+
+.panel table {
+    table-layout: fixed;
+}
+
+/* Zones: 4 колонки мають підлаштовуватись під ширину вікна (без жорсткого fixed). */
+table.zones-table {
+    table-layout: auto;
+}
+
+.panel th,
+.panel td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 0.3rem;
+    font-size: 0.9rem;
+}
+
+th,
+td {
+    padding: 0.3rem 0.4rem;
+    border-bottom: 1px solid #1f2833;
+}
+
+th {
+    text-align: left;
+    color: #9da5b4;
+    font-size: 0.8rem;
+}
+
+.panel th {
+    font-size: var(--typo-b-size);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.panel td {
+    font-size: var(--typo-c-size);
+}
+
+tr:last-child td {
+    border-bottom: none;
+}
+
+tbody tr:nth-child(odd) {
+    background: rgba(255, 255, 255, 0.015);
+}
+
+td.numeric {
+    font-family: "Roboto Mono", Consolas, monospace;
+    text-align: right;
+}
+
+tr.dir-long {
+    background: rgba(40, 167, 69, 0.08);
+}
+
+tr.dir-short {
+    background: rgba(220, 53, 69, 0.08);
+}
+
+tr.role-primary {
+    border-left: 3px solid #ffc107;
+}
+
+tr.event-row-last-bos {
+    outline: 1px solid #1d70b8;
+}
+
+tr.event-row-last-choch {
+    outline: 1px solid #f3722c;
+}
+
+tbody tr.empty-row td {
+    text-align: center;
+    font-style: italic;
+    color: #6c757d;
+}
+
+@media (max-width: 768px) {
+
+    html,
+    body {
+        height: var(--app-vh, 100dvh);
+        overflow: hidden;
+    }
+
+    body {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .app-header {
+        flex-direction: column;
+        gap: 0.75rem;
+        align-items: flex-start;
+    }
+
+    header select,
+    header button {
+        margin-right: 0.5rem;
+    }
+
+    .summary-grid {
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    }
+
+    .app-header {
+        display: none;
+    }
+
+    body.ui-view-overview #mobile-header-overview,
+    body.ui-view-chart #mobile-header-chart {
+        display: flex;
+    }
+
+    .mobile-header {
+        flex: 0 0 48px;
+        height: 48px;
+        padding: 6px 10px;
+    }
+
+    .mobile-header__left,
+    .mobile-header__right {
+        align-items: center;
+    }
+
+    .mobile-icon-btn {
+        padding: 6px 8px;
+    }
+
+    .bottom-nav {
+        display: flex;
+        position: static;
+        flex: 0 0 52px;
+        height: 52px;
+        padding: 6px 8px;
+        gap: 6px;
+    }
+
+    .bottom-nav__btn {
+        padding: 6px 8px;
+        font-size: 0.85rem;
+        border-radius: 12px;
+    }
+
+    .app-main {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        padding-bottom: 0;
+    }
+
+    body.ui-view-overview #view-chart,
+    body.ui-view-chart #view-overview {
+        display: none;
+    }
+
+    /* Summary на мобільному має реально перемикатись кнопкою Σ (через body.summary-collapsed). */
+
+    /* Мобільний Chart: чарт займає увесь доступний простір між шапкою і tab-bar. */
+    body.ui-view-chart .app-main {
+        overflow: hidden;
+    }
+
+    body.ui-view-chart #view-chart {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+
+    /* Важливо: `.card-chart` на мобілці фізично переноситься всередину `#chart-slot`.
+       Тому саме слот має бути flex:1, інакше чарт не має стабільної висоти і може «плисти». */
+    body.ui-view-chart #chart-slot {
+        display: flex;
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+
+    body.ui-view-chart #chart-slot .card-chart {
+        flex: 1 1 auto;
+        min-height: 0;
+        width: 100%;
+    }
+
+    body.ui-view-chart .card-chart {
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+
+    body.ui-view-chart .chart-overlay-shell {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+
+    body.ui-view-chart .chart-demo-container {
+        flex: 1 1 auto;
+        min-height: 0;
+        transition: none;
+    }
+
+    /* Мобільний Chart: максимально чистий графік (без важких таблиць/панелей). */
+    body.ui-view-chart .panel,
+    body.ui-view-chart .card-ohlcv,
+    body.ui-view-chart .card-overview-events {
+        display: none;
+    }
+
+    body.ui-view-chart .card-chart__header {
+        display: none;
+    }
+
+    body.ui-view-chart .card-chart {
+        padding: 0;
+        border: none;
+        background: transparent;
+    }
+
+    body.ui-view-chart .chart-demo-container {
+        border: none;
+        background: transparent;
+        border-radius: 0;
+    }
+
+    body.ui-view-overview {
+        --chart-height: var(--mobile-chart-height, 260px);
+    }
+
+    body.ui-view-chart {
+        --chart-height: var(--mobile-chart-height, 520px);
+    }
+
+    body.ui-view-chart .chart-height-control {
+        display: none;
+    }
+
+    body.ui-view-chart .app-main {
+        padding-top: 0;
+    }
+
+    .chart-layer-menu-btn,
+    .chart-layer-menu {
+        display: none !important;
+    }
+
+    /* x2 на мобільному не підтримуємо (і виглядає як зламана кнопка). */
+    #chart-size-toggle-btn {
+        display: none !important;
+    }
+
+    /* Mobile Layout v2 (chart-first + bottom sheets + FAB), тільки при флагу в JS (body.mobile-v2). */
+    body.mobile-v2 .bottom-nav {
+        display: none;
+    }
+
+    body.mobile-v2 #m-chart-back {
+        display: none;
+    }
+
+    body.mobile-v2 .sheet {
+        display: block;
+        left: 8px;
+        right: 8px;
+        bottom: auto;
+        top: calc(var(--mobile-header-h, 48px) + 6px);
+        transform: translateY(-8px);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.12s ease, transform 0.12s ease;
+        max-height: calc(var(--app-vh, 100dvh) - var(--mobile-header-h, 48px) - 14px);
+        border-radius: 12px;
+        overflow: hidden;
+    }
+
+    body.mobile-v2 .sheet.is-open {
+        transform: translateY(0);
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    /* Mobile v2: прозора top-sheet стилістика як у tooltip (S6/hover). */
+    body.mobile-v2 .filters-drawer,
+    body.mobile-v2 .tf-sheet {
+        background: rgba(22, 32, 74, 0.14);
+        border: 1px solid rgba(91, 118, 183, 0.14);
+        backdrop-filter: blur(2px);
+    }
+
+    body.mobile-v2 .summary-sheet {
+        background: rgba(22, 32, 74, 0.14);
+        border: 1px solid rgba(91, 118, 183, 0.14);
+        backdrop-filter: blur(2px);
+    }
+
+    body.mobile-v2 .filters-drawer__header {
+        padding: 6px 8px;
+        justify-content: flex-end;
+        border-bottom: 1px solid rgba(91, 118, 183, 0.09);
+    }
+
+    /* Mobile v2: Filters закриваємо тапом поза шторкою або повторним натисканням ⋮ — хрестик не потрібен. */
+    body.mobile-v2 #filters-drawer .filters-drawer__header {
+        display: none;
+    }
+
+    body.mobile-v2 .filters-drawer__title {
+        font-size: 0.85rem;
+        opacity: 0.95;
+    }
+
+    body.mobile-v2 .filters-drawer__body {
+        padding: 8px;
+    }
+
+    body.mobile-v2 .filters-group {
+        gap: 6px;
+    }
+
+    body.mobile-v2 .filters-group--grid {
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    }
+
+    body.mobile-v2 .drawer-toggle {
+        gap: 6px;
+    }
+
+    body.mobile-v2 .tf-sheet__body {
+        padding: 6px;
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 6px;
+    }
+
+    body.mobile-v2 .tf-chip {
+        border-radius: 10px;
+        padding: 6px 8px;
+        white-space: nowrap;
+    }
+
+    /* Mobile v2: TF sheet як компактний popover на рівні кнопки TF. */
+    body.mobile-v2 .tf-sheet {
+        left: var(--tf-popover-left, 8px);
+        top: var(--tf-popover-top, calc(var(--mobile-header-h, 48px) + 6px));
+        right: auto;
+        bottom: auto;
+        max-height: none;
+        width: auto;
+        transform: none;
+        transition: opacity 0.12s ease;
+    }
+
+    body.mobile-v2 .tf-sheet.is-open {
+        transform: none;
+    }
+
+    /* Summary як top-sheet: не займає місце у layout і відкривається тільки через Σ. */
+    body.mobile-v2 .summary-sheet {
+        position: fixed;
+        left: 8px;
+        right: 8px;
+        bottom: auto;
+        top: calc(var(--mobile-header-h, 48px) + 6px);
+        z-index: 58;
+        border-radius: 12px;
+        overflow: hidden;
+        transform: translateY(-8px);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.12s ease, transform 0.12s ease;
+        max-height: calc(var(--app-vh, 100dvh) - var(--mobile-header-h, 48px) - 14px);
+    }
+
+    body.mobile-v2 .summary-sheet.is-open {
+        transform: translateY(0);
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    body.mobile-v2 .summary-sheet .summary-grid {
+        padding: 8px;
+        gap: 8px;
+        grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    }
+
+    body.mobile-v2 .filters-drawer__body {
+        max-height: calc(var(--app-vh, 100dvh) * 0.6);
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body.mobile-v2 .sheet {
+        transition: none;
+        transform: none;
+    }
+
+    body.mobile-v2 .summary-sheet {
+        transition: none;
+        transform: none;
+    }
+}
+
+.card {
+    grid-column: 1 / -1;
+    background: #131722;
+    border: 1px solid #1f2833;
+    border-radius: 6px;
+    padding: 0.45rem;
+}
+
+.card-title {
+    margin-top: 0;
+    margin-bottom: 0.3rem;
+    font-size: 1.05rem;
+}
+
+.card-ohlcv {
+    margin-top: 0.35rem;
+}
+
+.card-chart {
+    grid-column: 1 / -1;
+    background: #131722;
+    border: 1px solid #1f2833;
+    border-radius: 6px;
+    padding: 0;
+    overflow: hidden;
+}
+
+.card-chart__header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    margin-bottom: 0.45rem;
+}
+
+.chart-layer-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.chart-layout-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.chart-height-control {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.35rem 0.75rem;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.02);
+    min-width: 200px;
+    flex: 1 1 220px;
+}
+
+.chart-height-control--disabled {
+    opacity: 0.35;
+    pointer-events: none;
+}
+
+.chart-control-label {
+    font-size: 0.7rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #9da5b4;
+}
+
+#chart-height-range {
+    width: 100%;
+    accent-color: #4ade80;
+}
+
+.chart-height-value {
+    font-size: 0.85rem;
+    color: #e5e7eb;
+}
+
+.layer-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    font-size: 0.8rem;
+    color: #d1d4dc;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.layer-toggle:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.15);
+}
+
+.layer-toggle input {
+    margin: 0;
+}
+
+.layer-toggle__dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.layer-toggle__dot--events {
+    background: linear-gradient(135deg, #1ed760, #ef476f);
+}
+
+.layer-toggle__dot--pools {
+    background: #f9c74f;
+}
+
+.layer-toggle__dot--ote {
+    background: #06d6a0;
+}
+
+.layer-toggle__dot--zones {
+    background: #ef476f;
+}
+
+.layer-toggle__dot--sessions {
+    background: linear-gradient(135deg, #26a69a, #f6c343, #ef5350);
+}
+
+.layer-toggle input:not(:checked)~.layer-toggle__dot,
+.layer-toggle input:not(:checked)~.layer-toggle__text {
+    opacity: 0.45;
+}
+
+.layer-toggle__text {
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.layer-toggle--select {
+    gap: 0.55rem;
+}
+
+.layer-toggle--select select {
+    font-size: 0.8rem;
+    color: #d1d4dc;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 999px;
+    padding: 0.15rem 0.55rem;
+}
+
+@media (min-width: 768px) {
+    .card-chart__header {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .chart-layer-controls {
+        justify-content: flex-end;
+    }
+
+    .chart-layout-controls {
+        justify-content: flex-end;
+    }
+}
+
+.summary-grid-ohlcv {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.3rem;
+}
+
+.summary-item {
+    background: #161b29;
+    border-radius: 4px;
+    padding: 0.25rem 0.4rem;
+}
+
+.summary-label {
+    display: block;
+    font-size: 0.7rem;
+    color: #9da5b4;
+    line-height: 1.1;
+}
+
+.summary-value {
+    font-size: 0.85rem;
+    font-weight: 600;
+    line-height: 1.15;
+}
+
+@media (max-width: 900px) {
+    .summary-grid-ohlcv {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+.chart-demo-body {
+    background: #0b0c10;
+    color: #f5f5f5;
+    min-height: 100vh;
+    margin: 0;
+    font-family: "Segoe UI", Tahoma, sans-serif;
+}
+
+.chart-demo-main {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem 1rem;
+}
+
+.chart-demo-panel {
+    background: #131722;
+    border: 1px solid #1f2833;
+    border-radius: 10px;
+    padding: 1rem 1.5rem 1.5rem;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+
+.chart-demo-header {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+
+.chart-demo-header label {
+    display: inline-block;
+    margin-right: 0.5rem;
+    font-weight: 600;
+    color: #9da5b4;
+}
+
+.chart-demo-header select {
+    padding: 0.4rem 0.75rem;
+    border-radius: 4px;
+    border: 1px solid #3a3f4b;
+    background: #1f2833;
+    color: #f5f5f5;
+    min-width: 140px;
+}
+
+.chart-demo-status {
+    font-size: 0.95rem;
+    color: #9da5b4;
+    margin-bottom: 0.75rem;
+}
+
+.chart-demo-container {
+    height: var(--chart-height, 700px);
+    width: 100%;
+    border: none;
+    border-radius: 0;
+    background: #0e111d;
+    /* Невеликий запас, щоб нижня time scale не обрізалась через округлення. */
+    padding-bottom: 6px;
+    cursor: pointer;
+    user-select: none;
+    touch-action: none;
+    /* Важливо: НЕ анімуємо висоту контейнера чарта.
+       Інакше canvas проміжно масштабується CSS-ом (видиме «розмазування/стрибки»),
+       поки lightweight-charts не встигає синхронно перемалюватись під новий розмір. */
+    transition: none;
+}
+
+/*
+  Mobile v2: прибираємо системне "tap highlight" (інколи виглядає як підсвічування всього екрана),
+  коли активним стає великий контейнер на весь viewport.
+*/
+@media (max-width: 768px) {
+    body.mobile-v2 .chart-demo-container,
+    body.mobile-v2 .chart-overlay-shell,
+    body.mobile-v2 .chart-slot {
+        -webkit-tap-highlight-color: transparent;
+        -webkit-touch-callout: none;
+    }
+
+    body.mobile-v2 button,
+    body.mobile-v2 [role="button"] {
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+    }
+}
+
+/* Щоб вертикальний слайдер зліва не дублювався з лівим бордером чарта. */
+.chart-overlay-shell .chart-demo-container {
+    border-left-color: transparent;
+}
+
+.chart-overlay-shell {
+    position: relative;
+}
+
+.chart-poi-label-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 35;
+    pointer-events: none;
+}
+
+.poi-label {
+    position: absolute;
+    transform: translate(6px, -50%);
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-size: 0.72rem;
+    line-height: 1.1;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    color: #d1d4dc;
+    background: rgba(22, 32, 74, 0.22);
+    border: 1px solid rgba(91, 118, 183, 0.22);
+    backdrop-filter: blur(1px);
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chart-hover-tooltip {
+    position: absolute;
+    z-index: 40;
+    pointer-events: none;
+    /* Прозорість задається alpha (останнє число) в rgba: 0 = прозоро, 1 = непрозоро */
+    background: rgba(22, 32, 74, 0.28); /* 0.28 — прозорість/непрозорість фону */
+
+    /* Тут теж є прозорість: alpha в rgba для кольору рамки */
+    border: 1px solid rgba(91, 118, 183, 0.28); /* 0.28 — прозорість рамки */
+    color: #d1d4dc;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 0.8rem;
+    line-height: 1.25;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-width: 260px;
+    overflow: hidden;
+    backdrop-filter: blur(2px);
+}
+
+.chart-overlay-actions {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+}
+
+/* Mobile v2: резерв під праву цінову шкалу (тільки на мобільному, щоб не впливати на desktop). */
+@media (max-width: 768px) {
+    body.mobile-v2 .chart-overlay-actions {
+        /* Резерв під праву цінову шкалу, щоб оверлей-кнопки не наїжджали на неї */
+        padding-right: var(--price-scale-w, 56px);
+    }
+}
+
+.chart-overlay-actions__left,
+.chart-overlay-actions__right {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.chart-layer-menu-btn {
+    border: 1px solid #3a3f4b;
+    background: #1f2833;
+    color: #f5f5f5;
+    border-radius: 10px;
+    padding: 6px 8px;
+    cursor: pointer;
+    line-height: 1;
+}
+
+/* Стандарт для компактних іконок у верхньому оверлеї графіка */
+.chart-overlay-actions .chart-layer-menu-btn,
+.chart-overlay-actions .chart-fullscreen-btn {
+    width: 32px;
+    height: 32px;
+}
+
+@media (min-width: 769px) {
+    .chart-overlay-actions .chart-layer-menu-btn,
+    .chart-overlay-actions .chart-fullscreen-btn {
+        width: 36px;
+        height: 36px;
+    }
+}
+
+.chart-overlay-actions .chart-layer-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    font-size: 16px;
+}
+
+.chart-overlay-actions .chart-layer-menu-btn:hover {
+    background: #304055;
+}
+
+.chart-overlay-actions .chart-layer-menu-btn:active {
+    transform: scale(0.98);
+}
+
+.chart-overlay-actions .chart-layer-menu-btn:focus-visible,
+.chart-overlay-actions .chart-fullscreen-btn:focus-visible {
+    outline: 2px solid rgba(91, 118, 183, 0.9);
+    outline-offset: 2px;
+}
+
+.chart-overlay-actions .chart-layer-menu-btn svg,
+.chart-overlay-actions .chart-fullscreen-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
+.chart-fullscreen-btn {
+    border: 1px solid #3a3f4b;
+    background: #1f2833;
+    color: #f5f5f5;
+    border-radius: 10px;
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.chart-fullscreen-btn:hover {
+    background: #304055;
+}
+
+.chart-fullscreen-btn:active {
+    transform: scale(0.98);
+}
+
+.chart-fullscreen-btn--active {
+    background: #11131a;
+}
+
+.chart-fullscreen-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
+.chart-layer-menu {
+    position: absolute;
+    top: 38px;
+    left: 8px;
+    z-index: 20;
+    border: 1px solid #1f2833;
+    background: #11131a;
+    border-radius: 12px;
+    padding: 8px;
+}
+
+.chart-layer-menu .chart-layer-controls {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+}
+
+.chart-layer-menu .layer-toggle {
+    width: 100%;
+    justify-content: flex-start;
+}
+
+.chart-height-control--overlay {
+    position: absolute;
+    top: auto;
+    bottom: 56px;
+    left: 6px;
+    transform: none;
+    z-index: 30;
+    padding: 4px 2px;
+    border: none;
+    background: transparent;
+    border-radius: 999px;
+    min-width: 0;
+    flex: none;
+    width: 18px;
+    height: 170px;
+    opacity: 0.85;
+    transition: opacity 0.15s ease;
+}
+
+.chart-height-control--overlay:hover,
+.chart-height-control--overlay:focus-within {
+    opacity: 1;
+}
+
+.chart-height-control--overlay #chart-height-range {
+    /* Вертикально вздовж лівого краю чарта */
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 160px;
+    height: 14px;
+    transform: translate(-50%, -50%) rotate(-90deg);
+    transform-origin: 50% 50%;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    outline: none;
+    cursor: ns-resize;
+}
+
+.chart-height-control--overlay #chart-height-range::-webkit-slider-runnable-track {
+    height: 2px;
+    background: rgba(180, 185, 195, 0.55);
+    border-radius: 999px;
+}
+
+.chart-height-control--overlay #chart-height-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(205, 210, 220, 0.88);
+    border: 1px solid rgba(0, 0, 0, 0.35);
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.22);
+    margin-top: -3px;
+}
+
+.chart-height-control--overlay #chart-height-range::-moz-range-track {
+    height: 2px;
+    background: rgba(180, 185, 195, 0.55);
+    border-radius: 999px;
+}
+
+.chart-height-control--overlay #chart-height-range::-moz-range-thumb {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(205, 210, 220, 0.88);
+    border: 1px solid rgba(0, 0, 0, 0.35);
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.22);
+}
+
+.chart-demo-container:active {
+    cursor: grabbing;
+}
+
+.chart-demo-container.vertical-pan-active,
+.chart-demo-container.vertical-pan-active:active {
+    cursor: grabbing;
+}
+
+.card-chart--fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: #0b0c10;
+    border: none;
+    box-shadow: none;
+    border-radius: 0;
+    padding: 0;
+}
+
+.card-chart--fullscreen .card-chart__header {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 0.85rem;
+    margin-bottom: 1rem;
+}
+
+.card-chart--fullscreen .card-chart__header {
+    padding: 0.75rem 0.75rem 0;
+}
+
+.card-chart--fullscreen .chart-layer-controls {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+}
+
+.card-chart--fullscreen .chart-layout-controls {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+}
+
+.card-chart--fullscreen .chart-height-control {
+    display: none;
+}
+
+.card-chart--fullscreen .chart-overlay-shell {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.card-chart--fullscreen .chart-overlay-actions {
+    top: 12px;
+    left: 12px;
+    right: 12px;
+}
+
+.card-chart--fullscreen .chart-demo-container {
+    flex: 1 1 0;
+    min-height: 0;
+    height: auto;
+    max-height: none;
+    margin-top: 0;
+    padding-bottom: 0;
+    overflow: hidden;
+    transition: none;
+    border: none;
+    border-radius: 0;
+}
+
+html.chart-fullscreen-lock,
+body.chart-fullscreen-lock {
+    overflow: hidden;
+    height: 100%;
+    overscroll-behavior: none;
+}
+
+/* Жорсткий lock скролу: фіксуємо body, а scrollY компенсуємо через inline `top` у JS. */
+body.chart-fullscreen-lock {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+}
+
+/* ── Stage6: компактна SMC-панель (правий верхній кут) ─────────────────── */
+
+.stage6-panel {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 30;
+    width: 420px;
+    max-width: min(520px, 46vw);
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid rgba(31, 40, 51, 0.15);
+    background: rgba(12, 16, 32, 0.08);
+    color: #f5f5f5;
+    backdrop-filter: blur(2px);
+}
+
+.stage6-panel__header {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+    margin-bottom: 6px;
+}
+
+.stage6-panel__heading {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.stage6-panel__title {
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    opacity: 0.9;
+}
+
+.stage6-panel__subtitle {
+    font-size: 0.68rem;
+    line-height: 1.1;
+    opacity: 0.8;
+    color: #9da5b4;
+}
+
+.stage6-panel__toggle {
+    border: 1px solid transparent;
+    background: #1f2833;
+    color: #f5f5f5;
+    border-radius: 10px;
+    min-width: 32px;
+    height: 32px;
+    padding: 0 10px;
+    cursor: pointer;
+    line-height: 1;
+    font-weight: 800;
+    font-size: 0.7rem;
+}
+
+.stage6-panel__toggle:focus-visible {
+    outline: 2px solid #3a3f4b;
+    outline-offset: 2px;
+}
+
+.stage6-panel__toggle:hover {
+    background: #304055;
+}
+
+.stage6-panel__toggle:active {
+    transform: scale(0.98);
+}
+
+.stage6-panel__grid {
+    display: grid;
+    gap: 6px;
+    align-items: start;
+}
+
+.stage6-row {
+    display: grid;
+    grid-template-columns: 118px 1fr;
+    gap: 6px 10px;
+    align-items: start;
+}
+
+.stage6-row .label {
+    white-space: nowrap;
+}
+
+.stage6-panel__nodata {
+    margin: 6px 0 8px;
+    padding: 6px 8px;
+    border-radius: 10px;
+    border: 1px solid rgba(91, 118, 183, 0.22);
+    background: rgba(22, 32, 74, 0.18);
+    color: #d1d4dc;
+    font-size: 0.72rem;
+    line-height: 1.2;
+}
+
+.stage6-progress {
+    height: 6px;
+    margin-top: 4px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.stage6-progress__bar {
+    height: 100%;
+    width: 0%;
+    background: #9da5b4;
+    opacity: 0.9;
+}
+
+.stage6-panel__value {
+    font-size: 0.72rem;
+    font-weight: 650;
+    line-height: 1.25;
+    color: #9da5b4;
+    font-variant-numeric: tabular-nums;
+    white-space: normal;
+    word-break: break-word;
+}
+
+.stage6-panel--collapsed {
+    width: auto;
+    max-width: none;
+    padding: 0;
+    background: transparent;
+    border-color: transparent;
+    backdrop-filter: none;
+}
+
+.stage6-panel--collapsed .stage6-panel__title {
+    display: none;
+}
+
+.stage6-panel--collapsed .stage6-panel__subtitle {
+    display: none;
+}
+
+.stage6-panel--collapsed .stage6-panel__grid {
+    display: none;
+}
+
+.stage6-panel.stage6-panel--collapsed {
+    top: 4px;
+    right: 4px;
+}
+
+/* Mobile v2: шапка всередині чарта як overlay, без фону/бордера. */
+body.mobile-v2 .mobile-header.mobile-header--overlay {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    /* Резерв під праву цінову шкалу, щоб шапка/кнопки не наїжджали на неї. */
+    right: calc(8px + var(--price-scale-w, 56px));
+    z-index: 45;
+    background: transparent;
+    border-bottom: none;
+    padding: 0;
+    height: auto;
+    align-items: flex-start;
+}
+
+/* Mobile v2: компактніший верхній ряд (символ/ціна) */
+body.mobile-v2 .mobile-header.mobile-header--overlay .mobile-header__symbol {
+    font-size: 0.95rem;
+}
+
+body.mobile-v2 .mobile-header.mobile-header--overlay .mobile-header__price {
+    font-size: 0.9rem;
+}
+
+/* Mobile v2: 2-й ряд під символом: ⋮ + TF */
+.mobile-header__subrow {
+    display: none;
+}
+
+body.mobile-v2 .mobile-header.mobile-header--overlay .mobile-header__left {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+body.mobile-v2 .mobile-header.mobile-header--overlay .mobile-header__subrow {
+    display: flex;
+    flex-basis: 100%;
+    gap: 4px;
+    margin-top: 0;
+}
+
+body.mobile-v2 .mobile-header.mobile-header--overlay .mobile-header__right {
+    gap: 4px;
+    align-self: flex-start;
+}
+
+body.mobile-v2 .mobile-header.mobile-header--overlay .chart-fullscreen-btn,
+body.mobile-v2 .mobile-header.mobile-header--overlay .stage6-panel__toggle {
+    border: 1px solid rgba(91, 118, 183, 0.14);
+    background: rgba(22, 32, 74, 0.14);
+    color: #f5f5f5;
+    border-radius: 10px;
+    padding: 6px 8px;
+    line-height: 1;
+}
+
+body.mobile-v2 .mobile-header.mobile-header--overlay .chart-fullscreen-btn svg {
+    display: block;
+}
+
+body.mobile-v2 .mobile-header.mobile-header--overlay .mobile-header__state {
+    background: transparent;
+    border: none;
+    padding: 0;
+    border-radius: 0;
+    opacity: 0.9;
+    font-size: 0.85rem;
+}
+
+body.mobile-v2 .mobile-header.mobile-header--overlay .mobile-icon-btn {
+    padding: 6px 8px;
+}
+
+/* Mobile v2: FULL прибираємо (є вже системний fullscreen/жест; економимо місце). */
+body.mobile-v2 #chart-fullscreen-btn {
+    display: none;
+}
+
+/* Mobile v2: у chart overlay не показуємо рядок типу “SHORT · ↓0.91” (S6 це вже покриває). */
+body.mobile-v2 .mobile-header.mobile-header--overlay #m-chart-state {
+    display: none;
+}
+
+/* AiOne Sessions ribbon (P1, Minimal) */
+.sessions-ribbon {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 22px;
+    pointer-events: none;
+    z-index: 6;
+}
+
+.sessions-ribbon__track {
+    position: absolute;
+    left: 8px;
+    right: calc(var(--price-scale-w, 56px) + 8px);
+    top: 4px;
+    height: 14px;
+}
+
+.sessions-ribbon__seg {
+    position: absolute;
+    top: 0;
+    height: 14px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px;
+    font-size: 11px;
+    line-height: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: auto;
+
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+/* Сесійні сегменти: легка кольорова заливка (trader-like, без “плівки” поверх графіка). */
+.sessions-ribbon__seg.is-session[data-tag="ASIA"],
+.sessions-ribbon__seg.is-session[data-tag="TOKYO"] {
+    background: rgba(59, 130, 246, 0.10);
+    border-color: rgba(59, 130, 246, 0.16);
+}
+
+.sessions-ribbon__seg.is-session[data-tag="LONDON"],
+.sessions-ribbon__seg.is-session[data-tag="LDN"] {
+    background: rgba(249, 115, 22, 0.10);
+    border-color: rgba(249, 115, 22, 0.16);
+}
+
+.sessions-ribbon__seg.is-session[data-tag="NY"],
+.sessions-ribbon__seg.is-session[data-tag="NEW_YORK"],
+.sessions-ribbon__seg.is-session[data-tag="NEWYORK"] {
+    background: rgba(34, 197, 94, 0.10);
+    border-color: rgba(34, 197, 94, 0.16);
+}
+
+.sessions-ribbon__seg.is-active {
+    background: rgba(255, 255, 255, 0.10);
+    border-color: rgba(255, 255, 255, 0.18);
+}
+
+/* Overlap/Gap: тонкий overlay (не відволікає від базових сесій). */
+.sessions-ribbon__seg.is-overlap,
+.sessions-ribbon__seg.is-gap {
+    height: 6px;
+    top: 4px;
+    padding: 0;
+    border-radius: 6px;
+}
+
+.sessions-ribbon__seg.is-overlap {
+    background: rgba(255, 255, 255, 0.04);
+    border-style: dashed;
+}
+
+.sessions-ribbon__seg.is-gap {
+    background: rgba(255, 255, 255, 0.02);
+    border-style: solid;
+    opacity: 0.85;
+}
+
+.sessions-ribbon__seg.is-overlap .sessions-ribbon__label,
+.sessions-ribbon__seg.is-overlap .sessions-ribbon__meta,
+.sessions-ribbon__seg.is-gap .sessions-ribbon__label,
+.sessions-ribbon__seg.is-gap .sessions-ribbon__meta {
+    display: none;
+}
+
+.sessions-ribbon__label {
+    opacity: 0.9;
+}
+
+.sessions-ribbon__meta {
+    opacity: 0.7;
+}
+
+.sessions-ribbon__tooltip {
+    position: absolute;
+    max-width: 260px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    line-height: 16px;
+    white-space: pre;
+    z-index: 7;
+    pointer-events: none;
+
+    background: rgba(0, 0, 0, 0.65);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(2px);
+}

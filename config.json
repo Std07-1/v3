@@ -1,0 +1,52 @@
+{
+    "user_id": "D251084463",
+    "password": "I4eav",
+    "url": "http://www.fxcorporate.com/Hosts.jsp",
+    "connection": "Demo",
+    "symbol": "XAU/USD",
+    "data_root": "./data_v3",
+    "warmup_bars": 3000,
+    "safety_delay_s": 2,
+    "history_backfill_step_bars": 300,
+    "history_backfill_every_n_polls": 5,
+    "derived_rebuild_lookback_bars": 60000,
+    "derived_rebuild_every_n_polls": 5,
+    "derived_rebuild_use_tool": true,
+    "derived_rebuild_tool_dry_run": false,
+    "derived_tolerate_missing_minutes": 1,
+    "derived_backfill_from_broker": false,
+    "derived_force_close_from_broker": false,
+    "broker_base_tfs_s": [
+        14400,
+        86400
+    ],
+    "broker_base_fetch_on_close": true,
+    "broker_base_max_tf_per_poll": 0,
+    "derived_force_close_max_tf_per_poll": 0,
+    "diagnose_lookback_bars": 60000,
+    "market_weekend_close_dow": 4,
+    "market_weekend_close_hm": "21:44",
+    "market_weekend_open_dow": 6,
+    "market_weekend_open_hm": "22:00",
+    "market_daily_break_start_hm": "21:59",
+    "market_daily_break_end_hm": "23:01",
+    "market_ignore_minutes_utc": [
+        "2026-02-01T23:02:00Z"
+    ],
+    "market_boundary_slip_minutes_per_day": 2,
+    "diagnose_missing_trading_output": "ranges",
+    "diagnose_missing_trading_max_ranges": 100,
+    "diagnose_missing_trading_dump_path": "./data_v3/diagnostics/missing_trading_minutes.jsonl",
+    "derived_tfs_s": [
+        180,
+        300,
+        900,
+        1800,
+        3600
+    ],
+    "day_anchor_offset_s": 68400,
+    "day_anchor_offset_s_alt": 75600,
+    "day_anchor_offset_s_alt2": 79200,
+    "day_anchor_offset_s_d1": 75600,
+    "day_anchor_offset_s_d1_alt": 79200
+}

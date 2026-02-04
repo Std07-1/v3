@@ -1,0 +1,31 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+
+# Дані
+/data_v3/
+/History/
+
+# Журнали та записи
+/changelog.jsonl
+/CHANGELOG.md
+/rebuild_state.json
+
+# GitHub/VSCode
+/.github/
+/.vscode/
+
+# Налаштування (пізніше додамо в проект)
+/mypy.ini
+/pytest.ini
+/pyproject.toml
+/setup.cfg
+/tox.ini
+/coverage.xml
+/.coverage
+
+# Тимчасове
+*.log

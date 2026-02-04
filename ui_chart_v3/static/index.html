@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="uk">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AiOne v3 · Chart (read-only)</title>
+  <style>
+    html,
+    body {
+      height: 100%;
+    }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #fff;
+      color: #111;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    #topbar {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border-bottom: 1px solid #e6e6e6;
+    }
+
+    #diag {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 6px 10px;
+      padding: 8px 12px;
+      border-bottom: 1px solid #e6e6e6;
+      font-size: 12px;
+      color: #222;
+    }
+
+    #diag .item {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #diag .item.time {
+      grid-column: span 2;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      justify-self: end;
+      padding-right: 2px;
+    }
+
+    .chart-overlay-shell {
+      position: relative;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+
+    #chart {
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+    }
+
+    #chart-hover-tooltip {
+      position: absolute;
+      left: 0;
+      top: 0;
+      z-index: 10;
+      padding: 6px 8px;
+      font-size: 12px;
+      line-height: 1.3;
+      background: rgba(0, 0, 0, 0.45);
+      color: #fff;
+      max-width: 320px;
+    }
+
+
+    .chart-poi-label-layer {
+      position: absolute;
+      left: 0;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      pointer-events: none;
+    }
+
+    select,
+    input,
+    button {
+      padding: 6px 8px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      background: #fff;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    #status {
+      margin-left: auto;
+      font-size: 12px;
+      opacity: 0.8;
+    }
+
+    body.dark {
+      background: #0b0f14;
+      color: #d5d5d5;
+    }
+
+    body.dark #topbar {
+      border-bottom: 1px solid #1f2a36;
+    }
+
+    body.dark #diag {
+      border-bottom: 1px solid #1f2a36;
+      color: #c2c2c2;
+    }
+
+    body.dark select,
+    body.dark input,
+    body.dark button {
+      background: #121821;
+      color: #d5d5d5;
+      border-color: #2b3846;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="topbar">
+    <label for="symbol">Symbol</label>
+    <select id="symbol"></select>
+
+    <label for="tf">TF</label>
+    <select id="tf">
+      <option value="60">1m</option>
+      <option value="180">3m</option>
+      <option value="300">5m</option>
+      <option value="900">15m</option>
+      <option value="1800">30m</option>
+      <option value="3600">1h</option>
+      <option value="14400">4h</option>
+      <option value="86400">1d</option>
+    </select>
+
+    <button id="reload">Reload</button>
+    <label><input id="follow" type="checkbox" checked /> follow</label>
+    <label><input id="theme" type="checkbox" /> dark</label>
+
+    <div id="status">init…</div>
+  </div>
+
+  <div id="diag">
+    <div class="item">Load: <span id="diag-load">—</span></div>
+    <div class="item">Poll: <span id="diag-poll">—</span></div>
+    <div class="item">Lag: <span id="diag-lag">—</span></div>
+    <div class="item">Bars: <span id="diag-bars">—</span></div>
+    <div class="item">Error: <span id="diag-error">—</span></div>
+    <div class="item time">Last bar: <span id="diag-last">—</span><span id="diag-utc">—</span></div>
+  </div>
+
+  <div class="chart-overlay-shell">
+    <div id="chart"></div>
+    <div id="chart-hover-tooltip" hidden></div>
+  </div>
+
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="/chart_adapter_lite.js"></script>
+  <script src="/app.js"></script>
+</body>
+
+</html>
