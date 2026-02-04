@@ -16,17 +16,31 @@ const elDiagLast = document.getElementById('diag-last');
 const elDiagBars = document.getElementById('diag-bars');
 const elDiagError = document.getElementById('diag-error');
 const elDiagUtc = document.getElementById('diag-utc');
+const elDiag = document.getElementById('diag');
+const elLastbarInline = document.getElementById('lastbar-inline');
+const elDrawer = document.getElementById('top-drawer');
+const elDrawerHandle = document.getElementById('drawer-handle');
+const elDrawerContent = document.getElementById('drawer-content');
+const elFloatingTools = document.getElementById('floating-tools');
+const elHud = document.getElementById('hud');
+const elHudSymbol = document.getElementById('hud-symbol');
+const elHudTf = document.getElementById('hud-tf');
+const elHudStream = document.getElementById('hud-stream');
 
 let controller = null;
 let lastOpenMs = null;
 let pollTimer = null;
 let currentTheme = 'light';
+let uiDebugEnabled = true;
+let lastHudSymbol = null;
+let lastHudTf = null;
 
 const RIGHT_OFFSET_PX = 48;
 const THEME_KEY = 'ui_chart_theme';
 const CANDLE_STYLE_KEY = 'ui_chart_candle_style';
 const SYMBOL_KEY = 'ui_chart_symbol';
 const TF_KEY = 'ui_chart_tf';
+const LAYOUT_SAVE_KEY = 'ui_chart_layout_save';
 const diag = {
   loadAt: null,
   pollAt: null,
@@ -65,16 +79,84 @@ function updateDiag(tfSeconds) {
   elDiagLast.textContent = lastOpenMs != null ? fmtUtc(lastOpenMs) : '—';
   elDiagBars.textContent = diag.barsTotal ? `${diag.barsTotal} (+${diag.lastPollBars})` : '—';
   elDiagError.textContent = diag.lastError || '—';
+  updateStreamingIndicator();
 }
 
 function setStatus(txt) {
-  elStatus.textContent = txt;
+  if (elStatus) {
+    elStatus.textContent = txt;
+  }
+}
+
+function isLayoutSaveEnabled() {
+  return true;
+}
+
+function saveLayoutValue(key, value) {
+  if (!isLayoutSaveEnabled()) return;
+  try {
+    localStorage.setItem(key, value);
+  } catch (e) {
+    // ignore storage errors
+  }
+}
+
+function updateStreamingIndicator() {
+  if (!elHudStream) return;
+  const now = Date.now();
+  const recent = diag.pollAt && now - diag.pollAt < 12000;
+  const paused = Boolean(diag.lastError) || !recent;
+  elHudStream.classList.toggle('streaming', !paused);
+  elHudStream.classList.toggle('paused', paused);
+}
+
+function updateHudValues() {
+  if (elHudSymbol) {
+    const opt = elSymbol && elSymbol.selectedIndex >= 0 ? elSymbol.options[elSymbol.selectedIndex] : null;
+    const nextSymbol = opt ? opt.textContent : (elSymbol && elSymbol.value ? elSymbol.value : '—');
+    if (lastHudSymbol !== null && nextSymbol !== lastHudSymbol) {
+      elHudSymbol.classList.remove('pulse');
+      void elHudSymbol.offsetWidth;
+      elHudSymbol.classList.add('pulse');
+    }
+    elHudSymbol.textContent = nextSymbol;
+    lastHudSymbol = nextSymbol;
+  }
+  if (elHudTf) {
+    const opt = elTf && elTf.selectedIndex >= 0 ? elTf.options[elTf.selectedIndex] : null;
+    const nextTf = opt ? opt.textContent : '—';
+    if (lastHudTf !== null && nextTf !== lastHudTf) {
+      elHudTf.classList.remove('pulse');
+      void elHudTf.offsetWidth;
+      elHudTf.classList.add('pulse');
+    }
+    elHudTf.textContent = nextTf;
+    lastHudTf = nextTf;
+  }
 }
 
 async function apiGet(url) {
   const r = await fetch(url, { cache: 'no-store' });
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return await r.json();
+}
+
+async function loadUiConfig() {
+  try {
+    const data = await apiGet('/api/config');
+    if (data && typeof data.ui_debug === 'boolean') {
+      uiDebugEnabled = data.ui_debug;
+    }
+  } catch (e) {
+    uiDebugEnabled = true;
+  }
+  applyUiDebug();
+}
+
+function applyUiDebug() {
+  const show = Boolean(uiDebugEnabled);
+  if (elDiag) elDiag.style.display = show ? '' : 'none';
+  if (elFollow) elFollow.closest('.follow-toggle')?.style.setProperty('display', show ? '' : 'none');
 }
 
 const REQUIRED_CONTROLLER_METHODS = [
@@ -173,10 +255,14 @@ function updateToolbarValue(selectId) {
     valueEl.textContent = option ? option.textContent : (select.value || '—');
   }
   const menu = group.querySelector('.tool-menu');
-  if (!menu) return;
+  if (!menu) {
+    updateHudValues();
+    return;
+  }
   for (const btn of menu.querySelectorAll('.tool-option')) {
     btn.classList.toggle('active', btn.dataset.value === select.value);
   }
+  updateHudValues();
 }
 
 function buildToolbarMenu(selectId) {
@@ -254,6 +340,52 @@ function initToolbars() {
     setupToolbarSelect(id);
   }
   document.addEventListener('click', () => closeAllToolMenus());
+  if (elDrawerHandle) {
+    elDrawerHandle.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (elFloatingTools) {
+        elFloatingTools.classList.toggle('is-hidden');
+      }
+    });
+  }
+  attachHudWheelControls();
+}
+
+function cycleSelectValue(select, direction) {
+  if (!select || !select.options || select.options.length === 0) return;
+  const total = select.options.length;
+  const current = Math.max(0, select.selectedIndex);
+  const next = (current + direction + total) % total;
+  select.selectedIndex = next;
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function attachHudWheelControls() {
+  if (elHudSymbol) {
+    elHudSymbol.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      const direction = event.deltaY > 0 ? 1 : -1;
+      cycleSelectValue(elSymbol, direction);
+    }, { passive: false });
+  }
+  if (elHudTf) {
+    elHudTf.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      const direction = event.deltaY > 0 ? 1 : -1;
+      cycleSelectValue(elTf, direction);
+    }, { passive: false });
+  }
+}
+
+function updateDrawerOffset() {
+  if (!elDrawer || !elDrawerContent) return;
+  const applyOffset = () => {
+    const isCollapsed = elDrawer.classList.contains('collapsed');
+    const offset = isCollapsed ? 0 : elDrawerContent.getBoundingClientRect().height;
+    document.documentElement.style.setProperty('--drawer-offset', `${Math.round(offset)}px`);
+  };
+  applyOffset();
+  requestAnimationFrame(() => applyOffset());
 }
 
 async function loadSymbols() {
@@ -277,6 +409,7 @@ async function loadSymbols() {
     elSymbol.value = preferred;
   }
   buildToolbarMenu('symbol');
+  updateHudValues();
 }
 
 async function loadBarsFull() {
@@ -367,21 +500,29 @@ function resetPolling() {
 async function init() {
   makeChart();
   initToolbars();
+  await loadUiConfig();
   let theme = 'light';
   let candleStyle = 'classic';
   let savedSymbol = null;
   let savedTf = null;
+  let layoutEnabled = true;
   try {
-    const saved = localStorage.getItem(THEME_KEY);
-    if (saved === 'dark' || saved === 'light' || saved === 'dark-gray') {
-      theme = saved;
-    } else if (!saved && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      theme = 'dark';
+    const saveFlag = localStorage.getItem(LAYOUT_SAVE_KEY);
+    if (saveFlag === '0') {
+      layoutEnabled = false;
     }
-    const savedStyle = localStorage.getItem(CANDLE_STYLE_KEY);
-    if (savedStyle) candleStyle = savedStyle;
-    savedSymbol = localStorage.getItem(SYMBOL_KEY);
-    savedTf = localStorage.getItem(TF_KEY);
+    const saved = localStorage.getItem(THEME_KEY);
+    if (layoutEnabled) {
+      if (saved === 'dark' || saved === 'light' || saved === 'dark-gray') {
+        theme = saved;
+      } else if (!saved && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        theme = 'dark';
+      }
+      const savedStyle = localStorage.getItem(CANDLE_STYLE_KEY);
+      if (savedStyle) candleStyle = savedStyle;
+      savedSymbol = localStorage.getItem(SYMBOL_KEY);
+      savedTf = localStorage.getItem(TF_KEY);
+    }
   } catch (e) {
     // ignore storage errors
   }
@@ -409,9 +550,16 @@ async function init() {
   updateToolbarValue('symbol');
   await loadBarsFull();
   updateToolbarValue('tf');
+  updateHudValues();
+  updateStreamingIndicator();
+  updateDrawerOffset();
   resetPolling();
   updateUtcNow();
   setInterval(updateUtcNow, 1000);
+
+  window.addEventListener('resize', () => {
+    updateDrawerOffset();
+  });
 
   if (elReload) {
     elReload.addEventListener('click', async () => {
@@ -420,20 +568,12 @@ async function init() {
   }
 
   elSymbol.addEventListener('change', async () => {
-    try {
-      localStorage.setItem(SYMBOL_KEY, elSymbol.value);
-    } catch (e) {
-      // ignore storage errors
-    }
+    saveLayoutValue(SYMBOL_KEY, elSymbol.value);
     await loadBarsFull();
   });
 
   elTf.addEventListener('change', async () => {
-    try {
-      localStorage.setItem(TF_KEY, elTf.value);
-    } catch (e) {
-      // ignore storage errors
-    }
+    saveLayoutValue(TF_KEY, elTf.value);
     await loadBarsFull();
   });
 
@@ -449,21 +589,19 @@ async function init() {
       const mode = readThemeValue();
       applyTheme(mode);
       setStatus(`theme_change=${mode}`);
+      saveLayoutValue(THEME_KEY, mode);
     });
     elTheme.addEventListener('input', () => {
       const mode = readThemeValue();
       applyTheme(mode);
+      saveLayoutValue(THEME_KEY, mode);
     });
   }
 
   if (elCandleStyle) {
     elCandleStyle.addEventListener('change', () => {
       const style = elCandleStyle.value;
-      try {
-        localStorage.setItem(CANDLE_STYLE_KEY, style);
-      } catch (e) {
-        // ignore storage errors
-      }
+      saveLayoutValue(CANDLE_STYLE_KEY, style);
       applyCandleStyle(style);
     });
   }

@@ -160,12 +160,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _handle_api(self, parsed: urllib.parse.ParseResult) -> None:
         qs = urllib.parse.parse_qs(parsed.query)
         data_root: str = self.server.data_root  # type: ignore[attr-defined]
+        config_path: str | None = getattr(self.server, "config_path", None)  # type: ignore[attr-defined]
+        path = parsed.path.rstrip("/") or "/"
 
-        if parsed.path == "/api/symbols":
+        if path == "/api/config":
+            ui_debug = True
+            if config_path and os.path.isfile(config_path):
+                try:
+                    with open(config_path, encoding="utf-8") as f:
+                        cfg = json.load(f)
+                    ui_debug = bool(cfg.get("ui_debug", True))
+                except Exception:
+                    ui_debug = True
+            self._json(200, {"ok": True, "ui_debug": ui_debug})
+            return
+
+        if path == "/api/symbols":
             self._json(200, {"ok": True, "symbols": _list_symbols(data_root)})
             return
 
-        if parsed.path in ("/api/bars", "/api/latest"):
+        if path in ("/api/bars", "/api/latest"):
             symbol = (qs.get("symbol", [""])[0] or "").strip()
             tf_s = _safe_int((qs.get("tf_s", ["60"])[0] or "60"), 60)
             limit = _safe_int((qs.get("limit", ["2000"])[0] or "2000"), 2000)
@@ -181,7 +195,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
             since_open_ms = None
             to_open_ms = None
-            if parsed.path == "/api/latest":
+            if path == "/api/latest":
                 a = qs.get("after_open_ms", [None])[0]
                 since_open_ms = _safe_int(a, 0) if a is not None else None
             else:
@@ -225,14 +239,22 @@ def main() -> int:
         default="static",
         help="Каталог зі статикою (index.html, app.js)",
     )
+    ap.add_argument(
+        "--config",
+        default=None,
+        help="Шлях до config.json (для ui_debug)",
+    )
     args = ap.parse_args()
 
     data_root = os.path.abspath(args.data_root)
     static_root = os.path.abspath(args.static_root)
+    default_config = os.path.abspath(os.path.join(static_root, "..", "..", "config.json"))
+    config_path = os.path.abspath(args.config) if args.config else default_config
     os.chdir(static_root)
 
     httpd = http.server.ThreadingHTTPServer((args.host, args.port), Handler)
     httpd.data_root = data_root  # type: ignore[attr-defined]
+    httpd.config_path = config_path  # type: ignore[attr-defined]
 
     print(f"UI: http://{args.host}:{args.port}/")
     print(f"DATA_ROOT: {httpd.data_root}")  # type: ignore[attr-defined]

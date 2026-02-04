@@ -364,8 +364,15 @@
                 if (top + tooltipEl.offsetHeight > rect.height) {
                     top = safePoint.y - tooltipEl.offsetHeight - margin;
                 }
+                let drawerOffset = 0;
+                try {
+                    const raw = getComputedStyle(document.documentElement).getPropertyValue("--drawer-offset");
+                    drawerOffset = Number(String(raw).replace("px", "").trim()) || 0;
+                } catch (_e) {
+                    drawerOffset = 0;
+                }
                 tooltipEl.style.left = `${Math.max(0, left)}px`;
-                tooltipEl.style.top = `${Math.max(0, top)}px`;
+                tooltipEl.style.top = `${Math.max(0, top + drawerOffset)}px`;
                 tooltipEl.hidden = false;
             });
         }

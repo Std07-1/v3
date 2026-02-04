@@ -21,43 +21,156 @@
       min-height: 100vh;
     }
 
-    #topbar {
-      display: flex;
-      gap: 10px;
-      align-items: center;
-      padding: 10px 12px;
-      border-bottom: 1px solid #e6e6e6;
-    }
-
     #diag {
+      position: absolute;
+      top: 6px;
+      right: 92px;
+      z-index: 29;
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 6px 10px;
-      padding: 8px 12px;
-      border-bottom: 1px solid #e6e6e6;
+      gap: 4px;
+      justify-items: end;
+      max-width: calc(100% - 340px);
       font-size: 12px;
-      color: #222;
+      color: #111;
+      pointer-events: auto;
+      background: transparent;
     }
 
-    #diag .item {
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    #diag .item.time {
-      grid-column: span 2;
+    #diag .diag-row {
       display: inline-flex;
+      flex-wrap: wrap;
       align-items: center;
-      gap: 10px;
-      justify-self: end;
-      padding-right: 2px;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    #diag .diag-sep {
+      opacity: 0.4;
+    }
+
+    #diag .diag-hidden {
+      display: none;
     }
 
     .chart-overlay-shell {
       position: relative;
       flex: 1 1 auto;
       min-height: 0;
+    }
+
+    .hud-stack {
+      position: absolute;
+      top: 6px;
+      left: 12px;
+      z-index: 28;
+      display: inline-flex;
+      align-items: flex-start;
+      gap: 10px;
+      pointer-events: none;
+    }
+
+    .floating-tools {
+      position: relative;
+      z-index: 28;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      pointer-events: auto;
+    }
+
+    .floating-tools.is-hidden {
+      display: none;
+    }
+
+    .hud {
+      position: relative;
+      z-index: 28;
+      display: inline-flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      background: rgba(255, 255, 255, 0.3);
+      backdrop-filter: blur(10px);
+      font-size: 12px;
+      color: #111;
+      max-width: 220px;
+      pointer-events: auto;
+    }
+
+    .hud-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      cursor: default;
+    }
+
+    .hud-item {
+      font-weight: 600;
+      cursor: default;
+      user-select: none;
+    }
+
+    .hud-slot {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 6px;
+      margin: -4px -6px;
+      border-radius: 8px;
+    }
+
+    .hud-item.pulse {
+      animation: hudPulse 0.36s ease;
+    }
+
+    @keyframes hudPulse {
+      0% {
+        transform: scale(1);
+        text-shadow: 0 0 0 rgba(0, 0, 0, 0);
+      }
+
+      50% {
+        transform: scale(1.22) translateZ(0);
+        text-shadow: 0 8px 16px rgba(0, 0, 0, 0.22);
+      }
+
+      100% {
+        transform: scale(1);
+        text-shadow: 0 0 0 rgba(0, 0, 0, 0);
+      }
+    }
+
+    .hud-sep {
+      opacity: 0.4;
+    }
+
+    .hud-stream {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #9aa0a6;
+      box-shadow: 0 0 6px rgba(0, 0, 0, 0.2);
+    }
+
+    .hud-stream.streaming {
+      background: #26a69a;
+      box-shadow: 0 0 8px rgba(38, 166, 154, 0.6);
+    }
+
+    .hud-stream.paused {
+      background: #ef5350;
+      box-shadow: 0 0 8px rgba(239, 83, 80, 0.6);
+    }
+
+    .hud-button {
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      background: rgba(255, 255, 255, 0.7);
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 11px;
+      cursor: pointer;
     }
 
     #chart {
@@ -77,6 +190,7 @@
       background: rgba(0, 0, 0, 0.45);
       color: #fff;
       max-width: 320px;
+      transform: translateY(var(--drawer-offset, 0px));
     }
 
 
@@ -205,17 +319,17 @@
       margin-left: auto;
       font-size: 12px;
       opacity: 0.8;
+      display: none;
     }
 
     .follow-toggle {
       display: inline-flex;
       align-items: center;
-      margin-left: 8px;
-      padding: 4px 6px;
+      margin-left: 2px;
+      padding: 2px 4px;
       border-radius: 8px;
       border: 1px solid rgba(0, 0, 0, 0.12);
-      background: rgba(255, 255, 255, 0.6);
-      backdrop-filter: blur(6px);
+      background: transparent;
     }
 
     .follow-toggle input {
@@ -227,13 +341,8 @@
       color: #d5d5d5;
     }
 
-    body.dark #topbar {
-      border-bottom: 1px solid #1f2a36;
-    }
-
     body.dark #diag {
-      border-bottom: 1px solid #1f2a36;
-      color: #c2c2c2;
+      color: #d5d5d5;
     }
 
     body.dark select,
@@ -245,7 +354,7 @@
     }
 
     body.dark .follow-toggle {
-      background: rgba(18, 24, 33, 0.6);
+      background: transparent;
       border-color: rgba(43, 56, 70, 0.8);
     }
 
@@ -261,6 +370,18 @@
       box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
     }
 
+    body.dark .hud {
+      background: rgba(11, 15, 20, 0.3);
+      color: #d5d5d5;
+      border-color: rgba(43, 56, 70, 0.8);
+    }
+
+    body.dark .hud-button {
+      background: rgba(18, 24, 33, 0.8);
+      border-color: rgba(43, 56, 70, 0.8);
+      color: #d5d5d5;
+    }
+
     body.dark .tool-option:hover {
       background: rgba(255, 255, 255, 0.08);
     }
@@ -274,13 +395,8 @@
       color: #111;
     }
 
-    body.dark-gray #topbar {
-      border-bottom: 1px solid #e6e6e6;
-    }
-
     body.dark-gray #diag {
-      border-bottom: 1px solid #e6e6e6;
-      color: #222;
+      color: #111;
     }
 
     body.dark-gray select,
@@ -294,115 +410,132 @@
 </head>
 
 <body>
-  <div id="topbar">
-    <div class="toolbar-group" data-select="symbol">
-      <button class="tool-button" type="button" aria-label="Symbol">
-        <span class="tool-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
-            stroke-linejoin="round">
-            <path d="M4 7h10a4 4 0 0 1 0 8H10" />
-            <path d="M20 17H10a4 4 0 0 1 0-8h4" />
-          </svg>
-        </span>
-        <span class="tool-value" data-value>Symbol</span>
-      </button>
-      <div class="tool-menu" role="listbox"></div>
-      <select id="symbol" class="native-select" aria-label="Symbol"></select>
-    </div>
-
-    <div class="toolbar-group" data-select="tf">
-      <button class="tool-button" type="button" aria-label="TF">
-        <span class="tool-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
-            stroke-linejoin="round">
-            <circle cx="12" cy="12" r="8" />
-            <path d="M12 8v5l3 2" />
-          </svg>
-        </span>
-        <span class="tool-value" data-value>TF</span>
-      </button>
-      <div class="tool-menu" role="listbox"></div>
-      <select id="tf" class="native-select" aria-label="TF">
-        <option value="60">1m</option>
-        <option value="180">3m</option>
-        <option value="300">5m</option>
-        <option value="900">15m</option>
-        <option value="1800">30m</option>
-        <option value="3600">1h</option>
-        <option value="14400">4h</option>
-        <option value="86400">1d</option>
-      </select>
-    </div>
-
-    <div class="toolbar-group" data-select="candle-style">
-      <button class="tool-button" type="button" aria-label="Стиль">
-        <span class="tool-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
-            stroke-linejoin="round">
-            <path d="M7 6v12" />
-            <rect x="5" y="10" width="4" height="4" rx="1" />
-            <path d="M17 4v16" />
-            <rect x="15" y="8" width="4" height="6" rx="1" />
-          </svg>
-        </span>
-        <span class="tool-value" data-value>Стиль</span>
-      </button>
-      <div class="tool-menu" role="listbox"></div>
-      <select id="candle-style" class="native-select" aria-label="Стиль">
-        <option value="classic">Класичні</option>
-        <option value="gray">Сірі</option>
-        <option value="white">Білі</option>
-        <option value="hollow">Порожні</option>
-        <option value="bars">Бари</option>
-        <option value="bars-dark">Бари чорносірі</option>
-      </select>
-    </div>
-
-    <div class="toolbar-group" data-toggle="theme">
-      <button class="tool-button" type="button" aria-label="Theme">
-        <span class="tool-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
-            stroke-linejoin="round">
-            <path d="M12 3v2" />
-            <path d="M12 19v2" />
-            <path d="M4.2 5.8l1.4 1.4" />
-            <path d="M18.4 18.2l1.4 1.4" />
-            <path d="M3 12h2" />
-            <path d="M19 12h2" />
-            <path d="M5.6 18.2l1.4-1.4" />
-            <path d="M17 7.2l1.4-1.4" />
-            <circle cx="12" cy="12" r="4" />
-          </svg>
-        </span>
-        <span class="tool-value" data-value>Theme</span>
-      </button>
-      <select id="theme" class="native-select" aria-label="Theme">
-        <option value="light">Світлий</option>
-        <option value="dark">Темний</option>
-      </select>
-    </div>
-
-    <div id="status">init…</div>
-    <label class="follow-toggle"><input id="follow" type="checkbox" checked aria-label="Follow" /></label>
-  </div>
-
-  <div id="diag">
-    <div class="item">Load: <span id="diag-load">—</span></div>
-    <div class="item">Poll: <span id="diag-poll">—</span></div>
-    <div class="item">Lag: <span id="diag-lag">—</span></div>
-    <div class="item">Bars: <span id="diag-bars">—</span></div>
-    <div class="item">Error: <span id="diag-error">—</span></div>
-    <div class="item time">Last bar: <span id="diag-last">—</span><span id="diag-utc">—</span></div>
-  </div>
-
   <div class="chart-overlay-shell">
+    <div id="diag" class="diag-signature">
+      <div class="diag-row">
+        <span>Last bar: <span id="diag-last">—</span></span>
+      </div>
+      <div class="diag-row">
+        <span id="diag-utc">—</span>
+      </div>
+      <div class="diag-row">
+        <span>Lag: <span id="diag-lag">—</span></span>
+        <span>Bars: <span id="diag-bars">—</span></span>
+        <label class="follow-toggle"><input id="follow" type="checkbox" checked aria-label="Follow" /></label>
+        <span class="diag-hidden">Load: <span id="diag-load">—</span></span>
+        <span class="diag-hidden">Poll: <span id="diag-poll">—</span></span>
+        <span class="diag-hidden">Error: <span id="diag-error">—</span></span>
+      </div>
+    </div>
+
+    <div class="hud-stack">
+      <div id="hud" class="hud">
+        <div class="hud-row">
+          <button id="drawer-handle" class="hud-button" type="button" aria-label="Меню">≡</button>
+          <span id="hud-symbol" class="hud-item hud-slot">—</span>
+          <span class="hud-sep">·</span>
+          <span id="hud-tf" class="hud-item hud-slot">—</span>
+          <span id="hud-stream" class="hud-stream" aria-hidden="true"></span>
+        </div>
+      </div>
+
+      <div id="floating-tools" class="floating-tools">
+        <div class="toolbar-group" data-select="symbol">
+          <button class="tool-button" type="button" aria-label="Symbol">
+            <span class="tool-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                stroke-linejoin="round">
+                <path d="M4 7h10a4 4 0 0 1 0 8H10" />
+                <path d="M20 17H10a4 4 0 0 1 0-8h4" />
+              </svg>
+            </span>
+            <span class="tool-value" data-value>Symbol</span>
+          </button>
+          <div class="tool-menu" role="listbox"></div>
+          <select id="symbol" class="native-select" aria-label="Symbol"></select>
+        </div>
+
+        <div class="toolbar-group" data-select="tf">
+          <button class="tool-button" type="button" aria-label="TF">
+            <span class="tool-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                stroke-linejoin="round">
+                <circle cx="12" cy="12" r="8" />
+                <path d="M12 8v5l3 2" />
+              </svg>
+            </span>
+            <span class="tool-value" data-value>TF</span>
+          </button>
+          <div class="tool-menu" role="listbox"></div>
+          <select id="tf" class="native-select" aria-label="TF">
+            <option value="60">1m</option>
+            <option value="180">3m</option>
+            <option value="300">5m</option>
+            <option value="900">15m</option>
+            <option value="1800">30m</option>
+            <option value="3600">1h</option>
+            <option value="14400">4h</option>
+            <option value="86400">1d</option>
+          </select>
+        </div>
+
+        <div class="toolbar-group" data-select="candle-style">
+          <button class="tool-button" type="button" aria-label="Стиль">
+            <span class="tool-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                stroke-linejoin="round">
+                <path d="M7 6v12" />
+                <rect x="5" y="10" width="4" height="4" rx="1" />
+                <path d="M17 4v16" />
+                <rect x="15" y="8" width="4" height="6" rx="1" />
+              </svg>
+            </span>
+            <span class="tool-value" data-value>Стиль</span>
+          </button>
+          <div class="tool-menu" role="listbox"></div>
+          <select id="candle-style" class="native-select" aria-label="Стиль">
+            <option value="classic">Класичні</option>
+            <option value="gray">Сірі</option>
+            <option value="white">Білі</option>
+            <option value="hollow">Порожні</option>
+            <option value="bars">Бари</option>
+            <option value="bars-dark">Бари чорносірі</option>
+          </select>
+        </div>
+
+        <div class="toolbar-group" data-toggle="theme">
+          <button class="tool-button" type="button" aria-label="Theme">
+            <span class="tool-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                stroke-linejoin="round">
+                <path d="M12 3v2" />
+                <path d="M12 19v2" />
+                <path d="M4.2 5.8l1.4 1.4" />
+                <path d="M18.4 18.2l1.4 1.4" />
+                <path d="M3 12h2" />
+                <path d="M19 12h2" />
+                <path d="M5.6 18.2l1.4-1.4" />
+                <path d="M17 7.2l1.4-1.4" />
+                <circle cx="12" cy="12" r="4" />
+              </svg>
+            </span>
+            <span class="tool-value" data-value>Theme</span>
+          </button>
+          <select id="theme" class="native-select" aria-label="Theme">
+            <option value="light">Світлий</option>
+            <option value="dark">Темний</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
     <div id="chart"></div>
     <div id="chart-hover-tooltip" hidden></div>
   </div>
 
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-  <script src="/chart_adapter_lite.js?v=20260204-10"></script>
-  <script src="/app.js?v=20260204-11"></script>
+  <script src="/chart_adapter_lite.js?v=20260204-11"></script>
+  <script src="/app.js?v=20260204-17"></script>
 </body>
 
 </html>

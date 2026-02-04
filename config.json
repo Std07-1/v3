@@ -58,5 +58,6 @@
     "day_anchor_offset_s_alt": 75600,
     "day_anchor_offset_s_alt2": 79200,
     "day_anchor_offset_s_d1": 75600,
-    "day_anchor_offset_s_d1_alt": 79200
+    "day_anchor_offset_s_d1_alt": 79200,
+    "ui_debug": false
 }
