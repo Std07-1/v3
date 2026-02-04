@@ -6,6 +6,7 @@ const elTf = document.getElementById('tf');
 const elReload = document.getElementById('reload');
 const elFollow = document.getElementById('follow');
 const elTheme = document.getElementById('theme');
+const elCandleStyle = document.getElementById('candle-style');
 const elStatus = document.getElementById('status');
 const chartEl = document.getElementById('chart');
 const elDiagLoad = document.getElementById('diag-load');
@@ -17,11 +18,15 @@ const elDiagError = document.getElementById('diag-error');
 const elDiagUtc = document.getElementById('diag-utc');
 
 let controller = null;
-
 let lastOpenMs = null;
 let pollTimer = null;
+let currentTheme = 'light';
+
 const RIGHT_OFFSET_PX = 48;
 const THEME_KEY = 'ui_chart_theme';
+const CANDLE_STYLE_KEY = 'ui_chart_candle_style';
+const SYMBOL_KEY = 'ui_chart_symbol';
+const TF_KEY = 'ui_chart_tf';
 const diag = {
   loadAt: null,
   pollAt: null,
@@ -29,6 +34,7 @@ const diag = {
   lastPollBars: 0,
   lastError: '',
 };
+
 function fmtAge(ms) {
   if (ms == null) return '—';
   if (ms < 1000) return `${ms}ms`;
@@ -79,6 +85,7 @@ const REQUIRED_CONTROLLER_METHODS = [
   'clearAll',
   'setViewTimeframe',
   'setTheme',
+  'setCandleStyle',
   'isAtEnd',
   'scrollToRealTime',
   'scrollToRealTimeWithOffset',
@@ -115,21 +122,144 @@ function makeChart() {
   }
 }
 
-function applyTheme(isDark) {
-  document.body.classList.toggle('dark', isDark);
+function applyTheme(theme) {
+  const mode = theme || 'light';
+  currentTheme = mode;
+  document.body.classList.remove('dark', 'dark-gray');
+  if (mode === 'dark') document.body.classList.add('dark');
+  if (mode === 'dark-gray') document.body.classList.add('dark-gray');
+  document.body.dataset.theme = mode;
+  setStatus(`theme=${mode}`);
   try {
-    localStorage.setItem(THEME_KEY, isDark ? 'dark' : 'light');
+    localStorage.setItem(THEME_KEY, mode);
   } catch (e) {
     // ignore storage errors
   }
   if (controller && typeof controller.setTheme === 'function') {
-    controller.setTheme(isDark);
+    controller.setTheme(mode);
   }
+}
+
+function applyCandleStyle(style) {
+  if (controller && typeof controller.setCandleStyle === 'function') {
+    controller.setCandleStyle(style);
+  }
+}
+
+const TOOLBAR_MENU_IDS = ['symbol', 'tf', 'candle-style'];
+const TOOLBAR_ALL_IDS = ['symbol', 'tf', 'candle-style', 'theme'];
+
+function getToolbarGroup(selectId) {
+  return document.querySelector(`.toolbar-group[data-select="${selectId}"], .toolbar-group[data-toggle="${selectId}"]`);
+}
+
+function closeAllToolMenus(exceptId = null) {
+  for (const id of TOOLBAR_MENU_IDS) {
+    if (id === exceptId) continue;
+    const group = getToolbarGroup(id);
+    if (group) group.classList.remove('open');
+  }
+}
+
+function updateToolbarValue(selectId) {
+  const select = document.getElementById(selectId);
+  const group = getToolbarGroup(selectId);
+  if (!select || !group) return;
+  const valueEl = group.querySelector('[data-value]');
+  const option = select.options && select.selectedIndex >= 0
+    ? select.options[select.selectedIndex]
+    : null;
+  if (valueEl) {
+    valueEl.textContent = option ? option.textContent : (select.value || '—');
+  }
+  const menu = group.querySelector('.tool-menu');
+  if (!menu) return;
+  for (const btn of menu.querySelectorAll('.tool-option')) {
+    btn.classList.toggle('active', btn.dataset.value === select.value);
+  }
+}
+
+function buildToolbarMenu(selectId) {
+  const select = document.getElementById(selectId);
+  const group = getToolbarGroup(selectId);
+  if (!select || !group) return;
+  const menu = group.querySelector('.tool-menu');
+  if (!menu) {
+    updateToolbarValue(selectId);
+    return;
+  }
+  menu.innerHTML = '';
+  const options = Array.from(select.options || []);
+  if (options.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'tool-option';
+    empty.textContent = '—';
+    menu.appendChild(empty);
+    updateToolbarValue(selectId);
+    return;
+  }
+  for (const opt of options) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tool-option';
+    btn.dataset.value = opt.value;
+    btn.textContent = opt.textContent;
+    if (opt.value === select.value) btn.classList.add('active');
+    btn.addEventListener('click', () => {
+      select.value = opt.value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      updateToolbarValue(selectId);
+      const groupLocal = getToolbarGroup(selectId);
+      if (groupLocal) groupLocal.classList.remove('open');
+    });
+    menu.appendChild(btn);
+  }
+  updateToolbarValue(selectId);
+}
+
+function setupToolbarSelect(selectId) {
+  const select = document.getElementById(selectId);
+  const group = getToolbarGroup(selectId);
+  if (!select || !group) return;
+  const button = group.querySelector('.tool-button');
+  if (button) {
+    if (selectId === 'theme') {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const next = select.value === 'dark' ? 'light' : 'dark';
+        select.value = next;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        updateToolbarValue(selectId);
+      });
+    } else {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const isOpen = group.classList.contains('open');
+        closeAllToolMenus(selectId);
+        if (!isOpen) {
+          buildToolbarMenu(selectId);
+          group.classList.add('open');
+        } else {
+          group.classList.remove('open');
+        }
+      });
+    }
+  }
+  select.addEventListener('change', () => updateToolbarValue(selectId));
+  buildToolbarMenu(selectId);
+}
+
+function initToolbars() {
+  for (const id of TOOLBAR_ALL_IDS) {
+    setupToolbarSelect(id);
+  }
+  document.addEventListener('click', () => closeAllToolMenus());
 }
 
 async function loadSymbols() {
   const data = await apiGet('/api/symbols');
   const syms = data.symbols || [];
+  const preferred = elSymbol.value;
   elSymbol.innerHTML = '';
   for (const s of syms) {
     const opt = document.createElement('option');
@@ -143,6 +273,10 @@ async function loadSymbols() {
     opt.textContent = 'XAU/USD';
     elSymbol.appendChild(opt);
   }
+  if (preferred && Array.from(elSymbol.options).some((opt) => opt.value === preferred)) {
+    elSymbol.value = preferred;
+  }
+  buildToolbarMenu('symbol');
 }
 
 async function loadBarsFull() {
@@ -169,6 +303,10 @@ async function loadBarsFull() {
 
   if (controller && typeof controller.setBars === 'function') {
     controller.setBars(bars);
+  }
+  applyTheme(currentTheme);
+  if (elCandleStyle) {
+    applyCandleStyle(elCandleStyle.value || 'classic');
   }
   if (controller && typeof controller.setViewTimeframe === 'function') {
     controller.setViewTimeframe(tf);
@@ -228,40 +366,107 @@ function resetPolling() {
 
 async function init() {
   makeChart();
-  let isDark = false;
+  initToolbars();
+  let theme = 'light';
+  let candleStyle = 'classic';
+  let savedSymbol = null;
+  let savedTf = null;
   try {
     const saved = localStorage.getItem(THEME_KEY);
-    if (saved === 'dark') isDark = true;
-    if (saved === 'light') isDark = false;
-    if (!saved && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      isDark = true;
+    if (saved === 'dark' || saved === 'light' || saved === 'dark-gray') {
+      theme = saved;
+    } else if (!saved && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      theme = 'dark';
     }
+    const savedStyle = localStorage.getItem(CANDLE_STYLE_KEY);
+    if (savedStyle) candleStyle = savedStyle;
+    savedSymbol = localStorage.getItem(SYMBOL_KEY);
+    savedTf = localStorage.getItem(TF_KEY);
   } catch (e) {
     // ignore storage errors
   }
-  elTheme.checked = isDark;
-  applyTheme(isDark);
+  if (elTheme) {
+    elTheme.value = theme;
+  }
+  applyTheme(theme);
+  updateToolbarValue('theme');
+  if (elCandleStyle) {
+    elCandleStyle.value = candleStyle;
+  }
+  applyCandleStyle(candleStyle);
+  updateToolbarValue('candle-style');
+  if (elTf) {
+    const tfValue = savedTf || '60';
+    if (Array.from(elTf.options).some((opt) => opt.value === tfValue)) {
+      elTf.value = tfValue;
+    }
+  }
   await loadSymbols();
+  const symbolPreferred = savedSymbol || 'XAU/USD';
+  if (Array.from(elSymbol.options).some((opt) => opt.value === symbolPreferred)) {
+    elSymbol.value = symbolPreferred;
+  }
+  updateToolbarValue('symbol');
   await loadBarsFull();
+  updateToolbarValue('tf');
   resetPolling();
   updateUtcNow();
   setInterval(updateUtcNow, 1000);
 
-  elReload.addEventListener('click', async () => {
-    await loadBarsFull();
-  });
+  if (elReload) {
+    elReload.addEventListener('click', async () => {
+      await loadBarsFull();
+    });
+  }
 
   elSymbol.addEventListener('change', async () => {
+    try {
+      localStorage.setItem(SYMBOL_KEY, elSymbol.value);
+    } catch (e) {
+      // ignore storage errors
+    }
     await loadBarsFull();
   });
 
   elTf.addEventListener('change', async () => {
+    try {
+      localStorage.setItem(TF_KEY, elTf.value);
+    } catch (e) {
+      // ignore storage errors
+    }
     await loadBarsFull();
   });
 
-  elTheme.addEventListener('change', () => {
-    applyTheme(elTheme.checked);
-  });
+  if (elTheme) {
+    const readThemeValue = () => {
+      const idx = elTheme.selectedIndex;
+      if (idx >= 0 && elTheme.options && elTheme.options[idx]) {
+        return elTheme.options[idx].value || 'light';
+      }
+      return elTheme.value || 'light';
+    };
+    elTheme.addEventListener('change', () => {
+      const mode = readThemeValue();
+      applyTheme(mode);
+      setStatus(`theme_change=${mode}`);
+    });
+    elTheme.addEventListener('input', () => {
+      const mode = readThemeValue();
+      applyTheme(mode);
+    });
+  }
+
+  if (elCandleStyle) {
+    elCandleStyle.addEventListener('change', () => {
+      const style = elCandleStyle.value;
+      try {
+        localStorage.setItem(CANDLE_STYLE_KEY, style);
+      } catch (e) {
+        // ignore storage errors
+      }
+      applyCandleStyle(style);
+    });
+  }
 
   window.addEventListener('keydown', (event) => {
     if (event.defaultPrevented) return;

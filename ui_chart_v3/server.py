@@ -197,6 +197,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         self._bad("unknown_endpoint")
 
+    def end_headers(self) -> None:
+        path = self.path or ""
+        if not path.startswith("/api/"):
+            self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
     # Вимикаємо логування кожного статичного файлу (за замовчуванням надто шумно)
     def log_message(self, format: str, *args: Any) -> None:
         if self.path.startswith("/api/"):

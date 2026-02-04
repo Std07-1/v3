@@ -93,12 +93,80 @@
         },
     };
 
+    const DARK_GRAY_CHART_OPTIONS = {
+        ...DEFAULT_CHART_OPTIONS,
+        layout: {
+            background: { color: "#2a3036" },
+            textColor: "#d0d3d8",
+        },
+        grid: {
+            vertLines: { color: "rgba(90, 96, 104, 0.35)" },
+            horzLines: { color: "rgba(90, 96, 104, 0.35)" },
+        },
+        crosshair: {
+            mode: LightweightCharts.CrosshairMode.Normal,
+            vertLine: {
+                color: "rgba(178, 206, 247, 0.45)",
+                width: 1,
+                style: LightweightCharts.LineStyle.Dashed,
+            },
+            horzLine: {
+                color: "rgba(42, 46, 52, 0.45)",
+                width: 1,
+                style: LightweightCharts.LineStyle.Dashed,
+            },
+        },
+    };
+
     const MIN_PRICE_SPAN = 1e-4;
     const WHEEL_OPTIONS = { passive: false, capture: true };
     const PRICE_AXIS_FALLBACK_WIDTH_PX = 56;
     const DRAG_ACTIVATION_PX = 6;
     const VOLUME_UP_COLOR = "rgba(38, 166, 154, 0.32)";
     const VOLUME_DOWN_COLOR = "rgba(239, 83, 80, 0.32)";
+    const CANDLE_STYLE_DEFAULT = "classic";
+    const CANDLE_STYLES = {
+        classic: {
+            upColor: "#26a69a",
+            downColor: "#ef5350",
+            borderUpColor: "#26a69a",
+            borderDownColor: "#ef5350",
+            wickUpColor: "#26a69a",
+            wickDownColor: "#ef5350",
+        },
+        gray: {
+            upColor: "#9aa0a6",
+            downColor: "rgba(255,255,255,0)",
+            borderUpColor: "#9aa0a6",
+            borderDownColor: "#5f6368",
+            wickUpColor: "#9aa0a6",
+            wickDownColor: "#5f6368",
+        },
+        dark: {
+            upColor: "#3a3f44",
+            downColor: "#1f2327",
+            borderUpColor: "#3a3f44",
+            borderDownColor: "#1f2327",
+            wickUpColor: "#3a3f44",
+            wickDownColor: "#1f2327",
+        },
+        white: {
+            upColor: "#e2e5e9",
+            downColor: "#2f3338",
+            borderUpColor: "#e2e5e9",
+            borderDownColor: "#2f3338",
+            wickUpColor: "#e2e5e9",
+            wickDownColor: "#2f3338",
+        },
+        hollow: {
+            upColor: "rgba(255,255,255,0)",
+            downColor: "#ef5350",
+            borderUpColor: "#26a69a",
+            borderDownColor: "#ef5350",
+            wickUpColor: "#26a69a",
+            wickDownColor: "#ef5350",
+        },
+    };
 
     function normalizeBar(bar) {
         if (!bar) return null;
@@ -155,6 +223,11 @@
             priceLineVisible: false,
             lastValueVisible: true,
         });
+        const barsSeries = chart.addBarSeries({
+            priceLineVisible: false,
+            lastValueVisible: true,
+        });
+        barsSeries.applyOptions({ visible: false });
         const volumes = chart.addHistogramSeries({
             priceFormat: { type: "volume" },
             priceScaleId: "",
@@ -173,6 +246,13 @@
         };
 
         let lastBar = null;
+        let activeSeries = candles;
+        let currentCandleStyle = CANDLE_STYLE_DEFAULT;
+        let lastBarsData = [];
+        let currentVolumeColors = {
+            up: VOLUME_UP_COLOR,
+            down: VOLUME_DOWN_COLOR,
+        };
         let barTimeSpanSeconds = 60;
         const interactionCleanup = [];
         const verticalPanState = {
@@ -229,7 +309,9 @@
             };
         };
 
-        candles.applyOptions({ autoscaleInfoProvider: makePriceScaleAutoscaleInfoProvider() });
+        const autoscaleProvider = makePriceScaleAutoscaleInfoProvider();
+        candles.applyOptions({ autoscaleInfoProvider: autoscaleProvider });
+        barsSeries.applyOptions({ autoscaleInfoProvider: autoscaleProvider });
         const volumeByTime = new Map();
 
         const isPointInCandleRange = (bar, point) => {
@@ -248,7 +330,7 @@
                     tooltipEl.hidden = true;
                     return;
                 }
-                const bar = param.seriesData.get(candles);
+                const bar = param.seriesData.get(activeSeries);
                 if (!bar) {
                     tooltipEl.hidden = true;
                     return;
@@ -358,8 +440,9 @@
             if (priceScaleState.lastAutoRange) return { ...priceScaleState.lastAutoRange };
             const { paneHeight } = getPaneMetrics();
             if (!paneHeight) return null;
-            const top = candles.coordinateToPrice(0);
-            const bottom = candles.coordinateToPrice(paneHeight);
+            const series = activeSeries || candles;
+            const top = series.coordinateToPrice(0);
+            const bottom = series.coordinateToPrice(paneHeight);
             if (!Number.isFinite(top) || !Number.isFinite(bottom)) return null;
             const min = Math.min(top, bottom);
             const max = Math.max(top, bottom);
@@ -394,7 +477,8 @@
             const currentRange = getEffectivePriceRange();
             if (!currentRange) return;
             const rect = container.getBoundingClientRect();
-            const anchor = candles.coordinateToPrice(event.clientY - rect.top);
+            const series = activeSeries || candles;
+            const anchor = series.coordinateToPrice(event.clientY - rect.top);
             if (!Number.isFinite(anchor)) return;
             const span = currentRange.max - currentRange.min;
             if (!(span > 0)) return;
@@ -624,9 +708,11 @@
                 resetManualPriceScale({ silent: true });
                 priceScaleState.lastAutoRange = null;
                 candles.setData([]);
+                barsSeries.setData([]);
                 volumes.setData([]);
                 volumeByTime.clear();
                 lastBar = null;
+                lastBarsData = [];
                 return;
             }
 
@@ -645,12 +731,14 @@
                 }
             }
 
+            lastBarsData = deduped;
             candles.setData(deduped);
+            barsSeries.setData(deduped);
             volumeByTime.clear();
             const volumeData = deduped.map((bar) => ({
                 time: bar.time,
                 value: bar.volume,
-                color: bar.close >= bar.open ? VOLUME_UP_COLOR : VOLUME_DOWN_COLOR,
+                color: bar.close >= bar.open ? currentVolumeColors.up : currentVolumeColors.down,
             }));
             volumes.setData(volumeData);
             for (const bar of deduped) {
@@ -670,15 +758,31 @@
                         barTimeSpanSeconds = Math.max(1, Math.round((barTimeSpanSeconds * 3 + diff) / 4));
                     }
                 }
+                if (lastBarsData.length && lastBarsData[lastBarsData.length - 1].time === normalized.time) {
+                    lastBarsData[lastBarsData.length - 1] = normalized;
+                } else {
+                    lastBarsData.push(normalized);
+                }
                 candles.update(normalized);
+                barsSeries.update(normalized);
                 volumeByTime.set(String(normalized.time), normalized.volume);
                 volumes.update({
                     time: normalized.time,
                     value: normalized.volume,
-                    color: normalized.close >= normalized.open ? VOLUME_UP_COLOR : VOLUME_DOWN_COLOR,
+                    color: normalized.close >= normalized.open ? currentVolumeColors.up : currentVolumeColors.down,
                 });
                 lastBar = normalized;
             }
+        }
+
+        function _applyVolumeColors() {
+            if (!lastBarsData.length) return;
+            const volumeData = lastBarsData.map((bar) => ({
+                time: bar.time,
+                value: bar.volume,
+                color: bar.close >= bar.open ? currentVolumeColors.up : currentVolumeColors.down,
+            }));
+            volumes.setData(volumeData);
         }
 
         function getCurrentBarSpacing() {
@@ -765,14 +869,102 @@
             resetManualPriceScale({ silent: true });
             priceScaleState.lastAutoRange = null;
             candles.setData([]);
+            barsSeries.setData([]);
             volumes.setData([]);
             volumeByTime.clear();
             lastBar = null;
         }
 
-        function setTheme(isDark) {
+        function setCandleStyle(style) {
+            const name = (style || "").toLowerCase();
+            if (name === "bars-dark") {
+                currentVolumeColors = {
+                    up: "rgba(90, 96, 102, 0.5)",
+                    down: "rgba(50, 55, 60, 0.5)",
+                };
+            } else if (name === "dark") {
+                currentVolumeColors = {
+                    up: "rgba(80, 86, 92, 0.4)",
+                    down: "rgba(40, 45, 50, 0.4)",
+                };
+            } else if (name === "gray") {
+                currentVolumeColors = {
+                    up: "rgba(154, 160, 166, 0.45)",
+                    down: "rgba(95, 99, 104, 0.45)",
+                };
+            } else if (name === "white") {
+                currentVolumeColors = {
+                    up: "rgba(226, 229, 233, 0.45)",
+                    down: "rgba(47, 51, 56, 0.45)",
+                };
+            } else if (name === "hollow") {
+                currentVolumeColors = {
+                    up: "rgba(38, 166, 154, 0.28)",
+                    down: "rgba(239, 83, 80, 0.28)",
+                };
+            } else {
+                currentVolumeColors = {
+                    up: VOLUME_UP_COLOR,
+                    down: VOLUME_DOWN_COLOR,
+                };
+            }
+            if (name === "bars" || name === "bars-dark") {
+                currentCandleStyle = "bars";
+                activeSeries = barsSeries;
+                if (typeof candles.applyOptions === "function") {
+                    candles.applyOptions({
+                        visible: true,
+                        upColor: "rgba(0,0,0,0)",
+                        downColor: "rgba(0,0,0,0)",
+                        borderUpColor: "rgba(0,0,0,0)",
+                        borderDownColor: "rgba(0,0,0,0)",
+                        wickUpColor: "rgba(0,0,0,0)",
+                        wickDownColor: "rgba(0,0,0,0)",
+                    });
+                }
+                if (typeof barsSeries.applyOptions === "function") {
+                    if (name === "bars-dark") {
+                        barsSeries.applyOptions({
+                            visible: true,
+                            upColor: "#c9ced6",
+                            downColor: "#5a6068",
+                            thinBars: true,
+                            openVisible: true,
+                        });
+                    } else {
+                        barsSeries.applyOptions({
+                            visible: true,
+                            upColor: "#26a69a",
+                            downColor: "#ef5350",
+                            thinBars: true,
+                            openVisible: true,
+                        });
+                    }
+                }
+                _applyVolumeColors();
+                return;
+            }
+            const preset = CANDLE_STYLES[name] || CANDLE_STYLES[CANDLE_STYLE_DEFAULT];
+            if (typeof candles.applyOptions === "function") {
+                candles.applyOptions({ ...preset, visible: true });
+            }
+            if (typeof barsSeries.applyOptions === "function") {
+                barsSeries.applyOptions({ visible: false });
+            }
+            currentCandleStyle = name in CANDLE_STYLES ? name : CANDLE_STYLE_DEFAULT;
+            activeSeries = candles;
+            _applyVolumeColors();
+        }
+
+        function setTheme(mode) {
             try {
-                chart.applyOptions(isDark ? DARK_CHART_OPTIONS : DEFAULT_CHART_OPTIONS);
+                if (mode === true || mode === "dark") {
+                    chart.applyOptions(DARK_CHART_OPTIONS);
+                } else if (mode === "dark-gray" || mode === "dark_gray") {
+                    chart.applyOptions(DEFAULT_CHART_OPTIONS);
+                } else {
+                    chart.applyOptions(DEFAULT_CHART_OPTIONS);
+                }
             } catch (_e) {
                 // noop
             }
@@ -789,6 +981,7 @@
             clearAll,
             setViewTimeframe,
             setTheme,
+            setCandleStyle,
             isAtEnd,
             scrollToRealTime,
             scrollToRealTimeWithOffset,
