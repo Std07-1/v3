@@ -9,6 +9,10 @@ __pycache__/
 /data_v3/
 /History/
 
+# Legacy
+/Old system Connector v2/
+/tools/tail_guard.py
+
 # Журнали та записи
 /changelog.jsonl
 /CHANGELOG.md
