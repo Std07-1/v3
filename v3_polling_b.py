@@ -242,6 +242,14 @@ def expected_last_closed_m1_open_ms(now_ms: int) -> int:
     return b - minute
 
 
+def sleep_to_next_minute(safety_delay_s: int) -> None:
+    now = time.time()
+    next_min = (int(now // 60) + 1) * 60
+    target = next_min + safety_delay_s
+    delay = max(0.0, target - now)
+    time.sleep(delay)
+
+
 def assert_invariants(b: CandleBar, anchor_offset_s: int = 0) -> None:
     tf_ms = b.tf_s * 1000
     if (b.open_time_ms - anchor_offset_s * 1000) % tf_ms != 0:
@@ -874,6 +882,8 @@ class PollingConnectorB:
         broker_base_tfs_s: List[int],
         broker_base_fetch_on_close: bool,
         broker_base_max_tf_per_poll: int,
+        broker_base_cold_start_counts: Dict[int, int],
+        broker_base_cold_start_enabled: bool,
         day_anchor_offset_s: int,
         day_anchor_offset_s_d1: Optional[int],
         day_anchor_offset_s_d1_alt: Optional[int],
@@ -906,6 +916,12 @@ class PollingConnectorB:
             self._derived_tfs_s = [x for x in self._derived_tfs_s if x not in overlap]
         self._broker_base_fetch_on_close = bool(broker_base_fetch_on_close)
         self._broker_base_max_tf_per_poll = max(0, int(broker_base_max_tf_per_poll))
+        self._broker_base_cold_start_counts = {
+            int(k): int(v)
+            for k, v in broker_base_cold_start_counts.items()
+            if int(k) > 0 and int(v) > 0
+        }
+        self._broker_base_cold_start_enabled = bool(broker_base_cold_start_enabled)
         self._day_anchor_offset_s = day_anchor_offset_s
         self._day_anchor_offset_s_d1 = day_anchor_offset_s_d1
         self._day_anchor_offset_s_d1_alt = day_anchor_offset_s_d1_alt
@@ -943,8 +959,25 @@ class PollingConnectorB:
 
     def run_forever(self) -> None:
         self._bootstrap_from_disk()
+        self._cold_start_base_from_broker()
         self._warmup_history()
         self._loop()
+
+    def bootstrap_and_warmup(self) -> None:
+        self._bootstrap_from_disk()
+        self._cold_start_base_from_broker()
+        self._warmup_history()
+
+    def poll_iteration(self) -> None:
+        self._poll_once()
+        self._poll_counter += 1
+        if self._poll_counter % self._backfill_every_n_polls == 0:
+            written = self._backfill_step()
+            if written > self._backfill_step_bars:
+                self._rebuild_derived_recent()
+
+    def close(self) -> None:
+        self._writer.close()
 
     def _bootstrap_from_disk(self) -> None:
         last = tail_last_bar_time_ms(self._data_root, self._symbol, tf_s=60)
@@ -975,6 +1008,48 @@ class PollingConnectorB:
             last_b = tail_last_bar_time_ms(self._data_root, self._symbol, tf_s=tf_s)
             if last_b is not None:
                 self._last_saved_base[tf_s] = last_b
+
+    def _cold_start_base_from_broker(self) -> None:
+        if not self._broker_base_cold_start_enabled:
+            return
+        if not self._broker_base_cold_start_counts:
+            logging.warning("Cold-start base: порожні counts, пропуск.")
+            return
+
+        date_to = dt.datetime.now(dt.timezone.utc)
+        total_written = 0
+        total_existing = 0
+        total_found = 0
+
+        for tf_s, n in sorted(self._broker_base_cold_start_counts.items()):
+            if self._broker_base_tfs_s and tf_s not in self._broker_base_tfs_s:
+                continue
+            if self._last_saved_base.get(tf_s) is not None:
+                logging.info("Cold-start base: TF=%ds вже є на диску, пропуск.", tf_s)
+                continue
+            bars = self._provider.fetch_last_n_tf(self._symbol, tf_s=tf_s, n=n, date_to_utc=date_to)
+            if not bars:
+                logging.warning("Cold-start base: broker пустий TF=%ds", tf_s)
+                continue
+
+            for b in bars:
+                total_found += 1
+                if self._has_on_disk(tf_s, b.open_time_ms):
+                    total_existing += 1
+                    continue
+                self._writer.append(b)
+                self._mark_on_disk(tf_s, b.open_time_ms)
+                total_written += 1
+                last = self._last_saved_base.get(tf_s)
+                if last is None or b.open_time_ms > last:
+                    self._last_saved_base[tf_s] = b.open_time_ms
+
+        logging.info(
+            "Cold-start base: written=%d existing=%d found=%d",
+            total_written,
+            total_existing,
+            total_found,
+        )
 
     def _warmup_history(self) -> None:
         """Підтягує warmup_bars останніх 1m барів і пише лише те, чого не було."""
@@ -1011,23 +1086,14 @@ class PollingConnectorB:
         try:
             while True:
                 self._sleep_to_next_minute()
-                self._poll_once()
-                self._poll_counter += 1
-                if self._poll_counter % self._backfill_every_n_polls == 0:
-                    written = self._backfill_step()
-                    if written > self._backfill_step_bars:
-                        self._rebuild_derived_recent()
+                self.poll_iteration()
         except KeyboardInterrupt:
             logging.info("Зупинено користувачем (KeyboardInterrupt). Завершую.")
         finally:
             self._writer.close()
 
     def _sleep_to_next_minute(self) -> None:
-        now = time.time()
-        next_min = (int(now // 60) + 1) * 60
-        target = next_min + self._safety_delay_s
-        delay = max(0.0, target - now)
-        time.sleep(delay)
+        sleep_to_next_minute(self._safety_delay_s)
 
     def _last_closed_cutoff_open_ms(self) -> int:
         return expected_last_closed_m1_open_ms(utc_now_ms())
@@ -1457,9 +1523,64 @@ class PollingConnectorB:
         return written
 
 
+class MultiSymbolRunner:
+    def __init__(self, engines: List[PollingConnectorB]) -> None:
+        self._engines = engines
+        self._safety_delay_s = max((e._safety_delay_s for e in engines), default=0)  # noqa: SLF001
+
+    def run_forever(self) -> None:
+        symbols = [e._symbol for e in self._engines]  # noqa: SLF001
+        logging.info("Polling loop: multi активний symbols=%s", ",".join(symbols))
+        try:
+            for e in self._engines:
+                e.bootstrap_and_warmup()
+            while True:
+                sleep_to_next_minute(self._safety_delay_s)
+                for e in self._engines:
+                    e.poll_iteration()
+        except KeyboardInterrupt:
+            logging.info("Зупинено користувачем (KeyboardInterrupt). Завершую.")
+        finally:
+            for e in self._engines:
+                e.close()
+
+
 def main() -> int:
     setup_logging(verbose=False)
     logging.info("Запуск PollingConnectorB")
+
+    def _parse_tf_counts_cfg(raw: Any) -> Dict[int, int]:
+        out: Dict[int, int] = {}
+        if raw is None:
+            return out
+        if isinstance(raw, dict):
+            for k, v in raw.items():
+                try:
+                    tf_s = int(k)
+                    cnt = int(v)
+                except Exception:
+                    continue
+                if tf_s > 0 and cnt > 0:
+                    out[tf_s] = cnt
+            return out
+        if isinstance(raw, list):
+            for item in raw:
+                try:
+                    s = str(item)
+                    if ":" in s:
+                        tf_s_str, n_str = s.split(":", 1)
+                    elif "=" in s:
+                        tf_s_str, n_str = s.split("=", 1)
+                    else:
+                        continue
+                    tf_s = int(tf_s_str.strip())
+                    cnt = int(n_str.strip())
+                    if tf_s > 0 and cnt > 0:
+                        out[tf_s] = cnt
+                except Exception:
+                    continue
+            return out
+        return out
 
     try:
         cfg = load_config("config.json")
@@ -1479,7 +1600,11 @@ def main() -> int:
         url = str(cfg.get("url", "http://www.fxcorporate.com/Hosts.jsp"))
         connection = str(cfg.get("connection", "Demo"))
 
-        symbol = str(cfg.get("symbol", "XAU/USD"))
+        symbols_raw = cfg.get("symbols", None)
+        if isinstance(symbols_raw, list) and symbols_raw:
+            symbols = [str(x) for x in symbols_raw if str(x).strip()]
+        else:
+            symbols = [str(cfg.get("symbol", "XAU/USD"))]
         data_root = str(cfg.get("data_root", "./data_v3"))
         warmup_bars = int(cfg.get("warmup_bars", 3000))
         safety_delay_s = int(cfg.get("safety_delay_s", 2))
@@ -1494,6 +1619,12 @@ def main() -> int:
 
         broker_base_fetch_on_close = bool(cfg.get("broker_base_fetch_on_close", True))
         broker_base_max_tf_per_poll = int(cfg.get("broker_base_max_tf_per_poll", 0))
+        broker_base_cold_start_enabled = bool(
+            cfg.get("broker_base_cold_start_enabled", True)
+        )
+        broker_base_cold_start_counts = _parse_tf_counts_cfg(
+            cfg.get("broker_base_cold_start_counts", {"14400": 1080, "86400": 180})
+        )
 
         day_anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
         day_anchor_offset_s_alt_raw = cfg.get("day_anchor_offset_s_alt", None)
@@ -1534,11 +1665,11 @@ def main() -> int:
         return 2
 
     logging.debug(
-        "Параметри: user=%s url=%s connection=%s symbol=%s data_root=%s warmup_bars=%d safety_delay_s=%d derived=%s broker_base=%s broker_base_fetch_on_close=%s broker_base_max_tf_per_poll=%d day_anchor_offset_s=%d day_anchor_offset_s_alt=%s day_anchor_offset_s_alt2=%s day_anchor_offset_s_d1=%s day_anchor_offset_s_d1_alt=%s",
+        "Параметри: user=%s url=%s connection=%s symbols=%s data_root=%s warmup_bars=%d safety_delay_s=%d derived=%s broker_base=%s broker_base_fetch_on_close=%s broker_base_max_tf_per_poll=%d broker_base_cold_start_enabled=%s broker_base_cold_start_counts=%s day_anchor_offset_s=%d day_anchor_offset_s_alt=%s day_anchor_offset_s_alt2=%s day_anchor_offset_s_d1=%s day_anchor_offset_s_d1_alt=%s",
         user_id,
         url,
         connection,
-        symbol,
+        symbols,
         data_root,
         warmup_bars,
         safety_delay_s,
@@ -1546,6 +1677,8 @@ def main() -> int:
         broker_base_tfs_s,
         str(broker_base_fetch_on_close),
         broker_base_max_tf_per_poll,
+        str(broker_base_cold_start_enabled),
+        broker_base_cold_start_counts,
         day_anchor_offset_s,
         str(day_anchor_offset_s_alt),
         str(day_anchor_offset_s_alt2),
@@ -1581,35 +1714,46 @@ def main() -> int:
             day_anchor_offset_s_alt=day_anchor_offset_s_alt,
             day_anchor_offset_s_alt2=day_anchor_offset_s_alt2,
         ) as prov:
-            engine = PollingConnectorB(
-                provider=prov,
-                data_root=data_root,
-                symbol=symbol,
-                config_path="config.json",
-                warmup_bars=warmup_bars,
-                safety_delay_s=safety_delay_s,
-                derived_tfs_s=derived_tfs_s,
-                broker_base_tfs_s=broker_base_tfs_s,
-                broker_base_fetch_on_close=broker_base_fetch_on_close,
-                broker_base_max_tf_per_poll=broker_base_max_tf_per_poll,
-                day_anchor_offset_s=day_anchor_offset_s,
-                day_anchor_offset_s_d1=day_anchor_offset_s_d1,
-                day_anchor_offset_s_d1_alt=day_anchor_offset_s_d1_alt,
-                day_anchor_offset_s_alt=day_anchor_offset_s_alt,
-                day_anchor_offset_s_alt2=day_anchor_offset_s_alt2,
-                backfill_step_bars=backfill_step_bars,
-                backfill_every_n_polls=backfill_every_n_polls,
-                derived_rebuild_lookback_bars=derived_rebuild_lookback_bars,
-                derived_tolerate_missing_minutes=derived_tolerate_missing_minutes,
-                derived_backfill_from_broker=derived_backfill_from_broker,
-                derived_force_close_from_broker=derived_force_close_from_broker,
-                derived_force_close_max_tf_per_poll=derived_force_close_max_tf_per_poll,
-                derived_rebuild_use_tool=derived_rebuild_use_tool,
-                derived_rebuild_tool_dry_run=derived_rebuild_tool_dry_run,
-            )
-            logging.debug("Engine створено, стартую run_forever()")
+            engines: List[PollingConnectorB] = []
+            for symbol in symbols:
+                engines.append(
+                    PollingConnectorB(
+                        provider=prov,
+                        data_root=data_root,
+                        symbol=symbol,
+                        config_path="config.json",
+                        warmup_bars=warmup_bars,
+                        safety_delay_s=safety_delay_s,
+                        derived_tfs_s=derived_tfs_s,
+                        broker_base_tfs_s=broker_base_tfs_s,
+                        broker_base_fetch_on_close=broker_base_fetch_on_close,
+                        broker_base_max_tf_per_poll=broker_base_max_tf_per_poll,
+                        broker_base_cold_start_counts=broker_base_cold_start_counts,
+                        broker_base_cold_start_enabled=broker_base_cold_start_enabled,
+                        day_anchor_offset_s=day_anchor_offset_s,
+                        day_anchor_offset_s_d1=day_anchor_offset_s_d1,
+                        day_anchor_offset_s_d1_alt=day_anchor_offset_s_d1_alt,
+                        day_anchor_offset_s_alt=day_anchor_offset_s_alt,
+                        day_anchor_offset_s_alt2=day_anchor_offset_s_alt2,
+                        backfill_step_bars=backfill_step_bars,
+                        backfill_every_n_polls=backfill_every_n_polls,
+                        derived_rebuild_lookback_bars=derived_rebuild_lookback_bars,
+                        derived_tolerate_missing_minutes=derived_tolerate_missing_minutes,
+                        derived_backfill_from_broker=derived_backfill_from_broker,
+                        derived_force_close_from_broker=derived_force_close_from_broker,
+                        derived_force_close_max_tf_per_poll=derived_force_close_max_tf_per_poll,
+                        derived_rebuild_use_tool=derived_rebuild_use_tool,
+                        derived_rebuild_tool_dry_run=derived_rebuild_tool_dry_run,
+                    )
+                )
+
             try:
-                engine.run_forever()
+                if len(engines) == 1:
+                    logging.debug("Engine створено, стартую run_forever()")
+                    engines[0].run_forever()
+                else:
+                    logging.debug("Engines створено: %d, стартую MultiSymbolRunner", len(engines))
+                    MultiSymbolRunner(engines).run_forever()
             except Exception:
                 logging.exception("Помилка в роботі engine")
                 return 1

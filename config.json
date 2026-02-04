@@ -3,9 +3,14 @@
     "password": "I4eav",
     "url": "http://www.fxcorporate.com/Hosts.jsp",
     "connection": "Demo",
-    "symbol": "XAU/USD",
+    "symbol": "XAG/USD",
+    "symbols": [
+        "XAU/USD",
+        "XAG/USD",
+        "EUR/USD"
+    ],
     "data_root": "./data_v3",
-    "warmup_bars": 3000,
+    "warmup_bars": 5000,
     "safety_delay_s": 2,
     "history_backfill_step_bars": 300,
     "history_backfill_every_n_polls": 5,
@@ -22,6 +27,11 @@
     ],
     "broker_base_fetch_on_close": true,
     "broker_base_max_tf_per_poll": 0,
+    "broker_base_cold_start_enabled": true,
+    "broker_base_cold_start_counts": {
+        "14400": 1080,
+        "86400": 180
+    },
     "derived_force_close_max_tf_per_poll": 0,
     "diagnose_lookback_bars": 60000,
     "market_weekend_close_dow": 4,

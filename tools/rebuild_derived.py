@@ -12,7 +12,6 @@ from v3_polling_b import (
     FxcmHistoryProvider,
     JsonlAppender,
     M1Buffer,
-    anchor_offset_for_tf,
     select_anchor_offset_for_anchor_open_ms,
     derive_from_m1_for_anchor,
     floor_bucket_start_ms,
