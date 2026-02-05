@@ -118,6 +118,11 @@
       user-select: none;
     }
 
+    .hud-price {
+      font-weight: 600;
+      opacity: 0.9;
+    }
+
     .hud-slot {
       display: inline-flex;
       align-items: center;
@@ -482,6 +487,8 @@
           <span id="hud-symbol" class="hud-item hud-slot">—</span>
           <span class="hud-sep">·</span>
           <span id="hud-tf" class="hud-item hud-slot">—</span>
+          <span class="hud-sep">·</span>
+          <span id="hud-price" class="hud-item hud-price">—</span>
           <span id="hud-stream" class="hud-stream" aria-hidden="true"></span>
         </div>
       </div>
@@ -585,7 +592,7 @@
 
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
   <script src="/chart_adapter_lite.js?v=20260204-11"></script>
-  <script src="/app.js?v=20260204-24"></script>
+  <script src="/app.js?v=20260204-25"></script>
 </body>
 
 </html>

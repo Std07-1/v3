@@ -25,6 +25,7 @@ const elHud = document.getElementById('hud');
 const elHudSymbol = document.getElementById('hud-symbol');
 const elHudTf = document.getElementById('hud-tf');
 const elHudStream = document.getElementById('hud-stream');
+const elHudPrice = document.getElementById('hud-price');
 
 let controller = null;
 let lastOpenMs = null;
@@ -33,6 +34,14 @@ let currentTheme = 'light';
 let uiDebugEnabled = true;
 let lastHudSymbol = null;
 let lastHudTf = null;
+let liveEnabled = false;
+let liveSymbol = null;
+let liveTimer = null;
+let lastLiveOpenMs = null;
+let lastLiveTickTs = null;
+let updatesSeqCursor = null;
+let bootId = null;
+const updateStateByKey = new Map();
 
 const RIGHT_OFFSET_PX = 48;
 const THEME_KEY = 'ui_chart_theme';
@@ -61,6 +70,14 @@ function fmtUtc(ms) {
   return `${iso.slice(0, 19).replace('T', ' ')} UTC`;
 }
 
+function fmtPrice(v) {
+  if (v == null) return '—';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '—';
+  const s = n.toFixed(5).replace(/\.0+$/, '').replace(/\.(\d*?)0+$/, '.$1');
+  return s.endsWith('.') ? s.slice(0, -1) : s;
+}
+
 function updateUtcNow() {
   if (!elDiagUtc) return;
   elDiagUtc.textContent = fmtUtc(Date.now());
@@ -79,6 +96,11 @@ function updateDiag(tfSeconds) {
   elDiagBars.textContent = diag.barsTotal ? `${diag.barsTotal} (+${diag.lastPollBars})` : '—';
   elDiagError.textContent = diag.lastError || '—';
   updateStreamingIndicator();
+}
+
+function updateHudPrice(price) {
+  if (!elHudPrice) return;
+  elHudPrice.textContent = fmtPrice(price);
 }
 
 function setStatus(txt) {
@@ -154,8 +176,17 @@ async function loadUiConfig() {
     if (data && typeof data.ui_debug === 'boolean') {
       uiDebugEnabled = data.ui_debug;
     }
+    if (data && typeof data.live_candle_enabled === 'boolean') {
+      liveEnabled = Boolean(data.live_candle_enabled);
+    }
+    if (data && typeof data.live_symbol === 'string') {
+      const raw = data.live_symbol.trim();
+      liveSymbol = raw ? raw : null;
+    }
   } catch (e) {
     uiDebugEnabled = true;
+    liveEnabled = false;
+    liveSymbol = null;
   }
   applyUiDebug();
 }
@@ -477,14 +508,21 @@ async function loadSymbols() {
   updateHudValues();
 }
 
-async function loadBarsFull() {
+async function loadBarsFull(forceDisk = false) {
   const symbol = elSymbol.value;
   const tf = parseInt(elTf.value, 10);
   const limit = 20000;
 
   setStatus('load…');
   diag.lastError = '';
-  const data = await apiGet(`/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${limit}`);
+  let url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${limit}`;
+  if (forceDisk) {
+    url += '&force_disk=1';
+  }
+  const data = await apiGet(url);
+  if (data && data.boot_id) {
+    bootId = data.boot_id;
+  }
   const bars = data.bars || [];
   if (bars.length === 0) {
     setStatus('no_data');
@@ -511,6 +549,8 @@ async function loadBarsFull() {
   }
 
   lastOpenMs = bars[bars.length - 1].open_time_ms;
+  updatesSeqCursor = null;
+  updateHudPrice(bars[bars.length - 1].close);
   diag.barsTotal = bars.length;
   diag.lastPollBars = 0;
   diag.loadAt = Date.now();
@@ -523,7 +563,63 @@ async function loadBarsFull() {
   setStatus(`ok · tf=${tf}s · bars=${bars.length}`);
 }
 
-async function pollLatest() {
+function applyUpdates(events) {
+  if (!Array.isArray(events) || events.length === 0) return 0;
+  let applied = 0;
+  let lastBar = null;
+  let maxSeq = updatesSeqCursor;
+  const sorted = events.slice().sort((a, b) => (a.seq || 0) - (b.seq || 0));
+  for (const ev of sorted) {
+    if (!ev || !ev.bar) continue;
+    const bar = ev.bar;
+    if (!Number.isFinite(bar.open_time_ms)) continue;
+    if (updatesSeqCursor != null && ev.seq != null && ev.seq <= updatesSeqCursor) {
+      continue;
+    }
+    const keySymbol = ev.key && ev.key.symbol ? String(ev.key.symbol) : (bar.symbol || elSymbol.value);
+    const keyTf = ev.key && Number.isFinite(ev.key.tf_s) ? ev.key.tf_s : (Number.isFinite(bar.tf_s) ? bar.tf_s : null);
+    const keyOpen = ev.key && Number.isFinite(ev.key.open_ms) ? ev.key.open_ms : bar.open_time_ms;
+    if (keyTf == null) continue;
+    if (updatesCursor != null && keyOpen <= updatesCursor) {
+      continue;
+    }
+    const stateKey = `${keySymbol}|${keyTf}|${keyOpen}`;
+    const complete = ev.complete === true || bar.complete === true;
+    const source = ev.source || bar.src || '';
+    const prev = updateStateByKey.get(stateKey);
+    if (prev && prev.complete === true && !complete) {
+      continue;
+    }
+    if (prev && prev.complete === true && complete && prev.source && source && prev.source !== source) {
+      console.warn('NoMix violation', { key: stateKey, prev: prev.source, next: source });
+      setStatus('nomix_violation');
+      continue;
+    }
+    updateStateByKey.set(stateKey, { complete, source });
+    if (controller && typeof controller.updateLastBar === 'function') {
+      controller.updateLastBar(bar);
+    }
+    if (complete) {
+      if (lastOpenMs == null || bar.open_time_ms > lastOpenMs) {
+        lastOpenMs = bar.open_time_ms;
+      }
+    }
+    if (ev.seq != null && (maxSeq == null || ev.seq > maxSeq)) {
+      maxSeq = ev.seq;
+    }
+    lastBar = bar;
+    applied += 1;
+  }
+  if (maxSeq != null) {
+    updatesSeqCursor = maxSeq;
+  }
+  if (lastBar) {
+    updateHudPrice(lastBar.last_price != null ? lastBar.last_price : lastBar.close);
+  }
+  return applied;
+}
+
+async function pollUpdates() {
   const symbol = elSymbol.value;
   const tf = parseInt(elTf.value, 10);
   if (lastOpenMs == null) return;
@@ -532,26 +628,47 @@ async function pollLatest() {
     : false);
 
   try {
-    const data = await apiGet(`/api/latest?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=500&after_open_ms=${lastOpenMs}`);
+    let url = `/api/updates?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=500`;
+    if (updatesSeqCursor != null) {
+      url += `&since_seq=${updatesSeqCursor}`;
+    }
+    const data = await apiGet(url);
+    if (data && data.boot_id) {
+      if (bootId && data.boot_id !== bootId) {
+        bootId = data.boot_id;
+        updatesSeqCursor = null;
+        await loadBarsFull();
+        resetPolling();
+        return;
+      }
+      if (!bootId) {
+        bootId = data.boot_id;
+      }
+    }
     diag.lastError = '';
     diag.pollAt = Date.now();
     updateDiag(tf);
-    const bars = data.bars || [];
-    if (bars.length === 0) return;
-
-    for (const b of bars) {
-      if (controller && typeof controller.updateLastBar === 'function') {
-        controller.updateLastBar(b);
-      }
-      lastOpenMs = b.open_time_ms;
+    const events = data.events || [];
+    const applied = applyUpdates(events);
+    if (events.length === 0
+      && Number.isFinite(data.disk_last_open_ms)
+      && lastOpenMs != null
+      && data.disk_last_open_ms > lastOpenMs) {
+      await loadBarsFull(true);
+      resetPolling();
+      return;
     }
+    if (Number.isFinite(data.cursor_seq) && (updatesSeqCursor == null || data.cursor_seq > updatesSeqCursor)) {
+      updatesSeqCursor = data.cursor_seq;
+    }
+    if (applied === 0) return;
     if (elFollow.checked && shouldFollow && controller && typeof controller.scrollToRealTimeWithOffset === 'function') {
       controller.scrollToRealTimeWithOffset(RIGHT_OFFSET_PX);
     }
-    diag.lastPollBars = bars.length;
+    diag.lastPollBars = applied;
     diag.pollAt = Date.now();
     updateDiag(tf);
-    setStatus(`ok · tf=${tf}s · +${bars.length}`);
+    setStatus(`ok · tf=${tf}s · +${applied}`);
   } catch (e) {
     diag.lastError = 'poll_error';
     diag.pollAt = Date.now();
@@ -560,9 +677,45 @@ async function pollLatest() {
   }
 }
 
+async function pollLive() {
+  if (!liveEnabled) return;
+  const symbol = elSymbol.value;
+  const tf = parseInt(elTf.value, 10);
+  const shouldFollow = Boolean(elFollow.checked && controller && typeof controller.isAtEnd === 'function'
+    ? controller.isAtEnd()
+    : false);
+
+  try {
+    const data = await apiGet(`/api/live?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}`);
+    if (data && data.last_tick_ts != null) {
+      if (lastLiveTickTs !== null && data.last_tick_ts === lastLiveTickTs) return;
+      lastLiveTickTs = data.last_tick_ts;
+    }
+    const bar = data && data.bar ? data.bar : null;
+    if (!bar) return;
+    const openMs = bar.open_time_ms;
+    if (Number.isFinite(openMs) && lastLiveOpenMs != null && openMs < lastLiveOpenMs) return;
+    if (Number.isFinite(openMs)) {
+      lastLiveOpenMs = openMs;
+    }
+    if (controller && typeof controller.updateLastBar === 'function') {
+      controller.updateLastBar(bar);
+    }
+    updateHudPrice(bar.last_price != null ? bar.last_price : bar.close);
+    if (elFollow.checked && shouldFollow && controller && typeof controller.scrollToRealTimeWithOffset === 'function') {
+      controller.scrollToRealTimeWithOffset(RIGHT_OFFSET_PX);
+    }
+  } catch (e) {
+    // ignore live errors
+  }
+}
+
 function resetPolling() {
   if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(pollLatest, 3000);
+  if (liveTimer) clearInterval(liveTimer);
+  lastLiveOpenMs = null;
+  lastLiveTickTs = null;
+  pollTimer = setInterval(pollUpdates, 3000);
 }
 
 async function init() {
@@ -611,7 +764,7 @@ async function init() {
     }
   }
   await loadSymbols();
-  const symbolPreferred = savedSymbol || 'XAU/USD';
+  const symbolPreferred = savedSymbol || (liveEnabled && liveSymbol ? liveSymbol : 'XAU/USD');
   if (Array.from(elSymbol.options).some((opt) => opt.value === symbolPreferred)) {
     elSymbol.value = symbolPreferred;
   }
@@ -621,6 +774,9 @@ async function init() {
   updateHudValues();
   updateStreamingIndicator();
   resetPolling();
+  if (liveTimer) {
+    clearInterval(liveTimer);
+  }
   updateUtcNow();
   setInterval(updateUtcNow, 1000);
 
@@ -636,11 +792,13 @@ async function init() {
 
   elSymbol.addEventListener('change', async () => {
     saveLayoutValue(SYMBOL_KEY, elSymbol.value);
+    lastLiveOpenMs = null;
     await loadBarsFull();
   });
 
   elTf.addEventListener('change', async () => {
     saveLayoutValue(TF_KEY, elTf.value);
+    lastLiveOpenMs = null;
     await loadBarsFull();
   });
 

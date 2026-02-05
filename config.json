@@ -3,11 +3,23 @@
     "password": "I4eav",
     "url": "http://www.fxcorporate.com/Hosts.jsp",
     "connection": "Demo",
-    "symbol": "XAG/USD",
+    "symbol": "XAU/USD",
     "symbols": [
-        "XAU/USD",
+        "BTC/USDT",
+        "ETH/USDT",
+        "EUSTX50",
+        "GBP/CAD",
+        "GER30",
+        "HKG33",
+        "NAS100",
+        "NGAS",
+        "NZD/CAD",
+        "SPX500",
+        "US30",
+        "USD/CAD",
+        "USD/JPY",
         "XAG/USD",
-        "EUR/USD"
+        "XAU/USD"
     ],
     "data_root": "./data_v3",
     "warmup_bars": 5000,
@@ -34,12 +46,30 @@
     },
     "derived_force_close_max_tf_per_poll": 0,
     "diagnose_lookback_bars": 60000,
+    "calendar_gate_enabled": true,
+    "poll_diag_enabled": true,
+    "live_candle_enabled": false,
+    "live_candle_autostart": false,
+    "live_candle_store_enabled": true,
+    "live_candle_store_root": "./data_v3/live_candles",
+    "live_candle_state_path": "./data_v3/live_candles/live_state.json",
+    "live_candle_tfs_s": [
+        60,
+        180,
+        300,
+        900,
+        1800,
+        3600,
+        14400,
+        86400
+    ],
     "market_weekend_close_dow": 4,
     "market_weekend_close_hm": "21:44",
     "market_weekend_open_dow": 6,
     "market_weekend_open_hm": "22:00",
     "market_daily_break_start_hm": "21:59",
     "market_daily_break_end_hm": "23:01",
+    "market_daily_break_enabled": true,
     "market_ignore_minutes_utc": [
         "2026-02-01T23:02:00Z"
     ],
@@ -59,5 +89,5 @@
     "day_anchor_offset_s_alt2": 79200,
     "day_anchor_offset_s_d1": 75600,
     "day_anchor_offset_s_d1_alt": 79200,
-    "ui_debug": false
+    "ui_debug": true
 }

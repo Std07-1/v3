@@ -242,6 +242,16 @@ def expected_last_closed_m1_open_ms(now_ms: int) -> int:
     return b - minute
 
 
+def _parse_hm(hm: str) -> Optional[Tuple[int, int]]:
+    if not hm:
+        return None
+    try:
+        h, m = hm.split(":", 1)
+        return int(h), int(m)
+    except Exception:
+        return None
+
+
 def sleep_to_next_minute(safety_delay_s: int) -> None:
     now = time.time()
     next_min = (int(now // 60) + 1) * 60
@@ -898,6 +908,15 @@ class PollingConnectorB:
         derived_force_close_max_tf_per_poll: int,
         derived_rebuild_use_tool: bool,
         derived_rebuild_tool_dry_run: bool,
+        calendar_gate_enabled: bool,
+        poll_diag_enabled: bool,
+        market_weekend_close_dow: int,
+        market_weekend_close_hm: str,
+        market_weekend_open_dow: int,
+        market_weekend_open_hm: str,
+        market_daily_break_start_hm: str,
+        market_daily_break_end_hm: str,
+        market_daily_break_enabled: bool,
     ) -> None:
         self._provider = provider
         self._data_root = data_root
@@ -936,6 +955,16 @@ class PollingConnectorB:
         self._derived_force_close_max_tf_per_poll = max(0, int(derived_force_close_max_tf_per_poll))
         self._derived_rebuild_use_tool = bool(derived_rebuild_use_tool)
         self._derived_rebuild_tool_dry_run = bool(derived_rebuild_tool_dry_run)
+        # CALENDAR_GATE: швидко вимкнути через config.
+        self._calendar_gate_enabled = bool(calendar_gate_enabled)
+        self._poll_diag_enabled = bool(poll_diag_enabled)
+        self._market_weekend_close_dow = int(market_weekend_close_dow)
+        self._market_weekend_close_hm = market_weekend_close_hm
+        self._market_weekend_open_dow = int(market_weekend_open_dow)
+        self._market_weekend_open_hm = market_weekend_open_hm
+        self._market_daily_break_start_hm = market_daily_break_start_hm
+        self._market_daily_break_end_hm = market_daily_break_end_hm
+        self._market_daily_break_enabled = bool(market_daily_break_enabled)
 
         self._writer = JsonlAppender(
             root=data_root,
@@ -1098,13 +1127,74 @@ class PollingConnectorB:
     def _last_closed_cutoff_open_ms(self) -> int:
         return expected_last_closed_m1_open_ms(utc_now_ms())
 
+    def _is_trading_minute(self, now_ms: int) -> bool:
+        # CALENDAR_GATE: легко видалити разом з конфігом.
+        dt_now = ms_to_utc_dt(now_ms)
+        dow = dt_now.weekday()
+        hm_break_start = _parse_hm(self._market_daily_break_start_hm)
+        hm_break_end = _parse_hm(self._market_daily_break_end_hm)
+        if self._market_daily_break_enabled and hm_break_start and hm_break_end:
+            start_min = hm_break_start[0] * 60 + hm_break_start[1]
+            end_min = hm_break_end[0] * 60 + hm_break_end[1]
+            cur_min = dt_now.hour * 60 + dt_now.minute
+            if start_min <= cur_min < end_min:
+                return False
+
+        hm_close = _parse_hm(self._market_weekend_close_hm)
+        hm_open = _parse_hm(self._market_weekend_open_hm)
+        if hm_close and hm_open:
+            close_min = self._market_weekend_close_dow * 1440 + hm_close[0] * 60 + hm_close[1]
+            open_min = self._market_weekend_open_dow * 1440 + hm_open[0] * 60 + hm_open[1]
+            cur_min = dow * 1440 + dt_now.hour * 60 + dt_now.minute
+            if close_min < open_min:
+                if close_min <= cur_min < open_min:
+                    return False
+            else:
+                if cur_min >= close_min or cur_min < open_min:
+                    return False
+        return True
+
+    def _last_trading_minute_open_ms(self, now_ms: int) -> int:
+        # Повертає open_time останньої торгової хвилини до now_ms.
+        cur = (now_ms // 60_000) * 60_000 - 60_000
+        for _ in range(7 * 24 * 60):
+            if self._is_trading_minute(cur):
+                return cur
+            cur -= 60_000
+        return (now_ms // 60_000) * 60_000 - 60_000
+
     def _poll_once(self) -> None:
         now_ms = utc_now_ms()
         exp_open = expected_last_closed_m1_open_ms(now_ms)
         date_to = ms_to_utc_dt(exp_open + 60_000)
 
+        market_open = self._is_trading_minute(now_ms)
+        base_anchor_open = exp_open
+        if not self._is_trading_minute(exp_open):
+            base_anchor_open = self._last_trading_minute_open_ms(exp_open)
+        if self._broker_base_fetch_on_close:
+            self._fetch_base_from_broker_on_close(base_anchor_open)
+        if self._calendar_gate_enabled and not market_open:
+            logging.info(
+                "Polling: calendar_closed now=%s exp_open=%s",
+                ms_to_utc_dt(now_ms).isoformat(),
+                ms_to_utc_dt(exp_open).isoformat(),
+            )
+            return
+
         # Беремо 2 останні бари, щоб мати шанс побачити exp_open (на практиці інколи вистачає 1, але 2 надійніше).
         bars = self._provider.fetch_last_n_m1(self._symbol, n=2, date_to_utc=date_to)
+
+        if self._poll_diag_enabled:
+            last_open = bars[-1].open_time_ms if bars else None
+            logging.info(
+                "Polling: diag now=%s exp_open=%s last_open=%s market_open=%s bars=%d",
+                ms_to_utc_dt(now_ms).isoformat(),
+                ms_to_utc_dt(exp_open).isoformat(),
+                ms_to_utc_dt(last_open).isoformat() if last_open is not None else "None",
+                market_open,
+                len(bars),
+            )
 
         if not bars:
             logging.info("Polling: барів немає (ймовірно market closed).")
@@ -1155,7 +1245,8 @@ class PollingConnectorB:
             tf_ms = tf_s * 1000
             b0 = floor_bucket_start_ms(anchor_open_ms, tf_s, anchor_offset_s=anchor)
             b1 = b0 + tf_ms
-            if anchor_open_ms != (b1 - 60_000):
+            expected_last = self._last_trading_minute_open_ms(b1 - 60_000)
+            if anchor_open_ms != expected_last:
                 continue
             if self._has_on_disk(tf_s, b0):
                 continue
@@ -1660,6 +1751,17 @@ def main() -> int:
         derived_force_close_max_tf_per_poll = int(
             cfg.get("derived_force_close_max_tf_per_poll", 0)
         )
+        live_candle_enabled = bool(cfg.get("live_candle_enabled", False))
+        live_candle_autostart = bool(cfg.get("live_candle_autostart", True))
+        calendar_gate_enabled = bool(cfg.get("calendar_gate_enabled", False))
+        poll_diag_enabled = bool(cfg.get("poll_diag_enabled", False))
+        market_weekend_close_dow = int(cfg.get("market_weekend_close_dow", 4))
+        market_weekend_close_hm = str(cfg.get("market_weekend_close_hm", "21:44"))
+        market_weekend_open_dow = int(cfg.get("market_weekend_open_dow", 6))
+        market_weekend_open_hm = str(cfg.get("market_weekend_open_hm", "22:00"))
+        market_daily_break_start_hm = str(cfg.get("market_daily_break_start_hm", "21:59"))
+        market_daily_break_end_hm = str(cfg.get("market_daily_break_end_hm", "23:01"))
+        market_daily_break_enabled = bool(cfg.get("market_daily_break_enabled", True))
     except Exception:
         logging.exception("Невірна конфігурація")
         return 2
@@ -1702,67 +1804,104 @@ def main() -> int:
         logging.exception("Не вдалось створити data_root: %s", data_root)
         return 2
 
-    try:
-        with FxcmHistoryProvider(
-            user_id=user_id,
-            password=password,
-            url=url,
-            connection=connection,
-            day_anchor_offset_s=day_anchor_offset_s,
-            day_anchor_offset_s_d1=day_anchor_offset_s_d1,
-            day_anchor_offset_s_d1_alt=day_anchor_offset_s_d1_alt,
-            day_anchor_offset_s_alt=day_anchor_offset_s_alt,
-            day_anchor_offset_s_alt2=day_anchor_offset_s_alt2,
-        ) as prov:
-            engines: List[PollingConnectorB] = []
-            for symbol in symbols:
-                engines.append(
-                    PollingConnectorB(
-                        provider=prov,
-                        data_root=data_root,
-                        symbol=symbol,
-                        config_path="config.json",
-                        warmup_bars=warmup_bars,
-                        safety_delay_s=safety_delay_s,
-                        derived_tfs_s=derived_tfs_s,
-                        broker_base_tfs_s=broker_base_tfs_s,
-                        broker_base_fetch_on_close=broker_base_fetch_on_close,
-                        broker_base_max_tf_per_poll=broker_base_max_tf_per_poll,
-                        broker_base_cold_start_counts=broker_base_cold_start_counts,
-                        broker_base_cold_start_enabled=broker_base_cold_start_enabled,
-                        day_anchor_offset_s=day_anchor_offset_s,
-                        day_anchor_offset_s_d1=day_anchor_offset_s_d1,
-                        day_anchor_offset_s_d1_alt=day_anchor_offset_s_d1_alt,
-                        day_anchor_offset_s_alt=day_anchor_offset_s_alt,
-                        day_anchor_offset_s_alt2=day_anchor_offset_s_alt2,
-                        backfill_step_bars=backfill_step_bars,
-                        backfill_every_n_polls=backfill_every_n_polls,
-                        derived_rebuild_lookback_bars=derived_rebuild_lookback_bars,
-                        derived_tolerate_missing_minutes=derived_tolerate_missing_minutes,
-                        derived_backfill_from_broker=derived_backfill_from_broker,
-                        derived_force_close_from_broker=derived_force_close_from_broker,
-                        derived_force_close_max_tf_per_poll=derived_force_close_max_tf_per_poll,
-                        derived_rebuild_use_tool=derived_rebuild_use_tool,
-                        derived_rebuild_tool_dry_run=derived_rebuild_tool_dry_run,
-                    )
-                )
+    live_proc: Optional[subprocess.Popen] = None
+    if live_candle_enabled and live_candle_autostart:
+        try:
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            env = dict(os.environ)
+            prev = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = project_root + (os.pathsep + prev if prev else "")
+            live_proc = subprocess.Popen(
+                [sys.executable, "-m", "tools.live_candle"],
+                cwd=project_root,
+                env=env,
+            )
+            logging.info("LIVE_BAR: автозапуск tools.live_candle pid=%s", live_proc.pid)
+        except Exception:
+            logging.exception("LIVE_BAR: не вдалося запустити tools.live_candle")
 
+    try:
+        try:
+            with FxcmHistoryProvider(
+                user_id=user_id,
+                password=password,
+                url=url,
+                connection=connection,
+                day_anchor_offset_s=day_anchor_offset_s,
+                day_anchor_offset_s_d1=day_anchor_offset_s_d1,
+                day_anchor_offset_s_d1_alt=day_anchor_offset_s_d1_alt,
+                day_anchor_offset_s_alt=day_anchor_offset_s_alt,
+                day_anchor_offset_s_alt2=day_anchor_offset_s_alt2,
+            ) as prov:
+                engines: List[PollingConnectorB] = []
+                for symbol in symbols:
+                    engines.append(
+                        PollingConnectorB(
+                            provider=prov,
+                            data_root=data_root,
+                            symbol=symbol,
+                            config_path="config.json",
+                            warmup_bars=warmup_bars,
+                            safety_delay_s=safety_delay_s,
+                            derived_tfs_s=derived_tfs_s,
+                            broker_base_tfs_s=broker_base_tfs_s,
+                            broker_base_fetch_on_close=broker_base_fetch_on_close,
+                            broker_base_max_tf_per_poll=broker_base_max_tf_per_poll,
+                            broker_base_cold_start_counts=broker_base_cold_start_counts,
+                            broker_base_cold_start_enabled=broker_base_cold_start_enabled,
+                            day_anchor_offset_s=day_anchor_offset_s,
+                            day_anchor_offset_s_d1=day_anchor_offset_s_d1,
+                            day_anchor_offset_s_d1_alt=day_anchor_offset_s_d1_alt,
+                            day_anchor_offset_s_alt=day_anchor_offset_s_alt,
+                            day_anchor_offset_s_alt2=day_anchor_offset_s_alt2,
+                            backfill_step_bars=backfill_step_bars,
+                            backfill_every_n_polls=backfill_every_n_polls,
+                            derived_rebuild_lookback_bars=derived_rebuild_lookback_bars,
+                            derived_tolerate_missing_minutes=derived_tolerate_missing_minutes,
+                            derived_backfill_from_broker=derived_backfill_from_broker,
+                            derived_force_close_from_broker=derived_force_close_from_broker,
+                            derived_force_close_max_tf_per_poll=derived_force_close_max_tf_per_poll,
+                            derived_rebuild_use_tool=derived_rebuild_use_tool,
+                            derived_rebuild_tool_dry_run=derived_rebuild_tool_dry_run,
+                            calendar_gate_enabled=calendar_gate_enabled,
+                            poll_diag_enabled=poll_diag_enabled,
+                            market_weekend_close_dow=market_weekend_close_dow,
+                            market_weekend_close_hm=market_weekend_close_hm,
+                            market_weekend_open_dow=market_weekend_open_dow,
+                            market_weekend_open_hm=market_weekend_open_hm,
+                            market_daily_break_start_hm=market_daily_break_start_hm,
+                            market_daily_break_end_hm=market_daily_break_end_hm,
+                            market_daily_break_enabled=market_daily_break_enabled,
+                        )
+                    )
+
+                try:
+                    if len(engines) == 1:
+                        logging.debug("Engine створено, стартую run_forever()")
+                        engines[0].run_forever()
+                    else:
+                        logging.debug("Engines створено: %d, стартую MultiSymbolRunner", len(engines))
+                        MultiSymbolRunner(engines).run_forever()
+                except Exception:
+                    logging.exception("Помилка в роботі engine")
+                    return 1
+        except KeyboardInterrupt:
+            logging.info("Зупинено користувачем (KeyboardInterrupt) у main.")
+            return 0
+        except Exception:
+            logging.exception("Не вдалось ініціалізувати FxcmHistoryProvider або запустити engine")
+            return 3
+    finally:
+        if live_proc is not None and live_proc.poll() is None:
+            logging.info("LIVE_BAR: зупиняю tools.live_candle pid=%s", live_proc.pid)
             try:
-                if len(engines) == 1:
-                    logging.debug("Engine створено, стартую run_forever()")
-                    engines[0].run_forever()
-                else:
-                    logging.debug("Engines створено: %d, стартую MultiSymbolRunner", len(engines))
-                    MultiSymbolRunner(engines).run_forever()
+                live_proc.terminate()
+                live_proc.wait(timeout=5)
             except Exception:
-                logging.exception("Помилка в роботі engine")
-                return 1
-    except KeyboardInterrupt:
-        logging.info("Зупинено користувачем (KeyboardInterrupt) у main.")
-        return 0
-    except Exception:
-        logging.exception("Не вдалось ініціалізувати FxcmHistoryProvider або запустити engine")
-        return 3
+                try:
+                    live_proc.kill()
+                except Exception:
+                    pass
 
     logging.info("Завершення роботи (main)")
     return 0
