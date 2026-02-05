@@ -968,6 +968,8 @@ class PollingConnectorB:
         self._market_daily_break_enabled = bool(market_daily_break_enabled)
         self._heavy_budget_s = max(0, int(heavy_budget_s))
         self._heavy_skipped = 0
+        self._pending_backfill: List[Tuple[int, int]] = []
+        self._pending_rebuild_recent = False
 
         self._writer = JsonlAppender(
             root=data_root,
@@ -1013,10 +1015,21 @@ class PollingConnectorB:
                 self._heavy_skipped,
             )
             return
+        if self._pending_rebuild_recent:
+            self._pending_rebuild_recent = False
+            self._rebuild_derived_recent()
+            return
+        if self._pending_backfill:
+            start_ms, end_ms = self._pending_backfill.pop(0)
+            written = self._backfill_range(start_ms, end_ms)
+            if written > self._backfill_step_bars:
+                self._pending_rebuild_recent = True
+            return
         if self._poll_counter % self._backfill_every_n_polls == 0:
             written = self._backfill_step()
             if written > self._backfill_step_bars:
-                self._rebuild_derived_recent()
+                self._pending_rebuild_recent = True
+            return
 
     def close(self) -> None:
         self._writer.close()
@@ -1181,6 +1194,20 @@ class PollingConnectorB:
             cur -= 60_000
         return (now_ms // 60_000) * 60_000 - 60_000
 
+    def _enqueue_backfill_window(self, start_ms: int, end_ms: int, reason: str) -> None:
+        if start_ms >= end_ms:
+            return
+        item = (start_ms, end_ms)
+        if item in self._pending_backfill:
+            return
+        self._pending_backfill.append(item)
+        logging.warning(
+            "Backfill: відкладено window [%s .. %s] reason=%s",
+            ms_to_utc_dt(start_ms).isoformat(),
+            ms_to_utc_dt(end_ms).isoformat(),
+            reason,
+        )
+
     def _poll_once(self) -> None:
         now_ms = utc_now_ms()
         exp_open = expected_last_closed_m1_open_ms(now_ms)
@@ -1227,20 +1254,27 @@ class PollingConnectorB:
 
         if target is None:
             # Якщо не знайшли — це або затримка “finalization”, або gap більший.
-            # Робимо короткий backfill на 30 хвилин назад як “страховку”.
+            # Робимо короткий retry перед heavy.
             logging.warning(
-                "Polling: не знайдено очікуваний last-closed m1 open=%s; роблю короткий backfill.",
+                "Polling: не знайдено очікуваний last-closed m1 open=%s; retry через 3s.",
                 ms_to_utc_dt(exp_open).isoformat(),
             )
-            start_ms = exp_open - 30 * 60_000
-            end_ms = exp_open
-            written = self._backfill_range(start_ms, end_ms)
-            if written > self._backfill_step_bars:
-                self._rebuild_derived_recent()
-        else:
-            self._ingest_m1_bars([target], log_summary=True, context="poll")
-            if self._broker_base_fetch_on_close:
-                self._fetch_base_from_broker_on_close(target.open_time_ms)
+            time.sleep(3)
+            date_to_retry = dt.datetime.now(dt.timezone.utc)
+            bars = self._provider.fetch_last_n_m1(self._symbol, n=2, date_to_utc=date_to_retry)
+            for b in bars:
+                if b.open_time_ms == exp_open:
+                    target = b
+                    break
+            if target is None:
+                start_ms = exp_open - 30 * 60_000
+                end_ms = exp_open
+                self._enqueue_backfill_window(start_ms, end_ms, reason="missed_exp_open")
+                return
+
+        self._ingest_m1_bars([target], log_summary=True, context="poll")
+        if self._broker_base_fetch_on_close:
+            self._fetch_base_from_broker_on_close(target.open_time_ms)
 
     def _fetch_base_from_broker_on_close(self, anchor_open_ms: int) -> None:
         written = 0
@@ -1385,7 +1419,7 @@ class PollingConnectorB:
                         ms_to_utc_dt(missing_start).isoformat(),
                         ms_to_utc_dt(missing_end).isoformat(),
                     )
-                    self._backfill_range(missing_start, missing_end)
+                    self._enqueue_backfill_window(missing_start, missing_end, reason="gap_detect")
 
             # пишемо 1m SSOT
             self._writer.append(b)

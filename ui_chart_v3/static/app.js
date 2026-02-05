@@ -12,6 +12,7 @@ const chartEl = document.getElementById('chart');
 const elDiagLoad = document.getElementById('diag-load');
 const elDiagPoll = document.getElementById('diag-poll');
 const elDiagLag = document.getElementById('diag-lag');
+const elDiagLagSsot = document.getElementById('diag-lag-ssot');
 const elDiagLast = document.getElementById('diag-last');
 const elDiagBars = document.getElementById('diag-bars');
 const elDiagError = document.getElementById('diag-error');
@@ -41,6 +42,9 @@ let lastLiveOpenMs = null;
 let lastLiveTickTs = null;
 let updatesSeqCursor = null;
 let bootId = null;
+let lastApiSeenMs = null;
+let lastSsotWriteMs = null;
+let lastBarCloseMs = null;
 const updateStateByKey = new Map();
 
 const RIGHT_OFFSET_PX = 48;
@@ -85,13 +89,20 @@ function updateUtcNow() {
 
 function updateDiag(tfSeconds) {
   const now = Date.now();
-  const lagMs = (lastOpenMs != null && tfSeconds)
-    ? Math.max(0, now - (lastOpenMs + tfSeconds * 1000))
+  const apiSeenMs = lastApiSeenMs != null ? lastApiSeenMs : now;
+  const lagCloseApiMs = (lastBarCloseMs != null)
+    ? Math.max(0, apiSeenMs - lastBarCloseMs)
+    : null;
+  const lagSsotApiMs = (lastSsotWriteMs != null)
+    ? Math.max(0, apiSeenMs - lastSsotWriteMs)
     : null;
 
   elDiagLoad.textContent = diag.loadAt ? fmtAge(now - diag.loadAt) : '—';
   elDiagPoll.textContent = diag.pollAt ? fmtAge(now - diag.pollAt) : '—';
-  elDiagLag.textContent = lagMs != null ? fmtAge(lagMs) : '—';
+  elDiagLag.textContent = lagCloseApiMs != null ? fmtAge(lagCloseApiMs) : '—';
+  if (elDiagLagSsot) {
+    elDiagLagSsot.textContent = lagSsotApiMs != null ? fmtAge(lagSsotApiMs) : '—';
+  }
   elDiagLast.textContent = lastOpenMs != null ? fmtUtc(lastOpenMs) : '—';
   elDiagBars.textContent = diag.barsTotal ? `${diag.barsTotal} (+${diag.lastPollBars})` : '—';
   elDiagError.textContent = diag.lastError || '—';
@@ -549,6 +560,11 @@ async function loadBarsFull(forceDisk = false) {
   }
 
   lastOpenMs = bars[bars.length - 1].open_time_ms;
+  if (Number.isFinite(bars[bars.length - 1].close_time_ms)) {
+    lastBarCloseMs = bars[bars.length - 1].close_time_ms;
+  } else if (Number.isFinite(lastOpenMs) && Number.isFinite(tf)) {
+    lastBarCloseMs = lastOpenMs + tf * 1000 - 1;
+  }
   updatesSeqCursor = null;
   updateHudPrice(bars[bars.length - 1].close);
   diag.barsTotal = bars.length;
@@ -633,6 +649,15 @@ async function pollUpdates() {
       url += `&since_seq=${updatesSeqCursor}`;
     }
     const data = await apiGet(url);
+    if (Number.isFinite(data.api_seen_ts_ms)) {
+      lastApiSeenMs = data.api_seen_ts_ms;
+    }
+    if (Number.isFinite(data.ssot_write_ts_ms)) {
+      lastSsotWriteMs = data.ssot_write_ts_ms;
+    }
+    if (Number.isFinite(data.bar_close_ms)) {
+      lastBarCloseMs = data.bar_close_ms;
+    }
     if (data && data.boot_id) {
       if (bootId && data.boot_id !== bootId) {
         bootId = data.boot_id;
