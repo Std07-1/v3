@@ -21,6 +21,7 @@ import argparse
 import hashlib
 import http.server
 import json
+import logging
 import os
 import threading
 import time
@@ -459,10 +460,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     """HTTP handler: / (статичні файли), /api/* (JSON)."""
 
     server_version = "AiOne_v3_UI/0.1"
+    _client_id: str | None = None
+    _client_new: bool = False
+
+    def _get_or_create_client_id(self) -> str:
+        cookie_header = self.headers.get("Cookie", "")
+        client_id = ""
+        if cookie_header:
+            parts = [p.strip() for p in cookie_header.split(";") if p.strip()]
+            for part in parts:
+                if part.startswith("aione_client_id="):
+                    client_id = part.split("=", 1)[1].strip()
+                    break
+        if client_id:
+            self._client_new = False
+            return client_id
+        self._client_new = True
+        return uuid.uuid4().hex
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+
+        self._client_id = self._get_or_create_client_id()
 
         if path == "/favicon.ico":
             self.send_response(204)
@@ -472,6 +492,27 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path.startswith("/api/"):
             self._handle_api(parsed)
             return
+
+        if path in ("/", "/index.html"):
+            try:
+                host, port = self.client_address
+                user_agent = self.headers.get("User-Agent", "")
+                referer = self.headers.get("Referer", "")
+                accept_lang = self.headers.get("Accept-Language", "")
+                forwarded_for = self.headers.get("X-Forwarded-For", "")
+                logging.debug(
+                    "UI клієнт: id=%s new=%s addr=%s:%s xff=%s | UA=%s | Ref=%s | Lang=%s",
+                    self._client_id,
+                    self._client_new,
+                    host,
+                    port,
+                    forwarded_for,
+                    user_agent,
+                    referer,
+                    accept_lang,
+                )
+            except Exception:
+                logging.debug("UI клієнт підключився")
 
         # Статичні файли
         super().do_GET()
@@ -483,9 +524,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.wfile.write(data)
+        except ConnectionAbortedError:
+            logging.debug("UI: клієнт розірвав з'єднання під час відповіді")
 
     def _bad(self, msg: str) -> None:
+        logging.error("UI API помилка: %s", msg)
         self._json(400, {"ok": False, "error": msg})
 
     def _handle_api(self, parsed: urllib.parse.ParseResult) -> None:
@@ -735,21 +780,27 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         path = self.path or ""
         if not path.startswith("/api/"):
             self.send_header("Cache-Control", "no-store")
+            if self._client_id and self._client_new:
+                self.send_header(
+                    "Set-Cookie",
+                    f"aione_client_id={self._client_id}; Path=/; HttpOnly; SameSite=Lax",
+                )
         super().end_headers()
 
     # Вимикаємо логування кожного статичного файлу (за замовчуванням надто шумно)
     def log_message(self, format: str, *args: Any) -> None:
-        if self.path.startswith("/api/"):
-            super().log_message(format, *args)
-        else:
-            return
+        return
 
 
 def main() -> int:
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s | %(levelname)s | %(message)s",
+    )
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--data-root",
-        required=True,
+        default=None,
         help="Корінь data_v3 (де лежать SYMBOL/tf_*/part-*.jsonl)",
     )
     ap.add_argument("--host", default="127.0.0.1")
@@ -766,18 +817,33 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    data_root = os.path.abspath(args.data_root)
-    static_root = os.path.abspath(args.static_root)
-    default_config = os.path.abspath(os.path.join(static_root, "..", "..", "config.json"))
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    static_root_value = args.static_root
+    if static_root_value == "static":
+        static_root_value = os.path.join(base_dir, "static")
+    static_root = os.path.abspath(static_root_value)
+    default_config = os.path.abspath(os.path.join(base_dir, "..", "config.json"))
     config_path = os.path.abspath(args.config) if args.config else default_config
+    data_root_value = args.data_root
+    if not data_root_value:
+        try:
+            with open(config_path, encoding="utf-8") as f:
+                cfg = json.load(f)
+            data_root_value = cfg.get("data_root")
+        except Exception:
+            data_root_value = None
+    if not data_root_value:
+        logging.error("data_root не задано (ні --data-root, ні data_root у config.json)")
+        return 2
+    data_root = os.path.abspath(data_root_value)
     os.chdir(static_root)
 
     httpd = http.server.ThreadingHTTPServer((args.host, args.port), Handler)
     httpd.data_root = data_root  # type: ignore[attr-defined]
     httpd.config_path = config_path  # type: ignore[attr-defined]
 
-    print(f"UI: http://{args.host}:{args.port}/")
-    print(f"DATA_ROOT: {httpd.data_root}")  # type: ignore[attr-defined]
+    logging.info("UI: http://%s:%s/", args.host, args.port)
+    logging.info("DATA_ROOT: %s", httpd.data_root)  # type: ignore[attr-defined]
     httpd.serve_forever()
     return 0
 

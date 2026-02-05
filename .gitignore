@@ -5,6 +5,10 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 
+
+.env
+.env.*
+
 # Дані
 /data_v3/
 /History/
