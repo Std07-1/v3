@@ -23,6 +23,7 @@ import http.server
 import json
 import os
 import threading
+import time
 import urllib.parse
 import uuid
 from collections import deque
@@ -317,6 +318,17 @@ def _disk_last_open_ms(data_root: str, symbol: str, tf_s: int) -> int | None:
         return None
     open_ms = last_obj.get("open_time_ms")
     return int(open_ms) if isinstance(open_ms, int) else None
+
+
+def _disk_last_mtime_ms(data_root: str, symbol: str, tf_s: int) -> int | None:
+    parts = _list_parts(data_root, symbol, tf_s)
+    if not parts:
+        return None
+    try:
+        ts = os.path.getmtime(parts[-1])
+    except Exception:
+        return None
+    return int(ts * 1000)
 
 
 def _validate_event(ev: dict[str, Any]) -> list[str]:
@@ -650,7 +662,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if warnings:
                 payload["warnings"] = warnings
             payload["cursor_seq"] = _current_seq()
-            payload["disk_last_open_ms"] = _disk_last_open_ms(data_root, symbol, tf_s)
+            disk_last_open_ms = _disk_last_open_ms(data_root, symbol, tf_s)
+            payload["disk_last_open_ms"] = disk_last_open_ms
+            if disk_last_open_ms is not None:
+                payload["bar_close_ms"] = disk_last_open_ms + tf_s * 1000 - 1
+            payload["ssot_write_ts_ms"] = _disk_last_mtime_ms(data_root, symbol, tf_s)
+            payload["api_seen_ts_ms"] = int(time.time() * 1000)
             self._json(200, payload)
             return
 

@@ -917,6 +917,7 @@ class PollingConnectorB:
         market_daily_break_start_hm: str,
         market_daily_break_end_hm: str,
         market_daily_break_enabled: bool,
+        heavy_budget_s: int,
     ) -> None:
         self._provider = provider
         self._data_root = data_root
@@ -965,6 +966,8 @@ class PollingConnectorB:
         self._market_daily_break_start_hm = market_daily_break_start_hm
         self._market_daily_break_end_hm = market_daily_break_end_hm
         self._market_daily_break_enabled = bool(market_daily_break_enabled)
+        self._heavy_budget_s = max(0, int(heavy_budget_s))
+        self._heavy_skipped = 0
 
         self._writer = JsonlAppender(
             root=data_root,
@@ -1000,6 +1003,16 @@ class PollingConnectorB:
     def poll_iteration(self) -> None:
         self._poll_once()
         self._poll_counter += 1
+        remaining_s = self._seconds_to_next_minute()
+        if self._heavy_budget_s > 0 and remaining_s < self._heavy_budget_s:
+            self._heavy_skipped += 1
+            logging.info(
+                "Polling: heavy пропущено remaining=%.2fs budget=%ds skipped=%d",
+                remaining_s,
+                self._heavy_budget_s,
+                self._heavy_skipped,
+            )
+            return
         if self._poll_counter % self._backfill_every_n_polls == 0:
             written = self._backfill_step()
             if written > self._backfill_step_bars:
@@ -1123,6 +1136,11 @@ class PollingConnectorB:
 
     def _sleep_to_next_minute(self) -> None:
         sleep_to_next_minute(self._safety_delay_s)
+
+    def _seconds_to_next_minute(self) -> float:
+        now = time.time()
+        next_min = (int(now // 60) + 1) * 60 + self._safety_delay_s
+        return max(0.0, next_min - now)
 
     def _last_closed_cutoff_open_ms(self) -> int:
         return expected_last_closed_m1_open_ms(utc_now_ms())
@@ -1762,6 +1780,7 @@ def main() -> int:
         market_daily_break_start_hm = str(cfg.get("market_daily_break_start_hm", "21:59"))
         market_daily_break_end_hm = str(cfg.get("market_daily_break_end_hm", "23:01"))
         market_daily_break_enabled = bool(cfg.get("market_daily_break_enabled", True))
+        heavy_budget_s = int(cfg.get("heavy_budget_s", 25))
     except Exception:
         logging.exception("Невірна конфігурація")
         return 2
@@ -1872,6 +1891,7 @@ def main() -> int:
                             market_daily_break_start_hm=market_daily_break_start_hm,
                             market_daily_break_end_hm=market_daily_break_end_hm,
                             market_daily_break_enabled=market_daily_break_enabled,
+                            heavy_budget_s=heavy_budget_s,
                         )
                     )
 
