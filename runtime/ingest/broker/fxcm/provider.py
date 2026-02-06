@@ -5,6 +5,7 @@ import logging
 from typing import Any, List, Optional, Tuple
 
 from core.model.bars import CandleBar, assert_invariants, utc_dt_to_ms
+from runtime.ingest.market_calendar import MarketCalendar
 
 # ⚠️ Імпорт ForexConnect може відрізнятись залежно від вашого SDK/обгортки.
 # Цей варіант відповідає офіційному прикладу forexconnect (fxcorepy + ForexConnect) для python 3.7
@@ -114,6 +115,10 @@ class FxcmHistoryProvider:
                 self._fx.logout()
         finally:
             self._fx = None
+
+    def is_market_open(self, symbol: str, now_ms: int, calendar: MarketCalendar) -> bool:
+        _ = symbol
+        return calendar.is_trading_minute(now_ms)
 
     def fetch_last_n_m1(
         self, symbol: str, n: int, date_to_utc: Optional[dt.datetime] = None

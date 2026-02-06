@@ -8,6 +8,7 @@ import sys
 from typing import Any, Dict, List, Optional, Tuple
 
 from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
+from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.polling.engine_b import MultiSymbolRunner, PollingConnectorB
 
 
@@ -53,6 +54,30 @@ def _parse_tf_counts_cfg(raw: Any) -> Dict[int, int]:
             except Exception:
                 continue
         return out
+    return out
+
+
+def _calendar_value(overrides: Dict[str, Any], key: str, default: Any) -> Any:
+    if key in overrides:
+        return overrides[key]
+    return default
+
+
+def _calendar_str_value(overrides: Dict[str, Any], key: str, default: Any) -> str:
+    if key in overrides:
+        return str(overrides[key])
+    return str(default)
+
+
+def _merge_calendar_overrides(
+    group_overrides: Optional[Dict[str, Any]],
+    symbol_overrides: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    if isinstance(group_overrides, dict):
+        out.update(group_overrides)
+    if isinstance(symbol_overrides, dict):
+        out.update(symbol_overrides)
     return out
 
 
@@ -146,8 +171,44 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         market_daily_break_end_hm = str(cfg.get("market_daily_break_end_hm", "23:01"))
         market_daily_break_enabled = bool(cfg.get("market_daily_break_enabled", True))
         heavy_budget_s = int(cfg.get("heavy_budget_s", 25))
+        calendar_by_symbol_raw = cfg.get("market_calendar_by_symbol", None)
+        calendar_by_group_raw = cfg.get("market_calendar_by_group", None)
+        calendar_symbol_groups_raw = cfg.get("market_calendar_symbol_groups", None)
     except Exception as exc:
         raise ConfigError("parse") from exc
+
+    calendar_by_symbol: Dict[str, Any] = {}
+    if calendar_by_symbol_raw is None:
+        calendar_by_symbol = {}
+    elif isinstance(calendar_by_symbol_raw, dict):
+        calendar_by_symbol = calendar_by_symbol_raw
+    else:
+        logging.warning(
+            "Config: market_calendar_by_symbol має бути dict, ігнорую значення типу %s",
+            type(calendar_by_symbol_raw).__name__,
+        )
+
+    calendar_by_group: Dict[str, Any] = {}
+    if calendar_by_group_raw is None:
+        calendar_by_group = {}
+    elif isinstance(calendar_by_group_raw, dict):
+        calendar_by_group = calendar_by_group_raw
+    else:
+        logging.warning(
+            "Config: market_calendar_by_group має бути dict, ігнорую значення типу %s",
+            type(calendar_by_group_raw).__name__,
+        )
+
+    calendar_symbol_groups: Dict[str, Any] = {}
+    if calendar_symbol_groups_raw is None:
+        calendar_symbol_groups = {}
+    elif isinstance(calendar_symbol_groups_raw, dict):
+        calendar_symbol_groups = calendar_symbol_groups_raw
+    else:
+        logging.warning(
+            "Config: market_calendar_symbol_groups має бути dict, ігнорую значення типу %s",
+            type(calendar_symbol_groups_raw).__name__,
+        )
 
     logging.debug(
         "Параметри: user=%s url=%s connection=%s symbols=%s data_root=%s warmup_bars=%d safety_delay_s=%d derived=%s broker_base=%s broker_base_fetch_on_close=%s broker_base_max_tf_per_poll=%d broker_base_cold_start_enabled=%s broker_base_cold_start_counts=%s day_anchor_offset_s=%d day_anchor_offset_s_alt=%s day_anchor_offset_s_alt2=%s day_anchor_offset_s_d1=%s day_anchor_offset_s_d1_alt=%s",
@@ -217,6 +278,68 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
 
     engines: List[PollingConnectorB] = []
     for symbol in symbols:
+        group_raw = calendar_symbol_groups.get(symbol)
+        group: Optional[str] = None
+        if group_raw is None:
+            group = None
+        else:
+            group = str(group_raw)
+
+        group_overrides_raw = calendar_by_group.get(group) if group else None
+        if group and group_overrides_raw is None:
+            logging.warning(
+                "Config: market_calendar_by_group не має запису для group=%s (symbol=%s), використано default",
+                group,
+                symbol,
+            )
+
+        if group_overrides_raw is not None and not isinstance(group_overrides_raw, dict):
+            logging.warning(
+                "Config: market_calendar_by_group[%s] має бути dict, використано default",
+                group,
+            )
+            group_overrides_raw = None
+
+        symbol_overrides_raw = calendar_by_symbol.get(symbol)
+        if symbol_overrides_raw is None:
+            if calendar_by_symbol:
+                logging.warning(
+                    "Config: market_calendar_by_symbol не має запису для symbol=%s, використано default",
+                    symbol,
+                )
+        elif not isinstance(symbol_overrides_raw, dict):
+            logging.warning(
+                "Config: market_calendar_by_symbol[%s] має бути dict, використано default",
+                symbol,
+            )
+            symbol_overrides_raw = None
+
+        overrides = _merge_calendar_overrides(group_overrides_raw, symbol_overrides_raw)
+
+        market_calendar = MarketCalendar(
+            enabled=bool(_calendar_value(overrides, "calendar_gate_enabled", calendar_gate_enabled)),
+            weekend_close_dow=int(
+                _calendar_value(overrides, "market_weekend_close_dow", market_weekend_close_dow)
+            ),
+            weekend_close_hm=_calendar_str_value(
+                overrides, "market_weekend_close_hm", market_weekend_close_hm
+            ),
+            weekend_open_dow=int(
+                _calendar_value(overrides, "market_weekend_open_dow", market_weekend_open_dow)
+            ),
+            weekend_open_hm=_calendar_str_value(
+                overrides, "market_weekend_open_hm", market_weekend_open_hm
+            ),
+            daily_break_start_hm=_calendar_str_value(
+                overrides, "market_daily_break_start_hm", market_daily_break_start_hm
+            ),
+            daily_break_end_hm=_calendar_str_value(
+                overrides, "market_daily_break_end_hm", market_daily_break_end_hm
+            ),
+            daily_break_enabled=bool(
+                _calendar_value(overrides, "market_daily_break_enabled", market_daily_break_enabled)
+            ),
+        )
         engines.append(
             PollingConnectorB(
                 provider=prov,
@@ -245,15 +368,8 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
                 derived_force_close_max_tf_per_poll=derived_force_close_max_tf_per_poll,
                 derived_rebuild_use_tool=derived_rebuild_use_tool,
                 derived_rebuild_tool_dry_run=derived_rebuild_tool_dry_run,
-                calendar_gate_enabled=calendar_gate_enabled,
                 poll_diag_enabled=poll_diag_enabled,
-                market_weekend_close_dow=market_weekend_close_dow,
-                market_weekend_close_hm=market_weekend_close_hm,
-                market_weekend_open_dow=market_weekend_open_dow,
-                market_weekend_open_hm=market_weekend_open_hm,
-                market_daily_break_start_hm=market_daily_break_start_hm,
-                market_daily_break_end_hm=market_daily_break_end_hm,
-                market_daily_break_enabled=market_daily_break_enabled,
+                market_calendar=market_calendar,
                 heavy_budget_s=heavy_budget_s,
             )
         )

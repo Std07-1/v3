@@ -9,6 +9,7 @@ import time
 from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 
 from core.model.bars import CandleBar, assert_invariants, ms_to_utc_dt
+from runtime.ingest.market_calendar import MarketCalendar
 from runtime.store.ssot_jsonl import (
     JsonlAppender,
     head_first_bar_time_ms,
@@ -108,16 +109,6 @@ def expected_last_closed_m1_open_ms(now_ms: int) -> int:
     minute = 60_000
     b = (now_ms // minute) * minute
     return b - minute
-
-
-def _parse_hm(hm: str) -> Optional[Tuple[int, int]]:
-    if not hm:
-        return None
-    try:
-        h, m = hm.split(":", 1)
-        return int(h), int(m)
-    except Exception:
-        return None
 
 
 def sleep_to_next_minute(safety_delay_s: int) -> None:
@@ -268,15 +259,8 @@ class PollingConnectorB:
         derived_force_close_max_tf_per_poll: int,
         derived_rebuild_use_tool: bool,
         derived_rebuild_tool_dry_run: bool,
-        calendar_gate_enabled: bool,
         poll_diag_enabled: bool,
-        market_weekend_close_dow: int,
-        market_weekend_close_hm: str,
-        market_weekend_open_dow: int,
-        market_weekend_open_hm: str,
-        market_daily_break_start_hm: str,
-        market_daily_break_end_hm: str,
-        market_daily_break_enabled: bool,
+        market_calendar: MarketCalendar,
         heavy_budget_s: int,
     ) -> None:
         self._provider = provider
@@ -317,15 +301,9 @@ class PollingConnectorB:
         self._derived_rebuild_use_tool = bool(derived_rebuild_use_tool)
         self._derived_rebuild_tool_dry_run = bool(derived_rebuild_tool_dry_run)
         # CALENDAR_GATE: швидко вимкнути через config.
-        self._calendar_gate_enabled = bool(calendar_gate_enabled)
+        self._calendar = market_calendar
+        self._calendar_gate_enabled = bool(market_calendar.enabled)
         self._poll_diag_enabled = bool(poll_diag_enabled)
-        self._market_weekend_close_dow = int(market_weekend_close_dow)
-        self._market_weekend_close_hm = market_weekend_close_hm
-        self._market_weekend_open_dow = int(market_weekend_open_dow)
-        self._market_weekend_open_hm = market_weekend_open_hm
-        self._market_daily_break_start_hm = market_daily_break_start_hm
-        self._market_daily_break_end_hm = market_daily_break_end_hm
-        self._market_daily_break_enabled = bool(market_daily_break_enabled)
         self._heavy_budget_s = max(0, int(heavy_budget_s))
         self._heavy_skipped = 0
         self._pending_backfill: List[Tuple[int, int]] = []
@@ -593,40 +571,11 @@ class PollingConnectorB:
     def _last_closed_cutoff_open_ms(self) -> int:
         return expected_last_closed_m1_open_ms(utc_now_ms())
 
-    def _is_trading_minute(self, now_ms: int) -> bool:
-        if not self._calendar_gate_enabled:
-            return True
-        # CALENDAR_GATE: легко видалити разом з конфігом.
-        dt_now = ms_to_utc_dt(now_ms)
-        dow = dt_now.weekday()
-        hm_break_start = _parse_hm(self._market_daily_break_start_hm)
-        hm_break_end = _parse_hm(self._market_daily_break_end_hm)
-        if self._market_daily_break_enabled and hm_break_start and hm_break_end:
-            start_min = hm_break_start[0] * 60 + hm_break_start[1]
-            end_min = hm_break_end[0] * 60 + hm_break_end[1]
-            cur_min = dt_now.hour * 60 + dt_now.minute
-            if start_min < cur_min < end_min:
-                return False
-
-        hm_close = _parse_hm(self._market_weekend_close_hm)
-        hm_open = _parse_hm(self._market_weekend_open_hm)
-        if hm_close and hm_open:
-            close_min = self._market_weekend_close_dow * 1440 + hm_close[0] * 60 + hm_close[1]
-            open_min = self._market_weekend_open_dow * 1440 + hm_open[0] * 60 + hm_open[1]
-            cur_min = dow * 1440 + dt_now.hour * 60 + dt_now.minute
-            if close_min < open_min:
-                if close_min <= cur_min < open_min:
-                    return False
-            else:
-                if cur_min >= close_min or cur_min < open_min:
-                    return False
-        return True
-
     def _last_trading_minute_open_ms(self, now_ms: int) -> int:
         # Повертає open_time останньої торгової хвилини до now_ms.
         cur = (now_ms // 60_000) * 60_000 - 60_000
         for _ in range(7 * 24 * 60):
-            if self._is_trading_minute(cur):
+            if self._provider.is_market_open(self._symbol, cur, self._calendar):
                 return cur
             cur -= 60_000
         return (now_ms // 60_000) * 60_000 - 60_000
@@ -657,11 +606,15 @@ class PollingConnectorB:
         exp_open = expected_last_closed_m1_open_ms(now_ms)
         date_to = ms_to_utc_dt(exp_open + 60_000)
 
-        market_open = self._is_trading_minute(now_ms)
+        market_open = self._provider.is_market_open(self._symbol, now_ms, self._calendar)
         calendar_closed_now = self._calendar_gate_enabled and not market_open
-        calendar_closed_exp = self._calendar_gate_enabled and not self._is_trading_minute(exp_open)
+        calendar_closed_exp = self._calendar_gate_enabled and not self._provider.is_market_open(
+            self._symbol,
+            exp_open,
+            self._calendar,
+        )
         base_anchor_open = exp_open
-        if not self._is_trading_minute(exp_open):
+        if not self._provider.is_market_open(self._symbol, exp_open, self._calendar):
             base_anchor_open = self._last_trading_minute_open_ms(exp_open)
         if self._broker_base_fetch_on_close:
             self._fetch_base_from_broker_on_close(base_anchor_open)
@@ -1195,30 +1148,33 @@ class MultiSymbolRunner:
         self._safety_delay_s = max((e._safety_delay_s for e in engines), default=0)  # noqa: SLF001
         for e in self._engines:
             e.enable_group_logging()
-        self._last_calendar_closed_exp_open: Optional[int] = None
-        self._last_calendar_closed_log_ts: float = 0.0
+        self._last_calendar_closed_exp_open_by_symbol: Dict[str, int] = {}
+        self._last_calendar_closed_log_ts_by_symbol: Dict[str, float] = {}
 
     def _log_calendar_closed_if_needed(self) -> None:
         if not self._engines:
             return
-        e0 = self._engines[0]
-        if not e0._calendar_gate_enabled:  # noqa: SLF001
-            return
         now_ms = utc_now_ms()
-        if e0._is_trading_minute(now_ms):  # noqa: SLF001
-            return
         exp_open = expected_last_closed_m1_open_ms(now_ms)
-        if self._last_calendar_closed_exp_open == exp_open:
-            return
-        if now_ms - int(self._last_calendar_closed_log_ts * 1000) < 300_000:
-            return
-        self._last_calendar_closed_exp_open = exp_open
-        self._last_calendar_closed_log_ts = time.time()
-        logging.info(
-            "Polling: calendar_closed now=%s exp_open=%s",
-            ms_to_utc_dt(now_ms).isoformat(),
-            ms_to_utc_dt(exp_open).isoformat(),
-        )
+        for e in self._engines:
+            if not e._calendar_gate_enabled:  # noqa: SLF001
+                continue
+            if e._provider.is_market_open(e._symbol, now_ms, e._calendar):  # noqa: SLF001
+                continue
+            last_exp = self._last_calendar_closed_exp_open_by_symbol.get(e._symbol)
+            if last_exp == exp_open:
+                continue
+            last_ts = self._last_calendar_closed_log_ts_by_symbol.get(e._symbol, 0.0)
+            if now_ms - int(last_ts * 1000) < 300_000:
+                continue
+            self._last_calendar_closed_exp_open_by_symbol[e._symbol] = exp_open
+            self._last_calendar_closed_log_ts_by_symbol[e._symbol] = time.time()
+            logging.info(
+                "Polling: calendar_closed symbol=%s now=%s exp_open=%s",
+                e._symbol,
+                ms_to_utc_dt(now_ms).isoformat(),
+                ms_to_utc_dt(exp_open).isoformat(),
+            )
 
     def _drain_history_errors(self) -> None:
         total = len(self._engines)
