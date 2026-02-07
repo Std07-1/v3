@@ -5,8 +5,7 @@
     "connection": "Demo",
     "symbol": "XAU/USD",
     "symbols": [
-        "BTC/USDT",
-        "ETH/USDT",
+        "XAU/USD",
         "EUSTX50",
         "GBP/CAD",
         "GER30",
@@ -18,21 +17,25 @@
         "US30",
         "USD/CAD",
         "USD/JPY",
-        "XAG/USD",
-        "XAU/USD"
+        "XAG/USD"
     ],
     "data_root": "./data_v3",
-    "warmup_bars": 5000,
+    "warmup_bars": 8000,
     "safety_delay_s": 2,
-    "history_backfill_step_bars": 300,
-    "history_backfill_every_n_polls": 5,
-    "derived_rebuild_lookback_bars": 60000,
-    "derived_rebuild_every_n_polls": 5,
-    "derived_rebuild_use_tool": true,
-    "derived_rebuild_tool_dry_run": false,
-    "derived_tolerate_missing_minutes": 1,
-    "derived_backfill_from_broker": false,
-    "derived_force_close_from_broker": false,
+    "m5_tail_fetch_n": 12,
+    "m5_tail_stale_s": 720,
+    "connector_retry_base_s": 10,
+    "connector_retry_max_s": 3600,
+    "connector_wake_ahead_s": 900,
+    "history_summary_interval_s": 600,
+    "history_still_failing_interval_s": 600,
+    "history_circuit_fail_streak": 3,
+    "history_circuit_base_s": 300,
+    "history_circuit_max_s": 900,
+    "history_circuit_log_interval_s": 300,
+    "history_symbols_sample_n": 3,
+    "history_network_error_escalate_s": 600,
+    "flat_bar_max_volume": 4,
     "broker_base_tfs_s": [
         14400,
         86400
@@ -44,18 +47,7 @@
         "14400": 1080,
         "86400": 180
     },
-    "derived_force_close_max_tf_per_poll": 0,
-    "diagnose_lookback_bars": 60000,
-    "calendar_gate_enabled": true,
-    "poll_diag_enabled": true,
-    "live_candle_enabled": false,
-    "live_candle_autostart": false,
-    "live_candle_store_enabled": true,
-    "live_candle_store_root": "./data_v3/live_candles",
-    "live_candle_state_path": "./data_v3/live_candles/live_state.json",
-    "live_candle_tfs_s": [
-        60,
-        180,
+    "tf_allowlist_s": [
         300,
         900,
         1800,
@@ -63,23 +55,61 @@
         14400,
         86400
     ],
-    "market_weekend_close_dow": 4,
-    "market_weekend_close_hm": "21:44",
-    "market_weekend_open_dow": 6,
-    "market_weekend_open_hm": "22:00",
-    "market_daily_break_start_hm": "21:59",
-    "market_daily_break_end_hm": "23:01",
-    "market_daily_break_enabled": true,
+    "calendar_gate_enabled": true,
+    "market_calendar_by_group": {
+        "fx_24x5_utc_winter": {
+            "market_weekend_open_dow": 6,
+            "market_weekend_open_hm": "22:00",
+            "market_weekend_close_dow": 4,
+            "market_weekend_close_hm": "21:55",
+            "market_daily_break_start_hm": "00:00",
+            "market_daily_break_end_hm": "00:00"
+        },
+        "cfd_us_22_23": {
+            "market_weekend_open_dow": 6,
+            "market_weekend_open_hm": "23:00",
+            "market_weekend_close_dow": 4,
+            "market_weekend_close_hm": "21:45",
+            "market_daily_break_start_hm": "22:00",
+            "market_daily_break_end_hm": "23:00"
+        },
+        "cfd_eu_21_07": {
+            "market_weekend_open_dow": 0,
+            "market_weekend_open_hm": "07:00",
+            "market_weekend_close_dow": 4,
+            "market_weekend_close_hm": "21:00",
+            "market_daily_break_start_hm": "21:00",
+            "market_daily_break_end_hm": "07:00"
+        },
+        "cfd_hk_main": {
+            "market_weekend_open_dow": 0,
+            "market_weekend_open_hm": "01:15",
+            "market_weekend_close_dow": 4,
+            "market_weekend_close_hm": "19:00",
+            "market_daily_break_start_hm": "19:00",
+            "market_daily_break_end_hm": "01:15"
+        }
+    },
+    "market_calendar_symbol_groups": {
+        "XAU/USD": "cfd_us_22_23",
+        "XAG/USD": "cfd_us_22_23",
+        "NGAS": "cfd_us_22_23",
+        "SPX500": "cfd_us_22_23",
+        "NAS100": "cfd_us_22_23",
+        "US30": "cfd_us_22_23",
+        "GER30": "cfd_eu_21_07",
+        "EUSTX50": "cfd_eu_21_07",
+        "HKG33": "cfd_hk_main",
+        "GBP/CAD": "fx_24x5_utc_winter",
+        "NZD/CAD": "fx_24x5_utc_winter",
+        "USD/CAD": "fx_24x5_utc_winter",
+        "USD/JPY": "fx_24x5_utc_winter"
+    },
     "market_ignore_minutes_utc": [
         "2026-02-01T23:02:00Z"
     ],
     "market_boundary_slip_minutes_per_day": 2,
-    "diagnose_missing_trading_output": "ranges",
-    "diagnose_missing_trading_max_ranges": 100,
-    "diagnose_missing_trading_dump_path": "./data_v3/diagnostics/missing_trading_minutes.jsonl",
     "derived_tfs_s": [
-        180,
-        300,
         900,
         1800,
         3600

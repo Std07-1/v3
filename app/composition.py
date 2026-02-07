@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
-import sys
 from typing import Any, Dict, List, Optional, Tuple
 
 from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
@@ -81,11 +79,92 @@ def _merge_calendar_overrides(
     return out
 
 
+def _validate_config(cfg: Dict[str, Any]) -> None:
+    issues: List[str] = []
+
+    def require_int(key: str, min_val: Optional[int] = None) -> None:
+        if key not in cfg:
+            issues.append(f"missing:{key}")
+            return
+        try:
+            val = int(cfg[key])
+        except Exception:
+            issues.append(f"invalid_int:{key}")
+            return
+        if min_val is not None and val < min_val:
+            issues.append(f"invalid_range:{key}")
+
+    def require_int_list(key: str, allow_empty: bool = False) -> None:
+        raw = cfg.get(key)
+        if not isinstance(raw, list):
+            issues.append(f"invalid_list:{key}")
+            return
+        out: List[int] = []
+        for item in raw:
+            try:
+                val = int(item)
+            except Exception:
+                continue
+            if val > 0:
+                out.append(val)
+        if not allow_empty and not out:
+            issues.append(f"empty:{key}")
+
+    symbols_raw = cfg.get("symbols")
+    if isinstance(symbols_raw, list) and any(str(x).strip() for x in symbols_raw):
+        pass
+    else:
+        symbol = cfg.get("symbol")
+        if not isinstance(symbol, str) or not symbol.strip():
+            issues.append("missing:symbols_or_symbol")
+
+    require_int("m5_tail_fetch_n", min_val=1)
+    require_int("m5_tail_stale_s", min_val=0)
+    require_int("connector_retry_base_s", min_val=1)
+    require_int("connector_retry_max_s", min_val=1)
+    require_int("connector_wake_ahead_s", min_val=0)
+    require_int("history_summary_interval_s", min_val=60)
+    require_int("history_still_failing_interval_s", min_val=60)
+    require_int("history_circuit_fail_streak", min_val=1)
+    require_int("history_circuit_base_s", min_val=60)
+    require_int("history_circuit_max_s", min_val=60)
+    require_int("history_circuit_log_interval_s", min_val=60)
+    require_int("history_symbols_sample_n", min_val=1)
+    require_int("history_network_error_escalate_s", min_val=60)
+    require_int("flat_bar_max_volume", min_val=0)
+    require_int_list("tf_allowlist_s")
+    require_int_list("derived_tfs_s")
+    require_int_list("broker_base_tfs_s", allow_empty=True)
+
+    calendar_gate_enabled = bool(cfg.get("calendar_gate_enabled", False))
+    if calendar_gate_enabled:
+        if not isinstance(cfg.get("market_calendar_by_group"), dict):
+            issues.append("invalid_dict:market_calendar_by_group")
+        if not isinstance(cfg.get("market_calendar_symbol_groups"), dict):
+            issues.append("invalid_dict:market_calendar_symbol_groups")
+
+    try:
+        base_retry = int(cfg.get("connector_retry_base_s", 0))
+        max_retry = int(cfg.get("connector_retry_max_s", 0))
+        if base_retry > 0 and max_retry > 0 and max_retry < base_retry:
+            issues.append("invalid_range:connector_retry_max_s")
+    except Exception:
+        issues.append("invalid_range:connector_retry_max_s")
+
+    if issues:
+        raise ValueError("Config validation failed: " + ", ".join(issues))
+
+
 def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
     try:
         cfg = load_config(cfg_path)
     except Exception as exc:
         raise ConfigError("load") from exc
+
+    try:
+        _validate_config(cfg)
+    except Exception as exc:
+        raise ConfigError("validate") from exc
 
     # Не логувати пароль
     masked = dict(cfg)
@@ -107,6 +186,17 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         data_root = str(cfg.get("data_root", "./data_v3"))
         warmup_bars = int(cfg.get("warmup_bars", 3000))
         safety_delay_s = int(cfg.get("safety_delay_s", 2))
+        m5_tail_fetch_n = int(cfg.get("m5_tail_fetch_n", 12))
+        m5_tail_stale_s = int(cfg.get("m5_tail_stale_s", 12 * 60))
+        history_summary_interval_s = int(cfg.get("history_summary_interval_s", 600))
+        history_still_failing_interval_s = int(cfg.get("history_still_failing_interval_s", 600))
+        history_circuit_fail_streak = int(cfg.get("history_circuit_fail_streak", 3))
+        history_circuit_base_s = int(cfg.get("history_circuit_base_s", 300))
+        history_circuit_max_s = int(cfg.get("history_circuit_max_s", 900))
+        history_circuit_log_interval_s = int(cfg.get("history_circuit_log_interval_s", 300))
+        history_symbols_sample_n = int(cfg.get("history_symbols_sample_n", 3))
+        history_network_error_escalate_s = int(cfg.get("history_network_error_escalate_s", 600))
+        flat_bar_max_volume = int(cfg.get("flat_bar_max_volume", 0))
 
         derived = cfg.get(
             "derived_tfs_s", [180, 300, 900, 1800, 3600]
@@ -142,27 +232,6 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         day_anchor_offset_s_d1_alt = (
             None if day_anchor_offset_s_d1_alt_raw is None else int(day_anchor_offset_s_d1_alt_raw)
         )
-        backfill_step_bars = int(cfg.get("history_backfill_step_bars", 300))
-        backfill_every_n_polls = int(cfg.get("history_backfill_every_n_polls", 5))
-        derived_rebuild_lookback_bars = int(cfg.get("derived_rebuild_lookback_bars", 60000))
-        derived_rebuild_use_tool = bool(cfg.get("derived_rebuild_use_tool", False))
-        derived_rebuild_tool_dry_run = bool(cfg.get("derived_rebuild_tool_dry_run", False))
-        derived_tolerate_missing_minutes = int(
-            cfg.get("derived_tolerate_missing_minutes", 0)
-        )
-        derived_backfill_from_broker = bool(
-            cfg.get("derived_backfill_from_broker", True)
-        )
-        derived_force_close_from_broker = bool(
-            cfg.get("derived_force_close_from_broker", False)
-        )
-        derived_force_close_max_tf_per_poll = int(
-            cfg.get("derived_force_close_max_tf_per_poll", 0)
-        )
-        live_candle_enabled = bool(cfg.get("live_candle_enabled", False))
-        live_candle_autostart = bool(cfg.get("live_candle_autostart", True))
-        calendar_gate_enabled = bool(cfg.get("calendar_gate_enabled", False))
-        poll_diag_enabled = bool(cfg.get("poll_diag_enabled", False))
         market_weekend_close_dow = int(cfg.get("market_weekend_close_dow", 4))
         market_weekend_close_hm = str(cfg.get("market_weekend_close_hm", "21:44"))
         market_weekend_open_dow = int(cfg.get("market_weekend_open_dow", 6))
@@ -170,7 +239,7 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         market_daily_break_start_hm = str(cfg.get("market_daily_break_start_hm", "21:59"))
         market_daily_break_end_hm = str(cfg.get("market_daily_break_end_hm", "23:01"))
         market_daily_break_enabled = bool(cfg.get("market_daily_break_enabled", True))
-        heavy_budget_s = int(cfg.get("heavy_budget_s", 25))
+        calendar_gate_enabled = bool(cfg.get("calendar_gate_enabled", False))
         calendar_by_symbol_raw = cfg.get("market_calendar_by_symbol", None)
         calendar_by_group_raw = cfg.get("market_calendar_by_group", None)
         calendar_symbol_groups_raw = cfg.get("market_calendar_symbol_groups", None)
@@ -211,7 +280,7 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         )
 
     logging.debug(
-        "Параметри: user=%s url=%s connection=%s symbols=%s data_root=%s warmup_bars=%d safety_delay_s=%d derived=%s broker_base=%s broker_base_fetch_on_close=%s broker_base_max_tf_per_poll=%d broker_base_cold_start_enabled=%s broker_base_cold_start_counts=%s day_anchor_offset_s=%d day_anchor_offset_s_alt=%s day_anchor_offset_s_alt2=%s day_anchor_offset_s_d1=%s day_anchor_offset_s_d1_alt=%s",
+        "Параметри: user=%s url=%s connection=%s symbols=%s data_root=%s warmup_bars=%d safety_delay_s=%d m5_tail_fetch_n=%d m5_tail_stale_s=%d derived=%s broker_base=%s broker_base_fetch_on_close=%s broker_base_max_tf_per_poll=%d broker_base_cold_start_enabled=%s broker_base_cold_start_counts=%s day_anchor_offset_s=%d day_anchor_offset_s_alt=%s day_anchor_offset_s_alt2=%s day_anchor_offset_s_d1=%s day_anchor_offset_s_d1_alt=%s",
         user_id,
         url,
         connection,
@@ -219,6 +288,8 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         data_root,
         warmup_bars,
         safety_delay_s,
+        m5_tail_fetch_n,
+        m5_tail_stale_s,
         derived_tfs_s,
         broker_base_tfs_s,
         str(broker_base_fetch_on_close),
@@ -232,36 +303,11 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         str(day_anchor_offset_s_d1_alt),
     )
 
-    if derived_backfill_from_broker:
-        logging.warning(
-            "Config: derived_backfill_from_broker=true ігнорується (похідні тільки з M1)."
-        )
-    if derived_force_close_from_broker:
-        logging.warning(
-            "Config: derived_force_close_from_broker=true ігнорується (base TF беруться окремо)."
-        )
-
     try:
         os.makedirs(data_root, exist_ok=True)
         logging.debug("Каталог даних готовий: %s", data_root)
     except Exception as exc:
         raise ConfigError("data_root") from exc
-
-    live_proc: Optional[subprocess.Popen] = None
-    if live_candle_enabled and live_candle_autostart:
-        try:
-            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-            env = dict(os.environ)
-            prev = env.get("PYTHONPATH", "")
-            env["PYTHONPATH"] = project_root + (os.pathsep + prev if prev else "")
-            live_proc = subprocess.Popen(
-                [sys.executable, "-m", "tools.live_candle"],
-                cwd=project_root,
-                env=env,
-            )
-            logging.info("LIVE_BAR: автозапуск tools.live_candle pid=%s", live_proc.pid)
-        except Exception:
-            logging.exception("LIVE_BAR: не вдалося запустити tools.live_candle")
 
     provider = FxcmHistoryProvider(
         user_id=user_id,
@@ -348,6 +394,9 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
                 config_path=cfg_path,
                 warmup_bars=warmup_bars,
                 safety_delay_s=safety_delay_s,
+                m5_tail_fetch_n=m5_tail_fetch_n,
+                m5_tail_stale_s=m5_tail_stale_s,
+                flat_bar_max_volume=flat_bar_max_volume,
                 derived_tfs_s=derived_tfs_s,
                 broker_base_tfs_s=broker_base_tfs_s,
                 broker_base_fetch_on_close=broker_base_fetch_on_close,
@@ -359,18 +408,7 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
                 day_anchor_offset_s_d1_alt=day_anchor_offset_s_d1_alt,
                 day_anchor_offset_s_alt=day_anchor_offset_s_alt,
                 day_anchor_offset_s_alt2=day_anchor_offset_s_alt2,
-                backfill_step_bars=backfill_step_bars,
-                backfill_every_n_polls=backfill_every_n_polls,
-                derived_rebuild_lookback_bars=derived_rebuild_lookback_bars,
-                derived_tolerate_missing_minutes=derived_tolerate_missing_minutes,
-                derived_backfill_from_broker=derived_backfill_from_broker,
-                derived_force_close_from_broker=derived_force_close_from_broker,
-                derived_force_close_max_tf_per_poll=derived_force_close_max_tf_per_poll,
-                derived_rebuild_use_tool=derived_rebuild_use_tool,
-                derived_rebuild_tool_dry_run=derived_rebuild_tool_dry_run,
-                poll_diag_enabled=poll_diag_enabled,
                 market_calendar=market_calendar,
-                heavy_budget_s=heavy_budget_s,
             )
         )
 
@@ -379,22 +417,22 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         runner: object = engines[0]
     else:
         logging.debug("Engines створено: %d, стартую MultiSymbolRunner", len(engines))
-        runner = MultiSymbolRunner(engines)
+        runner = MultiSymbolRunner(
+            engines,
+            history_summary_interval_s=history_summary_interval_s,
+            history_still_failing_interval_s=history_still_failing_interval_s,
+            history_circuit_fail_streak=history_circuit_fail_streak,
+            history_circuit_base_s=history_circuit_base_s,
+            history_circuit_max_s=history_circuit_max_s,
+            history_circuit_log_interval_s=history_circuit_log_interval_s,
+            history_symbols_sample_n=history_symbols_sample_n,
+            history_network_error_escalate_s=history_network_error_escalate_s,
+        )
 
     def cleanup() -> None:
         try:
             provider.__exit__(None, None, None)
         except Exception:
             pass
-        if live_proc is not None and live_proc.poll() is None:
-            logging.info("LIVE_BAR: зупиняю tools.live_candle pid=%s", live_proc.pid)
-            try:
-                live_proc.terminate()
-                live_proc.wait(timeout=5)
-            except Exception:
-                try:
-                    live_proc.kill()
-                except Exception:
-                    pass
 
     return runner, cleanup

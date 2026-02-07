@@ -35,11 +35,6 @@ let currentTheme = 'light';
 let uiDebugEnabled = true;
 let lastHudSymbol = null;
 let lastHudTf = null;
-let liveEnabled = false;
-let liveSymbol = null;
-let liveTimer = null;
-let lastLiveOpenMs = null;
-let lastLiveTickTs = null;
 let updatesSeqCursor = null;
 let bootId = null;
 let lastApiSeenMs = null;
@@ -187,17 +182,10 @@ async function loadUiConfig() {
     if (data && typeof data.ui_debug === 'boolean') {
       uiDebugEnabled = data.ui_debug;
     }
-    if (data && typeof data.live_candle_enabled === 'boolean') {
-      liveEnabled = Boolean(data.live_candle_enabled);
-    }
-    if (data && typeof data.live_symbol === 'string') {
-      const raw = data.live_symbol.trim();
-      liveSymbol = raw ? raw : null;
-    }
+    // no live state
   } catch (e) {
     uiDebugEnabled = true;
-    liveEnabled = false;
-    liveSymbol = null;
+    // no live state
   }
   applyUiDebug();
 }
@@ -702,44 +690,8 @@ async function pollUpdates() {
   }
 }
 
-async function pollLive() {
-  if (!liveEnabled) return;
-  const symbol = elSymbol.value;
-  const tf = parseInt(elTf.value, 10);
-  const shouldFollow = Boolean(elFollow.checked && controller && typeof controller.isAtEnd === 'function'
-    ? controller.isAtEnd()
-    : false);
-
-  try {
-    const data = await apiGet(`/api/live?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}`);
-    if (data && data.last_tick_ts != null) {
-      if (lastLiveTickTs !== null && data.last_tick_ts === lastLiveTickTs) return;
-      lastLiveTickTs = data.last_tick_ts;
-    }
-    const bar = data && data.bar ? data.bar : null;
-    if (!bar) return;
-    const openMs = bar.open_time_ms;
-    if (Number.isFinite(openMs) && lastLiveOpenMs != null && openMs < lastLiveOpenMs) return;
-    if (Number.isFinite(openMs)) {
-      lastLiveOpenMs = openMs;
-    }
-    if (controller && typeof controller.updateLastBar === 'function') {
-      controller.updateLastBar(bar);
-    }
-    updateHudPrice(bar.last_price != null ? bar.last_price : bar.close);
-    if (elFollow.checked && shouldFollow && controller && typeof controller.scrollToRealTimeWithOffset === 'function') {
-      controller.scrollToRealTimeWithOffset(RIGHT_OFFSET_PX);
-    }
-  } catch (e) {
-    // ignore live errors
-  }
-}
-
 function resetPolling() {
   if (pollTimer) clearInterval(pollTimer);
-  if (liveTimer) clearInterval(liveTimer);
-  lastLiveOpenMs = null;
-  lastLiveTickTs = null;
   pollTimer = setInterval(pollUpdates, 3000);
 }
 
@@ -783,13 +735,13 @@ async function init() {
   applyCandleStyle(candleStyle);
   updateToolbarValue('candle-style');
   if (elTf) {
-    const tfValue = savedTf || '60';
+    const tfValue = savedTf || '300';
     if (Array.from(elTf.options).some((opt) => opt.value === tfValue)) {
       elTf.value = tfValue;
     }
   }
   await loadSymbols();
-  const symbolPreferred = savedSymbol || (liveEnabled && liveSymbol ? liveSymbol : 'XAU/USD');
+  const symbolPreferred = savedSymbol || 'XAU/USD';
   if (Array.from(elSymbol.options).some((opt) => opt.value === symbolPreferred)) {
     elSymbol.value = symbolPreferred;
   }
@@ -799,9 +751,6 @@ async function init() {
   updateHudValues();
   updateStreamingIndicator();
   resetPolling();
-  if (liveTimer) {
-    clearInterval(liveTimer);
-  }
   updateUtcNow();
   setInterval(updateUtcNow, 1000);
 
@@ -817,13 +766,11 @@ async function init() {
 
   elSymbol.addEventListener('change', async () => {
     saveLayoutValue(SYMBOL_KEY, elSymbol.value);
-    lastLiveOpenMs = null;
     await loadBarsFull();
   });
 
   elTf.addEventListener('change', async () => {
     saveLayoutValue(TF_KEY, elTf.value);
-    lastLiveOpenMs = null;
     await loadBarsFull();
   });
 

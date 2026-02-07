@@ -6,7 +6,7 @@
 - Без SQL, без метрик, без WebSocket.
 - Same-origin: HTML/JS + API в одному процесі.
 - Підтримка TF з директорій tf_{tf_s}/part-YYYYMMDD.jsonl.
-- Інкрементальні оновлення через простий polling /api/latest.
+- Інкрементальні оновлення через простий polling /api/updates.
 
 Запуск:
   python server.py --data-root ./data_v3 --host 0.0.0.0 --port 8089
@@ -42,10 +42,53 @@ _cache_lock = threading.Lock()
 _bars_cache: dict[tuple[str, int], list[dict[str, Any]]] = {}
 MAX_CACHE_BARS = 5000
 
-TF_ALLOWLIST = {60, 180, 300, 900, 1800, 3600, 14400, 86400}
-SOURCE_ALLOWLIST = {"history", "derived", "live_tick", "history_agg", "derived_partial", ""}
+DEFAULT_TF_ALLOWLIST = {300, 900, 1800, 3600, 14400, 86400}
+SOURCE_ALLOWLIST = {"history", "derived", "history_agg", ""}
 FINAL_SOURCES = {"history", "derived", "history_agg"}
 MAX_EVENTS_PER_RESPONSE = 500
+
+
+def _tf_allowlist_from_cfg(cfg: dict[str, Any]) -> set[int]:
+    raw = cfg.get("tf_allowlist_s")
+    out: list[int] = []
+    if isinstance(raw, list):
+        for item in raw:
+            try:
+                tf_s = int(item)
+            except Exception:
+                continue
+            if tf_s > 0:
+                out.append(tf_s)
+    if out:
+        return set(out)
+
+    derived = cfg.get("derived_tfs_s")
+    if isinstance(derived, list):
+        for item in derived:
+            try:
+                tf_s = int(item)
+            except Exception:
+                continue
+            if tf_s > 0:
+                out.append(tf_s)
+
+    broker_base = cfg.get("broker_base_tfs_s")
+    if isinstance(broker_base, list):
+        for item in broker_base:
+            try:
+                tf_s = int(item)
+            except Exception:
+                continue
+            if tf_s > 0:
+                out.append(tf_s)
+
+    if 300 not in out:
+        out.append(300)
+
+    if out:
+        return set(out)
+
+    return set(DEFAULT_TF_ALLOWLIST)
 
 
 def _cache_key(symbol: str, tf_s: int) -> tuple[str, int]:
@@ -332,7 +375,7 @@ def _disk_last_mtime_ms(data_root: str, symbol: str, tf_s: int) -> int | None:
     return int(ts * 1000)
 
 
-def _validate_event(ev: dict[str, Any]) -> list[str]:
+def _validate_event(ev: dict[str, Any], tf_allowlist: set[int]) -> list[str]:
     warnings: list[str] = []
     key = ev.get("key") or {}
     bar = ev.get("bar") or {}
@@ -340,7 +383,7 @@ def _validate_event(ev: dict[str, Any]) -> list[str]:
     if not symbol:
         warnings.append("missing_symbol")
     tf_s = key.get("tf_s") if key.get("tf_s") is not None else bar.get("tf_s")
-    if not isinstance(tf_s, int) or tf_s not in TF_ALLOWLIST:
+    if not isinstance(tf_s, int) or tf_s not in tf_allowlist:
         warnings.append("tf_not_allowed")
     open_ms = key.get("open_ms") if key.get("open_ms") is not None else bar.get("open_time_ms")
     close_ms = bar.get("close_time_ms")
@@ -364,10 +407,10 @@ def _validate_event(ev: dict[str, Any]) -> list[str]:
     return warnings
 
 
-def _validate_bar_lwc(bar: dict[str, Any]) -> list[str]:
+def _validate_bar_lwc(bar: dict[str, Any], tf_allowlist: set[int]) -> list[str]:
     warnings: list[str] = []
     tf_s = bar.get("tf_s")
-    if not isinstance(tf_s, int) or tf_s not in TF_ALLOWLIST:
+    if not isinstance(tf_s, int) or tf_s not in tf_allowlist:
         warnings.append("tf_not_allowed")
     open_ms = bar.get("open_time_ms")
     close_ms = bar.get("close_time_ms")
@@ -389,71 +432,6 @@ def _validate_bar_lwc(bar: dict[str, Any]) -> list[str]:
         if isinstance(src, str) and src not in FINAL_SOURCES:
             warnings.append("final_source_not_allowed")
     return warnings
-
-
-def _get_live_bar(
-    cfg: dict[str, Any],
-    config_path: str | None,
-    symbol: str,
-    tf_s: int,
-) -> tuple[bool, dict[str, Any] | None, int | None, str | None]:
-    live_enabled = _parse_bool(cfg.get("live_candle_enabled", False), False)
-    live_store_enabled = _parse_bool(cfg.get("live_candle_store_enabled", False), False)
-    live_store_root = _resolve_cfg_path(cfg.get("live_candle_store_root"), config_path)
-    live_state_path = _resolve_cfg_path(cfg.get("live_candle_state_path"), config_path)
-    if not live_enabled:
-        return False, None, None, "disabled"
-
-    if live_state_path and os.path.isfile(live_state_path):
-        try:
-            with open(live_state_path, encoding="utf-8") as f:
-                state = json.load(f)
-        except Exception:
-            state = None
-        if isinstance(state, dict):
-            state_symbols = state.get("symbols")
-            if isinstance(state_symbols, dict) and state_symbols:
-                if not symbol:
-                    symbol = next(iter(state_symbols.keys()), "")
-                entry = state_symbols.get(symbol)
-                if isinstance(entry, dict):
-                    bars = entry.get("bars")
-                    if isinstance(bars, dict):
-                        raw = bars.get(str(tf_s))
-                        if isinstance(raw, dict) and "open_time_ms" in raw:
-                            lwc = _bars_to_lwc([raw])
-                            bar = lwc[0] if lwc else None
-                            return True, bar, entry.get("last_tick_ts"), None
-            else:
-                state_symbol = str(state.get("symbol", "")).strip()
-                if not symbol or symbol == state_symbol:
-                    bars = state.get("bars")
-                    if isinstance(bars, dict):
-                        raw = bars.get(str(tf_s))
-                        if isinstance(raw, dict) and "open_time_ms" in raw:
-                            lwc = _bars_to_lwc([raw])
-                            bar = lwc[0] if lwc else None
-                            return True, bar, state.get("last_tick_ts"), None
-
-    if not live_store_enabled or not live_store_root:
-        return True, None, None, "store_disabled"
-    if not symbol:
-        return True, None, None, "missing_symbol"
-
-    parts = _list_parts(live_store_root, symbol, tf_s)
-    if not parts:
-        return True, None, None, "no_data"
-    last_obj = _read_last_jsonl(parts[-1])
-    if not last_obj:
-        return True, None, None, "no_data"
-    lwc = _bars_to_lwc([last_obj])
-    bar = lwc[0] if lwc else None
-    if isinstance(bar, dict):
-        if bar.get("src") == "live_tick" and bar.get("complete") is True:
-            bar = dict(bar)
-            bar["complete"] = False
-            bar.pop("event_ts", None)
-    return True, bar, None, None
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -495,22 +473,32 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         if path in ("/", "/index.html"):
             try:
+                ui_debug = True
+                config_path: str | None = getattr(self.server, "config_path", None)  # type: ignore[attr-defined]
+                if config_path and os.path.isfile(config_path):
+                    try:
+                        with open(config_path, encoding="utf-8") as f:
+                            cfg = json.load(f)
+                        ui_debug = _parse_bool(cfg.get("ui_debug", True), True)
+                    except Exception:
+                        ui_debug = True
                 host, port = self.client_address
                 user_agent = self.headers.get("User-Agent", "")
                 referer = self.headers.get("Referer", "")
                 accept_lang = self.headers.get("Accept-Language", "")
                 forwarded_for = self.headers.get("X-Forwarded-For", "")
-                logging.debug(
-                    "UI клієнт: id=%s new=%s addr=%s:%s xff=%s | UA=%s | Ref=%s | Lang=%s",
-                    self._client_id,
-                    self._client_new,
-                    host,
-                    port,
-                    forwarded_for,
-                    user_agent,
-                    referer,
-                    accept_lang,
-                )
+                if ui_debug:
+                    logging.debug(
+                        "UI клієнт: id=%s new=%s addr=%s:%s xff=%s | UA=%s | Ref=%s | Lang=%s",
+                        self._client_id,
+                        self._client_new,
+                        host,
+                        port,
+                        forwarded_for,
+                        user_agent,
+                        referer,
+                        accept_lang,
+                    )
             except Exception:
                 logging.debug("UI клієнт підключився")
 
@@ -547,92 +535,30 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             except Exception:
                 cfg = {}
 
+        tf_allowlist = _tf_allowlist_from_cfg(cfg)
+
         if path == "/api/config":
             ui_debug = _parse_bool(cfg.get("ui_debug", True), True)
-            live_enabled = _parse_bool(cfg.get("live_candle_enabled", False), False)
-            live_store_enabled = _parse_bool(cfg.get("live_candle_store_enabled", False), False)
-            live_store_root = cfg.get("live_candle_store_root")
-            if not isinstance(live_store_root, str):
-                live_store_root = None
-            live_symbols = []
-            raw_symbols = cfg.get("symbols")
-            if isinstance(raw_symbols, list):
-                live_symbols = [str(s).strip() for s in raw_symbols if str(s).strip()]
-            live_symbol = str(cfg.get("symbol", "")).strip() or None
-            if not live_symbol and live_symbols:
-                live_symbol = live_symbols[0]
-            live_state_path = _resolve_cfg_path(cfg.get("live_candle_state_path"), config_path)
-            if live_state_path and os.path.isfile(live_state_path):
-                try:
-                    with open(live_state_path, encoding="utf-8") as f:
-                        state = json.load(f)
-                except Exception:
-                    state = None
-                if isinstance(state, dict):
-                    state_symbols = state.get("symbols")
-                    if isinstance(state_symbols, dict) and state_symbols:
-                        live_symbols = list(state_symbols.keys())
-                        if live_symbols:
-                            live_symbol = live_symbols[0]
-                    else:
-                        state_symbol = str(state.get("symbol", "")).strip()
-                        if state_symbol:
-                            live_symbol = state_symbol
             self._json(
                 200,
                 {
                     "ok": True,
                     "ui_debug": ui_debug,
-                    "live_candle_enabled": live_enabled,
-                    "live_candle_store_enabled": live_store_enabled,
-                    "live_candle_store_root": live_store_root,
-                    "live_symbols": live_symbols,
-                    "live_symbol": live_symbol,
                 },
             )
             return
 
-        if path == "/api/live":
-            symbol = (qs.get("symbol", [""])[0] or "").strip()
-            tf_s = _safe_int((qs.get("tf_s", ["60"])[0] or "60"), 60)
-            if not symbol:
-                raw_symbols = cfg.get("symbols")
-                if isinstance(raw_symbols, list) and raw_symbols:
-                    symbol = str(raw_symbols[0]).strip()
-                if not symbol:
-                    symbol = str(cfg.get("symbol", "")).strip()
-            live_enabled, bar, last_tick_ts, note = _get_live_bar(
-                cfg,
-                config_path,
-                symbol,
-                tf_s,
-            )
-            if not live_enabled:
-                self._json(200, {"ok": True, "live_enabled": False, "bar": None})
-                return
-            if note == "missing_symbol":
-                self._bad("missing_symbol")
-                return
-            payload = {
-                "ok": True,
-                "live_enabled": True,
-                "bar": bar,
-            }
-            if last_tick_ts is not None:
-                payload["last_tick_ts"] = last_tick_ts
-            if note:
-                payload["note"] = note
-            self._json(200, payload)
-            return
-
         if path == "/api/updates":
             symbol = (qs.get("symbol", [""])[0] or "").strip()
-            tf_s = _safe_int((qs.get("tf_s", ["60"])[0] or "60"), 60)
+            tf_s = _safe_int((qs.get("tf_s", ["300"])[0] or "300"), 300)
             limit = _safe_int((qs.get("limit", ["500"])[0] or "500"), 500)
             since_seq_raw = qs.get("since_seq", [None])[0]
             since_seq = _safe_int(since_seq_raw, 0) if since_seq_raw is not None else None
             if not symbol:
                 self._bad("missing_symbol")
+                return
+            if tf_s not in tf_allowlist:
+                self._bad("tf_not_allowed")
                 return
 
             events: list[dict[str, Any]] = []
@@ -650,28 +576,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     ev["seq"] = seq
                     events.append(ev)
 
-            live_enabled, live_bar, last_tick_ts, note = _get_live_bar(
-                cfg,
-                config_path,
-                symbol,
-                tf_s,
-            )
-            if live_enabled and live_bar is not None:
-                key = (symbol, int(live_bar.get("tf_s", 0)), int(live_bar.get("open_time_ms", 0)))
-                digest = _digest_bar(live_bar)
-                seq = _next_seq_for_event(key, digest)
-                if seq is not None:
-                    ev = _bar_to_update_event(symbol, live_bar)
-                    ev["seq"] = seq
-                    events.append(ev)
-
             if since_seq is not None:
                 events = [ev for ev in events if ev.get("seq") and ev["seq"] > since_seq]
 
             warnings: list[str] = []
             filtered_events: list[dict[str, Any]] = []
             for ev in events:
-                issues = _validate_event(ev)
+                issues = _validate_event(ev, tf_allowlist)
                 if issues:
                     warnings.extend(issues)
                     continue
@@ -700,10 +611,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "cursor_seq": cursor_seq,
                 "boot_id": _boot_id,
             }
-            if last_tick_ts is not None:
-                payload["last_tick_ts"] = last_tick_ts
-            if note and not events:
-                payload["note"] = note
             if warnings:
                 payload["warnings"] = warnings
             payload["cursor_seq"] = _current_seq()
@@ -729,6 +636,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not symbol:
                 self._bad("missing_symbol")
                 return
+            if tf_s not in tf_allowlist:
+                self._bad("tf_not_allowed")
+                return
 
             parts = _list_parts(data_root, symbol, tf_s)
             if not parts:
@@ -751,7 +661,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             warnings: list[str] = []
             filtered: list[dict[str, Any]] = []
             for b in lwc:
-                issues = _validate_bar_lwc(b)
+                issues = _validate_bar_lwc(b, tf_allowlist)
                 if issues:
                     warnings.extend(issues)
                     continue

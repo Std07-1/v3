@@ -2,20 +2,13 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-import os
-import subprocess
-import sys
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
+from collections import Counter
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from core.model.bars import CandleBar, assert_invariants, ms_to_utc_dt
 from runtime.ingest.market_calendar import MarketCalendar
-from runtime.store.ssot_jsonl import (
-    JsonlAppender,
-    head_first_bar_time_ms,
-    load_day_open_times,
-    tail_last_bar_time_ms,
-)
+from runtime.store.ssot_jsonl import JsonlAppender, load_day_open_times, tail_last_bar_time_ms
 
 if TYPE_CHECKING:
     from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
@@ -102,13 +95,9 @@ def select_anchor_offset_for_anchor_open_ms(
     return primary
 
 
-def expected_last_closed_m1_open_ms(now_ms: int) -> int:
-    """Очікуваний open_time для останньої ЗАКРИТОЇ 1m свічки."""
-    # bucket boundary на хвилині: ..., 12:34:00.000
-    # остання закрита — попередня хвилина
-    minute = 60_000
-    b = (now_ms // minute) * minute
-    return b - minute
+def expected_last_closed_m5_open_ms(now_ms: int) -> int:
+    tf_ms = 300_000
+    return (now_ms // tf_ms) * tf_ms - tf_ms
 
 
 def sleep_to_next_minute(safety_delay_s: int) -> None:
@@ -119,20 +108,17 @@ def sleep_to_next_minute(safety_delay_s: int) -> None:
     time.sleep(delay)
 
 
-class M1Buffer:
-    """Буфер закритих 1m барів у памʼяті для побудови derived TF.
+class M5Buffer:
+    """Буфер закритих 5m барів у памʼяті для побудови derived TF."""
 
-    Зберігаємо останні max_keep барів (за замовчуванням вистачає на 2-4 дні).
-    """
-
-    def __init__(self, max_keep: int = 6000) -> None:
+    def __init__(self, max_keep: int = 2000) -> None:
         self._max_keep = max_keep
         self._by_open_ms: Dict[int, CandleBar] = {}
         self._sorted_keys: List[int] = []
 
     def upsert(self, bar: CandleBar) -> None:
-        if bar.tf_s != 60:
-            raise ValueError("M1Buffer приймає тільки tf_s=60")
+        if bar.tf_s != 300:
+            raise ValueError("M5Buffer приймає тільки tf_s=300")
         k = bar.open_time_ms
         if k in self._by_open_ms:
             self._by_open_ms[k] = bar
@@ -152,15 +138,14 @@ class M1Buffer:
             self._by_open_ms.pop(k, None)
 
     def has_range_complete(self, start_ms: int, end_ms: int) -> bool:
-        """Перевіряє, що є всі 1m бари на [start_ms, end_ms) без пропусків."""
-        step = 60_000
+        step = 300_000
         for t in range(start_ms, end_ms, step):
             if t not in self._by_open_ms:
                 return False
         return True
 
     def range_bars(self, start_ms: int, end_ms: int) -> List[CandleBar]:
-        step = 60_000
+        step = 300_000
         out: List[CandleBar] = []
         for t in range(start_ms, end_ms, step):
             b = self._by_open_ms.get(t)
@@ -170,7 +155,7 @@ class M1Buffer:
         return out
 
     def missing_count(self, start_ms: int, end_ms: int) -> int:
-        step = 60_000
+        step = 300_000
         missing = 0
         for t in range(start_ms, end_ms, step):
             if t not in self._by_open_ms:
@@ -188,10 +173,10 @@ class M1Buffer:
         return self._sorted_keys[-1]
 
 
-def derive_from_m1_for_anchor(
+def derive_from_m5_for_anchor(
     symbol: str,
     tf_s: int,
-    m1: M1Buffer,
+    m5: M5Buffer,
     anchor_open_ms: int,
     anchor_offset_s: int = 0,
 ) -> Optional[CandleBar]:
@@ -200,14 +185,13 @@ def derive_from_m1_for_anchor(
     b0 = floor_bucket_start_ms(anchor_open_ms, tf_s, anchor_offset_s=anchor_offset_s)
     b1 = b0 + tf_ms
 
-    # Емітимо derived рівно на останній хвилині бакету
-    if anchor_open_ms != (b1 - 60_000):
+    if anchor_open_ms != (b1 - 300_000):
         return None
 
-    if not m1.has_range_complete(b0, b1):
+    if not m5.has_range_complete(b0, b1):
         return None
 
-    bars = m1.range_bars(b0, b1)
+    bars = m5.range_bars(b0, b1)
     if not bars:
         return None
 
@@ -222,12 +206,20 @@ def derive_from_m1_for_anchor(
         tf_s=tf_s,
         open_time_ms=b0,
         close_time_ms=b1,
-        o=o, h=h, low=low, c=c, v=v,
+        o=o,
+        h=h,
+        low=low,
+        c=c,
+        v=v,
         complete=True,
         src="derived",
     )
     assert_invariants(out, anchor_offset_s=anchor_offset_s)
     return out
+
+
+def _is_flat_bar(bar: CandleBar, max_volume: int) -> bool:
+    return bar.o == bar.h == bar.low == bar.c and bar.v <= max_volume
 
 
 class PollingConnectorB:
@@ -239,6 +231,9 @@ class PollingConnectorB:
         config_path: str,
         warmup_bars: int,
         safety_delay_s: int,
+        m5_tail_fetch_n: int,
+        m5_tail_stale_s: int,
+        flat_bar_max_volume: int,
         derived_tfs_s: List[int],
         broker_base_tfs_s: List[int],
         broker_base_fetch_on_close: bool,
@@ -250,18 +245,7 @@ class PollingConnectorB:
         day_anchor_offset_s_d1_alt: Optional[int],
         day_anchor_offset_s_alt: Optional[int],
         day_anchor_offset_s_alt2: Optional[int],
-        backfill_step_bars: int,
-        backfill_every_n_polls: int,
-        derived_rebuild_lookback_bars: int,
-        derived_tolerate_missing_minutes: int,
-        derived_backfill_from_broker: bool,
-        derived_force_close_from_broker: bool,
-        derived_force_close_max_tf_per_poll: int,
-        derived_rebuild_use_tool: bool,
-        derived_rebuild_tool_dry_run: bool,
-        poll_diag_enabled: bool,
         market_calendar: MarketCalendar,
-        heavy_budget_s: int,
     ) -> None:
         self._provider = provider
         self._data_root = data_root
@@ -269,7 +253,20 @@ class PollingConnectorB:
         self._config_path = config_path
         self._warmup_bars = warmup_bars
         self._safety_delay_s = safety_delay_s
+        self._m5_tail_fetch_n = max(1, int(m5_tail_fetch_n))
+        self._m5_tail_stale_ms = max(0, int(m5_tail_stale_s)) * 1000
+        self._flat_bar_max_volume = max(0, int(flat_bar_max_volume))
         self._derived_tfs_s = derived_tfs_s
+        if 300 in self._derived_tfs_s:
+            logging.warning(
+                "Polling: derived_tfs_s містить 300, 5m стрімиться окремо; прибираю з derived."
+            )
+            self._derived_tfs_s = [x for x in self._derived_tfs_s if x != 300]
+        if 180 in self._derived_tfs_s:
+            logging.warning(
+                "Polling: derived_tfs_s містить 180, M3 вимкнено; прибираю з derived."
+            )
+            self._derived_tfs_s = [x for x in self._derived_tfs_s if x != 180]
         self._broker_base_tfs_s = sorted({int(x) for x in broker_base_tfs_s if int(x) > 0})
         overlap = sorted(set(self._broker_base_tfs_s) & set(self._derived_tfs_s))
         if overlap:
@@ -291,23 +288,10 @@ class PollingConnectorB:
         self._day_anchor_offset_s_d1_alt = day_anchor_offset_s_d1_alt
         self._day_anchor_offset_s_alt = day_anchor_offset_s_alt
         self._day_anchor_offset_s_alt2 = day_anchor_offset_s_alt2
-        self._backfill_step_bars = backfill_step_bars
-        self._backfill_every_n_polls = max(1, backfill_every_n_polls)
-        self._derived_rebuild_lookback_bars = derived_rebuild_lookback_bars
-        self._derived_tolerate_missing_minutes = max(0, int(derived_tolerate_missing_minutes))
-        self._derived_backfill_from_broker = bool(derived_backfill_from_broker)
-        self._derived_force_close_from_broker = bool(derived_force_close_from_broker)
-        self._derived_force_close_max_tf_per_poll = max(0, int(derived_force_close_max_tf_per_poll))
-        self._derived_rebuild_use_tool = bool(derived_rebuild_use_tool)
-        self._derived_rebuild_tool_dry_run = bool(derived_rebuild_tool_dry_run)
         # CALENDAR_GATE: швидко вимкнути через config.
         self._calendar = market_calendar
         self._calendar_gate_enabled = bool(market_calendar.enabled)
-        self._poll_diag_enabled = bool(poll_diag_enabled)
-        self._heavy_budget_s = max(0, int(heavy_budget_s))
         self._heavy_skipped = 0
-        self._pending_backfill: List[Tuple[int, int]] = []
-        self._pending_rebuild_recent = False
 
         self._writer = JsonlAppender(
             root=data_root,
@@ -317,36 +301,31 @@ class PollingConnectorB:
             day_anchor_offset_s_alt=day_anchor_offset_s_alt,
             day_anchor_offset_s_alt2=day_anchor_offset_s_alt2,
         )
-        m1_keep = max(6000, warmup_bars + 2000, self._derived_rebuild_lookback_bars + 2000)
-        self._m1 = M1Buffer(max_keep=m1_keep)
+        m5_keep = max(2000, warmup_bars + 500)
+        self._m5 = M5Buffer(max_keep=m5_keep)
 
-        self._last_saved_m1_open_ms: Optional[int] = None
+        self._derived_from_m5_tfs = list(self._derived_tfs_s)
+
+        self._last_saved_m5_open_ms: Optional[int] = None
         self._last_saved_derived: Dict[int, int] = {}  # tf_s -> open_time_ms
         self._last_saved_base: Dict[int, int] = {}  # tf_s -> open_time_ms
-        self._oldest_saved_m1_open_ms: Optional[int] = None
-        self._backfill_cursor_open_ms: Optional[int] = None
         self._poll_counter: int = 0
         self._day_index_cache: Dict[str, set[int]] = {}
-        self._missing_derived_backfill_attempted: Set[Tuple[int, int]] = set()
         self._group_logs: bool = False
-        self._recent_history_errors: List[str] = []
-        self._warn_throttle: Dict[str, Tuple[float, int]] = {}
+        self._recent_history_errors: List[Tuple[str, str, int]] = []
+        self._warn_throttle: Dict[str, Tuple[float, int, str]] = {}
+        self._m5_tail_state: str = "OK"
 
     def enable_group_logging(self) -> None:
         self._group_logs = True
 
-    def drain_history_errors(self) -> List[str]:
+    def drain_history_errors(self) -> List[Tuple[str, str, int]]:
         out = list(self._recent_history_errors)
         self._recent_history_errors = []
         return out
 
     def _record_history_error(self, context: str, message: str) -> None:
-        entry = f"{context}: {message}"
-        self._recent_history_errors.append(entry)
-        if not self._group_logs:
-            logging.warning("History: %s", entry)
-        else:
-            logging.debug("History: %s", entry)
+        self._recent_history_errors.append((context, message, utc_now_ms()))
 
     def _capture_history_error(self) -> None:
         err = self._provider.consume_last_error()
@@ -354,17 +333,22 @@ class PollingConnectorB:
             context, message = err
             self._record_history_error(context, message)
 
-    def _warn_throttled(self, key: str, message: str, every_s: int = 60) -> None:
+    def _warn_throttled(self, key: str, message: str, every_s: int = 600) -> None:
         now = time.time()
-        last_ts, suppressed = self._warn_throttle.get(key, (0.0, 0))
+        last_ts, suppressed, last_msg = self._warn_throttle.get(key, (0.0, 0, ""))
         if now - last_ts < every_s:
-            self._warn_throttle[key] = (last_ts, suppressed + 1)
+            self._warn_throttle[key] = (last_ts, suppressed + 1, message)
             return
         if suppressed > 0:
-            logging.warning("%s [suppressed=%d]", message, suppressed)
-        else:
-            logging.warning("%s", message)
-        self._warn_throttle[key] = (now, 0)
+            logging.warning(
+                "SUPPRESSED key=%s suppressed=%d window_s=%d last=%s",
+                key,
+                suppressed,
+                int(now - last_ts),
+                last_msg,
+            )
+        logging.warning("%s", message)
+        self._warn_throttle[key] = (now, 0, message)
 
     def run_forever(self) -> None:
         self.bootstrap_and_warmup(log_detail=True)
@@ -374,61 +358,30 @@ class PollingConnectorB:
         summary: Dict[str, Any] = {"symbol": self._symbol}
         summary.update(self._bootstrap_from_disk(log_detail=log_detail))
         summary.update(self._cold_start_base_from_broker(log_detail=log_detail))
-        summary.update(self._warmup_history(log_detail=log_detail))
+        summary.update(self._warmup_m5_tail(log_detail=log_detail))
         return summary
 
     def poll_iteration(self) -> None:
-        self._poll_once()
+        if self._broker_base_fetch_on_close:
+            anchor_open = self._last_trading_minute_open_ms(utc_now_ms())
+            self._fetch_base_from_broker_on_close(anchor_open)
+        self._poll_m5_once()
         self._poll_counter += 1
-        remaining_s = self._seconds_to_next_minute()
-        if self._heavy_budget_s > 0 and remaining_s < self._heavy_budget_s:
-            self._heavy_skipped += 1
-            logging.info(
-                "Polling: heavy пропущено remaining=%.2fs budget=%ds skipped=%d",
-                remaining_s,
-                self._heavy_budget_s,
-                self._heavy_skipped,
-            )
-            return
-        if self._pending_rebuild_recent:
-            self._pending_rebuild_recent = False
-            self._rebuild_derived_recent()
-            return
-        if self._pending_backfill:
-            start_ms, end_ms = self._pending_backfill.pop(0)
-            written = self._backfill_range(start_ms, end_ms)
-            if written > self._backfill_step_bars:
-                self._pending_rebuild_recent = True
-            return
-        if self._poll_counter % self._backfill_every_n_polls == 0:
-            written = self._backfill_step()
-            if written > self._backfill_step_bars:
-                self._pending_rebuild_recent = True
-            return
 
     def close(self) -> None:
         self._writer.close()
 
     def _bootstrap_from_disk(self, log_detail: bool = False) -> Dict[str, Any]:
-        last = tail_last_bar_time_ms(self._data_root, self._symbol, tf_s=60)
-        self._last_saved_m1_open_ms = last
-        first = head_first_bar_time_ms(self._data_root, self._symbol, tf_s=60)
-        self._oldest_saved_m1_open_ms = first
-        self._backfill_cursor_open_ms = first
+        last_m5 = tail_last_bar_time_ms(self._data_root, self._symbol, tf_s=300)
+        self._last_saved_m5_open_ms = last_m5
         if log_detail:
-            if last is not None:
+            if last_m5 is not None:
                 logging.debug(
-                    "Старт: знайдено останній 1m бар на диску open_time_utc=%s",
-                    ms_to_utc_dt(last).isoformat(),
+                    "Старт: знайдено останній 5m бар на диску open_time_utc=%s",
+                    ms_to_utc_dt(last_m5).isoformat(),
                 )
             else:
-                logging.debug("Старт: на диску немає 1m історії для %s", self._symbol)
-
-            if first is not None:
-                logging.debug(
-                    "Старт: знайдено перший 1m бар на диску open_time_utc=%s",
-                    ms_to_utc_dt(first).isoformat(),
-                )
+                logging.debug("Старт: на диску немає 5m історії для %s", self._symbol)
 
         for tf_s in self._derived_tfs_s:
             last_d = tail_last_bar_time_ms(self._data_root, self._symbol, tf_s=tf_s)
@@ -440,10 +393,7 @@ class PollingConnectorB:
             if last_b is not None:
                 self._last_saved_base[tf_s] = last_b
 
-        return {
-            "m1_last_exists": last is not None,
-            "m1_first_exists": first is not None,
-        }
+        return {"m5_last_exists": last_m5 is not None}
 
     def _cold_start_base_from_broker(self, log_detail: bool = False) -> Dict[str, Any]:
         if not self._broker_base_cold_start_enabled:
@@ -515,20 +465,20 @@ class PollingConnectorB:
             "cold_start_broker_empty": total_found == 0,
         }
 
-    def _warmup_history(self, log_detail: bool = False) -> Dict[str, Any]:
-        """Підтягує warmup_bars останніх 1m барів і пише лише те, чого не було."""
+    def _warmup_m5_tail(self, log_detail: bool = False) -> Dict[str, Any]:
         if log_detail:
             logging.debug(
-                "Warmup: запит %d барів m1 (чанками при потребі).",
+                "Warmup: запит %d барів m5 (tail).",
                 self._warmup_bars,
             )
 
-        cutoff_open = self._last_closed_cutoff_open_ms()
-        date_to = ms_to_utc_dt(cutoff_open + 60_000)
+        cutoff_open = expected_last_closed_m5_open_ms(utc_now_ms())
+        if cutoff_open <= 0:
+            return {"warmup_empty": True, "warmup_written": 0}
+        date_to = ms_to_utc_dt(cutoff_open + 300_000)
 
-        # Спроба: один запит на N барів “до останнього закритого”.
-        bars = self._provider.fetch_last_n_m1(
-            self._symbol, self._warmup_bars, date_to_utc=date_to
+        bars = self._provider.fetch_last_n_tf(
+            self._symbol, tf_s=300, n=self._warmup_bars, date_to_utc=date_to
         )
         self._capture_history_error()
         if not bars:
@@ -538,18 +488,22 @@ class PollingConnectorB:
                 )
             return {"warmup_empty": True, "warmup_written": 0}
 
-        written = self._ingest_m1_bars(
+        bars = [b for b in bars if b.open_time_ms <= cutoff_open]
+        if not bars:
+            return {"warmup_empty": True, "warmup_written": 0}
+
+        written = self._ingest_m5_bars(
             bars,
             allow_older=True,
-            write_missing_older=False,
+            write_missing_older=True,
             log_summary=log_detail,
-            context="warmup",
+            context="warmup_m5",
         )
         return {"warmup_empty": False, "warmup_written": written}
 
     def _loop(self) -> None:
         logging.info(
-            "Polling loop: режим B активний (тільки закриті 1m через history)."
+            "Polling loop: режим B активний (закриті 1m + 5m через history)."
         )
         try:
             while True:
@@ -568,9 +522,6 @@ class PollingConnectorB:
         next_min = (int(now // 60) + 1) * 60 + self._safety_delay_s
         return max(0.0, next_min - now)
 
-    def _last_closed_cutoff_open_ms(self) -> int:
-        return expected_last_closed_m1_open_ms(utc_now_ms())
-
     def _last_trading_minute_open_ms(self, now_ms: int) -> int:
         # Повертає open_time останньої торгової хвилини до now_ms.
         cur = (now_ms // 60_000) * 60_000 - 60_000
@@ -580,134 +531,62 @@ class PollingConnectorB:
             cur -= 60_000
         return (now_ms // 60_000) * 60_000 - 60_000
 
-    def _enqueue_backfill_window(self, start_ms: int, end_ms: int, reason: str) -> None:
-        if start_ms >= end_ms:
-            return
-        item = (start_ms, end_ms)
-        if item in self._pending_backfill:
-            return
-        self._pending_backfill.append(item)
-        self._warn_throttled(
-            f"backfill_window:{reason}",
-            (
-                "Backfill: відкладено window [%s .. %s] reason=%s symbol=%s"
-                % (
-                    ms_to_utc_dt(start_ms).isoformat(),
-                    ms_to_utc_dt(end_ms).isoformat(),
-                    reason,
-                    self._symbol,
-                )
-            ),
-            every_s=60,
-        )
-
-    def _poll_once(self) -> None:
+    def _poll_m5_once(self) -> None:
         now_ms = utc_now_ms()
-        exp_open = expected_last_closed_m1_open_ms(now_ms)
-        date_to = ms_to_utc_dt(exp_open + 60_000)
+        tf_ms = 300_000
+        cutoff_open_ms = (now_ms // tf_ms) * tf_ms - tf_ms
+        if cutoff_open_ms <= 0:
+            return
+        date_to = ms_to_utc_dt(cutoff_open_ms + tf_ms)
 
-        market_open = self._provider.is_market_open(self._symbol, now_ms, self._calendar)
-        calendar_closed_now = self._calendar_gate_enabled and not market_open
-        calendar_closed_exp = self._calendar_gate_enabled and not self._provider.is_market_open(
+        bars = self._provider.fetch_last_n_tf(
             self._symbol,
-            exp_open,
-            self._calendar,
+            tf_s=300,
+            n=self._m5_tail_fetch_n,
+            date_to_utc=date_to,
         )
-        base_anchor_open = exp_open
-        if not self._provider.is_market_open(self._symbol, exp_open, self._calendar):
-            base_anchor_open = self._last_trading_minute_open_ms(exp_open)
-        if self._broker_base_fetch_on_close:
-            self._fetch_base_from_broker_on_close(base_anchor_open)
-        if calendar_closed_now and not self._group_logs:
-            logging.info(
-                "Polling: calendar_closed now=%s exp_open=%s",
-                ms_to_utc_dt(now_ms).isoformat(),
-                ms_to_utc_dt(exp_open).isoformat(),
-            )
-        if calendar_closed_exp and not self._group_logs:
-            logging.info(
-                "Polling: calendar_closed exp_open=%s (skip retry/backfill)",
-                ms_to_utc_dt(exp_open).isoformat(),
-            )
-
-        # Беремо 2 останні бари, щоб мати шанс побачити exp_open (на практиці інколи вистачає 1, але 2 надійніше).
-        bars = self._provider.fetch_last_n_m1(self._symbol, n=2, date_to_utc=date_to)
         self._capture_history_error()
-
-        if self._poll_diag_enabled:
-            last_open = bars[-1].open_time_ms if bars else None
-            logging.debug(
-                "Polling: diag now=%s exp_open=%s last_open=%s market_open=%s bars=%d",
-                ms_to_utc_dt(now_ms).isoformat(),
-                ms_to_utc_dt(exp_open).isoformat(),
-                ms_to_utc_dt(last_open).isoformat() if last_open is not None else "None",
-                market_open,
-                len(bars),
-            )
-
         if not bars:
-            logging.debug("Polling: барів немає (ймовірно market closed).")
-            if calendar_closed_now or calendar_closed_exp:
-                return
             return
 
-        # Шукаємо бар із open_time_ms == exp_open.
-        target = None
-        for b in bars:
-            if b.open_time_ms == exp_open:
-                target = b
-                break
+        bars = [b for b in bars if b.open_time_ms <= cutoff_open_ms]
+        if not bars:
+            return
 
-        if target is None:
-            if calendar_closed_exp:
-                if bars:
-                    self._ingest_m1_bars(
-                        bars,
-                        allow_older=True,
-                        write_missing_older=True,
-                        log_summary=True,
-                        context="poll_miss",
-                    )
-                return
-            # Якщо не знайшли — це або затримка “finalization”, або gap більший.
-            # Робимо короткий retry перед heavy.
-            self._warn_throttled(
-                "missed_exp_open",
-                (
-                    "Polling: не знайдено очікуваний last-closed m1 open=%s; retry через 3s. symbol=%s"
-                    % (ms_to_utc_dt(exp_open).isoformat(), self._symbol)
-                ),
-                every_s=60,
-            )
-            time.sleep(3)
-            date_to_retry = dt.datetime.now(dt.timezone.utc)
-            bars = self._provider.fetch_last_n_m1(self._symbol, n=2, date_to_utc=date_to_retry)
-            self._capture_history_error()
-            for b in bars:
-                if b.open_time_ms == exp_open:
-                    target = b
-                    break
-            if target is None:
-                if bars:
-                    self._ingest_m1_bars(
-                        bars,
-                        allow_older=True,
-                        write_missing_older=True,
-                        log_summary=True,
-                        context="poll_miss",
-                    )
-                start_ms = exp_open - 30 * 60_000
-                end_ms = exp_open
-                self._enqueue_backfill_window(start_ms, end_ms, reason="missed_exp_open")
-                return
+        max_open_ms = max(b.open_time_ms for b in bars)
+        last_saved = self._last_saved_m5_open_ms
+        if last_saved is not None and max_open_ms <= last_saved:
+            tail_age_ms = now_ms - (last_saved + tf_ms)
+            if (
+                self._m5_tail_stale_ms > 0
+                and tail_age_ms > self._m5_tail_stale_ms
+                and self._m5_tail_state != "STALE"
+            ):
+                self._m5_tail_state = "STALE"
+                logging.warning(
+                    "M5_TAIL_STALE symbol=%s last_saved=%s age_ms=%d",
+                    self._symbol,
+                    ms_to_utc_dt(last_saved).isoformat(),
+                    tail_age_ms,
+                )
+            return
 
-        self._ingest_m1_bars([target], log_summary=True, context="poll")
-        if self._broker_base_fetch_on_close:
-            self._fetch_base_from_broker_on_close(target.open_time_ms)
+        bars.sort(key=lambda b: b.open_time_ms)
+        self._ingest_m5_bars(
+            bars,
+            allow_older=True,
+            write_missing_older=True,
+            log_summary=True,
+            context="tail_m5",
+        )
+        if self._m5_tail_state == "STALE":
+            self._m5_tail_state = "OK"
+            logging.info("M5_TAIL_OK symbol=%s", self._symbol)
 
     def _fetch_base_from_broker_on_close(self, anchor_open_ms: int) -> None:
         written = 0
         tried = 0
+        last_trading_open = self._last_trading_minute_open_ms(anchor_open_ms)
         for tf_s in self._broker_base_tfs_s:
             if (
                 self._broker_base_max_tf_per_poll > 0
@@ -716,7 +595,7 @@ class PollingConnectorB:
                 break
             anchor = select_anchor_offset_for_anchor_open_ms(
                 tf_s,
-                anchor_open_ms,
+                last_trading_open,
                 self._day_anchor_offset_s,
                 self._day_anchor_offset_s_alt,
                 self._day_anchor_offset_s_alt2,
@@ -724,10 +603,10 @@ class PollingConnectorB:
                 self._day_anchor_offset_s_d1_alt,
             )
             tf_ms = tf_s * 1000
-            b0 = floor_bucket_start_ms(anchor_open_ms, tf_s, anchor_offset_s=anchor)
+            b0 = floor_bucket_start_ms(last_trading_open, tf_s, anchor_offset_s=anchor)
             b1 = b0 + tf_ms
             expected_last = self._last_trading_minute_open_ms(b1 - 60_000)
-            if anchor_open_ms != expected_last:
+            if last_trading_open != expected_last:
                 continue
             if self._has_on_disk(tf_s, b0):
                 continue
@@ -795,7 +674,7 @@ class PollingConnectorB:
         idx = self._load_day_index(tf_s, day)
         idx.add(open_time_ms)
 
-    def _ingest_m1_bars(
+    def _ingest_m5_bars(
         self,
         bars: List[CandleBar],
         allow_older: bool = False,
@@ -803,289 +682,53 @@ class PollingConnectorB:
         log_summary: bool = False,
         context: str = "",
     ) -> int:
-        """Дедуп + gap-detect + append SSOT + derive."""
-        cutoff = self._last_closed_cutoff_open_ms()
-        cutoff_iso = ms_to_utc_dt(cutoff).isoformat()
         written = 0
-        skipped_cutoff = 0
-        skipped_cutoff_last: Optional[int] = None
         skipped_dedup = 0
+        skipped_flat = 0
         derived_written = 0
 
         for b in bars:
-            if self._last_saved_m1_open_ms is not None:
-                gap_min = (b.open_time_ms - self._last_saved_m1_open_ms) // 60_000
-                if (
-                    gap_min >= 2
-                    and b.o == b.h == b.low == b.c
-                    and b.v <= 2
-                ):
-                    self._warn_throttled(
-                        "flat_future_bar",
-                        (
-                            "M1: відсікання flat-bar open=%s gap_min=%d v=%.2f symbol=%s"
-                            % (
-                                ms_to_utc_dt(b.open_time_ms).isoformat(),
-                                gap_min,
-                                b.v,
-                                self._symbol,
-                            )
-                        ),
-                        every_s=300,
-                    )
-                    continue
-            if b.open_time_ms > cutoff:
-                skipped_cutoff += 1
-                skipped_cutoff_last = b.open_time_ms
+            if _is_flat_bar(b, self._flat_bar_max_volume):
+                skipped_flat += 1
                 continue
-
-            if self._last_saved_m1_open_ms is not None and b.open_time_ms <= self._last_saved_m1_open_ms:
+            if self._last_saved_m5_open_ms is not None and b.open_time_ms <= self._last_saved_m5_open_ms:
                 if allow_older:
-                    self._m1.upsert(b)
-                    if write_missing_older and not self._has_on_disk(60, b.open_time_ms):
+                    self._m5.upsert(b)
+                    if write_missing_older and not self._has_on_disk(300, b.open_time_ms):
                         self._writer.append(b)
-                        self._mark_on_disk(60, b.open_time_ms)
+                        self._mark_on_disk(300, b.open_time_ms)
                         written += 1
-                    if self._oldest_saved_m1_open_ms is None or b.open_time_ms < self._oldest_saved_m1_open_ms:
-                        self._oldest_saved_m1_open_ms = b.open_time_ms
-                    if self._backfill_cursor_open_ms is None or b.open_time_ms < self._backfill_cursor_open_ms:
-                        self._backfill_cursor_open_ms = b.open_time_ms
                     continue
                 skipped_dedup += 1
                 continue
 
-            # gap detect: якщо пропущено > 1 хв
-            if self._last_saved_m1_open_ms is not None and b.open_time_ms > self._last_saved_m1_open_ms:
-                gap_ms = b.open_time_ms - self._last_saved_m1_open_ms
-                if gap_ms > 60_000:
-                    # backfill пропущених хвилин
-                    missing_start = self._last_saved_m1_open_ms + 60_000
-                    missing_end = b.open_time_ms - 60_000
-                    self._warn_throttled(
-                        "gap_detect",
-                        (
-                            "Gap: пропущено %d хв; backfill [%s .. %s] symbol=%s"
-                            % (
-                                gap_ms // 60_000 - 1,
-                                ms_to_utc_dt(missing_start).isoformat(),
-                                ms_to_utc_dt(missing_end).isoformat(),
-                                self._symbol,
-                            )
-                        ),
-                        every_s=60,
-                    )
-                    self._enqueue_backfill_window(missing_start, missing_end, reason="gap_detect")
-
-            # пишемо 1m SSOT
             self._writer.append(b)
-            self._mark_on_disk(60, b.open_time_ms)
-            self._m1.upsert(b)
+            self._mark_on_disk(300, b.open_time_ms)
+            self._m5.upsert(b)
             written += 1
-            if self._last_saved_m1_open_ms is None or b.open_time_ms > self._last_saved_m1_open_ms:
-                self._last_saved_m1_open_ms = b.open_time_ms
-            if self._oldest_saved_m1_open_ms is None or b.open_time_ms < self._oldest_saved_m1_open_ms:
-                self._oldest_saved_m1_open_ms = b.open_time_ms
-            if self._backfill_cursor_open_ms is None or b.open_time_ms < self._backfill_cursor_open_ms:
-                self._backfill_cursor_open_ms = b.open_time_ms
+            if self._last_saved_m5_open_ms is None or b.open_time_ms > self._last_saved_m5_open_ms:
+                self._last_saved_m5_open_ms = b.open_time_ms
 
-            logging.debug(
-                "M1: записано open=%s o=%.5f h=%.5f low=%.5f c=%.5f v=%.2f",
-                ms_to_utc_dt(b.open_time_ms).isoformat(),
-                b.o,
-                b.h,
-                b.low,
-                b.c,
-                b.v,
-            )
-
-            # derive після кожного нового 1m
-            derived_written += self._try_derive_all(anchor_open_ms=b.open_time_ms)
+            derived_written += self._try_derive_from_m5(anchor_open_ms=b.open_time_ms)
 
         if log_summary:
-            ctx = context or "ingest"
+            ctx = context or "ingest_m5"
             log_fn = logging.debug if self._group_logs else logging.info
             log_fn(
-                "M1: %s записано=%d derived=%d skip_cutoff=%d skip_dedup=%d",
+                "M5: %s записано=%d derived=%d skip_dedup=%d skip_flat=%d",
                 ctx,
                 written,
                 derived_written,
-                skipped_cutoff,
                 skipped_dedup,
-            )
-        if skipped_cutoff:
-            last_iso = (
-                ms_to_utc_dt(skipped_cutoff_last).isoformat()
-                if skipped_cutoff_last is not None
-                else "None"
-            )
-            log_fn = logging.debug if self._group_logs else logging.info
-            log_fn(
-                "M1: пропуск не закритого бару count=%d last_open=%s cutoff=%s",
-                skipped_cutoff,
-                last_iso,
-                cutoff_iso,
+                skipped_flat,
             )
         return written
 
-    def _backfill_range(self, start_ms: int, end_ms: int) -> int:
-        """Backfill діапазону [start_ms..end_ms] включно, чанками через date_to + quotes_count."""
-        if start_ms > end_ms:
+    def _try_derive_from_m5(self, anchor_open_ms: int) -> int:
+        if not self._derived_from_m5_tfs:
             return 0
-
-        # cursor_end рухається назад
-        cursor_end = (
-            end_ms + 60_000
-        )  # date_to на close наступного, щоб шанс включити end_ms
-        chunk = 300  # ForexConnect часто “комфортно” на 300; більше може працювати, але 300 стабільно.
-
-        collected: List[CandleBar] = []
-        loops = 0
-
-        while True:
-            loops += 1
-            if loops > 200:
-                logging.error(
-                    "Backfill: занадто багато ітерацій; зупиняюсь щоб не зависнути."
-                )
-                break
-
-            date_to = ms_to_utc_dt(cursor_end)
-            bars = self._provider.fetch_last_n_m1(
-                self._symbol, n=chunk, date_to_utc=date_to
-            )
-            self._capture_history_error()
-            if not bars:
-                break
-
-            # фільтр по діапазону
-            for b in bars:
-                if start_ms <= b.open_time_ms <= end_ms:
-                    collected.append(b)
-
-            oldest = bars[0].open_time_ms
-            if oldest <= start_ms:
-                break
-
-            # рухаємо cursor_end до “перед oldest”
-            cursor_end = oldest - 60_000
-
-        if not collected:
-            logging.debug(
-                "Backfill: у діапазоні немає барів (можливо ринок був закритий)."
-            )
-            return 0
-
-        collected.sort(key=lambda x: x.open_time_ms)
-
-        # інжестимо як backfill (старі бари)
-        written = self._ingest_m1_bars(
-            collected,
-            allow_older=True,
-            write_missing_older=True,
-            log_summary=True,
-            context="backfill",
-        )
-        return written
-
-    def _backfill_step(self) -> int:
-        if self._backfill_cursor_open_ms is None:
-            return 0
-
-        end_ms = self._backfill_cursor_open_ms - 60_000
-        if end_ms <= 0:
-            return 0
-
-        step = max(1, self._backfill_step_bars)
-        date_to = ms_to_utc_dt(end_ms + 60_000)
-
-        logging.debug(
-            "Backfill: крок %d барів (date_to=%s)",
-            step,
-            date_to.isoformat(),
-        )
-
-        before_oldest = self._oldest_saved_m1_open_ms
-        bars = self._provider.fetch_last_n_m1(
-            self._symbol, n=step, date_to_utc=date_to
-        )
-        if not bars:
-            logging.debug(
-                "Backfill: нових барів не знайдено; зупиняю backfill symbol=%s cursor=%s",
-                self._symbol,
-                ms_to_utc_dt(self._backfill_cursor_open_ms).isoformat()
-                if self._backfill_cursor_open_ms is not None
-                else "None",
-            )
-            self._backfill_cursor_open_ms = None
-            return 0
-
-        written = self._ingest_m1_bars(bars, allow_older=True, write_missing_older=True)
-
-        after_oldest = self._oldest_saved_m1_open_ms
-        if before_oldest == after_oldest:
-            logging.info("Backfill: нових барів не знайдено; зупиняю backfill.")
-            self._backfill_cursor_open_ms = None
-            return 0
-
-        oldest_fetched = bars[0].open_time_ms
-        self._backfill_cursor_open_ms = oldest_fetched
-        return written
-
-    def _rebuild_derived_recent(self) -> None:
-        earliest = self._m1.earliest_open_ms()
-        latest = self._m1.latest_open_ms()
-        if earliest is None or latest is None:
-            return
-
-        lookback = max(0, int(self._derived_rebuild_lookback_bars))
-        start_ms = max(earliest, latest - lookback * 60_000)
-
-        if self._derived_rebuild_use_tool:
-            self._rebuild_derived_via_tool(start_ms, latest)
-            return
-
-        logging.warning(
-            "Rebuild derived: вимкнено (use_tool=false), пропуск rebuild у core"
-        )
-
-    def _rebuild_derived_via_tool(self, start_ms: int, end_ms: int) -> None:
-        tf_list = ",".join(str(x) for x in self._derived_tfs_s)
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-        args = [
-            sys.executable,
-            os.path.join(project_root, "tools", "rebuild_derived.py"),
-            "--config",
-            self._config_path,
-            "--symbol",
-            self._symbol,
-            "--tf",
-            tf_list,
-            "--start-utc",
-            ms_to_utc_dt(start_ms).isoformat(),
-            "--end-utc",
-            ms_to_utc_dt(end_ms).isoformat(),
-        ]
-        if self._derived_rebuild_tool_dry_run:
-            args.append("--dry-run")
-
-        logging.info(
-            "Rebuild derived (tool): запуск %s",
-            " ".join(args),
-        )
-        try:
-            env = os.environ.copy()
-            prev = env.get("PYTHONPATH", "")
-            env["PYTHONPATH"] = (
-                project_root if not prev else f"{project_root}{os.pathsep}{prev}"
-            )
-            subprocess.run(args, check=True, cwd=project_root, env=env)
-        except Exception:
-            logging.exception("Rebuild derived (tool): помилка виконання")
-
-    def _try_derive_all(self, anchor_open_ms: int) -> int:
-        """Пробуємо збудувати всі derived TF на основі останнього 1m (anchor_open_ms)."""
         written = 0
-        for tf_s in self._derived_tfs_s:
+        for tf_s in self._derived_from_m5_tfs:
             anchor = select_anchor_offset_for_anchor_open_ms(
                 tf_s,
                 anchor_open_ms,
@@ -1098,17 +741,16 @@ class PollingConnectorB:
             tf_ms = tf_s * 1000
             b0 = floor_bucket_start_ms(anchor_open_ms, tf_s, anchor_offset_s=anchor)
             b1 = b0 + tf_ms
-            if anchor_open_ms != (b1 - 60_000):
+            if anchor_open_ms != (b1 - 300_000):
                 continue
 
-            missing = self._m1.missing_count(b0, b1)
-            if missing != 0:
+            if not self._m5.has_range_complete(b0, b1):
                 continue
 
-            d = derive_from_m1_for_anchor(
+            d = derive_from_m5_for_anchor(
                 self._symbol,
                 tf_s=tf_s,
-                m1=self._m1,
+                m5=self._m5,
                 anchor_open_ms=anchor_open_ms,
                 anchor_offset_s=anchor,
             )
@@ -1128,99 +770,265 @@ class PollingConnectorB:
             if last is None or d.open_time_ms > last:
                 self._last_saved_derived[tf_s] = d.open_time_ms
 
-            logging.debug(
-                "DERIVED tf=%ds: записано open=%s o=%.5f h=%.5f low=%.5f c=%.5f v=%.2f",
-                tf_s,
-                ms_to_utc_dt(d.open_time_ms).isoformat(),
-                d.o,
-                d.h,
-                d.low,
-                d.c,
-                d.v,
-            )
-
         return written
 
 
 class MultiSymbolRunner:
-    def __init__(self, engines: List[PollingConnectorB]) -> None:
+    def __init__(
+        self,
+        engines: List[PollingConnectorB],
+        history_summary_interval_s: int,
+        history_still_failing_interval_s: int,
+        history_circuit_fail_streak: int,
+        history_circuit_base_s: int,
+        history_circuit_max_s: int,
+        history_circuit_log_interval_s: int,
+        history_symbols_sample_n: int,
+        history_network_error_escalate_s: int,
+    ) -> None:
         self._engines = engines
         self._safety_delay_s = max((e._safety_delay_s for e in engines), default=0)  # noqa: SLF001
         for e in self._engines:
             e.enable_group_logging()
-        self._last_calendar_closed_exp_open_by_symbol: Dict[str, int] = {}
-        self._last_calendar_closed_log_ts_by_symbol: Dict[str, float] = {}
+        self._calendar_state_by_symbol: Dict[str, bool] = {}
+        self._history_summary_interval_s = max(60, int(history_summary_interval_s))
+        self._history_still_failing_interval_s = max(60, int(history_still_failing_interval_s))
+        self._history_circuit_fail_streak = max(1, int(history_circuit_fail_streak))
+        self._history_circuit_base_s = max(60, int(history_circuit_base_s))
+        self._history_circuit_max_s = max(self._history_circuit_base_s, int(history_circuit_max_s))
+        self._history_circuit_log_interval_s = max(60, int(history_circuit_log_interval_s))
+        self._history_symbols_sample_n = max(1, int(history_symbols_sample_n))
+        self._history_network_error_escalate_s = max(60, int(history_network_error_escalate_s))
+        self._history_state: str = "OK"
+        self._history_fail_streak: int = 0
+        self._history_first_fail_ts: Optional[float] = None
+        self._history_last_fail_ts: Optional[float] = None
+        self._history_last_err_kind: str = ""
+        self._history_last_err_msg: str = ""
+        self._history_suppressed_count: int = 0
+        self._history_last_summary_ts: float = 0.0
+        self._history_backoff_until_ts: float = 0.0
+        self._history_last_circuit_log_ts: float = 0.0
+
+    def _format_symbols_sample(self, symbols: List[str]) -> Tuple[str, int]:
+        if not symbols:
+            return "", 0
+        sample = symbols[: self._history_symbols_sample_n]
+        and_more = max(0, len(symbols) - len(sample))
+        return ",".join(sample), and_more
+
+    def _error_sample(self, context: str, message: str, limit: int = 180) -> str:
+        raw = f"{context}: {message}"
+        if len(raw) <= limit:
+            return raw
+        return raw[: limit - 3] + "..."
+
+    def _classify_history_error(self, message: str, is_market_open: bool) -> str:
+        if not is_market_open:
+            return "calendar_closed"
+        msg = message.lower()
+        if "session" in msg or "сесія не відкрита" in msg:
+            return "session_expired"
+        if "auth" in msg or "login" in msg or "invalid" in msg or "access denied" in msg:
+            return "auth_failed"
+        if "rate" in msg or "too many" in msg or "429" in msg:
+            return "rate_limited"
+        if "dns" in msg or "name or service not known" in msg:
+            return "dns_error"
+        if "timeout" in msg or "timed out" in msg or "http request failed" in msg:
+            return "network_timeout"
+        if "instrument is not found" in msg or "instrument" in msg or "offer" in msg:
+            return "instrument_not_found"
+        if "500" in msg or "502" in msg or "503" in msg or "504" in msg:
+            return "provider_error"
+        if "parse" in msg or "missing key" in msg or "row" in msg or "keyerror" in msg:
+            return "parse_error"
+        return "provider_error"
+
+    def _history_log_level(self, reason_code: str, fail_duration_s: int) -> int:
+        if reason_code == "calendar_closed":
+            return logging.INFO
+        if reason_code in ("auth_failed", "session_expired"):
+            return logging.ERROR
+        if (
+            reason_code in ("network_timeout", "dns_error")
+            and fail_duration_s >= self._history_network_error_escalate_s
+        ):
+            return logging.ERROR
+        if reason_code == "rate_limited":
+            return logging.WARNING
+        return logging.WARNING
 
     def _log_calendar_closed_if_needed(self) -> None:
         if not self._engines:
             return
         now_ms = utc_now_ms()
-        exp_open = expected_last_closed_m1_open_ms(now_ms)
         for e in self._engines:
             if not e._calendar_gate_enabled:  # noqa: SLF001
                 continue
-            if e._provider.is_market_open(e._symbol, now_ms, e._calendar):  # noqa: SLF001
+            is_open = e._provider.is_market_open(e._symbol, now_ms, e._calendar)  # noqa: SLF001
+            prev = self._calendar_state_by_symbol.get(e._symbol)
+            if prev is None:
+                self._calendar_state_by_symbol[e._symbol] = is_open
                 continue
-            last_exp = self._last_calendar_closed_exp_open_by_symbol.get(e._symbol)
-            if last_exp == exp_open:
+            if prev == is_open:
                 continue
-            last_ts = self._last_calendar_closed_log_ts_by_symbol.get(e._symbol, 0.0)
-            if now_ms - int(last_ts * 1000) < 300_000:
-                continue
-            self._last_calendar_closed_exp_open_by_symbol[e._symbol] = exp_open
-            self._last_calendar_closed_log_ts_by_symbol[e._symbol] = time.time()
-            logging.info(
-                "Polling: calendar_closed symbol=%s now=%s exp_open=%s",
-                e._symbol,
-                ms_to_utc_dt(now_ms).isoformat(),
-                ms_to_utc_dt(exp_open).isoformat(),
-            )
+            self._calendar_state_by_symbol[e._symbol] = is_open
+            if is_open:
+                logging.info(
+                    "CALENDAR_STATE_CHANGE symbol=%s state=open now=%s",
+                    e._symbol,
+                    ms_to_utc_dt(now_ms).isoformat(),
+                )
+            else:
+                exp_open = expected_last_closed_m5_open_ms(now_ms)
+                logging.info(
+                    "CALENDAR_STATE_CHANGE symbol=%s state=closed now=%s next_open_m5=%s",
+                    e._symbol,
+                    ms_to_utc_dt(now_ms).isoformat(),
+                    ms_to_utc_dt(exp_open).isoformat(),
+                )
 
     def _drain_history_errors(self) -> None:
         total = len(self._engines)
         errors_by_symbol: Dict[str, List[str]] = {}
+        engine_by_symbol = {e._symbol: e for e in self._engines}  # noqa: SLF001
         for e in self._engines:
             errs = e.drain_history_errors()
             if errs:
                 errors_by_symbol[e._symbol] = errs  # noqa: SLF001
+
+        now_s = time.time()
+        now_ms = int(now_s * 1000)
+
         if not errors_by_symbol:
+            if self._history_state == "FAIL":
+                recovered_after = 0
+                if self._history_first_fail_ts is not None:
+                    recovered_after = int(now_s - self._history_first_fail_ts)
+                logging.info(
+                    "HISTORY_STATE_CHANGE to=OK recovered_after_s=%d",
+                    recovered_after,
+                )
+            self._history_state = "OK"
+            self._history_fail_streak = 0
+            self._history_first_fail_ts = None
+            self._history_last_fail_ts = None
+            self._history_last_err_kind = ""
+            self._history_last_err_msg = ""
+            self._history_suppressed_count = 0
+            self._history_last_summary_ts = 0.0
             return
+
+        failed = len(errors_by_symbol)
         symbols = sorted(errors_by_symbol.keys())
-        logging.warning(
-            "History: помилки для %d/%d symbols=%s",
-            len(symbols),
-            total,
-            ",".join(symbols),
-        )
+        symbols_sample, and_more = self._format_symbols_sample(symbols)
+
+        reason_counts: Counter[str] = Counter()
+        first_error_sample = ""
+        last_err_kind = ""
+        last_err_msg = ""
         for sym, errs in errors_by_symbol.items():
-            for err in errs:
-                logging.debug("History: %s: %s", sym, err)
+            eng = engine_by_symbol.get(sym)
+            is_open = True
+            if eng is not None and eng._calendar_gate_enabled:  # noqa: SLF001
+                is_open = eng._calendar.is_trading_minute(now_ms)  # noqa: SLF001
+            for context, message, _ts in errs:
+                combined = f"{context}: {message}"
+                reason = self._classify_history_error(combined, is_open)
+                reason_counts[reason] += 1
+                last_err_kind = reason
+                last_err_msg = combined
+                if not first_error_sample:
+                    first_error_sample = self._error_sample(context, message)
+
+        top_reason = "provider_error"
+        top_reason_count = 0
+        if reason_counts:
+            top_reason, top_reason_count = reason_counts.most_common(1)[0]
+
+        if self._history_state == "FAIL":
+            self._history_fail_streak += 1
+        else:
+            self._history_state = "FAIL"
+            self._history_fail_streak = 1
+            self._history_first_fail_ts = now_s
+            self._history_last_summary_ts = 0.0
+            self._history_suppressed_count = 0
+
+        self._history_last_fail_ts = now_s
+        self._history_last_err_kind = last_err_kind or top_reason
+        self._history_last_err_msg = last_err_msg
+
+        fail_duration_s = 0
+        if self._history_first_fail_ts is not None:
+            fail_duration_s = int(now_s - self._history_first_fail_ts)
+
+        backoff_s = 0
+        if failed == total and self._history_fail_streak >= self._history_circuit_fail_streak:
+            backoff_s = min(
+                self._history_circuit_max_s,
+                self._history_circuit_base_s
+                * (2 ** min(self._history_fail_streak - self._history_circuit_fail_streak, 2)),
+            )
+            until_ts = now_s + backoff_s
+            if until_ts > self._history_backoff_until_ts:
+                self._history_backoff_until_ts = until_ts
+
+        level = self._history_log_level(top_reason, fail_duration_s)
+
+        if self._history_last_summary_ts <= 0.0:
+            logging.log(
+                level,
+                "HISTORY_STATE_CHANGE to=FAIL failed=%d total=%d reason_code=%s reason_top=%s(%d) first_error_sample=%s symbols_sample=%s and_more=%d",
+                failed,
+                total,
+                top_reason,
+                top_reason,
+                top_reason_count,
+                first_error_sample,
+                symbols_sample,
+                and_more,
+            )
+            self._history_last_summary_ts = now_s
+            self._history_suppressed_count = 0
+            return
+
+        if now_s - self._history_last_summary_ts >= self._history_still_failing_interval_s:
+            logging.log(
+                level,
+                "HISTORY_STILL_FAILING failed=%d total=%d streak=%d suppressed=%d reason_top=%s(%d) last_reason=%s first_error_sample=%s symbols_sample=%s and_more=%d backoff_s=%d",
+                failed,
+                total,
+                self._history_fail_streak,
+                self._history_suppressed_count,
+                top_reason,
+                top_reason_count,
+                self._history_last_err_kind,
+                first_error_sample,
+                symbols_sample,
+                and_more,
+                backoff_s,
+            )
+            self._history_last_summary_ts = now_s
+            self._history_suppressed_count = 0
+        else:
+            self._history_suppressed_count += 1
 
     def _log_bootstrap_summary(self, summaries: List[Dict[str, Any]]) -> None:
         total = len(summaries)
         if total <= 0:
             return
-        missing_last = [s["symbol"] for s in summaries if not s.get("m1_last_exists")]
-        missing_first = [s["symbol"] for s in summaries if not s.get("m1_first_exists")]
+        missing_last = [s["symbol"] for s in summaries if not s.get("m5_last_exists")]
         if missing_last:
             logging.warning(
-                "Старт: останній 1m на диску %d/%d (немає: %s)",
+                "Старт: останній 5m на диску %d/%d (немає: %s)",
                 total - len(missing_last),
                 total,
                 ",".join(missing_last),
             )
         else:
-            logging.info("Старт: останній 1m на диску %d/%d", total, total)
-
-        if missing_first:
-            logging.warning(
-                "Старт: перший 1m на диску %d/%d (немає: %s)",
-                total - len(missing_first),
-                total,
-                ",".join(missing_first),
-            )
-        else:
-            logging.info("Старт: перший 1m на диску %d/%d", total, total)
+            logging.info("Старт: останній 5m на диску %d/%d", total, total)
 
         counts_empty = [s["symbol"] for s in summaries if s.get("cold_start_counts_empty")]
         broker_empty = [s["symbol"] for s in summaries if s.get("cold_start_broker_empty")]
@@ -1275,6 +1083,18 @@ class MultiSymbolRunner:
             self._log_bootstrap_summary(summaries)
             self._drain_history_errors()
             while True:
+                now_s = time.time()
+                if now_s < self._history_backoff_until_ts:
+                    remaining_s = int(self._history_backoff_until_ts - now_s)
+                    if now_s - self._history_last_circuit_log_ts >= self._history_circuit_log_interval_s:
+                        logging.info(
+                            "HISTORY_CIRCUIT_SLEEP seconds=%d",
+                            remaining_s,
+                        )
+                        self._history_last_circuit_log_ts = now_s
+                    time.sleep(min(60, max(1, remaining_s)))
+                    continue
+
                 sleep_to_next_minute(self._safety_delay_s)
                 self._log_calendar_closed_if_needed()
                 for e in self._engines:
