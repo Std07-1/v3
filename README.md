@@ -15,14 +15,42 @@
 
 ## Структура даних
 
-- data_v3/<SYMBOL>/tf_<TF>/part-YYYYMMDD.jsonl — основні дані
+- data_v3/SYMBOL/tf_TF/part-YYYYMMDD.jsonl — основні дані
 - History/ — довільна історія/експерименти (не для репо)
 
-## Запуск polling
+## Запуск системи
 
 - Активуйте .venv.
-- Запустіть конектор:
-  - python -m app.main_connector
+- Запуск UI+конектор (одна команда):
+  - python -m app.main
+- Лише конектор:
+  - python -m app.main --mode connector
+- Лише UI:
+  - python -m app.main --mode ui
+
+### Режими stdio supervisor
+
+- Дефолт: один термінал з префіксами (`[ui]`, `[connector]`):
+  - python -m app.main --mode all --stdio pipe
+- Логи у файли:
+  - python -m app.main --mode all --stdio files --log-dir logs
+- Успадкований stdio без префіксів:
+  - python -m app.main --mode all --stdio inherit
+- Окреме вікно (Windows-only, лише з inherit):
+  - python -m app.main --mode ui --stdio inherit --new-console
+
+### Приклади запусків
+
+- Стандартний dev (префікси в одному терміналі):
+  - python -m app.main --mode all --stdio pipe
+- Лише UI з префіксами:
+  - python -m app.main --mode ui --stdio pipe
+- Тихий режим у файли:
+  - python -m app.main --mode all --stdio files --log-dir logs
+- Мінімальний шум (повністю null):
+  - python -m app.main --mode all --stdio null
+- Окреме вікно UI (Windows):
+  - python -m app.main --mode ui --stdio inherit --new-console
 
 ## Налаштування
 
@@ -31,6 +59,7 @@
 - broker_base_tfs_s — базові TF з брокера (4h/1d)
 - derived_tfs_s — похідні TF (15m–1h)
 - day_anchor_offset_s та *alt* — якорі сесії
+- redis.* — snapshots для cold-load UI (опційно)
 
 Календарі задаються групами:
 
@@ -38,6 +67,8 @@
 - market_calendar_symbol_groups — мапінг символ → група
 
 Модель підтримує лише одну daily break пару на групу (UTC).
+
+Зміни config.json підхоплюються після перезапуску процесів (hot-reload немає).
 
 ## Git та дані
 

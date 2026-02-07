@@ -17,6 +17,10 @@ const elDiagLast = document.getElementById('diag-last');
 const elDiagBars = document.getElementById('diag-bars');
 const elDiagError = document.getElementById('diag-error');
 const elDiagUtc = document.getElementById('diag-utc');
+const elDiagRedisSource = document.getElementById('diag-redis-source');
+const elDiagRedisAge = document.getElementById('diag-redis-age');
+const elDiagRedisTtl = document.getElementById('diag-redis-ttl');
+const elDiagRedisSeq = document.getElementById('diag-redis-seq');
 const elDiag = document.getElementById('diag');
 const elDrawerHandle = document.getElementById('drawer-handle');
 const elFloatingTools = document.getElementById('floating-tools');
@@ -40,6 +44,10 @@ let bootId = null;
 let lastApiSeenMs = null;
 let lastSsotWriteMs = null;
 let lastBarCloseMs = null;
+let lastRedisSource = null;
+let lastRedisPayloadMs = null;
+let lastRedisTtlS = null;
+let lastRedisSeq = null;
 const updateStateByKey = new Map();
 
 const RIGHT_OFFSET_PX = 48;
@@ -67,6 +75,12 @@ function fmtUtc(ms) {
   if (ms == null) return '—';
   const iso = new Date(ms).toISOString();
   return `${iso.slice(0, 19).replace('T', ' ')} UTC`;
+}
+
+function fmtTtl(v) {
+  if (v == null) return '—';
+  if (!Number.isFinite(v)) return '—';
+  return `${v}s`;
 }
 
 function fmtPrice(v) {
@@ -101,6 +115,18 @@ function updateDiag(tfSeconds) {
   elDiagLast.textContent = lastOpenMs != null ? fmtUtc(lastOpenMs) : '—';
   elDiagBars.textContent = diag.barsTotal ? `${diag.barsTotal} (+${diag.lastPollBars})` : '—';
   elDiagError.textContent = diag.lastError || '—';
+  if (elDiagRedisSource) {
+    elDiagRedisSource.textContent = lastRedisSource || '—';
+  }
+  if (elDiagRedisAge) {
+    elDiagRedisAge.textContent = lastRedisPayloadMs != null ? fmtAge(now - lastRedisPayloadMs) : '—';
+  }
+  if (elDiagRedisTtl) {
+    elDiagRedisTtl.textContent = fmtTtl(lastRedisTtlS);
+  }
+  if (elDiagRedisSeq) {
+    elDiagRedisSeq.textContent = lastRedisSeq != null ? String(lastRedisSeq) : '—';
+  }
   updateStreamingIndicator();
 }
 
@@ -517,10 +543,24 @@ async function loadBarsFull(forceDisk = false) {
   let url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${limit}`;
   if (forceDisk) {
     url += '&force_disk=1';
+  } else {
+    url += '&prefer_redis=1';
   }
   const data = await apiGet(url);
   if (data && data.boot_id) {
     bootId = data.boot_id;
+  }
+  if (data && data.meta) {
+    const meta = data.meta || {};
+    lastRedisSource = meta.source || (meta.redis_hit ? 'redis' : 'disk');
+    lastRedisPayloadMs = Number.isFinite(meta.redis_payload_ts_ms) ? meta.redis_payload_ts_ms : null;
+    lastRedisTtlS = Number.isFinite(meta.redis_ttl_s_left) ? meta.redis_ttl_s_left : null;
+    lastRedisSeq = Number.isFinite(meta.redis_seq) ? meta.redis_seq : null;
+  } else {
+    lastRedisSource = null;
+    lastRedisPayloadMs = null;
+    lastRedisTtlS = null;
+    lastRedisSeq = null;
   }
   const bars = data.bars || [];
   if (bars.length === 0) {

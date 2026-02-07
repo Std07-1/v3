@@ -5,25 +5,21 @@
     "connection": "Demo",
     "symbol": "XAU/USD",
     "symbols": [
-        "XAU/USD",
-        "EUSTX50",
-        "GBP/CAD",
-        "GER30",
-        "HKG33",
-        "NAS100",
-        "NGAS",
-        "NZD/CAD",
-        "SPX500",
-        "US30",
-        "USD/CAD",
-        "USD/JPY",
-        "XAG/USD"
+        "XAU/USD"
     ],
     "data_root": "./data_v3",
-    "warmup_bars": 8000,
+    "warmup_bars": 5000,
     "safety_delay_s": 2,
     "m5_tail_fetch_n": 12,
     "m5_tail_stale_s": 720,
+    "m5_tail_catchup_max_missing_bars": 5000,
+    "m5_tail_catchup_max_lookback_bars": 5000,
+    "derived_tail_rebuild_enabled": true,
+    "derived_tail_rebuild_m5_bars": 5000,
+    "derived_tail_rebuild_budget_s": 2,
+    "m5_backfill_step_bars": 300,
+    "m5_backfill_every_min": 5,
+    "m5_backfill_max_bars": 30000,
     "connector_retry_base_s": 10,
     "connector_retry_max_s": 3600,
     "connector_wake_ahead_s": 900,
@@ -119,5 +115,45 @@
     "day_anchor_offset_s_alt2": 79200,
     "day_anchor_offset_s_d1": 75600,
     "day_anchor_offset_s_d1_alt": 79200,
-    "ui_debug": true
+    "ui_debug": true,
+    "redis_priming_enabled": true,
+    "redis_priming_budget_s": 2,
+    "redis_priming_tfs_s": [
+        300,
+        900,
+        1800,
+        3600,
+        14400,
+        86400
+    ],
+    "redis_priming_symbols": [],
+    "min_coldload_bars_by_tf_s": {
+        "300": 300,
+        "900": 200,
+        "1800": 150,
+        "3600": 100
+    },
+    "redis": {
+        "enabled": true,
+        "host": "127.0.0.1",
+        "port": 6379,
+        "db": 0,
+        "ns": "v3",
+        "ttl_by_tf_s": {
+            "300": 3600,
+            "900": 14400,
+            "1800": 14400,
+            "3600": 86400,
+            "14400": 172800,
+            "86400": 604800
+        },
+        "tail_n_by_tf_s": {
+            "300": 512,
+            "900": 512,
+            "1800": 256,
+            "3600": 256,
+            "14400": 256,
+            "86400": 128
+        }
+    }
 }

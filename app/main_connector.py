@@ -9,6 +9,7 @@ from typing import Optional
 from app.composition import ConfigError, build_connector
 from app.lifecycle import run_with_shutdown
 from runtime.ingest.market_calendar import MarketCalendar
+from runtime.store.redis_snapshot import init_redis_snapshot
 
 
 def setup_logging(verbose: bool) -> None:
@@ -133,6 +134,9 @@ def _build_with_retry(config_path: str) -> tuple[object, callable | None]:
     while True:
         try:
             return build_connector(config_path)
+        except KeyboardInterrupt:
+            logging.info("Зупинено користувачем у retry‑циклі")
+            raise SystemExit(0)
         except ConfigError as exc:
             if exc.stage == "load":
                 logging.exception("Не вдалось завантажити config.json")
@@ -143,6 +147,7 @@ def _build_with_retry(config_path: str) -> tuple[object, callable | None]:
             attempt += 1
             backoff = min(max_delay_s, base_delay_s * (2 ** min(attempt - 1, 4)))
             msg = str(exc)
+            msg_l = msg.lower()
             if "ORA-499" in msg:
                 sleep_s = _calendar_sleep_s(config_path, int(time.time() * 1000), wake_ahead_s)
                 if sleep_s is not None:
@@ -151,26 +156,47 @@ def _build_with_retry(config_path: str) -> tuple[object, callable | None]:
                     "FXCM login: ORA-499 (Hosts.jsp недоступний). Ринок спить; retry через %ds",
                     backoff,
                 )
+            elif "user or connection doesn't exist" in msg_l or "loginfailederror" in msg_l:
+                logging.warning(
+                    "FXCM login: невірні user_id/connection або недійсний акаунт; retry через %ds",
+                    backoff,
+                )
+            elif "wait timeout exceeded" in msg_l:
+                logging.warning(
+                    "FXCM login: wait timeout exceeded; retry через %ds",
+                    backoff,
+                )
             else:
                 logging.exception(
                     "Не вдалось ініціалізувати FxcmHistoryProvider або запустити engine; retry через %ds",
                     backoff,
                 )
-            time.sleep(backoff)
+            try:
+                time.sleep(backoff)
+            except KeyboardInterrupt:
+                logging.info("Зупинено користувачем під час backoff")
+                raise SystemExit(0)
 
 
 def main() -> int:
     setup_logging(verbose=False)
     logging.info("Запуск PollingConnectorB")
+    init_redis_snapshot("config.json", log_detail=True)
     try:
         runner, cleanup_fn = _build_with_retry("config.json")
     except ConfigError:
         return 2
+    except KeyboardInterrupt:
+        logging.info("Зупинено користувачем до старту engine")
+        return 0
 
     try:
         result = run_with_shutdown(getattr(runner, "run_forever"), cleanup_fn)
         if result is not None:
             return result
+    except KeyboardInterrupt:
+        logging.info("Зупинено користувачем у роботі engine")
+        return 0
     except Exception:
         logging.exception("Помилка в роботі engine")
         return 1

@@ -1,0 +1,67 @@
+{
+    "version": 1,
+    "gates": [
+        {
+            "name": "redis_snapshots_basic",
+            "module": "tools.exit_gates.redis_snapshots_basic",
+            "inputs": {
+                "config_path": "config.json",
+                "symbol": "XAU/USD",
+                "tf_s": 300,
+                "require_snap": true,
+                "require_status": true,
+                "ttl_min_s": 1,
+                "connect_timeout_ms": 200,
+                "socket_timeout_ms": 200
+            }
+        },
+        {
+            "name": "redis_snapshot_schema",
+            "module": "tools.exit_gates.gates.gate_redis_snapshot_schema",
+            "inputs": {
+                "config_path": "config.json",
+                "symbol": "XAU/USD",
+                "tf_s": 300,
+                "ttl_min_s": 1,
+                "allow_empty_keys": false,
+                "allow_empty_tail": false,
+                "max_status_bytes": 16384
+            }
+        },
+        {
+            "name": "api_bars_meta",
+            "module": "tools.exit_gates.gates.gate_api_bars_meta",
+            "inputs": {
+                "base_url": "http://127.0.0.1:8089",
+                "symbol": "XAU/USD",
+                "tf_s": 300,
+                "prefer_redis": true,
+                "limit": 20000
+            }
+        },
+        {
+            "name": "api_updates_contract",
+            "module": "tools.exit_gates.gates.gate_api_updates_contract",
+            "inputs": {
+                "base_url": "http://127.0.0.1:8089",
+                "symbol": "XAU/USD",
+                "tf_s": 300,
+                "since_seq": 0,
+                "max_events_expected": 500
+            }
+        },
+        {
+            "name": "payload_budgets",
+            "module": "tools.exit_gates.gates.gate_payload_budgets",
+            "inputs": {
+                "base_url": "http://127.0.0.1:8089",
+                "symbol": "XAU/USD",
+                "tf_s": 300,
+                "config_path": "config.json",
+                "max_status_bytes": 16384,
+                "max_updates_bytes": 256000,
+                "max_bars_bytes": 1000000
+            }
+        }
+    ]
+}

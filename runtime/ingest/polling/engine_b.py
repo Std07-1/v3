@@ -1,31 +1,46 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
+import os
 import time
 from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from core.model.bars import CandleBar, assert_invariants, ms_to_utc_dt
+from core.model.bars import CandleBar, ms_to_utc_dt
 from runtime.ingest.market_calendar import MarketCalendar
-from runtime.store.ssot_jsonl import JsonlAppender, load_day_open_times, tail_last_bar_time_ms
+from runtime.ingest.polling.dedup import has_on_disk, mark_on_disk
+from runtime.ingest.polling.derive import M5Buffer, derive_from_m5_for_anchor
+from runtime.ingest.polling.fetch_policy import (
+    expected_last_closed_m5_open_ms,
+    expected_last_closed_m5_open_ms_calendar,
+    last_trading_minute_open_ms,
+)
+from runtime.ingest.polling.flat_filter import is_flat_bar
+from runtime.ingest.polling.time_buckets import floor_bucket_start_ms
+from runtime.store.redis_snapshot import build_redis_snapshot_writer
+from runtime.store.ssot_jsonl import (
+    JsonlAppender,
+    head_first_bar_time_ms,
+    read_tail_bars,
+    tail_last_bar_time_ms,
+)
 
 if TYPE_CHECKING:
     from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
 
+logger = logging.getLogger("PollingConnectorB")
+if not logger.hasHandlers():
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s | %(levelname)s | %(message)s",
+    )
 
 # Утиліти часу/бакетів
 
 def utc_now_ms() -> int:
     return int(time.time() * 1000)
-
-
-def floor_bucket_start_ms(ts_ms: int, tf_s: int, anchor_offset_s: int = 0) -> int:
-    """Початок bucket для tf_s з опційним anchor_offset_s (для D1 зазвичай)."""
-    tf_ms = tf_s * 1000
-    adj = ts_ms - anchor_offset_s * 1000
-    b0 = (adj // tf_ms) * tf_ms
-    return b0 + anchor_offset_s * 1000
 
 
 def _d1_anchor_offsets(
@@ -95,131 +110,12 @@ def select_anchor_offset_for_anchor_open_ms(
     return primary
 
 
-def expected_last_closed_m5_open_ms(now_ms: int) -> int:
-    tf_ms = 300_000
-    return (now_ms // tf_ms) * tf_ms - tf_ms
-
-
 def sleep_to_next_minute(safety_delay_s: int) -> None:
     now = time.time()
     next_min = (int(now // 60) + 1) * 60
     target = next_min + safety_delay_s
     delay = max(0.0, target - now)
     time.sleep(delay)
-
-
-class M5Buffer:
-    """Буфер закритих 5m барів у памʼяті для побудови derived TF."""
-
-    def __init__(self, max_keep: int = 2000) -> None:
-        self._max_keep = max_keep
-        self._by_open_ms: Dict[int, CandleBar] = {}
-        self._sorted_keys: List[int] = []
-
-    def upsert(self, bar: CandleBar) -> None:
-        if bar.tf_s != 300:
-            raise ValueError("M5Buffer приймає тільки tf_s=300")
-        k = bar.open_time_ms
-        if k in self._by_open_ms:
-            self._by_open_ms[k] = bar
-            return
-        self._by_open_ms[k] = bar
-        self._sorted_keys.append(k)
-        self._sorted_keys.sort()
-        self._gc()
-
-    def _gc(self) -> None:
-        if len(self._sorted_keys) <= self._max_keep:
-            return
-        drop = len(self._sorted_keys) - self._max_keep
-        to_drop = self._sorted_keys[:drop]
-        self._sorted_keys = self._sorted_keys[drop:]
-        for k in to_drop:
-            self._by_open_ms.pop(k, None)
-
-    def has_range_complete(self, start_ms: int, end_ms: int) -> bool:
-        step = 300_000
-        for t in range(start_ms, end_ms, step):
-            if t not in self._by_open_ms:
-                return False
-        return True
-
-    def range_bars(self, start_ms: int, end_ms: int) -> List[CandleBar]:
-        step = 300_000
-        out: List[CandleBar] = []
-        for t in range(start_ms, end_ms, step):
-            b = self._by_open_ms.get(t)
-            if b is None:
-                return []
-            out.append(b)
-        return out
-
-    def missing_count(self, start_ms: int, end_ms: int) -> int:
-        step = 300_000
-        missing = 0
-        for t in range(start_ms, end_ms, step):
-            if t not in self._by_open_ms:
-                missing += 1
-        return missing
-
-    def earliest_open_ms(self) -> Optional[int]:
-        if not self._sorted_keys:
-            return None
-        return self._sorted_keys[0]
-
-    def latest_open_ms(self) -> Optional[int]:
-        if not self._sorted_keys:
-            return None
-        return self._sorted_keys[-1]
-
-
-def derive_from_m5_for_anchor(
-    symbol: str,
-    tf_s: int,
-    m5: M5Buffer,
-    anchor_open_ms: int,
-    anchor_offset_s: int = 0,
-) -> Optional[CandleBar]:
-    tf_ms = tf_s * 1000
-
-    b0 = floor_bucket_start_ms(anchor_open_ms, tf_s, anchor_offset_s=anchor_offset_s)
-    b1 = b0 + tf_ms
-
-    if anchor_open_ms != (b1 - 300_000):
-        return None
-
-    if not m5.has_range_complete(b0, b1):
-        return None
-
-    bars = m5.range_bars(b0, b1)
-    if not bars:
-        return None
-
-    o = bars[0].o
-    c = bars[-1].c
-    h = max(x.h for x in bars)
-    low = min(x.low for x in bars)
-    v = sum(x.v for x in bars)
-
-    out = CandleBar(
-        symbol=symbol,
-        tf_s=tf_s,
-        open_time_ms=b0,
-        close_time_ms=b1,
-        o=o,
-        h=h,
-        low=low,
-        c=c,
-        v=v,
-        complete=True,
-        src="derived",
-    )
-    assert_invariants(out, anchor_offset_s=anchor_offset_s)
-    return out
-
-
-def _is_flat_bar(bar: CandleBar, max_volume: int) -> bool:
-    return bar.o == bar.h == bar.low == bar.c and bar.v <= max_volume
 
 
 class PollingConnectorB:
@@ -233,6 +129,14 @@ class PollingConnectorB:
         safety_delay_s: int,
         m5_tail_fetch_n: int,
         m5_tail_stale_s: int,
+        m5_tail_catchup_max_missing_bars: int,
+        m5_tail_catchup_max_lookback_bars: int,
+        derived_tail_rebuild_enabled: bool,
+        derived_tail_rebuild_m5_bars: int,
+        derived_tail_rebuild_budget_s: float,
+        m5_backfill_step_bars: int,
+        m5_backfill_every_min: int,
+        m5_backfill_max_bars: int,
         flat_bar_max_volume: int,
         derived_tfs_s: List[int],
         broker_base_tfs_s: List[int],
@@ -240,6 +144,11 @@ class PollingConnectorB:
         broker_base_max_tf_per_poll: int,
         broker_base_cold_start_counts: Dict[int, int],
         broker_base_cold_start_enabled: bool,
+        redis_priming_enabled: bool,
+        redis_priming_budget_s: float,
+        redis_priming_tfs_s: List[int],
+        redis_priming_symbols: List[str],
+        redis_tail_n_by_tf_s: Dict[int, int],
         day_anchor_offset_s: int,
         day_anchor_offset_s_d1: Optional[int],
         day_anchor_offset_s_d1_alt: Optional[int],
@@ -255,6 +164,18 @@ class PollingConnectorB:
         self._safety_delay_s = safety_delay_s
         self._m5_tail_fetch_n = max(1, int(m5_tail_fetch_n))
         self._m5_tail_stale_ms = max(0, int(m5_tail_stale_s)) * 1000
+        self._m5_tail_catchup_max_missing_bars = max(0, int(m5_tail_catchup_max_missing_bars))
+        self._m5_tail_catchup_max_lookback_bars = max(0, int(m5_tail_catchup_max_lookback_bars))
+        self._derived_tail_rebuild_enabled = bool(derived_tail_rebuild_enabled)
+        self._derived_tail_rebuild_m5_bars = max(0, int(derived_tail_rebuild_m5_bars))
+        self._derived_tail_rebuild_budget_s = max(0.1, float(derived_tail_rebuild_budget_s))
+        self._m5_backfill_step_bars = max(0, int(m5_backfill_step_bars))
+        self._m5_backfill_every_s = max(0, int(m5_backfill_every_min)) * 60
+        self._m5_backfill_max_bars = max(0, int(m5_backfill_max_bars))
+        self._m5_backfill_total = 0
+        self._m5_backfill_last_ts = 0.0
+        self._m5_backfill_last_head_ms: Optional[int] = None
+        self._m5_backfill_no_progress = 0
         self._flat_bar_max_volume = max(0, int(flat_bar_max_volume))
         self._derived_tfs_s = derived_tfs_s
         if 300 in self._derived_tfs_s:
@@ -283,6 +204,11 @@ class PollingConnectorB:
             if int(k) > 0 and int(v) > 0
         }
         self._broker_base_cold_start_enabled = bool(broker_base_cold_start_enabled)
+        self._redis_priming_enabled = bool(redis_priming_enabled)
+        self._redis_priming_budget_s = float(redis_priming_budget_s)
+        self._redis_priming_tfs_s = [int(x) for x in redis_priming_tfs_s if int(x) > 0]
+        self._redis_priming_symbols = [str(x) for x in redis_priming_symbols if str(x).strip()]
+        self._redis_tail_n_by_tf_s = {int(k): int(v) for k, v in redis_tail_n_by_tf_s.items()}
         self._day_anchor_offset_s = day_anchor_offset_s
         self._day_anchor_offset_s_d1 = day_anchor_offset_s_d1
         self._day_anchor_offset_s_d1_alt = day_anchor_offset_s_d1_alt
@@ -301,6 +227,7 @@ class PollingConnectorB:
             day_anchor_offset_s_alt=day_anchor_offset_s_alt,
             day_anchor_offset_s_alt2=day_anchor_offset_s_alt2,
         )
+        self._snapshots = build_redis_snapshot_writer(self._config_path)
         m5_keep = max(2000, warmup_bars + 500)
         self._m5 = M5Buffer(max_keep=m5_keep)
 
@@ -357,19 +284,375 @@ class PollingConnectorB:
     def bootstrap_and_warmup(self, log_detail: bool = False) -> Dict[str, Any]:
         summary: Dict[str, Any] = {"symbol": self._symbol}
         summary.update(self._bootstrap_from_disk(log_detail=log_detail))
+        summary.update(self._prime_redis_from_disk(log_detail=log_detail))
+        summary.update(self._tail_catchup_from_broker(log_detail=log_detail))
+        summary.update(self._rebuild_derived_from_disk_tail(log_detail=log_detail))
         summary.update(self._cold_start_base_from_broker(log_detail=log_detail))
         summary.update(self._warmup_m5_tail(log_detail=log_detail))
         return summary
+
+    def _tail_catchup_from_broker(self, log_detail: bool = False) -> Dict[str, Any]:
+        last_saved = self._last_saved_m5_open_ms
+        if last_saved is None:
+            return {"tail_catchup_skipped": "no_disk"}
+
+        tf_ms = 300_000
+        now_ms = utc_now_ms()
+        cutoff_open_ms = expected_last_closed_m5_open_ms_calendar(
+            self._provider,
+            self._symbol,
+            self._calendar,
+            now_ms,
+        )
+        if cutoff_open_ms <= 0:
+            return {"tail_catchup_missing": 0}
+        if cutoff_open_ms <= last_saved:
+            return {"tail_catchup_missing": 0}
+
+        missing = int((cutoff_open_ms - last_saved) // tf_ms)
+        if missing <= 0:
+            return {"tail_catchup_missing": 0}
+
+        max_missing = self._m5_tail_catchup_max_missing_bars
+        max_lookback = self._m5_tail_catchup_max_lookback_bars
+        n = missing
+        if max_lookback > 0:
+            n = min(n, max_lookback)
+        if max_missing > 0:
+            n = min(n, max_missing)
+        if n <= 0:
+            return {"tail_catchup_missing": missing, "tail_catchup_fetched": 0}
+
+        if missing > n:
+            backlog = missing - n
+            logging.warning(
+                "TAIL_CATCHUP_TRUNCATED symbol=%s missing_total=%d fetched=%d backlog=%d",
+                self._symbol,
+                missing,
+                n,
+                backlog,
+            )
+            if self._snapshots is not None:
+                gap_from_ms = last_saved + tf_ms
+                self._snapshots.set_gap_state(
+                    backlog_bars=backlog,
+                    gap_from_ms=gap_from_ms,
+                    gap_to_ms=cutoff_open_ms,
+                    policy="manual_tool_required",
+                )
+        elif self._snapshots is not None:
+            self._snapshots.set_gap_state(
+                backlog_bars=0,
+                gap_from_ms=None,
+                gap_to_ms=None,
+                policy=None,
+            )
+
+        if log_detail:
+            logging.debug(
+                "Tail catch-up: missing=%d fetch_n=%d last_saved=%s cutoff=%s",
+                missing,
+                n,
+                ms_to_utc_dt(last_saved).isoformat(),
+                ms_to_utc_dt(cutoff_open_ms).isoformat(),
+            )
+
+        date_to = ms_to_utc_dt(cutoff_open_ms + tf_ms)
+        bars = self._provider.fetch_last_n_tf(
+            self._symbol, tf_s=300, n=n, date_to_utc=date_to
+        )
+        self._capture_history_error()
+        if not bars:
+            return {"tail_catchup_missing": missing, "tail_catchup_fetched": 0}
+
+        bars = [b for b in bars if b.open_time_ms > last_saved and b.open_time_ms <= cutoff_open_ms]
+        if not bars:
+            return {"tail_catchup_missing": missing, "tail_catchup_fetched": 0}
+
+        written = self._ingest_m5_bars(
+            bars,
+            allow_older=True,
+            write_missing_older=True,
+            log_summary=log_detail,
+            context="tail_catchup_m5",
+        )
+        return {
+            "tail_catchup_missing": missing,
+            "tail_catchup_fetched": len(bars),
+            "tail_catchup_written": written,
+        }
+
+    def _rebuild_derived_from_disk_tail(self, log_detail: bool = False) -> Dict[str, Any]:
+        if not self._derived_from_m5_tfs:
+            return {"derived_tail_rebuild_skipped": "no_tfs"}
+        if not self._derived_tail_rebuild_enabled:
+            return {"derived_tail_rebuild_skipped": "disabled"}
+        if self._derived_tail_rebuild_m5_bars <= 0:
+            return {"derived_tail_rebuild_skipped": "no_m5_tail"}
+        if self._last_saved_m5_open_ms is not None:
+            ok_state = self._load_derived_tail_state().get(self._symbol, {})
+            ok_ms = ok_state.get("m5_tail_ok_end_ms")
+            if ok_ms is None:
+                ok_ms = ok_state.get("derived_tail_ok_m5_open_ms")
+            ok_window = ok_state.get("m5_tail_ok_window_bars")
+            if (
+                isinstance(ok_ms, int)
+                and isinstance(ok_window, int)
+                and ok_window == self._derived_tail_rebuild_m5_bars
+                and ok_ms >= self._last_saved_m5_open_ms
+            ):
+                logging.debug(
+                    "DERIVED_TAIL_SKIP_OK symbol=%s ok_end=%s window_bars=%d",
+                    self._symbol,
+                    ms_to_utc_dt(ok_ms).isoformat(),
+                    ok_window,
+                )
+                return {"derived_tail_rebuild_skipped": "ok_state"}
+
+        bars = read_tail_bars(
+            self._data_root,
+            self._symbol,
+            300,
+            self._derived_tail_rebuild_m5_bars,
+        )
+        if not bars:
+            return {"derived_tail_rebuild_empty": True}
+
+        start = time.time()
+        if self._last_saved_m5_open_ms is None:
+            return {"derived_tail_rebuild_empty": True}
+        tail_end_ms = self._last_saved_m5_open_ms
+        tail_start_ms = tail_end_ms - (self._derived_tail_rebuild_m5_bars - 1) * 300_000
+        bar_set = {b.open_time_ms for b in bars}
+        missing_m5_buckets = self._m5_tail_missing_count(tail_start_ms, tail_end_ms, bar_set)
+        missing_sample: list[int] = []
+        if missing_m5_buckets > 0:
+            missing_sample = self._m5_tail_missing_samples(
+                tail_start_ms,
+                tail_end_ms,
+                bar_set,
+                limit=20,
+            )
+        logging.debug(
+            "DERIVED_TAIL_M5_CHECK symbol=%s start=%s end=%s missing=%d",
+            self._symbol,
+            ms_to_utc_dt(tail_start_ms).isoformat(),
+            ms_to_utc_dt(tail_end_ms).isoformat(),
+            missing_m5_buckets,
+        )
+        if missing_sample:
+            logging.debug(
+                "DERIVED_TAIL_M5_MISSING_SAMPLE symbol=%s sample=%s",
+                self._symbol,
+                ",".join(ms_to_utc_dt(x).isoformat() for x in missing_sample),
+            )
+
+        if missing_sample:
+            backfill = self._backfill_missing_m5_from_broker(
+                missing_sample,
+                log_detail=log_detail,
+            )
+            if int(backfill.get("m5_gap_backfill_written", 0)) > 0:
+                bars = read_tail_bars(
+                    self._data_root,
+                    self._symbol,
+                    300,
+                    self._derived_tail_rebuild_m5_bars,
+                )
+                bar_set = {b.open_time_ms for b in bars}
+                missing_m5_buckets = self._m5_tail_missing_count(
+                    tail_start_ms,
+                    tail_end_ms,
+                    bar_set,
+                )
+                missing_sample = self._m5_tail_missing_samples(
+                    tail_start_ms,
+                    tail_end_ms,
+                    bar_set,
+                    limit=20,
+                )
+        m5_buf = M5Buffer(max_keep=max(2000, self._derived_tail_rebuild_m5_bars + 5))
+        written = 0
+        scanned = 0
+        partial = False
+        missing_m5_ref = [0]
+        for b in bars:
+            if time.time() - start >= self._derived_tail_rebuild_budget_s:
+                partial = True
+                break
+            m5_buf.upsert(b)
+            scanned += 1
+            written += self._try_derive_from_m5_buffer(
+                m5_buf,
+                anchor_open_ms=b.open_time_ms,
+                tail_start_ms=tail_start_ms,
+                tail_end_ms=tail_end_ms,
+                missing_m5_ref=missing_m5_ref,
+            )
+        derived_missing = int(missing_m5_ref[0])
+        logging.debug(
+            "DERIVED_TAIL_DERIVED_CHECK symbol=%s missing=%d",
+            self._symbol,
+            derived_missing,
+        )
+        derived_coverage: Dict[str, Optional[int]] = {}
+        for tf_s in self._derived_from_m5_tfs:
+            derived_coverage[str(tf_s)] = head_first_bar_time_ms(
+                self._data_root,
+                self._symbol,
+                tf_s,
+            )
+        derived_gaps_detected = missing_m5_buckets > 0 or derived_missing > 0
+
+        if partial:
+            logging.warning(
+                "DERIVED_TAIL_PARTIAL symbol=%s scanned=%d written=%d budget_s=%.2f",
+                self._symbol,
+                scanned,
+                written,
+                self._derived_tail_rebuild_budget_s,
+            )
+        elif log_detail:
+            logging.debug(
+                "DERIVED_TAIL_OK symbol=%s scanned=%d written=%d missing_m5=%d missing_derived=%d budget_s=%.2f",
+                self._symbol,
+                scanned,
+                written,
+                missing_m5_buckets,
+                derived_missing,
+                self._derived_tail_rebuild_budget_s,
+            )
+
+        if missing_m5_buckets > 0:
+            logging.warning(
+                "DERIVED_TAIL_M5_GAPS symbol=%s missing=%d tail_start=%s tail_end=%s",
+                self._symbol,
+                missing_m5_buckets,
+                ms_to_utc_dt(tail_start_ms).isoformat(),
+                ms_to_utc_dt(tail_end_ms).isoformat(),
+            )
+            if missing_sample:
+                logging.warning(
+                    "DERIVED_TAIL_M5_GAPS_SAMPLE symbol=%s sample=%s",
+                    self._symbol,
+                    ",".join(ms_to_utc_dt(x).isoformat() for x in missing_sample),
+                )
+
+            self._store_derived_tail_state(
+                ok_m5_open_ms=None,
+                missing_count=missing_m5_buckets,
+                missing_samples=missing_sample,
+                tail_end_ms=tail_end_ms,
+                derived_coverage_from_ms=derived_coverage,
+                derived_gaps_detected=derived_gaps_detected,
+            )
+
+        if not partial and missing_m5_buckets == 0:
+            self._store_derived_tail_state(
+                ok_m5_open_ms=tail_end_ms,
+                missing_count=0,
+                missing_samples=[],
+                tail_end_ms=tail_end_ms,
+                derived_coverage_from_ms=derived_coverage,
+                derived_gaps_detected=derived_gaps_detected,
+            )
+
+        return {
+            "derived_tail_rebuild_scanned": scanned,
+            "derived_tail_rebuild_written": written,
+            "derived_tail_rebuild_partial": partial,
+            "derived_tail_rebuild_missing_m5": missing_m5_buckets,
+            "derived_tail_rebuild_missing_derived": derived_missing,
+        }
+
+    def _prime_redis_from_disk(self, log_detail: bool = False) -> Dict[str, Any]:
+        if not self._redis_priming_enabled:
+            return {"cache_prime_enabled": False}
+        if self._redis_priming_symbols and self._symbol not in self._redis_priming_symbols:
+            return {"cache_prime_enabled": True, "cache_prime_skipped": True}
+        if self._snapshots is None:
+            logging.warning("CACHE_PRIME_SKIP symbol=%s reason=redis_disabled", self._symbol)
+            return {"cache_prime_enabled": True, "cache_prime_error": "redis_disabled"}
+
+        start = time.time()
+        budget_s = max(0.1, float(self._redis_priming_budget_s))
+        tfs = list(self._redis_priming_tfs_s)
+        if not tfs:
+            tfs = sorted(k for k, v in self._redis_tail_n_by_tf_s.items() if int(v) > 0)
+
+        primed_counts: Dict[str, int] = {}
+        degraded: list[str] = []
+        errors: list[str] = []
+        partial = False
+
+        for tf_s in tfs:
+            if time.time() - start >= budget_s:
+                partial = True
+                break
+            tail_n = int(self._redis_tail_n_by_tf_s.get(tf_s, 0))
+            if tail_n <= 0:
+                continue
+            bars = read_tail_bars(self._data_root, self._symbol, tf_s, tail_n)
+            if not bars:
+                continue
+            count = self._snapshots.prime_from_bars(self._symbol, tf_s, bars)
+            if count > 0:
+                primed_counts[f"{self._symbol}:{tf_s}"] = count
+
+        if partial:
+            degraded.append("cache_prime_partial")
+        if not primed_counts:
+            degraded.append("cache_prime_empty")
+
+        priming_ts_ms = int(time.time() * 1000)
+        self._snapshots.set_cache_state(
+            primed=bool(primed_counts) and not partial,
+            prime_partial=partial,
+            priming_ts_ms=priming_ts_ms,
+            primed_counts=primed_counts,
+            degraded=degraded,
+            errors=errors,
+        )
+
+        if partial:
+            logging.warning(
+                "CACHE_PRIME_PARTIAL symbol=%s done=%d budget_s=%.2f",
+                self._symbol,
+                len(primed_counts),
+                budget_s,
+            )
+        else:
+            logging.info(
+                "CACHE_PRIME_OK symbol=%s done=%d budget_s=%.2f",
+                self._symbol,
+                len(primed_counts),
+                budget_s,
+            )
+
+        return {
+            "cache_prime_enabled": True,
+            "cache_prime_partial": partial,
+            "cache_prime_counts": primed_counts,
+        }
 
     def poll_iteration(self) -> None:
         if self._broker_base_fetch_on_close:
             anchor_open = self._last_trading_minute_open_ms(utc_now_ms())
             self._fetch_base_from_broker_on_close(anchor_open)
         self._poll_m5_once()
+        self._progressive_backfill_m5()
         self._poll_counter += 1
 
     def close(self) -> None:
         self._writer.close()
+        if self._snapshots is not None:
+            self._snapshots.close()
+
+    def _append_bar(self, bar: CandleBar) -> None:
+        self._writer.append(bar)
+        if self._snapshots is None:
+            return
+        self._snapshots.put_bar(bar)
 
     def _bootstrap_from_disk(self, log_detail: bool = False) -> Dict[str, Any]:
         last_m5 = tail_last_bar_time_ms(self._data_root, self._symbol, tf_s=300)
@@ -438,11 +721,23 @@ class PollingConnectorB:
 
             for b in bars:
                 total_found += 1
-                if self._has_on_disk(tf_s, b.open_time_ms):
+                if has_on_disk(
+                    self._day_index_cache,
+                    self._data_root,
+                    self._symbol,
+                    tf_s,
+                    b.open_time_ms,
+                ):
                     total_existing += 1
                     continue
-                self._writer.append(b)
-                self._mark_on_disk(tf_s, b.open_time_ms)
+                self._append_bar(b)
+                mark_on_disk(
+                    self._day_index_cache,
+                    self._data_root,
+                    self._symbol,
+                    tf_s,
+                    b.open_time_ms,
+                )
                 total_written += 1
                 last = self._last_saved_base.get(tf_s)
                 if last is None or b.open_time_ms > last:
@@ -472,9 +767,20 @@ class PollingConnectorB:
                 self._warmup_bars,
             )
 
-        cutoff_open = expected_last_closed_m5_open_ms(utc_now_ms())
+        now_ms = utc_now_ms()
+        cutoff_open = expected_last_closed_m5_open_ms_calendar(
+            self._provider,
+            self._symbol,
+            self._calendar,
+            now_ms,
+        )
         if cutoff_open <= 0:
             return {"warmup_empty": True, "warmup_written": 0}
+        last_saved = self._last_saved_m5_open_ms
+        if last_saved is not None:
+            missing_bars = int((cutoff_open - last_saved) // 300_000)
+            if missing_bars <= 0:
+                return {"warmup_skipped": True}
         date_to = ms_to_utc_dt(cutoff_open + 300_000)
 
         bars = self._provider.fetch_last_n_tf(
@@ -523,18 +829,22 @@ class PollingConnectorB:
         return max(0.0, next_min - now)
 
     def _last_trading_minute_open_ms(self, now_ms: int) -> int:
-        # Повертає open_time останньої торгової хвилини до now_ms.
-        cur = (now_ms // 60_000) * 60_000 - 60_000
-        for _ in range(7 * 24 * 60):
-            if self._provider.is_market_open(self._symbol, cur, self._calendar):
-                return cur
-            cur -= 60_000
-        return (now_ms // 60_000) * 60_000 - 60_000
+        return last_trading_minute_open_ms(
+            self._provider,
+            self._symbol,
+            self._calendar,
+            now_ms,
+        )
 
     def _poll_m5_once(self) -> None:
         now_ms = utc_now_ms()
         tf_ms = 300_000
-        cutoff_open_ms = (now_ms // tf_ms) * tf_ms - tf_ms
+        cutoff_open_ms = expected_last_closed_m5_open_ms_calendar(
+            self._provider,
+            self._symbol,
+            self._calendar,
+            now_ms,
+        )
         if cutoff_open_ms <= 0:
             return
         date_to = ms_to_utc_dt(cutoff_open_ms + tf_ms)
@@ -608,7 +918,7 @@ class PollingConnectorB:
             expected_last = self._last_trading_minute_open_ms(b1 - 60_000)
             if last_trading_open != expected_last:
                 continue
-            if self._has_on_disk(tf_s, b0):
+            if has_on_disk(self._day_index_cache, self._data_root, self._symbol, tf_s, b0):
                 continue
 
             tried += 1
@@ -634,8 +944,8 @@ class PollingConnectorB:
                 )
                 continue
 
-            self._writer.append(b)
-            self._mark_on_disk(tf_s, b0)
+            self._append_bar(b)
+            mark_on_disk(self._day_index_cache, self._data_root, self._symbol, tf_s, b0)
             last = self._last_saved_base.get(tf_s)
             if last is None or b0 > last:
                 self._last_saved_base[tf_s] = b0
@@ -647,32 +957,6 @@ class PollingConnectorB:
                 written,
                 tried,
             )
-
-    def _day_key(self, open_time_ms: int) -> str:
-        return ms_to_utc_dt(open_time_ms).strftime("%Y%m%d")
-
-    def _day_index_key(self, tf_s: int, day: str) -> str:
-        return f"{tf_s}:{day}"
-
-    def _load_day_index(self, tf_s: int, day: str) -> set[int]:
-        key = self._day_index_key(tf_s, day)
-        cached = self._day_index_cache.get(key)
-        if cached is not None:
-            return cached
-
-        out = load_day_open_times(self._data_root, self._symbol, tf_s, day)
-        self._day_index_cache[key] = out
-        return out
-
-    def _has_on_disk(self, tf_s: int, open_time_ms: int) -> bool:
-        day = self._day_key(open_time_ms)
-        idx = self._load_day_index(tf_s, day)
-        return open_time_ms in idx
-
-    def _mark_on_disk(self, tf_s: int, open_time_ms: int) -> None:
-        day = self._day_key(open_time_ms)
-        idx = self._load_day_index(tf_s, day)
-        idx.add(open_time_ms)
 
     def _ingest_m5_bars(
         self,
@@ -688,22 +972,40 @@ class PollingConnectorB:
         derived_written = 0
 
         for b in bars:
-            if _is_flat_bar(b, self._flat_bar_max_volume):
+            if is_flat_bar(b, self._flat_bar_max_volume):
                 skipped_flat += 1
                 continue
             if self._last_saved_m5_open_ms is not None and b.open_time_ms <= self._last_saved_m5_open_ms:
                 if allow_older:
                     self._m5.upsert(b)
-                    if write_missing_older and not self._has_on_disk(300, b.open_time_ms):
-                        self._writer.append(b)
-                        self._mark_on_disk(300, b.open_time_ms)
+                    if write_missing_older and not has_on_disk(
+                        self._day_index_cache,
+                        self._data_root,
+                        self._symbol,
+                        300,
+                        b.open_time_ms,
+                    ):
+                        self._append_bar(b)
+                        mark_on_disk(
+                            self._day_index_cache,
+                            self._data_root,
+                            self._symbol,
+                            300,
+                            b.open_time_ms,
+                        )
                         written += 1
                     continue
                 skipped_dedup += 1
                 continue
 
-            self._writer.append(b)
-            self._mark_on_disk(300, b.open_time_ms)
+            self._append_bar(b)
+            mark_on_disk(
+                self._day_index_cache,
+                self._data_root,
+                self._symbol,
+                300,
+                b.open_time_ms,
+            )
             self._m5.upsert(b)
             written += 1
             if self._last_saved_m5_open_ms is None or b.open_time_ms > self._last_saved_m5_open_ms:
@@ -760,17 +1062,344 @@ class PollingConnectorB:
 
             last = self._last_saved_derived.get(tf_s)
             if last is not None and d.open_time_ms <= last:
-                if self._has_on_disk(tf_s, d.open_time_ms):
+                if has_on_disk(
+                    self._day_index_cache,
+                    self._data_root,
+                    self._symbol,
+                    tf_s,
+                    d.open_time_ms,
+                ):
                     continue
 
-            if not self._has_on_disk(tf_s, d.open_time_ms):
-                self._writer.append(d)
-                self._mark_on_disk(tf_s, d.open_time_ms)
+            if not has_on_disk(
+                self._day_index_cache,
+                self._data_root,
+                self._symbol,
+                tf_s,
+                d.open_time_ms,
+            ):
+                self._append_bar(d)
+                mark_on_disk(
+                    self._day_index_cache,
+                    self._data_root,
+                    self._symbol,
+                    tf_s,
+                    d.open_time_ms,
+                )
                 written += 1
             if last is None or d.open_time_ms > last:
                 self._last_saved_derived[tf_s] = d.open_time_ms
 
         return written
+
+    def _try_derive_from_m5_buffer(
+        self,
+        m5_buf: M5Buffer,
+        anchor_open_ms: int,
+        tail_start_ms: int,
+        tail_end_ms: int,
+        missing_m5_ref: list[Any],
+    ) -> int:
+        if not self._derived_from_m5_tfs:
+            return 0
+        written = 0
+        for tf_s in self._derived_from_m5_tfs:
+            anchor = select_anchor_offset_for_anchor_open_ms(
+                tf_s,
+                anchor_open_ms,
+                self._day_anchor_offset_s,
+                self._day_anchor_offset_s_alt,
+                self._day_anchor_offset_s_alt2,
+                self._day_anchor_offset_s_d1,
+                self._day_anchor_offset_s_d1_alt,
+            )
+            tf_ms = tf_s * 1000
+            b0 = floor_bucket_start_ms(anchor_open_ms, tf_s, anchor_offset_s=anchor)
+            b1 = b0 + tf_ms
+            if anchor_open_ms != (b1 - 300_000):
+                continue
+
+            if b0 < tail_start_ms or b1 > tail_end_ms:
+                continue
+
+            if not m5_buf.has_range_complete(b0, b1):
+                missing_m5_ref[0] = int(missing_m5_ref[0]) + 1
+                continue
+
+            d = derive_from_m5_for_anchor(
+                self._symbol,
+                tf_s=tf_s,
+                m5=m5_buf,
+                anchor_open_ms=anchor_open_ms,
+                anchor_offset_s=anchor,
+            )
+
+            if d is None:
+                continue
+
+            last = self._last_saved_derived.get(tf_s)
+            if last is not None and d.open_time_ms <= last:
+                if has_on_disk(
+                    self._day_index_cache,
+                    self._data_root,
+                    self._symbol,
+                    tf_s,
+                    d.open_time_ms,
+                ):
+                    continue
+
+            if not has_on_disk(
+                self._day_index_cache,
+                self._data_root,
+                self._symbol,
+                tf_s,
+                d.open_time_ms,
+            ):
+                self._append_bar(d)
+                mark_on_disk(
+                    self._day_index_cache,
+                    self._data_root,
+                    self._symbol,
+                    tf_s,
+                    d.open_time_ms,
+                )
+                written += 1
+            if last is None or d.open_time_ms > last:
+                self._last_saved_derived[tf_s] = d.open_time_ms
+
+        return written
+
+    def _derived_tail_state_path(self) -> str:
+        return os.path.join(self._data_root, "_derived_tail_state.json")
+
+    def _load_derived_tail_state(self) -> Dict[str, Any]:
+        path = self._derived_tail_state_path()
+        if not os.path.isfile(path):
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get("symbols"), dict):
+                return data["symbols"]
+        except Exception:
+            return {}
+        return {}
+
+    def _store_derived_tail_state(
+        self,
+        *,
+        ok_m5_open_ms: Optional[int],
+        missing_count: int,
+        missing_samples: list[int],
+        tail_end_ms: int,
+        derived_coverage_from_ms: Dict[str, Optional[int]],
+        derived_gaps_detected: bool,
+    ) -> None:
+        path = self._derived_tail_state_path()
+        data: Dict[str, Any] = {"symbols": {}}
+        try:
+            if os.path.isfile(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                if isinstance(raw, dict) and isinstance(raw.get("symbols"), dict):
+                    data = raw
+        except Exception:
+            data = {"symbols": {}}
+
+        symbols = data.get("symbols")
+        if not isinstance(symbols, dict):
+            symbols = {}
+            data["symbols"] = symbols
+
+        entry: Dict[str, Any] = {
+            "m5_tail_ok_window_bars": int(self._derived_tail_rebuild_m5_bars),
+            "m5_tail_missing_count": int(missing_count),
+            "m5_tail_missing_samples": [int(x) for x in missing_samples],
+            "m5_tail_missing_end_ms": int(tail_end_ms),
+            "m5_tail_missing_window_bars": int(self._derived_tail_rebuild_m5_bars),
+            "derived_coverage_from_ms": {
+                str(k): int(v) for k, v in derived_coverage_from_ms.items() if v is not None
+            },
+            "derived_gaps_detected": bool(derived_gaps_detected),
+            "ts_ms": int(time.time() * 1000),
+        }
+        if ok_m5_open_ms is not None:
+            entry["m5_tail_ok_end_ms"] = int(ok_m5_open_ms)
+
+        symbols[self._symbol] = entry
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            pass
+
+    def _m5_tail_missing_count(
+        self,
+        tail_start_ms: int,
+        tail_end_ms: int,
+        bar_set: set[int],
+    ) -> int:
+        missing = 0
+        step = 300_000
+        for open_ms in range(tail_start_ms, tail_end_ms + 1, step):
+            if not self._calendar.is_trading_minute(open_ms):
+                continue
+            if open_ms not in bar_set:
+                missing += 1
+        return missing
+
+    def _m5_tail_missing_samples(
+        self,
+        tail_start_ms: int,
+        tail_end_ms: int,
+        bar_set: set[int],
+        limit: int,
+    ) -> list[int]:
+        out: list[int] = []
+        step = 300_000
+        for open_ms in range(tail_start_ms, tail_end_ms + 1, step):
+            if not self._calendar.is_trading_minute(open_ms):
+                continue
+            if open_ms not in bar_set:
+                out.append(open_ms)
+                if len(out) >= limit:
+                    break
+        return out
+
+    def _progressive_backfill_m5(self) -> None:
+        if self._m5_backfill_step_bars <= 0:
+            return
+        if self._m5_backfill_every_s <= 0:
+            return
+        if self._m5_backfill_max_bars <= 0:
+            return
+        if self._m5_backfill_total >= self._m5_backfill_max_bars:
+            return
+
+        now_s = time.time()
+        if now_s - self._m5_backfill_last_ts < self._m5_backfill_every_s:
+            return
+        self._m5_backfill_last_ts = now_s
+
+        head_ms = head_first_bar_time_ms(self._data_root, self._symbol, 300)
+        if head_ms is None:
+            return
+        if self._m5_backfill_last_head_ms is not None and head_ms >= self._m5_backfill_last_head_ms:
+            if self._m5_backfill_no_progress >= 2:
+                logging.warning(
+                    "M5_BACKFILL_STOP symbol=%s reason=no_progress",
+                    self._symbol,
+                )
+                self._m5_backfill_total = self._m5_backfill_max_bars
+                return
+            self._m5_backfill_no_progress += 1
+        else:
+            self._m5_backfill_no_progress = 0
+        self._m5_backfill_last_head_ms = head_ms
+
+        remaining = self._m5_backfill_max_bars - self._m5_backfill_total
+        step_n = min(self._m5_backfill_step_bars, remaining)
+        if step_n <= 0:
+            return
+
+        date_to = ms_to_utc_dt(head_ms)
+        bars = self._provider.fetch_last_n_tf(
+            self._symbol,
+            tf_s=300,
+            n=step_n,
+            date_to_utc=date_to,
+        )
+        self._capture_history_error()
+        if not bars:
+            return
+
+        older = [b for b in bars if b.open_time_ms < head_ms]
+        if not older:
+            return
+
+        written = self._ingest_m5_bars(
+            older,
+            allow_older=True,
+            write_missing_older=True,
+            log_summary=True,
+            context="backfill_m5",
+        )
+        if written <= 0:
+            self._m5_backfill_no_progress += 1
+            return
+
+        self._m5_backfill_total += written
+        logging.info(
+            "M5_BACKFILL_STEP symbol=%s written=%d total=%d remaining=%d head=%s",
+            self._symbol,
+            written,
+            self._m5_backfill_total,
+            self._m5_backfill_max_bars - self._m5_backfill_total,
+            ms_to_utc_dt(head_ms).isoformat(),
+        )
+
+    def _backfill_missing_m5_from_broker(
+        self,
+        missing_samples: list[int],
+        log_detail: bool = False,
+    ) -> Dict[str, Any]:
+        if not missing_samples:
+            return {"m5_gap_backfill_attempted": 0, "m5_gap_backfill_written": 0}
+
+        fetched: list[CandleBar] = []
+        attempted = 0
+        for open_ms in missing_samples:
+            attempted += 1
+            date_to = ms_to_utc_dt(open_ms + 300_000)
+            bars = self._provider.fetch_last_n_tf(
+                self._symbol,
+                tf_s=300,
+                n=2,
+                date_to_utc=date_to,
+            )
+            self._capture_history_error()
+            if not bars:
+                continue
+            for b in bars:
+                if b.open_time_ms != open_ms:
+                    continue
+                if has_on_disk(
+                    self._day_index_cache,
+                    self._data_root,
+                    self._symbol,
+                    300,
+                    b.open_time_ms,
+                ):
+                    break
+                fetched.append(b)
+                break
+
+        if not fetched:
+            return {"m5_gap_backfill_attempted": attempted, "m5_gap_backfill_written": 0}
+
+        fetched.sort(key=lambda b: b.open_time_ms)
+        written = self._ingest_m5_bars(
+            fetched,
+            allow_older=True,
+            write_missing_older=True,
+            log_summary=log_detail,
+            context="gap_backfill_m5",
+        )
+        if written > 0:
+            logging.warning(
+                "M5_GAP_BACKFILL_OK symbol=%s written=%d attempted=%d",
+                self._symbol,
+                written,
+                attempted,
+            )
+        elif log_detail:
+            logging.debug(
+                "M5_GAP_BACKFILL_EMPTY symbol=%s attempted=%d",
+                self._symbol,
+                attempted,
+            )
+        return {"m5_gap_backfill_attempted": attempted, "m5_gap_backfill_written": written}
+
 
 
 class MultiSymbolRunner:

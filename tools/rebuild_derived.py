@@ -9,7 +9,7 @@ from typing import Dict, Iterable, List
 
 from app.composition import load_config
 from core.model.bars import CandleBar, assert_invariants
-from runtime.ingest.polling.engine_b import floor_bucket_start_ms
+from runtime.ingest.polling.time_buckets import floor_bucket_start_ms
 from runtime.store.ssot_jsonl import (
     JsonlAppender,
     head_first_bar_time_ms,

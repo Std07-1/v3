@@ -38,7 +38,7 @@ class MarketCalendar:
             start_min = hm_break_start[0] * 60 + hm_break_start[1]
             end_min = hm_break_end[0] * 60 + hm_break_end[1]
             cur_min = dt_now.hour * 60 + dt_now.minute
-            if start_min < cur_min < end_min:
+            if start_min <= cur_min < end_min:
                 return False
 
         hm_close = parse_hm(self.weekend_close_hm)

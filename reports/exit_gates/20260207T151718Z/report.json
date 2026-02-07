@@ -1,0 +1,62 @@
+{
+  "run_id": "20260207T151718Z",
+  "manifest": "tools/exit_gates/manifest.json",
+  "ok": true,
+  "results": [
+    {
+      "name": "redis_snapshots_basic",
+      "module": "tools.exit_gates.redis_snapshots_basic",
+      "ok": true,
+      "skipped": false,
+      "details": "ok",
+      "metrics": {
+        "now_ms": 1770477438241,
+        "snap_ttl_s": 3441,
+        "status_bytes": 156
+      }
+    },
+    {
+      "name": "redis_snapshot_schema",
+      "module": "tools.exit_gates.gates.gate_redis_snapshot_schema",
+      "ok": true,
+      "skipped": false,
+      "details": "keys_checked=3 ttl_min=3441 violations=0",
+      "metrics": {
+        "keys_checked": 3,
+        "ttl_min": 3441,
+        "violations": 0
+      }
+    },
+    {
+      "name": "api_bars_meta",
+      "module": "tools.exit_gates.gates.gate_api_bars_meta",
+      "ok": true,
+      "skipped": true,
+      "details": "skip:url_error:URLError",
+      "metrics": {
+        "status": 0
+      }
+    },
+    {
+      "name": "api_updates_contract",
+      "module": "tools.exit_gates.gates.gate_api_updates_contract",
+      "ok": true,
+      "skipped": true,
+      "details": "skip:url_error:URLError",
+      "metrics": {
+        "status": 0
+      }
+    },
+    {
+      "name": "payload_budgets",
+      "module": "tools.exit_gates.gates.gate_payload_budgets",
+      "ok": true,
+      "skipped": true,
+      "details": "skip:url_error:URLError",
+      "metrics": {
+        "bars_bytes": 0,
+        "updates_bytes": 0
+      }
+    }
+  ]
+}

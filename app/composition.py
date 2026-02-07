@@ -143,6 +143,20 @@ def _validate_config(cfg: Dict[str, Any]) -> None:
         if not isinstance(cfg.get("market_calendar_symbol_groups"), dict):
             issues.append("invalid_dict:market_calendar_symbol_groups")
 
+    redis_cfg = cfg.get("redis")
+    if isinstance(redis_cfg, dict) and bool(redis_cfg.get("enabled", False)):
+        if not isinstance(redis_cfg.get("host"), str):
+            issues.append("invalid_str:redis.host")
+        try:
+            int(redis_cfg.get("port", 0))
+            int(redis_cfg.get("db", 0))
+        except Exception:
+            issues.append("invalid_int:redis.port_db")
+        if "ttl_by_tf_s" in redis_cfg and not isinstance(redis_cfg.get("ttl_by_tf_s"), dict):
+            issues.append("invalid_dict:redis.ttl_by_tf_s")
+        if "tail_n_by_tf_s" in redis_cfg and not isinstance(redis_cfg.get("tail_n_by_tf_s"), dict):
+            issues.append("invalid_dict:redis.tail_n_by_tf_s")
+
     try:
         base_retry = int(cfg.get("connector_retry_base_s", 0))
         max_retry = int(cfg.get("connector_retry_max_s", 0))
@@ -188,6 +202,18 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         safety_delay_s = int(cfg.get("safety_delay_s", 2))
         m5_tail_fetch_n = int(cfg.get("m5_tail_fetch_n", 12))
         m5_tail_stale_s = int(cfg.get("m5_tail_stale_s", 12 * 60))
+        m5_tail_catchup_max_missing_bars = int(
+            cfg.get("m5_tail_catchup_max_missing_bars", 500)
+        )
+        m5_tail_catchup_max_lookback_bars = int(
+            cfg.get("m5_tail_catchup_max_lookback_bars", 5000)
+        )
+        derived_tail_rebuild_enabled = bool(cfg.get("derived_tail_rebuild_enabled", True))
+        derived_tail_rebuild_m5_bars = int(cfg.get("derived_tail_rebuild_m5_bars", 8000))
+        derived_tail_rebuild_budget_s = float(cfg.get("derived_tail_rebuild_budget_s", 2))
+        m5_backfill_step_bars = int(cfg.get("m5_backfill_step_bars", 0))
+        m5_backfill_every_min = int(cfg.get("m5_backfill_every_min", 0))
+        m5_backfill_max_bars = int(cfg.get("m5_backfill_max_bars", 0))
         history_summary_interval_s = int(cfg.get("history_summary_interval_s", 600))
         history_still_failing_interval_s = int(cfg.get("history_still_failing_interval_s", 600))
         history_circuit_fail_streak = int(cfg.get("history_circuit_fail_streak", 3))
@@ -214,6 +240,17 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         broker_base_cold_start_counts = _parse_tf_counts_cfg(
             cfg.get("broker_base_cold_start_counts", {"14400": 1080, "86400": 180})
         )
+
+        redis_cfg = cfg.get("redis", {})
+        redis_tail_n_by_tf_s = _parse_tf_counts_cfg(
+            redis_cfg.get("tail_n_by_tf_s", {}) if isinstance(redis_cfg, dict) else {}
+        )
+        redis_priming_enabled = bool(cfg.get("redis_priming_enabled", True))
+        redis_priming_budget_s = float(cfg.get("redis_priming_budget_s", 2))
+        redis_priming_tfs_raw = cfg.get("redis_priming_tfs_s", [])
+        redis_priming_tfs_s = [int(x) for x in redis_priming_tfs_raw if int(x) > 0]
+        redis_priming_symbols_raw = cfg.get("redis_priming_symbols", [])
+        redis_priming_symbols = [str(x) for x in redis_priming_symbols_raw if str(x).strip()]
 
         day_anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
         day_anchor_offset_s_alt_raw = cfg.get("day_anchor_offset_s_alt", None)
@@ -396,6 +433,14 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
                 safety_delay_s=safety_delay_s,
                 m5_tail_fetch_n=m5_tail_fetch_n,
                 m5_tail_stale_s=m5_tail_stale_s,
+                m5_tail_catchup_max_missing_bars=m5_tail_catchup_max_missing_bars,
+                m5_tail_catchup_max_lookback_bars=m5_tail_catchup_max_lookback_bars,
+                derived_tail_rebuild_enabled=derived_tail_rebuild_enabled,
+                derived_tail_rebuild_m5_bars=derived_tail_rebuild_m5_bars,
+                derived_tail_rebuild_budget_s=derived_tail_rebuild_budget_s,
+                m5_backfill_step_bars=m5_backfill_step_bars,
+                m5_backfill_every_min=m5_backfill_every_min,
+                m5_backfill_max_bars=m5_backfill_max_bars,
                 flat_bar_max_volume=flat_bar_max_volume,
                 derived_tfs_s=derived_tfs_s,
                 broker_base_tfs_s=broker_base_tfs_s,
@@ -403,6 +448,11 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
                 broker_base_max_tf_per_poll=broker_base_max_tf_per_poll,
                 broker_base_cold_start_counts=broker_base_cold_start_counts,
                 broker_base_cold_start_enabled=broker_base_cold_start_enabled,
+                redis_priming_enabled=redis_priming_enabled,
+                redis_priming_budget_s=redis_priming_budget_s,
+                redis_priming_tfs_s=redis_priming_tfs_s,
+                redis_priming_symbols=redis_priming_symbols,
+                redis_tail_n_by_tf_s=redis_tail_n_by_tf_s,
                 day_anchor_offset_s=day_anchor_offset_s,
                 day_anchor_offset_s_d1=day_anchor_offset_s_d1,
                 day_anchor_offset_s_d1_alt=day_anchor_offset_s_d1_alt,

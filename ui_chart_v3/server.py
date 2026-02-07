@@ -32,6 +32,11 @@ from typing import Any
 
 from core.time_geom import normalize_bar
 
+try:
+    import redis as redis_lib  # type: ignore
+except Exception:
+    redis_lib = None  # type: ignore
+
 
 _updates_lock = threading.Lock()
 _updates_seq = 0
@@ -46,6 +51,11 @@ DEFAULT_TF_ALLOWLIST = {300, 900, 1800, 3600, 14400, 86400}
 SOURCE_ALLOWLIST = {"history", "derived", "history_agg", ""}
 FINAL_SOURCES = {"history", "derived", "history_agg"}
 MAX_EVENTS_PER_RESPONSE = 500
+REDIS_SOCKET_TIMEOUT_S = 0.4
+DEFAULT_MIN_COLDLOAD_BARS = {300: 300, 900: 200, 1800: 150, 3600: 100}
+
+_redis_log_throttle: dict[str, float] = {}
+_redis_client_cache: dict[str, Any] = {}
 
 
 def _tf_allowlist_from_cfg(cfg: dict[str, Any]) -> set[int]:
@@ -89,6 +99,23 @@ def _tf_allowlist_from_cfg(cfg: dict[str, Any]) -> set[int]:
         return set(out)
 
     return set(DEFAULT_TF_ALLOWLIST)
+
+
+def _min_coldload_bars_from_cfg(cfg: dict[str, Any]) -> dict[int, int]:
+    raw = cfg.get("min_coldload_bars_by_tf_s")
+    out: dict[int, int] = {}
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            try:
+                tf_s = int(k)
+                min_n = int(v)
+            except Exception:
+                continue
+            if tf_s > 0 and min_n > 0:
+                out[tf_s] = min_n
+    if out:
+        return out
+    return dict(DEFAULT_MIN_COLDLOAD_BARS)
 
 
 def _cache_key(symbol: str, tf_s: int) -> tuple[str, int]:
@@ -161,6 +188,130 @@ def _parse_bool(value: Any, default: bool) -> bool:
         if v in ("0", "false", "no", "n", "off", ""):
             return False
     return default
+
+
+def _log_throttled(level: str, key: str, message: str, every_s: int = 60) -> None:
+    now = time.time()
+    last = _redis_log_throttle.get(key, 0.0)
+    if now - last < every_s:
+        return
+    _redis_log_throttle[key] = now
+    if level == "warning":
+        logging.warning("%s", message)
+    else:
+        logging.info("%s", message)
+
+
+def _redis_config_from_cfg(cfg: dict[str, Any]) -> dict[str, Any] | None:
+    raw = cfg.get("redis")
+    if not isinstance(raw, dict):
+        return None
+    if not bool(raw.get("enabled", False)):
+        return None
+    return raw
+
+
+def _redis_client_from_cfg(cfg: dict[str, Any]) -> tuple[Any, str] | None:
+    raw = _redis_config_from_cfg(cfg)
+    if raw is None:
+        return None
+    if redis_lib is None:
+        return None
+    host = str(raw.get("host", "127.0.0.1"))
+    port = int(raw.get("port", 6379))
+    db = int(raw.get("db", 0))
+    ns = str(raw.get("ns", "v3"))
+    cache_key = f"{host}:{port}:{db}:{ns}"
+    cached = _redis_client_cache.get(cache_key)
+    if cached is not None:
+        return cached, ns
+    client = redis_lib.Redis(
+        host=host,
+        port=port,
+        db=db,
+        decode_responses=True,
+        socket_timeout=REDIS_SOCKET_TIMEOUT_S,
+        socket_connect_timeout=REDIS_SOCKET_TIMEOUT_S,
+    )
+    _redis_client_cache[cache_key] = client
+    return client, ns
+
+
+def _redis_key(ns: str, *parts: str) -> str:
+    return ":".join([ns, *parts])
+
+
+def _redis_get_json(client: Any, key: str) -> tuple[dict[str, Any] | None, int | None, str | None]:
+    try:
+        raw = client.get(key)
+    except Exception as exc:
+        return None, None, f"redis_get_failed:{type(exc).__name__}"
+    if raw is None:
+        return None, None, "redis_miss"
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return None, None, "redis_json_invalid"
+    ttl_left: int | None = None
+    try:
+        ttl = client.ttl(key)
+        if isinstance(ttl, int) and ttl >= 0:
+            ttl_left = ttl
+    except Exception:
+        ttl_left = None
+    return payload, ttl_left, None
+
+
+def _redis_payload_to_bars(
+    payload: dict[str, Any],
+    symbol: str,
+    tf_s: int,
+) -> list[dict[str, Any]]:
+    bars: list[dict[str, Any]] = []
+    complete = bool(payload.get("complete", True))
+    source = str(payload.get("source", ""))
+    raw_bars = payload.get("bars")
+    if isinstance(raw_bars, list):
+        for item in raw_bars:
+            if not isinstance(item, dict):
+                continue
+            bar = _redis_payload_bar_to_canonical(item, symbol, tf_s, complete, source)
+            if bar is not None:
+                bars.append(bar)
+        return bars
+    raw_bar = payload.get("bar")
+    if isinstance(raw_bar, dict):
+        bar = _redis_payload_bar_to_canonical(raw_bar, symbol, tf_s, complete, source)
+        if bar is not None:
+            bars.append(bar)
+    return bars
+
+
+def _redis_payload_bar_to_canonical(
+    bar: dict[str, Any],
+    symbol: str,
+    tf_s: int,
+    complete: bool,
+    source: str,
+) -> dict[str, Any] | None:
+    open_ms = bar.get("open_ms")
+    close_ms = bar.get("close_ms")
+    if not isinstance(open_ms, int) or not isinstance(close_ms, int):
+        return None
+    return {
+        "symbol": symbol,
+        "tf_s": int(tf_s),
+        "open_time_ms": int(open_ms),
+        "close_time_ms": int(close_ms),
+        "o": bar.get("o"),
+        "h": bar.get("h"),
+        "low": bar.get("l"),
+        "c": bar.get("c"),
+        "v": bar.get("v"),
+        "complete": bool(complete),
+        "src": str(source),
+        "event_ts": int(close_ms) if complete else None,
+    }
 
 
 def _resolve_cfg_path(path: str | None, config_path: str | None) -> str | None:
@@ -536,6 +687,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 cfg = {}
 
         tf_allowlist = _tf_allowlist_from_cfg(cfg)
+        min_coldload_bars = _min_coldload_bars_from_cfg(cfg)
 
         if path == "/api/config":
             ui_debug = _parse_bool(cfg.get("ui_debug", True), True)
@@ -632,6 +784,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             tf_s = _safe_int((qs.get("tf_s", ["60"])[0] or "60"), 60)
             limit = _safe_int((qs.get("limit", ["2000"])[0] or "2000"), 2000)
             force_disk = _safe_int((qs.get("force_disk", ["0"])[0] or "0"), 0) == 1
+            prefer_redis = _safe_int((qs.get("prefer_redis", ["0"])[0] or "0"), 0) == 1
 
             if not symbol:
                 self._bad("missing_symbol")
@@ -642,7 +795,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
             parts = _list_parts(data_root, symbol, tf_s)
             if not parts:
-                self._json(200, {"ok": True, "bars": [], "note": "no_data"})
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "bars": [],
+                        "note": "no_data",
+                        "boot_id": _boot_id,
+                        "meta": {"source": "disk", "redis_hit": False, "boot_id": _boot_id},
+                    },
+                )
                 return
 
             since_open_ms = None
@@ -656,17 +818,147 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 since_open_ms = _safe_int(s, 0) if s is not None else None
                 to_open_ms = _safe_int(t, 0) if t is not None else None
 
-            bars = _read_jsonl_filtered(parts, since_open_ms, to_open_ms, limit)
-            lwc = _bars_to_lwc(bars)
+            meta: dict[str, Any] = {"source": "disk", "redis_hit": False, "boot_id": _boot_id}
             warnings: list[str] = []
             filtered: list[dict[str, Any]] = []
+            cold_load = since_open_ms is None and to_open_ms is None and not force_disk
+
+            if path == "/api/bars" and prefer_redis and cold_load:
+                redis_error_code: str | None = None
+                redis_client = _redis_client_from_cfg(cfg)
+                if redis_client is None:
+                    redis_error_code = "redis_disabled"
+                else:
+                    client, ns = redis_client
+                    tail_key = _redis_key(ns, "ohlcv", "tail", symbol, str(tf_s))
+                    snap_key = _redis_key(ns, "ohlcv", "snap", symbol, str(tf_s))
+                    payload, ttl_left, err = _redis_get_json(client, tail_key)
+                    if err == "redis_miss":
+                        payload, ttl_left, err = _redis_get_json(client, snap_key)
+                    if err is not None:
+                        redis_error_code = err
+                    elif payload is None:
+                        redis_error_code = "redis_empty"
+                    elif ttl_left is None or ttl_left <= 0:
+                        redis_error_code = "redis_ttl_invalid"
+                    else:
+                        bars = _redis_payload_to_bars(payload, symbol, tf_s)
+                        if not bars:
+                            redis_error_code = "redis_empty"
+                        else:
+                            lwc = _bars_to_lwc(bars)
+                            for b in lwc:
+                                issues = _validate_bar_lwc(b, tf_allowlist)
+                                if issues:
+                                    warnings.extend(issues)
+                                    continue
+                                filtered.append(b)
+                            if limit > 0:
+                                filtered = filtered[-limit:]
+                            min_required = int(min_coldload_bars.get(tf_s, 0))
+                            if min_required > 0 and len(filtered) < min_required:
+                                redis_error_code = "redis_tail_small"
+                                meta = {
+                                    "source": "disk_fallback_small_tail",
+                                    "redis_hit": True,
+                                    "redis_len": len(filtered),
+                                    "redis_ttl_s_left": ttl_left,
+                                    "redis_payload_ts_ms": payload.get("payload_ts_ms"),
+                                    "redis_seq": payload.get("last_seq")
+                                    if isinstance(payload.get("last_seq"), int)
+                                    else payload.get("seq"),
+                                    "boot_id": _boot_id,
+                                }
+                                log_key = f"redis_small_tail:{symbol}:{tf_s}"
+                                _log_throttled(
+                                    "warning",
+                                    log_key,
+                                    (
+                                        "UI_BARS_REDIS_SMALL_TAIL_FALLBACK symbol=%s tf=%s len=%s min=%s"
+                                        % (symbol, tf_s, len(filtered), min_required)
+                                    ),
+                                )
+                                filtered = []
+                            else:
+                                meta = {
+                                    "source": "redis",
+                                    "redis_hit": True,
+                                    "redis_ttl_s_left": ttl_left,
+                                    "redis_payload_ts_ms": payload.get("payload_ts_ms"),
+                                    "redis_seq": payload.get("last_seq")
+                                    if isinstance(payload.get("last_seq"), int)
+                                    else payload.get("seq"),
+                                    "boot_id": _boot_id,
+                                }
+                                _cache_seed(symbol, tf_s, filtered)
+                                log_key = f"redis_hit:{symbol}:{tf_s}"
+                                _log_throttled(
+                                    "info",
+                                    log_key,
+                                    (
+                                        "UI_BARS_REDIS_HIT symbol=%s tf=%s ttl_left_s=%s seq=%s"
+                                        % (symbol, tf_s, ttl_left, meta.get("redis_seq"))
+                                    ),
+                                )
+
+                if filtered:
+                    payload = {
+                        "ok": True,
+                        "symbol": symbol,
+                        "tf_s": tf_s,
+                        "bars": filtered,
+                        "boot_id": _boot_id,
+                        "meta": meta,
+                    }
+                    if warnings:
+                        payload["warnings"] = warnings
+                    self._json(200, payload)
+                    return
+                if redis_error_code:
+                    meta = {
+                        "source": "disk",
+                        "redis_hit": False,
+                        "redis_error_code": redis_error_code,
+                        "boot_id": _boot_id,
+                    }
+                    log_key = f"redis_fallback:{symbol}:{tf_s}"
+                    if redis_error_code == "redis_miss":
+                        _log_throttled(
+                            "warning",
+                            log_key,
+                            (
+                                "UI_BARS_REDIS_MISS_FALLBACK_DISK symbol=%s tf=%s"
+                                % (symbol, tf_s)
+                            ),
+                        )
+                    elif redis_error_code == "redis_tail_small":
+                        _log_throttled(
+                            "warning",
+                            log_key,
+                            (
+                                "UI_BARS_REDIS_SMALL_TAIL_FALLBACK symbol=%s tf=%s"
+                                % (symbol, tf_s)
+                            ),
+                        )
+                    else:
+                        _log_throttled(
+                            "warning",
+                            log_key,
+                            (
+                                "UI_BARS_REDIS_READ_FAILED symbol=%s tf=%s code=%s fallback=disk"
+                                % (symbol, tf_s, redis_error_code)
+                            ),
+                        )
+
+            bars = _read_jsonl_filtered(parts, since_open_ms, to_open_ms, limit)
+            lwc = _bars_to_lwc(bars)
             for b in lwc:
                 issues = _validate_bar_lwc(b, tf_allowlist)
                 if issues:
                     warnings.extend(issues)
                     continue
                 filtered.append(b)
-            if since_open_ms is None and to_open_ms is None and not force_disk:
+            if cold_load and not force_disk:
                 cached = _cache_get(symbol, tf_s)
                 if cached:
                     filtered = cached[-limit:] if limit > 0 else cached
@@ -678,6 +970,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "tf_s": tf_s,
                 "bars": filtered,
                 "boot_id": _boot_id,
+                "meta": meta,
             }
             if warnings:
                 payload["warnings"] = warnings
