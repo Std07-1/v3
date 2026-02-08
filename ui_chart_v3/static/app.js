@@ -62,9 +62,11 @@ let scrollbackLastReqMs = 0;
 let scrollbackAbort = null;
 let scrollbackPending = false;
 let scrollbackLatestRange = null;
+let scrollbackPendingStep = 0;
 const cacheLru = new Map();
 let updateStateLastCleanupMs = 0;
 let favoritesState = null;
+let lastContinuityLogMs = 0;
 
 const RIGHT_OFFSET_PX = 48;
 const THEME_KEY = 'ui_chart_theme';
@@ -72,21 +74,26 @@ const CANDLE_STYLE_KEY = 'ui_chart_candle_style';
 const SYMBOL_KEY = 'ui_chart_symbol';
 const TF_KEY = 'ui_chart_tf';
 const LAYOUT_SAVE_KEY = 'ui_chart_layout_save';
-const MAX_RENDER_BARS_ACTIVE = 60000;
+const MAX_RENDER_BARS_ACTIVE_BASE = 60000;
 const MAX_RENDER_BARS_WARM = 20000;
 const WARM_LRU_LIMIT = 6;
 const UPDATE_STATE_TTL_MS = 30 * 60 * 1000;
 const UPDATE_STATE_CLEANUP_INTERVAL_MS = 60000;
 const FAVORITES_KEY = 'ui_chart_favorites_v1';
-const SCROLLBACK_TRIGGER_BARS = 80;
+const SCROLLBACK_TRIGGER_BARS_BASE = 2000;
 const SCROLLBACK_MIN_INTERVAL_MS = 1200;
-const SCROLLBACK_CHUNK_MAX = 8000;
+const SCROLLBACK_CHUNK_MAX_BASE = 10000;
+const SCROLLBACK_CHUNK_MIN_BASE = 5000;
+const SCROLLBACK_EXTRA_BARS = 0;
+const SCROLLBACK_MAX_STEPS = 6;
+const CONTINUITY_LOG_INTERVAL_MS = 15000;
 const SCROLLBACK_CHUNK_BY_TF = {
-  300: 1000,
-  900: 1000,
-  1800: 1000,
-  3600: 1000,
+  300: 5000,
+  900: 5000,
+  1800: 5000,
+  3600: 5000,
 };
+const DEFAULT_SCROLLBACK_CHUNK = 5000;
 
 function readSelectedTf(defaultTf = 300) {
   const raw = parseInt(elTf?.value, 10);
@@ -749,6 +756,21 @@ async function loadSymbols() {
 }
 
 function rebuildBarsIndex() {
+  if (barsStore.length > 1) {
+    let sorted = true;
+    for (let i = 1; i < barsStore.length; i += 1) {
+      const prev = barsStore[i - 1]?.open_time_ms;
+      const curr = barsStore[i]?.open_time_ms;
+      if (!Number.isFinite(prev) || !Number.isFinite(curr)) continue;
+      if (curr < prev) {
+        sorted = false;
+        break;
+      }
+    }
+    if (!sorted) {
+      barsStore.sort((a, b) => (a.open_time_ms || 0) - (b.open_time_ms || 0));
+    }
+  }
   barsIndexByOpen = new Map();
   for (let i = 0; i < barsStore.length; i += 1) {
     const openMs = barsStore[i]?.open_time_ms;
@@ -762,6 +784,48 @@ function rebuildBarsIndex() {
 function getTfOptionsList() {
   const values = getSelectOptions(elTf).map((opt) => Number(opt.value));
   return values.filter((v) => Number.isFinite(v) && v > 0);
+}
+
+function isFavoriteSymbol(symbol) {
+  if (!symbol) return false;
+  return getFavoriteSymbols().includes(String(symbol));
+}
+
+function isFavoriteTf(tf) {
+  if (!Number.isFinite(tf)) return false;
+  return getFavoriteTfs().includes(String(tf));
+}
+
+function isFavoritePair(symbol, tf) {
+  return isFavoriteSymbol(symbol) || isFavoriteTf(tf);
+}
+
+function getActiveMaxBars() {
+  const symbol = elSymbol?.value;
+  const tf = readSelectedTf();
+  const isFav = isFavoritePair(symbol, tf);
+  return isFav ? MAX_RENDER_BARS_ACTIVE_BASE * 2 : MAX_RENDER_BARS_ACTIVE_BASE;
+}
+
+function getScrollbackTriggerBars() {
+  const symbol = elSymbol?.value;
+  const tf = readSelectedTf();
+  const isFav = isFavoritePair(symbol, tf);
+  return isFav ? SCROLLBACK_TRIGGER_BARS_BASE * 2 : SCROLLBACK_TRIGGER_BARS_BASE;
+}
+
+function getScrollbackChunkMin() {
+  const symbol = elSymbol?.value;
+  const tf = readSelectedTf();
+  const isFav = isFavoritePair(symbol, tf);
+  return isFav ? SCROLLBACK_CHUNK_MIN_BASE * 2 : SCROLLBACK_CHUNK_MIN_BASE;
+}
+
+function getScrollbackChunkMax() {
+  const symbol = elSymbol?.value;
+  const tf = readSelectedTf();
+  const isFav = isFavoritePair(symbol, tf);
+  return isFav ? SCROLLBACK_CHUNK_MAX_BASE * 2 : SCROLLBACK_CHUNK_MAX_BASE;
 }
 
 function getNeighborTf(tf) {
@@ -859,7 +923,7 @@ function saveCacheCurrent() {
     : null);
   if (!key) return;
   if (!barsStore.length) return;
-  const trimmedBars = trimBarsForLimit(barsStore, MAX_RENDER_BARS_ACTIVE);
+  const trimmedBars = trimBarsForLimit(barsStore, getActiveMaxBars());
   uiCacheByKey.set(key, {
     bars: trimmedBars,
     lastOpenMs,
@@ -923,6 +987,7 @@ function restoreCacheFor(symbol, tf) {
   scrollbackReachedStart = Boolean(cached.scrollbackReachedStart);
   scrollbackPending = false;
   scrollbackLatestRange = null;
+  scrollbackPendingStep = 0;
   lastRedisSource = 'cache';
   lastRedisPayloadMs = null;
   lastRedisTtlS = null;
@@ -946,8 +1011,9 @@ function restoreCacheFor(symbol, tf) {
 
 function setBarsStore(bars) {
   barsStore = Array.isArray(bars) ? bars.slice() : [];
-  if (barsStore.length > MAX_RENDER_BARS_ACTIVE) {
-    barsStore = barsStore.slice(-MAX_RENDER_BARS_ACTIVE);
+  const maxBars = getActiveMaxBars();
+  if (barsStore.length > maxBars) {
+    barsStore = barsStore.slice(-maxBars);
   }
   rebuildBarsIndex();
 }
@@ -964,29 +1030,68 @@ function upsertBarToStore(bar) {
   if (barsStore.length > 1 && Number.isFinite(lastOpenMs) && openMs < lastOpenMs) {
     barsStore.sort((a, b) => a.open_time_ms - b.open_time_ms);
   }
-  if (barsStore.length > MAX_RENDER_BARS_ACTIVE) {
-    barsStore = barsStore.slice(-MAX_RENDER_BARS_ACTIVE);
+  const maxBars = getActiveMaxBars();
+  if (barsStore.length > maxBars) {
+    barsStore = barsStore.slice(-maxBars);
   }
   rebuildBarsIndex();
 }
 
 function getScrollbackChunk(tf) {
-  return SCROLLBACK_CHUNK_BY_TF[tf] || 0;
+  return SCROLLBACK_CHUNK_BY_TF[tf] || DEFAULT_SCROLLBACK_CHUNK;
 }
 
-function getAdaptiveScrollbackChunk(tf, range) {
-  const base = getScrollbackChunk(tf);
-  if (!base) return 0;
+function computeScrollbackNeed(range) {
   const from = Number(range?.from);
   const to = Number(range?.to);
-  if (!Number.isFinite(from) || !Number.isFinite(to)) return base;
-  const visibleBars = Math.max(0, Math.ceil(to - from));
-  const boost = Math.min(visibleBars, base * 3);
-  const chunk = base + boost;
-  return Math.min(SCROLLBACK_CHUNK_MAX, chunk);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+  const targetLeftBuffer = getScrollbackTriggerBars();
+  const deficitLeft = from < 0 ? Math.max(0, -Math.floor(from)) : 0;
+  return { from, to, targetLeftBuffer, deficitLeft };
 }
 
-function mergeOlderBars(olderBars, prevRange) {
+function computeScrollbackChunk(tf, range, barsBefore) {
+  const base = getScrollbackChunk(tf);
+  if (!base) return { chunk: 0, need: 0 };
+  const needRange = computeScrollbackNeed(range);
+  if (!needRange) return { chunk: base, need: base };
+  const before = Number.isFinite(barsBefore) ? Math.max(0, barsBefore) : 0;
+  const need = Math.max(0, needRange.targetLeftBuffer - before) + needRange.deficitLeft;
+  const raw = Math.max(need + SCROLLBACK_EXTRA_BARS, getScrollbackChunkMin());
+  const chunk = Math.min(getScrollbackChunkMax(), raw);
+  return { chunk, need };
+}
+
+function computeBarsBefore(range) {
+  if (controller && typeof controller.barsInLogicalRange === 'function') {
+    const info = controller.barsInLogicalRange(range);
+    if (info && Number.isFinite(info.barsBefore)) return info.barsBefore;
+  }
+  if (range && Number.isFinite(range.from)) return Math.floor(range.from);
+  return null;
+}
+
+function logContinuityIfNeeded(tf) {
+  const now = Date.now();
+  if (now - lastContinuityLogMs < CONTINUITY_LOG_INTERVAL_MS) return;
+  if (!Number.isFinite(tf) || tf <= 0) return;
+  if (!Array.isArray(barsStore) || barsStore.length < 2) return;
+  const expected = tf;
+  let maxDt = 0;
+  let gaps = 0;
+  for (let i = 1; i < barsStore.length; i += 1) {
+    const prev = barsStore[i - 1]?.open_time_ms;
+    const curr = barsStore[i]?.open_time_ms;
+    if (!Number.isFinite(prev) || !Number.isFinite(curr)) continue;
+    const dt = Math.max(0, Math.round((curr - prev) / 1000));
+    if (dt > maxDt) maxDt = dt;
+    if (dt > expected * 3) gaps += 1;
+  }
+  lastContinuityLogMs = now;
+  console.info(`UI_CONTINUITY tf=${tf}s bars=${barsStore.length} max_dt_s=${maxDt} gaps_gt_3x=${gaps}`);
+}
+
+function mergeOlderBars(olderBars, prevRange, tf) {
   if (!Array.isArray(olderBars) || olderBars.length === 0) {
     scrollbackReachedStart = true;
     return;
@@ -1005,7 +1110,8 @@ function mergeOlderBars(olderBars, prevRange) {
     return;
   }
   added.sort((a, b) => a.open_time_ms - b.open_time_ms);
-  const space = Math.max(0, MAX_RENDER_BARS_ACTIVE - barsStore.length);
+  const maxBars = getActiveMaxBars();
+  const space = Math.max(0, maxBars - barsStore.length);
   const take = space > 0 ? added.slice(-space) : [];
   if (take.length === 0) return;
   barsStore = take.concat(barsStore);
@@ -1020,18 +1126,28 @@ function mergeOlderBars(olderBars, prevRange) {
     });
   }
   diag.barsTotal = barsStore.length;
+  logContinuityIfNeeded(tf);
   saveCacheCurrent();
 }
 
-async function loadScrollbackChunk(range) {
+function scheduleEnsureCoverage(range, step) {
+  window.requestAnimationFrame(() => {
+    ensureLeftCoverage(range, step, 'loop');
+  });
+}
+
+async function loadScrollbackChunk(range, step) {
   const tf = readSelectedTf();
-  const chunk = getAdaptiveScrollbackChunk(tf, range);
-  if (!chunk) return;
+  const barsBefore = computeBarsBefore(range);
+  const need = computeScrollbackNeed(range);
+  if (!need) return;
+  const calc = computeScrollbackChunk(tf, range, barsBefore);
+  if (!calc.chunk) return;
   if (!Number.isFinite(firstOpenMs)) return;
-  if (barsStore.length >= MAX_RENDER_BARS_ACTIVE) return;
+  if (barsStore.length >= getActiveMaxBars()) return;
   if (scrollbackInFlight || scrollbackReachedStart) return;
-  const space = Math.max(0, MAX_RENDER_BARS_ACTIVE - barsStore.length);
-  const limit = Math.min(chunk, space);
+  const space = Math.max(0, getActiveMaxBars() - barsStore.length);
+  const limit = Math.min(calc.chunk, space);
   if (limit <= 0) return;
   const now = Date.now();
   if (now - scrollbackLastReqMs < SCROLLBACK_MIN_INTERVAL_MS) return;
@@ -1051,16 +1167,23 @@ async function loadScrollbackChunk(range) {
       + `&to_open_ms=${beforeOpenMs}&force_disk=1`;
     const data = await apiGet(url, { signal: scrollbackAbort.signal });
     const olderBars = Array.isArray(data?.bars) ? data.bars : [];
-    mergeOlderBars(olderBars, prevRange);
+    mergeOlderBars(olderBars, prevRange, tf);
   } catch (e) {
     if (e && e.name === 'AbortError') return;
   } finally {
     scrollbackInFlight = false;
     if (scrollbackPending) {
       scrollbackPending = false;
-      if (!scrollbackReachedStart && barsStore.length < MAX_RENDER_BARS_ACTIVE) {
-        loadScrollbackChunk(scrollbackLatestRange);
+      const nextRange = scrollbackLatestRange || range;
+      const nextStep = Math.max(step + 1, scrollbackPendingStep);
+      scrollbackPendingStep = 0;
+      if (!scrollbackReachedStart && barsStore.length < getActiveMaxBars()) {
+        scheduleEnsureCoverage(nextRange, nextStep);
       }
+      return;
+    }
+    if (!scrollbackReachedStart && barsStore.length < getActiveMaxBars()) {
+      scheduleEnsureCoverage(range, step + 1);
     }
   }
 }
@@ -1100,26 +1223,38 @@ async function fetchNewerBarsFromDisk() {
   }
 }
 
-function handleVisibleRangeChange(range) {
+function ensureLeftCoverage(range, step, reason) {
+  const currentStep = Number.isFinite(step) ? step : 0;
   if (!range || !Number.isFinite(range.from)) return;
   if (scrollbackReachedStart) return;
   if (!barsStore.length) return;
-  if (barsStore.length >= MAX_RENDER_BARS_ACTIVE) return;
+  if (barsStore.length >= getActiveMaxBars()) return;
+  if (currentStep >= SCROLLBACK_MAX_STEPS) return;
+  if (!Number.isFinite(firstOpenMs)) return;
   scrollbackLatestRange = range;
-  let barsBefore = null;
-  if (controller && typeof controller.barsInLogicalRange === 'function') {
-    const info = controller.barsInLogicalRange(range);
-    if (info && Number.isFinite(info.barsBefore)) barsBefore = info.barsBefore;
-  }
-  if (barsBefore == null && Number.isFinite(range.from)) {
-    barsBefore = Math.floor(range.from);
-  }
-  if (barsBefore == null || barsBefore > SCROLLBACK_TRIGGER_BARS) return;
+
+  const barsBefore = computeBarsBefore(range);
+  const need = computeScrollbackNeed(range);
+  if (!need) return;
+  const targetLeftBuffer = need.targetLeftBuffer;
+  const deficitLeft = need.deficitLeft;
+  const before = Number.isFinite(barsBefore) ? Math.max(0, barsBefore) : 0;
+  const missing = Math.max(0, targetLeftBuffer - before) + deficitLeft;
+  if (missing <= 0) return;
+
   if (scrollbackInFlight) {
     scrollbackPending = true;
+    scrollbackPendingStep = currentStep;
     return;
   }
-  loadScrollbackChunk(range);
+  if (reason !== 'loop') {
+    scrollbackPendingStep = 0;
+  }
+  loadScrollbackChunk(range, currentStep);
+}
+
+function handleVisibleRangeChange(range) {
+  ensureLeftCoverage(range, 0, 'rangeChange');
 }
 
 async function loadBarsFull(forceDisk = false) {
@@ -1131,7 +1266,7 @@ async function loadBarsFull(forceDisk = false) {
   const symbol = elSymbol.value;
   const tf = readSelectedTf();
   currentCacheKey = makeCacheKey(symbol, tf);
-  const limit = MAX_RENDER_BARS_ACTIVE;
+  const limit = getActiveMaxBars();
 
   setStatus('load…');
   diag.lastError = '';
@@ -1192,6 +1327,7 @@ async function loadBarsFull(forceDisk = false) {
   scrollbackReachedStart = false;
   scrollbackPending = false;
   scrollbackLatestRange = null;
+  scrollbackPendingStep = 0;
   saveCacheCurrent();
   applyTheme(currentTheme);
   if (elCandleStyle) {
