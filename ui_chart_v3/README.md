@@ -3,11 +3,11 @@
 ## Запуск
 
 - Рекомендовано (модуль):
- 	- python -m ui_chart_v3 --data-root ./data_v3 --host 0.0.0.0 --port 8089
+  - python -m ui_chart_v3 --data-root ./data_v3 --host 0.0.0.0 --port 8089
 - Якщо data_root вже в config.json:
- 	- python -m ui_chart_v3 --host 0.0.0.0 --port 8089
+  - python -m ui_chart_v3 --host 0.0.0.0 --port 8089
 - Прямий запуск:
- 	- python server.py --data-root ./data_v3 --host 0.0.0.0 --port 8089 --static-root ./static
+  - python server.py --data-root ./data_v3 --host 0.0.0.0 --port 8089 --static-root ./static
 
 ## Конфіг
 
