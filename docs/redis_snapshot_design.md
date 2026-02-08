@@ -8,6 +8,7 @@
 - Зменшити залежність UI від disk scan або rebuild.
 - Зробити stale/ok видимими через TTL + payload_ts_ms.
 - Не змінювати SSOT і логіку ingest.
+- Не допустити «малого tail» у cold-load: при недостатній кількості барів UI переходить на диск.
 
 ## Не цілі
 
@@ -108,6 +109,21 @@
 }
 ```
 
+## Мінімум барів для cold-load
+
+UI використовує поріг min_coldload_bars_by_tf_s. Якщо Redis tail коротший за цей поріг, /api/bars переходить на диск.
+
+```json
+{
+  "min_coldload_bars_by_tf_s": {
+    "300": 300,
+    "900": 200,
+    "1800": 150,
+    "3600": 100
+  }
+}
+```
+
 UI показує stale/miss через:
 
 - ключ відсутній (miss), або
@@ -119,6 +135,11 @@ UI показує stale/miss через:
 - Якщо бар не прийшов: нічого не публікуємо.
 - Якщо тики є, а барів нема: лог code=bar_missing_with_ticks (rate-limit).
 - Якщо тики зникли: calendar_open використовується як пояснення.
+
+UI політики читання:
+
+- /api/bars із prefer_redis читає Redis tail/snap, але при малому tail або miss переходить на disk.
+- /api/updates завжди читає disk (tail-only) і не залежить від Redis.
 
 ## Status snapshot (людський)
 

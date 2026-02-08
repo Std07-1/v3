@@ -4,7 +4,7 @@
 
 ## Короткий опис
 
-Система працює тільки з M5 як базовим потоком. На старті робиться warmup останніх M5 (history), далі щохвилини підтягування M5 tail (history). Похідні TF (>= 15m) будуються тільки якщо M5-діапазон повний. UI отримує дані через HTTP API: cold-load може йти з Redis snapshots з fallback на диск, оновлення (/api/updates) читаються з SSOT JSONL.
+Система працює тільки з M5 як базовим потоком. На старті робиться warmup останніх M5 (history), далі щохвилини підтягування M5 tail (history). Похідні TF (>= 15m) будуються тільки якщо M5-діапазон повний. UI отримує дані через HTTP API: cold-load може йти з Redis snapshots з fallback на диск при малому tail, оновлення (/api/updates) читаються з SSOT JSONL через tail-only scan. UI клієнт абортує застарілі load-запити та ігнорує пізні відповіді. UI API читає config.json з кешем mtime (для ui_debug/tf_allowlist/min_coldload_bars).
 
 ## Геометрія часу (помітка для всіх розмов про свічки)
 
@@ -22,9 +22,9 @@ flowchart LR
     P -->|dedup + flat_filter| D[(data_v3)]
     P -->|derive from M5| D
     P -->|redis snapshots| R[(Redis snapshots)]
-    D -->|/api/updates| UI[ui_chart_v3]
-    R -->|cold-load /api/bars| UI
-    D -->|fallback /api/bars| UI
+    D -->|/api/updates tail-only| UI[ui_chart_v3]
+    R -->|cold-load /api/bars prefer_redis| UI
+    D -->|fallback /api/bars (small tail/miss)| UI
     D -->|manual rebuild| Rb[tools/rebuild_derived.py]
     P --> M[dedup/derive/flat_filter/fetch_policy]
     M --> P
@@ -102,7 +102,7 @@ sequenceDiagram
     participant SSOT as data_v3 JSONL
 
     UI->>API: GET /api/updates?symbol&tf_s&since_seq
-    API->>SSOT: read JSONL parts (tail)
+    API->>SSOT: read JSONL parts (tail-only)
     API-->>UI: events[] + cursor_seq
     UI->>UI: applyUpdates(events)
 ```

@@ -264,6 +264,8 @@
             baseRange: null,
             pointerId: null,
         };
+        const visibleRangeHandlers = new Set();
+        let visibleRangeRaf = null;
 
         const formatNumber = (value, digits = 6) => {
             if (!Number.isFinite(value)) return "—";
@@ -753,6 +755,7 @@
             }
             lastBar = deduped.length ? deduped[deduped.length - 1] : null;
             updateBarTimeSpanFromBars(deduped);
+            scheduleVisibleRangeNotify();
         }
 
         function updateLastBar(bar) {
@@ -872,6 +875,73 @@
             }
         }
 
+        function getVisibleLogicalRange() {
+            try {
+                const range = chart.timeScale().getVisibleLogicalRange();
+                if (!range) return null;
+                const from = Number(range.from);
+                const to = Number(range.to);
+                if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+                return { from, to };
+            } catch (_e) {
+                return null;
+            }
+        }
+
+        function setVisibleLogicalRange(range) {
+            if (!range) return;
+            const from = Number(range.from);
+            const to = Number(range.to);
+            if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+            try {
+                chart.timeScale().setVisibleLogicalRange({ from, to });
+            } catch (_e) {
+                // noop
+            }
+        }
+
+        function notifyVisibleRange() {
+            const range = getVisibleLogicalRange();
+            if (!range) return;
+            visibleRangeHandlers.forEach((handler) => {
+                try {
+                    handler(range);
+                } catch (_e) {
+                    // noop
+                }
+            });
+        }
+
+        function scheduleVisibleRangeNotify() {
+            if (visibleRangeRaf !== null) return;
+            visibleRangeRaf = window.requestAnimationFrame(() => {
+                visibleRangeRaf = null;
+                notifyVisibleRange();
+            });
+        }
+
+        function onVisibleLogicalRangeChange(handler) {
+            if (typeof handler !== "function") return () => { };
+            visibleRangeHandlers.add(handler);
+            return () => visibleRangeHandlers.delete(handler);
+        }
+
+        function installVisibleRangeObserver() {
+            const timeScale = chart.timeScale();
+            if (!timeScale) return;
+            if (typeof timeScale.subscribeVisibleLogicalRangeChange === "function") {
+                const cb = () => scheduleVisibleRangeNotify();
+                timeScale.subscribeVisibleLogicalRangeChange(cb);
+                interactionCleanup.push(() => timeScale.unsubscribeVisibleLogicalRangeChange(cb));
+                return;
+            }
+            if (typeof timeScale.subscribeVisibleTimeRangeChange === "function") {
+                const cb = () => scheduleVisibleRangeNotify();
+                timeScale.subscribeVisibleTimeRangeChange(cb);
+                interactionCleanup.push(() => timeScale.unsubscribeVisibleTimeRangeChange(cb));
+            }
+        }
+
         function clearAll() {
             resetManualPriceScale({ silent: true });
             priceScaleState.lastAutoRange = null;
@@ -978,6 +1048,7 @@
         }
 
         setupPriceScaleInteractions();
+        installVisibleRangeObserver();
         resizeToContainer();
 
         return {
@@ -993,6 +1064,9 @@
             scrollToRealTime,
             scrollToRealTimeWithOffset,
             setFollowRightOffsetPx,
+            getVisibleLogicalRange,
+            setVisibleLogicalRange,
+            onVisibleLogicalRangeChange,
         };
     }
 

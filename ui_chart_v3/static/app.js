@@ -51,6 +51,16 @@ let lastRedisPayloadMs = null;
 let lastRedisTtlS = null;
 let lastRedisSeq = null;
 const updateStateByKey = new Map();
+const uiCacheByKey = new Map();
+let currentCacheKey = null;
+let barsStore = [];
+let barsIndexByOpen = new Map();
+let firstOpenMs = null;
+let scrollbackInFlight = false;
+let scrollbackReachedStart = false;
+let scrollbackLastReqMs = 0;
+let scrollbackAbort = null;
+let prefetchStarted = false;
 
 const RIGHT_OFFSET_PX = 48;
 const THEME_KEY = 'ui_chart_theme';
@@ -58,6 +68,21 @@ const CANDLE_STYLE_KEY = 'ui_chart_candle_style';
 const SYMBOL_KEY = 'ui_chart_symbol';
 const TF_KEY = 'ui_chart_tf';
 const LAYOUT_SAVE_KEY = 'ui_chart_layout_save';
+const MAX_RENDER_BARS = 20000;
+const SCROLLBACK_TRIGGER_BARS = 80;
+const SCROLLBACK_MIN_INTERVAL_MS = 1200;
+const SCROLLBACK_CHUNK_BY_TF = {
+  300: 1000,
+  900: 1000,
+  1800: 1000,
+  3600: 1000,
+};
+
+function readSelectedTf(defaultTf = 300) {
+  const raw = parseInt(elTf?.value, 10);
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  return defaultTf;
+}
 const diag = {
   loadAt: null,
   pollAt: null,
@@ -238,6 +263,9 @@ const REQUIRED_CONTROLLER_METHODS = [
   'scrollToRealTime',
   'scrollToRealTimeWithOffset',
   'setFollowRightOffsetPx',
+  'getVisibleLogicalRange',
+  'setVisibleLogicalRange',
+  'onVisibleLogicalRangeChange',
 ];
 
 function ensureControllerContract(ctrl) {
@@ -259,6 +287,9 @@ function makeChart() {
   ensureControllerContract(controller);
   if (controller && typeof controller.setFollowRightOffsetPx === 'function') {
     controller.setFollowRightOffsetPx(RIGHT_OFFSET_PX);
+  }
+  if (controller && typeof controller.onVisibleLogicalRangeChange === 'function') {
+    controller.onVisibleLogicalRangeChange(handleVisibleRangeChange);
   }
   window.addEventListener('resize', () => {
     if (controller && typeof controller.resizeToContainer === 'function') {
@@ -533,6 +564,266 @@ async function loadSymbols() {
   }
   buildToolbarMenu('symbol');
   updateHudValues();
+  return syms;
+}
+
+function rebuildBarsIndex() {
+  barsIndexByOpen = new Map();
+  for (let i = 0; i < barsStore.length; i += 1) {
+    const openMs = barsStore[i]?.open_time_ms;
+    if (Number.isFinite(openMs)) {
+      barsIndexByOpen.set(openMs, i);
+    }
+  }
+  firstOpenMs = barsStore.length ? barsStore[0].open_time_ms : null;
+}
+
+function makeCacheKey(symbol, tf) {
+  return `${symbol}|${tf}`;
+}
+
+function saveCacheCurrent() {
+  const fallbackSymbol = elSymbol?.value;
+  const fallbackTf = Number(elTf?.value);
+  const key = currentCacheKey || (fallbackSymbol && Number.isFinite(fallbackTf)
+    ? makeCacheKey(fallbackSymbol, fallbackTf)
+    : null);
+  if (!key) return;
+  if (!barsStore.length) return;
+  uiCacheByKey.set(key, {
+    bars: barsStore.slice(),
+    lastOpenMs,
+    lastBarCloseMs,
+    updatesSeqCursor,
+    scrollbackReachedStart,
+  });
+  currentCacheKey = key;
+}
+
+function storeCacheFor(symbol, tf, bars) {
+  if (!symbol || !Number.isFinite(tf)) return;
+  if (!Array.isArray(bars) || bars.length === 0) return;
+  const key = makeCacheKey(symbol, tf);
+  if (uiCacheByKey.has(key)) return;
+  const last = bars[bars.length - 1];
+  const lastOpen = Number.isFinite(last.open_time_ms) ? last.open_time_ms : null;
+  let lastClose = Number.isFinite(last.close_time_ms) ? last.close_time_ms : null;
+  if (lastClose == null && lastOpen != null) {
+    lastClose = lastOpen + tf * 1000 - 1;
+  }
+  uiCacheByKey.set(key, {
+    bars: bars.slice(),
+    lastOpenMs: lastOpen,
+    lastBarCloseMs: lastClose,
+    updatesSeqCursor: null,
+    scrollbackReachedStart: false,
+  });
+}
+
+async function prefetchAllSymbols(symbols) {
+  if (prefetchStarted) return;
+  if (!Array.isArray(symbols) || symbols.length === 0) return;
+  prefetchStarted = true;
+  const tf = readSelectedTf();
+  const limit = MAX_RENDER_BARS;
+  const current = elSymbol.value;
+  for (const symbol of symbols) {
+    if (!symbol || symbol === current) continue;
+    const key = makeCacheKey(symbol, tf);
+    if (uiCacheByKey.has(key)) continue;
+    const url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${limit}&force_disk=1`;
+    try {
+      const data = await apiGet(url);
+      const bars = Array.isArray(data?.bars) ? data.bars : [];
+      storeCacheFor(symbol, tf, bars);
+    } catch (e) {
+      // ignore prefetch errors
+    }
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+}
+
+function restoreCacheFor(symbol, tf) {
+  const key = makeCacheKey(symbol, tf);
+  const cached = uiCacheByKey.get(key);
+  if (!cached) return false;
+  const bars = Array.isArray(cached.bars) ? cached.bars : [];
+  if (!bars.length) return false;
+  if (controller && typeof controller.setBars === 'function') {
+    controller.setBars(bars);
+  }
+  setBarsStore(bars);
+  applyTheme(currentTheme);
+  if (elCandleStyle) {
+    applyCandleStyle(elCandleStyle.value || 'classic');
+  }
+  if (controller && typeof controller.setViewTimeframe === 'function') {
+    controller.setViewTimeframe(tf);
+  }
+  lastOpenMs = Number.isFinite(cached.lastOpenMs) ? cached.lastOpenMs : bars[bars.length - 1].open_time_ms;
+  lastBarCloseMs = Number.isFinite(cached.lastBarCloseMs) ? cached.lastBarCloseMs : null;
+  updatesSeqCursor = Number.isFinite(cached.updatesSeqCursor) ? cached.updatesSeqCursor : null;
+  scrollbackReachedStart = Boolean(cached.scrollbackReachedStart);
+  lastRedisSource = 'cache';
+  lastRedisPayloadMs = null;
+  lastRedisTtlS = null;
+  lastRedisSeq = null;
+  diag.barsTotal = bars.length;
+  diag.lastPollBars = 0;
+  diag.loadAt = Date.now();
+  updateHudPrice(bars[bars.length - 1].close);
+  updateDiag(Number(tf));
+  if (elFollow.checked && controller && typeof controller.resetViewAndFollow === 'function') {
+    controller.resetViewAndFollow(RIGHT_OFFSET_PX);
+  }
+  setStatus(`ok · cache · tf=${tf}s · bars=${bars.length}`);
+  currentCacheKey = key;
+  return true;
+}
+
+function setBarsStore(bars) {
+  barsStore = Array.isArray(bars) ? bars.slice() : [];
+  if (barsStore.length > MAX_RENDER_BARS) {
+    barsStore = barsStore.slice(-MAX_RENDER_BARS);
+  }
+  rebuildBarsIndex();
+}
+
+function upsertBarToStore(bar) {
+  if (!bar || !Number.isFinite(bar.open_time_ms)) return;
+  const openMs = bar.open_time_ms;
+  const idx = barsIndexByOpen.get(openMs);
+  if (idx != null) {
+    barsStore[idx] = bar;
+    return;
+  }
+  barsStore.push(bar);
+  if (barsStore.length > 1 && Number.isFinite(lastOpenMs) && openMs < lastOpenMs) {
+    barsStore.sort((a, b) => a.open_time_ms - b.open_time_ms);
+  }
+  if (barsStore.length > MAX_RENDER_BARS) {
+    barsStore = barsStore.slice(-MAX_RENDER_BARS);
+  }
+  rebuildBarsIndex();
+}
+
+function getScrollbackChunk(tf) {
+  return SCROLLBACK_CHUNK_BY_TF[tf] || 0;
+}
+
+function mergeOlderBars(olderBars, prevRange) {
+  if (!Array.isArray(olderBars) || olderBars.length === 0) {
+    scrollbackReachedStart = true;
+    return;
+  }
+  if (!Number.isFinite(firstOpenMs)) return;
+  const added = [];
+  for (const bar of olderBars) {
+    const openMs = bar?.open_time_ms;
+    if (!Number.isFinite(openMs)) continue;
+    if (openMs >= firstOpenMs) continue;
+    if (barsIndexByOpen.has(openMs)) continue;
+    added.push(bar);
+  }
+  if (added.length === 0) {
+    scrollbackReachedStart = true;
+    return;
+  }
+  added.sort((a, b) => a.open_time_ms - b.open_time_ms);
+  const space = Math.max(0, MAX_RENDER_BARS - barsStore.length);
+  const take = space > 0 ? added.slice(-space) : [];
+  if (take.length === 0) return;
+  barsStore = take.concat(barsStore);
+  rebuildBarsIndex();
+  if (controller && typeof controller.setBars === 'function') {
+    controller.setBars(barsStore);
+  }
+  if (prevRange && controller && typeof controller.setVisibleLogicalRange === 'function') {
+    controller.setVisibleLogicalRange({
+      from: prevRange.from + take.length,
+      to: prevRange.to + take.length,
+    });
+  }
+  diag.barsTotal = barsStore.length;
+  saveCacheCurrent();
+}
+
+async function loadScrollbackChunk() {
+  const tf = readSelectedTf();
+  const chunk = getScrollbackChunk(tf);
+  if (!chunk) return;
+  if (!Number.isFinite(firstOpenMs)) return;
+  if (barsStore.length >= MAX_RENDER_BARS) return;
+  if (scrollbackInFlight || scrollbackReachedStart) return;
+  const now = Date.now();
+  if (now - scrollbackLastReqMs < SCROLLBACK_MIN_INTERVAL_MS) return;
+  scrollbackLastReqMs = now;
+  scrollbackInFlight = true;
+  if (scrollbackAbort) {
+    scrollbackAbort.abort();
+  }
+  scrollbackAbort = new AbortController();
+  const symbol = elSymbol.value;
+  const beforeOpenMs = firstOpenMs - 1;
+  const prevRange = controller && typeof controller.getVisibleLogicalRange === 'function'
+    ? controller.getVisibleLogicalRange()
+    : null;
+  try {
+    const url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${chunk}`
+      + `&to_open_ms=${beforeOpenMs}&force_disk=1`;
+    const data = await apiGet(url, { signal: scrollbackAbort.signal });
+    const olderBars = Array.isArray(data?.bars) ? data.bars : [];
+    mergeOlderBars(olderBars, prevRange);
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+  } finally {
+    scrollbackInFlight = false;
+  }
+}
+
+async function fetchNewerBarsFromDisk() {
+  if (!Number.isFinite(lastOpenMs)) return false;
+  const symbol = elSymbol.value;
+  const tf = readSelectedTf();
+  const limit = 2000;
+  try {
+    const url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${limit}`
+      + `&since_open_ms=${lastOpenMs}&force_disk=1`;
+    const data = await apiGet(url);
+    const newerBars = Array.isArray(data?.bars) ? data.bars : [];
+    if (!newerBars.length) return false;
+    newerBars.sort((a, b) => a.open_time_ms - b.open_time_ms);
+    for (const bar of newerBars) {
+      if (!Number.isFinite(bar.open_time_ms)) continue;
+      if (bar.open_time_ms <= lastOpenMs) continue;
+      if (controller && typeof controller.updateLastBar === 'function') {
+        controller.updateLastBar(bar);
+      }
+      upsertBarToStore(bar);
+      lastOpenMs = bar.open_time_ms;
+      if (Number.isFinite(bar.close_time_ms)) {
+        lastBarCloseMs = bar.close_time_ms;
+      }
+    }
+    diag.barsTotal = barsStore.length;
+    diag.lastPollBars = newerBars.length;
+    diag.pollAt = Date.now();
+    updateDiag(tf);
+    saveCacheCurrent();
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function handleVisibleRangeChange(range) {
+  if (!range || !Number.isFinite(range.from)) return;
+  if (scrollbackInFlight || scrollbackReachedStart) return;
+  if (!barsStore.length) return;
+  if (barsStore.length >= MAX_RENDER_BARS) return;
+  if (range.from > SCROLLBACK_TRIGGER_BARS) return;
+  if (controller && typeof controller.isAtEnd === 'function' && controller.isAtEnd()) return;
+  loadScrollbackChunk();
 }
 
 async function loadBarsFull(forceDisk = false) {
@@ -542,7 +833,8 @@ async function loadBarsFull(forceDisk = false) {
   }
   loadAbort = new AbortController();
   const symbol = elSymbol.value;
-  const tf = parseInt(elTf.value, 10);
+  const tf = readSelectedTf();
+  currentCacheKey = makeCacheKey(symbol, tf);
   const limit = 20000;
 
   setStatus('load…');
@@ -582,6 +874,8 @@ async function loadBarsFull(forceDisk = false) {
     if (controller && typeof controller.clearAll === 'function') {
       controller.clearAll();
     }
+    setBarsStore([]);
+    scrollbackReachedStart = true;
     lastOpenMs = null;
     diag.barsTotal = 0;
     diag.lastPollBars = 0;
@@ -593,6 +887,14 @@ async function loadBarsFull(forceDisk = false) {
   if (controller && typeof controller.setBars === 'function') {
     controller.setBars(bars);
   }
+  setBarsStore(bars);
+  scrollbackInFlight = false;
+  if (scrollbackAbort) {
+    scrollbackAbort.abort();
+    scrollbackAbort = null;
+  }
+  scrollbackReachedStart = false;
+  saveCacheCurrent();
   applyTheme(currentTheme);
   if (elCandleStyle) {
     applyCandleStyle(elCandleStyle.value || 'classic');
@@ -657,6 +959,7 @@ function applyUpdates(events) {
     if (controller && typeof controller.updateLastBar === 'function') {
       controller.updateLastBar(bar);
     }
+    upsertBarToStore(bar);
     if (complete) {
       if (lastOpenMs == null || bar.open_time_ms > lastOpenMs) {
         lastOpenMs = bar.open_time_ms;
@@ -674,12 +977,15 @@ function applyUpdates(events) {
   if (lastBar) {
     updateHudPrice(lastBar.last_price != null ? lastBar.last_price : lastBar.close);
   }
+  if (applied > 0) {
+    saveCacheCurrent();
+  }
   return applied;
 }
 
 async function pollUpdates() {
   const symbol = elSymbol.value;
-  const tf = parseInt(elTf.value, 10);
+  const tf = readSelectedTf();
   if (lastOpenMs == null) return;
   const shouldFollow = Boolean(elFollow.checked && controller && typeof controller.isAtEnd === 'function'
     ? controller.isAtEnd()
@@ -721,9 +1027,7 @@ async function pollUpdates() {
       && Number.isFinite(data.disk_last_open_ms)
       && lastOpenMs != null
       && data.disk_last_open_ms > lastOpenMs) {
-      await loadBarsFull(true);
-      resetPolling();
-      return;
+      await fetchNewerBarsFromDisk();
     }
     if (Number.isFinite(data.cursor_seq) && (updatesSeqCursor == null || data.cursor_seq > updatesSeqCursor)) {
       updatesSeqCursor = data.cursor_seq;
@@ -794,13 +1098,15 @@ async function init() {
       elTf.value = tfValue;
     }
   }
-  await loadSymbols();
+  const syms = await loadSymbols();
   const symbolPreferred = savedSymbol || 'XAU/USD';
   if (Array.from(elSymbol.options).some((opt) => opt.value === symbolPreferred)) {
     elSymbol.value = symbolPreferred;
   }
   updateToolbarValue('symbol');
   await loadBarsFull();
+  saveCacheCurrent();
+  setTimeout(() => prefetchAllSymbols(syms), 400);
   updateToolbarValue('tf');
   updateHudValues();
   updateStreamingIndicator();
@@ -820,12 +1126,26 @@ async function init() {
 
   elSymbol.addEventListener('change', async () => {
     saveLayoutValue(SYMBOL_KEY, elSymbol.value);
-    await loadBarsFull();
+    saveCacheCurrent();
+    const tf = readSelectedTf();
+    const restored = restoreCacheFor(elSymbol.value, tf);
+    if (!restored) {
+      await loadBarsFull();
+    }
+    resetPolling();
+    await pollUpdates();
   });
 
   elTf.addEventListener('change', async () => {
     saveLayoutValue(TF_KEY, elTf.value);
-    await loadBarsFull();
+    saveCacheCurrent();
+    const tf = readSelectedTf();
+    const restored = restoreCacheFor(elSymbol.value, tf);
+    if (!restored) {
+      await loadBarsFull();
+    }
+    resetPolling();
+    await pollUpdates();
   });
 
   if (elTheme) {

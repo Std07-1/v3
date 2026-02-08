@@ -1034,7 +1034,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                             ),
                         )
 
-            use_tail = path == "/api/latest" or cold_load or since_open_ms is not None
+            use_tail = (
+                path == "/api/latest"
+                or cold_load
+                or since_open_ms is not None
+                or (to_open_ms is not None and force_disk)
+            )
             if use_tail:
                 bars = _read_jsonl_tail_filtered(parts, since_open_ms, to_open_ms, limit)
             else:

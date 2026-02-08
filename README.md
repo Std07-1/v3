@@ -60,6 +60,8 @@
 - derived_tfs_s — похідні TF (15m–1h)
 - day_anchor_offset_s та *alt* — якорі сесії
 - redis.* — snapshots для cold-load UI (опційно)
+- min_coldload_bars_by_tf_s — мінімум барів для cold-load з Redis tail
+- ui_debug — показ діагностики у UI
 
 Календарі задаються групами:
 
@@ -68,7 +70,14 @@
 
 Модель підтримує лише одну daily break пару на групу (UTC).
 
-Зміни config.json підхоплюються після перезапуску процесів (hot-reload немає).
+Runtime/connector потребує перезапуску після змін config.json.
+UI API читає config.json з кешем mtime (перевірка ~0.5s) для ui_debug/tf_allowlist/min_coldload_bars.
+
+## UI: cold-load та snapshots
+
+- /api/bars у режимі prefer_redis читає Redis tail/snap, але при малому tail переходить на диск.
+- /api/updates завжди читає диск і використовує tail-only скан.
+- Клієнт UI абортує попередні load-запити і ігнорує застарілі відповіді.
 
 ## Git та дані
 
