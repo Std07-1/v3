@@ -30,13 +30,6 @@ from runtime.store.ssot_jsonl import (
 if TYPE_CHECKING:
     from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
 
-logger = logging.getLogger("PollingConnectorB")
-if not logger.hasHandlers():
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s | %(levelname)s | %(message)s",
-    )
-
 # Утиліти часу/бакетів
 
 def utc_now_ms() -> int:
@@ -1435,7 +1428,6 @@ class MultiSymbolRunner:
     def __init__(
         self,
         engines: List[PollingConnectorB],
-        group_logs_enabled: bool,
         history_summary_interval_s: int,
         history_still_failing_interval_s: int,
         history_circuit_fail_streak: int,
@@ -1447,10 +1439,8 @@ class MultiSymbolRunner:
     ) -> None:
         self._engines = engines
         self._safety_delay_s = max((e._safety_delay_s for e in engines), default=0)  # noqa: SLF001
-        self._group_logs_enabled = bool(group_logs_enabled)
-        if self._group_logs_enabled:
-            for e in self._engines:
-                e.enable_group_logging()
+        for e in self._engines:
+            e.enable_group_logging()
         self._calendar_state_by_symbol: Dict[str, bool] = {}
         self._history_summary_interval_s = max(60, int(history_summary_interval_s))
         self._history_still_failing_interval_s = max(60, int(history_still_failing_interval_s))
