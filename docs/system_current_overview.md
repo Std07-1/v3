@@ -4,7 +4,7 @@
 
 ## Короткий опис
 
-Система працює тільки з M5 як базовим потоком. На старті робиться warmup останніх M5 (history), далі щохвилини підтягування M5 tail (history). Похідні TF (>= 15m) будуються тільки якщо M5-діапазон повний. UI отримує дані через HTTP API: cold-load може йти з Redis snapshots з fallback на диск при малому tail, оновлення (/api/updates) читаються з SSOT JSONL через tail-only scan. UI клієнт абортує застарілі load-запити та ігнорує пізні відповіді. UI API читає config.json з кешем mtime (для ui_debug/tf_allowlist/min_coldload_bars).
+Система працює тільки з M5 як базовим потоком. На старті робиться warmup останніх M5 (history), далі щохвилини підтягування M5 tail (history). Похідні TF (>= 15m) будуються тільки якщо M5-діапазон повний. UI отримує дані через HTTP API: cold-load може йти з Redis snapshots з fallback на диск при малому tail, оновлення (/api/updates) читаються з SSOT JSONL через tail-only scan. UI клієнт абортує застарілі load-запити та ігнорує пізні відповіді. Scrollback працює як cover-until-satisfied: тригер лівого буфера ~2000 барів, підкидає по 5000 (фаворити x2) і повторює догрузку до покриття. UI API читає config.json з кешем mtime (для ui_debug/tf_allowlist/min_coldload_bars).
 
 ## Геометрія часу (помітка для всіх розмов про свічки)
 
@@ -106,6 +106,12 @@ sequenceDiagram
     API-->>UI: events[] + cursor_seq
     UI->>UI: applyUpdates(events)
 ```
+
+### UI scrollback (cover-until-satisfied)
+
+- Тригер: дефіцит лівого буфера (~2000 барів).
+- Пачки: 5000 барів (фаворити x2).
+- Ліміти: active 60000 (фаворити 120000), warm LRU=6 по 20000.
 
 ### Модулі polling (залежності)
 
