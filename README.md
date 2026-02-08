@@ -12,6 +12,10 @@
 ## Вимоги
 
 - Python 3.7 у .venv
+- Runtime залежності: див. requirements.txt
+- Локальна розробка: pyproject.toml (deps + metadata)
+- ForexConnect SDK встановлюється окремо (vendor SDK / wheel)
+- Для env-профілів потрібен python-dotenv (є в requirements.txt)
 
 ## Структура даних
 
@@ -27,6 +31,78 @@
   - python -m app.main --mode connector
 - Лише UI:
   - python -m app.main --mode ui
+
+## Профілі середовища (local/prod)
+
+Профілі потрібні для безпечної ізоляції local/prod через env. У v3 використовується
+один SSOT конфіг (config.json), а профіль визначає креденшіали FXCM і Redis.
+
+### Як працює перемикання
+
+- `.env` містить тільки `AI_ONE_ENV_FILE=.env.local` або `.env.prod`.
+- `env_profile.py` спочатку читає `.env`, потім завантажує профільний файл.
+- Обидва процеси (connector і UI) логують активний профіль при старті.
+
+### Мінімальні ключі профілю
+
+- FXCM:
+  - `FXCM_USERNAME`
+  - `FXCM_PASSWORD`
+  - `FXCM_CONNECTION`
+  - `FXCM_HOST_URL`
+- Redis (ізоляція local/prod):
+  - `FXCM_REDIS_HOST`
+  - `FXCM_REDIS_PORT`
+  - `FXCM_REDIS_DB`
+  - `FXCM_REDIS_NS`
+
+### Приклад dispatcher
+
+```dotenv
+# .env
+AI_ONE_ENV_FILE=.env.local
+```
+
+### Приклад локального профілю
+
+```dotenv
+# .env.local
+FXCM_USERNAME=demo_user
+FXCM_PASSWORD=demo_pass
+FXCM_CONNECTION=Demo
+FXCM_HOST_URL=http://www.fxcorporate.com/Hosts.jsp
+
+FXCM_REDIS_HOST=127.0.0.1
+FXCM_REDIS_PORT=6379
+FXCM_REDIS_DB=1
+FXCM_REDIS_NS=v3_local
+```
+
+### Приклад прод профілю
+
+```dotenv
+# .env.prod
+FXCM_USERNAME=prod_user
+FXCM_PASSWORD=prod_pass
+FXCM_CONNECTION=Real
+FXCM_HOST_URL=http://www.fxcorporate.com/Hosts.jsp
+
+FXCM_REDIS_HOST=redis.prod.local
+FXCM_REDIS_PORT=6380
+FXCM_REDIS_DB=0
+FXCM_REDIS_NS=v3_prod
+```
+
+### Перевірка, що профіль підхоплено
+
+У логах має бути:
+
+- Конектор: `ENV: dispatcher=... profile=...`
+- UI: `ENV: dispatcher=... profile=...`
+- Supervisor (python -m app.main): той самий лог перед стартом процесів
+
+Якщо бачите `ENV: профіль не завантажено`, перевірте наявність python-dotenv
+та правильний `AI_ONE_ENV_FILE` у `.env`.
 
 ### Режими stdio supervisor
 

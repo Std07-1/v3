@@ -31,6 +31,7 @@ from collections import deque
 from typing import Any
 
 from core.time_geom import normalize_bar
+from env_profile import load_env_profile
 
 try:
     import redis as redis_lib  # type: ignore
@@ -210,7 +211,27 @@ def _redis_config_from_cfg(cfg: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if not bool(raw.get("enabled", False)):
         return None
-    return raw
+    env_host = (os.environ.get("FXCM_REDIS_HOST") or "").strip() or None
+    env_port = (os.environ.get("FXCM_REDIS_PORT") or "").strip() or None
+    env_db = (os.environ.get("FXCM_REDIS_DB") or "").strip() or None
+    env_ns = (os.environ.get("FXCM_REDIS_NS") or "").strip() or None
+
+    merged = dict(raw)
+    if env_host:
+        merged["host"] = env_host
+    if env_port:
+        try:
+            merged["port"] = int(env_port)
+        except Exception:
+            pass
+    if env_db:
+        try:
+            merged["db"] = int(env_db)
+        except Exception:
+            pass
+    if env_ns:
+        merged["ns"] = env_ns
+    return merged
 
 
 def _redis_client_from_cfg(cfg: dict[str, Any]) -> tuple[Any, str] | None:
@@ -357,6 +378,15 @@ def _resolve_cfg_path(path: str | None, config_path: str | None) -> str | None:
         base = os.path.dirname(os.path.abspath(config_path))
         return os.path.join(base, path)
     return os.path.abspath(path)
+
+
+def _resolve_profile_config_path(base_dir: str) -> str | None:
+    env_path = (os.environ.get("AI_ONE_CONFIG_PATH") or "").strip()
+    if not env_path:
+        return None
+    if os.path.isabs(env_path):
+        return os.path.abspath(env_path)
+    return os.path.abspath(os.path.join(base_dir, "..", env_path))
 
 
 def _sym_dir(symbol: str) -> str:
@@ -1093,6 +1123,11 @@ def main() -> int:
         level=logging.DEBUG,
         format="%(asctime)s | %(levelname)s | %(message)s",
     )
+    report = load_env_profile()
+    if report.dispatcher_loaded or report.profile_loaded:
+        logging.info("ENV: dispatcher=%s profile=%s", report.dispatcher_path, report.profile_path)
+    else:
+        logging.info("ENV: профіль не завантажено")
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--data-root",
@@ -1118,7 +1153,8 @@ def main() -> int:
     if static_root_value == "static":
         static_root_value = os.path.join(base_dir, "static")
     static_root = os.path.abspath(static_root_value)
-    default_config = os.path.abspath(os.path.join(base_dir, "..", "config.json"))
+    env_config = _resolve_profile_config_path(base_dir)
+    default_config = env_config or os.path.abspath(os.path.join(base_dir, "..", "config.json"))
     config_path = os.path.abspath(args.config) if args.config else default_config
     data_root_value = args.data_root
     if not data_root_value:

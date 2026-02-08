@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from collections import deque
 from typing import Any, Deque, Dict, Optional, Tuple
@@ -332,6 +333,24 @@ def _parse_int_map(raw: Any) -> Dict[int, int]:
     return out
 
 
+def _env_str(key: str) -> Optional[str]:
+    value = os.environ.get(key)
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value or None
+
+
+def _env_int(key: str) -> Optional[int]:
+    raw = _env_str(key)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except Exception:
+        return None
+
+
 def build_redis_snapshot_writer(config_path: str) -> Optional[RedisSnapshotWriter]:
     try:
         with open(config_path, "r", encoding="utf-8") as f:
@@ -348,10 +367,10 @@ def build_redis_snapshot_writer(config_path: str) -> Optional[RedisSnapshotWrite
         logging.warning("Redis: пакет redis не встановлено, snapshots вимкнено")
         return None
 
-    host = str(raw.get("host", "127.0.0.1"))
-    port = int(raw.get("port", 6379))
-    db = int(raw.get("db", 0))
-    ns = str(raw.get("ns", "v3"))
+    host = _env_str("FXCM_REDIS_HOST") or str(raw.get("host", "127.0.0.1"))
+    port = _env_int("FXCM_REDIS_PORT") or int(raw.get("port", 6379))
+    db = _env_int("FXCM_REDIS_DB") or int(raw.get("db", 0))
+    ns = _env_str("FXCM_REDIS_NS") or str(raw.get("ns", "v3"))
     ttl_by_tf_s = _parse_int_map(raw.get("ttl_by_tf_s"))
     tail_n_by_tf_s = _parse_int_map(raw.get("tail_n_by_tf_s"))
 
@@ -392,10 +411,10 @@ def init_redis_snapshot(config_path: str, log_detail: bool = True) -> bool:
         logging.warning("REDIS_INIT_SKIP reason=redis_package_missing")
         return False
 
-    host = str(raw.get("host", "127.0.0.1"))
-    port = int(raw.get("port", 6379))
-    db = int(raw.get("db", 0))
-    ns = str(raw.get("ns", "v3"))
+    host = _env_str("FXCM_REDIS_HOST") or str(raw.get("host", "127.0.0.1"))
+    port = _env_int("FXCM_REDIS_PORT") or int(raw.get("port", 6379))
+    db = _env_int("FXCM_REDIS_DB") or int(raw.get("db", 0))
+    ns = _env_str("FXCM_REDIS_NS") or str(raw.get("ns", "v3"))
     ttl_by_tf_s = _parse_int_map(raw.get("ttl_by_tf_s"))
     tail_n_by_tf_s = _parse_int_map(raw.get("tail_n_by_tf_s"))
 

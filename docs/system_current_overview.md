@@ -4,7 +4,7 @@
 
 ## Короткий опис
 
-Система працює тільки з M5 як базовим потоком. На старті робиться warmup останніх M5 (history), далі щохвилини підтягування M5 tail (history). Похідні TF (>= 15m) будуються тільки якщо M5-діапазон повний. UI отримує дані через HTTP API: cold-load може йти з Redis snapshots з fallback на диск при малому tail, оновлення (/api/updates) читаються з SSOT JSONL через tail-only scan. UI клієнт абортує застарілі load-запити та ігнорує пізні відповіді. Scrollback працює як cover-until-satisfied: тригер лівого буфера ~2000 барів, підкидає по 5000 (фаворити x2) і повторює догрузку до покриття. UI API читає config.json з кешем mtime (для ui_debug/tf_allowlist/min_coldload_bars).
+Система працює тільки з M5 як базовим потоком. На старті робиться warmup останніх M5 (history), далі щохвилини підтягування M5 tail (history). Похідні TF (>= 15m) будуються тільки якщо M5-діапазон повний. UI отримує дані через HTTP API: cold-load може йти з Redis snapshots з fallback на диск при малому tail, оновлення (/api/updates) читаються з SSOT JSONL через tail-only scan. UI клієнт абортує застарілі load-запити та ігнорує пізні відповіді. Scrollback працює як cover-until-satisfied: тригер лівого буфера ~2000 барів, підкидає по 5000 (фаворити x2) і повторює догрузку до покриття. UI API читає config.json з кешем mtime (для ui_debug/tf_allowlist/min_coldload_bars). Профіль середовища визначається через `.env` -> `.env.local/.env.prod`, а Redis host/port/db/ns береться з FXCM_REDIS_* (env override).
 
 ## Геометрія часу (помітка для всіх розмов про свічки)
 
@@ -168,10 +168,16 @@ v3/
 |   |-- purge_broken_bars.py      # чистка пошкоджених JSONL
 |   `-- __init__.py
 |-- config.json                  # SSOT конфіг (календарі груп)
+|-- env_profile.py               # завантаження .env профілів
+|-- .env                         # dispatcher (AI_ONE_ENV_FILE)
+|-- .env.local                   # локальні FXCM/Redis параметри (секрети)
+|-- .env.prod                    # прод FXCM/Redis параметри (секрети)
 |-- data_v3/                     # SSOT дані (JSONL)
 |-- changelog.jsonl              # детальний журнал
 |-- CHANGELOG.md                 # короткий індекс
-|-- system_current_overview.md   # цей файл
+|-- docs/
+|   |-- system_current_overview.md   # цей файл
+|   `-- redis_snapshot_design.md     # дизайн Redis snapshots
 ```
 
 ## Ключові можливості

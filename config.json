@@ -1,8 +1,4 @@
 {
-    "user_id": "D251084463",
-    "password": "I4eav",
-    "url": "http://www.fxcorporate.com/Hosts.jsp",
-    "connection": "Demo",
     "symbol": "XAU/USD",
     "symbols": [
         "XAU/USD",
@@ -127,7 +123,7 @@
     "day_anchor_offset_s_alt2": 79200,
     "day_anchor_offset_s_d1": 75600,
     "day_anchor_offset_s_d1_alt": 79200,
-    "ui_debug": false,
+    "ui_debug": true,
     "group_logs_enabled": true,
     "redis_priming_enabled": true,
     "redis_priming_budget_s": 2,

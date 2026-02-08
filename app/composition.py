@@ -16,6 +16,14 @@ class ConfigError(Exception):
         self.stage = stage
 
 
+def _env_str(key: str) -> Optional[str]:
+    value = os.environ.get(key)
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value or None
+
+
 def load_config(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -236,10 +244,32 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
     logging.debug("Конфіг завантажено: %s", json.dumps(masked, ensure_ascii=False))
 
     try:
-        user_id = str(cfg["user_id"])
-        password = str(cfg["password"])
-        url = str(cfg.get("url", "http://www.fxcorporate.com/Hosts.jsp"))
-        connection = str(cfg.get("connection", "Demo"))
+        env_user_id = _env_str("FXCM_USERNAME")
+        env_password = _env_str("FXCM_PASSWORD")
+        env_connection = _env_str("FXCM_CONNECTION")
+        env_url = _env_str("FXCM_HOST_URL")
+
+        cfg_user_id = cfg.get("user_id")
+        cfg_password = cfg.get("password")
+        cfg_connection = cfg.get("connection")
+        cfg_url = cfg.get("url")
+
+        if env_user_id and cfg_user_id and str(cfg_user_id) != env_user_id:
+            logging.warning("Config: FXCM_USERNAME відрізняється від user_id у config.json; беру ENV")
+        if env_password and cfg_password and str(cfg_password) != env_password:
+            logging.warning("Config: FXCM_PASSWORD відрізняється від password у config.json; беру ENV")
+        if env_connection and cfg_connection and str(cfg_connection) != env_connection:
+            logging.warning("Config: FXCM_CONNECTION відрізняється від connection у config.json; беру ENV")
+        if env_url and cfg_url and str(cfg_url) != env_url:
+            logging.warning("Config: FXCM_HOST_URL відрізняється від url у config.json; беру ENV")
+
+        user_id = env_user_id or (str(cfg_user_id) if cfg_user_id is not None else None)
+        password = env_password or (str(cfg_password) if cfg_password is not None else None)
+        if not user_id or not password:
+            raise ConfigError("validate")
+
+        url = env_url or str(cfg.get("url", "http://www.fxcorporate.com/Hosts.jsp"))
+        connection = env_connection or str(cfg.get("connection", "Demo"))
 
         symbols_raw = cfg.get("symbols", None)
         if isinstance(symbols_raw, list) and symbols_raw:
@@ -335,6 +365,8 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         calendar_by_symbol_raw = cfg.get("market_calendar_by_symbol", None)
         calendar_by_group_raw = cfg.get("market_calendar_by_group", None)
         calendar_symbol_groups_raw = cfg.get("market_calendar_symbol_groups", None)
+    except ConfigError:
+        raise
     except Exception as exc:
         raise ConfigError("parse") from exc
 

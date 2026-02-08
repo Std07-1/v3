@@ -3,9 +3,12 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import os
 import time
+from pathlib import Path
 from typing import Optional
 
+from env_profile import load_env_profile
 from app.composition import ConfigError, build_connector
 from app.lifecycle import run_with_shutdown
 from runtime.ingest.market_calendar import MarketCalendar
@@ -18,6 +21,23 @@ def setup_logging(verbose: bool) -> None:
         level=level,
         format="%(asctime)s | %(levelname)s | %(message)s",
     )
+
+
+def _resolve_config_path(raw_path: str | None) -> str:
+    base_dir = Path(__file__).resolve().parents[1]
+    raw_value = (raw_path or "").strip()
+    if not raw_value:
+        return str((base_dir / "config.json").resolve())
+    if Path(raw_value).is_absolute():
+        return str(Path(raw_value).resolve())
+    return str((base_dir / raw_value).resolve())
+
+
+def _pick_config_path() -> str:
+    env_path = (os.environ.get("AI_ONE_CONFIG_PATH") or "").strip()
+    if env_path:
+        return _resolve_config_path(env_path)
+    return _resolve_config_path("config.json")
 
 
 def _load_retry_config(config_path: str) -> tuple[int, int, int]:
@@ -180,10 +200,17 @@ def _build_with_retry(config_path: str) -> tuple[object, callable | None]:
 
 def main() -> int:
     setup_logging(verbose=False)
+    report = load_env_profile()
+    if report.dispatcher_loaded or report.profile_loaded:
+        logging.info("ENV: dispatcher=%s profile=%s", report.dispatcher_path, report.profile_path)
+    else:
+        logging.info("ENV: профіль не завантажено")
+    config_path = _pick_config_path()
+    logging.info("Config: %s", config_path)
     logging.info("Запуск PollingConnectorB")
-    init_redis_snapshot("config.json", log_detail=True)
+    init_redis_snapshot(config_path, log_detail=True)
     try:
-        runner, cleanup_fn = _build_with_retry("config.json")
+        runner, cleanup_fn = _build_with_retry(config_path)
     except ConfigError:
         return 2
     except KeyboardInterrupt:

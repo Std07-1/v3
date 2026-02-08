@@ -25,6 +25,9 @@ exit_gates/
 /CHANGELOG.md
 /rebuild_state.json
 
+# Секретні документи
+/docs/Host Contract - Capability Sheet.md
+
 # GitHub/VSCode
 /.github/
 /.vscode/
