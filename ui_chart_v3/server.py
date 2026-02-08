@@ -56,6 +56,8 @@ DEFAULT_MIN_COLDLOAD_BARS = {300: 300, 900: 200, 1800: 150, 3600: 100}
 
 _redis_log_throttle: dict[str, float] = {}
 _redis_client_cache: dict[str, Any] = {}
+_cfg_cache: dict[str, Any] = {"data": {}, "mtime": None, "next_check_ts": 0.0}
+CFG_CACHE_CHECK_INTERVAL_S = 0.5
 
 
 def _tf_allowlist_from_cfg(cfg: dict[str, Any]) -> set[int]:
@@ -262,6 +264,38 @@ def _redis_get_json(client: Any, key: str) -> tuple[dict[str, Any] | None, int |
     return payload, ttl_left, None
 
 
+def _load_cfg_cached(config_path: str | None) -> dict[str, Any]:
+    if not config_path:
+        return {}
+    now = time.time()
+    if now < float(_cfg_cache.get("next_check_ts", 0.0)):
+        cached = _cfg_cache.get("data")
+        if isinstance(cached, dict):
+            return cached
+        return {}
+    _cfg_cache["next_check_ts"] = now + CFG_CACHE_CHECK_INTERVAL_S
+    try:
+        if not os.path.isfile(config_path):
+            _cfg_cache["data"] = {}
+            _cfg_cache["mtime"] = None
+            return {}
+        mtime = os.path.getmtime(config_path)
+        if _cfg_cache.get("mtime") == mtime:
+            cached = _cfg_cache.get("data")
+            if isinstance(cached, dict):
+                return cached
+            return {}
+        with open(config_path, encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+        _cfg_cache["data"] = data
+        _cfg_cache["mtime"] = mtime
+        return data
+    except Exception:
+        return {}
+
+
 def _redis_payload_to_bars(
     payload: dict[str, Any],
     symbol: str,
@@ -391,6 +425,64 @@ def _read_jsonl_filtered(
 
     out = list(buf)
     out.sort(key=lambda x: x.get("open_time_ms", 0))
+    return out
+
+
+def _iter_lines_reverse(path: str):
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            pos = f.tell()
+            buf = b""
+            chunk = 8192
+            while pos > 0:
+                step = min(chunk, pos)
+                pos -= step
+                f.seek(pos)
+                buf = f.read(step) + buf
+                while b"\n" in buf:
+                    idx = buf.rfind(b"\n")
+                    line = buf[idx + 1 :]
+                    buf = buf[:idx]
+                    yield line
+            if buf:
+                yield buf
+    except Exception:
+        return
+
+
+def _read_jsonl_tail_filtered(
+    paths: list[str],
+    since_open_ms: int | None,
+    to_open_ms: int | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+    out: list[dict[str, Any]] = []
+    for p in reversed(paths):
+        for raw in _iter_lines_reverse(p):
+            if len(out) >= limit:
+                break
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw.decode("utf-8"))
+            except Exception:
+                continue
+            open_ms = obj.get("open_time_ms")
+            if not isinstance(open_ms, int):
+                continue
+            if to_open_ms is not None and open_ms > to_open_ms:
+                continue
+            if since_open_ms is not None and open_ms <= since_open_ms:
+                out.reverse()
+                return out
+            out.append(obj)
+        if len(out) >= limit:
+            break
+    out.reverse()
     return out
 
 
@@ -626,13 +718,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             try:
                 ui_debug = True
                 config_path: str | None = getattr(self.server, "config_path", None)  # type: ignore[attr-defined]
-                if config_path and os.path.isfile(config_path):
-                    try:
-                        with open(config_path, encoding="utf-8") as f:
-                            cfg = json.load(f)
-                        ui_debug = _parse_bool(cfg.get("ui_debug", True), True)
-                    except Exception:
-                        ui_debug = True
+                if config_path:
+                    cfg = _load_cfg_cached(config_path)
+                    ui_debug = _parse_bool(cfg.get("ui_debug", True), True)
                 host, port = self.client_address
                 user_agent = self.headers.get("User-Agent", "")
                 referer = self.headers.get("Referer", "")
@@ -679,12 +767,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         path = parsed.path.rstrip("/") or "/"
 
         cfg: dict[str, Any] = {}
-        if config_path and os.path.isfile(config_path):
-            try:
-                with open(config_path, encoding="utf-8") as f:
-                    cfg = json.load(f)
-            except Exception:
-                cfg = {}
+        if config_path:
+            cfg = _load_cfg_cached(config_path)
 
         tf_allowlist = _tf_allowlist_from_cfg(cfg)
         min_coldload_bars = _min_coldload_bars_from_cfg(cfg)
@@ -716,7 +800,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             events: list[dict[str, Any]] = []
             parts = _list_parts(data_root, symbol, tf_s)
             if parts:
-                bars = _read_jsonl_filtered(parts, None, None, limit)
+                bars = _read_jsonl_tail_filtered(parts, None, None, limit)
                 lwc = _bars_to_lwc(bars)
                 for b in lwc:
                     key = (symbol, int(b.get("tf_s", 0)), int(b.get("open_time_ms", 0)))
@@ -950,7 +1034,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                             ),
                         )
 
-            bars = _read_jsonl_filtered(parts, since_open_ms, to_open_ms, limit)
+            use_tail = path == "/api/latest" or cold_load or since_open_ms is not None
+            if use_tail:
+                bars = _read_jsonl_tail_filtered(parts, since_open_ms, to_open_ms, limit)
+            else:
+                bars = _read_jsonl_filtered(parts, since_open_ms, to_open_ms, limit)
             lwc = _bars_to_lwc(bars)
             for b in lwc:
                 issues = _validate_bar_lwc(b, tf_allowlist)

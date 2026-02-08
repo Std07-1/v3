@@ -1436,11 +1436,14 @@ class MultiSymbolRunner:
         history_circuit_log_interval_s: int,
         history_symbols_sample_n: int,
         history_network_error_escalate_s: int,
+        group_logs_enabled: bool = True,
     ) -> None:
         self._engines = engines
         self._safety_delay_s = max((e._safety_delay_s for e in engines), default=0)  # noqa: SLF001
-        for e in self._engines:
-            e.enable_group_logging()
+        self._group_logs_enabled = bool(group_logs_enabled)
+        if self._group_logs_enabled:
+            for e in self._engines:
+                e.enable_group_logging()
         self._calendar_state_by_symbol: Dict[str, bool] = {}
         self._history_summary_interval_s = max(60, int(history_summary_interval_s))
         self._history_still_failing_interval_s = max(60, int(history_still_failing_interval_s))

@@ -35,6 +35,8 @@ const elHudPrice = document.getElementById('hud-price');
 let controller = null;
 let lastOpenMs = null;
 let pollTimer = null;
+let loadReqId = 0;
+let loadAbort = null;
 let currentTheme = 'light';
 let uiDebugEnabled = true;
 let lastHudSymbol = null;
@@ -196,8 +198,8 @@ function syncHudMenuWidth() {
   elHud.parentElement.style.setProperty('--hud-width', `${width}px`);
 }
 
-async function apiGet(url) {
-  const r = await fetch(url, { cache: 'no-store' });
+async function apiGet(url, opts = {}) {
+  const r = await fetch(url, { cache: 'no-store', signal: opts.signal });
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return await r.json();
 }
@@ -534,6 +536,11 @@ async function loadSymbols() {
 }
 
 async function loadBarsFull(forceDisk = false) {
+  const reqId = ++loadReqId;
+  if (loadAbort) {
+    loadAbort.abort();
+  }
+  loadAbort = new AbortController();
   const symbol = elSymbol.value;
   const tf = parseInt(elTf.value, 10);
   const limit = 20000;
@@ -546,7 +553,14 @@ async function loadBarsFull(forceDisk = false) {
   } else {
     url += '&prefer_redis=1';
   }
-  const data = await apiGet(url);
+  let data = null;
+  try {
+    data = await apiGet(url, { signal: loadAbort.signal });
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+    throw e;
+  }
+  if (reqId !== loadReqId) return;
   if (data && data.boot_id) {
     bootId = data.boot_id;
   }
