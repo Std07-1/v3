@@ -60,7 +60,11 @@ let scrollbackInFlight = false;
 let scrollbackReachedStart = false;
 let scrollbackLastReqMs = 0;
 let scrollbackAbort = null;
-let prefetchStarted = false;
+let scrollbackPending = false;
+let scrollbackLatestRange = null;
+const cacheLru = new Map();
+let updateStateLastCleanupMs = 0;
+let favoritesState = null;
 
 const RIGHT_OFFSET_PX = 48;
 const THEME_KEY = 'ui_chart_theme';
@@ -68,9 +72,15 @@ const CANDLE_STYLE_KEY = 'ui_chart_candle_style';
 const SYMBOL_KEY = 'ui_chart_symbol';
 const TF_KEY = 'ui_chart_tf';
 const LAYOUT_SAVE_KEY = 'ui_chart_layout_save';
-const MAX_RENDER_BARS = 20000;
+const MAX_RENDER_BARS_ACTIVE = 60000;
+const MAX_RENDER_BARS_WARM = 20000;
+const WARM_LRU_LIMIT = 6;
+const UPDATE_STATE_TTL_MS = 30 * 60 * 1000;
+const UPDATE_STATE_CLEANUP_INTERVAL_MS = 60000;
+const FAVORITES_KEY = 'ui_chart_favorites_v1';
 const SCROLLBACK_TRIGGER_BARS = 80;
 const SCROLLBACK_MIN_INTERVAL_MS = 1200;
+const SCROLLBACK_CHUNK_MAX = 8000;
 const SCROLLBACK_CHUNK_BY_TF = {
   300: 1000,
   900: 1000,
@@ -181,6 +191,88 @@ function saveLayoutValue(key, value) {
   }
 }
 
+function safeParseJson(raw, fallback) {
+  if (!raw) return fallback;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed;
+  } catch (e) {
+    // ignore parse errors
+  }
+  return fallback;
+}
+
+function loadFavoritesState() {
+  try {
+    const raw = localStorage.getItem(FAVORITES_KEY);
+    const parsed = safeParseJson(raw, { symbols: [], tfs: [] });
+    const symbols = Array.isArray(parsed.symbols)
+      ? parsed.symbols.map((v) => String(v)).filter((v) => v)
+      : [];
+    const tfs = Array.isArray(parsed.tfs)
+      ? parsed.tfs.map((v) => String(v)).filter((v) => v)
+      : [];
+    return { symbols, tfs };
+  } catch (e) {
+    return { symbols: [], tfs: [] };
+  }
+}
+
+function saveFavoritesState(nextState) {
+  favoritesState = nextState;
+  try {
+    localStorage.setItem(FAVORITES_KEY, JSON.stringify(nextState));
+  } catch (e) {
+    // ignore storage errors
+  }
+}
+
+function getFavoriteSymbols() {
+  return favoritesState && Array.isArray(favoritesState.symbols) ? favoritesState.symbols : [];
+}
+
+function getFavoriteTfs() {
+  return favoritesState && Array.isArray(favoritesState.tfs) ? favoritesState.tfs : [];
+}
+
+function normalizeFavoritesSymbols(available) {
+  if (!Array.isArray(available)) return;
+  const allowed = new Set(available.map((v) => String(v)));
+  const current = getFavoriteSymbols();
+  const filtered = current.filter((v) => allowed.has(String(v)));
+  if (filtered.length !== current.length) {
+    saveFavoritesState({ symbols: filtered, tfs: getFavoriteTfs() });
+  }
+}
+
+function normalizeFavoritesTfs(available) {
+  if (!Array.isArray(available)) return;
+  const allowed = new Set(available.map((v) => String(v)));
+  const current = getFavoriteTfs();
+  const filtered = current.filter((v) => allowed.has(String(v)));
+  if (filtered.length !== current.length) {
+    saveFavoritesState({ symbols: getFavoriteSymbols(), tfs: filtered });
+  }
+}
+
+function toggleFavoriteSymbol(symbol) {
+  const value = String(symbol || '');
+  if (!value) return;
+  const current = getFavoriteSymbols();
+  const exists = current.includes(value);
+  const next = exists ? current.filter((v) => v !== value) : current.concat(value);
+  saveFavoritesState({ symbols: next, tfs: getFavoriteTfs() });
+}
+
+function toggleFavoriteTf(tfValue) {
+  const value = String(tfValue || '');
+  if (!value) return;
+  const current = getFavoriteTfs();
+  const exists = current.includes(value);
+  const next = exists ? current.filter((v) => v !== value) : current.concat(value);
+  saveFavoritesState({ symbols: getFavoriteSymbols(), tfs: next });
+}
+
 function updateStreamingIndicator() {
   if (!elHudStream) return;
   const now = Date.now();
@@ -266,6 +358,7 @@ const REQUIRED_CONTROLLER_METHODS = [
   'getVisibleLogicalRange',
   'setVisibleLogicalRange',
   'onVisibleLogicalRangeChange',
+  'barsInLogicalRange',
 ];
 
 function ensureControllerContract(ctrl) {
@@ -392,6 +485,78 @@ function updateToolbarValue(selectId) {
   updateHudValues();
 }
 
+function getSelectOptions(select) {
+  return Array.from(select?.options || []);
+}
+
+function isFavoriteValue(selectId, value) {
+  if (selectId === 'symbol') return getFavoriteSymbols().includes(String(value));
+  if (selectId === 'tf') return getFavoriteTfs().includes(String(value));
+  return false;
+}
+
+function splitOptionsByFavorites(selectId, options) {
+  const fav = [];
+  const rest = [];
+  for (const opt of options) {
+    if (isFavoriteValue(selectId, opt.value)) {
+      fav.push(opt);
+    } else {
+      rest.push(opt);
+    }
+  }
+  return { fav, rest };
+}
+
+function appendMenuSection(menu, title) {
+  const section = document.createElement('div');
+  section.className = 'tool-menu-section';
+  section.textContent = title;
+  menu.appendChild(section);
+}
+
+function createMenuOptionButton(selectId, select, opt, closeMenu) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'tool-option';
+  btn.dataset.value = opt.value;
+  const isFav = isFavoriteValue(selectId, opt.value);
+  if (isFav) btn.classList.add('is-fav');
+  if (opt.value === select.value) btn.classList.add('active');
+
+  const label = document.createElement('span');
+  label.className = 'tool-option-label';
+  label.textContent = opt.textContent;
+  btn.appendChild(label);
+
+  const favBtn = document.createElement('span');
+  favBtn.className = 'fav-btn';
+  favBtn.textContent = 'fav';
+  favBtn.title = isFav ? 'Зняти з улюблених' : 'Додати в улюблені';
+  if (!isFav) favBtn.classList.add('is-off');
+  favBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (selectId === 'symbol') {
+      toggleFavoriteSymbol(opt.value);
+    } else if (selectId === 'tf') {
+      toggleFavoriteTf(opt.value);
+    }
+    buildToolbarMenu(selectId);
+    if (selectId === 'symbol' && elHudMenuSymbol) buildHudMenu(elSymbol, elHudMenuSymbol);
+    if (selectId === 'tf' && elHudMenuTf) buildHudMenu(elTf, elHudMenuTf);
+  });
+  btn.appendChild(favBtn);
+
+  btn.addEventListener('click', () => {
+    select.value = opt.value;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    if (typeof closeMenu === 'function') closeMenu();
+  });
+
+  return btn;
+}
+
 function buildToolbarMenu(selectId) {
   const select = document.getElementById(selectId);
   const group = getToolbarGroup(selectId);
@@ -402,7 +567,7 @@ function buildToolbarMenu(selectId) {
     return;
   }
   menu.innerHTML = '';
-  const options = Array.from(select.options || []);
+  const options = getSelectOptions(select);
   if (options.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'tool-option';
@@ -411,28 +576,29 @@ function buildToolbarMenu(selectId) {
     updateToolbarValue(selectId);
     return;
   }
-  for (const opt of options) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'tool-option';
-    btn.dataset.value = opt.value;
-    btn.textContent = opt.textContent;
-    if (opt.value === select.value) btn.classList.add('active');
-    btn.addEventListener('click', () => {
-      select.value = opt.value;
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-      updateToolbarValue(selectId);
-      const groupLocal = getToolbarGroup(selectId);
-      if (groupLocal) groupLocal.classList.remove('open');
-    });
-    menu.appendChild(btn);
+  const { fav, rest } = splitOptionsByFavorites(selectId, options);
+  const closeMenu = () => {
+    const groupLocal = getToolbarGroup(selectId);
+    if (groupLocal) groupLocal.classList.remove('open');
+  };
+  if (fav.length > 0) {
+    appendMenuSection(menu, 'Улюблені');
+    for (const opt of fav) {
+      menu.appendChild(createMenuOptionButton(selectId, select, opt, closeMenu));
+    }
+  }
+  if (rest.length > 0) {
+    if (fav.length > 0) appendMenuSection(menu, 'Усі');
+    for (const opt of rest) {
+      menu.appendChild(createMenuOptionButton(selectId, select, opt, closeMenu));
+    }
   }
   updateToolbarValue(selectId);
 }
 
 function buildHudMenu(select, menu) {
   menu.innerHTML = '';
-  const options = Array.from(select.options || []);
+  const options = getSelectOptions(select);
   if (options.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'tool-option';
@@ -440,19 +606,19 @@ function buildHudMenu(select, menu) {
     menu.appendChild(empty);
     return;
   }
-  for (const opt of options) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'tool-option';
-    btn.dataset.value = opt.value;
-    btn.textContent = opt.textContent;
-    if (opt.value === select.value) btn.classList.add('active');
-    btn.addEventListener('click', () => {
-      select.value = opt.value;
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-      closeHudMenus();
-    });
-    menu.appendChild(btn);
+  const selectId = select.id;
+  const { fav, rest } = splitOptionsByFavorites(selectId, options);
+  if (fav.length > 0) {
+    appendMenuSection(menu, 'Улюблені');
+    for (const opt of fav) {
+      menu.appendChild(createMenuOptionButton(selectId, select, opt, closeHudMenus));
+    }
+  }
+  if (rest.length > 0) {
+    if (fav.length > 0) appendMenuSection(menu, 'Усі');
+    for (const opt of rest) {
+      menu.appendChild(createMenuOptionButton(selectId, select, opt, closeHudMenus));
+    }
   }
 }
 
@@ -505,13 +671,27 @@ function initToolbars() {
   syncHudMenuWidth();
 }
 
-function cycleSelectValue(select, direction) {
-  if (!select || !select.options || select.options.length === 0) return;
-  const total = select.options.length;
-  const current = Math.max(0, select.selectedIndex);
-  const next = (current + direction + total) % total;
-  select.selectedIndex = next;
+function cycleSelectValue(select, direction, preferredValues = []) {
+  if (!select) return;
+  const options = getSelectOptions(select);
+  if (options.length === 0) return;
+  const allowed = Array.isArray(preferredValues)
+    ? preferredValues.filter((v) => options.some((opt) => opt.value === String(v)))
+    : [];
+  const values = allowed.length > 0 ? allowed : options.map((opt) => opt.value);
+  if (values.length === 0) return;
+  const currentValue = select.value;
+  let index = values.indexOf(currentValue);
+  if (index < 0) index = 0;
+  else index = (index + direction + values.length) % values.length;
+  select.value = values[index];
   select.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function getPreferredValuesForSelect(selectId) {
+  if (selectId === 'symbol') return getFavoriteSymbols();
+  if (selectId === 'tf') return getFavoriteTfs();
+  return [];
 }
 
 function attachHudWheelControls() {
@@ -519,7 +699,7 @@ function attachHudWheelControls() {
     elHudSymbol.addEventListener('wheel', (event) => {
       event.preventDefault();
       const direction = event.deltaY > 0 ? 1 : -1;
-      cycleSelectValue(elSymbol, direction);
+      cycleSelectValue(elSymbol, direction, getPreferredValuesForSelect('symbol'));
     }, { passive: false });
     elHudSymbol.addEventListener('click', (event) => {
       event.preventDefault();
@@ -531,7 +711,7 @@ function attachHudWheelControls() {
     elHudTf.addEventListener('wheel', (event) => {
       event.preventDefault();
       const direction = event.deltaY > 0 ? 1 : -1;
-      cycleSelectValue(elTf, direction);
+      cycleSelectValue(elTf, direction, getPreferredValuesForSelect('tf'));
     }, { passive: false });
     elHudTf.addEventListener('click', (event) => {
       event.preventDefault();
@@ -562,6 +742,7 @@ async function loadSymbols() {
   if (preferred && Array.from(elSymbol.options).some((opt) => opt.value === preferred)) {
     elSymbol.value = preferred;
   }
+  normalizeFavoritesSymbols(syms.length ? syms : ['XAU/USD']);
   buildToolbarMenu('symbol');
   updateHudValues();
   return syms;
@@ -578,6 +759,94 @@ function rebuildBarsIndex() {
   firstOpenMs = barsStore.length ? barsStore[0].open_time_ms : null;
 }
 
+function getTfOptionsList() {
+  const values = getSelectOptions(elTf).map((opt) => Number(opt.value));
+  return values.filter((v) => Number.isFinite(v) && v > 0);
+}
+
+function getNeighborTf(tf) {
+  const list = getTfOptionsList();
+  if (!Number.isFinite(tf) || list.length === 0) return null;
+  const idx = list.findIndex((v) => v === tf);
+  if (idx < 0) return null;
+  if (idx + 1 < list.length) return list[idx + 1];
+  if (idx - 1 >= 0) return list[idx - 1];
+  return null;
+}
+
+function getPinnedCacheKeys() {
+  const pinned = new Set();
+  if (currentCacheKey) pinned.add(currentCacheKey);
+  const symbol = elSymbol?.value;
+  const tf = readSelectedTf();
+  const neighborTf = getNeighborTf(tf);
+  if (symbol && Number.isFinite(neighborTf)) {
+    pinned.add(makeCacheKey(symbol, neighborTf));
+  }
+  return pinned;
+}
+
+function trimBarsForLimit(bars, limit) {
+  if (!Array.isArray(bars)) return [];
+  if (!Number.isFinite(limit) || limit <= 0) return bars.slice();
+  return bars.length > limit ? bars.slice(-limit) : bars.slice();
+}
+
+function touchCacheKey(key) {
+  if (!key) return;
+  if (cacheLru.has(key)) cacheLru.delete(key);
+  cacheLru.set(key, Date.now());
+}
+
+function dropUpdateStateForKey(cacheKey) {
+  if (!cacheKey) return;
+  const prefix = `${cacheKey}|`;
+  for (const key of updateStateByKey.keys()) {
+    if (key.startsWith(prefix)) updateStateByKey.delete(key);
+  }
+}
+
+function normalizeWarmCaches(pinned) {
+  for (const [key, entry] of uiCacheByKey.entries()) {
+    if (pinned.has(key)) continue;
+    const bars = Array.isArray(entry.bars) ? entry.bars : [];
+    if (bars.length > MAX_RENDER_BARS_WARM) {
+      entry.bars = bars.slice(-MAX_RENDER_BARS_WARM);
+    }
+  }
+}
+
+function evictWarmCaches(pinned) {
+  const nonPinnedKeys = () => Array.from(cacheLru.keys()).filter((key) => !pinned.has(key));
+  let warmKeys = nonPinnedKeys();
+  while (warmKeys.length > WARM_LRU_LIMIT) {
+    const key = warmKeys.shift();
+    if (!key) break;
+    uiCacheByKey.delete(key);
+    cacheLru.delete(key);
+    dropUpdateStateForKey(key);
+    warmKeys = nonPinnedKeys();
+  }
+}
+
+function cleanupUpdateStateCache(allowedPairs) {
+  const now = Date.now();
+  if (now - updateStateLastCleanupMs < UPDATE_STATE_CLEANUP_INTERVAL_MS) return;
+  updateStateLastCleanupMs = now;
+  const allowed = allowedPairs || new Set();
+  for (const [key, value] of updateStateByKey.entries()) {
+    const ts = Number(value?.ts || 0);
+    const pairKey = value?.pairKey ? String(value.pairKey) : '';
+    if (ts && now - ts > UPDATE_STATE_TTL_MS) {
+      updateStateByKey.delete(key);
+      continue;
+    }
+    if (pairKey && !allowed.has(pairKey)) {
+      updateStateByKey.delete(key);
+    }
+  }
+}
+
 function makeCacheKey(symbol, tf) {
   return `${symbol}|${tf}`;
 }
@@ -590,14 +859,19 @@ function saveCacheCurrent() {
     : null);
   if (!key) return;
   if (!barsStore.length) return;
+  const trimmedBars = trimBarsForLimit(barsStore, MAX_RENDER_BARS_ACTIVE);
   uiCacheByKey.set(key, {
-    bars: barsStore.slice(),
+    bars: trimmedBars,
     lastOpenMs,
     lastBarCloseMs,
     updatesSeqCursor,
     scrollbackReachedStart,
   });
+  touchCacheKey(key);
   currentCacheKey = key;
+  const pinned = getPinnedCacheKeys();
+  normalizeWarmCaches(pinned);
+  evictWarmCaches(pinned);
 }
 
 function storeCacheFor(symbol, tf, bars) {
@@ -605,43 +879,26 @@ function storeCacheFor(symbol, tf, bars) {
   if (!Array.isArray(bars) || bars.length === 0) return;
   const key = makeCacheKey(symbol, tf);
   if (uiCacheByKey.has(key)) return;
-  const last = bars[bars.length - 1];
+  const trimmedBars = trimBarsForLimit(bars, MAX_RENDER_BARS_WARM);
+  const last = trimmedBars[trimmedBars.length - 1];
   const lastOpen = Number.isFinite(last.open_time_ms) ? last.open_time_ms : null;
   let lastClose = Number.isFinite(last.close_time_ms) ? last.close_time_ms : null;
   if (lastClose == null && lastOpen != null) {
     lastClose = lastOpen + tf * 1000 - 1;
   }
   uiCacheByKey.set(key, {
-    bars: bars.slice(),
+    bars: trimmedBars,
     lastOpenMs: lastOpen,
     lastBarCloseMs: lastClose,
     updatesSeqCursor: null,
     scrollbackReachedStart: false,
   });
+  touchCacheKey(key);
+  const pinned = getPinnedCacheKeys();
+  normalizeWarmCaches(pinned);
+  evictWarmCaches(pinned);
 }
 
-async function prefetchAllSymbols(symbols) {
-  if (prefetchStarted) return;
-  if (!Array.isArray(symbols) || symbols.length === 0) return;
-  prefetchStarted = true;
-  const tf = readSelectedTf();
-  const limit = MAX_RENDER_BARS;
-  const current = elSymbol.value;
-  for (const symbol of symbols) {
-    if (!symbol || symbol === current) continue;
-    const key = makeCacheKey(symbol, tf);
-    if (uiCacheByKey.has(key)) continue;
-    const url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${limit}&force_disk=1`;
-    try {
-      const data = await apiGet(url);
-      const bars = Array.isArray(data?.bars) ? data.bars : [];
-      storeCacheFor(symbol, tf, bars);
-    } catch (e) {
-      // ignore prefetch errors
-    }
-    await new Promise((resolve) => setTimeout(resolve, 120));
-  }
-}
 
 function restoreCacheFor(symbol, tf) {
   const key = makeCacheKey(symbol, tf);
@@ -664,6 +921,8 @@ function restoreCacheFor(symbol, tf) {
   lastBarCloseMs = Number.isFinite(cached.lastBarCloseMs) ? cached.lastBarCloseMs : null;
   updatesSeqCursor = Number.isFinite(cached.updatesSeqCursor) ? cached.updatesSeqCursor : null;
   scrollbackReachedStart = Boolean(cached.scrollbackReachedStart);
+  scrollbackPending = false;
+  scrollbackLatestRange = null;
   lastRedisSource = 'cache';
   lastRedisPayloadMs = null;
   lastRedisTtlS = null;
@@ -678,13 +937,17 @@ function restoreCacheFor(symbol, tf) {
   }
   setStatus(`ok · cache · tf=${tf}s · bars=${bars.length}`);
   currentCacheKey = key;
+  touchCacheKey(key);
+  const pinned = getPinnedCacheKeys();
+  normalizeWarmCaches(pinned);
+  evictWarmCaches(pinned);
   return true;
 }
 
 function setBarsStore(bars) {
   barsStore = Array.isArray(bars) ? bars.slice() : [];
-  if (barsStore.length > MAX_RENDER_BARS) {
-    barsStore = barsStore.slice(-MAX_RENDER_BARS);
+  if (barsStore.length > MAX_RENDER_BARS_ACTIVE) {
+    barsStore = barsStore.slice(-MAX_RENDER_BARS_ACTIVE);
   }
   rebuildBarsIndex();
 }
@@ -701,14 +964,26 @@ function upsertBarToStore(bar) {
   if (barsStore.length > 1 && Number.isFinite(lastOpenMs) && openMs < lastOpenMs) {
     barsStore.sort((a, b) => a.open_time_ms - b.open_time_ms);
   }
-  if (barsStore.length > MAX_RENDER_BARS) {
-    barsStore = barsStore.slice(-MAX_RENDER_BARS);
+  if (barsStore.length > MAX_RENDER_BARS_ACTIVE) {
+    barsStore = barsStore.slice(-MAX_RENDER_BARS_ACTIVE);
   }
   rebuildBarsIndex();
 }
 
 function getScrollbackChunk(tf) {
   return SCROLLBACK_CHUNK_BY_TF[tf] || 0;
+}
+
+function getAdaptiveScrollbackChunk(tf, range) {
+  const base = getScrollbackChunk(tf);
+  if (!base) return 0;
+  const from = Number(range?.from);
+  const to = Number(range?.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return base;
+  const visibleBars = Math.max(0, Math.ceil(to - from));
+  const boost = Math.min(visibleBars, base * 3);
+  const chunk = base + boost;
+  return Math.min(SCROLLBACK_CHUNK_MAX, chunk);
 }
 
 function mergeOlderBars(olderBars, prevRange) {
@@ -730,7 +1005,7 @@ function mergeOlderBars(olderBars, prevRange) {
     return;
   }
   added.sort((a, b) => a.open_time_ms - b.open_time_ms);
-  const space = Math.max(0, MAX_RENDER_BARS - barsStore.length);
+  const space = Math.max(0, MAX_RENDER_BARS_ACTIVE - barsStore.length);
   const take = space > 0 ? added.slice(-space) : [];
   if (take.length === 0) return;
   barsStore = take.concat(barsStore);
@@ -748,13 +1023,16 @@ function mergeOlderBars(olderBars, prevRange) {
   saveCacheCurrent();
 }
 
-async function loadScrollbackChunk() {
+async function loadScrollbackChunk(range) {
   const tf = readSelectedTf();
-  const chunk = getScrollbackChunk(tf);
+  const chunk = getAdaptiveScrollbackChunk(tf, range);
   if (!chunk) return;
   if (!Number.isFinite(firstOpenMs)) return;
-  if (barsStore.length >= MAX_RENDER_BARS) return;
+  if (barsStore.length >= MAX_RENDER_BARS_ACTIVE) return;
   if (scrollbackInFlight || scrollbackReachedStart) return;
+  const space = Math.max(0, MAX_RENDER_BARS_ACTIVE - barsStore.length);
+  const limit = Math.min(chunk, space);
+  if (limit <= 0) return;
   const now = Date.now();
   if (now - scrollbackLastReqMs < SCROLLBACK_MIN_INTERVAL_MS) return;
   scrollbackLastReqMs = now;
@@ -765,11 +1043,11 @@ async function loadScrollbackChunk() {
   scrollbackAbort = new AbortController();
   const symbol = elSymbol.value;
   const beforeOpenMs = firstOpenMs - 1;
-  const prevRange = controller && typeof controller.getVisibleLogicalRange === 'function'
+  const prevRange = range || (controller && typeof controller.getVisibleLogicalRange === 'function'
     ? controller.getVisibleLogicalRange()
-    : null;
+    : null);
   try {
-    const url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${chunk}`
+    const url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${limit}`
       + `&to_open_ms=${beforeOpenMs}&force_disk=1`;
     const data = await apiGet(url, { signal: scrollbackAbort.signal });
     const olderBars = Array.isArray(data?.bars) ? data.bars : [];
@@ -778,6 +1056,12 @@ async function loadScrollbackChunk() {
     if (e && e.name === 'AbortError') return;
   } finally {
     scrollbackInFlight = false;
+    if (scrollbackPending) {
+      scrollbackPending = false;
+      if (!scrollbackReachedStart && barsStore.length < MAX_RENDER_BARS_ACTIVE) {
+        loadScrollbackChunk(scrollbackLatestRange);
+      }
+    }
   }
 }
 
@@ -818,12 +1102,24 @@ async function fetchNewerBarsFromDisk() {
 
 function handleVisibleRangeChange(range) {
   if (!range || !Number.isFinite(range.from)) return;
-  if (scrollbackInFlight || scrollbackReachedStart) return;
+  if (scrollbackReachedStart) return;
   if (!barsStore.length) return;
-  if (barsStore.length >= MAX_RENDER_BARS) return;
-  if (range.from > SCROLLBACK_TRIGGER_BARS) return;
-  if (controller && typeof controller.isAtEnd === 'function' && controller.isAtEnd()) return;
-  loadScrollbackChunk();
+  if (barsStore.length >= MAX_RENDER_BARS_ACTIVE) return;
+  scrollbackLatestRange = range;
+  let barsBefore = null;
+  if (controller && typeof controller.barsInLogicalRange === 'function') {
+    const info = controller.barsInLogicalRange(range);
+    if (info && Number.isFinite(info.barsBefore)) barsBefore = info.barsBefore;
+  }
+  if (barsBefore == null && Number.isFinite(range.from)) {
+    barsBefore = Math.floor(range.from);
+  }
+  if (barsBefore == null || barsBefore > SCROLLBACK_TRIGGER_BARS) return;
+  if (scrollbackInFlight) {
+    scrollbackPending = true;
+    return;
+  }
+  loadScrollbackChunk(range);
 }
 
 async function loadBarsFull(forceDisk = false) {
@@ -835,7 +1131,7 @@ async function loadBarsFull(forceDisk = false) {
   const symbol = elSymbol.value;
   const tf = readSelectedTf();
   currentCacheKey = makeCacheKey(symbol, tf);
-  const limit = 20000;
+  const limit = MAX_RENDER_BARS_ACTIVE;
 
   setStatus('load…');
   diag.lastError = '';
@@ -894,6 +1190,8 @@ async function loadBarsFull(forceDisk = false) {
     scrollbackAbort = null;
   }
   scrollbackReachedStart = false;
+  scrollbackPending = false;
+  scrollbackLatestRange = null;
   saveCacheCurrent();
   applyTheme(currentTheme);
   if (elCandleStyle) {
@@ -946,6 +1244,7 @@ function applyUpdates(events) {
     const stateKey = `${keySymbol}|${keyTf}|${keyOpen}`;
     const complete = ev.complete === true || bar.complete === true;
     const source = ev.source || bar.src || '';
+    const pairKey = `${keySymbol}|${keyTf}`;
     const prev = updateStateByKey.get(stateKey);
     if (prev && prev.complete === true && !complete) {
       continue;
@@ -955,7 +1254,7 @@ function applyUpdates(events) {
       setStatus('nomix_violation');
       continue;
     }
-    updateStateByKey.set(stateKey, { complete, source });
+    updateStateByKey.set(stateKey, { complete, source, pairKey, ts: Date.now() });
     if (controller && typeof controller.updateLastBar === 'function') {
       controller.updateLastBar(bar);
     }
@@ -977,6 +1276,9 @@ function applyUpdates(events) {
   if (lastBar) {
     updateHudPrice(lastBar.last_price != null ? lastBar.last_price : lastBar.close);
   }
+  const allowedPairs = new Set(uiCacheByKey.keys());
+  if (currentCacheKey) allowedPairs.add(currentCacheKey);
+  cleanupUpdateStateCache(allowedPairs);
   if (applied > 0) {
     saveCacheCurrent();
   }
@@ -1055,6 +1357,7 @@ function resetPolling() {
 
 async function init() {
   makeChart();
+  favoritesState = loadFavoritesState();
   initToolbars();
   await loadUiConfig();
   let theme = 'light';
@@ -1098,6 +1401,10 @@ async function init() {
       elTf.value = tfValue;
     }
   }
+  if (elTf) {
+    const tfOptions = getSelectOptions(elTf).map((opt) => opt.value);
+    normalizeFavoritesTfs(tfOptions);
+  }
   const syms = await loadSymbols();
   const symbolPreferred = savedSymbol || 'XAU/USD';
   if (Array.from(elSymbol.options).some((opt) => opt.value === symbolPreferred)) {
@@ -1106,7 +1413,6 @@ async function init() {
   updateToolbarValue('symbol');
   await loadBarsFull();
   saveCacheCurrent();
-  setTimeout(() => prefetchAllSymbols(syms), 400);
   updateToolbarValue('tf');
   updateHudValues();
   updateStreamingIndicator();

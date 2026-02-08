@@ -888,6 +888,24 @@
             }
         }
 
+        function barsInLogicalRange(range) {
+            const from = Number(range?.from);
+            const to = Number(range?.to);
+            if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+            try {
+                const timeScale = chart.timeScale();
+                if (!timeScale || typeof timeScale.barsInLogicalRange !== "function") return null;
+                const info = timeScale.barsInLogicalRange({ from, to });
+                if (!info) return null;
+                const barsBefore = Number(info.barsBefore);
+                const barsAfter = Number(info.barsAfter);
+                if (!Number.isFinite(barsBefore) || !Number.isFinite(barsAfter)) return null;
+                return { barsBefore, barsAfter };
+            } catch (_e) {
+                return null;
+            }
+        }
+
         function setVisibleLogicalRange(range) {
             if (!range) return;
             const from = Number(range.from);
@@ -1065,6 +1083,7 @@
             scrollToRealTimeWithOffset,
             setFollowRightOffsetPx,
             getVisibleLogicalRange,
+            barsInLogicalRange,
             setVisibleLogicalRange,
             onVisibleLogicalRangeChange,
         };

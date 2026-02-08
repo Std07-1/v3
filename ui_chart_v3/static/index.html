@@ -352,6 +352,46 @@
       color: inherit;
       font-size: 12px;
       cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .tool-option-label {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .tool-menu-section {
+      padding: 6px 10px 4px;
+      font-size: 10px;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      opacity: 0.5;
+    }
+
+    .fav-btn {
+      flex: 0 0 auto;
+      padding: 2px 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 0, 0, 0.2);
+      background: rgba(0, 0, 0, 0.04);
+      font-size: 10px;
+      line-height: 1.1;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      cursor: pointer;
+    }
+
+    .fav-btn.is-off {
+      opacity: 0.4;
+    }
+
+    .tool-option.is-fav .fav-btn {
+      border-color: rgba(168, 107, 0, 0.5);
+      color: #a86b00;
+      background: rgba(255, 196, 0, 0.14);
     }
 
     .tool-option:hover {
@@ -440,6 +480,18 @@
 
     body.dark .tool-option.active {
       background: rgba(255, 255, 255, 0.12);
+    }
+
+    body.dark .fav-btn {
+      border-color: rgba(70, 80, 95, 0.8);
+      background: rgba(13, 18, 26, 0.6);
+      color: #c2c7d0;
+    }
+
+    body.dark .tool-option.is-fav .fav-btn {
+      border-color: rgba(255, 196, 0, 0.45);
+      color: #f2c14d;
+      background: rgba(255, 196, 0, 0.12);
     }
 
     body.dark-gray {
