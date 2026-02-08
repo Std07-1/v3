@@ -1,6 +1,7 @@
 # Runtime dependencies (host)
 redis==5.0.1
 numpy==1.21.6
-python-dotenv==0.21.1
+python-dotenv>=0.21,<1.0
 
 # forexconnect SDK is installed separately (vendor SDK / wheel)
+forexconnect==1.6.43

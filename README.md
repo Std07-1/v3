@@ -14,8 +14,9 @@
 - Python 3.7 у .venv
 - Runtime залежності: див. requirements.txt
 - Локальна розробка: pyproject.toml (deps + metadata)
-- ForexConnect SDK встановлюється окремо (vendor SDK / wheel)
-- Для env-профілів потрібен python-dotenv (є в requirements.txt)
+- ForexConnect SDK встановлюється окремо (vendor SDK / wheel), додав 1.6.43
+
+- Для env-профілів потрібен python-dotenv (є в requirements.txt), змінено на 0.21,<1.0
 
 ## Структура даних
 
