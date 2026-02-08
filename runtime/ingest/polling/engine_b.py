@@ -242,6 +242,8 @@ class PollingConnectorB:
         self._recent_history_errors: List[Tuple[str, str, int]] = []
         self._warn_throttle: Dict[str, Tuple[float, int, str]] = {}
         self._m5_tail_state: str = "OK"
+        self._warmup_pending: bool = False
+        self._rebuild_pending: bool = False
 
     def enable_group_logging(self) -> None:
         self._group_logs = True
@@ -286,10 +288,35 @@ class PollingConnectorB:
         summary.update(self._bootstrap_from_disk(log_detail=log_detail))
         summary.update(self._prime_redis_from_disk(log_detail=log_detail))
         summary.update(self._tail_catchup_from_broker(log_detail=log_detail))
-        summary.update(self._rebuild_derived_from_disk_tail(log_detail=log_detail))
         summary.update(self._cold_start_base_from_broker(log_detail=log_detail))
-        summary.update(self._warmup_m5_tail(log_detail=log_detail))
+        summary.update(self._schedule_post_start_phases())
         return summary
+
+    def _schedule_post_start_phases(self) -> Dict[str, Any]:
+        self._warmup_pending = bool(self._warmup_bars > 0)
+        self._rebuild_pending = bool(self._derived_tail_rebuild_enabled)
+        return {
+            "warmup_deferred": self._warmup_pending,
+            "derived_rebuild_deferred": self._rebuild_pending,
+        }
+
+    def _run_warmup_phase(self) -> None:
+        if not self._warmup_pending:
+            return
+        logging.info("WARMUP_PHASE_START symbol=%s", self._symbol)
+        self._warmup_pending = False
+        result = self._warmup_m5_tail(log_detail=False)
+        logging.info("WARMUP_PHASE_DONE symbol=%s result=%s", self._symbol, result)
+
+    def _run_rebuild_phase(self) -> None:
+        if self._warmup_pending:
+            return
+        if not self._rebuild_pending:
+            return
+        logging.info("REBUILD_PHASE_START symbol=%s", self._symbol)
+        self._rebuild_pending = False
+        result = self._rebuild_derived_from_disk_tail(log_detail=False)
+        logging.info("REBUILD_PHASE_DONE symbol=%s result=%s", self._symbol, result)
 
     def _tail_catchup_from_broker(self, log_detail: bool = False) -> Dict[str, Any]:
         last_saved = self._last_saved_m5_open_ms
@@ -641,6 +668,8 @@ class PollingConnectorB:
             self._fetch_base_from_broker_on_close(anchor_open)
         self._poll_m5_once()
         self._progressive_backfill_m5()
+        self._run_warmup_phase()
+        self._run_rebuild_phase()
         self._poll_counter += 1
 
     def close(self) -> None:
@@ -1406,6 +1435,7 @@ class MultiSymbolRunner:
     def __init__(
         self,
         engines: List[PollingConnectorB],
+        group_logs_enabled: bool,
         history_summary_interval_s: int,
         history_still_failing_interval_s: int,
         history_circuit_fail_streak: int,
@@ -1417,8 +1447,10 @@ class MultiSymbolRunner:
     ) -> None:
         self._engines = engines
         self._safety_delay_s = max((e._safety_delay_s for e in engines), default=0)  # noqa: SLF001
-        for e in self._engines:
-            e.enable_group_logging()
+        self._group_logs_enabled = bool(group_logs_enabled)
+        if self._group_logs_enabled:
+            for e in self._engines:
+                e.enable_group_logging()
         self._calendar_state_by_symbol: Dict[str, bool] = {}
         self._history_summary_interval_s = max(60, int(history_summary_interval_s))
         self._history_still_failing_interval_s = max(60, int(history_still_failing_interval_s))
@@ -1689,18 +1721,14 @@ class MultiSymbolRunner:
                     ",".join(broker_empty),
                 )
 
-        warmup_empty = [s["symbol"] for s in summaries if s.get("warmup_empty")]
-        warmup_written = sum(int(s.get("warmup_written", 0)) for s in summaries)
-        if warmup_empty:
-            logging.warning(
-                "Warmup: history=0 для %d/%d (%s)",
-                len(warmup_empty),
+        warmup_deferred = [s["symbol"] for s in summaries if s.get("warmup_deferred")]
+        if warmup_deferred:
+            logging.info(
+                "Warmup: deferred %d/%d (%s)",
+                len(warmup_deferred),
                 total,
-                ",".join(warmup_empty),
+                ",".join(warmup_deferred),
             )
-        else:
-            logging.info("Warmup: history ok %d/%d", total, total)
-        logging.info("Warmup: written=%d", warmup_written)
 
     def run_forever(self) -> None:
         symbols = [e._symbol for e in self._engines]  # noqa: SLF001

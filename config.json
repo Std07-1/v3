@@ -116,6 +116,7 @@
     "day_anchor_offset_s_d1": 75600,
     "day_anchor_offset_s_d1_alt": 79200,
     "ui_debug": true,
+    "group_logs_enabled": false,
     "redis_priming_enabled": true,
     "redis_priming_budget_s": 2,
     "redis_priming_tfs_s": [

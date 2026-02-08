@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
 from runtime.ingest.market_calendar import MarketCalendar
@@ -110,6 +110,47 @@ def _validate_config(cfg: Dict[str, Any]) -> None:
         if not allow_empty and not out:
             issues.append(f"empty:{key}")
 
+    def require_unique_int_list(key: str) -> None:
+        raw = cfg.get(key)
+        if not isinstance(raw, list):
+            return
+        values: List[int] = []
+        for item in raw:
+            try:
+                val = int(item)
+            except Exception:
+                continue
+            if val > 0:
+                values.append(val)
+        if not values:
+            return
+        seen: Set[int] = set()
+        dups: Set[int] = set()
+        for val in values:
+            if val in seen:
+                dups.add(val)
+            else:
+                seen.add(val)
+        if dups:
+            issues.append(f"duplicates:{key}")
+
+    def require_unique_str_list(key: str) -> None:
+        raw = cfg.get(key)
+        if not isinstance(raw, list):
+            return
+        values = [str(x).strip() for x in raw if str(x).strip()]
+        if not values:
+            return
+        seen: Set[str] = set()
+        dups: Set[str] = set()
+        for val in values:
+            if val in seen:
+                dups.add(val)
+            else:
+                seen.add(val)
+        if dups:
+            issues.append(f"duplicates:{key}")
+
     symbols_raw = cfg.get("symbols")
     if isinstance(symbols_raw, list) and any(str(x).strip() for x in symbols_raw):
         pass
@@ -117,6 +158,9 @@ def _validate_config(cfg: Dict[str, Any]) -> None:
         symbol = cfg.get("symbol")
         if not isinstance(symbol, str) or not symbol.strip():
             issues.append("missing:symbols_or_symbol")
+
+    if "group_logs_enabled" in cfg and not isinstance(cfg.get("group_logs_enabled"), bool):
+        issues.append("invalid_bool:group_logs_enabled")
 
     require_int("m5_tail_fetch_n", min_val=1)
     require_int("m5_tail_stale_s", min_val=0)
@@ -135,6 +179,11 @@ def _validate_config(cfg: Dict[str, Any]) -> None:
     require_int_list("tf_allowlist_s")
     require_int_list("derived_tfs_s")
     require_int_list("broker_base_tfs_s", allow_empty=True)
+    require_unique_int_list("tf_allowlist_s")
+    require_unique_int_list("derived_tfs_s")
+    require_unique_int_list("broker_base_tfs_s")
+    require_unique_int_list("redis_priming_tfs_s")
+    require_unique_str_list("symbols")
 
     calendar_gate_enabled = bool(cfg.get("calendar_gate_enabled", False))
     if calendar_gate_enabled:
@@ -197,6 +246,8 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
             symbols = [str(x) for x in symbols_raw if str(x).strip()]
         else:
             symbols = [str(cfg.get("symbol", "XAU/USD"))]
+        if isinstance(symbols_raw, list) and symbols and isinstance(cfg.get("symbol"), str):
+            logging.warning("Config: задано symbol і symbols; використовую symbols")
         data_root = str(cfg.get("data_root", "./data_v3"))
         warmup_bars = int(cfg.get("warmup_bars", 3000))
         safety_delay_s = int(cfg.get("safety_delay_s", 2))
@@ -223,6 +274,10 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         history_symbols_sample_n = int(cfg.get("history_symbols_sample_n", 3))
         history_network_error_escalate_s = int(cfg.get("history_network_error_escalate_s", 600))
         flat_bar_max_volume = int(cfg.get("flat_bar_max_volume", 0))
+        if "group_logs_enabled" not in cfg:
+            group_logs_enabled: Optional[bool] = None
+        else:
+            group_logs_enabled = bool(cfg.get("group_logs_enabled"))
 
         derived = cfg.get(
             "derived_tfs_s", [180, 300, 900, 1800, 3600]
@@ -464,11 +519,15 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
 
     if len(engines) == 1:
         logging.debug("Engine створено, стартую run_forever()")
+        if group_logs_enabled:
+            engines[0].enable_group_logging()
         runner: object = engines[0]
     else:
         logging.debug("Engines створено: %d, стартую MultiSymbolRunner", len(engines))
+        effective_group_logs = True if group_logs_enabled is None else bool(group_logs_enabled)
         runner = MultiSymbolRunner(
             engines,
+            group_logs_enabled=effective_group_logs,
             history_summary_interval_s=history_summary_interval_s,
             history_still_failing_interval_s=history_still_failing_interval_s,
             history_circuit_fail_streak=history_circuit_fail_streak,
