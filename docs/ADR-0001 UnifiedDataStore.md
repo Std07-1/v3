@@ -1,0 +1,414 @@
+
+Нижче — **ADR-скелет** під *v3* для рішення “**UnifiedDataStore (RAM↔Redis↔Disk) + API contracts**”, із акцентом на **TV-like стабільність**, швидкі перемикання **symbol/TF**, і **тупий UI** (рендер без рішень).
+
+Я спеціально заклав у скелет **інваріанти**, які прямо б’ють по твоїй проблемі “refresh нормалізує / потім знову ламається”: це майже завжди **гонки запитів**, **часткові вікна**, **неузгоджені cursors/seq**, і **випадкові деградації** (silent partial). У поточному UI видно паралельні контури оновлення: `loadBarsFull()` → `/api/bars`, `pollLatest()` → `/api/latest`, `pollLive()` → `/api/live` із різними таймерами, без cancellation/epoch-гейту, що легко дає “смикання” при перемиканні symbol/TF і при масштабуванні.
+
+---
+
+## ADR-0001: UnifiedDataStore (RAM/Redis/Disk) + Contract-first MarketData API
+
+**Status:** Draft
+**Date:** 2026-02-09
+**Owners:** (TBD)
+**Related:** UI stability / live jitter, redis snapshots, derived TF, exit-gates (TBD)
+
+### 1) Контекст і проблема
+
+**Симптоми (prod/live):**
+
+* графік “смикається”, інколи стає “битий”, refresh інколи лікує, інколи навпаки;
+* 4h/1d часто “стабільніші”, TF5 + похідні — більш чутливі;
+* при перемиканні symbol/TF та при zoom/scrollback — нестабільне підвантаження/узгодження історії.
+
+**Факти поточного UI-патерну (v3 UI lite):**
+
+* cold load бере `/api/bars?…&limit=20000`;
+* паралельно живуть **два polling-контури**:
+
+  * `/api/latest … after_open_ms=…` кожні 3s;
+  * `/api/live` кожні 500ms (оновлення “останнього бару”).
+* зміна symbol/TF викликає `loadBarsFull()`, але **не гарантує** “зупинити/анулювати” in-flight відповіді попереднього symbol/TF (нема request epoch / cancellation token у протоколі).
+
+**Арх-проблема:** сьогодні “кеш/політика” фактично розмазана між UI↔server↔Redis↔disk, а відповідальність за **цілісність вікна** і **узгодженість інкрементів** не зафіксована контрактом.
+
+### 2) Цілі (Goals)
+
+1. **TV-like стабільність рендера**: жодних “дір”/стрибків від часткових відповідей або reorder.
+2. **Швидкі перемикання symbol/TF**: predictable latency, без “гонок” між old/new запитами.
+3. **UI = dumb renderer**: UI не вирішує, “звідки дані”, не міксує шарів, не має prefer_redis тощо.
+4. **UnifiedDataStore = системний шар**: RAM↔Redis↔Disk як *єдине місце*, де вирішується: read path, write path, backpressure, TTL, coherency.
+5. **Contract-first API**: чіткі схеми запит/відповідь + версії; partial/degraded — **тільки loud**.
+6. **Масштабування**: керовані ліміти історії/вікон/хвостів; контроль Redis-size; прогнозована CPU/IO.
+
+### 3) Не-цілі (Non-goals)
+
+* не міняємо доменний SMC compute (Stage/сценарії) — тільки рельси даних/вікон/узгодження;
+* не робимо “історичний recovery” дір (це окремий ADR);
+* не переписуємо UI в “важкий” клієнт (навпаки — спрощуємо).
+
+### 4) Рішення (Decision)
+
+#### 4.1 Ввести UnifiedDataStore як SSOT для marketdata
+
+**UDS** — центральний модуль з чітким layering:
+
+* **RAM (hot window)**: LRU/TTL, квоти по пам’яті/кількості hot symbols, швидкий доступ. (патерн RAM-евікшнів/TTL вже показаний у референс-імплементації)
+* **Redis (warm/system cache)**:
+
+  * мінімум: “останній бар/метадані/seq/cursor”, швидкий cross-process доступ;
+  * опційно: window cache (chunked) для популярних TF (TBD).
+* **Disk (durable snapshots)**:
+
+  * write-behind (черга) з backpressure;
+  * atomic replace + retry (IO стабільність).
+
+**Write policy (стандарт):** write-through RAM→Redis + write-behind Disk.
+**Read policy (стандарт):** завжди повертаємо **контрактне вікно**; якщо шар не здатен — fallback в нижчий шар, але без “тихої підміни”.
+**Метрики:** hit ratios, flush backlog, latency per layer (RAM/Redis/Disk), errors per stage.
+
+#### 4.2 “Вікно” як перший клас (Window Contract)
+
+Вводимо поняття **Window** як канонічну відповідь `/api/bars`:
+
+* сервер повертає **узгоджене** вікно (sorted+dedup, монотонні open_time_ms);
+* відповідь має **meta**:
+
+  * `window_start_ms`, `window_end_ms`, `count`,
+  * `complete_coverage: true/false`,
+  * `degraded[]` / `errors[]` (loud деградації),
+  * `cursor_next` для scrollback,
+  * `seq_head` (монотонний номер версії потоку по symbol/TF).
+
+#### 4.3 Інкременти тільки через seq/cursor (Updates Contract)
+
+Замість “UI сам думає, що вважати новим” — UDS дає стабільний **seq**:
+
+* `/api/updates?symbol&tf_s&since_seq=` → повертає:
+
+  * `bars_append[]` (повністю завершені нові бари),
+  * `bar_last_patch` (патч/повний last bar для live),
+  * `seq_head`,
+  * `gap: true/false` (якщо since_seq занадто старий/втрата — тоді UI робить **реload window**, а не “латання”).
+* UI **не міксує** `/api/live` і `/api/latest` без epoch-гейту; або:
+
+  * A) лишаємо 2 endpoints, але обидва підпорядковані одному `seq_head`, або
+  * B) зводимо live+latest в один `/api/updates` (рекомендовано).
+
+#### 4.4 UI стає “тупий”: state machine + epoch gate
+
+UI логіка міняється з “викликай що хочеш паралельно” на:
+
+* `view_epoch++` на кожне перемикання symbol/TF;
+* кожен fetch несе `epoch` (в query або header), а відповіді містять `epoch` → UI ігнорує “старі” відповіді;
+* на час `load window` — poll/updates або зупиняється, або відповіді старого epoch відкидаються.
+
+(Поточні обробники `change` викликають `loadBarsFull()`, але без вбудованого механізму відкидання in-flight відповідей → це прямий кандидат на “смикання”)
+
+### 5) API Contracts (версійовані схеми)
+
+**Розміщення:** `core/contracts/public/marketdata_v1/…` (TBD)
+**Валідація:** server-side (debug/rail), і опційно в CI.
+
+#### 5.1 GET /api/bars (Window)
+
+**Request**
+
+* `symbol: string`
+* `tf_s: int`
+* `limit: int`
+* `to_open_ms?: int` (опційно, для scrollback)
+* `epoch?: int` (опційно, для UI gate)
+
+**Response**
+
+* `schema: "marketdata.window.v1"`
+* `symbol, tf_s`
+* `bars: Bar[]`
+* `meta: { seq_head, cursor_next, window_start_ms, window_end_ms, complete_coverage, degraded[], errors[] }`
+* `epoch?: int`
+
+#### 5.2 GET /api/updates (Incremental)
+
+**Request**
+
+* `symbol, tf_s`
+* `since_seq: int`
+* `epoch?: int`
+
+**Response**
+
+* `schema: "marketdata.updates.v1"`
+* `seq_head`
+* `bars_append: Bar[]`
+* `bar_last: Bar | null` (або patch-формат)
+* `gap: boolean`
+* `degraded[], errors[]`
+* `epoch?: int`
+
+#### 5.3 GET /api/status (Health/telemetry)
+
+* включає UDS metrics snapshot (hit ratios, backlog, bytes_in_ram…)
+
+### 6) Data Model
+
+**Bar (canonical)**
+
+* `open_time_ms: int64`
+* `close_time_ms: int64`
+* `open, high, low, close: float`
+* `volume: float`
+* `complete: bool`
+* `source: "stream"|"backfill"|"derived"|"disk_snapshot"` (TBD)
+* `rev?: int` (опційно для patch/last bar)
+
+(У референсі UDS бари тримають мінімальний набір OHLCV+complete і роблять merge/dedup/sort)
+
+### 7) Інваріанти та гарантії
+
+1. **No silent partial**: якщо вікно/інкремент неповний — тільки через `complete_coverage=false` + `degraded[]`.
+2. **Monotonic time**: `open_time_ms` не зменшується в `bars_append`; last-bar patch має `open_time_ms >= last_seen`.
+3. **Single-writer per (symbol,tf)** для seq (UDS/worker).
+4. **Collapse-to-latest**: при backpressure (write-behind, derived rebuild) — latest wins, без розмноження черг. (патерн коалесингу flush_pending)
+5. **Disk не на hot-path**: disk — durable + cold start + recovery, але не “кожен скрол” (окрім контрольованого scrollback режиму).
+
+### 8) Варіанти (Alternatives considered)
+
+A) **Redis-only** (disk лише для recovery)
+
+* * швидко, просто для live
+* − ризик “втрати історії” при eviction/рестарті; складніше робити стабільний scrollback; Redis memory pressure.
+
+B) **Disk-first + cache as optimization**
+
+* * простіше гарантувати повноту
+* − latency/jitter при навантаженні, гірше UX.
+
+C) **UDS layered (рекомендовано)**
+
+* * контрольована продуктивність і повнота, чіткі контракти
+* − складніша реалізація, треба дисципліна контрактів і метрик.
+
+### 9) Ризики і “анти-патерни”
+
+* **Гонки запитів UI** без epoch/seq → “смикання”, reorder, applied-to-wrong-series. (поточний UI має паралельні контури)
+* **Tail-only видача як cold-load** (не контрактне вікно) → “дірки” при zoom-out/scrollback.
+* **Derived TF on read-path без бюджету** → спайки CPU/IO; потрібен throttle/worker policy. (у референсі є throttle refresh derived TF)
+* **Redis size runaway** без TTL/retention/limit. (у референсі є tail limit + TTL per interval)
+
+### 10) План впровадження (P-slices)
+
+**P0 (Discovery / Audit)**
+
+* зафіксувати current endpoints + payload sizes + jitter сценарії;
+* додати діаг-лог: epoch, seq_head, count, window_start/end.
+
+**P1 (Contracts-first)**
+
+* додати JSON-схеми `marketdata.window.v1`, `marketdata.updates.v1`, `bar.v1`;
+* мінімальні rails: “server відповідає тільки за схемою або loud error”.
+
+**P2 (UDS core)**
+
+* RAM LRU/TTL/quotas, Redis meta+lastbar+seq, Disk snapshots write-behind.
+
+**P3 (Server інтеграція)**
+
+* `/api/bars` → UDS.get_window()
+* `/api/updates` → UDS.get_updates()
+* заборонити “cache override” та silent partial.
+
+**P4 (UI спрощення)**
+
+* ввести epoch-gate (ігнор старих відповідей)
+* звести polling до `/api/updates` (або синхронізувати live/latest через seq)
+
+**P5 (Exit gates + Observability)**
+
+* метрики: latency p95, hit ratios, degraded counts, seq gaps
+* тест-кейси: switch storm (symbol/tf), zoom-out, reconnect, redis down (loud degrade).
+
+### 11) Тести / Exit Gates (Definition of Done)
+
+* Unit: dedup/sort invariants, seq monotonic, gap detection.
+* Integration: “switch storm 100x” без jitter/reorder; “scrollback до N днів” без partial.
+* Runtime rails:
+
+  * “відповідь /api/bars не може бути tail-only якщо limit>X без degraded[]”
+  * “updates з gap=true → UI мусить reload window”.
+
+### 12) Rollback / Feature flags
+
+* `config/config.py` (SSOT): `UDS_ENABLED`, `UDS_UPDATES_ENABLED`, `UDS_REDIS_REQUIRED` (TBD)
+* rollback: повернення до старого /api/latest|/api/live, але **degraded-but-loud**.
+
+### 13) Відкриті питання (TBD)відповідь на яких нижче
+
+* Який “цільовий window” по TF (bars/day, max_days_by_tf)?
+* Чи робимо Redis window-chunks, чи тільки meta+lastbar+seq?
+* Як узгоджуємо derived OHLCV TF5: worker на close чи best-effort throttle?
+
+---
+Нижче — конкретні **рекомендовані рішення** для v3 по трьох питаннях. Я даю значення так, щоб:
+
+* UI завжди отримував **контрактне “вікно”** (contiguous window), без “tail-only сюрпризів”
+* перемикання symbol/TF було **швидким** завдяки RAM/Redis, а не через UI-хитрощі
+* derived TF збирався **детерміновано** (без “best-effort магії” на read-path), але без зайвого навантаження
+
+---
+
+## 1) “Цільовий window” по TF (bars/day, max_days_by_tf)
+
+### Принцип
+
+* **Кап по барах** важливіший за “роки”: UI/мережа/JS відчувають саме кількість барів.
+* Робимо `default_window_days` і `max_window_days`, але **обидва повинні вкладатися в max_bars_per_request**.
+* Для TV-like UX: **default window** має покривати нормальний zoom-out без довантажень; довантаження — тільки через `cursor` (scrollback), а не через запит “дай 200k барів”.
+
+### Рекомендована таблиця для v3 (UI window)
+
+> Ці значення зручні тим, що для коротких TF ми тримаємо під контролем кількість барів (і час відповіді), а для довших TF дозволяємо великі “days”, бо барів мало.
+
+| TF  | bars/day | default_window_days | default bars | max_window_days | max bars |
+| --- | -------: | ------------------: | -----------: | --------------: | -------: |
+| 1m  |     1440 |                   7 |       10,080 |              21 |   30,240 |
+| 5m  |      288 |                  60 |       17,280 |             180 |   51,840 |
+| 15m |       96 |                 180 |       17,280 |             365 |   35,040 |
+| 30m |       48 |                 365 |       17,520 |             730 |   35,040 |
+| 1h  |       24 |                 730 |       17,520 |            1460 |   35,040 |
+| 4h  |        6 |                1460 |        8,760 |            3650 |   21,900 |
+| 1d  |        1 |                3650 |        3,650 |            9125 |    9,125 |
+
+**Ключові наслідки:**
+
+* Для **5m**: max 180 днів ≈ 51.8k барів — це верхня межа, де ще реально тримати стабільно і на сервері, і в UI.
+* Для derived (15m/30m/1h): ти можеш давати “рік+” без проблем, бо барів значно менше.
+* `max_bars_per_request` можна поставити **60,000** глобально (і перевіряти rail’ом).
+
+---
+
+## 2) Redis: window-chunks чи тільки meta+lastbar+seq?
+
+### Рішення: **двоступенево (але з чіткою ціллю)**
+
+#### Phase A (P0/P1) — **тільки meta + lastbar + seq (+ опційно невеликий tail)**
+
+Це обов’язково, навіть якщо потім підемо в chunks.
+
+**Зберігаємо в Redis:**
+
+* `seq_head` по (symbol, tf)
+* `watermark_ms` (останній гарантовано finalized bar)
+* `last_bar_final` (останній complete бар)
+* `last_bar_live` (поточний incomplete, якщо потрібен)
+* **опційно** `tail_small` (наприклад 500–2000 барів) — лише щоб UI не показував “порожньо” на cold start
+
+**Чому так:**
+
+* ти одразу вирізаєш головний клас багів: *UI не має гадати*, чи можна “дошивати” і що вважати новим.
+* маленькі значення в Redis → менше шансів на latency spikes/переповнення/великий трафік.
+
+#### Phase B (P2+) — **Redis window-chunks для hot TF (мінімум: 5m і 15m)**
+
+Якщо хочеш **максимально швидкі перемикання TF/символів** (як ТВ), тоді chunks дадуть приріст: UI window можна віддати **без диску**.
+
+**Рекомендація по chunks:**
+
+* **chunk granularity = “1 день”** (для FX це природно):
+
+  * 5m: до 288 барів на день
+  * 15m: до 96 барів на день
+* ключі:
+
+  * `md:{symbol}:{tf}:chunk:{YYYYMMDD}` → bytes (msgpack/zstd)
+  * `md:{symbol}:{tf}:index` → відсортований список днів/діапазонів
+  * `md:{symbol}:{tf}:meta` → seq_head, watermark, last_bar_final/live, coverage flags
+* TTL/retention для chunk-ключів **окремо від meta** (meta тримаємо довше)
+
+**Чому chunk-by-day краще за “один великий blob”:**
+
+* не переписуєш 20–50k барів при кожному апдейті (це дуже дорога операція)
+* eviction/TTL працює по днях
+* scrollback робиться природно (додаємо день за днем)
+
+**Мій висновок:**
+
+* якщо головна мета зараз — **стабільність**: починай з **Phase A**.
+* якщо додатково потрібна **TV-like швидкість перемикань без диску**: додавай **Phase B** тільки для 5m/15m і тільки після того, як контракти/seq стабільні.
+
+---
+
+## 3) Узгодження derived OHLCV від TF5: worker “on close” чи best-effort throttle?
+
+### Рішення: **event-driven “on close”, але з boundary gating + coalescing**
+
+Best-effort throttle на read-path (як у старому `UnifiedDataStore` з `DERIVED_TF_REFRESH_THROTTLE_MS`) — це зручно, але воно **плодить недетермінізм**: UI запросив — derived “підтягнулось”; не запросив — не підтягнулось; інколи “підтягнулось частково”.
+
+Для v3 (твоя ціль “як ТВ”) краще:
+
+#### 3.1. Канонічний pipeline
+
+* Базовий finalized TF (для цього питання) = **5m complete bars**.
+* Derived OHLCV будується **інкрементально**:
+
+  * 15m з 3×5m
+  * 30m з 6×5m
+  * 1h з 12×5m
+  * 4h з 48×5m
+  * 1d — через session/day anchor (окремо, але теж event-driven)
+
+#### 3.2. Boundary gating (важливо)
+
+На кожному новому 5m close:
+
+* перевіряємо, чи цей close **закриває bucket** для target TF.
+
+  * якщо **не закриває** → derived finalized **не оновлюємо**
+  * якщо **закриває** → рахуємо рівно **1 новий derived bar** і пушимо його в UDS (RAM/Redis/Disk), піднімаємо `seq_head` для target TF
+
+Це дає:
+
+* **детермінізм** (derived з’являється рівно тоді, коли має)
+* **низьку CPU** (не “перерахунок хвоста”, а одна свічка)
+
+#### 3.3. Coalescing/backpressure (best-effort тільки тут)
+
+Best-effort потрібен не для derived-логіки, а для **захисту**:
+
+* якщо прийшов burst (backfill, reconnection) — робимо `collapse-to-latest-final`:
+
+  * один inflight per (symbol, target_tf)
+  * якщо під час обчислення прийшли ще 10 M5 барів — після завершення добудовуємо до останнього закритого boundary, але **не запускаємо 10 паралельних задач**
+
+#### 3.4. Live (incomplete) derived bar — опційно
+
+Якщо тобі треба “як ТВ” і для 15m/1h показувати “рух” всередині свічки:
+
+* можна публікувати `last_bar_live (complete=false)` для derived TF, але:
+
+  * він не впливає на `seq_head` finalized потоку
+  * UI чітко розрізняє `final append` vs `live patch`
+
+### Мій вибір
+
+* **on close** для finalized derived — must-have.
+* throttle/coalescing — тільки як механізм backpressure, не як “логіка правди”.
+* best-effort refresh “по запиту UI” — не рекомендую для v3, бо це саме те, що дає “refresh лікує/ламає”.
+
+---
+
+## Підсумок рішень (коротко)
+
+1. Window:
+
+* 5m: default 60d (~17k), max 180d (~52k)
+* derived: дозволяємо 1–4 роки в днях, але caps по барах ~35k
+
+1. Redis:
+
+* почати з **meta+lastbar+seq** (опційно маленький tail)
+* chunks додати **після стабілізації контрактів**, і лише для **5m/15m** (day-chunks)
+
+1. Derived:
+
+* finalized derived = **worker on close** + boundary gating + coalescing
+* live patches — окремо, не змішувати з finalized seq

@@ -820,6 +820,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             limit = _safe_int((qs.get("limit", ["500"])[0] or "500"), 500)
             since_seq_raw = qs.get("since_seq", [None])[0]
             since_seq = _safe_int(since_seq_raw, 0) if since_seq_raw is not None else None
+            epoch_raw = qs.get("epoch", [None])[0]
+            epoch = _safe_int(epoch_raw, 0) if epoch_raw is not None else None
             if not symbol:
                 self._bad("missing_symbol")
                 return
@@ -869,6 +871,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 seq = ev.get("seq")
                 if isinstance(seq, int) and (cursor_seq is None or seq > cursor_seq):
                     cursor_seq = seq
+            if cursor_seq is None and since_seq is not None:
+                cursor_seq = since_seq
+            if cursor_seq is None:
+                cursor_seq = 0
             payload: dict[str, Any] = {
                 "ok": True,
                 "symbol": symbol,
@@ -879,13 +885,33 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             }
             if warnings:
                 payload["warnings"] = warnings
-            payload["cursor_seq"] = _current_seq()
             disk_last_open_ms = _disk_last_open_ms(data_root, symbol, tf_s)
             payload["disk_last_open_ms"] = disk_last_open_ms
             if disk_last_open_ms is not None:
                 payload["bar_close_ms"] = disk_last_open_ms + tf_s * 1000 - 1
             payload["ssot_write_ts_ms"] = _disk_last_mtime_ms(data_root, symbol, tf_s)
             payload["api_seen_ts_ms"] = int(time.time() * 1000)
+            if logging.getLogger().isEnabledFor(logging.INFO):
+                window_start_ms = None
+                window_end_ms = None
+                if events:
+                    first_bar = events[0].get("bar")
+                    last_bar = events[-1].get("bar")
+                    if isinstance(first_bar, dict):
+                        window_start_ms = first_bar.get("open_time_ms")
+                    if isinstance(last_bar, dict):
+                        window_end_ms = last_bar.get("close_time_ms")
+                logging.info(
+                    "UI_UPDATES symbol=%s tf_s=%s epoch=%s since_seq=%s count=%s cursor_seq=%s window_start_ms=%s window_end_ms=%s",
+                    symbol,
+                    tf_s,
+                    epoch,
+                    since_seq,
+                    len(events),
+                    payload.get("cursor_seq"),
+                    window_start_ms,
+                    window_end_ms,
+                )
             self._json(200, payload)
             return
 
@@ -899,6 +925,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             limit = _safe_int((qs.get("limit", ["2000"])[0] or "2000"), 2000)
             force_disk = _safe_int((qs.get("force_disk", ["0"])[0] or "0"), 0) == 1
             prefer_redis = _safe_int((qs.get("prefer_redis", ["0"])[0] or "0"), 0) == 1
+            epoch_raw = qs.get("epoch", [None])[0]
+            epoch = _safe_int(epoch_raw, 0) if epoch_raw is not None else None
 
             if not symbol:
                 self._bad("missing_symbol")
@@ -1083,9 +1111,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 filtered.append(b)
             if cold_load and not force_disk:
                 cached = _cache_get(symbol, tf_s)
-                if cached:
+                if cached and (limit <= 0 or len(cached) >= limit):
                     filtered = cached[-limit:] if limit > 0 else cached
-                else:
+                elif not cached:
                     _cache_seed(symbol, tf_s, filtered)
             payload = {
                 "ok": True,
@@ -1097,6 +1125,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             }
             if warnings:
                 payload["warnings"] = warnings
+            if logging.getLogger().isEnabledFor(logging.INFO):
+                window_start_ms = None
+                window_end_ms = None
+                if filtered:
+                    window_start_ms = filtered[0].get("open_time_ms")
+                    window_end_ms = filtered[-1].get("close_time_ms")
+                logging.info(
+                    "UI_BARS path=%s symbol=%s tf_s=%s epoch=%s limit=%s count=%s window_start_ms=%s window_end_ms=%s source=%s redis_hit=%s redis_error=%s",
+                    path,
+                    symbol,
+                    tf_s,
+                    epoch,
+                    limit,
+                    len(filtered),
+                    window_start_ms,
+                    window_end_ms,
+                    meta.get("source"),
+                    meta.get("redis_hit"),
+                    meta.get("redis_error_code"),
+                )
             self._json(200, payload)
             return
 

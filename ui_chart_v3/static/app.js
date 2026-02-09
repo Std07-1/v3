@@ -36,6 +36,7 @@ let controller = null;
 let lastOpenMs = null;
 let pollTimer = null;
 let loadReqId = 0;
+let viewEpoch = 0;
 let loadAbort = null;
 let currentTheme = 'light';
 let uiDebugEnabled = true;
@@ -63,6 +64,7 @@ let scrollbackAbort = null;
 let scrollbackPending = false;
 let scrollbackLatestRange = null;
 let scrollbackPendingStep = 0;
+let diskFillAbort = null;
 const cacheLru = new Map();
 let updateStateLastCleanupMs = 0;
 let favoritesState = null;
@@ -75,6 +77,12 @@ const SYMBOL_KEY = 'ui_chart_symbol';
 const TF_KEY = 'ui_chart_tf';
 const LAYOUT_SAVE_KEY = 'ui_chart_layout_save';
 const MAX_RENDER_BARS_ACTIVE_BASE = 60000;
+const MAX_RENDER_BARS_BY_TF = {
+  300: 52500,
+  900: 17500,
+  1800: 8500,
+  3600: 4380,
+};
 const MAX_RENDER_BARS_WARM = 20000;
 const WARM_LRU_LIMIT = 6;
 const UPDATE_STATE_TTL_MS = 30 * 60 * 1000;
@@ -99,6 +107,35 @@ function readSelectedTf(defaultTf = 300) {
   const raw = parseInt(elTf?.value, 10);
   if (Number.isFinite(raw) && raw > 0) return raw;
   return defaultTf;
+}
+
+function startNewViewEpoch() {
+  viewEpoch += 1;
+  if (loadAbort) {
+    loadAbort.abort();
+    loadAbort = null;
+  }
+  if (diskFillAbort) {
+    diskFillAbort.abort();
+    diskFillAbort = null;
+  }
+  if (scrollbackAbort) {
+    scrollbackAbort.abort();
+    scrollbackAbort = null;
+  }
+  scrollbackInFlight = false;
+  scrollbackPending = false;
+  scrollbackLatestRange = null;
+  scrollbackPendingStep = 0;
+  scrollbackReachedStart = false;
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  updatesSeqCursor = null;
+  lastOpenMs = null;
+  lastBarCloseMs = null;
+  return viewEpoch;
 }
 const diag = {
   loadAt: null,
@@ -801,10 +838,8 @@ function isFavoritePair(symbol, tf) {
 }
 
 function getActiveMaxBars() {
-  const symbol = elSymbol?.value;
   const tf = readSelectedTf();
-  const isFav = isFavoritePair(symbol, tf);
-  return isFav ? MAX_RENDER_BARS_ACTIVE_BASE * 2 : MAX_RENDER_BARS_ACTIVE_BASE;
+  return MAX_RENDER_BARS_BY_TF[tf] || MAX_RENDER_BARS_ACTIVE_BASE;
 }
 
 function getScrollbackTriggerBars() {
@@ -965,6 +1000,7 @@ function storeCacheFor(symbol, tf, bars) {
 
 
 function restoreCacheFor(symbol, tf) {
+  startNewViewEpoch();
   const key = makeCacheKey(symbol, tf);
   const cached = uiCacheByKey.get(key);
   if (!cached) return false;
@@ -1162,10 +1198,12 @@ async function loadScrollbackChunk(range, step) {
   const prevRange = range || (controller && typeof controller.getVisibleLogicalRange === 'function'
     ? controller.getVisibleLogicalRange()
     : null);
+  const epoch = viewEpoch;
   try {
     const url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${limit}`
-      + `&to_open_ms=${beforeOpenMs}&force_disk=1`;
+      + `&to_open_ms=${beforeOpenMs}&force_disk=1&epoch=${viewEpoch}`;
     const data = await apiGet(url, { signal: scrollbackAbort.signal });
+    if (epoch !== viewEpoch) return;
     const olderBars = Array.isArray(data?.bars) ? data.bars : [];
     mergeOlderBars(olderBars, prevRange, tf);
   } catch (e) {
@@ -1193,10 +1231,12 @@ async function fetchNewerBarsFromDisk() {
   const symbol = elSymbol.value;
   const tf = readSelectedTf();
   const limit = 2000;
+  const epoch = viewEpoch;
   try {
     const url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${limit}`
-      + `&since_open_ms=${lastOpenMs}&force_disk=1`;
+      + `&since_open_ms=${lastOpenMs}&force_disk=1&epoch=${viewEpoch}`;
     const data = await apiGet(url);
+    if (epoch !== viewEpoch) return false;
     const newerBars = Array.isArray(data?.bars) ? data.bars : [];
     if (!newerBars.length) return false;
     newerBars.sort((a, b) => a.open_time_ms - b.open_time_ms);
@@ -1267,6 +1307,7 @@ async function loadBarsFull(forceDisk = false) {
   const tf = readSelectedTf();
   currentCacheKey = makeCacheKey(symbol, tf);
   const limit = getActiveMaxBars();
+  const epoch = viewEpoch;
 
   setStatus('load…');
   diag.lastError = '';
@@ -1276,6 +1317,7 @@ async function loadBarsFull(forceDisk = false) {
   } else {
     url += '&prefer_redis=1';
   }
+  url += `&epoch=${epoch}`;
   let data = null;
   try {
     data = await apiGet(url, { signal: loadAbort.signal });
@@ -1283,16 +1325,19 @@ async function loadBarsFull(forceDisk = false) {
     if (e && e.name === 'AbortError') return;
     throw e;
   }
+  if (epoch !== viewEpoch) return;
   if (reqId !== loadReqId) return;
   if (data && data.boot_id) {
     bootId = data.boot_id;
   }
   if (data && data.meta) {
     const meta = data.meta || {};
+    const source = String(meta.source || '');
     lastRedisSource = meta.source || (meta.redis_hit ? 'redis' : 'disk');
     lastRedisPayloadMs = Number.isFinite(meta.redis_payload_ts_ms) ? meta.redis_payload_ts_ms : null;
     lastRedisTtlS = Number.isFinite(meta.redis_ttl_s_left) ? meta.redis_ttl_s_left : null;
     lastRedisSeq = Number.isFinite(meta.redis_seq) ? meta.redis_seq : null;
+    data.meta._source_norm = source;
   } else {
     lastRedisSource = null;
     lastRedisPayloadMs = null;
@@ -1355,6 +1400,44 @@ async function loadBarsFull(forceDisk = false) {
   }
 
   setStatus(`ok · tf=${tf}s · bars=${bars.length}`);
+  const metaSource = data && data.meta ? String(data.meta._source_norm || '') : '';
+  if (!forceDisk) {
+    fillFromDiskIfNeeded(reqId, symbol, tf, limit, metaSource);
+  }
+}
+
+async function fillFromDiskIfNeeded(reqId, symbol, tf, limit, metaSource) {
+  if (!Number.isFinite(limit) || limit <= 0) return;
+  if (!symbol || !Number.isFinite(tf)) return;
+  if (!barsStore.length || !Number.isFinite(firstOpenMs)) return;
+  if (barsStore.length >= limit) return;
+  if (metaSource && (metaSource === 'disk' || metaSource.startsWith('disk_'))) return;
+  if (diskFillAbort) {
+    diskFillAbort.abort();
+  }
+  diskFillAbort = new AbortController();
+  const prevRange = controller && typeof controller.getVisibleLogicalRange === 'function'
+    ? controller.getVisibleLogicalRange()
+    : null;
+  const epoch = viewEpoch;
+  const url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${limit}`
+    + `&force_disk=1&epoch=${viewEpoch}`;
+  try {
+    const data = await apiGet(url, { signal: diskFillAbort.signal });
+    if (epoch !== viewEpoch) return;
+    if (reqId !== loadReqId) return;
+    const diskBars = Array.isArray(data?.bars) ? data.bars : [];
+    if (!diskBars.length || !Number.isFinite(firstOpenMs)) return;
+    const olderBars = diskBars.filter((bar) => {
+      const openMs = bar?.open_time_ms;
+      return Number.isFinite(openMs) && openMs < firstOpenMs;
+    });
+    if (!olderBars.length) return;
+    mergeOlderBars(olderBars, prevRange, tf);
+    setStatus(`ok · tf=${tf}s · bars=${barsStore.length} · disk_fill`);
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+  }
 }
 
 function applyUpdates(events) {
@@ -1374,9 +1457,6 @@ function applyUpdates(events) {
     const keyTf = ev.key && Number.isFinite(ev.key.tf_s) ? ev.key.tf_s : (Number.isFinite(bar.tf_s) ? bar.tf_s : null);
     const keyOpen = ev.key && Number.isFinite(ev.key.open_ms) ? ev.key.open_ms : bar.open_time_ms;
     if (keyTf == null) continue;
-    if (updatesCursor != null && keyOpen <= updatesCursor) {
-      continue;
-    }
     const stateKey = `${keySymbol}|${keyTf}|${keyOpen}`;
     const complete = ev.complete === true || bar.complete === true;
     const source = ev.source || bar.src || '';
@@ -1430,11 +1510,14 @@ async function pollUpdates() {
     : false);
 
   try {
+    const epoch = viewEpoch;
     let url = `/api/updates?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=500`;
     if (updatesSeqCursor != null) {
       url += `&since_seq=${updatesSeqCursor}`;
     }
+    url += `&epoch=${viewEpoch}`;
     const data = await apiGet(url);
+    if (epoch !== viewEpoch) return;
     if (Number.isFinite(data.api_seen_ts_ms)) {
       lastApiSeenMs = data.api_seen_ts_ms;
     }
@@ -1547,6 +1630,7 @@ async function init() {
     elSymbol.value = symbolPreferred;
   }
   updateToolbarValue('symbol');
+  startNewViewEpoch();
   await loadBarsFull();
   saveCacheCurrent();
   updateToolbarValue('tf');
@@ -1562,6 +1646,7 @@ async function init() {
 
   if (elReload) {
     elReload.addEventListener('click', async () => {
+      startNewViewEpoch();
       await loadBarsFull();
     });
   }
