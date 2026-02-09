@@ -19,13 +19,10 @@ from runtime.ingest.polling.fetch_policy import (
 )
 from runtime.ingest.polling.flat_filter import is_flat_bar
 from runtime.ingest.polling.time_buckets import floor_bucket_start_ms
+from runtime.obs_60s import Obs60s
+from runtime.store.layers.disk_layer import DiskLayer
 from runtime.store.redis_snapshot import build_redis_snapshot_writer
-from runtime.store.ssot_jsonl import (
-    JsonlAppender,
-    head_first_bar_time_ms,
-    read_tail_bars,
-    tail_last_bar_time_ms,
-)
+from runtime.store.ssot_jsonl import JsonlAppender, head_first_bar_time_ms, read_tail_bars
 
 if TYPE_CHECKING:
     from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
@@ -34,6 +31,28 @@ if TYPE_CHECKING:
 
 def utc_now_ms() -> int:
     return int(time.time() * 1000)
+
+
+FINAL_SOURCES = {"history", "derived", "history_agg"}
+REPLAY_GRACE_BARS = 10
+
+_OBS = Obs60s("writer")
+
+
+def _watermark_drop_reason(open_ms: int, wm_open_ms: Optional[int]) -> Optional[str]:
+    if wm_open_ms is None:
+        return None
+    if open_ms == wm_open_ms:
+        return "duplicate"
+    if open_ms < wm_open_ms:
+        return "stale"
+    return None
+
+
+def _is_final_bar(bar: CandleBar) -> bool:
+    if bar.complete is not True:
+        return False
+    return bar.src in FINAL_SOURCES
 
 
 def _d1_anchor_offsets(
@@ -220,6 +239,7 @@ class PollingConnectorB:
             day_anchor_offset_s_alt=day_anchor_offset_s_alt,
             day_anchor_offset_s_alt2=day_anchor_offset_s_alt2,
         )
+        self._disk = DiskLayer(data_root)
         self._snapshots = build_redis_snapshot_writer(self._config_path)
         m5_keep = max(2000, warmup_bars + 500)
         self._m5 = M5Buffer(max_keep=m5_keep)
@@ -229,6 +249,7 @@ class PollingConnectorB:
         self._last_saved_m5_open_ms: Optional[int] = None
         self._last_saved_derived: Dict[int, int] = {}  # tf_s -> open_time_ms
         self._last_saved_base: Dict[int, int] = {}  # tf_s -> open_time_ms
+        self._wm_by_key: Dict[Tuple[str, int], int] = {}  # (symbol, tf_s) -> open_time_ms
         self._poll_counter: int = 0
         self._day_index_cache: Dict[str, set[int]] = {}
         self._group_logs: bool = False
@@ -671,14 +692,76 @@ class PollingConnectorB:
             self._snapshots.close()
 
     def _append_bar(self, bar: CandleBar) -> None:
+        if not _is_final_bar(bar):
+            if self._snapshots is not None:
+                self._snapshots.put_bar(bar)
+            return
+
+        wm_key = (bar.symbol, bar.tf_s)
+        wm_open_ms = self._wm_by_key.get(wm_key)
+        reason = _watermark_drop_reason(bar.open_time_ms, wm_open_ms)
+        if reason is not None:
+            label = "WRITER_DROP_STALE" if reason == "stale" else "WRITER_DROP_DUPLICATE"
+            level = logging.warning
+            delta_bars = None
+            if reason == "stale" and wm_open_ms is not None:
+                tf_ms = int(bar.tf_s) * 1000
+                if tf_ms > 0:
+                    delta_bars = int((wm_open_ms - bar.open_time_ms) // tf_ms)
+                if delta_bars is not None and 0 < delta_bars <= REPLAY_GRACE_BARS:
+                    label = "WRITER_DROP_REPLAY"
+                    level = logging.info
+                    _OBS.inc_writer_drop("replay", bar.tf_s)
+                else:
+                    _OBS.inc_writer_drop(reason, bar.tf_s)
+            else:
+                _OBS.inc_writer_drop(reason, bar.tf_s)
+            level(
+                "%s symbol=%s tf_s=%s open_ms=%s wm_open_ms=%s delta_bars=%s src=%s complete=%s",
+                label,
+                bar.symbol,
+                bar.tf_s,
+                bar.open_time_ms,
+                wm_open_ms,
+                delta_bars,
+                bar.src,
+                bar.complete,
+            )
+            return
+
         self._writer.append(bar)
+        self._wm_by_key[wm_key] = bar.open_time_ms
         if self._snapshots is None:
             return
         self._snapshots.put_bar(bar)
 
+    def _load_last_open_ms_from_disk(self, symbol: str, tf_s: int) -> Optional[int]:
+        bars, geom = self._disk.read_window_with_geom(
+            symbol,
+            tf_s,
+            limit=1,
+            since_open_ms=None,
+            to_open_ms=None,
+            use_tail=True,
+        )
+        if geom is not None:
+            logging.warning(
+                "Watermark init: виправлено геометрію symbol=%s tf_s=%s sorted=%s dedup_dropped=%s",
+                symbol,
+                tf_s,
+                geom.get("sorted"),
+                geom.get("dedup_dropped"),
+            )
+        if not bars:
+            return None
+        last_open_ms = bars[-1].get("open_time_ms")
+        return int(last_open_ms) if isinstance(last_open_ms, int) else None
+
     def _bootstrap_from_disk(self, log_detail: bool = False) -> Dict[str, Any]:
-        last_m5 = tail_last_bar_time_ms(self._data_root, self._symbol, tf_s=300)
+        last_m5 = self._load_last_open_ms_from_disk(self._symbol, 300)
         self._last_saved_m5_open_ms = last_m5
+        if last_m5 is not None:
+            self._wm_by_key[(self._symbol, 300)] = last_m5
         if log_detail:
             if last_m5 is not None:
                 logging.debug(
@@ -689,14 +772,16 @@ class PollingConnectorB:
                 logging.debug("Старт: на диску немає 5m історії для %s", self._symbol)
 
         for tf_s in self._derived_tfs_s:
-            last_d = tail_last_bar_time_ms(self._data_root, self._symbol, tf_s=tf_s)
+            last_d = self._load_last_open_ms_from_disk(self._symbol, tf_s)
             if last_d is not None:
                 self._last_saved_derived[tf_s] = last_d
+                self._wm_by_key[(self._symbol, tf_s)] = last_d
 
         for tf_s in self._broker_base_tfs_s:
-            last_b = tail_last_bar_time_ms(self._data_root, self._symbol, tf_s=tf_s)
+            last_b = self._load_last_open_ms_from_disk(self._symbol, tf_s)
             if last_b is not None:
                 self._last_saved_base[tf_s] = last_b
+                self._wm_by_key[(self._symbol, tf_s)] = last_b
 
         return {"m5_last_exists": last_m5 is not None}
 

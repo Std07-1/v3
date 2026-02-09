@@ -1,0 +1,137 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "marketdata.window.v1",
+    "title": "MarketData Window v1",
+    "type": "object",
+    "additionalProperties": false,
+    "oneOf": [
+        {
+            "title": "window_response",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "ok",
+                "symbol",
+                "tf_s",
+                "bars",
+                "boot_id",
+                "meta"
+            ],
+            "properties": {
+                "ok": {
+                    "const": true
+                },
+                "symbol": {
+                    "type": "string"
+                },
+                "tf_s": {
+                    "type": "integer"
+                },
+                "bars": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "bar_v1.json"
+                    }
+                },
+                "boot_id": {
+                    "type": "string"
+                },
+                "meta": {
+                    "$ref": "#/$defs/meta"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "title": "no_data_response",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "ok",
+                "bars",
+                "note",
+                "boot_id",
+                "meta"
+            ],
+            "properties": {
+                "ok": {
+                    "const": true
+                },
+                "symbol": {
+                    "type": "string"
+                },
+                "tf_s": {
+                    "type": "integer"
+                },
+                "bars": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "bar_v1.json"
+                    },
+                    "maxItems": 0
+                },
+                "note": {
+                    "const": "no_data"
+                },
+                "boot_id": {
+                    "type": "string"
+                },
+                "meta": {
+                    "$ref": "#/$defs/meta"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        }
+    ],
+    "$defs": {
+        "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "source",
+                "redis_hit",
+                "boot_id"
+            ],
+            "properties": {
+                "source": {
+                    "type": "string"
+                },
+                "redis_hit": {
+                    "type": "boolean"
+                },
+                "boot_id": {
+                    "type": "string"
+                },
+                "redis_error_code": {
+                    "type": "string"
+                },
+                "redis_ttl_s_left": {
+                    "type": "integer"
+                },
+                "redis_payload_ts_ms": {
+                    "type": "integer"
+                },
+                "redis_seq": {
+                    "type": "integer"
+                },
+                "redis_len": {
+                    "type": "integer"
+                },
+                "extensions": {
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            }
+        }
+    }
+}

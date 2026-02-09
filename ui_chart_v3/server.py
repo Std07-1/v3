@@ -32,6 +32,7 @@ from typing import Any
 
 from core.time_geom import normalize_bar
 from env_profile import load_env_profile
+from runtime.store.uds import ReadPolicy, UpdatesSpec, WindowSpec, build_uds_from_config
 
 try:
     import redis as redis_lib  # type: ignore
@@ -707,6 +708,205 @@ def _validate_bar_lwc(bar: dict[str, Any], tf_allowlist: set[int]) -> list[str]:
     return warnings
 
 
+def _sample_items(items: list[Any], full_limit: int = 2000, head: int = 50, tail: int = 50) -> list[Any]:
+    if len(items) <= full_limit:
+        return items
+    if head + tail >= len(items):
+        return items
+    return list(items[:head]) + list(items[-tail:])
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int)
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _guard_bar_shape(bar: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    required = {
+        "time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "open_time_ms",
+        "close_time_ms",
+        "tf_s",
+        "src",
+        "complete",
+    }
+    optional = {"event_ts", "last_price", "last_tick_ts"}
+    allowed = required | optional
+    missing = [key for key in required if key not in bar]
+    if missing:
+        issues.append(f"bar_missing:{','.join(sorted(missing))}")
+    extra = [key for key in bar.keys() if key not in allowed]
+    if extra:
+        issues.append(f"bar_extra:{','.join(sorted(extra))}")
+    if "time" in bar and not _is_int(bar.get("time")):
+        issues.append("bar_time_not_int")
+    for key in ("open", "high", "low", "close", "volume"):
+        if key in bar and not _is_number(bar.get(key)):
+            issues.append(f"bar_{key}_not_number")
+    if "open_time_ms" in bar and not _is_int(bar.get("open_time_ms")):
+        issues.append("bar_open_time_ms_not_int")
+    close_ms = bar.get("close_time_ms")
+    if close_ms is not None and not _is_int(close_ms):
+        issues.append("bar_close_time_ms_not_int")
+    if "tf_s" in bar and not _is_int(bar.get("tf_s")):
+        issues.append("bar_tf_s_not_int")
+    if "src" in bar and not isinstance(bar.get("src"), str):
+        issues.append("bar_src_not_str")
+    if "complete" in bar and not isinstance(bar.get("complete"), bool):
+        issues.append("bar_complete_not_bool")
+    if "event_ts" in bar and not _is_int(bar.get("event_ts")):
+        issues.append("bar_event_ts_not_int")
+    if "last_price" in bar and not _is_number(bar.get("last_price")):
+        issues.append("bar_last_price_not_number")
+    if "last_tick_ts" in bar and not _is_int(bar.get("last_tick_ts")):
+        issues.append("bar_last_tick_ts_not_int")
+    return issues
+
+
+def _guard_event_shape(ev: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    required = {"key", "bar", "complete", "source"}
+    optional = {"event_ts", "seq"}
+    allowed = required | optional
+    missing = [key for key in required if key not in ev]
+    if missing:
+        issues.append(f"event_missing:{','.join(sorted(missing))}")
+    extra = [key for key in ev.keys() if key not in allowed]
+    if extra:
+        issues.append(f"event_extra:{','.join(sorted(extra))}")
+    key = ev.get("key")
+    if not isinstance(key, dict):
+        issues.append("event_key_not_object")
+    else:
+        key_required = {"symbol", "tf_s", "open_ms"}
+        key_missing = [k for k in key_required if k not in key]
+        if key_missing:
+            issues.append(f"event_key_missing:{','.join(sorted(key_missing))}")
+        if "symbol" in key and not isinstance(key.get("symbol"), str):
+            issues.append("event_key_symbol_not_str")
+        if "tf_s" in key and not _is_int(key.get("tf_s")):
+            issues.append("event_key_tf_s_not_int")
+        if "open_ms" in key and not _is_int(key.get("open_ms")):
+            issues.append("event_key_open_ms_not_int")
+        key_extra = [k for k in key.keys() if k not in key_required]
+        if key_extra:
+            issues.append(f"event_key_extra:{','.join(sorted(key_extra))}")
+    if "bar" in ev and not isinstance(ev.get("bar"), dict):
+        issues.append("event_bar_not_object")
+    if "complete" in ev and not isinstance(ev.get("complete"), bool):
+        issues.append("event_complete_not_bool")
+    if "source" in ev and not isinstance(ev.get("source"), str):
+        issues.append("event_source_not_str")
+    if "event_ts" in ev and ev.get("event_ts") is not None and not _is_int(ev.get("event_ts")):
+        issues.append("event_event_ts_not_int")
+    if "seq" in ev and not _is_int(ev.get("seq")):
+        issues.append("event_seq_not_int")
+    return issues
+
+
+def _guard_meta_shape(meta: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    required = {"source", "redis_hit", "boot_id"}
+    optional = {
+        "redis_error_code",
+        "redis_ttl_s_left",
+        "redis_payload_ts_ms",
+        "redis_seq",
+        "redis_len",
+        "extensions",
+    }
+    allowed = required | optional
+    missing = [key for key in required if key not in meta]
+    if missing:
+        issues.append(f"meta_missing:{','.join(sorted(missing))}")
+    extra = [key for key in meta.keys() if key not in allowed]
+    if extra:
+        issues.append(f"meta_extra:{','.join(sorted(extra))}")
+    if "source" in meta and not isinstance(meta.get("source"), str):
+        issues.append("meta_source_not_str")
+    if "redis_hit" in meta and not isinstance(meta.get("redis_hit"), bool):
+        issues.append("meta_redis_hit_not_bool")
+    if "boot_id" in meta and not isinstance(meta.get("boot_id"), str):
+        issues.append("meta_boot_id_not_str")
+    if "redis_error_code" in meta and not isinstance(meta.get("redis_error_code"), str):
+        issues.append("meta_redis_error_code_not_str")
+    for key in ("redis_ttl_s_left", "redis_payload_ts_ms", "redis_seq", "redis_len"):
+        if key in meta and not _is_int(meta.get(key)):
+            issues.append(f"meta_{key}_not_int")
+    if "extensions" in meta and not isinstance(meta.get("extensions"), dict):
+        issues.append("meta_extensions_not_object")
+    return issues
+
+
+def _contract_guard_warn_window(
+    payload: dict[str, Any],
+    bars: list[dict[str, Any]],
+    warnings: list[str],
+    had_warnings: bool,
+) -> None:
+    issues: list[str] = []
+    if payload.get("ok") is not True:
+        issues.append("window_ok_not_true")
+    if "note" in payload and payload.get("note") == "no_data":
+        if "bars" in payload and isinstance(payload.get("bars"), list) and payload.get("bars"):
+            issues.append("window_no_data_bars_not_empty")
+    else:
+        if "symbol" not in payload:
+            issues.append("window_missing_symbol")
+        if "tf_s" not in payload:
+            issues.append("window_missing_tf_s")
+    meta = payload.get("meta")
+    if not isinstance(meta, dict):
+        issues.append("window_meta_not_object")
+    else:
+        issues.extend(_guard_meta_shape(meta))
+    sample = _sample_items(bars)
+    for bar in sample:
+        if not isinstance(bar, dict):
+            issues.append("window_bar_not_object")
+            continue
+        issues.extend(_guard_bar_shape(bar))
+    if issues:
+        if had_warnings:
+            warnings.append("contract_violation")
+        logging.warning("CONTRACT_VIOLATION schema=window_v1 issues=%s", ",".join(issues[:10]))
+
+
+def _contract_guard_warn_updates(
+    payload: dict[str, Any],
+    events: list[dict[str, Any]],
+    warnings: list[str],
+    had_warnings: bool,
+) -> None:
+    issues: list[str] = []
+    if payload.get("ok") is not True:
+        issues.append("updates_ok_not_true")
+    for key in ("symbol", "tf_s", "events", "cursor_seq", "boot_id"):
+        if key not in payload:
+            issues.append(f"updates_missing:{key}")
+    if "cursor_seq" in payload and not _is_int(payload.get("cursor_seq")):
+        issues.append("updates_cursor_seq_not_int")
+    sample = _sample_items(events, full_limit=500, head=50, tail=50)
+    for ev in sample:
+        if not isinstance(ev, dict):
+            issues.append("updates_event_not_object")
+            continue
+        issues.extend(_guard_event_shape(ev))
+    if issues:
+        if had_warnings:
+            warnings.append("contract_violation")
+        logging.warning("CONTRACT_VIOLATION schema=updates_v1 issues=%s", ",".join(issues[:10]))
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     """HTTP handler: / (статичні файли), /api/* (JSON)."""
 
@@ -794,6 +994,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         qs = urllib.parse.parse_qs(parsed.query)
         data_root: str = self.server.data_root  # type: ignore[attr-defined]
         config_path: str | None = getattr(self.server, "config_path", None)  # type: ignore[attr-defined]
+        uds = getattr(self.server, "uds", None)  # type: ignore[attr-defined]
         path = parsed.path.rstrip("/") or "/"
 
         cfg: dict[str, Any] = {}
@@ -801,7 +1002,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             cfg = _load_cfg_cached(config_path)
 
         tf_allowlist = _tf_allowlist_from_cfg(cfg)
-        min_coldload_bars = _min_coldload_bars_from_cfg(cfg)
+
+        if uds is None:
+            self._bad("uds_not_available")
+            return
 
         if path == "/api/config":
             ui_debug = _parse_bool(cfg.get("ui_debug", True), True)
@@ -828,75 +1032,31 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if tf_s not in tf_allowlist:
                 self._bad("tf_not_allowed")
                 return
-
-            events: list[dict[str, Any]] = []
-            parts = _list_parts(data_root, symbol, tf_s)
-            if parts:
-                bars = _read_jsonl_tail_filtered(parts, None, None, limit)
-                lwc = _bars_to_lwc(bars)
-                for b in lwc:
-                    key = (symbol, int(b.get("tf_s", 0)), int(b.get("open_time_ms", 0)))
-                    digest = _digest_bar(b)
-                    seq = _next_seq_for_event(key, digest)
-                    if seq is None:
-                        continue
-                    ev = _bar_to_update_event(symbol, b)
-                    ev["seq"] = seq
-                    events.append(ev)
-
-            if since_seq is not None:
-                events = [ev for ev in events if ev.get("seq") and ev["seq"] > since_seq]
-
-            warnings: list[str] = []
-            filtered_events: list[dict[str, Any]] = []
-            for ev in events:
-                issues = _validate_event(ev, tf_allowlist)
-                if issues:
-                    warnings.extend(issues)
-                    continue
-                filtered_events.append(ev)
-            if len(filtered_events) > MAX_EVENTS_PER_RESPONSE:
-                filtered_events = filtered_events[-MAX_EVENTS_PER_RESPONSE:]
-                warnings.append("max_events_trimmed")
-
-            events = filtered_events
-            for ev in events:
-                if ev.get("complete") is True and ev.get("source") in FINAL_SOURCES:
-                    bar = ev.get("bar")
-                    if isinstance(bar, dict):
-                        _cache_upsert(symbol, tf_s, bar)
-
-            cursor_seq = None
-            for ev in events:
-                seq = ev.get("seq")
-                if isinstance(seq, int) and (cursor_seq is None or seq > cursor_seq):
-                    cursor_seq = seq
-            if cursor_seq is None and since_seq is not None:
-                cursor_seq = since_seq
-            if cursor_seq is None:
-                cursor_seq = 0
+            spec = UpdatesSpec(symbol=symbol, tf_s=tf_s, since_seq=since_seq, limit=limit)
+            res = uds.read_updates(spec)
             payload: dict[str, Any] = {
                 "ok": True,
                 "symbol": symbol,
                 "tf_s": tf_s,
-                "events": events,
-                "cursor_seq": cursor_seq,
+                "events": res.events,
+                "cursor_seq": res.cursor_seq,
                 "boot_id": _boot_id,
             }
+            warnings = list(res.warnings)
+            had_warnings = bool(warnings)
+            _contract_guard_warn_updates(payload, res.events, warnings, had_warnings)
             if warnings:
                 payload["warnings"] = warnings
-            disk_last_open_ms = _disk_last_open_ms(data_root, symbol, tf_s)
-            payload["disk_last_open_ms"] = disk_last_open_ms
-            if disk_last_open_ms is not None:
-                payload["bar_close_ms"] = disk_last_open_ms + tf_s * 1000 - 1
-            payload["ssot_write_ts_ms"] = _disk_last_mtime_ms(data_root, symbol, tf_s)
-            payload["api_seen_ts_ms"] = int(time.time() * 1000)
+            payload["disk_last_open_ms"] = res.disk_last_open_ms
+            payload["bar_close_ms"] = res.bar_close_ms
+            payload["ssot_write_ts_ms"] = res.ssot_write_ts_ms
+            payload["api_seen_ts_ms"] = res.api_seen_ts_ms
             if logging.getLogger().isEnabledFor(logging.INFO):
                 window_start_ms = None
                 window_end_ms = None
-                if events:
-                    first_bar = events[0].get("bar")
-                    last_bar = events[-1].get("bar")
+                if res.events:
+                    first_bar = res.events[0].get("bar")
+                    last_bar = res.events[-1].get("bar")
                     if isinstance(first_bar, dict):
                         window_start_ms = first_bar.get("open_time_ms")
                     if isinstance(last_bar, dict):
@@ -907,8 +1067,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     tf_s,
                     epoch,
                     since_seq,
-                    len(events),
-                    payload.get("cursor_seq"),
+                    len(res.events),
+                    res.cursor_seq,
                     window_start_ms,
                     window_end_ms,
                 )
@@ -935,20 +1095,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._bad("tf_not_allowed")
                 return
 
-            parts = _list_parts(data_root, symbol, tf_s)
-            if not parts:
-                self._json(
-                    200,
-                    {
-                        "ok": True,
-                        "bars": [],
-                        "note": "no_data",
-                        "boot_id": _boot_id,
-                        "meta": {"source": "disk", "redis_hit": False, "boot_id": _boot_id},
-                    },
-                )
-                return
-
             since_open_ms = None
             to_open_ms = None
             if path == "/api/latest":
@@ -960,177 +1106,49 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 since_open_ms = _safe_int(s, 0) if s is not None else None
                 to_open_ms = _safe_int(t, 0) if t is not None else None
 
-            meta: dict[str, Any] = {"source": "disk", "redis_hit": False, "boot_id": _boot_id}
-            warnings: list[str] = []
-            filtered: list[dict[str, Any]] = []
             cold_load = since_open_ms is None and to_open_ms is None and not force_disk
-
-            if path == "/api/bars" and prefer_redis and cold_load:
-                redis_error_code: str | None = None
-                redis_client = _redis_client_from_cfg(cfg)
-                if redis_client is None:
-                    redis_error_code = "redis_disabled"
-                else:
-                    client, ns = redis_client
-                    tail_key = _redis_key(ns, "ohlcv", "tail", symbol, str(tf_s))
-                    snap_key = _redis_key(ns, "ohlcv", "snap", symbol, str(tf_s))
-                    payload, ttl_left, err = _redis_get_json(client, tail_key)
-                    if err == "redis_miss":
-                        payload, ttl_left, err = _redis_get_json(client, snap_key)
-                    if err is not None:
-                        redis_error_code = err
-                    elif payload is None:
-                        redis_error_code = "redis_empty"
-                    elif ttl_left is None or ttl_left <= 0:
-                        redis_error_code = "redis_ttl_invalid"
-                    else:
-                        bars = _redis_payload_to_bars(payload, symbol, tf_s)
-                        if not bars:
-                            redis_error_code = "redis_empty"
-                        else:
-                            lwc = _bars_to_lwc(bars)
-                            for b in lwc:
-                                issues = _validate_bar_lwc(b, tf_allowlist)
-                                if issues:
-                                    warnings.extend(issues)
-                                    continue
-                                filtered.append(b)
-                            if limit > 0:
-                                filtered = filtered[-limit:]
-                            min_required = int(min_coldload_bars.get(tf_s, 0))
-                            if min_required > 0 and len(filtered) < min_required:
-                                redis_error_code = "redis_tail_small"
-                                meta = {
-                                    "source": "disk_fallback_small_tail",
-                                    "redis_hit": True,
-                                    "redis_len": len(filtered),
-                                    "redis_ttl_s_left": ttl_left,
-                                    "redis_payload_ts_ms": payload.get("payload_ts_ms"),
-                                    "redis_seq": payload.get("last_seq")
-                                    if isinstance(payload.get("last_seq"), int)
-                                    else payload.get("seq"),
-                                    "boot_id": _boot_id,
-                                }
-                                log_key = f"redis_small_tail:{symbol}:{tf_s}"
-                                _log_throttled(
-                                    "warning",
-                                    log_key,
-                                    (
-                                        "UI_BARS_REDIS_SMALL_TAIL_FALLBACK symbol=%s tf=%s len=%s min=%s"
-                                        % (symbol, tf_s, len(filtered), min_required)
-                                    ),
-                                )
-                                filtered = []
-                            else:
-                                meta = {
-                                    "source": "redis",
-                                    "redis_hit": True,
-                                    "redis_ttl_s_left": ttl_left,
-                                    "redis_payload_ts_ms": payload.get("payload_ts_ms"),
-                                    "redis_seq": payload.get("last_seq")
-                                    if isinstance(payload.get("last_seq"), int)
-                                    else payload.get("seq"),
-                                    "boot_id": _boot_id,
-                                }
-                                _cache_seed(symbol, tf_s, filtered)
-                                log_key = f"redis_hit:{symbol}:{tf_s}"
-                                _log_throttled(
-                                    "info",
-                                    log_key,
-                                    (
-                                        "UI_BARS_REDIS_HIT symbol=%s tf=%s ttl_left_s=%s seq=%s"
-                                        % (symbol, tf_s, ttl_left, meta.get("redis_seq"))
-                                    ),
-                                )
-
-                if filtered:
-                    payload = {
-                        "ok": True,
-                        "symbol": symbol,
-                        "tf_s": tf_s,
-                        "bars": filtered,
-                        "boot_id": _boot_id,
-                        "meta": meta,
-                    }
-                    if warnings:
-                        payload["warnings"] = warnings
-                    self._json(200, payload)
-                    return
-                if redis_error_code:
-                    meta = {
-                        "source": "disk",
-                        "redis_hit": False,
-                        "redis_error_code": redis_error_code,
-                        "boot_id": _boot_id,
-                    }
-                    log_key = f"redis_fallback:{symbol}:{tf_s}"
-                    if redis_error_code == "redis_miss":
-                        _log_throttled(
-                            "warning",
-                            log_key,
-                            (
-                                "UI_BARS_REDIS_MISS_FALLBACK_DISK symbol=%s tf=%s"
-                                % (symbol, tf_s)
-                            ),
-                        )
-                    elif redis_error_code == "redis_tail_small":
-                        _log_throttled(
-                            "warning",
-                            log_key,
-                            (
-                                "UI_BARS_REDIS_SMALL_TAIL_FALLBACK symbol=%s tf=%s"
-                                % (symbol, tf_s)
-                            ),
-                        )
-                    else:
-                        _log_throttled(
-                            "warning",
-                            log_key,
-                            (
-                                "UI_BARS_REDIS_READ_FAILED symbol=%s tf=%s code=%s fallback=disk"
-                                % (symbol, tf_s, redis_error_code)
-                            ),
-                        )
-
-            use_tail = (
-                path == "/api/latest"
-                or cold_load
-                or since_open_ms is not None
-                or (to_open_ms is not None and force_disk)
+            spec = WindowSpec(
+                symbol=symbol,
+                tf_s=tf_s,
+                limit=limit,
+                since_open_ms=since_open_ms,
+                to_open_ms=to_open_ms,
+                cold_load=cold_load,
             )
-            if use_tail:
-                bars = _read_jsonl_tail_filtered(parts, since_open_ms, to_open_ms, limit)
-            else:
-                bars = _read_jsonl_filtered(parts, since_open_ms, to_open_ms, limit)
-            lwc = _bars_to_lwc(bars)
-            for b in lwc:
-                issues = _validate_bar_lwc(b, tf_allowlist)
-                if issues:
-                    warnings.extend(issues)
-                    continue
-                filtered.append(b)
-            if cold_load and not force_disk:
-                cached = _cache_get(symbol, tf_s)
-                if cached and (limit <= 0 or len(cached) >= limit):
-                    filtered = cached[-limit:] if limit > 0 else cached
-                elif not cached:
-                    _cache_seed(symbol, tf_s, filtered)
+            policy = ReadPolicy(
+                force_disk=force_disk,
+                prefer_redis=path == "/api/bars" and prefer_redis,
+            )
+            res = uds.read_window(spec, policy)
+            if not res.bars_lwc and since_open_ms is None and to_open_ms is None:
+                payload = {
+                    "ok": True,
+                    "bars": [],
+                    "note": "no_data",
+                    "boot_id": _boot_id,
+                    "meta": res.meta or {"source": "disk", "redis_hit": False, "boot_id": _boot_id},
+                }
+                _contract_guard_warn_window(payload, [], [], False)
+                self._json(200, payload)
+                return
             payload = {
                 "ok": True,
                 "symbol": symbol,
                 "tf_s": tf_s,
-                "bars": filtered,
+                "bars": res.bars_lwc,
                 "boot_id": _boot_id,
-                "meta": meta,
+                "meta": res.meta,
             }
+            warnings = list(res.warnings)
             if warnings:
                 payload["warnings"] = warnings
+            _contract_guard_warn_window(payload, res.bars_lwc, warnings, bool(warnings))
             if logging.getLogger().isEnabledFor(logging.INFO):
                 window_start_ms = None
                 window_end_ms = None
-                if filtered:
-                    window_start_ms = filtered[0].get("open_time_ms")
-                    window_end_ms = filtered[-1].get("close_time_ms")
+                if res.bars_lwc:
+                    window_start_ms = res.bars_lwc[0].get("open_time_ms")
+                    window_end_ms = res.bars_lwc[-1].get("close_time_ms")
                 logging.info(
                     "UI_BARS path=%s symbol=%s tf_s=%s epoch=%s limit=%s count=%s window_start_ms=%s window_end_ms=%s source=%s redis_hit=%s redis_error=%s",
                     path,
@@ -1138,12 +1156,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     tf_s,
                     epoch,
                     limit,
-                    len(filtered),
+                    len(res.bars_lwc),
                     window_start_ms,
                     window_end_ms,
-                    meta.get("source"),
-                    meta.get("redis_hit"),
-                    meta.get("redis_error_code"),
+                    res.meta.get("source"),
+                    res.meta.get("redis_hit"),
+                    res.meta.get("redis_error_code"),
                 )
             self._json(200, payload)
             return
@@ -1221,9 +1239,15 @@ def main() -> int:
     httpd = http.server.ThreadingHTTPServer((args.host, args.port), Handler)
     httpd.data_root = data_root  # type: ignore[attr-defined]
     httpd.config_path = config_path  # type: ignore[attr-defined]
+    httpd.uds = build_uds_from_config(  # type: ignore[attr-defined]
+        config_path,
+        data_root,
+        _boot_id,
+        role="reader",
+    )
 
     logging.info("UI: http://%s:%s/", args.host, args.port)
-    logging.info("DATA_ROOT: %s", httpd.data_root)  # type: ignore[attr-defined]
+    logging.debug("DATA_ROOT: %s", httpd.data_root)  # type: ignore[attr-defined]
     httpd.serve_forever()
     return 0
 

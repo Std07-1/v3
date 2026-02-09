@@ -8,6 +8,7 @@ from collections import deque
 from typing import Any, Deque, Dict, Optional, Tuple
 
 from core.model.bars import CandleBar
+from runtime.store.redis_keys import symbol_key
 
 try:
     import redis as redis_lib  # type: ignore
@@ -181,6 +182,7 @@ class RedisSnapshotWriter:
 
         payload_ts_ms = int(time.time() * 1000)
         seq = self._next_seq()
+        key_symbol = symbol_key(symbol)
         snap_bar = tail[-1]
         snap = {
             "v": 1,
@@ -193,14 +195,14 @@ class RedisSnapshotWriter:
             "seq": seq,
             "payload_ts_ms": payload_ts_ms,
         }
-        key = self._key("ohlcv", "snap", symbol, str(tf_s))
+        key = self._key("ohlcv", "snap", key_symbol, str(tf_s))
         self._write_json(key, snap, self._ttl(tf_s))
 
         n = int(self._tail_n_by_tf_s.get(tf_s, 0))
         if n > 0:
             if len(tail) > n:
                 tail = tail[-n:]
-            k = (symbol, tf_s)
+            k = (key_symbol, tf_s)
             self._tails[k] = deque(tail, maxlen=n)
             tail_payload = {
                 "v": 1,
@@ -212,7 +214,7 @@ class RedisSnapshotWriter:
                 "last_seq": seq,
                 "payload_ts_ms": payload_ts_ms,
             }
-            tail_key = self._key("ohlcv", "tail", symbol, str(tf_s))
+            tail_key = self._key("ohlcv", "tail", key_symbol, str(tf_s))
             self._write_json(tail_key, tail_payload, self._ttl(tf_s))
 
         if last_complete and last_close_ms_excl is not None:
@@ -246,6 +248,7 @@ class RedisSnapshotWriter:
             return
         close_ms_incl = close_ms_excl - 1
         seq = self._next_seq()
+        key_symbol = symbol_key(bar.symbol)
         snap = {
             "v": 1,
             "symbol": bar.symbol,
@@ -265,12 +268,12 @@ class RedisSnapshotWriter:
             "seq": seq,
             "payload_ts_ms": payload_ts_ms,
         }
-        key = self._key("ohlcv", "snap", bar.symbol, str(bar.tf_s))
+        key = self._key("ohlcv", "snap", key_symbol, str(bar.tf_s))
         self._write_json(key, snap, self._ttl(bar.tf_s))
 
         n = int(self._tail_n_by_tf_s.get(bar.tf_s, 0))
         if n > 0:
-            k = (bar.symbol, bar.tf_s)
+            k = (key_symbol, bar.tf_s)
             if k not in self._tails:
                 self._tails[k] = deque(maxlen=n)
             self._tails[k].append(snap["bar"])
@@ -284,7 +287,7 @@ class RedisSnapshotWriter:
                 "last_seq": seq,
                 "payload_ts_ms": payload_ts_ms,
             }
-            tail_key = self._key("ohlcv", "tail", bar.symbol, str(bar.tf_s))
+            tail_key = self._key("ohlcv", "tail", key_symbol, str(bar.tf_s))
             self._write_json(tail_key, tail, self._ttl(bar.tf_s))
 
         if bar.complete:

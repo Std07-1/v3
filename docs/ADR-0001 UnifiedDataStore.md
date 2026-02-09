@@ -1,5 +1,5 @@
 
-Нижче — **ADR-скелет** під *v3* для рішення “**UnifiedDataStore (RAM↔Redis↔Disk) + API contracts**”, із акцентом на **TV-like стабільність**, швидкі перемикання **symbol/TF**, і **тупий UI** (рендер без рішень).
+**ADR-скелет** під *v3* для рішення “**UnifiedDataStore (RAM↔Redis↔Disk) + API contracts**”, із акцентом на **TV-like стабільність**, швидкі перемикання **symbol/TF**, і **тупий UI** (рендер без рішень).
 
 Я спеціально заклав у скелет **інваріанти**, які прямо б’ють по твоїй проблемі “refresh нормалізує / потім знову ламається”: це майже завжди **гонки запитів**, **часткові вікна**, **неузгоджені cursors/seq**, і **випадкові деградації** (silent partial). У поточному UI видно паралельні контури оновлення: `loadBarsFull()` → `/api/bars`, `pollLatest()` → `/api/latest`, `pollLive()` → `/api/live` із різними таймерами, без cancellation/epoch-гейту, що легко дає “смикання” при перемиканні symbol/TF і при масштабуванні.
 
@@ -7,10 +7,11 @@
 
 ## ADR-0001: UnifiedDataStore (RAM/Redis/Disk) + Contract-first MarketData API
 
-**Status:** Draft
+**Status:** In progress (P2.2 wired, verify pending)
 **Date:** 2026-02-09
 **Owners:** (TBD)
 **Related:** UI stability / live jitter, redis snapshots, derived TF, exit-gates (TBD)
+**Updated:** 2026-02-09
 
 ### 1) Контекст і проблема
 
@@ -39,6 +40,104 @@
 4. **UnifiedDataStore = системний шар**: RAM↔Redis↔Disk як *єдине місце*, де вирішується: read path, write path, backpressure, TTL, coherency.
 5. **Contract-first API**: чіткі схеми запит/відповідь + версії; partial/degraded — **тільки loud**.
 6. **Масштабування**: керовані ліміти історії/вікон/хвостів; контроль Redis-size; прогнозована CPU/IO.
+
+### 2.1) Поточний стан (станом на 2026-02-09)
+
+**Реалізовано (факти з коду):**
+
+* UDS реалізовано у runtime/store/uds.py з шарами RAM/Redis/Disk та arbitration: `force_disk` → Disk, `cold_load+prefer_redis` → Redis tail/snap, інакше RAM (якщо є) → Disk.
+* /api/bars та /api/updates вже використовують UDS у ui_chart_v3/server.py; UDS створюється в `main()` і передається в handler.
+* warn-only guard контрактів активний для /api/bars і /api/updates (логування без блокування).
+
+**Фактичний API (наразі, без schema поля):**
+
+* /api/bars: `bars[]` (LWC-формат), `meta` з `source`, `redis_hit`, `redis_error_code?`, `boot_id`.
+* /api/updates: `events[]` (key/bar/complete/source/event_ts), `cursor_seq`, `disk_last_open_ms`, `bar_close_ms`, `ssot_write_ts_ms`, `api_seen_ts_ms`, `boot_id`.
+
+**VERIFY (реальні відповіді):**
+
+* tf_s=300: зафіксовано `open_time_ms` нестрого-зростаючий (non-increasing) на idx=399.
+  * prev=1769126100000 (2026-01-22 23:55:00Z)
+  * cur=1769040000000 (2026-01-22 00:00:00Z)
+  * це “відкат” майже на добу всередині одного дня.
+* tf_s=86400: зафіксовані зміни offset (ймовірно DST) — як warning.
+
+**Наслідки:**
+
+* потрібна нормалізація/впорядкування для tf_s=300 на read-path (або корекція даних на disk).
+* HTF offset має бути явно закріплений у SSOT календарі/конфігу та узгоджений з `bucket_start_ms()`.
+
+### 2.2) Висновки з VERIFY і локалізація причини
+
+**Ключовий факт:** /api/bars повернув non-increasing `open_time_ms` для tf_s=300. Для LWC це токсично, бо серія очікує монотонний час; такі “відкати” дають рваність/стриби/нестабільну нормалізацію після refresh.
+
+**Найбільш імовірна причина:** append-only JSONL отримав “пізній” запис із раннім `open_time_ms` (backfill/repair/derived/перезапуск), який дописався в кінець файла. DiskLayer `_read_jsonl_tail_filtered()` повертає хвіст без сортування, тому out-of-order одразу виходить в API.
+
+**tf_s=86400 offset/DST:** це не обов’язково дефект. Для D1 часто буває зміна якоря (FX/NY close) і DST. Це залишаємо як warning, але не FAIL у core.
+
+**Локалізація джерела out-of-order (Disk vs Redis vs RAM):**
+
+* Disk SSOT: `/api/bars?symbol=XAU/USD&tf_s=300&limit=2000&force_disk=1&prefer_redis=0`
+* Redis: `/api/bars?symbol=XAU/USD&tf_s=300&limit=2000&prefer_redis=1`
+
+Інтерпретація:
+
+* якщо out-of-order є навіть при `force_disk=1` → проблема у JSONL (дублі/пізні вставки).
+* якщо тільки в Redis → проблема у snapshot writer/packing.
+* якщо тільки у “звичайному” режимі → проблема в RAM cache seed/override.
+
+**Пошук дубля/пізнього append у JSONL (мінімальний скрипт):**
+
+```
+python - <<'PY'
+import os, glob, json
+DATA_ROOT = "./data_v3"
+SYMBOL_DIR = "XAU_USD"
+TF = 300
+TARGET = 1769040000000
+
+root = os.path.join(DATA_ROOT, SYMBOL_DIR, f"tf_{TF}")
+for fn in sorted(glob.glob(os.path.join(root, "part-*.jsonl"))):
+  with open(fn, "r", encoding="utf-8") as f:
+    for i, line in enumerate(f, 1):
+      line = line.strip()
+      if not line:
+        continue
+      try:
+        obj = json.loads(line)
+      except Exception:
+        continue
+      if obj.get("open_time_ms") == TARGET:
+        print("HIT", fn, "line", i, "src", obj.get("src"), "complete", obj.get("complete"))
+PY
+```
+
+**Критерій:** 2+ входження одного `open_time_ms` = прямий доказ дубля/пізнього backfill append.
+
+### 2.3) P2.2 hardening (must-have)
+
+**P2.2.1 Geometry normalize на read-path (UDS):**
+
+* додати `ensure_sorted_dedup(bars)` для виходу з Disk/Redis/RAM:
+  * cheap-scan: якщо монотонність порушена → sort by `open_time_ms`.
+  * dedup по `open_time_ms` із пріоритетом: `complete=True` над `complete=False`, FINAL sources над preview.
+  * якщо були правки → `meta.degraded += ["geom_non_monotonic"]` і `meta.geom_fix={"sorted":true,"dedup_dropped":N}`.
+  * лог `UDS_GEOM_FIX` з `source`, `tf_s`, `dropped`.
+
+**P2.2.2 Заборонити cache override після disk:**
+
+* джерело обирається до читання (UDS arbitration) і не підміняється після факту.
+
+**P2.2.3 Cursor semantics (updates):**
+
+* `cursor_seq` має бути детермінований (max seq або since_seq). Не перезаписувати cursor поза UDS.
+
+**P2.3/P2.4 Rails (single-writer + watermark):**
+
+* UDS у UI процесі має роль `reader` і кидає `UDS_WRITE_FORBIDDEN` при будь-якому записі.
+* Write-path має **watermark per (symbol, tf_s)**; бар з `open_time_ms <= wm_open_ms` відкидається як `stale|duplicate` (loud лог).
+* SSOT приймає лише final/complete бари з FINAL sources; preview/live іде лише в RAM/Redis tail.
+* Інваріант: final/complete бар **незмінний** — дублікати того ж `open_time_ms` не перезаписуються.
 
 ### 3) Не-цілі (Non-goals)
 
@@ -227,6 +326,22 @@ C) **UDS layered (рекомендовано)**
 * метрики: latency p95, hit ratios, degraded counts, seq gaps
 * тест-кейси: switch storm (symbol/tf), zoom-out, reconnect, redis down (loud degrade).
 
+### 10.1) Статус виконання (факт)
+
+* P0: виконано (діаг-логи у /api/bars і /api/updates, epoch у запитах зафіксовано у журналі).
+* P1: виконано (JSON Schema `marketdata_v1` + warn-only guard у server.py).
+* P2: виконано (UDS + RAM/Redis/Disk шари у runtime/store).
+* P3: виконано (інтеграція /api/bars і /api/updates через UDS у ui_chart_v3/server.py).
+* P4: частково (epoch-гейт у UI зафіксовано в журналі; потребує повторної перевірки після P2.2).
+* P5: не виконано (exit-gates і Observability без runner/manifest для UDS).
+
+### 10.2) Slice mapping (узгодження нумерації)
+
+Щоб уникнути плутанини під час рев’ю:
+
+* **P2.1** = `20260209-024` (UDS scaffolding: RAM/Redis/Disk шари).
+* **P3.0** = `20260209-025` (thin-API інтеграція через UDS; історично позначено як P2.2).
+
 ### 11) Тести / Exit Gates (Definition of Done)
 
 * Unit: dedup/sort invariants, seq monotonic, gap detection.
@@ -278,13 +393,52 @@ C) **UDS layered (рекомендовано)**
 | 4h  |        6 |                1460 |        8,760 |            3650 |   21,900 |
 | 1d  |        1 |                3650 |        3,650 |            9125 |    9,125 |
 
+1) Cold‑start (bootstrap) — рекомендовані ліміти
+Це саме “скільки потрібно, щоб стартувати стабільно” для всіх активів.
+
+5m (основа для derived):
+
+7 днів (≈ 2 016 барів) — стартова нормa.
+Якщо дозволяє CPU/IO, можна 14 днів (≈ 4 032), але тільки якщо без gap‑обрізання.
+Derived 15m/30m/1h (з 5m):
+
+дорівнює тривалості 5m, бо береться з нього.
+Тобто якщо 5m = 7d → derived теж максимум 7d на старті.
+4h (з брокера):
+
+180 днів (≈ 1 080 барів).
+Дає достатню “глибину” без надмірного трафіку.
+1d (з брокера):
+
+365 днів (≈ 365 барів).
+Достатньо для макро‑контексту без важкого history.
+Це холодний старт: швидко, без рваності, без перегріву.
+
+1) Таблиця з ADR — як ліміт накопичення, а не cold‑start
+Твоя таблиця нормальна як довгострокова межа (retention/макс‑вікно).
+Але для cold‑start її застосовувати не можна — інакше ти знову потрапиш у gaps.
+
+Тобто:
+
+Cold‑start = короткі вікна (вище).
+Retention/max = як у таблиці (це “стеля”, не старт).
+3) UI ліміти (що бачимо на старті)
+Пропоную такі default‑вікна UI саме для cold‑start:
+
+TF Cold‑start window
+5m 7d (≈ 2 016)
+15m 7d (≈ 672)
+30m 7d (≈ 336)
+1h 7d (≈ 168)
+4h 180d (≈ 1 080)
+1d 365d (≈ 365)
+А max‑window UI залишаємо за таблицею ADR (це вже “накопичення/глибина”).
+
 **Ключові наслідки:**
 
 * Для **5m**: max 180 днів ≈ 51.8k барів — це верхня межа, де ще реально тримати стабільно і на сервері, і в UI.
 * Для derived (15m/30m/1h): ти можеш давати “рік+” без проблем, бо барів значно менше.
 * `max_bars_per_request` можна поставити **60,000** глобально (і перевіряти rail’ом).
-
----
 
 ## 2) Redis: window-chunks чи тільки meta+lastbar+seq?
 

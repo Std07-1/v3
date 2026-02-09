@@ -51,6 +51,16 @@
             }
         },
         {
+            "name": "api_updates_cursor_sanity",
+            "module": "tools.exit_gates.gates.gate_api_updates_cursor",
+            "inputs": {
+                "base_url": "http://127.0.0.1:8089",
+                "symbol": "XAU/USD",
+                "tf_s": 300,
+                "since_seq": 0
+            }
+        },
+        {
             "name": "payload_budgets",
             "module": "tools.exit_gates.gates.gate_payload_budgets",
             "inputs": {
@@ -61,6 +71,35 @@
                 "max_status_bytes": 16384,
                 "max_updates_bytes": 256000,
                 "max_bars_bytes": 1000000
+            }
+        },
+        {
+            "name": "ui_thin_handlers",
+            "module": "tools.exit_gates.gates.gate_ui_thin_handlers",
+            "inputs": {
+                "file_path": "ui_chart_v3/server.py",
+                "class_name": "Handler",
+                "functions": [
+                    "do_GET",
+                    "_handle_api"
+                ],
+                "forbidden_prefixes": [
+                    "_read_jsonl_",
+                    "_redis_",
+                    "_cache_"
+                ]
+            }
+        },
+        {
+            "name": "ui_single_writer",
+            "module": "tools.exit_gates.gates.gate_ui_single_writer",
+            "inputs": {
+                "file_path": "ui_chart_v3/server.py",
+                "forbidden_modules": [
+                    "runtime.ingest",
+                    "runtime.store.ssot_jsonl",
+                    "runtime.store.redis_snapshot"
+                ]
             }
         }
     ]

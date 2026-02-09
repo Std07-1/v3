@@ -1,0 +1,67 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "marketdata.bar.v1",
+    "title": "MarketData Bar v1",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "open_time_ms",
+        "close_time_ms",
+        "tf_s",
+        "src",
+        "complete"
+    ],
+    "properties": {
+        "time": {
+            "type": "integer"
+        },
+        "open": {
+            "type": "number"
+        },
+        "high": {
+            "type": "number"
+        },
+        "low": {
+            "type": "number"
+        },
+        "close": {
+            "type": "number"
+        },
+        "volume": {
+            "type": "number"
+        },
+        "open_time_ms": {
+            "type": "integer"
+        },
+        "close_time_ms": {
+            "type": [
+                "integer",
+                "null"
+            ]
+        },
+        "tf_s": {
+            "type": "integer"
+        },
+        "src": {
+            "type": "string"
+        },
+        "complete": {
+            "type": "boolean"
+        },
+        "event_ts": {
+            "type": "integer"
+        },
+        "last_price": {
+            "type": "number"
+        },
+        "last_tick_ts": {
+            "type": "integer"
+        }
+    }
+}

@@ -2,17 +2,6 @@
     "symbol": "XAU/USD",
     "symbols": [
         "XAU/USD",
-        "EUSTX50",
-        "GBP/CAD",
-        "GER30",
-        "HKG33",
-        "NAS100",
-        "NGAS",
-        "NZD/CAD",
-        "SPX500",
-        "US30",
-        "USD/CAD",
-        "USD/JPY",
         "XAG/USD"
     ],
     "data_root": "./data_v3",
@@ -137,10 +126,12 @@
     ],
     "redis_priming_symbols": [],
     "min_coldload_bars_by_tf_s": {
-        "300": 300,
-        "900": 200,
+        "300": 2016,
+        "900": 672,
         "1800": 150,
-        "3600": 100
+        "3600": 720,
+        "14400": 1080,
+        "86400": 365
     },
     "redis": {
         "enabled": true,

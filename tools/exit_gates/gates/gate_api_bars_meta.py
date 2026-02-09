@@ -54,6 +54,12 @@ def _validate_lwc_bar(bar: dict, violations: List[str]) -> None:
         event_ts = _parse_int(bar.get("event_ts"))
         if event_ts is None or event_ts != close_ms:
             violations.append("bar:event_ts_invalid")
+    if not isinstance(bar.get("complete"), bool):
+        violations.append("bar:complete_not_bool")
+    if bar.get("complete") is True:
+        event_ts = _parse_int(bar.get("event_ts"))
+        if event_ts is None or event_ts != close_ms:
+            violations.append("bar:event_ts_invalid")
 
 
 def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:

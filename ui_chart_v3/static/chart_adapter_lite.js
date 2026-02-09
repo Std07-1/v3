@@ -170,11 +170,11 @@
 
     function normalizeBar(bar) {
         if (!bar) return null;
-        const time = Number(bar.time);
-        const open = Number(bar.open);
-        const high = Number(bar.high);
-        const low = Number(bar.low);
-        const close = Number(bar.close);
+        const time = Number(bar.time ?? (Number.isFinite(bar.open_time_ms) ? Math.floor(bar.open_time_ms / 1000) : NaN));
+        const open = Number(bar.open ?? bar.o);
+        const high = Number(bar.high ?? bar.h);
+        const low = Number(bar.low ?? bar.l);
+        const close = Number(bar.close ?? bar.c);
         const volumeRaw = bar.volume ?? bar.value ?? bar.v ?? 0;
         const volume = Number(volumeRaw);
         if (!Number.isFinite(time) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) {

@@ -12,6 +12,10 @@ except Exception:
 DEFAULT_SOURCE_ALLOWLIST = {"history", "derived", "history_agg", ""}
 
 
+def _symbol_key(symbol: str) -> str:
+    return str(symbol).strip().replace("/", "_")
+
+
 def _load_config(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -140,7 +144,7 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
             }
         return {"ok": False, "details": "no_snap_keys", "metrics": {"keys_checked": 0}}
 
-    target_symbol = str(symbol_in) if symbol_in else None
+    target_symbol = _symbol_key(symbol_in) if symbol_in else None
     target_tf_s = tf_s_in if tf_s_in is not None else None
 
     if target_symbol is None or target_tf_s is None:
@@ -174,6 +178,7 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
             if open_ms is None or close_ms is None:
                 violations.append("snap:time_not_int")
             else:
+                # Політика: Redis snapshots для UI мають end-incl close_ms (open + tf*1000 - 1).
                 expect_close = open_ms + target_tf_s * 1000 - 1
                 if close_ms != expect_close:
                     violations.append("snap:close_time_invalid")
@@ -221,6 +226,7 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
                 if open_ms is None or close_ms is None:
                     violations.append("tail:time_not_int")
                     continue
+                # Політика: Redis snapshots для UI мають end-incl close_ms (open + tf*1000 - 1).
                 expect_close = open_ms + target_tf_s * 1000 - 1
                 if close_ms != expect_close:
                     violations.append("tail:close_time_invalid")

@@ -10,6 +10,10 @@ except Exception:
     redis_lib = None  # type: ignore
 
 
+def _symbol_key(symbol: str) -> str:
+    return str(symbol).strip().replace("/", "_")
+
+
 def _load_config(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -62,7 +66,7 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "details": f"redis.ping error: {exc}", "metrics": {}}
 
     now_ms = int(time.time() * 1000)
-    snap_key = f"{ns}:ohlcv:snap:{symbol}:{tf_s}"
+    snap_key = f"{ns}:ohlcv:snap:{_symbol_key(symbol)}:{tf_s}"
     status_key = f"{ns}:status:snapshot"
 
     metrics: Dict[str, Any] = {"now_ms": now_ms}
@@ -70,6 +74,15 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     if require_snap:
         snap_raw = client.get(snap_key)
         if not snap_raw:
+            try:
+                pattern = f"{ns}:ohlcv:snap:*:{tf_s}"
+                sample = list(client.scan_iter(match=pattern, count=20))[:5]
+                metrics["snap_keys_sample"] = [
+                    k.decode("utf-8", errors="ignore") if isinstance(k, bytes) else str(k)
+                    for k in sample
+                ]
+            except Exception:
+                pass
             return {
                 "ok": False,
                 "details": f"snap key missing: {snap_key}",
