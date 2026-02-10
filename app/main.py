@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import subprocess
@@ -12,6 +13,12 @@ from pathlib import Path
 from typing import List, Optional, TextIO
 
 from env_profile import load_env_profile
+from runtime.store.redis_spec import resolve_redis_spec
+
+try:
+    import redis as redis_lib  # type: ignore
+except Exception:
+    redis_lib = None  # type: ignore
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -133,6 +140,69 @@ def _start_process(
     raise ValueError(f"Невідомий stdio режим: {stdio}")
 
 
+def _resolve_config_path(raw_path: str | None) -> str:
+    base_dir = Path(__file__).resolve().parents[1]
+    raw_value = (raw_path or "").strip()
+    if not raw_value:
+        return str((base_dir / "config.json").resolve())
+    if Path(raw_value).is_absolute():
+        return str(Path(raw_value).resolve())
+    return str((base_dir / raw_value).resolve())
+
+
+def _pick_config_path() -> str:
+    env_path = (os.environ.get("AI_ONE_CONFIG_PATH") or "").strip()
+    if env_path:
+        return _resolve_config_path(env_path)
+    return _resolve_config_path("config.json")
+
+
+def _wait_for_prime_ready(config_path: str, timeout_s: int = 20) -> bool:
+    if redis_lib is None:
+        logging.warning("PRIME_READY_WAIT_SKIP reason=redis_package_missing")
+        return False
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as exc:
+        logging.warning("PRIME_READY_WAIT_SKIP reason=config_read_failed err=%s", exc)
+        return False
+
+    spec = resolve_redis_spec(cfg, role="prime_wait", log=False)
+    if spec is None:
+        logging.info("PRIME_READY_WAIT_SKIP reason=redis_disabled")
+        return False
+
+    key = f"{spec.namespace}:prime:ready"
+    client = redis_lib.Redis(
+        host=spec.host,
+        port=spec.port,
+        db=spec.db,
+        decode_responses=True,
+        socket_timeout=0.5,
+        socket_connect_timeout=0.5,
+    )
+
+    start = time.time()
+    warned = False
+    while time.time() - start < max(1, int(timeout_s)):
+        try:
+            raw = client.get(key)
+            if raw:
+                payload = json.loads(raw)
+                if isinstance(payload, dict) and payload.get("ready") is True:
+                    logging.info("PRIME_READY_OK key=%s", key)
+                    return True
+        except Exception as exc:
+            if not warned:
+                logging.warning("PRIME_READY_WAIT_ERROR err=%s", exc)
+                warned = True
+        time.sleep(0.5)
+
+    logging.warning("PRIME_READY_TIMEOUT key=%s timeout_s=%d", key, int(timeout_s))
+    return False
+
+
 def _terminate(item: ChildProcess, timeout_s: int = 5) -> None:
     proc = item.proc
     if proc.poll() is not None:
@@ -191,6 +261,9 @@ def main() -> int:
                 )
             )
         if args.mode in ("all", "ui"):
+            if args.mode == "all":
+                config_path = _pick_config_path()
+                _wait_for_prime_ready(config_path)
             processes.append(
                 _start_process(
                     label="ui",

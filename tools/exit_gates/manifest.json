@@ -101,6 +101,17 @@
                     "runtime.store.redis_snapshot"
                 ]
             }
+        },
+        {
+            "name": "ingest_no_direct_writers",
+            "module": "tools.exit_gates.gates.gate_ingest_no_direct_writers",
+            "inputs": {
+                "root_dir": "runtime/ingest",
+                "forbidden_modules": [
+                    "runtime.store.ssot_jsonl",
+                    "runtime.store.redis_snapshot"
+                ]
+            }
         }
     ]
 }

@@ -37,6 +37,10 @@ def _read_jsonl_filtered(
     since_open_ms: Optional[int],
     to_open_ms: Optional[int],
     limit: int,
+    *,
+    final_only: bool,
+    skip_preview: bool,
+    final_sources: Optional[set[str]],
 ) -> list[dict[str, Any]]:
     buf: deque[dict[str, Any]] = deque(maxlen=max(1, limit))
     for p in paths:
@@ -58,6 +62,14 @@ def _read_jsonl_filtered(
                     if since_open_ms is not None and open_ms <= since_open_ms:
                         continue
                     if to_open_ms is not None and open_ms > to_open_ms:
+                        continue
+
+                    if not _bar_passes_filters(
+                        obj,
+                        final_only=final_only,
+                        skip_preview=skip_preview,
+                        final_sources=final_sources,
+                    ):
                         continue
 
                     buf.append(obj)
@@ -95,12 +107,58 @@ def _needs_dedup_by_open_ms(bars: list[dict[str, Any]]) -> bool:
 
 def _bar_is_complete(bar: dict[str, Any]) -> bool:
     val = bar.get("complete")
+    if val is None:
+        return False
     return bool(val) if isinstance(val, bool) else bool(val)
 
 
-def _bar_is_final_source(bar: dict[str, Any]) -> bool:
+def _bar_is_final_source(bar: dict[str, Any], final_sources: Optional[set[str]] = None) -> bool:
     src = bar.get("src")
-    return isinstance(src, str) and src in FINAL_SOURCES
+    if not isinstance(src, str):
+        return False
+    if src == "":
+        src = "history"
+    sources = final_sources or FINAL_SOURCES
+    return src in sources
+
+
+def _bar_has_canonical_ohlc(bar: dict[str, Any]) -> bool:
+    o = bar.get("o", bar.get("open"))
+    h = bar.get("h", bar.get("high"))
+    l = bar.get("low", bar.get("l"))
+    c = bar.get("c", bar.get("close"))
+    if o is None or h is None or l is None or c is None:
+        return False
+    try:
+        float(o)
+        float(h)
+        float(l)
+        float(c)
+    except Exception:
+        return False
+    return True
+
+
+def _bar_passes_filters(
+    bar: dict[str, Any],
+    *,
+    final_only: bool,
+    skip_preview: bool,
+    final_sources: Optional[set[str]],
+) -> bool:
+    is_complete = _bar_is_complete(bar)
+    if skip_preview and not is_complete:
+        return False
+    if final_only:
+        if is_complete:
+            if not _bar_is_final_source(bar, final_sources):
+                return False
+        else:
+            if not _bar_is_final_source(bar, final_sources):
+                return False
+            if not _bar_has_canonical_ohlc(bar):
+                return False
+    return True
 
 
 def _bar_ts_priority(bar: dict[str, Any]) -> Optional[int]:
@@ -162,6 +220,10 @@ def _read_jsonl_tail_filtered_with_geom(
     since_open_ms: Optional[int],
     to_open_ms: Optional[int],
     limit: int,
+    *,
+    final_only: bool,
+    skip_preview: bool,
+    final_sources: Optional[set[str]],
 ) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
     if limit <= 0:
         return [], None
@@ -185,6 +247,13 @@ def _read_jsonl_tail_filtered_with_geom(
             if since_open_ms is not None and open_ms <= since_open_ms:
                 out.reverse()
                 return _finalize_tail_with_geom(out)
+            if not _bar_passes_filters(
+                obj,
+                final_only=final_only,
+                skip_preview=skip_preview,
+                final_sources=final_sources,
+            ):
+                continue
             out.append(obj)
         if len(out) >= limit:
             break
@@ -210,12 +279,19 @@ def _read_jsonl_tail_filtered(
     since_open_ms: Optional[int],
     to_open_ms: Optional[int],
     limit: int,
+    *,
+    final_only: bool,
+    skip_preview: bool,
+    final_sources: Optional[set[str]],
 ) -> list[dict[str, Any]]:
     out, _geom = _read_jsonl_tail_filtered_with_geom(
         paths,
         since_open_ms,
         to_open_ms,
         limit,
+        final_only=final_only,
+        skip_preview=skip_preview,
+        final_sources=final_sources,
     )
     return out
 
@@ -268,6 +344,9 @@ class DiskLayer:
         since_open_ms: Optional[int] = None,
         to_open_ms: Optional[int] = None,
         use_tail: bool = False,
+        final_only: bool = False,
+        skip_preview: bool = False,
+        final_sources: Optional[set[str]] = None,
     ) -> list[dict[str, Any]]:
         bars, _geom = self.read_window_with_geom(
             symbol,
@@ -276,6 +355,9 @@ class DiskLayer:
             since_open_ms=since_open_ms,
             to_open_ms=to_open_ms,
             use_tail=use_tail,
+            final_only=final_only,
+            skip_preview=skip_preview,
+            final_sources=final_sources,
         )
         return bars
 
@@ -288,6 +370,9 @@ class DiskLayer:
         since_open_ms: Optional[int] = None,
         to_open_ms: Optional[int] = None,
         use_tail: bool = False,
+        final_only: bool = False,
+        skip_preview: bool = False,
+        final_sources: Optional[set[str]] = None,
     ) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
         parts = self.list_parts(symbol, tf_s)
         if not parts:
@@ -298,8 +383,22 @@ class DiskLayer:
                 since_open_ms,
                 to_open_ms,
                 limit,
+                final_only=final_only,
+                skip_preview=skip_preview,
+                final_sources=final_sources,
             )
-        return _read_jsonl_filtered(parts, since_open_ms, to_open_ms, limit), None
+        return (
+            _read_jsonl_filtered(
+                parts,
+                since_open_ms,
+                to_open_ms,
+                limit,
+                final_only=final_only,
+                skip_preview=skip_preview,
+                final_sources=final_sources,
+            ),
+            None,
+        )
 
     def last_open_ms(self, symbol: str, tf_s: int) -> Optional[int]:
         parts = self.list_parts(symbol, tf_s)

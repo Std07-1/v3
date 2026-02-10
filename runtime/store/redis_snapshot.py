@@ -9,6 +9,7 @@ from typing import Any, Deque, Dict, Optional, Tuple
 
 from core.model.bars import CandleBar
 from runtime.store.redis_keys import symbol_key
+from runtime.store.redis_spec import resolve_redis_spec
 
 try:
     import redis as redis_lib  # type: ignore
@@ -99,6 +100,13 @@ class RedisSnapshotWriter:
             else:
                 self._client.set(key, raw)
             self._redis_ok = True
+            if logging.getLogger().isEnabledFor(logging.DEBUG):
+                logging.debug(
+                    "REDIS_SNAP_WRITE_OK key=%s ttl_s=%s bytes=%s",
+                    key,
+                    ttl_s,
+                    len(raw),
+                )
         except Exception as exc:
             self._redis_ok = False
             self._log_error_throttled(f"REDIS_SNAP_WRITE_FAILED key={key} err={exc}")
@@ -217,11 +225,23 @@ class RedisSnapshotWriter:
             tail_key = self._key("ohlcv", "tail", key_symbol, str(tf_s))
             self._write_json(tail_key, tail_payload, self._ttl(tf_s))
 
+        logging.info(
+            "REDIS_SNAP_PRIME ok symbol=%s tf_s=%s count=%s key=%s",
+            symbol,
+            tf_s,
+            len(tail),
+            key,
+        )
+
         if last_complete and last_close_ms_excl is not None:
             if self._last_final_close_ms is None or last_close_ms_excl > self._last_final_close_ms:
                 self._last_final_close_ms = last_close_ms_excl
         self._write_status(payload_ts_ms)
         return len(tail)
+
+    def set_prime_ready(self, payload: Dict[str, Any], ttl_s: Optional[int]) -> None:
+        key = self._key("prime", "ready")
+        self._write_json(key, payload, ttl_s)
 
     def put_bar(self, bar: CandleBar) -> None:
         payload_ts_ms = int(time.time() * 1000)
@@ -361,32 +381,58 @@ def build_redis_snapshot_writer(config_path: str) -> Optional[RedisSnapshotWrite
     except Exception:
         return None
 
-    raw = cfg.get("redis")
-    if not isinstance(raw, dict):
-        return None
-    if not bool(raw.get("enabled", False)):
-        return None
     if redis_lib is None:
         logging.warning("Redis: пакет redis не встановлено, snapshots вимкнено")
         return None
+    spec = resolve_redis_spec(cfg, role="snap_writer")
+    if spec is None:
+        return None
 
-    host = _env_str("FXCM_REDIS_HOST") or str(raw.get("host", "127.0.0.1"))
-    port = _env_int("FXCM_REDIS_PORT") or int(raw.get("port", 6379))
-    db = _env_int("FXCM_REDIS_DB") or int(raw.get("db", 0))
-    ns = _env_str("FXCM_REDIS_NS") or str(raw.get("ns", "v3"))
-    ttl_by_tf_s = _parse_int_map(raw.get("ttl_by_tf_s"))
-    tail_n_by_tf_s = _parse_int_map(raw.get("tail_n_by_tf_s"))
+    raw = cfg.get("redis")
+    ttl_by_tf_s = _parse_int_map(raw.get("ttl_by_tf_s")) if isinstance(raw, dict) else {}
+    tail_n_by_tf_s = _parse_int_map(raw.get("tail_n_by_tf_s")) if isinstance(raw, dict) else {}
 
-    cache_key = f"{host}:{port}:{db}:{ns}"
+    cache_key = f"{spec.host}:{spec.port}:{spec.db}:{spec.namespace}"
     cached = _WRITER_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
-    client = redis_lib.Redis(host=host, port=port, db=db, decode_responses=True)
+    logging.info(
+        "UDS_REDIS_SPEC role=snap_writer host=%s port=%s db=%s namespace=%s",
+        spec.host,
+        spec.port,
+        spec.db,
+        spec.namespace,
+    )
+    client = redis_lib.Redis(
+        host=spec.host,
+        port=spec.port,
+        db=spec.db,
+        decode_responses=True,
+    )
+    try:
+        ok = bool(client.ping())
+        logging.info(
+            "UDS_REDIS_PING role=snap_writer ok=%s host=%s port=%s db=%s namespace=%s",
+            ok,
+            spec.host,
+            spec.port,
+            spec.db,
+            spec.namespace,
+        )
+    except Exception as exc:
+        logging.info(
+            "UDS_REDIS_PING role=snap_writer ok=0 host=%s port=%s db=%s namespace=%s err=%s",
+            spec.host,
+            spec.port,
+            spec.db,
+            spec.namespace,
+            exc,
+        )
     boot_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     writer = RedisSnapshotWriter(
         client=client,
-        ns=ns,
+        ns=spec.namespace,
         ttl_by_tf_s=ttl_by_tf_s,
         tail_n_by_tf_s=tail_n_by_tf_s,
         boot_id=boot_id,
@@ -402,74 +448,68 @@ def init_redis_snapshot(config_path: str, log_detail: bool = True) -> bool:
     except Exception as exc:
         logging.warning("REDIS_INIT_SKIP reason=config_read_failed err=%s", exc)
         return False
-
-    raw = cfg.get("redis")
-    if not isinstance(raw, dict):
-        logging.info("REDIS_INIT_SKIP reason=redis_not_configured")
-        return False
-    if not bool(raw.get("enabled", False)):
-        logging.info("REDIS_INIT_SKIP reason=redis_disabled")
-        return False
     if redis_lib is None:
         logging.warning("REDIS_INIT_SKIP reason=redis_package_missing")
         return False
 
-    host = _env_str("FXCM_REDIS_HOST") or str(raw.get("host", "127.0.0.1"))
-    port = _env_int("FXCM_REDIS_PORT") or int(raw.get("port", 6379))
-    db = _env_int("FXCM_REDIS_DB") or int(raw.get("db", 0))
-    ns = _env_str("FXCM_REDIS_NS") or str(raw.get("ns", "v3"))
-    ttl_by_tf_s = _parse_int_map(raw.get("ttl_by_tf_s"))
-    tail_n_by_tf_s = _parse_int_map(raw.get("tail_n_by_tf_s"))
+    spec = resolve_redis_spec(cfg, role="snap_init")
+    if spec is None:
+        logging.info("REDIS_INIT_SKIP reason=redis_disabled")
+        return False
+
+    raw = cfg.get("redis")
+    ttl_by_tf_s = _parse_int_map(raw.get("ttl_by_tf_s")) if isinstance(raw, dict) else {}
+    tail_n_by_tf_s = _parse_int_map(raw.get("tail_n_by_tf_s")) if isinstance(raw, dict) else {}
 
     if log_detail:
         logging.info(
-            "REDIS_INIT_START enabled=1 host=%s port=%d db=%d ns=%s",
-            host,
-            port,
-            db,
-            ns,
+            "REDIS_INIT_START enabled=1 host=%s port=%d db=%d namespace=%s",
+            spec.host,
+            spec.port,
+            spec.db,
+            spec.namespace,
         )
 
     writer = build_redis_snapshot_writer(config_path)
     if writer is None:
         logging.warning(
-            "REDIS_INIT_FAIL reason=writer_unavailable host=%s port=%d db=%d ns=%s",
-            host,
-            port,
-            db,
-            ns,
+            "REDIS_INIT_FAIL reason=writer_unavailable host=%s port=%d db=%d namespace=%s",
+            spec.host,
+            spec.port,
+            spec.db,
+            spec.namespace,
         )
         return False
 
     ok, err = writer.ping()
     if log_detail:
         logging.info(
-            "REDIS_PING ok=%s host=%s port=%d db=%d ns=%s err=%s",
+            "REDIS_PING ok=%s host=%s port=%d db=%d namespace=%s err=%s",
             bool(ok),
-            host,
-            port,
-            db,
-            ns,
+            spec.host,
+            spec.port,
+            spec.db,
+            spec.namespace,
             err,
         )
     if ok:
         logging.info(
-            "REDIS_INIT_OK host=%s port=%d db=%d ns=%s ttl_tfs=%d tail_tfs=%d",
-            host,
-            port,
-            db,
-            ns,
+            "REDIS_INIT_OK host=%s port=%d db=%d namespace=%s ttl_tfs=%d tail_tfs=%d",
+            spec.host,
+            spec.port,
+            spec.db,
+            spec.namespace,
             len(ttl_by_tf_s),
             len(tail_n_by_tf_s),
         )
         return True
 
     logging.warning(
-        "REDIS_INIT_FAIL host=%s port=%d db=%d ns=%s err=%s",
-        host,
-        port,
-        db,
-        ns,
+        "REDIS_INIT_FAIL host=%s port=%d db=%d namespace=%s err=%s",
+        spec.host,
+        spec.port,
+        spec.db,
+        spec.namespace,
         err,
     )
     return False

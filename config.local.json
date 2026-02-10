@@ -137,8 +137,8 @@
         "enabled": true,
         "host": "127.0.0.1",
         "port": 6379,
-        "db": 0,
-        "namespace": "v3",
+        "db": 1,
+        "namespace": "v3_local",
         "allow_env_override": false,
         "ttl_by_tf_s": {
             "300": 3600,

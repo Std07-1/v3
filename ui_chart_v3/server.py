@@ -1018,6 +1018,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             )
             return
 
+        if path == "/api/status":
+            payload = {
+                "ok": True,
+                "status": uds.snapshot_status(),
+            }
+            self._json(200, payload)
+            return
+
         if path == "/api/updates":
             symbol = (qs.get("symbol", [""])[0] or "").strip()
             tf_s = _safe_int((qs.get("tf_s", ["300"])[0] or "300"), 300)
@@ -1061,17 +1069,50 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         window_start_ms = first_bar.get("open_time_ms")
                     if isinstance(last_bar, dict):
                         window_end_ms = last_bar.get("close_time_ms")
-                logging.info(
-                    "UI_UPDATES symbol=%s tf_s=%s epoch=%s since_seq=%s count=%s cursor_seq=%s window_start_ms=%s window_end_ms=%s",
-                    symbol,
-                    tf_s,
-                    epoch,
-                    since_seq,
-                    len(res.events),
-                    res.cursor_seq,
-                    window_start_ms,
-                    window_end_ms,
-                )
+                now = time.time()
+                events_count = len(res.events)
+                key = (symbol, tf_s)
+                # Лінива ініціалізація глобального стейту для логування (thread-safe)
+                st = globals().get("_updates_log_state")
+                if st is None:
+                    st = {}
+                    globals()["_updates_log_state"] = st
+                lock = globals().get("_updates_log_lock")
+                if lock is None:
+                    lock = threading.Lock()
+                    globals()["_updates_log_lock"] = lock
+
+                with lock:
+                    s = st.get(key)
+                    if s is None:
+                        s = {"last_ts": 0.0, "events": 0, "requests": 0}
+                        st[key] = s
+                    s["events"] += events_count
+                    s["requests"] += 1
+                    elapsed = now - s["last_ts"]
+                    # Логуємо або при наявності нових подій, або не частіше ніж раз на 30s
+                    if events_count > 0 or elapsed >= 30.0:
+                        logged_events = s["events"]
+                        logged_requests = s["requests"]
+                        rate = logged_events / elapsed if elapsed > 0 else float(logged_events)
+                        logging.info(
+                            "UI_UPDATES symbol=%s tf_s=%s epoch=%s since_seq=%s count=%s cursor_seq=%s window_start_ms=%s window_end_ms=%s events_since_last_log=%s requests_since_last_log=%s elapsed_s=%.1f event_rate_per_s=%.2f",
+                            symbol,
+                            tf_s,
+                            epoch,
+                            since_seq,
+                            len(res.events),
+                            res.cursor_seq,
+                            window_start_ms,
+                            window_end_ms,
+                            logged_events,
+                            logged_requests,
+                            elapsed,
+                            rate,
+                        )
+                        s["last_ts"] = now
+                        s["events"] = 0
+                        s["requests"] = 0
             self._json(200, payload)
             return
 

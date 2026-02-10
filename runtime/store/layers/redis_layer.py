@@ -45,3 +45,19 @@ class RedisLayer:
         if err is None:
             return payload, ttl_left, "redis_tail", None
         return None, ttl_left, None, err
+
+    def get_prime_ready_payload(self) -> Optional[dict[str, Any]]:
+        key = self._key("prime", "ready")
+        payload, _, err = self._get_json(key)
+        if err is not None or payload is None:
+            return None
+        return payload
+
+    def is_prime_ready(self) -> bool:
+        payload = self.get_prime_ready_payload()
+        if payload is None:
+            return False
+        ready = payload.get("ready")
+        if isinstance(ready, bool):
+            return ready
+        return True

@@ -277,7 +277,7 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         else:
             symbols = [str(cfg.get("symbol", "XAU/USD"))]
         if isinstance(symbols_raw, list) and symbols and isinstance(cfg.get("symbol"), str):
-            logging.warning("Config: задано symbol і symbols; використовую symbols")
+            logging.debug("Config: задано symbol і symbols; використовую symbols")
         data_root = str(cfg.get("data_root", "./data_v3"))
         warmup_bars = int(cfg.get("warmup_bars", 3000))
         safety_delay_s = int(cfg.get("safety_delay_s", 2))

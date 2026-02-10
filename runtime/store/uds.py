@@ -2,20 +2,25 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from core.model.bars import CandleBar
 from core.time_geom import normalize_bar
 
 from runtime.obs_60s import Obs60s
 from runtime.store.layers.disk_layer import DiskLayer
 from runtime.store.layers.ram_layer import RamLayer
 from runtime.store.layers.redis_layer import RedisLayer
+from runtime.store.redis_snapshot import RedisSnapshotWriter, build_redis_snapshot_writer
+from runtime.store.redis_spec import resolve_redis_spec
+from runtime.store.ssot_jsonl import JsonlAppender
 
 Logging = logging.getLogger("uds")
-Logging.setLevel(logging.INFO)
+Logging.setLevel(logging.DEBUG)
 
 _OBS = Obs60s("uds")
 
@@ -32,6 +37,149 @@ SOURCE_ALLOWLIST = {"history", "derived", "history_agg", ""}
 FINAL_SOURCES = {"history", "derived", "history_agg"}
 MAX_EVENTS_PER_RESPONSE = 500
 REDIS_SOCKET_TIMEOUT_S = 0.4
+
+def _disk_bar_to_candle(
+    raw: dict[str, Any],
+    symbol: str,
+    tf_s: int,
+) -> Optional[CandleBar]:
+    open_ms = raw.get("open_time_ms")
+    close_ms = raw.get("close_time_ms")
+    if open_ms is None or close_ms is None:
+        return None
+    low = raw.get("low")
+    if low is None:
+        low = raw.get("l")
+    if low is None:
+        return None
+    try:
+        src = raw.get("src")
+        if src is None or src == "":
+            src = "history"
+        open_val = raw.get("open")
+        if open_val is None:
+            open_val = raw.get("o", 0.0)
+        high_val = raw.get("high")
+        if high_val is None:
+            high_val = raw.get("h", 0.0)
+        close_val = raw.get("close")
+        if close_val is None:
+            close_val = raw.get("c", 0.0)
+        v_val = raw.get("volume")
+        if v_val is None:
+            v_val = raw.get("v", 0.0)
+        return CandleBar(
+            symbol=symbol,
+            tf_s=int(tf_s),
+            open_time_ms=int(open_ms),
+            close_time_ms=int(close_ms),
+            o=float(open_val),
+            h=float(high_val),
+            low=float(low),
+            c=float(close_val),
+            v=float(v_val),
+            complete=bool(raw.get("complete", True)),
+            src=str(src),
+        )
+    except Exception:
+        return None
+
+UPDATES_REDIS_RETAIN_DEFAULT = 2000
+
+
+def _watermark_drop_reason(open_ms: int, wm_open_ms: Optional[int]) -> Optional[str]:
+    if wm_open_ms is None:
+        return None
+    if open_ms == wm_open_ms:
+        return "duplicate"
+    if open_ms < wm_open_ms:
+        return "stale"
+    return None
+
+
+def _mark_degraded(meta: dict[str, Any], reason: str) -> None:
+    ext = meta.setdefault("extensions", {})
+    if isinstance(ext, dict):
+        degraded = ext.get("degraded")
+        if isinstance(degraded, list):
+            if reason not in degraded:
+                degraded.append(reason)
+        else:
+            ext["degraded"] = [reason]
+
+
+def _mark_redis_mismatch(
+    meta: dict[str, Any],
+    warnings: list[str],
+    fields: list[str],
+) -> None:
+    warnings.append("redis_spec_mismatch")
+    _mark_degraded(meta, "redis_spec_mismatch")
+    if fields:
+        ext = meta.setdefault("extensions", {})
+        if isinstance(ext, dict):
+            ext["redis_spec_mismatch_fields"] = list(fields)
+
+
+def _mark_prime_pending(meta: dict[str, Any], warnings: list[str]) -> None:
+    warnings.append("prime_pending")
+    _mark_degraded(meta, "prime_pending")
+
+
+def _mark_prime_broken(meta: dict[str, Any], warnings: list[str]) -> None:
+    warnings.append("prime_broken")
+    _mark_degraded(meta, "prime_broken")
+
+
+def _mark_prime_incomplete(meta: dict[str, Any], warnings: list[str]) -> None:
+    warnings.append("prime_incomplete")
+    _mark_degraded(meta, "prime_incomplete")
+
+
+def _mark_history_short(meta: dict[str, Any], warnings: list[str]) -> None:
+    warnings.append("history_short")
+    _mark_degraded(meta, "history_short")
+
+
+def _prime_available_final(
+    payload: dict[str, Any],
+    symbol: str,
+    tf_s: int,
+) -> Optional[int]:
+    per_symbol = payload.get("prime_tail_len_by_symbol")
+    if isinstance(per_symbol, dict):
+        sym_entry = per_symbol.get(symbol)
+        if isinstance(sym_entry, dict):
+            value = sym_entry.get(str(tf_s))
+            if isinstance(value, int):
+                return value
+            value = sym_entry.get(tf_s)
+            if isinstance(value, int):
+                return value
+    per_tf = payload.get("prime_tail_len_by_tf_s")
+    if isinstance(per_tf, dict):
+        value = per_tf.get(str(tf_s))
+        if isinstance(value, int):
+            return value
+        value = per_tf.get(tf_s)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _prime_append_meta(
+    meta: dict[str, Any],
+    target_min: int,
+    available_final: Optional[int],
+    effective_min: int,
+) -> None:
+    ext = meta.setdefault("extensions", {})
+    if not isinstance(ext, dict):
+        return
+    ext["prime_target_min"] = int(target_min)
+    if available_final is not None:
+        ext["prime_available_final"] = int(available_final)
+        ext["prime_effective_min"] = int(effective_min)
 
 
 @dataclass(frozen=True)
@@ -77,6 +225,16 @@ class UpdatesResult:
     warnings: list[str]
 
 
+@dataclass
+class CommitResult:
+    ok: bool
+    reason: Optional[str]
+    ssot_written: bool
+    redis_written: bool
+    updates_published: bool
+    warnings: list[str]
+
+
 class UnifiedDataStore:
     """UnifiedDataStore: оркестрація RAM↔Redis↔Disk."""
 
@@ -91,6 +249,11 @@ class UnifiedDataStore:
         ram_layer: Optional[RamLayer] = None,
         redis_layer: Optional[RedisLayer] = None,
         disk_layer: Optional[DiskLayer] = None,
+        jsonl_appender: Optional[JsonlAppender] = None,
+        redis_snapshot_writer: Optional[RedisSnapshotWriter] = None,
+        updates_bus: Optional[Any] = None,
+        redis_spec_mismatch: bool = False,
+        redis_spec_mismatch_fields: Optional[list[str]] = None,
     ) -> None:
         if role not in ("reader", "writer"):
             raise ValueError(f"UDS: невідома роль {role}")
@@ -102,15 +265,26 @@ class UnifiedDataStore:
         self._ram = ram_layer or RamLayer()
         self._redis = redis_layer
         self._disk = disk_layer or DiskLayer(data_root)
+        self._jsonl = jsonl_appender
+        self._redis_writer = redis_snapshot_writer
+        self._updates_bus = updates_bus
         self._updates_lock = threading.Lock()
         self._updates_seq = 0
         self._updates_last_digest: dict[tuple[str, int, int], str] = {}
+        self._wm_by_key: dict[tuple[str, int], int] = {}
+        self._updates_bus_warned = False
+        self._redis_spec_mismatch = bool(redis_spec_mismatch)
+        self._redis_spec_mismatch_fields = list(redis_spec_mismatch_fields or [])
 
     def read_window(self, spec: WindowSpec, policy: ReadPolicy) -> WindowResult:
         warnings: list[str] = []
         meta: dict[str, Any] = {"boot_id": self._boot_id}
         symbol = spec.symbol
         tf_s = spec.tf_s
+        prime_ready = False
+        prime_payload: Optional[dict[str, Any]] = None
+        if self._redis_spec_mismatch:
+            _mark_redis_mismatch(meta, warnings, self._redis_spec_mismatch_fields)
         if Logging.isEnabledFor(logging.INFO):
             Logging.info(
                 "UDS: читання вікна symbol=%s tf_s=%s limit=%s cold_load=%s force_disk=%s prefer_redis=%s",
@@ -130,6 +304,14 @@ class UnifiedDataStore:
             return result
 
         if spec.cold_load and policy.prefer_redis and self._redis is not None:
+            prime_payload = self._redis.get_prime_ready_payload()
+            if prime_payload is not None:
+                ready_flag = prime_payload.get("ready")
+                prime_ready = bool(ready_flag) if isinstance(ready_flag, bool) else True
+            else:
+                prime_ready = False
+            if not prime_ready:
+                _mark_prime_pending(meta, warnings)
             if tf_s not in self._min_coldload_bars:
                 warnings.append("redis_min_missing")
                 Logging.warning(
@@ -139,6 +321,32 @@ class UnifiedDataStore:
             else:
                 redis_result = self._read_window_redis(spec, meta, warnings)
                 if redis_result is not None:
+                    min_required = int(self._min_coldload_bars.get(tf_s, 0))
+                    redis_len = redis_result.meta.get("redis_len")
+                    if not isinstance(redis_len, int):
+                        redis_len = len(redis_result.bars_lwc)
+                        redis_result.meta["redis_len"] = redis_len
+
+                    if prime_payload is not None:
+                        available_final = _prime_available_final(
+                            prime_payload,
+                            symbol,
+                            tf_s,
+                        )
+                        effective_min = min_required
+                        if available_final is not None and min_required > 0:
+                            effective_min = min(min_required, available_final)
+                        _prime_append_meta(
+                            redis_result.meta,
+                            min_required,
+                            available_final,
+                            effective_min,
+                        )
+                        if available_final is not None and min_required > 0:
+                            if available_final < min_required:
+                                _mark_history_short(redis_result.meta, warnings)
+                        if prime_ready and effective_min > 0 and redis_len < effective_min:
+                            _mark_prime_incomplete(redis_result.meta, warnings)
                     _log_window_result(redis_result, warnings, tf_s)
                     return redis_result
 
@@ -150,14 +358,20 @@ class UnifiedDataStore:
                     _mark_geom_fix(meta, warnings, geom, source="ram", tf_s=tf_s)
                 meta.update({"source": "ram", "redis_hit": False})
                 result = WindowResult(ram_bars, meta, warnings)
+                if policy.prefer_redis and prime_ready:
+                    _mark_prime_broken(meta, warnings)
                 _log_window_result(result, warnings, tf_s)
                 return result
 
             result = self._read_window_disk(spec, meta, warnings)
+            if policy.prefer_redis and prime_ready:
+                _mark_prime_broken(result.meta, warnings)
             _log_window_result(result, warnings, tf_s)
             return result
 
         result = self._read_window_disk(spec, meta, warnings)
+        if policy.prefer_redis and prime_ready:
+            _mark_prime_broken(result.meta, warnings)
         _log_window_result(result, warnings, tf_s)
         return result
 
@@ -165,52 +379,56 @@ class UnifiedDataStore:
         symbol = spec.symbol
         tf_s = spec.tf_s
         limit = spec.limit
-        if Logging.isEnabledFor(logging.INFO):
-            Logging.info(
+        if Logging.isEnabledFor(logging.DEBUG):
+            Logging.debug(
                 "UDS: читання updates symbol=%s tf_s=%s limit=%s since_seq=%s",
                 symbol,
                 tf_s,
                 limit,
                 spec.since_seq,
             )
-        parts = self._disk.list_parts(symbol, tf_s)
-        events: list[dict[str, Any]] = []
         warnings: list[str] = []
-        geom_fix: Optional[dict[str, Any]] = None
-        if parts:
-            bars, geom = self._disk.read_window_with_geom(
+        meta: dict[str, Any] = {"boot_id": self._boot_id}
+        if self._redis_spec_mismatch:
+            _mark_redis_mismatch(meta, warnings, self._redis_spec_mismatch_fields)
+        events: list[dict[str, Any]] = []
+        cursor_seq = spec.since_seq if spec.since_seq is not None else 0
+        gap: Optional[dict[str, Any]] = None
+
+        if self._updates_bus is None:
+            warnings.append("updates_bus_missing")
+        else:
+            events, cursor_seq, gap, err = self._updates_bus.read_updates(
                 symbol,
                 tf_s,
+                spec.since_seq,
                 limit,
-                since_open_ms=None,
-                to_open_ms=None,
-                use_tail=True,
             )
-            if geom is None:
-                bars, geom = _ensure_sorted_dedup(bars)
-            if geom is not None:
-                geom_fix = geom
-                _log_geom_fix("disk_tail", tf_s, geom)
-            lwc = self._bars_to_lwc(bars)
-            for b in lwc:
-                key = (symbol, int(b.get("tf_s", 0)), int(b.get("open_time_ms", 0)))
-                digest = self._digest_bar(b)
-                seq = self._next_seq_for_event(key, digest)
-                if seq is None:
-                    continue
-                ev = self._bar_to_update_event(symbol, b)
-                ev["seq"] = seq
-                events.append(ev)
+            if err is not None:
+                warnings.append("redis_down")
+                ext = meta.setdefault("extensions", {})
+                if isinstance(ext, dict):
+                    degraded = ext.get("degraded")
+                    if isinstance(degraded, list):
+                        if "redis_down" not in degraded:
+                            degraded.append("redis_down")
+                    else:
+                        ext["degraded"] = ["redis_down"]
+                events = []
+                if spec.since_seq is not None:
+                    cursor_seq = spec.since_seq
+                else:
+                    cursor_seq = 0
 
-        if spec.since_seq is not None:
-            events = [ev for ev in events if ev.get("seq") and ev["seq"] > spec.since_seq]
+        if gap is not None:
+            warnings.append("cursor_gap")
+            ext = meta.setdefault("extensions", {})
+            if isinstance(ext, dict):
+                ext["gap"] = gap
 
         if len(events) > MAX_EVENTS_PER_RESPONSE:
             events = events[-MAX_EVENTS_PER_RESPONSE:]
             warnings.append("max_events_trimmed")
-
-        if geom_fix is not None and events:
-            warnings.append("geom_non_monotonic")
 
         for ev in events:
             if ev.get("complete") is True and ev.get("source") in FINAL_SOURCES:
@@ -218,23 +436,10 @@ class UnifiedDataStore:
                 if isinstance(bar, dict):
                     self._ram.upsert_bar(symbol, tf_s, bar)
 
-        cursor_seq: Optional[int] = None
-        for ev in events:
-            seq = ev.get("seq")
-            if isinstance(seq, int) and (cursor_seq is None or seq > cursor_seq):
-                cursor_seq = seq
-        if cursor_seq is None and spec.since_seq is not None:
-            cursor_seq = spec.since_seq
-        if cursor_seq is None:
-            cursor_seq = 0
-
-        disk_last_open_ms = self._disk.last_open_ms(symbol, tf_s)
-        bar_close_ms = None
-        if disk_last_open_ms is not None:
-            bar_close_ms = disk_last_open_ms + tf_s * 1000 - 1
-
-        ssot_write_ts_ms = self._disk.last_mtime_ms(symbol, tf_s)
         api_seen_ts_ms = int(time.time() * 1000)
+        disk_last_open_ms = None
+        bar_close_ms = None
+        ssot_write_ts_ms = None
 
         result = UpdatesResult(
             events=events,
@@ -243,7 +448,7 @@ class UnifiedDataStore:
             bar_close_ms=bar_close_ms,
             ssot_write_ts_ms=ssot_write_ts_ms,
             api_seen_ts_ms=api_seen_ts_ms,
-            meta={"boot_id": self._boot_id},
+            meta=meta,
             warnings=warnings,
         )
         _log_updates_result(result)
@@ -258,12 +463,365 @@ class UnifiedDataStore:
             raise RuntimeError(f"UDS_WRITE_FORBIDDEN role={self._role}")
         self._ram.upsert_bar(symbol, tf_s, bar_canon)
 
+    def commit_final_bar(
+        self,
+        bar: CandleBar,
+        *,
+        ssot_write_ts_ms: Optional[int] = None,
+    ) -> CommitResult:
+        self._ensure_writer_role("commit_final_bar")
+        warnings: list[str] = []
+        if not isinstance(bar, CandleBar):
+            Logging.warning("UDS: commit_final_bar очікує CandleBar")
+            return CommitResult(False, "invalid_bar", False, False, False, warnings)
+        if not bar.complete:
+            Logging.warning(
+                "UDS: commit_final_bar пропущено (complete=false) symbol=%s tf_s=%s open_ms=%s",
+                bar.symbol,
+                bar.tf_s,
+                bar.open_time_ms,
+            )
+            return CommitResult(False, "not_complete", False, False, False, warnings)
+        if bar.src not in FINAL_SOURCES:
+            Logging.warning(
+                "UDS: commit_final_bar пропущено (non_final_source) symbol=%s tf_s=%s src=%s",
+                bar.symbol,
+                bar.tf_s,
+                bar.src,
+            )
+            return CommitResult(False, "non_final_source", False, False, False, warnings)
+
+        wm = self._init_watermark_for_key(bar.symbol, bar.tf_s)
+        drop_reason = _watermark_drop_reason(bar.open_time_ms, wm)
+        if drop_reason is not None:
+            Logging.warning(
+                "UDS: commit_final_bar drop reason=%s symbol=%s tf_s=%s open_ms=%s wm_open_ms=%s",
+                drop_reason,
+                bar.symbol,
+                bar.tf_s,
+                bar.open_time_ms,
+                wm,
+            )
+            _OBS.inc_writer_drop(drop_reason, bar.tf_s)
+            return CommitResult(False, drop_reason, False, False, False, warnings)
+
+        ssot_written = self._append_to_disk(bar, ssot_write_ts_ms, warnings)
+        redis_written = self._write_redis_snapshot(bar, warnings)
+        updates_published = self._publish_update(bar, warnings)
+        if ssot_written:
+            self._wm_by_key[(bar.symbol, bar.tf_s)] = bar.open_time_ms
+        if ssot_written:
+            self._ram.upsert_bar(bar.symbol, bar.tf_s, bar.to_dict())
+        ok = ssot_written
+        reason = None if ok else "ssot_write_failed"
+        return CommitResult(ok, reason, ssot_written, redis_written, updates_published, warnings)
+
+    def publish_preview_bar(self, bar: CandleBar, *, ttl_s: Optional[int] = None) -> None:
+        self._ensure_writer_role("publish_preview_bar")
+        if not isinstance(bar, CandleBar):
+            Logging.warning("UDS: publish_preview_bar очікує CandleBar")
+            return
+        if bar.complete:
+            Logging.warning(
+                "UDS: publish_preview_bar пропущено (complete=true) symbol=%s tf_s=%s open_ms=%s",
+                bar.symbol,
+                bar.tf_s,
+                bar.open_time_ms,
+            )
+            return
+        if self._redis_writer is None:
+            Logging.warning(
+                "UDS: publish_preview_bar пропущено (redis_writer_missing) symbol=%s tf_s=%s",
+                bar.symbol,
+                bar.tf_s,
+            )
+            return
+        self._redis_writer.put_bar(bar)
+        if ttl_s is not None:
+            Logging.debug(
+                "UDS: publish_preview_bar ttl_s задано, але TTL керується Redis snapshots config"
+            )
+        self._publish_update(bar, warnings=[])
+
     def snapshot_status(self) -> dict[str, Any]:
         status = {"boot_id": self._boot_id}
         status.update(self._ram.stats())
         status["redis_enabled"] = self._redis is not None
+        status["redis_spec_mismatch"] = bool(self._redis_spec_mismatch)
+        status["redis_spec_mismatch_fields"] = list(self._redis_spec_mismatch_fields)
+        status["prime_target_min_by_tf_s"] = dict(self._min_coldload_bars)
+        if self._redis is not None:
+            payload = self._redis.get_prime_ready_payload()
+            status["prime_ready_payload"] = payload
+            status["prime_ready"] = bool(payload.get("ready")) if isinstance(payload, dict) else False
         status["ts_ms"] = int(time.time() * 1000)
         return status
+
+    def prime_redis_from_bars(self, symbol: str, tf_s: int, bars: list[CandleBar]) -> int:
+        if self._redis_writer is None:
+            Logging.warning(
+                "UDS: prime_redis_from_bars пропущено (redis_writer_missing) symbol=%s tf_s=%s",
+                symbol,
+                tf_s,
+            )
+            return 0
+        try:
+            return self._redis_writer.prime_from_bars(symbol, tf_s, bars)
+        except Exception as exc:
+            Logging.warning(
+                "UDS: prime_redis_from_bars failed symbol=%s tf_s=%s err=%s",
+                symbol,
+                tf_s,
+                exc,
+            )
+            return 0
+
+    def bootstrap_prime_from_disk(
+        self,
+        symbol: str,
+        tf_s: int,
+        tail_n: int,
+        *,
+        log_detail: bool = False,
+    ) -> int:
+        if self._redis_writer is None:
+            Logging.warning(
+                "UDS: bootstrap_prime_from_disk пропущено (redis_writer_missing) symbol=%s tf_s=%s",
+                symbol,
+                tf_s,
+            )
+            return 0
+        if tail_n <= 0:
+            return 0
+        bars, geom = self._disk.read_window_with_geom(
+            symbol,
+            tf_s,
+            tail_n,
+            since_open_ms=None,
+            to_open_ms=None,
+            use_tail=True,
+            final_only=True,
+            skip_preview=True,
+            final_sources=FINAL_SOURCES,
+        )
+        if geom is not None and log_detail:
+            Logging.warning(
+                "UDS: bootstrap geom_fix symbol=%s tf_s=%s sorted=%s dedup_dropped=%s",
+                symbol,
+                tf_s,
+                geom.get("sorted"),
+                geom.get("dedup_dropped"),
+            )
+        candles: list[CandleBar] = []
+        for raw in bars:
+            candle = _disk_bar_to_candle(raw, symbol, tf_s)
+            if candle is None:
+                continue
+            candles.append(candle)
+        raw_count = len(bars)
+        final_count = len(candles)
+        if not candles:
+            Logging.info(
+                "UDS_PRIME_SUMMARY symbol=%s tf_s=%s raw_count=%s final_count=%s wrote_snap=%s",
+                symbol,
+                tf_s,
+                raw_count,
+                final_count,
+                False,
+            )
+            return 0
+        try:
+            count = self._redis_writer.prime_from_bars(symbol, tf_s, candles)
+            Logging.info(
+                "UDS_PRIME_SUMMARY symbol=%s tf_s=%s raw_count=%s final_count=%s wrote_snap=%s",
+                symbol,
+                tf_s,
+                raw_count,
+                final_count,
+                bool(count > 0),
+            )
+            if log_detail:
+                Logging.info(
+                    "UDS: bootstrap_prime_from_disk ok symbol=%s tf_s=%s count=%s",
+                    symbol,
+                    tf_s,
+                    count,
+                )
+            return count
+        except Exception as exc:
+            Logging.warning(
+                "UDS: bootstrap_prime_from_disk failed symbol=%s tf_s=%s err=%s",
+                symbol,
+                tf_s,
+                exc,
+            )
+            return 0
+
+    def set_cache_state(
+        self,
+        *,
+        primed: bool,
+        prime_partial: bool,
+        priming_ts_ms: int,
+        primed_counts: dict[str, int],
+        degraded: list[str],
+        errors: list[str],
+    ) -> None:
+        if self._redis_writer is None:
+            return
+        self._redis_writer.set_cache_state(
+            primed=primed,
+            prime_partial=prime_partial,
+            priming_ts_ms=priming_ts_ms,
+            primed_counts=primed_counts,
+            degraded=degraded,
+            errors=errors,
+        )
+
+    def set_gap_state(
+        self,
+        *,
+        backlog_bars: int,
+        gap_from_ms: Optional[int],
+        gap_to_ms: Optional[int],
+        policy: Optional[str],
+    ) -> None:
+        if self._redis_writer is None:
+            return
+        self._redis_writer.set_gap_state(
+            backlog_bars=backlog_bars,
+            gap_from_ms=gap_from_ms,
+            gap_to_ms=gap_to_ms,
+            policy=policy,
+        )
+
+    def set_prime_ready(self, payload: dict[str, Any], ttl_s: Optional[int]) -> None:
+        if self._redis_writer is None:
+            Logging.warning("UDS: set_prime_ready пропущено (redis_writer_missing)")
+            return
+        try:
+            self._redis_writer.set_prime_ready(payload, ttl_s)
+        except Exception as exc:
+            Logging.warning("UDS: set_prime_ready failed err=%s", exc)
+
+    def has_redis_writer(self) -> bool:
+        return self._redis_writer is not None
+
+    def close(self) -> None:
+        if self._jsonl is not None:
+            try:
+                self._jsonl.close()
+            except Exception:
+                pass
+        if self._redis_writer is not None:
+            try:
+                self._redis_writer.close()
+            except Exception:
+                pass
+
+    def _ensure_writer_role(self, action: str) -> None:
+        if self._role != "writer":
+            Logging.warning(
+                "UDS: запис заборонено (UDS_WRITE_FORBIDDEN) action=%s role=%s",
+                action,
+                self._role,
+            )
+            raise RuntimeError(f"UDS_WRITE_FORBIDDEN role={self._role}")
+
+    def get_watermark_open_ms(self, symbol: str, tf_s: int) -> Optional[int]:
+        return self._init_watermark_for_key(symbol, tf_s)
+
+    def _init_watermark_for_key(self, symbol: str, tf_s: int) -> Optional[int]:
+        key = (symbol, tf_s)
+        if key in self._wm_by_key:
+            return self._wm_by_key[key]
+        last_open_ms = self._disk.last_open_ms(symbol, tf_s)
+        if last_open_ms is not None:
+            self._wm_by_key[key] = last_open_ms
+            Logging.info(
+                "UDS: watermark ініціалізовано symbol=%s tf_s=%s wm_open_ms=%s source=disk_last_open_ms",
+                symbol,
+                tf_s,
+                last_open_ms,
+            )
+        return last_open_ms
+
+    def _append_to_disk(
+        self,
+        bar: CandleBar,
+        ssot_write_ts_ms: Optional[int],
+        warnings: list[str],
+    ) -> bool:
+        if self._jsonl is None:
+            warnings.append("ssot_writer_missing")
+            Logging.warning(
+                "UDS: ssot writer відсутній (jsonl_appender) symbol=%s tf_s=%s",
+                bar.symbol,
+                bar.tf_s,
+            )
+            return False
+        try:
+            _ = ssot_write_ts_ms
+            self._jsonl.append(bar)
+            return True
+        except Exception as exc:
+            warnings.append("ssot_write_failed")
+            Logging.warning(
+                "UDS: ssot write failed symbol=%s tf_s=%s err=%s",
+                bar.symbol,
+                bar.tf_s,
+                exc,
+            )
+            return False
+
+    def _write_redis_snapshot(self, bar: CandleBar, warnings: list[str]) -> bool:
+        if self._redis_writer is None:
+            warnings.append("redis_writer_missing")
+            Logging.warning(
+                "UDS: redis snapshots writer відсутній symbol=%s tf_s=%s",
+                bar.symbol,
+                bar.tf_s,
+            )
+            return False
+        try:
+            self._redis_writer.put_bar(bar)
+            return True
+        except Exception as exc:
+            warnings.append("redis_write_failed")
+            Logging.warning(
+                "UDS: redis snapshots write failed symbol=%s tf_s=%s err=%s",
+                bar.symbol,
+                bar.tf_s,
+                exc,
+            )
+            return False
+
+    def _publish_update(self, bar: CandleBar, warnings: list[str]) -> bool:
+        if self._updates_bus is None:
+            warnings.append("updates_bus_missing")
+            if not self._updates_bus_warned:
+                self._updates_bus_warned = True
+                Logging.warning("UDS: updates bus відсутній, update events не публікуються")
+            return False
+        try:
+            bar_payload = normalize_bar(bar.to_dict(), mode="incl")
+            event = {
+                "key": {
+                    "symbol": bar.symbol,
+                    "tf_s": int(bar.tf_s),
+                    "open_ms": int(bar.open_time_ms),
+                },
+                "bar": bar_payload,
+                "complete": bool(bar.complete),
+                "source": str(bar.src),
+                "event_ts": int(bar_payload.get("close_time_ms")) if bar.complete else None,
+            }
+            self._updates_bus.publish(event)
+            return True
+        except Exception as exc:
+            warnings.append("updates_publish_failed")
+            Logging.warning("UDS: updates publish failed err=%s", exc)
+            return False
 
     def _read_window_disk(
         self,
@@ -313,6 +871,14 @@ class UnifiedDataStore:
     ) -> Optional[WindowResult]:
         if self._redis is None:
             return None
+        def _mark_redis_fallback(code: str) -> None:
+            warnings.append(f"redis_fallback:{code}")
+            _mark_degraded(meta, code)
+
+        def _mark_redis_small_tail() -> None:
+            warnings.append("redis_small_tail")
+            _mark_degraded(meta, "redis_small_tail")
+
         payload, ttl_left, source, err = self._redis.read_tail_or_snap(
             spec.symbol, spec.tf_s
         )
@@ -333,6 +899,7 @@ class UnifiedDataStore:
                             degraded.append("redis_down")
                     else:
                         ext["degraded"] = ["redis_down"]
+            _mark_redis_fallback(err)
             meta.update(
                 {
                     "source": "disk",
@@ -347,6 +914,7 @@ class UnifiedDataStore:
                 spec.symbol,
                 spec.tf_s,
             )
+            _mark_redis_fallback("redis_empty")
             meta.update(
                 {
                     "source": "disk",
@@ -362,6 +930,7 @@ class UnifiedDataStore:
                 spec.tf_s,
                 ttl_left,
             )
+            _mark_redis_fallback("redis_ttl_invalid")
             meta.update(
                 {
                     "source": "disk",
@@ -373,6 +942,7 @@ class UnifiedDataStore:
 
         bars = self._redis_payload_to_bars(payload, spec.symbol, spec.tf_s)
         if not bars:
+            _mark_redis_fallback("redis_empty")
             meta.update(
                 {
                     "source": "disk",
@@ -392,9 +962,10 @@ class UnifiedDataStore:
 
         min_required = int(self._min_coldload_bars.get(spec.tf_s, 0))
         if min_required > 0 and len(lwc) < min_required:
+            _mark_redis_small_tail()
             meta.update(
                 {
-                    "source": "disk_fallback_small_tail",
+                    "source": source or "redis_tail",
                     "redis_hit": True,
                     "redis_len": len(lwc),
                     "redis_ttl_s_left": ttl_left,
@@ -404,7 +975,11 @@ class UnifiedDataStore:
                     else payload.get("seq"),
                 }
             )
-            return None
+            ext = meta.setdefault("extensions", {})
+            if isinstance(ext, dict):
+                ext["partial"] = True
+            self._ram.set_window(spec.symbol, spec.tf_s, lwc)
+            return WindowResult(lwc, meta, warnings)
 
         meta.update(
             {
@@ -750,35 +1325,179 @@ def _log_window_result(result: WindowResult, warnings: list[str], tf_s: int) -> 
 def _log_updates_result(result: UpdatesResult) -> None:
     if not Logging.isEnabledFor(logging.INFO):
         return
-    Logging.info(
+    if not Logging.isEnabledFor(logging.INFO):
+        return
+    events_len = len(result.events)
+    cursor_seq = result.cursor_seq
+    warnings_key = "|".join(result.warnings) if result.warnings else "-"
+
+    # rate-limit identical logs: не спамити, якщо попередній лог не змінився
+    lock = getattr(_log_updates_result, "_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        setattr(_log_updates_result, "_lock", lock)
+
+    with lock:
+        prev = getattr(_log_updates_result, "_last_state", None)
+        curr = (events_len, cursor_seq, warnings_key)
+        if prev == curr:
+            return
+        setattr(_log_updates_result, "_last_state", curr)
+
+    Logging.debug(
         "UDS: updates готові events=%s cursor_seq=%s warnings=%s",
-        len(result.events),
-        result.cursor_seq,
-        "|".join(result.warnings) if result.warnings else "-",
+        events_len,
+        cursor_seq,
+        warnings_key,
     )
 
 
 def _redis_layer_from_cfg(cfg: dict[str, Any]) -> Optional[RedisLayer]:
-    raw = cfg.get("redis")
-    if not isinstance(raw, dict):
-        return None
-    if not bool(raw.get("enabled", False)):
-        return None
     if redis_lib is None:
         return None
-    host = raw.get("host") or "127.0.0.1"
-    port = int(raw.get("port", 6379))
-    db = int(raw.get("db", 0))
-    ns = str(raw.get("ns", "v3"))
+    spec = resolve_redis_spec(cfg, role="read_layer")
+    if spec is None:
+        return None
     client = redis_lib.Redis(
-        host=host,
-        port=port,
-        db=db,
+        host=spec.host,
+        port=spec.port,
+        db=spec.db,
         socket_timeout=REDIS_SOCKET_TIMEOUT_S,
         socket_connect_timeout=REDIS_SOCKET_TIMEOUT_S,
         decode_responses=False,
     )
-    return RedisLayer(client, ns)
+    return RedisLayer(client, spec.namespace)
+
+
+class _RedisUpdatesBus:
+    def __init__(self, client: Any, ns: str, retain: int) -> None:
+        self._client = client
+        self._ns = ns
+        self._retain = max(1, int(retain))
+
+    def _key(self, *parts: str) -> str:
+        return ":".join([self._ns, *parts])
+
+    def publish(self, event: dict[str, Any]) -> Optional[int]:
+        seq_key = self._key("updates", "seq", str(event["key"]["symbol"]), str(event["key"]["tf_s"]))
+        list_key = self._key("updates", "list", str(event["key"]["symbol"]), str(event["key"]["tf_s"]))
+        seq = int(self._client.incr(seq_key))
+        event = dict(event)
+        event["seq"] = seq
+        payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+        self._client.rpush(list_key, payload)
+        self._client.ltrim(list_key, -self._retain, -1)
+        return seq
+
+    def read_updates(
+        self,
+        symbol: str,
+        tf_s: int,
+        since_seq: Optional[int],
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], int, Optional[dict[str, Any]], Optional[str]]:
+        try:
+            seq_key = self._key("updates", "seq", symbol, str(tf_s))
+            list_key = self._key("updates", "list", symbol, str(tf_s))
+            raw_list = self._client.lrange(list_key, -self._retain, -1)
+            events: list[dict[str, Any]] = []
+            min_seq: Optional[int] = None
+            max_seq: Optional[int] = None
+            for raw in raw_list or []:
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8")
+                try:
+                    ev = json.loads(raw)
+                except Exception:
+                    continue
+                seq = ev.get("seq")
+                if not isinstance(seq, int):
+                    continue
+                if min_seq is None or seq < min_seq:
+                    min_seq = seq
+                if max_seq is None or seq > max_seq:
+                    max_seq = seq
+                if since_seq is not None and seq <= since_seq:
+                    continue
+                events.append(ev)
+
+            if limit > 0 and len(events) > limit:
+                events = events[-limit:]
+
+            cursor_seq = since_seq if since_seq is not None else 0
+            if events:
+                cursor_seq = max(ev.get("seq", 0) for ev in events)
+            else:
+                last_seq_raw = self._client.get(seq_key)
+                if isinstance(last_seq_raw, bytes):
+                    last_seq_raw = last_seq_raw.decode("utf-8")
+                try:
+                    last_seq = int(last_seq_raw) if last_seq_raw is not None else 0
+                except Exception:
+                    last_seq = 0
+                if since_seq is None:
+                    cursor_seq = last_seq
+
+            gap: Optional[dict[str, Any]] = None
+            if since_seq is not None and min_seq is not None and since_seq < min_seq - 1:
+                gap = {
+                    "first_seq_available": min_seq,
+                    "last_seq_available": max_seq if max_seq is not None else min_seq,
+                }
+            return events, int(cursor_seq), gap, None
+        except Exception as exc:
+            return [], since_seq if since_seq is not None else 0, None, str(exc)
+
+
+def _env_str(key: str) -> Optional[str]:
+    value = os.environ.get(key)
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value or None
+
+
+def _env_int(key: str) -> Optional[int]:
+    raw = _env_str(key)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except Exception:
+        return None
+
+
+def _updates_bus_from_cfg(cfg: dict[str, Any]) -> Optional[_RedisUpdatesBus]:
+    if redis_lib is None:
+        return None
+    spec = resolve_redis_spec(cfg, role="updates_bus")
+    if spec is None:
+        return None
+    updates_cfg = cfg.get("updates")
+    retain = UPDATES_REDIS_RETAIN_DEFAULT
+    if isinstance(updates_cfg, dict):
+        try:
+            retain = int(updates_cfg.get("retain", retain))
+        except Exception:
+            retain = UPDATES_REDIS_RETAIN_DEFAULT
+    client = redis_lib.Redis(
+        host=spec.host,
+        port=spec.port,
+        db=spec.db,
+        socket_timeout=REDIS_SOCKET_TIMEOUT_S,
+        socket_connect_timeout=REDIS_SOCKET_TIMEOUT_S,
+        decode_responses=False,
+    )
+    return _RedisUpdatesBus(client, spec.namespace, retain)
+
+
+def _opt_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
 
 
 def build_uds_from_config(
@@ -787,11 +1506,30 @@ def build_uds_from_config(
     boot_id: str,
     *,
     role: str = "writer",
+    writer_components: bool = False,
 ) -> UnifiedDataStore:
     cfg = _load_cfg(config_path)
     tf_allowlist = _tf_allowlist_from_cfg(cfg)
     min_coldload_bars = _min_coldload_bars_from_cfg(cfg)
     redis_layer = _redis_layer_from_cfg(cfg)
+    updates_bus = _updates_bus_from_cfg(cfg)
+    spec_for_status = resolve_redis_spec(cfg, role="uds_status", log=False)
+    redis_spec_mismatch = bool(spec_for_status.mismatch) if spec_for_status is not None else False
+    redis_spec_mismatch_fields = (
+        list(spec_for_status.mismatch_fields) if spec_for_status is not None else []
+    )
+    jsonl_appender = None
+    redis_writer = None
+    if writer_components:
+        jsonl_appender = JsonlAppender(
+            root=data_root,
+            day_anchor_offset_s=int(cfg.get("day_anchor_offset_s", 0)),
+            day_anchor_offset_s_d1=_opt_int(cfg.get("day_anchor_offset_s_d1")),
+            day_anchor_offset_s_d1_alt=_opt_int(cfg.get("day_anchor_offset_s_d1_alt")),
+            day_anchor_offset_s_alt=_opt_int(cfg.get("day_anchor_offset_s_alt")),
+            day_anchor_offset_s_alt2=_opt_int(cfg.get("day_anchor_offset_s_alt2")),
+        )
+        redis_writer = build_redis_snapshot_writer(config_path)
     return UnifiedDataStore(
         data_root=data_root,
         boot_id=boot_id,
@@ -799,4 +1537,97 @@ def build_uds_from_config(
         min_coldload_bars=min_coldload_bars,
         role=role,
         redis_layer=redis_layer,
+        jsonl_appender=jsonl_appender,
+        redis_snapshot_writer=redis_writer,
+        updates_bus=updates_bus,
+        redis_spec_mismatch=redis_spec_mismatch,
+        redis_spec_mismatch_fields=redis_spec_mismatch_fields,
     )
+
+
+def selftest_writer_api() -> None:
+    class _FakeJsonl:
+        def __init__(self) -> None:
+            self.appended: list[CandleBar] = []
+
+        def append(self, bar: CandleBar) -> None:
+            self.appended.append(bar)
+
+    class _FakeRedisWriter:
+        def __init__(self) -> None:
+            self.bars: list[CandleBar] = []
+
+        def put_bar(self, bar: CandleBar) -> None:
+            self.bars.append(bar)
+
+    class _FakeUpdatesBus:
+        def __init__(self) -> None:
+            self.events: list[dict[str, Any]] = []
+
+        def publish(self, event: dict[str, Any]) -> None:
+            self.events.append(event)
+
+    class _FakeDisk:
+        def last_open_ms(self, symbol: str, tf_s: int) -> Optional[int]:
+            _ = (symbol, tf_s)
+            return None
+
+    fake_jsonl = _FakeJsonl()
+    fake_redis = _FakeRedisWriter()
+    fake_bus = _FakeUpdatesBus()
+
+    uds = UnifiedDataStore(
+        data_root=".",
+        boot_id="selftest",
+        tf_allowlist={300},
+        min_coldload_bars={},
+        role="writer",
+        disk_layer=_FakeDisk(),
+        jsonl_appender=fake_jsonl,
+        redis_snapshot_writer=fake_redis,
+        updates_bus=fake_bus,
+    )
+
+    bar_final = CandleBar(
+        symbol="XAU/USD",
+        tf_s=300,
+        open_time_ms=1700000000000,
+        close_time_ms=1700000000000 + 300 * 1000,
+        o=1.0,
+        h=1.0,
+        low=1.0,
+        c=1.0,
+        v=1.0,
+        complete=True,
+        src="history",
+    )
+    result = uds.commit_final_bar(bar_final)
+    if not result.ok:
+        raise RuntimeError(f"UDS selftest: commit_final_bar failed reason={result.reason}")
+    if len(fake_jsonl.appended) != 1:
+        raise RuntimeError("UDS selftest: ssot append не викликано")
+    if len(fake_redis.bars) != 1:
+        raise RuntimeError("UDS selftest: redis write не викликано")
+    if len(fake_bus.events) != 1:
+        raise RuntimeError("UDS selftest: updates publish не викликано")
+
+    bar_preview = CandleBar(
+        symbol="XAU/USD",
+        tf_s=300,
+        open_time_ms=1700000300000,
+        close_time_ms=1700000300000 + 300 * 1000,
+        o=1.0,
+        h=1.0,
+        low=1.0,
+        c=1.0,
+        v=1.0,
+        complete=False,
+        src="stream",
+    )
+    uds.publish_preview_bar(bar_preview)
+    if len(fake_jsonl.appended) != 1:
+        raise RuntimeError("UDS selftest: preview не має писати в SSOT")
+    if len(fake_redis.bars) != 2:
+        raise RuntimeError("UDS selftest: preview не записано в Redis")
+
+    Logging.info("UDS_SELFTEST_OK writer_api=1")

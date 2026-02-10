@@ -19,10 +19,8 @@ from runtime.ingest.polling.fetch_policy import (
 )
 from runtime.ingest.polling.flat_filter import is_flat_bar
 from runtime.ingest.polling.time_buckets import floor_bucket_start_ms
-from runtime.obs_60s import Obs60s
-from runtime.store.layers.disk_layer import DiskLayer
-from runtime.store.redis_snapshot import build_redis_snapshot_writer
-from runtime.store.ssot_jsonl import JsonlAppender, head_first_bar_time_ms, read_tail_bars
+from runtime.store.uds import build_uds_from_config
+from runtime.store.ssot_jsonl import head_first_bar_time_ms, read_tail_bars
 
 if TYPE_CHECKING:
     from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
@@ -34,25 +32,78 @@ def utc_now_ms() -> int:
 
 
 FINAL_SOURCES = {"history", "derived", "history_agg"}
-REPLAY_GRACE_BARS = 10
-
-_OBS = Obs60s("writer")
-
-
-def _watermark_drop_reason(open_ms: int, wm_open_ms: Optional[int]) -> Optional[str]:
-    if wm_open_ms is None:
-        return None
-    if open_ms == wm_open_ms:
-        return "duplicate"
-    if open_ms < wm_open_ms:
-        return "stale"
-    return None
+PRIME_READY_TTL_S = 21600
 
 
 def _is_final_bar(bar: CandleBar) -> bool:
     if bar.complete is not True:
         return False
     return bar.src in FINAL_SOURCES
+
+
+def _prime_ready_is_ok(summary: Dict[str, Any]) -> bool:
+    if not bool(summary.get("cache_prime_enabled", False)):
+        return False
+    if bool(summary.get("cache_prime_partial", False)):
+        return False
+    if summary.get("cache_prime_error") is not None:
+        return False
+    counts = summary.get("cache_prime_counts")
+    return isinstance(counts, dict) and bool(counts)
+
+
+def _prime_ready_payload(
+    *,
+    boot_id: str,
+    symbols: List[str],
+    summaries: List[Dict[str, Any]],
+    tfs: List[int],
+) -> Dict[str, Any]:
+    tail_len_by_tf_s: Dict[int, int] = {}
+    tail_len_by_symbol: Dict[str, Dict[int, int]] = {}
+    for summary in summaries:
+        counts = summary.get("cache_prime_counts")
+        if not isinstance(counts, dict):
+            continue
+        for key, val in counts.items():
+            if not isinstance(key, str):
+                continue
+            try:
+                count = int(val)
+            except Exception:
+                continue
+            if ":" not in key:
+                continue
+            symbol, tf_raw = key.split(":", 1)
+            try:
+                tf_s = int(tf_raw)
+            except Exception:
+                continue
+            per_symbol = tail_len_by_symbol.setdefault(symbol, {})
+            per_symbol[tf_s] = count
+            prev = tail_len_by_tf_s.get(tf_s)
+            if prev is None or count < prev:
+                tail_len_by_tf_s[tf_s] = count
+    ready_symbols = [s.get("symbol") for s in summaries if _prime_ready_is_ok(s)]
+    ready_symbols = [str(x) for x in ready_symbols if isinstance(x, str) and x]
+    partial_symbols = [s.get("symbol") for s in summaries if s.get("cache_prime_partial")]
+    partial_symbols = [str(x) for x in partial_symbols if isinstance(x, str) and x]
+    empty_symbols = [s.get("symbol") for s in summaries if s.get("cache_prime_empty")]
+    empty_symbols = [str(x) for x in empty_symbols if isinstance(x, str) and x]
+    ready = len(ready_symbols) == len(symbols) and len(symbols) > 0
+    return {
+        "v": 1,
+        "ready": ready,
+        "boot_id": boot_id,
+        "ts_ms": utc_now_ms(),
+        "symbols": list(symbols),
+        "symbols_ready": ready_symbols,
+        "cache_prime_partial": partial_symbols,
+        "cache_prime_empty": empty_symbols,
+        "tfs": list(tfs),
+        "prime_tail_len_by_tf_s": tail_len_by_tf_s,
+        "prime_tail_len_by_symbol": tail_len_by_symbol,
+    }
 
 
 def _d1_anchor_offsets(
@@ -231,16 +282,15 @@ class PollingConnectorB:
         self._calendar_gate_enabled = bool(market_calendar.enabled)
         self._heavy_skipped = 0
 
-        self._writer = JsonlAppender(
-            root=data_root,
-            day_anchor_offset_s=day_anchor_offset_s,
-            day_anchor_offset_s_d1=day_anchor_offset_s_d1,
-            day_anchor_offset_s_d1_alt=day_anchor_offset_s_d1_alt,
-            day_anchor_offset_s_alt=day_anchor_offset_s_alt,
-            day_anchor_offset_s_alt2=day_anchor_offset_s_alt2,
+        boot_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        self._boot_id = boot_id
+        self._uds = build_uds_from_config(
+            self._config_path,
+            data_root,
+            boot_id,
+            role="writer",
+            writer_components=True,
         )
-        self._disk = DiskLayer(data_root)
-        self._snapshots = build_redis_snapshot_writer(self._config_path)
         m5_keep = max(2000, warmup_bars + 500)
         self._m5 = M5Buffer(max_keep=m5_keep)
 
@@ -249,7 +299,6 @@ class PollingConnectorB:
         self._last_saved_m5_open_ms: Optional[int] = None
         self._last_saved_derived: Dict[int, int] = {}  # tf_s -> open_time_ms
         self._last_saved_base: Dict[int, int] = {}  # tf_s -> open_time_ms
-        self._wm_by_key: Dict[Tuple[str, int], int] = {}  # (symbol, tf_s) -> open_time_ms
         self._poll_counter: int = 0
         self._day_index_cache: Dict[str, set[int]] = {}
         self._group_logs: bool = False
@@ -258,9 +307,25 @@ class PollingConnectorB:
         self._m5_tail_state: str = "OK"
         self._warmup_pending: bool = False
         self._rebuild_pending: bool = False
+        self._prime_ready_mode = "auto"
 
     def enable_group_logging(self) -> None:
         self._group_logs = True
+
+    def set_prime_ready_mode(self, mode: str) -> None:
+        self._prime_ready_mode = str(mode)
+
+    def get_boot_id(self) -> str:
+        return self._boot_id
+
+    def redis_priming_tfs(self) -> list[int]:
+        tfs = list(self._redis_priming_tfs_s)
+        if not tfs:
+            tfs = sorted(k for k, v in self._redis_tail_n_by_tf_s.items() if int(v) > 0)
+        return tfs
+
+    def set_prime_ready(self, payload: dict[str, Any], ttl_s: Optional[int]) -> None:
+        self._uds.set_prime_ready(payload, ttl_s)
 
     def drain_history_errors(self) -> List[Tuple[str, str, int]]:
         out = list(self._recent_history_errors)
@@ -300,7 +365,16 @@ class PollingConnectorB:
     def bootstrap_and_warmup(self, log_detail: bool = False) -> Dict[str, Any]:
         summary: Dict[str, Any] = {"symbol": self._symbol}
         summary.update(self._bootstrap_from_disk(log_detail=log_detail))
-        summary.update(self._prime_redis_from_disk(log_detail=log_detail))
+        prime_summary = self._prime_redis_from_disk(log_detail=log_detail)
+        summary.update(prime_summary)
+        if self._prime_ready_mode == "auto":
+            payload = _prime_ready_payload(
+                boot_id=self._boot_id,
+                symbols=[self._symbol],
+                summaries=[summary],
+                tfs=self.redis_priming_tfs(),
+            )
+            self.set_prime_ready(payload, PRIME_READY_TTL_S)
         summary.update(self._tail_catchup_from_broker(log_detail=log_detail))
         summary.update(self._cold_start_base_from_broker(log_detail=log_detail))
         summary.update(self._schedule_post_start_phases())
@@ -373,16 +447,15 @@ class PollingConnectorB:
                 n,
                 backlog,
             )
-            if self._snapshots is not None:
-                gap_from_ms = last_saved + tf_ms
-                self._snapshots.set_gap_state(
-                    backlog_bars=backlog,
-                    gap_from_ms=gap_from_ms,
-                    gap_to_ms=cutoff_open_ms,
-                    policy="manual_tool_required",
-                )
-        elif self._snapshots is not None:
-            self._snapshots.set_gap_state(
+            gap_from_ms = last_saved + tf_ms
+            self._uds.set_gap_state(
+                backlog_bars=backlog,
+                gap_from_ms=gap_from_ms,
+                gap_to_ms=cutoff_open_ms,
+                policy="manual_tool_required",
+            )
+        else:
+            self._uds.set_gap_state(
                 backlog_bars=0,
                 gap_from_ms=None,
                 gap_to_ms=None,
@@ -611,7 +684,7 @@ class PollingConnectorB:
             return {"cache_prime_enabled": False}
         if self._redis_priming_symbols and self._symbol not in self._redis_priming_symbols:
             return {"cache_prime_enabled": True, "cache_prime_skipped": True}
-        if self._snapshots is None:
+        if not self._uds.has_redis_writer():
             logging.warning("CACHE_PRIME_SKIP symbol=%s reason=redis_disabled", self._symbol)
             return {"cache_prime_enabled": True, "cache_prime_error": "redis_disabled"}
 
@@ -641,10 +714,12 @@ class PollingConnectorB:
             tail_n = int(self._redis_tail_n_by_tf_s.get(tf_s, 0))
             if tail_n <= 0:
                 continue
-            bars = read_tail_bars(self._data_root, self._symbol, tf_s, tail_n)
-            if not bars:
-                continue
-            count = self._snapshots.prime_from_bars(self._symbol, tf_s, bars)
+            count = self._uds.bootstrap_prime_from_disk(
+                self._symbol,
+                tf_s,
+                tail_n,
+                log_detail=log_detail,
+            )
             if count > 0:
                 primed_counts[f"{self._symbol}:{tf_s}"] = count
 
@@ -654,7 +729,7 @@ class PollingConnectorB:
             degraded.append("cache_prime_empty")
 
         priming_ts_ms = int(time.time() * 1000)
-        self._snapshots.set_cache_state(
+        self._uds.set_cache_state(
             primed=bool(primed_counts) and not partial,
             prime_partial=partial,
             priming_ts_ms=priming_ts_ms,
@@ -695,81 +770,46 @@ class PollingConnectorB:
         self._poll_counter += 1
 
     def close(self) -> None:
-        self._writer.close()
-        if self._snapshots is not None:
-            self._snapshots.close()
+        self._uds.close()
 
     def _append_bar(self, bar: CandleBar) -> None:
         if not _is_final_bar(bar):
-            if self._snapshots is not None:
-                self._snapshots.put_bar(bar)
+            self._uds.publish_preview_bar(bar)
             return
-
-        wm_key = (bar.symbol, bar.tf_s)
-        wm_open_ms = self._wm_by_key.get(wm_key)
-        reason = _watermark_drop_reason(bar.open_time_ms, wm_open_ms)
-        if reason is not None:
-            label = "WRITER_DROP_STALE" if reason == "stale" else "WRITER_DROP_DUPLICATE"
-            level = logging.warning
-            delta_bars = None
-            if reason == "stale" and wm_open_ms is not None:
-                tf_ms = int(bar.tf_s) * 1000
-                if tf_ms > 0:
-                    delta_bars = int((wm_open_ms - bar.open_time_ms) // tf_ms)
-                if delta_bars is not None and 0 < delta_bars <= REPLAY_GRACE_BARS:
-                    label = "WRITER_DROP_REPLAY"
-                    level = logging.info
-                    _OBS.inc_writer_drop("replay", bar.tf_s)
-                else:
-                    _OBS.inc_writer_drop(reason, bar.tf_s)
+        wm_open_ms = self._uds.get_watermark_open_ms(bar.symbol, bar.tf_s)
+        if wm_open_ms is not None and bar.open_time_ms <= wm_open_ms:
+            # Зменшу шум: троттлюю повідомлення та зберігаю перше/останнє значення в одному повідомленні
+            key = f"backfill_quarantine:{bar.tf_s}"
+            iso = ms_to_utc_dt(bar.open_time_ms).isoformat()
+            _, _, last_msg = self._warn_throttle.get(key, (0.0, 0, ""))
+            if last_msg and "|" in last_msg:
+                first_iso = last_msg.split("|", 1)[0]
             else:
-                _OBS.inc_writer_drop(reason, bar.tf_s)
-            level(
-                "%s symbol=%s tf_s=%s open_ms=%s wm_open_ms=%s delta_bars=%s src=%s complete=%s",
-                label,
+                first_iso = iso
+            msg = f"BACKFILL_QUARANTINE symbol={self._symbol} tf_s={bar.tf_s} first={first_iso} last={iso}"
+            self._warn_throttled(key, msg)
+            # повідомлення тротлиться всередині _warn_throttled, тому тут нічого не логимо
+            return
+            return
+        result = self._uds.commit_final_bar(bar)
+        if not result.ok:
+            logging.warning(
+                "UDS_COMMIT_DROP symbol=%s tf_s=%s open_ms=%s reason=%s",
                 bar.symbol,
                 bar.tf_s,
                 bar.open_time_ms,
-                wm_open_ms,
-                delta_bars,
-                bar.src,
-                bar.complete,
+                result.reason,
             )
-            return
-
-        self._writer.append(bar)
-        self._wm_by_key[wm_key] = bar.open_time_ms
-        if self._snapshots is None:
-            return
-        self._snapshots.put_bar(bar)
 
     def _load_last_open_ms_from_disk(self, symbol: str, tf_s: int) -> Optional[int]:
-        bars, geom = self._disk.read_window_with_geom(
-            symbol,
-            tf_s,
-            limit=1,
-            since_open_ms=None,
-            to_open_ms=None,
-            use_tail=True,
-        )
-        if geom is not None:
-            logging.warning(
-                "Watermark init: виправлено геометрію symbol=%s tf_s=%s sorted=%s dedup_dropped=%s",
-                symbol,
-                tf_s,
-                geom.get("sorted"),
-                geom.get("dedup_dropped"),
-            )
+        bars = read_tail_bars(self._data_root, symbol, tf_s, n=1)
         if not bars:
             return None
-        last_open_ms = bars[-1].get("open_time_ms")
-        return int(last_open_ms) if isinstance(last_open_ms, int) else None
+        return int(bars[-1].open_time_ms)
 
     def _bootstrap_from_disk(self, log_detail: bool = False) -> Dict[str, Any]:
         last_m5 = self._load_last_open_ms_from_disk(self._symbol, 300)
         self._last_saved_m5_open_ms = last_m5
-        if last_m5 is not None:
-            self._wm_by_key[(self._symbol, 300)] = last_m5
         if log_detail:
             if last_m5 is not None:
                 logging.debug(
@@ -783,13 +823,11 @@ class PollingConnectorB:
             last_d = self._load_last_open_ms_from_disk(self._symbol, tf_s)
             if last_d is not None:
                 self._last_saved_derived[tf_s] = last_d
-                self._wm_by_key[(self._symbol, tf_s)] = last_d
 
         for tf_s in self._broker_base_tfs_s:
             last_b = self._load_last_open_ms_from_disk(self._symbol, tf_s)
             if last_b is not None:
                 self._last_saved_base[tf_s] = last_b
-                self._wm_by_key[(self._symbol, tf_s)] = last_b
 
         return {"m5_last_exists": last_m5 is not None}
 
@@ -933,7 +971,7 @@ class PollingConnectorB:
         except KeyboardInterrupt:
             logging.info("Зупинено користувачем (KeyboardInterrupt). Завершую.")
         finally:
-            self._writer.close()
+            self._uds.close()
 
     def _sleep_to_next_minute(self) -> None:
         sleep_to_next_minute(self._safety_delay_s)
@@ -1816,14 +1854,35 @@ class MultiSymbolRunner:
                 ",".join(warmup_deferred),
             )
 
+    def _set_prime_ready_global(self, summaries: List[Dict[str, Any]]) -> None:
+        if not self._engines:
+            return
+        engine0 = self._engines[0]
+        symbols = [e._symbol for e in self._engines]  # noqa: SLF001
+        payload = _prime_ready_payload(
+            boot_id=engine0.get_boot_id(),
+            symbols=symbols,
+            summaries=summaries,
+            tfs=engine0.redis_priming_tfs(),
+        )
+        engine0.set_prime_ready(payload, PRIME_READY_TTL_S)
+        logging.info(
+            "PRIME_READY_SET ready=%s symbols=%s",
+            payload.get("ready"),
+            ",".join(symbols),
+        )
+
     def run_forever(self) -> None:
         symbols = [e._symbol for e in self._engines]  # noqa: SLF001
         logging.info("Polling loop: multi активний symbols=%s", ",".join(symbols))
         try:
+            for e in self._engines:
+                e.set_prime_ready_mode("defer")
             summaries: List[Dict[str, Any]] = []
             for e in self._engines:
                 summaries.append(e.bootstrap_and_warmup(log_detail=False))
             self._log_bootstrap_summary(summaries)
+            self._set_prime_ready_global(summaries)
             self._drain_history_errors()
             while True:
                 now_s = time.time()
