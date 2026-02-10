@@ -621,6 +621,14 @@ class PollingConnectorB:
         if not tfs:
             tfs = sorted(k for k, v in self._redis_tail_n_by_tf_s.items() if int(v) > 0)
 
+        if log_detail:
+            logging.info(
+                "CACHE_PRIME_START symbol=%s tfs=%s budget_s=%.2f",
+                self._symbol,
+                ",".join(str(x) for x in tfs),
+                budget_s,
+            )
+
         primed_counts: Dict[str, int] = {}
         degraded: list[str] = []
         errors: list[str] = []

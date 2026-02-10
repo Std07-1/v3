@@ -64,7 +64,6 @@ let scrollbackAbort = null;
 let scrollbackPending = false;
 let scrollbackLatestRange = null;
 let scrollbackPendingStep = 0;
-let diskFillAbort = null;
 const cacheLru = new Map();
 let updateStateLastCleanupMs = 0;
 let favoritesState = null;
@@ -114,10 +113,6 @@ function startNewViewEpoch() {
   if (loadAbort) {
     loadAbort.abort();
     loadAbort = null;
-  }
-  if (diskFillAbort) {
-    diskFillAbort.abort();
-    diskFillAbort = null;
   }
   if (scrollbackAbort) {
     scrollbackAbort.abort();
@@ -1201,7 +1196,7 @@ async function loadScrollbackChunk(range, step) {
   const epoch = viewEpoch;
   try {
     const url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${limit}`
-      + `&to_open_ms=${beforeOpenMs}&force_disk=1&epoch=${viewEpoch}`;
+      + `&to_open_ms=${beforeOpenMs}&epoch=${viewEpoch}`;
     const data = await apiGet(url, { signal: scrollbackAbort.signal });
     if (epoch !== viewEpoch) return;
     const olderBars = Array.isArray(data?.bars) ? data.bars : [];
@@ -1234,7 +1229,7 @@ async function fetchNewerBarsFromDisk() {
   const epoch = viewEpoch;
   try {
     const url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${limit}`
-      + `&since_open_ms=${lastOpenMs}&force_disk=1&epoch=${viewEpoch}`;
+      + `&since_open_ms=${lastOpenMs}&epoch=${viewEpoch}`;
     const data = await apiGet(url);
     if (epoch !== viewEpoch) return false;
     const newerBars = Array.isArray(data?.bars) ? data.bars : [];
@@ -1297,7 +1292,7 @@ function handleVisibleRangeChange(range) {
   ensureLeftCoverage(range, 0, 'rangeChange');
 }
 
-async function loadBarsFull(forceDisk = false) {
+async function loadBarsFull() {
   const reqId = ++loadReqId;
   if (loadAbort) {
     loadAbort.abort();
@@ -1312,11 +1307,6 @@ async function loadBarsFull(forceDisk = false) {
   setStatus('load…');
   diag.lastError = '';
   let url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${limit}`;
-  if (forceDisk) {
-    url += '&force_disk=1';
-  } else {
-    url += '&prefer_redis=1';
-  }
   url += `&epoch=${epoch}`;
   let data = null;
   try {
@@ -1400,44 +1390,6 @@ async function loadBarsFull(forceDisk = false) {
   }
 
   setStatus(`ok · tf=${tf}s · bars=${bars.length}`);
-  const metaSource = data && data.meta ? String(data.meta._source_norm || '') : '';
-  if (!forceDisk) {
-    fillFromDiskIfNeeded(reqId, symbol, tf, limit, metaSource);
-  }
-}
-
-async function fillFromDiskIfNeeded(reqId, symbol, tf, limit, metaSource) {
-  if (!Number.isFinite(limit) || limit <= 0) return;
-  if (!symbol || !Number.isFinite(tf)) return;
-  if (!barsStore.length || !Number.isFinite(firstOpenMs)) return;
-  if (barsStore.length >= limit) return;
-  if (metaSource && (metaSource === 'disk' || metaSource.startsWith('disk_'))) return;
-  if (diskFillAbort) {
-    diskFillAbort.abort();
-  }
-  diskFillAbort = new AbortController();
-  const prevRange = controller && typeof controller.getVisibleLogicalRange === 'function'
-    ? controller.getVisibleLogicalRange()
-    : null;
-  const epoch = viewEpoch;
-  const url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${limit}`
-    + `&force_disk=1&epoch=${viewEpoch}`;
-  try {
-    const data = await apiGet(url, { signal: diskFillAbort.signal });
-    if (epoch !== viewEpoch) return;
-    if (reqId !== loadReqId) return;
-    const diskBars = Array.isArray(data?.bars) ? data.bars : [];
-    if (!diskBars.length || !Number.isFinite(firstOpenMs)) return;
-    const olderBars = diskBars.filter((bar) => {
-      const openMs = bar?.open_time_ms;
-      return Number.isFinite(openMs) && openMs < firstOpenMs;
-    });
-    if (!olderBars.length) return;
-    mergeOlderBars(olderBars, prevRange, tf);
-    setStatus(`ok · tf=${tf}s · bars=${barsStore.length} · disk_fill`);
-  } catch (e) {
-    if (e && e.name === 'AbortError') return;
-  }
 }
 
 function applyUpdates(events) {

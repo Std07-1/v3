@@ -152,9 +152,15 @@ UI API читає config.json з кешем mtime (перевірка ~0.5s) д�
 
 ## UI: cold-load та snapshots
 
+- UDS використовується як read-only в UI.
 - /api/bars у режимі prefer_redis читає Redis tail/snap, але при малому tail переходить на диск.
-- /api/updates завжди читає диск і використовує tail-only скан.
+- /api/updates читає диск і використовує tail-only скан (hot-path з диску).
 - Клієнт UI абортує попередні load-запити і ігнорує застарілі відповіді.
+
+## План P2X: UDS як write-center
+
+- Writer/connector пише тільки через UDS (без прямого JsonlAppender/RedisSnapshotWriter).
+- /api/updates переходить на RAM/Redis stream, disk лишається recovery.
 
 ## UI: scrollback, кеш, favorites
 

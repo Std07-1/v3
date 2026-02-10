@@ -41,13 +41,19 @@
 5. **Contract-first API**: чіткі схеми запит/відповідь + версії; partial/degraded — **тільки loud**.
 6. **Масштабування**: керовані ліміти історії/вікон/хвостів; контроль Redis-size; прогнозована CPU/IO.
 
-### 2.1) Поточний стан (станом на 2026-02-09)
+### 2.1) Поточний стан (станом на 2026-02-10)
 
 **Реалізовано (факти з коду):**
 
 * UDS реалізовано у runtime/store/uds.py з шарами RAM/Redis/Disk та arbitration: `force_disk` → Disk, `cold_load+prefer_redis` → Redis tail/snap, інакше RAM (якщо є) → Disk.
 * /api/bars та /api/updates вже використовують UDS у ui_chart_v3/server.py; UDS створюється в `main()` і передається в handler.
 * warn-only guard контрактів активний для /api/bars і /api/updates (логування без блокування).
+* **Write-path обходить UDS**: PollingConnectorB напряму використовує JsonlAppender і RedisSnapshotWriter.
+* **/api/updates читає disk tail** через UDS.read_updates (hot-path з диску).
+
+**Висновок станом на 2026-02-10:** інваріант ADR “All writes go through UDS” **ще не виконано**, а updates залежить від disk tail.
+
+**Ціль P2X (UDS write-center):** всі записи йдуть через UDS, а /api/updates читає RAM/Redis stream, disk лишається recovery.
 
 **Фактичний API (наразі, без schema поля):**
 
@@ -334,6 +340,65 @@ C) **UDS layered (рекомендовано)**
 * P3: виконано (інтеграція /api/bars і /api/updates через UDS у ui_chart_v3/server.py).
 * P4: частково (epoch-гейт у UI зафіксовано в журналі; потребує повторної перевірки після P2.2).
 * P5: не виконано (exit-gates і Observability без runner/manifest для UDS).
+* **P2X (Write-center)**: не виконано (writer/connector обходить UDS; updates читає disk tail).
+
+### 10.3) Апдейт 2026-02-10 (P2X: UDS як write-center)
+
+**Інваріанти:**
+
+1. **All writes go through UDS**: жодних прямих JsonlAppender/RedisSnapshotWriter у writer/connector.
+2. **UI reads only from UDS**: /api/bars і /api/updates не читають disk/redis напряму поза UDS.
+3. **Disk is recovery**: disk читається тільки для cold-start, scrollback за межами hot window, recovery/backfill.
+4. **Updates hot-path = RAM/Redis**: /api/updates не сканує disk tail.
+
+**Гейти (exit criteria):**
+
+* Gate-1: у runtime/ingest немає імпортів JsonlAppender/RedisSnapshotWriter (тільки UDS API).
+* Gate-2: UDS read_updates не має read_window_with_geom(use_tail=True).
+* Gate-3: /api/updates повертає cursor_seq з UDS stream без disk_last_open_ms як джерела істини.
+
+**Rollback:**
+
+* Повернути writer/connector на JsonlAppender + RedisSnapshotWriter без UDS.
+* Відновити UDS.read_updates через disk tail (current behavior) як деградований режим.
+
+### 10.4) Діагностика (поточний стан vs ADR)
+
+**Факти:**
+
+* Writer/connector пише напряму в JSONL і Redis snapshots, оминаючи UDS.
+* /api/updates читає disk tail (UDS read_updates використовує disk tail), тобто disk зараз hot-path.
+* UDS використовується як read-only у UI, але не є центром запису.
+
+**Висновок:** ADR-інваріанти “All writes go through UDS” і “Disk is recovery” порушені. Це головна причина split-brain і затримок між stream/SSOT/updates.
+
+### 10.5) Мінімальний план P2X (без UDS-daemon)
+
+**Принцип:** UDS залишається бібліотекою/фасадом, Redis = міжпроцесна спільна пам’ять, disk = SSOT + recovery. Один і той самий UDS код працює у writer (role=writer) і в UI (role=reader).
+
+**Крок A: Writer goes through UDS (критичний мінімум)**
+
+* Перенести JsonlAppender, RedisSnapshotWriter і watermark в UDS.
+* У PollingConnectorB замінити прямі записи на:
+  * `uds.commit_final_bar(...)` (complete=true → SSOT + Redis)
+  * `uds.upsert_preview_bar(...)` (complete=false → лише Redis)
+
+**Крок B: Updates тільки через Redis (hot-path)**
+
+* Додати Redis updates stream (XADD/XREAD або простий журнал з INCR seq).
+* UDS публікує update event на кожен upsert/commit.
+* /api/updates читає лише Redis updates; disk використовується тільки при redis_down (degraded) або для recovery.
+
+**Крок C: Disk = recovery/scrollback/warmup**
+
+* /api/bars: hot window з Redis snapshots/tail, scrollback — disk range.
+* Warmup/prime: заповнювати Redis з disk під бюджет; не використовувати disk у hot updates.
+
+**Preview vs Final (NoMix):**
+
+* preview ніколи не пишеться у SSOT як final;
+* final перемагає preview за ключем (symbol, tf, open_ms);
+* derived TF будуються тільки з final/complete бази.
 
 ### 10.2) Slice mapping (узгодження нумерації)
 

@@ -4,7 +4,7 @@
 
 ## Короткий опис
 
-Система працює тільки з M5 як базовим потоком. На старті робиться warmup останніх M5 (history), далі щохвилини підтягування M5 tail (history). Похідні TF (>= 15m) будуються тільки якщо M5-діапазон повний. UI отримує дані через HTTP API: cold-load може йти з Redis snapshots з fallback на диск при малому tail, оновлення (/api/updates) читаються з SSOT JSONL через tail-only scan. UI клієнт абортує застарілі load-запити та ігнорує пізні відповіді. Scrollback працює як cover-until-satisfied: тригер лівого буфера ~2000 барів, підкидає по 5000 (фаворити x2) і повторює догрузку до покриття. UI API читає config.json з кешем mtime (для ui_debug/tf_allowlist/min_coldload_bars). Профіль середовища визначається через `.env` -> `.env.local/.env.prod`, а Redis host/port/db/ns береться з FXCM_REDIS_* (env override).
+Система працює тільки з M5 як базовим потоком. На старті робиться warmup останніх M5 (history), далі щохвилини підтягування M5 tail (history). Похідні TF (>= 15m) будуються тільки якщо M5-діапазон повний. UI отримує дані через HTTP API, де UDS працює як read-only: cold-load може йти з Redis snapshots з fallback на диск при малому tail, оновлення (/api/updates) читаються з SSOT JSONL через tail-only scan. Write-path поки що обходить UDS (PollingConnectorB пише JSONL/Redis напряму). UI клієнт абортує застарілі load-запити та ігнорує пізні відповіді. Scrollback працює як cover-until-satisfied: тригер лівого буфера ~2000 барів, підкидає по 5000 (фаворити x2) і повторює догрузку до покриття. UI API читає config.json з кешем mtime (для ui_debug/tf_allowlist/min_coldload_bars). Профіль середовища визначається через `.env` -> `.env.local/.env.prod`, а Redis host/port/db/ns береться з FXCM_REDIS_* (env override).
 
 ## Геометрія часу (помітка для всіх розмов про свічки)
 
@@ -22,9 +22,10 @@ flowchart LR
     P -->|dedup + flat_filter| D[(data_v3)]
     P -->|derive from M5| D
     P -->|redis snapshots| R[(Redis snapshots)]
-    D -->|/api/updates tail-only| UI[ui_chart_v3]
-    R -->|cold-load /api/bars prefer_redis| UI
-    D -->|fallback /api/bars (small tail/miss)| UI
+    UI[ui_chart_v3] -->|/api/bars, /api/updates| U[UDS (read-only)]
+    U -->|cold-load /api/bars| R
+    U -->|/api/bars fallback| D
+    U -->|/api/updates tail-only| D
     D -->|manual rebuild| Rb[tools/rebuild_derived.py]
     P --> M[dedup/derive/flat_filter/fetch_policy]
     M --> P
@@ -99,10 +100,12 @@ flowchart TD
 sequenceDiagram
     participant UI as ui_chart_v3/static/app.js
     participant API as ui_chart_v3/server.py
+    participant UDS as runtime/store/uds.py
     participant SSOT as data_v3 JSONL
 
     UI->>API: GET /api/updates?symbol&tf_s&since_seq
-    API->>SSOT: read JSONL parts (tail-only)
+    API->>UDS: read_updates(symbol, tf_s, since_seq)
+    UDS->>SSOT: read JSONL parts (tail-only)
     API-->>UI: events[] + cursor_seq
     UI->>UI: applyUpdates(events)
 ```
@@ -153,7 +156,14 @@ v3/
 |   |       |-- fetch_policy.py  # політики часу для fetch
 |   |       `-- time_buckets.py  # floor_bucket_start_ms
 |   `-- store/
-|       `-- ssot_jsonl.py        # JSONL SSOT writer/reader helpers
+|       |-- uds.py               # UnifiedDataStore (read-only у UI)
+|       |-- redis_snapshot.py    # Redis snapshots writer
+|       |-- redis_keys.py        # нормалізація ключів Redis
+|       |-- ssot_jsonl.py        # JSONL SSOT writer/reader helpers
+|       `-- layers/
+|           |-- ram_layer.py     # RAM LRU шар
+|           |-- redis_layer.py   # Redis read шар
+|           `-- disk_layer.py    # Disk read шар
 |-- ui_chart_v3/                 # UI + API same-origin
 |   |-- server.py                # /api/bars, /api/updates, /api/config
 |   |-- __main__.py              # python -m ui_chart_v3
@@ -186,6 +196,8 @@ v3/
 - Derived TF: 15m/30m/1h з M5, тільки при повному діапазоні M5.
 - Base TF (H4/D1): broker fetch на закритті бакета.
 - UI: HTTP API /api/bars, /api/updates, /api/config (same-origin), cold-load з Redis snapshots.
+- UDS: read-only у UI, /api/updates читає disk tail.
+- Write-path: PollingConnectorB пише JSONL/Redis напряму (UDS write-center у плані P2X).
 - Supervisor: режими stdio pipe/files/inherit/null + префікси логів.
 - Ручний rebuild: tools/rebuild_derived.py з M5 SSOT.
 - Derived tail rebuild: опційно при старті з M5 tail під бюджет, ok-state у _derived_tail_state.json.

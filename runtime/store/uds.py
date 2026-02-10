@@ -271,8 +271,10 @@ class UnifiedDataStore:
         meta: dict[str, Any],
         warnings: list[str],
     ) -> WindowResult:
-        use_tail = spec.cold_load or spec.since_open_ms is not None or (
-            spec.to_open_ms is not None and True
+        use_tail = (
+            spec.cold_load
+            and spec.since_open_ms is None
+            and spec.to_open_ms is None
         )
         bars, geom = self._disk.read_window_with_geom(
             spec.symbol,

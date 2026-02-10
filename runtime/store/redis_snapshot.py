@@ -423,7 +423,7 @@ def init_redis_snapshot(config_path: str, log_detail: bool = True) -> bool:
 
     if log_detail:
         logging.info(
-            "REDIS_INIT_START host=%s port=%d db=%d ns=%s",
+            "REDIS_INIT_START enabled=1 host=%s port=%d db=%d ns=%s",
             host,
             port,
             db,
@@ -442,6 +442,16 @@ def init_redis_snapshot(config_path: str, log_detail: bool = True) -> bool:
         return False
 
     ok, err = writer.ping()
+    if log_detail:
+        logging.info(
+            "REDIS_PING ok=%s host=%s port=%d db=%d ns=%s err=%s",
+            bool(ok),
+            host,
+            port,
+            db,
+            ns,
+            err,
+        )
     if ok:
         logging.info(
             "REDIS_INIT_OK host=%s port=%d db=%d ns=%s ttl_tfs=%d tail_tfs=%d",
