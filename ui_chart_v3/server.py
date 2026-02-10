@@ -113,6 +113,27 @@ def _min_coldload_bars_from_cfg(cfg: dict[str, Any]) -> dict[int, int]:
     return dict(DEFAULT_MIN_COLDLOAD_BARS)
 
 
+def _safe_int(raw: Any, default: int) -> int:
+    try:
+        return int(raw)
+    except Exception:
+        return int(default)
+
+
+def _parse_bool(raw: Any, default: bool) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, int):
+        return bool(raw)
+    if isinstance(raw, str):
+        val = raw.strip().lower()
+        if val in ("1", "true", "yes", "y", "on"):
+            return True
+        if val in ("0", "false", "no", "n", "off"):
+            return False
+    return bool(default)
+
+
 def _cache_key(symbol: str, tf_s: int) -> tuple[str, int]:
     return (symbol, tf_s)
 
@@ -121,17 +142,6 @@ def _cache_get(symbol: str, tf_s: int) -> list[dict[str, Any]]:
     key = _cache_key(symbol, tf_s)
     with _cache_lock:
         return list(_bars_cache.get(key, []))
-
-
-        return None, None, "redis_json_invalid"
-    ttl_left: int | None = None
-    try:
-        ttl = client.ttl(key)
-        if isinstance(ttl, int) and ttl >= 0:
-            ttl_left = ttl
-    except Exception:
-        ttl_left = None
-    return payload, ttl_left, None
 
 
 def _load_cfg_cached(config_path: str | None) -> dict[str, Any]:
