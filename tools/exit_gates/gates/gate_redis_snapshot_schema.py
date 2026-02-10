@@ -8,12 +8,10 @@ try:
 except Exception:
     redis_lib = None  # type: ignore
 
+from runtime.store.redis_keys import symbol_key
+from runtime.store.redis_spec import resolve_redis_spec
 
 DEFAULT_SOURCE_ALLOWLIST = {"history", "derived", "history_agg", ""}
-
-
-def _symbol_key(symbol: str) -> str:
-    return str(symbol).strip().replace("/", "_")
 
 
 def _load_config(path: str) -> Dict[str, Any]:
@@ -102,17 +100,17 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     source_allowlist = set(inputs.get("source_allowlist", [])) or DEFAULT_SOURCE_ALLOWLIST
 
     cfg = _load_config(config_path)
-    redis_cfg = cfg.get("redis")
-    if not isinstance(redis_cfg, dict) or not bool(redis_cfg.get("enabled", False)):
+    spec = resolve_redis_spec(cfg, role="exit_gate", log=False)
+    if spec is None:
         return {"ok": False, "details": "redis.disabled", "metrics": {}}
 
     if redis_lib is None:
         return {"ok": False, "details": "redis.package_missing", "metrics": {}}
 
-    host = str(redis_cfg.get("host", "127.0.0.1"))
-    port = int(redis_cfg.get("port", 6379))
-    db = int(redis_cfg.get("db", 0))
-    ns = str(redis_cfg.get("ns", "v3"))
+    host = spec.host
+    port = spec.port
+    db = spec.db
+    ns = spec.namespace
 
     client = redis_lib.Redis(
         host=host,
@@ -133,6 +131,19 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     keys_checked = 0
     ttl_min_seen: Optional[int] = None
 
+    prime_key = f"{ns}:prime:ready"
+    prime_payload, _, prime_err = _read_json(client, prime_key)
+    prime_ready = False
+    if prime_err is None and isinstance(prime_payload, dict):
+        ready_flag = prime_payload.get("ready")
+        prime_ready = bool(ready_flag) if isinstance(ready_flag, bool) else True
+    if not prime_ready:
+        return {
+            "ok": True,
+            "details": "skip:prime_not_ready",
+            "metrics": {"keys_checked": 0, "prime_ready": False},
+        }
+
     snap_pattern = f"{ns}:ohlcv:snap:*"
     snap_keys = list(_scan_keys(client, snap_pattern))
     if not snap_keys:
@@ -144,7 +155,7 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
             }
         return {"ok": False, "details": "no_snap_keys", "metrics": {"keys_checked": 0}}
 
-    target_symbol = _symbol_key(symbol_in) if symbol_in else None
+    target_symbol = symbol_key(symbol_in) if symbol_in else None
     target_tf_s = tf_s_in if tf_s_in is not None else None
 
     if target_symbol is None or target_tf_s is None:

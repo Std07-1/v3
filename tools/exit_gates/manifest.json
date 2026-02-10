@@ -74,6 +74,11 @@
             }
         },
         {
+            "name": "ui_no_direct_redis",
+            "module": "tools.exit_gates.gates.gate_ui_no_direct_redis",
+            "inputs": {}
+        },
+        {
             "name": "ui_thin_handlers",
             "module": "tools.exit_gates.gates.gate_ui_thin_handlers",
             "inputs": {

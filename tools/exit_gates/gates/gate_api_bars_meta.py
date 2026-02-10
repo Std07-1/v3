@@ -96,7 +96,7 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
         redis_hit = meta.get("redis_hit")
         source = meta.get("source")
         if redis_hit is True:
-            if source != "redis":
+            if source not in ("redis_tail", "redis_snap", "redis"):
                 violations.append("meta:source_not_redis")
             if _parse_int(meta.get("redis_ttl_s_left")) is None:
                 violations.append("meta:ttl_missing")

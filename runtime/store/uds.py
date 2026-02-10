@@ -863,6 +863,80 @@ class UnifiedDataStore:
             self._ram.set_window(spec.symbol, spec.tf_s, lwc)
         return WindowResult(lwc, meta, warnings)
 
+    def read_tail_candles(
+        self,
+        symbol: str,
+        tf_s: int,
+        limit: int,
+    ) -> list[CandleBar]:
+        if limit <= 0:
+            return []
+        bars, _geom = self._disk.read_window_with_geom(
+            symbol,
+            tf_s,
+            limit,
+            use_tail=True,
+            final_only=False,
+            skip_preview=False,
+            final_sources=None,
+        )
+        out: list[CandleBar] = []
+        for raw in bars:
+            candle = _disk_bar_to_candle(raw, symbol, tf_s)
+            if candle is not None:
+                out.append(candle)
+        return out
+
+    def head_first_open_ms(self, symbol: str, tf_s: int) -> Optional[int]:
+        parts = self._disk.list_parts(symbol, tf_s)
+        if not parts:
+            return None
+        first_path = parts[0]
+        try:
+            with open(first_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                        open_ms = obj.get("open_time_ms")
+                        return int(open_ms) if isinstance(open_ms, int) else None
+                    except Exception:
+                        continue
+        except Exception:
+            return None
+        return None
+
+    def load_day_open_times(
+        self,
+        symbol: str,
+        tf_s: int,
+        day: str,
+    ) -> set[int]:
+        sym_dir = symbol.replace("/", "_")
+        tf_dir = f"tf_{tf_s}"
+        path = os.path.join(self._data_root, sym_dir, tf_dir, f"part-{day}.jsonl")
+        out: set[int] = set()
+        if not os.path.isfile(path):
+            return out
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                        open_ms = obj.get("open_time_ms")
+                        if isinstance(open_ms, int):
+                            out.add(open_ms)
+                    except Exception:
+                        continue
+        except Exception:
+            return out
+        return out
+
     def _read_window_redis(
         self,
         spec: WindowSpec,

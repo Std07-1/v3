@@ -20,7 +20,6 @@ from runtime.ingest.polling.fetch_policy import (
 from runtime.ingest.polling.flat_filter import is_flat_bar
 from runtime.ingest.polling.time_buckets import floor_bucket_start_ms
 from runtime.store.uds import build_uds_from_config
-from runtime.store.ssot_jsonl import head_first_bar_time_ms, read_tail_bars
 
 if TYPE_CHECKING:
     from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
@@ -523,8 +522,7 @@ class PollingConnectorB:
                 )
                 return {"derived_tail_rebuild_skipped": "ok_state"}
 
-        bars = read_tail_bars(
-            self._data_root,
+        bars = self._uds.read_tail_candles(
             self._symbol,
             300,
             self._derived_tail_rebuild_m5_bars,
@@ -567,8 +565,7 @@ class PollingConnectorB:
                 log_detail=log_detail,
             )
             if int(backfill.get("m5_gap_backfill_written", 0)) > 0:
-                bars = read_tail_bars(
-                    self._data_root,
+                bars = self._uds.read_tail_candles(
                     self._symbol,
                     300,
                     self._derived_tail_rebuild_m5_bars,
@@ -611,8 +608,7 @@ class PollingConnectorB:
         )
         derived_coverage: Dict[str, Optional[int]] = {}
         for tf_s in self._derived_from_m5_tfs:
-            derived_coverage[str(tf_s)] = head_first_bar_time_ms(
-                self._data_root,
+            derived_coverage[str(tf_s)] = self._uds.head_first_open_ms(
                 self._symbol,
                 tf_s,
             )
@@ -802,7 +798,7 @@ class PollingConnectorB:
             )
 
     def _load_last_open_ms_from_disk(self, symbol: str, tf_s: int) -> Optional[int]:
-        bars = read_tail_bars(self._data_root, symbol, tf_s, n=1)
+        bars = self._uds.read_tail_candles(symbol, tf_s, limit=1)
         if not bars:
             return None
         return int(bars[-1].open_time_ms)
@@ -876,7 +872,7 @@ class PollingConnectorB:
                 total_found += 1
                 if has_on_disk(
                     self._day_index_cache,
-                    self._data_root,
+                    self._uds,
                     self._symbol,
                     tf_s,
                     b.open_time_ms,
@@ -886,7 +882,7 @@ class PollingConnectorB:
                 self._append_bar(b)
                 mark_on_disk(
                     self._day_index_cache,
-                    self._data_root,
+                    self._uds,
                     self._symbol,
                     tf_s,
                     b.open_time_ms,
@@ -1071,7 +1067,7 @@ class PollingConnectorB:
             expected_last = self._last_trading_minute_open_ms(b1 - 60_000)
             if last_trading_open != expected_last:
                 continue
-            if has_on_disk(self._day_index_cache, self._data_root, self._symbol, tf_s, b0):
+            if has_on_disk(self._day_index_cache, self._uds, self._symbol, tf_s, b0):
                 continue
 
             tried += 1
@@ -1098,7 +1094,7 @@ class PollingConnectorB:
                 continue
 
             self._append_bar(b)
-            mark_on_disk(self._day_index_cache, self._data_root, self._symbol, tf_s, b0)
+            mark_on_disk(self._day_index_cache, self._uds, self._symbol, tf_s, b0)
             last = self._last_saved_base.get(tf_s)
             if last is None or b0 > last:
                 self._last_saved_base[tf_s] = b0
@@ -1133,7 +1129,7 @@ class PollingConnectorB:
                     self._m5.upsert(b)
                     if write_missing_older and not has_on_disk(
                         self._day_index_cache,
-                        self._data_root,
+                        self._uds,
                         self._symbol,
                         300,
                         b.open_time_ms,
@@ -1141,7 +1137,7 @@ class PollingConnectorB:
                         self._append_bar(b)
                         mark_on_disk(
                             self._day_index_cache,
-                            self._data_root,
+                            self._uds,
                             self._symbol,
                             300,
                             b.open_time_ms,
@@ -1154,7 +1150,7 @@ class PollingConnectorB:
             self._append_bar(b)
             mark_on_disk(
                 self._day_index_cache,
-                self._data_root,
+                self._uds,
                 self._symbol,
                 300,
                 b.open_time_ms,
@@ -1217,7 +1213,7 @@ class PollingConnectorB:
             if last is not None and d.open_time_ms <= last:
                 if has_on_disk(
                     self._day_index_cache,
-                    self._data_root,
+                    self._uds,
                     self._symbol,
                     tf_s,
                     d.open_time_ms,
@@ -1226,7 +1222,7 @@ class PollingConnectorB:
 
             if not has_on_disk(
                 self._day_index_cache,
-                self._data_root,
+                self._uds,
                 self._symbol,
                 tf_s,
                 d.open_time_ms,
@@ -1234,7 +1230,7 @@ class PollingConnectorB:
                 self._append_bar(d)
                 mark_on_disk(
                     self._day_index_cache,
-                    self._data_root,
+                    self._uds,
                     self._symbol,
                     tf_s,
                     d.open_time_ms,
@@ -1294,7 +1290,7 @@ class PollingConnectorB:
             if last is not None and d.open_time_ms <= last:
                 if has_on_disk(
                     self._day_index_cache,
-                    self._data_root,
+                    self._uds,
                     self._symbol,
                     tf_s,
                     d.open_time_ms,
@@ -1303,7 +1299,7 @@ class PollingConnectorB:
 
             if not has_on_disk(
                 self._day_index_cache,
-                self._data_root,
+                self._uds,
                 self._symbol,
                 tf_s,
                 d.open_time_ms,
@@ -1311,7 +1307,7 @@ class PollingConnectorB:
                 self._append_bar(d)
                 mark_on_disk(
                     self._day_index_cache,
-                    self._data_root,
+                    self._uds,
                     self._symbol,
                     tf_s,
                     d.open_time_ms,
@@ -1434,7 +1430,7 @@ class PollingConnectorB:
             return
         self._m5_backfill_last_ts = now_s
 
-        head_ms = head_first_bar_time_ms(self._data_root, self._symbol, 300)
+        head_ms = self._uds.head_first_open_ms(self._symbol, 300)
         if head_ms is None:
             return
         if self._m5_backfill_last_head_ms is not None and head_ms >= self._m5_backfill_last_head_ms:
@@ -1518,7 +1514,7 @@ class PollingConnectorB:
                     continue
                 if has_on_disk(
                     self._day_index_cache,
-                    self._data_root,
+                    self._uds,
                     self._symbol,
                     300,
                     b.open_time_ms,

@@ -2,21 +2,34 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 try:
     import redis as redis_lib  # type: ignore
 except Exception:
     redis_lib = None  # type: ignore
 
-
-def _symbol_key(symbol: str) -> str:
-    return str(symbol).strip().replace("/", "_")
+from runtime.store.redis_keys import symbol_key
+from runtime.store.redis_spec import resolve_redis_spec
 
 
 def _load_config(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _read_json(client: Any, key: str) -> Tuple[Optional[dict], Optional[str]]:
+    try:
+        raw = client.get(key)
+    except Exception as exc:
+        return None, f"redis_get_failed:{type(exc).__name__}"
+    if raw is None:
+        return None, "redis_miss"
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return None, "redis_json_invalid"
+    return payload, None
 
 
 def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
@@ -30,8 +43,8 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     socket_timeout_ms = int(inputs.get("socket_timeout_ms", 200))
 
     cfg = _load_config(config_path)
-    redis_cfg = cfg.get("redis")
-    if not isinstance(redis_cfg, dict) or not bool(redis_cfg.get("enabled", False)):
+    spec = resolve_redis_spec(cfg, role="exit_gate", log=False)
+    if spec is None:
         return {
             "ok": False,
             "details": "redis.enabled=false або відсутній redis блок",
@@ -45,10 +58,10 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
             "metrics": {},
         }
 
-    host = str(redis_cfg.get("host", "127.0.0.1"))
-    port = int(redis_cfg.get("port", 6379))
-    db = int(redis_cfg.get("db", 0))
-    ns = str(redis_cfg.get("ns", "v3"))
+    host = spec.host
+    port = spec.port
+    db = spec.db
+    ns = spec.namespace
 
     client = redis_lib.Redis(
         host=host,
@@ -66,10 +79,23 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "details": f"redis.ping error: {exc}", "metrics": {}}
 
     now_ms = int(time.time() * 1000)
-    snap_key = f"{ns}:ohlcv:snap:{_symbol_key(symbol)}:{tf_s}"
-    status_key = f"{ns}:status:snapshot"
+    prime_key = f"{ns}:prime:ready"
+    prime_payload, prime_err = _read_json(client, prime_key)
+    prime_ready = False
+    if prime_err is None and isinstance(prime_payload, dict):
+        ready_flag = prime_payload.get("ready")
+        prime_ready = bool(ready_flag) if isinstance(ready_flag, bool) else True
 
-    metrics: Dict[str, Any] = {"now_ms": now_ms}
+    metrics: Dict[str, Any] = {"now_ms": now_ms, "prime_ready": prime_ready}
+    if not prime_ready:
+        return {
+            "ok": True,
+            "details": "skip:prime_not_ready",
+            "metrics": metrics,
+        }
+
+    snap_key = f"{ns}:ohlcv:snap:{symbol_key(symbol)}:{tf_s}"
+    status_key = f"{ns}:status:snapshot"
 
     if require_snap:
         snap_raw = client.get(snap_key)

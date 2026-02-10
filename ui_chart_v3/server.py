@@ -34,11 +34,6 @@ from core.time_geom import normalize_bar
 from env_profile import load_env_profile
 from runtime.store.uds import ReadPolicy, UpdatesSpec, WindowSpec, build_uds_from_config
 
-try:
-    import redis as redis_lib  # type: ignore
-except Exception:
-    redis_lib = None  # type: ignore
-
 
 _updates_lock = threading.Lock()
 _updates_seq = 0
@@ -53,11 +48,7 @@ DEFAULT_TF_ALLOWLIST = {300, 900, 1800, 3600, 14400, 86400}
 SOURCE_ALLOWLIST = {"history", "derived", "history_agg", ""}
 FINAL_SOURCES = {"history", "derived", "history_agg"}
 MAX_EVENTS_PER_RESPONSE = 500
-REDIS_SOCKET_TIMEOUT_S = 0.4
 DEFAULT_MIN_COLDLOAD_BARS = {300: 300, 900: 200, 1800: 150, 3600: 100}
-
-_redis_log_throttle: dict[str, float] = {}
-_redis_client_cache: dict[str, Any] = {}
 _cfg_cache: dict[str, Any] = {"data": {}, "mtime": None, "next_check_ts": 0.0}
 CFG_CACHE_CHECK_INTERVAL_S = 0.5
 
@@ -132,149 +123,6 @@ def _cache_get(symbol: str, tf_s: int) -> list[dict[str, Any]]:
         return list(_bars_cache.get(key, []))
 
 
-def _cache_seed(symbol: str, tf_s: int, bars: list[dict[str, Any]]) -> None:
-    key = _cache_key(symbol, tf_s)
-    tail = bars[-MAX_CACHE_BARS:] if len(bars) > MAX_CACHE_BARS else list(bars)
-    with _cache_lock:
-        _bars_cache[key] = tail
-
-
-def _cache_upsert(symbol: str, tf_s: int, bar: dict[str, Any]) -> None:
-    key = _cache_key(symbol, tf_s)
-    open_ms = bar.get("open_time_ms")
-    if not isinstance(open_ms, int):
-        return
-    incoming_complete = bool(bar.get("complete", False))
-    incoming_src = bar.get("src")
-    with _cache_lock:
-        arr = _bars_cache.get(key)
-        if arr is None:
-            _bars_cache[key] = [bar]
-            return
-        replaced = False
-        for i, existing in enumerate(arr):
-            if existing.get("open_time_ms") == open_ms:
-                existing_complete = bool(existing.get("complete", False))
-                existing_src = existing.get("src")
-                if existing_complete and not incoming_complete:
-                    return
-                if existing_complete and incoming_complete and existing_src and incoming_src and existing_src != incoming_src:
-                    return
-                arr[i] = bar
-                replaced = True
-                break
-        if not replaced:
-            arr.append(bar)
-            if len(arr) >= 2 and arr[-2].get("open_time_ms") is not None:
-                prev_ms = arr[-2].get("open_time_ms")
-                if isinstance(prev_ms, int) and open_ms < prev_ms:
-                    arr.sort(key=lambda x: x.get("open_time_ms", 0))
-        if len(arr) > MAX_CACHE_BARS:
-            del arr[: len(arr) - MAX_CACHE_BARS]
-
-
-def _safe_int(v: str | None, default: int) -> int:
-    try:
-        return int(v) if v is not None else default
-    except Exception:
-        return default
-
-
-def _parse_bool(value: Any, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        v = value.strip().lower()
-        if v in ("1", "true", "yes", "y", "on"):
-            return True
-        if v in ("0", "false", "no", "n", "off", ""):
-            return False
-    return default
-
-
-def _log_throttled(level: str, key: str, message: str, every_s: int = 60) -> None:
-    now = time.time()
-    last = _redis_log_throttle.get(key, 0.0)
-    if now - last < every_s:
-        return
-    _redis_log_throttle[key] = now
-    if level == "warning":
-        logging.warning("%s", message)
-    else:
-        logging.info("%s", message)
-
-
-def _redis_config_from_cfg(cfg: dict[str, Any]) -> dict[str, Any] | None:
-    raw = cfg.get("redis")
-    if not isinstance(raw, dict):
-        return None
-    if not bool(raw.get("enabled", False)):
-        return None
-    env_host = (os.environ.get("FXCM_REDIS_HOST") or "").strip() or None
-    env_port = (os.environ.get("FXCM_REDIS_PORT") or "").strip() or None
-    env_db = (os.environ.get("FXCM_REDIS_DB") or "").strip() or None
-    env_ns = (os.environ.get("FXCM_REDIS_NS") or "").strip() or None
-
-    merged = dict(raw)
-    if env_host:
-        merged["host"] = env_host
-    if env_port:
-        try:
-            merged["port"] = int(env_port)
-        except Exception:
-            pass
-    if env_db:
-        try:
-            merged["db"] = int(env_db)
-        except Exception:
-            pass
-    if env_ns:
-        merged["ns"] = env_ns
-    return merged
-
-
-def _redis_client_from_cfg(cfg: dict[str, Any]) -> tuple[Any, str] | None:
-    raw = _redis_config_from_cfg(cfg)
-    if raw is None:
-        return None
-    if redis_lib is None:
-        return None
-    host = str(raw.get("host", "127.0.0.1"))
-    port = int(raw.get("port", 6379))
-    db = int(raw.get("db", 0))
-    ns = str(raw.get("ns", "v3"))
-    cache_key = f"{host}:{port}:{db}:{ns}"
-    cached = _redis_client_cache.get(cache_key)
-    if cached is not None:
-        return cached, ns
-    client = redis_lib.Redis(
-        host=host,
-        port=port,
-        db=db,
-        decode_responses=True,
-        socket_timeout=REDIS_SOCKET_TIMEOUT_S,
-        socket_connect_timeout=REDIS_SOCKET_TIMEOUT_S,
-    )
-    _redis_client_cache[cache_key] = client
-    return client, ns
-
-
-def _redis_key(ns: str, *parts: str) -> str:
-    return ":".join([ns, *parts])
-
-
-def _redis_get_json(client: Any, key: str) -> tuple[dict[str, Any] | None, int | None, str | None]:
-    try:
-        raw = client.get(key)
-    except Exception as exc:
-        return None, None, f"redis_get_failed:{type(exc).__name__}"
-    if raw is None:
-        return None, None, "redis_miss"
-    try:
-        payload = json.loads(raw)
-    except Exception:
         return None, None, "redis_json_invalid"
     ttl_left: int | None = None
     try:

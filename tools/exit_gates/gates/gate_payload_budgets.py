@@ -9,6 +9,7 @@ try:
 except Exception:
     redis_lib = None  # type: ignore
 
+from runtime.store.redis_spec import resolve_redis_spec
 
 def _http_get_bytes(url: str, timeout_s: float = 3.0) -> Tuple[int, bytes, Optional[str]]:
     req = request.Request(url, headers={"Cache-Control": "no-store"})
@@ -32,6 +33,20 @@ def _parse_int(value: Any) -> Optional[int]:
         return int(value)
     except Exception:
         return None
+
+
+def _read_json(client: Any, key: str) -> Tuple[Optional[dict], Optional[str]]:
+    try:
+        raw = client.get(key)
+    except Exception as exc:
+        return None, f"redis_get_failed:{type(exc).__name__}"
+    if raw is None:
+        return None, "redis_miss"
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return None, "redis_json_invalid"
+    return payload, None
 
 
 def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
@@ -88,15 +103,15 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
             }
 
     cfg = _load_config(config_path)
-    redis_cfg = cfg.get("redis")
-    if isinstance(redis_cfg, dict) and bool(redis_cfg.get("enabled", False)):
+    spec = resolve_redis_spec(cfg, role="exit_gate", log=False)
+    if spec is not None:
         if redis_lib is None:
             violations.append("redis_package_missing")
         else:
-            host = str(redis_cfg.get("host", "127.0.0.1"))
-            port = int(redis_cfg.get("port", 6379))
-            db = int(redis_cfg.get("db", 0))
-            ns = str(redis_cfg.get("ns", "v3"))
+            host = spec.host
+            port = spec.port
+            db = spec.db
+            ns = spec.namespace
             client = redis_lib.Redis(
                 host=host,
                 port=port,
@@ -105,6 +120,20 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
                 socket_connect_timeout=0.3,
                 socket_timeout=0.3,
             )
+            prime_key = f"{ns}:prime:ready"
+            prime_payload, prime_err = _read_json(client, prime_key)
+            prime_ready = False
+            if prime_err is None and isinstance(prime_payload, dict):
+                ready_flag = prime_payload.get("ready")
+                prime_ready = bool(ready_flag) if isinstance(ready_flag, bool) else True
+            metrics["prime_ready"] = prime_ready
+            if not prime_ready:
+                return {
+                    "ok": len(violations) == 0,
+                    "details": f"violations={len(violations)} bars_bytes={metrics.get('bars_bytes')} updates_bytes={metrics.get('updates_bytes')} status_bytes=None",
+                    "metrics": metrics,
+                }
+
             status_key = f"{ns}:status:snapshot"
             try:
                 status_raw = client.get(status_key)
