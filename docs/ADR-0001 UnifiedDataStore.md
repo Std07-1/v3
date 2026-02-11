@@ -1,17 +1,17 @@
 
 **ADR-скелет** під *v3* для рішення “**UnifiedDataStore (RAM↔Redis↔Disk) + API contracts**”, із акцентом на **TV-like стабільність**, швидкі перемикання **symbol/TF**, і **тупий UI** (рендер без рішень).
 
-Я спеціально заклав у скелет **інваріанти**, які прямо б’ють по твоїй проблемі “refresh нормалізує / потім знову ламається”: це майже завжди **гонки запитів**, **часткові вікна**, **неузгоджені cursors/seq**, і **випадкові деградації** (silent partial). У поточному UI видно паралельні контури оновлення: `loadBarsFull()` → `/api/bars`, `pollLatest()` → `/api/latest`, `pollLive()` → `/api/live` із різними таймерами, без cancellation/epoch-гейту, що легко дає “смикання” при перемиканні symbol/TF і при масштабуванні.
+Я спеціально заклав у скелет **інваріанти**, які прямо б’ють по твоїй проблемі “refresh нормалізує / потім знову ламається”: це майже завжди **гонки запитів**, **часткові вікна**, **неузгоджені cursors/seq**, і **випадкові деградації** (silent partial). У поточному UI контури оновлення зведені до `/api/bars` для cold-load і `/api/updates` для polling, але без гарантій cancellation/epoch-гейту це все ще може давати “смикання” при перемиканні symbol/TF.
 
 ---
 
 ## ADR-0001: UnifiedDataStore (RAM/Redis/Disk) + Contract-first MarketData API
 
-**Status:** In progress (P2.2 wired, verify pending)
+**Status:** Active (UDS read+write через UDS; Redis updates bus; preview-plane активний; tick-stream wiring pending)
 **Date:** 2026-02-09
 **Owners:** (TBD)
 **Related:** UI stability / live jitter, redis snapshots, derived TF, exit-gates (TBD)
-**Updated:** 2026-02-09
+**Updated:** 2026-02-10
 
 ### 1) Контекст і проблема
 
@@ -24,10 +24,7 @@
 **Факти поточного UI-патерну (v3 UI lite):**
 
 * cold load бере `/api/bars?…&limit=20000`;
-* паралельно живуть **два polling-контури**:
-
-  * `/api/latest … after_open_ms=…` кожні 3s;
-  * `/api/live` кожні 500ms (оновлення “останнього бару”).
+* polling йде через `/api/updates` (cursor/seq), а `/api/latest` лишився як legacy-алиас для range-читання;
 * зміна symbol/TF викликає `loadBarsFull()`, але **не гарантує** “зупинити/анулювати” in-flight відповіді попереднього symbol/TF (нема request epoch / cancellation token у протоколі).
 
 **Арх-проблема:** сьогодні “кеш/політика” фактично розмазана між UI↔server↔Redis↔disk, а відповідальність за **цілісність вікна** і **узгодженість інкрементів** не зафіксована контрактом.
@@ -45,22 +42,24 @@
 
 **Реалізовано (факти з коду):**
 
-* UDS реалізовано у runtime/store/uds.py з шарами RAM/Redis/Disk та arbitration: `force_disk` → Disk, `cold_load+prefer_redis` → Redis tail/snap, інакше RAM (якщо є) → Disk.
-* /api/bars та /api/updates вже використовують UDS у ui_chart_v3/server.py; UDS створюється в `main()` і передається в handler.
-* warn-only guard контрактів активний для /api/bars і /api/updates (логування без блокування).
-* **Write-path обходить UDS**: PollingConnectorB напряму використовує JsonlAppender і RedisSnapshotWriter.
-* **/api/updates читає disk tail** через UDS.read_updates (hot-path з диску).
+* UDS реалізовано у runtime/store/uds.py з шарами RAM/Redis/Disk та arbitration: `force_disk` → Disk, `cold_load+prefer_redis` → Redis tail/snap, інакше RAM (якщо є) → Disk; read-path робить sort+dedup з `geom_non_monotonic` у meta при фіксах.
+* /api/bars і /api/latest читають через UDS.read_window, /api/updates — через UDS.read_updates; UI не має прямого Redis read-path (є exit-gate).
+* PollingConnectorB пише через UDS: preview → `publish_preview_bar`, final → `commit_final_bar` з watermark/quarantine.
+* Updates hot-path працює через Redis UpdatesBus; disk tail більше не використовується у /api/updates (disk_last_open_ms/bar_close_ms = null).
+* Preview-plane ізольований: Redis preview keyspace (curr/tail/updates), allowlist TF=60/180, /api/bars для preview читає read_preview_window, include_preview ігнорується для не-preview TF (warning include_preview_ignored), NoMix guard активний; exit-gates: preview_not_on_disk і no_preview_in_final_redis.
+* TickAggregator (runtime/ingest/tick_agg.py) існує як бібліотека preview-агрегації (open=перший тик, late-bucket drop), wiring у tick-stream pending.
 
-**Висновок станом на 2026-02-10:** інваріант ADR “All writes go through UDS” **ще не виконано**, а updates залежить від disk tail.
+**Висновок станом на 2026-02-10:** UDS — write-center для polling; updates працюють через Redis bus; preview-plane відокремлено. Tick-stream wiring для preview з тиков ще не підʼєднано.
 
 **Ціль P2X (UDS write-center):** всі записи йдуть через UDS, а /api/updates читає RAM/Redis stream, disk лишається recovery.
 
 **Фактичний API (наразі, без schema поля):**
 
-* /api/bars: `bars[]` (LWC-формат), `meta` з `source`, `redis_hit`, `redis_error_code?`, `boot_id`.
-* /api/updates: `events[]` (key/bar/complete/source/event_ts), `cursor_seq`, `disk_last_open_ms`, `bar_close_ms`, `ssot_write_ts_ms`, `api_seen_ts_ms`, `boot_id`.
+* /api/bars і /api/latest: `bars[]` (LWC-формат), `meta` з `source`, `redis_hit`, `redis_error_code?`, `boot_id`, `extensions` (partial/prime/geom_fix).
+* /api/updates: `events[]` (key/bar/complete/source/event_ts), `cursor_seq`, `api_seen_ts_ms`, `boot_id`, `warnings[]` (include_preview_ignored, redis_down, cursor_gap).
+* Preview TF: /api/bars → preview-plane (meta.source=preview_*), /api/updates → preview updates; для non-preview TF `include_preview=1` ігнорується з warning.
 
-**VERIFY (реальні відповіді):**
+**VERIFY (історично, до geom-fix):**
 
 * tf_s=300: зафіксовано `open_time_ms` нестрого-зростаючий (non-increasing) на idx=399.
   * prev=1769126100000 (2026-01-22 23:55:00Z)
@@ -68,14 +67,14 @@
   * це “відкат” майже на добу всередині одного дня.
 * tf_s=86400: зафіксовані зміни offset (ймовірно DST) — як warning.
 
-**Наслідки:**
+**Наслідки (поточні):**
 
-* потрібна нормалізація/впорядкування для tf_s=300 на read-path (або корекція даних на disk).
+* нормалізація/впорядкування на read-path реалізована в UDS (sort+dedup з `geom_non_monotonic` і `geom_fix`).
 * HTF offset має бути явно закріплений у SSOT календарі/конфігу та узгоджений з `bucket_start_ms()`.
 
 ### 2.2) Висновки з VERIFY і локалізація причини
 
-**Ключовий факт:** /api/bars повернув non-increasing `open_time_ms` для tf_s=300. Для LWC це токсично, бо серія очікує монотонний час; такі “відкати” дають рваність/стриби/нестабільну нормалізацію після refresh.
+**Ключовий факт (історично):** /api/bars повернув non-increasing `open_time_ms` для tf_s=300. Для LWC це токсично, бо серія очікує монотонний час; такі “відкати” дають рваність/стриби/нестабільну нормалізацію після refresh.
 
 **Найбільш імовірна причина:** append-only JSONL отримав “пізній” запис із раннім `open_time_ms` (backfill/repair/derived/перезапуск), який дописався в кінець файла. DiskLayer `_read_jsonl_tail_filtered()` повертає хвіст без сортування, тому out-of-order одразу виходить в API.
 
@@ -120,9 +119,9 @@ PY
 
 **Критерій:** 2+ входження одного `open_time_ms` = прямий доказ дубля/пізнього backfill append.
 
-### 2.3) P2.2 hardening (must-have)
+### 2.3) P2.2 hardening (стан)
 
-**P2.2.1 Geometry normalize на read-path (UDS):**
+**P2.2.1 Geometry normalize на read-path (UDS) — виконано:**
 
 * додати `ensure_sorted_dedup(bars)` для виходу з Disk/Redis/RAM:
   * cheap-scan: якщо монотонність порушена → sort by `open_time_ms`.
@@ -130,15 +129,15 @@ PY
   * якщо були правки → `meta.degraded += ["geom_non_monotonic"]` і `meta.geom_fix={"sorted":true,"dedup_dropped":N}`.
   * лог `UDS_GEOM_FIX` з `source`, `tf_s`, `dropped`.
 
-**P2.2.2 Заборонити cache override після disk:**
+**P2.2.2 Заборонити cache override після disk — виконано:**
 
 * джерело обирається до читання (UDS arbitration) і не підміняється після факту.
 
-**P2.2.3 Cursor semantics (updates):**
+**P2.2.3 Cursor semantics (updates) — виконано:**
 
 * `cursor_seq` має бути детермінований (max seq або since_seq). Не перезаписувати cursor поза UDS.
 
-**P2.3/P2.4 Rails (single-writer + watermark):**
+**P2.3/P2.4 Rails (single-writer + watermark) — виконано:**
 
 * UDS у UI процесі має роль `reader` і кидає `UDS_WRITE_FORBIDDEN` при будь-якому записі.
 * Write-path має **watermark per (symbol, tf_s)**; бар з `open_time_ms <= wm_open_ms` відкидається як `stale|duplicate` (loud лог).
@@ -194,10 +193,10 @@ PY
   * `bar_last_patch` (патч/повний last bar для live),
   * `seq_head`,
   * `gap: true/false` (якщо since_seq занадто старий/втрата — тоді UI робить **реload window**, а не “латання”).
-* UI **не міксує** `/api/live` і `/api/latest` без epoch-гейту; або:
+* UI **не міксує** `/api/updates` і `/api/latest` без epoch-гейту; або:
 
   * A) лишаємо 2 endpoints, але обидва підпорядковані одному `seq_head`, або
-  * B) зводимо live+latest в один `/api/updates` (рекомендовано).
+  * B) тримаємо `/api/latest` лише як legacy-алиас для range-читання, а live робимо через `/api/updates`.
 
 #### 4.4 UI стає “тупий”: state machine + epoch gate
 
@@ -259,12 +258,13 @@ UI логіка міняється з “викликай що хочеш пар
 **Bar (canonical)**
 
 * `open_time_ms: int64`
-* `close_time_ms: int64`
+* `close_time_ms: int64` (API end-incl; внутрішній CandleBar з end-excl нормалізується на publish)
 * `open, high, low, close: float`
 * `volume: float`
 * `complete: bool`
-* `source: "stream"|"backfill"|"derived"|"disk_snapshot"` (TBD)
+* `source: "history"|"history_agg"|"derived"|"stream"|"preview_tick"` (preview-plane окремо)
 * `rev?: int` (опційно для patch/last bar)
+* `last_price?: float`, `last_tick_ts?: int` (опційно для preview)
 
 (У референсі UDS бари тримають мінімальний набір OHLCV+complete і роблять merge/dedup/sort)
 
@@ -275,6 +275,7 @@ UI логіка міняється з “викликай що хочеш пар
 3. **Single-writer per (symbol,tf)** для seq (UDS/worker).
 4. **Collapse-to-latest**: при backpressure (write-behind, derived rebuild) — latest wins, без розмноження черг. (патерн коалесингу flush_pending)
 5. **Disk не на hot-path**: disk — durable + cold start + recovery, але не “кожен скрол” (окрім контрольованого scrollback режиму).
+6. **Preview NoMix**: preview-plane тільки `complete=false` + `source=preview_*`, final завжди перемагає preview за ключем.
 
 ### 8) Варіанти (Alternatives considered)
 
@@ -338,11 +339,11 @@ C) **UDS layered (рекомендовано)**
 * P1: виконано (JSON Schema `marketdata_v1` + warn-only guard у server.py).
 * P2: виконано (UDS + RAM/Redis/Disk шари у runtime/store).
 * P3: виконано (інтеграція /api/bars і /api/updates через UDS у ui_chart_v3/server.py).
-* P4: частково (epoch-гейт у UI зафіксовано в журналі; потребує повторної перевірки після P2.2).
-* P5: не виконано (exit-gates і Observability без runner/manifest для UDS).
-* **P2X (Write-center)**: не виконано (writer/connector обходить UDS; updates читає disk tail).
+* P4: частково (epoch-гейт у UI зафіксовано; потрібна повторна перевірка після змін P2X).
+* P5: частково (runner для exit-gates є; метрики/latency p95 та повний набір gate-ів ще неповні).
+* **P2X (Write-center)**: виконано для polling (writer через UDS; updates через Redis bus; preview-plane ізольований). Tick-stream wiring pending.
 
-### 10.3) Апдейт 2026-02-10 (P2X: UDS як write-center)
+### 10.3) Апдейт 2026-02-10 (P2X: UDS як write-center) — виконано
 
 **Інваріанти:**
 
@@ -350,12 +351,13 @@ C) **UDS layered (рекомендовано)**
 2. **UI reads only from UDS**: /api/bars і /api/updates не читають disk/redis напряму поза UDS.
 3. **Disk is recovery**: disk читається тільки для cold-start, scrollback за межами hot window, recovery/backfill.
 4. **Updates hot-path = RAM/Redis**: /api/updates не сканує disk tail.
+5. **Preview-plane окремо**: preview не пишеться у SSOT, живе в Redis preview keyspace.
 
-**Гейти (exit criteria):**
+**Гейти (exit criteria) — виконано:**
 
-* Gate-1: у runtime/ingest немає імпортів JsonlAppender/RedisSnapshotWriter (тільки UDS API).
-* Gate-2: UDS read_updates не має read_window_with_geom(use_tail=True).
-* Gate-3: /api/updates повертає cursor_seq з UDS stream без disk_last_open_ms як джерела істини.
+* ingest_no_direct_writers: у runtime/ingest немає прямих ssot/redis writer імпортів.
+* ui_no_direct_redis: UI не містить Redis read-path.
+* preview_not_on_disk і no_preview_in_final_redis: preview не протікає у SSOT/final updates.
 
 **Rollback:**
 
@@ -364,35 +366,36 @@ C) **UDS layered (рекомендовано)**
 
 ### 10.4) Діагностика (поточний стан vs ADR)
 
-**Факти:**
+**Факти (станом на 2026-02-10):**
 
-* Writer/connector пише напряму в JSONL і Redis snapshots, оминаючи UDS.
-* /api/updates читає disk tail (UDS read_updates використовує disk tail), тобто disk зараз hot-path.
-* UDS використовується як read-only у UI, але не є центром запису.
+* Polling writer пише через UDS (`commit_final_bar`, `publish_preview_bar`) з watermark/quarantine.
+* /api/updates читає Redis updates bus; disk tail не використовується в hot-path.
+* UI читає тільки через UDS; прямий Redis read-path заборонений gate-ом.
+* Preview-plane у Redis preview keyspace; include_preview ігнорується для non-preview TF.
 
-**Висновок:** ADR-інваріанти “All writes go through UDS” і “Disk is recovery” порушені. Це головна причина split-brain і затримок між stream/SSOT/updates.
+**Висновок:** ADR-інваріанти “All writes go through UDS” і “Disk is recovery (для updates)” виконані для polling. Відкрите: tick-stream wiring для preview з тиков.
 
-### 10.5) Мінімальний план P2X (без UDS-daemon)
+### 10.5) Мінімальний план P2X (залишок)
 
 **Принцип:** UDS залишається бібліотекою/фасадом, Redis = міжпроцесна спільна пам’ять, disk = SSOT + recovery. Один і той самий UDS код працює у writer (role=writer) і в UI (role=reader).
 
-**Крок A: Writer goes through UDS (критичний мінімум)**
+**Крок A: Writer goes through UDS — виконано**
 
-* Перенести JsonlAppender, RedisSnapshotWriter і watermark в UDS.
-* У PollingConnectorB замінити прямі записи на:
-  * `uds.commit_final_bar(...)` (complete=true → SSOT + Redis)
-  * `uds.upsert_preview_bar(...)` (complete=false → лише Redis)
+* PollingConnectorB використовує `uds.commit_final_bar(...)` і `uds.publish_preview_bar(...)`.
 
-**Крок B: Updates тільки через Redis (hot-path)**
+**Крок B: Updates тільки через Redis (hot-path) — виконано**
 
-* Додати Redis updates stream (XADD/XREAD або простий журнал з INCR seq).
-* UDS публікує update event на кожен upsert/commit.
+* Redis updates stream (list+seq) реалізовано; UDS публікує update event на кожен commit.
 * /api/updates читає лише Redis updates; disk використовується тільки при redis_down (degraded) або для recovery.
 
-**Крок C: Disk = recovery/scrollback/warmup**
+**Крок C: Disk = recovery/scrollback/warmup — виконано**
 
 * /api/bars: hot window з Redis snapshots/tail, scrollback — disk range.
 * Warmup/prime: заповнювати Redis з disk під бюджет; не використовувати disk у hot updates.
+
+**Залишок P2X:**
+
+* tick-stream wiring до TickAggregator (preview-plane).
 
 **Preview vs Final (NoMix):**
 
@@ -409,7 +412,7 @@ C) **UDS layered (рекомендовано)**
 
 ### 11) Тести / Exit Gates (Definition of Done)
 
-* Unit: dedup/sort invariants, seq monotonic, gap detection.
+* Unit: dedup/sort invariants, seq monotonic, gap detection; TickAggregator (open=first tick, late bucket drop).
 * Integration: “switch storm 100x” без jitter/reorder; “scrollback до N днів” без partial.
 * Runtime rails:
 

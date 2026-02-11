@@ -33,10 +33,14 @@ except Exception:
 
 
 DEFAULT_TF_ALLOWLIST = {300, 900, 1800, 3600, 14400, 86400}
+DEFAULT_PREVIEW_TF_ALLOWLIST = {60, 180}
 SOURCE_ALLOWLIST = {"history", "derived", "history_agg", ""}
 FINAL_SOURCES = {"history", "derived", "history_agg"}
 MAX_EVENTS_PER_RESPONSE = 500
 REDIS_SOCKET_TIMEOUT_S = 0.4
+PREVIEW_CURR_TTL_S = 120
+PREVIEW_TAIL_RETAIN = 2000
+PREVIEW_UPDATES_RETAIN = 2000
 
 def _disk_bar_to_candle(
     raw: dict[str, Any],
@@ -211,6 +215,7 @@ class UpdatesSpec:
     tf_s: int
     since_seq: Optional[int]
     limit: int
+    include_preview: bool = False
 
 
 @dataclass
@@ -254,6 +259,11 @@ class UnifiedDataStore:
         updates_bus: Optional[Any] = None,
         redis_spec_mismatch: bool = False,
         redis_spec_mismatch_fields: Optional[list[str]] = None,
+        preview_tf_allowlist: Optional[set[int]] = None,
+        preview_tf_allowlist_source: str = "fallback",
+        preview_curr_ttl_s: int = PREVIEW_CURR_TTL_S,
+        preview_tail_retain: int = PREVIEW_TAIL_RETAIN,
+        preview_updates_retain: int = PREVIEW_UPDATES_RETAIN,
     ) -> None:
         if role not in ("reader", "writer"):
             raise ValueError(f"UDS: невідома роль {role}")
@@ -275,6 +285,40 @@ class UnifiedDataStore:
         self._updates_bus_warned = False
         self._redis_spec_mismatch = bool(redis_spec_mismatch)
         self._redis_spec_mismatch_fields = list(redis_spec_mismatch_fields or [])
+        self._preview_tf_allowlist = set(preview_tf_allowlist or DEFAULT_PREVIEW_TF_ALLOWLIST)
+        self._preview_allowlist_source = str(preview_tf_allowlist_source or "fallback")
+        self._preview_curr_ttl_s = int(preview_curr_ttl_s)
+        self._preview_tail_retain = max(1, int(preview_tail_retain))
+        self._preview_updates_retain = max(1, int(preview_updates_retain))
+        self._preview_last_open_ms: dict[tuple[str, int], int] = {}
+        self._preview_last_publish_ms: dict[tuple[str, int], int] = {}
+        self._preview_nomix_violation = False
+        self._preview_nomix_violation_reason: Optional[str] = None
+        self._preview_nomix_violation_ts_ms: Optional[int] = None
+        if self._preview_allowlist_source == "fallback":
+            Logging.warning(
+                "UDS: PREVIEW_TF_ALLOWLIST_FALLBACK tf_s=%s",
+                sorted(self._preview_tf_allowlist),
+            )
+
+    def _set_preview_nomix_violation(self, reason: str) -> None:
+        if not self._preview_nomix_violation:
+            Logging.warning("UDS: preview_nomix_violation reason=%s", reason)
+        self._preview_nomix_violation = True
+        self._preview_nomix_violation_reason = reason
+        self._preview_nomix_violation_ts_ms = int(time.time() * 1000)
+
+    def _apply_preview_nomix_violation(self, meta: dict[str, Any], warnings: list[str]) -> None:
+        if not self._preview_nomix_violation:
+            return
+        warnings.append("preview_nomix_violation")
+        _mark_degraded(meta, "preview_nomix_violation")
+        ext = meta.setdefault("extensions", {})
+        if isinstance(ext, dict):
+            if self._preview_nomix_violation_reason:
+                ext["preview_nomix_violation_reason"] = self._preview_nomix_violation_reason
+            if self._preview_nomix_violation_ts_ms is not None:
+                ext["preview_nomix_violation_ts_ms"] = int(self._preview_nomix_violation_ts_ms)
 
     def read_window(self, spec: WindowSpec, policy: ReadPolicy) -> WindowResult:
         warnings: list[str] = []
@@ -395,30 +439,67 @@ class UnifiedDataStore:
         cursor_seq = spec.since_seq if spec.since_seq is not None else 0
         gap: Optional[dict[str, Any]] = None
 
-        if self._updates_bus is None:
-            warnings.append("updates_bus_missing")
-        else:
-            events, cursor_seq, gap, err = self._updates_bus.read_updates(
-                symbol,
-                tf_s,
-                spec.since_seq,
-                limit,
-            )
-            if err is not None:
-                warnings.append("redis_down")
-                ext = meta.setdefault("extensions", {})
+        preview_mode = tf_s in self._preview_tf_allowlist
+        if spec.include_preview and not preview_mode:
+            warnings.append("include_preview_ignored")
+            ext = meta.setdefault("extensions", {})
+            if isinstance(ext, dict):
+                ext["include_preview_ignored"] = True
+        if preview_mode:
+            ext = meta.setdefault("extensions", {})
+            if isinstance(ext, dict):
+                ext["plane"] = "preview"
+            if self._redis is None:
+                warnings.append("preview_requires_redis")
                 if isinstance(ext, dict):
-                    degraded = ext.get("degraded")
-                    if isinstance(degraded, list):
-                        if "redis_down" not in degraded:
-                            degraded.append("redis_down")
+                    ext["degraded"] = ["preview_requires_redis"]
+            else:
+                events, cursor_seq, gap, err = self._redis.read_preview_updates(
+                    symbol,
+                    tf_s,
+                    spec.since_seq,
+                    limit,
+                    self._preview_updates_retain,
+                )
+                if err is not None:
+                    warnings.append("redis_down")
+                    if isinstance(ext, dict):
+                        degraded = ext.get("degraded")
+                        if isinstance(degraded, list):
+                            if "redis_down" not in degraded:
+                                degraded.append("redis_down")
+                        else:
+                            ext["degraded"] = ["redis_down"]
+                    events = []
+                    if spec.since_seq is not None:
+                        cursor_seq = spec.since_seq
                     else:
-                        ext["degraded"] = ["redis_down"]
-                events = []
-                if spec.since_seq is not None:
-                    cursor_seq = spec.since_seq
-                else:
-                    cursor_seq = 0
+                        cursor_seq = 0
+        else:
+            if self._updates_bus is None:
+                warnings.append("updates_bus_missing")
+            else:
+                events, cursor_seq, gap, err = self._updates_bus.read_updates(
+                    symbol,
+                    tf_s,
+                    spec.since_seq,
+                    limit,
+                )
+                if err is not None:
+                    warnings.append("redis_down")
+                    ext = meta.setdefault("extensions", {})
+                    if isinstance(ext, dict):
+                        degraded = ext.get("degraded")
+                        if isinstance(degraded, list):
+                            if "redis_down" not in degraded:
+                                degraded.append("redis_down")
+                        else:
+                            ext["degraded"] = ["redis_down"]
+                    events = []
+                    if spec.since_seq is not None:
+                        cursor_seq = spec.since_seq
+                    else:
+                        cursor_seq = 0
 
         if gap is not None:
             warnings.append("cursor_gap")
@@ -430,11 +511,14 @@ class UnifiedDataStore:
             events = events[-MAX_EVENTS_PER_RESPONSE:]
             warnings.append("max_events_trimmed")
 
-        for ev in events:
-            if ev.get("complete") is True and ev.get("source") in FINAL_SOURCES:
-                bar = ev.get("bar")
-                if isinstance(bar, dict):
-                    self._ram.upsert_bar(symbol, tf_s, bar)
+        self._apply_preview_nomix_violation(meta, warnings)
+
+        if not preview_mode:
+            for ev in events:
+                if ev.get("complete") is True and ev.get("source") in FINAL_SOURCES:
+                    bar = ev.get("bar")
+                    if isinstance(bar, dict):
+                        self._ram.upsert_bar(symbol, tf_s, bar)
 
         api_seen_ts_ms = int(time.time() * 1000)
         disk_last_open_ms = None
@@ -522,6 +606,7 @@ class UnifiedDataStore:
             Logging.warning("UDS: publish_preview_bar очікує CandleBar")
             return
         if bar.complete:
+            self._set_preview_nomix_violation("complete_true")
             Logging.warning(
                 "UDS: publish_preview_bar пропущено (complete=true) symbol=%s tf_s=%s open_ms=%s",
                 bar.symbol,
@@ -529,19 +614,229 @@ class UnifiedDataStore:
                 bar.open_time_ms,
             )
             return
-        if self._redis_writer is None:
+        if bar.src in FINAL_SOURCES:
+            self._set_preview_nomix_violation("final_source")
             Logging.warning(
-                "UDS: publish_preview_bar пропущено (redis_writer_missing) symbol=%s tf_s=%s",
+                "UDS: publish_preview_bar пропущено (final_source) symbol=%s tf_s=%s src=%s",
+                bar.symbol,
+                bar.tf_s,
+                bar.src,
+            )
+            return
+        if bar.tf_s not in self._preview_tf_allowlist:
+            Logging.warning(
+                "UDS: publish_preview_bar пропущено (preview_tf_reject) symbol=%s tf_s=%s",
                 bar.symbol,
                 bar.tf_s,
             )
             return
-        self._redis_writer.put_bar(bar)
-        if ttl_s is not None:
-            Logging.debug(
-                "UDS: publish_preview_bar ttl_s задано, але TTL керується Redis snapshots config"
+        if self._redis is None:
+            Logging.warning(
+                "UDS: publish_preview_bar пропущено (redis_missing) symbol=%s tf_s=%s",
+                bar.symbol,
+                bar.tf_s,
             )
-        self._publish_update(bar, warnings=[])
+            return
+
+        payload_ts_ms = int(time.time() * 1000)
+        bar_payload = normalize_bar(bar.to_dict(), mode="incl")
+        bar_item = {
+            "open_ms": int(bar_payload.get("open_time_ms")),
+            "close_ms": int(bar_payload.get("close_time_ms")),
+            "o": bar_payload.get("o"),
+            "h": bar_payload.get("h"),
+            "l": bar_payload.get("low"),
+            "c": bar_payload.get("c"),
+            "v": bar_payload.get("v", 0.0),
+        }
+        curr_payload = {
+            "v": 1,
+            "symbol": bar.symbol,
+            "tf_s": int(bar.tf_s),
+            "bar": bar_item,
+            "complete": False,
+            "source": str(bar.src),
+            "payload_ts_ms": payload_ts_ms,
+        }
+        ttl_curr = ttl_s if ttl_s is not None else self._preview_curr_ttl_s
+        try:
+            self._redis.write_preview_curr(bar.symbol, bar.tf_s, curr_payload, ttl_curr)
+        except Exception as exc:
+            Logging.warning("UDS: preview_curr write failed err=%s", exc)
+            return
+
+        key = (bar.symbol, bar.tf_s)
+        last_open = self._preview_last_open_ms.get(key)
+        rollover = last_open is None or last_open != bar.open_time_ms
+        self._preview_last_open_ms[key] = bar.open_time_ms
+        if rollover:
+            try:
+                tail_payload, _, _ = self._redis.read_preview_tail(bar.symbol, bar.tf_s)
+                tail_bars = []
+                if isinstance(tail_payload, dict):
+                    raw = tail_payload.get("bars")
+                    if isinstance(raw, list):
+                        tail_bars = [b for b in raw if isinstance(b, dict)]
+                if tail_bars and isinstance(tail_bars[-1].get("open_ms"), int):
+                    if int(tail_bars[-1].get("open_ms")) == int(bar_item["open_ms"]):
+                        tail_bars[-1] = bar_item
+                    else:
+                        tail_bars.append(bar_item)
+                else:
+                    tail_bars.append(bar_item)
+                if len(tail_bars) > self._preview_tail_retain:
+                    tail_bars = tail_bars[-self._preview_tail_retain :]
+                new_tail = {
+                    "v": 1,
+                    "symbol": bar.symbol,
+                    "tf_s": int(bar.tf_s),
+                    "bars": tail_bars,
+                    "complete": False,
+                    "source": str(bar.src),
+                    "payload_ts_ms": payload_ts_ms,
+                }
+                self._redis.write_preview_tail(bar.symbol, bar.tf_s, new_tail)
+            except Exception as exc:
+                Logging.warning("UDS: preview_tail write failed err=%s", exc)
+
+        self._publish_preview_update(bar_payload, throttle_ms=500, rollover=rollover)
+
+    def read_preview_window(
+        self,
+        symbol: str,
+        tf_s: int,
+        limit: int,
+        *,
+        include_current: bool = True,
+    ) -> WindowResult:
+        warnings: list[str] = []
+        meta: dict[str, Any] = {"boot_id": self._boot_id}
+        if self._redis_spec_mismatch:
+            _mark_redis_mismatch(meta, warnings, self._redis_spec_mismatch_fields)
+        ext = meta.setdefault("extensions", {})
+        if isinstance(ext, dict):
+            ext["plane"] = "preview"
+        self._apply_preview_nomix_violation(meta, warnings)
+        if tf_s not in self._preview_tf_allowlist:
+            warnings.append("preview_tf_not_allowed")
+            if isinstance(ext, dict):
+                ext["degraded"] = ["preview_tf_not_allowed"]
+            meta["source"] = "preview_unavailable"
+            return WindowResult([], meta, warnings)
+        if self._redis is None:
+            warnings.append("preview_requires_redis")
+            if isinstance(ext, dict):
+                ext["degraded"] = ["preview_requires_redis"]
+            meta["source"] = "preview_unavailable"
+            return WindowResult([], meta, warnings)
+
+        tail_payload, _, tail_err = self._redis.read_preview_tail(symbol, tf_s)
+        curr_payload, _, curr_err = self._redis.read_preview_curr(symbol, tf_s)
+        if tail_err is not None and curr_err is not None:
+            warnings.append("preview_empty")
+            if isinstance(ext, dict):
+                ext["degraded"] = ["preview_empty"]
+            meta["source"] = "preview_unavailable"
+            return WindowResult([], meta, warnings)
+
+        bars: list[dict[str, Any]] = []
+        source = "preview_unavailable"
+        if isinstance(tail_payload, dict):
+            bars = self._preview_payload_to_bars(tail_payload, symbol, tf_s)
+            if bars:
+                source = "preview_tail"
+
+        if include_current and isinstance(curr_payload, dict):
+            curr_bars = self._preview_payload_to_bars(curr_payload, symbol, tf_s)
+            if curr_bars:
+                curr_bar = curr_bars[-1]
+                bars = self._merge_preview_curr(bars, curr_bar)
+                if source == "preview_unavailable":
+                    source = "preview_curr"
+
+        bars, geom = _ensure_sorted_dedup(bars)
+        if geom is not None:
+            _mark_geom_fix(meta, warnings, geom, source=source, tf_s=tf_s)
+        lwc = self._bars_to_lwc(bars)
+        if limit > 0:
+            lwc = lwc[-limit:]
+        if not lwc:
+            warnings.append("preview_empty")
+            if isinstance(ext, dict):
+                ext["degraded"] = ["preview_empty"]
+        meta["source"] = source
+        return WindowResult(lwc, meta, warnings)
+
+    def _preview_payload_to_bars(
+        self, payload: dict[str, Any], symbol: str, tf_s: int
+    ) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        source = str(payload.get("source", "preview_tick"))
+        raw_bars = payload.get("bars")
+        if isinstance(raw_bars, list):
+            for item in raw_bars:
+                if not isinstance(item, dict):
+                    continue
+                bar = self._redis_payload_bar_to_canonical(item, symbol, tf_s, False, source)
+                if bar is not None:
+                    out.append(bar)
+            return out
+        raw_bar = payload.get("bar")
+        if isinstance(raw_bar, dict):
+            bar = self._redis_payload_bar_to_canonical(raw_bar, symbol, tf_s, False, source)
+            if bar is not None:
+                out.append(bar)
+        return out
+
+    def _merge_preview_curr(
+        self, bars: list[dict[str, Any]], curr: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if not bars:
+            return [curr]
+        last = bars[-1]
+        if isinstance(last, dict) and last.get("open_time_ms") == curr.get("open_time_ms"):
+            bars[-1] = curr
+        else:
+            bars.append(curr)
+        return bars
+
+    def _publish_preview_update(
+        self,
+        bar_payload: dict[str, Any],
+        *,
+        throttle_ms: int,
+        rollover: bool,
+    ) -> bool:
+        if self._redis is None:
+            return False
+        key = (str(bar_payload.get("symbol")), int(bar_payload.get("tf_s", 0)))
+        now_ms = int(time.time() * 1000)
+        last_ts = self._preview_last_publish_ms.get(key)
+        if not rollover and last_ts is not None and now_ms - last_ts < int(throttle_ms):
+            return False
+        self._preview_last_publish_ms[key] = now_ms
+        event = {
+            "key": {
+                "symbol": str(bar_payload.get("symbol")),
+                "tf_s": int(bar_payload.get("tf_s", 0)),
+                "open_ms": int(bar_payload.get("open_time_ms", 0)),
+            },
+            "bar": bar_payload,
+            "complete": False,
+            "source": str(bar_payload.get("src", "preview_tick")),
+            "event_ts": None,
+        }
+        try:
+            self._redis.publish_preview_event(
+                event["key"]["symbol"],
+                event["key"]["tf_s"],
+                event,
+                self._preview_updates_retain,
+            )
+            return True
+        except Exception as exc:
+            Logging.warning("UDS: preview updates publish failed err=%s", exc)
+            return False
 
     def snapshot_status(self) -> dict[str, Any]:
         status = {"boot_id": self._boot_id}
@@ -550,6 +845,12 @@ class UnifiedDataStore:
         status["redis_spec_mismatch"] = bool(self._redis_spec_mismatch)
         status["redis_spec_mismatch_fields"] = list(self._redis_spec_mismatch_fields)
         status["prime_target_min_by_tf_s"] = dict(self._min_coldload_bars)
+        status["preview_tf_allowlist_s"] = sorted(self._preview_tf_allowlist)
+        status["preview_tf_allowlist_source"] = self._preview_allowlist_source
+        if self._preview_nomix_violation:
+            status["preview_nomix_violation"] = True
+            status["preview_nomix_violation_reason"] = self._preview_nomix_violation_reason
+            status["preview_nomix_violation_ts_ms"] = self._preview_nomix_violation_ts_ms
         if self._redis is not None:
             payload = self._redis.get_prime_ready_payload()
             status["prime_ready_payload"] = payload
@@ -1259,6 +1560,22 @@ def _tf_allowlist_from_cfg(cfg: dict[str, Any]) -> set[int]:
     return set(DEFAULT_TF_ALLOWLIST)
 
 
+def _preview_tf_allowlist_from_cfg(cfg: dict[str, Any]) -> tuple[set[int], str]:
+    raw = cfg.get("tf_preview_allowlist_s")
+    out: list[int] = []
+    if isinstance(raw, list):
+        for item in raw:
+            try:
+                tf_s = int(item)
+            except Exception:
+                continue
+            if tf_s > 0:
+                out.append(tf_s)
+    if out:
+        return set(out), "config"
+    return set(DEFAULT_PREVIEW_TF_ALLOWLIST), "fallback"
+
+
 def _min_coldload_bars_from_cfg(cfg: dict[str, Any]) -> dict[int, int]:
     raw = cfg.get("min_coldload_bars_by_tf_s")
     out: dict[int, int] = {}
@@ -1584,6 +1901,7 @@ def build_uds_from_config(
 ) -> UnifiedDataStore:
     cfg = _load_cfg(config_path)
     tf_allowlist = _tf_allowlist_from_cfg(cfg)
+    preview_tf_allowlist, preview_tf_allowlist_source = _preview_tf_allowlist_from_cfg(cfg)
     min_coldload_bars = _min_coldload_bars_from_cfg(cfg)
     redis_layer = _redis_layer_from_cfg(cfg)
     updates_bus = _updates_bus_from_cfg(cfg)
@@ -1616,6 +1934,8 @@ def build_uds_from_config(
         updates_bus=updates_bus,
         redis_spec_mismatch=redis_spec_mismatch,
         redis_spec_mismatch_fields=redis_spec_mismatch_fields,
+        preview_tf_allowlist=preview_tf_allowlist,
+        preview_tf_allowlist_source=preview_tf_allowlist_source,
     )
 
 
@@ -1641,6 +1961,34 @@ def selftest_writer_api() -> None:
         def publish(self, event: dict[str, Any]) -> None:
             self.events.append(event)
 
+    class _FakeRedisLayer:
+        def __init__(self) -> None:
+            self.preview_curr: dict[tuple[str, int], dict[str, Any]] = {}
+            self.preview_tail: dict[tuple[str, int], dict[str, Any]] = {}
+            self.preview_events: list[dict[str, Any]] = []
+
+        def write_preview_curr(
+            self, symbol: str, tf_s: int, payload: dict[str, Any], ttl_s: Optional[int]
+        ) -> None:
+            _ = ttl_s
+            self.preview_curr[(symbol, tf_s)] = dict(payload)
+
+        def read_preview_tail(
+            self, symbol: str, tf_s: int
+        ) -> tuple[Optional[dict[str, Any]], Optional[int], Optional[str]]:
+            payload = self.preview_tail.get((symbol, tf_s))
+            return dict(payload) if payload is not None else None, None, None
+
+        def write_preview_tail(self, symbol: str, tf_s: int, payload: dict[str, Any]) -> None:
+            self.preview_tail[(symbol, tf_s)] = dict(payload)
+
+        def publish_preview_event(
+            self, symbol: str, tf_s: int, event: dict[str, Any], retain: int
+        ) -> Optional[int]:
+            _ = (symbol, tf_s, retain)
+            self.preview_events.append(dict(event))
+            return len(self.preview_events)
+
     class _FakeDisk:
         def last_open_ms(self, symbol: str, tf_s: int) -> Optional[int]:
             _ = (symbol, tf_s)
@@ -1648,6 +1996,7 @@ def selftest_writer_api() -> None:
 
     fake_jsonl = _FakeJsonl()
     fake_redis = _FakeRedisWriter()
+    fake_redis_layer = _FakeRedisLayer()
     fake_bus = _FakeUpdatesBus()
 
     uds = UnifiedDataStore(
@@ -1657,9 +2006,12 @@ def selftest_writer_api() -> None:
         min_coldload_bars={},
         role="writer",
         disk_layer=_FakeDisk(),
+        redis_layer=fake_redis_layer,
         jsonl_appender=fake_jsonl,
         redis_snapshot_writer=fake_redis,
         updates_bus=fake_bus,
+        preview_tf_allowlist={60, 180, 300},
+        preview_tf_allowlist_source="config",
     )
 
     bar_final = CandleBar(
@@ -1701,7 +2053,11 @@ def selftest_writer_api() -> None:
     uds.publish_preview_bar(bar_preview)
     if len(fake_jsonl.appended) != 1:
         raise RuntimeError("UDS selftest: preview не має писати в SSOT")
-    if len(fake_redis.bars) != 2:
-        raise RuntimeError("UDS selftest: preview не записано в Redis")
+    if len(fake_redis.bars) != 1:
+        raise RuntimeError("UDS selftest: preview не має писати у final Redis snapshots")
+    if not fake_redis_layer.preview_curr:
+        raise RuntimeError("UDS selftest: preview curr не записано")
+    if not fake_redis_layer.preview_events:
+        raise RuntimeError("UDS selftest: preview updates не опубліковано")
 
     Logging.info("UDS_SELFTEST_OK writer_api=1")

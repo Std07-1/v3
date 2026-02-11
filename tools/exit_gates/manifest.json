@@ -117,6 +117,31 @@
                     "runtime.store.redis_snapshot"
                 ]
             }
+        },
+        {
+            "name": "preview_not_on_disk",
+            "module": "tools.exit_gates.gates.gate_preview_not_on_disk",
+            "inputs": {
+                "config_path": "config.json",
+                "tail_lines": 200
+            }
+        },
+        {
+            "name": "no_preview_in_final_redis",
+            "module": "tools.exit_gates.gates.gate_no_preview_in_final_redis",
+            "inputs": {
+                "config_path": "config.json",
+                "symbol": "XAU/USD",
+                "tf_s": 300,
+                "max_events": 200
+            }
+        },
+        {
+            "name": "preview_plane",
+            "module": "tools.exit_gates.gates.gate_preview_plane",
+            "inputs": {
+                "root": "."
+            }
         }
     ]
 }

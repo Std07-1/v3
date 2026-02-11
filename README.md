@@ -9,6 +9,9 @@
 - 4h / 1d — з брокера як «джерело істини».
 - 15m–1h — похідні з 5m.
 
+UDS є центром читання/запису: writer пише через UDS (SSOT + Redis snapshots + updates bus), UI читає через UDS.
+Preview 1m/3m працює в окремому preview-plane (Redis keyspace), без запису у SSOT.
+
 ## Вимоги
 
 - Python 3.7 у .venv
@@ -139,6 +142,7 @@ FXCM_REDIS_NS=v3_prod
 - redis.* — snapshots для cold-load UI (опційно)
 - min_coldload_bars_by_tf_s — мінімум барів для cold-load з Redis tail
 - ui_debug — показ діагностики у UI
+- tf_preview_allowlist_s — allowlist TF для preview-plane (за замовчуванням 60/180)
 
 Календарі задаються групами:
 
@@ -152,15 +156,22 @@ UI API читає config.json з кешем mtime (перевірка ~0.5s) д�
 
 ## UI: cold-load та snapshots
 
-- UDS використовується як read-only в UI.
+- UDS використовується як read-only у UI (role=reader).
 - /api/bars у режимі prefer_redis читає Redis tail/snap, але при малому tail переходить на диск.
-- /api/updates читає диск і використовує tail-only скан (hot-path з диску).
+- /api/updates читає Redis updates bus (disk лише для recovery при redis_down).
 - Клієнт UI абортує попередні load-запити і ігнорує застарілі відповіді.
 
-## План P2X: UDS як write-center
+## Preview TF (1m/3m)
+
+- preview-plane живе у Redis preview keyspace (curr/tail/updates), не пишеться у SSOT.
+- /api/bars для tf_s=60/180 читає preview-plane; для non-preview TF `include_preview=1` ігнорується з warning.
+- TickAggregator існує як бібліотека preview-агрегації, wiring до tick-stream pending.
+
+## Статус P2X: UDS як write-center
 
 - Writer/connector пише тільки через UDS (без прямого JsonlAppender/RedisSnapshotWriter).
-- /api/updates переходить на RAM/Redis stream, disk лишається recovery.
+- /api/updates працює через Redis updates bus; disk лишається recovery.
+- Залишок: wiring tick-stream у TickAggregator (preview 1m/3m) + мінімальні тести.
 
 ## UI: scrollback, кеш, favorites
 

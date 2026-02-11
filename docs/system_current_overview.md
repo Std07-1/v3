@@ -4,7 +4,7 @@
 
 ## Короткий опис
 
-Система працює тільки з M5 як базовим потоком. На старті робиться warmup останніх M5 (history), далі щохвилини підтягування M5 tail (history). Похідні TF (>= 15m) будуються тільки якщо M5-діапазон повний. UI отримує дані через HTTP API, де UDS працює як read-only: cold-load може йти з Redis snapshots з fallback на диск при малому tail, оновлення (/api/updates) читаються з SSOT JSONL через tail-only scan. Write-path поки що обходить UDS (PollingConnectorB пише JSONL/Redis напряму). UI клієнт абортує застарілі load-запити та ігнорує пізні відповіді. Scrollback працює як cover-until-satisfied: тригер лівого буфера ~2000 барів, підкидає по 5000 (фаворити x2) і повторює догрузку до покриття. UI API читає config.json з кешем mtime (для ui_debug/tf_allowlist/min_coldload_bars). Профіль середовища визначається через `.env` -> `.env.local/.env.prod`, а Redis host/port/db/ns береться з FXCM_REDIS_* (env override).
+Система працює тільки з M5 як базовим потоком. На старті робиться warmup останніх M5 (history), далі щохвилини підтягування M5 tail (history). Похідні TF (>= 15m) будуються тільки якщо M5-діапазон повний. Write-path іде через UDS: PollingConnectorB пише final у SSOT і Redis snapshots, а updates публікуються у Redis updates bus. UI отримує дані через HTTP API, де UDS працює як reader: cold-load може йти з Redis snapshots з fallback на диск при малому tail, оновлення (/api/updates) читаються з Redis updates bus (disk тільки recovery при redis_down). Preview-plane для 1m/3m повністю wired: FXCM tick publisher (Plane A) → Redis pub/sub → TickPreviewWorker → TickAggregator → UDS.publish_preview_bar → Redis preview keyspace (Plane B). Tick-и валідуються schema guard (tick_v1) на вході TickPreviewWorker. Preview ніколи не пишеться у SSOT JSONL. /api/bars для preview TF завжди йде через read_preview_window (prefer_redis/force_disk ігноруються з loud warning). 0-ticks silence > 120с генерує WARNING. Wallclock fallback для tick_ts позначається src=fxcm_wallclock. P2X.6-U1: для TF≥M5 UI отримує ephemeral overlay бар через /api/overlay (read-only endpoint, агрегує preview M1 в один бар target TF, src=overlay_preview, complete=False, volume=0). Overlay polling кожні 1с, окрема серія в chart, не проходить через applyUpdates/final. UI клієнт абортує застарілі load-запити та ігнорує пізні відповіді. Scrollback працює як cover-until-satisfied: тригер лівого буфера ~2000 барів, підкидає по 5000 (фаворити x2) і повторює догрузку до покриття. UI API читає config.json з кешем mtime (для ui_debug/tf_allowlist/min_coldload_bars). Профіль середовища визначається через `.env` -> `.env.local/.env.prod`, а Redis host/port/db/ns береться з FXCM_REDIS_* (env override).
 
 ## Геометрія часу (помітка для всіх розмов про свічки)
 
@@ -19,13 +19,20 @@
 ```mermaid
 flowchart LR
     FXCM[(FXCM History API)] -->|history fetch| P[PollingConnectorB]
-    P -->|dedup + flat_filter| D[(data_v3)]
-    P -->|derive from M5| D
-    P -->|redis snapshots| R[(Redis snapshots)]
-    UI[ui_chart_v3] -->|/api/bars, /api/updates| U[UDS (read-only)]
-    U -->|cold-load /api/bars| R
-    U -->|/api/bars fallback| D
-    U -->|/api/updates tail-only| D
+    P -->|commit_final_bar| U[UDS (writer)]
+    U -->|SSOT write| D[(data_v3)]
+    U -->|redis snapshots| R[(Redis snapshots)]
+    U -->|updates bus| RU[(Redis updates)]
+    T[(FXCM Tick Stream)] -->|pub/sub| TP[TickPublisher]
+    TP -->|Redis channel| TW[TickPreviewWorker]
+    TW -->|schema guard + agg| TA[TickAggregator]
+    TA -->|publish_preview_bar| U
+    U -->|preview curr/tail/updates| RP[(Redis preview)]
+    UI[ui_chart_v3] -->|/api/bars, /api/updates| UR[UDS (reader)]
+    UI -->|/api/overlay TF≥M5| UR
+    UR -->|cold-load /api/bars| R
+    UR -->|/api/bars fallback| D
+    UR -->|/api/updates| RU
     D -->|manual rebuild| Rb[tools/rebuild_derived.py]
     P --> M[dedup/derive/flat_filter/fetch_policy]
     M --> P
@@ -64,7 +71,7 @@ flowchart TD
     F --> G[ingest M5 (dedup module)]
     G --> H[filter flat bars (flat_filter)]
     H --> I[derive 15m/30m/1h (derive module)]
-    I --> J[append JSONL SSOT]
+    I --> J[commit_final_bar через UDS]
 ```
 
 ### Retry/backoff + календарний сон
@@ -101,11 +108,11 @@ sequenceDiagram
     participant UI as ui_chart_v3/static/app.js
     participant API as ui_chart_v3/server.py
     participant UDS as runtime/store/uds.py
-    participant SSOT as data_v3 JSONL
+    participant RU as Redis updates
 
     UI->>API: GET /api/updates?symbol&tf_s&since_seq
     API->>UDS: read_updates(symbol, tf_s, since_seq)
-    UDS->>SSOT: read JSONL parts (tail-only)
+    UDS->>RU: read updates (list+seq)
     API-->>UI: events[] + cursor_seq
     UI->>UI: applyUpdates(events)
 ```
@@ -148,6 +155,9 @@ v3/
 |   |   |   `-- fxcm/
 |   |   |       `-- provider.py  # history API
 |   |   |-- market_calendar.py   # календар (single-break)
+|   |   |-- tick_agg.py           # TickAggregator (preview-plane, tf=60/180)
+|   |   |-- tick_preview_worker.py # TickPreviewWorker (Plane A→B, schema guard, 0-ticks loud)
+|   |   |-- tick_publisher_fxcm.py # FXCM tick publisher (Plane A, wallclock loud fallback)
 |   |   `-- polling/
 |   |       |-- engine_b.py      # оркестрація polling циклу
 |   |       |-- dedup.py         # індекси дня, has/mark on-disk
@@ -156,16 +166,16 @@ v3/
 |   |       |-- fetch_policy.py  # політики часу для fetch
 |   |       `-- time_buckets.py  # floor_bucket_start_ms
 |   `-- store/
-|       |-- uds.py               # UnifiedDataStore (read-only у UI)
-|       |-- redis_snapshot.py    # Redis snapshots writer
+|       |-- uds.py               # UnifiedDataStore (read/write, updates bus, preview-plane)
+|       |-- redis_snapshot.py    # Redis snapshots writer (використовується UDS)
 |       |-- redis_keys.py        # нормалізація ключів Redis
-|       |-- ssot_jsonl.py        # JSONL SSOT writer/reader helpers
+|       |-- ssot_jsonl.py        # JSONL SSOT helpers (legacy, не для ingest)
 |       `-- layers/
 |           |-- ram_layer.py     # RAM LRU шар
 |           |-- redis_layer.py   # Redis read шар
 |           `-- disk_layer.py    # Disk read шар
 |-- ui_chart_v3/                 # UI + API same-origin
-|   |-- server.py                # /api/bars, /api/updates, /api/config
+|   |-- server.py                # /api/bars, /api/updates, /api/overlay, /api/config
 |   |-- __main__.py              # python -m ui_chart_v3
 |   `-- static/
 |       |-- index.html           # UI shell
@@ -176,6 +186,13 @@ v3/
 |   |-- rebuild_derived.py        # rebuild derived з M5
 |   |-- rebuild_m15_isolated.py   # ізольований rebuild 15m
 |   |-- purge_broken_bars.py      # чистка пошкоджених JSONL
+|   |-- run_exit_gates.py         # runner exit-gates з manifest.json
+|   |-- exit_gates/
+|   |   |-- manifest.json         # реєстр усіх gates (13 записів)
+|   |   `-- gates/
+|   |       |-- gate_preview_plane.py  # P2X.6-G1: 4 sub-gates (nomix_disk, uds_hotpath, api_splitbrain, tick_schema)
+|   |       |-- gate_preview_not_on_disk.py  # preview не на диску (data scan)
+|   |       `-- gate_no_preview_in_final_redis.py  # preview не у final Redis
 |   `-- __init__.py
 |-- config.json                  # SSOT конфіг (календарі груп)
 |-- env_profile.py               # завантаження .env профілів
@@ -196,8 +213,9 @@ v3/
 - Derived TF: 15m/30m/1h з M5, тільки при повному діапазоні M5.
 - Base TF (H4/D1): broker fetch на закритті бакета.
 - UI: HTTP API /api/bars, /api/updates, /api/config (same-origin), cold-load з Redis snapshots.
-- UDS: read-only у UI, /api/updates читає disk tail.
-- Write-path: PollingConnectorB пише JSONL/Redis напряму (UDS write-center у плані P2X).
+- UDS: writer у polling, reader у UI; /api/updates читає Redis updates bus.
+- Preview-plane: Plane A (FXCM tick pub/sub) → Plane B (TickPreviewWorker + TickAggregator → UDS preview keyspace). Schema guard tick_v1 на вході. NoMix guard у UDS. 0-ticks loud. /api/bars для preview TF завжди через read_preview_window (prefer_redis/force_disk ігноруються).
+- Write-path: PollingConnectorB пише через UDS (SSOT + Redis snapshots + updates bus).
 - Supervisor: режими stdio pipe/files/inherit/null + префікси логів.
 - Ручний rebuild: tools/rebuild_derived.py з M5 SSOT.
 - Derived tail rebuild: опційно при старті з M5 tail під бюджет, ok-state у _derived_tail_state.json.
@@ -240,4 +258,4 @@ v3/
 - Warmup і tail роблять API history-запити і витрачають ліміт FXCM.
 - Derived пропускаються при будь-якій дірці у M5 в межах бакета.
 - Календар (break/weekend) впливає на очікування торгових хвилин у runtime.
-- UI cold-load з Redis snapshots (якщо є), fallback на SSOT JSONL; /api/updates читає з диску.
+- UI cold-load з Redis snapshots (якщо є), fallback на SSOT JSONL; /api/updates читає з Redis updates bus.

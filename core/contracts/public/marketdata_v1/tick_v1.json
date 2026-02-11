@@ -1,0 +1,49 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "marketdata.tick.v1",
+    "title": "MarketData Tick v1",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "v",
+        "symbol",
+        "tick_ts_ms",
+        "src",
+        "seq"
+    ],
+    "properties": {
+        "v": {
+            "type": "integer"
+        },
+        "symbol": {
+            "type": "string"
+        },
+        "bid": {
+            "type": [
+                "number",
+                "null"
+            ]
+        },
+        "ask": {
+            "type": [
+                "number",
+                "null"
+            ]
+        },
+        "mid": {
+            "type": [
+                "number",
+                "null"
+            ]
+        },
+        "tick_ts_ms": {
+            "type": "integer"
+        },
+        "src": {
+            "type": "string"
+        },
+        "seq": {
+            "type": "integer"
+        }
+    }
+}

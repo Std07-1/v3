@@ -33,9 +33,9 @@ def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--mode",
-        choices=["all", "connector", "ui"],
+        choices=["all", "connector", "ui", "tick_preview", "tick_publisher"],
         default="all",
-        help="all | connector | ui",
+        help="all | connector | ui | tick_preview | tick_publisher",
     )
     ap.add_argument(
         "--stdio",
@@ -255,6 +255,26 @@ def main() -> int:
                 _start_process(
                     label="connector",
                     module="app.main_connector",
+                    stdio=stdio,
+                    log_dir=log_dir,
+                    new_console=args.new_console,
+                )
+            )
+        if args.mode in ("all", "tick_preview"):
+            processes.append(
+                _start_process(
+                    label="tick_preview",
+                    module="runtime.ingest.tick_preview_worker",
+                    stdio=stdio,
+                    log_dir=log_dir,
+                    new_console=args.new_console,
+                )
+            )
+        if args.mode in ("all", "tick_publisher"):
+            processes.append(
+                _start_process(
+                    label="tick_publisher",
+                    module="runtime.ingest.tick_publisher_fxcm",
                     stdio=stdio,
                     log_dir=log_dir,
                     new_console=args.new_console,

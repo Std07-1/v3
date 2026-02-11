@@ -48,6 +48,18 @@
         14400,
         86400
     ],
+    "preview_tick_enabled": true,
+    "preview_tick_tfs_s": [
+        60,
+        180
+    ],
+    "preview_tick_publish_min_interval_ms": 250,
+    "preview_curr_ttl_s": 60,
+    "tick_stream_enabled": true,
+    "tick_stream_symbols": [],
+    "tick_stream_min_interval_ms": 200,
+    "tick_stream_last_tick_ttl_s": 30,
+    "tick_stream_price_mode": "mid",
     "calendar_gate_enabled": true,
     "market_calendar_by_group": {
         "fx_24x5_utc_winter": {

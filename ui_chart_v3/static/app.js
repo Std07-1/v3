@@ -69,6 +69,12 @@ let updateStateLastCleanupMs = 0;
 let favoritesState = null;
 let lastContinuityLogMs = 0;
 
+// P2X.6-U1: overlay state
+let overlayTimer = null;
+const OVERLAY_POLL_INTERVAL_MS = 1000;
+const OVERLAY_MIN_TF_S = 300;  // overlay лише для TF ≥ M5
+const OVERLAY_PREVIEW_TF_SET = new Set([60, 180]);  // preview TF — overlay не потрібен
+
 const RIGHT_OFFSET_PX = 48;
 const THEME_KEY = 'ui_chart_theme';
 const CANDLE_STYLE_KEY = 'ui_chart_candle_style';
@@ -1485,6 +1491,7 @@ async function pollUpdates() {
         updatesSeqCursor = null;
         await loadBarsFull();
         resetPolling();
+        resetOverlayPolling();
         return;
       }
       if (!bootId) {
@@ -1524,6 +1531,54 @@ async function pollUpdates() {
 function resetPolling() {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(pollUpdates, 3000);
+}
+
+// P2X.6-U1: overlay polling — окремий від applyUpdates
+async function pollOverlay() {
+  const symbol = elSymbol.value;
+  const tf = readSelectedTf();
+
+  // Overlay не потрібен для preview TF
+  if (OVERLAY_PREVIEW_TF_SET.has(tf)) return;
+  if (tf < OVERLAY_MIN_TF_S) return;
+
+  try {
+    const url = `/api/overlay?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&base_tf_s=60`;
+    const data = await apiGet(url);
+    if (!data || !data.ok) return;
+
+    // boot_id перевірка
+    if (data.meta && data.meta.boot_id) {
+      if (bootId && data.meta.boot_id !== bootId) {
+        // Рестарт сервера — основний pollUpdates зробить reload
+        return;
+      }
+    }
+
+    if (controller && typeof controller.updateOverlayBar === 'function') {
+      controller.updateOverlayBar(data.bar);  // bar=null → clearOverlay
+    }
+  } catch (_e) {
+    // Overlay помилки не фатальні — тихо ігноруємо
+  }
+}
+
+function resetOverlayPolling() {
+  if (overlayTimer) clearInterval(overlayTimer);
+  overlayTimer = null;
+
+  const tf = readSelectedTf();
+  // Запускаємо overlay polling тільки для TF ≥ M5 і не preview
+  if (!OVERLAY_PREVIEW_TF_SET.has(tf) && tf >= OVERLAY_MIN_TF_S) {
+    overlayTimer = setInterval(pollOverlay, OVERLAY_POLL_INTERVAL_MS);
+    // Негайний перший виклик
+    pollOverlay();
+  } else {
+    // Чистимо overlay при переключенні на preview TF
+    if (controller && typeof controller.clearOverlay === 'function') {
+      controller.clearOverlay();
+    }
+  }
 }
 
 async function init() {
@@ -1589,6 +1644,7 @@ async function init() {
   updateHudValues();
   updateStreamingIndicator();
   resetPolling();
+  resetOverlayPolling();
   updateUtcNow();
   setInterval(updateUtcNow, 1000);
 
@@ -1612,6 +1668,7 @@ async function init() {
       await loadBarsFull();
     }
     resetPolling();
+    resetOverlayPolling();
     await pollUpdates();
   });
 
@@ -1624,6 +1681,7 @@ async function init() {
       await loadBarsFull();
     }
     resetPolling();
+    resetOverlayPolling();
     await pollUpdates();
   });
 

@@ -31,6 +31,7 @@ from collections import deque
 from typing import Any
 
 from core.time_geom import normalize_bar
+from core.buckets import bucket_start_ms
 from env_profile import load_env_profile
 from runtime.store.uds import ReadPolicy, UpdatesSpec, WindowSpec, build_uds_from_config
 
@@ -45,6 +46,7 @@ _bars_cache: dict[tuple[str, int], list[dict[str, Any]]] = {}
 MAX_CACHE_BARS = 5000
 
 DEFAULT_TF_ALLOWLIST = {300, 900, 1800, 3600, 14400, 86400}
+DEFAULT_PREVIEW_TF_ALLOWLIST = {60, 180}
 SOURCE_ALLOWLIST = {"history", "derived", "history_agg", ""}
 FINAL_SOURCES = {"history", "derived", "history_agg"}
 MAX_EVENTS_PER_RESPONSE = 500
@@ -94,6 +96,22 @@ def _tf_allowlist_from_cfg(cfg: dict[str, Any]) -> set[int]:
         return set(out)
 
     return set(DEFAULT_TF_ALLOWLIST)
+
+
+def _preview_tf_allowlist_from_cfg(cfg: dict[str, Any]) -> set[int]:
+    raw = cfg.get("tf_preview_allowlist_s")
+    out: list[int] = []
+    if isinstance(raw, list):
+        for item in raw:
+            try:
+                tf_s = int(item)
+            except Exception:
+                continue
+            if tf_s > 0:
+                out.append(tf_s)
+    if out:
+        return set(out)
+    return set(DEFAULT_PREVIEW_TF_ALLOWLIST)
 
 
 def _min_coldload_bars_from_cfg(cfg: dict[str, Any]) -> dict[int, int]:
@@ -860,6 +878,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             cfg = _load_cfg_cached(config_path)
 
         tf_allowlist = _tf_allowlist_from_cfg(cfg)
+        preview_allowlist = _preview_tf_allowlist_from_cfg(cfg)
 
         if uds is None:
             self._bad("uds_not_available")
@@ -892,13 +911,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             since_seq = _safe_int(since_seq_raw, 0) if since_seq_raw is not None else None
             epoch_raw = qs.get("epoch", [None])[0]
             epoch = _safe_int(epoch_raw, 0) if epoch_raw is not None else None
+            include_preview_raw = qs.get("include_preview", [None])[0]
+            include_preview = (
+                _parse_bool(include_preview_raw, False) if include_preview_raw is not None else False
+            )
+            if tf_s in preview_allowlist:
+                include_preview = True
             if not symbol:
                 self._bad("missing_symbol")
                 return
-            if tf_s not in tf_allowlist:
+            if tf_s not in tf_allowlist and tf_s not in preview_allowlist:
                 self._bad("tf_not_allowed")
                 return
-            spec = UpdatesSpec(symbol=symbol, tf_s=tf_s, since_seq=since_seq, limit=limit)
+            spec = UpdatesSpec(
+                symbol=symbol,
+                tf_s=tf_s,
+                since_seq=since_seq,
+                limit=limit,
+                include_preview=include_preview,
+            )
             res = uds.read_updates(spec)
             payload: dict[str, Any] = {
                 "ok": True,
@@ -990,8 +1021,33 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not symbol:
                 self._bad("missing_symbol")
                 return
-            if tf_s not in tf_allowlist:
+            if tf_s not in tf_allowlist and tf_s not in preview_allowlist:
                 self._bad("tf_not_allowed")
+                return
+
+            if tf_s in preview_allowlist:
+                # P2X.6: preview TF завжди через read_preview_window,
+                # prefer_redis/force_disk ігноруються з loud warning
+                preview_warnings: list[str] = []
+                if prefer_redis:
+                    preview_warnings.append("query_param_ignored:prefer_redis")
+                if force_disk:
+                    preview_warnings.append("query_param_ignored:force_disk")
+
+                res = uds.read_preview_window(symbol, tf_s, limit, include_current=True)
+                payload = {
+                    "ok": True,
+                    "symbol": symbol,
+                    "tf_s": tf_s,
+                    "bars": res.bars_lwc,
+                    "boot_id": _boot_id,
+                    "meta": res.meta,
+                }
+                warnings = preview_warnings + list(res.warnings)
+                if warnings:
+                    payload["warnings"] = warnings
+                _contract_guard_warn_window(payload, res.bars_lwc, warnings, bool(warnings))
+                self._json(200, payload)
                 return
 
             since_open_ms = None
@@ -1005,7 +1061,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 since_open_ms = _safe_int(s, 0) if s is not None else None
                 to_open_ms = _safe_int(t, 0) if t is not None else None
 
-            cold_load = since_open_ms is None and to_open_ms is None and not force_disk
+            # P2X.6: prefer_redis/force_disk ігноруються (Правило 20.2)
+            final_extra_warnings: list[str] = []
+            if prefer_redis:
+                final_extra_warnings.append("query_param_ignored:prefer_redis")
+            if force_disk:
+                final_extra_warnings.append("query_param_ignored:force_disk")
+            cold_load = since_open_ms is None and to_open_ms is None
             spec = WindowSpec(
                 symbol=symbol,
                 tf_s=tf_s,
@@ -1015,8 +1077,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 cold_load=cold_load,
             )
             policy = ReadPolicy(
-                force_disk=force_disk,
-                prefer_redis=path == "/api/bars" and prefer_redis,
+                force_disk=False,
+                prefer_redis=False,
             )
             res = uds.read_window(spec, policy)
             if not res.bars_lwc and since_open_ms is None and to_open_ms is None:
@@ -1027,7 +1089,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "boot_id": _boot_id,
                     "meta": res.meta or {"source": "disk", "redis_hit": False, "boot_id": _boot_id},
                 }
-                _contract_guard_warn_window(payload, [], [], False)
+                if final_extra_warnings:
+                    payload["warnings"] = list(final_extra_warnings)
+                _contract_guard_warn_window(payload, [], final_extra_warnings, bool(final_extra_warnings))
                 self._json(200, payload)
                 return
             payload = {
@@ -1038,7 +1102,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "boot_id": _boot_id,
                 "meta": res.meta,
             }
-            warnings = list(res.warnings)
+            warnings = final_extra_warnings + list(res.warnings)
             if warnings:
                 payload["warnings"] = warnings
             _contract_guard_warn_window(payload, res.bars_lwc, warnings, bool(warnings))
@@ -1063,6 +1127,138 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     res.meta.get("redis_error_code"),
                 )
             self._json(200, payload)
+            return
+
+        # ----------------------------------------------------------------
+        # /api/overlay — P2X.6-U1: ephemeral overlay для TF ≥ M5
+        # Живиться з preview M1/M3, агрегує у один бар для target TF.
+        # Read-only: жодних записів у UDS/SSOT/final.
+        # ----------------------------------------------------------------
+        if path == "/api/overlay":
+            symbol = (qs.get("symbol", [""])[0] or "").strip()
+            tf_s = _safe_int((qs.get("tf_s", ["300"])[0] or "300"), 300)
+            base_tf_s = _safe_int((qs.get("base_tf_s", ["60"])[0] or "60"), 60)
+
+            if not symbol:
+                self._bad("missing_symbol")
+                return
+
+            overlay_warnings: list[str] = []
+
+            # Перевірка: overlay не для preview TF (вони вже мають живі бари)
+            if tf_s in preview_allowlist:
+                self._json(200, {
+                    "ok": True,
+                    "bar": None,
+                    "warnings": ["overlay_not_applicable_for_preview_tf"],
+                    "meta": {"extensions": {"plane": "overlay"}, "boot_id": _boot_id},
+                })
+                return
+
+            if tf_s < 300:
+                overlay_warnings.append("overlay_tf_too_small")
+
+            if tf_s not in tf_allowlist:
+                self._bad("tf_not_allowed")
+                return
+
+            if base_tf_s not in preview_allowlist:
+                overlay_warnings.append("base_tf_not_in_preview_allowlist")
+                self._json(200, {
+                    "ok": True,
+                    "bar": None,
+                    "warnings": overlay_warnings,
+                    "meta": {"extensions": {"plane": "overlay", "base_tf_s": base_tf_s}, "boot_id": _boot_id},
+                })
+                return
+
+            # Кількість preview-барів для покриття одного target-бару
+            tf_ms = tf_s * 1000
+            base_tf_ms = base_tf_s * 1000
+            preview_bars_needed = max(1, tf_ms // base_tf_ms) + 2  # +2 запас
+
+            res = uds.read_preview_window(symbol, base_tf_s, preview_bars_needed, include_current=True)
+            overlay_warnings.extend(res.warnings)
+
+            if not res.bars_lwc:
+                overlay_warnings.append("overlay_preview_unavailable")
+                self._json(200, {
+                    "ok": True,
+                    "bar": None,
+                    "warnings": overlay_warnings,
+                    "meta": {"extensions": {"plane": "overlay", "base_tf_s": base_tf_s}, "boot_id": _boot_id},
+                })
+                return
+
+            # Визначаємо поточний bucket для target TF
+            now_ms = int(time.time() * 1000)
+            b0 = bucket_start_ms(now_ms, tf_ms, 0)
+
+            # Фільтруємо preview-бари, що потрапляють у [b0, b0+tf_ms)
+            in_bucket: list[dict[str, Any]] = []
+            max_last_tick_ts = 0
+            for bar in res.bars_lwc:
+                bar_open_ms = bar.get("open_time_ms")
+                if bar_open_ms is None:
+                    continue
+                if b0 <= bar_open_ms < b0 + tf_ms:
+                    in_bucket.append(bar)
+                    ltt = bar.get("last_tick_ts")
+                    if isinstance(ltt, int) and ltt > max_last_tick_ts:
+                        max_last_tick_ts = ltt
+
+            if not in_bucket:
+                self._json(200, {
+                    "ok": True,
+                    "bar": None,
+                    "warnings": overlay_warnings + ["overlay_no_bars_in_bucket"],
+                    "meta": {
+                        "extensions": {
+                            "plane": "overlay",
+                            "base_tf_s": base_tf_s,
+                            "bucket_open_ms": b0,
+                        },
+                        "boot_id": _boot_id,
+                    },
+                })
+                return
+
+            # Агрегація preview-барів у один overlay bar
+            overlay_open = in_bucket[0].get("open", 0.0)
+            overlay_high = max(b.get("high", 0.0) for b in in_bucket)
+            overlay_low = min(b.get("low", float("inf")) for b in in_bucket)
+            overlay_close = in_bucket[-1].get("close", 0.0)
+
+            overlay_bar = {
+                "time": b0 // 1000,
+                "open": float(overlay_open),
+                "high": float(overlay_high),
+                "low": float(overlay_low),
+                "close": float(overlay_close),
+                "volume": 0.0,
+                "open_time_ms": b0,
+                "close_time_ms": b0 + tf_ms,
+                "tf_s": tf_s,
+                "src": "overlay_preview",
+                "complete": False,
+            }
+            if max_last_tick_ts > 0:
+                overlay_bar["last_tick_ts"] = max_last_tick_ts
+
+            self._json(200, {
+                "ok": True,
+                "bar": overlay_bar,
+                "warnings": overlay_warnings if overlay_warnings else [],
+                "meta": {
+                    "extensions": {
+                        "plane": "overlay",
+                        "base_tf_s": base_tf_s,
+                        "preview_bars_used": len(in_bucket),
+                        "bucket_open_ms": b0,
+                    },
+                    "boot_id": _boot_id,
+                },
+            })
             return
 
         self._bad("unknown_endpoint")

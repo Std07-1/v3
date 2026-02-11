@@ -232,6 +232,18 @@
             priceFormat: { type: "volume" },
             priceScaleId: "",
         });
+
+        // P2X.6-U1: overlay series — окремий candlestick для ephemeral бару TF≥M5
+        const overlaySeries = chart.addCandlestickSeries({
+            priceLineVisible: false,
+            lastValueVisible: false,
+            upColor: "rgba(38, 166, 154, 0.45)",
+            downColor: "rgba(239, 83, 80, 0.45)",
+            borderUpColor: "rgba(38, 166, 154, 0.7)",
+            borderDownColor: "rgba(239, 83, 80, 0.7)",
+            wickUpColor: "rgba(38, 166, 154, 0.5)",
+            wickDownColor: "rgba(239, 83, 80, 0.5)",
+        });
         try {
             volumes.priceScale().applyOptions({
                 scaleMargins: { top: 0.895, bottom: 0 },
@@ -785,6 +797,24 @@
             }
         }
 
+        // P2X.6-U1: overlay — один ephemeral бар, не проходить через applyUpdates
+        function updateOverlayBar(bar) {
+            if (!bar) {
+                overlaySeries.setData([]);
+                return;
+            }
+            const normalized = normalizeBar(bar);
+            if (!normalized) {
+                overlaySeries.setData([]);
+                return;
+            }
+            overlaySeries.setData([normalized]);
+        }
+
+        function clearOverlay() {
+            overlaySeries.setData([]);
+        }
+
         function _applyVolumeColors() {
             if (!lastBarsData.length) return;
             const volumeData = lastBarsData.map((bar) => ({
@@ -1072,6 +1102,8 @@
         return {
             setBars,
             updateLastBar,
+            updateOverlayBar,
+            clearOverlay,
             resetViewAndFollow,
             resizeToContainer,
             clearAll,
