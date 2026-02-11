@@ -31,7 +31,7 @@ from collections import deque
 from typing import Any
 
 from core.time_geom import normalize_bar
-from core.buckets import bucket_start_ms
+from core.buckets import bucket_start_ms, resolve_anchor_offset_ms
 from env_profile import load_env_profile
 from runtime.store.uds import ReadPolicy, UpdatesSpec, WindowSpec, build_uds_from_config
 
@@ -53,6 +53,14 @@ MAX_EVENTS_PER_RESPONSE = 500
 DEFAULT_MIN_COLDLOAD_BARS = {300: 300, 900: 200, 1800: 150, 3600: 100}
 _cfg_cache: dict[str, Any] = {"data": {}, "mtime": None, "next_check_ts": 0.0}
 CFG_CACHE_CHECK_INTERVAL_S = 0.5
+OVERLAY_ANCHOR_WARN_INTERVAL_S = 60
+_overlay_anchor_warn_state: dict[tuple[str, int], float] = {}
+OVERLAY_OBS_LOG_INTERVAL_S = 60
+_overlay_obs_log_ts = 0.0
+_overlay_req_total = 0
+_overlay_prev_held_total = 0
+_overlay_prev_wait_ms_last: int | None = None
+_overlay_prev_hold_since: dict[tuple[str, int], int] = {}
 
 
 def _tf_allowlist_from_cfg(cfg: dict[str, Any]) -> set[int]:
@@ -192,6 +200,25 @@ def _load_cfg_cached(config_path: str | None) -> dict[str, Any]:
         return data
     except Exception:
         return {}
+
+
+def _overlay_anchor_warn_allowed(symbol: str, tf_s: int) -> bool:
+    now = time.time()
+    key = (symbol, tf_s)
+    last = _overlay_anchor_warn_state.get(key, 0.0)
+    if now - last < OVERLAY_ANCHOR_WARN_INTERVAL_S:
+        return False
+    _overlay_anchor_warn_state[key] = now
+    return True
+
+
+def _overlay_obs_log_allowed() -> bool:
+    now = time.time()
+    global _overlay_obs_log_ts
+    if now - _overlay_obs_log_ts < OVERLAY_OBS_LOG_INTERVAL_S:
+        return False
+    _overlay_obs_log_ts = now
+    return True
 
 
 def _redis_payload_to_bars(
@@ -1135,6 +1162,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # Read-only: жодних записів у UDS/SSOT/final.
         # ----------------------------------------------------------------
         if path == "/api/overlay":
+            global _overlay_req_total
+            global _overlay_prev_held_total
+            global _overlay_prev_wait_ms_last
+            global _overlay_prev_hold_since
             symbol = (qs.get("symbol", [""])[0] or "").strip()
             tf_s = _safe_int((qs.get("tf_s", ["300"])[0] or "300"), 300)
             base_tf_s = _safe_int((qs.get("base_tf_s", ["60"])[0] or "60"), 60)
@@ -1172,10 +1203,39 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 })
                 return
 
-            # Кількість preview-барів для покриття одного target-бару
+            _overlay_req_total += 1
+
+            # P2X.6-U3: 2-bar overlay (prev_bar + curr_bar)
+            # prev_bar: попередній бакет, тримається до приходу final
+            # curr_bar: поточний бакет (in-progress)
             tf_ms = tf_s * 1000
             base_tf_ms = base_tf_s * 1000
-            preview_bars_needed = max(1, tf_ms // base_tf_ms) + 2  # +2 запас
+            anchor_offset_ms_cfg = resolve_anchor_offset_ms(tf_s, cfg)
+            anchor_offset_ms = anchor_offset_ms_cfg
+            last_final_open_ms = None
+            try:
+                spec_last = WindowSpec(
+                    symbol=symbol,
+                    tf_s=tf_s,
+                    limit=1,
+                    since_open_ms=None,
+                    to_open_ms=None,
+                    cold_load=True,
+                )
+                res_last = uds.read_window(spec_last, ReadPolicy(force_disk=False, prefer_redis=False))
+                if res_last.bars_lwc:
+                    last_final_open_ms = res_last.bars_lwc[-1].get("open_time_ms")
+            except Exception:
+                overlay_warnings.append("overlay_anchor_final_read_failed")
+
+            if isinstance(last_final_open_ms, int) and last_final_open_ms > 0:
+                expected = bucket_start_ms(last_final_open_ms, tf_ms, anchor_offset_ms_cfg)
+                if expected != last_final_open_ms and _overlay_anchor_warn_allowed(symbol, tf_s):
+                    overlay_warnings.append("overlay_anchor_mismatch")
+                anchor_offset_ms = int(last_final_open_ms % tf_ms)
+            bars_per_bucket = max(1, tf_ms // base_tf_ms)
+            # Потрібно покрити 2 бакети + запас
+            preview_bars_needed = bars_per_bucket * 2 + 4
 
             res = uds.read_preview_window(symbol, base_tf_s, preview_bars_needed, include_current=True)
             overlay_warnings.extend(res.warnings)
@@ -1185,76 +1245,121 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._json(200, {
                     "ok": True,
                     "bar": None,
+                    "bars": [],
                     "warnings": overlay_warnings,
                     "meta": {"extensions": {"plane": "overlay", "base_tf_s": base_tf_s}, "boot_id": _boot_id},
                 })
                 return
 
-            # Визначаємо поточний bucket для target TF
+            # Визначаємо поточний та попередній bucket для target TF
             now_ms = int(time.time() * 1000)
-            b0 = bucket_start_ms(now_ms, tf_ms, 0)
+            b0 = bucket_start_ms(now_ms, tf_ms, anchor_offset_ms)
+            b_prev = b0 - tf_ms
 
-            # Фільтруємо preview-бари, що потрапляють у [b0, b0+tf_ms)
-            in_bucket: list[dict[str, Any]] = []
-            max_last_tick_ts = 0
-            for bar in res.bars_lwc:
-                bar_open_ms = bar.get("open_time_ms")
-                if bar_open_ms is None:
-                    continue
-                if b0 <= bar_open_ms < b0 + tf_ms:
-                    in_bucket.append(bar)
-                    ltt = bar.get("last_tick_ts")
-                    if isinstance(ltt, int) and ltt > max_last_tick_ts:
-                        max_last_tick_ts = ltt
+            def _aggregate_bucket(bars_lwc: list[dict[str, Any]], bucket_start: int) -> dict[str, Any] | None:
+                """Агрегація preview-барів у один overlay bar для бакету."""
+                in_b: list[dict[str, Any]] = []
+                max_ltt = 0
+                for bar in bars_lwc:
+                    bar_open_ms = bar.get("open_time_ms")
+                    if bar_open_ms is None:
+                        continue
+                    if bucket_start <= bar_open_ms < bucket_start + tf_ms:
+                        in_b.append(bar)
+                        ltt = bar.get("last_tick_ts")
+                        if isinstance(ltt, int) and ltt > max_ltt:
+                            max_ltt = ltt
+                if not in_b:
+                    return None
+                agg = {
+                    "time": bucket_start // 1000,
+                    "open": float(in_b[0].get("open", 0.0)),
+                    "high": float(max(b.get("high", 0.0) for b in in_b)),
+                    "low": float(min(b.get("low", float("inf")) for b in in_b)),
+                    "close": float(in_b[-1].get("close", 0.0)),
+                    "volume": 0.0,
+                    "open_time_ms": bucket_start,
+                    "close_time_ms": bucket_start + tf_ms,
+                    "tf_s": tf_s,
+                    "src": "overlay_preview",
+                    "complete": False,
+                }
+                if max_ltt > 0:
+                    agg["last_tick_ts"] = max_ltt
+                # Прокидаємо last_price з останнього preview-бару (тік-ціна)
+                last_close = in_b[-1].get("close")
+                last_price_raw = in_b[-1].get("last_price")
+                if last_price_raw is not None:
+                    agg["last_price"] = float(last_price_raw)
+                elif last_close is not None:
+                    agg["last_price"] = float(last_close)
+                return agg
 
-            if not in_bucket:
-                self._json(200, {
-                    "ok": True,
-                    "bar": None,
-                    "warnings": overlay_warnings + ["overlay_no_bars_in_bucket"],
-                    "meta": {
-                        "extensions": {
-                            "plane": "overlay",
-                            "base_tf_s": base_tf_s,
-                            "bucket_open_ms": b0,
-                        },
-                        "boot_id": _boot_id,
-                    },
-                })
-                return
+            curr_bar = _aggregate_bucket(res.bars_lwc, b0)
+            prev_bar_candidate = _aggregate_bucket(res.bars_lwc, b_prev)
 
-            # Агрегація preview-барів у один overlay bar
-            overlay_open = in_bucket[0].get("open", 0.0)
-            overlay_high = max(b.get("high", 0.0) for b in in_bucket)
-            overlay_low = min(b.get("low", float("inf")) for b in in_bucket)
-            overlay_close = in_bucket[-1].get("close", 0.0)
+            # P2X.6-U3: prev_bar тримається лише до приходу final
+            prev_bar = None
+            if prev_bar_candidate is not None:
+                try:
+                    since_prev = max(0, b_prev - 1)
+                    spec_prev = WindowSpec(
+                        symbol=symbol,
+                        tf_s=tf_s,
+                        limit=1,
+                        since_open_ms=since_prev,
+                        to_open_ms=b_prev,
+                        cold_load=False,
+                    )
+                    res_final = uds.read_window(spec_prev, ReadPolicy(force_disk=False, prefer_redis=False))
+                    has_final = any(
+                        b.get("open_time_ms") == b_prev
+                        for b in (res_final.bars_lwc or [])
+                    )
+                    if not has_final:
+                        prev_bar = prev_bar_candidate
+                except Exception:
+                    # Якщо перевірка final упала — тримаємо prev_bar (degraded-but-visible)
+                    prev_bar = prev_bar_candidate
+                    overlay_warnings.append("overlay_final_check_failed")
 
-            overlay_bar = {
-                "time": b0 // 1000,
-                "open": float(overlay_open),
-                "high": float(overlay_high),
-                "low": float(overlay_low),
-                "close": float(overlay_close),
-                "volume": 0.0,
-                "open_time_ms": b0,
-                "close_time_ms": b0 + tf_ms,
-                "tf_s": tf_s,
-                "src": "overlay_preview",
-                "complete": False,
-            }
-            if max_last_tick_ts > 0:
-                overlay_bar["last_tick_ts"] = max_last_tick_ts
+            key = (symbol, tf_s)
+            if prev_bar is not None:
+                if key not in _overlay_prev_hold_since:
+                    _overlay_prev_hold_since[key] = now_ms
+                _overlay_prev_held_total += 1
+            else:
+                since_ms = _overlay_prev_hold_since.pop(key, None)
+                if since_ms is not None:
+                    _overlay_prev_wait_ms_last = max(0, now_ms - since_ms)
+
+            overlay_bars = []
+            if prev_bar is not None:
+                overlay_bars.append(prev_bar)
+            if curr_bar is not None:
+                overlay_bars.append(curr_bar)
+
+            if _overlay_obs_log_allowed():
+                logging.info(
+                    "UI_OVERLAY_OBS req_total=%s prev_held_total=%s prev_wait_ms_last=%s",
+                    _overlay_req_total,
+                    _overlay_prev_held_total,
+                    _overlay_prev_wait_ms_last,
+                )
 
             self._json(200, {
                 "ok": True,
-                "bar": overlay_bar,
+                "bar": curr_bar,  # backward compat (P2X.6-U1)
+                "bars": overlay_bars,  # P2X.6-U3: 0-2 бари
                 "warnings": overlay_warnings if overlay_warnings else [],
                 "meta": {
                     "extensions": {
                         "plane": "overlay",
                         "base_tf_s": base_tf_s,
-                        "preview_bars_used": len(in_bucket),
                         "bucket_open_ms": b0,
+                        "prev_bucket_open_ms": b_prev,
+                        "has_prev_bar": prev_bar is not None,
+                        "has_curr_bar": curr_bar is not None,
                     },
                     "boot_id": _boot_id,
                 },

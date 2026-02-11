@@ -172,9 +172,17 @@
         if (!bar) return null;
         const time = Number(bar.time ?? (Number.isFinite(bar.open_time_ms) ? Math.floor(bar.open_time_ms / 1000) : NaN));
         const open = Number(bar.open ?? bar.o);
-        const high = Number(bar.high ?? bar.h);
-        const low = Number(bar.low ?? bar.l);
-        const close = Number(bar.close ?? bar.c);
+        let high = Number(bar.high ?? bar.h);
+        let low = Number(bar.low ?? bar.l);
+        let close = Number(bar.close ?? bar.c);
+        const lastPrice = Number(bar.last_price ?? bar.lastPrice ?? NaN);
+        if (Number.isFinite(lastPrice) && bar.complete !== true) {
+            close = lastPrice;
+        }
+        if (Number.isFinite(close)) {
+            if (!Number.isFinite(high) || close > high) high = close;
+            if (!Number.isFinite(low) || close < low) low = close;
+        }
         const volumeRaw = bar.volume ?? bar.value ?? bar.v ?? 0;
         const volume = Number(volumeRaw);
         if (!Number.isFinite(time) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) {
@@ -236,7 +244,7 @@
         // P2X.6-U1: overlay series — окремий candlestick для ephemeral бару TF≥M5
         const overlaySeries = chart.addCandlestickSeries({
             priceLineVisible: false,
-            lastValueVisible: false,
+            lastValueVisible: true,
             upColor: "rgba(38, 166, 154, 0.45)",
             downColor: "rgba(239, 83, 80, 0.45)",
             borderUpColor: "rgba(38, 166, 154, 0.7)",
@@ -797,8 +805,19 @@
             }
         }
 
-        // P2X.6-U1: overlay — один ephemeral бар, не проходить через applyUpdates
-        function updateOverlayBar(bar) {
+        // P2X.6-U3: overlay — 0-2 ephemeral бари (prev_bar + curr_bar)
+        // Приймає масив bars або одиничний bar (backward compat P2X.6-U1)
+        function updateOverlayBar(bar, bars) {
+            // P2X.6-U3: якщо є масив bars — використовуємо його
+            if (Array.isArray(bars) && bars.length > 0) {
+                const normalized = bars
+                    .filter(b => b != null)
+                    .map(b => normalizeBar(b))
+                    .filter(b => b != null);
+                overlaySeries.setData(normalized);
+                return;
+            }
+            // Backward compat: одиничний bar (P2X.6-U1 fallback)
             if (!bar) {
                 overlaySeries.setData([]);
                 return;

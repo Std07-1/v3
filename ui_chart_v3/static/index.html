@@ -21,7 +21,7 @@
       min-height: 100vh;
     }
 
-    body.ui-debug-off #diag,
+    body.ui-debug-off #diag .diag-debug,
     body.ui-debug-off .follow-toggle {
       display: none;
     }
@@ -517,12 +517,12 @@
   <div class="chart-overlay-shell">
     <div id="diag" class="diag-signature">
       <div class="diag-row">
-        <span>Last bar: <span id="diag-last">—</span></span>
+        <span id="diag-last">—</span>
       </div>
       <div class="diag-row">
         <span id="diag-utc">—</span>
       </div>
-      <div class="diag-row">
+      <div class="diag-row diag-debug">
         <span>Lag close→api: <span id="diag-lag">—</span></span>
         <span>Lag ssot→api: <span id="diag-lag-ssot">—</span></span>
         <span>Bars: <span id="diag-bars">—</span></span>
@@ -530,6 +530,8 @@
         <span>Age: <span id="diag-redis-age">—</span></span>
         <span>TTL: <span id="diag-redis-ttl">—</span></span>
         <span>Seq: <span id="diag-redis-seq">—</span></span>
+        <span>Poll: <span id="diag-intervals">—</span></span>
+        <span>Meta: <span id="diag-meta">—</span></span>
         <label class="follow-toggle"><input id="follow" type="checkbox" checked aria-label="Follow" /></label>
         <span class="diag-hidden">Load: <span id="diag-load">—</span></span>
         <span class="diag-hidden">Poll: <span id="diag-poll">—</span></span>

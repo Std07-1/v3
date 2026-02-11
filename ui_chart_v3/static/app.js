@@ -21,6 +21,8 @@ const elDiagRedisSource = document.getElementById('diag-redis-source');
 const elDiagRedisAge = document.getElementById('diag-redis-age');
 const elDiagRedisTtl = document.getElementById('diag-redis-ttl');
 const elDiagRedisSeq = document.getElementById('diag-redis-seq');
+const elDiagIntervals = document.getElementById('diag-intervals');
+const elDiagMeta = document.getElementById('diag-meta');
 const elDiag = document.getElementById('diag');
 const elDrawerHandle = document.getElementById('drawer-handle');
 const elFloatingTools = document.getElementById('floating-tools');
@@ -42,6 +44,9 @@ let currentTheme = 'light';
 let uiDebugEnabled = true;
 let lastHudSymbol = null;
 let lastHudTf = null;
+let lastUpdatesPlane = null;
+let lastUpdatesGap = null;
+let lastUpdatesSeq = null;
 let updatesSeqCursor = null;
 let bootId = null;
 let lastApiSeenMs = null;
@@ -74,6 +79,20 @@ let overlayTimer = null;
 const OVERLAY_POLL_INTERVAL_MS = 1000;
 const OVERLAY_MIN_TF_S = 300;  // overlay лише для TF ≥ M5
 const OVERLAY_PREVIEW_TF_SET = new Set([60, 180]);  // preview TF — overlay не потрібен
+const OVERLAY_POLL_FAST_MS = 1000;
+const OVERLAY_POLL_SLOW_MS = 2000;
+let overlayInFlight = false;
+let overlayHeldPrev = false;
+let overlayLastBucketOpenMs = null;
+let overlayNextDelayMs = null;
+
+let updatesInFlight = false;
+let updatesEmptyStreak = 0;
+const UPDATES_BASE_FINAL_MS = 3000;
+const UPDATES_BASE_PREVIEW_MS = 1000;
+const UPDATES_BACKOFF_PREVIEW_MS = [1000, 2000, 5000];
+const UPDATES_BACKOFF_FINAL_MS = [3000, 5000, 8000];
+let updatesNextDelayMs = null;
 
 const RIGHT_OFFSET_PX = 48;
 const THEME_KEY = 'ui_chart_theme';
@@ -114,6 +133,10 @@ function readSelectedTf(defaultTf = 300) {
   return defaultTf;
 }
 
+function isUiVisible() {
+  return !document.hidden;
+}
+
 function startNewViewEpoch() {
   viewEpoch += 1;
   if (loadAbort) {
@@ -130,8 +153,12 @@ function startNewViewEpoch() {
   scrollbackPendingStep = 0;
   scrollbackReachedStart = false;
   if (pollTimer) {
-    clearInterval(pollTimer);
+    clearTimeout(pollTimer);
     pollTimer = null;
+  }
+  if (overlayTimer) {
+    clearTimeout(overlayTimer);
+    overlayTimer = null;
   }
   updatesSeqCursor = null;
   lastOpenMs = null;
@@ -165,6 +192,12 @@ function fmtTtl(v) {
   return `${v}s`;
 }
 
+function fmtIntervalMs(ms) {
+  if (ms == null || !Number.isFinite(ms)) return '—';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 function fmtPrice(v) {
   if (v == null) return '—';
   const n = Number(v);
@@ -174,8 +207,8 @@ function fmtPrice(v) {
 }
 
 function updateUtcNow() {
-  if (!elDiagUtc) return;
-  elDiagUtc.textContent = fmtUtc(Date.now());
+  const nowUtc = fmtUtc(Date.now());
+  if (elDiagUtc) elDiagUtc.textContent = nowUtc;
 }
 
 function updateDiag(tfSeconds) {
@@ -209,12 +242,37 @@ function updateDiag(tfSeconds) {
   if (elDiagRedisSeq) {
     elDiagRedisSeq.textContent = lastRedisSeq != null ? String(lastRedisSeq) : '—';
   }
+  if (elDiagIntervals) {
+    const up = fmtIntervalMs(updatesNextDelayMs);
+    const ov = fmtIntervalMs(overlayNextDelayMs);
+    elDiagIntervals.textContent = `upd=${up} ov=${ov}`;
+  }
+  if (elDiagMeta) {
+    const tf = readSelectedTf(tfSeconds);
+    const isPreview = OVERLAY_PREVIEW_TF_SET.has(tf);
+    const overlayActive = !isPreview && tf >= OVERLAY_MIN_TF_S;
+    const plane = isPreview ? 'preview' : (overlayActive ? 'overlay' : 'final');
+    const seq = lastUpdatesSeq != null ? String(lastUpdatesSeq) : '—';
+    const gap = _formatGap(lastUpdatesGap);
+    const held = overlayHeldPrev ? 'yes' : 'no';
+    elDiagMeta.textContent = `plane=${plane} seq=${seq} gap=${gap} held_prev=${held}`;
+  }
   updateStreamingIndicator();
 }
 
 function updateHudPrice(price) {
   if (!elHudPrice) return;
   elHudPrice.textContent = fmtPrice(price);
+}
+
+function _formatGap(gap) {
+  if (!gap || typeof gap !== 'object') return 'no';
+  const fromSeq = gap.from_seq ?? gap.fromSeq ?? gap.from;
+  const toSeq = gap.to_seq ?? gap.toSeq ?? gap.to;
+  if (Number.isFinite(fromSeq) && Number.isFinite(toSeq)) {
+    return `${fromSeq}-${toSeq}`;
+  }
+  return 'yes';
 }
 
 function setStatus(txt) {
@@ -1448,7 +1506,7 @@ function applyUpdates(events) {
     updatesSeqCursor = maxSeq;
   }
   if (lastBar) {
-    updateHudPrice(lastBar.last_price != null ? lastBar.last_price : lastBar.close);
+    updateHudPrice(lastBar.last_price ?? lastBar.close ?? lastBar.c);
   }
   const allowedPairs = new Set(uiCacheByKey.keys());
   if (currentCacheKey) allowedPairs.add(currentCacheKey);
@@ -1459,16 +1517,34 @@ function applyUpdates(events) {
   return applied;
 }
 
+function _calcUpdatesDelayMs(tf) {
+  const isPreview = OVERLAY_PREVIEW_TF_SET.has(tf);
+  if (updatesEmptyStreak < 3) {
+    return isPreview ? UPDATES_BASE_PREVIEW_MS : UPDATES_BASE_FINAL_MS;
+  }
+  const idx = Math.min(updatesEmptyStreak - 3, UPDATES_BACKOFF_PREVIEW_MS.length - 1);
+  return isPreview ? UPDATES_BACKOFF_PREVIEW_MS[idx] : UPDATES_BACKOFF_FINAL_MS[idx];
+}
+
+function _schedulePollUpdates(delayMs) {
+  if (pollTimer) clearTimeout(pollTimer);
+  updatesNextDelayMs = Math.max(0, delayMs);
+  pollTimer = setTimeout(pollUpdates, updatesNextDelayMs);
+}
+
 async function pollUpdates() {
   const symbol = elSymbol.value;
   const tf = readSelectedTf();
   if (lastOpenMs == null) return;
+  if (!isUiVisible()) return;
+  if (updatesInFlight) return;
+  updatesInFlight = true;
   const shouldFollow = Boolean(elFollow.checked && controller && typeof controller.isAtEnd === 'function'
     ? controller.isAtEnd()
     : false);
-
+  const epoch = viewEpoch;
+  let nextDelayMs = UPDATES_BASE_FINAL_MS;
   try {
-    const epoch = viewEpoch;
     let url = `/api/updates?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=500`;
     if (updatesSeqCursor != null) {
       url += `&since_seq=${updatesSeqCursor}`;
@@ -1498,10 +1574,25 @@ async function pollUpdates() {
         bootId = data.boot_id;
       }
     }
+    if (data && data.meta && data.meta.extensions) {
+      lastUpdatesPlane = data.meta.extensions.plane || lastUpdatesPlane;
+      lastUpdatesGap = data.meta.extensions.gap || null;
+    } else if (OVERLAY_PREVIEW_TF_SET.has(tf)) {
+      lastUpdatesPlane = 'preview';
+      lastUpdatesGap = null;
+    } else {
+      lastUpdatesPlane = 'final';
+      lastUpdatesGap = null;
+    }
     diag.lastError = '';
     diag.pollAt = Date.now();
     updateDiag(tf);
     const events = data.events || [];
+    if (events.length === 0) {
+      updatesEmptyStreak += 1;
+    } else {
+      updatesEmptyStreak = 0;
+    }
     const applied = applyUpdates(events);
     if (events.length === 0
       && Number.isFinite(data.disk_last_open_ms)
@@ -1512,6 +1603,10 @@ async function pollUpdates() {
     if (Number.isFinite(data.cursor_seq) && (updatesSeqCursor == null || data.cursor_seq > updatesSeqCursor)) {
       updatesSeqCursor = data.cursor_seq;
     }
+    if (updatesSeqCursor != null) {
+      lastUpdatesSeq = updatesSeqCursor;
+    }
+    nextDelayMs = _calcUpdatesDelayMs(tf);
     if (applied === 0) return;
     if (elFollow.checked && shouldFollow && controller && typeof controller.scrollToRealTimeWithOffset === 'function') {
       controller.scrollToRealTimeWithOffset(RIGHT_OFFSET_PX);
@@ -1520,20 +1615,58 @@ async function pollUpdates() {
     diag.pollAt = Date.now();
     updateDiag(tf);
     setStatus(`ok · tf=${tf}s · +${applied}`);
+    updateHudValues();
   } catch (e) {
+    updatesEmptyStreak += 1;
     diag.lastError = 'poll_error';
     diag.pollAt = Date.now();
     updateDiag(tf);
     setStatus('poll_error');
+    updateHudValues();
+    nextDelayMs = _calcUpdatesDelayMs(tf);
+  } finally {
+    updatesInFlight = false;
+    if (epoch === viewEpoch && isUiVisible()) {
+      _schedulePollUpdates(nextDelayMs);
+    }
   }
 }
 
 function resetPolling() {
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(pollUpdates, 3000);
+  if (pollTimer) clearTimeout(pollTimer);
+  updatesEmptyStreak = 0;
+  updatesInFlight = false;
+  updatesNextDelayMs = null;
+  if (!isUiVisible()) return;
+  _schedulePollUpdates(0);
 }
 
 // P2X.6-U1: overlay polling — окремий від applyUpdates
+function _calcOverlayDelayMs(tf, meta, bars) {
+  const heldPrev = Array.isArray(bars) && bars.length > 1;
+  if (heldPrev) return OVERLAY_POLL_FAST_MS;
+  const tfMs = tf * 1000;
+  let bucketOpenMs = null;
+  if (meta && meta.extensions && Number.isFinite(meta.extensions.bucket_open_ms)) {
+    bucketOpenMs = meta.extensions.bucket_open_ms;
+  } else if (Number.isFinite(overlayLastBucketOpenMs)) {
+    bucketOpenMs = overlayLastBucketOpenMs;
+  }
+  if (!Number.isFinite(bucketOpenMs)) {
+    const now = Date.now();
+    bucketOpenMs = Math.floor(now / tfMs) * tfMs;
+  }
+  const msToNext = (bucketOpenMs + tfMs) - Date.now();
+  if (msToNext > 60_000) return OVERLAY_POLL_SLOW_MS;
+  return OVERLAY_POLL_FAST_MS;
+}
+
+function _schedulePollOverlay(delayMs) {
+  if (overlayTimer) clearTimeout(overlayTimer);
+  overlayNextDelayMs = Math.max(0, delayMs);
+  overlayTimer = setTimeout(pollOverlay, overlayNextDelayMs);
+}
+
 async function pollOverlay() {
   const symbol = elSymbol.value;
   const tf = readSelectedTf();
@@ -1541,11 +1674,18 @@ async function pollOverlay() {
   // Overlay не потрібен для preview TF
   if (OVERLAY_PREVIEW_TF_SET.has(tf)) return;
   if (tf < OVERLAY_MIN_TF_S) return;
+  if (!isUiVisible()) return;
+  if (overlayInFlight) return;
+  overlayInFlight = true;
+  const epoch = viewEpoch;
+  let nextDelayMs = OVERLAY_POLL_SLOW_MS;
 
   try {
-    const url = `/api/overlay?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&base_tf_s=60`;
+    const baseTf = tf >= 14400 ? 180 : 60;  // HTF (H4+D1) аграгує з M3, решта з M1
+    const url = `/api/overlay?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&base_tf_s=${baseTf}`;
     const data = await apiGet(url);
     if (!data || !data.ok) return;
+    if (epoch !== viewEpoch) return;
 
     // boot_id перевірка
     if (data.meta && data.meta.boot_id) {
@@ -1555,24 +1695,49 @@ async function pollOverlay() {
       }
     }
 
-    if (controller && typeof controller.updateOverlayBar === 'function') {
-      controller.updateOverlayBar(data.bar);  // bar=null → clearOverlay
+    overlayHeldPrev = Array.isArray(data.bars) && data.bars.length > 1;
+    if (data.meta && data.meta.extensions && Number.isFinite(data.meta.extensions.bucket_open_ms)) {
+      overlayLastBucketOpenMs = data.meta.extensions.bucket_open_ms;
     }
+    if (controller && typeof controller.updateOverlayBar === 'function') {
+      controller.updateOverlayBar(data.bar, data.bars);  // P2X.6-U3: bars=[prev?,curr?]
+    }
+    if (Array.isArray(data.bars) && data.bars.length > 0) {
+      const lastOverlay = data.bars[data.bars.length - 1];
+      if (lastOverlay && (lastOverlay.last_price != null || lastOverlay.close != null)) {
+        const price = lastOverlay.last_price != null ? lastOverlay.last_price : lastOverlay.close;
+        if (Number.isFinite(price)) updateHudPrice(price);
+      }
+    } else if (data.bar && (data.bar.last_price != null || data.bar.close != null)) {
+      const price = data.bar.last_price != null ? data.bar.last_price : data.bar.close;
+      if (Number.isFinite(price)) updateHudPrice(price);
+    }
+    updateHudValues();
+    nextDelayMs = _calcOverlayDelayMs(tf, data.meta, data.bars);
   } catch (_e) {
     // Overlay помилки не фатальні — тихо ігноруємо
+    nextDelayMs = OVERLAY_POLL_SLOW_MS;
+  } finally {
+    overlayInFlight = false;
+    if (epoch === viewEpoch && isUiVisible()) {
+      _schedulePollOverlay(nextDelayMs);
+    }
   }
 }
 
 function resetOverlayPolling() {
-  if (overlayTimer) clearInterval(overlayTimer);
+  if (overlayTimer) clearTimeout(overlayTimer);
   overlayTimer = null;
+  overlayInFlight = false;
+  overlayHeldPrev = false;
+  overlayLastBucketOpenMs = null;
+  overlayNextDelayMs = null;
 
   const tf = readSelectedTf();
   // Запускаємо overlay polling тільки для TF ≥ M5 і не preview
   if (!OVERLAY_PREVIEW_TF_SET.has(tf) && tf >= OVERLAY_MIN_TF_S) {
-    overlayTimer = setInterval(pollOverlay, OVERLAY_POLL_INTERVAL_MS);
-    // Негайний перший виклик
-    pollOverlay();
+    if (!isUiVisible()) return;
+    _schedulePollOverlay(0);
   } else {
     // Чистимо overlay при переключенні на preview TF
     if (controller && typeof controller.clearOverlay === 'function') {
@@ -1736,6 +1901,20 @@ async function init() {
         controller.scrollToRealTimeWithOffset(RIGHT_OFFSET_PX);
       }
     }
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (pollTimer) clearTimeout(pollTimer);
+      pollTimer = null;
+      if (overlayTimer) clearTimeout(overlayTimer);
+      overlayTimer = null;
+      updatesNextDelayMs = null;
+      overlayNextDelayMs = null;
+      return;
+    }
+    resetPolling();
+    resetOverlayPolling();
   });
 }
 

@@ -78,7 +78,7 @@ class TickAggregator:
                 h=float(price),
                 low=float(price),
                 c=float(price),
-                v=1.0,
+                v=0.0,
             )
             self._state[key] = state
             return self._to_bar(symbol, tf_s, state)
@@ -96,7 +96,6 @@ class TickAggregator:
             state.h = float(price)
         if price < state.low:
             state.low = float(price)
-        state.v += 1.0
         return self._to_bar(symbol, tf_s, state)
 
     def _to_bar(self, symbol: str, tf_s: int, state: _BucketState) -> CandleBar:

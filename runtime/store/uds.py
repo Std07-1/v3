@@ -292,6 +292,8 @@ class UnifiedDataStore:
         self._preview_updates_retain = max(1, int(preview_updates_retain))
         self._preview_last_open_ms: dict[tuple[str, int], int] = {}
         self._preview_last_publish_ms: dict[tuple[str, int], int] = {}
+        self._preview_tail_updates_total = 0
+        self._preview_tail_updates_log_ts_ms = 0
         self._preview_nomix_violation = False
         self._preview_nomix_violation_reason: Optional[str] = None
         self._preview_nomix_violation_ts_ms: Optional[int] = None
@@ -669,35 +671,45 @@ class UnifiedDataStore:
         last_open = self._preview_last_open_ms.get(key)
         rollover = last_open is None or last_open != bar.open_time_ms
         self._preview_last_open_ms[key] = bar.open_time_ms
-        if rollover:
-            try:
-                tail_payload, _, _ = self._redis.read_preview_tail(bar.symbol, bar.tf_s)
-                tail_bars = []
-                if isinstance(tail_payload, dict):
-                    raw = tail_payload.get("bars")
-                    if isinstance(raw, list):
-                        tail_bars = [b for b in raw if isinstance(b, dict)]
-                if tail_bars and isinstance(tail_bars[-1].get("open_ms"), int):
-                    if int(tail_bars[-1].get("open_ms")) == int(bar_item["open_ms"]):
-                        tail_bars[-1] = bar_item
-                    else:
-                        tail_bars.append(bar_item)
+
+        # P2X.6-U2: tail оновлюється на КОЖЕН publish (не лише rollover),
+        # щоб /api/bars завжди повертав актуальну форму бара.
+        try:
+            tail_payload, _, _ = self._redis.read_preview_tail(bar.symbol, bar.tf_s)
+            tail_bars = []
+            if isinstance(tail_payload, dict):
+                raw = tail_payload.get("bars")
+                if isinstance(raw, list):
+                    tail_bars = [b for b in raw if isinstance(b, dict)]
+            if tail_bars and isinstance(tail_bars[-1].get("open_ms"), int):
+                if int(tail_bars[-1].get("open_ms")) == int(bar_item["open_ms"]):
+                    tail_bars[-1] = bar_item
                 else:
                     tail_bars.append(bar_item)
-                if len(tail_bars) > self._preview_tail_retain:
-                    tail_bars = tail_bars[-self._preview_tail_retain :]
-                new_tail = {
-                    "v": 1,
-                    "symbol": bar.symbol,
-                    "tf_s": int(bar.tf_s),
-                    "bars": tail_bars,
-                    "complete": False,
-                    "source": str(bar.src),
-                    "payload_ts_ms": payload_ts_ms,
-                }
-                self._redis.write_preview_tail(bar.symbol, bar.tf_s, new_tail)
-            except Exception as exc:
-                Logging.warning("UDS: preview_tail write failed err=%s", exc)
+            else:
+                tail_bars.append(bar_item)
+            if len(tail_bars) > self._preview_tail_retain:
+                tail_bars = tail_bars[-self._preview_tail_retain :]
+            new_tail = {
+                "v": 1,
+                "symbol": bar.symbol,
+                "tf_s": int(bar.tf_s),
+                "bars": tail_bars,
+                "complete": False,
+                "source": str(bar.src),
+                "payload_ts_ms": payload_ts_ms,
+            }
+            self._redis.write_preview_tail(bar.symbol, bar.tf_s, new_tail)
+            self._preview_tail_updates_total += 1
+            now_ms = int(time.time() * 1000)
+            if now_ms - self._preview_tail_updates_log_ts_ms >= 60_000:
+                self._preview_tail_updates_log_ts_ms = now_ms
+                Logging.info(
+                    "UDS: preview_tail_updates_total=%s",
+                    self._preview_tail_updates_total,
+                )
+        except Exception as exc:
+            Logging.warning("UDS: preview_tail write failed err=%s", exc)
 
         self._publish_preview_update(bar_payload, throttle_ms=500, rollover=rollover)
 
@@ -847,6 +859,7 @@ class UnifiedDataStore:
         status["prime_target_min_by_tf_s"] = dict(self._min_coldload_bars)
         status["preview_tf_allowlist_s"] = sorted(self._preview_tf_allowlist)
         status["preview_tf_allowlist_source"] = self._preview_allowlist_source
+        status["preview_tail_updates_total"] = self._preview_tail_updates_total
         if self._preview_nomix_violation:
             status["preview_nomix_violation"] = True
             status["preview_nomix_violation_reason"] = self._preview_nomix_violation_reason
