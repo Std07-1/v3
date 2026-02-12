@@ -12,6 +12,12 @@ from env_profile import load_env_secrets
 from core.config_loader import pick_config_path, load_system_config, env_str
 from runtime.store.redis_keys import symbol_key
 from runtime.store.redis_spec import resolve_redis_spec
+from runtime.ingest.tick_common import (
+    pick_tick_channel,
+    symbols_from_cfg,
+    build_symbol_aliases,
+    to_ms,
+)
 
 try:
     from forexconnect import ForexConnect, fxcorepy  # type: ignore
@@ -43,24 +49,7 @@ def _setup_logging(verbose: bool = False) -> None:
     )
 
 
-def _pick_tick_channel(cfg: dict[str, Any] | None = None) -> Optional[str]:
-    """Канал tick: config.json > ENV > legacy ENV."""
-    if cfg:
-        channels = cfg.get("channels")
-        if isinstance(channels, dict):
-            ch = channels.get("price_tick")
-            if ch:
-                return str(ch)
-    channel = env_str("FXCM_PRICE_TICK_CHANNEL")
-    if channel:
-        return channel
-    legacy = env_str("FXCM_PRICE_SNAPSHOT_CHANNEL")
-    if legacy:
-        logging.warning(
-            "TickPublisher: FXCM_PRICE_TICK_CHANNEL не заданий, fallback до FXCM_PRICE_SNAPSHOT_CHANNEL"
-        )
-        return legacy
-    return None
+
 
 
 def _parse_stream_cfg(cfg: dict[str, Any]) -> TickStreamConfig:
@@ -74,7 +63,7 @@ def _parse_stream_cfg(cfg: dict[str, Any]) -> TickStreamConfig:
     price_mode = str(cfg.get("tick_stream_price_mode", "mid")).lower().strip()
     if price_mode not in ("mid", "bid", "ask"):
         price_mode = "mid"
-    channel = _pick_tick_channel(cfg)
+    channel = pick_tick_channel(cfg)
     return TickStreamConfig(
         enabled=enabled,
         symbols=symbols,
@@ -85,40 +74,7 @@ def _parse_stream_cfg(cfg: dict[str, Any]) -> TickStreamConfig:
     )
 
 
-def _symbols_from_cfg(cfg: dict[str, Any]) -> list[str]:
-    raw = cfg.get("symbols")
-    if isinstance(raw, list) and raw:
-        out = [str(x) for x in raw if str(x).strip()]
-        if out:
-            return out
-    symbol = cfg.get("symbol")
-    return [str(symbol)] if symbol else []
 
-
-def _build_symbol_aliases(symbols: list[str]) -> dict[str, str]:
-    aliases: dict[str, str] = {}
-    for sym in symbols:
-        canon = str(sym).strip()
-        if not canon:
-            continue
-        aliases[canon] = canon
-        aliases[canon.replace("/", "")] = canon
-        aliases[canon.replace("/", "_")] = canon
-    return aliases
-
-
-def _to_ms(raw: Any) -> Optional[int]:
-    if raw is None:
-        return None
-    try:
-        value = float(raw)
-    except Exception:
-        return None
-    if value <= 0:
-        return None
-    if value < 100_000_000_000:
-        value *= 1000.0
-    return int(value)
 
 
 def _extract_row(update: Any) -> Optional[Any]:
@@ -199,7 +155,7 @@ class FxcmTickPublisher:
         self._client = redis_client
         self._namespace = str(namespace)
         self._symbols = symbols
-        self._aliases = _build_symbol_aliases(symbols)
+        self._aliases = build_symbol_aliases(symbols)
         self._min_interval_ms = max(0, int(min_interval_ms))
         self._last_tick_ttl_s = max(0, int(last_tick_ttl_s))
         self._price_mode = str(price_mode)
@@ -268,7 +224,7 @@ class FxcmTickPublisher:
             return
 
         ts_raw = _row_value(row, ["Time", "time", "timestamp", "tick_ts", "tick_ts_ms"])
-        tick_ts_ms = _to_ms(ts_raw)
+        tick_ts_ms = to_ms(ts_raw)
         ts_wallclock = False
         if tick_ts_ms is None:
             tick_ts_ms = int(time.time() * 1000)
@@ -432,7 +388,7 @@ def main() -> int:
         while True:
             time.sleep(60.0)
 
-    symbols = stream_cfg.symbols or _symbols_from_cfg(cfg)
+    symbols = stream_cfg.symbols or symbols_from_cfg(cfg)
     client = redis_lib.Redis(
         host=spec.host,
         port=spec.port,

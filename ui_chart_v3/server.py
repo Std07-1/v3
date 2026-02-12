@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import http.server
 import json
 import logging
@@ -27,31 +26,19 @@ import threading
 import time
 import urllib.parse
 import uuid
-from collections import deque
 from typing import Any
 
-from core.time_geom import normalize_bar
 from core.buckets import bucket_start_ms, resolve_anchor_offset_ms
-from core.config_loader import pick_config_path
+from core.config_loader import (
+    pick_config_path, tf_allowlist_from_cfg, preview_tf_allowlist_from_cfg,
+    DEFAULT_TF_ALLOWLIST, DEFAULT_PREVIEW_TF_ALLOWLIST, MAX_EVENTS_PER_RESPONSE,
+)
 from env_profile import load_env_secrets
 from runtime.store.uds import ReadPolicy, UpdatesSpec, WindowSpec, build_uds_from_config
 
 
-_updates_lock = threading.Lock()
-_updates_seq = 0
-_updates_last_digest: dict[tuple[str, int, int], str] = {}
 _boot_id = uuid.uuid4().hex
 
-_cache_lock = threading.Lock()
-_bars_cache: dict[tuple[str, int], list[dict[str, Any]]] = {}
-MAX_CACHE_BARS = 5000
-
-DEFAULT_TF_ALLOWLIST = {300, 900, 1800, 3600, 14400, 86400}
-DEFAULT_PREVIEW_TF_ALLOWLIST = {60, 180}
-SOURCE_ALLOWLIST = {"history", "derived", "history_agg", ""}
-FINAL_SOURCES = {"history", "derived", "history_agg"}
-MAX_EVENTS_PER_RESPONSE = 500
-DEFAULT_MIN_COLDLOAD_BARS = {300: 300, 900: 200, 1800: 150, 3600: 100}
 _cfg_cache: dict[str, Any] = {"data": {}, "mtime": None, "next_check_ts": 0.0}
 CFG_CACHE_CHECK_INTERVAL_S = 0.5
 OVERLAY_ANCHOR_WARN_INTERVAL_S = 60
@@ -64,80 +51,8 @@ _overlay_prev_wait_ms_last: int | None = None
 _overlay_prev_hold_since: dict[tuple[str, int], int] = {}
 
 
-def _tf_allowlist_from_cfg(cfg: dict[str, Any]) -> set[int]:
-    raw = cfg.get("tf_allowlist_s")
-    out: list[int] = []
-    if isinstance(raw, list):
-        for item in raw:
-            try:
-                tf_s = int(item)
-            except Exception:
-                continue
-            if tf_s > 0:
-                out.append(tf_s)
-    if out:
-        return set(out)
-
-    derived = cfg.get("derived_tfs_s")
-    if isinstance(derived, list):
-        for item in derived:
-            try:
-                tf_s = int(item)
-            except Exception:
-                continue
-            if tf_s > 0:
-                out.append(tf_s)
-
-    broker_base = cfg.get("broker_base_tfs_s")
-    if isinstance(broker_base, list):
-        for item in broker_base:
-            try:
-                tf_s = int(item)
-            except Exception:
-                continue
-            if tf_s > 0:
-                out.append(tf_s)
-
-    if 300 not in out:
-        out.append(300)
-
-    if out:
-        return set(out)
-
-    return set(DEFAULT_TF_ALLOWLIST)
 
 
-def _preview_tf_allowlist_from_cfg(cfg: dict[str, Any]) -> set[int]:
-    raw = cfg.get("tf_preview_allowlist_s")
-    out: list[int] = []
-    if isinstance(raw, list):
-        for item in raw:
-            try:
-                tf_s = int(item)
-            except Exception:
-                continue
-            if tf_s > 0:
-                out.append(tf_s)
-    if out:
-        return set(out)
-    return set(DEFAULT_PREVIEW_TF_ALLOWLIST)
-
-
-def _min_coldload_bars_from_cfg(cfg: dict[str, Any]) -> dict[int, int]:
-    raw = cfg.get("min_coldload_bars_by_tf_s")
-    out: dict[int, int] = {}
-    if isinstance(raw, dict):
-        for k, v in raw.items():
-            try:
-                tf_s = int(k)
-                min_n = int(v)
-            except Exception:
-                continue
-            if tf_s > 0 and min_n > 0:
-                out[tf_s] = min_n
-    if out:
-        return out
-    return dict(DEFAULT_MIN_COLDLOAD_BARS)
 
 
 def _safe_int(raw: Any, default: int) -> int:
@@ -159,16 +74,6 @@ def _parse_bool(raw: Any, default: bool) -> bool:
         if val in ("0", "false", "no", "n", "off"):
             return False
     return bool(default)
-
-
-def _cache_key(symbol: str, tf_s: int) -> tuple[str, int]:
-    return (symbol, tf_s)
-
-
-def _cache_get(symbol: str, tf_s: int) -> list[dict[str, Any]]:
-    key = _cache_key(symbol, tf_s)
-    with _cache_lock:
-        return list(_bars_cache.get(key, []))
 
 
 def _load_cfg_cached(config_path: str | None) -> dict[str, Any]:
@@ -222,73 +127,6 @@ def _overlay_obs_log_allowed() -> bool:
     return True
 
 
-def _redis_payload_to_bars(
-    payload: dict[str, Any],
-    symbol: str,
-    tf_s: int,
-) -> list[dict[str, Any]]:
-    bars: list[dict[str, Any]] = []
-    complete = bool(payload.get("complete", True))
-    source = str(payload.get("source", ""))
-    raw_bars = payload.get("bars")
-    if isinstance(raw_bars, list):
-        for item in raw_bars:
-            if not isinstance(item, dict):
-                continue
-            bar = _redis_payload_bar_to_canonical(item, symbol, tf_s, complete, source)
-            if bar is not None:
-                bars.append(bar)
-        return bars
-    raw_bar = payload.get("bar")
-    if isinstance(raw_bar, dict):
-        bar = _redis_payload_bar_to_canonical(raw_bar, symbol, tf_s, complete, source)
-        if bar is not None:
-            bars.append(bar)
-    return bars
-
-
-def _redis_payload_bar_to_canonical(
-    bar: dict[str, Any],
-    symbol: str,
-    tf_s: int,
-    complete: bool,
-    source: str,
-) -> dict[str, Any] | None:
-    open_ms = bar.get("open_ms")
-    close_ms = bar.get("close_ms")
-    if not isinstance(open_ms, int) or not isinstance(close_ms, int):
-        return None
-    return {
-        "symbol": symbol,
-        "tf_s": int(tf_s),
-        "open_time_ms": int(open_ms),
-        "close_time_ms": int(close_ms),
-        "o": bar.get("o"),
-        "h": bar.get("h"),
-        "low": bar.get("l"),
-        "c": bar.get("c"),
-        "v": bar.get("v"),
-        "complete": bool(complete),
-        "src": str(source),
-        "event_ts": int(close_ms) if complete else None,
-    }
-
-
-def _resolve_cfg_path(path: str | None, config_path: str | None) -> str | None:
-    if not path or not isinstance(path, str):
-        return None
-    if os.path.isabs(path):
-        return path
-    if config_path:
-        base = os.path.dirname(os.path.abspath(config_path))
-        return os.path.join(base, path)
-    return os.path.abspath(path)
-
-
-def _sym_dir(symbol: str) -> str:
-    return symbol.replace("/", "_")
-
-
 def _list_symbols(data_root: str) -> list[str]:
     if not os.path.isdir(data_root):
         return []
@@ -301,306 +139,6 @@ def _list_symbols(data_root: str) -> list[str]:
             sym = name.replace("_", "/")
             out.append(sym)
     return out
-
-
-def _list_parts(data_root: str, symbol: str, tf_s: int) -> list[str]:
-    d = os.path.join(data_root, _sym_dir(symbol), f"tf_{tf_s}")
-    if not os.path.isdir(d):
-        return []
-    parts = [
-        os.path.join(d, x)
-        for x in os.listdir(d)
-        if x.startswith("part-") and x.endswith(".jsonl")
-    ]
-    parts.sort()
-    return parts
-
-
-def _read_jsonl_filtered(
-    paths: list[str],
-    since_open_ms: int | None,
-    to_open_ms: int | None,
-    limit: int,
-) -> list[dict[str, Any]]:
-    """Читає JSONL у хронологічному порядку, повертає останні limit елементів після фільтрації."""
-    buf: deque[dict[str, Any]] = deque(maxlen=max(1, limit))
-    for p in paths:
-        try:
-            with open(p, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except Exception:
-                        continue
-
-                    open_ms = obj.get("open_time_ms")
-                    if not isinstance(open_ms, int):
-                        continue
-
-                    if since_open_ms is not None and open_ms <= since_open_ms:
-                        continue
-                    if to_open_ms is not None and open_ms > to_open_ms:
-                        continue
-
-                    buf.append(obj)
-        except FileNotFoundError:
-            continue
-
-    out = list(buf)
-    out.sort(key=lambda x: x.get("open_time_ms", 0))
-    return out
-
-
-def _iter_lines_reverse(path: str):
-    try:
-        with open(path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            pos = f.tell()
-            buf = b""
-            chunk = 8192
-            while pos > 0:
-                step = min(chunk, pos)
-                pos -= step
-                f.seek(pos)
-                buf = f.read(step) + buf
-                while b"\n" in buf:
-                    idx = buf.rfind(b"\n")
-                    line = buf[idx + 1 :]
-                    buf = buf[:idx]
-                    yield line
-            if buf:
-                yield buf
-    except Exception:
-        return
-
-
-def _read_jsonl_tail_filtered(
-    paths: list[str],
-    since_open_ms: int | None,
-    to_open_ms: int | None,
-    limit: int,
-) -> list[dict[str, Any]]:
-    if limit <= 0:
-        return []
-    out: list[dict[str, Any]] = []
-    for p in reversed(paths):
-        for raw in _iter_lines_reverse(p):
-            if len(out) >= limit:
-                break
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                obj = json.loads(raw.decode("utf-8"))
-            except Exception:
-                continue
-            open_ms = obj.get("open_time_ms")
-            if not isinstance(open_ms, int):
-                continue
-            if to_open_ms is not None and open_ms > to_open_ms:
-                continue
-            if since_open_ms is not None and open_ms <= since_open_ms:
-                out.reverse()
-                return out
-            out.append(obj)
-        if len(out) >= limit:
-            break
-    out.reverse()
-    return out
-
-
-def _read_last_jsonl(path: str) -> dict[str, Any] | None:
-    last_obj: dict[str, Any] | None = None
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except Exception:
-                    continue
-                open_ms = obj.get("open_time_ms")
-                if not isinstance(open_ms, int):
-                    continue
-                last_obj = obj
-    except FileNotFoundError:
-        return None
-    return last_obj
-
-
-def _bars_to_lwc(bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Перетворює канонічний формат у формат Lightweight Charts."""
-    out: list[dict[str, Any]] = []
-    for raw in bars:
-        b = normalize_bar(raw, mode="incl")
-        t = b["open_time_ms"] // 1000
-        low_val = b.get("low", b.get("l"))
-        complete = bool(b.get("complete", True))
-        item = {
-            "time": t,
-            "open": float(b["o"]),
-            "high": float(b["h"]),
-            "low": float(low_val),
-            "close": float(b["c"]),
-            "volume": float(b.get("v", 0.0)),
-            "open_time_ms": int(b["open_time_ms"]),
-            "close_time_ms": int(b.get("close_time_ms", b["open_time_ms"]))
-            if "close_time_ms" in b
-            else None,
-            "tf_s": int(b["tf_s"]),
-            "src": str(b.get("src", "")),
-            "complete": complete,
-        }
-        if complete and "close_time_ms" in b:
-            item["event_ts"] = int(b["close_time_ms"])
-        if "last_price" in b:
-            try:
-                item["last_price"] = float(b["last_price"])
-            except Exception:
-                pass
-        if "last_tick_ts" in b:
-            try:
-                item["last_tick_ts"] = int(b["last_tick_ts"])
-            except Exception:
-                pass
-        out.append(item)
-    return out
-
-
-def _bar_to_update_event(symbol: str, bar: dict[str, Any]) -> dict[str, Any]:
-    complete = bool(bar.get("complete", True))
-    return {
-        "key": {
-            "symbol": symbol,
-            "tf_s": int(bar.get("tf_s", 0)),
-            "open_ms": int(bar.get("open_time_ms", 0)),
-        },
-        "bar": bar,
-        "complete": complete,
-        "source": str(bar.get("src", "")),
-        "event_ts": bar.get("event_ts") if complete else None,
-    }
-
-
-def _digest_bar(bar: dict[str, Any]) -> str:
-    payload = {
-        "open_time_ms": bar.get("open_time_ms"),
-        "close_time_ms": bar.get("close_time_ms"),
-        "o": bar.get("open"),
-        "h": bar.get("high"),
-        "low": bar.get("low"),
-        "c": bar.get("close"),
-        "v": bar.get("volume"),
-        "complete": bar.get("complete"),
-        "src": bar.get("src"),
-        "event_ts": bar.get("event_ts"),
-        "last_price": bar.get("last_price"),
-        "last_tick_ts": bar.get("last_tick_ts"),
-    }
-    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def _next_seq_for_event(key: tuple[str, int, int], digest: str) -> int | None:
-    global _updates_seq
-    with _updates_lock:
-        prev = _updates_last_digest.get(key)
-        if prev == digest:
-            return None
-        _updates_last_digest[key] = digest
-        _updates_seq += 1
-        return _updates_seq
-
-
-def _current_seq() -> int:
-    with _updates_lock:
-        return _updates_seq
-
-
-def _disk_last_open_ms(data_root: str, symbol: str, tf_s: int) -> int | None:
-    parts = _list_parts(data_root, symbol, tf_s)
-    if not parts:
-        return None
-    last_obj = _read_last_jsonl(parts[-1])
-    if not last_obj:
-        return None
-    open_ms = last_obj.get("open_time_ms")
-    return int(open_ms) if isinstance(open_ms, int) else None
-
-
-def _disk_last_mtime_ms(data_root: str, symbol: str, tf_s: int) -> int | None:
-    parts = _list_parts(data_root, symbol, tf_s)
-    if not parts:
-        return None
-    try:
-        ts = os.path.getmtime(parts[-1])
-    except Exception:
-        return None
-    return int(ts * 1000)
-
-
-def _validate_event(ev: dict[str, Any], tf_allowlist: set[int]) -> list[str]:
-    warnings: list[str] = []
-    key = ev.get("key") or {}
-    bar = ev.get("bar") or {}
-    symbol = key.get("symbol") or bar.get("symbol")
-    if not symbol:
-        warnings.append("missing_symbol")
-    tf_s = key.get("tf_s") if key.get("tf_s") is not None else bar.get("tf_s")
-    if not isinstance(tf_s, int) or tf_s not in tf_allowlist:
-        warnings.append("tf_not_allowed")
-    open_ms = key.get("open_ms") if key.get("open_ms") is not None else bar.get("open_time_ms")
-    close_ms = bar.get("close_time_ms")
-    if not isinstance(open_ms, int) or not isinstance(close_ms, int):
-        warnings.append("time_not_int")
-    if isinstance(open_ms, int) and isinstance(tf_s, int) and isinstance(close_ms, int):
-        if close_ms != open_ms + tf_s * 1000 - 1:
-            warnings.append("close_time_invalid")
-    src = ev.get("source") if ev.get("source") is not None else bar.get("src")
-    if not isinstance(src, str) or src not in SOURCE_ALLOWLIST:
-        warnings.append("source_not_allowed")
-    complete = ev.get("complete") if ev.get("complete") is not None else bar.get("complete")
-    if not isinstance(complete, bool):
-        warnings.append("complete_not_bool")
-    if complete is True:
-        event_ts = ev.get("event_ts") if ev.get("event_ts") is not None else bar.get("event_ts")
-        if not isinstance(event_ts, int) or event_ts != close_ms:
-            warnings.append("event_ts_invalid")
-        if isinstance(src, str) and src not in FINAL_SOURCES:
-            warnings.append("final_source_not_allowed")
-    return warnings
-
-
-def _validate_bar_lwc(bar: dict[str, Any], tf_allowlist: set[int]) -> list[str]:
-    warnings: list[str] = []
-    tf_s = bar.get("tf_s")
-    if not isinstance(tf_s, int) or tf_s not in tf_allowlist:
-        warnings.append("tf_not_allowed")
-    open_ms = bar.get("open_time_ms")
-    close_ms = bar.get("close_time_ms")
-    if not isinstance(open_ms, int) or not isinstance(close_ms, int):
-        warnings.append("time_not_int")
-    if isinstance(open_ms, int) and isinstance(tf_s, int) and isinstance(close_ms, int):
-        if close_ms != open_ms + tf_s * 1000 - 1:
-            warnings.append("close_time_invalid")
-    src = bar.get("src")
-    if not isinstance(src, str) or src not in SOURCE_ALLOWLIST:
-        warnings.append("source_not_allowed")
-    complete = bar.get("complete")
-    if not isinstance(complete, bool):
-        warnings.append("complete_not_bool")
-    if complete is True:
-        event_ts = bar.get("event_ts")
-        if not isinstance(event_ts, int) or event_ts != close_ms:
-            warnings.append("event_ts_invalid")
-        if isinstance(src, str) and src not in FINAL_SOURCES:
-            warnings.append("final_source_not_allowed")
-    return warnings
 
 
 def _sample_items(items: list[Any], full_limit: int = 2000, head: int = 50, tail: int = 50) -> list[Any]:
@@ -896,8 +434,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if config_path:
             cfg = _load_cfg_cached(config_path)
 
-        tf_allowlist = _tf_allowlist_from_cfg(cfg)
-        preview_allowlist = _preview_tf_allowlist_from_cfg(cfg)
+        tf_allowlist = tf_allowlist_from_cfg(cfg)
+        preview_allowlist = preview_tf_allowlist_from_cfg(cfg)[0]
 
         if uds is None:
             self._bad("uds_not_available")

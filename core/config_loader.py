@@ -66,3 +66,116 @@ def env_str(key: str) -> Optional[str]:
         return None
     value = str(value).strip()
     return value or None
+
+
+# ── SSOT-допустимі TF (Правило №7) ────────────────────────────────
+
+DEFAULT_TF_ALLOWLIST: set[int] = {300, 900, 1800, 3600, 14400, 86400}
+DEFAULT_PREVIEW_TF_ALLOWLIST: set[int] = {60, 180}
+MAX_EVENTS_PER_RESPONSE: int = 500
+
+
+def tf_allowlist_from_cfg(cfg: Dict[str, Any]) -> set[int]:
+    """Повертає набір дозволених TF (у секундах) з конфігу.
+
+    Пріоритет: tf_allowlist_s → (derived_tfs_s + broker_base_tfs_s) → DEFAULT.
+    Гарантує наявність M5=300 у derived/broker fallback.
+    """
+    raw = cfg.get("tf_allowlist_s")
+    out: list[int] = []
+    if isinstance(raw, list):
+        for item in raw:
+            try:
+                tf_s = int(item)
+            except Exception:
+                continue
+            if tf_s > 0:
+                out.append(tf_s)
+    if out:
+        return set(out)
+
+    derived = cfg.get("derived_tfs_s")
+    if isinstance(derived, list):
+        for item in derived:
+            try:
+                tf_s = int(item)
+            except Exception:
+                continue
+            if tf_s > 0:
+                out.append(tf_s)
+
+    broker_base = cfg.get("broker_base_tfs_s")
+    if isinstance(broker_base, list):
+        for item in broker_base:
+            try:
+                tf_s = int(item)
+            except Exception:
+                continue
+            if tf_s > 0:
+                out.append(tf_s)
+
+    if 300 not in out:
+        out.append(300)
+
+    if out:
+        return set(out)
+
+    return set(DEFAULT_TF_ALLOWLIST)
+
+
+def preview_tf_allowlist_from_cfg(cfg: Dict[str, Any]) -> tuple[set[int], str]:
+    """Повертає набір дозволених preview TF (у секундах) і мітку джерела.
+
+    Пріоритет: tf_preview_allowlist_s → preview_tick_tfs_s → DEFAULT.
+    Returns:
+        (set_of_tf_s, source_label) де source = 'config' | 'default'.
+    """
+    raw = cfg.get("tf_preview_allowlist_s")
+    out: list[int] = []
+    if isinstance(raw, list):
+        for item in raw:
+            try:
+                tf_s = int(item)
+            except Exception:
+                continue
+            if tf_s > 0:
+                out.append(tf_s)
+    if out:
+        return set(out), "config"
+
+    raw = cfg.get("preview_tick_tfs_s")
+    out = []
+    if isinstance(raw, list):
+        for item in raw:
+            try:
+                tf_s = int(item)
+            except Exception:
+                continue
+            if tf_s > 0:
+                out.append(tf_s)
+    if out:
+        return set(out), "config"
+
+    return set(DEFAULT_PREVIEW_TF_ALLOWLIST), "default"
+
+
+def min_coldload_bars_from_cfg(cfg: Dict[str, Any]) -> dict[int, int]:
+    """Повертає мінімальну кількість барів для coldload за TF.
+
+    Читає cfg["min_coldload_bars_by_tf_s"] → {tf_s: min_n}.
+    Порожній dict якщо не задано.
+    """
+    raw = cfg.get("min_coldload_bars_by_tf_s")
+    out: dict[int, int] = {}
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            try:
+                tf_s = int(k)
+                min_n = int(v)
+            except Exception:
+                continue
+            if tf_s > 0 and min_n > 0:
+                out[tf_s] = min_n
+    if out:
+        return out
+    return {}

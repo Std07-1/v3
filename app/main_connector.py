@@ -13,6 +13,7 @@ from core.config_loader import pick_config_path
 from app.composition import ConfigError, build_connector
 from app.lifecycle import run_with_shutdown
 from runtime.ingest.market_calendar import MarketCalendar
+from runtime.ingest.tick_common import calendar_from_group
 from runtime.store.redis_snapshot import init_redis_snapshot
 
 
@@ -46,29 +47,6 @@ def _load_retry_config(config_path: str) -> tuple[int, int, int]:
         wake_ahead_s = 0
 
     return base_delay_s, max_delay_s, wake_ahead_s
-
-
-def _calendar_from_group(group_cfg: dict) -> Optional[MarketCalendar]:
-    try:
-        daily_breaks_raw = group_cfg.get("market_daily_breaks", [])
-        daily_breaks = tuple(
-            (str(pair[0]), str(pair[1]))
-            for pair in daily_breaks_raw
-            if isinstance(pair, (list, tuple)) and len(pair) >= 2
-        )
-        return MarketCalendar(
-            enabled=True,
-            weekend_close_dow=int(group_cfg["market_weekend_close_dow"]),
-            weekend_close_hm=str(group_cfg["market_weekend_close_hm"]),
-            weekend_open_dow=int(group_cfg["market_weekend_open_dow"]),
-            weekend_open_hm=str(group_cfg["market_weekend_open_hm"]),
-            daily_break_start_hm=str(group_cfg["market_daily_break_start_hm"]),
-            daily_break_end_hm=str(group_cfg["market_daily_break_end_hm"]),
-            daily_break_enabled=True,
-            daily_breaks=daily_breaks,
-        )
-    except Exception:
-        return None
 
 
 def _next_open_ms(calendar: MarketCalendar, now_ms: int) -> Optional[int]:
@@ -109,7 +87,7 @@ def _calendar_sleep_s(config_path: str, now_ms: int, wake_ahead_s: int) -> Optio
         group_cfg = calendar_by_group.get(group)
         if not isinstance(group_cfg, dict):
             continue
-        cal = _calendar_from_group(group_cfg)
+        cal = calendar_from_group(group_cfg)
         if cal is not None:
             calendars.append(cal)
 

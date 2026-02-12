@@ -4,13 +4,20 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Iterable
+from typing import Any, Dict, Optional
 
 from env_profile import load_env_secrets
-from core.config_loader import pick_config_path, load_system_config, env_str
+from core.config_loader import pick_config_path, load_system_config
 from core.buckets import bucket_start_ms as _bucket_start_ms
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.tick_agg import TickAggregator
+from runtime.ingest.tick_common import (
+    pick_tick_channel,
+    symbols_from_cfg,
+    build_symbol_aliases,
+    to_ms,
+    calendar_from_group,
+)
 from core.model.bars import CandleBar
 from runtime.store.redis_spec import resolve_redis_spec
 from runtime.store.uds import build_uds_from_config
@@ -88,24 +95,7 @@ def _setup_logging(verbose: bool = False) -> None:
     )
 
 
-def _pick_tick_channel(cfg: dict[str, Any] | None = None) -> Optional[str]:
-    """Канал tick: config.json > ENV > legacy ENV."""
-    if cfg:
-        channels = cfg.get("channels")
-        if isinstance(channels, dict):
-            ch = channels.get("price_tick")
-            if ch:
-                return str(ch)
-    channel = env_str("FXCM_PRICE_TICK_CHANNEL")
-    if channel:
-        return channel
-    legacy = env_str("FXCM_PRICE_SNAPSHOT_CHANNEL")
-    if legacy:
-        logging.warning(
-            "TickPreview: FXCM_PRICE_TICK_CHANNEL не заданий, fallback до FXCM_PRICE_SNAPSHOT_CHANNEL"
-        )
-        return legacy
-    return None
+
 
 
 def _parse_preview_cfg(cfg: dict[str, Any]) -> PreviewConfig:
@@ -126,7 +116,7 @@ def _parse_preview_cfg(cfg: dict[str, Any]) -> PreviewConfig:
     symbols: list[str] = []
     if isinstance(symbols_raw, list):
         symbols = [str(x) for x in symbols_raw if str(x).strip()]
-    channel = _pick_tick_channel(cfg)
+    channel = pick_tick_channel(cfg)
     return PreviewConfig(
         enabled=enabled,
         tfs=tfs,
@@ -137,64 +127,7 @@ def _parse_preview_cfg(cfg: dict[str, Any]) -> PreviewConfig:
     )
 
 
-def _symbols_from_cfg(cfg: dict[str, Any]) -> list[str]:
-    raw = cfg.get("symbols")
-    if isinstance(raw, list) and raw:
-        out = [str(x) for x in raw if str(x).strip()]
-        if out:
-            return out
-    symbol = cfg.get("symbol")
-    return [str(symbol)] if symbol else []
 
-
-def _build_symbol_aliases(symbols: Iterable[str]) -> dict[str, str]:
-    aliases: dict[str, str] = {}
-    for sym in symbols:
-        canon = str(sym).strip()
-        if not canon:
-            continue
-        aliases[canon] = canon
-        aliases[canon.replace("/", "")] = canon
-        aliases[canon.replace("/", "_")] = canon
-    return aliases
-
-
-def _to_ms(raw: Any) -> Optional[int]:
-    if raw is None:
-        return None
-    try:
-        value = float(raw)
-    except Exception:
-        return None
-    if value <= 0:
-        return None
-    if value < 100_000_000_000:
-        value *= 1000.0
-    return int(value)
-
-
-def _calendar_from_group(group_cfg: dict) -> Optional[MarketCalendar]:
-    """Побудова MarketCalendar з config group (аналог main_connector)."""
-    try:
-        daily_breaks_raw = group_cfg.get("market_daily_breaks", [])
-        daily_breaks = tuple(
-            (str(pair[0]), str(pair[1]))
-            for pair in daily_breaks_raw
-            if isinstance(pair, (list, tuple)) and len(pair) >= 2
-        )
-        return MarketCalendar(
-            enabled=True,
-            weekend_close_dow=int(group_cfg["market_weekend_close_dow"]),
-            weekend_close_hm=str(group_cfg["market_weekend_close_hm"]),
-            weekend_open_dow=int(group_cfg["market_weekend_open_dow"]),
-            weekend_open_hm=str(group_cfg["market_weekend_open_hm"]),
-            daily_break_start_hm=str(group_cfg.get("market_daily_break_start_hm", "00:00")),
-            daily_break_end_hm=str(group_cfg.get("market_daily_break_end_hm", "00:00")),
-            daily_break_enabled=True,
-            daily_breaks=daily_breaks,
-        )
-    except Exception:
-        return None
 
 
 def _pick_price(payload: dict[str, Any]) -> Optional[float]:
@@ -248,7 +181,7 @@ class TickPreviewWorker:
         # Forward-gap detection state
         self._gap_warn_last_ts: Dict[tuple[str, int], float] = {}
         base_symbols = symbols
-        self._symbol_aliases = _build_symbol_aliases(base_symbols)
+        self._symbol_aliases = build_symbol_aliases(base_symbols)
         self._symbol_allowlist = set(base_symbols)
         self._calendars: Dict[str, MarketCalendar] = calendars or {}
         self._cal_drop_total: int = 0
@@ -347,11 +280,11 @@ class TickPreviewWorker:
         if self._symbol_allowlist and symbol not in self._symbol_allowlist:
             self._inc("ticks_dropped_symbol")
             return
-        tick_ts_ms = _to_ms(payload.get("tick_ts"))
+        tick_ts_ms = to_ms(payload.get("tick_ts"))
         if tick_ts_ms is None:
-            tick_ts_ms = _to_ms(payload.get("tick_ts_ms"))
+            tick_ts_ms = to_ms(payload.get("tick_ts_ms"))
         if tick_ts_ms is None:
-            tick_ts_ms = _to_ms(payload.get("snap_ts"))
+            tick_ts_ms = to_ms(payload.get("snap_ts"))
         if tick_ts_ms is None:
             self._inc("ticks_dropped_ts")
             return
@@ -529,7 +462,7 @@ def main() -> int:
 
     # --- Build per-symbol calendars ---
     calendars: Dict[str, MarketCalendar] = {}
-    all_symbols = preview_cfg.symbols or _symbols_from_cfg(cfg)
+    all_symbols = preview_cfg.symbols or symbols_from_cfg(cfg)
     cal_groups = cfg.get("market_calendar_symbol_groups", {})
     cal_by_group = cfg.get("market_calendar_by_group", {})
     if isinstance(cal_groups, dict) and isinstance(cal_by_group, dict) and bool(cfg.get("calendar_gate_enabled", False)):
@@ -540,7 +473,7 @@ def main() -> int:
             grp_cfg = cal_by_group.get(grp_name)
             if not isinstance(grp_cfg, dict):
                 continue
-            cal = _calendar_from_group(grp_cfg)
+            cal = calendar_from_group(grp_cfg)
             if cal is not None:
                 calendars[sym] = cal
         logging.info("TickPreview: calendar gate для %d/%d символів", len(calendars), len(all_symbols))

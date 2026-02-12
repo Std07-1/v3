@@ -10,6 +10,10 @@ from typing import Any, Optional
 
 from core.model.bars import CandleBar
 from core.time_geom import normalize_bar
+from core.config_loader import (
+    tf_allowlist_from_cfg, preview_tf_allowlist_from_cfg, min_coldload_bars_from_cfg,
+    DEFAULT_TF_ALLOWLIST, DEFAULT_PREVIEW_TF_ALLOWLIST, MAX_EVENTS_PER_RESPONSE,
+)
 
 from runtime.obs_60s import Obs60s
 from runtime.store.layers.disk_layer import DiskLayer
@@ -33,11 +37,8 @@ except Exception:
     Logging.warning("UDS: redis бібліотека недоступна, RedisLayer вимкнено")
 
 
-DEFAULT_TF_ALLOWLIST = {300, 900, 1800, 3600, 14400, 86400}
-DEFAULT_PREVIEW_TF_ALLOWLIST = {60, 180}
 SOURCE_ALLOWLIST = {"history", "derived", "history_agg", ""}
 FINAL_SOURCES = {"history", "derived", "history_agg"}
-MAX_EVENTS_PER_RESPONSE = 500
 REDIS_SOCKET_TIMEOUT_S = 0.4
 PREVIEW_CURR_TTL_S = 120
 PREVIEW_TAIL_RETAIN = 2000
@@ -1531,94 +1532,8 @@ def _load_cfg(config_path: str) -> dict[str, Any]:
         return {}
 
 
-def _tf_allowlist_from_cfg(cfg: dict[str, Any]) -> set[int]:
-    raw = cfg.get("tf_allowlist_s")
-    out: list[int] = []
-    if isinstance(raw, list):
-        for item in raw:
-            try:
-                tf_s = int(item)
-            except Exception:
-                continue
-            if tf_s > 0:
-                out.append(tf_s)
-    if out:
-        return set(out)
-
-    derived = cfg.get("derived_tfs_s")
-    if isinstance(derived, list):
-        for item in derived:
-            try:
-                tf_s = int(item)
-            except Exception:
-                continue
-            if tf_s > 0:
-                out.append(tf_s)
-
-    broker_base = cfg.get("broker_base_tfs_s")
-    if isinstance(broker_base, list):
-        for item in broker_base:
-            try:
-                tf_s = int(item)
-            except Exception:
-                continue
-            if tf_s > 0:
-                out.append(tf_s)
-
-    if 300 not in out:
-        out.append(300)
-
-    if out:
-        return set(out)
-
-    return set(DEFAULT_TF_ALLOWLIST)
 
 
-def _preview_tf_allowlist_from_cfg(cfg: dict[str, Any]) -> tuple[set[int], str]:
-    raw = cfg.get("tf_preview_allowlist_s")
-    out: list[int] = []
-    if isinstance(raw, list):
-        for item in raw:
-            try:
-                tf_s = int(item)
-            except Exception:
-                continue
-            if tf_s > 0:
-                out.append(tf_s)
-    if out:
-        return set(out), "config"
-
-    raw = cfg.get("preview_tick_tfs_s")
-    out = []
-    if isinstance(raw, list):
-        for item in raw:
-            try:
-                tf_s = int(item)
-            except Exception:
-                continue
-            if tf_s > 0:
-                out.append(tf_s)
-    if out:
-        return set(out), "config"
-
-    return set(DEFAULT_PREVIEW_TF_ALLOWLIST), "default"
-
-
-def _min_coldload_bars_from_cfg(cfg: dict[str, Any]) -> dict[int, int]:
-    raw = cfg.get("min_coldload_bars_by_tf_s")
-    out: dict[int, int] = {}
-    if isinstance(raw, dict):
-        for k, v in raw.items():
-            try:
-                tf_s = int(k)
-                min_n = int(v)
-            except Exception:
-                continue
-            if tf_s > 0 and min_n > 0:
-                out[tf_s] = min_n
-    if out:
-        return out
-    return {}
 
 
 def _bar_is_complete(bar: dict[str, Any]) -> bool:
@@ -1926,9 +1841,9 @@ def build_uds_from_config(
                 ",".join(spec_boot.mismatch_fields) if spec_boot.mismatch_fields else "",
             )
 
-    tf_allowlist = _tf_allowlist_from_cfg(cfg)
-    preview_tf_allowlist, preview_tf_allowlist_source = _preview_tf_allowlist_from_cfg(cfg)
-    min_coldload_bars = _min_coldload_bars_from_cfg(cfg)
+    tf_allowlist = tf_allowlist_from_cfg(cfg)
+    preview_tf_allowlist, preview_tf_allowlist_source = preview_tf_allowlist_from_cfg(cfg)
+    min_coldload_bars = min_coldload_bars_from_cfg(cfg)
     redis_layer = _redis_layer_from_cfg(cfg)
     updates_bus = _updates_bus_from_cfg(cfg)
     spec_for_status = resolve_redis_spec(cfg, role="uds_status", log=False)
