@@ -69,8 +69,13 @@ flowchart TD
     D --> F[fetch_last_n_tf tf=300 (tail)]
     E --> F
     F --> G[ingest M5 (dedup module)]
-    G --> H[filter flat bars (flat_filter)]
-    H --> I[derive 15m/30m/1h (derive module)]
+    G --> H{calendar pause?}
+    H -->|trading + flat| Skip[skip flat bar]
+    H -->|pause + flat| Accept_PF[accept + ext:calendar_pause_flat]
+    H -->|pause + non-flat| Anomaly[WARN anomaly + accept]
+    H -->|trading + non-flat| I[derive 15m/30m/1h (derive module)]
+    Accept_PF --> I
+    Anomaly --> I
     I --> J[commit_final_bar через UDS]
 ```
 
@@ -201,7 +206,7 @@ v3/
 |   `-- time_geom.py             # normalize_bar
 |-- config.json                  # SSOT конфіг (один файл, без profile branching)
 |-- env_profile.py               # завантаження .env → секрети (load_env_secrets)
-|-- .env                         # секрети (FXCM credentials + channels + Redis override)
+|-- .env                         # тільки секрети (FXCM credentials). Канали/Redis — config.json
 |-- ui_chart_v3/
 |   |-- static/
 |   |   |-- app.js               # клієнт (API_BASE + ?api_base= override)

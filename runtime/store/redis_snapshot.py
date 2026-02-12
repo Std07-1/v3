@@ -225,7 +225,7 @@ class RedisSnapshotWriter:
             tail_key = self._key("ohlcv", "tail", key_symbol, str(tf_s))
             self._write_json(tail_key, tail_payload, self._ttl(tf_s))
 
-        logging.info(
+        logging.debug(
             "REDIS_SNAP_PRIME ok symbol=%s tf_s=%s count=%s key=%s",
             symbol,
             tf_s,
@@ -366,7 +366,7 @@ def build_redis_snapshot_writer(config_path: str) -> Optional[RedisSnapshotWrite
     if redis_lib is None:
         logging.warning("Redis: пакет redis не встановлено, snapshots вимкнено")
         return None
-    spec = resolve_redis_spec(cfg, role="snap_writer")
+    spec = resolve_redis_spec(cfg, role="snap_writer", log=False)
     if spec is None:
         return None
 
@@ -379,7 +379,7 @@ def build_redis_snapshot_writer(config_path: str) -> Optional[RedisSnapshotWrite
     if cached is not None:
         return cached
 
-    logging.info(
+    logging.debug(
         "UDS_REDIS_SPEC role=snap_writer host=%s port=%s db=%s namespace=%s",
         spec.host,
         spec.port,
@@ -434,7 +434,7 @@ def init_redis_snapshot(config_path: str, log_detail: bool = True) -> bool:
         logging.warning("REDIS_INIT_SKIP reason=redis_package_missing")
         return False
 
-    spec = resolve_redis_spec(cfg, role="snap_init")
+    spec = resolve_redis_spec(cfg, role="snap_init", log=False)
     if spec is None:
         logging.info("REDIS_INIT_SKIP reason=redis_disabled")
         return False
@@ -444,7 +444,7 @@ def init_redis_snapshot(config_path: str, log_detail: bool = True) -> bool:
     tail_n_by_tf_s = _parse_int_map(raw.get("tail_n_by_tf_s")) if isinstance(raw, dict) else {}
 
     if log_detail:
-        logging.info(
+        logging.debug(
             "REDIS_INIT_START enabled=1 host=%s port=%d db=%d namespace=%s",
             spec.host,
             spec.port,
@@ -465,7 +465,7 @@ def init_redis_snapshot(config_path: str, log_detail: bool = True) -> bool:
 
     ok, err = writer.ping()
     if log_detail:
-        logging.info(
+        logging.debug(
             "REDIS_PING ok=%s host=%s port=%d db=%d namespace=%s err=%s",
             bool(ok),
             spec.host,

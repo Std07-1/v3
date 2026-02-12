@@ -95,7 +95,7 @@ let updatesInFlight = false;
 let updatesEmptyStreak = 0;
 const UPDATES_BASE_FINAL_MS = 3000;
 const UPDATES_BASE_PREVIEW_MS = 1000;
-const UPDATES_BACKOFF_PREVIEW_MS = [1000, 2000, 5000];
+const UPDATES_BACKOFF_PREVIEW_MS = [1000, 1000, 1000];
 const UPDATES_BACKOFF_FINAL_MS = [3000, 5000, 8000];
 let updatesNextDelayMs = null;
 
@@ -1486,11 +1486,17 @@ async function loadBarsFull() {
   setStatus(`ok · tf=${tf}s · bars=${bars.length}`);
 }
 
+// Максимальний дозволений forward-gap (у барах) перш ніж тригерити reload
+const FORWARD_GAP_MAX_BARS = 3;
+let _forwardGapReloadPending = false;
+
 function applyUpdates(events) {
   if (!Array.isArray(events) || events.length === 0) return 0;
   let applied = 0;
   let lastBar = null;
   let maxSeq = updatesSeqCursor;
+  const tf = readSelectedTf();
+  const tfMs = tf * 1000;
   const sorted = events.slice().sort((a, b) => (a.seq || 0) - (b.seq || 0));
   for (const ev of sorted) {
     if (!ev || !ev.bar) continue;
@@ -1498,6 +1504,21 @@ function applyUpdates(events) {
     if (!Number.isFinite(bar.open_time_ms)) continue;
     if (updatesSeqCursor != null && ev.seq != null && ev.seq <= updatesSeqCursor) {
       continue;
+    }
+    // Drop stale bars — заборона мутації минулого
+    if (lastOpenMs != null && bar.open_time_ms < lastOpenMs - tfMs) {
+      continue;
+    }
+    // Forward-gap guard: live не має права стартувати далеко попереду history
+    if (lastOpenMs != null && bar.open_time_ms > lastOpenMs + tfMs * FORWARD_GAP_MAX_BARS) {
+      if (!_forwardGapReloadPending) {
+        _forwardGapReloadPending = true;
+        const gapBars = Math.round((bar.open_time_ms - lastOpenMs) / tfMs);
+        console.warn('[FORWARD_GAP] reload', { barOpen: bar.open_time_ms, last: lastOpenMs, gapBars });
+        setStatus('forward_gap_reload');
+        loadBarsFull().then(() => { _forwardGapReloadPending = false; });
+      }
+      return applied;
     }
     const keySymbol = ev.key && ev.key.symbol ? String(ev.key.symbol) : (bar.symbol || elSymbol.value);
     const keyTf = ev.key && Number.isFinite(ev.key.tf_s) ? ev.key.tf_s : (Number.isFinite(bar.tf_s) ? bar.tf_s : null);

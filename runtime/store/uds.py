@@ -23,6 +23,8 @@ Logging = logging.getLogger("uds")
 
 _OBS = Obs60s("uds")
 
+_REDIS_SPEC_BOOT_LOGGED = False
+
 try:
     import redis as redis_lib  # type: ignore
     Logging.debug("UDS: redis бібліотека завантажена")
@@ -259,7 +261,7 @@ class UnifiedDataStore:
         redis_spec_mismatch: bool = False,
         redis_spec_mismatch_fields: Optional[list[str]] = None,
         preview_tf_allowlist: Optional[set[int]] = None,
-        preview_tf_allowlist_source: str = "fallback",
+        preview_tf_allowlist_source: str = "default",
         preview_curr_ttl_s: int = PREVIEW_CURR_TTL_S,
         preview_tail_retain: int = PREVIEW_TAIL_RETAIN,
         preview_updates_retain: int = PREVIEW_UPDATES_RETAIN,
@@ -285,7 +287,7 @@ class UnifiedDataStore:
         self._redis_spec_mismatch = bool(redis_spec_mismatch)
         self._redis_spec_mismatch_fields = list(redis_spec_mismatch_fields or [])
         self._preview_tf_allowlist = set(preview_tf_allowlist or DEFAULT_PREVIEW_TF_ALLOWLIST)
-        self._preview_allowlist_source = str(preview_tf_allowlist_source or "fallback")
+        self._preview_allowlist_source = str(preview_tf_allowlist_source or "default")
         self._preview_curr_ttl_s = int(preview_curr_ttl_s)
         self._preview_tail_retain = max(1, int(preview_tail_retain))
         self._preview_updates_retain = max(1, int(preview_updates_retain))
@@ -297,8 +299,8 @@ class UnifiedDataStore:
         self._preview_nomix_violation_reason: Optional[str] = None
         self._preview_nomix_violation_ts_ms: Optional[int] = None
         if self._preview_allowlist_source == "fallback":
-            Logging.warning(
-                "UDS: PREVIEW_TF_ALLOWLIST_FALLBACK tf_s=%s",
+            Logging.debug(
+                "UDS: preview_tf_allowlist_source=fallback tf_s=%s",
                 sorted(self._preview_tf_allowlist),
             )
 
@@ -1051,7 +1053,7 @@ class UnifiedDataStore:
         last_open_ms = self._disk.last_open_ms(symbol, tf_s)
         if last_open_ms is not None:
             self._wm_by_key[key] = last_open_ms
-            Logging.info(
+            Logging.debug(
                 "UDS: watermark ініціалізовано symbol=%s tf_s=%s wm_open_ms=%s source=disk_last_open_ms",
                 symbol,
                 tf_s,
@@ -1585,7 +1587,21 @@ def _preview_tf_allowlist_from_cfg(cfg: dict[str, Any]) -> tuple[set[int], str]:
                 out.append(tf_s)
     if out:
         return set(out), "config"
-    return set(DEFAULT_PREVIEW_TF_ALLOWLIST), "fallback"
+
+    raw = cfg.get("preview_tick_tfs_s")
+    out = []
+    if isinstance(raw, list):
+        for item in raw:
+            try:
+                tf_s = int(item)
+            except Exception:
+                continue
+            if tf_s > 0:
+                out.append(tf_s)
+    if out:
+        return set(out), "config"
+
+    return set(DEFAULT_PREVIEW_TF_ALLOWLIST), "default"
 
 
 def _min_coldload_bars_from_cfg(cfg: dict[str, Any]) -> dict[int, int]:
@@ -1755,7 +1771,7 @@ def _log_updates_result(result: UpdatesResult) -> None:
 def _redis_layer_from_cfg(cfg: dict[str, Any]) -> Optional[RedisLayer]:
     if redis_lib is None:
         return None
-    spec = resolve_redis_spec(cfg, role="read_layer")
+    spec = resolve_redis_spec(cfg, role="read_layer", log=False)
     if spec is None:
         return None
     client = redis_lib.Redis(
@@ -1852,7 +1868,7 @@ class _RedisUpdatesBus:
 def _updates_bus_from_cfg(cfg: dict[str, Any]) -> Optional[_RedisUpdatesBus]:
     if redis_lib is None:
         return None
-    spec = resolve_redis_spec(cfg, role="updates_bus")
+    spec = resolve_redis_spec(cfg, role="updates_bus", log=False)
     if spec is None:
         return None
     updates_cfg = cfg.get("updates")
@@ -1890,7 +1906,26 @@ def build_uds_from_config(
     role: str = "writer",
     writer_components: bool = False,
 ) -> UnifiedDataStore:
+    global _REDIS_SPEC_BOOT_LOGGED
     cfg = _load_cfg(config_path)
+
+    if not _REDIS_SPEC_BOOT_LOGGED:
+        _REDIS_SPEC_BOOT_LOGGED = True
+        spec_boot = resolve_redis_spec(cfg, role="boot", log=True)
+        if spec_boot is None:
+            Logging.info("REDIS_SPEC_EFF enabled=0")
+        else:
+            Logging.info(
+                "REDIS_SPEC_EFF enabled=1 host=%s port=%s db=%s namespace=%s source=%s mismatch=%s mismatch_fields=%s",
+                spec_boot.host,
+                spec_boot.port,
+                spec_boot.db,
+                spec_boot.namespace,
+                spec_boot.source,
+                int(bool(spec_boot.mismatch)),
+                ",".join(spec_boot.mismatch_fields) if spec_boot.mismatch_fields else "",
+            )
+
     tf_allowlist = _tf_allowlist_from_cfg(cfg)
     preview_tf_allowlist, preview_tf_allowlist_source = _preview_tf_allowlist_from_cfg(cfg)
     min_coldload_bars = _min_coldload_bars_from_cfg(cfg)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 from core.buckets import bucket_start_ms, tf_to_ms
 from core.model.bars import CandleBar
@@ -20,6 +20,7 @@ class _BucketState:
     low: float
     c: float
     v: float
+    ticks_n: int
 
 
 class TickAggregator:
@@ -79,6 +80,7 @@ class TickAggregator:
                 low=float(price),
                 c=float(price),
                 v=0.0,
+                ticks_n=1,
             )
             self._state[key] = state
             return self._to_bar(symbol, tf_s, state)
@@ -92,6 +94,7 @@ class TickAggregator:
 
         state.last_tick_ts_ms = int(tick_ts_ms)
         state.c = float(price)
+        state.ticks_n += 1
         if price > state.h:
             state.h = float(price)
         if price < state.low:
@@ -99,6 +102,7 @@ class TickAggregator:
         return self._to_bar(symbol, tf_s, state)
 
     def _to_bar(self, symbol: str, tf_s: int, state: _BucketState) -> CandleBar:
+        extensions: Dict[str, Any] = {"ticks_n": state.ticks_n}
         return CandleBar(
             symbol=str(symbol),
             tf_s=int(tf_s),
@@ -108,7 +112,8 @@ class TickAggregator:
             h=float(state.h),
             low=float(state.low),
             c=float(state.c),
-            v=float(state.v),
+            v=0.0,
             complete=False,
             src=self._source,
+            extensions=extensions,
         )

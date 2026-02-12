@@ -16,7 +16,14 @@ except Exception:
     redis_lib = None  # type: ignore
 
 
-def _pick_tick_channel() -> Optional[str]:
+def _pick_tick_channel(cfg: dict | None = None) -> Optional[str]:
+    """Канал tick: config.json > ENV > legacy ENV."""
+    if cfg:
+        channels = cfg.get("channels")
+        if isinstance(channels, dict):
+            ch = channels.get("price_tick")
+            if ch:
+                return str(ch)
     channel = env_str("FXCM_PRICE_TICK_CHANNEL")
     if channel:
         return channel
@@ -80,12 +87,18 @@ def main() -> int:
         print("redis бібліотека недоступна")
         return 2
 
-    channel = args.channel or _pick_tick_channel()
-    if not channel:
-        print("tick-канал не заданий (FXCM_PRICE_TICK_CHANNEL)")
-        return 2
-
     config_path = args.config if args.config else pick_config_path()
+    sim_cfg = None
+    try:
+        import json as _json
+        with open(config_path, 'r', encoding='utf-8') as _f:
+            sim_cfg = _json.load(_f)
+    except Exception:
+        pass
+    channel = args.channel or _pick_tick_channel(sim_cfg)
+    if not channel:
+        print("tick-канал не заданий (config.json channels.price_tick / FXCM_PRICE_TICK_CHANNEL)")
+        return 2
     redis_cfg = _load_redis_cfg(config_path)
     if redis_cfg is None:
         print("Redis вимкнено або конфіг недоступний")

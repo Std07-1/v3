@@ -2,17 +2,67 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Dict, Optional, Iterable
 
 from env_profile import load_env_secrets
 from core.config_loader import pick_config_path, load_system_config, env_str
+from core.buckets import bucket_start_ms as _bucket_start_ms
+from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.tick_agg import TickAggregator
+from core.model.bars import CandleBar
 from runtime.store.redis_spec import resolve_redis_spec
 from runtime.store.uds import build_uds_from_config
+
+
+# ---------------------------------------------------------------------------
+# M1→M3 деривація: 3m будується з 1m (не окремо з тиків)
+# ---------------------------------------------------------------------------
+class _M1toM3Buffer:
+    """Деривація M3 preview бару з накопичених M1 preview барів."""
+
+    def __init__(self):
+        # type: () -> None
+        self._completed = {}   # type: Dict[str, list]  # symbol -> list[CandleBar]
+        self._current = {}     # type: Dict[str, CandleBar]  # symbol -> CandleBar
+
+    def update(self, symbol, m1_bar):
+        # type: (str, CandleBar) -> Optional[CandleBar]
+        """Оновити з M1 баром. Повертає M3 CandleBar або None."""
+        prev = self._current.get(symbol)
+        if prev is not None and prev.open_time_ms != m1_bar.open_time_ms:
+            # M1 rollover — зберігаємо завершений M1
+            if symbol not in self._completed:
+                self._completed[symbol] = []
+            self._completed[symbol].append(prev)
+            self._completed[symbol] = self._completed[symbol][-6:]
+        self._current[symbol] = m1_bar
+
+        m3_ms = 180_000
+        m3_open = (m1_bar.open_time_ms // m3_ms) * m3_ms
+        all_bars = []  # type: list
+        for b in self._completed.get(symbol, []):
+            if m3_open <= b.open_time_ms < m3_open + m3_ms:
+                all_bars.append(b)
+        if m3_open <= m1_bar.open_time_ms < m3_open + m3_ms:
+            all_bars.append(m1_bar)
+        if not all_bars:
+            return None
+        return CandleBar(
+            symbol=symbol,
+            tf_s=180,
+            open_time_ms=m3_open,
+            close_time_ms=m3_open + m3_ms,
+            o=all_bars[0].o,
+            h=max(b.h for b in all_bars),
+            low=min(b.low for b in all_bars),
+            c=all_bars[-1].c,
+            v=0.0,
+            complete=False,
+            src="derived_m1",
+            extensions={"m1_count": len(all_bars)},
+        )
 
 try:
     import redis as redis_lib  # type: ignore
@@ -38,7 +88,14 @@ def _setup_logging(verbose: bool = False) -> None:
     )
 
 
-def _pick_tick_channel() -> Optional[str]:
+def _pick_tick_channel(cfg: dict[str, Any] | None = None) -> Optional[str]:
+    """Канал tick: config.json > ENV > legacy ENV."""
+    if cfg:
+        channels = cfg.get("channels")
+        if isinstance(channels, dict):
+            ch = channels.get("price_tick")
+            if ch:
+                return str(ch)
     channel = env_str("FXCM_PRICE_TICK_CHANNEL")
     if channel:
         return channel
@@ -69,7 +126,7 @@ def _parse_preview_cfg(cfg: dict[str, Any]) -> PreviewConfig:
     symbols: list[str] = []
     if isinstance(symbols_raw, list):
         symbols = [str(x) for x in symbols_raw if str(x).strip()]
-    channel = _pick_tick_channel()
+    channel = _pick_tick_channel(cfg)
     return PreviewConfig(
         enabled=enabled,
         tfs=tfs,
@@ -116,6 +173,30 @@ def _to_ms(raw: Any) -> Optional[int]:
     return int(value)
 
 
+def _calendar_from_group(group_cfg: dict) -> Optional[MarketCalendar]:
+    """Побудова MarketCalendar з config group (аналог main_connector)."""
+    try:
+        daily_breaks_raw = group_cfg.get("market_daily_breaks", [])
+        daily_breaks = tuple(
+            (str(pair[0]), str(pair[1]))
+            for pair in daily_breaks_raw
+            if isinstance(pair, (list, tuple)) and len(pair) >= 2
+        )
+        return MarketCalendar(
+            enabled=True,
+            weekend_close_dow=int(group_cfg["market_weekend_close_dow"]),
+            weekend_close_hm=str(group_cfg["market_weekend_close_hm"]),
+            weekend_open_dow=int(group_cfg["market_weekend_open_dow"]),
+            weekend_open_hm=str(group_cfg["market_weekend_open_hm"]),
+            daily_break_start_hm=str(group_cfg.get("market_daily_break_start_hm", "00:00")),
+            daily_break_end_hm=str(group_cfg.get("market_daily_break_end_hm", "00:00")),
+            daily_break_enabled=True,
+            daily_breaks=daily_breaks,
+        )
+    except Exception:
+        return None
+
+
 def _pick_price(payload: dict[str, Any]) -> Optional[float]:
     mid = payload.get("mid")
     if mid is not None:
@@ -149,19 +230,29 @@ class TickPreviewWorker:
         curr_ttl_s: int,
         symbols: list[str],
         channel: str,
+        calendars: Dict[str, MarketCalendar] | None = None,
     ) -> None:
         self._uds = uds
         self._tfs = [int(x) for x in tfs if int(x) > 0]
         self._publish_min_interval_ms = max(0, int(publish_min_interval_ms))
         self._curr_ttl_s = max(1, int(curr_ttl_s))
         self._channel = str(channel)
-        self._agg = TickAggregator(tf_allowlist=self._tfs, source="preview_tick")
+        # M3 деривація: M1 агрегуємо з тиків, M3 — з M1
+        self._derive_m3 = 180 in self._tfs and 60 in self._tfs
+        agg_tfs = [t for t in self._tfs if not (t == 180 and self._derive_m3)]
+        self._agg = TickAggregator(tf_allowlist=agg_tfs, source="preview_tick")
+        self._m3_buffer = _M1toM3Buffer() if self._derive_m3 else None
         self._last_tick_ts_ms: Dict[str, int] = {}
         self._last_pub_ms: Dict[tuple[str, int], int] = {}
         self._last_open_ms: Dict[tuple[str, int], int] = {}
+        # Forward-gap detection state
+        self._gap_warn_last_ts: Dict[tuple[str, int], float] = {}
         base_symbols = symbols
         self._symbol_aliases = _build_symbol_aliases(base_symbols)
         self._symbol_allowlist = set(base_symbols)
+        self._calendars: Dict[str, MarketCalendar] = calendars or {}
+        self._cal_drop_total: int = 0
+        self._cal_drop_last_warn_ts: float = 0.0
         self._stats: Dict[str, int] = {}
         self._stats_last_emit_ts = 0.0
         # "0 ticks loud" state
@@ -274,36 +365,91 @@ class TickPreviewWorker:
             self._inc("ticks_dropped_price")
             return
 
+        # Calendar gate: drop ticks during calendar pause
+        cal = self._calendars.get(symbol)
+        if cal is not None:
+            m1_open_ms = _bucket_start_ms(tick_ts_ms, 60_000, 0)
+            if not cal.is_trading_minute(m1_open_ms):
+                self._inc("ticks_dropped_calendar_closed")
+                self._cal_drop_total += 1
+                now_t = time.time()
+                if now_t - self._cal_drop_last_warn_ts >= 60.0:
+                    self._cal_drop_last_warn_ts = now_t
+                    logging.warning(
+                        "TICK_PREVIEW_CLOSED_DROP symbol=%s dropped_total=%d m1_open_ms=%d",
+                        symbol,
+                        self._cal_drop_total,
+                        m1_open_ms,
+                    )
+                return
+
         for tf_s in self._tfs:
+            # M3 деривація: пропускаємо M3 у TickAggregator, виводимо з M1
+            if tf_s == 180 and self._derive_m3:
+                continue
             bar = self._agg.update(symbol, tf_s, tick_ts_ms, price)
             if bar is None:
                 continue
-            key = (symbol, tf_s)
-            last_open = self._last_open_ms.get(key)
-            rollover = last_open is None or last_open != bar.open_time_ms
-            now_ms = int(time.time() * 1000)
-            last_pub = self._last_pub_ms.get(key)
-            allow_publish = rollover
-            if not allow_publish and last_pub is not None:
-                if now_ms - last_pub >= self._publish_min_interval_ms:
-                    allow_publish = True
-            if not allow_publish:
-                self._inc("preview_publish_throttled_total")
-                continue
-            try:
-                self._uds.publish_preview_bar(bar, ttl_s=self._curr_ttl_s)
-                self._last_pub_ms[key] = now_ms
-                self._last_open_ms[key] = bar.open_time_ms
-                self._inc("preview_publish_total")
-            except Exception as exc:
-                logging.warning(
-                    "TickPreview: publish помилка symbol=%s tf_s=%s err=%s",
-                    symbol,
-                    tf_s,
-                    exc,
-                )
-                self._inc("preview_publish_errors_total")
+            self._publish_bar(bar, symbol, tf_s)
+
+            # M1→M3 деривація: після кожного M1 оновлення будуємо M3
+            if tf_s == 60 and self._m3_buffer is not None:
+                m3_bar = self._m3_buffer.update(symbol, bar)
+                if m3_bar is not None:
+                    self._publish_bar(m3_bar, symbol, 180)
         self._maybe_emit_stats()
+
+    def _publish_bar(self, bar, symbol, tf_s):
+        # type: (CandleBar, str, int) -> None
+        """Публікація preview бару з forward-gap detection та throttling."""
+        key = (symbol, tf_s)
+        last_open = self._last_open_ms.get(key)
+        rollover = last_open is None or last_open != bar.open_time_ms
+        now_ms = int(time.time() * 1000)
+
+        # Forward-gap detection (degraded-but-loud)
+        if last_open is not None and rollover:
+            tf_ms = tf_s * 1000
+            gap_bars = (bar.open_time_ms - last_open) // tf_ms
+            if gap_bars > 1:
+                is_closed = False
+                cal = self._calendars.get(symbol)
+                if cal is not None:
+                    mid_ms = last_open + (bar.open_time_ms - last_open) // 2
+                    mid_bucket = _bucket_start_ms(mid_ms, 60_000, 0)
+                    is_closed = not cal.is_trading_minute(mid_bucket)
+                now_t = time.time()
+                gw_key = key
+                last_gw = self._gap_warn_last_ts.get(gw_key, 0.0)
+                if now_t - last_gw >= 60.0:
+                    self._gap_warn_last_ts[gw_key] = now_t
+                    level = logging.DEBUG if is_closed else logging.WARNING
+                    logging.log(
+                        level,
+                        "PREVIEW_GAP symbol=%s tf_s=%s gap_bars=%d last_open=%d tick_open=%d market_closed=%s",
+                        symbol, tf_s, gap_bars, last_open, bar.open_time_ms, is_closed,
+                    )
+                self._inc("preview_gap_total")
+
+        last_pub = self._last_pub_ms.get(key)
+        allow_publish = rollover
+        if not allow_publish and last_pub is not None:
+            if now_ms - last_pub >= self._publish_min_interval_ms:
+                allow_publish = True
+        if not allow_publish:
+            self._inc("preview_publish_throttled_total")
+            return
+        try:
+            self._uds.publish_preview_bar(bar, ttl_s=self._curr_ttl_s)
+            self._last_pub_ms[key] = now_ms
+            self._last_open_ms[key] = bar.open_time_ms
+            self._inc("preview_publish_total")
+        except Exception as exc:
+            logging.warning(
+                "TickPreview: publish помилка symbol=%s tf_s=%s err=%s",
+                symbol, tf_s, exc,
+            )
+            self._inc("preview_publish_errors_total")
 
     def run_forever(self, redis_client: Any) -> None:
         while True:
@@ -381,13 +527,36 @@ def main() -> int:
         writer_components=False,
     )
 
+    # --- Build per-symbol calendars ---
+    calendars: Dict[str, MarketCalendar] = {}
+    all_symbols = preview_cfg.symbols or _symbols_from_cfg(cfg)
+    cal_groups = cfg.get("market_calendar_symbol_groups", {})
+    cal_by_group = cfg.get("market_calendar_by_group", {})
+    if isinstance(cal_groups, dict) and isinstance(cal_by_group, dict) and bool(cfg.get("calendar_gate_enabled", False)):
+        for sym in all_symbols:
+            grp_name = cal_groups.get(sym)
+            if not grp_name:
+                continue
+            grp_cfg = cal_by_group.get(grp_name)
+            if not isinstance(grp_cfg, dict):
+                continue
+            cal = _calendar_from_group(grp_cfg)
+            if cal is not None:
+                calendars[sym] = cal
+        logging.info("TickPreview: calendar gate для %d/%d символів", len(calendars), len(all_symbols))
+
     worker = TickPreviewWorker(
         uds=uds,
         tfs=preview_cfg.tfs,
         publish_min_interval_ms=preview_cfg.publish_min_interval_ms,
         curr_ttl_s=preview_cfg.curr_ttl_s,
-        symbols=preview_cfg.symbols or _symbols_from_cfg(cfg),
+        symbols=all_symbols,
         channel=preview_cfg.channel,
+        calendars=calendars,
+    )
+    logging.info(
+        "TickPreview: tfs=%s derive_m3=%s symbols=%d",
+        preview_cfg.tfs, worker._derive_m3, len(all_symbols),
     )
 
     client = redis_lib.Redis(

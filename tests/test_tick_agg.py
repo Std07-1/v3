@@ -27,7 +27,8 @@ class TestTickAggregator(unittest.TestCase):
         self.assertEqual(bar1.h, price1)
         self.assertEqual(bar1.low, price1)
         self.assertEqual(bar1.c, price1)
-        self.assertEqual(bar1.v, 1.0)
+        self.assertEqual(bar1.v, 0.0)
+        self.assertEqual(bar1.extensions.get("ticks_n"), 1)
         self.assertFalse(bar1.complete)
         self.assertEqual(bar1.src, "preview_tick")
 
@@ -40,7 +41,8 @@ class TestTickAggregator(unittest.TestCase):
         self.assertEqual(bar2.h, price2)
         self.assertEqual(bar2.low, price1)
         self.assertEqual(bar2.c, price2)
-        self.assertEqual(bar2.v, 2.0)
+        self.assertEqual(bar2.v, 0.0)
+        self.assertEqual(bar2.extensions.get("ticks_n"), 2)
 
         price3 = 99.5
         bar3 = agg.update(symbol, tf_s, t0 + 20_000, price3)
@@ -51,7 +53,8 @@ class TestTickAggregator(unittest.TestCase):
         self.assertEqual(bar3.h, price2)
         self.assertEqual(bar3.low, price3)
         self.assertEqual(bar3.c, price3)
-        self.assertEqual(bar3.v, 3.0)
+        self.assertEqual(bar3.v, 0.0)
+        self.assertEqual(bar3.extensions.get("ticks_n"), 3)
 
     def test_late_bucket_drop(self) -> None:
         agg = TickAggregator(tf_allowlist=[60])

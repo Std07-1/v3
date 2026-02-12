@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 
+_LOG_ONCE_KEYS = set()  # type: set
+
+
 @dataclass(frozen=True)
 class RedisSpec:
     host: str
@@ -107,17 +110,11 @@ def resolve_redis_spec(
 
     mismatch = bool(mismatch_fields)
     if log:
-        logging.info(
-            "UDS_REDIS_SPEC_CFG role=%s host=%s port=%s db=%s namespace=%s",
-            role,
+        key = "cfg={}:{}:{}:{}|eff={}:{}:{}:{}|src={}|mismatch={}|fields={}|allow_env_override={}".format(
             cfg_host,
             cfg_port,
             cfg_db,
             cfg_namespace,
-        )
-        logging.info(
-            "UDS_REDIS_SPEC_EFF role=%s host=%s port=%s db=%s namespace=%s source=%s mismatch=%s mismatch_fields=%s",
-            role,
             host,
             port,
             db,
@@ -125,19 +122,21 @@ def resolve_redis_spec(
             source,
             int(mismatch),
             ",".join(mismatch_fields) if mismatch_fields else "",
+            int(bool(allow_env_override)),
         )
-        if mismatch:
-            logging.warning(
-                "UDS_REDIS_SPEC_MISMATCH role=%s fields=%s",
-                role,
-                ",".join(mismatch_fields),
-            )
-        if not allow_env_override and mismatch_fields:
-            logging.warning(
-                "UDS_REDIS_ENV_OVERRIDE_IGNORED role=%s fields=%s",
-                role,
-                ",".join(mismatch_fields),
-            )
+        if key not in _LOG_ONCE_KEYS:
+            _LOG_ONCE_KEYS.add(key)
+            if mismatch:
+                logging.warning(
+                    "UDS_REDIS_SPEC_MISMATCH fields=%s src=%s",
+                    ",".join(mismatch_fields),
+                    source,
+                )
+            if not allow_env_override and mismatch_fields:
+                logging.warning(
+                    "UDS_REDIS_ENV_OVERRIDE_IGNORED fields=%s",
+                    ",".join(mismatch_fields),
+                )
     return RedisSpec(
         host=host,
         port=port,

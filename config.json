@@ -70,7 +70,7 @@
         180
     ],
     "preview_tick_publish_min_interval_ms": 250,
-    "preview_curr_ttl_s": 60,
+    "preview_curr_ttl_s": 1800,
     "tick_stream_enabled": true,
     "tick_stream_symbols": [],
     "tick_stream_min_interval_ms": 200,
@@ -156,7 +156,7 @@
     "day_anchor_offset_s_alt2": 79200,
     "day_anchor_offset_s_d1": 75600,
     "day_anchor_offset_s_d1_alt": 79200,
-    "ui_debug": true,
+    "ui_debug": false,
     "group_logs_enabled": true,
     "redis_priming_enabled": true,
     "redis_priming_budget_s": 5,
@@ -200,6 +200,14 @@
             "14400": 256,
             "86400": 128
         }
+    },
+    "channels": {
+        "prefix": "fxcm_local",
+        "ohlcv": "fxcm_local:ohlcv",
+        "price_tick": "fxcm_local:price_tik",
+        "status": "fxcm_local:status",
+        "commands": "fxcm_local:commands",
+        "heartbeat": "fxcm_local:heartbeat"
     },
     "known_broker_outages": [
         {

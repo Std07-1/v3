@@ -93,11 +93,22 @@ def derive_from_m5_for_anchor(
     if not bars:
         return None
 
-    o = bars[0].o
-    c = bars[-1].c
-    h = max(x.h for x in bars)
-    low = min(x.low for x in bars)
-    v = sum(x.v for x in bars)
+    # Фільтруємо calendar-pause flat бари — derived будуємо лише з торгових М5
+    trading_bars = [x for x in bars if not x.extensions.get("calendar_pause_flat")]
+    if not trading_bars:
+        return None  # усі М5 — calendar pause, derived не будуємо
+
+    o = trading_bars[0].o
+    c = trading_bars[-1].c
+    h = max(x.h for x in trading_bars)
+    low = min(x.low for x in trading_bars)
+    v = sum(x.v for x in trading_bars)
+
+    extensions = {}  # type: dict[str, Any]
+    if len(trading_bars) < len(bars):
+        pause_count = len(bars) - len(trading_bars)
+        extensions["partial_calendar_pause"] = True
+        extensions["calendar_pause_m5_count"] = pause_count
 
     out = CandleBar(
         symbol=symbol,
@@ -111,6 +122,7 @@ def derive_from_m5_for_anchor(
         v=v,
         complete=True,
         src="derived",
+        extensions=extensions,
     )
     assert_invariants(out, anchor_offset_s=anchor_offset_s)
     return out

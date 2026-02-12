@@ -208,6 +208,13 @@
             "inputs": {
                 "root": "."
             }
+        },
+        {
+            "name": "tick_preview_calendar",
+            "module": "tools.exit_gates.gates.gate_tick_preview_calendar",
+            "inputs": {
+                "root": "."
+            }
         }
     ]
 }

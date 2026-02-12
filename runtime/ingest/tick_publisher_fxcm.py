@@ -43,7 +43,14 @@ def _setup_logging(verbose: bool = False) -> None:
     )
 
 
-def _pick_tick_channel() -> Optional[str]:
+def _pick_tick_channel(cfg: dict[str, Any] | None = None) -> Optional[str]:
+    """Канал tick: config.json > ENV > legacy ENV."""
+    if cfg:
+        channels = cfg.get("channels")
+        if isinstance(channels, dict):
+            ch = channels.get("price_tick")
+            if ch:
+                return str(ch)
     channel = env_str("FXCM_PRICE_TICK_CHANNEL")
     if channel:
         return channel
@@ -67,7 +74,7 @@ def _parse_stream_cfg(cfg: dict[str, Any]) -> TickStreamConfig:
     price_mode = str(cfg.get("tick_stream_price_mode", "mid")).lower().strip()
     if price_mode not in ("mid", "bid", "ask"):
         price_mode = "mid"
-    channel = _pick_tick_channel()
+    channel = _pick_tick_channel(cfg)
     return TickStreamConfig(
         enabled=enabled,
         symbols=symbols,

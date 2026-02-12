@@ -46,40 +46,36 @@ Preview 1m/3m працює в окремому preview-plane (Redis keyspace), �
 - `env_profile.py` читає `.env` напряму через python-dotenv.
 - Обидва процеси (connector і UI) логують `ENV: secrets_loaded path=... keys=N` при старті.
 
-### Мінімальні ключі
+### Мінімальні ключі (.env — тільки секрети)
 
 - FXCM:
   - `FXCM_USERNAME`
   - `FXCM_PASSWORD`
   - `FXCM_CONNECTION`
   - `FXCM_HOST_URL`
-- Redis (ізоляція local/prod):
-  - `FXCM_REDIS_HOST`
-  - `FXCM_REDIS_PORT`
-  - `FXCM_REDIS_DB`
-  - `FXCM_REDIS_NS`
+- Redis/канали — у `config.json` секціях `"redis"` та `"channels"`
 
 ### Приклад .env
 
 ```dotenv
-# .env — секрети
+# .env — тільки секрети (канали/Redis тепер у config.json)
 FXCM_USERNAME=demo_user
 FXCM_PASSWORD=demo_pass
 FXCM_CONNECTION=Demo
 FXCM_HOST_URL=http://www.fxcorporate.com/Hosts.jsp
+```
 
-FXCM_CHANNEL_PREFIX=fxcm_local
-FXCM_OHLCV_CHANNEL=fxcm_local:ohlcv
-FXCM_PRICE_TICK_CHANNEL=fxcm_local:price_tik
-FXCM_PRICE_SNAPSHOT_CHANNEL=fxcm_local:price_tik
-FXCM_STATUS_CHANNEL=fxcm_local:status
-FXCM_COMMANDS_CHANNEL=fxcm_local:commands
-FXCM_HEARTBEAT_CHANNEL=fxcm_local:heartbeat
+### Канали (config.json → "channels")
 
-FXCM_REDIS_HOST=127.0.0.1
-FXCM_REDIS_PORT=6379
-FXCM_REDIS_DB=1
-FXCM_REDIS_NS=v3_local
+```json
+"channels": {
+    "prefix": "fxcm_local",
+    "ohlcv": "fxcm_local:ohlcv",
+    "price_tick": "fxcm_local:price_tik",
+    "status": "fxcm_local:status",
+    "commands": "fxcm_local:commands",
+    "heartbeat": "fxcm_local:heartbeat"
+}
 ```
 
 ### Перевірка, що секрети завантажено

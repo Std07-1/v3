@@ -778,6 +778,10 @@
             scheduleVisibleRangeNotify();
         }
 
+        // rAF-throttle: state оновлюється синхронно, chart render — через requestAnimationFrame
+        let _rafPending = null;
+        let _rafId = null;
+
         function updateLastBar(bar) {
             const normalized = normalizeBar(bar);
             if (!normalized) return;
@@ -793,16 +797,28 @@
                 } else {
                     lastBarsData.push(normalized);
                 }
-                candles.update(normalized);
-                barsSeries.update(normalized);
                 volumeByTime.set(String(normalized.time), normalized.volume);
-                volumes.update({
-                    time: normalized.time,
-                    value: normalized.volume,
-                    color: normalized.close >= normalized.open ? currentVolumeColors.up : currentVolumeColors.down,
-                });
                 lastBar = normalized;
+                // Відкладаємо chart render до наступного animation frame (debounce ≈16ms)
+                _rafPending = normalized;
+                if (!_rafId) {
+                    _rafId = requestAnimationFrame(_flushChartRender);
+                }
             }
+        }
+
+        function _flushChartRender() {
+            _rafId = null;
+            const bar = _rafPending;
+            if (!bar) return;
+            _rafPending = null;
+            candles.update(bar);
+            barsSeries.update(bar);
+            volumes.update({
+                time: bar.time,
+                value: bar.volume,
+                color: bar.close >= bar.open ? currentVolumeColors.up : currentVolumeColors.down,
+            });
         }
 
         // P2X.6-U3: overlay — 0-2 ephemeral бари (prev_bar + curr_bar)

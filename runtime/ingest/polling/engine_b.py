@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import json
 import logging
@@ -407,7 +408,7 @@ class PollingConnectorB:
     def _run_warmup_phase(self) -> None:
         if not self._warmup_pending:
             return
-        logging.info("WARMUP_PHASE_START symbol=%s", self._symbol)
+        logging.debug("WARMUP_PHASE_START symbol=%s", self._symbol)
         self._warmup_pending = False
         result = self._warmup_m5_tail(log_detail=False)
         logging.info("WARMUP_PHASE_DONE symbol=%s result=%s", self._symbol, result)
@@ -417,10 +418,10 @@ class PollingConnectorB:
             return
         if not self._rebuild_pending:
             return
-        logging.info("REBUILD_PHASE_START symbol=%s", self._symbol)
+        logging.debug("REBUILD_PHASE_START symbol=%s", self._symbol)
         self._rebuild_pending = False
         result = self._rebuild_derived_from_disk_tail(log_detail=False)
-        logging.info("REBUILD_PHASE_DONE symbol=%s result=%s", self._symbol, result)
+        logging.debug("REBUILD_PHASE_DONE symbol=%s result=%s", self._symbol, result)
 
     def _tail_catchup_from_broker(self, log_detail: bool = False) -> Dict[str, Any]:
         last_saved = self._last_saved_m5_open_ms
@@ -659,7 +660,7 @@ class PollingConnectorB:
                 ms_to_utc_dt(tail_end_ms).isoformat(),
             )
             if missing_sample:
-                logging.warning(
+                logging.debug(
                     "DERIVED_TAIL_M5_GAPS_SAMPLE symbol=%s sample=%s",
                     self._symbol,
                     ",".join(ms_to_utc_dt(x).isoformat() for x in missing_sample),
@@ -806,7 +807,7 @@ class PollingConnectorB:
             return
         result = self._uds.commit_final_bar(bar)
         if not result.ok:
-            logging.warning(
+            logging.debug(
                 "UDS_COMMIT_DROP symbol=%s tf_s=%s open_ms=%s reason=%s",
                 bar.symbol,
                 bar.tf_s,
@@ -1148,12 +1149,58 @@ class PollingConnectorB:
         written = 0
         skipped_dedup = 0
         skipped_flat = 0
+        accepted_pause_flat = 0
+        anomaly_pause_nonflat = 0
         derived_written = 0
 
         for b in bars:
-            if is_flat_bar(b, self._flat_bar_max_volume):
+            flat = is_flat_bar(b, self._flat_bar_max_volume)
+            trading = self._calendar.is_trading_minute(b.open_time_ms)
+
+            if flat and trading:
+                # Торговий час, flat — скіп (як раніше)
                 skipped_flat += 1
                 continue
+
+            if not trading:
+                if flat:
+                    # Календарна пауза + flat від провайдера — приймаємо з extensions
+                    b = dataclasses.replace(
+                        b,
+                        extensions={
+                            **b.extensions,
+                            "calendar_pause_flat": True,
+                        },
+                    )
+                    accepted_pause_flat += 1
+                else:
+                    # Календарна пауза + НЕ flat — аномалія, loud warning
+                    anomaly_pause_nonflat += 1
+                    msg = (
+                        "ANOMALY calendar_pause_nonflat: {} M5 open={} o={:.5f} h={:.5f} l={:.5f} c={:.5f} v={:.0f}".format(
+                            self._symbol,
+                            b.open_time_ms,
+                            b.o,
+                            b.h,
+                            b.low,
+                            b.c,
+                            b.v,
+                        )
+                    )
+                    self._warn_throttled(
+                        "calendar_pause_nonflat:{}".format(self._symbol),
+                        msg,
+                        every_s=600,
+                    )
+                    b = dataclasses.replace(
+                        b,
+                        extensions={
+                            **b.extensions,
+                            "calendar_pause_nonflat_anomaly": True,
+                        },
+                    )
+                    # Приймаємо, але маркуємо — провайдер надіслав дані
+
             if self._last_saved_m5_open_ms is not None and b.open_time_ms <= self._last_saved_m5_open_ms:
                 if allow_older:
                     self._m5.upsert(b)
@@ -1196,12 +1243,14 @@ class PollingConnectorB:
             ctx = context or "ingest_m5"
             log_fn = logging.debug if self._group_logs else logging.info
             log_fn(
-                "M5: %s записано=%d derived=%d skip_dedup=%d skip_flat=%d",
+                "M5: %s записано=%d derived=%d skip_dedup=%d skip_flat=%d pause_flat=%d pause_nonflat_anomaly=%d",
                 ctx,
                 written,
                 derived_written,
                 skipped_dedup,
                 skipped_flat,
+                accepted_pause_flat,
+                anomaly_pause_nonflat,
             )
         return written
 
@@ -1989,7 +2038,7 @@ class MultiSymbolRunner:
 
         warmup_deferred = [s["symbol"] for s in summaries if s.get("warmup_deferred")]
         if warmup_deferred:
-            logging.info(
+            logging.debug(
                 "Warmup: deferred %d/%d (%s)",
                 len(warmup_deferred),
                 total,
@@ -2008,7 +2057,7 @@ class MultiSymbolRunner:
             tfs=engine0.redis_priming_tfs(),
         )
         engine0.set_prime_ready(payload, PRIME_READY_TTL_S)
-        logging.info(
+        logging.debug(
             "PRIME_READY_SET ready=%s symbols=%s",
             payload.get("ready"),
             ",".join(symbols),
