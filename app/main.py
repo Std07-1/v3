@@ -34,9 +34,9 @@ def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--mode",
-        choices=["all", "connector", "ui", "tick_preview", "tick_publisher"],
+        choices=["all", "connector", "ui", "tick_preview", "tick_publisher", "m1_poller"],
         default="all",
-        help="all | connector | ui | tick_preview | tick_publisher",
+        help="all | connector | ui | tick_preview | tick_publisher | m1_poller",
     )
     ap.add_argument(
         "--stdio",
@@ -264,6 +264,16 @@ def main() -> int:
                     new_console=args.new_console,
                 )
             )
+        if args.mode in ("all", "m1_poller"):
+            processes.append(
+                _start_process(
+                    label="m1_poller",
+                    module="runtime.ingest.polling.m1_poller",
+                    stdio=stdio,
+                    log_dir=log_dir,
+                    new_console=args.new_console,
+                )
+            )
         if args.mode in ("all", "ui"):
             if args.mode == "all":
                 config_path = pick_config_path()
@@ -286,8 +296,33 @@ def main() -> int:
             for item in list(processes):
                 code = item.proc.poll()
                 if code is not None:
-                    logging.error("Процес %s завершився з кодом %s", item.label, code)
+                    # treat clean exit (code == 0) as normal — stop monitoring that process
+                    if code == 0:
+                        logging.info(
+                            "Процес %s завершився нормально (код=%s), видаляю з моніторингу",
+                            item.label,
+                            code,
+                        )
+                        processes.remove(item)
+                        # закрити file handles якщо вони були відкриті
+                        for handle in (item.stdout_handle, item.stderr_handle):
+                            if handle is None:
+                                continue
+                            try:
+                                handle.close()
+                            except Exception:
+                                pass
+                        continue
+
+                    # any non-zero exit is an error for the supervisor
+                    logging.error("Процес %s завершився з помилкою код=%s", item.label, code)
                     raise RuntimeError(f"process_exited:{item.label}")
+
+            # якщо всі дочірні процеси завершилися нормально — вийти успішно
+            if not processes:
+                logging.info("Усі дочірні процеси завершилися; supervisor завершується")
+                return 0
+
             time.sleep(1)
     except KeyboardInterrupt:
         logging.info("Зупинено користувачем (KeyboardInterrupt) у main supervisor.")

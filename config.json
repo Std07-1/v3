@@ -45,6 +45,14 @@
     "history_symbols_sample_n": 3,
     "history_network_error_escalate_s": 600,
     "flat_bar_max_volume": 4,
+    "m1_poller": {
+        "enabled": true,
+        "tail_fetch_n": 5,
+        "safety_delay_s": 8,
+        "m3_derive_enabled": true,
+        "backfill_enabled": false,
+        "backfill_max_bars": 1440
+    },
     "broker_base_tfs_s": [
         14400,
         86400
@@ -57,6 +65,8 @@
         "86400": 180
     },
     "tf_allowlist_s": [
+        60,
+        180,
         300,
         900,
         1800,
@@ -75,7 +85,7 @@
     "tick_stream_symbols": [],
     "tick_stream_min_interval_ms": 200,
     "tick_stream_last_tick_ttl_s": 30,
-    "tick_stream_price_mode": "mid",
+    "tick_stream_price_mode": "bid",
     "calendar_gate_enabled": true,
     "market_calendar_by_group": {
         "fx_24x5_utc_winter": {
@@ -161,6 +171,8 @@
     "redis_priming_enabled": true,
     "redis_priming_budget_s": 5,
     "redis_priming_tfs_s": [
+        60,
+        180,
         300,
         900,
         1800,
@@ -170,6 +182,8 @@
     ],
     "redis_priming_symbols": [],
     "min_coldload_bars_by_tf_s": {
+        "60": 1440,
+        "180": 480,
         "300": 2016,
         "900": 672,
         "1800": 150,
@@ -185,6 +199,8 @@
         "namespace": "v3_local",
         "allow_env_override": false,
         "ttl_by_tf_s": {
+            "60": 1800,
+            "180": 3600,
             "300": 3600,
             "900": 14400,
             "1800": 14400,
@@ -193,6 +209,8 @@
             "86400": 604800
         },
         "tail_n_by_tf_s": {
+            "60": 2880,
+            "180": 1440,
             "300": 8000,
             "900": 4000,
             "1800": 2500,

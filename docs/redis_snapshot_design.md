@@ -92,6 +92,8 @@
     "db": 0,
     "ns": "v3",
     "ttl_by_tf_s": {
+      "60": 1800,
+      "180": 1800,
       "300": 3600,
       "900": 14400,
       "1800": 14400,
@@ -100,6 +102,8 @@
       "86400": 604800
     },
     "tail_n_by_tf_s": {
+      "60": 1024,
+      "180": 512,
       "300": 512,
       "900": 1024,
       "1800": 512,
@@ -152,7 +156,8 @@ UI показує stale/miss через:
 UI політики читання:
 
 - /api/bars із prefer_redis читає Redis tail/snap, але при малому tail або miss переходить на disk.
-- /api/updates завжди читає disk (tail-only) і не залежить від Redis.
+- /api/updates читає Redis updates bus (list+seq); disk лишається тільки для recovery при redis_down (degraded).
+- /api/bars для preview TF (60/180) читає ізольований preview keyspace (curr/tail/updates).
 
 ## Status snapshot (людський)
 

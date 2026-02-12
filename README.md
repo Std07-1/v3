@@ -2,15 +2,17 @@
 
 ## Призначення
 
-Конектор отримує історію 5m з брокера, будує похідні TF локально та зберігає все в JSONL.
-База TF:
+Торгова платформа (дані → аналітика/SMC → UI → торгова взаємодія).
+Дві ізольовані data planes з єдиним write-center (UDS):
 
-- 5m — з брокера.
-- 4h / 1d — з брокера як «джерело істини».
-- 15m–1h — похідні з 5m.
+**SSOT-1 (M1/M3)** — M1 poller з FXCM History API (8s cycle, calendar gate, watermark, adaptive fetch). M3 derived з 3×M1. Preview-plane: tick stream → preview bars. Final bridge → preview ring.
 
-UDS є центром читання/запису: writer пише через UDS (SSOT + Redis snapshots + updates bus), UI читає через UDS.
-Preview 1m/3m працює в окремому preview-plane (Redis keyspace), без запису у SSOT.
+**SSOT-2 (M5+)** — engine_b polling (60s). Derived 15m/30m/H1 з M5.
+
+**SSOT-3 (H4/D1)** — broker fetch на закритті бакета.
+
+UDS є центром читання/запису: writer пише через UDS (SSOT disk + Redis snap + updates bus), UI читає через UDS.
+M1/M3 preview живе в ізольованому Redis keyspace (curr/tail/updates), PREVIOUS_CLOSE stitching у /api/bars.
 
 ## Вимоги
 
@@ -29,12 +31,18 @@ Preview 1m/3m працює в окремому preview-plane (Redis keyspace), �
 ## Запуск системи
 
 - Активуйте .venv.
-- Запуск UI+конектор (одна команда):
-  - python -m app.main
-- Лише конектор:
+- Запуск усіх 5 процесів (одна команда):
+  - python -m app.main --mode all
+- Лише конектор (M5+):
   - python -m app.main --mode connector
+- Лише M1 poller (M1/M3):
+  - python -m app.main --mode m1_poller
 - Лише UI:
   - python -m app.main --mode ui
+- Лише tick publisher:
+  - python -m app.main --mode tick_publisher
+- Лише tick preview worker:
+  - python -m app.main --mode tick_preview
 
 ## Профілі середовища (local/prod)
 
@@ -144,15 +152,18 @@ UI API читає config.json з кешем mtime (перевірка ~0.5s) д�
 
 ## Preview TF (1m/3m)
 
-- preview-plane живе у Redis preview keyspace (curr/tail/updates), не пишеться у SSOT.
+- Preview-plane живе у Redis preview keyspace (curr/tail/updates), не пишеться у SSOT.
 - /api/bars для tf_s=60/180 читає preview-plane; для non-preview TF `include_preview=1` ігнорується з warning.
-- TickAggregator існує як бібліотека preview-агрегації, wiring до tick-stream pending.
+- Tick pipeline: tick_publisher_fxcm → Redis PubSub → tick_preview_worker → TickAggregator → UDS preview.
+- M1 Poller finals bridge: commit_final M1/M3 → publish до preview ring (final>preview).
 
-## Статус P2X: UDS як write-center
+## Статус: UDS як write-center (P2X done)
 
 - Writer/connector пише тільки через UDS (без прямого JsonlAppender/RedisSnapshotWriter).
 - /api/updates працює через Redis updates bus; disk лишається recovery.
-- Залишок: wiring tick-stream у TickAggregator (preview 1m/3m) + мінімальні тести.
+- Tick-stream wiring done: TickAggregator → preview-plane, schema guard tick_v1.
+- M1 poller: final M1/M3 з History API, finals bridge, warmup, calendar gate.
+- PREVIOUS_CLOSE stitching: open[i]=close[i-1] у /api/bars для TV-like smooth candles.
 
 ## UI: scrollback, кеш, favorites
 

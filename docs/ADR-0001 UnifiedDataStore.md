@@ -7,11 +7,11 @@
 
 ## ADR-0001: UnifiedDataStore (RAM/Redis/Disk) + Contract-first MarketData API
 
-**Status:** Active (UDS read+write через UDS; Redis updates bus; preview-plane активний; tick-stream wiring pending)
+**Status:** Active (UDS write-center; Redis updates bus; preview-plane + tick-stream done; M1 poller + finals bridge done)
 **Date:** 2026-02-09
 **Owners:** (TBD)
 **Related:** UI stability / live jitter, redis snapshots, derived TF, exit-gates (TBD)
-**Updated:** 2026-02-10
+**Updated:** 2026-02-11
 
 ### 1) Контекст і проблема
 
@@ -47,9 +47,11 @@
 * PollingConnectorB пише через UDS: preview → `publish_preview_bar`, final → `commit_final_bar` з watermark/quarantine.
 * Updates hot-path працює через Redis UpdatesBus; disk tail більше не використовується у /api/updates (disk_last_open_ms/bar_close_ms = null).
 * Preview-plane ізольований: Redis preview keyspace (curr/tail/updates), allowlist TF=60/180, /api/bars для preview читає read_preview_window, include_preview ігнорується для не-preview TF (warning include_preview_ignored), NoMix guard активний; exit-gates: preview_not_on_disk і no_preview_in_final_redis.
-* TickAggregator (runtime/ingest/tick_agg.py) існує як бібліотека preview-агрегації (open=перший тик, late-bucket drop), wiring у tick-stream pending.
+* TickAggregator (runtime/ingest/tick_agg.py) інтегровано у tick-stream pipeline: tick_publisher_fxcm → Redis PubSub → tick_preview_worker → TickAggregator → UDS preview keyspace. Schema guard tick_v1 на вході, 0-ticks loud.
+* M1Poller (runtime/ingest/polling/m1_poller.py): FXCM M1 History → final M1 + derive M3 → UDS commit_final_bar. Finals bridge: final M1/M3 публікується до preview ring (final>preview). Calendar gate, watermark, adaptive fetch, warmup.
+* PREVIOUS_CLOSE stitching у /api/bars: open[i]=close[i-1] для TV-like smooth candles (підтримує LWC + full field formats).
 
-**Висновок станом на 2026-02-10:** UDS — write-center для polling; updates працюють через Redis bus; preview-plane відокремлено. Tick-stream wiring для preview з тиков ще не підʼєднано.
+**Висновок станом на 2026-02-11:** UDS — write-center для всіх data planes. Tick-stream wiring done. M1 poller + finals bridge done. Preview-plane ізольовано. Всі 8 TF (M1–D1) працюють без price gaps.
 
 **Ціль P2X (UDS write-center):** всі записи йдуть через UDS, а /api/updates читає RAM/Redis stream, disk лишається recovery.
 
@@ -341,7 +343,7 @@ C) **UDS layered (рекомендовано)**
 * P3: виконано (інтеграція /api/bars і /api/updates через UDS у ui_chart_v3/server.py).
 * P4: частково (epoch-гейт у UI зафіксовано; потрібна повторна перевірка після змін P2X).
 * P5: частково (runner для exit-gates є; метрики/latency p95 та повний набір gate-ів ще неповні).
-* **P2X (Write-center)**: виконано для polling (writer через UDS; updates через Redis bus; preview-plane ізольований). Tick-stream wiring pending.
+* **P2X (Write-center)**: виконано повністю (writer через UDS; updates через Redis bus; preview-plane ізольований; tick-stream done; M1 poller + finals bridge done).
 
 ### 10.3) Апдейт 2026-02-10 (P2X: UDS як write-center) — виконано
 
@@ -373,7 +375,7 @@ C) **UDS layered (рекомендовано)**
 * UI читає тільки через UDS; прямий Redis read-path заборонений gate-ом.
 * Preview-plane у Redis preview keyspace; include_preview ігнорується для non-preview TF.
 
-**Висновок:** ADR-інваріанти “All writes go through UDS” і “Disk is recovery (для updates)” виконані для polling. Відкрите: tick-stream wiring для preview з тиков.
+**Висновок:** ADR-інваріанти "All writes go through UDS" і "Disk is recovery (для updates)" виконані повністю. Tick-stream done, M1 poller + finals bridge done.
 
 ### 10.5) Мінімальний план P2X (залишок)
 
@@ -393,9 +395,11 @@ C) **UDS layered (рекомендовано)**
 * /api/bars: hot window з Redis snapshots/tail, scrollback — disk range.
 * Warmup/prime: заповнювати Redis з disk під бюджет; не використовувати disk у hot updates.
 
-**Залишок P2X:**
+**Залишок P2X:** виконано повністю.
 
-* tick-stream wiring до TickAggregator (preview-plane).
+* ~~tick-stream wiring до TickAggregator (preview-plane)~~ — done (tick_publisher + tick_preview_worker).
+* M1 poller (final M1/M3 з History API) + finals bridge + warmup + calendar gate — done.
+* PREVIOUS_CLOSE stitching у /api/bars — done.
 
 **Preview vs Final (NoMix):**
 

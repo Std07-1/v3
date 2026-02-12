@@ -567,6 +567,37 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
 
         if path in ("/api/bars", "/api/latest"):
+            # -- PREVIOUS_CLOSE stitching для плавних свічок (TV-like) --
+            # FXCM History повертає Open з FIRST_TICK для першого бару кожного batch,
+            # що створює ціновий розрив між batch-ами. Stitching: open[i] = close[i-1].
+            # Не змінює SSOT на диску, тільки UI display.
+            def _stitch_bars_previous_close(bars: list) -> list:
+                """Stitch: bars[i].open = bars[i-1].close (TV-like PREVIOUS_CLOSE).
+                Підтримує обидва формати: full (open/close/high/low) і LWC (o/c/h/low)."""
+                if len(bars) < 2:
+                    return bars
+                for i in range(1, len(bars)):
+                    prev = bars[i - 1]
+                    curr = bars[i]
+                    # Визначаємо ключі: LWC (o/c/h) або full (open/close/high)
+                    prev_close = prev.get("close") if "close" in prev else prev.get("c")
+                    open_key = "open" if "open" in curr else "o"
+                    high_key = "high" if "high" in curr else "h"
+                    low_key = "low"  # low однаковий в обох форматах
+                    curr_open = curr.get(open_key)
+                    if prev_close is not None and curr_open is not None:
+                        if abs(curr_open - prev_close) > 0.0001:
+                            bars[i] = dict(bars[i])  # copy
+                            bars[i][open_key] = prev_close
+                            # Коригуємо high/low якщо open вийшов за межі
+                            h = bars[i].get(high_key)
+                            lo = bars[i].get(low_key)
+                            if h is not None and prev_close > h:
+                                bars[i][high_key] = prev_close
+                            if lo is not None and prev_close < lo:
+                                bars[i][low_key] = prev_close
+                return bars
+
             symbol = (qs.get("symbol", [""])[0] or "").strip()
             tf_s = _safe_int((qs.get("tf_s", ["60"])[0] or "60"), 60)
             limit = _safe_int((qs.get("limit", ["2000"])[0] or "2000"), 2000)
@@ -583,27 +614,56 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return
 
             if tf_s in preview_allowlist:
-                # P2X.6: preview TF завжди через read_preview_window,
-                # prefer_redis/force_disk ігноруються з loud warning
+                # Preview TFs: history з snap/disk + overlay поточного preview бара.
+                # Finals від M1 poller зберігаються на disk + snap,
+                # preview_curr містить поточний формуючий бар від тіків.
                 preview_warnings: list[str] = []
                 if prefer_redis:
                     preview_warnings.append("query_param_ignored:prefer_redis")
                 if force_disk:
                     preview_warnings.append("query_param_ignored:force_disk")
 
-                res = uds.read_preview_window(symbol, tf_s, limit, include_current=True)
+                # 1. Історія з snap/disk (як для final TFs)
+                spec = WindowSpec(
+                    symbol=symbol,
+                    tf_s=tf_s,
+                    limit=limit,
+                    cold_load=True,
+                )
+                policy = ReadPolicy(force_disk=False, prefer_redis=False)
+                hist_res = uds.read_window(spec, policy)
+                hist_bars = list(hist_res.bars_lwc)
+
+                # 2. Overlay preview_curr (поточний бар від тіків)
+                preview_res = uds.read_preview_window(symbol, tf_s, 1, include_current=True)
+                if preview_res.bars_lwc:
+                    curr = preview_res.bars_lwc[-1]
+                    curr_open = curr.get("time") if isinstance(curr, dict) else None
+                    if curr_open is not None and hist_bars:
+                        last_hist_open = hist_bars[-1].get("time") if isinstance(hist_bars[-1], dict) else None
+                        if last_hist_open is not None and curr_open == last_hist_open:
+                            hist_bars[-1] = curr
+                        elif last_hist_open is not None and curr_open > last_hist_open:
+                            hist_bars.append(curr)
+                    elif not hist_bars:
+                        hist_bars = list(preview_res.bars_lwc)
+
+                meta = hist_res.meta or {}
+                meta.setdefault("extensions", {})["plane"] = "preview+history"
+                # Stitch: open[i] = close[i-1] для плавних свічок (TV-like)
+                stitched = _stitch_bars_previous_close(hist_bars)
                 payload = {
                     "ok": True,
                     "symbol": symbol,
                     "tf_s": tf_s,
-                    "bars": res.bars_lwc,
+                    "bars": stitched[-limit:] if limit > 0 else stitched,
                     "boot_id": _boot_id,
-                    "meta": res.meta,
+                    "meta": meta,
                 }
-                warnings = preview_warnings + list(res.warnings)
+                warnings = preview_warnings + list(hist_res.warnings)
                 if warnings:
                     payload["warnings"] = warnings
-                _contract_guard_warn_window(payload, res.bars_lwc, warnings, bool(warnings))
+                _contract_guard_warn_window(payload, hist_bars, warnings, bool(warnings))
                 self._json(200, payload)
                 return
 
@@ -651,11 +711,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 _contract_guard_warn_window(payload, [], final_extra_warnings, bool(final_extra_warnings))
                 self._json(200, payload)
                 return
+            # Stitch: open[i] = close[i-1] для плавних свічок (TV-like)
+            stitched_final = _stitch_bars_previous_close(res.bars_lwc)
             payload = {
                 "ok": True,
                 "symbol": symbol,
                 "tf_s": tf_s,
-                "bars": res.bars_lwc,
+                "bars": stitched_final,
                 "boot_id": _boot_id,
                 "meta": res.meta,
             }

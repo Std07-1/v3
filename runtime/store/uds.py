@@ -600,6 +600,9 @@ class UnifiedDataStore:
             self._wm_by_key[(bar.symbol, bar.tf_s)] = bar.open_time_ms
         if ssot_written:
             self._ram.upsert_bar(bar.symbol, bar.tf_s, bar.to_dict())
+        # Bridge: фінальний бар preview-TF → preview ring для UI
+        if ssot_written and bar.tf_s in self._preview_tf_allowlist:
+            self._publish_final_to_preview_ring(bar)
         ok = ssot_written
         reason = None if ok else "ssot_write_failed"
         return CommitResult(ok, reason, ssot_written, redis_written, updates_published, warnings)
@@ -813,6 +816,41 @@ class UnifiedDataStore:
         else:
             bars.append(curr)
         return bars
+
+    def _publish_final_to_preview_ring(self, bar: CandleBar) -> bool:
+        """Публікує фінальний бар у preview ring, щоб UI побачив final>preview.
+
+        Викликається з commit_final_bar для TF ∈ preview_tf_allowlist.
+        UI applyUpdates вже реалізує final>preview семантику.
+        """
+        if self._redis is None:
+            return False
+        try:
+            bar_payload = normalize_bar(bar.to_dict(), mode="incl")
+            event = {
+                "key": {
+                    "symbol": bar.symbol,
+                    "tf_s": int(bar.tf_s),
+                    "open_ms": int(bar.open_time_ms),
+                },
+                "bar": bar_payload,
+                "complete": True,
+                "source": str(bar.src),
+                "event_ts": int(bar_payload.get("close_time_ms")) if bar.complete else None,
+            }
+            self._redis.publish_preview_event(
+                bar.symbol,
+                int(bar.tf_s),
+                event,
+                self._preview_updates_retain,
+            )
+            return True
+        except Exception as exc:
+            Logging.warning(
+                "UDS: final→preview ring publish failed symbol=%s tf_s=%s err=%s",
+                bar.symbol, bar.tf_s, exc,
+            )
+            return False
 
     def _publish_preview_update(
         self,

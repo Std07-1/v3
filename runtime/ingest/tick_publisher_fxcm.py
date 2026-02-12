@@ -248,7 +248,7 @@ class FxcmTickPublisher:
             "symbol": symbol,
             "bid": bid,
             "ask": ask,
-            "mid": price if self._price_mode == "mid" else mid,
+            "mid": price,  # selected price (bid/ask/mid) — preview worker reads this
             "tick_ts_ms": int(tick_ts_ms),
             "src": tick_src,
             "seq": self._seq,
