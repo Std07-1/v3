@@ -7,7 +7,8 @@ import random
 import time
 from typing import Optional
 
-from env_profile import load_env_profile
+from env_profile import load_env_secrets
+from core.config_loader import pick_config_path, env_str
 
 try:
     import redis as redis_lib  # type: ignore
@@ -15,31 +16,14 @@ except Exception:
     redis_lib = None  # type: ignore
 
 
-def _env_str(key: str) -> Optional[str]:
-    value = os.environ.get(key)
-    if value is None:
-        return None
-    value = str(value).strip()
-    return value or None
-
-
 def _pick_tick_channel() -> Optional[str]:
-    channel = _env_str("FXCM_PRICE_TICK_CHANNEL")
+    channel = env_str("FXCM_PRICE_TICK_CHANNEL")
     if channel:
         return channel
-    legacy = _env_str("FXCM_PRICE_SNAPSHOT_CHANNEL")
+    legacy = env_str("FXCM_PRICE_SNAPSHOT_CHANNEL")
     if legacy:
         return legacy
     return None
-
-
-def _pick_config_path(raw_path: Optional[str]) -> Optional[str]:
-    if raw_path:
-        return raw_path
-    env_path = (os.environ.get("AI_ONE_CONFIG_PATH") or "").strip()
-    if env_path:
-        return env_path
-    return "config.json"
 
 
 def _load_redis_cfg(config_path: str) -> Optional[dict]:
@@ -90,7 +74,7 @@ def main() -> int:
     ap.add_argument("--config", default=None)
     args = ap.parse_args()
 
-    load_env_profile()
+    load_env_secrets()
 
     if redis_lib is None:
         print("redis бібліотека недоступна")
@@ -101,7 +85,7 @@ def main() -> int:
         print("tick-канал не заданий (FXCM_PRICE_TICK_CHANNEL)")
         return 2
 
-    config_path = _pick_config_path(args.config)
+    config_path = args.config if args.config else pick_config_path()
     redis_cfg = _load_redis_cfg(config_path)
     if redis_cfg is None:
         print("Redis вимкнено або конфіг недоступний")

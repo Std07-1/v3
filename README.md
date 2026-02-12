@@ -38,16 +38,15 @@ Preview 1m/3m працює в окремому preview-plane (Redis keyspace), �
 
 ## Профілі середовища (local/prod)
 
-Профілі потрібні для безпечної ізоляції local/prod через env. У v3 використовується
-один SSOT конфіг (config.json), а профіль визначає креденшіали FXCM і Redis.
+Секрети завантажуються з одного файлу `.env` (без dispatcher/profile).
 
-### Як працює перемикання
+### Як працює
 
-- `.env` містить тільки `AI_ONE_ENV_FILE=.env.local` або `.env.prod`.
-- `env_profile.py` спочатку читає `.env`, потім завантажує профільний файл.
-- Обидва процеси (connector і UI) логують активний профіль при старті.
+- `.env` містить секрети (FXCM креденшіали, канали, Redis override).
+- `env_profile.py` читає `.env` напряму через python-dotenv.
+- Обидва процеси (connector і UI) логують `ENV: secrets_loaded path=... keys=N` при старті.
 
-### Мінімальні ключі профілю
+### Мінімальні ключі
 
 - FXCM:
   - `FXCM_USERNAME`
@@ -60,21 +59,22 @@ Preview 1m/3m працює в окремому preview-plane (Redis keyspace), �
   - `FXCM_REDIS_DB`
   - `FXCM_REDIS_NS`
 
-### Приклад dispatcher
+### Приклад .env
 
 ```dotenv
-# .env
-AI_ONE_ENV_FILE=.env.local
-```
-
-### Приклад локального профілю
-
-```dotenv
-# .env.local
+# .env — секрети
 FXCM_USERNAME=demo_user
 FXCM_PASSWORD=demo_pass
 FXCM_CONNECTION=Demo
 FXCM_HOST_URL=http://www.fxcorporate.com/Hosts.jsp
+
+FXCM_CHANNEL_PREFIX=fxcm_local
+FXCM_OHLCV_CHANNEL=fxcm_local:ohlcv
+FXCM_PRICE_TICK_CHANNEL=fxcm_local:price_tik
+FXCM_PRICE_SNAPSHOT_CHANNEL=fxcm_local:price_tik
+FXCM_STATUS_CHANNEL=fxcm_local:status
+FXCM_COMMANDS_CHANNEL=fxcm_local:commands
+FXCM_HEARTBEAT_CHANNEL=fxcm_local:heartbeat
 
 FXCM_REDIS_HOST=127.0.0.1
 FXCM_REDIS_PORT=6379
@@ -82,31 +82,16 @@ FXCM_REDIS_DB=1
 FXCM_REDIS_NS=v3_local
 ```
 
-### Приклад прод профілю
-
-```dotenv
-# .env.prod
-FXCM_USERNAME=prod_user
-FXCM_PASSWORD=prod_pass
-FXCM_CONNECTION=Real
-FXCM_HOST_URL=http://www.fxcorporate.com/Hosts.jsp
-
-FXCM_REDIS_HOST=redis.prod.local
-FXCM_REDIS_PORT=6380
-FXCM_REDIS_DB=0
-FXCM_REDIS_NS=v3_prod
-```
-
-### Перевірка, що профіль підхоплено
+### Перевірка, що секрети завантажено
 
 У логах має бути:
 
-- Конектор: `ENV: dispatcher=... profile=...`
-- UI: `ENV: dispatcher=... profile=...`
+- Конектор: `ENV: secrets_loaded path=... keys=N`
+- UI: `ENV: secrets_loaded path=... keys=N`
 - Supervisor (python -m app.main): той самий лог перед стартом процесів
 
-Якщо бачите `ENV: профіль не завантажено`, перевірте наявність python-dotenv
-та правильний `AI_ONE_ENV_FILE` у `.env`.
+Якщо бачите `ENV: .env не завантажено`, перевірте наявність python-dotenv
+та файлу `.env` у кореневій директорії.
 
 ### Режими stdio supervisor
 

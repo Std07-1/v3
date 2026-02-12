@@ -5,6 +5,7 @@ import datetime as dt
 import json
 import logging
 import os
+import time
 from typing import Dict, Iterable, List
 
 from app.composition import load_config
@@ -216,10 +217,133 @@ def rebuild_from_m5(
         )
 
 
+def _update_derived_tail_state(
+    data_root,   # type: str
+    symbol,      # type: str
+    tf_list,     # type: List[int]
+    start_ms,    # type: int
+    end_ms,      # type: int
+):
+    # type: (...) -> None
+    """Записати стан derived rebuild у _derived_tail_state.json.
+
+    Формат сумісний з engine_b._store_derived_tail_state().
+    """
+    path = os.path.join(data_root, "_derived_tail_state.json")
+    data = {"symbols": {}}
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict) and isinstance(raw.get("symbols"), dict):
+                data = raw
+        except Exception:
+            data = {"symbols": {}}
+
+    symbols = data.get("symbols")
+    if not isinstance(symbols, dict):
+        symbols = {}
+        data["symbols"] = symbols
+
+    window_bars = max(1, int((end_ms - start_ms) / TF_M5_MS))
+    entry = {
+        "m5_tail_ok_end_ms": int(end_ms),
+        "m5_tail_ok_window_bars": window_bars,
+        "m5_tail_missing_count": 0,
+        "m5_tail_missing_samples": [],
+        "m5_tail_missing_end_ms": int(end_ms),
+        "m5_tail_missing_window_bars": window_bars,
+        "derived_coverage_from_ms": {str(tf): int(start_ms) for tf in tf_list},
+        "derived_gaps_detected": False,
+        "ts_ms": int(time.time() * 1000),
+        "source": "tools.rebuild_derived",
+    }
+    symbols[symbol] = entry
+
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        logging.exception("Rebuild: не вдалось записати стан у %s", path)
+
+
+def _symbols_from_config(cfg: dict) -> List[str]:
+    """Канонічний список символів з config.json (symbols[] → fallback symbol)."""
+    raw = cfg.get("symbols", [])
+    if isinstance(raw, list) and raw:
+        return [str(s) for s in raw if str(s).strip()]
+    sym = cfg.get("symbol", "")
+    return [str(sym)] if sym else []
+
+
+def _rebuild_one_symbol(
+    data_root,       # type: str
+    symbol,          # type: str
+    tf_list,         # type: List[int]
+    start_override,  # type: int
+    end_override,    # type: int
+    dry_run,         # type: bool
+):
+    # type: (...) -> str
+    """Rebuild derived TFs для одного символу.
+
+    Повертає None при успіху, рядок з описом помилки при невдачі.
+    """
+    if start_override is not None:
+        start_ms = start_override
+    else:
+        start_ms = head_first_bar_time_ms(data_root, symbol, tf_s=TF_M5_S)
+
+    if end_override is not None:
+        end_ms = end_override
+    else:
+        end_open = tail_last_bar_time_ms(data_root, symbol, tf_s=TF_M5_S)
+        end_ms = None if end_open is None else end_open + TF_M5_MS
+
+    if start_ms is None or end_ms is None:
+        return "%s: немає M5 на диску" % symbol
+
+    writer = JsonlAppender(root=data_root)
+    try:
+        rebuild_from_m5(
+            data_root=data_root,
+            symbol=symbol,
+            tf_list=tf_list,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            dry_run=dry_run,
+            writer=writer,
+        )
+    except Exception as exc:
+        return "%s: %s" % (symbol, exc)
+    finally:
+        writer.close()
+
+    # Оновити _derived_tail_state.json (сумісно з engine_b)
+    _update_derived_tail_state(
+        data_root=data_root,
+        symbol=symbol,
+        tf_list=tf_list,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+    return None
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description="Rebuild derived TFs (M15/M30/H1) з M5 даних на диску.",
+    )
     ap.add_argument("--config", default="config.json")
-    ap.add_argument("--symbol", default=None)
+    ap.add_argument(
+        "--all", action="store_true",
+        help="Ітерувати по всіх symbols[] з config.json (послідовно).",
+    )
+    ap.add_argument(
+        "--symbols", default=None,
+        help="CSV override символів, напр. 'XAU/USD,XAG/USD'.",
+    )
+    ap.add_argument("--symbol", default=None, help="Один символ (legacy)")
     ap.add_argument("--tf", default=None, help="TF у секундах, напр. 900,1800,3600")
     ap.add_argument("--start-utc", default=None)
     ap.add_argument("--end-utc", default=None)
@@ -232,9 +356,25 @@ def main() -> int:
         logging.exception("Rebuild: не вдалось завантажити config.json")
         return 2
 
-    symbol = args.symbol or str(cfg.get("symbol", "XAU/USD"))
     data_root = str(cfg.get("data_root", "./data_v3"))
 
+    # --- Визначення списку символів ---
+    if getattr(args, "all", False):
+        sym_list = _symbols_from_config(cfg)
+        if not sym_list:
+            logging.error("Rebuild: --all задано, але symbols[] порожній у %s", args.config)
+            return 2
+        logging.info("Rebuild --all: %d символів: %s", len(sym_list), ", ".join(sym_list))
+    elif args.symbols:
+        sym_list = [s.strip() for s in args.symbols.split(",") if s.strip()]
+        if not sym_list:
+            logging.error("Rebuild: --symbols порожній")
+            return 2
+        logging.info("Rebuild --symbols: %d символів: %s", len(sym_list), ", ".join(sym_list))
+    else:
+        sym_list = [args.symbol or str(cfg.get("symbol", "XAU/USD"))]
+
+    # --- TF ---
     if args.tf:
         tf_list = parse_tf_list(args.tf)
     else:
@@ -244,34 +384,45 @@ def main() -> int:
         logging.error("Rebuild: порожній список TF")
         return 2
 
+    # --- start/end overrides ---
+    start_override = None
+    end_override = None
     if args.start_utc:
-        start_ms = int(parse_iso_utc(args.start_utc).timestamp() * 1000)
-    else:
-        start_ms = head_first_bar_time_ms(data_root, symbol, tf_s=TF_M5_S)
+        start_override = int(parse_iso_utc(args.start_utc).timestamp() * 1000)
     if args.end_utc:
-        end_ms = int(parse_iso_utc(args.end_utc).timestamp() * 1000)
-    else:
-        end_open = tail_last_bar_time_ms(data_root, symbol, tf_s=TF_M5_S)
-        end_ms = None if end_open is None else end_open + TF_M5_MS
+        end_override = int(parse_iso_utc(args.end_utc).timestamp() * 1000)
 
-    if start_ms is None or end_ms is None:
-        logging.error("Rebuild: немає M5 на диску")
-        return 2
-
-    writer = JsonlAppender(root=data_root)
-    try:
-        rebuild_from_m5(
+    # --- Послідовний rebuild (NoMix для _derived_tail_state.json) ---
+    errors = []   # type: List[str]
+    ok_count = 0
+    for sym in sym_list:
+        logging.info("=== Rebuild START: %s ===", sym)
+        err = _rebuild_one_symbol(
             data_root=data_root,
-            symbol=symbol,
+            symbol=sym,
             tf_list=tf_list,
-            start_ms=start_ms,
-            end_ms=end_ms,
+            start_override=start_override,
+            end_override=end_override,
             dry_run=bool(args.dry_run),
-            writer=writer,
         )
-    finally:
-        writer.close()
+        if err:
+            logging.error("Rebuild FAIL: %s", err)
+            errors.append(err)
+        else:
+            logging.info("Rebuild OK: %s", sym)
+            ok_count += 1
 
+    # --- Підсумок ---
+    total = len(sym_list)
+    fail_count = len(errors)
+    logging.info(
+        "=== ПІДСУМОК: %d/%d OK, %d FAIL ===",
+        ok_count, total, fail_count,
+    )
+    if errors:
+        for e in errors:
+            logging.error("  FAIL: %s", e)
+        return 2
     return 0
 
 

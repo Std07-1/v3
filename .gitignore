@@ -5,9 +5,8 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 
-
+# Секрети та налаштування
 .env
-.env.*
 
 # Дані
 /data_v3/
@@ -24,6 +23,7 @@ exit_gates/
 /changelog.jsonl
 /CHANGELOG.md
 /rebuild_state.json
+/docs/audit/
 
 # Секретні документи
 /docs/Host Contract - Capability Sheet.md
@@ -43,3 +43,4 @@ exit_gates/
 
 # Тимчасове
 *.log
+logs/

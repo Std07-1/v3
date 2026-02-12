@@ -199,6 +199,11 @@ class PollingConnectorB:
         m5_backfill_step_bars: int,
         m5_backfill_every_min: int,
         m5_backfill_max_bars: int,
+        live_recover_threshold_bars: int,
+        live_recover_max_bars_per_cycle: int,
+        live_recover_cooldown_s: int,
+        live_recover_max_total_bars: int,
+        live_recover_log_interval_s: int,
         flat_bar_max_volume: int,
         derived_tfs_s: List[int],
         broker_base_tfs_s: List[int],
@@ -238,6 +243,18 @@ class PollingConnectorB:
         self._m5_backfill_last_ts = 0.0
         self._m5_backfill_last_head_ms: Optional[int] = None
         self._m5_backfill_no_progress = 0
+        self._live_recover_threshold_bars = max(1, int(live_recover_threshold_bars))
+        self._live_recover_max_bars_per_cycle = max(1, int(live_recover_max_bars_per_cycle))
+        self._live_recover_cooldown_s = max(0, int(live_recover_cooldown_s))
+        self._live_recover_max_total_bars = max(0, int(live_recover_max_total_bars))
+        self._live_recover_log_interval_s = max(10, int(live_recover_log_interval_s))
+        self._recover_active: bool = False
+        self._recover_start_ts: float = 0.0
+        self._recover_last_fetch_ts: float = 0.0
+        self._recover_total_fetched: int = 0
+        self._recover_total_written: int = 0
+        self._recover_last_log_ts: float = 0.0
+        self._recover_gap_at_start: int = 0
         self._flat_bar_max_volume = max(0, int(flat_bar_max_volume))
         self._derived_tfs_s = derived_tfs_s
         if 300 in self._derived_tfs_s:
@@ -760,6 +777,7 @@ class PollingConnectorB:
             anchor_open = self._last_trading_minute_open_ms(utc_now_ms())
             self._fetch_base_from_broker_on_close(anchor_open)
         self._poll_m5_once()
+        self._live_recover_check()
         self._progressive_backfill_m5()
         self._run_warmup_phase()
         self._run_rebuild_phase()
@@ -785,7 +803,6 @@ class PollingConnectorB:
             msg = f"BACKFILL_QUARANTINE symbol={self._symbol} tf_s={bar.tf_s} first={first_iso} last={iso}"
             self._warn_throttled(key, msg)
             # повідомлення тротлиться всередині _warn_throttled, тому тут нічого не логимо
-            return
             return
         result = self._uds.commit_final_bar(bar)
         if not result.ok:
@@ -854,13 +871,22 @@ class PollingConnectorB:
         total_existing = 0
         total_found = 0
 
-        for tf_s, n in sorted(self._broker_base_cold_start_counts.items()):
+        for tf_s, n_full in sorted(self._broker_base_cold_start_counts.items()):
             if self._broker_base_tfs_s and tf_s not in self._broker_base_tfs_s:
                 continue
-            if self._last_saved_base.get(tf_s) is not None:
+            # Catch-up: якщо дані є — обчислюємо мінімальний N для gap
+            last_known = self._last_saved_base.get(tf_s)
+            if last_known is not None:
+                now_ms = int(date_to.timestamp() * 1000)
+                gap_bars = max(2, (now_ms - last_known) // (tf_s * 1000) + 2)
+                n = min(n_full, gap_bars)
                 if log_detail:
-                    logging.debug("Cold-start base: TF=%ds вже є на диску, пропуск.", tf_s)
-                continue
+                    logging.debug(
+                        "Cold-start base: TF=%ds catch-up gap_bars=%d n=%d",
+                        tf_s, gap_bars, n,
+                    )
+            else:
+                n = n_full
             bars = self._provider.fetch_last_n_tf(self._symbol, tf_s=tf_s, n=n, date_to_utc=date_to)
             self._capture_history_error()
             if not bars:
@@ -1045,7 +1071,9 @@ class PollingConnectorB:
     def _fetch_base_from_broker_on_close(self, anchor_open_ms: int) -> None:
         written = 0
         tried = 0
-        last_trading_open = self._last_trading_minute_open_ms(anchor_open_ms)
+        # anchor_open_ms вже = _last_trading_minute_open_ms(now) з poll_iteration;
+        # повторне застосування зсувало на 1 хвилину назад і ламало детекцію.
+        last_trading_open = anchor_open_ms
         for tf_s in self._broker_base_tfs_s:
             if (
                 self._broker_base_max_tf_per_poll > 0
@@ -1064,7 +1092,9 @@ class PollingConnectorB:
             tf_ms = tf_s * 1000
             b0 = floor_bucket_start_ms(last_trading_open, tf_s, anchor_offset_s=anchor)
             b1 = b0 + tf_ms
-            expected_last = self._last_trading_minute_open_ms(b1 - 60_000)
+            # b1 = кінець бакета; _last_trading_minute_open_ms(b1) повертає
+            # останню торгову хвилину ДО b1 (тобто всередині бакета).
+            expected_last = self._last_trading_minute_open_ms(b1)
             if last_trading_open != expected_last:
                 continue
             if has_on_disk(self._day_index_cache, self._uds, self._symbol, tf_s, b0):
@@ -1414,6 +1444,122 @@ class PollingConnectorB:
                 if len(out) >= limit:
                     break
         return out
+
+    def _live_recover_check(self) -> None:
+        """Перевірка і виконання live-recover після паузи/reconnect.
+
+        Якщо gap між disk_last і expected_last > threshold — входить у
+        режим recover з rate-limit (cooldown + budget). Collapse-to-latest:
+        кожен цикл перераховує вікно від поточного last_saved до cutoff.
+        Тільки final M5, без preview.
+        """
+        if self._live_recover_max_total_bars <= 0:
+            return
+        now_ms = utc_now_ms()
+        cutoff = expected_last_closed_m5_open_ms_calendar(
+            self._provider,
+            self._symbol,
+            self._calendar,
+            now_ms,
+        )
+        if cutoff <= 0:
+            return
+        last_saved = self._last_saved_m5_open_ms
+        if last_saved is None:
+            return  # немає диску — обробляє bootstrap
+        gap_bars = int((cutoff - last_saved) // 300_000)
+
+        # --- Вхід у recover ---
+        if not self._recover_active:
+            if gap_bars <= self._live_recover_threshold_bars:
+                return
+            self._recover_active = True
+            self._recover_start_ts = time.time()
+            self._recover_last_fetch_ts = 0.0
+            self._recover_total_fetched = 0
+            self._recover_total_written = 0
+            self._recover_last_log_ts = 0.0
+            self._recover_gap_at_start = gap_bars
+            logging.warning(
+                "LIVE_RECOVER_START symbol=%s gap_bars=%d cutoff=%s last_saved=%s",
+                self._symbol,
+                gap_bars,
+                ms_to_utc_dt(cutoff).isoformat(),
+                ms_to_utc_dt(last_saved).isoformat(),
+            )
+
+        # --- Вихід: наздогнали ---
+        if gap_bars <= 0:
+            self._live_recover_finish("caught_up")
+            return
+
+        # --- Вихід: бюджет вичерпано ---
+        if self._recover_total_fetched >= self._live_recover_max_total_bars:
+            self._live_recover_finish("max_total_reached")
+            return
+
+        # --- Cooldown ---
+        now_s = time.time()
+        if now_s - self._recover_last_fetch_ts < self._live_recover_cooldown_s:
+            return
+
+        # --- Collapse-to-latest: вікно від поточного last_saved ---
+        n = min(gap_bars, self._live_recover_max_bars_per_cycle)
+        remaining_budget = self._live_recover_max_total_bars - self._recover_total_fetched
+        n = min(n, remaining_budget)
+        if n <= 0:
+            self._live_recover_finish("budget_exhausted")
+            return
+
+        date_to = ms_to_utc_dt(cutoff + 300_000)
+        bars = self._provider.fetch_last_n_tf(
+            self._symbol, tf_s=300, n=n, date_to_utc=date_to,
+        )
+        self._capture_history_error()
+        self._recover_last_fetch_ts = now_s
+        self._recover_total_fetched += len(bars) if bars else 0
+
+        if bars:
+            bars = [
+                b for b in bars
+                if b.open_time_ms > last_saved and b.open_time_ms <= cutoff
+            ]
+            if bars:
+                written = self._ingest_m5_bars(
+                    bars,
+                    allow_older=True,
+                    write_missing_older=True,
+                    log_summary=False,
+                    context="live_recover_m5",
+                )
+                self._recover_total_written += written
+
+        # --- Фазовий лог ---
+        if now_s - self._recover_last_log_ts >= self._live_recover_log_interval_s:
+            self._recover_last_log_ts = now_s
+            remaining = int((cutoff - (self._last_saved_m5_open_ms or 0)) // 300_000)
+            elapsed_s = int(now_s - self._recover_start_ts)
+            logging.info(
+                "LIVE_RECOVER sym=%s missing_bars=%d fetched=%d written=%d elapsed_s=%d",
+                self._symbol,
+                remaining,
+                self._recover_total_fetched,
+                self._recover_total_written,
+                elapsed_s,
+            )
+
+    def _live_recover_finish(self, reason: str) -> None:
+        elapsed_s = int(time.time() - self._recover_start_ts)
+        logging.info(
+            "LIVE_RECOVER_DONE symbol=%s reason=%s gap_at_start=%d fetched=%d written=%d elapsed_s=%d",
+            self._symbol,
+            reason,
+            self._recover_gap_at_start,
+            self._recover_total_fetched,
+            self._recover_total_written,
+            elapsed_s,
+        )
+        self._recover_active = False
 
     def _progressive_backfill_m5(self) -> None:
         if self._m5_backfill_step_bars <= 0:

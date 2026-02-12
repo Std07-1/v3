@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, TextIO
 
-from env_profile import load_env_profile
+from env_profile import load_env_secrets
+from core.config_loader import pick_config_path
 from runtime.store.redis_spec import resolve_redis_spec
 
 try:
@@ -140,23 +141,6 @@ def _start_process(
     raise ValueError(f"Невідомий stdio режим: {stdio}")
 
 
-def _resolve_config_path(raw_path: str | None) -> str:
-    base_dir = Path(__file__).resolve().parents[1]
-    raw_value = (raw_path or "").strip()
-    if not raw_value:
-        return str((base_dir / "config.json").resolve())
-    if Path(raw_value).is_absolute():
-        return str(Path(raw_value).resolve())
-    return str((base_dir / raw_value).resolve())
-
-
-def _pick_config_path() -> str:
-    env_path = (os.environ.get("AI_ONE_CONFIG_PATH") or "").strip()
-    if env_path:
-        return _resolve_config_path(env_path)
-    return _resolve_config_path("config.json")
-
-
 def _wait_for_prime_ready(config_path: str, timeout_s: int = 20) -> bool:
     if redis_lib is None:
         logging.warning("PRIME_READY_WAIT_SKIP reason=redis_package_missing")
@@ -242,11 +226,11 @@ def main() -> int:
 
     logging.info("Supervisor: mode=%s stdio=%s", args.mode, stdio)
 
-    report = load_env_profile()
-    if report.dispatcher_loaded or report.profile_loaded:
-        logging.info("ENV: dispatcher=%s profile=%s", report.dispatcher_path, report.profile_path)
+    report = load_env_secrets()
+    if report.loaded:
+        logging.info("ENV: secrets_loaded path=%s keys=%d", report.path, report.keys_count)
     else:
-        logging.info("ENV: профіль не завантажено")
+        logging.info("ENV: .env не завантажено")
 
     processes: List[ChildProcess] = []
     try:
@@ -282,7 +266,7 @@ def main() -> int:
             )
         if args.mode in ("all", "ui"):
             if args.mode == "all":
-                config_path = _pick_config_path()
+                config_path = pick_config_path()
                 _wait_for_prime_ready(config_path)
             processes.append(
                 _start_process(

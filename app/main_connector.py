@@ -8,7 +8,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from env_profile import load_env_profile
+from env_profile import load_env_secrets
+from core.config_loader import pick_config_path
 from app.composition import ConfigError, build_connector
 from app.lifecycle import run_with_shutdown
 from runtime.ingest.market_calendar import MarketCalendar
@@ -21,23 +22,6 @@ def setup_logging(verbose: bool) -> None:
         level=level,
         format="%(asctime)s | %(levelname)s | %(message)s",
     )
-
-
-def _resolve_config_path(raw_path: str | None) -> str:
-    base_dir = Path(__file__).resolve().parents[1]
-    raw_value = (raw_path or "").strip()
-    if not raw_value:
-        return str((base_dir / "config.json").resolve())
-    if Path(raw_value).is_absolute():
-        return str(Path(raw_value).resolve())
-    return str((base_dir / raw_value).resolve())
-
-
-def _pick_config_path() -> str:
-    env_path = (os.environ.get("AI_ONE_CONFIG_PATH") or "").strip()
-    if env_path:
-        return _resolve_config_path(env_path)
-    return _resolve_config_path("config.json")
 
 
 def _load_retry_config(config_path: str) -> tuple[int, int, int]:
@@ -66,6 +50,12 @@ def _load_retry_config(config_path: str) -> tuple[int, int, int]:
 
 def _calendar_from_group(group_cfg: dict) -> Optional[MarketCalendar]:
     try:
+        daily_breaks_raw = group_cfg.get("market_daily_breaks", [])
+        daily_breaks = tuple(
+            (str(pair[0]), str(pair[1]))
+            for pair in daily_breaks_raw
+            if isinstance(pair, (list, tuple)) and len(pair) >= 2
+        )
         return MarketCalendar(
             enabled=True,
             weekend_close_dow=int(group_cfg["market_weekend_close_dow"]),
@@ -75,6 +65,7 @@ def _calendar_from_group(group_cfg: dict) -> Optional[MarketCalendar]:
             daily_break_start_hm=str(group_cfg["market_daily_break_start_hm"]),
             daily_break_end_hm=str(group_cfg["market_daily_break_end_hm"]),
             daily_break_enabled=True,
+            daily_breaks=daily_breaks,
         )
     except Exception:
         return None
@@ -200,12 +191,12 @@ def _build_with_retry(config_path: str) -> tuple[object, callable | None]:
 
 def main() -> int:
     setup_logging(verbose=False)
-    report = load_env_profile()
-    if report.dispatcher_loaded or report.profile_loaded:
-        logging.info("ENV: dispatcher=%s profile=%s", report.dispatcher_path, report.profile_path)
+    report = load_env_secrets()
+    if report.loaded:
+        logging.info("ENV: secrets_loaded path=%s keys=%d", report.path, report.keys_count)
     else:
-        logging.info("ENV: профіль не завантажено")
-    config_path = _pick_config_path()
+        logging.info("ENV: .env не завантажено")
+    config_path = pick_config_path()
     logging.info("Config: %s", config_path)
     logging.info("Запуск PollingConnectorB")
     init_redis_snapshot(config_path, log_detail=True)

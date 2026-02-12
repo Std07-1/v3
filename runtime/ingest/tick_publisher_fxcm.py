@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from env_profile import load_env_profile
+from env_profile import load_env_secrets
+from core.config_loader import pick_config_path, load_system_config, env_str
 from runtime.store.redis_keys import symbol_key
 from runtime.store.redis_spec import resolve_redis_spec
 
@@ -42,41 +43,11 @@ def _setup_logging(verbose: bool = False) -> None:
     )
 
 
-def _resolve_config_path(raw_path: str | None) -> str:
-    base_dir = Path(__file__).resolve().parents[2]
-    raw_value = (raw_path or "").strip()
-    if not raw_value:
-        return str((base_dir / "config.json").resolve())
-    if Path(raw_value).is_absolute():
-        return str(Path(raw_value).resolve())
-    return str((base_dir / raw_value).resolve())
-
-
-def _pick_config_path() -> str:
-    env_path = (os.environ.get("AI_ONE_CONFIG_PATH") or "").strip()
-    if env_path:
-        return _resolve_config_path(env_path)
-    return _resolve_config_path("config.json")
-
-
-def _load_cfg(path: str) -> dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _env_str(key: str) -> Optional[str]:
-    value = os.environ.get(key)
-    if value is None:
-        return None
-    value = str(value).strip()
-    return value or None
-
-
 def _pick_tick_channel() -> Optional[str]:
-    channel = _env_str("FXCM_PRICE_TICK_CHANNEL")
+    channel = env_str("FXCM_PRICE_TICK_CHANNEL")
     if channel:
         return channel
-    legacy = _env_str("FXCM_PRICE_SNAPSHOT_CHANNEL")
+    legacy = env_str("FXCM_PRICE_SNAPSHOT_CHANNEL")
     if legacy:
         logging.warning(
             "TickPublisher: FXCM_PRICE_TICK_CHANNEL не заданий, fallback до FXCM_PRICE_SNAPSHOT_CHANNEL"
@@ -409,15 +380,15 @@ class FxcmTickPublisher:
 
 def main() -> int:
     _setup_logging()
-    report = load_env_profile()
-    if report.dispatcher_loaded or report.profile_loaded:
-        logging.info("ENV: dispatcher=%s profile=%s", report.dispatcher_path, report.profile_path)
+    report = load_env_secrets()
+    if report.loaded:
+        logging.info("ENV: secrets_loaded path=%s keys=%d", report.path, report.keys_count)
     else:
-        logging.info("ENV: профіль не завантажено")
+        logging.info("ENV: .env не завантажено")
 
-    config_path = _pick_config_path()
+    config_path = pick_config_path()
     try:
-        cfg = _load_cfg(config_path)
+        cfg = load_system_config(config_path)
     except Exception as exc:
         logging.error("TickPublisher: не вдалося прочитати config.json err=%s", exc)
         time.sleep(5.0)
@@ -445,10 +416,10 @@ def main() -> int:
         while True:
             time.sleep(60.0)
 
-    fxcm_user = _env_str("FXCM_USERNAME") or str(cfg.get("user_id") or "")
-    fxcm_password = _env_str("FXCM_PASSWORD") or str(cfg.get("password") or "")
-    fxcm_url = _env_str("FXCM_HOST_URL") or str(cfg.get("url", "http://www.fxcorporate.com/Hosts.jsp"))
-    fxcm_connection = _env_str("FXCM_CONNECTION") or str(cfg.get("connection", "Demo"))
+    fxcm_user = env_str("FXCM_USERNAME") or str(cfg.get("user_id") or "")
+    fxcm_password = env_str("FXCM_PASSWORD") or str(cfg.get("password") or "")
+    fxcm_url = env_str("FXCM_HOST_URL") or str(cfg.get("url", "http://www.fxcorporate.com/Hosts.jsp"))
+    fxcm_connection = env_str("FXCM_CONNECTION") or str(cfg.get("connection", "Demo"))
     if not fxcm_user or not fxcm_password:
         logging.error("TickPublisher: FXCM credentials відсутні")
         while True:

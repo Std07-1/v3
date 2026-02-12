@@ -4,7 +4,7 @@
 
 ## Короткий опис
 
-Система працює тільки з M5 як базовим потоком. На старті робиться warmup останніх M5 (history), далі щохвилини підтягування M5 tail (history). Похідні TF (>= 15m) будуються тільки якщо M5-діапазон повний. Write-path іде через UDS: PollingConnectorB пише final у SSOT і Redis snapshots, а updates публікуються у Redis updates bus. UI отримує дані через HTTP API, де UDS працює як reader: cold-load може йти з Redis snapshots з fallback на диск при малому tail, оновлення (/api/updates) читаються з Redis updates bus (disk тільки recovery при redis_down). Preview-plane для 1m/3m повністю wired: FXCM tick publisher (Plane A) → Redis pub/sub → TickPreviewWorker → TickAggregator → UDS.publish_preview_bar → Redis preview keyspace (Plane B). Tick-и валідуються schema guard (tick_v1) на вході TickPreviewWorker. Preview ніколи не пишеться у SSOT JSONL. /api/bars для preview TF завжди йде через read_preview_window (prefer_redis/force_disk ігноруються з loud warning). 0-ticks silence > 120с генерує WARNING. Wallclock fallback для tick_ts позначається src=fxcm_wallclock. P2X.6-U1: для TF≥M5 UI отримує ephemeral overlay бар через /api/overlay (read-only endpoint, агрегує preview M1 в один бар target TF, src=overlay_preview, complete=False, volume=0). Overlay polling кожні 1с, окрема серія в chart, не проходить через applyUpdates/final. UI клієнт абортує застарілі load-запити та ігнорує пізні відповіді. Scrollback працює як cover-until-satisfied: тригер лівого буфера ~2000 барів, підкидає по 5000 (фаворити x2) і повторює догрузку до покриття. UI API читає config.json з кешем mtime (для ui_debug/tf_allowlist/min_coldload_bars). Профіль середовища визначається через `.env` -> `.env.local/.env.prod`, а Redis host/port/db/ns береться з FXCM_REDIS_* (env override).
+Система працює тільки з M5 як базовим потоком. На старті робиться warmup останніх M5 (history), далі щохвилини підтягування M5 tail (history). Похідні TF (>= 15m) будуються тільки якщо M5-діапазон повний. Write-path іде через UDS: PollingConnectorB пише final у SSOT і Redis snapshots, а updates публікуються у Redis updates bus. UI отримує дані через HTTP API, де UDS працює як reader: cold-load може йти з Redis snapshots з fallback на диск при малому tail, оновлення (/api/updates) читаються з Redis updates bus (disk тільки recovery при redis_down). Preview-plane для 1m/3m повністю wired: FXCM tick publisher (Plane A) → Redis pub/sub → TickPreviewWorker → TickAggregator → UDS.publish_preview_bar → Redis preview keyspace (Plane B). Tick-и валідуються schema guard (tick_v1) на вході TickPreviewWorker. Preview ніколи не пишеться у SSOT JSONL. /api/bars для preview TF завжди йде через read_preview_window (prefer_redis/force_disk ігноруються з loud warning). 0-ticks silence > 120с генерує WARNING. Wallclock fallback для tick_ts позначається src=fxcm_wallclock. P2X.6-U1: для TF≥M5 UI отримує ephemeral overlay бар через /api/overlay (read-only endpoint, агрегує preview M1 в один бар target TF, src=overlay_preview, complete=False, volume=0). Overlay polling кожні 1с, окрема серія в chart, не проходить через applyUpdates/final. UI клієнт абортує застарілі load-запити та ігнорує пізні відповіді. Scrollback працює як cover-until-satisfied: тригер лівого буфера ~2000 барів, підкидає по 5000 (фаворити x2) і повторює догрузку до покриття. UI API читає config.json з кешем mtime (для ui_debug/tf_allowlist/min_coldload_bars). Конфіг шлях визначається через єдиний SSOT модуль `core/config_loader.py` (pick_config_path → AI_ONE_CONFIG_PATH або config.json). ENV використовується тільки для секретів. UI має portable `ui_config.json` + query string `?api_base=` override.
 
 ## Геометрія часу (помітка для всіх розмов про свічки)
 
@@ -188,17 +188,25 @@ v3/
 |   |-- purge_broken_bars.py      # чистка пошкоджених JSONL
 |   |-- run_exit_gates.py         # runner exit-gates з manifest.json
 |   |-- exit_gates/
-|   |   |-- manifest.json         # реєстр усіх gates (13 записів)
+|   |   |-- manifest.json         # реєстр усіх gates (14 записів)
 |   |   `-- gates/
+|   |       |-- gate_config_singleton.py  # P2X.8-C1/C2: 8 sub-gates (DRY config, no split-brain, no dispatcher)
 |   |       |-- gate_preview_plane.py  # P2X.6-G1: 4 sub-gates (nomix_disk, uds_hotpath, api_splitbrain, tick_schema)
 |   |       |-- gate_preview_not_on_disk.py  # preview не на диску (data scan)
 |   |       `-- gate_no_preview_in_final_redis.py  # preview не у final Redis
 |   `-- __init__.py
-|-- config.json                  # SSOT конфіг (календарі груп)
-|-- env_profile.py               # завантаження .env профілів
-|-- .env                         # dispatcher (AI_ONE_ENV_FILE)
-|-- .env.local                   # локальні FXCM/Redis параметри (секрети)
-|-- .env.prod                    # прод FXCM/Redis параметри (секрети)
+|-- core/
+|   |-- config_loader.py         # SSOT: pick_config_path / resolve_config_path / env_str / load_system_config
+|   |-- buckets.py               # bucket_start_ms / resolve_anchor_offset_ms
+|   `-- time_geom.py             # normalize_bar
+|-- config.json                  # SSOT конфіг (один файл, без profile branching)
+|-- env_profile.py               # завантаження .env → секрети (load_env_secrets)
+|-- .env                         # секрети (FXCM credentials + channels + Redis override)
+|-- ui_chart_v3/
+|   |-- static/
+|   |   |-- app.js               # клієнт (API_BASE + ?api_base= override)
+|   |   `-- ui_config.json       # portable UI конфіг (api_base, ui_debug)
+|   `-- server.py                # HTTP API + static server
 |-- data_v3/                     # SSOT дані (JSONL)
 |-- changelog.jsonl              # детальний журнал
 |-- CHANGELOG.md                 # короткий індекс

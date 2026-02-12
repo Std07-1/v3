@@ -1,6 +1,11 @@
 // Мінімальний клієнт для Lightweight Charts.
 // Працює з API: /api/symbols, /api/bars, /api/latest.
 
+// --- API_BASE: portable config ---
+// Визначається з ui_config.json або query string ?api_base=...
+// Порожній рядок = same-origin (дефолт).
+let API_BASE = '';
+
 const elSymbol = document.getElementById('symbol');
 const elTf = document.getElementById('tf');
 const elReload = document.getElementById('reload');
@@ -419,21 +424,46 @@ function syncHudMenuWidth() {
 }
 
 async function apiGet(url, opts = {}) {
-  const r = await fetch(url, { cache: 'no-store', signal: opts.signal });
+  const fullUrl = API_BASE ? API_BASE + url : url;
+  const r = await fetch(fullUrl, { cache: 'no-store', signal: opts.signal });
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return await r.json();
 }
 
 async function loadUiConfig() {
+  // 1. Query string override: ?api_base=http://host:port
+  const params = new URLSearchParams(window.location.search);
+  const qsBase = (params.get('api_base') || '').replace(/\/+$/, '');
+  if (qsBase) {
+    API_BASE = qsBase;
+    console.log('[ui_config] api_base від query string:', API_BASE);
+  }
+
+  // 2. Portable ui_config.json (статичний файл поряд з app.js)
+  if (!API_BASE) {
+    try {
+      const r = await fetch('ui_config.json', { cache: 'no-store' });
+      if (r.ok) {
+        const uiCfg = await r.json();
+        if (uiCfg.api_base) {
+          API_BASE = String(uiCfg.api_base).replace(/\/+$/, '');
+          console.log('[ui_config] api_base від ui_config.json:', API_BASE);
+        }
+        if (typeof uiCfg.ui_debug === 'boolean') {
+          uiDebugEnabled = uiCfg.ui_debug;
+        }
+      }
+    } catch (_) { /* ui_config.json не обов'язковий */ }
+  }
+
+  // 3. Серверний /api/config (доповнює, не перезаписує api_base)
   try {
     const data = await apiGet('/api/config');
     if (data && typeof data.ui_debug === 'boolean') {
       uiDebugEnabled = data.ui_debug;
     }
-    // no live state
   } catch (e) {
     uiDebugEnabled = true;
-    // no live state
   }
   applyUiDebug();
 }

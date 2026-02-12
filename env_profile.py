@@ -1,18 +1,9 @@
-"""Завантаження профілю середовища (local/prod) для репозиторію FXCM Connector.
+"""Завантаження секретів із `.env` для репозиторію FXCM Connector.
 
 Ціль:
-- мати один перемикач профілю через `.env` dispatcher;
-- локальний запуск не має торкатись прод Redis-каналів, якщо задано
-  `FXCM_CHANNEL_PREFIX=fxcm_local` (або інший префікс);
-- не зберігати секрети у dispatcher-файлі (він має містити лише прості ключі).
-
-Очікуваний формат:
-- `.env` містить тільки `AI_ONE_ENV_FILE=.env.local` або `.env.prod`.
-- самі профілі (`.env.local` / `.env.prod`) містять `FXCM_*` змінні.
-
-Примітка:
-Цей модуль НЕ друкує значення змінних (щоб не витікали секрети), лише
-керує порядком завантаження файлів.
+- один файл `.env` із секретами (FXCM_USERNAME, FXCM_PASSWORD, канали тощо);
+- пряме завантаження без посередників;
+- цей модуль НЕ друкує значення змінних (щоб не витікали секрети).
 """
 
 from __future__ import annotations
@@ -30,66 +21,45 @@ except ImportError:  # pragma: no cover
 
 @dataclass(frozen=True)
 class EnvLoadReport:
-    """Результат завантаження env-профілю (без значень)."""
+    """Результат завантаження .env (без значень)."""
 
-    dispatcher_path: Optional[Path]
-    profile_path: Optional[Path]
-    dispatcher_loaded: bool
-    profile_loaded: bool
+    path: Optional[Path]
+    loaded: bool
+    keys_count: int
 
 
-def load_env_profile(
+def load_env_secrets(
     *,
     override: bool = False,
-    dispatcher: str | Path = ".env",
+    env_path: str | Path = ".env",
 ) -> EnvLoadReport:
-    """Завантажує `.env` dispatcher і профіль із `AI_ONE_ENV_FILE`.
-
-    Порядок:
-    1) Якщо python-dotenv недоступний — нічого не робимо.
-    2) Якщо існує dispatcher-файл — вантажимо його.
-    3) Якщо після цього задано `AI_ONE_ENV_FILE` і файл існує — вантажимо профіль.
+    """Завантажує секрети з одного `.env` файлу.
 
     Args:
-        override: Якщо True — значення з файлів перекривають поточне ENV.
-        dispatcher: Шлях до dispatcher `.env`.
+        override: Якщо True — значення з файлу перекривають поточне ENV.
+        env_path: Шлях до `.env` файлу.
 
     Returns:
-        EnvLoadReport: Шляхи і прапорці завантаження.
+        EnvLoadReport: Шлях, чи завантажено, кількість ключів.
     """
 
     if load_dotenv is None:
-        return EnvLoadReport(
-            dispatcher_path=None,
-            profile_path=None,
-            dispatcher_loaded=False,
-            profile_loaded=False,
-        )
+        return EnvLoadReport(path=None, loaded=False, keys_count=0)
 
-    dispatcher_path = Path(dispatcher).resolve()
-    dispatcher_loaded = False
-    if dispatcher_path.exists():
-        dispatcher_loaded = bool(load_dotenv(dotenv_path=str(dispatcher_path), override=override))
+    resolved = Path(env_path).resolve()
+    if not resolved.exists():
+        return EnvLoadReport(path=None, loaded=False, keys_count=0)
 
-    env_file_raw = (os.environ.get("AI_ONE_ENV_FILE") or "").strip()
-    profile_path: Optional[Path] = None
-    profile_loaded = False
-    if env_file_raw:
-        candidate = Path(env_file_raw)
-        if not candidate.is_absolute():
-            candidate = (dispatcher_path.parent / candidate).resolve()
-        profile_path = candidate
-        if candidate.exists():
-            profile_loaded = bool(load_dotenv(dotenv_path=str(candidate), override=override))
+    # Підрахуємо кількість ключів у файлі (до завантаження)
+    keys_count = 0
+    try:
+        for line in resolved.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                keys_count += 1
+    except Exception:
+        pass
 
-    # Fallback: якщо dispatcher не існує і AI_ONE_ENV_FILE не заданий —
-    # залишаємо стару поведінку "autodetect .env".
-    if not dispatcher_path.exists() and not env_file_raw:
-        profile_loaded = bool(load_dotenv(override=override))
+    loaded = bool(load_dotenv(dotenv_path=str(resolved), override=override))
 
-    return EnvLoadReport(
-        dispatcher_path=dispatcher_path if dispatcher_path.exists() else None,
-        profile_path=profile_path if (profile_path and profile_path.exists()) else profile_path,
-        dispatcher_loaded=dispatcher_loaded,
-        profile_loaded=profile_loaded,
-    )
+    return EnvLoadReport(path=resolved, loaded=loaded, keys_count=keys_count)

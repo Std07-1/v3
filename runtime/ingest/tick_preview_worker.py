@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Iterable
 
-from env_profile import load_env_profile
+from env_profile import load_env_secrets
+from core.config_loader import pick_config_path, load_system_config, env_str
 from runtime.ingest.tick_agg import TickAggregator
 from runtime.store.redis_spec import resolve_redis_spec
 from runtime.store.uds import build_uds_from_config
@@ -37,41 +38,11 @@ def _setup_logging(verbose: bool = False) -> None:
     )
 
 
-def _resolve_config_path(raw_path: str | None) -> str:
-    base_dir = Path(__file__).resolve().parents[2]
-    raw_value = (raw_path or "").strip()
-    if not raw_value:
-        return str((base_dir / "config.json").resolve())
-    if Path(raw_value).is_absolute():
-        return str(Path(raw_value).resolve())
-    return str((base_dir / raw_value).resolve())
-
-
-def _pick_config_path() -> str:
-    env_path = (os.environ.get("AI_ONE_CONFIG_PATH") or "").strip()
-    if env_path:
-        return _resolve_config_path(env_path)
-    return _resolve_config_path("config.json")
-
-
-def _load_cfg(path: str) -> dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _env_str(key: str) -> Optional[str]:
-    value = os.environ.get(key)
-    if value is None:
-        return None
-    value = str(value).strip()
-    return value or None
-
-
 def _pick_tick_channel() -> Optional[str]:
-    channel = _env_str("FXCM_PRICE_TICK_CHANNEL")
+    channel = env_str("FXCM_PRICE_TICK_CHANNEL")
     if channel:
         return channel
-    legacy = _env_str("FXCM_PRICE_SNAPSHOT_CHANNEL")
+    legacy = env_str("FXCM_PRICE_SNAPSHOT_CHANNEL")
     if legacy:
         logging.warning(
             "TickPreview: FXCM_PRICE_TICK_CHANNEL не заданий, fallback до FXCM_PRICE_SNAPSHOT_CHANNEL"
@@ -364,15 +335,15 @@ class TickPreviewWorker:
 
 def main() -> int:
     _setup_logging()
-    report = load_env_profile()
-    if report.dispatcher_loaded or report.profile_loaded:
-        logging.info("ENV: dispatcher=%s profile=%s", report.dispatcher_path, report.profile_path)
+    report = load_env_secrets()
+    if report.loaded:
+        logging.info("ENV: secrets_loaded path=%s keys=%d", report.path, report.keys_count)
     else:
-        logging.info("ENV: профіль не завантажено")
+        logging.info("ENV: .env не завантажено")
 
-    config_path = _pick_config_path()
+    config_path = pick_config_path()
     try:
-        cfg = _load_cfg(config_path)
+        cfg = load_system_config(config_path)
     except Exception as exc:
         logging.error("TickPreview: не вдалося прочитати config.json err=%s", exc)
         time.sleep(5.0)

@@ -356,24 +356,6 @@ def _parse_int_map(raw: Any) -> Dict[int, int]:
     return out
 
 
-def _env_str(key: str) -> Optional[str]:
-    value = os.environ.get(key)
-    if value is None:
-        return None
-    value = str(value).strip()
-    return value or None
-
-
-def _env_int(key: str) -> Optional[int]:
-    raw = _env_str(key)
-    if raw is None:
-        return None
-    try:
-        return int(raw)
-    except Exception:
-        return None
-
-
 def build_redis_snapshot_writer(config_path: str) -> Optional[RedisSnapshotWriter]:
     try:
         with open(config_path, "r", encoding="utf-8") as f:

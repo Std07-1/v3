@@ -32,7 +32,8 @@ from typing import Any
 
 from core.time_geom import normalize_bar
 from core.buckets import bucket_start_ms, resolve_anchor_offset_ms
-from env_profile import load_env_profile
+from core.config_loader import pick_config_path
+from env_profile import load_env_secrets
 from runtime.store.uds import ReadPolicy, UpdatesSpec, WindowSpec, build_uds_from_config
 
 
@@ -282,15 +283,6 @@ def _resolve_cfg_path(path: str | None, config_path: str | None) -> str | None:
         base = os.path.dirname(os.path.abspath(config_path))
         return os.path.join(base, path)
     return os.path.abspath(path)
-
-
-def _resolve_profile_config_path(base_dir: str) -> str | None:
-    env_path = (os.environ.get("AI_ONE_CONFIG_PATH") or "").strip()
-    if not env_path:
-        return None
-    if os.path.isabs(env_path):
-        return os.path.abspath(env_path)
-    return os.path.abspath(os.path.join(base_dir, "..", env_path))
 
 
 def _sym_dir(symbol: str) -> str:
@@ -1386,14 +1378,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 def main() -> int:
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
     )
-    report = load_env_profile()
-    if report.dispatcher_loaded or report.profile_loaded:
-        logging.info("ENV: dispatcher=%s profile=%s", report.dispatcher_path, report.profile_path)
+    report = load_env_secrets()
+    if report.loaded:
+        logging.info("ENV: secrets_loaded path=%s keys=%d", report.path, report.keys_count)
     else:
-        logging.info("ENV: профіль не завантажено")
+        logging.info("ENV: .env не завантажено")
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--data-root",
@@ -1419,8 +1411,7 @@ def main() -> int:
     if static_root_value == "static":
         static_root_value = os.path.join(base_dir, "static")
     static_root = os.path.abspath(static_root_value)
-    env_config = _resolve_profile_config_path(base_dir)
-    default_config = env_config or os.path.abspath(os.path.join(base_dir, "..", "config.json"))
+    default_config = pick_config_path()
     config_path = os.path.abspath(args.config) if args.config else default_config
     data_root_value = args.data_root
     if not data_root_value:

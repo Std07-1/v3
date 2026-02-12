@@ -8,20 +8,13 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.polling.engine_b import MultiSymbolRunner, PollingConnectorB
+from core.config_loader import env_str
 
 
 class ConfigError(Exception):
     def __init__(self, stage: str) -> None:
         super().__init__(stage)
         self.stage = stage
-
-
-def _env_str(key: str) -> Optional[str]:
-    value = os.environ.get(key)
-    if value is None:
-        return None
-    value = str(value).strip()
-    return value or None
 
 
 def load_config(path: str) -> Dict[str, Any]:
@@ -244,10 +237,10 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
     logging.debug("Конфіг завантажено: %s", json.dumps(masked, ensure_ascii=False))
 
     try:
-        env_user_id = _env_str("FXCM_USERNAME")
-        env_password = _env_str("FXCM_PASSWORD")
-        env_connection = _env_str("FXCM_CONNECTION")
-        env_url = _env_str("FXCM_HOST_URL")
+        env_user_id = env_str("FXCM_USERNAME")
+        env_password = env_str("FXCM_PASSWORD")
+        env_connection = env_str("FXCM_CONNECTION")
+        env_url = env_str("FXCM_HOST_URL")
 
         cfg_user_id = cfg.get("user_id")
         cfg_password = cfg.get("password")
@@ -295,6 +288,11 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         m5_backfill_step_bars = int(cfg.get("m5_backfill_step_bars", 0))
         m5_backfill_every_min = int(cfg.get("m5_backfill_every_min", 0))
         m5_backfill_max_bars = int(cfg.get("m5_backfill_max_bars", 0))
+        live_recover_threshold_bars = int(cfg.get("live_recover_threshold_bars", 3))
+        live_recover_max_bars_per_cycle = int(cfg.get("live_recover_max_bars_per_cycle", 50))
+        live_recover_cooldown_s = int(cfg.get("live_recover_cooldown_s", 10))
+        live_recover_max_total_bars = int(cfg.get("live_recover_max_total_bars", 2000))
+        live_recover_log_interval_s = int(cfg.get("live_recover_log_interval_s", 60))
         history_summary_interval_s = int(cfg.get("history_summary_interval_s", 600))
         history_still_failing_interval_s = int(cfg.get("history_still_failing_interval_s", 600))
         history_circuit_fail_streak = int(cfg.get("history_circuit_fail_streak", 3))
@@ -486,6 +484,16 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
 
         overrides = _merge_calendar_overrides(group_overrides_raw, symbol_overrides_raw)
 
+        # daily_breaks: список додаткових інтервалів із group config
+        daily_breaks_raw = []
+        if isinstance(group_overrides_raw, dict):
+            daily_breaks_raw = group_overrides_raw.get("market_daily_breaks", [])
+        daily_breaks = tuple(
+            (str(pair[0]), str(pair[1]))
+            for pair in daily_breaks_raw
+            if isinstance(pair, (list, tuple)) and len(pair) >= 2
+        )
+
         market_calendar = MarketCalendar(
             enabled=bool(_calendar_value(overrides, "calendar_gate_enabled", calendar_gate_enabled)),
             weekend_close_dow=int(
@@ -509,6 +517,7 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
             daily_break_enabled=bool(
                 _calendar_value(overrides, "market_daily_break_enabled", market_daily_break_enabled)
             ),
+            daily_breaks=daily_breaks,
         )
         engines.append(
             PollingConnectorB(
@@ -528,6 +537,11 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
                 m5_backfill_step_bars=m5_backfill_step_bars,
                 m5_backfill_every_min=m5_backfill_every_min,
                 m5_backfill_max_bars=m5_backfill_max_bars,
+                live_recover_threshold_bars=live_recover_threshold_bars,
+                live_recover_max_bars_per_cycle=live_recover_max_bars_per_cycle,
+                live_recover_cooldown_s=live_recover_cooldown_s,
+                live_recover_max_total_bars=live_recover_max_total_bars,
+                live_recover_log_interval_s=live_recover_log_interval_s,
                 flat_bar_max_volume=flat_bar_max_volume,
                 derived_tfs_s=derived_tfs_s,
                 broker_base_tfs_s=broker_base_tfs_s,

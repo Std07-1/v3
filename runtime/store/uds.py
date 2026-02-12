@@ -20,7 +20,6 @@ from runtime.store.redis_spec import resolve_redis_spec
 from runtime.store.ssot_jsonl import JsonlAppender
 
 Logging = logging.getLogger("uds")
-Logging.setLevel(logging.DEBUG)
 
 _OBS = Obs60s("uds")
 
@@ -331,8 +330,8 @@ class UnifiedDataStore:
         prime_payload: Optional[dict[str, Any]] = None
         if self._redis_spec_mismatch:
             _mark_redis_mismatch(meta, warnings, self._redis_spec_mismatch_fields)
-        if Logging.isEnabledFor(logging.INFO):
-            Logging.info(
+        if Logging.isEnabledFor(logging.DEBUG):
+            Logging.debug(
                 "UDS: читання вікна symbol=%s tf_s=%s limit=%s cold_load=%s force_disk=%s prefer_redis=%s",
                 symbol,
                 tf_s,
@@ -1711,24 +1710,21 @@ def _log_geom_fix(source: str, tf_s: int, geom: dict[str, Any]) -> None:
 
 
 def _log_window_result(result: WindowResult, warnings: list[str], tf_s: int) -> None:
-    if not Logging.isEnabledFor(logging.INFO):
-        return
     meta = result.meta or {}
     source = meta.get("source") if isinstance(meta, dict) else None
     if isinstance(meta, dict) and isinstance(meta.get("redis_hit"), bool):
         _OBS.observe_redis_hit(tf_s, bool(meta.get("redis_hit")))
     count = len(result.bars_lwc)
-    Logging.info(
-        "UDS: вікно готове source=%s count=%s warnings=%s",
-        source,
-        count,
-        "|".join(warnings) if warnings else "-",
-    )
+    if Logging.isEnabledFor(logging.DEBUG):
+        Logging.debug(
+            "UDS: вікно готове source=%s count=%s warnings=%s",
+            source,
+            count,
+            "|".join(warnings) if warnings else "-",
+        )
 
 
 def _log_updates_result(result: UpdatesResult) -> None:
-    if not Logging.isEnabledFor(logging.INFO):
-        return
     if not Logging.isEnabledFor(logging.INFO):
         return
     events_len = len(result.events)
@@ -1851,24 +1847,6 @@ class _RedisUpdatesBus:
             return events, int(cursor_seq), gap, None
         except Exception as exc:
             return [], since_seq if since_seq is not None else 0, None, str(exc)
-
-
-def _env_str(key: str) -> Optional[str]:
-    value = os.environ.get(key)
-    if value is None:
-        return None
-    value = str(value).strip()
-    return value or None
-
-
-def _env_int(key: str) -> Optional[int]:
-    raw = _env_str(key)
-    if raw is None:
-        return None
-    try:
-        return int(raw)
-    except Exception:
-        return None
 
 
 def _updates_bus_from_cfg(cfg: dict[str, Any]) -> Optional[_RedisUpdatesBus]:

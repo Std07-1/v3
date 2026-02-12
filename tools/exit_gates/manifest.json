@@ -142,6 +142,65 @@
             "inputs": {
                 "root": "."
             }
+        },
+        {
+            "name": "ui_live_candle_plane",
+            "module": "tools.exit_gates.gates.gate_ui_live_candle_plane",
+            "inputs": {
+                "root": "."
+            }
+        },
+        {
+            "name": "htf_available",
+            "module": "tools.exit_gates.gates.gate_htf_available",
+            "inputs": {
+                "root": "."
+            }
+        },
+        {
+            "name": "config_singleton",
+            "module": "tools.exit_gates.gates.gate_config_singleton",
+            "inputs": {
+                "root": "."
+            }
+        },
+        {
+            "name": "coldstart_multisymbol",
+            "module": "tools.exit_gates.gates.gate_coldstart_multisymbol",
+            "inputs": {
+                "root": "."
+            }
+        },
+        {
+            "name": "calendar_break_wrap",
+            "module": "tools.exit_gates.gates.gate_calendar_break_wrap",
+            "inputs": {
+                "root": "."
+            }
+        },
+        {
+            "name": "unexpected_gap_budget",
+            "module": "tools.exit_gates.gates.gate_unexpected_gap_budget",
+            "inputs": {
+                "root": ".",
+                "days": 14,
+                "total_budget": 100,
+                "per_sym_budget": 50
+            }
+        },
+        {
+            "name": "calendar_multi_break",
+            "module": "tools.exit_gates.gates.gate_calendar_multi_break",
+            "inputs": {
+                "root": "."
+            }
+        },
+        {
+            "name": "live_recover_policy",
+            "module": "tools.exit_gates.gates.gate_live_recover_policy",
+            "inputs": {
+                "root": "."
+            }
         }
     ]
 }
