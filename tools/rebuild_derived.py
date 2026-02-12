@@ -6,10 +6,11 @@ import json
 import logging
 import os
 import time
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from app.composition import load_config
 from core.model.bars import CandleBar, assert_invariants
+from runtime.ingest.market_calendar import MarketCalendar, parse_hm
 from runtime.ingest.polling.time_buckets import floor_bucket_start_ms
 from runtime.store.ssot_jsonl import (
     JsonlAppender,
@@ -139,6 +140,64 @@ def _mark_on_disk(
     idx.add(open_time_ms)
 
 
+def _calendar_from_group(group_cfg):
+    # type: (dict) -> Optional[MarketCalendar]
+    """Побудувати MarketCalendar з конфігу calendar-групи."""
+    try:
+        daily_breaks_raw = group_cfg.get("market_daily_breaks", [])
+        daily_breaks = tuple(
+            (str(pair[0]), str(pair[1]))
+            for pair in daily_breaks_raw
+            if isinstance(pair, (list, tuple)) and len(pair) >= 2
+        )
+        return MarketCalendar(
+            enabled=True,
+            weekend_close_dow=int(group_cfg["market_weekend_close_dow"]),
+            weekend_close_hm=str(group_cfg["market_weekend_close_hm"]),
+            weekend_open_dow=int(group_cfg["market_weekend_open_dow"]),
+            weekend_open_hm=str(group_cfg["market_weekend_open_hm"]),
+            daily_break_start_hm=str(group_cfg["market_daily_break_start_hm"]),
+            daily_break_end_hm=str(group_cfg["market_daily_break_end_hm"]),
+            daily_break_enabled=True,
+            daily_breaks=daily_breaks,
+        )
+    except Exception:
+        return None
+
+
+def _build_calendar(cfg, symbol):
+    # type: (dict, str) -> Optional[MarketCalendar]
+    groups = cfg.get("market_calendar_by_group", {})
+    sym_groups = cfg.get("market_calendar_symbol_groups", {})
+    group_name = sym_groups.get(symbol)
+    if not group_name:
+        return None
+    group_cfg = groups.get(group_name)
+    if not isinstance(group_cfg, dict):
+        return None
+    return _calendar_from_group(group_cfg)
+
+
+def _load_known_outages(cfg, symbol):
+    # type: (dict, str) -> List[Tuple[int, int]]
+    raw = cfg.get("known_broker_outages", [])
+    intervals = []  # type: List[Tuple[int, int]]
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("symbol", "")) != symbol:
+            continue
+        try:
+            f_str = str(entry["from_utc"]).replace("Z", "+00:00")
+            t_str = str(entry["to_utc"]).replace("Z", "+00:00")
+            f = dt.datetime.fromisoformat(f_str)
+            t = dt.datetime.fromisoformat(t_str)
+            intervals.append((int(f.timestamp() * 1000), int(t.timestamp() * 1000)))
+        except Exception:
+            continue
+    return intervals
+
+
 def rebuild_from_m5(
     data_root: str,
     symbol: str,
@@ -147,12 +206,15 @@ def rebuild_from_m5(
     end_ms: int,
     dry_run: bool,
     writer: JsonlAppender,
+    calendar: Optional[MarketCalendar] = None,
+    known_outages: Optional[List[Tuple[int, int]]] = None,
 ) -> None:
     m5_by_open: Dict[int, CandleBar] = {}
     for b in iter_m5_bars(data_root, symbol, start_ms, end_ms):
         m5_by_open[b.open_time_ms] = b
 
     cache: Dict[str, set[int]] = {}
+    _outages = known_outages or []
 
     for tf_s in tf_list:
         if tf_s <= TF_M5_S:
@@ -163,21 +225,39 @@ def rebuild_from_m5(
             continue
 
         tf_ms = tf_s * 1000
+        n_m5 = tf_ms // TF_M5_MS
         b0 = floor_bucket_start_ms(start_ms, tf_s, anchor_offset_s=0)
         if b0 < start_ms:
             b0 += tf_ms
 
         written = 0
+        partial_written = 0
         skipped = 0
         for open_ms in range(b0, end_ms + 1, tf_ms):
             parts: List[CandleBar] = []
+            missing_closed = 0
+            missing_outage = 0
+            missing_unexpected = 0
+
             for t in range(open_ms, open_ms + tf_ms, TF_M5_MS):
                 b = m5_by_open.get(t)
-                if b is None:
-                    parts = []
-                    break
-                parts.append(b)
-            if not parts:
+                if b is not None:
+                    parts.append(b)
+                elif calendar is not None:
+                    is_trading = calendar.is_trading_minute(t)
+                    in_outage = any(f <= t < to for f, to in _outages)
+                    if not is_trading:
+                        missing_closed += 1
+                    elif in_outage:
+                        missing_outage += 1
+                    else:
+                        missing_unexpected += 1
+                else:
+                    # Без календаря — старша поведінка: вимагаємо всі M5
+                    missing_unexpected += 1
+
+            # Пропускаємо bucket якщо: немає жодного M5, або є unexpected gap
+            if not parts or missing_unexpected > 0:
                 skipped += 1
                 continue
 
@@ -189,6 +269,19 @@ def rebuild_from_m5(
             h = max(x.h for x in parts)
             low = min(x.low for x in parts)
             v = sum(x.v for x in parts)
+
+            is_partial = (missing_closed + missing_outage) > 0
+            extensions = {}  # type: Dict[str, Any]
+            if is_partial:
+                extensions = {
+                    "partial": True,
+                    "partial_reason": "calendar_break",
+                    "missing_expected_closed": missing_closed,
+                    "missing_known_outage": missing_outage,
+                    "missing_unexpected": 0,
+                    "present_m5": len(parts),
+                    "total_m5": n_m5,
+                }
 
             out = CandleBar(
                 symbol=symbol,
@@ -202,19 +295,22 @@ def rebuild_from_m5(
                 v=v,
                 complete=True,
                 src="derived",
+                extensions=extensions,
             )
             assert_invariants(out, anchor_offset_s=0)
             if not dry_run:
                 writer.append(out)
                 _mark_on_disk(cache, data_root, symbol, tf_s, open_ms)
             written += 1
+            if is_partial:
+                partial_written += 1
 
-        logging.info(
-            "Rebuild TF=%ds: written=%d skipped=%d",
-            tf_s,
-            written,
-            skipped,
-        )
+        msg = "Rebuild TF=%ds: written=%d skipped=%d"
+        args_log = [tf_s, written, skipped]
+        if partial_written:
+            msg += " (partial=%d)"
+            args_log.append(partial_written)
+        logging.info(msg, *args_log)
 
 
 def _update_derived_tail_state(
@@ -283,6 +379,8 @@ def _rebuild_one_symbol(
     start_override,  # type: int
     end_override,    # type: int
     dry_run,         # type: bool
+    calendar=None,   # type: Optional[MarketCalendar]
+    known_outages=None,  # type: Optional[List[Tuple[int, int]]]
 ):
     # type: (...) -> str
     """Rebuild derived TFs для одного символу.
@@ -313,6 +411,8 @@ def _rebuild_one_symbol(
             end_ms=end_ms,
             dry_run=dry_run,
             writer=writer,
+            calendar=calendar,
+            known_outages=known_outages,
         )
     except Exception as exc:
         return "%s: %s" % (symbol, exc)
@@ -397,6 +497,8 @@ def main() -> int:
     ok_count = 0
     for sym in sym_list:
         logging.info("=== Rebuild START: %s ===", sym)
+        cal = _build_calendar(cfg, sym)
+        outages = _load_known_outages(cfg, sym)
         err = _rebuild_one_symbol(
             data_root=data_root,
             symbol=sym,
@@ -404,6 +506,8 @@ def main() -> int:
             start_override=start_override,
             end_override=end_override,
             dry_run=bool(args.dry_run),
+            calendar=cal,
+            known_outages=outages,
         )
         if err:
             logging.error("Rebuild FAIL: %s", err)

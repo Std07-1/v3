@@ -201,6 +201,13 @@
             "inputs": {
                 "root": "."
             }
+        },
+        {
+            "name": "derived_partial",
+            "module": "tools.exit_gates.gates.gate_derived_partial",
+            "inputs": {
+                "root": "."
+            }
         }
     ]
 }

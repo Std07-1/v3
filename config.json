@@ -86,7 +86,10 @@
             "market_daily_break_start_hm": "00:00",
             "market_daily_break_end_hm": "00:00",
             "market_daily_breaks": [
-                ["21:55", "22:30"]
+                [
+                    "21:55",
+                    "22:30"
+                ]
             ]
         },
         "cfd_us_22_23": {
@@ -199,10 +202,35 @@
         }
     },
     "known_broker_outages": [
-        {"symbol": "NAS100", "from_utc": "2026-02-04T20:40:00Z", "to_utc": "2026-02-04T21:50:00Z", "reason": "FXCM data outage mid-session"},
-        {"symbol": "NGAS", "from_utc": "2026-01-26T23:00:00Z", "to_utc": "2026-01-26T23:05:00Z", "reason": "FXCM opening bar missing after break"},
-        {"symbol": "NGAS", "from_utc": "2026-02-09T09:45:00Z", "to_utc": "2026-02-09T09:50:00Z", "reason": "FXCM data outage"},
-        {"symbol": "NGAS", "from_utc": "2026-02-09T11:30:00Z", "to_utc": "2026-02-09T11:35:00Z", "reason": "FXCM data outage"},
-        {"symbol": "NGAS", "from_utc": "2026-02-09T12:35:00Z", "to_utc": "2026-02-09T12:40:00Z", "reason": "FXCM data outage"}
+        {
+            "symbol": "NAS100",
+            "from_utc": "2026-02-04T20:40:00Z",
+            "to_utc": "2026-02-04T21:50:00Z",
+            "reason": "FXCM data outage mid-session"
+        },
+        {
+            "symbol": "NGAS",
+            "from_utc": "2026-01-26T23:00:00Z",
+            "to_utc": "2026-01-26T23:05:00Z",
+            "reason": "FXCM opening bar missing after break"
+        },
+        {
+            "symbol": "NGAS",
+            "from_utc": "2026-02-09T09:45:00Z",
+            "to_utc": "2026-02-09T09:50:00Z",
+            "reason": "FXCM data outage"
+        },
+        {
+            "symbol": "NGAS",
+            "from_utc": "2026-02-09T11:30:00Z",
+            "to_utc": "2026-02-09T11:35:00Z",
+            "reason": "FXCM data outage"
+        },
+        {
+            "symbol": "NGAS",
+            "from_utc": "2026-02-09T12:35:00Z",
+            "to_utc": "2026-02-09T12:40:00Z",
+            "reason": "FXCM data outage"
+        }
     ]
 }

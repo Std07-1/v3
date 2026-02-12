@@ -13,6 +13,7 @@ class CandleBar:
     - open_time_ms = початок bucket.
     - close_time_ms = open_time_ms + tf_s*1000.
     - complete=true лише для закритих барів (у версії B — всі збережені 1m/derived є complete).
+    - extensions — додаткова мета-інформація (partial, degraded тощо).
     """
 
     symbol: str
@@ -26,12 +27,13 @@ class CandleBar:
     v: float
     complete: bool
     src: str  # "history" | "derived"
+    extensions: Dict[str, Any] = dataclasses.field(default_factory=dict)
 
     def key(self) -> Tuple[str, int, int]:
         return (self.symbol, self.tf_s, self.open_time_ms)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "symbol": self.symbol,
             "tf_s": self.tf_s,
             "open_time_ms": self.open_time_ms,
@@ -44,6 +46,9 @@ class CandleBar:
             "complete": self.complete,
             "src": self.src,
         }
+        if self.extensions:
+            d["extensions"] = dict(self.extensions)
+        return d
 
 
 def assert_invariants(b: CandleBar, anchor_offset_s: int = 0) -> None:
