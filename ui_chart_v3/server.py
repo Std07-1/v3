@@ -855,6 +855,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             b0 = bucket_start_ms(now_ms, tf_ms, anchor_offset_ms)
             b_prev = b0 - tf_ms
 
+            def _is_flat_preview_bar(bar: dict[str, Any]) -> bool:
+                """Відсікаємо flat бари (market pause) з overlay."""
+                ext = bar.get("extensions", {})
+                if isinstance(ext, dict) and ext.get("calendar_pause_flat"):
+                    return True
+                o = bar.get("open", bar.get("o"))
+                h = bar.get("high", bar.get("h"))
+                lo = bar.get("low", bar.get("l"))
+                c = bar.get("close", bar.get("c"))
+                v = bar.get("volume", bar.get("v", 0.0))
+                if all(isinstance(x, (int, float)) for x in (o, h, lo, c)):
+                    if o == h == lo == c and float(v) <= 4.0:
+                        return True
+                return False
+
             def _aggregate_bucket(bars_lwc: list[dict[str, Any]], bucket_start: int) -> dict[str, Any] | None:
                 """Агрегація preview-барів у один overlay bar для бакету."""
                 in_b: list[dict[str, Any]] = []
@@ -864,6 +879,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     if bar_open_ms is None:
                         continue
                     if bucket_start <= bar_open_ms < bucket_start + tf_ms:
+                        if _is_flat_preview_bar(bar):
+                            continue
                         in_b.append(bar)
                         ltt = bar.get("last_tick_ts")
                         if isinstance(ltt, int) and ltt > max_ltt:
@@ -921,6 +938,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     # Якщо перевірка final упала — тримаємо prev_bar (degraded-but-visible)
                     prev_bar = prev_bar_candidate
                     overlay_warnings.append("overlay_final_check_failed")
+
+            # Для HTF (H4/D1) не показуємо prev_bar, щоб не було свічка-на-свічці.
+            if tf_s >= 14400:
+                prev_bar = None
 
             key = (symbol, tf_s)
             if prev_bar is not None:
