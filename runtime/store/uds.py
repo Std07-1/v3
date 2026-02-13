@@ -607,6 +607,52 @@ class UnifiedDataStore:
         reason = None if ok else "ssot_write_failed"
         return CommitResult(ok, reason, ssot_written, redis_written, updates_published, warnings)
 
+    def publish_promoted_bar(self, bar: CandleBar) -> bool:
+        """Публікує promoted бар (tick→complete) у preview ring.
+
+        Promoted бар — це tick preview, який завершився по часу (rollover).
+        Він NOT in FINAL_SOURCES, тому не йде на диск,
+        але позначений complete=True щоб UI одразу мав "mock final".
+        Коли прийде справжній History final — він замінить promoted.
+        """
+        if not isinstance(bar, CandleBar):
+            return False
+        if bar.src != "tick_promoted":
+            Logging.warning("UDS: publish_promoted_bar — src=%s (очікується tick_promoted)", bar.src)
+            return False
+        if not bar.complete:
+            return False
+        if bar.tf_s not in self._preview_tf_allowlist:
+            return False
+        if self._redis is None:
+            return False
+        try:
+            bar_payload = normalize_bar(bar.to_dict(), mode="incl")
+            event = {
+                "key": {
+                    "symbol": bar.symbol,
+                    "tf_s": int(bar.tf_s),
+                    "open_ms": int(bar.open_time_ms),
+                },
+                "bar": bar_payload,
+                "complete": True,
+                "source": "tick_promoted",
+                "event_ts": int(bar_payload.get("close_time_ms")) if bar.complete else None,
+            }
+            self._redis.publish_preview_event(
+                bar.symbol,
+                int(bar.tf_s),
+                event,
+                self._preview_updates_retain,
+            )
+            return True
+        except Exception as exc:
+            Logging.warning(
+                "UDS: publish_promoted_bar failed symbol=%s tf_s=%s err=%s",
+                bar.symbol, bar.tf_s, exc,
+            )
+            return False
+
     def publish_preview_bar(self, bar: CandleBar, *, ttl_s: Optional[int] = None) -> None:
         self._ensure_writer_role("publish_preview_bar")
         if not isinstance(bar, CandleBar):

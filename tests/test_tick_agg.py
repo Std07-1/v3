@@ -14,7 +14,8 @@ class TestTickAggregator(unittest.TestCase):
         t0 = 1_700_000_000_000
         price1 = 100.0
 
-        bar1 = agg.update(symbol, tf_s, t0, price1)
+        promoted1, bar1 = agg.update(symbol, tf_s, t0, price1)
+        self.assertIsNone(promoted1)
         self.assertIsNotNone(bar1)
         if bar1 is None:
             return
@@ -33,7 +34,7 @@ class TestTickAggregator(unittest.TestCase):
         self.assertEqual(bar1.src, "preview_tick")
 
         price2 = 101.0
-        bar2 = agg.update(symbol, tf_s, t0 + 10_000, price2)
+        _, bar2 = agg.update(symbol, tf_s, t0 + 10_000, price2)
         self.assertIsNotNone(bar2)
         if bar2 is None:
             return
@@ -45,7 +46,7 @@ class TestTickAggregator(unittest.TestCase):
         self.assertEqual(bar2.extensions.get("ticks_n"), 2)
 
         price3 = 99.5
-        bar3 = agg.update(symbol, tf_s, t0 + 20_000, price3)
+        _, bar3 = agg.update(symbol, tf_s, t0 + 20_000, price3)
         self.assertIsNotNone(bar3)
         if bar3 is None:
             return
@@ -62,26 +63,80 @@ class TestTickAggregator(unittest.TestCase):
         tf_s = 60
         t0 = 1_700_000_000_000
 
-        bar0 = agg.update(symbol, tf_s, t0, 100.0)
+        _, bar0 = agg.update(symbol, tf_s, t0, 100.0)
         self.assertIsNotNone(bar0)
 
         t1 = t0 + 65_000
-        bar1 = agg.update(symbol, tf_s, t1, 101.0)
+        _, bar1 = agg.update(symbol, tf_s, t1, 101.0)
         self.assertIsNotNone(bar1)
         if bar1 is None:
             return
 
-        late = agg.update(symbol, tf_s, t0 + 30_000, 99.0)
+        _, late = agg.update(symbol, tf_s, t0 + 30_000, 99.0)
         self.assertIsNone(late)
 
         stats = agg.stats()
         self.assertEqual(stats.get("ticks_dropped_late_bucket"), 1)
 
-        bar2 = agg.update(symbol, tf_s, t1 + 10_000, 102.0)
+        _, bar2 = agg.update(symbol, tf_s, t1 + 10_000, 102.0)
         self.assertIsNotNone(bar2)
         if bar2 is None:
             return
         self.assertEqual(bar2.open_time_ms, bar1.open_time_ms)
+
+    def test_auto_promote_on_rollover(self) -> None:
+        """auto_promote=True: при rollover повертає завершений бар попередньої хвилини."""
+        agg = TickAggregator(tf_allowlist=[60], auto_promote=True)
+        symbol = "XAU/USD"
+        tf_s = 60
+        t0 = 1_700_000_000_000
+
+        # Перший тік — без promoted
+        promoted0, bar0 = agg.update(symbol, tf_s, t0, 100.0)
+        self.assertIsNone(promoted0)
+        self.assertIsNotNone(bar0)
+
+        # Ще тіки в тому ж бакеті
+        _, bar_mid = agg.update(symbol, tf_s, t0 + 10_000, 101.5)
+        _, bar_last = agg.update(symbol, tf_s, t0 + 30_000, 99.0)
+        self.assertIsNotNone(bar_last)
+
+        # Rollover — перший тік наступного бакету
+        t1 = t0 + 65_000
+        promoted1, bar1 = agg.update(symbol, tf_s, t1, 102.0)
+
+        # Promoted = завершений M1 попередньої хвилини
+        self.assertIsNotNone(promoted1)
+        self.assertTrue(promoted1.complete)
+        self.assertEqual(promoted1.src, "tick_promoted")
+        self.assertEqual(promoted1.open_time_ms, bar0.open_time_ms)
+        self.assertEqual(promoted1.o, 100.0)
+        self.assertEqual(promoted1.h, 101.5)
+        self.assertEqual(promoted1.low, 99.0)
+        self.assertEqual(promoted1.c, 99.0)
+        self.assertTrue(promoted1.extensions.get("promoted"))
+        self.assertEqual(promoted1.extensions.get("ticks_n"), 3)
+
+        # Preview = новий бакет
+        self.assertIsNotNone(bar1)
+        self.assertFalse(bar1.complete)
+        self.assertEqual(bar1.o, 102.0)
+
+        # Stats
+        stats = agg.stats()
+        self.assertEqual(stats.get("promoted_total"), 1)
+
+    def test_auto_promote_disabled(self) -> None:
+        """auto_promote=False (default): rollover не створює promoted."""
+        agg = TickAggregator(tf_allowlist=[60], auto_promote=False)
+        symbol = "XAU/USD"
+        t0 = 1_700_000_000_000
+        agg.update(symbol, 60, t0, 100.0)
+        agg.update(symbol, 60, t0 + 10_000, 101.0)
+
+        promoted, bar1 = agg.update(symbol, 60, t0 + 65_000, 102.0)
+        self.assertIsNone(promoted)
+        self.assertIsNotNone(bar1)
 
     def test_anchor_offset_matches_final_samples(self) -> None:
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))

@@ -650,13 +650,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
                 meta = hist_res.meta or {}
                 meta.setdefault("extensions", {})["plane"] = "preview+history"
-                # Stitch: open[i] = close[i-1] для плавних свічок (TV-like)
-                stitched = _stitch_bars_previous_close(hist_bars)
+                # Stitch: open[i] = close[i-1] (опціонально, вимкнено за замовчуванням)
+                _stitching_on = bool(cfg.get("ui_stitching_enabled", False))
+                out_bars = _stitch_bars_previous_close(hist_bars) if _stitching_on else hist_bars
+                if _stitching_on:
+                    meta.setdefault("extensions", {})["stitching"] = True
                 payload = {
                     "ok": True,
                     "symbol": symbol,
                     "tf_s": tf_s,
-                    "bars": stitched[-limit:] if limit > 0 else stitched,
+                    "bars": out_bars[-limit:] if limit > 0 else out_bars,
                     "boot_id": _boot_id,
                     "meta": meta,
                 }
@@ -711,13 +714,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 _contract_guard_warn_window(payload, [], final_extra_warnings, bool(final_extra_warnings))
                 self._json(200, payload)
                 return
-            # Stitch: open[i] = close[i-1] для плавних свічок (TV-like)
-            stitched_final = _stitch_bars_previous_close(res.bars_lwc)
+            # Stitch: open[i] = close[i-1] (опціонально, вимкнено за замовчуванням)
+            _stitching_on = bool(cfg.get("ui_stitching_enabled", False))
+            out_bars_final = _stitch_bars_previous_close(res.bars_lwc) if _stitching_on else res.bars_lwc
+            if _stitching_on:
+                res_meta = res.meta or {}
+                res_meta.setdefault("extensions", {})["stitching"] = True
             payload = {
                 "ok": True,
                 "symbol": symbol,
                 "tf_s": tf_s,
-                "bars": stitched_final,
+                "bars": out_bars_final,
                 "boot_id": _boot_id,
                 "meta": res.meta,
             }

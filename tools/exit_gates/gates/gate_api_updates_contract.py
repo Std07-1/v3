@@ -127,6 +127,8 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
                     violations.append("event_ts_should_be_null")
             source = ev.get("source")
             if complete is True and key is not None and isinstance(source, str):
+                if source == "tick_promoted":
+                    continue
                 prev = final_sources.get(key)
                 if prev is None:
                     final_sources[key] = source

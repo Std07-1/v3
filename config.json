@@ -16,7 +16,7 @@
         "XAG/USD"
     ],
     "data_root": "./data_v3",
-    "warmup_bars": 5000,
+    "warmup_bars": 1000,
     "safety_delay_s": 2,
     "m5_tail_fetch_n": 12,
     "m5_tail_stale_s": 720,
@@ -50,7 +50,7 @@
         "tail_fetch_n": 5,
         "safety_delay_s": 8,
         "m3_derive_enabled": true,
-        "backfill_enabled": false,
+        "backfill_enabled": true,
         "backfill_max_bars": 1440
     },
     "broker_base_tfs_s": [
@@ -81,6 +81,8 @@
     ],
     "preview_tick_publish_min_interval_ms": 250,
     "preview_curr_ttl_s": 1800,
+    "tick_auto_promote_m1": true,
+    "ui_stitching_enabled": false,
     "tick_stream_enabled": true,
     "tick_stream_symbols": [],
     "tick_stream_min_interval_ms": 200,
@@ -166,7 +168,7 @@
     "day_anchor_offset_s_alt2": 79200,
     "day_anchor_offset_s_d1": 75600,
     "day_anchor_offset_s_d1_alt": 79200,
-    "ui_debug": false,
+    "ui_debug": true,
     "group_logs_enabled": true,
     "redis_priming_enabled": true,
     "redis_priming_budget_s": 5,

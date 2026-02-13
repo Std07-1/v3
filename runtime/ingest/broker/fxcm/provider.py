@@ -130,6 +130,9 @@ class FxcmHistoryProvider:
             raise ValueError("date_to_utc має бути UTC tz-aware.")
 
         # timeframe = "m1" (стандартний ідентифікатор) :contentReference[oaicite:2]{index=2}
+        # FIRST_TICK mode (default): кожен бар має своє реальне BID open.
+        # PREVIOUS_CLOSE від FXCM створює артефакт: парне чергування volume (high/low)
+        # та непослідовне stitching. UI stitching (open[i]=close[i-1]) робиться окремо.
         try:
             arr = self._fx.get_history(
                 symbol,
@@ -137,9 +140,6 @@ class FxcmHistoryProvider:
                 None,
                 date_to_utc,
                 n,
-                candle_open_price_mode=getattr(
-                    fxcorepy.O2GCandleOpenPriceMode, "PREVIOUS_CLOSE", None
-                ),
             )
         except Exception as e:  # noqa: BLE001
             self._set_last_error(f"помилка запиту {symbol}", e)
@@ -169,6 +169,7 @@ class FxcmHistoryProvider:
             raise ValueError("date_to_utc має бути UTC tz-aware.")
 
         tf_name = tf_s_to_fxcm_timeframe(tf_s)
+        # FIRST_TICK mode — без PREVIOUS_CLOSE (артефакт volume alternation).
         try:
             arr = self._fx.get_history(
                 symbol,
@@ -176,9 +177,6 @@ class FxcmHistoryProvider:
                 None,
                 date_to_utc,
                 n,
-                candle_open_price_mode=getattr(
-                    fxcorepy.O2GCandleOpenPriceMode, "PREVIOUS_CLOSE", None
-                ),
             )
         except Exception as e:  # noqa: BLE001
             self._set_last_error(f"помилка TF={tf_name} {symbol}", e)

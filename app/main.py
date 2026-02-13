@@ -77,6 +77,24 @@ def _pump(stream: TextIO, prefix: str) -> None:
             pass
 
 
+def _pump_to_file(stream: TextIO, file_handle: TextIO, prefix: str) -> None:
+    """Pump з subprocess PIPE напряму у файл (обходить Windows stdio redirect баг)."""
+    try:
+        for line in iter(stream.readline, ""):
+            if not line:
+                break
+            try:
+                file_handle.write(f"{prefix}{line}")
+                file_handle.flush()
+            except Exception:
+                pass
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+
 def _start_process(
     *,
     label: str,
@@ -121,7 +139,16 @@ def _start_process(
         err_path = log_dir / f"{label}.err.log"
         out_f = out_path.open("a", encoding="utf-8", buffering=1)
         err_f = err_path.open("a", encoding="utf-8", buffering=1)
-        proc = subprocess.Popen(cmd, stdout=out_f, stderr=err_f, **popen_kwargs)
+        # Windows: direct file redirect через Popen не працює надійно з text=True.
+        # Замість цього: PIPE + pump_to_file у фонових потоках.
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_kwargs)
+        assert proc.stdout is not None and proc.stderr is not None
+        threading.Thread(
+            target=_pump_to_file, args=(proc.stdout, out_f, ""), daemon=True,
+        ).start()
+        threading.Thread(
+            target=_pump_to_file, args=(proc.stderr, err_f, ""), daemon=True,
+        ).start()
         logging.info(
             "Старт процесу %s pid=%s stdio=files dir=%s",
             label,

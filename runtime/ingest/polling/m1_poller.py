@@ -9,7 +9,6 @@ SSOT-1: M1/M3 (візуальність + точки входу).
 """
 from __future__ import annotations
 
-import json
 import logging
 import time
 import uuid
@@ -364,11 +363,9 @@ class M1SymbolPoller:
                 self._already_caught_up += 1
                 return
 
-        # Fetch
+        # Єдиний шлях: history M1 → фільтр закритих → sort → commit у UDS.
         try:
-            bars = self._provider.fetch_last_n_tf(
-                self._symbol, tf_s=60, n=fetch_n,
-            )
+            bars = self._provider.fetch_last_n_m1(self._symbol, n=fetch_n)
         except Exception as exc:
             self._errors += 1
             if self._errors <= 3 or self._errors % 60 == 0:
@@ -378,6 +375,14 @@ class M1SymbolPoller:
                 )
             return
 
+        if not bars:
+            return
+
+        # FXCM може повертати бари у зворотному порядку.
+        # Потрібен asc порядок для watermark/commit (щоб не дропати старі як stale).
+        if expected > 0:
+            bars = [b for b in bars if b.open_time_ms <= expected]
+        bars.sort(key=lambda b: b.open_time_ms)
         if not bars:
             return
 

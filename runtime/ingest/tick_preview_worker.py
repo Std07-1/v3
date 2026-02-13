@@ -164,16 +164,22 @@ class TickPreviewWorker:
         symbols: list[str],
         channel: str,
         calendars: Dict[str, MarketCalendar] | None = None,
+        auto_promote_m1: bool = False,
     ) -> None:
         self._uds = uds
         self._tfs = [int(x) for x in tfs if int(x) > 0]
         self._publish_min_interval_ms = max(0, int(publish_min_interval_ms))
         self._curr_ttl_s = max(1, int(curr_ttl_s))
         self._channel = str(channel)
+        self._auto_promote_m1 = bool(auto_promote_m1)
         # M3 деривація: M1 агрегуємо з тиків, M3 — з M1
         self._derive_m3 = 180 in self._tfs and 60 in self._tfs
         agg_tfs = [t for t in self._tfs if not (t == 180 and self._derive_m3)]
-        self._agg = TickAggregator(tf_allowlist=agg_tfs, source="preview_tick")
+        self._agg = TickAggregator(
+            tf_allowlist=agg_tfs,
+            source="preview_tick",
+            auto_promote=self._auto_promote_m1,
+        )
         self._m3_buffer = _M1toM3Buffer() if self._derive_m3 else None
         self._last_tick_ts_ms: Dict[str, int] = {}
         self._last_pub_ms: Dict[tuple[str, int], int] = {}
@@ -320,7 +326,12 @@ class TickPreviewWorker:
             # M3 деривація: пропускаємо M3 у TickAggregator, виводимо з M1
             if tf_s == 180 and self._derive_m3:
                 continue
-            bar = self._agg.update(symbol, tf_s, tick_ts_ms, price)
+            promoted, bar = self._agg.update(symbol, tf_s, tick_ts_ms, price)
+
+            # Auto-promote: публікуємо завершений бар попередньої хвилини
+            if promoted is not None:
+                self._publish_promoted(promoted, symbol, tf_s)
+
             if bar is None:
                 continue
             self._publish_bar(bar, symbol, tf_s)
@@ -331,6 +342,22 @@ class TickPreviewWorker:
                 if m3_bar is not None:
                     self._publish_bar(m3_bar, symbol, 180)
         self._maybe_emit_stats()
+
+    def _publish_promoted(self, promoted, symbol, tf_s):
+        # type: (CandleBar, str, int) -> None
+        """Публікація promoted бару (tick→complete) через UDS."""
+        try:
+            ok = self._uds.publish_promoted_bar(promoted)
+            if ok:
+                self._inc("promoted_publish_total")
+            else:
+                self._inc("promoted_publish_rejected")
+        except Exception as exc:
+            logging.warning(
+                "TickPreview: promoted publish err symbol=%s tf_s=%s err=%s",
+                symbol, tf_s, exc,
+            )
+            self._inc("promoted_publish_errors")
 
     def _publish_bar(self, bar, symbol, tf_s):
         # type: (CandleBar, str, int) -> None
@@ -478,6 +505,8 @@ def main() -> int:
                 calendars[sym] = cal
         logging.info("TickPreview: calendar gate для %d/%d символів", len(calendars), len(all_symbols))
 
+    auto_promote_m1 = bool(cfg.get("tick_auto_promote_m1", False))
+
     worker = TickPreviewWorker(
         uds=uds,
         tfs=preview_cfg.tfs,
@@ -486,10 +515,11 @@ def main() -> int:
         symbols=all_symbols,
         channel=preview_cfg.channel,
         calendars=calendars,
+        auto_promote_m1=auto_promote_m1,
     )
     logging.info(
-        "TickPreview: tfs=%s derive_m3=%s symbols=%d",
-        preview_cfg.tfs, worker._derive_m3, len(all_symbols),
+        "TickPreview: tfs=%s derive_m3=%s auto_promote_m1=%s symbols=%d",
+        preview_cfg.tfs, worker._derive_m3, auto_promote_m1, len(all_symbols),
     )
 
     client = redis_lib.Redis(

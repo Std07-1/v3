@@ -51,6 +51,17 @@
             }
         },
         {
+            "name": "api_updates_contract_m1",
+            "module": "tools.exit_gates.gates.gate_api_updates_contract",
+            "inputs": {
+                "base_url": "http://127.0.0.1:8089",
+                "symbol": "XAU/USD",
+                "tf_s": 60,
+                "since_seq": 0,
+                "max_events_expected": 500
+            }
+        },
+        {
             "name": "api_updates_cursor_sanity",
             "module": "tools.exit_gates.gates.gate_api_updates_cursor",
             "inputs": {
