@@ -83,6 +83,7 @@ let lastContinuityLogMs = 0;
 let overlayTimer = null;
 const OVERLAY_POLL_INTERVAL_MS = 1000;
 const OVERLAY_MIN_TF_S = 300;  // overlay лише для TF ≥ M5
+const OVERLAY_MAX_TF_S = 3600;  // H4/D1 без overlay (тільки broker final)
 const OVERLAY_PREVIEW_TF_SET = new Set([60, 180]);  // preview TF — overlay не потрібен
 const OVERLAY_POLL_FAST_MS = 1000;
 const OVERLAY_POLL_SLOW_MS = 2000;
@@ -255,7 +256,7 @@ function updateDiag(tfSeconds) {
   if (elDiagMeta) {
     const tf = readSelectedTf(tfSeconds);
     const isPreview = OVERLAY_PREVIEW_TF_SET.has(tf);
-    const overlayActive = !isPreview && tf >= OVERLAY_MIN_TF_S;
+    const overlayActive = !isPreview && tf >= OVERLAY_MIN_TF_S && tf <= OVERLAY_MAX_TF_S;
     const plane = isPreview ? 'preview' : (overlayActive ? 'overlay' : 'final');
     const seq = lastUpdatesSeq != null ? String(lastUpdatesSeq) : '—';
     const gap = _formatGap(lastUpdatesGap);
@@ -1724,7 +1725,7 @@ async function pollOverlay() {
 
   // Overlay не потрібен для preview TF
   if (OVERLAY_PREVIEW_TF_SET.has(tf)) return;
-  if (tf < OVERLAY_MIN_TF_S) return;
+  if (tf < OVERLAY_MIN_TF_S || tf > OVERLAY_MAX_TF_S) return;
   if (!isUiVisible()) return;
   if (overlayInFlight) return;
   overlayInFlight = true;
@@ -1786,7 +1787,7 @@ function resetOverlayPolling() {
 
   const tf = readSelectedTf();
   // Запускаємо overlay polling тільки для TF ≥ M5 і не preview
-  if (!OVERLAY_PREVIEW_TF_SET.has(tf) && tf >= OVERLAY_MIN_TF_S) {
+  if (!OVERLAY_PREVIEW_TF_SET.has(tf) && tf >= OVERLAY_MIN_TF_S && tf <= OVERLAY_MAX_TF_S) {
     if (!isUiVisible()) return;
     _schedulePollOverlay(0);
   } else {

@@ -785,6 +785,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 })
                 return
 
+            # HTF (H4/D1) — тільки broker final, без overlay
+            if tf_s >= 14400:
+                self._json(200, {
+                    "ok": True,
+                    "bar": None,
+                    "warnings": ["overlay_not_applicable_for_htf"],
+                    "meta": {"extensions": {"plane": "overlay"}, "boot_id": _boot_id},
+                })
+                return
+
             if tf_s < 300:
                 overlay_warnings.append("overlay_tf_too_small")
 
