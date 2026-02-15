@@ -25,8 +25,6 @@ class RamLayer:
         bars = self._windows.get(key)
         if not bars:
             return None
-        if limit > 0 and len(bars) < limit:
-            return None
         self._touch(key)
         if limit > 0:
             return bars[-limit:]

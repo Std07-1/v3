@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.model.bars import CandleBar, assert_invariants, ms_to_utc_dt
+
+
+FINAL_SOURCES = {"history", "derived", "history_agg"}
 
 
 def _d1_anchor_offsets(
@@ -90,6 +94,10 @@ class JsonlAppender:
         self._day_anchor_offset_s_d1_alt = day_anchor_offset_s_d1_alt
         self._day_anchor_offset_s_alt = day_anchor_offset_s_alt
         self._day_anchor_offset_s_alt2 = day_anchor_offset_s_alt2
+        self._drop_preview_total = 0
+
+    def drop_preview_total(self) -> int:
+        return int(self._drop_preview_total)
 
     def _path_for(self, symbol: str, tf_s: int, open_time_ms: int) -> str:
         day = ms_to_utc_dt(open_time_ms).strftime("%Y%m%d")
@@ -100,6 +108,18 @@ class JsonlAppender:
         return os.path.join(out_dir, f"part-{day}.jsonl")
 
     def append(self, bar: CandleBar) -> None:
+        if not bar.complete or bar.src not in FINAL_SOURCES:
+            self._drop_preview_total += 1
+            logging.error(
+                "SSOT_DROP_NON_FINAL symbol=%s tf_s=%s open_ms=%s complete=%s src=%s drop_total=%s",
+                bar.symbol,
+                bar.tf_s,
+                bar.open_time_ms,
+                bar.complete,
+                bar.src,
+                self._drop_preview_total,
+            )
+            return
         anchor_offset_s = select_anchor_offset_for_open_ms(
             bar.tf_s,
             bar.open_time_ms,
@@ -126,6 +146,29 @@ class JsonlAppender:
             except Exception:
                 pass
         self._open_files.clear()
+
+
+def _selftest_ssot_guard() -> bool:
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        app = JsonlAppender(tmp)
+        preview = CandleBar(
+            symbol="XAU/USD",
+            tf_s=60,
+            open_time_ms=0,
+            close_time_ms=60_000,
+            o=1.0,
+            h=1.0,
+            low=1.0,
+            c=1.0,
+            v=0.0,
+            complete=False,
+            src="preview_tick",
+        )
+        app.append(preview)
+        has_files = any(os.scandir(tmp))
+        return app.drop_preview_total() == 1 and not has_files
 
 
 def tail_last_bar_time_ms(data_root: str, symbol: str, tf_s: int) -> Optional[int]:
@@ -293,42 +336,6 @@ def read_tail_bars(data_root: str, symbol: str, tf_s: int, n: int) -> List[Candl
 
     out.reverse()
     return out
-
-
-def head_first_bar_time_ms(data_root: str, symbol: str, tf_s: int) -> Optional[int]:
-    """Знаходить найперший open_time_ms для (symbol,tf_s) через head JSONL файлів."""
-    sym_dir = symbol.replace("/", "_")
-    tf_dir = f"tf_{tf_s}"
-    dir_path = os.path.join(data_root, sym_dir, tf_dir)
-    if not os.path.isdir(dir_path):
-        return None
-
-    parts = [
-        p
-        for p in os.listdir(dir_path)
-        if p.startswith("part-") and p.endswith(".jsonl")
-    ]
-    if not parts:
-        return None
-    parts.sort()
-    earliest = os.path.join(dir_path, parts[0])
-
-    try:
-        with open(earliest, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                    return int(obj["open_time_ms"])
-                except Exception:
-                    continue
-    except Exception:
-        return None
-
-    return None
-
 
 def iter_day_keys_utc(start_ms: int, end_ms: int) -> List[str]:
     """Повертає список YYYYMMDD між start_ms та end_ms (UTC, включно)."""

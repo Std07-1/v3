@@ -4,7 +4,7 @@
 
 ## Короткий опис
 
-Система має **два ізольованих потоки даних**:
+Система має **три ізольовані SSOT-площини**:
 
 - **SSOT-1 (M1/M3)** — візуальність + точки входу. M1 final bars з FXCM History API (m1_poller), M3 derived з 3×M1. Preview-plane: tick stream → TickPreviewWorker → Redis preview keyspace.
 - **SSOT-2 (M5+)** — SMC аналітика. M5 з FXCM History (engine_b/connector), derived 15m/30m/H1 з M5.
@@ -14,7 +14,7 @@ Supervisor (`app.main --mode all`) керує 5 процесами. UDS є це�
 
 ## Архітектура процесів
 
-```
+```text
 app.main (supervisor)
   ├── connector             (FXCM History → UDS final → M5/derived/HTF)
   ├── tick_publisher_fxcm   (ForexConnect tick stream → Redis PubSub)
@@ -25,22 +25,22 @@ app.main (supervisor)
 
 ## SSOT-площини (ізольовані)
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
-│  SSOT-1: M1/M3 (візуальність + точки входу)                 │
-│  Джерело: tick stream → preview, FXCM M1 History → final    │
-│  Disk: data_v3/{sym}/tf_60/ та tf_180/                      │
+│  SSOT-1: M1/M3 (візуальність + точки входу)                  │
+│  Джерело: tick stream → preview, FXCM M1 History → final     │
+│  Disk: data_v3/{sym}/tf_60/ та tf_180/                       │
 │  Процеси: m1_poller (final), tick_publisher+preview_worker   │
-│  Ізоляція: НЕ впливає на M5+ pipeline                       │
+│  Ізоляція: НЕ впливає на M5+ pipeline                        │
 ├──────────────────────────────────────────────────────────────┤
-│  SSOT-2: M5+ (SMC аналітика)                                │
-│  Джерело: FXCM M5 History → final, derived 15m/30m/H1       │
+│  SSOT-2: M5+ (SMC аналітика)                                 │
+│  Джерело: FXCM M5 History → final, derived 15m/30m/H1        │
 │  Disk: data_v3/{sym}/tf_300..tf_3600/                        │
 │  Процес: connector (engine_b + derive)                       │
 │  Незмінний pipeline (polling engine_b)                       │
 ├──────────────────────────────────────────────────────────────┤
-│  SSOT-3: H4/D1 (глобальний тренд, структурні зони)          │
-│  Джерело: FXCM History API напряму                          │
+│  SSOT-3: H4/D1 (глобальний тренд, структурні зони)           │
+│  Джерело: FXCM History API напряму                           │
 │  Disk: data_v3/{sym}/tf_14400/ та tf_86400/                  │
 │  Процес: connector (broker_base fetch on close)              │
 │  Незмінний pipeline (broker_base fetch)                      │
@@ -49,11 +49,11 @@ app.main (supervisor)
 
 ## Геометрія часу (помітка для всіх розмов про свічки)
 
-- SSOT JSONL (CandleBar) тримає end-excl: `close_time_ms = open_time_ms + tf_s*1000`.
-- Зовнішній контракт (HTTP API + UI) нормалізує до end-incl: `close_time_ms = open_time_ms + tf_s*1000 - 1`.
+- SSOT JSONL (CandleBar) і HTTP API тримають end-excl: `close_time_ms = open_time_ms + tf_s*1000`.
+- Якщо потрібен end-incl для рендера, UI обчислює локально: `close_incl_ms = close_time_ms - 1`.
 - `event_ts`/`event_ts_ms` додається лише у вихідних payload-ах для `complete=true`, не зберігається у SSOT.
 
-Це рішення закріплено історично, щоб не ламати SSOT та уникати «дір» у даних. Будь-які зміни геометрії часу мають проходити через окремий initiative з міграцією і rollback.
+Це рішення є каноном. Будь-які зміни геометрії часу мають проходити через окремий initiative з міграцією і rollback.
 
 ## Схема (потік даних)
 
@@ -95,6 +95,47 @@ flowchart LR
         UR -->|updates bus| R5
     end
 ```
+
+## UI Render Pipeline — повний потік даних (актуально)
+
+Cold start:
+  init() → loadBarsFull()
+    → GET /api/bars?limit=COLD_START_BARS_BY_TF[tf]
+    → epoch guard check
+    → controller.setBars(data.bars)          // chart_adapter_lite.js:735
+      → normalizeBar(bar) each               // chart_adapter_lite.js:165
+        → filter(Boolean)                    // drops bars with time<=0 or NaN OHLC
+        → sort by time, dedupe by time       // chart_adapter_lite.js:741-751
+        → candles.setData(deduped)           // LWC API
+        → volumes.setData(volumeData)
+    → setBarsStore(data.bars)                // app.js:1207 — caps to MAX_RENDER_BARS_WARM
+      → rebuildBarsIndex()                   // Map(open_time_ms → index)
+    → saveCacheCurrent()                     // uiCacheByKey.set(key, bars)
+
+Incremental updates:
+  pollUpdates() → GET /api/updates?since_seq=...
+    → epoch guard, boot_id check
+    → applyUpdates(events)                   // app.js:1583
+      → sort by seq
+      → for each event:
+        → drop stale (bar.open_time_ms < lastOpenMs - tfMs)
+        → forward gap guard (>3 TF periods → reload)
+        → key match check (symbol/tf)
+        → final>preview invariant
+        → NoMix check
+        → controller.updateLastBar(bar)      // chart_adapter_lite.js:793
+          → normalizeBar(bar)
+          → _rafPending = normalized
+          → requestAnimationFrame(_flushChartRender)
+            → candles.update(bar)
+            → volumes.update(...)
+        → upsertBarToStore(bar)              // app.js:1219
+
+Scrollback:
+  handleVisibleRangeChange() → ensureLeftCoverage()
+    → GET /api/bars?to_open_ms=...&limit=SCROLLBACK_CHUNK
+    → mergeOlderBars(olderBars)
+    → controller.setBars(barsStore)          // full re-render
 
 ## Схеми процесів і циклів
 
@@ -222,9 +263,16 @@ sequenceDiagram
 
 ### UI scrollback (cover-until-satisfied)
 
-- Тригер: дефіцит лівого буфера (~2000 барів).
-- Пачки: 5000 барів (фаворити x2).
-- Ліміти: active 60000 (фаворити 120000), warm LRU=6 по 20000.
+- Тригер: дефіцит лівого буфера (~1000 барів).
+- Пачки: базово 1000 (динамічний clamp у межах 500..2000), фаворити x2.
+- Ліміти: active до 20000 (через policy + server clamp), warm LRU=6 по 20000.
+
+## Policy SSOT та rails (Slice-1..4)
+
+- `/api/config` є policy-джерелом для UI: `policy_version`, `build_id`, `window_policy`, allowlists.
+- `/api/bars` (final cold-start) читає через UDS з `prefer_redis=true`, `disk_policy=never`.
+- `bars=[]` без пояснення заборонено: no_data rail гарантує `warnings[]`.
+- RAM short-window повертає partial+loud (`insufficient_warmup`, `meta.extensions.expected/got`) замість `cache_miss -> empty`.
 
 ### Модулі polling (залежності)
 
@@ -250,7 +298,7 @@ v3/
 ├── core/                          # pure-логіка (час, контракти, моделі) — без I/O
 │   ├── config_loader.py           # SSOT: pick_config_path / load_system_config
 │   ├── buckets.py                 # bucket_start_ms / resolve_anchor_offset_ms
-│   ├── time_geom.py               # normalize_bar (end-incl)
+│   ├── time_geom.py               # helper-и геометрії часу (канон API/SSOT = end-excl)
 │   ├── model/
 │   │   └── bars.py                # CandleBar + інваріанти часу
 │   └── contracts/
@@ -279,7 +327,7 @@ v3/
 │   │       ├── fetch_policy.py    # політики часу для fetch
 │   │       └── time_buckets.py    # floor_bucket_start_ms
 │   ├── store/
-│   │   ├── uds.py                 # UnifiedDataStore (read/write, updates bus, preview-plane, bridge final→preview)
+│   │   ├── uds.py                 # UnifiedDataStore (read/write, updates bus, disk_policy rails, short-window loud rail)
 │   │   ├── redis_snapshot.py      # Redis snapshots writer
 │   │   ├── redis_keys.py          # нормалізація ключів Redis
 │   │   ├── redis_spec.py          # resolve Redis connection spec
@@ -290,12 +338,12 @@ v3/
 │   │       └── disk_layer.py      # Disk read шар
 │   └── obs_60s.py                 # спостереження / метрики (60s intervals)
 ├── ui_chart_v3/                   # UI + API same-origin
-│   ├── server.py                  # HTTP API + PREVIOUS_CLOSE stitching + static server
+│   ├── server.py                  # HTTP API + /api/config policy SSOT + no_data loud rail + static server
 │   ├── __main__.py                # python -m ui_chart_v3
 │   ├── README.md                  # UI документація
 │   └── static/
 │       ├── index.html             # UI shell
-│       ├── app.js                 # polling + applyUpdates + scrollback
+│       ├── app.js                 # polling + applyUpdates + policy consume + scrollback
 │       ├── chart_adapter_lite.js  # адаптер Lightweight Charts
 │       └── ui_config.json         # portable UI конфіг (api_base, ui_debug)
 ├── tools/                         # утиліти / діагностика

@@ -5,14 +5,15 @@ import logging
 import os
 import threading
 import time
+import tempfile
+import json as _json
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from core.model.bars import CandleBar
-from core.time_geom import normalize_bar
 from core.config_loader import (
     tf_allowlist_from_cfg, preview_tf_allowlist_from_cfg, min_coldload_bars_from_cfg,
-    DEFAULT_TF_ALLOWLIST, DEFAULT_PREVIEW_TF_ALLOWLIST, MAX_EVENTS_PER_RESPONSE,
+    DEFAULT_PREVIEW_TF_ALLOWLIST, MAX_EVENTS_PER_RESPONSE,
 )
 
 from runtime.obs_60s import Obs60s
@@ -147,6 +148,30 @@ def _mark_history_short(meta: dict[str, Any], warnings: list[str]) -> None:
     _mark_degraded(meta, "history_short")
 
 
+def _mark_ram_short_window(
+    meta: dict[str, Any],
+    warnings: list[str],
+    expected: int,
+    got: int,
+) -> None:
+    warnings.append("insufficient_warmup")
+    _mark_degraded(meta, "insufficient_warmup")
+    ext = meta.setdefault("extensions", {})
+    if isinstance(ext, dict):
+        ext["expected"] = int(expected)
+        ext["got"] = int(got)
+
+
+def _ensure_bar_payload_end_excl(bar_payload: dict[str, Any]) -> Optional[int]:
+    open_ms = bar_payload.get("open_time_ms")
+    tf_s = bar_payload.get("tf_s")
+    if not isinstance(open_ms, int) or not isinstance(tf_s, int) or tf_s <= 0:
+        return None
+    close_ms = int(open_ms + tf_s * 1000)
+    bar_payload["close_time_ms"] = close_ms
+    return close_ms
+
+
 def _prime_available_final(
     payload: dict[str, Any],
     symbol: str,
@@ -202,6 +227,14 @@ class WindowSpec:
 class ReadPolicy:
     force_disk: bool = False
     prefer_redis: bool = False
+    disk_policy: str = "never"  # "never" | "bootstrap" | "explicit"
+
+
+# ── Disk policy constants ──────────────────────────────────
+DISK_POLICY_NEVER = "never"
+DISK_POLICY_BOOTSTRAP = "bootstrap"
+DISK_POLICY_EXPLICIT = "explicit"
+BOOTSTRAP_WINDOW_S = 60  # disk дозволено протягом N сек після boot
 
 
 @dataclass
@@ -299,6 +332,10 @@ class UnifiedDataStore:
         self._preview_nomix_violation = False
         self._preview_nomix_violation_reason: Optional[str] = None
         self._preview_nomix_violation_ts_ms: Optional[int] = None
+        self._boot_ts = time.time()  # P1: timestamp старту для bootstrap window
+        self._disk_hotpath_blocked = 0  # P4: лічильник заблокованих disk спроб
+        self._disk_bootstrap_reads = 0  # P4: лічильник disk читань під час bootstrap
+        self._disk_hotpath_last_log_ts = 0.0  # rate-limit логів
         if self._preview_allowlist_source == "fallback":
             Logging.debug(
                 "UDS: preview_tf_allowlist_source=fallback tf_s=%s",
@@ -404,19 +441,39 @@ class UnifiedDataStore:
                 ram_bars, geom = _ensure_sorted_dedup(ram_bars)
                 if geom is not None:
                     _mark_geom_fix(meta, warnings, geom, source="ram", tf_s=tf_s)
-                meta.update({"source": "ram", "redis_hit": False})
+                if spec.limit > 0 and len(ram_bars) < spec.limit and policy.disk_policy == DISK_POLICY_NEVER:
+                    _mark_ram_short_window(meta, warnings, spec.limit, len(ram_bars))
+                    meta.update({"source": "degraded", "redis_hit": False})
+                else:
+                    meta.update({"source": "ram", "redis_hit": False})
                 result = WindowResult(ram_bars, meta, warnings)
                 if policy.prefer_redis and prime_ready:
                     _mark_prime_broken(meta, warnings)
                 _log_window_result(result, warnings, tf_s)
                 return result
 
+            # ── P1 disk_policy guard (RAM miss) ──
+            if not self._disk_allowed(policy, "ram_miss"):
+                meta.update({"source": "degraded", "disk_blocked": True,
+                             "disk_blocked_reason": "ram_miss"})
+                warnings.append("disk_disabled_cache_miss")
+                result = WindowResult([], meta, warnings)
+                _log_window_result(result, warnings, tf_s)
+                return result
             result = self._read_window_disk(spec, meta, warnings)
             if policy.prefer_redis and prime_ready:
                 _mark_prime_broken(result.meta, warnings)
             _log_window_result(result, warnings, tf_s)
             return result
 
+        # ── P1 disk_policy guard (range query) ──
+        if not self._disk_allowed(policy, "range_query"):
+            meta.update({"source": "degraded", "disk_blocked": True,
+                         "disk_blocked_reason": "range_query"})
+            warnings.append("disk_disabled_range_query")
+            result = WindowResult([], meta, warnings)
+            _log_window_result(result, warnings, tf_s)
+            return result
         result = self._read_window_disk(spec, meta, warnings)
         if policy.prefer_redis and prime_ready:
             _mark_prime_broken(result.meta, warnings)
@@ -627,7 +684,8 @@ class UnifiedDataStore:
         if self._redis is None:
             return False
         try:
-            bar_payload = normalize_bar(bar.to_dict(), mode="incl")
+            bar_payload = bar.to_dict()
+            _ensure_bar_payload_end_excl(bar_payload)
             event = {
                 "key": {
                     "symbol": bar.symbol,
@@ -692,10 +750,11 @@ class UnifiedDataStore:
             return
 
         payload_ts_ms = int(time.time() * 1000)
-        bar_payload = normalize_bar(bar.to_dict(), mode="incl")
+        bar_payload = bar.to_dict()
+        close_ms = _ensure_bar_payload_end_excl(bar_payload)
         bar_item = {
             "open_ms": int(bar_payload.get("open_time_ms")),
-            "close_ms": int(bar_payload.get("close_time_ms")),
+            "close_ms": int(close_ms) if close_ms is not None else int(bar_payload.get("close_time_ms")),
             "o": bar_payload.get("o"),
             "h": bar_payload.get("h"),
             "l": bar_payload.get("low"),
@@ -872,7 +931,7 @@ class UnifiedDataStore:
         if self._redis is None:
             return False
         try:
-            bar_payload = normalize_bar(bar.to_dict(), mode="incl")
+            bar_payload = bar.to_dict()
             event = {
                 "key": {
                     "symbol": bar.symbol,
@@ -946,6 +1005,11 @@ class UnifiedDataStore:
         status["preview_tf_allowlist_s"] = sorted(self._preview_tf_allowlist)
         status["preview_tf_allowlist_source"] = self._preview_allowlist_source
         status["preview_tail_updates_total"] = self._preview_tail_updates_total
+        # ── P4: disk policy telemetry ──
+        status["disk_hotpath_blocked_total"] = self._disk_hotpath_blocked
+        status["disk_bootstrap_reads_total"] = self._disk_bootstrap_reads
+        status["disk_bootstrap_elapsed_s"] = round(time.time() - self._boot_ts, 1)
+        status["disk_bootstrap_window_s"] = BOOTSTRAP_WINDOW_S
         if self._preview_nomix_violation:
             status["preview_nomix_violation"] = True
             status["preview_nomix_violation_reason"] = self._preview_nomix_violation_reason
@@ -1204,7 +1268,7 @@ class UnifiedDataStore:
                 Logging.warning("UDS: updates bus відсутній, update events не публікуються")
             return False
         try:
-            bar_payload = normalize_bar(bar.to_dict(), mode="incl")
+            bar_payload = bar.to_dict()
             event = {
                 "key": {
                     "symbol": bar.symbol,
@@ -1222,6 +1286,36 @@ class UnifiedDataStore:
             warnings.append("updates_publish_failed")
             Logging.warning("UDS: updates publish failed err=%s", exc)
             return False
+
+    # ── P1: disk_policy enforcement ─────────────────────────
+    def _disk_allowed(self, policy: ReadPolicy, reason: str) -> bool:
+        """Перевіряє чи дозволено disk-читання згідно disk_policy.
+
+        Returns True якщо disk дозволено, False якщо заблоковано.
+        Побічні ефекти: лічильник + rate-limited лог.
+        """
+        dp = policy.disk_policy
+        if dp == DISK_POLICY_EXPLICIT:
+            return True
+        if dp == DISK_POLICY_BOOTSTRAP:
+            elapsed = time.time() - self._boot_ts
+            if elapsed <= BOOTSTRAP_WINDOW_S:
+                self._disk_bootstrap_reads += 1
+                return True
+            # bootstrap вікно вичерпано — блокуємо
+        # dp == "never" або bootstrap expired
+        self._disk_hotpath_blocked += 1
+        now = time.time()
+        if now - self._disk_hotpath_last_log_ts > 5.0:
+            self._disk_hotpath_last_log_ts = now
+            Logging.warning(
+                "DISK_HOTPATH_BLOCKED: reason=%s policy=%s "
+                "blocked_total=%d bootstrap_reads=%d",
+                reason, dp,
+                self._disk_hotpath_blocked,
+                self._disk_bootstrap_reads,
+            )
+        return False
 
     def _read_window_disk(
         self,
@@ -1472,7 +1566,7 @@ class UnifiedDataStore:
     def _bars_to_lwc(self, bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         for raw in bars:
-            b = normalize_bar(raw, mode="incl")
+            b = raw
             t = b.get("open_time_ms")
             if not isinstance(t, int):
                 continue
@@ -1542,6 +1636,7 @@ class UnifiedDataStore:
         close_ms = bar.get("close_ms")
         if not isinstance(open_ms, int) or not isinstance(close_ms, int):
             return None
+        close_ms = int(open_ms + int(tf_s) * 1000)
         return {
             "symbol": symbol,
             "tf_s": int(tf_s),
@@ -1947,12 +2042,25 @@ def build_uds_from_config(
             day_anchor_offset_s_alt2=_opt_int(cfg.get("day_anchor_offset_s_alt2")),
         )
         redis_writer = build_redis_snapshot_writer(config_path)
+    # P3: для reader role збільшуємо RAM cache щоб вмістити warmup дані
+    # symbols × TFs ≈ 13×8 = 104 + запас
+    ram_max_keys = 8
+    if role == "reader":
+        n_symbols = len(cfg.get("symbols", []))
+        if n_symbols < 1:
+            n_symbols = 1
+        n_tfs = len(tf_allowlist)
+        if n_tfs < 1:
+            n_tfs = 8
+        ram_max_keys = max(n_symbols * n_tfs + 16, 128)
+    ram_layer = RamLayer(max_keys=ram_max_keys, max_bars=60000)
     return UnifiedDataStore(
         data_root=data_root,
         boot_id=boot_id,
         tf_allowlist=tf_allowlist,
         min_coldload_bars=min_coldload_bars,
         role=role,
+        ram_layer=ram_layer,
         redis_layer=redis_layer,
         jsonl_appender=jsonl_appender,
         redis_snapshot_writer=redis_writer,
@@ -2064,9 +2172,9 @@ def selftest_writer_api() -> None:
 
     bar_preview = CandleBar(
         symbol="XAU/USD",
-        tf_s=300,
+        tf_s=60,
         open_time_ms=1700000300000,
-        close_time_ms=1700000300000 + 300 * 1000,
+        close_time_ms=1700000300000 + 60 * 1000 - 1,
         o=1.0,
         h=1.0,
         low=1.0,
@@ -2082,7 +2190,91 @@ def selftest_writer_api() -> None:
         raise RuntimeError("UDS selftest: preview не має писати у final Redis snapshots")
     if not fake_redis_layer.preview_curr:
         raise RuntimeError("UDS selftest: preview curr не записано")
+    curr = fake_redis_layer.preview_curr.get(("XAU/USD", 60))
+    if not isinstance(curr, dict):
+        raise RuntimeError("UDS selftest: preview curr payload invalid")
+    curr_bar = curr.get("bar") if isinstance(curr.get("bar"), dict) else None
+    if not isinstance(curr_bar, dict):
+        raise RuntimeError("UDS selftest: preview curr bar invalid")
+    expected_close = 1700000300000 + 60 * 1000
+    if int(curr_bar.get("close_ms")) != expected_close:
+        raise RuntimeError("UDS selftest: preview close_ms not end-excl")
     if not fake_redis_layer.preview_events:
         raise RuntimeError("UDS selftest: preview updates не опубліковано")
 
     Logging.info("UDS_SELFTEST_OK writer_api=1")
+
+
+def selftest_disk_policy() -> None:
+    """Selftest: перевіряє що disk_policy='never' блокує disk, 'bootstrap' дозволяє."""
+
+    # Створюємо temp data_root з файлом для одного symbol/TF
+    tmp_root = tempfile.mkdtemp(prefix="uds_selftest_disk_")
+    sym_dir = os.path.join(tmp_root, "TEST_SYM", "tf_300")
+    os.makedirs(sym_dir, exist_ok=True)
+    part_file = os.path.join(sym_dir, "part-20250101.jsonl")
+    # Записуємо мінімальний бар
+    bar_data = {
+        "symbol": "TEST/SYM", "tf_s": 300,
+        "open_time_ms": 1735689600000, "close_time_ms": 1735689900000,
+        "o": 1.0, "h": 2.0, "l": 0.5, "c": 1.5, "v": 100.0,
+        "complete": True, "src": "test",
+    }
+    with open(part_file, "w", encoding="utf-8") as f:
+        f.write(_json.dumps(bar_data) + "\n")
+
+    uds = UnifiedDataStore(
+        data_root=tmp_root,
+        boot_id="selftest-dp",
+        tf_allowlist=[300],
+        min_coldload_bars={},
+        role="reader",
+    )
+
+    spec = WindowSpec(
+        symbol="TEST/SYM", tf_s=300, limit=1,
+        since_open_ms=None, to_open_ms=None, cold_load=True,
+    )
+
+    # 1) disk_policy="never" → RAM miss → заблоковано, повертає []
+    policy_never = ReadPolicy(disk_policy="never")
+    res = uds.read_window(spec, policy_never)
+    if res.bars_lwc:
+        raise RuntimeError("selftest_disk_policy: never повинно блокувати disk, але бари прийшли")
+    if res.meta.get("source") != "degraded":
+        raise RuntimeError(f"selftest_disk_policy: source має бути 'degraded', got {res.meta.get('source')}")
+    if "disk_disabled_cache_miss" not in (res.warnings or []):
+        raise RuntimeError("selftest_disk_policy: warning disk_disabled_cache_miss відсутній")
+    if uds._disk_hotpath_blocked < 1:
+        raise RuntimeError("selftest_disk_policy: лічильник blocked=0")
+
+    # 2) disk_policy="bootstrap" (в межах вікна) → disk дозволено
+    policy_boot = ReadPolicy(disk_policy="bootstrap")
+    uds._boot_ts = time.time()  # скидаємо boot time
+    res2 = uds.read_window(spec, policy_boot)
+    if not res2.bars_lwc:
+        raise RuntimeError("selftest_disk_policy: bootstrap має дозволити disk read, але бари порожні")
+    if "disk" not in (res2.meta.get("source") or ""):
+        raise RuntimeError(f"selftest_disk_policy: source має містити 'disk', got {res2.meta.get('source')}")
+
+    # 3) Тепер RAM прогріто, навіть never має повертати з RAM
+    res3 = uds.read_window(spec, policy_never)
+    if res3.meta.get("source") != "ram":
+        raise RuntimeError(f"selftest_disk_policy: після warmup source має бути 'ram', got {res3.meta.get('source')}")
+    if not res3.bars_lwc:
+        raise RuntimeError("selftest_disk_policy: RAM має повернути бари після warmup")
+
+    # 4) bootstrap expired → blocked
+    uds._boot_ts = time.time() - BOOTSTRAP_WINDOW_S - 10
+    uds._ram._windows.clear()  # очищаємо RAM щоб spike disk
+    blocked_before = uds._disk_hotpath_blocked
+    res4 = uds.read_window(spec, policy_boot)
+    if res4.bars_lwc:
+        raise RuntimeError("selftest_disk_policy: expired bootstrap не має повертати бари")
+    if uds._disk_hotpath_blocked <= blocked_before:
+        raise RuntimeError("selftest_disk_policy: лічильник blocked не збільшився")
+
+    # Cleanup
+    import shutil
+    shutil.rmtree(tmp_root, ignore_errors=True)
+    Logging.info("UDS_SELFTEST_OK disk_policy=1")

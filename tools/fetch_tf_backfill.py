@@ -5,7 +5,7 @@ import datetime as dt
 import json
 import logging
 import os
-from typing import List, Optional, Set
+from typing import List, Set
 
 from env_profile import load_env_secrets
 from core.config_loader import pick_config_path, load_system_config, env_str

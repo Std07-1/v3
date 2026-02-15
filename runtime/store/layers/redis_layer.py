@@ -107,6 +107,19 @@ class RedisLayer:
         try:
             seq_key = preview_updates_seq_key(self._ns, symbol, tf_s)
             list_key = preview_updates_list_key(self._ns, symbol, tf_s)
+
+            # P2: since_seq is None → adopt-tail (перший poll після loadBarsFull)
+            # Повертаємо events=[], cursor_seq=max_seq (fast-forward)
+            if since_seq is None:
+                last_seq_raw = self._client.get(seq_key)
+                if isinstance(last_seq_raw, bytes):
+                    last_seq_raw = last_seq_raw.decode("utf-8")
+                try:
+                    cursor_seq = int(last_seq_raw) if last_seq_raw is not None else 0
+                except Exception:
+                    cursor_seq = 0
+                return [], cursor_seq, None, None
+
             raw_list = self._client.lrange(list_key, -max(1, int(retain)), -1)
             events: list[dict[str, Any]] = []
             min_seq: Optional[int] = None
@@ -125,33 +138,27 @@ class RedisLayer:
                     min_seq = seq
                 if max_seq is None or seq > max_seq:
                     max_seq = seq
-                if since_seq is not None and seq <= since_seq:
+                if seq <= since_seq:
                     continue
                 events.append(ev)
 
-            if limit > 0 and len(events) > limit:
-                events = events[-limit:]
-
-            cursor_seq = since_seq if since_seq is not None else 0
-            if events:
-                cursor_seq = max(ev.get("seq", 0) for ev in events)
-            else:
-                last_seq_raw = self._client.get(seq_key)
-                if isinstance(last_seq_raw, bytes):
-                    last_seq_raw = last_seq_raw.decode("utf-8")
-                try:
-                    last_seq = int(last_seq_raw) if last_seq_raw is not None else 0
-                except Exception:
-                    last_seq = 0
-                if since_seq is None:
-                    cursor_seq = last_seq
-
+            # P1: cursor_gap → fast-forward, events=[] (НЕ віддаємо stale хвіст)
             gap: Optional[dict[str, Any]] = None
-            if since_seq is not None and min_seq is not None and since_seq < min_seq - 1:
+            if min_seq is not None and since_seq < min_seq - 1:
                 gap = {
                     "first_seq_available": min_seq,
                     "last_seq_available": max_seq if max_seq is not None else min_seq,
                 }
+                cursor_seq = max_seq if max_seq is not None else min_seq
+                return [], int(cursor_seq), gap, None
+
+            if limit > 0 and len(events) > limit:
+                events = events[-limit:]
+
+            cursor_seq = since_seq
+            if events:
+                cursor_seq = max(ev.get("seq", 0) for ev in events)
+
             return events, int(cursor_seq), gap, None
         except Exception as exc:
             return [], since_seq if since_seq is not None else 0, None, str(exc)
@@ -171,3 +178,80 @@ class RedisLayer:
         if isinstance(ready, bool):
             return ready
         return True
+
+
+def selftest_preview_updates_fast_forward() -> None:
+    """T1: selftest для P1+P2 — fast-forward при cursor_gap та adopt-tail при since_seq=None."""
+    import logging
+    _log = logging.getLogger("redis_layer_selftest")
+
+    class _FakeRedis:
+        def __init__(self) -> None:
+            self._store: dict[str, Any] = {}
+            self._lists: dict[str, list[str]] = {}
+
+        def get(self, key: str) -> Optional[bytes]:
+            v = self._store.get(key)
+            return v.encode("utf-8") if v is not None else None
+
+        def set(self, key: str, value: str, **kw: Any) -> None:
+            self._store[key] = value
+
+        def incr(self, key: str) -> int:
+            cur = int(self._store.get(key, "0"))
+            cur += 1
+            self._store[key] = str(cur)
+            return cur
+
+        def rpush(self, key: str, value: str) -> None:
+            self._lists.setdefault(key, []).append(value)
+
+        def ltrim(self, key: str, start: int, end: int) -> None:
+            lst = self._lists.get(key, [])
+            self._lists[key] = lst[start:] if end == -1 else lst[start:end + 1]
+
+        def lrange(self, key: str, start: int, end: int) -> list[bytes]:
+            lst = self._lists.get(key, [])
+            if end == -1:
+                end = len(lst)
+            else:
+                end += 1
+            result = lst[start:end] if start >= 0 else lst[start:]
+            return [v.encode("utf-8") if isinstance(v, str) else v for v in result]
+
+        def ttl(self, key: str) -> int:
+            return -1
+
+    fake_client = _FakeRedis()
+    layer = RedisLayer(fake_client, "test")
+
+    # Заповнити ring: retain=100, публікуємо 200 events → ring зберігає останні 100 (seq 101..200)
+    for i in range(200):
+        event = {"key": {"symbol": "XAU/USD", "tf_s": 60, "open_ms": 1700000000000 + i * 60000}, "bar": {}, "complete": False, "source": "stream"}
+        layer.publish_preview_event("XAU/USD", 60, event, 100)
+
+    # T1.1: since_seq=10 (стара позиція, поза ring) → gap → events=[], cursor_seq=max_seq
+    events, cursor_seq, gap, err = layer.read_preview_updates("XAU/USD", 60, 10, 500, 100)
+    assert err is None, f"T1.1: unexpected error: {err}"
+    assert len(events) == 0, f"T1.1: expected events=0, got {len(events)}"
+    assert gap is not None, f"T1.1: expected gap, got None"
+    assert cursor_seq >= 200, f"T1.1: expected cursor_seq>=200, got {cursor_seq}"
+    _log.info("T1.1 OK: cursor_gap fast-forward events=0 cursor_seq=%s", cursor_seq)
+
+    # T1.2: since_seq=None (перший poll) → adopt-tail → events=[], cursor_seq=max_seq
+    events, cursor_seq, gap, err = layer.read_preview_updates("XAU/USD", 60, None, 500, 100)
+    assert err is None, f"T1.2: unexpected error: {err}"
+    assert len(events) == 0, f"T1.2: expected events=0, got {len(events)}"
+    assert gap is None, f"T1.2: expected no gap for adopt-tail, got {gap}"
+    assert cursor_seq >= 200, f"T1.2: expected cursor_seq>=200, got {cursor_seq}"
+    _log.info("T1.2 OK: adopt-tail events=0 cursor_seq=%s", cursor_seq)
+
+    # T1.3: since_seq=199 (нормальний інкрементальний) → events з останнього елемента
+    events, cursor_seq, gap, err = layer.read_preview_updates("XAU/USD", 60, 199, 500, 100)
+    assert err is None, f"T1.3: unexpected error: {err}"
+    assert len(events) >= 1, f"T1.3: expected >=1 events, got {len(events)}"
+    assert gap is None, f"T1.3: expected no gap, got {gap}"
+    assert cursor_seq >= 200, f"T1.3: expected cursor_seq>=200, got {cursor_seq}"
+    _log.info("T1.3 OK: incremental events=%s cursor_seq=%s", len(events), cursor_seq)
+
+    _log.info("SELFTEST_PREVIEW_UPDATES_FAST_FORWARD_OK")

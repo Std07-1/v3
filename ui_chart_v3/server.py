@@ -31,10 +31,82 @@ from typing import Any
 from core.buckets import bucket_start_ms, resolve_anchor_offset_ms
 from core.config_loader import (
     pick_config_path, tf_allowlist_from_cfg, preview_tf_allowlist_from_cfg,
-    DEFAULT_TF_ALLOWLIST, DEFAULT_PREVIEW_TF_ALLOWLIST, MAX_EVENTS_PER_RESPONSE,
 )
 from env_profile import load_env_secrets
-from runtime.store.uds import ReadPolicy, UpdatesSpec, WindowSpec, build_uds_from_config
+from runtime.store.uds import ReadPolicy, UpdatesSpec, WindowSpec, UnifiedDataStore, build_uds_from_config
+
+
+# ── P3: Bootstrap warmup ─────────────────────────────────────
+# Відповідність app.js COLD_START_BARS_BY_TF
+_WARMUP_BARS_BY_TF: dict[int, int] = {
+    60:   500,
+    180:  500,
+    300:  500,
+    900:  500,
+    1800: 500,
+    3600: 500,
+    14400: 300,
+    86400: 200,
+}
+# SSOT policy для cold-start (UI може мати fallback, але пріоритет — серверний policy)
+_COLD_START_BARS_BY_TF: dict[int, int] = {
+    60: 10_080,
+    180: 3_360,
+    300: 2_016,
+    900: 672,
+    1800: 336,
+    3600: 168,
+    14400: 1_080,
+    86400: 365,
+}
+# Пріоритетні TF для warmup (найчастіше відкриваються)
+_WARMUP_TF_PRIORITY = [300, 3600, 900, 14400, 86400, 1800, 60, 180]
+_SHOW_IMMEDIATELY_TFS = [14400, 86400]
+_POLICY_VERSION = "20260214-201"
+_BUILD_ID = "20260214-201"
+
+
+def _bootstrap_warmup(uds: "UnifiedDataStore", config_path: str) -> None:
+    """Прогрів RAM-кешу з диску під час bootstrap window.
+
+    Читаємо для кожного symbol × priority TF холодний вікно з disk_policy=bootstrap.
+    Це заповнює RAM cache, і після цього runtime може працювати з disk_policy=never.
+    """
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+        symbols = cfg.get("symbols", [])
+        if not symbols:
+            symbol = cfg.get("symbol")
+            if symbol:
+                symbols = [symbol]
+    except Exception:
+        logging.warning("WARMUP: не вдалося прочитати config для символів")
+        return
+
+    total = 0
+    t0 = time.time()
+    for sym in symbols:
+        for tf_s in _WARMUP_TF_PRIORITY:
+            limit = _WARMUP_BARS_BY_TF.get(tf_s, 300)
+            try:
+                spec = WindowSpec(
+                    symbol=sym, tf_s=tf_s, limit=limit,
+                    since_open_ms=None, to_open_ms=None, cold_load=True,
+                )
+                policy = ReadPolicy(force_disk=False, prefer_redis=False,
+                                    disk_policy="bootstrap")
+                res = uds.read_window(spec, policy)
+                n = len(res.bars_lwc) if res.bars_lwc else 0
+                total += n
+            except Exception as exc:
+                logging.warning("WARMUP: %s tf_s=%d err=%s", sym, tf_s, exc)
+    elapsed = time.time() - t0
+    logging.info(
+        "WARMUP: завершено symbols=%d tfs=%d bars_total=%d elapsed=%.1fs",
+        len(symbols), len(_WARMUP_TF_PRIORITY), total, elapsed,
+    )
+
 
 
 _boot_id = uuid.uuid4().hex
@@ -50,9 +122,124 @@ _overlay_prev_held_total = 0
 _overlay_prev_wait_ms_last: int | None = None
 _overlay_prev_hold_since: dict[tuple[str, int], int] = {}
 
+# ── P4: SSOT server-side limit rail ──────────────────────────
+_MAX_BARS_CAP = 20_000
+_TF_CAP: dict[int, int] = {
+    60:    10_080,  # 1m: 7d
+    180:    3_360,  # 3m: 7d
+    300:   20_000,  # 5m: max
+    900:   20_000,  # 15m: max
+    1800:  20_000,  # 30m: max
+    3600:  20_000,  # 1h: max
+    14400:  5_000,  # 4h
+    86400:  3_650,  # 1d
+}
+_limit_clamp_count = 0
+_limit_clamp_last_log_ts = 0.0
 
 
+def _dedup_warnings(*warning_lists: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for items in warning_lists:
+        for item in items:
+            text = str(item)
+            if text in seen:
+                continue
+            seen.add(text)
+            out.append(text)
+    return out
 
+
+def _policy_sanity_issues() -> list[str]:
+    issues: list[str] = []
+    for tf_s in _SHOW_IMMEDIATELY_TFS:
+        cold = int(_COLD_START_BARS_BY_TF.get(tf_s, 0))
+        warm = int(_WARMUP_BARS_BY_TF.get(tf_s, 0))
+        if cold > 0 and warm < cold:
+            issues.append(f"warmup_lt_cold_start:tf={tf_s}:warmup={warm}:cold_start={cold}")
+    if _MAX_BARS_CAP < max(_TF_CAP.values()):
+        issues.append("max_bars_cap_lt_tf_cap")
+    return issues
+
+
+def _build_window_policy_payload(
+    cfg: dict[str, Any],
+    uds: "UnifiedDataStore",
+    tf_allowlist: list[int],
+    preview_allowlist: list[int],
+) -> dict[str, Any]:
+    status = uds.snapshot_status()
+    prime_payload = status.get("prime_ready_payload") if isinstance(status, dict) else None
+    redis_tail_by_tf: dict[int, int] = {}
+    if isinstance(prime_payload, dict):
+        prime_tf = prime_payload.get("prime_tail_len_by_tf_s")
+        if isinstance(prime_tf, dict):
+            for key, value in prime_tf.items():
+                try:
+                    tf_key = int(key)
+                except Exception:
+                    continue
+                if isinstance(value, int):
+                    redis_tail_by_tf[tf_key] = int(value)
+
+    issues = _policy_sanity_issues()
+    warnings = list(issues)
+    payload = {
+        "policy_version": _POLICY_VERSION,
+        "build_id": _BUILD_ID,
+        "window_policy": {
+            "cold_start_bars_by_tf": dict(_COLD_START_BARS_BY_TF),
+            "warmup_bars_by_tf": dict(_WARMUP_BARS_BY_TF),
+            "redis_tail_by_tf": redis_tail_by_tf,
+            "max_bars_cap": int(_MAX_BARS_CAP),
+            "scrollback_chunk_by_tf": {
+                300: 1000,
+                900: 1000,
+                1800: 1000,
+                3600: 1000,
+            },
+            "tf_cap": dict(_TF_CAP),
+        },
+        "tf_allowlist": list(tf_allowlist),
+        "preview_tf_allowlist": list(preview_allowlist),
+        "config_invalid": bool(issues),
+    }
+    if warnings:
+        payload["warnings"] = warnings
+    return payload
+
+
+def _build_no_data_payload(
+    symbol: str,
+    tf_s: int,
+    boot_id: str,
+    res_meta: dict[str, Any] | None,
+    final_extra_warnings: list[str],
+    res_warnings: list[str],
+) -> tuple[dict[str, Any], list[str]]:
+    warnings = _dedup_warnings(final_extra_warnings, res_warnings)
+    if not warnings:
+        warnings = ["no_data_unexplained"]
+    payload = {
+        "ok": True,
+        "symbol": symbol,
+        "tf_s": tf_s,
+        "bars": [],
+        "note": "no_data",
+        "boot_id": boot_id,
+        "meta": res_meta or {"source": "degraded", "redis_hit": False, "boot_id": boot_id},
+    }
+    if warnings:
+        payload["warnings"] = warnings
+    return payload, warnings
+
+
+def _clamp_limit(raw_limit: int, tf_s: int) -> tuple[int, bool]:
+    """Clamp limit до min(raw, tf_cap, global_cap). Повертає (clamped, was_clamped)."""
+    cap = min(_TF_CAP.get(tf_s, _MAX_BARS_CAP), _MAX_BARS_CAP)
+    clamped = min(max(raw_limit, 1), cap)
+    return clamped, clamped < raw_limit
 
 
 def _safe_int(raw: Any, default: int) -> int:
@@ -309,7 +496,7 @@ def _contract_guard_warn_window(
             continue
         issues.extend(_guard_bar_shape(bar))
     if issues:
-        if had_warnings:
+        if "contract_violation" not in warnings:
             warnings.append("contract_violation")
         logging.warning("CONTRACT_VIOLATION schema=window_v1 issues=%s", ",".join(issues[:10]))
 
@@ -335,9 +522,16 @@ def _contract_guard_warn_updates(
             continue
         issues.extend(_guard_event_shape(ev))
     if issues:
-        if had_warnings:
+        if "contract_violation" not in warnings:
             warnings.append("contract_violation")
         logging.warning("CONTRACT_VIOLATION schema=updates_v1 issues=%s", ",".join(issues[:10]))
+
+
+def _selftest_contract_guard() -> bool:
+    warnings: list[str] = []
+    payload = {"ok": True, "events": [], "cursor_seq": 0, "boot_id": "t"}
+    _contract_guard_warn_updates(payload, [], warnings, False)
+    return "contract_violation" in warnings
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -443,11 +637,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         if path == "/api/config":
             ui_debug = _parse_bool(cfg.get("ui_debug", True), True)
+            policy_payload = _build_window_policy_payload(
+                cfg,
+                uds,
+                sorted(tf_allowlist),
+                sorted(preview_allowlist),
+            )
             self._json(
                 200,
                 {
                     "ok": True,
                     "ui_debug": ui_debug,
+                    **policy_payload,
                 },
             )
             return
@@ -505,6 +706,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             payload["bar_close_ms"] = res.bar_close_ms
             payload["ssot_write_ts_ms"] = res.ssot_write_ts_ms
             payload["api_seen_ts_ms"] = res.api_seen_ts_ms
+            if res.meta:
+                payload["meta"] = res.meta
             if logging.getLogger().isEnabledFor(logging.INFO):
                 window_start_ms = None
                 window_end_ms = None
@@ -600,7 +803,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
             symbol = (qs.get("symbol", [""])[0] or "").strip()
             tf_s = _safe_int((qs.get("tf_s", ["60"])[0] or "60"), 60)
-            limit = _safe_int((qs.get("limit", ["2000"])[0] or "2000"), 2000)
+            raw_limit = _safe_int((qs.get("limit", ["2000"])[0] or "2000"), 2000)
+            limit, _was_clamped = _clamp_limit(raw_limit, tf_s)
+            if _was_clamped:
+                global _limit_clamp_count, _limit_clamp_last_log_ts
+                _limit_clamp_count += 1
+                _now = time.time()
+                if _now - _limit_clamp_last_log_ts > 30:
+                    logging.warning(
+                        "API_BARS_LIMIT_CLAMP tf_s=%s raw=%s clamped=%s (count_30s=%s)",
+                        tf_s, raw_limit, limit, _limit_clamp_count,
+                    )
+                    _limit_clamp_count = 0
+                    _limit_clamp_last_log_ts = _now
             force_disk = _safe_int((qs.get("force_disk", ["0"])[0] or "0"), 0) == 1
             prefer_redis = _safe_int((qs.get("prefer_redis", ["0"])[0] or "0"), 0) == 1
             epoch_raw = qs.get("epoch", [None])[0]
@@ -618,6 +833,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 # Finals від M1 poller зберігаються на disk + snap,
                 # preview_curr містить поточний формуючий бар від тіків.
                 preview_warnings: list[str] = []
+                if _was_clamped:
+                    preview_warnings.append(f"limit_clamped:{raw_limit}->{limit}")
                 if prefer_redis:
                     preview_warnings.append("query_param_ignored:prefer_redis")
                 if force_disk:
@@ -630,7 +847,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     limit=limit,
                     cold_load=True,
                 )
-                policy = ReadPolicy(force_disk=False, prefer_redis=False)
+                policy = ReadPolicy(force_disk=False, prefer_redis=False, disk_policy="never")
                 hist_res = uds.read_window(spec, policy)
                 hist_bars = list(hist_res.bars_lwc)
 
@@ -683,6 +900,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
             # P2X.6: prefer_redis/force_disk ігноруються (Правило 20.2)
             final_extra_warnings: list[str] = []
+            if _was_clamped:
+                final_extra_warnings.append(f"limit_clamped:{raw_limit}->{limit}")
             if prefer_redis:
                 final_extra_warnings.append("query_param_ignored:prefer_redis")
             if force_disk:
@@ -698,20 +917,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             )
             policy = ReadPolicy(
                 force_disk=False,
-                prefer_redis=False,
+                prefer_redis=bool(cold_load),
+                disk_policy="never",
             )
             res = uds.read_window(spec, policy)
             if not res.bars_lwc and since_open_ms is None and to_open_ms is None:
-                payload = {
-                    "ok": True,
-                    "bars": [],
-                    "note": "no_data",
-                    "boot_id": _boot_id,
-                    "meta": res.meta or {"source": "disk", "redis_hit": False, "boot_id": _boot_id},
-                }
-                if final_extra_warnings:
-                    payload["warnings"] = list(final_extra_warnings)
-                _contract_guard_warn_window(payload, [], final_extra_warnings, bool(final_extra_warnings))
+                payload, warnings = _build_no_data_payload(
+                    symbol,
+                    tf_s,
+                    _boot_id,
+                    res.meta,
+                    final_extra_warnings,
+                    list(res.warnings),
+                )
+                _contract_guard_warn_window(payload, [], warnings, bool(warnings))
                 self._json(200, payload)
                 return
             # Stitch: open[i] = close[i-1] (опціонально, вимкнено за замовчуванням)
@@ -831,7 +1050,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     to_open_ms=None,
                     cold_load=True,
                 )
-                res_last = uds.read_window(spec_last, ReadPolicy(force_disk=False, prefer_redis=False))
+                res_last = uds.read_window(spec_last, ReadPolicy(force_disk=False, prefer_redis=False, disk_policy="never"))
                 if res_last.bars_lwc:
                     last_final_open_ms = res_last.bars_lwc[-1].get("open_time_ms")
             except Exception:
@@ -937,7 +1156,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         to_open_ms=b_prev,
                         cold_load=False,
                     )
-                    res_final = uds.read_window(spec_prev, ReadPolicy(force_disk=False, prefer_redis=False))
+                    res_final = uds.read_window(spec_prev, ReadPolicy(force_disk=False, prefer_redis=False, disk_policy="never"))
                     has_final = any(
                         b.get("open_time_ms") == b_prev
                         for b in (res_final.bars_lwc or [])
@@ -1000,8 +1219,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def end_headers(self) -> None:
         path = self.path or ""
-        if not path.startswith("/api/"):
-            self.send_header("Cache-Control", "no-store")
+        path_no_qs = path.split("?", 1)[0].lower()
+        is_api = path_no_qs.startswith("/api/")
+        is_static_nostore = (
+            path_no_qs == "/"
+            or path_no_qs.endswith(".html")
+            or path_no_qs.endswith(".js")
+            or path_no_qs.endswith(".json")
+        )
+        if not is_api and is_static_nostore:
+            self.send_header("Cache-Control", "no-store, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+        if not is_api:
             if self._client_id and self._client_new:
                 self.send_header(
                     "Set-Cookie",
@@ -1074,6 +1304,12 @@ def main() -> int:
         _boot_id,
         role="reader",
     )
+
+    # ── P3: Bootstrap warmup — прогрів RAM з диску ──
+    _bootstrap_warmup(httpd.uds, config_path)
+    policy_issues = _policy_sanity_issues()
+    if policy_issues:
+        logging.error("POLICY_CONFIG_INVALID issues=%s", ",".join(policy_issues))
 
     logging.info("UI: http://%s:%s/", args.host, args.port)
     logging.debug("DATA_ROOT: %s", httpd.data_root)  # type: ignore[attr-defined]

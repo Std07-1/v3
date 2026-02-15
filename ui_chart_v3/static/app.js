@@ -44,6 +44,7 @@ let lastOpenMs = null;
 let pollTimer = null;
 let loadReqId = 0;
 let viewEpoch = 0;
+let uiEpoch = 0;
 let loadAbort = null;
 let currentTheme = 'light';
 let uiDebugEnabled = true;
@@ -91,9 +92,14 @@ let overlayInFlight = false;
 let overlayHeldPrev = false;
 let overlayLastBucketOpenMs = null;
 let overlayNextDelayMs = null;
+let uiPolicy = null;
+let policyFallbackActive = false;
 
 let updatesInFlight = false;
+let updatesAbort = null;
 let updatesEmptyStreak = 0;
+let _cursorGapRecoveryMs = 0; // P3: debounce cold-reload
+const CURSOR_GAP_RECOVERY_DEBOUNCE_MS = 5000;
 const UPDATES_BASE_FINAL_MS = 3000;
 const UPDATES_BASE_PREVIEW_MS = 1000;
 const UPDATES_BACKOFF_PREVIEW_MS = [1000, 1000, 1000];
@@ -106,32 +112,49 @@ const CANDLE_STYLE_KEY = 'ui_chart_candle_style';
 const SYMBOL_KEY = 'ui_chart_symbol';
 const TF_KEY = 'ui_chart_tf';
 const LAYOUT_SAVE_KEY = 'ui_chart_layout_save';
-const MAX_RENDER_BARS_ACTIVE_BASE = 60000;
-const MAX_RENDER_BARS_BY_TF = {
-  300: 52500,
-  900: 17500,
-  1800: 8500,
-  3600: 4380,
+// ── SSOT window policy (P1) ──────────────────────────────────
+// Cold-start = перший load символу/TF.  Максимум = стеля scroll/zoom.
+const COLD_START_BARS_BY_TF = {
+  60: 10080, // 1m: 7d
+  180: 3360, // 3m: 7d
+  300: 2016, // 5m: 7d
+  900: 672, // 15m: 7d
+  1800: 336, // 30m: 7d
+  3600: 168, // 1h: 7d
+  14400: 1080, // 4h: 180d
+  86400: 365, // 1d: 365d
 };
+const COLD_START_BARS_FALLBACK = 2000;
+const MAX_BARS_CAP = 20000;
+// Зберігає останній effective limit для кожного view-key (symbol|tf)
+const _lastLimitByView = new Map();
 const MAX_RENDER_BARS_WARM = 20000;
 const WARM_LRU_LIMIT = 6;
 const UPDATE_STATE_TTL_MS = 30 * 60 * 1000;
 const UPDATE_STATE_CLEANUP_INTERVAL_MS = 60000;
 const FAVORITES_KEY = 'ui_chart_favorites_v1';
-const SCROLLBACK_TRIGGER_BARS_BASE = 2000;
+// ── Scrollback policy (P2) ──────────────────────────────────
+const SCROLLBACK_TRIGGER_BARS_BASE = 1000;
 const SCROLLBACK_MIN_INTERVAL_MS = 1200;
-const SCROLLBACK_CHUNK_MAX_BASE = 10000;
-const SCROLLBACK_CHUNK_MIN_BASE = 5000;
+const SCROLLBACK_CHUNK_MAX_BASE = 2000;
+const SCROLLBACK_CHUNK_MIN_BASE = 500;
 const SCROLLBACK_EXTRA_BARS = 0;
 const SCROLLBACK_MAX_STEPS = 6;
 const CONTINUITY_LOG_INTERVAL_MS = 15000;
+const UPDATES_DROP_LOG_INTERVAL_MS = 15000;
 const SCROLLBACK_CHUNK_BY_TF = {
-  300: 5000,
-  900: 5000,
-  1800: 5000,
-  3600: 5000,
+  300: 1000,
+  900: 1000,
+  1800: 1000,
+  3600: 1000,
 };
-const DEFAULT_SCROLLBACK_CHUNK = 5000;
+const DEFAULT_SCROLLBACK_CHUNK = 1000;
+const POLICY_FALLBACK_VERSION = 'fallback-local-v1';
+// ── Switch debounce (P3) ─────────────────────────────────────
+const SWITCH_DEBOUNCE_MS = 120;
+let _switchDebounceTimer = null;
+const SETDATA_DEBUG_MAX = 20;
+let _setDataDebugCount = 0;
 
 function readSelectedTf(defaultTf = 300) {
   const raw = parseInt(elTf?.value, 10);
@@ -145,6 +168,7 @@ function isUiVisible() {
 
 function startNewViewEpoch() {
   viewEpoch += 1;
+  uiEpoch += 1;
   if (loadAbort) {
     loadAbort.abort();
     loadAbort = null;
@@ -153,6 +177,12 @@ function startNewViewEpoch() {
     scrollbackAbort.abort();
     scrollbackAbort = null;
   }
+  // P4: abort in-flight updates fetch + reset flag
+  if (updatesAbort) {
+    updatesAbort.abort();
+    updatesAbort = null;
+  }
+  updatesInFlight = false;
   scrollbackInFlight = false;
   scrollbackPending = false;
   scrollbackLatestRange = null;
@@ -171,13 +201,41 @@ function startNewViewEpoch() {
   lastBarCloseMs = null;
   return viewEpoch;
 }
+
+function logSetDataDebug(source, symbol, tf, barsCount) {
+  if (_setDataDebugCount >= SETDATA_DEBUG_MAX) return;
+  _setDataDebugCount += 1;
+  console.info('SETDATA', {
+    source,
+    symbol,
+    tf,
+    bars: barsCount,
+    epoch: uiEpoch,
+    n: _setDataDebugCount,
+  });
+}
+
 const diag = {
   loadAt: null,
   pollAt: null,
   barsTotal: 0,
   lastPollBars: 0,
   lastError: '',
+  droppedUpdates: 0,
 };
+
+let lastUpdatesDropLogMs = 0;
+
+function warnUpdatesDrop(reason, details) {
+  diag.droppedUpdates += 1;
+  const now = Date.now();
+  if (now - lastUpdatesDropLogMs >= UPDATES_DROP_LOG_INTERVAL_MS) {
+    lastUpdatesDropLogMs = now;
+    console.warn('UI_UPDATES_DROP', reason, details || '');
+  }
+  setStatus(`updates_drop:${reason}`);
+  updateDiag(readSelectedTf());
+}
 
 function fmtAge(ms) {
   if (ms == null) return '—';
@@ -261,7 +319,8 @@ function updateDiag(tfSeconds) {
     const seq = lastUpdatesSeq != null ? String(lastUpdatesSeq) : '—';
     const gap = _formatGap(lastUpdatesGap);
     const held = overlayHeldPrev ? 'yes' : 'no';
-    elDiagMeta.textContent = `plane=${plane} seq=${seq} gap=${gap} held_prev=${held}`;
+    const dropped = Number.isFinite(diag.droppedUpdates) ? diag.droppedUpdates : 0;
+    elDiagMeta.textContent = `plane=${plane} seq=${seq} gap=${gap} held_prev=${held} drop=${dropped}`;
   }
   updateStreamingIndicator();
 }
@@ -463,10 +522,56 @@ async function loadUiConfig() {
     if (data && typeof data.ui_debug === 'boolean') {
       uiDebugEnabled = data.ui_debug;
     }
+    if (data && data.window_policy && typeof data.window_policy === 'object') {
+      uiPolicy = {
+        policyVersion: String(data.policy_version || ''),
+        buildId: String(data.build_id || ''),
+        windowPolicy: data.window_policy,
+      };
+      policyFallbackActive = false;
+      console.info('UI_POLICY_LOADED', {
+        policy_version: uiPolicy.policyVersion,
+        build_id: uiPolicy.buildId,
+        config_invalid: Boolean(data.config_invalid),
+        warnings: Array.isArray(data.warnings) ? data.warnings : [],
+      });
+    } else {
+      policyFallbackActive = true;
+      console.warn('UI_POLICY_FALLBACK_ACTIVE reason=missing_window_policy policy_version=' + POLICY_FALLBACK_VERSION);
+      setStatus('policy_fallback_active');
+    }
   } catch (e) {
     uiDebugEnabled = true;
+    policyFallbackActive = true;
+    console.warn('UI_POLICY_FALLBACK_ACTIVE reason=api_config_unavailable policy_version=' + POLICY_FALLBACK_VERSION);
+    setStatus('policy_fallback_active');
   }
   applyUiDebug();
+}
+
+function getPolicyMap(name, fallbackMap) {
+  if (!uiPolicy || !uiPolicy.windowPolicy) {
+    return fallbackMap;
+  }
+  const source = uiPolicy.windowPolicy[name];
+  if (!source || typeof source !== 'object') {
+    return fallbackMap;
+  }
+  const out = {};
+  for (const [k, v] of Object.entries(source)) {
+    const key = Number(k);
+    const val = Number(v);
+    if (Number.isFinite(key) && Number.isFinite(val) && val > 0) {
+      out[key] = Math.floor(val);
+    }
+  }
+  return Object.keys(out).length ? out : fallbackMap;
+}
+
+function getPolicyMaxBarsCap() {
+  const cap = Number(uiPolicy?.windowPolicy?.max_bars_cap);
+  if (Number.isFinite(cap) && cap > 0) return Math.floor(cap);
+  return MAX_BARS_CAP;
 }
 
 function applyUiDebug() {
@@ -929,7 +1034,20 @@ function isFavoritePair(symbol, tf) {
 
 function getActiveMaxBars() {
   const tf = readSelectedTf();
-  return MAX_RENDER_BARS_BY_TF[tf] || MAX_RENDER_BARS_ACTIVE_BASE;
+  const maxBarsCap = getPolicyMaxBarsCap();
+  const key = currentCacheKey || makeCacheKey(elSymbol?.value || '', tf);
+  // Якщо view вже відвідували й user проскролив — використати last limit
+  const last = _lastLimitByView.get(key);
+  if (Number.isFinite(last) && last > 0) {
+    return Math.min(last, maxBarsCap);
+  }
+  // Cold-start limit
+  const coldMap = getPolicyMap('cold_start_bars_by_tf', COLD_START_BARS_BY_TF);
+  const cold = coldMap[tf];
+  if (!cold) {
+    console.warn('LIMIT_POLICY_MISSING tf=' + tf + ', fallback=' + COLD_START_BARS_FALLBACK);
+  }
+  return Math.min(cold || COLD_START_BARS_FALLBACK, maxBarsCap);
 }
 
 function getScrollbackTriggerBars() {
@@ -1096,10 +1214,15 @@ function restoreCacheFor(symbol, tf) {
   if (!cached) return false;
   const bars = Array.isArray(cached.bars) ? cached.bars : [];
   if (!bars.length) return false;
+  // P4: perf mark for cache-restore render
+  const _t0 = performance.now();
   if (controller && typeof controller.setBars === 'function') {
     controller.setBars(bars);
+    logSetDataDebug('cache_restore', symbol, tf, bars.length);
   }
   setBarsStore(bars);
+  const _dt = performance.now() - _t0;
+  if (_dt > 50) console.warn(`LONG_TASK_RENDER cache_restore tf=${tf} bars=${bars.length} ms=${_dt.toFixed(1)}`);
   applyTheme(currentTheme);
   if (elCandleStyle) {
     applyCandleStyle(elCandleStyle.value || 'classic');
@@ -1136,12 +1259,15 @@ function restoreCacheFor(symbol, tf) {
 }
 
 function setBarsStore(bars) {
+  const _t0 = performance.now();
   barsStore = Array.isArray(bars) ? bars.slice() : [];
   const maxBars = getActiveMaxBars();
   if (barsStore.length > maxBars) {
     barsStore = barsStore.slice(-maxBars);
   }
   rebuildBarsIndex();
+  const _dt = performance.now() - _t0;
+  if (_dt > 50) console.warn(`LONG_TASK_RENDER setBarsStore bars=${barsStore.length} ms=${_dt.toFixed(1)}`);
 }
 
 function upsertBarToStore(bar) {
@@ -1164,7 +1290,8 @@ function upsertBarToStore(bar) {
 }
 
 function getScrollbackChunk(tf) {
-  return SCROLLBACK_CHUNK_BY_TF[tf] || DEFAULT_SCROLLBACK_CHUNK;
+  const chunkMap = getPolicyMap('scrollback_chunk_by_tf', SCROLLBACK_CHUNK_BY_TF);
+  return chunkMap[tf] || DEFAULT_SCROLLBACK_CHUNK;
 }
 
 function computeScrollbackNeed(range) {
@@ -1203,6 +1330,8 @@ function logContinuityIfNeeded(tf) {
   if (!Number.isFinite(tf) || tf <= 0) return;
   if (!Array.isArray(barsStore) || barsStore.length < 2) return;
   const expected = tf;
+  // P2: HTF gap tolerance — D1 7d, H4 2d (вихідні/свята)
+  const gapMultiplier = tf >= 86400 ? 8 : (tf >= 14400 ? 5 : 3);
   let maxDt = 0;
   let gaps = 0;
   for (let i = 1; i < barsStore.length; i += 1) {
@@ -1211,10 +1340,11 @@ function logContinuityIfNeeded(tf) {
     if (!Number.isFinite(prev) || !Number.isFinite(curr)) continue;
     const dt = Math.max(0, Math.round((curr - prev) / 1000));
     if (dt > maxDt) maxDt = dt;
-    if (dt > expected * 3) gaps += 1;
+    if (dt > expected * gapMultiplier) gaps += 1;
   }
   lastContinuityLogMs = now;
-  console.info(`UI_CONTINUITY tf=${tf}s bars=${barsStore.length} max_dt_s=${maxDt} gaps_gt_3x=${gaps}`);
+  const htfNote = tf >= 14400 ? ' (htf:calendar_gaps_ok)' : '';
+  console.info(`UI_CONTINUITY tf=${tf}s bars=${barsStore.length} max_dt_s=${maxDt} gaps_gt_${gapMultiplier}x=${gaps}${htfNote}`);
 }
 
 function mergeOlderBars(olderBars, prevRange, tf) {
@@ -1244,6 +1374,7 @@ function mergeOlderBars(olderBars, prevRange, tf) {
   rebuildBarsIndex();
   if (controller && typeof controller.setBars === 'function') {
     controller.setBars(barsStore);
+    logSetDataDebug('scrollback', elSymbol.value, tf, barsStore.length);
   }
   if (prevRange && controller && typeof controller.setVisibleLogicalRange === 'function') {
     controller.setVisibleLogicalRange({
@@ -1252,6 +1383,10 @@ function mergeOlderBars(olderBars, prevRange, tf) {
     });
   }
   diag.barsTotal = barsStore.length;
+  // P1: оновити last limit після scrollback
+  if (currentCacheKey) {
+    _lastLimitByView.set(currentCacheKey, Math.min(barsStore.length, MAX_BARS_CAP));
+  }
   logContinuityIfNeeded(tf);
   saveCacheCurrent();
 }
@@ -1393,6 +1528,7 @@ async function loadBarsFull() {
     loadAbort.abort();
   }
   loadAbort = new AbortController();
+  const uiEpochAtStart = uiEpoch;
   const symbol = elSymbol.value;
   const tf = readSelectedTf();
   currentCacheKey = makeCacheKey(symbol, tf);
@@ -1410,6 +1546,7 @@ async function loadBarsFull() {
     if (e && e.name === 'AbortError') return;
     throw e;
   }
+  if (uiEpochAtStart !== uiEpoch) return;
   if (epoch !== viewEpoch) return;
   if (reqId !== loadReqId) return;
   if (data && data.boot_id) {
@@ -1445,10 +1582,19 @@ async function loadBarsFull() {
     return;
   }
 
+  // P4: perf marks for loadBarsFull render
+  const _t0Render = performance.now();
   if (controller && typeof controller.setBars === 'function') {
     controller.setBars(bars);
+    logSetDataDebug('loadBarsFull', symbol, tf, bars.length);
   }
   setBarsStore(bars);
+  const _dtRender = performance.now() - _t0Render;
+  if (_dtRender > 50) console.warn(`LONG_TASK_RENDER loadBarsFull tf=${tf} bars=${bars.length} ms=${_dtRender.toFixed(1)}`);
+  // P1: зберегти effective limit для повторного відкриття view
+  if (currentCacheKey) {
+    _lastLimitByView.set(currentCacheKey, Math.min(Math.max(bars.length, limit), MAX_BARS_CAP));
+  }
   scrollbackInFlight = false;
   if (scrollbackAbort) {
     scrollbackAbort.abort();
@@ -1491,12 +1637,26 @@ async function loadBarsFull() {
 const FORWARD_GAP_MAX_BARS = 3;
 let _forwardGapReloadPending = false;
 
+// P5: дозволені upgrade-переходи source для preview TF (tick_promoted→history тощо)
+const _ALLOWED_SOURCE_UPGRADES = {
+  'preview_tick\u2192tick_promoted': true,
+  'tick_promoted\u2192history': true,
+  'preview_tick\u2192history': true,
+  'stream\u2192tick_promoted': true,
+  'stream\u2192history': true,
+};
+function _isAllowedSourceUpgrade(prevSrc, nextSrc) {
+  return _ALLOWED_SOURCE_UPGRADES[prevSrc + '\u2192' + nextSrc] === true;
+}
+
 function applyUpdates(events) {
   if (!Array.isArray(events) || events.length === 0) return 0;
+  const _t0 = performance.now();
   let applied = 0;
   let lastBar = null;
   let maxSeq = updatesSeqCursor;
   const tf = readSelectedTf();
+  const expectedSymbol = elSymbol.value;
   const tfMs = tf * 1000;
   const sorted = events.slice().sort((a, b) => (a.seq || 0) - (b.seq || 0));
   for (const ev of sorted) {
@@ -1525,6 +1685,10 @@ function applyUpdates(events) {
     const keyTf = ev.key && Number.isFinite(ev.key.tf_s) ? ev.key.tf_s : (Number.isFinite(bar.tf_s) ? bar.tf_s : null);
     const keyOpen = ev.key && Number.isFinite(ev.key.open_ms) ? ev.key.open_ms : bar.open_time_ms;
     if (keyTf == null) continue;
+    if (keySymbol !== expectedSymbol || keyTf !== tf) {
+      warnUpdatesDrop('event_mismatch', { keySymbol, keyTf, expectedSymbol, expectedTf: tf });
+      continue;
+    }
     const stateKey = `${keySymbol}|${keyTf}|${keyOpen}`;
     const complete = ev.complete === true || bar.complete === true;
     const source = ev.source || bar.src || '';
@@ -1534,9 +1698,14 @@ function applyUpdates(events) {
       continue;
     }
     if (prev && prev.complete === true && complete && prev.source && source && prev.source !== source) {
-      console.warn('NoMix violation', { key: stateKey, prev: prev.source, next: source });
-      setStatus('nomix_violation');
-      continue;
+      // P5: дозволений upgrade для preview TF (tick_promoted→history etc.)
+      const _isPreviewTf = OVERLAY_PREVIEW_TF_SET.has(keyTf);
+      const _upgradeOk = _isPreviewTf && _isAllowedSourceUpgrade(prev.source, source);
+      if (!_upgradeOk) {
+        console.warn('NoMix violation', { key: stateKey, prev: prev.source, next: source });
+        setStatus('nomix_violation');
+        continue;
+      }
     }
     updateStateByKey.set(stateKey, { complete, source, pairKey, ts: Date.now() });
     if (controller && typeof controller.updateLastBar === 'function') {
@@ -1566,6 +1735,9 @@ function applyUpdates(events) {
   if (applied > 0) {
     saveCacheCurrent();
   }
+  // P4: perf measure
+  const _dt = performance.now() - _t0;
+  if (_dt > 50) console.warn(`LONG_TASK_RENDER applyUpdates events=${events.length} applied=${applied} ms=${_dt.toFixed(1)}`);
   return applied;
 }
 
@@ -1591,19 +1763,37 @@ async function pollUpdates() {
   if (!isUiVisible()) return;
   if (updatesInFlight) return;
   updatesInFlight = true;
+  // P4: AbortController для updates fetch
+  updatesAbort = new AbortController();
+  const uiEpochAtStart = uiEpoch;
   const shouldFollow = Boolean(elFollow.checked && controller && typeof controller.isAtEnd === 'function'
     ? controller.isAtEnd()
     : false);
   const epoch = viewEpoch;
   let nextDelayMs = UPDATES_BASE_FINAL_MS;
   try {
-    let url = `/api/updates?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=500`;
+    // P6: менший limit для preview TF
+    const isPreviewTf = OVERLAY_PREVIEW_TF_SET.has(tf);
+    const pollLimit = isPreviewTf ? 50 : 500;
+    let url = `/api/updates?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${pollLimit}`;
     if (updatesSeqCursor != null) {
       url += `&since_seq=${updatesSeqCursor}`;
     }
     url += `&epoch=${viewEpoch}`;
-    const data = await apiGet(url);
+    const data = await apiGet(url, { signal: updatesAbort.signal });
+    if (uiEpochAtStart !== uiEpoch) {
+      warnUpdatesDrop('epoch_mismatch', { batch: 'updates', start: uiEpochAtStart, now: uiEpoch });
+      return;
+    }
     if (epoch !== viewEpoch) return;
+    const expectedSymbol = elSymbol.value;
+    const expectedTf = readSelectedTf();
+    const respSymbol = data && data.symbol != null ? String(data.symbol) : '';
+    const respTf = data && Number.isFinite(data.tf_s) ? data.tf_s : null;
+    if (respSymbol !== expectedSymbol || respTf !== expectedTf) {
+      warnUpdatesDrop('batch_mismatch', { respSymbol, respTf, expectedSymbol, expectedTf });
+      return;
+    }
     if (Number.isFinite(data.api_seen_ts_ms)) {
       lastApiSeenMs = data.api_seen_ts_ms;
     }
@@ -1639,6 +1829,24 @@ async function pollUpdates() {
     diag.lastError = '';
     diag.pollAt = Date.now();
     updateDiag(tf);
+
+    // P3/PATCH: cursor_gap informational-only (без reload/clear)
+    const hasCursorGap = Array.isArray(data.warnings) && data.warnings.includes('cursor_gap');
+    if (hasCursorGap) {
+      if (Number.isFinite(data.cursor_seq)) {
+        updatesSeqCursor = data.cursor_seq;
+        lastUpdatesSeq = updatesSeqCursor;
+      }
+      const now = Date.now();
+      if (now - _cursorGapRecoveryMs >= CURSOR_GAP_RECOVERY_DEBOUNCE_MS) {
+        _cursorGapRecoveryMs = now;
+        console.warn('CURSOR_GAP informational: fast-forward only (no reload)', { cursor_seq: updatesSeqCursor });
+        setStatus('cursor_gap_info');
+      }
+      nextDelayMs = 2000;
+      return;
+    }
+
     const events = data.events || [];
     if (events.length === 0) {
       updatesEmptyStreak += 1;
@@ -1669,6 +1877,7 @@ async function pollUpdates() {
     setStatus(`ok · tf=${tf}s · +${applied}`);
     updateHudValues();
   } catch (e) {
+    if (e && e.name === 'AbortError') return;
     updatesEmptyStreak += 1;
     diag.lastError = 'poll_error';
     diag.pollAt = Date.now();
@@ -1678,10 +1887,27 @@ async function pollUpdates() {
     nextDelayMs = _calcUpdatesDelayMs(tf);
   } finally {
     updatesInFlight = false;
+    updatesAbort = null;
     if (epoch === viewEpoch && isUiVisible()) {
       _schedulePollUpdates(nextDelayMs);
     }
   }
+}
+
+function _shouldDropUpdatesBatch(respSymbol, respTf, expectedSymbol, expectedTf, epochAtStart, epochNow) {
+  if (epochAtStart !== epochNow) return true;
+  if (respSymbol !== expectedSymbol) return true;
+  if (respTf !== expectedTf) return true;
+  return false;
+}
+
+function runUpdateGateSelfTest() {
+  const ok1 = !_shouldDropUpdatesBatch('XAU/USD', 14400, 'XAU/USD', 14400, 1, 1);
+  const ok2 = _shouldDropUpdatesBatch('XAU/USD', 3600, 'XAU/USD', 14400, 1, 1);
+  const ok3 = _shouldDropUpdatesBatch('XAU/USD', 14400, 'XAU/USD', 14400, 1, 2);
+  const ok = ok1 && ok2 && ok3;
+  console.log('ui_update_gate_selftest', ok ? 'ok' : 'fail', { ok1, ok2, ok3 });
+  return ok;
 }
 
 function resetPolling() {
@@ -1876,30 +2102,50 @@ async function init() {
     });
   }
 
-  elSymbol.addEventListener('change', async () => {
+  elSymbol.addEventListener('change', () => {
     saveLayoutValue(SYMBOL_KEY, elSymbol.value);
-    saveCacheCurrent();
-    const tf = readSelectedTf();
-    const restored = restoreCacheFor(elSymbol.value, tf);
-    if (!restored) {
-      await loadBarsFull();
-    }
-    resetPolling();
-    resetOverlayPolling();
-    await pollUpdates();
+    // P1: abort одразу при зміні, не чекаючи debounce
+    startNewViewEpoch();
+    if (_switchDebounceTimer) clearTimeout(_switchDebounceTimer);
+    _switchDebounceTimer = setTimeout(async () => {
+      _switchDebounceTimer = null;
+      saveCacheCurrent();
+      const tf = readSelectedTf();
+      const restored = restoreCacheFor(elSymbol.value, tf);
+      // P1: cache-first → loadBarsFull у background, не блокує UI
+      resetPolling();
+      resetOverlayPolling();
+      if (!restored) {
+        setStatus('load…');
+        loadBarsFull().catch(() => { });
+      } else {
+        // P1: background refresh навіть при cache hit
+        loadBarsFull().catch(() => { });
+      }
+    }, SWITCH_DEBOUNCE_MS);
   });
 
-  elTf.addEventListener('change', async () => {
+  elTf.addEventListener('change', () => {
     saveLayoutValue(TF_KEY, elTf.value);
-    saveCacheCurrent();
-    const tf = readSelectedTf();
-    const restored = restoreCacheFor(elSymbol.value, tf);
-    if (!restored) {
-      await loadBarsFull();
-    }
-    resetPolling();
-    resetOverlayPolling();
-    await pollUpdates();
+    // P1: abort одразу при зміні, не чекаючи debounce
+    startNewViewEpoch();
+    if (_switchDebounceTimer) clearTimeout(_switchDebounceTimer);
+    _switchDebounceTimer = setTimeout(async () => {
+      _switchDebounceTimer = null;
+      saveCacheCurrent();
+      const tf = readSelectedTf();
+      const restored = restoreCacheFor(elSymbol.value, tf);
+      // P1: cache-first → loadBarsFull у background, не блокує UI
+      resetPolling();
+      resetOverlayPolling();
+      if (!restored) {
+        setStatus('load…');
+        loadBarsFull().catch(() => { });
+      } else {
+        // P1: background refresh навіть при cache hit
+        loadBarsFull().catch(() => { });
+      }
+    }, SWITCH_DEBOUNCE_MS);
   });
 
   if (elTheme) {
@@ -1968,6 +2214,8 @@ async function init() {
     resetPolling();
     resetOverlayPolling();
   });
+
+  window.runUpdateGateSelfTest = runUpdateGateSelfTest;
 }
 
 init().catch(() => setStatus('init_error'));

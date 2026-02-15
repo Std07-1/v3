@@ -45,7 +45,7 @@ def _validate_lwc_bar(bar: dict, violations: List[str]) -> None:
     if open_ms is None or close_ms is None or tf_s is None:
         violations.append("bar:time_not_int")
         return
-    expect_close = open_ms + tf_s * 1000 - 1
+    expect_close = open_ms + tf_s * 1000
     if close_ms != expect_close:
         violations.append("bar:close_time_invalid")
     if not isinstance(bar.get("complete"), bool):

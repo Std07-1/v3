@@ -110,7 +110,7 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
                 if open_ms is None or close_ms is None or tf_s_bar is None:
                     violations.append("event_bar_time_invalid")
                 else:
-                    expect_close = open_ms + tf_s_bar * 1000 - 1
+                    expect_close = open_ms + tf_s_bar * 1000
                     if close_ms != expect_close:
                         violations.append("event_bar_close_invalid")
             event_ts = ev.get("event_ts")

@@ -13,11 +13,15 @@ __pycache__/
 /History/
 research/
 reports/
-exit_gates/
+reports/exit_gates/
 
 # Legacy
 /Old system Connector v2/
+
+# tools
 /tools/tail_guard.py
+/tools/diag
+
 
 # Журнали та записи
 /changelog.jsonl
