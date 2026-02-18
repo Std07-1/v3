@@ -9,6 +9,24 @@
  */
 
 (function () {
+    // UTC час: форматери для осі часу і tooltip
+    function _fmtUtcDate(epochSec) {
+        const d = new Date(epochSec * 1000);
+        const yy = d.getUTCFullYear();
+        const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const dd = String(d.getUTCDate()).padStart(2, '0');
+        return `${yy}-${mm}-${dd}`;
+    }
+    function _fmtUtcTime(epochSec) {
+        const d = new Date(epochSec * 1000);
+        const hh = String(d.getUTCHours()).padStart(2, '0');
+        const mi = String(d.getUTCMinutes()).padStart(2, '0');
+        return `${hh}:${mi}`;
+    }
+    function _fmtUtcFull(epochSec) {
+        return `${_fmtUtcDate(epochSec)} ${_fmtUtcTime(epochSec)} UTC`;
+    }
+
     const DEFAULT_CHART_OPTIONS = {
         layout: {
             background: { color: "#ffffff" },
@@ -65,6 +83,16 @@
             fixLeftEdge: false,
             fixRightEdge: false,
             lockVisibleTimeRangeOnResize: false,
+            tickMarkFormatter: (time) => {
+                if (typeof time === 'number') return _fmtUtcTime(time);
+                return '';
+            },
+        },
+        localization: {
+            timeFormatter: (time) => {
+                if (typeof time === 'number') return _fmtUtcFull(time);
+                return '';
+            },
         },
     };
 
@@ -373,7 +401,11 @@
                     ? formatNumber(bar.close - bar.open)
                     : "—";
 
-                tooltipEl.innerHTML = `O: ${open}  H: ${high}  L: ${low}  C: ${close}<br>Δ: ${change}  V: ${volume}`;
+                // UTC час бару
+                const barTime = typeof param.time === 'number' ? param.time : 0;
+                const utcLine = barTime ? _fmtUtcFull(barTime) : '';
+
+                tooltipEl.innerHTML = `<span style="color:#888;font-size:11px">${utcLine}</span><br>O: ${open}  H: ${high}  L: ${low}  C: ${close}<br>Δ: ${change}  V: ${volume}`;
 
                 const safePoint = point || { x: 0, y: 0 };
                 const rect = container.getBoundingClientRect();
@@ -804,6 +836,28 @@
                 if (!_rafId) {
                     _rafId = requestAnimationFrame(_flushChartRender);
                 }
+            } else {
+                // History bar replacing tick preview for an older (already passed) bar.
+                // LWC v4 update() can only update the LAST bar — for older bars use setData().
+                let replaced = false;
+                for (let i = lastBarsData.length - 1; i >= 0; i--) {
+                    if (lastBarsData[i].time === normalized.time) {
+                        lastBarsData[i] = normalized;
+                        replaced = true;
+                        break;
+                    }
+                }
+                if (!replaced) return;
+                volumeByTime.set(String(normalized.time), normalized.volume);
+                // Re-render all bars via setData (safe for any position)
+                candles.setData(lastBarsData);
+                barsSeries.setData(lastBarsData);
+                const volData = lastBarsData.map(b => ({
+                    time: b.time,
+                    value: b.volume,
+                    color: b.close >= b.open ? currentVolumeColors.up : currentVolumeColors.down,
+                }));
+                volumes.setData(volData);
             }
         }
 
@@ -1031,6 +1085,7 @@
             candles.setData([]);
             barsSeries.setData([]);
             volumes.setData([]);
+            overlaySeries.setData([]);
             volumeByTime.clear();
             lastBar = null;
         }
@@ -1116,6 +1171,19 @@
             _applyVolumeColors();
         }
 
+        /**
+         * S5: перемикач overlay-режиму для цінової мітки.
+         * Коли overlay активний (TF M5-H1): candles lastValueVisible=false
+         * (щоб не було дублікату мітки), overlay показує live ціну.
+         * Коли overlay неактивний (M1/M3/HTF): candles lastValueVisible=true.
+         */
+        function setOverlayActive(active) {
+            try {
+                candles.applyOptions({ lastValueVisible: !active });
+                barsSeries.applyOptions({ lastValueVisible: !active });
+            } catch (_e) { /* noop */ }
+        }
+
         function setTheme(mode) {
             try {
                 if (mode === true || mode === "dark") {
@@ -1143,6 +1211,7 @@
             resizeToContainer,
             clearAll,
             setViewTimeframe,
+            setOverlayActive,
             setTheme,
             setCandleStyle,
             isAtEnd,

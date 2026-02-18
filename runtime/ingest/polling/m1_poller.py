@@ -134,11 +134,19 @@ def _derive_m3(symbol: str, m1_buf: M1Buffer, m1_bar: CandleBar) -> Optional[Can
 _M1_MS = 60_000
 
 # Flat bar: O==H==L==C з малим обсягом (calendar-pause маркер від брокера)
-_FLAT_BAR_MAX_VOLUME = 1
+# SSOT: config.json → flat_bar_max_volume. Дефолт 4 (як у конфігу).
+_FLAT_BAR_MAX_VOLUME_DEFAULT = 4
+_flat_bar_max_volume: int = _FLAT_BAR_MAX_VOLUME_DEFAULT
+
+
+def set_flat_bar_max_volume(v: int) -> None:
+    """Встановити flat_bar_max_volume з config (SSOT)."""
+    global _flat_bar_max_volume
+    _flat_bar_max_volume = max(0, int(v))
 
 
 def _is_flat(bar: CandleBar) -> bool:
-    return bar.o == bar.h == bar.low == bar.c and bar.v <= _FLAT_BAR_MAX_VOLUME
+    return bar.o == bar.h == bar.low == bar.c and bar.v <= _flat_bar_max_volume
 
 
 def _expected_closed_m1_ms(now_ms: int) -> int:
@@ -286,20 +294,20 @@ class M1SymbolPoller:
         flat = _is_flat(bar)
 
         if flat and trading:
-            # Flat під час торгових годин → пропускаємо (сміття)
-            return False
+            # Flat під час торгових — приймаємо з маркером (grid completeness)
+            bar = CandleBar(
+                symbol=bar.symbol, tf_s=bar.tf_s,
+                open_time_ms=bar.open_time_ms,
+                close_time_ms=bar.close_time_ms,
+                o=bar.o, h=bar.h, low=bar.low, c=bar.c, v=bar.v,
+                complete=bar.complete, src=bar.src,
+                extensions={**bar.extensions, "trading_flat": True},
+            )
 
         if not trading:
             if flat:
-                # Flat під час паузи → приймаємо з маркером
-                bar = CandleBar(
-                    symbol=bar.symbol, tf_s=bar.tf_s,
-                    open_time_ms=bar.open_time_ms,
-                    close_time_ms=bar.close_time_ms,
-                    o=bar.o, h=bar.h, low=bar.low, c=bar.c, v=bar.v,
-                    complete=bar.complete, src=bar.src,
-                    extensions={**bar.extensions, "calendar_pause_flat": True},
-                )
+                # Flat під час паузи → скіпаємо (шум від брокера)
+                return False
             else:
                 # Non-flat під час паузи → аномалія, але приймаємо
                 bar = CandleBar(
@@ -589,6 +597,17 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
     tail_fetch_n = int(m1_cfg.get("tail_fetch_n", 5))
     safety_delay_s = int(m1_cfg.get("safety_delay_s", 8))
     m3_derive = bool(m1_cfg.get("m3_derive_enabled", True))
+
+    # SSOT: flat_bar_max_volume з config.json (верхній рівень)
+    flat_vol_raw = cfg.get("flat_bar_max_volume")
+    if flat_vol_raw is not None:
+        set_flat_bar_max_volume(int(flat_vol_raw))
+        logging.info("M1_POLLER_FLAT_BAR_MAX_VOLUME=%d (from config)", _flat_bar_max_volume)
+    else:
+        logging.warning(
+            "M1_POLLER_FLAT_BAR_MAX_VOLUME=%d (default, config key missing)",
+            _flat_bar_max_volume,
+        )
 
     # Ініціалізуємо FXCM provider
     from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider

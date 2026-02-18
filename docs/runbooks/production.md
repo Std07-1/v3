@@ -1,0 +1,277 @@
+# Runbook: Production (запуск, моніторинг, інциденти)
+
+> **Останнє оновлення**: 2026-02-15  
+> **Навігація**: [docs/index.md](../index.md)
+
+---
+
+## Зміст
+
+1. [Порядок старту](#порядок-старту)
+2. [Health-check](#health-check)
+3. [Systemd units (приклад)](#systemd-units-приклад)
+4. [Типові інциденти](#типові-інциденти)
+5. [Recovery процедури](#recovery-процедури)
+6. [Що НЕ робити](#що-не-робити)
+
+---
+
+## Порядок старту
+
+### Передумови
+
+1. Python 3.7 venv активований (`.venv`)
+2. `config.json` налаштований (symbols, redis, calendar)
+3. `.env` містить FXCM credentials
+4. Redis запущений (`127.0.0.1:6379`, db=1 за замовчуванням)
+5. `data_v3/` каталог існує з JSONL файлами для всіх символів/TF
+
+### Одна команда (dev)
+
+```bash
+python -m app.main --mode all --stdio pipe
+```
+
+### Порядок старту (production, manual)
+
+1. **Redis** — має бути запущений *до* конектора
+2. **Connector** (M5+ pipeline):
+
+   ```bash
+   python -m app.main --mode connector --stdio files --log-dir logs
+   ```
+
+3. **M1 Poller** (M1/M3 pipeline):
+
+   ```bash
+   python -m app.main --mode m1_poller --stdio files --log-dir logs
+   ```
+
+4. **Tick Publisher** (тік-стрім):
+
+   ```bash
+   python -m app.main --mode tick_publisher --stdio files --log-dir logs
+   ```
+
+5. **Tick Preview Worker** (агрегація тіків → preview):
+
+   ```bash
+   python -m app.main --mode tick_preview --stdio files --log-dir logs
+   ```
+
+6. **UI** (чекає `prime_ready` від connector):
+
+   ```bash
+   python -m app.main --mode ui --stdio files --log-dir logs
+   ```
+
+> **Важливо**: у `--mode all` supervisor стартує всі 5 процесів і чекає `prime_ready` перед запуском UI. У ручному режимі переконайтесь, що connector встиг завершити bootstrap (prime Redis) **до** старту UI.
+
+### Derived rebuild (одноразово після cold start)
+
+```bash
+python -m tools.rebuild_derived --all
+```
+
+Перевірка: `data_v3/_derived_tail_state.json` має 13 символів.  
+Див. [runbooks/coldstart.md](coldstart.md) для деталей.
+
+---
+
+## Health-check
+
+### /api/status
+
+```bash
+curl -s http://127.0.0.1:8089/api/status | python -m json.tool
+```
+
+**Ключові поля для моніторингу**:
+
+| Поле | Очікуване | Проблема якщо |
+| --- | --- | --- |
+| `status.prime_ready` | `true` | `false` → connector ще bootstrapping |
+| `status.prime_ready_payload.ready` | `true` | `false` → неповний prime |
+| `status.redis_spec` | `{host, port, db}` | відсутній → Redis disconnect |
+| `status.warnings[]` | `[]` | непорожній → degraded |
+| `status.disk_bootstrap_reads_total` | `0` (після bootstrap) | зростає → disk hot-path порушено |
+
+### /api/config
+
+```bash
+curl -s http://127.0.0.1:8089/api/config | python -m json.tool
+```
+
+Перевірити `config_invalid=false`. Якщо `true` — логічна суперечність у policy.
+
+### Redis ключі
+
+```bash
+redis-cli -n 1 KEYS "v3_local:ohlcv:*"
+redis-cli -n 1 KEYS "v3_local:prime:*"
+```
+
+Якщо `ohlcv:*` ключів немає, але `prime:ready` є → stale readiness (див. [redis_snapshot_design.md](../redis_snapshot_design.md)).
+
+---
+
+## Systemd units (приклад)
+
+```ini
+# /etc/systemd/system/trading-v3.service
+[Unit]
+Description=Trading Platform v3 (all processes)
+After=redis.service network.target
+
+[Service]
+Type=simple
+User=trader
+WorkingDirectory=/opt/trading-v3
+Environment="PATH=/opt/trading-v3/.venv/bin:/usr/bin"
+ExecStart=/opt/trading-v3/.venv/bin/python -m app.main --mode all --stdio files --log-dir /var/log/trading-v3
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Nginx reverse proxy (приклад)
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name trading.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8089;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        # WebSocket (якщо буде)
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+> **UNKNOWN**: наразі система не має auth/TLS/rate-limit. Це заплановано для P6 (production-grade web). Nginx proxy з TLS — мінімальний workaround.
+
+---
+
+## Типові інциденти
+
+### 502/522 — сервер не відповідає
+
+**Симптоми**: браузер показує 502 (nginx) або connection refused (direct).
+
+**Діагностика**:
+
+1. Перевірити процеси: `ps aux | grep python`
+2. Перевірити /api/status: `curl http://127.0.0.1:8089/api/status`
+3. Перевірити логи: `logs/ui.err.log`, `logs/connector.err.log`
+
+**Типові причини**:
+
+- UI не стартував (connector ще bootstrapping → `prime_ready=false`)
+- Порт зайнятий іншим процесом
+- Python crash (check exit code)
+
+**Рішення**: Перезапустити `python -m app.main --mode all`.
+
+---
+
+### Redis disconnect
+
+**Симптоми**: `/api/status` показує `redis_spec=null` або `warnings[]` містить `redis_down`.
+
+**Діагностика**:
+
+1. `redis-cli ping` → має повернути `PONG`
+2. Перевірити `config.json → redis.host/port/db`
+3. Перевірити логи: `REDIS_DOWN code=redis_unavailable`
+
+**Наслідки**:
+
+- Cold-load деградує → `meta.source="degraded"`, `disk_blocked=true`
+- Updates polling може показувати stale дані
+- System функціонує, але в degraded режимі (loud)
+
+**Рішення**: відновити Redis, перезапустити систему.
+
+---
+
+### history=0 (порожній графік)
+
+**Симптоми**: UI показує порожній графік або "Немає даних".
+
+**Діагностика**:
+
+1. `/api/bars?symbol=XAU/USD&tf_s=300&limit=100` → перевірити `bars[]`, `warnings[]`, `meta`
+2. `/api/status` → `prime_ready`, `prime_ready_payload.prime_tail_len_by_tf_s`
+3. Redis ключі: `redis-cli -n 1 EXISTS v3_local:ohlcv:tail:XAU_USD:300`
+
+**Типові причини**:
+
+- Redis tail порожній (TTL expired), disk_policy=never → degraded
+- Connector ще не bootstrapping (prime_ready=false)
+- Новий символ без даних на диску
+
+**Рішення**:
+
+1. Якщо prime_ready=false: дочекатись bootstrap
+2. Якщо Redis порожній: перезапустити систему (re-prime)
+3. Якщо даних на диску немає: запустити backfill вручну
+
+---
+
+### Status payload too large
+
+**Симптоми**: slow /api/status, великий JSON.
+
+**Рішення**: перевірити `config.json → redis.tail_n_by_tf_s` — зменшити tail для не-критичних TF.
+
+---
+
+### WS stale / polling storm
+
+**Симптоми**: UI робить забагато запитів, навантаження на сервер.
+
+**Діагностика**: логи UI → `POLL_STORM` або `visibility_hidden_polling`.
+
+**Рішення**: оновити UI (app.js має setTimeout + visibility pause). Якщо фонова вкладка — polling призупиняється автоматично.
+
+---
+
+## Recovery процедури
+
+### Cold start / Prime (після повної зупинки)
+
+1. Запустити Redis
+2. `python -m tools.rebuild_derived --all` (одноразово)
+3. `python -m app.main --mode all --stdio pipe`
+4. Дочекатись `prime_ready=true` у `/api/status`
+5. Перевірити `/api/bars` для ключових символів/TF
+
+### Scrollback / історія
+
+Disk-дані (JSONL) є SSOT. Якщо Redis втрачено — система re-prime з диску при рестарті. Disk є джерелом для scrollback (explicit запити з `to_open_ms`).
+
+**Що робити**: перезапустити систему.  
+**Що НЕ робити**: не чіпати `data_v3/` файли вручну.
+
+### Live Recover (M5 gap)
+
+Автоматичний: connector detect gap → `_live_recover_check()` → dosyl missing bars. Деталі: [runbooks/live_recover.md](live_recover.md).
+
+---
+
+## Що НЕ робити
+
+| Заборонено | Чому | Що замість |
+| --- | --- | --- |
+| Видаляти `data_v3/` файли вручну | SSOT втрата | `tools/purge_broken_bars.py` для repair |
+| Писати в Redis вручну | Порушить watermark/seq | Перезапустити систему |
+| Запускати UI без connector bootstrap | Порожній графік | `--mode all` або дочекатись prime_ready |
+| Додавати `prefer_redis`/`force_disk` в UI код | Порушення Правила 20.2 | Сервер обирає джерело |
+| Міняти `config.json` під час роботи | Частково підтримується (mtime cache), але connector потребує рестарту | Зупинити → змінити → запустити |

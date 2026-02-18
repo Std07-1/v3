@@ -1,6 +1,27 @@
-# Поточна система (M1/M3 + M5+ dual pipeline)
+# Поточна система — Архітектурний огляд (SSOT)
 
-Цей файл описує актуальний стан системи після додавання M1/M3 pipeline.
+> **Останнє оновлення**: 2026-02-15  
+> **Навігація**: [docs/index.md](index.md)
+
+Цей файл — SSOT-опис поточної архітектури системи. Див. [docs/index.md](index.md) для навігації по всій документації.
+
+---
+
+## Зміст
+
+1. [Короткий опис](#короткий-опис)
+2. [Архітектура процесів](#архітектура-процесів)
+3. [SSOT-площини](#ssot-площини-ізольовані)
+4. [Dependency Rule / Boundary](#dependency-rule--boundary)
+5. [SSOT: де що живе](#ssot-де-що-живе)
+6. [Геометрія часу](#геометрія-часу)
+7. [Інваріанти (I0–I6)](#інваріанти-i0i6)
+8. [Схеми потоків даних (Mermaid)](#схеми-потоків-даних)
+9. [UI Render Pipeline](#ui-render-pipeline--повний-потік-даних-актуально)
+10. [Annotated tree](#annotated-tree-ascii-актуальний)
+11. [Stop-rules та режими](#stop-rules-та-режими)
+
+---
 
 ## Короткий опис
 
@@ -55,6 +76,87 @@ app.main (supervisor)
 
 Це рішення є каноном. Будь-які зміни геометрії часу мають проходити через окремий initiative з міграцією і rollback.
 
+## Dependency Rule / Boundary
+
+Шари системи мають строгу ієрархію залежностей:
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│  core/        pure-логіка (час, контракти, моделі)          │
+│               НЕ імпортує: runtime/, ui/, tools/            │
+│               НЕ має I/O: файли, мережа, Redis, FXCM       │
+├─────────────────────────────────────────────────────────────┤
+│  runtime/     I/O та процеси (ingest, store, pub/sub)       │
+│               Імпортує: core/                               │
+│               НЕ імпортує: tools/, ui/                      │
+├─────────────────────────────────────────────────────────────┤
+│  ui_chart_v3/ презентація + HTTP API (same-origin)          │
+│               Імпортує: core/ (pure helpers)                │
+│               Імпортує: runtime/ (ReadPolicy, UDS types)    │
+│               НЕ містить доменної логіки                    │
+├─────────────────────────────────────────────────────────────┤
+│  app/         запуск, supervisor, lifecycle                  │
+│               Імпортує: core/, runtime/ (для build/start)   │
+├─────────────────────────────────────────────────────────────┤
+│  tools/       одноразові утиліти/діагностика/міграції       │
+│               Імпортує: core/ (дозволено)                   │
+│               НЕ імпортується з runtime/ui/app              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Enforcement**: `tools/exit_gates/gates/` містить gate для перевірки dependency rule (AST).
+
+## SSOT: де що живе
+
+| Що | Де (файл/модуль) | Примітки |
+| --- | --- | --- |
+| **Контракти** (JSON Schema) | `core/contracts/public/marketdata_v1/` | bar_v1, window_v1, updates_v1, tick_v1 |
+| **Конфіг** (policy SSOT) | `config.json` (довідник: [config_reference.md](config_reference.md)) | Один файл; .env — лише секрети |
+| **Геометрія часу** | `core/time_geom.py`, `core/buckets.py` | end-excl канон; bar_close_incl/bar_close_excl |
+| **Дані** (SSOT JSONL) | `data_v3/{symbol}/tf_{tf_s}/part-YYYYMMDD.jsonl` | append-only, final-only |
+| **Redis cache** | `{NS}:ohlcv:snap/tail:{sym}:{tf_s}` | Не SSOT; warmup/cold-load кеш |
+| **Preview plane** | `{NS}:preview:*` у Redis | Ізольований keyspace; не на диску |
+| **Updates bus** | Redis list `{NS}:updates:{sym}:{tf_s}` + seq | Hot-path для /api/updates |
+| **TF allowlist** | `config.json → tf_allowlist_s` | `[60, 180, 300, 900, 1800, 3600, 14400, 86400]` |
+| **Preview TF allowlist** | `config.json → preview_tick_tfs_s` | `[60, 180]` (M1/M3) |
+| **Symbols** | `config.json → symbols` | 13 символів |
+| **Day anchors** | `config.json → day_anchor_offset_s*` | H4/D1 bucket alignment |
+| **Market calendar** | `config.json → market_calendar_*` | Per-group, single-break, UTC |
+
+## Інваріанти (I0–I6)
+
+| ID | Інваріант | Enforcement |
+| --- | --- | --- |
+| **I0** | **Dependency Rule**: core/ ← runtime/ ← ui/; tools/ ізольовані | Exit-gate AST перевірка |
+| **I1** | **UDS як вузька талія**: всі writes через `commit_final_bar`/`publish_preview_bar`; UI = `role="reader"`, `_ensure_writer_role()` кидає `RuntimeError` | Runtime guard у UDS |
+| **I2** | **Єдина геометрія часу**: canonical = epoch_ms int, end-excl (`close_time_ms = open_time_ms + tf_s*1000`). Redis snap зберігає end-incl (internal, конвертується на виході) | `core/time_geom.py` SSOT |
+| **I3** | **Final > Preview (NoMix)**: `complete=true` (final, `source ∈ {history, derived, history_agg}`) завжди перемагає `complete=false` (preview). NoMix guard у UDS | Watermark + NoMix violation tracking |
+| **I4** | **Один update-потік для UI**: UI отримує бари лише через `/api/updates` (upsert events) + `/api/bars` (cold-load). Жодних паралельних каналів | Contract-first API schema |
+| **I5** | **Degraded-but-loud**: будь-який fallback/перемикання джерел/geom_fix → `warnings[]`/`meta.extensions`, не silent. `bars=[]` завжди з `warnings[]` (no_data rail) | `_contract_guard_warn_*` + no_data branch |
+| **I6** | **Disk hot-path ban**: disk не читається для interactive requests; лише bootstrap/warmup (60s window), scrollback (explicit), recovery. `disk_policy="never"` у `/api/bars` | `_disk_allowed()` guard у UDS |
+
+## Stop-rules та режими
+
+### Режими роботи Copilot/розробника
+
+| Режим | Коли | Що дозволено |
+| --- | --- | --- |
+| **MODE=DISCOVERY** | Аналіз/дослідження | Read-only; кожна теза — з доказом (path:line) |
+| **MODE=PATCH** | Мінімальний фікс | ≤150 LOC, ≤1 новий файл, без нових concurrency patterns. Потребує VERIFY + POST |
+| **MODE=ADR** | Зміна інваріантів/контрактів/протоколу | ADR документ: проблема → рішення → інваріанти → exit criteria → rollback |
+
+### Stop-rules (зупинись і не «дописуй ще»)
+
+Зупинятись і **не додавати нові фічі**, якщо:
+
+- порушені інваріанти I0–I6
+- з'явився split-brain (два паралельні джерела істини для одного UI-стану)
+- з'явився silent fallback
+- зміна торкається контрактів/даних без плану міграції та rollback
+- Copilot починає плодити утиліти/модулі замість правки «вузької талії»
+
+У цих випадках — окремий PATCH, який **лише відновлює інваріант/межу**.
+
 ## Схема (потік даних)
 
 ```mermaid
@@ -96,6 +198,148 @@ flowchart LR
     end
 ```
 
+### Схема A: Final OHLCV Pipeline (канонічний потік)
+
+```mermaid
+flowchart LR
+    subgraph Broker["A: Broker (FXCM)"]
+        FX5[(History M5)]
+        FX1[(History M1)]
+        FXH[(History H4/D1)]
+    end
+    subgraph Writers["Writers (ingest)"]
+        EB[engine_b<br/>poll 60s]
+        M1P[m1_poller<br/>poll 8s]
+        DRV[derive<br/>M15/M30/H1/M3]
+    end
+    subgraph UDS["C: UDS (вузька талія)"]
+        CFB[commit_final_bar]
+        WM{{watermark guard}}
+        DSK[(Disk SSOT<br/>data_v3/*.jsonl)]
+        RSN[(Redis snap<br/>ohlcv:snap/tail)]
+        UPD[(Updates bus<br/>Redis list+seq)]
+        RAM[(RAM LRU)]
+    end
+    subgraph UI["B: UI (read-only)"]
+        BARS[/api/bars]
+        UPDE[/api/updates]
+    end
+
+    FX5 --> EB --> CFB
+    FX1 --> M1P --> CFB
+    FXH --> EB
+    EB --> DRV --> CFB
+    M1P --> DRV
+
+    CFB --> WM
+    WM -->|OK| DSK
+    WM -->|stale/dup| DROP[drop + loud log]
+    DSK --> RSN
+    DSK --> UPD
+    DSK --> RAM
+
+    RSN --> BARS
+    UPD --> UPDE
+    RAM --> BARS
+```
+
+**Інваріанти цього потоку:**
+
+- **I1**: всі writes тільки через `commit_final_bar` (UDS)
+- **I3**: final (complete=true, source ∈ {history, derived, history_agg}) = незмінний; дублікати відкидаються watermark
+- **I6**: disk = SSOT (append-only); Redis/RAM = cache (NOT hot-path для /api/bars у UI, крім bootstrap)
+
+### Схема B: Preview Pipeline (тіки → M1/M3 preview)
+
+```mermaid
+flowchart LR
+    subgraph Broker["A: FXCM Tick Stream"]
+        OFFERS[(ForexConnect<br/>OFFERS table)]
+    end
+    subgraph Tick["Tick pipeline"]
+        TP[tick_publisher<br/>BID mode]
+        PS[(Redis PubSub<br/>price_tick channel)]
+        TW[tick_preview_worker<br/>schema guard tick_v1]
+        TA[TickAggregator<br/>tf=60/180]
+    end
+    subgraph UDS_P["C: UDS Preview Plane"]
+        PPB[publish_preview_bar]
+        PRD[publish_promoted_bar<br/>tick_promoted]
+        PCUR[(preview:curr<br/>TTL=1800s)]
+        PTAIL[(preview:tail<br/>ring buffer)]
+        PUPD[(preview:updates)]
+    end
+    subgraph Final_Bridge["Final → Preview Bridge"]
+        CFB2[commit_final_bar<br/>M1/M3]
+        BRG[bridge final→preview<br/>final>preview]
+    end
+    subgraph UI_P["B: UI"]
+        BARSM1[/api/bars tf=60/180]
+        UPDM1[/api/updates tf=60/180]
+        OVL[/api/overlay]
+    end
+
+    OFFERS --> TP --> PS --> TW --> TA
+    TA -->|complete=false| PPB --> PCUR
+    TA -->|bucket rollover| PRD --> PTAIL
+    PPB --> PTAIL
+    PPB --> PUPD
+
+    CFB2 --> BRG --> PTAIL
+
+    PCUR --> BARSM1
+    PTAIL --> BARSM1
+    PUPD --> UPDM1
+    PCUR --> OVL
+```
+
+**Інваріанти цього потоку:**
+
+- **NoMix**: preview (complete=false) **НЕ** потрапляє в SSOT/JSONL на диску
+- **Final > Preview**: final (від m1_poller через bridge) завжди перемагає preview для того ж `(symbol, tf_s, open_ms)`
+- **Ізоляція**: preview keyspace (`{NS}:preview:*`) повністю ізольований від final keyspace (`{NS}:ohlcv:*`)
+- **Disk не hot-path**: preview живе лише в Redis; disk = recovery/scrollback
+
+### Схема C: Compute Triggers (SMC pipeline — план)
+
+```mermaid
+flowchart TD
+    subgraph TF_Closed["TF Closed Event"]
+        M5C[M5 closed] --> D15[derive M15]
+        M5C --> D30[derive M30]
+        M5C --> D1h[derive H1]
+        H4C[H4 closed] --> H4E[H4 event]
+        D1C[D1 closed] --> D1E[D1 event]
+    end
+    subgraph Trigger["Compute Trigger Allowlist"]
+        D15 --> CHK{TF ∈ allowlist?}
+        D30 --> CHK
+        D1h --> CHK
+        H4E --> CHK
+        D1E --> CHK
+        CHK -->|TF=900,3600,14400,86400| SMC[SMC Pipeline]
+        CHK -->|TF=60,180,300| SKIP[skip:<br/>UI-only TF]
+    end
+    subgraph SMC_Pipe["SMC Compute"]
+        SMC --> CALC[SMC обчислення<br/>структура/зони/FVG]
+        CALC --> HINT[SmcHint payload]
+        HINT --> PUB[publish → UI]
+    end
+    subgraph UI_SMC["B: UI"]
+        PUB --> SMCUI[SMC overlay<br/>на графіку]
+    end
+```
+
+> **Статус**: SMC compute pipeline — **PARTIAL / TODO**. Базові обчислення реалізовані, але інтеграція тригерів з UDS events ще не завершена. TF allowlist для compute тригерів:
+>
+> - **Primary**: M15 (900s) — основний TF для SMC
+> - **Secondary**: H1 (3600s), H4 (14400s), D1 (86400s) — старші TF для контексту
+> - **UI-only** (не тригерять compute): M1 (60s), M3 (180s), M5 (300s)
+>
+> Це рішення зафіксовано і потребує ADR для зміни.
+
+## Схеми процесів і циклів
+
 ## UI Render Pipeline — повний потік даних (актуально)
 
 Cold start:
@@ -136,8 +380,6 @@ Scrollback:
     → GET /api/bars?to_open_ms=...&limit=SCROLLBACK_CHUNK
     → mergeOlderBars(olderBars)
     → controller.setBars(barsStore)          // full re-render
-
-## Схеми процесів і циклів
 
 ### Старт і ініціалізація (connector)
 

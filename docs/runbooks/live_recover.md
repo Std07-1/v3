@@ -1,5 +1,7 @@
 # Runbook: Live Recover (P2X.9-L1)
 
+> **Навігація**: [docs/index.md](../index.md)
+
 ## Ціль
 
 Після паузи/рестарту/reconnect конектор автоматично наздоганяє пропущені final M5 бари

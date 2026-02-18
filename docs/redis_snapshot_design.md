@@ -1,5 +1,7 @@
 # Redis snapshots (мінімальний дизайн)
 
+> **Навігація**: [docs/index.md](index.md)
+
 Цей документ описує **snapshot keyspace** (ohlcv:snap/tail + status + prime:ready) для прискорення читання UI. Redis **не є SSOT**: SSOT лишається на диску (JSONL).
 
 Важливо: цей документ **не описує** preview keyspace (`{NS}:preview:*`) і updates bus (list+seq). Вони існують у системі, але це окремі контури.

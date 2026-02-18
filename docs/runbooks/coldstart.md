@@ -1,5 +1,7 @@
 # Runbook: Cold Start — одноразовий rebuild derived для всіх символів
 
+> **Навігація**: [docs/index.md](../index.md)
+
 **Initiative**: P2X.8-S1  
 **Ціль**: після рестарту UI не має дірок на M15/M30/H1 через відсутній derived-tail.
 

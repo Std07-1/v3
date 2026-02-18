@@ -35,27 +35,33 @@ class M5Buffer:
         for k in to_drop:
             self._by_open_ms.pop(k, None)
 
-    def has_range_complete(self, start_ms: int, end_ms: int) -> bool:
+    def has_range_complete(self, start_ms: int, end_ms: int, is_trading_fn=None) -> bool:
         step = 300_000
         for t in range(start_ms, end_ms, step):
+            if is_trading_fn is not None and not is_trading_fn(t):
+                continue  # non-trading slot — не потребує бару
             if t not in self._by_open_ms:
                 return False
         return True
 
-    def range_bars(self, start_ms: int, end_ms: int) -> List[CandleBar]:
+    def range_bars(self, start_ms: int, end_ms: int, is_trading_fn=None) -> List[CandleBar]:
         step = 300_000
         out: List[CandleBar] = []
         for t in range(start_ms, end_ms, step):
+            if is_trading_fn is not None and not is_trading_fn(t):
+                continue  # non-trading slot — пропускаємо
             b = self._by_open_ms.get(t)
             if b is None:
                 return []
             out.append(b)
         return out
 
-    def missing_count(self, start_ms: int, end_ms: int) -> int:
+    def missing_count(self, start_ms: int, end_ms: int, is_trading_fn=None) -> int:
         step = 300_000
         missing = 0
         for t in range(start_ms, end_ms, step):
+            if is_trading_fn is not None and not is_trading_fn(t):
+                continue
             if t not in self._by_open_ms:
                 missing += 1
         return missing
@@ -77,6 +83,7 @@ def derive_from_m5_for_anchor(
     m5: M5Buffer,
     anchor_open_ms: int,
     anchor_offset_s: int = 0,
+    is_trading_fn=None,
 ) -> Optional[CandleBar]:
     tf_ms = tf_s * 1000
 
@@ -86,29 +93,20 @@ def derive_from_m5_for_anchor(
     if anchor_open_ms != (b1 - 300_000):
         return None
 
-    if not m5.has_range_complete(b0, b1):
+    if not m5.has_range_complete(b0, b1, is_trading_fn=is_trading_fn):
         return None
 
-    bars = m5.range_bars(b0, b1)
+    bars = m5.range_bars(b0, b1, is_trading_fn=is_trading_fn)
     if not bars:
         return None
 
-    # Фільтруємо calendar-pause flat бари — derived будуємо лише з торгових М5
-    trading_bars = [x for x in bars if not x.extensions.get("calendar_pause_flat")]
-    if not trading_bars:
-        return None  # усі М5 — calendar pause, derived не будуємо
-
-    o = trading_bars[0].o
-    c = trading_bars[-1].c
-    h = max(x.h for x in trading_bars)
-    low = min(x.low for x in trading_bars)
-    v = sum(x.v for x in trading_bars)
+    o = bars[0].o
+    c = bars[-1].c
+    h = max(x.h for x in bars)
+    low = min(x.low for x in bars)
+    v = sum(x.v for x in bars)
 
     extensions = {}  # type: dict[str, Any]
-    if len(trading_bars) < len(bars):
-        pause_count = len(bars) - len(trading_bars)
-        extensions["partial_calendar_pause"] = True
-        extensions["calendar_pause_m5_count"] = pause_count
 
     out = CandleBar(
         symbol=symbol,

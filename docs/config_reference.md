@@ -1,5 +1,6 @@
 # config.json — довідник полів
 
+> **Навігація**: [docs/index.md](index.md)  
 > **SSOT**: `config.json` (Правило №4).
 > Секрети — лише у `.env.prod`/`.env.local`.
 > Цей файл — пояснення кожного ключа.

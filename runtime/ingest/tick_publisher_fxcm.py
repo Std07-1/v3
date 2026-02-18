@@ -294,12 +294,33 @@ class FxcmTickPublisher:
         return False
 
     def run_forever(self) -> None:
-        while True:
+        self._stop_requested = False
+        while not self._stop_requested:
             try:
                 self._run_once()
+            except KeyboardInterrupt:
+                logging.info("TickPublisher: отримано сигнал зупинки CTRL+C")
+                break
             except Exception as exc:
                 logging.warning("TickPublisher: помилка err=%s", exc)
                 time.sleep(5.0)
+        self._cleanup()
+
+    def _cleanup(self) -> None:
+        """Коректне завершення: відписка від OFFERS, logout."""
+        try:
+            if getattr(self, '_offers_listener', None) is not None:
+                logging.debug("TickPublisher: відписка від OFFERS listener")
+                self._offers_listener = None
+            if getattr(self, '_fx', None) is not None:
+                try:
+                    self._fx.logout()
+                except Exception:
+                    pass
+                self._fx = None
+        except Exception as exc:
+            logging.debug("TickPublisher: cleanup err=%s", exc)
+        logging.info("TickPublisher: завершено коректно")
 
     def _run_once(self) -> None:
         if ForexConnect is None or fxcorepy is None:
@@ -337,8 +358,11 @@ class FxcmTickPublisher:
         offers.subscribe_update(fxcorepy.O2GTableUpdateType.UPDATE, self._offers_listener)
         offers.subscribe_update(fxcorepy.O2GTableUpdateType.INSERT, self._offers_listener)
         logging.info("TickPublisher: підписка на OFFERS (%s)", ",".join(self._symbols))
-        while True:
-            time.sleep(1.0)
+        try:
+            while not self._stop_requested:
+                time.sleep(1.0)
+        except KeyboardInterrupt:
+            pass
 
 
 def main() -> int:

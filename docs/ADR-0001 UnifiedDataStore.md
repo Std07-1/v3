@@ -1,3 +1,6 @@
+# ADR-0001: UnifiedDataStore
+
+> **Навігація**: [docs/index.md](index.md)
 
 **ADR-скелет** під *v3* для рішення “**UnifiedDataStore (RAM↔Redis↔Disk) + API contracts**”, із акцентом на **TV-like стабільність**, швидкі перемикання **symbol/TF**, і **тупий UI** (рендер без рішень).
 

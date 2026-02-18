@@ -62,6 +62,7 @@ let lastRedisSource = null;
 let lastRedisPayloadMs = null;
 let lastRedisTtlS = null;
 let lastRedisSeq = null;
+let lastAlignMode = null;
 const updateStateByKey = new Map();
 const uiCacheByKey = new Map();
 let currentCacheKey = null;
@@ -320,7 +321,8 @@ function updateDiag(tfSeconds) {
     const gap = _formatGap(lastUpdatesGap);
     const held = overlayHeldPrev ? 'yes' : 'no';
     const dropped = Number.isFinite(diag.droppedUpdates) ? diag.droppedUpdates : 0;
-    elDiagMeta.textContent = `plane=${plane} seq=${seq} gap=${gap} held_prev=${held} drop=${dropped}`;
+    const alignTag = lastAlignMode ? ` align=${lastAlignMode}` : '';
+    elDiagMeta.textContent = `plane=${plane} seq=${seq} gap=${gap} held_prev=${held} drop=${dropped}${alignTag}`;
   }
   updateStreamingIndicator();
 }
@@ -328,6 +330,24 @@ function updateDiag(tfSeconds) {
 function updateHudPrice(price) {
   if (!elHudPrice) return;
   elHudPrice.textContent = fmtPrice(price);
+}
+
+// S4: HUD price policy — єдиний канал, без гонок між plane-ами
+let hudInstrumentPrice = null;
+let hudInstrumentPriceTsMs = 0;
+const HUD_INSTRUMENT_STALE_MS = 60_000;
+
+function updateHudInstrumentPrice(price) {
+  if (!Number.isFinite(price)) return;
+  hudInstrumentPrice = price;
+  hudInstrumentPriceTsMs = Date.now();
+  updateHudPrice(price);
+}
+
+function updateHudBarPrice(price) {
+  if (!Number.isFinite(price)) return;
+  if (hudInstrumentPrice != null && (Date.now() - hudInstrumentPriceTsMs) < HUD_INSTRUMENT_STALE_MS) return;
+  updateHudPrice(price);
 }
 
 function _formatGap(gap) {
@@ -1244,7 +1264,7 @@ function restoreCacheFor(symbol, tf) {
   diag.barsTotal = bars.length;
   diag.lastPollBars = 0;
   diag.loadAt = Date.now();
-  updateHudPrice(bars[bars.length - 1].close);
+  updateHudBarPrice(bars[bars.length - 1].close);
   updateDiag(Number(tf));
   if (elFollow.checked && controller && typeof controller.resetViewAndFollow === 'function') {
     controller.resetViewAndFollow(RIGHT_OFFSET_PX);
@@ -1538,6 +1558,7 @@ async function loadBarsFull() {
   setStatus('load…');
   diag.lastError = '';
   let url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${limit}`;
+  if (Number(tf) === 14400) url += '&align=tv';
   url += `&epoch=${epoch}`;
   let data = null;
   try {
@@ -1559,12 +1580,14 @@ async function loadBarsFull() {
     lastRedisPayloadMs = Number.isFinite(meta.redis_payload_ts_ms) ? meta.redis_payload_ts_ms : null;
     lastRedisTtlS = Number.isFinite(meta.redis_ttl_s_left) ? meta.redis_ttl_s_left : null;
     lastRedisSeq = Number.isFinite(meta.redis_seq) ? meta.redis_seq : null;
+    lastAlignMode = (meta.extensions && meta.extensions.align) ? meta.extensions.align : null;
     data.meta._source_norm = source;
   } else {
     lastRedisSource = null;
     lastRedisPayloadMs = null;
     lastRedisTtlS = null;
     lastRedisSeq = null;
+    lastAlignMode = null;
   }
   const bars = data.bars || [];
   if (bars.length === 0) {
@@ -1620,7 +1643,7 @@ async function loadBarsFull() {
     lastBarCloseMs = lastOpenMs + tf * 1000 - 1;
   }
   updatesSeqCursor = null;
-  updateHudPrice(bars[bars.length - 1].close);
+  updateHudBarPrice(bars[bars.length - 1].close);
   diag.barsTotal = bars.length;
   diag.lastPollBars = 0;
   diag.loadAt = Date.now();
@@ -1727,7 +1750,7 @@ function applyUpdates(events) {
     updatesSeqCursor = maxSeq;
   }
   if (lastBar) {
-    updateHudPrice(lastBar.last_price ?? lastBar.close ?? lastBar.c);
+    updateHudInstrumentPrice(lastBar.last_price ?? lastBar.close ?? lastBar.c);
   }
   const allowedPairs = new Set(uiCacheByKey.keys());
   if (currentCacheKey) allowedPairs.add(currentCacheKey);
@@ -1765,6 +1788,10 @@ async function pollUpdates() {
   updatesInFlight = true;
   // P4: AbortController для updates fetch
   updatesAbort = new AbortController();
+  // Таймаут 15с на fetch — захист від зависання
+  const _pollFetchTimeout = setTimeout(() => {
+    if (updatesAbort) updatesAbort.abort();
+  }, 15000);
   const uiEpochAtStart = uiEpoch;
   const shouldFollow = Boolean(elFollow.checked && controller && typeof controller.isAtEnd === 'function'
     ? controller.isAtEnd()
@@ -1886,6 +1913,7 @@ async function pollUpdates() {
     updateHudValues();
     nextDelayMs = _calcUpdatesDelayMs(tf);
   } finally {
+    clearTimeout(_pollFetchTimeout);
     updatesInFlight = false;
     updatesAbort = null;
     if (epoch === viewEpoch && isUiVisible()) {
@@ -1957,6 +1985,8 @@ async function pollOverlay() {
   overlayInFlight = true;
   const epoch = viewEpoch;
   let nextDelayMs = OVERLAY_POLL_SLOW_MS;
+  const _overlayAbort = new AbortController();
+  const _overlayFetchTimeout = setTimeout(() => _overlayAbort.abort(), 15000);
 
   try {
     const baseTf = tf >= 14400 ? 180 : 60;  // HTF (H4+D1) аграгує з M3, решта з M1
@@ -1984,11 +2014,11 @@ async function pollOverlay() {
       const lastOverlay = data.bars[data.bars.length - 1];
       if (lastOverlay && (lastOverlay.last_price != null || lastOverlay.close != null)) {
         const price = lastOverlay.last_price != null ? lastOverlay.last_price : lastOverlay.close;
-        if (Number.isFinite(price)) updateHudPrice(price);
+        if (Number.isFinite(price)) updateHudInstrumentPrice(price);
       }
     } else if (data.bar && (data.bar.last_price != null || data.bar.close != null)) {
       const price = data.bar.last_price != null ? data.bar.last_price : data.bar.close;
-      if (Number.isFinite(price)) updateHudPrice(price);
+      if (Number.isFinite(price)) updateHudInstrumentPrice(price);
     }
     updateHudValues();
     nextDelayMs = _calcOverlayDelayMs(tf, data.meta, data.bars);
@@ -1996,6 +2026,7 @@ async function pollOverlay() {
     // Overlay помилки не фатальні — тихо ігноруємо
     nextDelayMs = OVERLAY_POLL_SLOW_MS;
   } finally {
+    clearTimeout(_overlayFetchTimeout);
     overlayInFlight = false;
     if (epoch === viewEpoch && isUiVisible()) {
       _schedulePollOverlay(nextDelayMs);
@@ -2011,16 +2042,23 @@ function resetOverlayPolling() {
   overlayLastBucketOpenMs = null;
   overlayNextDelayMs = null;
 
+  // S3-2: безумовний clear overlay перед будь-яким switch
+  if (controller && typeof controller.clearOverlay === 'function') {
+    controller.clearOverlay();
+  }
+
   const tf = readSelectedTf();
   // Запускаємо overlay polling тільки для TF ≥ M5 і не preview
-  if (!OVERLAY_PREVIEW_TF_SET.has(tf) && tf >= OVERLAY_MIN_TF_S && tf <= OVERLAY_MAX_TF_S) {
+  const overlayActive = !OVERLAY_PREVIEW_TF_SET.has(tf) && tf >= OVERLAY_MIN_TF_S && tf <= OVERLAY_MAX_TF_S;
+
+  // S5: перемикаємо lastValueVisible на candles: off коли overlay показує live ціну
+  if (controller && typeof controller.setOverlayActive === 'function') {
+    controller.setOverlayActive(overlayActive);
+  }
+
+  if (overlayActive) {
     if (!isUiVisible()) return;
     _schedulePollOverlay(0);
-  } else {
-    // Чистимо overlay при переключенні на preview TF
-    if (controller && typeof controller.clearOverlay === 'function') {
-      controller.clearOverlay();
-    }
   }
 }
 
@@ -2214,6 +2252,22 @@ async function init() {
     resetPolling();
     resetOverlayPolling();
   });
+
+  // Watchdog: якщо polling не працює >30с — примусовий reset
+  setInterval(() => {
+    if (lastOpenMs == null || !isUiVisible()) return;
+    const sinceLastPoll = Date.now() - (diag.pollAt || 0);
+    if (sinceLastPoll > 30000 && !updatesInFlight) {
+      console.warn('POLL_WATCHDOG: no poll for', sinceLastPoll, 'ms, resetting');
+      resetPolling();
+    }
+    if (sinceLastPoll > 45000) {
+      console.warn('POLL_WATCHDOG: force reset (inFlight stuck)', sinceLastPoll, 'ms');
+      updatesInFlight = false;
+      resetPolling();
+      resetOverlayPolling();
+    }
+  }, 15000);
 
   window.runUpdateGateSelfTest = runUpdateGateSelfTest;
 }

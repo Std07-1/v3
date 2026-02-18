@@ -1148,8 +1148,9 @@ class PollingConnectorB:
     ) -> int:
         written = 0
         skipped_dedup = 0
-        skipped_flat = 0
-        accepted_pause_flat = 0
+        gap_filled = 0
+        accepted_trading_flat = 0
+        skipped_pause_flat = 0
         anomaly_pause_nonflat = 0
         derived_written = 0
 
@@ -1158,21 +1159,21 @@ class PollingConnectorB:
             trading = self._calendar.is_trading_minute(b.open_time_ms)
 
             if flat and trading:
-                # Торговий час, flat — скіп (як раніше)
-                skipped_flat += 1
-                continue
+                # Торговий час + flat — приймаємо з маркером (grid completeness для derived TF)
+                b = dataclasses.replace(
+                    b,
+                    extensions={
+                        **b.extensions,
+                        "trading_flat": True,
+                    },
+                )
+                accepted_trading_flat += 1
 
             if not trading:
                 if flat:
-                    # Календарна пауза + flat від провайдера — приймаємо з extensions
-                    b = dataclasses.replace(
-                        b,
-                        extensions={
-                            **b.extensions,
-                            "calendar_pause_flat": True,
-                        },
-                    )
-                    accepted_pause_flat += 1
+                    # Календарна пауза + flat — скіпаємо (шум від брокера)
+                    skipped_pause_flat += 1
+                    continue
                 else:
                     # Календарна пауза + НЕ flat — аномалія, loud warning
                     anomaly_pause_nonflat += 1
@@ -1221,6 +1222,27 @@ class PollingConnectorB:
                         )
                         written += 1
                     continue
+                # Gap-fill: бар за watermark, але не на диску → приймаємо як заповнення пропуску
+                if not has_on_disk(
+                    self._day_index_cache,
+                    self._uds,
+                    self._symbol,
+                    300,
+                    b.open_time_ms,
+                ):
+                    self._append_bar(b)
+                    mark_on_disk(
+                        self._day_index_cache,
+                        self._uds,
+                        self._symbol,
+                        300,
+                        b.open_time_ms,
+                    )
+                    self._m5.upsert(b)
+                    gap_filled += 1
+                    written += 1
+                    derived_written += self._try_derive_from_m5(anchor_open_ms=b.open_time_ms)
+                    continue
                 skipped_dedup += 1
                 continue
 
@@ -1243,13 +1265,14 @@ class PollingConnectorB:
             ctx = context or "ingest_m5"
             log_fn = logging.debug if self._group_logs else logging.info
             log_fn(
-                "M5: %s записано=%d derived=%d skip_dedup=%d skip_flat=%d pause_flat=%d pause_nonflat_anomaly=%d",
+                "M5: %s записано=%d derived=%d skip_dedup=%d gap_fill=%d trading_flat=%d skip_pause_flat=%d pause_nonflat_anomaly=%d",
                 ctx,
                 written,
                 derived_written,
                 skipped_dedup,
-                skipped_flat,
-                accepted_pause_flat,
+                gap_filled,
+                accepted_trading_flat,
+                skipped_pause_flat,
                 anomaly_pause_nonflat,
             )
         return written
@@ -1274,7 +1297,7 @@ class PollingConnectorB:
             if anchor_open_ms != (b1 - 300_000):
                 continue
 
-            if not self._m5.has_range_complete(b0, b1):
+            if not self._m5.has_range_complete(b0, b1, is_trading_fn=self._calendar.is_trading_minute):
                 continue
 
             d = derive_from_m5_for_anchor(
@@ -1283,6 +1306,7 @@ class PollingConnectorB:
                 m5=self._m5,
                 anchor_open_ms=anchor_open_ms,
                 anchor_offset_s=anchor,
+                is_trading_fn=self._calendar.is_trading_minute,
             )
 
             if d is None:
@@ -1350,7 +1374,7 @@ class PollingConnectorB:
             if b0 < tail_start_ms or b1 > tail_end_ms:
                 continue
 
-            if not m5_buf.has_range_complete(b0, b1):
+            if not m5_buf.has_range_complete(b0, b1, is_trading_fn=self._calendar.is_trading_minute):
                 missing_m5_ref[0] = int(missing_m5_ref[0]) + 1
                 continue
 
@@ -1360,6 +1384,7 @@ class PollingConnectorB:
                 m5=m5_buf,
                 anchor_open_ms=anchor_open_ms,
                 anchor_offset_s=anchor,
+                is_trading_fn=self._calendar.is_trading_minute,
             )
 
             if d is None:
