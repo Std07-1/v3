@@ -6,16 +6,16 @@
 -------
 Сервіс обслуговує статичні файли UI та просте JSON-API для читання OHLCV
 (без записів, без WebSocket, без SQL). Читає SSOT/preview з UnifiedDataStore (UDS),
-підтримує preview-TF, ephemeral overlay для in-progress бара та on‑the‑fly
-агрегацію H1→H4 з TV‑anchor (derived, read-only).
+підтримує preview-TF, ephemeral overlay для in-progress бара.
+H4 — first-class TF в UDS (записується DeriveEngine, ADR-0002 Phase 3).
 
 Головні можливості
 ------------------
 - Статичні файли + same-origin API в одному процесі.
 - /api/bars, /api/latest — історія final або preview (snap/disk + overlay).
-- /api/updates — інкрементальні події (only align=fxcm).
+- /api/updates — інкрементальні події (всі TF, включно H4).
 - /api/overlay — ephemeral overlay (2-bar: prev + curr) з preview → target TF.
-- Derived H4 (align=tv) агрегується з H1 final (TV anchor remainder).
+- H4 = first-class TF в UDS (DeriveEngine, ADR-0002 Phase 3). align=tv зберігається для backward compat, ігнорується.
 - Warmup (RAM cache прогрів) на стартапі.
 - Контракти/валидація відповіді + детальні warnings/meta.extensions.
 - Просте rate‑limiting логів і caching для derived/конфіга.
@@ -32,11 +32,10 @@
     Перерахунок символів з data_root (dirname → символ; "_" → "/").
 
 - GET /api/bars
-    Параметри: symbol, tf_s, limit, align (fxcm|tv), since_open_ms, to_open_ms, prefer_redis, force_disk...
+    Параметри: symbol, tf_s, limit, since_open_ms, to_open_ms (align ігнорується).
     Поводження:
-        - Final TF (звичайний): читає через uds.read_window.
+        - Final TF (звичайний, включно H4): читає через uds.read_window.
         - Preview TF (allowlist): merge snap/disk + preview_curr via uds.read_preview_window.
-        - align=tv: підтримується ТІЛЬКИ для tf_s==14400 (derived H4) — агрегує H1 → H4 по TV anchor.
         - Stitching (опціонально через config.ui_stitching_enabled): open[i] = prev.close.
         - Limit кларпиться по TF_CAP / _MAX_BARS_CAP; при кларпі повертається warning.
 
@@ -44,10 +43,10 @@
     Як /api/bars але для інкрементального запиту після after_open_ms (працює як shortcut).
 
 - GET /api/updates
-    Параметри: symbol, tf_s, since_seq, limit, include_preview, align (підтримується лише fxcm).
+    Параметри: symbol, tf_s, since_seq, limit, include_preview.
     Поводження:
         - Повертає list events (normalized), cursor_seq, boot_id.
-        - align=tv для updates НЕ підтримується (повертатиметься помилка).
+        - Підтримує всі TF включно H4 (ADR-0002 Phase 3).
         - Events нормалізуються та проганяються через contract guard.
 
 - GET /api/overlay
@@ -69,13 +68,12 @@
 - Meta містить source, redis_hit, boot_id та extensions (деталі provenance).
 - Всі відповіді містять boot_id; warnings + meta.extensions використовуються для діагностики.
 
-Derived H4 (align=tv)
+H4 (ADR-0002 Phase 3)
 ---------------------
-- read-only агрегат H1 → H4 з TV anchor remainder = 10_800_000 ms (23:00 UTC H4 anchor).
-- Доступно тільки для tf_s==14400 і якщо H1 (3600s) дозволений у allowlist.
-- Виконується budgeted fetch (крокове збільшення limit) через _derive_h4_tv_with_budget.
-- Кешується локально (~5s TTL) в _tv_derived_cache.
-- Updates для align=tv не доступні — клієнту потрібно poll /api/bars.
+- H4 = first-class TF в UDS, пишеться DeriveEngine (cascade M1→H4).
+- Читається через стандартний read_window(tf_s=14400) як будь-який інший TF.
+- Updates для H4 працюють через /api/updates(стандартно).
+- align=tv зберігається для backward compat, ігнорується.
 
 Overlay / preview behavior
 --------------------------
@@ -118,7 +116,7 @@ CLI / запуск
 Поради / обмеження
 ------------------
 - Сервер — read-only UI шар (жодних записів у SSOT через ці API).
-- align=tv — тільки H4 derived (no updates).
+- align=tv — legacy, ігнорується (H4 = first-class UDS TF, ADR-0002 Phase 3).
 - overlay підходить для TF < HTF (HTF — H4/D1) і вимагає preview source у allowlist.
 - Слід покладатися на warnings/meta.extensions для діагностики неповних/агрегованих даних.
 
@@ -153,7 +151,6 @@ from core.config_loader import (
     pick_config_path, tf_allowlist_from_cfg, preview_tf_allowlist_from_cfg,
 )
 from env_profile import load_env_secrets
-from runtime.ingest.market_calendar import MarketCalendar
 from runtime.store.uds import ReadPolicy, UpdatesSpec, WindowSpec, UnifiedDataStore, build_uds_from_config
 
 
@@ -250,47 +247,10 @@ _HTF_ANCHOR_MIN_TF_S = 14400
 HTF_ANCHOR_OBS_LOG_INTERVAL_S = 300  # rate-limit HTF anchor obs лог
 _htf_anchor_obs_log_state: dict[tuple[str, int], float] = {}
 
-# Align: FXCM raw vs TradingView anchor (derived)
+# Align: параметр зберігається для backward compat (ігнорується;
+# H4 тепер читається з UDS як first-class TF, ADR-0002 Phase 3).
 _ALIGN_FXCM = "fxcm"
 _ALIGN_TV = "tv"
-_TV_H4_ANCHOR_REMAINDER_MS = 10800000  # 23:00 UTC open for H4
-_TV_DERIVED_FROM_TF_S = 3600
-_TV_DERIVED_CACHE_TTL_S = 5.0
-_tv_derived_cache: dict[tuple[str, int, str, int], dict[str, Any]] = {}
-_tv_derived_cache_lock = threading.Lock()
-
-# ── Calendar helper для H4 derive (per-symbol) ──────────────
-def _build_calendar_for_symbol(cfg: dict[str, Any], symbol: str):
-    # type: (...) -> MarketCalendar | None
-    """Побудувати MarketCalendar з config.json для конкретного символу."""
-    if not cfg.get("calendar_gate_enabled"):
-        return None
-    groups = cfg.get("market_calendar_symbol_groups", {})
-    calendars = cfg.get("market_calendar_by_group", {})
-    group = groups.get(symbol)
-    if not group:
-        return None
-    cal_cfg = calendars.get(group)
-    if not isinstance(cal_cfg, dict):
-        return None
-    daily_breaks_raw = cal_cfg.get("market_daily_breaks", [])
-    daily_breaks = tuple(
-        (str(pair[0]), str(pair[1]))
-        for pair in daily_breaks_raw
-        if isinstance(pair, (list, tuple)) and len(pair) >= 2
-    )
-    return MarketCalendar(
-        enabled=True,
-        weekend_close_dow=int(cal_cfg.get("market_weekend_close_dow", 4)),
-        weekend_close_hm=str(cal_cfg.get("market_weekend_close_hm", "21:55")),
-        weekend_open_dow=int(cal_cfg.get("market_weekend_open_dow", 6)),
-        weekend_open_hm=str(cal_cfg.get("market_weekend_open_hm", "22:00")),
-        daily_break_start_hm=str(cal_cfg.get("market_daily_break_start_hm", "00:00")),
-        daily_break_end_hm=str(cal_cfg.get("market_daily_break_end_hm", "00:00")),
-        daily_break_enabled=True,
-        daily_breaks=daily_breaks,
-    )
-
 
 # ── P4: SSOT server-side limit rail ──────────────────────────
 _MAX_BARS_CAP = 20_000
@@ -323,377 +283,6 @@ def _dedup_warnings(*warning_lists: list[str]) -> list[str]:
             seen.add(text)
             out.append(text)
     return out
-
-
-def _derived_cache_key(symbol: str, tf_s: int, align: str, anchor_remainder_ms: int) -> tuple[str, int, str, int]:
-    return (symbol, int(tf_s), str(align), int(anchor_remainder_ms))
-
-
-def _derive_h4_tv_from_h1(
-    h1_bars: list[dict[str, Any]],
-    *,
-    anchor_remainder_ms: int,
-    base_tf_s: int = _TV_DERIVED_FROM_TF_S,
-    target_tf_s: int = 14400,
-    fetch_m5_range=None,
-    is_trading_fn=None,
-) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
-    """Агрегує H1 final у H4 з TV anchor (remainder).
-
-    is_trading_fn: callable(int_ms) -> bool — якщо задано, для кожного
-    H4 бакету обчислюємо очікувану кількість H1 з урахуванням паузи
-    (наприклад, cfd_us_22_23: бакет 19:00 потребує лише 3 H1,
-    бо H1 22:00 = пауза).
-    """
-    warnings: list[str] = []
-    ext: dict[str, Any] = {}
-    if not h1_bars:
-        warnings.append("derived_h1_empty")
-        return [], warnings, ext
-
-    base_tf_ms = int(base_tf_s) * 1000
-    target_tf_ms = int(target_tf_s) * 1000
-    nominal_count = max(1, target_tf_ms // base_tf_ms)
-
-    filtered: list[dict[str, Any]] = []
-    skipped_not_final = 0
-    for bar in h1_bars:
-        if not isinstance(bar, dict):
-            continue
-        if bar.get("complete") is False:
-            skipped_not_final += 1
-            continue
-        open_ms = bar.get("open_time_ms")
-        if not isinstance(open_ms, int):
-            continue
-        filtered.append(bar)
-    if skipped_not_final > 0:
-        warnings.append("derived_h1_not_final")
-        ext["derived_skipped_not_final"] = int(skipped_not_final)
-
-    filtered.sort(key=lambda b: b.get("open_time_ms", 0))
-
-    buckets: dict[int, list[dict[str, Any]]] = {}
-    for bar in filtered:
-        open_ms = int(bar.get("open_time_ms"))
-        bucket_open_ms = bucket_start_ms(open_ms, target_tf_ms, anchor_remainder_ms)
-        buckets.setdefault(bucket_open_ms, []).append(bar)
-
-    derived: list[dict[str, Any]] = []
-    incomplete: list[int] = []
-    partial_emitted = False
-    partial_reason: str | None = None
-    partial_missing_count: int | None = None
-    partial_refine_tf_s: int | None = None
-
-    bucket_keys = sorted(buckets.keys())
-    for idx, bucket_open_ms in enumerate(bucket_keys):
-        bars = sorted(buckets[bucket_open_ms], key=lambda b: b.get("open_time_ms", 0))
-        next_bucket_open = bucket_keys[idx + 1] if idx + 1 < len(bucket_keys) else None
-        is_calendar_break = (
-            next_bucket_open is not None and int(next_bucket_open) - int(bucket_open_ms) > target_tf_ms
-        )
-
-        # Обчислити очікувану кількість H1 з урахуванням паузи
-        if is_trading_fn is not None:
-            trading_slots: list[int] = []
-            for _si in range(nominal_count):
-                slot_ms = int(bucket_open_ms) + _si * base_tf_ms
-                if is_trading_fn(slot_ms):
-                    trading_slots.append(slot_ms)
-            expected_count = len(trading_slots)
-        else:
-            trading_slots = [int(bucket_open_ms) + _si * base_tf_ms for _si in range(nominal_count)]
-            expected_count = nominal_count
-
-        if expected_count == 0:
-            # Увесь бакет = non-trading (пауза/вікенд) → нічого деривувати
-            continue
-
-        if len(bars) != expected_count:
-            if is_calendar_break and len(bars) > 0:
-                # partial allowed before calendar break
-                m5_bars: list[dict[str, Any]] = []
-                m5_warnings: list[str] = []
-                if fetch_m5_range is not None:
-                    m5_bars, m5_warnings = fetch_m5_range(
-                        int(bucket_open_ms),
-                        int(bucket_open_ms + target_tf_ms),
-                    )
-                    warnings = _dedup_warnings(warnings, m5_warnings)
-
-                use_bars = m5_bars if m5_bars else bars
-                if use_bars:
-                    def _pick(bar: dict[str, Any], primary: str, fallback: str) -> float:
-                        val = bar.get(primary)
-                        if val is None:
-                            val = bar.get(fallback)
-                        return float(val) if val is not None else 0.0
-
-                    o = _pick(use_bars[0], "open", "o")
-                    c = _pick(use_bars[-1], "close", "c")
-                    h = max(_pick(b, "high", "h") for b in use_bars)
-                    lo = min(_pick(b, "low", "l") for b in use_bars)
-                    v = sum(float(b.get("volume", b.get("v", 0.0))) for b in use_bars)
-                    last_close_ms = use_bars[-1].get("close_time_ms")
-                    if last_close_ms is None:
-                        last_open = use_bars[-1].get("open_time_ms", 0)
-                        last_close_ms = int(last_open) + (300000 if m5_bars else base_tf_ms)
-
-                    derived.append({
-                        "open_time_ms": int(bucket_open_ms),
-                        "close_time_ms": int(bucket_open_ms + target_tf_ms),
-                        "open": float(o),
-                        "high": float(h),
-                        "low": float(lo),
-                        "close": float(c),
-                        "volume": float(v),
-                        "tf_s": int(target_tf_s),
-                        "complete": False,
-                        "src": "derived",
-                        "event_ts": int(last_close_ms),
-                    })
-                    warnings.append("derived_partial_bucket")
-                    partial_emitted = True
-                    partial_reason = "calendar_break" if m5_bars else "calendar_break_no_m5"
-                    base_tf_ms_used = 300000 if m5_bars else base_tf_ms
-                    partial_refine_tf_s = 300 if m5_bars else int(base_tf_s)
-                    expected_subbars = max(1, target_tf_ms // base_tf_ms_used)
-                    partial_missing_count = int(max(0, expected_subbars - len(use_bars)))
-                    continue
-
-            incomplete.append(int(bucket_open_ms))
-            continue
-        # Перевіряємо континуальність H1 барів (з урахуванням trading_slots)
-        ok = True
-        for _ci, b in enumerate(bars):
-            if _ci < len(trading_slots):
-                expected_open = trading_slots[_ci]
-            else:
-                expected_open = int(bucket_open_ms) + _ci * base_tf_ms
-            if b.get("open_time_ms") != expected_open:
-                ok = False
-                break
-        if not ok:
-            if is_calendar_break and len(bars) > 0:
-                # partial allowed before calendar break
-                m5_bars: list[dict[str, Any]] = []
-                m5_warnings: list[str] = []
-                if fetch_m5_range is not None:
-                    m5_bars, m5_warnings = fetch_m5_range(
-                        int(bucket_open_ms),
-                        int(bucket_open_ms + target_tf_ms),
-                    )
-                    warnings = _dedup_warnings(warnings, m5_warnings)
-
-                use_bars = m5_bars if m5_bars else bars
-                if use_bars:
-                    def _pick(bar: dict[str, Any], primary: str, fallback: str) -> float:
-                        val = bar.get(primary)
-                        if val is None:
-                            val = bar.get(fallback)
-                        return float(val) if val is not None else 0.0
-
-                    o = _pick(use_bars[0], "open", "o")
-                    c = _pick(use_bars[-1], "close", "c")
-                    h = max(_pick(b, "high", "h") for b in use_bars)
-                    lo = min(_pick(b, "low", "l") for b in use_bars)
-                    v = sum(float(b.get("volume", b.get("v", 0.0))) for b in use_bars)
-                    last_close_ms = use_bars[-1].get("close_time_ms")
-                    if last_close_ms is None:
-                        last_open = use_bars[-1].get("open_time_ms", 0)
-                        last_close_ms = int(last_open) + (300000 if m5_bars else base_tf_ms)
-
-                    derived.append({
-                        "open_time_ms": int(bucket_open_ms),
-                        "close_time_ms": int(bucket_open_ms + target_tf_ms),
-                        "open": float(o),
-                        "high": float(h),
-                        "low": float(lo),
-                        "close": float(c),
-                        "volume": float(v),
-                        "tf_s": int(target_tf_s),
-                        "complete": False,
-                        "src": "derived",
-                        "event_ts": int(last_close_ms),
-                    })
-                    warnings.append("derived_partial_bucket")
-                    partial_emitted = True
-                    partial_reason = "calendar_break" if m5_bars else "calendar_break_no_m5"
-                    base_tf_ms_used = 300000 if m5_bars else base_tf_ms
-                    partial_refine_tf_s = 300 if m5_bars else int(base_tf_s)
-                    expected_subbars = max(1, target_tf_ms // base_tf_ms_used)
-                    partial_missing_count = int(max(0, expected_subbars - len(use_bars)))
-                    continue
-
-            incomplete.append(int(bucket_open_ms))
-            continue
-
-        def _pick(bar: dict[str, Any], primary: str, fallback: str) -> float:
-            val = bar.get(primary)
-            if val is None:
-                val = bar.get(fallback)
-            return float(val) if val is not None else 0.0
-
-        o = _pick(bars[0], "open", "o")
-        c = _pick(bars[-1], "close", "c")
-        h = max(_pick(b, "high", "h") for b in bars)
-        lo = min(_pick(b, "low", "l") for b in bars)
-        v = sum(float(b.get("volume", b.get("v", 0.0))) for b in bars)
-
-        derived.append({
-            "open_time_ms": int(bucket_open_ms),
-            "close_time_ms": int(bucket_open_ms + target_tf_ms),
-            "open": float(o),
-            "high": float(h),
-            "low": float(lo),
-            "close": float(c),
-            "volume": float(v),
-            "tf_s": int(target_tf_s),
-            "complete": True,
-            "src": "derived",
-        })
-
-    if incomplete:
-        warnings.append("derived_incomplete_bucket")
-        ext["derived_incomplete_count"] = int(len(incomplete))
-        ext["derived_incomplete_buckets"] = [int(x) for x in incomplete[:10]]
-
-    ext["derived_partial"] = bool(partial_emitted)
-    if partial_emitted:
-        ext["partial_reason"] = partial_reason
-        ext["derived_missing_subbars_count"] = int(partial_missing_count or 0)
-        ext["derived_refine_base_tf_s"] = int(partial_refine_tf_s or base_tf_s)
-    else:
-        ext["derived_missing_subbars_count"] = 0
-        ext["derived_refine_base_tf_s"] = int(base_tf_s)
-
-    return derived, warnings, ext
-
-
-def _append_degraded(ext: dict[str, Any], reason: str) -> None:
-    degraded = ext.get("degraded")
-    if isinstance(degraded, list):
-        if reason not in degraded:
-            degraded.append(reason)
-        return
-    ext["degraded"] = [reason]
-
-
-def _make_derived_meta(
-    base_meta: dict[str, Any] | None,
-    derived_ext: dict[str, Any],
-    warnings: list[str],
-    *,
-    align: str,
-    anchor_remainder_ms: int,
-    derived_from_tf_s: int,
-) -> dict[str, Any]:
-    """Будує meta для derived align=tv, без протікання redis_* у top-level."""
-    meta: dict[str, Any] = {
-        "boot_id": _boot_id,
-        "source": "derived_h1_final",
-    }
-    ext = _ensure_meta_extensions(meta)
-
-    # Базова мета (лише в extensions.base_*)
-    if isinstance(base_meta, dict):
-        base_source = base_meta.get("source")
-        if base_source is not None:
-            ext["base_source"] = base_source
-        if "partial" in base_meta:
-            ext["base_partial"] = base_meta.get("partial")
-        base_redis = {k: v for k, v in base_meta.items() if str(k).startswith("redis_")}
-        if base_redis:
-            ext["base_redis"] = base_redis
-
-    # Derived extension fields
-    ext["align"] = align
-    ext["anchor_remainder_ms"] = int(anchor_remainder_ms)
-    ext["derived_from_tf_s"] = int(derived_from_tf_s)
-    if derived_ext:
-        ext.update(derived_ext)
-
-    # Loud degraded when derived not filled to target
-    target = ext.get("derived_target_h4")
-    got = ext.get("derived_got_h4")
-    if isinstance(target, int) and isinstance(got, int) and got < target:
-        _append_degraded(ext, "derived_budget_exhausted")
-        if "derived_insufficient_h1" not in warnings:
-            warnings.append("derived_insufficient_h1")
-
-    return meta
-
-
-def _derive_h4_tv_with_budget(
-    fetch_h1,
-    *,
-    target_h4: int,
-    anchor_remainder_ms: int,
-    base_tf_s: int = _TV_DERIVED_FROM_TF_S,
-    target_tf_s: int = 14400,
-    fetch_m5_range=None,
-    max_steps: int = 3,
-    initial_h1_limit: int | None = None,
-    step_h1_limit: int | None = None,
-    is_trading_fn=None,
-) -> tuple[list[dict[str, Any]], list[str], dict[str, Any], dict[str, Any]]:
-    """Derived H4 з H1 із budget fill-to-limit, без запису в SSOT."""
-    warnings: list[str] = []
-    ext: dict[str, Any] = {}
-    target_h4 = max(0, int(target_h4))
-    if target_h4 <= 0:
-        _append_degraded(ext, "derived_budget_exhausted")
-        warnings.append("derived_insufficient_h1")
-        ext["derived_target_h4"] = int(target_h4)
-        ext["derived_got_h4"] = 0
-        ext["derived_h1_used_count"] = 0
-        ext["derived_fill_steps"] = 0
-        return [], warnings, ext, {}
-
-    h1_limit = int(initial_h1_limit) if initial_h1_limit is not None else int(target_h4 * 4 + 16)
-    step_limit = int(step_h1_limit) if step_h1_limit is not None else int(target_h4 * 4)
-    steps = 0
-    h1_used = 0
-    derived_full: list[dict[str, Any]] = []
-
-    base_meta_last: dict[str, Any] = {}
-
-    while steps < max_steps:
-        steps += 1
-        fetch_result = fetch_h1(h1_limit)
-        if isinstance(fetch_result, tuple) and len(fetch_result) == 3:
-            h1_bars, h1_warnings, base_meta_last = fetch_result
-        else:
-            h1_bars, h1_warnings = fetch_result  # type: ignore[misc]
-            base_meta_last = {}
-        h1_used = len(h1_bars)
-        derived_full, deriv_warnings, deriv_ext = _derive_h4_tv_from_h1(
-            h1_bars,
-            anchor_remainder_ms=anchor_remainder_ms,
-            base_tf_s=base_tf_s,
-            target_tf_s=target_tf_s,
-            fetch_m5_range=fetch_m5_range,
-            is_trading_fn=is_trading_fn,
-        )
-        warnings = _dedup_warnings(warnings, list(h1_warnings), list(deriv_warnings))
-        if deriv_ext:
-            ext.update(deriv_ext)
-        if len(derived_full) >= target_h4:
-            break
-        h1_limit += step_limit
-
-    derived_out = derived_full[-target_h4:] if target_h4 > 0 else list(derived_full)
-    if len(derived_out) < target_h4:
-        warnings.append("derived_insufficient_h1")
-        _append_degraded(ext, "derived_budget_exhausted")
-
-    ext["derived_target_h4"] = int(target_h4)
-    ext["derived_got_h4"] = int(len(derived_out))
-    ext["derived_h1_used_count"] = int(h1_used)
-    ext["derived_fill_steps"] = int(steps)
-
-    return derived_out, warnings, ext, dict(base_meta_last)
 
 
 def _policy_sanity_issues() -> list[str]:
@@ -1443,23 +1032,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if align not in (_ALIGN_FXCM, _ALIGN_TV):
                 self._bad("align_not_supported")
                 return
-            if align == _ALIGN_TV:
-                payload = {
-                    "ok": False,
-                    "error": "align_tv_updates_not_supported",
-                    "message": "updates available only for align=fxcm; use /api/bars?align=tv for snapshots",
-                    "meta": {
-                        "extensions": {
-                            "align": _ALIGN_TV,
-                            "tf_s": tf_s,
-                            "supported_align_for_updates": [_ALIGN_FXCM],
-                            "hint": "poll /api/bars?align=tv with your normal refresh cadence",
-                        },
-                    },
-                    "warnings": ["updates_not_supported_for_derived_align"],
-                }
-                self._json(400, payload)
-                return
+            # ADR-0002 Phase 3: H4 тепер підтримує updates як будь-який TF
             if tf_s in preview_allowlist:
                 include_preview = True
             if not symbol:
@@ -1607,9 +1180,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             raw_limit = _safe_int((qs.get("limit", ["2000"])[0] or "2000"), 2000)
             limit, _was_clamped = _clamp_limit(raw_limit, tf_s)
             align = (qs.get("align", [_ALIGN_FXCM])[0] or _ALIGN_FXCM).strip().lower()
-            # H4 завжди деривується через TV anchor (23:00), не broker (22:00)
-            if tf_s == 14400 and align == _ALIGN_FXCM:
-                align = _ALIGN_TV
+            # ADR-0002 Phase 3: H4 тепер first-class TF в UDS, align ігнорується
             if _was_clamped:
                 global _limit_clamp_count, _limit_clamp_last_log_ts
                 _limit_clamp_count += 1
@@ -1634,9 +1205,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return
             if align not in (_ALIGN_FXCM, _ALIGN_TV):
                 self._bad("align_not_supported")
-                return
-            if align == _ALIGN_TV and tf_s in preview_allowlist:
-                self._bad("align_tv_not_allowed_for_preview_tf")
                 return
 
             # Symbol canonicalization meta (inject in all code paths below)
@@ -1670,14 +1238,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 hist_bars = list(hist_res.bars_lwc)
 
                 # 2. Overlay preview_curr (поточний бар від тіків)
+                # I3.final>preview: preview overlay НЕ перекриває complete=True history бар.
+                # Без цього guard стале preview_tail (v=0) заміщує фінальний бар (v=242)
+                # після market close, коли m1_poller вже закомітив history.
                 preview_res = uds.read_preview_window(symbol, tf_s, 1, include_current=True)
                 if preview_res.bars_lwc:
                     curr = preview_res.bars_lwc[-1]
                     curr_open = curr.get("time") if isinstance(curr, dict) else None
                     if curr_open is not None and hist_bars:
-                        last_hist_open = hist_bars[-1].get("time") if isinstance(hist_bars[-1], dict) else None
+                        last_hist = hist_bars[-1] if isinstance(hist_bars[-1], dict) else {}
+                        last_hist_open = last_hist.get("time")
+                        last_hist_complete = bool(last_hist.get("complete", False))
                         if last_hist_open is not None and curr_open == last_hist_open:
-                            hist_bars[-1] = curr
+                            # I3: final>preview — не заміщуємо complete бар preview-ом
+                            if not last_hist_complete:
+                                hist_bars[-1] = curr
                         elif last_hist_open is not None and curr_open > last_hist_open:
                             hist_bars.append(curr)
                     elif not hist_bars:
@@ -1721,163 +1296,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._json(200, payload)
                 return
 
-            # Derived TV-aligned H4 (anchor_remainder_ms=10800000), read-only
-            if align == _ALIGN_TV:
-                if tf_s != 14400:
-                    self._bad("align_tv_only_h4")
-                    return
-                if _TV_DERIVED_FROM_TF_S not in tf_allowlist:
-                    self._bad("align_tv_base_tf_not_allowed")
-                    return
-                # Range queries поки не підтримуємо для derived
-                s = qs.get("since_open_ms", [None])[0]
-                t = qs.get("to_open_ms", [None])[0]
-                if s is not None or t is not None:
-                    self._bad("align_tv_range_not_supported")
-                    return
-
-                derived_warnings: list[str] = []
-                if _was_clamped:
-                    derived_warnings.append(f"limit_clamped:{raw_limit}->{limit}")
-                if prefer_redis:
-                    derived_warnings.append("query_param_ignored:prefer_redis")
-                if force_disk:
-                    derived_warnings.append("query_param_ignored:force_disk")
-
-                cache_key = _derived_cache_key(symbol, tf_s, align, _TV_H4_ANCHOR_REMAINDER_MS)
-                cached = None
-                now = time.time()
-                with _tv_derived_cache_lock:
-                    cached = _tv_derived_cache.get(cache_key)
-                    if cached and (now - cached.get("ts", 0)) > _TV_DERIVED_CACHE_TTL_S:
-                        cached = None
-
-                if cached is None:
-                    def _fetch_h1(h1_limit: int) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
-                        spec_h1 = WindowSpec(
-                            symbol=symbol,
-                            tf_s=_TV_DERIVED_FROM_TF_S,
-                            limit=h1_limit,
-                            since_open_ms=None,
-                            to_open_ms=None,
-                            cold_load=True,
-                        )
-                        policy = ReadPolicy(
-                            force_disk=False,
-                            prefer_redis=True,
-                            disk_policy="never",
-                        )
-                        res_h1 = uds.read_window(spec_h1, policy)
-                        return list(res_h1.bars_lwc), list(res_h1.warnings), dict(res_h1.meta or {})
-
-                    m5_cache: dict[str, Any] = {"bars": None, "warnings": []}
-
-                    def _fetch_m5_range(start_ms: int, end_ms: int) -> tuple[list[dict[str, Any]], list[str]]:
-                        if m5_cache["bars"] is None:
-                            m5_limit = max(200, int(limit) * 48 + 48)
-                            spec_m5 = WindowSpec(
-                                symbol=symbol,
-                                tf_s=300,
-                                limit=m5_limit,
-                                since_open_ms=None,
-                                to_open_ms=None,
-                                cold_load=True,
-                            )
-                            policy_m5 = ReadPolicy(
-                                force_disk=False,
-                                prefer_redis=True,
-                                disk_policy="never",
-                            )
-                            res_m5 = uds.read_window(spec_m5, policy_m5)
-                            m5_cache["bars"] = list(res_m5.bars_lwc)
-                            m5_cache["warnings"] = list(res_m5.warnings)
-                        bars = [
-                            b for b in (m5_cache.get("bars") or [])
-                            if isinstance(b, dict)
-                            and isinstance(b.get("open_time_ms"), int)
-                            and int(start_ms) <= int(b.get("open_time_ms")) < int(end_ms)
-                        ]
-                        return bars, list(m5_cache.get("warnings") or [])
-
-                    # Calendar для коректного підрахунку H1 у бакеті (пауза 22:00-23:00 тощо)
-                    _h4_cal = _build_calendar_for_symbol(cfg, symbol)
-                    _h4_trading_fn = _h4_cal.is_trading_minute if _h4_cal else None
-
-                    derived_bars, deriv_warnings, deriv_ext, base_meta = _derive_h4_tv_with_budget(
-                        _fetch_h1,
-                        target_h4=limit,
-                        anchor_remainder_ms=_TV_H4_ANCHOR_REMAINDER_MS,
-                        base_tf_s=_TV_DERIVED_FROM_TF_S,
-                        target_tf_s=14400,
-                        fetch_m5_range=_fetch_m5_range,
-                        max_steps=3,
-                        initial_h1_limit=(limit * 4 + 16),
-                        step_h1_limit=(limit * 4),
-                        is_trading_fn=_h4_trading_fn,
-                    )
-
-                    derived_warnings = _dedup_warnings(derived_warnings)
-                    meta = _make_derived_meta(
-                        base_meta,
-                        deriv_ext,
-                        derived_warnings,
-                        align=_ALIGN_TV,
-                        anchor_remainder_ms=_TV_H4_ANCHOR_REMAINDER_MS,
-                        derived_from_tf_s=_TV_DERIVED_FROM_TF_S,
-                    )
-
-                    cached = {
-                        "bars": derived_bars,
-                        "meta": meta,
-                        "warnings": derived_warnings,
-                        "derived_ext": dict(deriv_ext),
-                        "base_meta": dict(base_meta),
-                        "ts": now,
-                    }
-                    with _tv_derived_cache_lock:
-                        _tv_derived_cache[cache_key] = cached
-
-                derived_bars = list(cached.get("bars", []))
-                derived_warnings = list(cached.get("warnings", []))
-                derived_ext_cached = dict(cached.get("derived_ext", {}))
-                base_meta_cached = dict(cached.get("base_meta", {}))
-                meta = _make_derived_meta(
-                    base_meta_cached,
-                    derived_ext_cached,
-                    derived_warnings,
-                    align=_ALIGN_TV,
-                    anchor_remainder_ms=_TV_H4_ANCHOR_REMAINDER_MS,
-                    derived_from_tf_s=_TV_DERIVED_FROM_TF_S,
-                )
-
-                normalized_bars, dropped_bars, bar_examples = _normalize_bars_window_v1(
-                    derived_bars,
-                    symbol=symbol,
-                    tf_s=tf_s,
-                )
-                if dropped_bars > 0:
-                    ext = _ensure_meta_extensions(meta)
-                    ext["bar_drop_count"] = int(dropped_bars)
-                    if bar_examples:
-                        ext["bar_drop_examples"] = list(bar_examples)
-                payload = {
-                    "ok": True,
-                    "symbol": symbol,
-                    "tf_s": tf_s,
-                    "bars": normalized_bars,
-                    "boot_id": _boot_id,
-                    "meta": meta,
-                }
-                _inject_sym_canon(meta)
-                warnings = list(derived_warnings)
-                if dropped_bars > 0:
-                    warnings.append("bar_dropped_contract_violation")
-                    _log_public_api_contract_guard(dropped_bars, 0)
-                if warnings:
-                    payload["warnings"] = warnings
-                _contract_guard_warn_window(payload, normalized_bars, warnings, bool(warnings))
-                self._json(200, payload)
-                return
+            # ADR-0002 Phase 3: H4 = standard UDS TF (DeriveEngine пише H4 final)
+            # align=tv falls through to standard read_window — backward compat
 
             since_open_ms = None
             to_open_ms = None

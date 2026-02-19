@@ -3,11 +3,11 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import os
-from typing import Dict, List
+from typing import Dict
 
 from app.composition import load_config
 from core.model.bars import CandleBar, assert_invariants
-from runtime.ingest.polling.time_buckets import floor_bucket_start_ms
+from core.buckets import bucket_start_ms  # floor_bucket_start_ms removed (ADR-0002)
 from runtime.store.ssot_jsonl import JsonlAppender
 
 DAY_YYYYMMDD = "20260205"

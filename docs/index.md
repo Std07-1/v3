@@ -1,6 +1,6 @@
 # Документація Trading Platform v3 — Індекс (SSOT)
 
-> **Остання перевірка**: 2026-02-15  
+> **Остання перевірка**: 2026-02-18  
 > **Мова**: українська (англійська лише для загальноприйнятих термінів)
 
 Цей файл — **точка входу** в усю документацію проєкту. Будь-яке знання про систему має бути знайдене через цей індекс.
@@ -23,6 +23,7 @@
 |---|---|
 | [system_current_overview.md § Схема потоку даних](system_current_overview.md#схема-потік-даних) | A→C→B: Broker → UDS → UI (Final + Preview + Overlay) |
 | [guide_candles.md](guide_candles.md) | Інструкція: «гарні» M1/M3 свічки від брокера до UI |
+| [guide_candle_acquisition.md](guide_candle_acquisition.md) | Повний посібник: отримання свічок (FXCM API, календар, watermark, recover) |
 | [redis_snapshot_design.md](redis_snapshot_design.md) | Redis snapshot keyspace, TTL, failure modes, stale readiness |
 
 ### 3. Контракти

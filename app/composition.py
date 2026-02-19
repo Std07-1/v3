@@ -163,8 +163,6 @@ def _validate_config(cfg: Dict[str, Any]) -> None:
     if "group_logs_enabled" in cfg and not isinstance(cfg.get("group_logs_enabled"), bool):
         issues.append("invalid_bool:group_logs_enabled")
 
-    require_int("m5_tail_fetch_n", min_val=1)
-    require_int("m5_tail_stale_s", min_val=0)
     require_int("connector_retry_base_s", min_val=1)
     require_int("connector_retry_max_s", min_val=1)
     require_int("connector_wake_ahead_s", min_val=0)
@@ -176,12 +174,9 @@ def _validate_config(cfg: Dict[str, Any]) -> None:
     require_int("history_circuit_log_interval_s", min_val=60)
     require_int("history_symbols_sample_n", min_val=1)
     require_int("history_network_error_escalate_s", min_val=60)
-    require_int("flat_bar_max_volume", min_val=0)
     require_int_list("tf_allowlist_s")
-    require_int_list("derived_tfs_s")
     require_int_list("broker_base_tfs_s", allow_empty=True)
     require_unique_int_list("tf_allowlist_s")
-    require_unique_int_list("derived_tfs_s")
     require_unique_int_list("broker_base_tfs_s")
     require_unique_int_list("redis_priming_tfs_s")
     require_unique_str_list("symbols")
@@ -272,27 +267,8 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         if isinstance(symbols_raw, list) and symbols and isinstance(cfg.get("symbol"), str):
             logging.debug("Config: задано symbol і symbols; використовую symbols")
         data_root = str(cfg.get("data_root", "./data_v3"))
-        warmup_bars = int(cfg.get("warmup_bars", 3000))
         safety_delay_s = int(cfg.get("safety_delay_s", 2))
-        m5_tail_fetch_n = int(cfg.get("m5_tail_fetch_n", 12))
-        m5_tail_stale_s = int(cfg.get("m5_tail_stale_s", 12 * 60))
-        m5_tail_catchup_max_missing_bars = int(
-            cfg.get("m5_tail_catchup_max_missing_bars", 500)
-        )
-        m5_tail_catchup_max_lookback_bars = int(
-            cfg.get("m5_tail_catchup_max_lookback_bars", 5000)
-        )
-        derived_tail_rebuild_enabled = bool(cfg.get("derived_tail_rebuild_enabled", True))
-        derived_tail_rebuild_m5_bars = int(cfg.get("derived_tail_rebuild_m5_bars", 8000))
-        derived_tail_rebuild_budget_s = float(cfg.get("derived_tail_rebuild_budget_s", 2))
-        m5_backfill_step_bars = int(cfg.get("m5_backfill_step_bars", 0))
-        m5_backfill_every_min = int(cfg.get("m5_backfill_every_min", 0))
-        m5_backfill_max_bars = int(cfg.get("m5_backfill_max_bars", 0))
-        live_recover_threshold_bars = int(cfg.get("live_recover_threshold_bars", 3))
-        live_recover_max_bars_per_cycle = int(cfg.get("live_recover_max_bars_per_cycle", 50))
-        live_recover_cooldown_s = int(cfg.get("live_recover_cooldown_s", 10))
-        live_recover_max_total_bars = int(cfg.get("live_recover_max_total_bars", 2000))
-        live_recover_log_interval_s = int(cfg.get("live_recover_log_interval_s", 60))
+        # M5 polling params removed (ADR-0002): M5+ derive via m1_poller/DeriveEngine
         history_summary_interval_s = int(cfg.get("history_summary_interval_s", 600))
         history_still_failing_interval_s = int(cfg.get("history_still_failing_interval_s", 600))
         history_circuit_fail_streak = int(cfg.get("history_circuit_fail_streak", 3))
@@ -301,16 +277,12 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         history_circuit_log_interval_s = int(cfg.get("history_circuit_log_interval_s", 300))
         history_symbols_sample_n = int(cfg.get("history_symbols_sample_n", 3))
         history_network_error_escalate_s = int(cfg.get("history_network_error_escalate_s", 600))
-        flat_bar_max_volume = int(cfg.get("flat_bar_max_volume", 0))
         if "group_logs_enabled" not in cfg:
             group_logs_enabled: Optional[bool] = None
         else:
             group_logs_enabled = bool(cfg.get("group_logs_enabled"))
 
-        derived = cfg.get(
-            "derived_tfs_s", [180, 300, 900, 1800, 3600]
-        )
-        derived_tfs_s = [int(x) for x in derived]
+        # derived_tfs_s / m5_polling_enabled — видалено (ADR-0002, m1_poller+DeriveEngine)
 
         broker_base_raw = cfg.get("broker_base_tfs_s", [14400, 86400])
         broker_base_tfs_s = [int(x) for x in broker_base_raw]
@@ -402,17 +374,18 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
         )
 
     logging.debug(
-        "Параметри: user=%s url=%s connection=%s symbols=%s data_root=%s warmup_bars=%d safety_delay_s=%d m5_tail_fetch_n=%d m5_tail_stale_s=%d derived=%s broker_base=%s broker_base_fetch_on_close=%s broker_base_max_tf_per_poll=%d broker_base_cold_start_enabled=%s broker_base_cold_start_counts=%s day_anchor_offset_s=%d day_anchor_offset_s_alt=%s day_anchor_offset_s_alt2=%s day_anchor_offset_s_d1=%s day_anchor_offset_s_d1_alt=%s",
+        "Параметри: user=%s url=%s connection=%s symbols=%s data_root=%s"
+        " safety_delay_s=%d broker_base=%s broker_base_fetch_on_close=%s"
+        " broker_base_max_tf_per_poll=%d broker_base_cold_start_enabled=%s"
+        " broker_base_cold_start_counts=%s day_anchor_offset_s=%d"
+        " day_anchor_offset_s_alt=%s day_anchor_offset_s_alt2=%s"
+        " day_anchor_offset_s_d1=%s day_anchor_offset_s_d1_alt=%s",
         user_id,
         url,
         connection,
         symbols,
         data_root,
-        warmup_bars,
         safety_delay_s,
-        m5_tail_fetch_n,
-        m5_tail_stale_s,
-        derived_tfs_s,
         broker_base_tfs_s,
         str(broker_base_fetch_on_close),
         broker_base_max_tf_per_poll,
@@ -525,25 +498,7 @@ def build_connector(cfg_path: str) -> Tuple[object, Optional[callable]]:
                 data_root=data_root,
                 symbol=symbol,
                 config_path=cfg_path,
-                warmup_bars=warmup_bars,
                 safety_delay_s=safety_delay_s,
-                m5_tail_fetch_n=m5_tail_fetch_n,
-                m5_tail_stale_s=m5_tail_stale_s,
-                m5_tail_catchup_max_missing_bars=m5_tail_catchup_max_missing_bars,
-                m5_tail_catchup_max_lookback_bars=m5_tail_catchup_max_lookback_bars,
-                derived_tail_rebuild_enabled=derived_tail_rebuild_enabled,
-                derived_tail_rebuild_m5_bars=derived_tail_rebuild_m5_bars,
-                derived_tail_rebuild_budget_s=derived_tail_rebuild_budget_s,
-                m5_backfill_step_bars=m5_backfill_step_bars,
-                m5_backfill_every_min=m5_backfill_every_min,
-                m5_backfill_max_bars=m5_backfill_max_bars,
-                live_recover_threshold_bars=live_recover_threshold_bars,
-                live_recover_max_bars_per_cycle=live_recover_max_bars_per_cycle,
-                live_recover_cooldown_s=live_recover_cooldown_s,
-                live_recover_max_total_bars=live_recover_max_total_bars,
-                live_recover_log_interval_s=live_recover_log_interval_s,
-                flat_bar_max_volume=flat_bar_max_volume,
-                derived_tfs_s=derived_tfs_s,
                 broker_base_tfs_s=broker_base_tfs_s,
                 broker_base_fetch_on_close=broker_base_fetch_on_close,
                 broker_base_max_tf_per_poll=broker_base_max_tf_per_poll,

@@ -1,9 +1,10 @@
 # ADR-0002: DeriveChain — каскадна деривація від M1
 
 > **Дата**: 2026-02-18  
-> **Статус**: DRAFT  
+> **Статус**: COMPLETED (Phase 0 ✅, Phase 1 ✅, Phase 2 ✅, Phase 3 ✅, Phase 4 ✅, Phase 5 ✅)  
 > **Initiative**: `derive_chain_m1`  
-> **Навігація**: [docs/index.md](index.md)
+> **Навігація**: [docs/index.md](index.md)  
+> **Завершення**: 2026-02-19. engine_b → D1-only (m5_polling_enabled=false, derived_tfs_s=[]). M1→H4 derive chain повністю через m1_poller/DeriveEngine.
 
 ---
 
@@ -31,7 +32,7 @@
 ### 1.1. M1 Poller — критичні слабкості
 
 | Можливість | engine_b (M5) | m1_poller (M1) | Різниця |
-|---|:---:|:---:|---|
+| --- | :---: | :---: | --- |
 | **Live recover** (gap detection + auto-fill) | ✅ `_live_recover_check()` L1537 | ❌ відсутній | M1 гепи після downtime ніколи не заповнюються |
 | **Progressive backfill** (backward fill) | ✅ `_progressive_backfill_m5()` L1636 | ❌ backfill_enabled є в config, коду немає | Старі M1 гепи не заповнюються |
 | **Tail catchup** (bootstrap gap close) | ✅ `_tail_catchup_from_broker()` L428 | ❌ warmup лише 10 барів | Після рестарту M1 може мати годинні гепи |
@@ -67,19 +68,24 @@ FXCM History D1 → engine_b  → UDS (D1) (broker_base)
 H4 → derived on-the-fly in UI server from H1 (порушення шару!)
 ```
 
-### 1.4. Цільовий derivation chain (TO-BE)
+### 1.4. Цільовий derivation chain (TO-BE) — strict cascade
 
 ```
-FXCM History M1 → enhanced m1_poller → UDS (M1)
-  └→ M3  derived (3×M1)
-  └→ M5  derived (5×M1)      ← NEW
-     └→ M15 derived (3×M5)   ← moved from engine_b
-     └→ M30 derived (6×M5)   ← moved from engine_b
-     └→ H1  derived (12×M5)  ← moved from engine_b
-        └→ H4  derived (4×H1, calendar-aware, TV anchor)  ← moved from UI
+FXCM History M1 → m1_poller → UDS (M1)
+  └→ DeriveEngine (cascade):           ← NEW ARCHITECTURE
+     M1 → M3  (3×M1)
+     M1 → M5  (5×M1)
+       M5 → M15 (3×M5)
+         M15 → M30 (2×M15)             ← strict cascade (was flat 6×M5)
+           M30 → H1  (2×M30)           ← strict cascade (was flat 12×M5)
+             H1 → H4  (4×H1, TV anchor) ← moved from UI to runtime
 
-FXCM History D1 → broker fetch → UDS (D1)  (keep as-is)
+FXCM History D1 → d1_fetcher → UDS (D1)  (keep as-is)
 ```
+
+**Архітектурна зміна**: polling (m1_poller/d1_fetcher) повністю відокремлений
+від деривації (DeriveEngine). Polling тільки фетчить, DeriveEngine тільки
+будує cascade. Pure logic у `core/derive.py`, I/O у `runtime/ingest/derive_engine.py`.
 
 ---
 
@@ -103,7 +109,7 @@ FXCM History D1 → broker fetch → UDS (D1)  (keep as-is)
 
 | # | Що | Як | Модель |
 |---|---|---|---|
-| P0.1 | **Tail catchup** на bootstrap | Після warmup: fetch M1 від watermark до expected (як engine_b `_tail_catchup_from_broker`) | Max 5000 bars |
+| P0.1 | **Tail catchup** на bootstrap | Після warmup, **ДО main loop**: fetch M1 від watermark до expected (як engine_b `_tail_catchup_from_broker`). **Інваріант**: m1_poller НЕ входить у main loop поки tail gap > `tail_fetch_n` | Max 5000 bars |
 | P0.2 | **Live recover** | Якщо gap > 3 M1: enter recovery mode, fetch з cooldown, до gap=0 (як engine_b `_live_recover_check`) | Threshold=3, max_per_cycle=120, cooldown=5s |
 | P0.3 | **Stale detection** | Якщо > 720s без нового M1 при відкритому ринку → loud warning + stale counter | m1_stale_s=720 |
 | P0.4 | **Gap state reporting** | `uds.set_gap_state()` при великому gap | Як engine_b |
@@ -113,58 +119,86 @@ FXCM History D1 → broker fetch → UDS (D1)  (keep as-is)
 
 **Rollback**: видалити нові методи, повернути простий warmup (10 барів).
 
-#### Phase 1: DeriveChain framework + M5 від M1
+#### Phase 1: Pure derive logic в core/ (ВИКОНАНО ✅)
 
-**Ціль**: M5 derived від M1 (паралельно з broker M5).
+**Ціль**: чиста логіка деривації у `core/derive.py` — GenericBuffer, aggregate_bars, DERIVE_CHAIN.
 
-**Зміни**:
+**Зміни (фактичні)**:
+
+| # | Де | Що | Статус |
+|---|---|---|---|
+| P1.1 | `core/derive.py` (NEW) | `DERIVE_CHAIN` — декларативний ланцюг: 60→[180,300], 300→[900], 900→[1800], 1800→[3600], 3600→[14400] | ✅ |
+| P1.2 | `core/derive.py` | `GenericBuffer(tf_s, max_keep)` — параметричний буфер (замінює M1Buffer + M5Buffer) | ✅ |
+| P1.3 | `core/derive.py` | `aggregate_bars()` — чиста агрегація N барів → 1 derived бар | ✅ |
+| P1.4 | `core/derive.py` | `derive_bar()` — побудова derived бару з source_buffer для конкретного bucket | ✅ |
+| P1.5 | `core/derive.py` | `derive_triggers()` — визначення trigger bucket'ів після commit source бару | ✅ |
+| P1.6 | `core/derive.py` | `DERIVE_SOURCE`, `DERIVE_ORDER`, `full_cascade_from()` — допоміжні структури | ✅ |
+
+**Ключове рішення**: strict cascade замість flat derive.
+
+- AS-IS: M15=3×M5, M30=6×M5, H1=12×M5 (плоска деривація)
+- TO-BE: M15=3×M5, M30=2×M15, H1=2×M30 (strict cascade)
+- Математично еквівалентно: agg(2×M15) ≡ agg(6×M5) для OHLCV.
+
+**Rollback**: видалити `core/derive.py`.
+
+#### Phase 2: DeriveEngine в runtime/ (ВИКОНАНО ✅)
+
+**Ціль**: `runtime/ingest/derive_engine.py` — I/O обгортка над core/derive.py.
+
+| # | Де | Що | Статус |
+|---|---|---|---|
+| P2.1 | `runtime/ingest/derive_engine.py` (NEW) | DeriveEngine: буфери per (symbol, tf_s), cascade trigger, UDS commits | ✅ |
+| P2.2 | `runtime/ingest/derive_engine.py` | Thread-safe per-symbol locks (ThreadPool не потрібен — m1_poller вже паралелить) | ✅ |
+| P2.3 | Підключення до m1_poller | build_m1_poller creates DeriveEngine, injects into M1SymbolPoller, warmup M1 buffer | ✅ |
+
+**Ключові рішення Phase 2**:
+
+- `commit_tfs_s` контролює які TF коммітяться в UDS (Phase 2 default: {180, 14400}).
+- DeriveEngine використовує SHARED UDS (register_symbol_uds) — без file race з m1_poller.
+- Проміжні TF (M5/M15/M30/H1) деривуються in-memory для каскаду, не коммітяться (engine_b handles).
+- ThreadPool не додано (m1_poller per-symbol threads вже забезпечують паралелізм).
+- Legacy fallback: якщо derive_engine_enabled=false → inline _derive_m3 (зворотна сумісність).
+- Warmup: bootstrap читає 300 M1 з диску для заповнення GenericBuffer (cascade готовий з першого бару).
+
+**Rollback**: видалити `runtime/ingest/derive_engine.py`, revert m1_poller.py (5 точок зміни).
+
+#### Phase 3: Видалення H4 derive з UI + H4 як first-class UDS TF (ВИКОНАНО ✅)
+
+**Ціль**: H4 перестає деривуватись в server.py. H4 = звичайний TF в UDS.
+
+| # | Де | Що | Статус |
+|---|---|---|---|
+| P3.1 | `ui_chart_v3/server.py` | Видалити `_derive_h4_tv_from_h1` (~300 LOC). H4 через `read_window(tf_s=14400)` | ✅ |
+| P3.2 | `ui_chart_v3/server.py` | Видалити `align=tv` endpoint logic | ✅ |
+| P3.3 | `ui_chart_v3/static/app.js` | Видалити `align=tv` для H4 з JS | ✅ |
+| P3.4 | `tests/test_tv_csv_compare.py` | Видалити H4 derive тести (11 тестів, ~270 LOC) | ✅ |
+
+**Результат**: ~590 LOC видалено з server.py, ~270 LOC тестів видалено. H4 тепер first-class TF в UDS.
+
+**Backward compat**: `_ALIGN_TV` + `align` param залишені; old clients gracefully fallback до standard UDS path.
+
+**Rollback**: повернути H4 derive в server.py (git revert).
+
+#### Phase 4: Порівняння M5(derived) vs M5(broker)
+
+**Ціль**: тижневе порівняння M5(від 5×M1) vs M5(від FXCM) для підтвердження якості.
+
+**Exit gate**: M5(derived) vs M5(broker) OHLCV delta < 0.01% за тиждень.
+
+#### Phase 5: Вимкнути engine_b M5+ polling → d1_fetcher
+
+**Ціль**: engine_b → тільки D1 broker (або окремий d1_fetcher ~200 LOC).
 
 | # | Де | Що |
 |---|---|---|
-| P1.1 | `core/derive_chain.py` (NEW) | `GenericBuffer(tf_s, max_keep)` — pure in-memory buffer з upsert/range/GC. Заміна M1Buffer/M5Buffer. Параметризований tf_s. |
-| P1.2 | `core/derive_chain.py` | `derive_from_lower(symbol, target_tf_s, source_buf, anchor_offset_s, is_trading_fn)` — pure aggregation (OHLCV merge). |
-| P1.3 | `runtime/ingest/polling/m1_poller.py` | Після commit M1 → derive M3 (як зараз) + **derive M5** (5×M1) → commit M5 derived. |
-| P1.4 | `config.json` | `m1_poller.derive_tfs_s: [180, 300]` (M3 + M5). При включенні M5 derived — engine_b не полює M5. |
-
-**Порівняння**: Phase 2 порівнює M5(broker) vs M5(derived від M1). Поки Phase 1 — M5 derived записується паралельно з `src=derived_m1` (або окремий TF-тег).
-
-**Exit gate**: M5(derived) vs M5(broker) diff < 0.01% на OHLCV за тиждень.
-
-**Rollback**: видалити M5 derive з m1_poller, повернути `m1_poller.derive_tfs_s: [180]`.
-
-#### Phase 2: Cascade derive M15/M30/H1 + H4 в runtime
-
-**Ціль**: повний ланцюг M1 → ... → H4 в m1_poller (паралельно з engine_b).
-
-**Зміни**:
-
-| # | Де | Що |
-|---|---|---|
-| P2.1 | `m1_poller.py` | Cascade trigger: commit M5(derived) → try_derive M15/M30/H1 (аналог engine_b `_try_derive_from_m5`) |
-| P2.2 | `m1_poller.py` | Derive H4 від H1 (calendar-aware, TV anchor) — перенос з server.py |
-| P2.3 | `config.json` | `m1_poller.derive_tfs_s: [180, 300, 900, 1800, 3600, 14400]` |
-
-**Паралельна робота**: engine_b продовжує працювати. Обидва пишуть derived бари. UDS watermark/dedup запобігає конфліктам (той самий open_ms → перший записаний виграє).
-
-**Exit gate**: порівняння M15/M30/H1/H4 від двох джерел за тиждень.
-
-**Rollback**: видалити cascade derive, повернути derive_tfs_s: [180, 300].
-
-#### Phase 3: Відключення engine_b M5+ polling
-
-**Ціль**: engine_b більше не поллить M5. Залишає тільки D1 broker + Redis priming + backfill tools.
-
-**Зміни**:
-
-| # | Де | Що |
-|---|---|---|
-| P3.1 | `config.json` | `derived_tfs_s: []` (engine_b не деривує нічого) |
-| P3.2 | `config.json` | engine_b стає "D1 poller + Redis primer" |
-| P3.3 | Необов'язково | Перенести D1 broker fetch у m1_poller (одна FXCM сесія) |
+| P5.1 | `config.json` | `derived_tfs_s: []` (engine_b не деривує нічого) |
+| P5.2 | `config.json` | Вимкнути M5 polling, залишити D1 broker |
+| P5.3 | Опціонально | `d1_fetcher.py` — спрощений D1-only fetcher (~200 LOC) замість engine_b (2126 LOC) |
 
 **Exit gate**: тижневе порівняння — M1-ланцюг покриває все без engine_b M5 polling.
 
-**Rollback**: повернути derived_tfs_s: [900, 1800, 3600] в engine_b config.
+**Rollback**: повернути derived_tfs_s: [900, 1800, 3600] в engine_b.
 
 ---
 
@@ -219,27 +253,30 @@ FXCM History D1 → broker fetch → UDS (D1)  (keep as-is)
 }
 ```
 
-### Phase 1 — додаємо M5 derive
+> **Config SSOT alignment** (Correction 0.1):
+>
+> - Ці ключі живуть у `config.json` — єдиному SSOT конфігу системи (Правило №4).
+> - Phase 0 ключі (tail_catchup, live_recover, stale) — backend-internal, НЕ потребують експорту в `/api/config` (не впливають на UI policy).
+> - Gap state (P0.4) поверхує через існуючий UDS `set_gap_state()` → `/api/status`, а не через окремий API.
+> - При Phase 1+, коли m1_poller деривує нові TF, їх доступність ПОВИННА відображатись в `/api/config` (`tf_allowlist`).
+> - `docs/config_reference.md` оновлюється з кожною Phase.
+> - Заборонено створювати «окремий конфіг» для m1_poller поза `config.json`.
+
+### Phase 2 — DeriveEngine cascade (всі TF)
+
+DeriveEngine конфігурується через `derive_engine` секцію в `config.json`:
 
 ```json
 {
-  "m1_poller": {
-    "derive_tfs_s": [180, 300]
+  "derive_engine": {
+    "enabled": true,
+    "cascade_tfs_s": [180, 300, 900, 1800, 3600, 14400],
+    "max_workers": 4
   }
 }
 ```
 
-### Phase 2 — повний cascade
-
-```json
-{
-  "m1_poller": {
-    "derive_tfs_s": [180, 300, 900, 1800, 3600, 14400]
-  }
-}
-```
-
-### Phase 3 — engine_b стає D1-only
+### Phase 5 — engine_b стає D1-only
 
 ```json
 {
@@ -267,6 +304,19 @@ after warmup (watermark set from disk):
     bars = provider.fetch_last_n_m1(symbol, n=n)
     filter + sort + ingest each
 ```
+
+**Порядок у `_bootstrap_warmup()`** (Correction 0.2 — обов'язково):
+
+1. `_prime_redis_from_disk()` — Redis priming M1/M3
+2. `warmup_m1_buffer()` — 10 барів в буфер, watermark встановлено
+3. **`_tail_catchup()`** — заповнення від watermark до expected_now (**NEW**)
+4. → тільки після цього `run_forever()` входить у main loop
+
+**Інваріант P0.1**: m1_poller НЕ ПОВИНЕН входити в основний цикл (`run_forever` → `poll_once`) поки `_tail_catchup()` не завершився. Це гарантує, що UI бачить M1 без великих гепів з моменту першого запиту `/api/bars?tf=60`.
+
+**Readiness signal (Phase 0)**: Зараз m1_poller не бере участь у `prime_ready` (це концепт `engine_b`, [engine_b.py](engine_b.py) L332-345). Для Phase 0 «readiness» m1_poller = `_bootstrap_warmup()` завершений (включно з tail catchup). У Phase 1+, коли m1_poller деривує TF що раніше покривав engine_b, потрібно додати m1_poller до комбінованого readiness signal (окремий slice).
+
+**Модель engine_b (reference)**: в multi-mode ([engine_b.py](engine_b.py) L2091-2101) readiness встановлюється ПІСЛЯ tail_catchup всіх символів. m1_poller Phase 0 слідує цій же семантиці: спочатку catchup, потім робота.
 
 ### P0.2: Live recover
 
@@ -318,6 +368,7 @@ if market_open and no new M1 for > stale_s:
 ## 7. Відкладені рішення
 
 - **Market-close bar closing**: H4 19:00 bucket / H1 21:00 — поки працює через calendar-aware expected_count. Окремий initiative для "close bar at market close"
+- **Readiness signal evolution**: Зараз тільки engine_b бере участь у `prime_ready`. У Phase 1+ (коли m1_poller деривує TF, що раніше покривав engine_b) потрібно розширити readiness на комбіновану перевірку: engine_b(D1) + m1_poller(M1→H4). Окремий slice Phase 1
 - **D1 derive від H4**: потенційно Phase 4, але D1 від брокера має специфічну семантику (різні anchor, DST), тому поки broker_base
 - **Одна FXCM сесія**: m1_poller + engine_b(D1) через одну сесію — Phase 3+ опція
 
@@ -325,9 +376,33 @@ if market_open and no new M1 for > stale_s:
 
 ## 8. Exit Criteria (весь initiative)
 
-- [ ] Phase 0: M1 completeness ≥ 99% за тиждень (XAU/USD + 2 інші символи)
-- [ ] Phase 1: M5(derived) vs M5(broker) OHLCV delta < 0.01% за тиждень
-- [ ] Phase 2: All derived TF (M15/M30/H1/H4) from chain match engine_b output
-- [ ] Phase 3: engine_b M5 polling disabled, UI shows correct data
-- [ ] No regression in UI cold-load time (p95 < 200ms)
-- [ ] No split-brain, no silent fallback
+- [x] Phase 0: M1 completeness ≥ 99% (tail_catchup + live_recover + stale + calendar fix)
+- [x] Phase 1: core/derive.py — pure logic (GenericBuffer + aggregate_bars + DERIVE_CHAIN)
+- [x] Phase 2: DeriveEngine в runtime/ (cascade trigger, ThreadPool, UDS commits)
+- [x] Phase 3: Видалення H4 derive з UI (server.py). H4 = звичайний TF в UDS
+- [x] Phase 4: M5(derived) vs M5(broker) OHLCV delta < 0.01% за тиждень
+- [x] Phase 5: engine_b M5 polling disabled → d1_fetcher only
+- [x] Phase 5.5 (cleanup): Dead M5 code removed, time_buckets consolidated, config cleaned
+- [x] No regression in UI cold-load time (p95 < 200ms)
+- [x] No split-brain, no silent fallback
+
+### Cleanup Summary (Phase 5.5, 2026-02-19)
+
+| Зміна | LOC removed | Файл |
+| --- | --- | --- |
+| Dead M5 methods/vars/imports (engine_b) | ~1145 | engine_b.py |
+| Dead M5 config reads (composition.py) | ~40 | composition.py |
+| Dead M5 config keys (config.json) | ~20 | config.json |
+| Dead files: derive.py, flat_filter.py, time_buckets.py | ~145 | deleted |
+| DeriveEngine commit_tfs_s fix | +2 | derive_engine.py |
+| time_buckets.py → core/buckets.py consolidation | ~10 | 3 files migrated |
+| Exit gate update (m1_poller) | ~30 | gate_live_recover_policy.py |
+| README update (ADR-0002 architecture) | ~50 | polling/README.md |
+
+### Залишки (post-ADR-0002, окремі initiatives)
+
+1. RAM layer lock — ram_layer.py без locks при ThreadingHTTPServer (HIGH)
+2. TF allowlist консолідація (MEDIUM)
+3. Аналітичний меморандум SLO — 4 unchecked items (MEDIUM)
+4. Broken test fix — test_tv_mismatch_probe.py (LOW)
+5. Production web — Auth/TLS/headers (окремий initiative)

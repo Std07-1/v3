@@ -1,6 +1,6 @@
 # Поточна система — Архітектурний огляд (SSOT)
 
-> **Останнє оновлення**: 2026-02-15  
+> **Останнє оновлення**: 2026-02-18  
 > **Навігація**: [docs/index.md](index.md)
 
 Цей файл — SSOT-опис поточної архітектури системи. Див. [docs/index.md](index.md) для навігації по всій документації.
@@ -25,22 +25,25 @@
 
 ## Короткий опис
 
-Система має **три ізольовані SSOT-площини**:
+Система має **два SSOT-потоки**:
 
-- **SSOT-1 (M1/M3)** — візуальність + точки входу. M1 final bars з FXCM History API (m1_poller), M3 derived з 3×M1. Preview-plane: tick stream → TickPreviewWorker → Redis preview keyspace.
-- **SSOT-2 (M5+)** — SMC аналітика. M5 з FXCM History (engine_b/connector), derived 15m/30m/H1 з M5.
-- **SSOT-3 (H4/D1)** — глобальний тренд. Прямий FXCM History API fetch на закритті бакета.
+- **M1→H4 derive chain (основний)** — M1 final bars з FXCM History API (m1_poller) → DeriveEngine cascade: M3(3×M1)→M5(5×M1)→M15(3×M5)→M30(2×M15)→H1(2×M30)→H4(4×H1). Всі TF від M1 до H4 деривуються з одного джерела. Preview-plane: tick stream → TickPreviewWorker → Redis preview keyspace.
+- **D1 (broker)** — глобальний тренд. D1 з FXCM History API fetch на закритті бакета (engine_b, D1-only mode).
 
 Supervisor (`app.main --mode all`) керує 5 процесами. UDS є центром читання/запису: writer-и пишуть через UDS (SSOT disk + Redis snapshots + updates bus), UI читає через UDS. Preview-plane (M1/M3) живе в Redis keyspace, final-и з M1 poller проходять bridge до preview ring (final>preview). `/api/bars` для всіх TF застосовує PREVIOUS_CLOSE stitching (open[i]=close[i-1]) для TV-like smooth candles; SSOT на диску не модифікується.
+
+> **ADR-0002 завершено**: engine_b M5 polling вимкнено (m5_polling_enabled=false), derived_tfs_s=[]. Всі TF M1→H4 через m1_poller/DeriveEngine.
+
+> **Детальний гайд по отриманню свічок**: [docs/guide_candle_acquisition.md](guide_candle_acquisition.md)
 
 ## Архітектура процесів
 
 ```text
 app.main (supervisor)
-  ├── connector             (FXCM History → UDS final → M5/derived/HTF)
+  ├── connector             (FXCM History → UDS final → D1 only; M5 polling OFF)
   ├── tick_publisher_fxcm   (ForexConnect tick stream → Redis PubSub)
   ├── tick_preview_worker   (Redis PubSub → UDS preview M1/M3)
-  ├── m1_poller             (FXCM M1 History → UDS final M1 + derive M3)
+  ├── m1_poller             (FXCM M1 History → UDS final M1 + DeriveEngine cascade M3→M5→M15→M30→H1→H4)
   └── ui                    (HTTP server, port 8089)
 ```
 
@@ -54,17 +57,18 @@ app.main (supervisor)
 │  Процеси: m1_poller (final), tick_publisher+preview_worker   │
 │  Ізоляція: НЕ впливає на M5+ pipeline                        │
 ├──────────────────────────────────────────────────────────────┤
-│  SSOT-2: M5+ (SMC аналітика)                                 │
-│  Джерело: FXCM M5 History → final, derived 15m/30m/H1        │
-│  Disk: data_v3/{sym}/tf_300..tf_3600/                        │
-│  Процес: connector (engine_b + derive)                       │
-│  Незмінний pipeline (polling engine_b)                       │
+│  SSOT-2: M5→H4 (derived від M1, SMC аналітика)               │
+│  Джерело: DeriveEngine cascade з M1 (m1_poller)              │
+│  M5=5×M1, M15=3×M5, M30=2×M15, H1=2×M30, H4=4×H1          │
+│  Disk: data_v3/{sym}/tf_300..tf_14400/                       │
+│  Процес: m1_poller + DeriveEngine                            │
+│  engine_b M5 polling OFF (ADR-0002 Phase 5)                  │
 ├──────────────────────────────────────────────────────────────┤
-│  SSOT-3: H4/D1 (глобальний тренд, структурні зони)           │
-│  Джерело: FXCM History API напряму                           │
-│  Disk: data_v3/{sym}/tf_14400/ та tf_86400/                  │
-│  Процес: connector (broker_base fetch on close)              │
-│  Незмінний pipeline (broker_base fetch)                      │
+│  SSOT-3: D1 (глобальний тренд, структурні зони)              │
+│  Джерело: FXCM History API (D1 only)                         │
+│  Disk: data_v3/{sym}/tf_86400/                               │
+│  Процес: connector (D1-only, broker_base fetch on close)     │
+│  engine_b = D1-only fetcher (m5_polling_enabled=false)        │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -169,24 +173,17 @@ flowchart LR
         U1 -->|preview curr/tail/updates| RP[(Redis preview)]
         FXCM1[(FXCM M1 History)] -->|poll 8s| M1P[M1Poller]
         M1P -->|commit_final_bar| U2[UDS writer]
-        M1P -->|derive 3×M1| M3[M3 bars]
-        M3 -->|commit_final_bar| U2
-        U2 -->|SSOT write| D1[(data_v3 tf_60/tf_180)]
-        U2 -->|Redis snap| R1[(Redis)]
+        M1P -->|DeriveEngine cascade| DE[M3→M5→M15→M30→H1→H4]
+        DE -->|commit all derived TF| U2
+        U2 -->|SSOT write| D1[(data_v3 tf_60..tf_14400)]
+        U2 -->|Redis snap + updates bus| R1[(Redis)]
         U2 -->|bridge final→preview ring| RP
     end
-    subgraph SSOT2["SSOT-2: M5+"]
-        FXCM5[(FXCM M5 History)] -->|poll 60s| P[PollingConnectorB]
+    subgraph SSOT3["D1 (broker)"]
+        FXCMH[(FXCM History)] -->|on bucket close| P[connector D1-only]
         P -->|commit_final_bar| U3[UDS writer]
-        P -->|derive 15m/30m/H1| DRV[Derived TFs]
-        DRV -->|commit_final_bar| U3
-        U3 -->|SSOT write| D5[(data_v3 tf_300..tf_3600)]
-        U3 -->|Redis snap + updates bus| R5[(Redis)]
-    end
-    subgraph SSOT3["SSOT-3: H4/D1"]
-        FXCMH[(FXCM History)] -->|on bucket close| P
-        P -->|commit_final_bar| U3
-        U3 -->|SSOT write| DH[(data_v3 tf_14400/tf_86400)]
+        U3 -->|SSOT write| DH[(data_v3 tf_86400)]
+        U3 -->|Redis snap| R5[(Redis)]
     end
     subgraph UI["UI Layer"]
         UIc[ui_chart_v3] -->|/api/bars, /api/updates| UR[UDS reader]
@@ -203,14 +200,13 @@ flowchart LR
 ```mermaid
 flowchart LR
     subgraph Broker["A: Broker (FXCM)"]
-        FX5[(History M5)]
         FX1[(History M1)]
-        FXH[(History H4/D1)]
+        FXH[(History D1)]
     end
     subgraph Writers["Writers (ingest)"]
-        EB[engine_b<br/>poll 60s]
+        EB[engine_b<br/>D1-only]
         M1P[m1_poller<br/>poll 8s]
-        DRV[derive<br/>M15/M30/H1/M3]
+        DRV[DeriveEngine<br/>M3→M5→M15→M30→H1→H4]
     end
     subgraph UDS["C: UDS (вузька талія)"]
         CFB[commit_final_bar]
@@ -225,11 +221,9 @@ flowchart LR
         UPDE[/api/updates]
     end
 
-    FX5 --> EB --> CFB
     FX1 --> M1P --> CFB
-    FXH --> EB
-    EB --> DRV --> CFB
-    M1P --> DRV
+    FXH --> EB --> CFB
+    M1P --> DRV --> CFB
 
     CFB --> WM
     WM -->|OK| DSK
@@ -403,21 +397,25 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    A[sleep 8s] --> B{calendar gate}
-    B -->|market closed| C[skip + log]
-    C --> A
-    B -->|market open| D{caught up?}
+    A[sleep 8s] --> B[calendar state log]
+    B --> C[expected = last trading M1]
+    C --> D{caught up?}
     D -->|watermark >= expected| E[skip]
     E --> A
     D -->|gap| F[adaptive fetch_n = gap+1]
-    F --> G[FXCM get_history M1]
-    G --> H[ingest: dedup + flat filter]
-    H --> I[commit_final_bar M1 via UDS]
-    I --> J[M1Buffer → derive M3]
-    J --> K[commit_final_bar M3 via UDS]
-    K --> L[bridge final→preview ring]
-    L --> A
+    F --> G[FXCM get_history M1<br/>date_to=expected+1M1]
+    G --> H[watermark pre-filter<br/>+ cutoff filter + sort]
+    H --> I[ingest: flat filter + calendar classify]
+    I --> J[commit_final_bar M1 via UDS]
+    J --> K[M1Buffer → derive M3]
+    K --> L[commit_final_bar M3 via UDS]
+    L --> M[bridge final→preview ring]
+    M --> N[live_recover_check]
+    N --> O[stale_check]
+    O --> A
 ```
+
+> **Важливо**: M1 Poller **НЕ має calendar gate** (blocking `if not market_open: return`). Це гарантує що останній бар перед daily break завжди фетчиться. Calendar-aware expected + caught-up check запобігають зайвим fetch під час break/weekend.
 
 ### M1 Poller warmup (startup)
 
@@ -520,12 +518,40 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    Engine[engine_b.py] --> Dedup[dedup.py]
-    Engine --> Derive[derive.py]
-    Engine --> Flat[flat_filter.py]
+    Engine[engine_b.py D1-only] --> Dedup[dedup.py]
     Engine --> Fetch[fetch_policy.py]
-    Engine --> Buckets[time_buckets.py]
+    Engine --> CoreBuckets[core/buckets.py]
+    CoreDerive[core/derive.py] --> CoreBuckets
+    CoreDerive --> CoreBars[core/model/bars.py]
+    DeriveEng[derive_engine.py] --> CoreDerive
+    DeriveEng --> UDS[uds.py]
+    M1Poller[m1_poller.py] --> DeriveEng
+    M1Poller --> UDS
 ```
+
+### Cascade Derive Chain (core/derive.py, ADR-0002 Phase 1)
+
+```mermaid
+flowchart TD
+    M1[M1 60s] -->|3×| M3[M3 180s]
+    M1 -->|5×| M5[M5 300s]
+    M5 -->|3×| M15[M15 900s]
+    M15 -->|2×| M30[M30 1800s]
+    M30 -->|2×| H1[H1 3600s]
+    H1 -->|4×| H4[H4 14400s TV anchor]
+    Broker -->|D1 broker| D1[D1 86400s]
+```
+
+**DERIVE_CHAIN** — декларативний strict cascade (кожен TF від попереднього, не плоска деривація).
+`GenericBuffer(tf_s)` — параметричний буфер (замінює M1Buffer + M5Buffer).
+`aggregate_bars()` — чиста агрегація. `derive_bar()` + `derive_triggers()` — bucket-орієнтована деривація.
+
+### DeriveEngine (runtime/ingest/derive_engine.py, ADR-0002 Phase 2)
+
+I/O обгортка над core/derive.py. Каскад: `on_bar(M1)` → buffer → triggers → derive → UDS commit → recurse.
+`commit_tfs_s` = `set(DERIVE_ORDER)` — всі 6 derived TFs (M3,M5,M15,M30,H1,H4).
+`register_symbol_uds()` — shared UDS з m1_poller (без file race).
+Per-symbol `threading.Lock` для cascade integrity.
 
 ## Annotated tree (ASCII, актуальний)
 
@@ -540,6 +566,7 @@ v3/
 ├── core/                          # pure-логіка (час, контракти, моделі) — без I/O
 │   ├── config_loader.py           # SSOT: pick_config_path / load_system_config
 │   ├── buckets.py                 # bucket_start_ms / resolve_anchor_offset_ms
+│   ├── derive.py                  # DERIVE_CHAIN + GenericBuffer + aggregate_bars (cascade pure logic)
 │   ├── time_geom.py               # helper-и геометрії часу (канон API/SSOT = end-excl)
 │   ├── model/
 │   │   └── bars.py                # CandleBar + інваріанти часу
@@ -555,19 +582,18 @@ v3/
 │   │   ├── broker/
 │   │   │   └── fxcm/
 │   │   │       └── provider.py    # FxcmHistoryProvider (FXCM History API, PREVIOUS_CLOSE mode)
+│   │   ├── derive_engine.py       # DeriveEngine (cascade I/O: on_bar→buffer→derive→UDS commit, per-symbol lock, ADR-0002 Phase 2)
 │   │   ├── market_calendar.py     # MarketCalendar (single-break groups, UTC)
 │   │   ├── tick_agg.py            # TickAggregator (preview-plane, tf=60/180)
 │   │   ├── tick_common.py         # спільні утиліти для tick pipeline
 │   │   ├── tick_preview_worker.py # TickPreviewWorker (tick→preview, schema guard, 0-ticks loud)
 │   │   ├── tick_publisher_fxcm.py # FXCM tick publisher (ForexConnect offers→Redis PubSub, BID mode)
 │   │   └── polling/
-│   │       ├── engine_b.py        # PollingConnectorB (M5 оркестрація + HTF fetch)
-│   │       ├── m1_poller.py       # M1Poller (FXCM M1→final, derive M3, calendar gate, watermark, warmup)
+│   │       ├── engine_b.py        # PollingConnectorB (D1-only fetcher, ADR-0002 cleanup done)
+│   │       ├── m1_poller.py       # M1Poller (FXCM M1→final, cascade via DeriveEngine M1→M3→…→H4, calendar-aware, watermark, tail_catchup, live_recover, stale)
 │   │       ├── dedup.py           # індекси дня, has/mark on-disk
-│   │       ├── derive.py          # M5Buffer + derive_from_m5 / M1Buffer + derive M3
-│   │       ├── flat_filter.py     # фільтр плоских барів
 │   │       ├── fetch_policy.py    # політики часу для fetch
-│   │       └── time_buckets.py    # floor_bucket_start_ms
+│   │       └── README.md          # повний посібник: polling + derive architecture
 │   ├── store/
 │   │   ├── uds.py                 # UnifiedDataStore (read/write, updates bus, disk_policy rails, short-window loud rail)
 │   │   ├── redis_snapshot.py      # Redis snapshots writer
@@ -625,9 +651,8 @@ v3/
 
 ### Ingest (дві ізольовані data planes)
 
-- **M1/M3 (SSOT-1)**: M1 poller з FXCM History API (8s cycle, calendar gate, watermark, adaptive fetch). M3 derived з 3×M1. Preview-plane: tick stream → preview bars в Redis. Final bridge → preview ring (final>preview). BID price mode.
-- **M5+ (SSOT-2)**: engine_b polling (60s cycle). Derived 15m/30m/H1 з M5 при повному M5-діапазоні.
-- **H4/D1 (SSOT-3)**: broker_base fetch на закритті бакета.
+- **M1→H4 (основний потік)**: M1 poller з FXCM History API (8s cycle, calendar-aware expected, watermark pre-filter, adaptive fetch, date_to bound). Tail catchup на bootstrap (до 5000 барів). Live recover (gap auto-fill з cooldown+budget). Stale detection (720s). DeriveEngine cascade: M3(3×M1)→M5(5×M1)→M15(3×M5)→M30(2×M15)→H1(2×M30)→H4(4×H1). Calendar-pause фільтрація. Preview-plane: tick stream → preview bars в Redis. Final bridge → preview ring (final>preview). BID price mode.
+- **D1 (broker)**: engine_b D1-only fetcher (m5_polling_enabled=false). broker_base fetch на закритті D1 бакета + cold start.
 
 ### UDS (UnifiedDataStore)
 
@@ -651,15 +676,17 @@ v3/
 
 ### Календар
 
-- Групи символів з однією daily break парою (UTC).
-- Calendar gate у M1 poller і connector.
+- Групи символів з daily break(s) (UTC): одна або кілька пар.
+- Calendar-aware expected у M1 poller (без blocking gate).
+- Calendar-aware cutoff у connector (через fetch_policy.py).
+- Підтримка wrap через північ (start > end, напр. cfd_hk_main 19:00→01:15).
 
 ## Ланцюжки дій
 
 ### 1) Старт системи (--mode all)
 
 1. Supervisor запускає connector, tick_publisher, tick_preview_worker, m1_poller.
-2. **Connector**: bootstrap M5 з диску → warmup з FXCM History → Redis prime → UI ready (prime_ready).
+2. **Connector (D1-only)**: bootstrap D1 з диску → cold start D1 від broker → Redis prime → periodic D1 fetch on close.
 3. **M1 Poller**: bootstrap Redis priming (M1+M3 з диску) → M1Buffer warmup → FXCM connect → polling.
 4. **UI**: чекає prime_ready → стартує HTTP сервер.
 
@@ -672,10 +699,13 @@ v3/
 
 ### 3) Live цикл M1/M3 (m1_poller)
 
-1. Кожні 8с: calendar gate → watermark check → adaptive fetch.
-2. FXCM get_history(M1) → dedup + flat_filter → commit_final_bar.
-3. M1Buffer → derive M3 → commit_final_bar.
-4. Bridge: final M1/M3 → preview ring (final>preview).
+1. Кожні 8с: calendar state log → calendar-aware expected → caught-up check → adaptive fetch.
+2. FXCM get_history(M1, date_to=expected+1M1) → watermark pre-filter + cutoff filter + sort.
+3. Calendar-aware ingest: flat bar classification → commit_final_bar.
+4. M1Buffer → derive M3 (з calendar-pause фільтрацією) → commit_final_bar.
+5. Bridge: final M1/M3 → preview ring (final>preview).
+6. Live recover check (gap > 3 → auto-fill з cooldown+budget).
+7. Stale detection (12 хв без нового бару при відкритому ринку → loud WARNING).
 
 ### 4) Tick preview (tick_publisher + tick_preview_worker)
 

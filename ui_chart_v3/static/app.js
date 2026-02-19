@@ -1558,7 +1558,7 @@ async function loadBarsFull() {
   setStatus('load…');
   diag.lastError = '';
   let url = `/api/bars?symbol=${encodeURIComponent(symbol)}&tf_s=${tf}&limit=${limit}`;
-  if (Number(tf) === 14400) url += '&align=tv';
+  // ADR-0002 Phase 3: H4 = first-class UDS TF, align=tv більше не потрібен
   url += `&epoch=${epoch}`;
   let data = null;
   try {

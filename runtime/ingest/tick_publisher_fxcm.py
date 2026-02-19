@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 from env_profile import load_env_secrets
@@ -47,9 +45,6 @@ def _setup_logging(verbose: bool = False) -> None:
         level=level,
         format="%(asctime)s | %(levelname)s | %(message)s",
     )
-
-
-
 
 
 def _parse_stream_cfg(cfg: dict[str, Any]) -> TickStreamConfig:
