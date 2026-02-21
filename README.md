@@ -59,6 +59,7 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 | [docs/audit/progress.md](docs/audit/progress.md) | Аудит прогресу P0-P6 з evidence |
 | [docs/ADR-0001 UnifiedDataStore.md](docs/ADR-0001%20UnifiedDataStore.md) | ADR: UDS як єдина талія |
 | [docs/ADR-0002-derive-chain-from-m1.md](docs/ADR-0002-derive-chain-from-m1.md) | ADR: DeriveChain M1→M3→M5→H4 (Phase 0 завершено) |
+| [docs/ADR-0003 Cold Start Hardening.md](docs/ADR-0003%20Cold%20Start%20Hardening.md) | ADR: Cold start hardening (S1 error isolation ✅, S2 supervisor restart ✅, S3-S4 pending) |
 
 ┌─────────────────────────────────────────────────────────────┐
 │  LAYER 1: POLLING (simple, focused, single-responsibility)  │

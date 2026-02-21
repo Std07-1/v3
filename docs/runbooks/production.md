@@ -67,6 +67,26 @@ python -m app.main --mode all --stdio pipe
 
 > **Важливо**: у `--mode all` supervisor стартує всі 5 процесів і чекає `prime_ready` перед запуском UI. У ручному режимі переконайтесь, що connector встиг завершити bootstrap (prime Redis) **до** старту UI.
 
+### Supervisor restart policy (ADR-0003 S2)
+
+Supervisor автоматично перезапускає crashed процеси з exponential backoff:
+
+| Категорія | Процеси | Backoff | Max спроб | Вичерпання |
+|-----------|---------|---------|:---------:|------------|
+| **critical** | connector, m1_poller | 10s→20s→40s→80s→160s | 5 | **supervisor fail** (kills all) |
+| **non_critical** | tick_publisher, tick_preview | 5s→10s→20s→…→120s | 10 | видалено з пулу |
+| **essential** | ui | 5s→10s→20s→…→120s | 10 | видалено з пулу |
+
+- Restart counter скидається після **10 хвилин** стабільної роботи.
+- Non-blocking: інші процеси моніторяться без затримки під час backoff delay.
+- Bootstrap error → degraded mode, NOT crash (ADR-0003 S1).
+
+**Діагностика** restart-loop:
+```bash
+# Шукати в логах
+grep -i "SUPERVISOR_RESTART\|SUPERVISOR_EXHAUSTED\|SUPERVISOR_CRITICAL" logs/*.log
+```
+
 ### Derived rebuild (одноразово після cold start)
 
 ```bash
@@ -170,14 +190,33 @@ server {
 1. Перевірити процеси: `ps aux | grep python`
 2. Перевірити /api/status: `curl http://127.0.0.1:8089/api/status`
 3. Перевірити логи: `logs/ui.err.log`, `logs/connector.err.log`
+4. Перевірити restart-loop: `grep SUPERVISOR_RESTART logs/*.log`
 
 **Типові причини**:
 
 - UI не стартував (connector ще bootstrapping → `prime_ready=false`)
 - Порт зайнятий іншим процесом
 - Python crash (check exit code)
+- UI видалено з пулу після 10 restart-спроб (SUPERVISOR_EXHAUSTED)
 
 **Рішення**: Перезапустити `python -m app.main --mode all`.
+
+---
+
+### Процес crash-loop (нове з ADR-0003 S2)
+
+**Симптоми**: в логах `SUPERVISOR_RESTART label=tick_publisher ...` з наростаючим delay.
+
+**Діагностика**:
+
+1. `grep SUPERVISOR_RESTART logs/*.log` — побачити який процес і скільки спроб.
+2. Перевірити лог відповідного процесу: `logs/<label>.err.log`.
+3. Якщо `SUPERVISOR_CRITICAL_EXHAUSTED` — supervisor зупинив все.
+
+**Рішення**:
+
+- Якщо non_critical (tick_publisher/tick_preview): перевірити FXCM WS/Redis підключення, перезапустити supervisor.
+- Якщо critical (connector/m1_poller): виправити root cause (corrupt JSONL, FXCM down, Redis down), потім перезапустити.
 
 ---
 

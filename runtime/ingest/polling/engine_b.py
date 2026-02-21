@@ -301,22 +301,67 @@ class PollingConnectorB:
 
     def bootstrap_and_warmup(self, log_detail: bool = False) -> Dict[str, Any]:
         summary: Dict[str, Any] = {"symbol": self._symbol}
-        summary.update(self._bootstrap_from_disk(log_detail=log_detail))
-        prime_summary = self._prime_redis_from_disk(log_detail=log_detail)
-        summary.update(prime_summary)
-        if self._prime_ready_mode == "auto":
-            payload = _prime_ready_payload(
-                boot_id=self._boot_id,
-                symbols=[self._symbol],
-                summaries=[summary],
-                tfs=self.redis_priming_tfs(),
+        bootstrap_degraded: list = []
+
+        # Phase 1: завантаження watermark/last_saved з диску
+        try:
+            summary.update(self._bootstrap_from_disk(log_detail=log_detail))
+        except Exception as exc:
+            logging.warning(
+                "BOOTSTRAP_DEGRADED phase=disk_bootstrap symbol=%s err=%s",
+                self._symbol, exc,
             )
-            self.set_prime_ready(payload, PRIME_READY_TTL_S)
-        summary.update(self._cold_start_base_from_broker(log_detail=log_detail))
-        logging.info(
-            "D1-only fetcher bootstrap завершено (symbol=%s)",
-            self._symbol,
-        )
+            bootstrap_degraded.append("disk_bootstrap: %s" % exc)
+
+        # Phase 2: Redis priming з диску
+        try:
+            prime_summary = self._prime_redis_from_disk(log_detail=log_detail)
+            summary.update(prime_summary)
+        except Exception as exc:
+            logging.warning(
+                "BOOTSTRAP_DEGRADED phase=redis_priming symbol=%s err=%s",
+                self._symbol, exc,
+            )
+            bootstrap_degraded.append("redis_priming: %s" % exc)
+
+        # Phase 3: prime_ready сигнал для supervisor gate
+        try:
+            if self._prime_ready_mode == "auto":
+                payload = _prime_ready_payload(
+                    boot_id=self._boot_id,
+                    symbols=[self._symbol],
+                    summaries=[summary],
+                    tfs=self.redis_priming_tfs(),
+                )
+                self.set_prime_ready(payload, PRIME_READY_TTL_S)
+        except Exception as exc:
+            logging.warning(
+                "BOOTSTRAP_DEGRADED phase=prime_ready symbol=%s err=%s",
+                self._symbol, exc,
+            )
+            bootstrap_degraded.append("prime_ready: %s" % exc)
+
+        # Phase 4: D1 cold-start з брокера
+        try:
+            summary.update(self._cold_start_base_from_broker(log_detail=log_detail))
+        except Exception as exc:
+            logging.warning(
+                "BOOTSTRAP_DEGRADED phase=broker_cold_start symbol=%s err=%s",
+                self._symbol, exc,
+            )
+            bootstrap_degraded.append("broker_cold_start: %s" % exc)
+
+        summary["bootstrap_degraded"] = bootstrap_degraded
+        if bootstrap_degraded:
+            logging.warning(
+                "BOOTSTRAP_FINISHED_DEGRADED symbol=%s degraded=%s",
+                self._symbol, bootstrap_degraded,
+            )
+        else:
+            logging.info(
+                "D1-only fetcher bootstrap завершено (symbol=%s)",
+                self._symbol,
+            )
         return summary
 
     def _prime_redis_from_disk(self, log_detail: bool = False) -> Dict[str, Any]:

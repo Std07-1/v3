@@ -10,7 +10,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, TextIO
+from typing import Dict, List, Optional, TextIO
 
 from env_profile import load_env_secrets
 from core.config_loader import pick_config_path
@@ -51,13 +51,35 @@ def _parse_args() -> argparse.Namespace:
     return ap.parse_args()
 
 
-@dataclass(frozen=True)
+@dataclass
 class ChildProcess:
     label: str
+    module: str
     proc: subprocess.Popen
     stdout_handle: Optional[TextIO] = None
     stderr_handle: Optional[TextIO] = None
 
+
+# ---------------------------------------------------------------------------
+# S2 (ADR-0003): категорії процесів + restart backoff
+# ---------------------------------------------------------------------------
+_PROCESS_CATEGORIES: Dict[str, str] = {
+    "connector": "critical",
+    "m1_poller": "critical",
+    "tick_publisher": "non_critical",
+    "tick_preview": "non_critical",
+    "ui": "essential",
+}
+# (base_delay_s, max_delay_s, max_restart_attempts)
+_BACKOFF_CFG: Dict[str, tuple] = {
+    "critical":     (10, 300, 5),
+    "non_critical": (5, 120, 10),
+    "essential":    (5, 120, 10),
+}
+_STABLE_RESET_S = 600  # restart counter reset після 10 хв стабільної роботи
+
+_restart_state: Dict[str, Dict] = {}      # label → {count, start}
+_restart_schedule: Dict[str, Dict] = {}   # label → {module, restart_at, attempt}
 
 _PRINT_LOCK = threading.Lock()
 
@@ -121,7 +143,7 @@ def _start_process(
     if stdio == "inherit":
         proc = subprocess.Popen(cmd, **popen_kwargs)
         logging.info("Старт процесу %s pid=%s stdio=inherit", label, proc.pid)
-        return ChildProcess(label=label, proc=proc)
+        return ChildProcess(label=label, module=module, proc=proc)
 
     if stdio == "null":
         proc = subprocess.Popen(
@@ -131,7 +153,7 @@ def _start_process(
             **popen_kwargs,
         )
         logging.info("Старт процесу %s pid=%s stdio=null", label, proc.pid)
-        return ChildProcess(label=label, proc=proc)
+        return ChildProcess(label=label, module=module, proc=proc)
 
     if stdio == "files":
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -155,7 +177,7 @@ def _start_process(
             proc.pid,
             log_dir,
         )
-        return ChildProcess(label=label, proc=proc, stdout_handle=out_f, stderr_handle=err_f)
+        return ChildProcess(label=label, module=module, proc=proc, stdout_handle=out_f, stderr_handle=err_f)
 
     if stdio == "pipe":
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_kwargs)
@@ -163,7 +185,7 @@ def _start_process(
         threading.Thread(target=_pump, args=(proc.stdout, f"[{label}] "), daemon=True).start()
         threading.Thread(target=_pump, args=(proc.stderr, f"[{label}:err] "), daemon=True).start()
         logging.info("Старт процесу %s pid=%s stdio=pipe", label, proc.pid)
-        return ChildProcess(label=label, proc=proc)
+        return ChildProcess(label=label, module=module, proc=proc)
 
     raise ValueError(f"Невідомий stdio режим: {stdio}")
 
@@ -216,18 +238,17 @@ def _wait_for_prime_ready(config_path: str, timeout_s: int = 20) -> bool:
 
 def _terminate(item: ChildProcess, timeout_s: int = 5) -> None:
     proc = item.proc
-    if proc.poll() is not None:
-        return
-    logging.info("Зупиняю процес %s pid=%s", item.label, proc.pid)
-    try:
-        proc.terminate()
-        proc.wait(timeout=timeout_s)
-    except Exception:
+    if proc.poll() is None:
+        logging.info("Зупиняю процес %s pid=%s", item.label, proc.pid)
         try:
-            proc.kill()
+            proc.terminate()
+            proc.wait(timeout=timeout_s)
         except Exception:
-            pass
-
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    # Завжди закриваємо file handles (навіть якщо процес вже завершився)
     for handle in (item.stdout_handle, item.stderr_handle):
         if handle is None:
             continue
@@ -319,35 +340,97 @@ def main() -> int:
             logging.error("Supervisor: немає процесів для запуску (mode=%s)", args.mode)
             return 2
 
+        # S2: ініціалізація restart state
+        for _p in processes:
+            _restart_state[_p.label] = {"count": 0, "start": time.time()}
+
         while True:
+            now = time.time()
+
+            # Phase 1: виконати заплановані рестарти
+            for label in list(_restart_schedule):
+                sched = _restart_schedule[label]
+                if now < sched["restart_at"]:
+                    continue
+                del _restart_schedule[label]
+                new_item = _start_process(
+                    label=label,
+                    module=sched["module"],
+                    stdio=stdio,
+                    log_dir=log_dir,
+                    new_console=args.new_console,
+                )
+                processes.append(new_item)
+                _restart_state[label]["start"] = now
+                logging.info(
+                    "SUPERVISOR_RESTARTED label=%s attempt=%d",
+                    label, sched["attempt"],
+                )
+
+            # Phase 2: перевірити статус процесів
             for item in list(processes):
                 code = item.proc.poll()
-                if code is not None:
-                    # treat clean exit (code == 0) as normal — stop monitoring that process
-                    if code == 0:
-                        logging.info(
-                            "Процес %s завершився нормально (код=%s), видаляю з моніторингу",
-                            item.label,
-                            code,
+                if code is None:
+                    continue
+
+                # clean exit (code == 0) — видалити з пулу
+                if code == 0:
+                    logging.info(
+                        "Процес %s завершився нормально (код=%s)",
+                        item.label, code,
+                    )
+                    processes.remove(item)
+                    _terminate(item)
+                    continue
+
+                # non-zero exit — restart з backoff (S2)
+                processes.remove(item)
+                _terminate(item)
+
+                cat = _PROCESS_CATEGORIES.get(item.label, "non_critical")
+                base_s, max_s, max_attempts = _BACKOFF_CFG[cat]
+                st = _restart_state.setdefault(
+                    item.label, {"count": 0, "start": 0.0},
+                )
+                # reset counter якщо процес працював стабільно >= 10 хв
+                if st["start"] > 0 and (now - st["start"]) >= _STABLE_RESET_S:
+                    st["count"] = 0
+                st["count"] += 1
+
+                if st["count"] > max_attempts:
+                    if cat == "critical":
+                        logging.error(
+                            "SUPERVISOR_CRITICAL_EXHAUSTED label=%s "
+                            "attempts=%d — зупинка всіх процесів",
+                            item.label, st["count"],
                         )
-                        processes.remove(item)
-                        # закрити file handles якщо вони були відкриті
-                        for handle in (item.stdout_handle, item.stderr_handle):
-                            if handle is None:
-                                continue
-                            try:
-                                handle.close()
-                            except Exception:
-                                pass
-                        continue
+                        raise RuntimeError(
+                            f"critical_exhausted:{item.label}"
+                        )
+                    logging.error(
+                        "SUPERVISOR_EXHAUSTED label=%s attempts=%d "
+                        "— видалено з пулу",
+                        item.label, st["count"],
+                    )
+                    continue
 
-                    # any non-zero exit is an error for the supervisor
-                    logging.error("Процес %s завершився з помилкою код=%s", item.label, code)
-                    raise RuntimeError(f"process_exited:{item.label}")
+                delay = min(base_s * (2 ** (st["count"] - 1)), max_s)
+                logging.warning(
+                    "SUPERVISOR_RESTART label=%s code=%d "
+                    "attempt=%d/%d delay=%.0fs cat=%s",
+                    item.label, code, st["count"],
+                    max_attempts, delay, cat,
+                )
+                _restart_schedule[item.label] = {
+                    "module": item.module,
+                    "restart_at": now + delay,
+                    "attempt": st["count"],
+                }
 
-            # якщо всі дочірні процеси завершилися нормально — вийти успішно
-            if not processes:
-                logging.info("Усі дочірні процеси завершилися; supervisor завершується")
+            if not processes and not _restart_schedule:
+                logging.info(
+                    "Supervisor: усі процеси завершились"
+                )
                 return 0
 
             time.sleep(1)

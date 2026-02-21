@@ -257,6 +257,22 @@ class DeriveEngine:
                 filter_calendar_pause=True,
             )
             if derived is None:
+                # DIAG: лог чому derive_bar повернув None
+                if target_tf_s in (300, 900, 1800, 3600, 14400):
+                    src_tf_s = source_info[0]
+                    tgt_ms = target_tf_s * 1000
+                    b_end = bucket_open_ms + tgt_ms
+                    miss = source_buf.missing_count(
+                        bucket_open_ms, b_end, is_trading_fn=is_trading_fn
+                    )
+                    buf_len = len(source_buf)
+                    log.warning(
+                        "DERIVE_SKIP tf=%d sym=%s bucket_open=%d "
+                        "missing=%d buf_size=%d src_tf=%d cal=%s",
+                        target_tf_s, symbol, bucket_open_ms,
+                        miss, buf_len, src_tf_s,
+                        "yes" if is_trading_fn else "no",
+                    )
                 continue
 
             self._stats_derived[target_tf_s] = (

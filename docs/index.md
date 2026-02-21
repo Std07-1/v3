@@ -16,6 +16,7 @@
 | [system_current_overview.md](system_current_overview.md) | Поточна архітектура, процеси, SSOT-площини, Mermaid-схеми, annotated tree |
 | [ADR-0001 UnifiedDataStore.md](ADR-0001%20UnifiedDataStore.md) | Архітектурне рішення: UDS (RAM↔Redis↔Disk) + Contract-first API |
 | [ADR-0002-derive-chain-from-m1.md](ADR-0002-derive-chain-from-m1.md) | DeriveChain: M1→M3→M5→M15→M30→H1→H4 (4 phases) |
+| [ADR-0003 Cold Start Hardening.md](ADR-0003%20Cold%20Start%20Hardening.md) | Cold start: error isolation, process restart, unified gate |
 
 ### 2. Потоки даних
 

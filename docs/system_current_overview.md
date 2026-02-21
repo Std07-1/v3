@@ -1,6 +1,6 @@
 # Поточна система — Архітектурний огляд (SSOT)
 
-> **Останнє оновлення**: 2026-02-18  
+> **Останнє оновлення**: 2026-02-19  
 > **Навігація**: [docs/index.md](index.md)
 
 Цей файл — SSOT-опис поточної архітектури системи. Див. [docs/index.md](index.md) для навігації по всій документації.
@@ -469,15 +469,23 @@ flowchart TD
     F --> A
 ```
 
-### Supervisor (app/main.py --mode all)
+### Supervisor (app/main.py --mode all) — ADR-0003 S2
 
 ```mermaid
 flowchart TD
-    A[app/main.py] -->|spawn| B[connector]
-    A -->|spawn| C[tick_publisher_fxcm]
-    A -->|spawn| D[tick_preview_worker]
-    A -->|spawn| E[m1_poller]
-    A -->|wait prime_ready| F[ui_chart_v3]
+    A[app/main.py] -->|spawn| B[connector 🔴 critical]
+    A -->|spawn| C[tick_publisher 🟡 non_critical]
+    A -->|spawn| D[tick_preview 🟡 non_critical]
+    A -->|spawn| E[m1_poller 🔴 critical]
+    A -->|wait prime_ready| F[ui 🟢 essential]
+    B -->|crash| R{restart policy}
+    C -->|crash| R
+    D -->|crash| R
+    E -->|crash| R
+    F -->|crash| R
+    R -->|backoff delay| A
+    R -->|exhausted critical| X[FAIL ALL loud]
+    R -->|exhausted non_critical| Y[remove from pool]
     A --> G{stdio}
     G -->|pipe| H[stdout/stderr -> prefix pump]
     G -->|files| I[logs/role.out.log + .err.log]
@@ -668,11 +676,32 @@ v3/
 - Scrollback: cover-until-satisfied (trigger ~2000, chunk 5000).
 - Epoch guard: абортує in-flight запити при switch symbol/TF.
 
-### Supervisor
+### Supervisor (ADR-0003 S2: process isolation)
 
 - `python -m app.main --mode all` запускає 5 процесів.
 - stdio: pipe/files/inherit/null + prefix pump.
-- Monitor: non-zero exit → supervisor error; clean exit=0 → remove from watch.
+
+**Категорії процесів**:
+
+| Категорія | Процеси | Backoff | Max attempts | При вичерпанні |
+|-----------|---------|---------|:---:|---|
+| **critical** | connector, m1_poller | base=10s, max=300s | 5 | supervisor fail (kill-all, loud) |
+| **non_critical** | tick_publisher, tick_preview | base=5s, max=120s | 10 | видаляється з пулу, інші працюють |
+| **essential** | ui | base=5s, max=120s | 10 | видаляється з пулу, інші працюють |
+
+**Restart policy** (S2):
+- Non-zero exit → restart з exponential backoff (delay = base × 2^(attempt-1), capped at max).
+- Clean exit (code=0) → видалити з моніторингу.
+- Restart counter reset після 10 хвилин стабільної роботи.
+- Non-blocking: restart планується з delay і виконується на наступній ітерації loop; інші процеси моніторяться без затримки.
+- Critical exhaustion (5 crashes за <10 хв) → supervisor зупиняє **все** (loud error).
+- Non-critical exhaustion → видалено з пулу, решта продовжують.
+
+**Backoff прогресія**:
+```
+critical:     10s → 20s → 40s → 80s → 160s (5 спроб)
+non_critical:  5s → 10s → 20s → 40s → 80s → 120s → 120s → 120s → 120s → 120s (10 спроб)
+```
 
 ### Календар
 
@@ -689,6 +718,7 @@ v3/
 2. **Connector (D1-only)**: bootstrap D1 з диску → cold start D1 від broker → Redis prime → periodic D1 fetch on close.
 3. **M1 Poller**: bootstrap Redis priming (M1+M3 з диску) → M1Buffer warmup → FXCM connect → polling.
 4. **UI**: чекає prime_ready → стартує HTTP сервер.
+5. **Supervisor loop**: моніторить процеси; crash → auto-restart з backoff (S2, ADR-0003); bootstrap error → degraded mode, NOT crash (S1, ADR-0003).
 
 ### 2) Live цикл M5 (connector, engine_b)
 

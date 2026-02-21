@@ -12,9 +12,12 @@ SSOT-3: H4 (derived через DeriveEngine).
 """
 from __future__ import annotations
 
+import ctypes
 import logging
+import os
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.config_loader import pick_config_path, load_system_config
@@ -843,55 +846,105 @@ class M1PollerRunner:
     # -- Bootstrap / warmup ---------------
 
     def _bootstrap_warmup(self) -> None:
-        """Redis priming з диску + M1Buffer warmup для M3 деривації."""
+        """Redis priming з диску (M1→H4) + M1Buffer warmup для M3 деривації."""
         symbols = [p._symbol for p in self._pollers]  # noqa: SLF001
-        # 1. Redis priming для M1/M3
-        primed_total = 0
-        for sym in symbols:
-            for tf_s, tail_n in sorted(self._redis_tail_n.items()):
-                if tail_n <= 0:
-                    continue
-                count = self._uds.bootstrap_prime_from_disk(sym, tf_s, tail_n)
-                primed_total += count
-        logging.info(
-            "M1_POLLER_REDIS_PRIME symbols=%d primed_bars=%d tfs=%s",
-            len(symbols), primed_total,
-            ",".join(str(t) for t in sorted(self._redis_tail_n)),
-        )
+        bootstrap_degraded = []
+
+        # 1. Redis priming для M1→H4 (всі TF, якими керує m1_poller)
+        #    Критично: заповнює self._tails у redis_snapshot, без чого
+        #    put_bar() створює порожні deque і перезаписує Redis tail.
+        try:
+            primed_total = 0
+            for sym in symbols:
+                for tf_s, tail_n in sorted(self._redis_tail_n.items()):
+                    if tail_n <= 0:
+                        continue
+                    count = self._uds.bootstrap_prime_from_disk(sym, tf_s, tail_n)
+                    primed_total += count
+            logging.info(
+                "M1_POLLER_REDIS_PRIME symbols=%d primed_bars=%d tfs=%s",
+                len(symbols), primed_total,
+                ",".join(str(t) for t in sorted(self._redis_tail_n)),
+            )
+        except Exception as exc:
+            logging.warning(
+                "BOOTSTRAP_DEGRADED phase=redis_priming err=%s", exc,
+            )
+            bootstrap_degraded.append("redis_priming: %s" % exc)
 
         # 2. M1Buffer warmup — останні 10 M1 з диску для M3 деривації
-        warmup_total = 0
-        for p in self._pollers:
-            loaded = p.warmup_m1_buffer(tail_n=10)
-            warmup_total += loaded
-        logging.info(
-            "M1_POLLER_WARMUP symbols=%d m1_buffer_loaded=%d",
-            len(self._pollers), warmup_total,
-        )
+        try:
+            warmup_total = 0
+            for p in self._pollers:
+                loaded = p.warmup_m1_buffer(tail_n=10)
+                warmup_total += loaded
+            logging.info(
+                "M1_POLLER_WARMUP symbols=%d m1_buffer_loaded=%d",
+                len(self._pollers), warmup_total,
+            )
+        except Exception as exc:
+            logging.warning(
+                "BOOTSTRAP_DEGRADED phase=m1_buffer_warmup err=%s", exc,
+            )
+            bootstrap_degraded.append("m1_buffer_warmup: %s" % exc)
 
         # 2b. DeriveEngine buffer warmup (ADR-0002 P2.3)
-        #     Заповнюємо GenericBuffer M1 даними з диску для cascade
+        #     Заповнюємо GenericBuffer: M1 + проміжні TF (M5/M15/M30/H1) з диску.
+        #     Без проміжних TF cascade M5→H4 не працює до ~4h після рестарту
+        #     (cold-start warmup defect, виявлено 2026-02-19).
         if self._derive_engine is not None:
-            engine_warmup = 0
-            for p in self._pollers:
-                sym = p._symbol  # noqa: SLF001
-                try:
-                    bars = self._uds.read_tail_candles(sym, 60, 300)
-                    if bars:
-                        engine_warmup += self._derive_engine.warmup_bars(list(bars))
-                except Exception as exc:
-                    logging.warning(
-                        "DERIVE_ENGINE_WARMUP_ERR symbol=%s err=%s", sym, exc,
-                    )
-            logging.info(
-                "DERIVE_ENGINE_WARMUP symbols=%d bars=%d",
-                len(self._pollers), engine_warmup,
-            )
+            try:
+                engine_warmup = 0
+                # TFs для warmup: (tf_s, tail_bars_to_read)
+                # M1: 300 барів (~5h) — основа каскаду
+                # M5-H1: достатньо для заповнення буферів derive-ланцюга
+                _WARMUP_TFS = [
+                    (60,   300),   # M1:  основа каскаду (~5h)
+                    (300,   20),   # M5:  ~1.7h, покриває ~6 M15 вікон
+                    (900,   10),   # M15: ~2.5h, покриває ~5 M30 вікон
+                    (1800,  10),   # M30: ~5h,   покриває ~5 H1 вікон
+                    (3600,  10),   # H1:  ~10h,  покриває ~2.5 H4 вікон
+                ]
+                for p in self._pollers:
+                    sym = p._symbol  # noqa: SLF001
+                    all_bars = []
+                    for tf_s, tail_n in _WARMUP_TFS:
+                        try:
+                            bars = self._uds.read_tail_candles(sym, tf_s, tail_n)
+                            if bars:
+                                all_bars.extend(bars)
+                        except Exception as exc:
+                            logging.warning(
+                                "DERIVE_ENGINE_WARMUP_ERR symbol=%s tf=%d err=%s",
+                                sym, tf_s, exc,
+                            )
+                    if all_bars:
+                        engine_warmup += self._derive_engine.warmup_bars(all_bars)
+                logging.info(
+                    "DERIVE_ENGINE_WARMUP symbols=%d bars=%d",
+                    len(self._pollers), engine_warmup,
+                )
+            except Exception as exc:
+                logging.warning(
+                    "BOOTSTRAP_DEGRADED phase=derive_engine_warmup err=%s", exc,
+                )
+                bootstrap_degraded.append("derive_engine_warmup: %s" % exc)
 
         # 3. Tail catchup — заповнення від watermark до expected_now
         #    Інваріант P0.1 (ADR-0002): ПЕРЕД main loop.
         if self._tail_catchup_enabled:
-            self._do_tail_catchup()
+            try:
+                self._do_tail_catchup()
+            except Exception as exc:
+                logging.warning(
+                    "BOOTSTRAP_DEGRADED phase=tail_catchup err=%s", exc,
+                )
+                bootstrap_degraded.append("tail_catchup: %s" % exc)
+
+        if bootstrap_degraded:
+            logging.warning(
+                "M1_POLLER_BOOTSTRAP_DEGRADED phases=%s", bootstrap_degraded,
+            )
 
     def _do_tail_catchup(self) -> None:
         """Tail catchup для всіх символів (потребує FXCM сесії)."""
@@ -1102,11 +1155,14 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
             sorted(derive_engine._commit_tfs_s),  # noqa: SLF001
         )
 
-    # Redis tail_n для priming M1/M3
+    # Redis tail_n для priming M1→H4 (всі TF, якими керує m1_poller)
+    # Без прайминґу derived TF (M5-H4) put_bar() створює порожні deque
+    # і перезаписує connector's повні Redis tail — split-brain (20260219-027).
     redis_cfg = cfg.get("redis", {})
     tail_n_raw = redis_cfg.get("tail_n_by_tf_s", {})
     redis_tail_n: Dict[int, int] = {}
-    for tf_s in (60, 180):
+    _PRIME_TFS = (60, 180, 300, 900, 1800, 3600, 14400)  # M1→H4
+    for tf_s in _PRIME_TFS:
         val = tail_n_raw.get(str(tf_s), 0)
         if int(val) > 0:
             redis_tail_n[tf_s] = int(val)
@@ -1123,6 +1179,56 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
 
 
 # ---------------------------------------------------------------------------
+# Pidfile guard — захист від дублікатів m1_poller (I5: SSOT writer)
+# ---------------------------------------------------------------------------
+_PID_FILE = Path("logs") / "m1_poller.pid"
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Перевіряє чи процес з PID живий (Windows + POSIX)."""
+    if os.name == "nt":
+        PROCESS_QUERY_LIMITED = 0x1000
+        h = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED, False, pid)
+        if h:
+            ctypes.windll.kernel32.CloseHandle(h)
+            return True
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _pidfile_guard() -> None:
+    """Перевірити pidfile; якщо дублікат — fatal exit. Stale — warn + продовжити."""
+    if _PID_FILE.exists():
+        try:
+            old_pid = int(_PID_FILE.read_text().strip())
+        except (ValueError, OSError):
+            old_pid = 0
+        if old_pid and _is_pid_alive(old_pid):
+            logging.error(
+                "M1_POLLER_DUPLICATE pid=%d вже працює! Pidfile=%s. "
+                "Вбийте старий процес або видаліть pidfile.",
+                old_pid, _PID_FILE,
+            )
+            raise SystemExit(2)
+        logging.warning("M1_POLLER_STALE_PID old_pid=%d (removed)", old_pid)
+    _PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _PID_FILE.write_text(str(os.getpid()))
+    logging.info("M1_POLLER_PID pid=%d file=%s", os.getpid(), _PID_FILE)
+
+
+def _pidfile_cleanup() -> None:
+    """Видалити pidfile при завершенні."""
+    try:
+        _PID_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Entrypoint  (python -m runtime.ingest.polling.m1_poller)
 # ---------------------------------------------------------------------------
 def main() -> int:
@@ -1130,6 +1236,8 @@ def main() -> int:
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
     )
+    _pidfile_guard()
+
     report = load_env_secrets()
     if report.loaded:
         logging.info("ENV: secrets_loaded path=%s keys=%d", report.path, report.keys_count)
@@ -1151,6 +1259,7 @@ def main() -> int:
         return 1
     finally:
         runner.shutdown()
+        _pidfile_cleanup()
 
     return 0
 
