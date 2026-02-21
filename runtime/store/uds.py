@@ -41,7 +41,7 @@ except Exception:
 SOURCE_ALLOWLIST = {"history", "derived", "history_agg", ""}
 FINAL_SOURCES = {"history", "derived", "history_agg"}
 REDIS_SOCKET_TIMEOUT_S = 0.4
-PREVIEW_CURR_TTL_S = 120
+_DEFAULT_PREVIEW_CURR_TTL_S = 1800  # SSOT fallback; runtime значення з config.json
 PREVIEW_TAIL_RETAIN = 2000
 PREVIEW_UPDATES_RETAIN = 2000
 
@@ -296,7 +296,7 @@ class UnifiedDataStore:
         redis_spec_mismatch_fields: Optional[list[str]] = None,
         preview_tf_allowlist: Optional[set[int]] = None,
         preview_tf_allowlist_source: str = "default",
-        preview_curr_ttl_s: int = PREVIEW_CURR_TTL_S,
+        preview_curr_ttl_s: int = _DEFAULT_PREVIEW_CURR_TTL_S,
         preview_tail_retain: int = PREVIEW_TAIL_RETAIN,
         preview_updates_retain: int = PREVIEW_UPDATES_RETAIN,
     ) -> None:
@@ -441,7 +441,15 @@ class UnifiedDataStore:
                 ram_bars, geom = _ensure_sorted_dedup(ram_bars)
                 if geom is not None:
                     _mark_geom_fix(meta, warnings, geom, source="ram", tf_s=tf_s)
-                if spec.limit > 0 and len(ram_bars) < spec.limit and policy.disk_policy == DISK_POLICY_NEVER:
+                # P1-unified: якщо RAM має менше барів ніж запитано і disk доступний,
+                # читаємо повний набір з диску замість повернення часткових даних.
+                # Disk _read_window_disk() автоматично заповнює RAM (set_window).
+                if spec.limit > 0 and len(ram_bars) < spec.limit:
+                    if self._disk_allowed(policy, "ram_short"):
+                        result = self._read_window_disk(spec, meta, warnings)
+                        _log_window_result(result, warnings, tf_s)
+                        return result
+                    # Disk не доступний — повертаємо часткові дані з degraded
                     _mark_ram_short_window(meta, warnings, spec.limit, len(ram_bars))
                     meta.update({"source": "degraded", "redis_hit": False})
                 else:
@@ -1159,12 +1167,17 @@ class UnifiedDataStore:
             policy=policy,
         )
 
-    def set_prime_ready(self, payload: dict[str, Any], ttl_s: Optional[int]) -> None:
+    def set_prime_ready(
+        self,
+        payload: dict[str, Any],
+        ttl_s: Optional[int],
+        component: Optional[str] = None,
+    ) -> None:
         if self._redis_writer is None:
             Logging.warning("UDS: set_prime_ready пропущено (redis_writer_missing)")
             return
         try:
-            self._redis_writer.set_prime_ready(payload, ttl_s)
+            self._redis_writer.set_prime_ready(payload, ttl_s, component=component)
         except Exception as exc:
             Logging.warning("UDS: set_prime_ready failed err=%s", exc)
 
@@ -2069,6 +2082,7 @@ def build_uds_from_config(
         redis_spec_mismatch_fields=redis_spec_mismatch_fields,
         preview_tf_allowlist=preview_tf_allowlist,
         preview_tf_allowlist_source=preview_tf_allowlist_source,
+        preview_curr_ttl_s=int(cfg.get("preview_curr_ttl_s", _DEFAULT_PREVIEW_CURR_TTL_S)),
     )
 
 

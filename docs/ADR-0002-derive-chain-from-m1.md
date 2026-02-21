@@ -406,3 +406,79 @@ if market_open and no new M1 for > stale_s:
 3. Аналітичний меморандум SLO — 4 unchecked items (MEDIUM)
 4. Broken test fix — test_tv_mismatch_probe.py (LOW)
 5. Production web — Auth/TLS/headers (окремий initiative)
+
+---
+
+## Phase 6: Calendar-Aware Cascade Triggers + Overdue Safety Net (2026-02-20)
+
+### Проблема
+
+**H4 19:00 НІКОЛИ не деривувався** — для ВСІХ символів, ВСІХ дат.
+
+`derive_triggers()` визначав trigger за "останнім номінальним source-слотом" у bucket:
+`expected_last = bucket_end - source_tf_ms`. Для H4 19:00 (bucket 19:00-22:59,
+anchor 23:00) це H1 22:00. Але H1 22:00 потрапляє на daily break і ніколи не деривується.
+
+**Каскадний ефект**: баг не обмежений H4 — на КОЖНОМУ рівні каскаду де останній
+номінальний source-слот non-trading, trigger не спрацьовував:
+
+- `cfd_us_22_23` (break 22:00-23:00): H4 19:00 — trigger чекає H1 22:00 ❌
+- `fx_24x5_utc_winter` (break 21:55-22:30): M5 21:55 не деривується → M15 21:45
+  trigger не спрацьовує → M30 21:30 → H1 21:00 → H4 19:00 — вся ланка мертва ❌
+- `cfd_eu_21_07` (break 21:00-07:00): H4 19:00 — trigger чекає H1 22:00 ❌
+
+**Доказ**: H4 19:00 count = 0 для ВСІХ 10+ символів за весь час роботи.
+
+### Рішення
+
+#### S1: Calendar-aware `derive_triggers()` (core/derive.py)
+
+Додано `is_trading_fn` параметр і `_has_any_trading_in_range()` helper.
+Коли останній номінальний source-слот non-trading, функція крокує назад
+до першого слоту з хоча б однією торговою хвилиною.
+
+```
+expected_last = bucket_end - source_tf_ms
+if is_trading_fn:
+    while expected_last >= bucket_open:
+        if _has_any_trading_in_range(expected_last, expected_last + source_tf_ms, fn):
+            break
+        expected_last -= source_tf_ms
+```
+
+Backward-compatible: `is_trading_fn=None` → стара поведінка.
+
+#### S2: Pass calendar в DeriveEngine._cascade()
+
+`derive_triggers()` тепер отримує `is_trading_fn` від символу через `_calendars`.
+
+#### S3: Overdue bucket check (timer-based safety net)
+
+`DeriveEngine.check_overdue_buckets(now_ms)` — перевіряє попередній bucket
+для кожного TF/symbol. Якщо source-бари достатні але bar не деривувався
+(race, restart, порушення trigger) — деривує. Викликається кожні 60с з m1_poller.
+
+### Верифікація
+
+- Симуляція cascade з XAU_USD M1 Feb 19 (1426 bars):
+  - **До фіксу**: H4 = ['03:00','07:00','11:00','15:00'] (4 bars, 19:00 MISSING)
+  - **Після фіксу**: H4 = ['03:00','07:00','11:00','15:00','19:00'] (5 bars) ✓
+  - H1 19→22 bars (13:00-15:00 restored через re-derive, 21:00 restored для FX)
+- Unit-тести: derive_triggers з calendar для cfd_us_22_23, fx_24x5, normal case
+- 151 existing tests pass (0 regressions)
+
+### Файли
+
+| Файл | Зміна |
+| --- | --- |
+| `core/derive.py` | +`_has_any_trading_in_range()`, `derive_triggers` +is_trading_fn |
+| `runtime/ingest/derive_engine.py` | Pass calendar to triggers, +`check_overdue_buckets()` |
+| `runtime/ingest/polling/m1_poller.py` | Overdue check в main loop (60s interval) |
+
+### Інваріанти збережені
+
+- I0: core/ не імпортує runtime — `is_trading_fn` = callable, не calendar import
+- I1: UDS единий writer — overdue check використовує той самий UDS
+- I2: Геометрія часу не змінена
+- I3: Final > preview — overdue commit через UDS (watermark guard)
+- I5: Degraded-but-loud — overdue derives логуються як OVERDUE_DERIVE_OK

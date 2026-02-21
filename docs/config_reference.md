@@ -192,10 +192,21 @@
 | Ключ | Тип | Опис |
 | --- | --- | --- |
 | `redis_priming_enabled` | bool | Прайм Redis з диску при старті |
-| `redis_priming_budget_s` | int | Таймаут на прайм одного символу |
+| `redis_priming_budget_s` | int | Таймаут на прайм одного символу (default=15) |
 | `redis_priming_tfs_s` | int[] | TF для priming (усі від M1 до D1) |
 | `redis_priming_symbols` | str[] | Порожній = всі символи |
 | `min_coldload_bars_by_tf_s` | dict | Мін кількість барів для UI coldload fallback: M1=1440, M5=2016, D1=365 |
+
+---
+
+## Bootstrap (S4, ADR-0003)
+
+| Ключ | Тип | Default | Опис |
+| --- | --- | --- | --- |
+| `bootstrap.prime_ready_timeout_s` | int | 30 | Таймаут AND-gate (connector + m1_poller) перед стартом UI |
+| `bootstrap.derive_warmup_bars_by_tf` | dict | `{60:300, 300:20, 900:10, 1800:10, 3600:10}` | Кількість барів з диску для warmup DeriveEngine каскаду |
+| `bootstrap.ui_warmup_bars_by_tf` | dict | `{60:500, ..., 86400:200}` | RAM-кеш прогрів UI (symbol × TF) |
+| `bootstrap.ui_cold_start_bars_by_tf` | dict | `{60:10080, ..., 86400:365}` | Policy для cold-start UI вікна (передається клієнту) |
 
 ---
 

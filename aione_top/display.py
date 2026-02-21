@@ -1,4 +1,4 @@
-"""Display — Rich TUI рендерер для aione-top v0.6.
+"""Display — Rich TUI рендерер для aione-top v0.7.
 
 Три сторінки:
   Page 1 (Overview):
@@ -190,7 +190,7 @@ def build_processes_table(procs: List[Dict[str, Any]]) -> Panel:
         if is_dup:
             row_style = "bold red"
             dup_mark = " [DUP!]"
-        elif role == "aione_top":
+        elif role == "aione_top" or role.startswith("sup:"):
             row_style = "dim"
             dup_mark = ""
         else:
@@ -205,6 +205,11 @@ def build_processes_table(procs: List[Dict[str, Any]]) -> Panel:
             "tick_pub": "bold yellow",
             "tick_preview": "bold yellow",
             "supervisor": "bold blue",
+            "sup:connector": "dim cyan",
+            "sup:m1_poller": "dim green",
+            "sup:tick_publisher": "dim yellow",
+            "sup:tick_preview": "dim yellow",
+            "sup:ui": "dim magenta",
             "derive": "bold white",
             "engine_b": "bold white",
             "aione_top": "dim",
@@ -359,7 +364,8 @@ _TOTAL_PAGES = 3
 
 _FOOTER_KEYS = {
     "normal": [
-        ("[Tab]", " Page  "), ("[k]", " Kill  "), ("[c]", " Cache  "),
+        ("[Tab]", " Page  "), ("[k]", " Kill  "), ("[x]", " Restart  "),
+        ("[s]", " Start  "), ("[c]", " Cache  "),
         ("[r]", " Refresh  "), ("[Space]", " Pause  "), ("[q]", " Quit"),
     ],
     "kill": [
@@ -369,6 +375,15 @@ _FOOTER_KEYS = {
     "confirm_kill_all": [
         ("[y]", " Yes, KILL ALL v3  "), ("[n]", " No"),
     ],
+    "restart": [
+        ("[1-9]", " by #  "), ("[a]", " All v3  "), ("[Esc]", " Cancel"),
+    ],
+    "confirm_restart_all": [
+        ("[y]", " Yes, RESTART ALL  "), ("[n]", " No"),
+    ],
+    "start": [
+        ("[1-9]", " by # (missing)  "), ("[a]", " All missing  "), ("[Esc]", " Cancel"),
+    ],
     "cache": [
         ("[r]", " Redis v3  "), ("[t]", " Top cache  "), ("[Esc]", " Cancel"),
     ],
@@ -377,6 +392,9 @@ _FOOTER_KEYS = {
 _MODE_BADGES = {
     "kill": ("  KILL ", "bold white on red"),
     "confirm_kill_all": ("  KILL ALL? ", "bold white on red"),
+    "restart": ("  RESTART ", "bold white on dark_orange"),
+    "confirm_restart_all": ("  RESTART ALL? ", "bold white on dark_orange"),
+    "start": ("  START ", "bold white on green"),
     "cache": ("  CACHE ", "bold white on blue"),
 }
 

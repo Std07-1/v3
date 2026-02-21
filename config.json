@@ -70,7 +70,7 @@
     "preview_tick_publish_min_interval_ms": 250,
     "preview_curr_ttl_s": 1800,
     "tick_auto_promote_m1": true,
-    "ui_stitching_enabled": false,
+    "ui_stitching_enabled": true,
     "tick_stream_enabled": true,
     "tick_stream_symbols": [],
     "tick_stream_min_interval_ms": 200,
@@ -146,15 +146,15 @@
         "2026-02-01T23:02:00Z"
     ],
     "market_boundary_slip_minutes_per_day": 2,
-    "day_anchor_offset_s": 68400,
-    "day_anchor_offset_s_alt": 75600,
-    "day_anchor_offset_s_alt2": 79200,
+    "day_anchor_offset_s": 82800,
+    "day_anchor_offset_s_alt": 79200,
+    "day_anchor_offset_s_alt2": 68400,
     "day_anchor_offset_s_d1": 75600,
     "day_anchor_offset_s_d1_alt": 79200,
     "ui_debug": true,
     "group_logs_enabled": true,
     "redis_priming_enabled": true,
-    "redis_priming_budget_s": 5,
+    "redis_priming_budget_s": 15,
     "redis_priming_tfs_s": [
         60,
         180,
@@ -184,13 +184,13 @@
         "namespace": "v3_local",
         "allow_env_override": false,
         "ttl_by_tf_s": {
-            "60": 1800,
-            "180": 3600,
-            "300": 3600,
-            "900": 14400,
-            "1800": 14400,
-            "3600": 86400,
-            "14400": 172800,
+            "60": 86400,
+            "180": 86400,
+            "300": 259200,
+            "900": 259200,
+            "1800": 259200,
+            "3600": 259200,
+            "14400": 604800,
             "86400": 604800
         },
         "tail_n_by_tf_s": {
@@ -211,6 +211,37 @@
         "status": "fxcm_local:status",
         "commands": "fxcm_local:commands",
         "heartbeat": "fxcm_local:heartbeat"
+    },
+    "bootstrap": {
+        "prime_ready_timeout_s": 30,
+        "cascade_catchup_m1_bars": 1440,
+        "derive_warmup_bars_by_tf": {
+            "60": 300,
+            "300": 20,
+            "900": 10,
+            "1800": 10,
+            "3600": 10
+        },
+        "ui_warmup_bars_by_tf": {
+            "60": 10080,
+            "180": 3360,
+            "300": 2016,
+            "900": 672,
+            "1800": 336,
+            "3600": 168,
+            "14400": 1080,
+            "86400": 365
+        },
+        "ui_cold_start_bars_by_tf": {
+            "60": 10080,
+            "180": 3360,
+            "300": 2016,
+            "900": 672,
+            "1800": 336,
+            "3600": 168,
+            "14400": 1080,
+            "86400": 365
+        }
     },
     "known_broker_outages": [
         {

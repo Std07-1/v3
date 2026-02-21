@@ -196,13 +196,17 @@ def _classify_process(cmdline: str) -> Optional[str]:
     cl = cmdline.lower()
 
     # --- Launcher/supervisor detection (ПЕРШИЙ, до індивідуальних ролей) ---
-    # `python -m app.main --mode connector` → launcher (hide)
+    # `python -m app.main --mode connector` → launcher (show as sup:connector)
     # `python -m app.main --mode all` → supervisor (show)
     if "app.main" in cl and "--mode" in cl:
         if "--mode all" in cl:
             return "supervisor"
-        # Individual mode launcher — реальний воркер буде виявлений окремо
-        return None
+        # Individual mode launcher — показуємо як sup:<role>
+        import re as _re
+        m = _re.search(r"--mode\s+(\S+)", cl)
+        if m:
+            return "sup:" + m.group(1)
+        return "sup:?"
 
     # --- Actual worker processes ---
     if "m1_poller" in cl:

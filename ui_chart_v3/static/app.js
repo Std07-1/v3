@@ -1235,6 +1235,10 @@ function restoreCacheFor(symbol, tf) {
   const bars = Array.isArray(cached.bars) ? cached.bars : [];
   if (!bars.length) return false;
   // P4: perf mark for cache-restore render
+  // D1 fix: встановити TF ДО setBars, щоб normalizeBar знав актуальний barTimeSpanSeconds
+  if (controller && typeof controller.setViewTimeframe === 'function') {
+    controller.setViewTimeframe(tf);
+  }
   const _t0 = performance.now();
   if (controller && typeof controller.setBars === 'function') {
     controller.setBars(bars);
@@ -1246,9 +1250,6 @@ function restoreCacheFor(symbol, tf) {
   applyTheme(currentTheme);
   if (elCandleStyle) {
     applyCandleStyle(elCandleStyle.value || 'classic');
-  }
-  if (controller && typeof controller.setViewTimeframe === 'function') {
-    controller.setViewTimeframe(tf);
   }
   lastOpenMs = Number.isFinite(cached.lastOpenMs) ? cached.lastOpenMs : bars[bars.length - 1].open_time_ms;
   lastBarCloseMs = Number.isFinite(cached.lastBarCloseMs) ? cached.lastBarCloseMs : null;
@@ -1606,6 +1607,10 @@ async function loadBarsFull() {
   }
 
   // P4: perf marks for loadBarsFull render
+  // D1 fix: встановити TF ДО setBars, щоб normalizeBar знав актуальний barTimeSpanSeconds
+  if (controller && typeof controller.setViewTimeframe === 'function') {
+    controller.setViewTimeframe(tf);
+  }
   const _t0Render = performance.now();
   if (controller && typeof controller.setBars === 'function') {
     controller.setBars(bars);
@@ -1631,9 +1636,6 @@ async function loadBarsFull() {
   applyTheme(currentTheme);
   if (elCandleStyle) {
     applyCandleStyle(elCandleStyle.value || 'classic');
-  }
-  if (controller && typeof controller.setViewTimeframe === 'function') {
-    controller.setViewTimeframe(tf);
   }
 
   lastOpenMs = bars[bars.length - 1].open_time_ms;

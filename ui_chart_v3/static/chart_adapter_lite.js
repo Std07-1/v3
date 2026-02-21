@@ -84,12 +84,14 @@
             fixRightEdge: false,
             lockVisibleTimeRangeOnResize: false,
             tickMarkFormatter: (time) => {
+                if (typeof time === 'string') return ''; // D1: LC сам показує дату
                 if (typeof time === 'number') return _fmtUtcTime(time);
                 return '';
             },
         },
         localization: {
             timeFormatter: (time) => {
+                if (typeof time === 'string') return time; // D1: повертаємо дату як є
                 if (typeof time === 'number') return _fmtUtcFull(time);
                 return '';
             },
@@ -196,54 +198,6 @@
         },
     };
 
-    function normalizeBar(bar) {
-        if (!bar) return null;
-        const time = Number(bar.time ?? (Number.isFinite(bar.open_time_ms) ? Math.floor(bar.open_time_ms / 1000) : NaN));
-        const open = Number(bar.open ?? bar.o);
-        let high = Number(bar.high ?? bar.h);
-        let low = Number(bar.low ?? bar.l);
-        let close = Number(bar.close ?? bar.c);
-        const lastPrice = Number(bar.last_price ?? bar.lastPrice ?? NaN);
-        if (Number.isFinite(lastPrice) && bar.complete !== true) {
-            close = lastPrice;
-        }
-        if (Number.isFinite(close)) {
-            if (!Number.isFinite(high) || close > high) high = close;
-            if (!Number.isFinite(low) || close < low) low = close;
-        }
-        const volumeRaw = bar.volume ?? bar.value ?? bar.v ?? 0;
-        const volume = Number(volumeRaw);
-        if (!Number.isFinite(time) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) {
-            return null;
-        }
-        return {
-            time: Math.floor(time),
-            open,
-            high,
-            low,
-            close,
-            volume: Number.isFinite(volume) ? volume : 0,
-        };
-    }
-
-    function normalizeRange(range) {
-        if (!range) return null;
-        let min = Number(range.min);
-        let max = Number(range.max);
-        if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
-        if (min === max) {
-            min -= MIN_PRICE_SPAN / 2;
-            max += MIN_PRICE_SPAN / 2;
-        }
-        if (max - min < MIN_PRICE_SPAN) {
-            const mid = (max + min) / 2;
-            min = mid - MIN_PRICE_SPAN / 2;
-            max = mid + MIN_PRICE_SPAN / 2;
-        }
-        if (!(max > min)) return null;
-        return { min, max };
-    }
-
     function createChartController(container, options = {}) {
         if (!container) {
             throw new Error("chart_adapter_lite: контейнер не передано");
@@ -302,6 +256,75 @@
             down: VOLUME_DOWN_COLOR,
         };
         let barTimeSpanSeconds = 60;
+
+        function normalizeBar(bar) {
+            if (!bar) return null;
+
+            // D1 (86400s): Lightweight Charts вимагає рядок 'YYYY-MM-DD'
+            // щоб вісь X показувала лише дату без часу.
+            // open_time_ms для D1 = 22:00 UTC (зима) або 21:00 UTC (літо/DST).
+            // +3h: 22:00→01:00 next day, 21:00→00:00 next day — обидва дають коректну номінальну дату.
+            let time;
+            if (barTimeSpanSeconds >= 86400) {
+                const openMs = Number(bar.open_time_ms ?? (bar.time != null ? Number(bar.time) * 1000 : NaN));
+                if (!Number.isFinite(openMs)) return null;
+                const d = new Date(openMs + 10800000); // +3h: 22:00/21:00 → номінальний торговий день
+                const yyyy = d.getUTCFullYear();
+                const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+                const dd = String(d.getUTCDate()).padStart(2, '0');
+                time = `${yyyy}-${mm}-${dd}`;
+            } else {
+                time = Number(bar.time ?? (Number.isFinite(bar.open_time_ms) ? Math.floor(bar.open_time_ms / 1000) : NaN));
+                if (!Number.isFinite(time)) return null;
+                time = Math.floor(time);
+            }
+
+            const open = Number(bar.open ?? bar.o);
+            let high = Number(bar.high ?? bar.h);
+            let low = Number(bar.low ?? bar.l);
+            let close = Number(bar.close ?? bar.c);
+            const lastPrice = Number(bar.last_price ?? bar.lastPrice ?? NaN);
+            if (Number.isFinite(lastPrice) && bar.complete !== true) {
+                close = lastPrice;
+            }
+            if (Number.isFinite(close)) {
+                if (!Number.isFinite(high) || close > high) high = close;
+                if (!Number.isFinite(low) || close < low) low = close;
+            }
+            const volumeRaw = bar.volume ?? bar.value ?? bar.v ?? 0;
+            const volume = Number(volumeRaw);
+            const timeValid = (typeof time === 'string') ? (time.length === 10) : Number.isFinite(time);
+            if (!timeValid || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) {
+                return null;
+            }
+            return {
+                time: (typeof time === 'string') ? time : Math.floor(time),
+                open,
+                high,
+                low,
+                close,
+                volume: Number.isFinite(volume) ? volume : 0,
+            };
+        }
+
+        function normalizeRange(range) {
+            if (!range) return null;
+            let min = Number(range.min);
+            let max = Number(range.max);
+            if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+            if (min === max) {
+                min -= MIN_PRICE_SPAN / 2;
+                max += MIN_PRICE_SPAN / 2;
+            }
+            if (max - min < MIN_PRICE_SPAN) {
+                const mid = (max + min) / 2;
+                min = mid - MIN_PRICE_SPAN / 2;
+                max = mid + MIN_PRICE_SPAN / 2;
+            }
+            if (!(max > min)) return null;
+            return { min, max };
+        }
+
         const interactionCleanup = [];
         const verticalPanState = {
             active: false,
@@ -402,8 +425,9 @@
                     : "—";
 
                 // UTC час бару
-                const barTime = typeof param.time === 'number' ? param.time : 0;
-                const utcLine = barTime ? _fmtUtcFull(barTime) : '';
+                const barTime = param.time;
+                const utcLine = typeof barTime === 'string' ? barTime
+                    : (typeof barTime === 'number' && barTime ? _fmtUtcFull(barTime) : '');
 
                 tooltipEl.innerHTML = `<span style="color:#888;font-size:11px">${utcLine}</span><br>O: ${open}  H: ${high}  L: ${low}  C: ${close}<br>Δ: ${change}  V: ${volume}`;
 
@@ -780,7 +804,7 @@
             const normalized = bars
                 .map((bar) => normalizeBar(bar))
                 .filter(Boolean)
-                .sort((a, b) => a.time - b.time);
+                .sort((a, b) => a.time < b.time ? -1 : a.time > b.time ? 1 : 0);
             const deduped = [];
             let lastTime = null;
             for (const bar of normalized) {

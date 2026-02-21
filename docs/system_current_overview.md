@@ -115,7 +115,7 @@ app.main (supervisor)
 | Що | Де (файл/модуль) | Примітки |
 | --- | --- | --- |
 | **Контракти** (JSON Schema) | `core/contracts/public/marketdata_v1/` | bar_v1, window_v1, updates_v1, tick_v1 |
-| **Конфіг** (policy SSOT) | `config.json` (довідник: [config_reference.md](config_reference.md)) | Один файл; .env — лише секрети |
+| **Конфіг** (policy SSOT) | `config.json` (довідник: [config_reference.md](config_reference.md)) | Один файл; .env — лише секрети. Секція `bootstrap` — SSOT для warmup/cold-start параметрів (S4, ADR-0003) |
 | **Геометрія часу** | `core/time_geom.py`, `core/buckets.py` | end-excl канон; bar_close_incl/bar_close_excl |
 | **Дані** (SSOT JSONL) | `data_v3/{symbol}/tf_{tf_s}/part-YYYYMMDD.jsonl` | append-only, final-only |
 | **Redis cache** | `{NS}:ohlcv:snap/tail:{sym}:{tf_s}` | Не SSOT; warmup/cold-load кеш |
@@ -137,7 +137,7 @@ app.main (supervisor)
 | **I3** | **Final > Preview (NoMix)**: `complete=true` (final, `source ∈ {history, derived, history_agg}`) завжди перемагає `complete=false` (preview). NoMix guard у UDS | Watermark + NoMix violation tracking |
 | **I4** | **Один update-потік для UI**: UI отримує бари лише через `/api/updates` (upsert events) + `/api/bars` (cold-load). Жодних паралельних каналів | Contract-first API schema |
 | **I5** | **Degraded-but-loud**: будь-який fallback/перемикання джерел/geom_fix → `warnings[]`/`meta.extensions`, не silent. `bars=[]` завжди з `warnings[]` (no_data rail) | `_contract_guard_warn_*` + no_data branch |
-| **I6** | **Disk hot-path ban**: disk не читається для interactive requests; лише bootstrap/warmup (60s window), scrollback (explicit), recovery. `disk_policy="never"` у `/api/bars` | `_disk_allowed()` guard у UDS |
+| **I6** | **Disk hot-path ban**: disk не читається для polling/updates; cold-load/scrollback використовують `disk_policy="explicit"` (one-time disk read, після чого RAM заповнюється). Live updates йдуть тільки через Redis bus | `_disk_allowed()` guard у UDS |
 
 ## Stop-rules та режими
 
@@ -469,7 +469,7 @@ flowchart TD
     F --> A
 ```
 
-### Supervisor (app/main.py --mode all) — ADR-0003 S2
+### Supervisor (app/main.py --mode all) — ADR-0003 S2+S3
 
 ```mermaid
 flowchart TD
@@ -477,7 +477,10 @@ flowchart TD
     A -->|spawn| C[tick_publisher 🟡 non_critical]
     A -->|spawn| D[tick_preview 🟡 non_critical]
     A -->|spawn| E[m1_poller 🔴 critical]
-    A -->|wait prime_ready| F[ui 🟢 essential]
+    B -->|publish prime:ready| PR{AND-gate S3}
+    E -->|publish prime:ready:m1| PR
+    PR -->|both ready OR timeout| F[ui 🟢 essential]
+    PR -->|timeout| W[WARNING: UI_START_DEGRADED]
     B -->|crash| R{restart policy}
     C -->|crash| R
     D -->|crash| R
@@ -518,7 +521,7 @@ sequenceDiagram
 ## Policy SSOT та rails (Slice-1..4)
 
 - `/api/config` є policy-джерелом для UI: `policy_version`, `build_id`, `window_policy`, allowlists.
-- `/api/bars` (final cold-start) читає через UDS з `prefer_redis=true`, `disk_policy=never`.
+- `/api/bars` (cold-start) читає через UDS з `prefer_redis=true`, `disk_policy=explicit` (unified для всіх TF).
 - `bars=[]` без пояснення заборонено: no_data rail гарантує `warnings[]`.
 - RAM short-window повертає partial+loud (`insufficient_warmup`, `meta.extensions.expected/got`) замість `cache_miss -> empty`.
 
@@ -623,8 +626,10 @@ v3/
 │       ├── chart_adapter_lite.js  # адаптер Lightweight Charts
 │       └── ui_config.json         # portable UI конфіг (api_base, ui_debug)
 ├── tools/                         # утиліти / діагностика
+│   ├── backfill_cascade.py        # waterfall M1→H4 backfill з calendar-aware derive
+│   ├── tail_integrity_scanner.py  # цілісність даних: all symbols × all TFs × N days
 │   ├── fetch_m5_isolated.py       # ізольований M5 fetch
-│   ├── rebuild_derived.py         # rebuild derived з M5
+│   ├── rebuild_derived.py         # rebuild derived з M5 (legacy, anchor=0)
 │   ├── rebuild_m15_isolated.py    # ізольований rebuild 15m
 │   ├── purge_broken_bars.py       # чистка пошкоджених JSONL
 │   ├── tick_sim_publisher.py      # симуляція тиків для тестів
@@ -690,6 +695,7 @@ v3/
 | **essential** | ui | base=5s, max=120s | 10 | видаляється з пулу, інші працюють |
 
 **Restart policy** (S2):
+
 - Non-zero exit → restart з exponential backoff (delay = base × 2^(attempt-1), capped at max).
 - Clean exit (code=0) → видалити з моніторингу.
 - Restart counter reset після 10 хвилин стабільної роботи.
@@ -698,6 +704,7 @@ v3/
 - Non-critical exhaustion → видалено з пулу, решта продовжують.
 
 **Backoff прогресія**:
+
 ```
 critical:     10s → 20s → 40s → 80s → 160s (5 спроб)
 non_critical:  5s → 10s → 20s → 40s → 80s → 120s → 120s → 120s → 120s → 120s (10 спроб)
@@ -715,9 +722,9 @@ non_critical:  5s → 10s → 20s → 40s → 80s → 120s → 120s → 120s →
 ### 1) Старт системи (--mode all)
 
 1. Supervisor запускає connector, tick_publisher, tick_preview_worker, m1_poller.
-2. **Connector (D1-only)**: bootstrap D1 з диску → cold start D1 від broker → Redis prime → periodic D1 fetch on close.
-3. **M1 Poller**: bootstrap Redis priming (M1+M3 з диску) → M1Buffer warmup → FXCM connect → polling.
-4. **UI**: чекає prime_ready → стартує HTTP сервер.
+2. **Connector (D1-only)**: bootstrap D1 з диску → cold start D1 від broker → Redis prime → periodic D1 fetch on close → publishes `prime:ready`.
+3. **M1 Poller**: bootstrap Redis priming (M1→H4 з диску) → M1Buffer warmup → DeriveEngine warmup → tail catchup → publishes `prime:ready:m1`.
+4. **UI**: supervisor AND-gate чекає `prime:ready` (connector) + `prime:ready:m1` (m1_poller), timeout з `config.json:prime_ready_timeout_s` (default=30s). Якщо timeout → UI стартує з WARNING (degraded-but-loud, S3 ADR-0003).
 5. **Supervisor loop**: моніторить процеси; crash → auto-restart з backoff (S2, ADR-0003); bootstrap error → degraded mode, NOT crash (S1, ADR-0003).
 
 ### 2) Live цикл M5 (connector, engine_b)
@@ -748,6 +755,7 @@ non_critical:  5s → 10s → 20s → 40s → 80s → 120s → 120s → 120s →
 1. `/api/bars`: cold-load з Redis snap → fallback disk. Stitching open[i]=close[i-1].
 2. `/api/updates`: Redis updates bus (cursor_seq). Disk лише recovery.
 3. `/api/overlay`: ephemeral preview bar для TF≥M5.
+4. `/api/gaps`: gap report з `tools/tail_integrity_scanner.py` (summary.json).
 
 ## Примітки
 

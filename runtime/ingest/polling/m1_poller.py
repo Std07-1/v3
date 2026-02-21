@@ -778,6 +778,11 @@ class M1SymbolPoller:
 class M1PollerRunner:
     """Запускає M1 polling для всіх символів."""
 
+    # Hardcoded defaults для derive warmup (fallback якщо config не задає)
+    _DEFAULT_DERIVE_WARMUP: Dict[int, int] = {
+        60: 300, 300: 20, 900: 10, 1800: 10, 3600: 10,
+    }
+
     def __init__(
         self,
         pollers: List[M1SymbolPoller],
@@ -789,6 +794,8 @@ class M1PollerRunner:
         reconnect_cooldown_s: int = 120,
         tail_catchup_enabled: bool = True,
         derive_engine: Optional[DeriveEngine] = None,
+        derive_warmup_bars_by_tf: Optional[Dict[int, int]] = None,
+        cascade_catchup_m1_bars: int = 1440,
     ) -> None:
         self._pollers = pollers
         self._provider = provider
@@ -802,6 +809,8 @@ class M1PollerRunner:
         self._connected = False
         self._tail_catchup_enabled = tail_catchup_enabled
         self._derive_engine = derive_engine
+        self._derive_warmup_bars_by_tf = derive_warmup_bars_by_tf or dict(self._DEFAULT_DERIVE_WARMUP)
+        self._cascade_catchup_m1_bars = max(0, cascade_catchup_m1_bars)
 
     # -- FXCM session lifecycle -----------
 
@@ -895,20 +904,12 @@ class M1PollerRunner:
         if self._derive_engine is not None:
             try:
                 engine_warmup = 0
-                # TFs для warmup: (tf_s, tail_bars_to_read)
-                # M1: 300 барів (~5h) — основа каскаду
-                # M5-H1: достатньо для заповнення буферів derive-ланцюга
-                _WARMUP_TFS = [
-                    (60,   300),   # M1:  основа каскаду (~5h)
-                    (300,   20),   # M5:  ~1.7h, покриває ~6 M15 вікон
-                    (900,   10),   # M15: ~2.5h, покриває ~5 M30 вікон
-                    (1800,  10),   # M30: ~5h,   покриває ~5 H1 вікон
-                    (3600,  10),   # H1:  ~10h,  покриває ~2.5 H4 вікон
-                ]
+                # SSOT: config.json → bootstrap.derive_warmup_bars_by_tf (S4 ADR-0003)
+                warmup_tfs = sorted(self._derive_warmup_bars_by_tf.items())
                 for p in self._pollers:
                     sym = p._symbol  # noqa: SLF001
                     all_bars = []
-                    for tf_s, tail_n in _WARMUP_TFS:
+                    for tf_s, tail_n in warmup_tfs:
                         try:
                             bars = self._uds.read_tail_candles(sym, tf_s, tail_n)
                             if bars:
@@ -929,6 +930,39 @@ class M1PollerRunner:
                     "BOOTSTRAP_DEGRADED phase=derive_engine_warmup err=%s", exc,
                 )
                 bootstrap_degraded.append("derive_engine_warmup: %s" % exc)
+
+        # 2c. Cascade catchup: прогін warmup M1 через cascade → деривація відсутніх барів.
+        #     Після buffer warmup (2b) буфери M5-H1 заповнені з диску.
+        #     Cascade catchup пропускає M1 через on_bar → cascade → derive + commit.
+        #     UDS відхилить duplicates (stale/dup) — cascade все одно рекурсує
+        #     і заповнює прогалини (gap-fill): M5→M15→M30→H1→H4.
+        #     Виявлено 2026-02-19: без цього кроку H4 не деривується після рестарту
+        #     бо warmup_bars() лише буферизує, не каскадує.
+        if self._derive_engine is not None:
+            try:
+                catchup_n = self._cascade_catchup_m1_bars
+                if catchup_n > 0:
+                    catchup_total = 0
+                    catchup_derived = 0
+                    for p in self._pollers:
+                        sym = p._symbol  # noqa: SLF001
+                        m1_bars = self._uds.read_tail_candles(sym, 60, catchup_n)
+                        if not m1_bars:
+                            continue
+                        for bar in m1_bars:
+                            committed = self._derive_engine.on_bar(bar)
+                            catchup_total += 1
+                            catchup_derived += len(committed)
+                    logging.info(
+                        "DERIVE_CASCADE_CATCHUP symbols=%d m1_processed=%d "
+                        "derived_committed=%d",
+                        len(self._pollers), catchup_total, catchup_derived,
+                    )
+            except Exception as exc:
+                logging.warning(
+                    "BOOTSTRAP_DEGRADED phase=cascade_catchup err=%s", exc,
+                )
+                bootstrap_degraded.append("cascade_catchup: %s" % exc)
 
         # 3. Tail catchup — заповнення від watermark до expected_now
         #    Інваріант P0.1 (ADR-0002): ПЕРЕД main loop.
@@ -967,6 +1001,32 @@ class M1PollerRunner:
             len(self._pollers), catchup_total,
         )
 
+    # -- Prime ready signal ---------------
+
+    # TTL має бути достатнім щоб supervisor встиг прочитати (6h як connector)
+    _PRIME_READY_TTL_S = 21600
+
+    def _publish_prime_ready(self) -> None:
+        """Публікує prime:ready:m1 після bootstrap (S3 ADR-0003)."""
+        symbols = [p._symbol for p in self._pollers]  # noqa: SLF001
+        tfs = sorted(self._redis_tail_n.keys())
+        payload = {
+            "v": 1,
+            "ready": True,
+            "component": "m1_poller",
+            "ts_ms": _utc_now_ms(),
+            "symbols": symbols,
+            "tfs": tfs,
+        }
+        try:
+            self._uds.set_prime_ready(payload, self._PRIME_READY_TTL_S, component="m1")
+            logging.info(
+                "PRIME_READY_SET component=m1 symbols=%d tfs=%s",
+                len(symbols), ",".join(str(t) for t in tfs),
+            )
+        except Exception as exc:
+            logging.warning("PRIME_READY_SET_FAILED component=m1 err=%s", exc)
+
     # -- Main loop -----------------------
 
     def run_forever(self) -> None:
@@ -975,8 +1035,11 @@ class M1PollerRunner:
             len(self._pollers), self._safety_delay_s,
         )
         self._bootstrap_warmup()
+        self._publish_prime_ready()
         self._try_connect()
         self._maybe_log_stats(force=True)  # Початкові stats (watermarks після warmup)
+        overdue_interval_s = 60  # Перевірка overdue кожні 60с
+        last_overdue_ts = 0.0
         while True:
             self._sleep_to_next_minute()
             cycle_errors = 0
@@ -985,6 +1048,25 @@ class M1PollerRunner:
                 p.poll_once()
                 if p.stats["errors"] > err_before:
                     cycle_errors += 1
+            # Timer-based overdue bucket check (safety net для cascade)
+            now_ts = time.time()
+            if (
+                self._derive_engine is not None
+                and now_ts - last_overdue_ts >= overdue_interval_s
+            ):
+                try:
+                    overdue = self._derive_engine.check_overdue_buckets(
+                        int(now_ts * 1000)
+                    )
+                    if overdue:
+                        logging.info(
+                            "OVERDUE_BUCKETS_FILLED count=%d tfs=%s",
+                            len(overdue),
+                            sorted(set(b.tf_s for b in overdue)),
+                        )
+                except Exception as exc:
+                    logging.warning("OVERDUE_CHECK_ERR err=%s", exc)
+                last_overdue_ts = now_ts
             self._maybe_log_stats()
             self._maybe_reconnect(cycle_errors)
 
@@ -1167,6 +1249,35 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
         if int(val) > 0:
             redis_tail_n[tf_s] = int(val)
 
+    # S4 ADR-0003: derive warmup bars з config.json → bootstrap секція
+    _derive_warmup_cfg: Optional[Dict[int, int]] = None
+    bootstrap_cfg = cfg.get("bootstrap", {})
+    if isinstance(bootstrap_cfg, dict):
+        raw_warmup = bootstrap_cfg.get("derive_warmup_bars_by_tf")
+        if isinstance(raw_warmup, dict):
+            _derive_warmup_cfg = {}
+            for k, v in raw_warmup.items():
+                try:
+                    _derive_warmup_cfg[int(k)] = int(v)
+                except (ValueError, TypeError):
+                    pass
+            if _derive_warmup_cfg:
+                logging.info(
+                    "DERIVE_WARMUP_FROM_CONFIG tfs=%s",
+                    sorted(_derive_warmup_cfg.keys()),
+                )
+
+    # Cascade catchup: кількість M1 для прогону через cascade при bootstrap.
+    # Заповнює прогалини в derived TF (M5→H4) після рестарту.
+    _cascade_catchup_m1_n = 1440  # default 24h
+    if isinstance(bootstrap_cfg, dict):
+        raw_catchup = bootstrap_cfg.get("cascade_catchup_m1_bars")
+        if raw_catchup is not None:
+            try:
+                _cascade_catchup_m1_n = int(raw_catchup)
+            except (ValueError, TypeError):
+                pass
+
     return M1PollerRunner(
         pollers=pollers,
         provider=provider,
@@ -1175,6 +1286,8 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
         safety_delay_s=safety_delay_s,
         tail_catchup_enabled=(tail_catchup_max_bars > 0),
         derive_engine=derive_engine,
+        derive_warmup_bars_by_tf=_derive_warmup_cfg,
+        cascade_catchup_m1_bars=_cascade_catchup_m1_n,
     )
 
 
@@ -1185,7 +1298,19 @@ _PID_FILE = Path("logs") / "m1_poller.pid"
 
 
 def _is_pid_alive(pid: int) -> bool:
-    """Перевіряє чи процес з PID живий (Windows + POSIX)."""
+    """Перевіряє чи процес з PID живий І є m1_poller (Windows + POSIX).
+
+    Використовує psutil для перевірки cmdline — захист від PID recycling.
+    Fallback на OS-level check якщо psutil недоступний.
+    """
+    try:
+        import psutil
+        p = psutil.Process(pid)
+        cmdline = " ".join(p.cmdline()).lower()
+        return "m1_poller" in cmdline
+    except Exception:
+        pass
+    # Fallback: OS-level (без cmdline check — менш надійно)
     if os.name == "nt":
         PROCESS_QUERY_LIMITED = 0x1000
         h = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED, False, pid)

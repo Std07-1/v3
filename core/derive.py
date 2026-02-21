@@ -359,10 +359,34 @@ def derive_bar(
 
 
 # ---------------------------------------------------------------------------
+# _has_any_trading_in_range — чи є хоча б одна торгова хвилина в діапазоні
+# ---------------------------------------------------------------------------
+def _has_any_trading_in_range(
+    start_ms: int,
+    end_ms: int,
+    is_trading_fn: Callable[[int], bool],
+) -> bool:
+    """Чи є хоча б одна торгова хвилина в [start_ms, end_ms).
+
+    Перевіряє кожну хвилину в діапазоні. Для M5-слоту це 5 хвилин,
+    для H1-слоту — 60 хвилин. Прийнятна вартість для trigger-контексту.
+    """
+    _MINUTE_MS = 60_000
+    for t in range(start_ms, end_ms, _MINUTE_MS):
+        if is_trading_fn(t):
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # try_derive_on_commit — визначає які derived бари можна побудувати після
 #                        commit нового source-бару
 # ---------------------------------------------------------------------------
-def derive_triggers(source_bar: CandleBar, anchor_offset_s: int = 0) -> List[Tuple[int, int]]:
+def derive_triggers(
+    source_bar: CandleBar,
+    anchor_offset_s: int = 0,
+    is_trading_fn: Optional[Callable[[int], bool]] = None,
+) -> List[Tuple[int, int]]:
     """Визначає які target bucket'и слід перевірити після commit source_bar.
 
     Повертає список (target_tf_s, bucket_open_ms) для кожного
@@ -371,6 +395,12 @@ def derive_triggers(source_bar: CandleBar, anchor_offset_s: int = 0) -> List[Tup
     Логіка: для кожного target = N × source, target bucket завершується
     коли source_bar.open_time_ms == bucket_end_ms - source_tf_ms
     (тобто source_bar — останній слот у target bucket).
+
+    Calendar-aware (is_trading_fn):
+    Якщо останній номінальний source-слот потрапляє на non-trading час
+    (daily break), шукаємо останній слот з торговою активністю.
+    Це фіксить H4 19:00 для груп cfd_us_22_23 / fx_24x5_utc_winter,
+    де partial break перекриває останній H1/M30/M15/M5 у bucket.
     """
     source_tf_s = source_bar.tf_s
     targets = DERIVE_CHAIN.get(source_tf_s, [])
@@ -389,8 +419,23 @@ def derive_triggers(source_bar: CandleBar, anchor_offset_s: int = 0) -> List[Tup
         )
         bucket_end = bucket_open + target_tf_ms
 
-        # Перевіряємо чи source_bar — останній слот у target bucket
+        # Номінальний останній source-слот
         expected_last_source = bucket_end - source_tf_ms
+
+        # Calendar-aware: якщо останній слот non-trading, крокуємо назад
+        if is_trading_fn is not None:
+            candidate = expected_last_source
+            while candidate >= bucket_open:
+                if _has_any_trading_in_range(
+                    candidate, candidate + source_tf_ms, is_trading_fn
+                ):
+                    break
+                candidate -= source_tf_ms
+            else:
+                # Жодного торгового слоту в bucket — пропускаємо
+                continue
+            expected_last_source = candidate
+
         if source_bar.open_time_ms == expected_last_source:
             result.append((target_tf_s, bucket_open))
 

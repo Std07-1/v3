@@ -36,6 +36,7 @@ from core.derive import (
     derive_triggers,
 )
 from core.model.bars import CandleBar
+from core.buckets import bucket_start_ms as _bucket_start_ms
 from runtime.store.uds import UnifiedDataStore
 
 log = logging.getLogger("derive_engine")
@@ -193,6 +194,123 @@ class DeriveEngine:
             "uds_registered": len(self._uds_by_symbol),
         }
 
+    def check_overdue_buckets(self, now_ms: int) -> List[CandleBar]:
+        """Перевірка та деривація прострочених bucket'ів (timer-based safety net).
+
+        Для кожного символу і TF перевіряє: чи є bucket, час якого вже минув
+        (bucket_end <= now_ms), але bar не був committed (ні в UDS committed set,
+        ні в буфері як вже derived). Якщо source-бари достатні — деривує.
+
+        Цей метод — страховка від ситуацій де trigger не спрацював
+        (race, restart mid-bucket, out-of-order delivery).
+        Викликається з m1_poller після кожного poll cycle або по таймеру.
+
+        Returns:
+            Список newly committed derived барів.
+        """
+        committed: List[CandleBar] = []
+
+        for symbol in self._symbols:
+            lock = self._locks.get(symbol)
+            if lock is None:
+                continue
+            with lock:
+                committed.extend(
+                    self._check_overdue_for_symbol(symbol, now_ms)
+                )
+        return committed
+
+    # Кількість попередніх bucket-ів для overdue-сканування per TF.
+    # Чим більший TF — тим глибше потрібно заглядати (H4=4h, один пропуск = 4 bucket M5).
+    _OVERDUE_LOOKBACK: Dict[int, int] = {
+        180:   3,    # M3:  3 × 3m  = 9m
+        300:   6,    # M5:  6 × 5m  = 30m
+        900:   4,    # M15: 4 × 15m = 1h
+        1800:  4,    # M30: 4 × 30m = 2h
+        3600:  3,    # H1:  3 × 1h  = 3h
+        14400: 3,    # H4:  3 × 4h  = 12h
+    }
+
+    def _check_overdue_for_symbol(
+        self, symbol: str, now_ms: int
+    ) -> List[CandleBar]:
+        """Per-symbol overdue check (має бути під lock).
+
+        Сканує N попередніх bucket-ів (не лише 1) і каскадує
+        successfully derived бари для можливості побудови H1/H4.
+        """
+        committed: List[CandleBar] = []
+        cal = self._calendars.get(symbol)
+        is_trading_fn = cal.is_trading_minute if cal is not None else None
+        uds = self._uds_by_symbol.get(symbol)
+        if uds is None:
+            return committed
+
+        # Перевіряємо кожен target TF, починаючи з найменших
+        # (щоб M5 з'явився до того, як перевіряємо M15)
+        sorted_tfs = sorted(self._cascade_tfs_s)
+        for target_tf_s in sorted_tfs:
+            source_info = DERIVE_SOURCE.get(target_tf_s)
+            if source_info is None:
+                continue
+            source_tf_s, _ = source_info
+            source_buf = self._buffers.get((symbol, source_tf_s))
+            if source_buf is None:
+                continue
+
+            target_tf_ms = target_tf_s * 1000
+            anchor_ms = (
+                self._anchor_offset_s * 1000 if target_tf_s >= 14400 else 0
+            )
+            anchor = self._anchor_offset_s if target_tf_s >= 14400 else 0
+
+            # Поточний bucket
+            cur_bucket = _bucket_start_ms(now_ms, target_tf_ms, anchor_ms)
+
+            # Скануємо N попередніх bucket-ів (не лише 1)
+            lookback = self._OVERDUE_LOOKBACK.get(target_tf_s, 2)
+            for i in range(1, lookback + 1):
+                prev_bucket = cur_bucket - target_tf_ms * i
+
+                # Перевірка: чи вже є derived бар у target буфері
+                target_buf = self._buffers.get((symbol, target_tf_s))
+                if target_buf is not None and prev_bucket in target_buf:
+                    continue
+
+                # Спроба деривації
+                derived = derive_bar(
+                    symbol=symbol,
+                    target_tf_s=target_tf_s,
+                    source_buffer=source_buf,
+                    bucket_open_ms=prev_bucket,
+                    anchor_offset_s=anchor,
+                    is_trading_fn=is_trading_fn,
+                    filter_calendar_pause=True,
+                )
+                if derived is None:
+                    continue
+
+                # Commit
+                if target_tf_s in self._commit_tfs_s:
+                    result = uds.commit_final_bar(derived)
+                    if result.ok:
+                        committed.append(derived)
+                        self._stats_committed[target_tf_s] = (
+                            self._stats_committed.get(target_tf_s, 0) + 1
+                        )
+                        log.info(
+                            "OVERDUE_DERIVE_OK tf=%d sym=%s open=%d lookback=%d",
+                            target_tf_s, symbol, derived.open_time_ms, i,
+                        )
+                    # stale/duplicate — тиха ситуація, бар вже є
+
+                # Каскад: буферизуємо + рекурсивна деривація вище
+                # (overdue M5 → може побудувати M15 → M30 → H1 → H4)
+                further = self._cascade(derived)
+                committed.extend(further)
+
+        return committed
+
     # -------------------------------------------------------------------
     # Internal cascade
     # -------------------------------------------------------------------
@@ -220,14 +338,19 @@ class DeriveEngine:
         if bar.tf_s in DERIVE_CHAIN:
             self._get_buffer(symbol, bar.tf_s).upsert(bar)
 
-        # 2. Triggers
-        triggers = derive_triggers(bar, anchor_offset_s=self._anchor_offset_s)
-        if not triggers:
-            return committed
-
-        # 3. Calendar filter для символу
+        # 2. Calendar filter для символу (потрібен і для triggers, і для derive)
         cal = self._calendars.get(symbol)
         is_trading_fn = cal.is_trading_minute if cal is not None else None
+
+        # 3. Triggers (calendar-aware: знаходить останній TRADING source
+        #    слот у bucket, а не номінальний — фіксить H4 19:00 тощо)
+        triggers = derive_triggers(
+            bar,
+            anchor_offset_s=self._anchor_offset_s,
+            is_trading_fn=is_trading_fn,
+        )
+        if not triggers:
+            return committed
 
         # 4. UDS для commit
         uds = self._uds_by_symbol.get(symbol)

@@ -60,10 +60,10 @@ for sym in symbols:
                   f"lines={len(lines):>5d} unique={len(seen):>5d} dupes={n_dupes:>4d}")
 
             if not DRY:
-                # Записуємо dedup
+                # Записуємо dedup + sorted
                 with open(part_file, "w", encoding="utf-8", newline="\n") as f:
-                    for v in seen.values():
-                        f.write(v + "\n")
+                    for k in sorted(seen.keys()):
+                        f.write(seen[k] + "\n")
                 total_files_fixed += 1
 
 mode_str = "DRY-RUN" if DRY else "FIXED"

@@ -1,6 +1,6 @@
 # ADR-0003: Cold Start Hardening
 
-> **Статус**: ACTIVE  
+> **Статус**: IMPLEMENTED (всі 4 slices S1–S4 завершені)  
 > **Дата**: 2026-02-19  
 > **Initiative**: `cold_start_hardening`  
 > **Попередник**: Аналітичний меморандум (docs/Аналітичний меморандум.md)  
@@ -258,9 +258,10 @@ Supervisor (app.main --mode all)
 | | |
 |---|---|
 | **Ціль** | UI чекає реальну готовність М1→H4+D1, priming не обрізається по budget |
-| **Файли** | `m1_poller.py`, `engine_b.py`, `app/main.py`, `config.json` |
+| **Файли** | `m1_poller.py`, `app/main.py`, `config.json`, `redis_snapshot.py`, `uds.py` |
 | **LOC est** | ~80 |
 | **Priority** | P1 |
+| **Status** | ✅ DONE (20260219-034) |
 
 **Рішення — спрощений варіант** (без нового Redis key):
 
@@ -289,6 +290,7 @@ Supervisor (app.main --mode all)
 | **Файли** | `config.json`, `m1_poller.py`, `server.py`, `main.py` |
 | **LOC est** | ~50 |
 | **Priority** | P2 — низький, policy compliance |
+| **Status** | ✅ DONE (20260219-035) |
 
 **Зміни**: Перенести в config.json:
 - `prime_ready_timeout_s` (main.py) — done in S3

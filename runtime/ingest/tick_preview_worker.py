@@ -82,7 +82,7 @@ class PreviewConfig:
     enabled: bool
     tfs: list[int]
     publish_min_interval_ms: int
-    curr_ttl_s: int
+    curr_ttl_s: Optional[int]
     symbols: list[str]
     channel: str
 
@@ -111,7 +111,7 @@ def _parse_preview_cfg(cfg: dict[str, Any]) -> PreviewConfig:
             if tf_s > 0:
                 tfs.append(tf_s)
     publish_min_interval_ms = int(cfg.get("preview_tick_publish_min_interval_ms", 250))
-    curr_ttl_s = int(cfg.get("preview_curr_ttl_s", 60))
+    curr_ttl_s = int(cfg.get("preview_curr_ttl_s")) if cfg.get("preview_curr_ttl_s") is not None else None
     symbols_raw = cfg.get("preview_tick_symbols")
     symbols: list[str] = []
     if isinstance(symbols_raw, list):
@@ -160,7 +160,7 @@ class TickPreviewWorker:
         uds: Any,
         tfs: list[int],
         publish_min_interval_ms: int,
-        curr_ttl_s: int,
+        curr_ttl_s: Optional[int],
         symbols: list[str],
         channel: str,
         calendars: Dict[str, MarketCalendar] | None = None,
@@ -169,7 +169,7 @@ class TickPreviewWorker:
         self._uds = uds
         self._tfs = [int(x) for x in tfs if int(x) > 0]
         self._publish_min_interval_ms = max(0, int(publish_min_interval_ms))
-        self._curr_ttl_s = max(1, int(curr_ttl_s))
+        self._curr_ttl_s: Optional[int] = max(1, int(curr_ttl_s)) if curr_ttl_s is not None else None
         self._channel = str(channel)
         self._auto_promote_m1 = bool(auto_promote_m1)
         # M3 деривація: M1 агрегуємо з тиків, M3 — з M1
@@ -194,6 +194,7 @@ class TickPreviewWorker:
         self._cal_drop_last_warn_ts: float = 0.0
         self._stats: Dict[str, int] = {}
         self._stats_last_emit_ts = 0.0
+        self._last_drops_total: Optional[int] = None  # S2: перший emit без WARNING
         # "0 ticks loud" state
         self._last_tick_rx_ts = time.time()
         self._zero_ticks_warned = False
@@ -222,6 +223,28 @@ class TickPreviewWorker:
             return
         payload = dict(self._stats)
         self._stats.clear()
+        # S2: merge tick_agg stats + degraded-but-loud при зростанні drops
+        agg_stats = self._agg.stats()
+        payload["tick_agg_stats"] = agg_stats
+        drops_total = (
+            agg_stats.get("ticks_dropped_late_bucket", 0)
+            + agg_stats.get("ticks_dropped_before_open", 0)
+            + agg_stats.get("ticks_dropped_out_of_order", 0)
+        )
+        if self._last_drops_total is None:
+            self._last_drops_total = drops_total
+            delta = 0
+        else:
+            delta = drops_total - self._last_drops_total
+            if delta < 0:
+                delta = 0
+            self._last_drops_total = drops_total
+        if delta > 0:
+            logging.warning(
+                "TICK_AGG_DROPS drops=%d interval_s=60 details=%s",
+                delta,
+                json.dumps(agg_stats, ensure_ascii=False),
+            )
         logging.info("TICK_PREVIEW_STATS %s", json.dumps(payload, ensure_ascii=False))
 
     def _normalize_symbol(self, raw: Any) -> Optional[str]:

@@ -30,6 +30,7 @@ UDS ініціалізується з `role="reader"` — будь-яка спр
 | `/api/updates` | GET | Інкрементальні upsert events (polling) | `updates_v1.json` | UDS `read_updates()` / preview updates | no-cache |
 | `/api/overlay` | GET | Ephemeral preview bar для TF≥M5 | — | UDS `read_preview_window()` | no-cache |
 | `/api/symbols` | GET | Список доступних символів | — | `config.json → symbols` | no-cache |
+| `/api/gaps` | GET | Gap report з tail integrity scanner | — | `reports/tail_audit/summary.json` | no-cache |
 | `/` | GET | Статичний UI (index.html) | — | `ui_chart_v3/static/` | no-cache (dev) |
 | `/app.js`, `/chart_adapter_lite.js` | GET | Статичні JS файли | — | `ui_chart_v3/static/` | no-cache (з cache-buster) |
 | `/ui_config.json` | GET | Портативний UI конфіг | — | `ui_chart_v3/static/` | no-cache |
@@ -200,6 +201,31 @@ UDS ініціалізується з `role="reader"` — будь-яка спр
   "symbols": ["XAU/USD", "EUSTX50", "GBP/CAD", ...]
 }
 ```
+
+### /api/gaps
+
+**Призначення**: звіт про gaps з tail integrity scanner (для моніторингу).
+
+**Джерело**: `reports/tail_audit/summary.json` (генерується `python -m tools.tail_integrity_scanner`).
+
+**Відповідь**:
+
+```json
+{
+  "ok": true,
+  "ts": "2026-02-20T13:40:15Z",
+  "overall": "FAIL",
+  "pass": 31,
+  "fail": 60,
+  "elapsed_s": 1.3,
+  "failed_items": [
+    {"symbol": "XAU/USD", "tf": "M5", "gaps": 2, "issues": []},
+    ...
+  ]
+}
+```
+
+Якщо scanner ще не запускався — `"overall": "NO_DATA"`.
 
 ---
 

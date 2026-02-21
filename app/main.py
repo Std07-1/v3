@@ -190,7 +190,12 @@ def _start_process(
     raise ValueError(f"Невідомий stdio режим: {stdio}")
 
 
-def _wait_for_prime_ready(config_path: str, timeout_s: int = 20) -> bool:
+def _wait_for_prime_ready(config_path: str, timeout_s: int = 30) -> bool:
+    """AND-gate: чекає prime:ready (connector) + prime:ready:m1 (m1_poller).
+
+    Повертає True якщо обидва компоненти ready, False при timeout.
+    timeout_s береться з config.json → bootstrap.prime_ready_timeout_s (default=30).
+    """
     if redis_lib is None:
         logging.warning("PRIME_READY_WAIT_SKIP reason=redis_package_missing")
         return False
@@ -201,12 +206,30 @@ def _wait_for_prime_ready(config_path: str, timeout_s: int = 20) -> bool:
         logging.warning("PRIME_READY_WAIT_SKIP reason=config_read_failed err=%s", exc)
         return False
 
+    # Таймаут: bootstrap.prime_ready_timeout_s → fallback root → fallback param (S4 ADR-0003)
+    bootstrap_cfg = cfg.get("bootstrap", {})
+    cfg_timeout = None
+    if isinstance(bootstrap_cfg, dict):
+        cfg_timeout = bootstrap_cfg.get("prime_ready_timeout_s")
+    if cfg_timeout is None:
+        cfg_timeout = cfg.get("prime_ready_timeout_s")  # backward compat
+    if cfg_timeout is not None:
+        try:
+            timeout_s = max(1, int(cfg_timeout))
+        except (ValueError, TypeError):
+            pass
+
     spec = resolve_redis_spec(cfg, role="prime_wait", log=False)
     if spec is None:
         logging.info("PRIME_READY_WAIT_SKIP reason=redis_disabled")
         return False
 
-    key = f"{spec.namespace}:prime:ready"
+    # AND-gate: connector + m1_poller (S3 ADR-0003)
+    keys = {
+        "connector": f"{spec.namespace}:prime:ready",
+        "m1": f"{spec.namespace}:prime:ready:m1",
+    }
+
     client = redis_lib.Redis(
         host=spec.host,
         port=spec.port,
@@ -218,21 +241,41 @@ def _wait_for_prime_ready(config_path: str, timeout_s: int = 20) -> bool:
 
     start = time.time()
     warned = False
+    ready_components: set = set()
     while time.time() - start < max(1, int(timeout_s)):
-        try:
-            raw = client.get(key)
-            if raw:
-                payload = json.loads(raw)
-                if isinstance(payload, dict) and payload.get("ready") is True:
-                    logging.info("PRIME_READY_OK key=%s", key)
-                    return True
-        except Exception as exc:
-            if not warned:
-                logging.warning("PRIME_READY_WAIT_ERROR err=%s", exc)
-                warned = True
+        for component, key in keys.items():
+            if component in ready_components:
+                continue
+            try:
+                raw = client.get(key)
+                if raw:
+                    payload = json.loads(raw)
+                    if isinstance(payload, dict) and payload.get("ready") is True:
+                        ready_components.add(component)
+                        logging.info(
+                            "PRIME_READY_OK component=%s key=%s",
+                            component, key,
+                        )
+            except Exception as exc:
+                if not warned:
+                    logging.warning("PRIME_READY_WAIT_ERROR err=%s", exc)
+                    warned = True
+        if len(ready_components) == len(keys):
+            logging.info(
+                "PRIME_READY_ALL_OK components=%s elapsed_s=%.1f",
+                ",".join(sorted(ready_components)),
+                time.time() - start,
+            )
+            return True
         time.sleep(0.5)
 
-    logging.warning("PRIME_READY_TIMEOUT key=%s timeout_s=%d", key, int(timeout_s))
+    missing = set(keys.keys()) - ready_components
+    logging.warning(
+        "PRIME_READY_TIMEOUT timeout_s=%d ready=%s missing=%s",
+        int(timeout_s),
+        ",".join(sorted(ready_components)) or "none",
+        ",".join(sorted(missing)),
+    )
     return False
 
 
@@ -325,7 +368,12 @@ def main() -> int:
         if args.mode in ("all", "ui"):
             if args.mode == "all":
                 config_path = pick_config_path()
-                _wait_for_prime_ready(config_path)
+                prime_ok = _wait_for_prime_ready(config_path)
+                if not prime_ok:
+                    logging.warning(
+                        "UI_START_DEGRADED reason=prime_timeout "
+                        "(UI стартує, але дані можуть бути неповними)",
+                    )
             processes.append(
                 _start_process(
                     label="ui",

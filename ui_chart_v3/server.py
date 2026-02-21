@@ -155,7 +155,7 @@ from runtime.store.uds import ReadPolicy, UpdatesSpec, WindowSpec, UnifiedDataSt
 
 
 # ── P3: Bootstrap warmup ─────────────────────────────────────
-# Відповідність app.js COLD_START_BARS_BY_TF
+# Defaults (SSOT: config.json → bootstrap секція, S4 ADR-0003)
 _WARMUP_BARS_BY_TF: dict[int, int] = {
     60:   500,
     180:  500,
@@ -184,6 +184,41 @@ _POLICY_VERSION = "20260214-201"
 _BUILD_ID = "20260214-201"
 
 
+def _apply_bootstrap_config(cfg: dict) -> None:
+    """Override warmup/cold-start з config.json → bootstrap (S4 ADR-0003).
+
+    Зберігає hardcoded defaults як fallback.
+    """
+    global _WARMUP_BARS_BY_TF, _COLD_START_BARS_BY_TF
+    bootstrap = cfg.get("bootstrap")
+    if not isinstance(bootstrap, dict):
+        return
+    # ui_warmup_bars_by_tf
+    raw_warmup = bootstrap.get("ui_warmup_bars_by_tf")
+    if isinstance(raw_warmup, dict) and raw_warmup:
+        parsed: dict[int, int] = {}
+        for k, v in raw_warmup.items():
+            try:
+                parsed[int(k)] = int(v)
+            except (ValueError, TypeError):
+                pass
+        if parsed:
+            _WARMUP_BARS_BY_TF = parsed
+            logging.info("UI_WARMUP_FROM_CONFIG tfs=%s", sorted(parsed.keys()))
+    # ui_cold_start_bars_by_tf
+    raw_cold = bootstrap.get("ui_cold_start_bars_by_tf")
+    if isinstance(raw_cold, dict) and raw_cold:
+        parsed_cold: dict[int, int] = {}
+        for k, v in raw_cold.items():
+            try:
+                parsed_cold[int(k)] = int(v)
+            except (ValueError, TypeError):
+                pass
+        if parsed_cold:
+            _COLD_START_BARS_BY_TF = parsed_cold
+            logging.info("UI_COLD_START_FROM_CONFIG tfs=%s", sorted(parsed_cold.keys()))
+
+
 def _bootstrap_warmup(uds: "UnifiedDataStore", config_path: str) -> None:
     """Прогрів RAM-кешу з диску під час bootstrap window.
 
@@ -198,6 +233,8 @@ def _bootstrap_warmup(uds: "UnifiedDataStore", config_path: str) -> None:
             symbol = cfg.get("symbol")
             if symbol:
                 symbols = [symbol]
+        # S4 ADR-0003: apply bootstrap config overrides
+        _apply_bootstrap_config(cfg)
     except Exception:
         logging.warning("WARMUP: не вдалося прочитати config для символів")
         return
@@ -1142,6 +1179,48 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._json(200, {"ok": True, "symbols": _list_symbols(data_root)})
             return
 
+        if path == "/api/gaps":
+            # Читаємо останній звіт tail integrity scanner
+            summary_path = os.path.join("reports", "tail_audit", "summary.json")
+            latest_path = os.path.join("reports", "tail_audit", "latest.json")
+            if os.path.isfile(summary_path):
+                try:
+                    with open(summary_path, "r", encoding="utf-8") as f:
+                        summary = json.loads(f.read())
+                    self._json(200, {"ok": True, **summary})
+                except Exception as exc:
+                    self._json(500, {"ok": False, "error": str(exc)})
+            elif os.path.isfile(latest_path):
+                try:
+                    with open(latest_path, "r", encoding="utf-8") as f:
+                        report = json.loads(f.read())
+                    # Витягнути лише gaps
+                    gaps = []
+                    for r in report.get("results", []):
+                        if r.get("unexpected_gaps", 0) > 0:
+                            gaps.append({
+                                "symbol": r["symbol"],
+                                "tf": r.get("tf_name", str(r.get("tf_s"))),
+                                "gaps": r["unexpected_gaps"],
+                                "details": r.get("gap_details", [])[:10],
+                            })
+                    self._json(200, {
+                        "ok": True,
+                        "ts": report.get("ts"),
+                        "overall": report.get("overall"),
+                        "gaps": gaps,
+                    })
+                except Exception as exc:
+                    self._json(500, {"ok": False, "error": str(exc)})
+            else:
+                self._json(200, {
+                    "ok": True,
+                    "ts": None,
+                    "overall": "NO_DATA",
+                    "message": "Scanner has not been run yet.",
+                })
+            return
+
         if path in ("/api/bars", "/api/latest"):
             # -- PREVIOUS_CLOSE stitching для плавних свічок (TV-like) --
             # FXCM History повертає Open з FIRST_TICK для першого бару кожного batch,
@@ -1233,7 +1312,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     limit=limit,
                     cold_load=True,
                 )
-                policy = ReadPolicy(force_disk=False, prefer_redis=True, disk_policy="bootstrap")
+                policy = ReadPolicy(force_disk=False, prefer_redis=True, disk_policy="explicit")
                 hist_res = uds.read_window(spec, policy)
                 hist_bars = list(hist_res.bars_lwc)
 
@@ -1330,7 +1409,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             policy = ReadPolicy(
                 force_disk=False,
                 prefer_redis=bool(cold_load),
-                disk_policy="never",
+                disk_policy="explicit",
             )
             res = uds.read_window(spec, policy)
             if not res.bars_lwc and since_open_ms is None and to_open_ms is None:
@@ -1477,7 +1556,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     to_open_ms=None,
                     cold_load=True,
                 )
-                res_last = uds.read_window(spec_last, ReadPolicy(force_disk=False, prefer_redis=False, disk_policy="never"))
+                res_last = uds.read_window(spec_last, ReadPolicy(force_disk=False, prefer_redis=False, disk_policy="explicit"))
                 if res_last.bars_lwc:
                     last_final_open_ms = res_last.bars_lwc[-1].get("open_time_ms")
             except Exception:
@@ -1590,14 +1669,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if prev_bar_candidate is not None:
                 try:
                     # Читаємо tail (не range-query) — RAM містить останні бари
-                    # range-query з disk_policy="never" завжди блокується
+                    # range-query з disk_policy="explicit" — дозволяє disk fallback
                     spec_prev = WindowSpec(
                         symbol=symbol,
                         tf_s=tf_s,
                         limit=3,
                         cold_load=True,
                     )
-                    res_final = uds.read_window(spec_prev, ReadPolicy(force_disk=False, prefer_redis=True, disk_policy="never"))
+                    res_final = uds.read_window(spec_prev, ReadPolicy(force_disk=False, prefer_redis=True, disk_policy="explicit"))
                     final_bar_match = None
                     for _fb in (res_final.bars_lwc or []):
                         if _fb.get("open_time_ms") == b_prev:

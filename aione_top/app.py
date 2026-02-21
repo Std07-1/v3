@@ -1,4 +1,9 @@
-"""aione-top — interactive TUI monitor for v3 platform (v0.6).
+"""aione-top — interactive TUI monitor for v3 platform (v0.7).
+
+v0.7: Restart + Start processes —
+  - [x] Restart: kill worker (launcher respawns) or kill+relaunch
+  - [s] Start: launch missing roles via app.main --mode <role>
+  - Restart all / Start all missing with [a] submenu
 
 v0.6: Page restructuring —
   - Page 1 (Overview): header, processes, components
@@ -29,8 +34,10 @@ from aione_top.display import (
     build_events_layout, build_combined_grid,
 )
 from aione_top.actions import (
-    kill_by_pid, kill_duplicates, kill_all_v3,
+    kill_by_pid, kill_with_launcher, kill_duplicates, kill_all_v3,
+    restart_process, restart_all_v3, start_process, get_missing_roles,
     clear_redis_ns, clear_app_cache,
+    STARTABLE_ROLES,
 )
 
 
@@ -140,7 +147,7 @@ _STATUS_TTL = 5.0  # секунд показувати повідомлення
 class _UIState:
     """Стан інтерактивного UI."""
     def __init__(self):
-        self.mode = "normal"   # normal | kill | cache | confirm_kill_all
+        self.mode = "normal"   # normal | kill | cache | confirm_kill_all | restart | confirm_restart_all | start
         self.status = ""
         self.status_expire = 0.0
         self.paused = False
@@ -168,6 +175,17 @@ def _handle_key(ch: str, state: _UIState, data: dict, cfg: dict) -> bool:
             return True
         elif ch == 'k':
             state.mode = "kill"
+        elif ch == 'x':
+            state.mode = "restart"
+        elif ch == 's':
+            procs = data.get("processes", [])
+            missing = get_missing_roles(procs)
+            if missing:
+                hints = ", ".join(f"{i+1}={r}" for i, r in enumerate(missing))
+                state.set_status(f"START: {hints}")
+                state.mode = "start"
+            else:
+                state.set_status("All roles already running")
         elif ch == 'c':
             state.mode = "cache"
         elif ch == 'r':
@@ -193,7 +211,7 @@ def _handle_key(ch: str, state: _UIState, data: dict, cfg: dict) -> bool:
             idx = int(ch) - 1
             procs = data.get("processes", [])
             if 0 <= idx < len(procs):
-                ok, msg = kill_by_pid(procs[idx]["pid"])
+                msg = kill_with_launcher(procs[idx]["pid"], procs)
                 state.set_status(msg)
             else:
                 state.set_status(f"No process #{ch}")
@@ -222,6 +240,63 @@ def _handle_key(ch: str, state: _UIState, data: dict, cfg: dict) -> bool:
         elif ch == 't':
             msg = clear_app_cache()
             state.set_status(msg)
+            state.mode = "normal"
+            return True
+        return False
+
+    elif state.mode == "restart":
+        if ch == '\x1b':
+            state.mode = "normal"
+        elif ch == 'a':
+            state.mode = "confirm_restart_all"
+        elif ch.isdigit() and ch != '0':
+            idx = int(ch) - 1
+            procs = data.get("processes", [])
+            if 0 <= idx < len(procs):
+                msg = restart_process(procs[idx]["pid"], procs)
+                state.set_status(msg)
+            else:
+                state.set_status(f"No process #{ch}")
+            state.mode = "normal"
+            return True
+        return False
+
+    elif state.mode == "confirm_restart_all":
+        if ch == 'y':
+            msg = restart_all_v3(data.get("processes", []))
+            state.set_status(msg)
+            state.mode = "normal"
+            return True
+        else:
+            state.mode = "normal"
+        return False
+
+    elif state.mode == "start":
+        if ch == '\x1b':
+            state.mode = "normal"
+        elif ch.isdigit() and ch != '0':
+            procs = data.get("processes", [])
+            missing = get_missing_roles(procs)
+            idx = int(ch) - 1
+            if 0 <= idx < len(missing):
+                msg = start_process(missing[idx])
+                state.set_status(msg)
+            else:
+                state.set_status(f"No missing role #{ch}")
+            state.mode = "normal"
+            return True
+        elif ch == 'a':
+            procs = data.get("processes", [])
+            missing = get_missing_roles(procs)
+            if not missing:
+                state.set_status("All roles already running")
+            else:
+                started = 0
+                for role in missing:
+                    result = start_process(role)
+                    if "Started" in result:
+                        started += 1
+                state.set_status(f"Started {started}/{len(missing)} missing roles")
             state.mode = "normal"
             return True
         return False

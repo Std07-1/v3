@@ -239,8 +239,16 @@ class RedisSnapshotWriter:
         self._write_status(payload_ts_ms)
         return len(tail)
 
-    def set_prime_ready(self, payload: Dict[str, Any], ttl_s: Optional[int]) -> None:
-        key = self._key("prime", "ready")
+    def set_prime_ready(
+        self,
+        payload: Dict[str, Any],
+        ttl_s: Optional[int],
+        component: Optional[str] = None,
+    ) -> None:
+        parts = ["prime", "ready"]
+        if component:
+            parts.append(component)
+        key = self._key(*parts)
         self._write_json(key, payload, ttl_s)
 
     def put_bar(self, bar: CandleBar) -> None:
