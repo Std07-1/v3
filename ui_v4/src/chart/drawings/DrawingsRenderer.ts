@@ -19,6 +19,7 @@ type HorzScaleItem = Time;
 
 function timeToSec(time: HorzScaleItem): number {
   if (typeof time === 'number') return time;
+  if (typeof time === 'string') return new Date(time).getTime() / 1000;
   return Date.UTC(time.year, time.month - 1, time.day, 0, 0, 0, 0) / 1000;
 }
 
@@ -65,13 +66,13 @@ export class DrawingsRenderer {
   private dragState:
     | null
     | {
-        id: string;
-        handleIdx: number | null; // null -> body drag
-        pointerId: number;
-        startX: number;
-        startY: number;
-        startObj: Drawing; // snapshot для UPDATE/undo
-      } = null;
+      id: string;
+      handleIdx: number | null; // null -> body drag
+      pointerId: number;
+      startX: number;
+      startY: number;
+      startObj: Drawing; // snapshot для UPDATE/undo
+    } = null;
 
   // hit-test/cache
   private aabbById = new Map<string, ScreenAabb>();
@@ -189,7 +190,7 @@ export class DrawingsRenderer {
 
   // ---- converters ----
   private toX(t_ms: number): number | null {
-    return this.chartApi.timeScale().timeToCoordinate(t_ms / 1000);
+    return this.chartApi.timeScale().timeToCoordinate((t_ms / 1000) as import('lightweight-charts').Time);
   }
 
   private toY(price: number): number | null {

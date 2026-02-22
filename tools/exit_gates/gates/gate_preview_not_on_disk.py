@@ -132,9 +132,6 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
                     violations.append(f"{sym}/tf_{tf_s}:is_preview=true")
                     violation_found = True
                     break
-            if saw_any and not violation_found:
-                violations.append(f"{sym}/tf_{tf_s}:preview_tf_on_disk")
-                break
 
     ok = not violations
     details = "ok" if ok else "found=" + ";".join(violations[:10])

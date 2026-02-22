@@ -1,6 +1,6 @@
 # Поточна система — Архітектурний огляд (SSOT)
 
-> **Останнє оновлення**: 2026-02-19  
+> **Останнє оновлення**: 2026-02-22  
 > **Навігація**: [docs/index.md](index.md)
 
 Цей файл — SSOT-опис поточної архітектури системи. Див. [docs/index.md](index.md) для навігації по всій документації.
@@ -44,7 +44,8 @@ app.main (supervisor)
   ├── tick_publisher_fxcm   (ForexConnect tick stream → Redis PubSub)
   ├── tick_preview_worker   (Redis PubSub → UDS preview M1/M3)
   ├── m1_poller             (FXCM M1 History → UDS final M1 + DeriveEngine cascade M3→M5→M15→M30→H1→H4)
-  └── ui                    (HTTP server, port 8089)
+  ├── ui                    (HTTP server, port 8089 — ui_chart_v3 polling)
+  └── ws_server             (WS server, port 8000 — ui_v4 real-time, config-gated)
 ```
 
 ## SSOT-площини (ізольовані)
@@ -186,8 +187,9 @@ flowchart LR
         U3 -->|Redis snap| R5[(Redis)]
     end
     subgraph UI["UI Layer"]
-        UIc[ui_chart_v3] -->|/api/bars, /api/updates| UR[UDS reader]
+        UIc[ui_chart_v3<br/>HTTP polling :8089] -->|/api/bars, /api/updates| UR[UDS reader]
         UIc -->|/api/overlay TF≥M5| UR
+        UIv4[ui_v4<br/>WS real-time :8000] -->|WS full/delta/scrollback| UR
         UR -->|cold-load| R5
         UR -->|fallback| D5
         UR -->|preview TFs| RP
@@ -615,8 +617,11 @@ v3/
 │   │       ├── ram_layer.py       # RAM LRU шар
 │   │       ├── redis_layer.py     # Redis read шар
 │   │       └── disk_layer.py      # Disk read шар
+│   ├── ws/
+│   │   ├── ws_server.py           # WS сервер (aiohttp, порт 8000, ui_v4_v2 protocol, UDS reader, config-gated, 733 LOC)
+│   │   └── candle_map.py          # bar→Candle mapping R2 closure (75 LOC)
 │   └── obs_60s.py                 # спостереження / метрики (60s intervals)
-├── ui_chart_v3/                   # UI + API same-origin
+├── ui_chart_v3/                   # UI + API same-origin (поточний production, HTTP polling)
 │   ├── server.py                  # HTTP API + /api/config policy SSOT + no_data loud rail + static server
 │   ├── __main__.py                # python -m ui_chart_v3
 │   ├── README.md                  # UI документація
@@ -625,6 +630,21 @@ v3/
 │       ├── app.js                 # polling + applyUpdates + policy consume + scrollback
 │       ├── chart_adapter_lite.js  # адаптер Lightweight Charts
 │       └── ui_config.json         # portable UI конфіг (api_base, ui_debug)
+├── ui_v4/                         # Next-gen UI: Svelte 5 + LWC 5 + TypeScript (WS backend DONE, chart parity DONE, T1-T10 COMPLETE, P3.11-P3.15 DONE)
+│   ├── package.json               # deps: lwc@5.0.0, uuid, svelte 5, vite 6, TS 5.7
+│   ├── vite.config.ts             # port 5173 (dev), proxy /api/* → 8089
+│   ├── dist/                      # vite build output (index.html + assets/); served by ws_server same-origin
+│   ├── README_DEV.md              # developer guide
+│   ├── UI_v4_COPILOT_README.md    # SSOT інструкція (slices 0–5 plan)
+│   └── src/                       # ~4500 LOC, 28 файлів, typecheck 0/0
+│       ├── types.ts               # SSOT: RenderFrame, WsAction, Candle, SmcData, Drawing
+│       ├── App.svelte             # root wiring: WS + DiagState + keyboard + theme/diag toggle
+│       ├── main.ts                # Svelte mount entrypoint
+│       ├── app/                   # diagState, diagSelectors, frameRouter (config frame T8), edgeProbe
+│       ├── ws/                    # WSConnection (quiet degraded mode), WsAction creators
+│       ├── stores/                # cursor price + UI warnings + meta (serverConfig) + favorites (P3.13)
+│       ├── layout/                # ChartPane, ChartHud (frosted HUD, theme/style/fav pickers), OhlcvTooltip, StatusBar (+diag btn), StatusOverlay, DiagPanel (P3.14), DrawingToolbar (disabled), SymbolTfPicker
+│       └── chart/                 # ChartEngine (LWC, v3-parity, applyTheme/applyCandleStyle), themes.ts (3 themes + 5 candle styles), interaction.ts (Y-zoom/pan/reset), OverlayRenderer, DrawingsRenderer (disabled), geometry
 ├── tools/                         # утиліти / діагностика
 │   ├── backfill_cascade.py        # waterfall M1→H4 backfill з calendar-aware derive
 │   ├── tail_integrity_scanner.py  # цілісність даних: all symbols × all TFs × N days
@@ -676,10 +696,29 @@ v3/
 
 ### UI
 
-- HTTP API: /api/bars, /api/updates, /api/overlay, /api/config (same-origin).
+**ui_chart_v3** (поточний production):
+
+- HTTP API: /api/bars, /api/updates, /api/overlay, /api/config (same-origin, порт 8089).
 - PREVIOUS_CLOSE stitching: open[i]=close[i-1] для TV-like smooth candles.
 - Scrollback: cover-until-satisfied (trigger ~2000, chunk 5000).
 - Epoch guard: абортує in-flight запити при switch symbol/TF.
+
+**ui_v4** (next-gen, WS backend DONE, chart parity DONE, audit T1-T10 COMPLETE):
+
+- Svelte 5 runes + TypeScript strict + Vite 6 + LWC 5.0.0. **25 файлів, ~4045 LOC** (typecheck 0/0).
+- Transport: WebSocket (`runtime/ws/ws_server.py`, 733 LOC, порт 8000, `/ws`). Протокол: `ui_v4_v2` (full + delta + scrollback + config + heartbeat).
+- Same-origin serving (Rule §11): `ws_server.py` роздає `ui_v4/dist/` (index.html + /assets/) на порт 8000. Prod: `npm run build` → `python -m runtime.ws.ws_server`. Dev: `npm run dev` (:5173) + ws_server (:8000).
+- 3-layer rendering: LWC candles + SMC overlay canvas + drawings canvas (RAF scheduler, DPR-aware). Drawings/SMC **вимкнені** (T1) до стабілізації.
+- CAD-рівень drawings: hline/trend/rect, snap-to-OHLC, selection/hit-testing, drag-edit, eraser, undo/redo (code present, disabled T1).
+- DiagState SSOT: 7-рівневий пріоритетний статус, StatusOverlay з hysteresis, quiet degraded mode.
+- WS backend: P0-P5 slices done. WS output guards (T6): `_guard_candle_shape` + `_guard_candles_output` on all outgoing frames.
+- Config frame (T8/S24): `_build_config_frame()` sent on connect before full frame. Policy bridge: symbols, TFs, delta_poll_interval_s, version.
+- Config SSOT (T10/S26): `ws_server.py` → `core.config_loader.load_system_config()` (єдиний SSOT, не дублює).
+- Chart parity (P3): engine.ts rewrite (volume, D1 +3h offset, UTC formatters, follow mode, rAF throttle, tooltip). V3 feature-complete.
+- Interaction (P3.3-P3.5): Y-zoom (wheel), Y-pan (drag), dblclick auto-reset — `interaction.ts` (385 LOC).
+- HUD (P3.1-P3.2): ChartHud.svelte (frosted glass, OHLCV + Δ + UTC clock, streaming dot, pulse, wheel TF cycling).
+- OhlcvTooltip (P3.6): crosshair cursor tooltip.
+- SymbolTfPicker: SSOT symbols/TFs from server via config frame (T5/T8).
 
 ### Supervisor (ADR-0003 S2: process isolation)
 
@@ -692,7 +731,7 @@ v3/
 |-----------|---------|---------|:---:|---|
 | **critical** | connector, m1_poller | base=10s, max=300s | 5 | supervisor fail (kill-all, loud) |
 | **non_critical** | tick_publisher, tick_preview | base=5s, max=120s | 10 | видаляється з пулу, інші працюють |
-| **essential** | ui | base=5s, max=120s | 10 | видаляється з пулу, інші працюють |
+| **essential** | ui, ws_server | base=5s, max=120s | 10 | видаляється з пулу, інші працюють |
 
 **Restart policy** (S2):
 
@@ -721,11 +760,12 @@ non_critical:  5s → 10s → 20s → 40s → 80s → 120s → 120s → 120s →
 
 ### 1) Старт системи (--mode all)
 
-1. Supervisor запускає connector, tick_publisher, tick_preview_worker, m1_poller.
+1. Supervisor запускає connector, tick_publisher, tick_preview_worker, m1_poller, ws_server (config-gated).
 2. **Connector (D1-only)**: bootstrap D1 з диску → cold start D1 від broker → Redis prime → periodic D1 fetch on close → publishes `prime:ready`.
 3. **M1 Poller**: bootstrap Redis priming (M1→H4 з диску) → M1Buffer warmup → DeriveEngine warmup → tail catchup → publishes `prime:ready:m1`.
-4. **UI**: supervisor AND-gate чекає `prime:ready` (connector) + `prime:ready:m1` (m1_poller), timeout з `config.json:prime_ready_timeout_s` (default=30s). Якщо timeout → UI стартує з WARNING (degraded-but-loud, S3 ADR-0003).
-5. **Supervisor loop**: моніторить процеси; crash → auto-restart з backoff (S2, ADR-0003); bootstrap error → degraded mode, NOT crash (S1, ADR-0003).
+4. **UI (http)**: supervisor AND-gate чекає `prime:ready` (connector) + `prime:ready:m1` (m1_poller), timeout з `config.json:prime_ready_timeout_s` (default=30s). Якщо timeout → UI стартує з WARNING (degraded-but-loud, S3 ADR-0003).
+5. **WS Server**: `ws_server.py` стартує на порті 8000, роздає `ui_v4/dist/` (same-origin), слухає `/ws`. Config-gated (`ws_server.enabled`).
+6. **Supervisor loop**: моніторить процеси; crash → auto-restart з backoff (S2, ADR-0003); bootstrap error → degraded mode, NOT crash (S1, ADR-0003).
 
 ### 2) Live цикл M5 (connector, engine_b)
 
@@ -752,10 +792,20 @@ non_critical:  5s → 10s → 20s → 40s → 80s → 120s → 120s → 120s →
 
 ### 5) UI reads
 
+**ui_chart_v3** (HTTP polling, порт 8089):
+
 1. `/api/bars`: cold-load з Redis snap → fallback disk. Stitching open[i]=close[i-1].
 2. `/api/updates`: Redis updates bus (cursor_seq). Disk лише recovery.
 3. `/api/overlay`: ephemeral preview bar для TF≥M5.
 4. `/api/gaps`: gap report з `tools/tail_integrity_scanner.py` (summary.json).
+
+**ui_v4** (WebSocket, порт 8000):
+
+1. WS connect → `config` frame (symbols, TFs, delta_poll_interval_s, version) → `full` frame (cold start bars).
+2. `delta` frames кожну `delta_poll_interval_s` (default 1.0s) з UDS updates bus.
+3. `switch` action → canonical symbol/TF → новий `full` frame.
+4. `scrollback` action → `to_ms` → UDS `read_window` → `scrollback` frame.
+5. `heartbeat` кожні 30с.
 
 ## Примітки
 

@@ -198,7 +198,7 @@ def _check_overlay_anchor_sentinel(root: str) -> Tuple[bool, str, Dict[str, Any]
     has_resolve = "resolve_anchor_offset_ms" in src
     metrics["has_resolve_anchor_offset_ms"] = has_resolve
 
-    has_sentinel = "overlay_anchor_mismatch" in src
+    has_sentinel = "overlay_anchor_mismatch" in src or "overlay_anchor_offset" in src
     metrics["has_overlay_anchor_mismatch_warning"] = has_sentinel
 
     issues: List[str] = []

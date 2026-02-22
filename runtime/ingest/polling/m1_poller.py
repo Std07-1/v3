@@ -5,7 +5,7 @@
 
 Деривація делегується DeriveEngine (ADR-0002 Phase 2):
   on_bar(M1) → cascade M3→M5→M15→M30→H1→H4
-При відсутності DeriveEngine — fallback на inline _derive_m3.
+При відсутності DeriveEngine — degraded-but-loud warning (S17: fallback видалено).
 
 SSOT-1: M1/M3 (візуальність + точки входу).
 SSOT-3: H4 (derived через DeriveEngine).
@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.config_loader import pick_config_path, load_system_config
-from core.model.bars import CandleBar, assert_invariants, ms_to_utc_dt
+from core.model.bars import CandleBar, ms_to_utc_dt
 from env_profile import load_env_secrets
 from runtime.ingest.derive_engine import DeriveEngine
 from runtime.ingest.market_calendar import MarketCalendar
@@ -34,105 +34,6 @@ from runtime.store.uds import build_uds_from_config, UnifiedDataStore
 
 def _utc_now_ms() -> int:
     return int(time.time() * 1000)
-
-
-# ---------------------------------------------------------------------------
-# M1Buffer — буфер закритих M1 для деривації M3
-# ---------------------------------------------------------------------------
-class M1Buffer:
-    """Буфер закритих M1 барів для побудови M3 derived."""
-
-    def __init__(self, max_keep: int = 500) -> None:
-        self._max_keep = max_keep
-        self._by_open_ms: Dict[int, CandleBar] = {}
-        self._sorted_keys: List[int] = []
-
-    def upsert(self, bar: CandleBar) -> None:
-        """Додає M1 бар у буфер."""
-        if bar.tf_s != 60:
-            raise ValueError("M1Buffer приймає тільки tf_s=60")
-        k = bar.open_time_ms
-        if k in self._by_open_ms:
-            self._by_open_ms[k] = bar
-            return
-        self._by_open_ms[k] = bar
-        self._sorted_keys.append(k)
-        self._sorted_keys.sort()
-        self._gc()
-
-    def _gc(self) -> None:
-        if len(self._sorted_keys) <= self._max_keep:
-            return
-        drop = len(self._sorted_keys) - self._max_keep
-        to_drop = self._sorted_keys[:drop]
-        self._sorted_keys = self._sorted_keys[drop:]
-        for k in to_drop:
-            self._by_open_ms.pop(k, None)
-
-    def has_full_m3(self, m3_open_ms: int) -> bool:
-        """Чи є всі 3 M1 бари для M3 bucket."""
-        step = 60_000
-        for i in range(3):
-            if (m3_open_ms + i * step) not in self._by_open_ms:
-                return False
-        return True
-
-    def m3_bars(self, m3_open_ms: int) -> List[CandleBar]:
-        """Повертає 3 M1 бари для M3 bucket або порожній list."""
-        step = 60_000
-        out: List[CandleBar] = []
-        for i in range(3):
-            b = self._by_open_ms.get(m3_open_ms + i * step)
-            if b is None:
-                return []
-            out.append(b)
-        return out
-
-
-def _derive_m3(symbol: str, m1_buf: M1Buffer, m1_bar: CandleBar) -> Optional[CandleBar]:
-    """Будує M3 бар якщо поточний M1 — останній у M3 bucket."""
-    m3_ms = 180_000
-    m3_open = (m1_bar.open_time_ms // m3_ms) * m3_ms
-    m3_close = m3_open + m3_ms
-
-    # M3 будується тільки коли прийшов останній M1 (третій)
-    expected_last_m1 = m3_open + 2 * 60_000
-    if m1_bar.open_time_ms != expected_last_m1:
-        return None
-
-    if not m1_buf.has_full_m3(m3_open):
-        return None
-
-    bars = m1_buf.m3_bars(m3_open)
-    if not bars:
-        return None
-
-    # Фільтруємо calendar-pause flat бари
-    trading = [b for b in bars if not b.extensions.get("calendar_pause_flat")]
-    if not trading:
-        return None
-
-    extensions: dict[str, Any] = {}
-    if len(trading) < len(bars):
-        extensions["partial_calendar_pause"] = True
-        extensions["calendar_pause_m1_count"] = len(bars) - len(trading)
-
-    out = CandleBar(
-        symbol=symbol,
-        tf_s=180,
-        open_time_ms=m3_open,
-        close_time_ms=m3_close,
-        o=trading[0].o,
-        h=max(b.h for b in trading),
-        low=min(b.low for b in trading),
-        c=trading[-1].c,
-        v=sum(b.v for b in trading),
-        complete=True,
-        src="derived",
-        extensions=extensions,
-    )
-    assert_invariants(out)
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +133,7 @@ class M1SymbolPoller:
         self._tail_n = max(2, tail_fetch_n)
         self._m3_derive = m3_derive
         self._derive_engine: Optional[DeriveEngine] = None
-        self._m1_buf = M1Buffer()
+        self._derive_engine_warned = False
         self._tail_catchup_max_bars = max(0, tail_catchup_max_bars)
 
         # P0.2: live recover config (ADR-0002)
@@ -373,21 +274,20 @@ class M1SymbolPoller:
                 self._watermark_ms = bar.open_time_ms
             # P0.3: оновлюємо час останнього нового бару
             self._last_new_bar_ts = time.time()
-            # M1Buffer для legacy M3 деривації
-            self._m1_buf.upsert(bar)
             # Каскадна деривація через DeriveEngine (ADR-0002 P2.3)
             if self._derive_engine is not None:
                 committed = self._derive_engine.on_bar(bar)
                 self._committed_m3 += sum(
                     1 for b in committed if b.tf_s == 180
                 )
-            elif self._m3_derive:
-                # Legacy fallback: inline M3 derive (без DeriveEngine)
-                m3 = _derive_m3(self._symbol, self._m1_buf, bar)
-                if m3 is not None:
-                    m3_result = self._uds.commit_final_bar(m3)
-                    if m3_result.ok:
-                        self._committed_m3 += 1
+            elif self._m3_derive and not self._derive_engine_warned:
+                # I5: degraded-but-loud — derive_engine missing
+                logging.warning(
+                    "M1_DERIVE_NO_ENGINE symbol=%s (derive_engine=None, m3_derive=True)"
+                    " — деривація M3+ неможлива, тільки M1 commit",
+                    self._symbol,
+                )
+                self._derive_engine_warned = True
             return True
         elif result.reason not in ("stale", "duplicate"):
             logging.warning(
@@ -632,15 +532,13 @@ class M1SymbolPoller:
 
     # -- Warmup ----------------------------------------------------------
 
-    def warmup_m1_buffer(self, tail_n: int = 10) -> int:
-        """Заповнює M1Buffer з disk tail + встановлює watermark."""
+    def warmup_watermark(self, tail_n: int = 10) -> int:
+        """Встановлює watermark з disk tail (M1 final bars)."""
         try:
             candles = self._uds.read_tail_candles(self._symbol, 60, tail_n)
             loaded = 0
             for bar in candles:
                 if bar.tf_s == 60 and bar.complete:
-                    self._m1_buf.upsert(bar)
-                    # Watermark з диску
                     if self._watermark_ms is None or bar.open_time_ms > self._watermark_ms:
                         self._watermark_ms = bar.open_time_ms
                     loaded += 1
@@ -855,7 +753,7 @@ class M1PollerRunner:
     # -- Bootstrap / warmup ---------------
 
     def _bootstrap_warmup(self) -> None:
-        """Redis priming з диску (M1→H4) + M1Buffer warmup для M3 деривації."""
+        """Redis priming з диску (M1→H4) + watermark warmup."""
         symbols = [p._symbol for p in self._pollers]  # noqa: SLF001
         bootstrap_degraded = []
 
@@ -881,21 +779,21 @@ class M1PollerRunner:
             )
             bootstrap_degraded.append("redis_priming: %s" % exc)
 
-        # 2. M1Buffer warmup — останні 10 M1 з диску для M3 деривації
+        # 2. Watermark warmup — останні 10 M1 з диску для watermark init
         try:
             warmup_total = 0
             for p in self._pollers:
-                loaded = p.warmup_m1_buffer(tail_n=10)
+                loaded = p.warmup_watermark(tail_n=10)
                 warmup_total += loaded
             logging.info(
-                "M1_POLLER_WARMUP symbols=%d m1_buffer_loaded=%d",
+                "M1_POLLER_WARMUP symbols=%d watermark_loaded=%d",
                 len(self._pollers), warmup_total,
             )
         except Exception as exc:
             logging.warning(
-                "BOOTSTRAP_DEGRADED phase=m1_buffer_warmup err=%s", exc,
+                "BOOTSTRAP_DEGRADED phase=watermark_warmup err=%s", exc,
             )
-            bootstrap_degraded.append("m1_buffer_warmup: %s" % exc)
+            bootstrap_degraded.append("watermark_warmup: %s" % exc)
 
         # 2b. DeriveEngine buffer warmup (ADR-0002 P2.3)
         #     Заповнюємо GenericBuffer: M1 + проміжні TF (M5/M15/M30/H1) з диску.

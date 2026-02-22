@@ -34,9 +34,9 @@ def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--mode",
-        choices=["all", "connector", "ui", "tick_preview", "tick_publisher", "m1_poller"],
+        choices=["all", "connector", "ui", "tick_preview", "tick_publisher", "m1_poller", "ws_server"],
         default="all",
-        help="all | connector | ui | tick_preview | tick_publisher | m1_poller",
+        help="all | connector | ui | tick_preview | tick_publisher | m1_poller | ws_server",
     )
     ap.add_argument(
         "--stdio",
@@ -69,6 +69,7 @@ _PROCESS_CATEGORIES: Dict[str, str] = {
     "tick_publisher": "non_critical",
     "tick_preview": "non_critical",
     "ui": "essential",
+    "ws_server": "essential",
 }
 # (base_delay_s, max_delay_s, max_restart_attempts)
 _BACKOFF_CFG: Dict[str, tuple] = {
@@ -383,10 +384,48 @@ def main() -> int:
                     new_console=args.new_console,
                 )
             )
+        if args.mode in ("all", "ws_server"):
+            # P5: WS-сервер для ui_v4 (essential, restart-tolerant)
+            # Gate: config.json → ws_server.enabled (default: false)
+            config_path_ws = pick_config_path()
+            _ws_enabled = False
+            try:
+                with open(config_path_ws, "r", encoding="utf-8") as _f:
+                    _ws_cfg = json.load(_f).get("ws_server", {})
+                    _ws_enabled = bool(_ws_cfg.get("enabled", False))
+            except Exception:
+                pass
+            if _ws_enabled:
+                processes.append(
+                    _start_process(
+                        label="ws_server",
+                        module="runtime.ws.ws_server",
+                        stdio=stdio,
+                        log_dir=log_dir,
+                        new_console=args.new_console,
+                    )
+                )
+            else:
+                logging.info("WS_SERVER_SKIP reason=disabled (config.ws_server.enabled=false)")
 
         if not processes:
             logging.error("Supervisor: немає процесів для запуску (mode=%s)", args.mode)
             return 2
+
+        # ── Process summary table ──
+        _port_map = {"ui": 8089, "ws_server": 8000}  # known port assignments
+        logging.info("=" * 60)
+        logging.info("  v3 Processes  (%d total, mode=%s)", len(processes), args.mode)
+        logging.info("-" * 60)
+        for _p in processes:
+            _port_info = _port_map.get(_p.label, "")
+            _port_str = " port=%s" % _port_info if _port_info else ""
+            _cat = _PROCESS_CATEGORIES.get(_p.label, "?")
+            logging.info(
+                "  %-16s pid=%-6s cat=%-12s%s",
+                _p.label, _p.proc.pid, _cat, _port_str,
+            )
+        logging.info("=" * 60)
 
         # S2: ініціалізація restart state
         for _p in processes:

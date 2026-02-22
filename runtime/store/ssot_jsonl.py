@@ -6,10 +6,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.model.bars import CandleBar, assert_invariants, ms_to_utc_dt
-
-
-FINAL_SOURCES = {"history", "derived", "history_agg"}
+from core.model.bars import CandleBar, FINAL_SOURCES, assert_invariants, ms_to_utc_dt
 
 
 def _d1_anchor_offsets(
@@ -86,15 +83,19 @@ class JsonlAppender:
         day_anchor_offset_s_d1_alt: Optional[int] = None,
         day_anchor_offset_s_alt: Optional[int] = None,
         day_anchor_offset_s_alt2: Optional[int] = None,
+        fsync: bool = False,
     ) -> None:
         self._root = root
         self._open_files: Dict[str, Any] = {}
+        self._fsync = fsync
         self._day_anchor_offset_s = day_anchor_offset_s
         self._day_anchor_offset_s_d1 = day_anchor_offset_s_d1
         self._day_anchor_offset_s_d1_alt = day_anchor_offset_s_d1_alt
         self._day_anchor_offset_s_alt = day_anchor_offset_s_alt
         self._day_anchor_offset_s_alt2 = day_anchor_offset_s_alt2
         self._drop_preview_total = 0
+        self._drop_log_last_ts = 0.0
+        self._drop_log_suppressed = 0
 
     def drop_preview_total(self) -> int:
         return int(self._drop_preview_total)
@@ -110,15 +111,22 @@ class JsonlAppender:
     def append(self, bar: CandleBar) -> None:
         if not bar.complete or bar.src not in FINAL_SOURCES:
             self._drop_preview_total += 1
-            logging.error(
-                "SSOT_DROP_NON_FINAL symbol=%s tf_s=%s open_ms=%s complete=%s src=%s drop_total=%s",
-                bar.symbol,
-                bar.tf_s,
-                bar.open_time_ms,
-                bar.complete,
-                bar.src,
-                self._drop_preview_total,
-            )
+            self._drop_log_suppressed += 1
+            import time as _time
+            now = _time.monotonic()
+            if now - self._drop_log_last_ts >= 30.0:
+                logging.error(
+                    "SSOT_DROP_NON_FINAL symbol=%s tf_s=%s open_ms=%s complete=%s src=%s drop_total=%s suppressed=%s",
+                    bar.symbol,
+                    bar.tf_s,
+                    bar.open_time_ms,
+                    bar.complete,
+                    bar.src,
+                    self._drop_preview_total,
+                    self._drop_log_suppressed,
+                )
+                self._drop_log_last_ts = now
+                self._drop_log_suppressed = 0
             return
         anchor_offset_s = select_anchor_offset_for_open_ms(
             bar.tf_s,
@@ -138,6 +146,8 @@ class JsonlAppender:
         line = json.dumps(bar.to_dict(), ensure_ascii=False, separators=(",", ":"))
         fh.write(line + "\n")
         fh.flush()
+        if self._fsync:
+            os.fsync(fh.fileno())
 
     def close(self) -> None:
         for fh in self._open_files.values():

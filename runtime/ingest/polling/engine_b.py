@@ -6,7 +6,7 @@ import time
 from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from core.model.bars import CandleBar, ms_to_utc_dt
+from core.model.bars import CandleBar, FINAL_SOURCES, ms_to_utc_dt
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.polling.dedup import has_on_disk, mark_on_disk
 from runtime.ingest.polling.fetch_policy import (
@@ -25,7 +25,6 @@ def utc_now_ms() -> int:
     return int(time.time() * 1000)
 
 
-FINAL_SOURCES = {"history", "derived", "history_agg"}
 PRIME_READY_TTL_S = 21600
 
 

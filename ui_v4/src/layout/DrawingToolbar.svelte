@@ -1,15 +1,25 @@
 <script lang="ts">
-  import type { ActiveTool } from '../types';
+  import type { ActiveTool } from "../types";
 
-  export let activeTool: ActiveTool;
-  export let onSelectTool: (tool: ActiveTool) => void;
+  const {
+    activeTool,
+    onSelectTool,
+  }: {
+    activeTool: ActiveTool;
+    onSelectTool: (tool: ActiveTool) => void;
+  } = $props();
 
-  const tools: { id: ActiveTool; icon: string; title: string; hotkey: string }[] = [
-    { id: 'hline', icon: '—', title: 'Horizontal Line', hotkey: 'H' },
-    { id: 'trend', icon: '╱', title: 'Trend Line', hotkey: 'T' },
-    { id: 'rect', icon: '▭', title: 'Rectangle', hotkey: 'R' },
+  const tools: {
+    id: ActiveTool;
+    icon: string;
+    title: string;
+    hotkey: string;
+  }[] = [
+    { id: "hline", icon: "—", title: "Horizontal Line", hotkey: "H" },
+    { id: "trend", icon: "╱", title: "Trend Line", hotkey: "T" },
+    { id: "rect", icon: "▭", title: "Rectangle", hotkey: "R" },
     // Eraser в v2 може бути “заглушка”; повноцінно — у v3.
-    { id: 'eraser', icon: '⌫', title: 'Eraser (v3)', hotkey: 'E' },
+    { id: "eraser", icon: "⌫", title: "Eraser (v3)", hotkey: "E" },
   ];
 </script>
 
@@ -18,7 +28,7 @@
     <button
       class="tool-btn"
       class:active={activeTool === tool.id}
-      on:click={() => onSelectTool(activeTool === tool.id ? null : tool.id)}
+      onclick={() => onSelectTool(activeTool === tool.id ? null : tool.id)}
       title={`${tool.title} [${tool.hotkey}]`}
       type="button"
     >

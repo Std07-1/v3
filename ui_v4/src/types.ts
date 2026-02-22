@@ -80,7 +80,7 @@ export type UiWarningCode =
 
 export interface UiWarning {
   code: UiWarningCode;
-  kind: 'overlay' | 'drawing' | 'router';
+  kind: 'overlay' | 'drawing' | 'router' | 'action';
   id: string;
   details: string;
 }

@@ -110,7 +110,7 @@ export class OverlayRenderer {
   }
 
   private toX(t_ms: number): number | null {
-    return this.chartApi.timeScale().timeToCoordinate(t_ms / 1000);
+    return this.chartApi.timeScale().timeToCoordinate((t_ms / 1000) as import('lightweight-charts').Time);
   }
 
   private toY(price: number): number | null {

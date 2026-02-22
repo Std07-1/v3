@@ -46,6 +46,9 @@
     "broker_base_tfs_s": [
         86400
     ],
+    "derived_tfs_s": [
+        14400
+    ],
     "broker_base_fetch_on_close": true,
     "broker_base_max_tf_per_poll": 0,
     "broker_base_cold_start_enabled": true,
@@ -151,6 +154,7 @@
     "day_anchor_offset_s_alt2": 68400,
     "day_anchor_offset_s_d1": 75600,
     "day_anchor_offset_s_d1_alt": 79200,
+    "ssot_jsonl_fsync": false,
     "ui_debug": true,
     "group_logs_enabled": true,
     "redis_priming_enabled": true,
@@ -194,14 +198,14 @@
             "86400": 604800
         },
         "tail_n_by_tf_s": {
-            "60": 2880,
-            "180": 1440,
+            "60": 10080,
+            "180": 3360,
             "300": 8000,
             "900": 4000,
             "1800": 2500,
             "3600": 2000,
-            "14400": 256,
-            "86400": 128
+            "14400": 1080,
+            "86400": 365
         }
     },
     "channels": {
@@ -274,5 +278,12 @@
             "to_utc": "2026-02-09T12:40:00Z",
             "reason": "FXCM data outage"
         }
-    ]
+    ],
+    "ws_server": {
+        "enabled": true,
+        "host": "127.0.0.1",
+        "port": 8000,
+        "heartbeat_interval_s": 30,
+        "delta_poll_interval_s": 1.0
+    }
 }

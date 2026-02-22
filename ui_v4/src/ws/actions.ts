@@ -1,8 +1,10 @@
 // src/ws/actions.ts
 // SSOT: action creators для UI v4. Українські коментарі. Без silent fallback.
 
+import { get } from 'svelte/store';
 import type { WSConnection } from './connection';
 import type { Drawing, T_MS, WsAction } from '../types';
+import { serverConfig, addUiWarning } from '../app/frameRouter';
 
 function toInt(n: number): number {
   if (!Number.isFinite(n)) return 0;
@@ -21,7 +23,18 @@ export function createActions(ws: WSConnection) {
   return {
     // ----- Core -----
     switchSymbolTf(symbol: string, tf: string) {
-      // Rail: символ/TF мають бути явними, без авто-нормалізації тут
+      // P2: guard — не надсилати switch з невалідним symbol/tf (degraded-but-loud)
+      const cfg = get(serverConfig);
+      if (cfg.symbols.length > 0 && !cfg.symbols.includes(symbol)) {
+        addUiWarning('schema_mismatch', 'action',
+          `switch blocked: symbol "${symbol}" not in server allowlist`);
+        return;
+      }
+      if (cfg.tfs.length > 0 && !cfg.tfs.includes(tf)) {
+        addUiWarning('schema_mismatch', 'action',
+          `switch blocked: tf "${tf}" not in server allowlist`);
+        return;
+      }
       send({ action: 'switch', symbol, tf });
     },
 

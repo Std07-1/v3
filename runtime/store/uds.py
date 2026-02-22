@@ -10,7 +10,7 @@ import json as _json
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from core.model.bars import CandleBar
+from core.model.bars import CandleBar, FINAL_SOURCES, SOURCE_ALLOWLIST
 from core.config_loader import (
     tf_allowlist_from_cfg, preview_tf_allowlist_from_cfg, min_coldload_bars_from_cfg,
     DEFAULT_PREVIEW_TF_ALLOWLIST, MAX_EVENTS_PER_RESPONSE,
@@ -28,6 +28,11 @@ Logging = logging.getLogger("uds")
 
 _OBS = Obs60s("uds")
 
+# Throttle логів "виправлено геометрію" — один підсумок / 30 с (антиспам при warmup)
+_geom_fix_count = 0
+_geom_fix_last_log_ts = 0.0
+_geom_fix_last_example: Optional[tuple] = None  # (source, tf_s, sorted, dedup_dropped)
+
 _REDIS_SPEC_BOOT_LOGGED = False
 
 try:
@@ -38,8 +43,6 @@ except Exception:
     Logging.warning("UDS: redis бібліотека недоступна, RedisLayer вимкнено")
 
 
-SOURCE_ALLOWLIST = {"history", "derived", "history_agg", ""}
-FINAL_SOURCES = {"history", "derived", "history_agg"}
 REDIS_SOCKET_TIMEOUT_S = 0.4
 _DEFAULT_PREVIEW_CURR_TTL_S = 1800  # SSOT fallback; runtime значення з config.json
 PREVIEW_TAIL_RETAIN = 2000
@@ -89,6 +92,10 @@ def _disk_bar_to_candle(
             src=str(src),
         )
     except Exception:
+        logging.debug(
+            "DISK_BAR_PARSE_FAIL symbol=%s tf_s=%s open_ms=%s",
+            raw.get("symbol"), raw.get("tf_s"), raw.get("open_time_ms"),
+        )
         return None
 
 UPDATES_REDIS_RETAIN_DEFAULT = 2000
@@ -336,6 +343,9 @@ class UnifiedDataStore:
         self._disk_hotpath_blocked = 0  # P4: лічильник заблокованих disk спроб
         self._disk_bootstrap_reads = 0  # P4: лічильник disk читань під час bootstrap
         self._disk_hotpath_last_log_ts = 0.0  # rate-limit логів
+        # Throttle логів commit_final_bar drop (stale/duplicate) — 1 рядок / 30 с з підсумком
+        self._commit_drop_counts: dict[str, int] = {}
+        self._commit_drop_last_log_ts = 0.0
         if self._preview_allowlist_source == "fallback":
             Logging.debug(
                 "UDS: preview_tf_allowlist_source=fallback tf_s=%s",
@@ -647,15 +657,25 @@ class UnifiedDataStore:
         wm = self._init_watermark_for_key(bar.symbol, bar.tf_s)
         drop_reason = _watermark_drop_reason(bar.open_time_ms, wm)
         if drop_reason is not None:
-            Logging.warning(
-                "UDS: commit_final_bar drop reason=%s symbol=%s tf_s=%s open_ms=%s wm_open_ms=%s",
-                drop_reason,
-                bar.symbol,
-                bar.tf_s,
-                bar.open_time_ms,
-                wm,
-            )
             _OBS.inc_writer_drop(drop_reason, bar.tf_s)
+            # Throttle: один підсумковий рядок раз на 30 с замість кожного дропа (антиспам)
+            self._commit_drop_counts[drop_reason] = self._commit_drop_counts.get(drop_reason, 0) + 1
+            now_mono = time.monotonic()
+            if now_mono - self._commit_drop_last_log_ts >= 30.0:
+                stale_n = self._commit_drop_counts.get("stale", 0)
+                dup_n = self._commit_drop_counts.get("duplicate", 0)
+                if stale_n or dup_n:
+                    Logging.warning(
+                        "UDS: commit_final_bar drops (throttled 30s) stale=%s duplicate=%s example symbol=%s tf_s=%s open_ms=%s wm_open_ms=%s",
+                        stale_n,
+                        dup_n,
+                        bar.symbol,
+                        bar.tf_s,
+                        bar.open_time_ms,
+                        wm,
+                    )
+                self._commit_drop_counts.clear()
+                self._commit_drop_last_log_ts = now_mono
             return CommitResult(False, drop_reason, False, False, False, warnings)
 
         ssot_written = self._append_to_disk(bar, ssot_write_ts_ms, warnings)
@@ -817,7 +837,8 @@ class UnifiedDataStore:
                 "source": str(bar.src),
                 "payload_ts_ms": payload_ts_ms,
             }
-            self._redis.write_preview_tail(bar.symbol, bar.tf_s, new_tail)
+            tail_ttl = self._preview_curr_ttl_s * 2 if self._preview_curr_ttl_s else None
+            self._redis.write_preview_tail(bar.symbol, bar.tf_s, new_tail, ttl_s=tail_ttl)
             self._preview_tail_updates_total += 1
             now_ms = int(time.time() * 1000)
             if now_ms - self._preview_tail_updates_log_ts_ms >= 60_000:
@@ -1822,14 +1843,24 @@ def _mark_geom_fix(
 
 
 def _log_geom_fix(source: str, tf_s: int, geom: dict[str, Any]) -> None:
-    Logging.warning(
-        "UDS: виправлено геометрію source=%s tf_s=%s sorted=%s dedup_dropped=%s",
-        source,
-        tf_s,
-        geom.get("sorted"),
-        geom.get("dedup_dropped"),
-    )
+    global _geom_fix_count, _geom_fix_last_log_ts, _geom_fix_last_example
     _OBS.inc_uds_geom_fix(source, tf_s)
+    _geom_fix_count += 1
+    _geom_fix_last_example = (source, tf_s, geom.get("sorted"), geom.get("dedup_dropped"))
+    now_mono = time.monotonic()
+    if now_mono - _geom_fix_last_log_ts >= 30.0:
+        if _geom_fix_count > 0 and _geom_fix_last_example:
+            src, tf, srt, dedup = _geom_fix_last_example
+            Logging.warning(
+                "UDS: виправлено геометрію (throttled 30s) total=%s example source=%s tf_s=%s sorted=%s dedup_dropped=%s",
+                _geom_fix_count,
+                src,
+                tf,
+                srt,
+                dedup,
+            )
+        _geom_fix_count = 0
+        _geom_fix_last_log_ts = now_mono
 
 
 def _log_window_result(result: WindowResult, warnings: list[str], tf_s: int) -> None:
@@ -1902,8 +1933,9 @@ class _RedisUpdatesBus:
         return ":".join([self._ns, *parts])
 
     def publish(self, event: dict[str, Any]) -> Optional[int]:
-        seq_key = self._key("updates", "seq", str(event["key"]["symbol"]), str(event["key"]["tf_s"]))
-        list_key = self._key("updates", "list", str(event["key"]["symbol"]), str(event["key"]["tf_s"]))
+        sym = str(event["key"]["symbol"]).replace("_", "/")
+        seq_key = self._key("updates", "seq", sym, str(event["key"]["tf_s"]))
+        list_key = self._key("updates", "list", sym, str(event["key"]["tf_s"]))
         seq = int(self._client.incr(seq_key))
         event = dict(event)
         event["seq"] = seq
@@ -1920,8 +1952,9 @@ class _RedisUpdatesBus:
         limit: int,
     ) -> tuple[list[dict[str, Any]], int, Optional[dict[str, Any]], Optional[str]]:
         try:
-            seq_key = self._key("updates", "seq", symbol, str(tf_s))
-            list_key = self._key("updates", "list", symbol, str(tf_s))
+            sym = str(symbol).replace("_", "/")
+            seq_key = self._key("updates", "seq", sym, str(tf_s))
+            list_key = self._key("updates", "list", sym, str(tf_s))
             raw_list = self._client.lrange(list_key, -self._retain, -1)
             events: list[dict[str, Any]] = []
             min_seq: Optional[int] = None
@@ -2053,19 +2086,18 @@ def build_uds_from_config(
             day_anchor_offset_s_d1_alt=_opt_int(cfg.get("day_anchor_offset_s_d1_alt")),
             day_anchor_offset_s_alt=_opt_int(cfg.get("day_anchor_offset_s_alt")),
             day_anchor_offset_s_alt2=_opt_int(cfg.get("day_anchor_offset_s_alt2")),
+            fsync=bool(cfg.get("ssot_jsonl_fsync", False)),
         )
         redis_writer = build_redis_snapshot_writer(config_path)
-    # P3: для reader role збільшуємо RAM cache щоб вмістити warmup дані
-    # symbols × TFs ≈ 13×8 = 104 + запас
-    ram_max_keys = 8
-    if role == "reader":
-        n_symbols = len(cfg.get("symbols", []))
-        if n_symbols < 1:
-            n_symbols = 1
-        n_tfs = len(tf_allowlist)
-        if n_tfs < 1:
-            n_tfs = 8
-        ram_max_keys = max(n_symbols * n_tfs + 16, 128)
+    # S6.5: RAM cache dynamic для обох ролей (writer і reader)
+    # symbols × TFs ≈ 13×8 = 104 + запас; max_keys=8 hardcode → LRU thrashing
+    n_symbols = len(cfg.get("symbols", []))
+    if n_symbols < 1:
+        n_symbols = 1
+    n_tfs = len(tf_allowlist)
+    if n_tfs < 1:
+        n_tfs = 8
+    ram_max_keys = max(n_symbols * n_tfs + 16, 128)
     ram_layer = RamLayer(max_keys=ram_max_keys, max_bars=60000)
     return UnifiedDataStore(
         data_root=data_root,
@@ -2126,7 +2158,8 @@ def selftest_writer_api() -> None:
             payload = self.preview_tail.get((symbol, tf_s))
             return dict(payload) if payload is not None else None, None, None
 
-        def write_preview_tail(self, symbol: str, tf_s: int, payload: dict[str, Any]) -> None:
+        def write_preview_tail(self, symbol: str, tf_s: int, payload: dict[str, Any], ttl_s: Optional[int] = None) -> None:
+            _ = ttl_s
             self.preview_tail[(symbol, tf_s)] = dict(payload)
 
         def publish_preview_event(

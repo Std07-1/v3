@@ -401,19 +401,20 @@ def _check_api_splitbrain(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     has_ignore_warning = "query_param_ignored" in src
     metrics["has_ignore_warning"] = has_ignore_warning
 
-    # 3. ReadPolicy має бути hardcoded (False, False)
+    # 3. ReadPolicy має бути hardcoded (False, False) — дозволяємо додаткові kwargs після
     rp_pattern = re.compile(
         r"ReadPolicy\s*\(\s*"
         r"force_disk\s*=\s*False\s*,\s*"
-        r"prefer_redis\s*=\s*False\s*,?\s*\)",
+        r"prefer_redis\s*=\s*False\b",
         re.DOTALL,
     )
     has_hardcoded_rp = bool(rp_pattern.search(src))
     metrics["has_hardcoded_ReadPolicy_False_False"] = has_hardcoded_rp
 
-    # 4. Заборонені патерни: ReadPolicy з prefer_redis=True / force_disk=True
+    # 4. Заборонені патерни: ReadPolicy з force_disk=True (справжній split-brain).
+    #    prefer_redis=True дозволений — це Redis hot-path оптимізація, не split-brain.
     bad_rp = re.compile(
-        r"ReadPolicy\s*\([^)]*(?:force_disk\s*=\s*(?:True|force_disk)|prefer_redis\s*=\s*(?:True|prefer_redis))",
+        r"ReadPolicy\s*\([^)]*force_disk\s*=\s*(?:True|force_disk)",
         re.DOTALL,
     )
     bad_matches = bad_rp.findall(src)

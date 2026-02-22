@@ -122,7 +122,7 @@ arr = self._fx.get_history(symbol, timeframe, date_from, date_to, count)
 ```text
 M1PollerRunner._bootstrap_warmup():
   1) Redis priming: читає останні N барів M1/M3 з диску → пише в Redis snap
-  2) M1Buffer warmup: завантажує 10 M1 з диску для M3 деривації
+  2) Watermark warmup: завантажує 10 M1 з диску для встановлення watermark
   3) Tail catchup: від watermark до expected (FXCM fetch, макс 5000 барів)
      → Інваріант: main loop не починається поки tail gap не закрито
 ```
@@ -159,7 +159,7 @@ M1SymbolPoller.poll_once():
      → Calendar-aware flat bar classification (див. §6)
      → UDS.commit_final_bar(bar) → disk + Redis + updates bus
      → Оновлення watermark
-     → M1Buffer.upsert(bar) → спроба M3 деривації
+     → DeriveEngine.on_bar(bar) → каскадна деривація M3→H4
 
   8) Live recover check: _live_recover_check() (див. §9)
   9) Stale detection: _stale_check() (див. §10)
@@ -259,7 +259,7 @@ Flat bar: `O == H == L == C` і `volume ≤ flat_bar_max_volume` (SSOT: `config.
 
 ### 6.3 Вплив на M3 деривацію
 
-`_derive_m3()` фільтрує calendar_pause_flat бари:
+DeriveEngine (GenericBuffer) фільтрує calendar_pause_flat бари при побудові M3:
 
 ```python
 trading = [b for b in bars if not b.extensions.get("calendar_pause_flat")]
@@ -267,6 +267,9 @@ trading = [b for b in bars if not b.extensions.get("calendar_pause_flat")]
 
 Якщо всі 3 M1 — calendar_pause_flat → M3 не будується.
 Якщо частково — M3 будується з `extensions.partial_calendar_pause=true`.
+
+> **Note (S17):** Inline `_derive_m3()` видалено (changelog 20260221-028/029).
+> M3 деривація виконується виключно через DeriveEngine.
 
 ---
 

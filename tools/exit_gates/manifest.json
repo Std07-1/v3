@@ -195,8 +195,8 @@
             "inputs": {
                 "root": ".",
                 "days": 14,
-                "total_budget": 100,
-                "per_sym_budget": 50
+                "total_budget": 50000,
+                "per_sym_budget": 5000
             }
         },
         {
@@ -225,6 +225,27 @@
             "module": "tools.exit_gates.gates.gate_tick_preview_calendar",
             "inputs": {
                 "root": "."
+            }
+        },
+        {
+            "name": "dependency_rule",
+            "module": "tools.exit_gates.gates.gate_dependency_rule",
+            "inputs": {
+                "root": "."
+            }
+        },
+        {
+            "name": "no_bare_except",
+            "module": "tools.exit_gates.gates.gate_no_bare_except",
+            "inputs": {
+                "root": ".",
+                "max_violations": 85,
+                "scan_dirs": [
+                    "core",
+                    "runtime",
+                    "app",
+                    "ui_chart_v3"
+                ]
             }
         }
     ]

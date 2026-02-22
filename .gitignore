@@ -1,42 +1,100 @@
-# Python
+# ============================================================
+#  .gitignore — Trading Platform v3
+#  Правило: в репо лише код + конфіг + core docs + тести.
+#  Все інше (дані, аудити, спеки, IDE, build output) — тут.
+# ============================================================
+
+# ── Python ───────────────────────────────────────────────────
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
 .mypy_cache/
 .pytest_cache/
+.ruff_cache/
 
-# Секрети та налаштування
+# ── Секрети ──────────────────────────────────────────────────
 .env
+.env.local
+.env.prod
 
-# Дані
+# ── IDE / Editor ─────────────────────────────────────────────
+/.vscode/
+/.cursor/
+/.github/
+/.idea/
+*.swp
+*.swo
+*~
+
+# ── Дані (runtime, не код) ──────────────────────────────────
 /data_v3/
 /History/
-research/
-reports/
-reports/exit_gates/
+/exports/
+dump.rdb
 
-# Legacy
+# ── Node / UI build artifacts ───────────────────────────────
+node_modules/
+ui_v4/node_modules/
+ui_v4/dist/
+
+# ── Legacy UI (замінено на ui_v4) ───────────────────────────
+/ui_chart_v3/
 /Old system Connector v2/
 
-# tools
-/tools/tail_guard.py
-/tools/diag
+# ── Research / аудити / звіти (dev-only, не релізні) ────────
+/research/
+/reports/
+/aione_top/
 
-
-# Журнали та записи
+# ── Журнали, стан, діагностика ──────────────────────────────
 /changelog.jsonl
 /CHANGELOG.md
 /rebuild_state.json
-/docs/audit/
+/env_profile.py
+*.log
+logs/
 
-# Секретні документи
+# ── Документація: внутрішні аудити та спеки (не релізні) ────
+/docs/audit/
+/docs/system_spec/
+/docs/claude_project_instructions.md
+/docs/Аналітичний меморандум.md
 /docs/Host Contract - Capability Sheet.md
 
-# GitHub/VSCode
-/.github/
-/.vscode/
+# ── UI v4: planning/spec docs (не релізні) ──────────────────
+ui_v4/system_spec_ui4/
+ui_v4/UI_v4_COPILOT_PROMPT.txt
+ui_v4/UI_v4_COPILOT_README.md
+ui_v4/UI_v4_Addendum_v2_consolidated.md
+ui_v4/UI_v4_Addendum_v3_consolidated.md
+ui_v4/UI v4 _v3.md
+ui_v4/Architecture Review & Slice 0 (Оновлено).md
+ui_v4/LWC Engine (з фіксом Dedupe Scrollback).md
+ui_v4/.env.example
 
-# Налаштування (пізніше додамо в проект)
+# ── Root-level аудити/плани (не релізні) ─────────────────────
+/ПОВНИЙ АУДИТ AS-IS + TO-BE ADR + ПЛАН.md
+
+# ── Tools (діагностичні, не core) ───────────────────────────
+/tools/tail_guard.py
+/tools/diag/
+/tools/audit/
+/tools/_diag_*.py
+/tools/_check_*.py
+/tools/purge_rebuild_h4.py
+/tools/compare_m5_derived_vs_broker.py
+/tools/dedup_jsonl.py
+/tools/backfill_cascade.py
+/tools/live_cascade_monitor.py
+/tools/tail_integrity_scanner.py
+
+# ── UI v4: old/dead code ────────────────────────────────────
+ui_v4/src/chart/ChartPane.svelte
+ui_v4/src/chart/drawings/CommandStack.ts
+
+# ── Python config/packaging (поки не використовується) ──────
 /mypy.ini
 /pytest.ini
 /pyproject.toml
@@ -45,6 +103,6 @@ reports/exit_gates/
 /coverage.xml
 /.coverage
 
-# Тимчасове
-*.log
-logs/
+# ── Тимчасове ────────────────────────────────────────────────
+*.tmp
+*.bak

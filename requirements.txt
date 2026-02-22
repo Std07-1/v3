@@ -3,6 +3,7 @@ redis==5.0.1
 numpy==1.21.6
 pandas==1.1.5
 python-dotenv>=0.21,<1.0
+aiohttp>=3.8,<4.0
 
 # forexconnect SDK is installed separately (vendor SDK / wheel)
 forexconnect==1.6.43

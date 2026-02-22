@@ -78,10 +78,10 @@ class RedisLayer:
         self._write_json(key, payload, ttl_s)
 
     def write_preview_tail(
-        self, symbol: str, tf_s: int, payload: dict[str, Any]
+        self, symbol: str, tf_s: int, payload: dict[str, Any], ttl_s: Optional[int] = None
     ) -> None:
         key = preview_tail_key(self._ns, symbol, tf_s)
-        self._write_json(key, payload, None)
+        self._write_json(key, payload, ttl_s)
 
     def publish_preview_event(
         self, symbol: str, tf_s: int, event: dict[str, Any], retain: int

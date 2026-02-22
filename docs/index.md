@@ -1,6 +1,6 @@
 # Документація Trading Platform v3 — Індекс (SSOT)
 
-> **Остання перевірка**: 2026-02-18  
+> **Остання перевірка**: 2026-02-22  
 > **Мова**: українська (англійська лише для загальноприйнятих термінів)
 
 Цей файл — **точка входу** в усю документацію проєкту. Будь-яке знання про систему має бути знайдене через цей індекс.
@@ -17,6 +17,7 @@
 | [ADR-0001 UnifiedDataStore.md](ADR-0001%20UnifiedDataStore.md) | Архітектурне рішення: UDS (RAM↔Redis↔Disk) + Contract-first API |
 | [ADR-0002-derive-chain-from-m1.md](ADR-0002-derive-chain-from-m1.md) | DeriveChain: M1→M3→M5→M15→M30→H1→H4 (4 phases) |
 | [ADR-0003 Cold Start Hardening.md](ADR-0003%20Cold%20Start%20Hardening.md) | Cold start: error isolation, process restart, unified gate |
+| [ADR-0004-log-format-and-throttles.md](ADR-0004-log-format-and-throttles.md) | Формат лог-рядків (aione_top), throttle UDS (commit_final_bar drop, geom_fix) |
 
 ### 2. Потоки даних
 
@@ -50,6 +51,16 @@
 | Документ | Зміст |
 |---|---|
 | [ui_api.md](ui_api.md) | Таблиця endpoint-ів, формати, джерела даних, кеш/TTL |
+
+### 5.1. UI v4 (Svelte 5 — next-gen frontend, chart parity DONE)
+
+| Документ | Зміст |
+|---|---|
+| [ui_v4_integration.md](ui_v4_integration.md) | Інтеграційний гайд: стан реалізації, WS-протокол, GAP аналіз, план підключення |
+| [ui_v4/README_DEV.md](../ui_v4/README_DEV.md) | Developer quick start, стек, env-змінні |
+| [ui_v4/UI_v4_COPILOT_README.md](../ui_v4/UI_v4_COPILOT_README.md) | SSOT інструкція для побудови (slices 0–5) |
+| [ui_v4/src/types.ts](../ui_v4/src/types.ts) | SSOT типи: RenderFrame, WsAction, Candle, SmcData, Drawing |
+| [system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md](system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md) | UI v4 аудит: T1-T10 ALL COMPLETE, chart parity DONE |
 
 ### 6. Runbooks (експлуатація)
 
@@ -89,7 +100,9 @@ A (Broker/Ingest) → C (UDS — єдина талія) → B (UI — read-only 
 
 - **A**: FXCM History + Tick Stream → writer-процеси (connector, m1_poller, tick_preview_worker, tick_publisher)
 - **C**: UnifiedDataStore — єдина точка запису/читання marketdata (SSOT disk + Redis snapshots + updates bus)
-- **B**: UI HTTP API — read-only, без доменної логіки, без прямого доступу до диску/Redis
+- **B**: UI — read-only renderer:
+  - **ui_chart_v3**: HTTP polling API (порт 8089, vanilla JS, поточний production)
+  - **ui_v4**: WebSocket real-time (порт 8000, Svelte 5 + LWC 5, chart parity DONE, audit T1-T10 COMPLETE) → [ui_v4_integration.md](ui_v4_integration.md)
 
 ## Ключові інваріанти (коротко)
 
@@ -109,7 +122,8 @@ A (Broker/Ingest) → C (UDS — єдина талія) → B (UI — read-only 
 
 - **Конфіг SSOT**: `config.json` (довідник: [config_reference.md](config_reference.md))
 - **Запуск**: `python -m app.main --mode all --stdio pipe`
-- **UI**: `http://127.0.0.1:8089/`
+- **UI v3**: `http://127.0.0.1:8089/`
+- **UI v4**: `http://127.0.0.1:8000/` (WS real-time, config-gated)
 - **Статус**: `http://127.0.0.1:8089/api/status`
 - **Exit Gates**: `python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json`
 - **Журнал змін**: `changelog.jsonl` (індекс: `CHANGELOG.md`)

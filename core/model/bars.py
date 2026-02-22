@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, FrozenSet, Tuple
+
+
+# ── FINAL_SOURCES: єдиний SSOT (S3 remediation) ──────────────
+# Джерела, які роблять бар «final» (придатний для SSOT JSONL та canonical window).
+# Будь-яка зміна — ТІЛЬКИ тут; решта коду імпортує цю константу.
+FINAL_SOURCES: FrozenSet[str] = frozenset({"history", "derived", "history_agg"})
+SOURCE_ALLOWLIST: FrozenSet[str] = frozenset({"history", "derived", "history_agg", ""})
+# ──────────────────────────────────────────────────────────────
 
 
 @dataclasses.dataclass(frozen=True)

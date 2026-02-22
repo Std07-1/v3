@@ -53,22 +53,23 @@ def _check_allowlist_htf(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     cfg = _load_config(root)
     allowlist = cfg.get("tf_allowlist_s", [])
     broker_base = cfg.get("broker_base_tfs_s", [])
+    derived_tfs = cfg.get("derived_tfs_s", [])
 
     missing_allow = []
-    missing_base = []
+    missing_source = []  # TF має бути або в broker_base, або в derived_tfs
     for tf in [14400, 86400]:
         if tf not in allowlist:
             missing_allow.append(tf)
-        if tf not in broker_base:
-            missing_base.append(tf)
+        if tf not in broker_base and tf not in derived_tfs:
+            missing_source.append(tf)
 
-    if missing_allow or missing_base:
+    if missing_allow or missing_source:
         return (
             False,
-            f"missing in allowlist: {missing_allow}, missing in broker_base: {missing_base}",
-            {"missing_allow": missing_allow, "missing_base": missing_base},
+            f"missing in allowlist: {missing_allow}, missing in broker/derived: {missing_source}",
+            {"missing_allow": missing_allow, "missing_source": missing_source},
         )
-    return True, "H4/D1 в tf_allowlist_s та broker_base_tfs_s", {}
+    return True, "H4/D1 в tf_allowlist_s та broker_base/derived_tfs_s", {}
 
 
 # ---------------------------------------------------------------------------

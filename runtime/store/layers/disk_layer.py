@@ -5,8 +5,7 @@ import os
 from collections import deque
 from typing import Any, Iterable, Optional
 
-
-FINAL_SOURCES = {"history", "derived", "history_agg"}
+from core.model.bars import FINAL_SOURCES
 
 
 def _iter_lines_reverse(path: str) -> Iterable[bytes]:
