@@ -10,7 +10,6 @@
   // DISABLED: trading tools deferred (audit T1)
   // import DrawingToolbar from "./layout/DrawingToolbar.svelte";
   import ChartHud from "./layout/ChartHud.svelte";
-  import StatusBar from "./layout/StatusBar.svelte";
   import StatusOverlay from "./layout/StatusOverlay.svelte";
   import DiagPanel from "./layout/DiagPanel.svelte";
 
@@ -52,11 +51,58 @@
   let chartPaneRef: any = $state(null);
   let activeTheme: ThemeName = $state(loadTheme());
   let appBg = $derived(THEMES[activeTheme]?.appBg ?? "#131722");
-  let statusBarBg = $derived(THEMES[activeTheme]?.statusBarBg ?? "#1e222d");
-  let hudBg = $derived(THEMES[activeTheme]?.hudBg ?? "rgba(30, 34, 45, 0.72)");
+  let hudBg = $derived(THEMES[activeTheme]?.hudBg ?? "transparent");
   let hudText = $derived(THEMES[activeTheme]?.hudText ?? "#d1d4dc");
-  let hudBorder = $derived(
-    THEMES[activeTheme]?.hudBorder ?? "rgba(255, 255, 255, 0.06)",
+  let hudBorder = $derived(THEMES[activeTheme]?.hudBorder ?? "transparent");
+  let menuBg = $derived(
+    (THEMES[activeTheme] as any)?.menuBg ?? "rgba(30, 34, 45, 0.92)",
+  );
+  let menuBorder = $derived(
+    (THEMES[activeTheme] as any)?.menuBorder ?? "rgba(255, 255, 255, 0.08)",
+  );
+
+  // Entry 078 §3a: Brightness control (0.80 - 1.20)
+  function loadBrightness(): number {
+    try {
+      const v = parseFloat(localStorage.getItem("v4_brightness") ?? "1");
+      if (Number.isFinite(v) && v >= 0.8 && v <= 1.2) return v;
+    } catch {}
+    return 1.0;
+  }
+  function saveBrightness(v: number): void {
+    try {
+      localStorage.setItem("v4_brightness", String(v));
+    } catch {}
+  }
+  let brightness = $state(loadBrightness());
+  let brightnessIcon = $derived(brightness >= 1.0 ? "☀" : "🌙");
+  function handleBrightnessWheel(e: WheelEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const delta = e.deltaY > 0 ? -0.02 : 0.02;
+    brightness = Math.max(0.8, Math.min(1.2, +(brightness + delta).toFixed(2)));
+    saveBrightness(brightness);
+  }
+
+  // Entry 077: Top-right compact bar (clock + health dot + diag toggle)
+  const STATUS_COLORS: Record<string, string> = {
+    HEALTHY: "#26a69a",
+    CONNECTING: "#f0b90b",
+    STALLED: "#ef5350",
+    WS_UNAVAILABLE: "#ef5350",
+    EDGE_BLOCKED: "#ef5350",
+    OFFLINE: "#ef5350",
+    FRONTEND_ERROR: "#ef5350",
+  };
+  let clockNow = $state(Date.now());
+  let clockInterval: ReturnType<typeof setInterval> | null = null;
+  let utcStr = $derived(
+    (() => {
+      const d = new Date(clockNow);
+      const hh = String(d.getUTCHours()).padStart(2, "0");
+      const mm = String(d.getUTCMinutes()).padStart(2, "0");
+      return `${hh}:${mm}`;
+    })(),
   );
 
   function handleThemeChange(name: ThemeName) {
@@ -81,6 +127,7 @@
   let hudTf = $state("");
   let lastPrice: number | null = $state(null);
   let lastBarTs: number | null = $state(null);
+  let lastBarOpen: number | null = $state(null);
 
   // --- Reactive subscriptions ---
   let frame: RenderFrame | null = $state(null);
@@ -100,6 +147,7 @@
       if (candles && candles.length > 0) {
         const last = candles[candles.length - 1];
         lastPrice = last.c;
+        lastBarOpen = last.o;
         lastBarTs = last.t_ms;
       }
     }
@@ -165,6 +213,11 @@
     ws = new WSConnection(WS_URL, handleWSFrame);
     ws.connect();
     actions = createActions(ws);
+
+    // 4. Clock tick for top-right UTC display
+    clockInterval = setInterval(() => {
+      clockNow = Date.now();
+    }, 1000);
   });
 
   onDestroy(() => {
@@ -173,6 +226,7 @@
     unsubConfig();
     ws?.close();
     stopEdgeProbe();
+    if (clockInterval) clearInterval(clockInterval);
     window.removeEventListener("error", onGlobalError);
     window.removeEventListener("unhandledrejection", onUnhandledRejection);
     window.removeEventListener("online", onOnline);
@@ -223,6 +277,7 @@
         {sendRawAction}
         {scrollback}
         {addUiWarning}
+        {brightness}
       />
       <!-- P3.1-P3.2: Frosted-glass HUD overlay -->
       <ChartHud
@@ -231,6 +286,7 @@
         currentSymbol={hudSymbol}
         currentTf={hudTf}
         {lastPrice}
+        {lastBarOpen}
         {lastBarTs}
         onSwitch={(sym, tf) => actions?.switchSymbolTf(sym, tf)}
         onThemeChange={handleThemeChange}
@@ -238,16 +294,31 @@
         themeBg={hudBg}
         themeText={hudText}
         themeBorder={hudBorder}
+        {menuBg}
+        {menuBorder}
       />
     </div>
   </div>
 
-  <!-- Bottom bar: status -->
-  <StatusBar
-    {statusInfo}
-    latencyMs={frame?.meta?.latency_ms ?? null}
-    onDiagToggle={() => (diagVisible = !diagVisible)}
-  />
+  <!-- Entry 078: Compact top-right bar (health dot + brightness + diag + clock) -->
+  <div class="top-right-bar">
+    <span
+      class="tr-dot"
+      style:background={STATUS_COLORS[statusInfo.status] ?? "#888"}
+    ></span>
+    <span
+      class="tr-brightness"
+      onwheel={handleBrightnessWheel}
+      title={`Brightness ${Math.round(brightness * 100)}% — scroll to adjust`}
+      >{brightnessIcon}</span
+    >
+    <button
+      class="tr-diag-btn"
+      onclick={() => (diagVisible = !diagVisible)}
+      title="Diagnostics (Ctrl+Shift+D)">🔧</button
+    >
+    <span class="tr-clock" style:color={hudText}>{utcStr} UTC</span>
+  </div>
 
   <!-- Overlay for critical states -->
   <StatusOverlay
@@ -284,5 +355,50 @@
     flex: 1 1 auto;
     min-width: 0;
     position: relative;
+  }
+
+  /* Entry 078: Compact top-right bar — no bg, shifted left from price axis */
+  .top-right-bar {
+    position: fixed;
+    top: 8px;
+    right: 64px;
+    z-index: 35;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 12px;
+    background: transparent;
+    pointer-events: auto;
+  }
+  .tr-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .tr-brightness {
+    cursor: pointer;
+    font-size: 14px;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+    user-select: none;
+  }
+  .tr-brightness:hover {
+    opacity: 1;
+  }
+  .tr-diag-btn {
+    all: unset;
+    cursor: pointer;
+    font-size: 13px;
+    opacity: 0.5;
+    transition: opacity 0.15s;
+  }
+  .tr-diag-btn:hover {
+    opacity: 1;
+  }
+  .tr-clock {
+    font-size: 11px;
+    font-family: "Roboto Mono", monospace, sans-serif;
+    white-space: nowrap;
   }
 </style>

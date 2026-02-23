@@ -21,17 +21,20 @@
   // DISABLED: trading tools deferred (audit T1)
   // import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
+  import { saveVisibleRange, loadVisibleRange } from "../stores/viewCache";
 
   const {
     currentFrame = null,
     sendRawAction,
     scrollback,
     addUiWarning,
+    brightness = 1.0,
   }: {
     currentFrame?: RenderFrame | null;
     sendRawAction: (a: WsAction) => void;
     scrollback: (ms: T_MS) => void;
     addUiWarning: (w: UiWarning) => void;
+    brightness?: number;
   } = $props();
 
   // Crosshair data for tooltip (OHLCV + cursor position)
@@ -57,10 +60,17 @@
   // P3.15: Scrollback state indicator
   let scrollbackState: "idle" | "loading" | "wall" = $state("idle");
 
+  // Entry 077: Left edge visible — for wall indicator
+  let leftEdgeVisible = $state(false);
+
   // P1: "No data" state — якщо full frame повертає 0 candles
   let showNoData = $state(false);
   let noDataSymbol = $state("");
   let noDataTf = $state("");
+
+  // P3.9: Track previous symbol/tf for viewCache save on switch
+  let prevSymbol = "";
+  let prevTf = "";
 
   // DISABLED: trading tools deferred (audit T1)
   // export function undo() { drawingsRenderer?.commandStack.undo(); }
@@ -97,6 +107,11 @@
       scrollbackState = state;
     });
 
+    // Entry 077: Left edge visibility for "no more history" indicator
+    chartEngine.onLeftEdgeChange((vis) => {
+      leftEdgeVisible = vis;
+    });
+
     overlayRenderer = new OverlayRenderer(
       overlayCanvasRef,
       chartEngine.chart,
@@ -125,7 +140,7 @@
       const r = wrapperRef.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
       overlayRenderer.resize(Math.round(r.width), Math.round(r.height), dpr);
-      // P3.6: Track container size for tooltip edge-flip
+      // Entry 078 §6: no auto-scroll on resize (user controls scroll position)
       containerW = Math.round(r.width);
       containerH = Math.round(r.height);
     });
@@ -151,6 +166,12 @@
           (lwcHostRef as any).__resetManualPriceScale();
         }
 
+        // P3.9: Save current visible range before switching
+        if (prevSymbol && prevTf && chartEngine) {
+          const range = chartEngine.chart.timeScale().getVisibleLogicalRange();
+          saveVisibleRange(prevSymbol, prevTf, range);
+        }
+
         const candles = currentFrame.candles ?? [];
         if (candles.length === 0) {
           chartEngine.clearAll();
@@ -165,7 +186,19 @@
         } else {
           chartEngine.setData(candles);
           showNoData = false;
+
+          // P3.9: Restore cached visible range for this symbol+tf
+          const sym = currentFrame.symbol ?? "";
+          const tf = currentFrame.tf ?? "";
+          const cached = loadVisibleRange(sym, tf);
+          if (cached) {
+            chartEngine.chart.timeScale().setVisibleLogicalRange(cached);
+          }
         }
+
+        // P3.9: Update prev tracking
+        prevSymbol = currentFrame.symbol ?? "";
+        prevTf = currentFrame.tf ?? "";
       } else if (currentFrame.frame_type === "delta") {
         const bars = currentFrame.candles ?? [];
         for (const b of bars) chartEngine.update(b);
@@ -197,12 +230,12 @@
 </script>
 
 <div class="chart-container" bind:this={wrapperRef}>
-  <div class="layer lwc-layer" bind:this={lwcHostRef}></div>
-  <OhlcvTooltip
-    data={crosshairData}
-    containerWidth={containerW}
-    containerHeight={containerH}
-  />
+  <div
+    class="layer lwc-layer"
+    bind:this={lwcHostRef}
+    style:filter={brightness !== 1 ? `brightness(${brightness})` : undefined}
+  ></div>
+  <OhlcvTooltip data={crosshairData} />
   <canvas class="layer overlay-layer" bind:this={overlayCanvasRef}></canvas>
   <!-- DISABLED: trading tools deferred (audit T1) -->
   <!-- <canvas class="layer drawings-layer" bind:this={drawingsCanvasRef}></canvas> -->
@@ -220,7 +253,7 @@
     <div class="scrollback-indicator loading">
       <span class="scrollback-spinner"></span> Loading history…
     </div>
-  {:else if scrollbackState === "wall"}
+  {:else if scrollbackState === "wall" && leftEdgeVisible}
     <div class="scrollback-indicator wall">No more history available</div>
   {/if}
 </div>

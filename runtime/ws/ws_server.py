@@ -43,7 +43,7 @@ DEFAULT_DELTA_POLL_S = 1.0
 DEFAULT_COLD_START_BARS = 300
 
 # P11: scrollback disk rails
-SCROLLBACK_MAX_STEPS = 6          # макс чанків scrollback per session per symbol+tf
+SCROLLBACK_MAX_STEPS = 12         # макс чанків scrollback per session per symbol+tf
 SCROLLBACK_COOLDOWN_S = 0.5       # мінімальний інтервал між scrollback від одного клієнта
 
 # TF label ↔ seconds mapping (types.ts WsAction.switch.tf)

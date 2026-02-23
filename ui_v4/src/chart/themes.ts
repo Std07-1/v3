@@ -5,9 +5,9 @@
 
 import { CrosshairMode, LineStyle } from 'lightweight-charts';
 
-// ─── Theme definitions (V3: DARK_CHART_OPTIONS / DARK_GRAY_CHART_OPTIONS) ───
+// ─── Theme definitions (Entry 078: dark / black / light) ───
 
-export type ThemeName = 'dark' | 'dark-gray' | 'blue';
+export type ThemeName = 'dark' | 'black' | 'light';
 
 export interface ThemeDef {
     label: string;
@@ -20,16 +20,20 @@ export interface ThemeDef {
             horzLine: { color: string; width: number; style: number };
         };
     };
-    /** CSS фон для .app-layout (підтримка різних тем ззовні графіка) */
+    /** CSS фон для .app-layout */
     appBg: string;
-    /** Фон для HUD overlay */
+    /** Фон для HUD overlay (transparent = без фону) */
     hudBg: string;
-    /** Текстовий колір для HUD елементів */
+    /** Текстовий колір для HUD елементів (адаптивний відносно фону) */
     hudText: string;
     /** Бордер для HUD */
     hudBorder: string;
     /** Фон для StatusBar */
     statusBarBg: string;
+    /** Фон для dropdown меню */
+    menuBg: string;
+    /** Бордер для dropdown меню */
+    menuBorder: string;
 }
 
 export const THEMES: Record<ThemeName, ThemeDef> = {
@@ -48,54 +52,60 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
             },
         },
         appBg: '#131722',
-        hudBg: 'rgba(30, 34, 45, 0.72)',
+        hudBg: 'transparent',
         hudText: '#d1d4dc',
-        hudBorder: 'rgba(255, 255, 255, 0.06)',
+        hudBorder: 'transparent',
         statusBarBg: '#1e222d',
+        menuBg: 'rgba(30, 34, 45, 0.92)',
+        menuBorder: 'rgba(255, 255, 255, 0.08)',
     },
-    'dark-gray': {
-        label: 'Gray',
+    black: {
+        label: 'Black',
         chart: {
-            layout: { background: { color: '#2a3036' }, textColor: '#d0d3d8' },
+            layout: { background: { color: '#000000' }, textColor: '#d5d5d5' },
             grid: {
-                vertLines: { color: 'rgba(90, 96, 104, 0.35)' },
-                horzLines: { color: 'rgba(90, 96, 104, 0.35)' },
+                vertLines: { color: 'rgba(255, 255, 255, 0.05)' },
+                horzLines: { color: 'rgba(255, 255, 255, 0.05)' },
             },
             crosshair: {
                 mode: CrosshairMode.Normal,
-                vertLine: { color: 'rgba(178, 206, 247, 0.45)', width: 1, style: LineStyle.Dashed },
-                horzLine: { color: 'rgba(42, 46, 52, 0.45)', width: 1, style: LineStyle.Dashed },
+                vertLine: { color: 'rgba(255, 255, 255, 0.25)', width: 1, style: LineStyle.Dashed },
+                horzLine: { color: 'rgba(255, 255, 255, 0.25)', width: 1, style: LineStyle.Dashed },
             },
         },
-        appBg: '#2a3036',
-        hudBg: 'rgba(50, 56, 64, 0.78)',
-        hudText: '#d0d3d8',
-        hudBorder: 'rgba(255, 255, 255, 0.08)',
-        statusBarBg: '#333940',
+        appBg: '#000000',
+        hudBg: 'transparent',
+        hudText: '#d1d4dc',
+        hudBorder: 'transparent',
+        statusBarBg: '#111111',
+        menuBg: 'rgba(20, 20, 20, 0.92)',
+        menuBorder: 'rgba(255, 255, 255, 0.08)',
     },
-    blue: {
-        label: 'Blue',
+    light: {
+        label: 'Light',
         chart: {
-            layout: { background: { color: '#0d1b2a' }, textColor: '#c8d6e5' },
+            layout: { background: { color: '#ffffff' }, textColor: '#333333' },
             grid: {
-                vertLines: { color: 'rgba(30, 72, 120, 0.35)' },
-                horzLines: { color: 'rgba(30, 72, 120, 0.35)' },
+                vertLines: { color: 'rgba(0, 0, 0, 0.06)' },
+                horzLines: { color: 'rgba(0, 0, 0, 0.06)' },
             },
             crosshair: {
                 mode: CrosshairMode.Normal,
-                vertLine: { color: 'rgba(74, 144, 217, 0.45)', width: 1, style: LineStyle.Dashed },
-                horzLine: { color: 'rgba(74, 144, 217, 0.45)', width: 1, style: LineStyle.Dashed },
+                vertLine: { color: 'rgba(0, 0, 0, 0.2)', width: 1, style: LineStyle.Dashed },
+                horzLine: { color: 'rgba(0, 0, 0, 0.2)', width: 1, style: LineStyle.Dashed },
             },
         },
-        appBg: '#0d1b2a',
-        hudBg: 'rgba(13, 27, 42, 0.82)',
-        hudText: '#c8d6e5',
-        hudBorder: 'rgba(74, 144, 217, 0.15)',
-        statusBarBg: '#122238',
+        appBg: '#ffffff',
+        hudBg: 'transparent',
+        hudText: '#131722',
+        hudBorder: 'transparent',
+        statusBarBg: '#f0f0f0',
+        menuBg: 'rgba(255, 255, 255, 0.92)',
+        menuBorder: 'rgba(0, 0, 0, 0.08)',
     },
 };
 
-export const THEME_NAMES: ThemeName[] = ['dark', 'dark-gray', 'blue'];
+export const THEME_NAMES: ThemeName[] = ['dark', 'black', 'light'];
 
 // ─── Candle style presets (V3: CANDLE_STYLES, chart_adapter_lite.js:162-198) ───
 

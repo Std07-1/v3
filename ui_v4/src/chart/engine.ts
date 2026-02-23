@@ -21,9 +21,24 @@ import {
 } from './themes';
 import type { Candle, T_MS } from '../types';
 
-// ─── Constants (V3 parity: chart_adapter_lite.js:155-156) ───
-const VOLUME_UP = 'rgba(38, 166, 154, 0.32)';
-const VOLUME_DOWN = 'rgba(239, 83, 80, 0.32)';
+// ─── Helpers ───
+
+/** Apply alpha to hex (#rrggbb) or rgba() color string */
+function _withAlpha(color: string, alpha: number): string {
+  if (color.startsWith('#') && color.length >= 7) {
+    const r = parseInt(color.slice(1, 3), 16);
+    const g = parseInt(color.slice(3, 5), 16);
+    const b = parseInt(color.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  if (color.startsWith('rgba(')) {
+    return color.replace(/,\s*[\d.]+\)$/, `, ${alpha})`);
+  }
+  return color;
+}
+
+// Default volume colors (classic style)
+const VOLUME_ALPHA = 0.32;
 const D1_OFFSET_MS = 10_800_000; // +3h: FXCM D1 open 22:00/21:00 UTC → nominal date
 
 // ─── UTC formatters (V3 parity: chart_adapter_lite.js:13-28) ───
@@ -75,17 +90,32 @@ export class ChartEngine {
   private _totalBars = 0;
   // Max bars per TF to prevent memory bloat (configurable)
   static readonly MAX_BARS: Record<string, number> = {
-    M1: 5000, M3: 4000, M5: 3000, M15: 2000,
-    M30: 1500, H1: 1200, H4: 800, D1: 500,
+    M1: 10000, M3: 8000, M5: 6000, M15: 4000,
+    M30: 3000, H1: 2500, H4: 1500, D1: 1000,
   };
 
   // ─── TF state (needed for D1 offset: chart_adapter_lite.js:258-280) ───
   private _tfS: number = 300; // default M5 (matches ws_server default)
 
+  // ─── P3.7: Follow mode (V3 parity: chart_adapter_lite.js:947-1001) ───
+  private _followEnabled = true; // user toggle: auto-scroll on new bars
+
   // ─── rAF throttle + head guard (V3 parity: chart_adapter_lite.js:837-900) ───
   private _rafQueue: Candle[] = [];
   private _rafId: number | null = null;
   private _headTMs: number = 0;  // найвищий t_ms, відправлений в LWC via update()
+
+  // ─── Left edge visibility (for "no more history" indicator) ───
+  private _leftEdgeVisible = false;
+  private _onLeftEdgeChange: ((v: boolean) => void) | null = null;
+
+  // ─── Volume colors (sync with candle style, Entry 078) ───
+  private _volUpColor: string;
+  private _volDownColor: string;
+
+  // ─── Idle auto-recenter timer (Entry 078: §6) ───
+  private _idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly IDLE_RECENTER_MS = 15_000; // 15s
 
   // ─── Crosshair callback ───
   private _onCrosshair: (data: CrosshairData) => void;
@@ -97,8 +127,13 @@ export class ChartEngine {
   ) {
     this._onCrosshair = onCrosshairMove;
 
+    // Init volume colors from default candle style
+    this._volUpColor = _withAlpha(CANDLE_STYLES.classic.upColor, VOLUME_ALPHA);
+    this._volDownColor = _withAlpha(CANDLE_STYLES.classic.downColor, VOLUME_ALPHA);
+
     // ─── Chart options (V3 parity: DARK_CHART_OPTIONS, chart_adapter_lite.js:101-148) ───
     this.chart = createChart(container, {
+      autoSize: true,
       layout: {
         background: { color: 'transparent' },
         textColor: '#d5d5d5',
@@ -145,7 +180,7 @@ export class ChartEngine {
         borderVisible: false,
         rightOffset: 3, // follow mode: ~3 bars right padding
         barSpacing: 8,
-        maxBarSpacing: 12,
+        maxBarSpacing: 50,
         timeVisible: true,
         secondsVisible: false,
         fixLeftEdge: false,
@@ -239,6 +274,14 @@ export class ChartEngine {
     // ─── Scrollback rail (V4 + P3.15 policy: dedupe + wall + bar cap) ───
     let debounceTimer: ReturnType<typeof setTimeout>;
     this.chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      // Track left edge visibility for "no more history" display
+      const leftVis = range != null && range.from < 1;
+      if (leftVis !== this._leftEdgeVisible) {
+        this._leftEdgeVisible = leftVis;
+        this._onLeftEdgeChange?.(leftVis);
+      }
+      // Entry 078 §6: Reset idle auto-recenter timer on any range change
+      this._resetIdleTimer();
       if (range && range.from < 10) {
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
@@ -310,7 +353,7 @@ export class ChartEngine {
     return {
       time: mappedTime,
       value: c.v ?? 0,
-      color: c.c >= c.o ? VOLUME_UP : VOLUME_DOWN,
+      color: c.c >= c.o ? this._volUpColor : this._volDownColor,
     };
   }
 
@@ -331,8 +374,10 @@ export class ChartEngine {
     this.series.setData(mapped);
     this.volumeSeries.setData(volMapped);
 
-    // Follow mode: auto-scroll to latest (V3: scrollToRealTimeWithOffset)
-    if (bars.length > 0) {
+    // P3.7: Follow mode — auto-scroll only if follow enabled
+    // On setData (full frame), always scroll to latest regardless of isAtEnd
+    // because user explicitly switched symbol/TF.
+    if (bars.length > 0 && this._followEnabled) {
       this.chart.timeScale().scrollToRealTime();
     }
   }
@@ -388,6 +433,10 @@ export class ChartEngine {
     if (lateBars.length > 0) {
       this._replacePastBars(lateBars);
     }
+
+    // Entry 078 §6: no auto-scroll on live updates.
+    // User controls scroll position; realign only on price-axis dblclick
+    // or idle timer (15s, slight offset).
   }
 
   /**
@@ -398,8 +447,13 @@ export class ChartEngine {
   private _replacePastBars(
     items: Array<{ bar: Candle; mapped: ReturnType<ChartEngine['_mapCandle']> }>,
   ): void {
-    const data = this.series.data().map(d => ({ ...d })) as any[];
-    const volData = this.volumeSeries.data().map(d => ({ ...d })) as any[];
+    // Filter WhitespaceData (no OHLC) to prevent "Value is null" crash (Entry 076)
+    const data = (this.series.data() as any[])
+      .filter((d) => 'open' in d && d.open != null)
+      .map(d => ({ ...d }));
+    const volData = (this.volumeSeries.data() as any[])
+      .filter((d) => 'value' in d && d.value != null)
+      .map(d => ({ ...d }));
 
     let replaced = 0;
     for (const { bar, mapped } of items) {
@@ -418,33 +472,57 @@ export class ChartEngine {
 
     // Preserve viewport position
     const range = this.chart.timeScale().getVisibleLogicalRange();
-    this.series.setData(data);
-    this.volumeSeries.setData(volData);
+    try {
+      this.series.setData(data);
+      this.volumeSeries.setData(volData);
+    } catch (err) {
+      console.error('[ChartEngine] _replacePastBars setData crashed:', err);
+      return;
+    }
     if (range) {
       this.chart.timeScale().setVisibleLogicalRange(range);
     }
   }
 
   // ─── prependData: scrollback (V4 + P3.15: wall detection + bar count) ───
+  // Guard: dedup overlapping bars (server to_open_ms is inclusive),
+  // filter WhitespaceData, move state reset AFTER setData to prevent
+  // infinite crash loop (Entry 076).
   prependData(bars: Candle[]): void {
-    this.isFetchingScrollback = false;
     if (bars.length === 0) {
-      // Empty response = wall reached
+      this.isFetchingScrollback = false;
+      this._setScrollbackState('wall');
+      return;
+    }
+
+    const mapped = bars.map((c) => this._mapCandle(c));
+    const volMapped = bars.map((c, i) => this._mapVolume(c, mapped[i].time));
+
+    // Dedup: server to_open_ms is inclusive → scrollback may return bars
+    // already on chart. Remove overlapping times from current data.
+    // Also filter WhitespaceData items ({time} only, no OHLC) that may
+    // appear after failed setData or LWC internal state corruption.
+    const newTimes = new Set(mapped.map((b) => b.time));
+    const currentCandle = (this.series.data() as any[]).filter(
+      (d) => 'open' in d && d.open != null && !newTimes.has(d.time),
+    );
+    const currentVol = (this.volumeSeries.data() as any[]).filter(
+      (d) => 'value' in d && d.value != null && !newTimes.has(d.time),
+    );
+
+    try {
+      this.series.setData([...mapped, ...currentCandle]);
+      this.volumeSeries.setData([...volMapped, ...currentVol]);
+    } catch (err) {
+      console.error('[ChartEngine] prependData setData crashed:', err);
+      this.isFetchingScrollback = false;
       this._setScrollbackState('wall');
       return;
     }
 
     this._totalBars += bars.length;
+    this.isFetchingScrollback = false;
     this._setScrollbackState('idle');
-
-    const mapped = bars.map((c) => this._mapCandle(c));
-    const volMapped = bars.map((c, i) => this._mapVolume(c, mapped[i].time));
-
-    const currentCandle = this.series.data();
-    const currentVol = this.volumeSeries.data();
-
-    this.series.setData([...mapped, ...currentCandle]);
-    this.volumeSeries.setData([...volMapped, ...currentVol]);
   }
 
   // ─── clearAll: for no-data + switch (V3: app.js:1594-1606) ───
@@ -476,6 +554,42 @@ export class ChartEngine {
     return this._scrollbackState;
   }
 
+  /** Register callback for left-edge visibility changes (Entry 077) */
+  onLeftEdgeChange(cb: (visible: boolean) => void): void {
+    this._onLeftEdgeChange = cb;
+  }
+
+  /** Whether the left edge of the chart data is currently visible */
+  get leftEdgeVisible(): boolean {
+    return this._leftEdgeVisible;
+  }
+
+  // ─── P3.7: Follow toggle + isAtEnd (V3 parity: chart_adapter_lite.js:991-1001) ───
+
+  /**
+   * Чи юзер знаходиться біля правого краю графіка.
+   * V3 reference: isAtEnd(thresholdBars) in chart_adapter_lite.js:991-995.
+   * Використовується для auto-scroll guard: якщо юзер скролив вліво — не скролимо назад.
+   */
+  isAtEnd(thresholdBars = 3): boolean {
+    const pos = this.chart.timeScale().scrollPosition();
+    // pos < 0 = scrolled left, pos 0 = at right edge, pos > 0 = past right edge
+    if (!Number.isFinite(pos)) return true; // no data or not scrollable
+    return pos >= -thresholdBars;
+  }
+
+  /** P3.7: Follow mode toggle (user checkbox) */
+  get followEnabled(): boolean {
+    return this._followEnabled;
+  }
+  set followEnabled(val: boolean) {
+    this._followEnabled = val;
+    // If re-enabled, immediately scroll to real-time
+    if (val) {
+      this.chart.timeScale().scrollToRealTime();
+    }
+  }
+
   // ─── Time → epoch ms (handles both D1 string "YYYY-MM-DD" and intraday epoch sec) ───
   private _timeToMs(time: Time): number {
     if (typeof time === 'number') return time * 1000;
@@ -487,6 +601,41 @@ export class ChartEngine {
     return 0;
   }
 
+  // ─── Entry 078 §6: Idle auto-recenter (15s, slight left offset only) ───
+  private _resetIdleTimer(): void {
+    if (this._idleTimer) clearTimeout(this._idleTimer);
+    this._idleTimer = setTimeout(() => this._tryIdleRecenter(), ChartEngine.IDLE_RECENTER_MS);
+  }
+
+  private _tryIdleRecenter(): void {
+    this._idleTimer = null;
+    const range = this.chart.timeScale().getVisibleLogicalRange();
+    if (!range) return;
+    const pos = this.chart.timeScale().scrollPosition();
+    if (!Number.isFinite(pos)) return;
+    // Only recenter when slightly shifted left (within 15% of visible area)
+    const visibleBars = range.to - range.from;
+    const threshold = visibleBars * 0.15;
+    // pos < 0 → scrolled left, pos > 0 → past right edge
+    // Recenter only when slightly left: -threshold < pos < 0
+    if (pos >= -threshold && pos < 0) {
+      this.chart.timeScale().scrollToRealTime();
+    }
+  }
+
+  // ─── Entry 078 §2: Refresh volume colors to match candle style ───
+  private _refreshVolumeColors(): void {
+    const cData = this.series.data() as any[];
+    const vData = (this.volumeSeries.data() as any[]).map(d => ({ ...d }));
+    for (let i = 0; i < Math.min(cData.length, vData.length); i++) {
+      const c = cData[i];
+      if ('close' in c && 'open' in c) {
+        vData[i] = { ...vData[i], color: c.close >= c.open ? this._volUpColor : this._volDownColor };
+      }
+    }
+    this.volumeSeries.setData(vData);
+  }
+
   // ─── P3.11: Multi-theme switching (V3: setTheme, chart_adapter_lite.js:1212-1224) ───
   applyTheme(name: ThemeName): void {
     const t = THEMES[name];
@@ -495,7 +644,7 @@ export class ChartEngine {
     saveTheme(name);
   }
 
-  // ─── P3.12: Candle style presets (V3: CANDLE_STYLES, chart_adapter_lite.js:162-198) ───
+  // ─── P3.12: Candle style presets + Entry 078 §2 volume color sync ───
   applyCandleStyle(name: CandleStyleName): void {
     const s = CANDLE_STYLES[name];
     if (!s) return;
@@ -507,6 +656,10 @@ export class ChartEngine {
       wickUpColor: s.wickUpColor,
       wickDownColor: s.wickDownColor,
     });
+    // Entry 078: sync volume colors with candle style
+    this._volUpColor = _withAlpha(s.upColor, VOLUME_ALPHA);
+    this._volDownColor = _withAlpha(s.downColor, VOLUME_ALPHA);
+    this._refreshVolumeColors();
     saveCandleStyle(name);
   }
 
@@ -519,6 +672,10 @@ export class ChartEngine {
     if (this._rafId) {
       cancelAnimationFrame(this._rafId);
       this._rafId = null;
+    }
+    if (this._idleTimer) {
+      clearTimeout(this._idleTimer);
+      this._idleTimer = null;
     }
     this._rafQueue = [];
     this.chart.remove();

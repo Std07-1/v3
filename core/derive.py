@@ -269,6 +269,62 @@ def aggregate_bars(
 
 
 # ---------------------------------------------------------------------------
+# _collect_boundary_tolerant — збір барів з толерантністю до session boundary
+# ---------------------------------------------------------------------------
+def _collect_boundary_tolerant(
+    source_buffer: "GenericBuffer",
+    start_ms: int,
+    end_ms: int,
+    is_trading_fn: Callable[[int], bool],
+) -> Optional[List[CandleBar]]:
+    """Збір source-барів з boundary-толерантністю для session open/close.
+
+    Дозволяє пропуск барів на межі торгової сесії (broker може не надати
+    бар у першу/останню хвилину після/до перерви чи відкриття ринку).
+
+    Boundary визначення:
+    - session open: is_trading_fn(t)=True, is_trading_fn(t - step)=False
+      → перша хвилина після відкриття/перерви; broker іноді не має бару.
+    - session close: is_trading_fn(t)=True, is_trading_fn(t + step)=False
+      → остання хвилина перед закриттям/перервою.
+
+    Якщо пропущений бар НЕ на boundary (gap у середині сесії) → None.
+
+    Returns:
+        Список барів (може бути коротший за очікуваний) або None.
+    """
+    step = source_buffer.tf_ms
+    bars: List[CandleBar] = []
+    boundary_skips = 0
+
+    for t in range(start_ms, end_ms, step):
+        # Не торговий — пропускаємо (calendar pause / break)
+        if not is_trading_fn(t):
+            continue
+
+        bar = source_buffer.get(t)
+        if bar is not None:
+            bars.append(bar)
+            continue
+
+        # Бар відсутній. Перевіряємо чи це session boundary gap.
+        is_open_boundary = not is_trading_fn(t - step)   # перша хвилина сесії
+        is_close_boundary = not is_trading_fn(t + step)  # остання хвилина сесії
+
+        if is_open_boundary or is_close_boundary:
+            boundary_skips += 1
+            continue
+
+        # Gap у середині сесії — fail (не boundary, реальний пропуск даних)
+        return None
+
+    if not bars:
+        return None
+
+    return bars
+
+
+# ---------------------------------------------------------------------------
 # derive_bar — спроба побудувати 1 derived бар для конкретного bucket
 # ---------------------------------------------------------------------------
 def derive_bar(
@@ -287,7 +343,13 @@ def derive_bar(
     1. Що target_tf_s є в DERIVE_SOURCE (має відоме джерело).
     2. Що source_buffer.tf_s == очікуваний source TF.
     3. Що всі trading-слоти в діапазоні [bucket_open_ms, bucket_close_ms) є.
+       Fallback: boundary-tolerant збір (пропуск барів на межі сесії).
     4. Aggregate → CandleBar.
+
+    Boundary tolerance (degraded-but-loud, §9):
+    Якщо strict has_range() не пройшов, але is_trading_fn задано — спробувати
+    зібрати бари з пропуском session open/close boundary gaps. Результат
+    отримує extension boundary_partial=True + source_count/expected_count.
 
     Args:
         symbol: символ.
@@ -312,20 +374,42 @@ def derive_bar(
     target_tf_ms = target_tf_s * 1000
     bucket_close_ms = bucket_open_ms + target_tf_ms
 
-    # Перевіряємо повноту source-барів для цього bucket
-    if not source_buffer.has_range(
+    # Strict: всі trading-слоти присутні
+    if source_buffer.has_range(
         bucket_open_ms, bucket_close_ms, is_trading_fn=is_trading_fn
     ):
+        bars = source_buffer.range_bars(
+            bucket_open_ms, bucket_close_ms, is_trading_fn=is_trading_fn
+        )
+        if not bars:
+            return None
+        return aggregate_bars(
+            bars,
+            symbol=symbol,
+            target_tf_s=target_tf_s,
+            bucket_open_ms=bucket_open_ms,
+            anchor_offset_s=anchor_offset_s,
+            filter_calendar_pause=filter_calendar_pause,
+        )
+
+    # Fallback: boundary-tolerant збір (тільки якщо є calendar)
+    if is_trading_fn is None:
         return None
 
-    # Збираємо бари
-    bars = source_buffer.range_bars(
-        bucket_open_ms, bucket_close_ms, is_trading_fn=is_trading_fn
+    bars = _collect_boundary_tolerant(
+        source_buffer, bucket_open_ms, bucket_close_ms, is_trading_fn
     )
     if not bars:
         return None
 
-    return aggregate_bars(
+    # Рахуємо expected trading slots для degraded metadata
+    step = source_buffer.tf_ms
+    expected_trading = sum(
+        1 for t in range(bucket_open_ms, bucket_close_ms, step)
+        if is_trading_fn(t)
+    )
+
+    result = aggregate_bars(
         bars,
         symbol=symbol,
         target_tf_s=target_tf_s,
@@ -333,6 +417,14 @@ def derive_bar(
         anchor_offset_s=anchor_offset_s,
         filter_calendar_pause=filter_calendar_pause,
     )
+    if result is None:
+        return None
+
+    # Degraded-but-loud: позначаємо як boundary partial (§9)
+    result.extensions["boundary_partial"] = True
+    result.extensions["source_count"] = len(bars)
+    result.extensions["expected_count"] = expected_trading
+    return result
 
 
 # ---------------------------------------------------------------------------

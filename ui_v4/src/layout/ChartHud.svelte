@@ -21,19 +21,23 @@
         currentSymbol,
         currentTf,
         lastPrice,
+        lastBarOpen,
         lastBarTs,
         onSwitch,
         onThemeChange,
         onCandleStyleChange,
-        themeBg = "rgba(30, 34, 45, 0.72)",
+        themeBg = "transparent",
         themeText = "#d1d4dc",
-        themeBorder = "rgba(255, 255, 255, 0.06)",
+        themeBorder = "transparent",
+        menuBg = "rgba(30, 34, 45, 0.92)",
+        menuBorder = "rgba(255, 255, 255, 0.08)",
     }: {
         symbols: string[];
         tfs: string[];
         currentSymbol: string;
         currentTf: string;
         lastPrice: number | null;
+        lastBarOpen: number | null;
         lastBarTs: number | null; // epoch ms of last bar/update
         onSwitch: (symbol: string, tf: string) => void;
         onThemeChange?: (name: ThemeName) => void;
@@ -41,6 +45,8 @@
         themeBg?: string;
         themeText?: string;
         themeBorder?: string;
+        menuBg?: string;
+        menuBorder?: string;
     } = $props();
 
     // ─── Dropdown state ───
@@ -67,6 +73,15 @@
             : now - lastBarTs < STALE_MS
               ? "streaming"
               : "paused",
+    );
+
+    // Entry 078 §5: Price color — green/red when streaming, theme text when idle
+    let priceColor = $derived(
+        streamState !== "streaming" || lastPrice == null || lastBarOpen == null
+            ? themeText
+            : lastPrice >= lastBarOpen
+              ? "#26a69a"
+              : "#ef5350",
     );
 
     // ─── Pulse animation on change ───
@@ -229,11 +244,7 @@
 <svelte:window onclick={handleWindowClick} />
 
 <div class="hud-stack">
-    <div
-        class="hud"
-        style:background={themeBg}
-        style:border-color={themeBorder}
-    >
+    <div class="hud" style:color={themeText}>
         <div class="hud-row">
             <!-- Symbol slot -->
             <button
@@ -261,13 +272,10 @@
 
             <span class="hud-sep">·</span>
 
-            <!-- UTC label -->
-            <span class="hud-utc">{utcStr} UTC</span>
-
-            <span class="hud-sep">·</span>
-
             <!-- Price -->
-            <span class="hud-price">{fmtPrice(lastPrice)}</span>
+            <span class="hud-price" style:color={priceColor}
+                >{fmtPrice(lastPrice)}</span
+            >
 
             <!-- Streaming dot -->
             <span
@@ -314,6 +322,9 @@
             class="hud-menu"
             role="listbox"
             tabindex="-1"
+            style:background={menuBg}
+            style:border-color={menuBorder}
+            style:color={themeText}
             onclick={(e) => e.stopPropagation()}
             onkeydown={(e) => e.key === "Escape" && (symbolOpen = false)}
         >
@@ -350,6 +361,9 @@
             class="hud-menu hud-menu-tf"
             role="listbox"
             tabindex="-1"
+            style:background={menuBg}
+            style:border-color={menuBorder}
+            style:color={themeText}
             onclick={(e) => e.stopPropagation()}
             onkeydown={(e) => e.key === "Escape" && (tfOpen = false)}
         >
@@ -371,6 +385,9 @@
             class="hud-menu hud-menu-tf"
             role="listbox"
             tabindex="-1"
+            style:background={menuBg}
+            style:border-color={menuBorder}
+            style:color={themeText}
             onclick={(e) => e.stopPropagation()}
             onkeydown={(e) => e.key === "Escape" && (themeOpen = false)}
         >
@@ -392,6 +409,9 @@
             class="hud-menu hud-menu-tf"
             role="listbox"
             tabindex="-1"
+            style:background={menuBg}
+            style:border-color={menuBorder}
+            style:color={themeText}
             onclick={(e) => e.stopPropagation()}
             onkeydown={(e) => e.key === "Escape" && (styleOpen = false)}
         >
@@ -428,12 +448,9 @@
     .hud {
         display: inline-flex;
         padding: 6px 12px;
-        background: rgba(30, 34, 45, 0.72);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border: 1px solid rgba(255, 255, 255, 0.06);
+        background: transparent;
+        border: none;
         border-radius: 10px;
-        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
     }
 
     .hud-row {
@@ -449,7 +466,7 @@
         cursor: pointer;
         font-size: 13px;
         font-weight: 600;
-        color: #d1d4dc;
+        color: inherit;
         padding: 2px 6px;
         border-radius: 4px;
         transition: background 0.15s;
@@ -479,21 +496,14 @@
     }
 
     .hud-sep {
-        color: #5d6068;
+        opacity: 0.35;
         font-size: 13px;
         user-select: none;
-    }
-
-    .hud-utc {
-        font-size: 11px;
-        color: #787b86;
-        font-family: "Roboto Mono", monospace, sans-serif;
     }
 
     .hud-price {
         font-size: 13px;
         font-weight: 600;
-        color: #d1d4dc;
         font-family: "Roboto Mono", monospace, sans-serif;
     }
 
@@ -523,10 +533,9 @@
         min-width: 120px;
         max-height: 300px;
         overflow-y: auto;
-        background: rgba(30, 34, 45, 0.92);
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
-        border: 1px solid rgba(255, 255, 255, 0.08);
+        border: 1px solid;
         border-radius: 8px;
         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
         padding: 4px;
@@ -545,14 +554,14 @@
         cursor: pointer;
         padding: 5px 10px;
         font-size: 12px;
-        color: #d1d4dc;
+        color: inherit;
         border-radius: 4px;
         transition: background 0.12s;
         white-space: nowrap;
     }
 
     .hud-menu-item:hover {
-        background: rgba(255, 255, 255, 0.08);
+        background: rgba(128, 128, 128, 0.15);
     }
 
     .hud-menu-item.active {
@@ -595,8 +604,10 @@
 
     /* P3.13: Favorite star + favorites section */
     .hud-star {
-        color: #5d6068;
-        transition: color 0.15s;
+        opacity: 0.4;
+        transition:
+            color 0.15s,
+            opacity 0.15s;
     }
     .hud-star.faved {
         color: #f0b90b;
