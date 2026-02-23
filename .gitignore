@@ -22,11 +22,16 @@ __pycache__/
 # ── IDE / Editor ─────────────────────────────────────────────
 /.vscode/
 /.cursor/
+/.antigravity/
 /.github/
 /.idea/
 *.swp
 *.swo
 *~
+project_instructions.md
+rules.md
+snapshot.json
+snapshot_*.json
 
 # ── Дані (runtime, не код) ──────────────────────────────────
 /data_v3/

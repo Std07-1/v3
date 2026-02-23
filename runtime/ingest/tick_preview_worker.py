@@ -165,6 +165,7 @@ class TickPreviewWorker:
         channel: str,
         calendars: Dict[str, MarketCalendar] | None = None,
         auto_promote_m1: bool = False,
+        anchor_offset_ms: int = 0,
     ) -> None:
         self._uds = uds
         self._tfs = [int(x) for x in tfs if int(x) > 0]
@@ -179,6 +180,7 @@ class TickPreviewWorker:
             tf_allowlist=agg_tfs,
             source="preview_tick",
             auto_promote=self._auto_promote_m1,
+            anchor_offset_ms=int(anchor_offset_ms),
         )
         self._m3_buffer = _M1toM3Buffer() if self._derive_m3 else None
         self._last_tick_ts_ms: Dict[str, int] = {}
@@ -530,6 +532,7 @@ def main() -> int:
 
     auto_promote_m1 = bool(cfg.get("tick_auto_promote_m1", False))
 
+    anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
     worker = TickPreviewWorker(
         uds=uds,
         tfs=preview_cfg.tfs,
@@ -539,6 +542,7 @@ def main() -> int:
         channel=preview_cfg.channel,
         calendars=calendars,
         auto_promote_m1=auto_promote_m1,
+        anchor_offset_ms=anchor_offset_s * 1000,
     )
     logging.info(
         "TickPreview: tfs=%s derive_m3=%s auto_promote_m1=%s symbols=%d",
