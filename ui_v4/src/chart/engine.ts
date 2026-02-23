@@ -82,9 +82,10 @@ export class ChartEngine {
   // ─── TF state (needed for D1 offset: chart_adapter_lite.js:258-280) ───
   private _tfS: number = 300; // default M5 (matches ws_server default)
 
-  // ─── rAF throttle (V3 parity: chart_adapter_lite.js:837-900) ───
-  private _rafPending: Candle | null = null;
+  // ─── rAF throttle + head guard (V3 parity: chart_adapter_lite.js:837-900) ───
+  private _rafQueue: Candle[] = [];
   private _rafId: number | null = null;
+  private _headTMs: number = 0;  // найвищий t_ms, відправлений в LWC via update()
 
   // ─── Crosshair callback ───
   private _onCrosshair: (data: CrosshairData) => void;
@@ -320,6 +321,10 @@ export class ChartEngine {
     this._totalBars = bars.length;
     this._setScrollbackState('idle');
 
+    // Reset delta state on full frame (prevent stale updates from previous symbol/tf)
+    this._rafQueue = [];
+    this._headTMs = bars.length > 0 ? bars[bars.length - 1].t_ms : 0;
+
     const mapped = bars.map((c) => this._mapCandle(c));
     const volMapped = bars.map((c, i) => this._mapVolume(c, mapped[i].time));
 
@@ -332,9 +337,14 @@ export class ChartEngine {
     }
   }
 
-  // ─── update: live delta with rAF throttle (V3: chart_adapter_lite.js:837-900) ───
+  // ─── update: live delta with rAF queue + try/catch for LWC safety ───
+  //
+  // LWC series.update() може оновити тільки останній бар або додати новий.
+  // Якщо bar.time < head → "Cannot update oldest data" exception.
+  // Рішення: акумулюємо бари в queue, dedup по t_ms, сортуємо, і
+  // для late bars (t_ms < head) — targeted data replacement через setData().
   update(bar: Candle): void {
-    this._rafPending = bar;
+    this._rafQueue.push(bar);
     if (!this._rafId) {
       this._rafId = requestAnimationFrame(() => this._flushUpdate());
     }
@@ -342,13 +352,77 @@ export class ChartEngine {
 
   private _flushUpdate(): void {
     this._rafId = null;
-    const bar = this._rafPending;
-    if (!bar) return;
-    this._rafPending = null;
+    const queue = this._rafQueue;
+    this._rafQueue = [];
+    if (queue.length === 0) return;
 
-    const mapped = this._mapCandle(bar);
-    this.series.update(mapped);
-    this.volumeSeries.update(this._mapVolume(bar, mapped.time));
+    // Dedup by t_ms: keep last entry per t_ms (final overwrites preview)
+    const deduped = new Map<number, Candle>();
+    for (const c of queue) deduped.set(c.t_ms, c);
+
+    // Sort ascending by t_ms for monotonic LWC update order
+    const sorted = [...deduped.values()].sort((a, b) => a.t_ms - b.t_ms);
+
+    // Collect late bars for batch replacement
+    const lateBars: Array<{ bar: Candle; mapped: ReturnType<ChartEngine['_mapCandle']> }> = [];
+
+    for (const bar of sorted) {
+      const mapped = this._mapCandle(bar);
+      if (bar.t_ms < this._headTMs) {
+        // Late bar (final arriving after preview of next minute) — collect for batch replace
+        lateBars.push({ bar, mapped });
+        continue;
+      }
+      // Normal path: update() for head or newer bars
+      try {
+        this.series.update(mapped);
+        this.volumeSeries.update(this._mapVolume(bar, mapped.time));
+        if (bar.t_ms > this._headTMs) this._headTMs = bar.t_ms;
+      } catch {
+        // Safety: if update() still fails (edge case), use replacement path
+        lateBars.push({ bar, mapped });
+      }
+    }
+
+    // Batch-replace all late bars via data splice + setData
+    if (lateBars.length > 0) {
+      this._replacePastBars(lateBars);
+    }
+  }
+
+  /**
+   * Замінює бари в минулому через series.setData() зі збереженням viewport.
+   * Викликається для late finals (final N приходить після preview N+1).
+   * Batch: одна операція setData() для всіх late bars.
+   */
+  private _replacePastBars(
+    items: Array<{ bar: Candle; mapped: ReturnType<ChartEngine['_mapCandle']> }>,
+  ): void {
+    const data = this.series.data().map(d => ({ ...d })) as any[];
+    const volData = this.volumeSeries.data().map(d => ({ ...d })) as any[];
+
+    let replaced = 0;
+    for (const { bar, mapped } of items) {
+      // Find existing bar by time
+      const idx = data.findIndex(
+        (d: any) => d.time === mapped.time,
+      );
+      if (idx < 0) continue; // bar not on chart — skip
+      data[idx] = mapped;
+      if (idx < volData.length) {
+        volData[idx] = this._mapVolume(bar, mapped.time);
+      }
+      replaced++;
+    }
+    if (replaced === 0) return;
+
+    // Preserve viewport position
+    const range = this.chart.timeScale().getVisibleLogicalRange();
+    this.series.setData(data);
+    this.volumeSeries.setData(volData);
+    if (range) {
+      this.chart.timeScale().setVisibleLogicalRange(range);
+    }
   }
 
   // ─── prependData: scrollback (V4 + P3.15: wall detection + bar count) ───
@@ -381,6 +455,8 @@ export class ChartEngine {
     this.lastScrollbackToMs = null;
     this._totalBars = 0;
     this._setScrollbackState('idle');
+    this._rafQueue = [];
+    this._headTMs = 0;
   }
 
   // ─── P3.15: Scrollback state management ───
@@ -444,6 +520,7 @@ export class ChartEngine {
       cancelAnimationFrame(this._rafId);
       this._rafId = null;
     }
+    this._rafQueue = [];
     this.chart.remove();
   }
 }

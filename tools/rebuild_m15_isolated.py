@@ -7,7 +7,7 @@ from typing import Dict
 
 from app.composition import load_config
 from core.model.bars import CandleBar, assert_invariants
-from core.buckets import bucket_start_ms  # floor_bucket_start_ms removed (ADR-0002)
+from core.buckets import bucket_start_ms
 from runtime.store.ssot_jsonl import JsonlAppender
 
 DAY_YYYYMMDD = "20260205"

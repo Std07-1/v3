@@ -270,7 +270,7 @@ UI логіка міняється з “викликай що хочеш пар
 **Bar (canonical)**
 
 * `open_time_ms: int64`
-* `close_time_ms: int64` (API end-incl; внутрішній CandleBar з end-excl нормалізується на publish)
+* `close_time_ms: int64` (end-excl: `open_time_ms + tf_s * 1000`; Redis snapshots конвертують у end-incl `-1`)
 * `open, high, low, close: float`
 * `volume: float`
 * `complete: bool`

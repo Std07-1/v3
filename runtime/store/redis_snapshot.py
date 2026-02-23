@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from collections import deque
 from typing import Any, Deque, Dict, Optional, Tuple
@@ -112,6 +111,12 @@ class RedisSnapshotWriter:
             self._log_error_throttled(f"REDIS_SNAP_WRITE_FAILED key={key} err={exc}")
 
     def _bar_to_cache_bar(self, bar: CandleBar) -> Optional[Dict[str, Any]]:
+        """Convert CandleBar (end-excl) → Redis cache dict (end-incl).
+
+        Convention: ALL Redis close_ms = end-inclusive = open_ms + tf_ms - 1.
+        CandleBar/SSOT internally = end-excl (open + tf*1000).
+        Conversion at Redis write boundary only.
+        """
         open_ms = bar.open_time_ms
         close_ms_excl = bar.close_time_ms
         tf_ms = int(bar.tf_s) * 1000
@@ -252,6 +257,10 @@ class RedisSnapshotWriter:
         self._write_json(key, payload, ttl_s)
 
     def put_bar(self, bar: CandleBar) -> None:
+        """Write single bar snapshot to Redis.
+
+        Convention: Redis close_ms = end-incl (open + tf*1000 - 1).
+        """
         payload_ts_ms = int(time.time() * 1000)
         open_ms = bar.open_time_ms
         close_ms_excl = bar.close_time_ms

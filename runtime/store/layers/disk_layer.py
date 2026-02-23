@@ -334,32 +334,6 @@ class DiskLayer:
         parts.sort()
         return parts
 
-    def read_window(
-        self,
-        symbol: str,
-        tf_s: int,
-        limit: int,
-        *,
-        since_open_ms: Optional[int] = None,
-        to_open_ms: Optional[int] = None,
-        use_tail: bool = False,
-        final_only: bool = False,
-        skip_preview: bool = False,
-        final_sources: Optional[set[str]] = None,
-    ) -> list[dict[str, Any]]:
-        bars, _geom = self.read_window_with_geom(
-            symbol,
-            tf_s,
-            limit,
-            since_open_ms=since_open_ms,
-            to_open_ms=to_open_ms,
-            use_tail=use_tail,
-            final_only=final_only,
-            skip_preview=skip_preview,
-            final_sources=final_sources,
-        )
-        return bars
-
     def read_window_with_geom(
         self,
         symbol: str,
@@ -408,13 +382,3 @@ class DiskLayer:
             return None
         open_ms = last_obj.get("open_time_ms")
         return int(open_ms) if isinstance(open_ms, int) else None
-
-    def last_mtime_ms(self, symbol: str, tf_s: int) -> Optional[int]:
-        parts = self.list_parts(symbol, tf_s)
-        if not parts:
-            return None
-        try:
-            ts = os.path.getmtime(parts[-1])
-        except Exception:
-            return None
-        return int(ts * 1000)

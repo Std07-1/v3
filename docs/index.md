@@ -18,6 +18,7 @@
 | [ADR-0002-derive-chain-from-m1.md](ADR-0002-derive-chain-from-m1.md) | DeriveChain: M1→M3→M5→M15→M30→H1→H4 (4 phases) |
 | [ADR-0003 Cold Start Hardening.md](ADR-0003%20Cold%20Start%20Hardening.md) | Cold start: error isolation, process restart, unified gate |
 | [ADR-0004-log-format-and-throttles.md](ADR-0004-log-format-and-throttles.md) | Формат лог-рядків (aione_top), throttle UDS (commit_final_bar drop, geom_fix) |
+| [ADR-0005-aione-top-monitoring.md](ADR-0005-aione-top-monitoring.md) | Контракт джерел даних aione_top (Redis, HTTP, логи, OBS_60S, очікувані процеси) |
 
 ### 2. Потоки даних
 
@@ -103,6 +104,7 @@ A (Broker/Ingest) → C (UDS — єдина талія) → B (UI — read-only 
 - **B**: UI — read-only renderer:
   - **ui_chart_v3**: HTTP polling API (порт 8089, vanilla JS, поточний production)
   - **ui_v4**: WebSocket real-time (порт 8000, Svelte 5 + LWC 5, chart parity DONE, audit T1-T10 COMPLETE) → [ui_v4_integration.md](ui_v4_integration.md)
+- **TUI**: aione_top — standalone TUI-монітор процесів/pipeline (`python -m aione_top`)
 
 ## Ключові інваріанти (коротко)
 
@@ -110,11 +112,11 @@ A (Broker/Ingest) → C (UDS — єдина талія) → B (UI — read-only 
 |---|---|
 | I0 | **Dependency Rule**: `core/` не імпортує `runtime/ui/tools`; `runtime/` не імпортує `tools/`; `ui/` не імпортує домен напряму |
 | I1 | **UDS як вузька талія**: всі writes через UDS; UI read-only |
-| I2 | **Геометрія часу**: canonical = epoch_ms int, end-excl (`close_time_ms = open_time_ms + tf_s*1000`) |
+| I2 | **Геометрія часу (dual convention)**: canonical = epoch_ms int; CandleBar/SSOT/API = end-excl (`close_time_ms = open + tf_s*1000`); Redis ALL = end-incl (`close_ms = open + tf_s*1000 - 1`). Конвертація на межі Redis write |
 | I3 | **Final > Preview (NoMix)**: complete=true завжди перемагає complete=false |
 | I4 | **Один update-потік для UI**: /api/updates (upsert events) |
 | I5 | **Degraded-but-loud**: будь-який fallback → warnings[]/degraded[], silent fallback заборонено |
-| I6 | **Disk hot-path ban**: disk не hot-path; лише bootstrap/warmup/scrollback/recovery |
+| I6 | **Disk hot-path ban**: disk не hot-path; лише bootstrap/warmup/scrollback/recovery. Scrollback: disk_policy=explicit, max_steps=6, cooldown 0.5s |
 
 ---
 

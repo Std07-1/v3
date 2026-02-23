@@ -42,6 +42,10 @@ DEFAULT_HEARTBEAT_S = 30
 DEFAULT_DELTA_POLL_S = 1.0
 DEFAULT_COLD_START_BARS = 300
 
+# P11: scrollback disk rails
+SCROLLBACK_MAX_STEPS = 6          # макс чанків scrollback per session per symbol+tf
+SCROLLBACK_COOLDOWN_S = 0.5       # мінімальний інтервал між scrollback від одного клієнта
+
 # TF label ↔ seconds mapping (types.ts WsAction.switch.tf)
 # Canonical labels: uppercase M1, M5, H1 etc. (як у фронтенді SymbolTfPicker)
 _TF_CANONICAL_LABELS: Dict[str, int] = {
@@ -193,6 +197,7 @@ class WsSession:
     __slots__ = (
         "client_id", "seq", "symbol", "tf_s",
         "last_update_seq", "ws", "delta_task",
+        "_scrollback_count", "_scrollback_last_ts",
     )
 
     def __init__(self, ws: web.WebSocketResponse) -> None:
@@ -203,6 +208,8 @@ class WsSession:
         self.last_update_seq: Optional[int] = None
         self.ws: web.WebSocketResponse = ws
         self.delta_task: Optional[asyncio.Task] = None  # type: ignore[type-arg]
+        self._scrollback_count: int = 0      # P11: кількість scrollback для поточного symbol+tf
+        self._scrollback_last_ts: float = 0  # P11: timestamp останнього scrollback
 
     def next_seq(self) -> int:
         self.seq += 1
@@ -361,7 +368,10 @@ async def _uds_read_window(app: web.Application, symbol: str, tf_s: int, limit: 
         to_open_ms=to_open_ms,
         cold_load=to_open_ms is None,
     )
-    policy = ReadPolicy(disk_policy="bootstrap", prefer_redis=True)
+    # P11: scrollback (to_open_ms) = "explicit" (disk дозволено завжди);
+    #      cold-start/switch = "bootstrap" (disk тільки в bootstrap вікні).
+    dp = "explicit" if to_open_ms is not None else "bootstrap"
+    policy = ReadPolicy(disk_policy=dp, prefer_redis=True)
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, uds.read_window, spec, policy)
 
@@ -444,12 +454,30 @@ async def _delta_loop(session: WsSession, app: web.Application) -> None:
                     session.last_update_seq = cursor
                     continue
                 # Map event bars → candles
-                bars = []
+                # Дедуплікація events по open_ms: complete=true (final) перемагає preview.
+                # Це усуває DUP_T_MS spam і гарантує final>preview.
+                seen_events: Dict[int, dict] = {}  # open_ms → event
                 for ev in events:
-                    bar = ev.get("bar") if isinstance(ev, dict) else None
-                    if isinstance(bar, dict):
-                        bars.append(bar)
+                    if not isinstance(ev, dict):
+                        continue
+                    bar = ev.get("bar")
+                    if not isinstance(bar, dict):
+                        continue
+                    open_ms = bar.get("open_time_ms") or bar.get("open_ms") or 0
+                    prev = seen_events.get(open_ms)
+                    if prev is None:
+                        seen_events[open_ms] = ev
+                    elif ev.get("complete") and not prev.get("complete"):
+                        # final перемагає preview
+                        seen_events[open_ms] = ev
+                    elif ev.get("complete") == prev.get("complete"):
+                        # однаковий тип — пізніший (newer seq) перемагає
+                        seen_events[open_ms] = ev
+                    # else: prev is final, ev is preview → keep prev
+                bars = [ev["bar"] for ev in seen_events.values()]
                 candles, dropped = map_bars_to_candles_v4(bars)
+                # Сортуємо по t_ms для монотонної доставки (defense-in-depth)
+                candles.sort(key=lambda c: c.get("t_ms", 0))
                 warnings: list = []
                 if dropped > 0:
                     warnings.append("candle_map_dropped:%d" % dropped)
@@ -616,6 +644,7 @@ async def _handle_switch(session: WsSession, data: Dict[str, Any], app: web.Appl
     session.symbol = symbol
     session.tf_s = tf_s
     session.last_update_seq = None  # reset cursor for new pair
+    session._scrollback_count = 0  # P11: reset scrollback budget on switch
 
     _log.info(
         "WS_SWITCH client=%s from=%s:%s to=%s:%s",
@@ -636,22 +665,53 @@ async def _handle_switch(session: WsSession, data: Dict[str, Any], app: web.Appl
 
 
 async def _handle_scrollback(session: WsSession, data: Dict[str, Any], app: web.Application) -> None:
-    """Обробка scrollback action: UDS read_window(to_open_ms) → scrollback frame."""
+    """Обробка scrollback action: UDS read_window(to_open_ms) → scrollback frame.
+
+    P11 rails: max_steps + cooldown per session/symbol+tf.
+    """
     if session.symbol is None or session.tf_s is None:
         return
+    tf_label = _TF_S_TO_LABEL.get(session.tf_s, f"{session.tf_s}s")
+
+    # P11 guard: max_steps
+    if session._scrollback_count >= SCROLLBACK_MAX_STEPS:
+        _log.warning(
+            "WS_SCROLLBACK_REJECT client=%s reason=max_steps(%d)",
+            session.client_id, SCROLLBACK_MAX_STEPS,
+        )
+        frame = _build_scrollback_frame(
+            session, [], session.symbol, tf_label,
+            ["scrollback_max_steps_reached"], app=app,
+        )
+        await session.ws.send_json(frame)
+        return
+
+    # P11 guard: cooldown
+    now = time.time()
+    if now - session._scrollback_last_ts < SCROLLBACK_COOLDOWN_S:
+        _log.warning(
+            "WS_SCROLLBACK_REJECT client=%s reason=cooldown",
+            session.client_id,
+        )
+        frame = _build_scrollback_frame(
+            session, [], session.symbol, tf_label,
+            ["scrollback_throttled"], app=app,
+        )
+        await session.ws.send_json(frame)
+        return
+
     to_ms = data.get("to_ms")
     if not isinstance(to_ms, (int, float)) or to_ms <= 0:
         _log.warning("WS_SCROLLBACK_REJECT client=%s reason=bad_to_ms", session.client_id)
-        # Завжди відповідаємо пустим frame — інакше клієнт застрягне з isFetchingScrollback=true
-        tf_label = _TF_S_TO_LABEL.get(session.tf_s, f"{session.tf_s}s")
         frame = _build_scrollback_frame(session, [], session.symbol, tf_label, ["bad_to_ms"], app=app)
         await session.ws.send_json(frame)
         return
     to_ms = int(to_ms)
+    session._scrollback_count += 1
+    session._scrollback_last_ts = now
     cfg = app.get("_full_config", {})
     # Scrollback chunk: менше ніж cold start
     limit = min(_cold_start_limit(session.tf_s, cfg), 500)
-    tf_label = _TF_S_TO_LABEL.get(session.tf_s, f"{session.tf_s}s")
     warnings: list = []
     try:
         result = await _uds_read_window(app, session.symbol, session.tf_s, limit, to_open_ms=to_ms)

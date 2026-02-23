@@ -75,8 +75,16 @@ app.main (supervisor)
 
 ## Геометрія часу (помітка для всіх розмов про свічки)
 
-- SSOT JSONL (CandleBar) і HTTP API тримають end-excl: `close_time_ms = open_time_ms + tf_s*1000`.
-- Якщо потрібен end-incl для рендера, UI обчислює локально: `close_incl_ms = close_time_ms - 1`.
+**Dual convention (канон):**
+
+| Шар | Поле | Семантика | Формула |
+|---|---|---|---|
+| CandleBar / SSOT JSONL / HTTP API | `close_time_ms` | **end-excl** | `open_time_ms + tf_s * 1000` |
+| Redis (ohlcv / preview:curr / preview:tail) | `close_ms` | **end-incl** | `open_ms + tf_s * 1000 - 1` |
+
+- Конвертація end-excl → end-incl відбувається **тільки** на межі Redis write:
+  `redis_snapshot._bar_to_cache_bar`, `redis_snapshot.put_bar`, `uds.publish_preview_bar`.
+- При читанні з Redis, UDS перераховує `close_ms = open_ms + tf_s*1000` (end-excl, ігноруючи stored close_ms).
 - `event_ts`/`event_ts_ms` додається лише у вихідних payload-ах для `complete=true`, не зберігається у SSOT.
 
 Це рішення є каноном. Будь-які зміни геометрії часу мають проходити через окремий initiative з міграцією і rollback.
@@ -117,7 +125,7 @@ app.main (supervisor)
 | --- | --- | --- |
 | **Контракти** (JSON Schema) | `core/contracts/public/marketdata_v1/` | bar_v1, window_v1, updates_v1, tick_v1 |
 | **Конфіг** (policy SSOT) | `config.json` (довідник: [config_reference.md](config_reference.md)) | Один файл; .env — лише секрети. Секція `bootstrap` — SSOT для warmup/cold-start параметрів (S4, ADR-0003) |
-| **Геометрія часу** | `core/time_geom.py`, `core/buckets.py` | end-excl канон; bar_close_incl/bar_close_excl |
+| **Геометрія часу** | `core/model/bars.py`, `core/buckets.py` | end-excl канон: `close_time_ms = open_time_ms + tf_s*1000`; guard: `assert_invariants()` |
 | **Дані** (SSOT JSONL) | `data_v3/{symbol}/tf_{tf_s}/part-YYYYMMDD.jsonl` | append-only, final-only |
 | **Redis cache** | `{NS}:ohlcv:snap/tail:{sym}:{tf_s}` | Не SSOT; warmup/cold-load кеш |
 | **Preview plane** | `{NS}:preview:*` у Redis | Ізольований keyspace; не на диску |
@@ -134,11 +142,11 @@ app.main (supervisor)
 | --- | --- | --- |
 | **I0** | **Dependency Rule**: core/ ← runtime/ ← ui/; tools/ ізольовані | Exit-gate AST перевірка |
 | **I1** | **UDS як вузька талія**: всі writes через `commit_final_bar`/`publish_preview_bar`; UI = `role="reader"`, `_ensure_writer_role()` кидає `RuntimeError` | Runtime guard у UDS |
-| **I2** | **Єдина геометрія часу**: canonical = epoch_ms int, end-excl (`close_time_ms = open_time_ms + tf_s*1000`). Redis snap зберігає end-incl (internal, конвертується на виході) | `core/time_geom.py` SSOT |
+| **I2** | **Єдина геометрія часу**: canonical = epoch_ms int. CandleBar/SSOT/API = end-excl (`close_time_ms = open + tf_s*1000`). Redis ALL = end-incl (`close_ms = open + tf_s*1000 - 1`). Конвертація на межі Redis write (`redis_snapshot`, `uds.publish_preview_bar`). | `core/model/bars.py:assert_invariants`, `_ensure_bar_payload_end_excl` |
 | **I3** | **Final > Preview (NoMix)**: `complete=true` (final, `source ∈ {history, derived, history_agg}`) завжди перемагає `complete=false` (preview). NoMix guard у UDS | Watermark + NoMix violation tracking |
 | **I4** | **Один update-потік для UI**: UI отримує бари лише через `/api/updates` (upsert events) + `/api/bars` (cold-load). Жодних паралельних каналів | Contract-first API schema |
 | **I5** | **Degraded-but-loud**: будь-який fallback/перемикання джерел/geom_fix → `warnings[]`/`meta.extensions`, не silent. `bars=[]` завжди з `warnings[]` (no_data rail) | `_contract_guard_warn_*` + no_data branch |
-| **I6** | **Disk hot-path ban**: disk не читається для polling/updates; cold-load/scrollback використовують `disk_policy="explicit"` (one-time disk read, після чого RAM заповнюється). Live updates йдуть тільки через Redis bus | `_disk_allowed()` guard у UDS |
+| **I6** | **Disk hot-path ban (P11)**: disk не читається для polling/updates. Cold-load/switch = `disk_policy="bootstrap"` (тільки 60s після boot). Scrollback = `disk_policy="explicit"` (disk дозволено, але з max_steps=6 + cooldown 0.5s per session). Live updates — тільки Redis bus | `_disk_allowed()` guard у UDS; `SCROLLBACK_MAX_STEPS`/`SCROLLBACK_COOLDOWN_S` у ws_server |
 
 ## Stop-rules та режими
 
@@ -580,7 +588,6 @@ v3/
 │   ├── config_loader.py           # SSOT: pick_config_path / load_system_config
 │   ├── buckets.py                 # bucket_start_ms / resolve_anchor_offset_ms
 │   ├── derive.py                  # DERIVE_CHAIN + GenericBuffer + aggregate_bars (cascade pure logic)
-│   ├── time_geom.py               # helper-и геометрії часу (канон API/SSOT = end-excl)
 │   ├── model/
 │   │   └── bars.py                # CandleBar + інваріанти часу
 │   └── contracts/
@@ -618,7 +625,7 @@ v3/
 │   │       ├── redis_layer.py     # Redis read шар
 │   │       └── disk_layer.py      # Disk read шар
 │   ├── ws/
-│   │   ├── ws_server.py           # WS сервер (aiohttp, порт 8000, ui_v4_v2 protocol, UDS reader, config-gated, 733 LOC)
+│   │   ├── ws_server.py           # WS сервер (aiohttp, порт 8000, ui_v4_v2 protocol, UDS reader, config-gated, 770 LOC, scrollback max_steps=6 + cooldown 0.5s)
 │   │   └── candle_map.py          # bar→Candle mapping R2 closure (75 LOC)
 │   └── obs_60s.py                 # спостереження / метрики (60s intervals)
 ├── ui_chart_v3/                   # UI + API same-origin (поточний production, HTTP polling)
@@ -645,6 +652,13 @@ v3/
 │       ├── stores/                # cursor price + UI warnings + meta (serverConfig) + favorites (P3.13)
 │       ├── layout/                # ChartPane, ChartHud (frosted HUD, theme/style/fav pickers), OhlcvTooltip, StatusBar (+diag btn), StatusOverlay, DiagPanel (P3.14), DrawingToolbar (disabled), SymbolTfPicker
 │       └── chart/                 # ChartEngine (LWC, v3-parity, applyTheme/applyCandleStyle), themes.ts (3 themes + 5 candle styles), interaction.ts (Y-zoom/pan/reset), OverlayRenderer, DrawingsRenderer (disabled), geometry
+├── aione_top/                     # TUI-монітор процесів/pipeline (standalone, NOT supervisor-managed)
+│   ├── __main__.py                # python -m aione_top
+│   ├── app.py                     # головний TUI loop (421 LOC, Textual)
+│   ├── collectors.py              # збір даних: Redis, HTTP, логи, OBS_60S (651 LOC)
+│   ├── display.py                 # рендер TUI таблиць/панелей (773 LOC)
+│   ├── actions.py                 # restart/start процесів (262 LOC)
+│   └── README.md                  # документація aione_top
 ├── tools/                         # утиліти / діагностика
 │   ├── backfill_cascade.py        # waterfall M1→H4 backfill з calendar-aware derive
 │   ├── tail_integrity_scanner.py  # цілісність даних: all symbols × all TFs × N days

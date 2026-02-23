@@ -46,29 +46,6 @@ for _src_tf, _targets in DERIVE_CHAIN.items():
         DERIVE_SOURCE[_tgt_tf] = (_src_tf, _n)
 
 
-def derive_chain_for(source_tf_s: int) -> List[Tuple[int, int]]:
-    """Які target TF можна побудувати з source_tf_s."""
-    return list(DERIVE_CHAIN.get(source_tf_s, []))
-
-
-def full_cascade_from(source_tf_s: int) -> List[int]:
-    """Повний cascade TF, які (транзитивно) залежать від source_tf_s.
-
-    Наприклад, full_cascade_from(60) → [180, 300, 900, 1800, 3600, 14400].
-    """
-    result: List[int] = []
-    queue = [t for t, _ in DERIVE_CHAIN.get(source_tf_s, [])]
-    seen = set(queue)
-    while queue:
-        tf = queue.pop(0)
-        result.append(tf)
-        for child_tf, _ in DERIVE_CHAIN.get(tf, []):
-            if child_tf not in seen:
-                seen.add(child_tf)
-                queue.append(child_tf)
-    return sorted(result)
-
-
 # ---------------------------------------------------------------------------
 # GenericBuffer — параметричний буфер барів для будь-якого TF
 # ---------------------------------------------------------------------------

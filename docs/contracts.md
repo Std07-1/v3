@@ -209,18 +209,25 @@
 
 ---
 
-## Redis snapshot (внутрішній формат)
+## Redis snapshot та preview (внутрішній формат)
 
 > Детальний дизайн: [redis_snapshot_design.md](redis_snapshot_design.md)
 
 Це **внутрішній** формат (не публічний контракт). Ключові відмінності від публічного bar_v1:
 
-| Відмінність | Redis snap (internal) | Public bar_v1 |
+| Відмінність | Redis (ohlcv + preview) | Public bar_v1 (CandleBar) |
 |---|---|---|
-| `close_ms` семантика | **end-incl** (`close_time_ms_excl - 1`) | **end-excl** (`open_time_ms + tf_s*1000`) |
+| `close_ms` семантика | **end-incl** (`open_ms + tf_ms - 1`) | **end-excl** (`open_time_ms + tf_s*1000`) |
 | Додаткові поля | `payload_ts_ms`, `seq`, `v` | `time`, `event_ts`, `last_price` |
 
-UDS нормалізує Redis snap → public bar_v1 при читанні.
+### Інваріант: Redis close_ms = end-inclusive (SSOT)
+
+Усі Redis ключі (`ohlcv:*`, `preview:curr:*`, `preview:tail:*`) зберігають
+`close_ms = open_ms + tf_s * 1000 - 1` (end-incl).  
+CandleBar/SSOT JSONL внутрішньо використовують end-excl (`close_time_ms = open_ms + tf_s * 1000`).  
+Конвертація відбувається **тільки на межі Redis write** (`redis_snapshot._bar_to_cache_bar`,
+`redis_snapshot.put_bar`, `uds.publish_preview_bar`).  
+UDS нормалізує Redis snap → public bar_v1 при читанні (`_redis_payload_bar_to_canonical`).
 
 ---
 

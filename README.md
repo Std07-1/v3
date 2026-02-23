@@ -10,14 +10,15 @@
 | **C** UDS | SSOT disk + Redis cache + updates bus | `runtime/store/uds.py` |
 | **B** UI (http) | read-only HTTP polling renderer, same-origin, порт 8089 | `ui_chart_v3/` |
 | **B** UI (ws) | read-only WS real-time renderer, same-origin, порт 8000 | `ui_v4/` + `runtime/ws/ws_server.py` |
+| **TUI** | aione-top: інтерактивний TUI-монітор процесів/pipeline | `aione_top/` |
 
 ## Ключові принципи
 
 - **SSOT**: один UDS, один `config.json`, один TF allowlist.
 - **NoMix / Final > Preview**: `complete=true` завжди перемагає; два різні final source для одного ключа заборонені.
 - **Degraded-but-loud**: жодних silent fallback — лише `warnings[]` / `meta.degraded[]`.
-- **Disk hot-path ban**: disk лише для bootstrap/scrollback/recovery; interactive = RAM/Redis.
-- **Часова геометрія**: `close_time_ms = open_time_ms + tf_s * 1000` (end-excl), UTC epoch ms int.
+- **Disk hot-path ban**: disk лише для bootstrap/scrollback/recovery; interactive = RAM/Redis. Scrollback: max_steps=6, cooldown 0.5s.
+- **Часова геометрія (dual convention)**: CandleBar/SSOT/API = end-excl (`close_time_ms = open + tf_s*1000`); Redis ALL = end-incl (`close_ms = open + tf_s*1000 - 1`). Конвертація на межі Redis write.
 
 ## Quickstart
 
@@ -66,6 +67,7 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 | [docs/ADR-0003 Cold Start Hardening.md](docs/ADR-0003%20Cold%20Start%20Hardening.md) | ADR: Cold start hardening (S1 error isolation ✅, S2 supervisor restart ✅, S3-S4 pending) |
 | [docs/system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md](docs/system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md) | UI v4 audit: T1-T10 ALL COMPLETE, chart parity DONE |
 
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │  LAYER 1: POLLING (simple, focused, single-responsibility)  │
 │                                                             │
@@ -79,7 +81,7 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 │  ┌──────────────────────────────────┐                       │
 │  │            UDS (SSOT)            │                       │
 │  └──────────────┬───────────────────┘                       │
-│                 │ updates bus (Redis pub/sub)                │
+│                 │ updates bus (Redis pub/sub)               │
 └─────────────────┼───────────────────────────────────────────┘
                   │
                   ▼
@@ -96,12 +98,12 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 │  │    runtime/ingest/derive_engine.py (I/O layer)  │        │
 │  │                                                 │        │
 │  │  On new M1 bar →  cascade per symbol:           │        │
-│  │    M1 → M3 (3×M1)                              │        │
-│  │    M1 → M5 (5×M1)                              │        │
-│  │      M5 → M15 (3×M5)                           │        │
-│  │        M15 → M30 (2×M15)                       │        │
-│  │          M30 → H1 (2×M30)                      │        │
-│  │            H1 → H4 (4×H1, calendar+TV anchor)  │        │
+│  │    M1 → M3 (3×M1)                               │        │
+│  │    M1 → M5 (5×M1)                               │        │
+│  │      M5 → M15 (3×M5)                            │        │
+│  │        M15 → M30 (2×M15)                        │        │
+│  │          M30 → H1 (2×M30)                       │        │
+│  │            H1 → H4 (4×H1, calendar+TV anchor)   │        │
 │  │                                                 │        │
 │  │  ThreadPool: 13 symbols паралельно              │        │
 │  │  Priority: watched symbol → front of queue      │        │
@@ -115,19 +117,20 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 └─────────────────────────────────────────────────────────────┘
                   │
                   ▼
-┌─────────────────────────────────────────────────────────────┐
-│  LAYER 3a: UI v3 (HTTP polling, read-only, ZERO domain logic)  │
-│  /api/bars → UDS.read_window() (ALL TFs, including H4!)        │
-│  /api/updates → UDS updates bus                               │
-│  H4 кеш/derive OUT OF UI completely                            │
-│  Порт 8089, same-origin, vanilla JS polling                   │
-├─────────────────────────────────────────────────────────────┤
-│  LAYER 3b: UI v4 (WS real-time, read-only, ZERO domain logic)  │
-│  WS full/delta/scrollback → UDS via ws_server.py               │
+┌──────────────────────────────────────────────────────────────┐
+│  LAYER 3a: UI v3 (HTTP polling, read-only, ZERO domain logic)│
+│  /api/bars → UDS.read_window() (ALL TFs, including H4!)      │
+│  /api/updates → UDS updates bus                              │
+│  H4 кеш/derive OUT OF UI completely                          │
+│  Порт 8089, same-origin, vanilla JS polling                  │
+├──────────────────────────────────────────────────────────────┤
+│  LAYER 3b: UI v4 (WS real-time, read-only, ZERO domain logic)│
+│  WS full/delta/scrollback → UDS via ws_server.py             │
 │  Svelte 5 + LWC 5 + TypeScript, 25 файлів ~4045 LOC          │
 │  Порт 8000, same-origin, config-gated                        │
-│  Chart parity DONE, audit T1-T10 COMPLETE                     │
-└─────────────────────────────────────────────────────────────┘
+│  Chart parity DONE, audit T1-T10 COMPLETE                    │
+└──────────────────────────────────────────────────────────────┘
+```
 
 ## Ліцензія
 

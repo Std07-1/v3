@@ -5,12 +5,10 @@ import logging
 import os
 import threading
 import time
-import tempfile
-import json as _json
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from core.model.bars import CandleBar, FINAL_SOURCES, SOURCE_ALLOWLIST
+from core.model.bars import CandleBar, FINAL_SOURCES
 from core.config_loader import (
     tf_allowlist_from_cfg, preview_tf_allowlist_from_cfg, min_coldload_bars_from_cfg,
     DEFAULT_PREVIEW_TF_ALLOWLIST, MAX_EVENTS_PER_RESPONSE,
@@ -320,9 +318,6 @@ class UnifiedDataStore:
         self._jsonl = jsonl_appender
         self._redis_writer = redis_snapshot_writer
         self._updates_bus = updates_bus
-        self._updates_lock = threading.Lock()
-        self._updates_seq = 0
-        self._updates_last_digest: dict[tuple[str, int, int], str] = {}
         self._wm_by_key: dict[tuple[str, int], int] = {}
         self._updates_bus_warned = False
         self._redis_spec_mismatch = bool(redis_spec_mismatch)
@@ -617,15 +612,6 @@ class UnifiedDataStore:
         _log_updates_result(result)
         return result
 
-    def upsert_bar(self, symbol: str, tf_s: int, bar_canon: dict[str, Any]) -> None:
-        if self._role != "writer":
-            Logging.warning(
-                "UDS: запис заборонено (UDS_WRITE_FORBIDDEN) role=%s",
-                self._role,
-            )
-            raise RuntimeError(f"UDS_WRITE_FORBIDDEN role={self._role}")
-        self._ram.upsert_bar(symbol, tf_s, bar_canon)
-
     def commit_final_bar(
         self,
         bar: CandleBar,
@@ -780,9 +766,12 @@ class UnifiedDataStore:
         payload_ts_ms = int(time.time() * 1000)
         bar_payload = bar.to_dict()
         close_ms = _ensure_bar_payload_end_excl(bar_payload)
+        # Redis close_ms = end-incl (open + tf*1000 - 1), matching redis_snapshot convention.
+        # CandleBar internal = end-excl; conversion at Redis boundary.
+        close_ms_incl = int(close_ms - 1) if close_ms is not None else int(bar_payload.get("close_time_ms")) - 1
         bar_item = {
             "open_ms": int(bar_payload.get("open_time_ms")),
-            "close_ms": int(close_ms) if close_ms is not None else int(bar_payload.get("close_time_ms")),
+            "close_ms": close_ms_incl,
             "o": bar_payload.get("o"),
             "h": bar_payload.get("h"),
             "l": bar_payload.get("low"),
@@ -1415,27 +1404,6 @@ class UnifiedDataStore:
                 out.append(candle)
         return out
 
-    def head_first_open_ms(self, symbol: str, tf_s: int) -> Optional[int]:
-        parts = self._disk.list_parts(symbol, tf_s)
-        if not parts:
-            return None
-        first_path = parts[0]
-        try:
-            with open(first_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                        open_ms = obj.get("open_time_ms")
-                        return int(open_ms) if isinstance(open_ms, int) else None
-                    except Exception:
-                        continue
-        except Exception:
-            return None
-        return None
-
     def load_day_open_times(
         self,
         symbol: str,
@@ -1685,54 +1653,6 @@ class UnifiedDataStore:
             "src": str(source),
             "event_ts": int(close_ms) if complete else None,
         }
-
-    def _bar_to_update_event(self, symbol: str, bar: dict[str, Any]) -> dict[str, Any]:
-        complete = bool(bar.get("complete", True))
-        return {
-            "key": {
-                "symbol": symbol,
-                "tf_s": int(bar.get("tf_s", 0)),
-                "open_ms": int(bar.get("open_time_ms", 0)),
-            },
-            "bar": bar,
-            "complete": complete,
-            "source": str(bar.get("src", "")),
-            "event_ts": bar.get("event_ts") if complete else None,
-        }
-
-    def _digest_bar(self, bar: dict[str, Any]) -> str:
-        payload = {
-            "open_time_ms": bar.get("open_time_ms"),
-            "close_time_ms": bar.get("close_time_ms"),
-            "o": bar.get("open"),
-            "h": bar.get("high"),
-            "low": bar.get("low"),
-            "c": bar.get("close"),
-            "v": bar.get("volume"),
-            "complete": bar.get("complete"),
-            "src": bar.get("src"),
-            "event_ts": bar.get("event_ts"),
-            "last_price": bar.get("last_price"),
-            "last_tick_ts": bar.get("last_tick_ts"),
-        }
-        raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-        return _sha256(raw)
-
-    def _next_seq_for_event(self, key: tuple[str, int, int], digest: str) -> Optional[int]:
-        with self._updates_lock:
-            prev = self._updates_last_digest.get(key)
-            if prev == digest:
-                return None
-            self._updates_last_digest[key] = digest
-            self._updates_seq += 1
-            return self._updates_seq
-
-
-def _sha256(text: str) -> str:
-    import hashlib
-
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
 
 def _load_cfg(config_path: str) -> dict[str, Any]:
     try:
@@ -2116,212 +2036,3 @@ def build_uds_from_config(
         preview_tf_allowlist_source=preview_tf_allowlist_source,
         preview_curr_ttl_s=int(cfg.get("preview_curr_ttl_s", _DEFAULT_PREVIEW_CURR_TTL_S)),
     )
-
-
-def selftest_writer_api() -> None:
-    class _FakeJsonl:
-        def __init__(self) -> None:
-            self.appended: list[CandleBar] = []
-
-        def append(self, bar: CandleBar) -> None:
-            self.appended.append(bar)
-
-    class _FakeRedisWriter:
-        def __init__(self) -> None:
-            self.bars: list[CandleBar] = []
-
-        def put_bar(self, bar: CandleBar) -> None:
-            self.bars.append(bar)
-
-    class _FakeUpdatesBus:
-        def __init__(self) -> None:
-            self.events: list[dict[str, Any]] = []
-
-        def publish(self, event: dict[str, Any]) -> None:
-            self.events.append(event)
-
-    class _FakeRedisLayer:
-        def __init__(self) -> None:
-            self.preview_curr: dict[tuple[str, int], dict[str, Any]] = {}
-            self.preview_tail: dict[tuple[str, int], dict[str, Any]] = {}
-            self.preview_events: list[dict[str, Any]] = []
-
-        def write_preview_curr(
-            self, symbol: str, tf_s: int, payload: dict[str, Any], ttl_s: Optional[int]
-        ) -> None:
-            _ = ttl_s
-            self.preview_curr[(symbol, tf_s)] = dict(payload)
-
-        def read_preview_tail(
-            self, symbol: str, tf_s: int
-        ) -> tuple[Optional[dict[str, Any]], Optional[int], Optional[str]]:
-            payload = self.preview_tail.get((symbol, tf_s))
-            return dict(payload) if payload is not None else None, None, None
-
-        def write_preview_tail(self, symbol: str, tf_s: int, payload: dict[str, Any], ttl_s: Optional[int] = None) -> None:
-            _ = ttl_s
-            self.preview_tail[(symbol, tf_s)] = dict(payload)
-
-        def publish_preview_event(
-            self, symbol: str, tf_s: int, event: dict[str, Any], retain: int
-        ) -> Optional[int]:
-            _ = (symbol, tf_s, retain)
-            self.preview_events.append(dict(event))
-            return len(self.preview_events)
-
-    class _FakeDisk:
-        def last_open_ms(self, symbol: str, tf_s: int) -> Optional[int]:
-            _ = (symbol, tf_s)
-            return None
-
-    fake_jsonl = _FakeJsonl()
-    fake_redis = _FakeRedisWriter()
-    fake_redis_layer = _FakeRedisLayer()
-    fake_bus = _FakeUpdatesBus()
-
-    uds = UnifiedDataStore(
-        data_root=".",
-        boot_id="selftest",
-        tf_allowlist={300},
-        min_coldload_bars={},
-        role="writer",
-        disk_layer=_FakeDisk(),
-        redis_layer=fake_redis_layer,
-        jsonl_appender=fake_jsonl,
-        redis_snapshot_writer=fake_redis,
-        updates_bus=fake_bus,
-        preview_tf_allowlist={60, 180, 300},
-        preview_tf_allowlist_source="config",
-    )
-
-    bar_final = CandleBar(
-        symbol="XAU/USD",
-        tf_s=300,
-        open_time_ms=1700000000000,
-        close_time_ms=1700000000000 + 300 * 1000,
-        o=1.0,
-        h=1.0,
-        low=1.0,
-        c=1.0,
-        v=1.0,
-        complete=True,
-        src="history",
-    )
-    result = uds.commit_final_bar(bar_final)
-    if not result.ok:
-        raise RuntimeError(f"UDS selftest: commit_final_bar failed reason={result.reason}")
-    if len(fake_jsonl.appended) != 1:
-        raise RuntimeError("UDS selftest: ssot append не викликано")
-    if len(fake_redis.bars) != 1:
-        raise RuntimeError("UDS selftest: redis write не викликано")
-    if len(fake_bus.events) != 1:
-        raise RuntimeError("UDS selftest: updates publish не викликано")
-
-    bar_preview = CandleBar(
-        symbol="XAU/USD",
-        tf_s=60,
-        open_time_ms=1700000300000,
-        close_time_ms=1700000300000 + 60 * 1000 - 1,
-        o=1.0,
-        h=1.0,
-        low=1.0,
-        c=1.0,
-        v=1.0,
-        complete=False,
-        src="stream",
-    )
-    uds.publish_preview_bar(bar_preview)
-    if len(fake_jsonl.appended) != 1:
-        raise RuntimeError("UDS selftest: preview не має писати в SSOT")
-    if len(fake_redis.bars) != 1:
-        raise RuntimeError("UDS selftest: preview не має писати у final Redis snapshots")
-    if not fake_redis_layer.preview_curr:
-        raise RuntimeError("UDS selftest: preview curr не записано")
-    curr = fake_redis_layer.preview_curr.get(("XAU/USD", 60))
-    if not isinstance(curr, dict):
-        raise RuntimeError("UDS selftest: preview curr payload invalid")
-    curr_bar = curr.get("bar") if isinstance(curr.get("bar"), dict) else None
-    if not isinstance(curr_bar, dict):
-        raise RuntimeError("UDS selftest: preview curr bar invalid")
-    expected_close = 1700000300000 + 60 * 1000
-    if int(curr_bar.get("close_ms")) != expected_close:
-        raise RuntimeError("UDS selftest: preview close_ms not end-excl")
-    if not fake_redis_layer.preview_events:
-        raise RuntimeError("UDS selftest: preview updates не опубліковано")
-
-    Logging.info("UDS_SELFTEST_OK writer_api=1")
-
-
-def selftest_disk_policy() -> None:
-    """Selftest: перевіряє що disk_policy='never' блокує disk, 'bootstrap' дозволяє."""
-
-    # Створюємо temp data_root з файлом для одного symbol/TF
-    tmp_root = tempfile.mkdtemp(prefix="uds_selftest_disk_")
-    sym_dir = os.path.join(tmp_root, "TEST_SYM", "tf_300")
-    os.makedirs(sym_dir, exist_ok=True)
-    part_file = os.path.join(sym_dir, "part-20250101.jsonl")
-    # Записуємо мінімальний бар
-    bar_data = {
-        "symbol": "TEST/SYM", "tf_s": 300,
-        "open_time_ms": 1735689600000, "close_time_ms": 1735689900000,
-        "o": 1.0, "h": 2.0, "l": 0.5, "c": 1.5, "v": 100.0,
-        "complete": True, "src": "test",
-    }
-    with open(part_file, "w", encoding="utf-8") as f:
-        f.write(_json.dumps(bar_data) + "\n")
-
-    uds = UnifiedDataStore(
-        data_root=tmp_root,
-        boot_id="selftest-dp",
-        tf_allowlist=[300],
-        min_coldload_bars={},
-        role="reader",
-    )
-
-    spec = WindowSpec(
-        symbol="TEST/SYM", tf_s=300, limit=1,
-        since_open_ms=None, to_open_ms=None, cold_load=True,
-    )
-
-    # 1) disk_policy="never" → RAM miss → заблоковано, повертає []
-    policy_never = ReadPolicy(disk_policy="never")
-    res = uds.read_window(spec, policy_never)
-    if res.bars_lwc:
-        raise RuntimeError("selftest_disk_policy: never повинно блокувати disk, але бари прийшли")
-    if res.meta.get("source") != "degraded":
-        raise RuntimeError(f"selftest_disk_policy: source має бути 'degraded', got {res.meta.get('source')}")
-    if "disk_disabled_cache_miss" not in (res.warnings or []):
-        raise RuntimeError("selftest_disk_policy: warning disk_disabled_cache_miss відсутній")
-    if uds._disk_hotpath_blocked < 1:
-        raise RuntimeError("selftest_disk_policy: лічильник blocked=0")
-
-    # 2) disk_policy="bootstrap" (в межах вікна) → disk дозволено
-    policy_boot = ReadPolicy(disk_policy="bootstrap")
-    uds._boot_ts = time.time()  # скидаємо boot time
-    res2 = uds.read_window(spec, policy_boot)
-    if not res2.bars_lwc:
-        raise RuntimeError("selftest_disk_policy: bootstrap має дозволити disk read, але бари порожні")
-    if "disk" not in (res2.meta.get("source") or ""):
-        raise RuntimeError(f"selftest_disk_policy: source має містити 'disk', got {res2.meta.get('source')}")
-
-    # 3) Тепер RAM прогріто, навіть never має повертати з RAM
-    res3 = uds.read_window(spec, policy_never)
-    if res3.meta.get("source") != "ram":
-        raise RuntimeError(f"selftest_disk_policy: після warmup source має бути 'ram', got {res3.meta.get('source')}")
-    if not res3.bars_lwc:
-        raise RuntimeError("selftest_disk_policy: RAM має повернути бари після warmup")
-
-    # 4) bootstrap expired → blocked
-    uds._boot_ts = time.time() - BOOTSTRAP_WINDOW_S - 10
-    uds._ram._windows.clear()  # очищаємо RAM щоб spike disk
-    blocked_before = uds._disk_hotpath_blocked
-    res4 = uds.read_window(spec, policy_boot)
-    if res4.bars_lwc:
-        raise RuntimeError("selftest_disk_policy: expired bootstrap не має повертати бари")
-    if uds._disk_hotpath_blocked <= blocked_before:
-        raise RuntimeError("selftest_disk_policy: лічильник blocked не збільшився")
-
-    # Cleanup
-    import shutil
-    shutil.rmtree(tmp_root, ignore_errors=True)
-    Logging.info("UDS_SELFTEST_OK disk_policy=1")

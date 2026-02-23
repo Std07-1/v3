@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Optional, Set
 
-from core.time_geom import bar_close_incl
-
 
 def tf_to_ms(tf_s: int, *, tf_allowlist: Optional[Set[int]] = None) -> int:
     """Конвертує TF секунди → мілісекунди.
@@ -36,7 +34,3 @@ def resolve_anchor_offset_ms(tf_s: int, cfg: dict[str, Any]) -> int:
 def bucket_start_ms(ts_ms: int, tf_ms: int, anchor_offset_ms: int) -> int:
     start = ((ts_ms - anchor_offset_ms) // tf_ms) * tf_ms + anchor_offset_ms
     return int(start)
-
-
-def bucket_close_incl(open_ms: int, tf_ms: int) -> int:
-    return bar_close_incl(open_ms, tf_ms)
