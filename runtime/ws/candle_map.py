@@ -29,15 +29,41 @@ def _pick(bar: dict, primary: str, fallback: str) -> Optional[float]:
         return None
 
 
+def _is_display_flat_bar(bar: dict) -> bool:
+    """Flat bar = O==H==L==C + low volume (≤4). Weekend/pause artifact від брокера.
+
+    Фільтрується на рівні display (не SSOT). Відповідає logic
+    m1_poller._is_flat + overlay._is_flat_preview_bar.
+    calendar_pause_flat extension теж рахується як flat.
+    """
+    ext = bar.get("extensions", {})
+    if isinstance(ext, dict) and ext.get("calendar_pause_flat"):
+        return True
+    o = bar.get("open", bar.get("o"))
+    h = bar.get("high", bar.get("h"))
+    lo = bar.get("low", bar.get("l"))
+    c = bar.get("close", bar.get("c"))
+    v = bar.get("volume", bar.get("v", 0.0))
+    if all(isinstance(x, (int, float)) for x in (o, h, lo, c)):
+        if o == h == lo == c and float(v) <= 4.0:
+            return True
+    return False
+
+
 def map_bar_to_candle_v4(bar: dict) -> Optional[dict]:
     """Конвертує один v3 bar dict → ui_v4 Candle dict або None (rejected).
 
     Вхід: LWC dict (open/high/low/close/volume/open_time_ms) АБО
           SHORT dict (o/h/low/c/v/open_time_ms).
     Вихід: {"t_ms": int, "o": float, "h": float, "l": float, "c": float, "v": float}
+    Flat бари (O==H==L==C, v≤4, calendar_pause_flat) фільтруються (I5: degraded-but-loud).
     """
     if not isinstance(bar, dict):
         _log.warning("CANDLE_MAP_REJECT reason=not_dict type=%s", type(bar).__name__)
+        return None
+
+    # Flat bar filter — display-only (SSOT не змінюється)
+    if _is_display_flat_bar(bar):
         return None
 
     # --- t_ms (epoch ms) ---
