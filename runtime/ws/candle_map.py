@@ -46,7 +46,7 @@ def _is_display_flat_bar(bar: dict) -> bool:
     c = bar.get("close", bar.get("c"))
     v = bar.get("volume", bar.get("v", 0.0))
     if all(isinstance(x, (int, float)) for x in (o, h, lo, c)):
-        if o == h == lo == c and float(v) <= 4.0:
+        if o == h == lo == c and float(v) <= 10.0:  # ADR-0012 P1: 4→10 (EUSTX50 V=6, GER30/HKG33 V=5)
             return True
     return False
 
@@ -57,10 +57,12 @@ _HTF_FLAT_SKIP_TF_S = 14400  # >= H4
 
 
 def _is_weekend_open_utc(bar: dict) -> bool:
-    """Перевіряє чи open_time бару припадає на п'ятницю або суботу UTC.
+    """Перевіряє чи open_time бару припадає на п'ятницю, суботу або неділю UTC.
 
     Fri 22:00 UTC → covers Saturday (no trading).
     Sat 22:00 UTC → covers Sunday (no trading).
+    Sun 21:00/22:00 UTC → D1 anchor open, flat artifact для індексів.
+    ADR-0012 P1: додано Sunday (wd=6).
     """
     oms = bar.get("open_time_ms") or bar.get("open_ms")
     if oms is None:
@@ -70,7 +72,7 @@ def _is_weekend_open_utc(bar: dict) -> bool:
     if not isinstance(oms, (int, float)) or oms <= 0:
         return False
     bar_dt = datetime.datetime.utcfromtimestamp(int(oms) / 1000)
-    return bar_dt.weekday() in (4, 5)  # Friday=4, Saturday=5
+    return bar_dt.weekday() in (4, 5, 6)  # Friday=4, Saturday=5, Sunday=6
 
 
 def map_bar_to_candle_v4(bar: dict, *, tf_s: int = 0) -> Optional[dict]:

@@ -14,6 +14,7 @@ const QUIET_INTERVAL_MS = 60_000;
 export class WSConnection {
   url: string;
   onMessage: (frame: RenderFrame) => void;
+  onOpen: (() => void) | null;
 
   ws: WebSocket | null = null;
 
@@ -24,9 +25,10 @@ export class WSConnection {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private boundOnVisibility: (() => void) | null = null;
 
-  constructor(url: string, onMessage: (frame: RenderFrame) => void) {
+  constructor(url: string, onMessage: (frame: RenderFrame) => void, onOpen?: () => void) {
     this.url = url;
     this.onMessage = onMessage;
+    this.onOpen = onOpen ?? null;
   }
 
   connect() {
@@ -42,6 +44,8 @@ export class WSConnection {
       diagStore.resetReconnectAttempt();
       stopEdgeProbe();
       this.removeVisibilityListener();
+      // Reset frame router on every (re)connect so server's new seq=1 isn't stale
+      this.onOpen?.();
     };
 
     this.ws.onmessage = (event) => {

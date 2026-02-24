@@ -1,0 +1,108 @@
+# Каталоги, де markdownlint не додає цінності (артефакти/кеші/експерименти)
+# ── Python ───────────────────────────────────────────────────
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# ── Секрети ──────────────────────────────────────────────────
+.env
+.env.local
+.env.prod
+
+# ── IDE / Editor ─────────────────────────────────────────────
+/.vscode/
+/.cursor/
+/.antigravity/
+/.github/
+/.idea/
+*.swp
+*.swo
+*~
+.agent/
+
+# ── Дані (runtime, не код) ──────────────────────────────────
+/data_v3/
+/History/
+/exports/
+dump.rdb
+
+# ── Node / UI build artifacts ───────────────────────────────
+node_modules/
+ui_v4/node_modules/
+ui_v4/dist/
+
+# ── Legacy UI (замінено на ui_v4) ───────────────────────────
+/ui_chart_v3/
+/Old system Connector v2/
+
+# ── Research / аудити / звіти (dev-only, не релізні) ────────
+/research/
+/reports/
+/aione_top/
+
+# ── Журнали, стан, діагностика ──────────────────────────────
+/changelog.jsonl
+/CHANGELOG.md
+/rebuild_state.json
+/env_profile.py
+*.log
+logs/
+
+# ── Документація: внутрішні аудити та спеки (не релізні) ────
+/docs/adr/
+/docs/audit/
+/docs/system_spec/
+/docs/claude_project_instructions.md
+/docs/Аналітичний меморандум.md
+/docs/Host Contract - Capability Sheet.md
+project_instructions.md
+rules.md
+
+# ── UI v4: planning/spec docs (не релізні) ──────────────────
+ui_v4/system_spec_ui4/
+ui_v4/UI_v4_COPILOT_PROMPT.txt
+ui_v4/UI_v4_COPILOT_README.md
+ui_v4/UI_v4_Addendum_v2_consolidated.md
+ui_v4/UI_v4_Addendum_v3_consolidated.md
+ui_v4/UI v4 _v3.md
+ui_v4/Architecture Review & Slice 0 (Оновлено).md
+ui_v4/LWC Engine (з фіксом Dedupe Scrollback).md
+ui_v4/.env.example
+
+# ── Root-level аудити/плани (не релізні) ─────────────────────
+/ПОВНИЙ АУДИТ AS-IS + TO-BE ADR + ПЛАН.md
+
+# ── Tools (діагностичні, не core) ───────────────────────────
+/tools/tail_guard.py
+/tools/diag/
+/tools/audit/
+/tools/_diag_*.py
+/tools/_check_*.py
+/tools/purge_rebuild_h4.py
+/tools/compare_m5_derived_vs_broker.py
+/tools/dedup_jsonl.py
+/tools/backfill_cascade.py
+/tools/live_cascade_monitor.py
+/tools/tail_integrity_scanner.py
+
+# ── UI v4: old/dead code ────────────────────────────────────
+ui_v4/src/chart/ChartPane.svelte
+ui_v4/src/chart/drawings/CommandStack.ts
+
+# ── Python config/packaging (поки не використовується) ──────
+/mypy.ini
+/pytest.ini
+/pyproject.toml
+/setup.cfg
+/tox.ini
+/coverage.xml
+/.coverage
+
+# ── Тимчасове ────────────────────────────────────────────────
+*.tmp
+*.bak

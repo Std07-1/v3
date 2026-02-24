@@ -558,10 +558,12 @@ class PollingConnectorB:
                             ms_to_utc_dt(bar_close_ms).isoformat(),
                         )
                     continue
-                # Guard 2: skip weekend artifact bars (Fri/Sat UTC open for D1+)
+                # Guard 2: skip weekend artifact bars (Fri/Sat/Sun UTC open for D1+)
+                # ADR-0012 P1: Sunday (wd=6) додано — D1 anchor 21:00/22:00 UTC,
+                # перший бар тижня = Sun 21:00+, для індексів це flat artifact.
                 if tf_s >= 86400:
                     bar_dt = dt.datetime.utcfromtimestamp(b.open_time_ms / 1000)
-                    if bar_dt.weekday() in (4, 5):  # Friday/Saturday = no trading
+                    if bar_dt.weekday() in (4, 5, 6):  # Fri/Sat/Sun = no trading for D1
                         logging.info(
                             "Cold-start: skip weekend artifact TF=%ds open=%s wd=%s",
                             tf_s,
@@ -687,10 +689,11 @@ class PollingConnectorB:
                 )
                 continue
 
-            # Guard: skip weekend artifact bars (Fri/Sat UTC open for D1+)
+            # Guard: skip weekend artifact bars (Fri/Sat/Sun UTC open for D1+)
+            # ADR-0012 P1: Sunday (wd=6) додано — flat artifact для індексів.
             if tf_s >= 86400:
                 bar_dt = dt.datetime.utcfromtimestamp(b.open_time_ms / 1000)
-                if bar_dt.weekday() in (4, 5):
+                if bar_dt.weekday() in (4, 5, 6):
                     logging.info(
                         "Base TF: skip weekend artifact TF=%ds open=%s wd=%s",
                         tf_s,

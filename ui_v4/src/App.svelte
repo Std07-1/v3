@@ -19,6 +19,7 @@
   import {
     handleWSFrame,
     currentFrame,
+    currentPair,
     resetFrameRouter,
     uiWarnings as routerUiWarnings,
     serverConfig,
@@ -213,6 +214,13 @@
   let lastBarOpen: number | null = $state(null);
 
   // --- Reactive subscriptions ---
+  const unsubPair = currentPair.subscribe((p) => {
+    if (p) {
+      hudSymbol = p.symbol;
+      hudTf = p.tf;
+    }
+  });
+
   let frame: RenderFrame | null = $state(null);
   let statusInfo: StatusInfo = $state({
     status: "CONNECTING" as const,
@@ -220,24 +228,30 @@
     critical: false,
   });
 
-  let _pairRestored = false; // one-shot: restore saved symbol/TF on first full frame
+  let _pairRestored = false; // restore saved symbol/TF on first full frame per connection
+
+  /** Called on every WS (re)connect — resets seq guard + pair restore flag */
+  function _onWsOpen(): void {
+    resetFrameRouter();
+    _pairRestored = false;
+  }
 
   const unsubFrame = currentFrame.subscribe((f) => {
-    // Restore saved symbol/TF on first full frame (skip rendering default)
     if (f && f.frame_type === "full" && !_pairRestored) {
       _pairRestored = true;
       const saved = loadLastPair();
       if (saved && (saved.symbol !== f.symbol || saved.tf !== f.tf)) {
         // Send switch immediately — server will send correct full frame
         actions?.switchSymbolTf(saved.symbol, saved.tf);
+        // Speculatively patch HUD to avoid flicker until correct full frame arrives
+        hudSymbol = saved.symbol;
+        hudTf = saved.tf;
         return; // Don't render this default frame
       }
     }
     frame = f;
-    // P3.1: Track symbol/tf/price from frames for HUD
+    // Track price/time from frames for HUD
     if (f) {
-      if (f.symbol) hudSymbol = f.symbol;
-      if (f.tf) hudTf = f.tf;
       const candles = f.candles;
       if (candles && candles.length > 0) {
         const last = candles[candles.length - 1];
@@ -277,10 +291,10 @@
     if (ws) {
       ws.close();
     }
-    resetFrameRouter();
+    // Note: resetFrameRouter + _pairRestored reset happen in _onWsOpen callback
     // Re-probe HTTP шар при ручному reconnect
     probeNow();
-    ws = new WSConnection(WS_URL, handleWSFrame);
+    ws = new WSConnection(WS_URL, handleWSFrame, _onWsOpen);
     ws.connect();
     actions = createActions(ws);
   }
@@ -303,8 +317,8 @@
     window.addEventListener("offline", onOffline);
     diagStore.setNetOffline(!navigator.onLine);
 
-    // 3. WS connect
-    ws = new WSConnection(WS_URL, handleWSFrame);
+    // 3. WS connect (onOpen resets frameRouter + pair restore on every reconnect)
+    ws = new WSConnection(WS_URL, handleWSFrame, _onWsOpen);
     ws.connect();
     actions = createActions(ws);
 
@@ -318,6 +332,7 @@
   });
 
   onDestroy(() => {
+    unsubPair();
     unsubFrame();
     unsubStatus();
     unsubConfig();

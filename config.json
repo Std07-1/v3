@@ -84,6 +84,10 @@
     "tick_stream_min_interval_ms": 200,
     "tick_stream_last_tick_ttl_s": 30,
     "tick_stream_price_mode": "bid",
+    "d1_live_tick_relay_enabled": true,
+    "d1_live_tick_relay_tfs_s": [
+        86400
+    ],
     "calendar_gate_enabled": true,
     "market_calendar_by_group": {
         "fx_24x5_utc_winter": {

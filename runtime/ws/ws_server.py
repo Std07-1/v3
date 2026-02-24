@@ -7,7 +7,7 @@ P2: UDS reader integration (full frame, switch, delta, scrollback).
 Інваріанти:
   W0: WS-сервер = UDS reader only (role="reader")
   W1: schema_v = "ui_v4_v2" на кожному frame
-  W2: meta.seq строго зростає per-connection
+  W2: meta.seq строго зростає per-connection (heartbeat/full/delta/scrollback)
   W7: heartbeat кожні ≤30s
 
 Запуск: python -m runtime.ws.ws_server --port 8000
@@ -42,6 +42,13 @@ DEFAULT_PORT = 8000
 DEFAULT_HEARTBEAT_S = 30
 DEFAULT_DELTA_POLL_S = 2.0
 DEFAULT_COLD_START_BARS = 300
+
+# ADR-0011: broadcast send timeout per client (slow-client rail)
+BROADCAST_SEND_TIMEOUT_S = 1.0
+
+# ADR-0012 P3: D1 live tick relay defaults
+_D1_TICK_RELAY_ENABLED_DEFAULT = False
+_D1_TICK_RELAY_TFS_DEFAULT: set = set()
 
 # P11: scrollback disk rails
 SCROLLBACK_MAX_STEPS = 12         # макс чанків scrollback per session per symbol+tf
@@ -197,7 +204,7 @@ class WsSession:
 
     __slots__ = (
         "client_id", "seq", "symbol", "tf_s",
-        "last_update_seq", "ws", "delta_task",
+        "last_update_seq", "ws",
         "_scrollback_count", "_scrollback_last_ts",
     )
 
@@ -208,9 +215,9 @@ class WsSession:
         self.tf_s: Optional[int] = None
         self.last_update_seq: Optional[int] = None
         self.ws: web.WebSocketResponse = ws
-        self.delta_task: Optional[asyncio.Task] = None  # type: ignore[type-arg]
         self._scrollback_count: int = 0      # P11: кількість scrollback для поточного symbol+tf
         self._scrollback_last_ts: float = 0  # P11: timestamp останнього scrollback
+
 
     def next_seq(self) -> int:
         self.seq += 1
@@ -431,75 +438,230 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
         _log.warning("WS_FULL_FRAME_ERROR client=%s err=%s", session.client_id, exc)
 
 
-async def _delta_loop(session: WsSession, app: web.Application) -> None:
-    """Background task: poll UDS read_updates → delta frames."""
+async def _safe_broadcast(
+    frame: Dict[str, Any],
+    recipients: tuple,
+    sessions: Dict[str, "WsSession"],
+    timeout_s: float = BROADCAST_SEND_TIMEOUT_S,
+) -> float:
+    """ADR-0011 BC5+BC6: broadcast з per-client seq + timeout + degraded-but-loud.
+
+    Для кожного клієнта: інжектить session.next_seq() в meta.seq,
+    серіалізує, відправляє з timeout. Повертає t_send_ms.
+    """
+    if not recipients:
+        return 0.0
+
+    async def _guarded_send(s: "WsSession") -> None:
+        frame["meta"]["seq"] = s.next_seq()
+        payload = json.dumps(frame)
+        await asyncio.wait_for(s.ws.send_str(payload), timeout=timeout_s)
+
+    t1 = time.perf_counter()
+    results = await asyncio.gather(
+        *(_guarded_send(s) for s in recipients),
+        return_exceptions=True,
+    )
+    t_send_ms = (time.perf_counter() - t1) * 1000.0
+
+    for s, res in zip(recipients, results):
+        if isinstance(res, Exception):
+            reason = "timeout" if isinstance(res, asyncio.TimeoutError) else type(res).__name__
+            _log.warning(
+                "WS_BROADCAST_ERR client_id=%s reason=%s err=%s",
+                s.client_id, reason, res,
+            )
+            sessions.pop(s.client_id, None)
+            try:
+                await s.ws.close()
+            except Exception:
+                pass
+    return t_send_ms
+
+
+async def _global_delta_loop(app: web.Application) -> None:
+    """ADR-0011: Global Background task: poll UDS read_updates → serialize once → fanout."""
     poll_s = app.get("_delta_poll_s", DEFAULT_DELTA_POLL_S)
     preview_tfs: set = app.get("_preview_tf_set", set())
+    forming_by_target: Dict[tuple[str, int], Dict[str, Any]] = {}  # ADR-0012 P3 global forming tracking
+
     try:
-        while not session.ws.closed:
+        while True:
             await asyncio.sleep(poll_s)
-            if session.ws.closed or session.symbol is None or session.tf_s is None:
-                break
-            include_preview = session.tf_s in preview_tfs
-            try:
-                result = await _uds_read_updates(
-                    app, session.symbol, session.tf_s,
-                    session.last_update_seq, include_preview,
-                )
-                if result is None:
+            sessions: Dict[str, WsSession] = app.get("_ws_sessions", {})
+            if not sessions:
+                continue
+            
+            subs_by_target: Dict[tuple[str, int], list[WsSession]] = {}
+            for sess in sessions.values():
+                if sess.ws.closed or sess.symbol is None or sess.tf_s is None:
                     continue
-                events = getattr(result, "events", [])
-                cursor = getattr(result, "cursor_seq", 0)
-                if session.last_update_seq is None:
-                    # Adopt-tail: skip events, just store cursor
-                    session.last_update_seq = cursor
-                    continue
-                if not events:
-                    session.last_update_seq = cursor
-                    continue
-                # Map event bars → candles
-                # Дедуплікація events по open_ms: complete=true (final) перемагає preview.
-                # Це усуває DUP_T_MS spam і гарантує final>preview.
-                seen_events: Dict[int, dict] = {}  # open_ms → event
-                for ev in events:
-                    if not isinstance(ev, dict):
+                target = (sess.symbol, sess.tf_s)
+                if target not in subs_by_target:
+                    subs_by_target[target] = []
+                subs_by_target[target].append(sess)
+            
+            for (symbol, tf_s), group_sessions in subs_by_target.items():
+                include_preview = tf_s in preview_tfs
+                subscribers = tuple(group_sessions)
+                
+                min_seq = None
+                for s in subscribers:
+                    if s.last_update_seq is not None:
+                        if min_seq is None or s.last_update_seq < min_seq:
+                            min_seq = s.last_update_seq
+                
+                t0 = time.perf_counter()
+                frame = None
+                try:
+                    result = await _uds_read_updates(app, symbol, tf_s, min_seq, include_preview)
+                    if result is None:
                         continue
-                    bar = ev.get("bar")
-                    if not isinstance(bar, dict):
+                        
+                    events = getattr(result, "events", [])
+                    cursor = getattr(result, "cursor_seq", 0)
+                    tf_label = _TF_S_TO_LABEL.get(tf_s, f"{tf_s}s")
+                    
+                    if not events:
+                        d1_relay_tfs: set = app.get("_d1_tick_relay_tfs", set())
+                        tick_redis = app.get("_tick_redis_client")
+                        tick_ns = app.get("_tick_redis_ns", "")
+                        payload: Optional[str] = None
+                        if tf_s in d1_relay_tfs and tick_redis is not None:
+                            try:
+                                tick_key = f"{tick_ns}:tick:last:{symbol.replace('/', '_')}"
+                                tick_raw = await asyncio.get_event_loop().run_in_executor(
+                                    app.get("_uds_executor"), tick_redis.get, tick_key
+                                )
+                                if tick_raw:
+                                    tick_data = json.loads(tick_raw)
+                                    tick_price = float(tick_data.get("mid", 0))
+                                    tick_ts_ms = int(tick_data.get("tick_ts_ms", 0))
+                                    if tick_price > 0 and tick_ts_ms > 0:
+                                        forming = forming_by_target.get((symbol, tf_s))
+                                        if forming is None:
+                                            forming = {
+                                                "symbol": symbol, "o": tick_price, "h": tick_price,
+                                                "l": tick_price, "c": tick_price, "open_ms": 0,
+                                            }
+                                        forming["h"] = max(forming["h"], tick_price)
+                                        forming["l"] = min(forming["l"], tick_price)
+                                        forming["c"] = tick_price
+                                        open_ms = forming.get("open_ms", 0)
+                                        if open_ms <= 0:
+                                            from core.buckets import bucket_start_ms, resolve_anchor_offset_ms
+                                            cfg = app.get("_full_config", {})
+                                            anchor_ms = resolve_anchor_offset_ms(tf_s, cfg)
+                                            open_ms = bucket_start_ms(tick_ts_ms, tf_s * 1000, anchor_ms)
+                                            forming["open_ms"] = open_ms
+                                        forming_by_target[(symbol, tf_s)] = forming
+                                        
+                                        forming_candle = {
+                                            "t_ms": open_ms, "o": forming["o"], "h": forming["h"],
+                                            "l": forming["l"], "c": forming["c"], "v": 0,
+                                            "complete": False, "src": "tick_relay",
+                                        }
+                                        meta = {
+                                            "schema_v": SCHEMA_V, "seq": 0,
+                                            "server_ts_ms": int(time.time() * 1000), "boot_id": app.get("_boot_id"),
+                                        }
+                                        frame = {
+                                            "type": "render_frame", "frame_type": "delta",
+                                            "symbol": symbol, "tf": tf_label, "candles": [forming_candle],
+                                            "meta": meta,
+                                        }
+                            except Exception as tick_exc:
+                                _log.debug("WS_TICK_RELAY_ERR target=%s:%s err=%s", symbol, tf_s, tick_exc)
+                        
+                        if frame is not None:
+                            t1 = time.perf_counter()
+                            t_ser_ms = (t1 - t0) * 1000.0
+                            active_recipients = []
+                            for s in subscribers:
+                                if s.last_update_seq is None:
+                                    s.last_update_seq = cursor
+                                else:
+                                    active_recipients.append(s)
+                            if active_recipients:
+                                t_send_ms = await _safe_broadcast(
+                                    frame, tuple(active_recipients), sessions,
+                                )
+                                _log.info("WS_BROADCAST_METRICS sym=%s tf=%s subs=%d t_ser_ms=%.2f t_send_ms=%.2f", symbol, tf_label, len(active_recipients), t_ser_ms, t_send_ms)
+                        
+                        for s in subscribers:
+                            if s.last_update_seq is None: 
+                                s.last_update_seq = cursor
                         continue
-                    open_ms = bar.get("open_time_ms") or bar.get("open_ms") or 0
-                    prev = seen_events.get(open_ms)
-                    if prev is None:
-                        seen_events[open_ms] = ev
-                    elif ev.get("complete") and not prev.get("complete"):
-                        # final перемагає preview
-                        seen_events[open_ms] = ev
-                    elif ev.get("complete") == prev.get("complete"):
-                        # однаковий тип — пізніший (newer seq) перемагає
-                        seen_events[open_ms] = ev
-                    # else: prev is final, ev is preview → keep prev
-                bars = [ev["bar"] for ev in seen_events.values()]
-                candles, dropped = map_bars_to_candles_v4(bars, tf_s=session.tf_s or 0)
-                # Сортуємо по t_ms для монотонної доставки (defense-in-depth)
-                candles.sort(key=lambda c: c.get("t_ms", 0))
-                warnings: list = []
-                if dropped > 0:
-                    warnings.append("candle_map_dropped:%d" % dropped)
-                warnings.extend(getattr(result, "warnings", []))
-                if candles:
-                    tf_label = _TF_S_TO_LABEL.get(session.tf_s, f"{session.tf_s}s")
-                    frame = _build_delta_frame(
-                        session, candles, session.symbol, tf_label,
-                        warnings or None, app=app,
-                    )
-                    await session.ws.send_json(frame)
-                    _log.info(
-                        "WS_DELTA_PUSH client=%s symbol=%s tf=%s candles=%d seq=%d",
-                        session.client_id, session.symbol, tf_label, len(candles), session.seq,
-                    )
-                session.last_update_seq = cursor
-            except Exception as exc:
-                _log.warning("WS_DELTA_ERROR client=%s err=%s", session.client_id, exc)
+                        
+                    seen_events: Dict[int, dict] = {}
+                    for ev in events:
+                        if not isinstance(ev, dict): 
+                            continue
+                        bar = ev.get("bar")
+                        if not isinstance(bar, dict): 
+                            continue
+                        open_ms = bar.get("open_time_ms") or bar.get("open_ms") or 0
+                        prev = seen_events.get(open_ms)
+                        if prev is None:
+                            seen_events[open_ms] = ev
+                        elif ev.get("complete") and not prev.get("complete"):
+                            seen_events[open_ms] = ev
+                        elif ev.get("complete") == prev.get("complete"):
+                            seen_events[open_ms] = ev
+                    
+                    bars = [ev["bar"] for ev in seen_events.values()]
+                    candles, dropped = map_bars_to_candles_v4(bars, tf_s=tf_s)
+                    candles.sort(key=lambda c: c.get("t_ms", 0))
+                    
+                    payload = None
+                    if candles:
+                        warnings = getattr(result, "warnings", [])
+                        if dropped > 0: 
+                            warnings.append("candle_map_dropped:%d" % dropped)
+                        guard_warns = _guard_candles_output(candles, symbol, tf_label, "delta")
+                        all_warnings = list(warnings) + guard_warns
+                        meta = {
+                            "schema_v": SCHEMA_V, "seq": 0,
+                            "server_ts_ms": int(time.time() * 1000), "boot_id": app.get("_boot_id"),
+                        }
+                        if all_warnings: 
+                            meta["warnings"] = all_warnings
+                        frame = {
+                            "type": "render_frame", "frame_type": "delta",
+                            "symbol": symbol, "tf": tf_label, "candles": candles, "meta": meta,
+                        }
+                        
+                        d1_relay_tfs_2: set = app.get("_d1_tick_relay_tfs", set())
+                        if tf_s in d1_relay_tfs_2:
+                            for c in candles:
+                                if c.get("complete", False) or c.get("src") not in ("tick_relay", None):
+                                    forming_by_target.pop((symbol, tf_s), None)
+                                    
+                    t1 = time.perf_counter()
+                    t_ser_ms = (t1 - t0) * 1000.0
+                    
+                    active_recipients = []
+                    for s in subscribers:
+                        if s.last_update_seq is None:
+                            s.last_update_seq = cursor
+                        else:
+                            active_recipients.append(s)
+                            s.last_update_seq = cursor
+                    
+                    if active_recipients and frame is not None:
+                        t_send_ms = await _safe_broadcast(
+                            frame, tuple(active_recipients), sessions,
+                        )
+                        _log.info("WS_BROADCAST_METRICS sym=%s tf=%s subs=%d t_ser_ms=%.2f t_send_ms=%.2f", symbol, tf_label, len(active_recipients), t_ser_ms, t_send_ms)
+                        
+                except Exception as loop_exc:
+                    _log.warning("WS_GLOBAL_DELTA_ERR target=%s:%s err=%s", symbol, tf_s, loop_exc)
+
+            # Purge forming_by_target for keys with no subscribers (memory hygiene)
+            stale_keys = [k for k in forming_by_target if k not in subs_by_target]
+            for k in stale_keys:
+                forming_by_target.pop(k, None)
+
     except asyncio.CancelledError:
         pass
 
@@ -563,10 +725,6 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 
     hb_task = asyncio.ensure_future(_heartbeat_loop())
 
-    # P2: start delta polling task (if UDS available)
-    if uds is not None:
-        session.delta_task = asyncio.ensure_future(_delta_loop(session, app))
-
     try:
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
@@ -578,8 +736,6 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 )
     finally:
         hb_task.cancel()
-        if session.delta_task is not None:
-            session.delta_task.cancel()
         sessions.pop(session.client_id, None)
         _log.info(
             "WS_DISCONNECT client_id=%s code=%s",
@@ -657,15 +813,7 @@ async def _handle_switch(session: WsSession, data: Dict[str, Any], app: web.Appl
         symbol, _TF_S_TO_LABEL.get(tf_s, "?"),
     )
 
-    # Cancel old delta task, start new one
-    if session.delta_task is not None:
-        session.delta_task.cancel()
-        session.delta_task = None
-
     await _send_full_frame(session, app)
-
-    if app.get("_uds") is not None:
-        session.delta_task = asyncio.ensure_future(_delta_loop(session, app))
 
 
 async def _handle_scrollback(session: WsSession, data: Dict[str, Any], app: web.Application) -> None:
@@ -799,6 +947,31 @@ def build_app(
     preview_set, _ = preview_tf_allowlist_from_cfg(full_cfg)
     app["_preview_tf_set"] = preview_set
 
+    # ADR-0012 P3: D1 live tick relay — Redis client + config flags
+    _d1_relay_enabled = bool(full_cfg.get("d1_live_tick_relay_enabled", _D1_TICK_RELAY_ENABLED_DEFAULT))
+    _d1_relay_tfs_raw = full_cfg.get("d1_live_tick_relay_tfs_s", [])
+    app["_d1_tick_relay_tfs"] = set(int(x) for x in _d1_relay_tfs_raw) if _d1_relay_enabled else set()
+    app["_tick_redis_client"] = None
+    app["_tick_redis_ns"] = ""
+    if _d1_relay_enabled and app["_d1_tick_relay_tfs"]:
+        try:
+            from runtime.store.redis_spec import resolve_redis_spec
+            import redis as _redis_lib
+            spec = resolve_redis_spec(full_cfg, role="tick_relay", log=False)
+            if spec is not None:
+                app["_tick_redis_client"] = _redis_lib.Redis(
+                    host=spec.host, port=spec.port, db=spec.db,
+                    socket_timeout=2.0, socket_connect_timeout=2.0,
+                    decode_responses=False,
+                )
+                app["_tick_redis_ns"] = spec.namespace
+                _log.info(
+                    "D1_TICK_RELAY_INIT enabled=1 tfs=%s ns=%s",
+                    app["_d1_tick_relay_tfs"], spec.namespace,
+                )
+        except Exception as relay_exc:
+            _log.warning("D1_TICK_RELAY_INIT_FAILED err=%s (disabled)", relay_exc)
+
     # Dedicated thread pool for UDS blocking I/O (limit thread explosion)
     app["_uds_executor"] = ThreadPoolExecutor(max_workers=2, thread_name_prefix="uds")
 
@@ -835,6 +1008,24 @@ def build_app(
         app["_heartbeat_s"], app["_boot_id"],
         "ready" if app.get("_uds") is not None else "none",
     )
+    
+    # Register global delta task lifecycle (ADR-0011)
+    async def _start_bg_tasks(app_ctx: web.Application) -> None:
+        if app_ctx.get("_uds") is not None:
+            app_ctx["_global_delta_task"] = asyncio.ensure_future(_global_delta_loop(app_ctx))
+
+    async def _cleanup_bg_tasks(app_ctx: web.Application) -> None:
+        task = app_ctx.get("_global_delta_task")
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    app.on_startup.append(_start_bg_tasks)
+    app.on_cleanup.append(_cleanup_bg_tasks)
+    
     return app
 
 

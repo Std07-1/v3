@@ -15,6 +15,9 @@ export const currentFrame = writable<RenderFrame | null>(null);
 export const serverWarnings = writable<string[]>([]);
 export const uiWarnings = writable<UiWarning[]>([]);
 
+/** SSOT for symbol/TF state across the UI to avoid split-brain defaults */
+export const currentPair = writable<{ symbol: string; tf: string } | null>(null);
+
 /** P2: SSOT конфіг символів/TF з сервера. Заповнюється при full frame. */
 export interface ServerConfig {
   symbols: string[];
@@ -72,6 +75,9 @@ export function handleWSFrame(raw: unknown): void {
   if (frame.frame_type === 'full') {
     uiWarnings.set([]);
     lastSeq = frame.meta.seq; // reset baseline
+    if (frame.symbol && frame.tf) {
+      currentPair.set({ symbol: frame.symbol, tf: frame.tf });
+    }
 
     // P2: populate serverConfig SSOT
     const cfg = (frame.meta as any).config;
@@ -86,11 +92,11 @@ export function handleWSFrame(raw: unknown): void {
     if (knownBootId === null) {
       knownBootId = frameBootId;
     } else if (frameBootId !== knownBootId) {
-      // Сервер перезапустився — потрібен повний reload
+      // Сервер перезапустився — скидаємо seq baseline щоб нові фрейми не дропались
       addUiWarning('schema_mismatch', 'router',
-        `boot_id changed: ${knownBootId} → ${frameBootId}, server restarted`);
+        `boot_id changed: ${knownBootId} → ${frameBootId}, server restarted — seq reset`);
       knownBootId = frameBootId;
-      // full frame автоматично прийде — але попередній стан може бути stale
+      lastSeq = frame.meta.seq; // reset to new server's seq baseline
     }
   }
 
@@ -103,7 +109,18 @@ export function handleWSFrame(raw: unknown): void {
     return; // config frame не потрапляє в currentFrame
   }
 
-  // 6. Dispatch (тільки валідні frame_type)
+  // 6. Split-brain guard (Slice-3): reject cross-polluted deltas
+  if (frame.frame_type === 'delta' || frame.frame_type === 'scrollback') {
+    if (frame.symbol && frame.tf) {
+      const pair = get(currentPair);
+      if (pair && (frame.symbol !== pair.symbol || frame.tf !== pair.tf)) {
+        addUiWarning('schema_mismatch', 'router', `TF mismatch: frame ${frame.symbol}:${frame.tf} != UI ${pair.symbol}:${pair.tf}. Dropped.`);
+        return; // force sync by dropping stale frame
+      }
+    }
+  }
+
+  // 7. Dispatch (тільки валідні frame_type)
   const validTypes = new Set(['full', 'delta', 'scrollback', 'drawing_ack', 'replay', 'warming', 'heartbeat', 'config']);
   if (validTypes.has(frame.frame_type)) {
     // heartbeat не оновлює currentFrame — тільки DiagState
