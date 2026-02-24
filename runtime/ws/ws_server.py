@@ -22,6 +22,7 @@ import logging
 import os
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional
 
 from aiohttp import web, WSMsgType
@@ -39,7 +40,7 @@ SCHEMA_V = "ui_v4_v2"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 DEFAULT_HEARTBEAT_S = 30
-DEFAULT_DELTA_POLL_S = 1.0
+DEFAULT_DELTA_POLL_S = 2.0
 DEFAULT_COLD_START_BARS = 300
 
 # P11: scrollback disk rails
@@ -370,10 +371,12 @@ async def _uds_read_window(app: web.Application, symbol: str, tf_s: int, limit: 
     )
     # P11: scrollback (to_open_ms) = "explicit" (disk дозволено завжди);
     #      cold-start/switch = "bootstrap" (disk тільки в bootstrap вікні).
-    dp = "explicit" if to_open_ms is not None else "bootstrap"
-    policy = ReadPolicy(disk_policy=dp, prefer_redis=True)
+    # P2: disk_policy="explicit" для всіх reads — ws_server окремий процес,
+    # його RAM/Redis можуть бути stale. Disk завжди актуальний.
+    policy = ReadPolicy(disk_policy="explicit", prefer_redis=True)
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, uds.read_window, spec, policy)
+    executor = app.get("_uds_executor")
+    return await loop.run_in_executor(executor, uds.read_window, spec, policy)
 
 
 async def _uds_read_updates(app: web.Application, symbol: str, tf_s: int,
@@ -391,7 +394,8 @@ async def _uds_read_updates(app: web.Application, symbol: str, tf_s: int,
         include_preview=include_preview,
     )
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, uds.read_updates, spec)
+    executor = app.get("_uds_executor")
+    return await loop.run_in_executor(executor, uds.read_updates, spec)
 
 
 async def _send_full_frame(session: WsSession, app: web.Application) -> None:
@@ -410,7 +414,7 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
             await session.ws.send_json(frame)
             return
         bars = getattr(result, "bars_lwc", [])
-        candles, dropped = map_bars_to_candles_v4(bars)
+        candles, dropped = map_bars_to_candles_v4(bars, tf_s=session.tf_s or 0)
         if dropped > 0:
             warnings.append("candle_map_dropped:%d" % dropped)
             _log.warning("WS_CANDLE_MAP_DROPPED client=%s dropped=%d", session.client_id, dropped)
@@ -475,7 +479,7 @@ async def _delta_loop(session: WsSession, app: web.Application) -> None:
                         seen_events[open_ms] = ev
                     # else: prev is final, ev is preview → keep prev
                 bars = [ev["bar"] for ev in seen_events.values()]
-                candles, dropped = map_bars_to_candles_v4(bars)
+                candles, dropped = map_bars_to_candles_v4(bars, tf_s=session.tf_s or 0)
                 # Сортуємо по t_ms для монотонної доставки (defense-in-depth)
                 candles.sort(key=lambda c: c.get("t_ms", 0))
                 warnings: list = []
@@ -721,7 +725,7 @@ async def _handle_scrollback(session: WsSession, data: Dict[str, Any], app: web.
             await session.ws.send_json(frame)
             return
         bars = getattr(result, "bars_lwc", [])
-        candles, dropped = map_bars_to_candles_v4(bars)
+        candles, dropped = map_bars_to_candles_v4(bars, tf_s=session.tf_s or 0)
         if dropped > 0:
             warnings.append("candle_map_dropped:%d" % dropped)
         warnings.extend(getattr(result, "warnings", []))
@@ -794,6 +798,9 @@ def build_app(
     app["_tf_allowlist"] = tf_allowlist_from_cfg(full_cfg)
     preview_set, _ = preview_tf_allowlist_from_cfg(full_cfg)
     app["_preview_tf_set"] = preview_set
+
+    # Dedicated thread pool for UDS blocking I/O (limit thread explosion)
+    app["_uds_executor"] = ThreadPoolExecutor(max_workers=2, thread_name_prefix="uds")
 
     # P2: UDS reader (W0: role="reader")
     if uds is not None:

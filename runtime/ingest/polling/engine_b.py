@@ -546,6 +546,29 @@ class PollingConnectorB:
 
             for b in bars:
                 total_found += 1
+                # Guard 1: skip unclosed bars (bucket hasn't ended yet)
+                bar_close_ms = b.open_time_ms + tf_s * 1000
+                now_ms = int(date_to.timestamp() * 1000)
+                if bar_close_ms > now_ms:
+                    if log_detail:
+                        logging.debug(
+                            "Cold-start: skip unclosed TF=%ds open=%s close=%s > now",
+                            tf_s,
+                            ms_to_utc_dt(b.open_time_ms).isoformat(),
+                            ms_to_utc_dt(bar_close_ms).isoformat(),
+                        )
+                    continue
+                # Guard 2: skip weekend artifact bars (Fri/Sat UTC open for D1+)
+                if tf_s >= 86400:
+                    bar_dt = dt.datetime.utcfromtimestamp(b.open_time_ms / 1000)
+                    if bar_dt.weekday() in (4, 5):  # Friday/Saturday = no trading
+                        logging.info(
+                            "Cold-start: skip weekend artifact TF=%ds open=%s wd=%s",
+                            tf_s,
+                            bar_dt.strftime("%Y-%m-%d %H:%M"),
+                            ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][bar_dt.weekday()],
+                        )
+                        continue
                 if has_on_disk(
                     self._day_index_cache,
                     self._uds,
@@ -663,6 +686,18 @@ class PollingConnectorB:
                     ms_to_utc_dt(b0).isoformat(),
                 )
                 continue
+
+            # Guard: skip weekend artifact bars (Fri/Sat UTC open for D1+)
+            if tf_s >= 86400:
+                bar_dt = dt.datetime.utcfromtimestamp(b.open_time_ms / 1000)
+                if bar_dt.weekday() in (4, 5):
+                    logging.info(
+                        "Base TF: skip weekend artifact TF=%ds open=%s wd=%s",
+                        tf_s,
+                        bar_dt.strftime("%Y-%m-%d %H:%M"),
+                        ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][bar_dt.weekday()],
+                    )
+                    continue
 
             self._append_bar(b)
             mark_on_disk(self._day_index_cache, self._uds, self._symbol, tf_s, b0)

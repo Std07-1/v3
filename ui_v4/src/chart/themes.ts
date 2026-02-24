@@ -34,6 +34,19 @@ export interface ThemeDef {
     menuBg: string;
     /** Бордер для dropdown меню */
     menuBorder: string;
+    // ─── ADR-0007: Drawing Toolbar + DrawingsRenderer colors ───
+    /** Базовий колір малювань (WCAG AA на відповідному фоні) */
+    drawingColor: string;
+    /** Fill для rect drawings */
+    drawingRectFill: string;
+    /** Glass background для DrawingToolbar */
+    toolbarBg: string;
+    /** Rim border для DrawingToolbar */
+    toolbarBorder: string;
+    /** Hover background для кнопок тулбара */
+    toolbarHoverBg: string;
+    /** Active accent color (інструмент обраний) */
+    toolbarActiveColor: string;
 }
 
 export const THEMES: Record<ThemeName, ThemeDef> = {
@@ -58,6 +71,12 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
         statusBarBg: '#1e222d',
         menuBg: 'rgba(30, 34, 45, 0.92)',
         menuBorder: 'rgba(255, 255, 255, 0.08)',
+        drawingColor: '#c8cdd6',
+        drawingRectFill: 'rgba(200, 205, 214, 0.10)',
+        toolbarBg: 'rgba(19, 23, 34, 0.6)',
+        toolbarBorder: 'rgba(255, 255, 255, 0.1)',
+        toolbarHoverBg: 'rgba(255, 255, 255, 0.08)',
+        toolbarActiveColor: '#3d9aff',
     },
     black: {
         label: 'Black',
@@ -80,6 +99,12 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
         statusBarBg: '#111111',
         menuBg: 'rgba(20, 20, 20, 0.92)',
         menuBorder: 'rgba(255, 255, 255, 0.08)',
+        drawingColor: '#c8cdd6',
+        drawingRectFill: 'rgba(200, 205, 214, 0.10)',
+        toolbarBg: 'rgba(10, 10, 10, 0.6)',
+        toolbarBorder: 'rgba(255, 255, 255, 0.08)',
+        toolbarHoverBg: 'rgba(255, 255, 255, 0.08)',
+        toolbarActiveColor: '#3d9aff',
     },
     light: {
         label: 'Light',
@@ -102,6 +127,12 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
         statusBarBg: '#f0f0f0',
         menuBg: 'rgba(255, 255, 255, 0.92)',
         menuBorder: 'rgba(0, 0, 0, 0.08)',
+        drawingColor: '#434651',
+        drawingRectFill: 'rgba(67, 70, 81, 0.10)',
+        toolbarBg: 'rgba(242, 245, 248, 0.7)',
+        toolbarBorder: 'rgba(0, 0, 0, 0.05)',
+        toolbarHoverBg: 'rgba(0, 0, 0, 0.06)',
+        toolbarActiveColor: '#2962ff',
     },
 };
 
@@ -183,4 +214,21 @@ export function loadCandleStyle(): CandleStyleName {
 
 export function saveCandleStyle(name: CandleStyleName): void {
     try { localStorage.setItem(LS_STYLE_KEY, name); } catch { /* noop */ }
+}
+
+// ─── ADR-0007: CSS custom properties for cross-component theming ───
+
+/** Встановити CSS custom properties на :root для DrawingToolbar + DrawingsRenderer.
+ *  Викликається з App.svelte при зміні теми. */
+export function applyThemeCssVars(name: ThemeName): void {
+    const t = THEMES[name];
+    if (!t) return;
+    const s = document.documentElement.style;
+    s.setProperty('--toolbar-btn-color', t.drawingColor);
+    s.setProperty('--toolbar-bg', t.toolbarBg);
+    s.setProperty('--toolbar-border', t.toolbarBorder);
+    s.setProperty('--toolbar-hover-bg', t.toolbarHoverBg);
+    s.setProperty('--toolbar-active-color', t.toolbarActiveColor);
+    s.setProperty('--drawing-base-color', t.drawingColor);
+    s.setProperty('--drawing-rect-fill', t.drawingRectFill);
 }

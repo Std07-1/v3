@@ -78,7 +78,7 @@
     "preview_tick_publish_min_interval_ms": 250,
     "preview_curr_ttl_s": 1800,
     "tick_auto_promote_m1": true,
-    "ui_stitching_enabled": true,
+    "ui_stitching_enabled": false,
     "tick_stream_enabled": true,
     "tick_stream_symbols": [],
     "tick_stream_min_interval_ms": 200,
@@ -205,12 +205,12 @@
         "tail_n_by_tf_s": {
             "60": 10080,
             "180": 3360,
-            "300": 8000,
-            "900": 4000,
-            "1800": 2500,
-            "3600": 2000,
-            "14400": 1080,
-            "86400": 365
+            "300": 10000,
+            "900": 5000,
+            "1800": 3000,
+            "3600": 5000,
+            "14400": 5000,
+            "86400": 2000
         }
     },
     "channels": {
@@ -222,7 +222,7 @@
         "heartbeat": "fxcm_local:heartbeat"
     },
     "bootstrap": {
-        "prime_ready_timeout_s": 30,
+        "prime_ready_timeout_s": 120,
         "cascade_catchup_m1_bars": 1440,
         "derive_warmup_bars_by_tf": {
             "60": 300,
@@ -235,21 +235,21 @@
             "60": 10080,
             "180": 3360,
             "300": 2016,
-            "900": 672,
-            "1800": 336,
-            "3600": 168,
-            "14400": 1080,
-            "86400": 365
+            "900": 2000,
+            "1800": 1000,
+            "3600": 2000,
+            "14400": 2000,
+            "86400": 1000
         },
         "ui_cold_start_bars_by_tf": {
             "60": 10080,
             "180": 3360,
             "300": 2016,
-            "900": 672,
-            "1800": 336,
-            "3600": 168,
-            "14400": 1080,
-            "86400": 365
+            "900": 2000,
+            "1800": 1000,
+            "3600": 2000,
+            "14400": 2000,
+            "86400": 1000
         }
     },
     "known_broker_outages": [

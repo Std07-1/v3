@@ -28,10 +28,7 @@ __pycache__/
 *.swp
 *.swo
 *~
-project_instructions.md
-rules.md
-snapshot.json
-snapshot_*.json
+.agent/
 
 # ── Дані (runtime, не код) ──────────────────────────────────
 /data_v3/
@@ -62,11 +59,14 @@ ui_v4/dist/
 logs/
 
 # ── Документація: внутрішні аудити та спеки (не релізні) ────
+/docs/adr/
 /docs/audit/
 /docs/system_spec/
 /docs/claude_project_instructions.md
 /docs/Аналітичний меморандум.md
 /docs/Host Contract - Capability Sheet.md
+project_instructions.md
+rules.md
 
 # ── UI v4: planning/spec docs (не релізні) ──────────────────
 ui_v4/system_spec_ui4/

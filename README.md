@@ -62,9 +62,10 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 | [docs/config_reference.md](docs/config_reference.md) | Довідник полів config.json |
 | [docs/runbooks/production.md](docs/runbooks/production.md) | Production runbook (запуск, інциденти, recovery) |
 | [docs/audit/progress.md](docs/audit/progress.md) | Аудит прогресу P0-P6 з evidence |
-| [docs/ADR-0001 UnifiedDataStore.md](docs/ADR-0001%20UnifiedDataStore.md) | ADR: UDS як єдина талія |
-| [docs/ADR-0002-derive-chain-from-m1.md](docs/ADR-0002-derive-chain-from-m1.md) | ADR: DeriveChain M1→M3→M5→H4 (Phase 0 завершено) |
-| [docs/ADR-0003 Cold Start Hardening.md](docs/ADR-0003%20Cold%20Start%20Hardening.md) | ADR: Cold start hardening (S1 error isolation ✅, S2 supervisor restart ✅, S3-S4 pending) |
+| [docs/adr/index.md](docs/adr/index.md) | Реєстр усіх ADR (ADR-0001 … ADR-0010) |
+| [docs/adr/0001-unified-data-store.md](docs/adr/0001-unified-data-store.md) | ADR: UDS як єдина талія |
+| [docs/adr/0002-derive-chain-from-m1.md](docs/adr/0002-derive-chain-from-m1.md) | ADR: DeriveChain M1→M3→M5→H4 (Phase 0 завершено) |
+| [docs/adr/0003-cold-start-hardening.md](docs/adr/0003-cold-start-hardening.md) | ADR: Cold start hardening (S1 ✅, S2 ✅, S3-S4 pending) |
 | [docs/system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md](docs/system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md) | UI v4 audit: T1-T10 ALL COMPLETE, chart parity DONE |
 
 ```text

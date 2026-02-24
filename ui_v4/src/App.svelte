@@ -7,15 +7,14 @@
   import { createActions } from "./ws/actions";
 
   import ChartPane from "./layout/ChartPane.svelte";
-  // DISABLED: trading tools deferred (audit T1)
-  // import DrawingToolbar from "./layout/DrawingToolbar.svelte";
+  import DrawingToolbar from "./layout/DrawingToolbar.svelte";
   import ChartHud from "./layout/ChartHud.svelte";
   import StatusOverlay from "./layout/StatusOverlay.svelte";
   import DiagPanel from "./layout/DiagPanel.svelte";
 
   // P3.11/P3.12: Theme + candle style imports
   import type { ThemeName, CandleStyleName } from "./chart/lwc";
-  import { THEMES, loadTheme } from "./chart/lwc";
+  import { THEMES, loadTheme, applyThemeCssVars } from "./chart/lwc";
 
   import {
     handleWSFrame,
@@ -30,7 +29,13 @@
   import { stopEdgeProbe, probeNow } from "./app/edgeProbe";
   import { metaStore } from "./stores/meta";
 
-  import type { WsAction, T_MS, UiWarning, RenderFrame } from "./types";
+  import type {
+    WsAction,
+    T_MS,
+    UiWarning,
+    RenderFrame,
+    ActiveTool,
+  } from "./types";
 
   // --- WS URL: same-origin у prod, explicit у dev (Правило §11) ---
   // Dev (Vite :5173): import.meta.env.DEV=true → ws://localhost:8000/ws
@@ -44,8 +49,43 @@
   let ws: WSConnection | null = null;
   let actions: ReturnType<typeof createActions> | null = null;
 
-  // DISABLED: trading tools deferred (audit T1)
-  // let activeTool: ActiveTool = $state(null);
+  let activeTool: ActiveTool = $state(null);
+
+  // Symbol/TF persistence (drawing_tools_v1)
+  function loadLastPair(): { symbol: string; tf: string } | null {
+    try {
+      const raw = localStorage.getItem("v4_last_pair");
+      if (!raw) return null;
+      const p = JSON.parse(raw);
+      return p && p.symbol && p.tf ? p : null;
+    } catch {
+      return null;
+    }
+  }
+  function saveLastPair(symbol: string, tf: string): void {
+    try {
+      localStorage.setItem("v4_last_pair", JSON.stringify({ symbol, tf }));
+    } catch {}
+  }
+
+  // Magnet mode: snap drawings to candle OHLC (drawing_tools_v1, PATCH 3)
+  function loadMagnet(): boolean {
+    try {
+      return localStorage.getItem("v4_magnet_enabled") === "1";
+    } catch {
+      return false;
+    }
+  }
+  function saveMagnet(v: boolean): void {
+    try {
+      localStorage.setItem("v4_magnet_enabled", v ? "1" : "0");
+    } catch {}
+  }
+  let magnetEnabled = $state(loadMagnet());
+  function toggleMagnet() {
+    magnetEnabled = !magnetEnabled;
+    saveMagnet(magnetEnabled);
+  }
 
   // P3.11/P3.12: ChartPane ref for theme/style delegation
   let chartPaneRef: any = $state(null);
@@ -108,6 +148,8 @@
   function handleThemeChange(name: ThemeName) {
     chartPaneRef?.applyTheme(name);
     activeTheme = name;
+    // ADR-0007: оновити CSS custom properties для toolbar/drawings
+    applyThemeCssVars(name);
   }
   function handleCandleStyleChange(name: CandleStyleName) {
     chartPaneRef?.applyCandleStyle(name);
@@ -119,7 +161,48 @@
     if (e.ctrlKey && e.shiftKey && e.key === "D") {
       e.preventDefault();
       diagVisible = !diagVisible;
+      return;
     }
+    // Drawing hotkeys (drawing_tools_v1: audit T1 розблоковано)
+    if (
+      e.target instanceof HTMLInputElement ||
+      e.target instanceof HTMLTextAreaElement
+    )
+      return;
+    if (e.ctrlKey && e.key === "z") {
+      e.preventDefault();
+      chartPaneRef?.undo();
+      return;
+    }
+    if (e.ctrlKey && e.key === "y") {
+      e.preventDefault();
+      chartPaneRef?.redo();
+      return;
+    }
+    if (e.key === "Escape") {
+      activeTool = null;
+      chartPaneRef?.cancelDraft();
+      return;
+    }
+    const k = e.key.toLowerCase();
+    if (k === "t") {
+      activeTool = activeTool === "trend" ? null : "trend";
+      return;
+    }
+    if (k === "h") {
+      activeTool = activeTool === "hline" ? null : "hline";
+      return;
+    }
+    if (k === "r") {
+      activeTool = activeTool === "rect" ? null : "rect";
+      return;
+    }
+    if (k === "e") {
+      activeTool = activeTool === "eraser" ? null : "eraser";
+      return;
+    }
+    // DEFERRED: magnet hotkey disabled (drawing_tools_v1)
+    // if (k === "g") { toggleMagnet(); return; }
   }
 
   // P3.1: HUD tracking — symbol/tf/price/timestamp from last frame
@@ -137,7 +220,19 @@
     critical: false,
   });
 
+  let _pairRestored = false; // one-shot: restore saved symbol/TF on first full frame
+
   const unsubFrame = currentFrame.subscribe((f) => {
+    // Restore saved symbol/TF on first full frame (skip rendering default)
+    if (f && f.frame_type === "full" && !_pairRestored) {
+      _pairRestored = true;
+      const saved = loadLastPair();
+      if (saved && (saved.symbol !== f.symbol || saved.tf !== f.tf)) {
+        // Send switch immediately — server will send correct full frame
+        actions?.switchSymbolTf(saved.symbol, saved.tf);
+        return; // Don't render this default frame
+      }
+    }
     frame = f;
     // P3.1: Track symbol/tf/price from frames for HUD
     if (f) {
@@ -194,8 +289,7 @@
     window.location.reload();
   }
 
-  // DISABLED: drawing keyboard shortcuts deferred (audit T1)
-  // Hotkeys: T(trend), H(hline), R(rect), E(eraser), Escape, Ctrl+Z/Y
+  // Drawing hotkeys: merged into handleGlobalKeydown (drawing_tools_v1)
 
   // --- Lifecycle ---
 
@@ -218,6 +312,9 @@
     clockInterval = setInterval(() => {
       clockNow = Date.now();
     }, 1000);
+
+    // ADR-0007: initial CSS custom properties для поточної теми
+    applyThemeCssVars(activeTheme);
   });
 
   onDestroy(() => {
@@ -262,15 +359,18 @@
   }
 </script>
 
-<!-- DISABLED: <svelte:window onkeydown={handleKeydown} /> — trading tools deferred (audit T1) -->
 <svelte:window onkeydown={handleGlobalKeydown} />
 
 <main class="app-layout" style:background={appBg}>
   <!-- Main content area -->
   <div class="main-content">
-    <!-- DISABLED: trading tools deferred (audit T1) -->
-    <!-- <DrawingToolbar {activeTool} onSelectTool={(t) => (activeTool = t)} /> -->
     <div class="chart-wrapper">
+      <DrawingToolbar
+        {activeTool}
+        onSelectTool={(t) => (activeTool = t)}
+        {magnetEnabled}
+        onToggleMagnet={toggleMagnet}
+      />
       <ChartPane
         bind:this={chartPaneRef}
         currentFrame={frame}
@@ -278,6 +378,8 @@
         {scrollback}
         {addUiWarning}
         {brightness}
+        {activeTool}
+        {magnetEnabled}
       />
       <!-- P3.1-P3.2: Frosted-glass HUD overlay -->
       <ChartHud
@@ -288,7 +390,10 @@
         {lastPrice}
         {lastBarOpen}
         {lastBarTs}
-        onSwitch={(sym, tf) => actions?.switchSymbolTf(sym, tf)}
+        onSwitch={(sym, tf) => {
+          actions?.switchSymbolTf(sym, tf);
+          saveLastPair(sym, tf);
+        }}
         onThemeChange={handleThemeChange}
         onCandleStyleChange={handleCandleStyleChange}
         themeBg={hudBg}

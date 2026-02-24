@@ -1,6 +1,6 @@
 # Поточна система — Архітектурний огляд (SSOT)
 
-> **Останнє оновлення**: 2026-02-22  
+> **Останнє оновлення**: 2026-02-24  
 > **Навігація**: [docs/index.md](index.md)
 
 Цей файл — SSOT-опис поточної архітектури системи. Див. [docs/index.md](index.md) для навігації по всій документації.
@@ -46,6 +46,7 @@ app.main (supervisor)
   ├── m1_poller             (FXCM M1 History → UDS final M1 + DeriveEngine cascade M3→M5→M15→M30→H1→H4)
   ├── ui                    (HTTP server, port 8089 — ui_chart_v3 polling)
   └── ws_server             (WS server, port 8000 — ui_v4 real-time, config-gated)
+                              Drawing tools: 4 tools (H/T/R/E), glass toolbar, theme-aware (ADR-0007, ADR-0008)
 ```
 
 ## SSOT-площини (ізольовані)
@@ -146,7 +147,22 @@ app.main (supervisor)
 | **I3** | **Final > Preview (NoMix)**: `complete=true` (final, `source ∈ {history, derived, history_agg}`) завжди перемагає `complete=false` (preview). NoMix guard у UDS | Watermark + NoMix violation tracking |
 | **I4** | **Один update-потік для UI**: UI отримує бари лише через `/api/updates` (upsert events) + `/api/bars` (cold-load). Жодних паралельних каналів | Contract-first API schema |
 | **I5** | **Degraded-but-loud**: будь-який fallback/перемикання джерел/geom_fix → `warnings[]`/`meta.extensions`, не silent. `bars=[]` завжди з `warnings[]` (no_data rail) | `_contract_guard_warn_*` + no_data branch |
-| **I6** | **Disk hot-path ban (P11)**: disk не читається для polling/updates. Cold-load/switch = `disk_policy="bootstrap"` (тільки 60s після boot). Scrollback = `disk_policy="explicit"` (disk дозволено, але з max_steps=6 + cooldown 0.5s per session). Live updates — тільки Redis bus | `_disk_allowed()` guard у UDS; `SCROLLBACK_MAX_STEPS`/`SCROLLBACK_COOLDOWN_S` у ws_server |
+| **I6** | **Stop-rule**: якщо зміна ламає I0–I5 → зупинити PATCH, зробити ADR. Ніяких "одноразових" фіксів без обґрунтування | Governance: copilot-instructions.md rev 2.0 |
+
+> **Disk policy (P11)**: disk не читається для polling/updates. Cold-load/switch = `disk_policy="bootstrap"` (тільки 60s після boot). Scrollback = `disk_policy="explicit"` (max_steps=6 + cooldown 0.5s). Guard: `_disk_allowed()` у UDS; `SCROLLBACK_MAX_STEPS`/`SCROLLBACK_COOLDOWN_S` у ws_server.
+
+### UI v4 Frontend Stack (Svelte 5 + LWC 5)
+
+| Компонент | Стан | Файл(и) | ADR |
+|---|---|---|---|
+| ChartEngine | ✅ v3 parity (volume, D1, tooltip, follow, rAF) | engine.ts | — |
+| DrawingsRenderer | ✅ 4 tools (hline/trend/rect/eraser), theme-aware | DrawingsRenderer.ts | ADR-0007, ADR-0008 |
+| DrawingToolbar | ✅ Glass-like, CSS custom properties, micro-interactions | DrawingToolbar.svelte | ADR-0008 |
+| Theming | ✅ 3 themes (dark/black/light) + `applyThemeCssVars()` на `:root` | themes.ts, App.svelte | ADR-0008 |
+| ChartHud | ✅ Symbol/TF picker, theme/style/brightness/favorites | ChartHud.svelte | — |
+| Interaction | ✅ Y-zoom, Y-pan, scroll, keyboard shortcuts | interaction.ts | — |
+| DiagPanel | ✅ FE diagnostics, WS state, frame freshness | DiagPanel.svelte | — |
+| WSConnection | ✅ Quiet degraded, reconnect backoff | connection.ts | — |
 
 ## Stop-rules та режими
 
@@ -637,7 +653,7 @@ v3/
 │       ├── app.js                 # polling + applyUpdates + policy consume + scrollback
 │       ├── chart_adapter_lite.js  # адаптер Lightweight Charts
 │       └── ui_config.json         # portable UI конфіг (api_base, ui_debug)
-├── ui_v4/                         # Next-gen UI: Svelte 5 + LWC 5 + TypeScript (WS backend DONE, chart parity DONE, T1-T10 COMPLETE, P3.11-P3.15 DONE)
+├── ui_v4/                         # Next-gen UI: Svelte 5 + LWC 5 + TypeScript (WS backend DONE, chart parity DONE, T1-T10 COMPLETE, P3.11-P3.15 DONE, Drawing Tools v1 ACTIVE)
 │   ├── package.json               # deps: lwc@5.0.0, uuid, svelte 5, vite 6, TS 5.7
 │   ├── vite.config.ts             # port 5173 (dev), proxy /api/* → 8089
 │   ├── dist/                      # vite build output (index.html + assets/); served by ws_server same-origin
@@ -650,8 +666,8 @@ v3/
 │       ├── app/                   # diagState, diagSelectors, frameRouter (config frame T8), edgeProbe
 │       ├── ws/                    # WSConnection (quiet degraded mode), WsAction creators
 │       ├── stores/                # cursor price + UI warnings + meta (serverConfig) + favorites (P3.13)
-│       ├── layout/                # ChartPane, ChartHud (frosted HUD, theme/style/fav pickers), OhlcvTooltip, StatusBar (+diag btn), StatusOverlay, DiagPanel (P3.14), DrawingToolbar (disabled), SymbolTfPicker
-│       └── chart/                 # ChartEngine (LWC, v3-parity, applyTheme/applyCandleStyle), themes.ts (3 themes + 5 candle styles), interaction.ts (Y-zoom/pan/reset), OverlayRenderer, DrawingsRenderer (disabled), geometry
+│       ├── layout/                # ChartPane, ChartHud (frosted HUD, theme/style/fav pickers), OhlcvTooltip, StatusBar (+diag btn), StatusOverlay, DiagPanel (P3.14), DrawingToolbar (4 tools + magnet toggle), SymbolTfPicker
+│       └── chart/                 # ChartEngine (LWC, v3-parity, applyTheme/applyCandleStyle), themes.ts (3 themes + 5 candle styles), interaction.ts (Y-zoom/pan/reset), OverlayRenderer, DrawingsRenderer (ACTIVE: hline/trend/rect/eraser, snap-to-OHLC, CommandStack undo/redo, ADR-0007), geometry
 ├── aione_top/                     # TUI-монітор процесів/pipeline (standalone, NOT supervisor-managed)
 │   ├── __main__.py                # python -m aione_top
 │   ├── app.py                     # головний TUI loop (421 LOC, Textual)
@@ -687,8 +703,18 @@ v3/
 ├── CHANGELOG.md                   # короткий індекс
 ├── docs/
 │   ├── system_current_overview.md # цей файл
-│   ├── ADR-0001 UnifiedDataStore.md # UDS архітектурне рішення
-│   └── redis_snapshot_design.md   # дизайн Redis snapshots
+│   ├── index.md                   # навігація по документації
+│   ├── contracts.md               # реєстр контрактів (bar_v1, window_v1, ...)
+│   ├── ui_api.md                  # HTTP API reference
+│   ├── redis_snapshot_design.md   # дизайн Redis snapshots
+│   ├── adr/                       # Architecture Decision Records (SSOT)
+│   │   ├── index.md               # реєстр усіх ADR (ADR-0001 … ADR-0010)
+│   │   ├── 0001-unified-data-store.md
+│   │   ├── 0002-derive-chain-from-m1.md
+│   │   └── ...                    # (10 файлів)
+│   ├── audit/                     # аудит прогресу P0–P6
+│   ├── runbooks/                  # production, coldstart, live_recover
+│   └── system_spec/               # UI v4 audit, gap analysis
 ├── tests/
 │   └── test_tick_agg.py           # тести TickAggregator
 └── research/                      # дослідження / POC (не для prod)
@@ -720,10 +746,12 @@ v3/
 **ui_v4** (next-gen, WS backend DONE, chart parity DONE, audit T1-T10 COMPLETE):
 
 - Svelte 5 runes + TypeScript strict + Vite 6 + LWC 5.0.0. **25 файлів, ~4045 LOC** (typecheck 0/0).
-- Transport: WebSocket (`runtime/ws/ws_server.py`, 733 LOC, порт 8000, `/ws`). Протокол: `ui_v4_v2` (full + delta + scrollback + config + heartbeat).
-- Same-origin serving (Rule §11): `ws_server.py` роздає `ui_v4/dist/` (index.html + /assets/) на порт 8000. Prod: `npm run build` → `python -m runtime.ws.ws_server`. Dev: `npm run dev` (:5173) + ws_server (:8000).
-- 3-layer rendering: LWC candles + SMC overlay canvas + drawings canvas (RAF scheduler, DPR-aware). Drawings/SMC **вимкнені** (T1) до стабілізації.
-- CAD-рівень drawings: hline/trend/rect, snap-to-OHLC, selection/hit-testing, drag-edit, eraser, undo/redo (code present, disabled T1).
+- Transport: WebSocket (`runtime/ws/ws_server.py`, 907 LOC, порт 8000, `/ws`). Протокол: `ui_v4_v2` (full + delta + scrollback + config + heartbeat). CPU opt: delta_poll 2s + ThreadPoolExecutor(2). Idle 2-3% CPU.
+- Same-origin serving (Тема G, G1): `ws_server.py` роздає `ui_v4/dist/` (index.html + /assets/) на порт 8000. Prod: `npm run build` → `python -m runtime.ws.ws_server`. Dev: `npm run dev` (:5173) + ws_server (:8000).
+- 3-layer rendering: LWC candles + SMC overlay canvas + drawings canvas (RAF + renderSync, DPR-aware). SMC overlay disabled; drawings **ACTIVE** (ADR-0007).
+- Drawing tools (ADR-0007): hline/trend/rect/eraser, click-click TradingView-style, selection/hit-testing, drag-edit, undo/redo (CommandStack), hotkeys (T/H/R/E/Esc/Ctrl+Z/Y). Client-only (noop sendAction). Sync render X+Y axis (renderSync on visibleTimeRangeChange + wheel + dblclick). Brightness sync via style:filter.
+- Drawing persistence: localStorage per symbol+TF (`v4_drawings_{sym}_{tf}`). Symbol/TF persistence (`v4_last_pair`, one-shot restore on first full frame). Toolbar collapse persistence (`v4_toolbar_collapsed`).
+- Floating DrawingToolbar: position:absolute over chart, 28px/16px collapsed, no background, Ukrainian labels. Magnet (snap-to-OHLC) deferred.
 - DiagState SSOT: 7-рівневий пріоритетний статус, StatusOverlay з hysteresis, quiet degraded mode.
 - WS backend: P0-P5 slices done. WS output guards (T6): `_guard_candle_shape` + `_guard_candles_output` on all outgoing frames.
 - Config frame (T8/S24): `_build_config_frame()` sent on connect before full frame. Policy bridge: symbols, TFs, delta_poll_interval_s, version.

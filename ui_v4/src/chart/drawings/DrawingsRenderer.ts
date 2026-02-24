@@ -85,12 +85,17 @@ export class DrawingsRenderer {
   private lastCursor: { x: number; y: number } | null = null;
   private hoverDirty = false;
 
-  // snap
-  private snapConfig: SnapConfig = { enabled: true, mode: 'ohlc', radius_px: 12 };
+  // snap (default OFF — controlled by toolbar magnet toggle, persisted in localStorage)
+  private snapConfig: SnapConfig = { enabled: false, mode: 'ohlc', radius_px: 30 };
+  private lastSnap: { x: number; y: number } | null = null; // visual snap indicator
 
   // warning throttle
   private warnLastTs = new Map<string, number>();
   private warningThrottleMs = 800;
+
+  // ADR-0007: theme-aware кольори (кешовані, оновлюються через refreshThemeColors)
+  private themeBaseColor = '#c8cdd6';
+  private themeRectFill = 'rgba(200, 205, 214, 0.10)';
 
   // listeners
   private ro: ResizeObserver;
@@ -138,17 +143,27 @@ export class DrawingsRenderer {
 
     if (this.canvas.parentElement) this.ro.observe(this.canvas.parentElement);
 
-    // Range trigger
-    this.chartApi.timeScale().subscribeVisibleTimeRangeChange(() => this.scheduleRender());
+    // Range trigger — renderSync (not rAF) to eliminate 1-frame lag during scroll/zoom
+    this.chartApi.timeScale().subscribeVisibleTimeRangeChange(() => this.renderSync());
+
+    // ADR-0008: Y-axis sync — відбувається через callback notifyPriceRangeChanged(),
+    // а не через wheel/dblclick listeners (ті блокуються interaction.ts:stopImmediatePropagation).
 
     // IMPORTANT: canvas лишається pointer-events:none завжди (арбітраж через capture на interactionEl)
     this.canvas.style.pointerEvents = 'none';
 
     this.setupInteractionsCapture();
+
+    // Load persisted drawings from localStorage
+    this.loadFromStorage();
   }
 
   setAll(drawings: Drawing[]): void {
-    this.drawings = drawings ?? [];
+    // Server-sync: only overwrite if server sends actual drawings.
+    // If empty (client-only mode), keep localStorage drawings.
+    if (!drawings || drawings.length === 0) return;
+    this.drawings = drawings;
+    this.saveToStorage();
     this.scheduleRender();
   }
 
@@ -170,6 +185,27 @@ export class DrawingsRenderer {
 
   cancelDraft(): void {
     this.draft = null;
+    this.scheduleRender();
+  }
+
+  /** Магнітний режим: прив'язка інструментів до OHLC свічок */
+  setMagnetEnabled(enabled: boolean): void {
+    this.snapConfig.enabled = enabled;
+  }
+
+  /** ADR-0007: оновити кольори теми з CSS custom properties.
+   *  Canvas не читає CSS vars напряму — кешуємо при зміні теми. */
+  refreshThemeColors(): void {
+    const s = getComputedStyle(this.canvas);
+    this.themeBaseColor = s.getPropertyValue('--drawing-base-color').trim() || '#c8cdd6';
+    this.themeRectFill = s.getPropertyValue('--drawing-rect-fill').trim() || 'rgba(200, 205, 214, 0.10)';
+    this.scheduleRender();
+  }
+
+  /** ADR-0008: Y-axis змінився (викликається з interaction.ts після applyManualRange).
+   *  Використовуємо scheduleRender (rAF), а не renderSync,
+   *  щоб LWC встиг оновити internal layout і priceToCoordinate повертав актуальні Y. */
+  notifyPriceRangeChanged(): void {
     this.scheduleRender();
   }
 
@@ -240,7 +276,14 @@ export class DrawingsRenderer {
       }
     }
 
-    return bestDist <= this.snapConfig.radius_px ? bestPrice : rawPrice;
+    if (bestDist <= this.snapConfig.radius_px) {
+      // Visual snap indicator: mark snapped point
+      const snapY = this.seriesApi.priceToCoordinate(bestPrice);
+      this.lastSnap = snapY !== null ? { x, y: snapY } : null;
+      return bestPrice;
+    }
+    this.lastSnap = null;
+    return rawPrice;
   }
 
   // ---- CommandStack локальне застосування ----
@@ -249,29 +292,56 @@ export class DrawingsRenderer {
       this.drawings = isUndo
         ? this.drawings.filter((d) => d.id !== cmd.drawing.id)
         : [...this.drawings, cmd.drawing];
-      this.scheduleRender();
-      return;
-    }
-    if (cmd.type === 'DELETE') {
+    } else if (cmd.type === 'DELETE') {
       this.drawings = isUndo
         ? [...this.drawings, cmd.drawing]
         : this.drawings.filter((d) => d.id !== cmd.drawing.id);
-      this.scheduleRender();
-      return;
-    }
-
-    // UPDATE
-    const next = isUndo ? cmd.prev : cmd.next;
-    const idx = this.drawings.findIndex((d) => d.id === next.id);
-    if (idx >= 0) {
-      const copy = this.drawings.slice();
-      copy[idx] = next;
-      this.drawings = copy;
     } else {
-      this.drawings = [...this.drawings, next];
-      this.warnOnce(`update_missing:${next.id}`, 'drawing_state_inconsistent', 'UPDATE: drawing не знайдено, додано як new');
+      // UPDATE
+      const next = isUndo ? cmd.prev : cmd.next;
+      const idx = this.drawings.findIndex((d) => d.id === next.id);
+      if (idx >= 0) {
+        const copy = this.drawings.slice();
+        copy[idx] = next;
+        this.drawings = copy;
+      } else {
+        this.drawings = [...this.drawings, next];
+        this.warnOnce(`update_missing:${next.id}`, 'drawing_state_inconsistent', 'UPDATE: drawing не знайдено, додано як new');
+      }
     }
     this.scheduleRender();
+    this.saveToStorage();
+  }
+
+  // ---- localStorage persistence ----
+  private storageKey = 'v4_drawings';
+
+  /** Оновити ключ збереження (при зміні symbol/TF). Зберігає поточні → завантажує нові. */
+  setStorageKey(symbol: string, tf: string): void {
+    // Save current drawings to OLD key
+    this.saveToStorage();
+    // Switch key
+    this.storageKey = `v4_drawings_${symbol}_${tf}`;
+    // Load drawings for new key
+    this.loadFromStorage();
+  }
+
+  private saveToStorage(): void {
+    try {
+      localStorage.setItem(this.storageKey, JSON.stringify(this.drawings));
+    } catch { /* quota exceeded or private mode — silent */ }
+  }
+
+  private loadFromStorage(): void {
+    try {
+      const raw = localStorage.getItem(this.storageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        this.drawings = parsed;
+        this.scheduleRender();
+      }
+    } catch { /* corrupted data — ignore */ }
   }
 
   // ---- v3 hit-testing ----
@@ -381,12 +451,17 @@ export class DrawingsRenderer {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
 
-      // Tool: створення
+      // Tool: click-click state machine (TradingView-style)
       if (this.activeTool && this.activeTool !== 'eraser') {
         e.preventDefault();
         e.stopPropagation();
-        this.interactionEl.setPointerCapture(e.pointerId);
-        this.handleToolPointerDown(e.pointerId, x, y);
+        if (this.draft) {
+          // 2nd click: commit draft
+          this.finishDraft();
+        } else {
+          // 1st click: create draft (hline is instant, trend/rect start preview)
+          this.handleToolPointerDown(e.pointerId, x, y);
+        }
         return;
       }
 
@@ -441,12 +516,7 @@ export class DrawingsRenderer {
 
     this.onPointerUpCapture = (e) => {
       if (!this.dragState) {
-        // commit draft при tool?
-        if (this.draft && this.activeTool && this.activeTool !== 'eraser') {
-          e.preventDefault();
-          e.stopPropagation();
-          this.finishDraft();
-        }
+        // click-click: draft lives until 2nd pointerdown; no commit on pointerup
         return;
       }
 
@@ -504,7 +574,7 @@ export class DrawingsRenderer {
     if (this.activeTool === 'hline') {
       const d: Drawing = { id: uuidv4(), type: 'hline', points: [{ t_ms, price }] };
       this.commandStack.push({ type: 'ADD', drawing: d });
-      this.setTool(null);
+      // Tool stays active for continuous drawing; Escape to exit
       return;
     }
 
@@ -521,9 +591,12 @@ export class DrawingsRenderer {
   private updateDraft(x: number, y: number): void {
     if (!this.draft) return;
 
-    const t_ms = this.fromX(x);
-    const rawPrice = this.fromY(y);
+    let t_ms = this.fromX(x);
+    let rawPrice = this.fromY(y);
 
+    // ADR-0008: при null — fallback до останніх відомих координат (уникає "freeze" на краях)
+    if (t_ms === null) t_ms = this.draft.points[1].t_ms;
+    if (rawPrice === null) rawPrice = this.draft.points[1].price;
     if (t_ms === null || rawPrice === null) {
       this.warnOnce('tool_map_move_null', 'drawing_coord_null', `tool pointermove: cannot map x=${x},y=${y}`);
       return;
@@ -545,7 +618,7 @@ export class DrawingsRenderer {
     if (!isZero) this.commandStack.push({ type: 'ADD', drawing: cloneDrawing(this.draft) });
 
     this.draft = null;
-    this.setTool(null);
+    // Tool stays active for continuous drawing (TradingView-style); Escape to exit
   }
 
   // ---- drag math (v3) ----
@@ -581,6 +654,7 @@ export class DrawingsRenderer {
     const dy = y - this.dragState.startY;
 
     const next = cloneDrawing(current);
+    let anyNull = false;
 
     for (let i = 0; i < start.points.length; i++) {
       const oldX = this.toX(start.points[i].t_ms);
@@ -588,19 +662,21 @@ export class DrawingsRenderer {
 
       if (oldX === null || oldY === null) {
         this.warnOnce('drag_body_old_null', 'drawing_coord_null', 'drag body: old point out of view');
-        return;
+        anyNull = true;
+        break;
       }
 
       const new_t_ms = this.fromX(oldX + dx);
       const new_price = this.fromY(oldY + dy);
 
-      if (new_t_ms === null || new_price === null) {
-        this.warnOnce('drag_body_new_null', 'drawing_coord_null', 'drag body: new point cannot map');
-        return;
-      }
-
-      next.points[i] = { t_ms: new_t_ms, price: new_price };
+      // ADR-0008: при null — зберегти поточну позицію точки (не рухати)
+      next.points[i] = {
+        t_ms: new_t_ms ?? current.points[i].t_ms,
+        price: new_price ?? current.points[i].price,
+      };
     }
+
+    if (anyNull) return;
 
     this.drawings = this.replaceById(next);
     this.scheduleRender();
@@ -621,6 +697,15 @@ export class DrawingsRenderer {
       this.rafId = null;
       this.forceRender();
     });
+  }
+
+  /** Синхронний рендер — для chart events (scroll/zoom). Убирає 1-frame lag. */
+  private renderSync(): void {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    this.forceRender();
   }
 
   private updateCursor(): void {
@@ -658,7 +743,7 @@ export class DrawingsRenderer {
     const toY = (p: number): number | null => this.toY(p);
 
     const drawItem = (d: Drawing, isDraft = false) => {
-      const baseColor = d.meta?.color ?? '#c8cdd6';
+      const baseColor = d.meta?.color ?? this.themeBaseColor;
       const hovered = this.hovered?.id === d.id;
       const selected = this.selectedId === d.id;
 
@@ -712,7 +797,7 @@ export class DrawingsRenderer {
 
         this.aabbById.set(d.id, { minX, minY, maxX: minX + w, maxY: minY + h });
 
-        this.ctx.fillStyle = isDraft ? 'rgba(61, 154, 255, 0.10)' : 'rgba(200, 205, 214, 0.10)';
+        this.ctx.fillStyle = isDraft ? 'rgba(61, 154, 255, 0.10)' : this.themeRectFill;
         this.ctx.fillRect(minX, minY, w, h);
         this.ctx.strokeRect(minX, minY, w, h);
         return;
@@ -722,7 +807,21 @@ export class DrawingsRenderer {
     for (const d of this.drawings) drawItem(d, false);
     if (this.draft) drawItem(this.draft, true);
 
-    // 2) handles для selected
+    // 2) snap indicator (magnet visual feedback)
+    if (this.lastSnap && this.draft) {
+      this.ctx.save();
+      this.ctx.strokeStyle = '#00e676';
+      this.ctx.fillStyle = 'rgba(0, 230, 118, 0.25)';
+      this.ctx.lineWidth = 1.5;
+      this.ctx.setLineDash([]);
+      this.ctx.beginPath();
+      this.ctx.arc(this.lastSnap.x, this.lastSnap.y, 6, 0, Math.PI * 2);
+      this.ctx.fill();
+      this.ctx.stroke();
+      this.ctx.restore();
+    }
+
+    // 3) handles для selected
     if (this.selectedId) {
       const d = this.drawings.find((q) => q.id === this.selectedId);
       if (d) this.renderHandles(d);

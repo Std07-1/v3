@@ -74,12 +74,26 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description="Backfill TF bars з FXCM у SSOT (data_root).",
     )
-    ap.add_argument("--tf", type=int, required=True, help="TF у секундах (60/180/300/14400/86400)")
+    ap.add_argument("--tf", type=int, required=True, help="TF у секундах (60/180/300/900/1800/3600/86400)")
     ap.add_argument("--symbol", default=None, help="Символ (override config)")
     ap.add_argument("--all", action="store_true", help="Усі symbols[] з конфігу")
     ap.add_argument("--date-to", default=None, help="Кінцева дата UTC ISO (default: now)")
     ap.add_argument("--n", type=int, required=True, help="Кількість барів")
+    ap.add_argument("--force-derived-tf", action="store_true", default=False,
+                    help="Дозволити fetch derived-only TF (H4). Небезпечно — anchor mismatch!")
     args = ap.parse_args()
+
+    # Guard: H4 (14400) є derived-only TF (ADR-0002). FXCM H4 має інший anchor grid.
+    # Бари H4 будуються тільки через DeriveEngine (M1→...→H1→H4).
+    DERIVED_ONLY_TFS = {14400}  # H4
+    if args.tf in DERIVED_ONLY_TFS and not args.force_derived_tf:
+        logging.error(
+            "TF=%ds є derived-only (ADR-0002). FXCM має інший anchor grid. "
+            "Використовуйте rebuild_from_m1 замість прямого fetch. "
+            "Якщо дійсно потрібно — додайте --force-derived-tf.",
+            args.tf,
+        )
+        return 1
 
     load_env_secrets()
     config_path = pick_config_path()

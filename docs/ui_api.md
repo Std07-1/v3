@@ -116,8 +116,8 @@ UDS ініціалізується з `role="reader"` — будь-яка спр
 | `to_open_ms` | integer | | Бари з open_ms < to_open_ms (для scrollback) |
 | `align` | string | | `fxcm` (default) або `tv` (лише H4, derived з H1 final-only) |
 | `epoch` | string | | Epoch guard: UI передає для cancellation stale відповідей |
-| `force_disk` | integer | | **ІГНОРУЄТЬСЯ** з warning (Правило 20.2) |
-| `prefer_redis` | integer | | **ІГНОРУЄТЬСЯ** з warning (Правило 20.2) |
+| `force_disk` | integer | | **ІГНОРУЄТЬСЯ** з warning (I1: UDS = вузька талія) |
+| `prefer_redis` | integer | | **ІГНОРУЄТЬСЯ** з warning (I1: UDS = вузька талія) |
 
 **Контракт відповіді**: `window_v1.json` (див. [contracts.md](contracts.md#window_v1--відповідь-apibars))
 
@@ -240,7 +240,7 @@ UDS ініціалізується з `role="reader"` — будь-яка спр
 | `_normalize_bar_window_v1` | `server.py` | Нормалізує бар до public window_v1 формату |
 | `_contract_guard_warn_window` | `server.py` | Loud лог при порушенні window_v1 контракту |
 | `_contract_guard_warn_updates` | `server.py` | Loud лог при порушенні updates_v1 контракту |
-| `prefer_redis`/`force_disk` ignore | `server.py` | Query params ігноруються з warning (Правило 20.2) |
+| `prefer_redis`/`force_disk` ignore | `server.py` | Query params ігноруються з warning (I1: UDS = вузька талія) |
 | no_data rail | `server.py` | `bars=[]` → обов'язково `warnings[]` |
 
 ---

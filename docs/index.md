@@ -1,6 +1,6 @@
 # Документація Trading Platform v3 — Індекс (SSOT)
 
-> **Остання перевірка**: 2026-02-22  
+> **Остання перевірка**: 2026-02-24  
 > **Мова**: українська (англійська лише для загальноприйнятих термінів)
 
 Цей файл — **точка входу** в усю документацію проєкту. Будь-яке знання про систему має бути знайдене через цей індекс.
@@ -14,11 +14,17 @@
 | Документ | Зміст |
 |---|---|
 | [system_current_overview.md](system_current_overview.md) | Поточна архітектура, процеси, SSOT-площини, Mermaid-схеми, annotated tree |
-| [ADR-0001 UnifiedDataStore.md](ADR-0001%20UnifiedDataStore.md) | Архітектурне рішення: UDS (RAM↔Redis↔Disk) + Contract-first API |
-| [ADR-0002-derive-chain-from-m1.md](ADR-0002-derive-chain-from-m1.md) | DeriveChain: M1→M3→M5→M15→M30→H1→H4 (4 phases) |
-| [ADR-0003 Cold Start Hardening.md](ADR-0003%20Cold%20Start%20Hardening.md) | Cold start: error isolation, process restart, unified gate |
-| [ADR-0004-log-format-and-throttles.md](ADR-0004-log-format-and-throttles.md) | Формат лог-рядків (aione_top), throttle UDS (commit_final_bar drop, geom_fix) |
-| [ADR-0005-aione-top-monitoring.md](ADR-0005-aione-top-monitoring.md) | Контракт джерел даних aione_top (Redis, HTTP, логи, OBS_60S, очікувані процеси) |
+| **[docs/adr/index.md](adr/index.md)** | **Індекс усіх ADR (SSOT)** — 10 ADR з обґрунтуваннями архітектурних рішень |
+| [ADR-0001](adr/0001-unified-data-store.md) | UDS (RAM↔Redis↔Disk) + Contract-first API |
+| [ADR-0002](adr/0002-derive-chain-from-m1.md) | DeriveChain: M1→M3→M5→M15→M30→H1→H4 |
+| [ADR-0003](adr/0003-cold-start-hardening.md) | Cold start: error isolation, process restart, unified gate |
+| [ADR-0004](adr/0004-log-format-and-throttles.md) | Формат лог-рядків, throttle UDS |
+| [ADR-0005](adr/0005-mid-session-gap-tolerance.md) | Mid-session Gap Tolerance (illiquid instruments) |
+| [ADR-0006](adr/0006-aione-top-data-sources.md) | aione_top: контракт джерел даних |
+| [ADR-0007](adr/0007-drawing-tools-unblock.md) | DrawingsRenderer: 4 інструменти, click-click UX |
+| [ADR-0008](adr/0008-glass-toolbar-light-theme.md) | Glass toolbar, WCAG AA, CSS custom properties |
+| [ADR-0009](adr/0009-drawing-sync-render-fix.md) | Y-axis sync render fix + draft freeze clamp |
+| [ADR-0010](adr/0010-thread-safe-ram-layer.md) | Thread-safety in ram_layer via threading.Lock |
 
 ### 2. Потоки даних
 

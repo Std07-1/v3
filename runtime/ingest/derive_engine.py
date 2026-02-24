@@ -18,7 +18,7 @@ commit_tfs_s контролює які TF коммітяться в UDS:
 Thread-safety: per-symbol lock для cascade integrity.
 Викликається з m1_poller per-symbol threads.
 
-ADR: ADR-0002 derive-chain-from-m1.md, Phase 2.
+ADR: ADR-0002 (DeriveChain M1→H4), Phase 2.
 """
 from __future__ import annotations
 

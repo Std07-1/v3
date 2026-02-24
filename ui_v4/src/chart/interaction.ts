@@ -118,6 +118,7 @@ export function setupPriceScaleInteractions(
     container: HTMLElement,
     chart: IChartApi,
     series: ISeriesApi<'Candlestick'>,
+    onPriceRangeChanged?: () => void,
 ): () => void {
     const cleanups: Array<() => void> = [];
 
@@ -181,6 +182,8 @@ export function setupPriceScaleInteractions(
         if (!normalized) return;
         state.manualRange = normalized;
         requestPriceScaleSync();
+        // ADR-0008: повідомити DrawingsRenderer про зміну Y-діапазону
+        onPriceRangeChanged?.();
     }
 
     function ensureManualRange(baseRange: PriceRange | null) {
@@ -412,6 +415,8 @@ export function setupPriceScaleInteractions(
             state.lastAutoRange = null;
             requestPriceScaleSync();
             chart.timeScale().scrollToRealTime();
+            // ADR-0008: dblclick reset також змінює Y-діапазон
+            onPriceRangeChanged?.();
         }
     };
     container.addEventListener('dblclick', handleDblClick);

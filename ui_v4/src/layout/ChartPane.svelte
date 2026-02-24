@@ -7,6 +7,7 @@
     T_MS,
     UiWarning,
     SmcData,
+    ActiveTool,
   } from "../types";
 
   import {
@@ -18,8 +19,7 @@
   } from "../chart/lwc";
   import { setupPriceScaleInteractions } from "../chart/interaction";
   import { OverlayRenderer } from "../chart/overlay/OverlayRenderer";
-  // DISABLED: trading tools deferred (audit T1)
-  // import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
+  import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
   import { saveVisibleRange, loadVisibleRange } from "../stores/viewCache";
 
@@ -29,12 +29,16 @@
     scrollback,
     addUiWarning,
     brightness = 1.0,
+    activeTool = null,
+    magnetEnabled = false,
   }: {
     currentFrame?: RenderFrame | null;
     sendRawAction: (a: WsAction) => void;
     scrollback: (ms: T_MS) => void;
     addUiWarning: (w: UiWarning) => void;
     brightness?: number;
+    activeTool?: ActiveTool;
+    magnetEnabled?: boolean;
   } = $props();
 
   // Crosshair data for tooltip (OHLCV + cursor position)
@@ -43,12 +47,11 @@
   let wrapperRef: HTMLDivElement;
   let lwcHostRef: HTMLDivElement;
   let overlayCanvasRef: HTMLCanvasElement;
-  // DISABLED: trading tools deferred (audit T1)
-  // let drawingsCanvasRef: HTMLCanvasElement;
+  let drawingsCanvasRef: HTMLCanvasElement;
 
   let chartEngine: ChartEngine;
   let overlayRenderer: OverlayRenderer;
-  // let drawingsRenderer: DrawingsRenderer;
+  let drawingsRenderer: DrawingsRenderer;
   let interactionCleanup: (() => void) | null = null;
 
   let ro: ResizeObserver | null = null;
@@ -72,14 +75,21 @@
   let prevSymbol = "";
   let prevTf = "";
 
-  // DISABLED: trading tools deferred (audit T1)
-  // export function undo() { drawingsRenderer?.commandStack.undo(); }
-  // export function redo() { drawingsRenderer?.commandStack.redo(); }
-  // export function cancelDraft() { drawingsRenderer?.cancelDraft(); }
+  export function undo() {
+    drawingsRenderer?.commandStack.undo();
+  }
+  export function redo() {
+    drawingsRenderer?.commandStack.redo();
+  }
+  export function cancelDraft() {
+    drawingsRenderer?.cancelDraft();
+  }
 
   // P3.11/P3.12: Delegators for theme & candle style (expose to parent)
   export function applyTheme(name: ThemeName): void {
     chartEngine?.applyTheme(name);
+    // ADR-0007: CSS vars вже встановлені в App.svelte → кешуємо для canvas через rAF
+    requestAnimationFrame(() => drawingsRenderer?.refreshThemeColors());
   }
   export function applyCandleStyle(name: CandleStyleName): void {
     chartEngine?.applyCandleStyle(name);
@@ -122,18 +132,22 @@
       },
     );
 
-    // DISABLED: trading tools deferred (audit T1)
-    // drawingsRenderer = new DrawingsRenderer(
-    //   drawingsCanvasRef, wrapperRef,
-    //   chartEngine.chart, chartEngine.series,
-    //   sendRawAction, addUiWarning,
-    // );
+    drawingsRenderer = new DrawingsRenderer(
+      drawingsCanvasRef,
+      wrapperRef,
+      chartEngine.chart,
+      chartEngine.series,
+      () => {}, // noop: drawings client-only (ADR-0005)
+      addUiWarning,
+    );
 
     // P3.3-P3.5: Price axis interactions (Y-zoom, Y-pan, dblclick reset)
+    // ADR-0008: callback для sync-рендерингу малювань при Y-axis змінах
     interactionCleanup = setupPriceScaleInteractions(
       lwcHostRef,
       chartEngine.chart,
       chartEngine.series,
+      () => drawingsRenderer?.notifyPriceRangeChanged(),
     );
 
     ro = new ResizeObserver(() => {
@@ -147,8 +161,12 @@
     ro.observe(wrapperRef);
   });
 
-  // DISABLED: trading tools deferred (audit T1)
-  // $effect(() => { drawingsRenderer?.setTool(activeTool); });
+  $effect(() => {
+    drawingsRenderer?.setTool(activeTool);
+  });
+  $effect(() => {
+    drawingsRenderer?.setMagnetEnabled(magnetEnabled ?? false);
+  });
 
   $effect(() => {
     if (currentFrame && chartEngine) {
@@ -209,13 +227,16 @@
 
       overlayRenderer?.patch(buildSmc(currentFrame));
 
-      // DISABLED: trading tools deferred (audit T1)
-      // if (currentFrame.frame_type === "full") {
-      //   drawingsRenderer?.setAll(currentFrame.drawings ?? []);
-      // } else if (currentFrame.frame_type === "drawing_ack") {
-      //   const d = currentFrame.drawings?.[0];
-      //   if (d) drawingsRenderer?.confirm(d);
-      // }
+      if (currentFrame.frame_type === "full") {
+        // Switch drawing storage to this symbol+TF pair
+        const sym = currentFrame.symbol ?? "";
+        const tf = currentFrame.tf ?? "";
+        if (sym && tf) drawingsRenderer?.setStorageKey(sym, tf);
+        drawingsRenderer?.setAll(currentFrame.drawings ?? []);
+      } else if (currentFrame.frame_type === "drawing_ack") {
+        const d = currentFrame.drawings?.[0];
+        if (d) drawingsRenderer?.confirm(d);
+      }
     }
   });
 
@@ -224,7 +245,7 @@
     interactionCleanup = null;
     ro?.disconnect();
     ro = null;
-    // DISABLED: drawingsRenderer?.destroy();
+    drawingsRenderer?.destroy();
     chartEngine?.destroy?.();
   });
 </script>
@@ -237,8 +258,11 @@
   ></div>
   <OhlcvTooltip data={crosshairData} />
   <canvas class="layer overlay-layer" bind:this={overlayCanvasRef}></canvas>
-  <!-- DISABLED: trading tools deferred (audit T1) -->
-  <!-- <canvas class="layer drawings-layer" bind:this={drawingsCanvasRef}></canvas> -->
+  <canvas
+    class="layer drawings-layer"
+    bind:this={drawingsCanvasRef}
+    style:filter={brightness !== 1 ? `brightness(${brightness})` : undefined}
+  ></canvas>
   {#if showNoData}
     <div class="no-data-overlay">
       <div class="no-data-content">

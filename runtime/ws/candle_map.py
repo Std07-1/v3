@@ -10,6 +10,7 @@ runtime/ws/candle_map.py — Конвертація v3 bar dict → ui_v4 Candle
 
 from __future__ import annotations
 
+import datetime
 import logging
 from typing import List, Optional, Tuple
 
@@ -50,21 +51,49 @@ def _is_display_flat_bar(bar: dict) -> bool:
     return False
 
 
-def map_bar_to_candle_v4(bar: dict) -> Optional[dict]:
+# HTF (H4/D1): flat bar filter = тільки weekend artifacts (Fri/Sat UTC open).
+# Flat на HTF з Mon-Thu open = бар щойно відкрився (V=2, OHLC однакові) — зберігається.
+_HTF_FLAT_SKIP_TF_S = 14400  # >= H4
+
+
+def _is_weekend_open_utc(bar: dict) -> bool:
+    """Перевіряє чи open_time бару припадає на п'ятницю або суботу UTC.
+
+    Fri 22:00 UTC → covers Saturday (no trading).
+    Sat 22:00 UTC → covers Sunday (no trading).
+    """
+    oms = bar.get("open_time_ms") or bar.get("open_ms")
+    if oms is None:
+        t = bar.get("time")
+        if isinstance(t, (int, float)):
+            oms = int(t) * 1000
+    if not isinstance(oms, (int, float)) or oms <= 0:
+        return False
+    bar_dt = datetime.datetime.utcfromtimestamp(int(oms) / 1000)
+    return bar_dt.weekday() in (4, 5)  # Friday=4, Saturday=5
+
+
+def map_bar_to_candle_v4(bar: dict, *, tf_s: int = 0) -> Optional[dict]:
     """Конвертує один v3 bar dict → ui_v4 Candle dict або None (rejected).
 
     Вхід: LWC dict (open/high/low/close/volume/open_time_ms) АБО
           SHORT dict (o/h/low/c/v/open_time_ms).
     Вихід: {"t_ms": int, "o": float, "h": float, "l": float, "c": float, "v": float}
     Flat бари (O==H==L==C, v≤4, calendar_pause_flat) фільтруються (I5: degraded-but-loud).
+    HTF (>=H4): flat filter пропускається — flat означає early/incomplete bar.
     """
     if not isinstance(bar, dict):
         _log.warning("CANDLE_MAP_REJECT reason=not_dict type=%s", type(bar).__name__)
         return None
 
     # Flat bar filter — display-only (SSOT не змінюється)
+    # LTF (<H4): filter all flat bars.
+    # HTF (>=H4): filter тільки weekend flat bars (Fri/Sat UTC open).
     if _is_display_flat_bar(bar):
-        return None
+        if tf_s < _HTF_FLAT_SKIP_TF_S:
+            return None
+        if _is_weekend_open_utc(bar):
+            return None
 
     # --- t_ms (epoch ms) ---
     t_ms = bar.get("open_time_ms")
@@ -102,16 +131,21 @@ def map_bar_to_candle_v4(bar: dict) -> Optional[dict]:
 
 def map_bars_to_candles_v4(
     bars: List[dict],
+    *,
+    tf_s: int = 0,
 ) -> Tuple[List[dict], int]:
     """Batch-конвертація барів → candles.
 
+    Args:
+        bars: список v3 bar dicts.
+        tf_s: TF у секундах (для HTF flat filter skip).
     Returns: (candles, dropped_count).
     Caller має додати warning якщо dropped > 0 (degraded-but-loud).
     """
     candles: List[dict] = []
     dropped = 0
     for bar in bars:
-        candle = map_bar_to_candle_v4(bar)
+        candle = map_bar_to_candle_v4(bar, tf_s=tf_s)
         if candle is None:
             dropped += 1
         else:

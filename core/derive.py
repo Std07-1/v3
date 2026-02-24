@@ -45,6 +45,10 @@ for _src_tf, _targets in DERIVE_CHAIN.items():
     for _tgt_tf, _n in _targets:
         DERIVE_SOURCE[_tgt_tf] = (_src_tf, _n)
 
+# ADR-0005: максимум пропущених mid-session source-слотів на 1 derived bucket.
+# Rollback: встановити 0 → повна regression до попередньої поведінки.
+MAX_MID_SESSION_GAPS: int = 3
+
 
 # ---------------------------------------------------------------------------
 # GenericBuffer — параметричний буфер барів для будь-якого TF
@@ -276,26 +280,26 @@ def _collect_boundary_tolerant(
     start_ms: int,
     end_ms: int,
     is_trading_fn: Callable[[int], bool],
-) -> Optional[List[CandleBar]]:
-    """Збір source-барів з boundary-толерантністю для session open/close.
+    max_mid_session_gaps: int = 0,
+) -> Optional[Tuple[List[CandleBar], int]]:
+    """Збір source-барів з толерантністю до boundary та mid-session gaps.
 
-    Дозволяє пропуск барів на межі торгової сесії (broker може не надати
-    бар у першу/останню хвилину після/до перерви чи відкриття ринку).
-
-    Boundary визначення:
+    Boundary tolerance (Entry 075):
     - session open: is_trading_fn(t)=True, is_trading_fn(t - step)=False
-      → перша хвилина після відкриття/перерви; broker іноді не має бару.
     - session close: is_trading_fn(t)=True, is_trading_fn(t + step)=False
-      → остання хвилина перед закриттям/перервою.
 
-    Якщо пропущений бар НЕ на boundary (gap у середині сесії) → None.
+    Mid-session tolerance (ADR-0005):
+    - Gap у середині сесії дозволений якщо mid_session_skips ≤ max_mid_session_gaps.
+    - Для неліквідних інструментів (NGAS, HKG33): broker не надає M1 для хвилин без угод.
+    - Перевищення бюджету → None.
 
     Returns:
-        Список барів (може бути коротший за очікуваний) або None.
+        Tuple (bars, mid_session_skips) або None.
     """
     step = source_buffer.tf_ms
     bars: List[CandleBar] = []
     boundary_skips = 0
+    mid_session_skips = 0
 
     for t in range(start_ms, end_ms, step):
         # Не торговий — пропускаємо (calendar pause / break)
@@ -315,13 +319,15 @@ def _collect_boundary_tolerant(
             boundary_skips += 1
             continue
 
-        # Gap у середині сесії — fail (не boundary, реальний пропуск даних)
-        return None
+        # Mid-session gap (ADR-0005): дозволяємо в межах бюджету
+        mid_session_skips += 1
+        if mid_session_skips > max_mid_session_gaps:
+            return None
 
     if not bars:
         return None
 
-    return bars
+    return (bars, mid_session_skips)
 
 
 # ---------------------------------------------------------------------------
@@ -396,11 +402,13 @@ def derive_bar(
     if is_trading_fn is None:
         return None
 
-    bars = _collect_boundary_tolerant(
-        source_buffer, bucket_open_ms, bucket_close_ms, is_trading_fn
+    result_tol = _collect_boundary_tolerant(
+        source_buffer, bucket_open_ms, bucket_close_ms, is_trading_fn,
+        max_mid_session_gaps=MAX_MID_SESSION_GAPS,
     )
-    if not bars:
+    if not result_tol:
         return None
+    bars, mid_gaps = result_tol
 
     # Рахуємо expected trading slots для degraded metadata
     step = source_buffer.tf_ms
@@ -424,6 +432,8 @@ def derive_bar(
     result.extensions["boundary_partial"] = True
     result.extensions["source_count"] = len(bars)
     result.extensions["expected_count"] = expected_trading
+    if mid_gaps > 0:
+        result.extensions["mid_session_gaps"] = mid_gaps
     return result
 
 
