@@ -973,7 +973,10 @@ def build_app(
             _log.warning("D1_TICK_RELAY_INIT_FAILED err=%s (disabled)", relay_exc)
 
     # Dedicated thread pool for UDS blocking I/O (limit thread explosion)
-    app["_uds_executor"] = ThreadPoolExecutor(max_workers=2, thread_name_prefix="uds")
+    # min(4, cpu_count) — 2 було недостатньо для паралельних /api/bars + /api/updates
+    import os as _os
+    _uds_workers = min(4, _os.cpu_count() or 4)
+    app["_uds_executor"] = ThreadPoolExecutor(max_workers=_uds_workers, thread_name_prefix="uds")
 
     # P2: UDS reader (W0: role="reader")
     if uds is not None:

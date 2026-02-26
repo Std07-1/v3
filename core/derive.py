@@ -11,6 +11,7 @@ Dependency Rule: core/ не імпортує runtime/ui/tools.
 """
 from __future__ import annotations
 
+import bisect
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.model.bars import CandleBar, assert_invariants
@@ -103,13 +104,12 @@ class GenericBuffer:
             self._by_open_ms[k] = bar
             return
         self._by_open_ms[k] = bar
-        # Вставка з підтримкою сортованості (bisect-like)
+        # Вставка з підтримкою сортованості.
         # Оптимістичний шлях: новий бар — найновіший (append)
         if not self._sorted_keys or k > self._sorted_keys[-1]:
             self._sorted_keys.append(k)
         else:
-            self._sorted_keys.append(k)
-            self._sorted_keys.sort()
+            bisect.insort(self._sorted_keys, k)
         self._gc()
 
     def upsert_many(self, bars: List[CandleBar]) -> int:

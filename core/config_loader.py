@@ -71,7 +71,7 @@ def env_str(key: str) -> Optional[str]:
 # ── SSOT-допустимі TF (Правило №7) ────────────────────────────────
 
 DEFAULT_TF_ALLOWLIST: set[int] = {300, 900, 1800, 3600, 14400, 86400}
-DEFAULT_PREVIEW_TF_ALLOWLIST: set[int] = {60, 180}
+DEFAULT_PREVIEW_TF_ALLOWLIST: set[int] = {60, 180, 300, 900, 1800, 3600, 14400}
 MAX_EVENTS_PER_RESPONSE: int = 500
 
 

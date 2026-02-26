@@ -75,6 +75,8 @@ def select_anchor_offset_for_open_ms(
 class JsonlAppender:
     """Append-only JSONL writer із ротацією по даті open_time_utc (YYYYMMDD)."""
 
+    _MAX_OPEN_FILES = 64  # LRU-ліміт відкритих FD (запобігає витоку)
+
     def __init__(
         self,
         root: str,
@@ -87,6 +89,7 @@ class JsonlAppender:
     ) -> None:
         self._root = root
         self._open_files: Dict[str, Any] = {}
+        self._open_files_order: List[str] = []  # LRU order
         self._fsync = fsync
         self._day_anchor_offset_s = day_anchor_offset_s
         self._day_anchor_offset_s_d1 = day_anchor_offset_s_d1
@@ -141,8 +144,23 @@ class JsonlAppender:
         path = self._path_for(bar.symbol, bar.tf_s, bar.open_time_ms)
         fh = self._open_files.get(path)
         if fh is None:
+            # LRU eviction: закрити найстаріший FD якщо ліміт досягнуто
+            if len(self._open_files) >= self._MAX_OPEN_FILES:
+                evict_path = self._open_files_order.pop(0)
+                evict_fh = self._open_files.pop(evict_path, None)
+                if evict_fh is not None:
+                    try:
+                        evict_fh.close()
+                    except Exception:
+                        pass
             fh = open(path, "a", encoding="utf-8")
             self._open_files[path] = fh
+            self._open_files_order.append(path)
+        else:
+            # Touch: перемістити в кінець LRU
+            if path in self._open_files_order:
+                self._open_files_order.remove(path)
+                self._open_files_order.append(path)
         line = json.dumps(bar.to_dict(), ensure_ascii=False, separators=(",", ":"))
         fh.write(line + "\n")
         fh.flush()

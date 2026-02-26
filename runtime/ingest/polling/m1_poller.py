@@ -62,14 +62,33 @@ def _expected_closed_m1_ms(now_ms: int) -> int:
     return (now_ms // _M1_MS) * _M1_MS - _M1_MS
 
 
+# Кеш останньої торгової хвилини per-calendar (уникає цикл до 10080 ітерацій)
+_ltm_cache: Dict[int, int] = {}  # {id(calendar): last_result_ms}
+_ltm_cache_input: Dict[int, int] = {}  # {id(calendar): now_ms що дало cache hit}
+
+
 def _last_trading_minute_ms(calendar: MarketCalendar, now_ms: int) -> int:
-    """Пошук останньої торгової хвилини (до 7 днів назад)."""
+    """Пошук останньої торгової хвилини (до 7 днів назад).
+
+    Кешує результат per-calendar: якщо now_ms не змінився — повертає
+    попередній результат без повторного циклу (O(1) замість O(10080)).
+    """
+    cal_id = id(calendar)
+    if _ltm_cache_input.get(cal_id) == now_ms:
+        cached = _ltm_cache.get(cal_id)
+        if cached is not None:
+            return cached
     cur = (now_ms // _M1_MS) * _M1_MS - _M1_MS
     for _ in range(7 * 24 * 60):
         if calendar.is_trading_minute(cur):
+            _ltm_cache[cal_id] = cur
+            _ltm_cache_input[cal_id] = now_ms
             return cur
         cur -= _M1_MS
-    return (now_ms // _M1_MS) * _M1_MS - _M1_MS
+    result = (now_ms // _M1_MS) * _M1_MS - _M1_MS
+    _ltm_cache[cal_id] = result
+    _ltm_cache_input[cal_id] = now_ms
+    return result
 
 
 def _expected_closed_m1_calendar(calendar: Optional[MarketCalendar], now_ms: int) -> int:
@@ -709,6 +728,9 @@ class M1PollerRunner:
         self._derive_engine = derive_engine
         self._derive_warmup_bars_by_tf = derive_warmup_bars_by_tf or dict(self._DEFAULT_DERIVE_WARMUP)
         self._cascade_catchup_m1_bars = max(0, cascade_catchup_m1_bars)
+        # Graceful shutdown: stop_event дозволяє перервати sleep між циклами
+        import threading as _threading
+        self._stop_event = _threading.Event()
 
     # -- FXCM session lifecycle -----------
 
@@ -742,7 +764,8 @@ class M1PollerRunner:
         self._try_connect()
 
     def shutdown(self) -> None:
-        """Закрити FXCM сесію."""
+        """Закрити FXCM сесію та зупинити polling loop."""
+        self._stop_event.set()  # негайно пробуджує _sleep_to_next_minute
         try:
             if self._connected:
                 self._provider.__exit__(None, None, None)
@@ -938,7 +961,7 @@ class M1PollerRunner:
         self._maybe_log_stats(force=True)  # Початкові stats (watermarks після warmup)
         overdue_interval_s = 60  # Перевірка overdue кожні 60с
         last_overdue_ts = 0.0
-        while True:
+        while not self._stop_event.is_set():
             self._sleep_to_next_minute()
             cycle_errors = 0
             for p in self._pollers:
@@ -973,7 +996,9 @@ class M1PollerRunner:
         next_min = (int(now // 60) + 1) * 60
         target = next_min + self._safety_delay_s
         delay = max(0.0, target - now)
-        time.sleep(delay)
+        # stop_event.wait замість time.sleep для graceful shutdown:
+        # дозволяє перервати очікування при виклику shutdown()
+        self._stop_event.wait(delay)
 
     def _maybe_log_stats(self, force: bool = False) -> None:
         now = time.time()

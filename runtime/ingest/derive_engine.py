@@ -165,17 +165,29 @@ class DeriveEngine:
         Не деривує і не коммітить — тільки buffer fill.
         Бари мають бути sorted by open_time_ms asc.
 
+        Thread-safety: per-symbol lock захищає від гонки з on_bar
+        під час bootstrap, коли m1_poller вже може почати poll.
+
         Returns:
             Кількість буферизованих барів.
         """
         count = 0
+        # Групуємо по символу для мінімізації lock contention
+        by_sym: Dict[str, List[CandleBar]] = {}
         for bar in bars:
             if bar.symbol not in self._symbols:
                 continue
             if bar.tf_s not in DERIVE_CHAIN:
                 continue
-            self._get_buffer(bar.symbol, bar.tf_s).upsert(bar)
-            count += 1
+            by_sym.setdefault(bar.symbol, []).append(bar)
+        for sym, sym_bars in by_sym.items():
+            lock = self._locks.get(sym)
+            if lock is None:
+                continue
+            with lock:
+                for bar in sym_bars:
+                    self._get_buffer(bar.symbol, bar.tf_s).upsert(bar)
+                    count += 1
         if count:
             log.info("DeriveEngine warmup: %d bars buffered", count)
         return count

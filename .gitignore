@@ -13,6 +13,8 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+patch.diff
+_tmp_jsonl_stress
 
 # ── Секрети ──────────────────────────────────────────────────
 .env
@@ -59,7 +61,7 @@ ui_v4/dist/
 logs/
 
 # ── Документація: внутрішні аудити та спеки (не релізні) ────
-/docs/adr/
+# /docs/adr/
 /docs/audit/
 /docs/system_spec/
 /docs/claude_project_instructions.md

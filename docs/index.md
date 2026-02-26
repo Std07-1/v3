@@ -31,8 +31,7 @@
 | Документ | Зміст |
 |---|---|
 | [system_current_overview.md § Схема потоку даних](system_current_overview.md#схема-потік-даних) | A→C→B: Broker → UDS → UI (Final + Preview + Overlay) |
-| [guide_candles.md](guide_candles.md) | Інструкція: «гарні» M1/M3 свічки від брокера до UI |
-| [guide_candle_acquisition.md](guide_candle_acquisition.md) | Повний посібник: отримання свічок (FXCM API, календар, watermark, recover) |
+
 | [redis_snapshot_design.md](redis_snapshot_design.md) | Redis snapshot keyspace, TTL, failure modes, stale readiness |
 
 ### 3. Контракти
@@ -63,7 +62,7 @@
 
 | Документ | Зміст |
 |---|---|
-| [ui_v4_integration.md](ui_v4_integration.md) | Інтеграційний гайд: стан реалізації, WS-протокол, GAP аналіз, план підключення |
+
 | [ui_v4/README_DEV.md](../ui_v4/README_DEV.md) | Developer quick start, стек, env-змінні |
 | [ui_v4/UI_v4_COPILOT_README.md](../ui_v4/UI_v4_COPILOT_README.md) | SSOT інструкція для побудови (slices 0–5) |
 | [ui_v4/src/types.ts](../ui_v4/src/types.ts) | SSOT типи: RenderFrame, WsAction, Candle, SmcData, Drawing |
@@ -85,9 +84,6 @@
 | [audit/coldstart_regressions.md](audit/coldstart_regressions.md) | Матриця регресій: cold start 13 символів |
 | [audit/htf_availability_regressions.md](audit/htf_availability_regressions.md) | Матриця регресій: H4/D1 availability |
 | [audit/ui_live_candle_regressions.md](audit/ui_live_candle_regressions.md) | Матриця регресій: UI live candle |
-| [audit/p0_freeze_snapshot/](audit/p0_freeze_snapshot/) | P0: freeze snapshot (as-is flow, policy table, smoke results) |
-| [audit/p1_policy_diff/](audit/p1_policy_diff/) | P1: policy diff table |
-| [audit/p2_empty_chart_rootcause/](audit/p2_empty_chart_rootcause/) | P2: порожній графік — root cause analysis |
 
 ### 8. Дослідження (research/)
 
