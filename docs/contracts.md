@@ -51,7 +51,7 @@
 | `close_time_ms` | integer\|null | End-excl: `open_time_ms + tf_s * 1000` (canonical) |
 | `tf_s` | integer | Timeframe у секундах (60, 180, 300, ... 86400) |
 | `src` | string | Джерело: `"history"`, `"derived"`, `"history_agg"`, `"preview_tick"`, `"tick_promoted"` |
-| `complete` | boolean | `true` = final (закритий), `false` = preview (формується) |
+| `complete` | boolean | `true` = bucket elapsed (нових барів для цього bucket не буде), `false` = preview (формується). Це **не** гарантія "100% N з N source bars" для derived випадків |
 
 ### Опціональні поля
 
@@ -88,6 +88,9 @@
 - Якщо `complete=true`: `src ∈ {"history", "derived", "history_agg"}`
 - Якщо `complete=false`: `src ∈ {"preview_tick", "tick_promoted"}`
 - `time = floor(open_time_ms / 1000)` (цілочисельне ділення)
+- Для `src="derived"` можливий partial-final випадок: `complete=true` разом з `extensions.partial=true` (або `partial_calendar_pause` / `boundary_partial`).
+- Strict-споживачі (screening/strategy) можуть відфільтрувати такі бари за `extensions.partial*` або застосувати soft-penalty замість hard reject.
+- Рекомендований soft-penalty: `1 - source_count/expected_count` (коли лічильники доступні).
 
 ---
 
@@ -133,7 +136,7 @@
 | `redis_payload_ts_ms` | integer | | Час запису payload у Redis |
 | `redis_seq` | integer | | Seq з Redis snap |
 | `redis_len` | integer | | Кількість барів у Redis tail |
-| `extensions` | object | | Розширення: `partial`, `geom_fix`, `expected/got` тощо |
+| `extensions` | object | | Розширення: `partial`, `partial_calendar_pause`, `boundary_partial`, `partial_reasons[]`, `source_count`, `expected_count`, `geom_fix`, `expected/got` тощо |
 
 ---
 

@@ -26,6 +26,44 @@ Logging = logging.getLogger("uds")
 
 _OBS = Obs60s("uds")
 
+try:
+    from prometheus_client import Counter, Gauge  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    Counter = None  # type: ignore
+    Gauge = None  # type: ignore
+
+
+class _NoopCounter:
+    def inc(self, _value: float = 1.0) -> None:
+        return
+
+
+class _NoopGauge:
+    def set(self, _value: float) -> None:
+        return
+
+
+if Counter is not None:
+    _METRIC_REDIS_WRITE_FAIL_TOTAL = Counter(
+        "ai_one_uds_redis_write_fail_total",
+        "UDS Redis snapshot write failures",
+    )
+    _METRIC_PUBSUB_FAIL_TOTAL = Counter(
+        "ai_one_uds_pubsub_fail_total",
+        "UDS pubsub publish failures",
+    )
+else:  # pragma: no cover - fallback when prometheus missing
+    _METRIC_REDIS_WRITE_FAIL_TOTAL = _NoopCounter()
+    _METRIC_PUBSUB_FAIL_TOTAL = _NoopCounter()
+
+if Gauge is not None:
+    _METRIC_SPLIT_BRAIN_ACTIVE = Gauge(
+        "ai_one_uds_split_brain_active",
+        "UDS split brain marker between disk and redis/pubsub",
+    )
+else:  # pragma: no cover - fallback when prometheus missing
+    _METRIC_SPLIT_BRAIN_ACTIVE = _NoopGauge()
+
 # Throttle логів "виправлено геометрію" — один підсумок / 30 с (антиспам при warmup)
 _geom_fix_count = 0
 _geom_fix_last_log_ts = 0.0
@@ -341,11 +379,40 @@ class UnifiedDataStore:
         # Throttle логів commit_final_bar drop (stale/duplicate) — 1 рядок / 30 с з підсумком
         self._commit_drop_counts: dict[str, int] = {}
         self._commit_drop_last_log_ts = 0.0
+        self._split_brain_active = False
+        self._degraded_warning_flag = os.getenv("UDS_COMMIT_DEGRADED_REASON_FF", "0") in {"1", "true", "yes", "on"}
+        _METRIC_SPLIT_BRAIN_ACTIVE.set(0)
         if self._preview_allowlist_source == "fallback":
             Logging.debug(
                 "UDS: preview_tf_allowlist_source=fallback tf_s=%s",
                 sorted(self._preview_tf_allowlist),
             )
+
+    def _head_tail_marker(self, bar: CandleBar) -> str:
+        return (
+            f"head:3 {bar.open_time_ms},{bar.o:.4f},{bar.h:.4f} "
+            f"tail:3 {bar.open_time_ms},{bar.low:.4f},{bar.c:.4f}"
+        )
+
+    def _mark_split_brain_active(self, bar: CandleBar, degraded_reasons: list[str]) -> None:
+        self._split_brain_active = True
+        _METRIC_SPLIT_BRAIN_ACTIVE.set(1)
+        reason_text = ",".join(degraded_reasons)
+        Logging.warning(
+            "[DEGRADED] [%s] [UDS] commit_final_bar: disk append ok, але Redis/pubsub деградовано (%s) | %s",
+            bar.symbol,
+            reason_text,
+            self._head_tail_marker(bar),
+        )
+
+    def mark_split_brain_reconciled(self, *, source: str = "manual_replay") -> None:
+        """Скидає split-brain після ручної реконсиляції диска до Redis."""
+        self._split_brain_active = False
+        _METRIC_SPLIT_BRAIN_ACTIVE.set(0)
+        Logging.info(
+            "[RECOVERED] [UDS] split-brain скинуто після реконсиляції source=%s | head:3 n/a tail:3 n/a",
+            source,
+        )
 
     def _set_preview_nomix_violation(self, reason: str) -> None:
         if not self._preview_nomix_violation:
@@ -667,6 +734,16 @@ class UnifiedDataStore:
         ssot_written = self._append_to_disk(bar, ssot_write_ts_ms, warnings)
         redis_written = self._write_redis_snapshot(bar, warnings)
         updates_published = self._publish_update(bar, warnings)
+        degraded_reasons: list[str] = []
+        if not redis_written:
+            degraded_reasons.append("redis_write_failed")
+        if not updates_published:
+            degraded_reasons.append("pubsub_failed")
+        if ssot_written and degraded_reasons:
+            if self._degraded_warning_flag:
+                warnings.append("degraded_reason:" + ",".join(degraded_reasons))
+            self._mark_split_brain_active(bar, degraded_reasons)
+
         if ssot_written:
             self._wm_by_key[(bar.symbol, bar.tf_s)] = bar.open_time_ms
         if ssot_written:
@@ -1264,10 +1341,12 @@ class UnifiedDataStore:
     def _write_redis_snapshot(self, bar: CandleBar, warnings: list[str]) -> bool:
         if self._redis_writer is None:
             warnings.append("redis_writer_missing")
+            _METRIC_REDIS_WRITE_FAIL_TOTAL.inc()
             Logging.warning(
-                "UDS: redis snapshots writer відсутній symbol=%s tf_s=%s",
+                "[DEGRADED] [%s] [UDS] Redis snapshot writer відсутній tf_s=%s | %s",
                 bar.symbol,
                 bar.tf_s,
+                self._head_tail_marker(bar),
             )
             return False
         try:
@@ -1275,20 +1354,27 @@ class UnifiedDataStore:
             return True
         except Exception as exc:
             warnings.append("redis_write_failed")
+            _METRIC_REDIS_WRITE_FAIL_TOTAL.inc()
             Logging.warning(
-                "UDS: redis snapshots write failed symbol=%s tf_s=%s err=%s",
+                "[DEGRADED] [%s] [UDS] Помилка запису Redis snapshot tf_s=%s err=%s | %s",
                 bar.symbol,
                 bar.tf_s,
                 exc,
+                self._head_tail_marker(bar),
             )
             return False
 
     def _publish_update(self, bar: CandleBar, warnings: list[str]) -> bool:
         if self._updates_bus is None:
             warnings.append("updates_bus_missing")
+            _METRIC_PUBSUB_FAIL_TOTAL.inc()
             if not self._updates_bus_warned:
                 self._updates_bus_warned = True
-                Logging.warning("UDS: updates bus відсутній, update events не публікуються")
+                Logging.warning(
+                    "[DEGRADED] [%s] [UDS] updates bus відсутній, events не публікуються | %s",
+                    bar.symbol,
+                    self._head_tail_marker(bar),
+                )
             return False
         try:
             bar_payload = bar.to_dict()
@@ -1307,7 +1393,13 @@ class UnifiedDataStore:
             return True
         except Exception as exc:
             warnings.append("updates_publish_failed")
-            Logging.warning("UDS: updates publish failed err=%s", exc)
+            _METRIC_PUBSUB_FAIL_TOTAL.inc()
+            Logging.warning(
+                "[DEGRADED] [%s] [UDS] Помилка публікації updates err=%s | %s",
+                bar.symbol,
+                exc,
+                self._head_tail_marker(bar),
+            )
             return False
 
     # ── P1: disk_policy enforcement ─────────────────────────
@@ -1589,6 +1681,25 @@ class UnifiedDataStore:
                 "src": str(b.get("src", "")),
                 "complete": complete,
             }
+            ext_raw = b.get("extensions")
+            if isinstance(ext_raw, dict) and ext_raw:
+                item["extensions"] = dict(ext_raw)
+
+                # Downstream soft-penalty: partial bars не відкидаємо hard,
+                # але додаємо явний penalty для аналітики/сигналів.
+                is_partial = bool(
+                    ext_raw.get("partial")
+                    or ext_raw.get("partial_calendar_pause")
+                    or ext_raw.get("boundary_partial")
+                )
+                if is_partial:
+                    src_n = ext_raw.get("source_count")
+                    exp_n = ext_raw.get("expected_count")
+                    if isinstance(src_n, int) and isinstance(exp_n, int) and exp_n > 0:
+                        # Динамічний soft-penalty: частка пропущених source-барів.
+                        item["partial_penalty"] = round(max(0.0, min(1.0, 1.0 - (src_n / exp_n))), 4)
+                    else:
+                        item["partial_penalty"] = 0.15
             if complete and "close_time_ms" in b:
                 item["event_ts"] = int(b.get("close_time_ms"))
             if "last_price" in b:

@@ -125,6 +125,8 @@ UDS ініціалізується з `role="reader"` — будь-яка спр
 
 - Для **preview TF** (60, 180): `uds.read_preview_window()` (Redis preview keyspace)
 - Для **final TF** (300+): `uds.read_window()` з `disk_policy="never"`, `prefer_redis=true` (Redis snap → RAM → degraded)
+- Для partial-derived барів (`extensions.partial=true` / `partial_calendar_pause=true`) API зберігає `complete=true` (bucket elapsed). Для downstream повертається `partial_penalty` (soft-penalty): якщо є `source_count/expected_count`, тоді `partial_penalty = 1 - source_count/expected_count`; інакше fallback 0.15.
+- `extensions.partial_reasons[]` дозволяє однозначно кодувати співіснування причин (`calendar_pause`, `boundary_gap`) без зміни старих полів.
 - Для **align=tv (H4)**: derived H4 з H1 final-only, anchor_remainder_ms=10800000, без запису в SSOT; `meta.source=derived_h1_final`, redis_* не повертаються у top-level. Неповний bucket перед calendar break повертається як partial (`complete=false`, `warnings+=derived_partial_bucket`, `extensions.partial_reason=calendar_break|calendar_break_no_m5`).
 
 **Stitching**: якщо `ui_stitching_enabled=true` у config.json → `open[i]=close[i-1]` (display-only, SSOT не модифікується). За замовчуванням `false`.

@@ -251,8 +251,12 @@ def aggregate_bars(
 
     extensions: Dict[str, Any] = {}
     if len(trading) < len(bars):
+        extensions["partial"] = True
         extensions["partial_calendar_pause"] = True
         extensions["calendar_pause_count"] = len(bars) - len(trading)
+        extensions["source_count"] = len(trading)
+        extensions["expected_count"] = len(bars)
+        extensions["partial_reasons"] = ["calendar_pause"]
 
     out = CandleBar(
         symbol=symbol,
@@ -429,9 +433,16 @@ def derive_bar(
         return None
 
     # Degraded-but-loud: позначаємо як boundary partial (§9)
+    result.extensions["partial"] = True
     result.extensions["boundary_partial"] = True
-    result.extensions["source_count"] = len(bars)
+    result.extensions["source_count"] = int(result.extensions.get("source_count", len(bars)))
     result.extensions["expected_count"] = expected_trading
+    reasons = result.extensions.get("partial_reasons")
+    if not isinstance(reasons, list):
+        reasons = []
+    if "boundary_gap" not in reasons:
+        reasons.append("boundary_gap")
+    result.extensions["partial_reasons"] = reasons
     if mid_gaps > 0:
         result.extensions["mid_session_gaps"] = mid_gaps
     return result

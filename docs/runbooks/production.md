@@ -318,6 +318,21 @@ server {
 
 Disk-дані (JSONL) є SSOT. Якщо Redis втрачено — система re-prime з диску при рестарті. Disk є джерелом для scrollback (explicit запити з `to_open_ms`).
 
+### Manual recovery: replay from disk to Redis
+
+**Коли запускати**: якщо `ai_one_uds_split_brain_active=1` і в логах є `[DEGRADED] [UDS] commit_final_bar: disk append ok, але Redis/pubsub деградовано`.
+
+1. Зупинити writers (`m1_poller`, derive workers), щоб не змінювався watermark.
+2. Переграти SSOT JSONL у Redis snapshot ключі для проблемних `symbol/tf_s` (внутрішній replay-скрипт або штатний re-prime).
+3. Перевірити tail у Redis (`redis-cli ... GET <tail_key>`), а також `/api/bars` без `redis_down` warning.
+4. Після успішної реконсиляції викликати `UnifiedDataStore.mark_split_brain_reconciled(source="manual_replay")`.
+
+**Критерій скидання split-brain**:
+
+- `ai_one_uds_split_brain_active` переходить у `0`.
+- Нові `commit_final_bar` не додають `degraded_reason:*` у warnings.
+- Лог містить `[RECOVERED] [UDS] split-brain скинуто після реконсиляції`.
+
 **Scrollback rails (P11)**:
 
 - `disk_policy="explicit"` — диск дозволений тільки для scrollback, bootstrap залишається в 60s вікні.
