@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://<твій-публічний-домен-api>/api/:path*"
+      "destination": "https://API_HOST/api/:path*"
     }
   ]
 }
