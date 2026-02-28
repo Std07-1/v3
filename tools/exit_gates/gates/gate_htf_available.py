@@ -77,6 +77,9 @@ def _check_allowlist_htf(root: str) -> Tuple[bool, str, Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 def _check_coldstart_catchup(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     cfg = _load_config(root)
+    # ADR-0023: connector disabled → cold-start N/A
+    if not cfg.get("broker_base_tfs_s", []):
+        return True, "broker_base_tfs_s=[] — connector disabled (ADR-0023), skip", {}
     if not cfg.get("broker_base_cold_start_enabled", False):
         return False, "broker_base_cold_start_enabled=false", {}
 
@@ -115,6 +118,9 @@ def _check_coldstart_catchup(root: str) -> Tuple[bool, str, Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 def _check_onclose_no_double_apply(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     cfg = _load_config(root)
+    # ADR-0023: connector disabled → on-close N/A
+    if not cfg.get("broker_base_tfs_s", []):
+        return True, "broker_base_tfs_s=[] — connector disabled (ADR-0023), skip", {}
     if not cfg.get("broker_base_fetch_on_close", False):
         return False, "broker_base_fetch_on_close=false", {}
 

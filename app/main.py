@@ -34,9 +34,9 @@ def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--mode",
-        choices=["all", "connector", "ui", "tick_preview", "tick_publisher", "m1_poller", "ws_server"],
+        choices=["all", "ui", "tick_preview", "tick_publisher", "m1_poller", "ws_server"],
         default="all",
-        help="all | connector | ui | tick_preview | tick_publisher | m1_poller | ws_server",
+        help="all | ui | tick_preview | tick_publisher | m1_poller | ws_server",
     )
     ap.add_argument(
         "--stdio",
@@ -64,7 +64,6 @@ class ChildProcess:
 # S2 (ADR-0003): категорії процесів + restart backoff
 # ---------------------------------------------------------------------------
 _PROCESS_CATEGORIES: Dict[str, str] = {
-    "connector": "critical",
     "m1_poller": "critical",
     "tick_publisher": "non_critical",
     "tick_preview": "non_critical",
@@ -192,10 +191,11 @@ def _start_process(
 
 
 def _wait_for_prime_ready(config_path: str, timeout_s: int = 30) -> bool:
-    """AND-gate: чекає prime:ready (connector) + prime:ready:m1 (m1_poller).
+    """AND-gate: чекає prime:ready:m1 (m1_poller).
 
-    Повертає True якщо обидва компоненти ready, False при timeout.
+    Повертає True якщо m1_poller ready, False при timeout.
     timeout_s береться з config.json → bootstrap.prime_ready_timeout_s (default=30).
+    Connector видалено (ADR-0023).
     """
     if redis_lib is None:
         logging.warning("PRIME_READY_WAIT_SKIP reason=redis_package_missing")
@@ -225,9 +225,8 @@ def _wait_for_prime_ready(config_path: str, timeout_s: int = 30) -> bool:
         logging.info("PRIME_READY_WAIT_SKIP reason=redis_disabled")
         return False
 
-    # AND-gate: connector + m1_poller (S3 ADR-0003)
+    # AND-gate: m1_poller prime:ready (ADR-0003; connector disabled ADR-0023)
     keys = {
-        "connector": f"{spec.namespace}:prime:ready",
         "m1": f"{spec.namespace}:prime:ready:m1",
     }
 
@@ -326,16 +325,6 @@ def main() -> int:
 
     processes: List[ChildProcess] = []
     try:
-        if args.mode in ("all", "connector"):
-            processes.append(
-                _start_process(
-                    label="connector",
-                    module="app.main_connector",
-                    stdio=stdio,
-                    log_dir=log_dir,
-                    new_console=args.new_console,
-                )
-            )
         if args.mode in ("all", "tick_preview"):
             processes.append(
                 _start_process(

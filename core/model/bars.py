@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import logging
 from typing import Any, Dict, FrozenSet, Tuple
+
+_log = logging.getLogger(__name__)
 
 
 # ── FINAL_SOURCES: єдиний SSOT (S3 remediation) ──────────────
@@ -71,6 +74,23 @@ def assert_invariants(b: CandleBar, anchor_offset_s: int = 0) -> None:
         )
     if b.tf_s == 60 and b.src == "derived":
         raise ValueError("derived_1m_forbidden")
+    # OHLC consistency (degraded-but-loud, не crash)
+    prices = (b.o, b.h, b.low, b.c)
+    if b.h < max(prices) or b.low > min(prices):
+        _log.warning(
+            "OHLC_BROKEN sym=%s tf=%d open_ms=%d src=%s "
+            "o=%.5f h=%.5f l=%.5f c=%.5f expected_h=%.5f expected_l=%.5f",
+            b.symbol, b.tf_s, b.open_time_ms, b.src,
+            b.o, b.h, b.low, b.c, max(prices), min(prices),
+        )
+
+
+def normalize_ohlc(o: float, h: float, low: float, c: float) -> tuple:
+    """Нормалізує OHLC: h = max(o,h,l,c), low = min(o,h,l,c).
+
+    Ідемпотентна pure function. Якщо дані коректні — нічого не міняє.
+    """
+    return o, max(o, h, low, c), min(o, h, low, c), c
 
 
 def ms_to_utc_dt(ms: int) -> dt.datetime:

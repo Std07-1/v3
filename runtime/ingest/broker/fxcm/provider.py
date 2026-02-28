@@ -224,7 +224,12 @@ def normalize_history_to_bars(
             close_ms = open_ms + tf_s * 1000
 
             o, h, low, c = extract_ohlc(r)
+            # Нормалізація OHLC: broker може повернути h < close (bid/ask артефакт)
+            h = max(o, h, low, c)
+            low = min(o, h, low, c)
             v = extract_volume(r)
+            if v < 0.0:
+                v = 0.0
 
             b = CandleBar(
                 symbol=symbol,

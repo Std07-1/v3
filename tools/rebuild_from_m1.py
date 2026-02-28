@@ -3,7 +3,7 @@
 Заповнює гапи у M3→M5→M15→M30→H1→H4, використовуючи core/derive.py
 (GenericBuffer + derive_bar) і calendar-aware boundary tolerance.
 
-Не змінює M1 (source) і D1 (broker-only).
+Не змінює M1 (source). D1 тепер derived (ADR-0023).
 Не змінює SSOT формат — append-only через JsonlAppender.
 
 Запуск:
@@ -18,20 +18,17 @@ import json
 import logging
 import os
 import time
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional
 
-from app.composition import load_config
-from core.buckets import bucket_start_ms, resolve_anchor_offset_ms
-from core.config_loader import pick_config_path
+from core.buckets import bucket_start_ms
+from core.config_loader import load_system_config as load_config, pick_config_path
 from core.derive import (
-    DERIVE_CHAIN,
     DERIVE_ORDER,
-    DERIVE_SOURCE,
     GenericBuffer,
     derive_bar,
 )
-from core.model.bars import CandleBar, assert_invariants
-from runtime.ingest.market_calendar import MarketCalendar, parse_hm
+from core.model.bars import CandleBar
+from runtime.ingest.market_calendar import MarketCalendar
 from runtime.store.ssot_jsonl import (
     JsonlAppender,
     head_first_bar_time_ms,
@@ -310,7 +307,6 @@ def rebuild_one_symbol(
         ao_s = anchor_offset_s if target_tf_s >= 14400 else 0
         ao_ms = ao_s * 1000
         target_tf_ms = target_tf_s * 1000
-        source_tf_ms = source_tf_s * 1000
 
         # Читаємо source TF з диску
         source_buf = GenericBuffer(source_tf_s, max_keep=50000)

@@ -1,33 +1,10 @@
 {
     "symbol": "XAU/USD",
     "symbols": [
-        "XAU/USD",
-        "EUSTX50",
-        "GBP/CAD",
-        "GER30",
-        "HKG33",
-        "NAS100",
-        "NGAS",
-        "NZD/CAD",
-        "SPX500",
-        "US30",
-        "USD/CAD",
-        "USD/JPY",
-        "XAG/USD"
+        "XAU/USD"
     ],
     "data_root": "./data_v3",
     "safety_delay_s": 2,
-    "connector_retry_base_s": 10,
-    "connector_retry_max_s": 3600,
-    "connector_wake_ahead_s": 900,
-    "history_summary_interval_s": 600,
-    "history_still_failing_interval_s": 600,
-    "history_circuit_fail_streak": 3,
-    "history_circuit_base_s": 300,
-    "history_circuit_max_s": 900,
-    "history_circuit_log_interval_s": 300,
-    "history_symbols_sample_n": 3,
-    "history_network_error_escalate_s": 600,
     "m1_poller": {
         "enabled": true,
         "tail_fetch_n": 5,
@@ -43,18 +20,11 @@
         "live_recover_log_interval_s": 60,
         "stale_s": 720
     },
-    "broker_base_tfs_s": [
+    "broker_base_tfs_s": [],
+    "derived_tfs_s": [
+        14400,
         86400
     ],
-    "derived_tfs_s": [
-        14400
-    ],
-    "broker_base_fetch_on_close": true,
-    "broker_base_max_tf_per_poll": 0,
-    "broker_base_cold_start_enabled": true,
-    "broker_base_cold_start_counts": {
-        "86400": 180
-    },
     "tf_allowlist_s": [
         60,
         180,
@@ -159,10 +129,7 @@
     ],
     "market_boundary_slip_minutes_per_day": 2,
     "day_anchor_offset_s": 82800,
-    "day_anchor_offset_s_alt": 79200,
-    "day_anchor_offset_s_alt2": 68400,
-    "day_anchor_offset_s_d1": 75600,
-    "day_anchor_offset_s_d1_alt": 79200,
+    "day_anchor_offset_s_d1": 79200,
     "ssot_jsonl_fsync": false,
     "ui_debug": true,
     "group_logs_enabled": true,
@@ -229,7 +196,7 @@
         "prime_ready_timeout_s": 120,
         "cascade_catchup_m1_bars": 1440,
         "derive_warmup_bars_by_tf": {
-            "60": 300,
+            "60": 1500,
             "300": 20,
             "900": 10,
             "1800": 10,

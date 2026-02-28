@@ -30,7 +30,8 @@ from core.buckets import bucket_start_ms as _bucket_start_ms
 
 DERIVE_CHAIN: Dict[int, List[Tuple[int, int]]] = {
     60:   [(180, 3),      # M3  = 3 × M1
-           (300, 5)],     # M5  = 5 × M1
+           (300, 5),      # M5  = 5 × M1
+           (86400, 1440)], # D1  = 1440 × M1 (ADR-0023: live derive from M1)
     300:  [(900, 3)],     # M15 = 3 × M5
     900:  [(1800, 2)],    # M30 = 2 × M15
     1800: [(3600, 2)],    # H1  = 2 × M30
@@ -38,7 +39,8 @@ DERIVE_CHAIN: Dict[int, List[Tuple[int, int]]] = {
 }
 
 # Повний порядок виконання cascade (від найнижчого до найвищого)
-DERIVE_ORDER: List[int] = [180, 300, 900, 1800, 3600, 14400]
+# D1 перед M15 (900) бо source=M1 (60), не залежить від M5+
+DERIVE_ORDER: List[int] = [180, 300, 86400, 900, 1800, 3600, 14400]
 
 # Зворотній маппінг: target_tf_s → (source_tf_s, bars_needed)
 DERIVE_SOURCE: Dict[int, Tuple[int, int]] = {}
@@ -48,7 +50,39 @@ for _src_tf, _targets in DERIVE_CHAIN.items():
 
 # ADR-0005: максимум пропущених mid-session source-слотів на 1 derived bucket.
 # Rollback: встановити 0 → повна regression до попередньої поведінки.
+# Per-TF override: D1 дозволяє більше gap-ів через 1440 source-слотів.
 MAX_MID_SESSION_GAPS: int = 3
+MAX_MID_SESSION_GAPS_BY_TF: Dict[int, int] = {
+    86400: 15,  # D1: 1440 M1 slots, breaks/gaps можуть бути ширші
+}
+
+
+# ---------------------------------------------------------------------------
+# resolve_cascade_anchor_s — SSOT для anchor routing по TF (ADR-0023)
+# ---------------------------------------------------------------------------
+def resolve_cascade_anchor_s(
+    target_tf_s: int,
+    h4_anchor_offset_s: int = 0,
+    d1_anchor_offset_s: int = 0,
+) -> int:
+    """Єдина точка визначення anchor offset для каскадної деривації.
+
+    Guardrail: будь-який новий HTF (Weekly тощо) — додати сюди.
+    Без цієї функції anchor routing дублюється у 5+ місцях.
+
+    Args:
+        target_tf_s: цільовий TF.
+        h4_anchor_offset_s: anchor для H4 (82800 = 23:00 UTC).
+        d1_anchor_offset_s: anchor для D1 (79200 = 22:00 UTC, ADR-0023).
+
+    Returns:
+        anchor offset в секундах.
+    """
+    if target_tf_s == 86400:
+        return d1_anchor_offset_s
+    elif target_tf_s >= 14400:
+        return h4_anchor_offset_s
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +378,7 @@ def derive_bar(
     source_buffer: "GenericBuffer",
     bucket_open_ms: int,
     anchor_offset_s: int = 0,
+    d1_anchor_offset_s: int = 0,
     is_trading_fn: Optional[Callable[[int], bool]] = None,
     filter_calendar_pause: bool = True,
 ) -> Optional[CandleBar]:
@@ -366,7 +401,8 @@ def derive_bar(
         target_tf_s: цільовий TF.
         source_buffer: буфер з барами джерельного TF.
         bucket_open_ms: open_time_ms цільового bucket.
-        anchor_offset_s: для HTF (H4: TV anchor).
+        anchor_offset_s: для HTF (H4: TV anchor 82800).
+        d1_anchor_offset_s: D1 anchor (79200, ADR-0023).
         is_trading_fn: calendar filter (is_trading_minute).
         filter_calendar_pause: чи ігнорувати calendar_pause_flat.
 
@@ -380,6 +416,9 @@ def derive_bar(
     expected_source_tf_s, _ = source_info
     if source_buffer.tf_s != expected_source_tf_s:
         return None
+
+    # Централізований anchor routing (ADR-0023)
+    effective_anchor = resolve_cascade_anchor_s(target_tf_s, anchor_offset_s, d1_anchor_offset_s)
 
     target_tf_ms = target_tf_s * 1000
     bucket_close_ms = bucket_open_ms + target_tf_ms
@@ -398,7 +437,7 @@ def derive_bar(
             symbol=symbol,
             target_tf_s=target_tf_s,
             bucket_open_ms=bucket_open_ms,
-            anchor_offset_s=anchor_offset_s,
+            anchor_offset_s=effective_anchor,
             filter_calendar_pause=filter_calendar_pause,
         )
 
@@ -406,9 +445,12 @@ def derive_bar(
     if is_trading_fn is None:
         return None
 
+    # Per-TF max_mid_session_gaps (ADR-0023: D1 дозволяє більше gaps)
+    tf_max_gaps = MAX_MID_SESSION_GAPS_BY_TF.get(target_tf_s, MAX_MID_SESSION_GAPS)
+
     result_tol = _collect_boundary_tolerant(
         source_buffer, bucket_open_ms, bucket_close_ms, is_trading_fn,
-        max_mid_session_gaps=MAX_MID_SESSION_GAPS,
+        max_mid_session_gaps=tf_max_gaps,
     )
     if not result_tol:
         return None
@@ -426,7 +468,7 @@ def derive_bar(
         symbol=symbol,
         target_tf_s=target_tf_s,
         bucket_open_ms=bucket_open_ms,
-        anchor_offset_s=anchor_offset_s,
+        anchor_offset_s=effective_anchor,
         filter_calendar_pause=filter_calendar_pause,
     )
     if result is None:
@@ -476,6 +518,7 @@ def derive_triggers(
     source_bar: CandleBar,
     anchor_offset_s: int = 0,
     is_trading_fn: Optional[Callable[[int], bool]] = None,
+    d1_anchor_offset_s: int = 0,
 ) -> List[Tuple[int, int]]:
     """Визначає які target bucket'и слід перевірити після commit source_bar.
 
@@ -491,6 +534,10 @@ def derive_triggers(
     (daily break), шукаємо останній слот з торговою активністю.
     Це фіксить H4 19:00 для груп cfd_us_22_23 / fx_24x5_utc_winter,
     де partial break перекриває останній H1/M30/M15/M5 у bucket.
+
+    Args:
+        anchor_offset_s: H4 anchor (82800 = 23:00 UTC).
+        d1_anchor_offset_s: D1 anchor (79200 = 22:00 UTC, ADR-0023).
     """
     source_tf_s = source_bar.tf_s
     targets = DERIVE_CHAIN.get(source_tf_s, [])
@@ -502,7 +549,8 @@ def derive_triggers(
 
     for target_tf_s, _ in targets:
         target_tf_ms = target_tf_s * 1000
-        anchor_offset_ms = anchor_offset_s * 1000 if target_tf_s >= 14400 else 0
+        anchor = resolve_cascade_anchor_s(target_tf_s, anchor_offset_s, d1_anchor_offset_s)
+        anchor_offset_ms = anchor * 1000
 
         bucket_open = _bucket_start_ms(
             source_bar.open_time_ms, target_tf_ms, anchor_offset_ms

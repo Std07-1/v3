@@ -479,6 +479,62 @@ async def _safe_broadcast(
     return t_send_ms
 
 
+def _seed_forming_from_uds(
+    app: web.Application,
+    symbol: str,
+    tf_s: int,
+    bucket_open_ms: int,
+    fallback_price: float,
+) -> Dict[str, Any]:
+    """Seed forming candle з UDS (поточний бар для bucket_open_ms).
+
+    Після рестарту forming_by_target = {}. Без seed open = перший тік
+    (хибний D1 open). Якщо UDS має бар для цього bucket — береться O/H/L.
+    Якщо UDS ще порожній — fallback на tick_price (degraded-but-loud).
+    """
+    uds = app.get("_uds")
+    if uds is not None:
+        try:
+            from runtime.store.uds import WindowSpec, ReadPolicy
+            spec = WindowSpec(
+                symbol=symbol, tf_s=tf_s, limit=2,
+                to_open_ms=None, cold_load=False,
+            )
+            policy = ReadPolicy(disk_policy="explicit", prefer_redis=True)
+            result = uds.read_window(spec, policy)
+            bars_lwc = getattr(result, "bars_lwc", [])
+            for b in reversed(bars_lwc):
+                b_open = b.get("open_time_ms") or b.get("open_ms", 0)
+                if b_open == bucket_open_ms:
+                    _log.info(
+                        "D1_FORMING_SEED_UDS sym=%s open_ms=%d o=%.2f h=%.2f l=%.2f",
+                        symbol, bucket_open_ms,
+                        b.get("open", b.get("o", 0)),
+                        b.get("high", b.get("h", 0)),
+                        b.get("low", b.get("l", 0)),
+                    )
+                    return {
+                        "symbol": symbol,
+                        "o": float(b.get("open", b.get("o", fallback_price))),
+                        "h": float(b.get("high", b.get("h", fallback_price))),
+                        "l": float(b.get("low", b.get("l", fallback_price))),
+                        "c": fallback_price,
+                        "open_ms": bucket_open_ms,
+                    }
+        except Exception as exc:
+            _log.warning("D1_FORMING_SEED_ERR sym=%s err=%s", symbol, exc)
+    # Fallback: немає UDS даних → чистий тік (degraded-but-loud)
+    _log.warning(
+        "D1_FORMING_NO_SEED sym=%s open_ms=%d price=%.2f "
+        "— open буде першим тіком після рестарту",
+        symbol, bucket_open_ms, fallback_price,
+    )
+    return {
+        "symbol": symbol, "o": fallback_price, "h": fallback_price,
+        "l": fallback_price, "c": fallback_price, "open_ms": bucket_open_ms,
+    }
+
+
 async def _global_delta_loop(app: web.Application) -> None:
     """ADR-0011: Global Background task: poll UDS read_updates → serialize once → fanout."""
     poll_s = app.get("_delta_poll_s", DEFAULT_DELTA_POLL_S)
@@ -526,7 +582,6 @@ async def _global_delta_loop(app: web.Application) -> None:
                         d1_relay_tfs: set = app.get("_d1_tick_relay_tfs", set())
                         tick_redis = app.get("_tick_redis_client")
                         tick_ns = app.get("_tick_redis_ns", "")
-                        payload: Optional[str] = None
                         if tf_s in d1_relay_tfs and tick_redis is not None:
                             try:
                                 tick_key = f"{tick_ns}:tick:last:{symbol.replace('/', '_')}"
@@ -540,10 +595,16 @@ async def _global_delta_loop(app: web.Application) -> None:
                                     if tick_price > 0 and tick_ts_ms > 0:
                                         forming = forming_by_target.get((symbol, tf_s))
                                         if forming is None:
-                                            forming = {
-                                                "symbol": symbol, "o": tick_price, "h": tick_price,
-                                                "l": tick_price, "c": tick_price, "open_ms": 0,
-                                            }
+                                            # ── ADR: seed forming з UDS при рестарті ──
+                                            # Без seed open = перший тік після рестарту (хибний).
+                                            # Читаємо поточний бар з UDS щоб успадкувати O/H/L.
+                                            from core.buckets import bucket_start_ms, resolve_anchor_offset_ms
+                                            cfg = app.get("_full_config", {})
+                                            anchor_ms = resolve_anchor_offset_ms(tf_s, cfg)
+                                            seed_open_ms = bucket_start_ms(tick_ts_ms, tf_s * 1000, anchor_ms)
+                                            forming = _seed_forming_from_uds(
+                                                app, symbol, tf_s, seed_open_ms, tick_price,
+                                            )
                                         forming["h"] = max(forming["h"], tick_price)
                                         forming["l"] = min(forming["l"], tick_price)
                                         forming["c"] = tick_price
@@ -613,7 +674,6 @@ async def _global_delta_loop(app: web.Application) -> None:
                     candles, dropped = map_bars_to_candles_v4(bars, tf_s=tf_s)
                     candles.sort(key=lambda c: c.get("t_ms", 0))
                     
-                    payload = None
                     if candles:
                         warnings = getattr(result, "warnings", [])
                         if dropped > 0: 

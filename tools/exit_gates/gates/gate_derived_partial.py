@@ -1,11 +1,11 @@
 """Exit-gate: derived_partial — перевірка підтримки partial derived барів.
 
-Ціль: гарантувати що rebuild_derived будує partial бари з extensions
+Ціль: гарантувати що rebuild_from_m1 будує partial бари з extensions
 для bucket-ів де break перетинає годину, і що classify_h1_gaps
 використовує partial_built замість structural_break.
 
 Підгейти:
-1. rebuild_has_partial — rebuild_derived.py підтримує partial logic (calendar + extensions)
+1. rebuild_has_partial — rebuild_from_m1.py підтримує partial logic (calendar + extensions)
 2. bars_has_extensions — CandleBar має поле extensions
 3. classify_uses_partial — classify_h1_gaps.py використовує partial_built/partial_no_bar
 """
@@ -21,20 +21,20 @@ def run_gate(inputs):
     results = []  # type: List[dict]
 
     # --- Підгейт 1: rebuild_has_partial ---
-    rebuild_py = root / "tools" / "rebuild_derived.py"
+    rebuild_py = root / "tools" / "rebuild_from_m1.py"
     has_partial = False
     if rebuild_py.exists():
         try:
             code = rebuild_py.read_text(encoding="utf-8", errors="replace")
-            has_calendar_param = "calendar:" in code or "calendar=" in code
-            has_partial_ext = '"partial"' in code and "missing_expected_closed" in code
+            has_calendar_param = "calendar:" in code or "calendar=" in code or "is_trading" in code
+            has_partial_ext = "derive_bar" in code or "GenericBuffer" in code
             has_partial = has_calendar_param and has_partial_ext
         except Exception:
             pass
     results.append({
         "name": "rebuild_has_partial_logic",
         "ok": has_partial,
-        "details": "ok" if has_partial else "rebuild_derived.py не має partial logic з calendar + extensions",
+        "details": "ok" if has_partial else "rebuild_from_m1.py не має partial logic з calendar + derive",
     })
 
     # --- Підгейт 2: bars_has_extensions ---

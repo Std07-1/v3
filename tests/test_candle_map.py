@@ -1,7 +1,5 @@
 """
-tests/test_candle_map.py — 7 тестів для runtime/ws/candle_map.py.
-
-P0 exit-gate: pytest tests/test_candle_map.py -v → 7 passed.
+tests/test_candle_map.py — тести для runtime/ws/candle_map.py.
 """
 
 from __future__ import annotations
@@ -10,6 +8,7 @@ import logging
 import pytest
 
 from runtime.ws.candle_map import map_bar_to_candle_v4, map_bars_to_candles_v4
+from core.model.bars import normalize_ohlc
 
 
 # ────────────────────────────────────────────────────────
@@ -158,3 +157,85 @@ def test_map_fallback_time_sec():
     result = map_bar_to_candle_v4(bar)
     assert result is not None
     assert result["t_ms"] == 1740000000000
+
+
+def test_map_normalizes_broken_tails():
+    """Broker artifact: close > high → h нормалізується до max(o,h,l,c)."""
+    bar = {
+        "open": 100.0,
+        "high": 101.0,   # broken: close=120 > high=101
+        "low": 99.0,
+        "close": 120.0,
+        "open_time_ms": 1740000000000,
+    }
+    result = map_bar_to_candle_v4(bar)
+    assert result is not None
+    assert result["h"] == 120.0   # max(100, 101, 99, 120)
+    assert result["l"] == 99.0    # min(100, 101, 99, 120)
+
+
+def test_map_normalizes_low_above_open():
+    """Broker artifact: low > open → low нормалізується до min(o,h,l,c)."""
+    bar = {
+        "open": 95.0,
+        "high": 110.0,
+        "low": 100.0,    # broken: low=100 > open=95
+        "close": 105.0,
+        "open_time_ms": 1740000000000,
+    }
+    result = map_bar_to_candle_v4(bar)
+    assert result is not None
+    assert result["h"] == 110.0
+    assert result["l"] == 95.0    # min(95, 110, 100, 105)
+
+
+def test_map_correct_ohlc_unchanged():
+    """Коректний OHLC не змінюється нормалізацією."""
+    bar = {
+        "open": 100.0,
+        "high": 110.0,
+        "low": 90.0,
+        "close": 105.0,
+        "open_time_ms": 1740000000000,
+    }
+    result = map_bar_to_candle_v4(bar)
+    assert result is not None
+    assert result["o"] == 100.0
+    assert result["h"] == 110.0
+    assert result["l"] == 90.0
+    assert result["c"] == 105.0
+
+
+def test_map_clamps_negative_volume():
+    """Від'ємний volume → 0.0."""
+    bar = {
+        "open": 100.0,
+        "high": 110.0,
+        "low": 90.0,
+        "close": 105.0,
+        "volume": -7.0,
+        "open_time_ms": 1740000000000,
+    }
+    result = map_bar_to_candle_v4(bar)
+    assert result is not None
+    assert result["v"] == 0.0
+
+
+# ────────────────────────────────────────────────────────
+# core/model/bars.normalize_ohlc
+# ────────────────────────────────────────────────────────
+
+
+def test_normalize_ohlc_broken():
+    """close > high → h стає max(o,h,l,c)."""
+    o, h, l, c = normalize_ohlc(100.0, 101.0, 99.0, 120.0)
+    assert h == 120.0
+    assert l == 99.0
+    assert o == 100.0
+    assert c == 120.0
+
+
+def test_normalize_ohlc_correct_noop():
+    """Коректний OHLC → без змін."""
+    o, h, l, c = normalize_ohlc(100.0, 110.0, 90.0, 105.0)
+    assert (o, h, l, c) == (100.0, 110.0, 90.0, 105.0)

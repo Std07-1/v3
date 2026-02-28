@@ -91,10 +91,10 @@ grep -i "SUPERVISOR_RESTART\|SUPERVISOR_EXHAUSTED\|SUPERVISOR_CRITICAL" logs/*.l
 ### Derived rebuild (одноразово після cold start)
 
 ```bash
-python -m tools.rebuild_derived --all
+python -m tools.rebuild_from_m1
 ```
 
-Перевірка: `data_v3/_derived_tail_state.json` має 13 символів.  
+Перевірка: disk TF-файли оновлені для всіх 13 символів.  
 Див. [runbooks/coldstart.md](coldstart.md) для деталей.
 
 ---
@@ -309,7 +309,7 @@ server {
 ### Cold start / Prime (після повної зупинки)
 
 1. Запустити Redis
-2. `python -m tools.rebuild_derived --all` (одноразово)
+2. `python -m tools.rebuild_from_m1` (одноразово)
 3. `python -m app.main --mode all --stdio pipe`
 4. Дочекатись `prime_ready=true` у `/api/status`
 5. Перевірити `/api/bars` для ключових символів/TF

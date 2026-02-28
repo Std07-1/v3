@@ -31,12 +31,15 @@ _tmp_jsonl_stress
 *.swo
 *~
 .agent/
+. AGENTS.md
 
 # ── Дані (runtime, не код) ──────────────────────────────────
 /data_v3/
 /History/
 /exports/
 dump.rdb
+tikcets/
+artifacts/
 
 # ── Node / UI build artifacts ───────────────────────────────
 node_modules/

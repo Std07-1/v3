@@ -138,19 +138,19 @@ def run_gate(inputs: dict) -> dict:
         "details": "ok" if ok3 else f"відсутні у state: {', '.join(missing_state)}",
     })
 
-    # --- Підгейт 4: rebuild_derived.py has --all ---
-    rebuild_py = root / "tools" / "rebuild_derived.py"
+    # --- Підгейт 4: rebuild_from_m1.py has CLI ---
+    rebuild_py = root / "tools" / "rebuild_from_m1.py"
     has_all = False
     if rebuild_py.exists():
         try:
             text = rebuild_py.read_text(encoding="utf-8", errors="replace")
-            has_all = "--all" in text
+            has_all = "--symbol" in text or "--config" in text
         except Exception:
             pass
     results.append({
         "name": "rebuild_tool_has_batch",
         "ok": has_all,
-        "details": "ok" if has_all else "rebuild_derived.py не має --all flag",
+        "details": "ok" if has_all else "rebuild_from_m1.py не має CLI",
     })
 
     # --- Підгейт 5: priming budget >= 5 ---

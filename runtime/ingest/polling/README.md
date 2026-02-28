@@ -54,8 +54,8 @@ A: Broker (FXCM)                    C: UDS (вузька талія)           B
 
 | Площина | TF | Джерело | Процес |
 | --- | --- | --- | --- |
-| SSOT-1 | M1 → M3, M5, M15, M30, H1, H4 | FXCM M1 History + DeriveEngine | `m1_poller` + `derive_engine` |
-| SSOT-2 | D1 | FXCM D1 History | `engine_b` (D1-only, broker_base) |
+| SSOT-1 | M1 → M3, M5, M15, M30, H1, H4, D1 | FXCM M1 History + DeriveEngine | `m1_poller` + `derive_engine` |
+| SSOT-2 | D1 (legacy) | FXCM D1 History | `engine_b` (D1 fetch OFF, ADR-0023: broker_base_tfs_s=[]) |
 
 **Preview-площина** (tick stream): M1, M3 — через `tick_publisher` + `tick_preview_worker`.
 
@@ -187,7 +187,8 @@ M1SymbolPoller.poll_once():
 
 > **Після ADR-0002**: engine_b **більше не поллить M5** і не деривує M15/M30/H1.
 > M5→H4 derive chain повністю перейшов до `m1_poller` + `DeriveEngine`.
-> engine_b залишився тільки для **D1 broker-based fetch**.
+> **Після ADR-0023**: engine_b D1 fetch вимкнено (`broker_base_tfs_s: []`).
+> D1 тепер derived TF (1440×M1, anchor 79200) через DeriveEngine.
 
 Основний цикл:
 

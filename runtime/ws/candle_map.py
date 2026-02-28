@@ -123,9 +123,15 @@ def map_bar_to_candle_v4(bar: dict, *, tf_s: int = 0) -> Optional[dict]:
         )
         return None
 
-    # --- Volume (optional, default 0) ---
+    # --- Tail normalization (safety net) ---
+    # Навіть якщо source нормалізований — display-шар гарантує що
+    # LWC ніколи не отримає h < close або low > open.
+    h = max(o, h, low, c)
+    low = min(o, h, low, c)
+
+    # --- Volume (optional, default 0; clamp negative) ---
     v = _pick(bar, "volume", "v")
-    if v is None:
+    if v is None or v < 0.0:
         v = 0.0
 
     return {"t_ms": t_ms, "o": o, "h": h, "l": low, "c": c, "v": v}

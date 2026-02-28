@@ -27,12 +27,13 @@
 
 Система має **два SSOT-потоки**:
 
-- **M1→H4 derive chain (основний)** — M1 final bars з FXCM History API (m1_poller) → DeriveEngine cascade: M3(3×M1)→M5(5×M1)→M15(3×M5)→M30(2×M15)→H1(2×M30)→H4(4×H1). Всі TF від M1 до H4 деривуються з одного джерела. Preview-plane: tick stream → TickPreviewWorker → Redis preview keyspace.
-- **D1 (broker)** — глобальний тренд. D1 з FXCM History API fetch на закритті бакета (engine_b, D1-only mode).
+- **M1→H4+D1 derive chain (основний)** — M1 final bars з FXCM History API (m1_poller) → DeriveEngine cascade: M3(3×M1)→M5(5×M1)→M15(3×M5)→M30(2×M15)→H1(2×M30)→H4(4×H1)+D1(1440×M1). Всі TF від M1 до D1 деривуються з одного джерела. Preview-plane: tick stream → TickPreviewWorker → Redis preview keyspace.
+- **D1 (derived, ADR-0023)** — глобальний тренд. D1 = 1440 × M1, anchor 79200s (22:00 UTC). DeriveEngine будує D1 як derived TF; engine_b D1 broker fetch вимкнено (`broker_base_tfs_s: []`).
 
 Supervisor (`app.main --mode all`) керує 5 процесами. UDS є центром читання/запису: writer-и пишуть через UDS (SSOT disk + Redis snapshots + updates bus), UI читає через UDS. Preview-plane (M1/M3) живе в Redis keyspace, final-и з M1 poller проходять bridge до preview ring (final>preview). `/api/bars` для всіх TF застосовує PREVIOUS_CLOSE stitching (open[i]=close[i-1]) для TV-like smooth candles; SSOT на диску не модифікується.
 
-> **ADR-0002 завершено**: engine_b M5 polling вимкнено (m5_polling_enabled=false), derived_tfs_s=[]. Всі TF M1→H4 через m1_poller/DeriveEngine.
+> **ADR-0002 завершено**: engine_b M5 polling вимкнено (m5_polling_enabled=false), derived_tfs_s=[]. Всі TF M1→H4 через m1_poller/DeriveEngine.  
+> **ADR-0023 (D1 derive)**: D1 стає derived TF (1440×M1, anchor 79200). engine_b broker_base_tfs_s=[] — D1 fetch з broker вимкнено.
 
 > **Детальний гайд по отриманню свічок**: [docs/guide_candle_acquisition.md](guide_candle_acquisition.md)
 
@@ -40,10 +41,10 @@ Supervisor (`app.main --mode all`) керує 5 процесами. UDS є це�
 
 ```text
 app.main (supervisor)
-  ├── connector             (FXCM History → UDS final → D1 only; M5 polling OFF)
+  ├── connector             (engine_b; broker_base_tfs_s=[] — D1 fetch OFF, ADR-0023)
   ├── tick_publisher_fxcm   (ForexConnect tick stream → Redis PubSub)
   ├── tick_preview_worker   (Redis PubSub → UDS preview M1/M3)
-  ├── m1_poller             (FXCM M1 History → UDS final M1 + DeriveEngine cascade M3→M5→M15→M30→H1→H4)
+  ├── m1_poller             (FXCM M1 History → UDS final M1 + DeriveEngine cascade M3→M5→M15→M30→H1→H4+D1)
   ├── ui                    (HTTP server, port 8089 — ui_chart_v3 polling)
   └── ws_server             (WS server, port 8000 — ui_v4 real-time, config-gated)
                               Drawing tools: 4 tools (H/T/R/E), glass toolbar, theme-aware (ADR-0007, ADR-0008)
@@ -59,18 +60,18 @@ app.main (supervisor)
 │  Процеси: m1_poller (final), tick_publisher+preview_worker   │
 │  Ізоляція: НЕ впливає на M5+ pipeline                        │
 ├──────────────────────────────────────────────────────────────┤
-│  SSOT-2: M5→H4 (derived від M1, SMC аналітика)               │
+│  SSOT-2: M5→H4+D1 (derived від M1, SMC аналітика)              │
 │  Джерело: DeriveEngine cascade з M1 (m1_poller)              │
 │  M5=5×M1, M15=3×M5, M30=2×M15, H1=2×M30, H4=4×H1          │
-│  Disk: data_v3/{sym}/tf_300..tf_14400/                       │
+│  D1=1440×M1 (anchor 79200, ADR-0023)                         │
+│  Disk: data_v3/{sym}/tf_300..tf_86400/                       │
 │  Процес: m1_poller + DeriveEngine                            │
 │  engine_b M5 polling OFF (ADR-0002 Phase 5)                  │
+│  engine_b D1 fetch OFF (ADR-0023, broker_base_tfs_s=[])      │
 ├──────────────────────────────────────────────────────────────┤
-│  SSOT-3: D1 (глобальний тренд, структурні зони)              │
-│  Джерело: FXCM History API (D1 only)                         │
-│  Disk: data_v3/{sym}/tf_86400/                               │
-│  Процес: connector (D1-only, broker_base fetch on close)     │
-│  engine_b = D1-only fetcher (m5_polling_enabled=false)        │
+│  SSOT-3: D1 (legacy broker, декомісіоновано)                  │
+│  engine_b broker_base_tfs_s: [] (ADR-0023)                   │
+│  Старі D1 бари на диску зберігаються (не перебудовуються)   │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -198,15 +199,15 @@ flowchart LR
         U1 -->|preview curr/tail/updates| RP[(Redis preview)]
         FXCM1[(FXCM M1 History)] -->|poll 8s| M1P[M1Poller]
         M1P -->|commit_final_bar| U2[UDS writer]
-        M1P -->|DeriveEngine cascade| DE[M3→M5→M15→M30→H1→H4]
+        M1P -->|DeriveEngine cascade| DE[M3→M5→M15→M30→H1→H4+D1]
         DE -->|commit all derived TF| U2
-        U2 -->|SSOT write| D1[(data_v3 tf_60..tf_14400)]
+        U2 -->|SSOT write| D1[(data_v3 tf_60..tf_86400)]
         U2 -->|Redis snap + updates bus| R1[(Redis)]
         U2 -->|bridge final→preview ring| RP
     end
-    subgraph SSOT3["D1 (broker)"]
-        FXCMH[(FXCM History)] -->|on bucket close| P[connector D1-only]
-        P -->|commit_final_bar| U3[UDS writer]
+    subgraph SSOT3["D1 (derived, ADR-0023)"]
+        FXCMH[(FXCM History)] -.->|disabled: broker_base_tfs_s=empty| P[connector D1-only]
+        P -.->|disabled| U3[UDS writer]
         U3 -->|SSOT write| DH[(data_v3 tf_86400)]
         U3 -->|Redis snap| R5[(Redis)]
     end
@@ -230,9 +231,9 @@ flowchart LR
         FXH[(History D1)]
     end
     subgraph Writers["Writers (ingest)"]
-        EB[engine_b<br/>D1-only]
+        EB[engine_b<br/>D1 fetch OFF]
         M1P[m1_poller<br/>poll 8s]
-        DRV[DeriveEngine<br/>M3→M5→M15→M30→H1→H4]
+        DRV[DeriveEngine<br/>M3→M5→M15→M30→H1→H4+D1]
     end
     subgraph UDS["C: UDS (вузька талія)"]
         CFB[commit_final_bar]
@@ -572,11 +573,11 @@ flowchart LR
 flowchart TD
     M1[M1 60s] -->|3×| M3[M3 180s]
     M1 -->|5×| M5[M5 300s]
+    M1 -->|1440×| D1[D1 86400s anchor 79200]
     M5 -->|3×| M15[M15 900s]
     M15 -->|2×| M30[M30 1800s]
     M30 -->|2×| H1[H1 3600s]
     H1 -->|4×| H4[H4 14400s TV anchor]
-    Broker -->|D1 broker| D1[D1 86400s]
 ```
 
 **DERIVE_CHAIN** — декларативний strict cascade (кожен TF від попереднього, не плоска деривація).
@@ -586,9 +587,10 @@ flowchart TD
 ### DeriveEngine (runtime/ingest/derive_engine.py, ADR-0002 Phase 2)
 
 I/O обгортка над core/derive.py. Каскад: `on_bar(M1)` → buffer → triggers → derive → UDS commit → recurse.
-`commit_tfs_s` = `set(DERIVE_ORDER)` — всі 6 derived TFs (M3,M5,M15,M30,H1,H4).
+`commit_tfs_s` = `set(DERIVE_ORDER)` — всі 7 derived TFs (M3,M5,M15,M30,H1,H4,D1).
 `register_symbol_uds()` — shared UDS з m1_poller (без file race).
 Per-symbol `threading.Lock` для cascade integrity.
+D1 anchor (79200) передається окремо від H4 anchor (82800) — ADR-0023.
 
 ## Annotated tree (ASCII, актуальний)
 
@@ -678,18 +680,16 @@ v3/
 ├── tools/                         # утиліти / діагностика
 │   ├── backfill_cascade.py        # waterfall M1→H4 backfill з calendar-aware derive
 │   ├── tail_integrity_scanner.py  # цілісність даних: all symbols × all TFs × N days
-│   ├── fetch_m5_isolated.py       # ізольований M5 fetch
-│   ├── rebuild_derived.py         # rebuild derived з M5 (legacy, anchor=0)
-│   ├── rebuild_m15_isolated.py    # ізольований rebuild 15m
+│   ├── rebuild_from_m1.py         # canonical rebuild all derived TFs from M1 (ADR-0023)
 │   ├── purge_broken_bars.py       # чистка пошкоджених JSONL
-│   ├── tick_sim_publisher.py      # симуляція тиків для тестів
 │   ├── run_exit_gates.py          # runner exit-gates
 │   ├── exit_gates/
 │   │   ├── manifest.json          # реєстр gates (22 gate-модулі)
 │   │   └── gates/                 # gate_*.py (22 файлів)
+│   ├── repair/
+│   │   ├── htf_rebuild_from_fxcm.py  # controlled H4/D1 rebuild from FXCM raw
+│   │   └── htf_tail_sync_from_fxcm.py # tail sync from FXCM
 │   └── diag/
-│       ├── check_gaps.py          # перевірка price gaps для всіх TF
-│       ├── check_freshness.py     # перевірка свіжості Redis ключів
 │       ├── classify_h1_gaps.py    # класифікація H1 gap-ів
 │       ├── classify_m5_gaps.py    # класифікація M5 gap-ів
 │       ├── clear_redis_cache.py   # очистка Redis кешу

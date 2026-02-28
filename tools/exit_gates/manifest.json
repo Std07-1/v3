@@ -247,6 +247,13 @@
                     "ui_chart_v3"
                 ]
             }
+        },
+        {
+            "name": "d1_anchor_alignment",
+            "module": "tools.exit_gates.gates.gate_d1_anchor_alignment",
+            "inputs": {
+                "root": "."
+            }
         }
     ]
 }

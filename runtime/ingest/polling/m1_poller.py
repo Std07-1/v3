@@ -1,6 +1,6 @@
 """M1 Poller — отримання фінальних M1 барів з FXCM + каскадна деривація.
 
-Ізольований від M5 pipeline (engine_b). Працює як окремий процес.
+Працює як окремий процес (ADR-0023: єдиний ingest pipeline, broker_base_tfs_s=[]).
 Поллить M1 від FXCM History API щохвилини, коммітить через UDS.
 
 Деривація делегується DeriveEngine (ADR-0002 Phase 2):
@@ -247,7 +247,7 @@ class M1SymbolPoller:
         if bar.tf_s != 60 or not bar.complete:
             return False
 
-        # Calendar-aware flat bar classification (як engine_b)
+        # Calendar-aware flat bar classification
         trading = self._is_market_open(bar.open_time_ms)
         flat = _is_flat(bar)
 
@@ -320,9 +320,8 @@ class M1SymbolPoller:
     def poll_once(self) -> None:
         """Один цикл: calendar-aware cutoff → smart fetch → ingest.
 
-        НЕ має calendar gate (як engine_b): замість блокування poll при
-        market-closed, покладається на calendar-aware expected + caught-up
-        check. Це гарантує що останній бар перед паузою завжди фетчиться.
+НЕ блокує poll при market-closed — покладається на calendar-aware
+        expected + caught-up check. Останній бар перед паузою завжди фетчиться.
         """
         now_ms = _utc_now_ms()
 
@@ -365,7 +364,7 @@ class M1SymbolPoller:
 
         # FXCM може повертати бари у зворотному порядку.
         # Фільтр: тільки бари після watermark і до expected cutoff.
-        # Watermark pre-filter запобігає stale spam в UDS (як engine_b).
+        # Watermark pre-filter запобігає stale spam в UDS.
         if expected > 0:
             bars = [b for b in bars if b.open_time_ms <= expected]
         if self._watermark_ms is not None:
@@ -378,7 +377,7 @@ class M1SymbolPoller:
         for bar in bars:
             self._ingest_bar(bar)
 
-        # P0.2: live recover після звичайного poll (як engine_b.poll_iteration)
+        # P0.2: live recover після звичайного poll
         self._live_recover_check()
 
         # P0.3: stale detection
@@ -393,7 +392,7 @@ class M1SymbolPoller:
         режим recover з cooldown + budget. Кожен цикл перераховує
         вікно від поточного watermark до cutoff.
 
-        Модель: engine_b._live_recover_check() (engine_b.py L1522).
+        Перевіряє gap між watermark і expected, при перевищенні — recover.
         """
         if self._live_recover_max_total_bars <= 0:
             return
@@ -528,7 +527,7 @@ class M1SymbolPoller:
     def _stale_check(self, now_ms: int) -> None:
         """Якщо ринок відкритий і давно не було нового M1 → loud warning.
 
-        Модель: engine_b m5_tail_stale_s логіка.
+        Stale threshold з config (stale_s). Loud WARN + метрика.
         """
         if self._stale_s <= 0:
             return
@@ -577,7 +576,7 @@ class M1SymbolPoller:
         Інваріант P0.1: m1_poller НЕ входить у poll loop поки tail catchup
         не завершився. Гарантує що UI бачить M1 без великих гепів.
 
-        Модель: engine_b._tail_catchup_from_broker() (engine_b.py L428).
+        Фетчить M1 від watermark до cutoff (budget-limited).
         """
         if self._watermark_ms is None:
             return {"tail_catchup_skipped": "no_watermark"}
@@ -1129,11 +1128,13 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
             stale_s=stale_s,
         ))
 
-    # -- DeriveEngine (ADR-0002 P2.3): каскадна деривація M1→H4 --
+    # -- DeriveEngine (ADR-0002 P2.3 + ADR-0023 D1): каскадна деривація M1→H4+D1 --
     derive_engine: Optional[DeriveEngine] = None
     derive_enabled = bool(m1_cfg.get("derive_engine_enabled", True))
     if derive_enabled:
         anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
+        # ADR-0023: D1 anchor (22:00 UTC = 79200s)
+        d1_anchor_offset_s = int(cfg.get("day_anchor_offset_s_d1", 0))
         # Calendar per symbol для DeriveEngine
         calendars_for_engine: Dict[str, MarketCalendar] = {}
         for sym in symbols:
@@ -1146,6 +1147,7 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
         derive_engine = DeriveEngine(
             symbols=symbols,
             anchor_offset_s=anchor_offset_s,
+            d1_anchor_offset_s=d1_anchor_offset_s,
             calendars=calendars_for_engine,
         )
         # Shared UDS: DeriveEngine коммітить через той же UDS (без file race)
@@ -1155,8 +1157,8 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
         for p in pollers:
             p._derive_engine = derive_engine  # noqa: SLF001
         logging.info(
-            "DERIVE_ENGINE_WIRED symbols=%d anchor_offset_s=%d commit_tfs=%s",
-            len(symbols), anchor_offset_s,
+            "DERIVE_ENGINE_WIRED symbols=%d anchor_offset_s=%d d1_anchor=%d commit_tfs=%s",
+            len(symbols), anchor_offset_s, d1_anchor_offset_s,
             sorted(derive_engine._commit_tfs_s),  # noqa: SLF001
         )
 
@@ -1166,7 +1168,7 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
     redis_cfg = cfg.get("redis", {})
     tail_n_raw = redis_cfg.get("tail_n_by_tf_s", {})
     redis_tail_n: Dict[int, int] = {}
-    _PRIME_TFS = (60, 180, 300, 900, 1800, 3600, 14400)  # M1→H4
+    _PRIME_TFS = (60, 180, 300, 900, 1800, 3600, 14400, 86400)  # M1→H4+D1 (ADR-0023)
     for tf_s in _PRIME_TFS:
         val = tail_n_raw.get(str(tf_s), 0)
         if int(val) > 0:

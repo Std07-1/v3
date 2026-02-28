@@ -34,6 +34,7 @@ from core.derive import (
     GenericBuffer,
     derive_bar,
     derive_triggers,
+    resolve_cascade_anchor_s,
 )
 from core.model.bars import CandleBar
 from core.buckets import bucket_start_ms as _bucket_start_ms
@@ -47,16 +48,17 @@ log = logging.getLogger("derive_engine")
 # Ключі = source TFs (з DERIVE_CHAIN keys).
 # ---------------------------------------------------------------------------
 _BUFFER_MAX_KEEP: Dict[int, int] = {
-    60:   2000,   # M1 → M3(3) + M5(5).  ~33h trading
+    60:   2000,   # M1 → M3(3) + M5(5) + D1(1440).  ~33h trading
     300:  500,    # M5 → M15(3).          ~41h
     900:  200,    # M15 → M30(2).         ~50h
     1800: 100,    # M30 → H1(2).          ~50h
     3600: 50,     # H1 → H4(4).           ~50h
+    86400: 5,     # D1 target buffer — overdue dedup (D-03)
 }
 
 # Phase 5 (ADR-0002 завершено): commit всіх derived TFs.
-# engine_b M5 polling вимкнено — DeriveEngine єдине джерело M3→H4.
-# Каскад: M1→M3(3)+M5(5)→M15(3)→M30(2)→H1(2)→H4(4).
+# engine_b M5 polling вимкнено — DeriveEngine єдине джерело M3→H4+D1.
+# Каскад: M1→M3(3)+M5(5)+D1(1440)→M15(3)→M30(2)→H1(2)→H4(4). ADR-0023.
 DEFAULT_COMMIT_TFS_S: Set[int] = set(DERIVE_ORDER)  # {180,300,900,1800,3600,14400}
 
 
@@ -77,6 +79,7 @@ class DeriveEngine:
         self,
         symbols: List[str],
         anchor_offset_s: int = 0,
+        d1_anchor_offset_s: int = 0,
         calendars: Optional[Dict[str, Any]] = None,
         cascade_tfs_s: Optional[Set[int]] = None,
         commit_tfs_s: Optional[Set[int]] = None,
@@ -85,12 +88,14 @@ class DeriveEngine:
         Args:
             symbols: список символів.
             anchor_offset_s: TV anchor offset для H4 (config: day_anchor_offset_s).
+            d1_anchor_offset_s: D1 anchor offset (config: day_anchor_offset_s_d1, ADR-0023).
             calendars: {symbol: MarketCalendar} — calendar per symbol.
             cascade_tfs_s: TFs для деривації (default: DERIVE_ORDER).
             commit_tfs_s: TFs для UDS commit (default: {180, 14400}).
         """
         self._symbols = set(symbols)
         self._anchor_offset_s = anchor_offset_s
+        self._d1_anchor_offset_s = d1_anchor_offset_s
         self._calendars: Dict[str, Any] = dict(calendars or {})
         self._cascade_tfs_s: Set[int] = set(cascade_tfs_s or DERIVE_ORDER)
         self._commit_tfs_s: Set[int] = set(
@@ -117,11 +122,12 @@ class DeriveEngine:
         self._start_ts = time.time()
 
         log.info(
-            "DeriveEngine init: symbols=%d cascade=%s commit=%s anchor=%d",
+            "DeriveEngine init: symbols=%d cascade=%s commit=%s anchor=%d d1_anchor=%d",
             len(symbols),
             sorted(self._cascade_tfs_s),
             sorted(self._commit_tfs_s),
             anchor_offset_s,
+            d1_anchor_offset_s,
         )
 
     # -------------------------------------------------------------------
@@ -241,6 +247,7 @@ class DeriveEngine:
         1800:  4,    # M30: 4 × 30m = 2h
         3600:  3,    # H1:  3 × 1h  = 3h
         14400: 3,    # H4:  3 × 4h  = 12h
+        86400: 1,    # D1:  1 × 24h = 24h (ADR-0023)
     }
 
     def _check_overdue_for_symbol(
@@ -271,10 +278,10 @@ class DeriveEngine:
                 continue
 
             target_tf_ms = target_tf_s * 1000
-            anchor_ms = (
-                self._anchor_offset_s * 1000 if target_tf_s >= 14400 else 0
+            anchor = resolve_cascade_anchor_s(
+                target_tf_s, self._anchor_offset_s, self._d1_anchor_offset_s
             )
-            anchor = self._anchor_offset_s if target_tf_s >= 14400 else 0
+            anchor_ms = anchor * 1000
 
             # Поточний bucket
             cur_bucket = _bucket_start_ms(now_ms, target_tf_ms, anchor_ms)
@@ -296,6 +303,7 @@ class DeriveEngine:
                     source_buffer=source_buf,
                     bucket_open_ms=prev_bucket,
                     anchor_offset_s=anchor,
+                    d1_anchor_offset_s=self._d1_anchor_offset_s,
                     is_trading_fn=is_trading_fn,
                     filter_calendar_pause=True,
                 )
@@ -360,6 +368,7 @@ class DeriveEngine:
             bar,
             anchor_offset_s=self._anchor_offset_s,
             is_trading_fn=is_trading_fn,
+            d1_anchor_offset_s=self._d1_anchor_offset_s,
         )
         if not triggers:
             return committed
@@ -379,8 +388,10 @@ class DeriveEngine:
             if source_buf is None:
                 continue
 
-            # Anchor offset — тільки для H4+ (14400+)
-            anchor = self._anchor_offset_s if target_tf_s >= 14400 else 0
+            # Anchor offset — централізований routing (ADR-0023)
+            anchor = resolve_cascade_anchor_s(
+                target_tf_s, self._anchor_offset_s, self._d1_anchor_offset_s
+            )
 
             derived = derive_bar(
                 symbol=symbol,
@@ -388,12 +399,13 @@ class DeriveEngine:
                 source_buffer=source_buf,
                 bucket_open_ms=bucket_open_ms,
                 anchor_offset_s=anchor,
+                d1_anchor_offset_s=self._d1_anchor_offset_s,
                 is_trading_fn=is_trading_fn,
                 filter_calendar_pause=True,
             )
             if derived is None:
                 # DIAG: лог чому derive_bar повернув None
-                if target_tf_s in (300, 900, 1800, 3600, 14400):
+                if target_tf_s in (300, 900, 1800, 3600, 14400, 86400):
                     src_tf_s = source_info[0]
                     tgt_ms = target_tf_s * 1000
                     b_end = bucket_open_ms + tgt_ms

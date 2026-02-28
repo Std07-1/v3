@@ -4,7 +4,8 @@
 > **Статус**: COMPLETED (Phase 0 ✅, Phase 1 ✅, Phase 2 ✅, Phase 3 ✅, Phase 4 ✅, Phase 5 ✅)  
 > **Initiative**: `derive_chain_m1`  
 > **Навігація**: [docs/index.md](index.md)  
-> **Завершення**: 2026-02-19. engine_b → D1-only (m5_polling_enabled=false, derived_tfs_s=[]). M1→H4 derive chain повністю через m1_poller/DeriveEngine.
+> **Завершення**: 2026-02-19. engine_b → D1-only (m5_polling_enabled=false, derived_tfs_s=[]). M1→H4 derive chain повністю через m1_poller/DeriveEngine.  
+> **Розширення**: [ADR-0023](0023-d1-live-derive-from-m1.md) — D1 Live Derive from M1 (D1 стає derived TF замість broker-fetched, anchor 79200).
 
 ---
 
@@ -369,7 +370,7 @@ if market_open and no new M1 for > stale_s:
 
 - **Market-close bar closing**: H4 19:00 bucket / H1 21:00 — поки працює через calendar-aware expected_count. Окремий initiative для "close bar at market close"
 - **Readiness signal evolution**: Зараз тільки engine_b бере участь у `prime_ready`. У Phase 1+ (коли m1_poller деривує TF, що раніше покривав engine_b) потрібно розширити readiness на комбіновану перевірку: engine_b(D1) + m1_poller(M1→H4). Окремий slice Phase 1
-- **D1 derive від H4**: потенційно Phase 4, але D1 від брокера має специфічну семантику (різні anchor, DST), тому поки broker_base
+- **D1 derive від M1**: → [ADR-0023](0023-d1-live-derive-from-m1.md) (D1 = 1440 × M1, anchor 79200, XAU/USD single-symbol mode)
 - **Одна FXCM сесія**: m1_poller + engine_b(D1) через одну сесію — Phase 3+ опція
 
 ---

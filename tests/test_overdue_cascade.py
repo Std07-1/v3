@@ -221,8 +221,10 @@ class TestOverdueFullChain:
         assert 900 in committed_tfs, f"M15 missing from cascade: {committed_tfs}"
 
     def test_overdue_lookback_covers_key_tfs(self) -> None:
-        """Кожен TF від M3 до H4 має lookback у _OVERDUE_LOOKBACK."""
+        """Кожен TF від M3 до H4+D1 має lookback у _OVERDUE_LOOKBACK."""
         for tf_s in DERIVE_ORDER:
             depth = DeriveEngine._OVERDUE_LOOKBACK.get(tf_s)
             assert depth is not None, f"TF {tf_s} missing from _OVERDUE_LOOKBACK"
-            assert depth >= 2, f"TF {tf_s} lookback={depth} too shallow"
+            # D1 (86400): lookback=1 достатній (один bucket = 24h)
+            min_depth = 1 if tf_s == 86400 else 2
+            assert depth >= min_depth, f"TF {tf_s} lookback={depth} too shallow (min={min_depth})"

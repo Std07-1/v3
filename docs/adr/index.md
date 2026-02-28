@@ -31,6 +31,8 @@
 | [0020](0020-candlebar-extensions-immutability.md) | CandleBar Extensions Immutability | **Proposed** | 2026-02-26 | CandleBar, frozen, Dict, MappingProxyType | `code_review_hardening` |
 | [0021](0021-jsonl-appender-thread-safety.md) | JsonlAppender Thread-Safety | **Proposed** | 2026-02-26 | JsonlAppender, threading.Lock, defense-in-depth | `code_review_hardening` |
 | [0022](0022-ws-audit-operational-docs.md) | WS Audit: Operational Docs (#10–#14) | **Proposed** | 2026-02-26 | has_range, TF mapping, prometheus, rate-limit, shutdown | `code_review_hardening` |
+| [0023](0023-d1-live-derive-from-m1.md) | D1 Live Derive from M1 | **Implemented** | 2026-02-27 | D1, 86400, derive chain, M1→D1, anchor 79200, ADR-0002 extension | `d1_derive_from_m1` |
+| [0024](0024-smc-engine.md) | SMC Engine — Smart Money Concepts | **Proposed** | 2026-02-28 | SMC, OB, FVG, BOS, CHoCH, liquidity, core/smc, replay, mentor | `smc_engine_v1` |
 
 ---
 
@@ -70,4 +72,4 @@
 
 Див. формат у [copilot-instructions.md](../../.github/copilot-instructions.md) → Тема B, Правило B2.
 
-Наступний номер: **0016**
+Наступний номер: **0025**
