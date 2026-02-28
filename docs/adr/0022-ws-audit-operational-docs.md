@@ -1,6 +1,6 @@
 # ADR-0022: WS Server Rate-Limit, Graceful Shutdown та Operational Docs
 
-- **Статус**: Proposed
+- **Статус**: Implemented
 - **Дата**: 2026-02-26
 - **Автор**: code-review audit (111.md, дефекти #10–#14)
 - **Initiative**: `code_review_hardening`

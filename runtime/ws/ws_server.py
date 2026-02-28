@@ -246,6 +246,21 @@ def build_heartbeat_frame(session: WsSession, app: Any = None) -> Dict[str, Any]
     }
 
 
+def _build_error_frame(
+    session: WsSession,
+    code: str,
+    message: str,
+    app: Any = None,
+) -> Dict[str, Any]:
+    """S20/S25: error response frame — degraded-but-loud для клієнта."""
+    return {
+        "type": "render_frame",
+        "frame_type": "error",
+        "error": {"code": code, "message": message},
+        "meta": _build_meta(session, app=app),
+    }
+
+
 def _build_full_frame(
     session: WsSession,
     candles: list,
@@ -807,14 +822,22 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 
 
 async def _handle_action(session: WsSession, raw: str, app: web.Application) -> None:
-    """Розбирає вхідне повідомлення від клієнта. P2: switch + scrollback."""
+    """Розбирає вхідне повідомлення від клієнта. P2: switch + scrollback.
+
+    S20: JSON/schema errors → error frame клієнту (degraded-but-loud).
+    S25: Unknown action → error frame + лог (не silent ignore).
+    """
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         _log.warning("WS_ACTION_INVALID client=%s reason=json_error raw=%.200s", session.client_id, raw)
+        err = _build_error_frame(session, "json_parse_error", "Invalid JSON", app=app)
+        await session.ws.send_json(err)
         return
     if not isinstance(data, dict) or "action" not in data:
         _log.warning("WS_ACTION_INVALID client=%s reason=missing_action raw=%.200s", session.client_id, raw)
+        err = _build_error_frame(session, "missing_action", "Message must have 'action' field", app=app)
+        await session.ws.send_json(err)
         return
     action = data.get("action")
     _log.info("WS_ACTION client=%s action=%s", session.client_id, action)
@@ -823,7 +846,11 @@ async def _handle_action(session: WsSession, raw: str, app: web.Application) -> 
         await _handle_switch(session, data, app)
     elif action == "scrollback":
         await _handle_scrollback(session, data, app)
-    # інші action-и (drawing_*, overlay_toggle, replay_*) — Phase 2+
+    else:
+        # S25: unknown action → error frame (degraded-but-loud, не silent ignore)
+        _log.warning("WS_ACTION_UNKNOWN client=%s action=%s", session.client_id, action)
+        err = _build_error_frame(session, "unknown_action", "Unknown action: %s" % action, app=app)
+        await session.ws.send_json(err)
 
 
 async def _handle_switch(session: WsSession, data: Dict[str, Any], app: web.Application) -> None:

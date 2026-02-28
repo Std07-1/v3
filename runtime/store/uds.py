@@ -510,7 +510,7 @@ class UnifiedDataStore:
         if spec.since_open_ms is None and spec.to_open_ms is None:
             ram_bars = self._ram.get_window(symbol, tf_s, spec.limit)
             if ram_bars is not None:
-                ram_bars, geom = _ensure_sorted_dedup(ram_bars)
+                ram_bars, geom = _ensure_sorted_dedup(ram_bars, tf_ms=tf_s * 1000)
                 if geom is not None:
                     _mark_geom_fix(meta, warnings, geom, source="ram", tf_s=tf_s)
                 # P1-unified: якщо RAM має менше барів ніж запитано і disk доступний,
@@ -971,7 +971,7 @@ class UnifiedDataStore:
                 if source == "preview_unavailable":
                     source = "preview_curr"
 
-        bars, geom = _ensure_sorted_dedup(bars)
+        bars, geom = _ensure_sorted_dedup(bars, tf_ms=tf_s * 1000)
         if geom is not None:
             _mark_geom_fix(meta, warnings, geom, source=source, tf_s=tf_s)
         lwc = self._bars_to_lwc(bars)
@@ -1452,7 +1452,7 @@ class UnifiedDataStore:
             use_tail=use_tail,
         )
         if geom is None:
-            bars, geom = _ensure_sorted_dedup(bars)
+            bars, geom = _ensure_sorted_dedup(bars, tf_ms=spec.tf_s * 1000)
         if geom is not None:
             _mark_geom_fix(
                 meta,
@@ -1614,7 +1614,7 @@ class UnifiedDataStore:
             )
             return None
 
-        bars, geom = _ensure_sorted_dedup(bars)
+        bars, geom = _ensure_sorted_dedup(bars, tf_ms=spec.tf_s * 1000)
         if geom is not None:
             _mark_geom_fix(meta, warnings, geom, source=source or "redis_tail", tf_s=spec.tf_s)
 
@@ -1820,20 +1820,41 @@ def _get_open_ms(bar: dict[str, Any]) -> Optional[int]:
 
 def _ensure_sorted_dedup(
     bars: list[dict[str, Any]],
+    tf_ms: int = 0,
 ) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
     if len(bars) <= 1:
         return bars, None
 
     prev_open: Optional[int] = None
+    needs_fix = False
     for bar in bars:
         open_ms = _get_open_ms(bar)
         if open_ms is None:
             continue
         if prev_open is not None and open_ms <= prev_open:
+            needs_fix = True
             break
         prev_open = open_ms
-    else:
+
+    # Near-dedup threshold: бари ближче ніж tf_ms // 12
+    # (2h для D1) — anchor jitter від DST / broker convention.
+    near_threshold = tf_ms // 12 if tf_ms >= 86400000 else 0
+    if not needs_fix and near_threshold <= 0:
         return bars, None
+
+    # Навіть якщо порядок OK, перевіримо near-dupes для HTF
+    if not needs_fix and near_threshold > 0:
+        prev_open = None
+        for bar in bars:
+            open_ms = _get_open_ms(bar)
+            if open_ms is None:
+                continue
+            if prev_open is not None and 0 < (open_ms - prev_open) < near_threshold:
+                needs_fix = True
+                break
+            prev_open = open_ms
+        if not needs_fix:
+            return bars, None
 
     sorted_bars = sorted(bars, key=lambda x: _get_open_ms(x) or 0)
     deduped: dict[int, dict[str, Any]] = {}
@@ -1850,6 +1871,22 @@ def _ensure_sorted_dedup(
         dropped += 1
 
     result = [deduped[k] for k in sorted(deduped.keys())]
+
+    # Near-dedup: злити бари ближче ніж near_threshold
+    # (DST anchor jitter: history@21:00 vs derived@22:00)
+    if near_threshold > 0 and len(result) > 1:
+        merged: list[dict[str, Any]] = [result[0]]
+        for bar in result[1:]:
+            prev = merged[-1]
+            prev_ms = _get_open_ms(prev) or 0
+            cur_ms = _get_open_ms(bar) or 0
+            if 0 < (cur_ms - prev_ms) < near_threshold:
+                merged[-1] = _choose_better_bar(prev, bar)
+                dropped += 1
+            else:
+                merged.append(bar)
+        result = merged
+
     geom = {"sorted": True, "dedup_dropped": dropped}
     return result, geom
 

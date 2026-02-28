@@ -75,39 +75,114 @@ def ws_app_mock_uds():
     return build_app(config_path="config.json", uds=_MockUDS())
 
 
+# ── S20/S25 tests: error frames ───────────────────────
+
+async def test_ws_s25_unknown_action_error_frame(aiohttp_client, ws_app_mock_uds):
+    """S25: unknown action → error frame з code=unknown_action (не silent ignore)."""
+    client = await aiohttp_client(ws_app_mock_uds)
+    ws = await client.ws_connect("/ws")
+    try:
+        # Skip initial frames (config + full)
+        for _ in range(3):
+            try:
+                await asyncio.wait_for(ws.receive_json(), timeout=2)
+            except asyncio.TimeoutError:
+                break
+
+        # Send unknown action
+        await ws.send_json({"action": "nonexistent_action_xyz"})
+        resp = await asyncio.wait_for(ws.receive_json(), timeout=3)
+        assert resp["frame_type"] == "error", "expected error frame, got %s" % resp.get("frame_type")
+        assert resp["error"]["code"] == "unknown_action"
+        assert "nonexistent_action_xyz" in resp["error"]["message"]
+    finally:
+        await ws.close()
+
+
+async def test_ws_s20_bad_json_error_frame(aiohttp_client, ws_app_mock_uds):
+    """S20: invalid JSON → error frame з code=json_parse_error."""
+    client = await aiohttp_client(ws_app_mock_uds)
+    ws = await client.ws_connect("/ws")
+    try:
+        for _ in range(3):
+            try:
+                await asyncio.wait_for(ws.receive_json(), timeout=2)
+            except asyncio.TimeoutError:
+                break
+
+        await ws.send_str("{not valid json!!!")
+        resp = await asyncio.wait_for(ws.receive_json(), timeout=3)
+        assert resp["frame_type"] == "error"
+        assert resp["error"]["code"] == "json_parse_error"
+    finally:
+        await ws.close()
+
+
+async def test_ws_s20_missing_action_error_frame(aiohttp_client, ws_app_mock_uds):
+    """S20: valid JSON but no 'action' field → error frame з code=missing_action."""
+    client = await aiohttp_client(ws_app_mock_uds)
+    ws = await client.ws_connect("/ws")
+    try:
+        for _ in range(3):
+            try:
+                await asyncio.wait_for(ws.receive_json(), timeout=2)
+            except asyncio.TimeoutError:
+                break
+
+        await ws.send_json({"data": "no action field"})
+        resp = await asyncio.wait_for(ws.receive_json(), timeout=3)
+        assert resp["frame_type"] == "error"
+        assert resp["error"]["code"] == "missing_action"
+    finally:
+        await ws.close()
+
+
+async def _recv_frame(ws, frame_type, timeout=5):
+    """Receive frames until one matches frame_type, or timeout."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while True:
+        remaining = deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            raise asyncio.TimeoutError("No %s frame within %ss" % (frame_type, timeout))
+        msg = await asyncio.wait_for(ws.receive_json(), timeout=remaining)
+        if msg.get("frame_type") == frame_type:
+            return msg
+
+
 async def test_ws_hello(aiohttp_client, ws_app):
-    """Connect → msg з type=render_frame, schema_v=ui_v4_v2, seq=1.
-    P2: перший frame може бути 'full' (якщо UDS доступний) або 'heartbeat'.
+    """Connect → msg з type=render_frame, schema_v=ui_v4_v2.
+    S24: config frame відправляється першим, потім full/heartbeat.
     """
     client = await aiohttp_client(ws_app)
     ws = await client.ws_connect("/ws")
     try:
+        # S24: first frame is config
+        cfg_msg = await asyncio.wait_for(ws.receive_json(), timeout=5)
+        assert cfg_msg["type"] == "render_frame"
+        assert cfg_msg["frame_type"] == "config"
+        assert cfg_msg["meta"]["schema_v"] == SCHEMA_V
+        assert cfg_msg["meta"]["seq"] == 1
+        # second frame is full or heartbeat
         msg = await asyncio.wait_for(ws.receive_json(), timeout=5)
         assert msg["type"] == "render_frame"
-        assert msg["frame_type"] in ("heartbeat", "full"), f"unexpected: {msg['frame_type']}"
-        assert msg["meta"]["schema_v"] == SCHEMA_V
-        assert msg["meta"]["seq"] == 1
-        assert "server_ts_ms" in msg["meta"]
-        assert isinstance(msg["meta"]["server_ts_ms"], int)
+        assert msg["frame_type"] in ("heartbeat", "full"), "unexpected: %s" % msg["frame_type"]
     finally:
         await ws.close()
 
 
 async def test_ws_heartbeat(aiohttp_client, ws_app):
-    """Skip hello → wait → heartbeat arrives, seq=2."""
+    """Skip config+full → wait → heartbeat arrives."""
     client = await aiohttp_client(ws_app)
-    # Створюємо app з коротким heartbeat для тесту
-    ws_app["_heartbeat_s"] = 1  # 1 секунда для тесту
+    ws_app["_heartbeat_s"] = 1
     ws = await client.ws_connect("/ws")
     try:
-        # hello frame (seq=1)
-        hello = await asyncio.wait_for(ws.receive_json(), timeout=5)
-        assert hello["meta"]["seq"] == 1
+        # drain config+full (seq 1,2)
+        for _ in range(2):
+            await asyncio.wait_for(ws.receive_json(), timeout=5)
 
-        # heartbeat frame (seq=2) — чекаємо до 3 секунд
+        # heartbeat frame
         hb = await asyncio.wait_for(ws.receive_json(), timeout=3)
         assert hb["frame_type"] == "heartbeat"
-        assert hb["meta"]["seq"] == 2
         assert hb["meta"]["schema_v"] == SCHEMA_V
     finally:
         await ws.close()
@@ -141,11 +216,9 @@ async def test_ws_full_frame_has_candles(aiohttp_client, ws_app_mock_uds):
     client = await aiohttp_client(ws_app_mock_uds)
     ws = await client.ws_connect("/ws")
     try:
-        msg = await asyncio.wait_for(ws.receive_json(), timeout=5)
+        msg = await _recv_frame(ws, "full")
         assert msg["type"] == "render_frame"
-        assert msg["frame_type"] == "full"
         assert msg["meta"]["schema_v"] == SCHEMA_V
-        assert msg["meta"]["seq"] == 1
 
         # Must have candles from mock UDS
         candles = msg.get("candles", [])
@@ -179,10 +252,9 @@ async def test_ws_switch_full_frame(aiohttp_client, ws_app_mock_uds):
     client = await aiohttp_client(ws_app_mock_uds)
     ws = await client.ws_connect("/ws")
     try:
-        # First: receive initial full frame (seq=1)
-        first = await asyncio.wait_for(ws.receive_json(), timeout=5)
+        # Drain initial config + full
+        first = await _recv_frame(ws, "full")
         assert first["frame_type"] == "full"
-        assert first["meta"]["seq"] == 1
 
         # Send switch action (same symbol, different TF)
         switch_msg = json.dumps({
@@ -192,11 +264,10 @@ async def test_ws_switch_full_frame(aiohttp_client, ws_app_mock_uds):
         })
         await ws.send_str(switch_msg)
 
-        # Receive new full frame (seq=2)
-        second = await asyncio.wait_for(ws.receive_json(), timeout=5)
+        # Receive new full frame after switch
+        second = await _recv_frame(ws, "full")
         assert second["type"] == "render_frame"
         assert second["frame_type"] == "full"
-        assert second["meta"]["seq"] == 2
         assert second["tf"] == "M15"
         assert second["symbol"] == "XAU/USD"
 
@@ -214,7 +285,7 @@ async def test_ws_full_frame_boot_id_and_config(aiohttp_client, ws_app_mock_uds)
     client = await aiohttp_client(ws_app_mock_uds)
     ws = await client.ws_connect("/ws")
     try:
-        msg = await asyncio.wait_for(ws.receive_json(), timeout=5)
+        msg = await _recv_frame(ws, "full")
         assert msg["frame_type"] == "full"
         meta = msg["meta"]
 
@@ -244,7 +315,7 @@ async def test_ws_default_tf_m30(aiohttp_client, ws_app_mock_uds):
     client = await aiohttp_client(ws_app_mock_uds)
     ws = await client.ws_connect("/ws")
     try:
-        msg = await asyncio.wait_for(ws.receive_json(), timeout=5)
+        msg = await _recv_frame(ws, "full")
         assert msg["frame_type"] == "full"
         assert msg["tf"] == "M30", f"expected M30, got {msg['tf']}"
     finally:

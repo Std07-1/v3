@@ -1,6 +1,6 @@
 # ADR-0004: Mid-session gap tolerance in Derive Chain
 
-## Статус: Accepted
+## Статус: Implemented
 
 ## Контекст
 
@@ -26,7 +26,7 @@
 4. **Константа**: `MAX_MID_SESSION_GAPS = 3` (максимум 3 source-слоти пропущені на bucket)
 5. **Degraded-but-loud (I5)**: extension `mid_session_gaps=N` на результуючому барі
 
-### Чому 3?
+### Чому 3
 
 - Для M1→M5: 3 з 5 M1 пропущені → мінімум 2 M1 присутні (40% coverage)
 - Для M5→M15: 3 з 3 M5... ні, M15=3×M5, якщо 3 M5 пропущені — бар не створюється

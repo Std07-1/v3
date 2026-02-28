@@ -121,8 +121,16 @@ export function handleWSFrame(raw: unknown): void {
   }
 
   // 7. Dispatch (тільки валідні frame_type)
-  const validTypes = new Set(['full', 'delta', 'scrollback', 'drawing_ack', 'replay', 'warming', 'heartbeat', 'config']);
+  const validTypes = new Set(['full', 'delta', 'scrollback', 'drawing_ack', 'replay', 'warming', 'heartbeat', 'config', 'error']);
   if (validTypes.has(frame.frame_type)) {
+    // S20/S25: error frame → UI warning (degraded-but-loud)
+    if (frame.frame_type === 'error') {
+      const err = (frame as any).error;
+      const code = err?.code ?? 'unknown';
+      const msg = err?.message ?? '';
+      addUiWarning('server_error', 'ws', `${code}: ${msg}`);
+      return; // error frame не потрапляє в currentFrame
+    }
     // heartbeat не оновлює currentFrame — тільки DiagState
     if (frame.frame_type !== 'heartbeat') {
       currentFrame.set(frame);

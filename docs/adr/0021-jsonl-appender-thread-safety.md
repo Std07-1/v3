@@ -1,6 +1,6 @@
 # ADR-0021: JsonlAppender Thread-Safety
 
-- **Статус**: Proposed
+- **Статус**: Accepted
 - **Дата**: 2026-02-26
 - **Автор**: code-review audit (111.md, дефект #6)
 - **Initiative**: `code_review_hardening`

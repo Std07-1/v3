@@ -1,6 +1,6 @@
 # ADR-0024: SMC Engine — Smart Money Concepts Computation Layer
 
-- **Статус**: Proposed
+- **Статус**: Accepted
 - **Дата**: 2026-02-28
 - **Автор**: Claude Opus 4.6 (Patch Master)
 - **Initiative**: `smc_engine_v1`
@@ -71,6 +71,106 @@
 **Плюси**: I0/I1 compliant. SMC = read-only overlay, обчислений з CandleBar. Ephemeral — відновлюється з warm bars при restart. Redis bus для events. Природна інтеграція з DeriveEngine та Replay.  
 **Мінуси**: Cold-start потребує warmup (500 барів на TF = ~3s).  
 **Вердикт**: ✅ Обрано.
+
+---
+
+## 2А. Фундаментальні архітектурні рішення
+
+> Цей розділ фіксує **явні відповіді** на ключові питання, які визначають траєкторію SMC Engine.
+> Кожне рішення — с reasoning, альтернативами, і критерієм перегляду.
+
+### Q1: Real-time чи batch
+
+**Рішення: Hybrid — event-driven live + batch warmup.**
+
+| Режим | Коли | Механізм | Latency |
+|-------|------|----------|---------|
+| Batch (warmup) | Cold-start, symbol switch | `SmcEngine.update(bars)` — повне перерахування з N барів | ~100ms одноразово |
+| Event-driven (live) | Кожен committed bar в cascade | `SmcEngine.on_bar(bar)` — O(1) інкремент | <10ms |
+| Event-driven (replay) | Кожен step ReplayEngine | `SmcEngine.on_bar(bar)` — ідентичний live алгоритм | <10ms |
+
+**Чому не чистий batch?** Затримка 1-60с між bar close і zone appearance — трейдер втрачає момент формування. Replay потребує step-by-step, а batch = повний пересчёт на кожен step.
+
+**Чому не per-tick stream?** SMC зони формуються на **закритих барах** (confirmed candles). Per-tick = шум: зона "з'являється і зникає" 100 разів за хвилину. Preview bars (complete=false) **навмисно ігноруються** — тільки final bars.
+
+**Rail**: `SmcRunner.on_bar_event()` відхиляє бари з `complete=False`. Лог: `SMC_SKIP_PREVIEW`.
+
+### Q2: Звідки читаємо бари — JSONL, Redis, UDS API
+
+**Рішення: Тільки через UDS API (warmup) + Redis event bus (live).**
+
+```
+Cold-start warmup:
+  SmcRunner.start()
+    → UDS.read_window(symbol, tf_s, n=lookback_bars)  # RAM → Redis → Disk fallback
+    → SmcEngine.update(bars)                            # batch recompute
+
+Live operation:
+  Redis pub/sub v3_local:updates:{symbol}:{tf_s}
+    → SmcRunner.on_bar_event(bar)                       # bar вже десеріалізований
+    → SmcEngine.on_bar(bar)                             # incremental O(1)
+```
+
+**Чому не напряму JSONL?** Порушує I1 (UDS = єдина талія). UDS вже має RAM layer з гарячими барами, dedup, sorting, end-excl semantics. Дублювати read logic = split-brain ризик.
+
+**Чому не напряму Redis?** Redis keys = implementation detail UDS. Формат (end-incl) може змінюватись. Direct read = coupling до `redis_keys.py`.
+
+**Критерій перегляду**: Якщо UDS API latency >50ms для warmup — розглянути прямий Redis snapshot read з конвертацією через UDS helper.
+
+### Q3: In-process чи окремий сервіс
+
+**Рішення: SmcRunner як asyncio task у ws_server process (in-process).**
+
+| Критерій | In-process ← **обрано** | Окремий процес | Окремий сервіс |
+|----------|------------------------|----------------|----------------|
+| Latency bar→zone | ~0ms (dict lookup) | ~5-10ms (Redis ser/de) | ~10-50ms (HTTP) |
+| Memory sharing | SmcSnapshot in Python RAM | Redis pub/sub bridge | HTTP response |
+| Deployment overhead | 0 | +1 процес у supervisor | +1 порт + health |
+| Failure domain | ws_server down → SMC down | Independent restart | Independent |
+| Scaling ceiling | ~50 символів (est.) | ~200 символів | Horizontal |
+| Implementation cost | ~20 LOC glue | ~80 LOC + bridge | ~200 LOC + client |
+
+**Reasoning**:
+
+1. WS frame будується в ws_server → snapshot = direct dict lookup, 0 серіалізації
+2. 104 пар × SmcSnapshot через Redis на кожен frame = зайвий overhead
+3. Якщо ws_server впав → UI не працює → SMC без UI безглуздий
+4. 13 символів далеко від ceiling ~50
+
+**Trigger для міграції на окремий процес**:
+
+- `on_bar()` > 50ms тричі поспіль → лог `SMC_DEGRADED_PERF` + метрика
+- Більше 50 символів
+- Потреба SMC API без WS (REST-only клієнти)
+
+### Q4: Які SMC-алгоритми і в якому порядку
+
+**Рішення: 10 алгоритмів у 3 ешелонах за пріоритетом реалізації.**
+
+| Ешелон | Алгоритм | Trader Value | Section |
+|--------|----------|-------------|---------|
+| **E1 (MVP)** | Swing Detection | Фундамент: HH/HL/LH/LL → тренд | §4.1 |
+| **E1** | Market Structure (BOS/CHoCH) | Тренд confirmation + reversal | §4.2 |
+| **E1** | Order Blocks | Зони накопичення smart money | §4.3 |
+| **E1** | Fair Value Gaps | Дисбаланс попиту/пропозиції | §4.4 |
+| **E2 (Core)** | Liquidity Levels | Target для smart money sweeps | §4.5 |
+| **E2** | **Premium/Discount Zones** | Фільтр якості: buy в discount, sell в premium | §4.6 |
+| **E2** | **Inducement (False Breakout)** | Trap detection → вхід після sweep | §4.7 |
+| **E3 (Pro)** | **Session/Killzone Awareness** | Коли торгувати (London/NY) | §4.8 |
+| **E3** | **Confluence POI Engine** | Об'єднання факторів → єдиний score | §4.9 |
+| **E3** | **Zone Quality Model** | Aging, freshness, decay → автоматична фільтрація | §4.10 |
+
+**Чому не Wyckoff / Elliott / ICT Silver Bullet?** Wyckoff = окрема парадигма. Elliott = суб'єктивне, погано автоматизується. Silver Bullet = спеціалізований патерн. Ці алгоритми = Phase 3+ addons через plugin interface.
+
+### Q5: Що робить систему НЕЗАМІННОЮ для сильного трейдера
+
+**Відповідь**: Не кількість індикаторів, а три фактори:
+
+1. **Confluence scoring**: Трейдер бачить 15 зон → система ранжує: "2 зони A+, 3 зони A, 10 зон B/C". Фокус на A+ скорочує аналіз з 20 хвилин до 30 секунд.
+2. **Наратив**: Система пояснює **чому** зона сильна: "OB + FVG + Discount + HTF aligned + London killzone" — не просто малює прямокутник.
+3. **Replay тренажер**: Ніхто на ринку не має Replay + Live SMC для 13 символів. Ментор може навчати учнів на реальній історії з zone formation в real-time.
+
+**Детальна розробка**: див. §9А "Trader Experience Architecture" (що робить систему незамінною).
 
 ---
 
@@ -317,6 +417,197 @@ Incremental:
 
 **Output**: `SmcLevel(kind="eq_highs"|"eq_lows"|"pdh"|"pdl"|"pwh"|"pwl", price, touches)`
 
+### 4.6 Premium/Discount Zones
+
+**Concept**: Розділити діапазон від останнього significant Swing High до Swing Low на дві зони. Smart money купує в Discount (нижні 50%), продає в Premium (верхні 50%). Equilibrium (50%) = "справедлива ціна".
+
+```
+Calculation:
+  range_high  = last significant Swing High (confirmed, period ≥ 5)
+  range_low   = last significant Swing Low  (confirmed, period ≥ 5)
+  equilibrium = (range_high + range_low) / 2
+
+  Premium zone: price > equilibrium → sell setups мають перевагу
+  Discount zone: price < equilibrium → buy setups мають перевагу
+
+Output:
+  SmcZone(kind="premium", high=range_high, low=equilibrium)
+  SmcZone(kind="discount", high=equilibrium, low=range_low)
+
+Incremental:
+  Новий confirmed Swing → перерахувати range → оновити P/D зони
+  BOS/CHoCH → range reset (новий тренд = новий range)
+
+Quality filter (integration з 4.3/4.4):
+  OB bullish + price in Discount → quality ×1.5 (HIGH probability buy)
+  OB bullish + price in Premium → quality ×0.5 (LOW probability buy → ігнорувати)
+  OB bearish + price in Premium → quality ×1.5 (HIGH probability sell)
+```
+
+**Для трейдера**: "Система показує: OB bullish у discount zone → цей setup має 75% edge. OB bullish у premium → 35% → пропустити або шукати sell." Це single filter який відсіче ~50% low-quality entries.
+
+### 4.7 Inducement (False Breakout Trap)
+
+**Concept**: Inducement — minor liquidity sweep, що trapає retail трейдерів. Smart money навмисно "виконують" minor swing highs/lows щоб зібрати стопи, потім розвертають ціну.
+
+```
+Detection:
+  1. Визначити minor Swing High/Low (period=3, менший за основний period=5)
+  2. Ціна пробиває minor swing: wick виходить за межі, але close повертається
+  3. Подальший рух в протилежному напрямку > 0.5 × ATR → inducement confirmed
+
+Pattern:
+  Minor SH at 2860.00
+  Bar: high=2861.20 (breaks above), close=2858.50 (повернулась)
+  Next bars: close=2855.00 → inducement confirmed!
+  → retail buy стопи зібрані, smart money починає sell
+
+  SmcSwing(kind="inducement_bull"|"inducement_bear", price, confirmed=bool)
+
+Incremental:
+  Новий бар → перевірити pending inducements (minor break without follow-through)
+  Confirmation: 2-3 бари після break showing reversal > 0.5 ATR
+
+Quality signal:
+  Inducement NEAR active OB → entry якість ↑↑ (trap завершено, реальний рух починається)
+  Inducement БЕЗ OB → інформаційний (не entry signal)
+```
+
+**Для трейдера**: "Ціна зняла ліквідність над 2860 (inducement ✓), тепер тестує OB bearish — вхід з подвійним підтвердженням. Retail trapped, smart money in control."
+
+### 4.8 Session/Killzone Awareness
+
+**Concept**: Зона, сформована під час London Open або NY Session killzone, має вищу вірогідність reaction, ніж зона під час Asian grind. Smart money найбільш активні в killzones.
+
+```
+Sessions (UTC, configurable через config.json:smc.sessions):
+  asia:     00:00 – 06:00  (low volatility, range formation)
+  london:   07:00 – 16:00  (killzone: 07:00–10:00)
+  ny:       12:00 – 21:00  (killzone: 12:00–15:00)
+  overlap:  12:00 – 16:00  (London+NY = max volatility)
+
+Symbol-specific relevance (config.json:smc.sessions.symbol_overrides):
+  XAU/USD:  London killzone (primary), NY killzone (secondary)
+  NAS100:   NY killzone (primary), London (pre-market)
+  GER30:    Frankfurt open 07:00-09:00 (primary)
+  USD/JPY:  Asia (primary), NY (secondary)
+
+Implementation:
+  1. Кожен бар tagged: session, in_killzone: bool
+  2. Кожна зона tagged: formed_session, formed_in_killzone
+  3. Quality modifier: killzone zone → strength × config.killzone_boost (default 1.3)
+  4. UI filter: toggle "Show only killzone zones" (reduces noise 60-70%)
+
+Incremental:
+  on_bar() → determine session from bar.open_time_ms UTC hour → inheritance to zones
+```
+
+**Для трейдера**: "OB bearish на XAU/USD, сформований 08:15 UTC (London killzone) з impulse 2.5 ATR → HIGH PRIORITY. Зона з Asian session 03:30 UTC → low priority, можливо range noise."
+
+### 4.9 Confluence POI Engine (Point of Interest)
+
+**Concept**: Найцінніша функція. POI — цінова область де перетинаються декілька SMC факторів. Чим більше confluence → тим вища probability reaction. **Це те, що перетворює "набір зон" на "торгову систему".**
+
+```
+Confluence Scoring Matrix:
+  Factor                          Points    Condition
+  ─────────────────────────────   ──────    ─────────
+  Order Block at zone             +2        Active OB overlaps price range
+  Fair Value Gap overlap          +2        FVG zone overlaps OB ≥ 50%
+  Liquidity level near zone       +1        EQ highs/lows within 0.5 ATR of zone edge
+  Premium/Discount alignment      +1        Buy in Discount / Sell in Premium
+  HTF bias alignment              +2        get_htf_bias() confirms direction
+  Killzone formation              +1        Zone formed during session killzone
+  Inducement near zone            +1        Inducement within 2 ATR before zone test
+  Fresh zone (untested)           +1        zone.status == "active", test_count == 0
+  ─────────────────────────────
+  MAX SCORE                       11
+
+Grade Classification:
+  score ≥ 8:  Grade "A+" → highest probability, primary focus
+  score ≥ 6:  Grade "A"  → high probability, secondary focus
+  score ≥ 4:  Grade "B"  → moderate, informational
+  score <  4:  Grade "C"  → low, display only on demand (UI toggle)
+
+POI Detection Algorithm:
+  1. For each active OB zone:
+     a. Scan FVGs → overlap ≥ 50%? → +2
+     b. Scan Liquidity levels → within 0.5 ATR of zone edges? → +1
+     c. Check Premium/Discount → correct zone? → +1
+     d. Query get_htf_bias() → aligned? → +2
+     e. Check formed_in_killzone → +1
+     f. Scan nearby inducements → +1
+     g. Check freshness → +1
+  2. Merge overlapping/adjacent zones → unified POI with combined score
+  3. Rank POIs by score descending
+  4. Cap: max_poi_per_tf = config value (default 5)
+
+Output:
+  ConfluencePOI(
+    id="poi_XAU/USD_3600_1770302400000",
+    zones=[ob_zone_id, fvg_zone_id],        # constituent elements
+    price_high=2852.50, price_low=2848.20,   # merged range
+    score=9, grade="A+",
+    direction="bearish",
+    factors=["ob_bear", "fvg_bear", "premium", "htf_bear", "killzone", 
+             "inducement", "fresh"],
+    narrative="Bearish OB+FVG confluence in premium zone, aligned with D1 
+              bearish bias, formed during London killzone, fresh untested"
+  )
+
+Incremental:
+  on_bar() → після update всіх layers → recalculate POI scores
+  Зміна в будь-якому layer (new OB, FVG filled, etc.) → POI rescore
+```
+
+**Для трейдера**: "З 15 активних зон система виділяє 2 POI grade A+ та 3 grade A. Замість 20 хвилин скролінгу → 30 секунд фокусу на найважливішому."
+
+### 4.10 Zone Quality Model (Aging, Freshness, Decay)
+
+**Concept**: Не всі зони живуть вічно. Свіжа зона > стара зона. Zone quality = автоматичний фільтр, який прибирає noise з чарту.
+
+```
+Quality Formula:
+  zone.quality = base_strength × freshness_factor × test_penalty × htf_bonus
+
+Components:
+  1. Base Strength (impulse/ATR at creation):
+     impulse / ATR > 3.0:   base = 1.0 (explosive move)
+     impulse / ATR > 2.0:   base = 0.8
+     impulse / ATR > 1.5:   base = 0.6
+     impulse / ATR < 1.5:   base = 0.3 (weak, likely noise)
+
+  2. Freshness Factor (bars since creation):
+     0-50 bars:    factor = 1.0 (fresh)
+     50-200 bars:  factor = 0.8 (aging)
+     200-500 bars: factor = 0.5 (stale)
+     500+ bars:    factor = 0.2 (expired from active display)
+
+  3. Test Penalty (times price touched zone):
+     untested:    penalty = 1.0 (virginal — highest value)
+     tested 1×:   penalty = 0.7 (bounced once — still valid)
+     tested 2×:   penalty = 0.4 (weakening)
+     tested 3×+:  penalty = 0.1 (exhausted — likely fails next touch)
+
+  4. HTF Bonus (origin timeframe):
+     D1 zone:     decay_rate × 0.3 (MUCH slower decay — D1 structures last)
+     H4 zone:     decay_rate × 0.5
+     H1 zone:     decay_rate × 1.0 (baseline)
+     M15/M5:      decay_rate × 2.0 (fast decay — LTF noise)
+
+Lifecycle:
+  quality ≥ 0.3:  ACTIVE — display normally
+  quality 0.1-0.3: FADING — display with reduced opacity (α = quality)
+  quality < 0.1:  EXPIRED — hide from chart, keep in memory for statistics
+
+Incremental:
+  on_bar() → age ALL zones → recalculate quality → transition status
+  Lifecycle events: ZONE_CREATED, ZONE_TESTED, ZONE_FADING, ZONE_EXPIRED
+  Each transition → SmcDelta event → UI update
+```
+
+**Для трейдера**: "H4 OB з quality 0.92 (свіжий, explosive impulse, untested) підсвічений яскраво. M15 OB з quality 0.25 (200 барів тому, тестований 2×) → ледь видимий. Chart clean = mind clean."
+
 ---
 
 ## 5. Контракт smc_v1
@@ -329,16 +620,26 @@ import dataclasses
 from typing import Any, Dict, List, Optional, Tuple
 
 # ── Zone Kinds ──
-ZONE_KINDS = frozenset({"ob_bull", "ob_bear", "fvg_bull", "fvg_bear"})
+ZONE_KINDS = frozenset({
+    "ob_bull", "ob_bear",         # Order Blocks (§4.3)
+    "fvg_bull", "fvg_bear",       # Fair Value Gaps (§4.4)
+    "premium", "discount",        # Premium/Discount Zones (§4.6)
+})
 ZONE_STATUSES = frozenset({"active", "tested", "mitigated", "breaker", 
-                            "partially_filled", "filled"})
+                            "partially_filled", "filled", "fading", "expired"})
 
 # ── Swing Kinds ──
-SWING_KINDS = frozenset({"hh", "hl", "lh", "ll",
-                         "bos_bull", "bos_bear", "choch_bull", "choch_bear"})
+SWING_KINDS = frozenset({
+    "hh", "hl", "lh", "ll",                                    # Basic swings
+    "bos_bull", "bos_bear", "choch_bull", "choch_bear",        # Structure (§4.2)
+    "inducement_bull", "inducement_bear",                       # Inducement (§4.7)
+})
 
 # ── Level Kinds ──
 LEVEL_KINDS = frozenset({"eq_highs", "eq_lows", "pdh", "pdl", "pwh", "pwl"})
+
+# ── POI Grades ──
+POI_GRADES = frozenset({"A+", "A", "B", "C"})                  # Confluence POI (§4.9)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -559,6 +860,44 @@ GET /api/smc?symbol=XAU/USD&tf_s=3600
       "pwh_pwl_enabled": true
     },
     "max_zones_per_tf": 30,
+    "premium_discount": {
+      "enabled": true
+    },
+    "inducement": {
+      "enabled": true,
+      "minor_swing_period": 3,
+      "confirmation_atr_mult": 0.5,
+      "confirmation_bars": 3
+    },
+    "sessions": {
+      "enabled": true,
+      "killzone_boost": 1.3,
+      "definitions": [
+        {"name": "asia",    "start_utc": "00:00", "end_utc": "06:00", "kz_start": null, "kz_end": null},
+        {"name": "london",  "start_utc": "07:00", "end_utc": "16:00", "kz_start": "07:00", "kz_end": "10:00"},
+        {"name": "ny",      "start_utc": "12:00", "end_utc": "21:00", "kz_start": "12:00", "kz_end": "15:00"}
+      ],
+      "symbol_overrides": {
+        "XAU/USD": {"primary": "london", "secondary": "ny"},
+        "NAS100": {"primary": "ny"},
+        "GER30": {"primary": "london"},
+        "USD/JPY": {"primary": "asia", "secondary": "ny"}
+      }
+    },
+    "confluence": {
+      "enabled": true,
+      "max_poi_per_tf": 5,
+      "grade_thresholds": {"A+": 8, "A": 6, "B": 4}
+    },
+    "quality": {
+      "fresh_bars": 50,
+      "aging_bars": 200,
+      "stale_bars": 500,
+      "test_penalties": [1.0, 0.7, 0.4, 0.1],
+      "htf_decay_multipliers": {"86400": 0.3, "14400": 0.5, "3600": 1.0, "default": 2.0},
+      "min_display_quality": 0.1,
+      "fading_threshold": 0.3
+    },
     "performance": {
       "max_compute_ms": 10,
       "log_slow_threshold_ms": 5
@@ -573,28 +912,65 @@ GET /api/smc?symbol=XAU/USD&tf_s=3600
 
 ## 6. Інтеграція
 
-### 6.1 Live Pipeline — SmcRunner у supervisor
+### 6.1 Live Pipeline — SmcRunner у ws_server process
 
-**Розміщення**: SmcRunner запускається як 6-й процес у supervisor (після ws_server):
+**Рішення (§2А Q3)**: SmcRunner живе **в тому ж процесі** що й ws_server — 0 серіалізації при frame build.
 
-```python
-# app/main.py — додати mode="smc_runner"
-# SmcRunner живе в тому ж процесі що й ws_server (shared memory для snapshots)
-# АБО як окремий процес з Redis pub/sub bridge
-```
-
-**Рекомендація**: SmcRunner у **тому ж процесі** що й ws_server — уникає серіалізації SmcSnapshot при кожному frame.
+**Subscription**: SmcRunner є **ще одним consumer** того ж Redis updates bus (`v3_local:updates:*`), який ws_server вже використовує для delta loop. **Не потрібен** окремий канал `smc:delta:{sym}:{tf}`. SMC delta вбудовується прямо у WS frame.
 
 ```
 ws_server process:
   ├─ aiohttp WS сервер
-  ├─ SmcRunner (thread або asyncio task)
-  │   ├─ Redis subscriber: v3_local:updates:*
-  │   ├─ SmcEngine (core, pure)
+  │   └─ delta_loop: Redis subscriber v3_local:updates:* (вже існує)
+  ├─ SmcRunner (asyncio task, той же event loop)
+  │   ├─ on_bar_event(bar): callback від delta_loop при новому барі
+  │   ├─ SmcEngine (core/smc/, pure)
   │   └─ In-memory SmcSnapshot per (symbol, tf)
   └─ _build_full_frame() / _build_delta_frame()
-       └─ reads SmcRunner.get_snapshot(symbol, tf_s)
+       └─ reads SmcRunner.get_snapshot(symbol, tf_s) — direct dict lookup
 ```
+
+**Чому не окремий Redis канал?** SmcRunner in-process → бар вже десеріалізований у delta loop → direct Python callback, 0 overhead. Окремий канал `smc:delta:*` = зайвий pub/sub roundtrip для даних що вже в пам'яті.
+
+**Warmup flow**:
+
+```python
+# При старті ws_server:
+smc_engine = SmcEngine(smc_config)              # core, pure
+smc_runner = SmcRunner(config, smc_engine)
+await smc_runner.warmup(uds)                     # UDS.read_window() → SmcEngine.update()
+# Далі delta_loop при кожному новому барі:
+async def on_bar_committed(bar: CandleBar):
+    smc_runner.on_bar(bar)                       # SmcEngine.on_bar() → SmcDelta cached
+```
+
+### 6.1a types.ts Contract Expansion — Breaking Change Guard
+
+**Поточний стан** (ui_v4/src/lib/types.ts:23-49):
+
+```typescript
+export type SmcZone = { kind: 'fvg' | 'ob' | 'liquidity'; /* ... */ }
+```
+
+**Проблема**: ADR вводить `'ob_bull' | 'ob_bear' | 'fvg_bull' | 'fvg_bear' | 'premium' | 'discount'`. Поточний `OverlayRenderer.zoneColor()` робить `if (kind === 'ob')` — **зламається** при `'ob_bull'`.
+
+**Рішення — backward-compatible prefix matching** (3 LOC у UI):
+
+```typescript
+// OverlayRenderer.ts — zoneColor():
+function zoneColor(kind: string): string {
+  if (kind.startsWith('ob'))        return '#ff8c00';  // orange (OB)
+  if (kind.startsWith('fvg'))       return '#00cc66';  // green (FVG)
+  if (kind === 'premium')           return '#cc3333';  // red tint
+  if (kind === 'discount')          return '#3399cc';  // blue tint
+  if (kind.startsWith('liquidity')) return '#9966ff';  // purple
+  return '#888888';                                     // fallback
+}
+```
+
+**Wire format contract**: Backend завжди надсилає `kind` з ADR-0024 vocabulary (§5.1 ZONE_KINDS). UI обробляє через `startsWith()` — forward-compatible з майбутніми sub-kinds.
+
+**Порядок deploy**: S5 (types.ts expand) робиться **одночасно** з S4 (SmcRunner integration) — один slice. UI не може отримати new kinds без backend, backend не надсилає without config enabled.
 
 ### 6.2 WS Server Integration
 
@@ -826,131 +1202,390 @@ interface ReplayFrame {
 
 ---
 
+## 9А. Trader Experience Architecture: що робить систему НЕЗАМІННОЮ
+
+> Цей розділ — не про технологію, а про **trader value**. Технічно досконала система без правильної
+> презентації = "ще один індикатор". Правильна презентація = **"AI-помічник, який думає як smart money"**.
+
+### 9А.1 Три рівні цінності для трейдера
+
+| Рівень | Що отримує | Як вимірюється | Конкуренти |
+|--------|-----------|---------------|------------|
+| **L1: Automation** | Auto-detection зон (OB, FVG, Structure) | Час аналізу: 20 хв → 30 сек | Платні SMC індикатори ($100-300/мо) |
+| **L2: Intelligence** | Confluence POI scoring + Zone Quality | Precision: фокус на A+ зонах замість 15 зон | **Нікого** (навіть платні = flat zones без ranking) |
+| **L3: Education** | Replay тренажер + Narrative engine | Skill growth: учень бачить formation в real-time | **Нікого** (TradingView replay ≠ SMC training) |
+
+**L1 = table stakes** (всі платні tool-и це вміють). **L2 + L3 = наш competitive moat.**
+
+### 9А.2 Workflow сильного трейдера (use case)
+
+```
+07:00 UTC — London Open. Трейдер відкриває Aione:
+
+1. DASHBOARD (загальний погляд):
+   "XAU/USD: 2 POI grade A+, bias BEARISH (D1+H4 aligned)"
+   "NAS100: 1 POI grade A, bias BULLISH"
+   "SPX500: no high-grade POI, range mode"
+   → Фокус: XAU/USD (highest confluence)
+
+2. XAU/USD H4 CHART:
+   - D1 bias: BEARISH (BOS bear at 2880)
+   - H4 OB bearish: [2865-2870], quality=0.91 (fresh, explosive, untested)
+   - H4 FVG bearish: [2862-2866] (overlaps OB partially)
+   - POI A+: [2862-2870], score=9, factors: OB+FVG+premium+HTF+killzone+fresh
+   - Narrative: "Smart money supply zone: OB+FVG confluence in premium,
+     D1 confirms bearish structure. Formed during London killzone."
+
+3. DRILL DOWN M15:
+   - Wait for M15 CHoCH bearish (confirmation)
+   - 08:45 UTC: M15 CHoCH confirmed at 2863
+   - Alignment indicator: "H4 ↘ + M15 CHoCH Bear → ALIGNED ✓ (score 9/11)"
+
+4. ENTRY (manual, але система підказує):
+   - Entry: 2863.00 (M15 CHoCH candle)
+   - SL: 2870.50 (above H4 OB + FVG + buffer)
+   - TP1: 2850.00 (next liquidity: equal lows cluster)
+   - TP2: 2842.00 (PDL = previous day low)
+   - R:R = 1:1.7 (TP1), 1:2.8 (TP2)
+
+5. POST-TRADE (система логує):
+   - POI A+ → entry taken → result: +1.7R
+   - Statistics update: "OB+FVG+Premium POIs: 72% win rate (last 50 trades)"
+
+Загальний час: ~3 хвилини (включаючи waiting for M15 CHoCH)
+Без системи: ~25 хвилин ручного аналізу, можливо пропустив setup
+```
+
+### 9А.3 Narrative Engine (що відрізняє від "просто зон")
+
+**Проблема**: Всі SMC tools малюють прямокутники. Трейдер бачить 20 зон і не знає **чому** кожна важлива.
+
+**Рішення**: Кожен POI / зона має human-readable narrative:
+
+```python
+# core/smc/narrative.py
+def build_narrative(poi: ConfluencePOI, context: SmcContext) -> str:
+    """Generates human-readable explanation for POI.
+    
+    Example output:
+    "Bearish supply zone: Order Block + FVG confluence at 2862-2870.
+     Zone formed during London killzone (08:15 UTC).
+     D1 structure bearish (BOS at 2880), H4 confirms.
+     Zone is fresh (untested), impulse 2.8 ATR (explosive).
+     Nearest liquidity target: Equal Lows at 2850 (3 touches).
+     Quality: A+ (9/11), recommended action: SELL on M15 CHoCH confirmation."
+    """
+```
+
+**Для менторів**: Narrative = готовий скрипт для учнів. Ментор не пояснює "чому ця зона" — система вже пояснила.
+
+### 9А.4 Dashboard: Symbol Prioritization
+
+```
+GET /api/smc/dashboard → або WS frame type="smc_dashboard"
+
+Response:
+{
+  "symbols": [
+    {
+      "symbol": "XAU/USD",
+      "htf_bias": "bearish",
+      "top_poi": {"grade": "A+", "score": 9, "price_range": [2862, 2870]},
+      "active_zones": 15,
+      "high_grade_count": 2,
+      "alert": "Approaching A+ POI in ~30 min at current pace"
+    },
+    {
+      "symbol": "NAS100",
+      "htf_bias": "bullish", 
+      "top_poi": {"grade": "A", "score": 7, "price_range": [21350, 21380]},
+      "active_zones": 12,
+      "high_grade_count": 1,
+      "alert": null
+    }
+  ],
+  "sorted_by": "top_poi.score DESC"
+}
+```
+
+**Для трейдера**: "Не скролити 13 графіків → одна таблиця: де зараз найкращі setup-и?"
+
+### 9А.5 Replay як Killer Feature для ком'юніті
+
+```
+Replay Training Modes:
+
+Mode 1: "Blind Replay" (для самостійного тренування)
+  - Replay запускається БЕЗ SMC overlay
+  - Трейдер малює свої зони (drawing tools)
+  - По завершенню: система показує свої зони → порівняння
+  - Scoring: "Ви знайшли 3 із 5 OB, 2 із 3 FVG, пропустили A+ POI"
+
+Mode 2: "Annotated Replay" (для навчання)
+  - Replay з SMC overlay: зони з'являються в real-time
+  - Pause на ключових моментах: "BOS formed here — what would you do?"
+  - Step-by-step formation: учень бачить як zone будується бар за баром
+
+Mode 3: "Mentor Session" (для менторів)
+  - Ментор контролює replay (play/pause/speed/jump)
+  - Учні підключені як read-only viewers
+  - Ментор додає annotations в реальному часі
+  - Session recording для повторного перегляду
+
+Value proposition для ком'юніті:
+  "Безкоштовний SMC тренажер з real-time зонами на 13 символів.
+   Replay будь-якої дати. Ніхто на ринку цього не має."
+```
+
+---
+
+## 9Б. Growth Trajectory: Шлях до рівня TradingView і далі
+
+### Phase 1 (поточний ADR): SMC Engine Core (тижні 1-3)
+
+**Ціль**: 10 алгоритмів працюють live для 13 символів × 8 TFs.
+
+```
+Deliverables:
+  ✓ Swing + Structure + OB + FVG + Liquidity (E1 MVP)
+  ✓ Premium/Discount + Inducement (E2 Core)
+  ✓ Session/Killzone + Confluence POI + Quality Model (E3 Pro)
+  ✓ WS integration (live + replay)
+  ✓ HTTP API (/api/smc, /api/smc/dashboard)
+
+Metric: "Один трейдер може працювати ефективно з XAU/USD"
+```
+
+### Phase 2: Intelligence Layer (тижні 4-6)
+
+**Ціль**: Від "detection" до "recommendations".
+
+```
+Narrative Engine:
+  - Human-readable explanations per POI
+  - "Why this zone?" panel in UI
+
+Alert System:
+  - "Price approaching A+ POI in ~30 min"
+  - WS push notifications
+  - Configurable: per-symbol, per-grade, per-session
+  - ADR required (окремий initiative)
+
+Statistics Tracker:
+  - Historical win/loss rate per zone type
+  - Per-symbol performance: "XAU/USD H4 OBs: 68% reaction rate"
+  - Zone heatmap: "These price levels triggered reactions 5+ times"
+
+Metric: "Трейдер отримує 2-3 high-quality alerts на день без постійного моніторингу"
+```
+
+### Phase 3: Education Platform (тижні 7-10)
+
+**Ціль**: Replay + SMC = найкращий безкоштовний тренажер для ICT/SMC трейдерів.
+
+```
+Replay Modes (Blind / Annotated / Mentor Session):
+  - Scoring system: compare user's analysis vs system
+  - Session recording + sharing
+  - Lesson library (curated setups per symbol)
+
+Import/Export:
+  - Share setup analysis (JSON export)
+  - Community lessons (mentor-created replay sessions)
+
+Metric: "Ментор може провести 1-годинну сесію з 5 учнями, використовуючи тільки Aione"
+```
+
+### Phase 4: Platform Scale (тижні 11-16)
+
+**Ціль**: Від "tool for one trader" до "platform for community".
+
+```
+Multi-user:
+  - User accounts (optional, localStorage default)
+  - Shared watchlists
+  - Social annotations ("I see sell setup here" → visible to followers)
+
+Extended Instruments:
+  - Crypto (BTC, ETH) — via different data provider
+  - More forex pairs (current: 13, target: 30+)
+  - Futures? Requires ADR for new data source
+
+Advanced Algorithms (Phase 3+ addons):
+  - Wyckoff accumulation/distribution detection
+  - ICT Silver Bullet timing model
+  - Order Flow imbalance (якщо з'являться Level 2 дані)
+  - Custom user-defined patterns (scripting?)
+
+Mobile:
+  - PWA version of ui_v4 (already Svelte → PWA-ready)
+  - Push notifications (Alert System → mobile push)
+
+Metric: "100+ active users, community-driven content"
+```
+
+### Competitive Position Matrix (поточний → Phase 4)
+
+| Feature | TradingView | ATAS | Paid SMC tools | Aione Phase 1 | Aione Phase 4 |
+|---------|-------------|------|----------------|---------------|---------------|
+| Auto SMC zones | ❌ | ❌ | ✅ (flat) | ✅ (scored) | ✅ (AI-ranked) |
+| Confluence scoring | ❌ | ❌ | ❌ | ✅ | ✅ (learning) |
+| Zone quality/decay | ❌ | ❌ | ❌ | ✅ | ✅ |
+| Session awareness | ❌ | ❌ | ⚠️ | ✅ | ✅ |
+| Narrative engine | ❌ | ❌ | ❌ | ✅ (v1) | ✅ (AI) |
+| Replay + SMC | ❌ | ❌ | ❌ | ✅ | ✅ (community) |
+| Multi-TF alignment | ❌ (manual) | ❌ | ⚠️ | ✅ (auto) | ✅ (auto) |
+| Mentor platform | ❌ | ❌ | ❌ | ✅ (basic) | ✅ (full) |
+| Price | $0-$50/mo | $70/mo | $100-300/mo | Free | Free (+ premium?) |
+| Community | ✅ (massive) | ⚠️ | ❌ | ❌ | ✅ (growing) |
+
+**Key insight**: TradingView = platform з massive community, але **zero SMC intelligence**. Aione Phase 4 = **SMC-specific platform** з intelligence що TV не має. Різні ніші: TV = general charting, Aione = SMC-focused analysis + education.
+
+**Realistic competitive edge**: не "заміна TradingView", а **"найкращий SMC companion tool"** — трейдер тримає TV для загального charting + Aione для SMC analysis + training.
+
+---
+
 ## 10. Implementation Plan (P-slices)
 
-Кожен slice ≤150 LOC, 1 інваріант, verify + rollback.
+> **Принцип**: Трейдер з 4 алгоритмами сьогодні > трейдер без нічого через 2 місяці з ідеальними 10.
+> MVP = E1 (Swings + Structure + OB + FVG) → зони на UI → далі ітеративно.
 
-### P1: Foundation Types + Swing Detection
+Фази розділені **MVP gate**: WS frame з реальними зонами замість `[]`.
+
+### ── PHASE 1: E1 Core Algorithms (Week 1-2) ──
+
+### S1: Foundation Types + Swing Detection
 
 ```
 Files: core/smc/__init__.py, core/smc/types.py, core/smc/config.py, core/smc/swings.py
 Tests: tests/test_smc_swings.py
 LOC: ~150
-Verify: pytest, detect swings on 500 M1 XAU/USD bars
+Verify: pytest, detect swings on 500 M1 XAU/USD bars from data_v3/
 Dependencies: None (pure, no integration)
+Note: _TfState.bars = deque(maxlen=lookback_bars), NOT list
 ```
 
-### P2: Market Structure (BOS/CHoCH)
+### S2: Market Structure + Order Blocks + FVG
 
 ```
-Files: core/smc/structure.py
-Tests: tests/test_smc_structure.py
-LOC: ~120
-Verify: detect BOS/CHoCH on known XAU/USD H1 data
-Dependencies: P1 (swings)
+Files: core/smc/structure.py, core/smc/order_blocks.py, core/smc/fvg.py
+Tests: tests/test_smc_structure.py, tests/test_smc_order_blocks.py, tests/test_smc_fvg.py
+LOC: ~250 (3 files)
+Verify: detect BOS/CHoCH, OBs (lifecycle: active→mitigated), FVGs (lifecycle: active→filled)
+Dependencies: S1 (swings)
 ```
 
-### P3: Order Blocks
-
-```
-Files: core/smc/order_blocks.py
-Tests: tests/test_smc_order_blocks.py
-LOC: ~130
-Verify: detect OBs, verify lifecycle (active → mitigated)
-Dependencies: P2 (structure)
-```
-
-### P4: Fair Value Gaps
-
-```
-Files: core/smc/fvg.py
-Tests: tests/test_smc_fvg.py
-LOC: ~80
-Verify: detect FVGs, verify fill lifecycle
-Dependencies: P1 (types)
-```
-
-### P5: Liquidity Levels
-
-```
-Files: core/smc/liquidity.py
-Tests: tests/test_smc_liquidity.py
-LOC: ~100
-Verify: detect equal highs/lows, PDH/PDL from D1
-Dependencies: P1 (swings)
-```
-
-### P6: SmcEngine Orchestrator
+### S3: SmcEngine Orchestrator
 
 ```
 Files: core/smc/engine.py
 Tests: tests/test_smc_engine.py, tests/test_smc_incremental.py
 LOC: ~150
-Verify: full compute + incremental consistency, performance <10ms/bar
-Dependencies: P1–P5
+Verify: update(bars) == sequential on_bar(); performance <10ms/bar on real XAU data
+Dependencies: S1, S2
+Gate: pytest — all E1 algorithms pass on real XAU/USD M1+H1 data
 ```
 
-### P7: SmcRunner + WS Integration
+### ── PHASE 2: Integration (Week 3) ──
+
+### S4: SmcRunner + WS Integration
 
 ```
 Files: runtime/smc/__init__.py, runtime/smc/smc_runner.py
-Changes: runtime/ws/ws_server.py (~30 LOC)
+Changes: runtime/ws/ws_server.py (~30 LOC — hook into existing delta_loop)
 Tests: tests/test_smc_runner.py
 LOC: ~120
-Verify: live WS frame з зонами, delta frame з змінами
-Dependencies: P6 + existing ws_server
+Verify: WS full frame має zones/swings/levels замість []
+Note: SmcRunner = consumer of existing v3_local:updates:* bus (§6.1)
 ```
 
-### P8: HTTP API + Config SSOT
+### S5: Config SSOT + types.ts Contract Expansion
 
 ```
-Changes: ui_chart_v3/server.py (~20 LOC), config.json (smc section)
+Changes: config.json (smc section), ui_v4/src/lib/types.ts
+Note: types.ts — kind.startsWith('ob') → orange, kind.startsWith('fvg') → green (backward compat)
 Files: core/contracts/public/marketdata_v1/smc_v1.json
-Tests: tests/test_api_smc.py
 LOC: ~60
-Verify: /api/smc endpoint, config reload
-Dependencies: P7
+Verify: config loads, types.ts matches wire format, OverlayRenderer renders zones
+Gate: existing OverlayRenderer.zoneColor() handles new kinds without crash
 ```
 
-### P9: UI Overlay Rendering
+### ── ✅ MVP GATE: трейдер бачить OB/FVG/BOS/CHoCH на графіку ──
+
+P9 з оригінального плану **на 80% вже зроблений**: OverlayRenderer.ts (269 LOC), ChartPane.svelte buildSmc(),
+types.ts SmcZone/SmcSwing/SmcLevel. Потрібно тільки розширити `kind` handling + swings labels.
+
+### ── PHASE 3: E2 Algorithms (Week 4-5) ──
+
+### S6: Liquidity Levels + Premium/Discount
 
 ```
-Files: ui_v4/src/smc/SmcOverlayRenderer.ts, ui_v4/src/smc/SmcPanel.svelte
-Changes: ui_v4/src/chart/engine.ts (hook overlays)
-LOC: ~200 (frontend)
-Verify: zones visible on chart, toggle layers, colors per smcThemes
-Dependencies: P8
+Files: core/smc/liquidity.py, core/smc/premium_discount.py
+Tests: tests/test_smc_liquidity.py, tests/test_smc_premium_discount.py
+LOC: ~180
+Verify: equal highs/lows detected, PDH/PDL from D1, P/D zone at 50% equilibrium
+Dependencies: S1 (swings), S2 (structure for P/D range reset)
 ```
 
-### P10: Replay Integration
+### S7: Inducement + Sessions/Killzones
+
+```
+Files: core/smc/inducement.py, core/smc/sessions.py
+Tests: tests/test_smc_inducement.py, tests/test_smc_sessions.py
+LOC: ~170
+Verify: false breakout detection, session tagging, killzone zone boost
+Dependencies: S1 (swings), config.json:smc.sessions
+```
+
+### ── PHASE 4: Intelligence Layer (Week 6-7) ──
+
+### S8: Confluence POI + Zone Quality + Narrative
+
+```
+Files: core/smc/confluence.py, core/smc/quality.py, core/smc/narrative.py
+Tests: tests/test_smc_confluence.py, tests/test_smc_quality.py
+LOC: ~250
+Verify: POI scoring (11-point), zone decay, human-readable narrative
+Dependencies: S1-S7 (all layers)
+```
+
+### ── PHASE 5: Polish (Week 8+) ──
+
+### S9: HTTP API + Exit Gates + Docs
+
+```
+Changes: ui_chart_v3/server.py (/api/smc endpoint ~20 LOC), docs/contracts.md
+Files: tools/exit_gates/gates/gate_smc_contract.py
+Tests: tests/test_api_smc.py
+LOC: ~80
+Dependencies: S4
+```
+
+### S10: Replay Integration
 
 ```
 Changes: runtime/replay/ (when ADR-0017 is implemented)
 LOC: ~20
-Verify: replay frame with SMC zones, step-by-step zone appearance
-Dependencies: P6 + ADR-0017
+Dependencies: S3 + ADR-0017
 ```
 
-### P11: Exit Gates + Docs
+**Реалістичний timeline**:
 
 ```
-Files: tools/exit_gates/gates/gate_smc_contract.py, docs/contracts.md update
-Changes: tools/exit_gates/manifest.json
-LOC: ~80
-Verify: exit-gates pass, docs current
-Dependencies: P8
+Week 1-2:  S1-S3   E1 MVP core/smc/ (pure logic + tests on real data)
+Week 3:    S4-S5   Integration (SmcRunner + ws_server + config + types.ts)
+── MVP GATE: зони на графіку ──
+Week 4-5:  S6-S7   E2 algorithms (liquidity, P/D, inducement, sessions)
+Week 6-7:  S8      E3 intelligence (confluence, quality, narrative)
+Week 8+:   S9-S10  HTTP API, exit gates, replay
 ```
 
-**Орієнтовний timeline**:
-
-```
-P1–P5: Week 1  (core/smc/ — pure logic, parallel development possible)
-P6:    Week 2  (integration, performance tuning)
-P7–P8: Week 2  (runtime integration, API)
-P9:    Week 3  (UI rendering)
-P10:   After ADR-0017 (replay)
-P11:   Week 3  (quality gates)
-```
+> **Чому довше ніж оригінал (8 тижнів vs 4)**:
+>
+> 1. Алгоритми потребують тюнінгу на реальних даних (XAU/USD vs NGAS дуже різні)
+> 2. Integration = shared state + asyncio → Bug Hunter знайде гонки
+> 3. UI rendering (BOS/CHoCH labels, strength opacity) потребує ітерацій
+> Перший видимий результат — Week 3 (MVP gate). Решта — ітеративне нарощування.
 
 ---
 
@@ -1037,8 +1672,8 @@ rm -rf core/smc/ runtime/smc/ ui_v4/src/smc/
 
 | Ризик | Ймовірність | Вплив | Мітигація |
 |-------|-------------|-------|-----------|
-| SMC compute > 10ms per bar на Python 3.7 | Medium | Повільні delta frames | numpy vectorization; per-layer disable; async compute |
-| Thread safety (SmcRunner in ws_server process) | Medium | Data race | threading.Lock per (symbol, tf); або asyncio-only |
+| SMC compute > 10ms per bar на Python 3.7 | Medium | Повільні delta frames | `deque(maxlen)` замість list; numpy vectorization; per-layer disable; async compute |
+| Thread safety (SmcRunner in ws_server process) | Medium | Data race | asyncio-only (single event loop); fallback: threading.Lock per (symbol, tf) |
 | 13 symbols × 8 TFs = 104 warmups at cold start | Low | Slow cold-start (+10s) | Parallel warmup; priority symbols first |
 | config.json bloat (SMC params) | Low | Config drift | Nested smc section, SmcConfig dataclass guard |
 | UI rendering perf (30+ zones on chart) | Low | Canvas lag | max_zones_per_tf cap; LOD by zoom |
@@ -1058,10 +1693,51 @@ rm -rf core/smc/ runtime/smc/ ui_v4/src/smc/
 
 ---
 
-## 16. Відкриті питання (для Phase 2+)
+## 16. Review Notes (staff-engineer рев'ю)
 
-1. **Alert system**: Chи SmcRunner публікує alerts ("New OB formed on XAU/USD H4")? Окремий ADR.
-2. **Risk Calculator**: Server-side чи UI-only? Якщо server — окремий endpoint.
-3. **Backtesting**: SmcEngine + historical bars → win rate by zone type. Потребує окремий initiative.
-4. **Custom zones**: User-drawn зони що co-exist з auto-detected. Drawing storage ADR.
-5. **Weekly TF (W1)**: Додавання tf_s=604800. Потребує зміну в TF allowlist + derive chain.
+> Дата рев'ю: 2026-02-28. Вердикт: **APPROVED з коригуваннями (applied).**
+
+### Що вже побудоване в коді (ADR baseline)
+
+| Компонент | Файл | Стан | Для SMC MVP |
+|-----------|------|------|-------------|
+| Overlay renderer | `ui_v4/src/smc/OverlayRenderer.ts` (269 LOC) | **Працює** — рендерить zones/swings/levels на canvas | P9 на 80% готовий |
+| SMC data extraction | `ChartPane.svelte:88` `buildSmc(frame)` | **Працює** — витягує з WS frame | Готовий |
+| WS frame placeholders | `ws_server.py:271-273` `zones: [], swings: [], levels: []` | **Placeholder** | Потрібно заповнити |
+| TypeScript types | `types.ts:23-49` SmcZone/SmcSwing/SmcLevel/SmcData | **Визначені** | Потрібно розширити kind |
+| Backend SMC logic | `core/smc/`, `runtime/smc/` | **Не існує (0 LOC)** | Весь S1-S3 |
+
+### 3 коригування (applied у rev 2.1)
+
+| # | Коригування | Що змінено в ADR | Причина |
+|---|-------------|------------------|---------|
+| C1 | **MVP = E1 only (4 алгоритми)** | §10: P-slices перебудовані на S1-S10, MVP gate після S5 | OB/FVG без confluence = корисний. Confluence без OB/FVG = безглуздий. |
+| C2 | **SmcRunner = existing bus consumer** | §6.1: SmcRunner як callback від delta_loop, не окремий Redis канал | In-process = direct callback, 0 overhead. Окремий `smc:delta:*` = зайвий pub/sub roundtrip. |
+| C3 | **types.ts prefix matching** | §6.1a: `kind.startsWith('ob')` замість `kind === 'ob'` | Forward-compatible з sub-kinds. 3 LOC зміна. |
+
+### Ризик Python 3.7 performance (додана мітигація)
+
+OB/FVG lifecycle check = float comparison (price vs zone.high/low) = мікросекунди per zone.
+Swing detection rolling window = **deque(maxlen=lookback_bars)**, не list scan.
+Зафіксовано в S1 note: `_TfState.bars = deque(maxlen=lookback_bars)`.
+Worst case 30 zones × 104 пар = 3120 checks — допустимо при simple float comparison.
+
+### Реалістичний timeline (8 тижнів замість 4)
+
+1. Алгоритми потребують тюнінгу на реальних даних (XAU/USD vs NGAS дуже різні)
+2. Integration = shared state + asyncio → Bug Hunter знайде гонки
+3. UI rendering (BOS/CHoCH labels, strength opacity) потребує ітерацій
+4. Перший видимий результат — **Week 3** (MVP gate). Решта — ітеративне нарощування.
+
+---
+
+## 17. Відкриті питання (для Phase 2+)
+
+1. **Alert system**: SmcRunner публікує alerts ("Price approaching A+ POI on XAU/USD H4")? Architeced в §9Б Phase 2, потребує окремий ADR для transport (WS push, sound, browser notification).
+2. **Risk Calculator**: Server-side чи UI-only? Якщо server — окремий endpoint `/api/smc/risk`. Залежить від того чи знаємо account size / risk per trade.
+3. **Backtesting**: SmcEngine + historical bars → win rate by zone type/grade. Потребує окремий initiative. High value: "A+ POIs мають 72% reaction rate" → proof of confluence scoring.
+4. **Custom zones**: User-drawn зони що co-exist з auto-detected. Drawing storage ADR (пов'язано з ADR-0007 Drawing Tools).
+5. **Weekly TF (W1)**: Додавання tf_s=604800. Потребує зміну в TF allowlist + derive chain + calendar logic.
+6. **Plugin Architecture**: Можливість додавати custom SMC layers (Wyckoff, Silver Bullet) без змін у core. Interface: `SmcLayer.on_bar() → List[SmcZone|SmcSwing|SmcLevel]`.
+7. **Multi-user Annotations**: Ментор анотує replay → учні бачать. Потребує persistence layer (окремий ADR).
+8. **Mobile PWA**: ui_v4 Svelte → PWA. SMC dashboard як перший mobile-friendly screen. Push notifications від Alert system.
