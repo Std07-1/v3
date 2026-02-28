@@ -1,7 +1,8 @@
 # ADR-0024: SMC Engine — Smart Money Concepts Computation Layer
 
-- **Статус**: Accepted
+- **Статус**: Implemented (E1 — Swings + Structure + OB + FVG)
 - **Дата**: 2026-02-28
+- **Дата реалізації E1**: 2026-03-01
 - **Автор**: Claude Opus 4.6 (Patch Master)
 - **Initiative**: `smc_engine_v1`
 - **Залежності**: ADR-0001 (UDS), ADR-0002 (DeriveChain), ADR-0017 (Replay), ADR-0023 (D1)

@@ -31,7 +31,7 @@ _tmp_jsonl_stress
 *.swo
 *~
 .agent/
-. AGENTS.md
+AGENTS.md
 
 # ── Дані (runtime, не код) ──────────────────────────────────
 /data_v3/

@@ -261,5 +261,31 @@
         "port": 8000,
         "heartbeat_interval_s": 30,
         "delta_poll_interval_s": 1.0
+    },
+    "smc": {
+        "enabled": true,
+        "lookback_bars": 500,
+        "swing_period": 5,
+        "ob": {
+            "enabled": true,
+            "min_impulse_atr_mult": 1.5,
+            "atr_period": 14,
+            "max_active_per_side": 5,
+            "track_breakers": true
+        },
+        "fvg": {
+            "enabled": true,
+            "min_gap_atr_mult": 0.1,
+            "max_active": 10
+        },
+        "structure": {
+            "enabled": true,
+            "confirmation_bars": 1
+        },
+        "max_zones_per_tf": 30,
+        "performance": {
+            "max_compute_ms": 10,
+            "log_slow_threshold_ms": 5
+        }
     }
 }
