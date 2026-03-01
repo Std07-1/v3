@@ -102,7 +102,7 @@ ui_v4/.env.example
 
 # ── UI v4: old/dead code ────────────────────────────────────
 ui_v4/src/chart/ChartPane.svelte
-ui_v4/src/chart/drawings/CommandStack.ts
+# CommandStack.ts — НЕ dead code: активно імпортується DrawingsRenderer.ts (undo/redo stack)
 
 # ── Python config/packaging (поки не використовується) ──────
 /mypy.ini
