@@ -19,12 +19,17 @@ from core.smc.types import (
     make_swing_id,
     make_level_id,
 )
-from core.smc.config import SmcConfig
+from core.smc.config import SmcConfig, SmcDisplayConfig, SmcLevelsConfig, SmcPremiumDiscountConfig, SmcInducementConfig
 from core.smc.engine import SmcEngine
+from core.smc.key_levels import compute_key_levels, collect_htf_levels, KEY_LEVEL_KINDS
 
 __all__ = [
     "SmcEngine",
     "SmcConfig",
+    "SmcDisplayConfig",
+    "SmcLevelsConfig",
+    "SmcPremiumDiscountConfig",
+    "SmcInducementConfig",
     "SmcZone",
     "SmcSwing",
     "SmcLevel",
@@ -33,7 +38,10 @@ __all__ = [
     "ZONE_KINDS",
     "SWING_KINDS",
     "LEVEL_KINDS",
+    "KEY_LEVEL_KINDS",
     "make_zone_id",
     "make_swing_id",
     "make_level_id",
+    "compute_key_levels",
+    "collect_htf_levels",
 ]

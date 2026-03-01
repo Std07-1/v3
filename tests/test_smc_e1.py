@@ -179,7 +179,7 @@ def test_s4_on_bar_processes_complete() -> None:
 # ──────────────────────────────────────────────────────────────
 
 def test_s6_snapshot_to_wire_has_required_keys() -> None:
-    """S6: SmcSnapshot.to_wire() повертає {zones, swings, levels}."""
+    """S6: SmcSnapshot.to_wire() повертає {zones, swings, levels, trend_bias} (F8)."""
     eng = _make_engine()
     snap = eng.update(SYM, TF, _flat_bars(30))
     wire = snap.to_wire()
@@ -187,6 +187,7 @@ def test_s6_snapshot_to_wire_has_required_keys() -> None:
     assert "zones" in wire
     assert "swings" in wire
     assert "levels" in wire
+    assert "trend_bias" in wire  # F8
     assert isinstance(wire["zones"], list)
     assert isinstance(wire["swings"], list)
     assert isinstance(wire["levels"], list)
@@ -211,7 +212,7 @@ def test_s6_zone_wire_has_required_fields() -> None:
 
 
 def test_s6_swing_wire_has_required_fields() -> None:
-    """S6: SmcSwing.to_wire() повертає {id, a, b, label}."""
+    """S6: SmcSwing.to_wire() повертає {id, kind, time_ms, price, label} (F7: point format)."""
     from core.smc.types import SmcSwing
 
     swing = SmcSwing(
@@ -222,8 +223,9 @@ def test_s6_swing_wire_has_required_fields() -> None:
     wire = swing.to_wire()
 
     assert "id" in wire
-    assert "a" in wire
-    assert "b" in wire
+    assert "kind" in wire
+    assert "time_ms" in wire
+    assert "price" in wire
     assert "label" in wire
 
 

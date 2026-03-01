@@ -1,8 +1,11 @@
 # ADR-0024: SMC Engine — Smart Money Concepts Computation Layer
 
-- **Статус**: Implemented (E1 — Swings + Structure + OB + FVG)
+- **Статус**: Implemented (E1 + S4 + E2 + N1/N2/N3)
 - **Дата**: 2026-02-28
-- **Дата реалізації E1**: 2026-03-01
+- **Дата реалізації E1** (pure logic): 2026-03-01
+- **Дата реалізації S4** (runtime wiring): 2026-03-01
+- **Дата реалізації E2** (liquidity, P/D, inducement): 2026-03-01
+- **Дата реалізації N1/N2/N3** (lifecycle, caps, UI toggles): 2026-03-01
 - **Автор**: Claude Opus 4.6 (Patch Master)
 - **Initiative**: `smc_engine_v1`
 - **Залежності**: ADR-0001 (UDS), ADR-0002 (DeriveChain), ADR-0017 (Replay), ADR-0023 (D1)
@@ -825,6 +828,8 @@ GET /api/smc?symbol=XAU/USD&tf_s=3600
 
 ### 5.3 Config SSOT (config.json)
 
+> **Актуальний config.json:smc** (станом на 2026-03-01, після E2+N2):
+
 ```json
 {
   "smc": {
@@ -840,65 +845,32 @@ GET /api/smc?symbol=XAU/USD&tf_s=3600
     },
     "fvg": {
       "enabled": true,
-      "min_gap_atr_mult": 0.1,
-      "max_active": 10
+      "min_gap_atr_mult": 0.3,
+      "max_active": 5
     },
     "structure": {
       "enabled": true,
       "confirmation_bars": 1
     },
-    "liquidity": {
+    "levels": {
       "enabled": true,
-      "eq_tolerance_pips": {
-        "XAU/USD": 0.50,
-        "XAG/USD": 0.05,
-        "NAS100": 5.0,
-        "SPX500": 2.0,
-        "default": 0.0003
-      },
+      "tolerance_atr_mult": 0.1,
       "min_touches": 2,
-      "pdh_pdl_enabled": true,
-      "pwh_pwl_enabled": true
+      "max_levels": 10
     },
-    "max_zones_per_tf": 30,
     "premium_discount": {
-      "enabled": true
+      "enabled": false
     },
     "inducement": {
       "enabled": true,
-      "minor_swing_period": 3,
-      "confirmation_atr_mult": 0.5,
-      "confirmation_bars": 3
+      "minor_period": 3,
+      "reversal_atr_mult": 0.5,
+      "confirmation_bars": 3,
+      "max_inducements": 10
     },
-    "sessions": {
-      "enabled": true,
-      "killzone_boost": 1.3,
-      "definitions": [
-        {"name": "asia",    "start_utc": "00:00", "end_utc": "06:00", "kz_start": null, "kz_end": null},
-        {"name": "london",  "start_utc": "07:00", "end_utc": "16:00", "kz_start": "07:00", "kz_end": "10:00"},
-        {"name": "ny",      "start_utc": "12:00", "end_utc": "21:00", "kz_start": "12:00", "kz_end": "15:00"}
-      ],
-      "symbol_overrides": {
-        "XAU/USD": {"primary": "london", "secondary": "ny"},
-        "NAS100": {"primary": "ny"},
-        "GER30": {"primary": "london"},
-        "USD/JPY": {"primary": "asia", "secondary": "ny"}
-      }
-    },
-    "confluence": {
-      "enabled": true,
-      "max_poi_per_tf": 5,
-      "grade_thresholds": {"A+": 8, "A": 6, "B": 4}
-    },
-    "quality": {
-      "fresh_bars": 50,
-      "aging_bars": 200,
-      "stale_bars": 500,
-      "test_penalties": [1.0, 0.7, 0.4, 0.1],
-      "htf_decay_multipliers": {"86400": 0.3, "14400": 0.5, "3600": 1.0, "default": 2.0},
-      "min_display_quality": 0.1,
-      "fading_threshold": 0.3
-    },
+    "max_zones_per_tf": 10,
+    "max_zone_height_atr_mult": 5.0,
+    "hide_mitigated": false,
     "performance": {
       "max_compute_ms": 10,
       "log_slow_threshold_ms": 5
@@ -907,7 +879,17 @@ GET /api/smc?symbol=XAU/USD&tf_s=3600
 }
 ```
 
-Кожен `enabled` прапорець — per-layer toggle. UI надсилає `overlay_toggle` action для відображення.
+**Зміни від оригінального spec**:
+
+| Параметр | Spec (ADR v1) | Actual (після N2) | Причина |
+|----------|---------------|-------------------|---------|
+| `fvg.min_gap_atr_mult` | 0.1 | **0.3** | N2: фільтрація шуму — мінімальна значуща FVG = 0.3 ATR |
+| `fvg.max_active` | 10 | **5** | N2: зменшення clutter на графіку |
+| `max_zones_per_tf` | 30 | **10** | N2: жорсткіший cap з `_zone_rank()` сортуванням |
+| `liquidity` | nested obj | → **levels** | E2: перейменовано для узгодженості з SmcLevel kind |
+| `premium_discount.enabled` | true | **false** | E2: вимкнено до E3 (потребує session awareness) |
+| `max_zone_height_atr_mult` | — | **5.0** (нове) | N2: фільтр аномально високих зон |
+| `hide_mitigated` | — | **false** (нове) | N2: show mitigated з напівпрозорістю |
 
 ---
 
@@ -1453,140 +1435,138 @@ Metric: "100+ active users, community-driven content"
 
 Фази розділені **MVP gate**: WS frame з реальними зонами замість `[]`.
 
-### ── PHASE 1: E1 Core Algorithms (Week 1-2) ──
+### ── PHASE 1: E1 Core Algorithms ✅ (2026-03-01) ──
 
-### S1: Foundation Types + Swing Detection
+### S1: Foundation Types + Swing Detection ✅
 
 ```
 Files: core/smc/__init__.py, core/smc/types.py, core/smc/config.py, core/smc/swings.py
-Tests: tests/test_smc_swings.py
-LOC: ~150
-Verify: pytest, detect swings on 500 M1 XAU/USD bars from data_v3/
-Dependencies: None (pure, no integration)
-Note: _TfState.bars = deque(maxlen=lookback_bars), NOT list
+Tests: tests/test_smc_e1.py
+Status: DONE — 17 tests pass
 ```
 
-### S2: Market Structure + Order Blocks + FVG
+### S2: Market Structure + Order Blocks + FVG ✅
 
 ```
 Files: core/smc/structure.py, core/smc/order_blocks.py, core/smc/fvg.py
-Tests: tests/test_smc_structure.py, tests/test_smc_order_blocks.py, tests/test_smc_fvg.py
-LOC: ~250 (3 files)
-Verify: detect BOS/CHoCH, OBs (lifecycle: active→mitigated), FVGs (lifecycle: active→filled)
-Dependencies: S1 (swings)
+Tests: tests/test_smc_e1.py
+Status: DONE — included in E1 test suite
 ```
 
-### S3: SmcEngine Orchestrator
+### S3: SmcEngine Orchestrator ✅
 
 ```
 Files: core/smc/engine.py
-Tests: tests/test_smc_engine.py, tests/test_smc_incremental.py
-LOC: ~150
-Verify: update(bars) == sequential on_bar(); performance <10ms/bar on real XAU data
-Dependencies: S1, S2
-Gate: pytest — all E1 algorithms pass on real XAU/USD M1+H1 data
+Tests: tests/test_smc_e1.py
+Status: DONE — update(bars) determinism verified, on_bar() incremental
 ```
 
-### ── PHASE 2: Integration (Week 3) ──
+### ── PHASE 2: S4 Integration ✅ (2026-03-01) ──
 
-### S4: SmcRunner + WS Integration
+### S4: SmcRunner + WS Integration ✅
 
 ```
 Files: runtime/smc/__init__.py, runtime/smc/smc_runner.py
-Changes: runtime/ws/ws_server.py (~30 LOC — hook into existing delta_loop)
-Tests: tests/test_smc_runner.py
-LOC: ~120
-Verify: WS full frame має zones/swings/levels замість []
-Note: SmcRunner = consumer of existing v3_local:updates:* bus (§6.1)
+Changes: runtime/ws/ws_server.py (5 surgical edits ~50 LOC)
+Tests: tests/test_smc_runner.py (31 tests)
+Status: DONE — WS full frame має zones/swings/levels, delta frame має smc_delta
 ```
 
-### S5: Config SSOT + types.ts Contract Expansion
+### S5: Config SSOT + types.ts Contract Expansion ✅
 
 ```
-Changes: config.json (smc section), ui_v4/src/lib/types.ts
-Note: types.ts — kind.startsWith('ob') → orange, kind.startsWith('fvg') → green (backward compat)
-Files: core/contracts/public/marketdata_v1/smc_v1.json
-LOC: ~60
-Verify: config loads, types.ts matches wire format, OverlayRenderer renders zones
-Gate: existing OverlayRenderer.zoneColor() handles new kinds without crash
+Changes: config.json (smc section), ui_v4/src/types.ts (SmcDeltaWire interface)
+New: ui_v4/src/stores/smcStore.ts (applySmcFull/applySmcDelta)
+Changes: ui_v4/src/layout/ChartPane.svelte (incremental SMC update)
+Status: DONE — config loads, types.ts matches wire format, OverlayRenderer renders
 ```
 
-### ── ✅ MVP GATE: трейдер бачить OB/FVG/BOS/CHoCH на графіку ──
+### ── ✅ MVP GATE PASSED: трейдер бачить OB/FVG/BOS/CHoCH на графіку ──
 
-P9 з оригінального плану **на 80% вже зроблений**: OverlayRenderer.ts (269 LOC), ChartPane.svelte buildSmc(),
-types.ts SmcZone/SmcSwing/SmcLevel. Потрібно тільки розширити `kind` handling + swings labels.
+### ── PHASE 3: E2 Algorithms ✅ (2026-03-01) ──
 
-### ── PHASE 3: E2 Algorithms (Week 4-5) ──
-
-### S6: Liquidity Levels + Premium/Discount
+### S6: Liquidity Levels ✅
 
 ```
-Files: core/smc/liquidity.py, core/smc/premium_discount.py
-Tests: tests/test_smc_liquidity.py, tests/test_smc_premium_discount.py
-LOC: ~180
-Verify: equal highs/lows detected, PDH/PDL from D1, P/D zone at 50% equilibrium
-Dependencies: S1 (swings), S2 (structure for P/D range reset)
+Files: core/smc/liquidity.py
+Tests: tests/test_smc_e2_liquidity.py (25 tests)
+Status: DONE — ATR-based clustering, equal highs/lows
+Note: Renamed config section from "liquidity" to "levels" для узгодженості з SmcLevel kind
 ```
 
-### S7: Inducement + Sessions/Killzones
+### S6b: Premium/Discount + Inducement ✅
 
 ```
-Files: core/smc/inducement.py, core/smc/sessions.py
-Tests: tests/test_smc_inducement.py, tests/test_smc_sessions.py
-LOC: ~170
-Verify: false breakout detection, session tagging, killzone zone boost
-Dependencies: S1 (swings), config.json:smc.sessions
+Files: core/smc/premium_discount.py, core/smc/inducement.py
+Config: core/smc/config.py (SmcPremiumDiscountConfig, SmcInducementConfig)
+Tests: tests/test_smc_e2_pd_inducement.py (38 tests)
+Status: DONE — P/D disabled (enabled=false, потребує sessions для E3), inducement enabled
 ```
 
-### ── PHASE 4: Intelligence Layer (Week 6-7) ──
+### ── PHASE 3b: N1/N2/N3 Normalization ✅ (2026-03-01, поза оригінальним планом) ──
 
-### S8: Confluence POI + Zone Quality + Narrative
+> **N-phase** не була в оригінальному ADR echelon плані. Виникла як необхідність
+> після E2: без lifecycle management зони накопичувались нескінченно.
 
-```
-Files: core/smc/confluence.py, core/smc/quality.py, core/smc/narrative.py
-Tests: tests/test_smc_confluence.py, tests/test_smc_quality.py
-LOC: ~250
-Verify: POI scoring (11-point), zone decay, human-readable narrative
-Dependencies: S1-S7 (all layers)
-```
-
-### ── PHASE 5: Polish (Week 8+) ──
-
-### S9: HTTP API + Exit Gates + Docs
+### N1: Zone Lifecycle Management ✅
 
 ```
-Changes: ui_chart_v3/server.py (/api/smc endpoint ~20 LOC), docs/contracts.md
-Files: tools/exit_gates/gates/gate_smc_contract.py
-Tests: tests/test_api_smc.py
-LOC: ~80
-Dependencies: S4
+Changes: core/smc/engine.py — _update_zone_lifecycle() (~80 LOC)
+Tests: tests/test_smc_n1_lifecycle.py (14 tests)
+Pipeline: merge OB+FVG → FVG evict(D-02 cap) → mitigate by close(R-04) → decay → expiry(>500 bars)
+          → hide_mitigated → deterministic cap(_zone_rank: kind → strength → freshness)
+State: _TfState._active_zones: Dict[str, SmcZone] — persistent zone slot
 ```
 
-### S10: Replay Integration
+### N2: Config Caps + FVG Height Guard ✅
 
 ```
-Changes: runtime/replay/ (when ADR-0017 is implemented)
-LOC: ~20
-Dependencies: S3 + ADR-0017
+Changes: config.json (max_zones_per_tf: 30→10, fvg.min_gap_atr_mult: 0.1→0.3, fvg.max_active: 10→5)
+         core/smc/config.py (+max_zone_height_atr_mult, +hide_mitigated)
+         core/smc/fvg.py (+height guard: reject FVG > max_zone_height_atr_mult × ATR)
+Status: DONE — tighter caps reduce noise
 ```
 
-**Реалістичний timeline**:
+### N3: UI Strength Opacity + 4 Toggles ✅
 
 ```
-Week 1-2:  S1-S3   E1 MVP core/smc/ (pure logic + tests on real data)
-Week 3:    S4-S5   Integration (SmcRunner + ws_server + config + types.ts)
-── MVP GATE: зони на графіку ──
-Week 4-5:  S6-S7   E2 algorithms (liquidity, P/D, inducement, sessions)
-Week 6-7:  S8      E3 intelligence (confluence, quality, narrative)
-Week 8+:   S9-S10  HTTP API, exit gates, replay
+Changes: ui_v4/src/smc/OverlayRenderer.ts — fillAlpha = 0.04 + 0.11 * strength
+         ui_v4/src/layout/ChartPane.svelte — 4 toggles (OB/FVG/Swings/Levels)
+         ui_v4 localStorage: v4_show_ob, v4_show_fvg, v4_show_swings, v4_show_levels
+Status: DONE — Vite build clean (166 modules)
 ```
 
-> **Чому довше ніж оригінал (8 тижнів vs 4)**:
->
-> 1. Алгоритми потребують тюнінгу на реальних даних (XAU/USD vs NGAS дуже різні)
-> 2. Integration = shared state + asyncio → Bug Hunter знайде гонки
-> 3. UI rendering (BOS/CHoCH labels, strength opacity) потребує ітерацій
-> Перший видимий результат — Week 3 (MVP gate). Решта — ітеративне нарощування.
+### ── PHASE 4: E3 Intelligence Layer ❌ (NOT STARTED) ──
+
+### S7: Sessions/Killzones ❌
+
+```
+Files: core/smc/sessions.py (not created)
+Config: config.json:smc.sessions (not added)
+Status: NOT STARTED — потребує session definitions, killzone boost, symbol overrides
+```
+
+### S8: Confluence POI + Zone Quality + Narrative ❌
+
+```
+Files: core/smc/confluence.py, core/smc/quality.py, core/smc/narrative.py (not created)
+Status: NOT STARTED — потребує S7 (sessions) як prerequisite для killzone scoring
+Note: N1 lifecycle вже реалізує частину quality model (decay, expiry, strength)
+```
+
+### ── PHASE 5: Polish ❌ (NOT STARTED) ──
+
+### S9: HTTP API + Exit Gates + Docs ❌
+
+```
+Status: NOT STARTED — /api/smc endpoint, SMC exit gates
+```
+
+### S10: Replay Integration ❌
+
+```
+Status: NOT STARTED — залежить від ADR-0017 (Replay)
+```
 
 ---
 
@@ -1696,17 +1676,31 @@ rm -rf core/smc/ runtime/smc/ ui_v4/src/smc/
 
 ## 16. Review Notes (staff-engineer рев'ю)
 
-> Дата рев'ю: 2026-02-28. Вердикт: **APPROVED з коригуваннями (applied).**
+> Дата початкового рев'ю: 2026-02-28. Оновлено: 2026-03-01.  
+> Вердикт: **APPROVED → IMPLEMENTED (E1+S4+E2+N1/N2/N3).**
 
-### Що вже побудоване в коді (ADR baseline)
+### Поточний стан коду (актуально 2026-03-01)
 
-| Компонент | Файл | Стан | Для SMC MVP |
-|-----------|------|------|-------------|
-| Overlay renderer | `ui_v4/src/smc/OverlayRenderer.ts` (269 LOC) | **Працює** — рендерить zones/swings/levels на canvas | P9 на 80% готовий |
-| SMC data extraction | `ChartPane.svelte:88` `buildSmc(frame)` | **Працює** — витягує з WS frame | Готовий |
-| WS frame placeholders | `ws_server.py:271-273` `zones: [], swings: [], levels: []` | **Placeholder** | Потрібно заповнити |
-| TypeScript types | `types.ts:23-49` SmcZone/SmcSwing/SmcLevel/SmcData | **Визначені** | Потрібно розширити kind |
-| Backend SMC logic | `core/smc/`, `runtime/smc/` | **Не існує (0 LOC)** | Весь S1-S3 |
+| Компонент | Файл(и) | Стан | LOC | Тести |
+|-----------|---------|------|-----|-------|
+| SmcZone/SmcSwing/SmcLevel/SmcSnapshot/SmcDelta | `core/smc/types.py` | ✅ Implemented | ~190 | E1 tests |
+| SmcConfig (nested dataclasses) | `core/smc/config.py` | ✅ Implemented | ~100 | — |
+| Swing Detection (rolling window) | `core/smc/swings.py` | ✅ Implemented | ~60 | E1 tests |
+| Market Structure (BOS/CHoCH) | `core/smc/structure.py` | ✅ Implemented | ~70 | E1 tests |
+| Order Blocks (bull/bear lifecycle) | `core/smc/order_blocks.py` | ✅ Implemented | ~90 | E1 tests |
+| FVG (bull/bear + height guard) | `core/smc/fvg.py` | ✅ Implemented | ~70 | E1+N2 tests |
+| Liquidity Levels (ATR clustering) | `core/smc/liquidity.py` | ✅ Implemented | ~120 | E2 tests |
+| Premium/Discount (equilibrium) | `core/smc/premium_discount.py` | ✅ Implemented | ~50 | E2 tests |
+| Inducement (false breakout) | `core/smc/inducement.py` | ✅ Implemented | ~80 | E2 tests |
+| SmcEngine (orchestrator + lifecycle) | `core/smc/engine.py` | ✅ Implemented (N1) | ~350 | E1+N1 tests |
+| SmcRunner (warmup + on_bar) | `runtime/smc/smc_runner.py` | ✅ Implemented | ~80 | S4 tests |
+| WS Server (full/delta/zones) | `runtime/ws/ws_server.py` | ✅ 5 surgical changes | ~10 Δ | S4 tests |
+| Overlay renderer | `ui_v4/src/smc/OverlayRenderer.ts` | ✅ Strength opacity (N3) | ~280 | Vite build |
+| SMC data store | `ui_v4/src/stores/smcStore.ts` | ✅ Full+Delta apply | ~90 | Vite build |
+| ChartPane SMC wiring | `ui_v4/src/layout/ChartPane.svelte` | ✅ 4 toggles (N3) | ~20 Δ | Vite build |
+| TypeScript types | `ui_v4/src/types.ts` | ✅ SmcDeltaWire + RenderFrame | ~50 Δ | Vite build |
+
+**Тести**: 125 Python tests (5 файлів), Vite build clean (166 modules).
 
 ### 3 коригування (applied у rev 2.1)
 
@@ -1734,6 +1728,9 @@ Worst case 30 zones × 104 пар = 3120 checks — допустимо при si
 
 ## 17. Відкриті питання (для Phase 2+)
 
+> **Примітка**: Sessions/Killzones (колишній S7) перенесено з "відкритих питань" в E3 план —
+> це наступний природний крок після N-phase.
+
 1. **Alert system**: SmcRunner публікує alerts ("Price approaching A+ POI on XAU/USD H4")? Architeced в §9Б Phase 2, потребує окремий ADR для transport (WS push, sound, browser notification).
 2. **Risk Calculator**: Server-side чи UI-only? Якщо server — окремий endpoint `/api/smc/risk`. Залежить від того чи знаємо account size / risk per trade.
 3. **Backtesting**: SmcEngine + historical bars → win rate by zone type/grade. Потребує окремий initiative. High value: "A+ POIs мають 72% reaction rate" → proof of confluence scoring.
@@ -1742,3 +1739,278 @@ Worst case 30 zones × 104 пар = 3120 checks — допустимо при si
 6. **Plugin Architecture**: Можливість додавати custom SMC layers (Wyckoff, Silver Bullet) без змін у core. Interface: `SmcLayer.on_bar() → List[SmcZone|SmcSwing|SmcLevel]`.
 7. **Multi-user Annotations**: Ментор анотує replay → учні бачать. Потребує persistence layer (окремий ADR).
 8. **Mobile PWA**: ui_v4 Svelte → PWA. SMC dashboard як перший mobile-friendly screen. Push notifications від Alert system.
+
+---
+
+## 18. Implementation Progress (станом на 2026-03-01)
+
+> Цей розділ — **briefing для нового асистента**: що зроблено, що поза планом, що далі.
+
+### 18.1 Зведена таблиця
+
+| Фаза | Slice | Що | Статус | Тести | Дата | Changelog |
+|------|-------|----|--------|-------|------|-----------|
+| **E1** | S1-S3 | Swings, Structure, OB, FVG, SmcEngine | ✅ Done | 17 (test_smc_e1) | 2026-03-01 | 20260301-004 |
+| **S4** | S4-S5 | SmcRunner, ws_server, types.ts, config | ✅ Done | 31 (test_smc_runner) | 2026-03-01 | 20260301-005 |
+| **E2** | S6 | Liquidity Levels | ✅ Done | 25 (test_smc_e2_liquidity) | 2026-03-01 | 20260301-007 |
+| **E2** | — | UI delta fix (smcStore, types.ts, ChartPane) | ✅ Done | Vite build | 2026-03-01 | 20260301-007 |
+| **E2** | S6b | Premium/Discount + Inducement | ✅ Done | 38 (test_smc_e2_pd_inducement) | 2026-03-01 | 20260301-008 |
+| **N1** | — | Zone lifecycle (_update_zone_lifecycle) | ✅ Done | 14 (test_smc_n1_lifecycle) | 2026-03-01 | 20260301-009 |
+| **N2** | — | Config caps, FVG height guard | ✅ Done | (in N1) | 2026-03-01 | 20260301-009 |
+| **N3** | — | Strength opacity, 4 UI toggles | ✅ Done | Vite build | 2026-03-01 | 20260301-009 |
+| **E3** | S7 | Sessions/Killzones | ❌ Not started | — | — | — |
+| **E3** | S8 | Confluence POI + Quality + Narrative | ❌ Not started | — | — | — |
+| **Polish** | S9 | HTTP API + Exit Gates | ❌ Not started | — | — | — |
+| **Polish** | S10 | Replay integration | ❌ Not started | — | — | — |
+
+**Загальна статистика**: 125 Python tests pass, Vite build clean (166 modules).
+
+### 18.2 Що зроблено за планом (ADR echelons)
+
+| ADR §4 алгоритм | Echelon | Статус | Примітки |
+|-----------------|---------|--------|----------|
+| §4.1 Swings | E1 | ✅ | `swings.py` — rolling window period=5 |
+| §4.2 Structure (BOS/CHoCH) | E1 | ✅ | `structure.py` — confirmation_bars=1 |
+| §4.3 Order Blocks | E1 | ✅ | `order_blocks.py` — bull/bear, impulse ATR filter |
+| §4.4 FVG | E1 | ✅ | `fvg.py` — bull/bear + N2 height guard |
+| §4.5 Liquidity Levels | E2 | ✅ | `liquidity.py` — ATR clustering (замість pip-based) |
+| §4.6 Premium/Discount | E2 | ✅ | `premium_discount.py` — disabled (потребує sessions) |
+| §4.7 Inducement | E2 | ✅ | `inducement.py` — minor_period + reversal |
+| §4.8 Sessions/Killzones | E3 | ❌ | Наступний крок |
+| §4.9 Confluence POI | E3 | ❌ | Залежить від §4.8 |
+| §4.10 Zone Quality Model | E3 | ⚠️ Partially | N1 lifecycle = decay+expiry+strength (§4.10 concepts без session scoring) |
+
+### 18.3 Що зроблено ПОЗА планом (N-phase)
+
+N-phase виникла після E2 як необхідність — зони накопичувались без обмежень.
+
+#### N1: Zone Lifecycle (`_update_zone_lifecycle`)
+
+Повний lifecycle pipeline в `engine.py`:
+
+```
+on_bar(bar) → _compute_snapshot() →
+  1. merge new OB + new FVG → all_new
+  2. FVG evict: cap per-side (D-02 стратегія — oldest first)
+  3. mitigate by close (R-04): bar.c crosses zone → status="mitigated"
+  4. decay: bars_since > 500 → zone expires
+  5. hide_mitigated: якщо config.hide_mitigated → drop mitigated
+  6. deterministic cap (_zone_rank): max_zones_per_tf=10, sort by kind→strength→freshness
+  7. store → _active_zones (persistent Dict[str, SmcZone])
+```
+
+**`_zone_rank(z)`** — детерміністичне сортування для cap:
+- kind priority: ob > fvg > liquidity > premium > discount > inducement
+- strength descending
+- freshness (newer = higher priority)
+
+#### N2: Config Tightening
+
+| Параметр | Before | After | Reason |
+|----------|--------|-------|--------|
+| `fvg.min_gap_atr_mult` | 0.1 | 0.3 | Фільтрація шуму |
+| `fvg.max_active` | 10 | 5 | Менше clutter |
+| `max_zones_per_tf` | 30 | 10 | Жорсткіший cap |
+| `max_zone_height_atr_mult` | — | 5.0 (new) | Відcікання аномальних зон |
+| `hide_mitigated` | — | false (new) | Показувати з напівпрозорістю |
+
+#### N3: UI Quality
+
+- **Strength opacity**: `fillAlpha = 0.04 + 0.11 * strength` (strong = яскравіше, weak = блідіше)
+- **4 toggles**: OB / FVG / Swings / Levels — localStorage persistence (`v4_show_ob` etc.)
+- OverlayRenderer тепер фільтрує зони за toggles перед рендерингом
+
+### 18.4 Файлова карта (actual tree)
+
+```
+core/smc/                       # Pure logic — 9 файлів, ~1100 LOC
+├── __init__.py                 # public API exports
+├── types.py                    # SmcZone, SmcSwing, SmcLevel, SmcSnapshot, SmcDelta
+├── config.py                   # SmcConfig + nested configs (OB, FVG, Structure, Levels, P/D, Inducement)
+├── swings.py                   # detect_swings() — rolling window
+├── structure.py                # detect_structure() — BOS/CHoCH
+├── order_blocks.py             # detect_order_blocks() — bull/bear lifecycle
+├── fvg.py                      # detect_fvg() — bull/bear + height guard (N2)
+├── liquidity.py                # detect_liquidity_levels() — ATR-based clustering
+├── premium_discount.py         # detect_premium_discount() — equilibrium zones
+├── inducement.py               # detect_inducements() — false breakout
+├── engine.py                   # SmcEngine orchestrator + _update_zone_lifecycle (N1)
+├── tests.py                    # inline smoke tests
+└── README.md                   # module docs
+
+runtime/smc/                    # I/O wiring — 2 файли, ~80 LOC
+├── __init__.py
+└── smc_runner.py               # SmcRunner: warmup + on_bar callback
+
+ui_v4/src/                      # Frontend changes — 4 файли modified
+├── types.ts                    # +SmcDeltaWire interface, +smc_delta on RenderFrame
+├── stores/smcStore.ts          # NEW: applySmcFull, applySmcDelta, EMPTY_SMC_DATA
+├── layout/ChartPane.svelte     # Δ: removed buildSmc(), added incremental SMC + 4 toggles
+└── smc/OverlayRenderer.ts      # Δ: strength-based opacity (N3)
+
+tests/                          # 5 test files, 125 tests
+├── test_smc_e1.py              # E1: swings, structure, OB, FVG, engine
+├── test_smc_runner.py          # S4: SmcRunner integration
+├── test_smc_e2_liquidity.py    # E2: liquidity levels
+├── test_smc_e2_pd_inducement.py # E2: premium/discount + inducement
+└── test_smc_n1_lifecycle.py    # N1: zone lifecycle, merge, cap, mitigate, decay
+```
+
+### 18.5 Що далі (E3 roadmap)
+
+| Крок | Що | Prerequisite | Estimated LOC |
+|------|----|-------------|---------------|
+| **E3.1** | `core/smc/sessions.py` — session detection + killzone boost | config.json:smc.sessions | ~120 |
+| **E3.2** | `core/smc/confluence.py` — POI scoring (11-point) | E3.1 (killzone factor) | ~150 |
+| **E3.3** | `core/smc/quality.py` — zone quality model + fading | E3.2 optional | ~100 |
+| **E3.4** | `core/smc/narrative.py` — human-readable zone explanation | E3.2 | ~80 |
+| **S9** | `/api/smc` HTTP endpoint + exit gates | any | ~80 |
+| **S10** | Replay integration | ADR-0017 | ~20 |
+
+**Ключове рішення**: Premium/Discount (вже реалізований, але `enabled=false`) буде увімкнений
+після Sessions — killzone awareness потрібна для P/D scoring.
+
+### 18.6 Інваріанти дотримані
+
+| Інваріант | Статус | Evidence |
+|-----------|--------|----------|
+| **I0** Dependency Rule | ✅ | core/smc/ has no runtime/ui imports |
+| **S0** core/smc/ = pure, NO I/O | ✅ | no file/Redis/network imports |
+| **S1** SMC read-only (no UDS writes) | ✅ | SmcRunner has no commit_* calls |
+| **S2** Deterministic | ✅ | test_smc_e1: update(bars) == sequential on_bar() |
+| **S3** Zone IDs deterministic | ✅ | `{kind}_{symbol}_{tf_s}_{anchor_ms}` |
+| **S4** Performance budget | ✅ | rail in engine.py, max_compute_ms=10 |
+| **S5** Config SSOT | ✅ | all params from config.json:smc |
+| **S6** Wire format matches TS | ✅ | types.ts SmcDeltaWire ↔ SmcDelta.to_wire() |
+
+### 18.7 LWC Overlay Render Sync — Double RAF Rule (2026-03-01)
+
+> **Цей розділ — SSOT для всіх майбутніх canvas overlay елементів на LWC.**
+
+#### Проблема
+
+Lightweight Charts (LWC) потребує **мінімум 2 анімаційні кадри** для завершення price scale auto-fit
+після зміни visible time range (zoom/scroll). Протягом першого кадру `priceToCoordinate()` повертає
+**старі Y-координати** → overlay елементи (зони, рівні, diamond markers) рендеряться
+на попередніх позиціях і "висять у повітрі". Тільки коли crosshair move тригерить
+синхронний рендер (LWC вже осадився), позиції виправляються.
+
+#### Root cause
+
+```
+User zoom/scroll → LWC subscribeVisibleTimeRangeChange fires
+                  → priceToCoordinate() returns STALE Y (layout pass not done yet)
+                  → RAF #1: LWC internal layout pass happens
+                  → RAF #2: priceToCoordinate() returns CORRECT Y ← render here
+```
+
+#### Рішення: Hybrid Render Strategy
+
+| Trigger | Стратегія | Чому |
+|---------|-----------|------|
+| `subscribeCrosshairMove` | **Синхронний** `renderNow()` | Координати вже актуальні, LWC осадився |
+| `subscribeVisibleTimeRangeChange` | **Double RAF** `scheduleDoubleRaf()` | LWC ще не завершив layout pass |
+| `subscribeVisibleLogicalRangeChange` | **Double RAF** `scheduleDoubleRaf()` | Те ж — logical range + auto fit |
+| `patch()` / `resize()` | **Single RAF** `scheduleRaf()` | Data/layout вже стабільний |
+| `notifyPriceRangeChanged()` (Y-axis) | **Double RAF** `scheduleDoubleRaf()` | applyManualRange → requestPriceScaleSync |
+
+```typescript
+// scheduleDoubleRaf() — canonical pattern
+private scheduleDoubleRaf(): void {
+  if (this.rafId !== null) return;
+  this.rafId = requestAnimationFrame(() => {
+    this.rafId = null;
+    // Другий RAF: тепер priceToCoordinate() повертає актуальні Y
+    requestAnimationFrame(() => this.renderNow());
+  });
+}
+
+// renderNow() — з recursion guard
+private renderNow(): void {
+  if (this.rendering) return;
+  this.rendering = true;
+  try { this.render(); }
+  finally { this.rendering = false; }
+}
+```
+
+#### Правило для майбутніх overlay елементів
+
+**ОБОВ'ЯЗКОВО** для будь-якого нового canvas overlay на LWC:
+
+1. Використовувати **double RAF** для range/zoom/Y-axis triggers
+2. Використовувати **синхронний рендер** для crosshair move
+3. Мати **recursion guard** (`this.rendering` flag)
+4. **Ніколи** не рендерити синхронно з `subscribeVisibleTimeRangeChange` — координати будуть старими
+
+DrawingsRenderer вже використовує аналогічний патерн: `renderSync()` + `scheduleRender()` (RAF).
+OverlayRenderer розширив це до double RAF після діагностики.
+
+#### Affected files
+
+- `ui_v4/src/chart/overlay/OverlayRenderer.ts:104-181` — bindTriggers + scheduleDoubleRaf
+- `ui_v4/src/chart/drawings/DrawingsRenderer.ts:146-147,694-709` — renderSync + scheduleRender
+- `ui_v4/src/layout/ChartPane.svelte:183-189` — setupPriceScaleInteractions callback
+
+### 18.8 Key Levels Visualization Design (ADR-0024b, 2026-03-01)
+
+> Цей розділ фіксує прийняті рішення щодо **візуалізації** SMC key levels.
+
+#### Філософія: Levels-Only Overlay
+
+Аналіз role_spec_smc_chief_strategist показав: **рівні > зони** для трейдера.
+Причина: рівні = чіткі горизонтальні якорі (PDH, LOD, 4H Hi), зони = шумні прямокутники.
+Тому key levels відображаються як **короткі лінії з підписами**, а не як full-width рівні.
+
+#### Rendering Rules
+
+| Параметр | Значення | Мотивація |
+|----------|----------|-----------|
+| Довжина лінії | **140px** фіксована | Коротка лінія = менше visual clutter, не перетинає весь графік |
+| Позиція X | Від `t_ms` (formation time) вправо, або від правого краю якщо formation поза екраном | Контекст: звідки рівень прийшов |
+| Label позиція | Над лінією, `textAlign: right`, `textBaseline: bottom`, зсув `(xEnd - 2, y - 3)` | Не перетинає ціну, читабельне |
+| Font | `{fontSize}px monospace` | Моноширинний = вирівняні стовпчики цифр |
+| Label текст | SMC-стандартні назви (HOD, LOD, PDH, Prev 4H Hi, EQH, etc.) | Розпізнавання без підказок |
+
+#### Кольори TF-шарів (Color Hierarchy)
+
+Кольори розділені за TF-рівнем для миттєвого візуального контексту:
+
+| TF | Колір | Приклад назв | Мотивація |
+|----|-------|-------------|----------|
+| D1 | Orange (`#ff9800`/`#ffb74d`) | PDH, PDL, HOD, LOD | Глобальний контекст — найпомітніший |
+| H4 | Purple (`#ab47bc`/`#ce93d8`) | Prev 4H Hi, 4H Lo | Високий TF — фіолетовий акцент |
+| H1 | Blue (`#42a5f5`/`#90caf9`) | Prev 1H Hi, 1H Lo | Аналіз — нейтральний синій |
+| M30 | Teal (`#26a69a`/`#80cbc4`) | Prev M30 Hi, M30 Lo | Середній TF — зелено-блакитний |
+| M15 | Cyan (`#00bcd4`/`#80deea`) | Prev M15 Hi, M15 Lo | Найнижчий TF — найсвітліший |
+| EQ | Red/Green (`#e91e63`/`#4caf50`) | EQH, EQL | Liquidity — семантичні кольори |
+
+#### Prev vs Current
+
+| Тип | dash | width | alpha | fontSize |
+|-----|------|-------|-------|----------|
+| **Previous** (pdh, p_h4_h, …) | `[6, 3]` рідкий | 1.0–1.5 | 0.70–0.85 | **9px** |
+| **Current** (dh, h4_h, …) | `[3, 2]` або `[2, 2]` густіший | 1.0 | 0.50–0.70 | **10px** |
+
+Previous рівні = ширший dash + менший шрифт → візуально вторинні.
+Current рівні = густіший dash + більший шрифт → візуально первинні.
+
+#### Cross-TF Injection
+
+`collect_htf_levels()` інжектує рівні з вищих TF у нижчий:
+- M1/M3/M5 отримують рівні від M15/M30/H1/H4/D1
+- M15 отримує від M30/H1/H4/D1 (але не від M5)
+- D1 показує тільки свої рівні
+
+Це гарантує що трейдер бачить HTF контекст на будь-якому TF.
+
+#### Proximity Filter
+
+Proximity filter **вимкнений** для levels (`capped_levels = list(snap.levels)`).
+Причина: рівні = orientation anchors, трейдер мусить бачити всі. Zones — інша справа.
+
+#### SSOT
+
+- Стилізація (`LEVEL_STYLES` map) — в `OverlayRenderer.ts` (UI concern, не backend)
+- Kind визначається backend (`core/smc/key_levels.py`)
+- Backend НЕ надсилає стиль/колір — тільки `{id, kind, price, t_ms}`

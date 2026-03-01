@@ -275,14 +275,40 @@
         },
         "fvg": {
             "enabled": true,
-            "min_gap_atr_mult": 0.1,
-            "max_active": 10
+            "min_gap_atr_mult": 0.3,
+            "max_active": 5
         },
         "structure": {
             "enabled": true,
             "confirmation_bars": 1
         },
-        "max_zones_per_tf": 30,
+        "levels": {
+            "enabled": true,
+            "tolerance_atr_mult": 0.1,
+            "min_touches": 2,
+            "max_levels": 10
+        },
+        "premium_discount": {
+            "enabled": false
+        },
+        "inducement": {
+            "enabled": true,
+            "minor_period": 3,
+            "reversal_atr_mult": 0.5,
+            "confirmation_bars": 3,
+            "max_inducements": 10
+        },
+        "max_zones_per_tf": 10,
+        "max_zone_height_atr_mult": 4.0,
+        "hide_mitigated": true,
+        "decay_start_bars": 30,
+        "decay_fast_bars": 150,
+        "display": {
+            "proximity_atr_mult": 5.0,
+            "max_display_zones": 8,
+            "max_display_levels": 6,
+            "max_display_swings": 20
+        },
         "performance": {
             "max_compute_ms": 10,
             "log_slow_threshold_ms": 5

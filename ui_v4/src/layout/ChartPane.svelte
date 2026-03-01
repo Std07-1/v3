@@ -22,6 +22,11 @@
   import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
   import { saveVisibleRange, loadVisibleRange } from "../stores/viewCache";
+  import {
+    applySmcFull,
+    applySmcDelta,
+    EMPTY_SMC_DATA,
+  } from "../stores/smcStore";
 
   const {
     currentFrame = null,
@@ -41,6 +46,27 @@
     magnetEnabled?: boolean;
   } = $props();
 
+  // ADR-0024: локальний стан SMC overlay (оновлюється інкрементально)
+  let smcData: SmcData = $state(EMPTY_SMC_DATA);
+
+  // N3: SMC layer toggles (localStorage-backed)
+  let showOB = $state(true);
+  let showFVG = $state(true);
+  let showSW = $state(true);
+  let showLVL = $state(true);
+
+  function filterSmc(d: SmcData): SmcData {
+    return {
+      zones: d.zones.filter((z) => {
+        if (z.kind.startsWith("ob") && !showOB) return false;
+        if (z.kind.startsWith("fvg") && !showFVG) return false;
+        if (z.kind === "premium" || z.kind === "discount") return showOB; // P/D follows OB toggle
+        return true;
+      }),
+      swings: showSW ? d.swings : [],
+      levels: showLVL ? d.levels : [],
+    };
+  }
   // Crosshair data for tooltip (OHLCV + cursor position)
   let crosshairData: CrosshairData | null = $state(null);
 
@@ -95,15 +121,21 @@
     chartEngine?.applyCandleStyle(name);
   }
 
-  function buildSmc(frame: RenderFrame): SmcData {
-    return {
-      zones: frame.zones ?? [],
-      swings: frame.swings ?? [],
-      levels: frame.levels ?? [],
-    };
-  }
-
   onMount(() => {
+    // N3: restore SMC toggles from localStorage (R-03: safe in onMount)
+    try {
+      const raw = localStorage.getItem("smc_toggles");
+      if (raw) {
+        const t = JSON.parse(raw);
+        if (typeof t.ob === "boolean") showOB = t.ob;
+        if (typeof t.fvg === "boolean") showFVG = t.fvg;
+        if (typeof t.sw === "boolean") showSW = t.sw;
+        if (typeof t.lvl === "boolean") showLVL = t.lvl;
+      }
+    } catch {
+      /* corrupt → use defaults */
+    }
+
     chartEngine = new ChartEngine(
       lwcHostRef,
       (data: CrosshairData) => {
@@ -141,13 +173,20 @@
       addUiWarning,
     );
 
+    // Expose purge method for console debugging: window.__purgeDrawings()
+    (window as any).__purgeDrawings = () =>
+      drawingsRenderer?.purgeAllDrawings();
+
     // P3.3-P3.5: Price axis interactions (Y-zoom, Y-pan, dblclick reset)
     // ADR-0008: callback для sync-рендерингу малювань при Y-axis змінах
     interactionCleanup = setupPriceScaleInteractions(
       lwcHostRef,
       chartEngine.chart,
       chartEngine.series,
-      () => drawingsRenderer?.notifyPriceRangeChanged(),
+      () => {
+        drawingsRenderer?.notifyPriceRangeChanged();
+        overlayRenderer?.notifyPriceRangeChanged();
+      },
     );
 
     ro = new ResizeObserver(() => {
@@ -225,7 +264,22 @@
         chartEngine.prependData(currentFrame.candles ?? []);
       }
 
-      overlayRenderer?.patch(buildSmc(currentFrame));
+      // ADR-0024 §6.2: оновлюємо smcData залежно від типу кадру
+      if (
+        currentFrame.frame_type === "full" ||
+        currentFrame.frame_type === "replay"
+      ) {
+        smcData = applySmcFull(
+          currentFrame.zones,
+          currentFrame.swings,
+          currentFrame.levels,
+          currentFrame.trend_bias,
+        );
+      } else if (currentFrame.frame_type === "delta") {
+        if (currentFrame.smc_delta) {
+          smcData = applySmcDelta(smcData, currentFrame.smc_delta);
+        }
+      }
 
       if (currentFrame.frame_type === "full") {
         // Switch drawing storage to this symbol+TF pair
@@ -237,6 +291,28 @@
         const d = currentFrame.drawings?.[0];
         if (d) drawingsRenderer?.confirm(d);
       }
+    }
+  });
+
+  // ADR-0024 §6.2: окремий $effect для patch overlay при зміні smcData / toggles
+  $effect(() => {
+    overlayRenderer?.patch(filterSmc(smcData));
+  });
+
+  // N3: persist toggles to localStorage
+  $effect(() => {
+    try {
+      localStorage.setItem(
+        "smc_toggles",
+        JSON.stringify({
+          ob: showOB,
+          fvg: showFVG,
+          sw: showSW,
+          lvl: showLVL,
+        }),
+      );
+    } catch {
+      /* quota / private mode */
     }
   });
 
@@ -280,6 +356,33 @@
   {:else if scrollbackState === "wall" && leftEdgeVisible}
     <div class="scrollback-indicator wall">No more history available</div>
   {/if}
+  <!-- N3: SMC layer toggles — per-kind colour coding -->
+  <div class="smc-toggles">
+    <button
+      class="smc-toggle smc-t-ob"
+      class:active={showOB}
+      onclick={() => (showOB = !showOB)}
+      title="Order Blocks">OB</button
+    >
+    <button
+      class="smc-toggle smc-t-fvg"
+      class:active={showFVG}
+      onclick={() => (showFVG = !showFVG)}
+      title="Fair Value Gaps">FVG</button
+    >
+    <button
+      class="smc-toggle smc-t-sw"
+      class:active={showSW}
+      onclick={() => (showSW = !showSW)}
+      title="Swings">SW</button
+    >
+    <button
+      class="smc-toggle smc-t-lvl"
+      class:active={showLVL}
+      onclick={() => (showLVL = !showLVL)}
+      title="Levels">LVL</button
+    >
+  </div>
 </div>
 
 <style>
@@ -372,5 +475,61 @@
     to {
       transform: rotate(360deg);
     }
+  }
+
+  /* N3: SMC layer toggles — нижче top-right-bar (App.svelte), z > 35 */
+  .smc-toggles {
+    position: absolute;
+    top: 36px;
+    right: 64px;
+    z-index: 36;
+    display: flex;
+    gap: 2px;
+    pointer-events: auto;
+  }
+  .smc-toggle {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 3px;
+    border: 1px solid transparent;
+    background: rgba(30, 34, 45, 0.45);
+    color: #5d6068;
+    cursor: pointer;
+    backdrop-filter: blur(4px);
+    transition: all 0.15s ease;
+    line-height: 1.3;
+    letter-spacing: 0.3px;
+  }
+  .smc-toggle:hover {
+    background: rgba(50, 55, 70, 0.6);
+    color: #a0a4b0;
+    border-color: rgba(120, 123, 134, 0.2);
+  }
+  /* Per-kind active colours (matches overlay rendering palette) */
+  .smc-toggle.active {
+    color: #4a90d9;
+    border-color: rgba(74, 144, 217, 0.3);
+    background: rgba(74, 144, 217, 0.1);
+  }
+  .smc-toggle.active.smc-t-ob {
+    color: #e67e22;
+    border-color: rgba(230, 126, 34, 0.35);
+    background: rgba(230, 126, 34, 0.1);
+  }
+  .smc-toggle.active.smc-t-fvg {
+    color: #2ecc71;
+    border-color: rgba(46, 204, 113, 0.35);
+    background: rgba(46, 204, 113, 0.1);
+  }
+  .smc-toggle.active.smc-t-sw {
+    color: #ef5350;
+    border-color: rgba(239, 83, 80, 0.35);
+    background: rgba(239, 83, 80, 0.1);
+  }
+  .smc-toggle.active.smc-t-lvl {
+    color: #ff9800;
+    border-color: rgba(255, 152, 0, 0.35);
+    background: rgba(255, 152, 0, 0.1);
   }
 </style>

@@ -28,6 +28,7 @@ def detect_order_blocks(
     bars: List[CandleBar],
     structure_swings: List,  # SmcSwing list from structure.py
     config: SmcConfig,
+    atr: float = 0.0,       # F4: caller-supplied ATR (0 → compute internally)
 ) -> List[SmcZone]:
     """Виявляє Order Blocks на основі BOS/CHoCH подій (ADR §4.3).
 
@@ -48,7 +49,8 @@ def detect_order_blocks(
     if not ob_cfg.enabled:
         return []
 
-    atr = compute_atr(bars, ob_cfg.atr_period)
+    if atr <= 0.0:
+        atr = compute_atr(bars, ob_cfg.atr_period)
     bar_index = {b.open_time_ms: i for i, b in enumerate(bars)}
 
     zones: List[SmcZone] = []

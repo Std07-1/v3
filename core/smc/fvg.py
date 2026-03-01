@@ -21,6 +21,7 @@ from core.smc.types import SmcZone, make_zone_id
 def detect_fvg(
     bars: List[CandleBar],
     config: SmcConfig,
+    atr: float = 0.0,       # F4: caller-supplied ATR (0 → compute internally)
 ) -> List[SmcZone]:
     """Виявляє Fair Value Gaps (3-свічковий патерн, ADR §4.4).
 
@@ -38,7 +39,8 @@ def detect_fvg(
     if not fvg_cfg.enabled or len(bars) < 3:
         return []
 
-    atr = compute_atr(bars, period=14)
+    if atr <= 0.0:
+        atr = compute_atr(bars, period=14)
     min_gap = fvg_cfg.min_gap_atr_mult * atr
     zones: List[SmcZone] = []
     active_count = 0
@@ -49,7 +51,9 @@ def detect_fvg(
         # Bullish FVG: b0.high < b2.low
         if b0.h < b2.low:
             gap_size = b2.low - b0.h
-            if gap_size >= min_gap and active_count < fvg_cfg.max_active:
+            if (gap_size >= min_gap
+                    and active_count < fvg_cfg.max_active
+                    and (atr <= 0 or gap_size <= config.max_zone_height_atr_mult * atr)):
                 zone_id = make_zone_id("fvg_bull", b1.symbol, b1.tf_s, b1.open_time_ms)
                 if not any(z.id == zone_id for z in zones):
                     strength = min(1.0, gap_size / (atr * 2.0)) if atr > 0 else 0.5
@@ -71,7 +75,9 @@ def detect_fvg(
         # Bearish FVG: b0.low > b2.high
         elif b0.low > b2.h:
             gap_size = b0.low - b2.h
-            if gap_size >= min_gap and active_count < fvg_cfg.max_active:
+            if (gap_size >= min_gap
+                    and active_count < fvg_cfg.max_active
+                    and (atr <= 0 or gap_size <= config.max_zone_height_atr_mult * atr)):
                 zone_id = make_zone_id("fvg_bear", b1.symbol, b1.tf_s, b1.open_time_ms)
                 if not any(z.id == zone_id for z in zones):
                     strength = min(1.0, gap_size / (atr * 2.0)) if atr > 0 else 0.5

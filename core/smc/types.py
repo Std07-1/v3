@@ -30,7 +30,15 @@ SWING_KINDS = frozenset({
     "inducement_bull", "inducement_bear",                 # Inducement (§4.7)
 })
 
-LEVEL_KINDS = frozenset({"eq_highs", "eq_lows", "pdh", "pdl", "pwh", "pwl"})
+LEVEL_KINDS = frozenset({
+    "eq_highs", "eq_lows",
+    # Key levels per TF (ADR-0024b: key_levels.py)
+    "pdh", "pdl", "dh", "dl",                     # D1
+    "p_h4_h", "p_h4_l", "h4_h", "h4_l",           # H4
+    "p_h1_h", "p_h1_l", "h1_h", "h1_l",           # H1
+    "p_m30_h", "p_m30_l", "m30_h", "m30_l",       # M30
+    "p_m15_h", "p_m15_l", "m15_h", "m15_l",       # M15
+})
 
 POI_GRADES = frozenset({"A+", "A", "B", "C"})
 
@@ -86,11 +94,12 @@ class SmcSwing:
     confirmed: bool       # True once `period` bars have passed
 
     def to_wire(self) -> Dict[str, Any]:
-        """S6: wire format = ui_v4 SmcSwing type."""
+        """S6: wire format = ui_v4 SmcSwing type (F7: point format)."""
         return {
             "id": self.id,
-            "a": {"t": self.time_ms, "p": self.price},
-            "b": {"t": self.time_ms, "p": self.price},
+            "kind": self.kind,
+            "time_ms": self.time_ms,
+            "price": self.price,
             "label": self.kind.upper().replace("_", " "),
         }
 
@@ -110,12 +119,12 @@ class SmcLevel:
     touches: int
 
     def to_wire(self) -> Dict[str, Any]:
-        """S6: wire format = ui_v4 SmcLevel type."""
+        """S6: wire format = ui_v4 SmcLevel type (ADR-0024b: +kind for UI styling)."""
         return {
             "id": self.id,
+            "kind": self.kind,
             "price": self.price,
             "t_ms": self.time_ms,
-            "color": None,  # UI вирішує по kind
         }
 
 
@@ -134,11 +143,12 @@ class SmcSnapshot:
     bar_count: int
 
     def to_wire(self) -> Dict[str, Any]:
-        """S6: wire format — вбудовується у WS full frame."""
+        """S6: wire format — вбудовується у WS full frame (F8: +trend_bias)."""
         return {
             "zones":   [z.to_wire() for z in self.zones],
             "swings":  [s.to_wire() for s in self.swings],
             "levels":  [low.to_wire() for low in self.levels],
+            "trend_bias": self.trend_bias,
         }
 
 

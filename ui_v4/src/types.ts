@@ -26,27 +26,47 @@ export interface SmcZone {
   end_ms?: T_MS; // open-ended дозволено
   high: number;
   low: number;
-  kind: 'fvg' | 'ob' | 'liquidity';
+  // ADR-0024 §5.1: 'ob_bull'|'ob_bear'|'fvg_bull'|'fvg_bear'|'premium'|'discount'|
+  // legacy: 'fvg'|'ob'|'liquidity'. Üбережемо як string для backward-compat (§6.1a)
+  kind: string;
+  status?: string;   // 'active'|'tested'|'mitigated'|'partially_filled'|'filled'
+  strength?: number; // 0.0–1.0
 }
 
 export interface SmcSwing {
   id: string;
-  a: SmcPoint;
-  b: SmcPoint;
+  kind: string;     // F7: 'hh'|'hl'|'lh'|'ll'|'bos_bull'|'bos_bear'|'choch_bull'|'choch_bear'|...
+  time_ms: T_MS;
+  price: number;
   label?: string;
 }
 
 export interface SmcLevel {
   id: string;
+  kind?: string;     // ADR-0024b: рівень kind для per-kind styling (pdh, pdl, h1_h, eq_highs, ...)
   price: number;
-  t_ms?: T_MS;      // опційно (якщо треба прив'язка)
-  color?: string;
+  t_ms?: T_MS;      // опційно (час формування рівня)
 }
 
 export interface SmcData {
   zones: SmcZone[];
   swings: SmcSwing[];
   levels: SmcLevel[];
+  trend_bias?: string | null;  // F8: 'bullish'|'bearish'|'neutral'|null
+}
+
+/**
+ * ADR-0024 §5: Wire format інкрементальної дельти SMC (WS delta frame).
+ * Відповідає SmcDelta.to_wire() в runtime/smc/smc_runner.py.
+ */
+export interface SmcDeltaWire {
+  new_zones: SmcZone[];
+  mitigated_zone_ids: string[];
+  updated_zones: SmcZone[];
+  new_swings: SmcSwing[];
+  new_levels: SmcLevel[];
+  removed_level_ids: string[];
+  trend_bias: string | null;
 }
 
 // -------------------- Drawings --------------------
@@ -106,6 +126,10 @@ export interface RenderFrame {
   zones?: SmcZone[];
   swings?: SmcSwing[];
   levels?: SmcLevel[];
+  /** ADR-0024: інкрементальні зміни SMC в delta кадрах */
+  smc_delta?: SmcDeltaWire;
+  /** F8: trend bias у full/replay frames */
+  trend_bias?: string | null;
   drawings?: Drawing[];
 
   replay?: {

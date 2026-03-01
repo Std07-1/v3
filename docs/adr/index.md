@@ -32,7 +32,11 @@
 | [0021](0021-jsonl-appender-thread-safety.md) | JsonlAppender Thread-Safety | **Accepted** | 2026-02-26 | JsonlAppender, threading.Lock, defense-in-depth | `code_review_hardening` |
 | [0022](0022-ws-audit-operational-docs.md) | WS Audit: Operational Docs (#10–#14) | **Implemented** | 2026-02-26 | has_range, TF mapping, prometheus, rate-limit, shutdown | `code_review_hardening` |
 | [0023](0023-d1-live-derive-from-m1.md) | D1 Live Derive from M1 | **Implemented** | 2026-02-27 | D1, 86400, derive chain, M1→D1, anchor 79200, ADR-0002 extension | `d1_derive_from_m1` |
-| [0024](0024-smc-engine.md) | SMC Engine — Smart Money Concepts | **Accepted** | 2026-02-28 | SMC, OB, FVG, BOS, CHoCH, liquidity, core/smc, replay, mentor | `smc_engine_v1` |
+| [0024](0024-smc-engine.md) | SMC Engine — Smart Money Concepts | **Implemented** | 2026-02-28 | SMC, OB, FVG, BOS, CHoCH, liquidity, inducement, P/D, core/smc, lifecycle, N1/N2/N3 | `smc_engine_v1` |
+| [0024a](0024a-smc-engine-self-audit.md) | SMC Engine Self-Audit & Hardening | **Implemented** | 2026-03-01 | F1-F12, swing wire format, ATR dedup, decay config, trend_bias | `smc_engine_hardening` |
+| [0024b](0024b-smc-engine-smc-key-levels,md) | SMC Key Levels — Horizontal Anchors | **Partially Implemented** | 2026-03-01 | PDH/PDL/PWH/PWL, sessions, opens, range, EQH/EQL, budget, key_levels.py, per-kind UI styling | `smc_engine_v1` |
+| [0025](0025-potik-b-data-quality-summary.md) | Потік B — Data Quality & Activation Summary | **Implemented** | 2026-02-28 | multi-symbol, data quality, derived integrity, XAU/USD focus | `potik_b_data_quality` |
+| [0026](0026-overlay-level-rendering-rules.md) | Overlay Level Rendering Rules | **Implemented** | 2026-03-01 | levels, merge, labels, LINE_PX, NOTCH_PX, LEVEL_STYLES, L1–L6 | `smc_engine_v1` |
 
 ---
 
@@ -72,4 +76,4 @@
 
 Див. формат у [copilot-instructions.md](../../.github/copilot-instructions.md) → Тема B, Правило B2.
 
-Наступний номер: **0025**
+Наступний номер: **0027**

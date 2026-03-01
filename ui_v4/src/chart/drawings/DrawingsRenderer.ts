@@ -154,8 +154,8 @@ export class DrawingsRenderer {
 
     this.setupInteractionsCapture();
 
-    // Load persisted drawings from localStorage
-    this.loadFromStorage();
+    // НЕ загружаємо тут — чекаємо на setStorageKey(sym, tf) від ChartPane,
+    // щоб уникнути витоку drawings з глобального ключа 'v4_drawings' у per-TF ключі.
   }
 
   setAll(drawings: Drawing[]): void {
@@ -318,12 +318,28 @@ export class DrawingsRenderer {
 
   /** Оновити ключ збереження (при зміні symbol/TF). Зберігає поточні → завантажує нові. */
   setStorageKey(symbol: string, tf: string): void {
-    // Save current drawings to OLD key
-    this.saveToStorage();
+    // Save current drawings to OLD key (if we have any)
+    if (this.drawings.length > 0) this.saveToStorage();
     // Switch key
     this.storageKey = `v4_drawings_${symbol}_${tf}`;
-    // Load drawings for new key
+    // Load drawings for new key (always resets this.drawings)
     this.loadFromStorage();
+    // Migration: видалити legacy глобальний ключ, що спричиняв витік drawings між TF
+    try { localStorage.removeItem('v4_drawings'); } catch { /* ok */ }
+  }
+
+  /** Очистити ВСІ збережені drawings з localStorage (всі символи/TF).
+   *  Виклик: drawingsRenderer.purgeAllDrawings() або через консоль: window.__purgeDrawings?.() */
+  purgeAllDrawings(): void {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('v4_drawings')) keysToRemove.push(key);
+    }
+    keysToRemove.forEach((k) => localStorage.removeItem(k));
+    this.drawings = [];
+    this.scheduleRender();
+    console.info('[DrawingsRenderer] purgeAllDrawings: видалено %d ключів', keysToRemove.length);
   }
 
   private saveToStorage(): void {
@@ -335,13 +351,18 @@ export class DrawingsRenderer {
   private loadFromStorage(): void {
     try {
       const raw = localStorage.getItem(this.storageKey);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        this.drawings = parsed;
+      if (!raw) {
+        this.drawings = [];
         this.scheduleRender();
+        return;
       }
-    } catch { /* corrupted data — ignore */ }
+      const parsed = JSON.parse(raw);
+      this.drawings = Array.isArray(parsed) ? parsed : [];
+      this.scheduleRender();
+    } catch {
+      this.drawings = [];
+      this.scheduleRender();
+    }
   }
 
   // ---- v3 hit-testing ----

@@ -1,6 +1,6 @@
 # Поточна система — Архітектурний огляд (SSOT)
 
-> **Останнє оновлення**: 2026-02-24  
+> **Останнє оновлення**: 2026-03-01  
 > **Навігація**: [docs/index.md](index.md)
 
 Цей файл — SSOT-опис поточної архітектури системи. Див. [docs/index.md](index.md) для навігації по всій документації.
@@ -47,7 +47,8 @@ app.main (supervisor)
   ├── m1_poller             (FXCM M1 History → UDS final M1 + DeriveEngine cascade M3→M5→M15→M30→H1→H4+D1)
   ├── ui                    (HTTP server, port 8089 — ui_chart_v3 polling)
   └── ws_server             (WS server, port 8000 — ui_v4 real-time, config-gated)
-                              Drawing tools: 4 tools (H/T/R/E), glass toolbar, theme-aware (ADR-0007, ADR-0008)
+                              ├── SmcRunner (in-process, ADR-0024): SmcEngine per (symbol, tf) → zones/swings/levels in WS frames
+                              └── Drawing tools: 4 tools (H/T/R/E), glass toolbar, theme-aware (ADR-0007, ADR-0008)
 ```
 
 ## SSOT-площини (ізольовані)
@@ -72,6 +73,17 @@ app.main (supervisor)
 │  SSOT-3: D1 (legacy broker, декомісіоновано)                  │
 │  engine_b broker_base_tfs_s: [] (ADR-0023)                   │
 │  Старі D1 бари на диску зберігаються (не перебудовуються)   │
+├──────────────────────────────────────────────────────────────┤
+│  SMC Overlay (ephemeral, ADR-0024)                            │
+│  SmcEngine (core/smc/): pure SMC detection — read-only,       │
+│    NOT SSOT, NOT persisted on disk                             │
+│  SmcRunner (runtime/smc/): lives in ws_server process,        │
+│    warmup via UDS.read_window(), on_bar() callback             │
+│  Алгоритми: Swings, BOS/CHoCH, OB, FVG, Liquidity,           │
+│    Premium/Discount, Inducement + N1 zone lifecycle            │
+│  Transport: вбудований у WS full/delta frames (zones,         │
+│    swings, levels, smc_delta) — NO окремий Redis канал         │
+│  125 tests, E1+S4+E2+N1/N2/N3 implemented                     │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -137,6 +149,9 @@ app.main (supervisor)
 | **Symbols** | `config.json → symbols` | 13 символів |
 | **Day anchors** | `config.json → day_anchor_offset_s*` | H4/D1 bucket alignment |
 | **Market calendar** | `config.json → market_calendar_*` | Per-group, single-break, UTC |
+| **SMC config** | `config.json → smc` | Алгоритми, cap-и, performance (ADR-0024). Ephemeral overlay, не на диску |
+| **SMC types** | `core/smc/types.py` | SmcZone/SmcSwing/SmcLevel/SmcSnapshot/SmcDelta |
+| **SMC wire** | `ui_v4/src/types.ts` | SmcData/SmcDeltaWire — contract з backend |
 
 ## Інваріанти (I0–I6)
 
@@ -157,6 +172,7 @@ app.main (supervisor)
 | Компонент | Стан | Файл(и) | ADR |
 |---|---|---|---|
 | ChartEngine | ✅ v3 parity (volume, D1, tooltip, follow, rAF) | engine.ts | — |
+| SMC Overlay | ✅ OB/FVG/Swings/Levels, strength opacity, 4 toggles, double-RAF sync | OverlayRenderer.ts, smcStore.ts | ADR-0024 §18.7 |
 | DrawingsRenderer | ✅ 4 tools (hline/trend/rect/eraser), theme-aware | DrawingsRenderer.ts | ADR-0007, ADR-0008 |
 | DrawingToolbar | ✅ Glass-like, CSS custom properties, micro-interactions | DrawingToolbar.svelte | ADR-0008 |
 | Theming | ✅ 3 themes (dark/black/light) + `applyThemeCssVars()` на `:root` | themes.ts, App.svelte | ADR-0008 |
@@ -321,43 +337,43 @@ flowchart LR
 - **Ізоляція**: preview keyspace (`{NS}:preview:*`) повністю ізольований від final keyspace (`{NS}:ohlcv:*`)
 - **Disk не hot-path**: preview живе лише в Redis; disk = recovery/scrollback
 
-### Схема C: Compute Triggers (SMC pipeline — план)
+### Схема C: SMC Overlay Pipeline (ADR-0024, implemented 2026-03-01)
 
 ```mermaid
 flowchart TD
-    subgraph TF_Closed["TF Closed Event"]
-        M5C[M5 closed] --> D15[derive M15]
-        M5C --> D30[derive M30]
-        M5C --> D1h[derive H1]
-        H4C[H4 closed] --> H4E[H4 event]
-        D1C[D1 closed] --> D1E[D1 event]
+    subgraph TF_Closed["Bar Committed Event (via UDS updates bus)"]
+        M1C[M1 bar committed] --> DE[DeriveEngine cascade]
+        DE --> BARS[M3/M5/M15/M30/H1/H4/D1 bars]
     end
-    subgraph Trigger["Compute Trigger Allowlist"]
-        D15 --> CHK{TF ∈ allowlist?}
-        D30 --> CHK
-        D1h --> CHK
-        H4E --> CHK
-        D1E --> CHK
-        CHK -->|TF=900,3600,14400,86400| SMC[SMC Pipeline]
-        CHK -->|TF=60,180,300| SKIP[skip:<br/>UI-only TF]
+    subgraph WS_Process["ws_server process"]
+        BARS --> DL[delta_loop: Redis subscriber<br/>v3_local:updates:*]
+        DL --> SR[SmcRunner.on_bar(bar)]
+        SR --> ENG[SmcEngine.on_bar(bar)<br/>core/smc/ — pure logic]
+        ENG --> SW[detect_swings]
+        ENG --> ST[detect_structure<br/>BOS/CHoCH]
+        ENG --> OB[detect_order_blocks]
+        ENG --> FVG[detect_fvg]
+        ENG --> LIQ[detect_liquidity_levels]
+        ENG --> IND[detect_inducements]
+        ENG --> LC[_update_zone_lifecycle<br/>merge→mitigate→decay→cap]
+        SW & ST & OB & FVG & LIQ & IND & LC --> SNAP[SmcSnapshot + SmcDelta]
     end
-    subgraph SMC_Pipe["SMC Compute"]
-        SMC --> CALC[SMC обчислення<br/>структура/зони/FVG]
-        CALC --> HINT[SmcHint payload]
-        HINT --> PUB[publish → UI]
+    subgraph Frames["WS Frames"]
+        SNAP --> FULL[full frame: zones, swings, levels]
+        SNAP --> DELTA[delta frame: smc_delta<br/>new_zones, mitigated_zone_ids, etc.]
     end
-    subgraph UI_SMC["B: UI"]
-        PUB --> SMCUI[SMC overlay<br/>на графіку]
+    subgraph UI["UI v4 (Svelte 5)"]
+        FULL --> STORE[smcStore.applySmcFull]
+        DELTA --> STORED[smcStore.applySmcDelta]
+        STORE & STORED --> OR[OverlayRenderer<br/>strength opacity + 4 toggles<br/>double-RAF zoom sync §18.7<br/>levels: merge-on-overlap ADR-0026]
     end
 ```
 
-> **Статус**: SMC compute pipeline — **PARTIAL / TODO**. Базові обчислення реалізовані, але інтеграція тригерів з UDS events ще не завершена. TF allowlist для compute тригерів:
->
-> - **Primary**: M15 (900s) — основний TF для SMC
-> - **Secondary**: H1 (3600s), H4 (14400s), D1 (86400s) — старші TF для контексту
-> - **UI-only** (не тригерять compute): M1 (60s), M3 (180s), M5 (300s)
->
-> Це рішення зафіксовано і потребує ADR для зміни.
+> **Статус**: SMC overlay pipeline — **IMPLEMENTED** (E1+S4+E2+N1/N2/N3).
+> SmcRunner живе в ws_server process (in-process, §6.1 ADR-0024).
+> Transactions: bar committed → SmcEngine.on_bar() → SmcDelta → вбудований у WS frame.
+> Read-only: SMC НЕ пише в UDS/SSOT. Ephemeral overlay, відновлюється при warmup.
+> Не реалізовано: Sessions/Killzones (E3), Confluence POI (E3), /api/smc HTTP endpoint.
 
 ## Схеми процесів і циклів
 
@@ -608,6 +624,18 @@ v3/
 │   ├── derive.py                  # DERIVE_CHAIN + GenericBuffer + aggregate_bars (cascade pure logic)
 │   ├── model/
 │   │   └── bars.py                # CandleBar + інваріанти часу
+│   ├── smc/                       # SMC Engine — pure logic, NO I/O (ADR-0024)
+│   │   ├── __init__.py            # public API exports
+│   │   ├── types.py               # SmcZone, SmcSwing, SmcLevel, SmcSnapshot, SmcDelta (~190 LOC)
+│   │   ├── config.py              # SmcConfig + nested configs (OB/FVG/Structure/Levels/P-D/Inducement)
+│   │   ├── swings.py              # detect_swings() — rolling window period
+│   │   ├── structure.py           # detect_structure() — BOS/CHoCH
+│   │   ├── order_blocks.py        # detect_order_blocks() — bull/bear lifecycle
+│   │   ├── fvg.py                 # detect_fvg() — bull/bear + height guard (N2)
+│   │   ├── liquidity.py           # detect_liquidity_levels() — ATR-based clustering
+│   │   ├── premium_discount.py    # detect_premium_discount() — equilibrium zones (enabled=false)
+│   │   ├── inducement.py          # detect_inducements() — false breakout detection
+│   │   └── engine.py              # SmcEngine orchestrator + _update_zone_lifecycle (N1, ~350 LOC)
 │   └── contracts/
 │       └── public/
 │           └── marketdata_v1/     # JSON Schema контракти
@@ -643,8 +671,11 @@ v3/
 │   │       ├── redis_layer.py     # Redis read шар
 │   │       └── disk_layer.py      # Disk read шар
 │   ├── ws/
-│   │   ├── ws_server.py           # WS сервер (aiohttp, порт 8000, ui_v4_v2 protocol, UDS reader, config-gated, 770 LOC, scrollback max_steps=6 + cooldown 0.5s)
+│   │   ├── ws_server.py           # WS сервер (aiohttp, порт 8000, ui_v4_v2 protocol, UDS reader, SmcRunner integration, config-gated, ~770 LOC)
 │   │   └── candle_map.py          # bar→Candle mapping R2 closure (75 LOC)
+│   ├── smc/                       # SMC runtime wiring (ADR-0024)
+│   │   ├── __init__.py
+│   │   └── smc_runner.py          # SmcRunner: warmup via UDS + on_bar callback (~80 LOC)
 │   └── obs_60s.py                 # спостереження / метрики (60s intervals)
 ├── ui_chart_v3/                   # UI + API same-origin (поточний production, HTTP polling)
 │   ├── server.py                  # HTTP API + /api/config policy SSOT + no_data loud rail + static server
@@ -655,21 +686,21 @@ v3/
 │       ├── app.js                 # polling + applyUpdates + policy consume + scrollback
 │       ├── chart_adapter_lite.js  # адаптер Lightweight Charts
 │       └── ui_config.json         # portable UI конфіг (api_base, ui_debug)
-├── ui_v4/                         # Next-gen UI: Svelte 5 + LWC 5 + TypeScript (WS backend DONE, chart parity DONE, T1-T10 COMPLETE, P3.11-P3.15 DONE, Drawing Tools v1 ACTIVE)
+├── ui_v4/                         # Next-gen UI: Svelte 5 + LWC 5 + TypeScript (WS backend DONE, chart parity DONE, T1-T10 COMPLETE, SMC overlay ACTIVE, Drawing Tools v1 ACTIVE)
 │   ├── package.json               # deps: lwc@5.0.0, uuid, svelte 5, vite 6, TS 5.7
 │   ├── vite.config.ts             # port 5173 (dev), proxy /api/* → 8089
 │   ├── dist/                      # vite build output (index.html + assets/); served by ws_server same-origin
 │   ├── README_DEV.md              # developer guide
 │   ├── UI_v4_COPILOT_README.md    # SSOT інструкція (slices 0–5 plan)
-│   └── src/                       # ~4500 LOC, 28 файлів, typecheck 0/0
-│       ├── types.ts               # SSOT: RenderFrame, WsAction, Candle, SmcData, Drawing
+│   └── src/                       # ~4700 LOC, ~30 файлів, typecheck 0/0
+│       ├── types.ts               # SSOT: RenderFrame, WsAction, Candle, SmcData, SmcDeltaWire, Drawing
 │       ├── App.svelte             # root wiring: WS + DiagState + keyboard + theme/diag toggle
 │       ├── main.ts                # Svelte mount entrypoint
 │       ├── app/                   # diagState, diagSelectors, frameRouter (config frame T8), edgeProbe
 │       ├── ws/                    # WSConnection (quiet degraded mode), WsAction creators
-│       ├── stores/                # cursor price + UI warnings + meta (serverConfig) + favorites (P3.13)
-│       ├── layout/                # ChartPane, ChartHud (frosted HUD, theme/style/fav pickers), OhlcvTooltip, StatusBar (+diag btn), StatusOverlay, DiagPanel (P3.14), DrawingToolbar (4 tools + magnet toggle), SymbolTfPicker
-│       └── chart/                 # ChartEngine (LWC, v3-parity, applyTheme/applyCandleStyle), themes.ts (3 themes + 5 candle styles), interaction.ts (Y-zoom/pan/reset), OverlayRenderer, DrawingsRenderer (ACTIVE: hline/trend/rect/eraser, snap-to-OHLC, CommandStack undo/redo, ADR-0007), geometry
+│       ├── stores/                # cursor price + UI warnings + meta (serverConfig) + favorites (P3.13) + smcStore (applySmcFull/Delta)
+│       ├── layout/                # ChartPane (SMC toggles OB/FVG/SW/LVL), ChartHud, OhlcvTooltip, StatusBar, StatusOverlay, DiagPanel, DrawingToolbar, SymbolTfPicker
+│       └── chart/                 # ChartEngine (LWC, v3-parity), themes.ts (3 themes + 5 candle styles), interaction.ts (Y-zoom/pan/reset), OverlayRenderer (strength opacity N3), DrawingsRenderer, geometry
 ├── aione_top/                     # TUI-монітор процесів/pipeline (standalone, NOT supervisor-managed)
 │   ├── __main__.py                # python -m aione_top
 │   ├── app.py                     # головний TUI loop (421 LOC, Textual)
@@ -708,10 +739,10 @@ v3/
 │   ├── ui_api.md                  # HTTP API reference
 │   ├── redis_snapshot_design.md   # дизайн Redis snapshots
 │   ├── adr/                       # Architecture Decision Records (SSOT)
-│   │   ├── index.md               # реєстр усіх ADR (ADR-0001 … ADR-0010)
+│   │   ├── index.md               # реєстр усіх ADR (ADR-0001 … ADR-0025)
 │   │   ├── 0001-unified-data-store.md
 │   │   ├── 0002-derive-chain-from-m1.md
-│   │   └── ...                    # (10 файлів)
+│   │   └── ...                    # (25 файлів)
 │   ├── audit/                     # аудит прогресу P0–P6
 │   ├── runbooks/                  # production, coldstart, live_recover
 │   └── system_spec/               # UI v4 audit, gap analysis
@@ -748,7 +779,7 @@ v3/
 - Svelte 5 runes + TypeScript strict + Vite 6 + LWC 5.0.0. **25 файлів, ~4045 LOC** (typecheck 0/0).
 - Transport: WebSocket (`runtime/ws/ws_server.py`, 907 LOC, порт 8000, `/ws`). Протокол: `ui_v4_v2` (full + delta + scrollback + config + heartbeat). CPU opt: delta_poll 2s + ThreadPoolExecutor(2). Idle 2-3% CPU.
 - Same-origin serving (Тема G, G1): `ws_server.py` роздає `ui_v4/dist/` (index.html + /assets/) на порт 8000. Prod: `npm run build` → `python -m runtime.ws.ws_server`. Dev: `npm run dev` (:5173) + ws_server (:8000).
-- 3-layer rendering: LWC candles + SMC overlay canvas + drawings canvas (RAF + renderSync, DPR-aware). SMC overlay disabled; drawings **ACTIVE** (ADR-0007).
+- 3-layer rendering: LWC candles + SMC overlay canvas + drawings canvas (RAF + renderSync, DPR-aware). SMC overlay **ACTIVE** (ADR-0024: OB/FVG/Swings/Levels + strength opacity + 4 toggles; ADR-0026: level rendering rules — merge-on-physical-overlap, L1–L6); drawings **ACTIVE** (ADR-0007).
 - Drawing tools (ADR-0007): hline/trend/rect/eraser, click-click TradingView-style, selection/hit-testing, drag-edit, undo/redo (CommandStack), hotkeys (T/H/R/E/Esc/Ctrl+Z/Y). Client-only (noop sendAction). Sync render X+Y axis (renderSync on visibleTimeRangeChange + wheel + dblclick). Brightness sync via style:filter.
 - Drawing persistence: localStorage per symbol+TF (`v4_drawings_{sym}_{tf}`). Symbol/TF persistence (`v4_last_pair`, one-shot restore on first full frame). Toolbar collapse persistence (`v4_toolbar_collapsed`).
 - Floating DrawingToolbar: position:absolute over chart, 28px/16px collapsed, no background, Ukrainian labels. Magnet (snap-to-OHLC) deferred.

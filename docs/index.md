@@ -1,6 +1,6 @@
 # Документація Trading Platform v3 — Індекс (SSOT)
 
-> **Остання перевірка**: 2026-02-24  
+> **Остання перевірка**: 2026-03-01  
 > **Мова**: українська (англійська лише для загальноприйнятих термінів)
 
 Цей файл — **точка входу** в усю документацію проєкту. Будь-яке знання про систему має бути знайдене через цей індекс.
@@ -14,7 +14,7 @@
 | Документ | Зміст |
 |---|---|
 | [system_current_overview.md](system_current_overview.md) | Поточна архітектура, процеси, SSOT-площини, Mermaid-схеми, annotated tree |
-| **[docs/adr/index.md](adr/index.md)** | **Індекс усіх ADR (SSOT)** — 10 ADR з обґрунтуваннями архітектурних рішень |
+| **[docs/adr/index.md](adr/index.md)** | **Індекс усіх ADR (SSOT)** — 25 ADR з обґрунтуваннями архітектурних рішень |
 | [ADR-0001](adr/0001-unified-data-store.md) | UDS (RAM↔Redis↔Disk) + Contract-first API |
 | [ADR-0002](adr/0002-derive-chain-from-m1.md) | DeriveChain: M1→M3→M5→M15→M30→H1→H4 |
 | [ADR-0003](adr/0003-cold-start-hardening.md) | Cold start: error isolation, process restart, unified gate |
@@ -25,6 +25,9 @@
 | [ADR-0008](adr/0008-glass-toolbar-light-theme.md) | Glass toolbar, WCAG AA, CSS custom properties |
 | [ADR-0009](adr/0009-drawing-sync-render-fix.md) | Y-axis sync render fix + draft freeze clamp |
 | [ADR-0010](adr/0010-thread-safe-ram-layer.md) | Thread-safety in ram_layer via threading.Lock |
+| [ADR-0023](adr/0023-d1-live-derive-from-m1.md) | D1 Live Derive from M1 (1440×M1, anchor 79200s) |
+| [ADR-0024](adr/0024-smc-engine.md) | **SMC Engine Architecture** — swings, OB, FVG, liquidity, P/D, inducement, lifecycle (Implemented E1+S4+E2+N1/N2/N3) |
+| [ADR-0025](adr/0025-potik-b-data-quality-summary.md) | Потік B data quality summary |
 
 ### 2. Потоки даних
 
@@ -38,7 +41,7 @@
 
 | Документ | Зміст |
 |---|---|
-| [contracts.md](contracts.md) | Реєстр JSON Schema контрактів, правила еволюції, приклади payload |
+| [contracts.md](contracts.md) | Реєстр JSON Schema контрактів, правила еволюції, приклади payload, **SMC wire format** |
 | Схеми (SSOT): | |
 | — `core/contracts/public/marketdata_v1/bar_v1.json` | Один OHLCV бар |
 | — `core/contracts/public/marketdata_v1/window_v1.json` | Відповідь `/api/bars` |
@@ -67,6 +70,18 @@
 | [ui_v4/UI_v4_COPILOT_README.md](../ui_v4/UI_v4_COPILOT_README.md) | SSOT інструкція для побудови (slices 0–5) |
 | [ui_v4/src/types.ts](../ui_v4/src/types.ts) | SSOT типи: RenderFrame, WsAction, Candle, SmcData, Drawing |
 | [system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md](system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md) | UI v4 аудит: T1-T10 ALL COMPLETE, chart parity DONE |
+
+### 5.2. SMC Engine (Smart Money Concepts — ADR-0024)
+
+| Документ | Зміст |
+|---|---|
+| [ADR-0024](adr/0024-smc-engine.md) | Архітектура, P-slices, інваріанти S0–S6, §18 Implementation Progress |
+| `core/smc/types.py` | SSOT типи: SmcZone, SmcSwing, SmcLevel, SmcSnapshot, SmcDelta |
+| `core/smc/engine.py` | SmcEngine — pure orchestrator (zone lifecycle, ranking, caps) |
+| `core/smc/config.py` | SmcConfig dataclass (params з config.json:smc) |
+| `runtime/smc/smc_runner.py` | SmcRunner — in-process під ws_server, warmup + on_bar |
+| `ui_v4/src/stores/smcStore.ts` | applySmcFull / applySmcDelta — incremental SMC state |
+| `ui_v4/src/components/overlays/OverlayRenderer.svelte` | Canvas rendering: OB/FVG/swings/levels з opacity за strength |
 
 ### 6. Runbooks (експлуатація)
 
@@ -106,6 +121,7 @@ A (Broker/Ingest) → C (UDS — єдина талія) → B (UI — read-only 
 - **B**: UI — read-only renderer:
   - **ui_chart_v3**: HTTP polling API (порт 8089, vanilla JS, поточний production)
   - **ui_v4**: WebSocket real-time (порт 8000, Svelte 5 + LWC 5, chart parity DONE, audit T1-T10 COMPLETE) → [ui_v4_integration.md](ui_v4_integration.md)
+  - **SMC Overlay** (ADR-0024): SmcRunner → SmcEngine → WS `smc_snapshot`/`smc_delta` → smcStore → OverlayRenderer (OB/FVG/swings/levels)
 - **TUI**: aione_top — standalone TUI-монітор процесів/pipeline (`python -m aione_top`)
 
 ## Ключові інваріанти (коротко)
@@ -119,6 +135,18 @@ A (Broker/Ingest) → C (UDS — єдина талія) → B (UI — read-only 
 | I4 | **Один update-потік для UI**: /api/updates (upsert events) |
 | I5 | **Degraded-but-loud**: будь-який fallback → warnings[]/degraded[], silent fallback заборонено |
 | I6 | **Disk hot-path ban**: disk не hot-path; лише bootstrap/warmup/scrollback/recovery. Scrollback: disk_policy=explicit, max_steps=6, cooldown 0.5s |
+
+### SMC інваріанти (S0–S6, ADR-0024)
+
+| ID | Інваріант |
+|---|---|
+| S0 | `core/smc/` = pure logic, NO I/O |
+| S1 | SMC не пише в UDS/SSOT JSONL (read-only overlay) |
+| S2 | Deterministic: same bars → same zones |
+| S3 | Zone ID deterministic: `{kind}_{symbol}_{tf_s}_{anchor_ms}` |
+| S4 | Performance: `on_bar()` < `max_compute_ms` |
+| S5 | Config SSOT: all params from `config.json:smc` |
+| S6 | Wire format = `core/smc/types.py` → `ui_v4/src/types.ts` |
 
 ---
 

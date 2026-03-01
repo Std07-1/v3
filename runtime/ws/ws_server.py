@@ -268,6 +268,7 @@ def _build_full_frame(
     tf_label: str,
     warnings: Optional[list] = None,
     app: Any = None,
+    smc_wire: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     # T6/S19: output guard — validate candle shapes before send
     guard_warns = _guard_candles_output(candles, symbol, tf_label, "full")
@@ -291,9 +292,9 @@ def _build_full_frame(
         "symbol": symbol,
         "tf": tf_label,
         "candles": candles,
-        "zones": [],
-        "swings": [],
-        "levels": [],
+        "zones":   smc_wire.get("zones", []) if smc_wire else [],
+        "swings":  smc_wire.get("swings", []) if smc_wire else [],
+        "levels":  smc_wire.get("levels", []) if smc_wire else [],
         "drawings": [],
         "meta": meta,
     }
@@ -441,7 +442,17 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
             warnings.append("candle_map_dropped:%d" % dropped)
             _log.warning("WS_CANDLE_MAP_DROPPED client=%s dropped=%d", session.client_id, dropped)
         warnings.extend(getattr(result, "warnings", []))
-        frame = _build_full_frame(session, candles, session.symbol, tf_label, warnings or None, app=app)
+        # SMC: inject snapshot into full frame (ADR-0024 §6.1)
+        smc_wire: Optional[Dict[str, Any]] = None
+        _smc_runner = app.get("_smc_runner")
+        if _smc_runner is not None:
+            try:
+                _snap = _smc_runner.get_snapshot(session.symbol, session.tf_s)
+                if _snap is not None:
+                    smc_wire = _snap.to_wire()
+            except Exception as _smc_exc:
+                _log.debug("WS_SMC_SNAP_ERR sym=%s tf=%s err=%s", session.symbol, session.tf_s, _smc_exc)
+        frame = _build_full_frame(session, candles, session.symbol, tf_label, warnings or None, app=app, smc_wire=smc_wire)
         await session.ws.send_json(frame)
         _log.info(
             "WS_FULL_PUSH client=%s symbol=%s tf=%s candles=%d seq=%d",
@@ -705,7 +716,18 @@ async def _global_delta_loop(app: web.Application) -> None:
                             "type": "render_frame", "frame_type": "delta",
                             "symbol": symbol, "tf": tf_label, "candles": candles, "meta": meta,
                         }
-                        
+
+                        # SMC: notify runner on complete bars → inject delta if has_changes
+                        _smc_runner = app.get("_smc_runner")
+                        if _smc_runner is not None:
+                            for _ev in seen_events.values():
+                                if _ev.get("complete"):
+                                    _smc_runner.on_bar_dict(symbol, tf_s, _ev["bar"])
+                            _smc_d = _smc_runner.last_delta(symbol, tf_s)
+                            if _smc_d is not None and _smc_d.has_changes:
+                                frame["smc_delta"] = _smc_d.to_wire()
+                                _smc_runner.clear_delta(symbol, tf_s)
+
                         d1_relay_tfs_2: set = app.get("_d1_tick_relay_tfs", set())
                         if tf_s in d1_relay_tfs_2:
                             for c in candles:
@@ -1071,6 +1093,25 @@ def build_app(
     else:
         _init_uds(app, config_path, full_cfg)
 
+    # SMC Runner init (ADR-0024 §6.1) — in-process, same event loop as ws_server
+    app["_smc_runner"] = None
+    _smc_section = full_cfg.get("smc", {}) if isinstance(full_cfg, dict) else {}
+    if _smc_section.get("enabled", False):
+        try:
+            from core.smc.config import SmcConfig
+            from core.smc.engine import SmcEngine
+            from runtime.smc.smc_runner import SmcRunner
+            _smc_cfg = SmcConfig.from_dict(_smc_section)
+            _smc_engine = SmcEngine(_smc_cfg)
+            app["_smc_runner"] = SmcRunner(full_cfg, _smc_engine)
+            _log.info(
+                "WS_SMC_RUNNER_INIT lookback=%d swing_period=%d",
+                _smc_cfg.lookback_bars, _smc_cfg.swing_period,
+            )
+        except Exception as _smc_init_exc:
+            app["_smc_runner"] = None
+            _log.warning("WS_SMC_RUNNER_INIT_FAILED err=%s — SMC disabled", _smc_init_exc)
+
     app.router.add_get("/ws", ws_handler)
 
     # ── Same-origin SPA serving (Правило §11: UI + API = один процес) ──
@@ -1103,6 +1144,15 @@ def build_app(
     async def _start_bg_tasks(app_ctx: web.Application) -> None:
         if app_ctx.get("_uds") is not None:
             app_ctx["_global_delta_task"] = asyncio.ensure_future(_global_delta_loop(app_ctx))
+        # SMC warmup in executor (blocking UDS reads, не блокує event loop)
+        _smc_r = app_ctx.get("_smc_runner")
+        _uds_r = app_ctx.get("_uds")
+        _exec  = app_ctx.get("_uds_executor")
+        if _smc_r is not None and _uds_r is not None:
+            asyncio.ensure_future(
+                asyncio.get_event_loop().run_in_executor(_exec, _smc_r.warmup, _uds_r)
+            )
+            _log.info("WS_SMC_WARMUP_SCHEDULED")
 
     async def _cleanup_bg_tasks(app_ctx: web.Application) -> None:
         task = app_ctx.get("_global_delta_task")

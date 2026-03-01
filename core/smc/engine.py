@@ -12,15 +12,20 @@ Python 3.7 compatible.
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 from collections import deque
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from core.model.bars import CandleBar
-from core.smc.config import SmcConfig
+from core.smc.config import SmcConfig, SmcDisplayConfig
 from core.smc.fvg import detect_fvg
+from core.smc.inducement import detect_inducement
+from core.smc.key_levels import compute_key_levels, collect_htf_levels
+from core.smc.liquidity import detect_liquidity_levels
 from core.smc.order_blocks import detect_order_blocks
+from core.smc.premium_discount import detect_premium_discount
 from core.smc.structure import classify_swings, detect_structure_events
 from core.smc.swings import detect_raw_swings
 from core.smc.types import (
@@ -28,6 +33,116 @@ from core.smc.types import (
 )
 
 _log = logging.getLogger(__name__)
+
+# ── Zone lifecycle constants & helpers (N1) ──────────────────────────
+
+_BULL_ZONE_KINDS = frozenset({"ob_bull", "fvg_bull", "discount"})
+_BEAR_ZONE_KINDS = frozenset({"ob_bear", "fvg_bear", "premium"})
+
+_STATUS_RANK = {
+    "active": 0,
+    "partially_filled": 1,
+    "tested": 2,
+    "breaker": 3,
+    "fading": 4,
+    "mitigated": 5,
+    "filled": 6,
+    "expired": 7,
+}
+
+
+def _zone_rank(z):
+    # type: (SmcZone) -> tuple
+    """Deterministic sort key: strongest active first, oldest last."""
+    return (-z.strength, _STATUS_RANK.get(z.status, 9), -z.anchor_bar_ms, z.id)
+
+
+def _update_zone_lifecycle(
+    fresh_zones,     # type: List[SmcZone]
+    active_zones,    # type: Dict[str, SmcZone]
+    last_bar,        # type: Optional[CandleBar]
+    config,          # type: SmcConfig
+    tf_s,            # type: int
+):
+    # type: (...) -> List[SmcZone]
+    """N1 zone lifecycle: merge → FVG evict → mitigate → decay → hide → cap.
+
+    Мутує active_zones in-place (state persistence між on_bar).
+    Повертає відфільтрований список зон для snapshot.
+
+    D-01: deterministic cap via _zone_rank.
+    D-02: FVG not in fresh_ids → evict (prevents resurrection).
+    R-04: mitigation by bar.c (close), NOT by wick.
+    """
+    fresh_ids = {z.id for z in fresh_zones}
+
+    # 1) Merge fresh zones → active_zones (fresh wins)
+    for z in fresh_zones:
+        active_zones[z.id] = z
+
+    # 2) D-02: FVG eviction — якщо FVG зникає з fresh → drop
+    stale_fvg = [
+        zid for zid, z in active_zones.items()
+        if z.kind.startswith("fvg") and zid not in fresh_ids
+    ]
+    for zid in stale_fvg:
+        del active_zones[zid]
+
+    # 3) Mitigation + age decay (only with last_bar)
+    if last_bar is not None:
+        to_delete = []
+        for zid, z in list(active_zones.items()):
+            # R-04: mitigation by CLOSE, not wick
+            mitigated = False
+            if z.kind in _BULL_ZONE_KINDS and last_bar.c < z.low:
+                mitigated = True
+            elif z.kind in _BEAR_ZONE_KINDS and last_bar.c > z.high:
+                mitigated = True
+
+            if mitigated and z.status in ("active", "tested", "partially_filled"):
+                active_zones[zid] = dataclasses.replace(
+                    z, status="mitigated", end_ms=last_bar.open_time_ms,
+                )
+                continue
+
+            # Age model: bars since creation
+            bar_ms = tf_s * 1000
+            if bar_ms > 0:
+                age_bars = (last_bar.open_time_ms - z.anchor_bar_ms) // bar_ms
+            else:
+                age_bars = 0
+
+            # >500 bars → expired, drop
+            if age_bars > 500:
+                to_delete.append(zid)
+                continue
+
+            # D1: configurable decay curve (F10: params at config root)
+            if age_bars > config.decay_start_bars and z.strength > 0.15:
+                if age_bars > config.decay_fast_bars:
+                    factor = 0.92  # aggressive: ~0.15 after 20 bars
+                else:
+                    factor = 0.97  # gentle: ~0.54 after 20 bars
+                decay = max(0.15, z.strength * factor)
+                active_zones[zid] = dataclasses.replace(
+                    z, strength=round(decay, 3),
+                )
+
+        for zid in to_delete:
+            del active_zones[zid]
+
+    # 4) Hide mitigated (optional)
+    if config.hide_mitigated:
+        result = [z for z in active_zones.values() if z.status != "mitigated"]
+    else:
+        result = list(active_zones.values())
+
+    # 5) D-01: deterministic cap
+    if len(result) > config.max_zones_per_tf:
+        result.sort(key=_zone_rank)
+        result = result[:config.max_zones_per_tf]
+
+    return result
 
 
 def _perf_ms() -> float:
@@ -39,6 +154,7 @@ class _TfState:
 
     __slots__ = (
         "_bars", "_last_snapshot", "_last_delta", "_lookback",
+        "_active_zones",
     )
 
     def __init__(self, lookback: int) -> None:
@@ -46,6 +162,7 @@ class _TfState:
         self._last_snapshot: Optional[SmcSnapshot] = None
         self._last_delta: Optional[SmcDelta] = None
         self._lookback = lookback
+        self._active_zones: Dict[str, SmcZone] = {}
 
     def append(self, bar: CandleBar) -> None:
         """Додає бар, зберігаючи вікно lookback_bars."""
@@ -109,7 +226,8 @@ class SmcEngine:
         """
         state = self._get_or_create(symbol, tf_s)
         state._bars = deque(bars[-self._config.lookback_bars:], maxlen=self._config.lookback_bars)
-        snap = self._compute_snapshot(symbol, tf_s, state.bars_list())
+        state._active_zones = {}  # N1: full recompute → reset lifecycle
+        snap = self._compute_snapshot(symbol, tf_s, state.bars_list(), state)
         state.last_snapshot = snap
         return snap
 
@@ -131,7 +249,7 @@ class SmcEngine:
         state.append(bar)
         bars = state.bars_list()
 
-        new_snap = self._compute_snapshot(bar.symbol, bar.tf_s, bars)
+        new_snap = self._compute_snapshot(bar.symbol, bar.tf_s, bars, state)
         state.last_snapshot = new_snap
 
         delta = _diff_snapshots(prev_snap, new_snap, bar.open_time_ms)
@@ -158,6 +276,27 @@ class SmcEngine:
         snap = self.get_snapshot(symbol, tf_s)
         return snap.trend_bias
 
+    def get_snapshot_with_htf_levels(
+        self,
+        symbol: str,
+        tf_s: int,
+    ) -> SmcSnapshot:
+        """Snapshot з ін’єкцією key levels з вищих TF (ADR-0024b).
+
+        Коли трейдер дивиться на M15 — він бачить D1/H4/H1 рівні.
+        S0: pure — читає _states dict (internal state), без I/O.
+        """
+        snap = self.get_snapshot(symbol, tf_s)
+        htf_levels = collect_htf_levels(
+            lambda s, t: self.get_snapshot(s, t),
+            symbol,
+            tf_s,
+        )
+        if htf_levels:
+            merged = list(snap.levels) + htf_levels
+            snap = dataclasses.replace(snap, levels=merged)
+        return snap
+
     def last_delta(self, symbol: str, tf_s: int) -> Optional[SmcDelta]:
         """Остання delta (після останнього on_bar) для WS delta frame."""
         state = self._states.get((symbol, tf_s))
@@ -183,6 +322,7 @@ class SmcEngine:
         symbol: str,
         tf_s: int,
         bars: List[CandleBar],
+        state: _TfState,
     ) -> SmcSnapshot:
         """Full SMC computation для E1 алгоритмів (Swings, Structure, OB, FVG).
 
@@ -193,6 +333,10 @@ class SmcEngine:
 
         if not bars:
             return _empty_snapshot(symbol, tf_s)
+
+        # ── F4: ATR once, pass to all detectors ──
+        from core.smc.swings import compute_atr
+        atr = compute_atr(bars, period=14)
 
         # ── E1.1: Raw swings ──
         raw_swings = detect_raw_swings(bars, period=self._config.swing_period)
@@ -207,27 +351,36 @@ class SmcEngine:
         all_swings.sort(key=lambda s: s.time_ms)
 
         # ── E1.3: Order Blocks ──
-        ob_zones = detect_order_blocks(bars, struct_events, self._config)
+        ob_zones = detect_order_blocks(bars, struct_events, self._config, atr=atr)
 
         # ── E1.4: FVG ──
-        fvg_zones = detect_fvg(bars, self._config)
+        fvg_zones = detect_fvg(bars, self._config, atr=atr)
 
-        # Обмеження загальної кількості зон (max_zones_per_tf)
-        all_zones: List[SmcZone] = ob_zones + fvg_zones
-        if len(all_zones) > self._config.max_zones_per_tf:
-            # Залишаємо пріоритетно active зони, потім по strength
-            all_zones.sort(
-                key=lambda z: (
-                    0 if z.status == "active" else 1,
-                    -z.strength,
-                )
-            )
-            all_zones = all_zones[:self._config.max_zones_per_tf]
+        # ── E2.6: Premium/Discount Zones ──
+        pd_zones: List[SmcZone] = detect_premium_discount(classified, bars, self._config)
 
-        # Рівні — E1 MVP: порожньо (E2 додасть liquidity levels)
-        levels: List[SmcLevel] = []
+        # ── N1: Zone lifecycle (merge, FVG evict, mitigate, decay, cap) ──
+        fresh_zones: List[SmcZone] = ob_zones + fvg_zones + pd_zones
+        last_bar = bars[-1] if bars else None
+        all_zones = _update_zone_lifecycle(
+            fresh_zones, state._active_zones, last_bar, self._config, tf_s,
+        )
 
-        return SmcSnapshot(
+        # ── E2.5: Liquidity Levels (Equal Highs / Equal Lows) ──
+        # Передаємо classified (hh/hl/lh/ll) — вони містять confirmed info
+        levels: List[SmcLevel] = detect_liquidity_levels(classified, bars, self._config, atr=atr)
+
+        # ── ADR-0024b: Key Levels per TF (PDH/PDL, H4H/L, H1H/L, ...) ──
+        key_lvls = compute_key_levels(bars)
+        levels = levels + key_lvls
+
+        # ── E2.7: Inducement (False Breakout Trap) ──
+        inducement_swings: List[SmcSwing] = detect_inducement(bars, classified, self._config, atr=atr)
+        if inducement_swings:
+            all_swings = all_swings + inducement_swings
+            all_swings.sort(key=lambda s: s.time_ms)
+
+        snap = SmcSnapshot(
             symbol=symbol,
             tf_s=tf_s,
             zones=all_zones,
@@ -239,6 +392,66 @@ class SmcEngine:
             computed_at_ms=now_ms,
             bar_count=len(bars),
         )
+
+        # ── D1: Display filter (proximity + cap) ──
+        snap = _filter_for_display(snap, bars, self._config, atr=atr)
+        return snap
+
+
+# ── D1: Display filter ───────────────────────────────────────────────
+
+def _filter_for_display(
+    snap: SmcSnapshot,
+    bars: List[CandleBar],
+    config: SmcConfig,
+    atr: float = 0.0,       # F4: caller-supplied ATR
+) -> SmcSnapshot:
+    """Proximity + height + cap filter before sending to UI.
+
+    Pure function (S0). Does NOT mutate active_zones state.
+    Reduces wire payload: only zones/levels near current price.
+    """
+    if not bars:
+        return snap
+
+    last_bar = bars[-1]
+    price = last_bar.c
+    if atr <= 0.0:
+        from core.smc.swings import compute_atr
+        atr = compute_atr(bars, period=14)
+    if atr <= 0:
+        return snap
+
+    disp = config.display  # type: SmcDisplayConfig
+    radius = disp.proximity_atr_mult * atr
+    max_height = config.max_zone_height_atr_mult * atr
+
+    # 1) Zones: proximity + height guard (FVG/OB only) + rank + cap
+    nearby_zones = []
+    for z in snap.zones:
+        mid = (z.high + z.low) / 2.0
+        if abs(price - mid) > radius:
+            continue
+        # Retroactive height guard — FVG/OB only (P/D zones are naturally wide)
+        if z.kind not in ("premium", "discount") and (z.high - z.low) > max_height:
+            continue
+        nearby_zones.append(z)
+    nearby_zones.sort(key=_zone_rank)
+    capped_zones = nearby_zones[:disp.max_display_zones]
+
+    # 2) Levels: proximity filter disabled (ADR-0024b: show all key levels)
+    # Трейдер хоче бачити всі рівні — UI стилізує per-kind, не потрібно фільтрувати.
+    capped_levels = list(snap.levels)
+
+    # 3) Swings: only last N
+    capped_swings = snap.swings[-disp.max_display_swings:]
+
+    return dataclasses.replace(
+        snap,
+        zones=capped_zones,
+        levels=capped_levels,
+        swings=capped_swings,
+    )
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -304,6 +517,9 @@ def _diff_snapshots(
         and z.id in curr_zone_ids
         and curr_zone_ids[z.id].status in ("mitigated", "filled")
     ]
+    # D1: zones that left display filter (proximity, cap) → tell UI to remove
+    disappeared = [z.id for z in prev.zones if z.id not in curr_zone_ids]
+    mitigated = mitigated + disappeared
     updated = [
         curr_zone_ids[z.id]
         for z in prev.zones

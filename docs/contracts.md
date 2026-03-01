@@ -1,6 +1,6 @@
 # Реєстр контрактів (SSOT)
 
-> **Останнє оновлення**: 2026-02-15  
+> **Останнє оновлення**: 2026-03-01  
 > **Навігація**: [docs/index.md](index.md)
 
 Усі публічні JSON Schema контракти живуть у `core/contracts/public/marketdata_v1/`.  
@@ -15,8 +15,9 @@
 3. [window_v1 — Відповідь /api/bars](#window_v1--відповідь-apibars)
 4. [updates_v1 — Відповідь /api/updates](#updates_v1--відповідь-apiupdates)
 5. [tick_v1 — Тік](#tick_v1--тік)
-6. [Redis snapshot (внутрішній)](#redis-snapshot-внутрішній-формат)
-7. [Правила еволюції схем](#правила-еволюції-схем)
+6. [SMC Wire Format (WS frames)](#smc-wire-format-ws-frames)
+7. [Redis snapshot (внутрішній)](#redis-snapshot-внутрішній-формат)
+8. [Правила еволюції схем](#правила-еволюції-схем)
 
 ---
 
@@ -29,6 +30,8 @@
 | **updates_v1** | `core/contracts/public/marketdata_v1/updates_v1.json` | `ui_chart_v3/server.py` → `/api/updates` | UI (app.js), тести | v1 |
 | **tick_v1** | `core/contracts/public/marketdata_v1/tick_v1.json` | `tick_publisher_fxcm.py` | `tick_preview_worker.py`, exit-gates | v1 |
 | **Redis snap** (internal) | Документація: `docs/redis_snapshot_design.md` | `runtime/store/redis_snapshot.py` | UDS read layers | internal v1 |
+| **smc_snapshot** (wire) | `core/smc/types.py` → `ui_v4/src/types.ts` | `SmcRunner` (ws_server) | `OverlayRenderer` (ui_v4) | v1 (ADR-0024) |
+| **smc_delta** (wire) | `core/smc/types.py` → `ui_v4/src/types.ts` | `SmcRunner` (ws_server) | `smcStore` (ui_v4) | v1 (ADR-0024) |
 
 ---
 
@@ -209,6 +212,94 @@
   "mid": null
 }
 ```
+
+---
+
+## SMC Wire Format (WS frames)
+
+> **ADR**: [0024-smc-engine.md](adr/0024-smc-engine.md)  
+> **Python SSOT**: `core/smc/types.py` (SmcZone, SmcSwing, SmcLevel, SmcSnapshot, SmcDelta)  
+> **TypeScript SSOT**: `ui_v4/src/types.ts` (SmcZone, SmcSwing, SmcLevel, SmcData, SmcDeltaWire)  
+> **Продюсер**: `runtime/smc/smc_runner.py` → `runtime/ws/ws_server.py`  
+> **Консюмер**: `ui_v4/src/stores/smcStore.ts` → `ui_v4/src/smc/OverlayRenderer.ts`
+
+SMC — ephemeral read-only overlay. **Не зберігається** на диску. Відновлюється при warmup з UDS bars.
+
+### SmcZone (WS wire)
+
+| Поле | Тип | Опис |
+|---|---|---|
+| `id` | string | Deterministic: `{kind}_{symbol}_{tf_s}_{anchor_ms}` |
+| `start_ms` | integer | Epoch ms — коли зона створена |
+| `end_ms` | integer\|null | Epoch ms коли mitigated, null якщо active |
+| `high` | number | Верхня межа зони |
+| `low` | number | Нижня межа зони |
+| `kind` | string | `"ob_bull"`, `"ob_bear"`, `"fvg_bull"`, `"fvg_bear"`, `"premium"`, `"discount"`, `"inducement_bull"`, `"inducement_bear"` |
+| `status` | string | `"active"`, `"mitigated"`, `"breaker"` |
+| `strength` | number | 0.0–1.0, використовується для opacity у UI |
+
+### SmcSwing (WS wire)
+
+| Поле | Тип | Опис |
+|---|---|---|
+| `id` | string | `{kind}_{symbol}_{tf_s}_{time_ms}` |
+| `a` | `{t: int, p: number}` | Точка A (час і ціна) |
+| `b` | `{t: int, p: number}` | Точка B (час і ціна) |
+| `label` | string | `"BOS BULL"`, `"BOS BEAR"`, `"CHOCH BULL"`, `"CHOCH BEAR"` |
+
+### SmcLevel (WS wire)
+
+| Поле | Тип | Опис |
+|---|---|---|
+| `id` | string | `{kind}_{symbol}_{tf_s}_{price_int}` |
+| `price` | number | Рівень ціни |
+| `t_ms` | integer | Epoch ms першого торкання |
+| `kind` | string | `"eq_highs"`, `"eq_lows"` |
+| `touches` | integer | Кількість торкань |
+
+### SmcData (full frame payload)
+
+У WS `full` та `replay` frame-ах:
+
+```json
+{
+  "data": {
+    "candles": [...],
+    "zones": [SmcZone, ...],
+    "swings": [SmcSwing, ...],
+    "levels": [SmcLevel, ...]
+  }
+}
+```
+
+### SmcDeltaWire (delta frame payload)
+
+У WS `delta` frame-ах (опціональне поле `smc_delta`):
+
+```json
+{
+  "data": {
+    "upsert": [...],
+    "smc_delta": {
+      "new_zones": [SmcZone, ...],
+      "mitigated_zone_ids": ["ob_bear_XAU/USD_900_1770288000000"],
+      "updated_zones": [SmcZone, ...],
+      "new_swings": [SmcSwing, ...],
+      "new_levels": [SmcLevel, ...],
+      "removed_level_ids": [],
+      "trend_bias": "bullish"
+    }
+  }
+}
+```
+
+### Інваріанти SMC wire
+
+- **S3**: Zone ID deterministic — same input → same ID
+- **S6**: Python `to_wire()` output === TypeScript interface fields
+- SMC не змінює OHLCV payload — це окремі поля в тому ж WS frame
+- `smc_delta` присутній тільки якщо `SmcDelta.has_changes == true`
+- UI обробляє через `smcStore.applySmcFull()` (full frame) / `smcStore.applySmcDelta()` (delta frame)
 
 ---
 
