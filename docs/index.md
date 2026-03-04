@@ -1,6 +1,6 @@
 # Документація Trading Platform v3 — Індекс (SSOT)
 
-> **Остання перевірка**: 2026-03-01  
+> **Остання перевірка**: 2026-03-02  
 > **Мова**: українська (англійська лише для загальноприйнятих термінів)
 
 Цей файл — **точка входу** в усю документацію проєкту. Будь-яке знання про систему має бути знайдене через цей індекс.
@@ -14,7 +14,7 @@
 | Документ | Зміст |
 |---|---|
 | [system_current_overview.md](system_current_overview.md) | Поточна архітектура, процеси, SSOT-площини, Mermaid-схеми, annotated tree |
-| **[docs/adr/index.md](adr/index.md)** | **Індекс усіх ADR (SSOT)** — 25 ADR з обґрунтуваннями архітектурних рішень |
+| **[docs/adr/index.md](adr/index.md)** | **Індекс усіх ADR (SSOT)** — 30 ADR з обґрунтуваннями архітектурних рішень |
 | [ADR-0001](adr/0001-unified-data-store.md) | UDS (RAM↔Redis↔Disk) + Contract-first API |
 | [ADR-0002](adr/0002-derive-chain-from-m1.md) | DeriveChain: M1→M3→M5→M15→M30→H1→H4 |
 | [ADR-0003](adr/0003-cold-start-hardening.md) | Cold start: error isolation, process restart, unified gate |
@@ -28,6 +28,8 @@
 | [ADR-0023](adr/0023-d1-live-derive-from-m1.md) | D1 Live Derive from M1 (1440×M1, anchor 79200s) |
 | [ADR-0024](adr/0024-smc-engine.md) | **SMC Engine Architecture** — swings, OB, FVG, liquidity, P/D, inducement, lifecycle (Implemented E1+S4+E2+N1/N2/N3) |
 | [ADR-0025](adr/0025-potik-b-data-quality-summary.md) | Потік B data quality summary |
+| [ADR-0026](adr/0026-overlay-level-rendering-rules.md) | Overlay Level Rendering Rules (L1–L6) |
+| [ADR-0027](adr/0027-client-side-replay.md) | Client-Side Replay (TradingView-style) |
 
 ### 2. Потоки даних
 
@@ -81,7 +83,7 @@
 | `core/smc/config.py` | SmcConfig dataclass (params з config.json:smc) |
 | `runtime/smc/smc_runner.py` | SmcRunner — in-process під ws_server, warmup + on_bar |
 | `ui_v4/src/stores/smcStore.ts` | applySmcFull / applySmcDelta — incremental SMC state |
-| `ui_v4/src/components/overlays/OverlayRenderer.svelte` | Canvas rendering: OB/FVG/swings/levels з opacity за strength |
+| `ui_v4/src/chart/overlay/OverlayRenderer.ts` | Canvas rendering: OB/FVG/swings/levels з opacity за strength |
 
 ### 6. Runbooks (експлуатація)
 

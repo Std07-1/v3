@@ -2,7 +2,7 @@
 
 > **Purpose**: This document provides essential context for AI coding agents working on this project.  
 > **Language**: Ukrainian (primary), English for technical terms.  
-> **Last Updated**: 2026-02-28
+> **Last Updated**: 2026-03-02
 
 ---
 
@@ -22,11 +22,13 @@
 
 ---
 
-## 1.1 Актуальний статус (2026-02-28)
+## 1.1 Актуальний статус (2026-03-02)
 
 - Потік B (мульти-символьна активація) — **відкладено** через integrity derived TF (див. ADR-0025)
 - Всі результати audit/rebuild зафіксовані в [docs/adr/0025-potik-b-data-quality-summary.md](docs/adr/0025-potik-b-data-quality-summary.md)
 - Потік B закритий, фокус на XAU/USD та SMC engine (Потік C)
+- SMC Engine **Implemented** (ADR-0024): E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a, 422+ тестів
+- Client-Side Replay (ADR-0027): TradingView-style replay з data_v3/
 - Для майбутньої активації інших символів потрібен окремий audit/fix integrity derived TF
 
 ### 1.2 Технологічний стек
@@ -57,38 +59,63 @@
 ```
 v3/
 ├── app/                    # Supervisor та lifecycle
-│   ├── main.py            # Головний supervisor (S2 restart backoff)
-│   ├── main_connector.py  # D1 fetcher (disabled, ADR-0023: broker_base_tfs_s=[])
-│   ├── composition.py     # DI composition
-│   └── lifecycle.py       # Process lifecycle
+│   └── main.py            # Головний supervisor (S2 restart backoff, --mode all/replay/…)
 │
 ├── core/                   # Pure logic (NO I/O)
 │   ├── model/bars.py      # CandleBar dataclass, FINAL_SOURCES
 │   ├── derive.py          # DERIVE_CHAIN, GenericBuffer, aggregate_bars
 │   ├── buckets.py         # Time bucket math
-│   └── config_loader.py   # Config parsing helpers
+│   ├── config_loader.py   # Config parsing helpers
+│   ├── contracts/         # JSON Schema (bar_v1, tick_v1, updates_v1, window_v1)
+│   └── smc/               # SMC Engine — pure logic, NO I/O (ADR-0024)
+│       ├── types.py       # SmcZone, SmcSwing, SmcLevel, SmcSnapshot, SmcDelta
+│       ├── config.py      # SmcConfig + nested configs
+│       ├── swings.py      # detect_swings() — rolling window period
+│       ├── structure.py   # detect_structure() — BOS/CHoCH
+│       ├── order_blocks.py # detect_order_blocks()
+│       ├── fvg.py         # detect_fvg() — bull/bear + height guard
+│       ├── liquidity.py   # detect_liquidity_levels()
+│       ├── premium_discount.py # detect_premium_discount()
+│       ├── inducement.py  # detect_inducements()
+│       ├── key_levels.py  # detect_key_levels() — PDH/PDL/DH/DL (ADR-0024b)
+│       ├── context_stack.py # ContextStack — cross-TF zone aggregation
+│       └── engine.py      # SmcEngine orchestrator + zone lifecycle
 │
 ├── runtime/               # I/O та процеси
 │   ├── ingest/            # Data ingestion
 │   │   ├── broker/fxcm/   # FXCM provider
-│   │   ├── polling/       # m1_poller, dedup, fetch_policy
-│   │   ├── tick_*.py      # Tick stream + preview worker
+│   │   ├── polling/       # m1_poller
+│   │   ├── tick_agg.py    # TickAggregator (preview-plane)
+│   │   ├── tick_common.py # спільні утиліти для tick pipeline
+│   │   ├── tick_preview_worker.py # tick→preview
+│   │   ├── tick_publisher_fxcm.py # FXCM tick → Redis PubSub
 │   │   ├── derive_engine.py  # Derive cascade (M1→H4+D1, ADR-0023)
-│   │   └── market_calendar.py
+│   │   ├── market_calendar.py # Calendar breaks (UTC)
+│   │   └── replay.py      # ReplayFeeder — offline replay (ADR-0017/0027)
 │   ├── store/             # UDS та storage layers
 │   │   ├── uds.py         # UnifiedDataStore (SSOT)
 │   │   ├── layers/        # disk_layer, ram_layer, redis_layer
 │   │   ├── redis_snapshot.py, redis_keys.py, redis_spec.py
 │   │   └── ssot_jsonl.py  # JSONL append-only writer
 │   ├── ws/                # WebSocket server (ui_v4)
-│   │   └── ws_server.py   # Port 8000
+│   │   ├── ws_server.py   # Port 8000 (SmcRunner integration)
+│   │   └── candle_map.py  # bar→Candle mapping
+│   ├── smc/               # SMC runtime wiring (ADR-0024)
+│   │   └── smc_runner.py  # SmcRunner: warmup + on_bar callback
 │   └── obs_60s.py         # 60s observability
 │
 ├── ui_chart_v3/           # HTTP UI (port 8089, polling)
-│   └── server.py          # Flask-like HTTP API
+│   └── server.py          # HTTP API + static server
 │
 ├── ui_v4/                 # WebSocket UI (port 8000, Svelte 5)
-│   ├── src/               # TypeScript + Svelte
+│   ├── src/
+│   │   ├── types.ts       # SSOT types: RenderFrame, Candle, SmcData, Drawing
+│   │   ├── App.svelte     # root wiring
+│   │   ├── app/           # diagState, frameRouter, edgeProbe
+│   │   ├── ws/            # WSConnection, WsAction creators
+│   │   ├── stores/        # smcStore, replayStore, favorites, meta, viewCache
+│   │   ├── layout/        # ChartPane, ChartHud, StatusBar, DrawingToolbar, ReplayBar, ...
+│   │   └── chart/         # engine.ts, themes.ts, interaction.ts, OverlayRenderer.ts, DrawingsRenderer.ts
 │   ├── package.json       # npm deps
 │   └── README_DEV.md      # UI v4 dev guide
 │
@@ -97,20 +124,28 @@ v3/
 │
 ├── tools/                 # Утиліти та діагностика (isolated)
 │   ├── run_exit_gates.py  # Quality gates runner
-│   ├── exit_gates/        # AST gates (dependency check)
-│   ├── rebuild_*.py       # Data rebuild tools
-│   └── audit/             # Audit scripts
+│   ├── exit_gates/        # 25 AST gates (dependency, contract, geometry)
+│   ├── rebuild_from_m1.py # Canonical rebuild all derived TFs
+│   ├── repair/            # htf_rebuild, htf_tail_sync
+│   └── diag/              # classify gaps, clear redis, disk_max_open_ms
 │
-├── tests/                 # 29+ тестів
+├── tests/                 # 37 файлів, 422+ тестів
+│   ├── test_smc_*.py      # SMC tests (e1, e2, runner, key_levels, n1_lifecycle, d1_display)
 │   ├── test_derive_*.py   # Derivation tests
-│   ├── test_uds_*.py      # UDS tests
-│   ├── test_s*_*.py       # SSOT compliance tests
-│   └── test_ws_server.py  # WS tests
+│   ├── test_uds_*.py      # UDS tests (split-brain, partial penalty)
+│   ├── test_s*_*.py       # SSOT compliance tests (s1–s6)
+│   ├── test_ws_server.py  # WS tests
+│   └── test_candle_map.py # Candle mapping tests
+│
+├── .github/               # AI agent governance
+│   ├── copilot-instructions.md  # SSOT інструкція для AI-агентів
+│   ├── role_spec_*.md     # 4 role specs (patch_master, bug_hunter, smc_chief, doc_keeper)
+│   └── prompts/           # 8 prompt files (adr, discovery, patch, review, ...)
 │
 ├── docs/                  # Повна документація
 │   ├── index.md           # Точка входу
 │   ├── system_current_overview.md  # Архітектура
-│   ├── adr/               # 22 ADR (architecture decisions)
+│   ├── adr/               # 30 ADR (architecture decisions, 0001–0027 + 0024a/b/c)
 │   ├── contracts.md       # JSON Schema contracts
 │   ├── ui_api.md          # HTTP API reference
 │   └── runbooks/          # Production runbooks
@@ -205,6 +240,12 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 | `test_s1_preview_ttl_ssot.py` | Preview TTL compliance (ADR-0001) |
 | `test_s3_final_sources_ssot.py` | FINAL_SOURCES integrity |
 | `test_ws_server.py` | WebSocket server functionality |
+| `test_smc_e1.py` | SMC E1: swings, structure, OB, FVG, engine |
+| `test_smc_runner.py` | SMC Runner: warmup, on_bar, delta, performance |
+| `test_smc_key_levels.py` | SMC key levels: PDH/PDL/DH/DL |
+| `test_smc_n1_lifecycle.py` | SMC N1: zone lifecycle (merge/evict/decay) |
+| `test_d1_derive.py` | D1 derive from M1 (ADR-0023) |
+| `test_candle_map.py` | bar→Candle mapping (R2 closure) |
 
 ---
 
@@ -348,9 +389,11 @@ REDIS_PORT=6379
 
 - ADR-0001: UDS як єдина талія
 - ADR-0002: DeriveChain M1→H4+D1
-- ADR-0023: D1 Live Derive from M1 (D1 = 1440×M1, anchor 79200)
 - ADR-0003: Cold start hardening
-- ... (22 ADR total)
+- ADR-0023: D1 Live Derive from M1 (D1 = 1440×M1, anchor 79200)
+- ADR-0024: SMC Engine Architecture (swings, OB, FVG, liquidity, P/D, lifecycle)
+- ADR-0027: Client-Side Replay (TradingView-style)
+- ... (30 ADR total, see `docs/adr/index.md`)
 
 ---
 

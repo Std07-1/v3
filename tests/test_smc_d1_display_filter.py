@@ -171,15 +171,16 @@ class TestProximityFilter:
 class TestHeightGuard:
     """Giant zones retroactively filtered (FVG/OB only)."""
 
-    def test_giant_fvg_removed(self):
+    def test_giant_fvg_passes_through(self):
+        """FVG zones bypass height guard (independent path since filter removal)."""
         bars = _make_bars(50, base_price=2000.0, atr_approx=10.0)
-        # ATR ≈ 10, max_height = 4.0 * 10 = 40. Zone height = 200 → out
+        # ATR ≈ 10, max_height = 4.0 * 10 = 40. Zone height = 200 but FVG = pass-through
         z = _zone("fvg_bull", high=2100.0, low=1900.0)
         snap = _snap(zones=[z])
         cfg = SmcConfig(max_zone_height_atr_mult=4.0,
                         display=SmcDisplayConfig(proximity_atr_mult=999.0))
         result = _filter_for_display(snap, bars, cfg)
-        assert len(result.zones) == 0
+        assert len(result.zones) == 1, "FVG bypasses height guard"
 
     def test_normal_fvg_passes(self):
         bars = _make_bars(50, base_price=2000.0, atr_approx=10.0)

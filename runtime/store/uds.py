@@ -318,6 +318,23 @@ class CommitResult:
     warnings: list[str]
 
 
+class _NullDiskLayer:
+    """No-op disk layer for replay mode (ADR-0017).
+
+    При V3_REPLAY_MODE=1 UI/WS reader UDS не читає з диску.
+    Всі дані приходять тільки з Redis (заповнюється replay).
+    """
+
+    def read_window_with_geom(self, *_a, **_kw):
+        return [], None
+
+    def last_open_ms(self, *_a, **_kw):
+        return None
+
+    def list_parts(self, *_a, **_kw):
+        return []
+
+
 class UnifiedDataStore:
     """UnifiedDataStore: оркестрація RAM↔Redis↔Disk."""
 
@@ -2167,6 +2184,14 @@ def build_uds_from_config(
         n_tfs = 8
     ram_max_keys = max(n_symbols * n_tfs + 16, 128)
     ram_layer = RamLayer(max_keys=ram_max_keys, max_bars=60000)
+
+    # ADR-0017: replay mode → UI/WS reader не читає з диску.
+    # Replay process пише в Redis, UI бачить тільки replayed бари.
+    replay_mode = os.environ.get("V3_REPLAY_MODE", "").lower() in ("1", "true")
+    disk_layer_eff = _NullDiskLayer() if replay_mode else None  # None → DiskLayer(data_root)
+    if replay_mode:
+        Logging.info("UDS_REPLAY_MODE disk=NullDiskLayer (V3_REPLAY_MODE=1)")
+
     return UnifiedDataStore(
         data_root=data_root,
         boot_id=boot_id,
@@ -2178,6 +2203,7 @@ def build_uds_from_config(
         jsonl_appender=jsonl_appender,
         redis_snapshot_writer=redis_writer,
         updates_bus=updates_bus,
+        disk_layer=disk_layer_eff,
         redis_spec_mismatch=redis_spec_mismatch,
         redis_spec_mismatch_fields=redis_spec_mismatch_fields,
         preview_tf_allowlist=preview_tf_allowlist,

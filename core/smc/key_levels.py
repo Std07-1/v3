@@ -2,15 +2,18 @@
 core/smc/key_levels.py — Key Price Levels per TF (ADR-0024b).
 
 Обчислює горизонтальні цінові якорі для intraday стратегії:
-  - Previous candle High/Low (PDH/PDL для D1, prev H4 H/L, prev H1 H/L, ...)
-  - Current candle running High/Low (DH/DL, H4H/H4L, H1H/H1L, ...)
+  - Previous candle High/Low (PDH/PDL для D1, prev H4 H/L, prev H1 H/L)
+  - Current candle running High/Low (HOD/LOD, H4H/H4L, H1H/H1L)
 
-TF ієрархія для рівнів:
-  D1   — глобальний контекст (PDH/PDL/DH/DL)
-  H4   — глобальний контекст
-  H1   — контекст та аналіз
-  M30  — контекст
-  M15  — підтвердження входу
+Генеруються тільки для TF ≥ H1 (D1, H4, H1).
+M30/M15 key levels видалені: трейдер бачить ці свічки напряму → рівні
+дублюють видиме і створюють шум.
+
+Cross-TF display filter у engine.py::_KEY_LEVEL_ALLOW далі відсіює:
+  M15 viewer: D1 + H4 + H1 prev only (не show h1_h/h1_l — змінюються занадто часто)
+  H1 viewer:  D1 + H4
+  H4 viewer:  D1
+  D1 viewer:  нічого
 
 S0: pure logic, NO I/O.
 S2: deterministic — same bars → same levels.
@@ -29,12 +32,13 @@ from core.smc.types import SmcLevel, make_level_id
 # Тільки стратегічно значущі TF для intraday (M15+).
 # M1/M3/M5 не генерують key levels (їх prev candle не є стратегічним якорем),
 # але ВІДОБРАЖАЮТЬ HTF levels через cross-TF ін'єкцію.
+# Only generate key levels for TFs ≥ H1.
+# M30/M15 prev/curr H/L are redundant: the viewer sees those candles directly.
+# Cross-TF display map in engine.py further filters which kinds appear per viewer.
 _TF_KEY_LEVEL_MAP = {
     86400:  ("pdh",     "pdl",     "dh",     "dl"),      # D1: Previous/Current Day
     14400:  ("p_h4_h",  "p_h4_l",  "h4_h",   "h4_l"),    # H4
     3600:   ("p_h1_h",  "p_h1_l",  "h1_h",   "h1_l"),    # H1
-    1800:   ("p_m30_h", "p_m30_l", "m30_h",  "m30_l"),   # M30
-    900:    ("p_m15_h", "p_m15_l", "m15_h",  "m15_l"),   # M15
 }  # type: Dict[int, Tuple[str, str, str, str]]
 
 # Усі kinds, що генеруються цим модулем (для LEVEL_KINDS union)
@@ -45,7 +49,7 @@ KEY_LEVEL_KINDS = frozenset(
 )
 
 # HTF шари, з яких ін'єктуються рівні на нижчі ТФ (sorted desc)
-_HTF_INJECT_ORDER = [86400, 14400, 3600, 1800, 900]
+_HTF_INJECT_ORDER = [86400, 14400, 3600]
 
 
 def compute_key_levels(bars: List[CandleBar]) -> List[SmcLevel]:

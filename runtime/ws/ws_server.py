@@ -43,6 +43,15 @@ DEFAULT_HEARTBEAT_S = 30
 DEFAULT_DELTA_POLL_S = 2.0
 DEFAULT_COLD_START_BARS = 300
 
+# CORS: дозволені origins для cross-origin (Vercel / Cloudflare Pages)
+# Конфіг: ws_server.cors_allowed_origins в config.json
+# Якщо список порожній — CORS headers не додаються (same-origin режим)
+_CORS_HEADERS_COMMON = {
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Max-Age": "86400",
+}
+
 # ADR-0011: broadcast send timeout per client (slow-client rail)
 BROADCAST_SEND_TIMEOUT_S = 1.0
 
@@ -1112,6 +1121,45 @@ def build_app(
             app["_smc_runner"] = None
             _log.warning("WS_SMC_RUNNER_INIT_FAILED err=%s — SMC disabled", _smc_init_exc)
 
+    # ── CORS middleware (cross-origin: Vercel / Cloudflare Pages) ──────
+    _cors_origins_raw = ws_cfg.get("cors_allowed_origins", [])
+    _cors_origins = set(str(o).rstrip("/") for o in _cors_origins_raw if o)
+    app["_cors_origins"] = _cors_origins
+    if _cors_origins:
+        _log.info("WS_CORS_ENABLED origins=%s", _cors_origins)
+
+    @web.middleware
+    async def cors_middleware(request, handler):
+        origin = request.headers.get("Origin", "")
+        allowed = app.get("_cors_origins", set())
+        # Якщо CORS не налаштований або origin не в списку — пропускаємо
+        if not allowed or origin not in allowed:
+            return await handler(request)
+        # Preflight OPTIONS
+        if request.method == "OPTIONS":
+            resp = web.Response(status=204)
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers.update(_CORS_HEADERS_COMMON)
+            return resp
+        # Звичайний запит — додаємо CORS headers
+        resp = await handler(request)
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        return resp
+
+    app.middlewares.append(cors_middleware)
+
+    # ── /api/status — edge probe endpoint (для Vercel cross-origin) ────
+    async def _api_status(request: web.Request) -> web.Response:
+        uds_ok = app.get("_uds") is not None
+        sessions_count = len(app.get("_ws_sessions", {}))
+        return web.json_response({
+            "status": "ok" if uds_ok else "no_uds",
+            "boot_id": app.get("_boot_id"),
+            "ws_clients": sessions_count,
+            "server_ts_ms": int(time.time() * 1000),
+        })
+
+    app.router.add_get("/api/status", _api_status)
     app.router.add_get("/ws", ws_handler)
 
     # ── Same-origin SPA serving (Правило §11: UI + API = один процес) ──

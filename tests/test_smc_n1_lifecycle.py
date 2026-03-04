@@ -250,11 +250,11 @@ class TestStateAccumulation:
 class TestFvgHeightGuard:
     """N2: giant FVG > max_zone_height_atr_mult × ATR should be skipped."""
 
-    def test_giant_fvg_filtered(self):
+    def test_giant_fvg_detected(self):
+        """detect_fvg no longer applies height guard — all FVGs pass through."""
         from core.smc.fvg import detect_fvg
-        # Create bars where FVG gap is huge (> 5 × ATR)
         cfg = SmcConfig(max_zone_height_atr_mult=5.0)
-        # ATR ~10 based on these bars, gap = 200 → 200 > 5*10 → skip
+        # ATR ~10 based on these bars, gap = 200 → height guard removed
         bars = []
         for i in range(20):
             ms = 1000000 + i * 300000
@@ -266,7 +266,7 @@ class TestFvgHeightGuard:
         result = detect_fvg(bars, cfg)
         fvg_bull = [z for z in result if z.kind == "fvg_bull"
                     and z.anchor_bar_ms == bars[-2].open_time_ms]
-        assert len(fvg_bull) == 0, "giant FVG should be filtered by height guard"
+        assert len(fvg_bull) >= 1, "giant FVG should pass (no height guard)"
 
     def test_normal_fvg_passes(self):
         from core.smc.fvg import detect_fvg

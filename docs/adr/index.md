@@ -25,7 +25,7 @@
 | [0014](0014-uds-split-brain-resilience.md) | UDS Split-Brain Resilience | **Implemented** | 2026-02-26 | split-brain, UDS, Redis, watermark | `concurrency_hardening` |
 | [0015](0015-calendar-pause-flat-bars.md) | Calendar Pause/Flat Bar Interpretation | **Implemented** | 2026-02-26 | calendar_pause, complete=True, derive, M5 | `derive_chain_m1` |
 | [0016](0016-python-version-broker-isolation.md) | Python Version Upgrade + Broker Subprocess Isolation | **Proposed** | 2026-02-26 | Python 3.7, 3.11, forexconnect, subprocess, venv | `platform_modernization` |
-| [0017](0017-replay-mode-offline-demo.md) | Replay-Mode з data_v3/ для Offline Demo | **Proposed** | 2026-02-26 | replay, offline, demo, data_v3, CI | `offline_demo` |
+| [0017](0017-replay-mode-offline-demo.md) | Replay-Mode з data_v3/ для Offline Demo | **Implemented** | 2026-02-28 | replay, offline, demo, data_v3, CI | `offline_demo` |
 | [0018](0018-slo-observability-prometheus.md) | SLO Observability + Prometheus Integration | **Proposed** | 2026-02-26 | SLO, latency, prometheus, metrics, p95 | `observability_v1` |
 | [0019](0019-code-review-quick-fixes.md) | Code Review Quick-Fixes Batch (#1,#2,#4,#5,#8,#9) | **Implemented** | 2026-02-26 | bisect, warmup lock, LRU FD, stop_event, max_workers | `code_review_hardening` |
 | [0020](0020-candlebar-extensions-immutability.md) | CandleBar Extensions Immutability | **Proposed** | 2026-02-26 | CandleBar, frozen, Dict, MappingProxyType | `code_review_hardening` |
@@ -34,9 +34,11 @@
 | [0023](0023-d1-live-derive-from-m1.md) | D1 Live Derive from M1 | **Implemented** | 2026-02-27 | D1, 86400, derive chain, M1→D1, anchor 79200, ADR-0002 extension | `d1_derive_from_m1` |
 | [0024](0024-smc-engine.md) | SMC Engine — Smart Money Concepts | **Implemented** | 2026-02-28 | SMC, OB, FVG, BOS, CHoCH, liquidity, inducement, P/D, core/smc, lifecycle, N1/N2/N3 | `smc_engine_v1` |
 | [0024a](0024a-smc-engine-self-audit.md) | SMC Engine Self-Audit & Hardening | **Implemented** | 2026-03-01 | F1-F12, swing wire format, ATR dedup, decay config, trend_bias | `smc_engine_hardening` |
-| [0024b](0024b-smc-engine-smc-key-levels,md) | SMC Key Levels — Horizontal Anchors | **Partially Implemented** | 2026-03-01 | PDH/PDL/PWH/PWL, sessions, opens, range, EQH/EQL, budget, key_levels.py, per-kind UI styling | `smc_engine_v1` |
+| [0024b](0024b-smc-engine-smc-key-levels.md) | SMC Key Levels — Horizontal Anchors | **Partially Implemented** | 2026-03-01 | PDH/PDL/PWH/PWL, sessions, opens, range, EQH/EQL, budget, key_levels.py, per-kind UI styling | `smc_engine_v1` |
+| [0024c](0024c-smc-zone-poi-rendering.md) | SMC Zone POI — Rendering Strategy | **Implemented** | 2026-03-01 | OB, FVG, premium/discount, POI grade, Z1–Z10, zone lifecycle, display filter, Context Stack | `smc_engine_v1` |
 | [0025](0025-potik-b-data-quality-summary.md) | Потік B — Data Quality & Activation Summary | **Implemented** | 2026-02-28 | multi-symbol, data quality, derived integrity, XAU/USD focus | `potik_b_data_quality` |
 | [0026](0026-overlay-level-rendering-rules.md) | Overlay Level Rendering Rules | **Implemented** | 2026-03-01 | levels, merge, labels, LINE_PX, NOTCH_PX, LEVEL_STYLES, L1–L6 | `smc_engine_v1` |
+| [0027](0027-client-side-replay.md) | Client-Side Replay (TradingView-style) | **Implemented** | 2026-02-28 | replay, client-side, scrubber, play/pause, candle-by-candle, TF switch | `replay_v2` |
 
 ---
 
@@ -76,4 +78,4 @@
 
 Див. формат у [copilot-instructions.md](../../.github/copilot-instructions.md) → Тема B, Правило B2.
 
-Наступний номер: **0027**
+Наступний номер: **0028**

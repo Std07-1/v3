@@ -98,28 +98,21 @@ class TestComputeKeyLevels(unittest.TestCase):
         self.assertIn("h4_h", kinds)
         self.assertIn("h4_l", kinds)
 
-    def test_m15_levels(self):
-        """M15 бари → prev M15 + current M15."""
+    def test_m15_no_levels(self):
+        """M15 бари → не генерує key levels (трейдер бачить свічки)."""
         bars = [
             _bar(900, 100000, 1.3000, 1.3050, 1.2980, 1.3020, complete=True),
             _bar(900, 1000000, 1.3020, 1.3060, 1.2990, 1.3040, complete=False),
         ]
-        levels = compute_key_levels(bars)
-        kinds = {lv.kind for lv in levels}
+        self.assertEqual(compute_key_levels(bars), [])
 
-        self.assertIn("p_m15_h", kinds)
-        self.assertIn("p_m15_l", kinds)
-
-    def test_m30_levels(self):
-        """M30 бари → prev M30 + current M30."""
+    def test_m30_no_levels(self):
+        """M30 бари → не генерує key levels (трейдер бачить свічки)."""
         bars = [
             _bar(1800, 100000, 50, 55, 45, 52, complete=True),
             _bar(1800, 1900000, 52, 58, 48, 56, complete=False),
         ]
-        levels = compute_key_levels(bars)
-        kinds = {lv.kind for lv in levels}
-        self.assertIn("p_m30_h", kinds)
-        self.assertIn("p_m30_l", kinds)
+        self.assertEqual(compute_key_levels(bars), [])
 
     def test_empty_bars(self):
         """Пусті бари → пустий список."""
@@ -263,12 +256,10 @@ class TestWireFormat(unittest.TestCase):
         self.assertNotIn("color", wire)
 
     def test_key_level_kinds_complete(self):
-        """KEY_LEVEL_KINDS contains all expected kinds."""
+        """KEY_LEVEL_KINDS contains all expected kinds (D1+H4+H1 only)."""
         expected = {"pdh", "pdl", "dh", "dl",
                     "p_h4_h", "p_h4_l", "h4_h", "h4_l",
-                    "p_h1_h", "p_h1_l", "h1_h", "h1_l",
-                    "p_m30_h", "p_m30_l", "m30_h", "m30_l",
-                    "p_m15_h", "p_m15_l", "m15_h", "m15_l"}
+                    "p_h1_h", "p_h1_l", "h1_h", "h1_l"}
         self.assertEqual(KEY_LEVEL_KINDS, expected)
 
 
@@ -331,8 +322,8 @@ class TestEngineIntegration(unittest.TestCase):
         self.assertIn("pdh", htf_kinds)
         self.assertIn("pdl", htf_kinds)
 
-        # M15 own levels
-        self.assertIn("p_m15_h", htf_kinds)
+        # M15 own levels: M15 no longer generates key levels
+        self.assertNotIn("p_m15_h", htf_kinds)
 
     def test_proximity_filter_disabled(self):
         """Display filter no longer removes levels by proximity."""

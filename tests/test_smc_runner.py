@@ -58,13 +58,15 @@ def _make_full_cfg(
     tf_allowlist: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
     """Мінімальний full_cfg для SmcRunner."""
+    tfs = tf_allowlist or [60, 300, 900]
     return {
         "symbols": symbols or [SYM],
-        "tf_allowlist_s": tf_allowlist or [60, 300, 900],
+        "tf_allowlist_s": tfs,
         "smc": {
             "enabled": True,
             "lookback_bars": 100,
             "swing_period": 2,
+            "compute_tfs": tfs,  # match test TFs so on_bar_dict/warmup work
             "ob": {
                 "enabled": True,
                 "min_impulse_atr_mult": 0.1,

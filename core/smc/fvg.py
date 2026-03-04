@@ -41,66 +41,69 @@ def detect_fvg(
 
     if atr <= 0.0:
         atr = compute_atr(bars, period=14)
-    min_gap = fvg_cfg.min_gap_atr_mult * atr
-    zones: List[SmcZone] = []
-    active_count = 0
 
+    zones: List[SmcZone] = []
+    seen_ids = set()  # type: set
+
+    # Detect ALL FVG candidates — NO gap-size or height filters.
+    # FVG is a pure 3-candle pattern. Filtering is the caller's job.
+    # Capped by max_active after lifecycle update.
     for i in range(len(bars) - 2):
         b0, b1, b2 = bars[i], bars[i + 1], bars[i + 2]
 
         # Bullish FVG: b0.high < b2.low
         if b0.h < b2.low:
             gap_size = b2.low - b0.h
-            if (gap_size >= min_gap
-                    and active_count < fvg_cfg.max_active
-                    and (atr <= 0 or gap_size <= config.max_zone_height_atr_mult * atr)):
-                zone_id = make_zone_id("fvg_bull", b1.symbol, b1.tf_s, b1.open_time_ms)
-                if not any(z.id == zone_id for z in zones):
-                    strength = min(1.0, gap_size / (atr * 2.0)) if atr > 0 else 0.5
-                    zones.append(SmcZone(
-                        id=zone_id,
-                        symbol=b1.symbol,
-                        tf_s=b1.tf_s,
-                        kind="fvg_bull",
-                        start_ms=b0.open_time_ms,
-                        end_ms=None,
-                        high=b2.low,   # top edge = b2.low
-                        low=b0.h,      # bottom edge = b0.high
-                        status="active",
-                        strength=round(strength, 3),
-                        anchor_bar_ms=b1.open_time_ms,
-                    ))
-                    active_count += 1
+            zone_id = make_zone_id("fvg_bull", b1.symbol, b1.tf_s, b1.open_time_ms)
+            if zone_id not in seen_ids:
+                seen_ids.add(zone_id)
+                strength = min(1.0, gap_size / (atr * 2.0)) if atr > 0 else 0.5
+                zones.append(SmcZone(
+                    id=zone_id,
+                    symbol=b1.symbol,
+                    tf_s=b1.tf_s,
+                    kind="fvg_bull",
+                    start_ms=b0.open_time_ms,
+                    end_ms=None,
+                    high=b2.low,   # top edge = b2.low
+                    low=b0.h,      # bottom edge = b0.high
+                    status="active",
+                    strength=round(strength, 3),
+                    anchor_bar_ms=b1.open_time_ms,
+                ))
 
         # Bearish FVG: b0.low > b2.high
         elif b0.low > b2.h:
             gap_size = b0.low - b2.h
-            if (gap_size >= min_gap
-                    and active_count < fvg_cfg.max_active
-                    and (atr <= 0 or gap_size <= config.max_zone_height_atr_mult * atr)):
-                zone_id = make_zone_id("fvg_bear", b1.symbol, b1.tf_s, b1.open_time_ms)
-                if not any(z.id == zone_id for z in zones):
-                    strength = min(1.0, gap_size / (atr * 2.0)) if atr > 0 else 0.5
-                    zones.append(SmcZone(
-                        id=zone_id,
-                        symbol=b1.symbol,
-                        tf_s=b1.tf_s,
-                        kind="fvg_bear",
-                        start_ms=b0.open_time_ms,
-                        end_ms=None,
-                        high=b0.low,   # top edge = b0.low
-                        low=b2.h,      # bottom edge = b2.high
-                        status="active",
-                        strength=round(strength, 3),
-                        anchor_bar_ms=b1.open_time_ms,
-                    ))
-                    active_count += 1
+            zone_id = make_zone_id("fvg_bear", b1.symbol, b1.tf_s, b1.open_time_ms)
+            if zone_id not in seen_ids:
+                seen_ids.add(zone_id)
+                strength = min(1.0, gap_size / (atr * 2.0)) if atr > 0 else 0.5
+                zones.append(SmcZone(
+                    id=zone_id,
+                    symbol=b1.symbol,
+                    tf_s=b1.tf_s,
+                    kind="fvg_bear",
+                    start_ms=b0.open_time_ms,
+                    end_ms=None,
+                    high=b0.low,   # top edge = b0.low
+                    low=b2.h,      # bottom edge = b2.high
+                    status="active",
+                    strength=round(strength, 3),
+                    anchor_bar_ms=b1.open_time_ms,
+                ))
 
     # Оновлюємо статус (fill check)
     zones = _update_fvg_status(zones, bars)
 
-    # Повертаємо тільки не-filled зони або всі (для history)
-    return [z for z in zones if z.status != "filled"]
+    # Cap: keep strongest non-filled, then include filled (for dimmed rendering)
+    active = [z for z in zones if z.status != "filled"]
+    filled = [z for z in zones if z.status == "filled"]
+    active.sort(key=lambda z: -z.strength)
+    active = active[:fvg_cfg.max_active]
+    # Include recent filled for dimmed display (last 3 by anchor_bar_ms)
+    filled.sort(key=lambda z: -z.anchor_bar_ms)
+    return active + filled[:3]
 
 
 def _update_fvg_status(zones: List[SmcZone], bars: List[CandleBar]) -> List[SmcZone]:

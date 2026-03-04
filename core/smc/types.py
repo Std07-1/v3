@@ -36,8 +36,6 @@ LEVEL_KINDS = frozenset({
     "pdh", "pdl", "dh", "dl",                     # D1
     "p_h4_h", "p_h4_l", "h4_h", "h4_l",           # H4
     "p_h1_h", "p_h1_l", "h1_h", "h1_l",           # H1
-    "p_m30_h", "p_m30_l", "m30_h", "m30_l",       # M30
-    "p_m15_h", "p_m15_l", "m15_h", "m15_l",       # M15
 })
 
 POI_GRADES = frozenset({"A+", "A", "B", "C"})
@@ -60,10 +58,14 @@ class SmcZone:
     status: str           # ZONE_STATUSES
     strength: float       # 0.0–1.0, impulse / ATR
     anchor_bar_ms: int    # The candle that created this zone
+    context_layer: Optional[str] = None  # ADR-0024c Phase 2: 'institutional'|'intraday'|'local'|None
 
     def to_wire(self) -> Dict[str, Any]:
-        """S6: wire format = ui_v4 SmcZone type."""
-        return {
+        """S6: wire format = ui_v4 SmcZone type.
+
+        ADR-0024c Phase 2: tf_s + context_layer для cross-TF zone rendering.
+        """
+        d = {
             "id": self.id,
             "start_ms": self.start_ms,
             "end_ms": self.end_ms,
@@ -72,7 +74,11 @@ class SmcZone:
             "kind": self.kind,
             "status": self.status,
             "strength": round(self.strength, 3),
-        }
+            "tf_s": self.tf_s,
+        }  # type: Dict[str, Any]
+        if self.context_layer is not None:
+            d["context_layer"] = self.context_layer
+        return d
 
     def with_status(self, status: str, end_ms: Optional[int] = None) -> "SmcZone":
         """Повертає нову зону з оновленим статусом (frozen=True → нова копія)."""

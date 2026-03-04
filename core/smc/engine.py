@@ -16,10 +16,11 @@ import dataclasses
 import logging
 import time
 from collections import deque
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Deque, Dict, List, Optional, Tuple
 
 from core.model.bars import CandleBar
-from core.smc.config import SmcConfig, SmcDisplayConfig
+from core.smc.config import SmcConfig
+from core.smc.context_stack import collect_htf_zones, tag_local_zones
 from core.smc.fvg import detect_fvg
 from core.smc.inducement import detect_inducement
 from core.smc.key_levels import compute_key_levels, collect_htf_levels
@@ -49,6 +50,16 @@ _STATUS_RANK = {
     "filled": 6,
     "expired": 7,
 }
+
+
+# Q2: TF-aware decay multipliers — HTF zones live much longer.
+# Maps tf_s → (decay_start_mult, decay_fast_mult, expire_bars).
+# Default (LTF): decay_start_bars as-is, expire at 500.
+# H4/D1: start decay 4×/10× later, expire at 2000/5000 bars.
+_TF_DECAY_PROFILE = {
+    14400: (4.0, 4.0, 2000),   # H4: 4× slower decay, expire ~333 days
+    86400: (10.0, 10.0, 5000), # D1: 10× slower decay, expire ~14 years (effectively never)
+}  # type: Dict[int, tuple]
 
 
 def _zone_rank(z):
@@ -81,9 +92,11 @@ def _update_zone_lifecycle(
         active_zones[z.id] = z
 
     # 2) D-02: FVG eviction — якщо FVG зникає з fresh → drop
+    # Виняток: filled FVG зберігаються для dimmed display на UI
     stale_fvg = [
         zid for zid, z in active_zones.items()
         if z.kind.startswith("fvg") and zid not in fresh_ids
+        and z.status not in ("filled", "mitigated")
     ]
     for zid in stale_fvg:
         del active_zones[zid]
@@ -112,14 +125,21 @@ def _update_zone_lifecycle(
             else:
                 age_bars = 0
 
-            # >500 bars → expired, drop
-            if age_bars > 500:
+            # Q2: TF-aware expire threshold
+            decay_profile = _TF_DECAY_PROFILE.get(tf_s)
+            expire_bars = decay_profile[2] if decay_profile else 500
+            if age_bars > expire_bars:
                 to_delete.append(zid)
                 continue
 
-            # D1: configurable decay curve (F10: params at config root)
-            if age_bars > config.decay_start_bars and z.strength > 0.15:
-                if age_bars > config.decay_fast_bars:
+            # Q2: TF-aware decay curve — HTF zones decay much slower
+            start_mult = decay_profile[0] if decay_profile else 1.0
+            fast_mult = decay_profile[1] if decay_profile else 1.0
+            eff_decay_start = int(config.decay_start_bars * start_mult)
+            eff_decay_fast = int(config.decay_fast_bars * fast_mult)
+
+            if age_bars > eff_decay_start and z.strength > 0.15:
+                if age_bars > eff_decay_fast:
                     factor = 0.92  # aggressive: ~0.15 after 20 bars
                 else:
                     factor = 0.97  # gentle: ~0.54 after 20 bars
@@ -132,17 +152,24 @@ def _update_zone_lifecycle(
             del active_zones[zid]
 
     # 4) Hide mitigated (optional)
+    # FVG filled/mitigated зберігаються для dimmed display на UI
     if config.hide_mitigated:
-        result = [z for z in active_zones.values() if z.status != "mitigated"]
+        result = [
+            z for z in active_zones.values()
+            if z.status != "mitigated"
+            or z.kind.startswith("fvg")  # FVG: keep for dimmed render
+        ]
     else:
         result = list(active_zones.values())
 
-    # 5) D-01: deterministic cap
-    if len(result) > config.max_zones_per_tf:
-        result.sort(key=_zone_rank)
-        result = result[:config.max_zones_per_tf]
+    # 5) D-01: deterministic cap (FVG capped separately in detect_fvg)
+    fvg_result = [z for z in result if z.kind.startswith("fvg")]
+    non_fvg = [z for z in result if not z.kind.startswith("fvg")]
+    if len(non_fvg) > config.max_zones_per_tf:
+        non_fvg.sort(key=_zone_rank)
+        non_fvg = non_fvg[:config.max_zones_per_tf]
 
-    return result
+    return non_fvg + fvg_result
 
 
 def _perf_ms() -> float:
@@ -296,6 +323,235 @@ class SmcEngine:
             merged = list(snap.levels) + htf_levels
             snap = dataclasses.replace(snap, levels=merged)
         return snap
+    def get_snapshot_with_context_stack(
+        self,
+        symbol: str,
+        tf_s: int,
+    ) -> SmcSnapshot:
+        """Snapshot з ін'єкцією HTF levels + Context Stack зон (ADR-0024c §3.2).
+
+        Об'єднує:
+          - HTF key levels (ADR-0024b: D1/H4/H1 рівні)
+          - Context Stack zones (ADR-0024c: L1 institutional + L2 intraday)
+          - Local zones (tagged as 'local')
+          - Premium/Discount (background, без тегу)
+
+        S0: pure — читає _states dict (internal state), без I/O.
+        """
+        snap = self.get_snapshot(symbol, tf_s)
+
+        # ── HTF key levels (ADR-0024b) ──
+        htf_levels = collect_htf_levels(
+            lambda s, t: self.get_snapshot(s, t),
+            symbol,
+            tf_s,
+        )
+        merged_levels = list(snap.levels)
+        if htf_levels:
+            merged_levels = merged_levels + htf_levels
+
+        # ── Context Stack zones (ADR-0024c) ──
+        state = self._states.get((symbol, tf_s))
+        if state is not None and state.bars_list():
+            bars = state.bars_list()
+            last_bar = bars[-1]
+            from core.smc.swings import compute_atr
+            atr = compute_atr(bars, period=14)
+            if atr > 0:
+                cs_cfg = self._config.context_stack
+                if cs_cfg.enabled:
+                    htf_zones = collect_htf_zones(
+                        lambda s, t: self.get_snapshot(s, t),
+                        symbol,
+                        tf_s,
+                        last_bar.c,
+                        atr,
+                        proximity_atr_mult=self._config.display.proximity_atr_mult,
+                        institutional_budget=cs_cfg.institutional_budget,
+                        intraday_budget=cs_cfg.intraday_budget,
+                    )
+                    # Tag local zones + merge
+                    local_zones = tag_local_zones(snap.zones)
+                    merged_zones = htf_zones + local_zones
+                else:
+                    merged_zones = list(snap.zones)
+            else:
+                merged_zones = list(snap.zones)
+        else:
+            merged_zones = list(snap.zones)
+
+        return dataclasses.replace(
+            snap,
+            zones=merged_zones,
+            levels=merged_levels,
+        )
+    # ── Cross-TF display mapping (SSOT: compute_tfs config) ─────────
+
+    # Viewer TF → base computed TF. Lower TFs map to nearest computed.
+    # User rules: CHoCH/BOS on M15, H1, H4. FVG on M15, H1, H4, D1.
+    _VIEWER_TO_BASE = {
+        60: 900, 180: 900, 300: 900, 900: 900,   # M1/M3/M5/M15 → M15
+        1800: 3600, 3600: 3600,                    # M30/H1 → H1
+        14400: 14400,                               # H4 → H4
+        86400: 86400,                               # D1 → D1
+    }  # type: Dict[int, int]
+
+    # CHoCH/BOS: show current_base + one higher TF
+    _STRUCTURE_NEXT_TF = {
+        900: 3600,     # M15 → +H1
+        3600: 14400,   # H1  → +H4
+    }  # type: Dict[int, int]
+
+    # FVG: explicit per-base TF display mapping
+    _FVG_DISPLAY_TFS = {
+        900:   [900, 3600, 14400],   # M15 → M15+H1+H4
+        3600:  [3600, 14400],        # H1  → H1+H4
+        14400: [14400, 86400],       # H4  → H4+D1
+        86400: [86400],              # D1  → D1
+    }  # type: Dict[int, List[int]]
+
+    # Structure (BOS/CHoCH) lives only on these TFs
+    _STRUCTURE_TFS = frozenset({900, 3600, 14400})
+
+    # Key Level display map: base_tf → which HTF key level kinds to show.
+    # Principle: show levels from TFs the trader CAN'T read on current zoom.
+    #   M15 viewer: D1 (PDH/PDL + HOD/LOD) + H4 (prev+curr) + H1 (prev only)
+    #   H1 viewer:  D1 (PDH/PDL + HOD/LOD) + H4 (prev+curr)
+    #   H4 viewer:  D1 (PDH/PDL + HOD/LOD)
+    #   D1 viewer:  nothing (candles visible)
+    # Current-hour H/L (h1_h/h1_l) excluded: changes too often, just noise.
+    # M30/M15 H/L: viewer sees those candles → never show.
+    _KEY_LEVEL_ALLOW = {
+        900: frozenset({
+            "pdh", "pdl", "dh", "dl",                       # D1
+            "p_h4_h", "p_h4_l", "h4_h", "h4_l",             # H4
+            "p_h1_h", "p_h1_l",                               # H1 prev only
+        }),
+        3600: frozenset({
+            "pdh", "pdl", "dh", "dl",                       # D1
+            "p_h4_h", "p_h4_l", "h4_h", "h4_l",             # H4
+        }),
+        14400: frozenset({
+            "pdh", "pdl", "dh", "dl",                       # D1
+        }),
+        86400: frozenset(),  # D1 viewer: candles visible, no key levels
+    }  # type: Dict[int, frozenset]
+
+    def get_display_snapshot(
+        self,
+        symbol: str,
+        viewer_tf_s: int,
+    ) -> SmcSnapshot:
+        """Composite snapshot for viewer with cross-TF injection.
+
+        Combines:
+          - Base snapshot from mapped compute-TF
+          - HTF CHoCH/BOS structure events (one TF higher)
+          - HTF FVG zones per display mapping
+          - OB zones via Context Stack (existing L1/L2 mechanism)
+          - HTF key levels (existing)
+
+        S0: pure — reads _states dict, no I/O.
+        """
+        # 1. Map viewer → base computed TF
+        compute_tfs = self._config.compute_tfs
+        base_tf = self._VIEWER_TO_BASE.get(viewer_tf_s)
+        if base_tf is None:
+            # Fallback: nearest computed TF >= viewer
+            for t in sorted(compute_tfs):
+                if t >= viewer_tf_s:
+                    base_tf = t
+                    break
+            if base_tf is None:
+                base_tf = max(compute_tfs) if compute_tfs else viewer_tf_s
+
+        snap = self.get_snapshot(symbol, base_tf)
+
+        # 2. Separate base swings: keep structure only if base is in STRUCTURE_TFS
+        base_swings = list(snap.swings)
+        if base_tf not in self._STRUCTURE_TFS:
+            base_swings = [
+                s for s in base_swings
+                if not s.kind.startswith("bos_") and not s.kind.startswith("choch_")
+            ]
+
+        # 3. Inject structure events from ONE higher TF
+        next_tf = self._STRUCTURE_NEXT_TF.get(base_tf)
+        if next_tf:
+            htf_snap = self.get_snapshot(symbol, next_tf)
+            htf_structure = [
+                s for s in htf_snap.swings
+                if s.kind.startswith("bos_") or s.kind.startswith("choch_")
+            ]
+            base_swings = base_swings + htf_structure
+
+        base_swings.sort(key=lambda s: s.time_ms)
+
+        # 4. Inject HTF FVG zones per display mapping
+        fvg_tfs = self._FVG_DISPLAY_TFS.get(base_tf, [base_tf])
+        extra_fvg = []  # type: List[SmcZone]
+        for tf in fvg_tfs:
+            if tf == base_tf:
+                continue  # already in base snap
+            htf_snap = self.get_snapshot(symbol, tf)
+            for z in htf_snap.zones:
+                if z.kind.startswith("fvg"):
+                    extra_fvg.append(z)
+        base_zones = list(snap.zones) + extra_fvg
+
+        # 5. Context Stack OB injection (existing L1/L2 from context_stack.py)
+        state = self._states.get((symbol, base_tf))
+        if state is not None and state.bars_list():
+            bars = state.bars_list()
+            last_bar = bars[-1]
+            from core.smc.swings import compute_atr
+            atr = compute_atr(bars, period=14)
+            if atr > 0:
+                cs_cfg = self._config.context_stack
+                if cs_cfg.enabled:
+                    htf_zones = collect_htf_zones(
+                        lambda s, t: self.get_snapshot(s, t),
+                        symbol,
+                        base_tf,
+                        last_bar.c,
+                        atr,
+                        proximity_atr_mult=self._config.display.proximity_atr_mult,
+                        institutional_budget=cs_cfg.institutional_budget,
+                        intraday_budget=cs_cfg.intraday_budget,
+                    )
+                    local_zones = tag_local_zones(base_zones)
+                    base_zones = htf_zones + local_zones
+                # else: keep base_zones as-is
+            # else: keep base_zones as-is
+
+        # 6. Key levels: curated display (only HTF levels trader can't read)
+        # Base snap already has EQ levels (eq_highs/eq_lows) from base_tf.
+        # Key levels (PDH/PDL etc) come from HTF snapshots, filtered by allow-set.
+        allowed = self._KEY_LEVEL_ALLOW.get(base_tf, frozenset())
+        merged_levels = []  # type: List[SmcLevel]
+        # Keep EQ levels from base snapshot (already capped by max_levels config)
+        for lv in snap.levels:
+            if lv.kind in ("eq_highs", "eq_lows"):
+                merged_levels.append(lv)
+        # Inject allowed HTF key levels
+        if allowed:
+            seen_ids = set()  # type: set
+            for htf_s in [86400, 14400, 3600]:  # D1 → H4 → H1
+                if htf_s <= base_tf:
+                    continue
+                htf_snap = self.get_snapshot(symbol, htf_s)
+                for lv in htf_snap.levels:
+                    if lv.kind in allowed and lv.id not in seen_ids:
+                        seen_ids.add(lv.id)
+                        merged_levels.append(lv)
+
+        return dataclasses.replace(
+            snap,
+            tf_s=viewer_tf_s,  # Tag snapshot with viewer TF for UI
+            zones=base_zones,
+            swings=base_swings,
+            levels=merged_levels,
+        )
 
     def last_delta(self, symbol: str, tf_s: int) -> Optional[SmcDelta]:
         """Остання delta (після останнього on_bar) для WS delta frame."""
@@ -395,6 +651,7 @@ class SmcEngine:
 
         # ── D1: Display filter (proximity + cap) ──
         snap = _filter_for_display(snap, bars, self._config, atr=atr)
+
         return snap
 
 
@@ -426,18 +683,23 @@ def _filter_for_display(
     radius = disp.proximity_atr_mult * atr
     max_height = config.max_zone_height_atr_mult * atr
 
-    # 1) Zones: proximity + height guard (FVG/OB only) + rank + cap
+    # 1a) FVG zones: pass through (independently managed, no shared cap)
+    fvg_zones = [z for z in snap.zones if z.kind.startswith("fvg")]
+
+    # 1b) Non-FVG zones: proximity + height guard + rank + cap
     nearby_zones = []
     for z in snap.zones:
+        if z.kind.startswith("fvg"):
+            continue  # handled separately
         mid = (z.high + z.low) / 2.0
         if abs(price - mid) > radius:
             continue
-        # Retroactive height guard — FVG/OB only (P/D zones are naturally wide)
+        # Retroactive height guard — OB only (P/D zones are naturally wide)
         if z.kind not in ("premium", "discount") and (z.high - z.low) > max_height:
             continue
         nearby_zones.append(z)
     nearby_zones.sort(key=_zone_rank)
-    capped_zones = nearby_zones[:disp.max_display_zones]
+    capped_zones = nearby_zones[:disp.max_display_zones] + fvg_zones
 
     # 2) Levels: proximity filter disabled (ADR-0024b: show all key levels)
     # Трейдер хоче бачити всі рівні — UI стилізує per-kind, не потрібно фільтрувати.
@@ -531,10 +793,10 @@ def _diff_snapshots(
     prev_swing_ids = {s.id for s in prev.swings}
     new_swings = [s for s in curr.swings if s.id not in prev_swing_ids]
 
-    prev_level_ids = {l.id: l for l in prev.levels}
-    curr_level_ids = {l.id: l for l in curr.levels}
-    new_levels = [l for l in curr.levels if l.id not in prev_level_ids]
-    removed_levels = [l.id for l in prev.levels if l.id not in curr_level_ids]
+    prev_level_ids = {low.id: low for low in prev.levels}
+    curr_level_ids = {low.id: low for low in curr.levels}
+    new_levels = [low for low in curr.levels if low.id not in prev_level_ids]
+    removed_levels = [low.id for low in prev.levels if low.id not in curr_level_ids]
 
     trend_changed = curr.trend_bias != prev.trend_bias
     return SmcDelta(

@@ -207,7 +207,7 @@ def test_s6_zone_wire_has_required_fields() -> None:
     )
     wire = zone.to_wire()
 
-    required = {"id", "start_ms", "end_ms", "high", "low", "kind", "status", "strength"}
+    required = {"id", "start_ms", "end_ms", "high", "low", "kind", "status", "strength", "tf_s"}
     assert required == set(wire.keys()), f"Wire format mismatch: {set(wire.keys())}"
 
 

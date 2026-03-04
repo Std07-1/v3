@@ -11,6 +11,10 @@
   import ChartHud from "./layout/ChartHud.svelte";
   import StatusOverlay from "./layout/StatusOverlay.svelte";
   import DiagPanel from "./layout/DiagPanel.svelte";
+  import ReplayBar from "./layout/ReplayBar.svelte";
+
+  // ADR-0027: Client-side replay store
+  import { replayStore } from "./stores/replayStore.svelte";
 
   // P3.11/P3.12: Theme + candle style imports
   import type { ThemeName, CandleStyleName } from "./chart/lwc";
@@ -303,6 +307,18 @@
     window.location.reload();
   }
 
+  // ADR-0027: Client-side replay
+  function handleEnterReplay() {
+    chartPaneRef?.enterReplay();
+  }
+  function handleExitReplay() {
+    chartPaneRef?.exitReplay();
+    // Request fresh full frame для поточного symbol/tf
+    if (hudSymbol && hudTf) {
+      actions?.switchSymbolTf(hudSymbol, hudTf);
+    }
+  }
+
   // Drawing hotkeys: merged into handleGlobalKeydown (drawing_tools_v1)
 
   // --- Lifecycle ---
@@ -418,7 +434,22 @@
         {menuBorder}
       />
     </div>
+    <!-- ADR-0027: Replay controls bar (visible only when replay active) -->
+    {#if replayStore.active}
+      <ReplayBar onExit={handleExitReplay} />
+    {/if}
   </div>
+
+  <!-- ADR-0027: Replay enter button (top-right, near clock bar) -->
+  {#if !replayStore.active}
+    <button
+      class="replay-enter-btn"
+      onclick={handleEnterReplay}
+      title="Enter Replay Mode">⏪ Replay</button
+    >
+  {:else}
+    <span class="replay-badge">REPLAY</span>
+  {/if}
 
   <!-- Entry 078: Compact top-right bar (health dot + brightness + diag + clock) -->
   <div class="top-right-bar">
@@ -468,6 +499,7 @@
   .main-content {
     flex: 1 1 auto;
     display: flex;
+    flex-direction: column;
     min-height: 0;
   }
 
@@ -520,5 +552,45 @@
     font-size: 11px;
     font-family: "Roboto Mono", monospace, sans-serif;
     white-space: nowrap;
+  }
+
+  /* ADR-0027: Replay enter button + active badge */
+  .replay-enter-btn {
+    all: unset;
+    position: fixed;
+    bottom: 12px;
+    right: 72px;
+    z-index: 35;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 5px 12px;
+    border-radius: 6px;
+    color: #8b8f9a;
+    background: rgba(30, 34, 45, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    backdrop-filter: blur(8px);
+    transition: all 0.15s ease;
+    pointer-events: auto;
+  }
+  .replay-enter-btn:hover {
+    color: #f0b90b;
+    background: rgba(240, 185, 11, 0.08);
+    border-color: rgba(240, 185, 11, 0.25);
+  }
+  .replay-badge {
+    position: fixed;
+    bottom: 12px;
+    right: 72px;
+    z-index: 35;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    color: #f0b90b;
+    background: rgba(240, 185, 11, 0.1);
+    border: 1px solid rgba(240, 185, 11, 0.3);
+    pointer-events: none;
   }
 </style>

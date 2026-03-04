@@ -103,12 +103,16 @@ class SmcRunner:
         self._tf_allowlist: Set[int] = set(int(x) for x in tf_raw)
         smc_cfg = full_cfg.get("smc", {}) if isinstance(full_cfg, dict) else {}
         self._lookback = int(smc_cfg.get("lookback_bars", 500))
+        # compute_tfs: TFs where SMC is computed (cross-TF display for others)
+        compute_raw = smc_cfg.get("compute_tfs", [900, 3600, 14400, 86400])
+        self._compute_tfs: Set[int] = set(int(x) for x in compute_raw)
         self._lock = threading.Lock()
         # (symbol, tf_s) → last SmcDelta after on_bar_dict()
         self._last_deltas: Dict[Tuple[str, int], Optional[SmcDelta]] = {}
         _log.info(
-            "SMC_RUNNER_INIT symbols=%s tfs=%s lookback=%d",
-            self._symbols, sorted(self._tf_allowlist), self._lookback,
+            "SMC_RUNNER_INIT symbols=%s tfs=%s compute_tfs=%s lookback=%d",
+            self._symbols, sorted(self._tf_allowlist),
+            sorted(self._compute_tfs), self._lookback,
         )
 
     # ── Warmup ──────────────────────────────────────────
@@ -121,12 +125,13 @@ class SmcRunner:
         """
         import time as _time
 
-        _log.info("SMC_RUNNER_WARMUP_START symbols=%d tfs=%d", len(self._symbols), len(self._tf_allowlist))
+        _log.info("SMC_RUNNER_WARMUP_START symbols=%d compute_tfs=%s",
+                 len(self._symbols), sorted(self._compute_tfs))
         total_ok = 0
         total_err = 0
 
         for symbol in self._symbols:
-            for tf_s in sorted(self._tf_allowlist):
+            for tf_s in sorted(self._compute_tfs):
                 t0 = _time.time()
                 try:
                     bars = self._read_bars_for_warmup(uds_reader, symbol, tf_s)
@@ -194,7 +199,11 @@ class SmcRunner:
         Конвертує bar dict → CandleBar → SmcEngine.on_bar().
         Кешує SmcDelta для наступного delta frame.
         Повертає delta або None (ADR: on_bar скіпає preview bars сам).
+        Скіпає TFs не в compute_tfs (cross-TF injection — лише display-time).
         """
+        if tf_s not in self._compute_tfs:
+            return None
+
         cb = _bar_dict_to_candle_bar(bar_dict, symbol, tf_s)
         if cb is None:
             _log.debug("SMC_BAR_SKIP sym=%s tf=%s reason=bad_dict", symbol, tf_s)
@@ -212,13 +221,17 @@ class SmcRunner:
     # ── Read API (для ws_server frame building) ────────
 
     def get_snapshot(self, symbol: str, tf_s: int) -> Optional[SmcSnapshot]:
-        """Для full frame build — snapshot з cross-TF ін'єкцією key levels.
+        """Для full frame build — composite snapshot з cross-TF display mapping.
 
-        ADR-0024b: використовує get_snapshot_with_htf_levels() для
-        збагачення snapshot-у рівнями з вищих TF (D1/H4/H1 на M15 chart).
+        Використовує get_display_snapshot() для:
+        - Маппінг viewer TF → base computed TF
+        - Ін'єкція HTF CHoCH/BOS (один вищий TF)
+        - Ін'єкція HTF FVG зон per display mapping
+        - Context Stack OB зон (L1/L2)
+        - HTF key levels
         """
         try:
-            return self._engine.get_snapshot_with_htf_levels(symbol, tf_s)
+            return self._engine.get_display_snapshot(symbol, tf_s)
         except Exception as exc:
             _log.debug("SMC_GET_SNAP_ERR sym=%s tf=%s err=%s", symbol, tf_s, exc)
             return None

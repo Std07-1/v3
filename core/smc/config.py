@@ -86,6 +86,24 @@ class SmcPremiumDiscountConfig:
 
 
 @dataclasses.dataclass
+class SmcContextStackConfig:
+    """ADR-0024c §3.2: Context Stack — cross-TF zone selection."""
+    enabled: bool = True
+    institutional_budget: int = 1  # Max zones from D1+H4
+    intraday_budget: int = 1       # Max zones from H1
+    local_budget: int = 2           # Max zones from viewer TF
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "SmcContextStackConfig":
+        return cls(
+            enabled=bool(d.get("enabled", True)),
+            institutional_budget=int(d.get("institutional_budget", 1)),
+            intraday_budget=int(d.get("intraday_budget", 1)),
+            local_budget=int(d.get("local_budget", 2)),
+        )
+
+
+@dataclasses.dataclass
 class SmcInducementConfig:
     """§4.7 Inducement / False Breakout Trap detection."""
     enabled: bool = True
@@ -145,6 +163,8 @@ class SmcConfig:
     max_zones_per_tf: int = 10
     max_zone_height_atr_mult: float = 5.0
     hide_mitigated: bool = False
+    # TFs on which SMC is computed (SSOT). Other TFs get cross-TF injection.
+    compute_tfs: tuple = (900, 3600, 14400, 86400)  # M15, H1, H4, D1
     # F10: decay params are lifecycle, not display — live at config root
     decay_start_bars: int = 30          # start strength decay after N bars
     decay_fast_bars: int = 150          # aggressive decay threshold
@@ -154,6 +174,7 @@ class SmcConfig:
     levels: SmcLevelsConfig = dataclasses.field(default_factory=SmcLevelsConfig)
     premium_discount: SmcPremiumDiscountConfig = dataclasses.field(default_factory=SmcPremiumDiscountConfig)
     inducement: SmcInducementConfig = dataclasses.field(default_factory=SmcInducementConfig)
+    context_stack: SmcContextStackConfig = dataclasses.field(default_factory=SmcContextStackConfig)
     display: SmcDisplayConfig = dataclasses.field(default_factory=SmcDisplayConfig)
     performance: SmcPerformanceConfig = dataclasses.field(default_factory=SmcPerformanceConfig)
 
@@ -171,6 +192,7 @@ class SmcConfig:
             max_zones_per_tf=int(d.get("max_zones_per_tf", 10)),
             max_zone_height_atr_mult=float(d.get("max_zone_height_atr_mult", 5.0)),
             hide_mitigated=bool(d.get("hide_mitigated", False)),
+            compute_tfs=tuple(int(x) for x in d.get("compute_tfs", [900, 3600, 14400, 86400])),
             decay_start_bars=int(d.get("decay_start_bars",
                                        disp_d.get("decay_start_bars", 30))),
             decay_fast_bars=int(d.get("decay_fast_bars",
@@ -181,6 +203,7 @@ class SmcConfig:
             levels=SmcLevelsConfig.from_dict(d.get("levels", {})),
             premium_discount=SmcPremiumDiscountConfig.from_dict(d.get("premium_discount", {})),
             inducement=SmcInducementConfig.from_dict(d.get("inducement", {})),
+            context_stack=SmcContextStackConfig.from_dict(d.get("context_stack", {})),
             display=SmcDisplayConfig.from_dict(disp_d),
             performance=SmcPerformanceConfig.from_dict(d.get("performance", {})),
         )

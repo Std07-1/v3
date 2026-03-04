@@ -31,6 +31,9 @@ export interface SmcZone {
   kind: string;
   status?: string;   // 'active'|'tested'|'mitigated'|'partially_filled'|'filled'
   strength?: number; // 0.0–1.0
+  // ADR-0024c Phase 2: cross-TF zone identification + Context Stack
+  tf_s?: number;                // Origin TF (seconds)
+  context_layer?: string;       // 'institutional'|'intraday'|'local' (Context Stack layer)
 }
 
 export interface SmcSwing {

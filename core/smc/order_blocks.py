@@ -119,6 +119,16 @@ def detect_order_blocks(
 
         strength = min(1.0, impulse_strength / (ob_cfg.min_impulse_atr_mult * 3))
 
+        # Q1: CHoCH OB (reversal) gets 1.5× strength boost over BOS (continuation)
+        is_choch = swing.kind in ("choch_bull", "choch_bear")
+        if is_choch:
+            strength = min(1.0, strength * 1.5)
+
+        # Q4: Zone = candle BODY (open-close), not wicks (high-low).
+        # Body is tighter → more precise zone, fewer false mitigations.
+        ob_high = max(ob_bar.o, ob_bar.c)
+        ob_low = min(ob_bar.o, ob_bar.c)
+
         zone = SmcZone(
             id=zone_id,
             symbol=ob_bar.symbol,
@@ -126,8 +136,8 @@ def detect_order_blocks(
             kind=kind,
             start_ms=ob_bar.open_time_ms,
             end_ms=None,         # активна до mitigation
-            high=ob_bar.h,
-            low=ob_bar.low,
+            high=ob_high,
+            low=ob_low,
             status="active",
             strength=round(strength, 3),
             anchor_bar_ms=ob_bar.open_time_ms,

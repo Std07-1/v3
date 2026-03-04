@@ -1,7 +1,7 @@
 # ADR-0017: Replay-Mode з data_v3/ для Offline Demo
 
-- **Статус**: Proposed
-- **Дата**: 2026-02-26
+- **Статус**: Accepted → Implemented
+- **Дата**: 2026-02-26 (оновлено: 2026-02-28)
 - **Автор**: code-review-audit
 - **Initiative**: `offline_demo`
 

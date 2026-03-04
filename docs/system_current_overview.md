@@ -1,6 +1,6 @@
 # Поточна система — Архітектурний огляд (SSOT)
 
-> **Останнє оновлення**: 2026-03-01  
+> **Останнє оновлення**: 2026-03-02  
 > **Навігація**: [docs/index.md](index.md)
 
 Цей файл — SSOT-опис поточної архітектури системи. Див. [docs/index.md](index.md) для навігації по всій документації.
@@ -83,7 +83,7 @@ app.main (supervisor)
 │    Premium/Discount, Inducement + N1 zone lifecycle            │
 │  Transport: вбудований у WS full/delta frames (zones,         │
 │    swings, levels, smc_delta) — NO окремий Redis канал         │
-│  125 tests, E1+S4+E2+N1/N2/N3 implemented                     │
+│  125 tests → 422+ tests (37 файлів), E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a implemented  │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -613,10 +613,7 @@ D1 anchor (79200) передається окремо від H4 anchor (82800) �
 ```text
 v3/
 ├── app/                           # запуск і складання runtime
-│   ├── main.py                    # supervisor (--mode all/connector/ui/tick_publisher/tick_preview/m1_poller)
-│   ├── main_connector.py          # retry/backoff + calendar sleep (engine_b)
-│   ├── composition.py             # build_connector, build_m1_poller, валідація config.json
-│   ├── lifecycle.py               # run_with_shutdown + cleanup
+│   ├── main.py                    # supervisor (--mode all/connector/ui/tick_publisher/tick_preview/m1_poller/replay)
 │   └── __init__.py
 ├── core/                          # pure-логіка (час, контракти, моделі) — без I/O
 │   ├── config_loader.py           # SSOT: pick_config_path / load_system_config
@@ -634,8 +631,8 @@ v3/
 │   │   ├── fvg.py                 # detect_fvg() — bull/bear + height guard (N2)
 │   │   ├── liquidity.py           # detect_liquidity_levels() — ATR-based clustering
 │   │   ├── premium_discount.py    # detect_premium_discount() — equilibrium zones (enabled=false)
-│   │   ├── inducement.py          # detect_inducements() — false breakout detection
-│   │   └── engine.py              # SmcEngine orchestrator + _update_zone_lifecycle (N1, ~350 LOC)
+│   │   ├── inducement.py          # detect_inducements() — false breakout detection│   ├── key_levels.py          # detect_key_levels() — PDH/PDL/DH/DL, cross-TF (ADR-0024b)
+│   ├── context_stack.py       # ContextStack — cross-TF zone aggregation│   │   └── engine.py              # SmcEngine orchestrator + _update_zone_lifecycle (N1, ~350 LOC)
 │   └── contracts/
 │       └── public/
 │           └── marketdata_v1/     # JSON Schema контракти
@@ -654,11 +651,9 @@ v3/
 │   │   ├── tick_common.py         # спільні утиліти для tick pipeline
 │   │   ├── tick_preview_worker.py # TickPreviewWorker (tick→preview, schema guard, 0-ticks loud)
 │   │   ├── tick_publisher_fxcm.py # FXCM tick publisher (ForexConnect offers→Redis PubSub, BID mode)
+│   │   ├── replay.py              # ReplayFeeder — replay M1 JSONL → UDS+DeriveEngine (ADR-0017/0027)
 │   │   └── polling/
-│   │       ├── engine_b.py        # PollingConnectorB (D1-only fetcher, ADR-0002 cleanup done)
 │   │       ├── m1_poller.py       # M1Poller (FXCM M1→final, cascade via DeriveEngine M1→M3→…→H4, calendar-aware, watermark, tail_catchup, live_recover, stale)
-│   │       ├── dedup.py           # індекси дня, has/mark on-disk
-│   │       ├── fetch_policy.py    # політики часу для fetch
 │   │       └── README.md          # повний посібник: polling + derive architecture
 │   ├── store/
 │   │   ├── uds.py                 # UnifiedDataStore (read/write, updates bus, disk_policy rails, short-window loud rail)
@@ -698,8 +693,8 @@ v3/
 │       ├── main.ts                # Svelte mount entrypoint
 │       ├── app/                   # diagState, diagSelectors, frameRouter (config frame T8), edgeProbe
 │       ├── ws/                    # WSConnection (quiet degraded mode), WsAction creators
-│       ├── stores/                # cursor price + UI warnings + meta (serverConfig) + favorites (P3.13) + smcStore (applySmcFull/Delta)
-│       ├── layout/                # ChartPane (SMC toggles OB/FVG/SW/LVL), ChartHud, OhlcvTooltip, StatusBar, StatusOverlay, DiagPanel, DrawingToolbar, SymbolTfPicker
+│       ├── stores/                # cursor price + UI warnings + meta (serverConfig) + favorites (P3.13) + smcStore (applySmcFull/Delta) + replayStore + viewCache
+│       ├── layout/                # ChartPane (SMC toggles OB/FVG/SW/LVL), ChartHud, OhlcvTooltip, StatusBar, StatusOverlay, DiagPanel, DrawingToolbar, SymbolTfPicker, ReplayBar
 │       └── chart/                 # ChartEngine (LWC, v3-parity), themes.ts (3 themes + 5 candle styles), interaction.ts (Y-zoom/pan/reset), OverlayRenderer (strength opacity N3), DrawingsRenderer, geometry
 ├── aione_top/                     # TUI-монітор процесів/pipeline (standalone, NOT supervisor-managed)
 │   ├── __main__.py                # python -m aione_top
@@ -715,8 +710,8 @@ v3/
 │   ├── purge_broken_bars.py       # чистка пошкоджених JSONL
 │   ├── run_exit_gates.py          # runner exit-gates
 │   ├── exit_gates/
-│   │   ├── manifest.json          # реєстр gates (22 gate-модулі)
-│   │   └── gates/                 # gate_*.py (22 файлів)
+│   │   ├── manifest.json          # реєстр gates (25 gate-модулів)
+│   │   └── gates/                 # gate_*.py (25 файлів)
 │   ├── repair/
 │   │   ├── htf_rebuild_from_fxcm.py  # controlled H4/D1 rebuild from FXCM raw
 │   │   └── htf_tail_sync_from_fxcm.py # tail sync from FXCM
@@ -739,15 +734,27 @@ v3/
 │   ├── ui_api.md                  # HTTP API reference
 │   ├── redis_snapshot_design.md   # дизайн Redis snapshots
 │   ├── adr/                       # Architecture Decision Records (SSOT)
-│   │   ├── index.md               # реєстр усіх ADR (ADR-0001 … ADR-0025)
+│   │   ├── index.md               # реєстр усіх ADR (ADR-0001 … ADR-0027)
 │   │   ├── 0001-unified-data-store.md
 │   │   ├── 0002-derive-chain-from-m1.md
-│   │   └── ...                    # (25 файлів)
+│   │   └── ...                    # (30 файлів)
 │   ├── audit/                     # аудит прогресу P0–P6
 │   ├── runbooks/                  # production, coldstart, live_recover
 │   └── system_spec/               # UI v4 audit, gap analysis
-├── tests/
-│   └── test_tick_agg.py           # тести TickAggregator
+├── tests/                         # 37 файлів, 422+ тестів
+│   ├── test_smc_e1.py             # SMC E1: swings, structure, OB, FVG, engine
+│   ├── test_smc_runner.py         # SMC Runner: warmup, on_bar, delta, performance
+│   ├── test_smc_key_levels.py     # SMC key levels: PDH/PDL/DH/DL
+│   ├── test_smc_n1_lifecycle.py   # SMC N1: zone lifecycle (merge/evict/decay)
+│   ├── test_smc_e2_liquidity.py   # SMC E2: liquidity ATR-clusters
+│   ├── test_smc_e2_pd_inducement.py # SMC E2: P/D + inducement
+│   ├── test_d1_derive.py          # D1 derive from M1 (ADR-0023)
+│   ├── test_derive_calendar_pause_partial.py # каскадна деривація з calendar pause
+│   ├── test_uds_commit_split_brain.py # UDS split-brain resilience
+│   ├── test_candle_map.py         # bar→Candle mapping
+│   ├── test_ws_server.py          # WS server functionality
+│   ├── test_tick_agg.py           # TickAggregator
+│   └── ...                        # + 25 ще файлів (s1-s6, qa, htf, tv, symbol, api)
 └── research/                      # дослідження / POC (не для prod)
 ```
 
@@ -840,12 +847,10 @@ non_critical:  5s → 10s → 20s → 40s → 80s → 120s → 120s → 120s →
 5. **WS Server**: `ws_server.py` стартує на порті 8000, роздає `ui_v4/dist/` (same-origin), слухає `/ws`. Config-gated (`ws_server.enabled`).
 6. **Supervisor loop**: моніторить процеси; crash → auto-restart з backoff (S2, ADR-0003); bootstrap error → degraded mode, NOT crash (S1, ADR-0003).
 
-### 2) Live цикл M5 (connector, engine_b)
+### 2) ~~Live цикл M5 (connector, engine_b)~~ — DEPRECATED (ADR-0002/0023)
 
-1. Кожну хвилину: fetch_last_n_tf(M5, n=12).
-2. Dedup + запис через UDS (SSOT + Redis snap + updates bus).
-3. Derive 15m/30m/H1 при повному M5-діапазоні.
-4. H4/D1: fetch на закритті бакета.
+> engine_b M5 polling вимкнено (`m5_polling_enabled=false`, `broker_base_tfs_s=[]`).
+> Всі TF M1→H4+D1 через m1_poller/DeriveEngine.
 
 ### 3) Live цикл M1/M3 (m1_poller)
 

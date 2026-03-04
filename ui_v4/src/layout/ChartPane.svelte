@@ -1,6 +1,6 @@
 <!-- src/layout/ChartPane.svelte -->
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import type {
     RenderFrame,
     WsAction,
@@ -27,6 +27,7 @@
     applySmcDelta,
     EMPTY_SMC_DATA,
   } from "../stores/smcStore";
+  import { replayStore } from "../stores/replayStore.svelte";
 
   const {
     currentFrame = null,
@@ -50,23 +51,13 @@
   let smcData: SmcData = $state(EMPTY_SMC_DATA);
 
   // N3: SMC layer toggles (localStorage-backed)
+  // ADR-0024c: toggles → OverlayRenderer per-layer flags.
+  // Дані (smcData) завжди повні. Toggle одного шару не чіпає інші.
   let showOB = $state(true);
   let showFVG = $state(true);
   let showSW = $state(true);
   let showLVL = $state(true);
-
-  function filterSmc(d: SmcData): SmcData {
-    return {
-      zones: d.zones.filter((z) => {
-        if (z.kind.startsWith("ob") && !showOB) return false;
-        if (z.kind.startsWith("fvg") && !showFVG) return false;
-        if (z.kind === "premium" || z.kind === "discount") return showOB; // P/D follows OB toggle
-        return true;
-      }),
-      swings: showSW ? d.swings : [],
-      levels: showLVL ? d.levels : [],
-    };
-  }
+  let showBOS = $state(true);
   // Crosshair data for tooltip (OHLCV + cursor position)
   let crosshairData: CrosshairData | null = $state(null);
 
@@ -101,6 +92,10 @@
   let prevSymbol = "";
   let prevTf = "";
 
+  // ADR-0027: Track current candles for replay enter + last rendered index
+  let _currentCandles: import("../types").Candle[] = [];
+  let _lastReplayIdx = 0;
+
   export function undo() {
     drawingsRenderer?.commandStack.undo();
   }
@@ -121,6 +116,21 @@
     chartEngine?.applyCandleStyle(name);
   }
 
+  // ADR-0027: Enter/exit replay mode
+  export function enterReplay(): void {
+    if (_currentCandles.length === 0) return;
+    replayStore.enter(_currentCandles, smcData);
+    // НЕ ставимо _lastReplayIdx тут — cursor $effect зробить initial render
+  }
+  export function exitReplay(): void {
+    replayStore.exit();
+    _lastReplayIdx = 0;
+    // Restore full chart data — trigger fresh full frame
+    if (_currentCandles.length > 0 && chartEngine) {
+      chartEngine.setData(_currentCandles);
+    }
+  }
+
   onMount(() => {
     // N3: restore SMC toggles from localStorage (R-03: safe in onMount)
     try {
@@ -131,6 +141,7 @@
         if (typeof t.fvg === "boolean") showFVG = t.fvg;
         if (typeof t.sw === "boolean") showSW = t.sw;
         if (typeof t.lvl === "boolean") showLVL = t.lvl;
+        if (typeof t.bos === "boolean") showBOS = t.bos;
       }
     } catch {
       /* corrupt → use defaults */
@@ -209,6 +220,47 @@
 
   $effect(() => {
     if (currentFrame && chartEngine) {
+      // ═══ ADR-0027: Replay mode intercept ═══
+      // untrack: не створювати deps на replayStore.$state щоб уникнути
+      // нескінченного циклу effect → write $state → re-trigger effect.
+      if (untrack(() => replayStore.active)) {
+        if (
+          currentFrame.frame_type === "full" ||
+          currentFrame.frame_type === "replay"
+        ) {
+          // TF switch during replay — update replay data with new candles
+          const tfLabel = currentFrame.tf ?? "M5";
+          const tfS = TF_TO_S[tfLabel] ?? 300;
+          chartEngine.setTfS(tfS);
+
+          const candles = currentFrame.candles ?? [];
+          _currentCandles = candles;
+          const newSmc = applySmcFull(
+            currentFrame.zones,
+            currentFrame.swings,
+            currentFrame.levels,
+            currentFrame.trend_bias,
+          );
+          // untrack: запис до replayStore без створення підписки
+          untrack(() => replayStore.updateDataForNewTf(candles, newSmc));
+
+          prevSymbol = currentFrame.symbol ?? "";
+          prevTf = currentFrame.tf ?? "";
+
+          // Drawings support during replay
+          if (currentFrame.frame_type === "full") {
+            const sym = currentFrame.symbol ?? "";
+            const tf = currentFrame.tf ?? "";
+            if (sym && tf) drawingsRenderer?.setStorageKey(sym, tf);
+            drawingsRenderer?.setAll(currentFrame.drawings ?? []);
+          }
+          // Chart + SMC update буде зроблено cursor $effect (tracks cursorIndex)
+        }
+        // Skip delta/scrollback during replay (R1: heartbeat/config still pass through frameRouter)
+        return;
+      }
+
+      // ═══ Normal mode (existing logic) ═══
       if (
         currentFrame.frame_type === "full" ||
         currentFrame.frame_type === "replay"
@@ -230,6 +282,7 @@
         }
 
         const candles = currentFrame.candles ?? [];
+        _currentCandles = candles; // ADR-0027: track for replay enter
         if (candles.length === 0) {
           chartEngine.clearAll();
           showNoData = true;
@@ -277,7 +330,13 @@
         );
       } else if (currentFrame.frame_type === "delta") {
         if (currentFrame.smc_delta) {
-          smcData = applySmcDelta(smcData, currentFrame.smc_delta);
+          // FIX: untrack(smcData) — інакше ефект читає smcData (залежність)
+          // І тут же пише smcData → Svelte перезапускає ефект → нескінченний цикл
+          // → effect_update_depth_exceeded. untrack розриває цей цикл.
+          smcData = applySmcDelta(
+            untrack(() => smcData),
+            currentFrame.smc_delta,
+          );
         }
       }
 
@@ -294,9 +353,62 @@
     }
   });
 
-  // ADR-0024 §6.2: окремий $effect для patch overlay при зміні smcData / toggles
+  // ADR-0024c: data effect — тільки при зміні smcData (повне, без фільтрації)
   $effect(() => {
-    overlayRenderer?.patch(filterSmc(smcData));
+    overlayRenderer?.patch(smcData);
+  });
+
+  // ═══ ADR-0027: Replay cursor effect ═══
+  // Deps: replayStore.active + replayStore.cursorIndex (тільки ці два).
+  // Data access (allCandles, visibleCandles, visibleSmcData) в untrack
+  // щоб зміна allCandles/allSmcData не перезапускала цей ефект.
+  $effect(() => {
+    if (!replayStore.active || !chartEngine) return;
+    const idx = replayStore.cursorIndex;
+    if (idx === _lastReplayIdx) return;
+
+    untrack(() => {
+      if (idx === _lastReplayIdx + 1 && idx > 0) {
+        // Forward step by 1 — efficient incremental update
+        const c = replayStore.allCandles[idx - 1];
+        if (c) {
+          chartEngine.update(c);
+          showNoData = false;
+        }
+      } else {
+        // Scrub / backward / large jump — full setData
+        const visible = replayStore.visibleCandles;
+        if (visible.length === 0) {
+          chartEngine.clearAll();
+          showNoData = true;
+        } else {
+          chartEngine.setData(visible);
+          showNoData = false;
+        }
+      }
+
+      _lastReplayIdx = idx;
+      // Update SMC overlay for current cursor position
+      smcData = replayStore.visibleSmcData;
+    });
+  });
+
+  // ADR-0024c §layer isolation: toggle effects — кожен шар незалежний.
+  // Toggle зон не чіпає рівні і навпаки. Zero frame rebuild.
+  $effect(() => {
+    overlayRenderer?.setZoneKindVisible("ob", showOB);
+  });
+  $effect(() => {
+    overlayRenderer?.setZoneKindVisible("fvg", showFVG);
+  });
+  $effect(() => {
+    overlayRenderer?.setLayerVisible("swings", showSW);
+  });
+  $effect(() => {
+    overlayRenderer?.setLayerVisible("levels", showLVL);
+  });
+  $effect(() => {
+    overlayRenderer?.setLayerVisible("structure", showBOS);
   });
 
   // N3: persist toggles to localStorage
@@ -309,6 +421,7 @@
           fvg: showFVG,
           sw: showSW,
           lvl: showLVL,
+          bos: showBOS,
         }),
       );
     } catch {
@@ -381,6 +494,12 @@
       class:active={showLVL}
       onclick={() => (showLVL = !showLVL)}
       title="Levels">LVL</button
+    >
+    <button
+      class="smc-toggle smc-t-bos"
+      class:active={showBOS}
+      onclick={() => (showBOS = !showBOS)}
+      title="BOS / CHoCH">BOS</button
     >
   </div>
 </div>
@@ -531,5 +650,10 @@
     color: #ff9800;
     border-color: rgba(255, 152, 0, 0.35);
     background: rgba(255, 152, 0, 0.1);
+  }
+  .smc-toggle.active.smc-t-bos {
+    color: #ffa726;
+    border-color: rgba(255, 167, 38, 0.35);
+    background: rgba(255, 167, 38, 0.1);
   }
 </style>

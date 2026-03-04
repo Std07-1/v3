@@ -34,9 +34,9 @@ def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--mode",
-        choices=["all", "ui", "tick_preview", "tick_publisher", "m1_poller", "ws_server"],
+        choices=["all", "ui", "tick_preview", "tick_publisher", "m1_poller", "ws_server", "replay"],
         default="all",
-        help="all | ui | tick_preview | tick_publisher | m1_poller | ws_server",
+        help="all | ui | tick_preview | tick_publisher | m1_poller | ws_server | replay",
     )
     ap.add_argument(
         "--stdio",
@@ -48,6 +48,23 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--log-dir", default="logs")
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--verbose", action="store_true")
+    # Replay-specific args (ADR-0017)
+    ap.add_argument(
+        "--speed",
+        type=float,
+        default=10.0,
+        help="Replay speed multiplier: 0=instant, 1=realtime, 10=10x (default: 10)",
+    )
+    ap.add_argument(
+        "--symbols",
+        default=None,
+        help="Replay symbols comma-separated (default: from config.json)",
+    )
+    ap.add_argument(
+        "--start",
+        default=None,
+        help="Replay start date YYYY-MM-DD (default: all data). Ex: --start 2026-02-01",
+    )
     return ap.parse_args()
 
 
@@ -69,6 +86,7 @@ _PROCESS_CATEGORIES: Dict[str, str] = {
     "tick_preview": "non_critical",
     "ui": "essential",
     "ws_server": "essential",
+    "replay": "critical",
 }
 # (base_delay_s, max_delay_s, max_restart_attempts)
 _BACKOFF_CFG: Dict[str, tuple] = {
@@ -124,10 +142,13 @@ def _start_process(
     stdio: str,
     log_dir: Path,
     new_console: bool,
+    extra_env: Optional[Dict[str, str]] = None,
 ) -> ChildProcess:
     cmd = [sys.executable, "-u", "-m", module]
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    if extra_env:
+        env.update(extra_env)
 
     creationflags = 0
     if os.name == "nt" and new_console:
@@ -355,8 +376,40 @@ def main() -> int:
                     new_console=args.new_console,
                 )
             )
-        if args.mode in ("all", "ui"):
-            if args.mode == "all":
+
+        # --- Replay mode (ADR-0017): M1 replay → DeriveEngine → UDS → UI ---
+        if args.mode == "replay":
+            # Будуємо CLI args для replay subprocess
+            replay_extra: List[str] = []
+            if args.speed is not None:
+                replay_extra.extend(["--speed", str(args.speed)])
+            if args.symbols:
+                replay_extra.extend(["--symbols", args.symbols])
+            if args.start:
+                replay_extra.extend(["--start", args.start])
+            replay_extra.append("--skip-disk-write")
+
+            # Replay subprocess з додатковими аргументами
+            replay_cmd = [sys.executable, "-u", "-m", "runtime.ingest.replay"] + replay_extra
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
+            env["V3_REPLAY_MODE"] = "1"  # ADR-0017: UI/WS reader не читає disk
+            proc = subprocess.Popen(
+                replay_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                text=True,
+                bufsize=1,
+            )
+            assert proc.stdout is not None and proc.stderr is not None
+            threading.Thread(target=_pump, args=(proc.stdout, "[replay] "), daemon=True).start()
+            threading.Thread(target=_pump, args=(proc.stderr, "[replay:err] "), daemon=True).start()
+            logging.info("Старт процесу replay pid=%s", proc.pid)
+            processes.append(ChildProcess(label="replay", module="runtime.ingest.replay", proc=proc))
+
+        if args.mode in ("all", "ui", "replay"):
+            if args.mode in ("all", "replay"):
                 config_path = pick_config_path()
                 prime_ok = _wait_for_prime_ready(config_path)
                 if not prime_ok:
@@ -364,6 +417,8 @@ def main() -> int:
                         "UI_START_DEGRADED reason=prime_timeout "
                         "(UI стартує, але дані можуть бути неповними)",
                     )
+            # ADR-0017: replay → UI/WS reader отримує env V3_REPLAY_MODE=1
+            extra_env_ui = {"V3_REPLAY_MODE": "1"} if args.mode == "replay" else {}
             processes.append(
                 _start_process(
                     label="ui",
@@ -371,9 +426,10 @@ def main() -> int:
                     stdio=stdio,
                     log_dir=log_dir,
                     new_console=args.new_console,
+                    extra_env=extra_env_ui,
                 )
             )
-        if args.mode in ("all", "ws_server"):
+        if args.mode in ("all", "ws_server", "replay"):
             # P5: WS-сервер для ui_v4 (essential, restart-tolerant)
             # Gate: config.json → ws_server.enabled (default: false)
             config_path_ws = pick_config_path()
@@ -385,6 +441,7 @@ def main() -> int:
             except Exception:
                 pass
             if _ws_enabled:
+                extra_env_ws = {"V3_REPLAY_MODE": "1"} if args.mode == "replay" else {}
                 processes.append(
                     _start_process(
                         label="ws_server",
@@ -392,6 +449,7 @@ def main() -> int:
                         stdio=stdio,
                         log_dir=log_dir,
                         new_console=args.new_console,
+                        extra_env=extra_env_ws,
                     )
                 )
             else:

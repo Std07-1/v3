@@ -260,12 +260,19 @@
         "host": "127.0.0.1",
         "port": 8000,
         "heartbeat_interval_s": 30,
-        "delta_poll_interval_s": 1.0
+        "delta_poll_interval_s": 1.0,
+        "cors_allowed_origins": []
     },
     "smc": {
         "enabled": true,
         "lookback_bars": 500,
         "swing_period": 5,
+        "compute_tfs": [
+            900,
+            3600,
+            14400,
+            86400
+        ],
         "ob": {
             "enabled": true,
             "min_impulse_atr_mult": 1.5,
@@ -275,8 +282,8 @@
         },
         "fvg": {
             "enabled": true,
-            "min_gap_atr_mult": 0.3,
-            "max_active": 5
+            "min_gap_atr_mult": 0.2,
+            "max_active": 15
         },
         "structure": {
             "enabled": true,
@@ -286,7 +293,7 @@
             "enabled": true,
             "tolerance_atr_mult": 0.1,
             "min_touches": 2,
-            "max_levels": 10
+            "max_levels": 4
         },
         "premium_discount": {
             "enabled": false
@@ -304,10 +311,16 @@
         "decay_start_bars": 30,
         "decay_fast_bars": 150,
         "display": {
-            "proximity_atr_mult": 5.0,
+            "proximity_atr_mult": 15.0,
             "max_display_zones": 8,
             "max_display_levels": 6,
             "max_display_swings": 20
+        },
+        "context_stack": {
+            "enabled": true,
+            "institutional_budget": 1,
+            "intraday_budget": 1,
+            "local_budget": 2
         },
         "performance": {
             "max_compute_ms": 10,

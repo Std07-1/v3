@@ -1,0 +1,27 @@
+{
+    "$schema": "https://openapi.vercel.sh/vercel.json",
+    "framework": "svelte",
+    "buildCommand": "npm run build",
+    "outputDirectory": "dist",
+    "rewrites": [
+        {
+            "source": "/api/:path*",
+            "destination": "${BACKEND_ORIGIN}/api/:path*"
+        }
+    ],
+    "headers": [
+        {
+            "source": "/(.*)",
+            "headers": [
+                {
+                    "key": "X-Frame-Options",
+                    "value": "DENY"
+                },
+                {
+                    "key": "X-Content-Type-Options",
+                    "value": "nosniff"
+                }
+            ]
+        }
+    ]
+}
