@@ -19,6 +19,7 @@ from collections import deque
 from typing import Deque, Dict, List, Optional, Tuple
 
 from core.model.bars import CandleBar
+from core.smc.confluence import score_zone_confluence
 from core.smc.config import SmcConfig
 from core.smc.context_stack import collect_htf_zones, tag_local_zones
 from core.smc.fvg import detect_fvg
@@ -151,6 +152,21 @@ def _update_zone_lifecycle(
         for zid in to_delete:
             del active_zones[zid]
 
+        # ── step 3b: post-mitigation TTL (ADR-0028 Φ0) ────────────
+        # Mitigated zones linger for `mitigated_ttl_bars` then get removed.
+        # Anchor = zone.end_ms (set during mitigation at step 3, line ~117).
+        mitigated_ttl = config.display.mitigated_ttl_bars  # default 20
+        bar_ms = tf_s * 1000
+        if mitigated_ttl > 0 and bar_ms > 0:
+            ttl_delete = []
+            for zid, z in active_zones.items():
+                if z.status == "mitigated" and z.end_ms is not None:
+                    bars_since = (last_bar.open_time_ms - z.end_ms) // bar_ms
+                    if bars_since > mitigated_ttl:
+                        ttl_delete.append(zid)
+            for zid in ttl_delete:
+                del active_zones[zid]
+
     # 4) Hide mitigated (optional)
     # FVG filled/mitigated зберігаються для dimmed display на UI
     if config.hide_mitigated:
@@ -232,6 +248,7 @@ class SmcEngine:
     def __init__(self, config: SmcConfig) -> None:
         self._config = config
         self._states: Dict[Tuple[str, int], _TfState] = {}
+        self._zone_grades: Dict[Tuple[str, int], Dict[str, dict]] = {}  # ADR-0029
 
     # ── Public API ──────────────────────────────────────────────────
 
@@ -545,6 +562,37 @@ class SmcEngine:
                         seen_ids.add(lv.id)
                         merged_levels.append(lv)
 
+        # 7. Confluence scoring (ADR-0029 E5: after cross-TF injection)
+        #    bars/last_bar/atr already computed in step 5 (same guard).
+        zone_grades = {}  # type: Dict[str, dict]
+        if state is not None and state.bars_list() and atr > 0:
+                conf_cfg = self._config.confluence.to_scoring_dict()
+                swing_dicts = [s.to_wire() for s in base_swings
+                               if not s.kind.startswith("bos_")
+                               and not s.kind.startswith("choch_")]
+                struct_dicts = [s.to_wire() for s in base_swings
+                                if s.kind.startswith("bos_")
+                                or s.kind.startswith("choch_")]
+                bar_dicts = [
+                    {"open_time_ms": b.open_time_ms, "h": b.h, "l": b.l}
+                    for b in bars[-50:]
+                ]
+                all_zone_wires = [z.to_wire() for z in base_zones]
+                for z in base_zones:
+                    z_wire = z.to_wire()
+                    if z_wire.get("kind", "").startswith("ob_"):
+                        htf_ctx = [hz.to_wire() for hz in base_zones if hz.tf_s > base_tf]
+                        result = score_zone_confluence(
+                            zone=z_wire, bars=bar_dicts,
+                            swings=swing_dicts,
+                            zones_all=all_zone_wires,
+                            htf_zones=htf_ctx, structure=struct_dicts,
+                            atr=atr, current_price=last_bar.c,
+                            tf_s=base_tf, config=conf_cfg,
+                        )
+                        zone_grades[z_wire["id"]] = result
+        self._zone_grades[(symbol, viewer_tf_s)] = zone_grades
+
         return dataclasses.replace(
             snap,
             tf_s=viewer_tf_s,  # Tag snapshot with viewer TF for UI
@@ -552,6 +600,10 @@ class SmcEngine:
             swings=base_swings,
             levels=merged_levels,
         )
+
+    def get_zone_grades(self, symbol: str, tf_s: int) -> Dict[str, dict]:
+        """ADR-0029: zone_grades для full frame wire payload."""
+        return self._zone_grades.get((symbol, tf_s), {})
 
     def last_delta(self, symbol: str, tf_s: int) -> Optional[SmcDelta]:
         """Остання delta (після останнього on_bar) для WS delta frame."""
@@ -683,14 +735,21 @@ def _filter_for_display(
     radius = disp.proximity_atr_mult * atr
     max_height = config.max_zone_height_atr_mult * atr
 
-    # 1a) FVG zones: pass through (independently managed, no shared cap)
-    fvg_zones = [z for z in snap.zones if z.kind.startswith("fvg")]
+    # 0) ADR-0028 Φ0: min strength gate (decay floor 0.15 ≠ display threshold)
+    min_str = disp.min_display_strength  # default 0.25
+    eligible_zones = [z for z in snap.zones if z.strength >= min_str]
+
+    # 1a) FVG zones: proximity exempt, but capped (ADR-0028 Φ0)
+    fvg_cap = disp.fvg_display_cap  # default 4
+    fvg_zones = [z for z in eligible_zones if z.kind.startswith("fvg")]
+    fvg_zones.sort(key=_zone_rank)
+    fvg_zones = fvg_zones[:fvg_cap]
 
     # 1b) Non-FVG zones: proximity + height guard + rank + cap
     nearby_zones = []
-    for z in snap.zones:
+    for z in eligible_zones:
         if z.kind.startswith("fvg"):
-            continue  # handled separately
+            continue  # handled above
         mid = (z.high + z.low) / 2.0
         if abs(price - mid) > radius:
             continue

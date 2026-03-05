@@ -125,20 +125,92 @@ class SmcInducementConfig:
 
 @dataclasses.dataclass
 class SmcDisplayConfig:
-    """D1: Display filter — proximity + caps before sending to UI."""
-    proximity_atr_mult: float = 5.0     # zones/levels within N×ATR of price
-    max_display_zones: int = 8          # hard cap after proximity filter
+    """D1: Display filter — proximity + caps before sending to UI.
+
+    ADR-0028 Φ0: extended with strength gate, mitigated TTL,
+    per-side budget, FVG cap, structure label cap.
+    """
+    proximity_atr_mult: float = 6.0     # zones/levels within N×ATR of price
+    max_display_zones: int = 10         # hard cap after proximity filter (research payload)
     max_display_levels: int = 6         # hard cap on levels
     max_display_swings: int = 20        # only last N swings
+    # ── ADR-0028 Φ0: new fields ──
+    min_display_strength: float = 0.25  # zones below this strength excluded (decay floor 0.15 ≠ this)
+    mitigated_ttl_bars: int = 20        # bars after mitigation before zone is removed
+    focus_budget_per_side: int = 3      # max zones per side (supply/demand) in Focus mode
+    focus_budget_total: int = 12        # hard cap on ALL SMC objects in Focus mode
+    structure_label_max: int = 4        # max structure labels (BOS/CHoCH) in Focus mode
+    fvg_display_cap: int = 4            # server-side cap on FVG zones
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "SmcDisplayConfig":
-        return cls(
-            proximity_atr_mult=float(d.get("proximity_atr_mult", 5.0)),
-            max_display_zones=int(d.get("max_display_zones", 8)),
+        inst = cls(
+            proximity_atr_mult=float(d.get("proximity_atr_mult", 6.0)),
+            max_display_zones=int(d.get("max_display_zones", 10)),
             max_display_levels=int(d.get("max_display_levels", 6)),
             max_display_swings=int(d.get("max_display_swings", 20)),
+            min_display_strength=float(d.get("min_display_strength", 0.25)),
+            mitigated_ttl_bars=int(d.get("mitigated_ttl_bars", 20)),
+            focus_budget_per_side=int(d.get("focus_budget_per_side", 3)),
+            focus_budget_total=int(d.get("focus_budget_total", 12)),
+            structure_label_max=int(d.get("structure_label_max", 4)),
+            fvg_display_cap=int(d.get("fvg_display_cap", 4)),
         )
+        _validate_display_budget(inst)
+        return inst
+
+
+def _validate_display_budget(disp):
+    # type: (SmcDisplayConfig) -> None
+    """ADR-0028 D3: budget cap validation — loud error on overflow."""
+    budget_sum = disp.focus_budget_per_side * 2 + disp.structure_label_max
+    if budget_sum > disp.focus_budget_total:
+        raise ValueError(
+            "[ADR-0028 D3] Budget overflow: "
+            "zones(%d*2) + structure(%d) = %d > total(%d)"
+            % (disp.focus_budget_per_side, disp.structure_label_max,
+               budget_sum, disp.focus_budget_total)
+        )
+
+
+@dataclasses.dataclass
+class SmcConfluenceConfig:
+    """ADR-0029: OB Confluence Scoring thresholds (S5: config-driven)."""
+    sweep_lookback_bars: int = 10
+    fvg_lookforward_bars: int = 3
+    extremum_tolerance_atr: float = 0.3
+    strong_impulse_threshold: float = 0.7
+    grade_thresholds_a_plus: int = 8
+    grade_thresholds_a: int = 6
+    grade_thresholds_b: int = 4
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "SmcConfluenceConfig":
+        gt = d.get("grade_thresholds", {})
+        return cls(
+            sweep_lookback_bars=int(d.get("sweep_lookback_bars", 10)),
+            fvg_lookforward_bars=int(d.get("fvg_lookforward_bars", 3)),
+            extremum_tolerance_atr=float(d.get("extremum_tolerance_atr", 0.3)),
+            strong_impulse_threshold=float(d.get("strong_impulse_threshold", 0.7)),
+            grade_thresholds_a_plus=int(gt.get("a_plus", 8)),
+            grade_thresholds_a=int(gt.get("a", 6)),
+            grade_thresholds_b=int(gt.get("b", 4)),
+        )
+
+    def to_scoring_dict(self):
+        # type: () -> Dict[str, Any]
+        """Config dict format expected by score_zone_confluence()."""
+        return {
+            "sweep_lookback_bars": self.sweep_lookback_bars,
+            "fvg_lookforward_bars": self.fvg_lookforward_bars,
+            "extremum_tolerance_atr": self.extremum_tolerance_atr,
+            "strong_impulse_threshold": self.strong_impulse_threshold,
+            "grade_thresholds": {
+                "a_plus": self.grade_thresholds_a_plus,
+                "a": self.grade_thresholds_a,
+                "b": self.grade_thresholds_b,
+            },
+        }
 
 
 @dataclasses.dataclass
@@ -176,6 +248,7 @@ class SmcConfig:
     inducement: SmcInducementConfig = dataclasses.field(default_factory=SmcInducementConfig)
     context_stack: SmcContextStackConfig = dataclasses.field(default_factory=SmcContextStackConfig)
     display: SmcDisplayConfig = dataclasses.field(default_factory=SmcDisplayConfig)
+    confluence: SmcConfluenceConfig = dataclasses.field(default_factory=SmcConfluenceConfig)
     performance: SmcPerformanceConfig = dataclasses.field(default_factory=SmcPerformanceConfig)
 
     @classmethod
@@ -205,6 +278,7 @@ class SmcConfig:
             inducement=SmcInducementConfig.from_dict(d.get("inducement", {})),
             context_stack=SmcContextStackConfig.from_dict(d.get("context_stack", {})),
             display=SmcDisplayConfig.from_dict(disp_d),
+            confluence=SmcConfluenceConfig.from_dict(d.get("confluence", {})),
             performance=SmcPerformanceConfig.from_dict(d.get("performance", {})),
         )
 

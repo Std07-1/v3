@@ -311,10 +311,16 @@
         "decay_start_bars": 30,
         "decay_fast_bars": 150,
         "display": {
-            "proximity_atr_mult": 15.0,
-            "max_display_zones": 8,
+            "proximity_atr_mult": 6.0,
+            "max_display_zones": 10,
             "max_display_levels": 6,
-            "max_display_swings": 20
+            "max_display_swings": 20,
+            "min_display_strength": 0.25,
+            "mitigated_ttl_bars": 20,
+            "focus_budget_per_side": 3,
+            "focus_budget_total": 12,
+            "structure_label_max": 4,
+            "fvg_display_cap": 4
         },
         "context_stack": {
             "enabled": true,
@@ -325,6 +331,17 @@
         "performance": {
             "max_compute_ms": 10,
             "log_slow_threshold_ms": 5
+        },
+        "confluence": {
+            "sweep_lookback_bars": 10,
+            "fvg_lookforward_bars": 3,
+            "extremum_tolerance_atr": 0.3,
+            "strong_impulse_threshold": 0.7,
+            "grade_thresholds": {
+                "a_plus": 8,
+                "a": 6,
+                "b": 4
+            }
         }
     }
 }

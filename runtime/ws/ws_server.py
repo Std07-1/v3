@@ -295,7 +295,7 @@ def _build_full_frame(
             "symbols": cfg.get("symbols", []),
             "tfs": tf_labels,
         }
-    return {
+    frame = {
         "type": "render_frame",
         "frame_type": "full",
         "symbol": symbol,
@@ -306,7 +306,11 @@ def _build_full_frame(
         "levels":  smc_wire.get("levels", []) if smc_wire else [],
         "drawings": [],
         "meta": meta,
-    }
+    }  # type: Dict[str, Any]
+    # ADR-0029: zone_grades (only in full frame)
+    if smc_wire and smc_wire.get("zone_grades"):
+        frame["zone_grades"] = smc_wire["zone_grades"]
+    return frame
 
 
 def _build_delta_frame(
@@ -459,6 +463,10 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                 _snap = _smc_runner.get_snapshot(session.symbol, session.tf_s)
                 if _snap is not None:
                     smc_wire = _snap.to_wire()
+                    # ADR-0029: zone_grades (computed during get_snapshot)
+                    _zg = _smc_runner.get_zone_grades(session.symbol, session.tf_s)
+                    if _zg:
+                        smc_wire["zone_grades"] = _zg
             except Exception as _smc_exc:
                 _log.debug("WS_SMC_SNAP_ERR sym=%s tf=%s err=%s", session.symbol, session.tf_s, _smc_exc)
         frame = _build_full_frame(session, candles, session.symbol, tf_label, warnings or None, app=app, smc_wire=smc_wire)

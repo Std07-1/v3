@@ -236,6 +236,10 @@ class SmcRunner:
             _log.debug("SMC_GET_SNAP_ERR sym=%s tf=%s err=%s", symbol, tf_s, exc)
             return None
 
+    def get_zone_grades(self, symbol: str, tf_s: int) -> dict:
+        """ADR-0029: zone_grades after get_snapshot() call."""
+        return self._engine.get_zone_grades(symbol, tf_s)
+
     def last_delta(self, symbol: str, tf_s: int) -> Optional[SmcDelta]:
         """Останній SmcDelta після on_bar_dict() — для delta frame wiring."""
         with self._lock:

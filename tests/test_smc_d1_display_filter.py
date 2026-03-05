@@ -97,10 +97,17 @@ def _make_bars(n=50, base_price=2000.0, atr_approx=10.0, tf_s=300):
 class TestSmcDisplayConfig:
     def test_defaults(self):
         cfg = SmcDisplayConfig()
-        assert cfg.proximity_atr_mult == 5.0
-        assert cfg.max_display_zones == 8
+        assert cfg.proximity_atr_mult == 6.0     # ADR-0028: tuned from 5.0
+        assert cfg.max_display_zones == 10        # ADR-0028: tuned from 8
         assert cfg.max_display_levels == 6
         assert cfg.max_display_swings == 20
+        # ADR-0028 Φ0 new fields
+        assert cfg.min_display_strength == 0.25
+        assert cfg.mitigated_ttl_bars == 20
+        assert cfg.focus_budget_per_side == 3
+        assert cfg.focus_budget_total == 12
+        assert cfg.structure_label_max == 4
+        assert cfg.fvg_display_cap == 4
         # F10: decay params moved to SmcConfig root
         scfg = SmcConfig()
         assert scfg.decay_start_bars == 30

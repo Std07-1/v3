@@ -56,6 +56,14 @@ export interface SmcData {
   swings: SmcSwing[];
   levels: SmcLevel[];
   trend_bias?: string | null;  // F8: 'bullish'|'bearish'|'neutral'|null
+  zone_grades?: Record<string, ZoneGradeInfo>;  // ADR-0029: confluence scoring
+}
+
+/** ADR-0029: zone confluence grade info (full frame only). */
+export interface ZoneGradeInfo {
+  score: number;      // 0-11
+  grade: string;      // 'A+'|'A'|'B'|'C'
+  factors: string[];  // e.g. ['sweep +2', 'htf_align +2']
 }
 
 /**
@@ -133,6 +141,8 @@ export interface RenderFrame {
   smc_delta?: SmcDeltaWire;
   /** F8: trend bias у full/replay frames */
   trend_bias?: string | null;
+  /** ADR-0029: confluence grade per zone (full frame only) */
+  zone_grades?: Record<string, ZoneGradeInfo>;
   drawings?: Drawing[];
 
   replay?: {

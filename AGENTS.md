@@ -52,6 +52,36 @@
 - Redis (db=1, namespace `v3_local`)
 - JSONL файли як SSOT (`data_v3/{symbol}/tf_{tf_s}/`)
 
+### 1.3 Ролі агента (Role Routing)
+
+Агент обирає роль **автоматично** за контекстом запиту. Якщо контекст неоднозначний — за замовчуванням `R_PATCH_MASTER`. Користувач може активувати роль явно: `"Ти R_<ID>"`.
+
+| ID | Роль | Файл специфікації | Коли активувати |
+|---|---|---|---|
+| `R_PATCH_MASTER` | **Patch Master** | `.github/role_spec_patch_master_v1.md` | **Default.** Фікс бага, патч коду, зміна поведінки, refactoring slice. Будь-яка зміна коду/конфігу. |
+| `R_BUG_HUNTER` | **Bug Hunter** | `.github/role_spec_bug_hunter_v2.md` | Аудит модуля/файлу, пошук прихованих дефектів, code review, "знайди баги в X". Без зміни коду — тільки аналіз + severity + evidence. |
+| `R_SMC_CHIEF` | **SMC Chief Strategist** | `.github/role_spec_smc_chief_strategist_v1.md` | Будь-що про SMC engine: зони, свінги, OB/FVG, liquidity, рендер overlays, Clean Chart Doctrine, UI/UX торгової аналітики. |
+| `R_DOC_KEEPER` | **Doc Keeper** | `.github/role_spec_doc_keeper_v1.md` | Оновлення документації, синхронізація docs з реальністю, AUDIT→SYNC→VERIFY цикл, drift detection. |
+| `R_TRADER` | **SMC Trader** | `.github/role_spec_trader_v1.md` | Валідація SMC output з позиції трейдера: оцінка сетапів, grade challenge, chart audit, "чи можу я з цього торгувати?". Не пише код — дає actionable feedback. |
+
+**Правила роутингу:**
+
+1. **Один запит = одна роль.** Не змішувати ролі в одній відповіді.
+2. **Preflight**: перед початком роботи агент читає повну специфікацію ролі з `.github/role_spec_*.md`.
+3. **Явна активація має пріоритет** над автоматичним роутингом.
+4. **Якщо запит перетинає межі ролей** (наприклад, "знайди баг і зафіксь") — спочатку `R_BUG_HUNTER` (аналіз), потім `R_PATCH_MASTER` (фікс).
+5. **Інваріанти I0–I6 діють у всіх ролях.** Жодна роль не може їх послабити.
+
+**Автоматичні тригери:**
+
+| Сигнал у запиті | Роль |
+|---|---|
+| "фікс", "виправ", "патч", "зміни", "додай", "побудуй" | `R_PATCH_MASTER` |
+| "аудит", "review", "знайди баги", "перевір", "що не так" | `R_BUG_HUNTER` |
+| "SMC", "зони", "свінги", "OB", "FVG", "overlay", "рівні", "Clean Chart" | `R_SMC_CHIEF` |
+| "документація", "оновити docs", "синхронізувати", "drift", "AGENTS.md" | `R_DOC_KEEPER` |
+| "оціни сетап", "чи це A+?", "торгувати чи ні?", "grade challenge", "що бачить трейдер?", "chart audit" | `R_TRADER` |
+
 ---
 
 ## 2. Project Structure

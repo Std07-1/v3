@@ -39,6 +39,8 @@
 | [0025](0025-potik-b-data-quality-summary.md) | Потік B — Data Quality & Activation Summary | **Implemented** | 2026-02-28 | multi-symbol, data quality, derived integrity, XAU/USD focus | `potik_b_data_quality` |
 | [0026](0026-overlay-level-rendering-rules.md) | Overlay Level Rendering Rules | **Implemented** | 2026-03-01 | levels, merge, labels, LINE_PX, NOTCH_PX, LEVEL_STYLES, L1–L6 | `smc_engine_v1` |
 | [0027](0027-client-side-replay.md) | Client-Side Replay (TradingView-style) | **Implemented** | 2026-02-28 | replay, client-side, scrubber, play/pause, candle-by-candle, TF switch | `replay_v2` |
+| [0028](ADR-0028-v2-elimination-engine.md) | Elimination Engine — Display Filter Pipeline | **Implemented** | 2026-03-04 | display filter, budget, proximity, TTL, Focus/Research toggle | `smc_vis_phi0` |
+| [0029](ADR-0029-confluence-scoring.md) | OB Confluence Scoring + Grade System | **Implemented** | 2026-03-05 | confluence, 8 factors, grade A+/A/B/C, badge, DisplayBudget, ADR-0030 ready | `smc_vis_phi1` |
 
 ---
 
@@ -78,4 +80,4 @@
 
 Див. формат у [copilot-instructions.md](../../.github/copilot-instructions.md) → Тема B, Правило B2.
 
-Наступний номер: **0028**
+Наступний номер: **0030**

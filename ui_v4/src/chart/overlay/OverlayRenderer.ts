@@ -25,7 +25,8 @@
 // ═══════════════════════════════════════════════════
 
 import type { IChartApi, ISeriesApi } from 'lightweight-charts';
-import type { SmcData, SmcZone, SmcLevel, SmcSwing, UiWarning } from '../../types';
+import type { SmcData, SmcZone, SmcLevel, SmcSwing, UiWarning, ZoneGradeInfo } from '../../types';
+import { applyBudget, DEFAULT_BUDGET, type BudgetConfig, type DisplayMode, type ZoneDisplayProps } from './DisplayBudget';
 
 type HorzScaleItem = number | { year: number; month: number; day: number };
 
@@ -68,6 +69,7 @@ function normalizeSmcData(d?: SmcData | null): Required<SmcData> {
     swings: d?.swings ?? [],
     levels: d?.levels ?? [],
     trend_bias: d?.trend_bias ?? null,
+    zone_grades: d?.zone_grades ?? {},
   };
 }
 
@@ -161,7 +163,7 @@ export class OverlayRenderer {
   private readonly chartApi: IChartApi;
   private readonly seriesApi: ISeriesApi<'Candlestick'>;
 
-  private frame: Required<SmcData> = { zones: [], swings: [], levels: [], trend_bias: null };
+  private frame: Required<SmcData> = { zones: [], swings: [], levels: [], trend_bias: null, zone_grades: {} };
 
   private dpr = 1;
   private cssW = 0;
@@ -170,9 +172,17 @@ export class OverlayRenderer {
   private rendering = false;
   private rafId: number | null = null;
 
+  // ── ADR-0029: Grade cache (E4: full frame only, delta removes mitigated) ──
+  private _gradeCache: Record<string, ZoneGradeInfo> = {};
+
   // ── ADR-0024c: Layer isolation ────────────────────────────────────
   private layerVisible = { levels: true, swings: true, structure: true };
   private zoneKindVisible = { ob: true, fvg: true };
+
+  // ── ADR-0028 Φ0: Display budget (client-side presentation filter) ──
+  private displayMode: DisplayMode = 'focus';
+  private budgetConfig: BudgetConfig = DEFAULT_BUDGET;
+  private _zoneProps: Map<string, ZoneDisplayProps> = new Map();
 
   // ── Tooltip system ────────────────────────────────────────────────
   private _hitAreas: HitArea[] = [];
@@ -262,7 +272,19 @@ export class OverlayRenderer {
 
   patch(overlays?: SmcData | null): void {
     this.frame = normalizeSmcData(overlays);
+    // ADR-0029 E4: update grade cache from full frame
+    const newGrades = this.frame.zone_grades ?? {};
+    if (Object.keys(newGrades).length > 0) {
+      this._gradeCache = { ...newGrades };
+    }
     this.scheduleRender();
+  }
+
+  /** ADR-0029 E4: remove mitigated zones from grade cache (delta path). */
+  removeMitigatedGrades(ids: string[]): void {
+    for (const id of ids) {
+      delete this._gradeCache[id];
+    }
   }
 
   resize(cssW: number, cssH: number, dpr: number): void {
@@ -391,16 +413,41 @@ export class OverlayRenderer {
     return (end_ms / 1000) >= toSec;
   }
 
+  // ── ADR-0028 Φ0: Display mode toggle ─────────────────────────────
+  setDisplayMode(mode: DisplayMode): void {
+    if (mode !== this.displayMode) {
+      this.displayMode = mode;
+      this.scheduleRender();
+    }
+  }
+
+  getDisplayMode(): DisplayMode {
+    return this.displayMode;
+  }
+
+  /** Opacity for zone from last budget computation (default 1.0). */
+  getZoneOpacity(zoneId: string): number {
+    return this._zoneProps.get(zoneId)?.opacity ?? 1.0;
+  }
+
   private render(): void {
     if (this.cssW <= 0 || this.cssH <= 0) return;
 
     this.ctx.clearRect(0, 0, this.cssW, this.cssH);
     this._hitAreas = []; // Reset tooltip hit areas each frame
 
+    // ADR-0028 Φ0: client-side budget filter (D3: budget ≤ cap)
+    // ADR-0029: pass grades for grade-aware Focus/Research filter
+    const budget = applyBudget(
+      this.frame.zones, this.frame.levels, this.frame.swings,
+      this.displayMode, this.budgetConfig, this._gradeCache,
+    );
+    this._zoneProps = budget.zoneProps;
+
     // ADR-0024c: кожен шар незалежний — toggle одного не чіпає інші
-    this.renderZones(this.frame.zones);
-    if (this.layerVisible.levels) this.renderLevels(this.frame.levels);
-    if (this.layerVisible.swings || this.layerVisible.structure) this.renderSwings(this.frame.swings);
+    this.renderZones(budget.zones);
+    if (this.layerVisible.levels) this.renderLevels(budget.levels);
+    if (this.layerVisible.swings || this.layerVisible.structure) this.renderSwings(budget.swings);
   }
 
   private zoneColor(kind: string): string {
@@ -415,6 +462,29 @@ export class OverlayRenderer {
     if (kind === 'discount') return '#3399cc';
     if (kind.startsWith('liquidity')) return '#9b59b6';
     return '#888888';
+  }
+
+  /** ADR-0029: Render grade badge next to zone label. */
+  private _renderGradeBadge(x: number, y: number, grade: string, alphaMult: number): void {
+    const colors: Record<string, string> = {
+      'A+': 'rgba(255,215,0,0.9)',     // gold
+      'A': 'rgba(255,255,255,0.65)',   // white
+      'B': 'rgba(150,150,150,0.45)',   // gray
+    };
+    const bg = colors[grade] ?? colors['B'];
+    const fs = 9;
+    this.ctx.save();
+    this.ctx.font = `bold ${fs}px Arial`;
+    const tm = this.ctx.measureText(grade);
+    const pad = 2;
+    this.ctx.globalAlpha = Math.min(1.0, 0.6 + 0.4 * alphaMult);
+    this.ctx.fillStyle = bg;
+    this.ctx.fillRect(x, y, tm.width + pad * 2, fs + 2);
+    this.ctx.fillStyle = '#000';
+    this.ctx.textAlign = 'left';
+    this.ctx.textBaseline = 'top';
+    this.ctx.fillText(grade, x + pad, y + 1);
+    this.ctx.restore();
   }
 
   private renderZones(zones: SmcZone[]): void {
@@ -503,6 +573,9 @@ export class OverlayRenderer {
       const st = z.status ?? 'active';
       const isDimmed = st === 'mitigated' || st === 'filled';
       const dimMult = isDimmed ? 0.35 : 1.0;  // 35% opacity for dead zones
+      // ADR-0028 Φ0: budget-driven opacity (strength→alpha mapping)
+      const budgetOpacity = this._zoneProps.get(z.id)?.opacity ?? 1.0;
+      const alphaMult = dimMult * budgetOpacity;
 
       // ── Fog Zones v4.1: fixed-pixel dissolve + status memory ───
       //
@@ -546,11 +619,11 @@ export class OverlayRenderer {
       // Clamp до фактичної ширини зони
       const renderPx = Math.min(totalPx + fadePx, w);
 
-      // ── Alpha (dimMult reduces all alphas for mitigated/filled zones) ──
-      const originAlpha = (0.025 + 0.035 * s) * dimMult;
-      const bodyAlpha = (0.030 + 0.065 * s) * proximity * dimMult;
+      // ── Alpha (dimMult + budgetOpacity reduce alphas) ──
+      const originAlpha = (0.025 + 0.035 * s) * alphaMult;
+      const bodyAlpha = (0.030 + 0.065 * s) * proximity * alphaMult;
       const borderBase = 0.08 + 0.25 * s;
-      const borderAlpha = borderBase * (0.25 + 0.75 * proximity) * dimMult;
+      const borderAlpha = borderBase * (0.25 + 0.75 * proximity) * alphaMult;
       const borderW = _zoneBorderWidth(z.context_layer, false);
 
       this.ctx.save();
@@ -639,6 +712,17 @@ export class OverlayRenderer {
           this.ctx.textBaseline = 'top';
           this.ctx.fillText(label, lblX, lblY + 1);
           this.ctx.restore();
+
+          // ADR-0029: Grade badge (A+/A/B — gold/white/gray, C hidden)
+          const gradeInfo = this._gradeCache[z.id];
+          if (gradeInfo && gradeInfo.grade !== 'C') {
+            this._renderGradeBadge(
+              lblX + tm.width + pad * 2 + 3,
+              lblY,
+              gradeInfo.grade,
+              proximity * dimMult,
+            );
+          }
         }
       }
 

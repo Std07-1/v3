@@ -19,6 +19,7 @@
   } from "../chart/lwc";
   import { setupPriceScaleInteractions } from "../chart/interaction";
   import { OverlayRenderer } from "../chart/overlay/OverlayRenderer";
+  import type { DisplayMode } from "../chart/overlay/DisplayBudget";
   import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
   import { saveVisibleRange, loadVisibleRange } from "../stores/viewCache";
@@ -58,6 +59,8 @@
   let showSW = $state(true);
   let showLVL = $state(true);
   let showBOS = $state(true);
+  // ADR-0028 Φ0: Focus/Research display mode
+  let displayMode: DisplayMode = $state("focus");
   // Crosshair data for tooltip (OHLCV + cursor position)
   let crosshairData: CrosshairData | null = $state(null);
 
@@ -142,6 +145,8 @@
         if (typeof t.sw === "boolean") showSW = t.sw;
         if (typeof t.lvl === "boolean") showLVL = t.lvl;
         if (typeof t.bos === "boolean") showBOS = t.bos;
+        if (t.displayMode === "focus" || t.displayMode === "research")
+          displayMode = t.displayMode;
       }
     } catch {
       /* corrupt → use defaults */
@@ -240,6 +245,7 @@
             currentFrame.swings,
             currentFrame.levels,
             currentFrame.trend_bias,
+            currentFrame.zone_grades,
           );
           // untrack: запис до replayStore без створення підписки
           untrack(() => replayStore.updateDataForNewTf(candles, newSmc));
@@ -303,6 +309,11 @@
           const cached = loadVisibleRange(sym, tf);
           if (cached) {
             chartEngine.chart.timeScale().setVisibleLogicalRange(cached);
+          } else {
+            // No cached range (first visit to this TF) — fit all bars
+            // so user sees maximum history. fitContent() auto-adjusts
+            // barSpacing to show all data points in the visible area.
+            chartEngine.chart.timeScale().fitContent();
           }
         }
 
@@ -327,6 +338,7 @@
           currentFrame.swings,
           currentFrame.levels,
           currentFrame.trend_bias,
+          currentFrame.zone_grades,
         );
       } else if (currentFrame.frame_type === "delta") {
         if (currentFrame.smc_delta) {
@@ -410,6 +422,10 @@
   $effect(() => {
     overlayRenderer?.setLayerVisible("structure", showBOS);
   });
+  // ADR-0028 Φ0: display mode effect
+  $effect(() => {
+    overlayRenderer?.setDisplayMode(displayMode);
+  });
 
   // N3: persist toggles to localStorage
   $effect(() => {
@@ -422,11 +438,32 @@
           sw: showSW,
           lvl: showLVL,
           bos: showBOS,
+          displayMode,
         }),
       );
     } catch {
       /* quota / private mode */
     }
+  });
+
+  // ADR-0028 Φ0: keyboard shortcut ‘F’ toggles Focus/Research
+  function handleDisplayModeKey(e: KeyboardEvent) {
+    // Skip if focus inside input/textarea/contentEditable
+    const t = e.target as HTMLElement | null;
+    if (
+      t &&
+      (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)
+    )
+      return;
+    if (e.key === "f" || e.key === "F") {
+      displayMode = displayMode === "focus" ? "research" : "focus";
+    }
+  }
+  onMount(() => {
+    window.addEventListener("keydown", handleDisplayModeKey);
+  });
+  onDestroy(() => {
+    window.removeEventListener("keydown", handleDisplayModeKey);
   });
 
   onDestroy(() => {
@@ -500,6 +537,18 @@
       class:active={showBOS}
       onclick={() => (showBOS = !showBOS)}
       title="BOS / CHoCH">BOS</button
+    >
+    <!-- ADR-0028 Φ0: Focus / Research display mode toggle (key: F) -->
+    <span class="smc-sep"></span>
+    <button
+      class="smc-toggle smc-t-mode"
+      class:research={displayMode === "research"}
+      onclick={() =>
+        (displayMode = displayMode === "focus" ? "research" : "focus")}
+      title={displayMode === "focus"
+        ? "Focus mode (F to toggle)"
+        : "Research mode (F to toggle)"}
+      >{displayMode === "focus" ? "F" : "R"}</button
     >
   </div>
 </div>
@@ -655,5 +704,25 @@
     color: #ffa726;
     border-color: rgba(255, 167, 38, 0.35);
     background: rgba(255, 167, 38, 0.1);
+  }
+  /* ADR-0028 Φ0: Focus/Research mode toggle */
+  .smc-sep {
+    width: 1px;
+    height: 14px;
+    background: rgba(120, 123, 134, 0.2);
+    align-self: center;
+    margin: 0 2px;
+  }
+  .smc-toggle.smc-t-mode {
+    color: #4a90d9;
+    border-color: rgba(74, 144, 217, 0.3);
+    background: rgba(74, 144, 217, 0.1);
+    min-width: 18px;
+    text-align: center;
+  }
+  .smc-toggle.smc-t-mode.research {
+    color: #ff9800;
+    border-color: rgba(255, 152, 0, 0.35);
+    background: rgba(255, 152, 0, 0.1);
   }
 </style>

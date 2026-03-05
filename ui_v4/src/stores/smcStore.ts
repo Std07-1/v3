@@ -6,7 +6,7 @@
 // ADR-0024 §6: I4 — Один update-потік для UI.
 // Патч: виправляє баг де delta-кадри очищали SMC overlay через patch(buildSmc(deltaFrame)).
 
-import type { SmcData, SmcZone, SmcSwing, SmcLevel, SmcDeltaWire } from '../types';
+import type { SmcData, SmcZone, SmcSwing, SmcLevel, SmcDeltaWire, ZoneGradeInfo } from '../types';
 
 // F1: UI swing cap — запобігає необмеженому росту масиву swings
 const MAX_UI_SWINGS = 40;
@@ -22,12 +22,14 @@ export function applySmcFull(
     swings: SmcSwing[] | undefined,
     levels: SmcLevel[] | undefined,
     trend_bias?: string | null,
+    zone_grades?: Record<string, ZoneGradeInfo>,
 ): SmcData {
     return {
         zones: zones ?? [],
         swings: swings ?? [],
         levels: levels ?? [],
         trend_bias: trend_bias ?? null,
+        zone_grades,
     };
 }
 
