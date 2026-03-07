@@ -29,7 +29,8 @@ from core.smc.liquidity import detect_liquidity_levels
 from core.smc.order_blocks import detect_order_blocks
 from core.smc.premium_discount import detect_premium_discount
 from core.smc.structure import classify_swings, detect_structure_events
-from core.smc.swings import detect_raw_swings
+from core.smc.momentum import detect_displacement, compute_momentum_score
+from core.smc.swings import detect_raw_swings, detect_fractals
 from core.smc.types import (
     SmcDelta, SmcLevel, SmcSnapshot, SmcSwing, SmcZone,
 )
@@ -320,6 +321,22 @@ class SmcEngine:
         snap = self.get_snapshot(symbol, tf_s)
         return snap.trend_bias
 
+    def get_momentum_score(self, symbol: str, tf_s: int) -> Tuple[int, int]:
+        """Momentum score (bull_count, bear_count) for given (symbol, tf)."""
+        state = self._states.get((symbol, tf_s))
+        if state is None or not state.bars_list():
+            return (0, 0)
+        bars = state.bars_list()
+        from core.smc.swings import compute_atr
+        atr = compute_atr(bars, period=14)
+        mom = self._config.momentum
+        return compute_momentum_score(
+            bars, atr,
+            min_body_atr=mom.min_body_atr_mult,
+            max_wick_ratio=mom.max_wick_ratio,
+            lookback=mom.lookback_bars,
+        )
+
     def get_snapshot_with_htf_levels(
         self,
         symbol: str,
@@ -501,6 +518,9 @@ class SmcEngine:
                 if s.kind.startswith("bos_") or s.kind.startswith("choch_")
             ]
             base_swings = base_swings + htf_structure
+            # A-1: Propagate HTF trend_bias when base TF has None
+            if snap.trend_bias is None and htf_snap.trend_bias is not None:
+                snap = dataclasses.replace(snap, trend_bias=htf_snap.trend_bias)
 
         base_swings.sort(key=lambda s: s.time_ms)
 
@@ -514,6 +534,8 @@ class SmcEngine:
             for z in htf_snap.zones:
                 if z.kind.startswith("fvg"):
                     extra_fvg.append(z)
+        # A-3: Collect IDs from step-4 FVG injection for dedup with step 5
+        _step4_zone_ids = frozenset(z.id for z in extra_fvg)  # type: frozenset
         base_zones = list(snap.zones) + extra_fvg
 
         # 5. Context Stack OB injection (existing L1/L2 from context_stack.py)
@@ -536,6 +558,8 @@ class SmcEngine:
                         institutional_budget=cs_cfg.institutional_budget,
                         intraday_budget=cs_cfg.intraday_budget,
                     )
+                    # A-3: Dedup — remove Context Stack zones already injected at step 4
+                    htf_zones = [z for z in htf_zones if z.id not in _step4_zone_ids]
                     local_zones = tag_local_zones(base_zones)
                     base_zones = htf_zones + local_zones
                 # else: keep base_zones as-is
@@ -574,14 +598,25 @@ class SmcEngine:
                                 if s.kind.startswith("bos_")
                                 or s.kind.startswith("choch_")]
                 bar_dicts = [
-                    {"open_time_ms": b.open_time_ms, "h": b.h, "l": b.l}
+                    {"open_time_ms": b.open_time_ms, "h": b.h, "l": b.low}
                     for b in bars[-50:]
                 ]
-                all_zone_wires = [z.to_wire() for z in base_zones]
+                all_zone_wires = []
+                for zz in base_zones:
+                    w = zz.to_wire()
+                    w["anchor_bar_ms"] = zz.anchor_bar_ms
+                    all_zone_wires.append(w)
                 for z in base_zones:
                     z_wire = z.to_wire()
+                    # anchor_bar_ms needed by scorer but not in UI wire (S6)
+                    z_wire["anchor_bar_ms"] = z.anchor_bar_ms
                     if z_wire.get("kind", "").startswith("ob_"):
-                        htf_ctx = [hz.to_wire() for hz in base_zones if hz.tf_s > base_tf]
+                        htf_ctx = []
+                        for hz in base_zones:
+                            if hz.tf_s > base_tf:
+                                hw = hz.to_wire()
+                                hw["anchor_bar_ms"] = hz.anchor_bar_ms
+                                htf_ctx.append(hw)
                         result = score_zone_confluence(
                             zone=z_wire, bars=bar_dicts,
                             swings=swing_dicts,
@@ -642,12 +677,15 @@ class SmcEngine:
         if not bars:
             return _empty_snapshot(symbol, tf_s)
 
+        # ── Per-TF config (S5: tf_overrides from SSOT) ──
+        cfg = self._config.for_tf(tf_s)
+
         # ── F4: ATR once, pass to all detectors ──
         from core.smc.swings import compute_atr
         atr = compute_atr(bars, period=14)
 
         # ── E1.1: Raw swings ──
-        raw_swings = detect_raw_swings(bars, period=self._config.swing_period)
+        raw_swings = detect_raw_swings(bars, period=cfg.swing_period)
 
         # ── E1.2: Classify + Structure events ──
         classified = classify_swings(raw_swings)
@@ -659,34 +697,52 @@ class SmcEngine:
         all_swings.sort(key=lambda s: s.time_ms)
 
         # ── E1.3: Order Blocks ──
-        ob_zones = detect_order_blocks(bars, struct_events, self._config, atr=atr)
+        ob_zones = detect_order_blocks(bars, struct_events, cfg, atr=atr)
 
         # ── E1.4: FVG ──
-        fvg_zones = detect_fvg(bars, self._config, atr=atr)
+        fvg_zones = detect_fvg(bars, cfg, atr=atr)
 
         # ── E2.6: Premium/Discount Zones ──
-        pd_zones: List[SmcZone] = detect_premium_discount(classified, bars, self._config)
+        pd_zones: List[SmcZone] = detect_premium_discount(classified, bars, cfg)
 
         # ── N1: Zone lifecycle (merge, FVG evict, mitigate, decay, cap) ──
         fresh_zones: List[SmcZone] = ob_zones + fvg_zones + pd_zones
         last_bar = bars[-1] if bars else None
         all_zones = _update_zone_lifecycle(
-            fresh_zones, state._active_zones, last_bar, self._config, tf_s,
+            fresh_zones, state._active_zones, last_bar, cfg, tf_s,
         )
 
         # ── E2.5: Liquidity Levels (Equal Highs / Equal Lows) ──
         # Передаємо classified (hh/hl/lh/ll) — вони містять confirmed info
-        levels: List[SmcLevel] = detect_liquidity_levels(classified, bars, self._config, atr=atr)
+        levels: List[SmcLevel] = detect_liquidity_levels(classified, bars, cfg, atr=atr)
 
         # ── ADR-0024b: Key Levels per TF (PDH/PDL, H4H/L, H1H/L, ...) ──
         key_lvls = compute_key_levels(bars)
         levels = levels + key_lvls
 
         # ── E2.7: Inducement (False Breakout Trap) ──
-        inducement_swings: List[SmcSwing] = detect_inducement(bars, classified, self._config, atr=atr)
+        inducement_swings: List[SmcSwing] = detect_inducement(bars, classified, cfg, atr=atr)
         if inducement_swings:
             all_swings = all_swings + inducement_swings
             all_swings.sort(key=lambda s: s.time_ms)
+
+        # ── Williams Fractals (display-only, separate from structure chain) ──
+        fractal_swings = detect_fractals(bars, period=cfg.fractal_period)
+        if fractal_swings:
+            all_swings = all_swings + fractal_swings
+            all_swings.sort(key=lambda s: s.time_ms)
+
+        # ── Displacement candles (momentum markers) ──
+        mom_cfg = cfg.momentum
+        if mom_cfg.enabled:
+            disp_swings = detect_displacement(
+                bars, atr,
+                min_body_atr=mom_cfg.min_body_atr_mult,
+                max_wick_ratio=mom_cfg.max_wick_ratio,
+            )
+            if disp_swings:
+                all_swings = all_swings + disp_swings
+                all_swings.sort(key=lambda s: s.time_ms)
 
         snap = SmcSnapshot(
             symbol=symbol,
@@ -702,7 +758,7 @@ class SmcEngine:
         )
 
         # ── D1: Display filter (proximity + cap) ──
-        snap = _filter_for_display(snap, bars, self._config, atr=atr)
+        snap = _filter_for_display(snap, bars, cfg, atr=atr)
 
         return snap
 
@@ -739,9 +795,15 @@ def _filter_for_display(
     min_str = disp.min_display_strength  # default 0.25
     eligible_zones = [z for z in snap.zones if z.strength >= min_str]
 
-    # 1a) FVG zones: proximity exempt, but capped (ADR-0028 Φ0)
+    # 1a) FVG zones: exclude filled, distance cap, then rank cap (ADR-0028 Φ0)
     fvg_cap = disp.fvg_display_cap  # default 4
-    fvg_zones = [z for z in eligible_zones if z.kind.startswith("fvg")]
+    fvg_max_dist = disp.proximity_atr_mult * 1.5 * atr  # A-4: ~9 ATR distance cap
+    fvg_zones = [
+        z for z in eligible_zones
+        if z.kind.startswith("fvg")
+        and z.status != "filled"          # A-2: filled = dead, не показувати
+        and abs(price - (z.high + z.low) / 2.0) <= fvg_max_dist  # A-4
+    ]
     fvg_zones.sort(key=_zone_rank)
     fvg_zones = fvg_zones[:fvg_cap]
 
@@ -764,8 +826,17 @@ def _filter_for_display(
     # Трейдер хоче бачити всі рівні — UI стилізує per-kind, не потрібно фільтрувати.
     capped_levels = list(snap.levels)
 
-    # 3) Swings: only last N
-    capped_swings = snap.swings[-disp.max_display_swings:]
+    # 3) Swings: only last N (structure swings + fractals capped separately)
+    struct_swings = [s for s in snap.swings
+                     if not s.kind.startswith('fractal_') and not s.kind.startswith('displacement_')]
+    frac_swings = [s for s in snap.swings if s.kind.startswith('fractal_')]
+    disp_swings = [s for s in snap.swings if s.kind.startswith('displacement_')]
+    capped_swings = (
+        struct_swings[-disp.max_display_swings:]
+        + frac_swings[-disp.max_display_fractals:]
+        + disp_swings[-config.momentum.max_display:]
+    )
+    capped_swings.sort(key=lambda s: s.time_ms)
 
     return dataclasses.replace(
         snap,

@@ -21,9 +21,12 @@ def _check_liquidity_sweep(zone, bars, swings, tf_s, config):
     anchor = zone.get("anchor_bar_ms", 0)
     window_start = anchor - lookback * tf_ms
 
+    # Swing kinds: hh/lh = highs, ll/hl = lows (structure.py convention)
+    _SWING_HIGHS = frozenset({"hh", "lh", "swing_high"})
+    _SWING_LOWS = frozenset({"ll", "hl", "swing_low"})
     relevant = [
         s for s in swings
-        if s.get("kind") in ("swing_high", "swing_low")
+        if s.get("kind") in (_SWING_HIGHS | _SWING_LOWS)
         and window_start <= s.get("time_ms", 0) < anchor
     ]
     if not relevant:
@@ -36,10 +39,10 @@ def _check_liquidity_sweep(zone, bars, swings, tf_s, config):
             b for b in bars
             if sw_time < b.get("open_time_ms", 0) <= anchor
         ]
-        if is_bull and sw.get("kind") == "swing_low":
+        if is_bull and sw.get("kind") in _SWING_LOWS:
             if any(b.get("l", 999999) < sw_price for b in sweep_bars):
                 return 2
-        elif not is_bull and sw.get("kind") == "swing_high":
+        elif not is_bull and sw.get("kind") in _SWING_HIGHS:
             if any(b.get("h", 0) > sw_price for b in sweep_bars):
                 return 2
     return 0
@@ -47,25 +50,43 @@ def _check_liquidity_sweep(zone, bars, swings, tf_s, config):
 
 def _check_fvg_after(zone, all_zones, tf_s, config):
     # type: (dict, list, int, dict) -> int
-    """F2: FVG у вікні 3 барів після OB anchor."""
+    """F2: FVG підтверджує OB — часове вікно АБО цінове перекриття.
+
+    Варіант A: FVG anchor у вікні N барів після OB anchor (time adjacency).
+    Варіант B: FVG ціново перекривається з OB (будь-який напрямок у часі).
+    Будь-який → +2.
+    """
     tf_ms = tf_s * 1000
     window = config.get("fvg_lookforward_bars", 3) * tf_ms
     anchor = zone.get("anchor_bar_ms", 0)
-    return 2 if any(
-        z for z in all_zones
-        if z.get("kind", "").startswith("fvg")
-        and anchor < z.get("anchor_bar_ms", 0) <= anchor + window
-    ) else 0
+    ob_hi = zone.get("high", 0)
+    ob_lo = zone.get("low", 0)
+    for z in all_zones:
+        if not z.get("kind", "").startswith("fvg"):
+            continue
+        fvg_anchor = z.get("anchor_bar_ms", 0)
+        # A: time adjacency — FVG right after OB (classic)
+        if anchor < fvg_anchor <= anchor + window:
+            return 2
+        # B: price overlap — OB inside FVG or FVG inside OB (any temporal order)
+        fvg_hi = z.get("high", 0)
+        fvg_lo = z.get("low", 0)
+        if fvg_lo < ob_hi and fvg_hi > ob_lo:
+            return 2
+    return 0
+
+
+_HTF_ALIVE_STATUSES = frozenset(("active", "tested", "partially_filled"))
 
 
 def _check_htf_alignment(zone, htf_zones):
     # type: (dict, list) -> int
-    """F3: OB mid-price всередині active HTF zone."""
+    """F3: OB mid-price всередині alive HTF zone (ER-10)."""
     mid = (zone["high"] + zone["low"]) / 2.0
     return 2 if any(
         hz for hz in htf_zones
         if hz.get("low", 0) <= mid <= hz.get("high", 0)
-        and hz.get("status") == "active"
+        and hz.get("status") in _HTF_ALIVE_STATUSES
     ) else 0
 
 
@@ -76,12 +97,14 @@ def _check_extremum(zone, swings, atr, tf_s, config):
     tf_ms = tf_s * 1000
     anchor = zone.get("anchor_bar_ms", 0)
     is_bull = zone.get("kind", "").startswith("ob_bull")
+    _SWING_HIGHS = frozenset({"hh", "lh", "swing_high"})
+    _SWING_LOWS = frozenset({"ll", "hl", "swing_low"})
     for s in swings:
         if abs(s.get("time_ms", 0) - anchor) < tf_ms * 3:
-            if is_bull and s.get("kind") == "swing_low":
+            if is_bull and s.get("kind") in _SWING_LOWS:
                 if abs(s["price"] - zone["low"]) < tol:
                     return 1
-            elif not is_bull and s.get("kind") == "swing_high":
+            elif not is_bull and s.get("kind") in _SWING_HIGHS:
                 if abs(s["price"] - zone["high"]) < tol:
                     return 1
     return 0
@@ -96,8 +119,10 @@ def _check_impulse(zone, config):
 def _check_premium_discount(zone, current_price, swings):
     # type: (dict, float, list) -> int
     """F6: Bullish OB in discount / Bearish OB in premium. E3."""
-    highs = [s["price"] for s in swings if s.get("kind") == "swing_high"][-5:]
-    lows = [s["price"] for s in swings if s.get("kind") == "swing_low"][-5:]
+    _SWING_HIGHS = frozenset({"hh", "lh", "swing_high"})
+    _SWING_LOWS = frozenset({"ll", "hl", "swing_low"})
+    highs = [s["price"] for s in swings if s.get("kind") in _SWING_HIGHS][-5:]
+    lows = [s["price"] for s in swings if s.get("kind") in _SWING_LOWS][-5:]
     if not highs or not lows:
         return 0
     mid = (max(highs) + min(lows)) / 2.0

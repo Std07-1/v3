@@ -12,6 +12,41 @@ from core.model.bars import CandleBar
 from core.smc.types import SmcSwing, make_swing_id
 
 
+def detect_fractals(
+    bars: List[CandleBar],
+    period: int = 2,
+) -> List[SmcSwing]:
+    """Williams Fractal detection (display-only markers).
+
+    Same algorithm as detect_raw_swings but with kind='fractal_high'/'fractal_low'.
+    Separate from structure swings to avoid polluting BOS/CHoCH chain.
+    """
+    n = len(bars)
+    if n < 2 * period + 1:
+        return []
+    result = []  # type: List[SmcSwing]
+    for i in range(period, n - period):
+        b = bars[i]
+        left_h = [bars[j].h for j in range(i - period, i)]
+        right_h = [bars[j].h for j in range(i + 1, i + period + 1)]
+        if b.h > max(left_h) and b.h >= max(right_h):
+            result.append(SmcSwing(
+                id=make_swing_id("fh", b.symbol, b.tf_s, b.open_time_ms),
+                symbol=b.symbol, tf_s=b.tf_s, kind="fractal_high",
+                price=b.h, time_ms=b.open_time_ms, confirmed=True,
+            ))
+        left_l = [bars[j].low for j in range(i - period, i)]
+        right_l = [bars[j].low for j in range(i + 1, i + period + 1)]
+        if b.low < min(left_l) and b.low <= min(right_l):
+            result.append(SmcSwing(
+                id=make_swing_id("fl", b.symbol, b.tf_s, b.open_time_ms),
+                symbol=b.symbol, tf_s=b.tf_s, kind="fractal_low",
+                price=b.low, time_ms=b.open_time_ms, confirmed=True,
+            ))
+    result.sort(key=lambda s: s.time_ms)
+    return result
+
+
 def detect_raw_swings(
     bars: List[CandleBar],
     period: int = 5,

@@ -267,6 +267,7 @@
         "enabled": true,
         "lookback_bars": 500,
         "swing_period": 5,
+        "fractal_period": 2,
         "compute_tfs": [
             900,
             3600,
@@ -305,6 +306,13 @@
             "confirmation_bars": 3,
             "max_inducements": 10
         },
+        "momentum": {
+            "enabled": true,
+            "min_body_atr_mult": 1.5,
+            "max_wick_ratio": 0.3,
+            "lookback_bars": 10,
+            "max_display": 15
+        },
         "max_zones_per_tf": 10,
         "max_zone_height_atr_mult": 4.0,
         "hide_mitigated": true,
@@ -341,6 +349,17 @@
                 "a_plus": 8,
                 "a": 6,
                 "b": 4
+            }
+        },
+        "tf_overrides": {
+            "900": {
+                "swing_period": 3,
+                "ob": {
+                    "min_impulse_atr_mult": 1.0
+                },
+                "fvg": {
+                    "min_gap_atr_mult": 0.15
+                }
             }
         }
     }

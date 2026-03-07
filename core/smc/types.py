@@ -28,6 +28,8 @@ SWING_KINDS = frozenset({
     "hh", "hl", "lh", "ll",                              # Basic structure
     "bos_bull", "bos_bear", "choch_bull", "choch_bear",  # Structure events (§4.2)
     "inducement_bull", "inducement_bear",                 # Inducement (§4.7)
+    "fractal_high", "fractal_low",                        # Williams fractals (display-only)
+    "displacement_bull", "displacement_bear",              # Displacement candles (momentum)
 })
 
 LEVEL_KINDS = frozenset({
@@ -142,7 +144,7 @@ class SmcSnapshot:
     zones: List[SmcZone]
     swings: List[SmcSwing]
     levels: List[SmcLevel]
-    trend_bias: Optional[str]  # "bullish" | "bearish" | "neutral" | None
+    trend_bias: Optional[str]  # "bullish" | "bearish" | None
     last_bos_ms: Optional[int]
     last_choch_ms: Optional[int]
     computed_at_ms: int
@@ -177,6 +179,7 @@ class SmcDelta:
         return bool(
             self.new_zones or self.mitigated_zones or self.updated_zones
             or self.new_swings or self.new_levels or self.removed_levels
+            or self.trend_bias is not None
         )
 
     def to_wire(self) -> Dict[str, Any]:

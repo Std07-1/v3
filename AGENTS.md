@@ -63,6 +63,7 @@
 | `R_SMC_CHIEF` | **SMC Chief Strategist** | `.github/role_spec_smc_chief_strategist_v1.md` | Будь-що про SMC engine: зони, свінги, OB/FVG, liquidity, рендер overlays, Clean Chart Doctrine, UI/UX торгової аналітики. |
 | `R_DOC_KEEPER` | **Doc Keeper** | `.github/role_spec_doc_keeper_v1.md` | Оновлення документації, синхронізація docs з реальністю, AUDIT→SYNC→VERIFY цикл, drift detection. |
 | `R_TRADER` | **SMC Trader** | `.github/role_spec_trader_v1.md` | Валідація SMC output з позиції трейдера: оцінка сетапів, grade challenge, chart audit, "чи можу я з цього торгувати?". Не пише код — дає actionable feedback. |
+| `R_CHART_UX` | **Chart Experience Craftsman** | `.github/role_spec_chart_ux_v1.md` | Візуальна якість canvas rendering, DPR, анімації, теми, micro-interactions, WCAG contrast. DevOps: build pipeline, supervisor, process lifecycle, DX. |
 
 **Правила роутингу:**
 
@@ -81,6 +82,7 @@
 | "SMC", "зони", "свінги", "OB", "FVG", "overlay", "рівні", "Clean Chart" | `R_SMC_CHIEF` |
 | "документація", "оновити docs", "синхронізувати", "drift", "AGENTS.md" | `R_DOC_KEEPER` |
 | "оціни сетап", "чи це A+?", "торгувати чи ні?", "grade challenge", "що бачить трейдер?", "chart audit" | `R_TRADER` |
+| "як виглядає?", "canvas", "рендер", "тема", "анімація", "DPR", "лагає", "build", "deploy", "запуск", "supervisor" | `R_CHART_UX` |
 
 ---
 
@@ -314,6 +316,7 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 - **Time fields**: `open_time_ms`, `close_time_ms` (epoch milliseconds)
 - **Redis keys**: `{namespace}:ohlcv:snap:{sym}:{tf_s}`, `{NS}:preview:curr:{sym}:{tf_s}`
 - **Config keys**: `snake_case` в JSON
+- **CandleBar fields** (CRITICAL): `.o`, `.h`, `.low`, `.c`, `.v` — НЕ `.l`! Wire/dict формат використовує `l`, але dataclass поле = `low`. Завжди звіряти з `core/model/bars.py:CandleBar`
 
 ### 5.3 Time Geometry (Dual Convention) — CRITICAL
 
@@ -531,6 +534,8 @@ tail -f logs/m1_poller.out.log
 **Z5 — Заборона на комплімент-обгортку.** ~~"Загалом непогано, але..."~~ Дефект не потребує вступного реверансу. Час обмежений — витрачай його на суть.
 
 **Z6 — Заборона на рефакторинг як фікс.** Мінімальний фікс = мінімальний diff. "Давайте перепишемо модуль" — це не фікс, це initiative.
+
+**Z7 — Заборона на `bar.l` замість `bar.low`.** CandleBar dataclass має поле `.low`, НЕ `.l`. Wire/dict формат (`{"l": ...}`) відрізняється від dataclass. Перед доступом до полів бару — звірити з `core/model/bars.py`. Порушення = silent crash у production (exception caught → empty overlay).
 
 ## 14. Поведінка в edge cases (що робити коли...)
 

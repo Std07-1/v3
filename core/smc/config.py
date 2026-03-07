@@ -124,6 +124,26 @@ class SmcInducementConfig:
 
 
 @dataclasses.dataclass
+class SmcMomentumConfig:
+    """Displacement candle detection + momentum scoring."""
+    enabled: bool = True
+    min_body_atr_mult: float = 1.5   # body >= 1.5 * ATR
+    max_wick_ratio: float = 0.3      # wicks < 30% of candle range
+    lookback_bars: int = 10          # window for momentum score
+    max_display: int = 15            # cap displacement markers
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "SmcMomentumConfig":
+        return cls(
+            enabled=bool(d.get("enabled", True)),
+            min_body_atr_mult=float(d.get("min_body_atr_mult", 1.5)),
+            max_wick_ratio=float(d.get("max_wick_ratio", 0.3)),
+            lookback_bars=int(d.get("lookback_bars", 10)),
+            max_display=int(d.get("max_display", 15)),
+        )
+
+
+@dataclasses.dataclass
 class SmcDisplayConfig:
     """D1: Display filter — proximity + caps before sending to UI.
 
@@ -134,6 +154,7 @@ class SmcDisplayConfig:
     max_display_zones: int = 10         # hard cap after proximity filter (research payload)
     max_display_levels: int = 6         # hard cap on levels
     max_display_swings: int = 20        # only last N swings
+    max_display_fractals: int = 30      # Williams fractal markers cap
     # ── ADR-0028 Φ0: new fields ──
     min_display_strength: float = 0.25  # zones below this strength excluded (decay floor 0.15 ≠ this)
     mitigated_ttl_bars: int = 20        # bars after mitigation before zone is removed
@@ -149,6 +170,7 @@ class SmcDisplayConfig:
             max_display_zones=int(d.get("max_display_zones", 10)),
             max_display_levels=int(d.get("max_display_levels", 6)),
             max_display_swings=int(d.get("max_display_swings", 20)),
+            max_display_fractals=int(d.get("max_display_fractals", 30)),
             min_display_strength=float(d.get("min_display_strength", 0.25)),
             mitigated_ttl_bars=int(d.get("mitigated_ttl_bars", 20)),
             focus_budget_per_side=int(d.get("focus_budget_per_side", 3)),
@@ -232,6 +254,7 @@ class SmcConfig:
     enabled: bool = True
     lookback_bars: int = 500
     swing_period: int = 5
+    fractal_period: int = 2
     max_zones_per_tf: int = 10
     max_zone_height_atr_mult: float = 5.0
     hide_mitigated: bool = False
@@ -248,8 +271,44 @@ class SmcConfig:
     inducement: SmcInducementConfig = dataclasses.field(default_factory=SmcInducementConfig)
     context_stack: SmcContextStackConfig = dataclasses.field(default_factory=SmcContextStackConfig)
     display: SmcDisplayConfig = dataclasses.field(default_factory=SmcDisplayConfig)
+    momentum: SmcMomentumConfig = dataclasses.field(default_factory=SmcMomentumConfig)
     confluence: SmcConfluenceConfig = dataclasses.field(default_factory=SmcConfluenceConfig)
     performance: SmcPerformanceConfig = dataclasses.field(default_factory=SmcPerformanceConfig)
+
+    # tf_overrides: raw dict from config.json, keyed by str(tf_s)
+    _tf_overrides: Dict[str, Dict[str, Any]] = dataclasses.field(
+        default_factory=dict, repr=False,
+    )
+
+    def for_tf(self, tf_s: int) -> "SmcConfig":
+        """Return a SmcConfig with per-TF overrides merged (S5 SSOT).
+
+        Shallow merge: top-level scalars replaced, sub-dicts (ob, fvg, …)
+        rebuilt from merged dicts.  Returns self unchanged if no override.
+        """
+        ovr = self._tf_overrides.get(str(tf_s))
+        if not ovr:
+            return self
+        kw: Dict[str, Any] = {}
+        # scalar overrides
+        for key in ("swing_period", "fractal_period", "lookback_bars",
+                    "max_zones_per_tf", "max_zone_height_atr_mult"):
+            if key in ovr:
+                kw[key] = type(getattr(self, key))(ovr[key])
+        # sub-config overrides (merge base dict + override dict)
+        _SUB = {
+            "ob": SmcObConfig, "fvg": SmcFvgConfig,
+            "structure": SmcStructureConfig, "levels": SmcLevelsConfig,
+            "inducement": SmcInducementConfig,
+        }
+        for sub_key, sub_cls in _SUB.items():
+            if sub_key in ovr:
+                base_d = dataclasses.asdict(getattr(self, sub_key))
+                base_d.update(ovr[sub_key])
+                kw[sub_key] = sub_cls.from_dict(base_d)
+        if not kw:
+            return self
+        return dataclasses.replace(self, **kw)
 
     @classmethod
     def from_dict(cls, d: Optional[Dict[str, Any]]) -> "SmcConfig":
@@ -262,6 +321,7 @@ class SmcConfig:
             enabled=bool(d.get("enabled", True)),
             lookback_bars=int(d.get("lookback_bars", 500)),
             swing_period=int(d.get("swing_period", 5)),
+            fractal_period=int(d.get("fractal_period", 2)),
             max_zones_per_tf=int(d.get("max_zones_per_tf", 10)),
             max_zone_height_atr_mult=float(d.get("max_zone_height_atr_mult", 5.0)),
             hide_mitigated=bool(d.get("hide_mitigated", False)),
@@ -278,8 +338,10 @@ class SmcConfig:
             inducement=SmcInducementConfig.from_dict(d.get("inducement", {})),
             context_stack=SmcContextStackConfig.from_dict(d.get("context_stack", {})),
             display=SmcDisplayConfig.from_dict(disp_d),
+            momentum=SmcMomentumConfig.from_dict(d.get("momentum", {})),
             confluence=SmcConfluenceConfig.from_dict(d.get("confluence", {})),
             performance=SmcPerformanceConfig.from_dict(d.get("performance", {})),
+            _tf_overrides=d.get("tf_overrides", {}),
         )
 
     @property

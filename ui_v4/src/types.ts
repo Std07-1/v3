@@ -55,8 +55,10 @@ export interface SmcData {
   zones: SmcZone[];
   swings: SmcSwing[];
   levels: SmcLevel[];
-  trend_bias?: string | null;  // F8: 'bullish'|'bearish'|'neutral'|null
+  trend_bias?: string | null;  // F8: 'bullish'|'bearish'|null
   zone_grades?: Record<string, ZoneGradeInfo>;  // ADR-0029: confluence scoring
+  bias_map?: Record<string, string>;  // ADR-0031: per-TF bias {"900":"bullish", ...}
+  momentum_map?: Record<string, { b: number; r: number }>;  // Directional displacement count
 }
 
 /** ADR-0029: zone confluence grade info (full frame only). */
@@ -143,6 +145,10 @@ export interface RenderFrame {
   trend_bias?: string | null;
   /** ADR-0029: confluence grade per zone (full frame only) */
   zone_grades?: Record<string, ZoneGradeInfo>;
+  /** ADR-0031: per-TF trend bias map (full frame only) */
+  bias_map?: Record<string, string>;
+  /** Momentum: per-TF directional displacement (full frame only) */
+  momentum_map?: Record<string, { b: number; r: number }>;
   drawings?: Drawing[];
 
   replay?: {

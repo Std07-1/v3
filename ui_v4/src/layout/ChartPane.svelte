@@ -22,6 +22,7 @@
   import type { DisplayMode } from "../chart/overlay/DisplayBudget";
   import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
+  import BiasBanner from "./BiasBanner.svelte";
   import { saveVisibleRange, loadVisibleRange } from "../stores/viewCache";
   import {
     applySmcFull,
@@ -59,6 +60,9 @@
   let showSW = $state(true);
   let showLVL = $state(true);
   let showBOS = $state(true);
+  let showFR = $state(true);
+  let showDIS = $state(true);
+  let smcPanelOpen = $state(false);
   // ADR-0028 Φ0: Focus/Research display mode
   let displayMode: DisplayMode = $state("focus");
   // Crosshair data for tooltip (OHLCV + cursor position)
@@ -145,6 +149,9 @@
         if (typeof t.sw === "boolean") showSW = t.sw;
         if (typeof t.lvl === "boolean") showLVL = t.lvl;
         if (typeof t.bos === "boolean") showBOS = t.bos;
+        if (typeof t.fr === "boolean") showFR = t.fr;
+        if (typeof t.dis === "boolean") showDIS = t.dis;
+        if (typeof t.smcOpen === "boolean") smcPanelOpen = t.smcOpen;
         if (t.displayMode === "focus" || t.displayMode === "research")
           displayMode = t.displayMode;
       }
@@ -237,6 +244,7 @@
           const tfLabel = currentFrame.tf ?? "M5";
           const tfS = TF_TO_S[tfLabel] ?? 300;
           chartEngine.setTfS(tfS);
+          overlayRenderer?.setViewerTfS(tfS);
 
           const candles = currentFrame.candles ?? [];
           _currentCandles = candles;
@@ -246,6 +254,8 @@
             currentFrame.levels,
             currentFrame.trend_bias,
             currentFrame.zone_grades,
+            currentFrame.bias_map,
+            currentFrame.momentum_map,
           );
           // untrack: запис до replayStore без створення підписки
           untrack(() => replayStore.updateDataForNewTf(candles, newSmc));
@@ -275,6 +285,7 @@
         const tfLabel = currentFrame.tf ?? "M5";
         const tfS = TF_TO_S[tfLabel] ?? 300;
         chartEngine.setTfS(tfS);
+        overlayRenderer?.setViewerTfS(tfS);
 
         // P3.3-P3.5: Reset manual price scale on full frame switch
         if ((lwcHostRef as any).__resetManualPriceScale) {
@@ -339,6 +350,8 @@
           currentFrame.levels,
           currentFrame.trend_bias,
           currentFrame.zone_grades,
+          currentFrame.bias_map,
+          currentFrame.momentum_map,
         );
       } else if (currentFrame.frame_type === "delta") {
         if (currentFrame.smc_delta) {
@@ -422,6 +435,12 @@
   $effect(() => {
     overlayRenderer?.setLayerVisible("structure", showBOS);
   });
+  $effect(() => {
+    overlayRenderer?.setLayerVisible("fractals", showFR);
+  });
+  $effect(() => {
+    overlayRenderer?.setLayerVisible("displacement", showDIS);
+  });
   // ADR-0028 Φ0: display mode effect
   $effect(() => {
     overlayRenderer?.setDisplayMode(displayMode);
@@ -438,7 +457,10 @@
           sw: showSW,
           lvl: showLVL,
           bos: showBOS,
+          fr: showFR,
+          dis: showDIS,
           displayMode,
+          smcOpen: smcPanelOpen,
         }),
       );
     } catch {
@@ -507,39 +529,19 @@
     <div class="scrollback-indicator wall">No more history available</div>
   {/if}
   <!-- N3: SMC layer toggles — per-kind colour coding -->
-  <div class="smc-toggles">
+  <!-- ADR-0031: Bias Banner — multi-TF trend bias -->
+  <BiasBanner
+    biasMap={smcData.bias_map ?? {}}
+    momentumMap={smcData.momentum_map ?? {}}
+  />
+  <div class="smc-panel">
     <button
-      class="smc-toggle smc-t-ob"
-      class:active={showOB}
-      onclick={() => (showOB = !showOB)}
-      title="Order Blocks">OB</button
-    >
-    <button
-      class="smc-toggle smc-t-fvg"
-      class:active={showFVG}
-      onclick={() => (showFVG = !showFVG)}
-      title="Fair Value Gaps">FVG</button
-    >
-    <button
-      class="smc-toggle smc-t-sw"
-      class:active={showSW}
-      onclick={() => (showSW = !showSW)}
-      title="Swings">SW</button
-    >
-    <button
-      class="smc-toggle smc-t-lvl"
-      class:active={showLVL}
-      onclick={() => (showLVL = !showLVL)}
-      title="Levels">LVL</button
-    >
-    <button
-      class="smc-toggle smc-t-bos"
-      class:active={showBOS}
-      onclick={() => (showBOS = !showBOS)}
-      title="BOS / CHoCH">BOS</button
+      class="smc-trigger"
+      class:open={smcPanelOpen}
+      onclick={() => (smcPanelOpen = !smcPanelOpen)}
+      title="Toggle SMC controls">SMC{smcPanelOpen ? " ▾" : " ▸"}</button
     >
     <!-- ADR-0028 Φ0: Focus / Research display mode toggle (key: F) -->
-    <span class="smc-sep"></span>
     <button
       class="smc-toggle smc-t-mode"
       class:research={displayMode === "research"}
@@ -550,6 +552,52 @@
         : "Research mode (F to toggle)"}
       >{displayMode === "focus" ? "F" : "R"}</button
     >
+    {#if smcPanelOpen}
+      <div class="smc-grid">
+        <button
+          class="smc-toggle smc-t-ob"
+          class:active={showOB}
+          onclick={() => (showOB = !showOB)}
+          title="Order Blocks">OB</button
+        >
+        <button
+          class="smc-toggle smc-t-fvg"
+          class:active={showFVG}
+          onclick={() => (showFVG = !showFVG)}
+          title="Fair Value Gaps">FVG</button
+        >
+        <button
+          class="smc-toggle smc-t-sw"
+          class:active={showSW}
+          onclick={() => (showSW = !showSW)}
+          title="Swings">SW</button
+        >
+        <button
+          class="smc-toggle smc-t-lvl"
+          class:active={showLVL}
+          onclick={() => (showLVL = !showLVL)}
+          title="Levels">LVL</button
+        >
+        <button
+          class="smc-toggle smc-t-bos"
+          class:active={showBOS}
+          onclick={() => (showBOS = !showBOS)}
+          title="BOS / CHoCH">BOS</button
+        >
+        <button
+          class="smc-toggle smc-t-fr"
+          class:active={showFR}
+          onclick={() => (showFR = !showFR)}
+          title="Williams Fractals">FR</button
+        >
+        <button
+          class="smc-toggle smc-t-dis"
+          class:active={showDIS}
+          onclick={() => (showDIS = !showDIS)}
+          title="Displacement">DIS</button
+        >
+      </div>
+    {/if}
   </div>
 </div>
 
@@ -645,15 +693,52 @@
     }
   }
 
-  /* N3: SMC layer toggles — нижче top-right-bar (App.svelte), z > 35 */
-  .smc-toggles {
+  /* N3: SMC layer toggles — collapsible panel */
+  .smc-panel {
     position: absolute;
     top: 36px;
     right: 64px;
     z-index: 36;
     display: flex;
+    align-items: flex-start;
     gap: 2px;
     pointer-events: auto;
+  }
+  .smc-trigger {
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 3px;
+    border: 1px solid rgba(74, 144, 217, 0.25);
+    background: rgba(30, 34, 45, 0.55);
+    color: #7b8ba8;
+    cursor: pointer;
+    backdrop-filter: blur(4px);
+    transition: all 0.15s ease;
+    line-height: 1.3;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+  }
+  .smc-trigger:hover,
+  .smc-trigger.open {
+    color: #a8bdd4;
+    border-color: rgba(74, 144, 217, 0.4);
+    background: rgba(40, 48, 65, 0.65);
+  }
+  .smc-grid {
+    display: flex;
+    gap: 2px;
+    animation: fadeSlide 0.12s ease-out;
+  }
+  @keyframes fadeSlide {
+    from {
+      opacity: 0;
+      transform: translateX(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
   }
   .smc-toggle {
     font-size: 9px;
@@ -705,14 +790,17 @@
     border-color: rgba(255, 167, 38, 0.35);
     background: rgba(255, 167, 38, 0.1);
   }
-  /* ADR-0028 Φ0: Focus/Research mode toggle */
-  .smc-sep {
-    width: 1px;
-    height: 14px;
-    background: rgba(120, 123, 134, 0.2);
-    align-self: center;
-    margin: 0 2px;
+  .smc-toggle.active.smc-t-fr {
+    color: #ab47bc;
+    border-color: rgba(171, 71, 188, 0.35);
+    background: rgba(171, 71, 188, 0.1);
   }
+  .smc-toggle.active.smc-t-dis {
+    color: #00e676;
+    border-color: rgba(0, 230, 118, 0.35);
+    background: rgba(0, 230, 118, 0.1);
+  }
+  /* ADR-0028 Φ0: Focus/Research mode toggle */
   .smc-toggle.smc-t-mode {
     color: #4a90d9;
     border-color: rgba(74, 144, 217, 0.3);

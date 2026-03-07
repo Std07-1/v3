@@ -70,6 +70,8 @@ function normalizeSmcData(d?: SmcData | null): Required<SmcData> {
     levels: d?.levels ?? [],
     trend_bias: d?.trend_bias ?? null,
     zone_grades: d?.zone_grades ?? {},
+    bias_map: d?.bias_map ?? {},
+    momentum_map: d?.momentum_map ?? {},
   };
 }
 
@@ -125,6 +127,10 @@ const _SWING_TOOLTIP: Record<string, string> = {
   choch_bear: 'CHoCH ▼ — Change of Character вниз.\nЦіна закрилась нижче LL при бичому тренді.\nМожливий розворот на ведмежий!',
   inducement_bull: 'Inducement ▲ — хибний пробій ліквідності.\nStop-hunt нижче мінімуму з різким відновленням.',
   inducement_bear: 'Inducement ▼ — хибний пробій ліквідності.\nStop-hunt вище максимуму з різким відновленням.',
+  fractal_high: 'Fractal High ▲ — Williams fractal (максимум п’яти свічок)',
+  fractal_low: 'Fractal Low ▼ — Williams fractal (мінімум п’яти свічок)',
+  displacement_bull: 'Displacement ▲ — сильна бича свічка (інституційний ордер-флоу)',
+  displacement_bear: 'Displacement ▼ — сильна ведмежа свічка (інституційний ордер-флоу)',
 };
 
 /** Hit area for tooltip system */
@@ -176,8 +182,11 @@ export class OverlayRenderer {
   private _gradeCache: Record<string, ZoneGradeInfo> = {};
 
   // ── ADR-0024c: Layer isolation ────────────────────────────────────
-  private layerVisible = { levels: true, swings: true, structure: true };
+  private layerVisible = { levels: true, swings: true, structure: true, fractals: true, displacement: true };
   private zoneKindVisible = { ob: true, fvg: true };
+
+  // ── ADR-0030-alt: TF Sovereignty (viewer TF for projection detection) ──
+  private viewerTfS: number = 900;
 
   // ── ADR-0028 Φ0: Display budget (client-side presentation filter) ──
   private displayMode: DisplayMode = 'focus';
@@ -370,12 +379,24 @@ export class OverlayRenderer {
     this.scheduleDoubleRaf();
   }
 
+  // ── ADR-0030-alt: TF Sovereignty ──────────────────────────────────
+  setViewerTfS(tfS: number): void {
+    if (this.viewerTfS !== tfS) {
+      this.viewerTfS = tfS;
+      this.scheduleRender();
+    }
+  }
+
+  private isProjection(z: SmcZone): boolean {
+    return (z.tf_s || 0) > this.viewerTfS;
+  }
+
   // ── ADR-0024c: Layer isolation API ─────────────────────────────────
   // Toggle одного шару → scheduleRender() → render pass перевіряє flags.
   // Frame data не перестворюється — zero allocation overhead.
 
   /** Встановити видимість шару (levels / swings / structure). Не чіпає zone layer. */
-  setLayerVisible(layer: 'levels' | 'swings' | 'structure', visible: boolean): void {
+  setLayerVisible(layer: 'levels' | 'swings' | 'structure' | 'fractals' | 'displacement', visible: boolean): void {
     if (this.layerVisible[layer] === visible) return;
     this.layerVisible[layer] = visible;
     this.scheduleRender();
@@ -430,6 +451,15 @@ export class OverlayRenderer {
     return this._zoneProps.get(zoneId)?.opacity ?? 1.0;
   }
 
+  /** Adaptive marker scale: 8px barSpacing = 1.0 (desktop default). */
+  private getBarScale(): number {
+    const lr = this.chartApi.timeScale().getVisibleLogicalRange();
+    if (!lr) return 1;
+    const bars = Math.max(1, lr.to - lr.from);
+    const px = this.getChartAreaWidth() / bars;
+    return Math.max(0.5, Math.min(2.0, px / 8));
+  }
+
   private render(): void {
     if (this.cssW <= 0 || this.cssH <= 0) return;
 
@@ -445,9 +475,11 @@ export class OverlayRenderer {
     this._zoneProps = budget.zoneProps;
 
     // ADR-0024c: кожен шар незалежний — toggle одного не чіпає інші
+    const scale = this.getBarScale();
+
     this.renderZones(budget.zones);
     if (this.layerVisible.levels) this.renderLevels(budget.levels);
-    if (this.layerVisible.swings || this.layerVisible.structure) this.renderSwings(budget.swings);
+    if (this.layerVisible.swings || this.layerVisible.structure) this.renderSwings(budget.swings, scale);
   }
 
   private zoneColor(kind: string): string {
@@ -462,29 +494,6 @@ export class OverlayRenderer {
     if (kind === 'discount') return '#3399cc';
     if (kind.startsWith('liquidity')) return '#9b59b6';
     return '#888888';
-  }
-
-  /** ADR-0029: Render grade badge next to zone label. */
-  private _renderGradeBadge(x: number, y: number, grade: string, alphaMult: number): void {
-    const colors: Record<string, string> = {
-      'A+': 'rgba(255,215,0,0.9)',     // gold
-      'A': 'rgba(255,255,255,0.65)',   // white
-      'B': 'rgba(150,150,150,0.45)',   // gray
-    };
-    const bg = colors[grade] ?? colors['B'];
-    const fs = 9;
-    this.ctx.save();
-    this.ctx.font = `bold ${fs}px Arial`;
-    const tm = this.ctx.measureText(grade);
-    const pad = 2;
-    this.ctx.globalAlpha = Math.min(1.0, 0.6 + 0.4 * alphaMult);
-    this.ctx.fillStyle = bg;
-    this.ctx.fillRect(x, y, tm.width + pad * 2, fs + 2);
-    this.ctx.fillStyle = '#000';
-    this.ctx.textAlign = 'left';
-    this.ctx.textBaseline = 'top';
-    this.ctx.fillText(grade, x + pad, y + 1);
-    this.ctx.restore();
   }
 
   private renderZones(zones: SmcZone[]): void {
@@ -575,7 +584,9 @@ export class OverlayRenderer {
       const dimMult = isDimmed ? 0.35 : 1.0;  // 35% opacity for dead zones
       // ADR-0028 Φ0: budget-driven opacity (strength→alpha mapping)
       const budgetOpacity = this._zoneProps.get(z.id)?.opacity ?? 1.0;
-      const alphaMult = dimMult * budgetOpacity;
+      // ADR-0030-alt: projection fade (cross-TF zones = background context)
+      const projMult = this.isProjection(z) ? 0.35 : 1.0;
+      const alphaMult = dimMult * budgetOpacity * projMult;
 
       // ── Fog Zones v4.1: fixed-pixel dissolve + status memory ───
       //
@@ -665,6 +676,8 @@ export class OverlayRenderer {
 
       this.ctx.strokeStyle = bGrad;
       this.ctx.lineWidth = borderW;
+      // ADR-0030-alt: dotted border for projections
+      if (this.isProjection(z)) this.ctx.setLineDash([4, 3]);
       this.ctx.beginPath();
       this.ctx.moveTo(x1, top);
       this.ctx.lineTo(x1 + Math.min(w, renderPx), top);
@@ -674,6 +687,7 @@ export class OverlayRenderer {
       this.ctx.moveTo(x1, top + h);
       this.ctx.lineTo(x1 + Math.min(w, renderPx), top + h);
       this.ctx.stroke();
+      this.ctx.setLineDash([]);
 
       // Left edge: solid vertical bar (origin marker)
       this.ctx.strokeStyle = _rgba(color, Math.max(originAlpha * 4, borderAlpha));
@@ -694,35 +708,41 @@ export class OverlayRenderer {
           const fs = 9;
           this.ctx.save();
           this.ctx.font = `${fs}px monospace`;
-          const tm = this.ctx.measureText(label);
+
+          // ADR-0029: Grade integrated into label pill (A+/A/B, C hidden)
+          // ADR-0030-alt: no grade badge on projections (context zones, not action zones)
+          const gradeInfo = this.isProjection(z) ? undefined : this._gradeCache[z.id];
+          const gradeSuffix = (gradeInfo && gradeInfo.grade !== 'C') ? ` ${gradeInfo.grade}` : '';
+          const fullText = label + gradeSuffix;
+
+          const labelTm = this.ctx.measureText(label);
+          const fullTm = this.ctx.measureText(fullText);
           const pad = 2;
 
-          const lblX = Math.min(x1 + 3, xRight - tm.width - pad * 2);
+          const lblX = Math.min(x1 + 3, xRight - fullTm.width - pad * 2);
           const lblY = top + 1;
 
+          // Single pill background
           const pillAlpha = (0.20 + 0.55 * proximity) * dimMult;
           this.ctx.globalAlpha = pillAlpha;
           this.ctx.fillStyle = '#141720';
-          this.ctx.fillRect(lblX - pad, lblY, tm.width + pad * 2, fs + 2);
+          this.ctx.fillRect(lblX - pad, lblY, fullTm.width + pad * 2, fs + 2);
 
+          // Label text
           const textAlpha = (0.30 + 0.60 * proximity) * dimMult;
           this.ctx.globalAlpha = Math.min(1.0, textAlpha);
           this.ctx.fillStyle = isDimmed ? '#888' : color;
           this.ctx.textAlign = 'left';
           this.ctx.textBaseline = 'top';
           this.ctx.fillText(label, lblX, lblY + 1);
-          this.ctx.restore();
 
-          // ADR-0029: Grade badge (A+/A/B — gold/white/gray, C hidden)
-          const gradeInfo = this._gradeCache[z.id];
-          if (gradeInfo && gradeInfo.grade !== 'C') {
-            this._renderGradeBadge(
-              lblX + tm.width + pad * 2 + 3,
-              lblY,
-              gradeInfo.grade,
-              proximity * dimMult,
-            );
+          // Grade suffix in its own color within same pill
+          if (gradeSuffix) {
+            const gc: Record<string, string> = { 'A+': '#ffd700', 'A': '#fff', 'B': '#999' };
+            this.ctx.fillStyle = gc[gradeInfo!.grade] ?? '#999';
+            this.ctx.fillText(gradeSuffix, lblX + labelTm.width, lblY + 1);
           }
+          this.ctx.restore();
         }
       }
 
@@ -730,9 +750,13 @@ export class OverlayRenderer {
       const statusDesc = _STATUS_TOOLTIP[st] ?? st;
       const kindDesc = _ZONE_TOOLTIP[z.kind] ?? z.kind;
       const tfLabel = z.tf_s ? (_TF_NAMES[z.tf_s] ?? `${z.tf_s}s`) : '';
+      const gi = this._gradeCache[z.id];
+      const gradeBlock = gi
+        ? `  ${gi.grade} (${gi.score}/11)\n${gi.factors.map(f => f.replace(/ \+\d+$/, '')).join(' · ')}\n\n`
+        : '\n';
       this._hitAreas.push({
         rect: { x: x1, y: top, w: Math.min(w, renderPx), h: Math.max(h, 8) },
-        tooltip: `${tfLabel} ${_KIND_SHORT[z.kind] ?? z.kind}\n${statusDesc}\nStrength: ${Math.round(s * 100)}%\n\n${kindDesc}`,
+        tooltip: `${tfLabel} ${_KIND_SHORT[z.kind] ?? z.kind}${gradeBlock}${statusDesc}\nStrength: ${Math.round(s * 100)}%\n\n${kindDesc}`,
       });
     }
   }
@@ -908,10 +932,10 @@ export class OverlayRenderer {
     }
   }
 
-  private renderSwings(swings: SmcSwing[]): void {
-    // Build bar lookup for candle-anchored BOS/CHoCH labels
+  private renderSwings(swings: SmcSwing[], scale: number = 1): void {
+    // Build bar lookup for candle-anchored rendering (BOS/CHoCH labels, displacement glow)
     let barMap: Map<number, any> | null = null;
-    if (this.layerVisible.structure) {
+    if (this.layerVisible.structure || this.layerVisible.displacement) {
       try {
         const allData = this.seriesApi.data() as any[];
         barMap = new Map();
@@ -925,11 +949,15 @@ export class OverlayRenderer {
       const isBos = s.kind?.startsWith('bos_') ?? false;
       const isChoch = s.kind?.startsWith('choch_') ?? false;
       const isInducement = s.kind?.startsWith('inducement_') ?? false;
+      const isFractal = s.kind?.startsWith('fractal_') ?? false;
+      const isDisplacement = s.kind?.startsWith('displacement_') ?? false;
       const isStructure = isBos || isChoch;
 
-      // Toggle check: structure events vs swing points
+      // Toggle check: structure events vs swing points vs fractals vs displacement
       if (isStructure && !this.layerVisible.structure) continue;
-      if (!isStructure && !isInducement && !this.layerVisible.swings) continue;
+      if (isFractal && !this.layerVisible.fractals) continue;
+      if (isDisplacement && !this.layerVisible.displacement) continue;
+      if (!isStructure && !isInducement && !isFractal && !isDisplacement && !this.layerVisible.swings) continue;
       if (isInducement && !this.layerVisible.swings) continue;
 
       const x = this.toX(s.time_ms);
@@ -953,7 +981,7 @@ export class OverlayRenderer {
         //   Bull → label ABOVE candle high
         //   Bear → label BELOW candle low
         const label = isChoch ? 'CHoCH' : 'BOS';
-        const fs = isChoch ? 10 : 9;
+        const fs = Math.round((isChoch ? 10 : 9) * Math.max(0.7, scale));
         const chochColor = isChoch ? '#ffa726' : color;
 
         // Find candle at break time for anchoring
@@ -999,11 +1027,13 @@ export class OverlayRenderer {
         });
       } else if (isInducement) {
         // ── Inducement: × marker ──
-        const sz = 4;
+        const sz = Math.max(2, Math.round(4 * scale));
         this.ctx.save();
         this.ctx.strokeStyle = '#ffa726';
         this.ctx.lineWidth = 1.5;
         this.ctx.globalAlpha = 0.75;
+        this.ctx.shadowColor = 'rgba(0,0,0,0.4)';
+        this.ctx.shadowBlur = 2;
         this.ctx.beginPath();
         this.ctx.moveTo(x - sz, yLevel - sz); this.ctx.lineTo(x + sz, yLevel + sz);
         this.ctx.moveTo(x + sz, yLevel - sz); this.ctx.lineTo(x - sz, yLevel + sz);
@@ -1014,12 +1044,111 @@ export class OverlayRenderer {
           rect: { x: x - sz - 2, y: yLevel - sz - 2, w: sz * 2 + 4, h: sz * 2 + 4 },
           tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? 'Inducement',
         });
+      } else if (isFractal) {
+        // ── Williams Fractal: small triangle ▲/▼ (offset clears diamond) ──
+        const isHigh = s.kind === 'fractal_high';
+        const sz = Math.max(2, Math.round(3 * scale));
+        const fOff = Math.round(4 * scale);  // vertical clearance from diamonds
+        this.ctx.save();
+        this.ctx.globalAlpha = 0.45;
+        this.ctx.fillStyle = isHigh ? '#ab47bc' : '#7e57c2';
+        this.ctx.shadowColor = 'rgba(0,0,0,0.4)';
+        this.ctx.shadowBlur = 2;
+        this.ctx.beginPath();
+        if (isHigh) {
+          // ▲ above high — raised offset
+          this.ctx.moveTo(x, yLevel - sz - fOff);
+          this.ctx.lineTo(x + sz, yLevel - fOff + 1);
+          this.ctx.lineTo(x - sz, yLevel - fOff + 1);
+        } else {
+          // ▼ below low — lowered offset
+          this.ctx.moveTo(x, yLevel + sz + fOff);
+          this.ctx.lineTo(x + sz, yLevel + fOff - 1);
+          this.ctx.lineTo(x - sz, yLevel + fOff - 1);
+        }
+        this.ctx.closePath();
+        this.ctx.fill();
+        this.ctx.restore();
+
+        this._hitAreas.push({
+          rect: { x: x - sz - 2, y: isHigh ? yLevel - sz - fOff - 2 : yLevel + fOff - 2, w: sz * 2 + 4, h: sz + fOff + 4 },
+          tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? 'Fractal',
+        });
+      } else if (isDisplacement) {
+        // ── Displacement: candle body glow + tip dot ──
+        // Glow = semi-transparent column behind candle body (indicator, not signal)
+        const bar = barMap?.get(s.time_ms / 1000);
+        const glowColor = isBull ? '#00e676' : '#ff5252';
+        const halfBar = Math.max(2, Math.round(scale * 4));
+
+        if (bar) {
+          const yOpen = this.toY(bar.open ?? s.price);
+          const yClose = this.toY(bar.close ?? s.price);
+          const yHigh = this.toY(bar.high ?? s.price);
+          const yLow = this.toY(bar.low ?? s.price);
+          if (yOpen !== null && yClose !== null && yHigh !== null && yLow !== null) {
+            const bodyTop = Math.min(yOpen, yClose);
+            const bodyBot = Math.max(yOpen, yClose);
+            const bodyH = Math.max(bodyBot - bodyTop, 2);
+
+            // Soft glow behind full candle range (wick-to-wick)
+            this.ctx.save();
+            const grd = this.ctx.createLinearGradient(0, yHigh, 0, yLow);
+            grd.addColorStop(0, isBull ? 'rgba(0,230,118,0.12)' : 'rgba(255,82,82,0.06)');
+            grd.addColorStop(0.5, isBull ? 'rgba(0,230,118,0.22)' : 'rgba(255,82,82,0.22)');
+            grd.addColorStop(1, isBull ? 'rgba(0,230,118,0.06)' : 'rgba(255,82,82,0.12)');
+            this.ctx.fillStyle = grd;
+            this.ctx.fillRect(x - halfBar - 1, yHigh, (halfBar + 1) * 2, yLow - yHigh);
+            this.ctx.restore();
+
+            // Brighter body highlight
+            this.ctx.save();
+            this.ctx.globalAlpha = 0.18;
+            this.ctx.fillStyle = glowColor;
+            this.ctx.fillRect(x - halfBar, bodyTop, halfBar * 2, bodyH);
+            this.ctx.restore();
+
+            // Tiny tip dot at candle extreme (high for bull, low for bear)
+            const tipY = isBull ? yHigh : yLow;
+            const r = Math.max(1.5, Math.round(2 * scale));
+            this.ctx.save();
+            this.ctx.globalAlpha = 0.70;
+            this.ctx.fillStyle = glowColor;
+            this.ctx.shadowColor = 'rgba(0,0,0,0.4)';
+            this.ctx.shadowBlur = 2;
+            this.ctx.beginPath();
+            this.ctx.arc(x, tipY + (isBull ? -r - 1 : r + 1), r, 0, Math.PI * 2);
+            this.ctx.fill();
+            this.ctx.restore();
+
+            this._hitAreas.push({
+              rect: { x: x - halfBar - 2, y: yHigh - 2, w: (halfBar + 2) * 2, h: yLow - yHigh + 4 },
+              tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? 'Displacement',
+            });
+          }
+        } else {
+          // Fallback: simple dot when barMap miss (rare)
+          const r = Math.max(2, Math.round(3 * scale));
+          this.ctx.save();
+          this.ctx.globalAlpha = 0.50;
+          this.ctx.fillStyle = glowColor;
+          this.ctx.beginPath();
+          this.ctx.arc(x, yLevel, r, 0, Math.PI * 2);
+          this.ctx.fill();
+          this.ctx.restore();
+          this._hitAreas.push({
+            rect: { x: x - r - 2, y: yLevel - r - 2, w: r * 2 + 4, h: r * 2 + 4 },
+            tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? 'Displacement',
+          });
+        }
       } else {
         // ── HH/HL/LH/LL: diamond marker ──
-        const r = 3;
+        const r = Math.max(2, Math.round(3 * scale));
         this.ctx.save();
         this.ctx.globalAlpha = 0.55;
         this.ctx.fillStyle = color;
+        this.ctx.shadowColor = 'rgba(0,0,0,0.4)';
+        this.ctx.shadowBlur = 2;
         this.ctx.beginPath();
         this.ctx.moveTo(x, yLevel - r);
         this.ctx.lineTo(x + r, yLevel);

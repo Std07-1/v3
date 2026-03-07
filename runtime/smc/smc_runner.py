@@ -233,12 +233,30 @@ class SmcRunner:
         try:
             return self._engine.get_display_snapshot(symbol, tf_s)
         except Exception as exc:
-            _log.debug("SMC_GET_SNAP_ERR sym=%s tf=%s err=%s", symbol, tf_s, exc)
+            _log.warning("SMC_GET_SNAP_ERR sym=%s tf=%s err=%s", symbol, tf_s, exc)
             return None
 
     def get_zone_grades(self, symbol: str, tf_s: int) -> dict:
         """ADR-0029: zone_grades after get_snapshot() call."""
         return self._engine.get_zone_grades(symbol, tf_s)
+
+    def get_bias_map(self, symbol: str) -> dict:
+        """ADR-0031: bias for all compute TFs. Returns {"900": "bullish", ...}."""
+        result = {}
+        for tf_s in sorted(self._compute_tfs):
+            b = self._engine.get_htf_bias(symbol, tf_s)
+            if b is not None:
+                result[str(tf_s)] = b
+        return result
+
+    def get_momentum_map(self, symbol: str) -> dict:
+        """Directional momentum per compute TF. Returns {"900": {"b": 2, "r": 1}, ...}."""
+        result = {}
+        for tf_s in sorted(self._compute_tfs):
+            bull, bear = self._engine.get_momentum_score(symbol, tf_s)
+            if bull > 0 or bear > 0:
+                result[str(tf_s)] = {"b": bull, "r": bear}
+        return result
 
     def last_delta(self, symbol: str, tf_s: int) -> Optional[SmcDelta]:
         """Останній SmcDelta після on_bar_dict() — для delta frame wiring."""

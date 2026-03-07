@@ -364,6 +364,19 @@
   // --- Event handlers ---
 
   function onGlobalError(ev: ErrorEvent) {
+    // LWC 5.0.0 internal render bug: ensureNotNull() throws "Value is null"
+    // when Candlestick color resolver encounters whitespace data at time gaps.
+    // The chart self-heals on next render — safe to suppress.
+    if (
+      ev.message === "Value is null" ||
+      ev.message === "Uncaught Error: Value is null"
+    ) {
+      ev.preventDefault();
+      console.debug(
+        "[LWC] suppressed render crash: Value is null (whitespace gap)",
+      );
+      return;
+    }
     diagStore.setFeError({
       message: ev.message ?? "unknown error",
       stack: ev.error?.stack,

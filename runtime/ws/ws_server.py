@@ -278,6 +278,8 @@ def _build_full_frame(
     warnings: Optional[list] = None,
     app: Any = None,
     smc_wire: Optional[Dict[str, Any]] = None,
+    bias_map: Optional[Dict[str, str]] = None,
+    momentum_map: Optional[Dict] = None,
 ) -> Dict[str, Any]:
     # T6/S19: output guard — validate candle shapes before send
     guard_warns = _guard_candles_output(candles, symbol, tf_label, "full")
@@ -304,12 +306,18 @@ def _build_full_frame(
         "zones":   smc_wire.get("zones", []) if smc_wire else [],
         "swings":  smc_wire.get("swings", []) if smc_wire else [],
         "levels":  smc_wire.get("levels", []) if smc_wire else [],
+        "trend_bias": smc_wire.get("trend_bias") if smc_wire else None,
         "drawings": [],
         "meta": meta,
     }  # type: Dict[str, Any]
     # ADR-0029: zone_grades (only in full frame)
     if smc_wire and smc_wire.get("zone_grades"):
         frame["zone_grades"] = smc_wire["zone_grades"]
+    # ADR-0031: multi-TF bias map (only in full frame)
+    if bias_map:
+        frame["bias_map"] = bias_map
+    if momentum_map:
+        frame["momentum_map"] = momentum_map
     return frame
 
 
@@ -468,8 +476,20 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                     if _zg:
                         smc_wire["zone_grades"] = _zg
             except Exception as _smc_exc:
-                _log.debug("WS_SMC_SNAP_ERR sym=%s tf=%s err=%s", session.symbol, session.tf_s, _smc_exc)
-        frame = _build_full_frame(session, candles, session.symbol, tf_label, warnings or None, app=app, smc_wire=smc_wire)
+                _log.warning("WS_SMC_SNAP_ERR sym=%s tf=%s err=%s", session.symbol, session.tf_s, _smc_exc)
+        # ADR-0031: collect bias_map for all compute TFs
+        bias_map = None
+        momentum_map = None
+        if _smc_runner is not None:
+            try:
+                bias_map = _smc_runner.get_bias_map(session.symbol)
+            except Exception as _bm_exc:
+                _log.warning("WS_BIAS_MAP_ERR sym=%s err=%s", session.symbol, _bm_exc)
+            try:
+                momentum_map = _smc_runner.get_momentum_map(session.symbol)
+            except Exception as _mm_exc:
+                _log.warning("WS_MOMENTUM_MAP_ERR sym=%s err=%s", session.symbol, _mm_exc)
+        frame = _build_full_frame(session, candles, session.symbol, tf_label, warnings or None, app=app, smc_wire=smc_wire, bias_map=bias_map, momentum_map=momentum_map)
         await session.ws.send_json(frame)
         _log.info(
             "WS_FULL_PUSH client=%s symbol=%s tf=%s candles=%d seq=%d",

@@ -23,6 +23,8 @@ export function applySmcFull(
     levels: SmcLevel[] | undefined,
     trend_bias?: string | null,
     zone_grades?: Record<string, ZoneGradeInfo>,
+    bias_map?: Record<string, string>,
+    momentum_map?: Record<string, { b: number; r: number }>,
 ): SmcData {
     return {
         zones: zones ?? [],
@@ -30,6 +32,8 @@ export function applySmcFull(
         levels: levels ?? [],
         trend_bias: trend_bias ?? null,
         zone_grades,
+        bias_map: bias_map ?? {},
+        momentum_map: momentum_map ?? {},
     };
 }
 
@@ -91,7 +95,7 @@ export function applySmcDelta(current: SmcData, delta: SmcDeltaWire): SmcData {
         if (freshLevels.length > 0) levels = [...levels, ...freshLevels];
     }
 
-    return { zones, swings, levels, trend_bias: delta.trend_bias ?? current.trend_bias ?? null };
+    return { zones, swings, levels, trend_bias: delta.trend_bias ?? current.trend_bias ?? null, bias_map: current.bias_map, momentum_map: current.momentum_map };
 }
 
 /**
@@ -106,4 +110,4 @@ export function filterMitigatedZones(data: SmcData): SmcData {
 }
 
 /** Порожній SmcData — для ініціалізації та reset. */
-export const EMPTY_SMC_DATA: SmcData = Object.freeze({ zones: [], swings: [], levels: [], trend_bias: null });
+export const EMPTY_SMC_DATA: SmcData = Object.freeze({ zones: [], swings: [], levels: [], trend_bias: null, bias_map: {}, momentum_map: {} } as SmcData);
