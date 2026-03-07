@@ -193,6 +193,9 @@ export class OverlayRenderer {
   private budgetConfig: BudgetConfig = DEFAULT_BUDGET;
   private _zoneProps: Map<string, ZoneDisplayProps> = new Map();
 
+  // ── Theme awareness (light background → transparent pills) ──────
+  private _isLightTheme = false;
+
   // ── Tooltip system ────────────────────────────────────────────────
   private _hitAreas: HitArea[] = [];
   private _tooltipEl: HTMLDivElement | null = null;
@@ -293,6 +296,14 @@ export class OverlayRenderer {
   removeMitigatedGrades(ids: string[]): void {
     for (const id of ids) {
       delete this._gradeCache[id];
+    }
+  }
+
+  /** Theme-aware pills: on light background pills are invisible. */
+  setLightTheme(isLight: boolean): void {
+    if (this._isLightTheme !== isLight) {
+      this._isLightTheme = isLight;
+      this.scheduleRender();
     }
   }
 
@@ -479,7 +490,7 @@ export class OverlayRenderer {
 
     this.renderZones(budget.zones);
     if (this.layerVisible.levels) this.renderLevels(budget.levels);
-    if (this.layerVisible.swings || this.layerVisible.structure) this.renderSwings(budget.swings, scale);
+    if (this.layerVisible.swings || this.layerVisible.structure || this.layerVisible.fractals || this.layerVisible.displacement) this.renderSwings(budget.swings, scale);
   }
 
   private zoneColor(kind: string): string {
@@ -722,11 +733,13 @@ export class OverlayRenderer {
           const lblX = Math.min(x1 + 3, xRight - fullTm.width - pad * 2);
           const lblY = top + 1;
 
-          // Single pill background
-          const pillAlpha = (0.20 + 0.55 * proximity) * dimMult;
-          this.ctx.globalAlpha = pillAlpha;
-          this.ctx.fillStyle = '#141720';
-          this.ctx.fillRect(lblX - pad, lblY, fullTm.width + pad * 2, fs + 2);
+          // Single pill background — skip on light theme (dark pills distract)
+          if (!this._isLightTheme) {
+            const pillAlpha = (0.20 + 0.55 * proximity) * dimMult;
+            this.ctx.globalAlpha = pillAlpha;
+            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+            this.ctx.fillRect(lblX - pad, lblY, fullTm.width + pad * 2, fs + 2);
+          }
 
           // Label text
           const textAlpha = (0.30 + 0.60 * proximity) * dimMult;
@@ -916,10 +929,12 @@ export class OverlayRenderer {
       const pillH = fs + 2;
       const pillY = g.y - fs - 2;
 
-      // Background pill
-      this.ctx.globalAlpha = 0.55;
-      this.ctx.fillStyle = '#141720';
-      this.ctx.fillRect(pillX, pillY, pillW, pillH);
+      // Background pill — skip on light theme
+      if (!this._isLightTheme) {
+        this.ctx.globalAlpha = 0.55;
+        this.ctx.fillStyle = '#141720';
+        this.ctx.fillRect(pillX, pillY, pillW, pillH);
+      }
 
       // Text — use primary color
       this.ctx.globalAlpha = Math.min(1.0, alpha + 0.2);
@@ -933,9 +948,9 @@ export class OverlayRenderer {
   }
 
   private renderSwings(swings: SmcSwing[], scale: number = 1): void {
-    // Build bar lookup for candle-anchored rendering (BOS/CHoCH labels, displacement glow)
+    // Build bar lookup for candle-anchored rendering
     let barMap: Map<number, any> | null = null;
-    if (this.layerVisible.structure || this.layerVisible.displacement) {
+    if (this.layerVisible.structure || this.layerVisible.displacement || this.layerVisible.swings) {
       try {
         const allData = this.seriesApi.data() as any[];
         barMap = new Map();
@@ -944,6 +959,9 @@ export class OverlayRenderer {
         }
       } catch { /* series not ready */ }
     }
+
+    // Capped scale for markers/labels — prevents visual bloat at max zoom
+    const mScale = Math.min(1.4, scale);
 
     for (const s of swings) {
       const isBos = s.kind?.startsWith('bos_') ?? false;
@@ -977,15 +995,12 @@ export class OverlayRenderer {
       const color = isBull ? '#26a69a' : '#ef5350';
 
       if (isStructure) {
-        // ── BOS/CHoCH: candle-anchored label ──
-        //   Bull → label ABOVE candle high
-        //   Bear → label BELOW candle low
+        // ── BOS/CHoCH: candle-anchored label (font capped at 12px) ──
         const label = isChoch ? 'CHoCH' : 'BOS';
-        const fs = Math.round((isChoch ? 10 : 9) * Math.max(0.7, scale));
+        const fs = Math.min(12, Math.round((isChoch ? 10 : 9) * Math.max(0.7, mScale)));
         const chochColor = isChoch ? '#ffa726' : color;
 
-        // Find candle at break time for anchoring
-        let yAnchor = yLevel; // fallback to break level
+        let yAnchor = yLevel;
         if (barMap) {
           const bar = barMap.get(s.time_ms / 1000);
           if (bar) {
@@ -997,71 +1012,75 @@ export class OverlayRenderer {
         }
 
         this.ctx.save();
-
-        // Text label above/below candle
         this.ctx.font = `bold ${fs}px monospace`;
         this.ctx.textAlign = 'center';
         this.ctx.textBaseline = isBull ? 'bottom' : 'top';
-        const yOff = isBull ? -6 : 6;
+        const yOff = isBull ? -10 : 10;
 
-        // Pill background for readability
         const tm = this.ctx.measureText(label);
         const px = 3, py = 1;
         const pillX = x - tm.width / 2 - px;
         const pillY = isBull ? yAnchor + yOff - fs - py : yAnchor + yOff - py;
-        this.ctx.globalAlpha = 0.50;
-        this.ctx.fillStyle = '#141720';
-        this.ctx.fillRect(pillX, pillY, tm.width + px * 2, fs + py * 2);
+        if (!this._isLightTheme) {
+          this.ctx.globalAlpha = 0.40;
+          this.ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+          this.ctx.fillRect(pillX, pillY, tm.width + px * 2, fs + py * 2);
+        }
 
-        // Label text
-        this.ctx.globalAlpha = isChoch ? 0.95 : 0.80;
+        this.ctx.globalAlpha = isChoch ? 0.85 : 0.70;
         this.ctx.fillStyle = chochColor;
         this.ctx.fillText(label, x, yAnchor + yOff);
 
         this.ctx.restore();
 
-        // Tooltip hit area for BOS/CHoCH
         this._hitAreas.push({
           rect: { x: x - 20, y: Math.min(pillY, yAnchor + yOff - fs - 2), w: 40, h: fs + 12 },
           tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? `${s.kind}`,
         });
       } else if (isInducement) {
-        // ── Inducement: × marker ──
-        const sz = Math.max(2, Math.round(4 * scale));
+        // ── Inducement: × marker, anchored to candle extreme ──
+        const sz = Math.max(2, Math.min(5, Math.round(3 * mScale)));
+        let yInd = yLevel;
+        if (barMap) {
+          const bar = barMap.get(s.time_ms / 1000);
+          if (bar) {
+            const anchorY = isBull
+              ? this.toY(bar.high ?? s.price)
+              : this.toY(bar.low ?? s.price);
+            if (anchorY !== null) yInd = anchorY;
+          }
+        }
+        const indOff = Math.round(6 * mScale);
+        yInd += isBull ? -indOff : indOff;
+
         this.ctx.save();
         this.ctx.strokeStyle = '#ffa726';
-        this.ctx.lineWidth = 1.5;
-        this.ctx.globalAlpha = 0.75;
-        this.ctx.shadowColor = 'rgba(0,0,0,0.4)';
-        this.ctx.shadowBlur = 2;
+        this.ctx.lineWidth = 1.0;
+        this.ctx.globalAlpha = 0.50;
         this.ctx.beginPath();
-        this.ctx.moveTo(x - sz, yLevel - sz); this.ctx.lineTo(x + sz, yLevel + sz);
-        this.ctx.moveTo(x + sz, yLevel - sz); this.ctx.lineTo(x - sz, yLevel + sz);
+        this.ctx.moveTo(x - sz, yInd - sz); this.ctx.lineTo(x + sz, yInd + sz);
+        this.ctx.moveTo(x + sz, yInd - sz); this.ctx.lineTo(x - sz, yInd + sz);
         this.ctx.stroke();
         this.ctx.restore();
 
         this._hitAreas.push({
-          rect: { x: x - sz - 2, y: yLevel - sz - 2, w: sz * 2 + 4, h: sz * 2 + 4 },
+          rect: { x: x - sz - 2, y: yInd - sz - 2, w: sz * 2 + 4, h: sz * 2 + 4 },
           tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? 'Inducement',
         });
       } else if (isFractal) {
-        // ── Williams Fractal: small triangle ▲/▼ (offset clears diamond) ──
+        // ── Williams Fractal: ▲/▼ (clean margin offset) ──
         const isHigh = s.kind === 'fractal_high';
-        const sz = Math.max(2, Math.round(3 * scale));
-        const fOff = Math.round(4 * scale);  // vertical clearance from diamonds
+        const sz = Math.max(2, Math.min(4, Math.round(2.5 * mScale)));
+        const fOff = Math.max(8, Math.min(14, Math.round(10 * mScale)));
         this.ctx.save();
-        this.ctx.globalAlpha = 0.45;
+        this.ctx.globalAlpha = 0.35;
         this.ctx.fillStyle = isHigh ? '#ab47bc' : '#7e57c2';
-        this.ctx.shadowColor = 'rgba(0,0,0,0.4)';
-        this.ctx.shadowBlur = 2;
         this.ctx.beginPath();
         if (isHigh) {
-          // ▲ above high — raised offset
           this.ctx.moveTo(x, yLevel - sz - fOff);
           this.ctx.lineTo(x + sz, yLevel - fOff + 1);
           this.ctx.lineTo(x - sz, yLevel - fOff + 1);
         } else {
-          // ▼ below low — lowered offset
           this.ctx.moveTo(x, yLevel + sz + fOff);
           this.ctx.lineTo(x + sz, yLevel + fOff - 1);
           this.ctx.lineTo(x - sz, yLevel + fOff - 1);
@@ -1075,92 +1094,85 @@ export class OverlayRenderer {
           tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? 'Fractal',
         });
       } else if (isDisplacement) {
-        // ── Displacement: candle body glow + tip dot ──
-        // Glow = semi-transparent column behind candle body (indicator, not signal)
+        // ── Displacement: candle body wash + directional chevron ──
+        // Body wash = subtle gradient overlay on candle body (energy from within).
+        // Chevron = tiny ▸ above/below candle to indicate direction.
         const bar = barMap?.get(s.time_ms / 1000);
-        const glowColor = isBull ? '#00e676' : '#ff5252';
-        const halfBar = Math.max(2, Math.round(scale * 4));
+        const accentColor = isBull ? '#00e676' : '#ff5252';
+        const halfBar = Math.max(3, Math.round(scale * 3.5));
 
         if (bar) {
-          const yOpen = this.toY(bar.open ?? s.price);
-          const yClose = this.toY(bar.close ?? s.price);
           const yHigh = this.toY(bar.high ?? s.price);
           const yLow = this.toY(bar.low ?? s.price);
-          if (yOpen !== null && yClose !== null && yHigh !== null && yLow !== null) {
-            const bodyTop = Math.min(yOpen, yClose);
-            const bodyBot = Math.max(yOpen, yClose);
-            const bodyH = Math.max(bodyBot - bodyTop, 2);
+          const bodyOpen = bar.open ?? s.price;
+          const bodyClose = bar.close ?? s.price;
+          const yBodyTop = this.toY(Math.max(bodyOpen, bodyClose));
+          const yBodyBot = this.toY(Math.min(bodyOpen, bodyClose));
 
-            // Soft glow behind full candle range (wick-to-wick)
-            this.ctx.save();
-            const grd = this.ctx.createLinearGradient(0, yHigh, 0, yLow);
-            grd.addColorStop(0, isBull ? 'rgba(0,230,118,0.12)' : 'rgba(255,82,82,0.06)');
-            grd.addColorStop(0.5, isBull ? 'rgba(0,230,118,0.22)' : 'rgba(255,82,82,0.22)');
-            grd.addColorStop(1, isBull ? 'rgba(0,230,118,0.06)' : 'rgba(255,82,82,0.12)');
-            this.ctx.fillStyle = grd;
-            this.ctx.fillRect(x - halfBar - 1, yHigh, (halfBar + 1) * 2, yLow - yHigh);
-            this.ctx.restore();
-
-            // Brighter body highlight
+          if (yHigh !== null && yLow !== null && yBodyTop !== null && yBodyBot !== null) {
+            // 1) Body wash: horizontal gradient across candle body
+            const bodyH = Math.max(2, yBodyBot - yBodyTop);
+            const washX = x - halfBar;
+            const washW = halfBar * 2;
+            const grad = this.ctx.createLinearGradient(washX, 0, washX + washW, 0);
+            grad.addColorStop(0, accentColor);
+            grad.addColorStop(1, 'transparent');
             this.ctx.save();
             this.ctx.globalAlpha = 0.18;
-            this.ctx.fillStyle = glowColor;
-            this.ctx.fillRect(x - halfBar, bodyTop, halfBar * 2, bodyH);
+            this.ctx.fillStyle = grad;
+            this.ctx.fillRect(washX, yBodyTop, washW, bodyH);
             this.ctx.restore();
 
-            // Tiny tip dot at candle extreme (high for bull, low for bear)
-            const tipY = isBull ? yHigh : yLow;
-            const r = Math.max(1.5, Math.round(2 * scale));
+            // 2) Directional chevron above/below wick
+            const chevronSz = Math.max(2, Math.min(4, Math.round(2.5 * mScale)));
+            const chevronOff = Math.round(8 * mScale);
+            const chevronY = isBull ? yHigh - chevronOff : yLow + chevronOff;
             this.ctx.save();
-            this.ctx.globalAlpha = 0.70;
-            this.ctx.fillStyle = glowColor;
-            this.ctx.shadowColor = 'rgba(0,0,0,0.4)';
-            this.ctx.shadowBlur = 2;
+            this.ctx.globalAlpha = 0.50;
+            this.ctx.fillStyle = accentColor;
             this.ctx.beginPath();
-            this.ctx.arc(x, tipY + (isBull ? -r - 1 : r + 1), r, 0, Math.PI * 2);
+            if (isBull) {
+              // Upward chevron ▲
+              this.ctx.moveTo(x, chevronY - chevronSz);
+              this.ctx.lineTo(x + chevronSz, chevronY + 1);
+              this.ctx.lineTo(x - chevronSz, chevronY + 1);
+            } else {
+              // Downward chevron ▼
+              this.ctx.moveTo(x, chevronY + chevronSz);
+              this.ctx.lineTo(x + chevronSz, chevronY - 1);
+              this.ctx.lineTo(x - chevronSz, chevronY - 1);
+            }
+            this.ctx.closePath();
             this.ctx.fill();
             this.ctx.restore();
 
             this._hitAreas.push({
-              rect: { x: x - halfBar - 2, y: yHigh - 2, w: (halfBar + 2) * 2, h: yLow - yHigh + 4 },
+              rect: { x: washX - 1, y: yHigh - chevronOff - chevronSz - 2, w: washW + 2, h: Math.max(8, yLow - yHigh + chevronOff * 2 + chevronSz * 2 + 4) },
               tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? 'Displacement',
             });
           }
-        } else {
-          // Fallback: simple dot when barMap miss (rare)
-          const r = Math.max(2, Math.round(3 * scale));
-          this.ctx.save();
-          this.ctx.globalAlpha = 0.50;
-          this.ctx.fillStyle = glowColor;
-          this.ctx.beginPath();
-          this.ctx.arc(x, yLevel, r, 0, Math.PI * 2);
-          this.ctx.fill();
-          this.ctx.restore();
-          this._hitAreas.push({
-            rect: { x: x - r - 2, y: yLevel - r - 2, w: r * 2 + 4, h: r * 2 + 4 },
-            tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? 'Displacement',
-          });
         }
       } else {
-        // ── HH/HL/LH/LL: diamond marker ──
-        const r = Math.max(2, Math.round(3 * scale));
+        // ── HH/HL/LH/LL: diamond marker (offset from wick tip) ──
+        const r = Math.max(2, Math.min(4, Math.round(2.5 * mScale)));
+        const isSwingHigh = s.kind === 'hh' || s.kind === 'lh';
+        const swOff = Math.round(5 * mScale);
+        const yDiamond = isSwingHigh ? yLevel - swOff : yLevel + swOff;
+
         this.ctx.save();
-        this.ctx.globalAlpha = 0.55;
+        this.ctx.globalAlpha = 0.40;
         this.ctx.fillStyle = color;
-        this.ctx.shadowColor = 'rgba(0,0,0,0.4)';
-        this.ctx.shadowBlur = 2;
         this.ctx.beginPath();
-        this.ctx.moveTo(x, yLevel - r);
-        this.ctx.lineTo(x + r, yLevel);
-        this.ctx.lineTo(x, yLevel + r);
-        this.ctx.lineTo(x - r, yLevel);
+        this.ctx.moveTo(x, yDiamond - r);
+        this.ctx.lineTo(x + r, yDiamond);
+        this.ctx.lineTo(x, yDiamond + r);
+        this.ctx.lineTo(x - r, yDiamond);
         this.ctx.closePath();
         this.ctx.fill();
         this.ctx.restore();
 
-        // Tooltip hit area for swing point
         this._hitAreas.push({
-          rect: { x: x - r - 2, y: yLevel - r - 2, w: r * 2 + 4, h: r * 2 + 4 },
+          rect: { x: x - r - 2, y: yDiamond - r - 2, w: r * 2 + 4, h: r * 2 + 4 },
           tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? (s.kind?.toUpperCase() ?? 'Swing'),
         });
       }

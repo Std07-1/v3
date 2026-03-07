@@ -154,12 +154,19 @@
     .replay-bar {
         display: flex;
         align-items: center;
-        gap: 6px;
-        padding: 6px 12px;
-        background: rgba(19, 23, 34, 0.92);
-        border-top: 1px solid rgba(255, 255, 255, 0.06);
-        backdrop-filter: blur(12px);
-        height: 36px;
+        justify-content: center;
+        gap: 8px;
+        padding: 8px 20px;
+        margin: 0 auto 6px;
+        max-width: 640px;
+        background: rgba(19, 23, 34, 0.88);
+        border: 1px solid rgba(240, 185, 11, 0.15);
+        border-radius: 10px;
+        backdrop-filter: blur(16px);
+        box-shadow:
+            0 2px 12px rgba(0, 0, 0, 0.3),
+            0 0 1px rgba(240, 185, 11, 0.1);
+        height: 38px;
         user-select: none;
         flex-shrink: 0;
     }
@@ -168,30 +175,30 @@
         all: unset;
         cursor: pointer;
         font-size: 12px;
-        padding: 3px 8px;
-        border-radius: 4px;
+        padding: 4px 10px;
+        border-radius: 6px;
         color: #8b8f9a;
         background: rgba(255, 255, 255, 0.04);
         border: 1px solid rgba(255, 255, 255, 0.06);
-        transition: all 0.12s ease;
+        transition: all 0.15s ease;
         white-space: nowrap;
         line-height: 1;
     }
     .rb-btn:hover {
         color: #d1d4dc;
         background: rgba(255, 255, 255, 0.08);
-        border-color: rgba(255, 255, 255, 0.12);
+        border-color: rgba(255, 255, 255, 0.14);
     }
 
     .rb-play {
-        font-size: 14px;
-        padding: 3px 10px;
+        font-size: 15px;
+        padding: 4px 12px;
         color: #26a69a;
     }
     .rb-play:hover {
         color: #2bbd8e;
-        background: rgba(38, 166, 154, 0.1);
-        border-color: rgba(38, 166, 154, 0.25);
+        background: rgba(38, 166, 154, 0.12);
+        border-color: rgba(38, 166, 154, 0.3);
     }
 
     .rb-speed {
@@ -202,27 +209,27 @@
         color: #f0b90b;
     }
     .rb-speed:hover {
-        background: rgba(240, 185, 11, 0.1);
-        border-color: rgba(240, 185, 11, 0.25);
+        background: rgba(240, 185, 11, 0.12);
+        border-color: rgba(240, 185, 11, 0.3);
     }
 
     .rb-exit {
         color: #ef5350;
         font-size: 13px;
         font-weight: bold;
-        padding: 3px 6px;
+        padding: 4px 8px;
     }
     .rb-exit:hover {
         background: rgba(239, 83, 80, 0.12);
-        border-color: rgba(239, 83, 80, 0.3);
+        border-color: rgba(239, 83, 80, 0.35);
     }
 
     .rb-info {
         font-size: 10px;
-        color: #5d6068;
+        color: #787b86;
         font-family: "Roboto Mono", monospace, sans-serif;
         white-space: nowrap;
-        min-width: 130px;
+        min-width: 120px;
         text-align: center;
     }
 

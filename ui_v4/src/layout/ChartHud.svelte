@@ -291,27 +291,27 @@
 
             <!-- P3.13: Favorite star -->
             <button
-                class="hud-slot hud-slot-sm hud-star"
+                class="hud-slot hud-star"
                 class:faved={isFaved}
                 onclick={toggleFav}
                 title={isFaved ? "Remove from favorites" : "Add to favorites"}
                 >{isFaved ? "★" : "☆"}</button
             >
 
-            <span class="hud-sep">·</span>
+            <span class="hud-spacer"></span>
 
             <!-- P3.11: Theme picker -->
             <button
-                class="hud-slot hud-slot-sm"
+                class="hud-slot hud-slot-icon"
                 onclick={toggleTheme}
-                title="Theme">🎨</button
+                title="Theme">◐</button
             >
 
             <!-- P3.12: Candle style picker -->
             <button
-                class="hud-slot hud-slot-sm"
+                class="hud-slot hud-slot-icon"
                 onclick={toggleStyle}
-                title="Candle style">🕯</button
+                title="Candle style">▮</button
             >
         </div>
     </div>
@@ -582,14 +582,21 @@
         border-radius: 2px;
     }
 
-    /* P3.11/P3.12: Small icon buttons for theme/style pickers */
-    .hud-slot-sm {
+    /* P3.11/P3.12: Clean icon buttons for theme/style pickers */
+    .hud-slot-icon {
         font-size: 12px;
-        padding: 1px 4px;
-        opacity: 0.7;
+        padding: 1px 5px;
+        opacity: 0.45;
+        transition: opacity 0.15s;
     }
-    .hud-slot-sm:hover {
-        opacity: 1;
+    .hud-slot-icon:hover {
+        opacity: 0.9;
+    }
+
+    /* Spacer pushes theme/style pickers to the end */
+    .hud-spacer {
+        flex: 1;
+        min-width: 8px;
     }
 
     /* P3.12: Color swatch in candle style menu */

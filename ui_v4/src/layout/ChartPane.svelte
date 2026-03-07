@@ -116,6 +116,7 @@
   // P3.11/P3.12: Delegators for theme & candle style (expose to parent)
   export function applyTheme(name: ThemeName): void {
     chartEngine?.applyTheme(name);
+    overlayRenderer?.setLightTheme(name === "light");
     // ADR-0007: CSS vars вже встановлені в App.svelte → кешуємо для canvas через rAF
     requestAnimationFrame(() => drawingsRenderer?.refreshThemeColors());
   }
@@ -498,7 +499,15 @@
   });
 </script>
 
-<div class="chart-container" bind:this={wrapperRef}>
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="chart-container"
+  bind:this={wrapperRef}
+  onclick={() => {
+    if (smcPanelOpen) smcPanelOpen = false;
+  }}
+>
   <div
     class="layer lwc-layer"
     bind:this={lwcHostRef}
@@ -534,24 +543,8 @@
     biasMap={smcData.bias_map ?? {}}
     momentumMap={smcData.momentum_map ?? {}}
   />
-  <div class="smc-panel">
-    <button
-      class="smc-trigger"
-      class:open={smcPanelOpen}
-      onclick={() => (smcPanelOpen = !smcPanelOpen)}
-      title="Toggle SMC controls">SMC{smcPanelOpen ? " ▾" : " ▸"}</button
-    >
-    <!-- ADR-0028 Φ0: Focus / Research display mode toggle (key: F) -->
-    <button
-      class="smc-toggle smc-t-mode"
-      class:research={displayMode === "research"}
-      onclick={() =>
-        (displayMode = displayMode === "focus" ? "research" : "focus")}
-      title={displayMode === "focus"
-        ? "Focus mode (F to toggle)"
-        : "Research mode (F to toggle)"}
-      >{displayMode === "focus" ? "F" : "R"}</button
-    >
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="smc-panel" onclick={(e) => e.stopPropagation()}>
     {#if smcPanelOpen}
       <div class="smc-grid">
         <button
@@ -598,6 +591,23 @@
         >
       </div>
     {/if}
+    <!-- ADR-0028 Φ0: Focus / Research display mode toggle (key: F) -->
+    <button
+      class="smc-toggle smc-t-mode"
+      class:research={displayMode === "research"}
+      onclick={() =>
+        (displayMode = displayMode === "focus" ? "research" : "focus")}
+      title={displayMode === "focus"
+        ? "Focus mode (F to toggle)"
+        : "Research mode (F to toggle)"}
+      >{displayMode === "focus" ? "F" : "R"}</button
+    >
+    <button
+      class="smc-trigger"
+      class:open={smcPanelOpen}
+      onclick={() => (smcPanelOpen = !smcPanelOpen)}
+      title="Toggle SMC controls">{smcPanelOpen ? "✕" : "SMC"}</button
+    >
   </div>
 </div>
 
@@ -693,47 +703,54 @@
     }
   }
 
-  /* N3: SMC layer toggles — collapsible panel */
+  /* N3: SMC layer toggles — refined collapsible panel */
   .smc-panel {
     position: absolute;
-    top: 36px;
+    top: 8px;
     right: 64px;
     z-index: 36;
     display: flex;
-    align-items: flex-start;
-    gap: 2px;
+    align-items: center;
+    gap: 3px;
     pointer-events: auto;
   }
   .smc-trigger {
     font-size: 9px;
     font-weight: 700;
-    padding: 1px 6px;
-    border-radius: 3px;
-    border: 1px solid rgba(74, 144, 217, 0.25);
-    background: rgba(30, 34, 45, 0.55);
+    padding: 2px 7px;
+    border-radius: 4px;
+    border: 1px solid rgba(74, 144, 217, 0.2);
+    background: rgba(30, 34, 45, 0.6);
     color: #7b8ba8;
     cursor: pointer;
-    backdrop-filter: blur(4px);
-    transition: all 0.15s ease;
-    line-height: 1.3;
-    letter-spacing: 0.4px;
+    backdrop-filter: blur(8px);
+    transition: all 0.18s ease;
+    line-height: 1.4;
+    letter-spacing: 0.5px;
     white-space: nowrap;
+    min-width: 28px;
+    text-align: center;
   }
   .smc-trigger:hover,
   .smc-trigger.open {
-    color: #a8bdd4;
-    border-color: rgba(74, 144, 217, 0.4);
-    background: rgba(40, 48, 65, 0.65);
+    color: #c0d0e4;
+    border-color: rgba(74, 144, 217, 0.45);
+    background: rgba(40, 48, 65, 0.75);
+  }
+  .smc-trigger.open {
+    color: #ef5350;
+    border-color: rgba(239, 83, 80, 0.3);
+    background: rgba(239, 83, 80, 0.08);
   }
   .smc-grid {
     display: flex;
     gap: 2px;
-    animation: fadeSlide 0.12s ease-out;
+    animation: fadeSlideRight 0.15s ease-out;
   }
-  @keyframes fadeSlide {
+  @keyframes fadeSlideRight {
     from {
       opacity: 0;
-      transform: translateX(4px);
+      transform: translateX(6px);
     }
     to {
       opacity: 1;
@@ -743,19 +760,19 @@
   .smc-toggle {
     font-size: 9px;
     font-weight: 600;
-    padding: 1px 5px;
-    border-radius: 3px;
+    padding: 2px 6px;
+    border-radius: 4px;
     border: 1px solid transparent;
-    background: rgba(30, 34, 45, 0.45);
+    background: rgba(30, 34, 45, 0.5);
     color: #5d6068;
     cursor: pointer;
-    backdrop-filter: blur(4px);
+    backdrop-filter: blur(8px);
     transition: all 0.15s ease;
-    line-height: 1.3;
+    line-height: 1.4;
     letter-spacing: 0.3px;
   }
   .smc-toggle:hover {
-    background: rgba(50, 55, 70, 0.6);
+    background: rgba(50, 55, 70, 0.65);
     color: #a0a4b0;
     border-color: rgba(120, 123, 134, 0.2);
   }
