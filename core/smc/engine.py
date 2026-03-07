@@ -424,7 +424,8 @@ class SmcEngine:
     # Viewer TF → base computed TF. Lower TFs map to nearest computed.
     # User rules: CHoCH/BOS on M15, H1, H4. FVG on M15, H1, H4, D1.
     _VIEWER_TO_BASE = {
-        60: 900, 180: 900, 300: 900, 900: 900,   # M1/M3/M5/M15 → M15
+        60: 300, 180: 300, 300: 300,               # M1/M3/M5 → M5
+        900: 900,                                   # M15 → M15
         1800: 3600, 3600: 3600,                    # M30/H1 → H1
         14400: 14400,                               # H4 → H4
         86400: 86400,                               # D1 → D1
@@ -432,12 +433,14 @@ class SmcEngine:
 
     # CHoCH/BOS: show current_base + one higher TF
     _STRUCTURE_NEXT_TF = {
+        300: 900,      # M5  → +M15
         900: 3600,     # M15 → +H1
         3600: 14400,   # H1  → +H4
     }  # type: Dict[int, int]
 
     # FVG: explicit per-base TF display mapping
     _FVG_DISPLAY_TFS = {
+        300:   [300, 900, 3600],     # M5  → M5+M15+H1
         900:   [900, 3600, 14400],   # M15 → M15+H1+H4
         3600:  [3600, 14400],        # H1  → H1+H4
         14400: [14400, 86400],       # H4  → H4+D1
@@ -445,7 +448,7 @@ class SmcEngine:
     }  # type: Dict[int, List[int]]
 
     # Structure (BOS/CHoCH) lives only on these TFs
-    _STRUCTURE_TFS = frozenset({900, 3600, 14400})
+    _STRUCTURE_TFS = frozenset({300, 900, 3600, 14400})
 
     # Key Level display map: base_tf → which HTF key level kinds to show.
     # Principle: show levels from TFs the trader CAN'T read on current zoom.
@@ -456,6 +459,11 @@ class SmcEngine:
     # Current-hour H/L (h1_h/h1_l) excluded: changes too often, just noise.
     # M30/M15 H/L: viewer sees those candles → never show.
     _KEY_LEVEL_ALLOW = {
+        300: frozenset({
+            "pdh", "pdl", "dh", "dl",                       # D1
+            "p_h4_h", "p_h4_l", "h4_h", "h4_l",             # H4
+            "p_h1_h", "p_h1_l", "h1_h", "h1_l",             # H1 prev+curr
+        }),
         900: frozenset({
             "pdh", "pdl", "dh", "dl",                       # D1
             "p_h4_h", "p_h4_l", "h4_h", "h4_l",             # H4

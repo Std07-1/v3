@@ -72,12 +72,12 @@
 <style>
     .bias-banner {
         position: absolute;
-        top: 32px;
-        right: 6px;
-        z-index: 36;
+        top: 72px;
+        left: 10px;
+        z-index: 30;
         display: flex;
-        flex-direction: column;
-        gap: 2px;
+        flex-direction: row;
+        gap: 3px;
         pointer-events: none;
     }
     .bias-banner.aligned {

@@ -711,7 +711,7 @@ export class OverlayRenderer {
       this.ctx.restore();
 
       // ── Zone label: видимість модулюється proximity ──
-      if (h > 6 && w > 25) {
+      if (h > 3 && w > 25) {
         let label = _zoneLabel(z);
         // Dimmed zones: add status marker
         if (isDimmed) label = `${label} ✗`;
@@ -1015,7 +1015,8 @@ export class OverlayRenderer {
         this.ctx.font = `bold ${fs}px monospace`;
         this.ctx.textAlign = 'center';
         this.ctx.textBaseline = isBull ? 'bottom' : 'top';
-        const yOff = isBull ? -10 : 10;
+        const yOffBase = Math.max(3, Math.round(8 * mScale));
+        const yOff = isBull ? -yOffBase : yOffBase;
 
         const tm = this.ctx.measureText(label);
         const px = 3, py = 1;
@@ -1071,7 +1072,7 @@ export class OverlayRenderer {
         // ── Williams Fractal: ▲/▼ (clean margin offset) ──
         const isHigh = s.kind === 'fractal_high';
         const sz = Math.max(2, Math.min(4, Math.round(2.5 * mScale)));
-        const fOff = Math.max(8, Math.min(14, Math.round(10 * mScale)));
+        const fOff = Math.max(4, Math.min(14, Math.round(10 * mScale)));
         this.ctx.save();
         this.ctx.globalAlpha = 0.35;
         this.ctx.fillStyle = isHigh ? '#ab47bc' : '#7e57c2';

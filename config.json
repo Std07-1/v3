@@ -269,6 +269,7 @@
         "swing_period": 5,
         "fractal_period": 2,
         "compute_tfs": [
+            300,
             900,
             3600,
             14400,
@@ -352,6 +353,15 @@
             }
         },
         "tf_overrides": {
+            "300": {
+                "swing_period": 3,
+                "ob": {
+                    "min_impulse_atr_mult": 0.8
+                },
+                "fvg": {
+                    "min_gap_atr_mult": 0.1
+                }
+            },
             "900": {
                 "swing_period": 3,
                 "ob": {

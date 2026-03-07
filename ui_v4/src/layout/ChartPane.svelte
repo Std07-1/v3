@@ -22,7 +22,7 @@
   import type { DisplayMode } from "../chart/overlay/DisplayBudget";
   import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
-  import BiasBanner from "./BiasBanner.svelte";
+  // BiasBanner moved to ChartHud (ADR-0031: inline after star)
   import { saveVisibleRange, loadVisibleRange } from "../stores/viewCache";
   import {
     applySmcFull,
@@ -538,11 +538,6 @@
     <div class="scrollback-indicator wall">No more history available</div>
   {/if}
   <!-- N3: SMC layer toggles — per-kind colour coding -->
-  <!-- ADR-0031: Bias Banner — multi-TF trend bias -->
-  <BiasBanner
-    biasMap={smcData.bias_map ?? {}}
-    momentumMap={smcData.momentum_map ?? {}}
-  />
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="smc-panel" onclick={(e) => e.stopPropagation()}>
     {#if smcPanelOpen}
@@ -593,6 +588,32 @@
     {/if}
     <!-- ADR-0028 Φ0: Focus / Research display mode toggle (key: F) -->
     <button
+      class="smc-trigger"
+      class:open={smcPanelOpen}
+      onclick={() => (smcPanelOpen = !smcPanelOpen)}
+      onwheel={(e) => {
+        e.preventDefault();
+        const allOn =
+          showOB &&
+          showFVG &&
+          showSW &&
+          showLVL &&
+          showBOS &&
+          showFR &&
+          showDIS;
+        const next = !allOn;
+        showOB = next;
+        showFVG = next;
+        showSW = next;
+        showLVL = next;
+        showBOS = next;
+        showFR = next;
+        showDIS = next;
+      }}
+      title="Toggle SMC controls (scroll: all on/off)"
+      >{smcPanelOpen ? "✕" : "SMC"}</button
+    >
+    <button
       class="smc-toggle smc-t-mode"
       class:research={displayMode === "research"}
       onclick={() =>
@@ -601,12 +622,6 @@
         ? "Focus mode (F to toggle)"
         : "Research mode (F to toggle)"}
       >{displayMode === "focus" ? "F" : "R"}</button
-    >
-    <button
-      class="smc-trigger"
-      class:open={smcPanelOpen}
-      onclick={() => (smcPanelOpen = !smcPanelOpen)}
-      title="Toggle SMC controls">{smcPanelOpen ? "✕" : "SMC"}</button
     >
   </div>
 </div>
@@ -706,7 +721,7 @@
   /* N3: SMC layer toggles — refined collapsible panel */
   .smc-panel {
     position: absolute;
-    top: 8px;
+    top: 36px;
     right: 64px;
     z-index: 36;
     display: flex;
@@ -719,11 +734,10 @@
     font-weight: 700;
     padding: 2px 7px;
     border-radius: 4px;
-    border: 1px solid rgba(74, 144, 217, 0.2);
-    background: rgba(30, 34, 45, 0.6);
+    border: 1px solid transparent;
+    background: none;
     color: #7b8ba8;
     cursor: pointer;
-    backdrop-filter: blur(8px);
     transition: all 0.18s ease;
     line-height: 1.4;
     letter-spacing: 0.5px;
@@ -763,10 +777,9 @@
     padding: 2px 6px;
     border-radius: 4px;
     border: 1px solid transparent;
-    background: rgba(30, 34, 45, 0.5);
+    background: none;
     color: #5d6068;
     cursor: pointer;
-    backdrop-filter: blur(8px);
     transition: all 0.15s ease;
     line-height: 1.4;
     letter-spacing: 0.3px;
@@ -821,13 +834,13 @@
   .smc-toggle.smc-t-mode {
     color: #4a90d9;
     border-color: rgba(74, 144, 217, 0.3);
-    background: rgba(74, 144, 217, 0.1);
+    background: none;
     min-width: 18px;
     text-align: center;
   }
   .smc-toggle.smc-t-mode.research {
     color: #ff9800;
     border-color: rgba(255, 152, 0, 0.35);
-    background: rgba(255, 152, 0, 0.1);
+    background: none;
   }
 </style>

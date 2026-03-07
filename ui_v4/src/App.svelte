@@ -18,7 +18,15 @@
 
   // P3.11/P3.12: Theme + candle style imports
   import type { ThemeName, CandleStyleName } from "./chart/lwc";
-  import { THEMES, loadTheme, applyThemeCssVars } from "./chart/lwc";
+  import {
+    THEMES,
+    THEME_NAMES,
+    CANDLE_STYLES,
+    CANDLE_STYLE_NAMES,
+    loadTheme,
+    loadCandleStyle,
+    applyThemeCssVars,
+  } from "./chart/lwc";
 
   import {
     handleWSFrame,
@@ -121,6 +129,32 @@
   }
   let brightness = $state(loadBrightness());
   let brightnessIcon = $derived(brightness >= 1.0 ? "☀" : "🌙");
+
+  // Theme + Candle style pickers (moved from ChartHud to top-right-bar)
+  let trThemeOpen = $state(false);
+  let trStyleOpen = $state(false);
+  let activeCandleStyle: CandleStyleName = $state(loadCandleStyle());
+
+  function trToggleTheme(e: MouseEvent) {
+    e.stopPropagation();
+    trStyleOpen = false;
+    trThemeOpen = !trThemeOpen;
+  }
+  function trToggleStyle(e: MouseEvent) {
+    e.stopPropagation();
+    trThemeOpen = false;
+    trStyleOpen = !trStyleOpen;
+  }
+  function trSelectTheme(name: ThemeName) {
+    trThemeOpen = false;
+    handleThemeChange(name);
+  }
+  function trSelectStyle(name: CandleStyleName) {
+    trStyleOpen = false;
+    activeCandleStyle = name;
+    handleCandleStyleChange(name);
+  }
+
   function handleBrightnessWheel(e: WheelEvent) {
     e.preventDefault();
     e.stopPropagation();
@@ -226,6 +260,8 @@
   });
 
   let frame: RenderFrame | null = $state(null);
+  let cachedBiasMap: Record<string, string> = $state({});
+  let cachedMomentumMap: Record<string, { b: number; r: number }> = $state({});
   let statusInfo: StatusInfo = $state({
     status: "CONNECTING" as const,
     detail: "",
@@ -254,6 +290,11 @@
       }
     }
     frame = f;
+    // Persist bias/momentum — only full frames carry bias_map; deltas don't
+    if (f?.bias_map && Object.keys(f.bias_map).length > 0)
+      cachedBiasMap = f.bias_map;
+    if (f?.momentum_map && Object.keys(f.momentum_map).length > 0)
+      cachedMomentumMap = f.momentum_map;
     // Track price/time from frames for HUD
     if (f) {
       const candles = f.candles;
@@ -438,13 +479,13 @@
           actions?.switchSymbolTf(sym, tf);
           saveLastPair(sym, tf);
         }}
-        onThemeChange={handleThemeChange}
-        onCandleStyleChange={handleCandleStyleChange}
         themeBg={hudBg}
         themeText={hudText}
         themeBorder={hudBorder}
         {menuBg}
         {menuBorder}
+        biasMap={cachedBiasMap}
+        momentumMap={cachedMomentumMap}
       />
     </div>
     <!-- ADR-0027: Replay controls bar (visible only when replay active) -->
@@ -458,14 +499,63 @@
     <button
       class="replay-enter-btn"
       onclick={handleEnterReplay}
-      title="Enter Replay Mode">⏪ Replay</button
+      title="Enter Replay Mode">Replay</button
     >
   {:else}
     <span class="replay-badge">REPLAY</span>
   {/if}
 
-  <!-- Entry 078: Compact top-right bar (health dot + brightness + diag + clock) -->
-  <div class="top-right-bar">
+  <!-- Entry 078: Compact top-right bar (health dot + brightness + pickers + diag + clock) -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="top-right-bar"
+    onclick={() => {
+      trThemeOpen = false;
+      trStyleOpen = false;
+    }}
+  >
+    <!-- Theme picker -->
+    <div class="tr-picker-wrap">
+      <button class="tr-picker-btn" onclick={trToggleTheme} title="Theme"
+        >◐</button
+      >
+      {#if trThemeOpen}
+        <div class="tr-dropdown" onclick={(e) => e.stopPropagation()}>
+          {#each THEME_NAMES as t}
+            <button
+              class="tr-dd-item"
+              class:active={t === activeTheme}
+              onclick={() => trSelectTheme(t)}>{THEMES[t].label}</button
+            >
+          {/each}
+        </div>
+      {/if}
+    </div>
+    <!-- Candle style picker -->
+    <div class="tr-picker-wrap">
+      <button class="tr-picker-btn" onclick={trToggleStyle} title="Candle style"
+        >▮</button
+      >
+      {#if trStyleOpen}
+        <div class="tr-dropdown" onclick={(e) => e.stopPropagation()}>
+          {#each CANDLE_STYLE_NAMES as cs}
+            <button
+              class="tr-dd-item"
+              class:active={cs === activeCandleStyle}
+              onclick={() => trSelectStyle(cs)}
+            >
+              <span
+                class="tr-swatch"
+                style:background={CANDLE_STYLES[cs].upColor}
+              ></span>
+              {CANDLE_STYLES[cs].label}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+    <span class="tr-sep"></span>
     <span
       class="tr-dot"
       style:background={STATUS_COLORS[statusInfo.status] ?? "#888"}
@@ -476,6 +566,7 @@
       title={`Brightness ${Math.round(brightness * 100)}% — scroll to adjust`}
       >{brightnessIcon}</span
     >
+    <span class="tr-sep"></span>
     <button
       class="tr-diag-btn"
       onclick={() => (diagVisible = !diagVisible)}
@@ -567,43 +658,111 @@
     white-space: nowrap;
   }
 
-  /* ADR-0027: Replay enter button + active badge */
+  /* ADR-0027: Replay enter button — prominent capsule */
   .replay-enter-btn {
     all: unset;
     position: fixed;
-    bottom: 12px;
-    right: 72px;
+    bottom: 4px;
+    right: 4px;
     z-index: 35;
     cursor: pointer;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 5px 12px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 4px 10px;
     border-radius: 6px;
     color: #8b8f9a;
     background: rgba(30, 34, 45, 0.85);
     border: 1px solid rgba(255, 255, 255, 0.06);
     backdrop-filter: blur(8px);
-    transition: all 0.15s ease;
+    transition: all 0.18s ease;
     pointer-events: auto;
   }
   .replay-enter-btn:hover {
     color: #f0b90b;
-    background: rgba(240, 185, 11, 0.08);
+    background: rgba(240, 185, 11, 0.1);
     border-color: rgba(240, 185, 11, 0.25);
+    box-shadow: 0 0 8px rgba(240, 185, 11, 0.1);
   }
   .replay-badge {
     position: fixed;
-    bottom: 12px;
-    right: 72px;
+    bottom: 4px;
+    right: 4px;
     z-index: 35;
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 1px;
-    padding: 4px 10px;
-    border-radius: 4px;
+    padding: 5px 12px;
+    border-radius: 6px;
     color: #f0b90b;
-    background: rgba(240, 185, 11, 0.1);
+    background: rgba(240, 185, 11, 0.08);
     border: 1px solid rgba(240, 185, 11, 0.3);
     pointer-events: none;
+  }
+
+  /* Theme/Candle picker: separator + inline dropdowns */
+  .tr-sep {
+    width: 1px;
+    height: 12px;
+    background: rgba(255, 255, 255, 0.08);
+    flex-shrink: 0;
+  }
+  .tr-picker-wrap {
+    position: relative;
+  }
+  .tr-picker-btn {
+    all: unset;
+    cursor: pointer;
+    font-size: 13px;
+    opacity: 0.45;
+    transition: opacity 0.15s;
+    padding: 0 2px;
+    line-height: 1;
+  }
+  .tr-picker-btn:hover {
+    opacity: 0.9;
+  }
+  .tr-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    display: flex;
+    flex-direction: row;
+    gap: 2px;
+    padding: 4px;
+    background: rgba(30, 34, 45, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    backdrop-filter: blur(12px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    z-index: 100;
+    white-space: nowrap;
+  }
+  .tr-dd-item {
+    all: unset;
+    cursor: pointer;
+    padding: 4px 8px;
+    font-size: 11px;
+    color: #8b8f9a;
+    border-radius: 4px;
+    transition: background 0.12s;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .tr-dd-item:hover {
+    background: rgba(128, 128, 128, 0.15);
+    color: #d1d4dc;
+  }
+  .tr-dd-item.active {
+    background: rgba(74, 144, 217, 0.2);
+    color: #4a90d9;
+    font-weight: 600;
+  }
+  .tr-swatch {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
   }
 </style>

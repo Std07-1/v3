@@ -4,15 +4,6 @@
      Symbol dropdown · TF pills · Live price · Streaming dot · UTC label -->
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
-    import type { ThemeName, CandleStyleName } from "../chart/lwc";
-    import {
-        THEMES,
-        THEME_NAMES,
-        CANDLE_STYLES,
-        CANDLE_STYLE_NAMES,
-        loadTheme,
-        loadCandleStyle,
-    } from "../chart/lwc";
     import { favoritesStore, type FavPair } from "../stores/favorites";
 
     const {
@@ -24,13 +15,13 @@
         lastBarOpen,
         lastBarTs,
         onSwitch,
-        onThemeChange,
-        onCandleStyleChange,
         themeBg = "transparent",
         themeText = "#d1d4dc",
         themeBorder = "transparent",
         menuBg = "rgba(30, 34, 45, 0.92)",
         menuBorder = "rgba(255, 255, 255, 0.08)",
+        biasMap = {} as Record<string, string>,
+        momentumMap = {} as Record<string, { b: number; r: number }>,
     }: {
         symbols: string[];
         tfs: string[];
@@ -40,14 +31,56 @@
         lastBarOpen: number | null;
         lastBarTs: number | null; // epoch ms of last bar/update
         onSwitch: (symbol: string, tf: string) => void;
-        onThemeChange?: (name: ThemeName) => void;
-        onCandleStyleChange?: (name: CandleStyleName) => void;
         themeBg?: string;
         themeText?: string;
         themeBorder?: string;
         menuBg?: string;
         menuBorder?: string;
+        biasMap?: Record<string, string>;
+        momentumMap?: Record<string, { b: number; r: number }>;
     } = $props();
+
+    // ─── Bias pills (ADR-0031) ───
+    const BIAS_TF_LABELS: Record<string, string> = {
+        "86400": "D1",
+        "14400": "H4",
+        "3600": "H1",
+        "900": "M15",
+    };
+    const BIAS_TF_ORDER = ["86400", "14400", "3600", "900"];
+
+    function momInfo(m: { b: number; r: number } | undefined): {
+        dots: string;
+        cls: string;
+    } {
+        if (!m) return { dots: "", cls: "" };
+        const max = Math.max(m.b, m.r);
+        if (max <= 0) return { dots: "", cls: "" };
+        const dots = max <= 2 ? "·" : max <= 5 ? "··" : "···";
+        const cls =
+            m.b > m.r ? "bull-mom" : m.r > m.b ? "bear-mom" : "neutral-mom";
+        return { dots, cls };
+    }
+
+    let biasPills = $derived(
+        BIAS_TF_ORDER.filter((k) => biasMap[k] != null).map((k) => {
+            const mi = momInfo(momentumMap[k]);
+            return {
+                label: BIAS_TF_LABELS[k],
+                bias: biasMap[k] as "bullish" | "bearish",
+                arrow: biasMap[k] === "bullish" ? "▲" : "▼",
+                momDots: mi.dots,
+                momCls: mi.cls,
+            };
+        }),
+    );
+
+    let biasVisible = $state(true);
+
+    function toggleBias(e: MouseEvent) {
+        e.stopPropagation();
+        biasVisible = !biasVisible;
+    }
 
     // ─── Dropdown state ───
     let symbolOpen = $state(false);
@@ -158,39 +191,6 @@
     function handleWindowClick() {
         symbolOpen = false;
         tfOpen = false;
-        themeOpen = false;
-        styleOpen = false;
-    }
-
-    // ─── P3.11/P3.12: Theme + Candle style pickers ───
-    let themeOpen = $state(false);
-    let styleOpen = $state(false);
-    let activeTheme: ThemeName = $state(loadTheme());
-    let activeStyle: CandleStyleName = $state(loadCandleStyle());
-
-    function toggleTheme(e: MouseEvent) {
-        e.stopPropagation();
-        symbolOpen = false;
-        tfOpen = false;
-        styleOpen = false;
-        themeOpen = !themeOpen;
-    }
-    function toggleStyle(e: MouseEvent) {
-        e.stopPropagation();
-        symbolOpen = false;
-        tfOpen = false;
-        themeOpen = false;
-        styleOpen = !styleOpen;
-    }
-    function selectTheme(name: ThemeName) {
-        themeOpen = false;
-        activeTheme = name;
-        onThemeChange?.(name);
-    }
-    function selectStyle(name: CandleStyleName) {
-        styleOpen = false;
-        activeStyle = name;
-        onCandleStyleChange?.(name);
     }
 
     // ─── P3.13: Favorites ───
@@ -298,21 +298,34 @@
                 >{isFaved ? "★" : "☆"}</button
             >
 
-            <span class="hud-spacer"></span>
-
-            <!-- P3.11: Theme picker -->
-            <button
-                class="hud-slot hud-slot-icon"
-                onclick={toggleTheme}
-                title="Theme">◐</button
-            >
-
-            <!-- P3.12: Candle style picker -->
-            <button
-                class="hud-slot hud-slot-icon"
-                onclick={toggleStyle}
-                title="Candle style">▮</button
-            >
+            <!-- ADR-0031: HTF bias toggle + pills -->
+            <span class="hud-sep">·</span>
+            {#if biasVisible && biasPills.length > 0}
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <span
+                    class="hud-bias-area"
+                    onclick={toggleBias}
+                    title="Hide HTF bias"
+                >
+                    {#each biasPills as p (p.label)}
+                        <span
+                            class="hud-bias-pill"
+                            class:bull={p.bias === "bullish"}
+                            class:bear={p.bias === "bearish"}
+                            >{p.label}<span class="bias-arrow">{p.arrow}</span
+                            >{#if p.momDots}<span class="bias-mom {p.momCls}"
+                                    >{p.momDots}</span
+                                >{/if}</span
+                        >
+                    {/each}
+                </span>
+            {:else}
+                <button
+                    class="hud-bias-toggle"
+                    onclick={toggleBias}
+                    title="Show HTF bias">›</button
+                >
+            {/if}
         </div>
     </div>
 
@@ -378,65 +391,13 @@
             {/each}
         </div>
     {/if}
-
-    <!-- P3.11: Theme dropdown -->
-    {#if themeOpen}
-        <div
-            class="hud-menu hud-menu-tf"
-            role="listbox"
-            tabindex="-1"
-            style:background={menuBg}
-            style:border-color={menuBorder}
-            style:color={themeText}
-            onclick={(e) => e.stopPropagation()}
-            onkeydown={(e) => e.key === "Escape" && (themeOpen = false)}
-        >
-            {#each THEME_NAMES as t}
-                <button
-                    class="hud-menu-item"
-                    class:active={t === activeTheme}
-                    onclick={() => selectTheme(t)}
-                >
-                    {THEMES[t].label}
-                </button>
-            {/each}
-        </div>
-    {/if}
-
-    <!-- P3.12: Candle style dropdown -->
-    {#if styleOpen}
-        <div
-            class="hud-menu hud-menu-tf"
-            role="listbox"
-            tabindex="-1"
-            style:background={menuBg}
-            style:border-color={menuBorder}
-            style:color={themeText}
-            onclick={(e) => e.stopPropagation()}
-            onkeydown={(e) => e.key === "Escape" && (styleOpen = false)}
-        >
-            {#each CANDLE_STYLE_NAMES as cs}
-                <button
-                    class="hud-menu-item"
-                    class:active={cs === activeStyle}
-                    onclick={() => selectStyle(cs)}
-                >
-                    <span
-                        class="candle-swatch"
-                        style:background={CANDLE_STYLES[cs].upColor}
-                    ></span>
-                    {CANDLE_STYLES[cs].label}
-                </button>
-            {/each}
-        </div>
-    {/if}
 </div>
 
 <style>
     /* ─── HUD: Frosted glass (V3: .hud-stack / .hud) ─── */
     .hud-stack {
         position: absolute;
-        top: 8px;
+        top: 1px;
         left: 8px;
         z-index: 35;
         display: inline-flex;
@@ -582,33 +543,7 @@
         border-radius: 2px;
     }
 
-    /* P3.11/P3.12: Clean icon buttons for theme/style pickers */
-    .hud-slot-icon {
-        font-size: 12px;
-        padding: 1px 5px;
-        opacity: 0.45;
-        transition: opacity 0.15s;
-    }
-    .hud-slot-icon:hover {
-        opacity: 0.9;
-    }
-
-    /* Spacer pushes theme/style pickers to the end */
-    .hud-spacer {
-        flex: 1;
-        min-width: 8px;
-    }
-
     /* P3.12: Color swatch in candle style menu */
-    .candle-swatch {
-        display: inline-block;
-        width: 10px;
-        height: 10px;
-        border-radius: 2px;
-        margin-right: 4px;
-        vertical-align: middle;
-    }
-
     /* P3.13: Favorite star + favorites section */
     .hud-star {
         opacity: 0.4;
@@ -638,5 +573,78 @@
         height: 1px;
         background: rgba(255, 255, 255, 0.06);
         margin: 4px 0;
+    }
+
+    /* ADR-0031: Inline bias pills */
+    .hud-bias-pill {
+        font-size: 9px;
+        font-weight: 600;
+        padding: 1px 4px;
+        border-radius: 3px;
+        line-height: 1.3;
+        letter-spacing: 0.3px;
+        display: inline-flex;
+        align-items: center;
+        gap: 1px;
+        pointer-events: none;
+    }
+    .hud-bias-pill.bull {
+        color: #26a69a;
+    }
+    .hud-bias-pill.bear {
+        color: #ef5350;
+    }
+    .bias-arrow {
+        font-size: 7px;
+        margin-left: 1px;
+    }
+    .bias-mom {
+        font-size: 8px;
+        margin-left: 1px;
+        opacity: 0.7;
+    }
+    .bull-mom {
+        color: #26a69a;
+    }
+    .bear-mom {
+        color: #ef5350;
+    }
+    .neutral-mom {
+        opacity: 0.4;
+    }
+    .hud-bias-area {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        cursor: pointer;
+        pointer-events: auto;
+        border-radius: 4px;
+        padding: 1px 3px;
+        transition: background 0.15s ease;
+    }
+    .hud-bias-area:hover {
+        background: rgba(255, 255, 255, 0.06);
+    }
+    .hud-bias-toggle {
+        background: none;
+        border: none;
+        color: #c8cdd6;
+        opacity: 0.6;
+        cursor: pointer;
+        width: 20px;
+        height: 20px;
+        border-radius: 4px;
+        transition: all 0.15s ease;
+        font-size: 11px;
+        line-height: 20px;
+        text-align: center;
+        padding: 0;
+        pointer-events: auto;
+        user-select: none;
+    }
+    .hud-bias-toggle:hover {
+        opacity: 1;
+        background: rgba(255, 255, 255, 0.08);
+        box-shadow: 0 0 4px rgba(255, 255, 255, 0.08);
     }
 </style>
