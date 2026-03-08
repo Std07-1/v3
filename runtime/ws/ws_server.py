@@ -891,12 +891,29 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
+_MAX_WS_MSG_BYTES = 65536  # SEC-05: 64 KB limit для WS повідомлень
+
+
+def _sanitize_log(value: str, max_len: int = 120) -> str:
+    """SEC-03: видаляє control characters для безпечного логування."""
+    import re as _re
+    if not isinstance(value, str):
+        return str(value)[:max_len]
+    return _re.sub(r'[\x00-\x1f\x7f]', '', value)[:max_len]
+
+
 async def _handle_action(session: WsSession, raw: str, app: web.Application) -> None:
     """Розбирає вхідне повідомлення від клієнта. P2: switch + scrollback.
 
     S20: JSON/schema errors → error frame клієнту (degraded-but-loud).
     S25: Unknown action → error frame + лог (не silent ignore).
     """
+    # SEC-05: message size guard
+    if len(raw) > _MAX_WS_MSG_BYTES:
+        _log.warning("WS_ACTION_OVERSIZED client=%s size=%d", session.client_id, len(raw))
+        err = _build_error_frame(session, "message_too_large", "Message exceeds 64 KB limit", app=app)
+        await session.ws.send_json(err)
+        return
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
@@ -934,7 +951,7 @@ async def _handle_switch(session: WsSession, data: Dict[str, Any], app: web.Appl
     # Validate symbol
     symbol = _canonicalize_symbol(raw_symbol, symbols_set)
     if symbol not in symbols_set and symbols_set:
-        _log.warning("WS_SWITCH_REJECT client=%s reason=unknown_symbol raw=%s", session.client_id, raw_symbol)
+        _log.warning("WS_SWITCH_REJECT client=%s reason=unknown_symbol raw=%s", session.client_id, _sanitize_log(raw_symbol))
         # Send empty full frame with warning
         warnings = ["unknown_symbol"]
         tf_label = _TF_S_TO_LABEL.get(session.tf_s or 300, "M5")
@@ -950,7 +967,7 @@ async def _handle_switch(session: WsSession, data: Dict[str, Any], app: web.Appl
         except (TypeError, ValueError):
             tf_s = None
     if tf_s is None or (tf_allowlist and tf_s not in tf_allowlist):
-        _log.warning("WS_SWITCH_REJECT client=%s reason=tf_not_allowed raw=%s", session.client_id, raw_tf)
+        _log.warning("WS_SWITCH_REJECT client=%s reason=tf_not_allowed raw=%s", session.client_id, _sanitize_log(raw_tf))
         warnings = ["tf_not_allowed"]
         tf_label = raw_tf or "?"
         frame = _build_full_frame(session, [], symbol, tf_label, warnings, app=app)

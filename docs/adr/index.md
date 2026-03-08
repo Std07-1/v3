@@ -45,6 +45,7 @@
 | [0031](0031-bias-banner.md) | Bias Banner — Multi-TF Trend Bias Display | **Implemented** | 2026-03-08 | bias_map, trend_bias, multi-TF, banner, BiasBanner.svelte | `smc_vis_phi2` |
 | [0032](0032-overlay-render-throttle-tf-switch.md) | Overlay Render Throttle + TF Switch Stability | **Implemented** | 2026-03-08 | crosshairMove guard, RAF wheel, center_ms viewCache, TF switch UX | `ui_perf_p1_p5` |
 | [0033](0033-context-flow-narrative.md) | Context Flow — Multi-TF Narrative Engine | **Implemented** | 2026-03-08 | narrative, scenario, trade/wait, market_phase, FVG context, NarrativePanel | `smc_vis_phi3` |
+| [0034](0034-advanced-market-analysis-tda.md) | Advanced Market Analysis — TDA Synchronization & Extended SMC | **Proposed** | 2026-03-09 | TDA, IFVG, breaker, DP, Quasimodo, TF sync, protected fractal, idea invalidation | `smc_tda_v1` |
 
 ---
 
@@ -84,4 +85,4 @@
 
 Див. формат у [copilot-instructions.md](../../.github/copilot-instructions.md) → Тема B, Правило B2.
 
-Наступний номер: **0033**
+Наступний номер: **0035**

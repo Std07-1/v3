@@ -67,6 +67,7 @@
 | `R_TRADER` | **SMC Trader** | `.github/role_spec_trader_v1.md` | Валідація SMC output з позиції трейдера: оцінка сетапів, grade challenge, chart audit, "чи можу я з цього торгувати?". Не пише код — дає actionable feedback. |
 | `R_CHART_UX` | **Chart Experience Craftsman** | `.github/role_spec_chart_ux_v1.md` | Візуальна якість canvas rendering, DPR, анімації, теми, micro-interactions, WCAG contrast. DevOps: build pipeline, supervisor, process lifecycle, DX. |
 | `R_ARCHITECT` | **Systems Architect** | `.github/role_spec_architect_v1.md` | Системний дизайн, ADR authoring, trade-off аналіз, P-slice planning, масштабування, release, cross-role coordination. Первинний автор усіх ADR. |
+| `R_COMPLIANCE` | **Compliance & Safety Officer** | `.github/role_spec_compliance_v1.md` | Ліцензії залежностей, OWASP/CVE аудит, secrets management, disclaimers, фінансове регулювання, data protection, technology lifecycle (EOL). Cross-cutting compliance gate. |
 
 **Правила роутингу:**
 
@@ -87,6 +88,7 @@
 | "оціни сетап", "чи це A+?", "торгувати чи ні?", "grade challenge", "що бачить трейдер?", "chart audit" | `R_TRADER` |
 | "як виглядає?", "canvas", "рендер", "тема", "анімація", "DPR", "лагає", "build", "deploy", "запуск", "supervisor" | `R_CHART_UX` |
 | "ADR", "архітектура", "дизайн системи", "масштаб", "альтернативи?", "trade-off", "які варіанти?", "спроектуй", "release" | `R_ARCHITECT` |
+| "ліцензія", "license", "security", "OWASP", "CVE", "compliance", "disclaimer", "безпека", "секрети", "secrets", "legal", "GDPR", "ToS" | `R_COMPLIANCE` |
 
 ---
 
@@ -177,7 +179,7 @@ v3/
 │
 ├── .github/               # AI agent governance
 │   ├── copilot-instructions.md  # SSOT інструкція для AI-агентів
-│   ├── role_spec_*.md     # 7 role specs (patch_master, bug_hunter, smc_chief, doc_keeper, trader, chart_ux, architect)
+│   ├── role_spec_*.md     # 8 role specs (patch_master, bug_hunter, smc_chief, doc_keeper, trader, chart_ux, architect, compliance)
 │   └── prompts/           # 8 prompt files (adr, discovery, patch, review, ...)
 │
 ├── docs/                  # Повна документація

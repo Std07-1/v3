@@ -136,3 +136,9 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 ## Ліцензія
 
 Див. [LICENSE_v1](LICENSE_v1).
+
+### Сторонні залежності
+
+Перелік сторонніх залежностей та їхніх ліцензій: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+
+**FXCM ForexConnect SDK**: Цей репозиторій НЕ містить і НЕ розповсюджує ForexConnect SDK. Для використання SDK кожен користувач зобов'язаний самостійно прийняти FXCM EULA та мати активний FXCM account. Детальніше: [docs/compliance/fxcm-sdk-license-review.md](docs/compliance/fxcm-sdk-license-review.md)

@@ -108,6 +108,11 @@ class JsonlAppender:
         sym_dir = symbol.replace("/", "_")
         tf_dir = f"tf_{tf_s}"
         out_dir = os.path.join(self._root, sym_dir, tf_dir)
+        # SEC-02: path traversal guard
+        resolved = os.path.abspath(out_dir)
+        root_resolved = os.path.abspath(self._root)
+        if not resolved.startswith(root_resolved + os.sep) and resolved != root_resolved:
+            raise ValueError("SSOT_PATH_TRAVERSAL symbol=%s" % symbol)
         os.makedirs(out_dir, exist_ok=True)
         return os.path.join(out_dir, f"part-{day}.jsonl")
 
