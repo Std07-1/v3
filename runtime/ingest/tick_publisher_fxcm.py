@@ -398,10 +398,10 @@ def main() -> int:
         while True:
             time.sleep(60.0)
 
-    fxcm_user = env_str("FXCM_USERNAME") or str(cfg.get("user_id") or "")
-    fxcm_password = env_str("FXCM_PASSWORD") or str(cfg.get("password") or "")
-    fxcm_url = env_str("FXCM_HOST_URL") or str(cfg.get("url", "http://www.fxcorporate.com/Hosts.jsp"))
-    fxcm_connection = env_str("FXCM_CONNECTION") or str(cfg.get("connection", "Demo"))
+    fxcm_user = env_str("FXCM_USERNAME") or ""
+    fxcm_password = env_str("FXCM_PASSWORD") or ""
+    fxcm_url = env_str("FXCM_HOST_URL") or "http://www.fxcorporate.com/Hosts.jsp"
+    fxcm_connection = env_str("FXCM_CONNECTION") or "Demo"
     if not fxcm_user or not fxcm_password:
         logging.error("TickPublisher: FXCM credentials відсутні")
         while True:

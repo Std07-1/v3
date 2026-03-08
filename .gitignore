@@ -31,7 +31,7 @@ _tmp_jsonl_stress
 *.swo
 *~
 .agent/
-AGENTS.md
+/AGENTS.md
 
 # ── Дані (runtime, не код) ──────────────────────────────────
 /data_v3/
@@ -59,7 +59,6 @@ ui_v4/dist/
 /changelog.jsonl
 /CHANGELOG.md
 /rebuild_state.json
-/env_profile.py
 *.log
 logs/
 
@@ -72,6 +71,8 @@ logs/
 /docs/Host Contract - Capability Sheet.md
 project_instructions.md
 rules.md
+AGENTS.md
+
 
 # ── UI v4: planning/spec docs (не релізні) ──────────────────
 ui_v4/system_spec_ui4/
@@ -108,7 +109,6 @@ ui_v4/src/chart/ChartPane.svelte
 # ── Python config/packaging (поки не використовується) ──────
 /mypy.ini
 /pytest.ini
-/pyproject.toml
 /setup.cfg
 /tox.ini
 /coverage.xml

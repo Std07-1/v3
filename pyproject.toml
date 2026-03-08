@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fxcm-connector-v3"
+version = "0.0.0"
+description = "FXCM Connector v3"
+requires-python = ">=3.7,<3.8"
+dependencies = [
+  "redis==5.0.1",
+  "numpy==1.21.6",
+  "pandas==1.1.5",
+  "python-dotenv==0.21.1",
+]
+
+[project.optional-dependencies]
+fxcm = []

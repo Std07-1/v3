@@ -11,10 +11,10 @@
 | Severity | Знайдено | Закрито | Відкрито |
 |----------|----------|---------|----------|
 | **S0** | 0 | 0 | 0 |
-| **S1** | 3 | 0 | 3 |
-| **S2** | 4 | 0 | 4 |
+| **S1** | 3 | 1 | 2 |
+| **S2** | 4 | 1 | 3 |
 | **S3** | 4 | 0 | 4 |
-| **Разом** | 11 | 0 | 11 |
+| **Разом** | 11 | 2 | 9 |
 
 **Загальна оцінка**: Прийнятний рівень для personal localhost-only trading tool. Жодних S0 (критичних) ризиків. Базова безпекова гігієна на місці: секрети не в коді, `.gitignore` коректний, input validation присутня, path traversal guards є, FXCM SDK не вендориться, ліцензії deps сумісні. **Головні gaps**: відсутній фінансовий disclaimer, Python 3.7 EOL, Redis без auth.
 
@@ -136,10 +136,10 @@
 |----|-------|----------|------------|------|----------|-------------------|------------------------|-----|
 | **R1** | Security/Auth | **S1** | Low (localhost) | WS/HTTP endpoints без автентифікації | [VERIFIED: ws_server.py] — no auth, no token, no session | 127.0.0.1 binding only | Документувати як accepted risk для localhost. Implement token auth якщо deployment змінюється | This sprint |
 | **R2** | Security/Auth | **S1** | Low (localhost) | Redis без паролю — будь-який процес на machine має R/W доступ | [VERIFIED: config.json, ws_server.py, tick_publisher_fxcm.py] — zero `password=` parameter | 127.0.0.1 binding | Додати `requirepass` в Redis config + `password=` в connection code. Або документувати як accepted risk | This sprint |
-| **R3** | Compliance/Financial | **S1** | Medium | Відсутній "Not Financial Advice" disclaimer. SMC engine має scoring/grades (A+/A/B/C) що можуть бути сприйняті як торгові рекомендації | [VERIFIED: grep README.md + Svelte — zero matches] | LICENSE_v1 Section 11 (warranty disclaimer, але не financial) | Додати explicit disclaimer в README.md + UI footer/StatusBar | This sprint |
+| **R3** | Compliance/Financial | **S1** | ~~Medium~~ **CLOSED** | ~~Відсутній~~ Disclaimer додано в README.md (2026-03-09) | [VERIFIED: README.md:L3 — "Not Financial Advice"] | LICENSE_v1 Section 11 + README.md disclaimer | ✅ Закрито | Done |
 | **R4** | Supply Chain | **S2** | Low | Python dependencies без lockfile з hash verification. `pip install` не верифікує integrity | [VERIFIED: no requirements.lock / pip.lock] | Pinned versions в requirements.txt | Створити lockfile: `pip-compile --generate-hashes` або `pip freeze --all > requirements.lock` | Plan |
 | **R5** | Technology/EOL | **S1** | High | Python 3.7 EOL з June 2023. Відомі CVE без патчів. 2.5+ роки без security updates | [VERIFIED: pyproject.toml `requires-python = ">=3.7,<3.8"`] | ADR-0016 Proposed (Python upgrade plan) | Імплементувати ADR-0016 roadmap. Interim: document accepted risk | This sprint |
-| **R6** | Secrets | **S2** | Low | `tick_publisher_fxcm.py`: `cfg.get("user_id")` / `cfg.get("password")` fallback з config.json. Ризик випадкового commit credentials | [VERIFIED: tick_publisher_fxcm.py:L401-402] | config.json не містить цих ключів зараз | Видалити fallback на cfg credentials, залишити тільки env vars | Plan |
+| **R6** | Secrets | **S2** | ~~Low~~ **CLOSED** | ~~cfg.get("user_id")~~ Credential fallback видалено (2026-03-09). Credentials тільки з env vars | [VERIFIED: grep cfg.get.*password — 0 matches] | Тільки env vars (FXCM_USERNAME, FXCM_PASSWORD) | ✅ Закрито | Done |
 | **R7** | Data Integrity | **S2** | Medium | `ssot_jsonl_fsync: false` — при crash/power failure можлива втрата даних (OS buffer not flushed) | [VERIFIED: config.json `ssot_jsonl_fsync: false`] | `flush()` після кожного запису | Або увімкнути fsync, або задокументувати trade-off (performance vs durability) в ADR | Plan |
 | **R8** | Rate Limiting | **S3** | Low | WS `switch` action та HTTP `/api/status` без rate limiting — потенційний DoS | [VERIFIED: ws_server.py — scrollback has rate limit, otherwise none] | Localhost only | Per-client action throttle | Batch |
 | **R9** | Privacy | **S3** | Low | Client IP (`request.remote`) логується при WS connect | [VERIFIED: ws_server.py:L826] | Local-only, logs gitignored | Якщо logs коли-небудь будуть shared — hash або omit IP | Batch |
@@ -181,11 +181,11 @@
 
 ## ФАЗА 3: REMEDIATE — Roadmap
 
-### P1: Financial Disclaimer (R3) — ~30 LOC
+### P1: Financial Disclaimer (R3) — ✅ DONE (2026-03-09)
 
 **Файли**: `README.md`  
-**Що**: Додати explicit disclaimer section в README.md  
-**Verify**: `grep "Not Financial Advice" README.md`
+**Що**: Disclaimer додано: "Not Financial Advice", ризик втрати капіталу, SMC = аналітичні мітки  
+**Verify**: `grep "Not Financial Advice" README.md` → 1 match ✅
 
 ### P2: Redis Auth Documentation (R1, R2) — 0 LOC
 
@@ -193,21 +193,23 @@
 **Що**: Задокументувати як accepted risk для localhost deployment  
 **Trigger for re-evaluation**: будь-яка зміна з localhost на network
 
-### P3: Config Credential Fallback (R6) — ~5 LOC
+### P3: Config Credential Fallback (R6) — ✅ DONE (2026-03-09)
 
 **Файли**: `runtime/ingest/tick_publisher_fxcm.py`  
-**Що**: Видалити `cfg.get("user_id")` / `cfg.get("password")` fallback  
-**Verify**: `grep "cfg.get.*password\|cfg.get.*user_id" runtime/`
+**Що**: `cfg.get("user_id")` / `cfg.get("password")` / `cfg.get("url")` / `cfg.get("connection")` fallback видалено. Credentials тільки з env vars  
+**Verify**: `grep "cfg.get.*password\|cfg.get.*user_id" runtime/` → 0 matches ✅
 
-### P4: Python 3.7 EOL Documentation (R5) — 0 LOC
+### P4: Python 3.7 EOL Documentation (R5) — ✅ ACCEPTED RISK (2026-03-09)
 
-**Що**: ADR-0016 вже Proposed. Задокументувати як accepted risk з clear trigger  
-**Trigger**: FXCM releases Python 3.11+ SDK → activate ADR-0016
+**Що**: Python 3.7 EOL з June 2023. Blocked by FXCM SDK (forexconnect 1.6.43 requires Python 3.7).  
+**Поточна мітигація**: localhost only, no untrusted input, ADR-0016 Proposed  
+**Trigger для re-evaluation**: FXCM releases Python 3.11+ compatible SDK → activate ADR-0016 migration
 
-### P5: AI Code Clause (R10) — 0 LOC (policy)
+### P5: AI Code Clause (R10) — ⏸️ DEFERRED (needs legal opinion)
 
-**Що**: Додати explicit statement в docs/compliance/ або LICENSE amendment щодо AI-generated code ownership  
-**[LEGAL OPINION NEEDED]**: Exact language for AI code IP in jurisdictions relevant to author
+**Що**: LICENSE_v1 Contribution clause (Section 4) implicitly covers AI-generated code через "any material you submit", але explicit AI clause відсутній  
+**[LEGAL OPINION NEEDED]**: Exact wording for AI code IP clause, jurisdiction-specific implications  
+**Interim**: Current broad contribution language provides reasonable coverage
 
 ---
 
