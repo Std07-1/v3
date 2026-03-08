@@ -374,12 +374,9 @@ export class ChartEngine {
     this.series.setData(mapped);
     this.volumeSeries.setData(volMapped);
 
-    // P3.7: Follow mode — auto-scroll only if follow enabled
-    // On setData (full frame), always scroll to latest regardless of isAtEnd
-    // because user explicitly switched symbol/TF.
-    if (bars.length > 0 && this._followEnabled) {
-      this.chart.timeScale().scrollToRealTime();
-    }
+    // ADR-0032 P4: caller always sets visible range after setData()
+    // (setVisibleLogicalRange / scrollToRealTime / fitContent) —
+    // no need to scroll here, it caused 3 range changes in one sync block.
   }
 
   // ─── update: live delta with rAF queue + try/catch for LWC safety ───

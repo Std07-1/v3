@@ -2,7 +2,7 @@
 
 > **Purpose**: This document provides essential context for AI coding agents working on this project.  
 > **Language**: Ukrainian (primary), English for technical terms.  
-> **Last Updated**: 2026-03-02
+> **Last Updated**: 2026-03-07
 
 ---
 
@@ -22,12 +22,14 @@
 
 ---
 
-## 1.1 Актуальний статус (2026-03-02)
+## 1.1 Актуальний статус (2026-03-07)
 
 - Потік B (мульти-символьна активація) — **відкладено** через integrity derived TF (див. ADR-0025)
 - Всі результати audit/rebuild зафіксовані в [docs/adr/0025-potik-b-data-quality-summary.md](docs/adr/0025-potik-b-data-quality-summary.md)
 - Потік B закритий, фокус на XAU/USD та SMC engine (Потік C)
-- SMC Engine **Implemented** (ADR-0024): E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a, 422+ тестів
+- SMC Engine **Implemented** (ADR-0024): E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a, 431+ тестів
+- Elimination Engine + Confluence Scoring (ADR-0028, ADR-0029): display budget, 8-factor grade
+- TF Sovereignty + Bias Banner (ADR-0030-alt, ADR-0031): cross-TF projection, multi-TF bias display
 - Client-Side Replay (ADR-0027): TradingView-style replay з data_v3/
 - Для майбутньої активації інших символів потрібен окремий audit/fix integrity derived TF
 
@@ -64,6 +66,7 @@
 | `R_DOC_KEEPER` | **Doc Keeper** | `.github/role_spec_doc_keeper_v1.md` | Оновлення документації, синхронізація docs з реальністю, AUDIT→SYNC→VERIFY цикл, drift detection. |
 | `R_TRADER` | **SMC Trader** | `.github/role_spec_trader_v1.md` | Валідація SMC output з позиції трейдера: оцінка сетапів, grade challenge, chart audit, "чи можу я з цього торгувати?". Не пише код — дає actionable feedback. |
 | `R_CHART_UX` | **Chart Experience Craftsman** | `.github/role_spec_chart_ux_v1.md` | Візуальна якість canvas rendering, DPR, анімації, теми, micro-interactions, WCAG contrast. DevOps: build pipeline, supervisor, process lifecycle, DX. |
+| `R_ARCHITECT` | **Systems Architect** | `.github/role_spec_architect_v1.md` | Системний дизайн, ADR authoring, trade-off аналіз, P-slice planning, масштабування, release, cross-role coordination. Первинний автор усіх ADR. |
 
 **Правила роутингу:**
 
@@ -83,6 +86,7 @@
 | "документація", "оновити docs", "синхронізувати", "drift", "AGENTS.md" | `R_DOC_KEEPER` |
 | "оціни сетап", "чи це A+?", "торгувати чи ні?", "grade challenge", "що бачить трейдер?", "chart audit" | `R_TRADER` |
 | "як виглядає?", "canvas", "рендер", "тема", "анімація", "DPR", "лагає", "build", "deploy", "запуск", "supervisor" | `R_CHART_UX` |
+| "ADR", "архітектура", "дизайн системи", "масштаб", "альтернативи?", "trade-off", "які варіанти?", "спроектуй", "release" | `R_ARCHITECT` |
 
 ---
 
@@ -110,6 +114,8 @@ v3/
 │       ├── premium_discount.py # detect_premium_discount()
 │       ├── inducement.py  # detect_inducements()
 │       ├── key_levels.py  # detect_key_levels() — PDH/PDL/DH/DL (ADR-0024b)
+│       ├── confluence.py  # confluence scoring — 8-factor grade A+/A/B/C (ADR-0029)
+│       ├── momentum.py    # displacement detection — body/ATR ratio
 │       ├── context_stack.py # ContextStack — cross-TF zone aggregation
 │       └── engine.py      # SmcEngine orchestrator + zone lifecycle
 │
@@ -146,8 +152,8 @@ v3/
 │   │   ├── app/           # diagState, frameRouter, edgeProbe
 │   │   ├── ws/            # WSConnection, WsAction creators
 │   │   ├── stores/        # smcStore, replayStore, favorites, meta, viewCache
-│   │   ├── layout/        # ChartPane, ChartHud, StatusBar, DrawingToolbar, ReplayBar, ...
-│   │   └── chart/         # engine.ts, themes.ts, interaction.ts, OverlayRenderer.ts, DrawingsRenderer.ts
+│   │   ├── layout/        # ChartPane, ChartHud, StatusBar, DrawingToolbar, ReplayBar, BiasBanner, ...
+│   │   └── chart/         # engine.ts, lwc.ts, themes.ts, interaction.ts, OverlayRenderer.ts, DrawingsRenderer.ts, overlay/DisplayBudget.ts
 │   ├── package.json       # npm deps
 │   └── README_DEV.md      # UI v4 dev guide
 │
@@ -161,8 +167,8 @@ v3/
 │   ├── repair/            # htf_rebuild, htf_tail_sync
 │   └── diag/              # classify gaps, clear redis, disk_max_open_ms
 │
-├── tests/                 # 37 файлів, 422+ тестів
-│   ├── test_smc_*.py      # SMC tests (e1, e2, runner, key_levels, n1_lifecycle, d1_display)
+├── tests/                 # 37 файлів, 431+ тестів
+│   ├── test_smc_*.py      # SMC tests (e1, e2, runner, key_levels, n1_lifecycle, d1_display, confluence)
 │   ├── test_derive_*.py   # Derivation tests
 │   ├── test_uds_*.py      # UDS tests (split-brain, partial penalty)
 │   ├── test_s*_*.py       # SSOT compliance tests (s1–s6)
@@ -171,13 +177,13 @@ v3/
 │
 ├── .github/               # AI agent governance
 │   ├── copilot-instructions.md  # SSOT інструкція для AI-агентів
-│   ├── role_spec_*.md     # 4 role specs (patch_master, bug_hunter, smc_chief, doc_keeper)
+│   ├── role_spec_*.md     # 7 role specs (patch_master, bug_hunter, smc_chief, doc_keeper, trader, chart_ux, architect)
 │   └── prompts/           # 8 prompt files (adr, discovery, patch, review, ...)
 │
 ├── docs/                  # Повна документація
 │   ├── index.md           # Точка входу
 │   ├── system_current_overview.md  # Архітектура
-│   ├── adr/               # 30 ADR (architecture decisions, 0001–0027 + 0024a/b/c)
+│   ├── adr/               # 35 ADR (architecture decisions, 0001–0032 + 0024a/b/c)
 │   ├── contracts.md       # JSON Schema contracts
 │   ├── ui_api.md          # HTTP API reference
 │   └── runbooks/          # Production runbooks
@@ -276,6 +282,7 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 | `test_smc_runner.py` | SMC Runner: warmup, on_bar, delta, performance |
 | `test_smc_key_levels.py` | SMC key levels: PDH/PDL/DH/DL |
 | `test_smc_n1_lifecycle.py` | SMC N1: zone lifecycle (merge/evict/decay) |
+| `test_smc_confluence.py` | SMC confluence scoring: 8 factors, grade (ADR-0029) |
 | `test_d1_derive.py` | D1 derive from M1 (ADR-0023) |
 | `test_candle_map.py` | bar→Candle mapping (R2 closure) |
 
@@ -426,7 +433,11 @@ REDIS_PORT=6379
 - ADR-0023: D1 Live Derive from M1 (D1 = 1440×M1, anchor 79200)
 - ADR-0024: SMC Engine Architecture (swings, OB, FVG, liquidity, P/D, lifecycle)
 - ADR-0027: Client-Side Replay (TradingView-style)
-- ... (30 ADR total, see `docs/adr/index.md`)
+- ADR-0028: Elimination Engine — Display Filter Pipeline
+- ADR-0029: OB Confluence Scoring + Grade System
+- ADR-0030-alt: TF Sovereignty — Cross-TF Projection Styling
+- ADR-0031: Bias Banner — Multi-TF Trend Bias Display
+- ... (35 ADR total, see `docs/adr/index.md`)
 
 ---
 

@@ -326,8 +326,13 @@ export class OverlayRenderer {
   }
 
   private bindTriggers(): void {
-    // Crosshair move — координати вже актуальні, рендеримо синхронно (без лагу).
-    this.chartApi.subscribeCrosshairMove(() => this.renderNow());
+    // ADR-0032 P1: crosshairMove guard — якщо double-RAF pending (zoom/scroll),
+    // skip синхронний рендер щоб не малювати overlay зі stale Y координатами.
+    // Без zoom/scroll — zero-lag як і раніше.
+    this.chartApi.subscribeCrosshairMove(() => {
+      if (this.rafId !== null) return; // double-RAF pending → skip stale render
+      this.renderNow();
+    });
     // Visible range change (zoom/scroll) — LWC потребує >=2 кадри щоб завершити
     // price scale auto-fit після зміни time range. Один RAF недостатній:
     // priceToCoordinate() повертає старі Y-координати → елементи "висять у повітрі".
@@ -382,6 +387,16 @@ export class OverlayRenderer {
   /** Зовнішній виклик (patch/resize) — single RAF достатній. */
   private scheduleRender(): void {
     this.scheduleRaf();
+  }
+
+  /** ADR-0032 P3: Cleanup pending RAF + tooltip DOM on unmount. */
+  destroy(): void {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    this._tooltipEl?.remove();
+    this._tooltipEl = null;
   }
 
   /** ADR-0008 parity: Y-axis manual zoom/pan — координати змінились.

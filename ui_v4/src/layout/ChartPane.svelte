@@ -23,7 +23,7 @@
   import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
   // BiasBanner moved to ChartHud (ADR-0031: inline after star)
-  import { saveVisibleRange, loadVisibleRange } from "../stores/viewCache";
+  import { saveViewSnapshot, loadViewSnapshot } from "../stores/viewCache";
   import {
     applySmcFull,
     applySmcDelta,
@@ -293,10 +293,24 @@
           (lwcHostRef as any).__resetManualPriceScale();
         }
 
-        // P3.9: Save current visible range before switching
-        if (prevSymbol && prevTf && chartEngine) {
-          const range = chartEngine.chart.timeScale().getVisibleLogicalRange();
-          saveVisibleRange(prevSymbol, prevTf, range);
+        // ADR-0032 P4: Save center_ms + bars_visible before switching
+        if (prevSymbol && prevTf && chartEngine && _currentCandles.length > 0) {
+          const logRange = chartEngine.chart
+            .timeScale()
+            .getVisibleLogicalRange();
+          if (logRange) {
+            const centerIdx = Math.round(
+              ((logRange.from as number) + (logRange.to as number)) / 2,
+            );
+            const clamped = Math.max(
+              0,
+              Math.min(_currentCandles.length - 1, centerIdx),
+            );
+            saveViewSnapshot(prevSymbol, prevTf, {
+              center_ms: _currentCandles[clamped].t_ms,
+              bars_visible: (logRange.to as number) - (logRange.from as number),
+            });
+          }
         }
 
         const candles = currentFrame.candles ?? [];
@@ -315,17 +329,34 @@
           chartEngine.setData(candles);
           showNoData = false;
 
-          // P3.9: Restore cached visible range for this symbol+tf
+          // ADR-0032 P4: Restore center-based view for this symbol+tf
           const sym = currentFrame.symbol ?? "";
           const tf = currentFrame.tf ?? "";
-          const cached = loadVisibleRange(sym, tf);
-          if (cached) {
-            chartEngine.chart.timeScale().setVisibleLogicalRange(cached);
+          const snapshot = loadViewSnapshot(sym, tf);
+          if (snapshot && candles.length > 0) {
+            // Binary search for nearest candle to center_ms
+            let lo = 0,
+              hi = candles.length - 1,
+              best = 0;
+            while (lo <= hi) {
+              const mid = (lo + hi) >>> 1;
+              if (
+                Math.abs(candles[mid].t_ms - snapshot.center_ms) <
+                Math.abs(candles[best].t_ms - snapshot.center_ms)
+              ) {
+                best = mid;
+              }
+              if (candles[mid].t_ms < snapshot.center_ms) lo = mid + 1;
+              else hi = mid - 1;
+            }
+            const half = Math.max(10, snapshot.bars_visible / 2);
+            chartEngine.chart.timeScale().setVisibleLogicalRange({
+              from: best - half,
+              to: best + half,
+            });
           } else {
-            // No cached range (first visit to this TF) — fit all bars
-            // so user sees maximum history. fitContent() auto-adjusts
-            // barSpacing to show all data points in the visible area.
-            chartEngine.chart.timeScale().fitContent();
+            // No snapshot (first visit) — show latest bars
+            chartEngine.chart.timeScale().scrollToRealTime();
           }
         }
 
@@ -494,6 +525,7 @@
     interactionCleanup = null;
     ro?.disconnect();
     ro = null;
+    overlayRenderer?.destroy();
     drawingsRenderer?.destroy();
     chartEngine?.destroy?.();
   });

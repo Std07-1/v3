@@ -43,7 +43,7 @@
 | [0029](ADR-0029-confluence-scoring.md) | OB Confluence Scoring + Grade System | **Implemented** | 2026-03-05 | confluence, 8 factors, grade A+/A/B/C, badge, DisplayBudget, ADR-0030 ready | `smc_vis_phi1` |
 | [0030-alt](ADR-0030-alt-tf-sovereignty.md) | TF Sovereignty — Cross-TF Projection Styling | **Implemented** | 2026-03-06 | projection, opacity, dashed, cross-TF, OverlayRenderer, TF sovereignty | `smc_vis_phi1` |
 | [0031](0031-bias-banner.md) | Bias Banner — Multi-TF Trend Bias Display | **Implemented** | 2026-03-08 | bias_map, trend_bias, multi-TF, banner, BiasBanner.svelte | `smc_vis_phi2` |
-| [0032](0032-overlay-render-throttle-tf-switch.md) | Overlay Render Throttle + TF Switch Stability | **Proposed** | 2026-03-07 | crosshairMove guard, RAF wheel, center_ms viewCache, TF switch UX | `ui_perf_p1_p5` |
+| [0032](0032-overlay-render-throttle-tf-switch.md) | Overlay Render Throttle + TF Switch Stability | **Implemented** | 2026-03-08 | crosshairMove guard, RAF wheel, center_ms viewCache, TF switch UX | `ui_perf_p1_p5` |
 
 ---
 

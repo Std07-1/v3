@@ -250,14 +250,14 @@ export function setupPriceScaleInteractions(
     // ─── Wheel handler with rAF throttle ───
 
     let pendingWheelRaf: number | null = null;
-    let pendingWheel: { clientX: number; clientY: number; deltaY: number; shiftKey: boolean } | null = null;
+    let pendingWheel: { clientX: number; clientY: number; deltaY: number; mode: 'pan' | 'zoom' } | null = null;
 
     const flushPendingWheel = () => {
         pendingWheelRaf = null;
         const payload = pendingWheel;
         pendingWheel = null;
         if (!payload) return;
-        if (payload.shiftKey) {
+        if (payload.mode === 'pan') {
             applyWheelPan(payload.deltaY);
         } else {
             applyWheelZoom(payload);
@@ -278,27 +278,16 @@ export function setupPriceScaleInteractions(
             event.stopImmediatePropagation();
         }
 
-        const effectiveRange = getEffectivePriceRange();
-        if (!effectiveRange) {
-            // Немає даних ще — schedule deferred
-            pendingWheel = {
-                clientX: event.clientX,
-                clientY: event.clientY,
-                deltaY: event.deltaY,
-                shiftKey: Boolean(event.shiftKey),
-            };
-            if (pendingWheelRaf === null) {
-                pendingWheelRaf = requestAnimationFrame(flushPendingWheel);
-            }
-            return;
-        }
-
-        if (event.shiftKey && inPane) {
-            applyWheelPan(event.deltaY);
-            return;
-        }
-        if (inAxis) {
-            applyWheelZoom(event);
+        // ADR-0032 P2: always buffer through RAF — max 60Hz zoom/pan
+        const mode: 'pan' | 'zoom' = (event.shiftKey && inPane) ? 'pan' : 'zoom';
+        pendingWheel = {
+            clientX: event.clientX,
+            clientY: event.clientY,
+            deltaY: event.deltaY,
+            mode,
+        };
+        if (pendingWheelRaf === null) {
+            pendingWheelRaf = requestAnimationFrame(flushPendingWheel);
         }
     };
 

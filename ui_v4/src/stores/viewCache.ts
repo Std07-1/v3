@@ -1,35 +1,35 @@
 // src/stores/viewCache.ts
-// P3.9: Visible range cache per (symbol, tf) key.
-// V3 parity: app.js:67-69 uiCacheByKey, cacheLru.
-//
-// При switch symbol/TF — зберігає scroll position.
-// При поверненні — відновлює, щоб графік не "стрибав".
+// ADR-0032 P4: Time-center preserving TF switch.
+// Зберігає center_ms (center timestamp) + bars_visible (zoom level)
+// замість LogicalRange (bar indices), що дозволяє стабільне cross-TF switching.
 // SSOT: цей файл — єдине місце збереження visible range.
 
-import type { LogicalRange } from 'lightweight-charts';
+export interface ViewSnapshot {
+    center_ms: number;
+    bars_visible: number;
+}
 
 const MAX_ENTRIES = 20; // LRU cap — достатньо для всіх symbol×TF комбінацій
 
-const cache = new Map<string, LogicalRange>();
+const cache = new Map<string, ViewSnapshot>();
 
 function makeKey(symbol: string, tf: string): string {
     return `${symbol}|${tf}`;
 }
 
 /**
- * Зберегти поточний visible range для symbol+tf.
+ * Зберегти поточний view snapshot для symbol+tf.
  * Викликається перед switch (full frame).
  */
-export function saveVisibleRange(
+export function saveViewSnapshot(
     symbol: string,
     tf: string,
-    range: LogicalRange | null,
+    snapshot: ViewSnapshot,
 ): void {
-    if (!range) return;
     const key = makeKey(symbol, tf);
     // Delete+set = move to end (LRU: most recently used at the end)
     cache.delete(key);
-    cache.set(key, range);
+    cache.set(key, snapshot);
     // LRU eviction
     if (cache.size > MAX_ENTRIES) {
         const oldest = cache.keys().next().value;
@@ -38,13 +38,13 @@ export function saveVisibleRange(
 }
 
 /**
- * Відновити visible range для symbol+tf.
- * Повертає null якщо немає збереженого range.
+ * Відновити view snapshot для symbol+tf.
+ * Повертає null якщо немає збереженого snapshot.
  */
-export function loadVisibleRange(
+export function loadViewSnapshot(
     symbol: string,
     tf: string,
-): LogicalRange | null {
+): ViewSnapshot | null {
     return cache.get(makeKey(symbol, tf)) ?? null;
 }
 

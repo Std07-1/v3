@@ -373,7 +373,7 @@ flowchart TD
 > SmcRunner живе в ws_server process (in-process, §6.1 ADR-0024).
 > Transactions: bar committed → SmcEngine.on_bar() → SmcDelta → вбудований у WS frame.
 > Read-only: SMC НЕ пише в UDS/SSOT. Ephemeral overlay, відновлюється при warmup.
-> Не реалізовано: Sessions/Killzones (E3), Confluence POI (E3), /api/smc HTTP endpoint.
+> Не реалізовано: Sessions/Killzones (E3), /api/smc HTTP endpoint.
 
 ## Схеми процесів і циклів
 
@@ -631,7 +631,10 @@ v3/
 │   │   ├── fvg.py                 # detect_fvg() — bull/bear + height guard (N2)
 │   │   ├── liquidity.py           # detect_liquidity_levels() — ATR-based clustering
 │   │   ├── premium_discount.py    # detect_premium_discount() — equilibrium zones (enabled=false)
-│   │   ├── inducement.py          # detect_inducements() — false breakout detection│   ├── key_levels.py          # detect_key_levels() — PDH/PDL/DH/DL, cross-TF (ADR-0024b)
+│   │   ├── inducement.py          # detect_inducements() — false breakout detection
+│   ├── confluence.py          # confluence_score() — 8-factor grade A+/A/B/C (ADR-0029)
+│   ├── momentum.py            # displacement detection — body/ATR ratio
+│   ├── key_levels.py          # detect_key_levels() — PDH/PDL/DH/DL, cross-TF (ADR-0024b)
 │   ├── context_stack.py       # ContextStack — cross-TF zone aggregation│   │   └── engine.py              # SmcEngine orchestrator + _update_zone_lifecycle (N1, ~350 LOC)
 │   └── contracts/
 │       └── public/
@@ -694,8 +697,8 @@ v3/
 │       ├── app/                   # diagState, diagSelectors, frameRouter (config frame T8), edgeProbe
 │       ├── ws/                    # WSConnection (quiet degraded mode), WsAction creators
 │       ├── stores/                # cursor price + UI warnings + meta (serverConfig) + favorites (P3.13) + smcStore (applySmcFull/Delta) + replayStore + viewCache
-│       ├── layout/                # ChartPane (SMC toggles OB/FVG/SW/LVL), ChartHud, OhlcvTooltip, StatusBar, StatusOverlay, DiagPanel, DrawingToolbar, SymbolTfPicker, ReplayBar
-│       └── chart/                 # ChartEngine (LWC, v3-parity), themes.ts (3 themes + 5 candle styles), interaction.ts (Y-zoom/pan/reset), OverlayRenderer (strength opacity N3), DrawingsRenderer, geometry
+│       ├── layout/                # ChartPane (SMC toggles OB/FVG/SW/LVL), ChartHud, OhlcvTooltip, StatusBar, StatusOverlay, DiagPanel, DrawingToolbar, SymbolTfPicker, ReplayBar, BiasBanner
+│       └── chart/                 # ChartEngine (LWC, v3-parity), lwc.ts, themes.ts (3 themes + 5 candle styles), interaction.ts (Y-zoom/pan/reset), OverlayRenderer (strength opacity N3), DrawingsRenderer, overlay/DisplayBudget.ts, geometry
 ├── aione_top/                     # TUI-монітор процесів/pipeline (standalone, NOT supervisor-managed)
 │   ├── __main__.py                # python -m aione_top
 │   ├── app.py                     # головний TUI loop (421 LOC, Textual)
@@ -734,18 +737,19 @@ v3/
 │   ├── ui_api.md                  # HTTP API reference
 │   ├── redis_snapshot_design.md   # дизайн Redis snapshots
 │   ├── adr/                       # Architecture Decision Records (SSOT)
-│   │   ├── index.md               # реєстр усіх ADR (ADR-0001 … ADR-0027)
+│   │   ├── index.md               # реєстр усіх ADR (ADR-0001 … ADR-0032)
 │   │   ├── 0001-unified-data-store.md
 │   │   ├── 0002-derive-chain-from-m1.md
 │   │   └── ...                    # (30 файлів)
 │   ├── audit/                     # аудит прогресу P0–P6
 │   ├── runbooks/                  # production, coldstart, live_recover
 │   └── system_spec/               # UI v4 audit, gap analysis
-├── tests/                         # 37 файлів, 422+ тестів
+├── tests/                         # 37 файлів, 431+ тестів
 │   ├── test_smc_e1.py             # SMC E1: swings, structure, OB, FVG, engine
 │   ├── test_smc_runner.py         # SMC Runner: warmup, on_bar, delta, performance
 │   ├── test_smc_key_levels.py     # SMC key levels: PDH/PDL/DH/DL
 │   ├── test_smc_n1_lifecycle.py   # SMC N1: zone lifecycle (merge/evict/decay)
+│   ├── test_smc_confluence.py     # SMC confluence: 8 factors, grade (ADR-0029)
 │   ├── test_smc_e2_liquidity.py   # SMC E2: liquidity ATR-clusters
 │   ├── test_smc_e2_pd_inducement.py # SMC E2: P/D + inducement
 │   ├── test_d1_derive.py          # D1 derive from M1 (ADR-0023)

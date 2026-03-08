@@ -1,6 +1,6 @@
 # Документація Trading Platform v3 — Індекс (SSOT)
 
-> **Остання перевірка**: 2026-03-02  
+> **Остання перевірка**: 2026-03-07  
 > **Мова**: українська (англійська лише для загальноприйнятих термінів)
 
 Цей файл — **точка входу** в усю документацію проєкту. Будь-яке знання про систему має бути знайдене через цей індекс.
@@ -14,7 +14,7 @@
 | Документ | Зміст |
 |---|---|
 | [system_current_overview.md](system_current_overview.md) | Поточна архітектура, процеси, SSOT-площини, Mermaid-схеми, annotated tree |
-| **[docs/adr/index.md](adr/index.md)** | **Індекс усіх ADR (SSOT)** — 30 ADR з обґрунтуваннями архітектурних рішень |
+| **[docs/adr/index.md](adr/index.md)** | **Індекс усіх ADR (SSOT)** — 35 ADR з обґрунтуваннями архітектурних рішень |
 | [ADR-0001](adr/0001-unified-data-store.md) | UDS (RAM↔Redis↔Disk) + Contract-first API |
 | [ADR-0002](adr/0002-derive-chain-from-m1.md) | DeriveChain: M1→M3→M5→M15→M30→H1→H4 |
 | [ADR-0003](adr/0003-cold-start-hardening.md) | Cold start: error isolation, process restart, unified gate |
@@ -30,6 +30,11 @@
 | [ADR-0025](adr/0025-potik-b-data-quality-summary.md) | Потік B data quality summary |
 | [ADR-0026](adr/0026-overlay-level-rendering-rules.md) | Overlay Level Rendering Rules (L1–L6) |
 | [ADR-0027](adr/0027-client-side-replay.md) | Client-Side Replay (TradingView-style) |
+| [ADR-0028](adr/ADR-0028-v2-elimination-engine.md) | Elimination Engine — Display Filter Pipeline |
+| [ADR-0029](adr/ADR-0029-confluence-scoring.md) | OB Confluence Scoring + Grade System (8-factor, A+/A/B/C) |
+| [ADR-0030-alt](adr/ADR-0030-alt-tf-sovereignty.md) | TF Sovereignty — Cross-TF Projection Styling |
+| [ADR-0031](adr/0031-bias-banner.md) | Bias Banner — Multi-TF Trend Bias Display |
+| [ADR-0032](adr/0032-overlay-render-throttle-tf-switch.md) | Overlay Render Throttle + TF Switch Stability |
 
 ### 2. Потоки даних
 
@@ -78,12 +83,16 @@
 | Документ | Зміст |
 |---|---|
 | [ADR-0024](adr/0024-smc-engine.md) | Архітектура, P-slices, інваріанти S0–S6, §18 Implementation Progress |
+| [ADR-0028](adr/ADR-0028-v2-elimination-engine.md) | Display Filter Pipeline (budget, proximity, TTL) |
+| [ADR-0029](adr/ADR-0029-confluence-scoring.md) | Confluence Scoring: 8-factor grade A+/A/B/C |
 | `core/smc/types.py` | SSOT типи: SmcZone, SmcSwing, SmcLevel, SmcSnapshot, SmcDelta |
 | `core/smc/engine.py` | SmcEngine — pure orchestrator (zone lifecycle, ranking, caps) |
+| `core/smc/confluence.py` | confluence_score() — 8-factor grade (ADR-0029) |
 | `core/smc/config.py` | SmcConfig dataclass (params з config.json:smc) |
 | `runtime/smc/smc_runner.py` | SmcRunner — in-process під ws_server, warmup + on_bar |
 | `ui_v4/src/stores/smcStore.ts` | applySmcFull / applySmcDelta — incremental SMC state |
 | `ui_v4/src/chart/overlay/OverlayRenderer.ts` | Canvas rendering: OB/FVG/swings/levels з opacity за strength |
+| `ui_v4/src/chart/overlay/DisplayBudget.ts` | Display budget filter (ADR-0028) |
 
 ### 6. Runbooks (експлуатація)
 
