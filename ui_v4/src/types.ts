@@ -82,6 +82,32 @@ export interface SmcDeltaWire {
   trend_bias: string | null;
 }
 
+// -------------------- Narrative (ADR-0033) --------------------
+
+/** ADR-0033: один actionable scenario для трейдера (max 2: primary + alternative). */
+export interface ActiveScenario {
+  zone_id: string;
+  direction: 'long' | 'short';
+  entry_desc: string;
+  trigger: 'approaching' | 'in_zone' | 'triggered' | 'ready';
+  trigger_desc: string;
+  target_desc: string | null;    // null якщо target невідомий (BH-4)
+  invalidation: string;
+}
+
+/** ADR-0033: повний narrative block для одного symbol+viewer_tf. */
+export interface NarrativeBlock {
+  mode: 'trade' | 'wait';
+  sub_mode: 'aligned' | 'reduced' | '';
+  headline: string;
+  bias_summary: string;
+  scenarios: ActiveScenario[];    // max 2 (T-1)
+  next_area: string;
+  fvg_context: string;            // "" if none
+  market_phase: 'trending_up' | 'trending_down' | 'ranging';
+  warnings: string[];             // degraded signals (BH-4/BH-8)
+}
+
 // -------------------- Drawings --------------------
 export type DrawingType = 'hline' | 'trend' | 'rect';
 
@@ -149,6 +175,8 @@ export interface RenderFrame {
   bias_map?: Record<string, string>;
   /** Momentum: per-TF directional displacement (full frame only) */
   momentum_map?: Record<string, { b: number; r: number }>;
+  /** ADR-0033: narrative block (full frame only, N4: not in delta) */
+  narrative?: NarrativeBlock;
   drawings?: Drawing[];
 
   replay?: {

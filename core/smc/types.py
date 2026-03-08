@@ -194,6 +194,39 @@ class SmcDelta:
         }
 
 
+# -------------------- Narrative (ADR-0033) --------------------
+
+@dataclasses.dataclass(frozen=True)
+class ActiveScenario:
+    """Один actionable scenario для трейдера (ADR-0033, T-1: max 2)."""
+    zone_id: str               # ID зони-тригера (OB A+/A)
+    direction: str             # "long" | "short"
+    entry_desc: str            # "OB▲ A(6) 5144–5225"
+    trigger: str               # "approaching" | "in_zone" | "triggered" | "ready"
+    trigger_desc: str          # "Approaching: 15 pts from zone"
+    target_desc: Optional[str] # "PDL 5062" | None (BH-4)
+    invalidation: str          # "Above 5230"
+
+
+@dataclasses.dataclass(frozen=True)
+class NarrativeBlock:
+    """Повний narrative для одного symbol+viewer_tf (ADR-0033 Rev 2).
+
+    N3: synthesize_narrative() НІКОЛИ не повертає None — fallback block з warnings.
+    N5: market_phase = display-only, НЕ впливає на mode.
+    N6: alignment = D1+H4 only, LTF disagree = normal correction.
+    """
+    mode: str                          # "trade" | "wait"
+    sub_mode: str                      # "aligned" | "reduced" | ""
+    headline: str                      # "🔴 SELL setup ready"
+    bias_summary: str                  # Context beyond BiasBanner pills
+    scenarios: List["ActiveScenario"]  # max 2 (T-1)
+    next_area: str                     # "{price} {dir} {type} ({grade}/{score})"
+    fvg_context: str                   # "" якщо немає
+    market_phase: str                  # "trending_up" | "trending_down" | "ranging"
+    warnings: List[str]                # ["no_target_found", "computation_error"]
+
+
 def make_zone_id(kind: str, symbol: str, tf_s: int, anchor_bar_ms: int) -> str:
     """S3: детермінований zone ID."""
     sym_safe = symbol.replace("/", "_").replace(" ", "_")

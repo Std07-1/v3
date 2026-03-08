@@ -22,6 +22,7 @@
   import type { DisplayMode } from "../chart/overlay/DisplayBudget";
   import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
+  // NarrativePanel moved to ChartHud inline (ADR-0033)
   // BiasBanner moved to ChartHud (ADR-0031: inline after star)
   import { saveViewSnapshot, loadViewSnapshot } from "../stores/viewCache";
   import {

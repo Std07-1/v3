@@ -806,12 +806,29 @@ def _filter_for_display(
     # 1a) FVG zones: exclude filled, distance cap, then rank cap (ADR-0028 Φ0)
     fvg_cap = disp.fvg_display_cap  # default 4
     fvg_max_dist = disp.proximity_atr_mult * 1.5 * atr  # A-4: ~9 ATR distance cap
-    fvg_zones = [
-        z for z in eligible_zones
-        if z.kind.startswith("fvg")
-        and z.status != "filled"          # A-2: filled = dead, не показувати
-        and abs(price - (z.high + z.low) / 2.0) <= fvg_max_dist  # A-4
-    ]
+
+    # ADR-0033 SC-2: collect active OB ranges for FVG overlap check
+    ob_ranges = []  # type: list
+    if disp.fvg_ob_overlap_hide:
+        for z in eligible_zones:
+            if "ob" in z.kind and z.status not in ("mitigated", "filled"):
+                ob_ranges.append((z.low, z.high))
+
+    fvg_zones = []
+    for z in eligible_zones:
+        if not z.kind.startswith("fvg"):
+            continue
+        if z.status == "filled":          # A-2: filled = dead
+            continue
+        if abs(price - (z.high + z.low) / 2.0) > fvg_max_dist:  # A-4
+            continue
+        # ADR-0033 SC-2: hide FVG that overlaps any active OB (any overlap > 0)
+        if disp.fvg_ob_overlap_hide:
+            overlaps_ob = any(z.low < ob_h and z.high > ob_l for ob_l, ob_h in ob_ranges)
+            if overlaps_ob:
+                continue
+        fvg_zones.append(z)
+
     fvg_zones.sort(key=_zone_rank)
     fvg_zones = fvg_zones[:fvg_cap]
 

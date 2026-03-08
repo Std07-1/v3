@@ -23,7 +23,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.model.bars import CandleBar
 from core.smc.engine import SmcEngine
-from core.smc.types import SmcDelta, SmcSnapshot
+from core.smc.types import SmcDelta, SmcSnapshot, NarrativeBlock
+from core.smc.narrative import synthesize_narrative, narrative_to_wire, _fallback_narrative_block
 
 _log = logging.getLogger(__name__)
 
@@ -98,6 +99,7 @@ class SmcRunner:
             engine:    ready SmcEngine instance (core/smc/).
         """
         self._engine = engine
+        self._full_config = full_cfg  # ADR-0033: narrative needs smc.narrative config
         self._symbols: List[str] = list(full_cfg.get("symbols", []))
         tf_raw = full_cfg.get("tf_allowlist_s", [60, 300, 900, 1800, 3600, 14400, 86400])
         self._tf_allowlist: Set[int] = set(int(x) for x in tf_raw)
@@ -257,6 +259,27 @@ class SmcRunner:
             if bull > 0 or bear > 0:
                 result[str(tf_s)] = {"b": bull, "r": bear}
         return result
+
+    def get_narrative(self, symbol, viewer_tf_s, current_price, atr):
+        # type: (str, int, float, float) -> Optional[NarrativeBlock]
+        """ADR-0033: synthesize narrative. Returns None if feature disabled."""
+        cfg = self._full_config.get("smc", {}).get("narrative", {})
+        if not cfg.get("enabled", False):
+            return None
+        try:
+            snap = self.get_snapshot(symbol, viewer_tf_s)
+            if snap is None:
+                return _fallback_narrative_block(["no_snapshot"])
+            bias = self.get_bias_map(symbol)
+            grades = self.get_zone_grades(symbol, viewer_tf_s)
+            momentum = self.get_momentum_map(symbol)
+            return synthesize_narrative(
+                snap, bias, grades, momentum,
+                viewer_tf_s, current_price, atr, cfg,
+            )
+        except Exception:
+            _log.exception("NARRATIVE_ERROR symbol=%s tf=%d", symbol, viewer_tf_s)
+            return _fallback_narrative_block()
 
     def last_delta(self, symbol: str, tf_s: int) -> Optional[SmcDelta]:
         """Останній SmcDelta після on_bar_dict() — для delta frame wiring."""

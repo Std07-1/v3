@@ -262,6 +262,7 @@
   let frame: RenderFrame | null = $state(null);
   let cachedBiasMap: Record<string, string> = $state({});
   let cachedMomentumMap: Record<string, { b: number; r: number }> = $state({});
+  let cachedNarrative: import("./types").NarrativeBlock | null = $state(null);
   let statusInfo: StatusInfo = $state({
     status: "CONNECTING" as const,
     detail: "",
@@ -295,6 +296,9 @@
       cachedBiasMap = f.bias_map;
     if (f?.momentum_map && Object.keys(f.momentum_map).length > 0)
       cachedMomentumMap = f.momentum_map;
+    // ADR-0033: narrative from full frame only
+    if (f?.frame_type === "full")
+      cachedNarrative = (f as any).narrative ?? null;
     // Track price/time from frames for HUD
     if (f) {
       const candles = f.candles;
@@ -486,6 +490,7 @@
         {menuBorder}
         biasMap={cachedBiasMap}
         momentumMap={cachedMomentumMap}
+        narrative={cachedNarrative}
       />
     </div>
     <!-- ADR-0027: Replay controls bar (visible only when replay active) -->

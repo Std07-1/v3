@@ -22,6 +22,7 @@
         menuBorder = "rgba(255, 255, 255, 0.08)",
         biasMap = {} as Record<string, string>,
         momentumMap = {} as Record<string, { b: number; r: number }>,
+        narrative = null as import("../types").NarrativeBlock | null,
     }: {
         symbols: string[];
         tfs: string[];
@@ -38,6 +39,7 @@
         menuBorder?: string;
         biasMap?: Record<string, string>;
         momentumMap?: Record<string, { b: number; r: number }>;
+        narrative?: import("../types").NarrativeBlock | null;
     } = $props();
 
     // ─── Bias pills (ADR-0031) ───
@@ -325,6 +327,109 @@
                     onclick={toggleBias}
                     title="Show HTF bias">›</button
                 >
+            {/if}
+
+            <!-- ADR-0033: Narrative inline (same row as HTF bias) -->
+            {#if narrative}
+                <span class="hud-sep">·</span>
+                <span
+                    class="hud-narrative"
+                    class:trade={narrative.mode === "trade"}
+                    class:wait={narrative.mode === "wait"}
+                >
+                    <span class="narr-mode"
+                        >{narrative.mode === "trade" ? "TRADE" : "WAIT"}</span
+                    >
+                    {#if narrative.scenarios.length > 0}
+                        <span
+                            class="narr-dir"
+                            class:long={narrative.scenarios[0].direction ===
+                                "long"}
+                            class:short={narrative.scenarios[0].direction ===
+                                "short"}
+                            >{narrative.scenarios[0].direction === "long"
+                                ? "▲"
+                                : "▼"}</span
+                        >
+                        <span
+                            class="narr-trigger narr-trigger-{narrative
+                                .scenarios[0].trigger}"
+                            >{narrative.scenarios[0].trigger}</span
+                        >
+                    {/if}
+                    {#if narrative.market_phase !== "ranging"}
+                        <span class="narr-phase"
+                            >{narrative.market_phase === "trending_up"
+                                ? "↑"
+                                : "↓"}</span
+                        >
+                    {/if}
+                    <!-- Styled tooltip on hover -->
+                    <span class="narr-tooltip">
+                        <div class="ntt-headline">{narrative.headline}</div>
+                        <div class="ntt-bias">{narrative.bias_summary}</div>
+                        {#each narrative.scenarios as sc, i}
+                            <div class="ntt-scenario" class:alt={i > 0}>
+                                <span
+                                    class="ntt-dir"
+                                    class:long={sc.direction === "long"}
+                                    class:short={sc.direction === "short"}
+                                    >{sc.direction === "long" ? "▲" : "▼"}
+                                    {sc.entry_desc}
+                                    <span class="ntt-expand"
+                                        >{sc.direction === "long"
+                                            ? "BUY — вхід у лонг від зони попиту"
+                                            : "SELL — вхід у шорт від зони пропозиції"}</span
+                                    >
+                                </span>
+                                <span class="ntt-trig ntt-trig-{sc.trigger}">
+                                    {sc.trigger_desc}
+                                    <span class="ntt-expand"
+                                        >{sc.trigger === "approaching"
+                                            ? "Ціна наближається до зони — чекаємо реакцію"
+                                            : sc.trigger === "in_zone"
+                                              ? "Ціна в зоні — потрібне підтвердження для входу"
+                                              : sc.trigger === "triggered"
+                                                ? "Сигнал входу підтверджено структурою"
+                                                : "Сетап готовий до виконання"}</span
+                                    >
+                                </span>
+                                {#if sc.target_desc}<span class="ntt-target">
+                                        → {sc.target_desc}
+                                        <span class="ntt-expand"
+                                            >Найближча ціль — рівень take-profit</span
+                                        >
+                                    </span>{/if}
+                                <span class="ntt-inv">
+                                    ✕ {sc.invalidation}
+                                    <span class="ntt-expand"
+                                        >Якщо ціна досягне цього рівня — сетап
+                                        скасовано</span
+                                    >
+                                </span>
+                            </div>
+                        {/each}
+                        {#if narrative.scenarios.length === 0}
+                            <div class="ntt-wait">
+                                {narrative.next_area || "Awaiting setup..."}
+                            </div>
+                        {/if}
+                        {#if narrative.fvg_context}
+                            <div class="ntt-fvg">
+                                {narrative.fvg_context}
+                                <span class="ntt-expand"
+                                    >FVG (Fair Value Gap) — незаповнений гап у
+                                    ціні, зона магніту</span
+                                >
+                            </div>
+                        {/if}
+                        {#if narrative.warnings.length > 0}
+                            <div class="ntt-warn">
+                                ⚠ {narrative.warnings.join(", ")}
+                            </div>
+                        {/if}
+                    </span>
+                </span>
             {/if}
         </div>
     </div>
@@ -646,5 +751,226 @@
         opacity: 1;
         background: rgba(255, 255, 255, 0.08);
         box-shadow: 0 0 4px rgba(255, 255, 255, 0.08);
+    }
+
+    /* ADR-0033: Inline narrative (consistent with bias pills) */
+    .hud-narrative {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        pointer-events: auto;
+        cursor: default;
+        border-radius: 4px;
+        padding: 1px 4px;
+        transition: opacity 0.15s ease;
+    }
+    .hud-narrative.trade {
+        color: #4a90d9;
+    }
+    .hud-narrative.wait {
+        color: #8b8f9a;
+        opacity: 0.7;
+    }
+    .narr-mode {
+        text-transform: uppercase;
+    }
+    .narr-dir.long {
+        color: #26a69a;
+    }
+    .narr-dir.short {
+        color: #ef5350;
+    }
+    .narr-trigger {
+        font-size: 8px;
+        opacity: 0.8;
+    }
+    .narr-trigger-ready {
+        color: #26a69a;
+    }
+    .narr-trigger-triggered {
+        color: #ffa726;
+    }
+    .narr-trigger-in_zone {
+        color: #42a5f5;
+    }
+    .narr-trigger-approaching {
+        color: #8b8f9a;
+    }
+    .narr-phase {
+        font-size: 7px;
+        opacity: 0.6;
+    }
+
+    /* Narrative hover tooltip */
+    .narr-tooltip {
+        display: none;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        margin-top: 4px;
+        min-width: 260px;
+        max-width: 380px;
+        padding: 6px 10px;
+        background: rgba(19, 23, 34, 0.92);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(120, 123, 134, 0.2);
+        border-radius: 6px;
+        font-size: 10px;
+        font-weight: 400;
+        color: #a0a4b0;
+        white-space: normal;
+        line-height: 1.5;
+        z-index: 100;
+        pointer-events: auto;
+    }
+    .hud-narrative:hover .narr-tooltip {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+    }
+    .ntt-headline {
+        font-weight: 600;
+        color: #c0c4cc;
+        font-size: 11px;
+    }
+    .ntt-bias {
+        color: #8b8f9a;
+        font-style: italic;
+    }
+    .ntt-scenario {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        padding: 3px 0;
+        border-top: 1px solid rgba(120, 123, 134, 0.1);
+        border-radius: 4px;
+        transition: background 0.12s ease;
+    }
+    .ntt-scenario:hover {
+        background: rgba(255, 255, 255, 0.04);
+        padding: 4px 5px;
+        margin: 0 -5px;
+    }
+    .ntt-scenario.alt {
+        opacity: 0.7;
+    }
+    .ntt-scenario.alt:hover {
+        opacity: 1;
+    }
+    .ntt-dir {
+        font-weight: 600;
+    }
+    .ntt-dir.long {
+        color: #26a69a;
+    }
+    .ntt-dir.short {
+        color: #ef5350;
+    }
+    .ntt-trig {
+        font-size: 9px;
+        padding: 1px 4px;
+        border-radius: 3px;
+        background: rgba(120, 123, 134, 0.08);
+        width: fit-content;
+        cursor: default;
+        transition: all 0.12s ease;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 220px;
+        white-space: nowrap;
+    }
+    .ntt-trig:hover {
+        max-width: none;
+        white-space: normal;
+        background: rgba(120, 123, 134, 0.15);
+    }
+    .ntt-trig-ready {
+        color: #26a69a;
+        background: rgba(38, 166, 154, 0.1);
+    }
+    .ntt-trig-triggered {
+        color: #ffa726;
+        background: rgba(255, 167, 38, 0.1);
+    }
+    .ntt-trig-in_zone {
+        color: #42a5f5;
+        background: rgba(66, 165, 245, 0.1);
+    }
+    .ntt-trig-approaching {
+        color: #8b8f9a;
+    }
+    .ntt-target {
+        color: #4a90d9;
+        font-size: 9px;
+        cursor: default;
+        transition: opacity 0.12s ease;
+        opacity: 0.8;
+    }
+    .ntt-target:hover {
+        opacity: 1;
+    }
+    .ntt-inv {
+        color: #ef5350;
+        font-size: 9px;
+        opacity: 0.5;
+        cursor: default;
+        transition: opacity 0.12s ease;
+    }
+    .ntt-inv:hover {
+        opacity: 1;
+    }
+    .ntt-wait {
+        color: #5d6068;
+    }
+    .ntt-fvg {
+        color: #2ecc71;
+        font-size: 9px;
+        opacity: 0.8;
+        cursor: default;
+        transition: opacity 0.12s ease;
+    }
+    .ntt-fvg:hover {
+        opacity: 1;
+    }
+    .ntt-warn {
+        color: #ff9800;
+        font-size: 9px;
+        opacity: 0.8;
+        cursor: default;
+        transition: opacity 0.12s ease;
+    }
+    .ntt-warn:hover {
+        opacity: 1;
+    }
+    /* Expandable description on hover */
+    .ntt-expand {
+        display: none;
+        font-size: 8px;
+        font-weight: 400;
+        font-style: italic;
+        color: rgba(210, 215, 225, 0.7);
+        margin-top: 2px;
+        padding: 2px 4px;
+        border-left: 2px solid rgba(120, 123, 134, 0.2);
+        white-space: normal;
+        line-height: 1.3;
+    }
+    .ntt-dir:hover .ntt-expand,
+    .ntt-trig:hover .ntt-expand,
+    .ntt-target:hover .ntt-expand,
+    .ntt-inv:hover .ntt-expand,
+    .ntt-fvg:hover .ntt-expand {
+        display: block;
+    }
+    .ntt-dir,
+    .ntt-trig,
+    .ntt-target,
+    .ntt-inv,
+    .ntt-fvg {
+        position: relative;
     }
 </style>

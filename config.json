@@ -329,7 +329,19 @@
             "focus_budget_per_side": 3,
             "focus_budget_total": 12,
             "structure_label_max": 4,
-            "fvg_display_cap": 4
+            "fvg_display_cap": 4,
+            "fvg_ob_overlap_hide": true
+        },
+        "narrative": {
+            "enabled": true,
+            "trade_min_score": 6,
+            "max_scenarios": 2,
+            "market_phase_enabled": true,
+            "phase_hysteresis_bars": 3,
+            "fvg_context_enabled": true,
+            "target_lookback_bars": 100,
+            "trigger_structure_lookback_bars": 5,
+            "max_wire_bytes": 600
         },
         "context_stack": {
             "enabled": true,

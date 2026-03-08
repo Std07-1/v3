@@ -490,6 +490,17 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
             except Exception as _mm_exc:
                 _log.warning("WS_MOMENTUM_MAP_ERR sym=%s err=%s", session.symbol, _mm_exc)
         frame = _build_full_frame(session, candles, session.symbol, tf_label, warnings or None, app=app, smc_wire=smc_wire, bias_map=bias_map, momentum_map=momentum_map)
+        # ADR-0033 N4: narrative only in full frame (not delta). current_price from last candle.
+        if _smc_runner is not None and candles:
+            try:
+                _last_c = candles[-1].get("c", 0) if isinstance(candles[-1], dict) else 0
+                _atr_est = abs(candles[-1].get("h", 0) - candles[-1].get("l", 0)) if isinstance(candles[-1], dict) and len(candles) > 0 else 1.0
+                _narr = _smc_runner.get_narrative(session.symbol, session.tf_s, float(_last_c), float(_atr_est))
+                if _narr is not None:
+                    from core.smc.narrative import narrative_to_wire
+                    frame["narrative"] = narrative_to_wire(_narr)
+            except Exception as _narr_exc:
+                _log.warning("WS_NARRATIVE_ERR sym=%s err=%s", session.symbol, _narr_exc)
         await session.ws.send_json(frame)
         _log.info(
             "WS_FULL_PUSH client=%s symbol=%s tf=%s candles=%d seq=%d",

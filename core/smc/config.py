@@ -162,6 +162,7 @@ class SmcDisplayConfig:
     focus_budget_total: int = 12        # hard cap on ALL SMC objects in Focus mode
     structure_label_max: int = 4        # max structure labels (BOS/CHoCH) in Focus mode
     fvg_display_cap: int = 4            # server-side cap on FVG zones
+    fvg_ob_overlap_hide: bool = True     # ADR-0033 SC-2: hide FVG overlapping active OB
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "SmcDisplayConfig":
@@ -177,6 +178,7 @@ class SmcDisplayConfig:
             focus_budget_total=int(d.get("focus_budget_total", 12)),
             structure_label_max=int(d.get("structure_label_max", 4)),
             fvg_display_cap=int(d.get("fvg_display_cap", 4)),
+            fvg_ob_overlap_hide=bool(d.get("fvg_ob_overlap_hide", True)),
         )
         _validate_display_budget(inst)
         return inst
