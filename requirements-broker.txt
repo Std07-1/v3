@@ -1,0 +1,20 @@
+# Broker-only dependencies (Python 3.7 / .venv37/)
+# ADR-0016: dual-venv broker isolation
+#
+# Ці залежності інсталюються ТІЛЬКИ у .venv37/.
+# Головний .venv/ (Python 3.12+) НЕ містить forexconnect.
+#
+# Setup:
+#   python3.7 -m venv .venv37
+#   .venv37\Scripts\pip install -r requirements-broker.txt
+#   set PYTHONPATH=.  (або pip install -e . --no-deps)
+
+# FXCM ForexConnect SDK — proprietary / EULA-governed.
+# Див. docs/compliance/fxcm-sdk-license-review.md
+forexconnect==1.6.43
+
+# Redis client (IPC з platform)
+redis>=4.0,<6.0
+
+# Env loading
+python-dotenv>=0.21,<1.0

@@ -11,55 +11,72 @@ Covers:
   - State accumulation between on_bar calls
   - FVG height guard (N2)
 """
+
 from __future__ import annotations
 
-import dataclasses
-from typing import List
-
-import pytest
 from core.model.bars import CandleBar
 from core.smc.config import SmcConfig
 from core.smc.engine import (
-    SmcEngine,
     _update_zone_lifecycle,
-    _zone_rank,
-    _BULL_ZONE_KINDS,
-    _BEAR_ZONE_KINDS,
 )
 from core.smc.types import SmcZone
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
-def _bar(open_ms: int, o: float, h: float, low: float, c: float,
-         tf_s: int = 300, sym: str = "XAU/USD", complete: bool = True) -> CandleBar:
+
+def _bar(
+    open_ms: int,
+    o: float,
+    h: float,
+    low: float,
+    c: float,
+    tf_s: int = 300,
+    sym: str = "XAU/USD",
+    complete: bool = True,
+) -> CandleBar:
     return CandleBar(
-        symbol=sym, tf_s=tf_s,
+        symbol=sym,
+        tf_s=tf_s,
         open_time_ms=open_ms,
         close_time_ms=open_ms + tf_s * 1000,
-        o=o, h=h, low=low, c=c, v=100.0,
+        o=o,
+        h=h,
+        low=low,
+        c=c,
+        v=100.0,
         complete=complete,
         src="test",
     )
 
 
-def _zone(kind: str, high: float, low: float,
-          anchor_ms: int = 1000000,
-          strength: float = 0.8,
-          status: str = "active",
-          sym: str = "XAU/USD",
-          tf_s: int = 300) -> SmcZone:
+def _zone(
+    kind: str,
+    high: float,
+    low: float,
+    anchor_ms: int = 1000000,
+    strength: float = 0.8,
+    status: str = "active",
+    sym: str = "XAU/USD",
+    tf_s: int = 300,
+) -> SmcZone:
     return SmcZone(
         id="{}_{}_{}_{}".format(kind, sym, tf_s, anchor_ms),
-        symbol=sym, tf_s=tf_s, kind=kind,
-        start_ms=anchor_ms, end_ms=None,
-        high=high, low=low,
-        status=status, strength=strength,
+        symbol=sym,
+        tf_s=tf_s,
+        kind=kind,
+        start_ms=anchor_ms,
+        end_ms=None,
+        high=high,
+        low=low,
+        status=status,
+        strength=strength,
         anchor_bar_ms=anchor_ms,
     )
 
 
 # ── TestMitigation ───────────────────────────────────────────────────────
+
 
 class TestMitigation:
     """R-04: mitigation by bar.c (close), NOT wick."""
@@ -99,6 +116,7 @@ class TestMitigation:
 
 # ── TestExpiry ───────────────────────────────────────────────────────────
 
+
 class TestExpiry:
     """Age > 500 bars → zone dropped."""
 
@@ -108,8 +126,14 @@ class TestExpiry:
         bar_ms = tf_s * 1000
         # 501 bars later
         bar_open_ms = anchor_ms + 501 * bar_ms
-        z = _zone("ob_bull", high=2050.0, low=2040.0, anchor_ms=anchor_ms,
-                   strength=0.8, tf_s=tf_s)
+        z = _zone(
+            "ob_bull",
+            high=2050.0,
+            low=2040.0,
+            anchor_ms=anchor_ms,
+            strength=0.8,
+            tf_s=tf_s,
+        )
         active = {z.id: z}
         cfg = SmcConfig(max_zones_per_tf=10)
         bar = _bar(bar_open_ms, o=2060.0, h=2065.0, low=2055.0, c=2060.0, tf_s=tf_s)
@@ -122,8 +146,14 @@ class TestExpiry:
         tf_s = 300
         bar_ms = tf_s * 1000
         bar_open_ms = anchor_ms + 100 * bar_ms
-        z = _zone("ob_bull", high=2050.0, low=2040.0, anchor_ms=anchor_ms,
-                   strength=0.8, tf_s=tf_s)
+        z = _zone(
+            "ob_bull",
+            high=2050.0,
+            low=2040.0,
+            anchor_ms=anchor_ms,
+            strength=0.8,
+            tf_s=tf_s,
+        )
         active = {z.id: z}
         cfg = SmcConfig(max_zones_per_tf=10)
         bar = _bar(bar_open_ms, o=2060.0, h=2065.0, low=2055.0, c=2060.0, tf_s=tf_s)
@@ -133,6 +163,7 @@ class TestExpiry:
 
 # ── TestAgeDecay ─────────────────────────────────────────────────────────
 
+
 class TestAgeDecay:
     """200–500 bars → strength decays toward 0.3."""
 
@@ -140,8 +171,14 @@ class TestAgeDecay:
         anchor_ms = 1000000
         tf_s = 300
         bar_open_ms = anchor_ms + 300 * tf_s * 1000
-        z = _zone("ob_bull", high=2050.0, low=2040.0, anchor_ms=anchor_ms,
-                   strength=0.8, tf_s=tf_s)
+        z = _zone(
+            "ob_bull",
+            high=2050.0,
+            low=2040.0,
+            anchor_ms=anchor_ms,
+            strength=0.8,
+            tf_s=tf_s,
+        )
         active = {z.id: z}
         cfg = SmcConfig(max_zones_per_tf=10)
         bar = _bar(bar_open_ms, o=2060.0, h=2065.0, low=2055.0, c=2060.0, tf_s=tf_s)
@@ -153,20 +190,23 @@ class TestAgeDecay:
 
 # ── TestHideMitigated ────────────────────────────────────────────────────
 
+
 class TestHideMitigated:
     """hide_mitigated config flag."""
 
     def test_hide_true_filters_mitigated(self):
-        z = _zone("ob_bull", high=2050.0, low=2040.0, anchor_ms=100000,
-                   status="mitigated")
+        z = _zone(
+            "ob_bull", high=2050.0, low=2040.0, anchor_ms=100000, status="mitigated"
+        )
         active = {z.id: z}
         cfg = SmcConfig(max_zones_per_tf=10, hide_mitigated=True)
         result = _update_zone_lifecycle([z], active, None, cfg, 300)
         assert len(result) == 0
 
     def test_hide_false_keeps_mitigated(self):
-        z = _zone("ob_bull", high=2050.0, low=2040.0, anchor_ms=100000,
-                   status="mitigated")
+        z = _zone(
+            "ob_bull", high=2050.0, low=2040.0, anchor_ms=100000, status="mitigated"
+        )
         active = {z.id: z}
         cfg = SmcConfig(max_zones_per_tf=10, hide_mitigated=False)
         result = _update_zone_lifecycle([z], active, None, cfg, 300)
@@ -174,6 +214,7 @@ class TestHideMitigated:
 
 
 # ── TestFvgMissingDrop (D-02) ────────────────────────────────────────────
+
 
 class TestFvgDrop:
     """D-02: FVG not in fresh → evict. Non-FVG survives."""
@@ -192,14 +233,19 @@ class TestFvgDrop:
 
 # ── TestCapEnforcement (D-01) ────────────────────────────────────────────
 
+
 class TestCapEnforcement:
     """D-01: deterministic cap via _zone_rank."""
 
     def test_cap_keeps_strongest(self):
         zones = [
-            _zone("ob_bull", high=2050 + i, low=2040 + i,
-                   anchor_ms=100000 + i * 300000,
-                   strength=round(0.1 + i * 0.07, 3))
+            _zone(
+                "ob_bull",
+                high=2050 + i,
+                low=2040 + i,
+                anchor_ms=100000 + i * 300000,
+                strength=round(0.1 + i * 0.07, 3),
+            )
             for i in range(12)
         ]
         active = {}
@@ -212,9 +258,13 @@ class TestCapEnforcement:
 
     def test_cap_is_deterministic(self):
         zones = [
-            _zone("ob_bear", high=2050 + i, low=2040 + i,
-                   anchor_ms=100000 + i * 300000,
-                   strength=0.5)
+            _zone(
+                "ob_bear",
+                high=2050 + i,
+                low=2040 + i,
+                anchor_ms=100000 + i * 300000,
+                strength=0.5,
+            )
             for i in range(12)
         ]
         active = {}
@@ -225,6 +275,7 @@ class TestCapEnforcement:
 
 
 # ── TestStateAccumulation ────────────────────────────────────────────────
+
 
 class TestStateAccumulation:
     """active_zones persists between on_bar calls."""
@@ -247,12 +298,14 @@ class TestStateAccumulation:
 
 # ── TestFvgHeightGuard (N2) ──────────────────────────────────────────────
 
+
 class TestFvgHeightGuard:
     """N2: giant FVG > max_zone_height_atr_mult × ATR should be skipped."""
 
     def test_giant_fvg_detected(self):
         """detect_fvg no longer applies height guard — all FVGs pass through."""
         from core.smc.fvg import detect_fvg
+
         cfg = SmcConfig(max_zone_height_atr_mult=5.0)
         # ATR ~10 based on these bars, gap = 200 → height guard removed
         bars = []
@@ -261,15 +314,23 @@ class TestFvgHeightGuard:
             bars.append(_bar(ms, 2000.0, 2010.0, 1990.0, 2005.0))
         # Create a bullish gap: b0.h < b2.low by a LOT
         bars.append(_bar(1000000 + 20 * 300000, 2000.0, 2010.0, 1990.0, 2000.0))  # b0
-        bars.append(_bar(1000000 + 21 * 300000, 2100.0, 2220.0, 2090.0, 2200.0))  # b1 (impulse)
-        bars.append(_bar(1000000 + 22 * 300000, 2210.0, 2220.0, 2210.0, 2215.0))  # b2: b2.low=2210 >> b0.h=2010
+        bars.append(
+            _bar(1000000 + 21 * 300000, 2100.0, 2220.0, 2090.0, 2200.0)
+        )  # b1 (impulse)
+        bars.append(
+            _bar(1000000 + 22 * 300000, 2210.0, 2220.0, 2210.0, 2215.0)
+        )  # b2: b2.low=2210 >> b0.h=2010
         result = detect_fvg(bars, cfg)
-        fvg_bull = [z for z in result if z.kind == "fvg_bull"
-                    and z.anchor_bar_ms == bars[-2].open_time_ms]
+        fvg_bull = [
+            z
+            for z in result
+            if z.kind == "fvg_bull" and z.anchor_bar_ms == bars[-2].open_time_ms
+        ]
         assert len(fvg_bull) >= 1, "giant FVG should pass (no height guard)"
 
     def test_normal_fvg_passes(self):
         from core.smc.fvg import detect_fvg
+
         cfg = SmcConfig(max_zone_height_atr_mult=5.0)
         # ATR ~10, gap = 5 → 5 < 5*10 → pass
         bars = []
@@ -278,7 +339,9 @@ class TestFvgHeightGuard:
             bars.append(_bar(ms, 2000.0, 2010.0, 1990.0, 2005.0))
         bars.append(_bar(1000000 + 20 * 300000, 2000.0, 2010.0, 1990.0, 2005.0))  # b0
         bars.append(_bar(1000000 + 21 * 300000, 2010.0, 2020.0, 2008.0, 2018.0))  # b1
-        bars.append(_bar(1000000 + 22 * 300000, 2015.0, 2025.0, 2015.0, 2020.0))  # b2: low=2015 > b0.h=2010 → gap=5
+        bars.append(
+            _bar(1000000 + 22 * 300000, 2015.0, 2025.0, 2015.0, 2020.0)
+        )  # b2: low=2015 > b0.h=2010 → gap=5
         result = detect_fvg(bars, cfg)
         bull = [z for z in result if z.kind == "fvg_bull"]
         assert len(bull) >= 1, "normal-sized FVG should pass height guard"

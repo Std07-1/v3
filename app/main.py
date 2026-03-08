@@ -22,6 +22,60 @@ except Exception:
     redis_lib = None  # type: ignore
 
 
+# ---------------------------------------------------------------------------
+# ADR-0016: Dual-venv broker isolation
+# Broker modules run under .venv37/ (Python 3.7), everything else under .venv/
+# ---------------------------------------------------------------------------
+BROKER_MODULES = {
+    "runtime.ingest.tick_publisher_fxcm",
+    "runtime.ingest.broker_sidecar",
+}
+
+_broker_python_cache: Optional[str] = None
+
+
+def _python_for(module: str) -> str:
+    """Повертає шлях до Python для запуску модуля (ADR-0016).
+
+    Broker modules → .venv37/ python (config.json: broker_python).
+    Все інше → sys.executable.
+    """
+    global _broker_python_cache
+    if module not in BROKER_MODULES:
+        return sys.executable
+    if _broker_python_cache is not None:
+        return _broker_python_cache
+    # Спробувати із config.json
+    try:
+        cfg_path = pick_config_path()
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        broker_py = cfg.get("broker_python", "")
+        if broker_py and os.path.isfile(broker_py):
+            _broker_python_cache = broker_py
+            logging.info("BROKER_PYTHON path=%s source=config", broker_py)
+            return broker_py
+    except Exception:
+        pass
+    # Fallback: спробувати стандартний шлях
+    if os.name == "nt":
+        default = os.path.join(".", ".venv37", "Scripts", "python.exe")
+    else:
+        default = os.path.join(".", ".venv37", "bin", "python")
+    if os.path.isfile(default):
+        _broker_python_cache = default
+        logging.info("BROKER_PYTHON path=%s source=default", default)
+        return default
+    # I5: degraded-but-loud — fallback на sys.executable
+    logging.warning(
+        "BROKER_PYTHON_NOT_FOUND config_key=broker_python default=%s "
+        "fallback=sys.executable (I5: degraded-but-loud)",
+        default,
+    )
+    _broker_python_cache = sys.executable
+    return sys.executable
+
+
 def _setup_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
@@ -34,9 +88,20 @@ def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--mode",
-        choices=["all", "ui", "tick_preview", "tick_publisher", "m1_poller", "ws_server", "replay"],
+        choices=[
+            "all",
+            "ui",
+            "tick_preview",
+            "tick_publisher",
+            "m1_poller",
+            "broker_sidecar",
+            "m1_ingestion_worker",
+            "ws_server",
+            "replay",
+        ],
         default="all",
-        help="all | ui | tick_preview | tick_publisher | m1_poller | ws_server | replay",
+        help="all | ui | tick_preview | tick_publisher | m1_poller | "
+        "broker_sidecar | m1_ingestion_worker | ws_server | replay",
     )
     ap.add_argument(
         "--stdio",
@@ -82,6 +147,8 @@ class ChildProcess:
 # ---------------------------------------------------------------------------
 _PROCESS_CATEGORIES: Dict[str, str] = {
     "m1_poller": "critical",
+    "m1_ingestion_worker": "critical",
+    "broker_sidecar": "critical",
     "tick_publisher": "non_critical",
     "tick_preview": "non_critical",
     "ui": "essential",
@@ -90,14 +157,14 @@ _PROCESS_CATEGORIES: Dict[str, str] = {
 }
 # (base_delay_s, max_delay_s, max_restart_attempts)
 _BACKOFF_CFG: Dict[str, tuple] = {
-    "critical":     (10, 300, 5),
+    "critical": (10, 300, 5),
     "non_critical": (5, 120, 10),
-    "essential":    (5, 120, 10),
+    "essential": (5, 120, 10),
 }
 _STABLE_RESET_S = 600  # restart counter reset після 10 хв стабільної роботи
 
-_restart_state: Dict[str, Dict] = {}      # label → {count, start}
-_restart_schedule: Dict[str, Dict] = {}   # label → {module, restart_at, attempt}
+_restart_state: Dict[str, Dict] = {}  # label → {count, start}
+_restart_schedule: Dict[str, Dict] = {}  # label → {module, restart_at, attempt}
 
 _PRINT_LOCK = threading.Lock()
 
@@ -144,9 +211,13 @@ def _start_process(
     new_console: bool,
     extra_env: Optional[Dict[str, str]] = None,
 ) -> ChildProcess:
-    cmd = [sys.executable, "-u", "-m", module]
+    python_exe = _python_for(module)
+    cmd = [python_exe, "-u", "-m", module]
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    # ADR-0016: broker modules need PYTHONPATH to find core/env_profile
+    if module in BROKER_MODULES:
+        env.setdefault("PYTHONPATH", os.getcwd())
     if extra_env:
         env.update(extra_env)
 
@@ -154,7 +225,7 @@ def _start_process(
     if os.name == "nt" and new_console:
         creationflags |= subprocess.CREATE_NEW_CONSOLE
 
-    popen_kwargs = dict(
+    popen_kwargs: dict = dict(
         env=env,
         creationflags=creationflags,
         text=True,
@@ -184,13 +255,19 @@ def _start_process(
         err_f = err_path.open("a", encoding="utf-8", buffering=1)
         # Windows: direct file redirect через Popen не працює надійно з text=True.
         # Замість цього: PIPE + pump_to_file у фонових потоках.
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_kwargs)
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_kwargs
+        )
         assert proc.stdout is not None and proc.stderr is not None
         threading.Thread(
-            target=_pump_to_file, args=(proc.stdout, out_f, ""), daemon=True,
+            target=_pump_to_file,
+            args=(proc.stdout, out_f, ""),
+            daemon=True,
         ).start()
         threading.Thread(
-            target=_pump_to_file, args=(proc.stderr, err_f, ""), daemon=True,
+            target=_pump_to_file,
+            args=(proc.stderr, err_f, ""),
+            daemon=True,
         ).start()
         logging.info(
             "Старт процесу %s pid=%s stdio=files dir=%s",
@@ -198,13 +275,25 @@ def _start_process(
             proc.pid,
             log_dir,
         )
-        return ChildProcess(label=label, module=module, proc=proc, stdout_handle=out_f, stderr_handle=err_f)
+        return ChildProcess(
+            label=label,
+            module=module,
+            proc=proc,
+            stdout_handle=out_f,
+            stderr_handle=err_f,
+        )
 
     if stdio == "pipe":
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_kwargs)
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_kwargs
+        )
         assert proc.stdout is not None and proc.stderr is not None
-        threading.Thread(target=_pump, args=(proc.stdout, f"[{label}] "), daemon=True).start()
-        threading.Thread(target=_pump, args=(proc.stderr, f"[{label}:err] "), daemon=True).start()
+        threading.Thread(
+            target=_pump, args=(proc.stdout, f"[{label}] "), daemon=True
+        ).start()
+        threading.Thread(
+            target=_pump, args=(proc.stderr, f"[{label}:err] "), daemon=True
+        ).start()
         logging.info("Старт процесу %s pid=%s stdio=pipe", label, proc.pid)
         return ChildProcess(label=label, module=module, proc=proc)
 
@@ -270,12 +359,13 @@ def _wait_for_prime_ready(config_path: str, timeout_s: int = 30) -> bool:
             try:
                 raw = client.get(key)
                 if raw:
-                    payload = json.loads(raw)
+                    payload = json.loads(raw)  # type: ignore[arg-type]
                     if isinstance(payload, dict) and payload.get("ready") is True:
                         ready_components.add(component)
                         logging.info(
                             "PRIME_READY_OK component=%s key=%s",
-                            component, key,
+                            component,
+                            key,
                         )
             except Exception as exc:
                 if not warned:
@@ -340,7 +430,9 @@ def main() -> int:
 
     report = load_env_secrets()
     if report.loaded:
-        logging.info("ENV: secrets_loaded path=%s keys=%d", report.path, report.keys_count)
+        logging.info(
+            "ENV: secrets_loaded path=%s keys=%d", report.path, report.keys_count
+        )
     else:
         logging.info("ENV: .env не завантажено")
 
@@ -366,16 +458,63 @@ def main() -> int:
                     new_console=args.new_console,
                 )
             )
-        if args.mode in ("all", "m1_poller"):
+        # ADR-0016: standalone modes for dual-venv components
+        if args.mode == "broker_sidecar":
             processes.append(
                 _start_process(
-                    label="m1_poller",
-                    module="runtime.ingest.polling.m1_poller",
+                    label="broker_sidecar",
+                    module="runtime.ingest.broker_sidecar",
                     stdio=stdio,
                     log_dir=log_dir,
                     new_console=args.new_console,
                 )
             )
+        if args.mode == "m1_ingestion_worker":
+            processes.append(
+                _start_process(
+                    label="m1_ingestion_worker",
+                    module="runtime.ingest.m1_ingestion_worker",
+                    stdio=stdio,
+                    log_dir=log_dir,
+                    new_console=args.new_console,
+                )
+            )
+        if args.mode in ("all", "m1_poller"):
+            # ADR-0016: dual-venv mode — broker_sidecar (3.7) + m1_ingestion_worker (3.12+)
+            # Fallback: якщо broker_python не знайдено, запускаємо legacy m1_poller
+            _bp = _python_for("runtime.ingest.broker_sidecar")
+            _use_dual = _bp != sys.executable
+
+            if _use_dual:
+                processes.append(
+                    _start_process(
+                        label="broker_sidecar",
+                        module="runtime.ingest.broker_sidecar",
+                        stdio=stdio,
+                        log_dir=log_dir,
+                        new_console=args.new_console,
+                    )
+                )
+                processes.append(
+                    _start_process(
+                        label="m1_ingestion_worker",
+                        module="runtime.ingest.m1_ingestion_worker",
+                        stdio=stdio,
+                        log_dir=log_dir,
+                        new_console=args.new_console,
+                    )
+                )
+            else:
+                # Legacy single-process mode (no .venv37/)
+                processes.append(
+                    _start_process(
+                        label="m1_poller",
+                        module="runtime.ingest.polling.m1_poller",
+                        stdio=stdio,
+                        log_dir=log_dir,
+                        new_console=args.new_console,
+                    )
+                )
 
         # --- Replay mode (ADR-0017): M1 replay → DeriveEngine → UDS → UI ---
         if args.mode == "replay":
@@ -390,7 +529,12 @@ def main() -> int:
             replay_extra.append("--skip-disk-write")
 
             # Replay subprocess з додатковими аргументами
-            replay_cmd = [sys.executable, "-u", "-m", "runtime.ingest.replay"] + replay_extra
+            replay_cmd = [
+                sys.executable,
+                "-u",
+                "-m",
+                "runtime.ingest.replay",
+            ] + replay_extra
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
             env["V3_REPLAY_MODE"] = "1"  # ADR-0017: UI/WS reader не читає disk
@@ -403,10 +547,16 @@ def main() -> int:
                 bufsize=1,
             )
             assert proc.stdout is not None and proc.stderr is not None
-            threading.Thread(target=_pump, args=(proc.stdout, "[replay] "), daemon=True).start()
-            threading.Thread(target=_pump, args=(proc.stderr, "[replay:err] "), daemon=True).start()
+            threading.Thread(
+                target=_pump, args=(proc.stdout, "[replay] "), daemon=True
+            ).start()
+            threading.Thread(
+                target=_pump, args=(proc.stderr, "[replay:err] "), daemon=True
+            ).start()
             logging.info("Старт процесу replay pid=%s", proc.pid)
-            processes.append(ChildProcess(label="replay", module="runtime.ingest.replay", proc=proc))
+            processes.append(
+                ChildProcess(label="replay", module="runtime.ingest.replay", proc=proc)
+            )
 
         if args.mode in ("all", "ui", "replay"):
             if args.mode in ("all", "replay"):
@@ -453,7 +603,9 @@ def main() -> int:
                     )
                 )
             else:
-                logging.info("WS_SERVER_SKIP reason=disabled (config.ws_server.enabled=false)")
+                logging.info(
+                    "WS_SERVER_SKIP reason=disabled (config.ws_server.enabled=false)"
+                )
 
         if not processes:
             logging.error("Supervisor: немає процесів для запуску (mode=%s)", args.mode)
@@ -470,7 +622,10 @@ def main() -> int:
             _cat = _PROCESS_CATEGORIES.get(_p.label, "?")
             logging.info(
                 "  %-16s pid=%-6s cat=%-12s%s",
-                _p.label, _p.proc.pid, _cat, _port_str,
+                _p.label,
+                _p.proc.pid,
+                _cat,
+                _port_str,
             )
         logging.info("=" * 60)
 
@@ -498,7 +653,8 @@ def main() -> int:
                 _restart_state[label]["start"] = now
                 logging.info(
                     "SUPERVISOR_RESTARTED label=%s attempt=%d",
-                    label, sched["attempt"],
+                    label,
+                    sched["attempt"],
                 )
 
             # Phase 2: перевірити статус процесів
@@ -511,7 +667,8 @@ def main() -> int:
                 if code == 0:
                     logging.info(
                         "Процес %s завершився нормально (код=%s)",
-                        item.label, code,
+                        item.label,
+                        code,
                     )
                     processes.remove(item)
                     _terminate(item)
@@ -524,7 +681,8 @@ def main() -> int:
                 cat = _PROCESS_CATEGORIES.get(item.label, "non_critical")
                 base_s, max_s, max_attempts = _BACKOFF_CFG[cat]
                 st = _restart_state.setdefault(
-                    item.label, {"count": 0, "start": 0.0},
+                    item.label,
+                    {"count": 0, "start": 0.0},
                 )
                 # reset counter якщо процес працював стабільно >= 10 хв
                 if st["start"] > 0 and (now - st["start"]) >= _STABLE_RESET_S:
@@ -536,15 +694,15 @@ def main() -> int:
                         logging.error(
                             "SUPERVISOR_CRITICAL_EXHAUSTED label=%s "
                             "attempts=%d — зупинка всіх процесів",
-                            item.label, st["count"],
+                            item.label,
+                            st["count"],
                         )
-                        raise RuntimeError(
-                            f"critical_exhausted:{item.label}"
-                        )
+                        raise RuntimeError(f"critical_exhausted:{item.label}")
                     logging.error(
                         "SUPERVISOR_EXHAUSTED label=%s attempts=%d "
                         "— видалено з пулу",
-                        item.label, st["count"],
+                        item.label,
+                        st["count"],
                     )
                     continue
 
@@ -552,8 +710,12 @@ def main() -> int:
                 logging.warning(
                     "SUPERVISOR_RESTART label=%s code=%d "
                     "attempt=%d/%d delay=%.0fs cat=%s",
-                    item.label, code, st["count"],
-                    max_attempts, delay, cat,
+                    item.label,
+                    code,
+                    st["count"],
+                    max_attempts,
+                    delay,
+                    cat,
                 )
                 _restart_schedule[item.label] = {
                     "module": item.module,
@@ -562,9 +724,7 @@ def main() -> int:
                 }
 
             if not processes and not _restart_schedule:
-                logging.info(
-                    "Supervisor: усі процеси завершились"
-                )
+                logging.info("Supervisor: усі процеси завершились")
                 return 0
 
             time.sleep(1)

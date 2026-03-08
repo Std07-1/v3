@@ -42,13 +42,21 @@ Supervisor (`app.main --mode all`) керує 5 процесами. UDS є це�
 ```text
 app.main (supervisor)
   ├── connector             (engine_b; broker_base_tfs_s=[] — D1 fetch OFF, ADR-0023)
-  ├── tick_publisher_fxcm   (ForexConnect tick stream → Redis PubSub)
+  ├── tick_publisher_fxcm   (ForexConnect tick stream → Redis PubSub, .venv37/)
   ├── tick_preview_worker   (Redis PubSub → UDS preview M1/M3)
-  ├── m1_poller             (FXCM M1 History → UDS final M1 + DeriveEngine cascade M3→M5→M15→M30→H1→H4+D1)
+  ├── broker_sidecar        (ADR-0016: stateless FXCM M1 fetcher, .venv37/, Redis IPC)
+  ├── m1_ingestion_worker   (ADR-0016: BrokerRedisProxy → UDS final M1 + DeriveEngine cascade, .venv/)
+  ├── m1_poller             (legacy single-process mode: FXCM M1 History → UDS, fallback якщо .venv37/ відсутній)
   ├── ui                    (HTTP server, port 8089 — ui_chart_v3 polling)
   └── ws_server             (WS server, port 8000 — ui_v4 real-time, config-gated)
                               ├── SmcRunner (in-process, ADR-0024): SmcEngine per (symbol, tf) → zones/swings/levels in WS frames
                               └── Drawing tools: 4 tools (H/T/R/E), glass toolbar, theme-aware (ADR-0007, ADR-0008)
+```
+
+> **Dual-venv (ADR-0016)**: Supervisor автоматично використовує `.venv37/` (Python 3.7) для
+> broker_sidecar та tick_publisher_fxcm, і `.venv/` (Python ≥3.11) для всього іншого.
+> Якщо `.venv37/` не знайдено — fallback на legacy m1_poller (single-process, Python 3.7).
+
 ```
 
 ## SSOT-площини (ізольовані)

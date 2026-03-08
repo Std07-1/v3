@@ -24,7 +24,7 @@
 | [0013](0013-d1-chart-rendering-fix.md) | D1 Chart Rendering Fix | **Implemented** | 2026-02-25 | D1, LWC, time mapping, YYYY-MM-DD, epoch seconds | `d1_tv_parity` |
 | [0014](0014-uds-split-brain-resilience.md) | UDS Split-Brain Resilience | **Implemented** | 2026-02-26 | split-brain, UDS, Redis, watermark | `concurrency_hardening` |
 | [0015](0015-calendar-pause-flat-bars.md) | Calendar Pause/Flat Bar Interpretation | **Implemented** | 2026-02-26 | calendar_pause, complete=True, derive, M5 | `derive_chain_m1` |
-| [0016](0016-python-version-broker-isolation.md) | Python Version Upgrade + Broker Subprocess Isolation | **Proposed** | 2026-02-26 | Python 3.7, 3.11, forexconnect, subprocess, venv | `platform_modernization` |
+| [0016](0016-python-version-broker-isolation.md) | Python Version Upgrade + Broker Subprocess Isolation | **Implemented** | 2026-03-08 | Python 3.7, 3.11, forexconnect, dual-venv, broker_sidecar | `platform_modernization` |
 | [0017](0017-replay-mode-offline-demo.md) | Replay-Mode з data_v3/ для Offline Demo | **Implemented** | 2026-02-28 | replay, offline, demo, data_v3, CI | `offline_demo` |
 | [0018](0018-slo-observability-prometheus.md) | SLO Observability + Prometheus Integration | **Proposed** | 2026-02-26 | SLO, latency, prometheus, metrics, p95 | `observability_v1` |
 | [0019](0019-code-review-quick-fixes.md) | Code Review Quick-Fixes Batch (#1,#2,#4,#5,#8,#9) | **Implemented** | 2026-02-26 | bisect, warmup lock, LRU FD, stop_event, max_workers | `code_review_hardening` |
@@ -39,9 +39,9 @@
 | [0025](0025-potik-b-data-quality-summary.md) | Потік B — Data Quality & Activation Summary | **Implemented** | 2026-02-28 | multi-symbol, data quality, derived integrity, XAU/USD focus | `potik_b_data_quality` |
 | [0026](0026-overlay-level-rendering-rules.md) | Overlay Level Rendering Rules | **Implemented** | 2026-03-01 | levels, merge, labels, LINE_PX, NOTCH_PX, LEVEL_STYLES, L1–L6 | `smc_engine_v1` |
 | [0027](0027-client-side-replay.md) | Client-Side Replay (TradingView-style) | **Implemented** | 2026-02-28 | replay, client-side, scrubber, play/pause, candle-by-candle, TF switch | `replay_v2` |
-| [0028](ADR-0028-v2-elimination-engine.md) | Elimination Engine — Display Filter Pipeline | **Implemented** | 2026-03-04 | display filter, budget, proximity, TTL, Focus/Research toggle | `smc_vis_phi0` |
-| [0029](ADR-0029-confluence-scoring.md) | OB Confluence Scoring + Grade System | **Implemented** | 2026-03-05 | confluence, 8 factors, grade A+/A/B/C, badge, DisplayBudget, ADR-0030 ready | `smc_vis_phi1` |
-| [0030-alt](ADR-0030-alt-tf-sovereignty.md) | TF Sovereignty — Cross-TF Projection Styling | **Implemented** | 2026-03-06 | projection, opacity, dashed, cross-TF, OverlayRenderer, TF sovereignty | `smc_vis_phi1` |
+| [0028](0028-v2-elimination-engine.md) | Elimination Engine — Display Filter Pipeline | **Implemented** | 2026-03-04 | display filter, budget, proximity, TTL, Focus/Research toggle | `smc_vis_phi0` |
+| [0029](0029-confluence-scoring.md) | OB Confluence Scoring + Grade System | **Implemented** | 2026-03-05 | confluence, 8 factors, grade A+/A/B/C, badge, DisplayBudget, ADR-0030 ready | `smc_vis_phi1` |
+| [0030-alt](0030-alt-tf-sovereignty.md) | TF Sovereignty — Cross-TF Projection Styling | **Implemented** | 2026-03-06 | projection, opacity, dashed, cross-TF, OverlayRenderer, TF sovereignty | `smc_vis_phi1` |
 | [0031](0031-bias-banner.md) | Bias Banner — Multi-TF Trend Bias Display | **Implemented** | 2026-03-08 | bias_map, trend_bias, multi-TF, banner, BiasBanner.svelte | `smc_vis_phi2` |
 | [0032](0032-overlay-render-throttle-tf-switch.md) | Overlay Render Throttle + TF Switch Stability | **Implemented** | 2026-03-08 | crosshairMove guard, RAF wheel, center_ms viewCache, TF switch UX | `ui_perf_p1_p5` |
 | [0033](0033-context-flow-narrative.md) | Context Flow — Multi-TF Narrative Engine | **Implemented** | 2026-03-08 | narrative, scenario, trade/wait, market_phase, FVG context, NarrativePanel | `smc_vis_phi3` |

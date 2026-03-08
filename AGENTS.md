@@ -35,13 +35,14 @@
 
 ### 1.2 Технологічний стек
 
-**Backend (Python):**
+**Backend (Python, dual-venv — ADR-0016):**
 
-- Python 3.7 (strict requirement для forexconnect SDK)
-- Redis 5.0.1 (pub/sub, snapshots, updates bus)
-- numpy 1.21.6, pandas 1.1.5
-- forexconnect 1.6.43 (FXCM SDK)
-- aiohttp ≥3.8 (для UI HTTP API)
+- Python ≥3.11 (main venv `.venv/` — platform, UDS, derive, SMC, UI)
+- Python 3.7 (broker venv `.venv37/` — forexconnect SDK only)
+- Redis 5.0.1 (pub/sub, snapshots, updates bus, broker IPC)
+- numpy ≥1.26, pandas ≥2.1
+- forexconnect 1.6.43 (FXCM SDK, `.venv37/` only)
+- aiohttp ≥3.9 (для UI HTTP API)
 
 **Frontend UI v4:**
 
@@ -123,12 +124,14 @@ v3/
 │
 ├── runtime/               # I/O та процеси
 │   ├── ingest/            # Data ingestion
-│   │   ├── broker/fxcm/   # FXCM provider
-│   │   ├── polling/       # m1_poller
+│   │   ├── broker/fxcm/   # FXCM provider (.venv37/ only)
+│   │   ├── broker_sidecar.py  # Stateless FXCM M1 fetcher via Redis IPC (ADR-0016, .venv37/)
+│   │   ├── m1_ingestion_worker.py # Platform-side M1 ingestion with BrokerRedisProxy (ADR-0016, .venv/)
+│   │   ├── polling/       # m1_poller (legacy single-process mode)
 │   │   ├── tick_agg.py    # TickAggregator (preview-plane)
 │   │   ├── tick_common.py # спільні утиліти для tick pipeline
 │   │   ├── tick_preview_worker.py # tick→preview
-│   │   ├── tick_publisher_fxcm.py # FXCM tick → Redis PubSub
+│   │   ├── tick_publisher_fxcm.py # FXCM tick → Redis PubSub (.venv37/)
 │   │   ├── derive_engine.py  # Derive cascade (M1→H4+D1, ADR-0023)
 │   │   ├── market_calendar.py # Calendar breaks (UTC)
 │   │   └── replay.py      # ReplayFeeder — offline replay (ADR-0017/0027)
@@ -164,7 +167,7 @@ v3/
 │
 ├── tools/                 # Утиліти та діагностика (isolated)
 │   ├── run_exit_gates.py  # Quality gates runner
-│   ├── exit_gates/        # 25 AST gates (dependency, contract, geometry)
+│   ├── exit_gates/        # 26 AST gates (dependency, contract, geometry, dual_python)
 │   ├── rebuild_from_m1.py # Canonical rebuild all derived TFs
 │   ├── repair/            # htf_rebuild, htf_tail_sync
 │   └── diag/              # classify gaps, clear redis, disk_max_open_ms
@@ -191,8 +194,9 @@ v3/
 │   └── runbooks/          # Production runbooks
 │
 ├── config.json            # SSOT конфігурація
-├── pyproject.toml         # Python package metadata
-├── requirements.txt       # Runtime deps
+├── pyproject.toml         # Python package metadata (>=3.11)
+├── requirements.txt       # Runtime deps (main venv, >=3.11)
+├── requirements-broker.txt # Broker deps (.venv37/, forexconnect)
 └── data_v3/               # SSOT JSONL data storage
 ```
 
@@ -200,16 +204,23 @@ v3/
 
 ## 3. Build and Run Commands
 
-### 3.1 Initial Setup
+### 3.1 Initial Setup (Dual-venv, ADR-0016)
 
 ```bash
-# 1. Python 3.7 venv + dependencies
+# 1. Main venv (Python >=3.11) — platform, UDS, derive, SMC, UI
+python -m venv .venv
+.venv/Scripts/activate    # Windows
 pip install -r requirements.txt
 
-# 2. Secrets (.env — лише FXCM credentials)
+# 2. Broker venv (Python 3.7) — forexconnect SDK only
+#    Потребує окрему інсталяцію Python 3.7
+C:\Python37\python.exe -m venv .venv37
+.venv37/Scripts/pip install -r requirements-broker.txt
+
+# 3. Secrets (.env — лише FXCM credentials)
 cp .env.example .env  # відредагуй FXCM_USER / FXCM_PASS / FXCM_URL
 
-# 3. UI v4 build (опціонально, для WebSocket UI)
+# 4. UI v4 build (опціонально, для WebSocket UI)
 cd ui_v4
 npm install
 npm run build
@@ -223,12 +234,14 @@ cd ..
 python -m app.main --mode all --stdio pipe
 
 # Окремі режими
-python -m app.main --mode connector      # D1 fetcher (disabled, ADR-0023)
-python -m app.main --mode m1_poller      # M1 poller + derive engine
-python -m app.main --mode tick_publisher # Tick stream
-python -m app.main --mode tick_preview   # Preview worker
-python -m app.main --mode ui             # HTTP UI (port 8089)
-python -m app.main --mode ws_server      # WS UI (port 8000)
+python -m app.main --mode connector          # D1 fetcher (disabled, ADR-0023)
+python -m app.main --mode m1_poller          # Legacy single-process M1 (Python 3.7)
+python -m app.main --mode broker_sidecar     # FXCM fetcher sidecar (.venv37/, ADR-0016)
+python -m app.main --mode m1_ingestion_worker # Platform M1 ingestion (.venv/, ADR-0016)
+python -m app.main --mode tick_publisher     # Tick stream (.venv37/)
+python -m app.main --mode tick_preview       # Preview worker
+python -m app.main --mode ui                 # HTTP UI (port 8089)
+python -m app.main --mode ws_server          # WS UI (port 8000)
 
 # TUI монітор (окремо)
 python -m aione_top
@@ -374,9 +387,10 @@ logging.warning("DEGRADED_REASON symbol=%s tf=%s", sym, tf)
 
 | Файл | Призначення |
 |---|---|
-| `config.json` | SSOT policy (symbols, TFs, calendar, Redis) |
+| `config.json` | SSOT policy (symbols, TFs, calendar, Redis, broker_python) |
 | `.env` | Secrets only (FXCM credentials) |
 | `env_profile.py` | Env loading logic |
+| `requirements-broker.txt` | Broker venv deps (.venv37/) |
 
 ### 7.2 Critical Config Sections
 
@@ -386,6 +400,7 @@ logging.warning("DEGRADED_REASON symbol=%s tf=%s", sym, tf)
   "tf_allowlist_s": [60, 180, 300, 900, 1800, 3600, 14400, 86400],
   "redis": { "enabled": true, "host": "127.0.0.1", "port": 6379, "db": 1 },
   "ws_server": { "enabled": true, "host": "127.0.0.1", "port": 8000 },
+  "broker_python": ".venv37/Scripts/python.exe",  // ADR-0016: шлях до Python 3.7
   "bootstrap": { "prime_ready_timeout_s": 120, ... }
 }
 ```

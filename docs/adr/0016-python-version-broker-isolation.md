@@ -1,7 +1,7 @@
 # ADR-0016: Python Version Upgrade + Broker Subprocess Isolation
 
-- **Статус**: Proposed → **Revised** (rev 2, 2026-03-08)
-- **Дата**: 2026-02-26 (initial), 2026-03-08 (rev 2)
+- **Статус**: **Implemented** (2026-03-08)
+- **Дата**: 2026-02-26 (initial), 2026-03-08 (rev 2 + accepted + implemented)
 - **Автор**: R_ARCHITECT
 - **Initiative**: `platform_modernization`
 - **Пов'язані ADR**: ADR-0001 (UDS), ADR-0002 (DeriveChain), ADR-0023 (D1 from M1), ADR-0024 (SMC Engine)

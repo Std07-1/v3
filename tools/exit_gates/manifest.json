@@ -254,6 +254,13 @@
             "inputs": {
                 "root": "."
             }
+        },
+        {
+            "name": "dual_python",
+            "module": "tools.exit_gates.gates.gate_dual_python",
+            "inputs": {
+                "root": "."
+            }
         }
     ]
 }

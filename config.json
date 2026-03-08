@@ -4,6 +4,7 @@
         "XAU/USD"
     ],
     "data_root": "./data_v3",
+    "broker_python": ".venv37/Scripts/python.exe",
     "safety_delay_s": 2,
     "m1_poller": {
         "enabled": true,

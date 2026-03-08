@@ -10,7 +10,7 @@
 > - **Минулі результати не гарантують майбутніх**. Торгівля на фінансових ринках пов'язана з
 >   суттєвим ризиком втрати капіталу. Ви можете втратити більше, ніж інвестували.
 > - Автор(и) не несуть відповідальності за фінансові збитки, спричинені використанням цього ПЗ.
->   Див. [LICENSE_v1](LICENSE_v1) (Sections 11–12) для повних умов.
+>   Див. [LICENSE](LICENSE) (Sections 11–12) для повних умов.
 > - Перед прийняттям торгових рішень проконсультуйтесь з ліцензованим фінансовим радником.
 
 Торгова платформа "дані → аналітика/SMC → UI → торгова взаємодія" з жорсткими інваріантами та **UnifiedDataStore (UDS)** як єдиним write-center.
@@ -36,22 +36,32 @@
 ## Quickstart
 
 ```bash
-# 1. Python 3.7 venv + залежності
+# 1. Main venv (Python >=3.11) — платформа, UDS, derive, SMC, UI
+python -m venv .venv
+.venv\Scripts\activate    # Windows
 pip install -r requirements.txt
 
-# 2. Секрети (.env — тільки FXCM креденшіали)
+# 2. Broker venv (Python 3.7) — forexconnect SDK (.venv37/)
+#    Потребує окрему інсталяцію Python 3.7
+C:\Python37\python.exe -m venv .venv37
+.venv37\Scripts\pip install -r requirements-broker.txt
+
+# 3. Секрети (.env — тільки FXCM креденшіали)
 cp .env.example .env  # або створіть вручну
 
-# 3. Запуск усіх процесів (включаючи ws_server якщо ws_server.enabled=true)
+# 4. Запуск усіх процесів (включаючи broker_sidecar через .venv37/)
 python -m app.main --mode all --stdio pipe
 
-# 4. Перевірка (HTTP polling UI)
+# 5. Перевірка (HTTP polling UI)
 curl http://127.0.0.1:8089/api/status
 # Або відкрийте http://127.0.0.1:8089/ у браузері
 
-# 5. ui_v4 (WS real-time UI, порт 8000)
+# 6. ui_v4 (WS real-time UI, порт 8000)
 # Відкрийте http://127.0.0.1:8000/ у браузері (потребує npm run build у ui_v4/)
 ```
+
+> **Dual-venv (ADR-0016)**: Supervisor автоматично використовує `.venv37/` для broker-процесів (broker_sidecar, tick_publisher)
+> і `.venv/` для всього іншого. Якщо `.venv37/` не знайдено — fallback на legacy single-process m1_poller.
 
 ## Quality Gates
 
@@ -148,7 +158,7 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 
 ## Ліцензія
 
-Див. [LICENSE_v1](LICENSE_v1).
+Див. [LICENSE](LICENSE).
 
 ### Сторонні залежності
 

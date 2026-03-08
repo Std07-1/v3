@@ -10,6 +10,7 @@ Pure function, zero I/O. S0/S2/S5 compliant.
 
 Grade: A+ >= 8, A >= 6, B >= 4, C < 4 (configurable).
 """
+
 from __future__ import annotations
 
 
@@ -25,7 +26,8 @@ def _check_liquidity_sweep(zone, bars, swings, tf_s, config):
     _SWING_HIGHS = frozenset({"hh", "lh", "swing_high"})
     _SWING_LOWS = frozenset({"ll", "hl", "swing_low"})
     relevant = [
-        s for s in swings
+        s
+        for s in swings
         if s.get("kind") in (_SWING_HIGHS | _SWING_LOWS)
         and window_start <= s.get("time_ms", 0) < anchor
     ]
@@ -35,10 +37,7 @@ def _check_liquidity_sweep(zone, bars, swings, tf_s, config):
     for sw in relevant:
         sw_price = sw.get("price", 0)
         sw_time = sw.get("time_ms", 0)
-        sweep_bars = [
-            b for b in bars
-            if sw_time < b.get("open_time_ms", 0) <= anchor
-        ]
+        sweep_bars = [b for b in bars if sw_time < b.get("open_time_ms", 0) <= anchor]
         if is_bull and sw.get("kind") in _SWING_LOWS:
             if any(b.get("l", 999999) < sw_price for b in sweep_bars):
                 return 2
@@ -83,11 +82,16 @@ def _check_htf_alignment(zone, htf_zones):
     # type: (dict, list) -> int
     """F3: OB mid-price всередині alive HTF zone (ER-10)."""
     mid = (zone["high"] + zone["low"]) / 2.0
-    return 2 if any(
-        hz for hz in htf_zones
-        if hz.get("low", 0) <= mid <= hz.get("high", 0)
-        and hz.get("status") in _HTF_ALIVE_STATUSES
-    ) else 0
+    return (
+        2
+        if any(
+            hz
+            for hz in htf_zones
+            if hz.get("low", 0) <= mid <= hz.get("high", 0)
+            and hz.get("status") in _HTF_ALIVE_STATUSES
+        )
+        else 0
+    )
 
 
 def _check_extremum(zone, swings, atr, tf_s, config):
@@ -113,7 +117,11 @@ def _check_extremum(zone, swings, atr, tf_s, config):
 def _check_impulse(zone, config):
     # type: (dict, dict) -> int
     """F5: zone.strength >= threshold."""
-    return 1 if zone.get("strength", 0) >= config.get("strong_impulse_threshold", 0.7) else 0
+    return (
+        1
+        if zone.get("strength", 0) >= config.get("strong_impulse_threshold", 0.7)
+        else 0
+    )
 
 
 def _check_premium_discount(zone, current_price, swings):
@@ -148,7 +156,7 @@ def _check_structure(zone, structure):
 
 
 def _check_tf_significance(tf_s):
-    # type: (int,) -> int
+    # type: (int) -> int
     """F8: tf_s >= 14400 (H4+)."""
     return 1 if tf_s >= 14400 else 0
 
@@ -166,8 +174,16 @@ def _score_to_grade(score, config):
 
 
 def score_zone_confluence(
-    zone, bars, swings, zones_all, htf_zones,
-    structure, atr, current_price, tf_s, config,
+    zone,
+    bars,
+    swings,
+    zones_all,
+    htf_zones,
+    structure,
+    atr,
+    current_price,
+    tf_s,
+    config,
 ):
     # type: (dict, list, list, list, list, list, float, float, int, dict) -> dict
     """Score OB zone confluence. Returns {'score': int, 'grade': str, 'factors': list}.
@@ -190,7 +206,7 @@ def score_zone_confluence(
     factors = []
     score = 0
     for name, fn, args in checks:
-        pts = fn(*args)
+        pts = fn(*args)  # type: ignore[operator]
         if pts > 0:
             factors.append("{} +{}".format(name, pts))
             score += pts
