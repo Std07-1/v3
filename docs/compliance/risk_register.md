@@ -114,7 +114,7 @@ written agreement with FXCM потрібен окремо.
 
 | Місце | "Not Financial Advice" | Risk Warning | Warranty Disclaimer |
 |-------|----------------------|--------------|-------------------|
-| LICENSE_v1 | ❌ | ❌ | ✅ Section 11 |
+| LICENSE | ❌ | ❌ | ✅ Section 11 |
 | README.md | ❌ | ❌ | ❌ |
 | UI (Svelte) | ❌ | ❌ | ❌ |
 | docs/ | ❌ | ❌ | ❌ |
@@ -160,14 +160,14 @@ written agreement with FXCM потрібен окремо.
 |----|-------|----------|------------|------|----------|-------------------|------------------------|-----|
 | **R1** | Security/Auth | **S1** | Low (localhost) | WS/HTTP endpoints без автентифікації | [VERIFIED: ws_server.py] — no auth, no token, no session | 127.0.0.1 binding only | Документувати як accepted risk для localhost. Implement token auth якщо deployment змінюється | This sprint |
 | **R2** | Security/Auth | **S1** | Low (localhost) | Redis без паролю — будь-який процес на machine має R/W доступ | [VERIFIED: config.json, ws_server.py, tick_publisher_fxcm.py] — zero `password=` parameter | 127.0.0.1 binding | Додати `requirepass` в Redis config + `password=` в connection code. Або документувати як accepted risk | This sprint |
-| **R3** | Compliance/Financial | **S1** | ~~Medium~~ **CLOSED** | ~~Відсутній~~ Disclaimer додано в README.md (2026-03-09) | [VERIFIED: README.md:L3 — "Not Financial Advice"] | LICENSE_v1 Section 11 + README.md disclaimer | ✅ Закрито | Done |
+| **R3** | Compliance/Financial | **S1** | ~~Medium~~ **CLOSED** | ~~Відсутній~~ Disclaimer додано в README.md (2026-03-09) | [VERIFIED: README.md:L3 — "Not Financial Advice"] | LICENSE Section 11 + README.md disclaimer | ✅ Закрито | Done |
 | **R4** | Supply Chain | **S2** | Low | Python dependencies без lockfile з hash verification. `pip install` не верифікує integrity | [VERIFIED: no requirements.lock / pip.lock] | Pinned versions в requirements.txt | Створити lockfile: `pip-compile --generate-hashes` або `pip freeze --all > requirements.lock` | Plan |
 | **R5** | Technology/EOL | **S1** | High | Python 3.7 EOL з June 2023. Відомі CVE без патчів. 2.5+ роки без security updates | [VERIFIED: pyproject.toml `requires-python = ">=3.7,<3.8"`] | ADR-0016 Proposed (Python upgrade plan) | Імплементувати ADR-0016 roadmap. Interim: document accepted risk | This sprint |
 | **R6** | Secrets | **S2** | ~~Low~~ **CLOSED** | ~~cfg.get("user_id")~~ Credential fallback видалено (2026-03-09). Credentials тільки з env vars | [VERIFIED: grep cfg.get.*password — 0 matches] | Тільки env vars (FXCM_USERNAME, FXCM_PASSWORD) | ✅ Закрито | Done |
 | **R7** | Data Integrity | **S2** | Medium | `ssot_jsonl_fsync: false` — при crash/power failure можлива втрата даних (OS buffer not flushed) | [VERIFIED: config.json `ssot_jsonl_fsync: false`] | `flush()` після кожного запису | Або увімкнути fsync, або задокументувати trade-off (performance vs durability) в ADR | Plan |
 | **R8** | Rate Limiting | **S3** | Low | WS `switch` action та HTTP `/api/status` без rate limiting — потенційний DoS | [VERIFIED: ws_server.py — scrollback has rate limit, otherwise none] | Localhost only | Per-client action throttle | Batch |
 | **R9** | Privacy | **S3** | Low | Client IP (`request.remote`) логується при WS connect | [VERIFIED: ws_server.py:L826] | Local-only, logs gitignored | Якщо logs коли-небудь будуть shared — hash або omit IP | Batch |
-| **R10** | IP/License | **S2** | Low | AI-generated code: LICENSE_v1 Contribution clause не має explicit AI clause. IP ownership unclear | [VERIFIED: LICENSE_v1 Section 4 — "any material you submit"] | Implicit coverage через broad language | Додати explicit AI clause до LICENSE або policy document | Plan |
+| **R10** | IP/License | **S2** | Low | AI-generated code: LICENSE Contribution clause не має explicit AI clause. IP ownership unclear | [VERIFIED: LICENSE_v1 Section 4 — "any material you submit"] | Implicit coverage через broad language | Додати explicit AI clause до LICENSE або policy document | Plan |
 | **R11** | Validation | **S3** | Low | WS messages валідуються per-field, не через JSON Schema. Ad-hoc але повне | [VERIFIED: ws_server.py input checks] | Per-field validation covers known vectors | Формальна JSON Schema validation — nice-to-have | Batch |
 
 ---
