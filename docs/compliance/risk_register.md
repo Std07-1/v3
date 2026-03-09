@@ -63,7 +63,7 @@ written agreement with FXCM потрібен окремо.
 
 ### 1.2 Власна ліцензія
 
-[VERIFIED: LICENSE_v1]
+[VERIFIED: LICENSE]
 
 - Тип: Proprietary Source-Available & Contribution License v2.0
 - Copyright: 2024–2026 Stanislav Std07-1
@@ -125,7 +125,7 @@ written agreement with FXCM потрібен окремо.
 
 | Артефакт | Існує? | Якість |
 |----------|--------|--------|
-| `LICENSE_v1` | ✅ | Повна, professional |
+| `LICENSE` | ✅ | Повна, professional |
 | `SECURITY.md` | ✅ | Повна, SLA визначені |
 | `THIRD_PARTY_NOTICES.md` | ✅ | Повна, всі deps покриті |
 | `docs/compliance/fxcm-sdk-license-review.md` | ✅ | Детальна, conservative |
@@ -232,7 +232,7 @@ written agreement with FXCM потрібен окремо.
 
 ### P5: AI Code Clause (R10) — ⏸️ DEFERRED (needs legal opinion)
 
-**Що**: LICENSE_v1 Contribution clause (Section 4) implicitly covers AI-generated code через "any material you submit", але explicit AI clause відсутній  
+**Що**: LICENSE Contribution clause (Section 4) implicitly covers AI-generated code через "any material you submit", але explicit AI clause відсутній  
 **[LEGAL OPINION NEEDED]**: Exact wording for AI code IP clause, jurisdiction-specific implications  
 **Interim**: Current broad contribution language provides reasonable coverage
 
