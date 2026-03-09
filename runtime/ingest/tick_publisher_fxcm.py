@@ -4,7 +4,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 from env_profile import load_env_secrets
 from core.config_loader import pick_config_path, load_system_config, env_str
@@ -69,9 +69,6 @@ def _parse_stream_cfg(cfg: dict[str, Any]) -> TickStreamConfig:
     )
 
 
-
-
-
 def _extract_row(update: Any) -> Optional[Any]:
     if update is None:
         return None
@@ -82,6 +79,11 @@ def _extract_row(update: Any) -> Optional[Any]:
             if row is not None:
                 return row
         except Exception:
+            logging.debug(
+                "TICK_PUBLISHER_GET_ROW_FAILED update_type=%s",
+                type(update).__name__,
+                exc_info=True,
+            )
             pass
     row = getattr(update, "row", None)
     if row is not None:
@@ -101,6 +103,9 @@ def _row_value(row: Any, keys: list[str]) -> Optional[Any]:
             try:
                 return getattr(row, key)
             except Exception:
+                logging.debug(
+                    "TICK_PUBLISHER_ATTR_READ_FAILED key=%s", key, exc_info=True
+                )
                 continue
     getter = getattr(row, "get", None)
     if callable(getter):
@@ -108,13 +113,18 @@ def _row_value(row: Any, keys: list[str]) -> Optional[Any]:
             try:
                 value = getter(key)
             except Exception:
+                logging.debug(
+                    "TICK_PUBLISHER_GETTER_READ_FAILED key=%s", key, exc_info=True
+                )
                 value = None
             if value is not None:
                 return value
     return None
 
 
-def _pick_price(mode: str, bid: Optional[float], ask: Optional[float], mid: Optional[float]) -> Optional[float]:
+def _pick_price(
+    mode: str, bid: Optional[float], ask: Optional[float], mid: Optional[float]
+) -> Optional[float]:
     if mode == "bid":
         return bid
     if mode == "ask":
@@ -172,7 +182,7 @@ class FxcmTickPublisher:
         self._stats_last_emit_ts = now
         if not self._stats:
             return
-        payload = dict(self._stats)
+        payload = cast(Dict[str, Any], dict(self._stats))
         # Wallclock fallback ratio warning (раз/60с)
         wc_count = payload.get("ticks_ts_fallback_wallclock", 0)
         pub_count = payload.get("ticks_published_total", 0)
@@ -282,6 +292,7 @@ class FxcmTickPublisher:
             try:
                 status = table_manager.status
             except Exception:
+                logging.debug("TICK_PUBLISHER_TABLE_STATUS_READ_FAILED", exc_info=True)
                 status = None
             if status == fxcorepy.O2GTableManagerStatus.TABLES_LOADED:
                 return True
@@ -304,12 +315,13 @@ class FxcmTickPublisher:
     def _cleanup(self) -> None:
         """Коректне завершення: відписка від OFFERS, logout."""
         try:
-            if getattr(self, '_offers_listener', None) is not None:
+            if getattr(self, "_offers_listener", None) is not None:
                 logging.debug("TickPublisher: відписка від OFFERS listener")
                 self._offers_listener = None
-            if getattr(self, '_fx', None) is not None:
+            fx = self._fx
+            if fx is not None:
                 try:
-                    self._fx.logout()
+                    cast(Any, fx).logout()
                 except Exception:
                     pass
                 self._fx = None
@@ -322,6 +334,7 @@ class FxcmTickPublisher:
             logging.error("TickPublisher: forexconnect недоступний")
             time.sleep(10.0)
             return
+
         class _OffersListener(fxcorepy.AO2GTableListener):
             def __init__(self, owner: "FxcmTickPublisher") -> None:
                 super().__init__()
@@ -350,13 +363,18 @@ class FxcmTickPublisher:
             logging.error("TickPublisher: OFFERS table недоступна")
             return
         self._offers_listener = _OffersListener(self)
-        offers.subscribe_update(fxcorepy.O2GTableUpdateType.UPDATE, self._offers_listener)
-        offers.subscribe_update(fxcorepy.O2GTableUpdateType.INSERT, self._offers_listener)
+        offers.subscribe_update(
+            fxcorepy.O2GTableUpdateType.UPDATE, self._offers_listener
+        )
+        offers.subscribe_update(
+            fxcorepy.O2GTableUpdateType.INSERT, self._offers_listener
+        )
         logging.info("TickPublisher: підписка на OFFERS (%s)", ",".join(self._symbols))
         try:
             while not self._stop_requested:
                 time.sleep(1.0)
         except KeyboardInterrupt:
+            logging.info("TickPublisher: цикл OFFERS перервано CTRL+C")
             pass
 
 
@@ -364,7 +382,9 @@ def main() -> int:
     _setup_logging()
     report = load_env_secrets()
     if report.loaded:
-        logging.info("ENV: secrets_loaded path=%s keys=%d", report.path, report.keys_count)
+        logging.info(
+            "ENV: secrets_loaded path=%s keys=%d", report.path, report.keys_count
+        )
     else:
         logging.info("ENV: .env не завантажено")
 
@@ -378,7 +398,9 @@ def main() -> int:
 
     stream_cfg = _parse_stream_cfg(cfg)
     if not stream_cfg.enabled:
-        logging.warning("TickPublisher: tick_stream_enabled=false, воркер у режимі очікування")
+        logging.warning(
+            "TickPublisher: tick_stream_enabled=false, воркер у режимі очікування"
+        )
         while True:
             time.sleep(60.0)
 

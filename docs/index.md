@@ -35,6 +35,7 @@
 | [ADR-0030-alt](adr/ADR-0030-alt-tf-sovereignty.md) | TF Sovereignty — Cross-TF Projection Styling |
 | [ADR-0031](adr/0031-bias-banner.md) | Bias Banner — Multi-TF Trend Bias Display |
 | [ADR-0032](adr/0032-overlay-render-throttle-tf-switch.md) | Overlay Render Throttle + TF Switch Stability |
+| [ADR-0036](adr/0036-premium-trader-first-shell.md) | Premium Trader-First Shell for UI v4 |
 
 ### 2. Потоки даних
 
@@ -75,6 +76,7 @@
 
 | [ui_v4/README_DEV.md](../ui_v4/README_DEV.md) | Developer quick start, стек, env-змінні |
 | [ui_v4/UI_v4_COPILOT_README.md](../ui_v4/UI_v4_COPILOT_README.md) | SSOT інструкція для побудови (slices 0–5) |
+| [ui spec.md](ui%20spec.md) | Premium trader-first UI spec: thesis bar, art direction, signature interactions, before/after |
 | [ui_v4/src/types.ts](../ui_v4/src/types.ts) | SSOT типи: RenderFrame, WsAction, Candle, SmcData, Drawing |
 | [system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md](system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md) | UI v4 аудит: T1-T10 ALL COMPLETE, chart parity DONE |
 

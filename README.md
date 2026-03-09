@@ -71,6 +71,12 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 
 Якщо gates FAIL → формальний **NO-GO** до наступних PATCH.
 
+## Automation Baseline
+
+- GitHub Actions: Python smoke tests + UI v4 typecheck/build на кожен push і pull request
+- Dependabot: weekly dependency updates для `pip` і `npm`
+- Мета: замкнути базовий enforcement-контур для governance, SSOT smoke та frontend compile health
+
 ## Документація (SSOT)
 
 Повна документація: **[docs/index.md](docs/index.md)** — єдина точка входу.

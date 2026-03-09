@@ -2,7 +2,7 @@
 // SSOT DiagState — єдине джерело правди діагностики UI v4.
 // Без silent fallback. Усі стани мають бути явними.
 
-import { writable, derived, get } from 'svelte/store';
+import { writable, get } from 'svelte/store';
 
 // -------------------- Types --------------------
 

@@ -21,6 +21,7 @@ CLI:
   - Жодних silent fallback: будь-який пропуск → warnings/degraded у звіті.
   - Не чіпає /api/updates або align=tv деривацію.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -77,7 +78,8 @@ def merge_dedup_last_wins(
     Повертає merged+sorted+deduped list.
     """
     kept = [
-        b for b in existing
+        b
+        for b in existing
         if not (from_open_ms <= b.get("open_time_ms", 0) <= to_open_ms)
     ]
     merged = kept + list(incoming)
@@ -113,16 +115,24 @@ def bar_summary(bars: list) -> Dict[str, Any]:
         return {"count": 0}
     first = bars[0]
     last = bars[-1]
-    first_ms = first.open_time_ms if hasattr(first, "open_time_ms") else first.get("open_time_ms", 0)
-    last_ms = last.open_time_ms if hasattr(last, "open_time_ms") else last.get("open_time_ms", 0)
+    first_ms = (
+        first.open_time_ms
+        if hasattr(first, "open_time_ms")
+        else first.get("open_time_ms", 0)
+    )
+    last_ms = (
+        last.open_time_ms
+        if hasattr(last, "open_time_ms")
+        else last.get("open_time_ms", 0)
+    )
     return {
         "count": len(bars),
         "first_open_ms": first_ms,
         "last_open_ms": last_ms,
-        "first_utc": dt.datetime.utcfromtimestamp(first_ms / 1000).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        ),
-        "last_utc": dt.datetime.utcfromtimestamp(last_ms / 1000).strftime(
+        "first_utc": dt.datetime.fromtimestamp(
+            first_ms / 1000, dt.timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "last_utc": dt.datetime.fromtimestamp(last_ms / 1000, dt.timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         ),
     }
@@ -214,7 +224,9 @@ def sync_one(
     if rw_status == "committed":
         result["status"] = "committed"
         result["wrote_count"] = rw.get("fxcm_inserted", 0)
-        result["changed"] = rw.get("fxcm_inserted", 0) > 0 or rw.get("removed_in_range", 0) > 0
+        result["changed"] = (
+            rw.get("fxcm_inserted", 0) > 0 or rw.get("removed_in_range", 0) > 0
+        )
     elif rw_status == "dry_run":
         result["status"] = "dry_run"
         result["wrote_count"] = 0
@@ -322,7 +334,8 @@ def _write_md_report(report: Dict[str, Any], md_path: str) -> None:
         for key, val in redis.items():
             if isinstance(val, dict):
                 lines.append(
-                    "- **%s**: primed=%s count=%s" % (key, val.get("primed"), val.get("count", "—"))
+                    "- **%s**: primed=%s count=%s"
+                    % (key, val.get("primed"), val.get("count", "—"))
                 )
             else:
                 lines.append("- %s: %s" % (key, val))
@@ -367,9 +380,7 @@ def _build_verify_diff(
     after: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Побудувати diff між before/after snapshots."""
-    after_map = {
-        (e["symbol"], e["tf_s"]): e for e in after
-    }
+    after_map = {(e["symbol"], e["tf_s"]): e for e in after}
     entries = []
     improved_count = 0
     for b in before:
@@ -380,15 +391,17 @@ def _build_verify_diff(
         improved = False
         if isinstance(before_age, int) and isinstance(after_age, int):
             improved = after_age < before_age
-        entries.append({
-            "symbol": b["symbol"],
-            "tf_s": b["tf_s"],
-            "before_last_close_utc": b.get("last_close_utc", "—"),
-            "after_last_close_utc": a.get("last_close_utc", "—"),
-            "before_age_s": before_age,
-            "after_age_s": after_age,
-            "improved": improved,
-        })
+        entries.append(
+            {
+                "symbol": b["symbol"],
+                "tf_s": b["tf_s"],
+                "before_last_close_utc": b.get("last_close_utc", "—"),
+                "after_last_close_utc": a.get("last_close_utc", "—"),
+                "before_age_s": before_age,
+                "after_age_s": after_age,
+                "improved": improved,
+            }
+        )
         if improved:
             improved_count += 1
 
@@ -413,21 +426,26 @@ def main() -> int:
     )
     ap.add_argument("--symbols", default=None, help="Символи через кому")
     ap.add_argument(
-        "--symbols-from-config", action="store_true",
+        "--symbols-from-config",
+        action="store_true",
         help="Символи з config.json",
     )
     ap.add_argument("--tfs", default="14400,86400", help="TF через кому")
     ap.add_argument("--limit-h4", type=int, default=8, help="Кількість H4 барів")
     ap.add_argument("--limit-d1", type=int, default=5, help="Кількість D1 барів")
-    ap.add_argument("--dry-run", action="store_true", default=True, help="Лише fetch + validate")
+    ap.add_argument(
+        "--dry-run", action="store_true", default=True, help="Лише fetch + validate"
+    )
     ap.add_argument("--commit", action="store_true", help="Записати + Redis prime")
     ap.add_argument("--verify", action="store_true", help="Before/after snapshot")
     ap.add_argument(
-        "--api-base-url", default="http://127.0.0.1:8089",
+        "--api-base-url",
+        default="http://127.0.0.1:8089",
         help="API для verify snapshot",
     )
     ap.add_argument(
-        "--out", default="reports/mpv_proof/htf_tail_sync_run.json",
+        "--out",
+        default="reports/mpv_proof/htf_tail_sync_run.json",
         help="Шлях JSON-звіту",
     )
     args = ap.parse_args()
@@ -498,7 +516,9 @@ def main() -> int:
             None if day_anchor_offset_s_d1 is None else int(day_anchor_offset_s_d1)
         ),
         day_anchor_offset_s_d1_alt=(
-            None if day_anchor_offset_s_d1_alt is None else int(day_anchor_offset_s_d1_alt)
+            None
+            if day_anchor_offset_s_d1_alt is None
+            else int(day_anchor_offset_s_d1_alt)
         ),
         day_anchor_offset_s_alt=(
             None if day_anchor_offset_s_alt is None else int(day_anchor_offset_s_alt)
@@ -539,7 +559,11 @@ def main() -> int:
 
                     try:
                         entry = sync_one(
-                            provider, symbol, tf_s, limit, data_root,
+                            provider,
+                            symbol,
+                            tf_s,
+                            limit,
+                            data_root,
                             dry_run=not is_commit,
                         )
                     except Exception as exc:
@@ -601,8 +625,11 @@ def main() -> int:
     LOG.info(
         "=== ПІДСУМОК: mode=%s fetched=%d committed=%d "
         "val_errors=%d fetch_errors=%d ===",
-        mode, t["fetched"], t["committed"],
-        t["validation_errors"], t["fetch_errors"],
+        mode,
+        t["fetched"],
+        t["committed"],
+        t["validation_errors"],
+        t["fetch_errors"],
     )
 
     if t["validation_errors"] > 0 or t["fetch_errors"] > 0:

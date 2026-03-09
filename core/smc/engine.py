@@ -10,6 +10,7 @@ core/smc/engine.py — SmcEngine orchestrator (ADR-0024 §3.3).
 
 Python 3.7 compatible.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -32,7 +33,12 @@ from core.smc.structure import classify_swings, detect_structure_events
 from core.smc.momentum import detect_displacement, compute_momentum_score
 from core.smc.swings import detect_raw_swings, detect_fractals
 from core.smc.types import (
-    SmcDelta, SmcLevel, SmcSnapshot, SmcSwing, SmcZone,
+    SmcDelta,
+    SmcLevel,
+    SmcSnapshot,
+    SmcSwing,
+    SmcZone,
+    SESSION_LEVEL_KINDS,
 )
 
 _log = logging.getLogger(__name__)
@@ -59,8 +65,12 @@ _STATUS_RANK = {
 # Default (LTF): decay_start_bars as-is, expire at 500.
 # H4/D1: start decay 4×/10× later, expire at 2000/5000 bars.
 _TF_DECAY_PROFILE = {
-    14400: (4.0, 4.0, 2000),   # H4: 4× slower decay, expire ~333 days
-    86400: (10.0, 10.0, 5000), # D1: 10× slower decay, expire ~14 years (effectively never)
+    14400: (4.0, 4.0, 2000),  # H4: 4× slower decay, expire ~333 days
+    86400: (
+        10.0,
+        10.0,
+        5000,
+    ),  # D1: 10× slower decay, expire ~14 years (effectively never)
 }  # type: Dict[int, tuple]
 
 
@@ -71,11 +81,11 @@ def _zone_rank(z):
 
 
 def _update_zone_lifecycle(
-    fresh_zones,     # type: List[SmcZone]
-    active_zones,    # type: Dict[str, SmcZone]
-    last_bar,        # type: Optional[CandleBar]
-    config,          # type: SmcConfig
-    tf_s,            # type: int
+    fresh_zones,  # type: List[SmcZone]
+    active_zones,  # type: Dict[str, SmcZone]
+    last_bar,  # type: Optional[CandleBar]
+    config,  # type: SmcConfig
+    tf_s,  # type: int
 ):
     # type: (...) -> List[SmcZone]
     """N1 zone lifecycle: merge → FVG evict → mitigate → decay → hide → cap.
@@ -96,8 +106,10 @@ def _update_zone_lifecycle(
     # 2) D-02: FVG eviction — якщо FVG зникає з fresh → drop
     # Виняток: filled FVG зберігаються для dimmed display на UI
     stale_fvg = [
-        zid for zid, z in active_zones.items()
-        if z.kind.startswith("fvg") and zid not in fresh_ids
+        zid
+        for zid, z in active_zones.items()
+        if z.kind.startswith("fvg")
+        and zid not in fresh_ids
         and z.status not in ("filled", "mitigated")
     ]
     for zid in stale_fvg:
@@ -116,7 +128,9 @@ def _update_zone_lifecycle(
 
             if mitigated and z.status in ("active", "tested", "partially_filled"):
                 active_zones[zid] = dataclasses.replace(
-                    z, status="mitigated", end_ms=last_bar.open_time_ms,
+                    z,
+                    status="mitigated",
+                    end_ms=last_bar.open_time_ms,
                 )
                 continue
 
@@ -147,7 +161,8 @@ def _update_zone_lifecycle(
                     factor = 0.97  # gentle: ~0.54 after 20 bars
                 decay = max(0.15, z.strength * factor)
                 active_zones[zid] = dataclasses.replace(
-                    z, strength=round(decay, 3),
+                    z,
+                    strength=round(decay, 3),
                 )
 
         for zid in to_delete:
@@ -172,7 +187,8 @@ def _update_zone_lifecycle(
     # FVG filled/mitigated зберігаються для dimmed display на UI
     if config.hide_mitigated:
         result = [
-            z for z in active_zones.values()
+            z
+            for z in active_zones.values()
             if z.status != "mitigated"
             or z.kind.startswith("fvg")  # FVG: keep for dimmed render
         ]
@@ -184,7 +200,7 @@ def _update_zone_lifecycle(
     non_fvg = [z for z in result if not z.kind.startswith("fvg")]
     if len(non_fvg) > config.max_zones_per_tf:
         non_fvg.sort(key=_zone_rank)
-        non_fvg = non_fvg[:config.max_zones_per_tf]
+        non_fvg = non_fvg[: config.max_zones_per_tf]
 
     return non_fvg + fvg_result
 
@@ -197,7 +213,10 @@ class _TfState:
     """Стан SMC для однієї пари (symbol, tf_s)."""
 
     __slots__ = (
-        "_bars", "_last_snapshot", "_last_delta", "_lookback",
+        "_bars",
+        "_last_snapshot",
+        "_last_delta",
+        "_lookback",
         "_active_zones",
     )
 
@@ -250,6 +269,10 @@ class SmcEngine:
         self._config = config
         self._states: Dict[Tuple[str, int], _TfState] = {}
         self._zone_grades: Dict[Tuple[str, int], Dict[str, dict]] = {}  # ADR-0029
+        # ADR-0035: session support
+        self._session_windows = []  # type: list
+        self._session_m1_bars: Dict[str, list] = {}  # symbol → deque of M1 CandleBars
+        self._init_sessions()
 
     # ── Public API ──────────────────────────────────────────────────
 
@@ -270,7 +293,9 @@ class SmcEngine:
             SmcSnapshot з усіма E1 зонами, свінгами, рівнями.
         """
         state = self._get_or_create(symbol, tf_s)
-        state._bars = deque(bars[-self._config.lookback_bars:], maxlen=self._config.lookback_bars)
+        state._bars = deque(
+            bars[-self._config.lookback_bars :], maxlen=self._config.lookback_bars
+        )
         state._active_zones = {}  # N1: full recompute → reset lifecycle
         snap = self._compute_snapshot(symbol, tf_s, state.bars_list(), state)
         state.last_snapshot = snap
@@ -304,7 +329,10 @@ class SmcEngine:
         if elapsed > self._config.max_compute_ms:
             _log.warning(
                 "SMC_SLOW sym=%s tf=%d elapsed_ms=%.1f budget=%d",
-                bar.symbol, bar.tf_s, elapsed, self._config.max_compute_ms,
+                bar.symbol,
+                bar.tf_s,
+                elapsed,
+                self._config.max_compute_ms,
             )
 
         return delta
@@ -328,14 +356,84 @@ class SmcEngine:
             return (0, 0)
         bars = state.bars_list()
         from core.smc.swings import compute_atr
+
         atr = compute_atr(bars, period=14)
         mom = self._config.momentum
         return compute_momentum_score(
-            bars, atr,
+            bars,
+            atr,
             min_body_atr=mom.min_body_atr_mult,
             max_wick_ratio=mom.max_wick_ratio,
             lookback=mom.lookback_bars,
         )
+
+    # ── ADR-0035: Session support ───────────────────────────────
+
+    def _init_sessions(self) -> None:
+        """Ініціалізує session windows з config (S5: SSOT)."""
+        scfg = self._config.sessions
+        if scfg.enabled and scfg._definitions:
+            from core.smc.sessions import load_session_windows
+
+            self._session_windows = load_session_windows(scfg._definitions)
+
+    def feed_m1_bar(self, bar: CandleBar) -> None:
+        """Зберігає M1 бар для обчислення session H/L.
+
+        Зберігаються тільки complete M1 бари, últimos ~2880 (2 дні).
+        S0: pure — лише зберігає у internal deque.
+        """
+        if bar.tf_s != 60 or not bar.complete:
+            return
+        sym = bar.symbol
+        if sym not in self._session_m1_bars:
+            self._session_m1_bars[sym] = deque(maxlen=2880)  # 48h × 60 min
+        self._session_m1_bars[sym].append(bar)
+
+    def feed_m1_bars_bulk(self, symbol: str, bars: List[CandleBar]) -> None:
+        """Bulk feed M1 bars (warmup). S0: pure."""
+        if symbol not in self._session_m1_bars:
+            self._session_m1_bars[symbol] = deque(maxlen=2880)
+        q = self._session_m1_bars[symbol]
+        for b in bars:
+            if b.tf_s == 60 and b.complete:
+                q.append(b)
+
+    def get_session_levels(self, symbol: str, current_time_ms: int) -> List[SmcLevel]:
+        """Обчислити session H/L levels. S0: pure, S2: deterministic."""
+        if not self._session_windows or not self._config.sessions.enabled:
+            return []
+        m1_bars = self._session_m1_bars.get(symbol)
+        if not m1_bars:
+            return []
+        from core.smc.sessions import compute_session_levels
+
+        levels, _states = compute_session_levels(
+            list(m1_bars),
+            self._session_windows,
+            current_time_ms,
+            symbol,
+            tf_s=86400,
+        )
+        return levels
+
+    def get_session_states(self, symbol: str, current_time_ms: int):
+        """Get session states for narrative. Returns list of SessionState."""
+        if not self._session_windows or not self._config.sessions.enabled:
+            return []
+        m1_bars = self._session_m1_bars.get(symbol)
+        if not m1_bars:
+            return []
+        from core.smc.sessions import compute_session_levels
+
+        _levels, states = compute_session_levels(
+            list(m1_bars),
+            self._session_windows,
+            current_time_ms,
+            symbol,
+            tf_s=86400,
+        )
+        return states
 
     def get_snapshot_with_htf_levels(
         self,
@@ -357,6 +455,7 @@ class SmcEngine:
             merged = list(snap.levels) + htf_levels
             snap = dataclasses.replace(snap, levels=merged)
         return snap
+
     def get_snapshot_with_context_stack(
         self,
         symbol: str,
@@ -390,6 +489,7 @@ class SmcEngine:
             bars = state.bars_list()
             last_bar = bars[-1]
             from core.smc.swings import compute_atr
+
             atr = compute_atr(bars, period=14)
             if atr > 0:
                 cs_cfg = self._config.context_stack
@@ -419,32 +519,36 @@ class SmcEngine:
             zones=merged_zones,
             levels=merged_levels,
         )
+
     # ── Cross-TF display mapping (SSOT: compute_tfs config) ─────────
 
     # Viewer TF → base computed TF. Lower TFs map to nearest computed.
     # User rules: CHoCH/BOS on M15, H1, H4. FVG on M15, H1, H4, D1.
     _VIEWER_TO_BASE = {
-        60: 300, 180: 300, 300: 300,               # M1/M3/M5 → M5
-        900: 900,                                   # M15 → M15
-        1800: 3600, 3600: 3600,                    # M30/H1 → H1
-        14400: 14400,                               # H4 → H4
-        86400: 86400,                               # D1 → D1
+        60: 300,
+        180: 300,
+        300: 300,  # M1/M3/M5 → M5
+        900: 900,  # M15 → M15
+        1800: 3600,
+        3600: 3600,  # M30/H1 → H1
+        14400: 14400,  # H4 → H4
+        86400: 86400,  # D1 → D1
     }  # type: Dict[int, int]
 
     # CHoCH/BOS: show current_base + one higher TF
     _STRUCTURE_NEXT_TF = {
-        300: 900,      # M5  → +M15
-        900: 3600,     # M15 → +H1
-        3600: 14400,   # H1  → +H4
+        300: 900,  # M5  → +M15
+        900: 3600,  # M15 → +H1
+        3600: 14400,  # H1  → +H4
     }  # type: Dict[int, int]
 
     # FVG: explicit per-base TF display mapping
     _FVG_DISPLAY_TFS = {
-        300:   [300, 900, 3600],     # M5  → M5+M15+H1
-        900:   [900, 3600, 14400],   # M15 → M15+H1+H4
-        3600:  [3600, 14400],        # H1  → H1+H4
-        14400: [14400, 86400],       # H4  → H4+D1
-        86400: [86400],              # D1  → D1
+        300: [300, 900, 3600],  # M5  → M5+M15+H1
+        900: [900, 3600, 14400],  # M15 → M15+H1+H4
+        3600: [3600, 14400],  # H1  → H1+H4
+        14400: [14400, 86400],  # H4  → H4+D1
+        86400: [86400],  # D1  → D1
     }  # type: Dict[int, List[int]]
 
     # Structure (BOS/CHoCH) lives only on these TFs
@@ -458,24 +562,89 @@ class SmcEngine:
     #   D1 viewer:  nothing (candles visible)
     # Current-hour H/L (h1_h/h1_l) excluded: changes too often, just noise.
     # M30/M15 H/L: viewer sees those candles → never show.
+    # ADR-0035 §3.4: session level kinds split
+    _SESSION_ALL = frozenset(
+        {
+            "as_h",
+            "as_l",
+            "p_as_h",
+            "p_as_l",
+            "lon_h",
+            "lon_l",
+            "p_lon_h",
+            "p_lon_l",
+            "ny_h",
+            "ny_l",
+            "p_ny_h",
+            "p_ny_l",
+        }
+    )
+    _SESSION_PREV_ONLY = frozenset(
+        {
+            "p_as_h",
+            "p_as_l",
+            "p_lon_h",
+            "p_lon_l",
+            "p_ny_h",
+            "p_ny_l",
+        }
+    )
+
     _KEY_LEVEL_ALLOW = {
-        300: frozenset({
-            "pdh", "pdl", "dh", "dl",                       # D1
-            "p_h4_h", "p_h4_l", "h4_h", "h4_l",             # H4
-            "p_h1_h", "p_h1_l", "h1_h", "h1_l",             # H1 prev+curr
-        }),
-        900: frozenset({
-            "pdh", "pdl", "dh", "dl",                       # D1
-            "p_h4_h", "p_h4_l", "h4_h", "h4_l",             # H4
-            "p_h1_h", "p_h1_l",                               # H1 prev only
-        }),
-        3600: frozenset({
-            "pdh", "pdl", "dh", "dl",                       # D1
-            "p_h4_h", "p_h4_l", "h4_h", "h4_l",             # H4
-        }),
-        14400: frozenset({
-            "pdh", "pdl", "dh", "dl",                       # D1
-        }),
+        300: frozenset(
+            {
+                "pdh",
+                "pdl",
+                "dh",
+                "dl",  # D1
+                "p_h4_h",
+                "p_h4_l",
+                "h4_h",
+                "h4_l",  # H4
+                "p_h1_h",
+                "p_h1_l",
+                "h1_h",
+                "h1_l",  # H1 prev+curr
+            }
+        )
+        | _SESSION_ALL,
+        900: frozenset(
+            {
+                "pdh",
+                "pdl",
+                "dh",
+                "dl",  # D1
+                "p_h4_h",
+                "p_h4_l",
+                "h4_h",
+                "h4_l",  # H4
+                "p_h1_h",
+                "p_h1_l",  # H1 prev only
+            }
+        )
+        | _SESSION_ALL,
+        3600: frozenset(
+            {
+                "pdh",
+                "pdl",
+                "dh",
+                "dl",  # D1
+                "p_h4_h",
+                "p_h4_l",
+                "h4_h",
+                "h4_l",  # H4
+            }
+        )
+        | _SESSION_ALL,
+        14400: frozenset(
+            {
+                "pdh",
+                "pdl",
+                "dh",
+                "dl",  # D1
+            }
+        )
+        | _SESSION_PREV_ONLY,
         86400: frozenset(),  # D1 viewer: candles visible, no key levels
     }  # type: Dict[int, frozenset]
 
@@ -513,7 +682,8 @@ class SmcEngine:
         base_swings = list(snap.swings)
         if base_tf not in self._STRUCTURE_TFS:
             base_swings = [
-                s for s in base_swings
+                s
+                for s in base_swings
                 if not s.kind.startswith("bos_") and not s.kind.startswith("choch_")
             ]
 
@@ -522,7 +692,8 @@ class SmcEngine:
         if next_tf:
             htf_snap = self.get_snapshot(symbol, next_tf)
             htf_structure = [
-                s for s in htf_snap.swings
+                s
+                for s in htf_snap.swings
                 if s.kind.startswith("bos_") or s.kind.startswith("choch_")
             ]
             base_swings = base_swings + htf_structure
@@ -552,6 +723,7 @@ class SmcEngine:
             bars = state.bars_list()
             last_bar = bars[-1]
             from core.smc.swings import compute_atr
+
             atr = compute_atr(bars, period=14)
             if atr > 0:
                 cs_cfg = self._config.context_stack
@@ -594,46 +766,68 @@ class SmcEngine:
                         seen_ids.add(lv.id)
                         merged_levels.append(lv)
 
+        # 6b. ADR-0035: inject session H/L levels (filtered by allowed set)
+        if allowed and self._config.sessions.enabled:
+            session_levels = self.get_session_levels(symbol, int(time.time() * 1000))
+            for lv in session_levels:
+                if lv.kind in allowed:
+                    merged_levels.append(lv)
+
         # 7. Confluence scoring (ADR-0029 E5: after cross-TF injection)
         #    bars/last_bar/atr already computed in step 5 (same guard).
         zone_grades = {}  # type: Dict[str, dict]
         if state is not None and state.bars_list() and atr > 0:
-                conf_cfg = self._config.confluence.to_scoring_dict()
-                swing_dicts = [s.to_wire() for s in base_swings
-                               if not s.kind.startswith("bos_")
-                               and not s.kind.startswith("choch_")]
-                struct_dicts = [s.to_wire() for s in base_swings
-                                if s.kind.startswith("bos_")
-                                or s.kind.startswith("choch_")]
-                bar_dicts = [
-                    {"open_time_ms": b.open_time_ms, "h": b.h, "l": b.low}
-                    for b in bars[-50:]
-                ]
-                all_zone_wires = []
-                for zz in base_zones:
-                    w = zz.to_wire()
-                    w["anchor_bar_ms"] = zz.anchor_bar_ms
-                    all_zone_wires.append(w)
-                for z in base_zones:
-                    z_wire = z.to_wire()
-                    # anchor_bar_ms needed by scorer but not in UI wire (S6)
-                    z_wire["anchor_bar_ms"] = z.anchor_bar_ms
-                    if z_wire.get("kind", "").startswith("ob_"):
-                        htf_ctx = []
-                        for hz in base_zones:
-                            if hz.tf_s > base_tf:
-                                hw = hz.to_wire()
-                                hw["anchor_bar_ms"] = hz.anchor_bar_ms
-                                htf_ctx.append(hw)
-                        result = score_zone_confluence(
-                            zone=z_wire, bars=bar_dicts,
-                            swings=swing_dicts,
-                            zones_all=all_zone_wires,
-                            htf_zones=htf_ctx, structure=struct_dicts,
-                            atr=atr, current_price=last_bar.c,
-                            tf_s=base_tf, config=conf_cfg,
-                        )
-                        zone_grades[z_wire["id"]] = result
+            conf_cfg = self._config.confluence.to_scoring_dict()
+            swing_dicts = [
+                s.to_wire()
+                for s in base_swings
+                if not s.kind.startswith("bos_") and not s.kind.startswith("choch_")
+            ]
+            struct_dicts = [
+                s.to_wire()
+                for s in base_swings
+                if s.kind.startswith("bos_") or s.kind.startswith("choch_")
+            ]
+            bar_dicts = [
+                {"open_time_ms": b.open_time_ms, "h": b.h, "l": b.low}
+                for b in bars[-50:]
+            ]
+            all_zone_wires = []
+            for zz in base_zones:
+                w = zz.to_wire()
+                w["anchor_bar_ms"] = zz.anchor_bar_ms
+                all_zone_wires.append(w)
+            for z in base_zones:
+                z_wire = z.to_wire()
+                # anchor_bar_ms needed by scorer but not in UI wire (S6)
+                z_wire["anchor_bar_ms"] = z.anchor_bar_ms
+                if z_wire.get("kind", "").startswith("ob_"):
+                    htf_ctx = []
+                    for hz in base_zones:
+                        if hz.tf_s > base_tf:
+                            hw = hz.to_wire()
+                            hw["anchor_bar_ms"] = hz.anchor_bar_ms
+                            htf_ctx.append(hw)
+                    # ADR-0035 F9: session level wires for confluence scoring
+                    session_lv_wires = [
+                        lv.to_wire()
+                        for lv in merged_levels
+                        if lv.kind in SESSION_LEVEL_KINDS
+                    ]
+                    result = score_zone_confluence(
+                        zone=z_wire,
+                        bars=bar_dicts,
+                        swings=swing_dicts,
+                        zones_all=all_zone_wires,
+                        htf_zones=htf_ctx,
+                        structure=struct_dicts,
+                        atr=atr,
+                        current_price=last_bar.c,
+                        tf_s=base_tf,
+                        config=conf_cfg,
+                        session_levels=session_lv_wires,
+                    )
+                    zone_grades[z_wire["id"]] = result
         self._zone_grades[(symbol, viewer_tf_s)] = zone_grades
 
         return dataclasses.replace(
@@ -680,6 +874,7 @@ class SmcEngine:
         S2: детермінований — same bars → same output.
         """
         import time as _time
+
         now_ms = int(_time.time() * 1000)
 
         if not bars:
@@ -690,6 +885,7 @@ class SmcEngine:
 
         # ── F4: ATR once, pass to all detectors ──
         from core.smc.swings import compute_atr
+
         atr = compute_atr(bars, period=14)
 
         # ── E1.1: Raw swings ──
@@ -717,7 +913,11 @@ class SmcEngine:
         fresh_zones: List[SmcZone] = ob_zones + fvg_zones + pd_zones
         last_bar = bars[-1] if bars else None
         all_zones = _update_zone_lifecycle(
-            fresh_zones, state._active_zones, last_bar, cfg, tf_s,
+            fresh_zones,
+            state._active_zones,
+            last_bar,
+            cfg,
+            tf_s,
         )
 
         # ── E2.5: Liquidity Levels (Equal Highs / Equal Lows) ──
@@ -729,7 +929,9 @@ class SmcEngine:
         levels = levels + key_lvls
 
         # ── E2.7: Inducement (False Breakout Trap) ──
-        inducement_swings: List[SmcSwing] = detect_inducement(bars, classified, cfg, atr=atr)
+        inducement_swings: List[SmcSwing] = detect_inducement(
+            bars, classified, cfg, atr=atr
+        )
         if inducement_swings:
             all_swings = all_swings + inducement_swings
             all_swings.sort(key=lambda s: s.time_ms)
@@ -744,7 +946,8 @@ class SmcEngine:
         mom_cfg = cfg.momentum
         if mom_cfg.enabled:
             disp_swings = detect_displacement(
-                bars, atr,
+                bars,
+                atr,
                 min_body_atr=mom_cfg.min_body_atr_mult,
                 max_wick_ratio=mom_cfg.max_wick_ratio,
             )
@@ -773,11 +976,12 @@ class SmcEngine:
 
 # ── D1: Display filter ───────────────────────────────────────────────
 
+
 def _filter_for_display(
     snap: SmcSnapshot,
     bars: List[CandleBar],
     config: SmcConfig,
-    atr: float = 0.0,       # F4: caller-supplied ATR
+    atr: float = 0.0,  # F4: caller-supplied ATR
 ) -> SmcSnapshot:
     """Proximity + height + cap filter before sending to UI.
 
@@ -791,6 +995,7 @@ def _filter_for_display(
     price = last_bar.c
     if atr <= 0.0:
         from core.smc.swings import compute_atr
+
         atr = compute_atr(bars, period=14)
     if atr <= 0:
         return snap
@@ -818,13 +1023,15 @@ def _filter_for_display(
     for z in eligible_zones:
         if not z.kind.startswith("fvg"):
             continue
-        if z.status == "filled":          # A-2: filled = dead
+        if z.status == "filled":  # A-2: filled = dead
             continue
         if abs(price - (z.high + z.low) / 2.0) > fvg_max_dist:  # A-4
             continue
         # ADR-0033 SC-2: hide FVG that overlaps any active OB (any overlap > 0)
         if disp.fvg_ob_overlap_hide:
-            overlaps_ob = any(z.low < ob_h and z.high > ob_l for ob_l, ob_h in ob_ranges)
+            overlaps_ob = any(
+                z.low < ob_h and z.high > ob_l for ob_l, ob_h in ob_ranges
+            )
             if overlaps_ob:
                 continue
         fvg_zones.append(z)
@@ -845,21 +1052,24 @@ def _filter_for_display(
             continue
         nearby_zones.append(z)
     nearby_zones.sort(key=_zone_rank)
-    capped_zones = nearby_zones[:disp.max_display_zones] + fvg_zones
+    capped_zones = nearby_zones[: disp.max_display_zones] + fvg_zones
 
     # 2) Levels: proximity filter disabled (ADR-0024b: show all key levels)
     # Трейдер хоче бачити всі рівні — UI стилізує per-kind, не потрібно фільтрувати.
     capped_levels = list(snap.levels)
 
     # 3) Swings: only last N (structure swings + fractals capped separately)
-    struct_swings = [s for s in snap.swings
-                     if not s.kind.startswith('fractal_') and not s.kind.startswith('displacement_')]
-    frac_swings = [s for s in snap.swings if s.kind.startswith('fractal_')]
-    disp_swings = [s for s in snap.swings if s.kind.startswith('displacement_')]
+    struct_swings = [
+        s
+        for s in snap.swings
+        if not s.kind.startswith("fractal_") and not s.kind.startswith("displacement_")
+    ]
+    frac_swings = [s for s in snap.swings if s.kind.startswith("fractal_")]
+    disp_swings = [s for s in snap.swings if s.kind.startswith("displacement_")]
     capped_swings = (
-        struct_swings[-disp.max_display_swings:]
-        + frac_swings[-disp.max_display_fractals:]
-        + disp_swings[-config.momentum.max_display:]
+        struct_swings[-disp.max_display_swings :]
+        + frac_swings[-disp.max_display_fractals :]
+        + disp_swings[-config.momentum.max_display :]
     )
     capped_swings.sort(key=lambda s: s.time_ms)
 
@@ -872,6 +1082,7 @@ def _filter_for_display(
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
+
 
 def _empty_snapshot(symbol: str, tf_s: int) -> SmcSnapshot:
     return SmcSnapshot(
@@ -929,7 +1140,8 @@ def _diff_snapshots(
 
     new_zones = [z for z in curr.zones if z.id not in prev_zone_ids]
     mitigated = [
-        z.id for z in prev.zones
+        z.id
+        for z in prev.zones
         if z.status in ("active", "tested")
         and z.id in curr_zone_ids
         and curr_zone_ids[z.id].status in ("mitigated", "filled")

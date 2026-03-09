@@ -39,6 +39,9 @@ def _env_int(key: str) -> Optional[int]:
     try:
         return int(raw)
     except Exception:
+        logging.debug(
+            "REDIS_SPEC_ENV_INT_PARSE_FAILED key=%s raw=%r", key, raw, exc_info=True
+        )
         return None
 
 

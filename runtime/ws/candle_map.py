@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import datetime
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, cast
 
 _log = logging.getLogger(__name__)
 
@@ -27,6 +27,13 @@ def _pick(bar: dict, primary: str, fallback: str) -> Optional[float]:
     try:
         return float(val)
     except (TypeError, ValueError):
+        _log.debug(
+            "CANDLE_MAP_PICK_PARSE_FAILED primary=%s fallback=%s raw=%r",
+            primary,
+            fallback,
+            val,
+            exc_info=True,
+        )
         return None
 
 
@@ -46,7 +53,9 @@ def _is_display_flat_bar(bar: dict) -> bool:
     c = bar.get("close", bar.get("c"))
     v = bar.get("volume", bar.get("v", 0.0))
     if all(isinstance(x, (int, float)) for x in (o, h, lo, c)):
-        if o == h == lo == c and float(v) <= 10.0:  # ADR-0012 P1: 4→10 (EUSTX50 V=6, GER30/HKG33 V=5)
+        if (
+            o == h == lo == c and float(v) <= 10.0
+        ):  # ADR-0012 P1: 4→10 (EUSTX50 V=6, GER30/HKG33 V=5)
             return True
     return False
 
@@ -106,7 +115,9 @@ def map_bar_to_candle_v4(bar: dict, *, tf_s: int = 0) -> Optional[dict]:
         if isinstance(time_sec, (int, float)):
             t_ms = int(time_sec) * 1000
     if not isinstance(t_ms, (int, float)) or t_ms <= 0:
-        _log.warning("CANDLE_MAP_REJECT reason=bad_t_ms raw=%s", bar.get("open_time_ms"))
+        _log.warning(
+            "CANDLE_MAP_REJECT reason=bad_t_ms raw=%s", bar.get("open_time_ms")
+        )
         return None
     t_ms = int(t_ms)
 
@@ -119,9 +130,18 @@ def map_bar_to_candle_v4(bar: dict, *, tf_s: int = 0) -> Optional[dict]:
     if None in (o, h, low, c):
         _log.warning(
             "CANDLE_MAP_REJECT reason=missing_ohlc o=%s h=%s l=%s c=%s t_ms=%s",
-            o, h, low, c, t_ms,
+            o,
+            h,
+            low,
+            c,
+            t_ms,
         )
         return None
+
+    o = float(cast(float, o))
+    h = float(cast(float, h))
+    low = float(cast(float, low))
+    c = float(cast(float, c))
 
     # --- Tail normalization (safety net) ---
     # Навіть якщо source нормалізований — display-шар гарантує що

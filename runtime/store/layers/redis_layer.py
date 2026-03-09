@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Optional, Tuple
 
 from runtime.store.redis_keys import (
@@ -10,6 +11,9 @@ from runtime.store.redis_keys import (
     preview_updates_seq_key,
     symbol_key,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class RedisLayer:
@@ -22,7 +26,9 @@ class RedisLayer:
     def _key(self, *parts: str) -> str:
         return ":".join([self._ns, *parts])
 
-    def _get_json(self, key: str) -> Tuple[Optional[dict[str, Any]], Optional[int], Optional[str]]:
+    def _get_json(
+        self, key: str
+    ) -> Tuple[Optional[dict[str, Any]], Optional[int], Optional[str]]:
         try:
             raw = self._client.get(key)
             if raw is None:
@@ -35,9 +41,12 @@ class RedisLayer:
                 ttl_left = -1
             return payload, int(ttl_left), None
         except Exception:
+            logger.debug("REDIS_LAYER_GET_JSON_FAILED key=%s", key, exc_info=True)
             return None, None, "redis_error"
 
-    def _write_json(self, key: str, payload: dict[str, Any], ttl_s: Optional[int]) -> None:
+    def _write_json(
+        self, key: str, payload: dict[str, Any], ttl_s: Optional[int]
+    ) -> None:
         raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         if ttl_s is not None and ttl_s > 0:
             self._client.set(key, raw, ex=int(ttl_s))
@@ -78,7 +87,11 @@ class RedisLayer:
         self._write_json(key, payload, ttl_s)
 
     def write_preview_tail(
-        self, symbol: str, tf_s: int, payload: dict[str, Any], ttl_s: Optional[int] = None
+        self,
+        symbol: str,
+        tf_s: int,
+        payload: dict[str, Any],
+        ttl_s: Optional[int] = None,
     ) -> None:
         key = preview_tail_key(self._ns, symbol, tf_s)
         self._write_json(key, payload, ttl_s)
@@ -117,6 +130,13 @@ class RedisLayer:
                 try:
                     cursor_seq = int(last_seq_raw) if last_seq_raw is not None else 0
                 except Exception:
+                    logger.debug(
+                        "REDIS_LAYER_CURSOR_PARSE_FAILED symbol=%s tf_s=%s raw=%r",
+                        symbol,
+                        tf_s,
+                        last_seq_raw,
+                        exc_info=True,
+                    )
                     cursor_seq = 0
                 return [], cursor_seq, None, None
 
@@ -130,6 +150,13 @@ class RedisLayer:
                 try:
                     ev = json.loads(raw)
                 except Exception:
+                    logger.debug(
+                        "REDIS_LAYER_EVENT_DECODE_FAILED symbol=%s tf_s=%s raw=%r",
+                        symbol,
+                        tf_s,
+                        raw,
+                        exc_info=True,
+                    )
                     continue
                 seq = ev.get("seq")
                 if not isinstance(seq, int):
@@ -161,6 +188,15 @@ class RedisLayer:
 
             return events, int(cursor_seq), gap, None
         except Exception as exc:
+            logger.debug(
+                "REDIS_LAYER_READ_PREVIEW_UPDATES_FAILED symbol=%s tf_s=%s since_seq=%r limit=%s retain=%s",
+                symbol,
+                tf_s,
+                since_seq,
+                limit,
+                retain,
+                exc_info=True,
+            )
             return [], since_seq if since_seq is not None else 0, None, str(exc)
 
     def get_prime_ready_payload(self) -> Optional[dict[str, Any]]:

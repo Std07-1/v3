@@ -15,6 +15,7 @@ Lifecycle:
 
 Python 3.7 compatible.
 """
+
 from __future__ import annotations
 
 import logging
@@ -24,7 +25,11 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from core.model.bars import CandleBar
 from core.smc.engine import SmcEngine
 from core.smc.types import SmcDelta, SmcSnapshot, NarrativeBlock
-from core.smc.narrative import synthesize_narrative, narrative_to_wire, _fallback_narrative_block
+from core.smc.narrative import (
+    synthesize_narrative,
+    narrative_to_wire,
+    _fallback_narrative_block,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -56,11 +61,11 @@ def _bar_dict_to_candle_bar(
                 return float(v)
         return 0.0
 
-    o   = _f(["o", "open"])
-    h   = _f(["h", "high"])
+    o = _f(["o", "open"])
+    h = _f(["h", "high"])
     low = _f(["low"])
-    c   = _f(["c", "close"])
-    v   = _f(["v", "volume"])
+    c = _f(["c", "close"])
+    v = _f(["v", "volume"])
     complete = bool(d.get("complete", True))
     src = str(d.get("src", "derived"))
 
@@ -75,7 +80,11 @@ def _bar_dict_to_candle_bar(
             tf_s=tf_s,
             open_time_ms=open_ms,
             close_time_ms=close_ms,
-            o=o, h=h, low=low, c=c, v=v,
+            o=o,
+            h=h,
+            low=low,
+            c=c,
+            v=v,
             complete=complete,
             src=src,
         )
@@ -101,7 +110,9 @@ class SmcRunner:
         self._engine = engine
         self._full_config = full_cfg  # ADR-0033: narrative needs smc.narrative config
         self._symbols: List[str] = list(full_cfg.get("symbols", []))
-        tf_raw = full_cfg.get("tf_allowlist_s", [60, 300, 900, 1800, 3600, 14400, 86400])
+        tf_raw = full_cfg.get(
+            "tf_allowlist_s", [60, 300, 900, 1800, 3600, 14400, 86400]
+        )
         self._tf_allowlist: Set[int] = set(int(x) for x in tf_raw)
         smc_cfg = full_cfg.get("smc", {}) if isinstance(full_cfg, dict) else {}
         self._lookback = int(smc_cfg.get("lookback_bars", 500))
@@ -113,8 +124,10 @@ class SmcRunner:
         self._last_deltas: Dict[Tuple[str, int], Optional[SmcDelta]] = {}
         _log.info(
             "SMC_RUNNER_INIT symbols=%s tfs=%s compute_tfs=%s lookback=%d",
-            self._symbols, sorted(self._tf_allowlist),
-            sorted(self._compute_tfs), self._lookback,
+            self._symbols,
+            sorted(self._tf_allowlist),
+            sorted(self._compute_tfs),
+            self._lookback,
         )
 
     # ── Warmup ──────────────────────────────────────────
@@ -127,10 +140,14 @@ class SmcRunner:
         """
         import time as _time
 
-        _log.info("SMC_RUNNER_WARMUP_START symbols=%d compute_tfs=%s",
-                 len(self._symbols), sorted(self._compute_tfs))
+        _log.info(
+            "SMC_RUNNER_WARMUP_START symbols=%d compute_tfs=%s",
+            len(self._symbols),
+            sorted(self._compute_tfs),
+        )
         total_ok = 0
         total_err = 0
+        m1_warmed: set = set()  # symbols that already got M1 feed
 
         for symbol in self._symbols:
             for tf_s in sorted(self._compute_tfs):
@@ -138,22 +155,60 @@ class SmcRunner:
                 try:
                     bars = self._read_bars_for_warmup(uds_reader, symbol, tf_s)
                     snap = self._engine.update(symbol, tf_s, bars)
+                    # ADR-0035: reuse M1 bars for session H/L (avoid duplicate read)
+                    # If lookback < 2880, do a separate larger read for sessions
+                    if tf_s == 60:
+                        if bars:
+                            self._engine.feed_m1_bars_bulk(symbol, bars)
+                        if len(bars) < 2880:
+                            try:
+                                extra = self._read_m1_for_sessions(
+                                    uds_reader, symbol, 2880
+                                )
+                                if len(extra) > len(bars):
+                                    self._engine.feed_m1_bars_bulk(symbol, extra)
+                            except Exception:
+                                pass  # warmup bars already fed, extra is best-effort
+                        m1_warmed.add(symbol)
                     elapsed_ms = (_time.time() - t0) * 1000.0
                     if elapsed_ms > _WARMUP_SLOW_MS:
                         _log.warning(
                             "SMC_WARMUP_SLOW sym=%s tf=%s bars=%d ms=%.1f",
-                            symbol, tf_s, len(bars), elapsed_ms,
+                            symbol,
+                            tf_s,
+                            len(bars),
+                            elapsed_ms,
                         )
                     else:
                         _log.info(
                             "SMC_WARMUP_OK sym=%s tf=%s bars=%d zones=%d swings=%d ms=%.1f",
-                            symbol, tf_s, len(bars),
-                            len(snap.zones), len(snap.swings), elapsed_ms,
+                            symbol,
+                            tf_s,
+                            len(bars),
+                            len(snap.zones),
+                            len(snap.swings),
+                            elapsed_ms,
                         )
                     total_ok += 1
                 except Exception as exc:
-                    _log.warning("SMC_WARMUP_ERR sym=%s tf=%s err=%s", symbol, tf_s, exc)
+                    _log.warning(
+                        "SMC_WARMUP_ERR sym=%s tf=%s err=%s", symbol, tf_s, exc
+                    )
                     total_err += 1
+
+        # ADR-0035: warmup M1 bars for session H/L (only if M1 not in compute_tfs)
+        # Session analysis needs ~48h of M1 data (prev + current sessions)
+        _m1_lookback = max(self._lookback, 2880)  # 2880 M1 bars ≈ 48h
+        for symbol in self._symbols:
+            if symbol in m1_warmed:
+                continue
+            try:
+                m1_bars = self._read_m1_for_sessions(uds_reader, symbol, _m1_lookback)
+                if m1_bars:
+                    self._engine.feed_m1_bars_bulk(symbol, m1_bars)
+                    _log.info("SMC_WARMUP_M1_OK sym=%s bars=%d", symbol, len(m1_bars))
+            except Exception as exc:
+                _log.warning("SMC_WARMUP_M1_ERR sym=%s err=%s", symbol, exc)
 
         _log.info("SMC_RUNNER_WARMUP_DONE ok=%d err=%d", total_ok, total_err)
 
@@ -188,7 +243,45 @@ class SmcRunner:
         bars.sort(key=lambda b: b.open_time_ms)
         return bars
 
+    def _read_m1_for_sessions(
+        self,
+        uds_reader: Any,
+        symbol: str,
+        limit: int,
+    ) -> List[CandleBar]:
+        """Read M1 bars with custom lookback for session warmup. S1: read-only."""
+        from runtime.store.uds import WindowSpec, ReadPolicy
+
+        spec = WindowSpec(
+            symbol=symbol,
+            tf_s=60,
+            limit=limit,
+            cold_load=True,
+        )
+        policy = ReadPolicy(disk_policy="explicit", prefer_redis=True)
+        result = uds_reader.read_window(spec, policy)
+        if result is None:
+            return []
+        bars_lwc = getattr(result, "bars_lwc", [])
+        bars: List[CandleBar] = []
+        for d in bars_lwc:
+            cb = _bar_dict_to_candle_bar(d, symbol, 60)
+            if cb is not None:
+                bars.append(cb)
+        bars.sort(key=lambda b: b.open_time_ms)
+        return bars
+
     # ── Live callback ────────────────────────────────────
+
+    def feed_m1_bar_dict(self, symbol: str, bar_dict: Dict[str, Any]) -> None:
+        """Feed M1 bar from delta loop for session H/L computation (ADR-0035).
+
+        Called separately from on_bar_dict() because M1 may not be a subscribed TF
+        but session engine still needs M1 data for session H/L tracking.
+        """
+        cb = _bar_dict_to_candle_bar(bar_dict, symbol, 60)
+        if cb is not None:
+            self._engine.feed_m1_bar(cb)
 
     def on_bar_dict(
         self,
@@ -203,12 +296,16 @@ class SmcRunner:
         Повертає delta або None (ADR: on_bar скіпає preview bars сам).
         Скіпає TFs не в compute_tfs (cross-TF injection — лише display-time).
         """
-        if tf_s not in self._compute_tfs:
-            return None
-
         cb = _bar_dict_to_candle_bar(bar_dict, symbol, tf_s)
         if cb is None:
             _log.debug("SMC_BAR_SKIP sym=%s tf=%s reason=bad_dict", symbol, tf_s)
+            return None
+
+        # ADR-0035: feed M1 bars to engine for session H/L computation
+        if tf_s == 60:
+            self._engine.feed_m1_bar(cb)
+
+        if tf_s not in self._compute_tfs:
             return None
 
         try:
@@ -260,9 +357,22 @@ class SmcRunner:
                 result[str(tf_s)] = {"b": bull, "r": bear}
         return result
 
+    def get_session_levels_wire(self, symbol: str) -> list:
+        """ADR-0035: session levels as wire dicts for delta frame injection.
+
+        Returns list of {id, kind, price, t_ms} for current+prev sessions.
+        """
+        import time as _t
+
+        try:
+            levels = self._engine.get_session_levels(symbol, int(_t.time() * 1000))
+            return [lv.to_wire() for lv in levels]
+        except Exception:
+            return []
+
     def get_narrative(self, symbol, viewer_tf_s, current_price, atr):
         # type: (str, int, float, float) -> Optional[NarrativeBlock]
-        """ADR-0033: synthesize narrative. Returns None if feature disabled."""
+        """ADR-0033 + ADR-0035: synthesize narrative with session context."""
         cfg = self._full_config.get("smc", {}).get("narrative", {})
         if not cfg.get("enabled", False):
             return None
@@ -273,9 +383,28 @@ class SmcRunner:
             bias = self.get_bias_map(symbol)
             grades = self.get_zone_grades(symbol, viewer_tf_s)
             momentum = self.get_momentum_map(symbol)
+            # ADR-0035: session info for killzone downgrade + context
+            session_info = None
+            if self._engine._config.sessions.enabled and self._engine._session_windows:
+                import time as _t
+                from core.smc.sessions import get_current_session
+
+                now_ms = int(_t.time() * 1000)
+                sess_name, sess_kz = get_current_session(
+                    now_ms, self._engine._session_windows
+                )
+                if sess_name:
+                    session_info = (sess_name, sess_kz)
             return synthesize_narrative(
-                snap, bias, grades, momentum,
-                viewer_tf_s, current_price, atr, cfg,
+                snap,
+                bias,
+                grades,
+                momentum,
+                viewer_tf_s,
+                current_price,
+                atr,
+                cfg,
+                session_info=session_info,
             )
         except Exception:
             _log.exception("NARRATIVE_ERROR symbol=%s tf=%d", symbol, viewer_tf_s)

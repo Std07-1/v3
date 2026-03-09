@@ -61,27 +61,27 @@
     ],
     "calendar_gate_enabled": true,
     "market_calendar_by_group": {
-        "fx_24x5_utc_winter": {
+        "fx_24x5_utc_summer": {
             "market_weekend_open_dow": 6,
-            "market_weekend_open_hm": "22:00",
+            "market_weekend_open_hm": "21:00",
             "market_weekend_close_dow": 4,
-            "market_weekend_close_hm": "21:55",
+            "market_weekend_close_hm": "20:55",
             "market_daily_break_start_hm": "00:00",
             "market_daily_break_end_hm": "00:00",
             "market_daily_breaks": [
                 [
-                    "21:55",
-                    "22:30"
+                    "20:55",
+                    "21:30"
                 ]
             ]
         },
         "cfd_us_22_23": {
             "market_weekend_open_dow": 6,
-            "market_weekend_open_hm": "23:00",
+            "market_weekend_open_hm": "22:00",
             "market_weekend_close_dow": 4,
-            "market_weekend_close_hm": "21:45",
-            "market_daily_break_start_hm": "22:00",
-            "market_daily_break_end_hm": "23:00"
+            "market_weekend_close_hm": "20:45",
+            "market_daily_break_start_hm": "21:00",
+            "market_daily_break_end_hm": "22:00"
         },
         "cfd_eu_21_07": {
             "market_weekend_open_dow": 0,
@@ -120,10 +120,10 @@
         "GER30": "cfd_eu_21_07",
         "EUSTX50": "cfd_eu_21_07",
         "HKG33": "cfd_hk_main",
-        "GBP/CAD": "fx_24x5_utc_winter",
-        "NZD/CAD": "fx_24x5_utc_winter",
-        "USD/CAD": "fx_24x5_utc_winter",
-        "USD/JPY": "fx_24x5_utc_winter"
+        "GBP/CAD": "fx_24x5_utc_summer",
+        "NZD/CAD": "fx_24x5_utc_summer",
+        "USD/CAD": "fx_24x5_utc_summer",
+        "USD/JPY": "fx_24x5_utc_summer"
     },
     "market_ignore_minutes_utc": [
         "2026-02-01T23:02:00Z"
@@ -384,6 +384,36 @@
                     "min_gap_atr_mult": 0.15
                 }
             }
+        },
+        "sessions": {
+            "enabled": true,
+            "definitions": {
+                "asia": {
+                    "label": "Asia",
+                    "open_utc": "00:00",
+                    "close_utc": "07:00",
+                    "killzone_start_utc": "00:00",
+                    "killzone_end_utc": "03:00"
+                },
+                "london": {
+                    "label": "London",
+                    "open_utc": "07:00",
+                    "close_utc": "16:00",
+                    "killzone_start_utc": "07:00",
+                    "killzone_end_utc": "10:00"
+                },
+                "newyork": {
+                    "label": "New York",
+                    "open_utc": "12:00",
+                    "close_utc": "21:00",
+                    "killzone_start_utc": "12:00",
+                    "killzone_end_utc": "15:00"
+                }
+            },
+            "level_budget_per_session": 2,
+            "previous_session_ttl_bars": 500,
+            "sweep_lookback_bars": 30,
+            "sweep_body_ok": false
         }
     }
 }

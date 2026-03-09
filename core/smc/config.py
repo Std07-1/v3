@@ -4,6 +4,7 @@ core/smc/config.py — SmcConfig dataclass (ADR-0024 §5.3).
 SSOT: config.json:smc  →  SmcConfig.from_dict(cfg["smc"])
 S5: параметри алгоритмів тільки з config, без hardcoded thresholds.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -60,10 +61,11 @@ class SmcStructureConfig:
 @dataclasses.dataclass
 class SmcLevelsConfig:
     """Конфігурація виявлення рівнів ліквідності (ADR-0024 §4.5)."""
+
     enabled: bool = True
-    tolerance_atr_mult: float = 0.1   # ATR для кластеризації
-    min_touches: int = 2               # Мінімальна кількість swing в кластері
-    max_levels: int = 10               # Макс. рівнів (половина eq_highs, половина eq_lows)
+    tolerance_atr_mult: float = 0.1  # ATR для кластеризації
+    min_touches: int = 2  # Мінімальна кількість swing в кластері
+    max_levels: int = 10  # Макс. рівнів (половина eq_highs, половина eq_lows)
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "SmcLevelsConfig":
@@ -78,6 +80,7 @@ class SmcLevelsConfig:
 @dataclasses.dataclass
 class SmcPremiumDiscountConfig:
     """§4.6 Premium/Discount Zones — фільтр якості OB/FVG."""
+
     enabled: bool = True
 
     @classmethod
@@ -88,10 +91,11 @@ class SmcPremiumDiscountConfig:
 @dataclasses.dataclass
 class SmcContextStackConfig:
     """ADR-0024c §3.2: Context Stack — cross-TF zone selection."""
+
     enabled: bool = True
     institutional_budget: int = 1  # Max zones from D1+H4
-    intraday_budget: int = 1       # Max zones from H1
-    local_budget: int = 2           # Max zones from viewer TF
+    intraday_budget: int = 1  # Max zones from H1
+    local_budget: int = 2  # Max zones from viewer TF
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "SmcContextStackConfig":
@@ -106,11 +110,12 @@ class SmcContextStackConfig:
 @dataclasses.dataclass
 class SmcInducementConfig:
     """§4.7 Inducement / False Breakout Trap detection."""
+
     enabled: bool = True
-    minor_period: int = 3              # Fractal period для minor swings (< swing_period)
-    reversal_atr_mult: float = 0.5     # Мінімальний відкат після trap (у ATR)
-    confirmation_bars: int = 3         # Вікно підтвердження (барів після trap candle)
-    max_inducements: int = 10          # Макс. inducements у snapshot
+    minor_period: int = 3  # Fractal period для minor swings (< swing_period)
+    reversal_atr_mult: float = 0.5  # Мінімальний відкат після trap (у ATR)
+    confirmation_bars: int = 3  # Вікно підтвердження (барів після trap candle)
+    max_inducements: int = 10  # Макс. inducements у snapshot
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "SmcInducementConfig":
@@ -126,11 +131,12 @@ class SmcInducementConfig:
 @dataclasses.dataclass
 class SmcMomentumConfig:
     """Displacement candle detection + momentum scoring."""
+
     enabled: bool = True
-    min_body_atr_mult: float = 1.5   # body >= 1.5 * ATR
-    max_wick_ratio: float = 0.3      # wicks < 30% of candle range
-    lookback_bars: int = 10          # window for momentum score
-    max_display: int = 15            # cap displacement markers
+    min_body_atr_mult: float = 1.5  # body >= 1.5 * ATR
+    max_wick_ratio: float = 0.3  # wicks < 30% of candle range
+    lookback_bars: int = 10  # window for momentum score
+    max_display: int = 15  # cap displacement markers
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "SmcMomentumConfig":
@@ -150,19 +156,22 @@ class SmcDisplayConfig:
     ADR-0028 Φ0: extended with strength gate, mitigated TTL,
     per-side budget, FVG cap, structure label cap.
     """
-    proximity_atr_mult: float = 6.0     # zones/levels within N×ATR of price
-    max_display_zones: int = 10         # hard cap after proximity filter (research payload)
-    max_display_levels: int = 6         # hard cap on levels
-    max_display_swings: int = 20        # only last N swings
-    max_display_fractals: int = 30      # Williams fractal markers cap
+
+    proximity_atr_mult: float = 6.0  # zones/levels within N×ATR of price
+    max_display_zones: int = 10  # hard cap after proximity filter (research payload)
+    max_display_levels: int = 6  # hard cap on levels
+    max_display_swings: int = 20  # only last N swings
+    max_display_fractals: int = 30  # Williams fractal markers cap
     # ── ADR-0028 Φ0: new fields ──
-    min_display_strength: float = 0.25  # zones below this strength excluded (decay floor 0.15 ≠ this)
-    mitigated_ttl_bars: int = 20        # bars after mitigation before zone is removed
-    focus_budget_per_side: int = 3      # max zones per side (supply/demand) in Focus mode
-    focus_budget_total: int = 12        # hard cap on ALL SMC objects in Focus mode
-    structure_label_max: int = 4        # max structure labels (BOS/CHoCH) in Focus mode
-    fvg_display_cap: int = 4            # server-side cap on FVG zones
-    fvg_ob_overlap_hide: bool = True     # ADR-0033 SC-2: hide FVG overlapping active OB
+    min_display_strength: float = (
+        0.25  # zones below this strength excluded (decay floor 0.15 ≠ this)
+    )
+    mitigated_ttl_bars: int = 20  # bars after mitigation before zone is removed
+    focus_budget_per_side: int = 3  # max zones per side (supply/demand) in Focus mode
+    focus_budget_total: int = 12  # hard cap on ALL SMC objects in Focus mode
+    structure_label_max: int = 4  # max structure labels (BOS/CHoCH) in Focus mode
+    fvg_display_cap: int = 4  # server-side cap on FVG zones
+    fvg_ob_overlap_hide: bool = True  # ADR-0033 SC-2: hide FVG overlapping active OB
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "SmcDisplayConfig":
@@ -192,14 +201,46 @@ def _validate_display_budget(disp):
         raise ValueError(
             "[ADR-0028 D3] Budget overflow: "
             "zones(%d*2) + structure(%d) = %d > total(%d)"
-            % (disp.focus_budget_per_side, disp.structure_label_max,
-               budget_sum, disp.focus_budget_total)
+            % (
+                disp.focus_budget_per_side,
+                disp.structure_label_max,
+                budget_sum,
+                disp.focus_budget_total,
+            )
+        )
+
+
+@dataclasses.dataclass
+class SmcSessionsConfig:
+    """ADR-0035: Trading Sessions & Killzones config (S5: SSOT)."""
+
+    enabled: bool = False
+    level_budget_per_session: int = 2
+    previous_session_ttl_bars: int = 500
+    sweep_lookback_bars: int = 30
+    sweep_body_ok: bool = False
+    # Session definitions: {name: {open_utc, close_utc, kz_start, kz_end}}
+    _definitions: Dict[str, Dict[str, Any]] = dataclasses.field(
+        default_factory=dict,
+        repr=False,
+    )
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "SmcSessionsConfig":
+        return cls(
+            enabled=bool(d.get("enabled", False)),
+            level_budget_per_session=int(d.get("level_budget_per_session", 2)),
+            previous_session_ttl_bars=int(d.get("previous_session_ttl_bars", 500)),
+            sweep_lookback_bars=int(d.get("sweep_lookback_bars", 30)),
+            sweep_body_ok=bool(d.get("sweep_body_ok", False)),
+            _definitions=dict(d.get("definitions", {})),
         )
 
 
 @dataclasses.dataclass
 class SmcConfluenceConfig:
     """ADR-0029: OB Confluence Scoring thresholds (S5: config-driven)."""
+
     sweep_lookback_bars: int = 10
     fvg_lookforward_bars: int = 3
     extremum_tolerance_atr: float = 0.3
@@ -253,6 +294,7 @@ class SmcPerformanceConfig:
 @dataclasses.dataclass
 class SmcConfig:
     """Повна конфігурація SMC Engine (SSOT: config.json:smc)."""
+
     enabled: bool = True
     lookback_bars: int = 500
     swing_period: int = 5
@@ -263,23 +305,37 @@ class SmcConfig:
     # TFs on which SMC is computed (SSOT). Other TFs get cross-TF injection.
     compute_tfs: tuple = (900, 3600, 14400, 86400)  # M15, H1, H4, D1
     # F10: decay params are lifecycle, not display — live at config root
-    decay_start_bars: int = 30          # start strength decay after N bars
-    decay_fast_bars: int = 150          # aggressive decay threshold
+    decay_start_bars: int = 30  # start strength decay after N bars
+    decay_fast_bars: int = 150  # aggressive decay threshold
     ob: SmcObConfig = dataclasses.field(default_factory=SmcObConfig)
     fvg: SmcFvgConfig = dataclasses.field(default_factory=SmcFvgConfig)
-    structure: SmcStructureConfig = dataclasses.field(default_factory=SmcStructureConfig)
+    structure: SmcStructureConfig = dataclasses.field(
+        default_factory=SmcStructureConfig
+    )
     levels: SmcLevelsConfig = dataclasses.field(default_factory=SmcLevelsConfig)
-    premium_discount: SmcPremiumDiscountConfig = dataclasses.field(default_factory=SmcPremiumDiscountConfig)
-    inducement: SmcInducementConfig = dataclasses.field(default_factory=SmcInducementConfig)
-    context_stack: SmcContextStackConfig = dataclasses.field(default_factory=SmcContextStackConfig)
+    premium_discount: SmcPremiumDiscountConfig = dataclasses.field(
+        default_factory=SmcPremiumDiscountConfig
+    )
+    inducement: SmcInducementConfig = dataclasses.field(
+        default_factory=SmcInducementConfig
+    )
+    context_stack: SmcContextStackConfig = dataclasses.field(
+        default_factory=SmcContextStackConfig
+    )
     display: SmcDisplayConfig = dataclasses.field(default_factory=SmcDisplayConfig)
     momentum: SmcMomentumConfig = dataclasses.field(default_factory=SmcMomentumConfig)
-    confluence: SmcConfluenceConfig = dataclasses.field(default_factory=SmcConfluenceConfig)
-    performance: SmcPerformanceConfig = dataclasses.field(default_factory=SmcPerformanceConfig)
+    sessions: SmcSessionsConfig = dataclasses.field(default_factory=SmcSessionsConfig)
+    confluence: SmcConfluenceConfig = dataclasses.field(
+        default_factory=SmcConfluenceConfig
+    )
+    performance: SmcPerformanceConfig = dataclasses.field(
+        default_factory=SmcPerformanceConfig
+    )
 
     # tf_overrides: raw dict from config.json, keyed by str(tf_s)
     _tf_overrides: Dict[str, Dict[str, Any]] = dataclasses.field(
-        default_factory=dict, repr=False,
+        default_factory=dict,
+        repr=False,
     )
 
     def for_tf(self, tf_s: int) -> "SmcConfig":
@@ -293,14 +349,21 @@ class SmcConfig:
             return self
         kw: Dict[str, Any] = {}
         # scalar overrides
-        for key in ("swing_period", "fractal_period", "lookback_bars",
-                    "max_zones_per_tf", "max_zone_height_atr_mult"):
+        for key in (
+            "swing_period",
+            "fractal_period",
+            "lookback_bars",
+            "max_zones_per_tf",
+            "max_zone_height_atr_mult",
+        ):
             if key in ovr:
                 kw[key] = type(getattr(self, key))(ovr[key])
         # sub-config overrides (merge base dict + override dict)
         _SUB = {
-            "ob": SmcObConfig, "fvg": SmcFvgConfig,
-            "structure": SmcStructureConfig, "levels": SmcLevelsConfig,
+            "ob": SmcObConfig,
+            "fvg": SmcFvgConfig,
+            "structure": SmcStructureConfig,
+            "levels": SmcLevelsConfig,
             "inducement": SmcInducementConfig,
         }
         for sub_key, sub_cls in _SUB.items():
@@ -327,20 +390,27 @@ class SmcConfig:
             max_zones_per_tf=int(d.get("max_zones_per_tf", 10)),
             max_zone_height_atr_mult=float(d.get("max_zone_height_atr_mult", 5.0)),
             hide_mitigated=bool(d.get("hide_mitigated", False)),
-            compute_tfs=tuple(int(x) for x in d.get("compute_tfs", [900, 3600, 14400, 86400])),
-            decay_start_bars=int(d.get("decay_start_bars",
-                                       disp_d.get("decay_start_bars", 30))),
-            decay_fast_bars=int(d.get("decay_fast_bars",
-                                      disp_d.get("decay_fast_bars", 150))),
+            compute_tfs=tuple(
+                int(x) for x in d.get("compute_tfs", [900, 3600, 14400, 86400])
+            ),
+            decay_start_bars=int(
+                d.get("decay_start_bars", disp_d.get("decay_start_bars", 30))
+            ),
+            decay_fast_bars=int(
+                d.get("decay_fast_bars", disp_d.get("decay_fast_bars", 150))
+            ),
             ob=SmcObConfig.from_dict(d.get("ob", {})),
             fvg=SmcFvgConfig.from_dict(d.get("fvg", {})),
             structure=SmcStructureConfig.from_dict(d.get("structure", {})),
             levels=SmcLevelsConfig.from_dict(d.get("levels", {})),
-            premium_discount=SmcPremiumDiscountConfig.from_dict(d.get("premium_discount", {})),
+            premium_discount=SmcPremiumDiscountConfig.from_dict(
+                d.get("premium_discount", {})
+            ),
             inducement=SmcInducementConfig.from_dict(d.get("inducement", {})),
             context_stack=SmcContextStackConfig.from_dict(d.get("context_stack", {})),
             display=SmcDisplayConfig.from_dict(disp_d),
             momentum=SmcMomentumConfig.from_dict(d.get("momentum", {})),
+            sessions=SmcSessionsConfig.from_dict(d.get("sessions", {})),
             confluence=SmcConfluenceConfig.from_dict(d.get("confluence", {})),
             performance=SmcPerformanceConfig.from_dict(d.get("performance", {})),
             _tf_overrides=d.get("tf_overrides", {}),

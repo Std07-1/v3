@@ -581,7 +581,7 @@ export class DrawingsRenderer {
   }
 
   // ---- tool create (v2) ----
-  private handleToolPointerDown(pointerId: number, x: number, y: number): void {
+  private handleToolPointerDown(_pointerId: number, x: number, y: number): void {
     const t_ms = this.fromX(x);
     const rawPrice = this.fromY(y);
 

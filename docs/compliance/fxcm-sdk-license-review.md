@@ -25,7 +25,7 @@
 | Create derivative works of SDK | **Ні** | EULA прямо забороняє derivative works |
 | Sublicense rights to downstream users | **Ні** | Non-sublicenseable, non-transferable |
 | Vendor SDK binaries/wheels/DLL у репо | **Ні** | = redistribution |
-| Комерційне / командне / публічне використання | **Лише з окремою письмовою домовленістю з FXCM** |
+| Комерційне / командне / публічне використання | **Лише з окремою письмовою домовленістю з FXCM** | EULA допускає інший режим лише за окремою письмовою згодою |
 
 ## 3. Статус у цьому репозиторії
 
@@ -39,7 +39,12 @@
 
 ## 4. Оцінка requirements.txt
 
-`requirements.txt` посилається на зовнішню proprietary-залежність — це **не те саме**, що розповсюджувати SDK у репо. Але це **не передає жодних прав** downstream-користувачам: кожен downstream-користувач все одно отримує пакет, який на PyPI позначений як "Other/Proprietary License". Тобто requirements.txt — це **reference to proprietary dependency**, а не легалізація її включення чи перепоширення.
+`requirements.txt` посилається на зовнішню proprietary-залежність — це **не те
+саме**, що розповсюджувати SDK у репо. Але це **не передає жодних прав**
+downstream-користувачам: кожен downstream-користувач все одно отримує пакет,
+який на PyPI позначений як "Other/Proprietary License". Тобто requirements.txt
+— це **reference to proprietary dependency**, а не легалізація її включення чи
+перепоширення.
 
 ## 5. Конфлікт у джерелах
 
@@ -68,6 +73,8 @@
 - Потрібен **written permission / separate agreement** від FXCM
 - Контакт: `api@fxcm.com`
 - EULA допускає інший режим лише *"unless ... agreed otherwise in writing"*
+
+Commercial, team, hosted, or redistributed use requires separate written permission from FXCM.
 
 ## 8. Дисклеймер
 

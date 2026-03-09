@@ -14,7 +14,11 @@ def _d1_anchor_offsets(
     day_anchor_offset_s_d1: Optional[int],
     day_anchor_offset_s_d1_alt: Optional[int],
 ) -> Tuple[int, Optional[int]]:
-    primary = day_anchor_offset_s_d1 if day_anchor_offset_s_d1 is not None else day_anchor_offset_s
+    primary = (
+        day_anchor_offset_s_d1
+        if day_anchor_offset_s_d1 is not None
+        else day_anchor_offset_s
+    )
     alt = day_anchor_offset_s_d1_alt
     if alt is not None and alt == primary:
         alt = None
@@ -111,7 +115,10 @@ class JsonlAppender:
         # SEC-02: path traversal guard
         resolved = os.path.abspath(out_dir)
         root_resolved = os.path.abspath(self._root)
-        if not resolved.startswith(root_resolved + os.sep) and resolved != root_resolved:
+        if (
+            not resolved.startswith(root_resolved + os.sep)
+            and resolved != root_resolved
+        ):
             raise ValueError("SSOT_PATH_TRAVERSAL symbol=%s" % symbol)
         os.makedirs(out_dir, exist_ok=True)
         return os.path.join(out_dir, f"part-{day}.jsonl")
@@ -121,6 +128,7 @@ class JsonlAppender:
             self._drop_preview_total += 1
             self._drop_log_suppressed += 1
             import time as _time
+
             now = _time.monotonic()
             if now - self._drop_log_last_ts >= 30.0:
                 logging.error(
@@ -157,6 +165,9 @@ class JsonlAppender:
                     try:
                         evict_fh.close()
                     except Exception:
+                        logging.debug(
+                            "SSOT_EVICT_CLOSE_FAIL path=%s", evict_path, exc_info=True
+                        )
                         pass
             fh = open(path, "a", encoding="utf-8")
             self._open_files[path] = fh
@@ -177,6 +188,7 @@ class JsonlAppender:
             try:
                 fh.close()
             except Exception:
+                logging.debug("SSOT_CLOSE_FAIL", exc_info=True)
                 pass
         self._open_files.clear()
 
@@ -249,8 +261,10 @@ def tail_last_bar_time_ms(data_root: str, symbol: str, tf_s: int) -> Optional[in
                     obj = json.loads(raw.decode("utf-8"))
                     return int(obj["open_time_ms"])
                 except Exception:
+                    logging.debug("SSOT_TAIL_PARSE_FAIL path=%s", latest)
                     continue
     except Exception:
+        logging.debug("SSOT_TAIL_READ_FAIL path=%s", latest, exc_info=True)
         return None
 
     return None
@@ -284,8 +298,10 @@ def head_first_bar_time_ms(data_root: str, symbol: str, tf_s: int) -> Optional[i
                     obj = json.loads(line)
                     return int(obj["open_time_ms"])
                 except Exception:
+                    logging.debug("SSOT_HEAD_PARSE_FAIL path=%s", first_path)
                     continue
     except Exception:
+        logging.debug("SSOT_HEAD_READ_FAIL path=%s", first_path, exc_info=True)
         return None
 
     return None
@@ -305,9 +321,7 @@ def iter_day_keys_utc(start_ms: int, end_ms: int) -> List[str]:
     return out
 
 
-def load_day_open_times(
-    data_root: str, symbol: str, tf_s: int, day: str
-) -> set[int]:
+def load_day_open_times(data_root: str, symbol: str, tf_s: int, day: str) -> set[int]:
     """Завантажує open_time_ms з part-YYYYMMDD.jsonl для (symbol, tf_s)."""
     sym_dir = symbol.replace("/", "_")
     tf_dir = f"tf_{tf_s}"
@@ -325,7 +339,9 @@ def load_day_open_times(
                     obj = json.loads(line)
                     out.add(int(obj["open_time_ms"]))
                 except Exception:
+                    logging.debug("SSOT_DAY_PARSE_FAIL path=%s", path)
                     continue
     except Exception:
+        logging.debug("SSOT_DAY_READ_FAIL path=%s", path, exc_info=True)
         return out
     return out

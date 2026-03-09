@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+import logging
+from typing import List, Optional, Tuple
 
 from core.model.bars import ms_to_utc_dt
+
+
+logger = logging.getLogger("market_calendar")
 
 
 def parse_hm(hm: str) -> Optional[Tuple[int, int]]:
@@ -13,6 +17,7 @@ def parse_hm(hm: str) -> Optional[Tuple[int, int]]:
         h, m = hm.split(":", 1)
         return int(h), int(m)
     except Exception:
+        logger.debug("MARKET_CALENDAR_PARSE_HM_INVALID value=%r", hm)
         return None
 
 
@@ -53,8 +58,9 @@ class MarketCalendar:
             hm_start = parse_hm(self.daily_break_start_hm)
             hm_end = parse_hm(self.daily_break_end_hm)
             if hm_start and hm_end:
-                intervals.append((hm_start[0] * 60 + hm_start[1],
-                                  hm_end[0] * 60 + hm_end[1]))
+                intervals.append(
+                    (hm_start[0] * 60 + hm_start[1], hm_end[0] * 60 + hm_end[1])
+                )
         for pair in self.daily_breaks:
             s = parse_hm(pair[0])
             e = parse_hm(pair[1])

@@ -15,15 +15,17 @@ import asyncio
 from aiohttp import WSMsgType
 from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
 
-from runtime.ws.ws_server import build_app, SCHEMA_V
+from runtime.ws.ws_server import APP_HEARTBEAT_S, build_app, SCHEMA_V
 
 pytestmark = pytest.mark.asyncio
 
 
 # ── Mock UDS ───────────────────────────────────────────
 
+
 class _MockWindowResult:
     """Імітує WindowResult з bars_lwc."""
+
     def __init__(self, bars_lwc, warnings=None):
         self.bars_lwc = bars_lwc
         self.warnings = warnings or []
@@ -31,6 +33,7 @@ class _MockWindowResult:
 
 class _MockUpdatesResult:
     """Імітує UpdatesResult."""
+
     def __init__(self, events=None, cursor_seq=0):
         self.events = events or []
         self.cursor_seq = cursor_seq
@@ -38,15 +41,23 @@ class _MockUpdatesResult:
 
 _MOCK_BARS_LWC = [
     {
-        "open": 2350.50, "high": 2355.00, "low": 2348.00,
-        "close": 2353.00, "volume": 100.0,
-        "time": 1720000000, "open_time_ms": 1720000000000,
+        "open": 2350.50,
+        "high": 2355.00,
+        "low": 2348.00,
+        "close": 2353.00,
+        "volume": 100.0,
+        "time": 1720000000,
+        "open_time_ms": 1720000000000,
         "close_time_ms": 1720000300000,
     },
     {
-        "open": 2353.00, "high": 2360.00, "low": 2351.00,
-        "close": 2358.00, "volume": 150.0,
-        "time": 1720000300, "open_time_ms": 1720000300000,
+        "open": 2353.00,
+        "high": 2360.00,
+        "low": 2351.00,
+        "close": 2358.00,
+        "volume": 150.0,
+        "time": 1720000300,
+        "open_time_ms": 1720000300000,
         "close_time_ms": 1720000600000,
     },
 ]
@@ -54,6 +65,7 @@ _MOCK_BARS_LWC = [
 
 class _MockUDS:
     """Mock UDS reader: read_window повертає фіксовані бари."""
+
     def read_window(self, spec, policy):
         return _MockWindowResult(_MOCK_BARS_LWC)
 
@@ -62,6 +74,7 @@ class _MockUDS:
 
 
 # ── Fixtures ───────────────────────────────────────────
+
 
 @pytest.fixture
 def ws_app():
@@ -76,6 +89,7 @@ def ws_app_mock_uds():
 
 
 # ── S20/S25 tests: error frames ───────────────────────
+
 
 async def test_ws_s25_unknown_action_error_frame(aiohttp_client, ws_app_mock_uds):
     """S25: unknown action → error frame з code=unknown_action (не silent ignore)."""
@@ -92,7 +106,9 @@ async def test_ws_s25_unknown_action_error_frame(aiohttp_client, ws_app_mock_uds
         # Send unknown action
         await ws.send_json({"action": "nonexistent_action_xyz"})
         resp = await asyncio.wait_for(ws.receive_json(), timeout=3)
-        assert resp["frame_type"] == "error", "expected error frame, got %s" % resp.get("frame_type")
+        assert resp["frame_type"] == "error", "expected error frame, got %s" % resp.get(
+            "frame_type"
+        )
         assert resp["error"]["code"] == "unknown_action"
         assert "nonexistent_action_xyz" in resp["error"]["message"]
     finally:
@@ -165,15 +181,17 @@ async def test_ws_hello(aiohttp_client, ws_app):
         # second frame is full or heartbeat
         msg = await asyncio.wait_for(ws.receive_json(), timeout=5)
         assert msg["type"] == "render_frame"
-        assert msg["frame_type"] in ("heartbeat", "full"), "unexpected: %s" % msg["frame_type"]
+        assert msg["frame_type"] in ("heartbeat", "full"), (
+            "unexpected: %s" % msg["frame_type"]
+        )
     finally:
         await ws.close()
 
 
 async def test_ws_heartbeat(aiohttp_client, ws_app):
     """Skip config+full → wait → heartbeat arrives."""
+    ws_app[APP_HEARTBEAT_S] = 1
     client = await aiohttp_client(ws_app)
-    ws_app["_heartbeat_s"] = 1
     ws = await client.ws_connect("/ws")
     try:
         # drain config+full (seq 1,2)
@@ -190,8 +208,8 @@ async def test_ws_heartbeat(aiohttp_client, ws_app):
 
 async def test_ws_seq_monotonic(aiohttp_client, ws_app):
     """3 frames → seq strictly increasing, all unique."""
+    ws_app[APP_HEARTBEAT_S] = 0.5  # fast heartbeats
     client = await aiohttp_client(ws_app)
-    ws_app["_heartbeat_s"] = 0.5  # fast heartbeats
     ws = await client.ws_connect("/ws")
     try:
         seqs = []
@@ -210,6 +228,7 @@ async def test_ws_seq_monotonic(aiohttp_client, ws_app):
 
 
 # ── P2 tests ───────────────────────────────────────────
+
 
 async def test_ws_full_frame_has_candles(aiohttp_client, ws_app_mock_uds):
     """P2: connect → full frame, candles have correct keys, t_ms > 1e12."""
@@ -230,13 +249,17 @@ async def test_ws_full_frame_has_candles(aiohttp_client, ws_app_mock_uds):
             missing = REQUIRED_KEYS - set(candle.keys())
             assert not missing, f"candle[{i}] missing keys: {missing}"
             assert isinstance(candle["t_ms"], int), f"candle[{i}].t_ms not int"
-            assert candle["t_ms"] > 1e12, f"candle[{i}].t_ms={candle['t_ms']} not epoch_ms"
+            assert (
+                candle["t_ms"] > 1e12
+            ), f"candle[{i}].t_ms={candle['t_ms']} not epoch_ms"
             assert isinstance(candle["o"], (int, float))
             assert isinstance(candle["v"], (int, float))
 
         # Monotonic t_ms
         t_ms_list = [c["t_ms"] for c in candles]
-        assert t_ms_list == sorted(t_ms_list), f"candles not sorted by t_ms: {t_ms_list}"
+        assert t_ms_list == sorted(
+            t_ms_list
+        ), f"candles not sorted by t_ms: {t_ms_list}"
 
         # Verify values match mock data
         assert candles[0]["t_ms"] == 1720000000000
@@ -257,11 +280,13 @@ async def test_ws_switch_full_frame(aiohttp_client, ws_app_mock_uds):
         assert first["frame_type"] == "full"
 
         # Send switch action (same symbol, different TF)
-        switch_msg = json.dumps({
-            "action": "switch",
-            "symbol": "XAU/USD",
-            "tf": "M15",
-        })
+        switch_msg = json.dumps(
+            {
+                "action": "switch",
+                "symbol": "XAU/USD",
+                "tf": "M15",
+            }
+        )
         await ws.send_str(switch_msg)
 
         # Receive new full frame after switch
@@ -279,6 +304,7 @@ async def test_ws_switch_full_frame(aiohttp_client, ws_app_mock_uds):
 
 
 # ── P1 tests ───────────────────────────────────────────
+
 
 async def test_ws_full_frame_boot_id_and_config(aiohttp_client, ws_app_mock_uds):
     """P1: full frame meta містить boot_id (str) та config.symbols/tfs."""

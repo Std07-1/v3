@@ -35,6 +35,21 @@ If you discover a security vulnerability in Trading Platform v3, please report i
 - WebSocket messages have size limits (64 KB)
 - User input is sanitized before logging (no log injection)
 
+## Deployment Boundary
+
+- Approved baseline: localhost only, single-user workstation deployment.
+- Any network exposure, multi-user access, or hosted deployment requires a fresh compliance/security review.
+- Commercial, team, hosted, or redistributed use requires separate written permission from FXCM while ForexConnect remains in the stack.
+
+## Automated Enforcement
+
+- CI workflow: `.github/workflows/ci.yml`
+- Static governance gates: `python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.ci.json`
+- Python dependency scan: `pip-audit -r requirements.txt`
+- Python SAST baseline: `bandit -q -r app core runtime ui_chart_v3 tools`
+- Frontend dependency scan: `npm audit --audit-level=high --omit=dev`
+- Dependency drift automation: `.github/dependabot.yml`
+
 ## Out of Scope
 
 - Vulnerabilities in third-party dependencies (report to upstream)

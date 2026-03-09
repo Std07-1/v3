@@ -10,15 +10,21 @@ from typing import Any, Optional
 
 from core.model.bars import CandleBar, FINAL_SOURCES
 from core.config_loader import (
-    tf_allowlist_from_cfg, preview_tf_allowlist_from_cfg, min_coldload_bars_from_cfg,
-    DEFAULT_PREVIEW_TF_ALLOWLIST, MAX_EVENTS_PER_RESPONSE,
+    tf_allowlist_from_cfg,
+    preview_tf_allowlist_from_cfg,
+    min_coldload_bars_from_cfg,
+    DEFAULT_PREVIEW_TF_ALLOWLIST,
+    MAX_EVENTS_PER_RESPONSE,
 )
 
 from runtime.obs_60s import Obs60s
 from runtime.store.layers.disk_layer import DiskLayer
 from runtime.store.layers.ram_layer import RamLayer
 from runtime.store.layers.redis_layer import RedisLayer
-from runtime.store.redis_snapshot import RedisSnapshotWriter, build_redis_snapshot_writer
+from runtime.store.redis_snapshot import (
+    RedisSnapshotWriter,
+    build_redis_snapshot_writer,
+)
 from runtime.store.redis_spec import resolve_redis_spec
 from runtime.store.ssot_jsonl import JsonlAppender
 
@@ -73,6 +79,7 @@ _REDIS_SPEC_BOOT_LOGGED = False
 
 try:
     import redis as redis_lib  # type: ignore
+
     Logging.debug("UDS: redis бібліотека завантажена")
 except Exception:
     redis_lib = None  # type: ignore
@@ -83,6 +90,7 @@ REDIS_SOCKET_TIMEOUT_S = 0.4
 _DEFAULT_PREVIEW_CURR_TTL_S = 1800  # SSOT fallback; runtime значення з config.json
 PREVIEW_TAIL_RETAIN = 2000
 PREVIEW_UPDATES_RETAIN = 2000
+
 
 def _disk_bar_to_candle(
     raw: dict[str, Any],
@@ -130,9 +138,12 @@ def _disk_bar_to_candle(
     except Exception:
         logging.debug(
             "DISK_BAR_PARSE_FAIL symbol=%s tf_s=%s open_ms=%s",
-            raw.get("symbol"), raw.get("tf_s"), raw.get("open_time_ms"),
+            raw.get("symbol"),
+            raw.get("tf_s"),
+            raw.get("open_time_ms"),
         )
         return None
+
 
 UPDATES_REDIS_RETAIN_DEFAULT = 2000
 
@@ -348,7 +359,7 @@ class UnifiedDataStore:
         role: str = "writer",
         ram_layer: Optional[RamLayer] = None,
         redis_layer: Optional[RedisLayer] = None,
-        disk_layer: Optional[DiskLayer] = None,
+        disk_layer: Optional[DiskLayer | _NullDiskLayer] = None,
         jsonl_appender: Optional[JsonlAppender] = None,
         redis_snapshot_writer: Optional[RedisSnapshotWriter] = None,
         updates_bus: Optional[Any] = None,
@@ -377,7 +388,9 @@ class UnifiedDataStore:
         self._updates_bus_warned = False
         self._redis_spec_mismatch = bool(redis_spec_mismatch)
         self._redis_spec_mismatch_fields = list(redis_spec_mismatch_fields or [])
-        self._preview_tf_allowlist = set(preview_tf_allowlist or DEFAULT_PREVIEW_TF_ALLOWLIST)
+        self._preview_tf_allowlist = set(
+            preview_tf_allowlist or DEFAULT_PREVIEW_TF_ALLOWLIST
+        )
         self._preview_allowlist_source = str(preview_tf_allowlist_source or "default")
         self._preview_curr_ttl_s = int(preview_curr_ttl_s)
         self._preview_tail_retain = max(1, int(preview_tail_retain))
@@ -397,7 +410,9 @@ class UnifiedDataStore:
         self._commit_drop_counts: dict[str, int] = {}
         self._commit_drop_last_log_ts = 0.0
         self._split_brain_active = False
-        self._degraded_warning_flag = os.getenv("UDS_COMMIT_DEGRADED_REASON_FF", "0") in {"1", "true", "yes", "on"}
+        self._degraded_warning_flag = os.getenv(
+            "UDS_COMMIT_DEGRADED_REASON_FF", "0"
+        ) in {"1", "true", "yes", "on"}
         _METRIC_SPLIT_BRAIN_ACTIVE.set(0)
         if self._preview_allowlist_source == "fallback":
             Logging.debug(
@@ -411,7 +426,9 @@ class UnifiedDataStore:
             f"tail:3 {bar.open_time_ms},{bar.low:.4f},{bar.c:.4f}"
         )
 
-    def _mark_split_brain_active(self, bar: CandleBar, degraded_reasons: list[str]) -> None:
+    def _mark_split_brain_active(
+        self, bar: CandleBar, degraded_reasons: list[str]
+    ) -> None:
         self._split_brain_active = True
         _METRIC_SPLIT_BRAIN_ACTIVE.set(1)
         reason_text = ",".join(degraded_reasons)
@@ -438,7 +455,9 @@ class UnifiedDataStore:
         self._preview_nomix_violation_reason = reason
         self._preview_nomix_violation_ts_ms = int(time.time() * 1000)
 
-    def _apply_preview_nomix_violation(self, meta: dict[str, Any], warnings: list[str]) -> None:
+    def _apply_preview_nomix_violation(
+        self, meta: dict[str, Any], warnings: list[str]
+    ) -> None:
         if not self._preview_nomix_violation:
             return
         warnings.append("preview_nomix_violation")
@@ -446,9 +465,13 @@ class UnifiedDataStore:
         ext = meta.setdefault("extensions", {})
         if isinstance(ext, dict):
             if self._preview_nomix_violation_reason:
-                ext["preview_nomix_violation_reason"] = self._preview_nomix_violation_reason
+                ext["preview_nomix_violation_reason"] = (
+                    self._preview_nomix_violation_reason
+                )
             if self._preview_nomix_violation_ts_ms is not None:
-                ext["preview_nomix_violation_ts_ms"] = int(self._preview_nomix_violation_ts_ms)
+                ext["preview_nomix_violation_ts_ms"] = int(
+                    self._preview_nomix_violation_ts_ms
+                )
 
     def read_window(self, spec: WindowSpec, policy: ReadPolicy) -> WindowResult:
         warnings: list[str] = []
@@ -519,7 +542,11 @@ class UnifiedDataStore:
                         if available_final is not None and min_required > 0:
                             if available_final < min_required:
                                 _mark_history_short(redis_result.meta, warnings)
-                        if prime_ready and effective_min > 0 and redis_len < effective_min:
+                        if (
+                            prime_ready
+                            and effective_min > 0
+                            and redis_len < effective_min
+                        ):
                             _mark_prime_incomplete(redis_result.meta, warnings)
                     _log_window_result(redis_result, warnings, tf_s)
                     return redis_result
@@ -551,8 +578,13 @@ class UnifiedDataStore:
 
             # ── P1 disk_policy guard (RAM miss) ──
             if not self._disk_allowed(policy, "ram_miss"):
-                meta.update({"source": "degraded", "disk_blocked": True,
-                             "disk_blocked_reason": "ram_miss"})
+                meta.update(
+                    {
+                        "source": "degraded",
+                        "disk_blocked": True,
+                        "disk_blocked_reason": "ram_miss",
+                    }
+                )
                 warnings.append("disk_disabled_cache_miss")
                 result = WindowResult([], meta, warnings)
                 _log_window_result(result, warnings, tf_s)
@@ -565,8 +597,13 @@ class UnifiedDataStore:
 
         # ── P1 disk_policy guard (range query) ──
         if not self._disk_allowed(policy, "range_query"):
-            meta.update({"source": "degraded", "disk_blocked": True,
-                         "disk_blocked_reason": "range_query"})
+            meta.update(
+                {
+                    "source": "degraded",
+                    "disk_blocked": True,
+                    "disk_blocked_reason": "range_query",
+                }
+            )
             warnings.append("disk_disabled_range_query")
             result = WindowResult([], meta, warnings)
             _log_window_result(result, warnings, tf_s)
@@ -722,14 +759,18 @@ class UnifiedDataStore:
                 bar.tf_s,
                 bar.src,
             )
-            return CommitResult(False, "non_final_source", False, False, False, warnings)
+            return CommitResult(
+                False, "non_final_source", False, False, False, warnings
+            )
 
         wm = self._init_watermark_for_key(bar.symbol, bar.tf_s)
         drop_reason = _watermark_drop_reason(bar.open_time_ms, wm)
         if drop_reason is not None:
             _OBS.inc_writer_drop(drop_reason, bar.tf_s)
             # Throttle: один підсумковий рядок раз на 30 с замість кожного дропа (антиспам)
-            self._commit_drop_counts[drop_reason] = self._commit_drop_counts.get(drop_reason, 0) + 1
+            self._commit_drop_counts[drop_reason] = (
+                self._commit_drop_counts.get(drop_reason, 0) + 1
+            )
             now_mono = time.monotonic()
             if now_mono - self._commit_drop_last_log_ts >= 30.0:
                 stale_n = self._commit_drop_counts.get("stale", 0)
@@ -770,7 +811,9 @@ class UnifiedDataStore:
             self._publish_final_to_preview_ring(bar)
         ok = ssot_written
         reason = None if ok else "ssot_write_failed"
-        return CommitResult(ok, reason, ssot_written, redis_written, updates_published, warnings)
+        return CommitResult(
+            ok, reason, ssot_written, redis_written, updates_published, warnings
+        )
 
     def publish_promoted_bar(self, bar: CandleBar) -> bool:
         """Публікує promoted бар (tick→complete) у preview ring.
@@ -783,7 +826,9 @@ class UnifiedDataStore:
         if not isinstance(bar, CandleBar):
             return False
         if bar.src != "tick_promoted":
-            Logging.warning("UDS: publish_promoted_bar — src=%s (очікується tick_promoted)", bar.src)
+            Logging.warning(
+                "UDS: publish_promoted_bar — src=%s (очікується tick_promoted)", bar.src
+            )
             return False
         if not bar.complete:
             return False
@@ -803,7 +848,7 @@ class UnifiedDataStore:
                 "bar": bar_payload,
                 "complete": True,
                 "source": "tick_promoted",
-                "event_ts": int(bar_payload.get("close_time_ms")) if bar.complete else None,
+                "event_ts": int(bar.close_time_ms),
             }
             self._redis.publish_preview_event(
                 bar.symbol,
@@ -815,11 +860,15 @@ class UnifiedDataStore:
         except Exception as exc:
             Logging.warning(
                 "UDS: publish_promoted_bar failed symbol=%s tf_s=%s err=%s",
-                bar.symbol, bar.tf_s, exc,
+                bar.symbol,
+                bar.tf_s,
+                exc,
             )
             return False
 
-    def publish_preview_bar(self, bar: CandleBar, *, ttl_s: Optional[int] = None) -> None:
+    def publish_preview_bar(
+        self, bar: CandleBar, *, ttl_s: Optional[int] = None
+    ) -> None:
         self._ensure_writer_role("publish_preview_bar")
         if not isinstance(bar, CandleBar):
             Logging.warning("UDS: publish_preview_bar очікує CandleBar")
@@ -859,18 +908,18 @@ class UnifiedDataStore:
 
         payload_ts_ms = int(time.time() * 1000)
         bar_payload = bar.to_dict()
-        close_ms = _ensure_bar_payload_end_excl(bar_payload)
+        _ensure_bar_payload_end_excl(bar_payload)
         # Redis close_ms = end-incl (open + tf*1000 - 1), matching redis_snapshot convention.
         # CandleBar internal = end-excl; conversion at Redis boundary.
-        close_ms_incl = int(close_ms - 1) if close_ms is not None else int(bar_payload.get("close_time_ms")) - 1
+        close_ms_incl = int(bar.close_time_ms) - 1
         bar_item = {
-            "open_ms": int(bar_payload.get("open_time_ms")),
+            "open_ms": int(bar.open_time_ms),
             "close_ms": close_ms_incl,
-            "o": bar_payload.get("o"),
-            "h": bar_payload.get("h"),
-            "l": bar_payload.get("low"),
-            "c": bar_payload.get("c"),
-            "v": bar_payload.get("v", 0.0),
+            "o": bar.o,
+            "h": bar.h,
+            "l": bar.low,
+            "c": bar.c,
+            "v": bar.v,
         }
         curr_payload = {
             "v": 1,
@@ -903,7 +952,7 @@ class UnifiedDataStore:
                 if isinstance(raw, list):
                     tail_bars = [b for b in raw if isinstance(b, dict)]
             if tail_bars and isinstance(tail_bars[-1].get("open_ms"), int):
-                if int(tail_bars[-1].get("open_ms")) == int(bar_item["open_ms"]):
+                if tail_bars[-1]["open_ms"] == int(bar_item["open_ms"]):
                     tail_bars[-1] = bar_item
                 else:
                     tail_bars.append(bar_item)
@@ -920,8 +969,12 @@ class UnifiedDataStore:
                 "source": str(bar.src),
                 "payload_ts_ms": payload_ts_ms,
             }
-            tail_ttl = self._preview_curr_ttl_s * 2 if self._preview_curr_ttl_s else None
-            self._redis.write_preview_tail(bar.symbol, bar.tf_s, new_tail, ttl_s=tail_ttl)
+            tail_ttl = (
+                self._preview_curr_ttl_s * 2 if self._preview_curr_ttl_s else None
+            )
+            self._redis.write_preview_tail(
+                bar.symbol, bar.tf_s, new_tail, ttl_s=tail_ttl
+            )
             self._preview_tail_updates_total += 1
             now_ms = int(time.time() * 1000)
             if now_ms - self._preview_tail_updates_log_ts_ms >= 60_000:
@@ -1011,13 +1064,17 @@ class UnifiedDataStore:
             for item in raw_bars:
                 if not isinstance(item, dict):
                     continue
-                bar = self._redis_payload_bar_to_canonical(item, symbol, tf_s, False, source)
+                bar = self._redis_payload_bar_to_canonical(
+                    item, symbol, tf_s, False, source
+                )
                 if bar is not None:
                     out.append(bar)
             return out
         raw_bar = payload.get("bar")
         if isinstance(raw_bar, dict):
-            bar = self._redis_payload_bar_to_canonical(raw_bar, symbol, tf_s, False, source)
+            bar = self._redis_payload_bar_to_canonical(
+                raw_bar, symbol, tf_s, False, source
+            )
             if bar is not None:
                 out.append(bar)
         return out
@@ -1028,7 +1085,9 @@ class UnifiedDataStore:
         if not bars:
             return [curr]
         last = bars[-1]
-        if isinstance(last, dict) and last.get("open_time_ms") == curr.get("open_time_ms"):
+        if isinstance(last, dict) and last.get("open_time_ms") == curr.get(
+            "open_time_ms"
+        ):
             bars[-1] = curr
         else:
             bars.append(curr)
@@ -1053,7 +1112,7 @@ class UnifiedDataStore:
                 "bar": bar_payload,
                 "complete": True,
                 "source": str(bar.src),
-                "event_ts": int(bar_payload.get("close_time_ms")) if bar.complete else None,
+                "event_ts": int(bar.close_time_ms),
             }
             self._redis.publish_preview_event(
                 bar.symbol,
@@ -1065,7 +1124,9 @@ class UnifiedDataStore:
         except Exception as exc:
             Logging.warning(
                 "UDS: final→preview ring publish failed symbol=%s tf_s=%s err=%s",
-                bar.symbol, bar.tf_s, exc,
+                bar.symbol,
+                bar.tf_s,
+                exc,
             )
             return False
 
@@ -1084,10 +1145,12 @@ class UnifiedDataStore:
         if not rollover and last_ts is not None and now_ms - last_ts < int(throttle_ms):
             return False
         self._preview_last_publish_ms[key] = now_ms
+        sym = str(bar_payload.get("symbol"))
+        tf_s_val = int(bar_payload.get("tf_s", 0))
         event = {
             "key": {
-                "symbol": str(bar_payload.get("symbol")),
-                "tf_s": int(bar_payload.get("tf_s", 0)),
+                "symbol": sym,
+                "tf_s": tf_s_val,
                 "open_ms": int(bar_payload.get("open_time_ms", 0)),
             },
             "bar": bar_payload,
@@ -1097,8 +1160,8 @@ class UnifiedDataStore:
         }
         try:
             self._redis.publish_preview_event(
-                event["key"]["symbol"],
-                event["key"]["tf_s"],
+                sym,
+                tf_s_val,
                 event,
                 self._preview_updates_retain,
             )
@@ -1108,7 +1171,7 @@ class UnifiedDataStore:
             return False
 
     def snapshot_status(self) -> dict[str, Any]:
-        status = {"boot_id": self._boot_id}
+        status: dict[str, Any] = {"boot_id": self._boot_id}
         status.update(self._ram.stats())
         status["redis_enabled"] = self._redis is not None
         status["redis_spec_mismatch"] = bool(self._redis_spec_mismatch)
@@ -1124,16 +1187,24 @@ class UnifiedDataStore:
         status["disk_bootstrap_window_s"] = BOOTSTRAP_WINDOW_S
         if self._preview_nomix_violation:
             status["preview_nomix_violation"] = True
-            status["preview_nomix_violation_reason"] = self._preview_nomix_violation_reason
-            status["preview_nomix_violation_ts_ms"] = self._preview_nomix_violation_ts_ms
+            status["preview_nomix_violation_reason"] = (
+                self._preview_nomix_violation_reason
+            )
+            status["preview_nomix_violation_ts_ms"] = (
+                self._preview_nomix_violation_ts_ms
+            )
         if self._redis is not None:
             payload = self._redis.get_prime_ready_payload()
             status["prime_ready_payload"] = payload
-            status["prime_ready"] = bool(payload.get("ready")) if isinstance(payload, dict) else False
+            status["prime_ready"] = (
+                bool(payload.get("ready")) if isinstance(payload, dict) else False
+            )
         status["ts_ms"] = int(time.time() * 1000)
         return status
 
-    def prime_redis_from_bars(self, symbol: str, tf_s: int, bars: list[CandleBar]) -> int:
+    def prime_redis_from_bars(
+        self, symbol: str, tf_s: int, bars: list[CandleBar]
+    ) -> int:
         if self._redis_writer is None:
             Logging.warning(
                 "UDS: prime_redis_from_bars пропущено (redis_writer_missing) symbol=%s tf_s=%s",
@@ -1402,9 +1473,9 @@ class UnifiedDataStore:
                     "open_ms": int(bar.open_time_ms),
                 },
                 "bar": bar_payload,
-                "complete": bool(bar.complete),
+                "complete": bar.complete,
                 "source": str(bar.src),
-                "event_ts": int(bar_payload.get("close_time_ms")) if bar.complete else None,
+                "event_ts": (int(bar.close_time_ms) if bar.complete else None),
             }
             self._updates_bus.publish(event)
             return True
@@ -1443,7 +1514,8 @@ class UnifiedDataStore:
             Logging.warning(
                 "DISK_HOTPATH_BLOCKED: reason=%s policy=%s "
                 "blocked_total=%d bootstrap_reads=%d",
-                reason, dp,
+                reason,
+                dp,
                 self._disk_hotpath_blocked,
                 self._disk_bootstrap_reads,
             )
@@ -1456,9 +1528,7 @@ class UnifiedDataStore:
         warnings: list[str],
     ) -> WindowResult:
         use_tail = (
-            spec.cold_load
-            and spec.since_open_ms is None
-            and spec.to_open_ms is None
+            spec.cold_load and spec.since_open_ms is None and spec.to_open_ms is None
         )
         bars, geom = self._disk.read_window_with_geom(
             spec.symbol,
@@ -1537,8 +1607,15 @@ class UnifiedDataStore:
                         if isinstance(open_ms, int):
                             out.add(open_ms)
                     except Exception:
+                        Logging.debug(
+                            "UDS_DAY_OPEN_TIME_PARSE_FAILED path=%s line=%r",
+                            path,
+                            line,
+                            exc_info=True,
+                        )
                         continue
         except Exception:
+            Logging.debug("UDS_DAY_OPEN_TIME_READ_FAILED path=%s", path, exc_info=True)
             return out
         return out
 
@@ -1550,6 +1627,7 @@ class UnifiedDataStore:
     ) -> Optional[WindowResult]:
         if self._redis is None:
             return None
+
         def _mark_redis_fallback(code: str) -> None:
             warnings.append(f"redis_fallback:{code}")
             _mark_degraded(meta, code)
@@ -1633,7 +1711,9 @@ class UnifiedDataStore:
 
         bars, geom = _ensure_sorted_dedup(bars, tf_ms=spec.tf_s * 1000)
         if geom is not None:
-            _mark_geom_fix(meta, warnings, geom, source=source or "redis_tail", tf_s=spec.tf_s)
+            _mark_geom_fix(
+                meta, warnings, geom, source=source or "redis_tail", tf_s=spec.tf_s
+            )
 
         lwc = self._bars_to_lwc(bars)
         if spec.limit > 0:
@@ -1649,9 +1729,11 @@ class UnifiedDataStore:
                     "redis_len": len(lwc),
                     "redis_ttl_s_left": ttl_left,
                     "redis_payload_ts_ms": payload.get("payload_ts_ms"),
-                    "redis_seq": payload.get("last_seq")
-                    if isinstance(payload.get("last_seq"), int)
-                    else payload.get("seq"),
+                    "redis_seq": (
+                        payload.get("last_seq")
+                        if isinstance(payload.get("last_seq"), int)
+                        else payload.get("seq")
+                    ),
                 }
             )
             ext = meta.setdefault("extensions", {})
@@ -1666,9 +1748,11 @@ class UnifiedDataStore:
                 "redis_hit": True,
                 "redis_ttl_s_left": ttl_left,
                 "redis_payload_ts_ms": payload.get("payload_ts_ms"),
-                "redis_seq": payload.get("last_seq")
-                if isinstance(payload.get("last_seq"), int)
-                else payload.get("seq"),
+                "redis_seq": (
+                    payload.get("last_seq")
+                    if isinstance(payload.get("last_seq"), int)
+                    else payload.get("seq")
+                ),
             }
         )
         self._ram.set_window(spec.symbol, spec.tf_s, lwc)
@@ -1682,19 +1766,23 @@ class UnifiedDataStore:
             if not isinstance(t, int):
                 continue
             low_val = b.get("low", b.get("l"))
+            o_raw, h_raw, c_raw = b.get("o"), b.get("h"), b.get("c")
+            if o_raw is None or h_raw is None or low_val is None or c_raw is None:
+                continue
             complete = bool(b.get("complete", True))
-            item = {
+            close_time_raw = b.get("close_time_ms")
+            item: dict[str, Any] = {
                 "time": t // 1000,
-                "open": float(b.get("o")),
-                "high": float(b.get("h")),
+                "open": float(o_raw),
+                "high": float(h_raw),
                 "low": float(low_val),
-                "close": float(b.get("c")),
+                "close": float(c_raw),
                 "volume": float(b.get("v", 0.0)),
-                "open_time_ms": int(b.get("open_time_ms")),
-                "close_time_ms": int(b.get("close_time_ms"))
-                if "close_time_ms" in b
-                else None,
-                "tf_s": int(b.get("tf_s")),
+                "open_time_ms": t,
+                "close_time_ms": (
+                    int(close_time_raw) if close_time_raw is not None else None
+                ),
+                "tf_s": int(b.get("tf_s", 0)),
                 "src": str(b.get("src", "")),
                 "complete": complete,
             }
@@ -1714,20 +1802,36 @@ class UnifiedDataStore:
                     exp_n = ext_raw.get("expected_count")
                     if isinstance(src_n, int) and isinstance(exp_n, int) and exp_n > 0:
                         # Динамічний soft-penalty: частка пропущених source-барів.
-                        item["partial_penalty"] = round(max(0.0, min(1.0, 1.0 - (src_n / exp_n))), 4)
+                        item["partial_penalty"] = round(
+                            max(0.0, min(1.0, 1.0 - (src_n / exp_n))), 4
+                        )
                     else:
                         item["partial_penalty"] = 0.15
-            if complete and "close_time_ms" in b:
-                item["event_ts"] = int(b.get("close_time_ms"))
+            if complete and close_time_raw is not None:
+                item["event_ts"] = int(close_time_raw)
             if "last_price" in b:
                 try:
-                    item["last_price"] = float(b.get("last_price"))
+                    item["last_price"] = float(b["last_price"])
                 except Exception:
+                    Logging.debug(
+                        "UDS_REDIS_BAR_LAST_PRICE_PARSE_FAILED symbol=%s tf_s=%s raw=%r",
+                        b.get("symbol"),
+                        b.get("tf_s"),
+                        b.get("last_price"),
+                        exc_info=True,
+                    )
                     pass
             if "last_tick_ts" in b:
                 try:
-                    item["last_tick_ts"] = int(b.get("last_tick_ts"))
+                    item["last_tick_ts"] = int(b["last_tick_ts"])
                 except Exception:
+                    Logging.debug(
+                        "UDS_REDIS_BAR_LAST_TICK_TS_PARSE_FAILED symbol=%s tf_s=%s raw=%r",
+                        b.get("symbol"),
+                        b.get("tf_s"),
+                        b.get("last_tick_ts"),
+                        exc_info=True,
+                    )
                     pass
             out.append(item)
         return out
@@ -1743,13 +1847,17 @@ class UnifiedDataStore:
             for item in raw_bars:
                 if not isinstance(item, dict):
                     continue
-                bar = self._redis_payload_bar_to_canonical(item, symbol, tf_s, complete, source)
+                bar = self._redis_payload_bar_to_canonical(
+                    item, symbol, tf_s, complete, source
+                )
                 if bar is not None:
                     bars.append(bar)
             return bars
         raw_bar = payload.get("bar")
         if isinstance(raw_bar, dict):
-            bar = self._redis_payload_bar_to_canonical(raw_bar, symbol, tf_s, complete, source)
+            bar = self._redis_payload_bar_to_canonical(
+                raw_bar, symbol, tf_s, complete, source
+            )
             if bar is not None:
                 bars.append(bar)
         return bars
@@ -1767,20 +1875,33 @@ class UnifiedDataStore:
         if not isinstance(open_ms, int) or not isinstance(close_ms, int):
             return None
         close_ms = int(open_ms + int(tf_s) * 1000)
+        o = bar.get("o")
+        h = bar.get("h")
+        low_val = bar.get("l")
+        c = bar.get("c")
+        if o is None or h is None or low_val is None or c is None:
+            Logging.debug(
+                "UDS_REDIS_BAR_OHLC_MISSING symbol=%s tf_s=%s open_ms=%s",
+                symbol,
+                tf_s,
+                open_ms,
+            )
+            return None
         return {
             "symbol": symbol,
             "tf_s": int(tf_s),
             "open_time_ms": int(open_ms),
             "close_time_ms": int(close_ms),
-            "o": bar.get("o"),
-            "h": bar.get("h"),
-            "low": bar.get("l"),
-            "c": bar.get("c"),
-            "v": bar.get("v"),
+            "o": o,
+            "h": h,
+            "low": low_val,
+            "c": c,
+            "v": bar.get("v", 0.0),
             "complete": bool(complete),
             "src": str(source),
             "event_ts": int(close_ms) if complete else None,
         }
+
 
 def _load_cfg(config_path: str) -> dict[str, Any]:
     try:
@@ -1790,11 +1911,8 @@ def _load_cfg(config_path: str) -> dict[str, Any]:
             return {}
         return data
     except Exception:
+        Logging.debug("UDS_LOAD_CFG_FAILED path=%s", config_path, exc_info=True)
         return {}
-
-
-
-
 
 
 def _bar_is_complete(bar: dict[str, Any]) -> bool:
@@ -1807,7 +1925,9 @@ def _bar_is_final_source(bar: dict[str, Any]) -> bool:
     return isinstance(src, str) and src in FINAL_SOURCES
 
 
-def _choose_better_bar(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+def _choose_better_bar(
+    existing: dict[str, Any], incoming: dict[str, Any]
+) -> dict[str, Any]:
     existing_complete = _bar_is_complete(existing)
     incoming_complete = _bar_is_complete(incoming)
     if incoming_complete and not existing_complete:
@@ -1831,6 +1951,7 @@ def _get_open_ms(bar: dict[str, Any]) -> Optional[int]:
         try:
             return int(value)
         except Exception:
+            Logging.debug("UDS_OPEN_MS_PARSE_FAILED raw=%r", value, exc_info=True)
             return None
     return None
 
@@ -1931,7 +2052,12 @@ def _log_geom_fix(source: str, tf_s: int, geom: dict[str, Any]) -> None:
     global _geom_fix_count, _geom_fix_last_log_ts, _geom_fix_last_example
     _OBS.inc_uds_geom_fix(source, tf_s)
     _geom_fix_count += 1
-    _geom_fix_last_example = (source, tf_s, geom.get("sorted"), geom.get("dedup_dropped"))
+    _geom_fix_last_example = (
+        source,
+        tf_s,
+        geom.get("sorted"),
+        geom.get("dedup_dropped"),
+    )
     now_mono = time.monotonic()
     if now_mono - _geom_fix_last_log_ts >= 30.0:
         if _geom_fix_count > 0 and _geom_fix_last_example:
@@ -2050,6 +2176,13 @@ class _RedisUpdatesBus:
                 try:
                     ev = json.loads(raw)
                 except Exception:
+                    Logging.debug(
+                        "UDS_UPDATES_EVENT_DECODE_FAILED symbol=%s tf_s=%s raw=%r",
+                        sym,
+                        tf_s,
+                        raw,
+                        exc_info=True,
+                    )
                     continue
                 seq = ev.get("seq")
                 if not isinstance(seq, int):
@@ -2075,18 +2208,37 @@ class _RedisUpdatesBus:
                 try:
                     last_seq = int(last_seq_raw) if last_seq_raw is not None else 0
                 except Exception:
+                    Logging.debug(
+                        "UDS_UPDATES_LAST_SEQ_PARSE_FAILED symbol=%s tf_s=%s raw=%r",
+                        sym,
+                        tf_s,
+                        last_seq_raw,
+                        exc_info=True,
+                    )
                     last_seq = 0
                 if since_seq is None:
                     cursor_seq = last_seq
 
             gap: Optional[dict[str, Any]] = None
-            if since_seq is not None and min_seq is not None and since_seq < min_seq - 1:
+            if (
+                since_seq is not None
+                and min_seq is not None
+                and since_seq < min_seq - 1
+            ):
                 gap = {
                     "first_seq_available": min_seq,
                     "last_seq_available": max_seq if max_seq is not None else min_seq,
                 }
             return events, int(cursor_seq), gap, None
         except Exception as exc:
+            Logging.debug(
+                "UDS_UPDATES_READ_FAILED symbol=%s tf_s=%s since_seq=%r limit=%s",
+                symbol,
+                tf_s,
+                since_seq,
+                limit,
+                exc_info=True,
+            )
             return [], since_seq if since_seq is not None else 0, None, str(exc)
 
 
@@ -2102,6 +2254,11 @@ def _updates_bus_from_cfg(cfg: dict[str, Any]) -> Optional[_RedisUpdatesBus]:
         try:
             retain = int(updates_cfg.get("retain", retain))
         except Exception:
+            Logging.debug(
+                "UDS_UPDATES_RETAIN_PARSE_FAILED raw=%r",
+                updates_cfg.get("retain"),
+                exc_info=True,
+            )
             retain = UPDATES_REDIS_RETAIN_DEFAULT
     client = redis_lib.Redis(
         host=spec.host,
@@ -2120,6 +2277,7 @@ def _opt_int(value: Any) -> Optional[int]:
     try:
         return int(value)
     except Exception:
+        Logging.debug("UDS_OPT_INT_PARSE_FAILED raw=%r", value, exc_info=True)
         return None
 
 
@@ -2148,16 +2306,24 @@ def build_uds_from_config(
                 spec_boot.namespace,
                 spec_boot.source,
                 int(bool(spec_boot.mismatch)),
-                ",".join(spec_boot.mismatch_fields) if spec_boot.mismatch_fields else "",
+                (
+                    ",".join(spec_boot.mismatch_fields)
+                    if spec_boot.mismatch_fields
+                    else ""
+                ),
             )
 
     tf_allowlist = tf_allowlist_from_cfg(cfg)
-    preview_tf_allowlist, preview_tf_allowlist_source = preview_tf_allowlist_from_cfg(cfg)
+    preview_tf_allowlist, preview_tf_allowlist_source = preview_tf_allowlist_from_cfg(
+        cfg
+    )
     min_coldload_bars = min_coldload_bars_from_cfg(cfg)
     redis_layer = _redis_layer_from_cfg(cfg)
     updates_bus = _updates_bus_from_cfg(cfg)
     spec_for_status = resolve_redis_spec(cfg, role="uds_status", log=False)
-    redis_spec_mismatch = bool(spec_for_status.mismatch) if spec_for_status is not None else False
+    redis_spec_mismatch = (
+        bool(spec_for_status.mismatch) if spec_for_status is not None else False
+    )
     redis_spec_mismatch_fields = (
         list(spec_for_status.mismatch_fields) if spec_for_status is not None else []
     )
@@ -2188,7 +2354,9 @@ def build_uds_from_config(
     # ADR-0017: replay mode → UI/WS reader не читає з диску.
     # Replay process пише в Redis, UI бачить тільки replayed бари.
     replay_mode = os.environ.get("V3_REPLAY_MODE", "").lower() in ("1", "true")
-    disk_layer_eff = _NullDiskLayer() if replay_mode else None  # None → DiskLayer(data_root)
+    disk_layer_eff = (
+        _NullDiskLayer() if replay_mode else None
+    )  # None → DiskLayer(data_root)
     if replay_mode:
         Logging.info("UDS_REPLAY_MODE disk=NullDiskLayer (V3_REPLAY_MODE=1)")
 
@@ -2208,5 +2376,7 @@ def build_uds_from_config(
         redis_spec_mismatch_fields=redis_spec_mismatch_fields,
         preview_tf_allowlist=preview_tf_allowlist,
         preview_tf_allowlist_source=preview_tf_allowlist_source,
-        preview_curr_ttl_s=int(cfg.get("preview_curr_ttl_s", _DEFAULT_PREVIEW_CURR_TTL_S)),
+        preview_curr_ttl_s=int(
+            cfg.get("preview_curr_ttl_s", _DEFAULT_PREVIEW_CURR_TTL_S)
+        ),
     )

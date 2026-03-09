@@ -3,7 +3,7 @@
 // Pure client state. Жодних WS round-trips. SSOT для replay UI.
 // Svelte 5 runes ($state / $derived) — файл має розширення .svelte.ts.
 
-import type { Candle, SmcData, SmcZone, SmcSwing, SmcLevel } from '../types';
+import type { Candle, SmcData } from '../types';
 
 // ────────────────────── Constants ──────────────────────
 export const SPEED_OPTIONS = [1, 2, 5, 10, 25, 50] as const;
@@ -101,7 +101,6 @@ class ReplayStore {
 
     /** Крок вперед на n барів */
     stepForward(n = 1): void {
-        const prev = this.cursorIndex;
         this.seekIndex(this.cursorIndex + n);
         if (this.cursorIndex >= this.allCandles.length) {
             this.pause();

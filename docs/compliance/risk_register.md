@@ -16,7 +16,13 @@
 | **S3** | 4 | 0 | 4 |
 | **Разом** | 11 | 2 | 9 |
 
-**Загальна оцінка**: Прийнятний рівень для personal localhost-only trading tool. Жодних S0 (критичних) ризиків. Базова безпекова гігієна на місці: секрети не в коді, `.gitignore` коректний, input validation присутня, path traversal guards є, FXCM SDK не вендориться, ліцензії deps сумісні. **Головні gaps**: відсутній фінансовий disclaimer, Python 3.7 EOL, Redis без auth.
+**Загальна оцінка**: Технічний baseline уже придатний для production-grade
+localhost-only operation: секрети не в коді, `.gitignore` коректний, input
+validation присутня, path traversal guards є, FXCM SDK не вендориться,
+ліцензії deps сумісні, CI запускає tests + static exit gates +
+dependency/security scan. **Головні gaps**: Python 3.7 EOL, Redis без auth,
+відсутність hash-locked Python lockfile. **Commercial deployment boundary**:
+written agreement with FXCM потрібен окремо.
 
 ---
 
@@ -124,9 +130,27 @@
 | `THIRD_PARTY_NOTICES.md` | ✅ | Повна, всі deps покриті |
 | `docs/compliance/fxcm-sdk-license-review.md` | ✅ | Детальна, conservative |
 | `requirements.txt` FXCM disclaimer | ✅ | Є |
-| Financial disclaimer | ❌ | **ВІДСУТНІЙ** |
+| Financial disclaimer | ✅ | README.md disclaimer додано |
 | `docs/compliance/risk_register.md` | ✅ | Цей файл |
 | Python lockfile (hashes) | ❌ | Відсутній |
+
+### 1.8 Automated Enforcement
+
+| Контроль | Enforcement | Статус |
+|----------|-------------|--------|
+| Tests | `.github/workflows/ci.yml` → `python -m pytest -q tests/` | ✅ |
+| Static governance gates | `tools/exit_gates/manifest.ci.json` | ✅ |
+| Dependency rule / no_bare_except / docs sync | exit gates in CI | ✅ |
+| Python dependency audit | `pip-audit -r requirements.txt` | ✅ |
+| Python static security scan | `bandit -q -r app core runtime ui_chart_v3 tools` | ✅ |
+| Frontend dependency audit | `npm audit --audit-level=high --omit=dev` | ✅ |
+| Dependency update cadence | `.github/dependabot.yml` weekly pip/npm | ✅ |
+
+### 1.9 Commercial Deployment Boundary
+
+- Current approval scope = localhost-only single-user workstation.
+- Commercial, team, hosted, or redistributed use with ForexConnect in the stack requires written agreement with FXCM.
+- До отримання такого дозволу стек може бути production-grade технічно, але не має commercial-clear legal posture.
 
 ---
 
@@ -161,21 +185,22 @@
 7. **Error handling** — degraded-but-loud, structured error frames, no secret leaking
 8. **npm lockfile** — package-lock.json present
 9. **Localhost binding** — all services 127.0.0.1 only
+10. **Automated enforcement** — CI запускає tests, static exit gates, dependency review, pip-audit, bandit, npm audit
 
 ### Що відсутнє ❌
 
-1. **Financial disclaimer** — README.md, UI, docs — жодного
-2. **Python lockfile** — no hash-verified lockfile
-3. **Redis auth** — no `requirepass`
-4. **ADR-0016 implementation** — Python 3.7 EOL migration stalled
-5. **AI code ownership clause** — not explicit in LICENSE
+1. **Python lockfile** — no hash-verified lockfile
+2. **Redis auth** — no `requirepass`
+3. **ADR-0016 implementation** — Python 3.7 EOL migration stalled
+4. **AI code ownership clause** — not explicit in LICENSE
+5. **Commercial FXCM permission** — written agreement with FXCM відсутній
 
 ### Що прийнятне за умови ⚠️
 
 1. **No auth on endpoints** — OK for localhost, MUST review if deployment changes
 2. **No encryption at rest** — OK for personal machine, MUST review if shared
 3. **`ssot_jsonl_fsync: false`** — OK if data recovery from FXCM is possible, SHOULD document
-4. **Config.json credential fallback** — OK while keys absent, SHOULD remove pattern
+4. **Commercial use boundary** — OK лише після окремого письмового дозволу FXCM
 
 ---
 

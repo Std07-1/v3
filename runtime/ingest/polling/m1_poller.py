@@ -10,6 +10,7 @@
 SSOT-1: M1/M3 (візуальність + точки входу).
 SSOT-3: H4 (derived через DeriveEngine).
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -91,7 +92,9 @@ def _last_trading_minute_ms(calendar: MarketCalendar, now_ms: int) -> int:
     return result
 
 
-def _expected_closed_m1_calendar(calendar: Optional[MarketCalendar], now_ms: int) -> int:
+def _expected_closed_m1_calendar(
+    calendar: Optional[MarketCalendar], now_ms: int
+) -> int:
     """Expected last closed M1 з урахуванням календаря.
 
     Якщо ринок зараз відкритий → стандартний floor.
@@ -173,7 +176,9 @@ class M1SymbolPoller:
 
         # P0.3: stale detection (ADR-0002)
         self._stale_s = max(0, stale_s)
-        self._last_new_bar_ts: float = 0.0  # time.time() коли останній новий M1 committed
+        self._last_new_bar_ts: float = (
+            0.0  # time.time() коли останній новий M1 committed
+        )
         self._stale_count: int = 0
         self._last_stale_log_ts: float = 0.0
 
@@ -204,7 +209,9 @@ class M1SymbolPoller:
         if self._last_market_open is not None and is_open != self._last_market_open:
             state_str = "open" if is_open else "closed"
             logging.info(
-                "M1_CALENDAR_STATE symbol=%s state=%s", self._symbol, state_str,
+                "M1_CALENDAR_STATE symbol=%s state=%s",
+                self._symbol,
+                state_str,
             )
         self._last_market_open = is_open
         return is_open
@@ -230,7 +237,10 @@ class M1SymbolPoller:
             if self._gaps_detected <= 5 or self._gaps_detected % 60 == 0:
                 logging.info(
                     "M1_GAP_DETECTED symbol=%s gap_bars=%d wm=%s expected=%s",
-                    self._symbol, gap_bars, self._watermark_ms, expected,
+                    self._symbol,
+                    gap_bars,
+                    self._watermark_ms,
+                    expected,
                 )
         # Fetch gap + 1 (щоб перекрити), але не більше ліміту
         return min(gap_bars + 1, self.MAX_FETCH_N)
@@ -254,11 +264,17 @@ class M1SymbolPoller:
         if flat and trading:
             # Flat під час торгових — приймаємо з маркером (grid completeness)
             bar = CandleBar(
-                symbol=bar.symbol, tf_s=bar.tf_s,
+                symbol=bar.symbol,
+                tf_s=bar.tf_s,
                 open_time_ms=bar.open_time_ms,
                 close_time_ms=bar.close_time_ms,
-                o=bar.o, h=bar.h, low=bar.low, c=bar.c, v=bar.v,
-                complete=bar.complete, src=bar.src,
+                o=bar.o,
+                h=bar.h,
+                low=bar.low,
+                c=bar.c,
+                v=bar.v,
+                complete=bar.complete,
+                src=bar.src,
                 extensions={**bar.extensions, "trading_flat": True},
             )
 
@@ -269,11 +285,17 @@ class M1SymbolPoller:
             else:
                 # Non-flat під час паузи → аномалія, але приймаємо
                 bar = CandleBar(
-                    symbol=bar.symbol, tf_s=bar.tf_s,
+                    symbol=bar.symbol,
+                    tf_s=bar.tf_s,
                     open_time_ms=bar.open_time_ms,
                     close_time_ms=bar.close_time_ms,
-                    o=bar.o, h=bar.h, low=bar.low, c=bar.c, v=bar.v,
-                    complete=bar.complete, src=bar.src,
+                    o=bar.o,
+                    h=bar.h,
+                    low=bar.low,
+                    c=bar.c,
+                    v=bar.v,
+                    complete=bar.complete,
+                    src=bar.src,
                     extensions={
                         **bar.extensions,
                         "calendar_pause_nonflat_anomaly": True,
@@ -281,8 +303,13 @@ class M1SymbolPoller:
                 )
                 logging.warning(
                     "M1_NONFLAT_IN_PAUSE symbol=%s open_ms=%s o=%.5f h=%.5f l=%.5f c=%.5f v=%.0f",
-                    self._symbol, bar.open_time_ms,
-                    bar.o, bar.h, bar.low, bar.c, bar.v,
+                    self._symbol,
+                    bar.open_time_ms,
+                    bar.o,
+                    bar.h,
+                    bar.low,
+                    bar.c,
+                    bar.v,
                 )
 
         result = self._uds.commit_final_bar(bar)
@@ -296,9 +323,7 @@ class M1SymbolPoller:
             # Каскадна деривація через DeriveEngine (ADR-0002 P2.3)
             if self._derive_engine is not None:
                 committed = self._derive_engine.on_bar(bar)
-                self._committed_m3 += sum(
-                    1 for b in committed if b.tf_s == 180
-                )
+                self._committed_m3 += sum(1 for b in committed if b.tf_s == 180)
             elif self._m3_derive and not self._derive_engine_warned:
                 # I5: degraded-but-loud — derive_engine missing
                 logging.warning(
@@ -311,7 +336,9 @@ class M1SymbolPoller:
         elif result.reason not in ("stale", "duplicate"):
             logging.warning(
                 "M1_COMMIT_REJECT symbol=%s reason=%s open_ms=%s",
-                self._symbol, result.reason, bar.open_time_ms,
+                self._symbol,
+                result.reason,
+                bar.open_time_ms,
             )
         return False
 
@@ -320,8 +347,8 @@ class M1SymbolPoller:
     def poll_once(self) -> None:
         """Один цикл: calendar-aware cutoff → smart fetch → ingest.
 
-НЕ блокує poll при market-closed — покладається на calendar-aware
-        expected + caught-up check. Останній бар перед паузою завжди фетчиться.
+        НЕ блокує poll при market-closed — покладається на calendar-aware
+                expected + caught-up check. Останній бар перед паузою завжди фетчиться.
         """
         now_ms = _utc_now_ms()
 
@@ -348,14 +375,18 @@ class M1SymbolPoller:
         date_to = ms_to_utc_dt(expected + _M1_MS) if expected > 0 else None
         try:
             bars = self._provider.fetch_last_n_m1(
-                self._symbol, n=fetch_n, date_to_utc=date_to,
+                self._symbol,
+                n=fetch_n,
+                date_to_utc=date_to,
             )
         except Exception as exc:
             self._errors += 1
             if self._errors <= 3 or self._errors % 60 == 0:
                 logging.warning(
                     "M1_POLL_FETCH_ERROR symbol=%s err=%s total_errors=%d",
-                    self._symbol, exc, self._errors,
+                    self._symbol,
+                    exc,
+                    self._errors,
                 )
             return
 
@@ -417,7 +448,8 @@ class M1SymbolPoller:
             self._recover_gap_at_start = gap_bars
             logging.warning(
                 "M1_LIVE_RECOVER_START symbol=%s gap_bars=%d cutoff=%s wm=%s",
-                self._symbol, gap_bars,
+                self._symbol,
+                gap_bars,
                 ms_to_utc_dt(cutoff).isoformat(),
                 ms_to_utc_dt(self._watermark_ms).isoformat(),
             )
@@ -446,7 +478,9 @@ class M1SymbolPoller:
 
         # --- Fetch batch ---
         n = min(gap_bars, self._live_recover_max_bars_per_cycle)
-        remaining_budget = self._live_recover_max_total_bars - self._recover_total_fetched
+        remaining_budget = (
+            self._live_recover_max_total_bars - self._recover_total_fetched
+        )
         n = min(n, remaining_budget)
         if n <= 0:
             self._live_recover_finish("budget_exhausted")
@@ -455,13 +489,16 @@ class M1SymbolPoller:
         date_to = ms_to_utc_dt(cutoff + _M1_MS)
         try:
             bars = self._provider.fetch_last_n_m1(
-                self._symbol, n=n, date_to_utc=date_to,
+                self._symbol,
+                n=n,
+                date_to_utc=date_to,
             )
         except Exception as exc:
             self._errors += 1
             logging.warning(
                 "M1_LIVE_RECOVER_FETCH_ERROR symbol=%s err=%s",
-                self._symbol, exc,
+                self._symbol,
+                exc,
             )
             self._recover_last_fetch_ts = now_s
             return
@@ -471,9 +508,9 @@ class M1SymbolPoller:
 
         if bars:
             bars = [
-                b for b in bars
-                if b.open_time_ms > self._watermark_ms
-                and b.open_time_ms <= cutoff
+                b
+                for b in bars
+                if b.open_time_ms > self._watermark_ms and b.open_time_ms <= cutoff
             ]
             bars.sort(key=lambda b: b.open_time_ms)
             for bar in bars:
@@ -496,7 +533,8 @@ class M1SymbolPoller:
             elapsed_s = int(now_s - self._recover_start_ts)
             logging.info(
                 "M1_LIVE_RECOVER sym=%s remaining=%d fetched=%d written=%d elapsed_s=%d",
-                self._symbol, remaining_gap,
+                self._symbol,
+                remaining_gap,
                 self._recover_total_fetched,
                 self._recover_total_written,
                 elapsed_s,
@@ -507,7 +545,8 @@ class M1SymbolPoller:
         logging.info(
             "M1_LIVE_RECOVER_DONE symbol=%s reason=%s gap_at_start=%d "
             "fetched=%d written=%d elapsed_s=%d",
-            self._symbol, reason,
+            self._symbol,
+            reason,
             self._recover_gap_at_start,
             self._recover_total_fetched,
             self._recover_total_written,
@@ -544,8 +583,10 @@ class M1SymbolPoller:
         if self._stale_count <= 3 or self._stale_count % 60 == 0:
             logging.warning(
                 "M1_STALE symbol=%s silence_s=%d stale_count=%d wm=%s",
-                self._symbol, int(silence_s),
-                self._stale_count, self._watermark_ms,
+                self._symbol,
+                int(silence_s),
+                self._stale_count,
+                self._watermark_ms,
             )
 
     # -- Warmup ----------------------------------------------------------
@@ -557,13 +598,18 @@ class M1SymbolPoller:
             loaded = 0
             for bar in candles:
                 if bar.tf_s == 60 and bar.complete:
-                    if self._watermark_ms is None or bar.open_time_ms > self._watermark_ms:
+                    if (
+                        self._watermark_ms is None
+                        or bar.open_time_ms > self._watermark_ms
+                    ):
                         self._watermark_ms = bar.open_time_ms
                     loaded += 1
             return loaded
         except Exception as exc:
             logging.warning(
-                "M1_WARMUP_ERROR symbol=%s err=%s", self._symbol, exc,
+                "M1_WARMUP_ERROR symbol=%s err=%s",
+                self._symbol,
+                exc,
             )
             return 0
 
@@ -602,7 +648,10 @@ class M1SymbolPoller:
             logging.warning(
                 "M1_TAIL_CATCHUP_TRUNCATED symbol=%s missing_total=%d "
                 "fetched=%d backlog=%d",
-                self._symbol, missing, n, backlog,
+                self._symbol,
+                missing,
+                n,
+                backlog,
             )
             gap_from_ms = self._watermark_ms + _M1_MS
             self._uds.set_gap_state(
@@ -616,12 +665,15 @@ class M1SymbolPoller:
         date_to = ms_to_utc_dt(cutoff_ms + _M1_MS)
         try:
             bars = self._provider.fetch_last_n_m1(
-                self._symbol, n=n, date_to_utc=date_to,
+                self._symbol,
+                n=n,
+                date_to_utc=date_to,
             )
         except Exception as exc:
             logging.warning(
                 "M1_TAIL_CATCHUP_FETCH_ERROR symbol=%s err=%s",
-                self._symbol, exc,
+                self._symbol,
+                exc,
             )
             return {
                 "tail_catchup_missing": missing,
@@ -637,9 +689,9 @@ class M1SymbolPoller:
 
         # Фільтр: тільки бари після watermark і до cutoff
         bars = [
-            b for b in bars
-            if b.open_time_ms > self._watermark_ms
-            and b.open_time_ms <= cutoff_ms
+            b
+            for b in bars
+            if b.open_time_ms > self._watermark_ms and b.open_time_ms <= cutoff_ms
         ]
         bars.sort(key=lambda b: b.open_time_ms)
 
@@ -661,9 +713,11 @@ class M1SymbolPoller:
             )
 
         logging.info(
-            "M1_TAIL_CATCHUP symbol=%s missing=%d fetched=%d written=%d "
-            "wm_after=%s",
-            self._symbol, missing, len(bars), written,
+            "M1_TAIL_CATCHUP symbol=%s missing=%d fetched=%d written=%d " "wm_after=%s",
+            self._symbol,
+            missing,
+            len(bars),
+            written,
             self._watermark_ms,
         )
         return {
@@ -696,7 +750,11 @@ class M1PollerRunner:
 
     # Hardcoded defaults для derive warmup (fallback якщо config не задає)
     _DEFAULT_DERIVE_WARMUP: Dict[int, int] = {
-        60: 300, 300: 20, 900: 10, 1800: 10, 3600: 10,
+        60: 300,
+        300: 20,
+        900: 10,
+        1800: 10,
+        3600: 10,
     }
 
     def __init__(
@@ -725,10 +783,13 @@ class M1PollerRunner:
         self._connected = False
         self._tail_catchup_enabled = tail_catchup_enabled
         self._derive_engine = derive_engine
-        self._derive_warmup_bars_by_tf = derive_warmup_bars_by_tf or dict(self._DEFAULT_DERIVE_WARMUP)
+        self._derive_warmup_bars_by_tf = derive_warmup_bars_by_tf or dict(
+            self._DEFAULT_DERIVE_WARMUP
+        )
         self._cascade_catchup_m1_bars = max(0, cascade_catchup_m1_bars)
         # Graceful shutdown: stop_event дозволяє перервати sleep між циклами
         import threading as _threading
+
         self._stop_event = _threading.Event()
 
     # -- FXCM session lifecycle -----------
@@ -736,7 +797,7 @@ class M1PollerRunner:
     def _try_connect(self) -> bool:
         """Спроба відкрити/перевідкрити FXCM сесію."""
         try:
-            if getattr(self._provider, '_fx', None) is not None:
+            if getattr(self._provider, "_fx", None) is not None:
                 try:
                     self._provider.__exit__(None, None, None)
                 except Exception:
@@ -792,12 +853,14 @@ class M1PollerRunner:
                     primed_total += count
             logging.info(
                 "M1_POLLER_REDIS_PRIME symbols=%d primed_bars=%d tfs=%s",
-                len(symbols), primed_total,
+                len(symbols),
+                primed_total,
                 ",".join(str(t) for t in sorted(self._redis_tail_n)),
             )
         except Exception as exc:
             logging.warning(
-                "BOOTSTRAP_DEGRADED phase=redis_priming err=%s", exc,
+                "BOOTSTRAP_DEGRADED phase=redis_priming err=%s",
+                exc,
             )
             bootstrap_degraded.append("redis_priming: %s" % exc)
 
@@ -809,11 +872,13 @@ class M1PollerRunner:
                 warmup_total += loaded
             logging.info(
                 "M1_POLLER_WARMUP symbols=%d watermark_loaded=%d",
-                len(self._pollers), warmup_total,
+                len(self._pollers),
+                warmup_total,
             )
         except Exception as exc:
             logging.warning(
-                "BOOTSTRAP_DEGRADED phase=watermark_warmup err=%s", exc,
+                "BOOTSTRAP_DEGRADED phase=watermark_warmup err=%s",
+                exc,
             )
             bootstrap_degraded.append("watermark_warmup: %s" % exc)
 
@@ -837,17 +902,21 @@ class M1PollerRunner:
                         except Exception as exc:
                             logging.warning(
                                 "DERIVE_ENGINE_WARMUP_ERR symbol=%s tf=%d err=%s",
-                                sym, tf_s, exc,
+                                sym,
+                                tf_s,
+                                exc,
                             )
                     if all_bars:
                         engine_warmup += self._derive_engine.warmup_bars(all_bars)
                 logging.info(
                     "DERIVE_ENGINE_WARMUP symbols=%d bars=%d",
-                    len(self._pollers), engine_warmup,
+                    len(self._pollers),
+                    engine_warmup,
                 )
             except Exception as exc:
                 logging.warning(
-                    "BOOTSTRAP_DEGRADED phase=derive_engine_warmup err=%s", exc,
+                    "BOOTSTRAP_DEGRADED phase=derive_engine_warmup err=%s",
+                    exc,
                 )
                 bootstrap_degraded.append("derive_engine_warmup: %s" % exc)
 
@@ -876,11 +945,14 @@ class M1PollerRunner:
                     logging.info(
                         "DERIVE_CASCADE_CATCHUP symbols=%d m1_processed=%d "
                         "derived_committed=%d",
-                        len(self._pollers), catchup_total, catchup_derived,
+                        len(self._pollers),
+                        catchup_total,
+                        catchup_derived,
                     )
             except Exception as exc:
                 logging.warning(
-                    "BOOTSTRAP_DEGRADED phase=cascade_catchup err=%s", exc,
+                    "BOOTSTRAP_DEGRADED phase=cascade_catchup err=%s",
+                    exc,
                 )
                 bootstrap_degraded.append("cascade_catchup: %s" % exc)
 
@@ -891,13 +963,15 @@ class M1PollerRunner:
                 self._do_tail_catchup()
             except Exception as exc:
                 logging.warning(
-                    "BOOTSTRAP_DEGRADED phase=tail_catchup err=%s", exc,
+                    "BOOTSTRAP_DEGRADED phase=tail_catchup err=%s",
+                    exc,
                 )
                 bootstrap_degraded.append("tail_catchup: %s" % exc)
 
         if bootstrap_degraded:
             logging.warning(
-                "M1_POLLER_BOOTSTRAP_DEGRADED phases=%s", bootstrap_degraded,
+                "M1_POLLER_BOOTSTRAP_DEGRADED phases=%s",
+                bootstrap_degraded,
             )
 
     def _do_tail_catchup(self) -> None:
@@ -914,11 +988,13 @@ class M1PollerRunner:
             if result.get("tail_catchup_error"):
                 logging.warning(
                     "M1_TAIL_CATCHUP_PARTIAL symbol=%s result=%s",
-                    p.stats["symbol"], result,
+                    p.stats["symbol"],
+                    result,
                 )
         logging.info(
             "M1_POLLER_TAIL_CATCHUP symbols=%d total_written=%d",
-            len(self._pollers), catchup_total,
+            len(self._pollers),
+            catchup_total,
         )
 
     # -- Prime ready signal ---------------
@@ -942,7 +1018,8 @@ class M1PollerRunner:
             self._uds.set_prime_ready(payload, self._PRIME_READY_TTL_S, component="m1")
             logging.info(
                 "PRIME_READY_SET component=m1 symbols=%d tfs=%s",
-                len(symbols), ",".join(str(t) for t in tfs),
+                len(symbols),
+                ",".join(str(t) for t in tfs),
             )
         except Exception as exc:
             logging.warning("PRIME_READY_SET_FAILED component=m1 err=%s", exc)
@@ -952,7 +1029,8 @@ class M1PollerRunner:
     def run_forever(self) -> None:
         logging.info(
             "M1_POLLER_START symbols=%d safety_delay_s=%d",
-            len(self._pollers), self._safety_delay_s,
+            len(self._pollers),
+            self._safety_delay_s,
         )
         self._bootstrap_warmup()
         self._publish_prime_ready()
@@ -1015,9 +1093,15 @@ class M1PollerRunner:
         logging.info(
             "M1_POLLER_STATS symbols=%d m1=%d m3=%d err=%d cal_skip=%d "
             "gaps=%d caught_up=%d recovering=%d stale=%d",
-            len(self._pollers), total_m1, total_m3, total_err,
-            total_cal_skip, total_gaps, total_caught,
-            recovering, total_stale,
+            len(self._pollers),
+            total_m1,
+            total_m3,
+            total_err,
+            total_cal_skip,
+            total_gaps,
+            total_caught,
+            recovering,
+            total_stale,
         )
 
 
@@ -1055,15 +1139,21 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
     logging.info(
         "M1_POLLER_CONFIG tail_catchup_max=%d lr_threshold=%d lr_max_cycle=%d "
         "lr_cooldown=%d lr_max_total=%d stale_s=%d",
-        tail_catchup_max_bars, lr_threshold, lr_max_cycle,
-        lr_cooldown, lr_max_total, stale_s,
+        tail_catchup_max_bars,
+        lr_threshold,
+        lr_max_cycle,
+        lr_cooldown,
+        lr_max_total,
+        stale_s,
     )
 
     # SSOT: flat_bar_max_volume з config.json (верхній рівень)
     flat_vol_raw = cfg.get("flat_bar_max_volume")
     if flat_vol_raw is not None:
         set_flat_bar_max_volume(int(flat_vol_raw))
-        logging.info("M1_POLLER_FLAT_BAR_MAX_VOLUME=%d (from config)", _flat_bar_max_volume)
+        logging.info(
+            "M1_POLLER_FLAT_BAR_MAX_VOLUME=%d (from config)", _flat_bar_max_volume
+        )
     else:
         logging.warning(
             "M1_POLLER_FLAT_BAR_MAX_VOLUME=%d (default, config key missing)",
@@ -1112,21 +1202,23 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
         if group and isinstance(cal_by_group.get(group), dict):
             cal = calendar_from_group(cal_by_group[group])
 
-        pollers.append(M1SymbolPoller(
-            symbol=sym,
-            provider=provider,
-            uds=uds,
-            calendar=cal,
-            tail_fetch_n=tail_fetch_n,
-            m3_derive=m3_derive,
-            tail_catchup_max_bars=tail_catchup_max_bars,
-            live_recover_threshold_bars=lr_threshold,
-            live_recover_max_bars_per_cycle=lr_max_cycle,
-            live_recover_cooldown_s=lr_cooldown,
-            live_recover_max_total_bars=lr_max_total,
-            live_recover_log_interval_s=lr_log_interval,
-            stale_s=stale_s,
-        ))
+        pollers.append(
+            M1SymbolPoller(
+                symbol=sym,
+                provider=provider,
+                uds=uds,
+                calendar=cal,
+                tail_fetch_n=tail_fetch_n,
+                m3_derive=m3_derive,
+                tail_catchup_max_bars=tail_catchup_max_bars,
+                live_recover_threshold_bars=lr_threshold,
+                live_recover_max_bars_per_cycle=lr_max_cycle,
+                live_recover_cooldown_s=lr_cooldown,
+                live_recover_max_total_bars=lr_max_total,
+                live_recover_log_interval_s=lr_log_interval,
+                stale_s=stale_s,
+            )
+        )
 
     # -- DeriveEngine (ADR-0002 P2.3 + ADR-0023 D1): каскадна деривація M1→H4+D1 --
     derive_engine: Optional[DeriveEngine] = None
@@ -1158,7 +1250,9 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
             p._derive_engine = derive_engine  # noqa: SLF001
         logging.info(
             "DERIVE_ENGINE_WIRED symbols=%d anchor_offset_s=%d d1_anchor=%d commit_tfs=%s",
-            len(symbols), anchor_offset_s, d1_anchor_offset_s,
+            len(symbols),
+            anchor_offset_s,
+            d1_anchor_offset_s,
             sorted(derive_engine._commit_tfs_s),  # noqa: SLF001
         )
 
@@ -1185,6 +1279,12 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
                 try:
                     _derive_warmup_cfg[int(k)] = int(v)
                 except (ValueError, TypeError):
+                    logging.debug(
+                        "M1_POLLER_DERIVE_WARMUP_PARSE_FAILED key=%r value=%r",
+                        k,
+                        v,
+                        exc_info=True,
+                    )
                     pass
             if _derive_warmup_cfg:
                 logging.info(
@@ -1201,6 +1301,11 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
             try:
                 _cascade_catchup_m1_n = int(raw_catchup)
             except (ValueError, TypeError):
+                logging.debug(
+                    "M1_POLLER_CASCADE_CATCHUP_PARSE_FAILED raw=%r",
+                    raw_catchup,
+                    exc_info=True,
+                )
                 pass
 
     return M1PollerRunner(
@@ -1230,10 +1335,12 @@ def _is_pid_alive(pid: int) -> bool:
     """
     try:
         import psutil
+
         p = psutil.Process(pid)
         cmdline = " ".join(p.cmdline()).lower()
         return "m1_poller" in cmdline
     except Exception:
+        logging.debug("M1_POLLER_PSUTIL_PID_CHECK_FAILED pid=%s", pid, exc_info=True)
         pass
     # Fallback: OS-level (без cmdline check — менш надійно)
     if os.name == "nt":
@@ -1256,12 +1363,16 @@ def _pidfile_guard() -> None:
         try:
             old_pid = int(_PID_FILE.read_text().strip())
         except (ValueError, OSError):
+            logging.debug(
+                "M1_POLLER_PIDFILE_READ_FAILED path=%s", _PID_FILE, exc_info=True
+            )
             old_pid = 0
         if old_pid and _is_pid_alive(old_pid):
             logging.error(
                 "M1_POLLER_DUPLICATE pid=%d вже працює! Pidfile=%s. "
                 "Вбийте старий процес або видаліть pidfile.",
-                old_pid, _PID_FILE,
+                old_pid,
+                _PID_FILE,
             )
             raise SystemExit(2)
         logging.warning("M1_POLLER_STALE_PID old_pid=%d (removed)", old_pid)
@@ -1290,7 +1401,9 @@ def main() -> int:
 
     report = load_env_secrets()
     if report.loaded:
-        logging.info("ENV: secrets_loaded path=%s keys=%d", report.path, report.keys_count)
+        logging.info(
+            "ENV: secrets_loaded path=%s keys=%d", report.path, report.keys_count
+        )
 
     config_path = pick_config_path()
     logging.info("M1_POLLER config=%s", config_path)

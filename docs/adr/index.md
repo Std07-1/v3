@@ -46,6 +46,8 @@
 | [0032](0032-overlay-render-throttle-tf-switch.md) | Overlay Render Throttle + TF Switch Stability | **Implemented** | 2026-03-08 | crosshairMove guard, RAF wheel, center_ms viewCache, TF switch UX | `ui_perf_p1_p5` |
 | [0033](0033-context-flow-narrative.md) | Context Flow — Multi-TF Narrative Engine | **Implemented** | 2026-03-08 | narrative, scenario, trade/wait, market_phase, FVG context, NarrativePanel | `smc_vis_phi3` |
 | [0034](0034-advanced-market-analysis-tda.md) | Advanced Market Analysis — TDA Synchronization & Extended SMC | **Proposed** | 2026-03-09 | TDA, IFVG, breaker, DP, Quasimodo, TF sync, protected fractal, idea invalidation | `smc_tda_v1` |
+| [0035](0035-sessions-killzones.md) | Sessions & Killzones — Trading Session Awareness | **Implemented** | 2026-03-08 | Asia/London/NY, session H/L, killzone, F9 sweep, narrative session context | `smc_sessions_v1` |
+| [0036](0036-premium-trader-first-shell.md) | Premium Trader-First Shell for UI v4 | **Proposed** | 2026-03-09 | premium shell, thesis bar, tactical strip, service rail, signature interaction, UI hierarchy | `ui_v4_premium_shell_v1` |
 
 ---
 
@@ -85,4 +87,4 @@
 
 Див. формат у [copilot-instructions.md](../../.github/copilot-instructions.md) → Тема B, Правило B2.
 
-Наступний номер: **0035**
+Наступний номер: **0036**

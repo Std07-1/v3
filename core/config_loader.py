@@ -4,15 +4,18 @@
 завантаження JSON-конфігу і роботи з ENV-ключами.
 Усі модулі імпортують звідси замість локальних копій.
 """
+
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 # Корінь репозиторію — батько core/
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+logger = logging.getLogger("config_loader")
 
 
 def resolve_config_path(raw_path: str | None = None) -> str:
@@ -88,6 +91,7 @@ def tf_allowlist_from_cfg(cfg: Dict[str, Any]) -> set[int]:
             try:
                 tf_s = int(item)
             except Exception:
+                logger.debug("CONFIG_TF_ALLOWLIST_ITEM_INVALID value=%r", item)
                 continue
             if tf_s > 0:
                 out.append(tf_s)
@@ -100,6 +104,7 @@ def tf_allowlist_from_cfg(cfg: Dict[str, Any]) -> set[int]:
             try:
                 tf_s = int(item)
             except Exception:
+                logger.debug("CONFIG_DERIVED_TF_ITEM_INVALID value=%r", item)
                 continue
             if tf_s > 0:
                 out.append(tf_s)
@@ -110,6 +115,7 @@ def tf_allowlist_from_cfg(cfg: Dict[str, Any]) -> set[int]:
             try:
                 tf_s = int(item)
             except Exception:
+                logger.debug("CONFIG_BROKER_BASE_TF_ITEM_INVALID value=%r", item)
                 continue
             if tf_s > 0:
                 out.append(tf_s)
@@ -137,6 +143,7 @@ def preview_tf_allowlist_from_cfg(cfg: Dict[str, Any]) -> tuple[set[int], str]:
             try:
                 tf_s = int(item)
             except Exception:
+                logger.debug("CONFIG_PREVIEW_ALLOWLIST_ITEM_INVALID value=%r", item)
                 continue
             if tf_s > 0:
                 out.append(tf_s)
@@ -150,6 +157,7 @@ def preview_tf_allowlist_from_cfg(cfg: Dict[str, Any]) -> tuple[set[int], str]:
             try:
                 tf_s = int(item)
             except Exception:
+                logger.debug("CONFIG_PREVIEW_TICK_TF_ITEM_INVALID value=%r", item)
                 continue
             if tf_s > 0:
                 out.append(tf_s)
@@ -173,6 +181,7 @@ def min_coldload_bars_from_cfg(cfg: Dict[str, Any]) -> dict[int, int]:
                 tf_s = int(k)
                 min_n = int(v)
             except Exception:
+                logger.debug("CONFIG_MIN_COLDLOAD_ITEM_INVALID key=%r value=%r", k, v)
                 continue
             if tf_s > 0 and min_n > 0:
                 out[tf_s] = min_n

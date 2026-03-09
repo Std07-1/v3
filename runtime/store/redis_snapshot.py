@@ -4,7 +4,7 @@ import json
 import logging
 import time
 from collections import deque
-from typing import Any, Deque, Dict, Optional, Tuple
+from typing import Any, Deque, Dict, Optional, Tuple, cast
 
 from core.model.bars import CandleBar
 from runtime.store.redis_keys import symbol_key
@@ -51,7 +51,7 @@ class RedisSnapshotWriter:
             if callable(close_fn):
                 close_fn()
         except Exception:
-            pass
+            logging.debug("REDIS_SNAP_CLOSE_FAIL", exc_info=True)
 
     def ping(self) -> Tuple[bool, Optional[str]]:
         try:
@@ -60,6 +60,7 @@ class RedisSnapshotWriter:
             return bool(pong), None
         except Exception as exc:
             self._redis_ok = False
+            logging.debug("REDIS_SNAP_PING_FAIL", exc_info=True)
             return False, str(exc)
 
     def _key(self, *parts: str) -> str:
@@ -91,7 +92,9 @@ class RedisSnapshotWriter:
         self._suppressed_err = 0
         self._last_err_msg = message
 
-    def _write_json(self, key: str, payload: Dict[str, Any], ttl_s: Optional[int]) -> None:
+    def _write_json(
+        self, key: str, payload: Dict[str, Any], ttl_s: Optional[int]
+    ) -> None:
         raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         try:
             if ttl_s is not None:
@@ -239,7 +242,10 @@ class RedisSnapshotWriter:
         )
 
         if last_complete and last_close_ms_excl is not None:
-            if self._last_final_close_ms is None or last_close_ms_excl > self._last_final_close_ms:
+            if (
+                self._last_final_close_ms is None
+                or last_close_ms_excl > self._last_final_close_ms
+            ):
                 self._last_final_close_ms = last_close_ms_excl
         self._write_status(payload_ts_ms)
         return len(tail)
@@ -313,7 +319,8 @@ class RedisSnapshotWriter:
             k = (key_symbol, bar.tf_s)
             if k not in self._tails:
                 self._tails[k] = deque(maxlen=n)
-            self._tails[k].append(snap["bar"])
+            tail_bar = cast(Dict[str, Any], snap["bar"])
+            self._tails[k].append(tail_bar)
             tail = {
                 "v": 1,
                 "symbol": bar.symbol,
@@ -328,7 +335,10 @@ class RedisSnapshotWriter:
             self._write_json(tail_key, tail, self._ttl(bar.tf_s))
 
         if bar.complete:
-            if self._last_final_close_ms is None or bar.close_time_ms > self._last_final_close_ms:
+            if (
+                self._last_final_close_ms is None
+                or bar.close_time_ms > self._last_final_close_ms
+            ):
                 self._last_final_close_ms = bar.close_time_ms
         self._write_status(payload_ts_ms)
 
@@ -367,6 +377,12 @@ def _parse_int_map(raw: Any) -> Dict[int, int]:
             key = int(k)
             val = int(v)
         except Exception:
+            logging.debug(
+                "REDIS_SNAP_INT_MAP_PARSE_FAIL key=%r value=%r",
+                k,
+                v,
+                exc_info=True,
+            )
             continue
         if key > 0 and val > 0:
             out[key] = val
@@ -378,6 +394,11 @@ def build_redis_snapshot_writer(config_path: str) -> Optional[RedisSnapshotWrite
         with open(config_path, "r", encoding="utf-8") as f:
             cfg = json.load(f)
     except Exception:
+        logging.debug(
+            "REDIS_SNAP_CONFIG_LOAD_FAIL config_path=%r",
+            config_path,
+            exc_info=True,
+        )
         return None
 
     if redis_lib is None:
@@ -388,8 +409,12 @@ def build_redis_snapshot_writer(config_path: str) -> Optional[RedisSnapshotWrite
         return None
 
     raw = cfg.get("redis")
-    ttl_by_tf_s = _parse_int_map(raw.get("ttl_by_tf_s")) if isinstance(raw, dict) else {}
-    tail_n_by_tf_s = _parse_int_map(raw.get("tail_n_by_tf_s")) if isinstance(raw, dict) else {}
+    ttl_by_tf_s = (
+        _parse_int_map(raw.get("ttl_by_tf_s")) if isinstance(raw, dict) else {}
+    )
+    tail_n_by_tf_s = (
+        _parse_int_map(raw.get("tail_n_by_tf_s")) if isinstance(raw, dict) else {}
+    )
 
     cache_key = f"{spec.host}:{spec.port}:{spec.db}:{spec.namespace}"
     cached = _WRITER_CACHE.get(cache_key)
@@ -457,8 +482,12 @@ def init_redis_snapshot(config_path: str, log_detail: bool = True) -> bool:
         return False
 
     raw = cfg.get("redis")
-    ttl_by_tf_s = _parse_int_map(raw.get("ttl_by_tf_s")) if isinstance(raw, dict) else {}
-    tail_n_by_tf_s = _parse_int_map(raw.get("tail_n_by_tf_s")) if isinstance(raw, dict) else {}
+    ttl_by_tf_s = (
+        _parse_int_map(raw.get("ttl_by_tf_s")) if isinstance(raw, dict) else {}
+    )
+    tail_n_by_tf_s = (
+        _parse_int_map(raw.get("tail_n_by_tf_s")) if isinstance(raw, dict) else {}
+    )
 
     if log_detail:
         logging.debug(

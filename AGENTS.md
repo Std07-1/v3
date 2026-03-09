@@ -27,9 +27,10 @@
 - Потік B (мульти-символьна активація) — **відкладено** через integrity derived TF (див. ADR-0025)
 - Всі результати audit/rebuild зафіксовані в [docs/adr/0025-potik-b-data-quality-summary.md](docs/adr/0025-potik-b-data-quality-summary.md)
 - Потік B закритий, фокус на XAU/USD та SMC engine (Потік C)
-- SMC Engine **Implemented** (ADR-0024): E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a, 431+ тестів
+- SMC Engine **Implemented** (ADR-0024): E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a, 491+ тестів
 - Elimination Engine + Confluence Scoring (ADR-0028, ADR-0029): display budget, 8-factor grade
 - TF Sovereignty + Bias Banner (ADR-0030-alt, ADR-0031): cross-TF projection, multi-TF bias display
+- Sessions & Killzones **Implemented** (ADR-0035): Asia/London/NY session H/L levels, killzone context, F9 sweep confluence, narrative session integration, 40 tests
 - Client-Side Replay (ADR-0027): TradingView-style replay з data_v3/
 - Для майбутньої активації інших символів потрібен окремий audit/fix integrity derived TF
 
@@ -57,39 +58,24 @@
 
 ### 1.3 Ролі агента (Role Routing)
 
-Агент обирає роль **автоматично** за контекстом запиту. Якщо контекст неоднозначний — за замовчуванням `R_PATCH_MASTER`. Користувач може активувати роль явно: `"Ти R_<ID>"`.
+Source of truth: .github/copilot-instructions.md
+Mirror mode: index-only
+Do not redefine triggers or precedence here.
 
-| ID | Роль | Файл специфікації | Коли активувати |
-|---|---|---|---|
-| `R_PATCH_MASTER` | **Patch Master** | `.github/role_spec_patch_master_v1.md` | **Default.** Фікс бага, патч коду, зміна поведінки, refactoring slice. Будь-яка зміна коду/конфігу. |
-| `R_BUG_HUNTER` | **Bug Hunter** | `.github/role_spec_bug_hunter_v2.md` | Аудит модуля/файлу, пошук прихованих дефектів, code review, "знайди баги в X". Без зміни коду — тільки аналіз + severity + evidence. |
-| `R_SMC_CHIEF` | **SMC Chief Strategist** | `.github/role_spec_smc_chief_strategist_v1.md` | Будь-що про SMC engine: зони, свінги, OB/FVG, liquidity, рендер overlays, Clean Chart Doctrine, UI/UX торгової аналітики. |
-| `R_DOC_KEEPER` | **Doc Keeper** | `.github/role_spec_doc_keeper_v1.md` | Оновлення документації, синхронізація docs з реальністю, AUDIT→SYNC→VERIFY цикл, drift detection. |
-| `R_TRADER` | **SMC Trader** | `.github/role_spec_trader_v1.md` | Валідація SMC output з позиції трейдера: оцінка сетапів, grade challenge, chart audit, "чи можу я з цього торгувати?". Не пише код — дає actionable feedback. |
-| `R_CHART_UX` | **Chart Experience Craftsman** | `.github/role_spec_chart_ux_v1.md` | Візуальна якість canvas rendering, DPR, анімації, теми, micro-interactions, WCAG contrast. DevOps: build pipeline, supervisor, process lifecycle, DX. |
-| `R_ARCHITECT` | **Systems Architect** | `.github/role_spec_architect_v1.md` | Системний дизайн, ADR authoring, trade-off аналіз, P-slice planning, масштабування, release, cross-role coordination. Первинний автор усіх ADR. |
-| `R_COMPLIANCE` | **Compliance & Safety Officer** | `.github/role_spec_compliance_v1.md` | Ліцензії залежностей, OWASP/CVE аудит, secrets management, disclaimers, фінансове регулювання, data protection, technology lifecycle (EOL). Cross-cutting compliance gate. |
+AGENTS.md §1.3 тримає лише компактний індекс ролей для discovery/navigation.
+Повні routing rules, trigger vocabulary і precedence живуть у `.github/copilot-instructions.md` → `РІВЕНЬ 0 — РОЛІ АГЕНТА`.
+CI gate звіряє ID→spec mapping і не дозволяє drift.
 
-**Правила роутингу:**
-
-1. **Один запит = одна роль.** Не змішувати ролі в одній відповіді.
-2. **Preflight**: перед початком роботи агент читає повну специфікацію ролі з `.github/role_spec_*.md`.
-3. **Явна активація має пріоритет** над автоматичним роутингом.
-4. **Якщо запит перетинає межі ролей** (наприклад, "знайди баг і зафіксь") — спочатку `R_BUG_HUNTER` (аналіз), потім `R_PATCH_MASTER` (фікс).
-5. **Інваріанти I0–I6 діють у всіх ролях.** Жодна роль не може їх послабити.
-
-**Автоматичні тригери:**
-
-| Сигнал у запиті | Роль |
-|---|---|
-| "фікс", "виправ", "патч", "зміни", "додай", "побудуй" | `R_PATCH_MASTER` |
-| "аудит", "review", "знайди баги", "перевір", "що не так" | `R_BUG_HUNTER` |
-| "SMC", "зони", "свінги", "OB", "FVG", "overlay", "рівні", "Clean Chart" | `R_SMC_CHIEF` |
-| "документація", "оновити docs", "синхронізувати", "drift", "AGENTS.md" | `R_DOC_KEEPER` |
-| "оціни сетап", "чи це A+?", "торгувати чи ні?", "grade challenge", "що бачить трейдер?", "chart audit" | `R_TRADER` |
-| "як виглядає?", "canvas", "рендер", "тема", "анімація", "DPR", "лагає", "build", "deploy", "запуск", "supervisor" | `R_CHART_UX` |
-| "ADR", "архітектура", "дизайн системи", "масштаб", "альтернативи?", "trade-off", "які варіанти?", "спроектуй", "release" | `R_ARCHITECT` |
-| "ліцензія", "license", "security", "OWASP", "CVE", "compliance", "disclaimer", "безпека", "секрети", "secrets", "legal", "GDPR", "ToS" | `R_COMPLIANCE` |
+| ID | Роль | Файл |
+|---|---|---|
+| `R_PATCH_MASTER` | **Patch Master** | `.github/role_spec_patch_master_v1.md` |
+| `R_BUG_HUNTER` | **Bug Hunter** | `.github/role_spec_bug_hunter_v2.md` |
+| `R_SMC_CHIEF` | **SMC Chief Strategist** | `.github/role_spec_smc_chief_strategist_v1.md` |
+| `R_DOC_KEEPER` | **Doc Keeper** | `.github/role_spec_doc_keeper_v1.md` |
+| `R_TRADER` | **SMC Trader** | `.github/role_spec_trader_v1.md` |
+| `R_CHART_UX` | **Chart Experience Product Designer** | `.github/role_spec_chart_ux_v1.md` |
+| `R_ARCHITECT` | **Systems Architect** | `.github/role_spec_architect_v1.md` |
+| `R_COMPLIANCE` | **Compliance & Safety Officer** | `.github/role_spec_compliance_v1.md` |
 
 ---
 
@@ -119,6 +105,7 @@ v3/
 │       ├── key_levels.py  # detect_key_levels() — PDH/PDL/DH/DL (ADR-0024b)
 │       ├── confluence.py  # confluence scoring — 8-factor grade A+/A/B/C (ADR-0029)
 │       ├── momentum.py    # displacement detection — body/ATR ratio
+│       ├── sessions.py    # session H/L, killzones, classify (ADR-0035)
 │       ├── context_stack.py # ContextStack — cross-TF zone aggregation
 │       └── engine.py      # SmcEngine orchestrator + zone lifecycle
 │
@@ -172,7 +159,7 @@ v3/
 │   ├── repair/            # htf_rebuild, htf_tail_sync
 │   └── diag/              # classify gaps, clear redis, disk_max_open_ms
 │
-├── tests/                 # 37 файлів, 431+ тестів
+├── tests/                 # 40 файлів, 491+ тестів
 │   ├── test_smc_*.py      # SMC tests (e1, e2, runner, key_levels, n1_lifecycle, d1_display, confluence)
 │   ├── test_derive_*.py   # Derivation tests
 │   ├── test_uds_*.py      # UDS tests (split-brain, partial penalty)
@@ -298,6 +285,7 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 | `test_smc_key_levels.py` | SMC key levels: PDH/PDL/DH/DL |
 | `test_smc_n1_lifecycle.py` | SMC N1: zone lifecycle (merge/evict/decay) |
 | `test_smc_confluence.py` | SMC confluence scoring: 8 factors, grade (ADR-0029) |
+| `test_smc_sessions.py` | SMC sessions: session H/L, killzones, F9 sweep (ADR-0035) |
 | `test_d1_derive.py` | D1 derive from M1 (ADR-0023) |
 | `test_candle_map.py` | bar→Candle mapping (R2 closure) |
 
@@ -454,7 +442,9 @@ REDIS_PORT=6379
 - ADR-0029: OB Confluence Scoring + Grade System
 - ADR-0030-alt: TF Sovereignty — Cross-TF Projection Styling
 - ADR-0031: Bias Banner — Multi-TF Trend Bias Display
-- ... (35 ADR total, see `docs/adr/index.md`)
+- ADR-0033: Context Flow — Multi-TF Narrative Engine
+- ADR-0035: Sessions & Killzones — Trading Session Awareness
+- ... (36 ADR total, see `docs/adr/index.md`)
 
 ---
 

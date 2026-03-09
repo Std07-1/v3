@@ -7,6 +7,7 @@ N3: synthesize_narrative() НІКОЛИ не повертає None — fallback 
 N5: market_phase display-only, не впливає на mode.
 N6: alignment = D1+H4 only.
 """
+
 from __future__ import annotations
 
 import logging
@@ -26,9 +27,9 @@ logger = logging.getLogger(__name__)
 # ── Headlines (ADR-0033 §3.2) ──────────────────────────────
 
 _MODE_HEADLINES = {
-    ("trade", "aligned", "long"):  "\U0001f7e2 BUY setup ready",
+    ("trade", "aligned", "long"): "\U0001f7e2 BUY setup ready",
     ("trade", "aligned", "short"): "\U0001f534 SELL setup ready",
-    ("trade", "reduced", "long"):  "\U0001f7e2 BUY \u2014 reduced: mixed HTF",
+    ("trade", "reduced", "long"): "\U0001f7e2 BUY \u2014 reduced: mixed HTF",
     ("trade", "reduced", "short"): "\U0001f534 SELL \u2014 reduced: mixed HTF",
 }
 _WAIT_HEADLINE = "\U0001f7e1 No setup \u2014 wait"
@@ -37,8 +38,14 @@ _DEGRADED_HEADLINE = "\u26a0 Narrative unavailable"
 # ── TF labels ───────────────────────────────────────────────
 
 _TF_LABELS = {
-    60: "M1", 180: "M3", 300: "M5", 900: "M15",
-    1800: "M30", 3600: "H1", 14400: "H4", 86400: "D1",
+    60: "M1",
+    180: "M3",
+    300: "M5",
+    900: "M15",
+    1800: "M30",
+    3600: "H1",
+    14400: "H4",
+    86400: "D1",
 }
 
 
@@ -48,6 +55,7 @@ def _tf_to_label(tf_s):
 
 
 # ── Fallback (N3 / BH-8) ───────────────────────────────────
+
 
 def _fallback_narrative_block(warnings=None):
     # type: (Optional[List[str]]) -> NarrativeBlock
@@ -65,6 +73,7 @@ def _fallback_narrative_block(warnings=None):
 
 
 # ── HTF Alignment (SC-4: D1+H4 only, N6) ──────────────────
+
 
 def _resolve_htf_alignment(bias_map):
     # type: (Dict[str, str]) -> Tuple[str, Optional[str]]
@@ -84,12 +93,14 @@ def _resolve_htf_alignment(bias_map):
 
 # ── Zone direction ──────────────────────────────────────────
 
+
 def _zone_direction(zone):
     # type: (SmcZone) -> str
     return "short" if "bear" in zone.kind else "long"
 
 
 # ── Invalidation (SC-7 / BH-1) ─────────────────────────────
+
 
 def _find_invalidation(zone):
     # type: (SmcZone) -> str
@@ -107,6 +118,7 @@ def _is_invalidated(zone, current_price):
 
 # ── Entry description ───────────────────────────────────────
 
+
 def _format_entry(zone, grade_info):
     # type: (SmcZone, dict) -> str
     arrow = "\u25bc" if "bear" in zone.kind else "\u25b2"
@@ -114,18 +126,24 @@ def _format_entry(zone, grade_info):
     score = grade_info.get("score", 0)
     kind_short = "OB" if "ob" in zone.kind else "FVG"
     return "{kind}{arrow} {grade}({score}) {low:.0f}\u2013{high:.0f}".format(
-        kind=kind_short, arrow=arrow, grade=grade, score=score,
-        low=zone.low, high=zone.high,
+        kind=kind_short,
+        arrow=arrow,
+        grade=grade,
+        score=score,
+        low=zone.low,
+        high=zone.high,
     )
 
 
 # ── Trigger Resolution (T-2: 4 IOFED states) ───────────────
 
+
 def _has_structure_aligned(snapshot, zone, viewer_tf_s):
     # type: (SmcSnapshot, SmcZone, int) -> bool
     """Check if recent structure break (CHoCH/BOS) aligns with zone direction."""
     target_kinds = (
-        ("choch_bear", "bos_bear") if "bear" in zone.kind
+        ("choch_bear", "bos_bear")
+        if "bear" in zone.kind
         else ("choch_bull", "bos_bull")
     )
     for sw in reversed(snapshot.swings):
@@ -158,10 +176,10 @@ def _resolve_trigger_desc(snapshot, zone, viewer_tf_s, current_price, atr):
         return "Ready: structure confirmed in zone"
     elif state == "triggered":
         return "Triggered: {tf} ChoCH{a} \u2014 seek entry OB".format(
-            tf=tf_label, a=direction_arrow)
+            tf=tf_label, a=direction_arrow
+        )
     elif state == "in_zone":
-        return "In zone: wait {tf} ChoCH{a}".format(
-            tf=tf_label, a=direction_arrow)
+        return "In zone: wait {tf} ChoCH{a}".format(tf=tf_label, a=direction_arrow)
     # approaching
     edge = zone.high if "bear" in zone.kind else zone.low
     dist = abs(current_price - edge)
@@ -169,6 +187,7 @@ def _resolve_trigger_desc(snapshot, zone, viewer_tf_s, current_price, atr):
 
 
 # ── Target Resolution ───────────────────────────────────────
+
 
 def _find_target(snapshot, zone, direction, config):
     # type: (SmcSnapshot, SmcZone, str, dict) -> Optional[str]
@@ -188,21 +207,26 @@ def _find_target(snapshot, zone, direction, config):
         z_dir = _zone_direction(z)
         if z_dir != direction and z.context_layer == "institutional":
             return "HTF {kind} {low:.0f}\u2013{high:.0f}".format(
-                kind=z.kind.split("_")[0].upper(), low=z.low, high=z.high)
+                kind=z.kind.split("_")[0].upper(), low=z.low, high=z.high
+            )
 
     # Priority 3: Recent swing extreme
     target_swing = _find_target_swing(snapshot.swings, direction)
     if target_swing:
         return "Recent {kind} {price:.0f}".format(
-            kind=target_swing.kind.upper(), price=target_swing.price)
+            kind=target_swing.kind.upper(), price=target_swing.price
+        )
 
     return None
 
 
 def _find_target_key_level(levels, direction):
     # type: (List[SmcLevel], str) -> Optional[SmcLevel]
-    target_kinds_short = {"pdl", "dl", "p_h4_l", "h4_l", "p_h1_l", "h1_l"} if direction == "short" else {
-        "pdh", "dh", "p_h4_h", "h4_h", "p_h1_h", "h1_h"}
+    target_kinds_short = (
+        {"pdl", "dl", "p_h4_l", "h4_l", "p_h1_l", "h1_l"}
+        if direction == "short"
+        else {"pdh", "dh", "p_h4_h", "h4_h", "p_h1_h", "h1_h"}
+    )
     for lv in levels:
         if lv.kind in target_kinds_short:
             return lv
@@ -219,6 +243,7 @@ def _find_target_swing(swings, direction):
 
 
 # ── FVG Context (T-5) ───────────────────────────────────────
+
 
 def _build_fvg_context(snapshot, zone, atr, config):
     # type: (SmcSnapshot, Optional[SmcZone], float, dict) -> str
@@ -238,11 +263,16 @@ def _build_fvg_context(snapshot, zone, atr, config):
             mid = (z.low + z.high) / 2.0
             zone_mid = (zone.low + zone.high) / 2.0
             if abs(mid - zone_mid) <= 2.0 * atr:
-                return "FVG gap at {:.0f} \u2014 rebalancing expected before zone".format(mid)
+                return (
+                    "FVG gap at {:.0f} \u2014 rebalancing expected before zone".format(
+                        mid
+                    )
+                )
     return ""
 
 
 # ── Market Phase Detection (SC-1: 3 states + BH-6 hysteresis) ──
+
 
 def _detect_market_phase(swings, config):
     # type: (List[SmcSwing], dict) -> str
@@ -268,6 +298,7 @@ def _detect_market_phase(swings, config):
 
 # ── Bias Summary (T-8) ─────────────────────────────────────
 
+
 def _build_bias_summary(alignment, htf_direction, bias_map, zone):
     # type: (str, Optional[str], Dict[str, str], Optional[SmcZone]) -> str
     if alignment == "no_data":
@@ -278,15 +309,39 @@ def _build_bias_summary(alignment, htf_direction, bias_map, zone):
         d1_arrow = "\u2191" if d1 == "bullish" else "\u2193"
         h4_arrow = "\u2191" if h4 == "bullish" else "\u2193"
         return "D1{d1} but H4{h4} \u2014 mixed: wait or reduce size".format(
-            d1=d1_arrow, h4=h4_arrow)
+            d1=d1_arrow, h4=h4_arrow
+        )
     # aligned
     if zone and "premium" in getattr(zone, "kind", ""):
         return "H4 pullback to premium OB \u2014 expect rejection"
     return "HTF {dir} aligned \u2014 watch for entry structure".format(
-        dir=htf_direction or "")
+        dir=htf_direction or ""
+    )
+
+
+# ── Session Context (ADR-0035 §5.1) ─────────────────────────
+
+_SESSION_LABELS = {
+    "asia": "Asia",
+    "london": "London",
+    "newyork": "New York",
+}
+
+
+def _build_session_context(session_name, in_killzone):
+    # type: (str, bool) -> str
+    label = _SESSION_LABELS.get(
+        session_name, session_name.title() if session_name else ""
+    )
+    if not label:
+        return ""
+    if in_killzone:
+        return "{} KZ active \u2014 high probability".format(label)
+    return "{} session active".format(label)
 
 
 # ── Next Area ───────────────────────────────────────────────
+
 
 def _build_next_area(snapshot, zone_grades):
     # type: (SmcSnapshot, Dict[str, dict]) -> str
@@ -306,34 +361,48 @@ def _build_next_area(snapshot, zone_grades):
     direction = "sell" if "bear" in best.kind else "buy"
     kind_short = "OB" if "ob" in best.kind else "FVG"
     return "{low:.0f} {dir} {kind} ({grade}/{score})".format(
-        low=best.low, dir=direction, kind=kind_short,
-        grade=gi.get("grade", "C"), score=gi.get("score", 0))
+        low=best.low,
+        dir=direction,
+        kind=kind_short,
+        grade=gi.get("grade", "C"),
+        score=gi.get("score", 0),
+    )
 
 
 # ═══════════════════════════════════════════════════════════
 # PUBLIC API
 # ═══════════════════════════════════════════════════════════
 
+
 def synthesize_narrative(
-    snapshot,       # type: SmcSnapshot
-    bias_map,       # type: Dict[str, str]
-    zone_grades,    # type: Dict[str, dict]
-    momentum_map,   # type: Dict[str, dict]
-    viewer_tf_s,    # type: int
+    snapshot,  # type: SmcSnapshot
+    bias_map,  # type: Dict[str, str]
+    zone_grades,  # type: Dict[str, dict]
+    momentum_map,  # type: Dict[str, dict]
+    viewer_tf_s,  # type: int
     current_price,  # type: float
-    atr,            # type: float
-    config,         # type: dict
+    atr,  # type: float
+    config,  # type: dict
+    session_info=None,  # type: Optional[Tuple[str, bool]]
 ):
     # type: (...) -> NarrativeBlock
-    """Synthesize narrative for display (ADR-0033).
+    """Synthesize narrative for display (ADR-0033, ADR-0035).
 
     N0: pure, deterministic.
     N3: NEVER returns None — fallback block з warnings.
+    session_info: (current_session_name, in_killzone) or None.
     """
     try:
         return _synthesize_impl(
-            snapshot, bias_map, zone_grades, momentum_map,
-            viewer_tf_s, current_price, atr, config,
+            snapshot,
+            bias_map,
+            zone_grades,
+            momentum_map,
+            viewer_tf_s,
+            current_price,
+            atr,
+            config,
+            session_info,
         )
     except Exception:
         sym = getattr(snapshot, "symbol", "?")
@@ -342,9 +411,18 @@ def synthesize_narrative(
         return _fallback_narrative_block()
 
 
-def _synthesize_impl(snapshot, bias_map, zone_grades, momentum_map,
-                     viewer_tf_s, current_price, atr, config):
-    # type: (SmcSnapshot, Dict[str, str], Dict[str, dict], Dict[str, dict], int, float, float, dict) -> NarrativeBlock
+def _synthesize_impl(
+    snapshot,
+    bias_map,
+    zone_grades,
+    momentum_map,
+    viewer_tf_s,
+    current_price,
+    atr,
+    config,
+    session_info=None,
+):
+    # type: (SmcSnapshot, Dict[str, str], Dict[str, dict], Dict[str, dict], int, float, float, dict, Optional[Tuple[str, bool]]) -> NarrativeBlock
     warnings = []  # type: List[str]
     min_grade = config.get("trade_min_grade", "A")
     min_score = config.get("trade_min_score", 6)
@@ -355,8 +433,12 @@ def _synthesize_impl(snapshot, bias_map, zone_grades, momentum_map,
 
     # Step 2: Best zones
     candidates = _select_candidate_zones(
-        snapshot.zones, zone_grades, current_price,
-        min_grade, min_score, warnings,
+        snapshot.zones,
+        zone_grades,
+        current_price,
+        min_grade,
+        min_score,
+        warnings,
     )
 
     # Step 2b: Invalidation check (SC-7)
@@ -383,8 +465,7 @@ def _synthesize_impl(snapshot, bias_map, zone_grades, momentum_map,
 
     # Headline
     if mode == "trade":
-        headline = _MODE_HEADLINES.get(
-            (mode, sub_mode, direction), _WAIT_HEADLINE)
+        headline = _MODE_HEADLINES.get((mode, sub_mode, direction), _WAIT_HEADLINE)
     else:
         headline = _WAIT_HEADLINE
 
@@ -399,15 +480,21 @@ def _synthesize_impl(snapshot, bias_map, zone_grades, momentum_map,
             tgt = _find_target(snapshot, z, d, config)
             if tgt is None:
                 warnings.append("no_target_found")
-            scenarios.append(ActiveScenario(
-                zone_id=z.id,
-                direction=d,
-                entry_desc=_format_entry(z, gi),
-                trigger=_resolve_trigger_state(snapshot, z, viewer_tf_s, current_price),
-                trigger_desc=_resolve_trigger_desc(snapshot, z, viewer_tf_s, current_price, atr),
-                target_desc=tgt,
-                invalidation=_find_invalidation(z),
-            ))
+            scenarios.append(
+                ActiveScenario(
+                    zone_id=z.id,
+                    direction=d,
+                    entry_desc=_format_entry(z, gi),
+                    trigger=_resolve_trigger_state(
+                        snapshot, z, viewer_tf_s, current_price
+                    ),
+                    trigger_desc=_resolve_trigger_desc(
+                        snapshot, z, viewer_tf_s, current_price, atr
+                    ),
+                    target_desc=tgt,
+                    invalidation=_find_invalidation(z),
+                )
+            )
             if len(scenarios) >= max_scenarios:
                 break
 
@@ -423,6 +510,21 @@ def _synthesize_impl(snapshot, bias_map, zone_grades, momentum_map,
     # Next area
     next_area = _build_next_area(snapshot, zone_grades)
 
+    # ADR-0035: session context
+    current_session = ""
+    in_killzone = False
+    session_context = ""
+    if session_info:
+        current_session = session_info[0] or ""
+        in_killzone = bool(session_info[1])
+        session_context = _build_session_context(current_session, in_killzone)
+        # Killzone downgrade: if trade mode but NOT in killzone → downgrade sub_mode
+        if mode == "trade" and not in_killzone and current_session:
+            if sub_mode == "aligned":
+                sub_mode = "reduced"
+                warnings.append("outside_killzone")
+                headline = _MODE_HEADLINES.get((mode, sub_mode, direction), headline)
+
     return NarrativeBlock(
         mode=mode,
         sub_mode=sub_mode,
@@ -433,6 +535,9 @@ def _synthesize_impl(snapshot, bias_map, zone_grades, momentum_map,
         fvg_context=fvg_context,
         market_phase=market_phase,
         warnings=warnings,
+        current_session=current_session,
+        in_killzone=in_killzone,
+        session_context=session_context,
     )
 
 
@@ -441,8 +546,9 @@ def _synthesize_impl(snapshot, bias_map, zone_grades, momentum_map,
 _GRADE_ORDER = {"A+": 0, "A": 1, "B": 2, "C": 3}
 
 
-def _select_candidate_zones(zones, zone_grades, current_price,
-                            min_grade, min_score, warnings):
+def _select_candidate_zones(
+    zones, zone_grades, current_price, min_grade, min_score, warnings
+):
     # type: (List[SmcZone], Dict[str, dict], float, str, int, List[str]) -> List[SmcZone]
     """Filter + sort zones by grade/score then proximity."""
     min_grade_idx = _GRADE_ORDER.get(min_grade, 1)
@@ -469,20 +575,23 @@ def _select_candidate_zones(zones, zone_grades, current_price,
 
 # ── Wire serialization (BH-5) ──────────────────────────────
 
+
 def narrative_to_wire(block):
     # type: (NarrativeBlock) -> dict
     """Convert NarrativeBlock to wire dict. S6 compliance."""
     scenarios_wire = []  # type: List[dict]
     for s in block.scenarios:
-        scenarios_wire.append({
-            "zone_id": s.zone_id,
-            "direction": s.direction,
-            "entry_desc": s.entry_desc,
-            "trigger": s.trigger,
-            "trigger_desc": s.trigger_desc,
-            "target_desc": s.target_desc,
-            "invalidation": s.invalidation,
-        })
+        scenarios_wire.append(
+            {
+                "zone_id": s.zone_id,
+                "direction": s.direction,
+                "entry_desc": s.entry_desc,
+                "trigger": s.trigger,
+                "trigger_desc": s.trigger_desc,
+                "target_desc": s.target_desc,
+                "invalidation": s.invalidation,
+            }
+        )
     return {
         "mode": block.mode,
         "sub_mode": block.sub_mode,
@@ -493,4 +602,7 @@ def narrative_to_wire(block):
         "fvg_context": block.fvg_context,
         "market_phase": block.market_phase,
         "warnings": block.warnings,
+        "current_session": block.current_session,
+        "in_killzone": block.in_killzone,
+        "session_context": block.session_context,
     }

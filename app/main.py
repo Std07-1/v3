@@ -56,6 +56,7 @@ def _python_for(module: str) -> str:
             logging.info("BROKER_PYTHON path=%s source=config", broker_py)
             return broker_py
     except Exception:
+        logging.debug("BROKER_PYTHON_CONFIG_READ_FAIL", exc_info=True)
         pass
     # Fallback: спробувати стандартний шлях
     if os.name == "nt":
@@ -194,11 +195,17 @@ def _pump_to_file(stream: TextIO, file_handle: TextIO, prefix: str) -> None:
                 file_handle.write(f"{prefix}{line}")
                 file_handle.flush()
             except Exception:
+                logging.debug(
+                    "PUMP_TO_FILE_WRITE_FAIL prefix=%s", prefix, exc_info=True
+                )
                 pass
     finally:
         try:
             stream.close()
         except Exception:
+            logging.debug(
+                "PUMP_TO_FILE_STREAM_CLOSE_FAIL prefix=%s", prefix, exc_info=True
+            )
             pass
 
 
@@ -251,6 +258,9 @@ def _start_process(
         log_dir.mkdir(parents=True, exist_ok=True)
         out_path = log_dir / f"{label}.out.log"
         err_path = log_dir / f"{label}.err.log"
+        # D3: ротація перед відкриттям
+        _rotate_log_if_needed(out_path)
+        _rotate_log_if_needed(err_path)
         out_f = out_path.open("a", encoding="utf-8", buffering=1)
         err_f = err_path.open("a", encoding="utf-8", buffering=1)
         # Windows: direct file redirect через Popen не працює надійно з text=True.
@@ -328,6 +338,9 @@ def _wait_for_prime_ready(config_path: str, timeout_s: int = 30) -> bool:
         try:
             timeout_s = max(1, int(cfg_timeout))
         except (ValueError, TypeError):
+            logging.debug(
+                "PRIME_READY_TIMEOUT_PARSE_FAILED raw=%r", cfg_timeout, exc_info=True
+            )
             pass
 
     spec = resolve_redis_spec(cfg, role="prime_wait", log=False)
@@ -370,6 +383,12 @@ def _wait_for_prime_ready(config_path: str, timeout_s: int = 30) -> bool:
             except Exception as exc:
                 if not warned:
                     logging.warning("PRIME_READY_WAIT_ERROR err=%s", exc)
+                    logging.debug(
+                        "PRIME_READY_WAIT_EXCEPTION component=%s key=%s",
+                        component,
+                        key,
+                        exc_info=True,
+                    )
                     warned = True
         if len(ready_components) == len(keys):
             logging.info(
@@ -409,7 +428,76 @@ def _terminate(item: ChildProcess, timeout_s: int = 5) -> None:
         try:
             handle.close()
         except Exception:
+            logging.debug(
+                "PROCESS_HANDLE_CLOSE_FAILED label=%s", item.label, exc_info=True
+            )
             pass
+
+
+# ---------------------------------------------------------------------------
+# D2: Redis preflight ping — fail-fast перед стартом workers
+# ---------------------------------------------------------------------------
+def _redis_preflight(config_path: str) -> bool:
+    """Перевіряє доступність Redis перед запуском workers.
+
+    Повертає True якщо Redis OK або вимкнений.
+    False + ERROR лог якщо Redis недоступний.
+    """
+    if redis_lib is None:
+        return True  # redis package не встановлено — skip
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        logging.debug(
+            "REDIS_PREFLIGHT_CONFIG_READ_FAILED path=%s", config_path, exc_info=True
+        )
+        return True  # не можемо прочитати config — не блокуємо
+    spec = resolve_redis_spec(cfg, role="preflight", log=False)
+    if spec is None:
+        return True  # Redis вимкнений у конфіг — OK
+    try:
+        client = redis_lib.Redis(
+            host=spec.host,
+            port=spec.port,
+            db=spec.db,
+            socket_timeout=2.0,
+            socket_connect_timeout=2.0,
+        )
+        client.ping()
+        logging.info(
+            "REDIS_PREFLIGHT_OK host=%s port=%s db=%s", spec.host, spec.port, spec.db
+        )
+        return True
+    except Exception as exc:
+        logging.error(
+            "REDIS_PREFLIGHT_FAIL host=%s port=%s db=%s err=%s — "
+            "Redis недоступний. Запустіть redis-server перед стартом.",
+            spec.host,
+            spec.port,
+            spec.db,
+            exc,
+        )
+        return False
+
+
+# ---------------------------------------------------------------------------
+# D3: Log rotation — обмеження розміру лог-файлів
+# ---------------------------------------------------------------------------
+_LOG_MAX_BYTES = 50 * 1024 * 1024  # 50 MB
+
+
+def _rotate_log_if_needed(log_path: Path) -> None:
+    """Ротація: якщо файл > _LOG_MAX_BYTES — перейменувати в .prev.log."""
+    try:
+        if log_path.exists() and log_path.stat().st_size > _LOG_MAX_BYTES:
+            prev = log_path.with_suffix(".prev.log")
+            if prev.exists():
+                prev.unlink()
+            log_path.rename(prev)
+            logging.info("LOG_ROTATED path=%s", log_path)
+    except Exception as exc:
+        logging.warning("LOG_ROTATE_FAIL path=%s err=%s", log_path, exc)
 
 
 def main() -> int:
@@ -427,6 +515,11 @@ def main() -> int:
     log_dir = Path(args.log_dir)
 
     logging.info("Supervisor: mode=%s stdio=%s", args.mode, stdio)
+
+    # D2: Redis preflight — fail-fast перед workers
+    config_path_pf = pick_config_path()
+    if not _redis_preflight(config_path_pf):
+        return 3
 
     report = load_env_secrets()
     if report.loaded:
@@ -589,6 +682,9 @@ def main() -> int:
                     _ws_cfg = json.load(_f).get("ws_server", {})
                     _ws_enabled = bool(_ws_cfg.get("enabled", False))
             except Exception:
+                logging.warning(
+                    "WS_SERVER_CONFIG_READ_FAIL path=%s", config_path_ws, exc_info=True
+                )
                 pass
             if _ws_enabled:
                 extra_env_ws = {"V3_REPLAY_MODE": "1"} if args.mode == "replay" else {}

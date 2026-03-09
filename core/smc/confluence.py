@@ -1,12 +1,12 @@
 """
-core/smc/confluence.py — OB Confluence Scoring (ADR-0029).
+core/smc/confluence.py — OB Confluence Scoring (ADR-0029, ADR-0035).
 
 Pure function, zero I/O. S0/S2/S5 compliant.
 
-8 factors (max 11 pts):
+9 factors (max 13 pts):
   F1 sweep +2, F2 fvg_after +2, F3 htf_align +2,
   F4 extremum +1, F5 impulse +1, F6 pd_align +1,
-  F7 structure +1, F8 tf_sig +1
+  F7 structure +1, F8 tf_sig +1, F9 session_sweep +2
 
 Grade: A+ >= 8, A >= 6, B >= 4, C < 4 (configurable).
 """
@@ -161,6 +161,63 @@ def _check_tf_significance(tf_s):
     return 1 if tf_s >= 14400 else 0
 
 
+def _check_session_sweep(zone, levels, config):
+    # type: (dict, list, dict) -> int
+    """F9: OB знаходиться біля session H/L що було swept (ADR-0035 §4.1).
+
+    Tri-state: 0 = no session sweep, 1 = nearby session level, 2 = wick sweep.
+    Session levels: as_h/l, lon_h/l, ny_h/l + prev variants.
+    """
+    _SESSION_KINDS = frozenset(
+        {
+            "as_h",
+            "as_l",
+            "p_as_h",
+            "p_as_l",
+            "lon_h",
+            "lon_l",
+            "p_lon_h",
+            "p_lon_l",
+            "ny_h",
+            "ny_l",
+            "p_ny_h",
+            "p_ny_l",
+        }
+    )
+    sweep_body_ok = config.get("sweep_body_ok", False)
+    if not levels:
+        return 0
+
+    zone_high = zone.get("high", 0)
+    zone_low = zone.get("low", 0)
+    if zone_high <= 0:
+        return 0
+    zone_range = zone_high - zone_low if zone_high > zone_low else 1.0
+    # Proximity threshold: 50% of zone range
+    proximity = zone_range * 0.5
+
+    is_bull = zone.get("kind", "").startswith("ob_bull")
+
+    for lv in levels:
+        kind = lv.get("kind", "")
+        if kind not in _SESSION_KINDS:
+            continue
+        price = lv.get("price", 0)
+        if price <= 0:
+            continue
+
+        # Bull OB near session low, Bear OB near session high
+        is_low_level = kind.endswith("_l")
+        if is_bull and is_low_level:
+            if abs(zone_low - price) <= proximity:
+                return 2 if not sweep_body_ok else 1
+        elif not is_bull and not is_low_level:
+            if abs(zone_high - price) <= proximity:
+                return 2 if not sweep_body_ok else 1
+
+    return 0
+
+
 def _score_to_grade(score, config):
     # type: (int, dict) -> str
     gt = config.get("grade_thresholds", {})
@@ -184,11 +241,13 @@ def score_zone_confluence(
     current_price,
     tf_s,
     config,
+    session_levels=None,
 ):
-    # type: (dict, list, list, list, list, list, float, float, int, dict) -> dict
+    # type: (dict, list, list, list, list, list, float, float, int, dict, ...) -> dict
     """Score OB zone confluence. Returns {'score': int, 'grade': str, 'factors': list}.
 
     Non-OB zones → {'score': 0, 'grade': 'C', 'factors': []}.
+    session_levels: list of session level dicts (kind, price) for F9.
     """
     if not zone.get("kind", "").startswith("ob_"):
         return {"score": 0, "grade": "C", "factors": []}
@@ -202,6 +261,7 @@ def score_zone_confluence(
         ("pd_align", _check_premium_discount, (zone, current_price, swings)),
         ("structure", _check_structure, (zone, structure)),
         ("tf_sig", _check_tf_significance, (tf_s,)),
+        ("session_sweep", _check_session_sweep, (zone, session_levels or [], config)),
     ]
     factors = []
     score = 0

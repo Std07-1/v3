@@ -116,7 +116,9 @@ class FxcmHistoryProvider:
         finally:
             self._fx = None
 
-    def is_market_open(self, symbol: str, now_ms: int, calendar: MarketCalendar) -> bool:
+    def is_market_open(
+        self, symbol: str, now_ms: int, calendar: MarketCalendar
+    ) -> bool:
         _ = symbol
         return calendar.is_trading_minute(now_ms)
 
@@ -216,6 +218,9 @@ def normalize_history_to_bars(
     try:
         rows = list(history_rows)
     except Exception:
+        logging.debug(
+            "FXCM_HISTORY_ROWS_COERCE_FAILED tf_s=%s src=%s", tf_s, src, exc_info=True
+        )
         rows = []
 
     for r in rows:
@@ -255,6 +260,14 @@ def normalize_history_to_bars(
                             ok = True
                             break
                         except ValueError:
+                            logging.debug(
+                                "FXCM_HISTORY_ALT_ANCHOR_INVALID symbol=%s tf_s=%s open_ms=%s alt=%s",
+                                b.symbol,
+                                b.tf_s,
+                                b.open_time_ms,
+                                alt,
+                                exc_info=True,
+                            )
                             continue
                     if not ok:
                         raise e
@@ -288,6 +301,7 @@ def extract_open_time_ms(row: Any) -> int:
         try:
             val = row[k]  # numpy.void / dict-подібні
         except Exception:
+            logging.debug("FXCM_OPEN_TIME_KEY_MISS key=%s", k, exc_info=True)
             continue
 
         if val is None:
@@ -329,6 +343,9 @@ def extract_open_time_ms(row: Any) -> int:
                     d = d.replace(tzinfo=dt.timezone.utc)
                 return utc_dt_to_ms(d.astimezone(dt.timezone.utc))
             except Exception:
+                logging.debug(
+                    "FXCM_OPEN_TIME_ISO_PARSE_FAILED raw=%r", val, exc_info=True
+                )
                 continue
 
     raise ValueError("history_row_missing_datetime")
@@ -350,6 +367,14 @@ def extract_ohlc(row: Any) -> Tuple[float, float, float, float]:
             cl = float(row[d])
             return o, h, low, cl
         except Exception:
+            logging.debug(
+                "FXCM_OHLC_EXTRACT_FAILED keys=%s/%s/%s/%s",
+                a,
+                b,
+                c,
+                d,
+                exc_info=True,
+            )
             continue
     raise ValueError("history_row_missing_ohlc")
 
@@ -363,5 +388,6 @@ def extract_volume(row: Any) -> float:
                 continue
             return float(val)
         except Exception:
+            logging.debug("FXCM_VOLUME_EXTRACT_FAILED key=%s", k, exc_info=True)
             continue
     return 0.0

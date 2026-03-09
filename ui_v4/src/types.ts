@@ -95,7 +95,7 @@ export interface ActiveScenario {
   invalidation: string;
 }
 
-/** ADR-0033: повний narrative block для одного symbol+viewer_tf. */
+/** ADR-0033 + ADR-0035: повний narrative block для одного symbol+viewer_tf. */
 export interface NarrativeBlock {
   mode: 'trade' | 'wait';
   sub_mode: 'aligned' | 'reduced' | '';
@@ -106,6 +106,10 @@ export interface NarrativeBlock {
   fvg_context: string;            // "" if none
   market_phase: 'trending_up' | 'trending_down' | 'ranging';
   warnings: string[];             // degraded signals (BH-4/BH-8)
+  // ADR-0035: session context
+  current_session?: string;       // "london" | "newyork" | "asia" | ""
+  in_killzone?: boolean;          // true if inside killzone window
+  session_context?: string;       // "London KZ active — high probability"
 }
 
 // -------------------- Drawings --------------------
@@ -135,11 +139,12 @@ export type UiWarningCode =
   | 'drawing_coord_null'
   | 'drawing_state_inconsistent'
   | 'stale_frame'
-  | 'schema_mismatch';
+  | 'schema_mismatch'
+  | 'server_error';
 
 export interface UiWarning {
   code: UiWarningCode;
-  kind: 'overlay' | 'drawing' | 'router' | 'action';
+  kind: 'overlay' | 'drawing' | 'router' | 'action' | 'ws';
   id: string;
   details: string;
 }
@@ -152,7 +157,9 @@ export type FrameType =
   | 'drawing_ack'
   | 'replay'
   | 'heartbeat'
-  | 'warming';
+  | 'warming'
+  | 'config'
+  | 'error';
 
 export interface RenderFrame {
   type: 'render_frame';
@@ -175,8 +182,10 @@ export interface RenderFrame {
   bias_map?: Record<string, string>;
   /** Momentum: per-TF directional displacement (full frame only) */
   momentum_map?: Record<string, { b: number; r: number }>;
-  /** ADR-0033: narrative block (full frame only, N4: not in delta) */
+  /** ADR-0033+ADR-0035: narrative block (full frame + delta on complete bars) */
   narrative?: NarrativeBlock;
+  /** ADR-0035: refreshed session levels in delta (full-replace session kinds) */
+  session_levels?: SmcLevel[];
   drawings?: Drawing[];
 
   replay?: {

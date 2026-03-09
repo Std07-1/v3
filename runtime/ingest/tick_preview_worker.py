@@ -31,8 +31,8 @@ class _M1toM3Buffer:
 
     def __init__(self):
         # type: () -> None
-        self._completed = {}   # type: Dict[str, list]  # symbol -> list[CandleBar]
-        self._current = {}     # type: Dict[str, CandleBar]  # symbol -> CandleBar
+        self._completed = {}  # type: Dict[str, list]  # symbol -> list[CandleBar]
+        self._current = {}  # type: Dict[str, CandleBar]  # symbol -> CandleBar
 
     def update(self, symbol, m1_bar):
         # type: (str, CandleBar) -> Optional[CandleBar]
@@ -71,6 +71,7 @@ class _M1toM3Buffer:
             extensions={"m1_count": len(all_bars)},
         )
 
+
 try:
     import redis as redis_lib  # type: ignore
 except Exception:
@@ -95,23 +96,24 @@ def _setup_logging(verbose: bool = False) -> None:
     )
 
 
-
-
-
 def _parse_preview_cfg(cfg: dict[str, Any]) -> PreviewConfig:
     enabled = bool(cfg.get("preview_tick_enabled", False))
     raw_tfs = cfg.get("preview_tick_tfs_s", [60, 180])
+    raw_curr_ttl_s = cfg.get("preview_curr_ttl_s")
     tfs: list[int] = []
     if isinstance(raw_tfs, list):
         for item in raw_tfs:
             try:
                 tf_s = int(item)
             except Exception:
+                logging.debug(
+                    "PREVIEW_CFG_TF_PARSE_FAILED item=%r", item, exc_info=True
+                )
                 continue
             if tf_s > 0:
                 tfs.append(tf_s)
     publish_min_interval_ms = int(cfg.get("preview_tick_publish_min_interval_ms", 250))
-    curr_ttl_s = int(cfg.get("preview_curr_ttl_s")) if cfg.get("preview_curr_ttl_s") is not None else None
+    curr_ttl_s = int(raw_curr_ttl_s) if raw_curr_ttl_s is not None else None
     symbols_raw = cfg.get("preview_tick_symbols")
     symbols: list[str] = []
     if isinstance(symbols_raw, list):
@@ -127,15 +129,13 @@ def _parse_preview_cfg(cfg: dict[str, Any]) -> PreviewConfig:
     )
 
 
-
-
-
 def _pick_price(payload: dict[str, Any]) -> Optional[float]:
     mid = payload.get("mid")
     if mid is not None:
         try:
             return float(mid)
         except Exception:
+            logging.debug("PICK_PRICE_MID_PARSE_FAILED mid=%r", mid, exc_info=True)
             return None
     bid = payload.get("bid")
     ask = payload.get("ask")
@@ -144,6 +144,12 @@ def _pick_price(payload: dict[str, Any]) -> Optional[float]:
     try:
         return (float(bid) + float(ask)) / 2.0
     except Exception:
+        logging.debug(
+            "PICK_PRICE_BID_ASK_PARSE_FAILED bid=%r ask=%r",
+            bid,
+            ask,
+            exc_info=True,
+        )
         return None
 
 
@@ -170,7 +176,9 @@ class TickPreviewWorker:
         self._uds = uds
         self._tfs = [int(x) for x in tfs if int(x) > 0]
         self._publish_min_interval_ms = max(0, int(publish_min_interval_ms))
-        self._curr_ttl_s: Optional[int] = max(1, int(curr_ttl_s)) if curr_ttl_s is not None else None
+        self._curr_ttl_s: Optional[int] = (
+            max(1, int(curr_ttl_s)) if curr_ttl_s is not None else None
+        )
         self._channel = str(channel)
         self._auto_promote_m1 = bool(auto_promote_m1)
         # M3 деривація: M1 агрегуємо з тиків, M3 — з M1
@@ -223,7 +231,7 @@ class TickPreviewWorker:
             self._zero_ticks_warned = False
         if not self._stats:
             return
-        payload = dict(self._stats)
+        payload: Dict[str, Any] = dict(self._stats)
         self._stats.clear()
         # S2: merge tick_agg stats + degraded-but-loud при зростанні drops
         agg_stats = self._agg.stats()
@@ -300,6 +308,9 @@ class TickPreviewWorker:
             try:
                 version = int(version)
             except Exception:
+                logging.debug(
+                    "TICK_VERSION_PARSE_FAILED raw=%r", version, exc_info=True
+                )
                 version = -1
             if version != 1:
                 self._inc("ticks_dropped_version")
@@ -380,7 +391,9 @@ class TickPreviewWorker:
         except Exception as exc:
             logging.warning(
                 "TickPreview: promoted publish err symbol=%s tf_s=%s err=%s",
-                symbol, tf_s, exc,
+                symbol,
+                tf_s,
+                exc,
             )
             self._inc("promoted_publish_errors")
 
@@ -412,7 +425,12 @@ class TickPreviewWorker:
                     logging.log(
                         level,
                         "PREVIEW_GAP symbol=%s tf_s=%s gap_bars=%d last_open=%d tick_open=%d market_closed=%s",
-                        symbol, tf_s, gap_bars, last_open, bar.open_time_ms, is_closed,
+                        symbol,
+                        tf_s,
+                        gap_bars,
+                        last_open,
+                        bar.open_time_ms,
+                        is_closed,
                     )
                 self._inc("preview_gap_total")
 
@@ -432,7 +450,9 @@ class TickPreviewWorker:
         except Exception as exc:
             logging.warning(
                 "TickPreview: publish помилка symbol=%s tf_s=%s err=%s",
-                symbol, tf_s, exc,
+                symbol,
+                tf_s,
+                exc,
             )
             self._inc("preview_publish_errors_total")
 
@@ -468,7 +488,9 @@ def main() -> int:
     _setup_logging()
     report = load_env_secrets()
     if report.loaded:
-        logging.info("ENV: secrets_loaded path=%s keys=%d", report.path, report.keys_count)
+        logging.info(
+            "ENV: secrets_loaded path=%s keys=%d", report.path, report.keys_count
+        )
     else:
         logging.info("ENV: .env не завантажено")
 
@@ -482,7 +504,9 @@ def main() -> int:
 
     preview_cfg = _parse_preview_cfg(cfg)
     if not preview_cfg.enabled:
-        logging.warning("TickPreview: preview_tick_enabled=false, воркер у режимі очікування")
+        logging.warning(
+            "TickPreview: preview_tick_enabled=false, воркер у режимі очікування"
+        )
         while True:
             time.sleep(60.0)
 
@@ -517,7 +541,11 @@ def main() -> int:
     all_symbols = preview_cfg.symbols or symbols_from_cfg(cfg)
     cal_groups = cfg.get("market_calendar_symbol_groups", {})
     cal_by_group = cfg.get("market_calendar_by_group", {})
-    if isinstance(cal_groups, dict) and isinstance(cal_by_group, dict) and bool(cfg.get("calendar_gate_enabled", False)):
+    if (
+        isinstance(cal_groups, dict)
+        and isinstance(cal_by_group, dict)
+        and bool(cfg.get("calendar_gate_enabled", False))
+    ):
         for sym in all_symbols:
             grp_name = cal_groups.get(sym)
             if not grp_name:
@@ -528,7 +556,11 @@ def main() -> int:
             cal = calendar_from_group(grp_cfg)
             if cal is not None:
                 calendars[sym] = cal
-        logging.info("TickPreview: calendar gate для %d/%d символів", len(calendars), len(all_symbols))
+        logging.info(
+            "TickPreview: calendar gate для %d/%d символів",
+            len(calendars),
+            len(all_symbols),
+        )
 
     auto_promote_m1 = bool(cfg.get("tick_auto_promote_m1", False))
 
@@ -546,7 +578,10 @@ def main() -> int:
     )
     logging.info(
         "TickPreview: tfs=%s derive_m3=%s auto_promote_m1=%s symbols=%d",
-        preview_cfg.tfs, worker._derive_m3, auto_promote_m1, len(all_symbols),
+        preview_cfg.tfs,
+        worker._derive_m3,
+        auto_promote_m1,
+        len(all_symbols),
     )
 
     client = redis_lib.Redis(

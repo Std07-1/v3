@@ -3,7 +3,6 @@
   import { onMount, onDestroy, untrack } from "svelte";
   import type {
     RenderFrame,
-    WsAction,
     T_MS,
     UiWarning,
     SmcData,
@@ -28,13 +27,13 @@
   import {
     applySmcFull,
     applySmcDelta,
+    applySessionLevels,
     EMPTY_SMC_DATA,
   } from "../stores/smcStore";
   import { replayStore } from "../stores/replayStore.svelte";
 
   const {
     currentFrame = null,
-    sendRawAction,
     scrollback,
     addUiWarning,
     brightness = 1.0,
@@ -42,7 +41,6 @@
     magnetEnabled = false,
   }: {
     currentFrame?: RenderFrame | null;
-    sendRawAction: (a: WsAction) => void;
     scrollback: (ms: T_MS) => void;
     addUiWarning: (w: UiWarning) => void;
     brightness?: number;
@@ -80,10 +78,6 @@
   let interactionCleanup: (() => void) | null = null;
 
   let ro: ResizeObserver | null = null;
-
-  // P3.6: Container dimensions for cursor-following tooltip
-  let containerW = $state(0);
-  let containerH = $state(0);
 
   // P3.15: Scrollback state indicator
   let scrollbackState: "idle" | "loading" | "wall" = $state("idle");
@@ -219,8 +213,6 @@
       const dpr = window.devicePixelRatio || 1;
       overlayRenderer.resize(Math.round(r.width), Math.round(r.height), dpr);
       // Entry 078 §6: no auto-scroll on resize (user controls scroll position)
-      containerW = Math.round(r.width);
-      containerH = Math.round(r.height);
     });
     ro.observe(wrapperRef);
   });
@@ -394,6 +386,16 @@
           smcData = applySmcDelta(
             untrack(() => smcData),
             currentFrame.smc_delta,
+          );
+        }
+        // ADR-0035: session levels refresh from delta
+        if (
+          currentFrame.session_levels &&
+          currentFrame.session_levels.length > 0
+        ) {
+          smcData = applySessionLevels(
+            untrack(() => smcData),
+            currentFrame.session_levels,
           );
         }
       }

@@ -28,6 +28,7 @@ Exit gate: після --commit запустити fxcm_raw_compare → mismatch_
   python -m tools.repair.htf_rebuild_from_fxcm --commit
   python -m tools.repair.htf_rebuild_from_fxcm --symbols XAU/USD --tfs 14400 --commit
 """
+
 from __future__ import annotations
 
 import argparse
@@ -38,7 +39,7 @@ import logging
 import os
 import tempfile
 import time
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Set, cast
 
 from env_profile import load_env_secrets
 from core.config_loader import pick_config_path, load_system_config, env_str
@@ -79,7 +80,9 @@ def _validate_batch(bars: list, tf_s: int) -> List[str]:
         if not b.complete:
             errors.append("bar[%d] complete=False open_time_ms=%d" % (i, ot))
         if b.src != "history":
-            errors.append("bar[%d] src=%r (expected 'history') open_time_ms=%d" % (i, b.src, ot))
+            errors.append(
+                "bar[%d] src=%r (expected 'history') open_time_ms=%d" % (i, b.src, ot)
+            )
 
     return errors
 
@@ -92,11 +95,11 @@ def _bar_summary(bars: list) -> Dict[str, Any]:
         "count": len(bars),
         "first_open_ms": bars[0].open_time_ms,
         "last_open_ms": bars[-1].open_time_ms,
-        "first_utc": dt.datetime.utcfromtimestamp(
-            bars[0].open_time_ms / 1000
+        "first_utc": dt.datetime.fromtimestamp(
+            bars[0].open_time_ms / 1000, dt.timezone.utc
         ).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "last_utc": dt.datetime.utcfromtimestamp(
-            bars[-1].open_time_ms / 1000
+        "last_utc": dt.datetime.fromtimestamp(
+            bars[-1].open_time_ms / 1000, dt.timezone.utc
         ).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
@@ -146,7 +149,7 @@ def _group_bars_by_day(bars: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, A
     groups: Dict[str, List[Dict[str, Any]]] = {}
     for b in bars:
         ot = b.get("open_time_ms", 0)
-        day = dt.datetime.utcfromtimestamp(ot / 1000).strftime("%Y%m%d")
+        day = dt.datetime.fromtimestamp(ot / 1000, dt.timezone.utc).strftime("%Y%m%d")
         key = "part-%s.jsonl" % day
         groups.setdefault(key, []).append(b)
     return groups
@@ -180,8 +183,12 @@ def rewrite_range(
         "tf_s": tf_s,
         "from_open_ms": from_open_ms,
         "to_open_ms": to_open_ms,
-        "from_utc": dt.datetime.utcfromtimestamp(from_open_ms / 1000).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "to_utc": dt.datetime.utcfromtimestamp(to_open_ms / 1000).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "from_utc": dt.datetime.fromtimestamp(
+            from_open_ms / 1000, dt.timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "to_utc": dt.datetime.fromtimestamp(
+            to_open_ms / 1000, dt.timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
     # 1. Зчитати існуючі бари
@@ -201,7 +208,10 @@ def rewrite_range(
     # 3. Додати FXCM бари
     fxcm_dicts: List[Dict[str, Any]] = []
     for b in fxcm_bars:
-        fxcm_dicts.append(b.to_dict())
+        if isinstance(b, dict):
+            fxcm_dicts.append(dict(b))
+            continue
+        fxcm_dicts.append(cast(Any, b).to_dict())
 
     merged = kept + fxcm_dicts
 
@@ -220,14 +230,16 @@ def rewrite_range(
 
     after_count = len(deduped)
 
-    result.update({
-        "before_count": before_count,
-        "removed_in_range": removed_count,
-        "fxcm_inserted": len(fxcm_dicts),
-        "kept_outside": len(kept),
-        "dup_removed": dup_count,
-        "after_count": after_count,
-    })
+    result.update(
+        {
+            "before_count": before_count,
+            "removed_in_range": removed_count,
+            "fxcm_inserted": len(fxcm_dicts),
+            "kept_outside": len(kept),
+            "dup_removed": dup_count,
+            "after_count": after_count,
+        }
+    )
 
     # Validate monotonic
     prev_ot = -1
@@ -244,7 +256,8 @@ def rewrite_range(
         result["status"] = "validation_error"
         LOG.error(
             "%s tf_s=%d: rewrite — порушення монотонності після merge",
-            symbol, tf_s,
+            symbol,
+            tf_s,
         )
         return result
 
@@ -252,7 +265,12 @@ def rewrite_range(
         result["status"] = "dry_run"
         LOG.info(
             "%s tf_s=%d: rewrite dry-run — before=%d removed=%d fxcm=%d after=%d",
-            symbol, tf_s, before_count, removed_count, len(fxcm_dicts), after_count,
+            symbol,
+            tf_s,
+            before_count,
+            removed_count,
+            len(fxcm_dicts),
+            after_count,
         )
         return result
 
@@ -272,9 +290,7 @@ def rewrite_range(
         lines = _bars_to_jsonl_lines(part_bars)
 
         # Atomic write: temp file → os.replace
-        fd, tmp_path = tempfile.mkstemp(
-            dir=tf_dir, prefix=".rewrite_", suffix=".tmp"
-        )
+        fd, tmp_path = tempfile.mkstemp(dir=tf_dir, prefix=".rewrite_", suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 for line in lines:
@@ -304,7 +320,12 @@ def rewrite_range(
     result["orphan_parts_removed"] = len(orphan_parts)
     LOG.info(
         "%s tf_s=%d: rewrite committed — before=%d removed=%d fxcm=%d after=%d parts=%d",
-        symbol, tf_s, before_count, removed_count, len(fxcm_dicts), after_count,
+        symbol,
+        tf_s,
+        before_count,
+        removed_count,
+        len(fxcm_dicts),
+        after_count,
         len(written_parts),
     )
     return result
@@ -361,9 +382,7 @@ def _refresh_redis(
     for symbol, tf_s in pairs:
         tail_n = min_coldload.get(tf_s, 300)
         try:
-            count = uds.bootstrap_prime_from_disk(
-                symbol, tf_s, tail_n, log_detail=True
-            )
+            count = uds.bootstrap_prime_from_disk(symbol, tf_s, tail_n, log_detail=True)
             results["%s:%d" % (symbol, tf_s)] = {"primed": True, "count": count}
             LOG.info("Redis prime OK: %s tf_s=%d count=%d", symbol, tf_s, count)
         except Exception as exc:
@@ -614,9 +633,7 @@ def main() -> int:
             root=data_root,
             day_anchor_offset_s=day_anchor_offset_s,
             day_anchor_offset_s_d1=(
-                None
-                if day_anchor_offset_s_d1 is None
-                else int(day_anchor_offset_s_d1)
+                None if day_anchor_offset_s_d1 is None else int(day_anchor_offset_s_d1)
             ),
             day_anchor_offset_s_d1_alt=(
                 None
@@ -667,9 +684,7 @@ def main() -> int:
 
                     # Fetch
                     try:
-                        bars = provider.fetch_last_n_tf(
-                            symbol, tf_s=tf_s, n=limit
-                        )
+                        bars = provider.fetch_last_n_tf(symbol, tf_s=tf_s, n=limit)
                     except Exception as exc:
                         LOG.error("%s: fetch error: %s", key, exc)
                         report["results"][symbol][str(tf_s)] = {
@@ -702,9 +717,7 @@ def main() -> int:
                     }
 
                     if val_errors:
-                        LOG.warning(
-                            "%s: %d validation errors:", key, len(val_errors)
-                        )
+                        LOG.warning("%s: %d validation errors:", key, len(val_errors))
                         for ve in val_errors[:5]:
                             LOG.warning("  - %s", ve)
                         report["totals"]["validation_errors"] += len(val_errors)
@@ -732,7 +745,9 @@ def main() -> int:
                         )
                         result_entry["rewrite"] = rw_result
                         if rw_result.get("status") == "committed":
-                            result_entry["committed"] = rw_result.get("fxcm_inserted", 0)
+                            result_entry["committed"] = rw_result.get(
+                                "fxcm_inserted", 0
+                            )
                             report["totals"]["committed"] += result_entry["committed"]
                             committed_pairs.append((symbol, tf_s))
                         elif rw_result.get("status") == "dry_run":

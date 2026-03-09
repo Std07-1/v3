@@ -54,6 +54,19 @@ const LEVEL_STYLES: Record<string, LevelStyle> & { _default: LevelStyle } = {
   // Liquidity (EQ Highs/Lows) — red/green
   eq_highs: { color: '#e91e63', dash: [2, 2], width: 1.0, alpha: 0.75, label: 'EQH', fontSize: 10 },
   eq_lows: { color: '#4caf50', dash: [2, 2], width: 1.0, alpha: 0.75, label: 'EQL', fontSize: 10 },
+  // ADR-0035: Session levels — Asia=#CE93D8, London=#FF9800, NY=#42A5F5
+  as_h: { color: '#CE93D8', dash: [3, 2], width: 1.0, alpha: 0.65, label: 'Asia Hi', fontSize: 10 },
+  as_l: { color: '#CE93D8', dash: [3, 2], width: 1.0, alpha: 0.65, label: 'Asia Lo', fontSize: 10 },
+  p_as_h: { color: '#CE93D8', dash: [6, 3], width: 1.5, alpha: 0.80, label: 'Prev Asia Hi', fontSize: 9 },
+  p_as_l: { color: '#CE93D8', dash: [6, 3], width: 1.5, alpha: 0.80, label: 'Prev Asia Lo', fontSize: 9 },
+  lon_h: { color: '#FF9800', dash: [3, 2], width: 1.0, alpha: 0.65, label: 'London Hi', fontSize: 10 },
+  lon_l: { color: '#FF9800', dash: [3, 2], width: 1.0, alpha: 0.65, label: 'London Lo', fontSize: 10 },
+  p_lon_h: { color: '#FF9800', dash: [6, 3], width: 1.5, alpha: 0.80, label: 'Prev Lon Hi', fontSize: 9 },
+  p_lon_l: { color: '#FF9800', dash: [6, 3], width: 1.5, alpha: 0.80, label: 'Prev Lon Lo', fontSize: 9 },
+  ny_h: { color: '#42A5F5', dash: [3, 2], width: 1.0, alpha: 0.65, label: 'NY Hi', fontSize: 10 },
+  ny_l: { color: '#42A5F5', dash: [3, 2], width: 1.0, alpha: 0.65, label: 'NY Lo', fontSize: 10 },
+  p_ny_h: { color: '#42A5F5', dash: [6, 3], width: 1.5, alpha: 0.80, label: 'Prev NY Hi', fontSize: 9 },
+  p_ny_l: { color: '#42A5F5', dash: [6, 3], width: 1.5, alpha: 0.80, label: 'Prev NY Lo', fontSize: 9 },
   // Fallback
   _default: { color: '#f1c40f', dash: [4, 2], width: 1.0, alpha: 0.60, label: 'LVL', fontSize: 9 },
 };
@@ -169,9 +182,8 @@ export class OverlayRenderer {
   private readonly chartApi: IChartApi;
   private readonly seriesApi: ISeriesApi<'Candlestick'>;
 
-  private frame: Required<SmcData> = { zones: [], swings: [], levels: [], trend_bias: null, zone_grades: {} };
+  private frame: Required<SmcData> = { zones: [], swings: [], levels: [], trend_bias: null, zone_grades: {}, bias_map: {}, momentum_map: {} };
 
-  private dpr = 1;
   private cssW = 0;
   private cssH = 0;
 
@@ -312,8 +324,6 @@ export class OverlayRenderer {
 
     this.cssW = cssW;
     this.cssH = cssH;
-    this.dpr = dpr;
-
     this.canvas.width = Math.round(cssW * dpr);
     this.canvas.height = Math.round(cssH * dpr);
     this.canvas.style.width = `${cssW}px`;
@@ -847,12 +857,15 @@ export class OverlayRenderer {
       scored.push({ lvl, y, dist, style, sticky, xStart, xEnd });
     }
 
-    // ── 2. Priority sort: D1 levels (pdh/pdl/dh/dl) first, then proximity ──
+    // ── 2. Priority sort: D1 levels first, then prev-session, then proximity ──
     const D1_KINDS = new Set(['pdh', 'pdl', 'dh', 'dl']);
+    const PREV_SESSION = new Set(['p_as_h', 'p_as_l', 'p_lon_h', 'p_lon_l', 'p_ny_h', 'p_ny_l']);
     scored.sort((a, b) => {
-      const aD1 = D1_KINDS.has(a.lvl.kind ?? '') ? 0 : 1;
-      const bD1 = D1_KINDS.has(b.lvl.kind ?? '') ? 0 : 1;
-      if (aD1 !== bD1) return aD1 - bD1;
+      const ak = a.lvl.kind ?? '';
+      const bk = b.lvl.kind ?? '';
+      const aTier = D1_KINDS.has(ak) ? 0 : PREV_SESSION.has(ak) ? 1 : 2;
+      const bTier = D1_KINDS.has(bk) ? 0 : PREV_SESSION.has(bk) ? 1 : 2;
+      if (aTier !== bTier) return aTier - bTier;
       return a.dist - b.dist;
     });
     const visible = scored.slice(0, MAX_LEVELS);

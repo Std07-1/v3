@@ -15,9 +15,7 @@
         lastBarOpen,
         lastBarTs,
         onSwitch,
-        themeBg = "transparent",
         themeText = "#d1d4dc",
-        themeBorder = "transparent",
         menuBg = "rgba(30, 34, 45, 0.92)",
         menuBorder = "rgba(255, 255, 255, 0.08)",
         biasMap = {} as Record<string, string>,
@@ -32,9 +30,7 @@
         lastBarOpen: number | null;
         lastBarTs: number | null; // epoch ms of last bar/update
         onSwitch: (symbol: string, tf: string) => void;
-        themeBg?: string;
         themeText?: string;
-        themeBorder?: string;
         menuBg?: string;
         menuBorder?: string;
         biasMap?: Record<string, string>;
@@ -151,16 +147,6 @@
         if (price >= 10) return price.toFixed(3);
         return price.toFixed(5);
     }
-
-    // ─── UTC clock ───
-    let utcStr = $derived(
-        (() => {
-            const d = new Date(now);
-            const hh = String(d.getUTCHours()).padStart(2, "0");
-            const mm = String(d.getUTCMinutes()).padStart(2, "0");
-            return `${hh}:${mm}`;
-        })(),
-    );
 
     // ─── Handlers ───
     function selectSymbol(sym: string) {
@@ -364,6 +350,9 @@
                                 : "↓"}</span
                         >
                     {/if}
+                    {#if narrative.in_killzone}
+                        <span class="narr-kz">KZ</span>
+                    {/if}
                     <!-- Styled tooltip on hover -->
                     <span class="narr-tooltip">
                         <div class="ntt-headline">{narrative.headline}</div>
@@ -426,6 +415,17 @@
                         {#if narrative.warnings.length > 0}
                             <div class="ntt-warn">
                                 ⚠ {narrative.warnings.join(", ")}
+                            </div>
+                        {/if}
+                        {#if narrative.session_context}
+                            <div class="ntt-session">
+                                🕐 {narrative.session_context}
+                            </div>
+                        {:else if narrative.current_session}
+                            <div class="ntt-session">
+                                🕐 {narrative.current_session}{narrative.in_killzone
+                                    ? " (KZ)"
+                                    : ""}
                             </div>
                         {/if}
                     </span>
@@ -804,6 +804,14 @@
         font-size: 7px;
         opacity: 0.6;
     }
+    .narr-kz {
+        font-size: 7px;
+        font-weight: 600;
+        color: #ff9800;
+        background: rgba(255, 152, 0, 0.15);
+        padding: 0 3px;
+        border-radius: 2px;
+    }
 
     /* Narrative hover tooltip */
     .narr-tooltip {
@@ -945,6 +953,12 @@
     }
     .ntt-warn:hover {
         opacity: 1;
+    }
+    .ntt-session {
+        color: #42a5f5;
+        font-size: 9px;
+        opacity: 0.8;
+        margin-top: 2px;
     }
     /* Expandable description on hover */
     .ntt-expand {

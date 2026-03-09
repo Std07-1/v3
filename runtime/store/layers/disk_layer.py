@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from collections import deque
+from collections.abc import Set as AbstractSet
 from typing import Any, Iterable, Optional
 
 from core.model.bars import FINAL_SOURCES
+
+logger = logging.getLogger("disk_layer")
 
 
 def _iter_lines_reverse(path: str) -> Iterable[bytes]:
@@ -28,6 +32,7 @@ def _iter_lines_reverse(path: str) -> Iterable[bytes]:
             if buf:
                 yield buf
     except Exception:
+        logger.debug("DISK_ITER_REVERSE_FAIL path=%s", path, exc_info=True)
         return
 
 
@@ -39,7 +44,7 @@ def _read_jsonl_filtered(
     *,
     final_only: bool,
     skip_preview: bool,
-    final_sources: Optional[set[str]],
+    final_sources: Optional[AbstractSet[str]],
 ) -> list[dict[str, Any]]:
     buf: deque[dict[str, Any]] = deque(maxlen=max(1, limit))
     for p in paths:
@@ -52,6 +57,7 @@ def _read_jsonl_filtered(
                     try:
                         obj = json.loads(line)
                     except Exception:
+                        logger.debug("DISK_JSON_DECODE_FAIL path=%s", p)
                         continue
 
                     open_ms = obj.get("open_time_ms")
@@ -73,6 +79,7 @@ def _read_jsonl_filtered(
 
                     buf.append(obj)
         except FileNotFoundError:
+            logger.debug("DISK_FILE_GONE path=%s", p)
             continue
 
     out = list(buf)
@@ -111,7 +118,9 @@ def _bar_is_complete(bar: dict[str, Any]) -> bool:
     return bool(val) if isinstance(val, bool) else bool(val)
 
 
-def _bar_is_final_source(bar: dict[str, Any], final_sources: Optional[set[str]] = None) -> bool:
+def _bar_is_final_source(
+    bar: dict[str, Any], final_sources: Optional[AbstractSet[str]] = None
+) -> bool:
     src = bar.get("src")
     if not isinstance(src, str):
         return False
@@ -134,6 +143,7 @@ def _bar_has_canonical_ohlc(bar: dict[str, Any]) -> bool:
         float(l)
         float(c)
     except Exception:
+        logging.debug("DISK_LAYER_NON_CANONICAL_OHLC bar=%r", bar, exc_info=True)
         return False
     return True
 
@@ -143,7 +153,7 @@ def _bar_passes_filters(
     *,
     final_only: bool,
     skip_preview: bool,
-    final_sources: Optional[set[str]],
+    final_sources: Optional[AbstractSet[str]],
 ) -> bool:
     is_complete = _bar_is_complete(bar)
     if skip_preview and not is_complete:
@@ -170,7 +180,9 @@ def _bar_ts_priority(bar: dict[str, Any]) -> Optional[int]:
     return None
 
 
-def _choose_better_bar(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+def _choose_better_bar(
+    existing: dict[str, Any], incoming: dict[str, Any]
+) -> dict[str, Any]:
     existing_complete = _bar_is_complete(existing)
     incoming_complete = _bar_is_complete(incoming)
     if incoming_complete and not existing_complete:
@@ -222,7 +234,7 @@ def _read_jsonl_tail_filtered_with_geom(
     *,
     final_only: bool,
     skip_preview: bool,
-    final_sources: Optional[set[str]],
+    final_sources: Optional[AbstractSet[str]],
 ) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
     if limit <= 0:
         return [], None
@@ -237,6 +249,12 @@ def _read_jsonl_tail_filtered_with_geom(
             try:
                 obj = json.loads(raw.decode("utf-8"))
             except Exception:
+                logging.debug(
+                    "DISK_LAYER_TAIL_JSON_DECODE_FAILED path=%s raw=%r",
+                    p,
+                    raw,
+                    exc_info=True,
+                )
                 continue
             open_ms = obj.get("open_time_ms")
             if not isinstance(open_ms, int):
@@ -281,7 +299,7 @@ def _read_jsonl_tail_filtered(
     *,
     final_only: bool,
     skip_preview: bool,
-    final_sources: Optional[set[str]],
+    final_sources: Optional[AbstractSet[str]],
 ) -> list[dict[str, Any]]:
     out, _geom = _read_jsonl_tail_filtered_with_geom(
         paths,
@@ -306,12 +324,19 @@ def _read_last_jsonl(path: str) -> Optional[dict[str, Any]]:
                 try:
                     obj = json.loads(line)
                 except Exception:
+                    logging.debug(
+                        "DISK_LAYER_LAST_JSON_DECODE_FAILED path=%s line=%r",
+                        path,
+                        line,
+                        exc_info=True,
+                    )
                     continue
                 open_ms = obj.get("open_time_ms")
                 if not isinstance(open_ms, int):
                     continue
                 last_obj = obj
     except FileNotFoundError:
+        logging.debug("DISK_LAYER_LAST_JSON_FILE_MISSING path=%s", path, exc_info=True)
         return None
     return last_obj
 
@@ -345,7 +370,7 @@ class DiskLayer:
         use_tail: bool = False,
         final_only: bool = False,
         skip_preview: bool = False,
-        final_sources: Optional[set[str]] = None,
+        final_sources: Optional[AbstractSet[str]] = None,
     ) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
         parts = self.list_parts(symbol, tf_s)
         if not parts:

@@ -11,6 +11,7 @@ tests/test_smc_runner.py — SmcRunner інтеграційні тести (ADR-
 
 Python 3.7 compatible.
 """
+
 from __future__ import annotations
 
 import types
@@ -28,28 +29,30 @@ from runtime.smc.smc_runner import SmcRunner, _bar_dict_to_candle_bar
 # ──────────────────────────────────────────────────────────────
 
 SYM = "XAU/USD"
-TF  = 60       # M1
-T0  = 1_700_000_000_000   # arbitrary epoch ms
+TF = 60  # M1
+T0 = 1_700_000_000_000  # arbitrary epoch ms
 BAR_MS = TF * 1000
 
 
 def _make_engine(swing_period: int = 2) -> SmcEngine:
     """Легкий SmcEngine для тестів (малий swing_period, малий lookback)."""
-    cfg = SmcConfig.from_dict({
-        "enabled": True,
-        "lookback_bars": 100,
-        "swing_period": swing_period,
-        "ob": {
+    cfg = SmcConfig.from_dict(
+        {
             "enabled": True,
-            "min_impulse_atr_mult": 0.1,
-            "atr_period": 5,
-            "max_active_per_side": 5,
-        },
-        "fvg": {"enabled": True, "min_gap_atr_mult": 0.0, "max_active": 10},
-        "structure": {"enabled": True, "confirmation_bars": 1},
-        "max_zones_per_tf": 30,
-        "performance": {"max_compute_ms": 2000, "log_slow_threshold_ms": 500},
-    })
+            "lookback_bars": 100,
+            "swing_period": swing_period,
+            "ob": {
+                "enabled": True,
+                "min_impulse_atr_mult": 0.1,
+                "atr_period": 5,
+                "max_active_per_side": 5,
+            },
+            "fvg": {"enabled": True, "min_gap_atr_mult": 0.0, "max_active": 10},
+            "structure": {"enabled": True, "confirmation_bars": 1},
+            "max_zones_per_tf": 30,
+            "performance": {"max_compute_ms": 2000, "log_slow_threshold_ms": 500},
+        }
+    )
     return SmcEngine(cfg)
 
 
@@ -104,14 +107,22 @@ def _bar_dict(
     return base
 
 
-def _candle_bar(i: int, o: float, h: float, low: float, c: float,
-                complete: bool = True) -> CandleBar:
+def _candle_bar(
+    i: int, o: float, h: float, low: float, c: float, complete: bool = True
+) -> CandleBar:
     open_ms = T0 + i * BAR_MS
     return CandleBar(
-        symbol=SYM, tf_s=TF,
-        open_time_ms=open_ms, close_time_ms=open_ms + BAR_MS,
-        o=o, h=h, low=low, c=c, v=500.0,
-        complete=complete, src="derived",
+        symbol=SYM,
+        tf_s=TF,
+        open_time_ms=open_ms,
+        close_time_ms=open_ms + BAR_MS,
+        o=o,
+        h=h,
+        low=low,
+        c=c,
+        v=500.0,
+        complete=complete,
+        src="derived",
     )
 
 
@@ -122,6 +133,7 @@ def _flat_candle_bars(n: int, p: float = 1900.0) -> List[CandleBar]:
 # ──────────────────────────────────────────────────────────────
 #  _bar_dict_to_candle_bar — unit tests
 # ──────────────────────────────────────────────────────────────
+
 
 class TestBarDictToCandleBar:
     """Перевіряє конвертер raw bar dict → CandleBar."""
@@ -193,6 +205,7 @@ class TestBarDictToCandleBar:
 #  SmcRunner.__init__ — конструктор
 # ──────────────────────────────────────────────────────────────
 
+
 class TestSmcRunnerInit:
     """Конструктор читає config з full_cfg."""
 
@@ -222,6 +235,7 @@ class TestSmcRunnerInit:
 # ──────────────────────────────────────────────────────────────
 #  SmcRunner.on_bar_dict
 # ──────────────────────────────────────────────────────────────
+
 
 class TestSmcRunnerOnBarDict:
     """on_bar_dict: кеш delta, фільтрація preview, bad dict."""
@@ -282,6 +296,7 @@ class TestSmcRunnerOnBarDict:
 #  SmcRunner.get_snapshot
 # ──────────────────────────────────────────────────────────────
 
+
 class TestSmcRunnerGetSnapshot:
     """get_snapshot повертає SmcSnapshot після наповнення engine."""
 
@@ -297,7 +312,7 @@ class TestSmcRunnerGetSnapshot:
         runner = SmcRunner(_make_full_cfg(), engine)
         snap = runner.get_snapshot(SYM, TF)
         # Дозволяємо обидва варіанти: None або порожній snapshot
-        assert snap is None or (hasattr(snap, 'bar_count') and snap.bar_count == 0)
+        assert snap is None or (hasattr(snap, "bar_count") and snap.bar_count == 0)
 
     def test_get_snapshot_after_update(self):
         """engine.update → get_snapshot повертає SmcSnapshot."""
@@ -331,6 +346,7 @@ class TestSmcRunnerGetSnapshot:
 # ──────────────────────────────────────────────────────────────
 #  SmcRunner.last_delta / clear_delta
 # ──────────────────────────────────────────────────────────────
+
 
 class TestSmcRunnerDeltaCache:
     """Кеш delta: last_delta / clear_delta."""
@@ -384,8 +400,10 @@ class TestSmcRunnerDeltaCache:
 #  SmcRunner.warmup — mock UDS
 # ──────────────────────────────────────────────────────────────
 
+
 class _MockWindowResult:
     """Мок WindowResult з полем bars_lwc."""
+
     def __init__(self, bars_lwc: List[Dict[str, Any]]) -> None:
         self.bars_lwc = bars_lwc
 
@@ -425,7 +443,7 @@ class TestSmcRunnerWarmup:
         assert isinstance(snap.swings, list)
 
     def test_warmup_calls_read_window_per_symbol_tf(self):
-        """warmup викликає read_window для кожної (symbol, tf) пари."""
+        """warmup викликає read_window для кожної (symbol, tf) пари + M1 session reads."""
         uds = _MockUds([])
         engine = _make_engine()
         runner = SmcRunner(
@@ -433,15 +451,16 @@ class TestSmcRunnerWarmup:
             engine,
         )
         runner.warmup(uds)
-        # 2 symbols × 2 TFs = 4 виклики
-        assert len(uds.calls) == 4
+        # 2 symbols × 2 TFs = 4 warmup reads
+        # + 2 extra M1 session reads (2880 limit, when M1 warmup < 2880 bars)
+        assert len(uds.calls) == 6
 
     def test_warmup_with_uds_returning_none_no_crash(self):
         """read_window повертає None (пустий результат) → warmup не падає."""
-        uds = _MockUds(None)   # read_window → None
+        uds = _MockUds(None)  # read_window → None
         engine = _make_engine()
         runner = SmcRunner(_make_full_cfg(symbols=[SYM], tf_allowlist=[TF]), engine)
-        runner.warmup(uds)     # не повинно кидати
+        runner.warmup(uds)  # не повинно кидати
         # snapshot відсутній (0 барів)
         snap = runner.get_snapshot(SYM, TF)
         # engine.update викликається з [] → snapshot може бути або None або порожній
@@ -451,14 +470,22 @@ class TestSmcRunnerWarmup:
     def test_warmup_skips_bad_dicts(self):
         """Якщо bars_lwc містить некоректні записи → engine не падає."""
         bad_dicts = [
-            {"open_time_ms": 0},                        # open_time_ms=0
-            {"o": 1900.0},                              # відсутній open_time_ms
-            {"open_time_ms": T0, "o": 1900.0, "h": 1895.0, "low": 1900.0, "c": 1901.0},  # h < low
-        ] + _make_lwc_bars_dicts(10)                    # 10 валідних
+            {"open_time_ms": 0},  # open_time_ms=0
+            {"o": 1900.0},  # відсутній open_time_ms
+            {
+                "open_time_ms": T0,
+                "o": 1900.0,
+                "h": 1895.0,
+                "low": 1900.0,
+                "c": 1901.0,
+            },  # h < low
+        ] + _make_lwc_bars_dicts(
+            10
+        )  # 10 валідних
         uds = _MockUds(bad_dicts)
         engine = _make_engine()
         runner = SmcRunner(_make_full_cfg(symbols=[SYM], tf_allowlist=[TF]), engine)
-        runner.warmup(uds)   # не повинно кидати
+        runner.warmup(uds)  # не повинно кидати
         snap = runner.get_snapshot(SYM, TF)
         assert snap is not None
 

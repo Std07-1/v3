@@ -18,6 +18,7 @@ Dependency Rule: runtime/ імпортує core/, не навпаки.
 
 ADR: ADR-0017 (Replay-Mode з data_v3/ для Offline Demo).
 """
+
 from __future__ import annotations
 
 import glob
@@ -47,6 +48,7 @@ log = logging.getLogger("replay")
 # JSONL reader
 # ---------------------------------------------------------------------------
 
+
 def _read_m1_bars_from_disk(
     data_root: str,
     symbol: str,
@@ -74,6 +76,7 @@ def _read_m1_bars_from_disk(
                     try:
                         obj = json.loads(line)
                     except Exception:
+                        log.debug("REPLAY_JSON_DECODE_FAIL path=%s", path)
                         continue
                     # Фільтр: тільки M1 (tf_s=60), complete=true
                     if obj.get("tf_s") != 60:
@@ -82,6 +85,7 @@ def _read_m1_bars_from_disk(
                         continue
                     bars.append(obj)
         except FileNotFoundError:
+            log.debug("REPLAY_FILE_GONE path=%s", path)
             continue
 
     # Сортування по open_time_ms (обов'язково для UDS watermark monotonicity)
@@ -101,7 +105,10 @@ def _read_m1_bars_from_disk(
 
     log.info(
         "REPLAY_LOADED symbol=%s files=%d bars=%d (deduped from %d)",
-        symbol, len(paths), len(unique), len(bars),
+        symbol,
+        len(paths),
+        len(unique),
+        len(bars),
     )
     return unique
 
@@ -163,6 +170,7 @@ def _flush_redis_namespace(cfg: Dict[str, Any]) -> int:
         return 0
 
     from runtime.store.redis_spec import resolve_redis_spec
+
     spec = resolve_redis_spec(cfg, role="replay_flush", log=False)
     if spec is None:
         log.warning("REPLAY_FLUSH_SKIP reason=redis_disabled")
@@ -181,7 +189,9 @@ def _flush_redis_namespace(cfg: Dict[str, Any]) -> int:
         keys = client.keys(pattern)
         if keys:
             client.delete(*keys)
-        log.info("REPLAY_REDIS_FLUSH namespace=%s keys_deleted=%d", spec.namespace, len(keys))
+        log.info(
+            "REPLAY_REDIS_FLUSH namespace=%s keys_deleted=%d", spec.namespace, len(keys)
+        )
         return len(keys)
     except Exception as exc:
         log.warning("REPLAY_REDIS_FLUSH_FAILED err=%s", exc)
@@ -278,7 +288,9 @@ def run_replay(
 
     log.info(
         "REPLAY_ENGINE_READY symbols=%s anchor=%d d1_anchor=%d speed=%s",
-        symbols, anchor_offset_s, d1_anchor_offset_s,
+        symbols,
+        anchor_offset_s,
+        d1_anchor_offset_s,
         "instant" if speed == 0 else f"{speed}x",
     )
 
@@ -299,7 +311,12 @@ def run_replay(
     if start_ms is not None:
         before = len(all_bars)
         all_bars = [b for b in all_bars if b.get("open_time_ms", 0) >= start_ms]
-        log.info("REPLAY_START_FILTER from=%d to=%d skipped=%d", start_ms, len(all_bars), before - len(all_bars))
+        log.info(
+            "REPLAY_START_FILTER from=%d to=%d skipped=%d",
+            start_ms,
+            len(all_bars),
+            before - len(all_bars),
+        )
 
     total = len(all_bars)
     log.info("REPLAY_TOTAL_BARS %d", total)
@@ -322,7 +339,8 @@ def run_replay(
                     committed_warmup += 1
             log.info(
                 "REPLAY_WARMUP bars=%d committed=%d",
-                len(warmup_candles), committed_warmup,
+                len(warmup_candles),
+                committed_warmup,
             )
 
     # --- Prime ready signal (UI може стартувати) ---
@@ -390,7 +408,11 @@ def run_replay(
             bars_per_sec = committed_m1 / elapsed if elapsed > 0 else 0
             log.info(
                 "REPLAY_PROGRESS %d/%d (%.1f%%) m1=%d derived=%d %.0f bars/s",
-                i + 1, replay_total, pct, committed_m1, committed_derived,
+                i + 1,
+                replay_total,
+                pct,
+                committed_m1,
+                committed_derived,
                 bars_per_sec,
             )
             last_log_ts = now
@@ -398,7 +420,10 @@ def run_replay(
     elapsed_total = time.time() - start_wall
     log.info(
         "REPLAY_DONE total=%d m1_committed=%d derived=%d elapsed=%.1fs",
-        replay_total, committed_m1, committed_derived, elapsed_total,
+        replay_total,
+        committed_m1,
+        committed_derived,
+        elapsed_total,
     )
 
     return 0
@@ -407,6 +432,7 @@ def run_replay(
 # ---------------------------------------------------------------------------
 # Entrypoint  (python -m runtime.ingest.replay)
 # ---------------------------------------------------------------------------
+
 
 def _parse_replay_args() -> Dict[str, Any]:
     """Парсить аргументи для replay mode."""
@@ -441,12 +467,17 @@ def _parse_replay_args() -> Dict[str, Any]:
     if args.start:
         try:
             import datetime
+
             dt = datetime.datetime.strptime(args.start, "%Y-%m-%d")
-            start_ms = int(dt.timestamp() * 1000) if hasattr(dt, 'timestamp') else int(
-                (dt - datetime.datetime(1970, 1, 1)).total_seconds() * 1000
+            start_ms = (
+                int(dt.timestamp() * 1000)
+                if hasattr(dt, "timestamp")
+                else int((dt - datetime.datetime(1970, 1, 1)).total_seconds() * 1000)
             )
         except ValueError:
-            log.error("REPLAY_INVALID_START_DATE format=%s expected=YYYY-MM-DD", args.start)
+            log.error(
+                "REPLAY_INVALID_START_DATE format=%s expected=YYYY-MM-DD", args.start
+            )
             raise SystemExit(1)
 
     return {
@@ -477,7 +508,10 @@ def main() -> int:
 
     log.info(
         "REPLAY_INIT symbols=%s speed=%s skip_disk=%s start_ms=%s",
-        symbols, speed, skip_disk, start_ms,
+        symbols,
+        speed,
+        skip_disk,
+        start_ms,
     )
 
     return run_replay(

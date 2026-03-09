@@ -4,13 +4,9 @@
   const {
     activeTool,
     onSelectTool,
-    magnetEnabled = false,
-    onToggleMagnet,
   }: {
     activeTool: ActiveTool;
     onSelectTool: (tool: ActiveTool) => void;
-    magnetEnabled?: boolean;
-    onToggleMagnet?: () => void;
   } = $props();
 
   function loadCollapsed(): boolean {

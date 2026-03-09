@@ -10,6 +10,7 @@
   4. tick_schema — tick_v1.json дозволяє src="fxcm_wallclock";
                    tick_preview_worker має _validate_tick_schema
 """
+
 from __future__ import annotations
 
 import json
@@ -21,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # ---------------------------------------------------------------------------
 # Допоміжні
 # ---------------------------------------------------------------------------
+
 
 def _read_text(path: str) -> Optional[str]:
     """Безпечне читання файлу; повертає None при помилці."""
@@ -110,8 +112,15 @@ def _check_nomix_disk(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     # (наявність reject/raise/return для невідомих source)
     has_reject = any(
         kw in commit_text
-        for kw in ("raise ", "return ", "rejected", "not in FINAL_SOURCES",
-                    "not_in_final_sources", "unknown_source", "source_rejected")
+        for kw in (
+            "raise ",
+            "return ",
+            "rejected",
+            "not in FINAL_SOURCES",
+            "not_in_final_sources",
+            "unknown_source",
+            "source_rejected",
+        )
     )
     metrics["commit_has_reject"] = has_reject
 
@@ -127,6 +136,7 @@ def _check_nomix_disk(root: str) -> Tuple[bool, str, Dict[str, Any]]:
 # Sub-gate 2: uds_hotpath
 # Перевіряє: read_updates для preview TF → Redis path, без disk
 # ---------------------------------------------------------------------------
+
 
 def _check_uds_hotpath(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     """read_updates для preview TF має йти через Redis, а не через disk."""
@@ -169,7 +179,9 @@ def _check_uds_hotpath(root: str) -> Tuple[bool, str, Dict[str, Any]]:
         return False, "read_updates_not_found", metrics
 
     # Перевірка 1: preview_mode визначається через _preview_tf_allowlist
-    has_preview_branch = "preview_mode" in method_text or "_preview_tf_allowlist" in method_text
+    has_preview_branch = (
+        "preview_mode" in method_text or "_preview_tf_allowlist" in method_text
+    )
     metrics["has_preview_branch"] = has_preview_branch
 
     # Перевірка 2: preview path використовує read_preview_updates (Redis)
@@ -178,8 +190,13 @@ def _check_uds_hotpath(root: str) -> Tuple[bool, str, Dict[str, Any]]:
 
     # Перевірка 3: preview path НЕ використовує disk-методи
     disk_patterns = [
-        "read_jsonl", "ssot_jsonl", "disk_reader", "disk_tail",
-        "_read_from_disk", "load_from_disk", "read_history",
+        "read_jsonl",
+        "ssot_jsonl",
+        "disk_reader",
+        "disk_tail",
+        "_read_from_disk",
+        "load_from_disk",
+        "read_history",
     ]
     disk_in_preview = []
     # Витягуємо тільки preview-гілку (від "if preview_mode" до "else:")
@@ -190,7 +207,7 @@ def _check_uds_hotpath(root: str) -> Tuple[bool, str, Dict[str, Any]]:
         # Шукаємо "else:" на тому ж indent
         else_match = re.search(r"\n(\s+)else:", preview_section)
         if else_match:
-            preview_section = preview_section[:else_match.start()]
+            preview_section = preview_section[: else_match.start()]
         for pat in disk_patterns:
             if pat in preview_section:
                 disk_in_preview.append(pat)
@@ -216,6 +233,7 @@ def _check_uds_hotpath(root: str) -> Tuple[bool, str, Dict[str, Any]]:
 # а не лише на rollover. Має бути: replace-if-same-open / append-if-new.
 # ---------------------------------------------------------------------------
 
+
 def _check_preview_tail_live_shape(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     """publish_preview_bar оновлює preview:tail на кожен publish (не лише rollover)."""
     uds_path = _find_file("runtime/store/uds.py", root)
@@ -235,7 +253,7 @@ def _check_preview_tail_live_shape(root: str) -> Tuple[bool, str, Dict[str, Any]
     indent_level = 0
     found = False
     for line in lines:
-        if not found and "def publish_preview_bar" in line and "self" in line:
+        if not found and "def publish_preview_bar" in line:
             found = True
             in_method = True
             indent_level = len(line) - len(line.lstrip())
@@ -269,15 +287,18 @@ def _check_preview_tail_live_shape(root: str) -> Tuple[bool, str, Dict[str, Any]
         last_lines = before.split("\n")[-5:]
         for ln in last_lines:
             stripped = ln.strip()
-            if stripped.startswith("if rollover") or stripped.startswith("if rollover:"):
+            if stripped.startswith("if rollover") or stripped.startswith(
+                "if rollover:"
+            ):
                 issues.append("tail_update_guarded_by_rollover")
                 break
-    metrics["tail_update_guarded_by_rollover"] = "tail_update_guarded_by_rollover" in issues
+    metrics["tail_update_guarded_by_rollover"] = (
+        "tail_update_guarded_by_rollover" in issues
+    )
 
     # 2. Має бути логіка replace-if-same-open
-    has_replace_same_open = (
-        "open_ms" in method_text
-        and ("tail_bars[-1]" in method_text or "tail_bars[- 1]" in method_text)
+    has_replace_same_open = "open_ms" in method_text and (
+        "tail_bars[-1]" in method_text or "tail_bars[- 1]" in method_text
     )
     metrics["has_replace_if_same_open"] = has_replace_same_open
     if not has_replace_same_open:
@@ -298,6 +319,7 @@ def _check_preview_tail_live_shape(root: str) -> Tuple[bool, str, Dict[str, Any]
 # Sub-gate 2c: preview_bus_isolation (G2.1)
 # Перевіряє: read_updates для preview TF ходить ТІЛЬКИ в preview-bus
 # ---------------------------------------------------------------------------
+
 
 def _check_preview_bus_isolation(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     """Preview updates ізольовані від final updates bus."""
@@ -362,7 +384,11 @@ def _check_preview_bus_isolation(root: str) -> Tuple[bool, str, Dict[str, Any]]:
         ppb_start = full_src.find("def publish_preview_bar")
         ppb_end = full_src.find("\n    def ", ppb_start + 1) if ppb_start >= 0 else -1
         if ppb_start >= 0:
-            ppb_body = full_src[ppb_start:ppb_end] if ppb_end > ppb_start else full_src[ppb_start:]
+            ppb_body = (
+                full_src[ppb_start:ppb_end]
+                if ppb_end > ppb_start
+                else full_src[ppb_start:]
+            )
             uses_final_bus = "_updates_bus" in ppb_body
             metrics["publish_preview_uses_final_bus"] = uses_final_bus
             if uses_final_bus:
@@ -377,6 +403,7 @@ def _check_preview_bus_isolation(root: str) -> Tuple[bool, str, Dict[str, Any]]:
 # Sub-gate 3: api_splitbrain
 # Перевіряє: server.py ігнорує prefer_redis/force_disk (PATCH 085)
 # ---------------------------------------------------------------------------
+
 
 def _check_api_splitbrain(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     """server.py не має активних if prefer_redis / if force_disk гілок
@@ -446,13 +473,16 @@ def _check_api_splitbrain(root: str) -> Tuple[bool, str, Dict[str, Any]]:
 #            tick_preview_worker має _validate_tick_schema
 # ---------------------------------------------------------------------------
 
+
 def _check_tick_schema(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     """tick_v1 дозволяє довільний src (string), worker має schema guard."""
     schema_path = _find_file(
-        "core/contracts/public/marketdata_v1/tick_v1.json", root,
+        "core/contracts/public/marketdata_v1/tick_v1.json",
+        root,
     )
     worker_path = _find_file(
-        "runtime/ingest/tick_preview_worker.py", root,
+        "runtime/ingest/tick_preview_worker.py",
+        root,
     )
 
     metrics: Dict[str, Any] = {}
@@ -564,9 +594,7 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
             details_parts.append(f"{name}:OK")
 
     metrics["total_subgates"] = len(_SUBGATES)
-    metrics["passed"] = sum(
-        1 for sg in metrics["subgates"].values() if sg.get("ok")
-    )
+    metrics["passed"] = sum(1 for sg in metrics["subgates"].values() if sg.get("ok"))
 
     details = "; ".join(details_parts)
     if all_ok:

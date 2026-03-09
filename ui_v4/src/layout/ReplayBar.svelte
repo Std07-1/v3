@@ -3,7 +3,7 @@
      Play/Pause, Speed, Scrubber, Step forward/back, Exit.
      Keyboard: Space=play/pause, ←/→=step, Shift+←/→=step×10, Esc=exit -->
 <script lang="ts">
-    import { replayStore, SPEED_OPTIONS } from "../stores/replayStore.svelte";
+    import { replayStore } from "../stores/replayStore.svelte";
 
     const { onExit }: { onExit: () => void } = $props();
 

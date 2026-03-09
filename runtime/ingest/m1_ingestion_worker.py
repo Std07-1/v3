@@ -8,6 +8,7 @@
 Реіспользує M1SymbolPoller / M1PollerRunner з m1_poller.py,
 замінюючи FxcmHistoryProvider на BrokerRedisProxy.
 """
+
 from __future__ import annotations
 
 import json
@@ -78,13 +79,15 @@ class BrokerRedisProxy:
             else:
                 date_to_ms = int(date_to_utc)
 
-        cmd = json.dumps({
-            "v": _CONTRACT_VERSION,
-            "cmd": "fetch_m1",
-            "symbol": symbol,
-            "n_bars": n,
-            "date_to_ms": date_to_ms,
-        })
+        cmd = json.dumps(
+            {
+                "v": _CONTRACT_VERSION,
+                "cmd": "fetch_m1",
+                "symbol": symbol,
+                "n_bars": n,
+                "date_to_ms": date_to_ms,
+            }
+        )
         self._redis.rpush(self._cmd_key, cmd)
 
         # Wait for response
@@ -92,7 +95,9 @@ class BrokerRedisProxy:
         if result is None:
             logging.warning(
                 "BROKER_PROXY_TIMEOUT symbol=%s n=%d timeout=%ds",
-                symbol, n, _BLPOP_TIMEOUT_S,
+                symbol,
+                n,
+                _BLPOP_TIMEOUT_S,
             )
             return []
 
@@ -106,27 +111,30 @@ class BrokerRedisProxy:
         if resp.get("error"):
             logging.warning(
                 "BROKER_PROXY_FETCH_ERROR symbol=%s err=%s",
-                symbol, resp["error"],
+                symbol,
+                resp["error"],
             )
             return []
 
         bars: List[CandleBar] = []
         for d in resp.get("bars", []):
             try:
-                bars.append(CandleBar(
-                    symbol=d["symbol"],
-                    tf_s=d["tf_s"],
-                    open_time_ms=d["open_time_ms"],
-                    close_time_ms=d["close_time_ms"],
-                    o=d["o"],
-                    h=d["h"],
-                    low=d["low"],
-                    c=d["c"],
-                    v=d["v"],
-                    complete=d.get("complete", True),
-                    src=d.get("src", "history"),
-                    extensions=d.get("extensions", {}),
-                ))
+                bars.append(
+                    CandleBar(
+                        symbol=d["symbol"],
+                        tf_s=d["tf_s"],
+                        open_time_ms=d["open_time_ms"],
+                        close_time_ms=d["close_time_ms"],
+                        o=d["o"],
+                        h=d["h"],
+                        low=d["low"],
+                        c=d["c"],
+                        v=d["v"],
+                        complete=d.get("complete", True),
+                        src=d.get("src", "history"),
+                        extensions=d.get("extensions", {}),
+                    )
+                )
             except (KeyError, TypeError, ValueError) as exc:
                 logging.warning("BROKER_PROXY_BAR_PARSE err=%s bar=%s", exc, d)
         return bars
@@ -162,7 +170,9 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
         return None
 
     redis_cli = redis_lib.Redis(
-        host=spec.host, port=spec.port, db=spec.db,
+        host=spec.host,
+        port=spec.port,
+        db=spec.db,
         decode_responses=True,
         socket_timeout=30,
         socket_connect_timeout=5,
@@ -210,21 +220,23 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
         if group and isinstance(cal_by_group.get(group), dict):
             cal = calendar_from_group(cal_by_group[group])
 
-        pollers.append(M1SymbolPoller(
-            symbol=sym,
-            provider=provider,
-            uds=uds,
-            calendar=cal,
-            tail_fetch_n=tail_fetch_n,
-            m3_derive=m3_derive,
-            tail_catchup_max_bars=tail_catchup_max_bars,
-            live_recover_threshold_bars=lr_threshold,
-            live_recover_max_bars_per_cycle=lr_max_cycle,
-            live_recover_cooldown_s=lr_cooldown,
-            live_recover_max_total_bars=lr_max_total,
-            live_recover_log_interval_s=lr_log_interval,
-            stale_s=stale_s,
-        ))
+        pollers.append(
+            M1SymbolPoller(
+                symbol=sym,
+                provider=provider,
+                uds=uds,
+                calendar=cal,
+                tail_fetch_n=tail_fetch_n,
+                m3_derive=m3_derive,
+                tail_catchup_max_bars=tail_catchup_max_bars,
+                live_recover_threshold_bars=lr_threshold,
+                live_recover_max_bars_per_cycle=lr_max_cycle,
+                live_recover_cooldown_s=lr_cooldown,
+                live_recover_max_total_bars=lr_max_total,
+                live_recover_log_interval_s=lr_log_interval,
+                stale_s=stale_s,
+            )
+        )
 
     # DeriveEngine (ADR-0002 + ADR-0023)
     derive_engine: Optional[DeriveEngine] = None
@@ -252,7 +264,9 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
             p._derive_engine = derive_engine  # noqa: SLF001
         logging.info(
             "DERIVE_ENGINE_WIRED symbols=%d anchor_offset_s=%d d1_anchor=%d",
-            len(symbols), anchor_offset_s, d1_anchor_offset_s,
+            len(symbols),
+            anchor_offset_s,
+            d1_anchor_offset_s,
         )
 
     # Redis tail_n для priming
@@ -276,6 +290,12 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
                 try:
                     _derive_warmup_cfg[int(k)] = int(v)
                 except (ValueError, TypeError):
+                    logging.debug(
+                        "M1_INGESTION_WARMUP_PARSE_FAILED key=%r value=%r",
+                        k,
+                        v,
+                        exc_info=True,
+                    )
                     pass
 
     _cascade_catchup_m1_n = 1440
@@ -285,11 +305,17 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
             try:
                 _cascade_catchup_m1_n = int(raw_catchup)
             except (ValueError, TypeError):
+                logging.debug(
+                    "M1_INGESTION_CASCADE_CATCHUP_PARSE_FAILED raw=%r",
+                    raw_catchup,
+                    exc_info=True,
+                )
                 pass
 
     logging.info(
         "M1_INGESTION_WORKER_BUILD symbols=%d tfs=%s mode=broker_proxy",
-        len(symbols), sorted(redis_tail_n.keys()),
+        len(symbols),
+        sorted(redis_tail_n.keys()),
     )
 
     return M1PollerRunner(
@@ -316,7 +342,9 @@ def main() -> int:
 
     report = load_env_secrets()
     if report.loaded:
-        logging.info("ENV: secrets_loaded path=%s keys=%d", report.path, report.keys_count)
+        logging.info(
+            "ENV: secrets_loaded path=%s keys=%d", report.path, report.keys_count
+        )
 
     config_path = pick_config_path()
     logging.info("M1_INGESTION_WORKER config=%s", config_path)

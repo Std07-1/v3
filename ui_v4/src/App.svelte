@@ -33,7 +33,6 @@
     currentFrame,
     currentPair,
     resetFrameRouter,
-    uiWarnings as routerUiWarnings,
     serverConfig,
   } from "./app/frameRouter";
   import { diagStore } from "./app/diagState";
@@ -42,13 +41,7 @@
   import { stopEdgeProbe, probeNow } from "./app/edgeProbe";
   import { metaStore } from "./stores/meta";
 
-  import type {
-    WsAction,
-    T_MS,
-    UiWarning,
-    RenderFrame,
-    ActiveTool,
-  } from "./types";
+  import type { T_MS, UiWarning, RenderFrame, ActiveTool } from "./types";
 
   // --- WS URL: same-origin у prod, explicit у dev (Правило §11) ---
   // Dev (Vite :5173): import.meta.env.DEV=true → ws://localhost:8000/ws
@@ -89,24 +82,13 @@
       return false;
     }
   }
-  function saveMagnet(v: boolean): void {
-    try {
-      localStorage.setItem("v4_magnet_enabled", v ? "1" : "0");
-    } catch {}
-  }
   let magnetEnabled = $state(loadMagnet());
-  function toggleMagnet() {
-    magnetEnabled = !magnetEnabled;
-    saveMagnet(magnetEnabled);
-  }
 
   // P3.11/P3.12: ChartPane ref for theme/style delegation
   let chartPaneRef: any = $state(null);
   let activeTheme: ThemeName = $state(loadTheme());
   let appBg = $derived(THEMES[activeTheme]?.appBg ?? "#131722");
-  let hudBg = $derived(THEMES[activeTheme]?.hudBg ?? "transparent");
   let hudText = $derived(THEMES[activeTheme]?.hudText ?? "#d1d4dc");
-  let hudBorder = $derived(THEMES[activeTheme]?.hudBorder ?? "transparent");
   let menuBg = $derived(
     (THEMES[activeTheme] as any)?.menuBg ?? "rgba(30, 34, 45, 0.92)",
   );
@@ -296,8 +278,8 @@
       cachedBiasMap = f.bias_map;
     if (f?.momentum_map && Object.keys(f.momentum_map).length > 0)
       cachedMomentumMap = f.momentum_map;
-    // ADR-0033: narrative from full frame only
-    if (f?.frame_type === "full")
+    // ADR-0033+ADR-0035: narrative from full frame or delta (if present)
+    if ((f as any)?.narrative != null)
       cachedNarrative = (f as any).narrative ?? null;
     // Track price/time from frames for HUD
     if (f) {
@@ -323,10 +305,6 @@
   });
 
   // --- Actions ---
-
-  function sendRawAction(a: WsAction) {
-    ws?.sendAction(a);
-  }
 
   function scrollback(ms: T_MS) {
     actions?.scrollback(ms);
@@ -454,16 +432,10 @@
   <!-- Main content area -->
   <div class="main-content">
     <div class="chart-wrapper">
-      <DrawingToolbar
-        {activeTool}
-        onSelectTool={(t) => (activeTool = t)}
-        {magnetEnabled}
-        onToggleMagnet={toggleMagnet}
-      />
+      <DrawingToolbar {activeTool} onSelectTool={(t) => (activeTool = t)} />
       <ChartPane
         bind:this={chartPaneRef}
         currentFrame={frame}
-        {sendRawAction}
         {scrollback}
         {addUiWarning}
         {brightness}
@@ -483,9 +455,7 @@
           actions?.switchSymbolTf(sym, tf);
           saveLastPair(sym, tf);
         }}
-        themeBg={hudBg}
         themeText={hudText}
-        themeBorder={hudBorder}
         {menuBg}
         {menuBorder}
         biasMap={cachedBiasMap}

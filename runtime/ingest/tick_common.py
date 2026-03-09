@@ -77,6 +77,7 @@ def to_ms(raw: Any) -> Optional[int]:
     try:
         value = float(raw)
     except Exception:
+        logging.debug("TICK_COMMON_TO_MS_PARSE_FAILED raw=%r", raw, exc_info=True)
         return None
     if value <= 0:
         return None
@@ -106,11 +107,12 @@ def calendar_from_group(group_cfg: dict) -> Optional[MarketCalendar]:
             daily_break_start_hm=str(
                 group_cfg.get("market_daily_break_start_hm", "00:00")
             ),
-            daily_break_end_hm=str(
-                group_cfg.get("market_daily_break_end_hm", "00:00")
-            ),
+            daily_break_end_hm=str(group_cfg.get("market_daily_break_end_hm", "00:00")),
             daily_break_enabled=True,
             daily_breaks=daily_breaks,
         )
     except Exception:
+        logging.debug(
+            "TICK_COMMON_CALENDAR_BUILD_FAILED group_cfg=%r", group_cfg, exc_info=True
+        )
         return None
