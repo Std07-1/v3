@@ -72,6 +72,8 @@ class BrokerRedisProxy:
         date_to_utc: Any = None,
     ) -> List[CandleBar]:
         """Fetch M1 bars через broker_sidecar Redis queue."""
+        req_id = uuid.uuid4().hex
+        reply_key = "%s:%s" % (self._bars_key, req_id)
         date_to_ms = None
         if date_to_utc is not None:
             if hasattr(date_to_utc, "timestamp"):
@@ -83,6 +85,8 @@ class BrokerRedisProxy:
             {
                 "v": _CONTRACT_VERSION,
                 "cmd": "fetch_m1",
+                "req_id": req_id,
+                "reply_to": reply_key,
                 "symbol": symbol,
                 "n_bars": n,
                 "date_to_ms": date_to_ms,
@@ -91,14 +95,16 @@ class BrokerRedisProxy:
         self._redis.rpush(self._cmd_key, cmd)
 
         # Wait for response
-        result = self._redis.blpop(self._bars_key, timeout=_BLPOP_TIMEOUT_S)
+        result = self._redis.blpop(reply_key, timeout=_BLPOP_TIMEOUT_S)
         if result is None:
             logging.warning(
-                "BROKER_PROXY_TIMEOUT symbol=%s n=%d timeout=%ds",
+                "BROKER_PROXY_TIMEOUT symbol=%s n=%d timeout=%ds req_id=%s",
                 symbol,
                 n,
                 _BLPOP_TIMEOUT_S,
+                req_id,
             )
+            self._redis.delete(reply_key)
             return []
 
         _key, raw = result
@@ -106,6 +112,27 @@ class BrokerRedisProxy:
             resp = json.loads(raw)
         except (json.JSONDecodeError, TypeError) as exc:
             logging.warning("BROKER_PROXY_PARSE_ERROR err=%s", exc)
+            self._redis.delete(reply_key)
+            return []
+
+        self._redis.delete(reply_key)
+
+        if resp.get("req_id") != req_id:
+            logging.warning(
+                "BROKER_PROXY_REQ_MISMATCH symbol=%s expected_req=%s got_req=%s",
+                symbol,
+                req_id,
+                resp.get("req_id"),
+            )
+            return []
+
+        if resp.get("symbol") != symbol:
+            logging.warning(
+                "BROKER_PROXY_SYMBOL_MISMATCH expected=%s got=%s req_id=%s",
+                symbol,
+                resp.get("symbol"),
+                req_id,
+            )
             return []
 
         if resp.get("error"):

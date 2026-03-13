@@ -61,11 +61,15 @@ class SmcRunnerLike(Protocol):
 
     def get_zone_grades(self, symbol: str, tf_s: int) -> Any: ...
 
+    def get_session_levels_wire(self, symbol: str) -> Any: ...
+
     def get_bias_map(self, symbol: str) -> Any: ...
 
     def get_momentum_map(self, symbol: str) -> Any: ...
 
     def get_narrative(self, symbol: str, tf_s: int, *args: Any) -> Any: ...
+
+    def feed_m1_bar_dict(self, symbol: str, bar: Dict[str, Any]) -> None: ...
 
     def on_bar_dict(self, symbol: str, tf_s: int, bar: Dict[str, Any]) -> None: ...
 
@@ -1054,7 +1058,9 @@ async def _global_delta_loop(app: web.Application) -> None:
                                     )
                             # ADR-0035: inject fresh session levels in delta
                             try:
-                                _sess_lvls = _smc_runner.get_session_levels_wire(symbol)
+                                _sess_lvls = cast(
+                                    Any, _smc_runner
+                                ).get_session_levels_wire(symbol)
                                 if _sess_lvls:
                                     frame["session_levels"] = _sess_lvls
                             except Exception:
@@ -1128,7 +1134,7 @@ async def _global_delta_loop(app: web.Application) -> None:
                             if isinstance(ev, dict) and ev.get("complete"):
                                 bar = ev.get("bar")
                                 if isinstance(bar, dict):
-                                    _smc_runner_m1.feed_m1_bar_dict(sym, bar)
+                                    cast(Any, _smc_runner_m1).feed_m1_bar_dict(sym, bar)
                     except Exception as m1_exc:
                         _log.debug("WS_M1_SESSION_FEED_ERR sym=%s err=%s", sym, m1_exc)
 

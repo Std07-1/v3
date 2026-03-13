@@ -49,6 +49,7 @@ TF_M1_MS = 60_000
 
 # ─── Допоміжні функції ────────────────────────────────────────────
 
+
 def parse_iso_utc(s: str) -> dt.datetime:
     d = dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
     if d.tzinfo is None:
@@ -141,9 +142,9 @@ def _has_on_disk(
     tf_s: int,
     open_time_ms: int,
 ) -> bool:
-    day = dt.datetime.fromtimestamp(
-        open_time_ms / 1000, dt.timezone.utc
-    ).strftime("%Y%m%d")
+    day = dt.datetime.fromtimestamp(open_time_ms / 1000, dt.timezone.utc).strftime(
+        "%Y%m%d"
+    )
     idx = _load_day_index(cache, data_root, symbol, tf_s, day)
     return open_time_ms in idx
 
@@ -155,14 +156,15 @@ def _mark_on_disk(
     tf_s: int,
     open_time_ms: int,
 ) -> None:
-    day = dt.datetime.fromtimestamp(
-        open_time_ms / 1000, dt.timezone.utc
-    ).strftime("%Y%m%d")
+    day = dt.datetime.fromtimestamp(open_time_ms / 1000, dt.timezone.utc).strftime(
+        "%Y%m%d"
+    )
     idx = _load_day_index(cache, data_root, symbol, tf_s, day)
     idx.add(open_time_ms)
 
 
 # ─── Calendar ─────────────────────────────────────────────────────
+
 
 def _calendar_from_group(group_cfg: dict) -> Optional[MarketCalendar]:
     """Побудувати MarketCalendar з конфігу calendar-групи."""
@@ -202,6 +204,7 @@ def _build_calendar(cfg: dict, symbol: str) -> Optional[MarketCalendar]:
 
 # ─── Символи з конфігу ────────────────────────────────────────────
 
+
 def _symbols_from_config(cfg: dict) -> List[str]:
     raw = cfg.get("symbols", [])
     if isinstance(raw, list) and raw:
@@ -211,6 +214,7 @@ def _symbols_from_config(cfg: dict) -> List[str]:
 
 
 # ─── Основна логіка rebuild ───────────────────────────────────────
+
 
 def rebuild_one_symbol(
     data_root: str,
@@ -247,6 +251,10 @@ def rebuild_one_symbol(
     t0 = time.time()
 
     # ── Stage 1: M1 → M3, M5 ──────────────────────────────
+    # Спочатку завантажуємо ВСІ M1 бари, потім деривуємо по бакетах.
+    # Bug-fix: попередня версія деривувала після кожного M1 upsert,
+    # що призводило до запису partial бару (source_count=1) з подальшим
+    # пропуском повних даних через _has_on_disk cache hit.
     logging.info("  Stage 1: M1 → M3, M5")
     m1_buf = GenericBuffer(60, max_keep=10000)
     for bar in iter_m1_bars(data_root, symbol, start_ms, end_ms):
@@ -257,12 +265,15 @@ def rebuild_one_symbol(
             continue
         m1_buf.upsert(bar)
 
-        # Derive M3 and M5 from M1
-        for target_tf_s in [180, 300]:
-            ao_s = 0  # M3/M5 не мають anchor
-            target_tf_ms = target_tf_s * 1000
-            bucket_open = bucket_start_ms(bar.open_time_ms, target_tf_ms, 0)
-
+    # Derive M3 and M5 з повного M1 буфера (аналогічно Stages 2-5)
+    for target_tf_s in [180, 300]:
+        ao_s = 0  # M3/M5 не мають anchor
+        target_tf_ms = target_tf_s * 1000
+        b0 = bucket_start_ms(start_ms, target_tf_ms, 0)
+        for bucket_open in range(b0, end_ms, target_tf_ms):
+            if _has_on_disk(disk_cache, data_root, symbol, target_tf_s, bucket_open):
+                stats[f"tf_{target_tf_s}_existed"] += 1
+                continue
             result = derive_bar(
                 symbol=symbol,
                 target_tf_s=target_tf_s,
@@ -274,9 +285,6 @@ def rebuild_one_symbol(
             )
             if result is None:
                 continue
-            if _has_on_disk(disk_cache, data_root, symbol, target_tf_s, bucket_open):
-                stats[f"tf_{target_tf_s}_existed"] += 1
-                continue
             if not dry_run:
                 writer.append(result)
                 _mark_on_disk(disk_cache, data_root, symbol, target_tf_s, bucket_open)
@@ -286,8 +294,10 @@ def rebuild_one_symbol(
     logging.info(
         "  Stage 1 done: m1=%d, M3 written=%d existed=%d, M5 written=%d existed=%d (%.1fs)",
         stats["m1_loaded"],
-        stats["tf_180_written"], stats["tf_180_existed"],
-        stats["tf_300_written"], stats["tf_300_existed"],
+        stats["tf_180_written"],
+        stats["tf_180_existed"],
+        stats["tf_300_written"],
+        stats["tf_300_existed"],
         elapsed_s1,
     )
 
@@ -295,10 +305,10 @@ def rebuild_one_symbol(
     # Кожен stage читає source TF з диску (включаючи щойно записані бари)
     # і деривує наступний TF.
     cascade_steps = [
-        (300, 900, 3),       # M5 → M15
-        (900, 1800, 2),      # M15 → M30
-        (1800, 3600, 2),     # M30 → H1
-        (3600, 14400, 4),    # H1 → H4
+        (300, 900, 3),  # M5 → M15
+        (900, 1800, 2),  # M15 → M30
+        (1800, 3600, 2),  # M30 → H1
+        (3600, 14400, 4),  # H1 → H4
     ]
     for source_tf_s, target_tf_s, n_bars in cascade_steps:
         stage_label = f"tf_{source_tf_s}→tf_{target_tf_s}"
@@ -311,7 +321,9 @@ def rebuild_one_symbol(
         # Читаємо source TF з диску
         source_buf = GenericBuffer(source_tf_s, max_keep=50000)
         loaded = 0
-        for bar in _iter_bars_from_disk(data_root, symbol, source_tf_s, start_ms, end_ms):
+        for bar in _iter_bars_from_disk(
+            data_root, symbol, source_tf_s, start_ms, end_ms
+        ):
             source_buf.upsert(bar)
             loaded += 1
 
@@ -422,20 +434,47 @@ def _iter_bars_from_disk(
 
 
 def _tf_label(tf_s: int) -> str:
-    labels = {60: "M1", 180: "M3", 300: "M5", 900: "M15", 1800: "M30", 3600: "H1", 14400: "H4", 86400: "D1"}
+    labels = {
+        60: "M1",
+        180: "M3",
+        300: "M5",
+        900: "M15",
+        1800: "M30",
+        3600: "H1",
+        14400: "H4",
+        86400: "D1",
+    }
     return labels.get(tf_s, f"{tf_s}s")
 
 
 # ─── CLI entrypoint ───────────────────────────────────────────────
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Rebuild derived TFs (M3→H4) з M1 даних на диску.",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Тільки підрахунок, без запису.")
-    parser.add_argument("--symbol", type=str, default=None, help="Один символ (наприклад XAU/USD). За замовчуванням — усі з config.")
-    parser.add_argument("--start", type=str, default=None, help="Початок діапазону (ISO UTC, наприклад 2025-01-01).")
-    parser.add_argument("--end", type=str, default=None, help="Кінець діапазону (ISO UTC, наприклад 2026-03-01).")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Тільки підрахунок, без запису."
+    )
+    parser.add_argument(
+        "--symbol",
+        type=str,
+        default=None,
+        help="Один символ (наприклад XAU/USD). За замовчуванням — усі з config.",
+    )
+    parser.add_argument(
+        "--start",
+        type=str,
+        default=None,
+        help="Початок діапазону (ISO UTC, наприклад 2025-01-01).",
+    )
+    parser.add_argument(
+        "--end",
+        type=str,
+        default=None,
+        help="Кінець діапазону (ISO UTC, наприклад 2026-03-01).",
+    )
     parser.add_argument("--config", type=str, default=None, help="Шлях до config.json.")
     args = parser.parse_args()
 
@@ -470,10 +509,11 @@ def main() -> None:
             if args.start:
                 start_ms = int(parse_iso_utc(args.start).timestamp() * 1000)
             else:
-                start_ms = head_first_bar_time_ms(data_root, symbol, tf_s=TF_M1_S)
-                if start_ms is None:
+                _head = head_first_bar_time_ms(data_root, symbol, tf_s=TF_M1_S)
+                if _head is None:
                     logging.warning("SKIP symbol=%s — M1 дані відсутні.", symbol)
                     continue
+                start_ms = _head
 
             if args.end:
                 end_ms = int(parse_iso_utc(args.end).timestamp() * 1000)

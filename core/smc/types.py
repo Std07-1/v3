@@ -23,6 +23,8 @@ ZONE_KINDS = frozenset(
         "fvg_bear",  # Fair Value Gaps (§4.4)
         "premium",
         "discount",  # Premium/Discount Zones (§4.6)
+        "ifvg_bull",
+        "ifvg_bear",  # Inverted FVG (ADR-0034 P0)
     }
 )
 ZONE_STATUSES = frozenset(
@@ -123,6 +125,7 @@ class SmcZone:
     context_layer: Optional[str] = (
         None  # ADR-0024c Phase 2: 'institutional'|'intraday'|'local'|None
     )
+    origin_zone_id: Optional[str] = None  # ADR-0034 P0: IFVG → id of source FVG
 
     def to_wire(self) -> Dict[str, Any]:
         """S6: wire format = ui_v4 SmcZone type.
@@ -142,6 +145,8 @@ class SmcZone:
         }  # type: Dict[str, Any]
         if self.context_layer is not None:
             d["context_layer"] = self.context_layer
+        if self.origin_zone_id is not None:
+            d["origin_zone_id"] = self.origin_zone_id
         return d
 
     def with_status(self, status: str, end_ms: Optional[int] = None) -> "SmcZone":

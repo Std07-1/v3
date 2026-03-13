@@ -37,6 +37,7 @@
 
 ```bash
 # 1. Main venv (Python >=3.11) — платформа, UDS, derive, SMC, UI
+#    Поточний documented migration incident: Python 3.14.2, див. ADR-0016 Appendix C
 python -m venv .venv
 .venv\Scripts\activate    # Windows
 pip install -r requirements.txt
@@ -61,7 +62,10 @@ curl http://127.0.0.1:8089/api/status
 ```
 
 > **Dual-venv (ADR-0016)**: Supervisor автоматично використовує `.venv37/` для broker-процесів (broker_sidecar, tick_publisher)
-> і `.venv/` для всього іншого. Якщо `.venv37/` не знайдено — fallback на legacy single-process m1_poller.
+> і `.venv/` для всього іншого. На Windows для main venv діє trampoline rail:
+> worker-и завершуються tree-kill через `taskkill /T`, а `logs/supervisor.pid`
+> блокує duplicate supervisor instance. Якщо `.venv37/` не знайдено — fallback
+> на legacy single-process m1_poller.
 
 ## Quality Gates
 
@@ -91,7 +95,7 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 | [docs/config_reference.md](docs/config_reference.md) | Довідник полів config.json |
 | [docs/runbooks/production.md](docs/runbooks/production.md) | Production runbook (запуск, інциденти, recovery) |
 | [docs/audit/progress.md](docs/audit/progress.md) | Аудит прогресу P0-P6 з evidence |
-| [docs/adr/index.md](docs/adr/index.md) | Реєстр усіх ADR (ADR-0001 … ADR-0010) |
+| [docs/adr/index.md](docs/adr/index.md) | Реєстр усіх ADR (canonical archive) |
 | [docs/adr/0001-unified-data-store.md](docs/adr/0001-unified-data-store.md) | ADR: UDS як єдина талія |
 | [docs/adr/0002-derive-chain-from-m1.md](docs/adr/0002-derive-chain-from-m1.md) | ADR: DeriveChain M1→M3→M5→H4 (Phase 0 завершено) |
 | [docs/adr/0003-cold-start-hardening.md](docs/adr/0003-cold-start-hardening.md) | ADR: Cold start hardening (S1 ✅, S2 ✅, S3-S4 pending) |

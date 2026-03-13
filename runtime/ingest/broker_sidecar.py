@@ -6,13 +6,14 @@
 
 Redis queues (namespace з config.json):
   {ns}:broker:m1:cmd   — BLPOP (commands)
-  {ns}:broker:m1:bars  — RPUSH (responses)
+    {ns}:broker:m1:bars  — legacy shared RPUSH (responses)
+    {ns}:broker:m1:bars:{req_id} — canonical per-request reply queue
 
 Command contract v1:
   {"v": 1, "cmd": "fetch_m1", "symbol": "XAU/USD", "n_bars": 5, "date_to_ms": 1741392060000}
 
 Response contract v1:
-  {"v": 1, "symbol": "XAU/USD", "bars": [{...}, ...], "error": null}
+    {"v": 1, "req_id": "...", "symbol": "XAU/USD", "bars": [{...}, ...], "error": null}
 """
 
 from __future__ import annotations
@@ -103,9 +104,12 @@ def _handle_command(provider, cmd_raw, redis_cli, bars_key):
         return
 
     action = cmd.get("cmd", "")
+    req_id = str(cmd.get("req_id", "") or "")
+    reply_to = str(cmd.get("reply_to", "") or "")
     symbol = cmd.get("symbol", "")
     n_bars = min(int(cmd.get("n_bars", 5)), _MAX_BARS_PER_CMD)
     date_to_ms = cmd.get("date_to_ms")
+    target_key = reply_to or bars_key
 
     if action != "fetch_m1" or not symbol:
         logging.warning("BROKER_SIDECAR_CMD_UNKNOWN cmd=%s symbol=%s", action, symbol)
@@ -123,13 +127,15 @@ def _handle_command(provider, cmd_raw, redis_cli, bars_key):
         error_resp = json.dumps(
             {
                 "v": _CONTRACT_VERSION,
+                "req_id": req_id,
                 "symbol": symbol,
                 "bars": [],
                 "error": str(exc),
             }
         )
-        redis_cli.rpush(bars_key, error_resp)
-        redis_cli.ltrim(bars_key, -_MAX_LIST_LEN, -1)
+        redis_cli.rpush(target_key, error_resp)
+        if not reply_to:
+            redis_cli.ltrim(target_key, -_MAX_LIST_LEN, -1)
         logging.warning("BROKER_SIDECAR_FETCH_ERROR symbol=%s err=%s", symbol, exc)
         return
 
@@ -138,13 +144,15 @@ def _handle_command(provider, cmd_raw, redis_cli, bars_key):
     resp = json.dumps(
         {
             "v": _CONTRACT_VERSION,
+            "req_id": req_id,
             "symbol": symbol,
             "bars": bar_dicts,
             "error": None,
         }
     )
-    redis_cli.rpush(bars_key, resp)
-    redis_cli.ltrim(bars_key, -_MAX_LIST_LEN, -1)
+    redis_cli.rpush(target_key, resp)
+    if not reply_to:
+        redis_cli.ltrim(target_key, -_MAX_LIST_LEN, -1)
 
     if bars:
         logging.debug(

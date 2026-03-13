@@ -24,7 +24,7 @@
 | [0013](0013-d1-chart-rendering-fix.md) | D1 Chart Rendering Fix | **Implemented** | 2026-02-25 | D1, LWC, time mapping, YYYY-MM-DD, epoch seconds | `d1_tv_parity` |
 | [0014](0014-uds-split-brain-resilience.md) | UDS Split-Brain Resilience | **Implemented** | 2026-02-26 | split-brain, UDS, Redis, watermark | `concurrency_hardening` |
 | [0015](0015-calendar-pause-flat-bars.md) | Calendar Pause/Flat Bar Interpretation | **Implemented** | 2026-02-26 | calendar_pause, complete=True, derive, M5 | `derive_chain_m1` |
-| [0016](0016-python-version-broker-isolation.md) | Python Version Upgrade + Broker Subprocess Isolation | **Implemented** | 2026-03-08 | Python 3.7, 3.11, forexconnect, dual-venv, broker_sidecar | `platform_modernization` |
+| [0016](0016-python-version-broker-isolation.md) | Python Version Upgrade + Broker Subprocess Isolation | **Implemented** | 2026-03-08 | dual-venv, broker_sidecar, broker_python, Python 3.14 trampoline, supervisor PID lock | `platform_modernization` |
 | [0017](0017-replay-mode-offline-demo.md) | Replay-Mode з data_v3/ для Offline Demo | **Implemented** | 2026-02-28 | replay, offline, demo, data_v3, CI | `offline_demo` |
 | [0018](0018-slo-observability-prometheus.md) | SLO Observability + Prometheus Integration | **Proposed** | 2026-02-26 | SLO, latency, prometheus, metrics, p95 | `observability_v1` |
 | [0019](0019-code-review-quick-fixes.md) | Code Review Quick-Fixes Batch (#1,#2,#4,#5,#8,#9) | **Implemented** | 2026-02-26 | bisect, warmup lock, LRU FD, stop_event, max_workers | `code_review_hardening` |
@@ -45,9 +45,10 @@
 | [0031](0031-bias-banner.md) | Bias Banner — Multi-TF Trend Bias Display | **Implemented** | 2026-03-08 | bias_map, trend_bias, multi-TF, banner, BiasBanner.svelte | `smc_vis_phi2` |
 | [0032](0032-overlay-render-throttle-tf-switch.md) | Overlay Render Throttle + TF Switch Stability | **Implemented** | 2026-03-08 | crosshairMove guard, RAF wheel, center_ms viewCache, TF switch UX | `ui_perf_p1_p5` |
 | [0033](0033-context-flow-narrative.md) | Context Flow — Multi-TF Narrative Engine | **Implemented** | 2026-03-08 | narrative, scenario, trade/wait, market_phase, FVG context, NarrativePanel | `smc_vis_phi3` |
-| [0034](0034-advanced-market-analysis-tda.md) | Advanced Market Analysis — TDA Synchronization & Extended SMC | **Proposed** | 2026-03-09 | TDA, IFVG, breaker, DP, Quasimodo, TF sync, protected fractal, idea invalidation | `smc_tda_v1` |
+| [0034](0034-advanced-market-analysis-tda.md) | Advanced Market Analysis — TDA Synchronization & Extended SMC | **Partially Implemented** | 2026-03-09 | TDA, IFVG (P0 ✅), breaker (P1 ✅), DP/Quasimodo/TF sync (P2–P6 ❌ rolled back) | `smc_tda_v1` |
 | [0035](0035-sessions-killzones.md) | Sessions & Killzones — Trading Session Awareness | **Implemented** | 2026-03-08 | Asia/London/NY, session H/L, killzone, F9 sweep, narrative session context | `smc_sessions_v1` |
 | [0036](0036-premium-trader-first-shell.md) | Premium Trader-First Shell for UI v4 | **Proposed** | 2026-03-09 | premium shell, thesis bar, tactical strip, service rail, signature interaction, UI hierarchy | `ui_v4_premium_shell_v1` |
+| [0037](0037-binance-second-broker.md) | Binance Futures — Second Broker (BTC/ETH Live Ingest) | **Proposed** | 2026-03-13 | Binance, BTCUSDT, ETHUSDT, Futures API, 24/7, crypto_24x7, python-binance, anchor=0 | `binance_broker_v1` |
 
 ---
 
@@ -87,4 +88,4 @@
 
 Див. формат у [copilot-instructions.md](../../.github/copilot-instructions.md) → Тема B, Правило B2.
 
-Наступний номер: **0036**
+Наступний номер: **0037**

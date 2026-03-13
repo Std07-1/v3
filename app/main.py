@@ -99,10 +99,13 @@ def _parse_args() -> argparse.Namespace:
             "m1_ingestion_worker",
             "ws_server",
             "replay",
+            "binance_ingest_worker",
+            "binance_tick_publisher",
         ],
         default="all",
         help="all | ui | tick_preview | tick_publisher | m1_poller | "
-        "broker_sidecar | m1_ingestion_worker | ws_server | replay",
+        "broker_sidecar | m1_ingestion_worker | ws_server | replay | "
+        "binance_ingest_worker | binance_tick_publisher",
     )
     ap.add_argument(
         "--stdio",
@@ -155,6 +158,8 @@ _PROCESS_CATEGORIES: Dict[str, str] = {
     "ui": "essential",
     "ws_server": "essential",
     "replay": "critical",
+    "binance_ingest_worker": "critical",
+    "binance_tick_publisher": "non_critical",
 }
 # (base_delay_s, max_delay_s, max_restart_attempts)
 _BACKOFF_CFG: Dict[str, tuple] = {
@@ -409,12 +414,43 @@ def _wait_for_prime_ready(config_path: str, timeout_s: int = 30) -> bool:
     return False
 
 
+def _kill_tree(pid: int) -> None:
+    """Kill process and all its children (handles Python 3.14 venv trampoline).
+
+    On Windows, .venv/Scripts/python.exe is a trampoline launcher that spawns
+    the real python.exe as a child.  proc.terminate() only kills the trampoline,
+    leaving the real worker orphaned.  taskkill /T walks the full tree.
+    """
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+        except Exception as exc:
+            logging.debug("KILL_TREE_TASKKILL_FAIL pid=%s err=%s", pid, exc)
+    else:
+        import signal as _sig
+
+        getpgid = getattr(os, "getpgid", None)
+        killpg = getattr(os, "killpg", None)
+        try:
+            if callable(getpgid) and callable(killpg):
+                killpg(getpgid(pid), _sig.SIGTERM)
+            else:
+                os.kill(pid, _sig.SIGTERM)
+        except (ProcessLookupError, OSError):
+            pass
+
+
 def _terminate(item: ChildProcess, timeout_s: int = 5) -> None:
     proc = item.proc
     if proc.poll() is None:
         logging.info("Зупиняю процес %s pid=%s", item.label, proc.pid)
+        _kill_tree(proc.pid)
         try:
-            proc.terminate()
             proc.wait(timeout=timeout_s)
         except Exception:
             try:
@@ -500,6 +536,55 @@ def _rotate_log_if_needed(log_path: Path) -> None:
         logging.warning("LOG_ROTATE_FAIL path=%s err=%s", log_path, exc)
 
 
+# ---------------------------------------------------------------------------
+# PID-file lock — prevent duplicate supervisor instances
+# ---------------------------------------------------------------------------
+_PID_FILE = "logs/supervisor.pid"
+
+
+def _acquire_pid_lock(log_dir: Path) -> bool:
+    """Write PID file. Return False if another supervisor is alive."""
+    pid_path = log_dir / "supervisor.pid"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    if pid_path.exists():
+        try:
+            old_pid = int(pid_path.read_text().strip())
+            # Check if old process is alive (Windows-safe)
+            if os.name == "nt":
+                ret = subprocess.run(
+                    ["tasklist", "/FI", f"PID eq {old_pid}", "/NH"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                alive = str(old_pid) in ret.stdout
+            else:
+                os.kill(old_pid, 0)
+                alive = True
+        except (ValueError, ProcessLookupError, OSError, Exception):
+            alive = False
+        if alive:
+            logging.error(
+                "SUPERVISOR_ALREADY_RUNNING pid=%d pid_file=%s — "
+                "зупиніть існуючий supervisor перед повторним запуском",
+                old_pid,
+                pid_path,
+            )
+            return False
+        logging.info("SUPERVISOR_STALE_PID old_pid=%d — перезаписую", old_pid)
+    pid_path.write_text(str(os.getpid()))
+    return True
+
+
+def _release_pid_lock(log_dir: Path) -> None:
+    pid_path = log_dir / "supervisor.pid"
+    try:
+        if pid_path.exists() and int(pid_path.read_text().strip()) == os.getpid():
+            pid_path.unlink()
+    except Exception:
+        pass
+
+
 def main() -> int:
     args = _parse_args()
     _setup_logging(verbose=bool(args.verbose))
@@ -514,7 +599,11 @@ def main() -> int:
 
     log_dir = Path(args.log_dir)
 
-    logging.info("Supervisor: mode=%s stdio=%s", args.mode, stdio)
+    # PID lock — блокує дублювання supervisor instances
+    if not _acquire_pid_lock(log_dir):
+        return 4
+
+    logging.info("Supervisor: mode=%s stdio=%s pid=%d", args.mode, stdio, os.getpid())
 
     # D2: Redis preflight — fail-fast перед workers
     config_path_pf = pick_config_path()
@@ -607,6 +696,60 @@ def main() -> int:
                         log_dir=log_dir,
                         new_console=args.new_console,
                     )
+                )
+
+        # --- ADR-0037: Binance Futures (standalone modes) ---
+        if args.mode == "binance_ingest_worker":
+            processes.append(
+                _start_process(
+                    label="binance_ingest_worker",
+                    module="runtime.ingest.binance_ingest_worker",
+                    stdio=stdio,
+                    log_dir=log_dir,
+                    new_console=args.new_console,
+                )
+            )
+        if args.mode == "binance_tick_publisher":
+            processes.append(
+                _start_process(
+                    label="binance_tick_publisher",
+                    module="runtime.ingest.binance_tick_publisher",
+                    stdio=stdio,
+                    log_dir=log_dir,
+                    new_console=args.new_console,
+                )
+            )
+        # --- ADR-0037: Binance Futures (auto-start in "all" mode) ---
+        if args.mode == "all":
+            _bn_enabled = False
+            try:
+                with open(config_path_pf, "r", encoding="utf-8") as _f:
+                    _bn_cfg = json.load(_f).get("binance", {})
+                    _bn_enabled = bool(_bn_cfg.get("enabled", False))
+            except Exception:
+                logging.debug("BINANCE_CONFIG_READ_FAIL", exc_info=True)
+            if _bn_enabled:
+                processes.append(
+                    _start_process(
+                        label="binance_ingest_worker",
+                        module="runtime.ingest.binance_ingest_worker",
+                        stdio=stdio,
+                        log_dir=log_dir,
+                        new_console=args.new_console,
+                    )
+                )
+                processes.append(
+                    _start_process(
+                        label="binance_tick_publisher",
+                        module="runtime.ingest.binance_tick_publisher",
+                        stdio=stdio,
+                        log_dir=log_dir,
+                        new_console=args.new_console,
+                    )
+                )
+            else:
+                logging.info(
+                    "BINANCE_SKIP reason=disabled (config.binance.enabled=false)"
                 )
 
         # --- Replay mode (ADR-0017): M1 replay → DeriveEngine → UDS → UI ---
@@ -833,6 +976,7 @@ def main() -> int:
     finally:
         for item in reversed(processes):
             _terminate(item)
+        _release_pid_lock(log_dir)
 
     return 0
 

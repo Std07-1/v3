@@ -373,6 +373,7 @@ class M1SymbolPoller:
         # Єдиний шлях: history M1 → фільтр закритих → sort → commit у UDS.
         # Fetch: date_to = cutoff + 1 M1 (щоб точно включити cutoff бар)
         date_to = ms_to_utc_dt(expected + _M1_MS) if expected > 0 else None
+        bars: List[CandleBar] = []
         try:
             bars = self._provider.fetch_last_n_m1(
                 self._symbol,
@@ -388,25 +389,19 @@ class M1SymbolPoller:
                     exc,
                     self._errors,
                 )
-            return
+        else:
+            # FXCM може повертати бари у зворотному порядку.
+            # Фільтр: тільки бари після watermark і до expected cutoff.
+            # Watermark pre-filter запобігає stale spam в UDS.
+            if expected > 0:
+                bars = [b for b in bars if b.open_time_ms <= expected]
+            if self._watermark_ms is not None:
+                bars = [b for b in bars if b.open_time_ms > self._watermark_ms]
+            bars.sort(key=lambda b: b.open_time_ms)
 
-        if not bars:
-            return
-
-        # FXCM може повертати бари у зворотному порядку.
-        # Фільтр: тільки бари після watermark і до expected cutoff.
-        # Watermark pre-filter запобігає stale spam в UDS.
-        if expected > 0:
-            bars = [b for b in bars if b.open_time_ms <= expected]
-        if self._watermark_ms is not None:
-            bars = [b for b in bars if b.open_time_ms > self._watermark_ms]
-        bars.sort(key=lambda b: b.open_time_ms)
-        if not bars:
-            return
-
-        # Ingest кожен бар
-        for bar in bars:
-            self._ingest_bar(bar)
+            # Ingest кожен бар
+            for bar in bars:
+                self._ingest_bar(bar)
 
         # P0.2: live recover після звичайного poll
         self._live_recover_check()
@@ -1038,6 +1033,8 @@ class M1PollerRunner:
         self._maybe_log_stats(force=True)  # Початкові stats (watermarks після warmup)
         overdue_interval_s = 60  # Перевірка overdue кожні 60с
         last_overdue_ts = 0.0
+        prime_refresh_interval_s = 3600  # Оновлювати TTL prime:ready:m1 кожну годину
+        last_prime_refresh_ts = time.time()
         while not self._stop_event.is_set():
             self._sleep_to_next_minute()
             cycle_errors = 0
@@ -1065,6 +1062,10 @@ class M1PollerRunner:
                 except Exception as exc:
                     logging.warning("OVERDUE_CHECK_ERR err=%s", exc)
                 last_overdue_ts = now_ts
+            # Periodic refresh prime:ready:m1 TTL (6h expiry, refresh кожну годину)
+            if now_ts - last_prime_refresh_ts >= prime_refresh_interval_s:
+                self._publish_prime_ready()
+                last_prime_refresh_ts = now_ts
             self._maybe_log_stats()
             self._maybe_reconnect(cycle_errors)
 

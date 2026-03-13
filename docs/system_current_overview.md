@@ -11,12 +11,12 @@
 
 1. [Короткий опис](#короткий-опис)
 2. [Архітектура процесів](#архітектура-процесів)
-3. [SSOT-площини](#ssot-площини-ізольовані)
+3. SSOT-площини
 4. [Dependency Rule / Boundary](#dependency-rule--boundary)
 5. [SSOT: де що живе](#ssot-де-що-живе)
-6. [Геометрія часу](#геометрія-часу)
+6. [Геометрія часу](#геометрія-часу-помітка-для-всіх-розмов-про-свічки)
 7. [Інваріанти (I0–I6)](#інваріанти-i0i6)
-8. [Схеми потоків даних (Mermaid)](#схеми-потоків-даних)
+8. [Схема (потік даних)](#схема-потік-даних)
 9. [UI Render Pipeline](#ui-render-pipeline--повний-потік-даних-актуально)
 10. [Annotated tree](#annotated-tree-ascii-актуальний)
 11. [Stop-rules та режими](#stop-rules-та-режими)
@@ -27,14 +27,25 @@
 
 Система має **два SSOT-потоки**:
 
-- **M1→H4+D1 derive chain (основний)** — M1 final bars з FXCM History API (m1_poller) → DeriveEngine cascade: M3(3×M1)→M5(5×M1)→M15(3×M5)→M30(2×M15)→H1(2×M30)→H4(4×H1)+D1(1440×M1). Всі TF від M1 до D1 деривуються з одного джерела. Preview-plane: tick stream → TickPreviewWorker → Redis preview keyspace.
-- **D1 (derived, ADR-0023)** — глобальний тренд. D1 = 1440 × M1, anchor 79200s (22:00 UTC). DeriveEngine будує D1 як derived TF; engine_b D1 broker fetch вимкнено (`broker_base_tfs_s: []`).
+- **M1→H4+D1 derive chain (основний)** — M1 final bars з FXCM History API
+    (`m1_poller`) → DeriveEngine cascade:
+    `M3(3×M1)→M5(5×M1)→M15(3×M5)→M30(2×M15)→H1(2×M30)→H4(4×H1)+D1(1440×M1)`.
+    Всі TF від M1 до D1 деривуються з одного джерела. Preview-plane: tick stream
+    → TickPreviewWorker → Redis preview keyspace.
+- **D1 (derived, ADR-0023)** — глобальний тренд. D1 = `1440 × M1`, anchor
+    `79200s` (22:00 UTC). DeriveEngine будує D1 як derived TF; engine_b D1 broker
+    fetch вимкнено (`broker_base_tfs_s: []`).
 
-Supervisor (`app.main --mode all`) керує 5 процесами. UDS є центром читання/запису: writer-и пишуть через UDS (SSOT disk + Redis snapshots + updates bus), UI читає через UDS. Preview-plane (M1/M3) живе в Redis keyspace, final-и з M1 poller проходять bridge до preview ring (final>preview). `/api/bars` для всіх TF застосовує PREVIOUS_CLOSE stitching (open[i]=close[i-1]) для TV-like smooth candles; SSOT на диску не модифікується.
+Supervisor (`app.main --mode all`) керує 5 процесами. UDS є центром
+читання/запису: writer-и пишуть через UDS (SSOT disk + Redis snapshots +
+updates bus), UI читає через UDS. Preview-plane (M1/M3) живе в Redis keyspace,
+final-и з M1 poller проходять bridge до preview ring (final>preview).
+`/api/bars` для всіх TF застосовує PREVIOUS_CLOSE stitching
+(`open[i]=close[i-1]`) для TV-like smooth candles; SSOT на диску не
+модифікується.
 
 > **ADR-0002 завершено**: engine_b M5 polling вимкнено (m5_polling_enabled=false), derived_tfs_s=[]. Всі TF M1→H4 через m1_poller/DeriveEngine.  
 > **ADR-0023 (D1 derive)**: D1 стає derived TF (1440×M1, anchor 79200). engine_b broker_base_tfs_s=[] — D1 fetch з broker вимкнено.
-
 > **Детальний гайд по отриманню свічок**: [docs/guide_candle_acquisition.md](guide_candle_acquisition.md)
 
 ## Архітектура процесів
@@ -56,10 +67,12 @@ app.main (supervisor)
 > **Dual-venv (ADR-0016)**: Supervisor автоматично використовує `.venv37/` (Python 3.7) для
 > broker_sidecar та tick_publisher_fxcm, і `.venv/` (Python ≥3.11) для всього іншого.
 > Якщо `.venv37/` не знайдено — fallback на legacy m1_poller (single-process, Python 3.7).
+> На Windows supervisor завершує workers через tree-kill (`taskkill /T`) і тримає `logs/supervisor.pid`,
+> бо Python 3.14 venv launcher створює trampoline-процес перед реальним worker.
 
 ```
 
-## SSOT-площини (ізольовані)
+## SSOT-площини ізольовані (SSOT)
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
@@ -173,7 +186,11 @@ app.main (supervisor)
 | **I5** | **Degraded-but-loud**: будь-який fallback/перемикання джерел/geom_fix → `warnings[]`/`meta.extensions`, не silent. `bars=[]` завжди з `warnings[]` (no_data rail) | `_contract_guard_warn_*` + no_data branch |
 | **I6** | **Stop-rule**: якщо зміна ламає I0–I5 → зупинити PATCH, зробити ADR. Ніяких "одноразових" фіксів без обґрунтування | Governance: copilot-instructions.md rev 2.0 |
 
-> **Disk policy (P11)**: disk не читається для polling/updates. Cold-load/switch = `disk_policy="bootstrap"` (тільки 60s після boot). Scrollback = `disk_policy="explicit"` (max_steps=6 + cooldown 0.5s). Guard: `_disk_allowed()` у UDS; `SCROLLBACK_MAX_STEPS`/`SCROLLBACK_COOLDOWN_S` у ws_server.
+> **Disk policy (P11)**: disk не читається для polling/updates. Cold-load/switch =
+> `disk_policy="bootstrap"` (тільки 60s після boot). Scrollback =
+> `disk_policy="explicit"` (max_steps=6 + cooldown 0.5s). Guard:
+> `_disk_allowed()` у UDS; `SCROLLBACK_MAX_STEPS`/`SCROLLBACK_COOLDOWN_S`
+> у ws_server.
 
 ### UI v4 Frontend Stack (Svelte 5 + LWC 5)
 
@@ -774,7 +791,13 @@ v3/
 
 ### Ingest (дві ізольовані data planes)
 
-- **M1→H4 (основний потік)**: M1 poller з FXCM History API (8s cycle, calendar-aware expected, watermark pre-filter, adaptive fetch, date_to bound). Tail catchup на bootstrap (до 5000 барів). Live recover (gap auto-fill з cooldown+budget). Stale detection (720s). DeriveEngine cascade: M3(3×M1)→M5(5×M1)→M15(3×M5)→M30(2×M15)→H1(2×M30)→H4(4×H1). Calendar-pause фільтрація. Preview-plane: tick stream → preview bars в Redis. Final bridge → preview ring (final>preview). BID price mode.
+- **M1→H4 (основний потік)**: M1 poller з FXCM History API (8s cycle,
+  calendar-aware expected, watermark pre-filter, adaptive fetch, date_to bound).
+  Tail catchup на bootstrap (до 5000 барів). Live recover (gap auto-fill з
+  cooldown+budget). Stale detection (720s). DeriveEngine cascade:
+  `M3(3×M1)→M5(5×M1)→M15(3×M5)→M30(2×M15)→H1(2×M30)→H4(4×H1)`.
+  Calendar-pause фільтрація. Preview-plane: tick stream → preview bars в Redis.
+  Final bridge → preview ring (final>preview). BID price mode.
 - **D1 (broker)**: engine_b D1-only fetcher (m5_polling_enabled=false). broker_base fetch на закритті D1 бакета + cold start.
 
 ### UDS (UnifiedDataStore)
@@ -799,7 +822,12 @@ v3/
 - Transport: WebSocket (`runtime/ws/ws_server.py`, 907 LOC, порт 8000, `/ws`). Протокол: `ui_v4_v2` (full + delta + scrollback + config + heartbeat). CPU opt: delta_poll 2s + ThreadPoolExecutor(2). Idle 2-3% CPU.
 - Same-origin serving (Тема G, G1): `ws_server.py` роздає `ui_v4/dist/` (index.html + /assets/) на порт 8000. Prod: `npm run build` → `python -m runtime.ws.ws_server`. Dev: `npm run dev` (:5173) + ws_server (:8000).
 - 3-layer rendering: LWC candles + SMC overlay canvas + drawings canvas (RAF + renderSync, DPR-aware). SMC overlay **ACTIVE** (ADR-0024: OB/FVG/Swings/Levels + strength opacity + 4 toggles; ADR-0026: level rendering rules — merge-on-physical-overlap, L1–L6); drawings **ACTIVE** (ADR-0007).
-- Drawing tools (ADR-0007): hline/trend/rect/eraser, click-click TradingView-style, selection/hit-testing, drag-edit, undo/redo (CommandStack), hotkeys (T/H/R/E/Esc/Ctrl+Z/Y). Client-only (noop sendAction). Sync render X+Y axis (renderSync on visibleTimeRangeChange + wheel + dblclick). Brightness sync via style:filter.
+- Drawing tools (ADR-0007): hline/trend/rect/eraser, click-click
+    TradingView-style, selection/hit-testing, drag-edit, undo/redo
+    (CommandStack), hotkeys (T/H/R/E/Esc/Ctrl+Z/Y). Client-only
+    (noop sendAction). Sync render X+Y axis
+    (renderSync on visibleTimeRangeChange + wheel + dblclick).
+    Brightness sync via style:filter.
 - Drawing persistence: localStorage per symbol+TF (`v4_drawings_{sym}_{tf}`). Symbol/TF persistence (`v4_last_pair`, one-shot restore on first full frame). Toolbar collapse persistence (`v4_toolbar_collapsed`).
 - Floating DrawingToolbar: position:absolute over chart, 28px/16px collapsed, no background, Ukrainian labels. Magnet (snap-to-OHLC) deferred.
 - DiagState SSOT: 7-рівневий пріоритетний статус, StatusOverlay з hysteresis, quiet degraded mode.

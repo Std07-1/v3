@@ -1,26 +1,19 @@
-# ADR-0034: Advanced Market Analysis — TDA Synchronization & Extended SMC Concepts
+> **ARCHIVE / NON-CANONICAL SNAPSHOT** — Цей файл зберігає окремий зріз стану ADR-0034
+> на момент, коли P2–P6 були реалізовані до rollback. Це **не підтримуваний** документ
+> і не поточне джерело правди для системи, але це **не сміттєва копія**: він лишається
+> як історичний запис того проміжного стану. Канонічний і підтримуваний документ:
+> [`0034-advanced-market-analysis-tda.md`](0034-advanced-market-analysis-tda.md).
+> Поки цей файл існує, його слід трактувати як archive-only reference, не як active ADR state.
 
-- **Статус**: **Partially Implemented** (P0 IFVG + P1 Breaker only)
-- **Дата**: 2026-03-09 (proposed), 2026-03-10 (P0+P1 implemented, P2–P6 rolled back)
+# ADR-0034: Advanced Market Analysis — TDA (ARCHIVE SNAPSHOT)
+
+- **Статус**: **Archived / Non-Canonical** — historical snapshot, see canonical `0034-advanced-market-analysis-tda.md`
+- **Дата**: 2026-03-09
+- **Snapshot of**: 2026-03-10 — стан перед rollback P2–P6
+- **Rolled back**: 2026-03-10 — механіка не тестувалась в реальних торгових умовах; ефект на якість аналізу невідомий. Реалізацію скасовано до MVP-валідації (P0+P1 першими).
+- **MVP plan**: реалізувати P0 (IFVG) + P1 (Breaker) → верифікувати на 1-2 торгових сесіях → продовжувати P2–P7 або відмовитись
 - **Автор**: R_ARCHITECT
 - **Initiative**: `smc_tda_v1`
-
-### Implementation Status (2026-03-13)
-
-| Slice | Статус | Evidence |
-|-------|--------|----------|
-| **P0: IFVG** | ✅ Implemented | `core/smc/fvg.py` IFVG detection, `types.py` ifvg_bull/ifvg_bear, `engine.py` step 4b |
-| **P1: Breaker** | ✅ Implemented | `engine.py:_apply_breaker_transition()` step 7b, mitigated OB + CHoCH → breaker |
-| P2: TF-sync | ❌ Not implemented | Code rolled back, not in `narrative.py` |
-| P3: Decisional Point | ❌ Not implemented | Code rolled back |
-| P4: Protected Fractal | ❌ Not implemented | Code rolled back |
-| P5: Quasimodo | ❌ Not implemented | `quasimodo.py` does not exist |
-| P6: Idea invalidation | ❌ Not implemented | Code rolled back from `narrative.py` |
-| P7: Wire format + UI | ❌ Not implemented | No TDA fields in `ui_v4/src/types.ts` |
-
-**Tests**: `tests/test_smc_tda_p0_p1.py` — 13 tests for P0+P1.
-**Config**: `config.json:smc.tda.enabled = false` (default). P0+P1 гейтовані цим прапорцем.
-
 - **Пов'язані ADR**: ADR-0024 (Engine), ADR-0024c (Zone POI), ADR-0028 (Elimination), ADR-0029 (Confluence), ADR-0033 (Context Flow Narrative)
 - **Джерело**: `research/Advanced Market Analysis. Dark Trader.csv` — конспект конференції з TDA-методології
 
@@ -30,18 +23,21 @@
 
 ### 1.1 Поточний стан
 
-SMC Engine (ADR-0024) реалізує 8 детекторів, Context Stack (L1/L2/L3), Confluence scoring (8 факторів), Narrative Engine (ADR-0033) і Bias Banner. Але TDA (Top-Down Analysis) — ключова методологія реальних трейдерів — лише **імпліцитно** присутня:
+> **Примітка читача**: ця секція описує historical attempted state на момент до rollback.
+> Вона навмисно збережена як snapshot і може не відповідати поточному коду.
 
-| Компонент | Статус | Чого бракує |
-|-----------|--------|-------------|
-| Cross-TF zone injection | ✅ Implemented | Немає **послідовної** валідації ланцюга (D1→H4→H1→M15) |
-| FVG detection + lifecycle | ✅ Implemented | Немає **IFVG** (Inverted FVG) — ключовий тригер зміни контексту |
-| OB detection + lifecycle | ✅ Implemented | `"breaker"` status = dead vocabulary. Немає BPR (Breaker transition) |
-| Trend bias per TF | ✅ Implemented | Немає **Decisional Point** (DP) — "хто контролює контекст?" |
-| Fractals (Williams) | ✅ Implemented | Немає **Protected Fractal** (fractal з HTF+LTF confirmation) |
-| Confluence scoring 8-factor | ✅ Implemented | Немає Quasimodo як factor, немає TF-sync quality factor |
-| Narrative: mode trade/wait | ✅ Implemented | Invalidation = zone-level. Немає **idea-level invalidation** (HTF cascade) |
-| Context Stack L1/L2/L3 | ✅ Implemented | Немає validation: "чи кожен проміжний TF дав confirmation?" |
+SMC Engine (ADR-0024) реалізує 8 детекторів, Context Stack (L1/L2/L3), Confluence scoring (8 факторів), Narrative Engine (ADR-0033) і Bias Banner. TDA (Top-Down Analysis) повністю реалізований і активований (2026-03-10):
+
+| Компонент | Статус | Реалізація |
+|-----------|--------|------------|
+| Cross-TF zone injection + TF-sync validation | ✅ Implemented | `narrative.py:_compute_tf_sync()`, `smc.tda.tf_sync_enabled` |
+| FVG detection + lifecycle + **IFVG** | ✅ Implemented | `fvg.py:_FVG_TO_IFVG_KIND`, `engine.py` step 4b |
+| OB detection + lifecycle + **Breaker** | ✅ Implemented | `engine.py:_apply_breaker_transition()`, step 7b |
+| Trend bias per TF + **Decisional Point** | ✅ Implemented | `engine.py:_apply_decisional_point_tagging()`, step 8 |
+| Fractals + **Protected Fractal** | ✅ Implemented | `engine.py` line 891, `is_protected` field |
+| Confluence scoring 8-factor + **Quasimodo F10** | ✅ Implemented | `quasimodo.py:detect_quasimodo()`, `confluence.py:_check_quasimodo()` |
+| Narrative invalidation + **idea-level invalidation** | ✅ Implemented | `narrative.py:619`, `invalidation_tf` field in NarrativeBlock |
+| Context Stack L1/L2/L3 + **TF-chain validation** | ✅ Implemented | `narrative.py:_compute_tf_sync()`, `tf_chains` in config |
 
 ### 1.2 Що таке TDA (з дослідження)
 
@@ -69,8 +65,8 @@ trigger  test  confirmation  entry
 
 | # | Концепт | Існуючий стан | Потрібно |
 |---|---------|---------------|----------|
-| G1 | **IFVG** (Inverted FVG) | `[IMPLEMENTED P0]` — `fvg.py`, `types.py` ifvg_bull/ifvg_bear, `engine.py` step 4b | ~~Новий zone kind~~ ✅ Done |
-| G2 | **BPR** (Breaker transition) | `[IMPLEMENTED P1]` — `engine.py:_apply_breaker_transition()`, mitigated+CHoCH→breaker | ~~Імплементувати~~ ✅ Done |
+| G1 | **IFVG** (Inverted FVG) | `[MISSING]` — згадка в ADR-0024c footnoте як future | Новий zone kind `ifvg_bull`/`ifvg_bear` + detection в `fvg.py` |
+| G2 | **BPR** (Breaker transition) | `[PARTIAL]` — `"breaker"` status існує, transition code відсутній | Імплементувати `mitigated → breaker` transition в `order_blocks.py` |
 | G3 | **DP** (Decisional Point) | `[MISSING]` — zero references | Tagging mechanism: property на zone що є DP |
 | G4 | **Quasimodo** | `[MISSING]` — zero references | Pattern detection з існуючих swings + structure |
 | G5 | **TF Synchronization** | `[PARTIAL]` — injection є, mandatory chain validation відсутня | Validation layer в engine або narrative |

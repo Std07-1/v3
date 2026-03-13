@@ -10,7 +10,7 @@ S5: пороги з SmcConfig.fvg.
 from __future__ import annotations
 
 import dataclasses
-from typing import List
+from typing import List, Optional
 
 from core.model.bars import CandleBar
 from core.smc.config import SmcConfig
@@ -93,8 +93,9 @@ def detect_fvg(
                     anchor_bar_ms=b1.open_time_ms,
                 ))
 
-    # Оновлюємо статус (fill check)
-    zones = _update_fvg_status(zones, bars)
+    # Оновлюємо статус (fill check) + IFVG creation
+    ifvg_enabled = config.tda.enabled and config.tda.ifvg_enabled
+    zones, new_ifvgs = _update_fvg_status(zones, bars, ifvg_enabled=ifvg_enabled)
 
     # Cap: keep strongest non-filled, then include filled (for dimmed rendering)
     active = [z for z in zones if z.status != "filled"]
@@ -103,20 +104,36 @@ def detect_fvg(
     active = active[:fvg_cfg.max_active]
     # Include recent filled for dimmed display (last 3 by anchor_bar_ms)
     filled.sort(key=lambda z: -z.anchor_bar_ms)
-    return active + filled[:3]
+
+    # IFVG cap: most recent first
+    if new_ifvgs:
+        new_ifvgs.sort(key=lambda z: -z.anchor_bar_ms)
+        new_ifvgs = new_ifvgs[:config.tda.ifvg_max_active]
+
+    return active + filled[:3] + new_ifvgs
 
 
-def _update_fvg_status(zones: List[SmcZone], bars: List[CandleBar]) -> List[SmcZone]:
-    """Оновлює lifecycle статус FVG зон.
+def _update_fvg_status(
+    zones: List[SmcZone],
+    bars: List[CandleBar],
+    ifvg_enabled: bool = False,
+):
+    # type: (...) -> tuple
+    """Оновлює lifecycle статус FVG зон. Повертає (updated_zones, new_ifvg_zones).
 
     active → partially_filled: ціна УВІЙШЛА в зону
     partially_filled → filled:  ціна ЗАКРИЛАСЬ за протилежну межу
     active → filled:            ціна одразу пробила повністю
+
+    ADR-0034 P0: якщо ifvg_enabled і FVG став filled → створює IFVG з тими ж межами,
+    інвертованим kind та origin_zone_id що вказує на source FVG.
     """
     updated = []
+    new_ifvgs = []  # type: List[SmcZone]
     for zone in zones:
         current_status = zone.status
         current_end_ms = zone.end_ms
+        fill_bar_ms = None  # type: Optional[int]
 
         for bar in bars:
             if bar.open_time_ms <= zone.anchor_bar_ms:
@@ -131,6 +148,7 @@ def _update_fvg_status(zones: List[SmcZone], bars: List[CandleBar]) -> List[SmcZ
                 if fills and current_status in ("active", "partially_filled"):
                     current_status = "filled"
                     current_end_ms = bar.open_time_ms
+                    fill_bar_ms = bar.open_time_ms
                     break
                 elif enters and current_status == "active":
                     current_status = "partially_filled"
@@ -142,6 +160,7 @@ def _update_fvg_status(zones: List[SmcZone], bars: List[CandleBar]) -> List[SmcZ
                 if fills and current_status in ("active", "partially_filled"):
                     current_status = "filled"
                     current_end_ms = bar.open_time_ms
+                    fill_bar_ms = bar.open_time_ms
                     break
                 elif enters and current_status == "active":
                     current_status = "partially_filled"
@@ -150,4 +169,25 @@ def _update_fvg_status(zones: List[SmcZone], bars: List[CandleBar]) -> List[SmcZ
             zone, status=current_status, end_ms=current_end_ms,
         ))
 
-    return updated
+        # ADR-0034 P0: IFVG creation
+        # fvg_bull filled → ifvg_bear (was support, now resistance)
+        # fvg_bear filled → ifvg_bull (was resistance, now support)
+        if ifvg_enabled and fill_bar_ms is not None:
+            ifvg_kind = "ifvg_bear" if zone.kind == "fvg_bull" else "ifvg_bull"
+            ifvg_id = make_zone_id(ifvg_kind, zone.symbol, zone.tf_s, fill_bar_ms)
+            new_ifvgs.append(SmcZone(
+                id=ifvg_id,
+                symbol=zone.symbol,
+                tf_s=zone.tf_s,
+                kind=ifvg_kind,
+                start_ms=fill_bar_ms,
+                end_ms=None,
+                high=zone.high,
+                low=zone.low,
+                status="active",
+                strength=zone.strength,
+                anchor_bar_ms=fill_bar_ms,
+                origin_zone_id=zone.id,
+            ))
+
+    return updated, new_ifvgs

@@ -16,7 +16,7 @@
 4. [updates_v1 — Відповідь /api/updates](#updates_v1--відповідь-apiupdates)
 5. [tick_v1 — Тік](#tick_v1--тік)
 6. [SMC Wire Format (WS frames)](#smc-wire-format-ws-frames)
-7. [Redis snapshot (внутрішній)](#redis-snapshot-внутрішній-формат)
+7. [Redis snapshot (внутрішній)](#redis-snapshot-та-preview-внутрішній-формат)
 8. [Правила еволюції схем](#правила-еволюції-схем)
 
 ---

@@ -1,7 +1,9 @@
 {
     "symbol": "XAU/USD",
     "symbols": [
-        "XAU/USD"
+        "XAU/USD",
+        "BTCUSDT",
+        "ETHUSDT"
     ],
     "data_root": "./data_v3",
     "broker_python": ".venv37/Scripts/python.exe",
@@ -108,6 +110,14 @@
                     "09:15"
                 ]
             ]
+        },
+        "crypto_24x7": {
+            "market_weekend_open_dow": 0,
+            "market_weekend_open_hm": "00:00",
+            "market_weekend_close_dow": 6,
+            "market_weekend_close_hm": "23:59",
+            "market_daily_break_start_hm": "00:00",
+            "market_daily_break_end_hm": "00:00"
         }
     },
     "market_calendar_symbol_groups": {
@@ -123,7 +133,9 @@
         "GBP/CAD": "fx_24x5_utc_summer",
         "NZD/CAD": "fx_24x5_utc_summer",
         "USD/CAD": "fx_24x5_utc_summer",
-        "USD/JPY": "fx_24x5_utc_summer"
+        "USD/JPY": "fx_24x5_utc_summer",
+        "BTCUSDT": "crypto_24x7",
+        "ETHUSDT": "crypto_24x7"
     },
     "market_ignore_minutes_utc": [
         "2026-02-01T23:02:00Z"
@@ -414,6 +426,30 @@
             "previous_session_ttl_bars": 500,
             "sweep_lookback_bars": 30,
             "sweep_body_ok": false
+        },
+        "tda": {
+            "enabled": false,
+            "ifvg_enabled": true,
+            "ifvg_max_active": 4,
+            "breaker_enabled": true,
+            "breaker_choch_lookback_bars": 10
         }
+    },
+    "binance": {
+        "enabled": true,
+        "symbols": [
+            "BTCUSDT",
+            "ETHUSDT"
+        ],
+        "api_futures": true,
+        "tail_fetch_n": 5,
+        "safety_delay_s": 10,
+        "backfill_enabled": true,
+        "backfill_max_bars": 1440,
+        "day_anchor_offset_s": 0,
+        "d1_anchor_offset_s": 0,
+        "tick_ws_enabled": true,
+        "tick_ws_reconnect_base_s": 3,
+        "tick_ws_reconnect_max_s": 30
     }
 }

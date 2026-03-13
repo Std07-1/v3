@@ -199,8 +199,10 @@ class RedisLayer:
             )
             return [], since_seq if since_seq is not None else 0, None, str(exc)
 
-    def get_prime_ready_payload(self) -> Optional[dict[str, Any]]:
-        key = self._key("prime", "ready")
+    def get_prime_ready_payload(
+        self, component: str = "m1"
+    ) -> Optional[dict[str, Any]]:
+        key = self._key("prime", "ready", component)
         payload, _, err = self._get_json(key)
         if err is not None or payload is None:
             return None

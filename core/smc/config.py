@@ -279,6 +279,27 @@ class SmcConfluenceConfig:
 
 
 @dataclasses.dataclass
+class SmcTdaConfig:
+    """ADR-0034: TDA — IFVG (P0) + Breaker (P1). Master toggle disabled by default."""
+
+    enabled: bool = False
+    ifvg_enabled: bool = True
+    ifvg_max_active: int = 4
+    breaker_enabled: bool = True
+    breaker_choch_lookback_bars: int = 10
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "SmcTdaConfig":
+        return cls(
+            enabled=bool(d.get("enabled", False)),
+            ifvg_enabled=bool(d.get("ifvg_enabled", True)),
+            ifvg_max_active=int(d.get("ifvg_max_active", 4)),
+            breaker_enabled=bool(d.get("breaker_enabled", True)),
+            breaker_choch_lookback_bars=int(d.get("breaker_choch_lookback_bars", 10)),
+        )
+
+
+@dataclasses.dataclass
 class SmcPerformanceConfig:
     max_compute_ms: int = 10
     log_slow_threshold_ms: int = 5
@@ -331,6 +352,7 @@ class SmcConfig:
     performance: SmcPerformanceConfig = dataclasses.field(
         default_factory=SmcPerformanceConfig
     )
+    tda: SmcTdaConfig = dataclasses.field(default_factory=SmcTdaConfig)
 
     # tf_overrides: raw dict from config.json, keyed by str(tf_s)
     _tf_overrides: Dict[str, Dict[str, Any]] = dataclasses.field(
@@ -359,7 +381,7 @@ class SmcConfig:
             if key in ovr:
                 kw[key] = type(getattr(self, key))(ovr[key])
         # sub-config overrides (merge base dict + override dict)
-        _SUB = {
+        _SUB: Dict[str, Any] = {
             "ob": SmcObConfig,
             "fvg": SmcFvgConfig,
             "structure": SmcStructureConfig,
@@ -413,6 +435,7 @@ class SmcConfig:
             sessions=SmcSessionsConfig.from_dict(d.get("sessions", {})),
             confluence=SmcConfluenceConfig.from_dict(d.get("confluence", {})),
             performance=SmcPerformanceConfig.from_dict(d.get("performance", {})),
+            tda=SmcTdaConfig.from_dict(d.get("tda", {})),
             _tf_overrides=d.get("tf_overrides", {}),
         )
 

@@ -289,11 +289,11 @@
             <!-- ADR-0031: HTF bias toggle + pills -->
             <span class="hud-sep">·</span>
             {#if biasVisible && biasPills.length > 0}
-                <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <span
+                <button
                     class="hud-bias-area"
                     onclick={toggleBias}
                     title="Hide HTF bias"
+                    type="button"
                 >
                     {#each biasPills as p (p.label)}
                         <span
@@ -306,7 +306,7 @@
                                 >{/if}</span
                         >
                     {/each}
-                </span>
+                </button>
             {:else}
                 <button
                     class="hud-bias-toggle"
@@ -718,6 +718,9 @@
         opacity: 0.4;
     }
     .hud-bias-area {
+        background: none;
+        border: none;
+        color: inherit;
         display: inline-flex;
         align-items: center;
         gap: 3px;

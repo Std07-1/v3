@@ -243,7 +243,7 @@ def score_zone_confluence(
     config,
     session_levels=None,
 ):
-    # type: (dict, list, list, list, list, list, float, float, int, dict, ...) -> dict
+    # type: (dict, list, list, list, list, list, float, float, int, dict, object) -> dict
     """Score OB zone confluence. Returns {'score': int, 'grade': str, 'factors': list}.
 
     Non-OB zones → {'score': 0, 'grade': 'C', 'factors': []}.

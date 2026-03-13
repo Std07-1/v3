@@ -161,15 +161,4 @@
     background: rgba(61, 154, 255, 0.15);
     box-shadow: 0 0 8px rgba(61, 154, 255, 0.25);
   }
-
-  .tool-separator {
-    height: 1px;
-    width: 14px;
-    background: var(--toolbar-border, rgba(255, 255, 255, 0.08));
-    margin: 2px auto;
-  }
-
-  .magnet-btn {
-    font-size: 10px;
-  }
 </style>

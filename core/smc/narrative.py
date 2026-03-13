@@ -461,10 +461,10 @@ def _synthesize_impl(
         mode, sub_mode = "wait", ""
 
     # Build direction from primary
-    direction = _zone_direction(primary_zone) if primary_zone else None
+    direction: str = _zone_direction(primary_zone) if primary_zone else ""
 
     # Headline
-    if mode == "trade":
+    if mode == "trade" and direction:
         headline = _MODE_HEADLINES.get((mode, sub_mode, direction), _WAIT_HEADLINE)
     else:
         headline = _WAIT_HEADLINE
@@ -472,9 +472,10 @@ def _synthesize_impl(
     # Scenarios (T-1: max 2)
     scenarios = []  # type: List[ActiveScenario]
     if mode == "trade":
-        for z in [primary_zone, alt_zone]:
-            if z is None:
+        for _zc in (primary_zone, alt_zone):
+            if _zc is None:
                 continue
+            z = _zc
             d = _zone_direction(z)
             gi = zone_grades.get(z.id, {})
             tgt = _find_target(snapshot, z, d, config)
@@ -523,7 +524,11 @@ def _synthesize_impl(
             if sub_mode == "aligned":
                 sub_mode = "reduced"
                 warnings.append("outside_killzone")
-                headline = _MODE_HEADLINES.get((mode, sub_mode, direction), headline)
+                headline = (
+                    _MODE_HEADLINES.get((mode, sub_mode, direction), headline)
+                    if direction
+                    else headline
+                )
 
     return NarrativeBlock(
         mode=mode,

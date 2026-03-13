@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from core.smc.types import SmcZone, ZONE_KINDS; from core.smc.config import SmcConfig, SmcTdaConfig; from core.smc.fvg import detect_fvg; from core.smc.engine import SmcEngine; print\\(''OK''\\); print\\(''ZONE_KINDS ifvg:'', [k for k in ZONE_KINDS if ''ifvg'' in k]\\); cfg = SmcConfig\\(\\); print\\(''tda.enabled:'', cfg.tda.enabled\\); print\\(''tda.ifvg_enabled:'', cfg.tda.ifvg_enabled\\); print\\(''tda.breaker_enabled:'', cfg.tda.breaker_enabled\\)\")",
+      "Bash(python -m pytest tests/test_smc_n1_lifecycle.py tests/test_smc_e1.py tests/test_smc_confluence.py -x -q)",
+      "Bash(python -m pytest tests/test_smc_tda_p0_p1.py -v)",
+      "Bash(python -m pytest tests/ -x -q)",
+      "Bash(python -m py_compile aione_top/actions.py aione_top/app.py aione_top/collectors.py aione_top/display.py)",
+      "Bash(python -m py_compile aione_top/app.py aione_top/collectors.py)",
+      "Bash(python -m py_compile aione_top/collectors.py)",
+      "Bash(python -m py_compile aione_top/display.py)",
+      "Bash(python -m py_compile aione_top/__init__.py)",
+      "Bash(python -m py_compile aione_top/display.py aione_top/collectors.py aione_top/app.py aione_top/actions.py aione_top/__init__.py)"
+    ]
+  }
+}

@@ -2,7 +2,7 @@
 
 > **Purpose**: This document provides essential context for AI coding agents working on this project.  
 > **Language**: Ukrainian (primary), English for technical terms.  
-> **Last Updated**: 2026-03-07
+> **Last Updated**: 2026-03-13
 
 ---
 
@@ -22,12 +22,12 @@
 
 ---
 
-## 1.1 Актуальний статус (2026-03-07)
+## 1.1 Актуальний статус (2026-03-13)
 
 - Потік B (мульти-символьна активація) — **відкладено** через integrity derived TF (див. ADR-0025)
 - Всі результати audit/rebuild зафіксовані в [docs/adr/0025-potik-b-data-quality-summary.md](docs/adr/0025-potik-b-data-quality-summary.md)
 - Потік B закритий, фокус на XAU/USD та SMC engine (Потік C)
-- SMC Engine **Implemented** (ADR-0024): E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a, 491+ тестів
+- SMC Engine **Implemented** (ADR-0024): E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a, comprehensive pytest coverage
 - Elimination Engine + Confluence Scoring (ADR-0028, ADR-0029): display budget, 8-factor grade
 - TF Sovereignty + Bias Banner (ADR-0030-alt, ADR-0031): cross-TF projection, multi-TF bias display
 - Sessions & Killzones **Implemented** (ADR-0035): Asia/London/NY session H/L levels, killzone context, F9 sweep confluence, narrative session integration, 40 tests
@@ -38,12 +38,18 @@
 
 **Backend (Python, dual-venv — ADR-0016):**
 
-- Python ≥3.11 (main venv `.venv/` — platform, UDS, derive, SMC, UI)
+- Python ≥3.11 (main venv `.venv/` — platform, UDS, derive, SMC, UI; current workspace migration documented on Python 3.14.2)
 - Python 3.7 (broker venv `.venv37/` — forexconnect SDK only)
 - Redis 5.0.1 (pub/sub, snapshots, updates bus, broker IPC)
 - numpy ≥1.26, pandas ≥2.1
 - forexconnect 1.6.43 (FXCM SDK, `.venv37/` only)
 - aiohttp ≥3.9 (для UI HTTP API)
+
+**Windows supervisor rail (ADR-0016 Appendix C):**
+
+- Python 3.14 venv launcher creates trampoline processes on Windows
+- `app/main.py` uses `_kill_tree()` (`taskkill /T`) instead of single-PID terminate
+- `logs/supervisor.pid` blocks duplicate supervisor instances
 
 **Frontend UI v4:**
 
@@ -159,7 +165,7 @@ v3/
 │   ├── repair/            # htf_rebuild, htf_tail_sync
 │   └── diag/              # classify gaps, clear redis, disk_max_open_ms
 │
-├── tests/                 # 40 файлів, 491+ тестів
+├── tests/                 # pytest suite: SMC, UDS, WS, ingest, supervisor rails
 │   ├── test_smc_*.py      # SMC tests (e1, e2, runner, key_levels, n1_lifecycle, d1_display, confluence)
 │   ├── test_derive_*.py   # Derivation tests
 │   ├── test_uds_*.py      # UDS tests (split-brain, partial penalty)
@@ -175,7 +181,7 @@ v3/
 ├── docs/                  # Повна документація
 │   ├── index.md           # Точка входу
 │   ├── system_current_overview.md  # Архітектура
-│   ├── adr/               # 35 ADR (architecture decisions, 0001–0032 + 0024a/b/c)
+│   ├── adr/               # ADR archive (canonical architecture decisions index)
 │   ├── contracts.md       # JSON Schema contracts
 │   ├── ui_api.md          # HTTP API reference
 │   └── runbooks/          # Production runbooks
@@ -195,6 +201,7 @@ v3/
 
 ```bash
 # 1. Main venv (Python >=3.11) — platform, UDS, derive, SMC, UI
+#    Current documented migration incident: Python 3.14.2, see ADR-0016 Appendix C
 python -m venv .venv
 .venv/Scripts/activate    # Windows
 pip install -r requirements.txt
@@ -219,6 +226,9 @@ cd ..
 ```bash
 # Запуск усіх процесів (supervisor mode)
 python -m app.main --mode all --stdio pipe
+
+# Windows note: supervisor kills worker process trees and keeps logs/supervisor.pid
+# because Python 3.14 venv launcher may create a trampoline process before real worker.
 
 # Окремі режими
 python -m app.main --mode connector          # D1 fetcher (disabled, ADR-0023)
@@ -553,7 +563,10 @@ tail -f logs/m1_poller.out.log
 
 **Z6 — Заборона на рефакторинг як фікс.** Мінімальний фікс = мінімальний diff. "Давайте перепишемо модуль" — це не фікс, це initiative.
 
-**Z7 — Заборона на `bar.l` замість `bar.low`.** CandleBar dataclass має поле `.low`, НЕ `.l`. Wire/dict формат (`{"l": ...}`) відрізняється від dataclass. Перед доступом до полів бару — звірити з `core/model/bars.py`. Порушення = silent crash у production (exception caught → empty overlay).
+**Z7 — Заборона на `bar.l` замість `bar.low`.** CandleBar dataclass має поле
+`.low`, НЕ `.l`. Wire/dict формат (`{"l": ...}`) відрізняється від dataclass.
+Перед доступом до полів бару — звірити з `core/model/bars.py`.
+Порушення = silent crash у production (exception caught → empty overlay).
 
 ## 14. Поведінка в edge cases (що робити коли...)
 

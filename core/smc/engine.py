@@ -21,7 +21,7 @@ from typing import Deque, Dict, List, Optional, Tuple
 
 from core.model.bars import CandleBar
 from core.smc.confluence import score_zone_confluence
-from core.smc.config import SmcConfig
+from core.smc.config import SmcConfig, SmcDisplayConfig
 from core.smc.context_stack import collect_htf_zones, tag_local_zones
 from core.smc.fvg import detect_fvg
 from core.smc.inducement import detect_inducement
@@ -45,8 +45,8 @@ _log = logging.getLogger(__name__)
 
 # ── Zone lifecycle constants & helpers (N1) ──────────────────────────
 
-_BULL_ZONE_KINDS = frozenset({"ob_bull", "fvg_bull", "discount"})
-_BEAR_ZONE_KINDS = frozenset({"ob_bear", "fvg_bear", "premium"})
+_BULL_ZONE_KINDS = frozenset({"ob_bull", "fvg_bull", "discount", "ifvg_bull"})
+_BEAR_ZONE_KINDS = frozenset({"ob_bear", "fvg_bear", "premium", "ifvg_bear"})
 
 _STATUS_RANK = {
     "active": 0,
@@ -86,6 +86,7 @@ def _update_zone_lifecycle(
     last_bar,  # type: Optional[CandleBar]
     config,  # type: SmcConfig
     tf_s,  # type: int
+    struct_events=None,  # type: Optional[List[SmcSwing]]
 ):
     # type: (...) -> List[SmcZone]
     """N1 zone lifecycle: merge → FVG evict → mitigate → decay → hide → cap.
@@ -96,11 +97,15 @@ def _update_zone_lifecycle(
     D-01: deterministic cap via _zone_rank.
     D-02: FVG not in fresh_ids → evict (prevents resurrection).
     R-04: mitigation by bar.c (close), NOT by wick.
+    ADR-0034 P1: struct_events → Breaker promotion для mitigated OBs.
     """
     fresh_ids = {z.id for z in fresh_zones}
 
     # 1) Merge fresh zones → active_zones (fresh wins)
+    # ADR-0034 P0: IFVG zones — never overwrite existing (preserve lifecycle state)
     for z in fresh_zones:
+        if z.kind.startswith("ifvg") and z.id in active_zones:
+            continue
         active_zones[z.id] = z
 
     # 2) D-02: FVG eviction — якщо FVG зникає з fresh → drop
@@ -168,9 +173,34 @@ def _update_zone_lifecycle(
         for zid in to_delete:
             del active_zones[zid]
 
+        # ── step 3c: ADR-0034 P1 — Breaker promotion ──────────────
+        # Mitigated OB + CHoCH in opposite direction → status="breaker".
+        # Breaker = mitigated OB that now works in reverse (acts as new POI).
+        tda = config.tda
+        if tda.enabled and tda.breaker_enabled and struct_events:
+            lookback_ms = tda.breaker_choch_lookback_bars * tf_s * 1000
+            # Collect CHoCH events by direction
+            choch_bull = [e for e in struct_events if e.kind == "choch_bull"]
+            choch_bear = [e for e in struct_events if e.kind == "choch_bear"]
+            for zid, z in list(active_zones.items()):
+                if z.status != "mitigated":
+                    continue
+                if z.kind not in ("ob_bull", "ob_bear"):
+                    continue
+                if z.end_ms is None:
+                    continue
+                # ob_bull mitigated → need choch_bear after mitigation (confirms bear context)
+                # ob_bear mitigated → need choch_bull after mitigation (confirms bull context)
+                needed = choch_bear if z.kind == "ob_bull" else choch_bull
+                cutoff = z.end_ms + lookback_ms
+                has_choch = any(z.end_ms < e.time_ms <= cutoff for e in needed)
+                if has_choch:
+                    active_zones[zid] = dataclasses.replace(z, status="breaker")
+
         # ── step 3b: post-mitigation TTL (ADR-0028 Φ0) ────────────
         # Mitigated zones linger for `mitigated_ttl_bars` then get removed.
         # Anchor = zone.end_ms (set during mitigation at step 3, line ~117).
+        # ADR-0034 P1: skip breaker zones — they persist until mitigated or expired.
         mitigated_ttl = config.display.mitigated_ttl_bars  # default 20
         bar_ms = tf_s * 1000
         if mitigated_ttl > 0 and bar_ms > 0:
@@ -271,7 +301,7 @@ class SmcEngine:
         self._zone_grades: Dict[Tuple[str, int], Dict[str, dict]] = {}  # ADR-0029
         # ADR-0035: session support
         self._session_windows = []  # type: list
-        self._session_m1_bars: Dict[str, list] = {}  # symbol → deque of M1 CandleBars
+        self._session_m1_bars: Dict[str, Deque[CandleBar]] = {}
         self._init_sessions()
 
     # ── Public API ──────────────────────────────────────────────────
@@ -918,6 +948,7 @@ class SmcEngine:
             last_bar,
             cfg,
             tf_s,
+            struct_events=struct_events,
         )
 
         # ── E2.5: Liquidity Levels (Equal Highs / Equal Lows) ──
@@ -1000,7 +1031,7 @@ def _filter_for_display(
     if atr <= 0:
         return snap
 
-    disp = config.display  # type: SmcDisplayConfig
+    disp: SmcDisplayConfig = config.display
     radius = disp.proximity_atr_mult * atr
     max_height = config.max_zone_height_atr_mult * atr
 
