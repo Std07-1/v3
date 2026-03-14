@@ -142,7 +142,9 @@
     ],
     "market_boundary_slip_minutes_per_day": 2,
     "day_anchor_offset_s": 82800,
+    "day_anchor_offset_s_alt": 0,
     "day_anchor_offset_s_d1": 79200,
+    "day_anchor_offset_s_d1_alt": 0,
     "ssot_jsonl_fsync": false,
     "ui_debug": true,
     "group_logs_enabled": true,
@@ -207,6 +209,8 @@
     },
     "bootstrap": {
         "prime_ready_timeout_s": 120,
+        "initial_backfill_m1_bars": 1440,
+        "initial_backfill_d1_bars": 180,
         "cascade_catchup_m1_bars": 1440,
         "derive_warmup_bars_by_tf": {
             "60": 1500,
@@ -347,7 +351,9 @@
         },
         "narrative": {
             "enabled": true,
+            "trade_min_grade": "A",
             "trade_min_score": 6,
+            "target_max_atr_distance": 12,
             "max_scenarios": 2,
             "market_phase_enabled": true,
             "phase_hysteresis_bars": 3,

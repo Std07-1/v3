@@ -172,10 +172,10 @@ def compute_session_levels(
     if not bars or not sessions:
         return [], []
 
-    # R_BUG_HUNTER: assert sorted
+    # R_BUG_HUNTER: assert sorted (callers pre-sort, but keep as defensive assert)
     for i in range(1, len(bars)):
         if bars[i].open_time_ms < bars[i - 1].open_time_ms:
-            _log.warning(
+            _log.debug(
                 "SESSION_BARS_UNSORTED idx=%d a_ms=%d b_ms=%d",
                 i,
                 bars[i - 1].open_time_ms,

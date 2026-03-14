@@ -187,7 +187,7 @@ def _pump(stream: TextIO, prefix: str) -> None:
         try:
             stream.close()
         except Exception:
-            pass
+            logging.debug("SUPERVISOR_STREAM_CLOSE_FAIL", exc_info=True)
 
 
 def _pump_to_file(stream: TextIO, file_handle: TextIO, prefix: str) -> None:
@@ -456,7 +456,9 @@ def _terminate(item: ChildProcess, timeout_s: int = 5) -> None:
             try:
                 proc.kill()
             except Exception:
-                pass
+                logging.debug(
+                    "SUPERVISOR_KILL_CLEANUP_FAIL pid=%s", proc.pid, exc_info=True
+                )
     # Завжди закриваємо file handles (навіть якщо процес вже завершився)
     for handle in (item.stdout_handle, item.stderr_handle):
         if handle is None:
@@ -582,7 +584,7 @@ def _release_pid_lock(log_dir: Path) -> None:
         if pid_path.exists() and int(pid_path.read_text().strip()) == os.getpid():
             pid_path.unlink()
     except Exception:
-        pass
+        logging.debug("SUPERVISOR_PIDFILE_CLEANUP_FAIL", exc_info=True)
 
 
 def main() -> int:

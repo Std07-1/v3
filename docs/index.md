@@ -1,6 +1,6 @@
 # Документація Trading Platform v3 — Індекс (SSOT)
 
-> **Остання перевірка**: 2026-03-07  
+> **Остання перевірка**: 2026-03-14  
 > **Мова**: українська (англійська лише для загальноприйнятих термінів)
 
 Цей файл — **точка входу** в усю документацію проєкту. Будь-яке знання про систему має бути знайдене через цей індекс.
@@ -35,6 +35,9 @@
 | [ADR-0030-alt](adr/ADR-0030-alt-tf-sovereignty.md) | TF Sovereignty — Cross-TF Projection Styling |
 | [ADR-0031](adr/0031-bias-banner.md) | Bias Banner — Multi-TF Trend Bias Display |
 | [ADR-0032](adr/0032-overlay-render-throttle-tf-switch.md) | Overlay Render Throttle + TF Switch Stability |
+| [ADR-0033](adr/0033-context-flow-narrative.md) | Context Flow — Multi-TF Narrative Engine (trade/wait/prepare scenario) |
+| [ADR-0034](adr/0034-advanced-market-analysis-tda.md) | Advanced Market Analysis — TDA (P0 IFVG + P1 Breaker Implemented; P2–P6 rolled back) |
+| [ADR-0035](adr/0035-sessions-killzones.md) | Sessions & Killzones — Asia/London/NY H/L, killzone context, F9 sweep |
 | [ADR-0036](adr/0036-premium-trader-first-shell.md) | Premium Trader-First Shell for UI v4 |
 
 ### 2. Потоки даних
@@ -95,6 +98,7 @@
 | `ui_v4/src/stores/smcStore.ts` | applySmcFull / applySmcDelta — incremental SMC state |
 | `ui_v4/src/chart/overlay/OverlayRenderer.ts` | Canvas rendering: OB/FVG/swings/levels з opacity за strength |
 | `ui_v4/src/chart/overlay/DisplayBudget.ts` | Display budget filter (ADR-0028) |
+| **[trader_coverage.md](trader_coverage.md)** | **Трейдерські концепти → ADR → Модуль** — карта захисту (що читати перед зміною будь-якого SMC-компонента) |
 
 ### 6. Runbooks (експлуатація)
 

@@ -20,6 +20,7 @@ Thread-safety: per-symbol lock для cascade integrity.
 
 ADR: ADR-0002 (DeriveChain M1→H4), Phase 2.
 """
+
 from __future__ import annotations
 
 import logging
@@ -48,12 +49,12 @@ log = logging.getLogger("derive_engine")
 # Ключі = source TFs (з DERIVE_CHAIN keys).
 # ---------------------------------------------------------------------------
 _BUFFER_MAX_KEEP: Dict[int, int] = {
-    60:   2000,   # M1 → M3(3) + M5(5) + D1(1440).  ~33h trading
-    300:  500,    # M5 → M15(3).          ~41h
-    900:  200,    # M15 → M30(2).         ~50h
-    1800: 100,    # M30 → H1(2).          ~50h
-    3600: 50,     # H1 → H4(4).           ~50h
-    86400: 5,     # D1 target buffer — overdue dedup (D-03)
+    60: 2000,  # M1 → M3(3) + M5(5) + D1(1440).  ~33h trading
+    300: 500,  # M5 → M15(3).          ~41h
+    900: 200,  # M15 → M30(2).         ~50h
+    1800: 100,  # M30 → H1(2).          ~50h
+    3600: 50,  # H1 → H4(4).           ~50h
+    86400: 5,  # D1 target buffer — overdue dedup (D-03)
 }
 
 # Phase 5 (ADR-0002 завершено): commit всіх derived TFs.
@@ -109,9 +110,7 @@ class DeriveEngine:
         self._buffers: Dict[Tuple[str, int], GenericBuffer] = {}
 
         # Per-symbol lock
-        self._locks: Dict[str, threading.Lock] = {
-            s: threading.Lock() for s in symbols
-        }
+        self._locks: Dict[str, threading.Lock] = {s: threading.Lock() for s in symbols}
 
         # Статистика
         self._stats_derived: Dict[int, int] = {}
@@ -233,26 +232,22 @@ class DeriveEngine:
             if lock is None:
                 continue
             with lock:
-                committed.extend(
-                    self._check_overdue_for_symbol(symbol, now_ms)
-                )
+                committed.extend(self._check_overdue_for_symbol(symbol, now_ms))
         return committed
 
     # Кількість попередніх bucket-ів для overdue-сканування per TF.
     # Чим більший TF — тим глибше потрібно заглядати (H4=4h, один пропуск = 4 bucket M5).
     _OVERDUE_LOOKBACK: Dict[int, int] = {
-        180:   3,    # M3:  3 × 3m  = 9m
-        300:   6,    # M5:  6 × 5m  = 30m
-        900:   4,    # M15: 4 × 15m = 1h
-        1800:  4,    # M30: 4 × 30m = 2h
-        3600:  3,    # H1:  3 × 1h  = 3h
-        14400: 3,    # H4:  3 × 4h  = 12h
-        86400: 1,    # D1:  1 × 24h = 24h (ADR-0023)
+        180: 3,  # M3:  3 × 3m  = 9m
+        300: 6,  # M5:  6 × 5m  = 30m
+        900: 4,  # M15: 4 × 15m = 1h
+        1800: 4,  # M30: 4 × 30m = 2h
+        3600: 3,  # H1:  3 × 1h  = 3h
+        14400: 3,  # H4:  3 × 4h  = 12h
+        86400: 1,  # D1:  1 × 24h = 24h (ADR-0023)
     }
 
-    def _check_overdue_for_symbol(
-        self, symbol: str, now_ms: int
-    ) -> List[CandleBar]:
+    def _check_overdue_for_symbol(self, symbol: str, now_ms: int) -> List[CandleBar]:
         """Per-symbol overdue check (має бути під lock).
 
         Сканує N попередніх bucket-ів (не лише 1) і каскадує
@@ -320,7 +315,10 @@ class DeriveEngine:
                         )
                         log.info(
                             "OVERDUE_DERIVE_OK tf=%d sym=%s open=%d lookback=%d",
-                            target_tf_s, symbol, derived.open_time_ms, i,
+                            target_tf_s,
+                            symbol,
+                            derived.open_time_ms,
+                            i,
                         )
                     # stale/duplicate — тиха ситуація, бар вже є
 
@@ -354,8 +352,8 @@ class DeriveEngine:
         committed: List[CandleBar] = []
         symbol = bar.symbol
 
-        # 1. Буферизація (тільки source TFs — ключі DERIVE_CHAIN)
-        if bar.tf_s in DERIVE_CHAIN:
+        # 1. Буферизація (source TFs + terminal targets для overdue-dedup)
+        if bar.tf_s in DERIVE_CHAIN or bar.tf_s in DERIVE_SOURCE:
             self._get_buffer(symbol, bar.tf_s).upsert(bar)
 
         # 2. Calendar filter для символу (потрібен і для triggers, і для derive)
@@ -416,8 +414,12 @@ class DeriveEngine:
                     log.warning(
                         "DERIVE_SKIP tf=%d sym=%s bucket_open=%d "
                         "missing=%d buf_size=%d src_tf=%d cal=%s",
-                        target_tf_s, symbol, bucket_open_ms,
-                        miss, buf_len, src_tf_s,
+                        target_tf_s,
+                        symbol,
+                        bucket_open_ms,
+                        miss,
+                        buf_len,
+                        src_tf_s,
                         "yes" if is_trading_fn else "no",
                     )
                 continue
@@ -437,15 +439,19 @@ class DeriveEngine:
                         )
                         log.debug(
                             "DERIVE_OK tf=%d sym=%s open=%d",
-                            target_tf_s, symbol, derived.open_time_ms,
+                            target_tf_s,
+                            symbol,
+                            derived.open_time_ms,
                         )
                     else:
                         self._stats_rejected += 1
                         if result.reason not in ("stale", "duplicate"):
                             log.warning(
                                 "DERIVE_REJECT tf=%d sym=%s open=%d reason=%s",
-                                target_tf_s, symbol,
-                                derived.open_time_ms, result.reason,
+                                target_tf_s,
+                                symbol,
+                                derived.open_time_ms,
+                                result.reason,
                             )
                 else:
                     self._stats_no_uds += 1

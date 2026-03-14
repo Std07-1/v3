@@ -1364,12 +1364,12 @@ class UnifiedDataStore:
             try:
                 self._jsonl.close()
             except Exception:
-                pass
+                Logging.debug("UDS_JSONL_CLOSE_FAIL", exc_info=True)
         if self._redis_writer is not None:
             try:
                 self._redis_writer.close()
             except Exception:
-                pass
+                Logging.debug("UDS_REDIS_CLOSE_FAIL", exc_info=True)
 
     def _ensure_writer_role(self, action: str) -> None:
         if self._role != "writer":
@@ -1640,7 +1640,8 @@ class UnifiedDataStore:
             spec.symbol, spec.tf_s
         )
         if err is not None:
-            Logging.warning(
+            _redis_log = Logging.warning if err == "redis_error" else Logging.info
+            _redis_log(
                 "UDS: Redis помилка читання source=%s tf_s=%s error=%s",
                 spec.symbol,
                 spec.tf_s,

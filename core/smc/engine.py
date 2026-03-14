@@ -379,6 +379,15 @@ class SmcEngine:
         snap = self.get_snapshot(symbol, tf_s)
         return snap.trend_bias
 
+    def get_atr(self, symbol: str, tf_s: int, period: int = 14) -> float:
+        """ATR14 for (symbol, tf). Returns 1.0 fallback if no data."""
+        state = self._states.get((symbol, tf_s))
+        if state is None or not state.bars_list():
+            return 1.0
+        from core.smc.swings import compute_atr
+
+        return compute_atr(state.bars_list(), period=period)
+
     def get_momentum_score(self, symbol: str, tf_s: int) -> Tuple[int, int]:
         """Momentum score (bull_count, bear_count) for given (symbol, tf)."""
         state = self._states.get((symbol, tf_s))
@@ -438,8 +447,9 @@ class SmcEngine:
             return []
         from core.smc.sessions import compute_session_levels
 
+        sorted_bars = sorted(list(m1_bars), key=lambda b: b.open_time_ms)
         levels, _states = compute_session_levels(
-            list(m1_bars),
+            sorted_bars,
             self._session_windows,
             current_time_ms,
             symbol,
@@ -456,8 +466,9 @@ class SmcEngine:
             return []
         from core.smc.sessions import compute_session_levels
 
+        sorted_bars = sorted(list(m1_bars), key=lambda b: b.open_time_ms)
         _levels, states = compute_session_levels(
-            list(m1_bars),
+            sorted_bars,
             self._session_windows,
             current_time_ms,
             symbol,

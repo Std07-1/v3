@@ -325,7 +325,7 @@ def extract_open_time_ms(row: Any) -> int:
                 ts = (val - epoch) / np.timedelta64(1, "ms")
                 return int(ts)
         except Exception:
-            pass
+            logging.debug("FXCM_NUMPY_DT64_PARSE_FAIL val=%r", val, exc_info=True)
 
         # epoch seconds/ms
         if isinstance(val, (int, float)):

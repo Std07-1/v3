@@ -189,11 +189,20 @@ def _resolve_trigger_desc(snapshot, zone, viewer_tf_s, current_price, atr):
 # ── Target Resolution ───────────────────────────────────────
 
 
-def _find_target(snapshot, zone, direction, config):
-    # type: (SmcSnapshot, SmcZone, str, dict) -> Optional[str]
-    """Find target price. Returns None if unknown (BH-4)."""
+def _find_target(snapshot, zone, direction, config, current_price=0.0, atr=0.0):
+    # type: (SmcSnapshot, SmcZone, str, dict, float, float) -> Optional[str]
+    """Find target price. Returns None if unknown (BH-4).
+
+    ATR-distance filter: targets farther than target_max_atr_distance * ATR
+    from current_price are skipped (prevents D1-level PDL on M5 chart).
+    """
+    max_atr_mult = config.get("target_max_atr_distance", 12)
+    max_dist = max_atr_mult * atr if atr > 0 else 0.0
+
     # Priority 1: Key level
-    target_level = _find_target_key_level(snapshot.levels, direction)
+    target_level = _find_target_key_level(
+        snapshot.levels, direction, current_price, max_dist
+    )
     if target_level:
         return "{kind} {price:.0f}".format(
             kind=target_level.kind.upper().replace("_", " "),
@@ -206,12 +215,17 @@ def _find_target(snapshot, zone, direction, config):
             continue
         z_dir = _zone_direction(z)
         if z_dir != direction and z.context_layer == "institutional":
+            center = (z.high + z.low) / 2
+            if max_dist > 0 and abs(center - current_price) > max_dist:
+                continue
             return "HTF {kind} {low:.0f}\u2013{high:.0f}".format(
                 kind=z.kind.split("_")[0].upper(), low=z.low, high=z.high
             )
 
     # Priority 3: Recent swing extreme
-    target_swing = _find_target_swing(snapshot.swings, direction)
+    target_swing = _find_target_swing(
+        snapshot.swings, direction, current_price, max_dist
+    )
     if target_swing:
         return "Recent {kind} {price:.0f}".format(
             kind=target_swing.kind.upper(), price=target_swing.price
@@ -220,8 +234,8 @@ def _find_target(snapshot, zone, direction, config):
     return None
 
 
-def _find_target_key_level(levels, direction):
-    # type: (List[SmcLevel], str) -> Optional[SmcLevel]
+def _find_target_key_level(levels, direction, current_price=0.0, max_dist=0.0):
+    # type: (List[SmcLevel], str, float, float) -> Optional[SmcLevel]
     target_kinds_short = (
         {"pdl", "dl", "p_h4_l", "h4_l", "p_h1_l", "h1_l"}
         if direction == "short"
@@ -229,15 +243,19 @@ def _find_target_key_level(levels, direction):
     )
     for lv in levels:
         if lv.kind in target_kinds_short:
+            if max_dist > 0 and abs(lv.price - current_price) > max_dist:
+                continue
             return lv
     return None
 
 
-def _find_target_swing(swings, direction):
-    # type: (List[SmcSwing], str) -> Optional[SmcSwing]
+def _find_target_swing(swings, direction, current_price=0.0, max_dist=0.0):
+    # type: (List[SmcSwing], str, float, float) -> Optional[SmcSwing]
     target_kinds = {"ll", "lh"} if direction == "short" else {"hh", "hl"}
     for sw in reversed(swings):
         if sw.kind in target_kinds:
+            if max_dist > 0 and abs(sw.price - current_price) > max_dist:
+                continue
             return sw
     return None
 
@@ -478,7 +496,7 @@ def _synthesize_impl(
             z = _zc
             d = _zone_direction(z)
             gi = zone_grades.get(z.id, {})
-            tgt = _find_target(snapshot, z, d, config)
+            tgt = _find_target(snapshot, z, d, config, current_price, atr)
             if tgt is None:
                 warnings.append("no_target_found")
             scenarios.append(

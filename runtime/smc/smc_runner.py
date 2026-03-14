@@ -168,7 +168,11 @@ class SmcRunner:
                                 if len(extra) > len(bars):
                                     self._engine.feed_m1_bars_bulk(symbol, extra)
                             except Exception:
-                                pass  # warmup bars already fed, extra is best-effort
+                                _log.debug(
+                                    "SMC_WARMUP_EXTRA_FAIL sym=%s",
+                                    symbol,
+                                    exc_info=True,
+                                )
                         m1_warmed.add(symbol)
                     elapsed_ms = (_time.time() - t0) * 1000.0
                     if elapsed_ms > _WARMUP_SLOW_MS:
@@ -368,11 +372,16 @@ class SmcRunner:
             levels = self._engine.get_session_levels(symbol, int(_t.time() * 1000))
             return [lv.to_wire() for lv in levels]
         except Exception:
+            _log.debug("SMC_SESSION_LEVELS_WIRE_FAIL sym=%s", symbol, exc_info=True)
             return []
 
-    def get_narrative(self, symbol, viewer_tf_s, current_price, atr):
+    def get_narrative(self, symbol, viewer_tf_s, current_price, atr=0.0):
         # type: (str, int, float, float) -> Optional[NarrativeBlock]
-        """ADR-0033 + ADR-0035: synthesize narrative with session context."""
+        """ADR-0033 + ADR-0035: synthesize narrative with session context.
+
+        atr param from ws_server is single-bar proxy — we compute ATR14
+        internally for reliable target distance filtering.
+        """
         cfg = self._full_config.get("smc", {}).get("narrative", {})
         if not cfg.get("enabled", False):
             return None
@@ -380,6 +389,10 @@ class SmcRunner:
             snap = self.get_snapshot(symbol, viewer_tf_s)
             if snap is None:
                 return _fallback_narrative_block(["no_snapshot"])
+            # Use ATR14 from engine bars instead of single-bar proxy
+            atr_14 = self._engine.get_atr(symbol, viewer_tf_s)
+            if atr_14 <= 1.0 and atr > 0:
+                atr_14 = atr  # fallback to caller estimate if engine has no data
             bias = self.get_bias_map(symbol)
             grades = self.get_zone_grades(symbol, viewer_tf_s)
             momentum = self.get_momentum_map(symbol)
@@ -402,7 +415,7 @@ class SmcRunner:
                 momentum,
                 viewer_tf_s,
                 current_price,
-                atr,
+                atr_14,
                 cfg,
                 session_info=session_info,
             )

@@ -186,6 +186,23 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
         logging.warning("M1_INGESTION_WORKER_NO_SYMBOLS")
         return None
 
+    # Exclude symbols owned by binance worker (ADR-0037)
+    bn_cfg = cfg.get("binance", {})
+    if isinstance(bn_cfg, dict) and bn_cfg.get("enabled", False):
+        bn_symbols = set(bn_cfg.get("symbols", []))
+        if bn_symbols:
+            symbols = [s for s in symbols if s not in bn_symbols]
+            if not symbols:
+                logging.warning(
+                    "M1_INGESTION_WORKER_NO_SYMBOLS (all claimed by binance)"
+                )
+                return None
+            logging.info(
+                "M1_INGESTION_WORKER_SYMBOLS excluded_binance=%s remaining=%s",
+                sorted(bn_symbols),
+                symbols,
+            )
+
     # Redis connection
     if redis_lib is None:
         logging.error("M1_INGESTION_WORKER_NO_REDIS (pip install redis)")

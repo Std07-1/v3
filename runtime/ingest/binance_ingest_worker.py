@@ -155,6 +155,26 @@ def build_binance_ingest_worker(config_path: str) -> Optional[M1PollerRunner]:
             except (ValueError, TypeError):
                 logging.debug("BINANCE_CASCADE_CATCHUP_PARSE raw=%r", raw_cc)
 
+    # ADR-0038: initial backfill for virgin symbols
+    initial_backfill_bars = 1440
+    if isinstance(bootstrap_cfg, dict):
+        raw_ib = bootstrap_cfg.get("initial_backfill_m1_bars")
+        if raw_ib is not None:
+            try:
+                initial_backfill_bars = int(raw_ib)
+            except (ValueError, TypeError):
+                logging.debug("BINANCE_INITIAL_BACKFILL_PARSE raw=%r", raw_ib)
+
+    # ADR-0038 S4: D1 direct backfill
+    initial_backfill_d1 = 180
+    if isinstance(bootstrap_cfg, dict):
+        raw_d1 = bootstrap_cfg.get("initial_backfill_d1_bars")
+        if raw_d1 is not None:
+            try:
+                initial_backfill_d1 = int(raw_d1)
+            except (ValueError, TypeError):
+                logging.debug("BINANCE_INITIAL_BACKFILL_D1_PARSE raw=%r", raw_d1)
+
     logger.info(
         "BINANCE_INGEST_WORKER_BUILD symbols=%s tfs=%s",
         symbols,
@@ -171,6 +191,8 @@ def build_binance_ingest_worker(config_path: str) -> Optional[M1PollerRunner]:
         derive_engine=derive_engine,
         derive_warmup_bars_by_tf=derive_warmup,
         cascade_catchup_m1_bars=cascade_catchup,
+        initial_backfill_m1_bars=initial_backfill_bars,
+        initial_backfill_d1_bars=initial_backfill_d1,
     )
 
 

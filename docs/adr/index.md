@@ -48,7 +48,9 @@
 | [0034](0034-advanced-market-analysis-tda.md) | Advanced Market Analysis — TDA Synchronization & Extended SMC | **Partially Implemented** | 2026-03-09 | TDA, IFVG (P0 ✅), breaker (P1 ✅), DP/Quasimodo/TF sync (P2–P6 ❌ rolled back) | `smc_tda_v1` |
 | [0035](0035-sessions-killzones.md) | Sessions & Killzones — Trading Session Awareness | **Implemented** | 2026-03-08 | Asia/London/NY, session H/L, killzone, F9 sweep, narrative session context | `smc_sessions_v1` |
 | [0036](0036-premium-trader-first-shell.md) | Premium Trader-First Shell for UI v4 | **Proposed** | 2026-03-09 | premium shell, thesis bar, tactical strip, service rail, signature interaction, UI hierarchy | `ui_v4_premium_shell_v1` |
-| [0037](0037-binance-second-broker.md) | Binance Futures — Second Broker (BTC/ETH Live Ingest) | **Proposed** | 2026-03-13 | Binance, BTCUSDT, ETHUSDT, Futures API, 24/7, crypto_24x7, python-binance, anchor=0 | `binance_broker_v1` |
+| [0037](0037-binance-second-broker.md) | Binance Futures — Second Broker (BTC/ETH Live Ingest) | **Implemented** | 2026-03-13 | Binance, BTCUSDT, ETHUSDT, Futures API, 24/7, crypto_24x7, python-binance, anchor=0 | `binance_broker_v1` |
+| [0038](0038-initial-backfill-virgin-symbols.md) | Initial Backfill for Virgin Symbols | **Implemented** | 2026-03-14 | backfill, virgin, bootstrap Phase 2.5, M1 history, D1 direct, cold start | `cold_start_backfill_v1` |
+| [0039](0039-signal-engine.md) | Signal Engine — Numeric Entry/SL/TP + R:R + Alerts | **Proposed** | 2026-03-14 | entry_price, stop_loss, take_profit, R:R, confidence, alerts, signal lifecycle, core/smc/signals.py | `signal_engine_v1` |
 
 ---
 
@@ -88,4 +90,4 @@
 
 Див. формат у [copilot-instructions.md](../../.github/copilot-instructions.md) → Тема B, Правило B2.
 
-Наступний номер: **0037**
+Наступний номер: **0040**

@@ -26,6 +26,7 @@ except ImportError:
 logger = logging.getLogger("binance_provider")
 
 _M1_MS = 60_000
+_D1_MS = 86_400_000
 _MAX_RETRIES = 3
 _BACKOFF_S = 2.0
 _MAX_KLINES_PER_REQUEST = 1500  # Binance API limit
@@ -102,6 +103,80 @@ class BinanceHistoryProvider:
 
         return self._parse_klines(symbol, raw)
 
+    def fetch_m1_range(
+        self,
+        symbol: str,
+        from_ms: int,
+        to_ms: int,
+        limit: int = _MAX_KLINES_PER_REQUEST,
+    ) -> List[CandleBar]:
+        """Отримує M1 бари за діапазон часу (ADR-0038 Initial Backfill).
+
+        Args:
+            symbol: Binance symbol (e.g. "BTCUSDT")
+            from_ms: початок діапазону (inclusive), epoch ms
+            to_ms: кінець діапазону (inclusive), epoch ms
+            limit: максимум барів (Binance API max = 1500)
+
+        Returns:
+            List[CandleBar] sorted by open_time_ms ascending.
+        """
+        if self._client is None:
+            raise RuntimeError("Binance client not initialized. Use context manager.")
+
+        limit = min(limit, _MAX_KLINES_PER_REQUEST)
+
+        kwargs: dict[str, Any] = {
+            "symbol": symbol,
+            "interval": BinanceClient.KLINE_INTERVAL_1MINUTE,
+            "startTime": int(from_ms),
+            "endTime": int(to_ms),
+            "limit": limit,
+        }
+
+        raw = self._fetch_with_retry(kwargs)
+        if raw is None:
+            return []
+
+        return self._parse_klines(symbol, raw)
+
+    def fetch_d1_range(
+        self,
+        symbol: str,
+        from_ms: int,
+        to_ms: int,
+        limit: int = _MAX_KLINES_PER_REQUEST,
+    ) -> List[CandleBar]:
+        """Отримує D1 бари за діапазон часу (ADR-0038 S4).
+
+        Args:
+            symbol: Binance symbol (e.g. "BTCUSDT")
+            from_ms: початок діапазону (inclusive), epoch ms
+            to_ms: кінець діапазону (inclusive), epoch ms
+            limit: максимум барів (Binance API max = 1500)
+
+        Returns:
+            List[CandleBar] sorted by open_time_ms ascending.
+        """
+        if self._client is None:
+            raise RuntimeError("Binance client not initialized. Use context manager.")
+
+        limit = min(limit, _MAX_KLINES_PER_REQUEST)
+
+        kwargs: dict[str, Any] = {
+            "symbol": symbol,
+            "interval": BinanceClient.KLINE_INTERVAL_1DAY,
+            "startTime": int(from_ms),
+            "endTime": int(to_ms),
+            "limit": limit,
+        }
+
+        raw = self._fetch_with_retry(kwargs)
+        if raw is None:
+            return []
+
+        return self._parse_klines(symbol, raw, tf_s=86400)
+
     def _fetch_with_retry(self, kwargs: dict[str, Any]) -> Optional[List[list]]:
         """REST GET з backoff retry."""
         client = self._client
@@ -131,11 +206,12 @@ class BinanceHistoryProvider:
         return None
 
     @staticmethod
-    def _parse_klines(symbol: str, raw: List[list]) -> List[CandleBar]:
+    def _parse_klines(symbol: str, raw: List[list], tf_s: int = 60) -> List[CandleBar]:
         """Binance kline row → CandleBar.
 
         Row format: [open_time, o, h, l, c, v, close_time, ...]
         """
+        tf_ms = tf_s * 1000
         bars: List[CandleBar] = []
         for row in raw:
             try:
@@ -149,9 +225,9 @@ class BinanceHistoryProvider:
                 bars.append(
                     CandleBar(
                         symbol=symbol,
-                        tf_s=60,
+                        tf_s=tf_s,
                         open_time_ms=open_time_ms,
-                        close_time_ms=open_time_ms + _M1_MS,
+                        close_time_ms=open_time_ms + tf_ms,
                         o=o,
                         h=h,
                         low=low,

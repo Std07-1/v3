@@ -171,6 +171,7 @@ class FxcmTickPublisher:
         self._seq = 0
         self._fx: Optional[Any] = None
         self._offers_listener: Optional[Any] = None
+        self._last_any_tick_wall_ts: float = 0.0
 
     def _inc(self, key: str, val: int = 1) -> None:
         self._stats[key] = self._stats.get(key, 0) + int(val)
@@ -267,6 +268,7 @@ class FxcmTickPublisher:
                 self._client.setex(key, self._last_tick_ttl_s, raw.encode("utf-8"))
             self._last_pub_ms[symbol] = now_ms
             self._inc("ticks_published_total")
+            self._last_any_tick_wall_ts = time.time()
         except Exception as exc:
             logging.warning("TickPublisher: publish err=%s", exc)
             self._inc("publish_errors_total")
@@ -323,7 +325,7 @@ class FxcmTickPublisher:
                 try:
                     cast(Any, fx).logout()
                 except Exception:
-                    pass
+                    logging.debug("TICK_PUB_LOGOUT_CLEANUP_FAIL", exc_info=True)
                 self._fx = None
         except Exception as exc:
             logging.debug("TickPublisher: cleanup err=%s", exc)
@@ -334,6 +336,14 @@ class FxcmTickPublisher:
             logging.error("TickPublisher: forexconnect недоступний")
             time.sleep(10.0)
             return
+
+        # Очищення попередньої FXCM-сесії перед новою спробою (D-04)
+        if self._fx is not None:
+            try:
+                cast(Any, self._fx).logout()
+            except Exception:
+                logging.debug("TICK_PUB_PREV_SESSION_CLEANUP_FAIL", exc_info=True)
+            self._fx = None
 
         class _OffersListener(fxcorepy.AO2GTableListener):
             def __init__(self, owner: "FxcmTickPublisher") -> None:
@@ -370,12 +380,34 @@ class FxcmTickPublisher:
             fxcorepy.O2GTableUpdateType.INSERT, self._offers_listener
         )
         logging.info("TickPublisher: підписка на OFFERS (%s)", ",".join(self._symbols))
+        _HEARTBEAT_INTERVAL_S = 60.0
+        _STALE_THRESHOLD_S = (
+            300  # TODO: перенести в config.json як tick_stale_threshold_s
+        )
+        _heartbeat_ts = time.time()
+        self._last_any_tick_wall_ts = (
+            time.time()
+        )  # пільговий період: уникнути stale при старті
         try:
             while not self._stop_requested:
                 time.sleep(1.0)
+                now = time.time()
+                if now - _heartbeat_ts >= _HEARTBEAT_INTERVAL_S:
+                    last_tick_ago_s = now - self._last_any_tick_wall_ts
+                    logging.info(
+                        "TICK_PUBLISHER_HEARTBEAT підключено=так тіків_не_було_с=%.0f",
+                        last_tick_ago_s,
+                    )
+                    if last_tick_ago_s > _STALE_THRESHOLD_S:
+                        logging.warning(
+                            "TICK_PUBLISHER_STALE_STREAM тіків_немає_с=%.0f поріг=%d — перепідключення",
+                            last_tick_ago_s,
+                            _STALE_THRESHOLD_S,
+                        )
+                        break
+                    _heartbeat_ts = now
         except KeyboardInterrupt:
             logging.info("TickPublisher: цикл OFFERS перервано CTRL+C")
-            pass
 
 
 def main() -> int:
@@ -430,6 +462,14 @@ def main() -> int:
             time.sleep(60.0)
 
     symbols = stream_cfg.symbols or symbols_from_cfg(cfg)
+
+    # Exclude symbols owned by binance worker (ADR-0037)
+    bn_cfg = cfg.get("binance", {})
+    if isinstance(bn_cfg, dict) and bn_cfg.get("enabled", False):
+        bn_symbols = set(bn_cfg.get("symbols", []))
+        if bn_symbols:
+            symbols = [s for s in symbols if s not in bn_symbols]
+
     client = redis_lib.Redis(
         host=spec.host,
         port=spec.port,

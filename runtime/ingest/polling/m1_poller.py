@@ -608,6 +608,170 @@ class M1SymbolPoller:
             )
             return 0
 
+    # -- Initial backfill (ADR-0038) ------------------------------------
+
+    def initial_backfill(self, max_bars: int) -> Dict[str, Any]:
+        """Fetch initial M1 history for virgin symbol (no watermark).
+
+        Phase 2.5: викликається з _bootstrap_warmup() коли watermark_ms is None
+        після warmup_watermark(). Ідемпотентний: після першого backfill watermark
+        set → надалі Phase 2.5 skip.
+
+        Returns:
+            dict з результатом: bars_expected, bars_fetched, bars_written, etc.
+        """
+        if self._watermark_ms is not None:
+            return {"initial_backfill_skipped": "watermark_exists"}
+        if max_bars <= 0:
+            return {"initial_backfill_skipped": "disabled"}
+
+        now_ms = _utc_now_ms()
+        from_ms = now_ms - max_bars * _M1_MS
+        to_ms = now_ms
+
+        # Provider must support fetch_m1_range (ADR-0038)
+        fetch_fn = getattr(self._provider, "fetch_m1_range", None)
+        if fetch_fn is None:
+            logging.warning(
+                "INITIAL_BACKFILL_SKIP symbol=%s reason=provider_no_fetch_m1_range",
+                self._symbol,
+            )
+            return {"initial_backfill_skipped": "provider_unsupported"}
+
+        try:
+            bars = fetch_fn(self._symbol, from_ms, to_ms, max_bars)
+        except Exception as exc:
+            logging.warning(
+                "INITIAL_BACKFILL_FAILED symbol=%s reason=%s",
+                self._symbol,
+                exc,
+            )
+            return {
+                "initial_backfill_failed": str(exc),
+                "bars_expected": max_bars,
+                "bars_fetched": 0,
+                "bars_written": 0,
+            }
+
+        if not bars:
+            logging.warning(
+                "INITIAL_BACKFILL_EMPTY symbol=%s expected=%d",
+                self._symbol,
+                max_bars,
+            )
+            return {
+                "bars_expected": max_bars,
+                "bars_fetched": 0,
+                "bars_written": 0,
+            }
+
+        bars.sort(key=lambda b: b.open_time_ms)
+        written = 0
+        for bar in bars:
+            if self._ingest_bar(bar):
+                written += 1
+
+        if written < max_bars:
+            logging.warning(
+                "INITIAL_BACKFILL_PARTIAL symbol=%s expected=%d fetched=%d written=%d",
+                self._symbol,
+                max_bars,
+                len(bars),
+                written,
+            )
+        else:
+            logging.info(
+                "INITIAL_BACKFILL_OK symbol=%s fetched=%d written=%d",
+                self._symbol,
+                len(bars),
+                written,
+            )
+
+        return {
+            "bars_expected": max_bars,
+            "bars_fetched": len(bars),
+            "bars_written": written,
+        }
+
+    def initial_backfill_d1(self, max_bars: int) -> Dict[str, Any]:
+        """Fetch initial D1 history for virgin symbol (ADR-0038 S4).
+
+        D1 через cascade від 1440 M1 = лише ~1 бар.
+        Прямий fetch D1 від провайдера дає глибшу історію для SMC.
+        Writes через UDS.commit_final_bar() (I1 compliant).
+        """
+        if max_bars <= 0:
+            return {"d1_backfill_skipped": "disabled"}
+
+        # Check if D1 data already exists (idempotent)
+        existing = self._uds.read_tail_candles(self._symbol, 86400, 1)
+        if existing:
+            return {"d1_backfill_skipped": "data_exists"}
+
+        fetch_fn = getattr(self._provider, "fetch_d1_range", None)
+        if fetch_fn is None:
+            logging.warning(
+                "D1_BACKFILL_SKIP symbol=%s reason=provider_no_fetch_d1_range",
+                self._symbol,
+            )
+            return {"d1_backfill_skipped": "provider_unsupported"}
+
+        now_ms = _utc_now_ms()
+        from_ms = now_ms - max_bars * 86_400_000
+        to_ms = now_ms
+
+        try:
+            bars = fetch_fn(self._symbol, from_ms, to_ms, max_bars)
+        except Exception as exc:
+            logging.warning(
+                "D1_BACKFILL_FAILED symbol=%s reason=%s",
+                self._symbol,
+                exc,
+            )
+            return {
+                "d1_backfill_failed": str(exc),
+                "bars_expected": max_bars,
+                "bars_fetched": 0,
+                "bars_written": 0,
+            }
+
+        if not bars:
+            logging.warning(
+                "D1_BACKFILL_EMPTY symbol=%s expected=%d",
+                self._symbol,
+                max_bars,
+            )
+            return {"bars_expected": max_bars, "bars_fetched": 0, "bars_written": 0}
+
+        bars.sort(key=lambda b: b.open_time_ms)
+        written = 0
+        for bar in bars:
+            result = self._uds.commit_final_bar(bar)
+            if result.ok:
+                written += 1
+
+        if written < len(bars):
+            logging.warning(
+                "D1_BACKFILL_PARTIAL symbol=%s expected=%d fetched=%d written=%d",
+                self._symbol,
+                max_bars,
+                len(bars),
+                written,
+            )
+        else:
+            logging.info(
+                "D1_BACKFILL_OK symbol=%s fetched=%d written=%d",
+                self._symbol,
+                len(bars),
+                written,
+            )
+
+        return {
+            "bars_expected": max_bars,
+            "bars_fetched": len(bars),
+            "bars_written": written,
+        }
+
     # -- Tail catchup (P0.1: ADR-0002) --------------------------------
 
     def tail_catchup(self) -> Dict[str, Any]:
@@ -765,6 +929,8 @@ class M1PollerRunner:
         derive_engine: Optional[DeriveEngine] = None,
         derive_warmup_bars_by_tf: Optional[Dict[int, int]] = None,
         cascade_catchup_m1_bars: int = 1440,
+        initial_backfill_m1_bars: int = 1440,
+        initial_backfill_d1_bars: int = 180,
     ) -> None:
         self._pollers = pollers
         self._provider = provider
@@ -782,6 +948,8 @@ class M1PollerRunner:
             self._DEFAULT_DERIVE_WARMUP
         )
         self._cascade_catchup_m1_bars = max(0, cascade_catchup_m1_bars)
+        self._initial_backfill_m1_bars = max(0, initial_backfill_m1_bars)
+        self._initial_backfill_d1_bars = max(0, initial_backfill_d1_bars)
         # Graceful shutdown: stop_event дозволяє перервати sleep між циклами
         import threading as _threading
 
@@ -796,7 +964,7 @@ class M1PollerRunner:
                 try:
                     self._provider.__exit__(None, None, None)
                 except Exception:
-                    pass
+                    logging.debug("M1_POLLER_RECONNECT_CLEANUP_FAIL", exc_info=True)
             self._provider.__enter__()
             if not self._connected:
                 logging.info("M1_POLLER_FXCM_SESSION connected=True")
@@ -826,7 +994,7 @@ class M1PollerRunner:
                 self._provider.__exit__(None, None, None)
                 self._connected = False
         except Exception:
-            pass
+            logging.debug("M1_POLLER_SHUTDOWN_CLEANUP_FAIL", exc_info=True)
 
     # -- Bootstrap / warmup ---------------
 
@@ -876,6 +1044,91 @@ class M1PollerRunner:
                 exc,
             )
             bootstrap_degraded.append("watermark_warmup: %s" % exc)
+
+        # 2.5. Initial backfill for virgin symbols (ADR-0038)
+        #      Якщо після Phase 2 watermark=None → символ "virgin" (порожній JSONL).
+        #      Fetch initial M1 history від провайдера → write через UDS → set watermark.
+        #      Потрібна активна сесія провайдера для fetch.
+        virgin_symbols = [
+            p for p in self._pollers if p._watermark_ms is None  # noqa: SLF001
+        ]
+        if virgin_symbols:
+            if self._try_connect():
+                backfill_n = self._initial_backfill_m1_bars
+                backfill_total = 0
+                for p in virgin_symbols:
+                    try:
+                        result = p.initial_backfill(backfill_n)
+                        written = result.get("bars_written", 0)
+                        backfill_total += written
+                        if result.get("initial_backfill_failed"):
+                            bootstrap_degraded.append(
+                                "initial_backfill:%s: %s"
+                                % (
+                                    p._symbol,
+                                    result["initial_backfill_failed"],
+                                )  # noqa: SLF001
+                            )
+                    except Exception as exc:
+                        logging.warning(
+                            "BOOTSTRAP_DEGRADED phase=initial_backfill "
+                            "symbol=%s err=%s",
+                            p._symbol,  # noqa: SLF001
+                            exc,
+                        )
+                        bootstrap_degraded.append(
+                            "initial_backfill:%s: %s" % (p._symbol, exc)  # noqa: SLF001
+                        )
+                logging.info(
+                    "INITIAL_BACKFILL_DONE virgin_symbols=%d total_written=%d",
+                    len(virgin_symbols),
+                    backfill_total,
+                )
+                # Re-warmup watermark after backfill
+                for p in virgin_symbols:
+                    p.warmup_watermark(tail_n=10)
+
+                # 2.5b. D1 direct backfill for virgin symbols (ADR-0038 S4)
+                #       D1 через cascade від 1440 M1 = ~1 бар.
+                #       Прямий fetch D1 від провайдера — глибша історія для SMC.
+                d1_n = self._initial_backfill_d1_bars
+                if d1_n > 0:
+                    d1_total = 0
+                    for p in virgin_symbols:
+                        try:
+                            d1_result = p.initial_backfill_d1(d1_n)
+                            d1_written = d1_result.get("bars_written", 0)
+                            d1_total += d1_written
+                            if d1_result.get("d1_backfill_failed"):
+                                bootstrap_degraded.append(
+                                    "d1_backfill:%s: %s"
+                                    % (
+                                        p._symbol,
+                                        d1_result["d1_backfill_failed"],
+                                    )  # noqa: SLF001
+                                )
+                        except Exception as exc:
+                            logging.warning(
+                                "BOOTSTRAP_DEGRADED phase=d1_backfill "
+                                "symbol=%s err=%s",
+                                p._symbol,  # noqa: SLF001
+                                exc,
+                            )
+                            bootstrap_degraded.append(
+                                "d1_backfill:%s: %s" % (p._symbol, exc)  # noqa: SLF001
+                            )
+                    logging.info(
+                        "D1_BACKFILL_DONE virgin_symbols=%d total_written=%d",
+                        len(virgin_symbols),
+                        d1_total,
+                    )
+            else:
+                logging.warning(
+                    "INITIAL_BACKFILL_SKIP reason=no_provider_session "
+                    "virgin_symbols=%d",
+                    len(virgin_symbols),
+                )
+                bootstrap_degraded.append("initial_backfill: no_provider_session")
 
         # 2b. DeriveEngine buffer warmup (ADR-0002 P2.3)
         #     Заповнюємо GenericBuffer: M1 + проміжні TF (M5/M15/M30/H1) з диску.
@@ -1124,6 +1377,16 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
     if not symbols:
         logging.warning("M1_POLLER_NO_SYMBOLS")
         return None
+
+    # Exclude symbols owned by binance worker (ADR-0037)
+    bn_cfg = cfg.get("binance", {})
+    if isinstance(bn_cfg, dict) and bn_cfg.get("enabled", False):
+        bn_symbols = set(bn_cfg.get("symbols", []))
+        if bn_symbols:
+            symbols = [s for s in symbols if s not in bn_symbols]
+            if not symbols:
+                logging.warning("M1_POLLER_NO_SYMBOLS (all claimed by binance)")
+                return None
 
     tail_fetch_n = int(m1_cfg.get("tail_fetch_n", 5))
     safety_delay_s = int(m1_cfg.get("safety_delay_s", 8))
@@ -1387,7 +1650,7 @@ def _pidfile_cleanup() -> None:
     try:
         _PID_FILE.unlink(missing_ok=True)
     except Exception:
-        pass
+        logging.debug("M1_POLLER_PIDFILE_CLEANUP_FAIL", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

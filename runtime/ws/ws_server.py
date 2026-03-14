@@ -655,7 +655,7 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                     "WS_NARRATIVE_ERR sym=%s err=%s", session.symbol, _narr_exc
                 )
         await session.ws.send_json(frame)
-        _log.info(
+        _log.debug(
             "WS_FULL_PUSH client=%s symbol=%s tf=%s candles=%d seq=%d",
             session.client_id,
             session.symbol,
@@ -712,7 +712,9 @@ async def _safe_broadcast(
             try:
                 await s.ws.close()
             except Exception:
-                pass
+                _log.debug(
+                    "WS_CLOSE_CLEANUP_FAIL client_id=%s", s.client_id, exc_info=True
+                )
     return t_send_ms
 
 
@@ -948,7 +950,7 @@ async def _global_delta_loop(app: web.Application) -> None:
                                     tuple(active_recipients),
                                     sessions,
                                 )
-                                _log.info(
+                                _log.debug(
                                     "WS_BROADCAST_METRICS sym=%s tf=%s subs=%d t_ser_ms=%.2f t_send_ms=%.2f",
                                     symbol,
                                     tf_label,
@@ -1064,7 +1066,11 @@ async def _global_delta_loop(app: web.Application) -> None:
                                 if _sess_lvls:
                                     frame["session_levels"] = _sess_lvls
                             except Exception:
-                                pass  # session levels are best-effort in delta
+                                _log.debug(
+                                    "WS_SESSION_LEVELS_DELTA_FAIL sym=%s",
+                                    symbol,
+                                    exc_info=True,
+                                )
 
                         d1_relay_tfs_2: set = app.get(APP_D1_TICK_RELAY_TFS, set())
                         if tf_s in d1_relay_tfs_2:
@@ -1092,7 +1098,7 @@ async def _global_delta_loop(app: web.Application) -> None:
                             tuple(active_recipients),
                             sessions,
                         )
-                        _log.info(
+                        _log.debug(
                             "WS_BROADCAST_METRICS sym=%s tf=%s subs=%d t_ser_ms=%.2f t_send_ms=%.2f",
                             symbol,
                             tf_label,
@@ -1443,7 +1449,7 @@ async def _handle_scrollback(
             session, candles, session.symbol, tf_label, warnings or None, app=app
         )
         await session.ws.send_json(frame)
-        _log.info(
+        _log.debug(
             "WS_SCROLLBACK_PUSH client=%s symbol=%s bars=%d to_ms=%d",
             session.client_id,
             session.symbol,
@@ -1728,6 +1734,15 @@ _BIND_MAX_RETRIES = 5
 _BIND_RETRY_DELAY_S = 3.0
 
 
+def _ws_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+    """Suppress noisy ProactorBasePipeTransport errors on Windows."""
+    msg = context.get("message", "")
+    if "_ProactorBasePipeTransport" in msg or "_call_connection_lost" in msg:
+        _log.debug("WS_ASYNCIO_TRANSPORT_NOISE msg=%s", msg)
+        return
+    loop.default_exception_handler(context)
+
+
 def _run_with_retry(
     app: web.Application,
     host: str,
@@ -1738,7 +1753,10 @@ def _run_with_retry(
     """Запуск aiohttp з retry для port bind (Windows TIME_WAIT)."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    runner = web.AppRunner(app)
+    loop.set_exception_handler(_ws_exception_handler)
+    runner = web.AppRunner(
+        app, access_log=None
+    )  # вимкнено access log (P4: ~227k рядків/день шуму)
     loop.run_until_complete(runner.setup())
 
     for attempt in range(1, max_retries + 1):

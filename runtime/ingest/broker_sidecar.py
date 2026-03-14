@@ -211,14 +211,27 @@ def main():
         bars_key,
     )
 
+    _consecutive_failures = 0
     while _running:
         # Ensure FXCM session
         if not connected:
             try:
                 provider.__enter__()
                 connected = True
+                _consecutive_failures = 0
                 logging.info("BROKER_SIDECAR_FXCM_CONNECTED")
             except Exception as exc:
+                _consecutive_failures += 1
+                if _consecutive_failures == 10:
+                    logging.error(
+                        "BROKER_SIDECAR_ESCALATION послідовних_збоїв=%d — FXCM стабільно не підключається (~5хв)",
+                        _consecutive_failures,
+                    )
+                elif _consecutive_failures == 60:
+                    logging.critical(
+                        "BROKER_SIDECAR_CRITICAL_FAILURE послідовних_збоїв=%d — немає з'єднання ~30хв",
+                        _consecutive_failures,
+                    )
                 logging.warning(
                     "BROKER_SIDECAR_FXCM_CONNECT_FAIL err=%s cooldown=%ds",
                     exc,
@@ -248,7 +261,7 @@ def main():
             try:
                 provider.__exit__(None, None, None)
             except Exception:
-                pass
+                logging.debug("BROKER_SIDECAR_EXIT_CLEANUP_FAIL", exc_info=True)
 
     # Cleanup
     logging.info("BROKER_SIDECAR_SHUTDOWN")
@@ -256,7 +269,7 @@ def main():
         try:
             provider.__exit__(None, None, None)
         except Exception:
-            pass
+            logging.debug("BROKER_SIDECAR_SHUTDOWN_CLEANUP_FAIL", exc_info=True)
     return 0
 
 

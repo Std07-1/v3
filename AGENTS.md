@@ -1,7 +1,8 @@
 # AGENTS.md — Trading Platform v3 (FXCM Connector)
 
-> **Purpose**: This document provides essential context for AI coding agents working on this project.  
-> **Language**: Ukrainian (primary), English for technical terms.  
+> **Системний довідник** — структура, команди, конфігурація, схеми.
+> Правила, інваріанти, заборони → `.github/copilot-instructions.md`.
+> Командна взаємодія агентів → `CLAUDE.md`.
 > **Last Updated**: 2026-03-13
 
 ---
@@ -82,6 +83,7 @@ CI gate звіряє ID→spec mapping і не дозволяє drift.
 | `R_CHART_UX` | **Chart Experience Product Designer** | `.github/role_spec_chart_ux_v1.md` |
 | `R_ARCHITECT` | **Systems Architect** | `.github/role_spec_architect_v1.md` |
 | `R_COMPLIANCE` | **Compliance & Safety Officer** | `.github/role_spec_compliance_v1.md` |
+| `R_SIGNAL_ARCHITECT` | **Signal Architect** | `.github/role_spec_signal_architect_v1.md` |
 
 ---
 
@@ -301,36 +303,9 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 
 ---
 
-## 5. Code Style Guidelines
+## 5. Code Conventions
 
-### 5.1 Dependency Rule (I0) — CRITICAL
-
-```text
-┌─────────────────────────────────────────────────────────────┐
-│  core/        pure-логіка (час, контракти, моделі)          │
-│               НЕ імпортує: runtime/, ui/, tools/            │
-│               НЕ має I/O: файли, мережа, Redis, FXCM        │
-├─────────────────────────────────────────────────────────────┤
-│  runtime/     I/O та процеси (ingest, store, pub/sub)       │
-│               Імпортує: core/                               │
-│               НЕ імпортує: tools/, ui/                      │
-├─────────────────────────────────────────────────────────────┤
-│  ui_chart_v3/ презентація + HTTP API                        │
-│               Імпортує: core/, runtime/ (ReadPolicy, UDS)   │
-│               НЕ містить доменної логіки                    │
-├─────────────────────────────────────────────────────────────┤
-│  app/         запуск, supervisor, lifecycle                 │
-│               Імпортує: core/, runtime/                     │
-├─────────────────────────────────────────────────────────────┤
-│  tools/       одноразові утиліти/діагностика/міграції       │
-│               Імпортує: core/ (дозволено)                   │
-│               НЕ імпортується з runtime/ui/app              │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Enforcement**: `tools/exit_gates/gates/` містить AST gate для перевірки.
-
-### 5.2 Naming Conventions
+### 5.1 Naming Conventions
 
 - **Python**: `snake_case` для функцій/змінних, `PascalCase` для класів
 - **Time fields**: `open_time_ms`, `close_time_ms` (epoch milliseconds)
@@ -338,7 +313,7 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 - **Config keys**: `snake_case` в JSON
 - **CandleBar fields** (CRITICAL): `.o`, `.h`, `.low`, `.c`, `.v` — НЕ `.l`! Wire/dict формат використовує `l`, але dataclass поле = `low`. Завжди звіряти з `core/model/bars.py:CandleBar`
 
-### 5.3 Time Geometry (Dual Convention) — CRITICAL
+### 5.2 Time Geometry (Dual Convention) — CRITICAL
 
 | Шар | Поле | Семантика | Формула |
 |---|---|---|---|
@@ -348,7 +323,7 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 - Конвертація end-excl → end-incl відбувається **тільки** на межі Redis write
 - При читанні з Redis, UDS перераховує `close_ms = open_ms + tf_s*1000`
 
-### 5.4 Logging Format
+### 5.3 Logging Format
 
 ```python
 # Structured logs з префіксами
@@ -365,23 +340,9 @@ logging.warning("DEGRADED_REASON symbol=%s tf=%s", sym, tf)
 
 ---
 
-## 6. Key Invariants (I0–I6)
+## 6. Configuration
 
-| ID | Інваріант | Enforcement |
-|---|---|---|
-| **I0** | **Dependency Rule**: core/ ← runtime/ ← ui/ | Exit-gate AST check |
-| **I1** | **UDS як вузька талія**: всі writes через UDS; UI = read-only | Runtime guard `_ensure_writer_role()` |
-| **I2** | **Єдина геометрія часу**: end-excl (SSOT/API), end-incl (Redis), конвертація на межі Redis | `assert_invariants()` |
-| **I3** | **Final > Preview (NoMix)**: `complete=true` завжди перемагає `complete=false` | Watermark + NoMix tracking |
-| **I4** | **Один update-потік для UI**: `/api/updates` (upsert events) | Contract-first API |
-| **I5** | **Degraded-but-loud**: fallback → `warnings[]`/`meta.extensions`, не silent | `_contract_guard_warn_*` |
-| **I6** | **Disk hot-path ban**: disk не для polling; лише bootstrap/warmup/scrollback | `_disk_allowed()` guard |
-
----
-
-## 7. Configuration
-
-### 7.1 Key Config Files
+### 6.1 Key Config Files
 
 | Файл | Призначення |
 |---|---|
@@ -390,7 +351,7 @@ logging.warning("DEGRADED_REASON symbol=%s tf=%s", sym, tf)
 | `env_profile.py` | Env loading logic |
 | `requirements-broker.txt` | Broker venv deps (.venv37/) |
 
-### 7.2 Critical Config Sections
+### 6.2 Critical Config Sections
 
 ```json
 {
@@ -403,7 +364,7 @@ logging.warning("DEGRADED_REASON symbol=%s tf=%s", sym, tf)
 }
 ```
 
-### 7.3 Environment Variables
+### 6.3 Environment Variables
 
 ```bash
 # FXCM credentials (required)
@@ -418,61 +379,21 @@ REDIS_PORT=6379
 
 ---
 
-## 8. Development Workflow
+## 7. Security Considerations
 
-### 8.1 Three Modes of Operation
-
-| Режим | Коли | Що дозволено |
-|-------|------|-------|
-| `MODE=DISCOVERY` | Будь-який аналіз. За замовчуванням якщо не впевнений. | FACTS з `path:line` + FAILURE MODEL + GAP ANALYSIS |
-| `MODE=PATCH` | Після DISCOVERY, якщо інваріанти не порушено. | Мінімальний диф ≤150 LOC, 1 файл, verify, ADR-reference |
-| `MODE=ADR` | Якщо зміна торкається інваріантів, формату, протоколу. | Документ `docs/adr/NNNN-<назва>.md` з повним обґрунтуванням |
-| `MODE=BUILD` | Нова підсистема з approved ADR. | Types+contracts FIRST → Pure logic з tests → Integration glue → UI wiring. Files >1 дозволено, LOC >150 дозволено якщо новий модуль з тестами. Послідовність P-slices з ADR. |
-
-### 8.2 Stop-Rules
-
-Зупинитись і **не додавати нові фічі**, якщо:
-
-- Порушені інваріанти I0–I6
-- З'явився split-brain (два паралельні джерела істини)
-- З'явився silent fallback
-- Зміна торкається контрактів/даних без плану міграції
-
-### 8.3 ADR Process
-
-Всі архітектурні рішення документуються в `docs/adr/`:
-
-- ADR-0001: UDS як єдина талія
-- ADR-0002: DeriveChain M1→H4+D1
-- ADR-0003: Cold start hardening
-- ADR-0023: D1 Live Derive from M1 (D1 = 1440×M1, anchor 79200)
-- ADR-0024: SMC Engine Architecture (swings, OB, FVG, liquidity, P/D, lifecycle)
-- ADR-0027: Client-Side Replay (TradingView-style)
-- ADR-0028: Elimination Engine — Display Filter Pipeline
-- ADR-0029: OB Confluence Scoring + Grade System
-- ADR-0030-alt: TF Sovereignty — Cross-TF Projection Styling
-- ADR-0031: Bias Banner — Multi-TF Trend Bias Display
-- ADR-0033: Context Flow — Multi-TF Narrative Engine
-- ADR-0035: Sessions & Killzones — Trading Session Awareness
-- ... (36 ADR total, see `docs/adr/index.md`)
-
----
-
-## 9. Security Considerations
-
-### 9.1 Secrets Management
+### 7.1 Secrets Management
 
 - **Ніколи** не коміть `.env` — він у `.gitignore`
 - Використовуй `.env.example` як шаблон
 - FXCM credentials завантажуються через `env_profile.load_env_secrets()`
 
-### 9.2 Data Protection
+### 7.2 Data Protection
 
 - `data_v3/` — локальне сховище JSONL (чутливі дані)
 - `logs/` — логи процесів (можуть містити sensitive data)
 - Redis db=1 — не production shared instance
 
-### 9.3 Network Security
+### 7.3 Network Security
 
 - UI HTTP: `127.0.0.1:8089` (localhost only)
 - UI WS: `127.0.0.1:8000` (localhost only)
@@ -481,9 +402,9 @@ REDIS_PORT=6379
 
 ---
 
-## 10. Troubleshooting
+## 8. Troubleshooting
 
-### 10.1 Common Issues
+### 8.1 Common Issues
 
 | Проблема | Діагностика | Рішення |
 |---|---|---|
@@ -492,7 +413,7 @@ REDIS_PORT=6379
 | `redis_spec_mismatch` | UDS warnings | Перевірити Redis TTL конфігурацію |
 | `insufficient_warmup` | UI показує порожній графік | Зачекати bootstrap або перезапустити |
 
-### 10.2 Recovery Commands
+### 8.2 Recovery Commands
 
 ```bash
 # Перезбірка derived барів з M1
@@ -505,7 +426,7 @@ python -m tools.dedup_rebuild_m1m3 --symbol XAU/USD
 python -m tools.purge_broken_bars --symbol XAU/USD --tf 14400
 ```
 
-### 10.3 Log Locations
+### 8.3 Log Locations
 
 ```bash
 # Supervisor mode (stdio=pipe) — логи в консолі
@@ -519,7 +440,7 @@ tail -f logs/m1_poller.out.log
 
 ---
 
-## 11. Quick Reference
+## 9. Quick Reference
 
 | Команда | Призначення |
 |---|---|
@@ -539,74 +460,12 @@ tail -f logs/m1_poller.out.log
 | `config.json` | SSOT конфігурація |
 | `docs/index.md` | Навігація по документації |
 
----
-
-## 12. Contact & Resources
+### Resources
 
 - **Документація**: `docs/index.md`
 - **ADR Index**: `docs/adr/index.md`
 - **Config Reference**: `docs/config_reference.md`
 - **Production Runbook**: `docs/runbooks/production.md`
 - **Changelog**: `CHANGELOG.md` / `changelog.jsonl`
-
-## 13. Жорсткі заборони
-
-**Z1 — Заборона на "загальну пораду".** ~~"Рекомендую додати тести"~~ → конкретно: який тест, що перевіряє, який assertion, де живе.
-
-**Z2 — Заборона на "тимчасово так".** Тимчасове без тікета/дедлайну/гейта = навічно. Кожне `TODO` без expiry date = технічний борг, який ніколи не буде сплачений.
-
-**Z3 — Заборона на "працює на моїй машині".** Відтворюваність = мінімум: команда + вхідні дані + очікуваний/фактичний результат.
-
-**Z4 — Заборона на вигадані номери рядків.** Якщо ти не бачив код — пиши `[path:?]` а не вигадуй line number. Брехливий доказ гірше за відсутній.
-
-**Z5 — Заборона на комплімент-обгортку.** ~~"Загалом непогано, але..."~~ Дефект не потребує вступного реверансу. Час обмежений — витрачай його на суть.
-
-**Z6 — Заборона на рефакторинг як фікс.** Мінімальний фікс = мінімальний diff. "Давайте перепишемо модуль" — це не фікс, це initiative.
-
-**Z7 — Заборона на `bar.l` замість `bar.low`.** CandleBar dataclass має поле
-`.low`, НЕ `.l`. Wire/dict формат (`{"l": ...}`) відрізняється від dataclass.
-Перед доступом до полів бару — звірити з `core/model/bars.py`.
-Порушення = silent crash у production (exception caught → empty overlay).
-
-## 14. Поведінка в edge cases (що робити коли...)
-
-**Коли автор каже "це by design":**
-→ Покажи конкретний сценарій, де цей design ламається. Якщо не можеш — визнай.
-
-**Коли не вистачає коду:**
-→ Маркуй `[ASSUMED]`. Давай worst-case оцінку. Запропонуй конкретну команду/файл для перевірки.
-
-**Коли все виглядає добре:**
-→ Шукай глибше. Подумай: "якщо б я хотів зламати цю систему зсередини — що б я зробив?" Якщо після 30 хвилин не знайшов S0/S1 — ок, але знайди хоча б 5 S2/S3.
-
-**Коли дефектів >30:**
-→ Пріоритезуй безжалісно. Top-10 з доказами краще за 30 без.
-
----
-
-## 15. Антипаттерни, які ти ніколи не робиш
-
-- ❌ "Код чистий і добре структурований" — це не рев'ю, це ввічливість.
-- ❌ "Рекомендую розглянути можливість..." — або конкретний баг, або нема.
-- ❌ "В цілому добре, але є нюанси" — кожен "нюанс" має severity і ID.
-- ❌ Перелік зауважень без severity/priority — це шум, не сигнал.
-- ❌ Рефакторинг як фікс S0 — S0 фікситься мінімальним патчем СЬОГОДНІ.
-- ❌ Хвалити за "правильні рішення" — тебе покликали не за цим.
-
----
-
-## 16. Контракт з замовником
-
-Ти гарантуєш:
-
-1. Кожен дефект має evidence (код, лог, або `[ASSUMED]` з обґрунтуванням)
-2. Severity не завищена (S0 = production data loss / corruption / crash, не "некрасиво")
-3. Фікс-мінімум реально мінімальний (не "заодно перепишемо")
-4. Якщо щось не перевірив — чесно скажеш що не перевірив
-5. Відповідь можна використати як технічний тікет без переписування
-
-Ти **не** гарантуєш:
-
-- Що знайшов усе (100% coverage неможливий)
-- Що автор буде задоволений (це не ціль)
-- Що всі рекомендації варто робити зараз (є priority для цього)
+- **Правила, інваріанти, заборони**: `.github/copilot-instructions.md`
+- **Командна взаємодія агентів**: `CLAUDE.md`

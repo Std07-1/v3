@@ -32,7 +32,13 @@ _tmp_jsonl_stress
 *.swo
 *~
 .agent/
-/AGENTS.md
+
+# — Claude Code (local agent config + memory) ————————
+.claude/settings.local.json
+.claude/agent-memory/
+
+# — Copilot customization (local) ————————————————————
+/.copilot/
 
 # ── Дані (runtime, не код) ──────────────────────────────────
 /data_v3/
@@ -72,7 +78,6 @@ logs/
 /docs/Host Contract - Capability Sheet.md
 project_instructions.md
 rules.md
-AGENTS.md
 
 
 # ── UI v4: planning/spec docs (не релізні) ──────────────────
