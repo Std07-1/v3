@@ -1065,6 +1065,8 @@ def _filter_for_display(
             continue
         if z.status == "filled":  # A-2: filled = dead
             continue
+        if (z.high - z.low) > max_height:  # height guard — same as OBs
+            continue
         if abs(price - (z.high + z.low) / 2.0) > fvg_max_dist:  # A-4
             continue
         # ADR-0033 SC-2: hide FVG that overlaps any active OB (any overlap > 0)
