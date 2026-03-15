@@ -4,6 +4,7 @@ tests/test_smc_narrative.py — ADR-0033 Rev 2 test matrix (16 cases).
 Covers: mode selection, trigger states, target resolution,
         FVG context, market phase, degraded fallback.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -26,39 +27,70 @@ from core.smc.narrative import (
 
 # ── Helpers ──────────────────────────────────────────────
 
-def _zone(kind="ob_bear", high=5225.0, low=5144.0, zone_id="z1",
-          status="active", tf_s=900, strength=0.8,
-          anchor_bar_ms=1000, context_layer=None):
+
+def _zone(
+    kind="ob_bear",
+    high=5225.0,
+    low=5144.0,
+    zone_id="z1",
+    status="active",
+    tf_s=900,
+    strength=0.8,
+    anchor_bar_ms=1000,
+    context_layer=None,
+):
     return SmcZone(
-        id=zone_id, symbol="XAU/USD", tf_s=tf_s, kind=kind,
-        start_ms=anchor_bar_ms, end_ms=None, high=high, low=low,
-        status=status, strength=strength, anchor_bar_ms=anchor_bar_ms,
+        id=zone_id,
+        symbol="XAU/USD",
+        tf_s=tf_s,
+        kind=kind,
+        start_ms=anchor_bar_ms,
+        end_ms=None,
+        high=high,
+        low=low,
+        status=status,
+        strength=strength,
+        anchor_bar_ms=anchor_bar_ms,
         context_layer=context_layer,
     )
 
 
 def _swing(kind="hh", price=5300.0, time_ms=2000, tf_s=900):
     return SmcSwing(
-        id="sw_{}".format(time_ms), symbol="XAU/USD", tf_s=tf_s,
-        kind=kind, price=price, time_ms=time_ms, confirmed=True,
+        id="sw_{}".format(time_ms),
+        symbol="XAU/USD",
+        tf_s=tf_s,
+        kind=kind,
+        price=price,
+        time_ms=time_ms,
+        confirmed=True,
     )
 
 
 def _level(kind="pdl", price=5062.0, tf_s=86400):
     return SmcLevel(
         id="lv_{}_{}".format(kind, int(price * 100)),
-        symbol="XAU/USD", tf_s=tf_s, kind=kind,
-        price=price, time_ms=1000, touches=1,
+        symbol="XAU/USD",
+        tf_s=tf_s,
+        kind=kind,
+        price=price,
+        time_ms=1000,
+        touches=1,
     )
 
 
 def _snap(zones=None, swings=None, levels=None, trend_bias=None):
     return SmcSnapshot(
-        symbol="XAU/USD", tf_s=900,
-        zones=zones or [], swings=swings or [], levels=levels or [],
+        symbol="XAU/USD",
+        tf_s=900,
+        zones=zones or [],
+        swings=swings or [],
+        levels=levels or [],
         trend_bias=trend_bias,
-        last_bos_ms=None, last_choch_ms=None,
-        computed_at_ms=9999, bar_count=100,
+        last_bos_ms=None,
+        last_choch_ms=None,
+        computed_at_ms=9999,
+        bar_count=100,
     )
 
 
@@ -72,15 +104,24 @@ def _default_config():
         "fvg_context_enabled": True,
         "target_lookback_bars": 100,
         "trigger_structure_lookback_bars": 5,
+        "trigger_proximity_atr": 3.0,
+        "trigger_displacement_window": 3,
         "max_wire_bytes": 600,
     }
 
 
 def _grade_a6(zone_id="z1"):
-    return {zone_id: {"score": 6, "grade": "A", "factors": ["sweep +2", "fvg_after +2", "impulse +1", "pd_align +1"]}}
+    return {
+        zone_id: {
+            "score": 6,
+            "grade": "A",
+            "factors": ["sweep +2", "fvg_after +2", "impulse +1", "pd_align +1"],
+        }
+    }
 
 
 # ── 1. test_trade_aligned_bearish ────────────────────────
+
 
 def test_trade_aligned_bearish():
     z = _zone(kind="ob_bear", zone_id="z1")
@@ -92,7 +133,9 @@ def test_trade_aligned_bearish():
     bias = {"86400": "bearish", "14400": "bearish"}
     grades = _grade_a6("z1")
 
-    nb = synthesize_narrative(snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config())
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config()
+    )
 
     assert nb.mode == "trade"
     assert nb.sub_mode == "aligned"
@@ -104,6 +147,7 @@ def test_trade_aligned_bearish():
 
 # ── 2. test_trade_aligned_bullish ────────────────────────
 
+
 def test_trade_aligned_bullish():
     z = _zone(kind="ob_bull", high=5100.0, low=5050.0, zone_id="z1")
     snap = _snap(
@@ -114,7 +158,9 @@ def test_trade_aligned_bullish():
     bias = {"86400": "bullish", "14400": "bullish"}
     grades = _grade_a6("z1")
 
-    nb = synthesize_narrative(snap, bias, grades, {}, 900, 5060.0, 20.0, _default_config())
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5060.0, 20.0, _default_config()
+    )
 
     assert nb.mode == "trade"
     assert nb.sub_mode == "aligned"
@@ -123,13 +169,16 @@ def test_trade_aligned_bullish():
 
 # ── 3. test_trade_reduced_mixed_htf ──────────────────────
 
+
 def test_trade_reduced_mixed_htf():
     z = _zone(kind="ob_bear", zone_id="z1")
     snap = _snap(zones=[z], swings=[_swing("choch_bear", 5200.0, 1500)])
     bias = {"86400": "bearish", "14400": "bullish"}
     grades = _grade_a6("z1")
 
-    nb = synthesize_narrative(snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config())
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config()
+    )
 
     assert nb.mode == "trade"
     assert nb.sub_mode == "reduced"
@@ -138,6 +187,7 @@ def test_trade_reduced_mixed_htf():
 
 # ── 4. test_wait_no_setup ────────────────────────────────
 
+
 def test_wait_no_setup():
     z = _zone(kind="ob_bear", zone_id="z1")
     snap = _snap(zones=[z])
@@ -145,7 +195,9 @@ def test_wait_no_setup():
     # Grade C (score 2) — below threshold
     grades = {"z1": {"score": 2, "grade": "C", "factors": []}}
 
-    nb = synthesize_narrative(snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config())
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config()
+    )
 
     assert nb.mode == "wait"
     assert nb.scenarios == []
@@ -154,18 +206,22 @@ def test_wait_no_setup():
 
 # ── 5. test_wait_no_data ────────────────────────────────
 
+
 def test_wait_no_data():
     z = _zone(kind="ob_bear", zone_id="z1")
     snap = _snap(zones=[z])
     bias = {}  # no HTF data
     grades = _grade_a6("z1")
 
-    nb = synthesize_narrative(snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config())
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config()
+    )
 
     assert nb.mode == "wait"
 
 
 # ── 6. test_two_scenarios ────────────────────────────────
+
 
 def test_two_scenarios():
     z1 = _zone(kind="ob_bear", zone_id="z1", high=5225.0, low=5144.0)
@@ -177,12 +233,15 @@ def test_two_scenarios():
         "z2": {"score": 6, "grade": "A", "factors": []},
     }
 
-    nb = synthesize_narrative(snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config())
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config()
+    )
 
     assert len(nb.scenarios) == 2
 
 
 # ── 7. test_trigger_approaching ──────────────────────────
+
 
 def test_trigger_approaching():
     z = _zone(kind="ob_bear", zone_id="z1", high=5300.0, low=5250.0)
@@ -190,7 +249,9 @@ def test_trigger_approaching():
     bias = {"86400": "bearish", "14400": "bearish"}
     grades = _grade_a6("z1")
 
-    nb = synthesize_narrative(snap, bias, grades, {}, 900, 5100.0, 20.0, _default_config())
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5100.0, 20.0, _default_config()
+    )
 
     assert nb.scenarios[0].trigger == "approaching"
     assert "pts from zone" in nb.scenarios[0].trigger_desc
@@ -198,13 +259,16 @@ def test_trigger_approaching():
 
 # ── 8. test_trigger_in_zone ──────────────────────────────
 
+
 def test_trigger_in_zone():
     z = _zone(kind="ob_bear", zone_id="z1", high=5225.0, low=5144.0)
     snap = _snap(zones=[z])  # no CHoCH → in_zone
     bias = {"86400": "bearish", "14400": "bearish"}
     grades = _grade_a6("z1")
 
-    nb = synthesize_narrative(snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config())
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config()
+    )
 
     assert nb.scenarios[0].trigger == "in_zone"
     assert "wait" in nb.scenarios[0].trigger_desc.lower()
@@ -212,23 +276,100 @@ def test_trigger_in_zone():
 
 # ── 9. test_trigger_ready ────────────────────────────────
 
+
 def test_trigger_ready():
     z = _zone(kind="ob_bear", zone_id="z1", high=5225.0, low=5144.0)
     snap = _snap(
         zones=[z],
-        swings=[_swing("choch_bear", 5200.0, 1500)],
+        swings=[
+            _swing("choch_bear", 5200.0, 1500),
+            _swing("displacement_bear", 5190.0, 1600),  # institutional impulse
+        ],
     )
     bias = {"86400": "bearish", "14400": "bearish"}
     grades = _grade_a6("z1")
 
-    # Price IN zone + structure aligned → ready
-    nb = synthesize_narrative(snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config())
+    # Price IN zone + CHoCH + displacement → ready
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config()
+    )
 
     assert nb.scenarios[0].trigger == "ready"
     assert "confirmed" in nb.scenarios[0].trigger_desc.lower()
 
 
+# ── 9a. CHoCH + in_zone but NO displacement → in_zone ───
+
+
+def test_trigger_in_zone_choch_no_displacement():
+    """Doctrine: MS Shift needs displacement, not just structure break."""
+    z = _zone(kind="ob_bear", zone_id="z1", high=5225.0, low=5144.0)
+    snap = _snap(
+        zones=[z],
+        swings=[_swing("choch_bear", 5200.0, 1500)],  # no displacement
+    )
+    bias = {"86400": "bearish", "14400": "bearish"}
+    grades = _grade_a6("z1")
+
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config()
+    )
+
+    assert nb.scenarios[0].trigger == "in_zone"
+    assert "choch" in nb.scenarios[0].trigger_desc.lower()
+
+
+# ── 9b. CHoCH + displacement but far → approaching ──────
+
+
+def test_trigger_approaching_far_with_choch():
+    """CHoCH + displacement but price > 3 ATR from zone → approaching."""
+    z = _zone(kind="ob_bear", zone_id="z1", high=5300.0, low=5250.0)
+    snap = _snap(
+        zones=[z],
+        swings=[
+            _swing("choch_bear", 5280.0, 1500),
+            _swing("displacement_bear", 5270.0, 1600),
+        ],
+    )
+    bias = {"86400": "bearish", "14400": "bearish"}
+    grades = _grade_a6("z1")
+
+    # 5100 vs zone.low=5250 → 150 pts, ATR=20 → 7.5 ATR (> 3.0)
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5100.0, 20.0, _default_config()
+    )
+
+    assert nb.scenarios[0].trigger == "approaching"
+
+
+# ── 9c. CHoCH + displacement + proximate → triggered ────
+
+
+def test_trigger_triggered_proximate_with_displacement():
+    """CHoCH + displacement + close to zone but NOT in zone → triggered."""
+    z = _zone(kind="ob_bear", zone_id="z1", high=5225.0, low=5200.0)
+    snap = _snap(
+        zones=[z],
+        swings=[
+            _swing("choch_bear", 5210.0, 1500),
+            _swing("displacement_bear", 5205.0, 1600),
+        ],
+    )
+    bias = {"86400": "bearish", "14400": "bearish"}
+    grades = _grade_a6("z1")
+
+    # 5185 vs zone.low=5200 → 15 pts, ATR=20 → 0.75 ATR (< 3.0)
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5185.0, 20.0, _default_config()
+    )
+
+    assert nb.scenarios[0].trigger == "triggered"
+    assert "displacement" in nb.scenarios[0].trigger_desc.lower()
+
+
 # ── 10. test_invalidation_crossed ────────────────────────
+
 
 def test_invalidation_crossed():
     z = _zone(kind="ob_bear", zone_id="z1", high=5225.0, low=5144.0)
@@ -237,13 +378,16 @@ def test_invalidation_crossed():
     grades = _grade_a6("z1")
 
     # Price above zone.high → invalidated
-    nb = synthesize_narrative(snap, bias, grades, {}, 900, 5300.0, 20.0, _default_config())
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5300.0, 20.0, _default_config()
+    )
 
     assert nb.mode == "wait"  # zone discarded
     assert "scenario_invalidated" in nb.warnings
 
 
 # ── 11. test_fvg_context_overlap ─────────────────────────
+
 
 def test_fvg_context_overlap():
     ob = _zone(kind="ob_bear", zone_id="z1", high=5225.0, low=5144.0)
@@ -252,12 +396,15 @@ def test_fvg_context_overlap():
     bias = {"86400": "bearish", "14400": "bearish"}
     grades = _grade_a6("z1")
 
-    nb = synthesize_narrative(snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config())
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config()
+    )
 
     assert "refined by FVG" in nb.fvg_context
 
 
 # ── 12. test_fvg_context_empty ───────────────────────────
+
 
 def test_fvg_context_empty():
     ob = _zone(kind="ob_bear", zone_id="z1", high=5225.0, low=5144.0)
@@ -266,12 +413,15 @@ def test_fvg_context_empty():
     bias = {"86400": "bearish", "14400": "bearish"}
     grades = _grade_a6("z1")
 
-    nb = synthesize_narrative(snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config())
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config()
+    )
 
     assert nb.fvg_context == ""
 
 
 # ── 13. test_market_phase_trending_down ──────────────────
+
 
 def test_market_phase_trending_down():
     swings = [
@@ -290,6 +440,7 @@ def test_market_phase_trending_down():
 
 # ── 14. test_market_phase_ranging ────────────────────────
 
+
 def test_market_phase_ranging():
     swings = [_swing("hh", 5200.0, 1000)]  # only 1 → ranging
     snap = _snap(swings=swings)
@@ -302,6 +453,7 @@ def test_market_phase_ranging():
 
 # ── 15. test_target_none_fallback ────────────────────────
 
+
 def test_target_none_fallback():
     z = _zone(kind="ob_bear", zone_id="z1")
     # No levels, no institutional zones, no swings
@@ -309,13 +461,16 @@ def test_target_none_fallback():
     bias = {"86400": "bearish", "14400": "bearish"}
     grades = _grade_a6("z1")
 
-    nb = synthesize_narrative(snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config())
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config()
+    )
 
     assert nb.scenarios[0].target_desc is None
     assert "no_target_found" in nb.warnings
 
 
 # ── 16. test_degraded_fallback ───────────────────────────
+
 
 def test_degraded_fallback():
     """Trigger exception → fallback NarrativeBlock (N3)."""
@@ -333,6 +488,7 @@ def test_degraded_fallback():
 
 # ── Extra: wire serialization (BH-5) ────────────────────
 
+
 def test_narrative_to_wire():
     z = _zone(kind="ob_bear", zone_id="z1")
     snap = _snap(
@@ -343,7 +499,9 @@ def test_narrative_to_wire():
     bias = {"86400": "bearish", "14400": "bearish"}
     grades = _grade_a6("z1")
 
-    nb = synthesize_narrative(snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config())
+    nb = synthesize_narrative(
+        snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config()
+    )
     wire = narrative_to_wire(nb)
 
     assert isinstance(wire, dict)
@@ -354,12 +512,19 @@ def test_narrative_to_wire():
 
 # ── Extra: HTF alignment helper ─────────────────────────
 
+
 def test_htf_alignment_aligned():
-    assert _resolve_htf_alignment({"86400": "bearish", "14400": "bearish"}) == ("aligned", "bearish")
+    assert _resolve_htf_alignment({"86400": "bearish", "14400": "bearish"}) == (
+        "aligned",
+        "bearish",
+    )
 
 
 def test_htf_alignment_mixed():
-    assert _resolve_htf_alignment({"86400": "bearish", "14400": "bullish"}) == ("mixed", None)
+    assert _resolve_htf_alignment({"86400": "bearish", "14400": "bullish"}) == (
+        "mixed",
+        None,
+    )
 
 
 def test_htf_alignment_no_data():

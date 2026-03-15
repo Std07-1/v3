@@ -360,6 +360,8 @@
             "fvg_context_enabled": true,
             "target_lookback_bars": 100,
             "trigger_structure_lookback_bars": 5,
+            "trigger_proximity_atr": 3.0,
+            "trigger_displacement_window": 3,
             "max_wire_bytes": 600
         },
         "context_stack": {

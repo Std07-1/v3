@@ -31,6 +31,8 @@ _MODE_HEADLINES = {
     ("trade", "aligned", "short"): "\U0001f534 SELL setup ready",
     ("trade", "reduced", "long"): "\U0001f7e2 BUY \u2014 reduced: mixed HTF",
     ("trade", "reduced", "short"): "\U0001f534 SELL \u2014 reduced: mixed HTF",
+    ("trade", "counter", "long"): "\U0001f7e1 BUY \u2014 counter-trend",
+    ("trade", "counter", "short"): "\U0001f7e1 SELL \u2014 counter-trend",
 }
 _WAIT_HEADLINE = "\U0001f7e1 No setup \u2014 wait"
 _DEGRADED_HEADLINE = "\u26a0 Narrative unavailable"
@@ -135,12 +137,15 @@ def _format_entry(zone, grade_info):
     )
 
 
-# ── Trigger Resolution (T-2: 4 IOFED states) ───────────────
+# ── Trigger Resolution (T-2: 4 IOFED states, proximity + displacement) ──
 
 
-def _has_structure_aligned(snapshot, zone, viewer_tf_s):
-    # type: (SmcSnapshot, SmcZone, int) -> bool
-    """Check if recent structure break (CHoCH/BOS) aligns with zone direction."""
+def _find_qualifying_choch(snapshot, zone):
+    # type: (SmcSnapshot, SmcZone) -> Optional[SmcSwing]
+    """Find the most recent CHoCH/BOS aligned with zone direction.
+
+    Returns the swing if found (after zone creation), None otherwise.
+    """
     target_kinds = (
         ("choch_bear", "bos_bear")
         if "bear" in zone.kind
@@ -148,41 +153,99 @@ def _has_structure_aligned(snapshot, zone, viewer_tf_s):
     )
     for sw in reversed(snapshot.swings):
         if sw.kind in target_kinds and sw.time_ms >= zone.anchor_bar_ms:
+            return sw
+    return None
+
+
+def _has_displacement_near(snapshot, choch_swing, zone, viewer_tf_s, config):
+    # type: (SmcSnapshot, SmcSwing, SmcZone, int, dict) -> bool
+    """Displacement marker within \u00b1N viewer-TF bars of the CHoCH.
+
+    Doctrine: MS Shift requires impulse/displacement, not just structure break.
+    """
+    window_bars = config.get("trigger_displacement_window", 3)
+    window_ms = window_bars * viewer_tf_s * 1000
+    target_kind = "displacement_bear" if "bear" in zone.kind else "displacement_bull"
+    choch_ms = choch_swing.time_ms
+    for sw in snapshot.swings:
+        if sw.kind == target_kind and abs(sw.time_ms - choch_ms) <= window_ms:
             return True
     return False
 
 
-def _resolve_trigger_state(snapshot, zone, viewer_tf_s, current_price):
-    # type: (SmcSnapshot, SmcZone, int, float) -> str
-    in_zone = zone.low <= current_price <= zone.high
-    choch_aligned = _has_structure_aligned(snapshot, zone, viewer_tf_s)
+def _is_price_proximate(zone, current_price, atr, config):
+    # type: (SmcZone, float, float, dict) -> bool
+    """Price within trigger_proximity_atr \u00d7 ATR of the nearest zone edge."""
+    if atr <= 0:
+        return True  # Cannot measure, be permissive
+    max_atr = config.get("trigger_proximity_atr", 3.0)
+    if current_price < zone.low:
+        distance = zone.low - current_price
+    elif current_price > zone.high:
+        distance = current_price - zone.high
+    else:
+        return True  # Inside zone
+    return distance <= max_atr * atr
 
-    if choch_aligned and in_zone:
+
+def _resolve_trigger_state(snapshot, zone, viewer_tf_s, current_price, atr, config):
+    # type: (SmcSnapshot, SmcZone, int, float, float, dict) -> str
+    """T-2: 4 IOFED trigger states with proximity + displacement guards.
+
+    Matrix (doctrine: proximity to POI + displacement confirmation):
+      CHoCH + displacement + in_zone          \u2192 \"ready\"
+      CHoCH + in_zone (no displacement)       \u2192 \"in_zone\"
+      CHoCH + displacement + proximate        \u2192 \"triggered\"
+      CHoCH + not proximate                   \u2192 \"approaching\"
+      CHoCH + proximate (no displacement)     \u2192 \"approaching\"
+      no CHoCH + in_zone                      \u2192 \"in_zone\"
+      no CHoCH                                \u2192 \"approaching\"
+    """
+    in_zone = zone.low <= current_price <= zone.high
+    choch = _find_qualifying_choch(snapshot, zone)
+    has_disp = False
+    if choch is not None:
+        has_disp = _has_displacement_near(snapshot, choch, zone, viewer_tf_s, config)
+    proximate = _is_price_proximate(zone, current_price, atr, config)
+    if choch is not None and has_disp and in_zone:
         return "ready"
-    elif choch_aligned:
+    if choch is not None and in_zone:
+        return "in_zone"
+    if choch is not None and has_disp and proximate:
         return "triggered"
-    elif in_zone:
+    if in_zone:
         return "in_zone"
     return "approaching"
 
 
-def _resolve_trigger_desc(snapshot, zone, viewer_tf_s, current_price, atr):
-    # type: (SmcSnapshot, SmcZone, int, float, float) -> str
-    state = _resolve_trigger_state(snapshot, zone, viewer_tf_s, current_price)
+def _resolve_trigger_desc(snapshot, zone, viewer_tf_s, current_price, atr, config):
+    # type: (SmcSnapshot, SmcZone, int, float, float, dict) -> str
+    state = _resolve_trigger_state(
+        snapshot, zone, viewer_tf_s, current_price, atr, config
+    )
     direction_arrow = "\u2193" if "bear" in zone.kind else "\u2191"
     tf_label = _tf_to_label(viewer_tf_s)
 
     if state == "ready":
-        return "Ready: structure confirmed in zone"
-    elif state == "triggered":
-        return "Triggered: {tf} ChoCH{a} \u2014 seek entry OB".format(
+        return "Ready: structure + displacement confirmed in zone"
+    if state == "triggered":
+        return "Triggered: {tf} CHoCH{a} + displacement \u2014 seek entry".format(
             tf=tf_label, a=direction_arrow
         )
-    elif state == "in_zone":
-        return "In zone: wait {tf} ChoCH{a}".format(tf=tf_label, a=direction_arrow)
+    if state == "in_zone":
+        choch = _find_qualifying_choch(snapshot, zone)
+        if choch is not None:
+            return "In zone: CHoCH{a} seen, await displacement".format(
+                a=direction_arrow
+            )
+        return "In zone: wait {tf} CHoCH{a}".format(tf=tf_label, a=direction_arrow)
     # approaching
-    edge = zone.high if "bear" in zone.kind else zone.low
-    dist = abs(current_price - edge)
+    if current_price < zone.low:
+        dist = zone.low - current_price
+    elif current_price > zone.high:
+        dist = current_price - zone.high
+    else:
+        dist = 0.0
     return "Approaching: {:.0f} pts from zone".format(dist)
 
 
@@ -317,8 +380,8 @@ def _detect_market_phase(swings, config):
 # ── Bias Summary (T-8) ─────────────────────────────────────
 
 
-def _build_bias_summary(alignment, htf_direction, bias_map, zone):
-    # type: (str, Optional[str], Dict[str, str], Optional[SmcZone]) -> str
+def _build_bias_summary(alignment, htf_direction, bias_map, zone, is_counter=False):
+    # type: (str, Optional[str], Dict[str, str], Optional[SmcZone], bool) -> str
     if alignment == "no_data":
         return "Insufficient HTF data"
     d1 = bias_map.get("86400", "?")
@@ -330,6 +393,10 @@ def _build_bias_summary(alignment, htf_direction, bias_map, zone):
             d1=d1_arrow, h4=h4_arrow
         )
     # aligned
+    if is_counter:
+        return "HTF {dir} aligned \u2014 counter-trend zone, reduce size".format(
+            dir=htf_direction or ""
+        )
     if zone and "premium" in getattr(zone, "kind", ""):
         return "H4 pullback to premium OB \u2014 expect rejection"
     return "HTF {dir} aligned \u2014 watch for entry structure".format(
@@ -471,15 +538,27 @@ def _synthesize_impl(
     alt_zone = valid[1] if len(valid) > 1 else None
 
     # Step 3: Mode decision (SC-3)
-    if primary_zone and alignment == "aligned":
+    #   "aligned" = HTF agrees AND zone direction matches HTF.
+    #   "counter" = HTF aligned but zone opposes HTF direction.
+    #   "reduced" = HTF mixed (D1 ≠ H4).
+    direction: str = _zone_direction(primary_zone) if primary_zone else ""
+    htf_trade_dir = (
+        "long"
+        if htf_direction == "bullish"
+        else "short" if htf_direction == "bearish" else ""
+    )
+    if primary_zone and alignment == "aligned" and direction == htf_trade_dir:
         mode, sub_mode = "trade", "aligned"
+    elif primary_zone and alignment == "aligned":
+        # HTF aligned but zone opposes → counter-trend
+        mode, sub_mode = "trade", "counter"
+        warnings.append("counter_trend")
     elif primary_zone and alignment == "mixed":
         mode, sub_mode = "trade", "reduced"
     else:
         mode, sub_mode = "wait", ""
 
-    # Build direction from primary
-    direction: str = _zone_direction(primary_zone) if primary_zone else ""
+    # Build direction from primary (already computed above)
 
     # Headline
     if mode == "trade" and direction:
@@ -505,10 +584,10 @@ def _synthesize_impl(
                     direction=d,
                     entry_desc=_format_entry(z, gi),
                     trigger=_resolve_trigger_state(
-                        snapshot, z, viewer_tf_s, current_price
+                        snapshot, z, viewer_tf_s, current_price, atr, config
                     ),
                     trigger_desc=_resolve_trigger_desc(
-                        snapshot, z, viewer_tf_s, current_price, atr
+                        snapshot, z, viewer_tf_s, current_price, atr, config
                     ),
                     target_desc=tgt,
                     invalidation=_find_invalidation(z),
@@ -518,7 +597,13 @@ def _synthesize_impl(
                 break
 
     # Bias summary (T-8)
-    bias_summary = _build_bias_summary(alignment, htf_direction, bias_map, primary_zone)
+    bias_summary = _build_bias_summary(
+        alignment,
+        htf_direction,
+        bias_map,
+        primary_zone,
+        is_counter=(sub_mode == "counter"),
+    )
 
     # FVG context (T-5)
     fvg_context = _build_fvg_context(snapshot, primary_zone, atr, config)
