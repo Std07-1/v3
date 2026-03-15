@@ -210,8 +210,11 @@
     "bootstrap": {
         "prime_ready_timeout_s": 120,
         "initial_backfill_m1_bars": 1440,
-        "initial_backfill_d1_bars": 180,
         "cascade_catchup_m1_bars": 1440,
+        "historical_crawl_enabled": true,
+        "historical_crawl_m1_per_run": 1440,
+        "historical_crawl_interval_s": 3600,
+        "historical_crawl_max_days": 30,
         "derive_warmup_bars_by_tf": {
             "60": 1500,
             "300": 20,
@@ -363,6 +366,10 @@
             "trigger_proximity_atr": 3.0,
             "trigger_displacement_window": 3,
             "max_wire_bytes": 600
+        },
+        "signal_journal": {
+            "enabled": true,
+            "path": "data_v3/_signals"
         },
         "context_stack": {
             "enabled": true,

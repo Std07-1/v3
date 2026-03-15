@@ -30,6 +30,7 @@ from core.smc.narrative import (
     narrative_to_wire,
     _fallback_narrative_block,
 )
+from runtime.smc.signal_journal import SignalJournal
 
 _log = logging.getLogger(__name__)
 
@@ -122,6 +123,7 @@ class SmcRunner:
         self._lock = threading.Lock()
         # (symbol, tf_s) → last SmcDelta after on_bar_dict()
         self._last_deltas: Dict[Tuple[str, int], Optional[SmcDelta]] = {}
+        self._journal = SignalJournal(full_cfg)
         _log.info(
             "SMC_RUNNER_INIT symbols=%s tfs=%s compute_tfs=%s lookback=%d",
             self._symbols,
@@ -408,7 +410,7 @@ class SmcRunner:
                 )
                 if sess_name:
                     session_info = (sess_name, sess_kz)
-            return synthesize_narrative(
+            result = synthesize_narrative(
                 snap,
                 bias,
                 grades,
@@ -419,6 +421,8 @@ class SmcRunner:
                 cfg,
                 session_info=session_info,
             )
+            self._journal.record(symbol, viewer_tf_s, result, current_price, atr_14)
+            return result
         except Exception:
             _log.exception("NARRATIVE_ERROR symbol=%s tf=%d", symbol, viewer_tf_s)
             return _fallback_narrative_block()
