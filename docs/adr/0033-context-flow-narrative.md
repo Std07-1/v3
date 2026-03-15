@@ -488,6 +488,7 @@ def _resolve_trigger_desc(snapshot, zone, viewer_tf_s, current_price, atr, confi
 ```
 
 **Key Rev 3 doctrine fixes:**
+
 - CHoCH far from zone (>3 ATR) → "approaching" not "triggered" (prevents false alerts on LTF cross-TF zones)
 - CHoCH without displacement → "in_zone" not "ready" (MS Shift ≠ just BOS)
 - `atr` and `config` added to function signature for proximity/displacement checks
@@ -728,6 +729,7 @@ Config: `smc.display.fvg_ob_overlap_hide: true` (default).
 **S1 fix — Direction-Alignment Mismatch:** Previously Step 3 only checked `alignment=="aligned"` (D1==H4) without verifying if the zone direction matches HTF bias. When HTF=bullish but best zone=ob_bear → headline "🔴 SELL setup ready" + "HTF bullish aligned" = contradiction. Fix: `sub_mode="counter"` with 🟡 yellow headlines and `counter_trend` warning.
 
 **S1 fix — Trigger Proximity/Displacement:** Previously `_resolve_trigger_state()` returned "triggered" for ANY CHoCH after zone anchor, regardless of price distance or impulse quality. Two doctrine violations:
+
 - Price 84 pts (3.36 ATR) from zone → "triggered" (should be "approaching")
 - CHoCH without displacement → "ready" (should require MS Shift = impulse)
 

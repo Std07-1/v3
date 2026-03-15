@@ -421,7 +421,9 @@ class SmcRunner:
                 cfg,
                 session_info=session_info,
             )
-            self._journal.record(symbol, viewer_tf_s, result, current_price, atr_14, bias_map=bias)
+            self._journal.record(
+                symbol, viewer_tf_s, result, current_price, atr_14, bias_map=bias
+            )
             return result
         except Exception:
             _log.exception("NARRATIVE_ERROR symbol=%s tf=%d", symbol, viewer_tf_s)

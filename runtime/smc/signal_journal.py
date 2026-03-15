@@ -304,7 +304,9 @@ class SignalJournal:
                 "mae_atr": round(summary.mae / atr, 2) if atr > 0 else 0.0,
                 "peak_trigger": summary.peak_trigger,
                 "reached_target": (
-                    self._check_target_reached(summary) if summary.target_price > 0 else None
+                    self._check_target_reached(summary)
+                    if summary.target_price > 0
+                    else None
                 ),
                 "hit_invalidation": (
                     self._check_invalidation_hit(summary)
