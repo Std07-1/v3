@@ -37,6 +37,7 @@
 - 2026-03-16 · 20260316-001 · **MARKET-HOURS GUARD**: SmcRunner.get_narrative() тепер перевіряє `MarketCalendar.is_trading_minute()` — на закритому ринку повертає `mode=wait, sub_mode=market_closed` замість хибних сигналів. TS types + UI components оновлені.
 - 2026-03-16 · 20260316-002 · **FVG HEIGHT GUARD**: `_filter_for_display()` тепер фільтрує FVG зони по `max_zone_height_atr_mult * ATR` — гігантські HTF FVG більше не покривають полчарту.
 - 2026-03-16 · 20260316-003 · **JOURNAL WARMUP GUARD**: SignalJournal не записує під час cascade catchup — `_warmup_done` flag у SmcRunner блокує journal.record() до завершення warmup.
+- 2026-03-16 · 20260316-004 · **CASCADE DEDUP FIX**: Видалено `reset_watermark(0)` з cascade catchup — derived бари більше не дублюються в JSONL при кожному рестарті. 59,403 дублікати по 3 символах. Додано `tools/dedup_derived_jsonl.py` для очищення.
 
 - 2026-03-13 · 20260313-005 · **ADR-0034a ARCHIVE CLARIFICATION**: [0034-advanced-market-analysis-tdaa.md](docs/adr/0034-advanced-market-analysis-tdaa.md) переведено з framing "deprecated copy" у точніше framing: archive-only snapshot pre-rollback. Підтримуваним документом лишається [0034-advanced-market-analysis-tda.md](docs/adr/0034-advanced-market-analysis-tda.md), але `tdaa` збережений як історичний зріз, а не як сміттєвий дубль.
 

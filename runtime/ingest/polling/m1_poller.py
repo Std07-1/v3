@@ -1061,21 +1061,16 @@ class M1PollerRunner:
         # 2c. Cascade catchup: прогін warmup M1 через cascade → деривація відсутніх барів.
         #     Після buffer warmup (2b) буфери M5-H1 заповнені з диску.
         #     Cascade catchup пропускає M1 через on_bar → cascade → derive + commit.
-        #     UDS watermark скидається для derived TFs щоб дозволити
-        #     commit барів за минулі дні (warmup rebuild).
+        #     UDS watermark НЕ скидається — бари що вже на диску дропаються як
+        #     stale/duplicate (dedup), нові бари > watermark комітяться нормально.
         #     Виявлено 2026-02-19: без цього кроку H4 не деривується після рестарту
         #     бо warmup_bars() лише буферизує, не каскадує.
+        #     Виявлено 2026-03-15: reset_watermark(0) спричиняв перезапис усіх
+        #     derived барів у JSONL при кожному рестарті (3x duplication).
         if self._derive_engine is not None:
             try:
                 catchup_n = self._cascade_catchup_m1_bars
                 if catchup_n > 0:
-                    # Скидаємо watermark для derived TFs щоб cascade catchup
-                    # міг commit бари за минулі дні (інакше UDS дропає як stale).
-                    derived_tfs = [180, 300, 900, 1800, 3600, 14400, 86400]
-                    for p in self._pollers:
-                        sym = p._symbol  # noqa: SLF001
-                        for dtf in derived_tfs:
-                            self._uds.reset_watermark(sym, dtf)
                     catchup_total = 0
                     catchup_derived = 0
                     for p in self._pollers:
