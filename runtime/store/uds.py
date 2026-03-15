@@ -1383,6 +1383,23 @@ class UnifiedDataStore:
     def get_watermark_open_ms(self, symbol: str, tf_s: int) -> Optional[int]:
         return self._init_watermark_for_key(symbol, tf_s)
 
+    def reset_watermark(self, symbol: str, tf_s: int) -> None:
+        """Скидає watermark на 0 для (symbol, tf_s).
+
+        Використовується перед cascade catchup щоб дозволити
+        commit derived барів за минулі дні (warmup rebuild).
+        Встановлює 0 замість видалення — інакше _init_watermark_for_key
+        перечитає з диску і нічого не зміниться.
+        """
+        key = (symbol, tf_s)
+        old = self._wm_by_key.get(key)
+        self._wm_by_key[key] = 0
+        if old is not None and old != 0:
+            Logging.info(
+                "UDS: watermark reset symbol=%s tf_s=%s old_wm=%s → 0",
+                symbol, tf_s, old,
+            )
+
     def _init_watermark_for_key(self, symbol: str, tf_s: int) -> Optional[int]:
         key = (symbol, tf_s)
         if key in self._wm_by_key:

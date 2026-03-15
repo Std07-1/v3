@@ -49,7 +49,7 @@ log = logging.getLogger("derive_engine")
 # Ключі = source TFs (з DERIVE_CHAIN keys).
 # ---------------------------------------------------------------------------
 _BUFFER_MAX_KEEP: Dict[int, int] = {
-    60: 2000,  # M1 → M3(3) + M5(5) + D1(1440).  ~33h trading
+    60: 10080,  # M1 → M3(3) + M5(5) + D1(1440).  7d = warmup alignment
     300: 500,  # M5 → M15(3).          ~41h
     900: 200,  # M15 → M30(2).         ~50h
     1800: 100,  # M30 → H1(2).          ~50h
