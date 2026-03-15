@@ -12,9 +12,11 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 import os
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.config_loader import pick_config_path, load_system_config
 from env_profile import load_env_secrets
@@ -26,14 +28,135 @@ from runtime.ingest.polling.m1_poller import (
     M1PollerRunner,
 )
 from runtime.ingest.tick_common import calendar_from_group
-from runtime.store.uds import build_uds_from_config
+from runtime.store.ssot_jsonl import head_first_bar_time_ms
+from runtime.store.uds import build_uds_from_config, UnifiedDataStore
 
 
 logger = logging.getLogger("binance_ingest_worker")
 
 
-def build_binance_ingest_worker(config_path: str) -> Optional[M1PollerRunner]:
-    """Будує M1PollerRunner з BinanceHistoryProvider для crypto symbols."""
+# ---------------------------------------------------------------------------
+# Historical Backward Crawl (ADR-0038 S6)
+# ---------------------------------------------------------------------------
+
+def _get_oldest_m1_ms(data_root: str, symbol: str) -> Optional[int]:
+    """Повертає open_time_ms найстарішого M1 бару на диску.
+
+    Використовує head_first_bar_time_ms — O(1), читає лише перший рядок
+    найстарішого part-*.jsonl файлу.
+    Повертає None якщо даних немає (initial backfill ще не запускався).
+    """
+    return head_first_bar_time_ms(data_root, symbol, tf_s=60)
+
+
+def _crawl_tick(
+    symbol: str,
+    provider: BinanceHistoryProvider,
+    jsonl_appender: Any,
+    data_root: str,
+    n_bars: int,
+    max_days: int,
+) -> None:
+    """Один тік backward crawl для одного символу.
+
+    Алгоритм:
+    1. Знаходимо horizon = найстаріший open_time_ms на диску.
+    2. Якщо None — пропускаємо (initial backfill ще не запустився).
+    3. Обчислюємо limit_ms = now - max_days * 86400s.
+    4. Якщо horizon <= limit_ms — crawl завершений.
+    5. Запитуємо [from_ms, horizon) у провайдера.
+    6. Записуємо бари через JsonlAppender (disk-only, без Redis).
+    """
+    # Крок 1–2: горизонт
+    horizon = _get_oldest_m1_ms(data_root, symbol)
+    if horizon is None:
+        logger.debug("CRAWL_SKIP_NO_HORIZON symbol=%s (initial backfill not done)", symbol)
+        return
+
+    # Крок 3–4: перевірка ліміту
+    now_ms = int(time.time() * 1000)
+    limit_ms = now_ms - max_days * 86_400_000
+    if horizon <= limit_ms:
+        logger.info("CRAWL_COMPLETE symbol=%s horizon_ms=%d limit_ms=%d", symbol, horizon, limit_ms)
+        return
+
+    # Крок 5: визначаємо вікно запиту
+    to_ms = horizon - 1          # виключаємо сам horizon (вже є на диску)
+    from_ms = max(horizon - n_bars * 60_000, limit_ms)
+
+    if from_ms >= to_ms:
+        logger.debug("CRAWL_SKIP_WINDOW_EMPTY symbol=%s from_ms=%d to_ms=%d", symbol, from_ms, to_ms)
+        return
+
+    # Крок 6: fetch (provider потребує активної сесії — _client != None)
+    if getattr(provider, "_client", None) is None:
+        logger.warning("CRAWL_SKIP_NO_SESSION symbol=%s (provider not connected)", symbol)
+        return
+
+    bars = provider.fetch_m1_range(symbol, from_ms, to_ms, n_bars)
+    if not bars:
+        logger.debug("CRAWL_EMPTY_RESPONSE symbol=%s from_ms=%d to_ms=%d", symbol, from_ms, to_ms)
+        return
+
+    # Крок 7–8: sort + write (JsonlAppender — disk-only, ADR-0021 thread-safe)
+    bars_sorted = sorted(bars, key=lambda b: b.open_time_ms)
+    written = 0
+    for bar in bars_sorted:
+        try:
+            jsonl_appender.append(bar)
+            written += 1
+        except Exception as exc:
+            logger.warning(
+                "CRAWL_BAR_WRITE_FAIL symbol=%s open_ms=%d err=%s",
+                symbol,
+                bar.open_time_ms,
+                exc,
+            )
+
+    new_horizon = bars_sorted[0].open_time_ms if bars_sorted else horizon
+    logger.info(
+        "CRAWL_TICK symbol=%s written=%d new_horizon=%d (was %d)",
+        symbol,
+        written,
+        new_horizon,
+        horizon,
+    )
+
+
+def _run_crawl_loop(
+    symbols: List[str],
+    provider: BinanceHistoryProvider,
+    uds: UnifiedDataStore,
+    crawl_cfg: Dict[str, Any],
+    stop_event: threading.Event,
+) -> None:
+    """Daemon crawl loop: тік кожен interval_s. I5: exception → WARNING, continue."""
+    n_bars = int(crawl_cfg["m1_per_run"])
+    max_days = int(crawl_cfg["max_days"])
+    interval_s = float(crawl_cfg["interval_s"])
+    data_root = str(crawl_cfg["data_root"])
+    jsonl_appender = uds._jsonl  # noqa: SLF001 — JsonlAppender, ADR-0038
+    if jsonl_appender is None:
+        logger.error("CRAWL_LOOP_ABORT uds._jsonl is None (writer_components=False?)")
+        return
+    while not stop_event.is_set():
+        for symbol in symbols:
+            try:
+                _crawl_tick(symbol, provider, jsonl_appender, data_root, n_bars, max_days)
+            except Exception as exc:
+                logger.warning("CRAWL_ERROR symbol=%s err=%s", symbol, exc, exc_info=True)
+        stop_event.wait(timeout=interval_s)
+    logger.info("CRAWL_LOOP_STOP")
+
+
+def build_binance_ingest_worker(
+    config_path: str,
+) -> Optional[Tuple[M1PollerRunner, Dict[str, Any]]]:
+    """Будує M1PollerRunner з BinanceHistoryProvider для crypto symbols.
+
+    Повертає (runner, crawl_context) або None якщо Binance вимкнено.
+    crawl_context містить параметри Historical Backward Crawl (ADR-0038 S6).
+    """
     cfg = load_system_config(config_path)
     bn_cfg = cfg.get("binance", {})
     if not isinstance(bn_cfg, dict):
@@ -165,23 +288,38 @@ def build_binance_ingest_worker(config_path: str) -> Optional[M1PollerRunner]:
             except (ValueError, TypeError):
                 logging.debug("BINANCE_INITIAL_BACKFILL_PARSE raw=%r", raw_ib)
 
-    # ADR-0038 S4: D1 direct backfill
-    initial_backfill_d1 = 180
-    if isinstance(bootstrap_cfg, dict):
-        raw_d1 = bootstrap_cfg.get("initial_backfill_d1_bars")
-        if raw_d1 is not None:
-            try:
-                initial_backfill_d1 = int(raw_d1)
-            except (ValueError, TypeError):
-                logging.debug("BINANCE_INITIAL_BACKFILL_D1_PARSE raw=%r", raw_d1)
+    # ADR-0038 S6: Historical Backward Crawl config
+    def _int_cfg(key: str, default: int) -> int:
+        try:
+            return int(bootstrap_cfg.get(key, default))  # type: ignore[union-attr]
+        except (ValueError, TypeError):
+            logging.debug("BINANCE_CFG_PARSE key=%r", key)
+            return default
+
+    crawl_enabled = bool(bootstrap_cfg.get("historical_crawl_enabled", False)) if isinstance(bootstrap_cfg, dict) else False
+    crawl_m1_per_run = _int_cfg("historical_crawl_m1_per_run", 1440)
+    crawl_interval_s = _int_cfg("historical_crawl_interval_s", 3600)
+    crawl_max_days = _int_cfg("historical_crawl_max_days", 30)
+
+    crawl_context: Dict[str, Any] = {
+        "enabled": crawl_enabled,
+        "m1_per_run": crawl_m1_per_run,
+        "interval_s": crawl_interval_s,
+        "max_days": crawl_max_days,
+        "symbols": symbols,
+        "provider": provider,
+        "uds": uds,
+        "data_root": data_root,
+    }
 
     logger.info(
-        "BINANCE_INGEST_WORKER_BUILD symbols=%s tfs=%s",
+        "BINANCE_INGEST_WORKER_BUILD symbols=%s tfs=%s crawl_enabled=%s",
         symbols,
         sorted(redis_tail_n.keys()),
+        crawl_enabled,
     )
 
-    return M1PollerRunner(
+    runner = M1PollerRunner(
         pollers=pollers,
         provider=provider,
         uds=uds,
@@ -192,8 +330,8 @@ def build_binance_ingest_worker(config_path: str) -> Optional[M1PollerRunner]:
         derive_warmup_bars_by_tf=derive_warmup,
         cascade_catchup_m1_bars=cascade_catchup,
         initial_backfill_m1_bars=initial_backfill_bars,
-        initial_backfill_d1_bars=initial_backfill_d1,
     )
+    return runner, crawl_context
 
 
 # ---------------------------------------------------------------------------
@@ -214,10 +352,38 @@ def main() -> int:
     config_path = pick_config_path()
     logger.info("BINANCE_INGEST_WORKER config=%s", config_path)
 
-    runner = build_binance_ingest_worker(config_path)
-    if runner is None:
+    result = build_binance_ingest_worker(config_path)
+    if result is None:
         logger.info("BINANCE_INGEST_WORKER_EXIT (disabled or no config)")
         return 0
+
+    runner, crawl_ctx = result
+
+    # ADR-0038 S6: Historical Backward Crawl — daemon thread
+    # Guard: тільки якщо crawl_enabled=True AND provider має fetch_m1_range
+    # (FXCM provider не має fetch_m1_range → crawl не запускається)
+    crawl_stop = threading.Event()
+    crawl_thread = None
+    if crawl_ctx["enabled"] and hasattr(crawl_ctx["provider"], "fetch_m1_range"):
+        crawl_thread = threading.Thread(
+            target=_run_crawl_loop,
+            args=(
+                crawl_ctx["symbols"],
+                crawl_ctx["provider"],
+                crawl_ctx["uds"],
+                crawl_ctx,
+                crawl_stop,
+            ),
+            daemon=True,
+            name="historical-crawl",
+        )
+        crawl_thread.start()
+        logger.info(
+            "CRAWL_STARTED symbols=%d max_days=%d interval_s=%d",
+            len(crawl_ctx["symbols"]),
+            crawl_ctx["max_days"],
+            crawl_ctx["interval_s"],
+        )
 
     try:
         runner.run_forever()
@@ -227,6 +393,8 @@ def main() -> int:
         logger.exception("BINANCE_INGEST_WORKER_FATAL")
         return 1
     finally:
+        # Зупиняємо crawl thread перед виходом
+        crawl_stop.set()
         runner.shutdown()
 
     return 0

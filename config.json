@@ -210,13 +210,13 @@
     "bootstrap": {
         "prime_ready_timeout_s": 120,
         "initial_backfill_m1_bars": 1440,
-        "cascade_catchup_m1_bars": 1440,
+        "cascade_catchup_m1_bars": 10080,
         "historical_crawl_enabled": true,
         "historical_crawl_m1_per_run": 1440,
         "historical_crawl_interval_s": 3600,
         "historical_crawl_max_days": 30,
         "derive_warmup_bars_by_tf": {
-            "60": 1500,
+            "60": 10080,
             "300": 20,
             "900": 10,
             "1800": 10,
