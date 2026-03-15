@@ -98,13 +98,13 @@ export interface ActiveScenario {
 /** ADR-0033 + ADR-0035: повний narrative block для одного symbol+viewer_tf. */
 export interface NarrativeBlock {
   mode: 'trade' | 'wait';
-  sub_mode: 'aligned' | 'reduced' | '';
+  sub_mode: 'aligned' | 'reduced' | 'market_closed' | '';
   headline: string;
   bias_summary: string;
   scenarios: ActiveScenario[];    // max 2 (T-1)
   next_area: string;
   fvg_context: string;            // "" if none
-  market_phase: 'trending_up' | 'trending_down' | 'ranging';
+  market_phase: 'trending_up' | 'trending_down' | 'ranging' | 'closed';
   warnings: string[];             // degraded signals (BH-4/BH-8)
   // ADR-0035: session context
   current_session?: string;       // "london" | "newyork" | "asia" | ""

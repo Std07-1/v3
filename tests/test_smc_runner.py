@@ -498,3 +498,73 @@ class TestSmcRunnerWarmup:
         runner.warmup(uds)
         snap = runner.get_snapshot(SYM, TF)
         assert snap is not None
+
+
+# ──────────────────────────────────────────────────────────────
+#  SmcRunner.get_narrative — market-hours guard
+# ──────────────────────────────────────────────────────────────
+
+
+class TestSmcRunnerMarketClosedGuard:
+    """Narrative повертає 'market_closed' коли ринок закритий."""
+
+    def _make_runner_with_calendar(self):
+        """Runner з calendar для XAU/USD (cfd_us_22_23)."""
+        cfg = _make_full_cfg(symbols=[SYM], tf_allowlist=[TF])
+        cfg["smc"]["narrative"] = {"enabled": True}
+        # ADR-0035: sessions enabled for narrative
+        cfg["smc"]["sessions"] = {"enabled": False}
+        cfg["market_calendar_by_group"] = {
+            "cfd_us_22_23": {
+                "market_weekend_open_dow": 6,
+                "market_weekend_open_hm": "22:00",
+                "market_weekend_close_dow": 4,
+                "market_weekend_close_hm": "20:45",
+                "market_daily_break_start_hm": "21:00",
+                "market_daily_break_end_hm": "22:00",
+            }
+        }
+        cfg["market_calendar_symbol_groups"] = {SYM: "cfd_us_22_23"}
+        engine = _make_engine()
+        return SmcRunner(cfg, engine)
+
+    def test_calendar_built_in_init(self):
+        """SmcRunner.__init__ побудує calendar для XAU/USD."""
+        runner = self._make_runner_with_calendar()
+        assert SYM in runner._calendars
+        assert runner._calendars[SYM].enabled is True
+
+    def test_market_closed_returns_wait_block(self, monkeypatch):
+        """Коли ринок закритий → get_narrative повертає market_closed block."""
+        import time
+
+        runner = self._make_runner_with_calendar()
+        # Субота 15:00 UTC → ринок гарантовано закритий
+        # dow=5 (saturday), 15:00 = 900 min
+        saturday_15h_ms = 1742306400000  # 2025-03-15 Sat 15:00 UTC (arbitrary)
+        # Замість фіксованої дати, використаємо monkeypatch
+        # Saturday = dow 5, between close (Fri 20:45) and open (Sun 22:00)
+        import datetime
+
+        # Знайдемо наступну суботу 15:00 UTC
+        dt_sat = datetime.datetime(2025, 3, 15, 15, 0, 0)  # Saturday
+        assert dt_sat.weekday() == 5  # Saturday
+        sat_ms = int(dt_sat.timestamp() * 1000)
+
+        monkeypatch.setattr(time, "time", lambda: sat_ms / 1000)
+        result = runner.get_narrative(SYM, TF, 1900.0, 5.0)
+        assert result is not None
+        assert result.mode == "wait"
+        assert result.sub_mode == "market_closed"
+        assert result.market_phase == "closed"
+        assert "market_closed" in result.warnings
+
+    def test_no_calendar_symbol_runs_normally(self):
+        """Символ без calendar (напр. crypto) → narrative працює без guard."""
+        cfg = _make_full_cfg(symbols=["BTCUSDT"], tf_allowlist=[TF])
+        cfg["smc"]["narrative"] = {"enabled": True}
+        cfg["smc"]["sessions"] = {"enabled": False}
+        # Без market_calendar_by_group
+        engine = _make_engine()
+        runner = SmcRunner(cfg, engine)
+        assert "BTCUSDT" not in runner._calendars

@@ -30,12 +30,29 @@ from core.smc.narrative import (
     narrative_to_wire,
     _fallback_narrative_block,
 )
+from runtime.ingest.market_calendar import MarketCalendar
+from runtime.ingest.tick_common import calendar_from_group
 from runtime.smc.signal_journal import SignalJournal
 
 _log = logging.getLogger(__name__)
 
 # S4 perf rail: лог якщо warmup на одному TF > N мс
 _WARMUP_SLOW_MS = 200.0
+
+
+def _market_closed_block() -> NarrativeBlock:
+    """NarrativeBlock for closed market — no signal, no journal."""
+    return NarrativeBlock(
+        mode="wait",
+        sub_mode="market_closed",
+        headline="⏸ Market Closed",
+        bias_summary="",
+        scenarios=[],
+        next_area="",
+        fvg_context="",
+        market_phase="closed",
+        warnings=["market_closed"],
+    )
 
 
 def _bar_dict_to_candle_bar(
@@ -124,6 +141,16 @@ class SmcRunner:
         # (symbol, tf_s) → last SmcDelta after on_bar_dict()
         self._last_deltas: Dict[Tuple[str, int], Optional[SmcDelta]] = {}
         self._journal = SignalJournal(full_cfg)
+        # Market calendar per symbol — for narrative market-hours guard
+        self._calendars: Dict[str, MarketCalendar] = {}
+        cal_groups = full_cfg.get("market_calendar_by_group", {})
+        sym_groups = full_cfg.get("market_calendar_symbol_groups", {})
+        for sym in self._symbols:
+            grp_name = sym_groups.get(sym)
+            if grp_name and grp_name in cal_groups:
+                cal = calendar_from_group(cal_groups[grp_name])
+                if cal is not None:
+                    self._calendars[sym] = cal
         _log.info(
             "SMC_RUNNER_INIT symbols=%s tfs=%s compute_tfs=%s lookback=%d",
             self._symbols,
@@ -387,6 +414,13 @@ class SmcRunner:
         cfg = self._full_config.get("smc", {}).get("narrative", {})
         if not cfg.get("enabled", False):
             return None
+        # Market-hours guard: don't generate signals on closed market
+        cal = self._calendars.get(symbol)
+        if cal is not None:
+            import time as _t
+
+            if not cal.is_trading_minute(int(_t.time() * 1000)):
+                return _market_closed_block()
         try:
             snap = self.get_snapshot(symbol, viewer_tf_s)
             if snap is None:

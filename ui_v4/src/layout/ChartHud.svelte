@@ -343,7 +343,7 @@
                             >{narrative.scenarios[0].trigger}</span
                         >
                     {/if}
-                    {#if narrative.market_phase !== "ranging"}
+                    {#if narrative.market_phase === "trending_up" || narrative.market_phase === "trending_down"}
                         <span class="narr-phase"
                             >{narrative.market_phase === "trending_up"
                                 ? "↑"

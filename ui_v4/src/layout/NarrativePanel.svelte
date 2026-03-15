@@ -41,7 +41,7 @@
             onclick={toggle}
         >
             <span class="headline-text">{narrative.headline}</span>
-            {#if narrative.market_phase !== "ranging"}
+            {#if narrative.market_phase === "trending_up" || narrative.market_phase === "trending_down"}
                 <span class="phase-badge"
                     >{narrative.market_phase === "trending_up"
                         ? "↑trend"
