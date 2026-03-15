@@ -141,6 +141,7 @@ class SmcRunner:
         # (symbol, tf_s) → last SmcDelta after on_bar_dict()
         self._last_deltas: Dict[Tuple[str, int], Optional[SmcDelta]] = {}
         self._journal = SignalJournal(full_cfg)
+        self._warmup_done = False  # journal gated until warmup completes
         # Market calendar per symbol — for narrative market-hours guard
         self._calendars: Dict[str, MarketCalendar] = {}
         cal_groups = full_cfg.get("market_calendar_by_group", {})
@@ -243,6 +244,7 @@ class SmcRunner:
             except Exception as exc:
                 _log.warning("SMC_WARMUP_M1_ERR sym=%s err=%s", symbol, exc)
 
+        self._warmup_done = True
         _log.info("SMC_RUNNER_WARMUP_DONE ok=%d err=%d", total_ok, total_err)
 
     def _read_bars_for_warmup(
@@ -455,9 +457,10 @@ class SmcRunner:
                 cfg,
                 session_info=session_info,
             )
-            self._journal.record(
-                symbol, viewer_tf_s, result, current_price, atr_14, bias_map=bias
-            )
+            if self._warmup_done:
+                self._journal.record(
+                    symbol, viewer_tf_s, result, current_price, atr_14, bias_map=bias
+                )
             return result
         except Exception:
             _log.exception("NARRATIVE_ERROR symbol=%s tf=%d", symbol, viewer_tf_s)

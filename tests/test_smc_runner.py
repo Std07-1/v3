@@ -568,3 +568,27 @@ class TestSmcRunnerMarketClosedGuard:
         engine = _make_engine()
         runner = SmcRunner(cfg, engine)
         assert "BTCUSDT" not in runner._calendars
+
+
+# ──────────────────────────────────────────────────────────────
+#  SmcRunner._warmup_done — journal gated until warmup completes
+# ──────────────────────────────────────────────────────────────
+
+
+class TestSmcRunnerWarmupDoneGuard:
+    """Journal записи блокуються до завершення warmup."""
+
+    def test_warmup_done_false_initially(self):
+        """Прапорець _warmup_done = False до виклику warmup()."""
+        engine = _make_engine()
+        runner = SmcRunner(_make_full_cfg(symbols=[SYM], tf_allowlist=[TF]), engine)
+        assert runner._warmup_done is False
+
+    def test_warmup_done_true_after_warmup(self):
+        """Після warmup() прапорець = True."""
+        dicts = _make_lwc_bars_dicts(20)
+        uds = _MockUds(dicts)
+        engine = _make_engine()
+        runner = SmcRunner(_make_full_cfg(symbols=[SYM], tf_allowlist=[TF]), engine)
+        runner.warmup(uds)
+        assert runner._warmup_done is True
