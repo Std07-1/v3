@@ -2,7 +2,8 @@
 
 - **Статус**: **Implemented**
 - **Дата**: 2026-03-08
-- **Revised**: 2026-03-09 (R_TRADER + R_SMC_CHIEF + R_BUG_HUNTER review incorporated)
+- **Revised**: 2026-03-09 (Rev 2: R_TRADER + R_SMC_CHIEF + R_BUG_HUNTER review incorporated)
+- **Revised**: 2026-03-15 (Rev 3: counter-trend sub_mode + trigger proximity/displacement guards)
 - **Автор**: R_ARCHITECT
 - **Initiative**: `smc_vis_phi3`
 - **Пов'язані ADR**: ADR-0024 (Engine), ADR-0024c (Zone POI + Context Stack), ADR-0028 (Elimination), ADR-0029 (Confluence), ADR-0030-alt (TF Sovereignty), ADR-0031 (Bias Banner)
@@ -258,8 +259,8 @@ class NarrativeBlock:
     - BH-8: fallback = degraded NarrativeBlock, не None
     """
     mode: str                  # "trade" | "wait" (2 modes, not 3 — SC-3)
-    sub_mode: str              # "aligned" | "reduced" | "" (trade sub-qualifier)
-    headline: str              # "🔴 SELL setup ready" | "🟡 No setup — wait"
+    sub_mode: str              # "aligned" | "counter" | "reduced" | "" (Rev 3: +counter)
+    headline: str              # "🔴 SELL setup ready" | "🟡 SELL — counter-trend" | "🟡 No setup — wait"
     bias_summary: str          # Context beyond pills: "H4 pullback to premium OB — expect rejection"
     scenarios: list            # List[ActiveScenario], max 2 (primary + alternative) — T-1
     next_area: str             # "{price} {dir} {type} ({grade}/{score}) — {condition}"
@@ -287,7 +288,7 @@ interface ActiveScenario {
 
 interface NarrativeBlock {
   mode: 'trade' | 'wait';                     // 2 modes (SC-3)
-  sub_mode: 'aligned' | 'reduced' | '';       // trade sub-qualifier
+  sub_mode: 'aligned' | 'counter' | 'reduced' | '';  // Rev 3: +counter
   headline: string;
   bias_summary: string;
   scenarios: ActiveScenario[];                 // max 2 (T-1)
@@ -313,6 +314,8 @@ interface NarrativeBlock {
     "market_phase_enabled": true,
     "fvg_context_enabled": true,
     "trigger_structure_lookback_bars": 5,
+    "trigger_proximity_atr": 3.0,
+    "trigger_displacement_window": 3,
     "target_lookback_bars": 100,
     "phase_hysteresis_bars": 3,
     "max_wire_bytes": 600
@@ -322,6 +325,8 @@ interface NarrativeBlock {
 **Removed** (Rev 2): `caution_on_mixed_bias` (SC-3: no caution mode), `market_phase_n_swings/range_atr/range_min_bars` (SC-1: simplified to 3 trend states).
 
 **Added** (Rev 2): `max_scenarios` (T-1), `phase_hysteresis_bars` (BH-6), `max_wire_bytes` (BH-5).
+
+**Added** (Rev 3): `trigger_proximity_atr` (max ATR distance for "triggered" state, default 3.0), `trigger_displacement_window` (±N viewer-TF bars to look for displacement near CHoCH, default 3).
 
 ### 4.2 Pure Logic: `core/smc/narrative.py`
 
@@ -360,8 +365,9 @@ Step 2b: Invalidation check (SC-7, BH-1)
   ├─ For each candidate zone: check if current_price has crossed invalidation level
   └─ Discard invalidated zones, add "scenario_invalidated" to warnings
 
-Step 3: Mode Decision (SC-3: 2 modes, not 3)
-  ├─ mode = "trade", sub_mode = "aligned"   IF primary_zone AND htf_aligned
+Step 3: Mode Decision (SC-3 + Rev 3: counter-trend detection)
+  ├─ mode = "trade", sub_mode = "aligned"   IF primary_zone AND htf_aligned AND zone_dir matches HTF
+  ├─ mode = "trade", sub_mode = "counter"   IF primary_zone AND htf_aligned AND zone_dir opposes HTF
   ├─ mode = "trade", sub_mode = "reduced"   IF primary_zone AND htf_mixed
   └─ mode = "wait",  sub_mode = ""          IF no primary_zone OR no_data
 ```
@@ -372,6 +378,8 @@ Step 3: Mode Decision (SC-3: 2 modes, not 3)
 MODE_HEADLINES = {
     ("trade", "aligned", "long"):    "🟢 BUY setup ready",
     ("trade", "aligned", "short"):   "🔴 SELL setup ready",
+    ("trade", "counter", "long"):    "🟡 BUY — counter-trend",        # Rev 3
+    ("trade", "counter", "short"):   "🟡 SELL — counter-trend",       # Rev 3
     ("trade", "reduced", "long"):    "🟢 BUY — reduced: mixed HTF",
     ("trade", "reduced", "short"):   "🔴 SELL — reduced: mixed HTF",
     ("wait", "", None):              "🟡 No setup — wait",
@@ -418,42 +426,71 @@ Primary scenario = highest score. Alternative = next qualifying zone (opposite d
 
 If `mode == "wait"` → `scenarios = []`.
 
-#### Trigger Resolution — 4 IOFED States (T-2)
+#### Trigger Resolution — 4 IOFED States + Proximity/Displacement (T-2, Rev 3)
+
+Rev 3 replaces the simple `_has_structure_aligned()` boolean with 3 doctrine-aligned helpers:
+
+1. **`_find_qualifying_choch(snapshot, zone)`** → `SmcSwing | None`  
+   Most recent CHoCH/BOS aligned with zone direction (after zone anchor).
+
+2. **`_has_displacement_near(snapshot, choch, zone, viewer_tf_s, config)`** → `bool`  
+   Displacement marker within ±`trigger_displacement_window` viewer-TF bars of the CHoCH.  
+   ICT doctrine: MS Shift requires impulse/displacement, not just structure break.
+
+3. **`_is_price_proximate(zone, current_price, atr, config)`** → `bool`  
+   Price within `trigger_proximity_atr` × ATR of the nearest zone edge.
+
+**Trigger matrix** (Rev 3 — proximity + displacement guards):
 
 ```python
-def _resolve_trigger_state(snapshot, zone, viewer_tf_s, current_price):
-    """Returns trigger enum: 'approaching' | 'in_zone' | 'triggered' | 'ready'."""
-    in_zone = zone.low <= current_price <= zone.high
-    choch_aligned = _has_structure_aligned(snapshot, zone, viewer_tf_s)
-    
-    if choch_aligned and in_zone:
-        return "ready"           # IOFED step 4-5: entry OB available
-    elif choch_aligned and not in_zone:
-        return "triggered"       # IOFED step 3-4: CHoCH confirmed, seek entry
-    elif in_zone:
-        return "in_zone"         # IOFED step 2-3: price in zone, wait CHoCH
-    else:
-        return "approaching"     # IOFED step 1-2: price moving toward zone
+def _resolve_trigger_state(snapshot, zone, viewer_tf_s, current_price, atr, config):
+    """T-2: 4 IOFED trigger states with proximity + displacement guards.
 
-def _resolve_trigger_desc(snapshot, zone, viewer_tf_s, current_price, atr):
-    """Human-readable trigger description."""
-    state = _resolve_trigger_state(snapshot, zone, viewer_tf_s, current_price)
-    direction_arrow = "↓" if "bear" in zone.kind else "↑"
-    tf_label = _tf_to_label(viewer_tf_s)
-    
-    if state == "ready":
-        return "Ready: structure confirmed in zone"
-    elif state == "triggered":
-        return "Triggered: {tf} ChoCH{arrow} — seek entry OB".format(
-            tf=tf_label, arrow=direction_arrow)
-    elif state == "in_zone":
-        return "In zone: wait {tf} ChoCH{arrow}".format(
-            tf=tf_label, arrow=direction_arrow)
-    else:
-        dist = abs(current_price - (zone.high if "bear" in zone.kind else zone.low))
-        pts = "{:.0f}".format(dist)
-        return "Approaching: {pts} pts from zone".format(pts=pts)
+    Matrix:
+      CHoCH + displacement + in_zone          → "ready"
+      CHoCH + in_zone (no displacement)       → "in_zone"  (Rev 3: was "ready")
+      CHoCH + displacement + proximate        → "triggered"
+      CHoCH + not proximate                   → "approaching"  (Rev 3: was "triggered")
+      CHoCH + proximate (no displacement)     → "approaching"
+      no CHoCH + in_zone                      → "in_zone"
+      no CHoCH                                → "approaching"
+    """
+    in_zone = zone.low <= current_price <= zone.high
+    choch = _find_qualifying_choch(snapshot, zone)
+    has_disp = False
+    if choch is not None:
+        has_disp = _has_displacement_near(snapshot, choch, zone, viewer_tf_s, config)
+    proximate = _is_price_proximate(zone, current_price, atr, config)
+
+    if choch is not None and has_disp and in_zone:
+        return "ready"
+    if choch is not None and in_zone:
+        return "in_zone"
+    if choch is not None and has_disp and proximate:
+        return "triggered"
+    if in_zone:
+        return "in_zone"
+    return "approaching"
 ```
+
+**Trigger descriptions** (Rev 3 — richer state messages):
+
+```python
+def _resolve_trigger_desc(snapshot, zone, viewer_tf_s, current_price, atr, config):
+    state = _resolve_trigger_state(snapshot, zone, viewer_tf_s, current_price, atr, config)
+    # ...
+    if state == "ready":     return "Ready: structure + displacement confirmed in zone"
+    if state == "triggered":  return "Triggered: M15 CHoCH↓ + displacement — seek entry"
+    if state == "in_zone":
+        if choch:             return "In zone: CHoCH↓ seen, await displacement"
+        else:                 return "In zone: wait M15 CHoCH↓"
+    else:                     return "Approaching: {n} pts from zone"
+```
+
+**Key Rev 3 doctrine fixes:**
+- CHoCH far from zone (>3 ATR) → "approaching" not "triggered" (prevents false alerts on LTF cross-TF zones)
+- CHoCH without displacement → "in_zone" not "ready" (MS Shift ≠ just BOS)
+- `atr` and `config` added to function signature for proximity/displacement checks
 
 #### Target Resolution (`_find_target`) — BH-4: Optional, no silent fallback
 
@@ -634,6 +671,8 @@ Config: `smc.display.fvg_ob_overlap_hide: true` (default).
         "fvg_context_enabled": true,
         "target_lookback_bars": 100,
         "trigger_structure_lookback_bars": 5,
+        "trigger_proximity_atr": 3.0,
+        "trigger_displacement_window": 3,
         "max_wire_bytes": 600
     },
     "display": {
@@ -684,6 +723,20 @@ Config: `smc.display.fvg_ob_overlap_hide: true` (default).
 
 **Default collapsed** headline bar з mode-кольором, phase badge, expand arrow. Expanded: bias summary, scenarios (direction, entry_desc, trigger state badge з colour-coding, target, invalidation), FVG context, warnings. Auto-collapse 10s (SC-6). Position: `bottom:40px; left:10px; z-index:31`. Glassmorphic styling. Wired через `(currentFrame as any).narrative ?? null` в ChartPane.
 
+### Rev 3: Counter-Trend Mode + Trigger Proximity/Displacement (2026-03-15)
+
+**S1 fix — Direction-Alignment Mismatch:** Previously Step 3 only checked `alignment=="aligned"` (D1==H4) without verifying if the zone direction matches HTF bias. When HTF=bullish but best zone=ob_bear → headline "🔴 SELL setup ready" + "HTF bullish aligned" = contradiction. Fix: `sub_mode="counter"` with 🟡 yellow headlines and `counter_trend` warning.
+
+**S1 fix — Trigger Proximity/Displacement:** Previously `_resolve_trigger_state()` returned "triggered" for ANY CHoCH after zone anchor, regardless of price distance or impulse quality. Two doctrine violations:
+- Price 84 pts (3.36 ATR) from zone → "triggered" (should be "approaching")
+- CHoCH without displacement → "ready" (should require MS Shift = impulse)
+
+Fix: 3 new helpers replace `_has_structure_aligned()`. Function signature expanded with `atr` and `config`. See trigger matrix above.
+
+**Config keys added:** `trigger_proximity_atr=3.0`, `trigger_displacement_window=3`.
+
+**Tests:** 513/513 pass (3 new trigger matrix tests). 5-case manual validation confirmed.
+
 ### Feature Gate
 
 `config.json → smc.narrative.enabled = false` за замовчуванням. Zero impact коли вимкнено.
@@ -728,6 +781,9 @@ Config: `smc.display.fvg_ob_overlap_hide: true` (default).
 | N4 | Narrative MUST NOT be computed in delta path. Only full frame (BH-9) | Code rail: assert |
 | N5 | `market_phase` = display-only, does NOT influence mode selection (T-6) | Verified in tests |
 | N6 | HTF alignment = D1+H4 only. LTF disagreement is NOT "mixed bias" (SC-4) | Logic in synthesize_narrative() |
+| N7 | Counter-trend = HTF aligned but zone opposes HTF direction → 🟡 warning (Rev 3) | Step 3 direction check |
+| N8 | Trigger "ready" requires displacement, not just CHoCH (Rev 3) | `_has_displacement_near()` |
+| N9 | Trigger "triggered" requires proximity ≤ `trigger_proximity_atr` × ATR (Rev 3) | `_is_price_proximate()` |
 
 ### Performance / SLO
 
@@ -858,7 +914,10 @@ cd ui_v4 && npm run build
 | `test_two_scenarios` | OB bear A(6) + OB bull A(6) | scenarios length = 2 |
 | `test_trigger_approaching` | Zone far from current_price | scenarios[0].trigger = "approaching" |
 | `test_trigger_in_zone` | current_price within zone, no CHoCH | scenarios[0].trigger = "in_zone" |
-| `test_trigger_ready` | In zone + structure aligned | scenarios[0].trigger = "ready" |
+| `test_trigger_ready` | In zone + CHoCH + displacement | scenarios[0].trigger = "ready" |
+| `test_trigger_in_zone_choch_no_displacement` | In zone + CHoCH, no displacement | scenarios[0].trigger = "in_zone" (Rev 3: N8) |
+| `test_trigger_approaching_far_with_choch` | CHoCH + displacement, >3 ATR from zone | scenarios[0].trigger = "approaching" (Rev 3: N9) |
+| `test_trigger_triggered_proximate_with_displacement` | CHoCH + displacement, <3 ATR from zone | scenarios[0].trigger = "triggered" |
 | `test_invalidation_crossed` | current_price > invalidation level | scenarios empty (zone discarded), warnings contains "scenario_invalidated" |
 | `test_fvg_context_overlap` | OB + overlapping FVG | fvg_context contains "OB entry refined by FVG" |
 | `test_fvg_context_empty` | OB without nearby FVG | fvg_context = "" |
