@@ -50,7 +50,7 @@
 | [0036](0036-premium-trader-first-shell.md) | Premium Trader-First Shell for UI v4 | **Implemented** | 2026-03-09 | premium shell, thesis bar, tactical strip, service rail, signature interaction, UI hierarchy | `ui_v4_premium_shell_v1` |
 | [0037](0037-binance-second-broker.md) | Binance Futures — Second Broker (BTC/ETH Live Ingest) | **Implemented** | 2026-03-13 | Binance, BTCUSDT, ETHUSDT, Futures API, 24/7, crypto_24x7, python-binance, anchor=0 | `binance_broker_v1` |
 | [0038](0038-initial-backfill-virgin-symbols.md) | Initial Backfill for Virgin Symbols | **Implemented (Amend v2)** | 2026-03-15 | backfill, virgin, bootstrap Phase 2.5, M1 history, historical crawl, derive-only HTF | `cold_start_backfill_v1` |
-| [0039](0039-signal-engine.md) | Signal Engine — Numeric Entry/SL/TP + R:R + Alerts | **Proposed** | 2026-03-14 | entry_price, stop_loss, take_profit, R:R, confidence, alerts, signal lifecycle, core/smc/signals.py | `signal_engine_v1` |
+| [0039](0039-signal-engine.md) | Signal Engine — Numeric Entry/SL/TP + R:R + Alerts | **Implemented** | 2026-03-14 | entry_price, stop_loss, take_profit, R:R, confidence, alerts, signal lifecycle, core/smc/signals.py | `signal_engine_v1` |
 
 ---
 

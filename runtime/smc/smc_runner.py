@@ -141,6 +141,8 @@ class SmcRunner:
         self._lock = threading.Lock()
         # (symbol, tf_s) → last SmcDelta after on_bar_dict()
         self._last_deltas: Dict[Tuple[str, int], Optional[SmcDelta]] = {}
+        # ADR-0039: previous signal state per (symbol, tf_s) for lifecycle continuity
+        self._prev_signals: Dict[Tuple[str, int], list] = {}
         self._journal = SignalJournal(full_cfg)
         self._warmup_done = False  # journal gated until warmup completes
         # Market calendar per symbol — for narrative market-hours guard
@@ -485,7 +487,8 @@ class SmcRunner:
             self._last_deltas.pop((symbol, tf_s), None)
 
     def get_shell_payload(
-        self, symbol: str, viewer_tf_s: int, narrative: NarrativeBlock
+        self, symbol: str, viewer_tf_s: int, narrative: NarrativeBlock,
+        signal: Any = None,
     ) -> Optional[ShellPayload]:
         """ADR-0036: compose shell payload from already-computed narrative.
 
@@ -503,9 +506,67 @@ class SmcRunner:
                 viewer_tf_s,
                 shell_cfg,
                 sessions_active=sessions_active,
+                signal=signal,
             )
         except Exception:
             _log.warning(
                 "SHELL_COMPOSE_ERR sym=%s tf=%d", symbol, viewer_tf_s, exc_info=True
             )
             return None
+
+    def get_signals(
+        self, symbol: str, viewer_tf_s: int,
+        narrative: NarrativeBlock, current_price: float, atr: float,
+    ) -> Tuple[list, list]:
+        """ADR-0039: synthesize numeric signals from narrative + SMC data.
+
+        Returns (signals, alerts). Stores state for lifecycle continuity.
+        """
+        sig_cfg = self._full_config.get("smc", {}).get("signals", {})
+        if not sig_cfg.get("enabled", False):
+            return [], []
+        try:
+            snap = self.get_snapshot(symbol, viewer_tf_s)
+            if snap is None:
+                return [], []
+            grades = self.get_zone_grades(symbol, viewer_tf_s)
+            bias = self.get_bias_map(symbol)
+            momentum = self.get_momentum_map(symbol)
+            session_info = None
+            if self._engine._config.sessions.enabled and self._engine._session_windows:
+                import time as _t
+                from core.smc.sessions import get_current_session
+
+                now_ms = int(_t.time() * 1000)
+                sess_name, sess_kz = get_current_session(
+                    now_ms, self._engine._session_windows
+                )
+                if sess_name:
+                    session_info = (sess_name, sess_kz)
+            else:
+                import time as _t
+                now_ms = int(_t.time() * 1000)
+
+            prev = self._prev_signals.get((symbol, viewer_tf_s), [])
+            from core.smc.signals import synthesize_signals
+
+            sigs, alerts = synthesize_signals(
+                narrative=narrative,
+                snapshot=snap,
+                zone_grades=grades,
+                bias_map=bias,
+                momentum_map=momentum,
+                current_price=current_price,
+                atr=atr,
+                config=sig_cfg,
+                previous_signals=prev,
+                now_ms=now_ms,
+                session_info=session_info,
+            )
+            self._prev_signals[(symbol, viewer_tf_s)] = sigs
+            return sigs, alerts
+        except Exception:
+            _log.warning(
+                "SIGNAL_SYNTH_ERR sym=%s tf=%d", symbol, viewer_tf_s, exc_info=True
+            )
+            return [], []

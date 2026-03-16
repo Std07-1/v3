@@ -380,7 +380,7 @@ class ShellPayload:
     stage_context: str  # "Bearish HTF · Inside supply · Waiting CHoCH"
     micro_card: MicroCard
     tactical_strip: TacticalStrip
-    # signal: Optional[SignalSnapshot] = None  # ADR-0039 slot — None until implemented
+    signal: Optional["SignalSpec"] = None  # ADR-0039: numeric entry/SL/TP/R:R
 
     def to_wire(self) -> Dict[str, Any]:
         return {
@@ -389,7 +389,95 @@ class ShellPayload:
             "stage_context": self.stage_context,
             "micro_card": self.micro_card.to_wire(),
             "tactical_strip": self.tactical_strip.to_wire(),
-            "signal": None,  # ADR-0039: always None until signal engine
+            "signal": self.signal.to_wire() if self.signal is not None else None,
+        }
+
+
+# -------------------- Signal Engine (ADR-0039) --------------------
+
+SIGNAL_STATES = frozenset(
+    {"pending", "approaching", "active", "ready", "invalidated", "completed", "expired"}
+)
+
+ENTRY_METHODS = frozenset({"ote", "zone_edge", "zone_mid"})
+
+
+@dataclasses.dataclass(frozen=True)
+class SignalSpec:
+    """Числовий actionable signal (ADR-0039). Pure, deterministic."""
+
+    signal_id: str
+    zone_id: str
+    symbol: str
+    tf_s: int
+    direction: str  # "long" | "short"
+
+    entry_price: float
+    stop_loss: float
+    take_profit: float
+    risk_reward: float
+
+    entry_method: str  # "ote" | "zone_edge" | "zone_mid"
+    entry_desc: str
+
+    confidence: int  # 0–100
+    confidence_factors: Dict[str, int]
+    grade: str  # "A+" | "A" | "B" | "C"
+
+    state: str  # SIGNAL_STATES
+    state_reason: str
+    created_ms: int
+    updated_ms: int
+    bars_alive: int  # bars since creation (for TTL)
+
+    session: str  # "london" | "newyork" | "asia" | ""
+    in_killzone: bool
+    warnings: List[str]
+
+    def to_wire(self) -> Dict[str, Any]:
+        return {
+            "signal_id": self.signal_id,
+            "zone_id": self.zone_id,
+            "symbol": self.symbol,
+            "tf_s": self.tf_s,
+            "direction": self.direction,
+            "entry_price": round(self.entry_price, 2),
+            "stop_loss": round(self.stop_loss, 2),
+            "take_profit": round(self.take_profit, 2),
+            "risk_reward": round(self.risk_reward, 2),
+            "entry_method": self.entry_method,
+            "entry_desc": self.entry_desc,
+            "confidence": self.confidence,
+            "confidence_factors": self.confidence_factors,
+            "grade": self.grade,
+            "state": self.state,
+            "state_reason": self.state_reason,
+            "created_ms": self.created_ms,
+            "updated_ms": self.updated_ms,
+            "bars_alive": self.bars_alive,
+            "session": self.session,
+            "in_killzone": self.in_killzone,
+            "warnings": self.warnings,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class SignalAlert:
+    """Alert event on signal state transition (ADR-0039). Ephemeral."""
+
+    signal_id: str
+    alert_type: str  # "approaching" | "active" | "ready" | "invalidated" | "completed"
+    headline: str
+    priority: str  # "high" | "medium" | "low"
+    ts_ms: int
+
+    def to_wire(self) -> Dict[str, Any]:
+        return {
+            "signal_id": self.signal_id,
+            "alert_type": self.alert_type,
+            "headline": self.headline,
+            "priority": self.priority,
+            "ts_ms": self.ts_ms,
         }
 
 

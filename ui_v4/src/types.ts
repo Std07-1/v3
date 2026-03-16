@@ -144,7 +144,41 @@ export interface ShellPayload {
   stage_context: string;  // "Bearish HTF · Inside supply · Waiting CHoCH"
   micro_card: MicroCard;
   tactical_strip: TacticalStrip;
-  signal: null;           // ADR-0039: always null until signal engine
+  signal: SignalSpec | null;  // ADR-0039: primary signal from signal engine
+}
+
+// -------------------- ADR-0039: Signal Engine --------------------
+export interface SignalSpec {
+  signal_id: string;
+  zone_id: string;
+  symbol: string;
+  tf_s: number;
+  direction: 'long' | 'short';
+  entry_price: number;
+  stop_loss: number;
+  take_profit: number;
+  risk_reward: number;
+  entry_method: string;
+  entry_desc: string;
+  confidence: number;       // 0–100
+  confidence_factors: Record<string, number>;
+  grade: string;
+  state: string;            // pending|approaching|active|ready|invalidated|completed|expired
+  state_reason: string;
+  created_ms: number;
+  updated_ms: number;
+  bars_alive: number;
+  session: string;
+  in_killzone: boolean;
+  warnings: string[];
+}
+
+export interface SignalAlert {
+  signal_id: string;
+  alert_type: string;
+  headline: string;
+  priority: string;
+  ts_ms: number;
 }
 
 // -------------------- Drawings --------------------
@@ -221,6 +255,10 @@ export interface RenderFrame {
   narrative?: NarrativeBlock;
   /** ADR-0036: shell payload (full frame + delta on complete bars) */
   shell?: ShellPayload;
+  /** ADR-0039: signal engine output (full frame) */
+  signals?: SignalSpec[];
+  /** ADR-0039: signal alerts on state transitions */
+  signal_alerts?: SignalAlert[];
   /** ADR-0035: refreshed session levels in delta (full-replace session kinds) */
   session_levels?: SmcLevel[];
   drawings?: Drawing[];

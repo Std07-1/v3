@@ -77,7 +77,9 @@ class SmcRunnerLike(Protocol):
 
     def clear_delta(self, symbol: str, tf_s: int) -> None: ...
 
-    def get_shell_payload(self, symbol: str, tf_s: int, narrative: Any) -> Any: ...
+    def get_shell_payload(self, symbol: str, tf_s: int, narrative: Any, signal: Any = None) -> Any: ...
+
+    def get_signals(self, symbol: str, tf_s: int, narrative: Any, price: float, atr: float) -> Any: ...
 
     def warmup(self, uds: UdsLike) -> None: ...
 
@@ -652,10 +654,27 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                     from core.smc.narrative import narrative_to_wire
 
                     frame["narrative"] = narrative_to_wire(_narr)
+                    # ADR-0039: signal engine wiring (before shell, so signal feeds shell)
+                    _primary_sig = None
+                    try:
+                        _sigs, _sig_alerts = _smc_runner.get_signals(
+                            session.symbol, session.tf_s, _narr,
+                            float(_last_c), float(_atr_est),
+                        )
+                        if _sigs:
+                            frame["signals"] = [s.to_wire() for s in _sigs]
+                            _primary_sig = _sigs[0]
+                        if _sig_alerts:
+                            frame["signal_alerts"] = [a.to_wire() for a in _sig_alerts]
+                    except Exception as _sig_exc:
+                        _log.warning(
+                            "WS_SIGNAL_ERR sym=%s err=%s", session.symbol, _sig_exc
+                        )
                     # ADR-0036: shell payload (post-processing narrative)
                     try:
                         _shell = _smc_runner.get_shell_payload(
-                            session.symbol, session.tf_s, _narr
+                            session.symbol, session.tf_s, _narr,
+                            signal=_primary_sig,
                         )
                         if _shell is not None:
                             frame["shell"] = _shell.to_wire()

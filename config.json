@@ -378,6 +378,23 @@
                 900
             ]
         },
+        "signals": {
+            "enabled": true,
+            "entry_method": "ote",
+            "sl_buffer_atr": 0.2,
+            "tp_atr_multiplier": 2.0,
+            "approach_atr_mult": 1.5,
+            "signal_ttl_bars": 50,
+            "max_active_signals": 3,
+            "min_risk_reward": 1.5,
+            "confidence_weights": {
+                "bias_alignment": 0.30,
+                "structure": 0.25,
+                "confluence_grade": 0.20,
+                "session": 0.15,
+                "momentum": 0.10
+            }
+        },
         "signal_journal": {
             "enabled": true,
             "path": "data_v3/_signals"

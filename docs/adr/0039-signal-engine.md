@@ -1,6 +1,6 @@
 # ADR-0039: Signal Engine — Numeric Entry/SL/TP + R:R + Alerts
 
-- **Статус**: Proposed
+- **Статус**: Implemented
 - **Дата**: 2026-03-14
 - **Автор**: R_ARCHITECT
 - **Initiative**: `signal_engine_v1`
