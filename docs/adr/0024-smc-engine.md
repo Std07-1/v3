@@ -1723,6 +1723,7 @@ Actual `config.json:smc` has these additional sections not in §5.3:
 `compute_tfs`, `sessions`, `momentum`, `confluence`, `context_stack`, `performance`, `tda`, `display`, `narrative`, `signal_journal`, `tf_overrides`.
 
 Each sub-section documented in its respective ADR. `config.json` is SSOT for deployed values.
+
 - P10: revert replay integration — replay без SMC
 
 ### Full rollback

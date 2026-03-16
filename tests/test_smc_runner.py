@@ -621,6 +621,7 @@ class TestOnBarDictJournalTick:
         def spy_record(*args, **kwargs):
             recorded.append((args, kwargs))
             # Don't actually write file
+
         monkeypatch.setattr(runner._journal, "record", spy_record)
 
         # Feed a complete bar

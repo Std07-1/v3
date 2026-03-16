@@ -783,9 +783,7 @@ class TestTooFarGuard:
         snap = _snap(zones=[z])
         bias = {"86400": "bearish", "14400": "bearish"}
         grades = _grade_a6("z1")
-        nb = synthesize_narrative(
-            snap, bias, grades, {}, 900, 4000.0, 0.0, self._cfg()
-        )
+        nb = synthesize_narrative(snap, bias, grades, {}, 900, 4000.0, 0.0, self._cfg())
         # atr=0 → guard skipped → should not crash
         assert nb is not None
         assert "zone_too_far" not in nb.warnings
@@ -798,7 +796,13 @@ class TestTooFarGuard:
         grades = _grade_a6("z1")
         # Distance = 5144 - 5060 = 84 pts.  ATR = 20.  84/20 = 4.2 → >2.0 → too far
         nb = synthesize_narrative(
-            snap, bias, grades, {}, 900, 5060.0, 20.0,
+            snap,
+            bias,
+            grades,
+            {},
+            900,
+            5060.0,
+            20.0,
             self._cfg(trade_max_distance_atr=2.0),
         )
         assert nb.mode == "wait"
