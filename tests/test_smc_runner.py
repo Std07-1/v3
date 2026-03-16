@@ -592,3 +592,83 @@ class TestSmcRunnerWarmupDoneGuard:
         runner = SmcRunner(_make_full_cfg(symbols=[SYM], tf_allowlist=[TF]), engine)
         runner.warmup(uds)
         assert runner._warmup_done is True
+
+
+# ──────────────────────────────────────────────────────────────
+#  on_bar_dict → journal (all TFs, not just viewer)
+# ──────────────────────────────────────────────────────────────
+
+
+class TestOnBarDictJournalTick:
+    """on_bar_dict() triggers journal.record() for complete bars after warmup."""
+
+    def test_on_bar_dict_calls_journal_on_complete_bar(self, monkeypatch):
+        """Complete bar on compute TF → journal.record() called."""
+        dicts = _make_lwc_bars_dicts(20)
+        uds = _MockUds(dicts)
+        engine = _make_engine()
+        cfg = _make_full_cfg(symbols=[SYM], tf_allowlist=[TF])
+        cfg["smc"]["narrative"] = {"enabled": True}
+        cfg["smc"]["sessions"] = {"enabled": False}
+        cfg["smc"]["signal_journal"] = {"enabled": True, "path": "data_v3/_signals"}
+        runner = SmcRunner(cfg, engine)
+        runner.warmup(uds)
+
+        # Spy on journal.record
+        recorded = []
+        original_record = runner._journal.record
+
+        def spy_record(*args, **kwargs):
+            recorded.append((args, kwargs))
+            # Don't actually write file
+        monkeypatch.setattr(runner._journal, "record", spy_record)
+
+        # Feed a complete bar
+        bar = _bar_dict(i=20, complete=True)
+        runner.on_bar_dict(SYM, TF, bar)
+
+        assert len(recorded) >= 1, "journal.record() should be called from on_bar_dict"
+        # First positional arg is symbol
+        assert recorded[0][0][0] == SYM
+
+    def test_on_bar_dict_skips_journal_on_preview_bar(self, monkeypatch):
+        """Preview bar (complete=False) → journal NOT called from on_bar_dict."""
+        dicts = _make_lwc_bars_dicts(20)
+        uds = _MockUds(dicts)
+        engine = _make_engine()
+        cfg = _make_full_cfg(symbols=[SYM], tf_allowlist=[TF])
+        cfg["smc"]["narrative"] = {"enabled": True}
+        cfg["smc"]["sessions"] = {"enabled": False}
+        cfg["smc"]["signal_journal"] = {"enabled": True, "path": "data_v3/_signals"}
+        runner = SmcRunner(cfg, engine)
+        runner.warmup(uds)
+
+        recorded = []
+        monkeypatch.setattr(
+            runner._journal, "record", lambda *a, **kw: recorded.append(1)
+        )
+
+        bar = _bar_dict(i=20, complete=False)
+        runner.on_bar_dict(SYM, TF, bar)
+
+        assert len(recorded) == 0, "journal should NOT be called for preview bars"
+
+    def test_on_bar_dict_skips_journal_before_warmup(self, monkeypatch):
+        """Before warmup → journal NOT called even for complete bars."""
+        engine = _make_engine()
+        cfg = _make_full_cfg(symbols=[SYM], tf_allowlist=[TF])
+        cfg["smc"]["narrative"] = {"enabled": True}
+        cfg["smc"]["sessions"] = {"enabled": False}
+        cfg["smc"]["signal_journal"] = {"enabled": True, "path": "data_v3/_signals"}
+        runner = SmcRunner(cfg, engine)
+        # No warmup!
+
+        recorded = []
+        monkeypatch.setattr(
+            runner._journal, "record", lambda *a, **kw: recorded.append(1)
+        )
+
+        bar = _bar_dict(i=0, complete=True)
+        runner.on_bar_dict(SYM, TF, bar)
+
+        assert len(recorded) == 0, "journal should NOT be called before warmup"

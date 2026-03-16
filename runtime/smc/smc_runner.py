@@ -347,6 +347,13 @@ class SmcRunner:
             delta = self._engine.on_bar(cb)
             with self._lock:
                 self._last_deltas[(symbol, tf_s)] = delta
+            # Journal: compute narrative on every complete bar for this (sym, tf)
+            # so ALL signals are captured, not just the viewer's current TF.
+            if self._warmup_done and cb.complete:
+                try:
+                    self.get_narrative(symbol, tf_s, cb.c)
+                except Exception:
+                    pass  # best-effort; errors logged inside get_narrative
             return delta
         except Exception as exc:
             _log.warning("SMC_ON_BAR_ERR sym=%s tf=%s err=%s", symbol, tf_s, exc)
