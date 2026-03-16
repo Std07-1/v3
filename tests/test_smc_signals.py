@@ -84,8 +84,16 @@ def _snapshot(
         tf_s=900,
         trend_bias="bullish",
         zones=zones if zones is not None else [_zone()],
-        swings=swings if swings is not None else [_swing("hh", 2880.0), _swing("ll", 2845.0)],
-        levels=levels if levels is not None else [_level("pdh", 2890.0), _level("pdl", 2840.0)],
+        swings=(
+            swings
+            if swings is not None
+            else [_swing("hh", 2880.0), _swing("ll", 2845.0)]
+        ),
+        levels=(
+            levels
+            if levels is not None
+            else [_level("pdh", 2890.0), _level("pdl", 2840.0)]
+        ),
         last_bos_ms=None,
         last_choch_ms=None,
         computed_at_ms=300000,
@@ -194,14 +202,14 @@ class TestResolveEntry:
 
 class TestStopLoss:
     def test_sl_long(self):
-        z = _zone(low=2860.0)
+        z = _zone(low=2860.0)  # zone range=10, 10*0.25=2.5 > 5*0.03=0.15
         sl = _resolve_stop_loss(z, "long", atr=5.0, buffer_atr=0.2)
-        assert sl == 2860.0 - 1.0  # 5*0.2 = 1
+        assert sl == 2860.0 - 2.5  # max(10*0.25, 5*0.03) = 2.5
 
     def test_sl_short(self):
-        z = _zone(high=2870.0)
+        z = _zone(high=2870.0)  # zone range=10, buf=2.5
         sl = _resolve_stop_loss(z, "short", atr=5.0, buffer_atr=0.2)
-        assert sl == 2870.0 + 1.0
+        assert sl == 2870.0 + 2.5
 
 
 class TestTakeProfit:
@@ -285,7 +293,13 @@ class TestConfidence:
         """Only D1 aligned → 50."""
         bias_map = {"86400": "bullish"}
         _, factors = _calc_confidence(
-            bias_map, "long", {}, _snapshot(swings=[]), None, {}, CFG["confidence_weights"]
+            bias_map,
+            "long",
+            {},
+            _snapshot(swings=[]),
+            None,
+            {},
+            CFG["confidence_weights"],
         )
         assert factors["bias_alignment"] == 50
 
@@ -296,32 +310,44 @@ class TestConfidence:
 class TestDetermineState:
     def test_pending(self):
         z = _zone()
-        state, _ = _determine_state("", 2862.0, z, 2863.82, 2855.0, 2890.0, "long", 5.0, 1.5)
+        state, _ = _determine_state(
+            "", 2862.0, z, 2863.82, 2855.0, 2890.0, "long", 5.0, 1.5
+        )
         assert state == "pending"
 
     def test_approaching(self):
         z = _zone()
-        state, _ = _determine_state("approaching", 2862.0, z, 2863.82, 2855.0, 2890.0, "long", 5.0, 1.5)
+        state, _ = _determine_state(
+            "approaching", 2862.0, z, 2863.82, 2855.0, 2890.0, "long", 5.0, 1.5
+        )
         assert state == "approaching"
 
     def test_active(self):
         z = _zone()
-        state, _ = _determine_state("in_zone", 2865.0, z, 2863.82, 2859.0, 2890.0, "long", 5.0, 1.5)
+        state, _ = _determine_state(
+            "in_zone", 2865.0, z, 2863.82, 2859.0, 2890.0, "long", 5.0, 1.5
+        )
         assert state == "active"
 
     def test_ready(self):
         z = _zone()
-        state, _ = _determine_state("ready", 2865.0, z, 2863.82, 2859.0, 2890.0, "long", 5.0, 1.5)
+        state, _ = _determine_state(
+            "ready", 2865.0, z, 2863.82, 2859.0, 2890.0, "long", 5.0, 1.5
+        )
         assert state == "ready"
 
     def test_invalidated_long(self):
         z = _zone()
-        state, _ = _determine_state("active", 2850.0, z, 2863.82, 2859.0, 2890.0, "long", 5.0, 1.5)
+        state, _ = _determine_state(
+            "active", 2850.0, z, 2863.82, 2859.0, 2890.0, "long", 5.0, 1.5
+        )
         assert state == "invalidated"
 
     def test_completed_long(self):
         z = _zone()
-        state, _ = _determine_state("active", 2891.0, z, 2863.82, 2859.0, 2890.0, "long", 5.0, 1.5)
+        state, _ = _determine_state(
+            "active", 2891.0, z, 2863.82, 2859.0, 2890.0, "long", 5.0, 1.5
+        )
         assert state == "completed"
 
 
@@ -669,7 +695,9 @@ class TestSynthesizeSignals:
 
     def test_max_active_signals_cap(self):
         """Only max_active_signals scenario processed."""
-        scenarios = [_scenario(zone_id=f"ob_bull_XAU_USD_900_{i}00000") for i in range(5)]
+        scenarios = [
+            _scenario(zone_id=f"ob_bull_XAU_USD_900_{i}00000") for i in range(5)
+        ]
         zones = [_zone(zone_id=f"ob_bull_XAU_USD_900_{i}00000") for i in range(5)]
         narr = _narrative(scenarios=scenarios)
         snap = _snapshot(zones=zones)

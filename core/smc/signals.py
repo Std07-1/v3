@@ -45,7 +45,9 @@ _DEFAULTS: Dict[str, Any] = {
 # ── Entry / SL / TP resolution (§4.2–4.4) ──────────────────────────
 
 
-def _resolve_entry(zone: SmcZone, direction: str, method: str, atr: float) -> Tuple[float, str]:
+def _resolve_entry(
+    zone: SmcZone, direction: str, method: str, atr: float
+) -> Tuple[float, str]:
     """Resolve entry price and description.
 
     Returns: (entry_price, entry_desc)
@@ -77,9 +79,17 @@ def _resolve_entry(zone: SmcZone, direction: str, method: str, atr: float) -> Tu
     return price, desc
 
 
-def _resolve_stop_loss(zone: SmcZone, direction: str, atr: float, buffer_atr: float) -> float:
-    """SL = zone opposite edge ± ATR buffer."""
-    buf = atr * buffer_atr
+def _resolve_stop_loss(
+    zone: SmcZone, direction: str, atr: float, buffer_atr: float
+) -> float:
+    """SL = zone opposite edge + buffer proportional to zone width.
+
+    Buffer = max(zone_range × 0.25, atr × 0.03).
+    ATR-only buffer was too generous (0.2×ATR for XAU ≈ 8 pts on a 6-pt zone),
+    creating SL far beyond the zone invalidation level.
+    """
+    zone_range = abs(zone.high - zone.low)
+    buf = max(zone_range * 0.25, atr * 0.03) if atr > 0 else zone_range * 0.25
     if direction == "long":
         return zone.low - buf
     else:
@@ -436,7 +446,11 @@ def synthesize_signals(
         sess_name = session_info[0] if session_info else ""
         in_kz = session_info[1] if session_info else False
 
-        sig_id = prev.signal_id if prev else f"sig_{snapshot.symbol}_{snapshot.tf_s}_{zone.id}_{created_ms}"
+        sig_id = (
+            prev.signal_id
+            if prev
+            else f"sig_{snapshot.symbol}_{snapshot.tf_s}_{zone.id}_{created_ms}"
+        )
 
         sig = SignalSpec(
             signal_id=sig_id,
