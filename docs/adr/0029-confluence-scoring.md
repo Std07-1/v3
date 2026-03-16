@@ -2,6 +2,7 @@
 
 - **Статус**: **Implemented** (Φ1 done: 4 P-slices, 424/431 tests pass, 9 new confluence tests)
 - **Дата**: 2026-03-05
+- **Revised**: 2026-03-16 (P5B: FVG Confluence Scoring for display)
 - **Автор**: Chief Strategist + System Architect
 - **Reviewer**: R_SMC_CHIEF (CONDITIONAL GO → 6 errata → **GO**)
 - **Mode**: BUILD (новий модуль + тести, >150 LOC total — правило A1)
@@ -41,6 +42,38 @@
 | N1 | `_zone_rank` з grades потребувала closure pattern | → Знято через ER-6: rank залишається strength-only на сервері |
 | N2 | FVG refinement ≠ confluence scoring — різна природа | Окремий P-slice (P-Φ1-1b) |
 | N3 | Total LOC > 150 | MODE=BUILD (правило A1: новий модуль з тестами) |
+
+### P5B Amendment: FVG Confluence Scoring (2026-03-16)
+
+**Мотивація**: OB зони мали 8-факторний scoring з grade badge. FVG зони — ні, показувались без grade → трейдер не міг оцінити якість FVG. P5B додає спрощений scoring для FVG-зон з display-only gate (не trade candidates).
+
+**Зміни в `confluence.py`:**
+
+1. **`score_fvg_confluence(zone, htf_zones, structure, tf_s, atr, config)`** — нова функція, 4 фактори, max 7 pts:
+   - F1 `gap_size`: gap/ATR ratio → +1 (>0.25), +2 (>0.6), +3 (>1.2)
+   - F2 `htf_align`: reuse `_check_htf_alignment()` → +2
+   - F3 `tf_sig`: reuse `_check_tf_significance()` → +1
+   - F4 `structure`: reuse `_check_structure()` → +1
+
+2. **`score_zone_confluence()` dispatch**: FVG зони (`kind.startswith("fvg_")`) тепер маршрутизуються в `score_fvg_confluence()` замість раннього `return {'score': 0, 'grade': 'C'}`.
+
+3. **`_score_to_grade(score, config, thresholds_key="grade_thresholds")`**: додано параметр `thresholds_key` для підтримки різних шкал (OB vs FVG). FVG використовує `config.get("fvg_grade_thresholds", ...)` з м'якшими порогами.
+
+**Config extension (smc.confluence):**
+
+```json
+"fvg_grade_thresholds": {
+    "a_plus": 6,
+    "a": 4,
+    "b": 2
+}
+```
+
+**Narrative gate (ADR-0033 Rev 4):** `smc.narrative.fvg_trade_min_score: 99` — FVG-зони отримують grade badge але НІКОЛИ не стають trade candidates у narrative (display-only). Зниження порогу до 4 увімкне FVG-кандидатів.
+
+**Тести:** 6 нових — 4 scoring (gap_size/htf/tf_sig/structure) + 2 candidate gate (narrative integration). 535/535 pass.
+
+**Інваріанти:** S0 ✅ (pure), S2 ✅ (deterministic), S5 ✅ (config SSOT), S6 ✅ (wire format unchanged).
 
 ---
 
@@ -262,8 +295,8 @@ def _check_tf_significance(tf_s):
 ### 3.4 Orchestrator + Grade Mapping
 
 ```python
-def _score_to_grade(score, config):
-    thresholds = config.get('grade_thresholds', {'a_plus': 8, 'a': 6, 'b': 4})
+def _score_to_grade(score, config, thresholds_key="grade_thresholds"):
+    thresholds = config.get(thresholds_key, {'a_plus': 8, 'a': 6, 'b': 4})
     if score >= thresholds.get('a_plus', 8): return 'A+'
     if score >= thresholds.get('a', 6):      return 'A'
     if score >= thresholds.get('b', 4):      return 'B'
@@ -271,26 +304,13 @@ def _score_to_grade(score, config):
 
 def score_zone_confluence(zone, bars, swings, zones_all, htf_zones,
                           structure, atr, current_price, tf_s, config):
-    if not zone.get('kind', '').startswith('ob_'):
+    kind = zone.get('kind', '')
+    # P5B: FVG zones get their own scoring pipeline
+    if kind.startswith('fvg_'):
+        return score_fvg_confluence(zone, htf_zones, structure, tf_s, atr, config)
+    if not kind.startswith('ob_'):
         return {'score': 0, 'grade': 'C', 'factors': []}
-    factors = []
-    score = 0
-    checks = [
-        ('sweep',     _check_liquidity_sweep, (zone, bars, swings, tf_s, config)),
-        ('fvg_after', _check_fvg_after,       (zone, zones_all, tf_s, config)),
-        ('htf_align', _check_htf_alignment,   (zone, htf_zones)),
-        ('extremum',  _check_extremum,        (zone, swings, atr, tf_s, config)),
-        ('impulse',   _check_impulse,         (zone, config)),
-        ('pd_align',  _check_premium_discount,(zone, current_price, swings)),
-        ('structure', _check_structure,       (zone, structure)),
-        ('tf_sig',    _check_tf_significance, (tf_s,)),
-    ]
-    for name, fn, args in checks:
-        pts = fn(*args)
-        if pts > 0:
-            factors.append("{} +{}".format(name, pts))
-            score += pts
-    return {'score': score, 'grade': _score_to_grade(score, config), 'factors': factors}
+    # ... OB scoring (8 factors) unchanged ...
 ```
 
 ### 3.5 FVG Strength Refinement (P-Φ1-1b)
@@ -443,7 +463,8 @@ function onDelta(delta: any) {
       "fvg_lookforward_bars": 3,
       "extremum_tolerance_atr": 0.3,
       "strong_impulse_threshold": 0.7,
-      "grade_thresholds": { "a_plus": 8, "a": 6, "b": 4 }
+      "grade_thresholds": { "a_plus": 8, "a": 6, "b": 4 },
+      "fvg_grade_thresholds": { "a_plus": 6, "a": 4, "b": 2 }
     }
   }
 }

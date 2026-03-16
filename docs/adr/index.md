@@ -40,7 +40,7 @@
 | [0026](0026-overlay-level-rendering-rules.md) | Overlay Level Rendering Rules | **Implemented** | 2026-03-01 | levels, merge, labels, LINE_PX, NOTCH_PX, LEVEL_STYLES, L1–L6 | `smc_engine_v1` |
 | [0027](0027-client-side-replay.md) | Client-Side Replay (TradingView-style) | **Implemented** | 2026-02-28 | replay, client-side, scrubber, play/pause, candle-by-candle, TF switch | `replay_v2` |
 | [0028](0028-v2-elimination-engine.md) | Elimination Engine — Display Filter Pipeline | **Implemented** | 2026-03-04 | display filter, budget, proximity, TTL, Focus/Research toggle | `smc_vis_phi0` |
-| [0029](0029-confluence-scoring.md) | OB Confluence Scoring + Grade System | **Implemented** | 2026-03-05 | confluence, 8 factors, grade A+/A/B/C, badge, DisplayBudget, ADR-0030 ready | `smc_vis_phi1` |
+| [0029](0029-confluence-scoring.md) | OB Confluence Scoring + Grade System | **Implemented** | 2026-03-05 | confluence, 8 factors, grade A+/A/B/C, badge, DisplayBudget, FVG scoring P5B | `smc_vis_phi1` |
 | [0030-alt](0030-alt-tf-sovereignty.md) | TF Sovereignty — Cross-TF Projection Styling | **Implemented** | 2026-03-06 | projection, opacity, dashed, cross-TF, OverlayRenderer, TF sovereignty | `smc_vis_phi1` |
 | [0031](0031-bias-banner.md) | Bias Banner — Multi-TF Trend Bias Display | **Implemented** | 2026-03-08 | bias_map, trend_bias, multi-TF, banner, BiasBanner.svelte | `smc_vis_phi2` |
 | [0032](0032-overlay-render-throttle-tf-switch.md) | Overlay Render Throttle + TF Switch Stability | **Implemented** | 2026-03-08 | crosshairMove guard, RAF wheel, center_ms viewCache, TF switch UX | `ui_perf_p1_p5` |

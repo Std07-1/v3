@@ -4,6 +4,7 @@
 - **Дата**: 2026-03-08
 - **Revised**: 2026-03-09 (Rev 2: R_TRADER + R_SMC_CHIEF + R_BUG_HUNTER review incorporated)
 - **Revised**: 2026-03-15 (Rev 3: counter-trend sub_mode + trigger proximity/displacement guards)
+- **Revised**: 2026-03-16 (Rev 4: Audit fixes P1–P6 + P5B FVG candidate gate)
 - **Автор**: R_ARCHITECT
 - **Initiative**: `smc_vis_phi3`
 - **Пов'язані ADR**: ADR-0024 (Engine), ADR-0024c (Zone POI + Context Stack), ADR-0028 (Elimination), ADR-0029 (Confluence), ADR-0030-alt (TF Sovereignty), ADR-0031 (Bias Banner)
@@ -658,7 +659,7 @@ Implementation: В `_filter_for_display()` додати FVG-OB overlap check. FV
 
 Config: `smc.display.fvg_ob_overlap_hide: true` (default).
 
-### 4.7 Config (повна секція) — Rev 2
+### 4.7 Config (повна секція) — Rev 4
 
 ```json
 "smc": {
@@ -666,6 +667,8 @@ Config: `smc.display.fvg_ob_overlap_hide: true` (default).
         "enabled": true,
         "trade_min_grade": "A",
         "trade_min_score": 6,
+        "fvg_trade_min_score": 99,
+        "target_max_atr_distance": 12,
         "max_scenarios": 2,
         "market_phase_enabled": true,
         "phase_hysteresis_bars": 3,
@@ -739,6 +742,33 @@ Fix: 3 new helpers replace `_has_structure_aligned()`. Function signature expand
 
 **Tests:** 513/513 pass (3 new trigger matrix tests). 5-case manual validation confirmed.
 
+### Rev 4: Audit Fixes P1–P6 + P5B FVG Candidate Gate (2026-03-16)
+
+Source: `research/Context.txt` — 6-defect audit of `narrative.py`.
+
+**P1 — 'counter' sub_mode TS contract:** `ui_v4/src/types.ts` — додано `'counter'` до `sub_mode` union type. `NarrativePanel.svelte` — `.counter` CSS клас з жовтою рамкою.
+
+**P2 — Directional gates in target resolution:** `_find_target_key_level()` і `_find_target_swing()` тепер фільтрують: для bullish — target > current_price, для bearish — target < current_price. Раніше могли повернути target позаду ціни.
+
+**P3 — Phase hysteresis fix:** `_detect_market_phase()` виправлено: перевірка `phase_hysteresis_bars` тепер рахує **строго останні N свінгів підряд** (slice від кінця), а не голосування з `count()`/`len()` що нормалізувалось некоректно.
+
+**P4 — Per-scenario trigger class:** `NarrativePanel.svelte` — замінено глобальний `$derived(triggerClass)` на функцію `getTriggerClass(state)` яка визначає CSS клас для кожного сценарію індивідуально.
+
+**P5B — FVG candidate gate (→ ADR-0029):** `_select_candidate_zones()` тепер підтримує FVG-зони для narrative:
+- Новий конфіг-ключ `fvg_trade_min_score: 99` — FVG зона стає кандидатом тільки при score ≥ threshold
+- Значення 99 = FVG-зони отримують grade badge, але НІКОЛИ не стають trade кандидатами (display-only)
+- Щоб увімкнути FVG як trade candidates → знизити `fvg_trade_min_score` до 4
+- Scoring реалізовано в `core/smc/confluence.py:score_fvg_confluence()` (ADR-0029 amendment)
+
+**P6 — HTF-aligned sort bonus:** `_select_candidate_zones()` — зони з HTF alignment отримують +3 sort bonus (sort key: `(-score - bonus, open_ms)`). Гарантує що HTF-aligned зони виходять першими.
+
+**Config changes (Rev 4):**
+- `smc.narrative.fvg_trade_min_score: 99` (P5B gate)
+
+**Files touched:** `core/smc/narrative.py`, `core/smc/confluence.py`, `ui_v4/src/types.ts`, `ui_v4/src/layout/NarrativePanel.svelte`, `config.json`.
+
+**Tests:** 535/535 pass (8 new P1–P6 tests + 6 new P5B confluence tests + 2 P5B candidate gate tests).
+
 ### Feature Gate
 
 `config.json → smc.narrative.enabled = false` за замовчуванням. Zero impact коли вимкнено.
@@ -786,6 +816,9 @@ Fix: 3 new helpers replace `_has_structure_aligned()`. Function signature expand
 | N7 | Counter-trend = HTF aligned but zone opposes HTF direction → 🟡 warning (Rev 3) | Step 3 direction check |
 | N8 | Trigger "ready" requires displacement, not just CHoCH (Rev 3) | `_has_displacement_near()` |
 | N9 | Trigger "triggered" requires proximity ≤ `trigger_proximity_atr` × ATR (Rev 3) | `_is_price_proximate()` |
+| N10 | Target directional gate: bullish target > price, bearish target < price (Rev 4, P2) | `_find_target_key_level()`, `_find_target_swing()` |
+| N11 | FVG candidate gate: FVG zone needs score ≥ `fvg_trade_min_score` to be narrative candidate (Rev 4, P5B) | `_select_candidate_zones()` config check |
+| N12 | HTF-first ranking: HTF-aligned zones sort before non-aligned at equal grade (Rev 4, P6) | +3 sort bonus in `_select_candidate_zones()` |
 
 ### Performance / SLO
 
