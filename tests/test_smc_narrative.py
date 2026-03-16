@@ -542,7 +542,9 @@ def test_target_short_skips_level_above_price():
     pdl_above = _level("pdl", 5100.0)
     pdl_below = _level("pdl", 4900.0)
     # Only pdl_below should match — it's ahead of price for short
-    result = _find_target_key_level([pdl_above, pdl_below], "short", current_price=5000.0)
+    result = _find_target_key_level(
+        [pdl_above, pdl_below], "short", current_price=5000.0
+    )
     assert result is not None
     assert result.price == 4900.0
 
@@ -553,7 +555,9 @@ def test_target_long_skips_level_below_price():
 
     pdh_below = _level("pdh", 4900.0)
     pdh_above = _level("pdh", 5100.0)
-    result = _find_target_key_level([pdh_below, pdh_above], "long", current_price=5000.0)
+    result = _find_target_key_level(
+        [pdh_below, pdh_above], "long", current_price=5000.0
+    )
     assert result is not None
     assert result.price == 5100.0
 
@@ -574,14 +578,24 @@ def test_target_swing_respects_direction():
 
 def test_market_phase_hysteresis_blocks_flicker():
     """P3: mixed [hh, ll, hh, hl] with hysteresis=3 → ranging (not enough consecutive)."""
-    swings = [_swing("hh", 100, 1), _swing("ll", 90, 2), _swing("hh", 110, 3), _swing("hl", 95, 4)]
+    swings = [
+        _swing("hh", 100, 1),
+        _swing("ll", 90, 2),
+        _swing("hh", 110, 3),
+        _swing("hl", 95, 4),
+    ]
     cfg = {"market_phase_enabled": True, "phase_hysteresis_bars": 3}
     assert _detect_market_phase(swings, cfg) == "ranging"
 
 
 def test_market_phase_hysteresis_passes_with_consecutive():
     """P3: 3 consecutive bullish swings [hh, hl, hh] → trending_up."""
-    swings = [_swing("ll", 80, 1), _swing("hh", 110, 2), _swing("hl", 95, 3), _swing("hh", 120, 4)]
+    swings = [
+        _swing("ll", 80, 1),
+        _swing("hh", 110, 2),
+        _swing("hl", 95, 3),
+        _swing("hh", 120, 4),
+    ]
     cfg = {"market_phase_enabled": True, "phase_hysteresis_bars": 3}
     assert _detect_market_phase(swings, cfg) == "trending_up"
 
@@ -610,8 +624,14 @@ def test_htf_aligned_zone_wins_over_higher_score_counter():
         "z_counter": {"score": 8, "grade": "A+", "factors": []},
     }
     result = _select_candidate_zones(
-        [z_aligned, z_counter], grades, 5180.0, "A", 6, [],
-        alignment="aligned", htf_direction="bearish",
+        [z_aligned, z_counter],
+        grades,
+        5180.0,
+        "A",
+        6,
+        [],
+        alignment="aligned",
+        htf_direction="bearish",
     )
     assert len(result) == 2
     # z_aligned should be first despite lower raw score (6+3 bonus > 8)
@@ -629,8 +649,62 @@ def test_htf_ranking_no_bonus_when_mixed():
         "z2": {"score": 8, "grade": "A+", "factors": []},
     }
     result = _select_candidate_zones(
-        [z1, z2], grades, 5120.0, "A", 6, [],
-        alignment="mixed", htf_direction=None,
+        [z1, z2],
+        grades,
+        5120.0,
+        "A",
+        6,
+        [],
+        alignment="mixed",
+        htf_direction=None,
     )
     # z2 wins by raw score when no alignment bonus
     assert result[0].id == "z2"
+
+
+# ── P5B: FVG candidate gate tests ──
+
+
+def test_fvg_candidate_blocked_by_high_threshold():
+    """P5B: FVG zone with score 5 blocked when fvg_trade_min_score=99 (display only)."""
+    from core.smc.narrative import _select_candidate_zones
+
+    z_ob = _zone(kind="ob_bull", high=5100, low=5050, zone_id="ob1")
+    z_fvg = _zone(kind="fvg_bull", high=5200, low=5150, zone_id="fvg1")
+    grades = {
+        "ob1": {"score": 7, "grade": "A", "factors": []},
+        "fvg1": {"score": 5, "grade": "A", "factors": []},
+    }
+    result = _select_candidate_zones(
+        [z_ob, z_fvg],
+        grades,
+        5120.0,
+        "A",
+        6,
+        [],
+        config={"fvg_trade_min_score": 99},
+    )
+    # FVG blocked by threshold, only OB remains
+    assert len(result) == 1
+    assert result[0].id == "ob1"
+
+
+def test_fvg_candidate_allowed_when_threshold_lowered():
+    """P5B: FVG zone passes when fvg_trade_min_score lowered to 4."""
+    from core.smc.narrative import _select_candidate_zones
+
+    z_fvg = _zone(kind="fvg_bull", high=5200, low=5150, zone_id="fvg1")
+    grades = {
+        "fvg1": {"score": 5, "grade": "A", "factors": []},
+    }
+    result = _select_candidate_zones(
+        [z_fvg],
+        grades,
+        5120.0,
+        "A",
+        6,
+        [],
+        config={"fvg_trade_min_score": 4},
+    )
+    assert len(result) == 1
+    assert result[0].id == "fvg1"

@@ -541,6 +541,7 @@ def _synthesize_impl(
         warnings,
         alignment=alignment,
         htf_direction=htf_direction,
+        config=config,
     )
 
     # Step 2b: Invalidation check (SC-7)
@@ -672,15 +673,24 @@ _GRADE_ORDER = {"A+": 0, "A": 1, "B": 2, "C": 3}
 
 
 def _select_candidate_zones(
-    zones, zone_grades, current_price, min_grade, min_score, warnings,
-    alignment=None, htf_direction=None,
+    zones,
+    zone_grades,
+    current_price,
+    min_grade,
+    min_score,
+    warnings,
+    alignment=None,
+    htf_direction=None,
+    config=None,
 ):
-    # type: (List[SmcZone], Dict[str, dict], float, str, int, List[str], Optional[str], Optional[str]) -> List[SmcZone]
+    # type: (List[SmcZone], Dict[str, dict], float, str, int, List[str], Optional[str], Optional[str], Optional[dict]) -> List[SmcZone]
     """Filter + sort zones by grade/score then proximity.
 
+    P5B: FVG zones use fvg_trade_min_score (default 99 = display only).
     P6: HTF-aligned zones get +3 virtual bonus in sort key (ICT doctrine).
     """
     min_grade_idx = _GRADE_ORDER.get(min_grade, 1)
+    fvg_min_score = (config or {}).get("fvg_trade_min_score", 99)
     candidates = []  # type: List[SmcZone]
     for z in zones:
         if z.status == "mitigated":
@@ -689,7 +699,8 @@ def _select_candidate_zones(
         grade = gi.get("grade", "C")
         score = gi.get("score", 0)
         grade_idx = _GRADE_ORDER.get(grade, 3)
-        if grade_idx <= min_grade_idx and score >= min_score:
+        effective_min_score = fvg_min_score if z.kind.startswith("fvg_") else min_score
+        if grade_idx <= min_grade_idx and score >= effective_min_score:
             candidates.append(z)
 
     # Sort: (score + alignment bonus) DESC, proximity ASC

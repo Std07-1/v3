@@ -356,6 +356,7 @@
             "enabled": true,
             "trade_min_grade": "A",
             "trade_min_score": 6,
+            "fvg_trade_min_score": 99,
             "target_max_atr_distance": 12,
             "max_scenarios": 2,
             "market_phase_enabled": true,
@@ -390,6 +391,11 @@
                 "a_plus": 8,
                 "a": 6,
                 "b": 4
+            },
+            "fvg_grade_thresholds": {
+                "a_plus": 6,
+                "a": 4,
+                "b": 2
             }
         },
         "tf_overrides": {

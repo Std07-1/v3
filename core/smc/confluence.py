@@ -218,9 +218,9 @@ def _check_session_sweep(zone, levels, config):
     return 0
 
 
-def _score_to_grade(score, config):
-    # type: (int, dict) -> str
-    gt = config.get("grade_thresholds", {})
+def _score_to_grade(score, config, thresholds_key="grade_thresholds"):
+    # type: (int, dict, str) -> str
+    gt = config.get(thresholds_key, config.get("grade_thresholds", {}))
     if score >= gt.get("a_plus", 8):
         return "A+"
     if score >= gt.get("a", 6):
@@ -228,6 +228,54 @@ def _score_to_grade(score, config):
     if score >= gt.get("b", 4):
         return "B"
     return "C"
+
+
+def score_fvg_confluence(zone, htf_zones, structure, tf_s, atr, config):
+    # type: (dict, list, list, int, float, dict) -> dict
+    """Score FVG zone confluence for display badge (P5B — Variant B).
+
+    4 factors, max 7 pts:
+      F1 gap_size  — gap/ATR ratio → +1/+2/+3
+      F2 htf_align — mid-price inside alive HTF zone → +2
+      F3 tf_sig    — H4+ → +1
+      F4 structure — BOS/CHoCH confirms direction → +1
+    """
+    factors = []
+    score = 0
+
+    # F1: gap size / ATR
+    gap = zone.get("high", 0) - zone.get("low", 0)
+    ratio = gap / atr if atr > 0 else 0.0
+    if ratio > 1.2:
+        factors.append("gap_size +3")
+        score += 3
+    elif ratio > 0.6:
+        factors.append("gap_size +2")
+        score += 2
+    elif ratio > 0.25:
+        factors.append("gap_size +1")
+        score += 1
+
+    # F2: HTF alignment (reuse helper)
+    pts = _check_htf_alignment(zone, htf_zones)
+    if pts > 0:
+        factors.append("htf_align +{}".format(pts))
+        score += pts
+
+    # F3: TF significance (H4+)
+    pts = _check_tf_significance(tf_s)
+    if pts > 0:
+        factors.append("tf_sig +{}".format(pts))
+        score += pts
+
+    # F4: structure confirmation
+    pts = _check_structure(zone, structure)
+    if pts > 0:
+        factors.append("structure +{}".format(pts))
+        score += pts
+
+    grade = _score_to_grade(score, config, "fvg_grade_thresholds")
+    return {"score": score, "grade": grade, "factors": factors}
 
 
 def score_zone_confluence(
@@ -249,7 +297,11 @@ def score_zone_confluence(
     Non-OB zones → {'score': 0, 'grade': 'C', 'factors': []}.
     session_levels: list of session level dicts (kind, price) for F9.
     """
-    if not zone.get("kind", "").startswith("ob_"):
+    kind = zone.get("kind", "")
+    # P5B: FVG zones get their own scoring pipeline
+    if kind.startswith("fvg_"):
+        return score_fvg_confluence(zone, htf_zones, structure, tf_s, atr, config)
+    if not kind.startswith("ob_"):
         return {"score": 0, "grade": "C", "factors": []}
 
     checks = [

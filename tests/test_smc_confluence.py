@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from core.smc.confluence import score_zone_confluence, score_fvg_strength
+from core.smc.confluence import score_zone_confluence, score_fvg_strength, score_fvg_confluence
 
 
 # ── Fixture helpers ──
@@ -149,3 +149,79 @@ class TestFvgStrength:
         """atr=0 → ratio=0 → min base."""
         fvg = {"high": 110, "low": 100}
         assert score_fvg_strength(fvg, atr=0.0) == 0.1
+
+
+# ── P5B: FVG confluence scoring ──
+
+FVG_CFG = {
+    "grade_thresholds": {"a_plus": 8, "a": 6, "b": 4},
+    "fvg_grade_thresholds": {"a_plus": 6, "a": 4, "b": 2},
+}
+
+
+def _fvg_zone(kind="fvg_bull", anchor_ms=50000, high=2710.0, low=2690.0, tf_s=900):
+    return {
+        "id": "{}_XAU_{}_{}".format(kind, tf_s, anchor_ms),
+        "kind": kind,
+        "symbol": "XAU/USD",
+        "tf_s": tf_s,
+        "anchor_bar_ms": anchor_ms,
+        "high": high,
+        "low": low,
+        "status": "active",
+    }
+
+
+class TestFvgConfluenceScoring:
+    """P5B: score_fvg_confluence returns meaningful score/grade for FVG zones."""
+
+    def test_fvg_large_gap_htf_structure(self):
+        """FVG with big gap on H4 + HTF align + structure → score >= 6 → A+."""
+        zone = _fvg_zone(kind="fvg_bull", tf_s=14400, high=2720.0, low=2700.0)
+        htf_zones = [{"high": 2730.0, "low": 2690.0, "status": "active"}]
+        structure = [{"kind": "bos_bull", "time_ms": 55000}]
+        atr = 10.0  # gap=20, ratio=2.0 → +3
+        result = score_fvg_confluence(zone, htf_zones, structure, 14400, atr, FVG_CFG)
+        assert result["score"] >= 6
+        assert result["grade"] == "A+"
+        assert any("gap_size" in f for f in result["factors"])
+        assert any("htf_align" in f for f in result["factors"])
+
+    def test_fvg_small_gap_no_context(self):
+        """FVG with tiny gap, no HTF, no structure → low score."""
+        zone = _fvg_zone(kind="fvg_bear", tf_s=300, high=2701.0, low=2700.0)
+        result = score_fvg_confluence(zone, [], [], 300, 10.0, FVG_CFG)
+        assert result["score"] <= 1
+        assert result["grade"] == "C"
+
+    def test_fvg_dispatched_via_score_zone_confluence(self):
+        """FVG zone dispatched correctly through score_zone_confluence."""
+        zone = _fvg_zone(kind="fvg_bull", tf_s=14400, high=2720.0, low=2700.0)
+        htf_zones = [{"high": 2730.0, "low": 2690.0, "status": "active"}]
+        structure = [{"kind": "bos_bull", "time_ms": 55000}]
+        result = score_zone_confluence(
+            zone, bars=[], swings=[], zones_all=[], htf_zones=htf_zones,
+            structure=structure, atr=10.0, current_price=2710.0,
+            tf_s=14400, config=FVG_CFG,
+        )
+        # Must get non-zero score (was 0 before P5B)
+        assert result["score"] > 0
+        assert result["grade"] != "C"
+
+    def test_fvg_uses_fvg_grade_thresholds(self):
+        """FVG grade uses fvg_grade_thresholds, not OB thresholds."""
+        zone = _fvg_zone(kind="fvg_bull", tf_s=14400, high=2710.0, low=2700.0)
+        # gap/ATR=1.0 → +2, H4 → +1, no HTF/structure = total 3
+        cfg_strict = {
+            "fvg_grade_thresholds": {"a_plus": 6, "a": 5, "b": 4},
+        }
+        result = score_fvg_confluence(zone, [], [], 14400, 10.0, cfg_strict)
+        assert result["score"] == 3
+        assert result["grade"] == "C"  # 3 < b(4) → C with strict thresholds
+
+        cfg_lenient = {
+            "fvg_grade_thresholds": {"a_plus": 6, "a": 4, "b": 2},
+        }
+        result2 = score_fvg_confluence(zone, [], [], 14400, 10.0, cfg_lenient)
+        assert result2["score"] == 3
+        assert result2["grade"] == "B"  # 3 >= b(2) → B with lenient thresholds
