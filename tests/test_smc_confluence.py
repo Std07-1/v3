@@ -1,13 +1,21 @@
 """test_smc_confluence.py — ADR-0029 P-Φ1-1a/1b gate tests."""
+
 from __future__ import annotations
 
 import pytest
-from core.smc.confluence import score_zone_confluence, score_fvg_strength, score_fvg_confluence
+from core.smc.confluence import (
+    score_zone_confluence,
+    score_fvg_strength,
+    score_fvg_confluence,
+)
 
 
 # ── Fixture helpers ──
 
-def _ob_zone(kind="ob_bull", strength=0.8, anchor_ms=50000, high=2700.0, low=2690.0, tf_s=900):
+
+def _ob_zone(
+    kind="ob_bull", strength=0.8, anchor_ms=50000, high=2700.0, low=2690.0, tf_s=900
+):
     return {
         "id": "{}_XAU_{}_{}".format(kind, tf_s, anchor_ms),
         "kind": kind,
@@ -42,16 +50,28 @@ DEFAULT_CFG = {
 
 # ── AC-1: A+ zone (sweep + fvg + htf + impulse + extremum + structure + tf_sig) ──
 
+
 class TestConfluenceScoring:
     def test_a_plus_zone(self):
         """AC-1: OB + sweep + FVG + HTF aligned + extremum + impulse + structure + H4 → A+."""
-        zone = _ob_zone(kind="ob_bull", strength=0.85, anchor_ms=50000,
-                        high=2700.0, low=2690.0, tf_s=14400)
+        zone = _ob_zone(
+            kind="ob_bull",
+            strength=0.85,
+            anchor_ms=50000,
+            high=2700.0,
+            low=2690.0,
+            tf_s=14400,
+        )
         # F1: swing_low swept before anchor
         swings = [_swing("swing_low", 2689.0, 40000)]
         bars = [_bar(41000, 2695.0, 2688.0)]  # bar l < swing price → sweep
         # F2: FVG after anchor
-        fvg_zone = {"kind": "fvg_bull", "anchor_bar_ms": 51000, "high": 2705, "low": 2700}
+        fvg_zone = {
+            "kind": "fvg_bull",
+            "anchor_bar_ms": 51000,
+            "high": 2705,
+            "low": 2700,
+        }
         all_zones = [zone, fvg_zone]
         # F3: HTF zone containing mid
         htf_zones = [{"high": 2710.0, "low": 2680.0, "status": "active"}]
@@ -59,9 +79,16 @@ class TestConfluenceScoring:
         structure = [{"kind": "bos_bull", "time_ms": 55000}]
         # current price in discount for F6
         result = score_zone_confluence(
-            zone=zone, bars=bars, swings=swings, zones_all=all_zones,
-            htf_zones=htf_zones, structure=structure,
-            atr=10.0, current_price=2685.0, tf_s=14400, config=DEFAULT_CFG,
+            zone=zone,
+            bars=bars,
+            swings=swings,
+            zones_all=all_zones,
+            htf_zones=htf_zones,
+            structure=structure,
+            atr=10.0,
+            current_price=2685.0,
+            tf_s=14400,
+            config=DEFAULT_CFG,
         )
         assert result["grade"] == "A+"
         assert result["score"] >= 8
@@ -75,9 +102,16 @@ class TestConfluenceScoring:
         """AC-2: OB без sweep, без HTF, weak impulse → C."""
         zone = _ob_zone(kind="ob_bull", strength=0.3, anchor_ms=50000, tf_s=900)
         result = score_zone_confluence(
-            zone=zone, bars=[], swings=[], zones_all=[zone],
-            htf_zones=[], structure=[],
-            atr=10.0, current_price=2700.0, tf_s=900, config=DEFAULT_CFG,
+            zone=zone,
+            bars=[],
+            swings=[],
+            zones_all=[zone],
+            htf_zones=[],
+            structure=[],
+            atr=10.0,
+            current_price=2700.0,
+            tf_s=900,
+            config=DEFAULT_CFG,
         )
         assert result["grade"] == "C"
         assert result["score"] < 4
@@ -86,9 +120,16 @@ class TestConfluenceScoring:
         """Non-OB zone → grade C, score 0."""
         zone = {"kind": "fvg_bull", "anchor_bar_ms": 50000, "high": 100, "low": 99}
         result = score_zone_confluence(
-            zone=zone, bars=[], swings=[], zones_all=[zone],
-            htf_zones=[], structure=[],
-            atr=10.0, current_price=100.0, tf_s=900, config=DEFAULT_CFG,
+            zone=zone,
+            bars=[],
+            swings=[],
+            zones_all=[zone],
+            htf_zones=[],
+            structure=[],
+            atr=10.0,
+            current_price=100.0,
+            tf_s=900,
+            config=DEFAULT_CFG,
         )
         assert result["score"] == 0
         assert result["grade"] == "C"
@@ -99,9 +140,16 @@ class TestConfluenceScoring:
         swings = [_swing("swing_high", 2710.0, 42000)]
         bars = [_bar(43000, 2711.0, 2700.0)]  # sweep above swing_high
         kwargs = dict(
-            zone=zone, bars=bars, swings=swings, zones_all=[zone],
-            htf_zones=[], structure=[], atr=10.0, current_price=2715.0,
-            tf_s=3600, config=DEFAULT_CFG,
+            zone=zone,
+            bars=bars,
+            swings=swings,
+            zones_all=[zone],
+            htf_zones=[],
+            structure=[],
+            atr=10.0,
+            current_price=2715.0,
+            tf_s=3600,
+            config=DEFAULT_CFG,
         )
         r1 = score_zone_confluence(**kwargs)
         r2 = score_zone_confluence(**kwargs)
@@ -116,9 +164,16 @@ class TestConfluenceScoring:
         # F7: structure confirm
         structure = [{"kind": "bos_bull", "time_ms": 55000}]
         result = score_zone_confluence(
-            zone=zone, bars=[], swings=[], zones_all=[zone, fvg],
-            htf_zones=[], structure=structure,
-            atr=10.0, current_price=2700.0, tf_s=900, config=DEFAULT_CFG,
+            zone=zone,
+            bars=[],
+            swings=[],
+            zones_all=[zone, fvg],
+            htf_zones=[],
+            structure=structure,
+            atr=10.0,
+            current_price=2700.0,
+            tf_s=900,
+            config=DEFAULT_CFG,
         )
         # F2(+2) + F5(+1) + F7(+1) = 4 → B
         assert result["grade"] == "B"
@@ -126,6 +181,7 @@ class TestConfluenceScoring:
 
 
 # ── P-Φ1-1b: FVG Strength ──
+
 
 class TestFvgStrength:
     def test_ac4_large_gap(self):
@@ -200,9 +256,16 @@ class TestFvgConfluenceScoring:
         htf_zones = [{"high": 2730.0, "low": 2690.0, "status": "active"}]
         structure = [{"kind": "bos_bull", "time_ms": 55000}]
         result = score_zone_confluence(
-            zone, bars=[], swings=[], zones_all=[], htf_zones=htf_zones,
-            structure=structure, atr=10.0, current_price=2710.0,
-            tf_s=14400, config=FVG_CFG,
+            zone,
+            bars=[],
+            swings=[],
+            zones_all=[],
+            htf_zones=htf_zones,
+            structure=structure,
+            atr=10.0,
+            current_price=2710.0,
+            tf_s=14400,
+            config=FVG_CFG,
         )
         # Must get non-zero score (was 0 before P5B)
         assert result["score"] > 0

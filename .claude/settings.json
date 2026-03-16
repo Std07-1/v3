@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "Bash(node -e \":*)",
+      "Bash(echo '{\"\"id\"\": \"\"20260315-001\"\", \"\"ts\"\": \"\"2026-03-15T00:00:00Z\"\", \"\"area\"\": \"\"runtime\"\", \"\"initiative\"\": \"\"adr0038_s5_remove_phase25b\"\", \"\"adr_ref\"\": \"\"0038-S5\"\", \"\"status\"\": \"\"active\"\", \"\"reverts\"\": null, \"\"scope\"\": \"\"runtime|config\"\", \"\"files\"\": [\"\"runtime/ingest/polling/m1_poller.py\"\", \"\"runtime/ingest/broker/binance/provider.py\"\", \"\"runtime/ingest/binance_ingest_worker.py\"\", \"\"config.json\"\"], \"\"summary\"\": \"\"Remove Phase 2.5b \\(D1 direct backfill\\) — superseded by ADR-0038 Amendment v2\"\", \"\"details\"\": \"\"Видалено: initial_backfill_d1\\(\\) з M1SymbolPoller, Phase 2.5b блок з _bootstrap_warmup\\(\\), initial_backfill_d1_bars param/field з M1PollerRunner.__init__, fetch_d1_range\\(\\) з BinanceHistoryProvider, блок читання D1 backfill config з binance_ingest_worker, kwarg initial_backfill_d1_bars з M1PollerRunner call, поле bootstrap.initial_backfill_d1_bars з config.json. _parse_klines tf_s параметр збережено \\(використовується внутрішньо з default=60\\).\"\", \"\"why\"\": \"\"Phase 2.5b порушує принцип derive-only HTF \\(ADR-0038 Amendment v2\\): D1 має заповнюватись виключно через DeriveEngine cascade, не прямим fetch від провайдера.\"\", \"\"goal\"\": \"\"Bootstrap запускається без D1 direct backfill. D1 для virgin symbol = порожній, заповнюється derive cascade.\"\", \"\"risks\"\": \"\"Virgin symbol після рестарту матиме порожній D1 до першого derive cycle \\(~1440 M1 барів\\). SMC engine на D1 зоні матиме менше даних холодного старту.\"\", \"\"rollback_steps\"\": [\"\"git revert HEAD\"\", \"\"python -m py_compile runtime/ingest/polling/m1_poller.py\"\"], \"\"notes\"\": \"\"Exit gates: 5/5 green. py_compile: 3/3 OK. Grep на initial_backfill_d1/fetch_d1_range в runtime/ = 0 matches.\"\"}')",
+      "Bash(/dev/null echo:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(xargs grep:*)",
+      "Bash(powershell.exe -Command \"Get-Process -Name python* -ErrorAction SilentlyContinue | Where-Object {$_mmandLine -like ''''*binance_ingest*''''} | Select-Object Id, CommandLine | Format-Table -AutoSize\")",
+      "Bash(tasklist)",
+      "Bash(powershell.exe -Command \"Get-WmiObject Win32_Process -Filter \"\"Name=''python.exe''\"\" | Select-Object ProcessId, CommandLine | Where-Object { $_.CommandLine -like ''*binance*'' } | Format-Table -AutoSize\")",
+      "Bash(powershell.exe -Command \"Get-WmiObject Win32_Process -Filter \"\"ProcessId=22892\"\" | Select-Object ProcessId, CommandLine | Format-Table -AutoSize\")",
+      "Bash(powershell.exe -Command \"Stop-Process -Id 21484 -Force; Stop-Process -Id 5600 -Force; Write-Host ''Killed binance ingest workers 21484 and 5600''\")",
+      "Bash(powershell.exe -Command \"Get-WmiObject Win32_Process -Filter \"\"Name=''python.exe''\"\" | Select-Object ProcessId, CommandLine | Where-Object { $_.CommandLine -like ''*binance_ingest_worker*'' } | Format-Table -AutoSize\")",
+      "Bash(powershell.exe -Command \"Get-WmiObject Win32_Process -Filter \"\"Name=''python.exe''\"\" | Select-Object ProcessId, CommandLine | Where-Object { $_.CommandLine -like ''*binance_ingest_worker*'' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Host \\(''Killed PID '' + $_.ProcessId\\) }\")",
+      "Bash(powershell.exe -Command \"Get-ChildItem ''c:\\\\Aione_projects\\\\v3\\\\data_v3\\\\BTCUSDT\\\\'' -Recurse -Filter ''*.jsonl'' | Where-Object { $_.Directory.Name -eq ''86400'' } | Format-Table FullName, Length, LastWriteTime; Get-ChildItem ''c:\\\\Aione_projects\\\\v3\\\\data_v3\\\\ETHUSDT\\\\'' -Recurse -Filter ''*.jsonl'' | Where-Object { $_.Directory.Name -eq ''86400'' } | Format-Table FullName, Length, LastWriteTime\")",
+      "Bash(powershell.exe -Command \"Get-ChildItem ''c:\\\\Aione_projects\\\\v3\\\\data_v3\\\\'' -Recurse -Directory | Where-Object { $_.Name -eq ''86400'' } | ForEach-Object { Get-ChildItem $_.FullName | Format-Table Name, Length, LastWriteTime }\")",
+      "Bash(powershell.exe -Command \"& { $redis = [System.Net.Sockets.TcpClient]::new\\(''127.0.0.1'', 6379\\); $stream = $redis.GetStream\\(\\); $writer = [System.IO.StreamWriter]::new\\($stream\\); $reader = [System.IO.StreamReader]::new\\($stream\\); $writer.WriteLine\\(''SELECT 1''\\); $writer.Flush\\(\\); $reader.ReadLine\\(\\); $writer.WriteLine\\(''ZCARD v3_local:snap:BTCUSDT:86400''\\); $writer.Flush\\(\\); $reader.ReadLine\\(\\); $writer.WriteLine\\(''ZCARD v3_local:snap:ETHUSDT:86400''\\); $writer.Flush\\(\\); $reader.ReadLine\\(\\); $redis.Close\\(\\) }\")",
+      "Bash(powershell.exe -Command \"Get-WmiObject Win32_Process -Filter \"\"Name=''python.exe''\"\" | Where-Object { $_.CommandLine -like ''*binance_ingest_worker*'' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Host \\(''Killed PID '' + $_.ProcessId\\) }\")"
+    ]
+  }
+}

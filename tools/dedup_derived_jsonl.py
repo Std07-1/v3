@@ -8,6 +8,7 @@
   python -m tools.dedup_derived_jsonl --symbols "XAU/USD"
   python -m tools.dedup_derived_jsonl --all --dry-run
 """
+
 import json
 import os
 import sys
@@ -67,7 +68,13 @@ def _dedup_file(path: str, dry_run: bool) -> int:
         return 0
 
     if dry_run:
-        log.info("DRY_RUN %s: %d lines → %d unique, %d dupes", path, len(lines), len(by_key), dropped)
+        log.info(
+            "DRY_RUN %s: %d lines → %d unique, %d dupes",
+            path,
+            len(lines),
+            len(by_key),
+            dropped,
+        )
         return dropped
 
     # Перезаписування: write tmp → replace (або fallback на Windows якщо файл locked)
@@ -120,8 +127,12 @@ def dedup_symbol(data_root: str, sym: str, dry_run: bool) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Dedup derived JSONL files")
     parser.add_argument("--all", action="store_true", help="Всі символи з config.json")
-    parser.add_argument("--symbols", type=str, help="Comma-separated symbols (XAU/USD,NAS100)")
-    parser.add_argument("--dry-run", action="store_true", help="Тільки показати що б змінилось")
+    parser.add_argument(
+        "--symbols", type=str, help="Comma-separated symbols (XAU/USD,NAS100)"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Тільки показати що б змінилось"
+    )
     parser.add_argument("--data-root", type=str, default=None, help="data_v3 root")
     args = parser.parse_args()
 
@@ -143,7 +154,9 @@ def main() -> None:
         total += dropped
 
     action = "would remove" if args.dry_run else "removed"
-    log.info("DONE: %s %d duplicate entries across %d symbols", action, total, len(symbols))
+    log.info(
+        "DONE: %s %d duplicate entries across %d symbols", action, total, len(symbols)
+    )
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ Regression тест: cascade catchup НЕ повинен створювати
 Root cause (2026-03-15): reset_watermark(0) перед cascade
 catchup дозволяв commit вже існуючих derived барів знову.
 """
+
 from __future__ import annotations
 
 import os
@@ -94,14 +95,17 @@ class TestCascadeNoDupes(unittest.TestCase):
             results.append((open_ms, reason))
 
         # 1000-4000: stale, 5000: duplicate, 6000: new → committed
-        self.assertEqual(results, [
-            (1000, "stale"),
-            (2000, "stale"),
-            (3000, "stale"),
-            (4000, "stale"),
-            (5000, "duplicate"),
-            (6000, None),       # only genuinely new bar passes
-        ])
+        self.assertEqual(
+            results,
+            [
+                (1000, "stale"),
+                (2000, "stale"),
+                (3000, "stale"),
+                (4000, "stale"),
+                (5000, "duplicate"),
+                (6000, None),  # only genuinely new bar passes
+            ],
+        )
 
 
 if __name__ == "__main__":

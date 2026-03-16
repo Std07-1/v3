@@ -10,6 +10,7 @@ Covers:
   - Disappeared zones → delta mitigated_zones (UI removal)
   - Config: SmcDisplayConfig from_dict round-trip
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -24,26 +25,46 @@ from core.smc.types import SmcZone, SmcSwing, SmcLevel, SmcSnapshot
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
+
 def _bar(idx, o, h, low, c, tf_s=300, sym="XAU/USD"):
     # type: (int, float, float, float, float, int, str) -> CandleBar
     return CandleBar(
-        symbol=sym, tf_s=tf_s,
+        symbol=sym,
+        tf_s=tf_s,
         open_time_ms=1000000 + idx * tf_s * 1000,
         close_time_ms=1000000 + idx * tf_s * 1000 + tf_s * 1000,
-        o=o, h=h, low=low, c=c, v=100.0,
-        complete=True, src="test",
+        o=o,
+        h=h,
+        low=low,
+        c=c,
+        v=100.0,
+        complete=True,
+        src="test",
     )
 
 
-def _zone(kind, high, low, anchor_idx=0, strength=0.8, status="active",
-          tf_s=300, sym="XAU/USD"):
+def _zone(
+    kind,
+    high,
+    low,
+    anchor_idx=0,
+    strength=0.8,
+    status="active",
+    tf_s=300,
+    sym="XAU/USD",
+):
     anchor_ms = 1000000 + anchor_idx * tf_s * 1000
     return SmcZone(
         id="{}_{}_{}_{}".format(kind, sym, tf_s, anchor_ms),
-        symbol=sym, tf_s=tf_s, kind=kind,
-        start_ms=anchor_ms, end_ms=None,
-        high=high, low=low,
-        status=status, strength=strength,
+        symbol=sym,
+        tf_s=tf_s,
+        kind=kind,
+        start_ms=anchor_ms,
+        end_ms=None,
+        high=high,
+        low=low,
+        status=status,
+        strength=strength,
         anchor_bar_ms=anchor_ms,
     )
 
@@ -51,7 +72,10 @@ def _zone(kind, high, low, anchor_idx=0, strength=0.8, status="active",
 def _level(kind, price, touches=3, idx=0, tf_s=300, sym="XAU/USD"):
     return SmcLevel(
         id="{}_{}_{}_{}".format(kind, sym, tf_s, int(price * 100)),
-        symbol=sym, tf_s=tf_s, kind=kind, price=price,
+        symbol=sym,
+        tf_s=tf_s,
+        kind=kind,
+        price=price,
         time_ms=1000000 + idx * tf_s * 1000,
         touches=touches,
     )
@@ -59,21 +83,30 @@ def _level(kind, price, touches=3, idx=0, tf_s=300, sym="XAU/USD"):
 
 def _swing(kind, time_ms, price, sym="XAU/USD", tf_s=300):
     from core.smc.types import make_swing_id
+
     return SmcSwing(
         id=make_swing_id(kind, sym, tf_s, time_ms),
-        symbol=sym, tf_s=tf_s, kind=kind,
-        price=price, time_ms=time_ms, confirmed=True,
+        symbol=sym,
+        tf_s=tf_s,
+        kind=kind,
+        price=price,
+        time_ms=time_ms,
+        confirmed=True,
     )
 
 
 def _snap(zones=None, levels=None, swings=None, sym="XAU/USD", tf_s=300):
     import time
+
     return SmcSnapshot(
-        symbol=sym, tf_s=tf_s,
+        symbol=sym,
+        tf_s=tf_s,
         zones=zones or [],
         swings=swings or [],
         levels=levels or [],
-        trend_bias=None, last_bos_ms=None, last_choch_ms=None,
+        trend_bias=None,
+        last_bos_ms=None,
+        last_choch_ms=None,
         computed_at_ms=int(time.time() * 1000),
         bar_count=100,
     )
@@ -94,11 +127,12 @@ def _make_bars(n=50, base_price=2000.0, atr_approx=10.0, tf_s=300):
 
 # ── TestSmcDisplayConfig ────────────────────────────────────────────────
 
+
 class TestSmcDisplayConfig:
     def test_defaults(self):
         cfg = SmcDisplayConfig()
-        assert cfg.proximity_atr_mult == 6.0     # ADR-0028: tuned from 5.0
-        assert cfg.max_display_zones == 10        # ADR-0028: tuned from 8
+        assert cfg.proximity_atr_mult == 6.0  # ADR-0028: tuned from 5.0
+        assert cfg.max_display_zones == 10  # ADR-0028: tuned from 8
         assert cfg.max_display_levels == 6
         assert cfg.max_display_swings == 20
         # ADR-0028 Φ0 new fields
@@ -133,6 +167,7 @@ class TestSmcDisplayConfig:
 
 
 # ── TestProximityFilter ─────────────────────────────────────────────────
+
 
 class TestProximityFilter:
     """Zones/levels far from current price are removed."""
@@ -175,6 +210,7 @@ class TestProximityFilter:
 
 # ── TestHeightGuard ─────────────────────────────────────────────────────
 
+
 class TestHeightGuard:
     """Giant zones retroactively filtered (FVG/OB only)."""
 
@@ -184,8 +220,10 @@ class TestHeightGuard:
         # ATR ≈ 10, max_height = 4.0 * 10 = 40. Zone height = 200 → filtered out
         z = _zone("fvg_bull", high=2100.0, low=1900.0)
         snap = _snap(zones=[z])
-        cfg = SmcConfig(max_zone_height_atr_mult=4.0,
-                        display=SmcDisplayConfig(proximity_atr_mult=999.0))
+        cfg = SmcConfig(
+            max_zone_height_atr_mult=4.0,
+            display=SmcDisplayConfig(proximity_atr_mult=999.0),
+        )
         result = _filter_for_display(snap, bars, cfg)
         assert len(result.zones) == 0, "Giant FVG must be filtered by height guard"
 
@@ -193,8 +231,10 @@ class TestHeightGuard:
         bars = _make_bars(50, base_price=2000.0, atr_approx=10.0)
         z = _zone("fvg_bull", high=2010.0, low=2000.0)  # height=10 < 40
         snap = _snap(zones=[z])
-        cfg = SmcConfig(max_zone_height_atr_mult=4.0,
-                        display=SmcDisplayConfig(proximity_atr_mult=999.0))
+        cfg = SmcConfig(
+            max_zone_height_atr_mult=4.0,
+            display=SmcDisplayConfig(proximity_atr_mult=999.0),
+        )
         result = _filter_for_display(snap, bars, cfg)
         assert len(result.zones) == 1
 
@@ -203,25 +243,36 @@ class TestHeightGuard:
         bars = _make_bars(50, base_price=2000.0, atr_approx=10.0)
         z = _zone("premium", high=2100.0, low=2000.0)  # height=100, would fail guard
         snap = _snap(zones=[z])
-        cfg = SmcConfig(max_zone_height_atr_mult=4.0,
-                        display=SmcDisplayConfig(proximity_atr_mult=999.0))
+        cfg = SmcConfig(
+            max_zone_height_atr_mult=4.0,
+            display=SmcDisplayConfig(proximity_atr_mult=999.0),
+        )
         result = _filter_for_display(snap, bars, cfg)
         assert len(result.zones) == 1
 
 
 # ── TestCaps ────────────────────────────────────────────────────────────
 
+
 class TestCaps:
     """Display caps enforced."""
 
     def test_zone_cap(self):
         bars = _make_bars(50, base_price=2000.0, atr_approx=10.0)
-        zones = [_zone("ob_bull", high=2000.0 + i, low=1999.0 + i, anchor_idx=i,
-                        strength=round(1.0 - i * 0.05, 2))
-                 for i in range(15)]
+        zones = [
+            _zone(
+                "ob_bull",
+                high=2000.0 + i,
+                low=1999.0 + i,
+                anchor_idx=i,
+                strength=round(1.0 - i * 0.05, 2),
+            )
+            for i in range(15)
+        ]
         snap = _snap(zones=zones)
-        cfg = SmcConfig(display=SmcDisplayConfig(
-            proximity_atr_mult=999.0, max_display_zones=5))
+        cfg = SmcConfig(
+            display=SmcDisplayConfig(proximity_atr_mult=999.0, max_display_zones=5)
+        )
         result = _filter_for_display(snap, bars, cfg)
         assert len(result.zones) == 5
 
@@ -230,15 +281,18 @@ class TestCaps:
         bars = _make_bars(50, base_price=2000.0, atr_approx=10.0)
         levels = [_level("eq_high", price=2000.0 + i, idx=i) for i in range(12)]
         snap = _snap(levels=levels)
-        cfg = SmcConfig(display=SmcDisplayConfig(
-            proximity_atr_mult=999.0, max_display_levels=4))
+        cfg = SmcConfig(
+            display=SmcDisplayConfig(proximity_atr_mult=999.0, max_display_levels=4)
+        )
         result = _filter_for_display(snap, bars, cfg)
         # ADR-0024b: no level cap — all 12 levels shown
         assert len(result.levels) == 12
 
     def test_swing_cap(self):
-        swings = [_swing("hh", time_ms=1000000 + i * 300000, price=2000.0 + i)
-                  for i in range(30)]
+        swings = [
+            _swing("hh", time_ms=1000000 + i * 300000, price=2000.0 + i)
+            for i in range(30)
+        ]
         bars = _make_bars(50, base_price=2000.0, atr_approx=10.0)
         snap = _snap(swings=swings)
         cfg = SmcConfig(display=SmcDisplayConfig(max_display_swings=10))
@@ -247,8 +301,10 @@ class TestCaps:
 
     def test_swing_cap_keeps_latest(self):
         """Last N swings are kept (most recent)."""
-        swings = [_swing("hh", time_ms=1000000 + i * 300000, price=2000.0 + i)
-                  for i in range(30)]
+        swings = [
+            _swing("hh", time_ms=1000000 + i * 300000, price=2000.0 + i)
+            for i in range(30)
+        ]
         bars = _make_bars(50, base_price=2000.0, atr_approx=10.0)
         snap = _snap(swings=swings)
         cfg = SmcConfig(display=SmcDisplayConfig(max_display_swings=5))
@@ -258,6 +314,7 @@ class TestCaps:
 
 
 # ── TestDisappearedInDelta ──────────────────────────────────────────────
+
 
 class TestDisappearedInDelta:
     """Zones that leave display filter → mitigated_zones in delta (UI removal)."""
@@ -281,6 +338,7 @@ class TestDisappearedInDelta:
 
 # ── TestEmptyBarsNoFilter ───────────────────────────────────────────────
 
+
 class TestEmptyBarsNoFilter:
     """Empty bars → snapshot returned as-is (no crash)."""
 
@@ -294,11 +352,15 @@ class TestEmptyBarsNoFilter:
 
 # ── TestDecayCurve ──────────────────────────────────────────────────────
 
+
 class TestDecayCurve:
     """D1 decay: starts at decay_start_bars, accelerates at decay_fast_bars."""
 
-    def _run_lifecycle(self, age_bars, initial_strength=0.8, decay_start=30, decay_fast=150):
+    def _run_lifecycle(
+        self, age_bars, initial_strength=0.8, decay_start=30, decay_fast=150
+    ):
         from core.smc.engine import _update_zone_lifecycle
+
         tf_s = 300
         anchor_ms = 1000000
         bar_ms = anchor_ms + age_bars * tf_s * 1000
@@ -306,12 +368,15 @@ class TestDecayCurve:
         z = dataclasses.replace(z, anchor_bar_ms=anchor_ms)
         active = {z.id: z}
         # F10: decay params at SmcConfig root
-        cfg = SmcConfig(max_zones_per_tf=100,
-                        decay_start_bars=decay_start,
-                        decay_fast_bars=decay_fast)
+        cfg = SmcConfig(
+            max_zones_per_tf=100,
+            decay_start_bars=decay_start,
+            decay_fast_bars=decay_fast,
+        )
         bar = _bar(0, 2060.0, 2065.0, 2055.0, 2060.0, tf_s=tf_s)
         bar = dataclasses.replace(bar, open_time_ms=bar_ms)
         from core.smc.engine import _update_zone_lifecycle
+
         result = _update_zone_lifecycle([z], active, bar, cfg, tf_s)
         return result[0] if result else None
 

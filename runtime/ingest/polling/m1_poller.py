@@ -973,7 +973,8 @@ class M1PollerRunner:
         #      with only a few bars by tick publisher before ingest worker start.
         #      Потрібна активна сесія провайдера для fetch.
         virgin_symbols = [
-            p for p in self._pollers
+            p
+            for p in self._pollers
             if p._bars_on_disk < self._initial_backfill_m1_bars  # noqa: SLF001
         ]
         if virgin_symbols:

@@ -755,6 +755,7 @@ Source: `research/Context.txt` — 6-defect audit of `narrative.py`.
 **P4 — Per-scenario trigger class:** `NarrativePanel.svelte` — замінено глобальний `$derived(triggerClass)` на функцію `getTriggerClass(state)` яка визначає CSS клас для кожного сценарію індивідуально.
 
 **P5B — FVG candidate gate (→ ADR-0029):** `_select_candidate_zones()` тепер підтримує FVG-зони для narrative:
+
 - Новий конфіг-ключ `fvg_trade_min_score: 99` — FVG зона стає кандидатом тільки при score ≥ threshold
 - Значення 99 = FVG-зони отримують grade badge, але НІКОЛИ не стають trade кандидатами (display-only)
 - Щоб увімкнути FVG як trade candidates → знизити `fvg_trade_min_score` до 4
@@ -763,6 +764,7 @@ Source: `research/Context.txt` — 6-defect audit of `narrative.py`.
 **P6 — HTF-aligned sort bonus:** `_select_candidate_zones()` — зони з HTF alignment отримують +3 sort bonus (sort key: `(-score - bonus, open_ms)`). Гарантує що HTF-aligned зони виходять першими.
 
 **Config changes (Rev 4):**
+
 - `smc.narrative.fvg_trade_min_score: 99` (P5B gate)
 
 **Files touched:** `core/smc/narrative.py`, `core/smc/confluence.py`, `ui_v4/src/types.ts`, `ui_v4/src/layout/NarrativePanel.svelte`, `config.json`.

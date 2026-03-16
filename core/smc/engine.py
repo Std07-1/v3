@@ -675,7 +675,8 @@ class SmcEngine:
                 "h4_h",
                 "h4_l",  # H4
             }
-        ),  # H1: no session levels — H/L visible from candles directly
+        )
+        | _SESSION_ALL,
         14400: frozenset(
             {
                 "pdh",
@@ -683,7 +684,8 @@ class SmcEngine:
                 "dh",
                 "dl",  # D1
             }
-        ),  # H4: no session levels — session = 1-2 candles, obvious visually
+        )
+        | _SESSION_PREV_ONLY,
         86400: frozenset(),  # D1 viewer: candles visible, no key levels
     }  # type: Dict[int, frozenset]
 
