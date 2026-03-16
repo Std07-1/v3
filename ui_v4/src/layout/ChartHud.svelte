@@ -134,13 +134,17 @@
     );
 
     // Entry 078 §5: Price color — green/red when streaming, theme text when idle
-    let priceColor = $derived(
-        streamState !== "streaming" || lastPrice == null || lastBarOpen == null
-            ? themeText
-            : lastPrice >= lastBarOpen
-              ? "#26a69a"
-              : "#ef5350",
-    );
+    let priceColor = $derived.by(() => {
+        if (streamState !== "streaming") return themeText;
+        if (
+            lastPrice == null ||
+            lastBarOpen == null ||
+            !Number.isFinite(lastPrice) ||
+            !Number.isFinite(lastBarOpen)
+        )
+            return themeText;
+        return lastPrice >= lastBarOpen ? "#26a69a" : "#ef5350";
+    });
 
     // ─── Pulse animation on change ───
     let pulseSymbol = $state(false);
@@ -202,10 +206,11 @@
         tfOpen = !tfOpen;
     }
 
-    // Close dropdowns on outside click
+    // Close dropdowns + micro-card on outside click
     function handleWindowClick() {
         symbolOpen = false;
         tfOpen = false;
+        microCardOpen = false;
     }
 
     // ─── P3.13: Favorites ───
@@ -272,8 +277,6 @@
                 {currentSymbol || "…"}
             </button>
 
-            <span class="hud-sep">·</span>
-
             <!-- TF slot -->
             <button
                 class="hud-slot"
@@ -284,8 +287,6 @@
             >
                 {currentTf || "…"}
             </button>
-
-            <span class="hud-sep">·</span>
 
             <!-- Price -->
             <span class="hud-price" style:color={priceColor}
@@ -313,9 +314,8 @@
                 >{isFaved ? "★" : "☆"}</button
             >
 
-            <!-- ADR-0031: HTF bias toggle + pills -->
-            <span class="hud-sep">·</span>
-            {#if biasVisible && biasPills.length > 0}
+            <!-- ADR-0031: HTF bias pills (only when shell is not active) -->
+            {#if !shell && biasVisible && biasPills.length > 0}
                 <button
                     class="hud-bias-area"
                     onclick={toggleBias}
@@ -334,7 +334,7 @@
                         >
                     {/each}
                 </button>
-            {:else}
+            {:else if !shell}
                 <button
                     class="hud-bias-toggle"
                     onclick={toggleBias}
@@ -344,7 +344,6 @@
 
             <!-- ADR-0033: Narrative inline (hidden when shell active) -->
             {#if narrative && !shell}
-                <span class="hud-sep">·</span>
                 <span
                     class="hud-narrative"
                     class:trade={narrative.mode === "trade"}
@@ -459,20 +458,77 @@
                 </span>
             {/if}
 
-            <!-- ADR-0036: Shell stage badge (replaces narrative inline) -->
+            <!-- ADR-0036: Shell stage badge + dropdown micro-card -->
             {#if shell}
-                <span class="hud-sep">·</span>
-                <button
-                    class="shell-stage"
-                    onclick={toggleMicroCard}
-                    type="button"
-                    title="Click to expand details"
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div
+                    class="shell-stage-wrap"
+                    onclick={(e) => e.stopPropagation()}
                 >
-                    <span class="shell-stlbl">{shell.stage_label}</span>
-                    {#if shell.stage_context}
-                        <span class="shell-stctx">{shell.stage_context}</span>
+                    <button
+                        class="shell-stage"
+                        onclick={toggleMicroCard}
+                        type="button"
+                        title="Натисніть для деталей"
+                    >
+                        <span class="shell-stlbl">{shell.stage_label}</span>
+                        {#if shell.stage_context}
+                            <span class="shell-stctx"
+                                >{shell.stage_context}</span
+                            >
+                        {/if}
+                    </button>
+                    <!-- Micro-card dropdown -->
+                    {#if shell.micro_card && microCardOpen}
+                        <div class="shell-mc open">
+                            <div class="mc-grid">
+                                <div
+                                    class="mc-field"
+                                    title="Поточний торговий режим"
+                                >
+                                    <div class="mc-label">Режим</div>
+                                    <div class="mc-val acc">
+                                        {shell.micro_card.mode_text}
+                                    </div>
+                                </div>
+                                <div
+                                    class="mc-field"
+                                    title="Причина поточного режиму"
+                                >
+                                    <div class="mc-label">Чому</div>
+                                    <div class="mc-val">
+                                        {shell.micro_card.why_text}
+                                    </div>
+                                </div>
+                                <div
+                                    class="mc-field"
+                                    title="Яка умова потрібна для переходу"
+                                >
+                                    <div class="mc-label">Що потрібно</div>
+                                    <div class="mc-val">
+                                        {shell.micro_card.what_needed}
+                                    </div>
+                                </div>
+                                {#if shell.micro_card.what_cancels && shell.micro_card.what_cancels !== "—"}
+                                    <div
+                                        class="mc-field"
+                                        title="Умова, яка скасує поточний сценарій"
+                                    >
+                                        <div class="mc-label">Що скасує</div>
+                                        <div class="mc-val red">
+                                            {shell.micro_card.what_cancels}
+                                        </div>
+                                    </div>
+                                {/if}
+                                {#if shell.micro_card.warning}
+                                    <div class="mc-warn">
+                                        ⚠ {shell.micro_card.warning}
+                                    </div>
+                                {/if}
+                            </div>
+                        </div>
                     {/if}
-                </button>
+                </div>
             {/if}
         </div>
     </div>
@@ -517,15 +573,17 @@
                             </span>
                             {#if chip.chip_state === "brk"}<span
                                     class="chip-dot brk-dot"
+                                    title="Пробій структури (BOS)"
                                 ></span>{/if}
                             {#if chip.chip_state === "cfl"}<span
                                     class="chip-dot cfl-dot"
+                                    title="Конфлікт напрямків"
                                 ></span>{/if}
                         </span>
                     {/each}
                 </div>
             {/if}
-            {#if shell.tactical_strip.tag_text}
+            {#if shell.tactical_strip.tag_text && shell.tactical_strip.alignment_type !== "htf_aligned"}
                 <span
                     class="strip-tag"
                     class:warn={shell.tactical_strip.tag_variant === "warn"}
@@ -542,35 +600,6 @@
             type="button"
             title="показати / сховати TF strip"
         ></button>
-    {/if}
-
-    <!-- ADR-0036: Micro-card (expandable) -->
-    {#if shell?.micro_card}
-        <div class="shell-mc" class:open={microCardOpen}>
-            <div class="mc-grid">
-                <div class="mc-field">
-                    <div class="mc-label">Режим</div>
-                    <div class="mc-val acc">{shell.micro_card.mode_text}</div>
-                </div>
-                <div class="mc-field">
-                    <div class="mc-label">Чому</div>
-                    <div class="mc-val">{shell.micro_card.why_text}</div>
-                </div>
-                <div class="mc-field">
-                    <div class="mc-label">Що потрібно</div>
-                    <div class="mc-val">{shell.micro_card.what_needed}</div>
-                </div>
-                <div class="mc-field">
-                    <div class="mc-label">Що скасує</div>
-                    <div class="mc-val red">
-                        {shell.micro_card.what_cancels}
-                    </div>
-                </div>
-                {#if shell.micro_card.warning}
-                    <div class="mc-warn">⚠ {shell.micro_card.warning}</div>
-                {/if}
-            </div>
-        </div>
     {/if}
 
     <!-- Symbol dropdown -->
@@ -704,6 +733,7 @@
         opacity: 0.35;
         font-size: 13px;
         user-select: none;
+        display: none;
     }
 
     .hud-price {
@@ -1202,7 +1232,8 @@
         height: 20px;
         padding: 0 12px;
         gap: 4px;
-        background: rgba(10, 12, 18, 0.95);
+        background: transparent;
+        margin-top: 2px;
         overflow: hidden;
         max-height: 20px;
         transition:
@@ -1217,7 +1248,7 @@
     .strip-handle {
         all: unset;
         height: 4px;
-        background: rgba(10, 12, 18, 0.95);
+        background: transparent;
         cursor: pointer;
         display: flex;
         align-items: center;
@@ -1339,24 +1370,36 @@
         color: rgba(252, 129, 129, 0.45);
     }
 
-    /* ─── Micro-card (expandable) ─── */
+    /* ─── Micro-card (dropdown from shell-stage) ─── */
+    .shell-stage-wrap {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+    }
     .shell-mc {
-        max-height: 0;
-        opacity: 0;
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        min-width: 260px;
         overflow: hidden;
-        transition:
-            max-height 360ms cubic-bezier(0.22, 1, 0.36, 1),
-            opacity 180ms;
-        background: rgba(13, 15, 21, 0.92);
+        background: rgba(13, 15, 21, 0.94);
         backdrop-filter: blur(16px);
         border-left: 2px solid var(--sa, rgba(255, 255, 255, 0.15));
         border-bottom: 0.5px solid var(--sb, rgba(255, 255, 255, 0.07));
-        margin-left: 12px;
-        border-radius: 0 0 6px 0;
+        border-radius: 0 6px 6px 6px;
+        z-index: 90;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+        animation: mc-drop 180ms cubic-bezier(0.22, 1, 0.36, 1);
     }
-    .shell-mc.open {
-        max-height: 200px;
-        opacity: 1;
+    @keyframes mc-drop {
+        from {
+            opacity: 0;
+            transform: translateY(-4px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
     }
     .mc-grid {
         display: grid;
@@ -1367,6 +1410,13 @@
     .mc-field {
         display: flex;
         flex-direction: column;
+        cursor: default;
+        border-radius: 3px;
+        padding: 2px 3px;
+        transition: background 0.12s;
+    }
+    .mc-field:hover {
+        background: rgba(255, 255, 255, 0.04);
     }
     .mc-label {
         font-size: 8px;
