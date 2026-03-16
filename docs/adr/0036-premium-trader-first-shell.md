@@ -1,6 +1,6 @@
 # ADR-0036: Premium Trader-First Shell for UI v4
 
-- **Статус**: Proposed (Amendment v3 — 2026-03-14)
+- **Статус**: Implemented (P1–P5 complete, P6 partial — signal = ADR-0039)
 - **Дата**: 2026-03-09 (original) / 2026-03-14 (amendment v2) / 2026-03-14 (amendment v3)
 - **Автор**: R_ARCHITECT
 - **Initiative**: `ui_v4_premium_shell_v1`

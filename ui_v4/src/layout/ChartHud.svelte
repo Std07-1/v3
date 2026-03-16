@@ -314,6 +314,70 @@
                 >{isFaved ? "★" : "☆"}</button
             >
 
+            <!-- ADR-0036: Inline TF Strip (after star) -->
+            {#if shell?.tactical_strip}
+                <button
+                    class="strip-toggle"
+                    class:vis={stripCollapsed}
+                    onclick={toggleStrip}
+                    type="button"
+                    title="показати TF strip"
+                ></button>
+                {#if !stripCollapsed}
+                    <button class="shell-strip-inline" onclick={toggleStrip} type="button" title="сховати TF strip">
+                        {#if shell.tactical_strip.alignment_type === "htf_aligned"}
+                            <span class="al-pill">
+                                <span
+                                    class="al-word"
+                                    class:bull={shell.tactical_strip
+                                        .alignment_direction === "bullish"}
+                                    class:bear={shell.tactical_strip
+                                        .alignment_direction === "bearish"}
+                                >
+                                    {shell.tactical_strip
+                                        .alignment_direction === "bullish"
+                                        ? "ALIGNED ▲"
+                                        : "ALIGNED ▼"}
+                                </span>
+                            </span>
+                        {:else}
+                            <span class="shell-chips">
+                                {#each shell.tactical_strip.chips as chip}
+                                    <span
+                                        class="shell-chip"
+                                        class:brk={chip.chip_state === "brk"}
+                                        class:cfl={chip.chip_state === "cfl"}
+                                    >
+                                        <span class="chip-tf"
+                                            >{chip.tf_label}</span
+                                        >
+                                        <span
+                                            class="chip-arr"
+                                            class:bull={chip.direction ===
+                                                "bullish"}
+                                            class:bear={chip.direction ===
+                                                "bearish"}
+                                        >
+                                            {chip.direction === "bullish"
+                                                ? "▲"
+                                                : "▼"}
+                                        </span>
+                                        {#if chip.chip_state === "brk"}<span
+                                                class="chip-dot brk-dot"
+                                                title="Пробій структури (BOS)"
+                                            ></span>{/if}
+                                        {#if chip.chip_state === "cfl"}<span
+                                                class="chip-dot cfl-dot"
+                                                title="Конфлікт напрямків"
+                                            ></span>{/if}
+                                    </span>
+                                {/each}
+                            </span>
+                        {/if}
+                    </button>
+                {/if}
+            {/if}
+
             <!-- ADR-0031: HTF bias pills (only when shell is not active) -->
             {#if !shell && biasVisible && biasPills.length > 0}
                 <button
@@ -463,6 +527,7 @@
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div
                     class="shell-stage-wrap"
+                    role="presentation"
                     onclick={(e) => e.stopPropagation()}
                 >
                     <button
@@ -532,75 +597,6 @@
             {/if}
         </div>
     </div>
-
-    <!-- ADR-0036: TF Strip -->
-    {#if shell?.tactical_strip}
-        <div class="shell-strip" class:collapsed={stripCollapsed}>
-            {#if shell.tactical_strip.alignment_type === "htf_aligned"}
-                <div class="al-pill">
-                    <span
-                        class="al-word"
-                        class:bull={shell.tactical_strip.alignment_direction ===
-                            "bullish"}
-                        class:bear={shell.tactical_strip.alignment_direction ===
-                            "bearish"}
-                    >
-                        {shell.tactical_strip.alignment_direction === "bullish"
-                            ? "ALIGNED ▲"
-                            : "ALIGNED ▼"}
-                    </span>
-                    <span class="al-tfs">
-                        {shell.tactical_strip.chips
-                            .map((c) => c.tf_label)
-                            .join(" · ")}
-                    </span>
-                </div>
-            {:else}
-                <div class="shell-chips">
-                    {#each shell.tactical_strip.chips as chip}
-                        <span
-                            class="shell-chip"
-                            class:brk={chip.chip_state === "brk"}
-                            class:cfl={chip.chip_state === "cfl"}
-                        >
-                            <span class="chip-tf">{chip.tf_label}</span>
-                            <span
-                                class="chip-arr"
-                                class:bull={chip.direction === "bullish"}
-                                class:bear={chip.direction === "bearish"}
-                            >
-                                {chip.direction === "bullish" ? "▲" : "▼"}
-                            </span>
-                            {#if chip.chip_state === "brk"}<span
-                                    class="chip-dot brk-dot"
-                                    title="Пробій структури (BOS)"
-                                ></span>{/if}
-                            {#if chip.chip_state === "cfl"}<span
-                                    class="chip-dot cfl-dot"
-                                    title="Конфлікт напрямків"
-                                ></span>{/if}
-                        </span>
-                    {/each}
-                </div>
-            {/if}
-            {#if shell.tactical_strip.tag_text && shell.tactical_strip.alignment_type !== "htf_aligned"}
-                <span
-                    class="strip-tag"
-                    class:warn={shell.tactical_strip.tag_variant === "warn"}
-                    class:danger={shell.tactical_strip.tag_variant === "danger"}
-                >
-                    {shell.tactical_strip.tag_text}
-                </span>
-            {/if}
-        </div>
-        <!-- Strip handle: click to collapse/expand TF strip -->
-        <button
-            class="strip-handle"
-            onclick={toggleStrip}
-            type="button"
-            title="показати / сховати TF strip"
-        ></button>
-    {/if}
 
     <!-- Symbol dropdown -->
     {#if symbolOpen}
@@ -1225,57 +1221,41 @@
         max-width: 220px;
     }
 
-    /* ─── TF Strip ─── */
-    .shell-strip {
-        display: flex;
-        align-items: center;
-        height: 20px;
-        padding: 0 12px;
-        gap: 4px;
-        background: transparent;
-        margin-top: 2px;
-        overflow: hidden;
-        max-height: 20px;
-        transition:
-            max-height 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94),
-            opacity 220ms;
-        opacity: 1;
-    }
-    .shell-strip.collapsed {
-        max-height: 0;
+    /* ─── Inline TF Strip (in hud-row, after star) ─── */
+    .strip-toggle {
+        all: unset;
+        width: 3px;
+        height: 14px;
+        border-radius: 1.5px;
+        background: rgba(255, 255, 255, 0.12);
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: background 140ms, opacity 180ms;
+        display: none;
         opacity: 0;
     }
-    .strip-handle {
+    .strip-toggle.vis {
+        display: block;
+        opacity: 1;
+        background: rgba(255, 255, 255, 0.18);
+    }
+    .strip-toggle.vis:hover {
+        background: rgba(255, 255, 255, 0.35);
+    }
+    .shell-strip-inline {
         all: unset;
-        height: 4px;
-        background: transparent;
-        cursor: pointer;
-        display: flex;
+        display: inline-flex;
         align-items: center;
-        justify-content: center;
-        transition: background 140ms;
-        position: relative;
-        flex-shrink: 0;
+        gap: 0;
+        cursor: pointer;
+        border-radius: 3px;
+        transition: background 120ms;
     }
-    .strip-handle::after {
-        content: "";
-        width: 24px;
-        height: 1.5px;
-        border-radius: 1px;
-        background: rgba(255, 255, 255, 0.12);
-        transition:
-            background 140ms,
-            width 140ms;
-    }
-    .strip-handle:hover {
+    .shell-strip-inline:hover {
         background: rgba(255, 255, 255, 0.04);
     }
-    .strip-handle:hover::after {
-        background: rgba(255, 255, 255, 0.28);
-        width: 32px;
-    }
     .al-pill {
-        display: flex;
+        display: inline-flex;
         align-items: center;
         gap: 7px;
     }
@@ -1290,21 +1270,16 @@
     .al-word.bear {
         color: rgba(252, 129, 129, 0.8);
     }
-    .al-tfs {
-        font-size: 9px;
-        color: rgba(255, 255, 255, 0.18);
-        text-transform: uppercase;
-    }
     .shell-chips {
-        display: flex;
+        display: inline-flex;
         gap: 0;
     }
     .shell-chip {
-        display: flex;
+        display: inline-flex;
         align-items: center;
-        gap: 3px;
-        padding: 0 7px;
-        height: 20px;
+        gap: 2px;
+        padding: 0 5px;
+        height: 18px;
         font-size: 9px;
         position: relative;
     }
@@ -1355,19 +1330,6 @@
     }
     .cfl-dot {
         background: rgba(252, 129, 129, 0.85);
-    }
-    .strip-tag {
-        margin-left: auto;
-        font-size: 9px;
-        font-weight: 500;
-        text-transform: uppercase;
-        color: rgba(52, 211, 153, 0.35);
-    }
-    .strip-tag.warn {
-        color: rgba(251, 191, 36, 0.45);
-    }
-    .strip-tag.danger {
-        color: rgba(252, 129, 129, 0.45);
     }
 
     /* ─── Micro-card (dropdown from shell-stage) ─── */

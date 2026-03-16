@@ -109,8 +109,8 @@ def _zone_direction(zone):
 def _find_invalidation(zone):
     # type: (SmcZone) -> str
     if "bear" in zone.kind:
-        return "Вище {:.0f}".format(zone.high)
-    return "Нижче {:.0f}".format(zone.low)
+        return "Вище {:.0f} \u2014 зона пробита".format(zone.high)
+    return "Нижче {:.0f} \u2014 зона пробита".format(zone.low)
 
 
 def _is_invalidated(zone, current_price):
@@ -237,9 +237,7 @@ def _resolve_trigger_desc(snapshot, zone, viewer_tf_s, current_price, atr, confi
     if state == "in_zone":
         choch = _find_qualifying_structure_break(snapshot, zone)
         if choch is not None:
-            return "У зоні: CHoCH{a} є, чекаємо імпульс".format(
-                a=direction_arrow
-            )
+            return "У зоні: CHoCH{a} є, чекаємо імпульс".format(a=direction_arrow)
         return "У зоні: чекаємо {tf} CHoCH{a}".format(tf=tf_label, a=direction_arrow)
     # approaching
     if current_price < zone.low:
@@ -248,7 +246,7 @@ def _resolve_trigger_desc(snapshot, zone, viewer_tf_s, current_price, atr, confi
         dist = current_price - zone.high
     else:
         dist = 0.0
-    return "Наближення: {:.0f} пт від зони".format(dist)
+    return "{:.0f} пт до зони".format(dist)
 
 
 # ── Target Resolution ───────────────────────────────────────
@@ -361,11 +359,7 @@ def _build_fvg_context(snapshot, zone, atr, config):
             mid = (z.low + z.high) / 2.0
             zone_mid = (zone.low + zone.high) / 2.0
             if abs(mid - zone_mid) <= 2.0 * atr:
-                return (
-                    "FVG гап на {:.0f} \u2014 ребаланс перед зоною".format(
-                        mid
-                    )
-                )
+                return "FVG гап на {:.0f} \u2014 ребаланс перед зоною".format(mid)
     return ""
 
 
@@ -406,9 +400,7 @@ def _build_bias_summary(alignment, htf_direction, bias_map, zone, is_counter=Fal
     if alignment == "mixed":
         d1_arrow = "\u2191" if d1 == "bullish" else "\u2193"
         h4_arrow = "\u2191" if h4 == "bullish" else "\u2193"
-        return "D1{d1} H4{h4} \u2014 змішаний: чекати або зменшити розмір".format(
-            d1=d1_arrow, h4=h4_arrow
-        )
+        return "D1{d1} H4{h4}".format(d1=d1_arrow, h4=h4_arrow)
     # aligned
     if is_counter:
         return "HTF {dir} \u2014 контртрендова зона, зменшити розмір".format(

@@ -305,7 +305,7 @@ class TestMicroCard:
         )
         result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG)
         card = result.micro_card
-        assert card.why_text == "Bearish D1+H4"
+        assert card.why_text == "OB▼ A(7) 2860–2870 · Bearish D1+H4"
         assert card.what_needed == "CHoCH на M15"
         assert card.what_cancels == "Above 2880"
 

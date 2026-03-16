@@ -225,7 +225,22 @@ def _build_micro_card(
     sessions_active: bool,
 ) -> MicroCard:
     mode_text = mode_texts.get(stage, stage.upper())
-    why_text = narrative.bias_summary or ""
+    # Direction hint for prepare / ready ("готуватись до чого?")
+    if stage == "prepare" and narrative.scenarios:
+        d = narrative.scenarios[0].direction
+        if d == "long":
+            mode_text += " до лонгу"
+        elif d == "short":
+            mode_text += " до шорту"
+    # why_text: zone context (entry_desc) + HTF bias for full picture
+    why_parts: List[str] = []
+    if narrative.scenarios:
+        sc = narrative.scenarios[0]
+        if sc.entry_desc:
+            why_parts.append(sc.entry_desc)
+    if narrative.bias_summary:
+        why_parts.append(narrative.bias_summary)
+    why_text = " · ".join(why_parts)
     what_needed = ""
     what_cancels = ""
     if narrative.scenarios:

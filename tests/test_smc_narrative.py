@@ -255,7 +255,7 @@ def test_trigger_approaching():
     )
 
     assert nb.scenarios[0].trigger == "approaching"
-    assert "пт від зони" in nb.scenarios[0].trigger_desc
+    assert "пт до зони" in nb.scenarios[0].trigger_desc
 
 
 # ── 8. test_trigger_in_zone ──────────────────────────────

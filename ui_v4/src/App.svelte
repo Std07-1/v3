@@ -291,7 +291,7 @@
         const last = candles[candles.length - 1];
         lastPrice = last.c;
         lastBarOpen = last.o;
-        lastBarTs = last.t_ms;
+        lastBarTs = Date.now(); // time of last WS frame, not candle open
       }
     }
   });
