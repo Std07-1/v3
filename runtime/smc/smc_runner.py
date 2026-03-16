@@ -24,12 +24,13 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.model.bars import CandleBar
 from core.smc.engine import SmcEngine
-from core.smc.types import SmcDelta, SmcSnapshot, NarrativeBlock
+from core.smc.types import SmcDelta, SmcSnapshot, NarrativeBlock, ShellPayload
 from core.smc.narrative import (
     synthesize_narrative,
     narrative_to_wire,
     _fallback_narrative_block,
 )
+from core.smc.shell_composer import compose_shell_payload
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.tick_common import calendar_from_group
 from runtime.smc.signal_journal import SignalJournal
@@ -482,3 +483,24 @@ class SmcRunner:
         """Очищає кеш delta після відправки у frame (запобігає повторній відправці)."""
         with self._lock:
             self._last_deltas.pop((symbol, tf_s), None)
+
+    def get_shell_payload(
+        self, symbol: str, viewer_tf_s: int, narrative: NarrativeBlock
+    ) -> Optional[ShellPayload]:
+        """ADR-0036: compose shell payload from already-computed narrative.
+
+        Returns None if shell is disabled. Catches exceptions (I5: degraded-but-loud).
+        """
+        shell_cfg = self._full_config.get("smc", {}).get("shell", {})
+        if not shell_cfg.get("enabled", True):
+            return None
+        try:
+            sessions_active = self._engine._config.sessions.enabled
+            bias_map = self.get_bias_map(symbol)
+            return compose_shell_payload(
+                narrative, bias_map, viewer_tf_s, shell_cfg,
+                sessions_active=sessions_active,
+            )
+        except Exception:
+            _log.warning("SHELL_COMPOSE_ERR sym=%s tf=%d", symbol, viewer_tf_s, exc_info=True)
+            return None

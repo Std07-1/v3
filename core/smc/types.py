@@ -309,6 +309,86 @@ class NarrativeBlock:
     session_context: str = ""  # "London KZ active — high probability"
 
 
+# -------------------- Shell (ADR-0036) --------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class TfChip:
+    """One TF chip in the tactical strip."""
+
+    tf_label: str  # "D1" | "H4" | "H1" | "M15"
+    direction: str  # "bullish" | "bearish"
+    chip_state: str  # "normal" | "brk" | "cfl"
+
+    def to_wire(self) -> Dict[str, Any]:
+        return {"tf_label": self.tf_label, "direction": self.direction, "chip_state": self.chip_state}
+
+
+@dataclasses.dataclass(frozen=True)
+class TacticalStrip:
+    """TF alignment strip (ADR-0036 §5.2.2)."""
+
+    alignment_type: str  # "htf_aligned" | "mixed"
+    alignment_direction: Optional[str]  # "bullish" | "bearish" | None
+    chips: List[TfChip]
+    tag_text: str  # "Контекст чистий" | "H1 проти тренду"
+    tag_variant: str  # "ok_bull" | "ok_bear" | "warn" | "danger"
+
+    def to_wire(self) -> Dict[str, Any]:
+        return {
+            "alignment_type": self.alignment_type,
+            "alignment_direction": self.alignment_direction,
+            "chips": [c.to_wire() for c in self.chips],
+            "tag_text": self.tag_text,
+            "tag_variant": self.tag_variant,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class MicroCard:
+    """4-field explanation card (ADR-0036 §5.2.3)."""
+
+    mode_text: str  # "Чекаємо" | "Готуємось" | "Готовий до входу"
+    why_text: str  # bias_summary
+    what_needed: str  # trigger_desc or fallback
+    what_cancels: str  # invalidation or fallback
+    warning: Optional[str] = None  # killzone/off-session warning
+
+    def to_wire(self) -> Dict[str, Any]:
+        return {
+            "mode_text": self.mode_text,
+            "why_text": self.why_text,
+            "what_needed": self.what_needed,
+            "what_cancels": self.what_cancels,
+            "warning": self.warning,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class ShellPayload:
+    """Backend-computed shell state (ADR-0036 §5.1, C-DUMB).
+
+    Frontend = dumb renderer. All derive logic on backend.
+    """
+
+    stage: str  # "wait" | "prepare" | "ready" | "triggered" | "stayout"
+    stage_label: str  # "WAIT" | "SHORT · READY" etc.
+    stage_context: str  # "Bearish HTF · Inside supply · Waiting CHoCH"
+    micro_card: MicroCard
+    tactical_strip: TacticalStrip
+    # signal: Optional[SignalSnapshot] = None  # ADR-0039 slot — None until implemented
+
+    def to_wire(self) -> Dict[str, Any]:
+        return {
+            "stage": self.stage,
+            "stage_label": self.stage_label,
+            "stage_context": self.stage_context,
+            "micro_card": self.micro_card.to_wire(),
+            "tactical_strip": self.tactical_strip.to_wire(),
+            "signal": None,  # ADR-0039: always None until signal engine
+        }
+
+
 def make_zone_id(kind: str, symbol: str, tf_s: int, anchor_bar_ms: int) -> str:
     """S3: детермінований zone ID."""
     sym_safe = symbol.replace("/", "_").replace(" ", "_")

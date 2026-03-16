@@ -112,6 +112,41 @@ export interface NarrativeBlock {
   session_context?: string;       // "London KZ active — high probability"
 }
 
+// -------------------- Shell (ADR-0036) --------------------
+
+export type ShellStage = 'wait' | 'prepare' | 'ready' | 'triggered' | 'stayout';
+
+export interface TfChip {
+  tf_label: string;    // "D1" | "H4" | "H1" | "M15"
+  direction: string;   // "bullish" | "bearish"
+  chip_state: string;  // "normal" | "brk" | "cfl"
+}
+
+export interface TacticalStrip {
+  alignment_type: string;            // "htf_aligned" | "mixed"
+  alignment_direction: string | null; // "bullish" | "bearish" | null
+  chips: TfChip[];
+  tag_text: string;     // "Контекст чистий" | "H1 проти тренду"
+  tag_variant: string;  // "ok_bull" | "ok_bear" | "warn" | "danger"
+}
+
+export interface MicroCard {
+  mode_text: string;     // "Чекаємо" | "Готуємось" | "Готовий до входу"
+  why_text: string;      // bias_summary
+  what_needed: string;   // trigger_desc or fallback
+  what_cancels: string;  // invalidation or fallback
+  warning: string | null;
+}
+
+export interface ShellPayload {
+  stage: ShellStage;
+  stage_label: string;    // "WAIT" | "SHORT · READY" etc.
+  stage_context: string;  // "Bearish HTF · Inside supply · Waiting CHoCH"
+  micro_card: MicroCard;
+  tactical_strip: TacticalStrip;
+  signal: null;           // ADR-0039: always null until signal engine
+}
+
 // -------------------- Drawings --------------------
 export type DrawingType = 'hline' | 'trend' | 'rect';
 
@@ -184,6 +219,8 @@ export interface RenderFrame {
   momentum_map?: Record<string, { b: number; r: number }>;
   /** ADR-0033+ADR-0035: narrative block (full frame + delta on complete bars) */
   narrative?: NarrativeBlock;
+  /** ADR-0036: shell payload (full frame + delta on complete bars) */
+  shell?: ShellPayload;
   /** ADR-0035: refreshed session levels in delta (full-replace session kinds) */
   session_levels?: SmcLevel[];
   drawings?: Drawing[];

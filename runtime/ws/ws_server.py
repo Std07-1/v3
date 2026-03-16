@@ -77,6 +77,8 @@ class SmcRunnerLike(Protocol):
 
     def clear_delta(self, symbol: str, tf_s: int) -> None: ...
 
+    def get_shell_payload(self, symbol: str, tf_s: int, narrative: Any) -> Any: ...
+
     def warmup(self, uds: UdsLike) -> None: ...
 
 
@@ -650,6 +652,17 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                     from core.smc.narrative import narrative_to_wire
 
                     frame["narrative"] = narrative_to_wire(_narr)
+                    # ADR-0036: shell payload (post-processing narrative)
+                    try:
+                        _shell = _smc_runner.get_shell_payload(
+                            session.symbol, session.tf_s, _narr
+                        )
+                        if _shell is not None:
+                            frame["shell"] = _shell.to_wire()
+                    except Exception as _shell_exc:
+                        _log.warning(
+                            "WS_SHELL_ERR sym=%s err=%s", session.symbol, _shell_exc
+                        )
             except Exception as _narr_exc:
                 _log.warning(
                     "WS_NARRATIVE_ERR sym=%s err=%s", session.symbol, _narr_exc
@@ -1052,6 +1065,19 @@ async def _global_delta_loop(app: web.Application) -> None:
                                         )
 
                                         frame["narrative"] = narrative_to_wire(_narr)
+                                        # ADR-0036: shell payload
+                                        try:
+                                            _shell = _smc_runner.get_shell_payload(
+                                                symbol, tf_s, _narr
+                                            )
+                                            if _shell is not None:
+                                                frame["shell"] = _shell.to_wire()
+                                        except Exception as _shell_exc:
+                                            _log.warning(
+                                                "WS_SHELL_ERR sym=%s err=%s",
+                                                symbol,
+                                                _shell_exc,
+                                            )
                                 except Exception as _narr_exc:
                                     _log.debug(
                                         "WS_DELTA_NARRATIVE_ERR sym=%s err=%s",
