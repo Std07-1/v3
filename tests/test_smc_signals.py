@@ -202,14 +202,14 @@ class TestResolveEntry:
 
 class TestStopLoss:
     def test_sl_long(self):
-        z = _zone(low=2860.0)  # zone range=10, 10*0.25=2.5 > 5*0.03=0.15
+        z = _zone(low=2860.0)  # zone range=10, structural=10*0.35=3.5, noise=5*0.2*0.5=0.5
         sl = _resolve_stop_loss(z, "long", atr=5.0, buffer_atr=0.2)
-        assert sl == 2860.0 - 2.5  # max(10*0.25, 5*0.03) = 2.5
+        assert sl == 2860.0 - 3.5  # max(3.5, 0.5) = 3.5
 
     def test_sl_short(self):
-        z = _zone(high=2870.0)  # zone range=10, buf=2.5
+        z = _zone(high=2870.0)  # zone range=10, buf=3.5
         sl = _resolve_stop_loss(z, "short", atr=5.0, buffer_atr=0.2)
-        assert sl == 2870.0 + 2.5
+        assert sl == 2870.0 + 3.5
 
 
 class TestTakeProfit:

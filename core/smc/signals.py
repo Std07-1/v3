@@ -82,14 +82,18 @@ def _resolve_entry(
 def _resolve_stop_loss(
     zone: SmcZone, direction: str, atr: float, buffer_atr: float
 ) -> float:
-    """SL = zone opposite edge + buffer proportional to zone width.
+    """SL = zone opposite edge + noise buffer.
 
-    Buffer = max(zone_range × 0.25, atr × 0.03).
-    ATR-only buffer was too generous (0.2×ATR for XAU ≈ 8 pts on a 6-pt zone),
-    creating SL far beyond the zone invalidation level.
+    Buffer = max(zone_range × 0.35, atr × buffer_atr × 0.5).
+    - zone_range × 0.35: proportional to zone size (structural)
+    - atr × buffer_atr × 0.5: volatility floor (noise protection)
+    Whichever is larger wins — avoids both absurd SL far from zone (old)
+    and impossibly tight SL that noise kills immediately (too low floor).
     """
     zone_range = abs(zone.high - zone.low)
-    buf = max(zone_range * 0.25, atr * 0.03) if atr > 0 else zone_range * 0.25
+    structural = zone_range * 0.35
+    noise_floor = atr * buffer_atr * 0.5 if atr > 0 else 0.0
+    buf = max(structural, noise_floor)
     if direction == "long":
         return zone.low - buf
     else:
