@@ -102,15 +102,14 @@ def compose_shell_payload(
     # ── Micro card ──
     micro_card = _build_micro_card(narrative, stage, mode_texts, sessions_active)
 
-    # ── Signal injection (SE3): only for ready/triggered ──
-    # ADR-0039 slot — None until implemented
-
+    # ── Signal injection (ADR-0039): pass through if computed ──
     return ShellPayload(
         stage=stage,
         stage_label=stage_label,
         stage_context=stage_context,
         micro_card=micro_card,
         tactical_strip=tactical_strip,
+        signal=signal,
     )
 
 
