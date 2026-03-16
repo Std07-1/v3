@@ -800,7 +800,7 @@ Source: `research/Context.txt` — 6-defect audit of `narrative.py`.
 - SmcEngine core algorithms (detectors, lifecycle) — untouched
 - Existing zone rendering pipeline — untouched
 - BiasBanner — untouched (narrative є доповненням, не заміною)
-- Delta frame protocol — unchanged (narrative only in full frames)
+- Delta frame protocol — narrative now also in delta on complete bars (ADR-0035 integration)
 - Confluence scoring — untouched (consumed, not modified)
 - Display budget / elimination engine — only FVG overlap addition
 
@@ -812,7 +812,7 @@ Source: `research/Context.txt` — 6-defect audit of `narrative.py`.
 | N1 | Deterministic: same inputs → same NarrativeBlock | Test with frozen snapshot |
 | N2 | Config SSOT: all thresholds from `config.json:smc.narrative` | No hardcoded values |
 | N3 | Graceful degradation: if narrative fails → fallback NarrativeBlock (mode=wait, warnings), NOT None (BH-8) | try/except with log + fallback |
-| N4 | Narrative MUST NOT be computed in delta path. Only full frame (BH-9) | Code rail: assert |
+| N4 | ~~(Rev 2) Narrative only in full frame~~ → (Rev 4) Narrative computed in delta path **on complete bars only** (ADR-0035 session integration). Preview/forming bars excluded. | ws_server.py: `if _ev.get("complete")` guard |
 | N5 | `market_phase` = display-only, does NOT influence mode selection (T-6) | Verified in tests |
 | N6 | HTF alignment = D1+H4 only. LTF disagreement is NOT "mixed bias" (SC-4) | Logic in synthesize_narrative() |
 | N7 | Counter-trend = HTF aligned but zone opposes HTF direction → 🟡 warning (Rev 3) | Step 3 direction check |
@@ -864,13 +864,14 @@ cd ui_v4 && npm run build
 
 | # | Питання | Хто перевіряє | Рекомендація |
 |---|---------|---------------|-------------|
-| Q1 | Чи потрібен narrative в delta frames (live update кожен бар)? | R_TRADER + R_CHART_UX | **Ні для v1.** Full frame достатньо. N4 constraint: delta path excluded. |
+| Q1 | Чи потрібен narrative в delta frames (live update кожен бар)? | R_TRADER + R_CHART_UX | **Реалізовано (ADR-0035):** narrative в delta на complete bars. N4 оновлено Rev 4. |
 | Q2 | Чи потрібен market_phase у v1? | R_TRADER | **Так, display-only.** 3 trend states (trending_up/down/ranging). With hysteresis. N5 constraint. |
 | Q3 | Мова narrative: English? Ukrainian? Configurable? | R_TRADER + R_CHART_UX | **English для v1.** Trading terms інтернаціональні. |
 | Q4 | FVG-OB overlap threshold | R_SMC_CHIEF | **Resolved (SC-2)**: any overlap > 0 + time adjacency. No percentage threshold. |
 | Q5 | NarrativePanel position: overlay чи sidebar? | R_CHART_UX | **Overlay (top-left, collapsible, default collapsed — SC-6)** для v1. |
 | Q6 | Session levels (Asia H/L, London H/L) в target resolution + killzone awareness? | R_TRADER + R_ARCHITECT | **Deferred.** Session module = окремий ADR. SmcLevel не має session kinds. T-3/T-7 зафіксовано як explicit limitation v1. |
 | Q7 | `bias_summary` = повторює Banner чи дає нову інформацію? | R_TRADER | **Resolved (T-8)**: bias_summary = context beyond direction pills. Not duplication of BiasBanner. |
+| Q8 | Invalidation semantics: lifecycle (bar.close) vs narrative (current_price) — різна гранулярність | R_ARCHITECT | **Design intent (Rev 4 audit):** narrative = advisory real-time caution (price-based), lifecycle = confirmed state change (close-based). Різні рівні абстракції, не помилка. `_is_invalidated()` = "подивись уважніше", `_update_zone_lifecycle()` = фінальне рішення. |
 
 ---
 

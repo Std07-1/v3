@@ -11,6 +11,7 @@ N6: alignment = D1+H4 only.
 from __future__ import annotations
 
 import logging
+
 from typing import Dict, List, Optional, Tuple
 
 from core.smc.types import (
@@ -140,7 +141,7 @@ def _format_entry(zone, grade_info):
 # ── Trigger Resolution (T-2: 4 IOFED states, proximity + displacement) ──
 
 
-def _find_qualifying_choch(snapshot, zone):
+def _find_qualifying_structure_break(snapshot, zone):
     # type: (SmcSnapshot, SmcZone) -> Optional[SmcSwing]
     """Find the most recent CHoCH/BOS aligned with zone direction.
 
@@ -202,7 +203,7 @@ def _resolve_trigger_state(snapshot, zone, viewer_tf_s, current_price, atr, conf
       no CHoCH                                \u2192 \"approaching\"
     """
     in_zone = zone.low <= current_price <= zone.high
-    choch = _find_qualifying_choch(snapshot, zone)
+    choch = _find_qualifying_structure_break(snapshot, zone)
     has_disp = False
     if choch is not None:
         has_disp = _has_displacement_near(snapshot, choch, zone, viewer_tf_s, config)
@@ -233,7 +234,7 @@ def _resolve_trigger_desc(snapshot, zone, viewer_tf_s, current_price, atr, confi
             tf=tf_label, a=direction_arrow
         )
     if state == "in_zone":
-        choch = _find_qualifying_choch(snapshot, zone)
+        choch = _find_qualifying_structure_break(snapshot, zone)
         if choch is not None:
             return "In zone: CHoCH{a} seen, await displacement".format(
                 a=direction_arrow
@@ -515,7 +516,7 @@ def _synthesize_impl(
     snapshot,
     bias_map,
     zone_grades,
-    momentum_map,
+    momentum_map,  # TODO(momentum): integrate into bias_summary/headline generation (v2)
     viewer_tf_s,
     current_price,
     atr,
