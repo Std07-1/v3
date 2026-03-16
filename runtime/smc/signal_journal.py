@@ -127,7 +127,68 @@ class SignalJournal:
 
         if self._enabled:
             os.makedirs(self._base_dir, exist_ok=True)
+            self._recover_state_from_journal()
             _log.info("SIGNAL_JOURNAL_INIT path=%s", self._base_dir)
+
+    def _recover_state_from_journal(self) -> None:
+        """Відновлює _last_state та _active з сьогоднішнього журналу після рестарту."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        filepath = os.path.join(self._base_dir, f"journal-{today}.jsonl")
+        if not os.path.isfile(filepath):
+            return
+
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    sym = rec.get("symbol", "")
+                    tf_s = rec.get("tf_s", 0)
+                    if not sym or not tf_s:
+                        continue
+
+                    key = (sym, tf_s)
+                    event = rec.get("event", "")
+                    mode = rec.get("mode", "")
+                    zone_id = rec.get("zone_id", "")
+                    trigger = rec.get("trigger", "")
+
+                    self._last_state[key] = (mode, zone_id, trigger)
+
+                    if event == "trade_entered":
+                        self._active[key] = _ActiveSignal(
+                            started_ms=rec.get("wall_ms", 0),
+                            entry_price=rec.get("price", 0.0),
+                            direction=rec.get("direction", ""),
+                            zone_id=zone_id,
+                            target_price=_parse_price_from_desc(
+                                rec.get("target_desc", "")
+                            ),
+                            invalidation_price=_parse_price_from_desc(
+                                rec.get("invalidation", "")
+                            ),
+                            bias_snapshot=rec.get("bias", {}),
+                            sub_mode=rec.get("sub_mode", ""),
+                            session_at_entry=rec.get("session", ""),
+                        )
+                    elif event == "trade_exited":
+                        self._active.pop(key, None)
+        except OSError as exc:
+            _log.warning("SIGNAL_JOURNAL_RECOVER_ERR path=%s err=%s", filepath, exc)
+            return
+
+        if self._last_state:
+            _log.info(
+                "SIGNAL_JOURNAL_RECOVERED states=%d active=%d",
+                len(self._last_state),
+                len(self._active),
+            )
 
     def record(
         self,
