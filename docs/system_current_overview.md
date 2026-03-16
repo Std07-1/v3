@@ -398,7 +398,8 @@ flowchart TD
 > SmcRunner живе в ws_server process (in-process, §6.1 ADR-0024).
 > Transactions: bar committed → SmcEngine.on_bar() → SmcDelta → вбудований у WS frame.
 > Read-only: SMC НЕ пише в UDS/SSOT. Ephemeral overlay, відновлюється при warmup.
-> Не реалізовано: Sessions/Killzones (E3), /api/smc HTTP endpoint.
+> Sessions/Killzones (E3) — **IMPLEMENTED** (ADR-0035): session H/L levels, killzone context, narrative integration.
+> Не реалізовано: /api/smc HTTP endpoint.
 
 ## Схеми процесів і циклів
 
@@ -657,10 +658,13 @@ v3/
 │   │   ├── liquidity.py           # detect_liquidity_levels() — ATR-based clustering
 │   │   ├── premium_discount.py    # detect_premium_discount() — equilibrium zones (enabled=false)
 │   │   ├── inducement.py          # detect_inducements() — false breakout detection
-│   ├── confluence.py          # confluence_score() — 8-factor grade A+/A/B/C (ADR-0029)
-│   ├── momentum.py            # displacement detection — body/ATR ratio
-│   ├── key_levels.py          # detect_key_levels() — PDH/PDL/DH/DL, cross-TF (ADR-0024b)
-│   ├── context_stack.py       # ContextStack — cross-TF zone aggregation│   │   └── engine.py              # SmcEngine orchestrator + _update_zone_lifecycle (N1, ~350 LOC)
+│   │   ├── confluence.py          # confluence_score() — 8-factor grade A+/A/B/C (ADR-0029)
+│   │   ├── momentum.py            # displacement detection — body/ATR ratio
+│   │   ├── key_levels.py          # detect_key_levels() — PDH/PDL/DH/DL, cross-TF (ADR-0024b)
+│   │   ├── sessions.py            # session H/L, killzones, classify (ADR-0035)
+│   │   ├── narrative.py           # synthesize_narrative() — Context Flow (ADR-0033, ~780 LOC)
+│   │   ├── context_stack.py       # ContextStack — cross-TF zone aggregation
+│   │   └── engine.py              # SmcEngine orchestrator + _update_zone_lifecycle (N1, ~350 LOC)
 │   └── contracts/
 │       └── public/
 │           └── marketdata_v1/     # JSON Schema контракти

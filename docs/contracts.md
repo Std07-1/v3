@@ -234,71 +234,122 @@ SMC — ephemeral read-only overlay. **Не зберігається** на ди
 | `end_ms` | integer\|null | Epoch ms коли mitigated, null якщо active |
 | `high` | number | Верхня межа зони |
 | `low` | number | Нижня межа зони |
-| `kind` | string | `"ob_bull"`, `"ob_bear"`, `"fvg_bull"`, `"fvg_bear"`, `"premium"`, `"discount"`, `"inducement_bull"`, `"inducement_bear"` |
-| `status` | string | `"active"`, `"mitigated"`, `"breaker"` |
+| `kind` | string | `"ob_bull"`, `"ob_bear"`, `"fvg_bull"`, `"fvg_bear"`, `"premium"`, `"discount"`, `"ifvg_bull"`, `"ifvg_bear"` |
+| `status` | string | `"active"`, `"tested"`, `"mitigated"`, `"breaker"`, `"partially_filled"`, `"filled"`, `"fading"`, `"expired"` |
 | `strength` | number | 0.0–1.0, використовується для opacity у UI |
+| `tf_s` | integer | Origin TF (seconds) — для cross-TF projection |
+| `context_layer` | string\|null | `"institutional"`, `"intraday"`, `"local"` або null (ADR-0024c) |
+| `origin_zone_id` | string\|null | ID source FVG для IFVG (ADR-0034 P0) |
 
 ### SmcSwing (WS wire)
+
+F7 single-point format (не two-point segment).
 
 | Поле | Тип | Опис |
 |---|---|---|
 | `id` | string | `{kind}_{symbol}_{tf_s}_{time_ms}` |
-| `a` | `{t: int, p: number}` | Точка A (час і ціна) |
-| `b` | `{t: int, p: number}` | Точка B (час і ціна) |
-| `label` | string | `"BOS BULL"`, `"BOS BEAR"`, `"CHOCH BULL"`, `"CHOCH BEAR"` |
+| `kind` | string | `"hh"`, `"hl"`, `"lh"`, `"ll"`, `"bos_bull"`, `"bos_bear"`, `"choch_bull"`, `"choch_bear"`, `"inducement_bull"`, `"inducement_bear"`, `"fractal_high"`, `"fractal_low"`, `"displacement_bull"`, `"displacement_bear"` |
+| `time_ms` | integer | Epoch ms — час бару де свінг детектовано |
+| `price` | number | Ціна свінг-точки |
+| `label` | string | Kind у uppercase, напр. `"BOS BULL"`, `"CHOCH BEAR"` |
 
 ### SmcLevel (WS wire)
 
 | Поле | Тип | Опис |
 |---|---|---|
 | `id` | string | `{kind}_{symbol}_{tf_s}_{price_int}` |
+| `kind` | string | `"eq_highs"`, `"eq_lows"`, `"pdh"`, `"pdl"`, `"dh"`, `"dl"`, `"h4_h"`, `"h4_l"`, `"h1_h"`, `"h1_l"`, `"p_h4_h"`, `"p_h4_l"`, `"p_h1_h"`, `"p_h1_l"`, + 12 session kinds (ADR-0035): `"as_h"`, `"as_l"`, `"p_as_h"`, `"p_as_l"`, `"lon_h"`, `"lon_l"`, `"p_lon_h"`, `"p_lon_l"`, `"ny_h"`, `"ny_l"`, `"p_ny_h"`, `"p_ny_l"` |
 | `price` | number | Рівень ціни |
-| `t_ms` | integer | Epoch ms першого торкання |
-| `kind` | string | `"eq_highs"`, `"eq_lows"` |
-| `touches` | integer | Кількість торкань |
+| `t_ms` | integer\|null | Epoch ms формування рівня (опціонально) |
 
-### SmcData (full frame payload)
+### Full frame payload (`frame_type: "full" | "replay"`)
 
-У WS `full` та `replay` frame-ах:
+SMC поля — **на кореневому рівні frame**, не в `data` (flat structure):
 
 ```json
 {
-  "data": {
-    "candles": [...],
-    "zones": [SmcZone, ...],
-    "swings": [SmcSwing, ...],
-    "levels": [SmcLevel, ...]
-  }
+  "type": "render_frame",
+  "frame_type": "full",
+  "symbol": "XAU/USD",
+  "tf": "M15",
+  "candles": [...],
+  "zones": [SmcZone, ...],
+  "swings": [SmcSwing, ...],
+  "levels": [SmcLevel, ...],
+  "trend_bias": "bullish",
+  "zone_grades": {"ob_bull_XAU_USD_900_...": {"score": 8, "grade": "A+", "factors": [...]}},
+  "bias_map": {"86400": "bearish", "14400": "bearish", "3600": "bullish"},
+  "momentum_map": {"900": {"b": 3, "r": 1}},
+  "narrative": NarrativeBlock,
+  "drawings": [],
+  "meta": {...}
 }
 ```
 
 ### SmcDeltaWire (delta frame payload)
 
-У WS `delta` frame-ах (опціональне поле `smc_delta`):
+У WS `delta` frame-ах — `smc_delta` **на кореневому рівні frame** (не під `data`):
 
 ```json
 {
-  "data": {
-    "upsert": [...],
-    "smc_delta": {
-      "new_zones": [SmcZone, ...],
-      "mitigated_zone_ids": ["ob_bear_XAU/USD_900_1770288000000"],
-      "updated_zones": [SmcZone, ...],
-      "new_swings": [SmcSwing, ...],
-      "new_levels": [SmcLevel, ...],
-      "removed_level_ids": [],
-      "trend_bias": "bullish"
-    }
-  }
+  "type": "render_frame",
+  "frame_type": "delta",
+  "candles": [...],
+  "smc_delta": {
+    "new_zones": [SmcZone, ...],
+    "mitigated_zone_ids": ["ob_bear_XAU_USD_900_1770288000000"],
+    "updated_zones": [SmcZone, ...],
+    "new_swings": [SmcSwing, ...],
+    "new_levels": [SmcLevel, ...],
+    "removed_level_ids": [],
+    "trend_bias": "bullish"
+  },
+  "narrative": NarrativeBlock,
+  "session_levels": [SmcLevel, ...],
+  "meta": {...}
 }
 ```
+
+> **Note**: `narrative` + `session_levels` з'являються в delta тільки на complete bars.
+> `zone_grades`, `bias_map`, `momentum_map` — тільки у full frame.
+
+### NarrativeBlock (ADR-0033 + ADR-0035)
+
+| Поле | Тип | Опис |
+|---|---|---|
+| `mode` | string | `"trade"` \| `"wait"` |
+| `sub_mode` | string | `"aligned"` \| `"reduced"` \| `"counter"` \| `"market_closed"` \| `""` |
+| `headline` | string | Заголовок, напр. `"🔴 SELL setup ready"` |
+| `bias_summary` | string | Контекст поверх BiasBanner |
+| `scenarios` | ActiveScenario[] | Max 2 (primary + alternative) |
+| `next_area` | string | `"{price} {dir} {type} ({grade}/{score})"` |
+| `fvg_context` | string | `""` якщо немає |
+| `market_phase` | string | `"trending_up"` \| `"trending_down"` \| `"ranging"` |
+| `warnings` | string[] | `["no_target_found", "computation_error"]` |
+| `current_session` | string | `"london"` \| `"newyork"` \| `"asia"` \| `""` |
+| `in_killzone` | boolean | True якщо у killzone window |
+| `session_context` | string | `"London KZ active — high probability"` |
+
+### ActiveScenario
+
+| Поле | Тип | Опис |
+|---|---|---|
+| `zone_id` | string | ID зони-тригера |
+| `direction` | string | `"long"` \| `"short"` |
+| `entry_desc` | string | `"OB▲ A(6) 5144–5225"` |
+| `trigger` | string | `"approaching"` \| `"in_zone"` \| `"triggered"` \| `"ready"` |
+| `trigger_desc` | string | Опис стану IOFED |
+| `target_desc` | string\|null | `"PDL 5062"` \| null (якщо target невідомий) |
+| `invalidation` | string | `"Above 5230"` |
 
 ### Інваріанти SMC wire
 
 - **S3**: Zone ID deterministic — same input → same ID
 - **S6**: Python `to_wire()` output === TypeScript interface fields
-- SMC не змінює OHLCV payload — це окремі поля в тому ж WS frame
+- SMC не змінює OHLCV payload — це окремі поля в тому ж WS frame (flat structure, не під `data`)
 - `smc_delta` присутній тільки якщо `SmcDelta.has_changes == true`
+- `narrative` + `session_levels` — тільки на complete bars (delta) або у full frame
+- `zone_grades`, `bias_map`, `momentum_map` — тільки у full frame
 - UI обробляє через `smcStore.applySmcFull()` (full frame) / `smcStore.applySmcDelta()` (delta frame)
 
 ---

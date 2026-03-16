@@ -1636,6 +1636,93 @@ Status: NOT STARTED — залежить від ADR-0017 (Replay)
 - P7: revert ws_server.py changes — frames повертаються до `zones: []`
 - P8: revert server.py + config.json — endpoint зникає
 - P9: revert ui_v4/ smc components — UI без overlay
+
+---
+
+## 14. Addendum: Wire Format & KINDS Reality (2026-03)
+
+> **Context**: §5 wire format examples and KINDS sets written at design time.
+> Actual implementation diverged during ADR-0024a/0024b/0024c/0034/0035.
+> This addendum documents the **actual implemented** state.
+> Canonical wire spec: `docs/contracts.md` → SMC Wire Format section.
+
+### 14.1 SmcSwing wire format — F7 single-point (replaces §5.2 two-point segment)
+
+```python
+# Actual SmcSwing.to_wire() — core/smc/types.py
+{"id": "bos_bull_XAU_USD_900_1770288000000", "kind": "bos_bull", "time_ms": 1770288000000, "price": 2850.5, "label": "BOS BULL"}
+```
+
+The `{a:{t,p}, b:{t,p}}` format in §5.2 was **never shipped**. UI uses single-point format.
+
+### 14.2 SmcLevel wire format — kind added, color removed
+
+```python
+# Actual SmcLevel.to_wire()
+{"id": "pdh_XAU_USD_86400_285050", "kind": "pdh", "price": 2850.5, "t_ms": 1770288000000}
+```
+
+`color` field removed (UI derives from `kind`). `touches` not in wire (internal only).
+
+### 14.3 SmcZone wire format — tf_s, context_layer, origin_zone_id added
+
+```python
+# Actual SmcZone.to_wire()
+{"id": "...", "start_ms": ..., "end_ms": null, "high": ..., "low": ..., "kind": "ob_bull", "status": "active", "strength": 0.82, "tf_s": 900, "context_layer": "intraday", "origin_zone_id": null}
+```
+
+### 14.4 SmcSnapshot.to_wire() — trend_bias added
+
+```python
+{"zones": [...], "swings": [...], "levels": [...], "trend_bias": "bullish"}
+```
+
+### 14.5 Updated KINDS sets
+
+| Constant | §5.1 (original) | Actual (`core/smc/types.py`) |
+|----------|-----------------|------------------------------|
+| ZONE_KINDS | 6 (ob, fvg, premium, discount) | 8: + `ifvg_bull`, `ifvg_bear` (ADR-0034 P0) |
+| SWING_KINDS | 10 | 14: + `fractal_high/low`, `displacement_bull/bear` |
+| LEVEL_KINDS | 6 (eq_highs/lows, pdh/pdl, pwh/pwl) | 26+: + `dh/dl`, `h4_h/l`, `h1_h/l`, `p_h4_h/l`, `p_h1_h/l` + 12 session kinds (ADR-0035) |
+| ZONE_STATUSES | (matches) | 8: `active, tested, mitigated, breaker, partially_filled, filled, fading, expired` |
+
+Note: `pwh/pwl` in §5.1 — **not in actual LEVEL_KINDS** (weekly levels not implemented).
+
+### 14.6 WS frame structure — flat, not nested
+
+Full frame: zones/swings/levels/trend_bias/zone_grades/bias_map/momentum_map/narrative at **root** level of frame dict.
+Delta frame: smc_delta/narrative/session_levels at **root** level.
+
+The `{"data": {"zones": ...}}` nesting shown in §5.2 examples was **not implemented**.
+See `docs/contracts.md` for canonical frame structure.
+
+### 14.7 Additional detectors (post-E1/E2)
+
+| Module | ADR | Added after |
+|--------|-----|-------------|
+| `momentum.py` | ADR-0024a | Displacement detection |
+| `key_levels.py` | ADR-0024b | PDH/PDL/DH/DL per-TF |
+| `sessions.py` | ADR-0035 | Session H/L, killzones |
+| `confluence.py` | ADR-0029 | 8-factor grade A+/A/B/C |
+| `narrative.py` | ADR-0033 | Context Flow engine |
+| `context_stack.py` | ADR-0024c | Cross-TF zone aggregation |
+
+### 14.8 SmcRunner API — actual methods
+
+| §3.4 (original) | Actual (`runtime/smc/smc_runner.py`) |
+|------------------|--------------------------------------|
+| `start()` | `warmup(symbol, tf_s, bars)` |
+| `on_bar_event()` | `on_bar_dict(symbol, tf_s, bar_dict, complete)` |
+| (N/A) | `last_delta(symbol, tf_s)` → SmcDelta |
+| (N/A) | `get_narrative(symbol, tf_s)` → NarrativeBlock |
+| (N/A) | `get_session_levels_wire(symbol)` → list |
+
+### 14.9 Config §5.3 — missing sections
+
+Actual `config.json:smc` has these additional sections not in §5.3:
+`compute_tfs`, `sessions`, `momentum`, `confluence`, `context_stack`, `performance`, `tda`, `display`, `narrative`, `signal_journal`, `tf_overrides`.
+
+Each sub-section documented in its respective ADR. `config.json` is SSOT for deployed values.
 - P10: revert replay integration — replay без SMC
 
 ### Full rollback

@@ -101,7 +101,7 @@ v3/
 │   ├── config_loader.py   # Config parsing helpers
 │   ├── contracts/         # JSON Schema (bar_v1, tick_v1, updates_v1, window_v1)
 │   └── smc/               # SMC Engine — pure logic, NO I/O (ADR-0024)
-│       ├── types.py       # SmcZone, SmcSwing, SmcLevel, SmcSnapshot, SmcDelta
+│       ├── types.py       # SmcZone, SmcSwing, SmcLevel, SmcSnapshot, SmcDelta, NarrativeBlock, ActiveScenario
 │       ├── config.py      # SmcConfig + nested configs
 │       ├── swings.py      # detect_swings() — rolling window period
 │       ├── structure.py   # detect_structure() — BOS/CHoCH
@@ -115,6 +115,7 @@ v3/
 │       ├── momentum.py    # displacement detection — body/ATR ratio
 │       ├── sessions.py    # session H/L, killzones, classify (ADR-0035)
 │       ├── context_stack.py # ContextStack — cross-TF zone aggregation
+│       ├── narrative.py   # synthesize_narrative() — Context Flow (ADR-0033)
 │       └── engine.py      # SmcEngine orchestrator + zone lifecycle
 │
 ├── runtime/               # I/O та процеси
