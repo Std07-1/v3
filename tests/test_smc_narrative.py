@@ -249,8 +249,9 @@ def test_trigger_approaching():
     bias = {"86400": "bearish", "14400": "bearish"}
     grades = _grade_a6("z1")
 
+    # Price 5170 → distance=80 pts, ATR=20, 80/20=4.0 ATR → within 5.0 guard
     nb = synthesize_narrative(
-        snap, bias, grades, {}, 900, 5100.0, 20.0, _default_config()
+        snap, bias, grades, {}, 900, 5170.0, 20.0, _default_config()
     )
 
     assert nb.scenarios[0].trigger == "approaching"
@@ -335,9 +336,9 @@ def test_trigger_approaching_far_with_choch():
     bias = {"86400": "bearish", "14400": "bearish"}
     grades = _grade_a6("z1")
 
-    # 5100 vs zone.low=5250 → 150 pts, ATR=20 → 7.5 ATR (> 3.0)
+    # 5170 vs zone.low=5250 → 80 pts, ATR=20 → 4.0 ATR (within 5.0 guard, > 3.0 trigger_proximity)
     nb = synthesize_narrative(
-        snap, bias, grades, {}, 900, 5100.0, 20.0, _default_config()
+        snap, bias, grades, {}, 900, 5170.0, 20.0, _default_config()
     )
 
     assert nb.scenarios[0].trigger == "approaching"
@@ -708,3 +709,97 @@ def test_fvg_candidate_allowed_when_threshold_lowered():
     )
     assert len(result) == 1
     assert result[0].id == "fvg1"
+
+
+# ── D2: trade_max_distance_atr guard ─────────────────────
+
+
+class TestTooFarGuard:
+    """Price >N ATR from zone → mode=wait, sub_mode=too_far."""
+
+    def _cfg(self, **overrides):
+        c = _default_config()
+        c.update(overrides)
+        return c
+
+    def test_too_far_bearish_zone(self):
+        """Price far below bear OB → wait/too_far."""
+        z = _zone(kind="ob_bear", high=5300.0, low=5250.0, zone_id="z1")
+        snap = _snap(zones=[z], swings=[_swing("choch_bear", 5200.0, 1500)])
+        bias = {"86400": "bearish", "14400": "bearish"}
+        grades = _grade_a6("z1")
+        # Distance = 5250 - 5000 = 250 pts.  ATR = 20.  250/20 = 12.5 ATR → too far
+        nb = synthesize_narrative(
+            snap, bias, grades, {}, 900, 5000.0, 20.0, self._cfg()
+        )
+        assert nb.mode == "wait"
+        assert nb.sub_mode == "too_far"
+        assert "zone_too_far" in nb.warnings
+        assert "too far" in nb.headline.lower()
+
+    def test_too_far_bullish_zone(self):
+        """Price far above bull OB → wait/too_far."""
+        z = _zone(kind="ob_bull", high=5100.0, low=5050.0, zone_id="z1")
+        snap = _snap(zones=[z], swings=[_swing("choch_bull", 5080.0, 1500)])
+        bias = {"86400": "bullish", "14400": "bullish"}
+        grades = _grade_a6("z1")
+        # Distance = 5400 - 5100 = 300 pts.  ATR = 20.  300/20 = 15 → too far
+        nb = synthesize_narrative(
+            snap, bias, grades, {}, 900, 5400.0, 20.0, self._cfg()
+        )
+        assert nb.mode == "wait"
+        assert nb.sub_mode == "too_far"
+        assert "zone_too_far" in nb.warnings
+
+    def test_close_to_zone_still_trade(self):
+        """Price within 5 ATR → normal trade/aligned."""
+        z = _zone(kind="ob_bear", high=5225.0, low=5144.0, zone_id="z1")
+        snap = _snap(zones=[z], swings=[_swing("choch_bear", 5200.0, 1500)])
+        bias = {"86400": "bearish", "14400": "bearish"}
+        grades = _grade_a6("z1")
+        # Distance = 5144 - 5060 = 84 pts.  ATR = 20.  84/20 = 4.2 → within 5.0
+        nb = synthesize_narrative(
+            snap, bias, grades, {}, 900, 5060.0, 20.0, self._cfg()
+        )
+        assert nb.mode == "trade"
+        assert nb.sub_mode == "aligned"
+        assert "zone_too_far" not in nb.warnings
+
+    def test_inside_zone_never_too_far(self):
+        """Price inside zone → distance=0 → trade."""
+        z = _zone(kind="ob_bear", high=5225.0, low=5144.0, zone_id="z1")
+        snap = _snap(zones=[z], swings=[_swing("choch_bear", 5200.0, 1500)])
+        bias = {"86400": "bearish", "14400": "bearish"}
+        grades = _grade_a6("z1")
+        nb = synthesize_narrative(
+            snap, bias, grades, {}, 900, 5180.0, 20.0, self._cfg()
+        )
+        assert nb.mode == "trade"
+        assert "zone_too_far" not in nb.warnings
+
+    def test_atr_zero_permissive(self):
+        """ATR=0 guard: don't crash, don't activate too_far."""
+        z = _zone(kind="ob_bear", high=5225.0, low=5144.0, zone_id="z1")
+        snap = _snap(zones=[z])
+        bias = {"86400": "bearish", "14400": "bearish"}
+        grades = _grade_a6("z1")
+        nb = synthesize_narrative(
+            snap, bias, grades, {}, 900, 4000.0, 0.0, self._cfg()
+        )
+        # atr=0 → guard skipped → should not crash
+        assert nb is not None
+        assert "zone_too_far" not in nb.warnings
+
+    def test_custom_threshold(self):
+        """trade_max_distance_atr=2.0 → tighter guard."""
+        z = _zone(kind="ob_bear", high=5225.0, low=5144.0, zone_id="z1")
+        snap = _snap(zones=[z], swings=[_swing("choch_bear", 5200.0, 1500)])
+        bias = {"86400": "bearish", "14400": "bearish"}
+        grades = _grade_a6("z1")
+        # Distance = 5144 - 5060 = 84 pts.  ATR = 20.  84/20 = 4.2 → >2.0 → too far
+        nb = synthesize_narrative(
+            snap, bias, grades, {}, 900, 5060.0, 20.0,
+            self._cfg(trade_max_distance_atr=2.0),
+        )
+        assert nb.mode == "wait"
+        assert nb.sub_mode == "too_far"

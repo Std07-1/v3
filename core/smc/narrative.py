@@ -36,6 +36,7 @@ _MODE_HEADLINES = {
     ("trade", "counter", "short"): "\U0001f7e1 SELL \u2014 counter-trend",
 }
 _WAIT_HEADLINE = "\U0001f7e1 No setup \u2014 wait"
+_TOO_FAR_HEADLINE = "\U0001f7e1 Zone too far \u2014 wait"
 _DEGRADED_HEADLINE = "\u26a0 Narrative unavailable"
 
 # ── TF labels ───────────────────────────────────────────────
@@ -566,7 +567,22 @@ def _synthesize_impl(
         if htf_direction == "bullish"
         else "short" if htf_direction == "bearish" else ""
     )
-    if primary_zone and alignment == "aligned" and direction == htf_trade_dir:
+    # Distance guard: price must be within trade_max_distance_atr of primary zone
+    max_dist_atr = config.get("trade_max_distance_atr", 5.0)
+    _too_far = False
+    if primary_zone and atr > 0:
+        if current_price < primary_zone.low:
+            _dist = primary_zone.low - current_price
+        elif current_price > primary_zone.high:
+            _dist = current_price - primary_zone.high
+        else:
+            _dist = 0.0  # inside zone
+        _too_far = _dist > max_dist_atr * atr
+
+    if _too_far:
+        mode, sub_mode = "wait", "too_far"
+        warnings.append("zone_too_far")
+    elif primary_zone and alignment == "aligned" and direction == htf_trade_dir:
         mode, sub_mode = "trade", "aligned"
     elif primary_zone and alignment == "aligned":
         # HTF aligned but zone opposes → counter-trend
@@ -582,6 +598,8 @@ def _synthesize_impl(
     # Headline
     if mode == "trade" and direction:
         headline = _MODE_HEADLINES.get((mode, sub_mode, direction), _WAIT_HEADLINE)
+    elif sub_mode == "too_far":
+        headline = _TOO_FAR_HEADLINE
     else:
         headline = _WAIT_HEADLINE
 

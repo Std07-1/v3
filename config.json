@@ -356,6 +356,7 @@
             "enabled": true,
             "trade_min_grade": "A",
             "trade_min_score": 6,
+            "trade_max_distance_atr": 5.0,
             "fvg_trade_min_score": 99,
             "target_max_atr_distance": 12,
             "max_scenarios": 2,
