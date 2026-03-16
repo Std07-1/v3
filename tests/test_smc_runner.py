@@ -673,3 +673,80 @@ class TestOnBarDictJournalTick:
         runner.on_bar_dict(SYM, TF, bar)
 
         assert len(recorded) == 0, "journal should NOT be called before warmup"
+
+
+class TestSignalStatePersistence:
+    """_prev_signals save/load cycle survives restart."""
+
+    def test_save_then_load_roundtrip(self, tmp_path):
+        """Saved signal state is recovered on new SmcRunner init."""
+        import json
+        from core.smc.types import SignalSpec
+
+        engine = _make_engine()
+        cfg = _make_full_cfg(symbols=[SYM], tf_allowlist=[TF])
+        cfg["smc"]["signal_journal"] = {"enabled": True, "path": str(tmp_path)}
+        runner = SmcRunner(cfg, engine)
+
+        # Manually inject a prev signal
+        sig = SignalSpec(
+            signal_id="sig_XAU_USD_60_zone1",
+            zone_id="zone1",
+            symbol=SYM,
+            tf_s=TF,
+            direction="long",
+            entry_price=2860.0,
+            stop_loss=2855.0,
+            take_profit=2890.0,
+            risk_reward=6.0,
+            entry_method="ote",
+            entry_desc="OB 2858-2862",
+            confidence=72,
+            confidence_factors={"bias": 20, "structure": 15},
+            grade="A",
+            state="approaching",
+            state_reason="12 pt to zone",
+            created_ms=1000,
+            updated_ms=2000,
+            bars_alive=5,
+            session="london",
+            in_killzone=True,
+            warnings=[],
+        )
+        runner._prev_signals[(SYM, TF)] = [sig]
+        runner._save_prev_signals()
+
+        # Verify file was written
+        state_file = tmp_path / "signal_state.json"
+        assert state_file.exists()
+        data = json.loads(state_file.read_text(encoding="utf-8"))
+        assert f"{SYM}|{TF}" in data
+
+        # Create new runner — should recover
+        runner2 = SmcRunner(cfg, engine)
+        assert (SYM, TF) in runner2._prev_signals
+        recovered = runner2._prev_signals[(SYM, TF)]
+        assert len(recovered) == 1
+        assert recovered[0].signal_id == "sig_XAU_USD_60_zone1"
+        assert recovered[0].state == "approaching"
+        assert recovered[0].entry_price == 2860.0
+        assert recovered[0].stop_loss == 2855.0
+
+    def test_load_missing_file_no_crash(self, tmp_path):
+        """No state file → empty _prev_signals (no crash)."""
+        engine = _make_engine()
+        cfg = _make_full_cfg(symbols=[SYM], tf_allowlist=[TF])
+        cfg["smc"]["signal_journal"] = {"enabled": True, "path": str(tmp_path)}
+        runner = SmcRunner(cfg, engine)
+        assert len(runner._prev_signals) == 0
+
+    def test_load_corrupted_file_no_crash(self, tmp_path):
+        """Corrupted state file → empty _prev_signals (graceful)."""
+        state_file = tmp_path / "signal_state.json"
+        state_file.write_text("{broken json!", encoding="utf-8")
+
+        engine = _make_engine()
+        cfg = _make_full_cfg(symbols=[SYM], tf_allowlist=[TF])
+        cfg["smc"]["signal_journal"] = {"enabled": True, "path": str(tmp_path)}
+        runner = SmcRunner(cfg, engine)
+        assert len(runner._prev_signals) == 0

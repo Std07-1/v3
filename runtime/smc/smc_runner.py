@@ -18,7 +18,9 @@ Python 3.7 compatible.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -145,6 +147,12 @@ class SmcRunner:
         self._prev_signals: Dict[Tuple[str, int], list] = {}
         self._journal = SignalJournal(full_cfg)
         self._warmup_done = False  # journal gated until warmup completes
+        # Signal state persistence: survive restarts (D1 fix)
+        sig_base = str(
+            full_cfg.get("smc", {}).get("signal_journal", {}).get("path", "data_v3/_signals")
+        )
+        self._signal_state_path = os.path.join(sig_base, "signal_state.json")
+        self._load_prev_signals()
         # Market calendar per symbol — for narrative market-hours guard
         self._calendars: Dict[str, MarketCalendar] = {}
         cal_groups = full_cfg.get("market_calendar_by_group", {})
@@ -162,6 +170,58 @@ class SmcRunner:
             sorted(self._compute_tfs),
             self._lookback,
         )
+
+    # ── Signal state persistence ────────────────────────
+
+    def _load_prev_signals(self) -> None:
+        """Відновлює _prev_signals з файлу після рестарту."""
+        if not os.path.isfile(self._signal_state_path):
+            return
+        try:
+            with open(self._signal_state_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            from core.smc.types import SignalSpec
+            import dataclasses
+
+            for key_str, sig_list in data.items():
+                parts = key_str.split("|", 1)
+                if len(parts) != 2:
+                    continue
+                sym, tf_str = parts
+                try:
+                    tf_s = int(tf_str)
+                except ValueError:
+                    continue
+                specs = []
+                for sw in sig_list:
+                    try:
+                        specs.append(SignalSpec(**sw))
+                    except (TypeError, KeyError):
+                        continue
+                if specs:
+                    self._prev_signals[(sym, tf_s)] = specs
+            if self._prev_signals:
+                _log.info(
+                    "SIGNAL_STATE_RECOVERED keys=%d",
+                    len(self._prev_signals),
+                )
+        except Exception as exc:
+            _log.warning("SIGNAL_STATE_LOAD_ERR err=%s", exc)
+
+    def _save_prev_signals(self) -> None:
+        """Зберігає _prev_signals у файл для persistence."""
+        try:
+            data: Dict[str, list] = {}
+            for (sym, tf_s), sigs in self._prev_signals.items():
+                key_str = f"{sym}|{tf_s}"
+                data[key_str] = [s.to_wire() for s in sigs]
+            os.makedirs(os.path.dirname(self._signal_state_path), exist_ok=True)
+            tmp = self._signal_state_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            os.replace(tmp, self._signal_state_path)
+        except Exception as exc:
+            _log.warning("SIGNAL_STATE_SAVE_ERR err=%s", exc)
 
     # ── Warmup ──────────────────────────────────────────
 
@@ -487,7 +547,10 @@ class SmcRunner:
             self._last_deltas.pop((symbol, tf_s), None)
 
     def get_shell_payload(
-        self, symbol: str, viewer_tf_s: int, narrative: NarrativeBlock,
+        self,
+        symbol: str,
+        viewer_tf_s: int,
+        narrative: NarrativeBlock,
         signal: Any = None,
     ) -> Optional[ShellPayload]:
         """ADR-0036: compose shell payload from already-computed narrative.
@@ -515,8 +578,12 @@ class SmcRunner:
             return None
 
     def get_signals(
-        self, symbol: str, viewer_tf_s: int,
-        narrative: NarrativeBlock, current_price: float, atr: float,
+        self,
+        symbol: str,
+        viewer_tf_s: int,
+        narrative: NarrativeBlock,
+        current_price: float,
+        atr: float,
     ) -> Tuple[list, list]:
         """ADR-0039: synthesize numeric signals from narrative + SMC data.
 
@@ -545,6 +612,7 @@ class SmcRunner:
                     session_info = (sess_name, sess_kz)
             else:
                 import time as _t
+
                 now_ms = int(_t.time() * 1000)
 
             prev = self._prev_signals.get((symbol, viewer_tf_s), [])
@@ -563,7 +631,15 @@ class SmcRunner:
                 now_ms=now_ms,
                 session_info=session_info,
             )
+            # Persist if state changed
+            prev_states = {s.state for s in prev} if prev else set()
+            new_states = {s.state for s in sigs} if sigs else set()
+            prev_zones = {s.zone_id for s in prev} if prev else set()
+            new_zones = {s.zone_id for s in sigs} if sigs else set()
+            state_changed = prev_states != new_states or prev_zones != new_zones
             self._prev_signals[(symbol, viewer_tf_s)] = sigs
+            if state_changed:
+                self._save_prev_signals()
             return sigs, alerts
         except Exception:
             _log.warning(
