@@ -284,6 +284,10 @@ def _calc_confidence(
 # ── Signal lifecycle (§4.6) ────────────────────────────────────────
 
 
+# Terminal signal states (cannot transition further)
+_TERMINAL_STATES = frozenset({"invalidated", "completed", "expired", "skipped"})
+
+
 def _determine_state(
     trigger: str,
     current_price: float,
@@ -294,19 +298,34 @@ def _determine_state(
     direction: str,
     atr: float,
     approach_mult: float,
+    was_active: bool = False,
 ) -> Tuple[str, str]:
-    """Map narrative trigger + price location → signal state + reason."""
+    """Map narrative trigger + price location → signal state + reason.
+
+    States: pending → watch → approaching → active → ready → completed/invalidated
+    'watch' = zone of interest (entry > approach_mult × ATR from price)
+    'skipped' = price reached TP without signal ever being active/ready
+    """
     # Check invalidation: price broke SL level
     if direction == "long" and current_price < stop_loss:
         return "invalidated", "Ціна пробила SL {:.0f}".format(stop_loss)
     if direction == "short" and current_price > stop_loss:
         return "invalidated", "Ціна пробила SL {:.0f}".format(stop_loss)
 
-    # Check completion: price reached TP
-    if direction == "long" and current_price >= take_profit:
-        return "completed", "Target {:.0f} досягнуто".format(take_profit)
-    if direction == "short" and current_price <= take_profit:
-        return "completed", "Target {:.0f} досягнуто".format(take_profit)
+    # Check TP reached
+    tp_reached = (
+        (direction == "long" and current_price >= take_profit)
+        or (direction == "short" and current_price <= take_profit)
+    )
+    if tp_reached:
+        if was_active:
+            return "completed", "Target {:.0f} досягнуто".format(take_profit)
+        return "skipped", "Ціна пройшла target {:.0f} без входу".format(take_profit)
+
+    # Distance filter → watch (zone of interest, not actionable yet)
+    dist = abs(current_price - entry_price)
+    if atr > 0 and dist > approach_mult * atr:
+        return "watch", "Зона інтересу: {:.0f} пт до entry".format(dist)
 
     # Map narrative trigger states
     if trigger in ("ready", "triggered"):
@@ -334,6 +353,8 @@ def _make_alert(
         "ready": "high",
         "invalidated": "medium",
         "completed": "medium",
+        "skipped": "low",
+        # "watch" excluded — informational, no alert
     }
     priority = _PRIORITY.get(signal.state)
     if priority is None:
@@ -401,13 +422,29 @@ def synthesize_signals(
         gi = zone_grades.get(zone.id, {})
         grade = gi.get("grade", "C")
 
-        # Entry / SL / TP
-        entry_price, entry_desc = _resolve_entry(zone, direction, entry_method, atr)
-        stop_loss = _resolve_stop_loss(zone, direction, atr, sl_buffer)
-        tp_price, tp_fallback = _resolve_take_profit(
-            snapshot, zone, direction, current_price, atr, entry_price, tp_atr_mult
-        )
-        rr = _calc_risk_reward(entry_price, stop_loss, tp_price, direction)
+        # Lifecycle
+        prev = prev_by_zone.get(scenario.zone_id)
+        created_ms = prev.created_ms if prev else now_ms
+        bars_alive = (prev.bars_alive + 1) if prev else 0
+
+        # TP / SL / Entry lock: once computed, values are immutable (D3 fix)
+        if prev and prev.state not in _TERMINAL_STATES:
+            entry_price = prev.entry_price
+            entry_desc = prev.entry_desc
+            stop_loss = prev.stop_loss
+            tp_price = prev.take_profit
+            tp_fallback = False
+            rr = prev.risk_reward
+        else:
+            entry_price, entry_desc = _resolve_entry(
+                zone, direction, entry_method, atr
+            )
+            stop_loss = _resolve_stop_loss(zone, direction, atr, sl_buffer)
+            tp_price, tp_fallback = _resolve_take_profit(
+                snapshot, zone, direction, current_price, atr,
+                entry_price, tp_atr_mult,
+            )
+            rr = _calc_risk_reward(entry_price, stop_loss, tp_price, direction)
 
         # Warnings
         warns: List[str] = []
@@ -416,15 +453,13 @@ def synthesize_signals(
         if rr < min_rr:
             warns.append("low_risk_reward")
 
-        # Confidence
+        # Confidence (always recalculated — live market context)
         confidence, conf_factors = _calc_confidence(
             bias_map, direction, gi, snapshot, session_info, momentum_map, weights
         )
 
-        # Lifecycle
-        prev = prev_by_zone.get(scenario.zone_id)
-        created_ms = prev.created_ms if prev else now_ms
-        bars_alive = (prev.bars_alive + 1) if prev else 0
+        # Was signal ever active/ready? (for skipped vs completed)
+        was_active = prev is not None and prev.state in ("active", "ready")
 
         # TTL check
         if bars_alive > ttl_bars:
@@ -440,20 +475,22 @@ def synthesize_signals(
                 direction,
                 atr,
                 approach_mult,
+                was_active=was_active,
             )
 
         # Preserve terminal states from previous
-        if prev and prev.state in ("invalidated", "completed", "expired"):
+        if prev and prev.state in _TERMINAL_STATES:
             state = prev.state
             state_reason = prev.state_reason
 
         sess_name = session_info[0] if session_info else ""
         in_kz = session_info[1] if session_info else False
 
+        # Deterministic signal ID — survives restarts (D1 fix)
         sig_id = (
             prev.signal_id
             if prev
-            else f"sig_{snapshot.symbol}_{snapshot.tf_s}_{zone.id}_{created_ms}"
+            else f"sig_{snapshot.symbol}_{snapshot.tf_s}_{zone.id}"
         )
 
         sig = SignalSpec(

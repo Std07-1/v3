@@ -202,7 +202,9 @@ class TestResolveEntry:
 
 class TestStopLoss:
     def test_sl_long(self):
-        z = _zone(low=2860.0)  # zone range=10, structural=10*0.35=3.5, noise=5*0.2*0.5=0.5
+        z = _zone(
+            low=2860.0
+        )  # zone range=10, structural=10*0.35=3.5, noise=5*0.2*0.5=0.5
         sl = _resolve_stop_loss(z, "long", atr=5.0, buffer_atr=0.2)
         assert sl == 2860.0 - 3.5  # max(3.5, 0.5) = 3.5
 
@@ -346,9 +348,40 @@ class TestDetermineState:
     def test_completed_long(self):
         z = _zone()
         state, _ = _determine_state(
-            "active", 2891.0, z, 2863.82, 2859.0, 2890.0, "long", 5.0, 1.5
+            "active", 2891.0, z, 2863.82, 2859.0, 2890.0, "long", 5.0, 1.5,
+            was_active=True,
         )
         assert state == "completed"
+
+    def test_watch_far_from_zone(self):
+        """Price far from entry (> approach_mult × ATR) → watch (zone of interest)."""
+        z = _zone()
+        # entry=2863.82, price=2850, dist=13.82, threshold=1.5*5=7.5 → watch
+        # SL must be below price so invalidation doesn't fire first
+        state, reason = _determine_state(
+            "approaching", 2850.0, z, 2863.82, 2840.0, 2890.0, "long", 5.0, 1.5
+        )
+        assert state == "watch"
+        assert "Зона інтересу" in reason
+
+    def test_skipped_tp_reached_without_entry(self):
+        """Price reached TP but was never active → skipped."""
+        z = _zone()
+        state, reason = _determine_state(
+            "approaching", 2891.0, z, 2863.82, 2859.0, 2890.0, "long", 5.0, 1.5,
+            was_active=False,
+        )
+        assert state == "skipped"
+        assert "без входу" in reason
+
+    def test_skipped_short(self):
+        """Short: price below TP without ever entering zone → skipped."""
+        z = _zone(kind="ob_bear")
+        state, _ = _determine_state(
+            "approaching", 2830.0, z, 2866.18, 2873.5, 2840.0, "short", 5.0, 1.5,
+            was_active=False,
+        )
+        assert state == "skipped"
 
 
 # ── Integration: synthesize_signals ───────────────────────────────
@@ -717,3 +750,159 @@ class TestSynthesizeSignals:
         )
 
         assert len(sigs) == 2
+
+    def test_deterministic_signal_id(self):
+        """Signal ID is deterministic (no created_ms) — survives restarts."""
+        narr = _narrative()
+        snap = _snapshot()
+        grades = {"ob_bull_XAU_USD_900_100000": {"grade": "A", "score": 6}}
+
+        sigs, _ = synthesize_signals(
+            narrative=narr,
+            snapshot=snap,
+            zone_grades=grades,
+            bias_map={},
+            momentum_map={},
+            current_price=2862.0,
+            atr=5.0,
+            config=CFG,
+            previous_signals=[],
+            now_ms=300000,
+        )
+
+        assert sigs[0].signal_id == "sig_XAU/USD_900_ob_bull_XAU_USD_900_100000"
+        # Same zone → same ID regardless of now_ms
+        sigs2, _ = synthesize_signals(
+            narrative=narr,
+            snapshot=snap,
+            zone_grades=grades,
+            bias_map={},
+            momentum_map={},
+            current_price=2862.0,
+            atr=5.0,
+            config=CFG,
+            previous_signals=[],
+            now_ms=999999,
+        )
+        assert sigs2[0].signal_id == sigs[0].signal_id
+
+    def test_tp_sl_lock_from_previous(self):
+        """Entry/SL/TP are locked from first computation, not recalculated."""
+        prev_sig = SignalSpec(
+            signal_id="sig_locked",
+            zone_id="ob_bull_XAU_USD_900_100000",
+            symbol="XAU/USD",
+            tf_s=900,
+            direction="long",
+            entry_price=2863.82,
+            stop_loss=2855.0,
+            take_profit=2890.0,
+            risk_reward=5.2,
+            entry_method="ote",
+            entry_desc="OTE locked",
+            confidence=80,
+            confidence_factors={},
+            grade="A",
+            state="approaching",
+            state_reason="Zone approaching",
+            created_ms=100000,
+            updated_ms=200000,
+            bars_alive=3,
+            session="london",
+            in_killzone=True,
+            warnings=[],
+        )
+        # Change ATR drastically — should NOT affect locked values
+        narr = _narrative()
+        snap = _snapshot()
+        grades = {"ob_bull_XAU_USD_900_100000": {"grade": "A", "score": 6}}
+
+        sigs, _ = synthesize_signals(
+            narrative=narr,
+            snapshot=snap,
+            zone_grades=grades,
+            bias_map={"86400": "bullish", "14400": "bullish"},
+            momentum_map={},
+            current_price=2862.0,
+            atr=50.0,  # 10× original ATR, but values should stay locked
+            config=CFG,
+            previous_signals=[prev_sig],
+            now_ms=300000,
+            session_info=("london", True),
+        )
+
+        sig = sigs[0]
+        assert sig.entry_price == 2863.82  # locked
+        assert sig.stop_loss == 2855.0  # locked
+        assert sig.take_profit == 2890.0  # locked
+        assert sig.risk_reward == 5.2  # locked
+        assert sig.entry_desc == "OTE locked"  # locked
+
+    def test_watch_state_in_integration(self):
+        """Far from zone → state=watch, not approaching."""
+        narr = _narrative(scenarios=[_scenario(trigger="approaching")])
+        snap = _snapshot()
+        grades = {"ob_bull_XAU_USD_900_100000": {"grade": "A", "score": 6}}
+
+        # approach_atr_mult=0.5 → threshold=2.5, SL≈2856.5, price=2858 → watch
+        sigs, alerts = synthesize_signals(
+            narrative=narr,
+            snapshot=snap,
+            zone_grades=grades,
+            bias_map={},
+            momentum_map={},
+            current_price=2858.0,  # dist=5.82 from entry, threshold=0.5*5=2.5
+            atr=5.0,
+            config={**CFG, "approach_atr_mult": 0.5},
+            previous_signals=[],
+            now_ms=300000,
+        )
+
+        assert sigs[0].state == "watch"
+        # watch should NOT generate alerts
+        assert len(alerts) == 0
+
+    def test_skipped_terminal_preserved(self):
+        """Skipped is terminal — stays skipped on next cycle."""
+        prev_sig = SignalSpec(
+            signal_id="sig_skip",
+            zone_id="ob_bull_XAU_USD_900_100000",
+            symbol="XAU/USD",
+            tf_s=900,
+            direction="long",
+            entry_price=2863.82,
+            stop_loss=2855.0,
+            take_profit=2890.0,
+            risk_reward=5.2,
+            entry_method="ote",
+            entry_desc="OTE",
+            confidence=70,
+            confidence_factors={},
+            grade="A",
+            state="skipped",
+            state_reason="Пройшла target без входу",
+            created_ms=100000,
+            updated_ms=200000,
+            bars_alive=10,
+            session="",
+            in_killzone=False,
+            warnings=[],
+        )
+        narr = _narrative()
+        snap = _snapshot()
+        grades = {"ob_bull_XAU_USD_900_100000": {"grade": "A", "score": 6}}
+
+        sigs, _ = synthesize_signals(
+            narrative=narr,
+            snapshot=snap,
+            zone_grades=grades,
+            bias_map={},
+            momentum_map={},
+            current_price=2895.0,
+            atr=5.0,
+            config=CFG,
+            previous_signals=[prev_sig],
+            now_ms=300000,
+        )
+
+        assert sigs[0].state == "skipped"
