@@ -64,9 +64,24 @@ def _scenario(
     )
 
 
-_ALIGNED_BIAS = {"86400": "bearish", "14400": "bearish", "3600": "bearish", "900": "bearish"}
-_MIXED_BIAS = {"86400": "bearish", "14400": "bearish", "3600": "bullish", "900": "bearish"}
-_D1_CFL_BIAS = {"86400": "bullish", "14400": "bearish", "3600": "bearish", "900": "bearish"}
+_ALIGNED_BIAS = {
+    "86400": "bearish",
+    "14400": "bearish",
+    "3600": "bearish",
+    "900": "bearish",
+}
+_MIXED_BIAS = {
+    "86400": "bearish",
+    "14400": "bearish",
+    "3600": "bullish",
+    "900": "bearish",
+}
+_D1_CFL_BIAS = {
+    "86400": "bullish",
+    "14400": "bearish",
+    "3600": "bearish",
+    "900": "bearish",
+}
 _CFG: dict = {}
 
 
@@ -79,38 +94,49 @@ class TestStageMapping:
     def test_row1_wait_no_scenarios_off_session_stayout(self):
         """Row 1: wait, no scenarios, sessions_active, no session -> stayout."""
         narr = _make_narrative(mode="wait", current_session="")
-        result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG, sessions_active=True)
+        result = compose_shell_payload(
+            narr, _ALIGNED_BIAS, 900, _CFG, sessions_active=True
+        )
         assert result.stage == "stayout"
         assert result.stage_label == "STAY OUT"
 
     def test_row2_wait_no_scenarios_sessions_disabled_wait(self):
         """Row 2: wait, no scenarios, sessions NOT active -> wait (not stayout)."""
         narr = _make_narrative(mode="wait", current_session="")
-        result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG, sessions_active=False)
+        result = compose_shell_payload(
+            narr, _ALIGNED_BIAS, 900, _CFG, sessions_active=False
+        )
         assert result.stage == "wait"
 
     def test_row3_wait_no_scenarios_in_session_wait(self):
         """Row 3: wait, no scenarios, in session -> wait."""
         narr = _make_narrative(mode="wait", current_session="london")
-        result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG, sessions_active=True)
+        result = compose_shell_payload(
+            narr, _ALIGNED_BIAS, 900, _CFG, sessions_active=True
+        )
         assert result.stage == "wait"
 
     def test_row4_wait_with_scenarios_wait(self):
         """Row 4: wait with scenarios -> wait (not prepare)."""
         narr = _make_narrative(mode="wait", scenarios=[_scenario()])
-        result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG, sessions_active=True)
+        result = compose_shell_payload(
+            narr, _ALIGNED_BIAS, 900, _CFG, sessions_active=True
+        )
         assert result.stage == "wait"
 
     def test_row5_trade_reduced_prepare(self):
         """Row 5: trade+reduced -> prepare."""
-        narr = _make_narrative(mode="trade", sub_mode="reduced", scenarios=[_scenario()])
+        narr = _make_narrative(
+            mode="trade", sub_mode="reduced", scenarios=[_scenario()]
+        )
         result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG)
         assert result.stage == "prepare"
 
     def test_row6_trade_aligned_approaching_prepare(self):
         """Row 6: trade+aligned+approaching -> prepare."""
         narr = _make_narrative(
-            mode="trade", sub_mode="aligned",
+            mode="trade",
+            sub_mode="aligned",
             scenarios=[_scenario(trigger="approaching")],
         )
         result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG)
@@ -119,7 +145,8 @@ class TestStageMapping:
     def test_row7_trade_aligned_in_zone_ready(self):
         """Row 7: trade+aligned+in_zone -> ready."""
         narr = _make_narrative(
-            mode="trade", sub_mode="aligned",
+            mode="trade",
+            sub_mode="aligned",
             scenarios=[_scenario(trigger="in_zone")],
         )
         result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG)
@@ -129,7 +156,8 @@ class TestStageMapping:
     def test_row8_trade_aligned_ready_ready(self):
         """Row 8: trade+aligned+ready -> ready."""
         narr = _make_narrative(
-            mode="trade", sub_mode="aligned",
+            mode="trade",
+            sub_mode="aligned",
             scenarios=[_scenario(trigger="ready")],
         )
         result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG)
@@ -138,7 +166,8 @@ class TestStageMapping:
     def test_row9_trade_aligned_triggered_triggered(self):
         """Row 9: trade+aligned+triggered -> triggered."""
         narr = _make_narrative(
-            mode="trade", sub_mode="aligned",
+            mode="trade",
+            sub_mode="aligned",
             scenarios=[_scenario(trigger="triggered")],
         )
         result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG)
@@ -148,7 +177,8 @@ class TestStageMapping:
     def test_ready_long_label(self):
         """Direction label: ready + long -> LONG · READY."""
         narr = _make_narrative(
-            mode="trade", sub_mode="aligned",
+            mode="trade",
+            sub_mode="aligned",
             scenarios=[_scenario(direction="long", trigger="in_zone")],
         )
         result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG)
@@ -174,7 +204,8 @@ class TestErrorGuard:
 
     def test_non_error_warning_does_not_block(self):
         narr = _make_narrative(
-            mode="trade", sub_mode="aligned",
+            mode="trade",
+            sub_mode="aligned",
             scenarios=[_scenario(trigger="in_zone")],
             warnings=["some_other_warning"],
         )
@@ -190,7 +221,8 @@ class TestD1ConflictDowngrade:
 
     def test_ready_downgraded_to_prepare(self):
         narr = _make_narrative(
-            mode="trade", sub_mode="aligned",
+            mode="trade",
+            sub_mode="aligned",
             scenarios=[_scenario(trigger="in_zone")],
         )
         result = compose_shell_payload(narr, _D1_CFL_BIAS, 900, _CFG)
@@ -198,7 +230,8 @@ class TestD1ConflictDowngrade:
 
     def test_triggered_downgraded_to_prepare(self):
         narr = _make_narrative(
-            mode="trade", sub_mode="aligned",
+            mode="trade",
+            sub_mode="aligned",
             scenarios=[_scenario(trigger="triggered")],
         )
         result = compose_shell_payload(narr, _D1_CFL_BIAS, 900, _CFG)
@@ -206,7 +239,8 @@ class TestD1ConflictDowngrade:
 
     def test_prepare_not_affected(self):
         narr = _make_narrative(
-            mode="trade", sub_mode="reduced",
+            mode="trade",
+            sub_mode="reduced",
             scenarios=[_scenario()],
         )
         result = compose_shell_payload(narr, _D1_CFL_BIAS, 900, _CFG)
@@ -262,8 +296,11 @@ class TestMicroCard:
 
     def test_card_from_scenario(self):
         narr = _make_narrative(
-            mode="trade", sub_mode="aligned",
-            scenarios=[_scenario(trigger_desc="CHoCH на M15", invalidation="Above 2880")],
+            mode="trade",
+            sub_mode="aligned",
+            scenarios=[
+                _scenario(trigger_desc="CHoCH на M15", invalidation="Above 2880")
+            ],
             bias_summary="Bearish D1+H4",
         )
         result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG)
@@ -280,31 +317,39 @@ class TestMicroCard:
 
     def test_warning_off_session(self):
         narr = _make_narrative(mode="wait", current_session="")
-        result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG, sessions_active=True)
+        result = compose_shell_payload(
+            narr, _ALIGNED_BIAS, 900, _CFG, sessions_active=True
+        )
         card = result.micro_card
         assert card.warning is not None
         assert "сесі" in card.warning
 
     def test_warning_outside_killzone(self):
         narr = _make_narrative(
-            mode="trade", sub_mode="aligned",
+            mode="trade",
+            sub_mode="aligned",
             scenarios=[_scenario(trigger="in_zone")],
             current_session="london",
             in_killzone=False,
         )
-        result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG, sessions_active=True)
+        result = compose_shell_payload(
+            narr, _ALIGNED_BIAS, 900, _CFG, sessions_active=True
+        )
         card = result.micro_card
         assert card.warning is not None
         assert "кілзон" in card.warning
 
     def test_no_warning_in_killzone(self):
         narr = _make_narrative(
-            mode="trade", sub_mode="aligned",
+            mode="trade",
+            sub_mode="aligned",
             scenarios=[_scenario(trigger="in_zone")],
             current_session="london",
             in_killzone=True,
         )
-        result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG, sessions_active=True)
+        result = compose_shell_payload(
+            narr, _ALIGNED_BIAS, 900, _CFG, sessions_active=True
+        )
         card = result.micro_card
         assert card.warning is None
 
@@ -317,7 +362,8 @@ class TestWireSerialization:
 
     def test_shell_to_wire_structure(self):
         narr = _make_narrative(
-            mode="trade", sub_mode="aligned",
+            mode="trade",
+            sub_mode="aligned",
             scenarios=[_scenario(trigger="in_zone")],
         )
         result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG)
@@ -330,4 +376,8 @@ class TestWireSerialization:
 
     def test_tfchip_to_wire(self):
         chip = TfChip(tf_label="D1", direction="bearish", chip_state="normal")
-        assert chip.to_wire() == {"tf_label": "D1", "direction": "bearish", "chip_state": "normal"}
+        assert chip.to_wire() == {
+            "tf_label": "D1",
+            "direction": "bearish",
+            "chip_state": "normal",
+        }

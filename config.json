@@ -371,7 +371,12 @@
         },
         "shell": {
             "enabled": true,
-            "strip_tfs": [86400, 14400, 3600, 900]
+            "strip_tfs": [
+                86400,
+                14400,
+                3600,
+                900
+            ]
         },
         "signal_journal": {
             "enabled": true,

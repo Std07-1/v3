@@ -28,16 +28,16 @@ logger = logging.getLogger(__name__)
 # ── Headlines (ADR-0033 §3.2) ──────────────────────────────
 
 _MODE_HEADLINES = {
-    ("trade", "aligned", "long"): "\U0001f7e2 BUY setup ready",
-    ("trade", "aligned", "short"): "\U0001f534 SELL setup ready",
-    ("trade", "reduced", "long"): "\U0001f7e2 BUY \u2014 reduced: mixed HTF",
-    ("trade", "reduced", "short"): "\U0001f534 SELL \u2014 reduced: mixed HTF",
-    ("trade", "counter", "long"): "\U0001f7e1 BUY \u2014 counter-trend",
-    ("trade", "counter", "short"): "\U0001f7e1 SELL \u2014 counter-trend",
+    ("trade", "aligned", "long"): "\U0001f7e2 BUY \u2014 сетап готовий",
+    ("trade", "aligned", "short"): "\U0001f534 SELL \u2014 сетап готовий",
+    ("trade", "reduced", "long"): "\U0001f7e2 BUY \u2014 змішаний HTF",
+    ("trade", "reduced", "short"): "\U0001f534 SELL \u2014 змішаний HTF",
+    ("trade", "counter", "long"): "\U0001f7e1 BUY \u2014 проти тренду",
+    ("trade", "counter", "short"): "\U0001f7e1 SELL \u2014 проти тренду",
 }
-_WAIT_HEADLINE = "\U0001f7e1 No setup \u2014 wait"
-_TOO_FAR_HEADLINE = "\U0001f7e1 Zone too far \u2014 wait"
-_DEGRADED_HEADLINE = "\u26a0 Narrative unavailable"
+_WAIT_HEADLINE = "\U0001f7e1 Немає сетапу \u2014 чекаємо"
+_TOO_FAR_HEADLINE = "\U0001f7e1 Зона далеко \u2014 чекаємо"
+_DEGRADED_HEADLINE = "\u26a0 Наратив недоступний"
 
 # ── TF labels ───────────────────────────────────────────────
 
@@ -109,8 +109,8 @@ def _zone_direction(zone):
 def _find_invalidation(zone):
     # type: (SmcZone) -> str
     if "bear" in zone.kind:
-        return "Above {:.0f}".format(zone.high)
-    return "Below {:.0f}".format(zone.low)
+        return "Вище {:.0f}".format(zone.high)
+    return "Нижче {:.0f}".format(zone.low)
 
 
 def _is_invalidated(zone, current_price):
@@ -229,18 +229,18 @@ def _resolve_trigger_desc(snapshot, zone, viewer_tf_s, current_price, atr, confi
     tf_label = _tf_to_label(viewer_tf_s)
 
     if state == "ready":
-        return "Ready: structure + displacement confirmed in zone"
+        return "Готовий: структура + імпульс підтверджені в зоні"
     if state == "triggered":
-        return "Triggered: {tf} CHoCH{a} + displacement \u2014 seek entry".format(
+        return "Тригер: {tf} CHoCH{a} + імпульс \u2014 шукаємо вхід".format(
             tf=tf_label, a=direction_arrow
         )
     if state == "in_zone":
         choch = _find_qualifying_structure_break(snapshot, zone)
         if choch is not None:
-            return "In zone: CHoCH{a} seen, await displacement".format(
+            return "У зоні: CHoCH{a} є, чекаємо імпульс".format(
                 a=direction_arrow
             )
-        return "In zone: wait {tf} CHoCH{a}".format(tf=tf_label, a=direction_arrow)
+        return "У зоні: чекаємо {tf} CHoCH{a}".format(tf=tf_label, a=direction_arrow)
     # approaching
     if current_price < zone.low:
         dist = zone.low - current_price
@@ -248,7 +248,7 @@ def _resolve_trigger_desc(snapshot, zone, viewer_tf_s, current_price, atr, confi
         dist = current_price - zone.high
     else:
         dist = 0.0
-    return "Approaching: {:.0f} pts from zone".format(dist)
+    return "Наближення: {:.0f} пт від зони".format(dist)
 
 
 # ── Target Resolution ───────────────────────────────────────
@@ -297,7 +297,7 @@ def _find_target(snapshot, zone, direction, config, current_price=0.0, atr=0.0):
         snapshot.swings, direction, current_price, max_dist
     )
     if target_swing:
-        return "Recent {kind} {price:.0f}".format(
+        return "Останній {kind} {price:.0f}".format(
             kind=target_swing.kind.upper(), price=target_swing.price
         )
 
@@ -352,7 +352,7 @@ def _build_fvg_context(snapshot, zone, atr, config):
             continue
         # Overlap з zone
         if z.low <= zone.high and z.high >= zone.low:
-            return "OB entry refined by FVG: {:.0f}\u2013{:.0f}".format(z.low, z.high)
+            return "OB вхід уточнений FVG: {:.0f}\u2013{:.0f}".format(z.low, z.high)
     # Closest FVG within 2*ATR
     if atr > 0:
         for z in snapshot.zones:
@@ -362,7 +362,7 @@ def _build_fvg_context(snapshot, zone, atr, config):
             zone_mid = (zone.low + zone.high) / 2.0
             if abs(mid - zone_mid) <= 2.0 * atr:
                 return (
-                    "FVG gap at {:.0f} \u2014 rebalancing expected before zone".format(
+                    "FVG гап на {:.0f} \u2014 ребаланс перед зоною".format(
                         mid
                     )
                 )
@@ -400,23 +400,23 @@ def _detect_market_phase(swings, config):
 def _build_bias_summary(alignment, htf_direction, bias_map, zone, is_counter=False):
     # type: (str, Optional[str], Dict[str, str], Optional[SmcZone], bool) -> str
     if alignment == "no_data":
-        return "Insufficient HTF data"
+        return "Недостатньо HTF даних"
     d1 = bias_map.get("86400", "?")
     h4 = bias_map.get("14400", "?")
     if alignment == "mixed":
         d1_arrow = "\u2191" if d1 == "bullish" else "\u2193"
         h4_arrow = "\u2191" if h4 == "bullish" else "\u2193"
-        return "D1{d1} but H4{h4} \u2014 mixed: wait or reduce size".format(
+        return "D1{d1} H4{h4} \u2014 змішаний: чекати або зменшити розмір".format(
             d1=d1_arrow, h4=h4_arrow
         )
     # aligned
     if is_counter:
-        return "HTF {dir} aligned \u2014 counter-trend zone, reduce size".format(
+        return "HTF {dir} \u2014 контртрендова зона, зменшити розмір".format(
             dir=htf_direction or ""
         )
     if zone and "premium" in getattr(zone, "kind", ""):
-        return "H4 pullback to premium OB \u2014 expect rejection"
-    return "HTF {dir} aligned \u2014 watch for entry structure".format(
+        return "H4 відкат до premium OB \u2014 чекаємо відбій"
+    return "HTF {dir} \u2014 шукаємо структуру для входу".format(
         dir=htf_direction or ""
     )
 
@@ -438,8 +438,8 @@ def _build_session_context(session_name, in_killzone):
     if not label:
         return ""
     if in_killzone:
-        return "{} KZ active \u2014 high probability".format(label)
-    return "{} session active".format(label)
+        return "{} KZ активна \u2014 висока ймовірність".format(label)
+    return "{} сесія активна".format(label)
 
 
 # ── Next Area ───────────────────────────────────────────────

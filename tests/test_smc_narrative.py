@@ -182,7 +182,7 @@ def test_trade_reduced_mixed_htf():
 
     assert nb.mode == "trade"
     assert nb.sub_mode == "reduced"
-    assert "reduced" in nb.headline.lower()
+    assert "reduced" in nb.headline.lower() or "змішаний" in nb.headline.lower()
 
 
 # ── 4. test_wait_no_setup ────────────────────────────────
@@ -255,7 +255,7 @@ def test_trigger_approaching():
     )
 
     assert nb.scenarios[0].trigger == "approaching"
-    assert "pts from zone" in nb.scenarios[0].trigger_desc
+    assert "пт від зони" in nb.scenarios[0].trigger_desc
 
 
 # ── 8. test_trigger_in_zone ──────────────────────────────
@@ -272,7 +272,7 @@ def test_trigger_in_zone():
     )
 
     assert nb.scenarios[0].trigger == "in_zone"
-    assert "wait" in nb.scenarios[0].trigger_desc.lower()
+    assert "чекаємо" in nb.scenarios[0].trigger_desc.lower()
 
 
 # ── 9. test_trigger_ready ────────────────────────────────
@@ -296,7 +296,7 @@ def test_trigger_ready():
     )
 
     assert nb.scenarios[0].trigger == "ready"
-    assert "confirmed" in nb.scenarios[0].trigger_desc.lower()
+    assert "підтверджені" in nb.scenarios[0].trigger_desc.lower()
 
 
 # ── 9a. CHoCH + in_zone but NO displacement → in_zone ───
@@ -318,9 +318,6 @@ def test_trigger_in_zone_choch_no_displacement():
 
     assert nb.scenarios[0].trigger == "in_zone"
     assert "choch" in nb.scenarios[0].trigger_desc.lower()
-
-
-# ── 9b. CHoCH + displacement but far → approaching ──────
 
 
 def test_trigger_approaching_far_with_choch():
@@ -366,7 +363,7 @@ def test_trigger_triggered_proximate_with_displacement():
     )
 
     assert nb.scenarios[0].trigger == "triggered"
-    assert "displacement" in nb.scenarios[0].trigger_desc.lower()
+    assert "імпульс" in nb.scenarios[0].trigger_desc.lower()
 
 
 # ── 10. test_invalidation_crossed ────────────────────────
@@ -401,7 +398,7 @@ def test_fvg_context_overlap():
         snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config()
     )
 
-    assert "refined by FVG" in nb.fvg_context
+    assert "уточнений" in nb.fvg_context or "FVG" in nb.fvg_context
 
 
 # ── 12. test_fvg_context_empty ───────────────────────────
@@ -477,7 +474,7 @@ def test_degraded_fallback():
     """Trigger exception → fallback NarrativeBlock (N3)."""
     fb = _fallback_narrative_block()
     assert fb.mode == "wait"
-    assert "unavailable" in fb.headline.lower()
+    assert "недоступний" in fb.headline.lower()
     assert "computation_error" in fb.warnings
 
     # Also verify synthesize_narrative catches exceptions
@@ -735,7 +732,7 @@ class TestTooFarGuard:
         assert nb.mode == "wait"
         assert nb.sub_mode == "too_far"
         assert "zone_too_far" in nb.warnings
-        assert "too far" in nb.headline.lower()
+        assert "далеко" in nb.headline.lower()
 
     def test_too_far_bullish_zone(self):
         """Price far above bull OB → wait/too_far."""

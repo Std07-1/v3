@@ -498,9 +498,14 @@ class SmcRunner:
             sessions_active = self._engine._config.sessions.enabled
             bias_map = self.get_bias_map(symbol)
             return compose_shell_payload(
-                narrative, bias_map, viewer_tf_s, shell_cfg,
+                narrative,
+                bias_map,
+                viewer_tf_s,
+                shell_cfg,
                 sessions_active=sessions_active,
             )
         except Exception:
-            _log.warning("SHELL_COMPOSE_ERR sym=%s tf=%d", symbol, viewer_tf_s, exc_info=True)
+            _log.warning(
+                "SHELL_COMPOSE_ERR sym=%s tf=%d", symbol, viewer_tf_s, exc_info=True
+            )
             return None

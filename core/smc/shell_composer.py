@@ -91,9 +91,7 @@ def compose_shell_payload(
     tactical_strip = _build_tactical_strip(bias_map, strip_tfs)
 
     # ── Stage mapping (§5.2.1) ──
-    stage, direction = _resolve_stage(
-        narrative, sessions_active, tactical_strip
-    )
+    stage, direction = _resolve_stage(narrative, sessions_active, tactical_strip)
 
     # ── Stage label ──
     stage_label = _resolve_stage_label(stage, direction, stage_labels)
@@ -102,9 +100,7 @@ def compose_shell_payload(
     stage_context = _build_stage_context(narrative, stage, direction, signal)
 
     # ── Micro card ──
-    micro_card = _build_micro_card(
-        narrative, stage, mode_texts, sessions_active
-    )
+    micro_card = _build_micro_card(narrative, stage, mode_texts, sessions_active)
 
     # ── Signal injection (SE3): only for ready/triggered ──
     # ADR-0039 slot — None until implemented
@@ -138,29 +134,29 @@ def _resolve_stage(
             if sessions_active and not narrative.current_session:
                 stage = "stayout"  # Row 1: off-session
             else:
-                stage = "wait"     # Row 2/3
+                stage = "wait"  # Row 2/3
         else:
-            stage = "wait"          # Row 4: wait with scenarios
+            stage = "wait"  # Row 4: wait with scenarios
         return (stage, direction)
 
     # ── trade mode ──
     if narrative.mode == "trade":
         if narrative.sub_mode == "reduced":
-            stage = "prepare"       # Row 5
+            stage = "prepare"  # Row 5
         elif narrative.sub_mode == "aligned" and narrative.scenarios:
             trigger = narrative.scenarios[0].trigger
             if trigger == "approaching":
-                stage = "prepare"    # Row 6
+                stage = "prepare"  # Row 6
             elif trigger == "in_zone":
-                stage = "ready"      # Row 7
+                stage = "ready"  # Row 7
             elif trigger == "ready":
-                stage = "ready"      # Row 8
+                stage = "ready"  # Row 8
             elif trigger == "triggered":
                 stage = "triggered"  # Row 9
             else:
-                stage = "wait"       # fallback
+                stage = "wait"  # fallback
         else:
-            stage = "wait"           # fallback (counter, unknown)
+            stage = "wait"  # fallback (counter, unknown)
         # ── D1 conflict downgrade (B9) ──
         if stage in ("ready", "triggered"):
             if _has_d1_conflict(tactical_strip):
@@ -274,11 +270,13 @@ def _build_tactical_strip(
         if not direction:
             continue
         tf_label = _TF_LABELS.get(tf_s, f"TF{tf_s}")
-        chips.append(TfChip(
-            tf_label=tf_label,
-            direction=direction,
-            chip_state="normal",  # refined below
-        ))
+        chips.append(
+            TfChip(
+                tf_label=tf_label,
+                direction=direction,
+                chip_state="normal",  # refined below
+            )
+        )
         directions.append(direction)
 
     if not chips:
@@ -315,17 +313,21 @@ def _build_tactical_strip(
             # This chip disagrees with majority
             if chip.tf_label == "D1":
                 d1_is_conflict = True
-                refined_chips.append(TfChip(
-                    tf_label=chip.tf_label,
-                    direction=chip.direction,
-                    chip_state="cfl",
-                ))
+                refined_chips.append(
+                    TfChip(
+                        tf_label=chip.tf_label,
+                        direction=chip.direction,
+                        chip_state="cfl",
+                    )
+                )
             else:
-                refined_chips.append(TfChip(
-                    tf_label=chip.tf_label,
-                    direction=chip.direction,
-                    chip_state="brk",
-                ))
+                refined_chips.append(
+                    TfChip(
+                        tf_label=chip.tf_label,
+                        direction=chip.direction,
+                        chip_state="brk",
+                    )
+                )
 
     if d1_is_conflict:
         tag_text = _TAG_D1_CFL

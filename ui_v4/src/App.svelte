@@ -283,8 +283,7 @@
     if ((f as any)?.narrative != null)
       cachedNarrative = (f as any).narrative ?? null;
     // ADR-0036: shell payload caching (delta frames without shell don't reset it)
-    if ((f as any)?.shell !== undefined)
-      cachedShell = (f as any).shell ?? null;
+    if ((f as any)?.shell !== undefined) cachedShell = (f as any).shell ?? null;
     // Track price/time from frames for HUD
     if (f) {
       const candles = f.candles;

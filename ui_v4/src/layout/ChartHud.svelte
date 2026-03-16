@@ -79,9 +79,24 @@
 
     // ─── Shell state (ADR-0036) ───
     let microCardOpen = $state(false);
+    let stripCollapsed = $state(
+        typeof localStorage !== "undefined"
+            ? localStorage.getItem("shell_strip_collapsed") === "1"
+            : false,
+    );
 
     function toggleMicroCard() {
         microCardOpen = !microCardOpen;
+    }
+
+    function toggleStrip() {
+        stripCollapsed = !stripCollapsed;
+        if (typeof localStorage !== "undefined") {
+            localStorage.setItem(
+                "shell_strip_collapsed",
+                stripCollapsed ? "1" : "0",
+            );
+        }
     }
 
     // Shell stage CSS class
@@ -447,8 +462,12 @@
             <!-- ADR-0036: Shell stage badge (replaces narrative inline) -->
             {#if shell}
                 <span class="hud-sep">·</span>
-                <button class="shell-stage" onclick={toggleMicroCard} type="button"
-                    title="Click to expand details">
+                <button
+                    class="shell-stage"
+                    onclick={toggleMicroCard}
+                    type="button"
+                    title="Click to expand details"
+                >
                     <span class="shell-stlbl">{shell.stage_label}</span>
                     {#if shell.stage_context}
                         <span class="shell-stctx">{shell.stage_context}</span>
@@ -460,44 +479,69 @@
 
     <!-- ADR-0036: TF Strip -->
     {#if shell?.tactical_strip}
-        <div class="shell-strip">
-            {#if shell.tactical_strip.alignment_type === 'htf_aligned'}
+        <div class="shell-strip" class:collapsed={stripCollapsed}>
+            {#if shell.tactical_strip.alignment_type === "htf_aligned"}
                 <div class="al-pill">
-                    <span class="al-word"
-                        class:bull={shell.tactical_strip.alignment_direction === 'bullish'}
-                        class:bear={shell.tactical_strip.alignment_direction === 'bearish'}>
-                        {shell.tactical_strip.alignment_direction === 'bullish' ? 'ALIGNED ▲' : 'ALIGNED ▼'}
+                    <span
+                        class="al-word"
+                        class:bull={shell.tactical_strip.alignment_direction ===
+                            "bullish"}
+                        class:bear={shell.tactical_strip.alignment_direction ===
+                            "bearish"}
+                    >
+                        {shell.tactical_strip.alignment_direction === "bullish"
+                            ? "ALIGNED ▲"
+                            : "ALIGNED ▼"}
                     </span>
                     <span class="al-tfs">
-                        {shell.tactical_strip.chips.map(c => c.tf_label).join(' · ')}
+                        {shell.tactical_strip.chips
+                            .map((c) => c.tf_label)
+                            .join(" · ")}
                     </span>
                 </div>
             {:else}
                 <div class="shell-chips">
                     {#each shell.tactical_strip.chips as chip}
-                        <span class="shell-chip"
-                            class:brk={chip.chip_state === 'brk'}
-                            class:cfl={chip.chip_state === 'cfl'}>
+                        <span
+                            class="shell-chip"
+                            class:brk={chip.chip_state === "brk"}
+                            class:cfl={chip.chip_state === "cfl"}
+                        >
                             <span class="chip-tf">{chip.tf_label}</span>
-                            <span class="chip-arr"
-                                class:bull={chip.direction === 'bullish'}
-                                class:bear={chip.direction === 'bearish'}>
-                                {chip.direction === 'bullish' ? '▲' : '▼'}
+                            <span
+                                class="chip-arr"
+                                class:bull={chip.direction === "bullish"}
+                                class:bear={chip.direction === "bearish"}
+                            >
+                                {chip.direction === "bullish" ? "▲" : "▼"}
                             </span>
-                            {#if chip.chip_state === 'brk'}<span class="chip-dot brk-dot"></span>{/if}
-                            {#if chip.chip_state === 'cfl'}<span class="chip-dot cfl-dot"></span>{/if}
+                            {#if chip.chip_state === "brk"}<span
+                                    class="chip-dot brk-dot"
+                                ></span>{/if}
+                            {#if chip.chip_state === "cfl"}<span
+                                    class="chip-dot cfl-dot"
+                                ></span>{/if}
                         </span>
                     {/each}
                 </div>
             {/if}
             {#if shell.tactical_strip.tag_text}
-                <span class="strip-tag"
-                    class:warn={shell.tactical_strip.tag_variant === 'warn'}
-                    class:danger={shell.tactical_strip.tag_variant === 'danger'}>
+                <span
+                    class="strip-tag"
+                    class:warn={shell.tactical_strip.tag_variant === "warn"}
+                    class:danger={shell.tactical_strip.tag_variant === "danger"}
+                >
                     {shell.tactical_strip.tag_text}
                 </span>
             {/if}
         </div>
+        <!-- Strip handle: click to collapse/expand TF strip -->
+        <button
+            class="strip-handle"
+            onclick={toggleStrip}
+            type="button"
+            title="показати / сховати TF strip"
+        ></button>
     {/if}
 
     <!-- ADR-0036: Micro-card (expandable) -->
@@ -518,7 +562,9 @@
                 </div>
                 <div class="mc-field">
                     <div class="mc-label">Що скасує</div>
-                    <div class="mc-val red">{shell.micro_card.what_cancels}</div>
+                    <div class="mc-val red">
+                        {shell.micro_card.what_cancels}
+                    </div>
                 </div>
                 {#if shell.micro_card.warning}
                     <div class="mc-warn">⚠ {shell.micro_card.warning}</div>
@@ -1087,11 +1133,37 @@
     /* ═══ ADR-0036: Shell Stage System ═══ */
 
     /* Stage CSS custom properties (5 stages) */
-    .st-wait    { --sb: rgba(255,255,255,0.07); --sa: rgba(255,255,255,0.15); --st: rgba(255,255,255,0.42); --ss: none; }
-    .st-prepare { --sb: rgba(251,191,36,0.22); --sa: rgba(251,191,36,0.6); --st: rgba(251,191,36,0.9); --ss: none; }
-    .st-ready   { --sb: rgba(52,211,153,0.28); --sa: rgba(52,211,153,0.75); --st: rgba(52,211,153,0.95); --ss: 0 1px 0 rgba(52,211,153,0.07); }
-    .st-triggered { --sb: rgba(99,179,237,0.38); --sa: rgba(99,179,237,0.85); --st: rgba(99,179,237,1); --ss: 0 1px 0 rgba(99,179,237,0.1), 0 2px 8px rgba(99,179,237,0.04); }
-    .st-stayout { --sb: rgba(252,129,129,0.2); --sa: rgba(252,129,129,0.55); --st: rgba(252,129,129,0.8); --ss: none; }
+    .st-wait {
+        --sb: rgba(255, 255, 255, 0.07);
+        --sa: rgba(255, 255, 255, 0.15);
+        --st: rgba(255, 255, 255, 0.42);
+        --ss: none;
+    }
+    .st-prepare {
+        --sb: rgba(251, 191, 36, 0.22);
+        --sa: rgba(251, 191, 36, 0.6);
+        --st: rgba(251, 191, 36, 0.9);
+        --ss: none;
+    }
+    .st-ready {
+        --sb: rgba(52, 211, 153, 0.28);
+        --sa: rgba(52, 211, 153, 0.75);
+        --st: rgba(52, 211, 153, 0.95);
+        --ss: 0 1px 0 rgba(52, 211, 153, 0.07);
+    }
+    .st-triggered {
+        --sb: rgba(99, 179, 237, 0.38);
+        --sa: rgba(99, 179, 237, 0.85);
+        --st: rgba(99, 179, 237, 1);
+        --ss: 0 1px 0 rgba(99, 179, 237, 0.1),
+            0 2px 8px rgba(99, 179, 237, 0.04);
+    }
+    .st-stayout {
+        --sb: rgba(252, 129, 129, 0.2);
+        --sa: rgba(252, 129, 129, 0.55);
+        --st: rgba(252, 129, 129, 0.8);
+        --ss: none;
+    }
 
     /* Shell stage badge (inline, same row as HUD) */
     .shell-stage {
@@ -1105,18 +1177,18 @@
         transition: background 0.15s;
     }
     .shell-stage:hover {
-        background: rgba(255,255,255,0.06);
+        background: rgba(255, 255, 255, 0.06);
     }
     .shell-stlbl {
         font-size: 11px;
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.05em;
-        color: var(--st, rgba(255,255,255,0.42));
+        color: var(--st, rgba(255, 255, 255, 0.42));
     }
     .shell-stctx {
         font-size: 9px;
-        color: rgba(255,255,255,0.35);
+        color: rgba(255, 255, 255, 0.35);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -1127,9 +1199,49 @@
     .shell-strip {
         display: flex;
         align-items: center;
-        height: 22px;
+        height: 20px;
         padding: 0 12px;
         gap: 4px;
+        background: rgba(10, 12, 18, 0.95);
+        overflow: hidden;
+        max-height: 20px;
+        transition:
+            max-height 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94),
+            opacity 220ms;
+        opacity: 1;
+    }
+    .shell-strip.collapsed {
+        max-height: 0;
+        opacity: 0;
+    }
+    .strip-handle {
+        all: unset;
+        height: 4px;
+        background: rgba(10, 12, 18, 0.95);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 140ms;
+        position: relative;
+        flex-shrink: 0;
+    }
+    .strip-handle::after {
+        content: "";
+        width: 24px;
+        height: 1.5px;
+        border-radius: 1px;
+        background: rgba(255, 255, 255, 0.12);
+        transition:
+            background 140ms,
+            width 140ms;
+    }
+    .strip-handle:hover {
+        background: rgba(255, 255, 255, 0.04);
+    }
+    .strip-handle:hover::after {
+        background: rgba(255, 255, 255, 0.28);
+        width: 32px;
     }
     .al-pill {
         display: flex;
@@ -1141,11 +1253,15 @@
         font-weight: 500;
         text-transform: uppercase;
     }
-    .al-word.bull { color: rgba(52,211,153,0.85); }
-    .al-word.bear { color: rgba(252,129,129,0.8); }
+    .al-word.bull {
+        color: rgba(52, 211, 153, 0.85);
+    }
+    .al-word.bear {
+        color: rgba(252, 129, 129, 0.8);
+    }
     .al-tfs {
         font-size: 9px;
-        color: rgba(255,255,255,0.18);
+        color: rgba(255, 255, 255, 0.18);
         text-transform: uppercase;
     }
     .shell-chips {
@@ -1155,99 +1271,128 @@
     .shell-chip {
         display: flex;
         align-items: center;
-        gap: 4px;
-        padding: 0 10px;
-        height: 22px;
+        gap: 3px;
+        padding: 0 7px;
+        height: 20px;
         font-size: 9px;
         position: relative;
     }
     .shell-chip:not(:last-child)::after {
-        content: '';
+        content: "";
         position: absolute;
         right: 0;
-        top: 5px;
-        bottom: 5px;
+        top: 4px;
+        bottom: 4px;
         width: 0.5px;
-        background: rgba(255,255,255,0.07);
+        background: rgba(255, 255, 255, 0.07);
     }
-    .shell-chip.brk { background: rgba(251,191,36,0.07); border-radius: 3px; }
-    .shell-chip.cfl { background: rgba(252,129,129,0.07); border-radius: 3px; }
+    .shell-chip.brk {
+        background: rgba(251, 191, 36, 0.07);
+        border-radius: 3px;
+    }
+    .shell-chip.cfl {
+        background: rgba(252, 129, 129, 0.07);
+        border-radius: 3px;
+    }
     .chip-tf {
         font-weight: 500;
         text-transform: uppercase;
-        color: rgba(255,255,255,0.28);
+        color: rgba(255, 255, 255, 0.28);
     }
-    .shell-chip.brk .chip-tf { color: rgba(251,191,36,0.8); }
-    .shell-chip.cfl .chip-tf { color: rgba(252,129,129,0.75); }
-    .chip-arr { font-size: 10px; }
-    .chip-arr.bull { color: rgba(52,211,153,0.6); }
-    .chip-arr.bear { color: rgba(252,129,129,0.55); }
+    .shell-chip.brk .chip-tf {
+        color: rgba(251, 191, 36, 0.8);
+    }
+    .shell-chip.cfl .chip-tf {
+        color: rgba(252, 129, 129, 0.75);
+    }
+    .chip-arr {
+        font-size: 10px;
+    }
+    .chip-arr.bull {
+        color: rgba(52, 211, 153, 0.6);
+    }
+    .chip-arr.bear {
+        color: rgba(252, 129, 129, 0.55);
+    }
     .chip-dot {
         width: 4px;
         height: 4px;
         border-radius: 50%;
     }
-    .brk-dot { background: rgba(251,191,36,0.9); }
-    .cfl-dot { background: rgba(252,129,129,0.85); }
+    .brk-dot {
+        background: rgba(251, 191, 36, 0.9);
+    }
+    .cfl-dot {
+        background: rgba(252, 129, 129, 0.85);
+    }
     .strip-tag {
         margin-left: auto;
         font-size: 9px;
         font-weight: 500;
         text-transform: uppercase;
-        color: rgba(52,211,153,0.35);
+        color: rgba(52, 211, 153, 0.35);
     }
-    .strip-tag.warn { color: rgba(251,191,36,0.45); }
-    .strip-tag.danger { color: rgba(252,129,129,0.45); }
+    .strip-tag.warn {
+        color: rgba(251, 191, 36, 0.45);
+    }
+    .strip-tag.danger {
+        color: rgba(252, 129, 129, 0.45);
+    }
 
     /* ─── Micro-card (expandable) ─── */
     .shell-mc {
         max-height: 0;
         opacity: 0;
         overflow: hidden;
-        transition: max-height 360ms cubic-bezier(.22,1,.36,1), opacity 180ms;
-        background: rgba(13,15,21,0.98);
-        border-left: 2px solid var(--sa, rgba(255,255,255,0.15));
+        transition:
+            max-height 360ms cubic-bezier(0.22, 1, 0.36, 1),
+            opacity 180ms;
+        background: rgba(13, 15, 21, 0.92);
+        backdrop-filter: blur(16px);
+        border-left: 2px solid var(--sa, rgba(255, 255, 255, 0.15));
+        border-bottom: 0.5px solid var(--sb, rgba(255, 255, 255, 0.07));
         margin-left: 12px;
         border-radius: 0 0 6px 0;
     }
     .shell-mc.open {
-        max-height: 280px;
+        max-height: 200px;
         opacity: 1;
     }
     .mc-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 7px 20px;
-        padding: 10px 14px 10px 10px;
+        gap: 5px 14px;
+        padding: 7px 10px 7px 8px;
     }
     .mc-field {
         display: flex;
         flex-direction: column;
     }
     .mc-label {
-        font-size: 9px;
+        font-size: 8px;
         text-transform: uppercase;
         font-weight: 500;
         letter-spacing: 0.1em;
-        color: rgba(255,255,255,0.28);
-        margin-bottom: 3px;
+        color: rgba(255, 255, 255, 0.25);
+        margin-bottom: 2px;
     }
     .mc-val {
-        font-size: 11px;
-        color: rgba(255,255,255,0.72);
+        font-size: 10px;
+        color: rgba(255, 255, 255, 0.72);
+        line-height: 1.4;
     }
     .mc-val.acc {
-        color: var(--st, rgba(255,255,255,0.42));
+        color: var(--st, rgba(255, 255, 255, 0.42));
     }
     .mc-val.red {
-        color: rgba(252,129,129,0.8);
+        color: rgba(252, 129, 129, 0.8);
     }
     .mc-warn {
         grid-column: span 2;
-        font-size: 10px;
-        color: rgba(251,191,36,0.6);
-        border-top: 0.5px solid rgba(255,255,255,0.06);
-        margin-top: 6px;
-        padding-top: 7px;
+        font-size: 9px;
+        color: rgba(251, 191, 36, 0.6);
+        border-top: 0.5px solid rgba(255, 255, 255, 0.06);
+        margin-top: 4px;
+        padding-top: 5px;
     }
 </style>

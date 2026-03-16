@@ -386,7 +386,7 @@ class TestNarrativeBlockSessions:
             warnings=[],
             current_session="london",
             in_killzone=True,
-            session_context="London KZ active",
+            session_context="London KZ активна",
         )
         assert block.current_session == "london"
         assert block.in_killzone is True
@@ -412,12 +412,12 @@ class TestNarrativeWireSessions:
             warnings=[],
             current_session="london",
             in_killzone=True,
-            session_context="London KZ active",
+            session_context="London KZ активна",
         )
         wire = narrative_to_wire(block)
         assert wire["current_session"] == "london"
         assert wire["in_killzone"] is True
-        assert wire["session_context"] == "London KZ active"
+        assert wire["session_context"] == "London KZ активна"
 
 
 # ── SmcEngine session integration ─────────────────────────

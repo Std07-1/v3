@@ -321,7 +321,11 @@ class TfChip:
     chip_state: str  # "normal" | "brk" | "cfl"
 
     def to_wire(self) -> Dict[str, Any]:
-        return {"tf_label": self.tf_label, "direction": self.direction, "chip_state": self.chip_state}
+        return {
+            "tf_label": self.tf_label,
+            "direction": self.direction,
+            "chip_state": self.chip_state,
+        }
 
 
 @dataclasses.dataclass(frozen=True)
