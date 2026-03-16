@@ -18,16 +18,13 @@
         }
     }
 
-    // Trigger emoji + color class
-    const triggerClass = $derived(
-        narrative?.scenarios?.[0]?.trigger === "ready"
-            ? "trigger-ready"
-            : narrative?.scenarios?.[0]?.trigger === "triggered"
-              ? "trigger-triggered"
-              : narrative?.scenarios?.[0]?.trigger === "in_zone"
-                ? "trigger-inzone"
-                : "trigger-approaching",
-    );
+    // Trigger color class — per-scenario (P4 fix: was global from [0])
+    function getTriggerClass(trigger: string): string {
+        if (trigger === "ready") return "trigger-ready";
+        if (trigger === "triggered") return "trigger-triggered";
+        if (trigger === "in_zone") return "trigger-inzone";
+        return "trigger-approaching";
+    }
 </script>
 
 {#if narrative}
@@ -38,6 +35,7 @@
         <button
             class="headline-bar"
             class:trade={narrative.mode === "trade"}
+            class:counter={narrative.sub_mode === "counter"}
             onclick={toggle}
         >
             <span class="headline-text">{narrative.headline}</span>
@@ -69,7 +67,7 @@
                                 {sc.entry_desc}
                             </span>
                         </div>
-                        <div class="sc-trigger {triggerClass}">
+                        <div class="sc-trigger {getTriggerClass(sc.trigger)}">
                             {sc.trigger_desc}
                         </div>
                         {#if sc.target_desc}
@@ -136,6 +134,9 @@
     }
     .headline-bar.trade {
         border-color: rgba(74, 144, 217, 0.35);
+    }
+    .headline-bar.counter {
+        border-color: rgba(255, 167, 38, 0.45);
     }
     .headline-text {
         flex: 1;

@@ -279,6 +279,11 @@ def _find_target(snapshot, zone, direction, config, current_price=0.0, atr=0.0):
         z_dir = _zone_direction(z)
         if z_dir != direction and z.context_layer == "institutional":
             center = (z.high + z.low) / 2
+            # P2: directional gate — target zone must be ahead of price
+            if direction == "short" and center >= current_price:
+                continue
+            if direction == "long" and center <= current_price:
+                continue
             if max_dist > 0 and abs(center - current_price) > max_dist:
                 continue
             return "HTF {kind} {low:.0f}\u2013{high:.0f}".format(
@@ -306,6 +311,11 @@ def _find_target_key_level(levels, direction, current_price=0.0, max_dist=0.0):
     )
     for lv in levels:
         if lv.kind in target_kinds_short:
+            # P2: directional gate — target must be ahead of price
+            if direction == "short" and lv.price >= current_price:
+                continue
+            if direction == "long" and lv.price <= current_price:
+                continue
             if max_dist > 0 and abs(lv.price - current_price) > max_dist:
                 continue
             return lv
@@ -317,6 +327,11 @@ def _find_target_swing(swings, direction, current_price=0.0, max_dist=0.0):
     target_kinds = {"ll", "lh"} if direction == "short" else {"hh", "hl"}
     for sw in reversed(swings):
         if sw.kind in target_kinds:
+            # P2: directional gate — target must be ahead of price
+            if direction == "short" and sw.price >= current_price:
+                continue
+            if direction == "long" and sw.price <= current_price:
+                continue
             if max_dist > 0 and abs(sw.price - current_price) > max_dist:
                 continue
             return sw
@@ -363,16 +378,16 @@ def _detect_market_phase(swings, config):
     if len(classified) < 2:
         return "ranging"
 
-    last_n = classified[-4:] if len(classified) >= 4 else classified
-    kinds = [s.kind for s in last_n]
+    # P3: use phase_hysteresis_bars (BH-6) — require N consecutive same-direction swings
+    hysteresis = max(2, config.get("phase_hysteresis_bars", 3))
+    last_n = classified[-hysteresis:]
+    if len(last_n) < hysteresis:
+        return "ranging"
 
-    # Count consecutive uptrend (HH+HL) and downtrend (LH+LL) signals
-    up = sum(1 for k in kinds if k in ("hh", "hl"))
-    down = sum(1 for k in kinds if k in ("lh", "ll"))
-
-    if up >= 2 and up > down:
+    kinds = {s.kind for s in last_n}
+    if kinds <= {"hh", "hl"}:
         return "trending_up"
-    if down >= 2 and down > up:
+    if kinds <= {"lh", "ll"}:
         return "trending_down"
     return "ranging"
 
@@ -524,6 +539,8 @@ def _synthesize_impl(
         min_grade,
         min_score,
         warnings,
+        alignment=alignment,
+        htf_direction=htf_direction,
     )
 
     # Step 2b: Invalidation check (SC-7)
@@ -655,10 +672,14 @@ _GRADE_ORDER = {"A+": 0, "A": 1, "B": 2, "C": 3}
 
 
 def _select_candidate_zones(
-    zones, zone_grades, current_price, min_grade, min_score, warnings
+    zones, zone_grades, current_price, min_grade, min_score, warnings,
+    alignment=None, htf_direction=None,
 ):
-    # type: (List[SmcZone], Dict[str, dict], float, str, int, List[str]) -> List[SmcZone]
-    """Filter + sort zones by grade/score then proximity."""
+    # type: (List[SmcZone], Dict[str, dict], float, str, int, List[str], Optional[str], Optional[str]) -> List[SmcZone]
+    """Filter + sort zones by grade/score then proximity.
+
+    P6: HTF-aligned zones get +3 virtual bonus in sort key (ICT doctrine).
+    """
     min_grade_idx = _GRADE_ORDER.get(min_grade, 1)
     candidates = []  # type: List[SmcZone]
     for z in zones:
@@ -671,11 +692,19 @@ def _select_candidate_zones(
         if grade_idx <= min_grade_idx and score >= min_score:
             candidates.append(z)
 
-    # Sort: score DESC, proximity ASC
+    # Sort: (score + alignment bonus) DESC, proximity ASC
+    _HTF_ALIGN_BONUS = 3
+
     def sort_key(z):
         gi = zone_grades.get(z.id, {})
         mid = (z.low + z.high) / 2.0
-        return (-gi.get("score", 0), abs(current_price - mid))
+        bonus = 0
+        if alignment == "aligned" and htf_direction:
+            z_dir = _zone_direction(z)
+            htf_trade = "long" if htf_direction == "bullish" else "short"
+            if z_dir == htf_trade:
+                bonus = _HTF_ALIGN_BONUS
+        return (-(gi.get("score", 0) + bonus), abs(current_price - mid))
 
     candidates.sort(key=sort_key)
     return candidates

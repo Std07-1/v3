@@ -530,3 +530,107 @@ def test_htf_alignment_mixed():
 def test_htf_alignment_no_data():
     assert _resolve_htf_alignment({}) == ("no_data", None)
     assert _resolve_htf_alignment({"86400": "bearish"}) == ("no_data", None)
+
+
+# ── P2: Target directional gate ─────────────────────────
+
+
+def test_target_short_skips_level_above_price():
+    """P2: PDL above current price must be skipped for short target."""
+    from core.smc.narrative import _find_target_key_level
+
+    pdl_above = _level("pdl", 5100.0)
+    pdl_below = _level("pdl", 4900.0)
+    # Only pdl_below should match — it's ahead of price for short
+    result = _find_target_key_level([pdl_above, pdl_below], "short", current_price=5000.0)
+    assert result is not None
+    assert result.price == 4900.0
+
+
+def test_target_long_skips_level_below_price():
+    """P2: PDH below current price must be skipped for long target."""
+    from core.smc.narrative import _find_target_key_level
+
+    pdh_below = _level("pdh", 4900.0)
+    pdh_above = _level("pdh", 5100.0)
+    result = _find_target_key_level([pdh_below, pdh_above], "long", current_price=5000.0)
+    assert result is not None
+    assert result.price == 5100.0
+
+
+def test_target_swing_respects_direction():
+    """P2: target swing must be ahead of price."""
+    from core.smc.narrative import _find_target_swing
+
+    sw_above = _swing("ll", 5100.0, 3000)
+    sw_below = _swing("ll", 4900.0, 2000)
+    result = _find_target_swing([sw_above, sw_below], "short", current_price=5000.0)
+    assert result is not None
+    assert result.price == 4900.0
+
+
+# ── P3: Market phase hysteresis ──────────────────────────
+
+
+def test_market_phase_hysteresis_blocks_flicker():
+    """P3: mixed [hh, ll, hh, hl] with hysteresis=3 → ranging (not enough consecutive)."""
+    swings = [_swing("hh", 100, 1), _swing("ll", 90, 2), _swing("hh", 110, 3), _swing("hl", 95, 4)]
+    cfg = {"market_phase_enabled": True, "phase_hysteresis_bars": 3}
+    assert _detect_market_phase(swings, cfg) == "ranging"
+
+
+def test_market_phase_hysteresis_passes_with_consecutive():
+    """P3: 3 consecutive bullish swings [hh, hl, hh] → trending_up."""
+    swings = [_swing("ll", 80, 1), _swing("hh", 110, 2), _swing("hl", 95, 3), _swing("hh", 120, 4)]
+    cfg = {"market_phase_enabled": True, "phase_hysteresis_bars": 3}
+    assert _detect_market_phase(swings, cfg) == "trending_up"
+
+
+def test_market_phase_hysteresis_uses_config():
+    """P3: hysteresis=2 is less strict — [hh, hl] in last 2 → trending_up."""
+    swings = [_swing("ll", 80, 1), _swing("hh", 110, 2), _swing("hl", 95, 3)]
+    cfg = {"market_phase_enabled": True, "phase_hysteresis_bars": 2}
+    assert _detect_market_phase(swings, cfg) == "trending_up"
+
+
+# ── P6: HTF-first candidate ranking ─────────────────────
+
+
+def test_htf_aligned_zone_wins_over_higher_score_counter():
+    """P6: HTF-aligned zone (lower raw score) beats counter-trend zone (higher raw score)."""
+    from core.smc.narrative import _select_candidate_zones
+
+    # ob_bear = short zone; HTF bearish = aligned
+    z_aligned = _zone(kind="ob_bear", high=5200, low=5150, zone_id="z_aligned")
+    # ob_bull = long zone; HTF bearish = counter-trend
+    z_counter = _zone(kind="ob_bull", high=5100, low=5050, zone_id="z_counter")
+
+    grades = {
+        "z_aligned": {"score": 6, "grade": "A", "factors": []},
+        "z_counter": {"score": 8, "grade": "A+", "factors": []},
+    }
+    result = _select_candidate_zones(
+        [z_aligned, z_counter], grades, 5180.0, "A", 6, [],
+        alignment="aligned", htf_direction="bearish",
+    )
+    assert len(result) == 2
+    # z_aligned should be first despite lower raw score (6+3 bonus > 8)
+    assert result[0].id == "z_aligned"
+
+
+def test_htf_ranking_no_bonus_when_mixed():
+    """P6: no alignment bonus when HTF is mixed."""
+    from core.smc.narrative import _select_candidate_zones
+
+    z1 = _zone(kind="ob_bear", high=5200, low=5150, zone_id="z1")
+    z2 = _zone(kind="ob_bull", high=5100, low=5050, zone_id="z2")
+    grades = {
+        "z1": {"score": 6, "grade": "A", "factors": []},
+        "z2": {"score": 8, "grade": "A+", "factors": []},
+    }
+    result = _select_candidate_zones(
+        [z1, z2], grades, 5120.0, "A", 6, [],
+        alignment="mixed", htf_direction=None,
+    )
+    # z2 wins by raw score when no alignment bonus
+    assert result[0].id == "z2"

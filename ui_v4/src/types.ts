@@ -98,7 +98,7 @@ export interface ActiveScenario {
 /** ADR-0033 + ADR-0035: повний narrative block для одного symbol+viewer_tf. */
 export interface NarrativeBlock {
   mode: 'trade' | 'wait';
-  sub_mode: 'aligned' | 'reduced' | 'market_closed' | '';
+  sub_mode: 'aligned' | 'reduced' | 'counter' | 'market_closed' | '';
   headline: string;
   bias_summary: string;
   scenarios: ActiveScenario[];    // max 2 (T-1)
