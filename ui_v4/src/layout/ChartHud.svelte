@@ -591,6 +591,43 @@
                                     </div>
                                 {/if}
                             </div>
+                            <!-- ADR-0039: Signal panel inside micro-card -->
+                            {#if shell.signal}
+                                {@const sig = shell.signal}
+                                <div class="mc-sig-sep"></div>
+                                <div class="mc-sig">
+                                    <div class="mc-sig-head">
+                                        <span class="mc-sig-dir" class:long={sig.direction === 'long'} class:short={sig.direction === 'short'}>
+                                            {sig.direction === 'long' ? '▲ LONG' : '▼ SHORT'}
+                                        </span>
+                                        <span class="mc-sig-state">{sig.state.toUpperCase()}</span>
+                                        <span class="mc-sig-conf" title="Confidence score">
+                                            {sig.confidence}%
+                                        </span>
+                                    </div>
+                                    <div class="mc-grid mc-sig-grid">
+                                        <div class="mc-field" title="Ціна входу ({sig.entry_method})">
+                                            <div class="mc-label">Entry</div>
+                                            <div class="mc-val entry">{sig.entry_price.toFixed(2)}</div>
+                                        </div>
+                                        <div class="mc-field" title="R:R відношення ризик/прибуток">
+                                            <div class="mc-label">R:R</div>
+                                            <div class="mc-val">{sig.risk_reward.toFixed(1)}:1</div>
+                                        </div>
+                                        <div class="mc-field" title="Стоп-лосс">
+                                            <div class="mc-label">SL</div>
+                                            <div class="mc-val sl">{sig.stop_loss.toFixed(2)}</div>
+                                        </div>
+                                        <div class="mc-field" title="Тейк-профіт">
+                                            <div class="mc-label">TP</div>
+                                            <div class="mc-val tp">{sig.take_profit.toFixed(2)}</div>
+                                        </div>
+                                    </div>
+                                    {#if sig.warnings && sig.warnings.length > 0}
+                                        <div class="mc-warn">⚠ {sig.warnings[0]}</div>
+                                    {/if}
+                                </div>
+                            {/if}
                         </div>
                     {/if}
                 </div>
@@ -1407,4 +1444,45 @@
         margin-top: 4px;
         padding-top: 5px;
     }
+
+    /* ─── ADR-0039: Signal section inside micro-card ─── */
+    .mc-sig-sep {
+        height: 0.5px;
+        background: rgba(255, 255, 255, 0.08);
+        margin: 2px 8px 0;
+    }
+    .mc-sig {
+        padding: 5px 10px 7px 8px;
+    }
+    .mc-sig-head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 5px;
+    }
+    .mc-sig-dir {
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+    }
+    .mc-sig-dir.long { color: rgba(52, 211, 153, 0.95); }
+    .mc-sig-dir.short { color: rgba(252, 129, 129, 0.95); }
+    .mc-sig-state {
+        font-size: 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: rgba(255, 255, 255, 0.35);
+    }
+    .mc-sig-conf {
+        margin-left: auto;
+        font-size: 9px;
+        font-weight: 600;
+        color: var(--st, rgba(255, 255, 255, 0.42));
+    }
+    .mc-sig-grid {
+        margin: 0;
+    }
+    .mc-val.entry { color: rgba(52, 211, 153, 0.85); }
+    .mc-val.sl { color: rgba(252, 129, 129, 0.8); }
+    .mc-val.tp { color: rgba(96, 165, 250, 0.85); }
 </style>
