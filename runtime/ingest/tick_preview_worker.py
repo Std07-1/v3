@@ -4,7 +4,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from env_profile import load_env_secrets
 from core.config_loader import pick_config_path, load_system_config
@@ -70,6 +70,98 @@ class _M1toM3Buffer:
             src="derived_m1",
             extensions={"m1_count": len(all_bars)},
         )
+
+
+# ---------------------------------------------------------------------------
+# M1→HTF деривація: HTF preview bar (e.g. D1) будується з фіналізованих M1
+# барів (з UDS/disk) + поточного M1 preview (з тиків).
+# ---------------------------------------------------------------------------
+class _M1toHTFBuffer:
+    """Derives HTF preview bar from finalized M1 bars (UDS) + current M1 preview.
+
+    Unlike _M1toM3Buffer which only needs 3 M1 bars (easily accumulated from ticks),
+    D1 needs up to 1440 M1 bars. We load finalized M1 from UDS disk, cache per bucket,
+    and merge with the current M1 tick preview on each update.
+    """
+
+    _CACHE_REFRESH_S = 60.0  # refresh finalized M1 cache every 60 seconds
+
+    def __init__(
+        self,
+        uds: Any,
+        target_tf_s: int,
+        anchor_offset_ms: int = 0,
+        max_m1_load: int = 1500,
+    ) -> None:
+        self._uds = uds
+        self._target_tf_s = int(target_tf_s)
+        self._target_tf_ms = self._target_tf_s * 1000
+        self._anchor_offset_ms = int(anchor_offset_ms)
+        self._max_m1_load = int(max_m1_load)
+        # Cache per symbol: (bucket_open_ms, List[CandleBar], last_refresh_ts)
+        self._cache: Dict[str, tuple] = {}  # type: ignore[type-arg]
+
+    def update(self, symbol: str, m1_bar: CandleBar) -> Optional[CandleBar]:
+        """Called on each M1 preview/promoted update. Returns HTF preview bar or None."""
+        htf_open = _bucket_start_ms(
+            m1_bar.open_time_ms, self._target_tf_ms, self._anchor_offset_ms
+        )
+        htf_close = htf_open + self._target_tf_ms
+
+        # Load / refresh finalized M1 cache
+        cached = self._cache.get(symbol)
+        now = time.time()
+        need_refresh = (
+            cached is None
+            or cached[0] != htf_open
+            or (now - cached[2]) > self._CACHE_REFRESH_S
+        )
+        if need_refresh:
+            m1_bars = self._load_m1_for_bucket(symbol, htf_open, htf_close)
+            self._cache[symbol] = (htf_open, m1_bars, now)
+        else:
+            m1_bars = cached[1]
+
+        # Merge: finalized M1 + current M1 preview (replace same open_time_ms)
+        all_bars: List[CandleBar] = [
+            b for b in m1_bars if b.open_time_ms != m1_bar.open_time_ms
+        ]
+        all_bars.append(m1_bar)
+        all_bars.sort(key=lambda b: b.open_time_ms)
+
+        if not all_bars:
+            return None
+
+        return CandleBar(
+            symbol=symbol,
+            tf_s=self._target_tf_s,
+            open_time_ms=htf_open,
+            close_time_ms=htf_close,
+            o=all_bars[0].o,
+            h=max(b.h for b in all_bars),
+            low=min(b.low for b in all_bars),
+            c=all_bars[-1].c,
+            v=sum(b.v for b in all_bars),
+            complete=False,
+            src="derived_m1",
+            extensions={"m1_count": len(all_bars)},
+        )
+
+    def _load_m1_for_bucket(
+        self, symbol: str, htf_open: int, htf_close: int
+    ) -> List[CandleBar]:
+        """Load finalized M1 bars from UDS disk for the current HTF bucket."""
+        try:
+            bars = self._uds.read_tail_candles(symbol, 60, limit=self._max_m1_load)
+            return [b for b in bars if htf_open <= b.open_time_ms < htf_close]
+        except Exception as exc:
+            logging.warning(
+                "M1toHTF: load M1 failed symbol=%s tf_s=%s err=%s",
+                symbol,
+                self._target_tf_s,
+                exc,
+            )
+            return []
 
 
 try:
@@ -172,6 +264,7 @@ class TickPreviewWorker:
         calendars: Dict[str, MarketCalendar] | None = None,
         auto_promote_m1: bool = False,
         anchor_offset_ms: int = 0,
+        d1_anchor_offset_ms: int = 0,
     ) -> None:
         self._uds = uds
         self._tfs = [int(x) for x in tfs if int(x) > 0]
@@ -183,7 +276,16 @@ class TickPreviewWorker:
         self._auto_promote_m1 = bool(auto_promote_m1)
         # M3 деривація: M1 агрегуємо з тиків, M3 — з M1
         self._derive_m3 = 180 in self._tfs and 60 in self._tfs
-        agg_tfs = [t for t in self._tfs if not (t == 180 and self._derive_m3)]
+        # D1 деривація: D1 будуємо з фіналізованих M1 (UDS) + поточний M1 preview
+        self._derive_d1 = 86400 in self._tfs and 60 in self._tfs
+        agg_tfs = [
+            t
+            for t in self._tfs
+            if not (
+                (t == 180 and self._derive_m3)
+                or (t == 86400 and self._derive_d1)
+            )
+        ]
         self._agg = TickAggregator(
             tf_allowlist=agg_tfs,
             source="preview_tick",
@@ -191,6 +293,15 @@ class TickPreviewWorker:
             anchor_offset_ms=int(anchor_offset_ms),
         )
         self._m3_buffer = _M1toM3Buffer() if self._derive_m3 else None
+        self._d1_buffer: Optional[_M1toHTFBuffer] = (
+            _M1toHTFBuffer(
+                uds=uds,
+                target_tf_s=86400,
+                anchor_offset_ms=int(d1_anchor_offset_ms),
+            )
+            if self._derive_d1
+            else None
+        )
         self._last_tick_ts_ms: Dict[str, int] = {}
         self._last_pub_ms: Dict[tuple[str, int], int] = {}
         self._last_open_ms: Dict[tuple[str, int], int] = {}
@@ -362,6 +473,9 @@ class TickPreviewWorker:
             # M3 деривація: пропускаємо M3 у TickAggregator, виводимо з M1
             if tf_s == 180 and self._derive_m3:
                 continue
+            # D1 деривація: пропускаємо D1 у TickAggregator, виводимо з M1
+            if tf_s == 86400 and self._derive_d1:
+                continue
             promoted, bar = self._agg.update(symbol, tf_s, tick_ts_ms, price)
 
             # Auto-promote: публікуємо завершений бар попередньої хвилини
@@ -377,6 +491,12 @@ class TickPreviewWorker:
                 m3_bar = self._m3_buffer.update(symbol, bar)
                 if m3_bar is not None:
                     self._publish_bar(m3_bar, symbol, 180)
+
+            # M1→D1 деривація: після кожного M1 оновлення будуємо D1
+            if tf_s == 60 and self._d1_buffer is not None:
+                d1_bar = self._d1_buffer.update(symbol, bar)
+                if d1_bar is not None:
+                    self._publish_bar(d1_bar, symbol, 86400)
         self._maybe_emit_stats()
 
     def _publish_promoted(self, promoted, symbol, tf_s):
@@ -565,6 +685,7 @@ def main() -> int:
     auto_promote_m1 = bool(cfg.get("tick_auto_promote_m1", False))
 
     anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
+    d1_anchor_offset_s = int(cfg.get("day_anchor_offset_s_d1", 0) or 0)
     worker = TickPreviewWorker(
         uds=uds,
         tfs=preview_cfg.tfs,
@@ -575,11 +696,13 @@ def main() -> int:
         calendars=calendars,
         auto_promote_m1=auto_promote_m1,
         anchor_offset_ms=anchor_offset_s * 1000,
+        d1_anchor_offset_ms=d1_anchor_offset_s * 1000,
     )
     logging.info(
-        "TickPreview: tfs=%s derive_m3=%s auto_promote_m1=%s symbols=%d",
+        "TickPreview: tfs=%s derive_m3=%s derive_d1=%s auto_promote_m1=%s symbols=%d",
         preview_cfg.tfs,
         worker._derive_m3,
+        worker._derive_d1,
         auto_promote_m1,
         len(all_symbols),
     )
