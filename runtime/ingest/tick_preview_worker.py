@@ -281,8 +281,10 @@ class TickPreviewWorker:
         agg_tfs = [
             t
             for t in self._tfs
-            if not (t == 180 and self._derive_m3)
-            and not (t == 86400 and self._derive_d1)
+            if not (
+                (t == 180 and self._derive_m3)
+                or (t == 86400 and self._derive_d1)
+            )
         ]
         self._agg = TickAggregator(
             tf_allowlist=agg_tfs,
