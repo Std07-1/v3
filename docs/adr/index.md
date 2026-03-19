@@ -51,6 +51,7 @@
 | [0037](0037-binance-second-broker.md) | Binance Futures — Second Broker (BTC/ETH Live Ingest) | **Implemented** | 2026-03-13 | Binance, BTCUSDT, ETHUSDT, Futures API, 24/7, crypto_24x7, python-binance, anchor=0 | `binance_broker_v1` |
 | [0038](0038-initial-backfill-virgin-symbols.md) | Initial Backfill for Virgin Symbols | **Implemented (Amend v2)** | 2026-03-15 | backfill, virgin, bootstrap Phase 2.5, M1 history, historical crawl, derive-only HTF | `cold_start_backfill_v1` |
 | [0039](0039-signal-engine.md) | Signal Engine — Numeric Entry/SL/TP + R:R + Alerts | **Implemented** | 2026-03-14 | entry_price, stop_loss, take_profit, R:R, confidence, alerts, signal lifecycle, core/smc/signals.py | `signal_engine_v1` |
+| [0040](0040-tda-cascade-signal-engine.md) | TDA Cascade — Daily Signal Engine Rebuild | **Implemented** | 2026-03-18 | TDA, 4-stage cascade, D1→H4→Session→FVG, Config F, partial TP, trailing SL, daily signal | `tda_cascade_v1` |
 
 ---
 
@@ -90,4 +91,4 @@
 
 Див. формат у [copilot-instructions.md](../../.github/copilot-instructions.md) → Тема B, Правило B2.
 
-Наступний номер: **0040**
+Наступний номер: **0041**

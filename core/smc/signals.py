@@ -313,9 +313,8 @@ def _determine_state(
         return "invalidated", "Ціна пробила SL {:.0f}".format(stop_loss)
 
     # Check TP reached
-    tp_reached = (
-        (direction == "long" and current_price >= take_profit)
-        or (direction == "short" and current_price <= take_profit)
+    tp_reached = (direction == "long" and current_price >= take_profit) or (
+        direction == "short" and current_price <= take_profit
     )
     if tp_reached:
         if was_active:
@@ -436,13 +435,16 @@ def synthesize_signals(
             tp_fallback = False
             rr = prev.risk_reward
         else:
-            entry_price, entry_desc = _resolve_entry(
-                zone, direction, entry_method, atr
-            )
+            entry_price, entry_desc = _resolve_entry(zone, direction, entry_method, atr)
             stop_loss = _resolve_stop_loss(zone, direction, atr, sl_buffer)
             tp_price, tp_fallback = _resolve_take_profit(
-                snapshot, zone, direction, current_price, atr,
-                entry_price, tp_atr_mult,
+                snapshot,
+                zone,
+                direction,
+                current_price,
+                atr,
+                entry_price,
+                tp_atr_mult,
             )
             rr = _calc_risk_reward(entry_price, stop_loss, tp_price, direction)
 

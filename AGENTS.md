@@ -116,7 +116,15 @@ v3/
 │       ├── sessions.py    # session H/L, killzones, classify (ADR-0035)
 │       ├── context_stack.py # ContextStack — cross-TF zone aggregation
 │       ├── narrative.py   # synthesize_narrative() — Context Flow (ADR-0033)
-│       └── engine.py      # SmcEngine orchestrator + zone lifecycle
+│       ├── engine.py      # SmcEngine orchestrator + zone lifecycle
+│       └── tda/           # TDA Cascade — daily signal engine (ADR-0040)
+│           ├── types.py       # TdaCascadeConfig, TdaSignal, FvgEntry, TradeState
+│           ├── stage1_macro.py    # D1 macro direction (3-bar pivot + slope)
+│           ├── stage2_h4_confirm.py # H4 confirmation (midpoint + trending)
+│           ├── stage3_session.py   # Session narrative (Asia/London sweep)
+│           ├── stage4_fvg_entry.py # M15 FVG entry (touch + close outside)
+│           ├── stage5_trade_mgmt.py # Config F trade management
+│           └── orchestrator.py    # 4-stage cascade orchestrator
 │
 ├── runtime/               # I/O та процеси
 │   ├── ingest/            # Data ingestion
@@ -140,7 +148,8 @@ v3/
 │   │   ├── ws_server.py   # Port 8000 (SmcRunner integration)
 │   │   └── candle_map.py  # bar→Candle mapping
 │   ├── smc/               # SMC runtime wiring (ADR-0024)
-│   │   └── smc_runner.py  # SmcRunner: warmup + on_bar callback
+│   │   ├── smc_runner.py  # SmcRunner: warmup + on_bar callback
+│   │   └── tda_live.py    # TdaLiveRunner: TDA cascade I/O wrapper (ADR-0040)
 │   └── obs_60s.py         # 60s observability
 │
 ├── ui_chart_v3/           # HTTP UI (port 8089, polling)
@@ -301,6 +310,13 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 | `test_smc_sessions.py` | SMC sessions: session H/L, killzones, F9 sweep (ADR-0035) |
 | `test_d1_derive.py` | D1 derive from M1 (ADR-0023) |
 | `test_candle_map.py` | bar→Candle mapping (R2 closure) |
+| `test_tda_stage1.py` | TDA Stage 1: D1 macro direction (ADR-0040) |
+| `test_tda_stage2.py` | TDA Stage 2: H4 confirmation |
+| `test_tda_stage3.py` | TDA Stage 3: session narrative (sweep) |
+| `test_tda_stage4.py` | TDA Stage 4: M15 FVG entry |
+| `test_tda_stage5.py` | TDA Stage 5: Config F trade management |
+| `test_tda_orchestrator.py` | TDA cascade orchestrator (4-stage flow) |
+| `test_tda_live.py` | TDA runtime wiring + config SSOT |
 
 ---
 

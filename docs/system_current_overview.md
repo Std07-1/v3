@@ -1,6 +1,6 @@
 # Поточна система — Архітектурний огляд (SSOT)
 
-> **Останнє оновлення**: 2026-03-02  
+> **Останнє оновлення**: 2026-03-19  
 > **Навігація**: [docs/index.md](index.md)
 
 Цей файл — SSOT-опис поточної архітектури системи. Див. [docs/index.md](index.md) для навігації по всій документації.
@@ -102,9 +102,13 @@ app.main (supervisor)
 │    warmup via UDS.read_window(), on_bar() callback             │
 │  Алгоритми: Swings, BOS/CHoCH, OB, FVG, Liquidity,           │
 │    Premium/Discount, Inducement + N1 zone lifecycle            │
+│  TDA Cascade (ADR-0040): D1→H4→Session→M15 FVG daily signal   │
+│    core/smc/tda/ (pure) + runtime/smc/tda_live.py (I/O)       │
+│    Config F trade mgmt, grade system, 1 signal/day max         │
+│    Fallback: smc.signals (ADR-0039) when tda_cascade.enabled=false │
 │  Transport: вбудований у WS full/delta frames (zones,         │
-│    swings, levels, smc_delta) — NO окремий Redis канал         │
-│  125 tests → 422+ tests (37 файлів), E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a implemented  │
+│    swings, levels, smc_delta, signals) — NO окремий Redis канал │
+│  755 tests, E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a+ADR-0040 implemented │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -173,6 +177,8 @@ app.main (supervisor)
 | **SMC config** | `config.json → smc` | Алгоритми, cap-и, performance (ADR-0024). Ephemeral overlay, не на диску |
 | **SMC types** | `core/smc/types.py` | SmcZone/SmcSwing/SmcLevel/SmcSnapshot/SmcDelta |
 | **SMC wire** | `ui_v4/src/types.ts` | SmcData/SmcDeltaWire — contract з backend |
+| **TDA Cascade config** | `config.json → smc.tda_cascade` | 4-stage daily signal (ADR-0040). `enabled: false` → fallback на ADR-0039 zone-reactive |
+| **TDA types** | `core/smc/tda/types.py` | TdaCascadeConfig/TdaSignal/FvgEntry/TradeState |
 
 ## Інваріанти (I0–I6)
 

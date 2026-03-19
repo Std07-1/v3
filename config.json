@@ -379,6 +379,7 @@
             ]
         },
         "signals": {
+            "_deprecated_by": "smc.tda_cascade (ADR-0040). Active fallback when tda_cascade.enabled=false.",
             "enabled": true,
             "entry_method": "ote",
             "sl_buffer_atr": 0.2,
@@ -481,6 +482,39 @@
             "ifvg_max_active": 4,
             "breaker_enabled": true,
             "breaker_choch_lookback_bars": 10
+        },
+        "tda_cascade": {
+            "_comment": "ADR-0040: TDA 4-stage daily cascade. Replaces ADR-0039 zone-reactive signals when enabled.",
+            "enabled": false,
+            "macro_min_bars": 5,
+            "macro_lookback_bars": 20,
+            "macro_slope_lookback": 10,
+            "macro_slope_threshold": 0.03,
+            "h4_min_bars": 5,
+            "h4_confirm_bars": 10,
+            "h4_cutoff_hour_utc": 7,
+            "asia_start_hour_utc": 23,
+            "asia_end_hour_utc": 7,
+            "london_start_hour_utc": 8,
+            "london_end_hour_utc": 13,
+            "asia_min_range_pts": 5.0,
+            "asia_min_h1_bars": 2,
+            "entry_search_start_utc": 9,
+            "entry_search_end_utc": 16,
+            "fvg_min_atr_ratio": 0.15,
+            "fvg_min_abs_pts": 1.0,
+            "fvg_proximity_pts": 200.0,
+            "sl_buffer_ratio": 0.5,
+            "rr_target": 3.0,
+            "min_rr": 2.5,
+            "max_open_bars_m15": 96,
+            "partial_tp_enabled": true,
+            "partial_tp_at_r": 1.0,
+            "partial_tp_pct": 0.5,
+            "trail_start_r": 2.0,
+            "trail_behind_r": 1.0,
+            "grade_enabled": true,
+            "min_grade_for_entry": "C"
         }
     },
     "binance": {

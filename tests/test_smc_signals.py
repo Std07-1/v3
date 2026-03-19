@@ -348,7 +348,15 @@ class TestDetermineState:
     def test_completed_long(self):
         z = _zone()
         state, _ = _determine_state(
-            "active", 2891.0, z, 2863.82, 2859.0, 2890.0, "long", 5.0, 1.5,
+            "active",
+            2891.0,
+            z,
+            2863.82,
+            2859.0,
+            2890.0,
+            "long",
+            5.0,
+            1.5,
             was_active=True,
         )
         assert state == "completed"
@@ -368,7 +376,15 @@ class TestDetermineState:
         """Price reached TP but was never active → skipped."""
         z = _zone()
         state, reason = _determine_state(
-            "approaching", 2891.0, z, 2863.82, 2859.0, 2890.0, "long", 5.0, 1.5,
+            "approaching",
+            2891.0,
+            z,
+            2863.82,
+            2859.0,
+            2890.0,
+            "long",
+            5.0,
+            1.5,
             was_active=False,
         )
         assert state == "skipped"
@@ -378,7 +394,15 @@ class TestDetermineState:
         """Short: price below TP without ever entering zone → skipped."""
         z = _zone(kind="ob_bear")
         state, _ = _determine_state(
-            "approaching", 2830.0, z, 2866.18, 2873.5, 2840.0, "short", 5.0, 1.5,
+            "approaching",
+            2830.0,
+            z,
+            2866.18,
+            2873.5,
+            2840.0,
+            "short",
+            5.0,
+            1.5,
             was_active=False,
         )
         assert state == "skipped"

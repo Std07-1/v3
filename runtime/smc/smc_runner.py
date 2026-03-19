@@ -149,7 +149,9 @@ class SmcRunner:
         self._warmup_done = False  # journal gated until warmup completes
         # Signal state persistence: survive restarts (D1 fix)
         sig_base = str(
-            full_cfg.get("smc", {}).get("signal_journal", {}).get("path", "data_v3/_signals")
+            full_cfg.get("smc", {})
+            .get("signal_journal", {})
+            .get("path", "data_v3/_signals")
         )
         self._signal_state_path = os.path.join(sig_base, "signal_state.json")
         self._load_prev_signals()
@@ -170,6 +172,17 @@ class SmcRunner:
             sorted(self._compute_tfs),
             self._lookback,
         )
+
+        # ADR-0040: TDA Cascade runner (replaces ADR-0039 signals when enabled)
+        self._tda_runner: Any = None
+        self._uds_reader: Any = None  # bound in warmup()
+        tda_cfg_dict = smc_cfg.get("tda_cascade", {})
+        if tda_cfg_dict.get("enabled", False):
+            from core.smc.tda.types import TdaCascadeConfig
+            from runtime.smc.tda_live import TdaLiveRunner
+
+            _tda_cfg = TdaCascadeConfig.from_dict(tda_cfg_dict)
+            self._tda_runner = TdaLiveRunner(_tda_cfg, self._symbols)
 
     # ── Signal state persistence ────────────────────────
 
@@ -308,6 +321,15 @@ class SmcRunner:
                 _log.warning("SMC_WARMUP_M1_ERR sym=%s err=%s", symbol, exc)
 
         self._warmup_done = True
+
+        # ADR-0040: TDA warmup (load persisted signals)
+        self._uds_reader = uds_reader
+        if self._tda_runner is not None:
+            try:
+                self._tda_runner.warmup()
+            except Exception as exc:
+                _log.warning("TDA_WARMUP_ERR err=%s", exc)
+
         _log.info("SMC_RUNNER_WARMUP_DONE ok=%d err=%d", total_ok, total_err)
 
     def _read_bars_for_warmup(
@@ -402,6 +424,13 @@ class SmcRunner:
         # ADR-0035: feed M1 bars to engine for session H/L computation
         if tf_s == 60:
             self._engine.feed_m1_bar(cb)
+
+        # ADR-0040: feed TDA runner (internally filters for M15)
+        if self._tda_runner is not None and cb.complete:
+            try:
+                self._tda_runner.on_bar(symbol, tf_s, cb, self._uds_reader)
+            except Exception as exc:
+                _log.warning("TDA_ON_BAR_ERR sym=%s tf=%s err=%s", symbol, tf_s, exc)
 
         if tf_s not in self._compute_tfs:
             return None
@@ -588,7 +617,15 @@ class SmcRunner:
         """ADR-0039: synthesize numeric signals from narrative + SMC data.
 
         Returns (signals, alerts). Stores state for lifecycle continuity.
+        When TDA cascade (ADR-0040) is enabled, delegates to TdaLiveRunner.
         """
+        # ADR-0040: TDA cascade signals take priority when enabled
+        if self._tda_runner is not None:
+            sig = self._tda_runner.get_signal(symbol)
+            if sig is not None:
+                return [sig], []
+            return [], []
+
         sig_cfg = self._full_config.get("smc", {}).get("signals", {})
         if not sig_cfg.get("enabled", False):
             return [], []
