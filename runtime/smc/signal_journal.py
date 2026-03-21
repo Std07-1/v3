@@ -403,3 +403,53 @@ class SignalJournal:
             return False
         inv_dist = abs(sig.invalidation_price - sig.entry_price)
         return sig.mae >= inv_dist if inv_dist > 0 else False
+
+    # ── TDA Cascade journaling (ADR-0040) ────────────────
+
+    def record_tda(
+        self,
+        event: str,
+        signal: Any,
+    ) -> None:
+        """Журналює TDA cascade events.
+
+        Events:
+          - tda_signal_generated: новий сигнал з каскаду
+          - tda_trade_closed: торгівля завершена (Config F outcome)
+        """
+        if not self._enabled:
+            return
+
+        now = datetime.now(timezone.utc)
+        entry: Dict[str, Any] = {
+            "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "wall_ms": int(time.time() * 1000),
+            "source": "tda_cascade",
+            "event": event,
+            "symbol": signal.symbol,
+            "signal_id": signal.signal_id,
+            "date": signal.date_str,
+            "direction": signal.entry.direction,
+            "grade": signal.grade,
+            "grade_score": signal.grade_score,
+            "entry_price": round(signal.entry.entry_price, 2),
+            "stop_loss": round(signal.entry.stop_loss, 2),
+            "take_profit": round(signal.entry.take_profit, 2),
+            "risk_reward": round(signal.entry.risk_reward, 2),
+            "macro_direction": signal.macro.direction,
+        }
+
+        if event == "tda_trade_closed":
+            entry["trade_outcome"] = signal.trade.outcome
+            entry["trade_net_r"] = round(signal.trade.net_r, 3)
+            entry["trade_bars_elapsed"] = signal.trade.bars_elapsed
+            entry["trade_partial_closed"] = signal.trade.partial_closed
+            entry["trade_max_favorable_pts"] = round(signal.trade.max_favorable, 2)
+
+        filename = f"journal-{now.strftime('%Y-%m-%d')}.jsonl"
+        filepath = os.path.join(self._base_dir, filename)
+        try:
+            with open(filepath, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            _log.warning("SIGNAL_JOURNAL_TDA_WRITE_ERR path=%s err=%s", filepath, exc)

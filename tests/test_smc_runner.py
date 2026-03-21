@@ -539,6 +539,7 @@ class TestSmcRunnerMarketClosedGuard:
         import time
 
         runner = self._make_runner_with_calendar()
+        runner._warmup_done = True  # simulate completed warmup
         # Субота 15:00 UTC → ринок гарантовано закритий
         # dow=5 (saturday), 15:00 = 900 min
         saturday_15h_ms = 1742306400000  # 2025-03-15 Sat 15:00 UTC (arbitrary)

@@ -281,6 +281,7 @@
         "port": 8000,
         "heartbeat_interval_s": 30,
         "delta_poll_interval_s": 1.0,
+        "bg_smc_poll_interval_s": 10.0,
         "cors_allowed_origins": []
     },
     "smc": {
@@ -380,7 +381,7 @@
         },
         "signals": {
             "_deprecated_by": "smc.tda_cascade (ADR-0040). Active fallback when tda_cascade.enabled=false.",
-            "enabled": true,
+            "enabled": false,
             "entry_method": "ote",
             "sl_buffer_atr": 0.2,
             "tp_atr_multiplier": 2.0,
@@ -485,7 +486,7 @@
         },
         "tda_cascade": {
             "_comment": "ADR-0040: TDA 4-stage daily cascade. Replaces ADR-0039 zone-reactive signals when enabled.",
-            "enabled": false,
+            "enabled": true,
             "macro_min_bars": 5,
             "macro_lookback_bars": 20,
             "macro_slope_lookback": 10,

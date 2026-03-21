@@ -43,6 +43,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 DEFAULT_HEARTBEAT_S = 30
 DEFAULT_DELTA_POLL_S = 2.0
+DEFAULT_BG_SMC_POLL_S = 10.0
 DEFAULT_COLD_START_BARS = 300
 
 
@@ -105,6 +106,7 @@ APP_UDS = web.AppKey("uds", UdsLike)
 APP_SMC_RUNNER = web.AppKey("smc_runner", SmcRunnerLike)
 APP_CORS_ORIGINS = web.AppKey("cors_origins", set)
 APP_GLOBAL_DELTA_TASK = web.AppKey("global_delta_task", asyncio.Task)
+APP_BG_SMC_TASK = web.AppKey("bg_smc_task", asyncio.Task)
 
 # CORS: дозволені origins для cross-origin (Vercel / Cloudflare Pages)
 # Конфіг: ws_server.cors_allowed_origins в config.json
@@ -840,11 +842,9 @@ async def _global_delta_loop(app: web.Application) -> None:
         while True:
             await asyncio.sleep(poll_s)
             sessions: Dict[str, WsSession] = app.get(APP_WS_SESSIONS, {})
-            if not sessions:
-                continue
 
             subs_by_target: Dict[tuple[str, int], list[WsSession]] = {}
-            for sess in sessions.values():
+            for sess in (sessions or {}).values():
                 if sess.ws.closed or sess.symbol is None or sess.tf_s is None:
                     continue
                 target = (sess.symbol, sess.tf_s)
@@ -1200,6 +1200,56 @@ async def _global_delta_loop(app: web.Application) -> None:
 
     except asyncio.CancelledError:
         _log.debug("WS_GLOBAL_DELTA_CANCELLED")
+        pass
+
+
+async def _bg_smc_feed_loop(app: web.Application) -> None:
+    """ADR-0040: фоновий feed ALL symbols × compute_tfs для SMC/TDA cascade.
+
+    Окрема coroutine з повільним інтервалом (bg_smc_poll_interval_s, default 10s).
+    HTF бари (D1/H4/H1/M15) змінюються рідко — polling кожну 1s надлишковий.
+    Запускається в _start_bg_tasks після warmup SMC runner.
+    """
+    ws_cfg = app.get(APP_FULL_CONFIG, {}).get("ws_server", {})
+    poll_s = float(ws_cfg.get("bg_smc_poll_interval_s", DEFAULT_BG_SMC_POLL_S))
+    _log.info("WS_BG_SMC_FEED_START poll_s=%.1f", poll_s)
+
+    _bg_cursor: Dict[tuple[str, int], Optional[int]] = {}
+
+    try:
+        while True:
+            await asyncio.sleep(poll_s)
+            _smc_runner = app[APP_SMC_RUNNER] if APP_SMC_RUNNER in app else None
+            if _smc_runner is None:
+                continue
+            _all_smc_syms: list = getattr(_smc_runner, "_symbols", [])
+            _smc_compute_tfs: set = getattr(_smc_runner, "_compute_tfs", set())
+            for sym in _all_smc_syms:
+                for bg_tf in _smc_compute_tfs:
+                    try:
+                        bg_seq = _bg_cursor.get((sym, bg_tf))
+                        bg_result = await _uds_read_updates(
+                            app, sym, bg_tf, bg_seq, False
+                        )
+                        if bg_result is None:
+                            continue
+                        bg_events = getattr(bg_result, "events", [])
+                        bg_cur = getattr(bg_result, "cursor_seq", 0)
+                        _bg_cursor[(sym, bg_tf)] = bg_cur
+                        for ev in bg_events:
+                            if isinstance(ev, dict) and ev.get("complete"):
+                                bar = ev.get("bar")
+                                if isinstance(bar, dict):
+                                    cast(Any, _smc_runner).on_bar_dict(sym, bg_tf, bar)
+                    except Exception as bg_exc:
+                        _log.debug(
+                            "WS_BG_SMC_FEED_ERR sym=%s tf=%s err=%s",
+                            sym,
+                            bg_tf,
+                            bg_exc,
+                        )
+    except asyncio.CancelledError:
+        _log.debug("WS_BG_SMC_FEED_CANCELLED")
         pass
 
 
@@ -1765,16 +1815,25 @@ def build_app(
                 asyncio.get_event_loop().run_in_executor(_exec, _smc_r.warmup, _uds_r)
             )
             _log.info("WS_SMC_WARMUP_SCHEDULED")
+        # ADR-0040: BG SMC feed loop — окрема coroutine з повільним poll (default 10s)
+        if APP_UDS in app_ctx and _smc_r is not None:
+            app_ctx[APP_BG_SMC_TASK] = asyncio.ensure_future(
+                _bg_smc_feed_loop(app_ctx)
+            )
 
     async def _cleanup_bg_tasks(app_ctx: web.Application) -> None:
-        task = app_ctx.get(APP_GLOBAL_DELTA_TASK)
-        if task:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                _log.debug("WS_GLOBAL_DELTA_TASK_CANCELLED")
-                pass
+        for task_key, label in (
+            (APP_GLOBAL_DELTA_TASK, "WS_GLOBAL_DELTA_TASK_CANCELLED"),
+            (APP_BG_SMC_TASK, "WS_BG_SMC_TASK_CANCELLED"),
+        ):
+            task = app_ctx.get(task_key)
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    _log.debug(label)
+                    pass
 
     app.on_startup.append(_start_bg_tasks)
     app.on_cleanup.append(_cleanup_bg_tasks)

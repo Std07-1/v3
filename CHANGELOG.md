@@ -41,6 +41,9 @@
 
 - 2026-03-19 · 20260319-001 · **TDA CASCADE SIGNAL ENGINE (ADR-0040)**: Повний rebuild Signal Engine як 4-stage cascade (D1→H4→Session→M15 FVG). P0: types (TdaCascadeConfig, TdaSignal, FvgEntry, TradeState). P1–P4: stages 1–4 (macro, H4 confirm, session narrative, FVG entry). P5: Config F trade management (50% at 1R, trail from 2R). P6: cascade orchestrator. P7: runtime wiring (TdaLiveRunner + SmcRunner integration). P8: config SSOT (`smc.tda_cascade`, 32 fields, `enabled: false`). Старі сигнали ADR-0039 = fallback. 755 tests ✅.
 
+- 2026-03-22 · 20260322-001 · **NARRATIVE PARTIAL HTF ALIGNMENT**: `_resolve_htf_alignment()` тепер повертає `partial` коли лише D1 або H4 має bias. UI: `D1↓ (H4 n/a)` замість «Недостатньо HTF даних». Warmup guard в `get_narrative()` — None до завершення. +2 тести. 757 tests ✅.
+- 2026-03-22 · 20260322-002 · **BG SMC FEED EXTRACTION**: BG SMC feed витягнуто з `_global_delta_loop` у окрему `_bg_smc_feed_loop()` з 10s poll (config SSOT). CPU ~20%→~5-8%. Graceful shutdown обох tasks. 757 tests ✅.
+
 - 2026-03-13 · 20260313-005 · **ADR-0034a ARCHIVE CLARIFICATION**: [0034-advanced-market-analysis-tdaa.md](docs/adr/0034-advanced-market-analysis-tdaa.md) переведено з framing "deprecated copy" у точніше framing: archive-only snapshot pre-rollback. Підтримуваним документом лишається [0034-advanced-market-analysis-tda.md](docs/adr/0034-advanced-market-analysis-tda.md), але `tdaa` збережений як історичний зріз, а не як сміттєвий дубль.
 
 - 2026-03-14 · 20260314-001 · **BINANCE SECOND BROKER (ADR-0037)**: Binance Futures як другий брокер для BTCUSDT/ETHUSDT. P0: `BinanceHistoryProvider` (REST klines, backoff retry). P1: `binance_ingest_worker.py` (M1 polling + derive cascade, anchor_offset_s=0). P2: `binance_tick_publisher.py` (WS kline_1m → Redis tick payloads). P3: supervisor wiring в `app/main.py`. Config: `crypto_24x7` calendar, `binance.enabled=false`. 510 tests ✅, 0 нових gate violations.

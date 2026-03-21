@@ -83,16 +83,22 @@ def _resolve_htf_alignment(bias_map):
     # type: (Dict[str, str]) -> Tuple[str, Optional[str]]
     """Returns (alignment, direction).
 
-    alignment: 'aligned' | 'mixed' | 'no_data'
-    direction: 'bullish'|'bearish' if aligned, None otherwise.
+    alignment: 'aligned' | 'mixed' | 'partial' | 'no_data'
+    direction: 'bullish'|'bearish' if aligned/partial, None otherwise.
+
+    'partial' = one of D1/H4 has trend_bias, the other does not yet
+    (e.g. insufficient bars for structure detection). Treated as
+    cautious/reduced in downstream logic — never "Недостатньо HTF даних".
     """
     d1 = bias_map.get("86400")
     h4 = bias_map.get("14400")
-    if not d1 or not h4:
-        return ("no_data", None)
-    if d1 == h4:
-        return ("aligned", d1)
-    return ("mixed", None)
+    if d1 and h4:
+        if d1 == h4:
+            return ("aligned", d1)
+        return ("mixed", None)
+    if d1 or h4:
+        return ("partial", d1 or h4)
+    return ("no_data", None)
 
 
 # ── Zone direction ──────────────────────────────────────────
@@ -394,7 +400,16 @@ def _detect_market_phase(swings, config):
 def _build_bias_summary(alignment, htf_direction, bias_map, zone, is_counter=False):
     # type: (str, Optional[str], Dict[str, str], Optional[SmcZone], bool) -> str
     if alignment == "no_data":
-        return "Недостатньо HTF даних"
+        return "HTF: \u043e\u0447\u0456\u043a\u0443\u0454\u043c\u043e \u0441\u0442\u0440\u0443\u043a\u0442\u0443\u0440\u0443"
+    if alignment == "partial":
+        d1 = bias_map.get("86400")
+        h4 = bias_map.get("14400")
+        if d1:
+            arrow = "\u2191" if d1 == "bullish" else "\u2193"
+            return "D1{a} (H4 n/a)".format(a=arrow)
+        if h4:
+            arrow = "\u2191" if h4 == "bullish" else "\u2193"
+            return "H4{a} (D1 n/a)".format(a=arrow)
     d1 = bias_map.get("86400", "?")
     h4 = bias_map.get("14400", "?")
     if alignment == "mixed":
@@ -580,7 +595,7 @@ def _synthesize_impl(
         # HTF aligned but zone opposes → counter-trend
         mode, sub_mode = "trade", "counter"
         warnings.append("counter_trend")
-    elif primary_zone and alignment == "mixed":
+    elif primary_zone and alignment in ("mixed", "partial"):
         mode, sub_mode = "trade", "reduced"
     else:
         mode, sub_mode = "wait", ""

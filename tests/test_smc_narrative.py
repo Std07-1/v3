@@ -527,7 +527,16 @@ def test_htf_alignment_mixed():
 
 def test_htf_alignment_no_data():
     assert _resolve_htf_alignment({}) == ("no_data", None)
-    assert _resolve_htf_alignment({"86400": "bearish"}) == ("no_data", None)
+
+
+def test_htf_alignment_partial_d1_only():
+    """Partial: D1 bias present but no H4 → partial alignment, not no_data."""
+    assert _resolve_htf_alignment({"86400": "bearish"}) == ("partial", "bearish")
+
+
+def test_htf_alignment_partial_h4_only():
+    """Partial: H4 bias present but no D1 → partial alignment."""
+    assert _resolve_htf_alignment({"14400": "bullish"}) == ("partial", "bullish")
 
 
 # ── P2: Target directional gate ─────────────────────────

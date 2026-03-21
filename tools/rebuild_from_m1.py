@@ -228,7 +228,7 @@ def rebuild_one_symbol(
     """Rebuild derived TFs для одного символу з M1.
 
     Staged cascade:
-      Stage 1: M1 → M3, M5 (прямо з M1 барів на диску)
+      Stage 1: M1 → M3, M5, D1 (прямо з M1 барів на диску)
       Stage 2: M5 (all disk) → M15
       Stage 3: M15 (all disk) → M30
       Stage 4: M30 (all disk) → H1
@@ -240,7 +240,15 @@ def rebuild_one_symbol(
     """
     calendar = _build_calendar(cfg, symbol)
     is_trading_fn = calendar.is_trading_minute if calendar else None
-    anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
+
+    # Per-symbol anchor: Binance symbols use 0, FX symbols use global config
+    binance_symbols = set(cfg.get("binance", {}).get("symbols", []))
+    if symbol in binance_symbols:
+        anchor_offset_s = int(cfg.get("binance", {}).get("day_anchor_offset_s", 0))
+        d1_anchor_s = int(cfg.get("binance", {}).get("d1_anchor_offset_s", 0))
+    else:
+        anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
+        d1_anchor_s = int(cfg.get("day_anchor_offset_s_d1", 0))
 
     disk_cache: Dict[str, set] = {}
     stats: Dict[str, int] = {"m1_loaded": 0, "m1_flat_skipped": 0}
@@ -255,8 +263,8 @@ def rebuild_one_symbol(
     # Bug-fix: попередня версія деривувала після кожного M1 upsert,
     # що призводило до запису partial бару (source_count=1) з подальшим
     # пропуском повних даних через _has_on_disk cache hit.
-    logging.info("  Stage 1: M1 → M3, M5")
-    m1_buf = GenericBuffer(60, max_keep=10000)
+    logging.info("  Stage 1: M1 → M3, M5, D1")
+    m1_buf = GenericBuffer(60, max_keep=100000)  # 100K = ~69 days for D1 (1440/day)
     for bar in iter_m1_bars(data_root, symbol, start_ms, end_ms):
         stats["m1_loaded"] += 1
         ext = bar.extensions or {}
@@ -290,14 +298,42 @@ def rebuild_one_symbol(
                 _mark_on_disk(disk_cache, data_root, symbol, target_tf_s, bucket_open)
             stats[f"tf_{target_tf_s}_written"] += 1
 
+    # Derive D1 з повного M1 буфера (ADR-0023: D1 = 1440 × M1)
+    d1_tf_s = 86400
+    d1_tf_ms = d1_tf_s * 1000
+    d1_ao_ms = d1_anchor_s * 1000
+    b0_d1 = bucket_start_ms(start_ms, d1_tf_ms, d1_ao_ms)
+    for bucket_open in range(b0_d1, end_ms, d1_tf_ms):
+        if _has_on_disk(disk_cache, data_root, symbol, d1_tf_s, bucket_open):
+            stats[f"tf_{d1_tf_s}_existed"] += 1
+            continue
+        result = derive_bar(
+            symbol=symbol,
+            target_tf_s=d1_tf_s,
+            source_buffer=m1_buf,
+            bucket_open_ms=bucket_open,
+            anchor_offset_s=0,  # derive_bar resolves via d1_anchor_offset_s
+            d1_anchor_offset_s=d1_anchor_s,
+            is_trading_fn=is_trading_fn,
+            filter_calendar_pause=True,
+        )
+        if result is None:
+            continue
+        if not dry_run:
+            writer.append(result)
+            _mark_on_disk(disk_cache, data_root, symbol, d1_tf_s, bucket_open)
+        stats[f"tf_{d1_tf_s}_written"] += 1
+
     elapsed_s1 = time.time() - t0
     logging.info(
-        "  Stage 1 done: m1=%d, M3 written=%d existed=%d, M5 written=%d existed=%d (%.1fs)",
+        "  Stage 1 done: m1=%d, M3 written=%d existed=%d, M5 written=%d existed=%d, D1 written=%d existed=%d (%.1fs)",
         stats["m1_loaded"],
         stats["tf_180_written"],
         stats["tf_180_existed"],
         stats["tf_300_written"],
         stats["tf_300_existed"],
+        stats["tf_86400_written"],
+        stats["tf_86400_existed"],
         elapsed_s1,
     )
 

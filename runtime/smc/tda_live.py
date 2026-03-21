@@ -62,9 +62,12 @@ class TdaLiveRunner:
       4. get_signal(symbol) → Optional[TdaSignal] — for frame injection
     """
 
-    def __init__(self, cfg: TdaCascadeConfig, symbols: List[str]) -> None:
+    def __init__(
+        self, cfg: TdaCascadeConfig, symbols: List[str], journal: Any = None
+    ) -> None:
         self._cfg = cfg
         self._symbols = list(symbols)
+        self._journal = journal  # SignalJournal for audit trail
 
         # Active signal per symbol (one per day max)
         self._signals: Dict[str, TdaSignal] = {}
@@ -148,6 +151,14 @@ class TdaLiveRunner:
                         new_trade.bars_elapsed,
                     )
                     self._save_state()
+                    # Journal: record trade close for audit trail
+                    if self._journal is not None:
+                        try:
+                            self._journal.record_tda(
+                                "tda_trade_closed", self._signals[symbol]
+                            )
+                        except Exception as jexc:
+                            _log.warning("TDA_JOURNAL_ERR event=closed err=%s", jexc)
 
     def get_signal(self, symbol: str) -> Optional[TdaSignal]:
         """Get current TDA signal for frame injection. Returns None if no active signal."""
@@ -218,6 +229,12 @@ class TdaLiveRunner:
             sig.entry.risk_reward,
         )
         self._save_state()
+        # Journal: record new TDA signal for audit trail
+        if self._journal is not None:
+            try:
+                self._journal.record_tda("tda_signal_generated", sig)
+            except Exception as jexc:
+                _log.warning("TDA_JOURNAL_ERR event=generated err=%s", jexc)
 
     # ── Private: UDS reads (S1: read-only) ────────────────
 

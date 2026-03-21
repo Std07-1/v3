@@ -653,8 +653,8 @@ class TestConfigSsot:
             cfg = json.load(f)
         d = cfg["smc"]["tda_cascade"]
         tc = TdaCascadeConfig.from_dict(d)
-        # Enabled is safe default
-        assert tc.enabled is False
+        # TDA cascade is now active (ADR-0040 implemented)
+        assert tc.enabled is True
         # Spot-check a field from each stage
         assert tc.macro_min_bars == 5
         assert tc.h4_cutoff_hour_utc == 7
@@ -667,11 +667,11 @@ class TestConfigSsot:
         assert tc.grade_enabled is True
         assert tc.min_grade_for_entry == "C"
 
-    def test_config_enabled_false_is_k5_compliant(self):
-        """K5 Gate: ADR-0040 status=Accepted → enabled=false is safe."""
+    def test_config_enabled_true_is_k5_compliant(self):
+        """K5 Gate: ADR-0040 status=Implemented → enabled=true is allowed."""
         with open("config.json") as f:
             cfg = json.load(f)
-        assert cfg["smc"]["tda_cascade"]["enabled"] is False
+        assert cfg["smc"]["tda_cascade"]["enabled"] is True
 
     def test_signals_has_deprecation_marker(self):
         """smc.signals has _deprecated_by pointing to tda_cascade."""

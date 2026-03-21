@@ -182,7 +182,9 @@ class SmcRunner:
             from runtime.smc.tda_live import TdaLiveRunner
 
             _tda_cfg = TdaCascadeConfig.from_dict(tda_cfg_dict)
-            self._tda_runner = TdaLiveRunner(_tda_cfg, self._symbols)
+            self._tda_runner = TdaLiveRunner(
+                _tda_cfg, self._symbols, journal=self._journal
+            )
 
     # ── Signal state persistence ────────────────────────
 
@@ -514,6 +516,9 @@ class SmcRunner:
         """
         cfg = self._full_config.get("smc", {}).get("narrative", {})
         if not cfg.get("enabled", False):
+            return None
+        # Warmup guard: don't generate "no data" narrative before warmup
+        if not self._warmup_done:
             return None
         # Market-hours guard: don't generate signals on closed market
         cal = self._calendars.get(symbol)
