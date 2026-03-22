@@ -1,10 +1,9 @@
 <!-- src/layout/ChartHud.svelte -->
 <!-- P3.1-P3.2: Frosted-glass HUD overlay (V3 parity: index.html .hud-stack)
-     P3.11: Theme picker. P3.12: Candle style picker. P3.13: Favorites.
-     Symbol dropdown · TF pills · Live price · Streaming dot · UTC label -->
+     P3.11: Theme picker. P3.12: Candle style picker.
+     Symbol dropdown · TF pills · Live price · Streaming dot -->
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
-    import { favoritesStore, type FavPair } from "../stores/favorites";
     import { derivePdBadge } from "../stores/shellState";
     import PdBadge from "./PdBadge.svelte";
 
@@ -88,48 +87,20 @@
 
     // ─── Shell state (ADR-0036) ───
     let microCardOpen = $state(false);
-    let stripCollapsed = $state(
-        typeof localStorage !== "undefined"
-            ? localStorage.getItem("shell_strip_collapsed") === "1"
-            : false,
-    );
-
     function toggleMicroCard() {
         microCardOpen = !microCardOpen;
-    }
-
-    function toggleStrip() {
-        stripCollapsed = !stripCollapsed;
-        if (typeof localStorage !== "undefined") {
-            localStorage.setItem(
-                "shell_strip_collapsed",
-                stripCollapsed ? "1" : "0",
-            );
-        }
     }
 
     // Shell stage CSS class
     let shellStageClass = $derived(shell ? `st-${shell.stage}` : "");
 
-    // ─── ADR-0041 §5a P8: Accent bar directional color ───
-    // Пріоритет: signal.direction (long/short) → alignment_direction (bullish/bearish) → null
-    let shellAccentColor = $derived.by((): string => {
-        const sigDir = shell?.signal?.direction ?? null;
-        if (sigDir === "long") return "52,211,153";
-        if (sigDir === "short") return "239,83,80";
-        const alDir = shell?.tactical_strip?.alignment_direction ?? null;
-        if (alDir === "bullish") return "52,211,153";
-        if (alDir === "bearish") return "239,83,80";
-        return "52,211,153"; // safe fallback (neutral green)
+    // Session label for sub-row (from narrative)
+    let sessionLabel = $derived.by(() => {
+        if (!narrative) return "";
+        const s = narrative.current_session ?? "";
+        const kz = narrative.in_killzone ? " KZ" : "";
+        return s ? `${s}${kz}` : "";
     });
-
-    // ADR-0041 §5a: tactical strip visible on PREPARE+ stages
-    let stripVisible = $derived(
-        shell != null &&
-            shell.stage !== "wait" &&
-            shell.stage !== "stayout" &&
-            !stripCollapsed,
-    );
 
     function toggleBias(e: MouseEvent) {
         e.stopPropagation();
@@ -174,6 +145,30 @@
             return themeText;
         return lastPrice >= lastBarOpen ? "#26a69a" : "#ef5350";
     });
+
+    // Price change (current candle delta)
+    let priceChange = $derived.by(() => {
+        if (
+            lastPrice == null ||
+            lastBarOpen == null ||
+            !Number.isFinite(lastPrice) ||
+            !Number.isFinite(lastBarOpen) ||
+            lastBarOpen === 0
+        )
+            return null;
+        const diff = lastPrice - lastBarOpen;
+        const pct = (diff / lastBarOpen) * 100;
+        return { diff, pct, up: diff >= 0 };
+    });
+
+    function fmtChange(diff: number): string {
+        // Precision matches price: use lastPrice magnitude, not delta magnitude
+        const ref = lastPrice ?? Math.abs(diff);
+        const abs = Math.abs(diff);
+        if (ref >= 100) return abs.toFixed(2);
+        if (ref >= 10) return abs.toFixed(3);
+        return abs.toFixed(5);
+    }
 
     // ─── Pulse animation on change ───
     let pulseSymbol = $state(false);
@@ -242,30 +237,6 @@
         microCardOpen = false;
     }
 
-    // ─── P3.13: Favorites ───
-    let favs: FavPair[] = $state([]);
-    const unsubFavs = favoritesStore.subscribe((f) => {
-        favs = f;
-    });
-    onDestroy(() => {
-        unsubFavs();
-    });
-
-    let isFaved = $derived(
-        favs.some((f) => f.symbol === currentSymbol && f.tf === currentTf),
-    );
-
-    function toggleFav(e: MouseEvent) {
-        e.stopPropagation();
-        favoritesStore.toggle(currentSymbol, currentTf);
-    }
-
-    function selectFav(f: FavPair) {
-        symbolOpen = false;
-        tfOpen = false;
-        onSwitch(f.symbol, f.tf);
-    }
-
     // ─── Wheel cycling (V3: attachHudWheelControls) ───
     function handleSymbolWheel(e: WheelEvent) {
         e.preventDefault();
@@ -322,6 +293,18 @@
                 >{fmtPrice(lastPrice)}</span
             >
 
+            <!-- Price change (candle delta) -->
+            {#if priceChange}
+                <span
+                    class="hud-chg"
+                    class:up={priceChange.up}
+                    class:dn={!priceChange.up}
+                >
+                    {priceChange.up ? "+" : "-"}{fmtChange(priceChange.diff)}
+                    {priceChange.up ? "▲" : "▼"}
+                </span>
+            {/if}
+
             <!-- Streaming dot -->
             <span
                 class="hud-dot"
@@ -333,54 +316,6 @@
                       ? "Stale (>12s)"
                       : "No data"}
             ></span>
-
-            <!-- P3.13: Favorite star -->
-            <button
-                class="hud-slot hud-star"
-                class:faved={isFaved}
-                onclick={toggleFav}
-                title={isFaved ? "Remove from favorites" : "Add to favorites"}
-                >{isFaved ? "★" : "☆"}</button
-            >
-
-            <!-- ADR-0031: HTF bias pills (always available, trader toggles) -->
-            {#if biasVisible && biasPills.length > 0}
-                <button
-                    class="hud-bias-area"
-                    onclick={toggleBias}
-                    title="Hide HTF bias"
-                    type="button"
-                >
-                    {#each biasPills as p (p.label)}
-                        <span
-                            class="hud-bias-pill"
-                            class:bull={p.bias === "bullish"}
-                            class:bear={p.bias === "bearish"}
-                            >{p.label}<span class="bias-arrow">{p.arrow}</span
-                            >{#if p.momDots}<span class="bias-mom {p.momCls}"
-                                    >{p.momDots}</span
-                                >{/if}</span
-                        >
-                    {/each}
-                </button>
-            {:else}
-                <button
-                    class="hud-bias-toggle"
-                    onclick={toggleBias}
-                    title="Show HTF bias">║</button
-                >
-            {/if}
-
-            <!-- ADR-0036: Strip toggle (inline, in hud-row) -->
-            {#if shell?.tactical_strip}
-                <button
-                    class="strip-toggle"
-                    class:vis={stripCollapsed}
-                    onclick={toggleStrip}
-                    type="button"
-                    title={stripCollapsed ? "показати strip" : "сховати strip"}
-                ></button>
-            {/if}
 
             <!-- ADR-0033: Narrative inline (hidden when shell active) -->
             {#if narrative && !shell}
@@ -643,74 +578,47 @@
         </div>
     </div>
 
-    <!-- Info Strip: PdBadge (другий рядок HUD, ADR-0041) -->
-    {#if pdBadge}
-        <div class="info-strip">
+    <!-- Sub-row: session + P/D (left) + bias pills (right) — compact, always anchored -->
+    <div class="hud-sub">
+        {#if sessionLabel}
+            <span class="tact-session">{sessionLabel}</span>
+            {#if pdBadge || (biasVisible && biasPills.length > 0)}
+                <span class="sub-sep">│</span>
+            {/if}
+        {/if}
+        {#if pdBadge}
             <PdBadge badge={pdBadge} />
-        </div>
-    {/if}
-
-    <!-- ADR-0041 §5a P7: Tactical strip (separate row, stage-driven visibility) -->
-    {#if shell?.tactical_strip}
-        <div
-            class="tact-wrap"
-            class:open={stripVisible}
-            style:color={themeText}
-            style:--shell-accent={shellAccentColor}
-        >
-            <div class="tact-inner">
-                {#if narrative?.in_killzone || narrative?.current_session}
-                    <span class="tact-session"
-                        >{narrative?.current_session ??
-                            ""}{narrative?.in_killzone ? " KZ" : ""}</span
+        {/if}
+        {#if pdBadge && biasVisible && biasPills.length > 0}
+            <span class="sub-sep">│</span>
+        {/if}
+        {#if biasVisible && biasPills.length > 0}
+            <button
+                class="hud-bias-area"
+                onclick={toggleBias}
+                title="Hide HTF bias"
+                type="button"
+            >
+                {#each biasPills as p (p.label)}
+                    <span
+                        class="hud-bias-pill"
+                        class:bull={p.bias === "bullish"}
+                        class:bear={p.bias === "bearish"}
+                        >{p.label}<span class="bias-arrow">{p.arrow}</span
+                        >{#if p.momDots}<span class="bias-mom {p.momCls}"
+                                >{p.momDots}</span
+                            >{/if}</span
                     >
-                {/if}
-                {#if shell.tactical_strip.alignment_type === "htf_aligned"}
-                    <span class="al-pill">
-                        <span
-                            class="al-word"
-                            class:bull={shell.tactical_strip
-                                .alignment_direction === "bullish"}
-                            class:bear={shell.tactical_strip
-                                .alignment_direction === "bearish"}
-                        >
-                            {shell.tactical_strip.alignment_direction ===
-                            "bullish"
-                                ? "ALIGNED ▲"
-                                : "ALIGNED ▼"}
-                        </span>
-                    </span>
-                {:else}
-                    <span class="shell-chips">
-                        {#each shell.tactical_strip.chips as chip}
-                            <span
-                                class="shell-chip"
-                                class:brk={chip.chip_state === "brk"}
-                                class:cfl={chip.chip_state === "cfl"}
-                            >
-                                <span class="chip-tf">{chip.tf_label}</span>
-                                <span
-                                    class="chip-arr"
-                                    class:bull={chip.direction === "bullish"}
-                                    class:bear={chip.direction === "bearish"}
-                                >
-                                    {chip.direction === "bullish" ? "▲" : "▼"}
-                                </span>
-                                {#if chip.chip_state === "brk"}<span
-                                        class="chip-dot brk-dot"
-                                        title="Пробій структури (BOS)"
-                                    ></span>{/if}
-                                {#if chip.chip_state === "cfl"}<span
-                                        class="chip-dot cfl-dot"
-                                        title="Конфлікт напрямків"
-                                    ></span>{/if}
-                            </span>
-                        {/each}
-                    </span>
-                {/if}
-            </div>
-        </div>
-    {/if}
+                {/each}
+            </button>
+        {:else}
+            <button
+                class="hud-bias-toggle"
+                onclick={toggleBias}
+                title="Show HTF bias">║</button
+            >
+        {/if}
+    </div>
 
     <!-- Symbol dropdown -->
     {#if symbolOpen}
@@ -724,21 +632,6 @@
             onclick={(e) => e.stopPropagation()}
             onkeydown={(e) => e.key === "Escape" && (symbolOpen = false)}
         >
-            <!-- P3.13: Favorites section -->
-            {#if favs.length > 0}
-                <div class="fav-section-label">★ Favorites</div>
-                {#each favs as fav}
-                    <button
-                        class="hud-menu-item fav-item"
-                        class:active={fav.symbol === currentSymbol &&
-                            fav.tf === currentTf}
-                        onclick={() => selectFav(fav)}
-                    >
-                        {fav.symbol} · {fav.tf}
-                    </button>
-                {/each}
-                <div class="fav-divider"></div>
-            {/if}
             {#each symbols as sym}
                 <button
                     class="hud-menu-item"
@@ -928,35 +821,19 @@
     }
 
     /* P3.12: Color swatch in candle style menu */
-    /* P3.13: Favorite star + favorites section */
-    .hud-star {
-        opacity: 0.4;
-        transition:
-            color 0.15s,
-            opacity 0.15s;
-    }
-    .hud-star.faved {
-        color: #f0b90b;
-    }
-    .hud-star:hover {
-        color: #f0b90b;
-    }
 
-    .fav-section-label {
-        font-size: 10px;
-        color: #f0b90b;
-        padding: 3px 10px 1px;
-        font-weight: 600;
-        letter-spacing: 0.5px;
-        user-select: none;
+    /* Price change indicator */
+    .hud-chg {
+        font-size: 11px;
+        font-weight: 500;
+        font-family: "Roboto Mono", monospace, sans-serif;
+        letter-spacing: -0.3px;
     }
-    .fav-item {
-        font-style: italic;
+    .hud-chg.up {
+        color: #26a69a;
     }
-    .fav-divider {
-        height: 1px;
-        background: rgba(255, 255, 255, 0.06);
-        margin: 4px 0;
+    .hud-chg.dn {
+        color: #ef5350;
     }
 
     /* ADR-0031: Inline bias pills */
@@ -1334,176 +1211,14 @@
         white-space: nowrap;
         max-width: 220px;
     }
-    .shell-strip-inline {
-        font-size: 9px;
-    }
 
-    /* ─── Inline TF Strip (toggle dot in hud-row) ─── */
-    .strip-toggle {
-        all: unset;
-        width: 3px;
-        height: 14px;
-        border-radius: 1.5px;
-        background: rgba(255, 255, 255, 0.12);
-        cursor: pointer;
-        flex-shrink: 0;
-        transition:
-            background 140ms,
-            opacity 180ms;
-        display: none;
-        opacity: 0;
-    }
-    .strip-toggle.vis {
-        display: block;
-        opacity: 1;
-        background: rgba(255, 255, 255, 0.18);
-    }
-    .strip-toggle.vis:hover {
-        background: rgba(255, 255, 255, 0.35);
-    }
-
-    /* ═══ ADR-0041 §5a P7: Tactical strip row (animated, stage-driven) ═══ */
-    .tact-wrap {
-        display: grid;
-        grid-template-rows: 0fr;
-        transition: grid-template-rows 150ms ease-out;
-    }
-    .tact-wrap.open {
-        grid-template-rows: 1fr;
-    }
-    .tact-inner {
-        overflow: hidden;
-        min-height: 0;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 0 12px;
-        font-size: 9px;
-        white-space: nowrap;
-    }
     .tact-session {
+        font-size: 9px;
         font-weight: 600;
         color: #ff9800;
         background: rgba(255, 152, 0, 0.12);
         padding: 1px 4px;
         border-radius: 3px;
-    }
-    .tact-bias {
-        display: inline-flex;
-        align-items: center;
-        gap: 3px;
-    }
-
-    /* ═══ ADR-0041 §5a P8: Accent bar (READY/TRIGGERED gradient) ═══ */
-    .tact-wrap::after {
-        content: "";
-        display: block;
-        height: 1.5px;
-        background: transparent;
-        transition: background 200ms ease;
-    }
-    .st-ready .tact-wrap.open::after {
-        background: linear-gradient(
-            90deg,
-            rgba(var(--shell-accent), 0.5),
-            rgba(var(--shell-accent), 0.1)
-        );
-    }
-    .st-triggered .tact-wrap.open::after {
-        background: linear-gradient(
-            90deg,
-            rgba(var(--shell-accent), 0.7),
-            rgba(var(--shell-accent), 0.15)
-        );
-        animation: accent-pulse 600ms ease-out 1;
-    }
-    @keyframes accent-pulse {
-        0% {
-            opacity: 0.3;
-        }
-        50% {
-            opacity: 1;
-        }
-        100% {
-            opacity: 1;
-        }
-    }
-    .al-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-    }
-    .al-word {
-        font-size: 10px;
-        font-weight: 500;
-        text-transform: uppercase;
-    }
-    .al-word.bull {
-        color: rgba(52, 211, 153, 0.85);
-    }
-    .al-word.bear {
-        color: rgba(252, 129, 129, 0.8);
-    }
-    .shell-chips {
-        display: inline-flex;
-        gap: 0;
-    }
-    .shell-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 2px;
-        padding: 0 5px;
-        height: 18px;
-        font-size: 9px;
-        position: relative;
-    }
-    .shell-chip:not(:last-child)::after {
-        content: "";
-        position: absolute;
-        right: 0;
-        top: 4px;
-        bottom: 4px;
-        width: 0.5px;
-        background: rgba(255, 255, 255, 0.07);
-    }
-    .shell-chip.brk {
-        background: rgba(251, 191, 36, 0.07);
-        border-radius: 3px;
-    }
-    .shell-chip.cfl {
-        background: rgba(252, 129, 129, 0.07);
-        border-radius: 3px;
-    }
-    .chip-tf {
-        font-weight: 500;
-        text-transform: uppercase;
-        color: rgba(255, 255, 255, 0.28);
-    }
-    .shell-chip.brk .chip-tf {
-        color: rgba(251, 191, 36, 0.8);
-    }
-    .shell-chip.cfl .chip-tf {
-        color: rgba(252, 129, 129, 0.75);
-    }
-    .chip-arr {
-        font-size: 10px;
-    }
-    .chip-arr.bull {
-        color: rgba(52, 211, 153, 0.6);
-    }
-    .chip-arr.bear {
-        color: rgba(252, 129, 129, 0.55);
-    }
-    .chip-dot {
-        width: 4px;
-        height: 4px;
-        border-radius: 50%;
-    }
-    .brk-dot {
-        background: rgba(251, 191, 36, 0.9);
-    }
-    .cfl-dot {
-        background: rgba(252, 129, 129, 0.85);
     }
 
     /* ─── Micro-card (dropdown from shell-stage) ─── */
@@ -1633,13 +1348,19 @@
         color: rgba(96, 165, 250, 0.85);
     }
 
-    /* Info Strip: PdBadge row (ADR-0041) */
-    .info-strip {
+    /* Sub-row: P/D + bias pills (compact, under price row) */
+    .hud-sub {
         display: flex;
         align-items: center;
-        gap: 6px;
-        padding: 2px 12px;
-        min-height: 18px;
+        gap: 4px;
+        padding: 0 12px;
+        min-height: 14px;
         white-space: nowrap;
+    }
+    .sub-sep {
+        font-size: 10px;
+        opacity: 0.18;
+        user-select: none;
+        line-height: 1;
     }
 </style>

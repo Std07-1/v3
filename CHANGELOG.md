@@ -43,6 +43,7 @@
 
 - 2026-03-22 · 20260322-001 · **NARRATIVE PARTIAL HTF ALIGNMENT**: `_resolve_htf_alignment()` тепер повертає `partial` коли лише D1 або H4 має bias. UI: `D1↓ (H4 n/a)` замість «Недостатньо HTF даних». Warmup guard в `get_narrative()` — None до завершення. +2 тести. 757 tests ✅.
 - 2026-03-22 · 20260322-002 · **BG SMC FEED EXTRACTION**: BG SMC feed витягнуто з `_global_delta_loop` у окрему `_bg_smc_feed_loop()` з 10s poll (config SSOT). CPU ~20%→~5-8%. Graceful shutdown обох tasks. 757 tests ✅.
+- 2026-03-22 · 20260322-003 · **HUD RESTRUCTURE**: Видалено ★ favorites, додано price change indicator (`+5.60▲`/`-3.20▼`), P/D badge + bias pills → compact sub-row, session label (`newyork KZ`) перенесено з tact-wrap, тактичний strip (tact-wrap) видалено повністю (дублював bias pills). OHLCV tooltip repositioned. Build: 317KB JS, 26KB CSS.
 
 - 2026-03-13 · 20260313-005 · **ADR-0034a ARCHIVE CLARIFICATION**: [0034-advanced-market-analysis-tdaa.md](docs/adr/0034-advanced-market-analysis-tdaa.md) переведено з framing "deprecated copy" у точніше framing: archive-only snapshot pre-rollback. Підтримуваним документом лишається [0034-advanced-market-analysis-tda.md](docs/adr/0034-advanced-market-analysis-tda.md), але `tdaa` збережений як історичний зріз, а не як сміттєвий дубль.
 
