@@ -42,6 +42,12 @@
                       │ (ЯК виглядає)│    │ (read-only)   │
                       │ ●orange·snnt│    │ ● teal·snnt   │
                       └─────────────┘    └───────────────┘
+
+                      ┌─────────────┐
+                      │ smc-mentor  │
+                      │(DarkTrader) │
+                      │●brown ·opus │
+                      └─────────────┘
 ```
 
 ---
@@ -313,7 +319,7 @@ R_<ROLE_A> → RFC → R_REJECTOR → assigns R_<ROLE_B> → delivers → R_REJE
 
 ### Пряма комунікація (дозволена тільки в межах одного Track)
 
-- **TRADING+UI**: trader ↔ chief ↔ chart-ux можуть обговорювати між собою ДО подачі спільного RFC
+- **TRADING+UI**: trader ↔ chief ↔ chart-ux ↔ mentor можуть обговорювати між собою ДО подачі спільного RFC
 - **SYSTEM**: bug-hunter може уточнити у patch-master технічну деталь ДО подачі RFC
 - Результат прямої комунікації = **спільний RFC**, не окремі
 
@@ -338,6 +344,7 @@ R_<ROLE_A> → RFC → R_REJECTOR → assigns R_<ROLE_B> → delivers → R_REJE
 | r-doc-keeper | **синхронізує** | ✅ | ❌ | ✅ | ❌ (RFC) |
 | compliance | **аудитує** | ✅ | ❌ | ❌ | ❌ (RFC) |
 | signal-architect | **специфікує** | ✅ | ❌ | ❌ | ✅ signal design |
+| smc-mentor | **навчає** | ❌ | ❌ | ❌ | ✅ торговий процес |
 | log-analyst | **розслідує + моніторить** | ✅ | ❌ | ❌ | ❌ (findings) |
 
 ---
@@ -424,6 +431,7 @@ R_<ROLE_A> → RFC → R_REJECTOR → assigns R_<ROLE_B> → delivers → R_REJE
 | **smc-trader** | ✅ setup evaluation, grade validation, chart audit | — | — |
 | **smc-chief** | ✅ doctrine review, display budget audit | — | — |
 | **signal-architect** | ✅ signal spec review, confidence calibration audit | 🟡 signal design spec | — |
+| **smc-mentor** | ✅ pre-trade check, scenario walkthrough, post-trade review, weekly review | — | — |
 | **chart-ux** | ✅ visual audit, DPR check, N1–N12, screenshot | — | — |
 | **compliance** | ✅ dependency scan, secrets scan | 🟡 audit report | — |
 | **r-architect** | ✅ RECON, alternatives analysis | 🟡 ADR draft | — |
@@ -574,6 +582,41 @@ R_<ROLE_A> → RFC → R_REJECTOR → assigns R_<ROLE_B> → delivers → R_REJE
 3. Grade system: чи A+/A/B/C відповідають confluence scoring?
 4. Cross-TF projection: чи HTF зони правильно проектуються?
 5. Дай Decision Record якщо знайдеш порушення доктрини.
+```
+
+---
+
+#### 🟢 ON-DEMAND: Pre-Trade Mentor Check (smc-mentor)
+
+**Коли**: "чи входити?", "pre-trade check", "перевір мій аналіз", "що думаєш?"
+
+```
+Проведи менторський pre-trade check (DarkTrader Protocol):
+1. MACRO: чи є high-impact news? який день? скільки trades сьогодні?
+2. HTF BIAS: D1 bias? H4 bias? Aligned чи conflict?
+3. STRUCTURE: M15 — останній BOS/CHoCH? Premium/Discount?
+4. ZONE: тип, confluence count (sweep, FVG, HTF, extremum, session, P/D, momentum)
+5. IOFED: яка стадія? (якщо не ⑤ — WAIT)
+6. RISK: SL/TP/R:R ≥ 2:1? Position ≤ 2%?
+7. ⚠️ THIN ICE: де конкретно легко помилитись у цьому сценарії?
+Дай Pre-Trade Checklist + Mentor Verdict (ENTRY/WAIT/NO TRADE) + coaching note.
+```
+
+---
+
+#### 🟢 PERIODIC: Weekly Mentor Review (smc-mentor)
+
+**Коли**: "weekly review", "розбери мій тиждень", кінець тижня
+
+```
+Проведи менторський тижневий огляд:
+1. JOURNAL REVIEW: trades, W/L/BE, process scores, найкращий/найгірший trade
+2. BIAS ACCURACY: скільки разів bias визначений правильно?
+3. MISSED SETUPS: чи були A+ setups що учень пропустив? ЧОМУ?
+4. PATTERN: яка помилка повторюється? (P1–P12 pitfalls)
+5. NEXT WEEK PREP: key levels D1/H4, потенційні зони, high-impact news
+6. MENTAL STATE: рівень стресу, drawdown status, ready to trade?
+Дай структурований Weekly Mentor Report з action items.
 ```
 
 ---

@@ -22,6 +22,7 @@
 | [0011](0011-ssot-broadcast-serialization.md) | SSOT Broadcast Serialization | **Implemented** | 2026-02-24 | ws_server, aiohttp, broadcast, wait_for, latency | `ws_performance_v1` |
 | [0012](../system_spec/MODE%3DDISCOVERY%20D1.md) | D1 TradingView Parity | **Implemented** | 2026-02-24 | D1, flat filter, tick relay, forming candle, HUD, I7, I8, I9 | `d1_tv_parity` |
 | [0013](0013-d1-chart-rendering-fix.md) | D1 Chart Rendering Fix | **Implemented** | 2026-02-25 | D1, LWC, time mapping, YYYY-MM-DD, epoch seconds | `d1_tv_parity` |
+| [0013b](0013-complete-semantics-partial-derived.md) | complete=true Semantics for Partial Derived Bars | **Accepted** | 2026-02-25 | partial derived, calendar pause, complete=true, boundary_partial, extensions | `derive_chain_m1` |
 | [0014](0014-uds-split-brain-resilience.md) | UDS Split-Brain Resilience | **Implemented** | 2026-02-26 | split-brain, UDS, Redis, watermark | `concurrency_hardening` |
 | [0015](0015-calendar-pause-flat-bars.md) | Calendar Pause/Flat Bar Interpretation | **Implemented** | 2026-02-26 | calendar_pause, complete=True, derive, M5 | `derive_chain_m1` |
 | [0016](0016-python-version-broker-isolation.md) | Python Version Upgrade + Broker Subprocess Isolation | **Implemented** | 2026-03-08 | dual-venv, broker_sidecar, broker_python, Python 3.14 trampoline, supervisor PID lock | `platform_modernization` |
@@ -39,6 +40,7 @@
 | [0025](0025-potik-b-data-quality-summary.md) | Потік B — Data Quality & Activation Summary | **Implemented** | 2026-02-28 | multi-symbol, data quality, derived integrity, XAU/USD focus | `potik_b_data_quality` |
 | [0026](0026-overlay-level-rendering-rules.md) | Overlay Level Rendering Rules | **Implemented** | 2026-03-01 | levels, merge, labels, LINE_PX, NOTCH_PX, LEVEL_STYLES, L1–L6 | `smc_engine_v1` |
 | [0027](0027-client-side-replay.md) | Client-Side Replay (TradingView-style) | **Implemented** | 2026-02-28 | replay, client-side, scrubber, play/pause, candle-by-candle, TF switch | `replay_v2` |
+| [0028-strategy](0028-smc-clean-chart-strategy.md) | SMC Clean Chart Strategy — від Detection Engine до Trading Terminal | **Proposed** | 2026-03-04 | clean chart doctrine, display budget, zone lifecycle, grade threshold, signal/noise | `smc_vis_phi0` |
 | [0028](0028-v2-elimination-engine.md) | Elimination Engine — Display Filter Pipeline | **Implemented** | 2026-03-04 | display filter, budget, proximity, TTL, Focus/Research toggle | `smc_vis_phi0` |
 | [0029](0029-confluence-scoring.md) | OB Confluence Scoring + Grade System | **Implemented** | 2026-03-05 | confluence, 8 factors, grade A+/A/B/C, badge, DisplayBudget, FVG scoring P5B | `smc_vis_phi1` |
 | [0030-alt](0030-alt-tf-sovereignty.md) | TF Sovereignty — Cross-TF Projection Styling | **Implemented** | 2026-03-06 | projection, opacity, dashed, cross-TF, OverlayRenderer, TF sovereignty | `smc_vis_phi1` |
@@ -52,7 +54,7 @@
 | [0038](0038-initial-backfill-virgin-symbols.md) | Initial Backfill for Virgin Symbols | **Implemented (Amend v2)** | 2026-03-15 | backfill, virgin, bootstrap Phase 2.5, M1 history, historical crawl, derive-only HTF | `cold_start_backfill_v1` |
 | [0039](0039-signal-engine.md) | Signal Engine — Numeric Entry/SL/TP + R:R + Alerts | **Implemented** | 2026-03-14 | entry_price, stop_loss, take_profit, R:R, confidence, alerts, signal lifecycle, core/smc/signals.py | `signal_engine_v1` |
 | [0040](0040-tda-cascade-signal-engine.md) | TDA Cascade — Daily Signal Engine Rebuild | **Implemented** | 2026-03-18 | TDA, 4-stage cascade, D1→H4→Session→FVG, Config F, partial TP, trailing SL, daily signal | `tda_cascade_v1` |
-| [0041](0041-pd-badge-eq-line.md) | Premium/Discount Badge + EQ Line — Decoupled Calc/Display + Variant H Shell Restructure | **Accepted** | 2026-03-22 | P/D calc/display split, PdBadge HUD, EQ dashed line, D8 coincidence, config granular keys, Variant H shell restructure, directional coloring, amber conflict | `pd_badge_eq_v1` |
+| [0041](0041-pd-badge-eq-line.md) | Premium/Discount Badge + EQ Line — Decoupled Calc/Display + Variant H Shell Restructure | **Accepted** (P1–P9 implemented) | 2026-03-22 | P/D calc/display split, PdBadge HUD, EQ dashed line, D8 coincidence, config granular keys, Variant H shell restructure, directional coloring, amber conflict | `pd_badge_eq_v1` |
 
 ---
 

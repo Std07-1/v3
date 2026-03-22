@@ -32,6 +32,7 @@
 | **Redis snap** (internal) | Документація: `docs/redis_snapshot_design.md` | `runtime/store/redis_snapshot.py` | UDS read layers | internal v1 |
 | **smc_snapshot** (wire) | `core/smc/types.py` → `ui_v4/src/types.ts` | `SmcRunner` (ws_server) | `OverlayRenderer` (ui_v4) | v1 (ADR-0024) |
 | **smc_delta** (wire) | `core/smc/types.py` → `ui_v4/src/types.ts` | `SmcRunner` (ws_server) | `smcStore` (ui_v4) | v1 (ADR-0024) |
+| **pd_state** (wire) | `core/smc/types.py:PdStatePayload` → `ui_v4/src/types.ts:PdState` | `SmcRunner.get_pd_state()` (ws_server) | `smcStore` → `PdBadge.svelte` + `OverlayRenderer.renderPdEqLine()` | v1 (ADR-0041) |
 
 ---
 
@@ -262,6 +263,33 @@ F7 single-point format (не two-point segment).
 | `price` | number | Рівень ціни |
 | `t_ms` | integer\|null | Epoch ms формування рівня (опціонально) |
 
+### PdStatePayload (WS wire, ADR-0041)
+
+> **Python SSOT**: `core/smc/types.py:PdStatePayload`
+> **TypeScript SSOT**: `ui_v4/src/types.ts:PdState`
+> **Продюсер**: `runtime/smc/smc_runner.py:get_pd_state()` → `ws_server._build_full_frame()`
+> **Консюмер**: `ui_v4/src/stores/smcStore.ts` → `PdBadge.svelte` (HUD chip) + `OverlayRenderer.renderPdEqLine()` (EQ line)
+
+Присутній тільки у **full frame** (аналогічно `bias_map`). Відсутній у delta frame.
+
+| Поле | Тип | Опис |
+|---|---|---|
+| `range_high` | number | Swing High price (верхня межа P/D range) |
+| `range_low` | number | Swing Low price (нижня межа P/D range) |
+| `equilibrium` | number | `(range_high + range_low) / 2` — EQ line price |
+| `pd_percent` | number | 0.0–100.0 (0 = range_low, 100 = range_high) — позиція ціни в range |
+| `label` | string | `"PREMIUM"` \| `"DISCOUNT"` \| `"EQ"` |
+
+**Threshold**: `label="DISCOUNT"` коли `pd_percent < 48`, `label="PREMIUM"` коли `pd_percent > 52`, `label="EQ"` інакше.
+
+**Нові інваріанти (ADR-0041)**:
+- **PD-1**: `calc_enabled: true` = default і lockable. P/D calc завжди активний незалежно від UI preferences.
+- **PD-2**: Badge = HUD element, не chart object. Не входить у display budget <=12.
+- **PD-3**: D8 coincidence rule: EQ line прихована коли `|EQ - PDH/PDL| < eq_pdh_coincidence_atr_mult * ATR`.
+- **PD-4** (Variant H): Amber coloring = frontend-only derivation (`derivePdBadge()` у `shellState.ts`). Backend не знає про amber.
+- **PD-5** (Variant H): EQ threshold = 45–55% (hysteresis band).
+- **PD-6** (Variant H): Tactical strip visibility = stage-driven (WAIT/STAYOUT: hidden 0fr; PREPARE+: visible 1fr).
+
 ### Full frame payload (`frame_type: "full" | "replay"`)
 
 SMC поля — **на кореневому рівні frame**, не в `data` (flat structure):
@@ -281,6 +309,7 @@ SMC поля — **на кореневому рівні frame**, не в `data` 
   "bias_map": {"86400": "bearish", "14400": "bearish", "3600": "bullish"},
   "momentum_map": {"900": {"b": 3, "r": 1}},
   "narrative": NarrativeBlock,
+  "pd_state": {"range_high": 3340.0, "range_low": 3290.0, "equilibrium": 3315.0, "pd_percent": 71.2, "label": "PREMIUM"},
   "drawings": [],
   "meta": {...}
 }

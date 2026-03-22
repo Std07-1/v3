@@ -107,8 +107,8 @@ app.main (supervisor)
 │    Config F trade mgmt, grade system, 1 signal/day max         │
 │    Fallback: smc.signals (ADR-0039) when tda_cascade.enabled=false │
 │  Transport: вбудований у WS full/delta frames (zones,         │
-│    swings, levels, smc_delta, signals) — NO окремий Redis канал │
-│  755 tests, E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a+ADR-0040 implemented │
+│    swings, levels, smc_delta, signals, pd_state) — NO Redis   │
+│  778 tests, E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a+ADR-0040+ADR-0041 │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -207,7 +207,7 @@ app.main (supervisor)
 | DrawingsRenderer | ✅ 4 tools (hline/trend/rect/eraser), theme-aware | DrawingsRenderer.ts | ADR-0007, ADR-0008 |
 | DrawingToolbar | ✅ Glass-like, CSS custom properties, micro-interactions | DrawingToolbar.svelte | ADR-0008 |
 | Theming | ✅ 3 themes (dark/black/light) + `applyThemeCssVars()` на `:root` | themes.ts, App.svelte | ADR-0008 |
-| ChartHud | ✅ Symbol/TF picker, theme/style/brightness/favorites | ChartHud.svelte | — |
+| ChartHud | ✅ Variant H shell: thesis bar (symbol+price+P/D chip+headline) + tactical strip (stage-driven visibility, bias pills, session, inv, target) + accent bar (READY/TRIGGERED) | ChartHud.svelte, PdBadge.svelte | ADR-0036, ADR-0041 |
 | Interaction | ✅ Y-zoom, Y-pan, scroll, keyboard shortcuts | interaction.ts | — |
 | DiagPanel | ✅ FE diagnostics, WS state, frame freshness | DiagPanel.svelte | — |
 | WSConnection | ✅ Quiet degraded, reconnect backoff | connection.ts | — |
@@ -662,7 +662,7 @@ v3/
 │   │   ├── order_blocks.py        # detect_order_blocks() — bull/bear lifecycle
 │   │   ├── fvg.py                 # detect_fvg() — bull/bear + height guard (N2)
 │   │   ├── liquidity.py           # detect_liquidity_levels() — ATR-based clustering
-│   │   ├── premium_discount.py    # detect_premium_discount() — equilibrium zones (enabled=false)
+│   │   ├── premium_discount.py    # detect_premium_discount() + compute_pd_state() — equilibrium zones (ADR-0041: calc_enabled/show_badge/show_eq_line/show_zones split)
 │   │   ├── inducement.py          # detect_inducements() — false breakout detection
 │   │   ├── confluence.py          # confluence_score() — 8-factor grade A+/A/B/C (ADR-0029)
 │   │   ├── momentum.py            # displacement detection — body/ATR ratio
@@ -670,7 +670,15 @@ v3/
 │   │   ├── sessions.py            # session H/L, killzones, classify (ADR-0035)
 │   │   ├── narrative.py           # synthesize_narrative() — Context Flow (ADR-0033, ~780 LOC)
 │   │   ├── context_stack.py       # ContextStack — cross-TF zone aggregation
-│   │   └── engine.py              # SmcEngine orchestrator + _update_zone_lifecycle (N1, ~350 LOC)
+│   │   ├── engine.py              # SmcEngine orchestrator + _update_zone_lifecycle (N1, ~350 LOC)
+│   │   └── tda/                   # TDA Cascade — daily signal engine (ADR-0040)
+│   │       ├── types.py           # TdaCascadeConfig, TdaSignal, FvgEntry, TradeState
+│   │       ├── stage1_macro.py    # D1 macro direction (3-bar pivot + slope)
+│   │       ├── stage2_h4_confirm.py # H4 confirmation (midpoint + trending)
+│   │       ├── stage3_session.py  # Session narrative (Asia/London sweep)
+│   │       ├── stage4_fvg_entry.py # M15 FVG entry (touch + close outside)
+│   │       ├── stage5_trade_mgmt.py # Config F trade management
+│   │       └── orchestrator.py    # 4-stage cascade orchestrator
 │   └── contracts/
 │       └── public/
 │           └── marketdata_v1/     # JSON Schema контракти
@@ -708,7 +716,8 @@ v3/
 │   │   └── candle_map.py          # bar→Candle mapping R2 closure (75 LOC)
 │   ├── smc/                       # SMC runtime wiring (ADR-0024)
 │   │   ├── __init__.py
-│   │   └── smc_runner.py          # SmcRunner: warmup via UDS + on_bar callback (~80 LOC)
+│   │   ├── smc_runner.py          # SmcRunner: warmup via UDS + on_bar callback + get_pd_state() (ADR-0041 P2)
+│   │   └── tda_live.py            # TdaLiveRunner: TDA cascade I/O wrapper (ADR-0040)
 │   └── obs_60s.py                 # спостереження / метрики (60s intervals)
 ├── ui_chart_v3/                   # UI + API same-origin (поточний production, HTTP polling)
 │   ├── server.py                  # HTTP API + /api/config policy SSOT + no_data loud rail + static server
@@ -731,8 +740,8 @@ v3/
 │       ├── main.ts                # Svelte mount entrypoint
 │       ├── app/                   # diagState, diagSelectors, frameRouter (config frame T8), edgeProbe
 │       ├── ws/                    # WSConnection (quiet degraded mode), WsAction creators
-│       ├── stores/                # cursor price + UI warnings + meta (serverConfig) + favorites (P3.13) + smcStore (applySmcFull/Delta) + replayStore + viewCache
-│       ├── layout/                # ChartPane (SMC toggles OB/FVG/SW/LVL), ChartHud, OhlcvTooltip, StatusBar, StatusOverlay, DiagPanel, DrawingToolbar, SymbolTfPicker, ReplayBar, BiasBanner
+│       ├── stores/                # cursor price + UI warnings + meta (serverConfig) + favorites (P3.13) + smcStore (applySmcFull/Delta) + replayStore + viewCache + shellState (derivePdBadge, ADR-0041)
+│       ├── layout/                # ChartPane (SMC toggles OB/FVG/SW/LVL), ChartHud, OhlcvTooltip, StatusBar, StatusOverlay, DiagPanel, DrawingToolbar, SymbolTfPicker, ReplayBar, BiasBanner, PdBadge (ADR-0041)
 │       └── chart/                 # ChartEngine (LWC, v3-parity), lwc.ts, themes.ts (3 themes + 5 candle styles), interaction.ts (Y-zoom/pan/reset), OverlayRenderer (strength opacity N3), DrawingsRenderer, overlay/DisplayBudget.ts, geometry
 ├── aione_top/                     # TUI-монітор процесів/pipeline (standalone, NOT supervisor-managed)
 │   ├── __main__.py                # python -m aione_top
@@ -772,14 +781,14 @@ v3/
 │   ├── ui_api.md                  # HTTP API reference
 │   ├── redis_snapshot_design.md   # дизайн Redis snapshots
 │   ├── adr/                       # Architecture Decision Records (SSOT)
-│   │   ├── index.md               # реєстр усіх ADR (ADR-0001 … ADR-0032)
+│   │   ├── index.md               # реєстр усіх ADR (ADR-0001 … ADR-0041)
 │   │   ├── 0001-unified-data-store.md
 │   │   ├── 0002-derive-chain-from-m1.md
-│   │   └── ...                    # (30 файлів)
+│   │   └── ...                    # (41+ файлів)
 │   ├── audit/                     # аудит прогресу P0–P6
 │   ├── runbooks/                  # production, coldstart, live_recover
 │   └── system_spec/               # UI v4 audit, gap analysis
-├── tests/                         # 37 файлів, 431+ тестів
+├── tests/                         # 38+ файлів, 778+ тестів
 │   ├── test_smc_e1.py             # SMC E1: swings, structure, OB, FVG, engine
 │   ├── test_smc_runner.py         # SMC Runner: warmup, on_bar, delta, performance
 │   ├── test_smc_key_levels.py     # SMC key levels: PDH/PDL/DH/DL
@@ -787,6 +796,7 @@ v3/
 │   ├── test_smc_confluence.py     # SMC confluence: 8 factors, grade (ADR-0029)
 │   ├── test_smc_e2_liquidity.py   # SMC E2: liquidity ATR-clusters
 │   ├── test_smc_e2_pd_inducement.py # SMC E2: P/D + inducement
+│   ├── test_pd_state.py           # PdState wire format + config compat (ADR-0041, 21 тест)
 │   ├── test_d1_derive.py          # D1 derive from M1 (ADR-0023)
 │   ├── test_derive_calendar_pause_partial.py # каскадна деривація з calendar pause
 │   ├── test_uds_commit_split_brain.py # UDS split-brain resilience

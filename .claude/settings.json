@@ -18,7 +18,13 @@
       "Bash(powershell.exe -Command \"Get-ChildItem ''c:\\\\Aione_projects\\\\v3\\\\data_v3\\\\BTCUSDT\\\\'' -Recurse -Filter ''*.jsonl'' | Where-Object { $_.Directory.Name -eq ''86400'' } | Format-Table FullName, Length, LastWriteTime; Get-ChildItem ''c:\\\\Aione_projects\\\\v3\\\\data_v3\\\\ETHUSDT\\\\'' -Recurse -Filter ''*.jsonl'' | Where-Object { $_.Directory.Name -eq ''86400'' } | Format-Table FullName, Length, LastWriteTime\")",
       "Bash(powershell.exe -Command \"Get-ChildItem ''c:\\\\Aione_projects\\\\v3\\\\data_v3\\\\'' -Recurse -Directory | Where-Object { $_.Name -eq ''86400'' } | ForEach-Object { Get-ChildItem $_.FullName | Format-Table Name, Length, LastWriteTime }\")",
       "Bash(powershell.exe -Command \"& { $redis = [System.Net.Sockets.TcpClient]::new\\(''127.0.0.1'', 6379\\); $stream = $redis.GetStream\\(\\); $writer = [System.IO.StreamWriter]::new\\($stream\\); $reader = [System.IO.StreamReader]::new\\($stream\\); $writer.WriteLine\\(''SELECT 1''\\); $writer.Flush\\(\\); $reader.ReadLine\\(\\); $writer.WriteLine\\(''ZCARD v3_local:snap:BTCUSDT:86400''\\); $writer.Flush\\(\\); $reader.ReadLine\\(\\); $writer.WriteLine\\(''ZCARD v3_local:snap:ETHUSDT:86400''\\); $writer.Flush\\(\\); $reader.ReadLine\\(\\); $redis.Close\\(\\) }\")",
-      "Bash(powershell.exe -Command \"Get-WmiObject Win32_Process -Filter \"\"Name=''python.exe''\"\" | Where-Object { $_.CommandLine -like ''*binance_ingest_worker*'' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Host \\(''Killed PID '' + $_.ProcessId\\) }\")"
+      "Bash(powershell.exe -Command \"Get-WmiObject Win32_Process -Filter \"\"Name=''python.exe''\"\" | Where-Object { $_.CommandLine -like ''*binance_ingest_worker*'' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Host \\(''Killed PID '' + $_.ProcessId\\) }\")",
+      "WebSearch",
+      "WebFetch(domain:docs.omnara.com)",
+      "Bash(ls -lah /c/Aione_projects/v3/tests/test_tda_stage*.py)",
+      "Bash(ls /c/Aione_projects/v3/data_v3/XAU_USD/tf_*)",
+      "Bash(python research/TDA/tda_simulation.py)",
+      "Bash(python research/TDA/tda_validate_production.py)"
     ]
   }
 }

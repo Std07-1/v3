@@ -3,7 +3,7 @@
 > **Системний довідник** — структура, команди, конфігурація, схеми.
 > Правила, інваріанти, заборони → `.github/copilot-instructions.md`.
 > Командна взаємодія агентів → `CLAUDE.md`.
-> **Last Updated**: 2026-03-13
+> **Last Updated**: 2026-03-22
 
 ---
 
@@ -318,6 +318,7 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 | `test_tda_stage5.py` | TDA Stage 5: Config F trade management |
 | `test_tda_orchestrator.py` | TDA cascade orchestrator (4-stage flow) |
 | `test_tda_live.py` | TDA runtime wiring + config SSOT |
+| `test_pd_state.py` | PdState wire format + PremiumDiscountConfig compat (ADR-0041, 21 тест) |
 
 ---
 

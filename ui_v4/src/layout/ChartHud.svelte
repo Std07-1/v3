@@ -7,7 +7,6 @@
     import { favoritesStore, type FavPair } from "../stores/favorites";
     import { derivePdBadge } from "../stores/shellState";
     import PdBadge from "./PdBadge.svelte";
-    import BiasBanner from "./BiasBanner.svelte";
 
     const {
         symbols,
@@ -80,11 +79,7 @@
         }),
     );
 
-    let infoStripExpanded = $state(
-        typeof localStorage !== "undefined"
-            ? localStorage.getItem("info_strip_expanded") !== "0"
-            : true,
-    );
+    let biasVisible = $state(true);
 
     // ─── ADR-0041 §5a: P/D chip with directional coloring ───
     let pdBadge = $derived(
@@ -136,15 +131,9 @@
             !stripCollapsed,
     );
 
-    function toggleInfoStrip(e: MouseEvent) {
+    function toggleBias(e: MouseEvent) {
         e.stopPropagation();
-        infoStripExpanded = !infoStripExpanded;
-        if (typeof localStorage !== "undefined") {
-            localStorage.setItem(
-                "info_strip_expanded",
-                infoStripExpanded ? "1" : "0",
-            );
-        }
+        biasVisible = !biasVisible;
     }
 
     // ─── Dropdown state ───
@@ -353,6 +342,34 @@
                 title={isFaved ? "Remove from favorites" : "Add to favorites"}
                 >{isFaved ? "★" : "☆"}</button
             >
+
+            <!-- ADR-0031: HTF bias pills (always available, trader toggles) -->
+            {#if biasVisible && biasPills.length > 0}
+                <button
+                    class="hud-bias-area"
+                    onclick={toggleBias}
+                    title="Hide HTF bias"
+                    type="button"
+                >
+                    {#each biasPills as p (p.label)}
+                        <span
+                            class="hud-bias-pill"
+                            class:bull={p.bias === "bullish"}
+                            class:bear={p.bias === "bearish"}
+                            >{p.label}<span class="bias-arrow">{p.arrow}</span
+                            >{#if p.momDots}<span class="bias-mom {p.momCls}"
+                                    >{p.momDots}</span
+                                >{/if}</span
+                        >
+                    {/each}
+                </button>
+            {:else}
+                <button
+                    class="hud-bias-toggle"
+                    onclick={toggleBias}
+                    title="Show HTF bias">║</button
+                >
+            {/if}
 
             <!-- ADR-0036: Strip toggle (inline, in hud-row) -->
             {#if shell?.tactical_strip}
@@ -626,22 +643,10 @@
         </div>
     </div>
 
-    <!-- Info Strip: PdBadge + collapsible HTF bias pills (другий рядок HUD) -->
-    {#if pdBadge || biasPills.length > 0}
+    <!-- Info Strip: PdBadge (другий рядок HUD, ADR-0041) -->
+    {#if pdBadge}
         <div class="info-strip">
             <PdBadge badge={pdBadge} />
-            <button
-                class="info-strip-toggle"
-                onclick={toggleInfoStrip}
-                type="button"
-                title={infoStripExpanded ? "Сховати bias" : "Показати bias"}
-                aria-label="Toggle bias pills"
-            >│</button>
-            {#if biasPills.length > 0}
-                <div class="info-strip-pills" class:expanded={infoStripExpanded}>
-                    <BiasBanner biasMap={biasMap} momentumMap={momentumMap} inline={true} />
-                </div>
-            {/if}
         </div>
     {/if}
 
@@ -702,16 +707,6 @@
                             </span>
                         {/each}
                     </span>
-                {/if}
-                {#if narrative?.scenarios?.[0]?.invalidation}
-                    <span class="tact-inv"
-                        >inv: {narrative.scenarios[0].invalidation}</span
-                    >
-                {/if}
-                {#if narrative?.scenarios?.[0]?.target_desc}
-                    <span class="tact-target"
-                        >→ {narrative.scenarios[0].target_desc}</span
-                    >
                 {/if}
             </div>
         </div>
@@ -1398,14 +1393,6 @@
         align-items: center;
         gap: 3px;
     }
-    .tact-inv {
-        color: rgba(252, 129, 129, 0.7);
-        font-size: 8px;
-    }
-    .tact-target {
-        color: rgba(96, 165, 250, 0.7);
-        font-size: 8px;
-    }
 
     /* ═══ ADR-0041 §5a P8: Accent bar (READY/TRIGGERED gradient) ═══ */
     .tact-wrap::after {
@@ -1646,7 +1633,7 @@
         color: rgba(96, 165, 250, 0.85);
     }
 
-    /* Info Strip: другий рядок HUD з PdBadge + collapsible bias pills */
+    /* Info Strip: PdBadge row (ADR-0041) */
     .info-strip {
         display: flex;
         align-items: center;
@@ -1654,41 +1641,5 @@
         padding: 2px 12px;
         min-height: 18px;
         white-space: nowrap;
-    }
-
-    .info-strip-toggle {
-        all: unset;
-        cursor: pointer;
-        font-size: 11px;
-        color: rgba(255, 255, 255, 0.45);
-        width: 12px;
-        height: 18px;
-        line-height: 18px;
-        text-align: center;
-        padding: 0 2px;
-        user-select: none;
-        transition: color 0.15s ease;
-        flex-shrink: 0;
-    }
-
-    .info-strip-toggle:hover {
-        color: rgba(255, 255, 255, 0.55);
-    }
-
-    .info-strip-pills {
-        display: inline-flex;
-        align-items: center;
-        gap: 3px;
-        max-width: 0;
-        overflow: hidden;
-        opacity: 0;
-        transition:
-            max-width 150ms ease-out,
-            opacity 120ms ease-out;
-    }
-
-    .info-strip-pills.expanded {
-        max-width: 220px;
-        opacity: 1;
     }
 </style>
