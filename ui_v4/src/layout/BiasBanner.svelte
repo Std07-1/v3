@@ -16,8 +16,9 @@
     interface Props {
         biasMap: Record<string, string>;
         momentumMap?: Record<string, { b: number; r: number }>;
+        inline?: boolean;
     }
-    let { biasMap, momentumMap = {} }: Props = $props();
+    let { biasMap, momentumMap = {}, inline = false }: Props = $props();
 
     // Momentum → directional dots: count → dots, color by dominant side
     function momInfo(m: { b: number; r: number } | undefined): {
@@ -54,7 +55,7 @@
 </script>
 
 {#if pills.length > 0}
-    <div class="bias-banner" class:aligned>
+    <div class="bias-banner" class:aligned class:is-inline={inline}>
         {#each pills as p (p.label)}
             <span
                 class="bias-pill"
@@ -79,6 +80,12 @@
         flex-direction: row;
         gap: 3px;
         pointer-events: none;
+    }
+    .bias-banner.is-inline {
+        position: static;
+        top: unset;
+        left: unset;
+        z-index: unset;
     }
     .bias-banner.aligned {
         outline: 1px solid rgba(46, 204, 113, 0.35);

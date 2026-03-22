@@ -7,6 +7,7 @@
     import { favoritesStore, type FavPair } from "../stores/favorites";
     import { derivePdBadge } from "../stores/shellState";
     import PdBadge from "./PdBadge.svelte";
+    import BiasBanner from "./BiasBanner.svelte";
 
     const {
         symbols,
@@ -638,13 +639,7 @@
             >│</button>
             {#if biasPills.length > 0}
                 <div class="info-strip-pills" class:expanded={infoStripExpanded}>
-                    {#each biasPills as p (p.label)}
-                        <span
-                            class="hud-bias-pill"
-                            class:bull={p.bias === "bullish"}
-                            class:bear={p.bias === "bearish"}
-                        >{p.label}<span class="bias-arrow">{p.arrow}</span>{#if p.momDots}<span class="bias-mom {p.momCls}">{p.momDots}</span>{/if}</span>
-                    {/each}
+                    <BiasBanner biasMap={biasMap} momentumMap={momentumMap} inline={true} />
                 </div>
             {/if}
         </div>
