@@ -79,7 +79,7 @@
 <style>
     .tv-legend {
         position: absolute;
-        top: 34px;
+        top: 68px;
         left: 10px;
         z-index: 30;
         display: flex;

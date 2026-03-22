@@ -246,6 +246,7 @@
   let cachedMomentumMap: Record<string, { b: number; r: number }> = $state({});
   let cachedNarrative: import("./types").NarrativeBlock | null = $state(null);
   let cachedShell: import("./types").ShellPayload | null = $state(null);
+  let cachedPdState: import("./types").PdState | null = $state(null);
   let statusInfo: StatusInfo = $state({
     status: "CONNECTING" as const,
     detail: "",
@@ -284,6 +285,8 @@
       cachedNarrative = (f as any).narrative ?? null;
     // ADR-0036: shell payload caching (delta frames without shell don't reset it)
     if ((f as any)?.shell !== undefined) cachedShell = (f as any).shell ?? null;
+    // ADR-0041 §5a: P/D state for thesis bar chip
+    if (f?.pd_state !== undefined) cachedPdState = f.pd_state ?? null;
     // Track price/time from frames for HUD
     if (f) {
       const candles = f.candles;
@@ -465,6 +468,7 @@
         momentumMap={cachedMomentumMap}
         narrative={cachedNarrative}
         shell={cachedShell}
+        pdState={cachedPdState}
       />
     </div>
     <!-- ADR-0027: Replay controls bar (visible only when replay active) -->

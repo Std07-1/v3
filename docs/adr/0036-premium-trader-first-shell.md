@@ -4,7 +4,7 @@
 - **Дата**: 2026-03-09 (original) / 2026-03-14 (amendment v2) / 2026-03-14 (amendment v3)
 - **Автор**: R_ARCHITECT
 - **Initiative**: `ui_v4_premium_shell_v1`
-- **Пов'язані ADR**: `0008`, `0027`, `0031`, `0032`, `0033`, `0035`, `0039`
+- **Пов'язані ADR**: `0008`, `0027`, `0031`, `0032`, `0033`, `0035`, `0039`, `0041`
 - **Visual reference**: `research/trader_shell_v5 (1).html`
 
 ---
@@ -1034,6 +1034,19 @@ code revert.
    (legacy HUD + new shell)?~~
    **CLOSED (v3)**: Feature detection по наявності `frame.shell`. Якщо є — new shell.
    Якщо ні — legacy. Transition period = organic (поки P4 не deployed, UI в legacy mode).
+
+## 9a. Cross-ADR Extension: Variant H (ADR-0041)
+
+> Розширено в **ADR-0041** (Variant H: Shell Restructure, P5–P9).
+>
+> Variant H реструктурує thesis bar + tactical strip:
+> - Thesis bar спрощений до 4 елементів: symbol + price + P/D chip + headline
+> - Bias pills мігрують з thesis bar у tactical strip
+> - P/D chip отримує directional coloring (amber для conflict P/D vs bias)
+> - Tactical strip стає stage-driven (hidden на WAIT, visible від PREPARE)
+> - Push-down layout model (B7) зберігається
+>
+> Деталі: `docs/adr/0041-pd-badge-eq-line.md` §5a.
 
 ## 10. Architect Self-Check
 

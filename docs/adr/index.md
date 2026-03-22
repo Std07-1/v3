@@ -52,6 +52,7 @@
 | [0038](0038-initial-backfill-virgin-symbols.md) | Initial Backfill for Virgin Symbols | **Implemented (Amend v2)** | 2026-03-15 | backfill, virgin, bootstrap Phase 2.5, M1 history, historical crawl, derive-only HTF | `cold_start_backfill_v1` |
 | [0039](0039-signal-engine.md) | Signal Engine — Numeric Entry/SL/TP + R:R + Alerts | **Implemented** | 2026-03-14 | entry_price, stop_loss, take_profit, R:R, confidence, alerts, signal lifecycle, core/smc/signals.py | `signal_engine_v1` |
 | [0040](0040-tda-cascade-signal-engine.md) | TDA Cascade — Daily Signal Engine Rebuild | **Implemented** | 2026-03-18 | TDA, 4-stage cascade, D1→H4→Session→FVG, Config F, partial TP, trailing SL, daily signal | `tda_cascade_v1` |
+| [0041](0041-pd-badge-eq-line.md) | Premium/Discount Badge + EQ Line — Decoupled Calc/Display + Variant H Shell Restructure | **Accepted** | 2026-03-22 | P/D calc/display split, PdBadge HUD, EQ dashed line, D8 coincidence, config granular keys, Variant H shell restructure, directional coloring, amber conflict | `pd_badge_eq_v1` |
 
 ---
 
@@ -91,4 +92,4 @@
 
 Див. формат у [copilot-instructions.md](../../.github/copilot-instructions.md) → Тема B, Правило B2.
 
-Наступний номер: **0041**
+Наступний номер: **0042**

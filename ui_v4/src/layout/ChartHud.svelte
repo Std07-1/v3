@@ -5,6 +5,8 @@
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
     import { favoritesStore, type FavPair } from "../stores/favorites";
+    import { derivePdBadge } from "../stores/shellState";
+    import PdBadge from "./PdBadge.svelte";
 
     const {
         symbols,
@@ -22,6 +24,7 @@
         momentumMap = {} as Record<string, { b: number; r: number }>,
         narrative = null as import("../types").NarrativeBlock | null,
         shell = null as import("../types").ShellPayload | null,
+        pdState = null as import("../types").PdState | null,
     }: {
         symbols: string[];
         tfs: string[];
@@ -38,6 +41,7 @@
         momentumMap?: Record<string, { b: number; r: number }>;
         narrative?: import("../types").NarrativeBlock | null;
         shell?: import("../types").ShellPayload | null;
+        pdState?: import("../types").PdState | null;
     } = $props();
 
     // ─── Bias pills (ADR-0031) ───
@@ -75,7 +79,16 @@
         }),
     );
 
-    let biasVisible = $state(true);
+    let infoStripExpanded = $state(
+        typeof localStorage !== "undefined"
+            ? localStorage.getItem("info_strip_expanded") !== "0"
+            : true,
+    );
+
+    // ─── ADR-0041 §5a: P/D chip with directional coloring ───
+    let pdBadge = $derived(
+        derivePdBadge(pdState, narrative?.scenarios?.[0]?.direction ?? null),
+    );
 
     // ─── Shell state (ADR-0036) ───
     let microCardOpen = $state(false);
@@ -102,9 +115,35 @@
     // Shell stage CSS class
     let shellStageClass = $derived(shell ? `st-${shell.stage}` : "");
 
-    function toggleBias(e: MouseEvent) {
+    // ─── ADR-0041 §5a P8: Accent bar directional color ───
+    // Пріоритет: signal.direction (long/short) → alignment_direction (bullish/bearish) → null
+    let shellAccentColor = $derived.by((): string => {
+        const sigDir = shell?.signal?.direction ?? null;
+        if (sigDir === "long") return "52,211,153";
+        if (sigDir === "short") return "239,83,80";
+        const alDir = shell?.tactical_strip?.alignment_direction ?? null;
+        if (alDir === "bullish") return "52,211,153";
+        if (alDir === "bearish") return "239,83,80";
+        return "52,211,153"; // safe fallback (neutral green)
+    });
+
+    // ADR-0041 §5a: tactical strip visible on PREPARE+ stages
+    let stripVisible = $derived(
+        shell != null &&
+            shell.stage !== "wait" &&
+            shell.stage !== "stayout" &&
+            !stripCollapsed,
+    );
+
+    function toggleInfoStrip(e: MouseEvent) {
         e.stopPropagation();
-        biasVisible = !biasVisible;
+        infoStripExpanded = !infoStripExpanded;
+        if (typeof localStorage !== "undefined") {
+            localStorage.setItem(
+                "info_strip_expanded",
+                infoStripExpanded ? "1" : "0",
+            );
+        }
     }
 
     // ─── Dropdown state ───
@@ -314,96 +353,15 @@
                 >{isFaved ? "★" : "☆"}</button
             >
 
-            <!-- ADR-0036: Inline TF Strip (after star) -->
+            <!-- ADR-0036: Strip toggle (inline, in hud-row) -->
             {#if shell?.tactical_strip}
                 <button
                     class="strip-toggle"
                     class:vis={stripCollapsed}
                     onclick={toggleStrip}
                     type="button"
-                    title="показати TF strip"
+                    title={stripCollapsed ? "показати strip" : "сховати strip"}
                 ></button>
-                {#if !stripCollapsed}
-                    <button class="shell-strip-inline" onclick={toggleStrip} type="button" title="сховати TF strip">
-                        {#if shell.tactical_strip.alignment_type === "htf_aligned"}
-                            <span class="al-pill">
-                                <span
-                                    class="al-word"
-                                    class:bull={shell.tactical_strip
-                                        .alignment_direction === "bullish"}
-                                    class:bear={shell.tactical_strip
-                                        .alignment_direction === "bearish"}
-                                >
-                                    {shell.tactical_strip
-                                        .alignment_direction === "bullish"
-                                        ? "ALIGNED ▲"
-                                        : "ALIGNED ▼"}
-                                </span>
-                            </span>
-                        {:else}
-                            <span class="shell-chips">
-                                {#each shell.tactical_strip.chips as chip}
-                                    <span
-                                        class="shell-chip"
-                                        class:brk={chip.chip_state === "brk"}
-                                        class:cfl={chip.chip_state === "cfl"}
-                                    >
-                                        <span class="chip-tf"
-                                            >{chip.tf_label}</span
-                                        >
-                                        <span
-                                            class="chip-arr"
-                                            class:bull={chip.direction ===
-                                                "bullish"}
-                                            class:bear={chip.direction ===
-                                                "bearish"}
-                                        >
-                                            {chip.direction === "bullish"
-                                                ? "▲"
-                                                : "▼"}
-                                        </span>
-                                        {#if chip.chip_state === "brk"}<span
-                                                class="chip-dot brk-dot"
-                                                title="Пробій структури (BOS)"
-                                            ></span>{/if}
-                                        {#if chip.chip_state === "cfl"}<span
-                                                class="chip-dot cfl-dot"
-                                                title="Конфлікт напрямків"
-                                            ></span>{/if}
-                                    </span>
-                                {/each}
-                            </span>
-                        {/if}
-                    </button>
-                {/if}
-            {/if}
-
-            <!-- ADR-0031: HTF bias pills (only when shell is not active) -->
-            {#if !shell && biasVisible && biasPills.length > 0}
-                <button
-                    class="hud-bias-area"
-                    onclick={toggleBias}
-                    title="Hide HTF bias"
-                    type="button"
-                >
-                    {#each biasPills as p (p.label)}
-                        <span
-                            class="hud-bias-pill"
-                            class:bull={p.bias === "bullish"}
-                            class:bear={p.bias === "bearish"}
-                            >{p.label}<span class="bias-arrow">{p.arrow}</span
-                            >{#if p.momDots}<span class="bias-mom {p.momCls}"
-                                    >{p.momDots}</span
-                                >{/if}</span
-                        >
-                    {/each}
-                </button>
-            {:else if !shell}
-                <button
-                    class="hud-bias-toggle"
-                    onclick={toggleBias}
-                    title="Show HTF bias">›</button
-                >
             {/if}
 
             <!-- ADR-0033: Narrative inline (hidden when shell active) -->
@@ -597,34 +555,66 @@
                                 <div class="mc-sig-sep"></div>
                                 <div class="mc-sig">
                                     <div class="mc-sig-head">
-                                        <span class="mc-sig-dir" class:long={sig.direction === 'long'} class:short={sig.direction === 'short'}>
-                                            {sig.direction === 'long' ? '▲ LONG' : '▼ SHORT'}
+                                        <span
+                                            class="mc-sig-dir"
+                                            class:long={sig.direction ===
+                                                "long"}
+                                            class:short={sig.direction ===
+                                                "short"}
+                                        >
+                                            {sig.direction === "long"
+                                                ? "▲ LONG"
+                                                : "▼ SHORT"}
                                         </span>
-                                        <span class="mc-sig-state">{sig.state.toUpperCase()}</span>
-                                        <span class="mc-sig-conf" title="Confidence score">
+                                        <span class="mc-sig-state"
+                                            >{sig.state.toUpperCase()}</span
+                                        >
+                                        <span
+                                            class="mc-sig-conf"
+                                            title="Confidence score"
+                                        >
                                             {sig.confidence}%
                                         </span>
                                     </div>
                                     <div class="mc-grid mc-sig-grid">
-                                        <div class="mc-field" title="Ціна входу ({sig.entry_method})">
+                                        <div
+                                            class="mc-field"
+                                            title="Ціна входу ({sig.entry_method})"
+                                        >
                                             <div class="mc-label">Entry</div>
-                                            <div class="mc-val entry">{sig.entry_price.toFixed(2)}</div>
+                                            <div class="mc-val entry">
+                                                {sig.entry_price.toFixed(2)}
+                                            </div>
                                         </div>
-                                        <div class="mc-field" title="R:R відношення ризик/прибуток">
+                                        <div
+                                            class="mc-field"
+                                            title="R:R відношення ризик/прибуток"
+                                        >
                                             <div class="mc-label">R:R</div>
-                                            <div class="mc-val">{sig.risk_reward.toFixed(1)}:1</div>
+                                            <div class="mc-val">
+                                                {sig.risk_reward.toFixed(1)}:1
+                                            </div>
                                         </div>
                                         <div class="mc-field" title="Стоп-лосс">
                                             <div class="mc-label">SL</div>
-                                            <div class="mc-val sl">{sig.stop_loss.toFixed(2)}</div>
+                                            <div class="mc-val sl">
+                                                {sig.stop_loss.toFixed(2)}
+                                            </div>
                                         </div>
-                                        <div class="mc-field" title="Тейк-профіт">
+                                        <div
+                                            class="mc-field"
+                                            title="Тейк-профіт"
+                                        >
                                             <div class="mc-label">TP</div>
-                                            <div class="mc-val tp">{sig.take_profit.toFixed(2)}</div>
+                                            <div class="mc-val tp">
+                                                {sig.take_profit.toFixed(2)}
+                                            </div>
                                         </div>
                                     </div>
                                     {#if sig.warnings && sig.warnings.length > 0}
-                                        <div class="mc-warn">⚠ {sig.warnings[0]}</div>
+                                        <div class="mc-warn">
+                                            ⚠ {sig.warnings[0]}
+                                        </div>
                                     {/if}
                                 </div>
                             {/if}
@@ -634,6 +624,103 @@
             {/if}
         </div>
     </div>
+
+    <!-- Info Strip: PdBadge + collapsible HTF bias pills (другий рядок HUD) -->
+    {#if pdBadge || biasPills.length > 0}
+        <div class="info-strip">
+            <PdBadge badge={pdBadge} />
+            <button
+                class="info-strip-toggle"
+                onclick={toggleInfoStrip}
+                type="button"
+                title={infoStripExpanded ? "Сховати bias" : "Показати bias"}
+                aria-label="Toggle bias pills"
+            >│</button>
+            {#if biasPills.length > 0}
+                <div class="info-strip-pills" class:expanded={infoStripExpanded}>
+                    {#each biasPills as p (p.label)}
+                        <span
+                            class="hud-bias-pill"
+                            class:bull={p.bias === "bullish"}
+                            class:bear={p.bias === "bearish"}
+                        >{p.label}<span class="bias-arrow">{p.arrow}</span>{#if p.momDots}<span class="bias-mom {p.momCls}">{p.momDots}</span>{/if}</span>
+                    {/each}
+                </div>
+            {/if}
+        </div>
+    {/if}
+
+    <!-- ADR-0041 §5a P7: Tactical strip (separate row, stage-driven visibility) -->
+    {#if shell?.tactical_strip}
+        <div
+            class="tact-wrap"
+            class:open={stripVisible}
+            style:color={themeText}
+            style:--shell-accent={shellAccentColor}
+        >
+            <div class="tact-inner">
+                {#if narrative?.in_killzone || narrative?.current_session}
+                    <span class="tact-session"
+                        >{narrative?.current_session ??
+                            ""}{narrative?.in_killzone ? " KZ" : ""}</span
+                    >
+                {/if}
+                {#if shell.tactical_strip.alignment_type === "htf_aligned"}
+                    <span class="al-pill">
+                        <span
+                            class="al-word"
+                            class:bull={shell.tactical_strip
+                                .alignment_direction === "bullish"}
+                            class:bear={shell.tactical_strip
+                                .alignment_direction === "bearish"}
+                        >
+                            {shell.tactical_strip.alignment_direction ===
+                            "bullish"
+                                ? "ALIGNED ▲"
+                                : "ALIGNED ▼"}
+                        </span>
+                    </span>
+                {:else}
+                    <span class="shell-chips">
+                        {#each shell.tactical_strip.chips as chip}
+                            <span
+                                class="shell-chip"
+                                class:brk={chip.chip_state === "brk"}
+                                class:cfl={chip.chip_state === "cfl"}
+                            >
+                                <span class="chip-tf">{chip.tf_label}</span>
+                                <span
+                                    class="chip-arr"
+                                    class:bull={chip.direction === "bullish"}
+                                    class:bear={chip.direction === "bearish"}
+                                >
+                                    {chip.direction === "bullish" ? "▲" : "▼"}
+                                </span>
+                                {#if chip.chip_state === "brk"}<span
+                                        class="chip-dot brk-dot"
+                                        title="Пробій структури (BOS)"
+                                    ></span>{/if}
+                                {#if chip.chip_state === "cfl"}<span
+                                        class="chip-dot cfl-dot"
+                                        title="Конфлікт напрямків"
+                                    ></span>{/if}
+                            </span>
+                        {/each}
+                    </span>
+                {/if}
+                {#if narrative?.scenarios?.[0]?.invalidation}
+                    <span class="tact-inv"
+                        >inv: {narrative.scenarios[0].invalidation}</span
+                    >
+                {/if}
+                {#if narrative?.scenarios?.[0]?.target_desc}
+                    <span class="tact-target"
+                        >→ {narrative.scenarios[0].target_desc}</span
+                    >
+                {/if}
+            </div>
+        </div>
+    {/if}
 
     <!-- Symbol dropdown -->
     {#if symbolOpen}
@@ -1257,8 +1344,11 @@
         white-space: nowrap;
         max-width: 220px;
     }
+    .shell-strip-inline {
+        font-size: 9px;
+    }
 
-    /* ─── Inline TF Strip (in hud-row, after star) ─── */
+    /* ─── Inline TF Strip (toggle dot in hud-row) ─── */
     .strip-toggle {
         all: unset;
         width: 3px;
@@ -1267,7 +1357,9 @@
         background: rgba(255, 255, 255, 0.12);
         cursor: pointer;
         flex-shrink: 0;
-        transition: background 140ms, opacity 180ms;
+        transition:
+            background 140ms,
+            opacity 180ms;
         display: none;
         opacity: 0;
     }
@@ -1279,17 +1371,80 @@
     .strip-toggle.vis:hover {
         background: rgba(255, 255, 255, 0.35);
     }
-    .shell-strip-inline {
-        all: unset;
+
+    /* ═══ ADR-0041 §5a P7: Tactical strip row (animated, stage-driven) ═══ */
+    .tact-wrap {
+        display: grid;
+        grid-template-rows: 0fr;
+        transition: grid-template-rows 150ms ease-out;
+    }
+    .tact-wrap.open {
+        grid-template-rows: 1fr;
+    }
+    .tact-inner {
+        overflow: hidden;
+        min-height: 0;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 12px;
+        font-size: 9px;
+        white-space: nowrap;
+    }
+    .tact-session {
+        font-weight: 600;
+        color: #ff9800;
+        background: rgba(255, 152, 0, 0.12);
+        padding: 1px 4px;
+        border-radius: 3px;
+    }
+    .tact-bias {
         display: inline-flex;
         align-items: center;
-        gap: 0;
-        cursor: pointer;
-        border-radius: 3px;
-        transition: background 120ms;
+        gap: 3px;
     }
-    .shell-strip-inline:hover {
-        background: rgba(255, 255, 255, 0.04);
+    .tact-inv {
+        color: rgba(252, 129, 129, 0.7);
+        font-size: 8px;
+    }
+    .tact-target {
+        color: rgba(96, 165, 250, 0.7);
+        font-size: 8px;
+    }
+
+    /* ═══ ADR-0041 §5a P8: Accent bar (READY/TRIGGERED gradient) ═══ */
+    .tact-wrap::after {
+        content: "";
+        display: block;
+        height: 1.5px;
+        background: transparent;
+        transition: background 200ms ease;
+    }
+    .st-ready .tact-wrap.open::after {
+        background: linear-gradient(
+            90deg,
+            rgba(var(--shell-accent), 0.5),
+            rgba(var(--shell-accent), 0.1)
+        );
+    }
+    .st-triggered .tact-wrap.open::after {
+        background: linear-gradient(
+            90deg,
+            rgba(var(--shell-accent), 0.7),
+            rgba(var(--shell-accent), 0.15)
+        );
+        animation: accent-pulse 600ms ease-out 1;
+    }
+    @keyframes accent-pulse {
+        0% {
+            opacity: 0.3;
+        }
+        50% {
+            opacity: 1;
+        }
+        100% {
+            opacity: 1;
+        }
     }
     .al-pill {
         display: inline-flex;
@@ -1465,8 +1620,12 @@
         font-weight: 600;
         letter-spacing: 0.06em;
     }
-    .mc-sig-dir.long { color: rgba(52, 211, 153, 0.95); }
-    .mc-sig-dir.short { color: rgba(252, 129, 129, 0.95); }
+    .mc-sig-dir.long {
+        color: rgba(52, 211, 153, 0.95);
+    }
+    .mc-sig-dir.short {
+        color: rgba(252, 129, 129, 0.95);
+    }
     .mc-sig-state {
         font-size: 8px;
         text-transform: uppercase;
@@ -1482,7 +1641,59 @@
     .mc-sig-grid {
         margin: 0;
     }
-    .mc-val.entry { color: rgba(52, 211, 153, 0.85); }
-    .mc-val.sl { color: rgba(252, 129, 129, 0.8); }
-    .mc-val.tp { color: rgba(96, 165, 250, 0.85); }
+    .mc-val.entry {
+        color: rgba(52, 211, 153, 0.85);
+    }
+    .mc-val.sl {
+        color: rgba(252, 129, 129, 0.8);
+    }
+    .mc-val.tp {
+        color: rgba(96, 165, 250, 0.85);
+    }
+
+    /* Info Strip: другий рядок HUD з PdBadge + collapsible bias pills */
+    .info-strip {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 12px;
+        min-height: 18px;
+        white-space: nowrap;
+    }
+
+    .info-strip-toggle {
+        all: unset;
+        cursor: pointer;
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.45);
+        width: 12px;
+        height: 18px;
+        line-height: 18px;
+        text-align: center;
+        padding: 0 2px;
+        user-select: none;
+        transition: color 0.15s ease;
+        flex-shrink: 0;
+    }
+
+    .info-strip-toggle:hover {
+        color: rgba(255, 255, 255, 0.55);
+    }
+
+    .info-strip-pills {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        max-width: 0;
+        overflow: hidden;
+        opacity: 0;
+        transition:
+            max-width 150ms ease-out,
+            opacity 120ms ease-out;
+    }
+
+    .info-strip-pills.expanded {
+        max-width: 220px;
+        opacity: 1;
+    }
 </style>

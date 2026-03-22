@@ -28,11 +28,12 @@ from core.smc.inducement import detect_inducement
 from core.smc.key_levels import compute_key_levels, collect_htf_levels
 from core.smc.liquidity import detect_liquidity_levels
 from core.smc.order_blocks import detect_order_blocks
-from core.smc.premium_discount import detect_premium_discount
+from core.smc.premium_discount import compute_pd_state, detect_premium_discount
 from core.smc.structure import classify_swings, detect_structure_events
 from core.smc.momentum import detect_displacement, compute_momentum_score
 from core.smc.swings import detect_raw_swings, detect_fractals
 from core.smc.types import (
+    PdState,
     SmcDelta,
     SmcLevel,
     SmcSnapshot,
@@ -405,6 +406,19 @@ class SmcEngine:
             max_wick_ratio=mom.max_wick_ratio,
             lookback=mom.lookback_bars,
         )
+
+    def get_pd_state(self, symbol: str, tf_s: int) -> Optional["PdState"]:
+        """ADR-0041: P/D position for (symbol, tf). Returns None if no data."""
+        base_tf = self._VIEWER_TO_BASE.get(tf_s, tf_s)
+        state = self._states.get((symbol, base_tf))
+        if state is None or not state.bars_list():
+            return None
+        bars = state.bars_list()
+        cfg = self._config.for_tf(tf_s)
+        raw_swings = detect_raw_swings(bars, period=cfg.swing_period)
+        classified = classify_swings(raw_swings)
+        current_price = bars[-1].c
+        return compute_pd_state(classified, current_price, cfg)
 
     # ── ADR-0035: Session support ───────────────────────────────
 

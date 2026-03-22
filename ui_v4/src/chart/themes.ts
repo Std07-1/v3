@@ -47,6 +47,16 @@ export interface ThemeDef {
     toolbarHoverBg: string;
     /** Active accent color (інструмент обраний) */
     toolbarActiveColor: string;
+    // ─── ADR-0041: P/D EQ line color ───
+    /** 40% opacity gray for equilibrium dashed line */
+    pdEqLineColor: string;
+    // ─── ADR-0041: P/D Badge colors (WCAG AA ≥ 4.5:1) ───
+    pdBadgeDiscountBg: string;
+    pdBadgeDiscountText: string;
+    pdBadgePremiumBg: string;
+    pdBadgePremiumText: string;
+    pdBadgeEqBg: string;
+    pdBadgeEqText: string;
 }
 
 export const THEMES: Record<ThemeName, ThemeDef> = {
@@ -77,6 +87,13 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
         toolbarBorder: 'rgba(255, 255, 255, 0.1)',
         toolbarHoverBg: 'rgba(255, 255, 255, 0.08)',
         toolbarActiveColor: '#3d9aff',
+        pdEqLineColor: 'rgba(255, 255, 255, 0.40)',
+        pdBadgeDiscountBg: 'rgba(46, 204, 113, 0.15)',
+        pdBadgeDiscountText: '#2ecc71',
+        pdBadgePremiumBg: 'rgba(239, 83, 80, 0.15)',
+        pdBadgePremiumText: '#ef5350',
+        pdBadgeEqBg: 'rgba(255, 255, 255, 0.10)',
+        pdBadgeEqText: 'rgba(255, 255, 255, 0.60)',
     },
     black: {
         label: 'Black',
@@ -105,6 +122,13 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
         toolbarBorder: 'rgba(255, 255, 255, 0.08)',
         toolbarHoverBg: 'rgba(255, 255, 255, 0.08)',
         toolbarActiveColor: '#3d9aff',
+        pdEqLineColor: 'rgba(255, 255, 255, 0.40)',
+        pdBadgeDiscountBg: 'rgba(46, 204, 113, 0.18)',
+        pdBadgeDiscountText: '#27ae60',
+        pdBadgePremiumBg: 'rgba(239, 83, 80, 0.18)',
+        pdBadgePremiumText: '#e74c3c',
+        pdBadgeEqBg: 'rgba(255, 255, 255, 0.12)',
+        pdBadgeEqText: 'rgba(255, 255, 255, 0.65)',
     },
     light: {
         label: 'Light',
@@ -133,6 +157,13 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
         toolbarBorder: 'rgba(0, 0, 0, 0.05)',
         toolbarHoverBg: 'rgba(0, 0, 0, 0.06)',
         toolbarActiveColor: '#2962ff',
+        pdEqLineColor: 'rgba(0, 0, 0, 0.35)',
+        pdBadgeDiscountBg: 'rgba(39, 174, 96, 0.12)',
+        pdBadgeDiscountText: '#1e8449',
+        pdBadgePremiumBg: 'rgba(231, 76, 60, 0.12)',
+        pdBadgePremiumText: '#c0392b',
+        pdBadgeEqBg: 'rgba(0, 0, 0, 0.06)',
+        pdBadgeEqText: 'rgba(0, 0, 0, 0.50)',
     },
 };
 

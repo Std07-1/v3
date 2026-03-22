@@ -12,6 +12,7 @@
   import {
     ChartEngine,
     TF_TO_S,
+    THEMES,
     type CrosshairData,
     type ThemeName,
     type CandleStyleName,
@@ -21,6 +22,7 @@
   import type { DisplayMode } from "../chart/overlay/DisplayBudget";
   import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
+  // PdBadge moved to ChartHud inline (ADR-0041 §5a Variant H)
   // NarrativePanel moved to ChartHud inline (ADR-0033)
   // BiasBanner moved to ChartHud (ADR-0031: inline after star)
   import { saveViewSnapshot, loadViewSnapshot } from "../stores/viewCache";
@@ -112,6 +114,7 @@
   export function applyTheme(name: ThemeName): void {
     chartEngine?.applyTheme(name);
     overlayRenderer?.setLightTheme(name === "light");
+    overlayRenderer?.setPdEqLineColor(THEMES[name].pdEqLineColor);
     // ADR-0007: CSS vars вже встановлені в App.svelte → кешуємо для canvas через rAF
     requestAnimationFrame(() => drawingsRenderer?.refreshThemeColors());
   }
@@ -250,6 +253,7 @@
             currentFrame.zone_grades,
             currentFrame.bias_map,
             currentFrame.momentum_map,
+            currentFrame.pd_state,
           );
           // untrack: запис до replayStore без створення підписки
           untrack(() => replayStore.updateDataForNewTf(candles, newSmc));
@@ -377,6 +381,7 @@
           currentFrame.zone_grades,
           currentFrame.bias_map,
           currentFrame.momentum_map,
+          currentFrame.pd_state,
         );
       } else if (currentFrame.frame_type === "delta") {
         if (currentFrame.smc_delta) {

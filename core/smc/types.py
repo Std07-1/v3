@@ -309,6 +309,37 @@ class NarrativeBlock:
     session_context: str = ""  # "London KZ active — high probability"
 
 
+# -------------------- Premium/Discount State (ADR-0041) --------------------
+
+PD_LABELS = frozenset({"PREMIUM", "DISCOUNT", "EQ"})
+
+
+@dataclasses.dataclass(frozen=True)
+class PdState:
+    """Поточна позиція ціни у Premium/Discount range (ADR-0041).
+
+    S0: pure dataclass, NO I/O.
+    Завжди обчислюється коли calc_enabled=True, незалежно від display settings.
+    """
+
+    range_high: float  # Swing High price
+    range_low: float  # Swing Low price
+    equilibrium: float  # (high + low) / 2
+    pd_percent: float  # 0.0-100.0 (0 = range_low, 100 = range_high)
+    label: str  # "PREMIUM" | "DISCOUNT" | "EQ"
+    current_price: float  # Ціна на момент розрахунку
+
+    def to_wire(self) -> Dict[str, Any]:
+        """S6: wire format → ui_v4 PdState type."""
+        return {
+            "range_high": round(self.range_high, 5),
+            "range_low": round(self.range_low, 5),
+            "equilibrium": round(self.equilibrium, 5),
+            "pd_percent": round(self.pd_percent, 1),
+            "label": self.label,
+        }
+
+
 # -------------------- Shell (ADR-0036) --------------------
 
 

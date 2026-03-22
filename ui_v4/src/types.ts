@@ -51,6 +51,15 @@ export interface SmcLevel {
   t_ms?: T_MS;      // опційно (час формування рівня)
 }
 
+/** ADR-0041: Premium/Discount badge state (always-on when calc_enabled). */
+export interface PdState {
+  range_high: number;
+  range_low: number;
+  equilibrium: number;
+  pd_percent: number;   // 0.0–100.0
+  label: 'PREMIUM' | 'DISCOUNT' | 'EQ';
+}
+
 export interface SmcData {
   zones: SmcZone[];
   swings: SmcSwing[];
@@ -59,6 +68,7 @@ export interface SmcData {
   zone_grades?: Record<string, ZoneGradeInfo>;  // ADR-0029: confluence scoring
   bias_map?: Record<string, string>;  // ADR-0031: per-TF bias {"900":"bullish", ...}
   momentum_map?: Record<string, { b: number; r: number }>;  // Directional displacement count
+  pd_state?: PdState | null;  // ADR-0041: P/D badge + EQ line
 }
 
 /** ADR-0029: zone confluence grade info (full frame only). */
@@ -251,6 +261,8 @@ export interface RenderFrame {
   bias_map?: Record<string, string>;
   /** Momentum: per-TF directional displacement (full frame only) */
   momentum_map?: Record<string, { b: number; r: number }>;
+  /** ADR-0041: P/D badge state (full frame only) */
+  pd_state?: PdState | null;
   /** ADR-0033+ADR-0035: narrative block (full frame + delta on complete bars) */
   narrative?: NarrativeBlock;
   /** ADR-0036: shell payload (full frame + delta on complete bars) */

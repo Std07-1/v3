@@ -85,6 +85,7 @@ function normalizeSmcData(d?: SmcData | null): Required<SmcData> {
     zone_grades: d?.zone_grades ?? {},
     bias_map: d?.bias_map ?? {},
     momentum_map: d?.momentum_map ?? {},
+    pd_state: d?.pd_state ?? null,
   };
 }
 
@@ -182,7 +183,7 @@ export class OverlayRenderer {
   private readonly chartApi: IChartApi;
   private readonly seriesApi: ISeriesApi<'Candlestick'>;
 
-  private frame: Required<SmcData> = { zones: [], swings: [], levels: [], trend_bias: null, zone_grades: {}, bias_map: {}, momentum_map: {} };
+  private frame: Required<SmcData> = { zones: [], swings: [], levels: [], trend_bias: null, zone_grades: {}, bias_map: {}, momentum_map: {}, pd_state: null };
 
   private cssW = 0;
   private cssH = 0;
@@ -207,6 +208,8 @@ export class OverlayRenderer {
 
   // ── Theme awareness (light background → transparent pills) ──────
   private _isLightTheme = false;
+  // ── ADR-0041: EQ line color (theme-dependent) ──────────────────
+  private _pdEqLineColor = 'rgba(255, 255, 255, 0.40)';
 
   // ── Tooltip system ────────────────────────────────────────────────
   private _hitAreas: HitArea[] = [];
@@ -317,6 +320,12 @@ export class OverlayRenderer {
       this._isLightTheme = isLight;
       this.scheduleRender();
     }
+  }
+
+  /** ADR-0041: set EQ line color from theme. */
+  setPdEqLineColor(color: string): void {
+    this._pdEqLineColor = color;
+    this.scheduleRender();
   }
 
   resize(cssW: number, cssH: number, dpr: number): void {
@@ -515,6 +524,7 @@ export class OverlayRenderer {
 
     this.renderZones(budget.zones);
     if (this.layerVisible.levels) this.renderLevels(budget.levels);
+    this.renderPdEqLine(budget.levels);
     if (this.layerVisible.swings || this.layerVisible.structure || this.layerVisible.fractals || this.layerVisible.displacement) this.renderSwings(budget.swings, scale);
   }
 
@@ -797,6 +807,48 @@ export class OverlayRenderer {
         tooltip: `${tfLabel} ${_KIND_SHORT[z.kind] ?? z.kind}${gradeBlock}${statusDesc}\nStrength: ${Math.round(s * 100)}%\n\n${kindDesc}`,
       });
     }
+  }
+
+  /** ADR-0041 P3: Dashed EQ line (equilibrium between swing SH/SL).
+   *  D8 coincidence rule: hide EQ if any PDH/PDL level is within threshold. */
+  private renderPdEqLine(levels: SmcLevel[]): void {
+    const pd = this.frame.pd_state;
+    if (!pd) return;
+
+    const chartW = this.getChartAreaWidth();
+    if (chartW <= 10) return;
+
+    const y = this.toY(pd.equilibrium);
+    if (y === null) return;
+    if (y < -5 || y > this.cssH + 5) return;
+
+    // D8 coincidence: skip EQ line if PDH or PDL is nearby
+    const PDH_PDL_KINDS = new Set(['pdh', 'pdl']);
+    for (const lvl of levels) {
+      if (!PDH_PDL_KINDS.has(lvl.kind ?? '')) continue;
+      const range = pd.range_high - pd.range_low;
+      if (range <= 0) return;
+      // coincidence threshold: 5% of total SH-SL range (compact heuristic)
+      if (Math.abs(lvl.price - pd.equilibrium) < range * 0.05) return;
+    }
+
+    this.ctx.save();
+    this.ctx.strokeStyle = this._pdEqLineColor;
+    this.ctx.lineWidth = 1;
+    this.ctx.setLineDash([4, 4]);
+    this.ctx.beginPath();
+    this.ctx.moveTo(0, y);
+    this.ctx.lineTo(chartW, y);
+    this.ctx.stroke();
+
+    // Tiny label "EQ" at right edge
+    const fs = 9;
+    this.ctx.font = `${fs}px monospace`;
+    this.ctx.fillStyle = this._pdEqLineColor;
+    this.ctx.textAlign = 'right';
+    this.ctx.textBaseline = 'bottom';
+    this.ctx.fillText('EQ', chartW - 2, y - 2);
+    this.ctx.restore();
   }
 
   private renderLevels(levels: SmcLevel[]): void {

@@ -79,13 +79,40 @@ class SmcLevelsConfig:
 
 @dataclasses.dataclass
 class SmcPremiumDiscountConfig:
-    """§4.6 Premium/Discount Zones — фільтр якості OB/FVG."""
+    """§4.6 Premium/Discount Zones — фільтр якості OB/FVG.
 
-    enabled: bool = True
+    ADR-0041: calc/display decoupled.
+      calc_enabled  — engine завжди рахує P/D state (narrative, confluence)
+      show_badge    — HUD chip [DISCOUNT 38%] (UI only)
+      show_eq_line  — EQ horizontal dashed line (UI only)
+      show_zones    — filled rectangles (default OFF — visual clutter)
+      eq_pdh_coincidence_atr_mult — D8: hide EQ if |EQ - PDH/PDL| < mult * ATR
+    """
+
+    calc_enabled: bool = True
+    show_badge: bool = True
+    show_eq_line: bool = True
+    show_zones: bool = False
+    eq_pdh_coincidence_atr_mult: float = 0.5
+
+    # Backward compat: old code reads .enabled
+    @property
+    def enabled(self) -> bool:
+        return self.calc_enabled
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "SmcPremiumDiscountConfig":
-        return cls(enabled=bool(d.get("enabled", True)))
+        # ADR-0041: migrate old {"enabled": bool} → new granular config
+        calc = d.get("calc_enabled", d.get("enabled", True))
+        return cls(
+            calc_enabled=bool(calc),
+            show_badge=bool(d.get("show_badge", True)),
+            show_eq_line=bool(d.get("show_eq_line", True)),
+            show_zones=bool(d.get("show_zones", False)),
+            eq_pdh_coincidence_atr_mult=float(
+                d.get("eq_pdh_coincidence_atr_mult", 0.5)
+            ),
+        )
 
 
 @dataclasses.dataclass

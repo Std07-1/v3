@@ -68,6 +68,8 @@ class SmcRunnerLike(Protocol):
 
     def get_momentum_map(self, symbol: str) -> Any: ...
 
+    def get_pd_state(self, symbol: str, viewer_tf_s: int) -> Any: ...
+
     def get_narrative(self, symbol: str, tf_s: int, *args: Any) -> Any: ...
 
     def feed_m1_bar_dict(self, symbol: str, bar: Dict[str, Any]) -> None: ...
@@ -398,6 +400,7 @@ def _build_full_frame(
     smc_wire: Optional[Dict[str, Any]] = None,
     bias_map: Optional[Dict[str, str]] = None,
     momentum_map: Optional[Dict] = None,
+    pd_state: Optional[Dict] = None,
 ) -> Dict[str, Any]:
     # T6/S19: output guard — validate candle shapes before send
     guard_warns = _guard_candles_output(candles, symbol, tf_label, "full")
@@ -436,6 +439,8 @@ def _build_full_frame(
         frame["bias_map"] = bias_map
     if momentum_map:
         frame["momentum_map"] = momentum_map
+    if pd_state:
+        frame["pd_state"] = pd_state
     return frame
 
 
@@ -620,6 +625,7 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
         # ADR-0031: collect bias_map for all compute TFs
         bias_map = None
         momentum_map = None
+        pd_state = None  # ADR-0041: P/D state for badge + EQ line
         if _smc_runner is not None:
             try:
                 bias_map = _smc_runner.get_bias_map(session.symbol)
@@ -631,6 +637,11 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                 _log.warning(
                     "WS_MOMENTUM_MAP_ERR sym=%s err=%s", session.symbol, _mm_exc
                 )
+            # ADR-0041: P/D state for badge + EQ line
+            try:
+                pd_state = _smc_runner.get_pd_state(session.symbol, session.tf_s)
+            except Exception as _pd_exc:
+                _log.warning("WS_PD_STATE_ERR sym=%s err=%s", session.symbol, _pd_exc)
         frame = _build_full_frame(
             session,
             candles,
@@ -641,6 +652,7 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
             smc_wire=smc_wire,
             bias_map=bias_map,
             momentum_map=momentum_map,
+            pd_state=pd_state,
         )
         # ADR-0033 N4: narrative in full frame + delta on complete bars. current_price from last candle.
         if _smc_runner is not None and candles:
@@ -1817,9 +1829,7 @@ def build_app(
             _log.info("WS_SMC_WARMUP_SCHEDULED")
         # ADR-0040: BG SMC feed loop — окрема coroutine з повільним poll (default 10s)
         if APP_UDS in app_ctx and _smc_r is not None:
-            app_ctx[APP_BG_SMC_TASK] = asyncio.ensure_future(
-                _bg_smc_feed_loop(app_ctx)
-            )
+            app_ctx[APP_BG_SMC_TASK] = asyncio.ensure_future(_bg_smc_feed_loop(app_ctx))
 
     async def _cleanup_bg_tasks(app_ctx: web.Application) -> None:
         for task_key, label in (

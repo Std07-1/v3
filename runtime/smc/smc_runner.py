@@ -493,6 +493,17 @@ class SmcRunner:
                 result[str(tf_s)] = {"b": bull, "r": bear}
         return result
 
+    def get_pd_state(self, symbol: str, viewer_tf_s: int) -> Optional[dict]:
+        """ADR-0041: P/D position as wire dict for WS frame."""
+        try:
+            pd = self._engine.get_pd_state(symbol, viewer_tf_s)
+            return pd.to_wire() if pd is not None else None
+        except Exception as exc:
+            _log.warning(
+                "SMC_PD_STATE_ERR sym=%s tf=%s err=%s", symbol, viewer_tf_s, exc
+            )
+            return None
+
     def get_session_levels_wire(self, symbol: str) -> list:
         """ADR-0035: session levels as wire dicts for delta frame injection.
 

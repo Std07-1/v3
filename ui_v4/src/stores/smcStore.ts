@@ -6,7 +6,7 @@
 // ADR-0024 §6: I4 — Один update-потік для UI.
 // Патч: виправляє баг де delta-кадри очищали SMC overlay через patch(buildSmc(deltaFrame)).
 
-import type { SmcData, SmcZone, SmcSwing, SmcLevel, SmcDeltaWire, ZoneGradeInfo } from '../types';
+import type { SmcData, SmcZone, SmcSwing, SmcLevel, SmcDeltaWire, ZoneGradeInfo, PdState } from '../types';
 
 // F1: UI swing cap — запобігає необмеженому росту масиву swings
 const MAX_UI_SWINGS = 40;
@@ -25,6 +25,7 @@ export function applySmcFull(
     zone_grades?: Record<string, ZoneGradeInfo>,
     bias_map?: Record<string, string>,
     momentum_map?: Record<string, { b: number; r: number }>,
+    pd_state?: PdState | null,
 ): SmcData {
     return {
         zones: zones ?? [],
@@ -34,6 +35,7 @@ export function applySmcFull(
         zone_grades,
         bias_map: bias_map ?? {},
         momentum_map: momentum_map ?? {},
+        pd_state: pd_state ?? null,
     };
 }
 
@@ -126,4 +128,4 @@ export function filterMitigatedZones(data: SmcData): SmcData {
 }
 
 /** Порожній SmcData — для ініціалізації та reset. */
-export const EMPTY_SMC_DATA: SmcData = Object.freeze({ zones: [], swings: [], levels: [], trend_bias: null, bias_map: {}, momentum_map: {} } as SmcData);
+export const EMPTY_SMC_DATA: SmcData = Object.freeze({ zones: [], swings: [], levels: [], trend_bias: null, bias_map: {}, momentum_map: {}, pd_state: null } as SmcData);
