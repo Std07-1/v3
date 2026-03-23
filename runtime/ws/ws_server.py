@@ -850,10 +850,46 @@ async def _global_delta_loop(app: web.Application) -> None:
     # ADR-0035: M1 cursor per symbol for session H/L live feed
     _m1_cursor_by_sym: Dict[str, Optional[int]] = {}
 
+    # O3-sleep: dedicated Redis client for viewer signal (lightweight, best-effort)
+    _viewer_redis = None
+    _viewer_ns = "v3_local"
+    try:
+        from runtime.store.redis_spec import resolve_redis_spec
+        import redis as _redis_mod
+
+        _v_spec = resolve_redis_spec(
+            app.get(APP_FULL_CONFIG, {}), role="viewer_signal", log=False
+        )
+        if _v_spec is not None:
+            _viewer_redis = _redis_mod.Redis(
+                host=_v_spec.host,
+                port=_v_spec.port,
+                db=_v_spec.db,
+                socket_timeout=1.0,
+                socket_connect_timeout=1.0,
+                decode_responses=False,
+            )
+            _viewer_ns = _v_spec.namespace
+    except Exception:
+        pass  # best-effort, tick_preview falls back to normal throttle
+
     try:
         while True:
             await asyncio.sleep(poll_s)
             sessions: Dict[str, WsSession] = app.get(APP_WS_SESSIONS, {})
+
+            # O3-sleep: publish active viewer count to Redis for tick_preview_worker
+            active_count = sum(
+                1
+                for s in (sessions or {}).values()
+                if not s.ws.closed and s.symbol is not None
+            )
+            if _viewer_redis is not None:
+                try:
+                    _vk = f"{_viewer_ns}:ws:viewer_count"
+                    _viewer_redis.set(_vk, str(active_count), ex=30)
+                except Exception:
+                    pass  # best-effort, non-critical
 
             subs_by_target: Dict[tuple[str, int], list[WsSession]] = {}
             for sess in (sessions or {}).values():
