@@ -1,9 +1,12 @@
 /**
  * ADR-0041 §5a — Unit tests for derivePdBadge().
  *
+ * G1 invariant: Frontend uses backend's label (SSOT).
+ * derivePdBadge() does NOT re-classify — only adds directional coloring.
+ *
  * Покриття:
  *   aligned-green, aligned-red, amber (×2), neutral,
- *   EQ boundaries (44.9 / 45.0 / 55.0 / 55.1),
+ *   label-based EQ/PREMIUM/DISCOUNT (backend SSOT),
  *   VH-F1 fallback (direction=null).
  *
  * Запуск: npx vitest run  (потребує npm install --save-dev vitest)
@@ -14,9 +17,10 @@ import { derivePdBadge } from './stores/shellState';
 import type { PdState } from './types';
 
 // ── helpers ──────────────────────────────────────────────────────────────
-function pd(pd_percent: number): PdState {
-    const label: PdState['label'] = pd_percent < 45 ? 'DISCOUNT' : pd_percent > 55 ? 'PREMIUM' : 'EQ';
-    return { pd_percent, label, range_high: 100, range_low: 0, equilibrium: 50 };
+/** Build PdState with explicit label — simulates backend SSOT classification. */
+function pd(pd_percent: number, label?: PdState['label']): PdState {
+    const l = label ?? (pd_percent < 45 ? 'DISCOUNT' : pd_percent > 55 ? 'PREMIUM' : 'EQ');
+    return { pd_percent, label: l, range_high: 100, range_low: 0, equilibrium: 50 };
 }
 
 // ── aligned-green / aligned-red ──────────────────────────────────────────
@@ -52,30 +56,38 @@ describe('derivePdBadge — directional coloring', () => {
     });
 });
 
-// ── EQ boundaries (PD-5 invariant: 45–55 inclusive) ──────────────────────
-describe('derivePdBadge — EQ boundary (PD-5)', () => {
-    it('TC-06 EQ boundary low-side: 44.9 → DISCOUNT (не EQ)', () => {
-        const r = derivePdBadge(pd(44.9), 'long');
-        expect(r?.colorVariant).not.toBe('neutral');
+// ── G1: Frontend trusts backend label (SSOT) ─────────────────────────────
+describe('derivePdBadge — G1 backend label SSOT', () => {
+    it('TC-06 backend says DISCOUNT → frontend shows DISCOUNT (no re-classify)', () => {
+        const r = derivePdBadge(pd(44.9, 'DISCOUNT'), 'long');
+        expect(r?.colorVariant).toBe('aligned-green');
         expect(r?.label).toContain('DISCOUNT');
     });
 
-    it('TC-07 EQ boundary low-edge: 45.0 → EQ', () => {
-        const r = derivePdBadge(pd(45.0), 'long');
+    it('TC-07 backend says EQ → frontend shows EQ (trusts label)', () => {
+        const r = derivePdBadge(pd(45.0, 'EQ'), 'long');
         expect(r?.colorVariant).toBe('neutral');
         expect(r?.label).toBe('EQ');
     });
 
-    it('TC-08 EQ boundary high-edge: 55.0 → EQ', () => {
-        const r = derivePdBadge(pd(55.0), 'long');
+    it('TC-08 backend says EQ at 55% → still EQ', () => {
+        const r = derivePdBadge(pd(55.0, 'EQ'), 'long');
         expect(r?.colorVariant).toBe('neutral');
         expect(r?.label).toBe('EQ');
     });
 
-    it('TC-09 EQ boundary high-side: 55.1 → PREMIUM (не EQ)', () => {
-        const r = derivePdBadge(pd(55.1), 'short');
-        expect(r?.colorVariant).not.toBe('neutral');
+    it('TC-09 backend says PREMIUM → frontend shows PREMIUM', () => {
+        const r = derivePdBadge(pd(55.1, 'PREMIUM'), 'short');
+        expect(r?.colorVariant).toBe('aligned-red');
         expect(r?.label).toContain('PREMIUM');
+    });
+
+    it('TC-11 backend label is authoritative even if percent seems different', () => {
+        // Backend says EQ for 49% (within backend's eq_low..eq_high)
+        // Frontend must trust this — no re-classification
+        const r = derivePdBadge(pd(49, 'EQ'), 'long');
+        expect(r?.colorVariant).toBe('neutral');
+        expect(r?.label).toBe('EQ');
     });
 });
 

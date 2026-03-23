@@ -69,21 +69,57 @@ class TestComputePdState:
         assert result.label == "EQ"
         assert result.pd_percent == pytest.approx(50.0, abs=0.1)
 
-    def test_eq_boundary_48(self):
-        """Ціна = 48% (boundary) → DISCOUNT."""
+    def test_eq_boundary_low(self):
+        """Ціна = 44.9% → DISCOUNT (нижче eq_low=45)."""
         swings = [_swing("hh", 2000.0, 100), _swing("hl", 1900.0, 200)]
-        price = 1900.0 + 0.479 * 100.0  # 47.9%
+        price = 1900.0 + 0.449 * 100.0  # 44.9%
         result = compute_pd_state(swings, price, _cfg())
         assert result is not None
         assert result.label == "DISCOUNT"
 
-    def test_eq_boundary_52(self):
-        """Ціна = 52% (boundary) → PREMIUM."""
+    def test_eq_boundary_high(self):
+        """Ціна = 55.1% → PREMIUM (вище eq_high=55)."""
         swings = [_swing("lh", 2000.0, 100), _swing("ll", 1900.0, 200)]
-        price = 1900.0 + 0.521 * 100.0  # 52.1%
+        price = 1900.0 + 0.551 * 100.0  # 55.1%
         result = compute_pd_state(swings, price, _cfg())
         assert result is not None
         assert result.label == "PREMIUM"
+
+    def test_eq_inside_band(self):
+        """Ціна = 50% → EQ (всередині eq_low..eq_high)."""
+        swings = [_swing("hh", 2000.0, 100), _swing("ll", 1900.0, 200)]
+        result = compute_pd_state(swings, 1950.0, _cfg())
+        assert result is not None
+        assert result.label == "EQ"
+
+    def test_eq_at_low_edge(self):
+        """Ціна = 45.0% (точно eq_low) → EQ."""
+        swings = [_swing("hh", 2000.0, 100), _swing("ll", 1900.0, 200)]
+        price = 1900.0 + 0.45 * 100.0  # exactly 45%
+        result = compute_pd_state(swings, price, _cfg())
+        assert result is not None
+        assert result.label == "EQ"
+
+    def test_eq_at_high_edge(self):
+        """Ціна ~54.5% (чітко всередині eq band) → EQ."""
+        swings = [_swing("hh", 2000.0, 100), _swing("ll", 1900.0, 200)]
+        price = 1954.5  # 54.5% — clearly inside [45, 55]
+        result = compute_pd_state(swings, price, _cfg())
+        assert result is not None
+        assert result.label == "EQ"
+
+    def test_custom_eq_thresholds(self):
+        """Config eq_low/eq_high змінює пороги — S5 SSOT."""
+        swings = [_swing("hh", 2000.0, 100), _swing("ll", 1900.0, 200)]
+        # 48% — default would be EQ, but with narrow band 48/52 → DISCOUNT
+        price = 1900.0 + 0.47 * 100.0  # 47%
+        result = compute_pd_state(swings, price, _cfg(eq_low=48, eq_high=52))
+        assert result is not None
+        assert result.label == "DISCOUNT"
+        # Same price with default 45/55 → EQ
+        result2 = compute_pd_state(swings, price, _cfg())
+        assert result2 is not None
+        assert result2.label == "EQ"
 
     def test_clamp_above_range(self):
         """Ціна вище range → 100%, PREMIUM."""
@@ -198,6 +234,14 @@ class TestPdConfigCompat:
         assert cfg.show_eq_line is True
         assert cfg.show_zones is False
         assert cfg.eq_pdh_coincidence_atr_mult == 0.5
+        assert cfg.eq_low == 45.0
+        assert cfg.eq_high == 55.0
+
+    def test_custom_eq_thresholds_config(self):
+        """eq_low/eq_high parse from dict correctly."""
+        cfg = SmcPremiumDiscountConfig.from_dict({"eq_low": 40, "eq_high": 60})
+        assert cfg.eq_low == 40.0
+        assert cfg.eq_high == 60.0
 
     def test_full_smc_config_from_dict(self):
         """SmcConfig.from_dict з new pd config."""

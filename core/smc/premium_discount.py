@@ -86,9 +86,11 @@ def compute_pd_state(
     raw_pct = ((current_price - range_low) / span) * 100.0
     pd_percent = max(0.0, min(100.0, raw_pct))
 
-    if pd_percent < 48.0:
+    eq_low = config.premium_discount.eq_low
+    eq_high = config.premium_discount.eq_high
+    if pd_percent < eq_low:
         label = "DISCOUNT"
-    elif pd_percent > 52.0:
+    elif pd_percent > eq_high:
         label = "PREMIUM"
     else:
         label = "EQ"
