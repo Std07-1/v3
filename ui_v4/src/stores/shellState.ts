@@ -2,13 +2,13 @@
  * ADR-0041 §5a (Variant H) — Shell state helpers.
  * derivePdBadge(): pure function, frontend-only amber logic (C-DUMB).
  * Zero backend changes. Uses pd_state.label + narrative direction.
+ *
+ * G1 invariant: Frontend = dumb renderer. Label classification is
+ * backend SSOT (config.json:smc.premium_discount.eq_low/eq_high).
+ * Frontend only adds directional coloring (amber/green/red).
  */
 
 import type { PdState } from '../types';
-
-// ── EQ hysteresis band (PD-5 invariant) ──
-const EQ_LOW = 45;
-const EQ_HIGH = 55;
 
 export type PdColorVariant = 'aligned-green' | 'aligned-red' | 'amber' | 'neutral';
 
@@ -26,8 +26,11 @@ export interface PdBadgeResult {
  *   PREMIUM  + short → aligned-red   (P/D confirms bias)
  *   PREMIUM  + long  → amber         (CONFLICT)
  *   DISCOUNT + short → amber         (CONFLICT)
- *   EQ (45–55%)      → neutral       (equilibrium, bias irrelevant)
+ *   EQ               → neutral       (equilibrium, bias irrelevant)
  *   direction=null    → default by label (green/red, no amber)
+ *
+ * G1: Label (PREMIUM/DISCOUNT/EQ) comes from backend SSOT.
+ *     Frontend does NOT re-classify — only adds directional color.
  *
  * @param pdState   Wire pd_state from backend (null → null return)
  * @param direction Primary scenario direction: 'long' | 'short' | null
@@ -39,13 +42,13 @@ export function derivePdBadge(
     if (!pdState) return null;
 
     const pct = pdState.pd_percent;
+    const pdLabel = pdState.label;  // G1: backend SSOT, no re-classification
 
-    // EQ hysteresis band (PD-5): 45–55% → neutral regardless of direction
-    if (pct >= EQ_LOW && pct <= EQ_HIGH) {
+    // EQ → neutral regardless of direction
+    if (pdLabel === 'EQ') {
         return { label: 'EQ', percent: pct, colorVariant: 'neutral' };
     }
 
-    const pdLabel = pct < EQ_LOW ? 'DISCOUNT' : 'PREMIUM';
     const displayLabel = `${pdLabel} ${Math.round(pct)}%`;
 
     // No direction available (WAIT stage, no scenarios) → fallback VH-F1

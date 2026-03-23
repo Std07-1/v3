@@ -94,6 +94,8 @@ class SmcPremiumDiscountConfig:
     show_eq_line: bool = True
     show_zones: bool = False
     eq_pdh_coincidence_atr_mult: float = 0.5
+    eq_low: float = 45.0
+    eq_high: float = 55.0
 
     # Backward compat: old code reads .enabled
     @property
@@ -112,6 +114,8 @@ class SmcPremiumDiscountConfig:
             eq_pdh_coincidence_atr_mult=float(
                 d.get("eq_pdh_coincidence_atr_mult", 0.5)
             ),
+            eq_low=float(d.get("eq_low", 45.0)),
+            eq_high=float(d.get("eq_high", 55.0)),
         )
 
 

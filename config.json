@@ -323,7 +323,9 @@
             "show_badge": true,
             "show_eq_line": true,
             "show_zones": false,
-            "eq_pdh_coincidence_atr_mult": 0.5
+            "eq_pdh_coincidence_atr_mult": 0.5,
+            "eq_low": 45,
+            "eq_high": 55
         },
         "inducement": {
             "enabled": true,
