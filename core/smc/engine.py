@@ -111,12 +111,18 @@ def _update_zone_lifecycle(
 
     # 2) D-02: FVG eviction — якщо FVG зникає з fresh → drop
     # Виняток: filled FVG зберігаються для dimmed display на UI
+    # ADR-0042 P3: grace period — не видаляємо FVG молодше fvg_grace_bars
+    _bar_ms = tf_s * 1000 if tf_s > 0 else 1
     stale_fvg = [
         zid
         for zid, z in active_zones.items()
         if z.kind.startswith("fvg")
         and zid not in fresh_ids
         and z.status not in ("filled", "mitigated")
+        and (
+            last_bar is None  # no bar → старий алгоритм: видалити
+            or (last_bar.open_time_ms - z.anchor_bar_ms) // _bar_ms >= config.fvg_grace_bars
+        )
     ]
     for zid in stale_fvg:
         del active_zones[zid]

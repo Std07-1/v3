@@ -355,6 +355,8 @@ class SmcConfig:
     # F10: decay params are lifecycle, not display — live at config root
     decay_start_bars: int = 30  # start strength decay after N bars
     decay_fast_bars: int = 150  # aggressive decay threshold
+    # ADR-0042 P3: grace period for FVG eviction (D-02) — bars before eviction allowed
+    fvg_grace_bars: int = 3
     ob: SmcObConfig = dataclasses.field(default_factory=SmcObConfig)
     fvg: SmcFvgConfig = dataclasses.field(default_factory=SmcFvgConfig)
     structure: SmcStructureConfig = dataclasses.field(
@@ -448,6 +450,7 @@ class SmcConfig:
             decay_fast_bars=int(
                 d.get("decay_fast_bars", disp_d.get("decay_fast_bars", 150))
             ),
+            fvg_grace_bars=int(d.get("fvg_grace_bars", 3)),
             ob=SmcObConfig.from_dict(d.get("ob", {})),
             fvg=SmcFvgConfig.from_dict(d.get("fvg", {})),
             structure=SmcStructureConfig.from_dict(d.get("structure", {})),

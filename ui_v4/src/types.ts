@@ -255,13 +255,13 @@ export interface RenderFrame {
   smc_delta?: SmcDeltaWire;
   /** F8: trend bias у full/replay frames */
   trend_bias?: string | null;
-  /** ADR-0029: confluence grade per zone (full frame only) */
+  /** ADR-0029: confluence grade per zone (full + delta on complete bars, ADR-0042) */
   zone_grades?: Record<string, ZoneGradeInfo>;
-  /** ADR-0031: per-TF trend bias map (full frame only) */
+  /** ADR-0031: per-TF trend bias map (full + delta on complete bars, ADR-0042) */
   bias_map?: Record<string, string>;
-  /** Momentum: per-TF directional displacement (full frame only) */
+  /** Momentum: per-TF directional displacement (full + delta on complete bars, ADR-0042) */
   momentum_map?: Record<string, { b: number; r: number }>;
-  /** ADR-0041: P/D badge state (full frame only) */
+  /** ADR-0041: P/D badge state (full + delta on complete bars, ADR-0042) */
   pd_state?: PdState | null;
   /** ADR-0033+ADR-0035: narrative block (full frame + delta on complete bars) */
   narrative?: NarrativeBlock;

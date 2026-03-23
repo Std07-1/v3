@@ -97,7 +97,7 @@ export function applySmcDelta(current: SmcData, delta: SmcDeltaWire): SmcData {
         if (freshLevels.length > 0) levels = [...levels, ...freshLevels];
     }
 
-    return { zones, swings, levels, trend_bias: delta.trend_bias ?? current.trend_bias ?? null, bias_map: current.bias_map, momentum_map: current.momentum_map };
+    return { zones, swings, levels, trend_bias: delta.trend_bias ?? current.trend_bias ?? null, zone_grades: current.zone_grades, bias_map: current.bias_map, momentum_map: current.momentum_map, pd_state: current.pd_state };
 }
 
 // ADR-0035: session level kinds — used to identify session levels for replacement

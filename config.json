@@ -344,6 +344,7 @@
         "hide_mitigated": true,
         "decay_start_bars": 30,
         "decay_fast_bars": 150,
+        "fvg_grace_bars": 3,
         "display": {
             "proximity_atr_mult": 6.0,
             "max_display_zones": 10,

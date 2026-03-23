@@ -770,7 +770,7 @@ export class OverlayRenderer {
 
           // Single pill background — skip on light theme (dark pills distract)
           if (!this._isLightTheme) {
-            const pillAlpha = (0.20 + 0.55 * proximity) * dimMult;
+            const pillAlpha = Math.max(0.15, (0.20 + 0.55 * proximity) * dimMult);  // ADR-0042 P3: floor
             this.ctx.globalAlpha = pillAlpha;
             this.ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
             this.ctx.fillRect(lblX - pad, lblY, fullTm.width + pad * 2, fs + 2);
