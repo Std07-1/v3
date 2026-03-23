@@ -403,6 +403,28 @@
             currentFrame.session_levels,
           );
         }
+        // ADR-0042 P2: merge metadata from thick delta (DF-2)
+        {
+          const cur = untrack(() => smcData);
+          const zg = currentFrame.zone_grades;
+          const bm = currentFrame.bias_map;
+          const mm = currentFrame.momentum_map;
+          const pd = currentFrame.pd_state;
+          if (
+            (zg && Object.keys(zg).length > 0) ||
+            (bm && Object.keys(bm).length > 0) ||
+            (mm && Object.keys(mm).length > 0) ||
+            pd !== undefined
+          ) {
+            smcData = {
+              ...cur,
+              ...(zg && Object.keys(zg).length > 0 ? { zone_grades: zg } : {}),
+              ...(bm && Object.keys(bm).length > 0 ? { bias_map: bm } : {}),
+              ...(mm && Object.keys(mm).length > 0 ? { momentum_map: mm } : {}),
+              ...(pd !== undefined && pd !== null ? { pd_state: pd } : {}),
+            };
+          }
+        }
       }
 
       if (currentFrame.frame_type === "full") {

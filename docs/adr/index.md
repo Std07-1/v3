@@ -55,6 +55,7 @@
 | [0039](0039-signal-engine.md) | Signal Engine — Numeric Entry/SL/TP + R:R + Alerts | **Implemented** | 2026-03-14 | entry_price, stop_loss, take_profit, R:R, confidence, alerts, signal lifecycle, core/smc/signals.py | `signal_engine_v1` |
 | [0040](0040-tda-cascade-signal-engine.md) | TDA Cascade — Daily Signal Engine Rebuild | **Implemented** | 2026-03-18 | TDA, 4-stage cascade, D1→H4→Session→FVG, Config F, partial TP, trailing SL, daily signal | `tda_cascade_v1` |
 | [0041](0041-pd-badge-eq-line.md) | Premium/Discount Badge + EQ Line — Decoupled Calc/Display + Variant H Shell Restructure | **Accepted** (P1–P9 implemented) | 2026-03-22 | P/D calc/display split, PdBadge HUD, EQ dashed line, D8 coincidence, config granular keys, Variant H shell restructure, directional coloring, amber conflict | `pd_badge_eq_v1` |
+| [0042](0042-delta-frame-state-sync.md) | Delta Frame State Synchronization — Full/Delta Parity | **Implemented** | 2026-03-22 | delta frame, state desync, zone_grades, pd_state, bias_map, thick delta, FVG grace, DF-1/DF-2/DF-3 | `delta_frame_parity_v1` |
 
 ---
 
@@ -94,4 +95,4 @@
 
 Див. формат у [copilot-instructions.md](../../.github/copilot-instructions.md) → Тема B, Правило B2.
 
-Наступний номер: **0042**
+Наступний номер: **0043**

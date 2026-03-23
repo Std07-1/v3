@@ -345,3 +345,68 @@ class TestFvgHeightGuard:
         result = detect_fvg(bars, cfg)
         bull = [z for z in result if z.kind == "fvg_bull"]
         assert len(bull) >= 1, "normal-sized FVG should pass height guard"
+
+
+# ── ADR-0042 P3: FVG Grace Period (DF-3) ────────────────────────────────
+
+
+class TestFvgGracePeriod:
+    """ADR-0042 DF-3: FVG younger than fvg_grace_bars is NOT evicted by D-02."""
+
+    def test_young_fvg_survives_d02(self):
+        """FVG created 1 bar ago (age 1 < grace 3) → not evicted."""
+        tf_s = 300
+        bar_ms = tf_s * 1000
+        anchor = 1000000
+        fvg = _zone("fvg_bull", high=2050.0, low=2045.0, anchor_ms=anchor, tf_s=tf_s)
+        ob = _zone("ob_bull", high=2060.0, low=2055.0, anchor_ms=anchor, tf_s=tf_s)
+        active = {fvg.id: fvg, ob.id: ob}
+        cfg = SmcConfig(max_zones_per_tf=10, fvg_grace_bars=3)
+        # last_bar 1 bar later → age = 1 < 3
+        bar = _bar(anchor + bar_ms, 2045.0, 2055.0, 2040.0, 2050.0, tf_s=tf_s)
+        result = _update_zone_lifecycle([ob], active, bar, cfg, tf_s)
+        ids = {z.id for z in result}
+        assert fvg.id in ids, "young FVG (age < grace) should survive D-02"
+
+    def test_old_fvg_evicted(self):
+        """FVG created 5 bars ago (age 5 >= grace 3) → evicted as before."""
+        tf_s = 300
+        bar_ms = tf_s * 1000
+        anchor = 1000000
+        fvg = _zone("fvg_bull", high=2050.0, low=2045.0, anchor_ms=anchor, tf_s=tf_s)
+        ob = _zone("ob_bull", high=2060.0, low=2055.0, anchor_ms=anchor, tf_s=tf_s)
+        active = {fvg.id: fvg, ob.id: ob}
+        cfg = SmcConfig(max_zones_per_tf=10, fvg_grace_bars=3)
+        # last_bar 5 bars later → age = 5 >= 3
+        bar = _bar(anchor + 5 * bar_ms, 2045.0, 2055.0, 2040.0, 2050.0, tf_s=tf_s)
+        result = _update_zone_lifecycle([ob], active, bar, cfg, tf_s)
+        ids = {z.id for z in result}
+        assert fvg.id not in ids, "old FVG (age >= grace) should be evicted"
+
+    def test_grace_exact_boundary(self):
+        """FVG age == fvg_grace_bars → evicted (grace is exclusive)."""
+        tf_s = 300
+        bar_ms = tf_s * 1000
+        anchor = 1000000
+        fvg = _zone("fvg_bull", high=2050.0, low=2045.0, anchor_ms=anchor, tf_s=tf_s)
+        active = {fvg.id: fvg}
+        cfg = SmcConfig(max_zones_per_tf=10, fvg_grace_bars=3)
+        # age exactly 3 → evicted
+        bar = _bar(anchor + 3 * bar_ms, 2045.0, 2055.0, 2040.0, 2050.0, tf_s=tf_s)
+        result = _update_zone_lifecycle([], active, bar, cfg, tf_s)
+        ids = {z.id for z in result}
+        assert fvg.id not in ids, "FVG at exact grace boundary should be evicted"
+
+    def test_no_bar_no_grace(self):
+        """last_bar=None → old behavior: FVG evicted without grace."""
+        fvg = _zone("fvg_bull", high=2050.0, low=2045.0, anchor_ms=100000)
+        active = {fvg.id: fvg}
+        cfg = SmcConfig(max_zones_per_tf=10, fvg_grace_bars=3)
+        result = _update_zone_lifecycle([], active, None, cfg, 300)
+        ids = {z.id for z in result}
+        assert fvg.id not in ids, "no bar → no grace protection"
+
+    def test_default_grace_is_3(self):
+        """Default fvg_grace_bars=3 from SmcConfig."""
+        cfg = SmcConfig()
+        assert cfg.fvg_grace_bars == 3

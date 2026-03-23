@@ -1115,6 +1115,31 @@ async def _global_delta_loop(app: web.Application) -> None:
                                 _ev.get("complete") for _ev in seen_events.values()
                             )
                             if _any_complete and candles:
+                                # ADR-0042 P2: metadata in delta (DF-2)
+                                try:
+                                    _zg = _smc_runner.get_zone_grades(symbol, tf_s)
+                                    if _zg:
+                                        frame["zone_grades"] = _zg
+                                except Exception:
+                                    _log.debug("WS_DELTA_ZG_ERR sym=%s", symbol, exc_info=True)
+                                try:
+                                    _bm = _smc_runner.get_bias_map(symbol)
+                                    if _bm:
+                                        frame["bias_map"] = _bm
+                                except Exception:
+                                    _log.debug("WS_DELTA_BM_ERR sym=%s", symbol, exc_info=True)
+                                try:
+                                    _mm = _smc_runner.get_momentum_map(symbol)
+                                    if _mm:
+                                        frame["momentum_map"] = _mm
+                                except Exception:
+                                    _log.debug("WS_DELTA_MM_ERR sym=%s", symbol, exc_info=True)
+                                try:
+                                    _pds = _smc_runner.get_pd_state(symbol, tf_s)
+                                    if _pds is not None:
+                                        frame["pd_state"] = _pds
+                                except Exception:
+                                    _log.debug("WS_DELTA_PD_ERR sym=%s", symbol, exc_info=True)
                                 try:
                                     _last_c = (
                                         candles[-1].get("c", 0)
@@ -1154,6 +1179,18 @@ async def _global_delta_loop(app: web.Application) -> None:
                                                 symbol,
                                                 _shell_exc,
                                             )
+                                    # ADR-0042 P2: signals in delta (DF-2)
+                                    try:
+                                        _sigs, _sig_alerts = _smc_runner.get_signals(
+                                            symbol, tf_s, _narr,
+                                            float(_last_c), float(_atr_est),
+                                        )
+                                        if _sigs:
+                                            frame["signals"] = [s.to_wire() for s in _sigs]
+                                        if _sig_alerts:
+                                            frame["signal_alerts"] = [a.to_wire() for a in _sig_alerts]
+                                    except Exception:
+                                        _log.debug("WS_DELTA_SIG_ERR sym=%s", symbol, exc_info=True)
                                 except Exception as _narr_exc:
                                     _log.debug(
                                         "WS_DELTA_NARRATIVE_ERR sym=%s err=%s",
