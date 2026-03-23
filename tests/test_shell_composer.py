@@ -354,6 +354,68 @@ class TestMicroCard:
         assert card.warning is None
 
 
+# ── Prepare + Long/Short Direction Hints ────────────────────
+
+
+class TestPrepareLongShortDirectionHints:
+    """Micro card direction hint for prepare stage (long/short)."""
+
+    def test_prepare_approaching_long_hint(self):
+        """Row 6 + long direction → mode_text = 'Готуємось до лонгу'."""
+        narr = _make_narrative(
+            mode="trade",
+            sub_mode="aligned",
+            scenarios=[_scenario(direction="long", trigger="approaching")],
+        )
+        result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG)
+        assert result.stage == "prepare"
+        assert result.micro_card.mode_text == "Готуємось до лонгу"
+
+    def test_prepare_approaching_short_hint(self):
+        """Row 6 + short direction → mode_text = 'Готуємось до шорту'."""
+        narr = _make_narrative(
+            mode="trade",
+            sub_mode="aligned",
+            scenarios=[_scenario(direction="short", trigger="approaching")],
+        )
+        result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG)
+        assert result.stage == "prepare"
+        assert result.micro_card.mode_text == "Готуємось до шорту"
+
+    def test_prepare_reduced_long_hint(self):
+        """Row 5 (reduced) + long direction → mode_text = 'Готуємось до лонгу'."""
+        narr = _make_narrative(
+            mode="trade",
+            sub_mode="reduced",
+            scenarios=[_scenario(direction="long", trigger="approaching")],
+        )
+        result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG)
+        assert result.stage == "prepare"
+        assert result.micro_card.mode_text == "Готуємось до лонгу"
+
+    def test_prepare_reduced_short_hint(self):
+        """Row 5 (reduced) + short direction → mode_text = 'Готуємось до шорту'."""
+        narr = _make_narrative(
+            mode="trade",
+            sub_mode="reduced",
+            scenarios=[_scenario(direction="short", trigger="approaching")],
+        )
+        result = compose_shell_payload(narr, _ALIGNED_BIAS, 900, _CFG)
+        assert result.stage == "prepare"
+        assert result.micro_card.mode_text == "Готуємось до шорту"
+
+    def test_d1_downgrade_long_prepare_hint(self):
+        """D1 conflict downgrade + long → still shows 'Готуємось до лонгу'."""
+        narr = _make_narrative(
+            mode="trade",
+            sub_mode="aligned",
+            scenarios=[_scenario(direction="long", trigger="in_zone")],
+        )
+        result = compose_shell_payload(narr, _D1_CFL_BIAS, 900, _CFG)
+        assert result.stage == "prepare"  # downgraded from ready
+        assert result.micro_card.mode_text == "Готуємось до лонгу"
+
+
 # ── Wire Serialization ──────────────────────────────────────
 
 
