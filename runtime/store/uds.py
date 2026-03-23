@@ -90,6 +90,7 @@ REDIS_SOCKET_TIMEOUT_S = 0.4
 _DEFAULT_PREVIEW_CURR_TTL_S = 1800  # SSOT fallback; runtime значення з config.json
 PREVIEW_TAIL_RETAIN = 2000
 PREVIEW_UPDATES_RETAIN = 2000
+_TAIL_FLUSH_INTERVAL_S = 5  # O3: flush in-memory tail to Redis max once per N seconds
 
 
 def _disk_bar_to_candle(
@@ -399,6 +400,9 @@ class UnifiedDataStore:
         self._preview_last_publish_ms: dict[tuple[str, int], int] = {}
         self._preview_tail_updates_total = 0
         self._preview_tail_updates_log_ts_ms = 0
+        # O3: in-memory tail cache — avoids json.loads/dumps 214KB on every publish
+        self._tail_cache: dict[tuple[str, int], list[dict[str, Any]]] = {}
+        self._tail_last_flush_ts: dict[tuple[str, int], float] = {}
         self._preview_nomix_violation = False
         self._preview_nomix_violation_reason: Optional[str] = None
         self._preview_nomix_violation_ts_ms: Optional[int] = None
@@ -942,15 +946,20 @@ class UnifiedDataStore:
         rollover = last_open is None or last_open != bar.open_time_ms
         self._preview_last_open_ms[key] = bar.open_time_ms
 
-        # P2X.6-U2: tail оновлюється на КОЖЕН publish (не лише rollover),
-        # щоб /api/bars завжди повертав актуальну форму бара.
+        # O3: in-memory tail cache — modify list in RAM, flush to Redis on rollover
+        # or every _TAIL_FLUSH_INTERVAL_S seconds. Eliminates json.loads/dumps 214KB per tick.
         try:
-            tail_payload, _, _ = self._redis.read_preview_tail(bar.symbol, bar.tf_s)
-            tail_bars = []
-            if isinstance(tail_payload, dict):
-                raw = tail_payload.get("bars")
-                if isinstance(raw, list):
-                    tail_bars = [b for b in raw if isinstance(b, dict)]
+            tail_bars = self._tail_cache.get(key)
+            if tail_bars is None:
+                # Cold start: seed from Redis once
+                tail_payload, _, _ = self._redis.read_preview_tail(bar.symbol, bar.tf_s)
+                tail_bars = []
+                if isinstance(tail_payload, dict):
+                    raw = tail_payload.get("bars")
+                    if isinstance(raw, list):
+                        tail_bars = [b for b in raw if isinstance(b, dict)]
+                self._tail_cache[key] = tail_bars
+
             if tail_bars and isinstance(tail_bars[-1].get("open_ms"), int):
                 if tail_bars[-1]["open_ms"] == int(bar_item["open_ms"]):
                     tail_bars[-1] = bar_item
@@ -959,30 +968,38 @@ class UnifiedDataStore:
             else:
                 tail_bars.append(bar_item)
             if len(tail_bars) > self._preview_tail_retain:
-                tail_bars = tail_bars[-self._preview_tail_retain :]
-            new_tail = {
-                "v": 1,
-                "symbol": bar.symbol,
-                "tf_s": int(bar.tf_s),
-                "bars": tail_bars,
-                "complete": False,
-                "source": str(bar.src),
-                "payload_ts_ms": payload_ts_ms,
-            }
-            tail_ttl = (
-                self._preview_curr_ttl_s * 2 if self._preview_curr_ttl_s else None
-            )
-            self._redis.write_preview_tail(
-                bar.symbol, bar.tf_s, new_tail, ttl_s=tail_ttl
-            )
-            self._preview_tail_updates_total += 1
-            now_ms = int(time.time() * 1000)
-            if now_ms - self._preview_tail_updates_log_ts_ms >= 60_000:
-                self._preview_tail_updates_log_ts_ms = now_ms
-                Logging.info(
-                    "UDS: preview_tail_updates_total=%s",
-                    self._preview_tail_updates_total,
+                self._tail_cache[key] = tail_bars[-self._preview_tail_retain :]
+                tail_bars = self._tail_cache[key]
+
+            # Flush to Redis on rollover or throttled interval
+            now_t = time.time()
+            last_flush = self._tail_last_flush_ts.get(key, 0.0)
+            need_flush = rollover or (now_t - last_flush >= _TAIL_FLUSH_INTERVAL_S)
+            if need_flush:
+                new_tail = {
+                    "v": 1,
+                    "symbol": bar.symbol,
+                    "tf_s": int(bar.tf_s),
+                    "bars": tail_bars,
+                    "complete": False,
+                    "source": str(bar.src),
+                    "payload_ts_ms": payload_ts_ms,
+                }
+                tail_ttl = (
+                    self._preview_curr_ttl_s * 2 if self._preview_curr_ttl_s else None
                 )
+                self._redis.write_preview_tail(
+                    bar.symbol, bar.tf_s, new_tail, ttl_s=tail_ttl
+                )
+                self._tail_last_flush_ts[key] = now_t
+                self._preview_tail_updates_total += 1
+                now_ms = int(time.time() * 1000)
+                if now_ms - self._preview_tail_updates_log_ts_ms >= 60_000:
+                    self._preview_tail_updates_log_ts_ms = now_ms
+                    Logging.info(
+                        "UDS: preview_tail_updates_total=%s",
+                        self._preview_tail_updates_total,
+                    )
         except Exception as exc:
             Logging.warning("UDS: preview_tail write failed err=%s", exc)
 
@@ -1397,7 +1414,9 @@ class UnifiedDataStore:
         if old is not None and old != 0:
             Logging.info(
                 "UDS: watermark reset symbol=%s tf_s=%s old_wm=%s → 0",
-                symbol, tf_s, old,
+                symbol,
+                tf_s,
+                old,
             )
 
     def _init_watermark_for_key(self, symbol: str, tf_s: int) -> Optional[int]:

@@ -208,6 +208,12 @@ class TickPreviewWorker:
         # "0 ticks loud" state
         self._last_tick_rx_ts = time.time()
         self._zero_ticks_warned = False
+        # O3-sleep: idle mode (no WS viewers → slow publish)
+        self._publish_min_interval_ms_orig = self._publish_min_interval_ms
+        self._idle_mode = False
+        self._idle_check_ts: float = 0.0
+        self._redis_client: Any = None  # set in run_forever()
+        self._redis_ns: str = ""  # set in run_forever()
 
     def _inc(self, key: str, val: int = 1) -> None:
         self._stats[key] = self._stats.get(key, 0) + int(val)
@@ -397,9 +403,45 @@ class TickPreviewWorker:
             )
             self._inc("promoted_publish_errors")
 
+    _IDLE_CHECK_INTERVAL_S = 10.0
+    _IDLE_PUBLISH_INTERVAL_MS = 2000
+
+    def _check_idle_mode(self) -> None:
+        """O3-sleep: check viewer count from Redis every 10s, toggle idle mode."""
+        if self._redis_client is None:
+            return
+        now = time.time()
+        if now - self._idle_check_ts < self._IDLE_CHECK_INTERVAL_S:
+            return
+        self._idle_check_ts = now
+        try:
+            vk = f"{self._redis_ns}:ws:viewer_count"
+            raw = self._redis_client.get(vk)
+            viewers = int(raw) if raw is not None else 0
+        except Exception:
+            viewers = -1  # unknown → stay in current mode
+        if viewers == -1:
+            return
+        if viewers == 0 and not self._idle_mode:
+            self._idle_mode = True
+            self._publish_min_interval_ms = self._IDLE_PUBLISH_INTERVAL_MS
+            logging.info(
+                "TICK_PREVIEW_MODE active→idle viewers=0 throttle_ms=%d",
+                self._IDLE_PUBLISH_INTERVAL_MS,
+            )
+        elif viewers > 0 and self._idle_mode:
+            self._idle_mode = False
+            self._publish_min_interval_ms = self._publish_min_interval_ms_orig
+            logging.info(
+                "TICK_PREVIEW_MODE idle→active viewers=%d throttle_ms=%d",
+                viewers,
+                self._publish_min_interval_ms_orig,
+            )
+
     def _publish_bar(self, bar, symbol, tf_s):
         # type: (CandleBar, str, int) -> None
         """Публікація preview бару з forward-gap detection та throttling."""
+        self._check_idle_mode()
         key = (symbol, tf_s)
         last_open = self._last_open_ms.get(key)
         rollover = last_open is None or last_open != bar.open_time_ms
@@ -456,7 +498,10 @@ class TickPreviewWorker:
             )
             self._inc("preview_publish_errors_total")
 
-    def run_forever(self, redis_client: Any) -> None:
+    def run_forever(self, redis_client: Any, redis_ns: str = "v3_local") -> None:
+        # O3-sleep: store redis for idle mode checks
+        self._redis_client = redis_client
+        self._redis_ns = redis_ns
         while True:
             try:
                 pubsub = redis_client.pubsub(ignore_subscribe_messages=True)
@@ -592,7 +637,7 @@ def main() -> int:
         socket_timeout=None,
         socket_connect_timeout=1.0,
     )
-    worker.run_forever(client)
+    worker.run_forever(client, redis_ns=spec.namespace)
     return 0
 
 
