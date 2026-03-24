@@ -374,7 +374,7 @@ logging.warning("DEGRADED_REASON symbol=%s tf=%s", sym, tf)
 
 ```json
 {
-  "symbols": ["XAU/USD", "EUR/USD", ...],  // 13 символів
+  "symbols": ["XAU/USD", "XAG/USD", "BTCUSDT", "ETHUSDT"],  // 4 активних символи
   "tf_allowlist_s": [60, 180, 300, 900, 1800, 3600, 14400, 86400],
   "redis": { "enabled": true, "host": "127.0.0.1", "port": 6379, "db": 1 },
   "ws_server": { "enabled": true, "host": "127.0.0.1", "port": 8000 },

@@ -12,7 +12,7 @@
 | Ключ | Тип | Приклад | Опис |
 | --- | --- | --- | --- |
 | `symbol` | str | `"XAU/USD"` | Символ за замовчуванням (legacy, не використ. в multi-sym mode) |
-| `symbols` | str[] | `["XAU/USD", ...]` | **Список всіх активних символів** (13 шт). Визначає що збирається/показується |
+| `symbols` | str[] | `["XAU/USD", ...]` | **Список всіх активних символів** (4 шт: XAU/USD, XAG/USD, BTCUSDT, ETHUSDT). Визначає що збирається/показується |
 | `data_root` | str | `"./data_v3"` | Кореневий каталог SSOT JSONL на диску |
 
 ---
@@ -130,7 +130,7 @@
 | Ключ | Тип | За замовч. | Опис |
 | --- | --- | --- | --- |
 | `preview_tick_enabled` | bool | true | Увімкнути tick → preview побудову свічок |
-| `preview_tick_tfs_s` | int[] | [60, 180] | TF для tick preview (M1 і M3) |
+| `preview_tick_tfs_s` | int[] | [60, 180, 300, 900, 1800, 3600, 14400, 86400] | TF для tick preview (M1→D1, включно з HTF running accumulator) |
 | `preview_tick_publish_min_interval_ms` | int | 250 | Мін інтервал між публікаціями preview в Redis |
 | `preview_curr_ttl_s` | int | 1800 | TTL preview_curr ключа в Redis |
 | `tick_auto_promote_m1` | bool | true | Auto-promote: на переході M1 бакету → публікувати як complete (до приходу History final) |

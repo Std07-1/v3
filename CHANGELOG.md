@@ -45,6 +45,10 @@
 - 2026-03-22 · 20260322-002 · **BG SMC FEED EXTRACTION**: BG SMC feed витягнуто з `_global_delta_loop` у окрему `_bg_smc_feed_loop()` з 10s poll (config SSOT). CPU ~20%→~5-8%. Graceful shutdown обох tasks. 757 tests ✅.
 - 2026-03-22 · 20260322-003 · **HUD RESTRUCTURE**: Видалено ★ favorites, додано price change indicator (`+5.60▲`/`-3.20▼`), P/D badge + bias pills → compact sub-row, session label (`newyork KZ`) перенесено з tact-wrap, тактичний strip (tact-wrap) видалено повністю (дублював bias pills). OHLCV tooltip repositioned. Build: 317KB JS, 26KB CSS.
 
+- 2026-03-24 · 20260324-001 · **HTF LIVE PREVIEW ACCUMULATOR**: `_RunningBar` + `_HTFRunningAccumulator` у tick_preview_worker — H4/D1 preview бари з tick stream. Seed з UDS, bucket boundary з `resolve_anchor_offset_ms()`. Config: `preview_tick_tfs_s` додано 86400 (D1). +154 LOC, 15 нових тестів. 813 tests ✅.
+- 2026-03-24 · 20260324-002 · **XAG/USD ACTIVATION**: XAG/USD додано як 4-й активний символ. Config-only зміна, календар `cfd_us_22_23` вже містив mapping. Docs синхронізовано.
+- 2026-03-24 · 20260324-003 · **XAG/USD DATA REPAIR**: Backfill 23103 M1 барів (gap 594.9h), rebuild 18520 derived (M3→D1). Додано `--force` flag у `rebuild_from_m1.py` для перезапису після ремонту.
+
 - 2026-03-13 · 20260313-005 · **ADR-0034a ARCHIVE CLARIFICATION**: [0034-advanced-market-analysis-tdaa.md](docs/adr/0034-advanced-market-analysis-tdaa.md) переведено з framing "deprecated copy" у точніше framing: archive-only snapshot pre-rollback. Підтримуваним документом лишається [0034-advanced-market-analysis-tda.md](docs/adr/0034-advanced-market-analysis-tda.md), але `tdaa` збережений як історичний зріз, а не як сміттєвий дубль.
 
 - 2026-03-14 · 20260314-001 · **BINANCE SECOND BROKER (ADR-0037)**: Binance Futures як другий брокер для BTCUSDT/ETHUSDT. P0: `BinanceHistoryProvider` (REST klines, backoff retry). P1: `binance_ingest_worker.py` (M1 polling + derive cascade, anchor_offset_s=0). P2: `binance_tick_publisher.py` (WS kline_1m → Redis tick payloads). P3: supervisor wiring в `app/main.py`. Config: `crypto_24x7` calendar, `binance.enabled=false`. 510 tests ✅, 0 нових gate violations.
