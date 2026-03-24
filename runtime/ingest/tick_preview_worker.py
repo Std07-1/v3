@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 from env_profile import load_env_secrets
 from core.config_loader import pick_config_path, load_system_config
-from core.buckets import bucket_start_ms as _bucket_start_ms
+from core.buckets import bucket_start_ms as _bucket_start_ms, resolve_anchor_offset_ms
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.tick_agg import TickAggregator
 from runtime.ingest.tick_common import (
@@ -70,6 +70,115 @@ class _M1toM3Buffer:
             src="derived_m1",
             extensions={"m1_count": len(all_bars)},
         )
+
+
+# ---------------------------------------------------------------------------
+# HTF (H4/D1) інкрементальна деривація з M1 preview барів
+# ---------------------------------------------------------------------------
+class _RunningBar:
+    """Інкрементальний OHLCV акумулятор для одного бакету."""
+
+    __slots__ = ("bucket_open_ms", "tf_s", "o", "h", "low", "c", "v", "count")
+
+    def __init__(self, bucket_open_ms: int, tf_s: int, first_bar):
+        self.bucket_open_ms = bucket_open_ms
+        self.tf_s = tf_s
+        self.o = first_bar.o
+        self.h = first_bar.h
+        self.low = first_bar.low
+        self.c = first_bar.c
+        self.v = first_bar.v
+        self.count = 1
+
+    def merge(self, bar):
+        """O(1) інкрементальне злиття нового M1 бару (новий open_time_ms)."""
+        if bar.h > self.h:
+            self.h = bar.h
+        if bar.low < self.low:
+            self.low = bar.low
+        self.c = bar.c
+        self.v += bar.v
+        self.count += 1
+
+    def update_forming(self, bar):
+        """Оновлення формуючого M1 (той самий open_time_ms). count/v не змінюються."""
+        if bar.h > self.h:
+            self.h = bar.h
+        if bar.low < self.low:
+            self.low = bar.low
+        self.c = bar.c
+
+    def to_candle(self, symbol: str) -> CandleBar:
+        return CandleBar(
+            symbol=symbol,
+            tf_s=self.tf_s,
+            open_time_ms=self.bucket_open_ms,
+            close_time_ms=self.bucket_open_ms + self.tf_s * 1000,
+            o=self.o,
+            h=self.h,
+            low=self.low,
+            c=self.c,
+            v=self.v,
+            complete=False,
+            src="htf_preview",
+            extensions={"m1_count": self.count},
+        )
+
+
+class _HTFRunningAccumulator:
+    """Інкрементальна деривація HTF (H4, D1) preview з M1 барів.
+
+    O(1) per update: running OHLCV state per (symbol, tf_s).
+    Dedup: відстежує last_m1_open_ms per (symbol, tf_s).
+    Tick-update (same open_time_ms) → update_forming (лише c/h/low).
+    Новий M1 bar → full merge (count + v).
+    seed() використовує той самий update() — єдиний код path.
+    """
+
+    def __init__(self, target_tfs_s: list, anchor_offsets_ms: dict):
+        self._target_tfs_s = list(target_tfs_s)
+        self._anchor_offsets_ms = dict(anchor_offsets_ms)
+        self._running: Dict[str, Dict[int, _RunningBar]] = {}
+        self._last_m1_open: Dict[tuple, int] = {}
+
+    def seed(self, symbol: str, m1_finals: list):
+        """Ініціалізація з M1 фіналів (послідовний update — однаковий код path)."""
+        for bar in m1_finals:
+            self.update(symbol, bar)
+
+    def update(self, symbol: str, m1_bar) -> list:
+        """Оновлення з M1 баром. Повертає list[CandleBar] HTF previews.
+
+        O(1) per call per target TF. Dedup по M1 open_time_ms.
+        """
+        sym_state = self._running.setdefault(symbol, {})
+        results = []
+
+        for tf_s in self._target_tfs_s:
+            tf_ms = tf_s * 1000
+            anchor_ms = self._anchor_offsets_ms.get(tf_s, 0)
+            bucket_open = _bucket_start_ms(m1_bar.open_time_ms, tf_ms, anchor_ms)
+
+            running = sym_state.get(tf_s)
+
+            if running is None or running.bucket_open_ms != bucket_open:
+                # Новий бакет — reset
+                sym_state[tf_s] = _RunningBar(bucket_open, tf_s, m1_bar)
+                self._last_m1_open[(symbol, tf_s)] = m1_bar.open_time_ms
+            else:
+                # Той самий бакет — dedup по M1 open_time_ms
+                last_m1 = self._last_m1_open.get((symbol, tf_s), -1)
+                if m1_bar.open_time_ms != last_m1:
+                    # Новий M1 бар — full merge
+                    running.merge(m1_bar)
+                    self._last_m1_open[(symbol, tf_s)] = m1_bar.open_time_ms
+                else:
+                    # Той самий M1 бар (tick update) — лише c/h/low
+                    running.update_forming(m1_bar)
+
+            results.append(sym_state[tf_s].to_candle(symbol))
+
+        return results
 
 
 try:
@@ -172,6 +281,8 @@ class TickPreviewWorker:
         calendars: Dict[str, MarketCalendar] | None = None,
         auto_promote_m1: bool = False,
         anchor_offset_ms: int = 0,
+        htf_preview_tfs: list[int] | None = None,
+        htf_anchor_offsets_ms: Dict[int, int] | None = None,
     ) -> None:
         self._uds = uds
         self._tfs = [int(x) for x in tfs if int(x) > 0]
@@ -181,6 +292,17 @@ class TickPreviewWorker:
         )
         self._channel = str(channel)
         self._auto_promote_m1 = bool(auto_promote_m1)
+        # HTF accumulator: M1→H4/D1 preview (replaces tick-agg for these TFs)
+        _htf_set = set(htf_preview_tfs or [])
+        if _htf_set:
+            self._htf_acc: Optional[_HTFRunningAccumulator] = _HTFRunningAccumulator(
+                sorted(_htf_set),
+                htf_anchor_offsets_ms or {},
+            )
+            # D-06 guard: exclude HTF from TickAgg to prevent dual-path publish
+            self._tfs = [t for t in self._tfs if t not in _htf_set]
+        else:
+            self._htf_acc = None
         # M3 деривація: M1 агрегуємо з тиків, M3 — з M1
         self._derive_m3 = 180 in self._tfs and 60 in self._tfs
         agg_tfs = [t for t in self._tfs if not (t == 180 and self._derive_m3)]
@@ -383,7 +505,27 @@ class TickPreviewWorker:
                 m3_bar = self._m3_buffer.update(symbol, bar)
                 if m3_bar is not None:
                     self._publish_bar(m3_bar, symbol, 180)
+
+            # HTF preview derivation: M1 → H4/D1
+            if tf_s == 60 and self._htf_acc is not None:
+                htf_bars = self._htf_acc.update(symbol, bar)
+                for htf_bar in htf_bars:
+                    self._publish_bar(htf_bar, symbol, htf_bar.tf_s)
         self._maybe_emit_stats()
+
+    def _seed_htf_from_uds(self):
+        """Seed HTF акумулятора з M1 фіналів UDS. Викликається при старті."""
+        if self._htf_acc is None:
+            return
+        for symbol in self._symbol_allowlist:
+            try:
+                m1_bars = self._uds.read_tail_candles(symbol, 60, 1500)
+                m1_bars = [b for b in m1_bars if b.complete]
+                m1_bars.sort(key=lambda b: b.open_time_ms)
+                self._htf_acc.seed(symbol, m1_bars)
+                logging.info("HTF_SEED symbol=%s m1_count=%d", symbol, len(m1_bars))
+            except Exception as exc:
+                logging.warning("HTF_SEED_FAIL symbol=%s err=%s", symbol, exc)
 
     def _publish_promoted(self, promoted, symbol, tf_s):
         # type: (CandleBar, str, int) -> None
@@ -502,6 +644,7 @@ class TickPreviewWorker:
         # O3-sleep: store redis for idle mode checks
         self._redis_client = redis_client
         self._redis_ns = redis_ns
+        self._seed_htf_from_uds()
         while True:
             try:
                 pubsub = redis_client.pubsub(ignore_subscribe_messages=True)
@@ -610,6 +753,13 @@ def main() -> int:
     auto_promote_m1 = bool(cfg.get("tick_auto_promote_m1", False))
 
     anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
+
+    # HTF preview: M1→H4/D1 via accumulator (SSOT anchors from resolve_anchor_offset_ms)
+    htf_preview_tfs = [tf for tf in preview_cfg.tfs if tf >= 14400]
+    htf_anchor_offsets_ms = {
+        tf_s: resolve_anchor_offset_ms(tf_s, cfg) for tf_s in htf_preview_tfs
+    }
+
     worker = TickPreviewWorker(
         uds=uds,
         tfs=preview_cfg.tfs,
@@ -620,6 +770,8 @@ def main() -> int:
         calendars=calendars,
         auto_promote_m1=auto_promote_m1,
         anchor_offset_ms=anchor_offset_s * 1000,
+        htf_preview_tfs=htf_preview_tfs,
+        htf_anchor_offsets_ms=htf_anchor_offsets_ms,
     )
     logging.info(
         "TickPreview: tfs=%s derive_m3=%s auto_promote_m1=%s symbols=%d",
