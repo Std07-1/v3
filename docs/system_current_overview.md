@@ -108,7 +108,7 @@ app.main (supervisor)
 │    Fallback: smc.signals (ADR-0039) when tda_cascade.enabled=false │
 │  Transport: вбудований у WS full/delta frames (zones,         │
 │    swings, levels, smc_delta, signals, pd_state) — NO Redis   │
-│  778 tests, E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a+ADR-0040+ADR-0041 │
+│  819 tests, E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a+ADR-0040+ADR-0041 │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -170,8 +170,8 @@ app.main (supervisor)
 | **Preview plane** | `{NS}:preview:*` у Redis | Ізольований keyspace; не на диску |
 | **Updates bus** | Redis list `{NS}:updates:{sym}:{tf_s}` + seq | Hot-path для /api/updates |
 | **TF allowlist** | `config.json → tf_allowlist_s` | `[60, 180, 300, 900, 1800, 3600, 14400, 86400]` |
-| **Preview TF allowlist** | `config.json → preview_tick_tfs_s` | `[60, 180, 300, 900, 1800, 3600, 14400]` (M1→H4) |
-| **Symbols** | `config.json → symbols` | 13 символів |
+| **Preview TF allowlist** | `config.json → preview_tick_tfs_s` | `[60, 180, 300, 900, 1800, 3600, 14400, 86400]` (M1→D1, HTF running accumulator) |
+| **Symbols** | `config.json → symbols` | 4 активних (XAU/USD, XAG/USD, BTCUSDT, ETHUSDT) |
 | **Day anchors** | `config.json → day_anchor_offset_s*` | H4/D1 bucket alignment |
 | **Market calendar** | `config.json → market_calendar_*` | Per-group, single-break, UTC |
 | **SMC config** | `config.json → smc` | Алгоритми, cap-и, performance (ADR-0024). Ephemeral overlay, не на диску |

@@ -36,6 +36,7 @@ _tmp_jsonl_stress
 # — Claude Code (local agent config + memory) ————————
 .claude/settings.local.json
 .claude/agent-memory/
+CLAUDE.md
 
 # — Copilot customization (local) ————————————————————
 /.copilot/
@@ -72,6 +73,7 @@ logs/
 # ── Документація: внутрішні аудити та спеки (не релізні) ────
 # /docs/adr/
 /docs/audit/
+/docs/audit-*
 /docs/system_spec/
 /docs/claude_project_instructions.md
 /docs/Аналітичний меморандум.md

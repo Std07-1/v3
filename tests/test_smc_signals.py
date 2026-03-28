@@ -930,3 +930,156 @@ class TestSynthesizeSignals:
         )
 
         assert sigs[0].state == "skipped"
+
+    def test_basic_short_signal(self):
+        """Short signal: SL above entry, TP below entry, direction=short."""
+        zone = _zone(
+            zone_id="ob_bear_XAU_USD_900_100000",
+            high=2870.0,
+            low=2860.0,
+            kind="ob_bear",
+        )
+        snap = _snapshot(
+            zones=[zone],
+            swings=[_swing("lh", 2875.0), _swing("ll", 2840.0)],
+            levels=[_level("pdl", 2840.0)],
+        )
+        narr = _narrative(
+            scenarios=[
+                _scenario(
+                    zone_id="ob_bear_XAU_USD_900_100000",
+                    direction="short",
+                    trigger="approaching",
+                )
+            ],
+        )
+        grades = {"ob_bear_XAU_USD_900_100000": {"grade": "A", "score": 6}}
+        bias = {"86400": "bearish", "14400": "bearish"}
+        mom = {"900": {"b": 0, "r": 2}}
+
+        sigs, alerts = synthesize_signals(
+            narrative=narr,
+            snapshot=snap,
+            zone_grades=grades,
+            bias_map=bias,
+            momentum_map=mom,
+            current_price=2872.0,
+            atr=5.0,
+            config=CFG,
+            previous_signals=[],
+            now_ms=300000,
+            session_info=("london", True),
+        )
+
+        assert len(sigs) == 1
+        sig = sigs[0]
+        assert sig.direction == "short"
+        assert sig.stop_loss > sig.entry_price  # SL above entry for short
+        assert sig.take_profit < sig.entry_price  # TP below entry for short
+        assert sig.risk_reward > 0
+        assert sig.confidence > 0
+        assert sig.state == "approaching"
+        assert sig.grade == "A"
+
+    def test_short_signal_watch_when_far(self):
+        """Short signal: price far from entry → watch state."""
+        zone = _zone(
+            zone_id="ob_bear_XAU_USD_900_100000",
+            high=2870.0,
+            low=2860.0,
+            kind="ob_bear",
+        )
+        snap = _snapshot(zones=[zone], swings=[_swing("ll", 2840.0)], levels=[])
+        narr = _narrative(
+            scenarios=[
+                _scenario(
+                    zone_id="ob_bear_XAU_USD_900_100000",
+                    direction="short",
+                    trigger="approaching",
+                )
+            ],
+        )
+        grades = {"ob_bear_XAU_USD_900_100000": {"grade": "A", "score": 6}}
+
+        sigs, _ = synthesize_signals(
+            narrative=narr,
+            snapshot=snap,
+            zone_grades=grades,
+            bias_map={"86400": "bearish", "14400": "bearish"},
+            momentum_map={},
+            current_price=2845.0,  # Far below entry ~2866 → watch
+            atr=5.0,
+            config=CFG,
+            previous_signals=[],
+            now_ms=300000,
+        )
+
+        assert len(sigs) == 1
+        assert sigs[0].state == "watch"
+
+    def test_long_signal_watch_when_far(self):
+        """Long signal: price far above entry (hasn't pulled back yet) → watch state."""
+        snap = _snapshot()
+        narr = _narrative()
+        grades = {"ob_bull_XAU_USD_900_100000": {"grade": "A", "score": 6}}
+
+        sigs, _ = synthesize_signals(
+            narrative=narr,
+            snapshot=snap,
+            zone_grades=grades,
+            bias_map={"86400": "bullish", "14400": "bullish"},
+            momentum_map={},
+            current_price=2878.0,  # Far above entry ~2864, zone not yet reached → watch
+            atr=5.0,
+            config=CFG,
+            previous_signals=[],
+            now_ms=300000,
+        )
+
+        assert len(sigs) == 1
+        assert sigs[0].state == "watch"
+        assert sigs[0].direction == "long"
+
+    def test_confidence_short_aligned_bearish(self):
+        """Short signal with bearish HTF alignment → max bias_alignment factor."""
+        zone = _zone(
+            zone_id="ob_bear_XAU_USD_900_100000",
+            high=2870.0,
+            low=2860.0,
+            kind="ob_bear",
+        )
+        snap = _snapshot(
+            zones=[zone],
+            swings=[_swing("bos", 2845.0), _swing("choch", 2855.0)],
+            levels=[_level("pdl", 2840.0)],
+        )
+        narr = _narrative(
+            scenarios=[
+                _scenario(
+                    zone_id="ob_bear_XAU_USD_900_100000",
+                    direction="short",
+                )
+            ],
+        )
+        grades = {"ob_bear_XAU_USD_900_100000": {"grade": "A+", "score": 8}}
+        bias = {"86400": "bearish", "14400": "bearish"}
+        mom = {"900": {"b": 0, "r": 3}}
+
+        sigs, _ = synthesize_signals(
+            narrative=narr,
+            snapshot=snap,
+            zone_grades=grades,
+            bias_map=bias,
+            momentum_map=mom,
+            current_price=2872.0,
+            atr=5.0,
+            config=CFG,
+            previous_signals=[],
+            now_ms=300000,
+            session_info=("london", True),
+        )
+
+        assert len(sigs) == 1
+        sig = sigs[0]
+        assert sig.confidence_factors["bias_alignment"] == 100
+        assert sig.confidence > 80

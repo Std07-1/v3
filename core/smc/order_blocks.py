@@ -5,6 +5,7 @@ S0: pure logic, NO I/O.
 S2: deterministic.
 S5: thresholds з SmcConfig.ob (не hardcoded).
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -28,7 +29,7 @@ def detect_order_blocks(
     bars: List[CandleBar],
     structure_swings: List,  # SmcSwing list from structure.py
     config: SmcConfig,
-    atr: float = 0.0,       # F4: caller-supplied ATR (0 → compute internally)
+    atr: float = 0.0,  # F4: caller-supplied ATR (0 → compute internally)
 ) -> List[SmcZone]:
     """Виявляє Order Blocks на основі BOS/CHoCH подій (ADR §4.3).
 
@@ -54,6 +55,7 @@ def detect_order_blocks(
     bar_index = {b.open_time_ms: i for i, b in enumerate(bars)}
 
     zones: List[SmcZone] = []
+    impulse_ends: dict = {}  # zone_id → impulse_end_bar_open_ms
     bull_count = 0
     bear_count = 0
 
@@ -83,7 +85,9 @@ def detect_order_blocks(
         if not impulse_bars:
             continue
 
-        impulse_range = max(b.h for b in impulse_bars) - min(b.low for b in impulse_bars)
+        impulse_range = max(b.h for b in impulse_bars) - min(
+            b.low for b in impulse_bars
+        )
         impulse_strength = impulse_range / atr if atr > 0 else 0.0
 
         # Фільтр слабких OB (S5: min_impulse_atr_mult з config)
@@ -135,7 +139,7 @@ def detect_order_blocks(
             tf_s=ob_bar.tf_s,
             kind=kind,
             start_ms=ob_bar.open_time_ms,
-            end_ms=None,         # активна до mitigation
+            end_ms=None,  # активна до mitigation
             high=ob_high,
             low=ob_low,
             status="active",
@@ -143,6 +147,9 @@ def detect_order_blocks(
             anchor_bar_ms=ob_bar.open_time_ms,
         )
         zones.append(zone)
+        # Запам'ятовуємо кінець імпульсу (BOS/CHoCH бар) — бари імпульсу
+        # НЕ повинні враховуватись для мітигації (вони створили OB).
+        impulse_ends[zone_id] = bars[impulse_end].open_time_ms
 
         if is_bullish_event:
             bull_count += 1
@@ -150,27 +157,38 @@ def detect_order_blocks(
             bear_count += 1
 
     # Оновлюємо статус зон (mitigation check) на всьому датасеті барів
-    zones = _update_ob_status(zones, bars)
+    zones = _update_ob_status(zones, bars, impulse_ends)
     return zones
 
 
-def _update_ob_status(zones: List[SmcZone], bars: List[CandleBar]) -> List[SmcZone]:
+def _update_ob_status(
+    zones: List[SmcZone],
+    bars: List[CandleBar],
+    impulse_ends: Optional[dict] = None,
+) -> List[SmcZone]:
     """Оновлює lifecycle статус кожної OB зони на основі цінової дії.
 
     active  → tested:    ціна УВІЙШЛА в зону (не закрилась за межами)
     tested  → mitigated: ціна ЗАКРИЛАСЬ за протилежну межу зони
     active  → mitigated: ціна одразу пробила без bounce
 
+    impulse_ends: mapping zone.id → open_time_ms бару BOS/CHoCH.
+    Бари імпульсу (anchor..impulse_end) пропускаються — вони створили OB
+    і не можуть його мітигувати.
+
     Повертає нові незмінні SmcZone з оновленим status.
     """
+    _impulse_ends = impulse_ends or {}
     updated = []
     for zone in zones:
         current_status = zone.status
         current_end_ms = zone.end_ms
+        # Починаємо перевірку ПІСЛЯ імпульсу (або після anchor, якщо невідомо)
+        skip_until_ms = _impulse_ends.get(zone.id, zone.anchor_bar_ms)
 
-        # Перевіряємо лише бари ПІСЛЯ утворення зони
+        # Перевіряємо лише бари ПІСЛЯ завершення імпульсу
         for bar in bars:
-            if bar.open_time_ms <= zone.anchor_bar_ms:
+            if bar.open_time_ms <= skip_until_ms:
                 continue
             if not bar.complete:
                 continue
@@ -178,7 +196,7 @@ def _update_ob_status(zones: List[SmcZone], bars: List[CandleBar]) -> List[SmcZo
             if zone.kind.endswith("bull"):
                 # Bullish OB: ціна тестує знизу вгору
                 bar_enters_zone = bar.low <= zone.high and bar.h >= zone.low
-                bar_mitigates = bar.c < zone.low     # close нижче низу зони
+                bar_mitigates = bar.c < zone.low  # close нижче низу зони
 
                 if bar_mitigates and current_status in ("active", "tested"):
                     current_status = "mitigated"
@@ -190,7 +208,7 @@ def _update_ob_status(zones: List[SmcZone], bars: List[CandleBar]) -> List[SmcZo
             else:
                 # Bearish OB: ціна тестує зверху вниз
                 bar_enters_zone = bar.h >= zone.low and bar.low <= zone.high
-                bar_mitigates = bar.c > zone.high    # close вище верху зони
+                bar_mitigates = bar.c > zone.high  # close вище верху зони
 
                 if bar_mitigates and current_status in ("active", "tested"):
                     current_status = "mitigated"
@@ -199,8 +217,12 @@ def _update_ob_status(zones: List[SmcZone], bars: List[CandleBar]) -> List[SmcZo
                 elif bar_enters_zone and current_status == "active":
                     current_status = "tested"
 
-        updated.append(dataclasses.replace(
-            zone, status=current_status, end_ms=current_end_ms,
-        ))
+        updated.append(
+            dataclasses.replace(
+                zone,
+                status=current_status,
+                end_ms=current_end_ms,
+            )
+        )
 
     return updated

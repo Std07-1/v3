@@ -224,6 +224,7 @@ def rebuild_one_symbol(
     dry_run: bool,
     cfg: dict,
     writer: JsonlAppender,
+    force: bool = False,
 ) -> Dict[str, int]:
     """Rebuild derived TFs для одного символу з M1.
 
@@ -279,7 +280,7 @@ def rebuild_one_symbol(
         target_tf_ms = target_tf_s * 1000
         b0 = bucket_start_ms(start_ms, target_tf_ms, 0)
         for bucket_open in range(b0, end_ms, target_tf_ms):
-            if _has_on_disk(disk_cache, data_root, symbol, target_tf_s, bucket_open):
+            if not force and _has_on_disk(disk_cache, data_root, symbol, target_tf_s, bucket_open):
                 stats[f"tf_{target_tf_s}_existed"] += 1
                 continue
             result = derive_bar(
@@ -304,7 +305,7 @@ def rebuild_one_symbol(
     d1_ao_ms = d1_anchor_s * 1000
     b0_d1 = bucket_start_ms(start_ms, d1_tf_ms, d1_ao_ms)
     for bucket_open in range(b0_d1, end_ms, d1_tf_ms):
-        if _has_on_disk(disk_cache, data_root, symbol, d1_tf_s, bucket_open):
+        if not force and _has_on_disk(disk_cache, data_root, symbol, d1_tf_s, bucket_open):
             stats[f"tf_{d1_tf_s}_existed"] += 1
             continue
         result = derive_bar(
@@ -371,7 +372,7 @@ def rebuild_one_symbol(
         written = 0
         existed = 0
         for bucket_open in range(b0, end_ms, target_tf_ms):
-            if _has_on_disk(disk_cache, data_root, symbol, target_tf_s, bucket_open):
+            if not force and _has_on_disk(disk_cache, data_root, symbol, target_tf_s, bucket_open):
                 existed += 1
                 continue
 
@@ -512,6 +513,10 @@ def main() -> None:
         help="Кінець діапазону (ISO UTC, наприклад 2026-03-01).",
     )
     parser.add_argument("--config", type=str, default=None, help="Шлях до config.json.")
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Перезаписати вже існуючі derived бари (після ремонту M1 gaps).",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config or pick_config_path())
@@ -575,6 +580,7 @@ def main() -> None:
                 dry_run=args.dry_run,
                 cfg=cfg,
                 writer=writer,
+                force=args.force,
             )
             total_stats[symbol] = stats
     finally:

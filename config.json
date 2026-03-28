@@ -2,6 +2,7 @@
     "symbol": "XAU/USD",
     "symbols": [
         "XAU/USD",
+        "XAG/USD",
         "BTCUSDT",
         "ETHUSDT"
     ],
@@ -46,7 +47,8 @@
         900,
         1800,
         3600,
-        14400
+        14400,
+        86400
     ],
     "preview_tick_publish_min_interval_ms": 250,
     "preview_curr_ttl_s": 1800,
@@ -406,7 +408,8 @@
         },
         "signal_journal": {
             "enabled": true,
-            "path": "data_v3/_signals"
+            "path": "data_v3/_signals",
+            "execution_tf_s": 900
         },
         "context_stack": {
             "enabled": true,
