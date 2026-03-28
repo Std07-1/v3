@@ -103,12 +103,21 @@ ui_v4/.env.example
 /tools/audit/
 /tools/_diag_*.py
 /tools/_check_*.py
+/tools/_ssh_*.py
+/tools/check_candle.py
+/tools/check_data.sh
+/tools/check_m5_derive.py
+/tools/scan_broken_bars.py
 /tools/purge_rebuild_h4.py
 /tools/compare_m5_derived_vs_broker.py
 /tools/dedup_jsonl.py
 /tools/backfill_cascade.py
 /tools/live_cascade_monitor.py
 /tools/tail_integrity_scanner.py
+/tools/smc-nginx-v3.conf
+
+# ── Великі артефакти (архіви, дампи) ───────────────────────
+*.tar.gz
 
 # ── UI v4: old/dead code ────────────────────────────────────
 ui_v4/src/chart/ChartPane.svelte
