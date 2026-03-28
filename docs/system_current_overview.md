@@ -108,7 +108,7 @@ app.main (supervisor)
 │    Fallback: smc.signals (ADR-0039) when tda_cascade.enabled=false │
 │  Transport: вбудований у WS full/delta frames (zones,         │
 │    swings, levels, smc_delta, signals, pd_state) — NO Redis   │
-│  778 tests, E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a+ADR-0040+ADR-0041 │
+│  819 tests, E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a+ADR-0040+ADR-0041 │
 └──────────────────────────────────────────────────────────────┘
 ```
 

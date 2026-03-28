@@ -319,6 +319,7 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 | `test_tda_orchestrator.py` | TDA cascade orchestrator (4-stage flow) |
 | `test_tda_live.py` | TDA runtime wiring + config SSOT |
 | `test_pd_state.py` | PdState wire format + PremiumDiscountConfig compat (ADR-0041, 21 тест) |
+| `test_ob_impulse_grace.py` | OB impulse grace: zone mitigation skips impulse bars (6 тестів) |
 
 ---
 
