@@ -6,6 +6,7 @@
     import { onMount, onDestroy } from "svelte";
     import { derivePdBadge } from "../stores/shellState";
     import PdBadge from "./PdBadge.svelte";
+    import { BIAS_TF_LABELS, BIAS_TF_ORDER } from '../constants/tfLabels';
 
     const {
         symbols,
@@ -43,14 +44,7 @@
         pdState?: import("../types").PdState | null;
     } = $props();
 
-    // ─── Bias pills (ADR-0031) ───
-    const BIAS_TF_LABELS: Record<string, string> = {
-        "86400": "D1",
-        "14400": "H4",
-        "3600": "H1",
-        "900": "M15",
-    };
-    const BIAS_TF_ORDER = ["86400", "14400", "3600", "900"];
+    // ─── Bias pills (ADR-0031, ADR-0043 D-15): SSOT у constants/tfLabels.ts ───
 
     function momInfo(m: { b: number; r: number } | undefined): {
         dots: string;

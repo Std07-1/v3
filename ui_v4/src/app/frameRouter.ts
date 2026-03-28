@@ -30,6 +30,14 @@ export const serverConfig = writable<ServerConfig>({ symbols: [], tfs: [] });
 let lastSeq = -1;
 let knownBootId: string | null = null;
 
+// ADR-0043 P3: boot_id change callback — скидає UI кеші при server restart (D5)
+let _onBootIdChange: (() => void) | null = null;
+
+/** Реєструє callback що буде викликаний при зміні boot_id (server restart). */
+export function setBootIdChangeCallback(cb: () => void): void {
+  _onBootIdChange = cb;
+}
+
 /** Exported for actions.ts guard (P2). */
 export function addUiWarning(code: UiWarning['code'], kind: UiWarning['kind'], details: string): void {
   const w: UiWarning = {
@@ -97,6 +105,8 @@ export function handleWSFrame(raw: unknown): void {
         `boot_id changed: ${knownBootId} → ${frameBootId}, server restarted — seq reset`);
       knownBootId = frameBootId;
       lastSeq = frame.meta.seq; // reset to new server's seq baseline
+      // ADR-0043 P3: сповіщаємо UI про server restart → очистити кеші (D5)
+      _onBootIdChange?.();
     }
   }
 
@@ -145,6 +155,7 @@ export function handleWSFrame(raw: unknown): void {
 export function resetFrameRouter(): void {
   lastSeq = -1;
   knownBootId = null;
+  _onBootIdChange = null; // ADR-0043 P3: очищаємо callback при reconnect
   currentFrame.set(null);
   serverWarnings.set([]);
   uiWarnings.set([]);

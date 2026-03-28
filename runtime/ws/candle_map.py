@@ -80,7 +80,7 @@ def _is_weekend_open_utc(bar: dict) -> bool:
             oms = int(t) * 1000
     if not isinstance(oms, (int, float)) or oms <= 0:
         return False
-    bar_dt = datetime.datetime.utcfromtimestamp(int(oms) / 1000)
+    bar_dt = datetime.datetime.fromtimestamp(int(oms) / 1000, tz=datetime.timezone.utc).replace(tzinfo=None)
     return bar_dt.weekday() in (4, 5, 6)  # Friday=4, Saturday=5, Sunday=6
 
 

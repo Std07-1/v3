@@ -195,10 +195,10 @@ def sync_one(
     to_ms = bars[-1].open_time_ms
     result["rewrite_from_ms"] = from_ms
     result["rewrite_to_ms"] = to_ms
-    result["rewrite_from_utc"] = dt.datetime.utcfromtimestamp(from_ms / 1000).strftime(
+    result["rewrite_from_utc"] = dt.datetime.fromtimestamp(from_ms / 1000, tz=dt.timezone.utc).replace(tzinfo=None).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
-    result["rewrite_to_utc"] = dt.datetime.utcfromtimestamp(to_ms / 1000).strftime(
+    result["rewrite_to_utc"] = dt.datetime.fromtimestamp(to_ms / 1000, tz=dt.timezone.utc).replace(tzinfo=None).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
 

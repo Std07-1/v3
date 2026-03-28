@@ -34,6 +34,7 @@
     currentPair,
     resetFrameRouter,
     serverConfig,
+    setBootIdChangeCallback,
   } from "./app/frameRouter";
   import { diagStore } from "./app/diagState";
   import { mainStatus } from "./app/diagSelectors";
@@ -367,6 +368,16 @@
     ws.connect();
     actions = createActions(ws);
 
+    // ADR-0043 P3: boot_id change → очистити UI кеші (D5 fix)
+    // Захищає від stale overlay при server restart перед першим full frame
+    setBootIdChangeCallback(() => {
+      cachedNarrative = null;
+      cachedShell = null;
+      cachedBiasMap = {};
+      cachedMomentumMap = {};
+      cachedPdState = null;
+    });
+
     // 4. Clock tick for top-right UTC display
     clockInterval = setInterval(() => {
       clockNow = Date.now();
@@ -597,10 +608,11 @@
   }
 
   /* Entry 078: Compact top-right bar — no bg, shifted left from price axis */
+  /* ADR-0043 P5: right: 64px → 4px (усунення overlap з smc-panel, D7 fix) */
   .top-right-bar {
     position: fixed;
     top: 8px;
-    right: 64px;
+    right: 4px;
     z-index: 35;
     display: flex;
     align-items: center;

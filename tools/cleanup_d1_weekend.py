@@ -59,7 +59,7 @@ def main():
             if not ot:
                 continue
 
-            bar_dt = datetime.datetime.utcfromtimestamp(int(ot) / 1000)
+            bar_dt = datetime.datetime.fromtimestamp(int(ot) / 1000, tz=datetime.timezone.utc).replace(tzinfo=None)
             wd = bar_dt.weekday()
             bar_close_ms = int(ot) + TF_S * 1000
 

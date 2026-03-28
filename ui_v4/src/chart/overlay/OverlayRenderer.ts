@@ -28,6 +28,11 @@ import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import type { SmcData, SmcZone, SmcLevel, SmcSwing, UiWarning, ZoneGradeInfo } from '../../types';
 import { applyBudget, DEFAULT_BUDGET, type BudgetConfig, type DisplayMode, type ZoneDisplayProps } from './DisplayBudget';
 
+// ── ADR-0043 P1: Canvas Safe Zones — overlay елементи не рендеряться під HUD ──
+const CANVAS_SAFE_TOP_Y = 75;    // HUD + OHLCV tooltip clearance (px)
+const CANVAS_SAFE_BOTTOM_Y = 30; // Time axis clearance (px)
+// CANVAS_SAFE_RIGHT_X = динамічний через getChartAreaWidth() — без hardcode
+
 type HorzScaleItem = number | { year: number; month: number; day: number };
 
 // ── ADR-0024b: Per-kind рівень стилізація ──────────────────────────
@@ -768,27 +773,30 @@ export class OverlayRenderer {
           const lblX = Math.min(x1 + 3, xRight - fullTm.width - pad * 2);
           const lblY = top + 1;
 
-          // Single pill background — skip on light theme (dark pills distract)
-          if (!this._isLightTheme) {
-            const pillAlpha = Math.max(0.15, (0.20 + 0.55 * proximity) * dimMult);  // ADR-0042 P3: floor
-            this.ctx.globalAlpha = pillAlpha;
-            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-            this.ctx.fillRect(lblX - pad, lblY, fullTm.width + pad * 2, fs + 2);
-          }
+          // ADR-0043 P1: Y-guard — не рендеримо label під HUD або над time axis
+          if (!(lblY < CANVAS_SAFE_TOP_Y || lblY > (this.cssH - CANVAS_SAFE_BOTTOM_Y))) {
+            // Single pill background — skip on light theme (dark pills distract)
+            if (!this._isLightTheme) {
+              const pillAlpha = Math.max(0.15, (0.20 + 0.55 * proximity) * dimMult);  // ADR-0042 P3: floor
+              this.ctx.globalAlpha = pillAlpha;
+              this.ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+              this.ctx.fillRect(lblX - pad, lblY, fullTm.width + pad * 2, fs + 2);
+            }
 
-          // Label text
-          const textAlpha = (0.30 + 0.60 * proximity) * dimMult;
-          this.ctx.globalAlpha = Math.min(1.0, textAlpha);
-          this.ctx.fillStyle = isDimmed ? '#888' : color;
-          this.ctx.textAlign = 'left';
-          this.ctx.textBaseline = 'top';
-          this.ctx.fillText(label, lblX, lblY + 1);
+            // Label text
+            const textAlpha = (0.30 + 0.60 * proximity) * dimMult;
+            this.ctx.globalAlpha = Math.min(1.0, textAlpha);
+            this.ctx.fillStyle = isDimmed ? '#888' : color;
+            this.ctx.textAlign = 'left';
+            this.ctx.textBaseline = 'top';
+            this.ctx.fillText(label, lblX, lblY + 1);
 
-          // Grade suffix in its own color within same pill
-          if (gradeSuffix) {
-            const gc: Record<string, string> = { 'A+': '#ffd700', 'A': '#fff', 'B': '#999' };
-            this.ctx.fillStyle = gc[gradeInfo!.grade] ?? '#999';
-            this.ctx.fillText(gradeSuffix, lblX + labelTm.width, lblY + 1);
+            // Grade suffix in its own color within same pill
+            if (gradeSuffix) {
+              const gc: Record<string, string> = { 'A+': '#ffd700', 'A': '#fff', 'B': '#999' };
+              this.ctx.fillStyle = gc[gradeInfo!.grade] ?? '#999';
+              this.ctx.fillText(gradeSuffix, lblX + labelTm.width, lblY + 1);
+            }
           }
           this.ctx.restore();
         }
@@ -970,6 +978,9 @@ export class OverlayRenderer {
 
     // ── 5. Render one label per group (all labels always visible) ──
     for (const g of groups) {
+      // ADR-0043 P1: Y-guard для level labels — не рендеримо під HUD або над time axis
+      if (g.y < CANVAS_SAFE_TOP_Y || g.y > (this.cssH - CANVAS_SAFE_BOTTOM_Y)) continue;
+
       // Merge label text: "PDH | Prev H4 Hi"
       const uniqueLabels: string[] = [];
       for (const it of g.items) {
@@ -1091,31 +1102,37 @@ export class OverlayRenderer {
           }
         }
 
-        this.ctx.save();
-        this.ctx.font = `bold ${fs}px monospace`;
-        this.ctx.textAlign = 'center';
-        this.ctx.textBaseline = isBull ? 'bottom' : 'top';
+        // ADR-0043 P1: Y-guard для BOS/CHoCH labels
         const yOffBase = Math.max(3, Math.round(8 * mScale));
         const yOff = isBull ? -yOffBase : yOffBase;
+        const lblRenderY = yAnchor + yOff;
+        if (lblRenderY < CANVAS_SAFE_TOP_Y || lblRenderY > (this.cssH - CANVAS_SAFE_BOTTOM_Y)) {
+          // Поза safe zone — пропускаємо label, але hit area додається нижче
+        } else {
+          this.ctx.save();
+          this.ctx.font = `bold ${fs}px monospace`;
+          this.ctx.textAlign = 'center';
+          this.ctx.textBaseline = isBull ? 'bottom' : 'top';
 
-        const tm = this.ctx.measureText(label);
-        const px = 3, py = 1;
-        const pillX = x - tm.width / 2 - px;
-        const pillY = isBull ? yAnchor + yOff - fs - py : yAnchor + yOff - py;
-        if (!this._isLightTheme) {
-          this.ctx.globalAlpha = 0.40;
-          this.ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-          this.ctx.fillRect(pillX, pillY, tm.width + px * 2, fs + py * 2);
+          const tm = this.ctx.measureText(label);
+          const px = 3, py = 1;
+          const pillX = x - tm.width / 2 - px;
+          const pillY = isBull ? lblRenderY - fs - py : lblRenderY - py;
+          if (!this._isLightTheme) {
+            this.ctx.globalAlpha = 0.40;
+            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+            this.ctx.fillRect(pillX, pillY, tm.width + px * 2, fs + py * 2);
+          }
+
+          this.ctx.globalAlpha = isChoch ? 0.85 : 0.70;
+          this.ctx.fillStyle = chochColor;
+          this.ctx.fillText(label, x, lblRenderY);
+
+          this.ctx.restore();
         }
 
-        this.ctx.globalAlpha = isChoch ? 0.85 : 0.70;
-        this.ctx.fillStyle = chochColor;
-        this.ctx.fillText(label, x, yAnchor + yOff);
-
-        this.ctx.restore();
-
         this._hitAreas.push({
-          rect: { x: x - 20, y: Math.min(pillY, yAnchor + yOff - fs - 2), w: 40, h: fs + 12 },
+          rect: { x: x - 20, y: Math.min(lblRenderY - fs - 2, yAnchor - fs - 2), w: 40, h: fs + 12 },
           tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? `${s.kind}`,
         });
       } else if (isInducement) {

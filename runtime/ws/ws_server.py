@@ -871,7 +871,7 @@ async def _global_delta_loop(app: web.Application) -> None:
             )
             _viewer_ns = _v_spec.namespace
     except Exception:
-        pass  # best-effort, tick_preview falls back to normal throttle
+        _log.warning("VIEWER_REDIS_INIT_FAIL: viewer Redis init failed, tick_preview falls back to normal throttle", exc_info=True)
 
     try:
         while True:
@@ -889,7 +889,7 @@ async def _global_delta_loop(app: web.Application) -> None:
                     _vk = f"{_viewer_ns}:ws:viewer_count"
                     _viewer_redis.set(_vk, str(active_count), ex=30)
                 except Exception:
-                    pass  # best-effort, non-critical
+                    _log.warning("VIEWER_REDIS_SET_FAIL: cannot publish viewer_count to Redis", exc_info=True)
 
             subs_by_target: Dict[tuple[str, int], list[WsSession]] = {}
             for sess in (sessions or {}).values():

@@ -30,6 +30,7 @@
     applySmcFull,
     applySmcDelta,
     applySessionLevels,
+    filterMitigatedZones,
     EMPTY_SMC_DATA,
   } from "../stores/smcStore";
   import { replayStore } from "../stores/replayStore.svelte";
@@ -404,6 +405,9 @@
           );
         }
         // ADR-0042 P2: merge metadata from thick delta (DF-2)
+        // zone_grades/bias_map/momentum_map/pd_state live on top-level RenderFrame,
+        // not in smc_delta — must merge here from currentFrame directly.
+        // ADR-0043 P2 D3 fix: pd !== undefined (allow null through — explicit clear)
         {
           const cur = untrack(() => smcData);
           const zg = currentFrame.zone_grades;
@@ -421,7 +425,7 @@
               ...(zg && Object.keys(zg).length > 0 ? { zone_grades: zg } : {}),
               ...(bm && Object.keys(bm).length > 0 ? { bias_map: bm } : {}),
               ...(mm && Object.keys(mm).length > 0 ? { momentum_map: mm } : {}),
-              ...(pd !== undefined && pd !== null ? { pd_state: pd } : {}),
+              ...(pd !== undefined ? { pd_state: pd } : {}),
             };
           }
         }
@@ -440,9 +444,13 @@
     }
   });
 
-  // ADR-0024c: data effect — тільки при зміні smcData (повне, без фільтрації)
+  // ADR-0024c: data effect — тільки при зміні smcData
+  // ADR-0043 P4: filterMitigatedZones підключений (D4 fix)
+  // TODO: читати hide_mitigated з frame.meta.config коли сервер його передаватиме
   $effect(() => {
-    overlayRenderer?.patch(smcData);
+    const HIDE_MITIGATED = false; // MVP: вимкнено, сервер фільтрує через smc.hide_mitigated
+    const displayData = HIDE_MITIGATED ? filterMitigatedZones(smcData) : smcData;
+    overlayRenderer?.patch(displayData);
   });
 
   // ═══ ADR-0027: Replay cursor effect ═══
@@ -781,9 +789,10 @@
   }
 
   /* N3: SMC layer toggles — refined collapsible panel */
+  /* ADR-0043 P5: top: 36px → 48px (HUD clearance, D7 fix) */
   .smc-panel {
     position: absolute;
-    top: 36px;
+    top: 48px;
     right: 64px;
     z-index: 36;
     display: flex;

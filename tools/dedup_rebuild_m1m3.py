@@ -78,7 +78,7 @@ def _write_bars(data_root: str, sym: str, tf_s: int, bars: List[dict], dry_run: 
     # Групуємо по UTC-даті
     by_day: Dict[str, List[dict]] = {}
     for b in bars:
-        dt = datetime.datetime.utcfromtimestamp(b["open_time_ms"] / 1000)
+        dt = datetime.datetime.fromtimestamp(b["open_time_ms"] / 1000, tz=datetime.timezone.utc).replace(tzinfo=None)
         day_key = dt.strftime("%Y%m%d")
         by_day.setdefault(day_key, []).append(b)
 

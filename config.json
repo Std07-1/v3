@@ -145,6 +145,7 @@
     "market_boundary_slip_minutes_per_day": 2,
     "day_anchor_offset_s": 82800,
     "day_anchor_offset_s_alt": 0,
+    "day_anchor_offset_s_alt2": 79200,
     "day_anchor_offset_s_d1": 79200,
     "day_anchor_offset_s_d1_alt": 0,
     "ssot_jsonl_fsync": false,
@@ -360,7 +361,8 @@
             "focus_budget_total": 12,
             "structure_label_max": 4,
             "fvg_display_cap": 4,
-            "fvg_ob_overlap_hide": true
+            "fvg_ob_overlap_hide": true,
+            "max_display_fractals": 30
         },
         "narrative": {
             "enabled": true,
@@ -544,5 +546,8 @@
         "tick_ws_enabled": true,
         "tick_ws_reconnect_base_s": 3,
         "tick_ws_reconnect_max_s": 30
+    },
+    "updates": {
+        "retain": 2000
     }
 }

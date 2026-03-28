@@ -1,6 +1,6 @@
 # Документація Trading Platform v3 — Індекс (SSOT)
 
-> **Остання перевірка**: 2026-03-14  
+> **Остання перевірка**: 2026-03-24
 > **Мова**: українська (англійська лише для загальноприйнятих термінів)
 
 Цей файл — **точка входу** в усю документацію проєкту. Будь-яке знання про систему має бути знайдене через цей індекс.
@@ -14,7 +14,7 @@
 | Документ | Зміст |
 |---|---|
 | [system_current_overview.md](system_current_overview.md) | Поточна архітектура, процеси, SSOT-площини, Mermaid-схеми, annotated tree |
-| **[docs/adr/index.md](adr/index.md)** | **Індекс усіх ADR (SSOT)** — 35 ADR з обґрунтуваннями архітектурних рішень |
+| **[docs/adr/index.md](adr/index.md)** | **Індекс усіх ADR (SSOT)** — 44+ ADR з обґрунтуваннями архітектурних рішень |
 | [ADR-0001](adr/0001-unified-data-store.md) | UDS (RAM↔Redis↔Disk) + Contract-first API |
 | [ADR-0002](adr/0002-derive-chain-from-m1.md) | DeriveChain: M1→M3→M5→M15→M30→H1→H4 |
 | [ADR-0003](adr/0003-cold-start-hardening.md) | Cold start: error isolation, process restart, unified gate |
@@ -30,15 +30,23 @@
 | [ADR-0025](adr/0025-potik-b-data-quality-summary.md) | Потік B data quality summary |
 | [ADR-0026](adr/0026-overlay-level-rendering-rules.md) | Overlay Level Rendering Rules (L1–L6) |
 | [ADR-0027](adr/0027-client-side-replay.md) | Client-Side Replay (TradingView-style) |
-| [ADR-0028](adr/ADR-0028-v2-elimination-engine.md) | Elimination Engine — Display Filter Pipeline |
-| [ADR-0029](adr/ADR-0029-confluence-scoring.md) | OB Confluence Scoring + Grade System (8-factor, A+/A/B/C) |
-| [ADR-0030-alt](adr/ADR-0030-alt-tf-sovereignty.md) | TF Sovereignty — Cross-TF Projection Styling |
+| [ADR-0028](adr/0028-v2-elimination-engine.md) | Elimination Engine — Display Filter Pipeline |
+| [ADR-0029](adr/0029-confluence-scoring.md) | OB Confluence Scoring + Grade System (8-factor, A+/A/B/C) |
+| [ADR-0030-alt](adr/0030-alt-tf-sovereignty.md) | TF Sovereignty — Cross-TF Projection Styling |
 | [ADR-0031](adr/0031-bias-banner.md) | Bias Banner — Multi-TF Trend Bias Display |
 | [ADR-0032](adr/0032-overlay-render-throttle-tf-switch.md) | Overlay Render Throttle + TF Switch Stability |
 | [ADR-0033](adr/0033-context-flow-narrative.md) | Context Flow — Multi-TF Narrative Engine (trade/wait/prepare scenario) |
 | [ADR-0034](adr/0034-advanced-market-analysis-tda.md) | Advanced Market Analysis — TDA (P0 IFVG + P1 Breaker Implemented; P2–P6 rolled back) |
 | [ADR-0035](adr/0035-sessions-killzones.md) | Sessions & Killzones — Asia/London/NY H/L, killzone context, F9 sweep |
 | [ADR-0036](adr/0036-premium-trader-first-shell.md) | Premium Trader-First Shell for UI v4 |
+| [ADR-0037](adr/0037-binance-second-broker.md) | Binance Futures — Second Broker (BTC/ETH Live Ingest, ADR-0037) |
+| [ADR-0038](adr/0038-initial-backfill-virgin-symbols.md) | Initial Backfill for Virgin Symbols (Bootstrap Phase 2.5, ADR-0038) |
+| [ADR-0039](adr/0039-signal-engine.md) | Signal Engine — Numeric Entry/SL/TP + R:R + Alerts (ADR-0039) |
+| [ADR-0040](adr/0040-tda-cascade-signal-engine.md) | TDA Cascade — Daily Signal Engine Rebuild (D1→H4→Session→FVG, ADR-0040) |
+| [ADR-0041](adr/0041-pd-badge-eq-line.md) | Premium/Discount Badge + EQ Line — Decoupled Calc/Display + Variant H Shell (ADR-0041) |
+| [ADR-0042](adr/0042-delta-frame-state-sync.md) | Delta Frame State Synchronization — Full/Delta Parity (DF-1/DF-2/DF-3, ADR-0042) |
+| [ADR-0043](adr/0043-ui-v4-canvas-safe-zones-state-sync.md) | UI v4 — Canvas Safe Zones + State Sync Hardening (ADR-0043) |
+| [ADR-0044](adr/0044-htf-live-preview.md) | HTF Live Preview — Incremental HTF accumulator for D1/H4 forming candle (ADR-0044) |
 
 ### 2. Потоки даних
 
@@ -88,8 +96,8 @@
 | Документ | Зміст |
 |---|---|
 | [ADR-0024](adr/0024-smc-engine.md) | Архітектура, P-slices, інваріанти S0–S6, §18 Implementation Progress |
-| [ADR-0028](adr/ADR-0028-v2-elimination-engine.md) | Display Filter Pipeline (budget, proximity, TTL) |
-| [ADR-0029](adr/ADR-0029-confluence-scoring.md) | Confluence Scoring: 8-factor grade A+/A/B/C |
+| [ADR-0028](adr/0028-v2-elimination-engine.md) | Display Filter Pipeline (budget, proximity, TTL) |
+| [ADR-0029](adr/0029-confluence-scoring.md) | Confluence Scoring: 8-factor grade A+/A/B/C |
 | `core/smc/types.py` | SSOT типи: SmcZone, SmcSwing, SmcLevel, SmcSnapshot, SmcDelta |
 | `core/smc/engine.py` | SmcEngine — pure orchestrator (zone lifecycle, ranking, caps) |
 | `core/smc/confluence.py` | confluence_score() — 8-factor grade (ADR-0029) |
@@ -137,7 +145,7 @@ A (Broker/Ingest) → C (UDS — єдина талія) → B (UI — read-only 
 - **C**: UnifiedDataStore — єдина точка запису/читання marketdata (SSOT disk + Redis snapshots + updates bus)
 - **B**: UI — read-only renderer:
   - **ui_chart_v3**: HTTP polling API (порт 8089, vanilla JS, поточний production)
-  - **ui_v4**: WebSocket real-time (порт 8000, Svelte 5 + LWC 5, chart parity DONE, audit T1-T10 COMPLETE) → [ui_v4_integration.md](ui_v4_integration.md)
+  - **ui_v4**: WebSocket real-time (порт 8000, Svelte 5 + LWC 5, chart parity DONE, audit T1-T10 COMPLETE) → [README_DEV.md](../ui_v4/README_DEV.md)
   - **SMC Overlay** (ADR-0024): SmcRunner → SmcEngine → WS `smc_snapshot`/`smc_delta` → smcStore → OverlayRenderer (OB/FVG/swings/levels)
 - **TUI**: aione_top — standalone TUI-монітор процесів/pipeline (`python -m aione_top`)
 

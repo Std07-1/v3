@@ -45,8 +45,8 @@ def _load_existing_opens(data_root: str, symbol: str, tf_s: int, start_ms: int, 
     sym_dir = os.path.join(data_root, symbol.replace("/", "_"), "tf_%d" % tf_s)
     if not os.path.isdir(sym_dir):
         return opens
-    day_start = dt.datetime.utcfromtimestamp(start_ms / 1000).date()
-    day_end = dt.datetime.utcfromtimestamp(end_ms / 1000).date()
+    day_start = dt.datetime.fromtimestamp(start_ms / 1000, tz=dt.timezone.utc).replace(tzinfo=None).date()
+    day_end = dt.datetime.fromtimestamp(end_ms / 1000, tz=dt.timezone.utc).replace(tzinfo=None).date()
     d = day_start
     while d <= day_end:
         path = os.path.join(sym_dir, "part-%s.jsonl" % d.strftime("%Y%m%d"))
@@ -193,8 +193,8 @@ def main() -> int:
                     logging.info(
                         "%s: записано=%d first=%s last=%s",
                         symbol, len(bars),
-                        dt.datetime.utcfromtimestamp(bars[0].open_time_ms / 1000).strftime("%Y-%m-%dT%H:%MZ"),
-                        dt.datetime.utcfromtimestamp(bars[-1].open_time_ms / 1000).strftime("%Y-%m-%dT%H:%MZ"),
+                        dt.datetime.fromtimestamp(bars[0].open_time_ms / 1000, tz=dt.timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%dT%H:%MZ"),
+                        dt.datetime.fromtimestamp(bars[-1].open_time_ms / 1000, tz=dt.timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%dT%H:%MZ"),
                     )
                 else:
                     logging.info("%s: 0 нових барів (усе вже є)", symbol)

@@ -161,10 +161,14 @@ describe('ADR-0042 DF-1 edge: undefined metadata passthrough', () => {
     });
 });
 
-// ── ADR-0042 P2: frame-level metadata merge simulation ───────
+// ── ADR-0042 P2 / ADR-0043 P2: frame-level metadata merge (ChartPane pattern) ──
+// zone_grades/bias_map/momentum_map/pd_state live on top-level RenderFrame,
+// not in SmcDeltaWire. ChartPane merges them separately after applySmcDelta.
+// This helper simulates that ChartPane thick-delta block.
 
-describe('ADR-0042 P2 DF-2: frame metadata overwrites smcData (ChartPane merge)', () => {
-    // Simulate ChartPane merge logic: after applySmcDelta, if frame has metadata, overwrite
+describe('ADR-0042 P2 DF-2 / ADR-0043 P2: frame metadata merge (ChartPane pattern)', () => {
+    // Simulates ChartPane thick-delta merge block (ADR-0043 D3 fix applied:
+    // pd !== undefined allows null through — explicit clear)
     function mergeFrameMetadata(
         smcData: SmcData,
         frame: { zone_grades?: Record<string, ZoneGradeInfo>; bias_map?: Record<string, string>; momentum_map?: Record<string, { b: number; r: number }>; pd_state?: PdState | null },
@@ -184,51 +188,42 @@ describe('ADR-0042 P2 DF-2: frame metadata overwrites smcData (ChartPane merge)'
                 ...(zg && Object.keys(zg).length > 0 ? { zone_grades: zg } : {}),
                 ...(bm && Object.keys(bm).length > 0 ? { bias_map: bm } : {}),
                 ...(mm && Object.keys(mm).length > 0 ? { momentum_map: mm } : {}),
-                ...(pd !== undefined && pd !== null ? { pd_state: pd } : {}),
+                // ADR-0043 D3 fix: pd !== undefined (allows null → explicit clear)
+                ...(pd !== undefined ? { pd_state: pd } : {}),
             };
         }
         return smcData;
     }
 
-    it('TC-11: frame zone_grades overwrites stale smcData grades', () => {
+    it('TC-11: frame pd_state null → explicit clear (D3 fix: null guard removed)', () => {
+        const state = makeFullState(); // pd_state = PD (non-null)
+        const result = mergeFrameMetadata(state, { pd_state: null });
+        expect(result.pd_state).toBeNull();
+    });
+
+    it('TC-12: frame zone_grades overwrites stale smcData grades', () => {
         const state = makeFullState();
         const afterDelta = applySmcDelta(state, emptyDelta());
-
         const newGrades: Record<string, ZoneGradeInfo> = {
             [ZONE_OB.id]: { score: 10, grade: 'A+', factors: ['sweep +2', 'htf_align +2', 'session +2', 'fvg_nearby +2', 'extremum +2'] },
         };
         const result = mergeFrameMetadata(afterDelta, { zone_grades: newGrades });
-
         expect(result.zone_grades).toEqual(newGrades);
         expect(result.pd_state).toEqual(PD); // unchanged
     });
 
-    it('TC-12: frame bias_map overwrites stale bias', () => {
+    it('TC-13: frame bias_map overwrites stale bias', () => {
         const state = makeFullState();
         const afterDelta = applySmcDelta(state, emptyDelta());
-
         const newBias = { '900': 'bearish', '3600': 'bullish' };
         const result = mergeFrameMetadata(afterDelta, { bias_map: newBias });
-
         expect(result.bias_map).toEqual(newBias);
         expect(result.zone_grades).toEqual(GRADES); // unchanged
     });
 
-    it('TC-13: frame pd_state overwrites old pd_state', () => {
-        const state = makeFullState();
-        const newPd: PdState = { pd_percent: 72, label: 'PREMIUM', range_high: 2100, range_low: 2000, equilibrium: 2050 };
-
-        const result = mergeFrameMetadata(state, { pd_state: newPd });
-
-        expect(result.pd_state).toEqual(newPd);
-    });
-
     it('TC-14: empty frame metadata does NOT overwrite (guard works)', () => {
         const state = makeFullState();
-
         const result = mergeFrameMetadata(state, { zone_grades: {}, bias_map: {}, momentum_map: {} });
-
-        // All should stay as-is because frame metadata is empty
         expect(result.zone_grades).toEqual(GRADES);
         expect(result.bias_map).toEqual(BIAS_MAP);
         expect(result.momentum_map).toEqual(MOMENTUM_MAP);

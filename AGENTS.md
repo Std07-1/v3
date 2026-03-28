@@ -3,7 +3,7 @@
 > **Системний довідник** — структура, команди, конфігурація, схеми.
 > Правила, інваріанти, заборони → `.github/copilot-instructions.md`.
 > Командна взаємодія агентів → `CLAUDE.md`.
-> **Last Updated**: 2026-03-22
+> **Last Updated**: 2026-03-24
 
 ---
 
@@ -130,6 +130,8 @@ v3/
 ├── runtime/               # I/O та процеси
 │   ├── ingest/            # Data ingestion
 │   │   ├── broker/fxcm/   # FXCM provider (.venv37/ only)
+│   │   ├── broker/binance/ # Binance Futures provider (24/7, ADR-0037)
+│   │   ├── binance_ingest_worker.py # Binance M1 ingest + backward crawl (ADR-0037/0038)
 │   │   ├── broker_sidecar.py  # Stateless FXCM M1 fetcher via Redis IPC (ADR-0016, .venv37/)
 │   │   ├── m1_ingestion_worker.py # Platform-side M1 ingestion with BrokerRedisProxy (ADR-0016, .venv/)
 │   │   ├── polling/       # m1_poller (legacy single-process mode)
@@ -175,7 +177,7 @@ v3/
 │   ├── run_exit_gates.py  # Quality gates runner
 │   ├── exit_gates/        # 26 AST gates (dependency, contract, geometry, dual_python)
 │   ├── rebuild_from_m1.py # Canonical rebuild all derived TFs
-│   ├── repair/            # htf_rebuild, htf_tail_sync
+│   ├── repair/            # htf_rebuild, htf_tail_sync, repair_m1_gaps
 │   └── diag/              # classify gaps, clear redis, disk_max_open_ms
 │
 ├── tests/                 # pytest suite: SMC, UDS, WS, ingest, supervisor rails

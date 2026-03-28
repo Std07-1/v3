@@ -4,8 +4,7 @@ import json
 import os
 from typing import Any, Dict, Iterable, List, Optional
 
-
-DEFAULT_PREVIEW_TF_ALLOWLIST = {60, 180}
+from core.config_loader import DEFAULT_PREVIEW_TF_ALLOWLIST
 
 
 def _load_config(path: str) -> Dict[str, Any]:

@@ -1,6 +1,6 @@
 # ADR-0041: Premium/Discount Badge + EQ Line — Decoupled Calc/Display
 
-- **Статус**: Accepted (P1–P4 implemented, Variant H P5–P9 next)
+- **Статус**: Implemented (P1–P9 implemented, changelog 20260322-003/005)
 - **Дата**: 2026-03-22
 - **Автор**: R_ARCHITECT
 - **Initiative**: `pd_badge_eq_v1`

@@ -4,14 +4,8 @@
   Read-only overlay, no side effects.
 -->
 <script lang="ts">
-    // TF labels ordered high→low (display order per ADR-0031)
-    const TF_LABELS: Record<string, string> = {
-        "86400": "D1",
-        "14400": "H4",
-        "3600": "H1",
-        "900": "M15",
-    };
-    const TF_ORDER = ["86400", "14400", "3600", "900"];
+    // ADR-0043 D-15: TF labels — SSOT у constants/tfLabels.ts (ADR-0031)
+    import { BIAS_TF_LABELS, BIAS_TF_ORDER } from '../constants/tfLabels';
 
     interface Props {
         biasMap: Record<string, string>;
@@ -36,10 +30,10 @@
 
     // Derived: pills тільки для відомих TF з bias_map
     let pills = $derived(
-        TF_ORDER.filter((k) => biasMap[k] != null).map((k) => {
+        BIAS_TF_ORDER.filter((k) => biasMap[k] != null).map((k) => {
             const mi = momInfo(momentumMap[k]);
             return {
-                label: TF_LABELS[k],
+                label: BIAS_TF_LABELS[k],
                 bias: biasMap[k] as "bullish" | "bearish",
                 arrow: biasMap[k] === "bullish" ? "▲" : "▼",
                 momDots: mi.dots,

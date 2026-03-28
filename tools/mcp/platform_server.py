@@ -104,7 +104,7 @@ def _sym_dir(symbol: str) -> str:
 def _format_ms(ms: int | float) -> str:
     """Epoch ms → ISO8601 UTC рядок."""
     try:
-        dt = datetime.datetime.utcfromtimestamp(ms / 1000)
+        dt = datetime.datetime.fromtimestamp(ms / 1000, tz=datetime.timezone.utc).replace(tzinfo=None)
         return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
     except Exception:
         return str(ms)

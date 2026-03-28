@@ -1,6 +1,6 @@
 # Реєстр контрактів (SSOT)
 
-> **Останнє оновлення**: 2026-03-01  
+> **Останнє оновлення**: 2026-03-24
 > **Навігація**: [docs/index.md](index.md)
 
 Усі публічні JSON Schema контракти живуть у `core/contracts/public/marketdata_v1/`.  
@@ -335,12 +335,21 @@ SMC поля — **на кореневому рівні frame**, не в `data` 
   },
   "narrative": NarrativeBlock,
   "session_levels": [SmcLevel, ...],
+  "zone_grades": {"ob_bull_...": {"score": 8, "grade": "A+", "factors": [...]}},
+  "bias_map": {"86400": "bearish", "14400": "bearish"},
+  "momentum_map": {"900": {"b": 3, "r": 1}},
+  "pd_state": {"range_high": 3340.0, "range_low": 3290.0, "equilibrium": 3315.0, "pd_percent": 71.2, "label": "PREMIUM"},
   "meta": {...}
 }
 ```
 
 > **Note**: `narrative` + `session_levels` з'являються в delta тільки на complete bars.
-> `zone_grades`, `bias_map`, `momentum_map` — тільки у full frame.
+> `zone_grades`, `bias_map`, `momentum_map`, `pd_state` — присутні у delta frame **тільки при complete bar** (`_any_complete=true`). Це "thick delta" (ADR-0042, DF-2): metadata оновлюється коли state реально змінюється.
+> Між complete bars metadata = stale від останнього full frame (прийнятно: M1 ≤1 хв, M5 ≤5 хв).
+> **Нові інваріанти (ADR-0042)**:
+> - **DF-1**: `applySmcDelta()` зберігає всі 8 полів SmcData (zone_grades, pd_state, bias_map, momentum_map не губляться).
+> - **DF-2**: "Thick delta" — metadata включається у delta frame при кожному complete bar.
+> - **DF-3**: FVG grace period (`fvg_grace_bars=3`) — FVG не evicts одразу при виході з lookback window.
 
 ### NarrativeBlock (ADR-0033 + ADR-0035)
 

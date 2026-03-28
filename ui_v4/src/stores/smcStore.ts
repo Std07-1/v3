@@ -97,6 +97,9 @@ export function applySmcDelta(current: SmcData, delta: SmcDeltaWire): SmcData {
         if (freshLevels.length > 0) levels = [...levels, ...freshLevels];
     }
 
+    // ADR-0043 P2: SmcDeltaWire не несе zone_grades/bias_map/momentum_map/pd_state —
+    // ці поля живуть на top-level RenderFrame і мержаться окремо у ChartPane (thick-delta block).
+    // trend_bias — єдиний metadata field у SmcDeltaWire.
     return { zones, swings, levels, trend_bias: delta.trend_bias ?? current.trend_bias ?? null, zone_grades: current.zone_grades, bias_map: current.bias_map, momentum_map: current.momentum_map, pd_state: current.pd_state };
 }
 

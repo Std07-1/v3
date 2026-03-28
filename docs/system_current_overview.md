@@ -1,6 +1,6 @@
 # Поточна система — Архітектурний огляд (SSOT)
 
-> **Останнє оновлення**: 2026-03-19  
+> **Останнє оновлення**: 2026-03-24
 > **Навігація**: [docs/index.md](index.md)
 
 Цей файл — SSOT-опис поточної архітектури системи. Див. [docs/index.md](index.md) для навігації по всій документації.
@@ -689,8 +689,11 @@ v3/
 ├── runtime/                       # ingest, store, I/O
 │   ├── ingest/
 │   │   ├── broker/
-│   │   │   └── fxcm/
-│   │   │       └── provider.py    # FxcmHistoryProvider (FXCM History API, PREVIOUS_CLOSE mode)
+│   │   │   ├── fxcm/
+│   │   │   │   └── provider.py    # FxcmHistoryProvider (FXCM History API, PREVIOUS_CLOSE mode)
+│   │   │   └── binance/
+│   │   │       └── provider.py    # BinanceHistoryProvider (Futures API, 24/7, anchor=0, ADR-0037)
+│   │   ├── binance_ingest_worker.py # Binance M1 ingest + backward crawl (ADR-0037/0038)
 │   │   ├── derive_engine.py       # DeriveEngine (cascade I/O: on_bar→buffer→derive→UDS commit, per-symbol lock, ADR-0002 Phase 2)
 │   │   ├── market_calendar.py     # MarketCalendar (single-break groups, UTC)
 │   │   ├── tick_agg.py            # TickAggregator (preview-plane, tf=60/180)
@@ -761,7 +764,8 @@ v3/
 │   │   └── gates/                 # gate_*.py (25 файлів)
 │   ├── repair/
 │   │   ├── htf_rebuild_from_fxcm.py  # controlled H4/D1 rebuild from FXCM raw
-│   │   └── htf_tail_sync_from_fxcm.py # tail sync from FXCM
+│   │   ├── htf_tail_sync_from_fxcm.py # tail sync from FXCM
+│   │   └── repair_m1_gaps.py         # M1 gap repair utility
 │   └── diag/
 │       ├── classify_h1_gaps.py    # класифікація H1 gap-ів
 │       ├── classify_m5_gaps.py    # класифікація M5 gap-ів
@@ -781,14 +785,14 @@ v3/
 │   ├── ui_api.md                  # HTTP API reference
 │   ├── redis_snapshot_design.md   # дизайн Redis snapshots
 │   ├── adr/                       # Architecture Decision Records (SSOT)
-│   │   ├── index.md               # реєстр усіх ADR (ADR-0001 … ADR-0041)
+│   │   ├── index.md               # реєстр усіх ADR (ADR-0001 … ADR-0044)
 │   │   ├── 0001-unified-data-store.md
 │   │   ├── 0002-derive-chain-from-m1.md
-│   │   └── ...                    # (41+ файлів)
+│   │   └── ...                    # (44+ файлів)
 │   ├── audit/                     # аудит прогресу P0–P6
 │   ├── runbooks/                  # production, coldstart, live_recover
 │   └── system_spec/               # UI v4 audit, gap analysis
-├── tests/                         # 38+ файлів, 778+ тестів
+├── tests/                         # 38+ файлів, 798+ тестів
 │   ├── test_smc_e1.py             # SMC E1: swings, structure, OB, FVG, engine
 │   ├── test_smc_runner.py         # SMC Runner: warmup, on_bar, delta, performance
 │   ├── test_smc_key_levels.py     # SMC key levels: PDH/PDL/DH/DL
