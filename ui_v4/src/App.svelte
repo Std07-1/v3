@@ -588,7 +588,7 @@
     flex-direction: column;
     width: 100vw;
     height: 100vh; /* fallback for older browsers */
-    height: 100dvh; /* dynamic viewport height — avoids mobile URL bar overlap */
+    height: var(--app-vh, 100dvh); /* P1: JS-driven viewport height, dvh fallback */
     overflow: hidden;
     /* background set dynamically via style:background= for theme switching */
     color: #d1d4dc;
@@ -765,5 +765,30 @@
     width: 8px;
     height: 8px;
     border-radius: 2px;
+  }
+
+  /* ═══ P5: Mobile responsive (768px breakpoint) ═══ */
+  @media (max-width: 768px) {
+    .top-right-bar {
+      gap: 6px;
+      padding: 4px 8px;
+      right: 2px;
+      top: 4px;
+    }
+    /* Hide non-essential controls: theme picker, style picker, brightness, diag */
+    .tr-picker-wrap,
+    .tr-brightness,
+    .tr-diag-btn,
+    .tr-sep {
+      display: none;
+    }
+    /* Keep only health dot + clock */
+    .tr-clock {
+      font-size: 10px;
+    }
+    /* Hide replay enter button on mobile */
+    .replay-enter-btn {
+      display: none;
+    }
   }
 </style>

@@ -13,13 +13,20 @@
             margin: 0;
             padding: 0;
             height: 100%;
-            height: 100dvh;
+            height: var(--app-vh, 100dvh);
             overflow: hidden;
+            overscroll-behavior: none;
             touch-action: pan-x pan-y;
             -ms-touch-action: pan-x pan-y;
+            -webkit-tap-highlight-color: transparent;
             background: #131722;
             color: #d1d4dc;
             font-family: system-ui, -apple-system, sans-serif;
+        }
+
+        /* P3: eliminate 300ms tap delay on interactive elements */
+        button, a, [role="button"] {
+            touch-action: manipulation;
         }
 
         #app {

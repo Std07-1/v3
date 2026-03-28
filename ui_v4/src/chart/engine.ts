@@ -20,6 +20,7 @@ import {
   loadTheme, saveTheme, loadCandleStyle, saveCandleStyle,
 } from './themes';
 import type { Candle, T_MS } from '../types';
+import { isMobile } from '../app/viewport';
 
 // ─── Helpers ───
 
@@ -170,11 +171,13 @@ export class ChartEngine {
         pinch: true,
       },
       // V3 parity: chart_adapter_lite.js:67-75
+      // P4: compact price scale on mobile (44px vs default 56px)
       rightPriceScale: {
         borderVisible: true,
         ticksVisible: true,
         autoScale: true,
         scaleMargins: { top: 0.12, bottom: 0.18 },
+        ...(isMobile ? { minimumWidth: 44 } : {}),
       },
       // V3 parity: chart_adapter_lite.js:76-98
       timeScale: {
@@ -664,6 +667,15 @@ export class ChartEngine {
   // ─── Getters for current settings ───
   get currentTheme(): ThemeName { return loadTheme(); }
   get currentCandleStyle(): CandleStyleName { return loadCandleStyle(); }
+
+  // ─── P4: Compact price scale toggle (mobile ↔ desktop) ───
+  setCompactPriceScale(compact: boolean): void {
+    this.chart.applyOptions({
+      rightPriceScale: {
+        minimumWidth: compact ? 44 : undefined,
+      },
+    });
+  }
 
   // ─── destroy ───
   destroy(): void {

@@ -1357,4 +1357,57 @@
         user-select: none;
         line-height: 1;
     }
+
+    /* ═══ P5: Mobile responsive (768px breakpoint) ═══ */
+    @media (max-width: 768px) {
+        .hud-stack {
+            left: 4px;
+            top: 0;
+        }
+        .hud {
+            padding: 4px 6px;
+        }
+        .hud-slot {
+            font-size: 12px;
+            padding: 2px 4px;
+        }
+        .hud-price {
+            font-size: 12px;
+        }
+        .hud-chg {
+            font-size: 10px;
+        }
+        /* Hide narrative inline on mobile — too much info for small screen */
+        .hud-narrative {
+            display: none;
+        }
+        /* Hide shell context text on mobile, keep stage label */
+        .shell-stctx {
+            display: none;
+        }
+        .shell-stlbl {
+            font-size: 9px;
+        }
+        /* Compact bias pills */
+        .hud-bias-pill {
+            font-size: 8px;
+            padding: 0 3px;
+        }
+        .hud-sub {
+            padding: 0 6px;
+            gap: 3px;
+        }
+        /* Dropdowns: wider on mobile for touch targets */
+        .hud-menu {
+            min-width: 140px;
+        }
+        .hud-menu-item {
+            padding: 8px 12px;
+            font-size: 14px;
+        }
+        .hud-menu-tf .hud-menu-item {
+            padding: 8px 10px;
+            font-size: 13px;
+        }
+    }
 </style>
