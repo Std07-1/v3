@@ -36,6 +36,7 @@ from core.smc.shell_composer import compose_shell_payload
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.tick_common import calendar_from_group
 from runtime.smc.signal_journal import SignalJournal
+from runtime.relay.signal_relay import fire_signal, fire_bias
 
 _log = logging.getLogger(__name__)
 
@@ -172,6 +173,9 @@ class SmcRunner:
             sorted(self._compute_tfs),
             self._lookback,
         )
+
+        # Relay: відстеження останнього bias для dedup
+        self._last_bias: Dict[Tuple[str, int], Optional[str]] = {}
 
         # ADR-0040: TDA Cascade runner (replaces ADR-0039 signals when enabled)
         self._tda_runner: Any = None
@@ -441,6 +445,35 @@ class SmcRunner:
             delta = self._engine.on_bar(cb)
             with self._lock:
                 self._last_deltas[(symbol, tf_s)] = delta
+            # ── Relay: надіслати сигнали у Cloudflare Worker ──────────────────
+            try:
+                for swing in (delta.new_swings or []):
+                    if swing.confirmed and swing.kind in (
+                        "bos_bull", "bos_bear", "choch_bull", "choch_bear"
+                    ):
+                        direction = "bullish" if "bull" in swing.kind else "bearish"
+                        fire_signal(
+                            symbol=swing.symbol,
+                            tf=swing.tf_s,
+                            signal_type=swing.kind.upper(),
+                            price=swing.price,
+                            direction=direction,
+                            details={"time_ms": swing.time_ms, "id": swing.id},
+                        )
+                bias_key = (delta.symbol, delta.tf_s)
+                if delta.trend_bias != self._last_bias.get(bias_key):
+                    self._last_bias[bias_key] = delta.trend_bias
+                    if delta.trend_bias is not None:
+                        fire_bias(
+                            symbol=delta.symbol,
+                            tf=delta.tf_s,
+                            bias=delta.trend_bias,
+                            confidence=0.75,
+                            context="bar_open_ms={}".format(delta.bar_open_ms),
+                        )
+            except Exception:
+                pass  # relay не блокує основний потік
+            # ── end relay ─────────────────────────────────────────────────────
             # Journal: compute narrative on every complete bar for this (sym, tf)
             # so ALL signals are captured, not just the viewer's current TF.
             if self._warmup_done and cb.complete:
