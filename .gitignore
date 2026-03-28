@@ -32,10 +32,10 @@ _tmp_jsonl_stress
 *.swo
 *~
 .agent/
+Untitled-*.txt
 
 # — Claude Code (local agent config + memory) ————————
-.claude/settings.local.json
-.claude/agent-memory/
+.claude/
 CLAUDE.md
 
 # — Copilot customization (local) ————————————————————
