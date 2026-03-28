@@ -447,9 +447,12 @@ class SmcRunner:
                 self._last_deltas[(symbol, tf_s)] = delta
             # ── Relay: надіслати сигнали у Cloudflare Worker ──────────────────
             try:
-                for swing in (delta.new_swings or []):
+                for swing in delta.new_swings or []:
                     if swing.confirmed and swing.kind in (
-                        "bos_bull", "bos_bear", "choch_bull", "choch_bear"
+                        "bos_bull",
+                        "bos_bear",
+                        "choch_bull",
+                        "choch_bear",
                     ):
                         direction = "bullish" if "bull" in swing.kind else "bearish"
                         fire_signal(

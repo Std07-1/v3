@@ -2,6 +2,7 @@
 SMC v3 → Cloudflare Worker Signal Relay
 Надсилає сигнали (BOS/CHoCH/bias) у Cloudflare KV через Worker API.
 """
+
 import asyncio
 import logging
 import os
@@ -42,9 +43,9 @@ async def _post(endpoint: str, payload: dict[str, Any]) -> bool:
 async def push_signal(
     symbol: str,
     tf: int,
-    signal_type: str,       # "BOS_BULL" | "BOS_BEAR" | "CHoCH_BULL" | "CHoCH_BEAR" | "OB"
+    signal_type: str,  # "BOS_BULL" | "BOS_BEAR" | "CHoCH_BULL" | "CHoCH_BEAR" | "OB"
     price: float,
-    direction: str,         # "bullish" | "bearish"
+    direction: str,  # "bullish" | "bearish"
     details: dict[str, Any] | None = None,
 ) -> bool:
     """Надіслати торговий сигнал при зміні структури ринку."""
@@ -62,8 +63,8 @@ async def push_signal(
 async def push_bias(
     symbol: str,
     tf: int,
-    bias: str,              # "bullish" | "bearish" | "neutral"
-    confidence: float,      # 0.0 – 1.0
+    bias: str,  # "bullish" | "bearish" | "neutral"
+    confidence: float,  # 0.0 – 1.0
     key_levels: dict[str, float] | None = None,
     context: str = "",
 ) -> bool:
@@ -84,9 +85,13 @@ def fire_signal(symbol, tf, signal_type, price, direction, details=None):
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            asyncio.ensure_future(push_signal(symbol, tf, signal_type, price, direction, details))
+            asyncio.ensure_future(
+                push_signal(symbol, tf, signal_type, price, direction, details)
+            )
         else:
-            loop.run_until_complete(push_signal(symbol, tf, signal_type, price, direction, details))
+            loop.run_until_complete(
+                push_signal(symbol, tf, signal_type, price, direction, details)
+            )
     except Exception as exc:
         logger.warning("relay fire_signal: %s", exc)
 
@@ -96,8 +101,12 @@ def fire_bias(symbol, tf, bias, confidence, key_levels=None, context=""):
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            asyncio.ensure_future(push_bias(symbol, tf, bias, confidence, key_levels, context))
+            asyncio.ensure_future(
+                push_bias(symbol, tf, bias, confidence, key_levels, context)
+            )
         else:
-            loop.run_until_complete(push_bias(symbol, tf, bias, confidence, key_levels, context))
+            loop.run_until_complete(
+                push_bias(symbol, tf, bias, confidence, key_levels, context)
+            )
     except Exception as exc:
         logger.warning("relay fire_bias: %s", exc)
