@@ -26,22 +26,22 @@ let _mql: MediaQueryList | null = null;
 export let isMobile = false;
 
 function _update(): void {
-  const vh = window.visualViewport?.height ?? window.innerHeight;
-  document.documentElement.style.setProperty('--app-vh', `${vh}px`);
+    const vh = window.visualViewport?.height ?? window.innerHeight;
+    document.documentElement.style.setProperty('--app-vh', `${vh}px`);
 }
 
 function _scheduleUpdate(): void {
-  if (_rafId !== null) return;
-  _rafId = requestAnimationFrame(() => {
-    _rafId = null;
-    _update();
-  });
+    if (_rafId !== null) return;
+    _rafId = requestAnimationFrame(() => {
+        _rafId = null;
+        _update();
+    });
 }
 
 function _onMobileChange(e: MediaQueryListEvent | MediaQueryList): void {
-  const mobile = 'matches' in e ? e.matches : (e as MediaQueryListEvent).matches;
-  isMobile = mobile;
-  document.body.classList.toggle('is-mobile', mobile);
+    const mobile = 'matches' in e ? e.matches : (e as MediaQueryListEvent).matches;
+    isMobile = mobile;
+    document.body.classList.toggle('is-mobile', mobile);
 }
 
 /**
@@ -51,38 +51,38 @@ function _onMobileChange(e: MediaQueryListEvent | MediaQueryList): void {
  * - Sets `body.is-mobile` class based on 768px breakpoint.
  */
 export function initViewportVars(): void {
-  // P1: viewport height
-  _update();
+    // P1: viewport height
+    _update();
 
-  const vv = window.visualViewport;
-  if (vv) {
-    vv.addEventListener('resize', _scheduleUpdate);
-    vv.addEventListener('scroll', _scheduleUpdate);
-  }
-  window.addEventListener('resize', _scheduleUpdate);
-  window.addEventListener('orientationchange', _scheduleUpdate);
-
-  // P2: mobile detection
-  _mql = window.matchMedia(MOBILE_BREAKPOINT);
-  _onMobileChange(_mql); // set initial state
-  _mql.addEventListener('change', _onMobileChange);
-
-  _cleanup = () => {
+    const vv = window.visualViewport;
     if (vv) {
-      vv.removeEventListener('resize', _scheduleUpdate);
-      vv.removeEventListener('scroll', _scheduleUpdate);
+        vv.addEventListener('resize', _scheduleUpdate);
+        vv.addEventListener('scroll', _scheduleUpdate);
     }
-    window.removeEventListener('resize', _scheduleUpdate);
-    window.removeEventListener('orientationchange', _scheduleUpdate);
-    _mql?.removeEventListener('change', _onMobileChange);
-    if (_rafId !== null) {
-      cancelAnimationFrame(_rafId);
-      _rafId = null;
-    }
-  };
+    window.addEventListener('resize', _scheduleUpdate);
+    window.addEventListener('orientationchange', _scheduleUpdate);
+
+    // P2: mobile detection
+    _mql = window.matchMedia(MOBILE_BREAKPOINT);
+    _onMobileChange(_mql); // set initial state
+    _mql.addEventListener('change', _onMobileChange);
+
+    _cleanup = () => {
+        if (vv) {
+            vv.removeEventListener('resize', _scheduleUpdate);
+            vv.removeEventListener('scroll', _scheduleUpdate);
+        }
+        window.removeEventListener('resize', _scheduleUpdate);
+        window.removeEventListener('orientationchange', _scheduleUpdate);
+        _mql?.removeEventListener('change', _onMobileChange);
+        if (_rafId !== null) {
+            cancelAnimationFrame(_rafId);
+            _rafId = null;
+        }
+    };
 }
 
 export function destroyViewportVars(): void {
-  _cleanup?.();
-  _cleanup = null;
+    _cleanup?.();
+    _cleanup = null;
 }

@@ -6,7 +6,7 @@
     import { onMount, onDestroy } from "svelte";
     import { derivePdBadge } from "../stores/shellState";
     import PdBadge from "./PdBadge.svelte";
-    import { BIAS_TF_LABELS, BIAS_TF_ORDER } from '../constants/tfLabels';
+    import { BIAS_TF_LABELS, BIAS_TF_ORDER } from "../constants/tfLabels";
 
     const {
         symbols,
@@ -25,6 +25,7 @@
         narrative = null as import("../types").NarrativeBlock | null,
         shell = null as import("../types").ShellPayload | null,
         pdState = null as import("../types").PdState | null,
+        utcTime = "" as string,
     }: {
         symbols: string[];
         tfs: string[];
@@ -42,6 +43,7 @@
         narrative?: import("../types").NarrativeBlock | null;
         shell?: import("../types").ShellPayload | null;
         pdState?: import("../types").PdState | null;
+        utcTime?: string;
     } = $props();
 
     // ─── Bias pills (ADR-0031, ADR-0043 D-15): SSOT у constants/tfLabels.ts ───
@@ -89,11 +91,20 @@
     let shellStageClass = $derived(shell ? `st-${shell.stage}` : "");
 
     // Session label for sub-row (from narrative)
+    const SESSION_SHORT: Record<string, string> = {
+        newyork: "NY",
+        london: "LDN",
+        asia: "ASIA",
+        closed: "",
+    };
     let sessionLabel = $derived.by(() => {
         if (!narrative) return "";
         const s = narrative.current_session ?? "";
+        if (!s) return "";
+        const short = SESSION_SHORT[s.toLowerCase()] ?? s.toUpperCase();
+        if (!short) return "";
         const kz = narrative.in_killzone ? " KZ" : "";
-        return s ? `${s}${kz}` : "";
+        return `${short}${kz}`;
     });
 
     function toggleBias(e: MouseEvent) {
@@ -311,6 +322,11 @@
                       : "No data"}
             ></span>
 
+            <!-- Clock (mobile only — replaces .top-right-bar clock) -->
+            {#if utcTime}
+                <span class="hud-clock">{utcTime}</span>
+            {/if}
+
             <!-- ADR-0033: Narrative inline (hidden when shell active) -->
             {#if narrative && !shell}
                 <span
@@ -450,7 +466,14 @@
                     </button>
                     <!-- Micro-card dropdown -->
                     {#if shell.micro_card && microCardOpen}
+                        <!-- svelte-ignore a11y_no_static_element_interactions -->
+                        <!-- svelte-ignore a11y_click_events_have_key_events -->
+                        <div
+                            class="mc-backdrop"
+                            onclick={() => (microCardOpen = false)}
+                        ></div>
                         <div class="shell-mc open">
+                            <div class="mc-grip"><span></span></div>
                             <div class="mc-grid">
                                 <div
                                     class="mc-field"
@@ -1208,11 +1231,22 @@
 
     .tact-session {
         font-size: 9px;
-        font-weight: 600;
+        font-weight: 700;
+        font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
         color: #ff9800;
-        background: rgba(255, 152, 0, 0.12);
-        padding: 1px 4px;
+        background: rgba(255, 152, 0, 0.1);
+        border: 1px solid rgba(255, 152, 0, 0.3);
+        padding: 1px 5px;
         border-radius: 3px;
+        letter-spacing: 0.5px;
+    }
+
+    /* ─── Micro-card backdrop (mobile only) ─── */
+    .mc-backdrop {
+        display: none;
+    }
+    .mc-grip {
+        display: none;
     }
 
     /* ─── Micro-card (dropdown from shell-stage) ─── */
@@ -1227,8 +1261,9 @@
         left: 0;
         min-width: 260px;
         overflow: hidden;
-        background: rgba(13, 15, 21, 0.94);
-        backdrop-filter: blur(16px);
+        background: rgba(13, 15, 21, 0.25);
+        backdrop-filter: blur(32px);
+        -webkit-backdrop-filter: blur(32px);
         border-left: 2px solid var(--sa, rgba(255, 255, 255, 0.15));
         border-bottom: 0.5px solid var(--sb, rgba(255, 255, 255, 0.07));
         border-radius: 0 6px 6px 6px;
@@ -1358,18 +1393,42 @@
         line-height: 1;
     }
 
+    /* Clock — hidden on desktop, visible on mobile */
+    .hud-clock {
+        display: none;
+    }
+
     /* ═══ P5: Mobile responsive (768px breakpoint) ═══ */
     @media (max-width: 768px) {
         .hud-stack {
-            left: 4px;
+            left: 2px;
             top: 0;
         }
+        .hud-clock {
+            display: block;
+            position: fixed;
+            bottom: 4px;
+            right: 4px;
+            font-size: 10px;
+            font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
+            opacity: 0.55;
+            white-space: nowrap;
+            z-index: 35;
+            pointer-events: none;
+        }
         .hud {
-            padding: 4px 6px;
+            padding: 3px 2px;
+        }
+        .hud-row {
+            gap: 5px;
         }
         .hud-slot {
             font-size: 12px;
             padding: 2px 4px;
+        }
+        /* Flush left edge of first slot with sub-row content */
+        .hud-row > .hud-slot:first-child {
+            padding-left: 1px;
         }
         .hud-price {
             font-size: 12px;
@@ -1394,7 +1453,7 @@
             padding: 0 3px;
         }
         .hud-sub {
-            padding: 0 6px;
+            padding: 0 3px;
             gap: 3px;
         }
         /* Dropdowns: wider on mobile for touch targets */
@@ -1408,6 +1467,71 @@
         .hud-menu-tf .hud-menu-item {
             padding: 8px 10px;
             font-size: 13px;
+        }
+        /* ─── Bottom-sheet micro-card on mobile ─── */
+        .mc-backdrop {
+            display: block;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.45);
+            z-index: 199;
+            animation: mc-fade 180ms ease;
+        }
+        @keyframes mc-fade {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
+        }
+        .shell-mc {
+            position: fixed;
+            top: auto;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            min-width: unset;
+            width: 100%;
+            border-radius: 14px 14px 0 0;
+            border-left: none;
+            border-bottom: none;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            z-index: 200;
+            max-height: 60vh;
+            overflow-y: auto;
+            animation: mc-slide-up 220ms cubic-bezier(0.22, 1, 0.36, 1);
+        }
+        @keyframes mc-slide-up {
+            from {
+                opacity: 0;
+                transform: translateY(100%);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        .mc-grip {
+            display: flex;
+            justify-content: center;
+            padding: 8px 0 4px;
+        }
+        .mc-grip span {
+            width: 32px;
+            height: 4px;
+            border-radius: 2px;
+            background: rgba(255, 255, 255, 0.18);
+        }
+        .mc-grid {
+            gap: 8px 16px;
+            padding: 8px 16px 12px;
+        }
+        .mc-label {
+            font-size: 9px;
+        }
+        .mc-val {
+            font-size: 12px;
         }
     }
 </style>

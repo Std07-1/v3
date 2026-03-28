@@ -14,6 +14,7 @@ export type PdColorVariant = 'aligned-green' | 'aligned-red' | 'amber' | 'neutra
 
 export interface PdBadgeResult {
     label: string;        // "DISCOUNT 38%" | "PREMIUM 71%" | "EQ"
+    shortLabel: string;   // "DIS 38%" | "PREM 71%" | "EQ" (mobile)
     percent: number;      // 0–100
     colorVariant: PdColorVariant;
 }
@@ -46,26 +47,29 @@ export function derivePdBadge(
 
     // EQ → neutral regardless of direction
     if (pdLabel === 'EQ') {
-        return { label: 'EQ', percent: pct, colorVariant: 'neutral' };
+        return { label: 'EQ', shortLabel: 'EQ', percent: pct, colorVariant: 'neutral' };
     }
 
     const displayLabel = `${pdLabel} ${Math.round(pct)}%`;
+    const shortMap: Record<string, string> = { DISCOUNT: 'DIS', PREMIUM: 'PREM' };
+    const shortDisplayLabel = `${shortMap[pdLabel] ?? pdLabel} ${Math.round(pct)}%`;
 
     // No direction available (WAIT stage, no scenarios) → fallback VH-F1
     if (!direction) {
         return {
             label: displayLabel,
+            shortLabel: shortDisplayLabel,
             percent: pct,
             colorVariant: pdLabel === 'DISCOUNT' ? 'aligned-green' : 'aligned-red',
         };
     }
 
     // Directional coloring (PD-4 invariant: amber = frontend-only)
-    if (pdLabel === 'DISCOUNT' && direction === 'long') return { label: displayLabel, percent: pct, colorVariant: 'aligned-green' };
-    if (pdLabel === 'PREMIUM' && direction === 'short') return { label: displayLabel, percent: pct, colorVariant: 'aligned-red' };
-    if (pdLabel === 'PREMIUM' && direction === 'long') return { label: displayLabel, percent: pct, colorVariant: 'amber' };
-    if (pdLabel === 'DISCOUNT' && direction === 'short') return { label: displayLabel, percent: pct, colorVariant: 'amber' };
+    if (pdLabel === 'DISCOUNT' && direction === 'long') return { label: displayLabel, shortLabel: shortDisplayLabel, percent: pct, colorVariant: 'aligned-green' };
+    if (pdLabel === 'PREMIUM' && direction === 'short') return { label: displayLabel, shortLabel: shortDisplayLabel, percent: pct, colorVariant: 'aligned-red' };
+    if (pdLabel === 'PREMIUM' && direction === 'long') return { label: displayLabel, shortLabel: shortDisplayLabel, percent: pct, colorVariant: 'amber' };
+    if (pdLabel === 'DISCOUNT' && direction === 'short') return { label: displayLabel, shortLabel: shortDisplayLabel, percent: pct, colorVariant: 'amber' };
 
     // Should not reach — but safe fallback
-    return { label: displayLabel, percent: pct, colorVariant: 'neutral' };
+    return { label: displayLabel, shortLabel: shortDisplayLabel, percent: pct, colorVariant: 'neutral' };
 }

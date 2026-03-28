@@ -14,7 +14,8 @@
 
 {#if badge}
     <span class="pd-chip {badge.colorVariant}">
-        {badge.label}
+        <span class="pd-full">{badge.label}</span>
+        <span class="pd-short">{badge.shortLabel}</span>
     </span>
 {/if}
 
@@ -52,5 +53,18 @@
         color: rgba(255, 255, 255, 0.5);
         border-color: rgba(255, 255, 255, 0.12);
         background: rgba(255, 255, 255, 0.04);
+    }
+
+    /* Mobile: show short label, hide full */
+    .pd-short {
+        display: none;
+    }
+    @media (max-width: 768px) {
+        .pd-full {
+            display: none;
+        }
+        .pd-short {
+            display: inline;
+        }
     }
 </style>

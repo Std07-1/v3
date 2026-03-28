@@ -481,6 +481,7 @@
         narrative={cachedNarrative}
         shell={cachedShell}
         pdState={cachedPdState}
+        utcTime={utcStr + " UTC"}
       />
     </div>
     <!-- ADR-0027: Replay controls bar (visible only when replay active) -->
@@ -588,7 +589,10 @@
     flex-direction: column;
     width: 100vw;
     height: 100vh; /* fallback for older browsers */
-    height: var(--app-vh, 100dvh); /* P1: JS-driven viewport height, dvh fallback */
+    height: var(
+      --app-vh,
+      100dvh
+    ); /* P1: JS-driven viewport height, dvh fallback */
     overflow: hidden;
     /* background set dynamically via style:background= for theme switching */
     color: #d1d4dc;
@@ -769,25 +773,13 @@
 
   /* ═══ P5: Mobile responsive (768px breakpoint) ═══ */
   @media (max-width: 768px) {
+    /* Hide entire top-right bar — clock moved to HUD row */
     .top-right-bar {
-      gap: 6px;
-      padding: 4px 8px;
-      right: 2px;
-      top: 4px;
+      display: none !important;
     }
-    /* Hide non-essential controls: theme picker, style picker, brightness, diag */
-    .tr-picker-wrap,
-    .tr-brightness,
-    .tr-diag-btn,
-    .tr-sep {
-      display: none;
-    }
-    /* Keep only health dot + clock */
-    .tr-clock {
-      font-size: 10px;
-    }
-    /* Hide replay enter button on mobile */
-    .replay-enter-btn {
+    /* Hide replay controls on mobile */
+    .replay-enter-btn,
+    .replay-badge {
       display: none;
     }
   }

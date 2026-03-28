@@ -916,4 +916,11 @@
     border-color: rgba(255, 152, 0, 0.35);
     background: none;
   }
+
+  /* ═══ Mobile: hide SMC panel ═══ */
+  @media (max-width: 768px) {
+    .smc-panel {
+      display: none;
+    }
+  }
 </style>
