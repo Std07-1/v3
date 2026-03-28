@@ -592,11 +592,11 @@ def _synthesize_impl(
     elif primary_zone and alignment == "aligned" and direction == htf_trade_dir:
         mode, sub_mode = "trade", "aligned"
     elif primary_zone and alignment == "aligned":
-        # HTF aligned but zone opposes → counter-trend
-        mode, sub_mode = "trade", "counter"
+        # HTF aligned but zone opposes → counter-trend → wait (D-02)
+        mode, sub_mode = "wait", "counter"
         warnings.append("counter_trend")
     elif primary_zone and alignment in ("mixed", "partial"):
-        mode, sub_mode = "trade", "reduced"
+        mode, sub_mode = "wait", "reduced"
     else:
         mode, sub_mode = "wait", ""
 

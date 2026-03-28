@@ -16,7 +16,7 @@ Trade management (Stage 5) is external — called per-bar after entry.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from core.model.bars import CandleBar
 from core.smc.tda.types import (
@@ -46,6 +46,7 @@ def run_tda_cascade(
     day_ms: int,
     cfg: TdaCascadeConfig,
     now_ms: int,
+    diagnostics: Optional[Dict[str, Any]] = None,
 ) -> Optional[TdaSignal]:
     """Run the full 4-stage TDA cascade for one symbol and one day.
 
@@ -62,25 +63,58 @@ def run_tda_cascade(
         day_ms: Epoch ms of trading day at 00:00 UTC.
         cfg: TDA cascade config (S5 SSOT).
         now_ms: Current epoch ms (for created_ms / updated_ms).
+        diagnostics: Optional dict — populated with per-stage results for logging.
+            Keys: "failed_stage", "s1_macro", "s2_h4", "s3_session", "s4_entry",
+                  "d1_count", "h4_count", "m15_count".
 
     Returns:
         TdaSignal with initial trade state, or None.
     """
+    diag = diagnostics if diagnostics is not None else {}
+    diag["d1_count"] = len(d1_bars)
+    diag["h4_count"] = len(h4_bars)
+    diag["m15_count"] = len(m15_bars)
+
     # ── Stage 1: D1 Macro Direction ──
     macro = get_macro_direction(d1_bars, cfg)
+    diag["s1_macro"] = (
+        {
+            "direction": macro.direction,
+            "method": macro.method,
+            "confidence": macro.confidence,
+        }
+        if macro
+        else None
+    )
     if macro is None or macro.direction == "CFL":
+        diag["failed_stage"] = "s1_macro"
         return None
 
     # ── Stage 2: H4 Confirmation ──
     h4 = h4_confirmed(h4_bars, macro.direction, day_ms, cfg)
+    diag["s2_h4"] = (
+        {"confirmed": h4.confirmed, "reason": h4.reason, "h4_count": h4.h4_bar_count}
+        if h4
+        else None
+    )
     if h4 is None or not h4.confirmed:
+        diag["failed_stage"] = "s2_h4"
         return None
 
     # ── Stage 3: Session Narrative ──
     session = get_session_narrative(h1_bars, m15_bars, macro.direction, day_ms, cfg)
+    diag["s3_session"] = {
+        "narrative": session.narrative,
+        "sweep_direction": session.sweep_direction,
+        "asia_high": round(session.asia_high, 2) if session.asia_high else 0,
+        "asia_low": round(session.asia_low, 2) if session.asia_low else 0,
+        "asia_bars": session.asia_bar_count,
+    }
     if session.narrative in ("COUNTER_TREND", "NO_NARRATIVE"):
+        diag["failed_stage"] = "s3_session"
         return None
     if session.sweep_direction is None or session.sweep_price is None:
+        diag["failed_stage"] = "s3_session"
         return None
 
     # ── Stage 4: M15 FVG Entry ──
@@ -91,7 +125,17 @@ def run_tda_cascade(
         day_ms,
         cfg,
     )
+    diag["s4_entry"] = (
+        {
+            "entry_price": round(entry.entry_price, 2),
+            "direction": entry.direction,
+            "rr": round(entry.risk_reward, 2),
+        }
+        if entry
+        else None
+    )
     if entry is None:
+        diag["failed_stage"] = "s4_entry"
         return None
 
     # ── Grading ──
@@ -100,7 +144,12 @@ def run_tda_cascade(
 
     if cfg.grade_enabled:
         if _GRADE_ORDER.get(grade, 0) < _GRADE_ORDER.get(cfg.min_grade_for_entry, 0):
+            diag["failed_stage"] = "grade_gate"
+            diag["grade"] = grade
+            diag["grade_score"] = score
             return None
+
+    diag["failed_stage"] = None  # all stages passed
 
     # ── Assemble signal ──
     signal_id = make_tda_signal_id(symbol, date_str)

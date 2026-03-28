@@ -408,7 +408,8 @@
         },
         "signal_journal": {
             "enabled": true,
-            "path": "data_v3/_signals"
+            "path": "data_v3/_signals",
+            "execution_tf_s": 900
         },
         "context_stack": {
             "enabled": true,

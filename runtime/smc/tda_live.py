@@ -193,6 +193,7 @@ class TdaLiveRunner:
             return
 
         try:
+            diag: Dict[str, Any] = {}
             sig = run_tda_cascade(
                 symbol,
                 date_str,
@@ -203,6 +204,7 @@ class TdaLiveRunner:
                 day_ms,
                 self._cfg,
                 now_ms,
+                diagnostics=diag,
             )
         except Exception as exc:
             _log.warning("TDA_CASCADE_RUN_ERR sym=%s err=%s", symbol, exc)
@@ -212,7 +214,16 @@ class TdaLiveRunner:
         self._last_cascade_day_ms[symbol] = day_ms
 
         if sig is None:
-            _log.info("TDA_CASCADE_NO_SIGNAL sym=%s date=%s", symbol, date_str)
+            _log.info(
+                "TDA_CASCADE_NO_SIGNAL sym=%s date=%s failed=%s d1=%d h4=%d m15=%d diag=%s",
+                symbol,
+                date_str,
+                diag.get("failed_stage", "?"),
+                diag.get("d1_count", 0),
+                diag.get("h4_count", 0),
+                diag.get("m15_count", 0),
+                {k: v for k, v in diag.items() if k.startswith("s") or k == "grade"},
+            )
             return
 
         self._signals[symbol] = sig

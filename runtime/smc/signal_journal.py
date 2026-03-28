@@ -1,8 +1,8 @@
 """
 runtime/smc/signal_journal.py — Автоматичний журнал сигналів (JSONL).
 
-Фіксує стани narrative коли mode="trade" з дедуплікацією по (symbol, tf_s).
-Логує: появу сигналу, зміну trigger state, зміну primary zone, вихід з trade mode.
+Фіксує стани narrative коли mode="trade" з дедуплікацією по (symbol, tf_s).Логує тільки на execution TF (config: execution_tf_s, default M15=900).
+Тільки trigger ∈ {ready, triggered} генерує trade_entered; інші → signal_approaching.Логує: появу сигналу, зміну trigger state, зміну primary zone, вихід з trade mode.
 
 **Lifecycle Tracking:**
 Поки сигнал активний, трекає MFE/MAE (Max Favorable / Adverse Excursion).
@@ -119,6 +119,7 @@ class SignalJournal:
         journal_cfg = config.get("smc", {}).get("signal_journal", {})
         self._enabled = bool(journal_cfg.get("enabled", False))
         self._base_dir = str(journal_cfg.get("path", "data_v3/_signals"))
+        self._execution_tf_s = int(journal_cfg.get("execution_tf_s", 900))
         self._lock = threading.Lock()
         # (symbol, tf_s) → (mode, primary_zone_id, trigger)
         self._last_state: Dict[Tuple[str, int], Tuple[str, str, str]] = {}
@@ -201,6 +202,9 @@ class SignalJournal:
     ) -> None:
         """Фіксує narrative state якщо він змінився. Оновлює lifecycle tracking."""
         if not self._enabled:
+            return
+        # D-01: логуємо тільки з execution TF (default M15=900)
+        if tf_s != self._execution_tf_s:
             return
 
         primary_zone_id = ""
@@ -293,7 +297,10 @@ class SignalJournal:
     ) -> Optional[str]:
         """Класифікує зміну стану narrative в тип події."""
         if mode == "trade" and prev_mode != "trade":
-            return "trade_entered"
+            # D-03: trade_entered тільки якщо trigger ready/triggered
+            if trigger in ("ready", "triggered"):
+                return "trade_entered"
+            return "signal_approaching"
         if mode != "trade" and prev_mode == "trade":
             return "trade_exited"
         if mode == "trade":

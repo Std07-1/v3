@@ -180,9 +180,10 @@ def test_trade_reduced_mixed_htf():
         snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config()
     )
 
-    assert nb.mode == "trade"
+    assert nb.mode == "wait"  # D-02: mixed HTF = wait, not trade
     assert nb.sub_mode == "reduced"
-    assert "reduced" in nb.headline.lower() or "змішаний" in nb.headline.lower()
+    # D-02: wait mode gets generic wait headline (no scenarios built)
+    assert "чекаємо" in nb.headline.lower()
 
 
 # ── 4. test_wait_no_setup ────────────────────────────────
