@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /ws
+
+Sitemap: https://aione-smc.com/sitemap.xml

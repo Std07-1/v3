@@ -3,7 +3,9 @@
 
 <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="description"
+        content="AiOne SMC Trading Platform — real-time institutional order flow analysis, Smart Money Concepts overlay, multi-timeframe charts" />
     <title>AiOne Trading — UI v4</title>
     <style>
         html,
@@ -11,6 +13,10 @@
             margin: 0;
             padding: 0;
             height: 100%;
+            height: 100dvh;
+            overflow: hidden;
+            touch-action: pan-x pan-y;
+            -ms-touch-action: pan-x pan-y;
             background: #131722;
             color: #d1d4dc;
             font-family: system-ui, -apple-system, sans-serif;
@@ -20,6 +26,8 @@
             height: 100%;
         }
     </style>
+    <script defer src='https://static.cloudflareinsights.com/beacon.min.js'
+        data-cf-beacon='{"token": "9db338cac0c64fc8b1990fe45d7f0278"}'></script>
 </head>
 
 <body>

@@ -214,7 +214,7 @@
 
     ro = new ResizeObserver(() => {
       const r = wrapperRef.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
       overlayRenderer.resize(Math.round(r.width), Math.round(r.height), dpr);
       // Entry 078 §6: no auto-scroll on resize (user controls scroll position)
     });
@@ -449,7 +449,9 @@
   // TODO: читати hide_mitigated з frame.meta.config коли сервер його передаватиме
   $effect(() => {
     const HIDE_MITIGATED = false; // MVP: вимкнено, сервер фільтрує через smc.hide_mitigated
-    const displayData = HIDE_MITIGATED ? filterMitigatedZones(smcData) : smcData;
+    const displayData = HIDE_MITIGATED
+      ? filterMitigatedZones(smcData)
+      : smcData;
     overlayRenderer?.patch(displayData);
   });
 

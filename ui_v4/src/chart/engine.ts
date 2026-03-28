@@ -134,6 +134,7 @@ export class ChartEngine {
     // ─── Chart options (V3 parity: DARK_CHART_OPTIONS, chart_adapter_lite.js:101-148) ───
     this.chart = createChart(container, {
       autoSize: true,
+      devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
       layout: {
         background: { color: 'transparent' },
         textColor: '#d5d5d5',

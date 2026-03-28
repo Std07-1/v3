@@ -417,8 +417,9 @@
       );
       return;
     }
+    const message = ev.message;
     diagStore.setFeError({
-      message: ev.message ?? "unknown error",
+      message: message,
       stack: ev.error?.stack,
       ts_ms: Date.now(),
     });
@@ -586,7 +587,8 @@
     display: flex;
     flex-direction: column;
     width: 100vw;
-    height: 100vh;
+    height: 100vh; /* fallback for older browsers */
+    height: 100dvh; /* dynamic viewport height — avoids mobile URL bar overlap */
     overflow: hidden;
     /* background set dynamically via style:background= for theme switching */
     color: #d1d4dc;
@@ -605,6 +607,10 @@
     flex: 1 1 auto;
     min-width: 0;
     position: relative;
+    touch-action: none; /* prevent browser gestures conflicting with chart pan/zoom */
+    -webkit-touch-callout: none; /* disable iOS callout on long-press */
+    -webkit-user-select: none;
+    user-select: none;
   }
 
   /* Entry 078: Compact top-right bar — no bg, shifted left from price axis */

@@ -129,7 +129,7 @@ export class DrawingsRenderer {
     // DPR rail
     this.ro = new ResizeObserver((entries) => {
       const { width, height } = entries[0].contentRect;
-      this.dpr = window.devicePixelRatio || 1;
+      this.dpr = Math.min(window.devicePixelRatio || 1, 2);
 
       this.canvas.width = Math.floor(width * this.dpr);
       this.canvas.height = Math.floor(height * this.dpr);
