@@ -1,272 +1,555 @@
-# UI API Reference (HTTP)
+# UI API Reference (WebSocket + HTTP)
 
-> **⚠️ DEPRECATED / STALE**: Цей документ описує HTTP REST API (`/api/bars`, `/api/updates`, `/api/overlay` тощо), які **НЕ реалізовані** в поточній архітектурі. Фактична архітектура — **WS-only**: єдиний HTTP endpoint — `/api/status` (health check), всі дані (bars, deltas, SMC overlay, config, scrollback) передаються через WebSocket `/ws` з протоколом `ui_v4_v2`. Див. `runtime/ws/ws_server.py` та `ui_v4/src/ws/` для актуального API.
-
-> **Останнє оновлення**: 2026-02-15 (потребує повного переписування)  
+> **Останнє оновлення**: 2026-03-29  
 > **Навігація**: [docs/index.md](index.md)  
-> **Принцип**: UI = read-only renderer. Тіки напряму не бачить. Не має доменної логіки.
+> **SSOT код**: `runtime/ws/ws_server.py`, `runtime/ws/candle_map.py`  
+> **SSOT клієнт**: `ui_v4/src/ws/`, `ui_v4/src/app/frameRouter.ts`  
+> **Принцип**: UI = read-only renderer (I1, G1). Тіки напряму не бачить. Не має доменної логіки.
 
-Усі endpoint-и обслуговуються процесом `runtime/ws/ws_server.py` (same-origin, порт 8000).  
+Архітектура — **WS-only**: всі дані (bars, SMC overlay, config, scrollback) передаються через
+WebSocket `/ws` з протоколом `ui_v4_v2`. Єдиний HTTP endpoint — `/api/status` (health check).
+
+Процес: `runtime/ws/ws_server.py` (aiohttp, порт 8000, same-origin).  
 UDS ініціалізується з `role="reader"` — будь-яка спроба запису → `RuntimeError`.
 
 ---
 
 ## Зміст
 
-1. [Таблиця endpoint-ів](#таблиця-endpoint-ів)
-2. [Деталі кожного endpoint](#деталі-кожного-endpoint)
-3. [Policy SSOT (/api/config)](#apiconfig)
-4. [Guards та rails](#guards-та-rails)
-5. [Кеш та TTL](#кеш-та-ttl)
+1. [HTTP Endpoints](#1-http-endpoints)
+2. [WebSocket протокол](#2-websocket-протокол)
+3. [Client → Server (actions)](#3-client--server-actions)
+4. [Server → Client (frames)](#4-server--client-frames)
+5. [Delta Loop](#5-delta-loop)
+6. [SMC інтеграція](#6-smc-інтеграція)
+7. [Candle Mapping](#7-candle-mapping)
+8. [Guards та rails](#8-guards-та-rails)
+9. [Конфігурація](#9-конфігурація)
+10. [Reconnect та відмовостійкість](#10-reconnect-та-відмовостійкість)
 
 ---
 
-## Таблиця endpoint-ів
+## 1. HTTP Endpoints
 
-| Endpoint | Метод | Призначення | Контракт | Джерело даних | Кеш |
-|---|---|---|---|---|---|
-| `/api/config` | GET | Policy SSOT для UI | — | `config.json` (mtime cache ~0.5s) | no-cache |
-| `/api/status` | GET | Статус UDS/UI, prime_ready | — | `uds.snapshot_status()` | no-cache |
-| `/api/bars` | GET | Вікно барів (cold-load / scrollback) | `window_v1.json` | UDS `read_window()` / `read_preview_window()` | no-cache |
-| `/api/latest` | GET | Alias для `/api/bars` (legacy) | `window_v1.json` | UDS `read_window()` | no-cache |
-| `/api/updates` | GET | Інкрементальні upsert events (polling) | `updates_v1.json` | UDS `read_updates()` / preview updates | no-cache |
-| `/api/overlay` | GET | Ephemeral preview bar для TF≥M5 | — | UDS `read_preview_window()` | no-cache |
-| `/api/symbols` | GET | Список доступних символів | — | `config.json → symbols` | no-cache |
-| `/api/gaps` | GET | Gap report з tail integrity scanner | — | `reports/tail_audit/summary.json` | no-cache |
-| `/` | GET | Статичний UI (index.html) | — | `ui_v4/dist/` | no-cache (dev) |
-| Static assets | GET | JS/CSS/images | — | `ui_v4/dist/assets/` | hashed filenames |
+| Endpoint | Метод | Призначення | Кеш |
+|---|---|---|---|
+| `/api/status` | GET | Health check (UDS стан, boot_id, кількість WS клієнтів) | no-cache |
+| `/` | GET | SPA fallback → `ui_v4/dist/index.html` | no-cache |
+| `/assets/*` | GET | Статичні файли Vite build | hashed filenames |
 
-> **Усі API endpoint-и повертають `Content-Type: application/json; charset=utf-8`.**  
-> **Статичні файли**: no-cache headers (`Cache-Control: no-store, no-cache`, `Pragma: no-cache`, `Expires: 0`).
+> Інших HTTP endpoints немає. `/api/bars`, `/api/updates`, `/api/overlay`, `/api/config` — **не існують**.
 
----
-
-## Деталі кожного endpoint
-
-### /api/config
-
-**Призначення**: видати policy SSOT для UI один раз на старті.
-
-**Відповідь**:
+### GET /api/status
 
 ```json
 {
-  "ok": true,
-  "ui_debug": false,
-  "policy_version": "20260215-001",
-  "build_id": "20260215T120000Z",
-  "window_policy": {
-    "scrollback_chunk_by_tf_s": { "300": 1000, ... },
-    "cold_start_by_tf_s": { "300": 5000, ... },
-    "max_bars_by_tf_s": { "300": 20000, ... }
-  },
-  "tf_allowlist": [60, 180, 300, 900, 1800, 3600, 14400, 86400],
-  "preview_tf_allowlist": [60, 180],
-  "config_invalid": false,
-  "warnings": []
+  "status": "ok",
+  "boot_id": "a1b2c3d4e5f67890",
+  "ws_clients": 2,
+  "server_ts_ms": 1711929600000
 }
 ```
 
-**Rail**: серверний sanity-check (`warmup < cold_start` для show-immediately TF). Якщо порушено → `config_invalid=true`, `warnings[]` з деталями, лог `POLICY_CONFIG_INVALID`.
-
-**UI поведінка при відмові**: fallback у hard-coded константи + loud лог `UI_POLICY_FALLBACK_ACTIVE`.
+| Поле | Тип | Опис |
+|---|---|---|
+| `status` | `"ok"` \| `"no_uds"` | `"no_uds"` якщо UDS не ініціалізовано |
+| `boot_id` | string (hex16) | Унікальний ID процесу, змінюється при рестарті |
+| `ws_clients` | int | Кількість активних WS підключень |
+| `server_ts_ms` | int | Серверний час (epoch ms) |
 
 ---
 
-### /api/status
+## 2. WebSocket протокол
 
-**Призначення**: моніторинг та діагностика стану UDS/UI.
+| Параметр | Значення |
+|---|---|
+| **Endpoint** | `GET /ws` → WebSocket upgrade |
+| **Schema version** | `"ui_v4_v2"` (константа `SCHEMA_V`) |
+| **Бібліотека (сервер)** | aiohttp `WebSocketResponse` |
+| **Бібліотека (клієнт)** | native browser `WebSocket` |
+| **Subprotocol** | немає |
 
-**Параметри**: немає.
+### Connection flow
 
-**Відповідь** (приклад):
+```
+Client                          Server
+  │                               │
+  ├─── WS handshake /ws ────────►│
+  │                               ├─── config frame (symbols, tfs, defaults)
+  │                               ├─── full frame (default symbol+tf, bars + SMC)
+  │                               │
+  │◄── delta frames (кожні 1s) ──┤  (global delta loop)
+  │◄── heartbeat (кожні 30s) ────┤
+  │                               │
+  ├─── {"action":"switch"} ──────►├─── full frame (new symbol+tf)
+  ├─── {"action":"scrollback"} ──►├─── scrollback frame (older bars)
+  │                               │
+```
+
+1. Клієнт відкриває `new WebSocket(url)` — без subprotocol header
+2. Сервер створює `WsSession` з унікальним `client_id` (12-char hex UUID)
+3. Сервер надсилає **config frame** (список символів, TF, defaults)
+4. Якщо UDS доступний — сервер надсилає **full frame** для пари за замовчуванням (`symbols[0]`, `M30`)
+5. Якщо UDS недоступний — heartbeat frame як hello
+6. Сервер запускає per-connection heartbeat loop (кожні `heartbeat_interval_s`, default 30s)
+7. Глобальний delta loop broadcastить deltas всім підписаним сесіям
+
+---
+
+## 3. Client → Server (actions)
+
+Всі повідомлення — JSON з полем `"action"`. Визначені в `ui_v4/src/types.ts` як `WsAction` union type.
+
+### 3.1 `switch` — переключити символ/TF
 
 ```json
 {
-  "ok": true,
-  "status": {
-    "boot_id": "20260215T120000Z",
-    "prime_ready": true,
-    "prime_ready_payload": {
-      "boot_id": "20260215T120000Z",
-      "ready": true,
-      "prime_tail_len_by_tf_s": { "300": 8000, "14400": 256 }
-    },
-    "redis_spec": { "host": "127.0.0.1", "port": 6379, "db": 1 },
-    "disk_bootstrap_reads_total": 0,
-    "ram_stats": { ... },
+  "action": "switch",
+  "symbol": "XAU/USD",
+  "tf": "M30"
+}
+```
+
+| Поле | Тип | Опис |
+|---|---|---|
+| `symbol` | string | Символ (підтримує `_` → `/` нормалізацію, напр. `"XAU_USD"` → `"XAU/USD"`) |
+| `tf` | string | TF label (`"M15"`, `"1h"`, `"H4"`) або seconds як рядок (`"900"`) |
+
+**Поведінка**: валідує symbol проти `symbols_set`, tf проти `tf_allowlist`. При успіху:
+оновлює сесію, скидає `last_update_seq` та scrollback counter, надсилає новий **full frame**.
+
+**При помилці**: надсилає full frame з порожніми candles + warning `["unknown_symbol"]` або `["tf_not_allowed"]`.
+
+**Client guard**: `actions.ts` блокує відправку якщо symbol/tf не в server allowlist.
+
+### 3.2 `scrollback` — запит старших барів
+
+```json
+{
+  "action": "scrollback",
+  "to_ms": 1711929600000
+}
+```
+
+| Поле | Тип | Опис |
+|---|---|---|
+| `to_ms` | int | Epoch ms — найстаріший `open_time_ms` для завантаження |
+
+**Поведінка**: читає з UDS `read_window(to_open_ms=to_ms)`, надсилає **scrollback frame**.
+
+**Rails**:
+- Макс. 12 chunks per session per symbol+tf (`SCROLLBACK_MAX_STEPS`)
+- Cooldown 0.5s між запитами
+- Chunk limit: `min(cold_start_bars, 500)`
+- При порушенні — порожній scrollback frame з warning
+
+### 3.3 Client-only actions (сервер НЕ обробляє)
+
+Ці actions визначені в клієнті, але сервер повертає `unknown_action` error frame:
+
+| Action | Призначення | Чому client-only |
+|---|---|---|
+| `overlay_toggle` | Видимість overlay шарів | Стан UI, не потребує серверу |
+| `drawing_add/update/remove` | Малювання на графіку | ADR-0007: drawings = client-side |
+| `replay_*` (`seek/step/play/pause/exit`) | Client-side replay | ADR-0027: replay локальний |
+
+---
+
+## 4. Server → Client (frames)
+
+Всі повідомлення мають envelope:
+
+```json
+{
+  "type": "render_frame",
+  "frame_type": "<тип>",
+  "meta": {
+    "schema_v": "ui_v4_v2",
+    "seq": 42,
+    "server_ts_ms": 1711929600000,
+    "boot_id": "a1b2c3d4e5f67890",
     "warnings": []
+  },
+  ...
+}
+```
+
+| Поле meta | Тип | Опис |
+|---|---|---|
+| `schema_v` | string | Версія протоколу (клієнт відхиляє якщо ≠ `"ui_v4_v2"`) |
+| `seq` | int | Per-connection монотонний лічильник (клієнт drop якщо `seq ≤ lastSeq`) |
+| `server_ts_ms` | int | Серверний час |
+| `boot_id` | string | ID процесу (при зміні → клієнт робить повний reset) |
+| `warnings` | string[] | Деградації, guards, rails |
+
+### 4.1 `config` frame
+
+**Тригер**: одразу при підключенні (перед full frame).
+
+```json
+{
+  "type": "render_frame",
+  "frame_type": "config",
+  "config": {
+    "symbols": ["XAU/USD", "XAG/USD", "BTCUSDT", "ETHUSDT"],
+    "tfs": ["M1", "M3", "M5", "M15", "M30", "H1", "H4", "D1"],
+    "default_symbol": "XAU/USD",
+    "default_tf": "M30"
+  },
+  "meta": { ... }
+}
+```
+
+**Client**: зберігає в `serverConfig` store. Не потрапляє в `currentFrame`.
+
+### 4.2 `full` frame
+
+**Тригер**: при підключенні (після config), при `switch` action.
+
+```json
+{
+  "type": "render_frame",
+  "frame_type": "full",
+  "symbol": "XAU/USD",
+  "tf": "M30",
+  "candles": [
+    { "t_ms": 1711929600000, "o": 3012.5, "h": 3015.0, "l": 3010.0, "c": 3013.2, "v": 120.0 }
+  ],
+  "zones": [
+    { "id": "ob_bull_XAU/USD_1800_17119...", "start_ms": 1711929600000,
+      "high": 3015.0, "low": 3010.0, "kind": "ob_bull", ... }
+  ],
+  "swings": [
+    { "id": "...", "kind": "hh", "time_ms": 1711929600000, "price": 3015.0 }
+  ],
+  "levels": [
+    { "id": "...", "kind": "pdh", "price": 3020.0 }
+  ],
+  "trend_bias": "bullish",
+  "zone_grades": { "<zone_id>": { "score": 8, "grade": "A+", "factors": ["sweep +2", ...] } },
+  "bias_map": { "900": "bullish", "3600": "bearish" },
+  "momentum_map": { "900": { "b": 3, "r": 1 } },
+  "pd_state": {
+    "range_high": 3020.0, "range_low": 3000.0,
+    "equilibrium": 3010.0, "pd_percent": 65.0, "label": "PREMIUM"
+  },
+  "narrative": { "mode": "trade", "sub_mode": "aligned", "headline": "..." },
+  "shell": { "stage": "ready", "stage_label": "SHORT · READY" },
+  "signals": [{ "signal_id": "...", "direction": "short", ... }],
+  "signal_alerts": [{ "signal_id": "...", "alert_type": "..." }],
+  "drawings": [],
+  "meta": {
+    "schema_v": "ui_v4_v2",
+    "seq": 3,
+    "server_ts_ms": 1711929600000,
+    "boot_id": "a1b2c3d4e5f67890",
+    "warnings": [],
+    "config": {
+      "symbols": ["XAU/USD", "XAG/USD", "BTCUSDT", "ETHUSDT"],
+      "tfs": ["M1", "M3", "M5", "M15", "M30", "H1", "H4", "D1"]
+    }
   }
 }
 ```
 
----
+**Примітки**:
+- `meta.config` дублюється у full frame (крім окремого config frame)
+- `zones`, `swings`, `levels`, `trend_bias` — SmcSnapshot (повний стан SMC overlay)
+- `zone_grades`, `bias_map`, `momentum_map`, `pd_state`, `narrative`, `shell`, `signals`, `signal_alerts` — присутні лише коли SMC engine ввімкнений і є дані
 
-### /api/bars
+### 4.3 `delta` frame
 
-**Призначення**: вікно барів для cold-load та scrollback.
-
-**Параметри**:
-
-| Параметр | Тип | Required | Опис |
-|---|---|---|---|
-| `symbol` | string | ✓ | Символ (напр. `XAU/USD`) |
-| `tf_s` | integer | ✓ | Timeframe у секундах |
-| `limit` | integer | | Кількість барів (default 1000, clamp по TF: `_TF_CAP`) |
-| `since_open_ms` | integer | | Бари з open_ms ≥ since_open_ms |
-| `to_open_ms` | integer | | Бари з open_ms < to_open_ms (для scrollback) |
-| `align` | string | | `fxcm` (default) або `tv` (лише H4, derived з H1 final-only) |
-| `epoch` | string | | Epoch guard: UI передає для cancellation stale відповідей |
-| `force_disk` | integer | | **ІГНОРУЄТЬСЯ** з warning (I1: UDS = вузька талія) |
-| `prefer_redis` | integer | | **ІГНОРУЄТЬСЯ** з warning (I1: UDS = вузька талія) |
-
-**Контракт відповіді**: `window_v1.json` (див. [contracts.md](contracts.md#window_v1--відповідь-apibars))
-
-**Джерело даних**:
-
-- Для **preview TF** (60, 180): `uds.read_preview_window()` (Redis preview keyspace)
-- Для **final TF** (300+): `uds.read_window()` з `disk_policy="never"`, `prefer_redis=true` (Redis snap → RAM → degraded)
-- Для partial-derived барів (`extensions.partial=true` / `partial_calendar_pause=true`) API зберігає `complete=true` (bucket elapsed). Для downstream повертається `partial_penalty` (soft-penalty): якщо є `source_count/expected_count`, тоді `partial_penalty = 1 - source_count/expected_count`; інакше fallback 0.15.
-- `extensions.partial_reasons[]` дозволяє однозначно кодувати співіснування причин (`calendar_pause`, `boundary_gap`) без зміни старих полів.
-- Для **align=tv (H4)**: derived H4 з H1 final-only, anchor_remainder_ms=10800000, без запису в SSOT; `meta.source=derived_h1_final`, redis_* не повертаються у top-level. Неповний bucket перед calendar break повертається як partial (`complete=false`, `warnings+=derived_partial_bucket`, `extensions.partial_reason=calendar_break|calendar_break_no_m5`).
-
-**Stitching**: якщо `ui_stitching_enabled=true` у config.json → `open[i]=close[i-1]` (display-only, SSOT не модифікується). За замовчуванням `false`.
-
-**Clamp**: `limit` обмежується server-side через `_clamp_limit(raw, tf_s)`. При перевищенні → warning `limit_clamped_...`.
-
-**No-data rail**: якщо `bars=[]` → відповідь містить `note="no_data"` + `warnings[]` (мінімум пояснення чому порожнє). Silent порожня відповідь заборонена (інваріант I5).
-
----
-
-### /api/updates
-
-**Призначення**: інкрементальні оновлення барів (upsert events). UI polling кожні 1–3 секунди.
-
-**Параметри**:
-
-| Параметр | Тип | Required | Опис |
-|---|---|---|---|
-| `symbol` | string | ✓ | Символ |
-| `tf_s` | integer | ✓ | Timeframe |
-| `since_seq` | integer | | Cursor: повернути events з seq > since_seq |
-| `limit` | integer | | Max events (default 100) |
-| `epoch` | string | | Epoch guard |
-| `include_preview` | integer | | Для preview TF: включити preview events. Для non-preview TF → warning `include_preview_ignored` |
-| `align` | string | | **Тільки `fxcm`**. `align=tv` → HTTP 400 `align_tv_updates_not_supported` |
-
-**Контракт відповіді**: `updates_v1.json` (див. [contracts.md](contracts.md#updates_v1--відповідь-apiupdates))
-
-**Джерело даних**: Redis updates bus (hot-path). Disk **не** використовується для updates (disk = лише recovery).
-
-**Guard**: `align=tv` не підтримується для updates (derived view працює лише через snapshot `/api/bars`).
-
-**Boot_id guard**: при зміні `boot_id` (рестарт сервера) → UI робить повний reload, а не інкрементальний update.
-
----
-
-### /api/overlay
-
-**Призначення**: ephemeral preview bar для формуючоїсвічки на TF ≥ M5.
-
-**Параметри**:
-
-| Параметр | Тип | Required | Опис |
-|---|---|---|---|
-| `symbol` | string | ✓ | Символ |
-| `tf_s` | integer | ✓ | Target TF (H1, H4, D1 тощо) |
-| `base_tf_s` | integer | | Базовий TF для агрегації (default: M3=180 для H4/D1, M1=60 для інших) |
-
-**Відповідь**:
+**Тригер**: global delta loop (кожні `delta_poll_interval_s`, default 1.0s), коли UDS має нові events.
 
 ```json
 {
-  "ok": true,
-  "bar": { ... },
-  "bars": [ ... ],
-  "warnings": [],
-  "meta": { "source": "preview_curr", "redis_hit": false }
+  "type": "render_frame",
+  "frame_type": "delta",
+  "symbol": "XAU/USD",
+  "tf": "M30",
+  "candles": [
+    { "t_ms": 1711929600000, "o": 3012.5, "h": 3015.0, "l": 3010.0,
+      "c": 3013.2, "v": 120.0, "complete": false, "src": "tick_relay" }
+  ],
+  "smc_delta": {
+    "new_zones": [...],
+    "mitigated_zone_ids": ["..."],
+    "updated_zones": [...],
+    "new_swings": [...],
+    "new_levels": [...],
+    "removed_level_ids": ["..."],
+    "trend_bias": "bullish"
+  },
+  "zone_grades": { ... },
+  "bias_map": { ... },
+  "momentum_map": { ... },
+  "pd_state": { ... },
+  "narrative": { ... },
+  "shell": { ... },
+  "signals": [...],
+  "signal_alerts": [...],
+  "session_levels": [{ "id": "...", "kind": "lon_h", "price": 3015.0 }],
+  "meta": { ... }
 }
 ```
 
-**Примітка**: Overlay — read-only. Створюється ефемерно з preview-tail, не пишеться у SSOT.
+**Примітки**:
+- `smc_delta` — інкрементальні зміни (нові/мітиговані/оновлені зони, нові свінги/рівні)
+- `complete: false` + `src: "tick_relay"` — формуюча свічка з tick stream
+- SMC метадані (`zone_grades`, `bias_map`, тощо) присутні лише при complete bars (ADR-0042 P2)
+- `session_levels` — сесійні рівні (Asia/London/NY H/L) з кожним delta
 
----
+### 4.4 `scrollback` frame
 
-### /api/symbols
-
-**Призначення**: список доступних символів.
-
-**Відповідь**:
+**Тригер**: відповідь на client `scrollback` action.
 
 ```json
 {
-  "ok": true,
-  "symbols": ["XAU/USD", "EUSTX50", "GBP/CAD", ...]
+  "type": "render_frame",
+  "frame_type": "scrollback",
+  "symbol": "XAU/USD",
+  "tf": "M30",
+  "candles": [{ "t_ms": ..., "o": ..., "h": ..., "l": ..., "c": ..., "v": ... }],
+  "meta": { ... }
 }
 ```
 
-### /api/gaps
+### 4.5 `heartbeat` frame
 
-**Призначення**: звіт про gaps з tail integrity scanner (для моніторингу).
-
-**Джерело**: `reports/tail_audit/summary.json` (генерується `python -m tools.tail_integrity_scanner`).
-
-**Відповідь**:
+**Тригер**: кожні `heartbeat_interval_s` (default 30s) per connection.
 
 ```json
 {
-  "ok": true,
-  "ts": "2026-02-20T13:40:15Z",
-  "overall": "FAIL",
-  "pass": 31,
-  "fail": 60,
-  "elapsed_s": 1.3,
-  "failed_items": [
-    {"symbol": "XAU/USD", "tf": "M5", "gaps": 2, "issues": []},
-    ...
-  ]
+  "type": "render_frame",
+  "frame_type": "heartbeat",
+  "meta": {
+    "schema_v": "ui_v4_v2",
+    "seq": 42,
+    "server_ts_ms": 1711929600000,
+    "boot_id": "a1b2c3d4e5f67890"
+  }
 }
 ```
 
-Якщо scanner ще не запускався — `"overall": "NO_DATA"`.
+**Client**: оновлює DiagState. Не потрапляє в `currentFrame`.
+
+### 4.6 `error` frame
+
+**Тригер**: невалідний JSON, відсутній action, невідомий action, надто великий message.
+
+```json
+{
+  "type": "render_frame",
+  "frame_type": "error",
+  "error": {
+    "code": "unknown_action",
+    "message": "Unknown action: overlay_toggle"
+  },
+  "meta": { ... }
+}
+```
+
+| Код | Опис |
+|---|---|
+| `json_parse_error` | Невалідний JSON |
+| `missing_action` | Відсутнє поле `action` |
+| `unknown_action` | Невідомий action (напр. `overlay_toggle`, `drawing_*`, `replay_*`) |
+| `message_too_large` | Перевищено 64 KB ліміт |
+
+**Client**: конвертує в `UiWarning`. Не потрапляє в `currentFrame`.
 
 ---
 
-## Guards та rails
+## 5. Delta Loop
 
-| Guard | Файл:функція | Що перевіряє |
-| --- | --- | ---|
-| `_guard_bar_shape` | `ws_server.py` | Validates bar contract (time, OHLCV, open_time_ms та ін.) |
-| `_guard_event_shape` | `ws_server.py` | Validates update event structure (key, bar, complete, source) |
-| `_guard_meta_shape` | `ws_server.py` | Validates meta object (source, redis_hit, boot_id) |
-| `_clamp_limit` | `ws_server.py` | Caps limit per TF; warning при перевищенні |
-| `_normalize_bar_window_v1` | `ws_server.py` | Нормалізує бар до public window_v1 формату |
-| `_contract_guard_warn_window` | `ws_server.py` | Loud лог при порушенні window_v1 контракту |
-| `_contract_guard_warn_updates` | `ws_server.py` | Loud лог при порушенні updates_v1 контракту |
-| `prefer_redis`/`force_disk` ignore | `ws_server.py` | Query params ігноруються з warning (I1: UDS = вузька талія) |
-| no_data rail | `ws_server.py` | `bars=[]` → обов'язково `warnings[]` |
+**Функція**: `_global_delta_loop()` — один asyncio task на весь сервер (не per-client).
 
----
+### Потік за один тік:
 
-## Кеш та TTL
+1. Sleep `delta_poll_interval_s` (default 1.0s)
+2. Публікує viewer count в Redis (`ws:viewer_count`, TTL 30s) — для tick_preview_worker O3-sleep оптимізації
+3. Групує сесії по `(symbol, tf_s)` target
+4. Для кожного target з підписниками:
+   - Знайти `min_seq` серед всіх підписників
+   - `UDS.read_updates(since_seq=min_seq, include_preview=tf_in_preview_set)`
+   - Якщо є events: dedup по `open_ms` (final beats preview), map to candles, build delta frame
+   - Якщо events немає, але D1 tick relay ввімкнено: read last tick → forming candle delta
+   - Inject SMC delta на complete bars (`on_bar_dict()` → `last_delta()`)
+   - На complete bars: inject `zone_grades`, `bias_map`, `momentum_map`, `pd_state`, `narrative`, `shell`, `signals`, `signal_alerts`
+   - Broadcast frame з per-client `seq` injection
+5. Purge forming targets без підписників
+6. M1 feed loop: poll M1 updates для всіх активних символів → SmcRunner session H/L tracking
+7. Per-recipient cursor adoption: щойно підключені сесії (після full frame) пропускають перший delta
 
-| Ресурс | Кеш-стратегія | TTL |
-| --- | --- | --- |
-| `/api/bars` (Redis snap) | Redis `ohlcv:tail`, warmup on boot | TTL per TF (M1=1800s, M5=3600s, H4=172800s, D1=604800s) |
-| `/api/bars` (RAM) | LRU in-process | Eviction при пам'яті / кількості |
-| `/api/bars` (Disk) | **НЕ hot-path** (`disk_policy="never"`) | Лише bootstrap (60s window) або scrollback (explicit) |
-| `/api/updates` | Redis list + seq | Немає TTL; очищається при переповненні |
-| Preview (curr) | Redis `preview:curr` | `preview_curr_ttl_s` (default 1800s) |
-| Preview (tail) | Redis `preview:tail` | Ring buffer, без TTL |
-| `/api/config` | mtime cache (~0.5s) | Перечитується при зміні config.json |
-| Статичні файли | no-cache headers | Cache-buster у URL |
+### Background SMC feed loop
+
+**Функція**: `_bg_smc_feed_loop()` — кожні `bg_smc_poll_interval_s` (default 10s).
+
+Живить SmcRunner всіма `compute_tfs × symbols` для cross-TF аналізу (D1/H4/H1/M15 bars змінюються рідко).
 
 ---
 
-## Важливі обмеження
+## 6. SMC інтеграція
 
-1. **UI read-only**: UI процес не має права писати в UDS (`role="reader"`). Будь-яка спроба → `RuntimeError`.
-2. **Тіки не видимі UI напряму**: UI не бачить raw ticks з Redis PubSub. Він бачить лише preview bars через `/api/bars` (preview TF) та overlay через `/api/overlay`.
-3. **Disk не hot-path**: `/api/bars` для interactive requests використовує `disk_policy="never"`. Disk доступний лише під час bootstrap (перші 60s) або для explicit scrollback (`to_open_ms`).
-4. **No split-brain**: query params `prefer_redis`/`force_disk` ігноруються server-side. Джерело обирається сервером, не клієнтом.
-5. **Same-origin**: UI та API працюють в одному процесі, один порт (8000).
+### Full frame (SmcSnapshot — повний стан)
+
+| Метод SmcRunner | Поле у frame | Опис |
+|---|---|---|
+| `get_snapshot(symbol, tf_s)` | `zones`, `swings`, `levels`, `trend_bias` | Повний SMC overlay |
+| `get_zone_grades(symbol, tf_s)` | `zone_grades` | Confluence scoring: 8 факторів, grade A+/A/B/C |
+| `get_bias_map(symbol)` | `bias_map` | Per-TF bias (bullish/bearish) |
+| `get_momentum_map(symbol)` | `momentum_map` | Displacement detection per TF |
+| `get_pd_state(symbol, tf_s)` | `pd_state` | Premium/Discount state |
+| `get_narrative(symbol, tf_s, ...)` | `narrative` | Context Flow narrative block |
+| `get_signals(symbol, tf_s, ...)` | `signals`, `signal_alerts` | Signal engine output |
+| `get_shell_payload(symbol, tf_s, ...)` | `shell` | Thesis bar shell state |
+
+### Delta frame (SmcDelta — інкрементальні зміни)
+
+На complete bars: `on_bar_dict(symbol, tf_s, bar)` → SmcEngine → `last_delta()`:
+
+```json
+{
+  "new_zones": [...],
+  "mitigated_zone_ids": ["zone_id_1", "zone_id_2"],
+  "updated_zones": [...],
+  "new_swings": [...],
+  "new_levels": [...],
+  "removed_level_ids": ["level_id_1"],
+  "trend_bias": "bullish"
+}
+```
+
+Після обробки: `clear_delta(symbol, tf_s)`.
+
+---
+
+## 7. Candle Mapping
+
+**Файл**: `runtime/ws/candle_map.py`
+
+### Wire формат (Candle)
+
+```json
+{ "t_ms": 1711929600000, "o": 3012.5, "h": 3015.0, "l": 3010.0, "c": 3013.2, "v": 120.0 }
+```
+
+Відповідає `ui_v4/src/types.ts:Candle`.
+
+### Flat bar filtering (display-only, не впливає на SSOT)
+
+| TF | Умова фільтрації |
+|---|---|
+| LTF (<H4) | `O == H == L == C` і `V ≤ 10` (або `calendar_pause_flat`) |
+| HTF (≥H4) | Flat AND weekend open (Fri/Sat/Sun UTC) |
+
+### Tail normalization
+
+- `h = max(o, h, low, c)`, `low = min(o, h, low, c)` — гарантує `h ≥ l` на wire
+- Volume: default 0, negative → 0
+
+### TF label mapping
+
+| Label | Секунди | Альтернативи |
+|---|---|---|
+| `M1` | 60 | `1m` |
+| `M3` | 180 | `3m` |
+| `M5` | 300 | `5m` |
+| `M15` | 900 | `15m` |
+| `M30` | 1800 | `30m` |
+| `H1` | 3600 | `1h` |
+| `H4` | 14400 | `4h` |
+| `D1` | 86400 | `1d` |
+
+Server→client завжди використовує uppercase canonical labels.
+
+---
+
+## 8. Guards та rails
+
+### Output guards
+
+`_guard_candles_output()` валідує кожну candle перед відправкою:
+- Required: `t_ms` (>0), `o`/`h`/`l`/`c` (числа, не NaN), `h ≥ l`
+- Невалідні candles = drop + degraded-but-loud warning
+- Перевірка `t_ms` монотонності (no dups, sorted asc)
+
+### Rate limits та ліміти
+
+| Guard | Значення | Опис |
+|---|---|---|
+| Max WS message size | 64 KB | `_MAX_WS_MSG_BYTES` — перевищення → error frame |
+| Scrollback max steps | 12 per session per symbol+tf | `SCROLLBACK_MAX_STEPS` |
+| Scrollback cooldown | 0.5s | Між запитами |
+| Scrollback chunk | `min(cold_start_bars, 500)` | Макс. барів за один запит |
+| Broadcast send timeout | 1.0s per client | Slow client → eviction |
+| Log sanitization | Control chars stripped, 120 char max | Від client messages |
+
+### Slow-client eviction
+
+`_safe_broadcast()`: якщо `send_str` timeout >1s → клієнт evicted: сесія видаляється, WS закривається.
+
+### Client-side guards
+
+| Guard | Поведінка |
+|---|---|
+| `schema_v` check | Reject frame якщо `≠ "ui_v4_v2"` |
+| `seq` monotonicity | Drop frame якщо `seq ≤ lastSeq` |
+| `boot_id` change | Reset seq baseline, clear view caches, запит нового full frame |
+| Cross-TF split-brain | Drop delta/scrollback якщо `symbol:tf` не збігається з поточною парою |
+
+---
+
+## 9. Конфігурація
+
+З `config.json`:
+
+```json
+{
+  "ws_server": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8000,
+    "heartbeat_interval_s": 30,
+    "delta_poll_interval_s": 1.0,
+    "bg_smc_poll_interval_s": 10.0,
+    "cors_allowed_origins": []
+  }
+}
+```
+
+### Cold start bars (bootstrap.ui_cold_start_bars_by_tf)
+
+| TF | Барів |
+|---|---|
+| M1 (60) | 10080 |
+| M3 (180) | 3360 |
+| M5 (300) | 2016 |
+| M15 (900) | 2000 |
+| M30 (1800) | 1000 |
+| H1 (3600) | 2000 |
+| H4 (14400) | 2000 |
+| D1 (86400) | 1000 |
+
+Default fallback: 300 барів (`DEFAULT_COLD_START_BARS`).
+
+---
+
+## 10. Reconnect та відмовостійкість
+
+**Файл**: `ui_v4/src/ws/connection.ts`
+
+| Параметр | Значення |
+|---|---|
+| Перший reconnect | 2s delay |
+| Backoff | ×1.5, макс. 10s |
+| Після 3 невдач | Quiet mode: 60s інтервал + wake on `visibilitychange` |
+| На reconnect | `resetFrameRouter()`: clear seq baseline, boot_id, всі кешовані стани |
+
+### boot_id change
+
+Якщо `meta.boot_id` змінився (сервер перезапустився):
+1. Client скидає seq baseline
+2. Fires `_onBootIdChange` callback
+3. Clears view caches
+4. Чекає на новий full frame (автоматично приходить від сервера)

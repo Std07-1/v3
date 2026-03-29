@@ -74,11 +74,11 @@
 | [system_current_overview.md § Інваріанти](system_current_overview.md#інваріанти) | I0–I6 канон, dependency rule, watermark, final>preview, NoMix |
 | [config_reference.md](config_reference.md) | Довідник полів `config.json` (SSOT конфігу) |
 
-### 5. UI API (HTTP)
+### 5. UI API (WebSocket + HTTP)
 
 | Документ | Зміст |
 |---|---|
-| [ui_api.md](ui_api.md) | Таблиця endpoint-ів, формати, джерела даних, кеш/TTL |
+| [ui_api.md](ui_api.md) | WS протокол `ui_v4_v2`, frames (full/delta/scrollback/config/heartbeat/error), actions, guards, SMC інтеграція |
 
 ### 5.1. UI v4 (Svelte 5 — next-gen frontend, chart parity DONE)
 
