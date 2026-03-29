@@ -36,13 +36,12 @@
     `79200s` (22:00 UTC). DeriveEngine будує D1 як derived TF; engine_b D1 broker
     fetch вимкнено (`broker_base_tfs_s: []`).
 
-Supervisor (`app.main --mode all`) керує 5 процесами. UDS є центром
+Supervisor (`app.main --mode all`) керує 6 процесами. UDS є центром
 читання/запису: writer-и пишуть через UDS (SSOT disk + Redis snapshots +
 updates bus), UI читає через UDS. Preview-plane (M1/M3) живе в Redis keyspace,
 final-и з M1 poller проходять bridge до preview ring (final>preview).
-`/api/bars` для всіх TF застосовує PREVIOUS_CLOSE stitching
-(`open[i]=close[i-1]`) для TV-like smooth candles; SSOT на диску не
-модифікується.
+`ui_stitching_enabled` = false за замовчуванням — показуємо реальні гепи (TV-like);
+SSOT на диску не модифікується.
 
 > **ADR-0002 завершено**: engine_b M5 polling вимкнено (m5_polling_enabled=false), derived_tfs_s=[]. Всі TF M1→H4 через m1_poller/DeriveEngine.  
 > **ADR-0023 (D1 derive)**: D1 стає derived TF (1440×M1, anchor 79200). engine_b broker_base_tfs_s=[] — D1 fetch з broker вимкнено.
@@ -405,48 +404,37 @@ flowchart TD
 
 ## Схеми процесів і циклів
 
-## UI Render Pipeline — повний потік даних (актуально)
+## UI Render Pipeline — повний потік даних (ui_v4, WS-only)
+
+> Архітектура: WS-only. Всі дані (bars, updates, overlay, config) через WebSocket `/ws`.
+> Єдиний HTTP endpoint: `/api/status` (health check).
 
 Cold start:
-  init() → loadBarsFull()
-    → GET /api/bars?limit=COLD_START_BARS_BY_TF[tf]
-    → epoch guard check
-    → controller.setBars(data.bars)          // chart_adapter_lite.js:735
-      → normalizeBar(bar) each               // chart_adapter_lite.js:165
-        → filter(Boolean)                    // drops bars with time<=0 or NaN OHLC
-        → sort by time, dedupe by time       // chart_adapter_lite.js:741-751
-        → candles.setData(deduped)           // LWC API
-        → volumes.setData(volumeData)
-    → setBarsStore(data.bars)                // app.js:1207 — caps to MAX_RENDER_BARS_WARM
-      → rebuildBarsIndex()                   // Map(open_time_ms → index)
-    → saveCacheCurrent()                     // uiCacheByKey.set(key, bars)
+  WSConnection.connect() → onopen
+    → send WsAction.subscribe({symbol, tf})
+    → server responds with `type:"full"` frame (bars + smc snapshot + config)
+    → frameRouter dispatches → smcStore.set(snapshot)
+    → engine.ts → lwc.ts: candles.setData(bars), volumes.setData(volumeData)
 
 Incremental updates:
-  pollUpdates() → GET /api/updates?since_seq=...
-    → epoch guard, boot_id check
-    → applyUpdates(events)                   // app.js:1583
+  WS `type:"delta"` frames (server-push, delta_poll 1s):
+    → frameRouter → applyUpdates()
       → sort by seq
-      → for each event:
-        → drop stale (bar.open_time_ms < lastOpenMs - tfMs)
-        → forward gap guard (>3 TF periods → reload)
-        → key match check (symbol/tf)
-        → final>preview invariant
-        → NoMix check
-        → controller.updateLastBar(bar)      // chart_adapter_lite.js:793
-          → normalizeBar(bar)
-          → _rafPending = normalized
-          → requestAnimationFrame(_flushChartRender)
-            → candles.update(bar)
-            → volumes.update(...)
-        → upsertBarToStore(bar)              // app.js:1219
+      → final>preview invariant
+      → candles.update(bar) / candles.setData(bars)
+      → smcStore.applyDelta(smcDelta)
+      → OverlayRenderer.render() via RAF
 
 Scrollback:
-  handleVisibleRangeChange() → ensureLeftCoverage()
-    → GET /api/bars?to_open_ms=...&limit=SCROLLBACK_CHUNK
-    → mergeOlderBars(olderBars)
-    → controller.setBars(barsStore)          // full re-render
+  handleVisibleRangeChange() → send WsAction.scrollback({to_open_ms, limit})
+    → server responds with `type:"scrollback"` frame
+    → merge older bars → candles.setData(merged)
 
-### Старт і ініціалізація (connector)
+### ~~Старт і ініціалізація (connector)~~ — DEPRECATED (ADR-0023)
+
+> Connector (engine_b, D1 broker fetch) вимкнено: `broker_base_tfs_s: []`.
+> D1 тепер derived з M1 через DeriveEngine (ADR-0023).
+> Діаграма нижче збережена для історичного контексту.
 
 ```mermaid
 sequenceDiagram
@@ -747,8 +735,8 @@ v3/
 │   ├── purge_broken_bars.py       # чистка пошкоджених JSONL
 │   ├── run_exit_gates.py          # runner exit-gates
 │   ├── exit_gates/
-│   │   ├── manifest.json          # реєстр gates (25 gate-модулів)
-│   │   └── gates/                 # gate_*.py (25 файлів)
+│   │   ├── manifest.json          # реєстр gates (29 gate-модулів)
+│   │   └── gates/                 # gate_*.py (29 файлів)
 │   ├── repair/
 │   │   ├── htf_rebuild_from_fxcm.py  # controlled H4/D1 rebuild from FXCM raw
 │   │   ├── htf_tail_sync_from_fxcm.py # tail sync from FXCM
@@ -779,7 +767,7 @@ v3/
 │   ├── audit/                     # аудит прогресу P0–P6
 │   ├── runbooks/                  # production, coldstart, live_recover
 │   └── system_spec/               # UI v4 audit, gap analysis
-├── tests/                         # 38+ файлів, 798+ тестів
+├── tests/                         # 52 файли, 776+ тестів
 │   ├── test_smc_e1.py             # SMC E1: swings, structure, OB, FVG, engine
 │   ├── test_smc_runner.py         # SMC Runner: warmup, on_bar, delta, performance
 │   ├── test_smc_key_levels.py     # SMC key levels: PDH/PDL/DH/DL
@@ -809,7 +797,7 @@ v3/
   `M3(3×M1)→M5(5×M1)→M15(3×M5)→M30(2×M15)→H1(2×M30)→H4(4×H1)`.
   Calendar-pause фільтрація. Preview-plane: tick stream → preview bars в Redis.
   Final bridge → preview ring (final>preview). BID price mode.
-- **D1 (broker)**: engine_b D1-only fetcher (m5_polling_enabled=false). broker_base fetch на закритті D1 бакета + cold start.
+- **D1 (derived, ADR-0023)**: engine_b D1-only fetcher вимкнено (`broker_base_tfs_s: []`). D1 = `1440 × M1`, derived через DeriveEngine.
 
 ### UDS (UnifiedDataStore)
 
@@ -822,11 +810,11 @@ v3/
 
 **ws_server** (port 8000, same-origin):
 
-- HTTP API: /api/bars, /api/updates, /api/overlay, /api/config, /api/status, /api/symbols.
-- WS: `ui_v4_v2` protocol (full + delta + scrollback + config + heartbeat).
+- HTTP API: /api/status (health check).
+- WS: `ui_v4_v2` protocol (full + delta + scrollback + config + heartbeat). Всі дані (bars, updates, overlay, config) доступні тільки через WS.
 - SmcRunner integration: `smc_snapshot`/`smc_delta` frames.
 - Same-origin serving: `ui_v4/dist/` (index.html + /assets/).
-- CPU opt: delta_poll 2s + ThreadPoolExecutor(2). Idle 2-3% CPU.
+- CPU opt: delta_poll 1s + ThreadPoolExecutor(min(4, cpu_count)). Idle 2-3% CPU.
 - Prod: `npm run build` → `python -m app.main --mode ws_server`. Dev: `npm run dev` (:5173) + ws_server (:8000).
 - 3-layer rendering: LWC candles + SMC overlay canvas + drawings canvas (RAF + renderSync, DPR-aware). SMC overlay **ACTIVE** (ADR-0024: OB/FVG/Swings/Levels + strength opacity + 4 toggles; ADR-0026: level rendering rules — merge-on-physical-overlap, L1–L6); drawings **ACTIVE** (ADR-0007).
 - Drawing tools (ADR-0007): hline/trend/rect/eraser, click-click
@@ -887,12 +875,11 @@ non_critical:  5s → 10s → 20s → 40s → 80s → 120s → 120s → 120s →
 
 ### 1) Старт системи (--mode all)
 
-1. Supervisor запускає connector, tick_publisher, tick_preview_worker, m1_poller, ws_server (config-gated).
-2. **Connector (D1-only)**: bootstrap D1 з диску → cold start D1 від broker → Redis prime → periodic D1 fetch on close → publishes `prime:ready`.
-3. **M1 Poller**: bootstrap Redis priming (M1→H4 з диску) → M1Buffer warmup → DeriveEngine warmup → tail catchup → publishes `prime:ready:m1`.
-4. **UI (http)**: supervisor AND-gate чекає `prime:ready` (connector) + `prime:ready:m1` (m1_poller), timeout з `config.json:prime_ready_timeout_s` (default=30s). Якщо timeout → UI стартує з WARNING (degraded-but-loud, S3 ADR-0003).
-5. **WS Server**: `ws_server.py` стартує на порті 8000, роздає `ui_v4/dist/` (same-origin), слухає `/ws`. Config-gated (`ws_server.enabled`).
-6. **Supervisor loop**: моніторить процеси; crash → auto-restart з backoff (S2, ADR-0003); bootstrap error → degraded mode, NOT crash (S1, ADR-0003).
+1. Supervisor запускає 6 процесів (config-gated): m1_poller, tick_publisher, tick_preview_worker, binance_ingest_worker, binance_tick_publisher, ws_server.
+2. **M1 Poller**: bootstrap Redis priming (M1→H4 з диску) → M1Buffer warmup → DeriveEngine warmup (M1→H4+D1) → tail catchup → publishes `prime:ready:m1`.
+3. **UI (http)**: supervisor AND-gate чекає `prime:ready:m1` (m1_poller), timeout з `config.json:prime_ready_timeout_s` (default=120s). Якщо timeout → UI стартує з WARNING (degraded-but-loud, S3 ADR-0003).
+4. **WS Server**: `ws_server.py` стартує на порті 8000, роздає `ui_v4/dist/` (same-origin), слухає `/ws`. Config-gated (`ws_server.enabled`).
+5. **Supervisor loop**: моніторить процеси; crash → auto-restart з backoff (S2, ADR-0003); bootstrap error → degraded mode, NOT crash (S1, ADR-0003).
 
 ### 2) ~~Live цикл M5 (connector, engine_b)~~ — DEPRECATED (ADR-0002/0023)
 

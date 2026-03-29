@@ -69,4 +69,4 @@ python -m tools.rebuild_from_m1
 
 - Rebuild виконується **послідовно** по символах (без паралельності), щоб уникнути race condition на `_derived_tail_state.json`.
 - Якщо для символу немає M5-даних на диску — він буде у FAIL-списку, exit code = 2.
-- Перед запуском конектора (`python -m app.main_connector`) рекомендується виконати цей rebuild одноразово.
+- Перед запуском платформи (`python -m app.main --mode all`) рекомендується виконати цей rebuild одноразово.

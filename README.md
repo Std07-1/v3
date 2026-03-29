@@ -119,14 +119,13 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│  LAYER 1: POLLING (simple, focused, single-responsibility)  │
+│  LAYER 1: INGEST (simple, focused, single-responsibility)   │
 │                                                             │
-│  ┌──────────────┐    ┌──────────────┐                       │
-│  │ m1_poller    │    │ d1_fetcher   │                       │
-│  │ M1 від FXCM  │    │ D1 від FXCM  │                       │
-│  │ ~400 LOC     │    │ ~200 LOC     │                       │
-│  └──────┬───────┘    └──────┬───────┘                       │
-│         │ commit M1         │ commit D1                     │
+│  ┌──────────────┐    ┌──────────────────┐                   │
+│  │ m1_poller    │    │ binance_ingest   │                   │
+│  │ M1 від FXCM  │    │ M1 від Binance   │                   │
+│  └──────┬───────┘    └──────┬───────────┘                   │
+│         │ commit M1         │ commit M1                     │
 │         ▼                   ▼                               │
 │  ┌──────────────────────────────────┐                       │
 │  │            UDS (SSOT)            │                       │
@@ -154,8 +153,9 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 │  │        M15 → M30 (2×M15)                        │        │
 │  │          M30 → H1 (2×M30)                       │        │
 │  │            H1 → H4 (4×H1, calendar+TV anchor)   │        │
+│  │    M1 → D1 (1440×M1, anchor 22:00 UTC)          │        │
 │  │                                                 │        │
-│  │  ThreadPool: 13 symbols паралельно              │        │
+│  │  4 символи (XAU/USD, XAG/USD, BTCUSDT, ETHUSDT)│        │
 │  │  Priority: watched symbol → front of queue      │        │
 │  │  Buffers: GenericBuffer per (symbol, tf_s)      │        │
 │  └─────────────────────────────────────────────────┘        │

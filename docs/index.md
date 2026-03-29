@@ -121,7 +121,7 @@
 | Документ | Зміст |
 |---|---|
 | [audit/progress.md](audit/progress.md) | Чекліст P0–P6 з доказами та статусами (DONE/PARTIAL/TODO/UNKNOWN) |
-| [audit/coldstart_regressions.md](audit/coldstart_regressions.md) | Матриця регресій: cold start 13 символів |
+| [audit/coldstart_regressions.md](audit/coldstart_regressions.md) | Матриця регресій: cold start 4 символи |
 | [audit/htf_availability_regressions.md](audit/htf_availability_regressions.md) | Матриця регресій: H4/D1 availability |
 | [audit/ui_live_candle_regressions.md](audit/ui_live_candle_regressions.md) | Матриця регресій: UI live candle |
 

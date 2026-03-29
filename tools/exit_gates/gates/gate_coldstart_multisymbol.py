@@ -14,6 +14,7 @@
 6. m5_recent_data — хоча б 1 bar у tf_300 за останні 7 днів для кожного символу (sample)
 7. derived_recent_data — хоча б 1 bar у tf_3600 за останні 7 днів для XAU/USD (sample)
 """
+
 from __future__ import annotations
 
 import json
@@ -21,7 +22,6 @@ import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List
-
 
 # Канонічний allowlist TF директорій
 EXPECTED_TFS = ["tf_300", "tf_900", "tf_1800", "tf_3600", "tf_14400", "tf_86400"]
@@ -59,7 +59,9 @@ def _latest_bar_ms_in_dir(tf_dir: Path) -> int:
         return 0
     for part in sorted(tf_dir.glob("part-*.jsonl"), reverse=True):
         try:
-            lines = part.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+            lines = (
+                part.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+            )
             for line in reversed(lines):
                 line = line.strip()
                 if not line:
@@ -86,8 +88,19 @@ def run_gate(inputs: dict) -> dict:
     results: List[dict] = []
 
     if not symbols:
-        results.append({"name": "config_symbols", "ok": False, "details": "symbols[] порожній у config.json"})
-        return {"ok": False, "details": "no symbols", "sub_gates": results, "metrics": {"sub_gates_total": 1, "sub_gates_ok": 0}}
+        results.append(
+            {
+                "name": "config_symbols",
+                "ok": False,
+                "details": "symbols[] порожній у config.json",
+            }
+        )
+        return {
+            "ok": False,
+            "details": "no symbols",
+            "sub_gates": results,
+            "metrics": {"sub_gates_total": 1, "sub_gates_ok": 0},
+        }
 
     # --- Підгейт 1: data dirs ---
     missing_dirs = []
@@ -96,11 +109,13 @@ def run_gate(inputs: dict) -> dict:
         if not d.is_dir():
             missing_dirs.append(sym)
     ok1 = len(missing_dirs) == 0
-    results.append({
-        "name": "all_symbols_have_data_dirs",
-        "ok": ok1,
-        "details": "ok" if ok1 else f"відсутні каталоги: {', '.join(missing_dirs)}",
-    })
+    results.append(
+        {
+            "name": "all_symbols_have_data_dirs",
+            "ok": ok1,
+            "details": "ok" if ok1 else f"відсутні каталоги: {', '.join(missing_dirs)}",
+        }
+    )
 
     # --- Підгейт 2: all TFs ---
     missing_tfs: List[str] = []
@@ -112,11 +127,13 @@ def run_gate(inputs: dict) -> dict:
             if not (sym_dir / tf).is_dir():
                 missing_tfs.append(f"{sym}/{tf}")
     ok2 = len(missing_tfs) == 0
-    results.append({
-        "name": "all_symbols_have_all_tfs",
-        "ok": ok2,
-        "details": "ok" if ok2 else f"відсутні: {', '.join(missing_tfs[:10])}",
-    })
+    results.append(
+        {
+            "name": "all_symbols_have_all_tfs",
+            "ok": ok2,
+            "details": "ok" if ok2 else f"відсутні: {', '.join(missing_tfs[:10])}",
+        }
+    )
 
     # --- Підгейт 3: derived_tail_state covers all ---
     state_path = data_root / "_derived_tail_state.json"
@@ -132,11 +149,13 @@ def run_gate(inputs: dict) -> dict:
         if sym not in state_symbols:
             missing_state.append(sym)
     ok3 = len(missing_state) == 0
-    results.append({
-        "name": "derived_state_covers_all",
-        "ok": ok3,
-        "details": "ok" if ok3 else f"відсутні у state: {', '.join(missing_state)}",
-    })
+    results.append(
+        {
+            "name": "derived_state_covers_all",
+            "ok": ok3,
+            "details": "ok" if ok3 else f"відсутні у state: {', '.join(missing_state)}",
+        }
+    )
 
     # --- Підгейт 4: rebuild_from_m1.py has CLI ---
     rebuild_py = root / "tools" / "rebuild_from_m1.py"
@@ -147,20 +166,28 @@ def run_gate(inputs: dict) -> dict:
             has_all = "--symbol" in text or "--config" in text
         except Exception:
             pass
-    results.append({
-        "name": "rebuild_tool_has_batch",
-        "ok": has_all,
-        "details": "ok" if has_all else "rebuild_from_m1.py не має CLI",
-    })
+    results.append(
+        {
+            "name": "rebuild_tool_has_batch",
+            "ok": has_all,
+            "details": "ok" if has_all else "rebuild_from_m1.py не має CLI",
+        }
+    )
 
     # --- Підгейт 5: priming budget >= 5 ---
     priming_budget = cfg.get("redis_priming_budget_s", 2)
     ok5 = int(priming_budget) >= 5
-    results.append({
-        "name": "priming_budget_sufficient",
-        "ok": ok5,
-        "details": f"ok (budget={priming_budget}s)" if ok5 else f"budget={priming_budget}s < 5s",
-    })
+    results.append(
+        {
+            "name": "priming_budget_sufficient",
+            "ok": ok5,
+            "details": (
+                f"ok (budget={priming_budget}s)"
+                if ok5
+                else f"budget={priming_budget}s < 5s"
+            ),
+        }
+    )
 
     # --- Підгейт 6: M5 recent data (sample) ---
     now_ms = int(time.time() * 1000)
@@ -172,22 +199,28 @@ def run_gate(inputs: dict) -> dict:
         if latest < cutoff_ms:
             stale_m5.append(sym)
     ok6 = len(stale_m5) == 0
-    results.append({
-        "name": "m5_recent_data",
-        "ok": ok6,
-        "details": "ok" if ok6 else f"stale M5 (>7d): {', '.join(stale_m5)}",
-    })
+    results.append(
+        {
+            "name": "m5_recent_data",
+            "ok": ok6,
+            "details": "ok" if ok6 else f"stale M5 (>7d): {', '.join(stale_m5)}",
+        }
+    )
 
     # --- Підгейт 7: derived recent data (sample — XAU/USD H1) ---
     sample_sym = symbols[0] if symbols else "XAU/USD"
     tf_dir_h1 = data_root / _symbol_dir_name(sample_sym) / "tf_3600"
     latest_h1 = _latest_bar_ms_in_dir(tf_dir_h1)
     ok7 = latest_h1 >= cutoff_ms
-    results.append({
-        "name": "derived_recent_data",
-        "ok": ok7,
-        "details": f"ok (sample={sample_sym})" if ok7 else f"{sample_sym} H1 stale (>7d)",
-    })
+    results.append(
+        {
+            "name": "derived_recent_data",
+            "ok": ok7,
+            "details": (
+                f"ok (sample={sample_sym})" if ok7 else f"{sample_sym} H1 stale (>7d)"
+            ),
+        }
+    )
 
     all_ok = all(r["ok"] for r in results)
     summary_parts = [f"{r['name']}={'OK' if r['ok'] else 'FAIL'}" for r in results]

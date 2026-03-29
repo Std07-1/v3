@@ -1,6 +1,8 @@
 # UI API Reference (HTTP)
 
-> **Останнє оновлення**: 2026-02-15  
+> **⚠️ DEPRECATED / STALE**: Цей документ описує HTTP REST API (`/api/bars`, `/api/updates`, `/api/overlay` тощо), які **НЕ реалізовані** в поточній архітектурі. Фактична архітектура — **WS-only**: єдиний HTTP endpoint — `/api/status` (health check), всі дані (bars, deltas, SMC overlay, config, scrollback) передаються через WebSocket `/ws` з протоколом `ui_v4_v2`. Див. `runtime/ws/ws_server.py` та `ui_v4/src/ws/` для актуального API.
+
+> **Останнє оновлення**: 2026-02-15 (потребує повного переписування)  
 > **Навігація**: [docs/index.md](index.md)  
 > **Принцип**: UI = read-only renderer. Тіки напряму не бачить. Не має доменної логіки.
 

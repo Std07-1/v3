@@ -25,9 +25,9 @@
 
 | Контракт | Файл (SSOT) | Продюсер | Консюмер | Версія |
 |---|---|---|---|---|
-| **bar_v1** | `core/contracts/public/marketdata_v1/bar_v1.json` | UDS (через server.py нормалізацію) | UI (app.js), exit-gates | v1 |
-| **window_v1** | `core/contracts/public/marketdata_v1/window_v1.json` | `runtime/ws/ws_server.py` → `/api/bars` | UI (ui_v4), тести | v1 |
-| **updates_v1** | `core/contracts/public/marketdata_v1/updates_v1.json` | `runtime/ws/ws_server.py` → `/api/updates` | UI (ui_v4), тести | v1 |
+| **bar_v1** | `core/contracts/public/marketdata_v1/bar_v1.json` | UDS (через ws_server.py нормалізацію) | UI (ui_v4), exit-gates | v1 |
+| **window_v1** | `core/contracts/public/marketdata_v1/window_v1.json` | `runtime/ws/ws_server.py` → WS `type:"full"` | UI (ui_v4), тести | v1 |
+| **updates_v1** | `core/contracts/public/marketdata_v1/updates_v1.json` | `runtime/ws/ws_server.py` → WS `type:"delta"` | UI (ui_v4), тести | v1 |
 | **tick_v1** | `core/contracts/public/marketdata_v1/tick_v1.json` | `tick_publisher_fxcm.py` | `tick_preview_worker.py`, exit-gates | v1 |
 | **Redis snap** (internal) | Документація: `docs/redis_snapshot_design.md` | `runtime/store/redis_snapshot.py` | UDS read layers | internal v1 |
 | **smc_snapshot** (wire) | `core/smc/types.py` → `ui_v4/src/types.ts` | `SmcRunner` (ws_server) | `OverlayRenderer` (ui_v4) | v1 (ADR-0024) |

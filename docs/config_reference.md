@@ -183,7 +183,7 @@
 | `redis.namespace` | str | Префікс ключів (`v3_local`) |
 | `redis.allow_env_override` | bool | Дозволити ENV перевизначити Redis параметри |
 | `redis.ttl_by_tf_s` | dict | TTL ключів по TF (секунди). M1=86400, M3=86400, M5=259200, D1=604800 |
-| `redis.tail_n_by_tf_s` | dict | Скільки барів тримати в Redis tail по TF. M1=2880, D1=128 |
+| `redis.tail_n_by_tf_s` | dict | Скільки барів тримати в Redis tail по TF. M1=10080, M3=3360, M5=10000, D1=2000 |
 
 ---
 
@@ -203,8 +203,8 @@
 
 | Ключ | Тип | Default | Опис |
 | --- | --- | --- | --- |
-| `bootstrap.prime_ready_timeout_s` | int | 30 | Таймаут AND-gate (m1_poller + binance_ingest) перед стартом WS Server |
-| `bootstrap.derive_warmup_bars_by_tf` | dict | `{60:300, 300:20, 900:10, 1800:10, 3600:10}` | Кількість барів з диску для warmup DeriveEngine каскаду |
+| `bootstrap.prime_ready_timeout_s` | int | 120 | Таймаут AND-gate (m1_poller + binance_ingest) перед стартом WS Server |
+| `bootstrap.derive_warmup_bars_by_tf` | dict | `{60:10080, 300:20, 900:10, 1800:10, 3600:10}` | Кількість барів з диску для warmup DeriveEngine каскаду |
 | `bootstrap.ui_warmup_bars_by_tf` | dict | `{60:500, ..., 86400:200}` | RAM-кеш прогрів UI (symbol × TF) |
 | `bootstrap.ui_cold_start_bars_by_tf` | dict | `{60:10080, ..., 86400:365}` | Policy для cold-start UI вікна (передається клієнту) |
 
