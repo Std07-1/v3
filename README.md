@@ -19,9 +19,8 @@
 
 | Шар | Що | Де |
 |---|---|---|
-| **A** Broker + ingest | FXCM History + tick stream → 5 writer-процесів | `runtime/ingest/`, `app/` |
+| **A** Broker + ingest | FXCM/Binance History + tick stream → writer-процеси | `runtime/ingest/`, `app/` |
 | **C** UDS | SSOT disk + Redis cache + updates bus | `runtime/store/uds.py` |
-| **B** UI (http) | read-only HTTP polling renderer, same-origin, порт 8089 | `ui_chart_v3/` *(private module, не входить у public repo)* |
 | **B** UI (ws) | read-only WS real-time renderer, same-origin, порт 8000 | `ui_v4/` + `runtime/ws/ws_server.py` |
 | **TUI** | aione-top: інтерактивний TUI-монітор процесів/pipeline | `aione_top/` |
 
@@ -35,37 +34,55 @@
 
 ## Quickstart
 
-```bash
-# 1. Main venv (Python >=3.11) — платформа, UDS, derive, SMC, UI
-#    Поточний documented migration incident: Python 3.14.2, див. ADR-0016 Appendix C
+### 1. Встановлення
+
+```powershell
+# Main venv (Python >=3.11) — платформа, UDS, derive, SMC, UI
 python -m venv .venv
-.venv\Scripts\activate    # Windows
+.venv\Scripts\activate
 pip install -r requirements.txt
 
-# 2. Broker venv (Python 3.7) — forexconnect SDK (.venv37/)
-#    Потребує окрему інсталяцію Python 3.7
+# Broker venv (Python 3.7) — forexconnect SDK (.venv37/)
 C:\Python37\python.exe -m venv .venv37
 .venv37\Scripts\pip install -r requirements-broker.txt
 
-# 3. Секрети (.env — тільки FXCM креденшіали)
-cp .env.example .env  # або створіть вручну
+# UI v4 frontend (Svelte 5 + Vite)
+cd ui_v4
+npm install
+npm run build
+cd ..
 
-# 4. Запуск усіх процесів (включаючи broker_sidecar через .venv37/)
-python -m app.main --mode all --stdio pipe
-
-# 5. Перевірка (HTTP polling UI)
-curl http://127.0.0.1:8089/api/status
-# Або відкрийте http://127.0.0.1:8089/ у браузері
-
-# 6. ui_v4 (WS real-time UI, порт 8000)
-# Відкрийте http://127.0.0.1:8000/ у браузері (потребує npm run build у ui_v4/)
+# Секрети
+cp .env.example .env   # відредагуй FXCM_USER / FXCM_PASS / FXCM_URL
 ```
 
-> **Dual-venv (ADR-0016)**: Supervisor автоматично використовує `.venv37/` для broker-процесів (broker_sidecar, tick_publisher)
-> і `.venv/` для всього іншого. На Windows для main venv діє trampoline rail:
-> worker-и завершуються tree-kill через `taskkill /T`, а `logs/supervisor.pid`
-> блокує duplicate supervisor instance. Якщо `.venv37/` не знайдено — fallback
-> на legacy single-process m1_poller.
+### 2. Запуск
+
+Платформа складається з 6 незалежних процесів. Кожен запускається окремо —
+це дозволяє перезапускати UI (ws_server) за 3 секунди без зупинки data pipeline.
+
+| Процес | `--mode` | Що робить |
+|--------|----------|-----------|
+| M1 poller | `m1_poller` | broker_sidecar + m1_ingestion + derive cascade |
+| Tick publisher | `tick_publisher` | FXCM live ticks → Redis |
+| Tick preview | `tick_preview` | ticks → preview bars |
+| Binance ingest | `binance_ingest_worker` | BTCUSDT/ETHUSDT M1 + backfill |
+| Binance ticks | `binance_tick_publisher` | Binance live ticks → Redis |
+| WS server | `ws_server` | UI backend, порт 8000 |
+
+```bash
+# Кожен у окремому терміналі:
+python -m app.main --mode <mode> --stdio pipe
+
+# Або все разом (legacy, НЕ рекомендується для dev):
+python -m app.main --mode all --stdio pipe
+```
+
+Повний cheat-sheet з усіма командами (локальний + VPS): **[docs/runbooks/commands.md](docs/runbooks/commands.md)**
+
+> **Dual-venv (ADR-0016)**: Supervisor автоматично використовує `.venv37/` для broker-процесів
+> (broker_sidecar, tick_publisher) і `.venv/` для всього іншого.
+> PID-локи per-mode: `logs/supervisor_{mode}.pid` — дозволяє паралельний запуск.
 
 ## Quality Gates
 
@@ -152,13 +169,7 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
                   │
                   ▼
 ┌──────────────────────────────────────────────────────────────┐
-│  LAYER 3a: UI v3 (HTTP polling, read-only, ZERO domain logic)│
-│  /api/bars → UDS.read_window() (ALL TFs, including H4!)      │
-│  /api/updates → UDS updates bus                              │
-│  H4 кеш/derive OUT OF UI completely                          │
-│  Порт 8089, same-origin, vanilla JS polling                  │
-├──────────────────────────────────────────────────────────────┤
-│  LAYER 3b: UI v4 (WS real-time, read-only, ZERO domain logic)│
+│  LAYER 3: UI v4 (WS real-time, read-only, ZERO domain logic) │
 │  WS full/delta/scrollback → UDS via ws_server.py             │
 │  Svelte 5 + LWC 5 + TypeScript, 25 файлів ~4045 LOC          │
 │  Порт 8000, same-origin, config-gated                        │
