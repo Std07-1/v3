@@ -34,7 +34,7 @@
 | **Display budget / Elimination** | §2.2 | [ADR-0028](adr/0028-v2-elimination-engine.md) | — | `ui_v4/src/chart/overlay/DisplayBudget.ts` | ✅ Повністю |
 | **Cross-TF projection** | §1.2, §2.2 | [ADR-0030-alt](adr/0030-alt-tf-sovereignty.md) | — | `OverlayRenderer.ts` (TF opacity + dashed) | ✅ Повністю |
 | **Bias Banner (multi-TF trend bias)** | §1.3.5 | [ADR-0031](adr/0031-bias-banner.md) | `runtime/smc/smc_runner.py:get_bias_map()` | `BiasBanner.svelte` | ✅ Повністю |
-| **Context Flow (Multi-TF Narrative)** | §1.3.5 | [ADR-0033](adr/0033-context-flow-narrative.md) | `ui_v4/src/narrativeEngine.ts` | `NarrativePanel.svelte` | ✅ Повністю |
+| **Context Flow (Multi-TF Narrative)** | §1.3.5 | [ADR-0033](adr/0033-context-flow-narrative.md) | `core/smc/narrative.py` | `NarrativePanel.svelte` | ✅ Повністю |
 | **Sessions (Asia/London/NY) H/L** | §1.3.2 | [ADR-0035](adr/0035-sessions-killzones.md) | `core/smc/sessions.py` | `OverlayRenderer.ts` (session levels) | ✅ Повністю |
 | **Killzones (London 07–10 / NY 12–15 UTC)** | §1.3.2 | [ADR-0035](adr/0035-sessions-killzones.md) | `core/smc/sessions.py:classify_killzone()` | `OverlayRenderer.ts` (killzone shading) | ✅ Повністю |
 | **Session Sweeps (F9 sweep confluence)** | §1.3.2, §4.5 | [ADR-0035](adr/0035-sessions-killzones.md) §F9 | `core/smc/sessions.py:detect_session_sweep()` | confluence factor у scoring | ✅ Повністю |
@@ -57,7 +57,7 @@
 
 **Ризик:** Не можна "зламати" те чого немає, але якщо хтось почне реалізацію без ADR — ризик I0/I1 порушень.
 
-**Якщо хочеш реалізувати:** Спочатку `MODE=ADR` → новий ADR-0039 (або наступний номер). Тільки після Accepted ADR → `MODE=BUILD`.
+**Якщо хочеш реалізувати:** Спочатку `MODE=ADR` → новий ADR (наступний вільний номер, ≥0045). Тільки після Accepted ADR → `MODE=BUILD`.
 
 ### GAP-2: Williams Fractals — без standalone ADR
 

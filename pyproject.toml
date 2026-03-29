@@ -3,9 +3,9 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fxcm-connector-v3"
+name = "trading-platform-v3"
 version = "0.0.0"
-description = "FXCM Connector v3"
+description = "Trading Platform v3"
 requires-python = ">=3.11"
 dependencies = [
   "redis==5.0.1",

@@ -113,8 +113,9 @@
 | Документ | Зміст |
 |---|---|
 | [runbooks/coldstart.md](runbooks/coldstart.md) | Cold start: rebuild derived, перевірка після рестарту |
-| [runbooks/live_recover.md](runbooks/live_recover.md) | Live Recover: автоматичне наздоганяння M5 після паузи |
+| [runbooks/live_recover.md](runbooks/live_recover.md) | ~~DEPRECATED~~ — старий M5 connector recovery (декомісіоновано, ADR-0023) |
 | [runbooks/production.md](runbooks/production.md) | Prod: systemd units, порядок старту, health-check, типові інциденти |
+| [runbooks/commands.md](runbooks/commands.md) | Cheat-sheet команд: локальний запуск, VPS, деплой |
 
 ### 7. Аудит / Прогрес (P0–P6)
 

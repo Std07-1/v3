@@ -12,8 +12,8 @@
 
 1. [Реєстр схем](#реєстр-схем)
 2. [bar_v1 — Один OHLCV бар](#bar_v1--один-ohlcv-бар)
-3. [window_v1 — Відповідь /api/bars](#window_v1--відповідь-apibars)
-4. [updates_v1 — Відповідь /api/updates](#updates_v1--відповідь-apiupdates)
+3. [window_v1 — WS full frame (bars)](#window_v1--ws-full-frame-bars)
+4. [updates_v1 — WS delta frame (events)](#updates_v1--ws-delta-frame-events)
 5. [tick_v1 — Тік](#tick_v1--тік)
 6. [SMC Wire Format (WS frames)](#smc-wire-format-ws-frames)
 7. [Redis snapshot (внутрішній)](#redis-snapshot-та-preview-внутрішній-формат)
@@ -98,7 +98,7 @@
 
 ---
 
-## window_v1 — Відповідь /api/bars
+## window_v1 — WS full frame (bars)
 
 **Файл**: `core/contracts/public/marketdata_v1/window_v1.json`  
 **Schema ID**: `marketdata.window.v1`
@@ -144,7 +144,7 @@
 
 ---
 
-## updates_v1 — Відповідь /api/updates
+## updates_v1 — WS delta frame (events)
 
 **Файл**: `core/contracts/public/marketdata_v1/updates_v1.json`  
 **Schema ID**: `marketdata.updates.v1`

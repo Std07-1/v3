@@ -165,7 +165,7 @@ app.main (supervisor)
 | **Дані** (SSOT JSONL) | `data_v3/{symbol}/tf_{tf_s}/part-YYYYMMDD.jsonl` | append-only, final-only |
 | **Redis cache** | `{NS}:ohlcv:snap/tail:{sym}:{tf_s}` | Не SSOT; warmup/cold-load кеш |
 | **Preview plane** | `{NS}:preview:*` у Redis | Ізольований keyspace; не на диску |
-| **Updates bus** | Redis list `{NS}:updates:{sym}:{tf_s}` + seq | Hot-path для /api/updates |
+| **Updates bus** | Redis list `{NS}:updates:{sym}:{tf_s}` + seq | Hot-path для WS delta frames |
 | **TF allowlist** | `config.json → tf_allowlist_s` | `[60, 180, 300, 900, 1800, 3600, 14400, 86400]` |
 | **Preview TF allowlist** | `config.json → preview_tick_tfs_s` | `[60, 180, 300, 900, 1800, 3600, 14400, 86400]` (M1→D1, HTF running accumulator) |
 | **Symbols** | `config.json → symbols` | 4 активних (XAU/USD, XAG/USD, BTCUSDT, ETHUSDT) |
@@ -185,7 +185,7 @@ app.main (supervisor)
 | **I1** | **UDS як вузька талія**: всі writes через `commit_final_bar`/`publish_preview_bar`; UI = `role="reader"`, `_ensure_writer_role()` кидає `RuntimeError` | Runtime guard у UDS |
 | **I2** | **Єдина геометрія часу**: canonical = epoch_ms int. CandleBar/SSOT/API = end-excl (`close_time_ms = open + tf_s*1000`). Redis ALL = end-incl (`close_ms = open + tf_s*1000 - 1`). Конвертація на межі Redis write (`redis_snapshot`, `uds.publish_preview_bar`). | `core/model/bars.py:assert_invariants`, `_ensure_bar_payload_end_excl` |
 | **I3** | **Final > Preview (NoMix)**: `complete=true` (final, `source ∈ {history, derived, history_agg}`) завжди перемагає `complete=false` (preview). NoMix guard у UDS | Watermark + NoMix violation tracking |
-| **I4** | **Один update-потік для UI**: UI отримує бари лише через `/api/updates` (upsert events) + `/api/bars` (cold-load). Жодних паралельних каналів | Contract-first API schema |
+| **I4** | **Один update-потік для UI**: UI отримує бари лише через WS `delta` frames (upsert events) + WS `full` frame (cold-load). Жодних паралельних каналів | Contract-first WS schema |
 | **I5** | **Degraded-but-loud**: будь-який fallback/перемикання джерел/geom_fix → `warnings[]`/`meta.extensions`, не silent. `bars=[]` завжди з `warnings[]` (no_data rail) | `_contract_guard_warn_*` + no_data branch |
 | **I6** | **Stop-rule**: якщо зміна ламає I0–I5 → зупинити PATCH, зробити ADR. Ніяких "одноразових" фіксів без обґрунтування | Governance: copilot-instructions.md rev 2.0 |
 
@@ -255,7 +255,6 @@ flowchart LR
     end
     subgraph UI["UI Layer"]
         UIv4[ui_v4<br/>WS real-time :8000] -->|WS full/delta/scrollback| UR
-        UIv4 -->|/api/bars, /api/updates, /api/overlay| UR
         UR -->|cold-load| R5
         UR -->|fallback| D5
         UR -->|preview TFs| RP
@@ -283,8 +282,8 @@ flowchart LR
         RAM[(RAM LRU)]
     end
     subgraph UI["B: UI (read-only)"]
-        BARS[/api/bars]
-        UPDE[/api/updates]
+        BARS[WS full frame]
+        UPDE[WS delta frame]
     end
 
     FX1 --> M1P --> CFB
@@ -306,7 +305,7 @@ flowchart LR
 
 - **I1**: всі writes тільки через `commit_final_bar` (UDS)
 - **I3**: final (complete=true, source ∈ {history, derived, history_agg}) = незмінний; дублікати відкидаються watermark
-- **I6**: disk = SSOT (append-only); Redis/RAM = cache (NOT hot-path для /api/bars у UI, крім bootstrap)
+- **I6**: disk = SSOT (append-only); Redis/RAM = cache (NOT hot-path для WS full frame у UI, крім bootstrap)
 
 ### Схема B: Preview Pipeline (тіки → M1/M3 preview)
 
@@ -333,9 +332,9 @@ flowchart LR
         BRG[bridge final→preview<br/>final>preview]
     end
     subgraph UI_P["B: UI"]
-        BARSM1[/api/bars tf=60/180]
-        UPDM1[/api/updates tf=60/180]
-        OVL[/api/overlay]
+        BARSM1[WS full tf=60/180]
+        UPDM1[WS delta tf=60/180]
+        OVL[WS overlay]
     end
 
     OFFERS --> TP --> PS --> TW --> TA
@@ -553,7 +552,7 @@ flowchart TD
     G -->|null| K[DEVNULL]
 ```
 
-### UI polling /api/updates
+### UI WS delta stream
 
 ```mermaid
 sequenceDiagram
@@ -562,10 +561,10 @@ sequenceDiagram
     participant UDS as runtime/store/uds.py
     participant RU as Redis updates
 
-    UI->>API: GET /api/updates?symbol&tf_s&since_seq
+    UI->>API: WS subscribe(symbol, tf_s)
     API->>UDS: read_updates(symbol, tf_s, since_seq)
     UDS->>RU: read updates (list+seq)
-    API-->>UI: events[] + cursor_seq
+    API-->>UI: WS delta frame: events[] + cursor_seq
     UI->>UI: applyUpdates(events)
 ```
 
@@ -578,7 +577,7 @@ sequenceDiagram
 ## Policy SSOT та rails (Slice-1..4)
 
 - `/api/config` є policy-джерелом для UI: `policy_version`, `build_id`, `window_policy`, allowlists.
-- `/api/bars` (cold-start) читає через UDS з `prefer_redis=true`, `disk_policy=explicit` (unified для всіх TF).
+- WS `full` frame (cold-start) читає через UDS з `prefer_redis=true`, `disk_policy=explicit` (unified для всіх TF).
 - `bars=[]` без пояснення заборонено: no_data rail гарантує `warnings[]`.
 - RAM short-window повертає partial+loud (`insufficient_warmup`, `meta.extensions.expected/got`) замість `cache_miss -> empty`.
 
@@ -711,7 +710,7 @@ v3/
 │   ├── dist/                      # vite build output (index.html + assets/); served by ws_server same-origin
 │   ├── README_DEV.md              # developer guide
 │   ├── UI_v4_COPILOT_README.md    # SSOT інструкція (slices 0–5 plan)
-│   └── src/                       # ~4700 LOC, ~30 файлів, typecheck 0/0
+│   └── src/                       # ~10000 LOC, ~40 файлів, typecheck 0/0
 │       ├── types.ts               # SSOT: RenderFrame, WsAction, Candle, SmcData, SmcDeltaWire, Drawing
 │       ├── App.svelte             # root wiring: WS + DiagState + keyboard + theme/diag toggle
 │       ├── main.ts                # Svelte mount entrypoint
@@ -903,18 +902,17 @@ non_critical:  5s → 10s → 20s → 40s → 80s → 120s → 120s → 120s →
 
 **ws_server** (WS + HTTP, порт 8000):
 
-1. `/api/bars`: cold-load з Redis snap → fallback disk.
-2. `/api/updates`: Redis updates bus (cursor_seq). Disk лише recovery.
-3. `/api/overlay`: ephemeral preview bar для TF≥5.
-4. `/api/gaps`: gap report з `tools/tail_integrity_scanner.py` (summary.json).
-5. WS: `full` frame (cold start), `delta` frames кожну `delta_poll_interval_s` (default 1.0s).
-3. `switch` action → canonical symbol/TF → новий `full` frame.
-4. `scrollback` action → `to_ms` → UDS `read_window` → `scrollback` frame.
-5. `heartbeat` кожні 30с.
+1. WS `full` frame: cold-load з Redis snap → fallback disk.
+2. WS `delta` frames: Redis updates bus (cursor_seq). Disk лише recovery.
+3. WS `overlay` frame: ephemeral preview bar для TF≥5.
+4. HTTP `/api/status`: health check.
+5. WS `full` frame (cold start), `delta` frames кожну `delta_poll_interval_s` (default 1.0s).
+6. `switch` action → canonical symbol/TF → новий `full` frame.
+7. `scrollback` action → `to_ms` → UDS `read_window` → `scrollback` frame.
+8. `heartbeat` кожні 30с.
 
 ## Примітки
 
 - Warmup/tail роблять FXCM History API запити (ліміт).
 - Derived пропускаються при gap у M5 в межах бакета.
-- FXCM PREVIOUS_CLOSE працює в рамках одного API batch; cross-batch stitching — у /api/bars.
 - Дані data_v3 і History не зберігаються у git.

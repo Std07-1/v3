@@ -170,7 +170,7 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 ┌──────────────────────────────────────────────────────────────┐
 │  LAYER 3: UI v4 (WS real-time, read-only, ZERO domain logic) │
 │  WS full/delta/scrollback → UDS via ws_server.py             │
-│  Svelte 5 + LWC 5 + TypeScript, 25 файлів ~4045 LOC          │
+│  Svelte 5 + LWC 5 + TypeScript, ~40 файлів ~10000 LOC          │
 │  Порт 8000, same-origin, config-gated                        │
 │  Chart parity DONE, audit T1-T10 COMPLETE                    │
 └──────────────────────────────────────────────────────────────┘
