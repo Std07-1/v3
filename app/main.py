@@ -91,7 +91,6 @@ def _parse_args() -> argparse.Namespace:
         "--mode",
         choices=[
             "all",
-            "ui",
             "tick_preview",
             "tick_publisher",
             "m1_poller",
@@ -103,7 +102,7 @@ def _parse_args() -> argparse.Namespace:
             "binance_tick_publisher",
         ],
         default="all",
-        help="all | ui | tick_preview | tick_publisher | m1_poller | "
+        help="all | tick_preview | tick_publisher | m1_poller | "
         "broker_sidecar | m1_ingestion_worker | ws_server | replay | "
         "binance_ingest_worker | binance_tick_publisher",
     )
@@ -155,7 +154,7 @@ _PROCESS_CATEGORIES: Dict[str, str] = {
     "broker_sidecar": "critical",
     "tick_publisher": "non_critical",
     "tick_preview": "non_critical",
-    "ui": "essential",
+
     "ws_server": "essential",
     "replay": "critical",
     "binance_ingest_worker": "critical",
@@ -796,27 +795,14 @@ def main() -> int:
                 ChildProcess(label="replay", module="runtime.ingest.replay", proc=proc)
             )
 
-        if args.mode in ("all", "ui", "replay"):
-            if args.mode in ("all", "replay"):
-                config_path = pick_config_path()
-                prime_ok = _wait_for_prime_ready(config_path)
-                if not prime_ok:
-                    logging.warning(
-                        "UI_START_DEGRADED reason=prime_timeout "
-                        "(UI стартує, але дані можуть бути неповними)",
-                    )
-            # ADR-0017: replay → UI/WS reader отримує env V3_REPLAY_MODE=1
-            extra_env_ui = {"V3_REPLAY_MODE": "1"} if args.mode == "replay" else {}
-            processes.append(
-                _start_process(
-                    label="ui",
-                    module="ui_chart_v3",
-                    stdio=stdio,
-                    log_dir=log_dir,
-                    new_console=args.new_console,
-                    extra_env=extra_env_ui,
+        if args.mode in ("all", "replay"):
+            config_path = pick_config_path()
+            prime_ok = _wait_for_prime_ready(config_path)
+            if not prime_ok:
+                logging.warning(
+                    "UI_START_DEGRADED reason=prime_timeout "
+                    "(UI стартує, але дані можуть бути неповними)",
                 )
-            )
         if args.mode in ("all", "ws_server", "replay"):
             # P5: WS-сервер для ui_v4 (essential, restart-tolerant)
             # Gate: config.json → ws_server.enabled (default: false)
@@ -853,7 +839,7 @@ def main() -> int:
             return 2
 
         # ── Process summary table ──
-        _port_map = {"ui": 8089, "ws_server": 8000}  # known port assignments
+        _port_map = {"ws_server": 8000}  # known port assignments
         logging.info("=" * 60)
         logging.info("  v3 Processes  (%d total, mode=%s)", len(processes), args.mode)
         logging.info("-" * 60)
