@@ -39,7 +39,7 @@
 - tick_publisher (FXCM WS tick stream)
 - tick_preview (tick → preview M1/M3)
 - m1_poller (M1 History → final M1 + DeriveEngine cascade M3→M5→…→H4)
-- ui (HTTP server, port 8089)
+- ws_server (HTTP + WS server, port 8000)
 
 **Non-goals**:
 - Не міняти derive chain

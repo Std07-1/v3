@@ -4,7 +4,7 @@
 > **Навігація**: [docs/index.md](index.md)  
 > **Принцип**: UI = read-only renderer. Тіки напряму не бачить. Не має доменної логіки.
 
-Усі endpoint-и обслуговуються одним процесом `ui_chart_v3/server.py` (same-origin, порт 8089).  
+Усі endpoint-и обслуговуються процесом `runtime/ws/ws_server.py` (same-origin, порт 8000).  
 UDS ініціалізується з `role="reader"` — будь-яка спроба запису → `RuntimeError`.
 
 ---
@@ -31,9 +31,8 @@ UDS ініціалізується з `role="reader"` — будь-яка спр
 | `/api/overlay` | GET | Ephemeral preview bar для TF≥M5 | — | UDS `read_preview_window()` | no-cache |
 | `/api/symbols` | GET | Список доступних символів | — | `config.json → symbols` | no-cache |
 | `/api/gaps` | GET | Gap report з tail integrity scanner | — | `reports/tail_audit/summary.json` | no-cache |
-| `/` | GET | Статичний UI (index.html) | — | `ui_chart_v3/static/` | no-cache (dev) |
-| `/app.js`, `/chart_adapter_lite.js` | GET | Статичні JS файли | — | `ui_chart_v3/static/` | no-cache (з cache-buster) |
-| `/ui_config.json` | GET | Портативний UI конфіг | — | `ui_chart_v3/static/` | no-cache |
+| `/` | GET | Статичний UI (index.html) | — | `ui_v4/dist/` | no-cache (dev) |
+| Static assets | GET | JS/CSS/images | — | `ui_v4/dist/assets/` | hashed filenames |
 
 > **Усі API endpoint-и повертають `Content-Type: application/json; charset=utf-8`.**  
 > **Статичні файли**: no-cache headers (`Cache-Control: no-store, no-cache`, `Pragma: no-cache`, `Expires: 0`).
@@ -235,15 +234,15 @@ UDS ініціалізується з `role="reader"` — будь-яка спр
 
 | Guard | Файл:функція | Що перевіряє |
 | --- | --- | ---|
-| `_guard_bar_shape` | `server.py` | Validates bar contract (time, OHLCV, open_time_ms та ін.) |
-| `_guard_event_shape` | `server.py` | Validates update event structure (key, bar, complete, source) |
-| `_guard_meta_shape` | `server.py` | Validates meta object (source, redis_hit, boot_id) |
-| `_clamp_limit` | `server.py` | Caps limit per TF; warning при перевищенні |
-| `_normalize_bar_window_v1` | `server.py` | Нормалізує бар до public window_v1 формату |
-| `_contract_guard_warn_window` | `server.py` | Loud лог при порушенні window_v1 контракту |
-| `_contract_guard_warn_updates` | `server.py` | Loud лог при порушенні updates_v1 контракту |
-| `prefer_redis`/`force_disk` ignore | `server.py` | Query params ігноруються з warning (I1: UDS = вузька талія) |
-| no_data rail | `server.py` | `bars=[]` → обов'язково `warnings[]` |
+| `_guard_bar_shape` | `ws_server.py` | Validates bar contract (time, OHLCV, open_time_ms та ін.) |
+| `_guard_event_shape` | `ws_server.py` | Validates update event structure (key, bar, complete, source) |
+| `_guard_meta_shape` | `ws_server.py` | Validates meta object (source, redis_hit, boot_id) |
+| `_clamp_limit` | `ws_server.py` | Caps limit per TF; warning при перевищенні |
+| `_normalize_bar_window_v1` | `ws_server.py` | Нормалізує бар до public window_v1 формату |
+| `_contract_guard_warn_window` | `ws_server.py` | Loud лог при порушенні window_v1 контракту |
+| `_contract_guard_warn_updates` | `ws_server.py` | Loud лог при порушенні updates_v1 контракту |
+| `prefer_redis`/`force_disk` ignore | `ws_server.py` | Query params ігноруються з warning (I1: UDS = вузька талія) |
+| no_data rail | `ws_server.py` | `bars=[]` → обов'язково `warnings[]` |
 
 ---
 
@@ -268,4 +267,4 @@ UDS ініціалізується з `role="reader"` — будь-яка спр
 2. **Тіки не видимі UI напряму**: UI не бачить raw ticks з Redis PubSub. Він бачить лише preview bars через `/api/bars` (preview TF) та overlay через `/api/overlay`.
 3. **Disk не hot-path**: `/api/bars` для interactive requests використовує `disk_policy="never"`. Disk доступний лише під час bootstrap (перші 60s) або для explicit scrollback (`to_open_ms`).
 4. **No split-brain**: query params `prefer_redis`/`force_disk` ігноруються server-side. Джерело обирається сервером, не клієнтом.
-5. **Same-origin**: UI та API працюють в одному процесі, один порт (8089).
+5. **Same-origin**: UI та API працюють в одному процесі, один порт (8000).

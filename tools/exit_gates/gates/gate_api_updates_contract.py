@@ -5,7 +5,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib import error, request, parse
 
 
-def _http_get_json(url: str, timeout_s: float = 3.0) -> Tuple[int, bytes, Optional[dict], Optional[str]]:
+def _http_get_json(
+    url: str, timeout_s: float = 3.0
+) -> Tuple[int, bytes, Optional[dict], Optional[str]]:
     req = request.Request(url, headers={"Cache-Control": "no-store"})
     try:
         with request.urlopen(req, timeout=timeout_s) as resp:
@@ -42,7 +44,7 @@ def _event_key(ev: dict) -> Optional[Tuple[str, int, int]]:
 
 
 def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
-    base_url = str(inputs.get("base_url", "http://127.0.0.1:8089"))
+    base_url = str(inputs.get("base_url", "http://127.0.0.1:8000"))
     symbol = inputs.get("symbol")
     tf_s = inputs.get("tf_s")
     since_seq = int(inputs.get("since_seq", 0))
@@ -61,7 +63,11 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     if err:
         return {"ok": False, "details": err, "metrics": {"status": code}}
     if code != 200 or not isinstance(data, dict):
-        return {"ok": False, "details": "http_or_json_invalid", "metrics": {"status": code}}
+        return {
+            "ok": False,
+            "details": "http_or_json_invalid",
+            "metrics": {"status": code},
+        }
 
     events = data.get("events")
     cursor_seq = _parse_int(data.get("cursor_seq"))
@@ -142,5 +148,8 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "ok": len(violations) == 0,
         "details": details,
-        "metrics": {"violations": len(violations), "events": len(events) if isinstance(events, list) else 0},
+        "metrics": {
+            "violations": len(violations),
+            "events": len(events) if isinstance(events, list) else 0,
+        },
     }

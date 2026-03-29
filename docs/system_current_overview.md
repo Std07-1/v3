@@ -58,8 +58,7 @@ app.main (supervisor)
   ├── broker_sidecar        (ADR-0016: stateless FXCM M1 fetcher, .venv37/, Redis IPC)
   ├── m1_ingestion_worker   (ADR-0016: BrokerRedisProxy → UDS final M1 + DeriveEngine cascade, .venv/)
   ├── m1_poller             (legacy single-process mode: FXCM M1 History → UDS, fallback якщо .venv37/ відсутній)
-  ├── ui                    (HTTP server, port 8089 — ui_chart_v3 polling)
-  └── ws_server             (WS server, port 8000 — ui_v4 real-time, config-gated)
+  └── ws_server             (WS server, port 8000 — ui_v4 real-time + HTTP API)
                               ├── SmcRunner (in-process, ADR-0024): SmcEngine per (symbol, tf) → zones/swings/levels in WS frames
                               └── Drawing tools: 4 tools (H/T/R/E), glass toolbar, theme-aware (ADR-0007, ADR-0008)
 ```
@@ -142,9 +141,8 @@ app.main (supervisor)
 │               Імпортує: core/                               │
 │               НЕ імпортує: tools/, ui/                      │
 ├─────────────────────────────────────────────────────────────┤
-│  ui_chart_v3/ презентація + HTTP API (same-origin)          │
-│               Імпортує: core/ (pure helpers)                │
-│               Імпортує: runtime/ (ReadPolicy, UDS types)    │
+│  ui_v4/      презентація (Svelte 5 + LWC 5, same-origin :8000)  │
+│               Імпортує: нічого (чистий frontend)               │
 │               НЕ містить доменної логіки                    │
 ├─────────────────────────────────────────────────────────────┤
 │  app/         запуск, supervisor, lifecycle                  │
@@ -259,9 +257,8 @@ flowchart LR
         U3 -->|Redis snap| R5[(Redis)]
     end
     subgraph UI["UI Layer"]
-        UIc[ui_chart_v3<br/>HTTP polling :8089] -->|/api/bars, /api/updates| UR[UDS reader]
-        UIc -->|/api/overlay TF≥M5| UR
         UIv4[ui_v4<br/>WS real-time :8000] -->|WS full/delta/scrollback| UR
+        UIv4 -->|/api/bars, /api/updates, /api/overlay| UR
         UR -->|cold-load| R5
         UR -->|fallback| D5
         UR -->|preview TFs| RP
@@ -575,8 +572,8 @@ flowchart TD
 
 ```mermaid
 sequenceDiagram
-    participant UI as ui_chart_v3/static/app.js
-    participant API as ui_chart_v3/server.py
+    participant UI as ui_v4 (WS client)
+    participant API as runtime/ws/ws_server.py
     participant UDS as runtime/store/uds.py
     participant RU as Redis updates
 
@@ -722,18 +719,9 @@ v3/
 │   │   ├── smc_runner.py          # SmcRunner: warmup via UDS + on_bar callback + get_pd_state() (ADR-0041 P2)
 │   │   └── tda_live.py            # TdaLiveRunner: TDA cascade I/O wrapper (ADR-0040)
 │   └── obs_60s.py                 # спостереження / метрики (60s intervals)
-├── ui_chart_v3/                   # UI + API same-origin (поточний production, HTTP polling)
-│   ├── server.py                  # HTTP API + /api/config policy SSOT + no_data loud rail + static server
-│   ├── __main__.py                # python -m ui_chart_v3
-│   ├── README.md                  # UI документація
-│   └── static/
-│       ├── index.html             # UI shell
-│       ├── app.js                 # polling + applyUpdates + policy consume + scrollback
-│       ├── chart_adapter_lite.js  # адаптер Lightweight Charts
-│       └── ui_config.json         # portable UI конфіг (api_base, ui_debug)
-├── ui_v4/                         # Next-gen UI: Svelte 5 + LWC 5 + TypeScript (WS backend DONE, chart parity DONE, T1-T10 COMPLETE, SMC overlay ACTIVE, Drawing Tools v1 ACTIVE)
+├── ui_v4/                         # UI: Svelte 5 + LWC 5 + TypeScript (WS backend, same-origin :8000)
 │   ├── package.json               # deps: lwc@5.0.0, uuid, svelte 5, vite 6, TS 5.7
-│   ├── vite.config.ts             # port 5173 (dev), proxy /api/* → 8089
+│   ├── vite.config.ts             # port 5173 (dev), proxy /api/* → 8000
 │   ├── dist/                      # vite build output (index.html + assets/); served by ws_server same-origin
 │   ├── README_DEV.md              # developer guide
 │   ├── UI_v4_COPILOT_README.md    # SSOT інструкція (slices 0–5 plan)
@@ -833,18 +821,14 @@ v3/
 
 ### UI
 
-**ui_chart_v3** (поточний production):
+**ws_server** (port 8000, same-origin):
 
-- HTTP API: /api/bars, /api/updates, /api/overlay, /api/config (same-origin, порт 8089).
-- PREVIOUS_CLOSE stitching: open[i]=close[i-1] для TV-like smooth candles.
-- Scrollback: cover-until-satisfied (trigger ~2000, chunk 5000).
-- Epoch guard: абортує in-flight запити при switch symbol/TF.
-
-**ui_v4** (next-gen, WS backend DONE, chart parity DONE, audit T1-T10 COMPLETE):
-
-- Svelte 5 runes + TypeScript strict + Vite 6 + LWC 5.0.0. **25 файлів, ~4045 LOC** (typecheck 0/0).
-- Transport: WebSocket (`runtime/ws/ws_server.py`, 907 LOC, порт 8000, `/ws`). Протокол: `ui_v4_v2` (full + delta + scrollback + config + heartbeat). CPU opt: delta_poll 2s + ThreadPoolExecutor(2). Idle 2-3% CPU.
-- Same-origin serving (Тема G, G1): `ws_server.py` роздає `ui_v4/dist/` (index.html + /assets/) на порт 8000. Prod: `npm run build` → `python -m runtime.ws.ws_server`. Dev: `npm run dev` (:5173) + ws_server (:8000).
+- HTTP API: /api/bars, /api/updates, /api/overlay, /api/config, /api/status, /api/symbols.
+- WS: `ui_v4_v2` protocol (full + delta + scrollback + config + heartbeat).
+- SmcRunner integration: `smc_snapshot`/`smc_delta` frames.
+- Same-origin serving: `ui_v4/dist/` (index.html + /assets/).
+- CPU opt: delta_poll 2s + ThreadPoolExecutor(2). Idle 2-3% CPU.
+- Prod: `npm run build` → `python -m app.main --mode ws_server`. Dev: `npm run dev` (:5173) + ws_server (:8000).
 - 3-layer rendering: LWC candles + SMC overlay canvas + drawings canvas (RAF + renderSync, DPR-aware). SMC overlay **ACTIVE** (ADR-0024: OB/FVG/Swings/Levels + strength opacity + 4 toggles; ADR-0026: level rendering rules — merge-on-physical-overlap, L1–L6); drawings **ACTIVE** (ADR-0007).
 - Drawing tools (ADR-0007): hline/trend/rect/eraser, click-click
     TradingView-style, selection/hit-testing, drag-edit, undo/redo
@@ -934,17 +918,13 @@ non_critical:  5s → 10s → 20s → 40s → 80s → 120s → 120s → 120s →
 
 ### 5) UI reads
 
-**ui_chart_v3** (HTTP polling, порт 8089):
+**ws_server** (WS + HTTP, порт 8000):
 
-1. `/api/bars`: cold-load з Redis snap → fallback disk. Stitching open[i]=close[i-1].
+1. `/api/bars`: cold-load з Redis snap → fallback disk.
 2. `/api/updates`: Redis updates bus (cursor_seq). Disk лише recovery.
-3. `/api/overlay`: ephemeral preview bar для TF≥M5.
+3. `/api/overlay`: ephemeral preview bar для TF≥5.
 4. `/api/gaps`: gap report з `tools/tail_integrity_scanner.py` (summary.json).
-
-**ui_v4** (WebSocket, порт 8000):
-
-1. WS connect → `config` frame (symbols, TFs, delta_poll_interval_s, version) → `full` frame (cold start bars).
-2. `delta` frames кожну `delta_poll_interval_s` (default 1.0s) з UDS updates bus.
+5. WS: `full` frame (cold start), `delta` frames кожну `delta_poll_interval_s` (default 1.0s).
 3. `switch` action → canonical symbol/TF → новий `full` frame.
 4. `scrollback` action → `to_ms` → UDS `read_window` → `scrollback` frame.
 5. `heartbeat` кожні 30с.

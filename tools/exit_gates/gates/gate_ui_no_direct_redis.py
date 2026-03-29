@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 FORBIDDEN = [
     "import redis",
     "redis_lib",
@@ -16,7 +15,7 @@ ALLOW_FILES = {
 
 
 def run_gate(inputs: dict) -> dict:
-    root = Path(str(inputs.get("root_dir", "ui_chart_v3")))
+    root = Path(str(inputs.get("root_dir", "runtime/ws")))
     bad: list[str] = []
     for path in root.rglob("*.py"):
         rel = str(path).replace("\\", "/")
@@ -32,7 +31,11 @@ def run_gate(inputs: dict) -> dict:
                 bad.append(f"{rel}: знайдено заборонений токен: {token}")
     ok = not bad
     details = "ok" if ok else "found=" + "; ".join(bad)
-    return {"ok": ok, "details": details, "metrics": {"files": len(list(root.rglob('*.py')))}}
+    return {
+        "ok": ok,
+        "details": details,
+        "metrics": {"files": len(list(root.rglob("*.py")))},
+    }
 
 
 def main() -> int:

@@ -46,7 +46,7 @@ If you discover a security vulnerability in Trading Platform v3, please report i
 - CI workflow: `.github/workflows/ci.yml`
 - Static governance gates: `python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.ci.json`
 - Python dependency scan: `pip-audit -r requirements.txt`
-- Python SAST baseline: `bandit -q -r app core runtime ui_chart_v3 tools`
+- Python SAST baseline: `bandit -q -r app core runtime tools`
 - Frontend dependency scan: `npm audit --audit-level=high --omit=dev`
 - Dependency drift automation: `.github/dependabot.yml`
 

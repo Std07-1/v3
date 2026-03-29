@@ -5,7 +5,9 @@ from typing import Any, Dict, Optional, Tuple
 from urllib import error, parse, request
 
 
-def _http_get_json(url: str, timeout_s: float = 3.0) -> Tuple[int, bytes, Optional[dict], Optional[str]]:
+def _http_get_json(
+    url: str, timeout_s: float = 3.0
+) -> Tuple[int, bytes, Optional[dict], Optional[str]]:
     req = request.Request(url, headers={"Cache-Control": "no-store"})
     try:
         with request.urlopen(req, timeout=timeout_s) as resp:
@@ -30,7 +32,7 @@ def _parse_int(value: Any) -> Optional[int]:
 
 
 def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
-    base_url = str(inputs.get("base_url", "http://127.0.0.1:8089"))
+    base_url = str(inputs.get("base_url", "http://127.0.0.1:8000"))
     symbol = inputs.get("symbol")
     tf_s = inputs.get("tf_s")
     since_seq = inputs.get("since_seq")
@@ -50,7 +52,11 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     if err:
         return {"ok": False, "details": err, "metrics": {"status": code}}
     if code != 200 or not isinstance(data, dict):
-        return {"ok": False, "details": "http_or_json_invalid", "metrics": {"status": code}}
+        return {
+            "ok": False,
+            "details": "http_or_json_invalid",
+            "metrics": {"status": code},
+        }
 
     events = data.get("events")
     cursor_seq = _parse_int(data.get("cursor_seq"))
@@ -78,7 +84,9 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
             expected = int(since_seq)
 
     ok = cursor_seq == expected
-    details = "ok" if ok else f"cursor_seq_mismatch:cursor={cursor_seq},expected={expected}"
+    details = (
+        "ok" if ok else f"cursor_seq_mismatch:cursor={cursor_seq},expected={expected}"
+    )
     return {
         "ok": ok,
         "details": details,

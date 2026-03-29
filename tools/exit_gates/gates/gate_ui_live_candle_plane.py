@@ -10,15 +10,16 @@
   4. ui_overlay_isolated_from_applyUpdates — overlay окремий від applyUpdates
   5. ui_polling_no_interval_storm — заборонено setInterval для polling
 """
+
 from __future__ import annotations
 
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
-
 # ---------------------------------------------------------------------------
 # Допоміжні
 # ---------------------------------------------------------------------------
+
 
 def _read_text(path: str) -> Optional[str]:
     try:
@@ -65,13 +66,13 @@ _WRITE_CALLS = [
 
 def _check_overlay_read_only(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     """/api/overlay має бути read-only (без write-викликів)."""
-    server_path = _find_file("ui_chart_v3/server.py", root)
+    server_path = _find_file("runtime/ws/ws_server.py", root)
     if server_path is None:
-        return False, "server.py_not_found", {}
+        return False, "ws_server.py_not_found", {}
 
     src = _read_text(server_path)
     if src is None:
-        return False, "server.py_read_error", {}
+        return False, "ws_server.py_read_error", {}
 
     metrics: Dict[str, Any] = {}
 
@@ -85,19 +86,18 @@ def _check_overlay_read_only(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     if not overlay_section:
         overlay_section = _extract_handler_section(
             src,
-            "path == \"/api/overlay\"",
+            'path == "/api/overlay"',
             "self._json(200",
         )
     if not overlay_section:
         # Пробуємо до кінця handler
         idx = src.find("/api/overlay")
         if idx >= 0:
-            # Беремо до наступного 'if path ==' або 'self._bad("unknown'
             end_idx = src.find('self._bad("unknown_endpoint")', idx)
             if end_idx > idx:
                 overlay_section = src[idx:end_idx]
 
-    metrics["overlay_section_len"] = len(overlay_section)
+    metrics["overlay_section_len"] = len(overlay_section) if overlay_section else 0
 
     if not overlay_section:
         return False, "overlay_handler_not_found", metrics
@@ -129,9 +129,10 @@ def _check_overlay_read_only(root: str) -> Tuple[bool, str, Dict[str, Any]]:
 # + hold-prev-until-final логіка
 # ---------------------------------------------------------------------------
 
+
 def _check_overlay_two_bar_contract(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     """/api/overlay має 2-bar contract з hold-prev-until-final."""
-    server_path = _find_file("ui_chart_v3/server.py", root)
+    server_path = _find_file("runtime/ws/ws_server.py", root)
     if server_path is None:
         return False, "server.py_not_found", {}
 
@@ -183,9 +184,10 @@ def _check_overlay_two_bar_contract(root: str) -> Tuple[bool, str, Dict[str, Any
 # resolve_anchor_offset_ms + sentinel warning overlay_anchor_mismatch
 # ---------------------------------------------------------------------------
 
+
 def _check_overlay_anchor_sentinel(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     """Наявність anchor offset і sentinel warning для drift."""
-    server_path = _find_file("ui_chart_v3/server.py", root)
+    server_path = _find_file("runtime/ws/ws_server.py", root)
     if server_path is None:
         return False, "server.py_not_found", {}
 
@@ -217,10 +219,11 @@ def _check_overlay_anchor_sentinel(root: str) -> Tuple[bool, str, Dict[str, Any]
 # overlay має окремий series і не заходить у applyUpdates
 # ---------------------------------------------------------------------------
 
+
 def _check_ui_overlay_isolation(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     """Overlay ізольований від applyUpdates: окремий series, окремий poll."""
-    adapter_path = _find_file("ui_chart_v3/static/chart_adapter_lite.js", root)
-    app_path = _find_file("ui_chart_v3/static/app.js", root)
+    adapter_path = _find_file("ui_v4/src/chart/OverlayRenderer.ts", root)
+    app_path = _find_file("ui_v4/src/App.svelte", root)
 
     metrics: Dict[str, Any] = {}
     issues: List[str] = []
@@ -280,7 +283,9 @@ def _check_ui_overlay_isolation(root: str) -> Tuple[bool, str, Dict[str, Any]]:
                     metrics["pollOverlay_calls_applyUpdates"] = False
 
                 # Має викликати updateOverlayBar або clearOverlay
-                has_overlay_call = "updateOverlayBar" in poll_body or "clearOverlay" in poll_body
+                has_overlay_call = (
+                    "updateOverlayBar" in poll_body or "clearOverlay" in poll_body
+                )
                 metrics["pollOverlay_uses_overlay_api"] = has_overlay_call
                 if not has_overlay_call:
                     issues.append("pollOverlay_not_using_overlay_api")
@@ -309,7 +314,7 @@ _FORBIDDEN_INTERVALS = [
 
 def _check_ui_polling_no_storm(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     """Polling має бути через setTimeout + single-flight, без setInterval."""
-    app_path = _find_file("ui_chart_v3/static/app.js", root)
+    app_path = _find_file("ui_v4/src/App.svelte", root)
     if app_path is None:
         return False, "app.js_not_found", {}
 
@@ -392,9 +397,7 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
             details_parts.append(f"{name}:OK")
 
     metrics["total_subgates"] = len(_SUBGATES)
-    metrics["passed"] = sum(
-        1 for sg in metrics["subgates"].values() if sg.get("ok")
-    )
+    metrics["passed"] = sum(1 for sg in metrics["subgates"].values() if sg.get("ok"))
 
     details = "; ".join(details_parts)
     if all_ok:

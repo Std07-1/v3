@@ -5,6 +5,7 @@
 Inline ignore: '# bare_except: allow' на рядку except.
 Ratchet: max_violations бюджет (зменшувати по мірі фіксів).
 """
+
 from __future__ import annotations
 
 import ast
@@ -13,8 +14,16 @@ from typing import Any, Dict, List, Set
 
 # Cleanup methods — silent except у їхньому try body авто-дозволений
 _CLEANUP_ATTRS: Set[str] = {
-    "close", "kill", "terminate", "logout", "__exit__",
-    "unlink", "shutdown", "dispose", "wait", "flush",
+    "close",
+    "kill",
+    "terminate",
+    "logout",
+    "__exit__",
+    "unlink",
+    "shutdown",
+    "dispose",
+    "wait",
+    "flush",
 }
 
 
@@ -40,7 +49,10 @@ def _has_logging(body: list) -> bool:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             val = node.func.value
             if isinstance(val, ast.Name) and val.id in (
-                "logging", "Logging", "logger", "log",
+                "logging",
+                "Logging",
+                "logger",
+                "log",
             ):
                 return True
     return False
@@ -101,7 +113,7 @@ def run_gate(inputs: dict) -> dict:
     """Entry point для run_exit_gates runner."""
     root = Path(str(inputs.get("root", ".")))
     max_violations = int(inputs.get("max_violations", 0))
-    scan_dirs = inputs.get("scan_dirs", ["core", "runtime", "app", "ui_chart_v3"])
+    scan_dirs = inputs.get("scan_dirs", ["core", "runtime", "app"])
 
     all_v: List[Dict[str, Any]] = []
     files = 0
@@ -129,5 +141,6 @@ def run_gate(inputs: dict) -> dict:
         detail_lines.append(f"...+{n - 25} more")
     return {
         "ok": False,
-        "details": f"violations={n} exceeds budget={max_violations}; " + "; ".join(detail_lines),
+        "details": f"violations={n} exceeds budget={max_violations}; "
+        + "; ".join(detail_lines),
     }

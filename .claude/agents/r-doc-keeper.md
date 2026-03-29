@@ -299,7 +299,7 @@ These facts must be identical everywhere they appear:
 | Derive chain | `core/derive.py:DERIVE_CHAIN` | `AGENTS.md`, `system_overview`, `copilot-instructions`, ADR-0002, ADR-0023 |
 | H4 anchor | `config.json` → `core/buckets.py` | `AGENTS.md`, `system_overview`, `copilot-instructions` |
 | D1 anchor | `config.json` → `core/buckets.py` | `AGENTS.md`, `system_overview`, `copilot-instructions`, ADR-0023 |
-| Ports (8089, 8000) | `config.json` | `AGENTS.md`, `system_overview`, `ui_api.md`, `config_reference` |
+| Ports (8000) | `config.json` | `AGENTS.md`, `system_overview`, `ui_api.md`, `config_reference` |
 | Symbols count | `config.json:symbols` | `AGENTS.md`, `system_overview`, `copilot-instructions` |
 | Invariants I0–I6 | `copilot-instructions.md` | `AGENTS.md`, `system_overview` |
 | SMC invariants S0–S6 | `copilot-instructions.md` | ADR-0024 |
@@ -358,7 +358,7 @@ S1: N | S2: N | S3: N | Total: N
 Checked: N links | Dead: 0
 
 # FACT-CHECK (sample)
-1. Port 8089 → [VERIFIED config.json + ui_chart_v3/server.py]: ✅
+1. Port 8000 → [VERIFIED config.json + runtime/ws/ws_server.py]: ✅
 2. TF allowlist 8 items → [VERIFIED config.json]: ✅
 3. D1 anchor 79200 → [VERIFIED core/buckets.py]: ✅
 4. Test count 415+ → [VERIFIED terminal]: ✅

@@ -80,9 +80,9 @@
 ## 7) Контрольні команди
 
 - Перевірка апдейтів:
-  - curl <http://localhost:8089/api/updates?symbol=XAU/USD&tf_s=60&limit=200>
+  - curl <http://localhost:8000/api/updates?symbol=XAU/USD&tf_s=60&limit=200>
 - Перевірка барів:
-  - curl <http://localhost:8089/api/bars?symbol=XAU/USD&tf_s=60&limit=200>
+  - curl <http://localhost:8000/api/bars?symbol=XAU/USD&tf_s=60&limit=200>
 
 ## 8) Коли не чіпати
 

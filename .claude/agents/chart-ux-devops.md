@@ -269,7 +269,7 @@ This standard must be maintained. Never degrade it.
 
 ### Process Health:
 - m1_poller, tick_publisher, tick_preview: supervisor heartbeat, auto-restart with backoff
-- ui_chart_v3 HTTP: port 8089, `GET /api/status`
+- ws_server HTTP+WS: port 8000, `GET /api/status`
 - ws_server WS: port 8000, ping
 - Redis: port 6379, `redis-cli ping`, manual restart
 
@@ -287,7 +287,7 @@ This standard must be maintained. Never degrade it.
 
 ### Health Check Protocol:
 - Before dev session: `redis-cli ping`, verify Python 3.7 venv
-- After launch: `curl http://127.0.0.1:8089/api/status`
+- After launch: `curl http://127.0.0.1:8000/api/status`
 - After UI changes: `cd ui_v4 && npx svelte-check`
 - Before commit: `python -m pytest tests/ -v`
 - Before production: `python -m tools.run_exit_gates`
@@ -420,7 +420,7 @@ You have access to **Playwright-based browser automation tools** that let you op
 
 ### Visual Audit Workflow (MANDATORY for any UI review):
 
-1. **Pre-flight**: Verify ws_server is running (`curl http://127.0.0.1:8000` or `http://127.0.0.1:8089`)
+1. **Pre-flight**: Verify ws_server is running (`curl http://127.0.0.1:8000`)
 2. **Open browser**: `open_browser_page` → chart URL
 3. **Wait for load**: Chart needs ~2–3s for WS connection + first candles
 4. **Screenshot baseline**: `screenshot_page` — capture initial state
@@ -440,8 +440,7 @@ When filling the Screenshot Audit Table, **attach real screenshots** from the br
 
 ### Key URLs:
 - **WS UI (primary)**: `http://127.0.0.1:8000`
-- **HTTP UI (fallback)**: `http://127.0.0.1:8089`
-- **Health check**: `http://127.0.0.1:8089/api/status`
+- **Health check**: `http://127.0.0.1:8000/api/status`
 
 ### DPR Testing:
 Use the browser tool to test at different DPR values. Check for:
@@ -537,8 +536,8 @@ UI-ISSUE-NN: <defect name>
 - Interactions: `ui_v4/src/chart/interaction.ts`
 - Engine: `ui_v4/src/chart/engine.ts` (LWC setup, D1 offset)
 - Process mgmt: `app/main.py` (Supervisor, --mode, Python 3.7)
-- Dev proxy: Vite proxy `/api` → `:8089` — `ui_v4/vite.config.ts`
-- Health check: `GET /api/status` — `ui_chart_v3/server.py`
+- Dev proxy: Vite proxy `/api` → `:8000` — `ui_v4/vite.config.ts`
+- Health check: `GET /api/status` — `runtime/ws/ws_server.py`
 
 ---
 

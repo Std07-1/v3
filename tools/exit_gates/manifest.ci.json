@@ -10,7 +10,7 @@
             "name": "ui_thin_handlers",
             "module": "tools.exit_gates.gates.gate_ui_thin_handlers",
             "inputs": {
-                "file_path": "ui_chart_v3/server.py",
+                "file_path": "runtime/ws/ws_server.py",
                 "class_name": "Handler",
                 "functions": [
                     "do_GET",
@@ -27,7 +27,7 @@
             "name": "ui_single_writer",
             "module": "tools.exit_gates.gates.gate_ui_single_writer",
             "inputs": {
-                "file_path": "ui_chart_v3/server.py",
+                "file_path": "runtime/ws/ws_server.py",
                 "forbidden_modules": [
                     "runtime.ingest",
                     "runtime.store.ssot_jsonl",
@@ -149,8 +149,7 @@
                 "scan_dirs": [
                     "core",
                     "runtime",
-                    "app",
-                    "ui_chart_v3"
+                    "app"
                 ]
             }
         },

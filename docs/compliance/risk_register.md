@@ -142,7 +142,7 @@ written agreement with FXCM потрібен окремо.
 | Static governance gates | `tools/exit_gates/manifest.ci.json` | ✅ |
 | Dependency rule / no_bare_except / docs sync | exit gates in CI | ✅ |
 | Python dependency audit | `pip-audit -r requirements.txt` | ✅ |
-| Python static security scan | `bandit -q -r app core runtime ui_chart_v3 tools` | ✅ |
+| Python static security scan | `bandit -q -r app core runtime tools` | ✅ |
 | Frontend dependency audit | `npm audit --audit-level=high --omit=dev` | ✅ |
 | Dependency update cadence | `.github/dependabot.yml` weekly pip/npm | ✅ |
 

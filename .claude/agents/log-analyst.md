@@ -26,7 +26,7 @@ All logs live in `logs/` directory. Each process writes two files:
 | **m1_ingestion_worker** | `logs/m1_ingestion_worker.out.log` | `logs/m1_ingestion_worker.err.log` | `.venv` |
 | **tick_publisher** (FXCM) | `logs/tick_publisher.out.log` | `logs/tick_publisher.err.log` | `.venv37` |
 | **tick_preview** | `logs/tick_preview.out.log` | `logs/tick_preview.err.log` | `.venv` |
-| **ui** (HTTP, port 8089) | `logs/ui.out.log` | `logs/ui.err.log` | `.venv` |
+| **ws_server** (HTTP+WS, port 8000) | `logs/ws_server.out.log` | `logs/ws_server.err.log` | `.venv` |
 | **ws_server** (WS, port 8000) | `logs/ws_server.out.log` | `logs/ws_server.err.log` | `.venv` |
 | **binance_tick_publisher** | `logs/binance_tick_publisher.out.log` | `logs/binance_tick_publisher.err.log` | `.venv` |
 | **binance_ingest_worker** | `logs/binance_ingest_worker.out.log` | `logs/binance_ingest_worker.err.log` | `.venv` |
@@ -97,7 +97,7 @@ You are NOT limited to logs. You also inspect **system state** directly.
 | Service | Expected State | Check Command |
 |---------|---------------|---------------|
 | Redis (port 6379, db=1) | Running, PONG | `python -c "import redis; r=redis.Redis(host='127.0.0.1',port=6379,db=1); print('PONG' if r.ping() else 'FAIL')"` |
-| HTTP UI (port 8089) | Responding 200 | `python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8089/api/status').read().decode()[:500])"` |
+| HTTP API (port 8000) | Responding 200 | `python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/api/status').read().decode()[:500])"` |
 | WS Server (port 8000) | Responding | `python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/').status)"` |
 | Supervisor PID | `logs/supervisor.pid` exists | `Get-Content logs/supervisor.pid -ErrorAction SilentlyContinue` |
 
@@ -111,7 +111,7 @@ Get-Process -Name "python*" -ErrorAction SilentlyContinue | Select-Object Id, Pr
 Get-Process -Name "python*" -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Id): $([math]::Round($_.WorkingSet64/1MB, 1)) MB — started $($_.StartTime)" }
 
 # Check which ports are actively listening (are our services bound?)
-Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in @(6379, 8000, 8089) } | Select-Object LocalPort, OwningProcess | Format-Table
+Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in @(6379, 8000) } | Select-Object LocalPort, OwningProcess | Format-Table
 
 # CPU usage snapshot
 Get-Process -Name "python*" -ErrorAction SilentlyContinue | Sort-Object CPU -Descending | Select-Object -First 5 Id, ProcessName, CPU | Format-Table
@@ -139,7 +139,7 @@ $pid = Get-Content logs/supervisor.pid -ErrorAction SilentlyContinue; if($pid){ 
 | Python processes | ≥5 running (supervisor+workers) | 2-4 running | 0-1 running |
 | Redis db=1 keys | >100 | 10-100 | 0 (empty cache) |
 | Redis memory | <500 MB | 500 MB–1 GB | >1 GB |
-| Port 8089 (HTTP) | Responds 200 | Responds with error | Connection refused |
+| Port 8000 (HTTP+WS) | Responds 200 | Responds with error | Connection refused |
 | Port 8000 (WS) | Responds | Responds with error | Connection refused |
 | Port 6379 (Redis) | PONG | Slow response | Connection refused |
 | Log freshness | <5 min ago | 5–30 min ago | >30 min ago (dead) |
@@ -253,7 +253,7 @@ Get-ChildItem "logs/*.out.log" | Sort-Object LastWriteTime -Descending | Select-
 ### Step 0 — System Vitals (ALWAYS run first)
 - Check running Python processes and their memory/CPU
 - Verify Redis connectivity and key count
-- Verify ports 6379, 8089, 8000 are listening
+- Verify ports 6379, 8000 are listening
 - Check supervisor.pid freshness
 - **Output**: System Vitals table
 
@@ -311,7 +311,7 @@ Get-ChildItem "logs/*.out.log" | Sort-Object LastWriteTime -Descending | Select-
 |----------|-------|--------|
 | Python processes | N running | ✅/⚠️/❌ |
 | Redis (6379) | PONG, 1234 keys, 45 MB | ✅/⚠️/❌ |
-| HTTP API (8089) | 200 OK | ✅/⚠️/❌ |
+| HTTP API (8000) | 200 OK | ✅/⚠️/❌ |
 | WS Server (8000) | Responding | ✅/⚠️/❌ |
 | Total log size | 120 MB | ✅/⚠️/❌ |
 | data_v3 size | 2.3 GB | ✅ |

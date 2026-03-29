@@ -18,7 +18,6 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-
 # ---------------------------------------------------------------------------
 # Допоміжні
 # ---------------------------------------------------------------------------
@@ -408,7 +407,7 @@ def _check_preview_bus_isolation(root: str) -> Tuple[bool, str, Dict[str, Any]]:
 def _check_api_splitbrain(root: str) -> Tuple[bool, str, Dict[str, Any]]:
     """server.py не має активних if prefer_redis / if force_disk гілок
     що змінюють ReadPolicy. Має бути лише warning-and-ignore."""
-    server_path = _find_file("ui_chart_v3/server.py", root)
+    server_path = _find_file("runtime/ws/ws_server.py", root)
     if server_path is None:
         return False, "server.py_not_found", {}
 

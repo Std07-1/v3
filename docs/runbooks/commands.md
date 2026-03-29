@@ -19,36 +19,42 @@ Remove-Item logs\supervisor_*.pid -ErrorAction SilentlyContinue
 ```powershell
 cd c:\Users\vikto\aione-context\v3
 .venv\Scripts\python.exe -u -m app.main --mode m1_poller --stdio pipe
+або --stdio files --log-dir logs
 ```
 
 **Вікно 2 — Tick publisher** (FXCM live ticks → Redis):
 ```powershell
 cd c:\Users\vikto\aione-context\v3
 .venv\Scripts\python.exe -u -m app.main --mode tick_publisher --stdio pipe
+або --stdio files --log-dir logs
 ```
 
 **Вікно 3 — Tick preview** (ticks → preview bars):
 ```powershell
 cd c:\Users\vikto\aione-context\v3
 .venv\Scripts\python.exe -u -m app.main --mode tick_preview --stdio pipe
+або --stdio files --log-dir logs
 ```
 
 **Вікно 4 — Binance ingest** (BTCUSDT/ETHUSDT M1 + backfill):
 ```powershell
 cd c:\Users\vikto\aione-context\v3
 .venv\Scripts\python.exe -u -m app.main --mode binance_ingest_worker --stdio pipe
+або --stdio files --log-dir logs
 ```
 
 **Вікно 5 — Binance tick publisher** (Binance live ticks → Redis):
 ```powershell
 cd c:\Users\vikto\aione-context\v3
 .venv\Scripts\python.exe -u -m app.main --mode binance_tick_publisher --stdio pipe
+або --stdio files --log-dir logs
 ```
 
 **Вікно 6 — WS server** (UI backend, порт 8000):
 ```powershell
 cd c:\Users\vikto\aione-context\v3
 .venv\Scripts\python.exe -u -m app.main --mode ws_server --stdio pipe
+або --stdio files --log-dir logs
 ```
 
 ### Швидкий рестарт тільки UI

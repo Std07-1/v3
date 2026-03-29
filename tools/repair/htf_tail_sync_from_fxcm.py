@@ -195,11 +195,15 @@ def sync_one(
     to_ms = bars[-1].open_time_ms
     result["rewrite_from_ms"] = from_ms
     result["rewrite_to_ms"] = to_ms
-    result["rewrite_from_utc"] = dt.datetime.fromtimestamp(from_ms / 1000, tz=dt.timezone.utc).replace(tzinfo=None).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
+    result["rewrite_from_utc"] = (
+        dt.datetime.fromtimestamp(from_ms / 1000, tz=dt.timezone.utc)
+        .replace(tzinfo=None)
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
     )
-    result["rewrite_to_utc"] = dt.datetime.fromtimestamp(to_ms / 1000, tz=dt.timezone.utc).replace(tzinfo=None).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
+    result["rewrite_to_utc"] = (
+        dt.datetime.fromtimestamp(to_ms / 1000, tz=dt.timezone.utc)
+        .replace(tzinfo=None)
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
     )
 
     try:
@@ -440,7 +444,7 @@ def main() -> int:
     ap.add_argument("--verify", action="store_true", help="Before/after snapshot")
     ap.add_argument(
         "--api-base-url",
-        default="http://127.0.0.1:8089",
+        default="http://127.0.0.1:8000",
         help="API для verify snapshot",
     )
     ap.add_argument(

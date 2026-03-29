@@ -11,7 +11,10 @@ except Exception:
 
 from runtime.store.redis_spec import resolve_redis_spec
 
-def _http_get_bytes(url: str, timeout_s: float = 3.0) -> Tuple[int, bytes, Optional[str]]:
+
+def _http_get_bytes(
+    url: str, timeout_s: float = 3.0
+) -> Tuple[int, bytes, Optional[str]]:
     req = request.Request(url, headers={"Cache-Control": "no-store"})
     try:
         with request.urlopen(req, timeout=timeout_s) as resp:
@@ -50,7 +53,7 @@ def _read_json(client: Any, key: str) -> Tuple[Optional[dict], Optional[str]]:
 
 
 def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
-    base_url = str(inputs.get("base_url", "http://127.0.0.1:8089"))
+    base_url = str(inputs.get("base_url", "http://127.0.0.1:8000"))
     symbol = str(inputs.get("symbol", "XAU/USD"))
     tf_s = int(inputs.get("tf_s", 300))
     config_path = str(inputs.get("config_path", "config.json"))
@@ -62,8 +65,12 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     violations = []
     metrics: Dict[str, Any] = {}
 
-    bars_url = base_url.rstrip("/") + "/api/bars?" + parse.urlencode(
-        {"symbol": symbol, "tf_s": str(tf_s), "prefer_redis": "1", "limit": "20000"}
+    bars_url = (
+        base_url.rstrip("/")
+        + "/api/bars?"
+        + parse.urlencode(
+            {"symbol": symbol, "tf_s": str(tf_s), "prefer_redis": "1", "limit": "20000"}
+        )
     )
     bars_err = None
     code, raw, err = _http_get_bytes(bars_url, timeout_s=timeout_s)
@@ -77,8 +84,10 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     if bars_bytes > max_bars_bytes:
         violations.append("bars_bytes_over")
 
-    updates_url = base_url.rstrip("/") + "/api/updates?" + parse.urlencode(
-        {"symbol": symbol, "tf_s": str(tf_s), "since_seq": "0"}
+    updates_url = (
+        base_url.rstrip("/")
+        + "/api/updates?"
+        + parse.urlencode({"symbol": symbol, "tf_s": str(tf_s), "since_seq": "0"})
     )
     updates_err = None
     code, raw, err = _http_get_bytes(updates_url, timeout_s=timeout_s)
@@ -93,9 +102,9 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
         violations.append("updates_bytes_over")
 
     if bars_err and updates_err:
-        if bars_err.startswith(("url_error:", "http_error:")) and updates_err.startswith(
+        if bars_err.startswith(
             ("url_error:", "http_error:")
-        ):
+        ) and updates_err.startswith(("url_error:", "http_error:")):
             return {
                 "ok": False,
                 "details": bars_err,

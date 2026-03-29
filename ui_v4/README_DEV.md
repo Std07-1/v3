@@ -21,9 +21,8 @@ npm run build        # production build → dist/
 
 | Процес                        | Порт  | Що робить                                      |
 |-------------------------------|-------|------------------------------------------------|
-| `npm run dev` (Vite)          | 5173  | UI dev-сервер; проксює `/api/*` → 8089         |
-| `app.main_connector`          | 8000  | WebSocket сервер (`/ws`); живі фрейми          |
-| `ui_chart_v3` (HTTP)          | 8089  | REST API (`/api/*`); health: `GET /api/status` |
+| `npm run dev` (Vite)          | 5173  | UI dev-сервер; проксює `/api/*` → 8000         |
+| `app.main --mode ws_server`   | 8000  | WS + HTTP API (`/ws`, `/api/*`)                |
 
 Скопіюй `.env.example` → `.env.local` (git-ignored) для локальних overrides.
 
@@ -32,7 +31,7 @@ npm run build        # production build → dist/
 | Змінна                   | Default                      | Опис                                              |
 |--------------------------|------------------------------|---------------------------------------------------|
 | `VITE_WS_URL`            | `ws://localhost:8000/ws`     | WebSocket URL (app.main_connector)                |
-| `VITE_API_PROXY_TARGET`  | `http://localhost:8089`      | Proxy target для `/api/*` (ui_chart_v3)           |
+| `VITE_API_PROXY_TARGET`  | `http://localhost:8000`      | Proxy target для `/api/*` (ws_server)             |
 | `VITE_EDGE_PROBE_URL`    | `/api/status`                | Health probe endpoint (відносний, через proxy)    |
 
 Приклад:

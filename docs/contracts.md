@@ -26,8 +26,8 @@
 | Контракт | Файл (SSOT) | Продюсер | Консюмер | Версія |
 |---|---|---|---|---|
 | **bar_v1** | `core/contracts/public/marketdata_v1/bar_v1.json` | UDS (через server.py нормалізацію) | UI (app.js), exit-gates | v1 |
-| **window_v1** | `core/contracts/public/marketdata_v1/window_v1.json` | `ui_chart_v3/server.py` → `/api/bars` | UI (app.js), тести | v1 |
-| **updates_v1** | `core/contracts/public/marketdata_v1/updates_v1.json` | `ui_chart_v3/server.py` → `/api/updates` | UI (app.js), тести | v1 |
+| **window_v1** | `core/contracts/public/marketdata_v1/window_v1.json` | `runtime/ws/ws_server.py` → `/api/bars` | UI (ui_v4), тести | v1 |
+| **updates_v1** | `core/contracts/public/marketdata_v1/updates_v1.json` | `runtime/ws/ws_server.py` → `/api/updates` | UI (ui_v4), тести | v1 |
 | **tick_v1** | `core/contracts/public/marketdata_v1/tick_v1.json` | `tick_publisher_fxcm.py` | `tick_preview_worker.py`, exit-gates | v1 |
 | **Redis snap** (internal) | Документація: `docs/redis_snapshot_design.md` | `runtime/store/redis_snapshot.py` | UDS read layers | internal v1 |
 | **smc_snapshot** (wire) | `core/smc/types.py` → `ui_v4/src/types.ts` | `SmcRunner` (ws_server) | `OverlayRenderer` (ui_v4) | v1 (ADR-0024) |
@@ -421,5 +421,5 @@ UDS нормалізує Redis snap → public bar_v1 при читанні (`_r
 3. **Сумісність**: legacy поля підтримуються при читанні, але канон визначає одне ім'я.
 4. **Версіонування**: `v1` → `v2` лише через окремий initiative + міграція + rollback-план.
 5. **JSONL append-only**: формат файлів на диску (CandleBar) не змінюється без ADR.
-6. **Guard на вході**: кожен payload проходить guard у `runtime/` (fail-fast). В `ui_chart_v3/server.py`: `_guard_bar_shape`, `_guard_event_shape`, `_guard_meta_shape`.
+6. **Guard на вході**: кожен payload проходить guard у `runtime/` (fail-fast). В `runtime/ws/ws_server.py`: guard-функції перевіряють shape на вході.
 7. **Бюджети payload**: `_MAX_BARS_CAP` та `_TF_CAP` у server.py обмежують розмір відповідей. Перевищення → loud warning + clamp.

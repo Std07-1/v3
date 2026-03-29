@@ -144,8 +144,7 @@ A (Broker/Ingest) → C (UDS — єдина талія) → B (UI — read-only 
 - **A**: FXCM History + Tick Stream → writer-процеси (connector, m1_poller, tick_preview_worker, tick_publisher)
 - **C**: UnifiedDataStore — єдина точка запису/читання marketdata (SSOT disk + Redis snapshots + updates bus)
 - **B**: UI — read-only renderer:
-  - **ui_chart_v3**: HTTP polling API (порт 8089, vanilla JS, поточний production)
-  - **ui_v4**: WebSocket real-time (порт 8000, Svelte 5 + LWC 5, chart parity DONE, audit T1-T10 COMPLETE) → [README_DEV.md](../ui_v4/README_DEV.md)
+  - **ui_v4**: WebSocket + HTTP API (port 8000, Svelte 5 + LWC 5, same-origin) → [README_DEV.md](../ui_v4/README_DEV.md)
   - **SMC Overlay** (ADR-0024): SmcRunner → SmcEngine → WS `smc_snapshot`/`smc_delta` → smcStore → OverlayRenderer (OB/FVG/swings/levels)
 - **TUI**: aione_top — standalone TUI-монітор процесів/pipeline (`python -m aione_top`)
 
@@ -179,8 +178,7 @@ A (Broker/Ingest) → C (UDS — єдина талія) → B (UI — read-only 
 
 - **Конфіг SSOT**: `config.json` (довідник: [config_reference.md](config_reference.md))
 - **Запуск**: `python -m app.main --mode all --stdio pipe`
-- **UI v3**: `http://127.0.0.1:8089/`
-- **UI v4**: `http://127.0.0.1:8000/` (WS real-time, config-gated)
-- **Статус**: `http://127.0.0.1:8089/api/status`
+- **UI**: `http://127.0.0.1:8000/` (WS real-time)
+- **Статус**: `http://127.0.0.1:8000/api/status`
 - **Exit Gates**: `python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json`
 - **Журнал змін**: `changelog.jsonl` (індекс: `CHANGELOG.md`)

@@ -6,7 +6,9 @@ import json
 import os
 import sys
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+REPO = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
 RESULTS = []  # type: list
 
 
@@ -60,10 +62,11 @@ def gate_tick_agg_volume_zero():
 
 def gate_ui_preview_polling_cap():
     """app.js UPDATES_BACKOFF_PREVIEW_MS не перевищує 1000."""
-    path = os.path.join(REPO, "ui_chart_v3", "static", "app.js")
+    path = os.path.join(REPO, "ui_v4", "src", "App.svelte")
     src = open(path, encoding="utf-8").read()
     # Шукаємо UPDATES_BACKOFF_PREVIEW_MS = [...]
     import re
+
     m = re.search(r"UPDATES_BACKOFF_PREVIEW_MS\s*=\s*\[([^\]]+)\]", src)
     if not m:
         _check("ui_preview_polling_cap_1s", False, "pattern not found")
@@ -95,14 +98,35 @@ def run_gate(inputs):
         os.makedirs(report_dir, exist_ok=True)
         report_path = os.path.join(report_dir, "gate_tick_preview_calendar.json")
         with open(report_path, "w", encoding="utf-8") as f:
-            json.dump({"gate": "gate_tick_preview_calendar", "results": RESULTS, "passed": passed, "total": total}, f, indent=2, ensure_ascii=False)
+            json.dump(
+                {
+                    "gate": "gate_tick_preview_calendar",
+                    "results": RESULTS,
+                    "passed": passed,
+                    "total": total,
+                },
+                f,
+                indent=2,
+                ensure_ascii=False,
+            )
 
-    details = "; ".join("{} {}".format(r["name"], "OK" if r["ok"] else "FAIL") for r in RESULTS)
-    return {"ok": passed == total, "details": details, "metrics": {"passed": passed, "total": total}}
+    details = "; ".join(
+        "{} {}".format(r["name"], "OK" if r["ok"] else "FAIL") for r in RESULTS
+    )
+    return {
+        "ok": passed == total,
+        "details": details,
+        "metrics": {"passed": passed, "total": total},
+    }
 
 
 if __name__ == "__main__":
-    out = run_gate({"root": REPO, "report_dir": os.path.join(REPO, "reports", "exit_gates", "manual")})
+    out = run_gate(
+        {
+            "root": REPO,
+            "report_dir": os.path.join(REPO, "reports", "exit_gates", "manual"),
+        }
+    )
     print(out["details"])
     print("ok={}".format(out["ok"]))
     sys.exit(0 if out["ok"] else 1)

@@ -15,9 +15,8 @@
 
 | Шар | Що | Де |
 |---|---|---|
-| **A** Broker + ingest | FXCM History + tick stream → 5 writer-процесів | `runtime/ingest/`, `app/` |
+| **A** Broker + ingest | FXCM/Binance History + tick stream → writer-процеси | `runtime/ingest/`, `app/` |
 | **C** UDS | SSOT disk + Redis cache + updates bus | `runtime/store/uds.py` |
-| **B** UI (http) | read-only HTTP polling renderer, same-origin, порт 8089 | `ui_chart_v3/` *(private module)* |
 | **B** UI (ws) | read-only WS real-time renderer, same-origin, порт 8000 | `ui_v4/` + `runtime/ws/ws_server.py` |
 | **TUI** | aione-top: інтерактивний TUI-монітор процесів/pipeline | `aione_top/` |
 
@@ -85,6 +84,7 @@ CI gate звіряє ID→spec mapping і не дозволяє drift.
 | `R_COMPLIANCE` | **Compliance & Safety Officer** | `.github/role_spec_compliance_v1.md` |
 | `R_SIGNAL_ARCHITECT` | **Signal Architect** | `.github/role_spec_signal_architect_v1.md` |
 | `R_MENTOR` | **Personal SMC Mentor (DarkTrader)** | `.github/role_spec_mentor_v1.md` |
+| `R_REJECTOR` | **QA Rejector & Final Gate** | `.github/role_spec_rejector_v1.md` |
 
 ---
 
@@ -154,9 +154,6 @@ v3/
 │   │   ├── smc_runner.py  # SmcRunner: warmup + on_bar callback
 │   │   └── tda_live.py    # TdaLiveRunner: TDA cascade I/O wrapper (ADR-0040)
 │   └── obs_60s.py         # 60s observability
-│
-├── ui_chart_v3/           # HTTP UI (port 8089, polling)
-│   └── server.py          # HTTP API + static server
 │
 ├── ui_v4/                 # WebSocket UI (port 8000, Svelte 5)
 │   ├── src/
@@ -252,7 +249,6 @@ python -m app.main --mode broker_sidecar     # FXCM fetcher sidecar (.venv37/, A
 python -m app.main --mode m1_ingestion_worker # Platform M1 ingestion (.venv/, ADR-0016)
 python -m app.main --mode tick_publisher     # Tick stream (.venv37/)
 python -m app.main --mode tick_preview       # Preview worker
-python -m app.main --mode ui                 # HTTP UI (port 8089)
 python -m app.main --mode ws_server          # WS UI (port 8000)
 
 # TUI монітор (окремо)
@@ -262,13 +258,10 @@ python -m aione_top
 ### 3.3 Health Checks
 
 ```bash
-# HTTP API status
-curl http://127.0.0.1:8089/api/status
+# API status
+curl http://127.0.0.1:8000/api/status
 
-# UI v3 (HTTP polling)
-open http://127.0.0.1:8089/
-
-# UI v4 (WebSocket real-time) — requires ws_server.enabled=true
+# UI v4 (WebSocket real-time)
 open http://127.0.0.1:8000/
 ```
 
@@ -417,7 +410,6 @@ REDIS_PORT=6379
 
 ### 7.3 Network Security
 
-- UI HTTP: `127.0.0.1:8089` (localhost only)
 - UI WS: `127.0.0.1:8000` (localhost only)
 - FXCM: HTTPS з автентифікацією
 - Redis: localhost only (за замовчуванням)
@@ -470,7 +462,7 @@ tail -f logs/m1_poller.out.log
 | `python -m tools.run_exit_gates` | Quality gates |
 | `python -m pytest tests/ -v` | Run tests |
 | `python -m aione_top` | TUI монітор |
-| `curl http://127.0.0.1:8089/api/status` | Health check |
+| `curl http://127.0.0.1:8000/api/status` | Health check |
 
 ### Key Files to Know
 

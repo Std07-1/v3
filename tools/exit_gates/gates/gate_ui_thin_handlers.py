@@ -71,7 +71,11 @@ def _scan_handler_functions(
                 if tok_str in targets:
                     pending_def_name = tok_str
                     pending_func_indent = True
-            elif current_func is not None and func_indent is not None and indent_level >= func_indent:
+            elif (
+                current_func is not None
+                and func_indent is not None
+                and indent_level >= func_indent
+            ):
                 scanned_names += 1
                 for prefix in forbidden_prefixes:
                     if tok_str.startswith(prefix):
@@ -82,7 +86,7 @@ def _scan_handler_functions(
 
 
 def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
-    file_path = str(inputs.get("file_path", "ui_chart_v3/server.py"))
+    file_path = str(inputs.get("file_path", "runtime/ws/ws_server.py"))
     class_name = str(inputs.get("class_name", "Handler"))
     func_names = inputs.get("functions", ["do_GET", "_handle_api"])
     if not isinstance(func_names, list):

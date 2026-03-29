@@ -13,11 +13,11 @@
 7. env_no_profile_files — .env.local та .env.prod не існують
 8. env_no_dispatcher_words — env_profile.py не містить dispatcher/profile
 """
+
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, List
-
 
 # Токени що мають бути тільки у core/config_loader.py
 FORBIDDEN_DEFS = {
@@ -38,7 +38,7 @@ ENV_STR_ALLOWED = {
     "tools/exit_gates/gates/gate_config_singleton.py",
 }
 
-SCAN_DIRS = ["app", "core", "runtime", "tools", "ui_chart_v3"]
+SCAN_DIRS = ["app", "core", "runtime", "tools"]
 SCAN_EXT = {".py"}
 
 
@@ -88,11 +88,17 @@ def run_gate(inputs: dict) -> dict:
     # Підгейт 4: config.local.json не має існувати
     local_cfg = root / "config.local.json"
     no_local = not local_cfg.exists()
-    results.append({
-        "name": "no_config_local_json",
-        "ok": no_local,
-        "details": "ok" if no_local else "config.local.json існує на диску — split-brain ризик",
-    })
+    results.append(
+        {
+            "name": "no_config_local_json",
+            "ok": no_local,
+            "details": (
+                "ok"
+                if no_local
+                else "config.local.json існує на диску — split-brain ризик"
+            ),
+        }
+    )
 
     # Підгейт 5: .env не містить AI_ONE_CONFIG_PATH або AI_ONE_ENV_FILE (dispatcher)
     env_file = root / ".env"
@@ -108,34 +114,48 @@ def run_gate(inputs: dict) -> dict:
                 bad_keys.append("AI_ONE_ENV_FILE")
             if bad_keys:
                 env_clean = False
-                env_clean_detail = ".env містить dispatcher ключі: " + ", ".join(bad_keys)
+                env_clean_detail = ".env містить dispatcher ключі: " + ", ".join(
+                    bad_keys
+                )
         except Exception:
             env_clean = False
             env_clean_detail = "не вдалося прочитати .env"
-    results.append({
-        "name": "env_no_config_path",
-        "ok": env_clean,
-        "details": env_clean_detail,
-    })
+    results.append(
+        {
+            "name": "env_no_config_path",
+            "ok": env_clean,
+            "details": env_clean_detail,
+        }
+    )
 
-    # Підгейт 6: ui_config.json існує
-    ui_cfg = root / "ui_chart_v3" / "static" / "ui_config.json"
+    # Підгейт 6: ui_v4/dist існує
+    ui_cfg = root / "ui_v4" / "dist" / "index.html"
     ui_ok = ui_cfg.exists()
-    results.append({
-        "name": "ui_has_config",
-        "ok": ui_ok,
-        "details": "ok" if ui_ok else "ui_config.json відсутній у static/",
-    })
+    results.append(
+        {
+            "name": "ui_has_dist",
+            "ok": ui_ok,
+            "details": (
+                "ok" if ui_ok else "ui_v4/dist/index.html відсутній (npm run build)"
+            ),
+        }
+    )
 
     # Підгейт 7: .env.local / .env.prod не існують
     profile_files = [root / ".env.local", root / ".env.prod"]
     existing_profiles = [str(p.name) for p in profile_files if p.exists()]
     no_profiles = len(existing_profiles) == 0
-    results.append({
-        "name": "env_no_profile_files",
-        "ok": no_profiles,
-        "details": "ok" if no_profiles else f"знайдено profile файли: {', '.join(existing_profiles)}",
-    })
+    results.append(
+        {
+            "name": "env_no_profile_files",
+            "ok": no_profiles,
+            "details": (
+                "ok"
+                if no_profiles
+                else f"знайдено profile файли: {', '.join(existing_profiles)}"
+            ),
+        }
+    )
 
     # Підгейт 8: env_profile.py не містить слів dispatcher/profile (C2)
     env_profile_py = root / "env_profile.py"
@@ -155,11 +175,13 @@ def run_gate(inputs: dict) -> dict:
         except Exception:
             env_no_dispatcher = False
             env_disp_detail = "не вдалося прочитати env_profile.py"
-    results.append({
-        "name": "env_no_dispatcher_words",
-        "ok": env_no_dispatcher,
-        "details": env_disp_detail,
-    })
+    results.append(
+        {
+            "name": "env_no_dispatcher_words",
+            "ok": env_no_dispatcher,
+            "details": env_disp_detail,
+        }
+    )
 
     all_ok = all(r["ok"] for r in results)
     summary_parts = [f"{r['name']}={'OK' if r['ok'] else 'FAIL'}" for r in results]
@@ -167,7 +189,10 @@ def run_gate(inputs: dict) -> dict:
         "ok": all_ok,
         "details": "; ".join(summary_parts),
         "sub_gates": results,
-        "metrics": {"sub_gates_total": len(results), "sub_gates_ok": sum(1 for r in results if r["ok"])},
+        "metrics": {
+            "sub_gates_total": len(results),
+            "sub_gates_ok": sum(1 for r in results if r["ok"]),
+        },
     }
 
 

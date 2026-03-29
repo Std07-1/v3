@@ -3,6 +3,7 @@
 Path-based layer detection + AST import scanning.
 Inline ignore: додати '# deps_guard: ignore' на рядку імпорту.
 """
+
 from __future__ import annotations
 
 import ast
@@ -11,12 +12,12 @@ from typing import Any, Dict, List, Set
 
 # Шар → set шарів, з яких ЗАБОРОНЕНО імпортувати
 FORBIDDEN: Dict[str, Set[str]] = {
-    "core": {"runtime", "ui_chart_v3", "tools", "app"},
+    "core": {"runtime", "tools", "app"},
     "runtime": {"tools"},
 }
 
 # Внутрішні root-пакети проєкту (все інше = stdlib/зовнішнє → skip)
-INTERNAL_ROOTS: Set[str] = {"core", "runtime", "ui_chart_v3", "tools", "app"}
+INTERNAL_ROOTS: Set[str] = {"core", "runtime", "tools", "app"}
 
 
 def _layer(relpath: str) -> str:
@@ -64,12 +65,14 @@ def _scan_file(filepath: str, relpath: str) -> List[Dict[str, Any]]:
             continue
         for root in _imported_roots(node):
             if root in INTERNAL_ROOTS and root in forbidden:
-                violations.append({
-                    "file": relpath,
-                    "line": lineno,
-                    "layer": layer,
-                    "imported": root,
-                })
+                violations.append(
+                    {
+                        "file": relpath,
+                        "line": lineno,
+                        "layer": layer,
+                        "imported": root,
+                    }
+                )
     return violations
 
 

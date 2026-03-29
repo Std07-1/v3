@@ -36,8 +36,7 @@ node_modules/
 ui_v4/node_modules/
 ui_v4/dist/
 
-# ── Legacy UI (замінено на ui_v4) ───────────────────────────
-/ui_chart_v3/
+# ── Legacy ───────────────────────────────────────────────────
 /Old system Connector v2/
 
 # ── Research / аудити / звіти (dev-only, не релізні) ────────

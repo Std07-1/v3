@@ -5,7 +5,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib import error, request, parse
 
 
-def _http_get_json(url: str, timeout_s: float = 3.0) -> Tuple[int, bytes, Optional[dict], Optional[str]]:
+def _http_get_json(
+    url: str, timeout_s: float = 3.0
+) -> Tuple[int, bytes, Optional[dict], Optional[str]]:
     req = request.Request(url, headers={"Cache-Control": "no-store"})
     try:
         with request.urlopen(req, timeout=timeout_s) as resp:
@@ -63,7 +65,7 @@ def _validate_lwc_bar(bar: dict, violations: List[str]) -> None:
 
 
 def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
-    base_url = str(inputs.get("base_url", "http://127.0.0.1:8089"))
+    base_url = str(inputs.get("base_url", "http://127.0.0.1:8000"))
     symbol = str(inputs.get("symbol", "XAU/USD"))
     tf_s = int(inputs.get("tf_s", 300))
     prefer_redis = bool(inputs.get("prefer_redis", True))
@@ -83,7 +85,11 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
     if err:
         return {"ok": False, "details": err, "metrics": {"status": code}}
     if code != 200 or not isinstance(data, dict):
-        return {"ok": False, "details": "http_or_json_invalid", "metrics": {"status": code}}
+        return {
+            "ok": False,
+            "details": "http_or_json_invalid",
+            "metrics": {"status": code},
+        }
 
     bars = data.get("bars")
     meta = data.get("meta")

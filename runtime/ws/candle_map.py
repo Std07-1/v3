@@ -4,7 +4,7 @@ runtime/ws/candle_map.py — Конвертація v3 bar dict → ui_v4 Candle
 Закриває Risk R2 (mapping confusion) назавжди.
 Обробляє ОБА формати: LWC (read_window) та SHORT (CandleBar.to_dict / event.bar).
 
-Еталон: ui_chart_v3/server.py:692 _normalize_bar_window_v1().
+Еталон: runtime/ws/ws_server.py _normalize_bar_window_v1().
 Контракт виходу: types.ts:8-15 Candle {t_ms, o, h, l, c, v}.
 """
 
@@ -80,7 +80,9 @@ def _is_weekend_open_utc(bar: dict) -> bool:
             oms = int(t) * 1000
     if not isinstance(oms, (int, float)) or oms <= 0:
         return False
-    bar_dt = datetime.datetime.fromtimestamp(int(oms) / 1000, tz=datetime.timezone.utc).replace(tzinfo=None)
+    bar_dt = datetime.datetime.fromtimestamp(
+        int(oms) / 1000, tz=datetime.timezone.utc
+    ).replace(tzinfo=None)
     return bar_dt.weekday() in (4, 5, 6)  # Friday=4, Saturday=5, Sunday=6
 
 

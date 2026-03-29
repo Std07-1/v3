@@ -63,7 +63,7 @@ def _scan_imports(text: str, forbidden_modules: Tuple[str, ...]) -> List[str]:
 
 
 def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
-    file_path = str(inputs.get("file_path", "ui_chart_v3/server.py"))
+    file_path = str(inputs.get("file_path", "runtime/ws/ws_server.py"))
     forbidden = inputs.get("forbidden_modules")
     if isinstance(forbidden, list) and forbidden:
         forbidden_modules = tuple(str(x) for x in forbidden)

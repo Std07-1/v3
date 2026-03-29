@@ -105,7 +105,7 @@ python -m tools.rebuild_from_m1
 
 **Що дивитись спочатку**:
 
-- **Health at a glance** (Page 1) — один рядок: Processes 6/6, Redis, Prime, UI :8089, WS :8000. Усе зелено = норма.
+- **Health at a glance** (Page 1) — один рядок: Processes 6/6, Redis, Prime, UI :8000. Усе зелено = норма.
 - **Alerts** (смуга під header на всіх сторінках) — якщо не «All systems nominal», з’явились короткі формулювання проблем (Prime not ready, missing process, Redis/UI/WS DOWN, Freshness stale, Last log ERROR).
 
 **OBS-панель** (Page 2, Pipeline): телеметрія з логів за останній інтервал 60 с — writer_drops (stale/duplicate барів), redis_hit_ratio по TF, uds_geom_fix. Допомагає оцінити «шум» UDS без перегляду сирих логів.
@@ -125,7 +125,7 @@ python -m aione_top --once --export incident_$(date +%Y%m%d_%H%M).json
 ### /api/status
 
 ```bash
-curl -s http://127.0.0.1:8089/api/status | python -m json.tool
+curl -s http://127.0.0.1:8000/api/status | python -m json.tool
 ```
 
 **Ключові поля для моніторингу**:
@@ -141,7 +141,7 @@ curl -s http://127.0.0.1:8089/api/status | python -m json.tool
 ### /api/config
 
 ```bash
-curl -s http://127.0.0.1:8089/api/config | python -m json.tool
+curl -s http://127.0.0.1:8000/api/config | python -m json.tool
 ```
 
 Перевірити `config_invalid=false`. Якщо `true` — логічна суперечність у policy.
@@ -186,7 +186,7 @@ server {
     server_name trading.example.com;
 
     location / {
-        proxy_pass http://127.0.0.1:8089;
+        proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         # WebSocket (якщо буде)
@@ -210,7 +210,7 @@ server {
 **Діагностика**:
 
 1. Перевірити процеси: `ps aux | grep python`
-2. Перевірити /api/status: `curl http://127.0.0.1:8089/api/status`
+2. Перевірити /api/status: `curl http://127.0.0.1:8000/api/status`
 3. Перевірити логи: `logs/ui.err.log`, `logs/connector.err.log`
 4. Перевірити restart-loop: `grep SUPERVISOR_RESTART logs/*.log`
 
