@@ -16,10 +16,10 @@
 | Джерело | Що збирається | Контракт |
 |--------|----------------|----------|
 | **OS** | CPU%, Mem%, Swap, Uptime | psutil (без змін) |
-| **Processes** | v3 Python-процеси за cmdline | Класифікація за модулем (app.main, m1_poller, connector, tick_*, ui_chart_v3, ws_server, aione_top). Очікувані ролі: connector, tick_pub, tick_preview, m1_poller, ui, ws_server |
+| **Processes** | v3 Python-процеси за cmdline | Класифікація за модулем (app.main, m1_poller, tick_*, ws_server, binance_*, aione_top). Очікувані ролі: tick_pub, tick_preview, m1_poller, binance_ingest, binance_tick, ws_server |
 | **Redis** | INFO, SCAN ключів, prime_ready | Ключі `{namespace}:*`, окремо `{namespace}:prime:ready`. Конфіг: config.json → redis.host, port, db, namespace |
 | **Disk freshness** | Останній бар per symbol/TF з JSONL | data_root/{symbol}/tf_{tf_s}/part-*.jsonl, останній рядок — JSON bar з open_time_ms |
-| **UI health** | GET /api/status | HTTP 200, JSON з status.prime_ready, status.boot_id, тощо. Порт за замовч. 8089 |
+| **UI health** | GET /api/status | HTTP 200, JSON з status.prime_ready, status.boot_id, тощо. Порт за замовч. 8000 (ws_server) |
 | **WS health** | GET / | HTTP 200. Порт/хост з config.json → ws_server.port (за замовч. 8000) |
 | **Pidfiles** | Файли logs/*.pid | Ім’я з імені файлу, PID з вмісту |
 | **Pipeline** | prime:ready + status:snapshot | Redis ключі `{ns}:prime:ready`, `{ns}:status:snapshot` — JSON |

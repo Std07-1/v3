@@ -50,12 +50,13 @@ SSOT на диску не модифікується.
 
 ```text
 app.main (supervisor)
-  ├── connector             (engine_b; broker_base_tfs_s=[] — D1 fetch OFF, ADR-0023)
   ├── tick_publisher_fxcm   (ForexConnect tick stream → Redis PubSub, .venv37/)
   ├── tick_preview_worker   (Redis PubSub → UDS preview M1/M3)
   ├── broker_sidecar        (ADR-0016: stateless FXCM M1 fetcher, .venv37/, Redis IPC)
   ├── m1_ingestion_worker   (ADR-0016: BrokerRedisProxy → UDS final M1 + DeriveEngine cascade, .venv/)
   ├── m1_poller             (legacy single-process mode: FXCM M1 History → UDS, fallback якщо .venv37/ відсутній)
+  ├── binance_ingest_worker (Binance Futures M1 ingest + backward crawl, ADR-0037/0038)
+  ├── binance_tick_publisher(Binance tick stream → Redis PubSub, ADR-0037)
   └── ws_server             (WS server, port 8000 — ui_v4 real-time + HTTP API)
                               ├── SmcRunner (in-process, ADR-0024): SmcEngine per (symbol, tf) → zones/swings/levels in WS frames
                               └── Drawing tools: 4 tools (H/T/R/E), glass toolbar, theme-aware (ADR-0007, ADR-0008)
@@ -532,18 +533,20 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[app/main.py] -->|spawn| B[connector 🔴 critical]
-    A -->|spawn| C[tick_publisher 🟡 non_critical]
+    A[app/main.py] -->|spawn| C[tick_publisher 🟡 non_critical]
     A -->|spawn| D[tick_preview 🟡 non_critical]
     A -->|spawn| E[m1_poller 🔴 critical]
-    B -->|publish prime:ready| PR{AND-gate S3}
+    A -->|spawn| BI[binance_ingest 🔴 critical]
+    A -->|spawn| BT[binance_tick 🟡 non_critical]
     E -->|publish prime:ready:m1| PR
-    PR -->|both ready OR timeout| F[ui 🟢 essential]
+    BI -->|publish prime:ready:binance| PR{AND-gate S3}
+    PR -->|both ready OR timeout| F[ws_server 🟢 essential]
     PR -->|timeout| W[WARNING: UI_START_DEGRADED]
-    B -->|crash| R{restart policy}
-    C -->|crash| R
+    C -->|crash| R{restart policy}
     D -->|crash| R
     E -->|crash| R
+    BI -->|crash| R
+    BT -->|crash| R
     F -->|crash| R
     R -->|backoff delay| A
     R -->|exhausted critical| X[FAIL ALL loud]
@@ -586,17 +589,18 @@ sequenceDiagram
 
 ### Модулі polling (залежності)
 
+> **Примітка**: `engine_b.py` (M5/D1 connector) декомісіоновано — `broker_base_tfs_s=[]`, `m5_polling_enabled=false` (ADR-0002/0023).
+
 ```mermaid
 flowchart LR
-    Engine[engine_b.py D1-only] --> Dedup[dedup.py]
-    Engine --> Fetch[fetch_policy.py]
-    Engine --> CoreBuckets[core/buckets.py]
-    CoreDerive[core/derive.py] --> CoreBuckets
+    CoreDerive[core/derive.py] --> CoreBuckets[core/buckets.py]
     CoreDerive --> CoreBars[core/model/bars.py]
     DeriveEng[derive_engine.py] --> CoreDerive
     DeriveEng --> UDS[uds.py]
     M1Poller[m1_poller.py] --> DeriveEng
     M1Poller --> UDS
+    BinanceIngest[binance_ingest_worker.py] --> DeriveEng
+    BinanceIngest --> UDS
 ```
 
 ### Cascade Derive Chain (core/derive.py, ADR-0002 Phase 1)
@@ -751,8 +755,6 @@ v3/
 ├── .env                           # тільки секрети (FXCM credentials)
 ├── data_v3/                       # SSOT дані (JSONL per symbol/tf)
 ├── logs/                          # runtime логи
-├── changelog.jsonl                # детальний журнал змін
-├── CHANGELOG.md                   # короткий індекс
 ├── docs/
 │   ├── system_current_overview.md # цей файл
 │   ├── index.md                   # навігація по документації

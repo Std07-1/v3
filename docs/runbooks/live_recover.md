@@ -2,6 +2,8 @@
 
 > **Навігація**: [docs/index.md](../index.md)
 
+> **⚠️ DEPRECATED (2026-03-25)**: Цей runbook описує live recovery для M5-based connector pipeline (`engine_b.py`, `composition.py`), який декомісіоновано після ADR-0002 Phase 5 та ADR-0023. Всі TF тепер derived від M1 через `m1_poller` + `DeriveEngine`. Файли `engine_b.py`, `composition.py`, `test_live_recover.py` видалено з кодової бази. Конфіг-ключі `live_recover_*` залишаються в config.json але не використовуються активним pipeline. При потребі recovery — перезапуск `m1_poller` автоматично наздоганяє пропущені M1 бари через FXCM History API.
+
 ## Ціль
 
 Після паузи/рестарту/reconnect конектор автоматично наздоганяє пропущені final M5 бари

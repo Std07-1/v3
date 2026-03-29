@@ -980,7 +980,7 @@ if delta and delta.has_changes:
     }
 ```
 
-### 6.3 HTTP API (ui_chart_v3/server.py)
+### 6.3 HTTP API (runtime/ws/ws_server.py)
 
 Новий endpoint `/api/smc`:
 
@@ -1729,7 +1729,7 @@ Each sub-section documented in its respective ADR. `config.json` is SSOT for dep
 ### Full rollback
 
 ```bash
-git checkout -- core/smc/ runtime/smc/ runtime/ws/ws_server.py ui_chart_v3/server.py config.json ui_v4/src/smc/ tests/test_smc_*
+git checkout -- core/smc/ runtime/smc/ runtime/ws/ws_server.py config.json ui_v4/src/smc/ tests/test_smc_*
 rm -rf core/smc/ runtime/smc/ ui_v4/src/smc/
 ```
 

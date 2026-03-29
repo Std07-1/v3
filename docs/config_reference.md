@@ -17,7 +17,9 @@
 
 ---
 
-## M5 Pipeline (polling connector)
+## M5 Pipeline (polling connector) — ⚠️ DEPRECATED
+
+> **Декомісіоновано**: M5 polling вимкнено (ADR-0002 Phase 5, `m5_polling_enabled=false`). Всі TF derived від M1 через DeriveEngine. Ключі залишаються в config.json для зворотної сумісності.
 
 | Ключ | Тип | За замовч. | Опис |
 | --- | --- | --- | --- |
@@ -67,19 +69,23 @@
 
 ---
 
-## Live Recovery (M5)
+## Live Recovery (M1) — ⚠️ DEPRECATED
+
+> **Декомісіоновано**: Live Recovery був частиною M5 connector pipeline. Після переходу на M1-based pipeline ці ключі не використовуються активно. Залишаються в config.json для зворотної сумісності.
 
 | Ключ | Тип | За замовч. | Опис |
 | --- | --- | --- | --- |
-| `live_recover_threshold_bars` | int | 3 | Мін кількість пропущених M5 барів для активації recovery |
-| `live_recover_max_bars_per_cycle` | int | 50 | Макс барів за один цикл recovery |
-| `live_recover_cooldown_s` | int | 10 | Cooldown між recovery циклами |
-| `live_recover_max_total_bars` | int | 2000 | Загальний бюджет recovery барів |
+| `live_recover_threshold_bars` | int | 3 | Мін кількість пропущених барів для активації recovery |
+| `live_recover_max_bars_per_cycle` | int | 120 | Макс барів за один цикл recovery |
+| `live_recover_cooldown_s` | int | 5 | Cooldown між recovery циклами |
+| `live_recover_max_total_bars` | int | 5000 | Загальний бюджет recovery барів |
 | `live_recover_log_interval_s` | int | 60 | Інтервал логування recovery |
 
 ---
 
-## Connector (FXCM ForexConnect)
+## Connector (FXCM ForexConnect) — ⚠️ DEPRECATED
+
+> **Декомісіоновано**: M5/D1 connector (engine_b) вимкнено — `broker_base_tfs_s=[]`, `m5_polling_enabled=false` (ADR-0002/0023). Ключі залишаються в config.json. `flat_bar_max_volume` ще використовується в M1 ingestion pipeline.
 
 | Ключ | Тип | За замовч. | Опис |
 | --- | --- | --- | --- |

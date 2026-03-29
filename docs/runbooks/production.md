@@ -308,7 +308,7 @@ server {
 
 **Діагностика**: логи UI → `POLL_STORM` або `visibility_hidden_polling`.
 
-**Рішення**: оновити UI (app.js має setTimeout + visibility pause). Якщо фонова вкладка — polling призупиняється автоматично.
+**Рішення**: оновити UI (ui_v4 WSConnection має reconnect backoff + visibility pause). Якщо фонова вкладка — WS polling призупиняється автоматично.
 
 ---
 

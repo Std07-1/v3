@@ -108,11 +108,11 @@ Python 3.7 досяг EOL у червні 2023 — це **2.5+ роки без s
 │    ├── spawn .venv/python  -m runtime.ingest.tick_preview_worker     │
 │    ├── spawn .venv/python  -m runtime.ingest.m1_ingestion_worker     │
 │    ├── spawn .venv/python  -m runtime.ws.ws_server                   │
-│    └── spawn .venv/python  -m ui_chart_v3                            │
+│    └── spawn .venv/python  -m runtime.ws.ws_server  (WS + HTTP)    │
 │                                                                      │
 │  core/*, runtime/store/*, runtime/ws/*, runtime/smc/*,               │
 │  runtime/ingest/derive_engine.py, runtime/ingest/tick_preview_worker │
-│  ui_chart_v3/, ui_v4/, tools/, aione_top/, tests/                    │
+│  ui_v4/, tools/, aione_top/, tests/                                  │
 └──────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -339,7 +339,7 @@ P5 тільки після P4 verify (все працює з dual venv).
 - `core/` — весь шар (pure logic, залишається 3.7-compatible для broker venv)
 - `runtime/store/uds.py` — API не змінюється
 - `runtime/ws/ws_server.py` — без змін
-- `ui_chart_v3/`, `ui_v4/` — без змін
+- `ui_v4/` — без змін
 - Redis key structure — без змін
 - Wire format (CandleBar JSON, tick payload) — без змін
 - SMC Engine — без змін, живе в main venv

@@ -153,6 +153,8 @@ v3/
 │   ├── smc/               # SMC runtime wiring (ADR-0024)
 │   │   ├── smc_runner.py  # SmcRunner: warmup + on_bar callback
 │   │   └── tda_live.py    # TdaLiveRunner: TDA cascade I/O wrapper (ADR-0040)
+│   ├── relay/             # Signal relay (ADR-0039)
+│   │   └── signal_relay.py # Signal event relay
 │   └── obs_60s.py         # 60s observability
 │
 ├── ui_v4/                 # WebSocket UI (port 8000, Svelte 5)
@@ -511,6 +513,5 @@ tail -f logs/m1_poller.out.log
 - **ADR Index**: `docs/adr/index.md`
 - **Config Reference**: `docs/config_reference.md`
 - **Production Runbook**: `docs/runbooks/production.md`
-- **Changelog**: `CHANGELOG.md` / `changelog.jsonl`
 - **Правила, інваріанти, заборони**: `.github/copilot-instructions.md`
 - **Командна взаємодія агентів**: `CLAUDE.md`

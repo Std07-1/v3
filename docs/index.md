@@ -181,4 +181,3 @@ A (Broker/Ingest) → C (UDS — єдина талія) → B (UI — read-only 
 - **UI**: `http://127.0.0.1:8000/` (WS real-time)
 - **Статус**: `http://127.0.0.1:8000/api/status`
 - **Exit Gates**: `python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json`
-- **Журнал змін**: `changelog.jsonl` (індекс: `CHANGELOG.md`)

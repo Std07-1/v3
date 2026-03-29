@@ -54,8 +54,8 @@
 
 | Точка | Метрика | Target |
 |-------|---------|--------|
-| `ui_chart_v3/server.py` → `/api/bars` | `api_bars_latency_ms` | p95 < 200ms |
-| `ui_chart_v3/server.py` → `/api/updates` | `api_updates_latency_ms` | p95 < 50ms |
+| `runtime/ws/ws_server.py` → `/api/bars` (via WS) | `api_bars_latency_ms` | p95 < 200ms |
+| `runtime/ws/ws_server.py` → `/api/updates` (via WS) | `api_updates_latency_ms` | p95 < 50ms |
 | `runtime/ws/ws_server.py` → broadcast | `ws_broadcast_latency_ms` | p95 < 100ms |
 
 Реалізація:
@@ -84,7 +84,7 @@ class LatencyTracker:
 ### Phase 1
 
 - Новий файл: `core/metrics.py` (~40 LOC)
-- Зміни: `ui_chart_v3/server.py` (+5 LOC per endpoint), `runtime/ws/ws_server.py` (+5 LOC)
+- Зміни: `runtime/ws/ws_server.py` (+5 LOC per endpoint)
 - Лог-формат: `[METRICS]` prefix для easy grep
 - Інваріанти I0–I6 не порушуються (read-only instrumentation)
 
