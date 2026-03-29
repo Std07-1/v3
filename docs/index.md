@@ -141,7 +141,7 @@
 A (Broker/Ingest) → C (UDS — єдина талія) → B (UI — read-only renderer)
 ```
 
-- **A**: FXCM History + Tick Stream → writer-процеси (connector, m1_poller, tick_preview_worker, tick_publisher)
+- **A**: FXCM/Binance History + Tick Stream → writer-процеси (m1_poller, tick_publisher, tick_preview, binance_ingest_worker, binance_tick_publisher)
 - **C**: UnifiedDataStore — єдина точка запису/читання marketdata (SSOT disk + Redis snapshots + updates bus)
 - **B**: UI — read-only renderer:
   - **ui_v4**: WebSocket + HTTP API (port 8000, Svelte 5 + LWC 5, same-origin) → [README_DEV.md](../ui_v4/README_DEV.md)

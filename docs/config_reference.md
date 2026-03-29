@@ -30,14 +30,14 @@
 
 ---
 
-## M5 Derived TF rebuild (900s, 1800s, 3600s)
+## M5 Derived TF rebuild (14400s, 86400s)
 
 | Ключ | Тип | За замовч. | Опис |
 | --- | --- | --- | --- |
-| `derived_tail_rebuild_enabled` | bool | true | Чи перебудовувати derived TF (M15/M30/H1) з M5 при полінгу |
+| `derived_tail_rebuild_enabled` | bool | true | Чи перебудовувати derived TF при полінгу |
 | `derived_tail_rebuild_m5_bars` | int | 5000 | Lookback M5 барів для derived rebuild |
 | `derived_tail_rebuild_budget_s` | int | 5 | Таймаут на rebuild (секунди) |
-| `derived_tfs_s` | int[] | [900, 1800, 3600] | TF для derived з M5 (M15=900, M30=1800, H1=3600) |
+| `derived_tfs_s` | int[] | [14400, 86400] | TF для derived (H4=14400, D1=86400). ADR-0023 |
 
 ---
 
@@ -109,7 +109,7 @@
 
 | Ключ | Тип | За замовч. | Опис |
 | --- | --- | --- | --- |
-| `broker_base_tfs_s` | int[] | [14400, 86400] | TF для прямого fetch (H4=14400, D1=86400) |
+| `broker_base_tfs_s` | int[] | [] | TF для прямого fetch. **Порожній** — всі TF derived (ADR-0023) |
 | `broker_base_fetch_on_close` | bool | true | Забирати бар одразу після close |
 | `broker_base_max_tf_per_poll` | int | 0 | 0 = без ліміту |
 | `broker_base_cold_start_enabled` | bool | true | Завантажити H4/D1 історію на coldstart |
@@ -166,11 +166,11 @@
 
 | Ключ | Тип | За замовч. | Опис |
 | --- | --- | --- | --- |
-| `day_anchor_offset_s` | int | 68400 | Зсув epoch для H4 bucket alignment (19:00 UTC) |
-| `day_anchor_offset_s_alt` | int | 75600 | Альт варіант (21:00 UTC) |
+| `day_anchor_offset_s` | int | 82800 | Зсув epoch для H4 bucket alignment (23:00 UTC) |
+| `day_anchor_offset_s_alt` | int | 0 | Альт варіант (00:00 UTC) |
 | `day_anchor_offset_s_alt2` | int | 79200 | Альт варіант 2 (22:00 UTC) |
-| `day_anchor_offset_s_d1` | int | 75600 | Зсув для D1 (21:00 UTC) |
-| `day_anchor_offset_s_d1_alt` | int | 79200 | Альт D1 (22:00 UTC) |
+| `day_anchor_offset_s_d1` | int | 79200 | Зсув для D1 (22:00 UTC) — ADR-0023 |
+| `day_anchor_offset_s_d1_alt` | int | 0 | Альт D1 (00:00 UTC) |
 
 ---
 
@@ -182,7 +182,7 @@
 | `redis.host` / `port` / `db` | str/int | Адреса Redis |
 | `redis.namespace` | str | Префікс ключів (`v3_local`) |
 | `redis.allow_env_override` | bool | Дозволити ENV перевизначити Redis параметри |
-| `redis.ttl_by_tf_s` | dict | TTL ключів по TF (секунди). M1=1800, D1=604800 |
+| `redis.ttl_by_tf_s` | dict | TTL ключів по TF (секунди). M1=86400, M3=86400, M5=259200, D1=604800 |
 | `redis.tail_n_by_tf_s` | dict | Скільки барів тримати в Redis tail по TF. M1=2880, D1=128 |
 
 ---
@@ -203,7 +203,7 @@
 
 | Ключ | Тип | Default | Опис |
 | --- | --- | --- | --- |
-| `bootstrap.prime_ready_timeout_s` | int | 30 | Таймаут AND-gate (connector + m1_poller) перед стартом UI |
+| `bootstrap.prime_ready_timeout_s` | int | 30 | Таймаут AND-gate (m1_poller + binance_ingest) перед стартом WS Server |
 | `bootstrap.derive_warmup_bars_by_tf` | dict | `{60:300, 300:20, 900:10, 1800:10, 3600:10}` | Кількість барів з диску для warmup DeriveEngine каскаду |
 | `bootstrap.ui_warmup_bars_by_tf` | dict | `{60:500, ..., 86400:200}` | RAM-кеш прогрів UI (symbol × TF) |
 | `bootstrap.ui_cold_start_bars_by_tf` | dict | `{60:10080, ..., 86400:365}` | Policy для cold-start UI вікна (передається клієнту) |

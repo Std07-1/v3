@@ -172,7 +172,7 @@ v3/
 │
 ├── tools/                 # Утиліти та діагностика (isolated)
 │   ├── run_exit_gates.py  # Quality gates runner
-│   ├── exit_gates/        # 26 AST gates (dependency, contract, geometry, dual_python)
+│   ├── exit_gates/        # 29 AST gates (dependency, contract, geometry, dual_python)
 │   ├── rebuild_from_m1.py # Canonical rebuild all derived TFs
 │   ├── repair/            # htf_rebuild, htf_tail_sync, repair_m1_gaps
 │   └── diag/              # classify gaps, clear redis, disk_max_open_ms
@@ -187,7 +187,7 @@ v3/
 │
 ├── .github/               # AI agent governance
 │   ├── copilot-instructions.md  # SSOT інструкція для AI-агентів
-│   ├── role_spec_*.md     # 8 role specs (patch_master, bug_hunter, smc_chief, doc_keeper, trader, chart_ux, architect, compliance)
+│   ├── role_spec_*.md     # 11 role specs (patch_master, bug_hunter, smc_chief, doc_keeper, trader, chart_ux, architect, compliance, signal_architect, mentor, rejector)
 │   └── prompts/           # 8 prompt files (adr, discovery, patch, review, ...)
 │
 ├── docs/                  # Повна документація
@@ -315,6 +315,37 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 | `test_tda_live.py` | TDA runtime wiring + config SSOT |
 | `test_pd_state.py` | PdState wire format + PremiumDiscountConfig compat (ADR-0041, 21 тест) |
 | `test_ob_impulse_grace.py` | OB impulse grace: zone mitigation skips impulse bars (6 тестів) |
+| `test_adr0042_config_ssot.py` | ADR-0042 config SSOT compliance |
+| `test_adr0042_delta_parity.py` | ADR-0042 delta frame parity |
+| `test_app_main_supervisor.py` | Supervisor lifecycle, restart policy |
+| `test_cascade_no_dupes.py` | Derive cascade dedup |
+| `test_hardcode_scan.py` | Hardcoded values scan |
+| `test_htf_rebuild.py` | HTF rebuild correctness |
+| `test_htf_running_accumulator.py` | HTF running accumulator |
+| `test_htf_tail_sync.py` | HTF tail synchronization |
+| `test_m1_flat_bar_policy.py` | M1 flat bar filtering policy |
+| `test_m1_ingestion_ipc.py` | M1 ingestion IPC (broker sidecar) |
+| `test_market_calendar.py` | Market calendar breaks/sessions |
+| `test_near_dedup_d1.py` | D1 near-dedup logic |
+| `test_overdue_cascade.py` | Overdue cascade detection |
+| `test_qa_001.py` | QA regression #001 |
+| `test_qa_002.py` | QA regression #002 |
+| `test_qa_003.py` | QA regression #003 |
+| `test_qa_003_exhaustive.py` | QA regression #003 exhaustive |
+| `test_s2_tick_drops_loud.py` | Tick drops degraded-but-loud (I5) |
+| `test_s6_tf_allowlist_ssot.py` | TF allowlist SSOT compliance |
+| `test_shell_composer.py` | Shell composer logic |
+| `test_signal_journal_recovery.py` | Signal journal recovery |
+| `test_smc_d1_display_filter.py` | SMC D1 display filter |
+| `test_smc_e2_liquidity.py` | SMC E2: liquidity detection |
+| `test_smc_e2_pd_inducement.py` | SMC E2: P/D + inducement |
+| `test_smc_narrative.py` | SMC narrative (Context Flow, ADR-0033) |
+| `test_smc_signals.py` | SMC signal engine (ADR-0039) |
+| `test_smc_tda_p0_p1.py` | TDA P0+P1 integration |
+| `test_tick_agg.py` | Tick aggregator logic |
+| `test_tick_preview_calendar.py` | Tick preview + calendar gate |
+
+> **52 test files total** on disk. Table above lists key tests; run `pytest tests/ -v` for full coverage.
 
 ---
 

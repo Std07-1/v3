@@ -106,7 +106,6 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 |---|---|
 | [docs/index.md](docs/index.md) | Навігація по всій документації |
 | [docs/system_current_overview.md](docs/system_current_overview.md) | Архітектура, процеси, схеми, інваріанти |
-| [docs/guide_candle_acquisition.md](docs/guide_candle_acquisition.md) | Повний посібник: отримання свічок (FXCM API, календар, watermark, recover) |
 | [docs/contracts.md](docs/contracts.md) | Реєстр контрактів (bar_v1, window_v1, updates_v1, tick_v1) |
 | [docs/ui_api.md](docs/ui_api.md) | HTTP API reference (endpoints, guards, TTL) |
 | [docs/config_reference.md](docs/config_reference.md) | Довідник полів config.json |
