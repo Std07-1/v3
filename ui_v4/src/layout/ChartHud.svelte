@@ -2,6 +2,7 @@
 <!-- P3.1-P3.2: Frosted-glass HUD overlay (V3 parity: index.html .hud-stack)
      P3.11: Theme picker. P3.12: Candle style picker.
      Symbol dropdown · TF pills · Live price · Streaming dot -->
+
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
     import { derivePdBadge } from "../stores/shellState";
