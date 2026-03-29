@@ -65,7 +65,7 @@ app.main (supervisor)
 > **Dual-venv (ADR-0016)**: Supervisor автоматично використовує `.venv37/` (Python 3.7) для
 > broker_sidecar та tick_publisher_fxcm, і `.venv/` (Python ≥3.11) для всього іншого.
 > Якщо `.venv37/` не знайдено — fallback на legacy m1_poller (single-process, Python 3.7).
-> На Windows supervisor завершує workers через tree-kill (`taskkill /T`) і тримає `logs/supervisor.pid`,
+> На Windows supervisor завершує workers через tree-kill (`taskkill /T`) і тримає `logs/supervisor_{mode}.pid`,
 > бо Python 3.14 venv launcher створює trampoline-процес перед реальним worker.
 
 ```
@@ -249,11 +249,9 @@ flowchart LR
         U2 -->|Redis snap + updates bus| R1[(Redis)]
         U2 -->|bridge final→preview ring| RP
     end
-    subgraph SSOT3["D1 (derived, ADR-0023)"]
-        FXCMH[(FXCM History)] -.->|disabled: broker_base_tfs_s=empty| P[connector D1-only]
-        P -.->|disabled| U3[UDS writer]
-        U3 -->|SSOT write| DH[(data_v3 tf_86400)]
-        U3 -->|Redis snap| R5[(Redis)]
+    subgraph SSOT3["D1 (derived from M1, ADR-0023)"]
+        DE -->|M1×1440| DH[(data_v3 tf_86400)]
+        DH -->|Redis snap| R5[(Redis)]
     end
     subgraph UI["UI Layer"]
         UIv4[ui_v4<br/>WS real-time :8000] -->|WS full/delta/scrollback| UR
@@ -271,10 +269,8 @@ flowchart LR
 flowchart LR
     subgraph Broker["A: Broker (FXCM)"]
         FX1[(History M1)]
-        FXH[(History D1)]
     end
     subgraph Writers["Writers (ingest)"]
-        EB[engine_b<br/>D1 fetch OFF]
         M1P[m1_poller<br/>poll 8s]
         DRV[DeriveEngine<br/>M3→M5→M15→M30→H1→H4+D1]
     end
@@ -292,7 +288,6 @@ flowchart LR
     end
 
     FX1 --> M1P --> CFB
-    FXH --> EB --> CFB
     M1P --> DRV --> CFB
 
     CFB --> WM

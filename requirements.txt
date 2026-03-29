@@ -1,4 +1,4 @@
-# Runtime dependencies — platform venv (Python 3.12+, ADR-0016)
+# Runtime dependencies — platform venv (Python >=3.11, ADR-0016)
 redis==5.0.1
 numpy>=1.26
 pandas>=2.1

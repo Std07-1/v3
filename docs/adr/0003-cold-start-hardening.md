@@ -25,7 +25,7 @@
 
 ## 1. Контекст та ціль
 
-**Ціль**: Ідеальний cold start для 13 символів × 8 TF з TradingView-клас UX.
+**Ціль**: Ідеальний cold start для 4 символів × 8 TF з TradingView-клас UX.
 
 **SLO**:
 - p95 < 200мс time-to-first-candle (після bootstrap)

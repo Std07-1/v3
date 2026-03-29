@@ -1,8 +1,7 @@
-# AGENTS.md — Trading Platform v3 (FXCM Connector)
+# AGENTS.md — Trading Platform v3
 
 > **Системний довідник** — структура, команди, конфігурація, схеми.
 > Правила, інваріанти, заборони → `.github/copilot-instructions.md`.
-> Командна взаємодія агентів → `CLAUDE.md`.
 > **Last Updated**: 2026-03-24
 
 ---
@@ -49,7 +48,7 @@
 
 - Python 3.14 venv launcher creates trampoline processes on Windows
 - `app/main.py` uses `_kill_tree()` (`taskkill /T`) instead of single-PID terminate
-- `logs/supervisor.pid` blocks duplicate supervisor instances
+- `logs/supervisor_{mode}.pid` blocks duplicate supervisor instances
 
 **Frontend UI v4:**
 
@@ -241,16 +240,17 @@ cd ..
 # Запуск усіх процесів (supervisor mode)
 python -m app.main --mode all --stdio pipe
 
-# Windows note: supervisor kills worker process trees and keeps logs/supervisor.pid
+# Windows note: supervisor kills worker process trees and keeps logs/supervisor_{mode}.pid
 # because Python 3.14 venv launcher may create a trampoline process before real worker.
 
 # Окремі режими
-python -m app.main --mode connector          # D1 fetcher (disabled, ADR-0023)
 python -m app.main --mode m1_poller          # Legacy single-process M1 (Python 3.7)
 python -m app.main --mode broker_sidecar     # FXCM fetcher sidecar (.venv37/, ADR-0016)
 python -m app.main --mode m1_ingestion_worker # Platform M1 ingestion (.venv/, ADR-0016)
-python -m app.main --mode tick_publisher     # Tick stream (.venv37/)
+python -m app.main --mode tick_publisher     # FXCM tick stream (.venv37/)
 python -m app.main --mode tick_preview       # Preview worker
+python -m app.main --mode binance_ingest_worker  # Binance M1 ingest (ADR-0037/0038)
+python -m app.main --mode binance_tick_publisher # Binance tick stream (ADR-0037)
 python -m app.main --mode ws_server          # WS UI (port 8000)
 
 # TUI монітор (окремо)
@@ -456,7 +456,7 @@ REDIS_PORT=6379
 | Проблема | Діагностика | Рішення |
 |---|---|---|
 | `prime_pending` | `curl /api/status` | Чекати cold start завершення |
-| `prime_broken` | Логи `connector`/`m1_poller` | Перевірити FXCM credentials |
+| `prime_broken` | Логи `m1_poller` / `binance_ingest_worker` | Перевірити FXCM credentials / Binance API |
 | `redis_spec_mismatch` | UDS warnings | Перевірити Redis TTL конфігурацію |
 | `insufficient_warmup` | UI показує порожній графік | Зачекати bootstrap або перезапустити |
 
@@ -481,8 +481,8 @@ python -m tools.purge_broken_bars --symbol XAU/USD --tf 14400
 ls logs/*.log
 
 # Окремі процеси (якщо запущені вручну):
-tail -f logs/connector.out.log
 tail -f logs/m1_poller.out.log
+tail -f logs/ws_server.out.log
 ```
 
 ---
@@ -514,4 +514,3 @@ tail -f logs/m1_poller.out.log
 - **Config Reference**: `docs/config_reference.md`
 - **Production Runbook**: `docs/runbooks/production.md`
 - **Правила, інваріанти, заборони**: `.github/copilot-instructions.md`
-- **Командна взаємодія агентів**: `CLAUDE.md`
