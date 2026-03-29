@@ -154,7 +154,6 @@ _PROCESS_CATEGORIES: Dict[str, str] = {
     "broker_sidecar": "critical",
     "tick_publisher": "non_critical",
     "tick_preview": "non_critical",
-
     "ws_server": "essential",
     "replay": "critical",
     "binance_ingest_worker": "critical",
@@ -543,9 +542,10 @@ def _rotate_log_if_needed(log_path: Path) -> None:
 _PID_FILE = "logs/supervisor.pid"
 
 
-def _acquire_pid_lock(log_dir: Path) -> bool:
-    """Write PID file. Return False if another supervisor is alive."""
-    pid_path = log_dir / "supervisor.pid"
+def _acquire_pid_lock(log_dir: Path, mode: str = "all") -> bool:
+    """Write PID file. Return False if another supervisor with same mode is alive."""
+    suffix = f"supervisor_{mode}.pid" if mode != "all" else "supervisor.pid"
+    pid_path = log_dir / suffix
     log_dir.mkdir(parents=True, exist_ok=True)
     if pid_path.exists():
         try:
@@ -577,8 +577,9 @@ def _acquire_pid_lock(log_dir: Path) -> bool:
     return True
 
 
-def _release_pid_lock(log_dir: Path) -> None:
-    pid_path = log_dir / "supervisor.pid"
+def _release_pid_lock(log_dir: Path, mode: str = "all") -> None:
+    suffix = f"supervisor_{mode}.pid" if mode != "all" else "supervisor.pid"
+    pid_path = log_dir / suffix
     try:
         if pid_path.exists() and int(pid_path.read_text().strip()) == os.getpid():
             pid_path.unlink()
@@ -600,8 +601,8 @@ def main() -> int:
 
     log_dir = Path(args.log_dir)
 
-    # PID lock — блокує дублювання supervisor instances
-    if not _acquire_pid_lock(log_dir):
+    # PID lock — блокує дублювання supervisor instances (per-mode)
+    if not _acquire_pid_lock(log_dir, mode=args.mode):
         return 4
 
     logging.info("Supervisor: mode=%s stdio=%s pid=%d", args.mode, stdio, os.getpid())
@@ -964,7 +965,7 @@ def main() -> int:
     finally:
         for item in reversed(processes):
             _terminate(item)
-        _release_pid_lock(log_dir)
+        _release_pid_lock(log_dir, mode=args.mode)
 
     return 0
 
