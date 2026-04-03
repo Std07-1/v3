@@ -60,6 +60,8 @@ class UdsLike(Protocol):
 class SmcRunnerLike(Protocol):
     def get_snapshot(self, symbol: str, tf_s: int) -> Any: ...
 
+    def get_last_price(self, symbol: str) -> float: ...
+
     def get_zone_grades(self, symbol: str, tf_s: int) -> Any: ...
 
     def get_session_levels_wire(self, symbol: str) -> Any: ...
@@ -871,7 +873,10 @@ async def _global_delta_loop(app: web.Application) -> None:
             )
             _viewer_ns = _v_spec.namespace
     except Exception:
-        _log.warning("VIEWER_REDIS_INIT_FAIL: viewer Redis init failed, tick_preview falls back to normal throttle", exc_info=True)
+        _log.warning(
+            "VIEWER_REDIS_INIT_FAIL: viewer Redis init failed, tick_preview falls back to normal throttle",
+            exc_info=True,
+        )
 
     try:
         while True:
@@ -889,7 +894,10 @@ async def _global_delta_loop(app: web.Application) -> None:
                     _vk = f"{_viewer_ns}:ws:viewer_count"
                     _viewer_redis.set(_vk, str(active_count), ex=30)
                 except Exception:
-                    _log.warning("VIEWER_REDIS_SET_FAIL: cannot publish viewer_count to Redis", exc_info=True)
+                    _log.warning(
+                        "VIEWER_REDIS_SET_FAIL: cannot publish viewer_count to Redis",
+                        exc_info=True,
+                    )
 
             subs_by_target: Dict[tuple[str, int], list[WsSession]] = {}
             for sess in (sessions or {}).values():
@@ -1121,25 +1129,33 @@ async def _global_delta_loop(app: web.Application) -> None:
                                     if _zg:
                                         frame["zone_grades"] = _zg
                                 except Exception:
-                                    _log.debug("WS_DELTA_ZG_ERR sym=%s", symbol, exc_info=True)
+                                    _log.debug(
+                                        "WS_DELTA_ZG_ERR sym=%s", symbol, exc_info=True
+                                    )
                                 try:
                                     _bm = _smc_runner.get_bias_map(symbol)
                                     if _bm:
                                         frame["bias_map"] = _bm
                                 except Exception:
-                                    _log.debug("WS_DELTA_BM_ERR sym=%s", symbol, exc_info=True)
+                                    _log.debug(
+                                        "WS_DELTA_BM_ERR sym=%s", symbol, exc_info=True
+                                    )
                                 try:
                                     _mm = _smc_runner.get_momentum_map(symbol)
                                     if _mm:
                                         frame["momentum_map"] = _mm
                                 except Exception:
-                                    _log.debug("WS_DELTA_MM_ERR sym=%s", symbol, exc_info=True)
+                                    _log.debug(
+                                        "WS_DELTA_MM_ERR sym=%s", symbol, exc_info=True
+                                    )
                                 try:
                                     _pds = _smc_runner.get_pd_state(symbol, tf_s)
                                     if _pds is not None:
                                         frame["pd_state"] = _pds
                                 except Exception:
-                                    _log.debug("WS_DELTA_PD_ERR sym=%s", symbol, exc_info=True)
+                                    _log.debug(
+                                        "WS_DELTA_PD_ERR sym=%s", symbol, exc_info=True
+                                    )
                                 try:
                                     _last_c = (
                                         candles[-1].get("c", 0)
@@ -1182,15 +1198,26 @@ async def _global_delta_loop(app: web.Application) -> None:
                                     # ADR-0042 P2: signals in delta (DF-2)
                                     try:
                                         _sigs, _sig_alerts = _smc_runner.get_signals(
-                                            symbol, tf_s, _narr,
-                                            float(_last_c), float(_atr_est),
+                                            symbol,
+                                            tf_s,
+                                            _narr,
+                                            float(_last_c),
+                                            float(_atr_est),
                                         )
                                         if _sigs:
-                                            frame["signals"] = [s.to_wire() for s in _sigs]
+                                            frame["signals"] = [
+                                                s.to_wire() for s in _sigs
+                                            ]
                                         if _sig_alerts:
-                                            frame["signal_alerts"] = [a.to_wire() for a in _sig_alerts]
+                                            frame["signal_alerts"] = [
+                                                a.to_wire() for a in _sig_alerts
+                                            ]
                                     except Exception:
-                                        _log.debug("WS_DELTA_SIG_ERR sym=%s", symbol, exc_info=True)
+                                        _log.debug(
+                                            "WS_DELTA_SIG_ERR sym=%s",
+                                            symbol,
+                                            exc_info=True,
+                                        )
                                 except Exception as _narr_exc:
                                     _log.debug(
                                         "WS_DELTA_NARRATIVE_ERR sym=%s err=%s",
@@ -1831,6 +1858,148 @@ def build_app(
         )
 
     app.router.add_get("/api/status", _api_status)
+
+    # ── /api/context — SMC context for external consumers (bot, TUI) ───
+    async def _api_context(request: web.Request) -> web.Response:
+        """Повертає поточний SMC контекст для symbol+tf.
+
+        GET /api/context?symbol=BTCUSDT&tf=M15
+        Використовується Telegram-ботом для збагачення аналізу.
+        """
+        symbol_raw = request.query.get("symbol", "")
+        tf_raw = request.query.get("tf", "M15")
+        if not symbol_raw:
+            return web.json_response(
+                {"error": "missing 'symbol' query param"}, status=400
+            )
+        symbol = _canonicalize_symbol(symbol_raw, app[APP_SYMBOLS_SET])
+        tf_s = _TF_LABEL_TO_S.get(tf_raw) or _TF_LABEL_TO_S.get(tf_raw.upper())
+        if tf_s is None:
+            return web.json_response({"error": f"unknown tf '{tf_raw}'"}, status=400)
+
+        ctx: Dict[str, Any] = {
+            "symbol": symbol,
+            "tf": _TF_S_TO_LABEL.get(tf_s, tf_raw),
+            "tf_s": tf_s,
+            "server_ts_ms": int(time.time() * 1000),
+        }
+
+        _smc_runner = app.get(APP_SMC_RUNNER)
+        if _smc_runner is None:
+            ctx["error"] = "smc_runner not available"
+            return web.json_response(ctx)
+
+        # last_price — від SmcRunner (оновлюється при кожному M1 bar)
+        _last_price = _smc_runner.get_last_price(symbol)
+        if _last_price > 0:
+            ctx["last_price"] = _last_price
+
+        # bias_map — HTF alignment
+        try:
+            bm = _smc_runner.get_bias_map(symbol)
+            if bm:
+                # Перетворюємо ключі tf_s → label для читабельності
+                ctx["bias_map"] = {
+                    _TF_S_TO_LABEL.get(int(k), k): v for k, v in bm.items()
+                }
+        except Exception as exc:
+            ctx.setdefault("warnings", []).append(f"bias_map: {exc}")
+
+        # pd_state — premium/discount
+        try:
+            pd = _smc_runner.get_pd_state(symbol, tf_s)
+            if pd:
+                ctx["pd_state"] = pd
+        except Exception as exc:
+            ctx.setdefault("warnings", []).append(f"pd_state: {exc}")
+
+        # zones + zone_grades — active SMC zones
+        try:
+            snap = _smc_runner.get_snapshot(symbol, tf_s)
+            if snap is not None:
+                wire = snap.to_wire()
+                # Тільки активні зони (не mitigated)
+                ctx["zones"] = wire.get("zones", [])
+                ctx["levels"] = wire.get("levels", [])
+                ctx["trend_bias"] = wire.get("trend_bias")
+                # zone_grades
+                zg = _smc_runner.get_zone_grades(symbol, tf_s)
+                if zg:
+                    ctx["zone_grades"] = zg
+        except Exception as exc:
+            ctx.setdefault("warnings", []).append(f"snapshot: {exc}")
+
+        # session levels
+        try:
+            sl = _smc_runner.get_session_levels_wire(symbol)
+            if sl:
+                ctx["session_levels"] = sl
+        except Exception as exc:
+            ctx.setdefault("warnings", []).append(f"session_levels: {exc}")
+
+        # ATR(14) for requested TF + D1/H4
+        try:
+            atr_map = {}
+            for _atf in sorted({tf_s, 14400, 86400}):
+                _atr_val = _smc_runner._engine.get_atr(symbol, _atf)
+                if _atr_val > 1.0:
+                    atr_map[_TF_S_TO_LABEL.get(_atf, str(_atf))] = round(_atr_val, 2)
+            if atr_map:
+                ctx["atr"] = atr_map
+        except Exception as exc:
+            ctx.setdefault("warnings", []).append(f"atr: {exc}")
+
+        # recent OHLC candles (last N bars for the TF)
+        try:
+            _limit = int(request.query.get("candles", "0"))
+            if _limit > 0:
+                _limit = min(_limit, 20)
+                state = _smc_runner._engine._states.get((symbol, tf_s))
+                if state is not None:
+                    _raw = state.bars_list()[-_limit:]
+                    ctx["candles"] = [
+                        {
+                            "t": int(b.open_time_ms),
+                            "o": round(b.o, 5),
+                            "h": round(b.h, 5),
+                            "l": round(b.low, 5),
+                            "c": round(b.c, 5),
+                        }
+                        for b in _raw
+                    ]
+        except Exception as exc:
+            ctx.setdefault("warnings", []).append(f"candles: {exc}")
+
+        # narrative — market phase, scenario, mode
+        narr = None
+        try:
+            _atr_est = 1.0
+            narr = _smc_runner.get_narrative(symbol, tf_s, _last_price, _atr_est)
+            if narr is not None:
+                from core.smc.narrative import narrative_to_wire
+
+                ctx["narrative"] = narrative_to_wire(narr)
+        except Exception as exc:
+            ctx.setdefault("warnings", []).append(f"narrative: {exc}")
+
+        # signals (ADR-0039)
+        try:
+            _atr_for_sig = ctx.get("atr", {}).get(_TF_S_TO_LABEL.get(tf_s, ""), 1.0)
+            _sigs, _ = _smc_runner.get_signals(
+                symbol,
+                tf_s,
+                narr,
+                _last_price,
+                _atr_for_sig if isinstance(_atr_for_sig, (int, float)) else 1.0,
+            )
+            if _sigs:
+                ctx["signals"] = [s.to_wire() for s in _sigs[:5]]
+        except Exception as exc:
+            ctx.setdefault("warnings", []).append(f"signals: {exc}")
+
+        return web.json_response(ctx)
+
+    app.router.add_get("/api/context", _api_context)
     app.router.add_get("/ws", ws_handler)
 
     # ── Same-origin SPA serving (Правило §11: UI + API = один процес) ──
