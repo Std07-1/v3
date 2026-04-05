@@ -1,94 +1,29 @@
-PROPRIETARY SOURCE-AVAILABLE & CONTRIBUTION LICENSE (v2.0)
+MIT License
 
-Copyright (C) 2024–2026 Stanislav Std07-1. All rights reserved.
+Copyright (c) 2024–2026 Stanislav Ostrynskyi (Std07-1)
 
-This software, including all source code, architecture, data contracts, trading mechanics, algorithms, documentation, and accompanying materials (collectively, the "Software"), is the proprietary work of Stanislav Std07-1 (the "Owner").
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-BY ACCESSING, VIEWING, DOWNLOADING, COPYING, OR USING THE SOFTWARE, YOU AGREE TO BE BOUND BY THIS LICENSE.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-1) Definitions
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
-"You" means any individual or entity that accesses or uses the Software.
+---
 
-"Use" means to run, execute, test, view, copy, modify, or otherwise utilize the Software.
+FINANCIAL DISCLAIMER
 
-"Non-Commercial" means not (a) selling, licensing, sublicensing, or distributing the Software; (b) offering the Software as a product or service (including SaaS, hosted, managed, or consulting services) to third parties; (c) using the Software for internal business operations of a company or organization; or (d) using the Software to develop, operate, or improve a commercial or competing product/service. For clarity: using the Software for personal research/education or for your own personal trading is permitted under this license and is not considered Commercial solely because your trading may be profitable.
-
-"Contribution" means any code, patch, feature, bugfix, documentation, test, configuration, or other material you submit to the Owner (for example, via pull request, patch file, email, or issue attachment) intended to be incorporated into the Software.
-
-2) License Grant (Source-Available; No Ownership Transfer)
-
-Subject to continuous compliance with this license, the Owner grants You a limited, non-exclusive, non-transferable, non-sublicensable, revocable license to:
-
-  a) Use the Software for personal, Non-Commercial purposes; and
-  b) Modify the Software for personal, Non-Commercial purposes.
-
-No ownership rights are transferred. The Owner retains all rights, title, and interest in and to the Software.
-
-3) Redistribution, Publication, and Sharing (Prohibited)
-
-Except as expressly permitted in Section 4 (Contributions), You may not:
-
-  a) distribute, publish, or make available the Software (or any portion of it) to any third party;
-  b) host the Software (or any portion) for access by any third party;
-  c) sublicense, sell, rent, lease, or otherwise transfer the Software;
-  d) publish forks, mirrors, or derivative repositories; or
-  e) distribute modified versions, compiled binaries, or re-packaged variants.
-
-4) Contributions (Mandatory Backflow; Owner-Friendly Terms)
-
-If You create modifications or improvements and wish to share them, the only permitted sharing mechanism under this license is a Contribution to the Owner.
-
-By submitting a Contribution, You grant the Owner a perpetual, worldwide, irrevocable, royalty-free, fully paid, transferable, sublicensable license to use, reproduce, modify, create derivative works of, distribute, publicly perform, publicly display, and otherwise exploit the Contribution as part of the Software or separately, under any license terms chosen by the Owner.
-
-You represent and warrant that You have the legal right to submit the Contribution and that it does not infringe any third-party rights.
-
-5) No Commercial Use; No Competitive Use
-
-You may not Use the Software (or any portion of it) for Commercial purposes.
-
-You may not Use the Software to design, implement, or operate any product or service that is substantially similar to, competes with, or substitutes for the Software, including (without limitation) trading platforms, market data systems, unified data stores for trading UI, update-stream merging systems, time-geometry canonicalization pipelines, or related mechanics.
-
-6) Attribution and Notice
-
-You must keep all copyright notices intact.
-
-If You publish any public write-up, benchmark, presentation, video, or other public material that is based on or derived from the Software (even without distributing the Software itself), You must include a visible attribution:
-
-  "Based on Trading Platform v3 / UDS architecture by Stanislav Std07-1."
-
-7) Confidentiality / No Misappropriation
-
-You agree not to misappropriate or reuse the Software's unique mechanisms, design, architecture, contracts, or implementation details to build or enhance a competing system.
-
-If You received access to this repository under a private or restricted context, You must not disclose the Software or any non-public information about it to third parties.
-
-8) Reverse Engineering and Circumvention
-
-You may not circumvent or attempt to circumvent any access controls, license checks, or technical restrictions related to the Software.
-
-9) No Patent or Trademark License
-
-This license does not grant You any patent rights, trademark rights, or rights to use the Owner's names, logos, or marks, except for the limited attribution requirement in Section 6.
-
-10) Termination
-
-This license terminates automatically if You breach any term. Upon termination, You must immediately cease all Use of the Software and destroy all copies in Your possession or control.
-
-11) Disclaimer of Warranty
-
-THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING, WITHOUT LIMITATION, WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
-
-12) Limitation of Liability
-
-TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT SHALL THE OWNER BE LIABLE FOR ANY DAMAGES, INCLUDING DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES, ARISING OUT OF OR RELATED TO THE SOFTWARE OR THIS LICENSE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
-
-13) Governing Law and Jurisdiction
-
-This license is governed by and construed in accordance with the laws of the Czech Republic. Any dispute arising out of or relating to this license shall be subject to the exclusive jurisdiction of the courts of the Czech Republic.
-
-14) Contact / Commercial License
-
-If You want to use the Software commercially, in a company context, or with any redistribution rights, contact the Owner to negotiate a separate commercial license.
-
-Effective date: 2026-02-15
+This software is a personal analytical tool. Nothing in the Software
+constitutes financial advice, investment recommendation, or solicitation
+to trade. All trading decisions are made at the user's own risk.
