@@ -52,6 +52,7 @@
     ],
     "preview_tick_publish_min_interval_ms": 250,
     "preview_curr_ttl_s": 1800,
+    "broker_ipc_reply_ttl_s": 120,
     "tick_auto_promote_m1": true,
     "ui_stitching_enabled": false,
     "tick_stream_enabled": true,

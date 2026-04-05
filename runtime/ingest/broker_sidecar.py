@@ -41,6 +41,9 @@ _CMD_QUEUE_SUFFIX = "broker:m1:cmd"
 _BARS_QUEUE_SUFFIX = "broker:m1:bars"
 _MAX_LIST_LEN = 10000  # LTRIM safety rail (ADR-0016 §F4)
 _BLPOP_TIMEOUT_S = 5  # seconds
+_DEFAULT_IPC_REPLY_TTL_S = 120  # config.json:broker_ipc_reply_ttl_s
+
+_ipc_reply_ttl_s = _DEFAULT_IPC_REPLY_TTL_S  # overridden in main() from config
 _RECONNECT_COOLDOWN_S = 30
 _MAX_BARS_PER_CMD = 200  # guard against huge requests
 _CONTRACT_VERSION = 1
@@ -134,7 +137,9 @@ def _handle_command(provider, cmd_raw, redis_cli, bars_key):
             }
         )
         redis_cli.rpush(target_key, error_resp)
-        if not reply_to:
+        if reply_to:
+            redis_cli.expire(target_key, _ipc_reply_ttl_s)
+        else:
             redis_cli.ltrim(target_key, -_MAX_LIST_LEN, -1)
         logging.warning("BROKER_SIDECAR_FETCH_ERROR symbol=%s err=%s", symbol, exc)
         return
@@ -151,7 +156,9 @@ def _handle_command(provider, cmd_raw, redis_cli, bars_key):
         }
     )
     redis_cli.rpush(target_key, resp)
-    if not reply_to:
+    if reply_to:
+        redis_cli.expire(target_key, _ipc_reply_ttl_s)
+    else:
         redis_cli.ltrim(target_key, -_MAX_LIST_LEN, -1)
 
     if bars:
@@ -189,6 +196,8 @@ def main():
         logging.error("BROKER_SIDECAR_REDIS_DISABLED")
         return 1
 
+    global _ipc_reply_ttl_s
+    _ipc_reply_ttl_s = int(cfg.get("broker_ipc_reply_ttl_s", _DEFAULT_IPC_REPLY_TTL_S))
     cmd_key = "%s:%s" % (spec.namespace, _CMD_QUEUE_SUFFIX)
     bars_key = "%s:%s" % (spec.namespace, _BARS_QUEUE_SUFFIX)
 
