@@ -62,6 +62,9 @@ ui_v4/dist/
 /reports/
 /aione_top/
 
+# ── Trader Bot (PROPRIETARY, не в репо) ─────────────────────
+/trader-v3/
+
 # ── Журнали, стан, діагностика ──────────────────────────────
 /changelog.jsonl
 /CHANGELOG.md

@@ -59,7 +59,30 @@
   let activeTool: ActiveTool = $state(null);
 
   // Symbol/TF persistence (drawing_tools_v1)
+  // Priority: URL query params > localStorage
+  // Seconds→label map for URL params (screenshot bot sends ?tf=3600)
+  const _S_TO_LABEL: Record<string, string> = {
+    "60": "M1",
+    "180": "M3",
+    "300": "M5",
+    "900": "M15",
+    "1800": "M30",
+    "3600": "H1",
+    "14400": "H4",
+    "86400": "D1",
+  };
   function loadLastPair(): { symbol: string; tf: string } | null {
+    // URL params have highest priority (used by screenshot bot, deep links)
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const qs = params.get("symbol");
+      let qt = params.get("tf");
+      if (qs && qt) {
+        // Accept both labels ("H1") and seconds ("3600")
+        qt = _S_TO_LABEL[qt] ?? qt;
+        return { symbol: qs, tf: qt };
+      }
+    } catch {}
     try {
       const raw = localStorage.getItem("v4_last_pair");
       if (!raw) return null;

@@ -170,13 +170,18 @@
 
 ## Day Anchors (для HTF bucket alignment)
 
-| Ключ | Тип | За замовч. | Опис |
-| --- | --- | --- | --- |
-| `day_anchor_offset_s` | int | 82800 | Зсув epoch для H4 bucket alignment (23:00 UTC) |
-| `day_anchor_offset_s_alt` | int | 0 | Альт варіант (00:00 UTC) |
-| `day_anchor_offset_s_alt2` | int | 79200 | Альт варіант 2 (22:00 UTC) |
-| `day_anchor_offset_s_d1` | int | 79200 | Зсув для D1 (22:00 UTC) — ADR-0023 |
-| `day_anchor_offset_s_d1_alt` | int | 0 | Альт D1 (00:00 UTC) |
+> **DST-залежні значення!** Ці якорі змінюються при переході літній/зимовий час.
+> Повна процедура переходу: [`docs/runbooks/dst_transition.md`](../runbooks/dst_transition.md)
+
+| Ключ | Тип | Літо (EDT) | Зима (EST) | Опис |
+| --- | --- | --- | --- | --- |
+| `day_anchor_offset_s` | int | **79200** (22:00 UTC) | **82800** (23:00 UTC) | H4 bucket alignment — поточний активний якір |
+| `day_anchor_offset_s_alt` | int | 82800 | 0 | Альт H4 якір (для backward compat при DST) |
+| `day_anchor_offset_s_alt2` | int | 0 | 79200 | Альт H4 якір 2 |
+| `day_anchor_offset_s_d1` | int | **75600** (21:00 UTC) | **79200** (22:00 UTC) | D1 bucket alignment — ADR-0023 |
+| `day_anchor_offset_s_d1_alt` | int | 79200 | 0 | Альт D1 якір (для backward compat) |
+
+**Пояснення**: Primary (`day_anchor_offset_s`, `_d1`) = поточний сезон. Alt/Alt2 = попередній сезон для `select_anchor_offset_for_open_ms()` — дозволяє читати старі бари без rebuild всієї історії.
 
 ---
 

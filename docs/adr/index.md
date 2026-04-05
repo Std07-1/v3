@@ -58,6 +58,8 @@
 | [0042](0042-delta-frame-state-sync.md) | Delta Frame State Synchronization — Full/Delta Parity | **Implemented** | 2026-03-22 | delta frame, state desync, zone_grades, pd_state, bias_map, thick delta, FVG grace, DF-1/DF-2/DF-3 | `delta_frame_parity_v1` |
 | [0043](0043-ui-v4-canvas-safe-zones-state-sync.md) | UI v4 — Canvas Safe Zones + State Sync Hardening | **Implemented** | 2026-03-24 | CANVAS_SAFE_TOP_Y, pd_state null-clear, boot_id reset, filterMitigated activation, z-index collision, thick-delta SSOT | `ui_v4_hardening_v1` |
 | [0044](0044-htf-live-preview.md) | HTF Live Preview — Incremental HTF Accumulator для D1/H4 forming candle | **Proposed** | 2026-03-24 | HTF preview, _HTFRunningAccumulator, D1/H4 forming candle, O(1) incremental, preview_tick_tfs_s, I1/I3/I5 | `htf_live_preview_v1` |
+| [0045](0045-vps-trader-bot.md) | VPS SMC Trader Bot (smc_trader_v3.py) — Reactive+Proactive Telegram bot | **Accepted** | 2026-03-30 | Telegram, aiogram 3.x, claude-opus-4-6, reactive/proactive, change_score, market_state.json, WS read-only, separate process | `smc_trader_bot_v1` |
+| [0046](0046-agent-personality-restoration.md) | Agent Personality Restoration — External Prompt SSOT + DNA Injection | **Accepted** | 2026-04-03 | personality, smc_trader_prompt_v3.md, external prompt, DNA injection, proactive style, conversation seed | `agent_personality_v1` |
 
 ---
 
@@ -97,4 +99,4 @@
 
 Див. формат у [copilot-instructions.md](../../.github/copilot-instructions.md) → Тема B, Правило B2.
 
-Наступний номер: **0045**
+Наступний номер: **0047**

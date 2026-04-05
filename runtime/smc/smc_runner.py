@@ -174,6 +174,9 @@ class SmcRunner:
             self._lookback,
         )
 
+        # Last known price per symbol (from M1 close)
+        self._last_prices: Dict[str, float] = {}
+
         # Relay: відстеження останнього bias для dedup
         self._last_bias: Dict[Tuple[str, int], Optional[str]] = {}
 
@@ -200,7 +203,6 @@ class SmcRunner:
             with open(self._signal_state_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             from core.smc.types import SignalSpec
-            import dataclasses
 
             for key_str, sig_list in data.items():
                 parts = key_str.split("|", 1)
@@ -408,6 +410,7 @@ class SmcRunner:
         cb = _bar_dict_to_candle_bar(bar_dict, symbol, 60)
         if cb is not None:
             self._engine.feed_m1_bar(cb)
+            self._last_prices[symbol] = cb.c
 
     def on_bar_dict(
         self,
@@ -490,6 +493,10 @@ class SmcRunner:
             return None
 
     # ── Read API (для ws_server frame building) ────────
+
+    def get_last_price(self, symbol: str) -> float:
+        """Last known close price from M1 bar feed."""
+        return self._last_prices.get(symbol, 0.0)
 
     def get_snapshot(self, symbol: str, tf_s: int) -> Optional[SmcSnapshot]:
         """Для full frame build — composite snapshot з cross-TF display mapping.

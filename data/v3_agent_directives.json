@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "updated_at": 1775247936.34551,
+  "next_check_minutes": 60,
+  "next_check_reason": "Вихідні, ринок закритий. Моніторимо для critical moves (structural только), але основний фокус на ранковий огляд перед London open.",
+  "next_check_set_at": 1775247936.181252,
+  "watch_levels": [
+    {
+      "id": "fvg_bear_high_exit",
+      "price": 4719.87,
+      "direction": "above",
+      "alert_text": "FVG бер верх пробив. Дивись на реакцію — rejection це гарна ознака для continuation лонга.",
+      "prompt": "Ціна 4719.87 пробила верх H4 FVG Bear. Чи це reject і новий лонг, чи початок нового дауну? Дивись на структуру M15.",
+      "set_at": 1775247936.181252,
+      "expires_at": 1775334336.181252
+    },
+    {
+      "id": "discount_bottom_continuation",
+      "price": 4575.68,
+      "direction": "below",
+      "alert_text": "Discount нижня межа пробита. Setup для continuation або reversal?",
+      "prompt": "Ціна 4575.68 вниз пробила discount bottom. Це продовження або reversal setup? Дивись M5 структуру + micro BOS.",
+      "set_at": 1775247936.181252,
+      "expires_at": 1775334336.181252
+    }
+  ],
+  "wake_at": [
+    {
+      "id": "morning_brief",
+      "time_epoch": 1775264400.0,
+      "reason": "Ранковий огляд перед London open — macro (DXY, US10Y, SPX), bias analysis, план на день",
+      "prompt": "Утро, понедельник (04.04). За вихідні щось змінилось на D1? Дивись macro: DXY, ставки, календар. Який сейчас bias і план? Дай краткий вахтовый brief."
+    }
+  ],
+  "active_scenario": {
+    "id": "xau_discount_confluence",
+    "direction": null,
+    "thesis": "D1 бичський, H4 ведмедик. Ціна в discount зоні. Чекаємо конфлюенсу або bias flip на HTF перед входом.",
+    "entry_zone_low": 4553.36,
+    "entry_zone_high": 4676.93,
+    "targets": [
+      4719.87,
+      4676.93
+    ],
+    "invalidation": 4800.5,
+    "status": "tracking",
+    "created_at": 1775247936.181252
+  },
+  "virtual_position": null,
+  "model_preference": "sentinel",
+  "operational_rules": [
+    "Не коментувати кожну свічку — тільки structural changes (BOS, CHoCH, sweep, bias flip, displacement)",
+    "Публікувати ранковий огляд (~07:00) і вечірній review (~19:00-20:00)",
+    "Не спамити: якщо нічого структурного не змінилось — мовчати",
+    "Завжди давати invalidation level коли описуєш сценарій"
+  ],
+  "agent_calls_today": 4,
+  "messages_sent_today": 3,
+  "last_agent_call": 1775247936.1812484,
+  "last_message_sent": 1775247936.342812,
+  "stats_date": "2026-04-03",
+  "position_history": []
+}

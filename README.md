@@ -155,7 +155,7 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 │  │            H1 → H4 (4×H1, calendar+TV anchor)   │        │
 │  │    M1 → D1 (1440×M1, anchor 22:00 UTC)          │        │
 │  │                                                 │        │
-│  │  4 символи (XAU/USD, XAG/USD, BTCUSDT, ETHUSDT)│        │
+│  │  4 символи (XAU/USD, XAG/USD, BTCUSDT, ETHUSDT) │        │
 │  │  Priority: watched symbol → front of queue      │        │
 │  │  Buffers: GenericBuffer per (symbol, tf_s)      │        │
 │  └─────────────────────────────────────────────────┘        │

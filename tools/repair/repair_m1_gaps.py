@@ -123,6 +123,7 @@ def _fetch_from_sidecar(
     namespace: str,
     symbol: str,
     n_bars: int,
+    date_to_ms: Optional[int] = None,
 ) -> List[CandleBar]:
     """Fetch M1 bars від broker_sidecar через Redis IPC.
 
@@ -135,15 +136,17 @@ def _fetch_from_sidecar(
     reply_key = f"{namespace}:{_BARS_QUEUE_SUFFIX}:{req_id}"
     cmd_key = f"{namespace}:{_CMD_QUEUE_SUFFIX}"
 
-    cmd = json.dumps({
-        "v": 1,
-        "cmd": "fetch_m1",
-        "req_id": req_id,
-        "reply_to": reply_key,
-        "symbol": symbol,
-        "n_bars": min(n_bars, _MAX_BARS_PER_FETCH),
-        "date_to_ms": None,
-    })
+    cmd = json.dumps(
+        {
+            "v": 1,
+            "cmd": "fetch_m1",
+            "req_id": req_id,
+            "reply_to": reply_key,
+            "symbol": symbol,
+            "n_bars": min(n_bars, _MAX_BARS_PER_FETCH),
+            "date_to_ms": date_to_ms,
+        }
+    )
     redis_cli.rpush(cmd_key, cmd)
 
     result = redis_cli.blpop(reply_key, timeout=_REPAIR_BLPOP_TIMEOUT_S)
@@ -152,7 +155,9 @@ def _fetch_from_sidecar(
         log.warning(
             "REPAIR_FETCH_TIMEOUT symbol=%s n=%d timeout=%ds "
             "(broker_sidecar не відповів — перевір що він працює)",
-            symbol, n_bars, _REPAIR_BLPOP_TIMEOUT_S,
+            symbol,
+            n_bars,
+            _REPAIR_BLPOP_TIMEOUT_S,
         )
         return []
 
@@ -172,21 +177,29 @@ def _fetch_from_sidecar(
     raw_bars = resp.get("bars", [])
     log.info(
         "REPAIR_SIDECAR_REPLY req_id=%s bars_count=%d",
-        resp.get("req_id", "?"), len(raw_bars),
+        resp.get("req_id", "?"),
+        len(raw_bars),
     )
 
     bars: List[CandleBar] = []
     for d in raw_bars:
         try:
-            bars.append(CandleBar(
-                symbol=d["symbol"], tf_s=d["tf_s"],
-                open_time_ms=d["open_time_ms"],
-                close_time_ms=d["close_time_ms"],
-                o=d["o"], h=d["h"], low=d["low"], c=d["c"], v=d["v"],
-                complete=d.get("complete", True),
-                src=d.get("src", "history"),
-                extensions=d.get("extensions", {}),
-            ))
+            bars.append(
+                CandleBar(
+                    symbol=d["symbol"],
+                    tf_s=d["tf_s"],
+                    open_time_ms=d["open_time_ms"],
+                    close_time_ms=d["close_time_ms"],
+                    o=d["o"],
+                    h=d["h"],
+                    low=d["low"],
+                    c=d["c"],
+                    v=d["v"],
+                    complete=d.get("complete", True),
+                    src=d.get("src", "history"),
+                    extensions=d.get("extensions", {}),
+                )
+            )
         except (KeyError, TypeError, ValueError) as exc:
             log.warning("REPAIR_BAR_PARSE err=%s bar=%s", exc, d)
 
@@ -201,45 +214,109 @@ def fetch_m1_for_range(
     end_ms: int,
     gap_opens: Set[int],
 ) -> List[CandleBar]:
-    """Fetch M1 bars від broker_sidecar для покриття gap діапазону."""
-    now_ms = int(time.time() * 1000)
-    range_minutes = ((now_ms - start_ms) // TF_M1_MS) + 10
-    n_fetch = min(range_minutes, _MAX_BARS_PER_FETCH)
+    """Fetch M1 bars від broker_sidecar для покриття gap діапазону.
 
-    log.info(
-        "REPAIR_FETCH symbol=%s n=%d gap_count=%d timeout=%ds",
-        symbol, n_fetch, len(gap_opens), _REPAIR_BLPOP_TIMEOUT_S,
-    )
+    Пагінує назад: від end_ms до start_ms, 200 барів за запит,
+    зменшуючи date_to_ms до найстарішого бару кожного batch.
+    """
+    all_bars: List[CandleBar] = []
+    cursor_ms: Optional[int] = end_ms + TF_M1_MS  # exclusive end
+    fetched_opens: Set[int] = set()
+    page = 0
+    max_pages = (len(gap_opens) // _MAX_BARS_PER_FETCH) + 5  # safety
 
-    # Retry: FXCM SDK повертає порожній результат ~50% часу (throttling)
-    bars: List[CandleBar] = []
-    for attempt in range(1, _FETCH_RETRIES + 1):
-        bars = _fetch_from_sidecar(redis_cli, namespace, symbol, n_fetch)
-        if bars:
-            break
-        if attempt < _FETCH_RETRIES:
-            log.info(
-                "REPAIR_FETCH_RETRY attempt=%d/%d (FXCM повернув 0, retry через %gs)",
-                attempt, _FETCH_RETRIES, _FETCH_RETRY_DELAY_S,
-            )
-            time.sleep(_FETCH_RETRY_DELAY_S)
-
-    if not bars:
-        log.warning(
-            "REPAIR_FETCH_FAILED symbol=%s після %d спроб. "
-            "Перевір: broker_sidecar працює? FXCM connected?",
-            symbol, _FETCH_RETRIES,
+    while page < max_pages:
+        page += 1
+        log.info(
+            "REPAIR_FETCH_PAGE page=%d symbol=%s date_to=%s gap_remaining=%d",
+            page,
+            symbol,
+            _ms_to_hm(cursor_ms) if cursor_ms else "latest",
+            len(gap_opens - fetched_opens),
         )
-        return []
 
-    # Фільтруємо: тільки бари, що потрапляють у gaps
-    repaired = [b for b in bars if b.open_time_ms in gap_opens]
+        # Retry: FXCM SDK повертає порожній результат ~50% часу (throttling)
+        bars: List[CandleBar] = []
+        for attempt in range(1, _FETCH_RETRIES + 1):
+            bars = _fetch_from_sidecar(
+                redis_cli,
+                namespace,
+                symbol,
+                _MAX_BARS_PER_FETCH,
+                date_to_ms=cursor_ms,
+            )
+            if bars:
+                break
+            if attempt < _FETCH_RETRIES:
+                log.info(
+                    "REPAIR_FETCH_RETRY page=%d attempt=%d/%d (retry через %gs)",
+                    page,
+                    attempt,
+                    _FETCH_RETRIES,
+                    _FETCH_RETRY_DELAY_S,
+                )
+                time.sleep(_FETCH_RETRY_DELAY_S)
+
+        if not bars:
+            log.warning(
+                "REPAIR_FETCH_PAGE_FAILED page=%d symbol=%s після %d спроб",
+                page,
+                symbol,
+                _FETCH_RETRIES,
+            )
+            break
+
+        # Фільтруємо: тільки бари, що потрапляють у gaps
+        matched = [
+            b
+            for b in bars
+            if b.open_time_ms in gap_opens and b.open_time_ms not in fetched_opens
+        ]
+        all_bars.extend(matched)
+        for b in matched:
+            fetched_opens.add(b.open_time_ms)
+
+        oldest_ms = min(b.open_time_ms for b in bars)
+        log.info(
+            "REPAIR_FETCH_PAGE_RESULT page=%d fetched=%d matched=%d oldest=%s total_matched=%d",
+            page,
+            len(bars),
+            len(matched),
+            _ms_to_hm(oldest_ms),
+            len(all_bars),
+        )
+
+        # Перевіряємо чи покрили весь діапазон
+        if fetched_opens >= gap_opens:
+            log.info("REPAIR_FETCH_COMPLETE всі %d гапів покрито", len(gap_opens))
+            break
+
+        # Зсуваємо cursor для наступної сторінки
+        if oldest_ms <= start_ms:
+            log.info(
+                "REPAIR_FETCH_REACHED_START oldest=%s <= start=%s",
+                _ms_to_hm(oldest_ms),
+                _ms_to_hm(start_ms),
+            )
+            break
+
+        cursor_ms = oldest_ms  # date_to = exclusive, fetch bars before this
+        time.sleep(1.0)  # throttle між сторінками
+
+    if not all_bars:
+        log.warning(
+            "REPAIR_FETCH_FAILED symbol=%s жоден бар не покриває гапи.",
+            symbol,
+        )
 
     log.info(
-        "REPAIR_FETCH_RESULT attempt=%d fetched=%d matched_gaps=%d",
-        attempt, len(bars), len(repaired),
+        "REPAIR_FETCH_TOTAL symbol=%s pages=%d bars=%d / gaps=%d",
+        symbol,
+        page,
+        len(all_bars),
+        len(gap_opens),
     )
-    return repaired
+    return all_bars
 
 
 # ─── Repair via rewrite_range ──────────────────────────────────────
@@ -287,7 +364,9 @@ def repair_gaps(
             "total_fetched": len(bars),
             "total_written": 0,
             "dry_run": True,
-            "groups": [{"status": "DRY_RUN", "fetched": len(bars), "expected": total_gaps}],
+            "groups": [
+                {"status": "DRY_RUN", "fetched": len(bars), "expected": total_gaps}
+            ],
         }
 
     # Append bars to JSONL — safe while platform is running
@@ -299,13 +378,15 @@ def repair_gaps(
         "total_fetched": len(bars),
         "total_written": written,
         "dry_run": False,
-        "groups": [{
-            "range": f"{_ms_to_hm(global_start)}..{_ms_to_hm(global_end)}",
-            "expected": total_gaps,
-            "fetched": len(bars),
-            "written": written,
-            "status": "REPAIRED",
-        }],
+        "groups": [
+            {
+                "range": f"{_ms_to_hm(global_start)}..{_ms_to_hm(global_end)}",
+                "expected": total_gaps,
+                "fetched": len(bars),
+                "written": written,
+                "status": "REPAIRED",
+            }
+        ],
     }
 
 
@@ -327,7 +408,9 @@ def _append_bars_to_jsonl(data_root: str, symbol: str, bars: List[CandleBar]) ->
         path = os.path.join(tf_dir, f"part-{day_key}.jsonl")
         with open(path, "a", encoding="utf-8") as fh:
             for bar in day_bars:
-                line = json.dumps(bar.to_dict(), ensure_ascii=False, separators=(",", ":"))
+                line = json.dumps(
+                    bar.to_dict(), ensure_ascii=False, separators=(",", ":")
+                )
                 fh.write(line + "\n")
                 written += 1
             fh.flush()
@@ -439,13 +522,15 @@ def main() -> None:
         start_iso = dt.datetime.fromtimestamp(
             start_ms / 1000, dt.timezone.utc
         ).strftime("%Y-%m-%dT%H:%M:%S")
-        end_iso = dt.datetime.fromtimestamp(
-            end_ms / 1000, dt.timezone.utc
-        ).strftime("%Y-%m-%dT%H:%M:%S")
+        end_iso = dt.datetime.fromtimestamp(end_ms / 1000, dt.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%S"
+        )
         log.info(
             '  python -m tools.repair.repair_m1_gaps --symbol "%s" '
             '--start "%s" --end "%s" --commit',
-            symbol, start_iso, end_iso,
+            symbol,
+            start_iso,
+            end_iso,
         )
         # Probe: показати що broker доступний
         _try_probe_broker(cfg, symbol, gap_groups, set(gaps))
@@ -525,7 +610,8 @@ def _try_probe_broker(
     if bars:
         log.info(
             "PROBE: fetched %d з %d очікуваних gap-барів. Готовий до --commit!",
-            len(bars), len(all_gap_opens),
+            len(bars),
+            len(all_gap_opens),
         )
     else:
         log.warning(
