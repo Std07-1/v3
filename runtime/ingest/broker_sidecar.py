@@ -90,21 +90,24 @@ def _build_provider(cfg):
 
 
 def _handle_command(provider, cmd_raw, redis_cli, bars_key):
-    """Обробити одну команду fetch і записати результат у Redis."""
+    """Обробити одну команду fetch і записати результат у Redis.
+
+    Returns True if FXCM session needs reconnection.
+    """
     try:
         cmd = json.loads(cmd_raw)
     except (json.JSONDecodeError, TypeError) as exc:
         logging.warning(
             "BROKER_SIDECAR_CMD_PARSE_ERROR raw=%r err=%s", cmd_raw[:200], exc
         )
-        return
+        return False
 
     v = cmd.get("v", 0)
     if v != _CONTRACT_VERSION:
         logging.warning(
             "BROKER_SIDECAR_CMD_VERSION_MISMATCH v=%s expected=%d", v, _CONTRACT_VERSION
         )
-        return
+        return False
 
     action = cmd.get("cmd", "")
     req_id = str(cmd.get("req_id", "") or "")
@@ -116,7 +119,7 @@ def _handle_command(provider, cmd_raw, redis_cli, bars_key):
 
     if action != "fetch_m1" or not symbol:
         logging.warning("BROKER_SIDECAR_CMD_UNKNOWN cmd=%s symbol=%s", action, symbol)
-        return
+        return False
 
     # Convert date_to_ms → datetime (provider expects tz-aware UTC)
     date_to_utc = None
@@ -142,7 +145,19 @@ def _handle_command(provider, cmd_raw, redis_cli, bars_key):
         else:
             redis_cli.ltrim(target_key, -_MAX_LIST_LEN, -1)
         logging.warning("BROKER_SIDECAR_FETCH_ERROR symbol=%s err=%s", symbol, exc)
-        return
+        return True  # needs reconnect
+
+    # Check for silent provider errors (SDK exceptions swallowed internally)
+    last_err = provider.consume_last_error()
+    needs_reconnect = False
+    if last_err:
+        logging.warning(
+            "BROKER_SIDECAR_PROVIDER_ERROR symbol=%s context=%s err=%s",
+            symbol,
+            last_err[0],
+            last_err[1],
+        )
+        needs_reconnect = True
 
     # Серіалізація: batch response
     bar_dicts = [b.to_dict() for b in bars] if bars else []
@@ -162,12 +177,21 @@ def _handle_command(provider, cmd_raw, redis_cli, bars_key):
         redis_cli.ltrim(target_key, -_MAX_LIST_LEN, -1)
 
     if bars:
-        logging.debug(
+        logging.info(
             "BROKER_SIDECAR_FETCHED symbol=%s n=%d returned=%d",
             symbol,
             n_bars,
             len(bars),
         )
+    else:
+        logging.warning(
+            "BROKER_SIDECAR_EMPTY symbol=%s n=%d date_to_ms=%s",
+            symbol,
+            n_bars,
+            date_to_ms,
+        )
+
+    return needs_reconnect
 
 
 def main():
@@ -262,10 +286,13 @@ def main():
 
         _key, cmd_raw = result  # type: ignore[misc]
         try:
-            _handle_command(provider, cmd_raw, redis_cli, bars_key)
+            needs_reconnect = _handle_command(provider, cmd_raw, redis_cli, bars_key)
         except Exception as exc:
             logging.warning("BROKER_SIDECAR_HANDLE_ERROR err=%s", exc)
-            # FXCM session може бути зламана
+            needs_reconnect = True
+
+        if needs_reconnect:
+            logging.warning("BROKER_SIDECAR_RECONNECTING reason=provider_error")
             connected = False
             try:
                 provider.__exit__(None, None, None)

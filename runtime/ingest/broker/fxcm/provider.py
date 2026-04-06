@@ -145,7 +145,7 @@ class FxcmHistoryProvider:
             )
         except Exception as e:  # noqa: BLE001
             self._set_last_error(f"помилка запиту {symbol}", e)
-            logging.debug("History: помилка запиту %s: %s", symbol, str(e))
+            logging.warning("FXCM_HISTORY_ERROR symbol=%s err=%s", symbol, e)
             return []
 
         return normalize_history_to_bars(
@@ -182,7 +182,9 @@ class FxcmHistoryProvider:
             )
         except Exception as e:  # noqa: BLE001
             self._set_last_error(f"помилка TF={tf_name} {symbol}", e)
-            logging.debug("History: помилка TF=%s %s: %s", tf_name, symbol, str(e))
+            logging.warning(
+                "FXCM_HISTORY_ERROR symbol=%s tf=%s err=%s", symbol, tf_name, e
+            )
             return []
 
         return normalize_history_to_bars(
