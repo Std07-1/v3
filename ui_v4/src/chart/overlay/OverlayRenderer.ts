@@ -304,6 +304,7 @@ export class OverlayRenderer {
 
   patch(overlays?: SmcData | null): void {
     this.frame = normalizeSmcData(overlays);
+
     // ADR-0029 E4: update grade cache from full frame
     const newGrades = this.frame.zone_grades ?? {};
     if (Object.keys(newGrades).length > 0) {
@@ -531,6 +532,8 @@ export class OverlayRenderer {
     if (this.layerVisible.levels) this.renderLevels(budget.levels);
     this.renderPdEqLine(budget.levels);
     if (this.layerVisible.swings || this.layerVisible.structure || this.layerVisible.fractals || this.layerVisible.displacement) this.renderSwings(budget.swings, scale);
+
+
   }
 
   private zoneColor(kind: string): string {
@@ -575,14 +578,9 @@ export class OverlayRenderer {
       // P/D disabled via config — skip if they somehow arrive
       if (z.kind === 'premium' || z.kind === 'discount') continue;
 
-      const x1 = this.toX(z.start_ms);
+      let x1 = this.toX(z.start_ms); // тут було виправлення але проблемка не вирішено. 
       if (x1 === null) {
-        this.warnOnce(`zone_x1_null:${z.id}`, {
-          code: 'overlay_coord_null',
-          kind: 'overlay',
-          id: z.id,
-          details: 'zone.start_ms поза видимою областю або timeScale не готовий',
-        });
+        // Zone origin off-screen — skip entirely (no partial render from left wall)
         continue;
       }
 

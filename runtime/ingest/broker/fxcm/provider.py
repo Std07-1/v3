@@ -148,6 +148,22 @@ class FxcmHistoryProvider:
             logging.warning("FXCM_HISTORY_ERROR symbol=%s err=%s", symbol, e)
             return []
 
+        # Diagnostic: raw SDK response
+        raw_len = 0
+        try:
+            raw_len = len(arr) if arr is not None else -1
+        except Exception:
+            raw_len = -2
+        if raw_len <= 0:
+            logging.warning(
+                "FXCM_HISTORY_RAW_EMPTY symbol=%s n=%d date_to=%s raw_len=%d type=%s",
+                symbol,
+                n,
+                date_to_utc,
+                raw_len,
+                type(arr).__name__,
+            )
+
         return normalize_history_to_bars(
             symbol=symbol,
             tf_s=60,
