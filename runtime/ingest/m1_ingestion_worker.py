@@ -235,6 +235,8 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
     lr_cooldown = int(m1_cfg.get("live_recover_cooldown_s", 5))
     lr_max_total = int(m1_cfg.get("live_recover_max_total_bars", 5000))
     lr_log_interval = int(m1_cfg.get("live_recover_log_interval_s", 60))
+    lr_max_consecutive_empty = int(m1_cfg.get("live_recover_max_consecutive_empty", 5))
+    lr_timeout = int(m1_cfg.get("live_recover_timeout_s", 600))
     stale_s = int(m1_cfg.get("stale_s", 720))
 
     # Flat bar max volume (SSOT)
@@ -278,6 +280,8 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
                 live_recover_cooldown_s=lr_cooldown,
                 live_recover_max_total_bars=lr_max_total,
                 live_recover_log_interval_s=lr_log_interval,
+                live_recover_max_consecutive_empty=lr_max_consecutive_empty,
+                live_recover_timeout_s=lr_timeout,
                 stale_s=stale_s,
             )
         )

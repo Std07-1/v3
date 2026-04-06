@@ -146,6 +146,8 @@ class M1SymbolPoller:
         live_recover_cooldown_s: int = 5,
         live_recover_max_total_bars: int = 5000,
         live_recover_log_interval_s: int = 60,
+        live_recover_max_consecutive_empty: int = 5,
+        live_recover_timeout_s: int = 600,
         stale_s: int = 720,
     ) -> None:
         self._symbol = symbol
@@ -164,6 +166,10 @@ class M1SymbolPoller:
         self._live_recover_cooldown_s = max(0, live_recover_cooldown_s)
         self._live_recover_max_total_bars = max(0, live_recover_max_total_bars)
         self._live_recover_log_interval_s = max(10, live_recover_log_interval_s)
+        self._live_recover_max_consecutive_empty = max(
+            1, live_recover_max_consecutive_empty
+        )
+        self._live_recover_timeout_s = max(60, live_recover_timeout_s)
 
         # P0.2: recover state
         self._recover_active: bool = False
@@ -173,6 +179,7 @@ class M1SymbolPoller:
         self._recover_total_written: int = 0
         self._recover_last_log_ts: float = 0.0
         self._recover_gap_at_start: int = 0
+        self._recover_consecutive_empty: int = 0
 
         # P0.3: stale detection (ADR-0002)
         self._stale_s = max(0, stale_s)
@@ -442,6 +449,7 @@ class M1SymbolPoller:
             self._recover_total_written = 0
             self._recover_last_log_ts = 0.0
             self._recover_gap_at_start = gap_bars
+            self._recover_consecutive_empty = 0
             logging.warning(
                 "M1_LIVE_RECOVER_START symbol=%s gap_bars=%d cutoff=%s wm=%s",
                 self._symbol,
@@ -465,6 +473,17 @@ class M1SymbolPoller:
         # --- Вихід: бюджет вичерпано ---
         if self._recover_total_fetched >= self._live_recover_max_total_bars:
             self._live_recover_finish("max_total_reached")
+            return
+
+        # --- Вихід: timeout (broker не повертає нових барів тривалий час) ---
+        elapsed_s = time.time() - self._recover_start_ts
+        if elapsed_s >= self._live_recover_timeout_s:
+            self._live_recover_finish("timeout")
+            return
+
+        # --- Вихід: consecutive empty (broker starved — post-gap/holiday lag) ---
+        if self._recover_consecutive_empty >= self._live_recover_max_consecutive_empty:
+            self._live_recover_finish("broker_starved")
             return
 
         # --- Cooldown ---
@@ -500,7 +519,12 @@ class M1SymbolPoller:
             return
 
         self._recover_last_fetch_ts = now_s
-        self._recover_total_fetched += len(bars) if bars else 0
+        fetched_count = len(bars) if bars else 0
+        self._recover_total_fetched += fetched_count
+        if fetched_count == 0:
+            self._recover_consecutive_empty += 1
+        else:
+            self._recover_consecutive_empty = 0
 
         if bars:
             bars = [
@@ -1292,6 +1316,8 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
     lr_cooldown = int(m1_cfg.get("live_recover_cooldown_s", 5))
     lr_max_total = int(m1_cfg.get("live_recover_max_total_bars", 5000))
     lr_log_interval = int(m1_cfg.get("live_recover_log_interval_s", 60))
+    lr_max_consecutive_empty = int(m1_cfg.get("live_recover_max_consecutive_empty", 5))
+    lr_timeout = int(m1_cfg.get("live_recover_timeout_s", 600))
     stale_s = int(m1_cfg.get("stale_s", 720))
     logging.info(
         "M1_POLLER_CONFIG tail_catchup_max=%d lr_threshold=%d lr_max_cycle=%d "
@@ -1373,6 +1399,8 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
                 live_recover_cooldown_s=lr_cooldown,
                 live_recover_max_total_bars=lr_max_total,
                 live_recover_log_interval_s=lr_log_interval,
+                live_recover_max_consecutive_empty=lr_max_consecutive_empty,
+                live_recover_timeout_s=lr_timeout,
                 stale_s=stale_s,
             )
         )
