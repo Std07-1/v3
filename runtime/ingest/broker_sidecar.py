@@ -28,11 +28,23 @@ from core.config_loader import pick_config_path, load_system_config, env_str
 from core.model.bars import ms_to_utc_dt
 from env_profile import load_env_secrets
 from runtime.store.redis_spec import resolve_redis_spec
+from runtime.ingest.tick_common import (
+    pick_tick_channel,
+    symbols_from_cfg,
+    build_symbol_aliases,
+    to_ms,
+)
+from runtime.store.redis_keys import symbol_key
 
 try:
     import redis as redis_lib  # type: ignore
 except Exception:
     redis_lib = None  # type: ignore
+
+try:
+    from forexconnect import fxcorepy  # type: ignore
+except Exception:
+    fxcorepy = None  # type: ignore
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -194,6 +206,185 @@ def _handle_command(provider, cmd_raw, redis_cli, bars_key):
     return needs_reconnect
 
 
+# ---------------------------------------------------------------------------
+# Tick relay: FXCM OFFERS → Redis PubSub (V2, ADR-0016 companion)
+# ---------------------------------------------------------------------------
+
+
+class _TickRelay:
+    """Relay FXCM OFFERS updates → Redis PubSub. Called from SDK thread."""
+
+    def __init__(
+        self, redis_cli, channel, namespace, aliases, min_interval_ms, ttl_s, price_mode
+    ):
+        self._cli = redis_cli
+        self._channel = channel
+        self._ns = namespace
+        self._aliases = aliases
+        self._min_ms = max(0, int(min_interval_ms))
+        self._ttl = max(0, int(ttl_s))
+        self._mode = str(price_mode)
+        self._last_pub_ms = {}
+        self._seq = 0
+        self._count = 0
+        self._errors = 0
+        self._last_stats_ts = time.time()
+
+    def handle_row(self, row):
+        """Called from ForexConnect SDK callback thread."""
+        if row is None:
+            return
+        # Extract symbol
+        sym_raw = None
+        for k in ("Instrument", "instrument"):
+            try:
+                sym_raw = getattr(row, k, None)
+            except Exception:
+                pass
+            if sym_raw is not None:
+                break
+        if sym_raw is None:
+            return
+        sym = self._aliases.get(str(sym_raw).strip())
+        if not sym:
+            return
+        # Extract bid/ask
+        bid = None
+        ask = None
+        for k in ("Bid", "bid"):
+            try:
+                v = getattr(row, k, None)
+                if v is not None:
+                    bid = float(v)
+                    break
+            except Exception:
+                pass
+        for k in ("Ask", "ask"):
+            try:
+                v = getattr(row, k, None)
+                if v is not None:
+                    ask = float(v)
+                    break
+            except Exception:
+                pass
+        if bid is None and ask is None:
+            return
+        # Price mode
+        if self._mode == "bid" and bid is not None:
+            mid = bid
+        elif self._mode == "ask" and ask is not None:
+            mid = ask
+        elif bid is not None and ask is not None:
+            mid = (bid + ask) / 2.0
+        else:
+            mid = bid if bid is not None else ask
+        # Throttle
+        now_ms = int(time.time() * 1000)
+        last = self._last_pub_ms.get(sym)
+        if last is not None and now_ms - last < self._min_ms:
+            return
+        # Timestamp
+        tick_ts_ms = None
+        src = "fxcm"
+        for k in ("Time", "time"):
+            try:
+                v = getattr(row, k, None)
+                if v is not None:
+                    tick_ts_ms = to_ms(v)
+                    break
+            except Exception:
+                pass
+        if tick_ts_ms is None:
+            tick_ts_ms = now_ms
+            src = "fxcm_wallclock"
+        # Publish
+        payload = json.dumps(
+            {
+                "v": 1,
+                "symbol": sym,
+                "bid": bid,
+                "ask": ask,
+                "mid": mid,
+                "tick_ts_ms": int(tick_ts_ms),
+                "src": src,
+                "seq": self._seq,
+            }
+        )
+        self._seq += 1
+        try:
+            self._cli.publish(self._channel, payload.encode("utf-8"))
+            if self._ttl > 0:
+                lk = "%s:tick:last:%s" % (self._ns, symbol_key(sym))
+                self._cli.setex(lk, self._ttl, payload.encode("utf-8"))
+            self._last_pub_ms[sym] = now_ms
+            self._count += 1
+        except Exception as exc:
+            self._errors += 1
+            if self._errors <= 5 or self._errors % 100 == 0:
+                logging.warning("TICK_RELAY_PUB_ERR err=%s n=%d", exc, self._errors)
+        # Periodic stats
+        now = time.time()
+        if now - self._last_stats_ts >= 60:
+            logging.info(
+                "TICK_RELAY_STATS published=%d errors=%d seq=%d",
+                self._count,
+                self._errors,
+                self._seq,
+            )
+            self._count = 0
+            self._errors = 0
+            self._last_stats_ts = now
+
+
+def _setup_tick_sub(fx, relay, timeout_s=30):
+    """Subscribe to FXCM OFFERS table. Returns listener ref or None."""
+    if fxcorepy is None:
+        logging.warning("TICK_RELAY_SKIP fxcorepy not available")
+        return None
+
+    tm = getattr(fx, "table_manager", None)
+    if tm is None:
+        logging.warning("TICK_RELAY_NO_TABLE_MANAGER")
+        return None
+
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            if tm.status == fxcorepy.O2GTableManagerStatus.TABLES_LOADED:
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
+    else:
+        logging.warning("TICK_RELAY_TABLES_TIMEOUT timeout=%ds", timeout_s)
+        return None
+
+    offers = tm.get_table(fxcorepy.O2GTableType.OFFERS)
+    if offers is None:
+        logging.warning("TICK_RELAY_NO_OFFERS_TABLE")
+        return None
+
+    class _L(fxcorepy.AO2GTableListener):
+        def __init__(self, r):
+            super(_L, self).__init__()
+            self._r = r
+
+        def on_added(self, rid, row):
+            self._r.handle_row(row)
+
+        def on_changed(self, rid, row):
+            self._r.handle_row(row)
+
+        def on_deleted(self, rid, row):
+            pass
+
+    listener = _L(relay)
+    offers.subscribe_update(fxcorepy.O2GTableUpdateType.UPDATE, listener)
+    offers.subscribe_update(fxcorepy.O2GTableUpdateType.INSERT, listener)
+    logging.info("TICK_RELAY_SUBSCRIBED ch=%s", relay._channel)
+    return listener
+
+
 def main():
     # type: () -> int
     _setup_logging()
@@ -234,6 +425,54 @@ def main():
         socket_connect_timeout=5,
     )
 
+    # ---- Tick relay setup (V2: ticks via same FXCM session) ----
+    tick_relay = None
+    tick_listener = None
+    tick_enabled = bool(cfg.get("tick_stream_enabled", False))
+    if tick_enabled:
+        channel = pick_tick_channel(cfg)
+        if channel:
+            raw_syms = cfg.get("tick_stream_symbols")
+            syms = (
+                [str(x) for x in raw_syms if str(x).strip()]
+                if isinstance(raw_syms, list) and raw_syms
+                else symbols_from_cfg(cfg)
+            )
+            # Exclude binance symbols
+            bn_cfg = cfg.get("binance", {})
+            if isinstance(bn_cfg, dict) and bn_cfg.get("enabled", False):
+                bn_s = set(bn_cfg.get("symbols", []))
+                syms = [s for s in syms if s not in bn_s]
+            aliases = build_symbol_aliases(syms)
+            tick_redis = redis_lib.Redis(
+                host=spec.host,
+                port=spec.port,
+                db=spec.db,
+                decode_responses=False,
+                socket_timeout=1.0,
+                socket_connect_timeout=1.0,
+            )
+            tick_relay = _TickRelay(
+                tick_redis,
+                channel,
+                spec.namespace,
+                aliases,
+                int(cfg.get("tick_stream_min_interval_ms", 200)),
+                int(cfg.get("tick_stream_last_tick_ttl_s", 30)),
+                str(cfg.get("tick_stream_price_mode", "bid")),
+            )
+            logging.info(
+                "TICK_RELAY_READY ch=%s symbols=%s",
+                channel,
+                ",".join(syms),
+            )
+        else:
+            logging.warning(
+                "TICK_RELAY_NO_CHANNEL tick_stream_enabled=true but no channel"
+            )
+    else:
+        logging.info("TICK_RELAY_DISABLED tick_stream_enabled=false")
+
     # FXCM provider
     provider = _build_provider(cfg)
     connected = False
@@ -252,6 +491,10 @@ def main():
                 provider.__enter__()
                 connected = True
                 _consecutive_failures = 0
+                # Subscribe to OFFERS for tick relay (V2)
+                tick_listener = None
+                if tick_relay is not None:
+                    tick_listener = _setup_tick_sub(provider._fx, tick_relay)
                 logging.info("BROKER_SIDECAR_FXCM_CONNECTED")
             except Exception as exc:
                 _consecutive_failures += 1
@@ -294,6 +537,7 @@ def main():
         if needs_reconnect:
             logging.warning("BROKER_SIDECAR_RECONNECTING reason=provider_error")
             connected = False
+            tick_listener = None  # release OFFERS subscription
             try:
                 provider.__exit__(None, None, None)
             except Exception:
@@ -301,6 +545,7 @@ def main():
 
     # Cleanup
     logging.info("BROKER_SIDECAR_SHUTDOWN")
+    tick_listener = None  # release OFFERS subscription
     if connected:
         try:
             provider.__exit__(None, None, None)
