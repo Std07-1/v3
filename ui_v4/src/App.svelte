@@ -47,11 +47,12 @@
   // --- WS URL: same-origin у prod, explicit у dev (Правило §11) ---
   // Dev (Vite :5173): import.meta.env.DEV=true → ws://localhost:8000/ws
   // Prod (aiohttp :8000 serves dist/): window.location.host → same-origin
+  // Prod always uses wss: even if page loaded via HTTP (CF might serve HTTP before redirect)
   const WS_URL =
     import.meta.env.VITE_WS_URL ??
     (import.meta.env.DEV
       ? "ws://localhost:8000/ws"
-      : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws`);
+      : `wss://${window.location.host}/ws`);
 
   let ws: WSConnection | null = null;
   let actions: ReturnType<typeof createActions> | null = null;
