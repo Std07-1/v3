@@ -1,13 +1,29 @@
-"""Broker Sidecar — stateless FXCM M1 fetcher (Python 3.7, ADR-0016).
+"""Broker Sidecar — FXCM M1 fetcher + tick relay V2 (Python 3.7, ADR-0016).
 
-Працює у .venv37/. Отримує команди fetch через Redis list,
-повертає бари через Redis list. Не має стану scheduling/watermark —
-вся бізнес-логіка в m1_ingestion_worker (3.12+).
+Працює у .venv37/. Виконує ДВІ функції через ОДНУ FXCM сесію:
+
+1. **M1 Fetch**: отримує команди fetch через Redis list,
+   повертає бари через Redis list. Не має стану scheduling/watermark —
+   вся бізнес-логіка в m1_ingestion_worker (3.12+).
+
+2. **Tick Relay V2**: підписується на FXCM OFFERS table (bid/ask),
+   публікує тіки у Redis PubSub (`{ns}:price_tick`).
+   Замінює окремий tick_publisher_fxcm (зупинений назавжди —
+   FXCM SDK не підтримує дві одночасні сесії з одного акаунту).
+   Деталі: docs/audit/vps_production_incidents_2026_04_06.md §1.
+
+⚠️  НЕ ЗАПУСКАЙТЕ tick_publisher_fxcm паралельно з broker_sidecar!
+    FXCM SDK дозволяє лише одну сесію на акаунт. Два процеси →
+    конфлікт → «QuotesManager: Quotes storage taking too long».
 
 Redis queues (namespace з config.json):
-  {ns}:broker:m1:cmd   — BLPOP (commands)
+  M1 fetch:
+    {ns}:broker:m1:cmd   — BLPOP (commands)
     {ns}:broker:m1:bars  — legacy shared RPUSH (responses)
     {ns}:broker:m1:bars:{req_id} — canonical per-request reply queue
+  Tick relay:
+    {ns}:price_tick — Redis PubSub channel (ticks)
+    {ns}:tick:last:{sym} — last tick cache (TTL configurable)
 
 Command contract v1:
   {"v": 1, "cmd": "fetch_m1", "symbol": "XAU/USD", "n_bars": 5, "date_to_ms": 1741392060000}

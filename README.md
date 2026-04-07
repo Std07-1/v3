@@ -64,7 +64,7 @@ cp .env.example .env   # відредагуй FXCM_USER / FXCM_PASS / FXCM_URL
 | Процес | `--mode` | Що робить |
 |--------|----------|-----------|
 | M1 poller | `m1_poller` | broker_sidecar + m1_ingestion + derive cascade |
-| Tick publisher | `tick_publisher` | FXCM live ticks → Redis |
+| Broker sidecar | `broker_sidecar` | FXCM M1 fetch + tick relay V2 (.venv37/) |
 | Tick preview | `tick_preview` | ticks → preview bars |
 | Binance ingest | `binance_ingest_worker` | BTCUSDT/ETHUSDT M1 + backfill |
 | Binance ticks | `binance_tick_publisher` | Binance live ticks → Redis |
@@ -80,8 +80,9 @@ python -m app.main --mode all --stdio pipe
 
 Повний cheat-sheet з усіма командами (локальний + VPS): **[docs/runbooks/commands.md](docs/runbooks/commands.md)**
 
-> **Dual-venv (ADR-0016)**: Supervisor автоматично використовує `.venv37/` для broker-процесів
-> (broker_sidecar, tick_publisher) і `.venv/` для всього іншого.
+> **Dual-venv (ADR-0016)**: Supervisor автоматично використовує `.venv37/` для broker_sidecar
+> (M1 fetch + tick relay V2) і `.venv/` для всього іншого.
+> `tick_publisher_fxcm` — зупинений назавжди (FXCM dual-session conflict).
 > PID-локи per-mode: `logs/supervisor_{mode}.pid` — дозволяє паралельний запуск.
 
 ## Quality Gates

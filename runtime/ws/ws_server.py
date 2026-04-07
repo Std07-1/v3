@@ -1922,6 +1922,21 @@ def build_app(
                 ctx["zones"] = wire.get("zones", [])
                 ctx["levels"] = wire.get("levels", [])
                 ctx["trend_bias"] = wire.get("trend_bias")
+                # swings — filtered to structure events only (BOS/CHoCH/displacement)
+                _STRUCTURE_KINDS = {
+                    "bos_bull",
+                    "bos_bear",
+                    "choch_bull",
+                    "choch_bear",
+                    "displacement_bull",
+                    "displacement_bear",
+                }
+                all_swings = wire.get("swings", [])
+                ctx["swings"] = [
+                    s
+                    for s in all_swings
+                    if isinstance(s, dict) and s.get("kind", "") in _STRUCTURE_KINDS
+                ]
                 # zone_grades
                 zg = _smc_runner.get_zone_grades(symbol, tf_s)
                 if zg:
@@ -1936,6 +1951,16 @@ def build_app(
                 ctx["session_levels"] = sl
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"session_levels: {exc}")
+
+        # momentum_map — displacement intensity per TF
+        try:
+            mm = _smc_runner.get_momentum_map(symbol)
+            if mm:
+                ctx["momentum_map"] = {
+                    _TF_S_TO_LABEL.get(int(k), k): v for k, v in mm.items()
+                }
+        except Exception as exc:
+            ctx.setdefault("warnings", []).append(f"momentum_map: {exc}")
 
         # ATR(14) for requested TF + D1/H4
         try:

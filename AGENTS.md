@@ -131,13 +131,13 @@ v3/
 │   │   ├── broker/fxcm/   # FXCM provider (.venv37/ only)
 │   │   ├── broker/binance/ # Binance Futures provider (24/7, ADR-0037)
 │   │   ├── binance_ingest_worker.py # Binance M1 ingest + backward crawl (ADR-0037/0038)
-│   │   ├── broker_sidecar.py  # Stateless FXCM M1 fetcher via Redis IPC (ADR-0016, .venv37/)
+│   │   ├── broker_sidecar.py  # FXCM M1 fetcher + tick relay V2 via Redis IPC (ADR-0016, .venv37/)
 │   │   ├── m1_ingestion_worker.py # Platform-side M1 ingestion with BrokerRedisProxy (ADR-0016, .venv/)
 │   │   ├── polling/       # m1_poller (legacy single-process mode)
 │   │   ├── tick_agg.py    # TickAggregator (preview-plane)
 │   │   ├── tick_common.py # спільні утиліти для tick pipeline
 │   │   ├── tick_preview_worker.py # tick→preview
-│   │   ├── tick_publisher_fxcm.py # FXCM tick → Redis PubSub (.venv37/)
+│   │   ├── tick_publisher_fxcm.py # [DEPRECATED] FXCM tick — тепер інтегровано в broker_sidecar
 │   │   ├── derive_engine.py  # Derive cascade (M1→H4+D1, ADR-0023)
 │   │   ├── market_calendar.py # Calendar breaks (UTC)
 │   │   └── replay.py      # ReplayFeeder — offline replay (ADR-0017/0027)
@@ -245,9 +245,9 @@ python -m app.main --mode all --stdio pipe
 
 # Окремі режими
 python -m app.main --mode m1_poller          # Legacy single-process M1 (Python 3.7)
-python -m app.main --mode broker_sidecar     # FXCM fetcher sidecar (.venv37/, ADR-0016)
+python -m app.main --mode broker_sidecar     # FXCM M1 fetch + tick relay V2 (.venv37/, ADR-0016)
 python -m app.main --mode m1_ingestion_worker # Platform M1 ingestion (.venv/, ADR-0016)
-python -m app.main --mode tick_publisher     # FXCM tick stream (.venv37/)
+python -m app.main --mode tick_publisher     # [DEPRECATED] use broker_sidecar — VPS smc-ticks permanently stopped
 python -m app.main --mode tick_preview       # Preview worker
 python -m app.main --mode binance_ingest_worker  # Binance M1 ingest (ADR-0037/0038)
 python -m app.main --mode binance_tick_publisher # Binance tick stream (ADR-0037)

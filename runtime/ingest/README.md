@@ -14,9 +14,18 @@
 
 ## 2) Мінімальний шлях даних (M1/M3)
 
-### 2.1 Preview (tick stream)
+### 2.1 Preview (tick stream via broker_sidecar tick relay V2)
 
-1. TickPublisher читає тики брокера і публікує у Redis channel.
+> **Tick Relay V2 (2026-04)**: tick_publisher_fxcm зупинений назавжди —
+> FXCM SDK не підтримує дві одночасні сесії з одного акаунту.
+> Тіки тепер йдуть через broker_sidecar._TickRelay (та сама сесія що M1 fetch).
+> Деталі: docs/audit/vps_production_incidents_2026_04_06.md §1, §5.
+
+1. **broker_sidecar** (.venv37/) підписується на FXCM OFFERS table:
+   - `_TickRelay` relay class обробляє SDK callbacks (окремий потік)
+   - Публікує bid/ask/mid у Redis PubSub: `{NS}:price_tick`
+   - Кешує last tick per symbol: `{NS}:tick:last:{sym}` (TTL)
+   - Throttle: `tick_stream_min_interval_ms` (default 100ms)
 2. TickPreviewWorker агрегує тики → M1 preview.
 3. TickPreviewWorker публікує:
    - preview бари (complete=false) у preview ring,
