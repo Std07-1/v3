@@ -11,7 +11,7 @@
         "test": "vitest run"
     },
     "dependencies": {
-        "lightweight-charts": "5.0.0",
+        "lightweight-charts": "5.1.0",
         "uuid": "^11.1.0"
     },
     "devDependencies": {
