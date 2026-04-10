@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test.txt
+
+      - name: Run Python test suite
+        run: python -m pytest -q tests/
+
+  exit-gates-static:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install gate dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run static exit gates
+        run: python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.ci.json
+
+  security-python:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install security tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pip-audit bandit
+
+      - name: Audit Python dependencies
+        run: pip-audit -r requirements.txt --progress-spinner off
+
+      - name: Run Bandit baseline scan
+        run: |
+          bandit -q -r app core runtime tools \
+            -x tests,data_v3,ui_v4,.venv,.venv37
+
+  ui-v4:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui_v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui_v4/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Typecheck UI v4
+        run: npm run typecheck
+
+      - name: Build UI v4
+        run: npm run build
+
+      - name: Audit production frontend dependencies
+        run: npm audit --audit-level=high --omit=dev
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@v4
