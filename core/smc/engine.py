@@ -121,7 +121,8 @@ def _update_zone_lifecycle(
         and z.status not in ("filled", "mitigated")
         and (
             last_bar is None  # no bar → старий алгоритм: видалити
-            or (last_bar.open_time_ms - z.anchor_bar_ms) // _bar_ms >= config.fvg_grace_bars
+            or (last_bar.open_time_ms - z.anchor_bar_ms) // _bar_ms
+            >= config.fvg_grace_bars
         )
     ]
     for zid in stale_fvg:
@@ -265,8 +266,15 @@ class _TfState:
         self._active_zones: Dict[str, SmcZone] = {}
 
     def append(self, bar: CandleBar) -> None:
-        """Додає бар, зберігаючи вікно lookback_bars."""
-        self._bars.append(bar)
+        """Додає бар, зберігаючи вікно lookback_bars.
+
+        Dedup: якщо останній бар має той самий open_time_ms — замінює
+        (final bar update від паралельних feed-шляхів).
+        """
+        if self._bars and self._bars[-1].open_time_ms == bar.open_time_ms:
+            self._bars[-1] = bar
+        else:
+            self._bars.append(bar)
 
     def bars_list(self) -> List[CandleBar]:
         return list(self._bars)
@@ -955,7 +963,7 @@ class SmcEngine:
         # ── E1.2: Classify + Structure events ──
         classified = classify_swings(raw_swings)
         struct_events, trend_bias, last_bos_ms, last_choch_ms = detect_structure_events(
-            classified, bars
+            classified, bars, config=cfg.structure
         )
 
         all_swings = classified + struct_events

@@ -104,7 +104,7 @@ v3/
 │       ├── types.py       # SmcZone, SmcSwing, SmcLevel, SmcSnapshot, SmcDelta, NarrativeBlock, ActiveScenario
 │       ├── config.py      # SmcConfig + nested configs
 │       ├── swings.py      # detect_swings() — rolling window period
-│       ├── structure.py   # detect_structure() — BOS/CHoCH
+│       ├── structure.py   # detect_structure() — BOS/CHoCH V2 (ADR-0047)
 │       ├── order_blocks.py # detect_order_blocks()
 │       ├── fvg.py         # detect_fvg() — bull/bear + height guard
 │       ├── liquidity.py   # detect_liquidity_levels()
@@ -346,8 +346,9 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 | `test_smc_tda_p0_p1.py` | TDA P0+P1 integration |
 | `test_tick_agg.py` | Tick aggregator logic |
 | `test_tick_preview_calendar.py` | Tick preview + calendar gate |
+| `test_structure_v2.py` | Structure V2: BOS/CHoCH canonical (ADR-0047) |
 
-> **52 test files total** on disk. Table above lists key tests; run `pytest tests/ -v` for full coverage.
+> **53 test files total** on disk. Table above lists key tests; run `pytest tests/ -v` for full coverage.
 
 ---
 

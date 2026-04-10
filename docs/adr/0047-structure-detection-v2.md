@@ -1,7 +1,7 @@
 # ADR-0047: Structure Detection V2 — Canonical BOS/CHoCH + FVG Accuracy
 
-**Status**: Proposed  
-**Date**: 2026-04-07  
+**Status**: Implemented  
+**Date**: 2026-04-07 (implemented 2026-04-08)  
 **Author**: AI-agent + Owner review  
 **Supersedes**: Частково ADR-0024 §4.2 (structure detection algorithm)  
 **Relates to**: ADR-0024 (SMC Engine), ADR-0029 (Confluence Scoring), ADR-0028 (Display Filter)

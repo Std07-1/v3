@@ -1360,6 +1360,23 @@ async def _bg_smc_feed_loop(app: web.Application) -> None:
                             bg_tf,
                             bg_exc,
                         )
+                # ── M1 feed for _last_prices + session H/L (ADR-0035 bg path) ──
+                # When ws_clients=0 the delta_loop doesn't feed M1 bars,
+                # so _last_prices freezes. Poll M1 here to keep price fresh.
+                try:
+                    m1_seq = _bg_cursor.get((sym, 60))
+                    m1_res = await _uds_read_updates(app, sym, 60, m1_seq, False)
+                    if m1_res is not None:
+                        m1_events = getattr(m1_res, "events", [])
+                        m1_cur = getattr(m1_res, "cursor_seq", 0)
+                        _bg_cursor[(sym, 60)] = m1_cur
+                        for ev in m1_events:
+                            if isinstance(ev, dict) and ev.get("complete"):
+                                bar = ev.get("bar")
+                                if isinstance(bar, dict):
+                                    cast(Any, _smc_runner).feed_m1_bar_dict(sym, bar)
+                except Exception as m1_exc:
+                    _log.debug("WS_BG_M1_FEED_ERR sym=%s err=%s", sym, m1_exc)
     except asyncio.CancelledError:
         _log.debug("WS_BG_SMC_FEED_CANCELLED")
         pass
@@ -2021,6 +2038,121 @@ def build_app(
                 ctx["signals"] = [s.to_wire() for s in _sigs[:5]]
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"signals: {exc}")
+
+        # ── tick_price: real-time tick from Redis (sub-second freshness) ──
+        try:
+            tick_redis = (
+                app[APP_TICK_REDIS_CLIENT] if APP_TICK_REDIS_CLIENT in app else None
+            )
+            if tick_redis is not None:
+                tick_ns = app[APP_TICK_REDIS_NS]
+                tick_key = f"{tick_ns}:tick:last:{symbol.replace('/', '_')}"
+                tick_raw = await asyncio.get_event_loop().run_in_executor(
+                    app[APP_UDS_EXECUTOR], tick_redis.get, tick_key
+                )
+                if tick_raw:
+                    tick_data = json.loads(tick_raw)
+                    _tp = float(tick_data.get("mid", 0))
+                    _tts = int(tick_data.get("tick_ts_ms", 0))
+                    if _tp > 0:
+                        ctx["tick_price"] = round(_tp, 5)
+                        ctx["tick_ts_ms"] = _tts
+                        # Override last_price with tick if tick is fresher
+                        if _last_price <= 0 or (_tts > 0 and _tp > 0):
+                            ctx["last_price"] = round(_tp, 5)
+        except Exception as exc:
+            ctx.setdefault("warnings", []).append(f"tick_price: {exc}")
+
+        # ── data_quality: auto-computed freshness metadata ──────────
+        try:
+            now_ms = int(time.time() * 1000)
+            dq: Dict[str, Any] = {"server_ts_ms": now_ms, "tf_freshness": {}}
+            _compute_tfs_set = (
+                getattr(_smc_runner, "_compute_tfs", set()) if _smc_runner else set()
+            )
+            for _dq_tf in sorted(_compute_tfs_set):
+                _dq_label = _TF_S_TO_LABEL.get(_dq_tf, str(_dq_tf))
+                _dq_state = (
+                    _smc_runner._engine._states.get((symbol, _dq_tf))
+                    if _smc_runner
+                    else None
+                )
+                if _dq_state is not None:
+                    _dq_bars = _dq_state.bars_list()
+                    if _dq_bars:
+                        _dq_last_ms = _dq_bars[-1].open_time_ms
+                        _dq_age_s = (now_ms - _dq_last_ms) / 1000
+                        _dq_expected_s = (
+                            _dq_tf * 2.5
+                        )  # bar should arrive within ~2.5× TF
+                        dq["tf_freshness"][_dq_label] = {
+                            "last_bar_ms": _dq_last_ms,
+                            "age_s": round(_dq_age_s),
+                            "bars_count": len(_dq_bars),
+                            "stale": _dq_age_s > _dq_expected_s,
+                        }
+            # M1 freshness from session_m1_bars (separate storage)
+            if _smc_runner:
+                _m1_deque = _smc_runner._engine._session_m1_bars.get(symbol)
+                if _m1_deque and len(_m1_deque) > 0:
+                    _m1_last = _m1_deque[-1]
+                    _m1_age_s = (now_ms - _m1_last.open_time_ms) / 1000
+                    dq["tf_freshness"]["M1"] = {
+                        "last_bar_ms": _m1_last.open_time_ms,
+                        "age_s": round(_m1_age_s),
+                        "bars_count": len(_m1_deque),
+                        "stale": _m1_age_s > 150,  # M1 should arrive within 2.5min
+                    }
+            # price_frozen detection: compare tick vs last M1 bar close
+            _tick_p = ctx.get("tick_price", 0)
+            if _tick_p > 0 and _last_price > 0:
+                dq["price_spread"] = round(abs(_tick_p - _last_price), 5)
+            dq["ws_clients"] = len(app.get(APP_WS_SESSIONS, {}))
+            ctx["data_quality"] = dq
+        except Exception as exc:
+            ctx.setdefault("warnings", []).append(f"data_quality: {exc}")
+
+        # ── h4_forming: synthesized forming H4 candle from M1 bars ──
+        try:
+            if tf_s == 14400 or int(request.query.get("include_h4_forming", "0")):
+                from core.buckets import bucket_start_ms, resolve_anchor_offset_ms
+
+                _anchor = resolve_anchor_offset_ms(14400, app.get(APP_FULL_CONFIG, {}))
+                _now_ms = int(time.time() * 1000)
+                _h4_open_ms = bucket_start_ms(_now_ms, 14400 * 1000, _anchor)
+                # Get M1 bars from SmcEngine session storage (not _states)
+                _m1_deque = (
+                    _smc_runner._engine._session_m1_bars.get(symbol)
+                    if _smc_runner
+                    else None
+                )
+                if _m1_deque is not None and len(_m1_deque) > 0:
+                    _m1_bars = list(_m1_deque)
+                    _forming_bars = [
+                        b for b in _m1_bars if b.open_time_ms >= _h4_open_ms
+                    ]
+                    if _forming_bars:
+                        _fo = _forming_bars[0].o
+                        _fh = max(b.h for b in _forming_bars)
+                        _fl = min(b.low for b in _forming_bars)
+                        _fc = _forming_bars[-1].c
+                        # Use tick_price as latest close if available
+                        _tp_forming = ctx.get("tick_price")
+                        if _tp_forming and _tp_forming > 0:
+                            _fc = _tp_forming
+                            _fh = max(_fh, _tp_forming)
+                            _fl = min(_fl, _tp_forming)
+                        ctx["h4_forming"] = {
+                            "open_ms": _h4_open_ms,
+                            "o": round(_fo, 5),
+                            "h": round(_fh, 5),
+                            "l": round(_fl, 5),
+                            "c": round(_fc, 5),
+                            "m1_count": len(_forming_bars),
+                            "age_s": round((_now_ms - _h4_open_ms) / 1000),
+                        }
+        except Exception as exc:
+            ctx.setdefault("warnings", []).append(f"h4_forming: {exc}")
 
         return web.json_response(ctx)
 

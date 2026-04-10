@@ -60,7 +60,7 @@
 | [0044](0044-htf-live-preview.md) | HTF Live Preview — Incremental HTF Accumulator для D1/H4 forming candle | **Proposed** | 2026-03-24 | HTF preview, _HTFRunningAccumulator, D1/H4 forming candle, O(1) incremental, preview_tick_tfs_s, I1/I3/I5 | `htf_live_preview_v1` |
 | [0045](0045-vps-trader-bot.md) | VPS SMC Trader Bot (smc_trader_v3.py) — Reactive+Proactive Telegram bot | **Accepted** | 2026-03-30 | Telegram, aiogram 3.x, claude-opus-4-6, reactive/proactive, change_score, market_state.json, WS read-only, separate process | `smc_trader_bot_v1` |
 | [0046](0046-agent-personality-restoration.md) | Agent Personality Restoration — External Prompt SSOT + DNA Injection | **Accepted** | 2026-04-03 | personality, smc_trader_prompt_v3.md, external prompt, DNA injection, proactive style, conversation seed | `agent_personality_v1` |
-| [0047](0047-structure-detection-v2.md) | Structure Detection V2 — Canonical BOS/CHoCH + FVG Accuracy | **Proposed** | 2026-04-07 | BOS, CHoCH, HH/HL/LH/LL, structure.py, FVG display cap, confirmation_bars, ICT canonical | `structure_detection_v2` |
+| [0047](0047-structure-detection-v2.md) | Structure Detection V2 — Canonical BOS/CHoCH + FVG Accuracy | **Implemented** | 2026-04-07 | BOS, CHoCH, HH/HL/LH/LL, structure.py, FVG display cap, confirmation_bars, ICT canonical | `structure_detection_v2` |
 
 ---
 
@@ -100,4 +100,4 @@
 
 Див. формат у [copilot-instructions.md](../../.github/copilot-instructions.md) → Тема B, Правило B2.
 
-Наступний номер: **0047**
+Наступний номер: **0048**

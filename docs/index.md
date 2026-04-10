@@ -47,6 +47,9 @@
 | [ADR-0042](adr/0042-delta-frame-state-sync.md) | Delta Frame State Synchronization — Full/Delta Parity (DF-1/DF-2/DF-3, ADR-0042) |
 | [ADR-0043](adr/0043-ui-v4-canvas-safe-zones-state-sync.md) | UI v4 — Canvas Safe Zones + State Sync Hardening (ADR-0043) |
 | [ADR-0044](adr/0044-htf-live-preview.md) | HTF Live Preview — Incremental HTF accumulator for D1/H4 forming candle (ADR-0044) |
+| [ADR-0045](adr/0045-vps-trader-bot.md) | VPS SMC Trader Bot — Reactive+Proactive Telegram bot (ADR-0045) |
+| [ADR-0046](adr/0046-agent-personality-restoration.md) | Agent Personality Restoration — External Prompt SSOT + DNA Injection (ADR-0046) |
+| [ADR-0047](adr/0047-structure-detection-v2.md) | Structure Detection V2 — Canonical BOS/CHoCH + FVG Accuracy (ADR-0047) |
 
 ### 2. Потоки даних
 
