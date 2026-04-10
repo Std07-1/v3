@@ -9,7 +9,7 @@ description = "Trading Platform v3"
 requires-python = ">=3.11"
 dependencies = [
   "redis==5.0.1",
-  "numpy>=1.26",
+  "numpy>=2.4.4",
   "pandas>=2.1",
   "python-dotenv>=0.21,<1.0",
   "aiohttp>=3.9,<4.0",
