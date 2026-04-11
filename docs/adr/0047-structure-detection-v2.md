@@ -1,9 +1,9 @@
 # ADR-0047: Structure Detection V2 — Canonical BOS/CHoCH + FVG Accuracy
 
-**Status**: Implemented  
-**Date**: 2026-04-07 (implemented 2026-04-08)  
-**Author**: AI-agent + Owner review  
-**Supersedes**: Частково ADR-0024 §4.2 (structure detection algorithm)  
+**Status**: Implemented
+**Date**: 2026-04-07 (implemented 2026-04-08)
+**Author**: AI-agent + Owner review
+**Supersedes**: Частково ADR-0024 §4.2 (structure detection algorithm)
 **Relates to**: ADR-0024 (SMC Engine), ADR-0029 (Confluence Scoring), ADR-0028 (Display Filter)
 
 ---
@@ -22,14 +22,16 @@
 ### 1.2 Проблема з FVG відображенням
 
 Не всі FVG-зони відображаються на графіку через агресивну фільтрацію:
+
 - `fvg_display_cap = 4` — тверде обмеження на кількість FVG в display
-- `fvg_ob_overlap_hide = true` — FVG що перетинається з OB ховається  
+- `fvg_ob_overlap_hide = true` — FVG що перетинається з OB ховається
 - `min_display_strength = 0.25` — слабкі FVG відсікаються
 - Результат: трейдер бачить неповну картину FVG — може пропустити entry zones
 
 ### 1.3 Відсутність mBOS
 
 В ICT методології є два рівні структури:
+
 - **Major structure**: HH/HL/LH/LL з великих swing points (period=5)
 - **Minor structure (mBOS)**: менші pivots (period=2-3) для раннього entry
 
@@ -62,6 +64,7 @@ elif last_ll and bar.c < last_ll.price and bar.open_time_ms > last_ll.time_ms:
     if trend_bias == "bullish": → CHoCH_BEAR
     else:                       → BOS_BEAR
     last_ll = None  # consumed
+
 ```
 
 [VERIFIED structure.py:109-162]
@@ -93,6 +96,7 @@ fvg_cap = disp.fvg_display_cap  # config: 4
 # + fvg_ob_overlap_hide = True → hide if overlaps ANY active OB
 # + min_display_strength = 0.25
 # + distance: proximity_atr_mult * 1.5 * atr
+
 ```
 
 [VERIFIED engine.py:1074-1101, config.py:204-205]
@@ -109,10 +113,12 @@ fvg_cap = disp.fvg_display_cap  # config: 4
 **ICT визначення:**
 
 В **uptrend** (bullish bias): HH → HL → HH → HL ...
+
 - **BOS_BULL**: close вище останнього swing high → тренд **продовжується**
 - **CHoCH_BEAR**: close нижче останнього **HL** (higher low) → тренд **зламаний**
 
 В **downtrend** (bearish bias): LL → LH → LL → LH ...
+
 - **BOS_BEAR**: close нижче останнього swing low → тренд **продовжується**
 - **CHoCH_BULL**: close вище останнього **LH** (lower high) → тренд **зламаний**
 
@@ -131,42 +137,43 @@ fvg_cap = disp.fvg_display_cap  # config: 4
 ```python
 def detect_structure_events_v2(classified_swings, bars, config):
     trend_bias = None  # None → "bullish" | "bearish"
-    
+
     # Трекаємо всі 4 типи swing points
     last_hh = None   # останній HH
     last_hl = None   # останній HL  (internal low в uptrend)
     last_ll = None   # останній LL
     last_lh = None   # останній LH  (internal high в downtrend)
-    
+
     for bar in bars:
         # Update swing tracking
         update_swing_levels(bar, classified_swings)
-        
+
         if trend_bias == "bullish" or trend_bias is None:
             # BOS_BULL: break above last swing high (HH)
             if last_hh and bar.c > last_hh.price:
                 emit BOS_BULL
                 trend_bias = "bullish"
                 last_hh = None  # consumed
-                
+
             # CHoCH_BEAR: break below last HL (internal structure violated)
             elif last_hl and bar.c < last_hl.price:
                 emit CHoCH_BEAR
                 trend_bias = "bearish"
                 last_hl = None  # consumed
-                
+
         if trend_bias == "bearish" or trend_bias is None:
             # BOS_BEAR: break below last swing low (LL)
             if last_ll and bar.c < last_ll.price:
                 emit BOS_BEAR
                 trend_bias = "bearish"
                 last_ll = None  # consumed
-                
+
             # CHoCH_BULL: break above last LH (internal structure violated)
             elif last_lh and bar.c > last_lh.price:
                 emit CHoCH_BULL
                 trend_bias = "bullish"
                 last_lh = None  # consumed
+
 ```
 
 ### 3.3 FVG Display — збільшити cap
@@ -180,6 +187,7 @@ def detect_structure_events_v2(classified_swings, bars, config):
 ### 3.4 mBOS — NOT включено в V2
 
 mBOS (minor BOS) з `period=2`) **відкладено**:
+
 - Додає складність без очевидної вигоди поки V2 не стабілізується
 - `detect_fractals(period=2)` залишається display-only
 - Може бути додано як ADR-0047a якщо V2 покаже потребу
@@ -187,6 +195,7 @@ mBOS (minor BOS) з `period=2`) **відкладено**:
 ### 3.5 `confirmation_bars` — підключити або видалити
 
 **Рішення**: Підключити з мінімальним впливом.
+
 - Якщо `confirmation_bars > 1` → вимагати що bar.close за рівнем утримується N барів
 - Default = 1 (поточна поведінка: один bar.close достатньо)
 
@@ -199,6 +208,7 @@ mBOS (minor BOS) з `period=2`) **відкладено**:
 **Файл**: `core/smc/structure.py`
 
 **Зміни:**
+
 1. `detect_structure_events()` → новий алгоритм V2 з tracking всіх 4 swing types
 2. CHoCH тепер ламає HL/LH (internal structure), не HH/LL
 3. BOS = continuation break (HH в uptrend, LL в downtrend)
@@ -208,6 +218,7 @@ mBOS (minor BOS) з `period=2`) **відкладено**:
 **Wire format**: Без змін — ті самі kinds: `bos_bull, bos_bear, choch_bull, choch_bear`
 
 **Verify**:
+
 - Existing tests `test_smc_e1.py` pass (wire format not changed)
 - New test: `test_structure_v2.py` — 8+ cases covering:
   - Uptrend BOS continuation (HH break while bullish)
@@ -224,11 +235,13 @@ mBOS (minor BOS) з `period=2`) **відкладено**:
 **Файл**: `core/smc/order_blocks.py`
 
 **Зміни:**
+
 - З V2 BOS і CHoCH будуть збалансовані → CHoCH boost 1.5× стає адекватним
 - **Без змін коду** — лише верифікація що з новим розподілом BOS/CHoCH grades розумні
 - Якщо BOS OBs consistently underscored → додати `bos_impulse_boost` factor
 
-**Verify**: 
+**Verify**:
+
 - Run existing `test_smc_e1.py`, `test_smc_confluence.py`
 - Manual check: BOS-based OBs мають адекватний strength vs CHoCH
 
@@ -237,14 +250,17 @@ mBOS (minor BOS) з `period=2`) **відкладено**:
 **Файл**: `config.json`
 
 **Зміни:**
+
 ```json
 "display": {
     "fvg_display_cap": 6,        // було 4
     "fvg_ob_overlap_hide": false  // було true
 }
+
 ```
 
-**Verify**: 
+**Verify**:
+
 - Перевірити що UI показує більше FVG
 - Не призводить до visual clutter (якщо так — rollback до 5)
 
@@ -253,16 +269,19 @@ mBOS (minor BOS) з `period=2`) **відкладено**:
 **Файли**: `core/smc/structure.py`, `core/smc/engine.py`, `tests/test_smc_e2_pd_inducement.py`
 
 **Зміни:**
+
 - `detect_structure_events()` приймає `config: SmcStructureConfig` параметр
 - Використовує `config.confirmation_bars` для multi-bar confirmation
 - `engine.py` передає `cfg.structure` у **обох** callsites:
   - `_compute_snapshot()` (line ~957)
   - `_compute_full_snapshot_v2()` (line ~425, if exists)
+
 - `test_smc_e2_pd_inducement.py` (line ~38) — update call signature
 
 **Note**: `confirmation_bars` disambiguation — `smc.structure.confirmation_bars` (BOS/CHoCH) vs `smc.inducement.confirmation_bars` (inducements). Різні purposes, різні consumers.
 
-**Verify**: 
+**Verify**:
+
 - Default `confirmation_bars=1` → поведінка ідентична до V2 з P0
 - `confirmation_bars=3` → structure breaks рідше, але сильніше confirmed
 - `pytest tests/test_smc_e2_pd_inducement.py` passes
@@ -313,6 +332,7 @@ mBOS (minor BOS) з `period=2`) **відкладено**:
 ### 5.5 Semantic change (важливо)
 
 **Однакові wire kinds, інша семантика:**
+
 - `choch_bull` раніше = "break HH while bearish"
 - `choch_bull` тепер = "break LH (internal downtrend structure)"
 - `bos_bull` раніше = "break HH while bullish or trend=None"
@@ -323,6 +343,7 @@ mBOS (minor BOS) з `period=2`) **відкладено**:
 ### 5.6 `confirmation_bars` disambiguation
 
 В `config.json` є два `confirmation_bars`:
+
 - `smc.structure.confirmation_bars = 1` — для **structure breaks** (BOS/CHoCH). Використовується цим ADR.
 - `smc.inducement.confirmation_bars = 3` — для **inducement detection**. Інший purpose, інший consumer (`inducement.py`).
 
@@ -335,6 +356,7 @@ mBOS (minor BOS) з `period=2`) **відкладено**:
 ### A1: Patch V1 — тільки track HL/LH для CHoCH
 
 Мінімальний диф: додати `last_hl`/`last_lh` tracking, CHoCH ламає їх.
+
 - ✅ Простіше
 - ❌ Не виправляє consumed swing problem (BOS все ще рідкий)
 - ❌ Half-measure
@@ -344,6 +366,7 @@ mBOS (minor BOS) з `period=2`) **відкладено**:
 ### A2: Dual-chain (major + minor structure)
 
 Два паралельні ланцюги: period=5 (major) + period=2 (minor/mBOS).
+
 - ✅ Дає раннє підтвердження
 - ❌ Подвоює complexity
 - ❌ Потребує зміни wire format (adding kind `mbos_*`)
@@ -354,6 +377,7 @@ mBOS (minor BOS) з `period=2`) **відкладено**:
 ### A3: Без змін, тільки FVG display
 
 Не чіпати structure, тільки FVG display cap.
+
 - ❌ Не вирішує фундаментальну проблему BOS/CHoCH
 - ❌ Agent все ще бачить перекошену структуру
 
@@ -415,6 +439,7 @@ Data from VPS `2026-04-07`:
 H4: 17 swings — displacement_bear, displacement_bull, displacement_bull, ...
 H1: 18 swings — displacement_bear, choch_bear, displacement_bear, ...
 M15: 10 swings — displacement_bull, displacement_bull, choch_bull, ...
+
 ```
 
 [VERIFIED terminal — check_swings.py output]
@@ -437,6 +462,7 @@ _filter_for_display()
     ├── exclude: overlaps active OB (fvg_ob_overlap_hide=true)  ← LOSSY
     ├── sort by _zone_rank
     └── cap: fvg_display_cap = 4  ← TIGHT
+
 ```
 
 3 layers of filtering after detection, each reducing visible count.

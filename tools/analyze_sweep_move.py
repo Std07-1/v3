@@ -46,10 +46,12 @@ def main():
         # Structure events
         events = d.get("structure_events", [])
         print(f"  Structure events (last 8):")
-        for e in events[-8:]:
-            bar_ms = e.get("bar_ms", 0)
+        for evt in events[-8:]:
+            bar_ms = evt.get("bar_ms", 0)
             ts = ts_to_utc(bar_ms) if bar_ms else "?"
-            print(f"    {e['kind']:6s} {e['direction']:8s} @ {e['price']:.2f}  [{ts}]")
+            print(
+                f"    {evt['kind']:6s} {evt['direction']:8s} @ {evt['price']:.2f}  [{ts}]"
+            )
 
         # Key levels
         levels = d.get("levels", [])

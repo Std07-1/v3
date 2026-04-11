@@ -241,7 +241,7 @@ def detect_structure_events(
                 candidate_level = last_lh
 
         # Multi-bar confirmation
-        if candidate_kind is not None:
+        if candidate_kind is not None and candidate_level is not None:
             if (
                 confirm_kind == candidate_kind
                 and confirm_level is not None
@@ -254,7 +254,11 @@ def detect_structure_events(
                 confirm_count = 1
                 confirm_bar = bar
 
-            if confirm_count >= confirmation_bars:
+            if (
+                confirm_count >= confirmation_bars
+                and confirm_level is not None
+                and confirm_bar is not None
+            ):
                 _emit(confirm_kind, confirm_level, confirm_bar)
                 confirm_kind = None
                 confirm_count = 0

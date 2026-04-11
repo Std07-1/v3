@@ -58,6 +58,8 @@ class UdsLike(Protocol):
 
 
 class SmcRunnerLike(Protocol):
+    _engine: Any  # SmcEngine — accessed by diagnostics endpoints
+
     def get_snapshot(self, symbol: str, tf_s: int) -> Any: ...
 
     def get_last_price(self, symbol: str) -> float: ...
@@ -1876,6 +1878,76 @@ def build_app(
 
     app.router.add_get("/api/status", _api_status)
 
+    # ── /api/agent/state — Agent observability (ADR-012) ───────────────
+    # Reads Redis HASH {ns}:agent:state written by smc_trader_v3 bot.
+    # Graceful: returns 503 if Redis not available, 204 if no data yet.
+    _agent_redis_client = None
+    try:
+        from runtime.store.redis_spec import resolve_redis_spec
+        import redis as _aredis_mod
+
+        _agent_spec = resolve_redis_spec(
+            load_system_config(resolve_config_path()),
+            role="agent_observability",
+        )
+        if _agent_spec is None:
+            raise ValueError("resolve_redis_spec returned None")
+        _agent_redis_client = _aredis_mod.Redis(
+            host=_agent_spec.host,
+            port=_agent_spec.port,
+            db=_agent_spec.db,
+            socket_connect_timeout=2,
+            decode_responses=True,
+        )
+        _agent_ns = _agent_spec.namespace
+        _log.info("AGENT_OBSERVABILITY: Redis wired ns=%s", _agent_ns)
+    except Exception as _are:
+        _agent_ns = "v3_local"
+        _log.info(
+            "AGENT_OBSERVABILITY: Redis not available (%s) — endpoints will return 503",
+            _are,
+        )
+
+    async def _api_agent_state(request: web.Request) -> web.Response:
+        """GET /api/agent/state — latest agent state snapshot."""
+        if _agent_redis_client is None:
+            return web.json_response(
+                {"error": "agent_redis_not_configured"}, status=503
+            )
+        try:
+            raw = _agent_redis_client.hgetall(f"{_agent_ns}:agent:state")
+            if not raw:
+                return web.json_response({"status": "no_data"}, status=204)
+            return web.json_response(raw)
+        except Exception as e:
+            _log.warning("API_AGENT_STATE_FAIL: %s", e)
+            return web.json_response({"error": "redis_read_failed"}, status=503)
+
+    async def _api_agent_feed(request: web.Request) -> web.Response:
+        """GET /api/agent/feed?limit=50 — chronological event log."""
+        if _agent_redis_client is None:
+            return web.json_response(
+                {"error": "agent_redis_not_configured"}, status=503
+            )
+        try:
+            limit = min(int(request.query.get("limit", "50")), 500)
+            raw_items = _agent_redis_client.lrange(
+                f"{_agent_ns}:agent:feed", 0, limit - 1
+            )
+            events = []
+            for item in list(raw_items):  # type: ignore[arg-type]
+                try:
+                    events.append(json.loads(item))
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            return web.json_response({"events": events, "total": len(events)})
+        except Exception as e:
+            _log.warning("API_AGENT_FEED_FAIL: %s", e)
+            return web.json_response({"error": "redis_read_failed"}, status=503)
+
+    app.router.add_get("/api/agent/state", _api_agent_state)
+    app.router.add_get("/api/agent/feed", _api_agent_feed)
+
     # ── /api/context — SMC context for external consumers (bot, TUI) ───
     async def _api_context(request: web.Request) -> web.Response:
         """Повертає поточний SMC контекст для symbol+tf.
@@ -2067,7 +2139,7 @@ def build_app(
         try:
             now_ms = int(time.time() * 1000)
             dq: Dict[str, Any] = {"server_ts_ms": now_ms, "tf_freshness": {}}
-            _compute_tfs_set = (
+            _compute_tfs_set: set = (
                 getattr(_smc_runner, "_compute_tfs", set()) if _smc_runner else set()
             )
             for _dq_tf in sorted(_compute_tfs_set):
@@ -2107,7 +2179,7 @@ def build_app(
             _tick_p = ctx.get("tick_price", 0)
             if _tick_p > 0 and _last_price > 0:
                 dq["price_spread"] = round(abs(_tick_p - _last_price), 5)
-            dq["ws_clients"] = len(app.get(APP_WS_SESSIONS, {}))
+            dq["ws_clients"] = len(app.get(APP_WS_SESSIONS, {}))  # type: ignore[arg-type]
             ctx["data_quality"] = dq
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"data_quality: {exc}")

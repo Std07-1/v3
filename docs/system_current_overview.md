@@ -17,7 +17,7 @@
 6. [Геометрія часу](#геометрія-часу-помітка-для-всіх-розмов-про-свічки)
 7. [Інваріанти (I0–I6)](#інваріанти-i0i6)
 8. [Схема (потік даних)](#схема-потік-даних)
-9. [UI Render Pipeline](#ui-render-pipeline--повний-потік-даних-актуально)
+9. [UI Render Pipeline](#ui-render-pipeline--повний-потік-даних-ui_v4-ws-only)
 10. [Annotated tree](#annotated-tree-ascii-актуальний)
 11. [Stop-rules та режими](#stop-rules-та-режими)
 
