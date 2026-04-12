@@ -72,4 +72,17 @@ export const api = {
             undefined,
             { method: 'POST', body: JSON.stringify({ message }) },
         ),
+
+    logs: (lines = 80, level: 'all' | 'error' | 'warn' = 'all') =>
+        apiFetch<import('./types').LogsResponse>('/api/archi/logs', { lines, level }),
+
+    ownerNote: () =>
+        apiFetch<import('./types').OwnerNote>('/api/archi/owner-note'),
+
+    saveOwnerNote: (note: { text: string; mood?: string; status?: string }) =>
+        apiFetch<import('./types').OwnerNote & { ok: boolean }>(
+            '/api/archi/owner-note',
+            undefined,
+            { method: 'POST', body: JSON.stringify(note) },
+        ),
 };

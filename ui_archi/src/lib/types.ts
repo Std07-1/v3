@@ -125,6 +125,27 @@ export interface ChatHistory {
     total: number;
 }
 
+// ── Log Entry ──
+export interface LogLine {
+    text: string;
+    level: "ERROR" | "WARN" | "INFO" | "DEBUG";
+}
+
+export interface LogsResponse {
+    lines: LogLine[];
+    source: string;
+    total: number;
+    error?: string;
+}
+
+// ── Owner Note ──
+export interface OwnerNote {
+    text: string;
+    mood: string;
+    status: string;
+    updated_at: number | string;
+}
+
 // ── SSE stream message ──
 export interface StreamMessage {
     type: "feed" | "directives";

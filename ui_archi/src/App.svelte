@@ -2,11 +2,13 @@
     import "./lib/theme.css";
     import { getToken, setToken, api } from "./lib/api";
     import type { Directives } from "./lib/types";
+    import { onDestroy } from "svelte";
     import Feed from "./views/Feed.svelte";
     import Thinking from "./views/Thinking.svelte";
     import Relationship from "./views/Relationship.svelte";
     import Chat from "./views/Chat.svelte";
     import Mind from "./views/Mind.svelte";
+    import Logs from "./views/Logs.svelte";
 
     // ── routing (hash-based) ──
     let route = $state(window.location.hash.replace("#", "") || "/chat");
@@ -54,6 +56,129 @@
             const id = setInterval(fetchDirectives, 30_000);
             return () => clearInterval(id);
         }
+    });
+
+    // ── P3: Mood → Accent color ──
+    const MOOD_COLORS: Record<string, string> = {
+        calm: "#5487FF",
+        focused: "#22CC8F",
+        alert: "#F5A623",
+        stressed: "#ED4554",
+        excited: "#9B59B6",
+        cautious: "#fb923c",
+        frustrated: "#ED4554",
+    };
+    const DEFAULT_ACCENT = "#7c6fff";
+
+    $effect(() => {
+        const mood = directives?.mood;
+        const color = (mood && MOOD_COLORS[mood]) || DEFAULT_ACCENT;
+        document.documentElement.style.setProperty("--accent", color);
+    });
+
+    // ── Bottom nav auto-hide (mobile curtain) ──
+    let navHidden = $state(false);
+    let navTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function showNav() {
+        navHidden = false;
+        if (navTimer) clearTimeout(navTimer);
+        navTimer = setTimeout(() => {
+            navHidden = true;
+        }, 4000);
+    }
+
+    // Show nav on route change
+    $effect(() => {
+        route; // track dependency
+        showNav();
+    });
+
+    // ── Browser Push Notifications ──
+    const NOTIF_TYPE_ICON: Record<string, string> = {
+        analysis: "🧠",
+        signal: "🎯",
+        trade: "💰",
+        alert: "⚠️",
+        error: "❌",
+        market: "📊",
+    };
+    let notifEnabled = $state(
+        typeof Notification !== "undefined" &&
+            Notification.permission === "granted" &&
+            localStorage.getItem("archi_notif") === "1",
+    );
+    let notifSSE: EventSource | null = null;
+
+    function toggleNotifications() {
+        if (notifEnabled) {
+            // turn off
+            notifEnabled = false;
+            localStorage.setItem("archi_notif", "0");
+            notifSSE?.close();
+            notifSSE = null;
+            return;
+        }
+        if (!("Notification" in window)) return;
+        if (Notification.permission === "granted") {
+            notifEnabled = true;
+            localStorage.setItem("archi_notif", "1");
+            connectNotifSSE();
+        } else if (Notification.permission !== "denied") {
+            Notification.requestPermission().then((perm) => {
+                if (perm === "granted") {
+                    notifEnabled = true;
+                    localStorage.setItem("archi_notif", "1");
+                    connectNotifSSE();
+                }
+            });
+        }
+    }
+
+    function connectNotifSSE() {
+        if (notifSSE || !token || !notifEnabled) return;
+        const url = `/api/archi/stream?token=${encodeURIComponent(token)}`;
+        const es = new EventSource(url);
+        notifSSE = es;
+
+        es.onmessage = (evt: MessageEvent) => {
+            if (!document.hidden) return; // only notify when tab not visible
+            try {
+                const msg = JSON.parse(evt.data);
+                if (msg.type === "feed" && msg.data) {
+                    const ev = msg.data;
+                    const imp = ev.importance ?? 1;
+                    if (imp < 3) return;
+                    const type = ev.type ?? "system";
+                    const body = (ev.body ?? "").slice(0, 140);
+                    const icon = NOTIF_TYPE_ICON[type] ?? "📋";
+                    new Notification(`${icon} Арчі — ${type}`, {
+                        body,
+                        tag: String(ev.id ?? ev.ts_ms),
+                    });
+                }
+            } catch {
+                /* ignore */
+            }
+        };
+
+        es.onerror = () => {
+            notifSSE?.close();
+            notifSSE = null;
+            // Reconnect after 15s
+            if (notifEnabled) setTimeout(() => connectNotifSSE(), 15_000);
+        };
+    }
+
+    // Auto-connect notification SSE if already enabled
+    $effect(() => {
+        if (token && notifEnabled) {
+            connectNotifSSE();
+        }
+        return () => {
+            notifSSE?.close();
+            notifSSE = null;
+        };
     });
 </script>
 
@@ -135,7 +260,31 @@
                         <span class="nav-icon">🧩</span> Mind
                     </button>
                 </li>
+                <li>
+                    <button
+                        class="nav-item"
+                        class:active={route === "/logs"}
+                        onclick={() => nav("/logs")}
+                    >
+                        <span class="nav-icon">📋</span> Logs
+                    </button>
+                </li>
             </ul>
+
+            <!-- ── Notification toggle ── -->
+            <button
+                class="notif-toggle"
+                class:active={notifEnabled}
+                onclick={toggleNotifications}
+                title={notifEnabled
+                    ? "Сповіщення увімкнено"
+                    : "Увімкнути сповіщення"}
+            >
+                <span class="notif-bell">{notifEnabled ? "🔔" : "🔕"}</span>
+                <span class="notif-label"
+                    >{notifEnabled ? "Сповіщення" : "Увімкнути"}</span
+                >
+            </button>
 
             <!-- ── Directives panel ── -->
             {#if directives}
@@ -158,7 +307,13 @@
                     {#if directives.mood}
                         <div class="dir-row">
                             <span class="dir-label">настрій</span>
-                            <span class="dir-val">{directives.mood}</span>
+                            <span class="dir-val mood-val">
+                                <span
+                                    class="mood-dot"
+                                    data-mood={directives.mood}
+                                ></span>
+                                {directives.mood}
+                            </span>
                         </div>
                     {/if}
                     {#if directives.focus_symbol}
@@ -216,45 +371,12 @@
             </div>
         </nav>
 
-        <div class="right-panel">
-            <!-- ── Status HUD ── -->
-            {#if directives}
-                <div class="status-hud">
-                    {#if directives.kill_switch_active}
-                        <span class="hud-chip danger">⛔ KILL</span>
-                    {/if}
-                    {#if directives.economy_mode_active}
-                        <span class="hud-chip warning">⚡ ECO</span>
-                    {/if}
-                    {#if directives.mode}
-                        <span class="hud-chip mode">{directives.mode}</span>
-                    {/if}
-                    {#if directives.focus_symbol}
-                        <span class="hud-chip gold"
-                            >{directives.focus_symbol}</span
-                        >
-                    {/if}
-                    {#if directives.token_usage_today != null}
-                        {@const _tok = directives.token_usage_today as
-                            | Record<string, number>
-                            | number}
-                        {@const _total =
-                            typeof _tok === "object" && _tok !== null
-                                ? (_tok.input_tokens ?? 0) +
-                                  (_tok.output_tokens ?? 0)
-                                : Number(_tok)}
-                        <span class="hud-chip muted"
-                            >~{isNaN(_total)
-                                ? "?"
-                                : Math.round(_total / 1000) + "k"} токенів</span
-                        >
-                    {/if}
-                </div>
-            {/if}
-
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="right-panel" ontouchstart={showNav}>
             <main
                 class="content"
                 class:chat-layout={route === "/chat" || route === ""}
+                class:logs-layout={route === "/logs"}
             >
                 {#if route === "/chat" || route === ""}
                     <Chat prefill={chatPrefill} />
@@ -271,47 +393,50 @@
                     <Relationship />
                 {:else if route === "/mind"}
                     <Mind />
+                {:else if route === "/logs"}
+                    <Logs />
                 {:else}
                     <div class="empty-state">404 — не знайдено</div>
                 {/if}
             </main>
 
-            <!-- ── Bottom Nav (mobile only) ── -->
-            <nav class="bottom-nav">
+            <!-- ── Bottom Nav (mobile only — icon-only with underline) ── -->
+            <nav class="bottom-nav" class:hidden={navHidden}>
                 <button
                     class:active={route === "/chat" || route === ""}
                     onclick={() => nav("/chat")}
                 >
                     <span class="bn-icon">💬</span>
-                    <span class="bn-label">Chat</span>
                 </button>
                 <button
                     class:active={route === "/feed"}
                     onclick={() => nav("/feed")}
                 >
                     <span class="bn-icon">⚡</span>
-                    <span class="bn-label">Feed</span>
                 </button>
                 <button
                     class:active={route === "/thinking"}
                     onclick={() => nav("/thinking")}
                 >
                     <span class="bn-icon">🧠</span>
-                    <span class="bn-label">Thinking</span>
                 </button>
                 <button
                     class:active={route === "/relationship"}
                     onclick={() => nav("/relationship")}
                 >
                     <span class="bn-icon">💙</span>
-                    <span class="bn-label">Relation</span>
                 </button>
                 <button
                     class:active={route === "/mind"}
                     onclick={() => nav("/mind")}
                 >
                     <span class="bn-icon">🧩</span>
-                    <span class="bn-label">Mind</span>
+                </button>
+                <button
+                    class:active={route === "/logs"}
+                    onclick={() => nav("/logs")}
+                >
+                    <span class="bn-icon">📋</span>
                 </button>
             </nav>
         </div>
@@ -470,6 +595,38 @@
         padding: 4px 10px;
     }
 
+    /* ── Notification toggle ── */
+    .notif-toggle {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: 100%;
+        padding: 6px 10px;
+        background: none;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--text-muted);
+        font-size: 12px;
+        cursor: pointer;
+        transition:
+            border-color 0.15s,
+            color 0.15s;
+    }
+    .notif-toggle:hover {
+        border-color: var(--accent);
+        color: var(--text);
+    }
+    .notif-toggle.active {
+        border-color: var(--accent);
+        color: var(--accent);
+    }
+    .notif-bell {
+        font-size: 14px;
+    }
+    .notif-label {
+        font-weight: 500;
+    }
+
     /* ── Content ── */
     .right-panel {
         flex: 1;
@@ -489,50 +646,10 @@
         display: flex;
         flex-direction: column;
     }
-
-    /* ── Status HUD ── */
-    .status-hud {
+    .content.logs-layout {
+        overflow: hidden;
         display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 6px 16px;
-        background: var(--surface);
-        border-bottom: 1px solid var(--border);
-        flex-shrink: 0;
-        flex-wrap: wrap;
-    }
-    .hud-chip {
-        font-size: 11px;
-        font-weight: 500;
-        padding: 2px 8px;
-        border-radius: 10px;
-        background: var(--surface2);
-        color: var(--text-muted);
-        border: 1px solid var(--border);
-        white-space: nowrap;
-    }
-    .hud-chip.danger {
-        background: rgba(239, 68, 68, 0.15);
-        color: #f87171;
-        border-color: rgba(239, 68, 68, 0.3);
-    }
-    .hud-chip.warning {
-        background: rgba(245, 158, 11, 0.15);
-        color: #fbbf24;
-        border-color: rgba(245, 158, 11, 0.3);
-    }
-    .hud-chip.gold {
-        background: rgba(251, 191, 36, 0.12);
-        color: #fbbf24;
-        border-color: rgba(251, 191, 36, 0.3);
-    }
-    .hud-chip.mode {
-        background: var(--accent-dim);
-        color: var(--accent);
-        border-color: transparent;
-    }
-    .hud-chip.muted {
-        color: var(--text-muted);
+        flex-direction: column;
     }
 
     /* ── Directives panel ── */
@@ -624,13 +741,72 @@
         display: none;
     }
 
+    /* ── Mood dot (pulsing) ── */
+    .mood-dot {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--accent);
+        animation: mood-pulse 2s ease-in-out infinite;
+        vertical-align: middle;
+        margin-right: 4px;
+    }
+    .mood-val {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    /* Mood colors */
+    .mood-dot[data-mood="calm"] {
+        background: #60a5fa;
+        animation-duration: 3s;
+    }
+    .mood-dot[data-mood="focused"] {
+        background: #34d399;
+        animation-duration: 2s;
+    }
+    .mood-dot[data-mood="alert"] {
+        background: #fbbf24;
+        animation-duration: 1.5s;
+    }
+    .mood-dot[data-mood="stressed"] {
+        background: #f87171;
+        animation-duration: 1s;
+    }
+    .mood-dot[data-mood="cautious"] {
+        background: #fb923c;
+        animation-duration: 1.8s;
+    }
+    .mood-dot[data-mood="frustrated"] {
+        background: #f87171;
+        animation-duration: 0.8s;
+    }
+    .mood-dot[data-mood="excited"] {
+        background: #c084fc;
+        animation-duration: 1.2s;
+    }
+
+    @keyframes mood-pulse {
+        0%,
+        100% {
+            opacity: 1;
+            transform: scale(1);
+        }
+        50% {
+            opacity: 0.5;
+            transform: scale(0.7);
+        }
+    }
+
     /* ── Mobile ── */
     @media (max-width: 768px) {
         .sidebar {
             display: none;
         }
         .content {
-            padding-bottom: 60px; /* reserve space for bottom nav */
+            padding-bottom: 52px; /* reserve space for bottom nav */
         }
         .bottom-nav {
             display: flex;
@@ -638,38 +814,44 @@
             bottom: 0;
             left: 0;
             right: 0;
-            height: 56px;
+            height: 48px;
             background: var(--surface);
             border-top: 1px solid var(--border);
             z-index: 100;
-            safe-area-inset-bottom: env(safe-area-inset-bottom);
+            padding-bottom: env(safe-area-inset-bottom);
+            transition:
+                transform 0.3s ease,
+                opacity 0.3s ease;
+        }
+        .bottom-nav.hidden {
+            transform: translateY(100%);
+            opacity: 0;
+            pointer-events: none;
         }
         .bottom-nav button {
             flex: 1;
             display: flex;
-            flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 2px;
+            min-width: 48px;
+            min-height: 48px;
             background: none;
             border: none;
+            border-top: 2px solid transparent;
             cursor: pointer;
             color: var(--text-muted);
-            transition: color 0.15s;
+            transition:
+                color 0.15s,
+                border-color 0.15s;
+            position: relative;
         }
         .bottom-nav button.active {
             color: var(--accent);
+            border-top-color: var(--accent);
         }
         .bn-icon {
-            font-size: 20px;
+            font-size: 22px;
             line-height: 1;
-        }
-        .bn-label {
-            font-size: 10px;
-            font-weight: 500;
-        }
-        .status-hud {
-            padding: 4px 12px;
         }
     }
 </style>

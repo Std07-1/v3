@@ -1,4 +1,12 @@
 /* ── Archi Console — Dark Minimal Theme ── */
+
+/* P3: Register --accent for transition support */
+@property --accent {
+    syntax: '<color>';
+    inherits: true;
+    initial-value: #7c6fff;
+}
+
 :root {
     --bg: #0f0f11;
     --surface: #1a1a1f;
@@ -15,6 +23,7 @@
     --radius: 8px;
     --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
     --font-ui: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    transition: --accent 1.5s ease;
 }
 
 *,

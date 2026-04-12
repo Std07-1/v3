@@ -12,6 +12,39 @@
     // IDs of events that just arrived via SSE (for fade-in animation)
     let newEventIds = $state<Set<string | number>>(new Set());
 
+    // ── Filters + Search ──
+    let activeFilter = $state("all");
+    let searchQuery = $state("");
+
+    const TYPE_FILTERS: { key: string; label: string; icon: string }[] = [
+        { key: "all", label: "Всі", icon: "" },
+        { key: "analysis", label: "Аналіз", icon: "🧠" },
+        { key: "signal", label: "Сигнал", icon: "🎯" },
+        { key: "alert", label: "Alert", icon: "⚠️" },
+        { key: "trade", label: "Trade", icon: "💰" },
+        { key: "system", label: "Система", icon: "⚙️" },
+        { key: "heartbeat", label: "HB", icon: "💓" },
+    ];
+
+    const filteredEvents = $derived.by(() => {
+        let result = events;
+        if (activeFilter !== "all") {
+            result = result.filter((ev) =>
+                (ev.type ?? "").toLowerCase().includes(activeFilter),
+            );
+        }
+        if (searchQuery.trim()) {
+            const q = searchQuery.trim().toLowerCase();
+            result = result.filter(
+                (ev) =>
+                    (ev.body ?? "").toLowerCase().includes(q) ||
+                    (ev.type ?? "").toLowerCase().includes(q) ||
+                    (ev.symbol ?? "").toLowerCase().includes(q),
+            );
+        }
+        return result;
+    });
+
     const TYPE_ICONS: Record<string, string> = {
         analysis: "🧠",
         signal: "🎯",
@@ -198,14 +231,44 @@
             </div>
         </div>
     {/if}
-    <!-- в”Ђв”Ђ Events в”Ђв”Ђ -->
+    <!-- ── Filter Bar ── -->
+    <div class="filter-bar">
+        <div class="filter-pills">
+            {#each TYPE_FILTERS as f}
+                <button
+                    class="filter-pill"
+                    class:active={activeFilter === f.key}
+                    onclick={() => (activeFilter = f.key)}
+                >
+                    {#if f.icon}<span class="fp-icon">{f.icon}</span>{/if}
+                    {f.label}
+                </button>
+            {/each}
+        </div>
+        <div class="search-box">
+            <input
+                type="text"
+                placeholder="Пошук…"
+                bind:value={searchQuery}
+                class="search-input"
+            />
+            {#if searchQuery}
+                <button class="search-clear" onclick={() => (searchQuery = "")}>
+                    ✕
+                </button>
+            {/if}
+        </div>
+    </div>
+    <!-- ── Events ── -->
     <div class="events-list">
         {#if loading && events.length === 0}
             <div class="empty-state">Завантаження…</div>
-        {:else if events.length === 0}
-            <div class="empty-state">Подій немає</div>
+        {:else if filteredEvents.length === 0}
+            <div class="empty-state">
+                {events.length === 0 ? "Подій немає" : "Нічого не знайдено"}
+            </div>
         {:else}
-            {#each events as ev (ev.id ?? ev.ts_ms)}
+            {#each filteredEvents as ev (ev.id ?? ev.ts_ms)}
                 {@const key = ev.id ?? ev.ts_ms}
                 {@const style = cardStyle(ev)}
                 <div
@@ -482,5 +545,96 @@
     .btn-ghost.small {
         font-size: 12px;
         padding: 4px 10px;
+    }
+
+    /* ── Filter Bar ── */
+    .filter-bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 24px;
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+        overflow: hidden;
+    }
+    .filter-pills {
+        display: flex;
+        gap: 4px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        flex-shrink: 0;
+    }
+    .filter-pills::-webkit-scrollbar {
+        display: none;
+    }
+    .filter-pill {
+        display: flex;
+        align-items: center;
+        gap: 3px;
+        padding: 4px 10px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: none;
+        color: var(--text-muted);
+        font-size: 11px;
+        font-weight: 500;
+        cursor: pointer;
+        white-space: nowrap;
+        flex-shrink: 0;
+        transition:
+            border-color 0.15s,
+            color 0.15s,
+            background 0.15s;
+    }
+    .filter-pill:hover {
+        border-color: var(--accent);
+        color: var(--text);
+    }
+    .filter-pill.active {
+        background: var(--accent-dim);
+        border-color: var(--accent);
+        color: var(--text);
+    }
+    .fp-icon {
+        font-size: 12px;
+    }
+    .search-box {
+        position: relative;
+        flex: 1;
+        min-width: 100px;
+        max-width: 220px;
+    }
+    .search-input {
+        width: 100%;
+        padding: 5px 28px 5px 10px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 12px;
+        outline: none;
+        transition: border-color 0.15s;
+    }
+    .search-input:focus {
+        border-color: var(--accent);
+    }
+    .search-input::placeholder {
+        color: var(--text-muted);
+    }
+    .search-clear {
+        position: absolute;
+        right: 6px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 12px;
+        padding: 2px;
+        line-height: 1;
+    }
+    .search-clear:hover {
+        color: var(--text);
     }
 </style>

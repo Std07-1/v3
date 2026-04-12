@@ -2223,9 +2223,7 @@ def build_app(
                 _ARCHI_WEB_INBOX_KEY, json.dumps(inbox_msg, ensure_ascii=False)
             )
 
-            return web.json_response(
-                {"ok": True, "message": user_msg, "pending": True}
-            )
+            return web.json_response({"ok": True, "message": user_msg, "pending": True})
         except Exception as _e:
             _log.warning("API_ARCHI_CHAT_POST_FAIL: %s", _e)
             return web.json_response({"error": "write_failed"}, status=503)
@@ -2251,6 +2249,117 @@ def build_app(
             _log.warning("API_ARCHI_CHAT_GET_FAIL: %s", _e)
             return web.json_response({"error": "redis_read_failed"}, status=503)
 
+    # ── /api/archi/logs — read bot supervisor log from data_dir ──
+    async def _api_archi_logs(request: web.Request) -> web.Response:
+        """GET /api/archi/logs?lines=50&level=all — read recent bot log lines."""
+        if not _archi_auth(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        lines_limit = min(int(request.query.get("lines", "80")), 500)
+        level_filter = request.query.get("level", "all").upper()
+        # Try multiple log locations
+        _log_candidates = [
+            os.path.join(_console_data_dir, "..", "logs", "supervisor.log"),
+            "/var/log/smc-v3/smc_trader_v3.stderr.log",
+            os.path.join(_console_data_dir, "..", "logs", "bot.log"),
+        ]
+        log_path = None
+        for _c in _log_candidates:
+            _norm = os.path.normpath(_c)
+            if os.path.isfile(_norm):
+                log_path = _norm
+                break
+        if not log_path:
+            return web.json_response(
+                {"lines": [], "source": "none", "error": "no_log_file_found"},
+            )
+        try:
+            # Read last N lines efficiently (tail)
+            import collections
+
+            result_lines: list[dict[str, str]] = []
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                tail = collections.deque(
+                    f, maxlen=lines_limit * 3
+                )  # over-read for filter
+            for raw_line in tail:
+                raw_line = raw_line.rstrip("\n")
+                if not raw_line:
+                    continue
+                # Detect level
+                line_level = "INFO"
+                for _lv in ("ERROR", "WARN", "WARNING", "DEBUG", "CRITICAL"):
+                    if _lv in raw_line:
+                        line_level = (
+                            "ERROR"
+                            if _lv in ("ERROR", "CRITICAL")
+                            else ("WARN" if _lv in ("WARN", "WARNING") else _lv)
+                        )
+                        break
+                if level_filter != "ALL" and line_level != level_filter:
+                    continue
+                result_lines.append({"text": raw_line, "level": line_level})
+            # Keep only last N after filtering
+            result_lines = result_lines[-lines_limit:]
+            return web.json_response(
+                {
+                    "lines": result_lines,
+                    "source": os.path.basename(log_path),
+                    "total": len(result_lines),
+                },
+            )
+        except Exception as e:
+            _log.warning("API_ARCHI_LOGS_FAIL: %s", e)
+            return web.json_response({"error": str(e), "lines": []}, status=500)
+
+    # ── /api/archi/owner-note — user status note Archi can read ──
+    async def _api_archi_owner_note_get(request: web.Request) -> web.Response:
+        """GET /api/archi/owner-note — read owner's note for Archi."""
+        if not _archi_auth(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        note_path = os.path.join(_console_data_dir, "owner_note.json")
+        try:
+            if os.path.isfile(note_path):
+                with open(note_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return web.json_response(data)
+            return web.json_response(
+                {"text": "", "mood": "", "status": "", "updated_at": ""}
+            )
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def _api_archi_owner_note_post(request: web.Request) -> web.Response:
+        """POST /api/archi/owner-note — save owner's note."""
+        if not _archi_auth(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        try:
+            body = await request.json()
+            note_data = {
+                "text": str(body.get("text", ""))[:500],
+                "mood": str(body.get("mood", ""))[:50],
+                "status": str(body.get("status", ""))[:100],
+                "updated_at": int(time.time() * 1000),
+            }
+            note_path = os.path.join(_console_data_dir, "owner_note.json")
+            import tempfile
+
+            _tmp_fd, _tmp_path = tempfile.mkstemp(
+                dir=os.path.dirname(note_path), suffix=".tmp"
+            )
+            try:
+                with os.fdopen(_tmp_fd, "w", encoding="utf-8") as f:
+                    json.dump(note_data, f, ensure_ascii=False)
+                os.replace(_tmp_path, note_path)
+            except BaseException:
+                try:
+                    os.unlink(_tmp_path)
+                except OSError:
+                    pass
+                raise
+            return web.json_response({"ok": True, **note_data})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
     if _console_enabled:
         app.router.add_get("/api/archi/thinking", _api_archi_thinking)
         app.router.add_get("/api/archi/directives", _api_archi_directives)
@@ -2259,6 +2368,9 @@ def build_app(
         app.router.add_get("/api/archi/relationship", _api_archi_relationship)
         app.router.add_post("/api/archi/chat", _api_archi_chat_post)
         app.router.add_get("/api/archi/chat", _api_archi_chat_get)
+        app.router.add_get("/api/archi/logs", _api_archi_logs)
+        app.router.add_get("/api/archi/owner-note", _api_archi_owner_note_get)
+        app.router.add_post("/api/archi/owner-note", _api_archi_owner_note_post)
 
     # ── /api/context — SMC context for external consumers (bot, TUI) ───
     async def _api_context(request: web.Request) -> web.Response:

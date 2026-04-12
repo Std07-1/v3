@@ -1267,7 +1267,7 @@
             gap: 6px;
         }
         .chat-input {
-            flex-basis: 100%;  /* full width, wraps alone on first line */
+            flex-basis: 100%; /* full width, wraps alone on first line */
             max-height: 200px;
             min-height: 46px;
             font-size: 16px; /* prevents iOS zoom on focus */
