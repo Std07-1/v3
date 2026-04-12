@@ -85,4 +85,12 @@ export const api = {
             undefined,
             { method: 'POST', body: JSON.stringify(note) },
         ),
+
+    // ADR-028 P3 J5: approve or reject a pending improvement_proposal
+    reviewProposal: (id: string, approved: boolean) =>
+        apiFetch<{ ok: boolean; id: string; approved: boolean }>(
+            '/api/archi/proposals/review',
+            undefined,
+            { method: 'POST', body: JSON.stringify({ id, approved }) },
+        ),
 };

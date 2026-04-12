@@ -120,6 +120,19 @@ export interface ChatMessage {
     source?: "web" | "telegram";
 }
 
+// ── ADR-028 P3 J5: Self-Improvement Proposal ──
+export interface ImprovementProposal {
+    id: string;
+    ts: number;
+    type: "add_rule" | "modify_rule" | "remove_rule";
+    proposed_rule: string;
+    evidence: string;
+    reasoning: string;
+    alternatives_considered?: string[];
+    status: "pending" | "approved" | "rejected";
+    resolved_at?: number;
+}
+
 export interface ChatHistory {
     messages: ChatMessage[];
     total: number;

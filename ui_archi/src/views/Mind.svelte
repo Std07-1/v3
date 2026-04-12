@@ -1,6 +1,6 @@
 <script lang="ts">
     import { api, ApiError } from "../lib/api";
-    import type { Directives, OwnerNote } from "../lib/types";
+    import type { Directives, OwnerNote, ImprovementProposal } from "../lib/types";
 
     let data: Directives | null = $state(null);
     let loading = $state(true);
@@ -82,6 +82,25 @@
             /* quiet */
         } finally {
             noteSaving = false;
+        }
+    }
+
+    // ── ADR-028 P3 J5: Proposal review ──
+    let proposalReviewing = $state<string | null>(null); // proposal id being processed
+    let proposalError = $state("");
+
+    async function handleProposalReview(id: string, approved: boolean) {
+        if (proposalReviewing) return;
+        proposalReviewing = id;
+        proposalError = "";
+        try {
+            await api.reviewProposal(id, approved);
+            await load(); // refresh directives to reflect new status
+        } catch (e) {
+            proposalError = approved ? "Помилка підтвердження" : "Помилка відхилення";
+            setTimeout(() => { proposalError = ""; }, 3000);
+        } finally {
+            proposalReviewing = null;
         }
     }
 
@@ -539,6 +558,58 @@
                         {/each}
                     </ul>
                 </details>
+            </section>
+        {/if}
+
+        <!-- ── ADR-028 P3 J5: Improvement Proposals ── -->
+        {#if arr("improvement_proposals").filter((p: ImprovementProposal) => p.status === "pending").length}
+            <section class="mind-section proposals-section">
+                <div class="section-title">
+                    <span class="sec-icon">💡</span>
+                    Пропозиції Арчі
+                    <span class="counter badge-pending">
+                        {arr("improvement_proposals").filter((p: ImprovementProposal) => p.status === "pending").length}
+                    </span>
+                </div>
+                {#if proposalError}
+                    <div class="proposal-error">{proposalError}</div>
+                {/if}
+                {#each arr("improvement_proposals").filter((p: ImprovementProposal) => p.status === "pending") as proposal (proposal.id)}
+                    <div class="proposal-card">
+                        <div class="proposal-header">
+                            <span class="proposal-type-badge">{proposal.type}</span>
+                            <span class="proposal-time">{fmtAgo(proposal.ts)}</span>
+                        </div>
+                        <div class="proposal-rule">{proposal.proposed_rule}</div>
+                        {#if proposal.evidence}
+                            <div class="proposal-evidence">📊 {proposal.evidence}</div>
+                        {/if}
+                        {#if proposal.reasoning}
+                            <div class="proposal-reasoning">💭 {proposal.reasoning}</div>
+                        {/if}
+                        {#if proposal.alternatives_considered?.length}
+                            <div class="proposal-alts">
+                                Альтернативи: {proposal.alternatives_considered.join(" / ")}
+                            </div>
+                        {/if}
+                        <div class="proposal-actions">
+                            <button
+                                class="btn-approve"
+                                onclick={() => handleProposalReview(proposal.id, true)}
+                                disabled={proposalReviewing === proposal.id}
+                            >
+                                {proposalReviewing === proposal.id ? "…" : "✓ Прийняти"}
+                            </button>
+                            <button
+                                class="btn-reject"
+                                onclick={() => handleProposalReview(proposal.id, false)}
+                                disabled={proposalReviewing === proposal.id}
+                            >
+                                {proposalReviewing === proposal.id ? "…" : "✗ Відхилити"}
+                            </button>
+                        </div>
+                    </div>
+                {/each}
             </section>
         {/if}
 
@@ -1038,5 +1109,114 @@
             opacity: 0;
             transform: translateY(-6px);
         }
+    }
+
+    /* ── ADR-028 P3 J5: Improvement Proposals ── */
+    .proposals-section {
+        gap: 10px;
+    }
+    .badge-pending {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #f59e0b;
+        color: #1a1a1a;
+        border-radius: 10px;
+        padding: 1px 7px;
+        font-size: 11px;
+        font-weight: 700;
+        margin-left: 6px;
+    }
+    .proposal-card {
+        background: var(--surface2);
+        border: 1px solid #f59e0b44;
+        border-radius: 10px;
+        padding: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .proposal-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .proposal-type-badge {
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        background: #f59e0b22;
+        color: #f59e0b;
+        border: 1px solid #f59e0b44;
+        border-radius: 6px;
+        padding: 2px 8px;
+    }
+    .proposal-time {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin-left: auto;
+    }
+    .proposal-rule {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text);
+        line-height: 1.4;
+    }
+    .proposal-evidence,
+    .proposal-reasoning,
+    .proposal-alts {
+        font-size: 12px;
+        color: var(--text-muted);
+        line-height: 1.4;
+    }
+    .proposal-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 4px;
+    }
+    .btn-approve {
+        flex: 1;
+        padding: 7px 14px;
+        background: #16a34a;
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: filter 0.15s;
+    }
+    .btn-approve:hover:not(:disabled) {
+        filter: brightness(1.15);
+    }
+    .btn-approve:disabled {
+        opacity: 0.5;
+        cursor: default;
+    }
+    .btn-reject {
+        flex: 1;
+        padding: 7px 14px;
+        background: var(--surface);
+        color: var(--danger, #ef4444);
+        border: 1px solid var(--danger, #ef4444);
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: filter 0.15s;
+    }
+    .btn-reject:hover:not(:disabled) {
+        background: var(--danger, #ef4444);
+        color: #fff;
+    }
+    .btn-reject:disabled {
+        opacity: 0.5;
+        cursor: default;
+    }
+    .proposal-error {
+        font-size: 12px;
+        color: var(--danger, #ef4444);
+        padding: 4px 0;
     }
 </style>
