@@ -23,8 +23,38 @@
     let voiceError = $state("");
     let recognition: any = null;
 
-    // Scroll ref
+    // Emoji
+    let showEmoji = $state(false);
+    const EMOJI_SETS: { label: string; emojis: string[] }[] = [
+        { label: "Часті", emojis: ["👍", "🔥", "💰", "📊", "🎯", "⚡", "✅", "❌", "🤔", "💪", "🚀", "⏰"] },
+        { label: "Ринок", emojis: ["📈", "📉", "🐂", "🐻", "💎", "🏦", "⚠️", "🛡️", "🔑", "🧲", "🪙", "💸"] },
+        { label: "Настрій", emojis: ["😌", "😤", "🤯", "😎", "🫡", "🙏", "👀", "💀", "🧠", "❤️", "😂", "🫠"] },
+    ];
+    function insertEmoji(e: string) {
+        inputText += e;
+        showEmoji = false;
+        textareaEl?.focus();
+    }
+
+    // Quick actions
+    const QUICK_ACTIONS = [
+        { label: "/mind", text: "Покажи свій стан", icon: "🧩" },
+        { label: "/bias", text: "Який твій поточний bias?", icon: "🧭" },
+        { label: "/levels", text: "Які рівні спостерігаєш?", icon: "👁" },
+        { label: "/plan", text: "Який план на сьогодні?", icon: "📋" },
+        { label: "/review", text: "Зроби self-review", icon: "🪞" },
+    ];
+
+    // Scroll + textarea refs
     let messagesEl: HTMLDivElement;
+    let textareaEl: HTMLTextAreaElement;
+
+    // Auto-grow textarea
+    function autoGrow() {
+        if (!textareaEl) return;
+        textareaEl.style.height = "auto";
+        textareaEl.style.height = Math.min(textareaEl.scrollHeight, 140) + "px";
+    }
 
     // ── bias helpers ──
     function getBias(dir: Directives | null): { label: string; color: string } {
@@ -102,6 +132,7 @@
         const text = inputText.trim();
         if (!text || sending) return;
         inputText = "";
+        if (textareaEl) textareaEl.style.height = "auto";
         sending = true;
         error = "";
 
@@ -157,6 +188,10 @@
         if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             sendMessage();
+        }
+        // close emoji on Escape
+        if (e.key === "Escape" && showEmoji) {
+            showEmoji = false;
         }
     }
 
@@ -332,16 +367,59 @@
     {/if}
 </div>
 
+<!-- ── Quick Actions ── -->
+<div class="quick-actions">
+    {#each QUICK_ACTIONS as act}
+        <button
+            class="qa-btn"
+            onclick={() => { inputText = act.text; textareaEl?.focus(); }}
+            title={act.text}
+        >
+            <span class="qa-icon">{act.icon}</span>
+            <span class="qa-label">{act.label}</span>
+        </button>
+    {/each}
+</div>
+
 <!-- ── Input Bar ── -->
 <div class="input-bar">
     {#if error}
         <div class="input-error">{error}</div>
     {/if}
+
+    <!-- Emoji picker -->
+    {#if showEmoji}
+        <div class="emoji-picker">
+            {#each EMOJI_SETS as group}
+                <div class="emoji-group">
+                    <div class="emoji-group-label">{group.label}</div>
+                    <div class="emoji-grid">
+                        {#each group.emojis as em}
+                            <button class="emoji-btn" onclick={() => insertEmoji(em)}>{em}</button>
+                        {/each}
+                    </div>
+                </div>
+            {/each}
+        </div>
+    {/if}
+
     <div class="input-row">
+        <!-- Emoji toggle -->
+        <button
+            class="btn-icon"
+            class:active={showEmoji}
+            onclick={() => { showEmoji = !showEmoji; }}
+            title="Емодзі"
+            aria-label="Емодзі"
+        >
+            😊
+        </button>
+
         <!-- Voice button -->
         <button
-            class="btn-voice"
+            class="btn-icon"
             class:active={listening}
+            class:recording={listening}
             onclick={toggleVoice}
             title={voiceSupported
                 ? listening
@@ -356,9 +434,12 @@
 
         <textarea
             class="chat-input"
+            bind:this={textareaEl}
             bind:value={inputText}
+            oninput={autoGrow}
             onkeydown={handleKeydown}
-            placeholder="Напиши Арчі... (Enter — відправити, Shift+Enter — новий рядок)"
+            onfocus={() => { showEmoji = false; }}
+            placeholder="Напиши Арчі..."
             rows={1}
             disabled={sending}
         ></textarea>
@@ -576,10 +657,11 @@
 
     /* ── Input bar ── */
     .input-bar {
-        padding: 12px 16px;
+        padding: 8px 16px 12px;
         border-top: 1px solid var(--border);
         background: var(--surface);
         flex-shrink: 0;
+        position: relative;
     }
     .input-error {
         font-size: 12px;
@@ -594,10 +676,92 @@
     .input-row {
         display: flex;
         align-items: flex-end;
-        gap: 8px;
+        gap: 6px;
     }
 
-    .btn-voice {
+    /* ── Quick actions ── */
+    .quick-actions {
+        display: flex;
+        gap: 6px;
+        padding: 6px 16px;
+        background: var(--bg);
+        border-top: 1px solid var(--border);
+        flex-shrink: 0;
+        overflow-x: auto;
+        scrollbar-width: none;
+    }
+    .quick-actions::-webkit-scrollbar { display: none; }
+    .qa-btn {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 10px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: var(--surface);
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 12px;
+        white-space: nowrap;
+        flex-shrink: 0;
+        transition: border-color 0.2s, color 0.2s;
+    }
+    .qa-btn:hover {
+        border-color: var(--accent, #7c6fff);
+        color: var(--text);
+    }
+    .qa-icon { font-size: 13px; }
+    .qa-label { font-weight: 500; }
+
+    /* ── Emoji picker ── */
+    .emoji-picker {
+        position: absolute;
+        bottom: 100%;
+        left: 8px;
+        right: 8px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+        z-index: 50;
+        max-height: 220px;
+        overflow-y: auto;
+    }
+    .emoji-group-label {
+        font-size: 10px;
+        font-weight: 600;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .emoji-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+        gap: 2px;
+    }
+    .emoji-btn {
+        width: 36px;
+        height: 36px;
+        border: none;
+        background: none;
+        cursor: pointer;
+        font-size: 20px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.15s;
+    }
+    .emoji-btn:hover {
+        background: var(--surface2, rgba(255,255,255,0.06));
+    }
+
+    /* ── Shared icon buttons (emoji + voice) ── */
+    .btn-icon {
         width: 36px;
         height: 36px;
         border-radius: 50%;
@@ -609,15 +773,17 @@
         align-items: center;
         justify-content: center;
         flex-shrink: 0;
-        transition:
-            background 0.2s,
-            border-color 0.2s;
+        transition: background 0.2s, border-color 0.2s;
     }
-    .btn-voice:disabled {
+    .btn-icon:disabled {
         opacity: 0.4;
         cursor: not-allowed;
     }
-    .btn-voice.active {
+    .btn-icon.active {
+        border-color: var(--accent, #7c6fff);
+        background: rgba(124, 111, 255, 0.1);
+    }
+    .btn-icon.recording {
         border-color: #e05555;
         background: rgba(224, 85, 85, 0.1);
         animation: pulse-ring 1s ease infinite;
@@ -636,16 +802,17 @@
         flex: 1;
         resize: none;
         border: 1px solid var(--border);
-        border-radius: 12px;
+        border-radius: 20px;
         background: var(--bg);
         color: var(--text);
         font-family: inherit;
-        font-size: 14px;
+        font-size: 15px;
         line-height: 1.5;
-        padding: 8px 12px;
+        padding: 10px 16px;
         outline: none;
         transition: border-color 0.2s;
-        max-height: 120px;
+        min-height: 44px;
+        max-height: 140px;
         overflow-y: auto;
     }
     .chat-input:focus {
@@ -654,16 +821,19 @@
     .chat-input:disabled {
         opacity: 0.6;
     }
+    .chat-input::placeholder {
+        color: var(--text-muted);
+    }
 
     .btn-send {
-        width: 36px;
-        height: 36px;
+        width: 44px;
+        height: 44px;
         border-radius: 50%;
         border: none;
         background: var(--accent, #7c6fff);
         color: #fff;
         cursor: pointer;
-        font-size: 16px;
+        font-size: 18px;
         display: flex;
         align-items: center;
         justify-content: center;
