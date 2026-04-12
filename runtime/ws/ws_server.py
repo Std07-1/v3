@@ -2176,100 +2176,17 @@ def build_app(
             _log.warning("API_ARCHI_RELATIONSHIP_FAIL: %s", _e)
             return web.json_response({"error": "read_failed"}, status=503)
 
-    # ── /api/archi/chat — persistent chat log (user messages + Archi replies) ──
+    # ── /api/archi/chat — unified chat (proxy to bot via Redis IPC) ──────
     _ARCHI_CHAT_KEY = f"{_agent_ns}:archi:chat"
     _ARCHI_CHAT_MAX = 500
-    _ARCHI_CHAT_MODEL = "claude-haiku-4-5"
-
-    def _build_archi_system_prompt() -> str:
-        """Будує system prompt для Арчі з поточним контекстом."""
-        parts: list[str] = []
-        parts.append(
-            "Ти — Арчі, персональний SMC-трейдер і AI-асистент. "
-            "Ти відповідаєш українською (або мовою питання). "
-            "Ти маєш доступ до реального стану ринку і власних думок."
-        )
-        # Inject directives context if available
-        try:
-            dir_raw = _agent_redis_client.get(f"{_agent_ns}:archi:directives")
-            if dir_raw:
-                d = json.loads(dir_raw)
-                focus = d.get("focus_symbol", "XAU/USD")
-                mode = d.get("mode", "")
-                mood = d.get("mood", "")
-                scenario = d.get("active_scenario", "")
-                bias_map = d.get("bias_map", {})
-                parts.append(f"\n--- ПОТОЧНИЙ СТАН ---")
-                parts.append(f"Символ у фокусі: {focus}")
-                if mode:
-                    parts.append(f"Режим: {mode}")
-                if mood:
-                    parts.append(f"Настрій: {mood}")
-                if scenario:
-                    parts.append(f"Активний сценарій: {scenario}")
-                if bias_map:
-                    bias_str = ", ".join(f"{tf}: {v}" for tf, v in bias_map.items())
-                    parts.append(f"Bias-map: {bias_str}")
-                inner = d.get("inner_thought", "")
-                if inner:
-                    parts.append(f"Думка: {inner}")
-        except Exception:
-            pass
-        # Inject agent state if available
-        try:
-            state_raw = _agent_redis_client.hgetall(f"{_agent_ns}:agent:state")
-            if state_raw:
-                session = state_raw.get(
-                    b"market_session", state_raw.get("market_session", "")
-                )
-                budget = state_raw.get(
-                    b"budget_today_usd", state_raw.get("budget_today_usd", "")
-                )
-                if session:
-                    parts.append(f"Торгова сесія: {session}")
-                if budget:
-                    parts.append(f"Бюджет сьогодні (витрачено): ${budget}")
-        except Exception:
-            pass
-        return "\n".join(parts)
-
-    async def _archi_claude_reply(user_text: str, history: list) -> str:
-        """Викликає Claude API з контекстом і повертає відповідь Арчі."""
-        import os as _os
-
-        api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            return "Немає API ключа — я поки що недоступний."
-        try:
-            import anthropic as _anthropic
-
-            client = _anthropic.AsyncAnthropic(api_key=api_key)
-            system = _build_archi_system_prompt()
-            # Build messages array from recent history (last 10 exchanges)
-            msgs: list[dict] = []
-            for h in history[-20:]:
-                role = h.get("role", "user")
-                # Map archi → assistant for Claude API
-                if role == "archi":
-                    role = "assistant"
-                elif role != "user":
-                    role = "user"
-                msgs.append({"role": role, "content": h.get("text", "")})
-            # Add current user message
-            msgs.append({"role": "user", "content": user_text})
-            response = await client.messages.create(
-                model=_ARCHI_CHAT_MODEL,
-                max_tokens=1024,
-                system=system,
-                messages=msgs,
-            )
-            return response.content[0].text if response.content else "…"
-        except Exception as _e:
-            _log.warning("ARCHI_CLAUDE_FAIL: %s", _e)
-            return f"Помилка відповіді: {_e}"
+    _ARCHI_WEB_INBOX_KEY = f"{_agent_ns}:archi:web_inbox"
 
     async def _api_archi_chat_post(request: web.Request) -> web.Response:
-        """POST /api/archi/chat — зберігає повідомлення і отримує відповідь Арчі."""
+        """POST /api/archi/chat — saves user message and pushes to bot inbox.
+
+        Bot process picks up from web_inbox, calls Claude with full personality,
+        and writes reply to the same chat key. Frontend polls for reply.
+        """
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         if _agent_redis_client is None:
@@ -2287,39 +2204,27 @@ def build_app(
                 "role": "user",
                 "text": msg_text,
                 "ts_ms": now_ms,
+                "source": "web",
             }
+            # Save to chat history (visible immediately in GET)
             _agent_redis_client.lpush(
                 _ARCHI_CHAT_KEY, json.dumps(user_msg, ensure_ascii=False)
             )
             _agent_redis_client.ltrim(_ARCHI_CHAT_KEY, 0, _ARCHI_CHAT_MAX - 1)
 
-            # Get recent history for context (newest first from Redis, then reversed)
-            raw_history = _agent_redis_client.lrange(_ARCHI_CHAT_KEY, 0, 39)
-            history: list[dict] = []
-            for item in reversed(list(raw_history)):
-                try:
-                    history.append(json.loads(item))
-                except (json.JSONDecodeError, TypeError):
-                    continue
-            # history now is oldest→newest, excluding the just-saved user msg
-            context_history = [h for h in history if h.get("id") != user_msg["id"]]
-
-            # Get Archi's reply from Claude
-            reply_text = await _archi_claude_reply(msg_text, context_history)
-
-            archi_msg = {
-                "id": f"a_{int(_time.time() * 1000)}",
-                "role": "archi",
-                "text": reply_text,
-                "ts_ms": int(_time.time() * 1000),
+            # Push to bot inbox for processing (bot will call Claude)
+            inbox_msg = {
+                "req_id": user_msg["id"],
+                "text": msg_text,
+                "ts_ms": now_ms,
+                "source": "web",
             }
-            _agent_redis_client.lpush(
-                _ARCHI_CHAT_KEY, json.dumps(archi_msg, ensure_ascii=False)
+            _agent_redis_client.rpush(
+                _ARCHI_WEB_INBOX_KEY, json.dumps(inbox_msg, ensure_ascii=False)
             )
-            _agent_redis_client.ltrim(_ARCHI_CHAT_KEY, 0, _ARCHI_CHAT_MAX - 1)
 
             return web.json_response(
-                {"ok": True, "message": user_msg, "archi_response": archi_msg}
+                {"ok": True, "message": user_msg, "pending": True}
             )
         except Exception as _e:
             _log.warning("API_ARCHI_CHAT_POST_FAIL: %s", _e)

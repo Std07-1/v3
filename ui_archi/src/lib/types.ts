@@ -117,6 +117,7 @@ export interface ChatMessage {
     role: "user" | "archi";
     text: string;
     ts_ms: number;
+    source?: "web" | "telegram";
 }
 
 export interface ChatHistory {

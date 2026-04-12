@@ -127,7 +127,10 @@
         }
     }
 
-    // ── send message ──
+    // ── send message (async: POST saves + bot replies via Redis) ──
+    let awaitingReply = $state(false);
+    let lastSentId = $state("");
+
     async function sendMessage() {
         const text = inputText.trim();
         if (!text || sending) return;
@@ -143,40 +146,22 @@
             text,
             ts_ms: Date.now(),
         };
-        // Optimistic placeholder for Archi's reply
-        const tmpArchi: ChatMessage = {
-            id: `a_tmp_${Date.now()}`,
-            role: "archi",
-            text: "…",
-            ts_ms: Date.now() + 1,
-        };
-        messages = [...messages, tmpMsg, tmpArchi];
+        messages = [...messages, tmpMsg];
         await tick();
         scrollToBottom();
 
         try {
             const res = await api.chatSend(text);
-            // Replace tmp user msg + tmp archi with real versions
+            // Replace tmp user msg with real (server-assigned) one
             const realUser = res.message;
-            const realArchi = res.archi_response;
-            messages = messages
-                .map((m) => (m.id === tmpMsg.id ? realUser : m))
-                .map((m) => {
-                    if (m.id === tmpArchi.id) {
-                        return (
-                            realArchi ?? {
-                                ...tmpArchi,
-                                text: "Помилка відповіді",
-                            }
-                        );
-                    }
-                    return m;
-                });
+            messages = messages.map((m) => (m.id === tmpMsg.id ? realUser : m));
+            // Bot will reply asynchronously — start fast polling
+            lastSentId = realUser.id;
+            awaitingReply = true;
+            startFastPoll();
         } catch {
             error = "Повідомлення не відправлено. Спробуй ще раз.";
-            messages = messages.filter(
-                (m) => m.id !== tmpMsg.id && m.id !== tmpArchi.id,
-            );
+            messages = messages.filter((m) => m.id !== tmpMsg.id);
         } finally {
             sending = false;
             await tick();
@@ -236,15 +221,30 @@
         }
     }
 
-    // ── polling for new messages (every 10s) ──
+    // ── polling for new messages ──
     let pollId: ReturnType<typeof setInterval>;
+    let fastPollId: ReturnType<typeof setInterval> | null = null;
+    const NORMAL_POLL_MS = 8_000;
+    const FAST_POLL_MS = 2_000;
+    const FAST_POLL_MAX_MS = 90_000; // stop fast polling after 90s
 
     async function pollMessages() {
-        if (sending) return; // don't overwrite optimistic messages while waiting
         try {
             const result = await api.chatHistory(80);
-            if (result.messages.length !== messages.length) {
-                messages = result.messages;
+            const newMsgs = result.messages ?? [];
+            // Check if we got a reply to our last sent message
+            if (awaitingReply && lastSentId) {
+                const hasReply = newMsgs.some(
+                    (m) => m.role === "archi" && m.ts_ms > (messages.find((x) => x.id === lastSentId)?.ts_ms ?? 0)
+                );
+                if (hasReply) {
+                    awaitingReply = false;
+                    lastSentId = "";
+                    stopFastPoll();
+                }
+            }
+            if (newMsgs.length !== messages.length || (newMsgs.length > 0 && newMsgs[newMsgs.length - 1]?.id !== messages[messages.length - 1]?.id)) {
+                messages = newMsgs;
                 await tick();
                 scrollToBottom();
             }
@@ -253,11 +253,30 @@
         }
     }
 
+    function startFastPoll() {
+        stopFastPoll();
+        fastPollId = setInterval(pollMessages, FAST_POLL_MS);
+        // Safety: stop fast poll after timeout
+        setTimeout(() => {
+            if (awaitingReply) {
+                awaitingReply = false;
+                stopFastPoll();
+            }
+        }, FAST_POLL_MAX_MS);
+    }
+
+    function stopFastPoll() {
+        if (fastPollId) {
+            clearInterval(fastPollId);
+            fastPollId = null;
+        }
+    }
+
     // ── lifecycle ──
     onMount(() => {
         loadData();
         initVoice();
-        pollId = setInterval(pollMessages, 10_000);
+        pollId = setInterval(pollMessages, NORMAL_POLL_MS);
         // also refresh agent state
         setInterval(() => {
             api.agentState()
@@ -270,6 +289,7 @@
 
     onDestroy(() => {
         clearInterval(pollId);
+        stopFastPoll();
         if (recognition && listening) recognition.stop();
     });
 
@@ -347,23 +367,32 @@
                     <div class="avatar">⬡</div>
                 {/if}
                 <div class="bubble">
-                    {#if msg.role === "archi" && msg.text === "…"}
-                        <div class="bubble-text">
-                            <span class="typing-dot">●</span><span
-                                class="typing-dot"
-                                style="animation-delay:0.2s">●</span
-                            ><span
-                                class="typing-dot"
-                                style="animation-delay:0.4s">●</span
-                            >
-                        </div>
-                    {:else}
-                        <div class="bubble-text">{msg.text}</div>
-                    {/if}
-                    <div class="bubble-ts">{formatTs(msg.ts_ms)}</div>
+                    <div class="bubble-text">{msg.text}</div>
+                    <div class="bubble-meta">
+                        <span class="bubble-ts">{formatTs(msg.ts_ms)}</span>
+                        {#if (msg as any).source === "telegram"}
+                            <span class="source-badge tg">TG</span>
+                        {/if}
+                    </div>
                 </div>
             </div>
         {/each}
+        {#if awaitingReply}
+            <div class="bubble-row archi">
+                <div class="avatar">⬡</div>
+                <div class="bubble thinking-bubble">
+                    <div class="bubble-text">
+                        <span class="typing-dot">●</span><span
+                            class="typing-dot"
+                            style="animation-delay:0.2s">●</span
+                        ><span
+                            class="typing-dot"
+                            style="animation-delay:0.4s">●</span
+                        >
+                    </div>
+                </div>
+            </div>
+        {/if}
     {/if}
 </div>
 
@@ -628,31 +657,41 @@
         line-height: 1.5;
         white-space: pre-wrap;
     }
-    /* Typing indicator for pending archi response */
-    .bubble-row.archi .bubble .bubble-text:only-child:empty::after,
-    .bubble-row.archi .bubble-text:is([data-typing]) {
-        content: "";
+    .bubble-ts {
+        font-size: 10px;
+        opacity: 0.55;
+    }
+    .bubble-meta {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 6px;
+        margin-top: 4px;
+    }
+    .source-badge {
+        font-size: 9px;
+        font-weight: 600;
+        padding: 1px 5px;
+        border-radius: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .source-badge.tg {
+        background: rgba(0, 136, 204, 0.15);
+        color: #0088cc;
+    }
+    .thinking-bubble {
+        min-width: 52px;
     }
     .typing-dot {
         display: inline-block;
-        animation: typing-blink 1.2s ease infinite;
+        animation: typingPulse 1.4s infinite ease-in-out;
+        font-size: 14px;
         opacity: 0.6;
     }
-    @keyframes typing-blink {
-        0%,
-        80%,
-        100% {
-            opacity: 0.2;
-        }
-        40% {
-            opacity: 1;
-        }
-    }
-    .bubble-ts {
-        font-size: 10px;
-        margin-top: 4px;
-        opacity: 0.55;
-        text-align: right;
+    @keyframes typingPulse {
+        0%, 80%, 100% { opacity: 0.2; }
+        40% { opacity: 1; }
     }
 
     /* ── Input bar ── */
