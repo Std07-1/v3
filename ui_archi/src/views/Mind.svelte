@@ -1,10 +1,18 @@
 <script lang="ts">
     import { api, ApiError } from "../lib/api";
-    import type { Directives } from "../lib/types";
+    import type { Directives, OwnerNote } from "../lib/types";
 
     let data: Directives | null = $state(null);
     let loading = $state(true);
     let error = $state("");
+
+    // ── Owner note state ──
+    let ownerNote = $state<OwnerNote | null>(null);
+    let noteText = $state("");
+    let noteStatus = $state("");
+    let noteSaving = $state(false);
+    let noteSaved = $state(false);
+    let noteEditing = $state(false);
 
     function fmtTime(ts: number): string {
         if (!ts) return "?";
@@ -42,6 +50,14 @@
         error = "";
         try {
             data = await api.directives(false); // brief=0 → full state
+            // Load owner note in parallel
+            api.ownerNote()
+                .then((n) => {
+                    ownerNote = n;
+                    if (!noteText && n.text) noteText = n.text;
+                    if (!noteStatus && n.status) noteStatus = n.status;
+                })
+                .catch(() => {});
         } catch (e) {
             if (e instanceof ApiError && e.status === 401) {
                 error = "Не авторизовано";
@@ -50,6 +66,22 @@
             }
         } finally {
             loading = false;
+        }
+    }
+
+    async function saveNote() {
+        if (noteSaving) return;
+        noteSaving = true;
+        try {
+            await api.saveOwnerNote({ text: noteText, status: noteStatus });
+            noteSaved = true;
+            setTimeout(() => {
+                noteSaved = false;
+            }, 1500);
+        } catch {
+            /* quiet */
+        } finally {
+            noteSaving = false;
         }
     }
 
@@ -118,6 +150,84 @@
                 <blockquote class="inner-thought">
                     "{str("inner_thought")}"
                 </blockquote>
+            {/if}
+        </section>
+
+        <!-- ── Owner Note for Archi ── -->
+        <section class="mind-section owner-note-section">
+            <h3 class="section-title">
+                <span class="sec-icon">📝</span>
+                Нотатка для Арчі
+            </h3>
+            {#if !noteEditing}
+                <!-- Card display mode -->
+                <div
+                    class="note-card"
+                    role="button"
+                    tabindex="0"
+                    onclick={() => {
+                        noteEditing = true;
+                    }}
+                    onkeydown={(e) => {
+                        if (e.key === "Enter") noteEditing = true;
+                    }}
+                >
+                    {#if noteStatus}
+                        <div class="nc-status">{noteStatus}</div>
+                    {/if}
+                    {#if noteText}
+                        <div class="nc-text">{noteText}</div>
+                    {:else}
+                        <div class="nc-placeholder">
+                            Натисни щоб додати нотатку…
+                        </div>
+                    {/if}
+                    {#if ownerNote?.updated_at}
+                        <div class="nc-footer">
+                            {fmtAgo(Number(ownerNote.updated_at))}
+                        </div>
+                    {/if}
+                </div>
+            {:else}
+                <!-- Edit mode -->
+                <div class="note-edit">
+                    <input
+                        class="note-status-input"
+                        type="text"
+                        bind:value={noteStatus}
+                        placeholder="Статус (працюю / відпочиваю / аналізую)"
+                        maxlength="100"
+                    />
+                    <textarea
+                        class="note-textarea"
+                        bind:value={noteText}
+                        placeholder="Думки, контекст для Арчі…"
+                        rows={3}
+                        maxlength="500"
+                    ></textarea>
+                    <div class="note-actions">
+                        <span class="note-counter">{noteText.length}/500</span>
+                        <button
+                            class="btn-note-cancel"
+                            onclick={() => {
+                                noteEditing = false;
+                            }}>Скасувати</button
+                        >
+                        <button
+                            class="btn-note-save"
+                            onclick={() => {
+                                saveNote();
+                                noteEditing = false;
+                            }}
+                            disabled={noteSaving}
+                        >
+                            {noteSaving ? "⟳" : "✓ Зберегти"}
+                        </button>
+                    </div>
+                </div>
+            {/if}
+            {#if noteSaved}
+                <div class="note-toast">✓ Збережено</div>
             {/if}
         </section>
 
@@ -782,6 +892,151 @@
         }
         .model-key {
             min-width: 90px;
+        }
+    }
+
+    /* ── Owner Note (styled like Стан Арчі directives panel) ── */
+    .owner-note-section {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 14px;
+        background: var(--surface2);
+        position: relative;
+    }
+    /* Card mode — directives-panel style */
+    .note-card {
+        cursor: pointer;
+        border-radius: 8px;
+        padding: 10px 12px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        transition:
+            border-color 0.2s,
+            background 0.2s;
+    }
+    .note-card:hover {
+        border-color: var(--accent);
+    }
+    .nc-status {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--accent);
+        margin-bottom: 4px;
+        text-transform: capitalize;
+    }
+    .nc-text {
+        font-size: 13px;
+        line-height: 1.5;
+        color: var(--text);
+        white-space: pre-wrap;
+    }
+    .nc-placeholder {
+        font-size: 13px;
+        color: var(--text-muted);
+        font-style: italic;
+    }
+    .nc-footer {
+        font-size: 10px;
+        color: var(--text-muted);
+        margin-top: 6px;
+        text-align: right;
+    }
+    /* Edit mode */
+    .note-edit {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .note-status-input {
+        padding: 8px 12px;
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text);
+        font-size: 13px;
+        outline: none;
+    }
+    .note-status-input:focus {
+        border-color: var(--accent);
+    }
+    .note-textarea {
+        padding: 10px 12px;
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text);
+        font-size: 13px;
+        resize: vertical;
+        min-height: 60px;
+        outline: none;
+        font-family: inherit;
+        line-height: 1.5;
+    }
+    .note-textarea:focus {
+        border-color: var(--accent);
+    }
+    .note-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .note-counter {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin-right: auto;
+    }
+    .btn-note-cancel {
+        padding: 6px 12px;
+        background: var(--surface2);
+        color: var(--text-muted);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: color 0.15s;
+    }
+    .btn-note-cancel:hover {
+        color: var(--text);
+    }
+    .btn-note-save {
+        padding: 6px 14px;
+        background: var(--accent);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: filter 0.15s;
+    }
+    .btn-note-save:hover {
+        filter: brightness(1.1);
+    }
+    .btn-note-save:disabled {
+        opacity: 0.5;
+        cursor: default;
+    }
+    /* Toast */
+    .note-toast {
+        position: absolute;
+        top: 14px;
+        right: 14px;
+        font-size: 11px;
+        font-weight: 600;
+        color: #34d399;
+        animation: toast-fade 1.5s ease-out forwards;
+    }
+    @keyframes toast-fade {
+        0% {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        70% {
+            opacity: 1;
+        }
+        100% {
+            opacity: 0;
+            transform: translateY(-6px);
         }
     }
 </style>

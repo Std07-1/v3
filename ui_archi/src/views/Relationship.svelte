@@ -209,6 +209,9 @@
         letter-spacing: 0.07em;
         color: var(--text-muted);
         margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
     }
     .sub-title {
         font-size: 11px;
@@ -219,30 +222,98 @@
         margin: 14px 0 6px;
     }
 
-    /* ── field-row: label | value ── */
+    /* ── field-row: stacked card on mobile, grid on desktop ── */
     .field-list {
         display: flex;
         flex-direction: column;
-        gap: 7px;
+        gap: 8px;
     }
     .field-row {
-        display: grid;
-        grid-template-columns: 160px 1fr;
-        gap: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
         font-size: 13px;
         line-height: 1.55;
+        background: var(--bg);
+        border-radius: 8px;
+        padding: 10px 12px;
+        border-left: 3px solid var(--accent-dim, #334155);
     }
     .field-label {
         color: var(--text-muted);
-        font-size: 11px;
-        font-weight: 500;
-        padding-top: 2px;
-        white-space: nowrap;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
     }
     .field-val {
         color: var(--text);
         white-space: pre-wrap;
         word-break: break-word;
+        font-size: 13px;
+    }
+
+    @media (min-width: 769px) {
+        .field-row {
+            flex-direction: row;
+            gap: 12px;
+            align-items: baseline;
+            background: transparent;
+            padding: 4px 0;
+            border-radius: 0;
+            border-left: none;
+        }
+        .field-label {
+            width: 140px;
+            flex-shrink: 0;
+            font-size: 11px;
+        }
+    }
+
+    @media (max-width: 768px) {
+        .memo-body {
+            padding: 12px;
+            gap: 16px;
+        }
+        .section {
+            border-radius: 12px;
+            padding: 14px;
+        }
+        .field-list {
+            gap: 10px;
+        }
+        .field-row {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 12px 14px;
+            border-left: 3px solid var(--accent);
+            gap: 4px;
+        }
+        .field-label {
+            color: var(--accent);
+            font-size: 10px;
+            font-weight: 600;
+        }
+        .field-val {
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .moment-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 12px 14px;
+            border-left: 3px solid var(--gold, #fbbf24);
+            font-style: normal;
+        }
+        .agree-list li {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px 12px;
+            border-left: 3px solid var(--accent-dim, #334155);
+        }
     }
 
     /* ── agreements list ── */
