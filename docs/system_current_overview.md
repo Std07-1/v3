@@ -20,6 +20,7 @@
 9. [UI Render Pipeline](#ui-render-pipeline--повний-потік-даних-ui_v4-ws-only)
 10. [Annotated tree](#annotated-tree-ascii-актуальний)
 11. [Stop-rules та режими](#stop-rules-та-режими)
+12. [Agent Console — ui_archi](#agent-console--ui_archi-adr-025-trader-v3)
 
 ---
 
@@ -914,6 +915,32 @@ non_critical:  5s → 10s → 20s → 40s → 80s → 120s → 120s → 120s →
 6. `switch` action → canonical symbol/TF → новий `full` frame.
 7. `scrollback` action → `to_ms` → UDS `read_window` → `scrollback` frame.
 8. `heartbeat` кожні 30с.
+
+## Agent Console — ui_archi (ADR-025, trader-v3)
+
+Окрема SPA для моніторингу AI-агента Арчі (trader-v3). Розгорнута на `archi.aione-smc.com` (Cloudflare Access).
+
+**Стек**: Svelte 5 (runes) + Vite + TypeScript. Окрема директорія `ui_archi/`, збирається в `ui_archi/dist/`.
+
+**Транспорт**: HTTP API (`/api/archi/*`, `/api/agent/*`) + SSE (`/api/notif-stream`, `/api/archi/stream`). Bearer token auth. Ендпоінти живуть у `ws_server.py` (port 8000, same-origin з ui_v4).
+
+**Views**:
+
+| View | Що показує |
+|------|-----------|
+| Feed | Стрічка подій агента (аналіз, сигнали, алерти, торги, системні). Фільтри по типу + текстовий пошук |
+| Chat | Двосторонній чат з Арчі (web → Redis IPC → bot). Контекстні quick-actions що адаптуються до стану ринку |
+| Mind | Робоча пам'ять агента: inner_thought, scratchpad, watch_levels, mental_model, metacognition |
+| Relationship | Стан відносин owner↔agent, memo, mood |
+| Logs | Лог-переглядач бота |
+
+**Сповіщення**: Browser Push Notifications через SSE `/api/notif-stream` (тільки `importance ≥ 3`, коли `document.hidden`).
+
+**Bot integration** (trader-v3): `web_inbox.py` — Redis IPC consumer для web-повідомлень. `handlers.py:_sync_to_redis_chat()` — sync TG→Redis для ui_archi.
+
+> Деталі: `trader-v3/docs/adr/ADR-025-archi-console.md`, `ui_archi/README_DEV.md`
+
+---
 
 ## Примітки
 

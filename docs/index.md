@@ -111,7 +111,16 @@
 | `ui_v4/src/chart/overlay/DisplayBudget.ts` | Display budget filter (ADR-0028) |
 | **[trader_coverage.md](trader_coverage.md)** | **Трейдерські концепти → ADR → Модуль** — карта захисту (що читати перед зміною будь-якого SMC-компонента) |
 
-### 6. Runbooks (експлуатація)
+### 6. Agent Console — ui_archi (trader-v3)
+
+| Документ | Зміст |
+|---|---|
+| [system_current_overview.md § Agent Console](system_current_overview.md#agent-console--ui_archi-adr-025-trader-v3) | Архітектура, views, транспорт |
+| [ui_api.md § Agent Console API](ui_api.md#11-agent-console-api-ui_archi-adr-025) | HTTP + SSE endpoints, Bearer auth |
+| `trader-v3/docs/adr/ADR-025-archi-console.md` | ADR: problem, architecture, views, API contracts, implementation plan |
+| `ui_archi/` | SPA: Svelte 5 + Vite + TypeScript (Feed, Chat, Mind, Relationship, Logs) |
+
+### 7. Runbooks (експлуатація)
 
 | Документ | Зміст |
 |---|---|
@@ -120,7 +129,7 @@
 | [runbooks/production.md](runbooks/production.md) | Prod: systemd units, порядок старту, health-check, типові інциденти |
 | [runbooks/commands.md](runbooks/commands.md) | Cheat-sheet команд: локальний запуск, VPS, деплой |
 
-### 7. Аудит / Прогрес (P0–P6)
+### 8. Аудит / Прогрес (P0–P6)
 
 | Документ | Зміст |
 |---|---|
@@ -129,7 +138,7 @@
 | [audit/htf_availability_regressions.md](audit/htf_availability_regressions.md) | Матриця регресій: H4/D1 availability |
 | [audit/ui_live_candle_regressions.md](audit/ui_live_candle_regressions.md) | Матриця регресій: UI live candle |
 
-### 8. Дослідження (research/)
+### 9. Дослідження (research/)
 
 | Документ | Зміст |
 |---|---|

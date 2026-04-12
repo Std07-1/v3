@@ -6,8 +6,9 @@
 > **SSOT клієнт**: `ui_v4/src/ws/`, `ui_v4/src/app/frameRouter.ts`  
 > **Принцип**: UI = read-only renderer (I1, G1). Тіки напряму не бачить. Не має доменної логіки.
 
-Архітектура — **WS-only**: всі дані (bars, SMC overlay, config, scrollback) передаються через
-WebSocket `/ws` з протоколом `ui_v4_v2`. Єдиний HTTP endpoint — `/api/status` (health check).
+Архітектура — **WS-only для ui_v4 chart**: bars, SMC overlay, config, scrollback — через
+WebSocket `/ws` з протоколом `ui_v4_v2`. HTTP endpoints: `/api/status` (health check) +
+Agent Console API `/api/archi/*` (§11, ADR-025).
 
 Процес: `runtime/ws/ws_server.py` (aiohttp, порт 8000, same-origin).  
 UDS ініціалізується з `role="reader"` — будь-яка спроба запису → `RuntimeError`.
@@ -26,6 +27,7 @@ UDS ініціалізується з `role="reader"` — будь-яка спр
 8. [Guards та rails](#8-guards-та-rails)
 9. [Конфігурація](#9-конфігурація)
 10. [Reconnect та відмовостійкість](#10-reconnect-та-відмовостійкість)
+11. [Agent Console API (ui_archi)](#11-agent-console-api-ui_archi-adr-025)
 
 ---
 
@@ -553,3 +555,45 @@ Default fallback: 300 барів (`DEFAULT_COLD_START_BARS`).
 2. Fires `_onBootIdChange` callback
 3. Clears view caches
 4. Чекає на новий full frame (автоматично приходить від сервера)
+
+---
+
+## 11. Agent Console API (ui_archi, ADR-025)
+
+Ендпоінти для Archi Console (ui_archi). Всі потребують Bearer token auth:
+```
+Authorization: Bearer <token з config.json:archi_console.auth_token>
+```
+
+### HTTP Endpoints
+
+| Endpoint | Метод | Призначення |
+|---|---|---|
+| `/api/archi/chat` | POST | Відправка повідомлення Арчі (→ Claude + directives context) |
+| `/api/archi/thinking` | GET | Історія thinking entries (пагінація, фільтри) |
+| `/api/archi/feed` | GET | Стрічка подій агента |
+| `/api/agent/directives` | GET | Директиви агента (`?brief=0` для повного дампу) |
+| `/api/agent/consciousness` | GET | Стан свідомості (mood, inner_thought, metacognition) |
+| `/api/agent/relationship` | GET | Relationship memo + стан відносин |
+| `/api/agent/stats` | GET | Статистика (cost, model usage, session count) |
+| `/api/logs` | GET | Лог-файли бота |
+
+### SSE Streams
+
+| Endpoint | Призначення |
+|---|---|
+| `/api/archi/stream` | Real-time events stream (thinking, feed updates) |
+| `/api/notif-stream` | Browser notifications (events з `importance ≥ 3`) |
+
+### POST /api/archi/chat
+
+```json
+// Request
+{ "message": "Що бачиш на XAU/USD?" }
+
+// Response
+{ "reply": "...", "inner_thought": "...", "mood": "focused" }
+```
+
+> SSOT код: `runtime/ws/ws_server.py` (agent endpoints), `ui_archi/src/lib/api.ts` (client).
+> Деталі: `trader-v3/docs/adr/ADR-025-archi-console.md`.
