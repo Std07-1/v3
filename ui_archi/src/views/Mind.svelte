@@ -572,8 +572,6 @@
     }
 
     /* Watch card */
-    .watch-card {
-    }
     .watch-header {
         display: flex;
         align-items: center;
@@ -608,8 +606,6 @@
     }
 
     /* Scenario card */
-    .scenario-card {
-    }
     .scenario-row {
         display: flex;
         gap: 8px;
