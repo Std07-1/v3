@@ -2360,6 +2360,80 @@ def build_app(
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
 
+    # ── /api/archi/proposals/review — ADR-028 P3 J5 approval ──
+    async def _api_archi_proposals_review(request: web.Request) -> web.Response:
+        """POST /api/archi/proposals/review — approve or reject a pending proposal.
+
+        Body: {"id": "p<ts>", "approved": true|false}
+        Reads v3_agent_directives.json, applies the decision, saves.
+        """
+        if not _archi_auth(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        if not _console_data_dir:
+            return web.json_response({"error": "data_dir_not_configured"}, status=503)
+        import os as _os
+
+        directives_path = _os.path.join(_console_data_dir, "v3_agent_directives.json")
+        try:
+            body = await request.json()
+            proposal_id = str(body.get("id", "")).strip()
+            approved = bool(body.get("approved", False))
+            if not proposal_id:
+                return web.json_response({"error": "missing_id"}, status=400)
+            if not _os.path.exists(directives_path):
+                return web.json_response({"error": "no_directives"}, status=404)
+
+            # Load → patch → save (atomic replace)
+            with open(directives_path, "r", encoding="utf-8") as _fh:
+                raw = json.loads(_fh.read())
+
+            proposals = raw.get("improvement_proposals", [])
+            found = False
+            for p in proposals:
+                if p.get("id") == proposal_id and p.get("status") == "pending":
+                    p["status"] = "approved" if approved else "rejected"
+                    p["resolved_at"] = time.time()
+                    if approved and p.get("type") == "add_rule":
+                        rule = str(p.get("proposed_rule", "")).strip()
+                        current_rules: list = raw.get("operational_rules", [])
+                        if rule and rule not in current_rules:
+                            current_rules.append(rule)
+                            raw["operational_rules"] = current_rules[-20:]
+                    found = True
+                    break
+
+            if not found:
+                return web.json_response(
+                    {"error": "proposal_not_found_or_already_resolved"}, status=404
+                )
+
+            raw["improvement_proposals"] = proposals
+            import tempfile
+
+            _tmp_fd, _tmp_path = tempfile.mkstemp(
+                dir=_os.path.dirname(directives_path), suffix=".tmp"
+            )
+            try:
+                with _os.fdopen(_tmp_fd, "w", encoding="utf-8") as _wf:
+                    json.dump(raw, _wf, ensure_ascii=False)
+                _os.replace(_tmp_path, directives_path)
+            except BaseException:
+                try:
+                    _os.unlink(_tmp_path)
+                except OSError:
+                    pass
+                raise
+
+            _log.info(
+                "PROPOSALS_REVIEW: %s id=%s",
+                "APPROVED" if approved else "REJECTED",
+                proposal_id,
+            )
+            return web.json_response({"ok": True, "id": proposal_id, "approved": approved})
+        except Exception as _e:
+            _log.warning("API_ARCHI_PROPOSALS_REVIEW_FAIL: %s", _e)
+            return web.json_response({"error": "failed"}, status=500)
+
     if _console_enabled:
         app.router.add_get("/api/archi/thinking", _api_archi_thinking)
         app.router.add_get("/api/archi/directives", _api_archi_directives)
@@ -2371,6 +2445,7 @@ def build_app(
         app.router.add_get("/api/archi/logs", _api_archi_logs)
         app.router.add_get("/api/archi/owner-note", _api_archi_owner_note_get)
         app.router.add_post("/api/archi/owner-note", _api_archi_owner_note_post)
+        app.router.add_post("/api/archi/proposals/review", _api_archi_proposals_review)
 
     # ── /api/context — SMC context for external consumers (bot, TUI) ───
     async def _api_context(request: web.Request) -> web.Response:
