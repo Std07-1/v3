@@ -1948,6 +1948,413 @@ def build_app(
     app.router.add_get("/api/agent/state", _api_agent_state)
     app.router.add_get("/api/agent/feed", _api_agent_feed)
 
+    # ── /api/archi/* — Archi Console (ADR-025) ─────────────────────────
+    # Private API: Bearer token auth + file reads from bot data dir.
+    _console_cfg = load_system_config(resolve_config_path()).get("agent_console", {})
+    _console_enabled: bool = bool(_console_cfg.get("enabled", False))
+    _console_token: str = str(_console_cfg.get("auth_token", ""))
+    _console_data_dir: str = str(_console_cfg.get("data_dir", ""))
+    _console_thinking_max: int = int(_console_cfg.get("thinking_max_items", 100))
+    _console_feed_max: int = int(_console_cfg.get("feed_max_items", 200))
+    if _console_enabled:
+        _log.info("ARCHI_CONSOLE: enabled data_dir=%s", _console_data_dir)
+
+    def _archi_auth(request: web.Request) -> bool:
+        """Return True if request carries valid Bearer token."""
+        if not _console_enabled:
+            return False
+        if not _console_token:
+            return True  # token not configured → open (dev mode)
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            return auth_header[7:].strip() == _console_token
+        # also accept ?token= query param for browser direct access
+        return request.query.get("token", "") == _console_token
+
+    async def _api_archi_thinking(request: web.Request) -> web.Response:
+        """GET /api/archi/thinking?limit=50&offset=0 — Thinking Archive."""
+        if not _archi_auth(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        if not _console_data_dir:
+            return web.json_response({"error": "data_dir_not_configured"}, status=503)
+        import os as _os
+
+        fpath = _os.path.join(_console_data_dir, "v3_thinking_archive.jsonl")
+        try:
+            limit = min(int(request.query.get("limit", "50")), _console_thinking_max)
+            offset = max(0, int(request.query.get("offset", "0")))
+            entries: list = []
+            if _os.path.exists(fpath):
+                with open(fpath, "r", encoding="utf-8") as _fh:
+                    for _line in _fh:
+                        _line = _line.strip()
+                        if not _line:
+                            continue
+                        try:
+                            entries.append(json.loads(_line))
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+            # newest first
+            entries.reverse()
+            total = len(entries)
+            page = entries[offset : offset + limit]
+            return web.json_response(
+                {"entries": page, "total": total, "offset": offset, "limit": limit}
+            )
+        except Exception as _e:
+            _log.warning("API_ARCHI_THINKING_FAIL: %s", _e)
+            return web.json_response({"error": "read_failed"}, status=503)
+
+    async def _api_archi_directives(request: web.Request) -> web.Response:
+        """GET /api/archi/directives — agent directives snapshot."""
+        if not _archi_auth(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        if not _console_data_dir:
+            return web.json_response({"error": "data_dir_not_configured"}, status=503)
+        import os as _os
+
+        fpath = _os.path.join(_console_data_dir, "v3_agent_directives.json")
+        try:
+            if not _os.path.exists(fpath):
+                return web.json_response({"error": "no_data"}, status=204)
+            with open(fpath, "r", encoding="utf-8") as _fh:
+                data = json.loads(_fh.read())
+            # Return only safe/display fields — strip inner_thought if requested
+            brief = request.query.get("brief", "0") == "1"
+            if brief:
+                safe_keys = [
+                    "mode",
+                    "focus_symbol",
+                    "active_scenario",
+                    "mood",
+                    "inner_thought",
+                    "bias_map",
+                    "market_mental_model",
+                    "token_usage_today",
+                    "kill_switch_active",
+                    "economy_mode_active",
+                ]
+                data = {k: data[k] for k in safe_keys if k in data}
+            return web.json_response(data)
+        except Exception as _e:
+            _log.warning("API_ARCHI_DIRECTIVES_FAIL: %s", _e)
+            return web.json_response({"error": "read_failed"}, status=503)
+
+    async def _api_archi_feed(request: web.Request) -> web.Response:
+        """GET /api/archi/feed?limit=50 — event feed with auth."""
+        if not _archi_auth(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        if _agent_redis_client is None:
+            return web.json_response({"error": "redis_not_available"}, status=503)
+        try:
+            limit = min(int(request.query.get("limit", "50")), _console_feed_max)
+            raw_items = _agent_redis_client.lrange(
+                f"{_agent_ns}:agent:feed", 0, limit - 1
+            )
+            events = []
+            for item in list(raw_items):  # type: ignore[arg-type]
+                try:
+                    events.append(json.loads(item))
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            return web.json_response({"events": events, "total": len(events)})
+        except Exception as _e:
+            _log.warning("API_ARCHI_FEED_FAIL: %s", _e)
+            return web.json_response({"error": "redis_read_failed"}, status=503)
+
+    async def _api_archi_stream(request: web.Request) -> web.StreamResponse:
+        """GET /api/archi/stream — SSE stream: feed events + directives changes."""
+        if not _archi_auth(request):
+            return web.Response(status=401)  # type: ignore[return-value]
+        import os as _os
+        import asyncio as _asyncio
+
+        resp = web.StreamResponse(
+            headers={
+                "Content-Type": "text/event-stream; charset=utf-8",
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Access-Control-Allow-Origin": "*",
+            }
+        )
+        await resp.prepare(request)
+
+        loop = _asyncio.get_event_loop()
+        ns = _agent_ns
+        redis_cl = _agent_redis_client
+        last_len: int = 0
+        last_dir_mtime: float = 0.0
+
+        # send initial keep-alive
+        await resp.write(b": connected\n\n")
+
+        try:
+            while True:
+                # ── Check feed (Redis LIST) ──────────────────────────────
+                if redis_cl is not None:
+                    try:
+                        curr_len: int = await loop.run_in_executor(
+                            None, lambda: redis_cl.llen(f"{ns}:agent:feed")  # type: ignore[union-attr]
+                        )
+                        if curr_len > last_len:
+                            n_new = curr_len - last_len
+                            # Get only the new items (index 0 = newest in LPUSH list)
+                            _n = n_new
+                            new_raw = await loop.run_in_executor(
+                                None, lambda: redis_cl.lrange(f"{ns}:agent:feed", 0, _n - 1)  # type: ignore[union-attr]
+                            )
+                            for raw_item in reversed(list(new_raw)):  # oldest first
+                                try:
+                                    ev = json.loads(raw_item)
+                                    payload = json.dumps({"type": "feed", "data": ev})
+                                    await resp.write(f"data: {payload}\n\n".encode())
+                                except (json.JSONDecodeError, TypeError):
+                                    pass
+                            last_len = curr_len
+                    except Exception as _e:
+                        _log.debug("ARCHI_STREAM_REDIS_ERR: %s", _e)
+
+                # ── Check directives file mtime ──────────────────────────
+                if _console_data_dir:
+                    dir_path = _os.path.join(
+                        _console_data_dir, "v3_agent_directives.json"
+                    )
+                    try:
+                        mtime = (
+                            _os.path.getmtime(dir_path)
+                            if _os.path.exists(dir_path)
+                            else 0.0
+                        )
+                        if mtime > last_dir_mtime:
+                            last_dir_mtime = mtime
+                            with open(dir_path, "r", encoding="utf-8") as _fh:
+                                raw_dir = json.loads(_fh.read())
+                            safe_keys = [
+                                "mode",
+                                "focus_symbol",
+                                "active_scenario",
+                                "mood",
+                                "inner_thought",
+                                "token_usage_today",
+                                "kill_switch_active",
+                                "economy_mode_active",
+                            ]
+                            brief_dir = {
+                                k: raw_dir[k] for k in safe_keys if k in raw_dir
+                            }
+                            await resp.write(
+                                f"data: {json.dumps({'type': 'directives', 'data': brief_dir})}\n\n".encode()
+                            )
+                    except Exception as _e:
+                        _log.debug("ARCHI_STREAM_DIR_ERR: %s", _e)
+
+                # ── Keep-alive comment every 2s ──────────────────────────
+                await resp.write(b": ping\n\n")
+                await _asyncio.sleep(2)
+
+        except (ConnectionResetError, _asyncio.CancelledError, Exception):
+            pass
+
+        return resp
+
+    async def _api_archi_relationship(request: web.Request) -> web.Response:
+        """GET /api/archi/relationship — relationship memo snapshot."""
+        if not _archi_auth(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        if not _console_data_dir:
+            return web.json_response({"error": "data_dir_not_configured"}, status=503)
+        import os as _os
+
+        fpath = _os.path.join(_console_data_dir, "v3_relationship_memo.json")
+        try:
+            if not _os.path.exists(fpath):
+                return web.json_response({"error": "no_data"}, status=204)
+            with open(fpath, "r", encoding="utf-8") as _fh:
+                data = json.loads(_fh.read())
+            return web.json_response(data)
+        except Exception as _e:
+            _log.warning("API_ARCHI_RELATIONSHIP_FAIL: %s", _e)
+            return web.json_response({"error": "read_failed"}, status=503)
+
+    # ── /api/archi/chat — persistent chat log (user messages + Archi replies) ──
+    _ARCHI_CHAT_KEY = f"{_agent_ns}:archi:chat"
+    _ARCHI_CHAT_MAX = 500
+    _ARCHI_CHAT_MODEL = "claude-haiku-4-5"
+
+    def _build_archi_system_prompt() -> str:
+        """Будує system prompt для Арчі з поточним контекстом."""
+        parts: list[str] = []
+        parts.append(
+            "Ти — Арчі, персональний SMC-трейдер і AI-асистент. "
+            "Ти відповідаєш українською (або мовою питання). "
+            "Ти маєш доступ до реального стану ринку і власних думок."
+        )
+        # Inject directives context if available
+        try:
+            dir_raw = _agent_redis_client.get(f"{_agent_ns}:archi:directives")
+            if dir_raw:
+                d = json.loads(dir_raw)
+                focus = d.get("focus_symbol", "XAU/USD")
+                mode = d.get("mode", "")
+                mood = d.get("mood", "")
+                scenario = d.get("active_scenario", "")
+                bias_map = d.get("bias_map", {})
+                parts.append(f"\n--- ПОТОЧНИЙ СТАН ---")
+                parts.append(f"Символ у фокусі: {focus}")
+                if mode:
+                    parts.append(f"Режим: {mode}")
+                if mood:
+                    parts.append(f"Настрій: {mood}")
+                if scenario:
+                    parts.append(f"Активний сценарій: {scenario}")
+                if bias_map:
+                    bias_str = ", ".join(f"{tf}: {v}" for tf, v in bias_map.items())
+                    parts.append(f"Bias-map: {bias_str}")
+                inner = d.get("inner_thought", "")
+                if inner:
+                    parts.append(f"Думка: {inner}")
+        except Exception:
+            pass
+        # Inject agent state if available
+        try:
+            state_raw = _agent_redis_client.hgetall(f"{_agent_ns}:agent:state")
+            if state_raw:
+                session = state_raw.get(
+                    b"market_session", state_raw.get("market_session", "")
+                )
+                budget = state_raw.get(
+                    b"budget_today_usd", state_raw.get("budget_today_usd", "")
+                )
+                if session:
+                    parts.append(f"Торгова сесія: {session}")
+                if budget:
+                    parts.append(f"Бюджет сьогодні (витрачено): ${budget}")
+        except Exception:
+            pass
+        return "\n".join(parts)
+
+    async def _archi_claude_reply(user_text: str, history: list) -> str:
+        """Викликає Claude API з контекстом і повертає відповідь Арчі."""
+        import os as _os
+
+        api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return "Немає API ключа — я поки що недоступний."
+        try:
+            import anthropic as _anthropic
+
+            client = _anthropic.AsyncAnthropic(api_key=api_key)
+            system = _build_archi_system_prompt()
+            # Build messages array from recent history (last 10 exchanges)
+            msgs: list[dict] = []
+            for h in history[-20:]:
+                role = h.get("role", "user")
+                # Map archi → assistant for Claude API
+                if role == "archi":
+                    role = "assistant"
+                elif role != "user":
+                    role = "user"
+                msgs.append({"role": role, "content": h.get("text", "")})
+            # Add current user message
+            msgs.append({"role": "user", "content": user_text})
+            response = await client.messages.create(
+                model=_ARCHI_CHAT_MODEL,
+                max_tokens=1024,
+                system=system,
+                messages=msgs,
+            )
+            return response.content[0].text if response.content else "…"
+        except Exception as _e:
+            _log.warning("ARCHI_CLAUDE_FAIL: %s", _e)
+            return f"Помилка відповіді: {_e}"
+
+    async def _api_archi_chat_post(request: web.Request) -> web.Response:
+        """POST /api/archi/chat — зберігає повідомлення і отримує відповідь Арчі."""
+        if not _archi_auth(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        if _agent_redis_client is None:
+            return web.json_response({"error": "redis_not_available"}, status=503)
+        try:
+            import time as _time
+
+            body = await request.json()
+            msg_text = str(body.get("message", "")).strip()
+            if not msg_text:
+                return web.json_response({"error": "empty_message"}, status=400)
+            now_ms = int(_time.time() * 1000)
+            user_msg = {
+                "id": f"u_{now_ms}",
+                "role": "user",
+                "text": msg_text,
+                "ts_ms": now_ms,
+            }
+            _agent_redis_client.lpush(
+                _ARCHI_CHAT_KEY, json.dumps(user_msg, ensure_ascii=False)
+            )
+            _agent_redis_client.ltrim(_ARCHI_CHAT_KEY, 0, _ARCHI_CHAT_MAX - 1)
+
+            # Get recent history for context (newest first from Redis, then reversed)
+            raw_history = _agent_redis_client.lrange(_ARCHI_CHAT_KEY, 0, 39)
+            history: list[dict] = []
+            for item in reversed(list(raw_history)):
+                try:
+                    history.append(json.loads(item))
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            # history now is oldest→newest, excluding the just-saved user msg
+            context_history = [h for h in history if h.get("id") != user_msg["id"]]
+
+            # Get Archi's reply from Claude
+            reply_text = await _archi_claude_reply(msg_text, context_history)
+
+            archi_msg = {
+                "id": f"a_{int(_time.time() * 1000)}",
+                "role": "archi",
+                "text": reply_text,
+                "ts_ms": int(_time.time() * 1000),
+            }
+            _agent_redis_client.lpush(
+                _ARCHI_CHAT_KEY, json.dumps(archi_msg, ensure_ascii=False)
+            )
+            _agent_redis_client.ltrim(_ARCHI_CHAT_KEY, 0, _ARCHI_CHAT_MAX - 1)
+
+            return web.json_response(
+                {"ok": True, "message": user_msg, "archi_response": archi_msg}
+            )
+        except Exception as _e:
+            _log.warning("API_ARCHI_CHAT_POST_FAIL: %s", _e)
+            return web.json_response({"error": "write_failed"}, status=503)
+
+    async def _api_archi_chat_get(request: web.Request) -> web.Response:
+        """GET /api/archi/chat?limit=50 — chat history (oldest first)."""
+        if not _archi_auth(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        if _agent_redis_client is None:
+            return web.json_response({"error": "redis_not_available"}, status=503)
+        try:
+            limit = min(int(request.query.get("limit", "50")), 200)
+            raw_items = _agent_redis_client.lrange(_ARCHI_CHAT_KEY, 0, limit - 1)
+            messages: list = []
+            for item in list(raw_items):
+                try:
+                    messages.append(json.loads(item))
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            messages.reverse()  # chronological order (oldest first)
+            return web.json_response({"messages": messages, "total": len(messages)})
+        except Exception as _e:
+            _log.warning("API_ARCHI_CHAT_GET_FAIL: %s", _e)
+            return web.json_response({"error": "redis_read_failed"}, status=503)
+
+    if _console_enabled:
+        app.router.add_get("/api/archi/thinking", _api_archi_thinking)
+        app.router.add_get("/api/archi/directives", _api_archi_directives)
+        app.router.add_get("/api/archi/feed", _api_archi_feed)
+        app.router.add_get("/api/archi/stream", _api_archi_stream)
+        app.router.add_get("/api/archi/relationship", _api_archi_relationship)
+        app.router.add_post("/api/archi/chat", _api_archi_chat_post)
+        app.router.add_get("/api/archi/chat", _api_archi_chat_get)
+
     # ── /api/context — SMC context for external consumers (bot, TUI) ───
     async def _api_context(request: web.Request) -> web.Response:
         """Повертає поточний SMC контекст для symbol+tf.

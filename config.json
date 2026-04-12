@@ -288,6 +288,13 @@
         "bg_smc_poll_interval_s": 10.0,
         "cors_allowed_origins": []
     },
+    "agent_console": {
+        "enabled": true,
+        "data_dir": "/opt/smc-trader-v3/data",
+        "auth_token": "8aa8ce74b0c976ba6f4902b25511eb44f946d89eef131cc3",
+        "thinking_max_items": 100,
+        "feed_max_items": 200
+    },
     "smc": {
         "enabled": true,
         "lookback_bars": 500,

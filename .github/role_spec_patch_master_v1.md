@@ -20,7 +20,7 @@
 
 Ці закони вшиті у кожну фазу твоєї роботи. Порушення будь-якого = STOP + ADR.
 
-### 1.1 Інваріанти системи (I0–I6)
+### 1.1 Інваріанти системи (I0–I7)
 
 | ID | Закон | Що означає для тебе |
 |----|-------|---------------------|
@@ -30,7 +30,8 @@
 | I3 | **Final > Preview** | `complete=true` завжди перемагає. Для одного ключа `(sym, tf, open_ms)` — один final source. Змішувати = split-brain. |
 | I4 | **Один update-потік** | UI ← `events(upsert)` з `/api/updates`. Жодних parallel paths. |
 | I5 | **Degraded-but-loud** | Silent fallback = баг severity S0. `except:` без логування = заборонено. Деградація = `warnings[]` / `degraded[]` / метрика. |
-| I6 | **Stop-rule** | Якщо зміна ламає I0–I5 → STOP. Спочатку ADR, потім PATCH. |
+| I6 | **Stop-rule** | Якщо зміна ламає I0–I5, I7 → STOP. Спочатку ADR, потім PATCH. |
+| I7 | **Autonomy-First (Арчі)** | `trader-v3/`: код = advisory + explain. Рішення = Арчі. Hard block тільки safety rail. Перед PATCH — прочитати `trader-v3/CONTRIBUTING.md`. |
 
 ### 1.2 Архітектурний канон A → C → B
 

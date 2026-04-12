@@ -206,6 +206,43 @@ v3/
 └── data_v3/               # SSOT JSONL data storage
 ```
 
+### 2.1 trader-v3/ — AI Trading Agent "Арчі" (окрема підсистема)
+
+```
+trader-v3/                     # .gitignore'd — proprietary, deploy = SCP
+├── bot/                       # Bot application code
+│   ├── agent/prompts.py       # System prompts (personality, recommendations)
+│   ├── scheduling/monitor.py  # Proactive monitor loop
+│   ├── state/directives.py    # Agent directives (wake_at, VP, rules)
+│   ├── transport/handlers.py  # Telegram message handlers
+│   └── config.py              # Config dataclasses
+├── docs/
+│   ├── ARCHITECTURE.md        # Bot architecture + I7 governance (§3a)
+│   └── adr/                   # Bot ADRs (001–024)
+│       └── ADR-024-autonomy-charter.md  # I7 SSOT
+├── smc_trader_prompt_v3.md    # Арчі's personality prompt (~750 lines)
+└── tests/test_directives.py   # 153 tests
+```
+
+**Інваріант I7 — Autonomy-First (ADR-024)**:
+
+Арчі — автономний AI-агент з власною особистістю і правом прийняття рішень.
+Код trader-v3/ = **advisory + explain**, рішення приймає Арчі.
+
+| Що | Правило |
+|---|---|
+| Cooldowns (VP, channel) | Warning → agent decides. НЕ hard block |
+| Economy mode (budget) | Advisory log → agent picks model. НЕ force-downgrade |
+| System timers | Agent can delete any timer. НЕ re-injection |
+| Suppress/notify | Default = deliver. Agent opt-out. НЕ suppress-by-default |
+| Prompt language | Recommendations, not commands. "З досвіду" not "НІКОЛИ" |
+| Hard blocks allowed | ТІЛЬКИ: kill switch, daily $ hard cap, owner-only, anti-hallucination |
+
+**Для всіх агентів (R_PATCH_MASTER, R_BUG_HUNTER, etc.)** при роботі з `trader-v3/`:
+1. Перед додаванням будь-якого обмеження → перевірити I7
+2. `if blocked:` або `return` без пояснення Арчі = I7 violation
+3. Перечитати `trader-v3/docs/adr/ADR-024-autonomy-charter.md` перед PATCH
+
 ---
 
 ## 3. Build and Run Commands

@@ -1,0 +1,105 @@
+/* ── Archi Console — Dark Minimal Theme ── */
+:root {
+    --bg: #0f0f11;
+    --surface: #1a1a1f;
+    --surface2: #222228;
+    --border: #2a2a35;
+    --text: #e4e4f0;
+    --text-muted: #6b6b80;
+    --accent: #7c6fff;
+    --accent-dim: #3d3580;
+    --positive: #4ade80;
+    --warning: #fbbf24;
+    --danger: #f87171;
+    --gold: #f0b429;
+    --radius: 8px;
+    --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    --font-ui: system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html,
+body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+#app {
+    height: 100%;
+}
+
+a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+/* ── Markdown prose ── */
+.prose {
+    line-height: 1.65;
+}
+
+.prose p {
+    margin-bottom: 0.6em;
+}
+
+.prose code {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    background: var(--surface2);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--accent);
+}
+
+.prose pre {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 0.82em;
+    margin: 0.5em 0;
+}
+
+.prose blockquote {
+    border-left: 3px solid var(--accent-dim);
+    padding-left: 12px;
+    color: var(--text-muted);
+    margin: 0.5em 0;
+}

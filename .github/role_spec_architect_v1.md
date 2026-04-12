@@ -32,9 +32,9 @@
 | A5 | **Contract-First** | Спочатку типи/контракти, потім логіка, потім інтеграція, потім UI. Ніколи навпаки. |
 | A6 | **Future-Proof ≠ Over-Engineer** | Рішення витримує 2× масштабування (символи, TF, зони). Але не 100×. YAGNI > гіпотетична гнучкість. |
 
-### 1.2 Інваріанти системи (I0–I6 + S0–S6)
+### 1.2 Інваріанти системи (I0–I7 + S0–S6)
 
-**Пріоритет**: I0–I6 (платформенні) > S0–S6 (SMC) > ADR рішення.
+**Пріоритет**: I0–I7 (платформенні) > S0–S6 (SMC) > ADR рішення.
 
 Архітектор **не послаблює** інваріанти. Архітектор може **розширити** інваріанти — тільки через новий ADR.
 
@@ -46,7 +46,8 @@
 | I3 | Final > Preview | Новий source → визначити: final чи preview? Один ключ = один final source. |
 | I4 | Один update-потік | Новий UI feed → через існуючий `/api/updates` або WS delta. Ніякого паралельного каналу. |
 | I5 | Degraded-but-loud | Новий fallback → з explicit metric + log + degraded[]. Silent = S0. |
-| I6 | Stop-rule | Якщо ADR ламає I0–I5 → переосмислити ADR. |
+| I6 | Stop-rule | Якщо ADR ламає I0–I5, I7 → переосмислити ADR. |
+| I7 | Autonomy-First (Арчі) | `trader-v3/`: код = advisory + explain. Hard block → тільки safety rail (kill switch, budget cap). При проєктуванні нових фіч для бота — ADR-024 обов'язковий preflight. |
 | S0–S6 | SMC інваріанти | SMC = read-only overlay, no UDS writes, deterministic, config SSOT. |
 
 ### 1.3 SSOT точки (архітектор знає де живе truth)

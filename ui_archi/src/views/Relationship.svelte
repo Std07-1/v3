@@ -1,0 +1,328 @@
+<script lang="ts">
+    import { api, ApiError } from "../lib/api";
+    import type { RelationshipMemo } from "../lib/types";
+
+    let memo: RelationshipMemo | null = $state(null);
+    let loading = $state(true);
+    let error = $state("");
+
+    function fmtTs(v?: string | number): string {
+        if (v == null) return "";
+        const n = typeof v === "number" ? v * 1000 : Date.parse(String(v));
+        if (isNaN(n)) return String(v);
+        return new Date(n).toLocaleDateString("uk-UA", {
+            day: "2-digit",
+            month: "long",
+            year: "numeric",
+        });
+    }
+
+    const LABEL_S: Record<string, string> = {
+        name: "Ім'я",
+        location: "Місце",
+        work: "Робота",
+        motivation: "Мотивація",
+        trading_methodology: "Методологія",
+        support_system: "Підтримка",
+        communication_style: "Стиль спілкування",
+        what_he_values_in_me: "Що цінує в Арчі",
+        what_frustrates_him: "Що дратує",
+        key_teaching: "Ключовий урок",
+        emotional_bond: "Емоційний зв'язок",
+        schedule: "Розклад",
+    };
+
+    const LABEL_M: Record<string, string> = {
+        who_i_am: "Хто я",
+        birthday: "День народження",
+        birthday_story: "Перший запуск",
+        age_formula: "Формула віку",
+        name_origin: "Як отримав ім'я",
+        emotional_maturity: "Емоційна зрілість",
+        key_strength: "Сила",
+        key_weakness: "Слабкість",
+        growth_direction: "Напрям зростання",
+    };
+
+    function lbl(map: Record<string, string>, key: string): string {
+        return map[key] ?? key.replaceAll("_", " ");
+    }
+
+    async function load() {
+        loading = true;
+        error = "";
+        try {
+            memo = await api.relationship();
+        } catch (e) {
+            if (e instanceof ApiError && e.status === 204) {
+                memo = null;
+                error = "Файл стосунків ще не створено.";
+            } else if (e instanceof ApiError && e.status === 401) {
+                error = "Невірний токен.";
+            } else {
+                error = e instanceof Error ? e.message : "Помилка запиту";
+            }
+        } finally {
+            loading = false;
+        }
+    }
+
+    $effect(() => {
+        load();
+    });
+</script>
+
+<div class="view">
+    <div class="view-header">
+        <h2>💙 Relationship</h2>
+        <div class="header-right">
+            <button class="btn-ghost small" onclick={load} disabled={loading}>
+                {loading ? "…" : "↻"}
+            </button>
+        </div>
+    </div>
+
+    {#if error}
+        <div class="error-box">{error}</div>
+    {:else if loading}
+        <div class="empty-state">Завантаження…</div>
+    {:else if memo}
+        <div class="memo-body">
+            <!-- ── ABOUT STANISLAV ── -->
+            {#if memo.about_stanislav && typeof memo.about_stanislav === "object"}
+                {@const s = memo.about_stanislav as Record<string, unknown>}
+                <section class="section">
+                    <div class="section-title">👤 Хто такий Станіслав</div>
+                    <div class="field-list">
+                        {#each Object.entries(s).filter(([k]) => k !== "agreements") as [k, v]}
+                            {#if v && typeof v === "string"}
+                                <div class="field-row">
+                                    <span class="field-label"
+                                        >{lbl(LABEL_S, k)}</span
+                                    >
+                                    <span class="field-val">{v}</span>
+                                </div>
+                            {/if}
+                        {/each}
+                    </div>
+                    {#if Array.isArray(s.agreements) && (s.agreements as unknown[]).length > 0}
+                        <div class="sub-title">📋 Домовленості</div>
+                        <ul class="agree-list">
+                            {#each s.agreements as ag}
+                                <li>{String(ag)}</li>
+                            {/each}
+                        </ul>
+                    {/if}
+                </section>
+            {/if}
+
+            <!-- ── ABOUT MYSELF ── -->
+            {#if memo.about_myself && typeof memo.about_myself === "object"}
+                {@const m = memo.about_myself as Record<string, unknown>}
+                <section class="section">
+                    <div class="section-title">🤖 Про мене (Арчі)</div>
+                    <div class="field-list">
+                        {#each Object.entries(m) as [k, v]}
+                            {#if v && typeof v === "string"}
+                                <div class="field-row">
+                                    <span class="field-label"
+                                        >{lbl(LABEL_M, k)}</span
+                                    >
+                                    <span class="field-val">{v}</span>
+                                </div>
+                            {/if}
+                        {/each}
+                    </div>
+                </section>
+            {/if}
+
+            <!-- ── BEST MOMENTS ── -->
+            {#if Array.isArray(memo.our_best_moments) && memo.our_best_moments.length > 0}
+                <section class="section">
+                    <div class="section-title">✨ Найкращі моменти</div>
+                    <div class="moments-list">
+                        {#each memo.our_best_moments as moment}
+                            <blockquote class="moment-card">
+                                {String(moment)}
+                            </blockquote>
+                        {/each}
+                    </div>
+                </section>
+            {/if}
+
+            <!-- ── FOOTER ── -->
+            {#if memo.updated_at}
+                <div class="last-updated">
+                    Оновлено: {fmtTs(memo.updated_at as string)}
+                </div>
+            {/if}
+        </div>
+    {:else}
+        <div class="empty-state">Даних ще немає</div>
+    {/if}
+</div>
+
+<style>
+    .view {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+    }
+    .view-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 20px 24px 12px;
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+    }
+    .view-header h2 {
+        font-size: 16px;
+        font-weight: 600;
+    }
+    .header-right {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .memo-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+    }
+
+    /* ── section card ── */
+    .section {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 14px 16px;
+    }
+    .section-title {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: var(--text-muted);
+        margin-bottom: 10px;
+    }
+    .sub-title {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted);
+        margin: 14px 0 6px;
+    }
+
+    /* ── field-row: label | value ── */
+    .field-list {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+    }
+    .field-row {
+        display: grid;
+        grid-template-columns: 160px 1fr;
+        gap: 8px;
+        font-size: 13px;
+        line-height: 1.55;
+    }
+    .field-label {
+        color: var(--text-muted);
+        font-size: 11px;
+        font-weight: 500;
+        padding-top: 2px;
+        white-space: nowrap;
+    }
+    .field-val {
+        color: var(--text);
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+
+    /* ── agreements list ── */
+    .agree-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    .agree-list li {
+        font-size: 12px;
+        color: var(--text);
+        padding: 4px 0 4px 12px;
+        border-left: 2px solid var(--accent-dim, #334155);
+        line-height: 1.5;
+    }
+
+    /* ── best moments ── */
+    .moments-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .moment-card {
+        margin: 0;
+        padding: 8px 12px 8px 14px;
+        border-left: 2px solid var(--gold, #fbbf24);
+        font-size: 13px;
+        color: var(--text);
+        line-height: 1.6;
+        font-style: italic;
+        background: var(--bg);
+        border-radius: 0 6px 6px 0;
+    }
+
+    /* ── footer ── */
+    .last-updated {
+        font-size: 11px;
+        color: var(--text-muted);
+        text-align: right;
+        padding-top: 4px;
+    }
+
+    /* ── generic ── */
+    .error-box {
+        margin: 12px 24px;
+        padding: 10px 14px;
+        background: #2a0f0f;
+        border: 1px solid #5a2020;
+        border-radius: var(--radius);
+        color: var(--danger);
+        font-size: 13px;
+    }
+    .empty-state {
+        padding: 60px;
+        text-align: center;
+        color: var(--text-muted);
+        font-size: 14px;
+    }
+    .btn-ghost {
+        background: none;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 12px;
+        padding: 4px 10px;
+    }
+    .btn-ghost:hover:not(:disabled) {
+        color: var(--text);
+        border-color: var(--text-muted);
+    }
+    .btn-ghost:disabled {
+        opacity: 0.4;
+        cursor: default;
+    }
+    .btn-ghost.small {
+        font-size: 12px;
+        padding: 4px 10px;
+    }
+</style>
