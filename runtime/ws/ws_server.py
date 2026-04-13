@@ -1952,7 +1952,7 @@ def build_app(
     # Private API: Bearer token auth + file reads from bot data dir.
     _console_cfg = load_system_config(resolve_config_path()).get("agent_console", {})
     _console_enabled: bool = bool(_console_cfg.get("enabled", False))
-    _console_token: str = str(_console_cfg.get("auth_token", ""))
+    _console_token: str = os.environ.get("ARCHI_AUTH_TOKEN", "") or str(_console_cfg.get("auth_token", ""))
     _console_data_dir: str = str(_console_cfg.get("data_dir", ""))
     _console_thinking_max: int = int(_console_cfg.get("thinking_max_items", 100))
     _console_feed_max: int = int(_console_cfg.get("feed_max_items", 200))
