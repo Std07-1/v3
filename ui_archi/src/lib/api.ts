@@ -47,6 +47,23 @@ export class ApiError extends Error {
     }
 }
 
+/** Redis HGETALL returns all values as strings. Transform numeric fields. */
+const AGENT_STATE_NUMERIC_KEYS = [
+    'ts_ms', 'next_wake_ms', 'budget_today_usd', 'budget_limit_usd',
+    'budget_pct', 'calls_today', 'messages_sent_today',
+] as const;
+
+function transformAgentState(raw: Record<string, unknown>): import('./types').AgentState {
+    const result = { ...raw };
+    for (const key of AGENT_STATE_NUMERIC_KEYS) {
+        if (key in result && result[key] != null) {
+            const n = Number(result[key]);
+            if (!Number.isNaN(n)) result[key] = n;
+        }
+    }
+    return result as import('./types').AgentState;
+}
+
 export const api = {
     thinking: (limit = 50, offset = 0) =>
         apiFetch<import('./types').ThinkingResponse>('/api/archi/thinking', { limit, offset }),
@@ -60,8 +77,8 @@ export const api = {
     relationship: () =>
         apiFetch<import('./types').RelationshipMemo>('/api/archi/relationship'),
 
-    agentState: () =>
-        apiFetch<import('./types').AgentState>('/api/agent/state'),
+    agentState: async () =>
+        transformAgentState(await apiFetch<Record<string, unknown>>('/api/agent/state')),
 
     chatHistory: (limit = 50) =>
         apiFetch<import('./types').ChatHistory>('/api/archi/chat', { limit }),

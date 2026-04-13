@@ -1,8 +1,14 @@
 <script lang="ts">
     import "./lib/theme.css";
     import { getToken, setToken, api } from "./lib/api";
-    import type { ChatHandoff, Directives } from "./lib/types";
+    import type { ChatHandoff } from "./lib/types";
     import { onMount } from "svelte";
+    import {
+        getDirectives,
+        refreshDirectives,
+        startPolling,
+        stopPolling,
+    } from "./lib/state.svelte";
     import Feed from "./views/Feed.svelte";
     import Thinking from "./views/Thinking.svelte";
     import Relationship from "./views/Relationship.svelte";
@@ -77,25 +83,16 @@
         setToken(tokenInput);
         token = tokenInput.trim();
         authError = "";
-        fetchDirectives();
+        refreshDirectives();
     }
 
-    // ── directives (shell-level, shared across views) ──
-    let directives = $state<Directives | null>(null);
-
-    async function fetchDirectives() {
-        try {
-            directives = await api.directives(true);
-        } catch {
-            // silent — directives are non-critical
-        }
-    }
+    // ── directives (shell-level, shared across views via state.svelte.ts) ──
+    let directives = $derived(getDirectives());
 
     $effect(() => {
         if (token) {
-            fetchDirectives();
-            const id = setInterval(fetchDirectives, 30_000);
-            return () => clearInterval(id);
+            startPolling();
+            return () => stopPolling();
         }
     });
 

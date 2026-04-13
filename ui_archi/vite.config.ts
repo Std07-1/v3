@@ -17,6 +17,14 @@ export default defineConfig(() => {
                     target: apiTarget,
                     changeOrigin: true,
                 },
+                '/api/agent': {
+                    target: apiTarget,
+                    changeOrigin: true,
+                },
+                '/api/status': {
+                    target: apiTarget,
+                    changeOrigin: true,
+                },
             },
         },
     };

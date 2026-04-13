@@ -2,6 +2,15 @@
     import { onMount, onDestroy, tick } from "svelte";
     import { marked } from "marked";
     import { api } from "../lib/api";
+    import {
+        getDirectives,
+        getAgentState,
+        getLastDirectivesSyncMs,
+        getLastAgentStateSyncMs,
+        getDirectivesError,
+        getAgentStateError,
+        refreshAll,
+    } from "../lib/state.svelte";
     import type {
         AgentState,
         ChatHandoff,
@@ -10,9 +19,27 @@
         Directives,
         MarketMentalModel,
         MetaCognition,
+        ThinkingEntry,
         TrackedPromise,
     } from "../lib/types";
 
+    type HearthTone = "home" | "work" | "quiet" | "bridge" | "degraded";
+    type HearthAction = {
+        label: string;
+        prompt: string;
+        subtle?: boolean;
+    };
+    type ModeHearth = {
+        tone: HearthTone;
+        title: string;
+        detail: string;
+        reason: string;
+        modeLabel: string;
+        modelLabel?: string;
+        meta: string[];
+        actions: HearthAction[];
+        warning?: string;
+    };
     type PulseCardTone = "live" | "change" | "ledger" | "care" | "risk";
     type PulseCard = {
         id: string;
@@ -44,13 +71,16 @@
     let loading = $state(true);
     let error = $state("");
 
-    // Market pulse
-    let directives = $state<Directives | null>(null);
-    let agentState = $state<AgentState | null>(null);
-    let lastDirectivesSyncMs = $state(0);
-    let lastAgentStateSyncMs = $state(0);
-    let directivesSyncError = $state("");
-    let agentStateSyncError = $state("");
+    // Market pulse (shared state — single polling source in state.svelte.ts)
+    let directives = $derived(getDirectives());
+    let agentState = $derived(getAgentState());
+    let lastDirectivesSyncMs = $derived(getLastDirectivesSyncMs());
+    let lastAgentStateSyncMs = $derived(getLastAgentStateSyncMs());
+    let directivesSyncError = $derived(getDirectivesError());
+    let agentStateSyncError = $derived(getAgentStateError());
+    let latestThinking = $state<ThinkingEntry | null>(null);
+    let lastThinkingSyncMs = $state(0);
+    let thinkingSyncError = $state("");
 
     // Voice
     let listening = $state(false);
@@ -453,6 +483,15 @@
         return `${compact.slice(0, max - 1).trimEnd()}…`;
     }
 
+    function firstNonEmptyText(
+        ...values: Array<string | null | undefined>
+    ): string {
+        for (const value of values) {
+            if (typeof value === "string" && value.trim()) return value.trim();
+        }
+        return "";
+    }
+
     function relativeMinutes(minutes: number): string {
         if (minutes <= 0) return "щойно";
         if (minutes === 1) return "1 хв тому";
@@ -464,6 +503,197 @@
         if (diffMinutes <= 0) return "wake вже настав";
         if (diffMinutes === 1) return "wake через 1 хв";
         return `wake через ${diffMinutes} хв`;
+    }
+
+    function thinkingTimestampMs(entry: ThinkingEntry | null): number | null {
+        if (!entry) return null;
+        if (typeof entry.ts === "number" && Number.isFinite(entry.ts)) {
+            return Math.round(entry.ts * 1000);
+        }
+        const parsed = toNumber(entry.ts);
+        return parsed !== null ? Math.round(parsed * 1000) : null;
+    }
+
+    function normalizeCallType(value: string | undefined): string {
+        return value?.trim().toLowerCase() ?? "";
+    }
+
+    function modeToneFromCallType(
+        callType: string,
+        nextWakeMs: number | null,
+    ): HearthTone {
+        if (
+            callType === "reactive_casual" ||
+            callType === "manual" ||
+            callType === "casual"
+        ) {
+            return "home";
+        }
+        if (
+            callType === "reactive_market" ||
+            callType === "proactive" ||
+            callType === "full" ||
+            callType === "observation" ||
+            callType === "daily_review" ||
+            callType === "ritual_weekly" ||
+            callType === "system_upgrade" ||
+            callType === "tda"
+        ) {
+            return "work";
+        }
+        if (callType === "reactive" || callType === "consciousness_recovery") {
+            return "bridge";
+        }
+        if (nextWakeMs !== null && nextWakeMs > Date.now()) return "quiet";
+        return "quiet";
+    }
+
+    function modeLabelFromCallType(callType: string, tone: HearthTone): string {
+        switch (callType) {
+            case "reactive_casual":
+                return "Casual Contact";
+            case "reactive_market":
+                return "Market Contact";
+            case "proactive":
+                return "Proactive Analyst";
+            case "full":
+                return "Full Context";
+            case "observation":
+                return "Observation";
+            case "reactive":
+                return "Reactive Contact";
+            case "consciousness_recovery":
+                return "Recovery";
+            case "daily_review":
+                return "Daily Review";
+            case "ritual_weekly":
+                return "Weekly Ritual";
+            case "manual":
+                return "Manual Contact";
+            case "system_upgrade":
+                return "System Upgrade";
+            case "tda":
+                return "TDA Review";
+            default:
+                switch (tone) {
+                    case "home":
+                        return "Casual Presence";
+                    case "work":
+                        return "Analyst Contour";
+                    case "bridge":
+                        return "Live Contact";
+                    case "degraded":
+                        return "Unavailable";
+                    case "quiet":
+                    default:
+                        return "Standby";
+                }
+        }
+    }
+
+    function currentModeModel(
+        entry: ThinkingEntry | null,
+        state: AgentState | null,
+    ): string {
+        return firstNonEmptyText(
+            entry?.model,
+            typeof state?.model_last_call === "string"
+                ? state.model_last_call
+                : "",
+            typeof state?.model_current === "string" ? state.model_current : "",
+        );
+    }
+
+    function hearthReasonCopy(
+        callType: string,
+        nextWakeReason: string,
+        nextWakeMs: number | null,
+        observationEnabled: boolean,
+    ): string {
+        if (nextWakeReason) {
+            return `Наступний wake: ${truncateText(nextWakeReason, 112)}${
+                nextWakeMs ? ` · ${countdownLabel(nextWakeMs)}` : ""
+            }`;
+        }
+
+        if (callType === "reactive_casual" || callType === "manual") {
+            return "Shell читає це як людський контакт без важкого analyst bootstrap: спочатку присутність, потім аналіз за потреби.";
+        }
+        if (
+            callType === "reactive_market" ||
+            callType === "proactive" ||
+            callType === "full" ||
+            callType === "observation" ||
+            callType === "daily_review" ||
+            callType === "ritual_weekly" ||
+            callType === "system_upgrade" ||
+            callType === "tda"
+        ) {
+            return "Є ринковий привід для структурованої присутності: Archi тримає analyst contour і готує brief замість дружнього small talk.";
+        }
+        if (callType === "reactive" || callType === "consciousness_recovery") {
+            return "Останній archived call дає лише signal живого контакту: це ще не доказ чистого casual mode і не гарантія повного analyst frame.";
+        }
+
+        return observationEnabled
+            ? "Observation beat лишається увімкненим, але shell поки не має явного wake reason для наступної ескалації."
+            : "Observation beat зараз мовчить; Archi чекає зовнішній trigger або ручний контакт.";
+    }
+
+    function hearthActions(tone: HearthTone): HearthAction[] {
+        switch (tone) {
+            case "home":
+                return [
+                    {
+                        label: "Як ти зараз?",
+                        prompt: "Скажи просто і по-людськи: ти зараз вдома як друг чи вже напівв роботі, що в тебе на думці і що мені важливо знати без зайвого формалізму?",
+                    },
+                    {
+                        label: "Коли розбудиш?",
+                        prompt: "Поясни, який наступний trigger або wake_reason переведе тебе з дружнього режиму в analyst mode і як ти це мені подаси.",
+                        subtle: true,
+                    },
+                ];
+            case "work":
+                return [
+                    {
+                        label: "Operator brief",
+                        prompt: "Дай operator brief на зараз: bias, active thesis, risk trigger, next wake condition і що конкретно може змінити сценарій.",
+                    },
+                    {
+                        label: "Переклади просто",
+                        prompt: "Переклади свій поточний analyst mode людською мовою: що це означає для мене прямо зараз без зайвого noise.",
+                        subtle: true,
+                    },
+                ];
+            case "bridge":
+                return [
+                    {
+                        label: "Що перемикає режим?",
+                        prompt: "Поясни, між якими режимами ти зараз стоїш, що саме тригерить перемикання і яка ознака, що пора ввімкнути аналітика повністю.",
+                    },
+                    {
+                        label: "Коротко по-людськи",
+                        prompt: "Дай короткий статус як друг, але збережи головний risk context: що ти зараз відчуваєш у ринку і чому це важливо або не важливо.",
+                        subtle: true,
+                    },
+                ];
+            case "quiet":
+            default:
+                return [
+                    {
+                        label: "Чому тиша?",
+                        prompt: "Поясни, чому зараз тиша є правильною, що ти все одно тримаєш у фоні і який наступний wake trigger важливий.",
+                    },
+                    {
+                        label: "Легкий статус",
+                        prompt: "Дай короткий домашній статус у двох-трьох реченнях: як ти зараз, що з ринком у фоні і коли чекати наступний осмислений signal.",
+                        subtle: true,
+                    },
+                ];
+            case "degraded":
+                return [];
+        }
     }
 
     function getMarketMentalModel(
@@ -547,33 +777,43 @@
         }
     }
 
-    function recordPulseSync(
-        nextDirectives: Directives | null,
-        nextAgentState: AgentState | null,
+    // recordPulseSync is no longer needed — directives & agentState
+    // are managed by the shared state module (state.svelte.ts).
+    // Thinking signal remains Chat-specific.
+
+    function recordThinkingSync(
+        nextThinking: ThinkingEntry | null,
+        ok: boolean,
         phase: "initial" | "refresh",
     ) {
-        const now = Date.now();
-
-        if (nextDirectives) {
-            directives = nextDirectives;
-            lastDirectivesSyncMs = now;
-            directivesSyncError = "";
-        } else {
-            directivesSyncError =
-                phase === "initial"
-                    ? "Directives snapshot не завантажився. Pulse Rail частково сліпий."
-                    : "Directives snapshot не оновився. Cards на основі directives можуть бути застарілими.";
+        if (ok) {
+            latestThinking = nextThinking;
+            lastThinkingSyncMs = Date.now();
+            thinkingSyncError = "";
+            return;
         }
 
-        if (nextAgentState) {
-            agentState = nextAgentState;
-            lastAgentStateSyncMs = now;
-            agentStateSyncError = "";
-        } else {
-            agentStateSyncError =
-                phase === "initial"
-                    ? "Agent state snapshot не завантажився. Pulse Rail частково сліпий."
-                    : "Agent state snapshot не оновився. Freshness / wake info може бути застарілим.";
+        thinkingSyncError =
+            phase === "initial"
+                ? "Thinking journal snapshot не завантажився. Mode Hearth читає режим без last-call signal."
+                : "Thinking journal snapshot не оновився. Mode Hearth може спиратись на попередній call signal.";
+    }
+
+    async function loadLatestThinkingSignal(): Promise<{
+        ok: boolean;
+        entry: ThinkingEntry | null;
+    }> {
+        try {
+            const result = await api.thinking(1, 0);
+            return {
+                ok: true,
+                entry: result.entries?.[0] ?? null,
+            };
+        } catch {
+            return {
+                ok: false,
+                entry: null,
+            };
         }
     }
 
@@ -626,27 +866,29 @@
     // ── data fetch ──
     async function loadData() {
         try {
-            const [nextDirectives, nextMessages, nextAgentState] =
-                await Promise.all([
-                    api.directives(false).catch(() => null),
-                    api
-                        .chatHistory(80)
-                        .then((r) => r.messages ?? [])
-                        .catch(() => []),
-                    api.agentState().catch(() => null),
-                ]);
+            const [, nextMessages, , nextThinkingSignal] = await Promise.all([
+                refreshAll(false),
+                api
+                    .chatHistory(80)
+                    .then((r) => r.messages ?? [])
+                    .catch(() => []),
+                Promise.resolve(null), // slot kept for array destructuring
+                loadLatestThinkingSignal(),
+            ]);
             messages = nextMessages;
-            recordPulseSync(nextDirectives, nextAgentState, "initial");
+            recordThinkingSync(
+                nextThinkingSignal.entry,
+                nextThinkingSignal.ok,
+                "initial",
+            );
             // Prevent auto-TTS of existing messages on load
             const _lastArchi = [...messages]
                 .reverse()
                 .find((m) => m.role === "archi");
             if (_lastArchi) lastSpokenId = _lastArchi.id;
         } catch {
-            directivesSyncError =
-                "Directives snapshot не завантажився. Початковий shell sync не вдався.";
-            agentStateSyncError =
-                "Agent state snapshot не завантажився. Початковий shell sync не вдався.";
+            thinkingSyncError =
+                "Thinking journal snapshot не завантажився. Початковий shell sync не вдався.";
             // graceful
         } finally {
             loading = false;
@@ -655,18 +897,20 @@
         }
     }
 
-    async function refreshPulseData() {
+    async function refreshShellData() {
         try {
-            const [nextDirectives, nextAgentState] = await Promise.all([
-                api.directives(false).catch(() => null),
-                api.agentState().catch(() => null),
+            const [, nextThinkingSignal] = await Promise.all([
+                refreshAll(false),
+                loadLatestThinkingSignal(),
             ]);
-            recordPulseSync(nextDirectives, nextAgentState, "refresh");
+            recordThinkingSync(
+                nextThinkingSignal.entry,
+                nextThinkingSignal.ok,
+                "refresh",
+            );
         } catch {
-            directivesSyncError =
-                "Directives snapshot не оновився. Показано останній успішний directives state.";
-            agentStateSyncError =
-                "Agent state snapshot не оновився. Показано останній успішний agent state.";
+            thinkingSyncError =
+                "Thinking journal snapshot не оновився. Показано останній успішний call signal.";
         }
     }
 
@@ -809,7 +1053,8 @@
     // ── polling for new messages ──
     let pollId: ReturnType<typeof setInterval>;
     let fastPollId: ReturnType<typeof setInterval> | null = null;
-    let agentStatePollId: ReturnType<typeof setInterval> | null = null;
+    // Thinking signal polling (Chat-specific, not shared)
+    let thinkingPollId: ReturnType<typeof setInterval> | null = null;
     const NORMAL_POLL_MS = 8_000;
     const FAST_POLL_MS = 2_000;
     const FAST_POLL_MAX_MS = 90_000; // stop fast polling after 90s
@@ -877,7 +1122,8 @@
         pollId = setInterval(pollMessages, NORMAL_POLL_MS);
         resetContextTimer();
         tick().then(() => applyComposerHeight());
-        agentStatePollId = setInterval(refreshPulseData, 30_000);
+        // Thinking signal is Chat-specific — poll separately
+        thinkingPollId = setInterval(refreshShellData, 30_000);
 
         const syncComposer = () =>
             requestAnimationFrame(() => applyComposerHeight());
@@ -892,7 +1138,7 @@
 
     onDestroy(() => {
         clearInterval(pollId);
-        if (agentStatePollId) clearInterval(agentStatePollId);
+        if (thinkingPollId) clearInterval(thinkingPollId);
         stopFastPoll();
         if (recognition && listening) recognition.stop();
         if (quickActionHintTimer) clearTimeout(quickActionHintTimer);
@@ -911,6 +1157,128 @@
         const current = activeHandoff;
         if (!current) return false;
         return inputText.trim() === current.prompt.trim();
+    });
+    const modeHearth = $derived.by(() => {
+        const syncWarnings = [
+            directivesSyncError,
+            agentStateSyncError,
+            thinkingSyncError,
+        ].filter(Boolean);
+        const hasSnapshot = !!(directives || agentState || latestThinking);
+
+        if (!hasSnapshot) {
+            if (loading || syncWarnings.length === 0) return null;
+
+            return {
+                tone: "degraded",
+                title: "Mode Hearth недоступний",
+                detail: "Shell не отримав жодного валідного snapshot для presence layer, тому режим не буде вигаданий поверх порожнечі.",
+                reason: "Поки немає мінімального shell snapshot, Chat не робить висновок про quiet, casual чи analyst presence.",
+                modeLabel: "Unavailable",
+                meta: [],
+                actions: [],
+                warning: syncWarnings.join(" · "),
+            } satisfies ModeHearth;
+        }
+
+        const mentalModel = getMarketMentalModel(directives);
+        const observationEnabled = directives?.observation_enabled !== false;
+        const nextWakeMs = toNumber(agentState?.next_wake_ms);
+        const nextWakeReason = firstNonEmptyText(
+            typeof agentState?.next_wake_reason === "string"
+                ? agentState.next_wake_reason
+                : "",
+            typeof directives?.next_check_reason === "string"
+                ? directives.next_check_reason
+                : "",
+        );
+        const callType = normalizeCallType(latestThinking?.call_type);
+        const tone = modeToneFromCallType(callType, nextWakeMs);
+        const modeLabel = modeLabelFromCallType(callType, tone);
+        const lastCallMs = thinkingTimestampMs(latestThinking);
+        const lastCallMinutes =
+            lastCallMs !== null
+                ? Math.max(0, Math.round((Date.now() - lastCallMs) / 60000))
+                : null;
+        const focusLine = truncateText(
+            firstNonEmptyText(
+                latestThinking?.output_snippet,
+                mentalModel?.current_narrative,
+                mentalModel?.what_watching,
+                mentalModel?.what_changed,
+                typeof agentState?.inner_thought === "string"
+                    ? agentState.inner_thought
+                    : "",
+                typeof directives?.inner_thought === "string"
+                    ? directives.inner_thought
+                    : "",
+                latestThinking?.trigger,
+            ),
+            176,
+        );
+
+        const title =
+            tone === "home"
+                ? "Арчі в casual presence"
+                : tone === "work"
+                  ? "Арчі в analyst contour"
+                  : tone === "bridge"
+                    ? "Арчі на live contact між режимами"
+                    : "Арчі тримає тишу між wake-подіями";
+        const detail =
+            focusLine ||
+            (tone === "home"
+                ? "Контакт зараз ближчий до друга: Archi не заводить важкий briefing без реального приводу, але лишається поруч."
+                : tone === "work"
+                  ? "Контур зібраний для операторського читання: shell чекає не small talk, а структурований brief або перевірку сценарію."
+                  : tone === "bridge"
+                    ? "Останній signal говорить лише про живий контакт або recovery: shell не вдає, ніби вже точно знає casual чи analyst режим без додаткового підтвердження."
+                    : "Тиша тут не порожнеча: Archi лишається на фоні й чекає осмислений trigger замість тривожних фальстартів.");
+
+        const meta: string[] = [];
+        if (lastCallMinutes !== null) {
+            meta.push(`last call ${relativeMinutes(lastCallMinutes)}`);
+        } else if (lastThinkingSyncMs > 0) {
+            meta.push("call journal ще тихий");
+        }
+        if (nextWakeMs) {
+            meta.push(countdownLabel(nextWakeMs));
+        } else if (observationEnabled && tone !== "home") {
+            meta.push("wake без таймера");
+        }
+
+        const modelLabel = currentModeModel(latestThinking, agentState);
+        if (
+            typeof directives?.focus_symbol === "string" &&
+            directives.focus_symbol
+        ) {
+            meta.push(directives.focus_symbol);
+        }
+        if (directives?.economy_mode_active) meta.push("economy mode");
+
+        const warnings = [
+            directives?.kill_switch_active
+                ? "Kill switch активний — Archi лишається в розмові, але торгова ескалація може бути навмисно стриманою."
+                : "",
+            ...syncWarnings,
+        ].filter(Boolean);
+
+        return {
+            tone,
+            title,
+            detail,
+            reason: hearthReasonCopy(
+                callType,
+                nextWakeReason,
+                nextWakeMs,
+                observationEnabled,
+            ),
+            modeLabel,
+            modelLabel,
+            meta,
+            actions: hearthActions(tone),
+            warning: warnings.join(" · "),
+        } satisfies ModeHearth;
     });
     const pulseFreshness = $derived.by(() => {
         const freshest = [lastDirectivesSyncMs, lastAgentStateSyncMs].filter(
@@ -1208,6 +1576,57 @@
                 Сховати
             </button>
         </div>
+    </div>
+{/if}
+
+{#if modeHearth}
+    <div class="mode-hearth" data-tone={modeHearth.tone}>
+        <div class="mode-hearth-head">
+            <div>
+                <div class="mode-hearth-kicker">Dual Mode</div>
+                <div class="mode-hearth-title">{modeHearth.title}</div>
+            </div>
+
+            <div class="mode-hearth-badges">
+                <span class="mode-hearth-badge emphasis">
+                    {modeHearth.modeLabel}
+                </span>
+                {#if modeHearth.modelLabel}
+                    <span class="mode-hearth-badge">
+                        {modeHearth.modelLabel}
+                    </span>
+                {/if}
+            </div>
+        </div>
+
+        <div class="mode-hearth-copy">{modeHearth.detail}</div>
+        <div class="mode-hearth-reason">{modeHearth.reason}</div>
+
+        {#if modeHearth.meta.length > 0}
+            <div class="mode-hearth-meta">
+                {#each modeHearth.meta as item}
+                    <span class="mode-hearth-pill">{item}</span>
+                {/each}
+            </div>
+        {/if}
+
+        {#if modeHearth.actions.length > 0}
+            <div class="mode-hearth-actions">
+                {#each modeHearth.actions as action}
+                    <button
+                        class="mode-hearth-btn"
+                        class:secondary={action.subtle}
+                        onclick={() => primeDraft(action.prompt)}
+                    >
+                        {action.label}
+                    </button>
+                {/each}
+            </div>
+        {/if}
+
+        {#if modeHearth.warning}
+            <div class="mode-hearth-warning">{modeHearth.warning}</div>
+        {/if}
     </div>
 {/if}
 
@@ -1678,6 +2097,205 @@
         color: var(--text);
         border-color: color-mix(in srgb, var(--border) 72%, transparent);
         background: var(--surface2);
+    }
+
+    /* ── Mode hearth ── */
+    .mode-hearth {
+        --hearth-accent: rgba(246, 168, 74, 0.28);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 14px 16px 16px;
+        border-bottom: 1px solid var(--border);
+        background: radial-gradient(
+                circle at top left,
+                rgba(246, 168, 74, 0.16),
+                transparent 34%
+            ),
+            radial-gradient(
+                circle at right center,
+                rgba(92, 205, 180, 0.1),
+                transparent 38%
+            ),
+            color-mix(in srgb, var(--surface) 94%, var(--bg));
+        flex-shrink: 0;
+    }
+    .mode-hearth[data-tone="work"] {
+        --hearth-accent: rgba(120, 164, 255, 0.3);
+        background: radial-gradient(
+                circle at top left,
+                rgba(120, 164, 255, 0.16),
+                transparent 36%
+            ),
+            radial-gradient(
+                circle at right center,
+                rgba(92, 205, 180, 0.08),
+                transparent 38%
+            ),
+            color-mix(in srgb, var(--surface) 94%, var(--bg));
+    }
+    .mode-hearth[data-tone="bridge"] {
+        --hearth-accent: rgba(150, 132, 255, 0.28);
+        background: radial-gradient(
+                circle at top left,
+                rgba(150, 132, 255, 0.16),
+                transparent 34%
+            ),
+            radial-gradient(
+                circle at right center,
+                rgba(246, 168, 74, 0.1),
+                transparent 38%
+            ),
+            color-mix(in srgb, var(--surface) 94%, var(--bg));
+    }
+    .mode-hearth[data-tone="quiet"] {
+        --hearth-accent: rgba(92, 205, 180, 0.22);
+        background: radial-gradient(
+                circle at top left,
+                rgba(92, 205, 180, 0.12),
+                transparent 32%
+            ),
+            radial-gradient(
+                circle at right center,
+                rgba(120, 164, 255, 0.08),
+                transparent 38%
+            ),
+            color-mix(in srgb, var(--surface) 94%, var(--bg));
+    }
+    .mode-hearth[data-tone="degraded"] {
+        --hearth-accent: rgba(239, 95, 71, 0.3);
+        background: radial-gradient(
+                circle at top left,
+                rgba(239, 95, 71, 0.14),
+                transparent 34%
+            ),
+            radial-gradient(
+                circle at right center,
+                rgba(246, 168, 74, 0.08),
+                transparent 38%
+            ),
+            color-mix(in srgb, var(--surface) 94%, var(--bg));
+    }
+    .mode-hearth-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+    }
+    .mode-hearth-kicker {
+        font-size: 10px;
+        color: #f6a84a;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 4px;
+    }
+    .mode-hearth-title {
+        font-size: 15px;
+        font-weight: 650;
+        color: var(--text);
+        line-height: 1.35;
+    }
+    .mode-hearth-badges {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .mode-hearth-badge {
+        padding: 5px 10px;
+        border-radius: 999px;
+        border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+        background: color-mix(in srgb, var(--surface2) 90%, var(--bg));
+        color: var(--text-muted);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+    }
+    .mode-hearth-badge.emphasis {
+        border-color: var(--hearth-accent);
+        color: var(--text);
+    }
+    .mode-hearth-copy {
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--text);
+        max-width: 760px;
+    }
+    .mode-hearth-reason {
+        font-size: 12px;
+        line-height: 1.55;
+        color: var(--text-muted);
+        max-width: 760px;
+    }
+    .mode-hearth-meta {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .mode-hearth-pill {
+        padding: 5px 9px;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--surface2) 90%, var(--bg));
+        border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+        color: var(--text-muted);
+        font-size: 10px;
+        font-weight: 600;
+    }
+    .mode-hearth-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .mode-hearth-btn {
+        padding: 7px 11px;
+        border-radius: 999px;
+        border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+        background: color-mix(in srgb, var(--accent) 11%, var(--surface2));
+        color: var(--text);
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        transition:
+            border-color 0.15s,
+            background 0.15s,
+            transform 0.15s;
+    }
+    .mode-hearth-btn:hover {
+        border-color: color-mix(in srgb, var(--accent) 44%, transparent);
+        background: color-mix(in srgb, var(--accent) 17%, var(--surface2));
+        transform: translateY(-1px);
+    }
+    .mode-hearth-btn.secondary {
+        border-color: color-mix(in srgb, var(--border) 82%, transparent);
+        background: transparent;
+        color: var(--text-muted);
+    }
+    .mode-hearth-btn.secondary:hover {
+        color: var(--text);
+        border-color: color-mix(in srgb, var(--border) 66%, transparent);
+        background: color-mix(in srgb, var(--surface2) 92%, var(--bg));
+    }
+    .mode-hearth-warning {
+        padding: 9px 11px;
+        border-radius: 12px;
+        border: 1px solid rgba(246, 168, 74, 0.2);
+        background: rgba(246, 168, 74, 0.08);
+        color: var(--text);
+        font-size: 11px;
+        line-height: 1.45;
+    }
+    @media (max-width: 720px) {
+        .mode-hearth-head {
+            flex-direction: column;
+        }
+        .mode-hearth-badges {
+            justify-content: flex-start;
+        }
     }
 
     /* ── Pulse rail ── */

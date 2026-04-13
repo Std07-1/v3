@@ -144,18 +144,20 @@ export interface RelationshipMemo {
 }
 
 // ── Agent State (from /api/agent/state) ──
+// Backend returns all values as strings (Redis HGETALL).
+// api.ts transforms numeric fields at fetch time.
 export interface AgentState {
-    ts_ms?: string;
+    ts_ms?: number;
     health?: string;
     model_current?: string;
     model_last_call?: string;
-    next_wake_ms?: string;
+    next_wake_ms?: number;
     next_wake_reason?: string;
-    budget_today_usd?: string;
-    budget_limit_usd?: string;
-    budget_pct?: string;
-    calls_today?: string;
-    messages_sent_today?: string;
+    budget_today_usd?: number;
+    budget_limit_usd?: number;
+    budget_pct?: number;
+    calls_today?: number;
+    messages_sent_today?: number;
     active_scenarios?: string;
     watch_levels?: string;
     has_virtual_position?: string;

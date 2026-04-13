@@ -1,5 +1,6 @@
 ﻿<script lang="ts">
     import { api, ApiError, getToken } from "../lib/api";
+    import { getDirectives, refreshDirectives } from "../lib/state.svelte";
     import type { ChatHandoff, FeedEvent, Directives } from "../lib/types";
 
     let {
@@ -11,7 +12,7 @@
     let error = $state("");
     let lastRefresh = $state("");
     let sseConnected = $state(false);
-    let directives = $state<Directives | null>(null);
+    let directives = $derived(getDirectives());
 
     // IDs of events that just arrived via SSE (for fade-in animation)
     let newEventIds = $state<Set<string | number>>(new Set());
@@ -196,12 +197,11 @@
         loading = true;
         error = "";
         try {
-            const [feedRes, dir] = await Promise.all([
+            const [feedRes] = await Promise.all([
                 api.feed(100),
-                api.directives(false).catch(() => null),
+                refreshDirectives(false),
             ]);
             events = feedRes.events ?? [];
-            directives = dir;
             lastRefresh = new Date().toLocaleTimeString("uk-UA");
         } catch (e) {
             if (e instanceof ApiError && e.status === 401) {

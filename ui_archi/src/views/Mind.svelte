@@ -1,5 +1,6 @@
 <script lang="ts">
     import { api, ApiError } from "../lib/api";
+    import { getDirectives, refreshDirectives } from "../lib/state.svelte";
     import type {
         ChatHandoff,
         Directives,
@@ -115,7 +116,8 @@
         loading = true;
         error = "";
         try {
-            data = await api.directives(false); // brief=0 → full state
+            await refreshDirectives(false); // brief=0 → full state
+            data = getDirectives();
             // Load owner note in parallel
             api.ownerNote()
                 .then((n) => {
