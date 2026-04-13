@@ -216,12 +216,21 @@ server {
 
 **Симптоми**: браузер показує 502 (nginx) або connection refused (direct).
 
+> **Archi Console note (2026-04-13)**: якщо `archi.aione-smc.com` локально на VPS дає `200`,
+> але браузер через Cloudflare ловить `522`, перевірити два окремі класи причин: host firewall/UFW
+> має містити **повний** Cloudflare allowlist на `80/443` (missing `172.64.0.0/13` вже давав
+> selective `522` при локально здоровому origin); nginx для Archi має проксіювати не лише
+> `/api/archi/`, а й `/api/agent/`, бо shell читає `/api/agent/state` і без цього запит падає
+> в SPA `index.html`, ламаючи authenticated shell.
+
 **Діагностика**:
 
 1. Перевірити процеси: `ps aux | grep python`
 2. Перевірити /api/status: `curl http://127.0.0.1:8000/api/status`
 3. Перевірити логи: `logs/ws_server.err.log`, `logs/m1_poller.err.log`
 4. Перевірити restart-loop: `grep SUPERVISOR_RESTART logs/*.log`
+5. Для CF-only ingress перевірити firewall: `sudo ufw status numbered`
+6. Для Archi перевірити origin без Cloudflare: `curl -sk --resolve archi.aione-smc.com:443:127.0.0.1 https://archi.aione-smc.com/`
 
 **Типові причини**:
 
@@ -229,8 +238,16 @@ server {
 - Порт зайнятий іншим процесом
 - Python crash (check exit code)
 - UI видалено з пулу після 10 restart-спроб (SUPERVISOR_EXHAUSTED)
+- Неповний Cloudflare allowlist у host firewall (`80/443`)
+- Для Archi: відсутній nginx proxy для `/api/agent/`
 
 **Рішення**: Перезапустити `python -m app.main --mode all`.
+
+Якщо це **Archi Console** інцидент і origin локально здоровий, а публічний browser path падає:
+
+1. Додати відсутні Cloudflare ranges у UFW для `80/tcp` і `443/tcp`
+2. Переконатись, що Archi nginx proxy covers both `/api/archi/` і `/api/agent/`
+3. Перезавантажити nginx: `sudo nginx -t ; sudo systemctl reload nginx`
 
 ---
 

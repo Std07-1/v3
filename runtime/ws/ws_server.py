@@ -2429,7 +2429,9 @@ def build_app(
                 "APPROVED" if approved else "REJECTED",
                 proposal_id,
             )
-            return web.json_response({"ok": True, "id": proposal_id, "approved": approved})
+            return web.json_response(
+                {"ok": True, "id": proposal_id, "approved": approved}
+            )
         except Exception as _e:
             _log.warning("API_ARCHI_PROPOSALS_REVIEW_FAIL: %s", _e)
             return web.json_response({"error": "failed"}, status=500)

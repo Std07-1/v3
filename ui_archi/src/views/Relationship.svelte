@@ -1,6 +1,10 @@
 <script lang="ts">
     import { api, ApiError } from "../lib/api";
-    import type { RelationshipMemo } from "../lib/types";
+    import type { ChatHandoff, RelationshipMemo } from "../lib/types";
+
+    let {
+        onchat = (_handoff: ChatHandoff): void => {},
+    }: { onchat?: (handoff: ChatHandoff) => void } = $props();
 
     let memo: RelationshipMemo | null = $state(null);
     let loading = $state(true);
@@ -48,6 +52,60 @@
         return map[key] ?? key.replaceAll("_", " ");
     }
 
+    function truncate(text: string, limit: number): string {
+        return text.length > limit
+            ? `${text.slice(0, limit - 1).trimEnd()}…`
+            : text;
+    }
+
+    function stringEntries(
+        source: Record<string, unknown>,
+        labels: Record<string, string>,
+    ): string[] {
+        return Object.entries(source)
+            .filter(([, value]) => typeof value === "string" && value)
+            .map(([key, value]) => `${lbl(labels, key)}: ${String(value)}`);
+    }
+
+    function aboutStanislavSummary(source: Record<string, unknown>): string {
+        const parts = stringEntries(source, LABEL_S);
+        if (Array.isArray(source.agreements) && source.agreements.length) {
+            parts.push(
+                `Домовленості: ${(source.agreements as unknown[])
+                    .map((item) => String(item))
+                    .join(" | ")}`,
+            );
+        }
+        return parts.join(". ");
+    }
+
+    function aboutMyselfSummary(source: Record<string, unknown>): string {
+        return stringEntries(source, LABEL_M).join(". ");
+    }
+
+    function bestMomentsSummary(moments: string[]): string {
+        return moments
+            .map((moment, index) => `${index + 1}. ${moment}`)
+            .join(" | ");
+    }
+
+    function openRelationshipHandoff(title: string, summary: string) {
+        onchat({
+            id: `relationship:${title}:${Date.now()}`,
+            source: "relationship",
+            icon: "💙",
+            title,
+            summary: truncate(summary, 220),
+            prompt: [
+                `Арчі, розгорни цей relationship context: ${title}.`,
+                "",
+                summary,
+                "",
+                "Що тут важливо пам'ятати у спілкуванні далі?",
+            ].join("\n"),
+        });
+    }
+
     async function load() {
         loading = true;
         error = "";
@@ -92,7 +150,19 @@
             {#if memo.about_stanislav && typeof memo.about_stanislav === "object"}
                 {@const s = memo.about_stanislav as Record<string, unknown>}
                 <section class="section">
-                    <div class="section-title">👤 Хто такий Станіслав</div>
+                    <div class="section-head">
+                        <div class="section-title">👤 Хто такий Станіслав</div>
+                        <button
+                            class="btn-discuss"
+                            onclick={() =>
+                                openRelationshipHandoff(
+                                    "Хто такий Станіслав",
+                                    aboutStanislavSummary(s),
+                                )}
+                        >
+                            💬 Обговорити
+                        </button>
+                    </div>
                     <div class="field-list">
                         {#each Object.entries(s).filter(([k]) => k !== "agreements") as [k, v]}
                             {#if v && typeof v === "string"}
@@ -120,7 +190,19 @@
             {#if memo.about_myself && typeof memo.about_myself === "object"}
                 {@const m = memo.about_myself as Record<string, unknown>}
                 <section class="section">
-                    <div class="section-title">🤖 Про мене (Арчі)</div>
+                    <div class="section-head">
+                        <div class="section-title">🤖 Про мене (Арчі)</div>
+                        <button
+                            class="btn-discuss"
+                            onclick={() =>
+                                openRelationshipHandoff(
+                                    "Про мене (Арчі)",
+                                    aboutMyselfSummary(m),
+                                )}
+                        >
+                            💬 Обговорити
+                        </button>
+                    </div>
                     <div class="field-list">
                         {#each Object.entries(m) as [k, v]}
                             {#if v && typeof v === "string"}
@@ -138,8 +220,25 @@
 
             <!-- ── BEST MOMENTS ── -->
             {#if Array.isArray(memo.our_best_moments) && memo.our_best_moments.length > 0}
+                {@const bestMoments = memo.our_best_moments}
                 <section class="section">
-                    <div class="section-title">✨ Найкращі моменти</div>
+                    <div class="section-head">
+                        <div class="section-title">✨ Найкращі моменти</div>
+                        <button
+                            class="btn-discuss"
+                            onclick={() =>
+                                openRelationshipHandoff(
+                                    "Найкращі моменти",
+                                    bestMomentsSummary(
+                                        bestMoments.map((moment) =>
+                                            String(moment),
+                                        ),
+                                    ),
+                                )}
+                        >
+                            💬 Обговорити
+                        </button>
+                    </div>
                     <div class="moments-list">
                         {#each memo.our_best_moments as moment}
                             <blockquote class="moment-card">
@@ -212,6 +311,32 @@
         display: flex;
         align-items: center;
         gap: 6px;
+    }
+    .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    .btn-discuss {
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+        background: color-mix(in srgb, var(--accent) 10%, var(--surface2));
+        color: var(--text);
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        white-space: nowrap;
+        transition:
+            border-color 0.15s,
+            background 0.15s,
+            color 0.15s;
+    }
+    .btn-discuss:hover {
+        border-color: color-mix(in srgb, var(--accent) 44%, transparent);
+        background: color-mix(in srgb, var(--accent) 16%, var(--surface2));
     }
     .sub-title {
         font-size: 11px;

@@ -1,6 +1,15 @@
 <script lang="ts">
     import { api, ApiError } from "../lib/api";
-    import type { Directives, OwnerNote, ImprovementProposal } from "../lib/types";
+    import type {
+        ChatHandoff,
+        Directives,
+        OwnerNote,
+        ImprovementProposal,
+    } from "../lib/types";
+
+    let {
+        onchat = (_handoff: ChatHandoff): void => {},
+    }: { onchat?: (handoff: ChatHandoff) => void } = $props();
 
     let data: Directives | null = $state(null);
     let loading = $state(true);
@@ -43,6 +52,63 @@
 
     function truncate(s: string, n: number): string {
         return s.length > n ? s.slice(0, n) + "…" : s;
+    }
+
+    function formatValue(value: unknown): string {
+        if (value == null || value === "") return "";
+        if (Array.isArray(value)) return value.map(formatValue).join(", ");
+        if (typeof value === "object") {
+            return Object.entries(value as Record<string, unknown>)
+                .map(([key, item]) => `${key}: ${formatValue(item)}`)
+                .filter(Boolean)
+                .join("; ");
+        }
+        return String(value);
+    }
+
+    function summarizeScenario(scenario: unknown): string {
+        if (typeof scenario === "string") return scenario;
+        if (!scenario || typeof scenario !== "object")
+            return "сценарій не задано";
+        return Object.entries(scenario as Record<string, unknown>)
+            .map(([key, value]) => `${key}: ${formatValue(value)}`)
+            .filter((line) => !line.endsWith(": "))
+            .join(". ");
+    }
+
+    function handoffPrompt(
+        title: string,
+        summary: string,
+        context?: string,
+    ): string {
+        const lines = [
+            `Арчі, розбери цей контекст із Mind: ${title}.`,
+            "",
+            summary,
+            context ? `Контекст: ${context}` : "",
+            "",
+            "Що тут головне і що з цього потрібно врахувати далі?",
+        ].filter(Boolean);
+        return lines.join("\n");
+    }
+
+    function openMindHandoff(title: string, summary: string, context = "") {
+        onchat({
+            id: `mind:${title}:${Date.now()}`,
+            source: "mind",
+            icon: "🧩",
+            title,
+            summary: truncate(summary, 220),
+            prompt: handoffPrompt(title, summary, context),
+        });
+    }
+
+    function currentMindSummary(): string {
+        const mood = str("mood") || "невідомий настрій";
+        const thought = str("inner_thought") || "inner thought відсутня";
+        const scenario = (data as any)?.active_scenario;
+        const scenarioText = summarizeScenario(scenario);
+        return `Настрій: ${mood}. Внутрішня думка: ${thought}. Активний сценарій: ${scenarioText}.`;
     }
 
     async function load() {
@@ -97,8 +163,12 @@
             await api.reviewProposal(id, approved);
             await load(); // refresh directives to reflect new status
         } catch (e) {
-            proposalError = approved ? "Помилка підтвердження" : "Помилка відхилення";
-            setTimeout(() => { proposalError = ""; }, 3000);
+            proposalError = approved
+                ? "Помилка підтвердження"
+                : "Помилка відхилення";
+            setTimeout(() => {
+                proposalError = "";
+            }, 3000);
         } finally {
             proposalReviewing = null;
         }
@@ -164,6 +234,16 @@
                         / ${Number((data as any).budget_limit ?? 6).toFixed(0)}
                     </span>
                 {/if}
+                <button
+                    class="btn-discuss"
+                    onclick={() =>
+                        openMindHandoff(
+                            "Поточний стан Арчі",
+                            currentMindSummary(),
+                        )}
+                >
+                    💬 Обговорити в Chat
+                </button>
             </div>
             {#if str("inner_thought")}
                 <blockquote class="inner-thought">
@@ -292,10 +372,23 @@
         {#if (data as any).active_scenario}
             {@const sc = (data as any).active_scenario}
             <section class="mind-section">
-                <h3 class="section-title">
-                    <span class="sec-icon">🎯</span>
-                    Активний сценарій
-                </h3>
+                <div class="section-head">
+                    <h3 class="section-title">
+                        <span class="sec-icon">🎯</span>
+                        Активний сценарій
+                    </h3>
+                    <button
+                        class="btn-discuss"
+                        onclick={() =>
+                            openMindHandoff(
+                                "Active Scenario",
+                                summarizeScenario(sc),
+                                str("inner_thought"),
+                            )}
+                    >
+                        💬 Обговорити
+                    </button>
+                </div>
                 <div class="card scenario-card">
                     {#if typeof sc === "object"}
                         {#each Object.entries(sc) as [k, v]}
@@ -568,7 +661,9 @@
                     <span class="sec-icon">💡</span>
                     Пропозиції Арчі
                     <span class="counter badge-pending">
-                        {arr("improvement_proposals").filter((p: ImprovementProposal) => p.status === "pending").length}
+                        {arr("improvement_proposals").filter(
+                            (p: ImprovementProposal) => p.status === "pending",
+                        ).length}
                     </span>
                 </div>
                 {#if proposalError}
@@ -577,35 +672,53 @@
                 {#each arr("improvement_proposals").filter((p: ImprovementProposal) => p.status === "pending") as proposal (proposal.id)}
                     <div class="proposal-card">
                         <div class="proposal-header">
-                            <span class="proposal-type-badge">{proposal.type}</span>
-                            <span class="proposal-time">{fmtAgo(proposal.ts)}</span>
+                            <span class="proposal-type-badge"
+                                >{proposal.type}</span
+                            >
+                            <span class="proposal-time"
+                                >{fmtAgo(proposal.ts)}</span
+                            >
                         </div>
-                        <div class="proposal-rule">{proposal.proposed_rule}</div>
+                        <div class="proposal-rule">
+                            {proposal.proposed_rule}
+                        </div>
                         {#if proposal.evidence}
-                            <div class="proposal-evidence">📊 {proposal.evidence}</div>
+                            <div class="proposal-evidence">
+                                📊 {proposal.evidence}
+                            </div>
                         {/if}
                         {#if proposal.reasoning}
-                            <div class="proposal-reasoning">💭 {proposal.reasoning}</div>
+                            <div class="proposal-reasoning">
+                                💭 {proposal.reasoning}
+                            </div>
                         {/if}
                         {#if proposal.alternatives_considered?.length}
                             <div class="proposal-alts">
-                                Альтернативи: {proposal.alternatives_considered.join(" / ")}
+                                Альтернативи: {proposal.alternatives_considered.join(
+                                    " / ",
+                                )}
                             </div>
                         {/if}
                         <div class="proposal-actions">
                             <button
                                 class="btn-approve"
-                                onclick={() => handleProposalReview(proposal.id, true)}
+                                onclick={() =>
+                                    handleProposalReview(proposal.id, true)}
                                 disabled={proposalReviewing === proposal.id}
                             >
-                                {proposalReviewing === proposal.id ? "…" : "✓ Прийняти"}
+                                {proposalReviewing === proposal.id
+                                    ? "…"
+                                    : "✓ Прийняти"}
                             </button>
                             <button
                                 class="btn-reject"
-                                onclick={() => handleProposalReview(proposal.id, false)}
+                                onclick={() =>
+                                    handleProposalReview(proposal.id, false)}
                                 disabled={proposalReviewing === proposal.id}
                             >
-                                {proposalReviewing === proposal.id ? "…" : "✗ Відхилити"}
+                                {proposalReviewing === proposal.id
+                                    ? "…"
+                                    : "✗ Відхилити"}
                             </button>
                         </div>
                     </div>
@@ -691,6 +804,13 @@
         text-transform: uppercase;
         letter-spacing: 0.04em;
     }
+    .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
     .section-title.clickable {
         cursor: pointer;
         user-select: none;
@@ -737,6 +857,25 @@
         color: var(--text-muted);
         font-size: 10px;
         padding: 1px 6px;
+    }
+    .btn-discuss {
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+        background: color-mix(in srgb, var(--accent) 10%, var(--surface2));
+        color: var(--text);
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        white-space: nowrap;
+        transition:
+            border-color 0.15s,
+            background 0.15s,
+            color 0.15s;
+    }
+    .btn-discuss:hover {
+        border-color: color-mix(in srgb, var(--accent) 44%, transparent);
+        background: color-mix(in srgb, var(--accent) 16%, var(--surface2));
     }
 
     /* ── Cards ── */

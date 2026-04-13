@@ -1,6 +1,10 @@
 ﻿<script lang="ts">
     import { api, ApiError, getToken } from "../lib/api";
-    import type { FeedEvent, Directives } from "../lib/types";
+    import type { ChatHandoff, FeedEvent, Directives } from "../lib/types";
+
+    let {
+        onchat = (_handoff: ChatHandoff): void => {},
+    }: { onchat?: (handoff: ChatHandoff) => void } = $props();
 
     let events: FeedEvent[] = $state([]);
     let loading = $state(true);
@@ -121,6 +125,73 @@
         return c < 0.001 ? `<$0.001` : `$${c.toFixed(3)}`;
     }
 
+    function truncate(text: string, limit: number): string {
+        if (text.length <= limit) return text;
+        return `${text.slice(0, limit - 1).trimEnd()}…`;
+    }
+
+    function buildFeedPrompt(
+        title: string,
+        body: string,
+        meta: string[],
+    ): string {
+        const lines = [
+            "Арчі, розгорни цей контекст із Feed і скажи, що тут головне зараз.",
+            "",
+            `Подія: ${title}`,
+            ...meta,
+            body ? `Контекст: ${body}` : "",
+            "",
+            "Що це означає, який ризик/можливість і чи потрібна дія?",
+        ].filter(Boolean);
+        return lines.join("\n");
+    }
+
+    function buildEventHandoff(ev: FeedEvent): ChatHandoff {
+        const title = ev.symbol
+            ? `${ev.symbol} · ${ev.type ?? "Подія"}`
+            : (ev.type ?? "Подія");
+        const body = truncate(
+            ev.body?.trim() || "Подія без текстового опису.",
+            240,
+        );
+        const meta: string[] = [];
+        if (ev.symbol) meta.push(`Символ: ${ev.symbol}`);
+        if (ev.ts_ms) meta.push(`Час: ${fmtTs(ev.ts_ms)}`);
+
+        return {
+            id: `feed:${ev.id ?? ev.ts_ms}:${Date.now()}`,
+            source: "feed",
+            icon: typeIcon(ev.type ?? ""),
+            title,
+            summary: body,
+            prompt: buildFeedPrompt(title, body, meta),
+            ts_ms: ev.ts_ms,
+            symbol: ev.symbol,
+        };
+    }
+
+    function buildScenarioHandoff(scenarioText: string): ChatHandoff {
+        const title = directives?.focus_symbol
+            ? `${directives.focus_symbol} · Active Scenario`
+            : "Active Scenario";
+        const body = truncate(scenarioText.trim(), 240);
+        const meta: string[] = [];
+        if (directives?.focus_symbol) {
+            meta.push(`Символ: ${directives.focus_symbol}`);
+        }
+
+        return {
+            id: `scenario:${Date.now()}`,
+            source: "feed",
+            icon: "🎯",
+            title,
+            summary: body,
+            prompt: buildFeedPrompt(title, body, meta),
+            symbol: directives?.focus_symbol,
+        };
+    }
+
     async function refresh() {
         loading = true;
         error = "";
@@ -229,6 +300,15 @@
                 <div class="scenario-label">ACTIVE SCENARIO</div>
                 <div class="scenario-text">{directives.active_scenario}</div>
             </div>
+            <button
+                class="scenario-discuss"
+                onclick={() =>
+                    onchat(
+                        buildScenarioHandoff(directives?.active_scenario ?? ""),
+                    )}
+            >
+                💬 Обговорити
+            </button>
         </div>
     {/if}
     <!-- ── Filter Bar ── -->
@@ -306,6 +386,14 @@
                         {#if ev.body}
                             <div class="event-text">{ev.body}</div>
                         {/if}
+                        <div class="event-footer">
+                            <button
+                                class="event-discuss"
+                                onclick={() => onchat(buildEventHandoff(ev))}
+                            >
+                                💬 Обговорити в Chat
+                            </button>
+                        </div>
                     </div>
                 </div>
             {/each}
@@ -424,6 +512,27 @@
         overflow: hidden;
         text-overflow: ellipsis;
     }
+    .scenario-discuss {
+        flex-shrink: 0;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(251, 191, 36, 0.28);
+        background: rgba(251, 191, 36, 0.08);
+        color: #fbbf24;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        white-space: nowrap;
+        transition:
+            border-color 0.15s,
+            background 0.15s,
+            color 0.15s;
+    }
+    .scenario-discuss:hover {
+        border-color: rgba(251, 191, 36, 0.44);
+        background: rgba(251, 191, 36, 0.14);
+        color: #fcd34d;
+    }
 
     /* ── Card type variants ── */
     .card-compact {
@@ -517,6 +626,30 @@
         word-break: break-word;
         line-height: 1.5;
     }
+    .event-footer {
+        margin-top: 8px;
+        display: flex;
+        justify-content: flex-start;
+    }
+    .event-discuss {
+        padding: 5px 10px;
+        border-radius: 999px;
+        border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+        background: var(--surface2);
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        transition:
+            border-color 0.15s,
+            color 0.15s,
+            background 0.15s;
+    }
+    .event-discuss:hover {
+        border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+        color: var(--text);
+        background: color-mix(in srgb, var(--accent) 12%, var(--surface2));
+    }
 
     .empty-state {
         padding: 48px;
@@ -545,6 +678,16 @@
     .btn-ghost.small {
         font-size: 12px;
         padding: 4px 10px;
+    }
+
+    @media (max-width: 768px) {
+        .scenario-card {
+            align-items: flex-start;
+            flex-wrap: wrap;
+        }
+        .scenario-discuss {
+            margin-left: 28px;
+        }
     }
 
     /* ── Filter Bar ── */

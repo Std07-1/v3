@@ -1,7 +1,11 @@
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
-    import { api } from "../lib/api";
-    import type { LogLine } from "../lib/types";
+    import { api, ApiError } from "../lib/api";
+    import type { ChatHandoff, LogLine } from "../lib/types";
+
+    let {
+        onchat = (_handoff: ChatHandoff): void => {},
+    }: { onchat?: (handoff: ChatHandoff) => void } = $props();
 
     let lines = $state<LogLine[]>([]);
     let loading = $state(true);
@@ -10,15 +14,23 @@
     let copied = $state<number | null>(null);
     let autoRefresh = $state(true);
     let refreshId: ReturnType<typeof setInterval>;
+    let loadError = $state("");
 
     async function fetchLogs() {
         try {
+            loadError = "";
             const res = await api.logs(150, filter);
             // Reverse: newest first
             lines = (res.lines ?? []).slice().reverse();
             source = res.source ?? "";
-        } catch {
-            // quiet
+        } catch (e) {
+            lines = [];
+            source = "";
+            if (e instanceof ApiError && e.status === 401) {
+                loadError = "Невірний токен.";
+            } else {
+                loadError = "Не вдалося завантажити логи.";
+            }
         } finally {
             loading = false;
         }
@@ -49,6 +61,29 @@
         filter = f;
         loading = true;
         fetchLogs();
+    }
+
+    function openLogsHandoff() {
+        if (loadError || loading || lines.length === 0) return;
+        const preview = lines
+            .slice(0, 5)
+            .map((line) => `[${line.level}] ${line.text}`)
+            .join("\n");
+
+        onchat({
+            id: `logs:${filter}:${Date.now()}`,
+            source: "logs",
+            icon: "📋",
+            title: `Logs · ${filter}`,
+            summary: preview.slice(0, 220),
+            prompt: [
+                `Арчі, поясни цей лог-контекст (${filter}).`,
+                "",
+                preview,
+                "",
+                "Що тут важливе, чи це шум, і чи потрібна дія?",
+            ].join("\n"),
+        });
     }
 
     onMount(() => {
@@ -83,6 +118,14 @@
             </div>
             <div class="logs-actions">
                 <span class="meta-count">{lines.length}</span>
+                <button
+                    class="action-btn discuss-btn"
+                    onclick={openLogsHandoff}
+                    title="Обговорити логи в Chat"
+                    disabled={!!loadError || loading || lines.length === 0}
+                >
+                    💬
+                </button>
                 <button class="action-btn" onclick={copyAll} title="Copy all">
                     {copied === -1 ? "✓" : "📋"}
                 </button>
@@ -99,6 +142,8 @@
     <div class="logs-body">
         {#if loading && lines.length === 0}
             <div class="empty-state">Завантаження…</div>
+        {:else if loadError}
+            <div class="empty-state error-state">{loadError}</div>
         {:else if lines.length === 0}
             <div class="empty-state">Порожньо</div>
         {:else}

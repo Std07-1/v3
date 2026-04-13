@@ -1,8 +1,8 @@
 <script lang="ts">
     import "./lib/theme.css";
     import { getToken, setToken, api } from "./lib/api";
-    import type { Directives } from "./lib/types";
-    import { onDestroy } from "svelte";
+    import type { ChatHandoff, Directives } from "./lib/types";
+    import { onMount } from "svelte";
     import Feed from "./views/Feed.svelte";
     import Thinking from "./views/Thinking.svelte";
     import Relationship from "./views/Relationship.svelte";
@@ -12,16 +12,57 @@
 
     // ── routing (hash-based) ──
     let route = $state(window.location.hash.replace("#", "") || "/chat");
+    let sectionSwitcherOpen = $state(false);
     window.addEventListener("hashchange", () => {
         route = window.location.hash.replace("#", "") || "/chat";
+        sectionSwitcherOpen = false;
     });
 
     function nav(path: string) {
+        sectionSwitcherOpen = false;
         window.location.hash = path;
     }
 
-    // ── chat prefill (from Thinking quick reply) ──
-    let chatPrefill = $state("");
+    // ── chat draft + handoff state ──
+    let chatDraft = $state("");
+    let chatHandoff = $state<ChatHandoff | null>(null);
+
+    function openChatDraft(text: string) {
+        chatHandoff = null;
+        chatDraft = text;
+        nav("/chat");
+    }
+
+    function openChatHandoff(handoff: ChatHandoff) {
+        const currentDraft = chatDraft.trim();
+        const nextPrompt = handoff.prompt.trim();
+        chatHandoff = handoff;
+        if (!currentDraft) {
+            chatDraft = handoff.prompt;
+        } else if (currentDraft === nextPrompt) {
+            chatDraft = handoff.prompt;
+        }
+        nav("/chat");
+    }
+
+    function updateChatDraft(text: string) {
+        chatDraft = text;
+    }
+
+    function dismissChatHandoff(handoffId: string) {
+        if (chatHandoff?.id === handoffId) {
+            chatHandoff = null;
+        }
+    }
+
+    function getChatProps(): Record<string, unknown> {
+        return {
+            draft: chatDraft,
+            handoff: chatHandoff,
+            ondraftchange: updateChatDraft,
+            ondismisshandoff: dismissChatHandoff,
+        };
+    }
 
     // ── auth ──
     let token = $state(getToken());
@@ -76,22 +117,69 @@
         document.documentElement.style.setProperty("--accent", color);
     });
 
-    // ── Bottom nav auto-hide (mobile curtain) ──
-    let navHidden = $state(false);
-    let navTimer: ReturnType<typeof setTimeout> | null = null;
+    // ── Mobile viewport + keyboard state ──
+    const MOBILE_BREAKPOINT = "(max-width: 768px)";
+    let keyboardOpen = $state(false);
+    let viewportRaf: number | null = null;
 
-    function showNav() {
-        navHidden = false;
-        if (navTimer) clearTimeout(navTimer);
-        navTimer = setTimeout(() => {
-            navHidden = true;
-        }, 4000);
+    function hasTextEntryFocus(): boolean {
+        const active = document.activeElement;
+        return !!(
+            active instanceof HTMLElement &&
+            (active.tagName === "TEXTAREA" ||
+                active.tagName === "INPUT" ||
+                active.isContentEditable)
+        );
     }
 
-    // Show nav on route change
+    function updateViewportLayout() {
+        const vv = window.visualViewport;
+        const vh = vv?.height ?? window.innerHeight;
+        const isMobile = window.matchMedia(MOBILE_BREAKPOINT).matches;
+        const textEntryFocused = hasTextEntryFocus();
+
+        document.documentElement.style.setProperty("--app-vh", `${vh}px`);
+        keyboardOpen = isMobile && textEntryFocused;
+        document.body.classList.toggle("is-mobile", isMobile);
+        document.body.classList.toggle("keyboard-open", keyboardOpen);
+    }
+
+    function scheduleViewportLayout() {
+        if (viewportRaf !== null) return;
+        viewportRaf = requestAnimationFrame(() => {
+            viewportRaf = null;
+            updateViewportLayout();
+        });
+    }
+
     $effect(() => {
-        route; // track dependency
-        showNav();
+        if (!(route === "/chat" || route === "") || !keyboardOpen) {
+            sectionSwitcherOpen = false;
+        }
+    });
+
+    onMount(() => {
+        updateViewportLayout();
+
+        const vv = window.visualViewport;
+        vv?.addEventListener("resize", scheduleViewportLayout);
+        vv?.addEventListener("scroll", scheduleViewportLayout);
+        window.addEventListener("resize", scheduleViewportLayout);
+        window.addEventListener("orientationchange", scheduleViewportLayout);
+
+        return () => {
+            vv?.removeEventListener("resize", scheduleViewportLayout);
+            vv?.removeEventListener("scroll", scheduleViewportLayout);
+            window.removeEventListener("resize", scheduleViewportLayout);
+            window.removeEventListener(
+                "orientationchange",
+                scheduleViewportLayout,
+            );
+            if (viewportRaf !== null) {
+                cancelAnimationFrame(viewportRaf);
+                viewportRaf = null;
+            }
+        };
     });
 
     // ── Browser Push Notifications ──
@@ -372,71 +460,129 @@
         </nav>
 
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="right-panel" ontouchstart={showNav}>
+        <div
+            class="right-panel"
+            class:chat-route={route === "/chat" || route === ""}
+            class:keyboard-open={keyboardOpen}
+        >
             <main
                 class="content"
                 class:chat-layout={route === "/chat" || route === ""}
                 class:logs-layout={route === "/logs"}
             >
                 {#if route === "/chat" || route === ""}
-                    <Chat prefill={chatPrefill} />
+                    <Chat {...getChatProps()} />
                 {:else if route === "/feed"}
-                    <Feed />
+                    <Feed onchat={openChatHandoff} />
                 {:else if route === "/thinking"}
                     <Thinking
                         onchat={(text: string) => {
-                            chatPrefill = text;
-                            nav("/chat");
+                            openChatDraft(text);
                         }}
                     />
                 {:else if route === "/relationship"}
-                    <Relationship />
+                    <Relationship onchat={openChatHandoff} />
                 {:else if route === "/mind"}
-                    <Mind />
+                    <Mind onchat={openChatHandoff} />
                 {:else if route === "/logs"}
-                    <Logs />
+                    <Logs onchat={openChatHandoff} />
                 {:else}
                     <div class="empty-state">404 — не знайдено</div>
                 {/if}
             </main>
 
+            {#if (route === "/chat" || route === "") && keyboardOpen}
+                <div class="section-switcher">
+                    <button
+                        class="section-switcher-toggle"
+                        class:active={sectionSwitcherOpen}
+                        onclick={() => {
+                            sectionSwitcherOpen = !sectionSwitcherOpen;
+                        }}
+                        aria-expanded={sectionSwitcherOpen}
+                        aria-label="Перемкнути розділ"
+                    >
+                        <span class="section-switcher-icon">☰</span>
+                        <span class="section-switcher-label">Розділи</span>
+                    </button>
+
+                    {#if sectionSwitcherOpen}
+                        <div class="section-switcher-menu">
+                            <button
+                                class:active={route === "/chat" || route === ""}
+                                onclick={() => nav("/chat")}
+                            >
+                                <span class="switcher-emoji">💬</span>
+                                <span>Chat</span>
+                            </button>
+                            <button onclick={() => nav("/feed")}>
+                                <span class="switcher-emoji">⚡</span>
+                                <span>Feed</span>
+                            </button>
+                            <button onclick={() => nav("/thinking")}>
+                                <span class="switcher-emoji">🧠</span>
+                                <span>Thinking</span>
+                            </button>
+                            <button onclick={() => nav("/relationship")}>
+                                <span class="switcher-emoji">💙</span>
+                                <span>Relationship</span>
+                            </button>
+                            <button onclick={() => nav("/mind")}>
+                                <span class="switcher-emoji">🧩</span>
+                                <span>Mind</span>
+                            </button>
+                            <button onclick={() => nav("/logs")}>
+                                <span class="switcher-emoji">📋</span>
+                                <span>Logs</span>
+                            </button>
+                        </div>
+                    {/if}
+                </div>
+            {/if}
+
             <!-- ── Bottom Nav (mobile only — icon-only with underline) ── -->
-            <nav class="bottom-nav" class:hidden={navHidden}>
+            <nav class="bottom-nav">
                 <button
                     class:active={route === "/chat" || route === ""}
                     onclick={() => nav("/chat")}
+                    aria-label="Chat"
                 >
-                    <span class="bn-icon">💬</span>
+                    <span class="bn-pill"><span class="bn-icon">💬</span></span>
                 </button>
                 <button
                     class:active={route === "/feed"}
                     onclick={() => nav("/feed")}
+                    aria-label="Feed"
                 >
-                    <span class="bn-icon">⚡</span>
+                    <span class="bn-pill"><span class="bn-icon">⚡</span></span>
                 </button>
                 <button
                     class:active={route === "/thinking"}
                     onclick={() => nav("/thinking")}
+                    aria-label="Thinking"
                 >
-                    <span class="bn-icon">🧠</span>
+                    <span class="bn-pill"><span class="bn-icon">🧠</span></span>
                 </button>
                 <button
                     class:active={route === "/relationship"}
                     onclick={() => nav("/relationship")}
+                    aria-label="Relationship"
                 >
-                    <span class="bn-icon">💙</span>
+                    <span class="bn-pill"><span class="bn-icon">💙</span></span>
                 </button>
                 <button
                     class:active={route === "/mind"}
                     onclick={() => nav("/mind")}
+                    aria-label="Mind"
                 >
-                    <span class="bn-icon">🧩</span>
+                    <span class="bn-pill"><span class="bn-icon">🧩</span></span>
                 </button>
                 <button
                     class:active={route === "/logs"}
                     onclick={() => nav("/logs")}
+                    aria-label="Logs"
                 >
-                    <span class="bn-icon">📋</span>
+                    <span class="bn-pill"><span class="bn-icon">📋</span></span>
                 </button>
             </nav>
         </div>
@@ -446,7 +592,7 @@
 <style>
     /* ── Auth Screen ── */
     .auth-screen {
-        min-height: 100vh;
+        min-height: var(--app-vh, 100vh);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -517,7 +663,7 @@
     /* ── Shell ── */
     .shell {
         display: flex;
-        height: 100vh;
+        height: var(--app-vh, 100vh);
         overflow: hidden;
     }
 
@@ -726,6 +872,7 @@
         border-top: 1px solid var(--border);
         overflow: hidden;
         display: -webkit-box;
+        line-clamp: 3;
         -webkit-line-clamp: 3;
         -webkit-box-orient: vertical;
     }
@@ -738,6 +885,9 @@
 
     /* ── Bottom Nav (hidden on desktop) ── */
     .bottom-nav {
+        display: none;
+    }
+    .section-switcher {
         display: none;
     }
 
@@ -805,8 +955,90 @@
         .sidebar {
             display: none;
         }
+        .right-panel {
+            --mobile-nav-space: calc(60px + env(safe-area-inset-bottom));
+        }
+        .right-panel.chat-route.keyboard-open {
+            --mobile-nav-space: 0px;
+        }
         .content {
-            padding-bottom: 52px; /* reserve space for bottom nav */
+            padding-bottom: var(--mobile-nav-space);
+            transition: padding-bottom 0.22s ease;
+        }
+        .section-switcher {
+            position: fixed;
+            top: max(12px, calc(env(safe-area-inset-top) + 4px));
+            right: 12px;
+            z-index: 130;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 8px;
+        }
+        .section-switcher-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 9px 12px;
+            border-radius: 999px;
+            border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+            background: color-mix(in srgb, var(--surface) 96%, var(--bg));
+            color: var(--text);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+            cursor: pointer;
+            transition:
+                border-color 0.15s,
+                transform 0.15s;
+        }
+        .section-switcher-toggle.active {
+            border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+        }
+        .section-switcher-toggle:active {
+            transform: scale(0.98);
+        }
+        .section-switcher-icon {
+            font-size: 13px;
+            line-height: 1;
+        }
+        .section-switcher-label {
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+        }
+        .section-switcher-menu {
+            width: min(228px, calc(100vw - 24px));
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+            padding: 10px;
+            border-radius: 18px;
+            border: 1px solid var(--border);
+            background: color-mix(in srgb, var(--surface) 97%, var(--bg));
+            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+        }
+        .section-switcher-menu button {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 8px;
+            min-height: 42px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            border: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+            background: var(--surface2);
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .section-switcher-menu button.active {
+            color: var(--text);
+            border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+            background: color-mix(in srgb, var(--accent) 14%, var(--surface2));
+        }
+        .switcher-emoji {
+            font-size: 15px;
+            line-height: 1;
         }
         .bottom-nav {
             display: flex;
@@ -814,17 +1046,19 @@
             bottom: 0;
             left: 0;
             right: 0;
-            height: 48px;
-            background: var(--surface);
+            align-items: center;
+            justify-content: space-between;
+            min-height: 56px;
+            padding: 6px 10px calc(8px + env(safe-area-inset-bottom));
+            background: color-mix(in srgb, var(--surface) 96%, var(--bg));
             border-top: 1px solid var(--border);
             z-index: 100;
-            padding-bottom: env(safe-area-inset-bottom);
             transition:
-                transform 0.3s ease,
-                opacity 0.3s ease;
+                transform 0.22s ease,
+                opacity 0.22s ease;
         }
-        .bottom-nav.hidden {
-            transform: translateY(100%);
+        .right-panel.chat-route.keyboard-open .bottom-nav {
+            transform: translateY(120%);
             opacity: 0;
             pointer-events: none;
         }
@@ -837,17 +1071,32 @@
             min-height: 48px;
             background: none;
             border: none;
-            border-top: 2px solid transparent;
             cursor: pointer;
             color: var(--text-muted);
-            transition:
-                color 0.15s,
-                border-color 0.15s;
-            position: relative;
+            transition: color 0.15s;
         }
         .bottom-nav button.active {
-            color: var(--accent);
-            border-top-color: var(--accent);
+            color: var(--text);
+        }
+        .bn-pill {
+            width: 42px;
+            height: 34px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 17px;
+            transition:
+                background 0.15s,
+                box-shadow 0.15s,
+                transform 0.15s;
+        }
+        .bottom-nav button.active .bn-pill {
+            background: color-mix(in srgb, var(--accent) 18%, var(--surface2));
+            box-shadow:
+                inset 0 0 0 1px
+                    color-mix(in srgb, var(--accent) 35%, transparent),
+                0 6px 18px rgba(0, 0, 0, 0.18);
+            transform: translateY(-1px);
         }
         .bn-icon {
             font-size: 22px;
