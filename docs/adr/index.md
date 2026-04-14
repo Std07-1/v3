@@ -61,6 +61,7 @@
 | [0045](0045-vps-trader-bot.md) | VPS SMC Trader Bot (smc_trader_v3.py) — Reactive+Proactive Telegram bot | **Accepted** | 2026-03-30 | Telegram, aiogram 3.x, claude-opus-4-6, reactive/proactive, change_score, market_state.json, WS read-only, separate process | `smc_trader_bot_v1` |
 | [0046](0046-agent-personality-restoration.md) | Agent Personality Restoration — External Prompt SSOT + DNA Injection | **Accepted** | 2026-04-03 | personality, smc_trader_prompt_v3.md, external prompt, DNA injection, proactive style, conversation seed | `agent_personality_v1` |
 | [0047](0047-structure-detection-v2.md) | Structure Detection V2 — Canonical BOS/CHoCH + FVG Accuracy | **Implemented** | 2026-04-07 | BOS, CHoCH, HH/HL/LH/LL, structure.py, FVG display cap, confirmation_bars, ICT canonical | `structure_detection_v2` |
+| [0048](0048-wake-engine-narrative-subscription.md) | Platform Wake Engine + Narrative Enrichment + Subscription Prep | **Proposed** | 2026-04-14 | WakeEngine, wake conditions, thesis layer, narrative enrichment, subscription, tier gate, premium/free, Redis IPC | `wake_engine_v1` |
 
 ---
 
