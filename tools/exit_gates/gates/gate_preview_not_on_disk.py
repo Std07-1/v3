@@ -54,7 +54,7 @@ def _iter_tail_lines(path: str, max_lines: int) -> Iterable[bytes]:
             for line in lines:
                 yield line
     except Exception:
-        return []
+        return
 
 
 def _list_symbols(data_root: str) -> List[str]:
