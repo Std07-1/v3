@@ -2,7 +2,7 @@
 
 > **Системний довідник** — структура, команди, конфігурація, схеми.
 > Правила, інваріанти, заборони → `.github/copilot-instructions.md`.
-> **Last Updated**: 2026-03-24
+> **Last Updated**: 2026-04-16
 
 ---
 
@@ -21,7 +21,7 @@
 
 ---
 
-## 1.1 Актуальний статус (2026-03-13)
+## 1.1 Актуальний статус (2026-04-16)
 
 - Потік B (мульти-символьна активація) — **відкладено** через integrity derived TF (див. ADR-0025)
 - Всі результати audit/rebuild зафіксовані в [docs/adr/0025-potik-b-data-quality-summary.md](docs/adr/0025-potik-b-data-quality-summary.md)
@@ -30,7 +30,12 @@
 - Elimination Engine + Confluence Scoring (ADR-0028, ADR-0029): display budget, 8-factor grade
 - TF Sovereignty + Bias Banner (ADR-0030-alt, ADR-0031): cross-TF projection, multi-TF bias display
 - Sessions & Killzones **Implemented** (ADR-0035): Asia/London/NY session H/L levels, killzone context, F9 sweep confluence, narrative session integration, 40 tests
+- Structure Detection V2 **Implemented** (ADR-0047): BOS/CHoCH canonical ICT, confirmation_bars, FVG display cap
+- Delta Frame State Sync **Implemented** (ADR-0042): zone_grades, pd_state, bias_map thick delta
+- UI v4 Canvas Safe Zones **Implemented** (ADR-0043): CANVAS_SAFE_TOP_Y, pd_state null-clear, boot_id reset
 - Client-Side Replay (ADR-0027): TradingView-style replay з data_v3/
+- Binance Second Broker **Implemented** (ADR-0037): BTCUSDT/ETHUSDT 24/7 ingest
+- Platform Wake Engine (ADR-0049): wake conditions + external consumer IPC — **Accepted**
 - Для майбутньої активації інших символів потрібен окремий audit/fix integrity derived TF
 
 ### 1.2 Технологічний стек
@@ -208,20 +213,61 @@ v3/
 
 ### 2.1 trader-v3/ — AI Trading Agent "Арчі" (окрема підсистема)
 
+> **42 .py files, ~17,800 LOC** (April 2026). Deploy = SCP to VPS.
+
 ```
-trader-v3/                     # .gitignore'd — proprietary, deploy = SCP
-├── bot/                       # Bot application code
-│   ├── agent/prompts.py       # System prompts (personality, recommendations)
-│   ├── scheduling/monitor.py  # Proactive monitor loop
-│   ├── state/directives.py    # Agent directives (wake_at, VP, rules)
-│   ├── transport/handlers.py  # Telegram message handlers
-│   └── config.py              # Config dataclasses
+trader-v3/                          # .gitignore'd — proprietary
+├── bot/                            # Bot application code (42 .py, ~17,800 LOC)
+│   ├── main.py                    # Entry point, Telegram polling (366)
+│   ├── config.py                  # Config dataclasses (533)
+│   ├── agent/                     # AI agent core
+│   │   ├── core.py               # AgentCore: Anthropic calls, tool use (1210)
+│   │   ├── prompts.py            # System prompts, personality DNA extraction (752)
+│   │   ├── discipline.py         # Pre/post trade discipline checks (480)
+│   │   ├── observation_router.py # TSM/observation routing (ADR-033) (299)
+│   │   ├── scanner.py            # Market scanning logic (180)
+│   │   └── structured_output.py  # Structured output parsing (180)
+│   ├── enrichment/                # External data enrichment
+│   │   ├── market_data.py        # Yahoo/ForexFactory market data (416)
+│   │   └── news_feed.py          # News feed integration (150)
+│   ├── scheduling/                # Proactive scheduling
+│   │   ├── monitor.py            # Proactive monitor loop v3 + TSM (2064)
+│   │   ├── mechanical.py         # Mechanical operations (timers, budget reset) (174)
+│   │   ├── cost.py               # API cost tracking (72)
+│   │   └── scheduler.py          # Cron-like scheduler (45)
+│   ├── state/                     # Agent state management (largest package)
+│   │   ├── directives.py         # AgentDirectives: bias, levels, scenarios, wake (3586)
+│   │   ├── manager.py            # StateManager: load/save/merge state (1049)
+│   │   ├── curator.py            # Knowledge curation + learning journal (476)
+│   │   ├── thesis.py             # ThesisStateMachine (TSM, ADR-033) (395)
+│   │   ├── self_eval.py          # Self-evaluation + accuracy tracking (291)
+│   │   ├── thinking_archive.py   # Consciousness archive (ADR-018) (263)
+│   │   ├── event_journal.py      # Structured event journaling (236)
+│   │   ├── hibernation.py        # API limit hibernation mode (189)
+│   │   ├── predictions.py        # Prediction tracking (163)
+│   │   ├── conv_memory.py        # Conversation memory management (143)
+│   │   ├── digest.py             # Daily digest generation (130)
+│   │   └── forecasts.py          # Forecast tracking (115)
+│   ├── tools/                     # Agent tool use
+│   │   └── executor.py           # Tool executor (ADR-026) (263)
+│   └── transport/                 # I/O layer
+│       ├── handlers.py           # Telegram message handlers (2169)
+│       ├── web_inbox.py          # Archi Console web chat (305)
+│       ├── platform.py           # Platform WS/HTTP client (214)
+│       ├── voice.py              # TTS/STT voice pipeline (187)
+│       ├── events.py             # Event dispatching (185)
+│       ├── wake_sync.py          # Wake conditions → Redis sync (164)
+│       ├── telegram.py           # Telegram transport utilities (113)
+│       └── wake_reader.py        # WakeEngine events reader (99)
 ├── docs/
-│   ├── ARCHITECTURE.md        # Bot architecture + I7 governance (§3a)
-│   └── adr/                   # Bot ADRs (001–024)
+│   ├── ARCHITECTURE.md           # Bot architecture + I7 governance (§3a)
+│   ├── CURRENT_STATE.md          # Current snapshot (updated regularly)
+│   ├── CODEMAP.md                # Code map (needs refresh)
+│   └── adr/                      # Bot ADRs (001–034)
 │       └── ADR-024-autonomy-charter.md  # I7 SSOT
-├── smc_trader_prompt_v3.md    # Арчі's personality prompt (~750 lines)
-└── tests/test_directives.py   # 153 tests
+├── smc_trader_prompt_v3.md       # Арчі's personality prompt (~1,500 lines, 95KB)
+├── ui_archi/                     # Archi Console (Svelte web UI)
+└── tests/                        # 153+ tests
 ```
 
 **Інваріант I7 — Autonomy-First (ADR-024)**:
@@ -385,7 +431,7 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 | `test_tick_preview_calendar.py` | Tick preview + calendar gate |
 | `test_structure_v2.py` | Structure V2: BOS/CHoCH canonical (ADR-0047) |
 
-> **53 test files total** on disk. Table above lists key tests; run `pytest tests/ -v` for full coverage.
+> **54 test files total** on disk. Table above lists key tests; run `pytest tests/ -v` for full coverage.
 
 ---
 

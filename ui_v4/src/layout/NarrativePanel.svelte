@@ -1,4 +1,4 @@
-<!-- src/layout/NarrativePanel.svelte — ADR-0033: Context Flow Narrative Panel -->
+﻿<!-- src/layout/NarrativePanel.svelte вЂ” ADR-0033: Context Flow Narrative Panel -->
 <script lang="ts">
     import type { NarrativeBlock } from "../types";
 
@@ -18,7 +18,7 @@
         }
     }
 
-    // Trigger color class — per-scenario (P4 fix: was global from [0])
+    // Trigger color class вЂ” per-scenario (P4 fix: was global from [0])
     function getTriggerClass(trigger: string): string {
         if (trigger === "ready") return "trigger-ready";
         if (trigger === "triggered") return "trigger-triggered";
@@ -42,11 +42,11 @@
             {#if narrative.market_phase === "trending_up" || narrative.market_phase === "trending_down"}
                 <span class="phase-badge"
                     >{narrative.market_phase === "trending_up"
-                        ? "↑trend"
-                        : "↓trend"}</span
+                        ? "в†‘trend"
+                        : "в†“trend"}</span
                 >
             {/if}
-            <span class="expand-arrow">{expanded ? "▾" : "▸"}</span>
+            <span class="expand-arrow">{expanded ? "в–ѕ" : "в–ё"}</span>
         </button>
 
         {#if expanded}
@@ -63,7 +63,7 @@
                                 class:long={sc.direction === "long"}
                                 class:short={sc.direction === "short"}
                             >
-                                {sc.direction === "long" ? "▲" : "▼"}
+                                {sc.direction === "long" ? "в–І" : "в–ј"}
                                 {sc.entry_desc}
                             </span>
                         </div>
@@ -71,9 +71,9 @@
                             {sc.trigger_desc}
                         </div>
                         {#if sc.target_desc}
-                            <div class="sc-target">→ {sc.target_desc}</div>
+                            <div class="sc-target">в†’ {sc.target_desc}</div>
                         {/if}
-                        <div class="sc-invalidation">✕ {sc.invalidation}</div>
+                        <div class="sc-invalidation">вњ• {sc.invalidation}</div>
                     </div>
                 {/each}
 
@@ -91,7 +91,50 @@
                 <!-- Warnings -->
                 {#if narrative.warnings.length > 0}
                     <div class="row warnings">
-                        ⚠ {narrative.warnings.join(", ")}
+                        вљ  {narrative.warnings.join(", ")}
+                    </div>
+                {/if}
+
+                <!-- ADR-0049: Archi Thesis Layer -->
+                {#if narrative.archi_thesis}
+                    <div class="archi-section">
+                        <div class="archi-header">
+                            <span class="archi-icon">рџ§ </span>
+                            <span class="archi-label">РђСЂС‡С–</span>
+                            <span class="conviction conviction-{narrative.archi_thesis.conviction}">
+                                {narrative.archi_thesis.conviction}
+                            </span>
+                            <span class="freshness freshness-{narrative.archi_thesis.freshness}">
+                                {narrative.archi_thesis.freshness}
+                            </span>
+                        </div>
+                        <div class="archi-thesis">{narrative.archi_thesis.thesis}</div>
+                        {#if narrative.archi_thesis.key_level}
+                            <div class="archi-detail">
+                                рџЋЇ {narrative.archi_thesis.key_level}
+                                {#if narrative.archi_thesis.invalidation}
+                                    <span class="archi-inv">вњ• {narrative.archi_thesis.invalidation}</span>
+                                {/if}
+                            </div>
+                        {/if}
+                    </div>
+                {/if}
+
+                <!-- ADR-0049: Archi Presence -->
+                {#if narrative.archi_presence}
+                    <div class="presence-row">
+                        <span class="presence-dot presence-{narrative.archi_presence.status}"></span>
+                        <span class="presence-text">
+                            {narrative.archi_presence.status}
+                            {#if narrative.archi_presence.silence_h > 0}
+                                В· {narrative.archi_presence.silence_h}h ago
+                            {/if}
+                        </span>
+                        {#if narrative.archi_presence.conditions > 0}
+                            <span class="presence-conditions">
+                                {narrative.archi_presence.conditions} conditions
+                            </span>
+                        {/if}
                     </div>
                 {/if}
             </div>
@@ -245,5 +288,89 @@
     .warnings {
         color: #ff9800;
         font-size: 9px;
+    }
+
+    /* ADR-0049: Archi Thesis */
+    .archi-section {
+        margin-top: 4px;
+        padding: 4px 6px;
+        border-top: 1px solid rgba(124, 77, 255, 0.2);
+        border-radius: 4px;
+        background: rgba(124, 77, 255, 0.05);
+    }
+    .archi-header {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 9px;
+    }
+    .archi-icon { font-size: 10px; }
+    .archi-label {
+        font-weight: 700;
+        color: #b388ff;
+        font-size: 9px;
+    }
+    .conviction {
+        font-size: 8px;
+        padding: 1px 4px;
+        border-radius: 3px;
+    }
+    .conviction-high { color: #26a69a; background: rgba(38, 166, 154, 0.15); }
+    .conviction-medium { color: #ffa726; background: rgba(255, 167, 38, 0.12); }
+    .conviction-low { color: #8b8f9a; background: rgba(120, 123, 134, 0.12); }
+    .freshness {
+        font-size: 7px;
+        padding: 1px 3px;
+        border-radius: 2px;
+        margin-left: auto;
+    }
+    .freshness-fresh { color: #26a69a; }
+    .freshness-aging { color: #ffa726; }
+    .freshness-stale { color: #ef5350; }
+    .archi-thesis {
+        font-size: 10px;
+        color: #d0d4e0;
+        margin-top: 3px;
+        line-height: 1.4;
+    }
+    .archi-detail {
+        font-size: 9px;
+        color: #4a90d9;
+        margin-top: 2px;
+    }
+    .archi-inv {
+        color: #ef5350;
+        margin-left: 8px;
+    }
+
+    /* ADR-0049: Presence */
+    .presence-row {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        margin-top: 4px;
+        padding-top: 3px;
+        border-top: 1px solid rgba(120, 123, 134, 0.08);
+        font-size: 8px;
+        color: #5d6068;
+    }
+    .presence-dot {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+    .presence-sleeping { background: #5d6068; }
+    .presence-watching { background: #ffa726; }
+    .presence-analyzing { background: #42a5f5; animation: pulse 1.5s infinite; }
+    .presence-active { background: #26a69a; animation: pulse 1s infinite; }
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+    }
+    .presence-text { flex: 1; }
+    .presence-conditions {
+        color: #8b8f9a;
+        font-size: 7px;
     }
 </style>

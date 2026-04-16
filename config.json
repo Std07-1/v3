@@ -288,6 +288,19 @@
         "bg_smc_poll_interval_s": 10.0,
         "cors_allowed_origins": []
     },
+    "wake_engine": {
+        "enabled": true,
+        "zone_proximity_atr": 2.0,
+        "max_silence_hours": 3.0,
+        "grade_accept": [
+            "A+",
+            "A"
+        ],
+        "zone_score_min": 6,
+        "accumulator_threshold": 5.0,
+        "accumulator_decay": 0.95,
+        "min_event_interval_s": 600
+    },
     "agent_console": {
         "enabled": true,
         "data_dir": "/opt/smc-trader-v3/data",

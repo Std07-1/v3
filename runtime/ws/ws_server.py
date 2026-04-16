@@ -1,16 +1,16 @@
-"""
-runtime/ws/ws_server.py — aiohttp WebSocket сервер для ui_v4.
+﻿"""
+runtime/ws/ws_server.py вЂ” aiohttp WebSocket СЃРµСЂРІРµСЂ РґР»СЏ ui_v4.
 
 P1: skeleton + heartbeat.
 P2: UDS reader integration (full frame, switch, delta, scrollback).
 
-Інваріанти:
-  W0: WS-сервер = UDS reader only (role="reader")
-  W1: schema_v = "ui_v4_v2" на кожному frame
-  W2: meta.seq строго зростає per-connection (heartbeat/full/delta/scrollback)
-  W7: heartbeat кожні ≤30s
+Р†РЅРІР°СЂС–Р°РЅС‚Рё:
+  W0: WS-СЃРµСЂРІРµСЂ = UDS reader only (role="reader")
+  W1: schema_v = "ui_v4_v2" РЅР° РєРѕР¶РЅРѕРјСѓ frame
+  W2: meta.seq СЃС‚СЂРѕРіРѕ Р·СЂРѕСЃС‚Р°С” per-connection (heartbeat/full/delta/scrollback)
+  W7: heartbeat РєРѕР¶РЅС– в‰¤30s
 
-Запуск: python -m runtime.ws.ws_server --port 8000
+Р—Р°РїСѓСЃРє: python -m runtime.ws.ws_server --port 8000
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from core.config_loader import (
 
 _log = logging.getLogger(__name__)
 
-# ── Constants ──────────────────────────────────────────
+# в”Ђв”Ђ Constants в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 SCHEMA_V = "ui_v4_v2"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -58,7 +58,7 @@ class UdsLike(Protocol):
 
 
 class SmcRunnerLike(Protocol):
-    _engine: Any  # SmcEngine — accessed by diagnostics endpoints
+    _engine: Any  # SmcEngine вЂ” accessed by diagnostics endpoints
 
     def get_snapshot(self, symbol: str, tf_s: int) -> Any: ...
 
@@ -113,10 +113,11 @@ APP_SMC_RUNNER = web.AppKey("smc_runner", SmcRunnerLike)
 APP_CORS_ORIGINS = web.AppKey("cors_origins", set)
 APP_GLOBAL_DELTA_TASK = web.AppKey("global_delta_task", asyncio.Task)
 APP_BG_SMC_TASK = web.AppKey("bg_smc_task", asyncio.Task)
+APP_WAKE_ENGINE = web.AppKey("wake_engine", object)  # ADR-0049: WakeEngine instance
 
-# CORS: дозволені origins для cross-origin (Vercel / Cloudflare Pages)
-# Конфіг: ws_server.cors_allowed_origins в config.json
-# Якщо список порожній — CORS headers не додаються (same-origin режим)
+# CORS: РґРѕР·РІРѕР»РµРЅС– origins РґР»СЏ cross-origin (Vercel / Cloudflare Pages)
+# РљРѕРЅС„С–Рі: ws_server.cors_allowed_origins РІ config.json
+# РЇРєС‰Рѕ СЃРїРёСЃРѕРє РїРѕСЂРѕР¶РЅС–Р№ вЂ” CORS headers РЅРµ РґРѕРґР°СЋС‚СЊСЃСЏ (same-origin СЂРµР¶РёРј)
 _CORS_HEADERS_COMMON = {
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
@@ -131,11 +132,11 @@ _D1_TICK_RELAY_ENABLED_DEFAULT = False
 _D1_TICK_RELAY_TFS_DEFAULT: set = set()
 
 # P11: scrollback disk rails
-SCROLLBACK_MAX_STEPS = 12  # макс чанків scrollback per session per symbol+tf
-SCROLLBACK_COOLDOWN_S = 0.5  # мінімальний інтервал між scrollback від одного клієнта
+SCROLLBACK_MAX_STEPS = 12  # РјР°РєСЃ С‡Р°РЅРєС–РІ scrollback per session per symbol+tf
+SCROLLBACK_COOLDOWN_S = 0.5  # РјС–РЅС–РјР°Р»СЊРЅРёР№ С–РЅС‚РµСЂРІР°Р» РјС–Р¶ scrollback РІС–Рґ РѕРґРЅРѕРіРѕ РєР»С–С”РЅС‚Р°
 
-# TF label ↔ seconds mapping (types.ts WsAction.switch.tf)
-# Canonical labels: uppercase M1, M5, H1 etc. (як у фронтенді SymbolTfPicker)
+# TF label в†” seconds mapping (types.ts WsAction.switch.tf)
+# Canonical labels: uppercase M1, M5, H1 etc. (СЏРє Сѓ С„СЂРѕРЅС‚РµРЅРґС– SymbolTfPicker)
 _TF_CANONICAL_LABELS: Dict[str, int] = {
     "M1": 60,
     "M3": 180,
@@ -166,11 +167,11 @@ _TF_LABEL_TO_S.update(
 )
 _TF_S_TO_LABEL: Dict[int, str] = {v: k for k, v in _TF_CANONICAL_LABELS.items()}
 
-# ── Helpers ────────────────────────────────────────────
+# в”Ђв”Ђ Helpers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 
 def _load_full_config(config_path: str) -> Dict[str, Any]:
-    """Завантажує повний config.json через core.config_loader (T10/S26 SSOT)."""
+    """Р—Р°РІР°РЅС‚Р°Р¶СѓС” РїРѕРІРЅРёР№ config.json С‡РµСЂРµР· core.config_loader (T10/S26 SSOT)."""
     try:
         resolved = resolve_config_path(config_path)
         return load_system_config(resolved)
@@ -180,7 +181,7 @@ def _load_full_config(config_path: str) -> Dict[str, Any]:
 
 
 def _canonicalize_symbol(raw: str, symbols: set) -> str:
-    """Нормалізує символ: EUR_USD → EUR/USD."""
+    """РќРѕСЂРјР°Р»С–Р·СѓС” СЃРёРјРІРѕР»: EUR_USD в†’ EUR/USD."""
     if raw in symbols:
         return raw
     if "_" in raw:
@@ -191,7 +192,7 @@ def _canonicalize_symbol(raw: str, symbols: set) -> str:
 
 
 def _cold_start_limit(tf_s: int, cfg: Dict[str, Any]) -> int:
-    """Повертає кількість барів для cold start по TF."""
+    """РџРѕРІРµСЂС‚Р°С” РєС–Р»СЊРєС–СЃС‚СЊ Р±Р°СЂС–РІ РґР»СЏ cold start РїРѕ TF."""
     bootstrap = cfg.get("bootstrap", {})
     cold_map = bootstrap.get("ui_cold_start_bars_by_tf", {})
     raw = cold_map.get(str(tf_s))
@@ -209,13 +210,13 @@ def _cold_start_limit(tf_s: int, cfg: Dict[str, Any]) -> int:
     return DEFAULT_COLD_START_BARS
 
 
-# ── Output Guard (T6/S19: WS candle shape + monotonicity) ──────
+# в”Ђв”Ђ Output Guard (T6/S19: WS candle shape + monotonicity) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 
 def _guard_candle_shape(candle: dict) -> Optional[str]:
-    """Валідує один v4 Candle dict. Повертає issue string або None якщо OK.
+    """Р’Р°Р»С–РґСѓС” РѕРґРёРЅ v4 Candle dict. РџРѕРІРµСЂС‚Р°С” issue string Р°Р±Рѕ None СЏРєС‰Рѕ OK.
 
-    Контракт: types.ts Candle {t_ms: int, o: float, h: float, l: float, c: float, v: float}
+    РљРѕРЅС‚СЂР°РєС‚: types.ts Candle {t_ms: int, o: float, h: float, l: float, c: float, v: float}
     """
     if not isinstance(candle, dict):
         return "candle_not_dict"
@@ -245,19 +246,19 @@ def _guard_candles_output(
     tf_label: str,
     frame_type: str,
 ) -> list:
-    """Output guard для масиву candles перед відправкою клієнту (T6/S19).
+    """Output guard РґР»СЏ РјР°СЃРёРІСѓ candles РїРµСЂРµРґ РІС–РґРїСЂР°РІРєРѕСЋ РєР»С–С”РЅС‚Сѓ (T6/S19).
 
-    - Дропає candles з поганою формою (degraded-but-loud).
-    - Перевіряє монотонність t_ms (no duplicates, sorted asc).
-    - Повертає список warnings.
+    - Р”СЂРѕРїР°С” candles Р· РїРѕРіР°РЅРѕСЋ С„РѕСЂРјРѕСЋ (degraded-but-loud).
+    - РџРµСЂРµРІС–СЂСЏС” РјРѕРЅРѕС‚РѕРЅРЅС–СЃС‚СЊ t_ms (no duplicates, sorted asc).
+    - РџРѕРІРµСЂС‚Р°С” СЃРїРёСЃРѕРє warnings.
 
-    Мутує candles in-place (видаляє bad).
+    РњСѓС‚СѓС” candles in-place (РІРёРґР°Р»СЏС” bad).
     """
     warnings: list = []
     if not candles:
         return warnings
 
-    # ── Pass 1: shape guard — дропаємо погані ──
+    # в”Ђв”Ђ Pass 1: shape guard вЂ” РґСЂРѕРїР°С”РјРѕ РїРѕРіР°РЅС– в”Ђв”Ђ
     valid = []
     for i, c in enumerate(candles):
         issue = _guard_candle_shape(c)
@@ -286,7 +287,7 @@ def _guard_candles_output(
             dropped + len(valid),
         )
 
-    # ── Pass 2: монотонність t_ms (sorted asc, no dup) ──
+    # в”Ђв”Ђ Pass 2: РјРѕРЅРѕС‚РѕРЅРЅС–СЃС‚СЊ t_ms (sorted asc, no dup) в”Ђв”Ђ
     if len(candles) >= 2:
         dup_count = 0
         unsorted_count = 0
@@ -322,7 +323,7 @@ def _guard_candles_output(
     return warnings
 
 
-# ── Session ────────────────────────────────────────────
+# в”Ђв”Ђ Session в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 
 class WsSession:
@@ -347,16 +348,16 @@ class WsSession:
         self.last_update_seq: Optional[int] = 0
         self.ws: web.WebSocketResponse = ws
         self._scrollback_count: int = (
-            0  # P11: кількість scrollback для поточного symbol+tf
+            0  # P11: РєС–Р»СЊРєС–СЃС‚СЊ scrollback РґР»СЏ РїРѕС‚РѕС‡РЅРѕРіРѕ symbol+tf
         )
-        self._scrollback_last_ts: float = 0  # P11: timestamp останнього scrollback
+        self._scrollback_last_ts: float = 0  # P11: timestamp РѕСЃС‚Р°РЅРЅСЊРѕРіРѕ scrollback
 
     def next_seq(self) -> int:
         self.seq += 1
         return self.seq
 
 
-# ── Frame builders ─────────────────────────────────────
+# в”Ђв”Ђ Frame builders в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 
 def _build_meta(session: WsSession, app: Any = None, **extra: Any) -> Dict[str, Any]:
@@ -385,7 +386,7 @@ def _build_error_frame(
     message: str,
     app: Any = None,
 ) -> Dict[str, Any]:
-    """S20/S25: error response frame — degraded-but-loud для клієнта."""
+    """S20/S25: error response frame вЂ” degraded-but-loud РґР»СЏ РєР»С–С”РЅС‚Р°."""
     return {
         "type": "render_frame",
         "frame_type": "error",
@@ -406,14 +407,14 @@ def _build_full_frame(
     momentum_map: Optional[Dict] = None,
     pd_state: Optional[Dict] = None,
 ) -> Dict[str, Any]:
-    # T6/S19: output guard — validate candle shapes before send
+    # T6/S19: output guard вЂ” validate candle shapes before send
     guard_warns = _guard_candles_output(candles, symbol, tf_label, "full")
     meta = _build_meta(session, app=app)
     all_warnings = list(warnings or []) + guard_warns
     if all_warnings:
         meta["warnings"] = all_warnings
-    # P1→P2: config payload — UI читає symbols/tfs з сервера (SSOT)
-    # tfs = canonical labels (["M1","M3",...]) — UI switch надсилає саме labels
+    # P1в†’P2: config payload вЂ” UI С‡РёС‚Р°С” symbols/tfs Р· СЃРµСЂРІРµСЂР° (SSOT)
+    # tfs = canonical labels (["M1","M3",...]) вЂ” UI switch РЅР°РґСЃРёР»Р°С” СЃР°РјРµ labels
     if app is not None:
         cfg = app.get(APP_FULL_CONFIG, {})
         allowlist_s = sorted(app.get(APP_TF_ALLOWLIST, set()))
@@ -500,10 +501,10 @@ def _build_config_frame(
     session: WsSession,
     app: Any,
 ) -> Dict[str, Any]:
-    """T8/S24: dedicated config frame — policy bridge for UI.
+    """T8/S24: dedicated config frame вЂ” policy bridge for UI.
 
-    Відправляється одразу при connect, до full frame.
-    UI отримує symbols/tfs/defaults навіть якщо UDS недоступний.
+    Р’С–РґРїСЂР°РІР»СЏС”С‚СЊСЃСЏ РѕРґСЂР°Р·Сѓ РїСЂРё connect, РґРѕ full frame.
+    UI РѕС‚СЂРёРјСѓС” symbols/tfs/defaults РЅР°РІС–С‚СЊ СЏРєС‰Рѕ UDS РЅРµРґРѕСЃС‚СѓРїРЅРёР№.
     """
     cfg = app.get(APP_FULL_CONFIG, {})
     allowlist_s = sorted(app.get(APP_TF_ALLOWLIST, set()))
@@ -524,7 +525,7 @@ def _build_config_frame(
     }
 
 
-# ── UDS async wrappers (blocking I/O → executor) ──────
+# в”Ђв”Ђ UDS async wrappers (blocking I/O в†’ executor) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 
 async def _uds_read_window(
@@ -534,7 +535,7 @@ async def _uds_read_window(
     limit: int,
     to_open_ms: Optional[int] = None,
 ) -> Any:
-    """Async wrapper для UDS read_window (blocking Redis/Disk I/O)."""
+    """Async wrapper РґР»СЏ UDS read_window (blocking Redis/Disk I/O)."""
     from runtime.store.uds import WindowSpec, ReadPolicy
 
     uds = app[APP_UDS] if APP_UDS in app else None
@@ -547,10 +548,10 @@ async def _uds_read_window(
         to_open_ms=to_open_ms,
         cold_load=to_open_ms is None,
     )
-    # P11: scrollback (to_open_ms) = "explicit" (disk дозволено завжди);
-    #      cold-start/switch = "bootstrap" (disk тільки в bootstrap вікні).
-    # P2: disk_policy="explicit" для всіх reads — ws_server окремий процес,
-    # його RAM/Redis можуть бути stale. Disk завжди актуальний.
+    # P11: scrollback (to_open_ms) = "explicit" (disk РґРѕР·РІРѕР»РµРЅРѕ Р·Р°РІР¶РґРё);
+    #      cold-start/switch = "bootstrap" (disk С‚С–Р»СЊРєРё РІ bootstrap РІС–РєРЅС–).
+    # P2: disk_policy="explicit" РґР»СЏ РІСЃС–С… reads вЂ” ws_server РѕРєСЂРµРјРёР№ РїСЂРѕС†РµСЃ,
+    # Р№РѕРіРѕ RAM/Redis РјРѕР¶СѓС‚СЊ Р±СѓС‚Рё stale. Disk Р·Р°РІР¶РґРё Р°РєС‚СѓР°Р»СЊРЅРёР№.
     policy = ReadPolicy(disk_policy="explicit", prefer_redis=True)
     loop = asyncio.get_event_loop()
     executor = app[APP_UDS_EXECUTOR]
@@ -564,7 +565,7 @@ async def _uds_read_updates(
     since_seq: Optional[int],
     include_preview: bool,
 ) -> Any:
-    """Async wrapper для UDS read_updates (blocking)."""
+    """Async wrapper РґР»СЏ UDS read_updates (blocking)."""
     from runtime.store.uds import UpdatesSpec
 
     uds = app[APP_UDS] if APP_UDS in app else None
@@ -583,7 +584,7 @@ async def _uds_read_updates(
 
 
 async def _send_full_frame(session: WsSession, app: web.Application) -> None:
-    """Читає UDS read_window → map → full frame → send."""
+    """Р§РёС‚Р°С” UDS read_window в†’ map в†’ full frame в†’ send."""
     if session.symbol is None or session.tf_s is None:
         return
     cfg = app.get(APP_FULL_CONFIG, {})
@@ -607,7 +608,7 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                 "WS_CANDLE_MAP_DROPPED client=%s dropped=%d", session.client_id, dropped
             )
         warnings.extend(getattr(result, "warnings", []))
-        # SMC: inject snapshot into full frame (ADR-0024 §6.1)
+        # SMC: inject snapshot into full frame (ADR-0024 В§6.1)
         smc_wire: Optional[Dict[str, Any]] = None
         _smc_runner = app[APP_SMC_RUNNER] if APP_SMC_RUNNER in app else None
         if _smc_runner is not None:
@@ -676,6 +677,25 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                     from core.smc.narrative import narrative_to_wire
 
                     frame["narrative"] = narrative_to_wire(_narr)
+                    # ADR-0049: enrich narrative with thesis + presence
+                    _wake_eng_enr = app.get(APP_WAKE_ENGINE)
+                    if _wake_eng_enr is not None and isinstance(
+                        frame.get("narrative"), dict
+                    ):
+                        try:
+                            from runtime.smc.narrative_enricher import NarrativeEnricher
+
+                            _enricher = app.get("_narrative_enricher")
+                            if _enricher is not None:
+                                _pres = _wake_eng_enr.get_presence(session.symbol)
+                                frame["narrative"] = _enricher.enrich_narrative(
+                                    frame["narrative"],
+                                    session.symbol,
+                                    presence=_pres,
+                                    tier="free",
+                                )
+                        except Exception as _enr_exc:
+                            _log.debug("NARRATIVE_ENRICH_ERR: %s", _enr_exc)
                     # ADR-0039: signal engine wiring (before shell, so signal feeds shell)
                     _primary_sig = None
                     try:
@@ -734,10 +754,10 @@ async def _safe_broadcast(
     sessions: Dict[str, "WsSession"],
     timeout_s: float = BROADCAST_SEND_TIMEOUT_S,
 ) -> float:
-    """ADR-0011 BC5+BC6: broadcast з per-client seq + timeout + degraded-but-loud.
+    """ADR-0011 BC5+BC6: broadcast Р· per-client seq + timeout + degraded-but-loud.
 
-    Для кожного клієнта: інжектить session.next_seq() в meta.seq,
-    серіалізує, відправляє з timeout. Повертає t_send_ms.
+    Р”Р»СЏ РєРѕР¶РЅРѕРіРѕ РєР»С–С”РЅС‚Р°: С–РЅР¶РµРєС‚РёС‚СЊ session.next_seq() РІ meta.seq,
+    СЃРµСЂС–Р°Р»С–Р·СѓС”, РІС–РґРїСЂР°РІР»СЏС” Р· timeout. РџРѕРІРµСЂС‚Р°С” t_send_ms.
     """
     if not recipients:
         return 0.0
@@ -784,11 +804,11 @@ def _seed_forming_from_uds(
     bucket_open_ms: int,
     fallback_price: float,
 ) -> Dict[str, Any]:
-    """Seed forming candle з UDS (поточний бар для bucket_open_ms).
+    """Seed forming candle Р· UDS (РїРѕС‚РѕС‡РЅРёР№ Р±Р°СЂ РґР»СЏ bucket_open_ms).
 
-    Після рестарту forming_by_target = {}. Без seed open = перший тік
-    (хибний D1 open). Якщо UDS має бар для цього bucket — береться O/H/L.
-    Якщо UDS ще порожній — fallback на tick_price (degraded-but-loud).
+    РџС–СЃР»СЏ СЂРµСЃС‚Р°СЂС‚Сѓ forming_by_target = {}. Р‘РµР· seed open = РїРµСЂС€РёР№ С‚С–Рє
+    (С…РёР±РЅРёР№ D1 open). РЇРєС‰Рѕ UDS РјР°С” Р±Р°СЂ РґР»СЏ С†СЊРѕРіРѕ bucket вЂ” Р±РµСЂРµС‚СЊСЃСЏ O/H/L.
+    РЇРєС‰Рѕ UDS С‰Рµ РїРѕСЂРѕР¶РЅС–Р№ вЂ” fallback РЅР° tick_price (degraded-but-loud).
     """
     uds = app.get("_uds")
     if uds is not None:
@@ -826,10 +846,10 @@ def _seed_forming_from_uds(
                     }
         except Exception as exc:
             _log.warning("D1_FORMING_SEED_ERR sym=%s err=%s", symbol, exc)
-    # Fallback: немає UDS даних → чистий тік (degraded-but-loud)
+    # Fallback: РЅРµРјР°С” UDS РґР°РЅРёС… в†’ С‡РёСЃС‚РёР№ С‚С–Рє (degraded-but-loud)
     _log.warning(
         "D1_FORMING_NO_SEED sym=%s open_ms=%d price=%.2f "
-        "— open буде першим тіком після рестарту",
+        "вЂ” open Р±СѓРґРµ РїРµСЂС€РёРј С‚С–РєРѕРј РїС–СЃР»СЏ СЂРµСЃС‚Р°СЂС‚Сѓ",
         symbol,
         bucket_open_ms,
         fallback_price,
@@ -845,7 +865,7 @@ def _seed_forming_from_uds(
 
 
 async def _global_delta_loop(app: web.Application) -> None:
-    """ADR-0011: Global Background task: poll UDS read_updates → serialize once → fanout."""
+    """ADR-0011: Global Background task: poll UDS read_updates в†’ serialize once в†’ fanout."""
     poll_s = app.get(APP_DELTA_POLL_S, DEFAULT_DELTA_POLL_S)
     preview_tfs: set = app.get(APP_PREVIEW_TF_SET, set())
     forming_by_target: Dict[tuple[str, int], Dict[str, Any]] = (
@@ -960,9 +980,9 @@ async def _global_delta_loop(app: web.Application) -> None:
                                     if tick_price > 0 and tick_ts_ms > 0:
                                         forming = forming_by_target.get((symbol, tf_s))
                                         if forming is None:
-                                            # ── ADR: seed forming з UDS при рестарті ──
-                                            # Без seed open = перший тік після рестарту (хибний).
-                                            # Читаємо поточний бар з UDS щоб успадкувати O/H/L.
+                                            # в”Ђв”Ђ ADR: seed forming Р· UDS РїСЂРё СЂРµСЃС‚Р°СЂС‚С– в”Ђв”Ђ
+                                            # Р‘РµР· seed open = РїРµСЂС€РёР№ С‚С–Рє РїС–СЃР»СЏ СЂРµСЃС‚Р°СЂС‚Сѓ (С…РёР±РЅРёР№).
+                                            # Р§РёС‚Р°С”РјРѕ РїРѕС‚РѕС‡РЅРёР№ Р±Р°СЂ Р· UDS С‰РѕР± СѓСЃРїР°РґРєСѓРІР°С‚Рё O/H/L.
                                             from core.buckets import (
                                                 bucket_start_ms,
                                                 resolve_anchor_offset_ms,
@@ -1108,7 +1128,7 @@ async def _global_delta_loop(app: web.Application) -> None:
                             "meta": meta,
                         }
 
-                        # SMC: notify runner on complete bars → inject delta if has_changes
+                        # SMC: notify runner on complete bars в†’ inject delta if has_changes
                         _smc_runner = (
                             app[APP_SMC_RUNNER] if APP_SMC_RUNNER in app else None
                         )
@@ -1288,7 +1308,7 @@ async def _global_delta_loop(app: web.Application) -> None:
             for k in stale_keys:
                 forming_by_target.pop(k, None)
 
-            # ── ADR-0035: M1 feed for session H/L live tracking ──
+            # в”Ђв”Ђ ADR-0035: M1 feed for session H/L live tracking в”Ђв”Ђ
             # Poll M1 updates for each active symbol and feed to SmcRunner.
             # This ensures session levels update as new M1 bars complete,
             # even when M1 is not a subscribed display TF.
@@ -1312,17 +1332,41 @@ async def _global_delta_loop(app: web.Application) -> None:
                     except Exception as m1_exc:
                         _log.debug("WS_M1_SESSION_FEED_ERR sym=%s err=%s", sym, m1_exc)
 
+            # в”Ђв”Ђ ADR-0049: WakeEngine tick ($0, in-process) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+            _wake_eng = app.get(APP_WAKE_ENGINE)
+            if _wake_eng is not None:
+                try:
+                    _wake_ts_ms = int(time.time() * 1000)
+                    await _wake_eng.tick(_wake_ts_ms)
+                except Exception as _wake_exc:
+                    _log.debug("WS_WAKE_ENGINE_TICK_ERR: %s", _wake_exc)
+
+            # в”Ђв”Ђ ADR-0049: NarrativeEnricher thesis refresh (via executor) в”Ђв”Ђ
+            _enricher = app.get("_narrative_enricher")
+            if _enricher is not None:
+                try:
+                    _enr_loop = asyncio.get_event_loop()
+                    for _enr_sym in set(sym for sym, _ in subs_by_target.keys()):
+                        if _enricher.needs_refresh(_enr_sym):
+                            await _enr_loop.run_in_executor(
+                                app[APP_UDS_EXECUTOR],
+                                _enricher.refresh_thesis_sync,
+                                _enr_sym,
+                            )
+                except Exception as _enr_exc:
+                    _log.debug("WS_THESIS_REFRESH_ERR: %s", _enr_exc)
+
     except asyncio.CancelledError:
         _log.debug("WS_GLOBAL_DELTA_CANCELLED")
         pass
 
 
 async def _bg_smc_feed_loop(app: web.Application) -> None:
-    """ADR-0040: фоновий feed ALL symbols × compute_tfs для SMC/TDA cascade.
+    """ADR-0040: С„РѕРЅРѕРІРёР№ feed ALL symbols Г— compute_tfs РґР»СЏ SMC/TDA cascade.
 
-    Окрема coroutine з повільним інтервалом (bg_smc_poll_interval_s, default 10s).
-    HTF бари (D1/H4/H1/M15) змінюються рідко — polling кожну 1s надлишковий.
-    Запускається в _start_bg_tasks після warmup SMC runner.
+    РћРєСЂРµРјР° coroutine Р· РїРѕРІС–Р»СЊРЅРёРј С–РЅС‚РµСЂРІР°Р»РѕРј (bg_smc_poll_interval_s, default 10s).
+    HTF Р±Р°СЂРё (D1/H4/H1/M15) Р·РјС–РЅСЋСЋС‚СЊСЃСЏ СЂС–РґРєРѕ вЂ” polling РєРѕР¶РЅСѓ 1s РЅР°РґР»РёС€РєРѕРІРёР№.
+    Р—Р°РїСѓСЃРєР°С”С‚СЊСЃСЏ РІ _start_bg_tasks РїС–СЃР»СЏ warmup SMC runner.
     """
     ws_cfg = app.get(APP_FULL_CONFIG, {}).get("ws_server", {})
     poll_s = float(ws_cfg.get("bg_smc_poll_interval_s", DEFAULT_BG_SMC_POLL_S))
@@ -1362,7 +1406,7 @@ async def _bg_smc_feed_loop(app: web.Application) -> None:
                             bg_tf,
                             bg_exc,
                         )
-                # ── M1 feed for _last_prices + session H/L (ADR-0035 bg path) ──
+                # в”Ђв”Ђ M1 feed for _last_prices + session H/L (ADR-0035 bg path) в”Ђв”Ђ
                 # When ws_clients=0 the delta_loop doesn't feed M1 bars,
                 # so _last_prices freezes. Poll M1 here to keep price fresh.
                 try:
@@ -1384,7 +1428,7 @@ async def _bg_smc_feed_loop(app: web.Application) -> None:
         pass
 
 
-# ── WS Handler ─────────────────────────────────────────
+# в”Ђв”Ђ WS Handler в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
@@ -1403,9 +1447,9 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     symbols = cfg.get("symbols", [])
     default_symbol = symbols[0] if symbols else "XAU/USD"
     session.symbol = default_symbol
-    session.tf_s = 1800  # M30 default — sync з SymbolTfPicker default
+    session.tf_s = 1800  # M30 default вЂ” sync Р· SymbolTfPicker default
 
-    # T8/S24: config frame (policy bridge) — завжди, незалежно від UDS
+    # T8/S24: config frame (policy bridge) вЂ” Р·Р°РІР¶РґРё, РЅРµР·Р°Р»РµР¶РЅРѕ РІС–Рґ UDS
     try:
         config_frame = _build_config_frame(session, app)
         await ws.send_json(config_frame)
@@ -1471,11 +1515,11 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
-_MAX_WS_MSG_BYTES = 65536  # SEC-05: 64 KB limit для WS повідомлень
+_MAX_WS_MSG_BYTES = 65536  # SEC-05: 64 KB limit РґР»СЏ WS РїРѕРІС–РґРѕРјР»РµРЅСЊ
 
 
 def _sanitize_log(value: str, max_len: int = 120) -> str:
-    """SEC-03: видаляє control characters для безпечного логування."""
+    """SEC-03: РІРёРґР°Р»СЏС” control characters РґР»СЏ Р±РµР·РїРµС‡РЅРѕРіРѕ Р»РѕРіСѓРІР°РЅРЅСЏ."""
     import re as _re
 
     if not isinstance(value, str):
@@ -1484,10 +1528,10 @@ def _sanitize_log(value: str, max_len: int = 120) -> str:
 
 
 async def _handle_action(session: WsSession, raw: str, app: web.Application) -> None:
-    """Розбирає вхідне повідомлення від клієнта. P2: switch + scrollback.
+    """Р РѕР·Р±РёСЂР°С” РІС…С–РґРЅРµ РїРѕРІС–РґРѕРјР»РµРЅРЅСЏ РІС–Рґ РєР»С–С”РЅС‚Р°. P2: switch + scrollback.
 
-    S20: JSON/schema errors → error frame клієнту (degraded-but-loud).
-    S25: Unknown action → error frame + лог (не silent ignore).
+    S20: JSON/schema errors в†’ error frame РєР»С–С”РЅС‚Сѓ (degraded-but-loud).
+    S25: Unknown action в†’ error frame + Р»РѕРі (РЅРµ silent ignore).
     """
     # SEC-05: message size guard
     if len(raw) > _MAX_WS_MSG_BYTES:
@@ -1529,7 +1573,7 @@ async def _handle_action(session: WsSession, raw: str, app: web.Application) -> 
     elif action == "scrollback":
         await _handle_scrollback(session, data, app)
     else:
-        # S25: unknown action → error frame (degraded-but-loud, не silent ignore)
+        # S25: unknown action в†’ error frame (degraded-but-loud, РЅРµ silent ignore)
         _log.warning("WS_ACTION_UNKNOWN client=%s action=%s", session.client_id, action)
         err = _build_error_frame(
             session, "unknown_action", "Unknown action: %s" % action, app=app
@@ -1540,7 +1584,7 @@ async def _handle_action(session: WsSession, raw: str, app: web.Application) -> 
 async def _handle_switch(
     session: WsSession, data: Dict[str, Any], app: web.Application
 ) -> None:
-    """Обробка switch action: змінити symbol/tf → новий full frame."""
+    """РћР±СЂРѕР±РєР° switch action: Р·РјС–РЅРёС‚Рё symbol/tf в†’ РЅРѕРІРёР№ full frame."""
     symbols_set: set = app.get(APP_SYMBOLS_SET, set())
     tf_allowlist: set = app.get(APP_TF_ALLOWLIST, set())
 
@@ -1603,7 +1647,7 @@ async def _handle_switch(
 async def _handle_scrollback(
     session: WsSession, data: Dict[str, Any], app: web.Application
 ) -> None:
-    """Обробка scrollback action: UDS read_window(to_open_ms) → scrollback frame.
+    """РћР±СЂРѕР±РєР° scrollback action: UDS read_window(to_open_ms) в†’ scrollback frame.
 
     P11 rails: max_steps + cooldown per session/symbol+tf.
     """
@@ -1661,7 +1705,7 @@ async def _handle_scrollback(
     session._scrollback_count += 1
     session._scrollback_last_ts = now
     cfg = app.get(APP_FULL_CONFIG, {})
-    # Scrollback chunk: менше ніж cold start
+    # Scrollback chunk: РјРµРЅС€Рµ РЅС–Р¶ cold start
     limit = min(_cold_start_limit(session.tf_s, cfg), 500)
     warnings: list = []
     try:
@@ -1693,7 +1737,7 @@ async def _handle_scrollback(
         )
     except Exception as exc:
         _log.warning("WS_SCROLLBACK_ERROR client=%s err=%s", session.client_id, exc)
-        # Завжди відповідаємо пустим frame — інакше клієнт застрягне
+        # Р—Р°РІР¶РґРё РІС–РґРїРѕРІС–РґР°С”РјРѕ РїСѓСЃС‚РёРј frame вЂ” С–РЅР°РєС€Рµ РєР»С–С”РЅС‚ Р·Р°СЃС‚СЂСЏРіРЅРµ
         try:
             tf_label = _TF_S_TO_LABEL.get(session.tf_s, f"{session.tf_s}s")
             frame = _build_scrollback_frame(
@@ -1709,11 +1753,11 @@ async def _handle_scrollback(
             pass
 
 
-# ── UDS init ───────────────────────────────────────────
+# в”Ђв”Ђ UDS init в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 
 def _init_uds(app: web.Application, config_path: str, cfg: Dict[str, Any]) -> None:
-    """Ініціалізує UDS reader. W0: role='reader', writer_components=False."""
+    """Р†РЅС–С†С–Р°Р»С–Р·СѓС” UDS reader. W0: role='reader', writer_components=False."""
     try:
         from runtime.store.uds import build_uds_from_config
         import os
@@ -1733,7 +1777,7 @@ def _init_uds(app: web.Application, config_path: str, cfg: Dict[str, Any]) -> No
         _log.warning("WS_UDS_INIT_FAILED err=%s (running without UDS)", exc)
 
 
-# ── App factory ────────────────────────────────────────
+# в”Ђв”Ђ App factory в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 
 def build_app(
@@ -1741,11 +1785,11 @@ def build_app(
     config_path: str = "config.json",
     uds: Any = None,
 ) -> web.Application:
-    """Створює aiohttp Application з WS endpoint.
+    """РЎС‚РІРѕСЂСЋС” aiohttp Application Р· WS endpoint.
 
     Args:
-        config_path: шлях до config.json
-        uds: зовнішній UDS instance (для тестів). Якщо None — P2 auto-init.
+        config_path: С€Р»СЏС… РґРѕ config.json
+        uds: Р·РѕРІРЅС–С€РЅС–Р№ UDS instance (РґР»СЏ С‚РµСЃС‚С–РІ). РЇРєС‰Рѕ None вЂ” P2 auto-init.
     """
     full_cfg = _load_full_config(config_path)
     ws_cfg = full_cfg.get("ws_server", {}) if isinstance(full_cfg, dict) else {}
@@ -1766,7 +1810,7 @@ def build_app(
     preview_set, _ = preview_tf_allowlist_from_cfg(full_cfg)
     app[APP_PREVIEW_TF_SET] = preview_set
 
-    # ADR-0012 P3: D1 live tick relay — Redis client + config flags
+    # ADR-0012 P3: D1 live tick relay вЂ” Redis client + config flags
     _d1_relay_enabled = bool(
         full_cfg.get("d1_live_tick_relay_enabled", _D1_TICK_RELAY_ENABLED_DEFAULT)
     )
@@ -1801,7 +1845,7 @@ def build_app(
             _log.warning("D1_TICK_RELAY_INIT_FAILED err=%s (disabled)", relay_exc)
 
     # Dedicated thread pool for UDS blocking I/O (limit thread explosion)
-    # min(4, cpu_count) — 2 було недостатньо для паралельних /api/bars + /api/updates
+    # min(4, cpu_count) вЂ” 2 Р±СѓР»Рѕ РЅРµРґРѕСЃС‚Р°С‚РЅСЊРѕ РґР»СЏ РїР°СЂР°Р»РµР»СЊРЅРёС… /api/bars + /api/updates
     import os as _os
 
     _uds_workers = min(4, _os.cpu_count() or 4)
@@ -1815,7 +1859,7 @@ def build_app(
     else:
         _init_uds(app, config_path, full_cfg)
 
-    # SMC Runner init (ADR-0024 §6.1) — in-process, same event loop as ws_server
+    # SMC Runner init (ADR-0024 В§6.1) вЂ” in-process, same event loop as ws_server
     _smc_section = full_cfg.get("smc", {}) if isinstance(full_cfg, dict) else {}
     if _smc_section.get("enabled", False):
         try:
@@ -1833,10 +1877,10 @@ def build_app(
             )
         except Exception as _smc_init_exc:
             _log.warning(
-                "WS_SMC_RUNNER_INIT_FAILED err=%s — SMC disabled", _smc_init_exc
+                "WS_SMC_RUNNER_INIT_FAILED err=%s вЂ” SMC disabled", _smc_init_exc
             )
 
-    # ── CORS middleware (cross-origin: Vercel / Cloudflare Pages) ──────
+    # в”Ђв”Ђ CORS middleware (cross-origin: Vercel / Cloudflare Pages) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     _cors_origins_raw = ws_cfg.get("cors_allowed_origins", [])
     _cors_origins = set(str(o).rstrip("/") for o in _cors_origins_raw if o)
     app[APP_CORS_ORIGINS] = _cors_origins
@@ -1847,7 +1891,7 @@ def build_app(
     async def cors_middleware(request, handler):
         origin = request.headers.get("Origin", "")
         allowed = app.get(APP_CORS_ORIGINS, set())
-        # Якщо CORS не налаштований або origin не в списку — пропускаємо
+        # РЇРєС‰Рѕ CORS РЅРµ РЅР°Р»Р°С€С‚РѕРІР°РЅРёР№ Р°Р±Рѕ origin РЅРµ РІ СЃРїРёСЃРєСѓ вЂ” РїСЂРѕРїСѓСЃРєР°С”РјРѕ
         if not allowed or origin not in allowed:
             return await handler(request)
         # Preflight OPTIONS
@@ -1856,14 +1900,14 @@ def build_app(
             resp.headers["Access-Control-Allow-Origin"] = origin
             resp.headers.update(_CORS_HEADERS_COMMON)
             return resp
-        # Звичайний запит — додаємо CORS headers
+        # Р—РІРёС‡Р°Р№РЅРёР№ Р·Р°РїРёС‚ вЂ” РґРѕРґР°С”РјРѕ CORS headers
         resp = await handler(request)
         resp.headers["Access-Control-Allow-Origin"] = origin
         return resp
 
     app.middlewares.append(cors_middleware)
 
-    # ── /api/status — edge probe endpoint (для Vercel cross-origin) ────
+    # в”Ђв”Ђ /api/status вЂ” edge probe endpoint (РґР»СЏ Vercel cross-origin) в”Ђв”Ђв”Ђв”Ђ
     async def _api_status(request: web.Request) -> web.Response:
         uds_ok = APP_UDS in app
         sessions_count = len(app[APP_WS_SESSIONS])
@@ -1878,7 +1922,7 @@ def build_app(
 
     app.router.add_get("/api/status", _api_status)
 
-    # ── /api/agent/state — Agent observability (ADR-012) ───────────────
+    # в”Ђв”Ђ /api/agent/state вЂ” Agent observability (ADR-012) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     # Reads Redis HASH {ns}:agent:state written by smc_trader_v3 bot.
     # Graceful: returns 503 if Redis not available, 204 if no data yet.
     _agent_redis_client = None
@@ -1904,12 +1948,12 @@ def build_app(
     except Exception as _are:
         _agent_ns = "v3_local"
         _log.info(
-            "AGENT_OBSERVABILITY: Redis not available (%s) — endpoints will return 503",
+            "AGENT_OBSERVABILITY: Redis not available (%s) вЂ” endpoints will return 503",
             _are,
         )
 
     async def _api_agent_state(request: web.Request) -> web.Response:
-        """GET /api/agent/state — latest agent state snapshot."""
+        """GET /api/agent/state вЂ” latest agent state snapshot."""
         if _agent_redis_client is None:
             return web.json_response(
                 {"error": "agent_redis_not_configured"}, status=503
@@ -1924,7 +1968,7 @@ def build_app(
             return web.json_response({"error": "redis_read_failed"}, status=503)
 
     async def _api_agent_feed(request: web.Request) -> web.Response:
-        """GET /api/agent/feed?limit=50 — chronological event log."""
+        """GET /api/agent/feed?limit=50 вЂ” chronological event log."""
         if _agent_redis_client is None:
             return web.json_response(
                 {"error": "agent_redis_not_configured"}, status=503
@@ -1948,7 +1992,7 @@ def build_app(
     app.router.add_get("/api/agent/state", _api_agent_state)
     app.router.add_get("/api/agent/feed", _api_agent_feed)
 
-    # ── /api/archi/* — Archi Console (ADR-025) ─────────────────────────
+    # в”Ђв”Ђ /api/archi/* вЂ” Archi Console (ADR-025) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     # Private API: Bearer token auth + file reads from bot data dir.
     _console_cfg = load_system_config(resolve_config_path()).get("agent_console", {})
     _console_enabled: bool = bool(_console_cfg.get("enabled", False))
@@ -1966,7 +2010,7 @@ def build_app(
         if not _console_enabled:
             return False
         if not _console_token:
-            return True  # token not configured → open (dev mode)
+            return True  # token not configured в†’ open (dev mode)
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             return auth_header[7:].strip() == _console_token
@@ -1974,7 +2018,7 @@ def build_app(
         return request.query.get("token", "") == _console_token
 
     async def _api_archi_thinking(request: web.Request) -> web.Response:
-        """GET /api/archi/thinking?limit=50&offset=0 — Thinking Archive."""
+        """GET /api/archi/thinking?limit=50&offset=0 вЂ” Thinking Archive."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         if not _console_data_dir:
@@ -2008,7 +2052,7 @@ def build_app(
             return web.json_response({"error": "read_failed"}, status=503)
 
     async def _api_archi_directives(request: web.Request) -> web.Response:
-        """GET /api/archi/directives — agent directives snapshot."""
+        """GET /api/archi/directives вЂ” agent directives snapshot."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         if not _console_data_dir:
@@ -2021,7 +2065,7 @@ def build_app(
                 return web.json_response({"error": "no_data"}, status=204)
             with open(fpath, "r", encoding="utf-8") as _fh:
                 data = json.loads(_fh.read())
-            # Return only safe/display fields — strip inner_thought if requested
+            # Return only safe/display fields вЂ” strip inner_thought if requested
             brief = request.query.get("brief", "0") == "1"
             if brief:
                 safe_keys = [
@@ -2043,7 +2087,7 @@ def build_app(
             return web.json_response({"error": "read_failed"}, status=503)
 
     async def _api_archi_feed(request: web.Request) -> web.Response:
-        """GET /api/archi/feed?limit=50 — event feed with auth."""
+        """GET /api/archi/feed?limit=50 вЂ” event feed with auth."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         if _agent_redis_client is None:
@@ -2065,7 +2109,7 @@ def build_app(
             return web.json_response({"error": "redis_read_failed"}, status=503)
 
     async def _api_archi_stream(request: web.Request) -> web.StreamResponse:
-        """GET /api/archi/stream — SSE stream: feed events + directives changes."""
+        """GET /api/archi/stream вЂ” SSE stream: feed events + directives changes."""
         if not _archi_auth(request):
             return web.Response(status=401)  # type: ignore[return-value]
         import os as _os
@@ -2092,7 +2136,7 @@ def build_app(
 
         try:
             while True:
-                # ── Check feed (Redis LIST) ──────────────────────────────
+                # в”Ђв”Ђ Check feed (Redis LIST) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
                 if redis_cl is not None:
                     try:
                         curr_len: int = await loop.run_in_executor(
@@ -2116,7 +2160,7 @@ def build_app(
                     except Exception as _e:
                         _log.debug("ARCHI_STREAM_REDIS_ERR: %s", _e)
 
-                # ── Check directives file mtime ──────────────────────────
+                # в”Ђв”Ђ Check directives file mtime в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
                 if _console_data_dir:
                     dir_path = _os.path.join(
                         _console_data_dir, "v3_agent_directives.json"
@@ -2150,7 +2194,7 @@ def build_app(
                     except Exception as _e:
                         _log.debug("ARCHI_STREAM_DIR_ERR: %s", _e)
 
-                # ── Keep-alive comment every 2s ──────────────────────────
+                # в”Ђв”Ђ Keep-alive comment every 2s в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
                 await resp.write(b": ping\n\n")
                 await _asyncio.sleep(2)
 
@@ -2160,7 +2204,7 @@ def build_app(
         return resp
 
     async def _api_archi_relationship(request: web.Request) -> web.Response:
-        """GET /api/archi/relationship — relationship memo snapshot."""
+        """GET /api/archi/relationship вЂ” relationship memo snapshot."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         if not _console_data_dir:
@@ -2178,13 +2222,13 @@ def build_app(
             _log.warning("API_ARCHI_RELATIONSHIP_FAIL: %s", _e)
             return web.json_response({"error": "read_failed"}, status=503)
 
-    # ── /api/archi/chat — unified chat (proxy to bot via Redis IPC) ──────
+    # в”Ђв”Ђ /api/archi/chat вЂ” unified chat (proxy to bot via Redis IPC) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     _ARCHI_CHAT_KEY = f"{_agent_ns}:archi:chat"
     _ARCHI_CHAT_MAX = 500
     _ARCHI_WEB_INBOX_KEY = f"{_agent_ns}:archi:web_inbox"
 
     async def _api_archi_chat_post(request: web.Request) -> web.Response:
-        """POST /api/archi/chat — saves user message and pushes to bot inbox.
+        """POST /api/archi/chat вЂ” saves user message and pushes to bot inbox.
 
         Bot process picks up from web_inbox, calls Claude with full personality,
         and writes reply to the same chat key. Frontend polls for reply.
@@ -2231,7 +2275,7 @@ def build_app(
             return web.json_response({"error": "write_failed"}, status=503)
 
     async def _api_archi_chat_get(request: web.Request) -> web.Response:
-        """GET /api/archi/chat?limit=50 — chat history (oldest first)."""
+        """GET /api/archi/chat?limit=50 вЂ” chat history (oldest first)."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         if _agent_redis_client is None:
@@ -2251,9 +2295,9 @@ def build_app(
             _log.warning("API_ARCHI_CHAT_GET_FAIL: %s", _e)
             return web.json_response({"error": "redis_read_failed"}, status=503)
 
-    # ── /api/archi/logs — read bot supervisor log from data_dir ──
+    # в”Ђв”Ђ /api/archi/logs вЂ” read bot supervisor log from data_dir в”Ђв”Ђ
     async def _api_archi_logs(request: web.Request) -> web.Response:
-        """GET /api/archi/logs?lines=50&level=all — read recent bot log lines."""
+        """GET /api/archi/logs?lines=50&level=all вЂ” read recent bot log lines."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         lines_limit = min(int(request.query.get("lines", "80")), 500)
@@ -2313,9 +2357,9 @@ def build_app(
             _log.warning("API_ARCHI_LOGS_FAIL: %s", e)
             return web.json_response({"error": str(e), "lines": []}, status=500)
 
-    # ── /api/archi/owner-note — user status note Archi can read ──
+    # в”Ђв”Ђ /api/archi/owner-note вЂ” user status note Archi can read в”Ђв”Ђ
     async def _api_archi_owner_note_get(request: web.Request) -> web.Response:
-        """GET /api/archi/owner-note — read owner's note for Archi."""
+        """GET /api/archi/owner-note вЂ” read owner's note for Archi."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         note_path = os.path.join(_console_data_dir, "owner_note.json")
@@ -2331,7 +2375,7 @@ def build_app(
             return web.json_response({"error": str(e)}, status=500)
 
     async def _api_archi_owner_note_post(request: web.Request) -> web.Response:
-        """POST /api/archi/owner-note — save owner's note."""
+        """POST /api/archi/owner-note вЂ” save owner's note."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         try:
@@ -2362,9 +2406,9 @@ def build_app(
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
 
-    # ── /api/archi/proposals/review — ADR-028 P3 J5 approval ──
+    # в”Ђв”Ђ /api/archi/proposals/review вЂ” ADR-028 P3 J5 approval в”Ђв”Ђ
     async def _api_archi_proposals_review(request: web.Request) -> web.Response:
-        """POST /api/archi/proposals/review — approve or reject a pending proposal.
+        """POST /api/archi/proposals/review вЂ” approve or reject a pending proposal.
 
         Body: {"id": "p<ts>", "approved": true|false}
         Reads v3_agent_directives.json, applies the decision, saves.
@@ -2385,7 +2429,7 @@ def build_app(
             if not _os.path.exists(directives_path):
                 return web.json_response({"error": "no_directives"}, status=404)
 
-            # Load → patch → save (atomic replace)
+            # Load в†’ patch в†’ save (atomic replace)
             with open(directives_path, "r", encoding="utf-8") as _fh:
                 raw = json.loads(_fh.read())
 
@@ -2451,12 +2495,12 @@ def build_app(
         app.router.add_post("/api/archi/owner-note", _api_archi_owner_note_post)
         app.router.add_post("/api/archi/proposals/review", _api_archi_proposals_review)
 
-    # ── /api/context — SMC context for external consumers (bot, TUI) ───
+    # в”Ђв”Ђ /api/context вЂ” SMC context for external consumers (bot, TUI) в”Ђв”Ђв”Ђ
     async def _api_context(request: web.Request) -> web.Response:
-        """Повертає поточний SMC контекст для symbol+tf.
+        """РџРѕРІРµСЂС‚Р°С” РїРѕС‚РѕС‡РЅРёР№ SMC РєРѕРЅС‚РµРєСЃС‚ РґР»СЏ symbol+tf.
 
         GET /api/context?symbol=BTCUSDT&tf=M15
-        Використовується Telegram-ботом для збагачення аналізу.
+        Р’РёРєРѕСЂРёСЃС‚РѕРІСѓС”С‚СЊСЃСЏ Telegram-Р±РѕС‚РѕРј РґР»СЏ Р·Р±Р°РіР°С‡РµРЅРЅСЏ Р°РЅР°Р»С–Р·Сѓ.
         """
         symbol_raw = request.query.get("symbol", "")
         tf_raw = request.query.get("tf", "M15")
@@ -2481,23 +2525,23 @@ def build_app(
             ctx["error"] = "smc_runner not available"
             return web.json_response(ctx)
 
-        # last_price — від SmcRunner (оновлюється при кожному M1 bar)
+        # last_price вЂ” РІС–Рґ SmcRunner (РѕРЅРѕРІР»СЋС”С‚СЊСЃСЏ РїСЂРё РєРѕР¶РЅРѕРјСѓ M1 bar)
         _last_price = _smc_runner.get_last_price(symbol)
         if _last_price > 0:
             ctx["last_price"] = _last_price
 
-        # bias_map — HTF alignment
+        # bias_map вЂ” HTF alignment
         try:
             bm = _smc_runner.get_bias_map(symbol)
             if bm:
-                # Перетворюємо ключі tf_s → label для читабельності
+                # РџРµСЂРµС‚РІРѕСЂСЋС”РјРѕ РєР»СЋС‡С– tf_s в†’ label РґР»СЏ С‡РёС‚Р°Р±РµР»СЊРЅРѕСЃС‚С–
                 ctx["bias_map"] = {
                     _TF_S_TO_LABEL.get(int(k), k): v for k, v in bm.items()
                 }
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"bias_map: {exc}")
 
-        # pd_state — premium/discount
+        # pd_state вЂ” premium/discount
         try:
             pd = _smc_runner.get_pd_state(symbol, tf_s)
             if pd:
@@ -2505,16 +2549,16 @@ def build_app(
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"pd_state: {exc}")
 
-        # zones + zone_grades — active SMC zones
+        # zones + zone_grades вЂ” active SMC zones
         try:
             snap = _smc_runner.get_snapshot(symbol, tf_s)
             if snap is not None:
                 wire = snap.to_wire()
-                # Тільки активні зони (не mitigated)
+                # РўС–Р»СЊРєРё Р°РєС‚РёРІРЅС– Р·РѕРЅРё (РЅРµ mitigated)
                 ctx["zones"] = wire.get("zones", [])
                 ctx["levels"] = wire.get("levels", [])
                 ctx["trend_bias"] = wire.get("trend_bias")
-                # swings — filtered to structure events only (BOS/CHoCH/displacement)
+                # swings вЂ” filtered to structure events only (BOS/CHoCH/displacement)
                 _STRUCTURE_KINDS = {
                     "bos_bull",
                     "bos_bear",
@@ -2544,7 +2588,7 @@ def build_app(
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"session_levels: {exc}")
 
-        # momentum_map — displacement intensity per TF
+        # momentum_map вЂ” displacement intensity per TF
         try:
             mm = _smc_runner.get_momentum_map(symbol)
             if mm:
@@ -2587,7 +2631,7 @@ def build_app(
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"candles: {exc}")
 
-        # narrative — market phase, scenario, mode
+        # narrative вЂ” market phase, scenario, mode
         narr = None
         try:
             _atr_est = 1.0
@@ -2614,7 +2658,7 @@ def build_app(
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"signals: {exc}")
 
-        # ── tick_price: real-time tick from Redis (sub-second freshness) ──
+        # в”Ђв”Ђ tick_price: real-time tick from Redis (sub-second freshness) в”Ђв”Ђ
         try:
             tick_redis = (
                 app[APP_TICK_REDIS_CLIENT] if APP_TICK_REDIS_CLIENT in app else None
@@ -2638,7 +2682,7 @@ def build_app(
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"tick_price: {exc}")
 
-        # ── data_quality: auto-computed freshness metadata ──────────
+        # в”Ђв”Ђ data_quality: auto-computed freshness metadata в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         try:
             now_ms = int(time.time() * 1000)
             dq: Dict[str, Any] = {"server_ts_ms": now_ms, "tf_freshness": {}}
@@ -2659,7 +2703,7 @@ def build_app(
                         _dq_age_s = (now_ms - _dq_last_ms) / 1000
                         _dq_expected_s = (
                             _dq_tf * 2.5
-                        )  # bar should arrive within ~2.5× TF
+                        )  # bar should arrive within ~2.5Г— TF
                         dq["tf_freshness"][_dq_label] = {
                             "last_bar_ms": _dq_last_ms,
                             "age_s": round(_dq_age_s),
@@ -2687,7 +2731,7 @@ def build_app(
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"data_quality: {exc}")
 
-        # ── h4_forming: synthesized forming H4 candle from M1 bars ──
+        # в”Ђв”Ђ h4_forming: synthesized forming H4 candle from M1 bars в”Ђв”Ђ
         try:
             if tf_s == 14400 or int(request.query.get("include_h4_forming", "0")):
                 from core.buckets import bucket_start_ms, resolve_anchor_offset_ms
@@ -2734,13 +2778,13 @@ def build_app(
     app.router.add_get("/api/context", _api_context)
     app.router.add_get("/ws", ws_handler)
 
-    # ── Same-origin SPA serving (Правило §11: UI + API = один процес) ──
-    # Роздача ui_v4/dist/ якщо dist існує (після npm run build)
+    # в”Ђв”Ђ Same-origin SPA serving (РџСЂР°РІРёР»Рѕ В§11: UI + API = РѕРґРёРЅ РїСЂРѕС†РµСЃ) в”Ђв”Ђ
+    # Р РѕР·РґР°С‡Р° ui_v4/dist/ СЏРєС‰Рѕ dist С–СЃРЅСѓС” (РїС–СЃР»СЏ npm run build)
     _ws_dir = os.path.dirname(os.path.abspath(__file__))
     _ui_dist = os.path.normpath(os.path.join(_ws_dir, "..", "..", "ui_v4", "dist"))
     _ui_src = os.path.normpath(os.path.join(_ws_dir, "..", "..", "ui_v4", "src"))
     _ui_index = os.path.join(_ui_dist, "index.html")
-    # D7: stale dist/ detection — порівняти mtime dist/index.html vs max(src/**)
+    # D7: stale dist/ detection вЂ” РїРѕСЂС–РІРЅСЏС‚Рё mtime dist/index.html vs max(src/**)
     if os.path.isfile(_ui_index) and os.path.isdir(_ui_src):
         try:
             _dist_mtime = os.path.getmtime(_ui_index)
@@ -2755,21 +2799,21 @@ def build_app(
             )
             if _src_mtime > _dist_mtime:
                 _log.warning(
-                    "UI_V4_DIST_STALE dist/index.html older than src/ by %.0fs — "
+                    "UI_V4_DIST_STALE dist/index.html older than src/ by %.0fs вЂ” "
                     "run 'cd ui_v4 && npm run build' to rebuild",
                     _src_mtime - _dist_mtime,
                 )
         except Exception:
             _log.debug("UI_V4_DIST_STALE_CHECK_FAILED", exc_info=True)
-            pass  # best-effort, не блокуємо старт
+            pass  # best-effort, РЅРµ Р±Р»РѕРєСѓС”РјРѕ СЃС‚Р°СЂС‚
     if os.path.isfile(_ui_index):
 
         async def _spa_index(request: web.Request) -> web.FileResponse:
             return web.FileResponse(_ui_index)
 
-        # SPA fallback: index.html для кореня
+        # SPA fallback: index.html РґР»СЏ РєРѕСЂРµРЅСЏ
         app.router.add_get("/", _spa_index)
-        # Статичні ассети (JS/CSS/images)
+        # РЎС‚Р°С‚РёС‡РЅС– Р°СЃСЃРµС‚Рё (JS/CSS/images)
         app.router.add_static("/assets", os.path.join(_ui_dist, "assets"))
         _log.info("UI_V4_STATIC registered dist=%s", _ui_dist)
     else:
@@ -2792,7 +2836,7 @@ def build_app(
             app_ctx[APP_GLOBAL_DELTA_TASK] = asyncio.ensure_future(
                 _global_delta_loop(app_ctx)
             )
-        # SMC warmup in executor (blocking UDS reads, не блокує event loop)
+        # SMC warmup in executor (blocking UDS reads, РЅРµ Р±Р»РѕРєСѓС” event loop)
         _smc_r = app_ctx[APP_SMC_RUNNER] if APP_SMC_RUNNER in app_ctx else None
         _uds_r = app_ctx[APP_UDS] if APP_UDS in app_ctx else None
         _exec = app_ctx[APP_UDS_EXECUTOR]
@@ -2801,9 +2845,49 @@ def build_app(
                 asyncio.get_event_loop().run_in_executor(_exec, _smc_r.warmup, _uds_r)
             )
             _log.info("WS_SMC_WARMUP_SCHEDULED")
-        # ADR-0040: BG SMC feed loop — окрема coroutine з повільним poll (default 10s)
+        # ADR-0040: BG SMC feed loop вЂ” РѕРєСЂРµРјР° coroutine Р· РїРѕРІС–Р»СЊРЅРёРј poll (default 10s)
         if APP_UDS in app_ctx and _smc_r is not None:
             app_ctx[APP_BG_SMC_TASK] = asyncio.ensure_future(_bg_smc_feed_loop(app_ctx))
+
+        # ADR-0049: WakeEngine вЂ” $0 wake condition checker in delta_loop
+        _full_cfg = app_ctx.get(APP_FULL_CONFIG, {})
+        _wake_cfg = _full_cfg.get("wake_engine", {})
+        if _wake_cfg.get("enabled", False) and _smc_r is not None:
+            try:
+                _wake_redis = app_ctx.get(APP_TICK_REDIS_CLIENT)
+                _wake_ns = app_ctx.get(APP_TICK_REDIS_NS, "v3_local")
+                _wake_symbols = list(_full_cfg.get("symbols", []))
+                if _wake_redis is not None and _wake_symbols:
+                    from runtime.smc.wake_engine import WakeEngine
+
+                    _we = WakeEngine(
+                        redis_client=_wake_redis,
+                        namespace=_wake_ns,
+                        executor=_exec,
+                        smc_runner=_smc_r,
+                        symbols=_wake_symbols,
+                        config=_full_cfg,
+                    )
+                    app_ctx[APP_WAKE_ENGINE] = _we
+                    _log.info(
+                        "WAKE_ENGINE_INIT: symbols=%s ns=%s",
+                        _wake_symbols,
+                        _wake_ns,
+                    )
+                    # NarrativeEnricher вЂ” thesis injection, same Redis
+                    from runtime.smc.narrative_enricher import NarrativeEnricher
+
+                    _ne = NarrativeEnricher(
+                        redis_client=_wake_redis,
+                        namespace=_wake_ns,
+                        executor=_exec,
+                    )
+                    app_ctx["_narrative_enricher"] = _ne
+                    _log.info("NARRATIVE_ENRICHER_INIT: ns=%s", _wake_ns)
+                else:
+                    _log.warning("WAKE_ENGINE_SKIP: no redis or no symbols")
+            except Exception as _we_exc:
+                _log.warning("WAKE_ENGINE_INIT_FAIL: %s", _we_exc)
 
     async def _cleanup_bg_tasks(app_ctx: web.Application) -> None:
         for task_key, label in (
@@ -2825,7 +2909,7 @@ def build_app(
     return app
 
 
-# ── Port bind with retry (Windows TIME_WAIT resilience) ──
+# в”Ђв”Ђ Port bind with retry (Windows TIME_WAIT resilience) в”Ђв”Ђ
 
 _BIND_MAX_RETRIES = 5
 _BIND_RETRY_DELAY_S = 3.0
@@ -2847,13 +2931,13 @@ def _run_with_retry(
     max_retries: int = _BIND_MAX_RETRIES,
     retry_delay: float = _BIND_RETRY_DELAY_S,
 ) -> None:
-    """Запуск aiohttp з retry для port bind (Windows TIME_WAIT)."""
+    """Р—Р°РїСѓСЃРє aiohttp Р· retry РґР»СЏ port bind (Windows TIME_WAIT)."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.set_exception_handler(_ws_exception_handler)
     runner = web.AppRunner(
         app, access_log=None
-    )  # вимкнено access log (P4: ~227k рядків/день шуму)
+    )  # РІРёРјРєРЅРµРЅРѕ access log (P4: ~227k СЂСЏРґРєС–РІ/РґРµРЅСЊ С€СѓРјСѓ)
     loop.run_until_complete(runner.setup())
 
     for attempt in range(1, max_retries + 1):
@@ -2896,7 +2980,7 @@ def _run_with_retry(
         loop.close()
 
 
-# ── CLI entrypoint ─────────────────────────────────────
+# в”Ђв”Ђ CLI entrypoint в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 
 def main() -> None:

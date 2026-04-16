@@ -1,6 +1,6 @@
 # Поточна система — Архітектурний огляд (SSOT)
 
-> **Останнє оновлення**: 2026-03-24
+> **Останнє оновлення**: 2026-04-16
 > **Навігація**: [docs/index.md](index.md)
 
 Цей файл — SSOT-опис поточної архітектури системи. Див. [docs/index.md](index.md) для навігації по всій документації.
@@ -100,15 +100,15 @@ app.main (supervisor)
 │    NOT SSOT, NOT persisted on disk                             │
 │  SmcRunner (runtime/smc/): lives in ws_server process,        │
 │    warmup via UDS.read_window(), on_bar() callback             │
-│  Алгоритми: Swings, BOS/CHoCH, OB, FVG, Liquidity,           │
-│    Premium/Discount, Inducement + N1 zone lifecycle            │
+│  Алгоритми: Swings, BOS/CHoCH V2 (ADR-0047), OB, FVG,        │
+│    Liquidity, Premium/Discount, Inducement + N1 zone lifecycle │
 │  TDA Cascade (ADR-0040): D1→H4→Session→M15 FVG daily signal   │
 │    core/smc/tda/ (pure) + runtime/smc/tda_live.py (I/O)       │
 │    Config F trade mgmt, grade system, 1 signal/day max         │
 │    Fallback: smc.signals (ADR-0039) when tda_cascade.enabled=false │
 │  Transport: вбудований у WS full/delta frames (zones,         │
 │    swings, levels, smc_delta, signals, pd_state) — NO Redis   │
-│  819 tests, E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a+ADR-0040+ADR-0041 │
+│  820+ tests, E1+S4+E2+N1/N2/N3+D1-D3+ADR-0024a+ADR-0040+ADR-0041+ADR-0047 │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -641,7 +641,7 @@ v3/
 │   │   ├── types.py               # SmcZone, SmcSwing, SmcLevel, SmcSnapshot, SmcDelta (~190 LOC)
 │   │   ├── config.py              # SmcConfig + nested configs (OB/FVG/Structure/Levels/P-D/Inducement)
 │   │   ├── swings.py              # detect_swings() — rolling window period
-│   │   ├── structure.py           # detect_structure() — BOS/CHoCH
+│   │   ├── structure.py           # detect_structure() — BOS/CHoCH V2 (ADR-0047)
 │   │   ├── order_blocks.py        # detect_order_blocks() — bull/bear lifecycle
 │   │   ├── fvg.py                 # detect_fvg() — bull/bear + height guard (N2)
 │   │   ├── liquidity.py           # detect_liquidity_levels() — ATR-based clustering
@@ -764,7 +764,7 @@ v3/
 │   ├── audit/                     # аудит прогресу P0–P6
 │   ├── runbooks/                  # production, coldstart, live_recover
 │   └── system_spec/               # UI v4 audit, gap analysis
-├── tests/                         # 52 файли, 776+ тестів
+├── tests/                         # 54 файли, 820+ тестів
 │   ├── test_smc_e1.py             # SMC E1: swings, structure, OB, FVG, engine
 │   ├── test_smc_runner.py         # SMC Runner: warmup, on_bar, delta, performance
 │   ├── test_smc_key_levels.py     # SMC key levels: PDH/PDL/DH/DL

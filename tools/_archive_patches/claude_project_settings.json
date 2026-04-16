@@ -1,0 +1,44 @@
+{
+    "permissions": {
+        "allow": [
+            "Bash(cat:*)",
+            "Bash(ls:*)",
+            "Bash(head:*)",
+            "Bash(tail:*)",
+            "Bash(grep:*)",
+            "Bash(find:*)",
+            "Bash(wc:*)",
+            "Bash(stat:*)",
+            "Bash(du:*)",
+            "Bash(diff:*)",
+            "Bash(sort:*)",
+            "Bash(uniq:*)",
+            "Bash(tree:*)",
+            "Bash(python3 -m pytest:*)",
+            "Bash(python3 -c:*)",
+            "Bash(supervisorctl status:*)",
+            "Bash(sudo supervisorctl status:*)",
+            "Bash(curl http://127.0.0.1:*)",
+            "Bash(redis-cli:*)",
+            "Bash(ps:*)",
+            "Bash(date:*)",
+            "Bash(pwd:*)",
+            "Bash(echo:*)",
+            "Bash(cd:*)",
+            "Bash(basename:*)",
+            "Bash(dirname:*)",
+            "Bash(realpath:*)",
+            "Bash(sha256sum:*)",
+            "Bash(md5sum:*)",
+            "Bash(jq:*)"
+        ],
+        "deny": [
+            "Bash(rm -rf:*)",
+            "Bash(dd:*)",
+            "Bash(mkfs:*)",
+            "Bash(shutdown:*)",
+            "Bash(reboot:*)",
+            "Bash(kill -9:*)"
+        ]
+    }
+}
