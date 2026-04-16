@@ -32,6 +32,7 @@
 | `R_SIGNAL_ARCHITECT` | **Signal Architect** | `.github/role_spec_signal_architect_v1.md` | "signal", "entry/SL/TP", "R:R", "confidence", "signal lifecycle", "alert", "SignalSpec" |
 | `R_MENTOR` | **Personal SMC Mentor (DarkTrader)** | `.github/role_spec_mentor_v1.md` | "ментор", "mentor", "навчи", "поясни", "де я помиляюсь?", "pre-trade check", "чекліст", "DarkTrader", "Пукаляк", "review мого trade", "weekly review", "як навчитись?", "чому я втрачаю?" |
 | `R_REJECTOR` | **QA Rejector & Final Gate** | `.github/role_spec_rejector_v1.md` | **Auto-activate перед "done".** "перевір", "чи готово?", "rejector", "QA", "чому це не можна приймати?", "знайди проблеми" |
+| `R_ELEVATOR` | **Ambition Auditor (Quality Forcing Function)** | `.github/role_spec_elevator_v1.md` | "audit якості", "ladder", "elevator", "rate this", "чи це достатньо круто?", "це R3 чи R2?", "стагнуємо?", monthly ambition audit |
 
 **Правила:**
 1. Перед початком роботи агент **читає повну специфікацію ролі** з `.github/role_spec_*.md`.

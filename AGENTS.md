@@ -89,6 +89,7 @@ CI gate звіряє ID→spec mapping і не дозволяє drift.
 | `R_SIGNAL_ARCHITECT` | **Signal Architect** | `.github/role_spec_signal_architect_v1.md` |
 | `R_MENTOR` | **Personal SMC Mentor (DarkTrader)** | `.github/role_spec_mentor_v1.md` |
 | `R_REJECTOR` | **QA Rejector & Final Gate** | `.github/role_spec_rejector_v1.md` |
+| `R_ELEVATOR` | **Ambition Auditor** | `.github/role_spec_elevator_v1.md` |
 
 ---
 
