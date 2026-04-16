@@ -2,7 +2,7 @@
 > на момент, коли P2–P6 були реалізовані до rollback. Це **не підтримуваний** документ
 > і не поточне джерело правди для системи, але це **не сміттєва копія**: він лишається
 > як історичний запис того проміжного стану. Канонічний і підтримуваний документ:
-> [`0034-advanced-market-analysis-tda.md`](0034-advanced-market-analysis-tda.md).
+> [`0034-advanced-market-analysis-tda.md`](../0034-advanced-market-analysis-tda.md).
 > Поки цей файл існує, його слід трактувати як archive-only reference, не як active ADR state.
 
 # ADR-0034: Advanced Market Analysis — TDA (ARCHIVE SNAPSHOT)

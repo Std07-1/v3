@@ -22,7 +22,7 @@
 | [0011](0011-ssot-broadcast-serialization.md) | SSOT Broadcast Serialization | **Implemented** | 2026-02-24 | ws_server, aiohttp, broadcast, wait_for, latency | `ws_performance_v1` |
 | [0012](../system_spec/MODE%3DDISCOVERY%20D1.md) | D1 TradingView Parity | **Implemented** | 2026-02-24 | D1, flat filter, tick relay, forming candle, HUD, I7, I8, I9 | `d1_tv_parity` |
 | [0013](0013-d1-chart-rendering-fix.md) | D1 Chart Rendering Fix | **Implemented** | 2026-02-25 | D1, LWC, time mapping, YYYY-MM-DD, epoch seconds | `d1_tv_parity` |
-| [0013b](0013-complete-semantics-partial-derived.md) | complete=true Semantics for Partial Derived Bars | **Accepted** | 2026-02-25 | partial derived, calendar pause, complete=true, boundary_partial, extensions | `derive_chain_m1` |
+| [0013b](0013b-complete-semantics-partial-derived.md) | complete=true Semantics for Partial Derived Bars | **Accepted** | 2026-02-25 | partial derived, calendar pause, complete=true, boundary_partial, extensions | `derive_chain_m1` |
 | [0014](0014-uds-split-brain-resilience.md) | UDS Split-Brain Resilience | **Implemented** | 2026-02-26 | split-brain, UDS, Redis, watermark | `concurrency_hardening` |
 | [0015](0015-calendar-pause-flat-bars.md) | Calendar Pause/Flat Bar Interpretation | **Implemented** | 2026-02-26 | calendar_pause, complete=True, derive, M5 | `derive_chain_m1` |
 | [0016](0016-python-version-broker-isolation.md) | Python Version Upgrade + Broker Subprocess Isolation | **Implemented** | 2026-03-08 | dual-venv, broker_sidecar, broker_python, Python 3.14 trampoline, supervisor PID lock | `platform_modernization` |
