@@ -1,5 +1,8 @@
 # "Patch Master" — Unified Role Spec for Claude Opus 4.6 · Trading Platform v3 · v1.0
 
+> **Sync Checkpoint**: ADR-0049 (2026-04-16). **Next v3 ADR**: 0050.
+> **Drift check**: якщо latest v3 ADR > 0049 → spec потребує перегляду.
+
 > **Один агент. Три фази. Zero tolerance до невідповідностей.**
 > Цей файл — єдина рольова інструкція для Claude Opus 4.6 у цьому проєкті.
 > Підключається через `.github/copilot-instructions.md`.

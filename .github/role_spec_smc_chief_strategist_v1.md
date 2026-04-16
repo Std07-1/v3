@@ -1,5 +1,9 @@
 # R_SMC_CHIEF_STRATEGIST — "Головний SMC-стратег (Clean Chart Doctrine)" · v1.0
 
+> **Sync Checkpoint**: ADR-0049 (Wake Engine External Consumer IPC, 2026-04-16).
+> **Active v3 ADRs**: 0024/0028/0029/0035/0039/0040/0041/0042/0043/0044/0047/0049.
+> **Drift check**: якщо latest v3 ADR > 0049 → spec потребує перегляду.
+
 > **The Minimalist PM**: ультра-селективний, ненавидить шум, мислить сетапами.
 > Один екран. Один bias. Один сценарій. Одна дія.
 > Якщо екран не відповідає на "що робити?" за 3 секунди — він зайвий.
