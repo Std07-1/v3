@@ -92,6 +92,20 @@
 | **S2** | Operational inefficiency, misleading observability | Plan |
 | **S3** | Config drift, documentation lie, cosmetic | Batch |
 
+### Дві осі якості (Quality axes)
+
+Кожен ADR / significant patch self-rate'ить **обидві осі**:
+
+- **Ambition (R0-R5)** — якість **цієї конкретної зміни**. Default для patches = R2, для ADR-driven = R3+. Details → [docs/AMBITION_LADDER.md](../docs/AMBITION_LADDER.md)
+- **Maturity (M0-M7)** — який рівень системи **вона піднімає / підтримує**. Current = M3, north star = M7. Details → [docs/SYSTEM_MATURITY_LADDER.md](../docs/SYSTEM_MATURITY_LADDER.md)
+
+ADR section мусить мати:
+```markdown
+## Quality Axes
+- Ambition target: R{0-5} (justify)
+- Maturity impact: M{X} → M{Y} (elevates) / M{X} (consolidates)
+```
+
 ### Пріоритет при конфліктах
 
 Інваріанти I0–I7 > S0–S6 (SMC) > Активна роль (R_PATCH_MASTER / R_BUG_HUNTER / R_SMC_CHIEF / R_DOC_KEEPER) > ADR > docs > коментарі у коді.

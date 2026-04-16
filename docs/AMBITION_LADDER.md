@@ -5,6 +5,23 @@
 
 **Архетип**: Master Craftsman Studio + Adversarial Lab (B+C гібрид).
 
+> **Дві осі якості** (орто́гональні):
+> - **Ambition (R0-R5, цей файл)** = якість **кожної зміни** (per-patch, short-term)
+> - **Maturity (M0-M7)** = потужність **системи в цілому** → [SYSTEM_MATURITY_LADDER.md](SYSTEM_MATURITY_LADDER.md)
+>
+> Щоб піднятись M3→M4 треба серію R4+ patches. Дві осі працюють разом.
+
+## TL;DR — коротко про кожен rung
+
+| Rung | Назва | Коли | Acceptance |
+|------|-------|------|------------|
+| **R0** | Just Works | emergency hotfix (не default) | немає видимих багів |
+| **R1** | Robust | edge cases handled | витримає 1h stress test |
+| **R2** | Surgical | **DEFAULT patches** | R_REJECTOR PASS першим проходом |
+| **R3** | Crafted | ADR-driven features | review без питань "що це робить?" |
+| **R4** | Innovative | нові subsystems | можна показати у public talk |
+| **R5** | Unique | methodology/governance innovations | коли скопіюють — їхній проєкт стане кращим |
+
 ---
 
 ## Філософія двох сил
