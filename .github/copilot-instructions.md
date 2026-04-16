@@ -701,11 +701,14 @@ Feature flag у `config.json` може бути `enabled: true` **тільки**
 | 0042 | Delta Frame State Sync | Implemented | delta frame, state desync, zone_grades, pd_state, bias_map, thick delta, FVG grace |
 | 0043 | UI v4 — Canvas Safe Zones + State Sync Hardening | Implemented | CANVAS_SAFE_TOP_Y, pd_state null-clear, boot_id reset, filterMitigated, z-index |
 | 0044 | HTF Live Preview | Proposed | HTF preview, _HTFRunningAccumulator, D1/H4 forming candle, O(1) incremental |
-| 0045 | VPS SMC Trader Bot | Accepted | Telegram, aiogram 3.x, claude-opus-4-6, reactive/proactive, WS read-only |
-| 0046 | Agent Personality Restoration | Accepted | personality, smc_trader_prompt_v3.md, external prompt, DNA injection |
+| ~~0045~~ | ~~VPS SMC Trader Bot~~ → **trader-v3/ADR-037** | — | *Moved: Арчі-specific* |
+| ~~0046~~ | ~~Agent Personality Restoration~~ → **trader-v3/ADR-038** | — | *Moved: Арчі-specific* |
 | 0047 | Structure Detection V2 | Implemented | BOS, CHoCH, HH/HL/LH/LL, structure.py, FVG display cap, confirmation_bars, ICT canonical |
+| ~~0048~~ | ~~Platform Wake Engine~~ → **trader-v3/ADR-039** | — | *Moved: Арчі-specific; platform ADR: 0049* |
+| 0049 | Wake Engine — External Consumer IPC | Accepted | WakeEngine, Redis IPC, wake conditions, PubSub, external consumer |
 
-> **Примітка**: ADR мігровані в `docs/adr/`. Повний список 0001–0047 → `docs/adr/index.md`.
+> **Примітка**: ADR мігровані в `docs/adr/`. Повний список 0001–0049 → `docs/adr/index.md`.
+> 0045/0046/0048 переміщені в `trader-v3/docs/adr/` (X31 boundary rule).
 
 ---
 
@@ -745,4 +748,6 @@ Feature flag у `config.json` може бути `enabled: true` **тільки**
 | X28 | Frontend re-derives/re-classifies backend SSOT дані (label, grade, bias, phase, scenario). UI = dumb renderer (G1): показує `value` як є, без власної логіки класифікації. Directional coloring/formatting = OK, перерахунок домену = ЗАБОРОНЕНО. Прецедент: P/D label split-brain (changelog 20260322-005) |
 | X29 | `trader-v3/`: hard block (cooldown, model force-downgrade, suppress, timer re-injection) без safety justification. I7: максимум = warning + explain, рішення = Арчі. Виключення: kill switch, daily $ hard cap, owner-only guard, anti-hallucination |
 | X30 | `trader-v3/`: приховане обмеження яке Арчі не бачить в логах/промпті/контексті. Кожне обмеження = transparent + justified + challengeable (I7, ADR-024) |
+| X31 | **Cross-repo contamination**: при роботі над `trader-v3/` заборонено створювати/змінювати ADR, документацію, конфіги чи код у v3 platform (`docs/`, `core/`, `runtime/`, `ui_v4/`, `config.json`). Арчі ADR живуть ТІЛЬКИ в `trader-v3/docs/adr/`. Platform ADR — ТІЛЬКИ в `docs/adr/`. Якщо зміна Арчі потребує platform feature — окремий v3 ADR з platform perspective |
+| X32 | **data/ dumping**: заборонено зберігати runtime data Арчі (`*_directives.json`, `*_conversation.json`, `*_journal.json`) у v3 root. Runtime data живе ТІЛЬКИ в `trader-v3/data/` або на VPS |
 
