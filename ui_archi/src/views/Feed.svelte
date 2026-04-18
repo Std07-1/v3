@@ -172,11 +172,28 @@
         };
     }
 
-    function buildScenarioHandoff(scenarioText: string): ChatHandoff {
+    function scenarioSummary(sc: unknown): string {
+        if (!sc) return "";
+        if (typeof sc === "string") return sc;
+        if (typeof sc === "object") {
+            const o = sc as Record<string, unknown>;
+            // Prefer thesis, fallback to direction + entry_zone
+            const parts: string[] = [];
+            if (o.thesis) parts.push(String(o.thesis));
+            if (o.direction) parts.push(String(o.direction));
+            if (o.entry_zone_low && o.entry_zone_high)
+                parts.push(`zone ${o.entry_zone_low}–${o.entry_zone_high}`);
+            if (o.invalidation) parts.push(`inv: ${o.invalidation}`);
+            return parts.join(" · ") || JSON.stringify(sc);
+        }
+        return String(sc);
+    }
+
+    function buildScenarioHandoff(scenario: unknown): ChatHandoff {
         const title = directives?.focus_symbol
             ? `${directives.focus_symbol} · Active Scenario`
             : "Active Scenario";
-        const body = truncate(scenarioText.trim(), 240);
+        const body = truncate(scenarioSummary(scenario).trim(), 240);
         const meta: string[] = [];
         if (directives?.focus_symbol) {
             meta.push(`Символ: ${directives.focus_symbol}`);
@@ -298,13 +315,13 @@
             <span class="scenario-icon">🎯</span>
             <div class="scenario-body">
                 <div class="scenario-label">ACTIVE SCENARIO</div>
-                <div class="scenario-text">{directives.active_scenario}</div>
+                <div class="scenario-text">{scenarioSummary(directives.active_scenario)}</div>
             </div>
             <button
                 class="scenario-discuss"
                 onclick={() =>
                     onchat(
-                        buildScenarioHandoff(directives?.active_scenario ?? ""),
+                        buildScenarioHandoff(directives?.active_scenario),
                     )}
             >
                 💬 Обговорити

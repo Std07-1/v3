@@ -410,10 +410,18 @@
                         </div>
                     {/if}
                     {#if directives.active_scenario}
+                        {@const _sc = directives.active_scenario}
+                        {@const _scText = typeof _sc === 'object' && _sc !== null
+                            ? ((_sc as Record<string, unknown>).thesis
+                                ? String((_sc as Record<string, unknown>).thesis)
+                                : ((_sc as Record<string, unknown>).direction
+                                    ? String((_sc as Record<string, unknown>).direction)
+                                    : '—'))
+                            : String(_sc)}
                         <div class="dir-row">
                             <span class="dir-label">сценарій</span>
-                            <span class="dir-val scenario"
-                                >{directives.active_scenario}</span
+                            <span class="dir-val scenario" title={_scText}
+                                >{_scText}</span
                             >
                         </div>
                     {/if}

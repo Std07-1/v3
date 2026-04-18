@@ -97,47 +97,49 @@
 </script>
 
 <div class="logs-view">
-    <header class="logs-header">
-        <div class="logs-top-row">
-            <div class="filter-bar">
-                <button
-                    class="filter-btn"
-                    class:active={filter === "all"}
-                    onclick={() => setFilter("all")}>All</button
+    <div class="view-header">
+        <h2>📋 Logs</h2>
+        <div class="header-right">
+            <span class="meta-count">{lines.length}</span>
+            <button
+                class="action-btn discuss-btn"
+                onclick={openLogsHandoff}
+                title="Обговорити логи в Chat"
+                disabled={!!loadError || loading || lines.length === 0}
+            >
+                💬
+            </button>
+            <button class="action-btn" onclick={copyAll} title="Copy all">
+                {copied === -1 ? "✓" : "📋"}
+            </button>
+            <label class="auto-toggle">
+                <input type="checkbox" bind:checked={autoRefresh} />
+                <span class="toggle-track"
+                    ><span class="toggle-thumb"></span></span
                 >
-                <button
-                    class="filter-btn warn"
-                    class:active={filter === "warn"}
-                    onclick={() => setFilter("warn")}>Warn</button
-                >
-                <button
-                    class="filter-btn error"
-                    class:active={filter === "error"}
-                    onclick={() => setFilter("error")}>Error</button
-                >
-            </div>
-            <div class="logs-actions">
-                <span class="meta-count">{lines.length}</span>
-                <button
-                    class="action-btn discuss-btn"
-                    onclick={openLogsHandoff}
-                    title="Обговорити логи в Chat"
-                    disabled={!!loadError || loading || lines.length === 0}
-                >
-                    💬
-                </button>
-                <button class="action-btn" onclick={copyAll} title="Copy all">
-                    {copied === -1 ? "✓" : "📋"}
-                </button>
-                <label class="auto-toggle">
-                    <input type="checkbox" bind:checked={autoRefresh} />
-                    <span class="toggle-track"
-                        ><span class="toggle-thumb"></span></span
-                    >
-                </label>
-            </div>
+            </label>
         </div>
-    </header>
+    </div>
+
+    <div class="filter-bar">
+        <div class="filter-pills">
+            <button
+                class="filter-pill"
+                class:active={filter === "all"}
+                onclick={() => setFilter("all")}>All</button
+            >
+            <button
+                class="filter-pill warn"
+                class:active={filter === "warn"}
+                onclick={() => setFilter("warn")}>⚠️ Warn</button
+            >
+            <button
+                class="filter-pill error"
+                class:active={filter === "error"}
+                onclick={() => setFilter("error")}>❌ Error</button
+            >
+        </div>
+    </div>
 
     <div class="logs-body">
         {#if loading && lines.length === 0}
@@ -179,57 +181,73 @@
         height: 100%;
         overflow: hidden;
     }
-    .logs-header {
-        padding: 10px 16px;
-        background: var(--bg);
-        border-bottom: 1px solid var(--border);
-        flex-shrink: 0;
-    }
-    .logs-top-row {
+    .view-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 8px;
+        padding: 20px 24px 12px;
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+    }
+    .view-header h2 {
+        font-size: 16px;
+        font-weight: 600;
+    }
+    .header-right {
+        display: flex;
+        align-items: center;
+        gap: 12px;
     }
     .filter-bar {
         display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 24px;
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+    }
+    .filter-pills {
+        display: flex;
         gap: 4px;
     }
-    .filter-btn {
-        padding: 5px 14px;
-        font-size: 12px;
-        font-weight: 600;
-        border: none;
-        border-radius: 20px;
-        background: var(--surface);
-        color: var(--text-muted);
-        cursor: pointer;
-        transition:
-            background 0.15s,
-            color 0.15s;
-    }
-    .filter-btn:hover {
-        background: var(--surface2);
-        color: var(--text);
-    }
-    .filter-btn.active {
-        background: var(--accent);
-        color: #fff;
-    }
-    .filter-btn.warn.active {
-        background: #b45309;
-        color: #fff;
-    }
-    .filter-btn.error.active {
-        background: #dc2626;
-        color: #fff;
-    }
-
-    .logs-actions {
+    .filter-pill {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 3px;
+        padding: 4px 10px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: none;
+        color: var(--text-muted);
+        font-size: 11px;
+        font-weight: 500;
+        cursor: pointer;
+        white-space: nowrap;
+        transition:
+            border-color 0.15s,
+            color 0.15s,
+            background 0.15s;
     }
+    .filter-pill:hover {
+        border-color: var(--accent);
+        color: var(--text);
+    }
+    .filter-pill.active {
+        background: var(--accent-dim);
+        border-color: var(--accent);
+        color: var(--text);
+    }
+    .filter-pill.warn.active {
+        background: rgba(180, 83, 9, 0.12);
+        border-color: #b45309;
+        color: #fbbf24;
+    }
+    .filter-pill.error.active {
+        background: rgba(220, 38, 38, 0.12);
+        border-color: #dc2626;
+        color: #f87171;
+    }
+
     .meta-count {
         font-size: 11px;
         font-weight: 600;

@@ -262,6 +262,7 @@
 </div>
 
 <style>
+    /* ── Layout ── */
     .view {
         display: flex;
         flex-direction: column;
@@ -291,15 +292,22 @@
         padding: 16px 24px;
         display: flex;
         flex-direction: column;
-        gap: 20px;
+        gap: 16px;
     }
 
-    /* ── section card ── */
+    /* ── Section card ── */
     .section {
         background: var(--surface);
         border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 14px 16px;
+        border-radius: 8px;
+        padding: 12px 14px;
+    }
+    .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 10px;
     }
     .section-title {
         font-size: 11px;
@@ -307,20 +315,11 @@
         text-transform: uppercase;
         letter-spacing: 0.07em;
         color: var(--text-muted);
-        margin-bottom: 10px;
-        display: flex;
-        align-items: center;
-        gap: 6px;
     }
-    .section-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-        flex-wrap: wrap;
-    }
+
+    /* ── Discuss button (pill) ── */
     .btn-discuss {
-        padding: 6px 10px;
+        padding: 5px 10px;
         border-radius: 999px;
         border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
         background: color-mix(in srgb, var(--accent) 10%, var(--surface2));
@@ -331,45 +330,36 @@
         white-space: nowrap;
         transition:
             border-color 0.15s,
-            background 0.15s,
-            color 0.15s;
+            background 0.15s;
     }
     .btn-discuss:hover {
         border-color: color-mix(in srgb, var(--accent) 44%, transparent);
         background: color-mix(in srgb, var(--accent) 16%, var(--surface2));
     }
-    .sub-title {
+
+    /* ── Field rows ── */
+    .field-list {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+    .field-row {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        padding: 5px 0 5px 10px;
+        border-left: 2px solid var(--accent-dim);
+        font-size: 13px;
+        line-height: 1.5;
+    }
+    .field-label {
+        color: var(--text-muted);
         font-size: 11px;
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.05em;
-        color: var(--text-muted);
-        margin: 14px 0 6px;
-    }
-
-    /* ── field-row: stacked card on mobile, grid on desktop ── */
-    .field-list {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-    }
-    .field-row {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        font-size: 13px;
-        line-height: 1.55;
-        background: var(--bg);
-        border-radius: 8px;
-        padding: 10px 12px;
-        border-left: 3px solid var(--accent-dim, #334155);
-    }
-    .field-label {
-        color: var(--text-muted);
-        font-size: 10px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
+        width: 130px;
+        flex-shrink: 0;
     }
     .field-val {
         color: var(--text);
@@ -378,105 +368,50 @@
         font-size: 13px;
     }
 
-    @media (min-width: 769px) {
-        .field-row {
-            flex-direction: row;
-            gap: 12px;
-            align-items: baseline;
-            background: transparent;
-            padding: 4px 0;
-            border-radius: 0;
-            border-left: none;
-        }
-        .field-label {
-            width: 140px;
-            flex-shrink: 0;
-            font-size: 11px;
-        }
+    /* ── Agreements sub-section ── */
+    .sub-title {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: var(--text-muted);
+        margin: 14px 0 6px;
     }
-
-    @media (max-width: 768px) {
-        .memo-body {
-            padding: 12px;
-            gap: 16px;
-        }
-        .section {
-            border-radius: 12px;
-            padding: 14px;
-        }
-        .field-list {
-            gap: 10px;
-        }
-        .field-row {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 12px 14px;
-            border-left: 3px solid var(--accent);
-            gap: 4px;
-        }
-        .field-label {
-            color: var(--accent);
-            font-size: 10px;
-            font-weight: 600;
-        }
-        .field-val {
-            font-size: 13px;
-            line-height: 1.5;
-        }
-        .moment-card {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 12px 14px;
-            border-left: 3px solid var(--gold, #fbbf24);
-            font-style: normal;
-        }
-        .agree-list li {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 8px 12px;
-            border-left: 3px solid var(--accent-dim, #334155);
-        }
-    }
-
-    /* ── agreements list ── */
     .agree-list {
         list-style: none;
         padding: 0;
         margin: 0;
         display: flex;
         flex-direction: column;
-        gap: 4px;
+        gap: 2px;
     }
     .agree-list li {
-        font-size: 12px;
+        font-size: 13px;
         color: var(--text);
-        padding: 4px 0 4px 12px;
-        border-left: 2px solid var(--accent-dim, #334155);
+        padding: 5px 0 5px 10px;
+        border-left: 2px solid var(--accent-dim);
         line-height: 1.5;
     }
 
-    /* ── best moments ── */
+    /* ── Best moments ── */
     .moments-list {
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 6px;
     }
     .moment-card {
         margin: 0;
-        padding: 8px 12px 8px 14px;
-        border-left: 2px solid var(--gold, #fbbf24);
+        padding: 8px 12px 8px 12px;
+        border-left: 2px solid var(--gold);
         font-size: 13px;
         color: var(--text);
-        line-height: 1.6;
+        line-height: 1.55;
         font-style: italic;
-        background: var(--bg);
+        background: var(--surface2);
         border-radius: 0 6px 6px 0;
     }
 
-    /* ── footer ── */
+    /* ── Footer ── */
     .last-updated {
         font-size: 11px;
         color: var(--text-muted);
@@ -484,7 +419,7 @@
         padding-top: 4px;
     }
 
-    /* ── generic ── */
+    /* ── Shared utility classes ── */
     .error-box {
         margin: 12px 24px;
         padding: 10px 14px;
@@ -493,9 +428,10 @@
         border-radius: var(--radius);
         color: var(--danger);
         font-size: 13px;
+        flex-shrink: 0;
     }
     .empty-state {
-        padding: 60px;
+        padding: 48px;
         text-align: center;
         color: var(--text-muted);
         font-size: 14px;
@@ -506,8 +442,8 @@
         border-radius: var(--radius);
         color: var(--text-muted);
         cursor: pointer;
-        font-size: 12px;
-        padding: 4px 10px;
+        font-size: 13px;
+        padding: 6px 12px;
     }
     .btn-ghost:hover:not(:disabled) {
         color: var(--text);
@@ -520,5 +456,21 @@
     .btn-ghost.small {
         font-size: 12px;
         padding: 4px 10px;
+    }
+
+    /* ── Mobile adjustments ── */
+    @media (max-width: 768px) {
+        .memo-body {
+            padding: 12px;
+        }
+        .field-row {
+            flex-direction: column;
+            gap: 1px;
+            align-items: stretch;
+        }
+        .field-label {
+            width: auto;
+            font-size: 10px;
+        }
     }
 </style>
