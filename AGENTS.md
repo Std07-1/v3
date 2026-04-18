@@ -214,7 +214,7 @@ v3/
 
 ### 2.1 trader-v3/ — AI Trading Agent "Арчі" (окрема підсистема)
 
-> **42 .py files, ~17,800 LOC** (April 2026). Deploy = SCP to VPS.
+> **46 .py files, ~18,000 LOC** (April 2026, post hibernation + monitor v2). Deploy = SCP to VPS.
 
 ```
 trader-v3/                          # .gitignore'd — proprietary

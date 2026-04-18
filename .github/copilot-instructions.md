@@ -24,7 +24,7 @@
 | `R_PATCH_MASTER` | **Patch Master** | `.github/role_spec_patch_master_v1.md` | **Default.** "фікс", "виправ", "патч", "зміни", "додай", "побудуй" |
 | `R_BUG_HUNTER` | **Bug Hunter** | `.github/role_spec_bug_hunter_v2.md` | "аудит", "review", "знайди баги", "перевір", "що не так" |
 | `R_SMC_CHIEF` | **SMC Chief Strategist** | `.github/role_spec_smc_chief_strategist_v1.md` | "SMC", "зони", "свінги", "OB/FVG", "overlay", "Clean Chart" |
-| `R_DOC_KEEPER` | **Doc Keeper** | `.github/role_spec_doc_keeper_v1.md` | "документація", "оновити docs", "синхронізувати", "drift" |
+| `R_DOC_KEEPER` | **Doc Keeper** | `.github/role_spec_doc_keeper_v2.md` | "документація", "оновити docs", "синхронізувати", "drift", "CURRENT_STATE", "CLAUDE.md", "post-deploy" |
 | `R_TRADER` | **SMC Trader** | `.github/role_spec_trader_v1.md` | "оціни сетап", "чи це A+?", "торгувати чи ні?", "що бачить трейдер?", "grade challenge" |
 | `R_CHART_UX` | **Chart Experience Product Designer** | `.github/role_spec_chart_ux_v1.md` | "як виглядає?", "дизайн", "ui/ux", "premium", "преміум", "Awwwards", "canvas", "рендер", "тема", "анімація", "DPR", "HUD", "інтерфейс", "product feel", "лагає", "build", "deploy", "запуск", "supervisor" |
 | `R_ARCHITECT` | **Systems Architect** | `.github/role_spec_architect_v1.md` | "ADR", "архітектура", "дизайн системи", "масштаб", "альтернативи?", "trade-off", "які варіанти?", "спроектуй", "release" |
@@ -721,6 +721,7 @@ Feature flag у `config.json` може бути `enabled: true` **тільки**
 | 0047 | Structure Detection V2 | Implemented | BOS, CHoCH, HH/HL/LH/LL, structure.py, FVG display cap, confirmation_bars, ICT canonical |
 | ~~0048~~ | ~~Platform Wake Engine~~ → **trader-v3/ADR-039** | — | *Moved: Арчі-specific; platform ADR: 0049* |
 | 0049 | Wake Engine — External Consumer IPC | Accepted | WakeEngine, Redis IPC, wake conditions, PubSub, external consumer |
+| 0051 | TDA Cascade Trigger Timing — Defer to After London Close | Accepted | TDA, cascade timing, london_end_hour_utc, NO_NARRATIVE fix, ADR-0040 |
 
 > **Примітка**: ADR мігровані в `docs/adr/`. Повний список 0001–0049 → `docs/adr/index.md`.
 > 0045/0046/0048 переміщені в `trader-v3/docs/adr/` (X31 boundary rule).

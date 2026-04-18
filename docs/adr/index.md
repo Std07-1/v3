@@ -63,6 +63,7 @@
 | [0047](0047-structure-detection-v2.md) | Structure Detection V2 — Canonical BOS/CHoCH + FVG Accuracy | **Implemented** | 2026-04-07 | BOS, CHoCH, HH/HL/LH/LL, structure.py, FVG display cap, confirmation_bars, ICT canonical | `structure_detection_v2` |
 | ~~0048~~ | ~~Platform Wake Engine~~ → **Moved to trader-v3/ADR-039** | — | 2026-04-14 | *Арчі-specific; v3 platform ADR: 0049* | — |
 | [0049](0049-wake-engine-external-consumer-ipc.md) | Wake Engine — External Consumer IPC via Redis | **Accepted** | 2026-04-16 | WakeEngine, Redis IPC, wake conditions, PubSub notify, event-driven, external consumer | `wake_engine_v1` |
+| [0051](0051-tda-cascade-trigger-timing.md) | TDA Cascade Trigger Timing — Defer to After London Close | **Accepted** | 2026-04-18 | TDA, cascade timing, london_end_hour_utc, NO_NARRATIVE root cause, ADR-0040 fix | `tda_calibration_2026_04` |
 
 ---
 
@@ -102,4 +103,4 @@
 
 Див. формат у [copilot-instructions.md](../../.github/copilot-instructions.md) → Тема B, Правило B2.
 
-Наступний номер: **0050**
+Наступний номер: **0052** (0050 пропущено: TDA timing fix — використано 0051)

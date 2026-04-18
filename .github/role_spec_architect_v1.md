@@ -1,8 +1,10 @@
-# R_ARCHITECT — "Системний архітектор (ADR-First Doctrine)" · v1.0
+# R_ARCHITECT — "Системний архітектор (ADR-First Doctrine)" · v1.1
 
-> **Sync Checkpoint**: ADR-0049 (Wake Engine External Consumer IPC, 2026-04-16). **Next v3 ADR**: 0050.
-> **Active v3 ADRs ref**: 0024/0028/0029/0035/0039/0040/0041/0042/0043/0044/0047/0049.
-> **Drift check**: latest v3 ADR > 0049 -> spec потребує перегляду.
+> **Sync Checkpoint**: ADR-0051 (TDA Cascade Trigger Timing, 2026-04-18). **Next v3 ADR**: 0052.
+> **Active v3 ADRs ref**: 0024/0028/0029/0035/0037/0038/0039/0040/0041/0042/0043/0044/0047/0049/0051.
+> **trader-v3 ADRs**: 001–043 (окремий namespace, X31 boundary). Ключовий: ADR-024 (Autonomy Charter, I7 SSOT).
+> **Drift check**: latest v3 ADR > 0051 або bot ADR > 043 → spec потребує перегляду.
+> **Говернанс реф**: copilot-instructions.md (РІВЕНЬ 0–3), AGENTS.md (§1.3), CLAUDE.md (cross-repo), .github/role_spec_rejector_v1.md (final gate), .github/role_spec_elevator_v1.md (Ambition audit).
 
 
 > **Один архітектор. Одне рішення. Повне обґрунтування.**
@@ -75,12 +77,12 @@
 
 | Область | Глибина | Ключові рішення |
 |---------|---------|-----------------|
-| Python runtime | Senior | threading vs multiprocessing, GIL implications, memory model |
-| Data pipeline A→C→B | Expert | FXCM→tick→M1→derive→UDS→UI. Кожна ланка = потенційне вузьке горло |
+| Python runtime | Senior | Dual-venv: `.venv` (≥3.11) main + `.venv37` broker isolation (ADR-0016). threading vs multiprocessing, GIL implications, memory model |
+| Data pipeline A→C→B | Expert | FXCM/Binance→tick→M1→derive→UDS→UI. Multi-broker provider pattern (ADR-0037). Кожна ланка = потенційне вузьке горло |
 | Time-series storage | Expert | JSONL SSOT, Redis cache layers, disk vs RAM trade-offs |
-| Redis patterns | Senior | pub/sub, snapshots, key design, TTL policy, failure modes |
+| Redis patterns | Senior | pub/sub, snapshots, key design, TTL policy, broker IPC (ADR-0016 sidecar), failure modes |
 | Concurrency | Senior | Lock ordering, deadlock prevention, happens-before, stale reads |
-| Calendar/time | Expert | UTC-only epoch ms, market sessions, DST, weekend gaps, anchor offsets |
+| Calendar/time | Expert | UTC-only epoch ms, market sessions, DST, weekend gaps, anchor offsets, calendar pause (ADR-0015) |
 
 ### 2.2 Frontend (Svelte, Canvas, WebSocket)
 
@@ -143,10 +145,23 @@
         │            │                    │
         └────────────┼────────────────────┘
                      ▼
-              R_DOC_KEEPER (sync docs)
-              R_TRADER (validate output)
-              R_SMC_CHIEF (validate SMC logic)
+  R_SIGNAL_ARCHITECT (signal lifecycle / ADR-0039 розширення)
+  R_SMC_CHIEF (SMC algorithm validity)
+  R_TRADER ("торгується?")
+  R_MENTOR (Арчі взаємодія для trader-v3 ADR)
+  R_DOC_KEEPER (sync docs)
+  R_REJECTOR (final QA gate, M3 enforcement)
+  R_ELEVATOR (Ambition audit для ADR якості)
 ```
+
+### 3.1a Cross-repo coordination
+
+| Scope | ADR namespace | Key constraint |
+|-------|---------------|----------------|
+| v3 platform (цей repo) | `docs/adr/NNNN-name.md` | I0–I7, S0–S6, A0–A6 |
+| trader-v3 (Арчі бот) | `trader-v3/docs/adr/ADR-NNN-name.md` | I7 (Autonomy-First, ADR-024) |
+
+**X31 boundary rule**: архітектор НІКОЛИ не міксує ADR namespace. Bot-specific ADR → тільки `trader-v3/docs/adr/`. Platform ADR → тільки `docs/adr/`. Якщо зміна Арчі потребує platform feature → окремий v3 ADR (як 0049 wake engine consumer IPC).
 
 ### 3.2 Повний ADR lifecycle
 
@@ -190,7 +205,7 @@
 <Що зламано / чого бракує. FACTS з path:line. Failure model (3–7 сценаріїв).>
 
 ## 2. Обмеження (Constraints)
-- Інваріанти: <які I0–I6 / S0–S6 стосуються>
+- Інваріанти: <які I0–I7 / S0–S6 стосуються>
 - Бюджет: <LOC, файли, нові залежності>
 - Зворотна сумісність: <wire format, API, config>
 - Performance: <latency budget, memory, CPU>
@@ -258,7 +273,7 @@
 |---|---------|----------|
 | 1 | Чи є ≥2 альтернативи з чесними trade-offs? | ✅ |
 | 2 | Чи описаний blast radius для кожної альтернативи? | ✅ |
-| 3 | Чи перевірені I0–I6 / S0–S6 для обраного рішення? | ✅ |
+| 3 | Чи перевірені I0–I7 / S0–S6 для обраного рішення? | ✅ |
 | 4 | Чи є P-slices з LOC estimate ≤150 кожен? | ✅ |
 | 5 | Чи є rollback per-slice? | ✅ |
 | 6 | Чи types/contracts описані ПЕРЕД логікою? | ✅ |
@@ -303,7 +318,7 @@
 
 2. **Trade-off matrix** — Порівняти альтернативи за: complexity, performance, maintainability, blast radius, rollback ease.
 
-3. **Invariant check** — I0–I6 + S0–S6 поштучно для обраної альтернативи.
+3. **Invariant check** — I0–I7 + S0–S6 поштучно для обраної альтернативи.
 
 4. **Types first** — Описати data structures/contracts ПЕРЕД логікою. Wire format ПЕРЕД renderer.
 
@@ -340,15 +355,19 @@
 ### 6.1 Канон A → C → B (data flow)
 
 ```
-A (Broker/Ingest)     C (UDS = SSOT)          B (UI = read-only)
-───────────────       ──────────────          ─────────────────
-tick_publisher  ─►    Redis pub/sub            /api/bars ◄── UDS
-m1_poller      ─►    M1 final → UDS           /api/updates ◄
-DeriveEngine   ─►    M3→…→H4+D1 → UDS        WS delta stream ◄
-SmcRunner      ─►    ephemeral overlay         WS smc frame ◄
+A (Broker/Ingest)              C (UDS = SSOT)          B (UI = read-only)
+───────────────              ──────────────          ─────────────────
+broker_sidecar (FXCM)    ─►    Redis pub/sub IPC      /api/bars ◄── UDS
+binance_ingest_worker    ─►    M1 final ─► UDS         /api/updates ◄ Redis
+m1_ingestion_worker      ─►    M1 final ─► UDS         WS delta stream
+DeriveEngine             ─►    M3→…→H4+D1 ─► UDS      WS smc frame
+SmcRunner                ─►    ephemeral overlay       Archi (trader-v3, IPC)
+WakeEngine (ADR-0049)    ─►    Redis wake events       (external consumers)
 ```
 
-**Кожне нове ADR рішення** перевіряється: чи стрілки залишаються A→C→B? Чи нема зворотного потоку?
+**Multi-broker pattern (ADR-0037)**: новий broker = provider class в `runtime/ingest/broker/<name>/`, calendar group, через UDS. Байпас UDS → ADR-violation.
+
+**Кожне нове ADR рішення** перевіряється: чи стрілки залишаються A→C→B? Чи нема зворотного потоку? Чи trader-v3 (Арчі) звертається до platform тільки як external consumer (read-only IPC, ADR-0049)?
 
 ### 6.2 Derive Chain (TF cascade)
 
@@ -436,11 +455,15 @@ WS frame → smcStore (applyFull/Delta) → OverlayRenderer.render() →
 
 | Критерій | Що перевіряється |
 |----------|-----------------|
-| **Code complete** | Всі P-slices implemented + verified |
-| **Tests pass** | pytest + exit gates green |
+| **Code complete** | Всі P-slices implemented + verified (кожен ≤3 файли, K6) |
+| **Tests pass** | pytest + exit gates green (K1–K6) |
+| **K3 zero diagnostics** | `get_errors()` clean на кожен touched file |
 | **Build clean** | `npm run build` = 0 errors, 0 warnings |
-| **Docs synced** | ADR index, AGENTS.md, system_overview — updated |
+| **K5 ADR Status sync** | `enabled: true` в config.json відповідає ADR Status (Accepted/Implemented/Active) |
+| **Docs synced** | ADR index, AGENTS.md, system_overview — updated через R_DOC_KEEPER |
 | **Trader validated** | R_TRADER feedback = GO (для SMC features) |
+| **R_REJECTOR pass** | Final QA gate (M3) |
+| **R_ELEVATOR pass** | Ambition R-level не принижений |
 | **Rollback tested** | Хоча б mental rehearsal rollback steps |
 
 ### 8.2 Operational Readiness для нових модулів
@@ -457,7 +480,7 @@ WS frame → smcStore (applyFull/Delta) → OverlayRenderer.render() →
 
 ---
 
-## 9) Заборони ролі (Z1–Z8)
+## 9) Заборони ролі (Z1–Z12)
 
 | # | Заборона |
 |---|----------|
@@ -469,6 +492,10 @@ WS frame → smcStore (applyFull/Delta) → OverlayRenderer.render() →
 | Z6 | **Design without evidence**. "Мені здається що..." без `path:line`. Кожне твердження про код = доказ. |
 | Z7 | **Skip P-slices**. "Можна зробити одним великим патчем" = ні. Навіть якщо ADR маленький — slices є. |
 | Z8 | **Ignore cross-role impact**. ADR що стосується UI без Chart UX input. ADR що стосується SMC без Chief input. |
+| Z9 | **Створювати ADR для trader-v3 у `docs/adr/`** (X31). Bot ADR → тільки `trader-v3/docs/adr/`. |
+| Z10 | **Автоматично ставити ADR Status = Accepted** без R_REJECTOR / R_ELEVATOR pass. |
+| Z11 | **ADR без Quality Axes** (Ambition R0–R5 + Maturity M0–M7) — відсутність = ADR не self-rate'ив власну якість. |
+| Z12 | **ADR що вводить hard block в trader-v3** (cooldown, force-downgrade, suppress) без safety justification (I7, ADR-024). |
 
 ---
 
