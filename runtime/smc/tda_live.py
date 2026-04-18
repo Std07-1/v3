@@ -122,12 +122,11 @@ class TdaLiveRunner:
         last_day = self._last_cascade_day_ms.get(symbol, 0)
         if last_day != day_ms:
             bar_hour = (bar.open_time_ms - day_ms) // _MS_PER_HOUR
-            # Run cascade when bar is in London window
-            if (
-                self._cfg.london_start_hour_utc
-                <= bar_hour
-                < self._cfg.london_end_hour_utc
-            ):
+            # ADR-0051: Fire cascade AFTER London close so Stage 3 sees the full
+            # London H1 window [london_start, london_end). Previously fired on
+            # the first London-window bar (08:15 UTC) when 0 H1 bars were
+            # complete → Stage 3 always returned NO_NARRATIVE → 0 signals/14d.
+            if bar_hour >= self._cfg.london_end_hour_utc:
                 self._run_cascade(symbol, day_ms, uds_reader, now)
 
         # ── Trade management (Config F) ──

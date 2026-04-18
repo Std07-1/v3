@@ -182,8 +182,22 @@ class WakeEngine:
             )
         ]
 
-        # в”Ђв”Ђ 4. Check all conditions ($0) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        # ── 4. Check all conditions ($0) ─────────────────────────
         last_wake = self._last_wake_ts.get(symbol, 0)
+        # GAP #9 / ADR-040 errata A2: drain recent BOS/CHoCH events for STRUCTURE_BREAK.
+        # SmcRunner buffers events per symbol; we read events newer than last_wake.
+        # Symbol-agnostic — same path for XAU/XAG/BTC/ETH.
+        try:
+            structure_events = self._smc.get_recent_structure_events(
+                symbol, since_ts_ms=last_wake
+            )
+        except AttributeError:
+            # Older SmcRunner without buffer — degraded-but-loud (I5)
+            structure_events = []
+            _log.warning(
+                "WAKE_STRUCTURE_EVENTS_UNAVAILABLE sym=%s reason=smc_runner_missing_method",
+                symbol,
+            )
         fired: List[WakeCondition] = []
         for cond in all_conditions:
             if check_condition(
@@ -193,6 +207,7 @@ class WakeEngine:
                 session_info,
                 ts_ms,
                 last_wake_ts_ms=last_wake,
+                structure_events=structure_events,
             ):
                 fired.append(cond)
 
@@ -210,18 +225,18 @@ class WakeEngine:
             reason = fired[0].reason if fired else f"accumulator_score={acc.score:.2f}"
             kind = fired[0].kind.value if fired else "accumulator"
 
-            # Dedup: suppress if same kind+zone fired recently and price stable
+            # Dedup: per-kind cooldown + zone aggregation (ADR-037)
+            _we_cfg = self._config.get("wake_engine", {})
+            _cooldowns = _we_cfg.get("event_cooldown_s", {})
+            _cooldown_s = _cooldowns.get(kind, _cooldowns.get("_default", 600))
+            _min_interval_ms = int(_cooldown_s) * 1000
+
+            # Dedup key: zone aggregation when dedup_include_zone_id=false (ADR-037)
             _dedup_key = f"{symbol}:{kind}"
-            if fired:
+            if fired and _we_cfg.get("dedup_include_zone_id", False):
                 _zone_id = fired[0].params.get("zone_id", "")
                 if _zone_id:
                     _dedup_key = f"{symbol}:{kind}:{_zone_id}"
-            _min_interval_ms = (
-                int(
-                    self._config.get("wake_engine", {}).get("min_event_interval_s", 600)
-                )
-                * 1000
-            )
             _prev_event = self._event_dedup.get(_dedup_key)
             if _prev_event is not None:
                 _prev_ts, _prev_price = _prev_event
@@ -242,6 +257,21 @@ class WakeEngine:
                     "accumulator_score": round(acc.score, 2),
                     "conditions_total": len(all_conditions),
                     "conditions_fired": len(fired),
+                    # ADR-037: aggregate all fired zones into meta
+                    "fired_zones": (
+                        [
+                            {
+                                "zone_id": c.params.get("zone_id", ""),
+                                "zone_kind": c.params.get("zone_kind", ""),
+                                "zone_high": c.params.get("zone_high", 0),
+                                "zone_low": c.params.get("zone_low", 0),
+                            }
+                            for c in fired
+                            if c.params.get("zone_id")
+                        ]
+                        if fired
+                        else []
+                    ),
                 },
             )
 
@@ -339,7 +369,7 @@ class WakeEngine:
                                 kind=kind,
                                 params=item.get("params", {}),
                                 reason=item.get("reason", ""),
-                                source="bot",
+                                source=item.get("source", "bot"),
                                 created_at_ms=item.get("created_at_ms", 0),
                             )
                         )
@@ -355,23 +385,51 @@ class WakeEngine:
             self._redis_load_bot_conditions,
         )
 
-    # в”Ђв”Ђ Helpers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── Helpers ─────────────────────────────────────────────────────────────
 
     def _get_session_info(self, symbol: str) -> Dict[str, Any]:
-        """Extract session info from SmcRunner's calendars."""
+        """Resolve current session + market-open state for ``symbol``.
+
+        GAP #10 (ADR-040 §session, ADR-0035): MarketCalendar exposes only
+        ``is_trading_minute(now_ms)`` — no session attributes. Earlier
+        implementation looked for ``current_session`` / ``is_open`` attrs that
+        do not exist → always returned ``{}`` → SESSION_OPEN wake conditions
+        could never fire and ``meta.session`` was always empty string.
+
+        Now: derive ``current_session`` + ``in_killzone`` via
+        ``core.smc.sessions.get_current_session`` (SSOT, ADR-0035) using
+        ``SmcEngine._session_windows``. Market-open state via the per-symbol
+        ``MarketCalendar.is_trading_minute``.
+        """
+        info: Dict[str, Any] = {
+            "current_session": "",
+            "in_killzone": False,
+            "is_open": True,  # default open for 24/7 symbols (BTCUSDT etc.)
+        }
+        try:
+            engine = getattr(self._smc, "_engine", None)
+            sess_windows = getattr(engine, "_session_windows", None) if engine else None
+            sess_cfg = getattr(getattr(engine, "_config", None), "sessions", None)
+            if sess_windows and getattr(sess_cfg, "enabled", False):
+                from core.smc.sessions import get_current_session
+
+                now_ms = int(time.time() * 1000)
+                name, in_kz = get_current_session(now_ms, sess_windows)
+                if name and name != "off_session":
+                    info["current_session"] = name
+                    info["in_killzone"] = bool(in_kz)
+        except Exception as e:  # I5: degraded-but-loud (rate-limited at logger level)
+            _log.debug("WAKE_SESSION_LOOKUP_FAIL symbol=%s err=%s", symbol, e)
+
         try:
             calendars = getattr(self._smc, "_calendars", {})
-            for cal in calendars.values() if isinstance(calendars, dict) else []:
-                if hasattr(cal, "current_session"):
-                    return {
-                        "current_session": getattr(cal, "current_session", ""),
-                        "is_open": getattr(cal, "is_open", False),
-                        "next_session": getattr(cal, "next_session", ""),
-                        "next_open_min": getattr(cal, "next_open_min", -1),
-                    }
-        except Exception:
-            pass
-        return {}
+            cal = calendars.get(symbol) if isinstance(calendars, dict) else None
+            if cal is not None and hasattr(cal, "is_trading_minute"):
+                info["is_open"] = bool(cal.is_trading_minute(int(time.time() * 1000)))
+        except Exception as e:
+            _log.debug("WAKE_CALENDAR_LOOKUP_FAIL symbol=%s err=%s", symbol, e)
+
+        return info
 
     @staticmethod
     def _describe_next_wake(conditions: List[WakeCondition]) -> str:

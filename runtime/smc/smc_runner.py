@@ -144,6 +144,11 @@ class SmcRunner:
         self._lock = threading.Lock()
         # (symbol, tf_s) → last SmcDelta after on_bar_dict()
         self._last_deltas: Dict[Tuple[str, int], Optional[SmcDelta]] = {}
+        # ADR-040 errata A2 / GAP #9 (changelog 20260418-009):
+        # Recent confirmed BOS/CHoCH events per symbol for WakeEngine STRUCTURE_BREAK.
+        # Bounded ring (last 50, FIFO drop) to cap RAM. All 4 symbols (XAU/XAG/BTC/ETH)
+        # use identical path — on_bar_dict is symbol-agnostic.
+        self._recent_structure_events: Dict[str, List[Dict[str, Any]]] = {}
         # ADR-0039: previous signal state per (symbol, tf_s) for lifecycle continuity
         self._prev_signals: Dict[Tuple[str, int], list] = {}
         self._journal = SignalJournal(full_cfg)
@@ -458,6 +463,22 @@ class SmcRunner:
                         "choch_bear",
                     ):
                         direction = "bullish" if "bull" in swing.kind else "bearish"
+                        # GAP #9 / ADR-040 A2: buffer for WakeEngine STRUCTURE_BREAK.
+                        # Wire format matches core.smc.wake_check.check_condition() expects:
+                        # {tf_s, type ∈ "bos"|"choch"} + provenance fields.
+                        _ev = {
+                            "tf_s": swing.tf_s,
+                            "type": "bos" if "bos" in swing.kind else "choch",
+                            "direction": direction,
+                            "ts_ms": swing.time_ms,
+                            "price": swing.price,
+                            "id": swing.id,
+                        }
+                        with self._lock:
+                            _buf = self._recent_structure_events.setdefault(symbol, [])
+                            _buf.append(_ev)
+                            if len(_buf) > 50:
+                                del _buf[: len(_buf) - 50]  # FIFO drop oldest
                         fire_signal(
                             symbol=swing.symbol,
                             tf=swing.tf_s,
@@ -497,6 +518,24 @@ class SmcRunner:
     def get_last_price(self, symbol: str) -> float:
         """Last known close price from M1 bar feed."""
         return self._last_prices.get(symbol, 0.0)
+
+    def get_recent_structure_events(
+        self, symbol: str, since_ts_ms: int = 0
+    ) -> List[Dict[str, Any]]:
+        """GAP #9 / ADR-040 errata A2: drain BOS/CHoCH events for WakeEngine.
+
+        Returns shallow copy of events with ts_ms >= since_ts_ms.
+        Symbol-agnostic — works identically for XAU/XAG/BTC/ETH.
+        Thread-safe (acquires self._lock).
+
+        Wire format consumed by core.smc.wake_check.check_condition():
+            [{tf_s: int, type: "bos"|"choch", direction: ..., ts_ms: ..., ...}, ...]
+        """
+        with self._lock:
+            buf = self._recent_structure_events.get(symbol, [])
+            if since_ts_ms <= 0:
+                return list(buf)
+            return [e for e in buf if e.get("ts_ms", 0) >= since_ts_ms]
 
     def get_snapshot(self, symbol: str, tf_s: int) -> Optional[SmcSnapshot]:
         """Для full frame build — composite snapshot з cross-TF display mapping.

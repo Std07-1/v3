@@ -299,7 +299,16 @@
         "zone_score_min": 6,
         "accumulator_threshold": 5.0,
         "accumulator_decay": 0.95,
-        "min_event_interval_s": 600
+        "event_cooldown_s": {
+            "price_zone_touch": 1800,
+            "session_open": 7200,
+            "structure_break": 1200,
+            "bias_divergence": 3600,
+            "accumulator": 0,
+            "max_silence": 0,
+            "_default": 600
+        },
+        "dedup_include_zone_id": false
     },
     "agent_console": {
         "enabled": true,
