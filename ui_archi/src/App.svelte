@@ -14,6 +14,7 @@
     import Relationship from "./views/Relationship.svelte";
     import Chat from "./views/Chat.svelte";
     import Mind from "./views/Mind.svelte";
+    import Workspace from "./views/Workspace.svelte";
     import Logs from "./views/Logs.svelte";
 
     // ── routing (hash-based) ──
@@ -348,6 +349,15 @@
                 <li>
                     <button
                         class="nav-item"
+                        class:active={route === "/workspace"}
+                        onclick={() => nav("/workspace")}
+                    >
+                        <span class="nav-icon">🏠</span> Workspace
+                    </button>
+                </li>
+                <li>
+                    <button
+                        class="nav-item"
                         class:active={route === "/logs"}
                         onclick={() => nav("/logs")}
                     >
@@ -489,6 +499,8 @@
                     <Relationship onchat={openChatHandoff} />
                 {:else if route === "/mind"}
                     <Mind onchat={openChatHandoff} />
+                {:else if route === "/workspace"}
+                    <Workspace onchat={openChatHandoff} />
                 {:else if route === "/logs"}
                     <Logs onchat={openChatHandoff} />
                 {:else}
@@ -536,6 +548,10 @@
                                 <span class="switcher-emoji">🧩</span>
                                 <span>Mind</span>
                             </button>
+                            <button onclick={() => nav("/workspace")}>
+                                <span class="switcher-emoji">🏠</span>
+                                <span>Workspace</span>
+                            </button>
                             <button onclick={() => nav("/logs")}>
                                 <span class="switcher-emoji">📋</span>
                                 <span>Logs</span>
@@ -581,6 +597,13 @@
                     aria-label="Mind"
                 >
                     <span class="bn-pill"><span class="bn-icon">🧩</span></span>
+                </button>
+                <button
+                    class:active={route === "/workspace"}
+                    onclick={() => nav("/workspace")}
+                    aria-label="Workspace"
+                >
+                    <span class="bn-pill"><span class="bn-icon">🏠</span></span>
                 </button>
                 <button
                     class:active={route === "/logs"}

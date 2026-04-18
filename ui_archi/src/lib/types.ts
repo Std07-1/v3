@@ -170,6 +170,22 @@ export interface AgentState {
     [key: string]: unknown;
 }
 
+// ── ADR-044: Workspace Item ──
+export interface WorkspaceItem {
+    id: string;
+    kind: "pin" | "note" | "briefing" | "scenario_map" | "alert";
+    title: string;
+    content: string;
+    priority: number;
+    created_at: number;
+    expires_at?: number | null;
+    tags: string[];
+    pinned: boolean;
+    status: "active" | "archived" | "superseded";
+    superseded_by?: string;
+    linked_scenario_id?: string;
+}
+
 export interface ChatHandoff {
     id: string;
     source: "feed" | "thinking" | "relationship" | "mind" | "logs";
