@@ -24,6 +24,7 @@
     } from "../lib/types";
     import { sanitizeHtml } from "../lib/sanitize";
     import { chatStore } from "../features/chat/stores/chatStore.svelte";
+    import MessageList from "../features/chat/components/MessageList.svelte";
 
     type HearthTone = "home" | "work" | "quiet" | "bridge" | "degraded";
     type HearthAction = {
@@ -310,7 +311,11 @@
     });
 
     // Scroll + textarea refs
-    let messagesEl: HTMLDivElement;
+    let messageListRef = $state<{
+        scrollToBottom: () => void;
+        isNearBottom: () => boolean;
+        isSelectingMessageText: () => boolean;
+    } | null>(null);
     let textareaEl: HTMLTextAreaElement;
 
     function clamp(value: number, min: number, max: number): number {
@@ -387,34 +392,6 @@
             context.prompt,
             `Чернетку відновлено з ${handoffSourceLabel(context.source)}.`,
         );
-    }
-
-    function escapeHtml(text: string): string {
-        return text.replace(/[&<>"']/g, (char) => {
-            switch (char) {
-                case "&":
-                    return "&amp;";
-                case "<":
-                    return "&lt;";
-                case ">":
-                    return "&gt;";
-                case '"':
-                    return "&quot;";
-                case "'":
-                    return "&#39;";
-                default:
-                    return char;
-            }
-        });
-    }
-
-    function renderMessageHtml(msg: ChatMessage): string {
-        if (msg.role === "user") {
-            return escapeHtml(msg.text).replace(/\n/g, "<br />");
-        }
-
-        const rendered = marked.parse(msg.text) as string;
-        return sanitizeHtml(rendered);
     }
 
     function toNumber(value: unknown): number | null {
@@ -850,32 +827,15 @@
         }
     }
 
+    // Scroll helpers делегують у MessageList (який володіє scroll container-ом).
     function scrollToBottom() {
-        if (messagesEl) {
-            messagesEl.scrollTop = messagesEl.scrollHeight;
-        }
+        messageListRef?.scrollToBottom();
     }
-
     function isNearBottom(): boolean {
-        if (!messagesEl) return true;
-        const remaining =
-            messagesEl.scrollHeight -
-            messagesEl.scrollTop -
-            messagesEl.clientHeight;
-        return remaining < 72;
+        return messageListRef?.isNearBottom() ?? true;
     }
-
     function isSelectingMessageText(): boolean {
-        const selection = window.getSelection?.();
-        if (!selection || selection.isCollapsed) return false;
-        const anchor = selection.anchorNode;
-        const focus = selection.focusNode;
-        return !!(
-            anchor &&
-            focus &&
-            messagesEl?.contains(anchor) &&
-            messagesEl.contains(focus)
-        );
+        return messageListRef?.isSelectingMessageText() ?? false;
     }
 
     function maybeScrollToBottom(force = false) {
@@ -1564,70 +1524,16 @@
 
 </div><!-- /chat-context-rail -->
 
-<!-- ── Messages Area ── -->
-<div class="messages" bind:this={messagesEl}>
-    {#if loading}
-        <div class="empty-state">
-            <div class="empty-icon">💬</div>
-            <p>Завантаження…</p>
-        </div>
-    {:else if messages.length === 0}
-        <div class="empty-state">
-            <div class="empty-icon">💬</div>
-            <p>Напиши Арчі — він прочитає і відповість</p>
-            {#if directives?.inner_thought}
-                <blockquote class="archi-thought">
-                    "{directives.inner_thought}"
-                </blockquote>
-            {/if}
-        </div>
-    {:else}
-        <div class="messages-spacer"></div>
-        {#each filteredMessages as msg, idx (msg.id)}
-            {@const prevMsg = idx > 0 ? filteredMessages[idx - 1] : null}
-            {@const sameAuthor = prevMsg?.role === msg.role}
-            {@const timeDiff = prevMsg ? msg.ts_ms - prevMsg.ts_ms : Infinity}
-            {@const grouped = sameAuthor && timeDiff < 120_000}
-            <div
-                class="bubble-row"
-                class:user={msg.role === "user"}
-                class:archi={msg.role === "archi"}
-                class:grouped
-            >
-                <div class="bubble">
-                    <div class="bubble-text prose">
-                        {@html renderMessageHtml(msg)}
-                    </div>
-                    <div class="bubble-meta">
-                        <span class="bubble-ts">{formatTs(msg.ts_ms)}</span>
-                        {#if (msg as any).source === "telegram"}
-                            <span class="src-tg">TG</span>
-                        {/if}
-                        {#if msg.role === "archi" && ttsSupported}
-                            <button
-                                class="btn-tts"
-                                onclick={() => speak(msg.text)}
-                                title="Озвучити">🔊</button
-                            >
-                        {/if}
-                    </div>
-                </div>
-            </div>
-        {/each}
-        {#if awaitingReply}
-            <div class="bubble-row archi">
-                <div class="bubble">
-                    <span class="typing-dot">●</span><span
-                        class="typing-dot"
-                        style="animation-delay:0.15s">●</span
-                    ><span class="typing-dot" style="animation-delay:0.3s"
-                        >●</span
-                    >
-                </div>
-            </div>
-        {/if}
-    {/if}
-</div>
+<!-- ── Messages Area (ADR-0052 S3) ── -->
+<MessageList
+    bind:this={messageListRef}
+    {messages}
+    {loading}
+    {awaitingReply}
+    innerThought={directives?.inner_thought ?? ""}
+    {ttsSupported}
+    onspeak={(text) => speak(text)}
+/>
 
 <!-- ── Input Bar ── -->
 <div class="input-bar" class:focused={inputFocused}>
@@ -2404,191 +2310,7 @@
         overscroll-behavior-y: contain;
     }
 
-    /* ── Messages area ── */
-    .messages {
-        flex: 1;
-        overflow-y: auto;
-        padding: 12px 16px 8px;
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        min-height: 0;
-        overscroll-behavior-y: contain;
-    }
-    .messages-spacer {
-        flex: 1;
-    }
-
-    .empty-state {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        height: 100%;
-        gap: 10px;
-        color: var(--text-muted);
-        text-align: center;
-    }
-    .empty-icon {
-        font-size: 36px;
-    }
-    .empty-state p {
-        font-size: 14px;
-        margin: 0;
-    }
-    .archi-thought {
-        max-width: 320px;
-        font-style: italic;
-        font-size: 13px;
-        color: var(--text-muted);
-        border-left: 2px solid var(--accent);
-        padding-left: 10px;
-        margin: 0;
-    }
-
-    /* ── Bubble rows ── */
-    .bubble-row {
-        display: flex;
-        max-width: 82%;
-        position: relative;
-    }
-    .bubble-row.user {
-        align-self: flex-end;
-    }
-    .bubble-row.archi {
-        align-self: flex-start;
-    }
-    .bubble-row.grouped {
-        margin-top: -2px;
-    }
-
-    .bubble {
-        padding: 8px 14px;
-        border-radius: 18px;
-        max-width: 100%;
-        word-break: break-word;
-        position: relative;
-    }
-    .bubble,
-    .bubble-text {
-        user-select: text;
-        -webkit-user-select: text;
-        -webkit-touch-callout: default;
-    }
-    .bubble-text :global(*) {
-        user-select: text;
-        -webkit-user-select: text;
-        -webkit-touch-callout: default;
-    }
-    /* User bubbles */
-    .bubble-row.user .bubble {
-        background: color-mix(in srgb, var(--accent) 22%, var(--surface));
-        color: var(--text);
-        border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-        border-bottom-right-radius: 6px;
-    }
-    .bubble-row.user.grouped .bubble {
-        border-top-right-radius: 6px;
-    }
-
-    /* Archi bubbles */
-    .bubble-row.archi .bubble {
-        background: var(--surface);
-        color: var(--text);
-        border-bottom-left-radius: 6px;
-    }
-    .bubble-row.archi.grouped .bubble {
-        border-top-left-radius: 6px;
-    }
-
-    .bubble-text {
-        font-size: 14.5px;
-        line-height: 1.5;
-        white-space: pre-wrap;
-    }
-    .bubble-text :global(p) {
-        margin: 0 0 0.55em;
-    }
-    .bubble-text :global(p:last-child) {
-        margin-bottom: 0;
-    }
-    .bubble-text :global(strong) {
-        font-weight: 650;
-    }
-    .bubble-text :global(blockquote) {
-        margin: 0.45em 0;
-        padding-left: 10px;
-        border-left: 2px solid
-            color-mix(in srgb, var(--accent) 45%, transparent);
-        color: var(--text-muted);
-    }
-    .bubble-text :global(code) {
-        font-family: var(--font-mono);
-        font-size: 0.88em;
-        background: var(--surface2);
-        padding: 1px 4px;
-        border-radius: 4px;
-    }
-    .bubble-row.user .bubble-text :global(code) {
-        background: color-mix(in srgb, var(--accent) 18%, var(--surface2));
-    }
-    .bubble-meta {
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        gap: 5px;
-        margin-top: 2px;
-    }
-    .bubble-ts {
-        font-size: 10px;
-        opacity: 0.45;
-    }
-    .bubble-row.user .bubble-ts {
-        opacity: 0.45;
-    }
-    .src-tg {
-        font-size: 8px;
-        font-weight: 700;
-        padding: 1px 4px;
-        border-radius: 3px;
-        background: rgba(0, 136, 204, 0.15);
-        color: #0088cc;
-    }
-
-    /* TTS */
-    .btn-tts {
-        background: none;
-        border: none;
-        cursor: pointer;
-        font-size: 11px;
-        padding: 0;
-        opacity: 0;
-        transition: opacity 0.15s;
-    }
-    .bubble:hover .btn-tts {
-        opacity: 0.5;
-    }
-    .btn-tts:hover {
-        opacity: 1 !important;
-    }
-
-    /* Typing indicator */
-    .typing-dot {
-        display: inline-block;
-        animation: tp 1.4s infinite ease-in-out;
-        font-size: 14px;
-        opacity: 0.6;
-    }
-    @keyframes tp {
-        0%,
-        80%,
-        100% {
-            opacity: 0.15;
-        }
-        40% {
-            opacity: 1;
-        }
-    }
+    /* ── Messages area & bubbles: owned by MessageList/MessageBubble (ADR-0052 S3) ── */
 
     /* ── Quick actions ── */
     .quick-actions {
@@ -2875,9 +2597,6 @@
         }
         .handoff-summary {
             font-size: 11px;
-        }
-        .bubble-row {
-            max-width: 88%;
         }
         .emoji-panel {
             width: 260px;
