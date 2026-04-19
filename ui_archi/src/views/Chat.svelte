@@ -24,7 +24,10 @@
     } from "../lib/types";
     import { sanitizeHtml } from "../lib/sanitize";
     import { chatStore } from "../features/chat/stores/chatStore.svelte";
+    import { ttsStore } from "../features/chat/stores/ttsStore.svelte";
     import MessageList from "../features/chat/components/MessageList.svelte";
+    import InputBar from "../features/chat/components/InputBar.svelte";
+    import type { QuickAction } from "../features/chat/components/QuickActions.svelte";
 
     type HearthTone = "home" | "work" | "quiet" | "bridge" | "degraded";
     type HearthAction = {
@@ -88,19 +91,15 @@
     let lastThinkingSyncMs = $state(0);
     let thinkingSyncError = $state("");
 
-    // Voice
-    let listening = $state(false);
-    let voiceSupported = $state(false);
-    let voiceError = $state("");
-    let recognition: any = null;
-
-    // Input focus state
-    let inputFocused = $state(false);
-    const DESKTOP_INPUT_MAX = 140;
-    const MOBILE_INPUT_MIN = 52;
-    const MOBILE_INPUT_MAX = 196;
-    let quickActionHint = $state("");
-    let quickActionHintTimer: ReturnType<typeof setTimeout> | null = null;
+    // Input concerns (composer height, focus, voice, emoji, quick-action hint) живуть
+    // у InputBar (ADR-0052 S4). Тут лише ref для setDraft/primeDraft delegation.
+    let inputBarRef = $state<{
+        primeDraft: (text: string) => void;
+        setDraft: (text: string, hint: string) => void;
+        focus: () => void;
+        applyHeight: () => void;
+        resetHeight: () => void;
+    } | null>(null);
 
     marked.setOptions({ breaks: true, gfm: true });
 
@@ -115,109 +114,11 @@
         }, 5000);
     }
 
-    // ── TTS (P2 — session-only, no scare on reload) ──
-    let ttsAuto = $state(false);
-    const ttsSupported =
-        typeof window !== "undefined" && "speechSynthesis" in window;
-    let lastSpokenId = "";
+    // ── TTS (ADR-0052 S4): state + speak/toggle у ttsStore. ──
+    // Auto-TTS watcher на оновлення messages нижче (через ttsStore.maybeAutoSpeak).
 
-    function speak(text: string) {
-        if (!ttsSupported) return;
-        speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance(text);
-        u.lang = "uk-UA";
-        u.rate = 1.05;
-        speechSynthesis.speak(u);
-    }
-
-    function toggleAutoTTS() {
-        ttsAuto = !ttsAuto;
-        if (!ttsAuto) speechSynthesis.cancel();
-    }
-
-    // ── Emoji (P6) — Categorized Telegram-style ──
-    let showEmoji = $state(false);
-    const EMOJI_CATS: { icon: string; emojis: string[] }[] = [
-        {
-            icon: "😀",
-            emojis: [
-                "😊",
-                "😂",
-                "🤣",
-                "😎",
-                "🤔",
-                "😏",
-                "🙄",
-                "😤",
-                "😴",
-                "🥳",
-                "🫡",
-                "😈",
-            ],
-        },
-        {
-            icon: "👋",
-            emojis: [
-                "👍",
-                "👎",
-                "👏",
-                "🤝",
-                "💪",
-                "✋",
-                "🤞",
-                "👀",
-                "🙏",
-                "🫶",
-                "✌️",
-                "🤙",
-            ],
-        },
-        {
-            icon: "❤️",
-            emojis: [
-                "❤️",
-                "🔥",
-                "⚡",
-                "💎",
-                "🎯",
-                "⭐",
-                "💰",
-                "🏆",
-                "🚀",
-                "💡",
-                "🔮",
-                "🎰",
-            ],
-        },
-        {
-            icon: "📈",
-            emojis: [
-                "📈",
-                "📉",
-                "💹",
-                "🟢",
-                "🔴",
-                "⚠️",
-                "🏦",
-                "🪙",
-                "📊",
-                "💵",
-                "🐂",
-                "🐻",
-            ],
-        },
-    ];
-    let emojiCat = $state(0);
-
-    function insertEmoji(e: string) {
-        inputText += e;
-        ondraftchange(inputText);
-        showEmoji = false;
-        tick().then(() => applyComposerHeight());
-        textareaEl?.focus();
-    }
-
-    // ── inner_thought filter (dedupe) ──
+    // ── inner_thought filter (dedupe) — для auto-TTS; MessageList робить свою
+    //    ідентичну dedup, але тут потрібен масив для ttsStore.maybeAutoSpeak. ──
     const filteredMessages = $derived(
         messages.filter((m) => {
             if (
@@ -230,20 +131,15 @@
         }),
     );
 
-    // ── auto-TTS on new archi message ──
+    // ── auto-TTS: ttsStore сам перевіряє auto + lastSpokenId ──
     $effect(() => {
-        if (!ttsAuto || filteredMessages.length === 0) return;
-        const last = filteredMessages[filteredMessages.length - 1];
-        if (last.role === "archi" && last.id !== lastSpokenId) {
-            lastSpokenId = last.id;
-            speak(last.text);
-        }
+        ttsStore.maybeAutoSpeak(filteredMessages);
     });
 
     // ── Smart Context Actions — adapt to Archi's current state ──
-    const contextActions = $derived.by(() => {
+    const contextActions = $derived.by<QuickAction[]>(() => {
         const d = directives;
-        const acts: { label: string; text: string; icon: string }[] = [];
+        const acts: QuickAction[] = [];
 
         const hasScenario = !!d?.active_scenario;
         const vp = (d as any)?.virtual_position;
@@ -316,79 +212,14 @@
         isNearBottom: () => boolean;
         isSelectingMessageText: () => boolean;
     } | null>(null);
-    let textareaEl: HTMLTextAreaElement;
-
-    function clamp(value: number, min: number, max: number): number {
-        return Math.min(max, Math.max(min, value));
+    // Composer height / textarea DOM — повністю у InputBar (ADR-0052 S4).
+    // Parent-level primeDraft/setDraft делегують у inputBarRef.
+    function primeDraft(text: string): void {
+        inputBarRef?.primeDraft(text);
     }
 
-    function isMobileViewport(): boolean {
-        return (
-            typeof window !== "undefined" &&
-            window.matchMedia("(max-width: 768px)").matches
-        );
-    }
-
-    function getComposerMaxHeight(): number {
-        const vh = window.visualViewport?.height ?? window.innerHeight;
-        return Math.round(Math.min(vh * 0.28, MOBILE_INPUT_MAX));
-    }
-
-    function applyComposerHeight() {
-        if (!textareaEl) return;
-
-        const mobile = isMobileViewport();
-        const min = mobile ? MOBILE_INPUT_MIN : 44;
-        const max = mobile ? getComposerMaxHeight() : DESKTOP_INPUT_MAX;
-
-        textareaEl.style.height = "auto";
-        const natural = textareaEl.scrollHeight;
-        const target = clamp(natural, min, max);
-
-        textareaEl.style.height = `${target}px`;
-        textareaEl.style.overflowY = natural > target ? "auto" : "hidden";
-    }
-
-    // Auto-grow textarea
-    function autoGrow() {
-        applyComposerHeight();
-    }
-
-    function setQuickActionHint(text: string) {
-        quickActionHint = text;
-        if (quickActionHintTimer) clearTimeout(quickActionHintTimer);
-        quickActionHintTimer = setTimeout(() => {
-            quickActionHint = "";
-            quickActionHintTimer = null;
-        }, 2600);
-    }
-
-    function setDraft(text: string, hint: string) {
-        inputText = text;
-        ondraftchange(text);
-        setQuickActionHint(hint);
-
-        tick().then(() => {
-            applyComposerHeight();
-            textareaEl?.focus();
-            const caret = inputText.length;
-            textareaEl?.setSelectionRange?.(caret, caret);
-        });
-    }
-
-    function primeDraft(text: string) {
-        const existingDraft = inputText.trim();
-        const nextText = existingDraft ? `${inputText}\n\n${text}` : text;
-        setDraft(
-            nextText,
-            existingDraft
-                ? "Команду додано в чернетку. Відправка лишається ручною."
-                : "Чернетка вставлена. Перевір і відправ вручну.",
-        );
-    }
-
-    function restoreHandoffDraft(context: ChatHandoff) {
-        setDraft(
+    function restoreHandoffDraft(context: ChatHandoff): void {
+        inputBarRef?.setDraft(
             context.prompt,
             `Чернетку відновлено з ${handoffSourceLabel(context.source)}.`,
         );
@@ -848,14 +679,9 @@
     async function sendMessage() {
         const text = inputText.trim();
         if (!text || sending) return;
-        quickActionHint = "";
-        if (quickActionHintTimer) {
-            clearTimeout(quickActionHintTimer);
-            quickActionHintTimer = null;
-        }
         inputText = "";
         ondraftchange("");
-        if (textareaEl) textareaEl.style.height = "auto";
+        inputBarRef?.resetHeight();
 
         await tick();
         scrollToBottom();
@@ -870,57 +696,7 @@
         maybeScrollToBottom(true);
     }
 
-    function handleKeydown(e: KeyboardEvent) {
-        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-            e.preventDefault();
-            sendMessage();
-        }
-    }
-
-    // ── voice input ──
-    function initVoice() {
-        const SR =
-            (window as any).SpeechRecognition ||
-            (window as any).webkitSpeechRecognition;
-        if (!SR) {
-            voiceSupported = false;
-            return;
-        }
-        voiceSupported = true;
-        recognition = new SR();
-        recognition.lang = "uk-UA";
-        recognition.continuous = false;
-        recognition.interimResults = false;
-
-        recognition.onresult = (e: any) => {
-            const transcript = e.results[0]?.[0]?.transcript ?? "";
-            if (transcript) {
-                inputText = (inputText + " " + transcript).trim();
-                ondraftchange(inputText);
-                tick().then(() => applyComposerHeight());
-            }
-        };
-        recognition.onerror = (e: any) => {
-            voiceError =
-                e.error === "not-allowed" ? "Мікрофон заблоковано" : e.error;
-            listening = false;
-        };
-        recognition.onend = () => {
-            listening = false;
-        };
-    }
-
-    function toggleVoice() {
-        if (!voiceSupported || !recognition) return;
-        if (listening) {
-            recognition.stop();
-            listening = false;
-        } else {
-            voiceError = "";
-            recognition.start();
-            listening = true;
-        }
-    }
+    // Voice + Ctrl/Cmd+Enter keyboard тепер у InputBar (ADR-0052 S4).
 
     // ── polling for new messages (логіка у chatStore, тут лишається тільки
     // Thinking-signal poll — Chat-specific, не shared) ──
@@ -946,7 +722,7 @@
         const lastArchi = [...chatStore.messages]
             .reverse()
             .find((m) => m.role === "archi");
-        if (lastArchi) lastSpokenId = lastArchi.id;
+        if (lastArchi) ttsStore.seed(lastArchi.id);
         _ttsInitialized = true;
     });
 
@@ -955,34 +731,20 @@
         // chatStore.init() = загрузка history + старт normal polling (8s) + fast-poll готовий.
         void chatStore.init();
         void loadShellData();
-        initVoice();
         resetContextTimer();
-        tick().then(() => applyComposerHeight());
         // Thinking signal is Chat-specific — poll separately (не messages).
         thinkingPollId = setInterval(refreshShellData, 30_000);
-
-        const syncComposer = () =>
-            requestAnimationFrame(() => applyComposerHeight());
-        window.visualViewport?.addEventListener("resize", syncComposer);
-        window.addEventListener("orientationchange", syncComposer);
-
-        return () => {
-            window.visualViewport?.removeEventListener("resize", syncComposer);
-            window.removeEventListener("orientationchange", syncComposer);
-        };
     });
 
     onDestroy(() => {
         chatStore.shutdown();
         if (thinkingPollId) clearInterval(thinkingPollId);
-        if (recognition && listening) recognition.stop();
-        if (quickActionHintTimer) clearTimeout(quickActionHintTimer);
     });
 
+    // draft prop (від App.svelte) → inputText. Height synchronization тепер у InputBar.
     $effect(() => {
         if (draft === inputText) return;
         inputText = draft;
-        tick().then(() => applyComposerHeight());
     });
 
     const bias = $derived(getBias(directives));
@@ -1354,16 +1116,16 @@
         {/if}
     </div>
     <div class="ch-right">
-        {#if ttsSupported}
+        {#if ttsStore.supported}
             <button
                 class="tts-pill"
-                class:active={ttsAuto}
-                onclick={toggleAutoTTS}
-                title={ttsAuto
+                class:active={ttsStore.auto}
+                onclick={() => ttsStore.toggleAuto()}
+                title={ttsStore.auto
                     ? "Вимкнути авто-озвучення (браузерне, лише у відкритій вкладці)"
                     : "Увімкнути авто-озвучення (браузерне, лише у відкритій вкладці)"}
             >
-                {ttsAuto ? "🔊 Авто" : "🔇"}
+                {ttsStore.auto ? "🔊 Авто" : "🔇"}
             </button>
         {/if}
     </div>
@@ -1531,116 +1293,20 @@
     {loading}
     {awaitingReply}
     innerThought={directives?.inner_thought ?? ""}
-    {ttsSupported}
-    onspeak={(text) => speak(text)}
+    ttsSupported={ttsStore.supported}
+    onspeak={(text) => ttsStore.speak(text)}
 />
 
-<!-- ── Input Bar ── -->
-<div class="input-bar" class:focused={inputFocused}>
-    {#if !inputFocused && !inputText.trim() && contextActions.length > 0}
-        <div class="quick-actions compact">
-            {#each contextActions as act}
-                <button
-                    class="qa-btn"
-                    onclick={() => primeDraft(act.text)}
-                    title={act.text}
-                >
-                    <span class="qa-icon">{act.icon}</span>
-                    <span class="qa-label">{act.label}</span>
-                </button>
-            {/each}
-        </div>
-    {/if}
-    {#if error}<div class="input-error">{error}</div>{/if}
-    <div class="input-hint" class:accent={!!quickActionHint}>
-        {quickActionHint || "Enter — новий рядок · Ctrl/Cmd+Enter — відправити"}
-    </div>
-    <div class="input-row">
-        <textarea
-            class="chat-input"
-            bind:this={textareaEl}
-            bind:value={inputText}
-            oninput={() => {
-                autoGrow();
-                ondraftchange(inputText);
-            }}
-            onkeydown={handleKeydown}
-            onfocus={() => {
-                inputFocused = true;
-                tick().then(() => applyComposerHeight());
-            }}
-            onblur={() => {
-                setTimeout(() => {
-                    inputFocused = false;
-                }, 150);
-            }}
-            placeholder="Повідомлення…"
-            rows={1}
-            enterkeyhint="enter"
-            spellcheck="true"
-            disabled={sending}
-        ></textarea>
-
-        <div class="input-actions">
-            <!-- Voice -->
-            {#if voiceSupported}
-                <button
-                    class="ia-btn"
-                    class:recording={listening}
-                    onclick={toggleVoice}
-                    title={listening ? "Зупинити" : "Голос"}
-                >
-                    {listening ? "🔴" : "🎤"}
-                </button>
-            {/if}
-
-            <!-- Emoji -->
-            <div class="emoji-anchor">
-                <button
-                    class="ia-btn"
-                    onclick={() => {
-                        showEmoji = !showEmoji;
-                    }}
-                    title="Емодзі">😊</button
-                >
-                {#if showEmoji}
-                    <div class="emoji-panel">
-                        <div class="emoji-tabs">
-                            {#each EMOJI_CATS as cat, ci}
-                                <button
-                                    class="emoji-tab"
-                                    class:active={emojiCat === ci}
-                                    onclick={() => {
-                                        emojiCat = ci;
-                                    }}>{cat.icon}</button
-                                >
-                            {/each}
-                        </div>
-                        <div class="emoji-grid">
-                            {#each EMOJI_CATS[emojiCat].emojis as em}
-                                <button
-                                    class="emoji-cell"
-                                    onclick={() => insertEmoji(em)}>{em}</button
-                                >
-                            {/each}
-                        </div>
-                    </div>
-                {/if}
-            </div>
-
-            <!-- Send -->
-            <button
-                class="btn-send"
-                onclick={sendMessage}
-                disabled={sending || !inputText.trim()}
-                title="Відправити (Ctrl/Cmd+Enter)"
-            >
-                {sending ? "⏳" : "➤"}
-            </button>
-        </div>
-    </div>
-    {#if voiceError}<div class="voice-error">{voiceError}</div>{/if}
-</div>
+<!-- ── Input Bar (ADR-0052 S4) ── -->
+<InputBar
+    bind:this={inputBarRef}
+    bind:value={inputText}
+    {sending}
+    {error}
+    {contextActions}
+    onsend={sendMessage}
+    oninputchange={(t) => ondraftchange(t)}
+/>
 
 <style>
     /* ═══ Chat Premium Layout ═══ */
@@ -2311,261 +1977,7 @@
     }
 
     /* ── Messages area & bubbles: owned by MessageList/MessageBubble (ADR-0052 S3) ── */
-
-    /* ── Quick actions ── */
-    .quick-actions {
-        display: flex;
-        gap: 6px;
-        padding: 0 0 10px;
-        margin: 0;
-        background: transparent;
-        flex-shrink: 0;
-        overflow-x: auto;
-        scrollbar-width: none;
-    }
-    .quick-actions.compact {
-        padding-top: 2px;
-    }
-    .quick-actions::-webkit-scrollbar {
-        display: none;
-    }
-    .qa-btn {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        padding: 5px 12px;
-        border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-        border-radius: 20px;
-        background: var(--surface2);
-        color: var(--text-muted);
-        cursor: pointer;
-        font-size: 12px;
-        white-space: nowrap;
-        flex-shrink: 0;
-        scroll-snap-align: start;
-        transition:
-            border-color 0.15s,
-            color 0.15s,
-            background 0.15s;
-    }
-    .qa-btn:hover {
-        border-color: var(--accent);
-        color: var(--text);
-        background: var(--surface2);
-    }
-    .qa-icon {
-        font-size: 13px;
-    }
-    .qa-label {
-        font-weight: 500;
-    }
-
-    /* ── Input bar ── */
-    .input-bar {
-        padding: 8px 12px 12px;
-        background: var(--surface);
-        border-top: 1px solid var(--border);
-        flex-shrink: 0;
-        box-shadow: 0 -14px 32px rgba(0, 0, 0, 0.18);
-    }
-    .input-bar.focused {
-        box-shadow: 0 -18px 36px rgba(0, 0, 0, 0.24);
-    }
-    .input-error {
-        font-size: 12px;
-        color: #e05555;
-        margin-bottom: 4px;
-        padding: 0 4px;
-    }
-    .input-hint {
-        font-size: 11px;
-        color: var(--text-muted);
-        margin-bottom: 6px;
-        padding: 0 4px;
-    }
-    .input-hint.accent {
-        color: var(--accent);
-    }
-    .voice-error {
-        font-size: 11px;
-        color: #e05555;
-        margin-top: 4px;
-        padding: 0 4px;
-    }
-    .input-row {
-        display: flex;
-        align-items: flex-end;
-        gap: 8px;
-    }
-
-    .chat-input {
-        flex: 1;
-        resize: none;
-        border: 1px solid var(--border);
-        border-radius: 22px;
-        background: var(--bg);
-        color: var(--text);
-        font-family: inherit;
-        font-size: 15px;
-        line-height: 1.45;
-        padding: 10px 16px;
-        outline: none;
-        transition: border-color 0.2s;
-        min-height: 44px;
-        max-height: 140px;
-        overflow-y: auto;
-    }
-    .chat-input:focus {
-        border-color: var(--accent);
-    }
-    .chat-input:disabled {
-        opacity: 0.6;
-    }
-    .chat-input::placeholder {
-        color: var(--text-muted);
-    }
-
-    .input-actions {
-        display: flex;
-        align-items: flex-end;
-        gap: 4px;
-        flex-shrink: 0;
-    }
-    .ia-btn {
-        width: 38px;
-        height: 38px;
-        border-radius: 50%;
-        border: none;
-        background: none;
-        cursor: pointer;
-        font-size: 18px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: var(--text-muted);
-        transition:
-            background 0.15s,
-            color 0.15s;
-    }
-    .ia-btn:hover {
-        background: var(--surface2);
-        color: var(--text);
-    }
-    .ia-btn.tts-on {
-        color: var(--accent);
-    }
-    .ia-btn.recording {
-        color: #e05555;
-        animation: rec-pulse 1s ease infinite;
-    }
-    @keyframes rec-pulse {
-        0%,
-        100% {
-            box-shadow: 0 0 0 0 rgba(224, 85, 85, 0.35);
-        }
-        50% {
-            box-shadow: 0 0 0 6px rgba(224, 85, 85, 0);
-        }
-    }
-
-    .btn-send {
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        border: none;
-        background: var(--accent);
-        color: #fff;
-        cursor: pointer;
-        font-size: 17px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-        transition:
-            opacity 0.15s,
-            transform 0.1s;
-    }
-    .btn-send:disabled {
-        opacity: 0.35;
-        cursor: not-allowed;
-    }
-    .btn-send:not(:disabled):hover {
-        opacity: 0.85;
-        transform: scale(1.06);
-    }
-
-    /* ── Emoji panel (Telegram-style) ── */
-    .emoji-anchor {
-        position: relative;
-    }
-    .emoji-panel {
-        position: absolute;
-        bottom: 48px;
-        right: 0;
-        width: 280px;
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 14px;
-        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
-        z-index: 60;
-        overflow: hidden;
-        animation: emojiIn 0.15s ease-out;
-    }
-    @keyframes emojiIn {
-        from {
-            opacity: 0;
-            transform: translateY(8px) scale(0.95);
-        }
-        to {
-            opacity: 1;
-            transform: none;
-        }
-    }
-    .emoji-tabs {
-        display: flex;
-        border-bottom: 1px solid var(--border);
-    }
-    .emoji-tab {
-        flex: 1;
-        padding: 8px 0;
-        font-size: 16px;
-        background: none;
-        border: none;
-        cursor: pointer;
-        border-bottom: 2px solid transparent;
-        transition: border-color 0.15s;
-    }
-    .emoji-tab.active {
-        border-bottom-color: var(--accent);
-    }
-    .emoji-tab:hover {
-        background: var(--surface2);
-    }
-    .emoji-grid {
-        display: grid;
-        grid-template-columns: repeat(6, 1fr);
-        gap: 2px;
-        padding: 8px;
-    }
-    .emoji-cell {
-        width: 40px;
-        height: 40px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 22px;
-        border: none;
-        background: none;
-        border-radius: 8px;
-        cursor: pointer;
-        transition:
-            background 0.1s,
-            transform 0.1s;
-    }
-    .emoji-cell:hover {
-        background: var(--surface2);
-        transform: scale(1.15);
-    }
+    /* ── Input bar / QuickActions / VoiceButton / EmojiPicker: owned by InputBar (ADR-0052 S4) ── */
 
     @media (max-width: 768px) {
         .pulse-board-head {
@@ -2598,10 +2010,6 @@
         .handoff-summary {
             font-size: 11px;
         }
-        .emoji-panel {
-            width: 260px;
-            right: -12px;
-        }
         .chat-context-rail {
             max-height: 40vh;
             /* Fade hint at bottom when scrollable */
@@ -2616,39 +2024,6 @@
             font-size: 11px;
             line-clamp: 1;
             -webkit-line-clamp: 1;
-        }
-
-        /* ── Mobile input: textarea grows big, actions wrap below ── */
-        .input-bar {
-            padding: 8px 10px calc(10px + env(safe-area-inset-bottom)) 10px;
-        }
-        .quick-actions {
-            padding-bottom: 8px;
-        }
-        .input-row {
-            flex-wrap: wrap;
-            gap: 6px;
-        }
-        .chat-input {
-            flex-basis: 100%; /* full width, wraps alone on first line */
-            max-height: min(28vh, 196px);
-            min-height: 52px;
-            font-size: 16px; /* prevents iOS zoom on focus */
-            border-radius: 18px;
-            padding: 14px 16px;
-        }
-        .input-actions {
-            width: 100%;
-            justify-content: flex-end;
-            gap: 8px;
-        }
-        .btn-send {
-            width: 44px;
-            height: 44px;
-        }
-        .ia-btn {
-            width: 42px;
-            height: 42px;
         }
     }
 </style>
