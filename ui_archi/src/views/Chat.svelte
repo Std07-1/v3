@@ -22,6 +22,8 @@
         ThinkingEntry,
         TrackedPromise,
     } from "../lib/types";
+    import { sanitizeHtml } from "../lib/sanitize";
+    import { chatStore } from "../features/chat/stores/chatStore.svelte";
 
     type HearthTone = "home" | "work" | "quiet" | "bridge" | "degraded";
     type HearthAction = {
@@ -65,11 +67,14 @@
     }>();
 
     // ── state ──
-    let messages = $state<ChatMessage[]>([]);
+    // messages/sending/loading/error/awaitingReply/lastSentId живуть у chatStore
+    // (ADR-0052 S2). Тут лише локальний input + DOM-concerns.
+    let messages = $derived(chatStore.messages);
+    let sending = $derived(chatStore.sending);
+    let loading = $derived(chatStore.loading);
+    let error = $derived(chatStore.error);
+    let awaitingReply = $derived(chatStore.awaitingReply);
     let inputText = $state("");
-    let sending = $state(false);
-    let loading = $state(true);
-    let error = $state("");
 
     // Market pulse (shared state — single polling source in state.svelte.ts)
     let directives = $derived(getDirectives());
@@ -409,62 +414,7 @@
         }
 
         const rendered = marked.parse(msg.text) as string;
-        return sanitizeRenderedHtml(rendered);
-    }
-
-    function sanitizeRenderedHtml(html: string): string {
-        if (typeof document === "undefined") return html;
-
-        const allowedTags = new Set([
-            "A",
-            "BLOCKQUOTE",
-            "BR",
-            "CODE",
-            "EM",
-            "LI",
-            "OL",
-            "P",
-            "PRE",
-            "STRONG",
-            "UL",
-        ]);
-        const template = document.createElement("template");
-        template.innerHTML = html;
-
-        const elements = Array.from(template.content.querySelectorAll("*"));
-        for (const element of elements) {
-            if (!allowedTags.has(element.tagName)) {
-                element.replaceWith(
-                    document.createTextNode(element.textContent ?? ""),
-                );
-                continue;
-            }
-
-            for (const attr of Array.from(element.attributes)) {
-                const name = attr.name.toLowerCase();
-                if (element.tagName === "A" && name === "href") {
-                    const value = attr.value.trim();
-                    if (!/^(https?:|mailto:)/i.test(value)) {
-                        element.removeAttribute(attr.name);
-                    }
-                    continue;
-                }
-                if (
-                    element.tagName === "A" &&
-                    (name === "target" || name === "rel")
-                ) {
-                    continue;
-                }
-                element.removeAttribute(attr.name);
-            }
-
-            if (element.tagName === "A" && element.hasAttribute("href")) {
-                element.setAttribute("target", "_blank");
-                element.setAttribute("rel", "noopener noreferrer");
-            }
-        }
-
-        return template.innerHTML;
+        return sanitizeHtml(rendered);
     }
 
     function toNumber(value: unknown): number | null {
@@ -864,36 +814,22 @@
     }
 
     // ── data fetch ──
-    async function loadData() {
+    async function loadShellData() {
+        // chatStore.init() завантажує historyу + стартує polling — див. onMount.
+        // Тут — лише shell-sync (directives, agent state, thinking signal).
         try {
-            const [, nextMessages, , nextThinkingSignal] = await Promise.all([
+            const [, nextThinkingSignal] = await Promise.all([
                 refreshAll(false),
-                api
-                    .chatHistory(80)
-                    .then((r) => r.messages ?? [])
-                    .catch(() => []),
-                Promise.resolve(null), // slot kept for array destructuring
                 loadLatestThinkingSignal(),
             ]);
-            messages = nextMessages;
             recordThinkingSync(
                 nextThinkingSignal.entry,
                 nextThinkingSignal.ok,
                 "initial",
             );
-            // Prevent auto-TTS of existing messages on load
-            const _lastArchi = [...messages]
-                .reverse()
-                .find((m) => m.role === "archi");
-            if (_lastArchi) lastSpokenId = _lastArchi.id;
         } catch {
             thinkingSyncError =
                 "Thinking journal snapshot не завантажився. Початковий shell sync не вдався.";
-            // graceful
-        } finally {
-            loading = false;
-            await tick();
-            scrollToBottom();
         }
     }
 
@@ -948,10 +884,7 @@
         }
     }
 
-    // ── send message (async: POST saves + bot replies via Redis) ──
-    let awaitingReply = $state(false);
-    let lastSentId = $state("");
-
+    // ── send message (store handles optimistic add + rollback + fast poll) ──
     async function sendMessage() {
         const text = inputText.trim();
         if (!text || sending) return;
@@ -963,39 +896,18 @@
         inputText = "";
         ondraftchange("");
         if (textareaEl) textareaEl.style.height = "auto";
-        sending = true;
-        error = "";
 
-        // Optimistic local add for user message
-        const tmpMsg: ChatMessage = {
-            id: `u_tmp_${Date.now()}`,
-            role: "user",
-            text,
-            ts_ms: Date.now(),
-        };
-        messages = [...messages, tmpMsg];
         await tick();
         scrollToBottom();
 
-        try {
-            const res = await api.chatSend(text);
-            // Replace tmp user msg with real (server-assigned) one
-            const realUser = res.message;
-            messages = messages.map((m) => (m.id === tmpMsg.id ? realUser : m));
-            // Bot will reply asynchronously — start fast polling
-            lastSentId = realUser.id;
-            awaitingReply = true;
-            startFastPoll();
-        } catch {
-            error = "Повідомлення не відправлено. Спробуй ще раз.";
-            inputText = text;
-            ondraftchange(text);
-            messages = messages.filter((m) => m.id !== tmpMsg.id);
-        } finally {
-            sending = false;
-            await tick();
-            maybeScrollToBottom(true);
+        const result = await chatStore.send(text);
+        if (!result.ok) {
+            // I7 degraded-but-loud: restore draft у інпут, UI показує error banner з store.
+            inputText = result.text;
+            ondraftchange(result.text);
         }
+        await tick();
+        maybeScrollToBottom(true);
     }
 
     function handleKeydown(e: KeyboardEvent) {
@@ -1050,79 +962,43 @@
         }
     }
 
-    // ── polling for new messages ──
-    let pollId: ReturnType<typeof setInterval>;
-    let fastPollId: ReturnType<typeof setInterval> | null = null;
-    // Thinking signal polling (Chat-specific, not shared)
+    // ── polling for new messages (логіка у chatStore, тут лишається тільки
+    // Thinking-signal poll — Chat-specific, не shared) ──
     let thinkingPollId: ReturnType<typeof setInterval> | null = null;
-    const NORMAL_POLL_MS = 8_000;
-    const FAST_POLL_MS = 2_000;
-    const FAST_POLL_MAX_MS = 90_000; // stop fast polling after 90s
 
-    async function pollMessages() {
-        try {
-            const shouldStickToBottom = awaitingReply || isNearBottom();
-            const result = await api.chatHistory(80);
-            const newMsgs = result.messages ?? [];
-            // Check if we got a reply to our last sent message
-            if (awaitingReply && lastSentId) {
-                const hasReply = newMsgs.some(
-                    (m) =>
-                        m.role === "archi" &&
-                        m.ts_ms >
-                            (messages.find((x) => x.id === lastSentId)?.ts_ms ??
-                                0),
-                );
-                if (hasReply) {
-                    awaitingReply = false;
-                    lastSentId = "";
-                    stopFastPoll();
-                }
-            }
-            if (
-                newMsgs.length !== messages.length ||
-                (newMsgs.length > 0 &&
-                    newMsgs[newMsgs.length - 1]?.id !==
-                        messages[messages.length - 1]?.id)
-            ) {
-                messages = newMsgs;
-                await tick();
-                if (!isSelectingMessageText() && shouldStickToBottom) {
-                    scrollToBottom();
-                }
-            }
-        } catch {
-            /* silent */
-        }
-    }
+    // Scroll-to-bottom коли store додає нові повідомлення (не під час user-selection).
+    let _lastVersion = 0;
+    $effect(() => {
+        const v = chatStore.messagesVersion;
+        if (v === _lastVersion) return;
+        const shouldStick = chatStore.awaitingReply || isNearBottom();
+        _lastVersion = v;
+        void tick().then(() => {
+            if (!isSelectingMessageText() && shouldStick) scrollToBottom();
+        });
+    });
 
-    function startFastPoll() {
-        stopFastPoll();
-        fastPollId = setInterval(pollMessages, FAST_POLL_MS);
-        // Safety: stop fast poll after timeout
-        setTimeout(() => {
-            if (awaitingReply) {
-                awaitingReply = false;
-                stopFastPoll();
-            }
-        }, FAST_POLL_MAX_MS);
-    }
-
-    function stopFastPoll() {
-        if (fastPollId) {
-            clearInterval(fastPollId);
-            fastPollId = null;
-        }
-    }
+    // Після первинного завантаження — позначити останнє archi-повідомлення
+    // як "вже промовлене", щоб auto-TTS не читав історію при відкритті вкладки.
+    let _ttsInitialized = false;
+    $effect(() => {
+        if (_ttsInitialized || chatStore.loading) return;
+        const lastArchi = [...chatStore.messages]
+            .reverse()
+            .find((m) => m.role === "archi");
+        if (lastArchi) lastSpokenId = lastArchi.id;
+        _ttsInitialized = true;
+    });
 
     // ── lifecycle ──
     onMount(() => {
-        loadData();
+        // chatStore.init() = загрузка history + старт normal polling (8s) + fast-poll готовий.
+        void chatStore.init();
+        void loadShellData();
         initVoice();
-        pollId = setInterval(pollMessages, NORMAL_POLL_MS);
         resetContextTimer();
         tick().then(() => applyComposerHeight());
-        // Thinking signal is Chat-specific — poll separately
+        // Thinking signal is Chat-specific — poll separately (не messages).
         thinkingPollId = setInterval(refreshShellData, 30_000);
 
         const syncComposer = () =>
@@ -1137,9 +1013,8 @@
     });
 
     onDestroy(() => {
-        clearInterval(pollId);
+        chatStore.shutdown();
         if (thinkingPollId) clearInterval(thinkingPollId);
-        stopFastPoll();
         if (recognition && listening) recognition.stop();
         if (quickActionHintTimer) clearTimeout(quickActionHintTimer);
     });
@@ -1534,6 +1409,9 @@
     </div>
 </div>
 
+<!-- ── Context Rail: scrollable on mobile so input is always reachable ── -->
+<div class="chat-context-rail">
+
 {#if activeHandoff}
     <div class="handoff-strip">
         <div class="handoff-meta">
@@ -1683,6 +1561,8 @@
         <span class="pt-text">{directives.inner_thought}</span>
     </div>
 {/if}
+
+</div><!-- /chat-context-rail -->
 
 <!-- ── Messages Area ── -->
 <div class="messages" bind:this={messagesEl}>
@@ -2516,6 +2396,14 @@
         -webkit-box-orient: vertical;
     }
 
+    /* ── Context Rail (cards above messages) ── */
+    .chat-context-rail {
+        flex-shrink: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        overscroll-behavior-y: contain;
+    }
+
     /* ── Messages area ── */
     .messages {
         flex: 1;
@@ -2994,6 +2882,12 @@
         .emoji-panel {
             width: 260px;
             right: -12px;
+        }
+        .chat-context-rail {
+            max-height: 40vh;
+            /* Fade hint at bottom when scrollable */
+            mask-image: linear-gradient(to bottom, black calc(100% - 16px), transparent 100%);
+            -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 16px), transparent 100%);
         }
         .pinned-thought {
             padding: 6px 12px;
