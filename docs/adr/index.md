@@ -64,6 +64,7 @@
 | ~~0048~~ | ~~Platform Wake Engine~~ → **Moved to trader-v3/ADR-039** | — | 2026-04-14 | *Арчі-specific; v3 platform ADR: 0049* | — |
 | [0049](0049-wake-engine-external-consumer-ipc.md) | Wake Engine — External Consumer IPC via Redis | **Accepted** | 2026-04-16 | WakeEngine, Redis IPC, wake conditions, PubSub notify, event-driven, external consumer | `wake_engine_v1` |
 | [0051](0051-tda-cascade-trigger-timing.md) | TDA Cascade Trigger Timing — Defer to After London Close | **Accepted** | 2026-04-18 | TDA, cascade timing, london_end_hour_utc, NO_NARRATIVE root cause, ADR-0040 fix | `tda_calibration_2026_04` |
+| [0052](0052-chat-modularization.md) | Chat Modularization + Security Layer | **Proposed** | 2026-04-19 | ui_archi, feature-modules, Svelte 5 runes, STRIDE threat model, auth/rate_limit/csrf, 8 slices | `ui_archi_chat_v2` |
 
 ---
 
@@ -103,4 +104,4 @@
 
 Див. формат у [copilot-instructions.md](../../.github/copilot-instructions.md) → Тема B, Правило B2.
 
-Наступний номер: **0052** (0050 пропущено: TDA timing fix — використано 0051)
+Наступний номер: **0053** (0050 пропущено: TDA timing fix — використано 0051; 0052 = Chat Modularization)
