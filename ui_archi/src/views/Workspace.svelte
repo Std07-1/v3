@@ -3,6 +3,7 @@
     import type { ChatHandoff, WorkspaceItem, Directives } from "../lib/types";
     import { getDirectives, refreshDirectives } from "../lib/state.svelte";
     import { marked } from "marked";
+    import { sanitizeHtml } from "../lib/sanitize";
 
     let {
         onchat = (_handoff: ChatHandoff): void => {},
@@ -19,6 +20,7 @@
 
     const KIND_FILTERS: { key: string; label: string; icon: string }[] = [
         { key: "", label: "Всі", icon: "" },
+        { key: "__task__", label: "Tasks", icon: "▶" },
         { key: "pin", label: "Pins", icon: "📌" },
         { key: "note", label: "Notes", icon: "📝" },
         { key: "briefing", label: "Briefings", icon: "☀️" },
@@ -30,7 +32,7 @@
 
     function parseMarkdown(raw: string): string {
         if (!raw) return "";
-        return marked.parse(raw) as string;
+        return sanitizeHtml(marked.parse(raw) as string);
     }
 
     // ── Extract workspace_items from directives ──
@@ -42,10 +44,15 @@
         return raw as WorkspaceItem[];
     });
 
+    function isTask(i: WorkspaceItem): boolean {
+        return typeof i.next_step === "string" && i.next_step.length > 0;
+    }
+
     const activeItems = $derived<WorkspaceItem[]>(
         allItems()
             .filter((i: WorkspaceItem) => i.status === "active")
             .filter((i: WorkspaceItem) => {
+                if (filterKind === "__task__") return isTask(i);
                 if (filterKind && i.kind !== filterKind) return false;
                 if (searchText) {
                     const q = searchText.toLowerCase();
@@ -55,13 +62,21 @@
                 return true;
             })
             .sort((a: WorkspaceItem, b: WorkspaceItem) => {
-                // Pinned first
+                // ADR-045: Active tasks (with next_step) bubble to top
+                const aTask = isTask(a);
+                const bTask = isTask(b);
+                if (aTask !== bTask) return aTask ? -1 : 1;
+                // Pinned next
                 if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
                 // Then by priority ascending
                 if (a.priority !== b.priority) return a.priority - b.priority;
                 // Then by created_at descending (newest first)
                 return b.created_at - a.created_at;
             }),
+    );
+
+    const taskCount = $derived<number>(
+        allItems().filter((i: WorkspaceItem) => i.status === "active" && isTask(i)).length,
     );
 
     const archivedItems = $derived<WorkspaceItem[]>(
@@ -151,7 +166,7 @@
         <h2>🏠 Workspace</h2>
         <div class="header-right">
             <span class="ts-muted">
-                {activeItems.length} active{#if archivedItems.length > 0}, {archivedItems.length} archived{/if}
+                {#if taskCount > 0}<span class="task-count-badge">{taskCount} ▶</span> {/if}{activeItems.length} active{#if archivedItems.length > 0}, {archivedItems.length} archived{/if}
             </span>
             <button
                 class="btn-ghost small"
@@ -217,8 +232,10 @@
             </div>
         {:else}
             {#each activeItems as item (item.id)}
-                {@const isExpanded = expanded[item.id] ?? (item.content.length <= 300)}
-                <div class="ws-card" class:pinned={item.pinned} class:alert={item.kind === "alert"}>
+                {@const task = isTask(item)}
+                {@const hasProgress = Array.isArray(item.progress_log) && item.progress_log.length > 0}
+                {@const isExpanded = expanded[item.id] ?? (task || hasProgress || item.content.length <= 300)}
+                <div class="ws-card" class:pinned={item.pinned} class:alert={item.kind === "alert"} class:task={task}>
                     <div
                         class="ws-card-header"
                         onclick={() => toggle(item.id)}
@@ -230,6 +247,9 @@
                             <span class="ws-icon">{kindIcon(item.kind)}</span>
                             <span class="ws-kind badge">{item.kind}</span>
                             <span class="ws-title">{item.title}</span>
+                            {#if task}
+                                <span class="badge task-badge" title="Active task з next_step">▶ TASK</span>
+                            {/if}
                             {#if item.pinned}
                                 <span class="badge pin-badge">pinned</span>
                             {/if}
@@ -264,6 +284,34 @@
                         <div class="ws-content prose">
                             <!-- eslint-disable-next-line svelte/no-at-html-tags -->
                             {@html parseMarkdown(item.content)}
+                        </div>
+                    {/if}
+
+                    {#if isExpanded && (task || hasProgress)}
+                        <div class="task-panel">
+                            {#if task}
+                                <div class="task-next">
+                                    <span class="task-next-label">→ Next</span>
+                                    <span class="task-next-text">{item.next_step}</span>
+                                </div>
+                            {/if}
+                            {#if item.wake_condition_id}
+                                <div class="task-wake">
+                                    <span class="wake-chip">⚡ wake: {item.wake_condition_id}</span>
+                                </div>
+                            {/if}
+                            {#if hasProgress}
+                                <div class="task-progress">
+                                    <div class="task-progress-label">
+                                        {task ? "Progress" : "✓ Last steps"}
+                                    </div>
+                                    <ul class="task-progress-list">
+                                        {#each item.progress_log ?? [] as step}
+                                            <li>{step}</li>
+                                        {/each}
+                                    </ul>
+                                </div>
+                            {/if}
                         </div>
                     {/if}
 
@@ -452,6 +500,13 @@
     .ws-card.alert {
         border-left: 3px solid #ef4444;
     }
+    .ws-card.task {
+        border-left: 3px solid #10b981;
+        background: linear-gradient(90deg, rgba(16, 185, 129, 0.04) 0%, transparent 60%);
+    }
+    .ws-card.task.pinned {
+        border-left-color: #10b981;
+    }
     .ws-card.archived {
         opacity: 0.5;
     }
@@ -518,6 +573,23 @@
         background: var(--accent-dim);
         color: var(--accent);
     }
+    .task-badge {
+        background: rgba(16, 185, 129, 0.18);
+        color: #10b981;
+        border: 1px solid rgba(16, 185, 129, 0.35);
+        letter-spacing: 0.04em;
+        font-weight: 600;
+    }
+    .task-count-badge {
+        display: inline-block;
+        padding: 1px 7px;
+        margin-right: 4px;
+        border-radius: 9px;
+        background: rgba(16, 185, 129, 0.18);
+        color: #10b981;
+        font-weight: 600;
+        font-size: 11px;
+    }
     .expiry {
         background: rgba(251, 191, 36, 0.15);
         color: #fbbf24;
@@ -538,6 +610,81 @@
         font-size: 13px;
         color: var(--text);
         line-height: 1.6;
+    }
+
+    /* ── Task panel (ADR-045) ── */
+    .task-panel {
+        margin: 0 24px 12px;
+        padding: 10px 14px;
+        border-left: 2px solid rgba(16, 185, 129, 0.55);
+        background: rgba(16, 185, 129, 0.05);
+        border-radius: 0 4px 4px 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .task-next {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        font-size: 13px;
+    }
+    .task-next-label {
+        color: #10b981;
+        font-weight: 600;
+        flex-shrink: 0;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        padding-top: 1px;
+    }
+    .task-next-text {
+        color: var(--text);
+        line-height: 1.5;
+        flex: 1;
+        word-wrap: break-word;
+        overflow-wrap: anywhere;
+    }
+    .task-wake {
+        font-size: 11px;
+    }
+    .wake-chip {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 10px;
+        background: rgba(251, 191, 36, 0.12);
+        color: #fbbf24;
+        border: 1px solid rgba(251, 191, 36, 0.28);
+        font-family: var(--font-mono);
+    }
+    .task-progress-label {
+        font-size: 11px;
+        color: var(--text-muted);
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 3px;
+    }
+    .task-progress-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        font-size: 12px;
+        color: var(--text-muted);
+    }
+    .task-progress-list li {
+        padding: 2px 0 2px 14px;
+        line-height: 1.45;
+        position: relative;
+    }
+    .task-progress-list li::before {
+        content: "·";
+        position: absolute;
+        left: 4px;
+        color: #10b981;
+        font-weight: 700;
+    }
+    .task-progress-list li:last-child {
+        color: var(--text);
     }
 
     /* ── Tags ── */

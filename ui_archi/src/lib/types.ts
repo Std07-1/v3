@@ -170,7 +170,7 @@ export interface AgentState {
     [key: string]: unknown;
 }
 
-// ── ADR-044: Workspace Item ──
+// ── ADR-044: Workspace Item + ADR-045: Task Queue fields ──
 export interface WorkspaceItem {
     id: string;
     kind: "pin" | "note" | "briefing" | "scenario_map" | "alert";
@@ -184,6 +184,10 @@ export interface WorkspaceItem {
     status: "active" | "archived" | "superseded";
     superseded_by?: string;
     linked_scenario_id?: string;
+    // ADR-045: Workspace-as-TaskQueue
+    next_step?: string | null;          // Plan for next wake (null → passive item)
+    progress_log?: string[];            // Chronological steps (max 5, oldest-drop)
+    wake_condition_id?: string | null;  // FK → wake_conditions[*].id
 }
 
 export interface ChatHandoff {
