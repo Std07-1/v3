@@ -275,9 +275,15 @@
         _ttsInitialized = true;
     });
 
-    // Draft prop sync.
+    // Draft prop sync — тільки ЗОВНІШНІ зміни draft пушимо в inputText.
+    // Якщо тракати inputText теж — race: user types "x" → inputText="x",
+    // draft ще "" (callback async) → effect бачить mismatch → wipe inputText.
+    // Тому зберігаємо останній побачений draft у plain let (не state),
+    // і effect тригериться виключно коли draft реально змінився ззовні.
+    let _lastDraft = "";
     $effect(() => {
-        if (draft === inputText) return;
+        if (draft === _lastDraft) return;
+        _lastDraft = draft;
         inputText = draft;
     });
 

@@ -197,6 +197,8 @@
     <div class="pill" class:focused class:has-text={hasText}>
         <textarea
             class="ta"
+            name="archi_chat_input"
+            id="archi-chat-input"
             bind:this={textareaEl}
             bind:value
             oninput={handleInput}
@@ -207,6 +209,7 @@
             rows={1}
             enterkeyhint="enter"
             spellcheck="true"
+            autocomplete="off"
             disabled={sending}
         ></textarea>
 
