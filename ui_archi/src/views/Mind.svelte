@@ -1,12 +1,30 @@
 <script lang="ts">
+    import { onMount, onDestroy } from "svelte";
     import { api, ApiError } from "../lib/api";
-    import { getDirectives, refreshDirectives } from "../lib/state.svelte";
+    import {
+        getDirectives,
+        refreshDirectives,
+        getAgentState,
+        getLastDirectivesSyncMs,
+        getLastAgentStateSyncMs,
+        getDirectivesError,
+        getAgentStateError,
+    } from "../lib/state.svelte";
     import type {
         ChatHandoff,
         Directives,
         OwnerNote,
         ImprovementProposal,
     } from "../lib/types";
+    // ADR-0053 S2: Dual Mode + Pulse Board переїхали з Chat у Mind.
+    import ModeHearth from "../features/chat/components/ModeHearth.svelte";
+    import PulseBoard from "../features/chat/components/PulseBoard.svelte";
+    import { railStore } from "../features/chat/stores/railStore.svelte";
+    import {
+        buildModeHearth,
+        buildPulseCards,
+        buildPulseFreshness,
+    } from "../features/chat/lib/hearthHelpers";
 
     let {
         onchat = (_handoff: ChatHandoff): void => {},
@@ -181,6 +199,44 @@
         const id = setInterval(load, 30_000);
         return () => clearInterval(id);
     });
+
+    // ── ADR-0053 S2: Mode Hearth + Pulse Board (переїхали з Chat) ──
+    // railStore = singleton: thinking signal + 30s poll. Lifecycle тут.
+    onMount(() => {
+        void railStore.init();
+    });
+    onDestroy(() => {
+        railStore.shutdown();
+    });
+
+    const modeHearth = $derived(
+        buildModeHearth({
+            directives: data,
+            agentState: getAgentState(),
+            latestThinking: railStore.latestThinking,
+            lastThinkingSyncMs: railStore.lastThinkingSyncMs,
+            directivesSyncError: getDirectivesError(),
+            agentStateSyncError: getAgentStateError(),
+            thinkingSyncError: railStore.thinkingSyncError,
+            loading,
+        }),
+    );
+    const pulseFreshness = $derived(
+        buildPulseFreshness(
+            getLastDirectivesSyncMs(),
+            getLastAgentStateSyncMs(),
+            getDirectivesError(),
+            getAgentStateError(),
+        ),
+    );
+    const pulseCards = $derived(buildPulseCards(data, getAgentState()));
+
+    function onHearthAction(prompt: string): void {
+        openMindHandoff("Dual Mode", prompt, str("inner_thought"));
+    }
+    function onPulseAction(prompt: string): void {
+        openMindHandoff("Pulse Rail", prompt, str("inner_thought"));
+    }
 
     // Extract typed data from the flexible Directives interface
     function arr(key: string): any[] {
@@ -426,6 +482,33 @@
                             <div class="scenario-text">{sc}</div>
                         {/if}
                     </div>
+                </section>
+            {/if}
+
+            <!-- ── ADR-0053 S2: Dual Mode (Mode Hearth) ── -->
+            {#if modeHearth}
+                <section class="mind-section hearth-host">
+                    <h3 class="section-title">
+                        <span class="sec-icon">🏠</span>
+                        Dual Mode
+                    </h3>
+                    <ModeHearth hearth={modeHearth} onaction={onHearthAction} />
+                </section>
+            {/if}
+
+            <!-- ── ADR-0053 S2: Pulse Board (Living Platform) ── -->
+            {#if pulseCards.length > 0}
+                <section class="mind-section pulse-host">
+                    <h3 class="section-title">
+                        <span class="sec-icon">📡</span>
+                        Pulse Board
+                        <span class="counter">{pulseCards.length}</span>
+                    </h3>
+                    <PulseBoard
+                        cards={pulseCards}
+                        freshness={pulseFreshness}
+                        oncardaction={onPulseAction}
+                    />
                 </section>
             {/if}
 
