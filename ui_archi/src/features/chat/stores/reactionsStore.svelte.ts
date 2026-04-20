@@ -1,12 +1,15 @@
 /**
- * reactionsStore — hover-reactions на chat bubbles (ADR-0053 S1).
+ * reactionsStore — hover-reactions на chat bubbles (ADR-0053 S1 + S4).
  *
- * Локальний UX layer: зберігає {msg_id → Set<reaction>} у localStorage одразу.
- * S4 (окремий slice) піде з backend: `POST /api/archi/chat/react` → Redis XADD
- * `feedback:chat` stream. Поки цього немає — reaction живе у браузері, бот
- * нічого не бачить. Це свідома тимчасова деградація (I7 loud — no-op, не
- * silent-drop).
+ * Dual-write архітектура:
+ *   1) localStorage = SSOT для UI (instant toggle, survive reload, per-browser)
+ *   2) POST /api/archi/chat/react → XADD feedback:chat (training signal для Арчі)
+ *
+ * API виклик — fire-and-forget: UX не блокується мережею і НЕ rollback-ить
+ * оптимістичний state при fail (I7 loud через console.warn, не через flicker).
+ * Бот консумить stream коли хоче; localStorage переживає і fail, і offline.
  */
+import { api } from "../../../lib/api";
 
 const STORAGE_KEY = "archi_chat_reactions_v1";
 
@@ -49,7 +52,8 @@ class ReactionsStore {
 
     toggle(msgId: string, type: ReactionType): void {
         const current = this.state[msgId] ?? [];
-        const next = current.includes(type)
+        const wasSet = current.includes(type);
+        const next = wasSet
             ? current.filter((t) => t !== type)
             : [...current, type];
         if (next.length === 0) {
@@ -59,6 +63,20 @@ class ReactionsStore {
             this.state = { ...this.state, [msgId]: next };
         }
         persist(this.state);
+
+        // Fire-and-forget publish до feedback:chat stream (ADR-0053 S4).
+        // Ні await, ні rollback: localStorage лишається SSOT UI state.
+        const action: "add" | "remove" = wasSet ? "remove" : "add";
+        void api
+            .chatReact(msgId, type, action)
+            .catch((err) => {
+                // Degraded-but-loud: console warn, без UI-noise.
+                // eslint-disable-next-line no-console
+                console.warn(
+                    `[reactions] publish failed msg=${msgId} type=${type} action=${action}`,
+                    err,
+                );
+            });
     }
 }
 

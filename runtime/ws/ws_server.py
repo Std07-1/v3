@@ -2461,6 +2461,65 @@ def build_app(
 
         return resp
 
+    # ── ADR-0053 S4: /api/archi/chat/react — hover-reactions → feedback stream ──
+    #
+    # UX layer reactions (👍/📌/⭐) тепер публікуються у Redis XADD stream
+    # `{ns}:feedback:chat`. Бот може консумити цей stream як training signal:
+    # які репліки резонують з юзером, які — ні. Shape:
+    #   XADD {ns}:feedback:chat MAXLEN ~ 5000 *
+    #     msg_id <id> type <like|pin|star> action <add|remove>
+    #     ts_ms <ms> source web user <token_hint>
+    #
+    # Degraded-but-loud: якщо Redis падає — 503 у відповіді, клієнт НЕ
+    # rollback-ить оптимістичний toggle (localStorage лишається SSOT UX).
+    # Тобто користувач не бачить стрибків іконки, але бот міг не отримати сигнал.
+    _ARCHI_FEEDBACK_KEY = f"{_agent_ns}:feedback:chat"
+    _ARCHI_FEEDBACK_MAXLEN = 5000
+    _ALLOWED_REACTIONS = ("like", "pin", "star")
+    _ALLOWED_ACTIONS = ("add", "remove")
+
+    async def _api_archi_chat_react(request: web.Request) -> web.Response:
+        """POST /api/archi/chat/react — publish a reaction to feedback:chat."""
+        if not _archi_auth(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        if _agent_redis_client is None:
+            return web.json_response({"error": "redis_not_available"}, status=503)
+        try:
+            import time as _time
+
+            body = await request.json()
+            msg_id = str(body.get("msg_id", "")).strip()
+            rtype = str(body.get("type", "")).strip().lower()
+            action = str(body.get("action", "add")).strip().lower()
+            if not msg_id or len(msg_id) > 64:
+                return web.json_response({"error": "bad_msg_id"}, status=400)
+            if rtype not in _ALLOWED_REACTIONS:
+                return web.json_response({"error": "bad_type"}, status=400)
+            if action not in _ALLOWED_ACTIONS:
+                return web.json_response({"error": "bad_action"}, status=400)
+
+            fields = {
+                "msg_id": msg_id,
+                "type": rtype,
+                "action": action,
+                "ts_ms": str(int(_time.time() * 1000)),
+                "source": "web",
+            }
+            entry_id = _agent_redis_client.xadd(
+                _ARCHI_FEEDBACK_KEY,
+                fields,
+                maxlen=_ARCHI_FEEDBACK_MAXLEN,
+                approximate=True,
+            )
+            return web.json_response(
+                {"ok": True, "entry_id": str(entry_id)}
+            )
+        except json.JSONDecodeError:
+            return web.json_response({"error": "bad_json"}, status=400)
+        except Exception as _e:
+            _log.warning("API_ARCHI_CHAT_REACT_FAIL: %s", _e)
+            return web.json_response({"error": "write_failed"}, status=503)
+
     # в”Ђв”Ђ /api/archi/logs вЂ” read bot supervisor log from data_dir в”Ђв”Ђ
     async def _api_archi_logs(request: web.Request) -> web.Response:
         """GET /api/archi/logs?lines=50&level=all вЂ” read recent bot log lines."""
@@ -2657,6 +2716,7 @@ def build_app(
         app.router.add_post("/api/archi/chat", _api_archi_chat_post)
         app.router.add_get("/api/archi/chat", _api_archi_chat_get)
         app.router.add_get("/api/archi/chat/stream", _api_archi_chat_stream)
+        app.router.add_post("/api/archi/chat/react", _api_archi_chat_react)
         app.router.add_get("/api/archi/logs", _api_archi_logs)
         app.router.add_get("/api/archi/owner-note", _api_archi_owner_note_get)
         app.router.add_post("/api/archi/owner-note", _api_archi_owner_note_post)

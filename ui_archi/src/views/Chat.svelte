@@ -42,7 +42,6 @@
     import ReactionBar from "../features/chat/components/ReactionBar.svelte";
     import HandoffStrip from "../features/chat/components/HandoffStrip.svelte";
     import InputBar from "../features/chat/components/InputBar.svelte";
-    import type { QuickAction } from "../features/chat/components/QuickActions.svelte";
     import { getBias, formatTs } from "../features/chat/lib/hearthHelpers";
 
     // ── props ──
@@ -116,76 +115,6 @@
     );
     $effect(() => {
         ttsStore.maybeAutoSpeak(ttsFeed);
-    });
-
-    // ── Smart Context Actions (для InputBar quick actions) ──
-    const contextActions = $derived.by<QuickAction[]>(() => {
-        const d = directives;
-        const acts: QuickAction[] = [];
-        const hasScenario = !!d?.active_scenario;
-        const vp = (d as any)?.virtual_position;
-        const hasOpenVP =
-            vp && typeof vp === "object" && vp.status === "open";
-        const isClosed = (d as any)?.last_market_status === "closed";
-        const wl = d?.watch_levels;
-        const hasLevels = Array.isArray(wl) && wl.length > 0;
-
-        if (isClosed) {
-            acts.push({
-                icon: "📊",
-                label: "Підсумки",
-                text: "Підведи підсумки торгового дня — що вийшло, що ні?",
-            });
-            acts.push({
-                icon: "🪞",
-                label: "Self-review",
-                text: "Зроби self-review: що було добре, де помилки, що покращити?",
-            });
-            acts.push({
-                icon: "📋",
-                label: "План",
-                text: "Який план на наступну торгову сесію?",
-            });
-        } else {
-            if (hasScenario) {
-                acts.push({
-                    icon: "🎯",
-                    label: "Перевір тезис",
-                    text: "Перевір валідність поточного сценарію — чи тримається тезис?",
-                });
-            } else {
-                acts.push({
-                    icon: "🎯",
-                    label: "Сценарій",
-                    text: "Побудуй торговий сценарій на поточну сесію",
-                });
-            }
-            if (hasOpenVP) {
-                acts.push({
-                    icon: "💼",
-                    label: "VP статус",
-                    text: "Як моя віртуальна позиція? Тримаємо чи закриваємо?",
-                });
-            }
-            acts.push({
-                icon: "🧠",
-                label: "Аналіз",
-                text: "Проаналізуй поточний ринок та онови bias",
-            });
-            if (!hasLevels) {
-                acts.push({
-                    icon: "👁",
-                    label: "Рівні",
-                    text: "Визнач ключові рівні та зони для спостереження",
-                });
-            }
-        }
-        acts.push({
-            icon: "💭",
-            label: "Думки?",
-            text: "Що зараз на думці? Поділись",
-        });
-        return acts.slice(0, 5);
     });
 
     // ── Scroll container ──
@@ -444,7 +373,6 @@
     bind:value={inputText}
     {sending}
     {error}
-    {contextActions}
     onsend={sendMessage}
     oninputchange={(t) => ondraftchange(t)}
 />

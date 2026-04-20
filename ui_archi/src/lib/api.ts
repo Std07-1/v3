@@ -110,4 +110,12 @@ export const api = {
             undefined,
             { method: 'POST', body: JSON.stringify({ id, approved }) },
         ),
+
+    // ADR-0053 S4: publish a reaction (like/pin/star) to feedback:chat stream
+    chatReact: (msg_id: string, type: 'like' | 'pin' | 'star', action: 'add' | 'remove') =>
+        apiFetch<{ ok: boolean; entry_id: string }>(
+            '/api/archi/chat/react',
+            undefined,
+            { method: 'POST', body: JSON.stringify({ msg_id, type, action }) },
+        ),
 };

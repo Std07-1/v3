@@ -1,30 +1,28 @@
 <!--
-    InputBar — композитор інпут-рядка: textarea + QuickActions + VoiceButton +
-    EmojiPicker + Send button.
+    InputBar — тонкий premium композитор (ADR-0053 S4 rewrite).
 
-    Props:
-      - value: bindable string (поточний текст чернетки)
-      - sending: boolean (блокує textarea + send button)
-      - error: string (показується у .input-error banner — приходить з chatStore)
-      - contextActions: QuickAction[] (рендеряться коли !focused && !value.trim())
+    Структура:
+        ┌──────────────────────────────────────────┐
+        │ ╭──────────────────────────────────────╮ │
+        │ │ Повідомлення…           🎤  😊  ➤   │ │   focus-ring ззовні pill
+        │ ╰──────────────────────────────────────╯ │
+        └──────────────────────────────────────────┘
 
-    Events:
-      - onsend() — Ctrl/Cmd+Enter або клік по send
-      - oninputchange(text) — кожна зміна value (для ondraftchange у parent)
-      - onfocuschange(focused) — зміна фокусу textarea
+    Прибрано (GPT-стиль, категорично відкинуто власником):
+      - QuickActions контекст-чіпи ("🎯 Перевір тезис / 💼 VP статус / 🧠 Аналіз / 💭 Думки?")
+      - Static hint "Enter — новий рядок · Ctrl/Cmd+Enter — відправити"
 
-    Exposed via bind:this:
-      - primeDraft(text)  — append до value + hint "чернетка додана"
-      - setDraft(text, hint) — replace value з custom hint (для handoff restore)
-      - focus() / applyHeight() / resetHeight() — DOM-level operations
+    Лишилось:
+      - primeDraft/setDraft (handoff restore) з transient hint toast
+      - Voice + Emoji + Send (icons інтегровані у pill-trailing)
+      - applyHeight (auto-grow desktop 44..140, mobile 52..196)
+      - error banner (з chatStore) як тонка лінія над pill
+      - iOS Safari anti-zoom (font-size ≥16px на mobile)
 
-    Mobile:
-      - Textarea wraps на свій ряд (flex-basis: 100%), actions wrap нижче.
-      - Font-size 16px щоб iOS Safari не zoom-ив при focus.
+    Shortcuts: Enter → newline, Ctrl/Cmd+Enter → send. Без легенди — це стандарт.
 -->
 <script lang="ts">
     import { onMount, onDestroy, tick } from "svelte";
-    import QuickActions, { type QuickAction } from "./QuickActions.svelte";
     import VoiceButton from "./VoiceButton.svelte";
     import EmojiPicker from "./EmojiPicker.svelte";
 
@@ -32,7 +30,6 @@
         value = $bindable(""),
         sending = false,
         error = "",
-        contextActions = [],
         onsend = (): void => {},
         oninputchange = (_text: string): void => {},
         onfocuschange = (_focused: boolean): void => {},
@@ -40,14 +37,14 @@
         value?: string;
         sending?: boolean;
         error?: string;
-        contextActions?: QuickAction[];
         onsend?: () => void;
         oninputchange?: (text: string) => void;
         onfocuschange?: (focused: boolean) => void;
     }>();
 
-    const DESKTOP_MAX = 140;
-    const MOBILE_MIN = 52;
+    const DESKTOP_MIN = 40;
+    const DESKTOP_MAX = 144;
+    const MOBILE_MIN = 48;
     const MOBILE_MAX = 196;
 
     let textareaEl: HTMLTextAreaElement;
@@ -65,7 +62,7 @@
     function clamp(v: number, mn: number, mx: number): number {
         return Math.min(mx, Math.max(mn, v));
     }
-    function getComposerMaxHeight(): number {
+    function getMobileMax(): number {
         const vh = window.visualViewport?.height ?? window.innerHeight;
         return Math.round(Math.min(vh * 0.28, MOBILE_MAX));
     }
@@ -73,8 +70,8 @@
     export function applyHeight(): void {
         if (!textareaEl) return;
         const mobile = isMobileViewport();
-        const min = mobile ? MOBILE_MIN : 44;
-        const max = mobile ? getComposerMaxHeight() : DESKTOP_MAX;
+        const min = mobile ? MOBILE_MIN : DESKTOP_MIN;
+        const max = mobile ? getMobileMax() : DESKTOP_MAX;
         textareaEl.style.height = "auto";
         const natural = textareaEl.scrollHeight;
         const target = clamp(natural, min, max);
@@ -90,7 +87,7 @@
         if (textareaEl) textareaEl.style.height = "auto";
     }
 
-    function setHint(text: string): void {
+    function showHint(text: string): void {
         hint = text;
         if (hintTimer) clearTimeout(hintTimer);
         hintTimer = setTimeout(() => {
@@ -99,11 +96,10 @@
         }, 2600);
     }
 
-    /** Replace draft entirely + custom hint. Used for handoff restore. */
     export function setDraft(text: string, hintText: string): void {
         value = text;
         oninputchange(text);
-        setHint(hintText);
+        showHint(hintText);
         tick().then(() => {
             applyHeight();
             textareaEl?.focus();
@@ -112,20 +108,15 @@
         });
     }
 
-    /** Append to draft OR replace if empty. Default hint depending on existing draft. */
     export function primeDraft(text: string): void {
         const existing = value.trim();
         const nextText = existing ? `${value}\n\n${text}` : text;
         setDraft(
             nextText,
             existing
-                ? "Команду додано в чернетку. Відправка лишається ручною."
-                : "Чернетка вставлена. Перевір і відправ вручну.",
+                ? "Команду додано в чернетку."
+                : "Чернетка вставлена — перевір і відправ.",
         );
-    }
-
-    function onQuickActionSelect(text: string): void {
-        primeDraft(text);
     }
 
     function onVoiceTranscript(t: string): void {
@@ -168,8 +159,9 @@
         }, 150);
     }
 
-    // Re-apply height коли value змінюється ззовні (primeDraft/setDraft/clear).
-    // applyHeight ідемпотентний — internal oninput шлях теж тригерить, це OK.
+    const hasText = $derived(value.trim().length > 0);
+    const canSend = $derived(hasText && !sending);
+
     $effect(() => {
         void value;
         tick().then(() => applyHeight());
@@ -191,37 +183,34 @@
     });
 </script>
 
-<div class="input-bar" class:focused>
-    {#if !focused && !value.trim() && contextActions.length > 0}
-        <QuickActions
-            actions={contextActions}
-            compact={true}
-            onselect={onQuickActionSelect}
-        />
+<div class="bar">
+    {#if hint}
+        <div class="toast" role="status" aria-live="polite">{hint}</div>
     {/if}
     {#if error}
-        <div class="input-error">{error}</div>
+        <div class="bar-err">{error}</div>
     {/if}
-    <div class="input-hint" class:accent={!!hint}>
-        {hint || "Enter — новий рядок · Ctrl/Cmd+Enter — відправити"}
-    </div>
-    <div class="input-row">
+    {#if voiceError}
+        <div class="bar-err voice">{voiceError}</div>
+    {/if}
+
+    <div class="pill" class:focused class:has-text={hasText}>
         <textarea
-            class="chat-input"
+            class="ta"
             bind:this={textareaEl}
             bind:value
             oninput={handleInput}
             onkeydown={handleKeydown}
             onfocus={handleFocus}
             onblur={handleBlur}
-            placeholder="Повідомлення…"
+            placeholder="Повідомлення Арчі…"
             rows={1}
             enterkeyhint="enter"
             spellcheck="true"
             disabled={sending}
         ></textarea>
 
-        <div class="input-actions">
+        <div class="trail">
             <VoiceButton
                 disabled={sending}
                 ontranscript={onVoiceTranscript}
@@ -229,132 +218,174 @@
             />
             <EmojiPicker disabled={sending} oninsert={onEmojiInsert} />
             <button
-                class="btn-send"
+                class="send"
+                class:armed={canSend}
                 onclick={onsend}
-                disabled={sending || !value.trim()}
+                disabled={!canSend}
                 title="Відправити (Ctrl/Cmd+Enter)"
                 aria-label="Відправити повідомлення"
             >
-                {sending ? "⏳" : "➤"}
+                {#if sending}
+                    <span class="spin" aria-hidden="true"></span>
+                {:else}
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M5 12h14" />
+                        <path d="M13 6l6 6-6 6" />
+                    </svg>
+                {/if}
             </button>
         </div>
     </div>
-    {#if voiceError}
-        <div class="voice-error">{voiceError}</div>
-    {/if}
 </div>
 
 <style>
-    .input-bar {
-        padding: 8px 12px 12px;
-        background: var(--surface);
+    .bar {
+        position: relative;
+        padding: 8px 14px 12px;
+        background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--bg) 70%, transparent) 0%,
+            var(--surface) 52%
+        );
         border-top: 1px solid var(--border);
         flex-shrink: 0;
-        box-shadow: 0 -14px 32px rgba(0, 0, 0, 0.18);
-    }
-    .input-bar.focused {
-        box-shadow: 0 -18px 36px rgba(0, 0, 0, 0.24);
     }
 
-    .input-error {
-        font-size: 12px;
-        color: #e05555;
-        margin-bottom: 4px;
-        padding: 0 4px;
-    }
-    .input-hint {
+    /* Transient handoff hint — floats above the pill, fades 2.6s. */
+    .toast {
+        position: absolute;
+        left: 14px;
+        right: 14px;
+        top: -28px;
         font-size: 11px;
-        color: var(--text-muted);
-        margin-bottom: 6px;
-        padding: 0 4px;
+        color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+        border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+        padding: 5px 10px;
+        border-radius: 10px;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+        animation: toastIn 0.18s ease-out;
+        pointer-events: none;
     }
-    .input-hint.accent { color: var(--accent); }
-    .voice-error {
+    @keyframes toastIn {
+        from { opacity: 0; transform: translateY(4px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .bar-err {
         font-size: 11px;
-        color: #e05555;
-        margin-top: 4px;
-        padding: 0 4px;
+        color: #ff7373;
+        margin: 0 4px 6px;
+        padding: 4px 10px;
+        border-radius: 8px;
+        background: color-mix(in srgb, #ff4d4d 10%, transparent);
+        border: 1px solid color-mix(in srgb, #ff4d4d 30%, var(--border));
     }
 
-    .input-row {
-        display: flex;
-        align-items: flex-end;
-        gap: 8px;
-    }
-
-    .chat-input {
-        flex: 1;
-        resize: none;
-        border: 1px solid var(--border);
-        border-radius: 22px;
-        background: var(--bg);
-        color: var(--text);
-        font-family: inherit;
-        font-size: 15px;
-        line-height: 1.45;
-        padding: 10px 16px;
-        outline: none;
-        transition: border-color 0.2s;
-        min-height: 44px;
-        max-height: 140px;
-        overflow-y: auto;
-    }
-    .chat-input:focus { border-color: var(--accent); }
-    .chat-input:disabled { opacity: 0.6; }
-    .chat-input::placeholder { color: var(--text-muted); }
-
-    .input-actions {
+    /* ─── The pill ──────────────────────────────────────────────── */
+    .pill {
         display: flex;
         align-items: flex-end;
         gap: 4px;
+        padding: 4px 6px 4px 4px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 22px;
+        transition:
+            border-color 0.18s,
+            box-shadow 0.22s,
+            background 0.18s;
+        box-shadow:
+            0 1px 0 rgba(255, 255, 255, 0.02) inset,
+            0 10px 28px rgba(0, 0, 0, 0.18);
+    }
+    .pill.focused {
+        border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+        box-shadow:
+            0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent),
+            0 14px 34px rgba(0, 0, 0, 0.22);
+    }
+
+    .ta {
+        flex: 1;
+        min-width: 0;
+        resize: none;
+        border: none;
+        background: transparent;
+        color: var(--text);
+        font-family: inherit;
+        font-size: 14.5px;
+        line-height: 1.5;
+        padding: 10px 4px 10px 14px;
+        outline: none;
+        min-height: 40px;
+        max-height: 144px;
+        overflow-y: auto;
+        caret-color: var(--accent);
+    }
+    .ta::placeholder { color: var(--text-muted); }
+    .ta:disabled { opacity: 0.55; }
+
+    .trail {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        padding-bottom: 2px;
         flex-shrink: 0;
     }
 
-    .btn-send {
-        width: 40px;
-        height: 40px;
+    /* Send button: ghost while empty, solid accent when armed. */
+    .send {
+        width: 34px;
+        height: 34px;
+        margin-left: 2px;
         border-radius: 50%;
-        border: none;
-        background: var(--accent);
-        color: #fff;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--text-muted);
         cursor: pointer;
-        font-size: 17px;
         display: flex;
         align-items: center;
         justify-content: center;
         flex-shrink: 0;
-        transition: opacity 0.15s, transform 0.1s;
+        transition:
+            background 0.15s,
+            border-color 0.15s,
+            color 0.15s,
+            transform 0.08s;
     }
-    .btn-send:disabled {
-        opacity: 0.35;
-        cursor: not-allowed;
+    .send:disabled { cursor: not-allowed; }
+    .send.armed {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+        box-shadow: 0 4px 12px
+            color-mix(in srgb, var(--accent) 45%, transparent);
     }
-    .btn-send:not(:disabled):hover {
-        opacity: 0.85;
-        transform: scale(1.06);
+    .send.armed:hover { transform: translateY(-1px); }
+    .send.armed:active { transform: scale(0.94); }
+    .send svg { display: block; }
+
+    .spin {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        border: 2px solid color-mix(in srgb, var(--text-muted) 55%, transparent);
+        border-top-color: transparent;
+        animation: spin 0.75s linear infinite;
     }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
     @media (max-width: 768px) {
-        .input-bar {
+        .bar {
             padding: 8px 10px calc(10px + env(safe-area-inset-bottom)) 10px;
         }
-        .input-row {
-            flex-wrap: wrap;
-            gap: 6px;
-        }
-        .chat-input {
-            flex-basis: 100%;
+        .ta {
+            font-size: 16px; /* iOS anti-zoom */
+            min-height: 48px;
+            padding: 12px 4px 12px 14px;
             max-height: min(28vh, 196px);
-            min-height: 52px;
-            font-size: 16px; /* prevents iOS zoom on focus */
-            border-radius: 18px;
-            padding: 14px 16px;
         }
-        .input-actions {
-            width: 100%;
-            justify-content: flex-end;
-            gap: 8px;
-        }
-        .btn-send { width: 44px; height: 44px; }
+        .send { width: 38px; height: 38px; }
     }
 </style>
