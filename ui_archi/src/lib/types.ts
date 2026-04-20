@@ -208,6 +208,10 @@ export interface ChatMessage {
     text: string;
     ts_ms: number;
     source?: "web" | "telegram";
+    /** ADR-0053: optional action suggestions rendered as chips under an archi bubble. */
+    chips?: string[];
+    /** ADR-0053: true while a streaming reply is still being appended. */
+    streaming?: boolean;
 }
 
 // ── ADR-028 P3 J5: Self-Improvement Proposal ──
