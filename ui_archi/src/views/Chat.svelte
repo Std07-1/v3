@@ -276,6 +276,8 @@
 
     const bias = $derived(getBias(directives));
     const activeHandoff = $derived(handoff);
+    // ── (ADR-0052 S6) Mobile-only collapse toggle for the context rail. ──
+    let railCollapsed = $state(false);
     const handoffDraftActive = $derived.by(() => {
         const current = activeHandoff;
         if (!current) return false;
@@ -334,8 +336,17 @@
     ontoggletts={() => ttsStore.toggleAuto()}
 />
 
-<!-- ── Context Rail (ADR-0052 S5): scrollable on mobile so input is always reachable ── -->
-<div class="chat-context-rail">
+<!-- ── Context Rail (ADR-0052 S5/S6): scrollable on mobile + collapse toggle ── -->
+<button
+    class="rail-toggle"
+    type="button"
+    aria-expanded={!railCollapsed}
+    aria-controls="chat-context-rail"
+    onclick={() => (railCollapsed = !railCollapsed)}
+>
+    {railCollapsed ? "▼ Контекст" : "▲ Сховати контекст"}
+</button>
+<div id="chat-context-rail" class="chat-context-rail" class:collapsed={railCollapsed}>
     {#if activeHandoff}
         <HandoffStrip
             handoff={activeHandoff}
@@ -405,9 +416,31 @@
         overflow-y: auto;
         overflow-x: hidden;
         overscroll-behavior-y: contain;
+        transition: max-height 0.24s ease;
+    }
+
+    /* Collapse toggle — mobile only (display: none on desktop). */
+    .rail-toggle {
+        display: none;
     }
 
     @media (max-width: 768px) {
+        .rail-toggle {
+            display: block;
+            align-self: stretch;
+            padding: 6px 12px;
+            border: none;
+            border-bottom: 1px solid var(--border);
+            background: color-mix(in srgb, var(--surface) 94%, var(--bg));
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-align: left;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .rail-toggle:hover { color: var(--text); }
         .chat-context-rail {
             max-height: 40vh;
             /* Fade hint at bottom when scrollable */
@@ -421,6 +454,10 @@
                 black calc(100% - 16px),
                 transparent 100%
             );
+        }
+        .chat-context-rail.collapsed {
+            max-height: 0;
+            border-bottom: none;
         }
     }
 </style>
