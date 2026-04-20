@@ -14,7 +14,7 @@
  *
  * I7 (Degraded-but-loud): усі помилки re-throw як ApiError — UI показує banner/toast.
  */
-import { api, ApiError } from "../../../lib/api";
+import { api, ApiError, getToken } from "../../../lib/api";
 import type { ChatHistory, ChatMessage } from "../../../lib/types";
 
 export interface SendResult {
@@ -43,6 +43,31 @@ export async function sendMessage(text: string): Promise<SendResult> {
  */
 export async function loadHistory(limit = 80): Promise<ChatHistory> {
     return api.chatHistory(limit);
+}
+
+/**
+ * Відкрити SSE stream для typing-effect на final reply (ADR-0053 S3).
+ *
+ * Fake-stream: сервер чекає final reply у Redis LIST (той самий шлях що
+ * LRANGE обслуговує fast-poll), розбиває готовий text на chunks і віддає
+ * як `event: delta` frames. UX overlay — якщо EventSource падає, fast-poll
+ * все одно дотягне фінальне повідомлення (I7 degraded-but-loud).
+ *
+ * Auth: Bearer не можна передати у headers EventSource (browser обмеження),
+ * тому token йде як `?token=` (сервер приймає обидва варіанти через _archi_auth).
+ *
+ * @param afterId  id user message — anchor, щоб уникнути race зі старою реплікою
+ * @param timeoutS cap на очікування reply (5..240, default 120s)
+ * @returns EventSource або null, якщо API недоступне (SSR / Node тест)
+ */
+export function openChatStream(afterId: string, timeoutS = 120): EventSource | null {
+    if (typeof EventSource === "undefined") return null;
+    const url = new URL("/api/archi/chat/stream", window.location.origin);
+    url.searchParams.set("after_id", afterId);
+    url.searchParams.set("timeout", String(timeoutS));
+    const token = getToken();
+    if (token) url.searchParams.set("token", token);
+    return new EventSource(url.toString());
 }
 
 export { ApiError };

@@ -247,6 +247,11 @@
         });
     });
 
+    // Streaming bubble в потоці → не показуємо "Арчі думає" дублем.
+    const hasStreamingBubble = $derived(
+        displayMessages.some((m) => m.streaming === true),
+    );
+
     // ── send ──
     async function sendMessage(): Promise<void> {
         const text = inputText.trim();
@@ -303,6 +308,22 @@
     });
 
     // ── auto-scroll effects ──
+    // Initial jump: історія з Redis приходить ДО того як scrollEl ініціалізовано.
+    // Перший рендер = scrollTop=0, isNearBottom() буде false → без цього effect
+    // ми застрягаємо на перших повідомленнях. Фіксуємо однократно на момент
+    // переходу loading:true→false.
+    let _initialScrollDone = false;
+    $effect(() => {
+        if (_initialScrollDone) return;
+        if (chatStore.loading) return;
+        if (chatStore.messages.length === 0) return;
+        _initialScrollDone = true;
+        void tick().then(() => {
+            // instant (без smooth) — менше мерехтіння при відкритті вкладки
+            if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
+        });
+    });
+
     let _lastVersion = 0;
     $effect(() => {
         const v = chatStore.messagesVersion;
@@ -382,7 +403,11 @@
     {:else}
         <div class="spacer"></div>
         {#each displayMessages as msg (msg.id)}
-            <div class="msg-block" class:grouped={msg.grouped}>
+            <div
+                class="msg-block"
+                class:grouped={msg.grouped}
+                class:streaming={msg.streaming === true}
+            >
                 <MessageBubble
                     message={msg}
                     grouped={msg.grouped}
@@ -403,7 +428,7 @@
                 {/if}
             </div>
         {/each}
-        {#if awaitingReply}
+        {#if awaitingReply && !hasStreamingBubble}
             <div class="thinking" role="status" aria-live="polite">
                 <span class="td"></span>
                 <span class="td"></span>
@@ -452,6 +477,22 @@
     }
     .msg-block:first-of-type {
         margin-top: 0;
+    }
+
+    /* Streaming bubble (ADR-0053 S3): blinking cursor на bubble-text.
+     * MessageBubble не знає про streaming, тож цілимо через global descendant. */
+    :global(.msg-block.streaming .bubble::after) {
+        content: "▍";
+        display: inline-block;
+        margin-left: 2px;
+        color: var(--accent);
+        animation: streamBlink 1s steps(2) infinite;
+        vertical-align: baseline;
+        font-weight: 500;
+    }
+    @keyframes streamBlink {
+        0%, 49% { opacity: 1; }
+        50%, 100% { opacity: 0; }
     }
 
     .empty {

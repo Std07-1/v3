@@ -2295,6 +2295,172 @@ def build_app(
             _log.warning("API_ARCHI_CHAT_GET_FAIL: %s", _e)
             return web.json_response({"error": "redis_read_failed"}, status=503)
 
+    # ── ADR-0053 S3: /api/archi/chat/stream — fake-stream final reply over SSE ──
+    #
+    # Option A per product discussion 2026-04-20: the bot still produces a final
+    # reply via non-streaming Claude call (see trader-v3/bot/agent/core.py); this
+    # endpoint waits for that reply in Redis, then re-emits it to the browser as
+    # a pacing SSE so the user sees a real typing effect without any changes in
+    # the bot's hot path.
+    #
+    # Contract:
+    #   GET /api/archi/chat/stream?after_id=<user_msg_id>&token=<tok>&timeout=120
+    #   Events:
+    #     start   — metadata {id, ts_ms}
+    #     delta   — {"text": "..."} chunks with 25–45 ms pacing
+    #     done    — final marker (full text already accumulated)
+    #     timeout — no archi reply within window
+    #     error   — unrecoverable (closes stream)
+    #
+    # Degraded-but-loud (I7): the UI MUST keep its existing fast-poll as the
+    # source of truth for message history. This endpoint is a UX overlay, not
+    # the authoritative message channel — if it drops, fast-poll picks up the
+    # reply on the next tick.
+    async def _api_archi_chat_stream(
+        request: web.Request,
+    ) -> web.StreamResponse:
+        if not _archi_auth(request):
+            return web.Response(status=401)  # type: ignore[return-value]
+        if _agent_redis_client is None:
+            return web.Response(status=503)  # type: ignore[return-value]
+
+        import asyncio as _asyncio
+        import time as _time
+
+        after_id = str(request.query.get("after_id", "")).strip()
+        try:
+            timeout_s = max(5, min(240, int(request.query.get("timeout", "120"))))
+        except (TypeError, ValueError):
+            timeout_s = 120
+
+        resp = web.StreamResponse(
+            headers={
+                "Content-Type": "text/event-stream; charset=utf-8",
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Access-Control-Allow-Origin": "*",
+            }
+        )
+        await resp.prepare(request)
+        await resp.write(b": connected\n\n")
+
+        async def _send(event: str, payload: dict) -> None:
+            line = (
+                f"event: {event}\n"
+                f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            )
+            await resp.write(line.encode("utf-8"))
+
+        loop = _asyncio.get_event_loop()
+        redis_cl = _agent_redis_client
+        deadline = _time.time() + timeout_s
+
+        # Anchor: read the user msg's ts_ms so "reply comes after user" has a clean
+        # ordering even if the bot is fast enough to reply before the stream opens.
+        after_ts_ms: int = 0
+        try:
+            raw_hist = await loop.run_in_executor(
+                None, lambda: redis_cl.lrange(_ARCHI_CHAT_KEY, 0, 50)  # type: ignore[union-attr]
+            )
+            for item in list(raw_hist):
+                try:
+                    m = json.loads(item)
+                    if m.get("id") == after_id:
+                        after_ts_ms = int(m.get("ts_ms", 0))
+                        break
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    continue
+        except Exception as _e:
+            _log.debug("ARCHI_CHAT_STREAM_ANCHOR_ERR: %s", _e)
+
+        if after_ts_ms == 0:
+            # Unknown user message — fall back to "any archi msg newer than now"
+            after_ts_ms = int(_time.time() * 1000) - 1
+
+        reply: dict | None = None
+
+        try:
+            while _time.time() < deadline:
+                # Poll the newest ~40 list entries for an archi reply newer than anchor.
+                try:
+                    raw = await loop.run_in_executor(
+                        None, lambda: redis_cl.lrange(_ARCHI_CHAT_KEY, 0, 40)  # type: ignore[union-attr]
+                    )
+                except Exception as _e:
+                    _log.debug("ARCHI_CHAT_STREAM_POLL_ERR: %s", _e)
+                    raw = []
+
+                for item in list(raw):
+                    try:
+                        m = json.loads(item)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    if m.get("role") != "archi":
+                        continue
+                    try:
+                        ts = int(m.get("ts_ms", 0))
+                    except (TypeError, ValueError):
+                        ts = 0
+                    if ts > after_ts_ms:
+                        reply = m
+                        break
+
+                if reply is not None:
+                    break
+
+                # Keep-alive so proxies don't close the idle connection.
+                await resp.write(b": ping\n\n")
+                await _asyncio.sleep(0.4)
+
+            if reply is None:
+                await _send("timeout", {"after_id": after_id})
+                return resp
+
+            text = str(reply.get("text", ""))
+            await _send(
+                "start",
+                {
+                    "id": reply.get("id"),
+                    "ts_ms": reply.get("ts_ms"),
+                    "role": "archi",
+                    "length": len(text),
+                },
+            )
+
+            # Split into pacing chunks: whitespace-preserving groups of ~8–16 chars.
+            chunks: list[str] = []
+            buf = ""
+            for ch in text:
+                buf += ch
+                if len(buf) >= 10 and ch in (" ", "\n", "\t", ",", ".", "!", "?", ";"):
+                    chunks.append(buf)
+                    buf = ""
+            if buf:
+                chunks.append(buf)
+            if not chunks:
+                chunks = [text]
+
+            # Target total animation: ~1.8s typical, cap at 3.5s, floor at 0.5s.
+            total_target = min(3.5, max(0.5, 0.02 * len(chunks)))
+            per_chunk = max(0.015, min(0.06, total_target / max(1, len(chunks))))
+
+            for chunk in chunks:
+                await _send("delta", {"text": chunk})
+                await _asyncio.sleep(per_chunk)
+
+            await _send("done", {"id": reply.get("id")})
+        except (ConnectionResetError, _asyncio.CancelledError):
+            # Client gone — that's fine, fast-poll on the UI side handles completion.
+            pass
+        except Exception as _e:
+            _log.warning("ARCHI_CHAT_STREAM_FAIL: %s", _e)
+            try:
+                await _send("error", {"reason": "internal"})
+            except Exception:
+                pass
+
+        return resp
+
     # в”Ђв”Ђ /api/archi/logs вЂ” read bot supervisor log from data_dir в”Ђв”Ђ
     async def _api_archi_logs(request: web.Request) -> web.Response:
         """GET /api/archi/logs?lines=50&level=all вЂ” read recent bot log lines."""
@@ -2490,6 +2656,7 @@ def build_app(
         app.router.add_get("/api/archi/relationship", _api_archi_relationship)
         app.router.add_post("/api/archi/chat", _api_archi_chat_post)
         app.router.add_get("/api/archi/chat", _api_archi_chat_get)
+        app.router.add_get("/api/archi/chat/stream", _api_archi_chat_stream)
         app.router.add_get("/api/archi/logs", _api_archi_logs)
         app.router.add_get("/api/archi/owner-note", _api_archi_owner_note_get)
         app.router.add_post("/api/archi/owner-note", _api_archi_owner_note_post)

@@ -41,6 +41,10 @@ class ChatStore {
     private pollId: ReturnType<typeof setInterval> | null = null;
     private fastPollId: ReturnType<typeof setInterval> | null = null;
     private fastPollStartedAt = 0;
+    /** SSE stream для typing-effect (ADR-0053 S3). null = не активний. */
+    private streamSource: EventSource | null = null;
+    /** id archi bubble, який зараз стрімиться — щоб poll не перетер її текст. */
+    private streamingBubbleId: string | null = null;
 
     /** Завантажити історію + стартувати normal poll. Викликати у onMount. */
     async init(): Promise<void> {
@@ -52,6 +56,7 @@ class ChatStore {
     shutdown(): void {
         this.stopNormalPoll();
         this.stopFastPoll();
+        this.closeStream();
     }
 
     async loadHistory(): Promise<void> {
@@ -95,7 +100,10 @@ class ChatStore {
             this.lastSentId = res.message.id;
             this.awaitingReply = true;
             this.bumpVersion();
-            this.startFastPoll();
+            // SSE-first (ADR-0053 S3): сервер паcить final reply у typing-effect.
+            // Якщо EventSource недоступне / падає — openStream самостійно запускає
+            // fast-poll як fallback (I7 degraded-but-loud).
+            this.openStream(res.message.id);
             return { ok: true };
         } catch {
             this.error = "Повідомлення не відправлено. Спробуй ще раз.";
@@ -127,12 +135,127 @@ class ChatStore {
 
             const lastNew = newMsgs[newMsgs.length - 1]?.id;
             const lastCur = this.messages[this.messages.length - 1]?.id;
-            if (newMsgs.length !== this.messages.length || lastNew !== lastCur) {
-                this.messages = newMsgs;
+            const changed =
+                newMsgs.length !== this.messages.length || lastNew !== lastCur;
+            if (changed) {
+                // Якщо зараз стрімиться bubble — не перетираємо його частково
+                // заповнений text фінальним знімком з poll. Merge: беремо newMsgs,
+                // але для streaming id залишаємо локальну версію.
+                if (this.streamingBubbleId) {
+                    const streamingId = this.streamingBubbleId;
+                    const local = this.messages.find((m) => m.id === streamingId);
+                    if (local) {
+                        this.messages = newMsgs.map((m) =>
+                            m.id === streamingId ? local : m,
+                        );
+                    } else {
+                        this.messages = newMsgs;
+                    }
+                } else {
+                    this.messages = newMsgs;
+                }
                 this.bumpVersion();
             }
         } catch {
             // silent retry — loudness через відсутність оновлень, не через error state
+        }
+    }
+
+    // ── SSE typing-effect stream (ADR-0053 S3) ──────────────────────────────
+    private openStream(afterId: string): void {
+        this.closeStream();
+        const es = chatApi.openChatStream(afterId, 180);
+        if (!es) {
+            // Browser/test env без EventSource — одразу падаємо у fast-poll.
+            this.startFastPoll();
+            return;
+        }
+        this.streamSource = es;
+
+        const onStart = (ev: MessageEvent) => {
+            try {
+                const d = JSON.parse(ev.data);
+                const id = String(d.id ?? "");
+                const ts = Number(d.ts_ms ?? Date.now());
+                if (!id) return;
+                // Guard проти дублю, якщо poll вже додав фінальне повідомлення.
+                if (this.messages.some((m) => m.id === id)) {
+                    this.messages = this.messages.map((m) =>
+                        m.id === id ? { ...m, text: "", streaming: true } : m,
+                    );
+                } else {
+                    this.messages = [
+                        ...this.messages,
+                        { id, role: "archi", text: "", ts_ms: ts, streaming: true },
+                    ];
+                }
+                this.streamingBubbleId = id;
+                this.bumpVersion();
+            } catch {
+                // malformed frame — ігноруємо, fallback на poll
+            }
+        };
+
+        const onDelta = (ev: MessageEvent) => {
+            if (!this.streamingBubbleId) return;
+            try {
+                const d = JSON.parse(ev.data);
+                const chunk = String(d.text ?? "");
+                if (!chunk) return;
+                const id = this.streamingBubbleId;
+                this.messages = this.messages.map((m) =>
+                    m.id === id ? { ...m, text: m.text + chunk } : m,
+                );
+                this.bumpVersion();
+            } catch {
+                // malformed delta — skip
+            }
+        };
+
+        const onDone = () => {
+            if (this.streamingBubbleId) {
+                const id = this.streamingBubbleId;
+                this.messages = this.messages.map((m) =>
+                    m.id === id ? { ...m, streaming: false } : m,
+                );
+                this.bumpVersion();
+            }
+            this.streamingBubbleId = null;
+            this.awaitingReply = false;
+            this.lastSentId = "";
+            this.closeStream();
+            this.stopFastPoll();
+        };
+
+        const onFallback = () => {
+            // Викидаємо частково заповнений bubble — fast-poll принесе цілий.
+            if (this.streamingBubbleId) {
+                const id = this.streamingBubbleId;
+                this.messages = this.messages.filter((m) => m.id !== id);
+                this.bumpVersion();
+            }
+            this.streamingBubbleId = null;
+            this.closeStream();
+            this.startFastPoll();
+        };
+
+        es.addEventListener("start", onStart as EventListener);
+        es.addEventListener("delta", onDelta as EventListener);
+        es.addEventListener("done", onDone as EventListener);
+        es.addEventListener("timeout", onFallback as EventListener);
+        // Named "error" event з сервера + generic onerror (network drop / 5xx).
+        es.addEventListener("error", onFallback as EventListener);
+        es.onerror = onFallback;
+    }
+
+    private closeStream(): void {
+        if (this.streamSource) {
+            try {
+                this.streamSource.close();
+            } catch {
+                // noop
+            }
+            this.streamSource = null;
         }
     }
 
