@@ -214,7 +214,7 @@ v3/
 
 ### 2.1 trader-v3/ — AI Trading Agent "Арчі" (окрема підсистема)
 
-> **46 .py files, ~18,000 LOC** (April 2026, post hibernation + monitor v2). Deploy = SCP to VPS.
+> **46 .py files, ~18,000 LOC** (April 2026, post hibernation + monitor v2 + file_guardian). Deploy = SCP to VPS.
 
 ```
 trader-v3/                          # .gitignore'd — proprietary
@@ -232,7 +232,7 @@ trader-v3/                          # .gitignore'd — proprietary
 │   │   ├── market_data.py        # Yahoo/ForexFactory market data (416)
 │   │   └── news_feed.py          # News feed integration (150)
 │   ├── scheduling/                # Proactive scheduling
-│   │   ├── monitor.py            # Proactive monitor loop v3 + TSM (2064)
+│   │   ├── monitor.py            # Proactive monitor loop v3 + TSM (2258, target: split → monitor_loop + agent_call + wake_logic)
 │   │   ├── mechanical.py         # Mechanical operations (timers, budget reset) (174)
 │   │   ├── cost.py               # API cost tracking (72)
 │   │   └── scheduler.py          # Cron-like scheduler (45)
@@ -252,7 +252,14 @@ trader-v3/                          # .gitignore'd — proprietary
 │   ├── tools/                     # Agent tool use
 │   │   └── executor.py           # Tool executor (ADR-026) (263)
 │   └── transport/                 # I/O layer
-│       ├── handlers.py           # Telegram message handlers (2169)
+│       ├── handlers.py           # Telegram dispatcher root (690) — register_handlers + reactive process_messages
+│       ├── handlers_lifecycle.py # /intense /calm /auto /pause /resume /kill /unkill (128, Slice 1)
+│       ├── handlers_budget.py    # /budget [reset|set] (155, Slice 2)
+│       ├── handlers_core_info.py # /start /status /state /mind /context (374, Slice 3)
+│       ├── handlers_analysis.py  # /analyze /deep /forecast /waiting (350, Slice 4)
+│       ├── handlers_meta_publish.py # /forget + channel_post + /publish /briefings /channel (213, Slice 5)
+│       ├── handlers_knowledge.py # /kb /learn /lessons /save /setups /review (259, Slice 6)
+│       ├── handlers_profile_chat.py # /profile /voice + voice msg + reaction + handle_any/group (413, Slice 7)
 │       ├── web_inbox.py          # Archi Console web chat (305)
 │       ├── platform.py           # Platform WS/HTTP client (214)
 │       ├── voice.py              # TTS/STT voice pipeline (187)
@@ -260,16 +267,35 @@ trader-v3/                          # .gitignore'd — proprietary
 │       ├── wake_sync.py          # Wake conditions → Redis sync (164)
 │       ├── telegram.py           # Telegram transport utilities (113)
 │       └── wake_reader.py        # WakeEngine events reader (99)
+├── tools/                         # Local utilities (NOT deployed to VPS)
+│   ├── file_guardian.py          # SHA+AST+tail snapshot для critical files (X33 enforcement)
+│   ├── local_backup_trader_v3.ps1 # Hourly local zip backup (Task Scheduler: TraderV3HourlyBackup)
+│   └── vps_backup_trader_v3.sh   # Daily VPS tar backup (cron 03:00 UTC, 7-day retention)
 ├── docs/
 │   ├── ARCHITECTURE.md           # Bot architecture + I7 governance (§3a)
 │   ├── CURRENT_STATE.md          # Current snapshot (updated regularly)
 │   ├── CODEMAP.md                # Code map (needs refresh)
 │   └── adr/                      # Bot ADRs (001–034)
 │       └── ADR-024-autonomy-charter.md  # I7 SSOT
-├── smc_trader_prompt_v3.md       # Арчі's personality prompt (~1,500 lines, 95KB)
+├── smc_trader_prompt_v3.md       # Арчі's personality prompt (~1,598 lines, 66KB; v3.2)
+├── knowledge/smc_trader_prompt_v3.md  # VPS-only deployed copy (READ source for bot)
 ├── ui_archi/                     # Archi Console (Svelte web UI)
+├── .guardian.json                # file_guardian baseline (NEVER edit by hand)
 └── tests/                        # 153+ tests
+    └── test_handlers_registration.py  # Characterization snapshot (handlers.py decomposition gate)
 ```
+
+### 2.1.1 Silent Truncation Defense (Tier 0, post 2026-04-19 incident)
+
+| Захід | Шлях | Trigger |
+|---|---|---|
+| **file_guardian** | `trader-v3/tools/file_guardian.py` | `python -m tools.file_guardian check` після кожної сесії агента |
+| **X33 stop-rule** | `.github/copilot-instructions.md` (Заборони) | Після Edit на >1500-LOC file → AST + wc -l verify обов'язковий |
+| **Hourly local backup** | Task Scheduler `TraderV3HourlyBackup` | `backups/trader-v3-local/trader-v3-YYYYMMDD-HH.zip` (7-day) |
+| **Daily VPS backup** | cron `03:00 UTC` на aione-vps | `/opt/backups/trader-v3-YYYYMMDD.tar.gz` (7-day) |
+| **Characterization tests** | `tests/test_handlers_registration.py` | Locks 29 /commands + 5 spec handlers перед decomposition |
+
+Прецедент: 2026-04-19 monitor.py truncated mid-function під час agent edit, виявлено тільки на VPS deploy через SyntaxError. Recovery з VPS pre-sync tarball + manual fix re-application.
 
 **Інваріант I7 — Autonomy-First (ADR-024)**:
 

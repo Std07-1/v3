@@ -2,6 +2,7 @@
     import { api, ApiError } from "../lib/api";
     import type { ThinkingEntry } from "../lib/types";
     import { marked } from "marked";
+    import { sanitizeHtml } from "../lib/sanitize";
 
     let {
         onchat = (_text: string): void => {},
@@ -86,12 +87,12 @@
 
     function parseThinking(raw?: string): string {
         if (!raw) return "";
-        return marked.parse(raw) as string;
+        return sanitizeHtml(marked.parse(raw) as string);
     }
 
     function parseSnippet(raw?: string): string {
         if (!raw) return "";
-        return marked.parse(raw) as string;
+        return sanitizeHtml(marked.parse(raw) as string);
     }
 
     async function load(newOffset = 0) {

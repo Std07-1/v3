@@ -136,8 +136,9 @@ M7  TradingView-grade product   ← north star
 **Current: M3 (achieved), орієнтир M4 (Market Regime Engine)**
 
 ✅ M0-M3 = foundation complete
-⏳ M4 = наступна велика ціль, потребує окремого roadmap
-🎯 M5-M7 = long-term vision (рік+)
+⏳ M4 = наступна велика ціль → **[ROADMAP_M3_M5.md](ROADMAP_M3_M5.md)** (ADR-052…056)
+⏳ M5 = Market State Understanding → **[ROADMAP_M3_M5.md](ROADMAP_M3_M5.md)** (ADR-057…062)
+🎯 M6-M7 = long-term vision (рік+)
 
 ---
 
