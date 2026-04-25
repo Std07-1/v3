@@ -526,6 +526,31 @@
             "breaker_enabled": true,
             "breaker_choch_lookback_bars": 10
         },
+        "range_exhaustion": {
+            "_comment": "ADR-0053: ATR-based Daily/Session Travel Gauge. Staged rollout: enabled=false until P2 tests + R_BUG_HUNTER review.",
+            "enabled": false,
+            "atr_period": 14,
+            "session_atr_scale": 6.0,
+            "exhaustion_cap": 1.5,
+            "week_gap_cap": 0.5,
+            "phase_thresholds": {
+                "early_max": 0.35,
+                "mid_max": 0.70,
+                "late_max": 1.00
+            },
+            "confidence_delta_map": {
+                "early": 0.0,
+                "mid": 0.0,
+                "late": -0.15,
+                "exhausted": -0.30
+            },
+            "primary_anchor_rules": {
+                "asia": "d1_open",
+                "london": "london_open",
+                "ny": "ny_open",
+                "weekend": "week_open"
+            }
+        },
         "tda_cascade": {
             "_comment": "ADR-0040: TDA 4-stage daily cascade. Replaces ADR-0039 zone-reactive signals when enabled.",
             "enabled": true,

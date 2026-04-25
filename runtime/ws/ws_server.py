@@ -439,6 +439,9 @@ def _build_full_frame(
     # ADR-0029: zone_grades (only in full frame)
     if smc_wire and smc_wire.get("zone_grades"):
         frame["zone_grades"] = smc_wire["zone_grades"]
+    # ADR-0053: range_exhaustion (ATR travel gauge) — symbol-scoped, surfaces in full frame
+    if smc_wire and smc_wire.get("range_exhaustion"):
+        frame["range_exhaustion"] = smc_wire["range_exhaustion"]
     # ADR-0031: multi-TF bias map (only in full frame)
     if bias_map:
         frame["bias_map"] = bias_map
@@ -1140,6 +1143,18 @@ async def _global_delta_loop(app: web.Application) -> None:
                             if _smc_d is not None and _smc_d.has_changes:
                                 frame["smc_delta"] = _smc_d.to_wire()
                                 _smc_runner.clear_delta(symbol, tf_s)
+                            # ADR-0053: range_exhaustion — emit every delta tick so
+                            # UI pill reflects live traveled_mult; runner caches 2s to
+                            # amortize across per-TF frame fan-out. Symbol-scope, gated
+                            # by runner config.range_exhaustion.enabled.
+                            try:
+                                _re = _smc_runner.get_range_exhaustion(symbol)
+                                if _re is not None:
+                                    frame["range_exhaustion"] = _re.to_wire()
+                            except Exception:
+                                _log.debug(
+                                    "WS_DELTA_RE_ERR sym=%s", symbol, exc_info=True
+                                )
                             # ADR-0035: narrative refresh in delta (was full-frame only)
                             _any_complete = any(
                                 _ev.get("complete") for _ev in seen_events.values()

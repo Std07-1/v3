@@ -403,6 +403,11 @@ class SmcEngine:
 
         return compute_atr(state.bars_list(), period=period)
 
+    def get_bars(self, symbol: str, tf_s: int) -> List[CandleBar]:
+        """ADR-0053: public accessor for bar buffer. [] if (symbol, tf_s) not tracked."""
+        state = self._states.get((symbol, tf_s))
+        return state.bars_list() if state is not None else []
+
     def get_momentum_score(self, symbol: str, tf_s: int) -> Tuple[int, int]:
         """Momentum score (bull_count, bear_count) for given (symbol, tf)."""
         state = self._states.get((symbol, tf_s))

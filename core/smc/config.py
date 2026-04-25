@@ -344,6 +344,67 @@ class SmcPerformanceConfig:
 
 
 @dataclasses.dataclass
+class SmcRangeExhaustionConfig:
+    """ADR-0053: ATR-based Daily/Session Travel Gauge (Range Exhaustion Detector).
+
+    Staged rollout: enabled=False until P2 tests + R_BUG_HUNTER review pass.
+    """
+
+    enabled: bool = False
+    atr_period: int = 14
+    session_atr_scale: float = 6.0  # rough D1/H1 ratio — recalibrated in P10
+    exhaustion_cap: float = 1.5
+    # Phase thresholds (traveled_mult boundaries)
+    phase_early_max: float = 0.35
+    phase_mid_max: float = 0.70
+    phase_late_max: float = 1.00
+    # Confidence delta applied to confluence/signal scores per phase
+    confidence_delta_early: float = 0.0
+    confidence_delta_mid: float = 0.0
+    confidence_delta_late: float = -0.15
+    confidence_delta_exhausted: float = -0.30
+    # Safety: skip week_open у primary якщо weekend gap > week_gap_cap × ATR
+    week_gap_cap: float = 0.5
+    # Session → preferred primary anchor mapping
+    _primary_rules: Dict[str, str] = dataclasses.field(
+        default_factory=lambda: {
+            "asia": "d1_open",
+            "london": "london_open",
+            "ny": "ny_open",
+            "weekend": "week_open",
+        },
+        repr=False,
+    )
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "SmcRangeExhaustionConfig":
+        pt = d.get("phase_thresholds", {})
+        cd = d.get("confidence_delta_map", {})
+        pr = d.get("primary_anchor_rules", {})
+        default_rules = {
+            "asia": "d1_open",
+            "london": "london_open",
+            "ny": "ny_open",
+            "weekend": "week_open",
+        }
+        return cls(
+            enabled=bool(d.get("enabled", False)),
+            atr_period=int(d.get("atr_period", 14)),
+            session_atr_scale=float(d.get("session_atr_scale", 6.0)),
+            exhaustion_cap=float(d.get("exhaustion_cap", 1.5)),
+            phase_early_max=float(pt.get("early_max", 0.35)),
+            phase_mid_max=float(pt.get("mid_max", 0.70)),
+            phase_late_max=float(pt.get("late_max", 1.00)),
+            confidence_delta_early=float(cd.get("early", 0.0)),
+            confidence_delta_mid=float(cd.get("mid", 0.0)),
+            confidence_delta_late=float(cd.get("late", -0.15)),
+            confidence_delta_exhausted=float(cd.get("exhausted", -0.30)),
+            week_gap_cap=float(d.get("week_gap_cap", 0.5)),
+            _primary_rules={**default_rules, **dict(pr)},
+        )
+
+
+@dataclasses.dataclass
 class SmcConfig:
     """Повна конфігурація SMC Engine (SSOT: config.json:smc)."""
 
@@ -386,6 +447,10 @@ class SmcConfig:
         default_factory=SmcPerformanceConfig
     )
     tda: SmcTdaConfig = dataclasses.field(default_factory=SmcTdaConfig)
+    # ADR-0053: Range Exhaustion Detector (staged rollout — enabled=False default)
+    range_exhaustion: SmcRangeExhaustionConfig = dataclasses.field(
+        default_factory=SmcRangeExhaustionConfig
+    )
 
     # tf_overrides: raw dict from config.json, keyed by str(tf_s)
     _tf_overrides: Dict[str, Dict[str, Any]] = dataclasses.field(
@@ -470,6 +535,9 @@ class SmcConfig:
             confluence=SmcConfluenceConfig.from_dict(d.get("confluence", {})),
             performance=SmcPerformanceConfig.from_dict(d.get("performance", {})),
             tda=SmcTdaConfig.from_dict(d.get("tda", {})),
+            range_exhaustion=SmcRangeExhaustionConfig.from_dict(
+                d.get("range_exhaustion", {})
+            ),
             _tf_overrides=d.get("tf_overrides", {}),
         )
 

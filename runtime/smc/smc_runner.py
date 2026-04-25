@@ -18,15 +18,24 @@ Python 3.7 compatible.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
 import threading
+import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.model.bars import CandleBar
 from core.smc.engine import SmcEngine
-from core.smc.types import SmcDelta, SmcSnapshot, NarrativeBlock, ShellPayload
+from core.smc.range_exhaustion import compute_range_exhaustion
+from core.smc.types import (
+    NarrativeBlock,
+    RangeExhaustionSnapshot,
+    ShellPayload,
+    SmcDelta,
+    SmcSnapshot,
+)
 from core.smc.narrative import (
     synthesize_narrative,
     narrative_to_wire,
@@ -181,6 +190,12 @@ class SmcRunner:
 
         # Last known price per symbol (from M1 close)
         self._last_prices: Dict[str, float] = {}
+
+        # ADR-0053: range exhaustion cache (symbol → (computed_at_ms, snapshot))
+        # 2s freshness prevents per-TF recompute on render_frame cascade.
+        self._range_exhaustion_cache: Dict[
+            str, Tuple[int, RangeExhaustionSnapshot]
+        ] = {}
 
         # Relay: відстеження останнього bias для dedup
         self._last_bias: Dict[Tuple[str, int], Optional[str]] = {}
@@ -546,16 +561,102 @@ class SmcRunner:
         - Ін'єкція HTF FVG зон per display mapping
         - Context Stack OB зон (L1/L2)
         - HTF key levels
+
+        ADR-0053: якщо range_exhaustion.enabled — додає range_exhaustion snapshot.
         """
         try:
-            return self._engine.get_display_snapshot(symbol, tf_s)
+            snap = self._engine.get_display_snapshot(symbol, tf_s)
         except Exception as exc:
             _log.warning("SMC_GET_SNAP_ERR sym=%s tf=%s err=%s", symbol, tf_s, exc)
             return None
+        if snap is None:
+            return None
+        re_snap = self.get_range_exhaustion(symbol)
+        if re_snap is not None:
+            snap = dataclasses.replace(snap, range_exhaustion=re_snap)
+        return snap
+
+    def get_range_exhaustion(
+        self, symbol: str, now_ms: Optional[int] = None
+    ) -> Optional[RangeExhaustionSnapshot]:
+        """ADR-0053: ATR-based travel gauge for symbol.
+
+        Returns None if disabled via config OR on any compute error (I5: logged).
+        2s cache: consecutive per-TF get_snapshot calls reuse cached result.
+        """
+        re_cfg = self._engine._config.range_exhaustion
+        if not re_cfg.enabled:
+            return None
+
+        if now_ms is None:
+            now_ms = int(time.time() * 1000)
+
+        cached = self._range_exhaustion_cache.get(symbol)
+        if cached is not None and (now_ms - cached[0]) < 2000:
+            return cached[1]
+
+        try:
+            bars_d1 = self._engine.get_bars(symbol, 86400)
+            bars_h1 = self._engine.get_bars(symbol, 3600)
+            current_price = self.get_last_price(symbol)
+            if current_price <= 0.0:
+                return None
+
+            anchors: Dict[str, Tuple[int, float]] = {}
+            if bars_d1:
+                last_d1 = bars_d1[-1]
+                anchors["d1_open"] = (last_d1.open_time_ms, last_d1.o)
+
+            # ADR-0053: active_session=None is a first-class "session unknown" state —
+            # primary falls back through cascade (d1_open → ...) і compute позначає
+            # primary.degraded=["session_context_unavailable"]. ADR-0035 session wiring
+            # living у runtime/smc/ — не coupled сюди (S1: compute залишається pure).
+            snap = compute_range_exhaustion(
+                symbol=symbol,
+                current_price=current_price,
+                bars_d1=bars_d1,
+                bars_h1=bars_h1,
+                anchors=anchors,
+                active_session=None,
+                now_ms=now_ms,
+                cfg=re_cfg,
+            )
+            self._range_exhaustion_cache[symbol] = (now_ms, snap)
+            return snap
+        except Exception as exc:
+            _log.warning(
+                "SMC_RANGE_EXHAUSTION_ERR sym=%s err=%s",
+                symbol,
+                exc,
+                exc_info=True,
+            )
+            return None
 
     def get_zone_grades(self, symbol: str, tf_s: int) -> dict:
-        """ADR-0029: zone_grades after get_snapshot() call."""
-        return self._engine.get_zone_grades(symbol, tf_s)
+        """ADR-0029: zone_grades after get_snapshot() call.
+
+        ADR-0053: when range_exhaustion enabled — apply post-hoc confidence penalty
+        для same-direction setups у exhausted move. Pure adjustment via
+        `apply_range_exhaustion_penalty`; engine state untouched.
+        """
+        raw = self._engine.get_zone_grades(symbol, tf_s)
+        if not raw:
+            return raw
+        re_cfg = self._engine._config.range_exhaustion
+        if not re_cfg.enabled:
+            return raw
+        re_snap = self.get_range_exhaustion(symbol)
+        if re_snap is None:
+            return raw
+        snap = self._engine.get_snapshot(symbol, tf_s)
+        if snap is None or not snap.zones:
+            return raw
+        from core.smc.confluence import apply_range_exhaustion_penalty
+
+        conf_cfg = self._engine._config.confluence.to_scoring_dict()
+        return apply_range_exhaustion_penalty(
+            raw, snap.zones, re_snap.primary, conf_cfg
+        )
 
     def get_bias_map(self, symbol: str) -> dict:
         """ADR-0031: bias for all compute TFs. Returns {"900": "bullish", ...}."""
@@ -643,6 +744,11 @@ class SmcRunner:
                 )
                 if sess_name:
                     session_info = (sess_name, sess_kz)
+            # ADR-0053: pass primary range_exhaustion state for narrative phrase
+            re_state = None
+            re_snap = self.get_range_exhaustion(symbol)
+            if re_snap is not None:
+                re_state = re_snap.primary
             result = synthesize_narrative(
                 snap,
                 bias,
@@ -653,6 +759,7 @@ class SmcRunner:
                 atr_14,
                 cfg,
                 session_info=session_info,
+                range_exhaustion=re_state,
             )
             if self._warmup_done:
                 self._journal.record(

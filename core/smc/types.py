@@ -205,6 +205,63 @@ class SmcLevel:
         }
 
 
+# ── Range Exhaustion (ADR-0053) ──────────────────────────────────────────────
+RANGE_ANCHOR_KINDS = frozenset(
+    {"d1_open", "london_open", "ny_open", "week_open"}
+)
+RANGE_PHASES = frozenset({"early", "mid", "late", "exhausted"})
+
+
+@dataclasses.dataclass(frozen=True)
+class RangeExhaustionState:
+    """ATR-based travel gauge для одного reference anchor (ADR-0053)."""
+
+    anchor_kind: str  # ∈ RANGE_ANCHOR_KINDS
+    anchor_ms: int
+    anchor_price: float
+    current_price: float
+    traveled_abs: float
+    traveled_dir: int  # +1 bull, -1 bear, 0 flat
+    atr_baseline: float
+    traveled_mult: float
+    phase: str  # ∈ RANGE_PHASES
+    remaining_budget: float
+    confidence_delta: float
+    degraded: List[str]  # I5: reasons if compute недостатнє
+
+    def to_wire(self) -> Dict[str, Any]:
+        return {
+            "anchor_kind": self.anchor_kind,
+            "anchor_ms": self.anchor_ms,
+            "anchor_price": self.anchor_price,
+            "traveled_abs": self.traveled_abs,
+            "traveled_dir": self.traveled_dir,
+            "atr_baseline": self.atr_baseline,
+            "traveled_mult": self.traveled_mult,
+            "phase": self.phase,
+            "remaining_budget": self.remaining_budget,
+            "confidence_delta": self.confidence_delta,
+            "degraded": list(self.degraded),
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class RangeExhaustionSnapshot:
+    """Multi-anchor exhaustion snapshot для символу (ADR-0053)."""
+
+    symbol: str
+    primary: RangeExhaustionState
+    by_anchor: Dict[str, RangeExhaustionState]
+    computed_at_ms: int
+
+    def to_wire(self) -> Dict[str, Any]:
+        return {
+            "primary": self.primary.to_wire(),
+            "by_anchor": {k: v.to_wire() for k, v in self.by_anchor.items()},
+            "computed_at_ms": self.computed_at_ms,
+        }
+
+
 @dataclasses.dataclass(frozen=True)
 class SmcSnapshot:
     """Повний стан SMC для (symbol, tf) — для full WS frame / HTTP GET."""
@@ -219,15 +276,21 @@ class SmcSnapshot:
     last_choch_ms: Optional[int]
     computed_at_ms: int
     bar_count: int
+    # ADR-0053: range exhaustion gauge (optional, populated if smc.range_exhaustion.enabled)
+    range_exhaustion: Optional[RangeExhaustionSnapshot] = None
 
     def to_wire(self) -> Dict[str, Any]:
-        """S6: wire format — вбудовується у WS full frame (F8: +trend_bias)."""
-        return {
+        """S6: wire format — вбудовується у WS full frame (F8: +trend_bias, ADR-0053: +range_exhaustion)."""
+        d: Dict[str, Any] = {
             "zones": [z.to_wire() for z in self.zones],
             "swings": [s.to_wire() for s in self.swings],
             "levels": [low.to_wire() for low in self.levels],
             "trend_bias": self.trend_bias,
         }
+        # ADR-0053: omit when None to keep wire compact (null-compact semantics)
+        if self.range_exhaustion is not None:
+            d["range_exhaustion"] = self.range_exhaustion.to_wire()
+        return d
 
 
 @dataclasses.dataclass(frozen=True)
@@ -307,6 +370,8 @@ class NarrativeBlock:
     current_session: str = ""  # "london" | "newyork" | "asia" | ""
     in_killzone: bool = False  # True якщо у killzone window
     session_context: str = ""  # "London KZ active — high probability"
+    # ADR-0053: range exhaustion display phrase ("" якщо early/mid/None)
+    range_exhaustion_summary: str = ""
 
 
 # -------------------- Premium/Discount State (ADR-0041) --------------------

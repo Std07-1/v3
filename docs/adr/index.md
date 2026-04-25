@@ -65,6 +65,8 @@
 | [0049](0049-wake-engine-external-consumer-ipc.md) | Wake Engine — External Consumer IPC via Redis | **Accepted** | 2026-04-16 | WakeEngine, Redis IPC, wake conditions, PubSub notify, event-driven, external consumer | `wake_engine_v1` |
 | [0051](0051-tda-cascade-trigger-timing.md) | TDA Cascade Trigger Timing — Defer to After London Close | **Accepted** | 2026-04-18 | TDA, cascade timing, london_end_hour_utc, NO_NARRATIVE root cause, ADR-0040 fix | `tda_calibration_2026_04` |
 | [0052](0052-chat-modularization.md) | Chat Modularization + Security Layer | **Proposed** | 2026-04-19 | ui_archi, feature-modules, Svelte 5 runes, STRIDE threat model, auth/rate_limit/csrf, 8 slices | `ui_archi_chat_v2` |
+| [0053](0053-range-exhaustion-detector.md) | Range Exhaustion Detector — ATR Daily/Session Travel Gauge | **Proposed** | 2026-04-24 | ATR travel, daily range, session range, phase (early/mid/late/exhausted), confidence_delta, confluence/narrative/signal consumers, XAU/USD focus | `range_exhaustion_v1` |
+| [0054](0054-multi-symbol-reactivation-plan.md) | Multi-Symbol Re-Activation Plan — Phased Rollout with Regression Net | **Proposed** | 2026-04-24 | multi-symbol, regression net, isolation investigation, per-symbol weekly rollout, supersedes ADR-0025 rollback, chart product scope | `multi_symbol_reactivation_v1` |
 
 ---
 

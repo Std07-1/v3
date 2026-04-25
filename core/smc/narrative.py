@@ -41,6 +41,47 @@ _DEGRADED_HEADLINE = "\u26a0 Наратив недоступний"
 
 # ── TF labels ───────────────────────────────────────────────
 
+# ── ADR-0053: Range Exhaustion display strings ──────────────
+# Phrase emitted ONLY for late/exhausted phases — early/mid = silent (clean chart doctrine).
+_RANGE_PHASE_HINTS = {
+    "late": "ймовірний pullback або consolidation",
+    "exhausted": "висока ймовірність розвороту, не chase'ити",
+}
+_RANGE_ANCHOR_LABELS = {
+    "d1_open": "D1",
+    "london_open": "London",
+    "ny_open": "NY",
+    "week_open": "Week",
+}
+
+
+def _build_range_exhaustion_summary(range_state):
+    # type: (object) -> str
+    """ADR-0053: human-readable phrase for late/exhausted phases.
+
+    Returns "" коли:
+      - range_state is None
+      - phase in {early, mid} (clean chart doctrine — silent для здорового руху)
+      - traveled_dir == 0 (flat day, нема напрямку)
+    """
+    if range_state is None:
+        return ""
+    phase = getattr(range_state, "phase", "")
+    if phase not in _RANGE_PHASE_HINTS:
+        return ""
+    traveled_dir = getattr(range_state, "traveled_dir", 0)
+    if traveled_dir == 0:
+        return ""
+    mult = getattr(range_state, "traveled_mult", 0.0)
+    anchor_kind = getattr(range_state, "anchor_kind", "")
+    anchor_label = _RANGE_ANCHOR_LABELS.get(anchor_kind, anchor_kind)
+    arrow = "up" if traveled_dir > 0 else "down"
+    hint = _RANGE_PHASE_HINTS[phase]
+    return "{} {} {:.2f} ATR ({}) - {}".format(
+        anchor_label, arrow, mult, phase, hint
+    )
+
+
 _TF_LABELS = {
     60: "M1",
     180: "M3",
@@ -493,13 +534,16 @@ def synthesize_narrative(
     atr,  # type: float
     config,  # type: dict
     session_info=None,  # type: Optional[Tuple[str, bool]]
+    range_exhaustion=None,  # type: Optional[object]
 ):
     # type: (...) -> NarrativeBlock
-    """Synthesize narrative for display (ADR-0033, ADR-0035).
+    """Synthesize narrative for display (ADR-0033, ADR-0035, ADR-0053).
 
     N0: pure, deterministic.
     N3: NEVER returns None — fallback block з warnings.
     session_info: (current_session_name, in_killzone) or None.
+    range_exhaustion: ADR-0053 RangeExhaustionState (primary anchor) or None;
+        used to populate NarrativeBlock.range_exhaustion_summary.
     """
     try:
         return _synthesize_impl(
@@ -512,6 +556,7 @@ def synthesize_narrative(
             atr,
             config,
             session_info,
+            range_exhaustion,
         )
     except Exception:
         sym = getattr(snapshot, "symbol", "?")
@@ -530,6 +575,7 @@ def _synthesize_impl(
     atr,
     config,
     session_info=None,
+    range_exhaustion=None,
 ):
     # type: (SmcSnapshot, Dict[str, str], Dict[str, dict], Dict[str, dict], int, float, float, dict, Optional[Tuple[str, bool]]) -> NarrativeBlock
     warnings = []  # type: List[str]
@@ -677,6 +723,9 @@ def _synthesize_impl(
                     else headline
                 )
 
+    # ADR-0053: range exhaustion phrase (silent for early/mid/None)
+    range_exhaustion_summary = _build_range_exhaustion_summary(range_exhaustion)
+
     return NarrativeBlock(
         mode=mode,
         sub_mode=sub_mode,
@@ -690,6 +739,7 @@ def _synthesize_impl(
         current_session=current_session,
         in_killzone=in_killzone,
         session_context=session_context,
+        range_exhaustion_summary=range_exhaustion_summary,
     )
 
 
@@ -766,7 +816,7 @@ def narrative_to_wire(block):
                 "invalidation": s.invalidation,
             }
         )
-    return {
+    d = {
         "mode": block.mode,
         "sub_mode": block.sub_mode,
         "headline": block.headline,
@@ -780,3 +830,7 @@ def narrative_to_wire(block):
         "in_killzone": block.in_killzone,
         "session_context": block.session_context,
     }
+    # ADR-0053: include only when populated (null-compact, matches SmcSnapshot.to_wire pattern)
+    if block.range_exhaustion_summary:
+        d["range_exhaustion_summary"] = block.range_exhaustion_summary
+    return d

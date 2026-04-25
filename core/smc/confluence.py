@@ -325,6 +325,72 @@ def score_zone_confluence(
     return {"score": score, "grade": _score_to_grade(score, config), "factors": factors}
 
 
+# ── ADR-0053: Range Exhaustion penalty (post-hoc score adjustment) ──────────
+
+
+def apply_range_exhaustion_penalty(zone_grades, zones, range_state, config):
+    # type: (dict, list, object, dict) -> dict
+    """ADR-0053: knock-down zone grades for same-direction setups у exhausted move.
+
+    Pure post-processing. Returns NEW dict (no mutation of input).
+
+    Penalty applied коли:
+      - range_state is not None AND has negative confidence_delta
+      - range_state.traveled_dir != 0
+      - zone setup direction (bull/bear) matches range_state.traveled_dir
+        (long entry у вже-exhausted bullish impulse = knock-down)
+
+    Semantics: confidence_delta інтерпретується як percentage-of-score
+    adjustment (scale-invariant across OB [0..13] та FVG [0..7] scoring).
+    Formula: new_score = max(0, score + round(score × confidence_delta))
+    Grade перераховується через _score_to_grade з відповідним thresholds.
+
+    Opposite-direction setups (mean reversion) НЕ отримують bonus — це P10
+    calibration concern per ADR-0053 §5.2.
+    """
+    if range_state is None:
+        return dict(zone_grades)
+    if range_state.confidence_delta >= 0.0:
+        return dict(zone_grades)
+    traveled = range_state.traveled_dir
+    if traveled == 0:
+        return dict(zone_grades)
+
+    delta = range_state.confidence_delta
+    phase = range_state.phase
+    kind_by_id = {z.id: z.kind for z in zones}
+
+    result = {}
+    for zid, g in zone_grades.items():
+        kind = kind_by_id.get(zid, "")
+        if kind.endswith("_bull"):
+            zdir = 1
+        elif kind.endswith("_bear"):
+            zdir = -1
+        else:
+            zdir = 0
+        if zdir == 0 or zdir * traveled <= 0:
+            result[zid] = g
+            continue
+        score = g.get("score", 0)
+        if score <= 0:
+            result[zid] = g
+            continue
+        adj = int(round(score * delta))  # negative integer
+        if adj == 0:
+            result[zid] = g  # no numeric effect — don't pollute factors list
+            continue
+        new_score = max(0, score + adj)
+        factors = list(g.get("factors", []))
+        factors.append("range_exhaust_{} {:+d}".format(phase, adj))
+        thresholds_key = (
+            "fvg_grade_thresholds" if kind.startswith("fvg_") else "grade_thresholds"
+        )
+        new_grade = _score_to_grade(new_score, config, thresholds_key)
+        result[zid] = {"score": new_score, "grade": new_grade, "factors": factors}
+    return result
+
+
 def score_fvg_strength(fvg_zone, atr, partial_fill_pct=0.0):
     # type: (dict, float, float) -> float
     """FVG strength = f(gap_size/ATR, partial_fill). P-Φ1-1b."""
