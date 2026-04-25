@@ -128,6 +128,39 @@ ADR section мусить мати:
 | F6 | **Patch-цикл** | Один інваріант → один патч → verify → changelog/ADR. Без масових рефакторів |
 | F7 | **ADR-driven** | Кожна нетривіальна зміна = ADR з обґрунтуванням → потім PATCH. Без "одноразових" виправлень |
 | F8 | **UDS = вузька талія** | Всі OHLCV writes/reads — тільки через UnifiedDataStore. UI = read-only renderer |
+| F9 | **Craftsmanship-First** | Кожен touch коду = код-рев'ю senior staff engineer. Patch має виглядати так, ніби його писав інженер який пишається своєю роботою. Hack/workaround/"тимчасово" — заборонено без ADR + TODO з датою видалення |
+
+### F9 — деталізація (Craftsmanship-First)
+
+> **Контекст**: ми системно піднімаємо Maturity ladder M0→M7 ([SYSTEM_MATURITY_LADDER.md](../docs/SYSTEM_MATURITY_LADDER.md)).
+> На M5+ кожен зайвий хак = регрес. Tech debt компаундується. Тому **єдиний прийнятний стандарт = production-grade від першого commit**.
+
+**Тест "Senior Reviewer"**: уяви що твій patch читає staff engineer з 15 років досвіду який зайшов у репо вперше. Має пройти reaction "о, чисто", не "хто це писав". Якщо є сумнів — patch не готовий.
+
+| Заборонено (red flags) | Натомість |
+|---|---|
+| Inline `if symbol == "XAU/USD"` для одного випадку | Витяг у config + lookup table |
+| `# TODO: refactor later` без дати/умови | Видалити tech debt **зараз** або відкрити ADR з owner+deadline |
+| Copy-paste блоку логіки в 2-й файл | Витяг у shared helper з тестом |
+| `magic_number = 0.7` без коментаря джерела | Конфіг або константа з docstring "ATR multiplier per ICT methodology" |
+| Імпорт що тягне за собою I/O в pure модуль | Refactor — інверсія залежностей |
+| Функція >50 рядків без чіткої розбивки на фази | Розбити на phase functions з docstrings |
+| `try: ... except: pass` (X9) | `except SpecificError as e: log.warning(...); degraded.append(...)` |
+| Назва `data`, `result`, `tmp`, `x` у production коді | Семантична назва: `bars_window`, `confluence_score`, `pending_zones` |
+| `# fix bug` як commit message | "fix(smc): zone mitigation skips impulse bars (ADR-0029 §4.3)" |
+| Новий файл без модульного docstring | Перший рядок: що це, чому окремий модуль, які invariants тримає |
+
+**Принципи "красивого коду" в цьому репо**:
+
+1. **Читається зверху вниз як історія** — public API спочатку, helpers нижче, нічого не "стрибає" з кінця файлу
+2. **Назви розповідають інтент** — `_resolve_anchor_offset_ms()` краще за `_get_offset()`
+3. **Pure / impure явно розділені** — pure функції згруповані, I/O винесене на межу
+4. **Type hints обов'язкові** для public API, бажані всюди
+5. **Жодних "magic" — все іменоване** — або константа, або config field, або enum
+6. **Кожен модуль тримає 1 invariant** — якщо файл робить 3 речі, розбий на 3 модулі
+7. **Тести читаються як специфікація** — `test_<що_перевіряємо>_<при_яких_умовах>_<очікуваний_результат>`
+
+**Maturity rule**: репо зараз M3, ціль M7. Кожен patch = або тримає M3, або підіймає до M4. **Жоден patch не може опустити Maturity нижче поточного рівня**. Якщо помічаєш регрес — зупинись, виправ, потім продовжуй.
 
 ### Канон A → C → B
 
@@ -767,4 +800,10 @@ Feature flag у `config.json` може бути `enabled: true` **тільки**
 | X31 | **Cross-repo contamination**: при роботі над `trader-v3/` заборонено створювати/змінювати ADR, документацію, конфіги чи код у v3 platform (`docs/`, `core/`, `runtime/`, `ui_v4/`, `config.json`). Арчі ADR живуть ТІЛЬКИ в `trader-v3/docs/adr/`. Platform ADR — ТІЛЬКИ в `docs/adr/`. Якщо зміна Арчі потребує platform feature — окремий v3 ADR з platform perspective |
 | X32 | **data/ dumping**: заборонено зберігати runtime data Арчі (`*_directives.json`, `*_conversation.json`, `*_journal.json`) у v3 root. Runtime data живе ТІЛЬКИ в `trader-v3/data/` або на VPS |
 | X33 | **Silent file truncation**: після кожного `replace_string_in_file` / `multi_replace_string_in_file` на файлі **>1500 рядків** обов'язково: (a) AST parse (для .py) або повне читання останніх 30 рядків, (b) звірка `wc -l` до/після — delta >50 рядків без явного `[shrink]` у наміру = STOP, повернути файл з backup. Прецедент: 2026-04-19 monitor.py truncation mid-function (тільки deploy виявив SyntaxError). Recommended tool: `python -m tools.file_guardian check` після session |
+| X34 | **Hack/workaround/"тимчасово"**: будь-яке `# TODO`, `# HACK`, `# FIXME`, `# temporary`, `# quick fix` без (a) дати-deadline, (b) ADR-ref, (c) owner — заборонено в prod-коді. Видали технічний борг **зараз** або відкрий ADR. F9 craftsmanship-first |
+| X35 | **Inline duplication**: copy-paste блоку логіки в 2-й файл = SSOT violation in progress. ≥3 повторення → STOP, витяг у shared helper з тестом. Прецедент: anchor offset routing inline у 4 місцях. Правило 3-х місць (Тема C: Централізація vs inline) |
+| X36 | **Magic numbers/strings без іменування**: `0.7`, `"XAU/USD"`, `60_000`, `2.5` без константи / config field / enum з docstring-джерелом — заборонено. Hardcoded thresholds для SMC заборонені окремо (S5). F9 принцип "Жодних magic — все іменоване" |
+| X37 | **Mixed abstraction levels у функції**: `connect_redis()` + `compute_atr()` + `format_log_line()` в одній функції — STOP, розбий по фазах. Функція >50 LOC без чіткої розбивки на phase functions з docstrings = STOP. F9 принцип "Читається зверху вниз як історія" |
+| X38 | **Generic names у production**: `data`, `result`, `tmp`, `x`, `obj`, `do_stuff()`, `helper()` — заборонено. Семантичні назви розповідають інтент: `bars_window`, `confluence_score`, `pending_zones`, `_resolve_anchor_offset_ms()`. F9 craftsmanship |
+| X39 | **Maturity regression**: жоден patch не може опустити Maturity ladder нижче поточного M-рівня (зараз M3). Якщо patch додає hack/workaround/silent fallback/duplication — це регрес. STOP, перепиши на production-grade. F9 Maturity rule |
 
