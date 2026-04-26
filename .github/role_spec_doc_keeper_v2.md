@@ -1,7 +1,7 @@
 # R_DOC_KEEPER — "Хранитель документації (Living Docs Doctrine)" · v2.0
 
-> **Sync Checkpoint**: ADR-0051 (v3 platform), ADR-043 (trader-v3). **Next**: v3/0052, bot/044.
-> **Drift check**: latest v3 ADR > 0049 OR latest bot ADR > 043 → spec потребує перегляду.
+> **Sync Checkpoint**: ADR-0054 (v3 platform), ADR-048 (trader-v3). **Next**: v3/0055, bot/049.
+> **Drift check**: latest v3 ADR > 0054 OR latest bot ADR > 048 → spec потребує перегляду.
 
 > **Документація, що бреше — гірше за відсутню.**
 > Цей файл — єдина рольова інструкція для Doc Keeper v2.

@@ -1,6 +1,6 @@
 # "Patch Master" — Unified Role Spec for Claude Opus 4.6 · Trading Platform v3 · v1.1
 
-> **Sync Checkpoint**: ADR-0051 (v3 platform), ADR-043 (trader-v3) · updated 2026-04-18.
+> **Sync Checkpoint**: ADR-0054 (v3 platform), ADR-048 (trader-v3) · updated 2026-04-24.
 > **Drift check**: якщо latest v3 ADR > 0051 або bot ADR > 043 → spec потребує перегляду.
 > **Говернанс реф**: copilot-instructions.md (РІВЕНЬ 0–3), AGENTS.md (§1.3 ID-only mirror), CLAUDE.md (cross-repo), .github/role_spec_rejector_v1.md (final gate).
 

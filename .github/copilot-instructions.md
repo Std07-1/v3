@@ -755,9 +755,13 @@ Feature flag у `config.json` може бути `enabled: true` **тільки**
 | ~~0048~~ | ~~Platform Wake Engine~~ → **trader-v3/ADR-039** | — | *Moved: Арчі-specific; platform ADR: 0049* |
 | 0049 | Wake Engine — External Consumer IPC | Accepted | WakeEngine, Redis IPC, wake conditions, PubSub, external consumer |
 | 0051 | TDA Cascade Trigger Timing — Defer to After London Close | Accepted | TDA, cascade timing, london_end_hour_utc, NO_NARRATIVE fix, ADR-0040 |
+| 0052 | Chat Modularization + Security Layer | Proposed | ui_archi, feature-modules, Svelte 5 runes, STRIDE, auth/rate_limit/csrf, 8 slices |
+| 0053 | Range Exhaustion Detector | Proposed | ATR travel, daily/session range, phase (early/mid/late/exhausted), confidence_delta, XAU/USD focus |
+| 0054 | Multi-Symbol Re-Activation Plan | Proposed | multi-symbol, regression net, isolation investigation, per-symbol weekly rollout, supersedes ADR-0025 rollback |
 
-> **Примітка**: ADR мігровані в `docs/adr/`. Повний список 0001–0049 → `docs/adr/index.md`.
+> **Примітка**: ADR мігровані в `docs/adr/`. Повний список 0001–0054 → `docs/adr/index.md`.
 > 0045/0046/0048 переміщені в `trader-v3/docs/adr/` (X31 boundary rule).
+> 0050 пропущено (TDA timing fix отримав номер 0051).
 
 ---
 

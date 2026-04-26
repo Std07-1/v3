@@ -106,4 +106,4 @@
 
 Див. формат у [copilot-instructions.md](../../.github/copilot-instructions.md) → Тема B, Правило B2.
 
-Наступний номер: **0053** (0050 пропущено: TDA timing fix — використано 0051; 0052 = Chat Modularization)
+Наступний номер: **0055** (0050 пропущено: TDA timing fix — використано 0051; 0052 = Chat Modularization; 0053 = Range Exhaustion; 0054 = Multi-Symbol Reactivation Plan)

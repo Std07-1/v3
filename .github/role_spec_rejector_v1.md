@@ -1,6 +1,6 @@
 # R_REJECTOR — "QA Rejector & Final Gate" · v1.0
 
-> **Sync Checkpoint**: ADR-0049 (Wake Engine External Consumer IPC, 2026-04-16). **Next v3 ADR**: 0050.
+> **Sync Checkpoint**: ADR-0054 (Multi-Symbol Re-Activation Plan, 2026-04-24). **Next v3 ADR**: 0055.
 > **Active v3 ADRs ref**: 0024/0028/0029/0035/0039/0040/0041/0042/0043/0044/0047/0049.
 > **Drift check**: latest v3 ADR > 0049 -> spec потребує перегляду.
 

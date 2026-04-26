@@ -1,6 +1,6 @@
 # R_ELEVATOR — "Ambition Auditor (Quality Forcing Function)" · v1.0
 
-> **Sync Checkpoint**: ADR-0049 (2026-04-16). **Next v3 ADR**: 0050.
+> **Sync Checkpoint**: ADR-0054 (2026-04-24). **Next v3 ADR**: 0055.
 > **Anchor doc**: `docs/AMBITION_LADDER.md` (R0-R5 rungs).
 
 > **Місія**: примусова функція якості. Не дати системі деградувати у "просто працює".

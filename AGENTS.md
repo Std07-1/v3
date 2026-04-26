@@ -36,7 +36,11 @@
 - Client-Side Replay (ADR-0027): TradingView-style replay з data_v3/
 - Binance Second Broker **Implemented** (ADR-0037): BTCUSDT/ETHUSDT 24/7 ingest
 - Platform Wake Engine (ADR-0049): wake conditions + external consumer IPC — **Accepted**
-- Для майбутньої активації інших символів потрібен окремий audit/fix integrity derived TF
+- TDA Cascade Trigger Timing **Accepted** (ADR-0051): defer to after London close (NO_NARRATIVE root cause fix)
+- Chat Modularization + Security Layer (ADR-0052): **Proposed** — ui_archi feature-modules, STRIDE threat model, 8 slices
+- Range Exhaustion Detector (ADR-0053): **Proposed** — ATR daily/session travel gauge, XAU/USD focus
+- Multi-Symbol Re-Activation Plan (ADR-0054): **Proposed** — phased rollout w/ regression net (supersedes ADR-0025 rollback)
+- Для майбутньої активації інших символів — див. ADR-0054
 
 ### 1.2 Технологічний стек
 
@@ -81,7 +85,7 @@ CI gate звіряє ID→spec mapping і не дозволяє drift.
 | `R_PATCH_MASTER` | **Patch Master** | `.github/role_spec_patch_master_v1.md` |
 | `R_BUG_HUNTER` | **Bug Hunter** | `.github/role_spec_bug_hunter_v2.md` |
 | `R_SMC_CHIEF` | **SMC Chief Strategist** | `.github/role_spec_smc_chief_strategist_v1.md` |
-| `R_DOC_KEEPER` | **Doc Keeper** | `.github/role_spec_doc_keeper_v1.md` |
+| `R_DOC_KEEPER` | **Doc Keeper** | `.github/role_spec_doc_keeper_v2.md` |
 | `R_TRADER` | **SMC Trader** | `.github/role_spec_trader_v1.md` |
 | `R_CHART_UX` | **Chart Experience Product Designer** | `.github/role_spec_chart_ux_v1.md` |
 | `R_ARCHITECT` | **Systems Architect** | `.github/role_spec_architect_v1.md` |
@@ -458,7 +462,7 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 | `test_tick_preview_calendar.py` | Tick preview + calendar gate |
 | `test_structure_v2.py` | Structure V2: BOS/CHoCH canonical (ADR-0047) |
 
-> **54 test files total** on disk. Table above lists key tests; run `pytest tests/ -v` for full coverage.
+> **59 test files total** on disk (as of 2026-04-26). Table above lists key tests; run `pytest tests/ -v` for full coverage.
 
 ---
 

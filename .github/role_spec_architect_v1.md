@@ -1,6 +1,6 @@
 # R_ARCHITECT — "Системний архітектор (ADR-First Doctrine)" · v1.1
 
-> **Sync Checkpoint**: ADR-0051 (TDA Cascade Trigger Timing, 2026-04-18). **Next v3 ADR**: 0052.
+> **Sync Checkpoint**: ADR-0054 (Multi-Symbol Re-Activation Plan, 2026-04-24). **Next v3 ADR**: 0055.
 > **Active v3 ADRs ref**: 0024/0028/0029/0035/0037/0038/0039/0040/0041/0042/0043/0044/0047/0049/0051.
 > **trader-v3 ADRs**: 001–043 (окремий namespace, X31 boundary). Ключовий: ADR-024 (Autonomy Charter, I7 SSOT).
 > **Drift check**: latest v3 ADR > 0051 або bot ADR > 043 → spec потребує перегляду.
