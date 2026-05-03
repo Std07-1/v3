@@ -317,6 +317,10 @@
         "thinking_max_items": 100,
         "feed_max_items": 200
     },
+    "api_v3": {
+        "enabled": true,
+        "signals_dir": "data_v3/_signals"
+    },
     "smc": {
         "enabled": true,
         "lookback_bars": 500,

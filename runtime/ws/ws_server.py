@@ -2007,7 +2007,29 @@ def build_app(
     app.router.add_get("/api/agent/state", _api_agent_state)
     app.router.add_get("/api/agent/feed", _api_agent_feed)
 
-    # в”Ђв”Ђ /api/archi/* вЂ” Archi Console (ADR-025) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── /api/v3/* — Public read-only API (ADR-0058 slice 058.2) ─────────────
+    # Token auth via X-API-Key header against Redis-backed TokenStore.
+    # Off by default — enable via config.json:api_v3.enabled.
+    _api_v3_cfg = (full_cfg or {}).get("api_v3") or {}
+    if bool(_api_v3_cfg.get("enabled", False)):
+        try:
+            from runtime.api_v3.endpoints import register_routes as _register_api_v3
+            from runtime.api_v3.token_store import TokenStore as _TokenStore
+
+            if _agent_redis_client is None:
+                raise RuntimeError("redis_client_unavailable")
+            _signals_dir = str(_api_v3_cfg.get("signals_dir", "data_v3/_signals"))
+            _token_store = _TokenStore(_agent_redis_client, namespace=_agent_ns)
+            _register_api_v3(app, token_store=_token_store, signals_dir=_signals_dir)
+            _log.info(
+                "API_V3_ENABLED: ns=%s signals_dir=%s", _agent_ns, _signals_dir
+            )
+        except Exception as _av3_exc:  # pragma: no cover — surfaced loud
+            _log.warning("API_V3_INIT_FAIL: %s", _av3_exc)
+    else:
+        _log.info("API_V3_DISABLED: set api_v3.enabled=true to mount /api/v3/*")
+
+    # ── /api/archi/* — Archi Console (ADR-025) ─────────────────────────────
     # Private API: Bearer token auth + file reads from bot data dir.
     _console_cfg = load_system_config(resolve_config_path()).get("agent_console", {})
     _console_enabled: bool = bool(_console_cfg.get("enabled", False))
