@@ -132,6 +132,7 @@ external ──HTTPS──► Cloudflare ──► nginx (aione-smc.com)
 **Cache stability contract**: `Live RAM` означає "значення може змінитись між двома fetch'ами в межах секунд — НЕ кешуй >5s". `Persisted (immutable)` означає "можна кешувати aggressive (1h+) для минулих дат". Точні CF page rules — slice 058.3.
 
 **Verified state (2026-05-03)**: journal містить тільки `source=tda_cascade` events (entry + closed pairs, ~2/день). `smc_narrative` події в journal **не пишуться** — narrative живе тільки в SmcRunner RAM, broadcast у WS frame для UI v4 NarrativePanel. Тому розділяємо:
+
 - **`/signals/*`** — historical/persisted (journal-backed)
 - **`/narrative/snapshot`** — live RAM, **немає** `/narrative/latest` from journal до окремого ADR (потребує persistence layer для smc_narrative events)
 
@@ -165,6 +166,7 @@ external ──HTTPS──► Cloudflare ──► nginx (aione-smc.com)
 ```
 
 **Чому це обов'язково**:
+
 1. Journal вже сьогодні mixed-source (`tda_cascade` events, у майбутньому `smc_narrative`); споживач без `kind` field змушений вгадувати тип по presence/absence полів — fragile
 2. `schema_version` дає safe-rollout шлях для breaking field changes (старий бот продовжує читати v3.0, новий бот — v3.1)
 3. `?source=` filter дозволяє фільтрувати на платформі (один прохід по journal) замість на споживачі (zero efficiency win)
@@ -219,6 +221,7 @@ python -m tools.api_v3.issue_token \
 ```
 
 Під капотом:
+
 ```python
 import secrets
 token = "tk_" + secrets.token_bytes(32).hex()  # F-S1-006: cryptographically secure
@@ -235,6 +238,7 @@ redis.setex(f"{ns}:tokens:{token}", ttl_s, json.dumps({
 #### Rotation з grace period (F-S1-001)
 
 **Runbook**:
+
 1. Issue новий токен: `python -m tools.api_v3.issue_token --consumer old_news_bot --ttl-days 90`
 2. Notify consumer (Telegram/email): «Новий токен: `tk_NEW`. Старий працюватиме до `<old_expires + 7d>`.»
 3. Consumer оновлює свою конфігурацію, починає використовувати новий
@@ -256,6 +260,7 @@ redis-cli DEL {ns}:tokens:tk_REVOKED
 #### Renewal (F-S2-003)
 
 TTL default 90 днів. Якщо токен скоро спливе:
+
 - **Option A** (recommended): issue новий токен з grace period (див. вище)
 - **Option B** (operational shortcut): manual extension `redis-cli EXPIRE {ns}:tokens:tk_X {new_ttl_s}`
 
@@ -335,6 +340,7 @@ data_v3/_audit/api_v3_access.jsonl  (append-only, rotate щодня)
 ```
 
 Fields per line:
+
 ```json
 {"ts":"2026-05-03T13:15:11.123Z","consumer":"old_news_bot","endpoint":"/api/v3/signals/latest","method":"GET","status":200,"latency_ms":12,"ip_hash":"sha256_8bytes"}
 ```
@@ -408,12 +414,14 @@ Fields per line:
 ## 7. Implementation Plan (для майбутнього slice після Accepted)
 
 ### Slice 058.1 — FastAPI sidecar skeleton (M0.5)
+
 - `runtime/api_v3/auth_validator.py` — FastAPI app з `/_auth`, `/health`
 - Redis client, token lookup, structured logging
 - supervisord entry, port :8001 (localhost-only bind)
 - Тести: token valid/missing/expired/scope-mismatch
 
 ### Slice 058.2 — Read endpoints
+
 - `GET /api/v3/signals/latest`, `/journal`, `/bias/latest`, `/narrative/snapshot`, `/macro/context`
 - Реалізація як **новий aiohttp router у ws_server** (same-origin first), потім nginx експортує `/api/v3/*` зовні
 - **Tagged union envelope** (§3.2.1): `schema_version`, `kind`, `data`/`items`
@@ -421,17 +429,20 @@ Fields per line:
 - Тести: payload schema parity з internal data, envelope contract, filter correctness
 
 ### Slice 058.3 — nginx auth_request integration
+
 - nginx config: `limit_req_zone`, `auth_request /_auth`, `limit_except GET`, `X-API-Key` map redact
 - VPS deploy + smoke test через CF
 - D9 observation window 60s
 
 ### Slice 058.4 — Token operational tooling
+
 - `tools/api_v3/issue_token.py` — generate + SETEX
 - `tools/api_v3/list_tokens.py` — read-only audit
 - `tools/api_v3/revoke_token.py` — DEL
 - Runbook: `docs/runbooks/api_v3_tokens.md`
 
 ### Slice 058.5 — Compliance review (R_COMPLIANCE)
+
 - OWASP A01/A07/A09 sign-off
 - Disclaimer: read-only data is NOT financial advice
 - Update `SECURITY.md` з новою зовнішньою поверхнею
@@ -470,6 +481,15 @@ Fields per line:
   - ⏸ **F-S3-002 (audit JSONL with IP hash) deferred** — S3 priority, обсяг ~150 LOC окремий slice; current logging вже purpose-fit (token prefix + consumer in `_validate_token`)
   - ✅ **SECURITY.md updated** з новою публічною поверхнею + повна OWASP A01–A10 mitigation table + Public API Disclaimer section
   - **Verdict**: **ACCEPTED** (no conditions remaining for slice 058.5 scope). Public API surface production-grade.
+- **2026-05-04 (Slice 058.6 executed — F-S3-002 audit JSONL closed + cowork consumer onboarding)**: Picked up the deferred S3 item the same day to fully close the OWASP roadmap before handing off to the cowork bot.
+  - ✅ **`audit_middleware` mounted on `/api/v3/*`** ([endpoints.py](../../runtime/api_v3/endpoints.py)): per-request append to `data_v3/_audit/api_v3_access-YYYY-MM-DD.jsonl`. Captured fields: `ts, consumer, ip_hash, method, path, query, status, latency_ms`. Token value is **never** persisted (only the consumer name resolved by the lookup).
+  - ✅ **IP hashing (GDPR-friendly)**: `SHA-256(daily_salt || ip)[:16]`. Daily salt rotation = no cross-day correlation; intra-day grouping preserved for rate-limit forensics. Salt seed configurable via `API_V3_AUDIT_SALT` env var.
+  - ✅ **90-day retention** enforced via `_cleanup_old_audit_files()` swept once on `register_routes()` startup.
+  - ✅ **Fail-soft**: audit write failures only log a warning; never break the API request path.
+  - ✅ **5 new tests** (29/29 total pass): success record shape, 401 anonymous record, token-never-leaks invariant, retention cleanup, opt-out via `audit_dir=None`.
+  - ✅ **SECURITY.md A09 row** (Logging & Monitoring Failures) updated to reference live audit JSONL.
+  - ✅ **Consumer mini-spec** published at [docs/runbooks/cowork_consumer_quickstart.md](../runbooks/cowork_consumer_quickstart.md): base URL, auth, envelope contract, 5 endpoints, rate limits, error codes, X28 obligations, audit trail disclosure.
+  - **Verdict**: **F-S3-002 CLOSED**. ADR-0058 OWASP roadmap fully resolved. Ready for cowork bot integration.
 - **Next**: Slice 058.1 (FastAPI sidecar skeleton) — окрема сесія R_PATCH_MASTER з P-slices ≤150 LOC each.
 
 ---
@@ -507,11 +527,13 @@ Fields per line:
 ### 10.3 Patterns (recommended)
 
 **Pattern A — Direct passthrough** (для Telegram коротких повідомлень):
+
 ```
 fetch /narrative/snapshot → render headline + entry_desc + target_desc → post
 ```
 
 **Pattern B — Wrapper з підсиленням** (для довших аналітичних постів):
+
 ```
 fetch /narrative/snapshot
 + fetch /macro/context
@@ -522,6 +544,7 @@ fetch /narrative/snapshot
 ```
 
 **Pattern C — Aggregation** (weekly recap):
+
 ```
 for date in last_7_days:
   fetch /signals/journal?date=date&source=tda_cascade
@@ -577,6 +600,7 @@ GET /api/v3/narrative/snapshot?symbol=XAUUSD&include_internal=true
 **Default**: `include_internal=false`. Без явного `?include_internal=true` всі fields позначені як `_internal_*` (prefix convention) виключаються з response.
 
 Приклади internal-only fields (на майбутнє, поки не impl у 058.1):
+
 - `_internal_archi_chain_of_thought` — Архі's reasoning (PII-like, sensitive competitive info)
 - `_internal_correlation_id` — debug trace IDs
 - `_internal_runner_state_dump` — SmcRunner internal state для debug

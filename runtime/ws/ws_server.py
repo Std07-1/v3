@@ -2021,9 +2021,21 @@ def build_app(
             if _agent_redis_client is None:
                 raise RuntimeError("redis_client_unavailable")
             _signals_dir = str(_api_v3_cfg.get("signals_dir", "data_v3/_signals"))
+            _audit_dir_cfg = _api_v3_cfg.get("audit_dir", "data_v3/_audit")
+            _audit_dir = str(_audit_dir_cfg) if _audit_dir_cfg else None
             _token_store = _TokenStore(_agent_redis_client, namespace=_agent_ns)
-            _register_api_v3(app, token_store=_token_store, signals_dir=_signals_dir)
-            _log.info("API_V3_ENABLED: ns=%s signals_dir=%s", _agent_ns, _signals_dir)
+            _register_api_v3(
+                app,
+                token_store=_token_store,
+                signals_dir=_signals_dir,
+                audit_dir=_audit_dir,
+            )
+            _log.info(
+                "API_V3_ENABLED: ns=%s signals_dir=%s audit_dir=%s",
+                _agent_ns,
+                _signals_dir,
+                _audit_dir or "DISABLED",
+            )
         except Exception as _av3_exc:  # pragma: no cover — surfaced loud
             _log.warning("API_V3_INIT_FAIL: %s", _av3_exc)
     else:

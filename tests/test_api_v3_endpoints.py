@@ -93,6 +93,13 @@ def signals_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def audit_dir(tmp_path: Path) -> Path:
+    d = tmp_path / "_audit"
+    d.mkdir()
+    return d
+
+
+@pytest.fixture
 def token_store() -> _StubTokenStore:
     return _StubTokenStore({VALID_TOKEN: _StubRecord()})
 
@@ -107,6 +114,7 @@ def _build_app(
     token_store: _StubTokenStore,
     signals_dir: Path,
     smc_runner: _StubSmcRunner,
+    audit_dir: Optional[Path] = None,
     config_symbols: Optional[List[str]] = None,
 ) -> web.Application:
     """Build a minimal aiohttp app with api_v3 routes mounted."""
@@ -119,16 +127,18 @@ def _build_app(
         app,
         token_store=token_store,  # type: ignore[arg-type]
         signals_dir=str(signals_dir),
+        audit_dir=str(audit_dir) if audit_dir is not None else None,
     )
     return app
 
 
 @pytest.fixture
-def app(token_store, signals_dir, smc_runner):
+def app(token_store, signals_dir, smc_runner, audit_dir):
     return _build_app(
         token_store=token_store,
         signals_dir=signals_dir,
         smc_runner=smc_runner,
+        audit_dir=audit_dir,
     )
 
 
@@ -477,3 +487,95 @@ async def test_unknown_v3_path_returns_structured_404(aiohttp_client, app):
     _assert_envelope(body, "error")
     assert body["data"]["code"] == "not_found"
     assert body["data"]["path"] == "/api/v3/does/not/exist"
+
+
+# ────────────────────────────────────────────────────────────
+# F-S3-002 — Audit JSONL with hashed IP and 90d retention
+# ────────────────────────────────────────────────────────────
+
+
+def _audit_lines(audit_dir: Path) -> List[Dict[str, Any]]:
+    """Read every audit record across all per-day files (chronological)."""
+    out: List[Dict[str, Any]] = []
+    for name in sorted(os.listdir(audit_dir)):
+        if not (name.startswith("api_v3_access-") and name.endswith(".jsonl")):
+            continue
+        with open(audit_dir / name, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    out.append(json.loads(line))
+    return out
+
+
+async def test_audit_log_records_successful_request(aiohttp_client, app, audit_dir):
+    client = await aiohttp_client(app)
+    resp = await client.get("/api/v3/macro/context", headers=_auth())
+    assert resp.status == 200
+
+    rows = _audit_lines(audit_dir)
+    assert len(rows) == 1, rows
+    rec = rows[0]
+    assert rec["status"] == 200
+    assert rec["method"] == "GET"
+    assert rec["path"] == "/api/v3/macro/context"
+    assert rec["consumer"] == "old_news_bot"
+    assert isinstance(rec["latency_ms"], int) and rec["latency_ms"] >= 0
+    # IP hash is 16 hex chars and never reveals the literal client address.
+    assert len(rec["ip_hash"]) == 16
+    assert all(c in "0123456789abcdef" for c in rec["ip_hash"])
+    assert "127.0.0.1" not in rec["ip_hash"]
+
+
+async def test_audit_log_records_auth_failure(aiohttp_client, app, audit_dir):
+    client = await aiohttp_client(app)
+    resp = await client.get("/api/v3/macro/context")  # no X-API-Key
+    assert resp.status == 401
+
+    rows = _audit_lines(audit_dir)
+    assert len(rows) == 1
+    rec = rows[0]
+    assert rec["status"] == 401
+    # Anonymous requests must not impersonate a real consumer.
+    assert rec["consumer"] == "anonymous"
+
+
+async def test_audit_log_never_persists_token(aiohttp_client, app, audit_dir):
+    client = await aiohttp_client(app)
+    await client.get("/api/v3/macro/context", headers=_auth())
+
+    raw = (audit_dir / f"api_v3_access-{_today_str()}.jsonl").read_text(
+        encoding="utf-8"
+    )
+    # The 64-hex-char token tail must never appear in any audit row.
+    assert ("a" * 64) not in raw
+    assert "tk_" not in raw
+
+
+def test_audit_cleanup_purges_old_files(audit_dir):
+    # Drop a fake old file outside the retention window.
+    old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+    (audit_dir / f"api_v3_access-{old_date}.jsonl").write_text("{}\n", encoding="utf-8")
+    fresh_date = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%d")
+    (audit_dir / f"api_v3_access-{fresh_date}.jsonl").write_text(
+        "{}\n", encoding="utf-8"
+    )
+
+    purged = ep._cleanup_old_audit_files(str(audit_dir), keep_days=90)
+    assert purged == 1
+    remaining = sorted(os.listdir(audit_dir))
+    assert remaining == [f"api_v3_access-{fresh_date}.jsonl"]
+
+
+def test_audit_disabled_when_audit_dir_none(
+    token_store, signals_dir, smc_runner, tmp_path
+):
+    """Passing audit_dir=None must mount routes without the middleware."""
+    app = _build_app(
+        token_store=token_store,
+        signals_dir=signals_dir,
+        smc_runner=smc_runner,
+        audit_dir=None,
+    )
+    # Middleware list should NOT contain audit_middleware when disabled.
+    assert ep.audit_middleware not in app.middlewares

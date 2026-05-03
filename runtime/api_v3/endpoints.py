@@ -34,12 +34,13 @@ Invariants:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
 from aiohttp import web
 from redis.exceptions import RedisError
@@ -64,6 +65,18 @@ DISCLAIMER = (
 # Public AppKey so ws_server.create_app can stash these dependencies once.
 APP_TOKEN_STORE = web.AppKey("api_v3_token_store", TokenStore)
 APP_SIGNALS_DIR = web.AppKey("api_v3_signals_dir", str)
+APP_AUDIT_DIR = web.AppKey("api_v3_audit_dir", str)
+
+# F-S3-002 (slice 058.5): per-day rotating audit JSONL with hashed IP.
+# 90d retention enforced by a startup cleanup pass in register_routes().
+AUDIT_FILE_PREFIX = "api_v3_access-"
+AUDIT_FILE_SUFFIX = ".jsonl"
+AUDIT_RETENTION_DAYS = 90
+# Daily salt rotation: same IP yields different hashes on different days,
+# so long-term cross-day tracking is impossible while same-day grouping
+# (for rate-limit forensics) is preserved. Operator can override with the
+# API_V3_AUDIT_SALT env var; otherwise a deterministic per-host fallback.
+_AUDIT_SALT_CACHE: Dict[str, str] = {}
 
 
 # ────────────────────────────────────────────────────────────
@@ -476,6 +489,118 @@ async def _handle_v3_not_found(request: web.Request) -> web.Response:
 
 
 # ────────────────────────────────────────────────────────────
+# Audit log (F-S3-002 — append-only JSONL with hashed IP, 90d retention)
+# ────────────────────────────────────────────────────────────
+
+
+def _audit_salt_for(date_str: str) -> str:
+    """Return the per-day salt used when hashing client IPs.
+
+    Cached per-process so the cost is amortised. Daily rotation prevents
+    cross-day correlation of the same IP while keeping intra-day grouping
+    intact for rate-limit / abuse forensics.
+    """
+    cached = _AUDIT_SALT_CACHE.get(date_str)
+    if cached is not None:
+        return cached
+    seed = os.environ.get("API_V3_AUDIT_SALT", "v3-audit-default-salt")
+    salt = hashlib.sha256(f"{seed}:{date_str}".encode("utf-8")).hexdigest()[:32]
+    _AUDIT_SALT_CACHE[date_str] = salt
+    return salt
+
+
+def _ip_hash(ip: str, date_str: str) -> str:
+    """SHA-256(salt || ip), truncated to 16 hex chars (~64-bit collision space)."""
+    salt = _audit_salt_for(date_str)
+    return hashlib.sha256(f"{salt}:{ip}".encode("utf-8")).hexdigest()[:16]
+
+
+def _client_ip(request: web.Request) -> str:
+    """Resolve consumer IP through the nginx → loopback hop.
+
+    nginx sets `X-Forwarded-For` (CF-edge IP, possibly comma-list); we take
+    the first hop which is what Cloudflare exposes. Falls back to the raw
+    socket peer when the header is missing (e.g. local pytest client).
+    """
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        return xff.split(",", 1)[0].strip()
+    return request.remote or "unknown"
+
+
+def _audit_path(base_dir: str, date_str: str) -> str:
+    return os.path.join(base_dir, f"{AUDIT_FILE_PREFIX}{date_str}{AUDIT_FILE_SUFFIX}")
+
+
+def _audit_write(base_dir: str, record: Dict[str, Any]) -> None:
+    """Append one JSON record. Fail-soft (logs only) so audit never breaks API."""
+    date_str = record["ts"][:10]  # "YYYY-MM-DDT…" → "YYYY-MM-DD"
+    path = _audit_path(base_dir, date_str)
+    line = json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n"
+    try:
+        os.makedirs(base_dir, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line)
+    except OSError as exc:
+        log.warning("api_v3_audit_write_err path=%s err=%s", path, exc)
+
+
+def _cleanup_old_audit_files(base_dir: str, keep_days: int = AUDIT_RETENTION_DAYS) -> int:
+    """Delete audit files older than `keep_days`. Returns count purged."""
+    if not os.path.isdir(base_dir):
+        return 0
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).strftime("%Y-%m-%d")
+    purged = 0
+    for name in os.listdir(base_dir):
+        if not (name.startswith(AUDIT_FILE_PREFIX) and name.endswith(AUDIT_FILE_SUFFIX)):
+            continue
+        date_part = name[len(AUDIT_FILE_PREFIX) : -len(AUDIT_FILE_SUFFIX)]
+        if date_part < cutoff:
+            try:
+                os.remove(os.path.join(base_dir, name))
+                purged += 1
+            except OSError as exc:
+                log.warning("api_v3_audit_purge_err name=%s err=%s", name, exc)
+    if purged:
+        log.info("api_v3_audit_purged count=%d cutoff=%s", purged, cutoff)
+    return purged
+
+
+@web.middleware
+async def audit_middleware(
+    request: web.Request,
+    handler: Callable[[web.Request], Awaitable[web.StreamResponse]],
+) -> web.StreamResponse:
+    """Append one JSONL line per `/api/v3/*` request after the handler runs.
+
+    Captured fields: ts, consumer (resolved by handler before us), ip_hash,
+    method, path, query (sanitized), status, latency_ms. The X-API-Key value
+    itself is NEVER persisted — only the consumer name from the lookup.
+    """
+    if not request.path.startswith("/api/v3/"):
+        return await handler(request)
+    base_dir: Optional[str] = request.app.get(APP_AUDIT_DIR)
+    t0 = time.monotonic()
+    response = await handler(request)
+    if not base_dir:
+        return response
+    now = datetime.now(timezone.utc)
+    date_str = now.strftime("%Y-%m-%d")
+    record = {
+        "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "consumer": request.get("api_consumer") or "anonymous",
+        "ip_hash": _ip_hash(_client_ip(request), date_str),
+        "method": request.method,
+        "path": request.path,
+        "query": dict(request.query),
+        "status": response.status,
+        "latency_ms": int((time.monotonic() - t0) * 1000),
+    }
+    _audit_write(base_dir, record)
+    return response
+
+
+# ────────────────────────────────────────────────────────────
 # Wiring helpers (called from ws_server.create_app)
 # ────────────────────────────────────────────────────────────
 
@@ -507,14 +632,27 @@ def register_routes(
     *,
     token_store: TokenStore,
     signals_dir: str = "data_v3/_signals",
+    audit_dir: Optional[str] = "data_v3/_audit",
 ) -> None:
     """Mount the five `/api/v3/*` endpoints on `app`.
 
     Idempotent at module level: a second call would shadow the AppKeys, so the
     caller (ws_server.create_app) MUST only invoke it once during startup.
+
+    `audit_dir` controls F-S3-002 audit JSONL output; pass `None` to disable
+    (e.g. for unit tests that don't care about the audit trail).
     """
     app[APP_TOKEN_STORE] = token_store
     app[APP_SIGNALS_DIR] = signals_dir
+    if audit_dir:
+        app[APP_AUDIT_DIR] = audit_dir
+        # Best-effort retention sweep at startup. Failures are logged inside.
+        try:
+            _cleanup_old_audit_files(audit_dir)
+        except OSError as exc:
+            log.warning("api_v3_audit_cleanup_err dir=%s err=%s", audit_dir, exc)
+        # Middleware fires only for /api/v3/* — see audit_middleware body.
+        app.middlewares.append(audit_middleware)
     app.router.add_get("/api/v3/signals/latest", _handle_signals_latest)
     app.router.add_get("/api/v3/signals/journal", _handle_signals_journal)
     app.router.add_get("/api/v3/bias/latest", _handle_bias_latest)
@@ -524,6 +662,7 @@ def register_routes(
     # (F-S2-004) instead of aiohttp's plain text default.
     app.router.add_route("*", "/api/v3/{tail:.*}", _handle_v3_not_found)
     log.info(
-        "api_v3_routes_registered signals_dir=%s endpoints=5",
+        "api_v3_routes_registered signals_dir=%s audit_dir=%s endpoints=5",
         signals_dir,
+        audit_dir or "DISABLED",
     )
