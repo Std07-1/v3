@@ -30,7 +30,9 @@ def generate_token() -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Issue a new API token (ADR-0058)")
-    parser.add_argument("--consumer", required=True, help="Consumer identifier (free-form)")
+    parser.add_argument(
+        "--consumer", required=True, help="Consumer identifier (free-form)"
+    )
     parser.add_argument(
         "--scope",
         default="read",

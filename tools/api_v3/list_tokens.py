@@ -37,7 +37,11 @@ def parse_record(client, key: str) -> dict | None:
     ttl_s = client.ttl(key)
     payload = parse_redis_json(raw)
     if raw is not None and payload is None:
-        return {"key_prefix": key.rsplit(":", 1)[-1][:11], "error": "malformed_json", "ttl_s": ttl_s}
+        return {
+            "key_prefix": key.rsplit(":", 1)[-1][:11],
+            "error": "malformed_json",
+            "ttl_s": ttl_s,
+        }
     if payload is None:
         return None
     token = key.rsplit(":", 1)[-1]
@@ -53,7 +57,9 @@ def parse_record(client, key: str) -> dict | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="List API tokens (ADR-0058)")
-    parser.add_argument("--json", action="store_true", help="JSONL output instead of table")
+    parser.add_argument(
+        "--json", action="store_true", help="JSONL output instead of table"
+    )
     args = parser.parse_args(argv)
 
     client, namespace = get_redis()

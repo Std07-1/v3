@@ -24,10 +24,11 @@ def redis_mock() -> Iterator[MagicMock]:
     client = MagicMock()
     client.scan.return_value = (0, [])
     fake = (client, "test_ns")
-    with patch.object(issue_token, "get_redis", return_value=fake), patch.object(
-        list_tokens, "get_redis", return_value=fake
-    ), patch.object(revoke_token, "get_redis", return_value=fake), patch.object(
-        extend_token, "get_redis", return_value=fake
+    with (
+        patch.object(issue_token, "get_redis", return_value=fake),
+        patch.object(list_tokens, "get_redis", return_value=fake),
+        patch.object(revoke_token, "get_redis", return_value=fake),
+        patch.object(extend_token, "get_redis", return_value=fake),
     ):
         yield client
 
@@ -87,7 +88,9 @@ class TestListTokens:
             [token_redis_key("test_ns", token_a), token_redis_key("test_ns", token_b)],
         )
         redis_mock.get.side_effect = [
-            json.dumps({"consumer": "alice", "scope": "read", "expires": "2026-08-01Z"}),
+            json.dumps(
+                {"consumer": "alice", "scope": "read", "expires": "2026-08-01Z"}
+            ),
             json.dumps({"consumer": "bob", "scope": "read", "expires": "2026-09-01Z"}),
         ]
         redis_mock.ttl.side_effect = [86400 * 30, 86400 * 60]

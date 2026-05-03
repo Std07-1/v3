@@ -22,9 +22,13 @@ from tools.api_v3._common import get_redis, parse_redis_json
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Extend API token TTL (ADR-0058 Option B)")
+    parser = argparse.ArgumentParser(
+        description="Extend API token TTL (ADR-0058 Option B)"
+    )
     parser.add_argument("--token", required=True, help="Token to extend")
-    parser.add_argument("--days", type=int, required=True, help="New TTL in days from now (1..365)")
+    parser.add_argument(
+        "--days", type=int, required=True, help="New TTL in days from now (1..365)"
+    )
     args = parser.parse_args(argv)
 
     if not 1 <= args.days <= 365:
@@ -42,11 +46,16 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     payload = parse_redis_json(raw)
     if payload is None:
-        print(f"ERROR: existing record has malformed JSON; refuse to overwrite", file=sys.stderr)
+        print(
+            f"ERROR: existing record has malformed JSON; refuse to overwrite",
+            file=sys.stderr,
+        )
         return 1
 
     new_expires = datetime.now(timezone.utc) + timedelta(days=args.days)
-    payload["expires"] = new_expires.isoformat(timespec="seconds").replace("+00:00", "Z")
+    payload["expires"] = new_expires.isoformat(timespec="seconds").replace(
+        "+00:00", "Z"
+    )
     ttl_s = args.days * 86400
     # SETEX rewrites both value (with new expires field) AND TTL atomically.
     client.setex(key, ttl_s, json.dumps(payload))
