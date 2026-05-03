@@ -1,6 +1,6 @@
 # ADR-0058: Public Read-Only API + Token Auth для External Consumers
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-05-03, post Compliance review — 0 S0, 8 S1 amendments applied, 5 S2 amendments applied)
 - **Date**: 2026-05-03
 - **Author**: Стас
 - **Initiative**: `public_api_v1`
@@ -11,8 +11,8 @@
 
 ## Quality Axes
 
-- **Ambition target**: R2 — нова зовнішня поверхня з security review, доку-only proposal стадія; реалізація в наступному slice після Accepted
-- **Maturity impact**: M3 → M4 — вводить перший формальний auth-layer на платформі (раніше всі API були same-origin тільки)
+- **Ambition target**: R2.5 — нова зовнішня поверхня з повним Compliance/OWASP API Top 10 (2023) sign-off; пост-amendments hardened proposal готовий до 058.1 implementation
+- **Maturity impact**: M3 → M4 — вводить перший формальний auth-layer на платформі (раніше всі API були same-origin тільки) + grace period rotation + per-IP defense-in-depth + CORS lock + TLS bypass guard
 
 ---
 
@@ -117,13 +117,19 @@ external ──HTTPS──► Cloudflare ──► nginx (aione-smc.com)
 
 ### 3.2 Endpoints (read-only, version-prefixed)
 
-| Endpoint | Що повертає | Джерело | Lifecycle |
-|---|---|---|---|
-| `GET /api/v3/signals/latest?limit=N&source=tda_cascade\|smc_narrative\|all` | Останні N events з journal | `data_v3/_signals/journal-*.jsonl` tail | Persisted (TDA only зараз; smc_narrative — майбутнє розширення) |
-| `GET /api/v3/signals/journal?date=YYYY-MM-DD&symbol=...&source=...` | Повний journal за дату | Файлова система | Persisted |
-| `GET /api/v3/bias/latest` | Поточний `bias_map` (всі TF) | SmcRunner snapshot | **Live RAM** (no history) |
-| `GET /api/v3/narrative/snapshot?symbol=XAUUSD` | Поточний `NarrativeBlock` (live) — headline, scenario, entry/target/invalidation, archi_thesis (якщо Архі онлайн) | SmcRunner snapshot + narrative_enricher | **Live RAM** (no history; tick ~2s) |
-| `GET /api/v3/macro/context` | TDA `tda_state.json` snapshot | Файлова система | Persisted |
+| Endpoint | Що повертає | Джерело | Lifecycle | Cache hint |
+|---|---|---|---|---|
+| `GET /api/v3/signals/latest?limit=N&source=tda_cascade\|smc_narrative\|all` | Останні N events з journal | `data_v3/_signals/journal-*.jsonl` tail | Persisted (TDA only зараз; smc_narrative — майбутнє розширення) | Polite ≤30s (new entries rare, ~2/day) |
+| `GET /api/v3/signals/journal?date=YYYY-MM-DD&symbol=...&source=...` | Повний journal за дату | Файлова система | Persisted (immutable після кінця дня) | Aggressive (immutable past dates: 1h+) |
+| `GET /api/v3/bias/latest` | Поточний `bias_map` (всі TF) | SmcRunner snapshot | **Live RAM** (no history) | Polite ≤5s |
+| `GET /api/v3/narrative/snapshot?symbol=XAUUSD` | Поточний `NarrativeBlock` (live) — headline, scenario, entry/target/invalidation, archi_thesis (якщо Архі онлайн) | SmcRunner snapshot + narrative_enricher | **Live RAM** (no history; tick ~2s) | Polite ≤5s (do NOT cache >5s) |
+| `GET /api/v3/macro/context` | TDA `tda_state.json` snapshot | Файлова система | Persisted (rewritten ~1/day) | Polite ≤60s |
+
+**Pagination cap (F-S1-003)**: для list endpoints `?limit` має hard maximum **100**. `?limit > 100` → `400 Bad Request` з body `{kind:"error", data:{code:"limit_exceeded", max:100, requested:N}}`. Default `?limit=10`.
+
+**Historical scraping limit (F-S2-002)**: `/signals/journal?date=X` приймає `X` тільки в межах **останніх 90 днів** від today. `?date < (today - 90d)` → `400 Bad Request` з `{kind:"error", data:{code:"date_too_old", max_back_days:90}}`. Захист від full-history scraping (disk I/O DDoS vector).
+
+**Cache stability contract**: `Live RAM` означає "значення може змінитись між двома fetch'ами в межах секунд — НЕ кешуй >5s". `Persisted (immutable)` означає "можна кешувати aggressive (1h+) для минулих дат". Точні CF page rules — slice 058.3.
 
 **Verified state (2026-05-03)**: journal містить тільки `source=tda_cascade` events (entry + closed pairs, ~2/день). `smc_narrative` події в journal **не пишуться** — narrative живе тільки в SmcRunner RAM, broadcast у WS frame для UI v4 NarrativePanel. Тому розділяємо:
 - **`/signals/*`** — historical/persisted (journal-backed)
@@ -185,28 +191,157 @@ X-API-Key: tk_abc123...
 5. If scope mismatch → 403
 ```
 
+### 3.3.1 Token scope semantics (F-S1-007)
+
+`scope` field у Redis token JSON визначає що саме токен дозволяє:
+
+| Scope value | Семантика | Use case |
+|---|---|---|
+| `"read"` | Усі публічні `/api/v3/*` GET endpoints, всі symbols (XAU/USD, XAG/USD, BTCUSDT, ETHUSDT) | Default для всіх consumers сьогодні (одна tenant, single owner) |
+| `"read:XAU/USD"` | (FUTURE, не impl у 058.1) Тільки endpoints з `?symbol=XAU/USD` або symbol-agnostic (`/macro/context`) | Multi-tenant scenarios, per-symbol tokens для third-party publishers |
+| `"read:no-narrative"` | (FUTURE) Все крім `/narrative/snapshot` (якщо narrative містить competitive/sensitive info) | Restricted external integrations |
+
+Для slice 058.1 implementовано **тільки `"read"`**. Інші scope values reserved — FastAPI повертає `403 forbidden_scope` якщо токен має невідомий scope (fail-closed). Розширення scope vocabulary = новий ADR amendment.
+
+**Principle of least privilege**: коли з'явиться other-tenant publisher — видати йому token зі вузьким scope, не дефолтним `"read"`.
+
 ### 3.4 Token lifecycle
 
-- Створення: manual `redis-cli SETEX {ns}:tokens:tk_NEW {ttl_s} '{...}'`
-- Rotation: видати новий токен, дати споживачу час перейти, видалити старий
-- Revocation: `DEL {ns}:tokens:tk_REVOKED`
-- TTL: default 90 днів, renewable
-- Token format: `tk_` + 32 random bytes hex
+#### Створення
 
-### 3.5 Rate limiting
+```bash
+# slice 058.4 tooling
+python -m tools.api_v3.issue_token \
+    --consumer old_news_bot \
+    --scope read \
+    --ttl-days 90
+# виводить tk_<64 hex chars>
+```
+
+Під капотом:
+```python
+import secrets
+token = "tk_" + secrets.token_bytes(32).hex()  # F-S1-006: cryptographically secure
+redis.setex(f"{ns}:tokens:{token}", ttl_s, json.dumps({
+    "scope": "read",
+    "consumer": "old_news_bot",
+    "created": iso_ts,
+    "expires": iso_ts_plus_ttl,
+}))
+```
+
+**Token format**: `tk_` префікс + **32 bytes** (256 біт) ентропії з `secrets.token_bytes()` (Python stdlib cryptographic source) → 64 hex chars. Загальна довжина 67 символів. Не використовувати `random.randbytes()` (не cryptographic).
+
+#### Rotation з grace period (F-S1-001)
+
+**Runbook**:
+1. Issue новий токен: `python -m tools.api_v3.issue_token --consumer old_news_bot --ttl-days 90`
+2. Notify consumer (Telegram/email): «Новий токен: `tk_NEW`. Старий працюватиме до `<old_expires + 7d>`.»
+3. Consumer оновлює свою конфігурацію, починає використовувати новий
+4. **Grace period: 7 днів** — обидва токени активні
+5. Verify: `python -m tools.api_v3.list_tokens` показує `last_used_at` для обох; новий має recent activity, старий — silent
+6. Після grace period: `redis-cli DEL {ns}:tokens:tk_OLD`
+7. Verify: 24h без 401 у `data_v3/_audit/api_v3_access.jsonl` для consumer
+
+**Чому 7 днів**: Cowork scheduled task = cron-стиль, може deploy редко. 7 днів покриває weekend-only deployments + 2-3 дні reaction window.
+
+#### Revocation (instant)
+
+```bash
+redis-cli DEL {ns}:tokens:tk_REVOKED
+```
+
+→ наступний request с цим токеном дає 401 одразу (FastAPI sidecar не кешує — Redis lookup per-request).
+
+#### Renewal (F-S2-003)
+
+TTL default 90 днів. Якщо токен скоро спливе:
+- **Option A** (recommended): issue новий токен з grace period (див. вище)
+- **Option B** (operational shortcut): manual extension `redis-cli EXPIRE {ns}:tokens:tk_X {new_ttl_s}`
+
+Option B можна використовувати тільки якщо consumer identity verified out-of-band (Telegram message від owner). Tooling: `python -m tools.api_v3.extend_token --token tk_X --days 90`.
+
+### 3.5 Rate limiting + transport hardening
+
+#### Per-token rate limit (primary)
 
 ```nginx
-limit_req_zone $http_x_api_key zone=api_v3:10m rate=60r/m;
+limit_req_zone $http_x_api_key zone=api_v3_tok:10m rate=60r/m;
 
 location /api/v3/ {
-    limit_req zone=api_v3 burst=10 nodelay;
-    auth_request /_auth;
+    limit_req zone=api_v3_tok burst=10 nodelay;
     ...
 }
 ```
 
-- 60 req/min per token, burst 10
-- Hit → 429 + `Retry-After`
+- 60 req/min per token, burst 10 → hit → 429 + `Retry-After`
+
+#### Per-IP rate limit (defense-in-depth, F-S1-002)
+
+```nginx
+limit_req_zone $binary_remote_addr zone=api_v3_ip:10m rate=120r/m;
+
+location /api/v3/ {
+    limit_req zone=api_v3_tok burst=10 nodelay;
+    limit_req zone=api_v3_ip burst=20 nodelay;
+    ...
+}
+```
+
+- 120 req/min per IP — **2× per-token rate** щоб legitimate multi-IP consumer (CF edge diversity, NAT) не страждав, але блокувати single-source spam якщо токен витік
+- Обидва limiti спрацьовують незалежно — спам з одного IP блокується навіть з валідним токеном
+
+#### CORS lock (F-S1-004)
+
+```nginx
+location /api/v3/ {
+    # API server-to-server only, NOT browser fetch
+    add_header Access-Control-Allow-Origin "" always;
+    add_header Access-Control-Allow-Methods "GET" always;
+    # Preflight OPTIONS → 405 (only GET allowed)
+    ...
+}
+```
+
+Явно empty `Allow-Origin` — browser fetch з malicious site не зможе прочитати response. API призначений для server-side fetch (cron, scheduled task, server agent), не для front-end JavaScript.
+
+#### TLS bypass guard (F-S1-005)
+
+Cloudflare termination → origin VPS на `:80`. Якщо атакуючий знайде direct VPS IP і зробить HTTP request bypassing CF — токен у headers буде передано в clear text.
+
+```nginx
+server {
+    listen 80;
+    server_name aione-smc.com;
+
+    # F-S1-005: enforce HTTPS навіть при CF bypass
+    if ($http_x_forwarded_proto != "https") {
+        return 301 https://$host$request_uri;
+    }
+    ...
+}
+```
+
+`$http_x_forwarded_proto` встановлюється CF як `https` при коректному flow. Direct VPS hit без CF не матиме цього header → redirect на HTTPS змусить TLS handshake (origin server має валідний cert або Let's Encrypt).
+
+**Альтернатива** (якщо origin cert не налаштований): Cloudflare Authenticated Origin Pulls (mTLS між CF і origin) — але це окрема ops робота, defer до slice 058.3.
+
+#### Audit JSONL (F-S3-002 → resolved тут)
+
+FastAPI middleware пише per-request:
+
+```
+data_v3/_audit/api_v3_access.jsonl  (append-only, rotate щодня)
+```
+
+Fields per line:
+```json
+{"ts":"2026-05-03T13:15:11.123Z","consumer":"old_news_bot","endpoint":"/api/v3/signals/latest","method":"GET","status":200,"latency_ms":12,"ip_hash":"sha256_8bytes"}
+```
+
+- **IP hash** замість raw IP (F-S3-003 GDPR mitigation): `sha256(ip + daily_salt)[:16]` — анонімізація з можливістю correlate within day без зберігання PII
+- **Retention**: 90 днів (rotate `gzip` після 7 днів, delete після 90)
+- **Token redaction**: `X-API-Key` ніколи не пишеться, тільки `consumer` field з token JSON
 
 ---
 
@@ -218,9 +353,17 @@ location /api/v3/ {
 | **I5 degraded-but-loud** | Rate-limit hit → nginx access log + Prometheus counter `api_v3_rate_limit_hits_total`; auth fail → FastAPI structured log + counter; жодного silent drop |
 | **F4 no silent fallback** | FastAPI Redis-down → 503 + log, **не** fallback на "allow all"; nginx `auth_request` fail-closed |
 | **X1 Compliance — secrets** | Tokens живуть тільки в Redis (TTL); не логуються; access log редактує `X-API-Key` через `map` directive (`'tk_***'`) |
-| **OWASP A01 (Broken Access)** | auth_request обов'язковий на всіх `/api/v3/*` locations |
-| **OWASP A07 (ID/Auth Failures)** | Redis token store з TTL, без in-memory cache в nginx (avoid stale-after-revoke) |
-| **OWASP A09 (Logging)** | Structured logs у FastAPI (consumer, endpoint, status); nginx redact для `X-API-Key`; Prometheus counters |
+| **OWASP A01 (Broken Access)** | auth_request обов'язковий на всіх `/api/v3/*` locations; scope check у FastAPI (§3.3.1); невідомий scope → 403 fail-closed |
+| **OWASP A02 (Auth)** | Token entropy = `secrets.token_bytes(32)` (cryptographic source); grace period 7d на rotation (§3.4); revocation = instant Redis DEL |
+| **OWASP A03 (Property-level)** | `?include_internal=false` за замовчуванням (§10.6); sensitive fields opt-in only |
+| **OWASP A04 (Resource Consumption)** | Pagination cap `max_limit=100` (§3.2); historical date limit 90 днів (§3.2); response size cap 1MB (нижче); per-IP rate limit 120 req/min (§3.5) |
+| **OWASP A05 (Function-level)** | nginx `limit_except GET { deny all; }` зашиває read-only у конфіг; FastAPI не має POST/PUT/DELETE handlers взагалі |
+| **OWASP A07 (ID/Auth Failures)** | Redis token store з TTL, без in-memory cache в nginx (avoid stale-after-revoke); TLS enforcement redirect (§3.5) проти CF bypass |
+| **OWASP A08 (Misconfig)** | Empty CORS (§3.5) проти browser fetch; FastAPI catch-all 404 handler (нижче); structured error responses замість 500 stack traces |
+| **OWASP A09 (Logging)** | Structured logs у FastAPI (consumer, endpoint, status); nginx redact для `X-API-Key`; Prometheus counters; audit JSONL (§3.5) з IP hash |
+| **F-S1-008 Symbol validation** | FastAPI Query param `symbol: str = Query(...)` має validator: `if symbol not in config["symbols"]: raise HTTPException(400, {"code": "invalid_symbol", "allowed": config["symbols"]})`. Запобігає probing `?symbol=../etc/passwd` або injection через невідомі symbol values. |
+| **F-S2-001 Response size cap** | nginx `client_max_body_size 1m;` для `/api/v3/` (request side); FastAPI middleware рахує response bytes — якщо >1MB → 413 + `{code:"response_too_large", hint:"use pagination"}`. Захист від unbounded `/signals/journal?date=X` для дуже активних днів. |
+| **F-S2-004 404 catch-all** | FastAPI має `@app.exception_handler(404)` що повертає structured JSON `{schema_version:"v3.0", kind:"error", data:{code:"not_found", path:request.url.path, message:"Endpoint not found"}}`. Запобігає 500-стек-трейс leak для typo paths типу `/api/v3/signal/latest` (single `signal` без `s`). |
 
 ---
 
@@ -297,10 +440,12 @@ location /api/v3/ {
 
 ## 8. Open Questions
 
-1. **Чи нам треба per-IP rate limit окрім per-token?** (defense-in-depth проти token leak) → recommend yes
-2. **Чи писати access events в `data_v3/_audit/api_v3_access.jsonl` для self-monitoring?** → recommend yes, append-only JSONL
-3. **CF page rule для cache control** — деякі endpoints (`/macro/context`) можуть кешуватись 60s, інші (`/signals/latest`) — no-cache. Уточнити при 058.3
-4. **TLS mutual fingerprint** як додатковий рівень? → defer, тільки якщо OWASP review вимагатиме
+1. ~~**Per-IP rate limit окрім per-token?**~~ → **RESOLVED** (F-S1-002, §3.5): yes, 120 req/min per IP як defense-in-depth
+2. ~~**Audit events в `data_v3/_audit/api_v3_access.jsonl`?**~~ → **RESOLVED** (§3.5): yes, append-only JSONL з IP hash, 90d retention
+3. **CF page rule для cache control** — згідно §3.2 cache hints (Polite ≤5s/≤30s/≤60s, Aggressive 1h+ для immutable past). Точна CF page rule конфігурація → slice 058.3 task
+4. ~~**TLS mutual fingerprint**?~~ → **DEFERRED** (S3): F-S1-005 TLS bypass redirect покриває baseline; mTLS до origin (CF Authenticated Origin Pulls) — окрема ops робота якщо/коли direct-VPS-IP threat актуалізується
+5. **API deprecation path для v3 → v4** (F-S3-001): коли з'явиться v4 — `/api/v3/*` живе ще 6 місяців paralel, потім → `410 Gone` з header `X-Deprecated-Version: v3, Sunset: YYYY-MM-DD`. Деталі — окремий ADR коли v4 буде на горизонті.
+6. **Token runtime path для Cowork consumer** (operational, поза цим ADR): env-injected? per-task secret store? plain `.env` mode 600? — рішення оператора Cowork, не платформи. Consumer-side mini-spec буде підготовлений коли path вибрано.
 
 ---
 
@@ -308,7 +453,14 @@ location /api/v3/ {
 
 - **2026-05-03**: Стас затвердив path B (HTTP proxy + auth) як відповідь на питання про канал доставки даних старому новинному боту під час hibernation Архі. Quote: «так, якщо потрібен шлях B (HTTP proxy), то так, - ADR, Auth та інше, все що потрібно».
 - **2026-05-03 (amendment)**: Додано §3.2.1 (tagged union envelope) + `?source=` filter + split `/narrative/snapshot` vs `/signals/latest` (verified: journal містить тільки `tda_cascade`, smc_narrative живе в SmcRunner RAM). Додано §10 (Consumer Invariants — X28 enforcement). Залишається v1, не v2.
-- **Next**: Compliance/OWASP review → Accepted → Slice 058.1
+- **2026-05-03 (Compliance pass — R_COMPLIANCE)**: OWASP API Top 10 (2023) review завершено. Verdict: **ACCEPTED-WITH-CONDITIONS** (0 S0, 8 S1, 5 S2, 3 S3 findings). Усі 8 S1 + 5 S2 amendments застосовано в одному проході (R_PATCH_MASTER):
+  - **S1**: grace period 7d (§3.4), per-IP rate limit 120 r/m (§3.5), pagination cap max=100 (§3.2), CORS empty (§3.5), TLS bypass redirect (§3.5), `secrets.token_bytes(32)` entropy (§3.4), token scope semantics (§3.3.1 new), symbol validation (§4)
+  - **S2**: response size cap 1MB (§4), historical journal limit 90d (§3.2), token renewal process (§3.4), FastAPI 404 catch-all (§4), sensitive field redaction (§10.6 new)
+  - **S3**: API deprecation path (§8 Open Q5 new), audit JSONL resolved (§3.5), GDPR IP hash (§3.5)
+  - License audit clean: FastAPI MIT, uvicorn BSD-3, redis-py MIT, aiohttp Apache-2.0; `pip-audit` run required перед slice 058.1 install
+  - Token format: custom `tk_{64 hex}` (NOT JWT) — менше CVE surface (no algorithm confusion)
+- **2026-05-03 Status**: Proposed → **Accepted**. Готовий до slice 058.1 (FastAPI sidecar implementation) без додаткових doc rounds.
+- **Next**: Slice 058.1 (FastAPI sidecar skeleton) — окрема сесія R_PATCH_MASTER з P-slices ≤150 LOC each.
 
 ---
 
@@ -387,11 +539,36 @@ for key in ("entry_price", "stop_loss", "take_profit", "grade"):
 
 ### 10.5 Cohabitation з Архі (future)
 
-Коли Архі прокинеться (post 2026-06-01 monthly reset):
+**Важливо**: Cowork consumer працює **незалежно** від стану Архі. `/api/v3/*` доступний 24/7, hibernation Архі не впливає на доступність даних системи. Архі — додатковий шар, не передумова.
 
-- `/narrative/snapshot` автоматично почне повертати `archi_thesis` field (через існуючий [runtime/smc/narrative_enricher.py](../../runtime/smc/narrative_enricher.py))
+Коли Архі онлайн (post 2026-06-01 monthly reset або вручну):
+
+- `/narrative/snapshot` автоматично почне повертати **додаткове поле** `archi_thesis` (через існуючий [runtime/smc/narrative_enricher.py](../../runtime/smc/narrative_enricher.py))
 - Bot-consumer **повинен** показувати Архі-тезу окремим блоком ("🤖 Архі вважає: ...")
 - Якщо Архі-теза суперечить системному `bias` — показати **обидва** як adversarial views, не вибирати "правильний"
 - Це healthy adversarial loop: система vs Архі → publication показує обидва → traders judge → over time accumulate accuracy stats per source
 
-**Інваріант**: bot ніколи не "вирішує" хто правий (це робить ринок). Bot = transparent reporter, не arbiter.
+Коли Архі офлайн:
+
+- `/narrative/snapshot` повертає той самий envelope **без** `archi_thesis` field (або з `archi_thesis: null`)
+- Bot-consumer публікує тільки системний deterministic naratив
+- Це baseline режим — повноцінний publishing шар без залежності від Архі
+
+**Інваріант**: bot ніколи не "вирішує" хто правий (це робить ринок). Bot = transparent reporter, не arbiter. Cowork consumer = first-class citizen, не fallback.
+
+### 10.6 Sensitive field redaction (F-S2-005)
+
+Деякі future fields у responses можуть містити internal-only reasoning (Архі's chain-of-thought, debug traces, internal correlation IDs). Для opt-in доступу:
+
+```http
+GET /api/v3/narrative/snapshot?symbol=XAUUSD&include_internal=true
+```
+
+**Default**: `include_internal=false`. Без явного `?include_internal=true` всі fields позначені як `_internal_*` (prefix convention) виключаються з response.
+
+Приклади internal-only fields (на майбутнє, поки не impl у 058.1):
+- `_internal_archi_chain_of_thought` — Архі's reasoning (PII-like, sensitive competitive info)
+- `_internal_correlation_id` — debug trace IDs
+- `_internal_runner_state_dump` — SmcRunner internal state для debug
+
+**Сьогодні** (slice 058.1 baseline): жодних `_internal_*` fields у response — все public-safe. Цей розділ — forward-compatibility hook щоб коли такі поля з'являться, contract вже визначений і consumer не зламається.
