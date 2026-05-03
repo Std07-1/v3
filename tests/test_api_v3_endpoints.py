@@ -29,6 +29,7 @@ pytestmark = pytest.mark.asyncio
 # Stubs
 # ────────────────────────────────────────────────────────────
 
+
 class _StubTokenStore:
     """Drop-in replacement for runtime.api_v3.token_store.TokenStore."""
 
@@ -135,7 +136,9 @@ def _today_str() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
-def _write_journal(signals_dir: Path, date_str: str, records: List[Dict[str, Any]]) -> None:
+def _write_journal(
+    signals_dir: Path, date_str: str, records: List[Dict[str, Any]]
+) -> None:
     path = signals_dir / f"journal-{date_str}.jsonl"
     with open(path, "w", encoding="utf-8") as fh:
         for rec in records:
@@ -150,6 +153,7 @@ def _auth() -> Dict[str, str]:
 # Envelope shape
 # ────────────────────────────────────────────────────────────
 
+
 def _assert_envelope(body: Dict[str, Any], expected_kind: str) -> None:
     assert body["schema_version"] == "v3.0", body
     assert body["kind"] == expected_kind, body
@@ -159,6 +163,7 @@ def _assert_envelope(body: Dict[str, Any], expected_kind: str) -> None:
 # ────────────────────────────────────────────────────────────
 # Auth tests
 # ────────────────────────────────────────────────────────────
+
 
 async def test_missing_api_key_returns_401(aiohttp_client, app):
     client = await aiohttp_client(app)
@@ -179,7 +184,9 @@ async def test_invalid_api_key_returns_401(aiohttp_client, app):
     assert body["data"]["code"] == "invalid_api_key"
 
 
-async def test_redis_error_returns_503(token_store, signals_dir, smc_runner, aiohttp_client):
+async def test_redis_error_returns_503(
+    token_store, signals_dir, smc_runner, aiohttp_client
+):
     token_store.raise_on_lookup = RedisError("boom")
     app = _build_app(
         token_store=token_store, signals_dir=signals_dir, smc_runner=smc_runner
@@ -195,6 +202,7 @@ async def test_redis_error_returns_503(token_store, signals_dir, smc_runner, aio
 # /api/v3/signals/latest
 # ────────────────────────────────────────────────────────────
 
+
 async def test_signals_latest_returns_envelope(aiohttp_client, app, signals_dir):
     client = await aiohttp_client(app)
     today = _today_str()
@@ -202,15 +210,29 @@ async def test_signals_latest_returns_envelope(aiohttp_client, app, signals_dir)
         signals_dir,
         today,
         [
-            {"ts": "2026-04-26T10:00:00Z", "wall_ms": 1, "source": "tda_cascade",
-             "event": "signal_emitted", "symbol": "XAU/USD", "signal_id": "s1",
-             "direction": "long"},
-            {"ts": "2026-04-26T11:00:00Z", "wall_ms": 2, "symbol": "XAU/USD",
-             "tf_s": 900, "event": "narrative_emit", "mode": "trade",
-             "headline": "London sweep"},
+            {
+                "ts": "2026-04-26T10:00:00Z",
+                "wall_ms": 1,
+                "source": "tda_cascade",
+                "event": "signal_emitted",
+                "symbol": "XAU/USD",
+                "signal_id": "s1",
+                "direction": "long",
+            },
+            {
+                "ts": "2026-04-26T11:00:00Z",
+                "wall_ms": 2,
+                "symbol": "XAU/USD",
+                "tf_s": 900,
+                "event": "narrative_emit",
+                "mode": "trade",
+                "headline": "London sweep",
+            },
         ],
     )
-    resp = await client.get("/api/v3/signals/latest?limit=10&source=all", headers=_auth())
+    resp = await client.get(
+        "/api/v3/signals/latest?limit=10&source=all", headers=_auth()
+    )
     assert resp.status == 200, await resp.text()
     body = await resp.json()
     _assert_envelope(body, "signal_list")
@@ -227,8 +249,13 @@ async def test_signals_latest_filter_by_source(aiohttp_client, app, signals_dir)
         today,
         [
             {"source": "tda_cascade", "symbol": "XAU/USD", "ts": "x", "wall_ms": 1},
-            {"symbol": "BTCUSDT", "tf_s": 900, "event": "narrative_emit",
-             "ts": "y", "wall_ms": 2},
+            {
+                "symbol": "BTCUSDT",
+                "tf_s": 900,
+                "event": "narrative_emit",
+                "ts": "y",
+                "wall_ms": 2,
+            },
         ],
     )
     resp = await client.get(
@@ -266,6 +293,7 @@ async def test_signals_latest_invalid_source(aiohttp_client, app):
 # /api/v3/signals/journal
 # ────────────────────────────────────────────────────────────
 
+
 async def test_signals_journal_requires_date(aiohttp_client, app):
     client = await aiohttp_client(app)
     resp = await client.get("/api/v3/signals/journal", headers=_auth())
@@ -283,9 +311,7 @@ async def test_signals_journal_invalid_date_format(aiohttp_client, app):
 async def test_signals_journal_too_old(aiohttp_client, app):
     client = await aiohttp_client(app)
     old = (datetime.now(timezone.utc) - timedelta(days=200)).strftime("%Y-%m-%d")
-    resp = await client.get(
-        f"/api/v3/signals/journal?date={old}", headers=_auth()
-    )
+    resp = await client.get(f"/api/v3/signals/journal?date={old}", headers=_auth())
     assert resp.status == 400
     body = await resp.json()
     assert body["data"]["code"] == "date_too_old"
@@ -295,9 +321,7 @@ async def test_signals_journal_too_old(aiohttp_client, app):
 async def test_signals_journal_in_future(aiohttp_client, app):
     client = await aiohttp_client(app)
     fut = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%d")
-    resp = await client.get(
-        f"/api/v3/signals/journal?date={fut}", headers=_auth()
-    )
+    resp = await client.get(f"/api/v3/signals/journal?date={fut}", headers=_auth())
     assert resp.status == 400
     assert (await resp.json())["data"]["code"] == "date_in_future"
 
@@ -326,9 +350,7 @@ async def test_signals_journal_filter_by_symbol(aiohttp_client, app, signals_dir
 async def test_signals_journal_missing_file_returns_empty(aiohttp_client, app):
     client = await aiohttp_client(app)
     today = _today_str()
-    resp = await client.get(
-        f"/api/v3/signals/journal?date={today}", headers=_auth()
-    )
+    resp = await client.get(f"/api/v3/signals/journal?date={today}", headers=_auth())
     assert resp.status == 200
     body = await resp.json()
     assert body["total"] == 0
@@ -343,9 +365,7 @@ async def test_signals_journal_skips_malformed_lines(aiohttp_client, app, signal
         fh.write('{"source": "tda_cascade", "symbol": "XAU/USD", "ts": "ok"}\n')
         fh.write("not-json garbage line\n")
         fh.write('{"source": "tda_cascade", "symbol": "BTCUSDT", "ts": "ok"}\n')
-    resp = await client.get(
-        f"/api/v3/signals/journal?date={today}", headers=_auth()
-    )
+    resp = await client.get(f"/api/v3/signals/journal?date={today}", headers=_auth())
     assert resp.status == 200
     body = await resp.json()
     assert body["total"] == 2  # malformed line skipped, others kept
@@ -354,6 +374,7 @@ async def test_signals_journal_skips_malformed_lines(aiohttp_client, app, signal
 # ────────────────────────────────────────────────────────────
 # /api/v3/bias/latest
 # ────────────────────────────────────────────────────────────
+
 
 async def test_bias_latest_uses_default_symbol(aiohttp_client, app):
     client = await aiohttp_client(app)
@@ -377,6 +398,7 @@ async def test_bias_latest_explicit_symbol(aiohttp_client, app):
 # /api/v3/narrative/snapshot
 # ────────────────────────────────────────────────────────────
 
+
 async def test_narrative_snapshot_success(aiohttp_client, app, smc_runner):
     client = await aiohttp_client(app)
     smc_runner._block = _StubNarrativeBlock()
@@ -392,9 +414,7 @@ async def test_narrative_snapshot_success(aiohttp_client, app, smc_runner):
 
 async def test_narrative_snapshot_invalid_tf(aiohttp_client, app):
     client = await aiohttp_client(app)
-    resp = await client.get(
-        "/api/v3/narrative/snapshot?tf=foo", headers=_auth()
-    )
+    resp = await client.get("/api/v3/narrative/snapshot?tf=foo", headers=_auth())
     assert resp.status == 400
     assert (await resp.json())["data"]["code"] == "tf_invalid"
 
@@ -419,6 +439,7 @@ async def test_narrative_snapshot_no_block_503(aiohttp_client, app, smc_runner):
 # /api/v3/macro/context
 # ────────────────────────────────────────────────────────────
 
+
 async def test_macro_context_returns_state(aiohttp_client, app, signals_dir):
     client = await aiohttp_client(app)
     state = {"XAU/USD": {"signal_id": "s1", "direction": "long"}}
@@ -442,6 +463,7 @@ async def test_macro_context_missing_file_returns_empty(aiohttp_client, app):
 # ────────────────────────────────────────────────────────────
 # Catch-all 404
 # ────────────────────────────────────────────────────────────
+
 
 async def test_unknown_v3_path_returns_structured_404(aiohttp_client, app):
     client = await aiohttp_client(app)

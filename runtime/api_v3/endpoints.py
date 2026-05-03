@@ -64,6 +64,7 @@ APP_SIGNALS_DIR = web.AppKey("api_v3_signals_dir", str)
 # Envelope helpers (ADR-0058 §3.2.1)
 # ────────────────────────────────────────────────────────────
 
+
 def _server_ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -115,6 +116,7 @@ def _error_response(
 # Auth dependency
 # ────────────────────────────────────────────────────────────
 
+
 def _validate_token(request: web.Request) -> Optional[web.Response]:
     """Return None if request is authorised, else an error response.
 
@@ -159,6 +161,7 @@ def _validate_token(request: web.Request) -> Optional[web.Response]:
 # ────────────────────────────────────────────────────────────
 # Query parsing helpers
 # ────────────────────────────────────────────────────────────
+
 
 def _parse_limit(request: web.Request) -> tuple[Optional[int], Optional[web.Response]]:
     raw = request.query.get("limit")
@@ -219,7 +222,9 @@ def _parse_date(request: web.Request) -> tuple[Optional[str], Optional[web.Respo
             "?date must be YYYY-MM-DD",
             status=400,
         )
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     if dt > today:
         return None, _error_response(
             "date_in_future",
@@ -244,6 +249,7 @@ def _resolve_symbol(request: web.Request, default_symbol: str) -> str:
 # ────────────────────────────────────────────────────────────
 # Journal readers (sync — caller wraps in to_thread)
 # ────────────────────────────────────────────────────────────
+
 
 def _journal_path(base_dir: str, date_str: str) -> str:
     return os.path.join(base_dir, f"journal-{date_str}.jsonl")
@@ -298,6 +304,7 @@ def _classify_record_kind(rec: Dict[str, Any]) -> str:
 # ────────────────────────────────────────────────────────────
 # Route handlers
 # ────────────────────────────────────────────────────────────
+
 
 async def _handle_signals_latest(request: web.Request) -> web.Response:
     err = _validate_token(request)
@@ -387,7 +394,9 @@ async def _handle_narrative_snapshot(request: web.Request) -> web.Response:
     try:
         tf_s = int(tf_raw)
     except (TypeError, ValueError):
-        return _error_response("tf_invalid", "?tf must be an integer (seconds)", status=400)
+        return _error_response(
+            "tf_invalid", "?tf must be an integer (seconds)", status=400
+        )
 
     price = runner.get_last_price(symbol)
     if price <= 0.0:
@@ -447,6 +456,7 @@ async def _handle_macro_context(request: web.Request) -> web.Response:
 # 404 catch-all for /api/v3/* (F-S2-004)
 # ────────────────────────────────────────────────────────────
 
+
 async def _handle_v3_not_found(request: web.Request) -> web.Response:
     return _error_response(
         "not_found",
@@ -459,6 +469,7 @@ async def _handle_v3_not_found(request: web.Request) -> web.Response:
 # ────────────────────────────────────────────────────────────
 # Wiring helpers (called from ws_server.create_app)
 # ────────────────────────────────────────────────────────────
+
 
 # Late import keeps endpoints.py importable in tests that don't pull ws_server.
 def _resolve_smc_runner(request: web.Request) -> Any:

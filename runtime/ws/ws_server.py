@@ -350,7 +350,9 @@ class WsSession:
         self._scrollback_count: int = (
             0  # P11: РєС–Р»СЊРєС–СЃС‚СЊ scrollback РґР»СЏ РїРѕС‚РѕС‡РЅРѕРіРѕ symbol+tf
         )
-        self._scrollback_last_ts: float = 0  # P11: timestamp РѕСЃС‚Р°РЅРЅСЊРѕРіРѕ scrollback
+        self._scrollback_last_ts: float = (
+            0  # P11: timestamp РѕСЃС‚Р°РЅРЅСЊРѕРіРѕ scrollback
+        )
 
     def next_seq(self) -> int:
         self.seq += 1
@@ -2021,9 +2023,7 @@ def build_app(
             _signals_dir = str(_api_v3_cfg.get("signals_dir", "data_v3/_signals"))
             _token_store = _TokenStore(_agent_redis_client, namespace=_agent_ns)
             _register_api_v3(app, token_store=_token_store, signals_dir=_signals_dir)
-            _log.info(
-                "API_V3_ENABLED: ns=%s signals_dir=%s", _agent_ns, _signals_dir
-            )
+            _log.info("API_V3_ENABLED: ns=%s signals_dir=%s", _agent_ns, _signals_dir)
         except Exception as _av3_exc:  # pragma: no cover — surfaced loud
             _log.warning("API_V3_INIT_FAIL: %s", _av3_exc)
     else:
@@ -2548,9 +2548,7 @@ def build_app(
                 maxlen=_ARCHI_FEEDBACK_MAXLEN,
                 approximate=True,
             )
-            return web.json_response(
-                {"ok": True, "entry_id": str(entry_id)}
-            )
+            return web.json_response({"ok": True, "entry_id": str(entry_id)})
         except json.JSONDecodeError:
             return web.json_response({"error": "bad_json"}, status=400)
         except Exception as _e:
