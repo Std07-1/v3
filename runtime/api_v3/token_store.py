@@ -16,6 +16,7 @@ Scope semantics (F-S1-007):
 This module is layer-runtime (allowed Redis I/O) but contains no FastAPI
 imports — kept thin for unit testing without an HTTP harness.
 """
+
 from __future__ import annotations
 
 import json
@@ -60,7 +61,7 @@ def is_well_formed(token: Optional[str]) -> bool:
         return False
     if not token.startswith(TOKEN_PREFIX):
         return False
-    hex_tail = token[len(TOKEN_PREFIX):]
+    hex_tail = token[len(TOKEN_PREFIX) :]
     try:
         int(hex_tail, 16)
     except ValueError:

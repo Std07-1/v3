@@ -24,6 +24,7 @@ Invariants:
     I5 — degraded-but-loud. Redis errors → 503 + log; never silent allow.
     F-S1-007 — only "read" scope honored (token_store enforces fail-closed).
 """
+
 from __future__ import annotations
 
 import logging

@@ -1,4 +1,5 @@
 """ADR-0058 slice 058.1 — token_store + auth_validator FastAPI sidecar."""
+
 from __future__ import annotations
 
 import json
@@ -63,12 +64,16 @@ def _make_store(redis_get_value: object) -> tuple[TokenStore, MagicMock]:
 
 class TestTokenStoreLookup:
     def test_valid_record_returned(self) -> None:
-        store, redis_mock = _make_store(json.dumps({
-            "consumer": "old_news_bot",
-            "scope": "read",
-            "created": "2026-05-03T10:00:00Z",
-            "expires": "2026-08-01T10:00:00Z",
-        }))
+        store, redis_mock = _make_store(
+            json.dumps(
+                {
+                    "consumer": "old_news_bot",
+                    "scope": "read",
+                    "created": "2026-05-03T10:00:00Z",
+                    "expires": "2026-08-01T10:00:00Z",
+                }
+            )
+        )
         record = store.lookup(VALID_TOKEN)
         assert record == TokenRecord(
             consumer="old_news_bot",
@@ -89,10 +94,14 @@ class TestTokenStoreLookup:
 
     def test_unknown_scope_returns_none(self) -> None:
         # F-S1-007: future scope reserved → fail-closed.
-        store, _ = _make_store(json.dumps({
-            "consumer": "future_bot",
-            "scope": "read:XAU/USD",
-        }))
+        store, _ = _make_store(
+            json.dumps(
+                {
+                    "consumer": "future_bot",
+                    "scope": "read:XAU/USD",
+                }
+            )
+        )
         assert store.lookup(VALID_TOKEN) is None
 
     def test_missing_consumer_returns_none(self) -> None:
