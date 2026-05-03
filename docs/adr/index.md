@@ -67,6 +67,7 @@
 | [0052](0052-chat-modularization.md) | Chat Modularization + Security Layer | **Proposed** | 2026-04-19 | ui_archi, feature-modules, Svelte 5 runes, STRIDE threat model, auth/rate_limit/csrf, 8 slices | `ui_archi_chat_v2` |
 | [0053](0053-range-exhaustion-detector.md) | Range Exhaustion Detector — ATR Daily/Session Travel Gauge | **Proposed** | 2026-04-24 | ATR travel, daily range, session range, phase (early/mid/late/exhausted), confidence_delta, confluence/narrative/signal consumers, XAU/USD focus | `range_exhaustion_v1` |
 | [0054](0054-multi-symbol-reactivation-plan.md) | Multi-Symbol Re-Activation Plan — Phased Rollout with Regression Net | **Proposed** | 2026-04-24 | multi-symbol, regression net, isolation investigation, per-symbol weekly rollout, supersedes ADR-0025 rollback, chart product scope | `multi_symbol_reactivation_v1` |
+| [0058](0058-public-readonly-api-auth.md) | Public Read-Only API + Token Auth для External Consumers | **Proposed** | 2026-05-03 | public api, read-only, fastapi, nginx auth_request, token, rate_limit, telegram bot, external consumer, OWASP | `public_api_v1` |
 
 ---
 
