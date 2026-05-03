@@ -535,26 +535,31 @@
                                         >
                                             {sig.direction === "long"
                                                 ? "▲ LONG"
-                                                : "▼ SHORT"}
+                                                : sig.direction === "short"
+                                                  ? "▼ SHORT"
+                                                  : "— —"}
                                         </span>
                                         <span class="mc-sig-state"
-                                            >{sig.state.toUpperCase()}</span
+                                            >{sig.state?.toUpperCase() ??
+                                                "—"}</span
                                         >
                                         <span
                                             class="mc-sig-conf"
                                             title="Confidence score"
                                         >
-                                            {sig.confidence}%
+                                            {sig.confidence ?? 0}%
                                         </span>
                                     </div>
                                     <div class="mc-grid mc-sig-grid">
                                         <div
                                             class="mc-field"
-                                            title="Ціна входу ({sig.entry_method})"
+                                            title="Ціна входу ({sig.entry_method ??
+                                                'unknown'})"
                                         >
                                             <div class="mc-label">Entry</div>
                                             <div class="mc-val entry">
-                                                {sig.entry_price.toFixed(2)}
+                                                {sig.entry_price?.toFixed(2) ??
+                                                    "—"}
                                             </div>
                                         </div>
                                         <div
@@ -563,13 +568,15 @@
                                         >
                                             <div class="mc-label">R:R</div>
                                             <div class="mc-val">
-                                                {sig.risk_reward.toFixed(1)}:1
+                                                {sig.risk_reward?.toFixed(1) ??
+                                                    "—"}:1
                                             </div>
                                         </div>
                                         <div class="mc-field" title="Стоп-лосс">
                                             <div class="mc-label">SL</div>
                                             <div class="mc-val sl">
-                                                {sig.stop_loss.toFixed(2)}
+                                                {sig.stop_loss?.toFixed(2) ??
+                                                    "—"}
                                             </div>
                                         </div>
                                         <div
@@ -578,7 +585,8 @@
                                         >
                                             <div class="mc-label">TP</div>
                                             <div class="mc-val tp">
-                                                {sig.take_profit.toFixed(2)}
+                                                {sig.take_profit?.toFixed(2) ??
+                                                    "—"}
                                             </div>
                                         </div>
                                     </div>
