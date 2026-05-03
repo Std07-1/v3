@@ -54,6 +54,12 @@ MAX_LIMIT = 100
 MAX_DATE_BACK_DAYS = 90
 DEFAULT_TF_S = 900  # M15 — matches ADR-0040 execution TF
 KNOWN_SOURCES = frozenset({"tda_cascade", "smc_narrative"})
+# F-S2-003 — disclaimer in every envelope so consumers cannot strip it
+# without violating the contract; see SECURITY.md §Public API Disclaimer.
+DISCLAIMER = (
+    "Educational/research data only. Not financial advice. "
+    "No recommendation to buy or sell any instrument."
+)
 
 # Public AppKey so ws_server.create_app can stash these dependencies once.
 APP_TOKEN_STORE = web.AppKey("api_v3_token_store", TokenStore)
@@ -74,6 +80,7 @@ def _envelope_data(kind: str, data: Dict[str, Any]) -> Dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "kind": kind,
         "server_ts": _server_ts(),
+        "disclaimer": DISCLAIMER,
         "data": data,
     }
 
@@ -85,6 +92,7 @@ def _envelope_items(
         "schema_version": SCHEMA_VERSION,
         "kind": kind,
         "server_ts": _server_ts(),
+        "disclaimer": DISCLAIMER,
         "items": items,
     }
     if total is not None:
@@ -106,6 +114,7 @@ def _error_response(
             "schema_version": SCHEMA_VERSION,
             "kind": "error",
             "server_ts": _server_ts(),
+            "disclaimer": DISCLAIMER,
             "data": payload,
         },
         status=status,

@@ -158,6 +158,10 @@ def _assert_envelope(body: Dict[str, Any], expected_kind: str) -> None:
     assert body["schema_version"] == "v3.0", body
     assert body["kind"] == expected_kind, body
     assert "server_ts" in body and body["server_ts"].endswith("Z")
+    # F-S2-003 (slice 058.5): disclaimer must be present in every envelope
+    # so consumers cannot strip it without violating the contract.
+    assert "disclaimer" in body, body
+    assert "not financial advice" in body["disclaimer"].lower()
 
 
 # ────────────────────────────────────────────────────────────

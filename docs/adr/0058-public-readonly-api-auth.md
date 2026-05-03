@@ -460,6 +460,16 @@ Fields per line:
   - License audit clean: FastAPI MIT, uvicorn BSD-3, redis-py MIT, aiohttp Apache-2.0; `pip-audit` run required перед slice 058.1 install
   - Token format: custom `tk_{64 hex}` (NOT JWT) — менше CVE surface (no algorithm confusion)
 - **2026-05-03 Status**: Proposed → **Accepted**. Готовий до slice 058.1 (FastAPI sidecar implementation) без додаткових doc rounds.
+- **2026-05-04 (Slice 058.5 executed — R_COMPLIANCE sign-off)**: Post-implementation OWASP audit проти живого коду після slices 058.2/058.3. Findings:
+  - ✅ **8/8 S1 amendments verified in code**: token entropy `secrets.token_bytes(32)` ([token_store.py:32](../../runtime/api_v3/token_store.py)), `MAX_LIMIT=100` ([endpoints.py](../../runtime/api_v3/endpoints.py)), `MAX_DATE_BACK_DAYS=90`, per-IP `api_v3` zone 2r/s burst 30 ([nginx](../../tools/smc-nginx-v4-hardened.conf)), `TOKEN_PREFIX="tk_"`, symbol validation, scope check, source filter
+  - ✅ **5/5 S2 amendments verified**: 404 catch-all (`_handle_v3_not_found`), 90d horizon, `?source=` filter, structured error envelopes, no `?include_internal` honored
+  - ⚠️ **3 gaps закриті у цій же сесії**:
+    - F-S2-001 (A05): додано `limit_except GET HEAD OPTIONS { deny all; }` в nginx `/api/v3/` block
+    - F-S2-002 (A08): додано `add_header Access-Control-Allow-Origin "" always;` в nginx
+    - F-S2-003: додано `disclaimer` field у всі envelopes (data/items/error) + assertion в test suite (24/24 pass)
+  - ⏸ **F-S3-002 (audit JSONL with IP hash) deferred** — S3 priority, обсяг ~150 LOC окремий slice; current logging вже purpose-fit (token prefix + consumer in `_validate_token`)
+  - ✅ **SECURITY.md updated** з новою публічною поверхнею + повна OWASP A01–A10 mitigation table + Public API Disclaimer section
+  - **Verdict**: **ACCEPTED** (no conditions remaining for slice 058.5 scope). Public API surface production-grade.
 - **Next**: Slice 058.1 (FastAPI sidecar skeleton) — окрема сесія R_PATCH_MASTER з P-slices ≤150 LOC each.
 
 ---
