@@ -266,8 +266,32 @@ class TdaSignal:
     updated_ms: int
 
     def to_wire(self) -> Dict[str, Any]:
-        """Wire format for WS frame — consumed by ui_v4."""
+        """Wire format for WS frame — consumed by ui_v4.
+
+        Emits a superset of fields:
+
+        * Native TDA fields (``macro``, ``h4_confirm``, ``session``, ``entry``,
+          ``trade``, ``grade_factors`` …) — full cascade context.
+        * SignalSpec-compatible top-level mirrors (``direction``,
+          ``entry_price``, ``stop_loss``, ``take_profit``, ``risk_reward``,
+          ``confidence``, ``state``, ``entry_method``, ``warnings``) consumed by
+          the shell ``signal`` micro-card in ChartHud (ADR-0036/ADR-0039).
+
+        Both ``SignalSpec.to_wire()`` and ``TdaSignal.to_wire()`` flow into the
+        same ``shell.signal`` slot (see ``ws_server`` / ``shell_composer``), so
+        the wire shape must be uniform from the renderer's perspective.
+        ``direction`` is lowercased to match the SignalSpec convention
+        (``"long"``/``"short"``).
+        """
+        # SignalSpec-compatible projections (UI shell.signal renderer)
+        direction_lc = self.entry.direction.lower()
+        # 8-factor checklist → 0..100 confidence (mirrors grade gate)
+        confidence = int(round(self.grade_score / 8.0 * 100)) if self.grade_score else 0
+        # trade.status ∈ {open, partial, closed} — pass through as state
+        state = self.trade.status
+
         return {
+            # ── Native TDA cascade payload ──
             "signal_id": self.signal_id,
             "symbol": self.symbol,
             "date": self.date_str,
@@ -281,6 +305,16 @@ class TdaSignal:
             "trade": self.trade.to_wire(),
             "created_ms": self.created_ms,
             "updated_ms": self.updated_ms,
+            # ── SignalSpec-compatible top-level (shell.signal renderer) ──
+            "direction": direction_lc,
+            "entry_price": round(self.entry.entry_price, 2),
+            "stop_loss": round(self.entry.stop_loss, 2),
+            "take_profit": round(self.entry.take_profit, 2),
+            "risk_reward": round(self.entry.risk_reward, 2),
+            "confidence": confidence,
+            "state": state,
+            "entry_method": "tda_fvg",
+            "warnings": [],
         }
 
 

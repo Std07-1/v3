@@ -488,6 +488,33 @@ class TestWireFormat:
         assert "macro" in wire
         assert "session" in wire
 
+    def test_signal_to_wire_signalspec_compat_top_level(self):
+        """TdaSignal.to_wire() emits SignalSpec-compatible top-level fields.
+
+        ChartHud micro-card (shell.signal) expects flat fields regardless of
+        whether the signal was produced by SignalSpec (ADR-0039) or TdaSignal
+        (ADR-0040). Both must share the same top-level shape.
+        """
+        sig = _make_signal(direction="LONG", trade_status="open")
+        wire = sig.to_wire()
+        # Top-level fields consumed by ui_v4/src/layout/ChartHud.svelte:541+
+        assert wire["direction"] == "long"  # lowercased per SignalSpec convention
+        assert wire["entry_price"] == round(sig.entry.entry_price, 2)
+        assert wire["stop_loss"] == round(sig.entry.stop_loss, 2)
+        assert wire["take_profit"] == round(sig.entry.take_profit, 2)
+        assert wire["risk_reward"] == round(sig.entry.risk_reward, 2)
+        assert isinstance(wire["confidence"], int)
+        assert 0 <= wire["confidence"] <= 100
+        assert wire["state"] == "open"  # passes trade.status through
+        assert wire["entry_method"] == "tda_fvg"
+        assert wire["warnings"] == []
+
+    def test_signal_to_wire_short_direction_lowercased(self):
+        """SHORT direction must be lowercased to 'short' for UI class binding."""
+        sig = _make_signal(direction="SHORT")
+        wire = sig.to_wire()
+        assert wire["direction"] == "short"
+
     def test_signal_from_wire_round_trip(self):
         """_signal_from_wire reconstructs signal from wire dict."""
         sig = _make_signal()
