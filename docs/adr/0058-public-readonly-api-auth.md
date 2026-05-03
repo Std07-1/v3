@@ -117,13 +117,53 @@ external ──HTTPS──► Cloudflare ──► nginx (aione-smc.com)
 
 ### 3.2 Endpoints (read-only, version-prefixed)
 
-| Endpoint | Що повертає | Джерело |
-|---|---|---|
-| `GET /api/v3/signals/latest?limit=N` | Останні N TDA signals (всі символи) | `data_v3/_signals/journal-*.jsonl` tail |
-| `GET /api/v3/signals/journal?date=YYYY-MM-DD&symbol=...` | Повний journal за дату | Файлова система |
-| `GET /api/v3/bias/latest` | Поточний `bias_map` (всі TF) | SmcRunner snapshot |
-| `GET /api/v3/narrative/latest?symbol=XAUUSD` | Поточний narrative блок | SmcRunner snapshot |
-| `GET /api/v3/macro/context` | TDA `tda_state.json` snapshot | Файлова система |
+| Endpoint | Що повертає | Джерело | Lifecycle |
+|---|---|---|---|
+| `GET /api/v3/signals/latest?limit=N&source=tda_cascade\|smc_narrative\|all` | Останні N events з journal | `data_v3/_signals/journal-*.jsonl` tail | Persisted (TDA only зараз; smc_narrative — майбутнє розширення) |
+| `GET /api/v3/signals/journal?date=YYYY-MM-DD&symbol=...&source=...` | Повний journal за дату | Файлова система | Persisted |
+| `GET /api/v3/bias/latest` | Поточний `bias_map` (всі TF) | SmcRunner snapshot | **Live RAM** (no history) |
+| `GET /api/v3/narrative/snapshot?symbol=XAUUSD` | Поточний `NarrativeBlock` (live) — headline, scenario, entry/target/invalidation, archi_thesis (якщо Архі онлайн) | SmcRunner snapshot + narrative_enricher | **Live RAM** (no history; tick ~2s) |
+| `GET /api/v3/macro/context` | TDA `tda_state.json` snapshot | Файлова система | Persisted |
+
+**Verified state (2026-05-03)**: journal містить тільки `source=tda_cascade` events (entry + closed pairs, ~2/день). `smc_narrative` події в journal **не пишуться** — narrative живе тільки в SmcRunner RAM, broadcast у WS frame для UI v4 NarrativePanel. Тому розділяємо:
+- **`/signals/*`** — historical/persisted (journal-backed)
+- **`/narrative/snapshot`** — live RAM, **немає** `/narrative/latest` from journal до окремого ADR (потребує persistence layer для smc_narrative events)
+
+### 3.2.1 Response envelope (tagged union)
+
+Всі endpoints повертають **єдиний envelope** для версіонування і дисамбігуації типу:
+
+```json
+{
+  "schema_version": "v3.0",
+  "kind": "tda_cascade",          // або "smc_narrative" | "bias_map" | "narrative_block" | "tda_state"
+  "server_ts": "2026-05-03T13:15:11Z",
+  "data": { /* payload schema залежить від kind */ }
+}
+```
+
+Для list endpoints (`/signals/latest`, `/signals/journal`):
+
+```json
+{
+  "schema_version": "v3.0",
+  "kind": "signal_list",
+  "server_ts": "...",
+  "items": [
+    {"kind": "tda_cascade", "data": {...}},
+    {"kind": "tda_cascade", "data": {...}}
+  ],
+  "count": 2,
+  "filters": {"source": "all", "limit": 10}
+}
+```
+
+**Чому це обов'язково**:
+1. Journal вже сьогодні mixed-source (`tda_cascade` events, у майбутньому `smc_narrative`); споживач без `kind` field змушений вгадувати тип по presence/absence полів — fragile
+2. `schema_version` дає safe-rollout шлях для breaking field changes (старий бот продовжує читати v3.0, новий бот — v3.1)
+3. `?source=` filter дозволяє фільтрувати на платформі (один прохід по journal) замість на споживачі (zero efficiency win)
+
+**Default `?source=all`** — backward-friendly для майбутніх consumers що не знають усіх типів.
 
 ### 3.3 Auth контракт
 
@@ -231,9 +271,11 @@ location /api/v3/ {
 - Тести: token valid/missing/expired/scope-mismatch
 
 ### Slice 058.2 — Read endpoints
-- `GET /api/v3/signals/latest`, `/journal`, `/bias/latest`, `/narrative/latest`, `/macro/context`
+- `GET /api/v3/signals/latest`, `/journal`, `/bias/latest`, `/narrative/snapshot`, `/macro/context`
 - Реалізація як **новий aiohttp router у ws_server** (same-origin first), потім nginx експортує `/api/v3/*` зовні
-- Тести: payload schema parity з internal data
+- **Tagged union envelope** (§3.2.1): `schema_version`, `kind`, `data`/`items`
+- **`?source=` filter** для `/signals/*`: `tda_cascade`, `smc_narrative`, `all` (default)
+- Тести: payload schema parity з internal data, envelope contract, filter correctness
 
 ### Slice 058.3 — nginx auth_request integration
 - nginx config: `limit_req_zone`, `auth_request /_auth`, `limit_except GET`, `X-API-Key` map redact
@@ -265,4 +307,91 @@ location /api/v3/ {
 ## 9. Decision Log
 
 - **2026-05-03**: Стас затвердив path B (HTTP proxy + auth) як відповідь на питання про канал доставки даних старому новинному боту під час hibernation Архі. Quote: «так, якщо потрібен шлях B (HTTP proxy), то так, - ADR, Auth та інше, все що потрібно».
+- **2026-05-03 (amendment)**: Додано §3.2.1 (tagged union envelope) + `?source=` filter + split `/narrative/snapshot` vs `/signals/latest` (verified: journal містить тільки `tda_cascade`, smc_narrative живе в SmcRunner RAM). Додано §10 (Consumer Invariants — X28 enforcement). Залишається v1, не v2.
 - **Next**: Compliance/OWASP review → Accepted → Slice 058.1
+
+---
+
+## 10. Consumer Invariants — Що споживачі НЕ мають права робити (X28 enforcement)
+
+> Цей розділ — **інваріант для будь-якого external consumer** (Telegram bot, Discord publisher, research agent), що читає `/api/v3/*`. Порушення = X28 violation (frontend re-derives backend SSOT).
+
+### 10.1 Заборонено (consumer side)
+
+| Дія consumer'а | Чому заборонено | SSOT де живе |
+|---|---|---|
+| Перерахунок `headline` з `bias` + `zone_id` | Headline вже синтезований у `core/smc/narrative.py` з повним контекстом (sessions, killzones, sweep, P/D, range exhaustion). Будь-який rewrite втрачає контекст. | [core/smc/narrative.py](../../core/smc/narrative.py) |
+| Перерахунок `bias` з `zones[]` або `structure[]` | `bias_map` обчислюється в SmcRunner з multi-TF context. Локальний rewrite дасть інший результат на інших TF. | SmcRunner snapshot, ADR-0031 |
+| Перерахунок `grade` / `grade_score` з confluence factors | Grade = 8-factor weighted scoring (ADR-0029). Зміна вагів на consumer side зламає parity з UI. | [core/smc/confluence.py](../../core/smc/confluence.py) |
+| Перерахунок `entry_price` / `stop_loss` / `take_profit` / `R:R` | Numeric resolution = ADR-0039 Signal Engine; OTE/zone_edge methods. | [core/smc/signals.py](../../core/smc/signals.py) |
+| Перерахунок `target_desc` / `invalidation` text | Згенеровано narrative.py з прив'язкою до конкретних levels (PDH/PDL/EQH). | narrative.py |
+| Власна class'ifікація `market_phase` / `session` / `killzone` | Sessions = ADR-0035, market_phase = narrative.py. | sessions.py, narrative.py |
+| Override `confidence` value | Confidence = weighted output з 5 факторів (Signal Engine §4). | signals.py |
+| Mute `archi_thesis` поки не подобається | Якщо Архі онлайн і має тезу — публікація мусить її показати (transparency); consumer може вибрати presentation, не suppression |
+
+### 10.2 Дозволено (consumer's job)
+
+| Дія | Приклад |
+|---|---|
+| **Format/presentation** | Markdown/HTML rendering, emoji mapping, mobile vs desktop layout |
+| **Channel-specific packaging** | Telegram caption + image, Discord embed, X thread split |
+| **Aggregation** | Weekly recap (group TDA signals by day, compute win rate over journal range) |
+| **Macro layer enrichment** | DXY level, Fed calendar, ForexFactory news — **ДОДАЄТЬСЯ збоку**, не перезаписує `bias` |
+| **Cross-asset insights** | "BTC А+ долонг while XAU B+ short" — observation, не override grade |
+| **Hallucination defense** | Regex-перевірка LLM-generated wrapper text проти SSOT values (e.g. price у тексті ≠ price у `data` → reject) |
+| **Off-hours evergreen** | Educational пости коли journal порожній — generic content, без спекуляцій про "що зараз робить ринок" |
+| **Chart generation** | mplfinance/lightweight-charts screenshot з overlay zone_id з API |
+
+### 10.3 Patterns (recommended)
+
+**Pattern A — Direct passthrough** (для Telegram коротких повідомлень):
+```
+fetch /narrative/snapshot → render headline + entry_desc + target_desc → post
+```
+
+**Pattern B — Wrapper з підсиленням** (для довших аналітичних постів):
+```
+fetch /narrative/snapshot
++ fetch /macro/context
++ external DXY/news (consumer's responsibility)
+→ LLM compose з SYSTEM_PROMPT: "паrafраз headline, ДОДАЙ macro context, НЕ перерахуй bias/target/grade"
+→ regex check: всі numeric values з API мусять бути присутні в output
+→ post
+```
+
+**Pattern C — Aggregation** (weekly recap):
+```
+for date in last_7_days:
+  fetch /signals/journal?date=date&source=tda_cascade
+  collect entry/closed pairs
+compute: win_rate, avg_R, max_loss, partial_win_count
+→ honest report (3 trades: 1 partial win, 2 losses → educational angle)
+```
+
+### 10.4 Validation rail (recommended для consumers)
+
+Перед публікацією consumer мусить пройти **hallucination guard**:
+
+```python
+# pseudocode
+api_data = fetch(endpoint)
+text = llm_generate(api_data)
+
+# guard: всі numeric values з api_data["data"] мусять бути дослівно в text
+for key in ("entry_price", "stop_loss", "take_profit", "grade"):
+    if str(api_data["data"][key]) not in text:
+        raise PublicationGuardFailure(f"missing {key} in generated text")
+```
+
+Це не enforced платформою (consumer's responsibility), але **рекомендована практика** для будь-якого LLM-wrapper що публікує платформенні дані.
+
+### 10.5 Cohabitation з Архі (future)
+
+Коли Архі прокинеться (post 2026-06-01 monthly reset):
+
+- `/narrative/snapshot` автоматично почне повертати `archi_thesis` field (через існуючий [runtime/smc/narrative_enricher.py](../../runtime/smc/narrative_enricher.py))
+- Bot-consumer **повинен** показувати Архі-тезу окремим блоком ("🤖 Архі вважає: ...")
+- Якщо Архі-теза суперечить системному `bias` — показати **обидва** як adversarial views, не вибирати "правильний"
+- Це healthy adversarial loop: система vs Архі → publication показує обидва → traders judge → over time accumulate accuracy stats per source
+
+**Інваріант**: bot ніколи не "вирішує" хто правий (це робить ринок). Bot = transparent reporter, не arbiter.
