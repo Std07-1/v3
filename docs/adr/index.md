@@ -67,7 +67,9 @@
 | [0052](0052-chat-modularization.md) | Chat Modularization + Security Layer | **Proposed** | 2026-04-19 | ui_archi, feature-modules, Svelte 5 runes, STRIDE threat model, auth/rate_limit/csrf, 8 slices | `ui_archi_chat_v2` |
 | [0053](0053-range-exhaustion-detector.md) | Range Exhaustion Detector — ATR Daily/Session Travel Gauge | **Proposed** | 2026-04-24 | ATR travel, daily range, session range, phase (early/mid/late/exhausted), confidence_delta, confluence/narrative/signal consumers, XAU/USD focus | `range_exhaustion_v1` |
 | [0054](0054-multi-symbol-reactivation-plan.md) | Multi-Symbol Re-Activation Plan — Phased Rollout with Regression Net | **Proposed** | 2026-04-24 | multi-symbol, regression net, isolation investigation, per-symbol weekly rollout, supersedes ADR-0025 rollback, chart product scope | `multi_symbol_reactivation_v1` |
-| [0058](0058-public-readonly-api-auth.md) | Public Read-Only API + Token Auth для External Consumers | **Accepted** | 2026-05-03 | public api, read-only, fastapi, nginx auth_request, token, rate_limit, telegram bot, external consumer, OWASP, grace period, per-IP rate limit, CORS, TLS bypass guard | `public_api_v1` |
+| [0058](0058-public-readonly-api-auth.md) | Public Read-Only API + Token Auth для External Consumers | **Accepted** (not deployed — ADR-0060 Phase 2) | 2026-05-03 | public api, read-only, fastapi, nginx auth_request, token, rate_limit, telegram bot, external consumer, OWASP, grace period, per-IP rate limit, CORS, TLS bypass guard | `public_api_v1` |
+| [0059](0059-public-analysis-api-raw-data.md) | Public Analysis API — Raw Data Access for External Consumers | **Deferred** (2026-05-04) | 2026-05-04 | public api, raw data access, bars window, smc zones, smc levels, multi-TF, kill switch, schema v3.1, cowork analyst, X28 extended | `public_api_v1` |
+| [0060](0060-deploy-discipline-vps-catchup.md) | Deploy Discipline + VPS Catch-Up Plan | **Proposed** | 2026-05-04 | deploy discipline, VPS catch-up, governance, backup rail, heartbeat alerting, drift detector, staged deploy, R3, M3→M4 | `deploy_discipline_v1` |
 
 ---
 

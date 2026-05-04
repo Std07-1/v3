@@ -490,7 +490,8 @@ Fields per line:
   - ✅ **SECURITY.md A09 row** (Logging & Monitoring Failures) updated to reference live audit JSONL.
   - ✅ **Consumer mini-spec** published at [docs/runbooks/cowork_consumer_quickstart.md](../runbooks/cowork_consumer_quickstart.md): base URL, auth, envelope contract, 5 endpoints, rate limits, error codes, X28 obligations, audit trail disclosure.
   - **Verdict**: **F-S3-002 CLOSED**. ADR-0058 OWASP roadmap fully resolved. Ready for cowork bot integration.
-- **Next**: Slice 058.1 (FastAPI sidecar skeleton) — окрема сесія R_PATCH_MASTER з P-slices ≤150 LOC each.
+- **2026-05-04 (Scope extension → ADR-0059)**: Cowork bot pilot revealed root architectural gap — current 5 endpoints expose **system conclusions only** (signals, bias, narrative, macro), not raw market context. Cowork stuck in "system commentator" mode (5/10 quality) — repeatedly transcribes same TDA verdict because new signals are rare (1-3/day). Owner pivot: «потрібен розбір на зараз а не трактування минулих сигналів... повернемось до ідеї яку відкинули — читання data\ або інші способи щоб отримувати свіжі дані». Decision: extend ADR-0058 surface with raw data endpoints (`bars/window`, `smc/zones`, `smc/levels`) under same auth/envelope/audit umbrella. Schema bump v3.0 → v3.1. New ADR drafted: [ADR-0059](0059-public-analysis-api-raw-data.md) (Status: Proposed).
+- **Next**: Slice 058.1 (FastAPI sidecar skeleton) — окрема сесія R_PATCH_MASTER з P-slices ≤150 LOC each. Parallel: ADR-0059 slice 059.4 (kill switch) → 059.1-059.3 (endpoints) → 059.5 (docs).
 
 ---
 
