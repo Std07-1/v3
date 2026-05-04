@@ -2030,11 +2030,28 @@ def build_app(
                 signals_dir=_signals_dir,
                 audit_dir=_audit_dir,
             )
+            # ADR-0059 §3.4 (slice 059.4) — analysis kill switch.
+            # Mounted unconditionally when api_v3 is enabled so the
+            # middleware is in place BEFORE analysis endpoints land in
+            # slices 059.1-059.3. Config flag `analysis_enabled` (default
+            # true) gates the boot layer; Redis flag toggles runtime.
+            from runtime.api_v3.kill_switch import (
+                register_kill_switch as _register_kill_switch,
+            )
+
+            _analysis_enabled = bool(_api_v3_cfg.get("analysis_enabled", True))
+            _register_kill_switch(
+                app,
+                redis_client=_agent_redis_client,
+                namespace=_agent_ns,
+                analysis_enabled=_analysis_enabled,
+            )
             _log.info(
-                "API_V3_ENABLED: ns=%s signals_dir=%s audit_dir=%s",
+                "API_V3_ENABLED: ns=%s signals_dir=%s audit_dir=%s analysis_enabled=%s",
                 _agent_ns,
                 _signals_dir,
                 _audit_dir or "DISABLED",
+                _analysis_enabled,
             )
         except Exception as _av3_exc:  # pragma: no cover — surfaced loud
             _log.warning("API_V3_INIT_FAIL: %s", _av3_exc)

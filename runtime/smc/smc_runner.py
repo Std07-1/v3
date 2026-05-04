@@ -193,9 +193,9 @@ class SmcRunner:
 
         # ADR-0053: range exhaustion cache (symbol → (computed_at_ms, snapshot))
         # 2s freshness prevents per-TF recompute on render_frame cascade.
-        self._range_exhaustion_cache: Dict[
-            str, Tuple[int, RangeExhaustionSnapshot]
-        ] = {}
+        self._range_exhaustion_cache: Dict[str, Tuple[int, RangeExhaustionSnapshot]] = (
+            {}
+        )
 
         # Relay: відстеження останнього bias для dedup
         self._last_bias: Dict[Tuple[str, int], Optional[str]] = {}
@@ -533,6 +533,24 @@ class SmcRunner:
     def get_last_price(self, symbol: str) -> float:
         """Last known close price from M1 bar feed."""
         return self._last_prices.get(symbol, 0.0)
+
+    def get_atr(self, symbol: str, tf_s: int, period: int = 14) -> float:
+        """ADR-0059 §3.1.2: ATR accessor for proximity_atr computation.
+
+        Thin pass-through to engine — read-only, no side effects (S1).
+        Returns 1.0 fallback when (symbol, tf_s) not yet warmed up so that
+        callers performing `distance / atr` never divide by zero.
+        """
+        return self._engine.get_atr(symbol, tf_s, period=period)
+
+    def get_session_states(self, symbol: str, current_time_ms: int) -> List[Any]:
+        """ADR-0059 §3.1.3: session states accessor for /api/v3/smc/levels.
+
+        Thin pass-through to engine — read-only, no side effects (S1).
+        Returns list[SessionState] (asia/london/newyork) or [] if sessions
+        disabled / no warmup. Wire formatting happens at endpoint layer.
+        """
+        return self._engine.get_session_states(symbol, current_time_ms)
 
     def get_recent_structure_events(
         self, symbol: str, since_ts_ms: int = 0
