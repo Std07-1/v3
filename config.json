@@ -319,6 +319,7 @@
     },
     "api_v3": {
         "enabled": true,
+        "analysis_enabled": true,
         "signals_dir": "data_v3/_signals"
     },
     "smc": {
