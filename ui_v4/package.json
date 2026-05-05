@@ -12,7 +12,7 @@
     },
     "dependencies": {
         "lightweight-charts": "5.1.0",
-        "uuid": "^13.0.0"
+        "uuid": "^14.0.0"
     },
     "devDependencies": {
         "@sveltejs/vite-plugin-svelte": "^5.0.0",
