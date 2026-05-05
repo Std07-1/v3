@@ -70,6 +70,9 @@
 | [0058](0058-public-readonly-api-auth.md) | Public Read-Only API + Token Auth для External Consumers | **Accepted** (not deployed — ADR-0060 Phase 2) | 2026-05-03 | public api, read-only, fastapi, nginx auth_request, token, rate_limit, telegram bot, external consumer, OWASP, grace period, per-IP rate limit, CORS, TLS bypass guard | `public_api_v1` |
 | [0059](0059-public-analysis-api-raw-data.md) | Public Analysis API — Raw Data Access for External Consumers | **Deferred** (2026-05-04) | 2026-05-04 | public api, raw data access, bars window, smc zones, smc levels, multi-TF, kill switch, schema v3.1, cowork analyst, X28 extended | `public_api_v1` |
 | [0060](0060-deploy-discipline-vps-catchup.md) | Deploy Discipline + VPS Catch-Up Plan | **Proposed** | 2026-05-04 | deploy discipline, VPS catch-up, governance, backup rail, heartbeat alerting, drift detector, staged deploy, R3, M3→M4 | `deploy_discipline_v1` |
+| [0061](0061-vps-reconciliation-2026-05-05.md) | VPS Reconciliation 2026-05-05 (Force-Local Sync to origin/main) | **Implemented** | 2026-05-05 | VPS reconciliation, force-local, git reset, provenance check, tar backup, 60s observation, data_v3 sync, R3, M3 | `deploy_discipline_v1` |
+| [0062](0062-major-bump-playbook.md) | Major Dependency Bump Playbook (Reusable Template) | **Accepted** | 2026-05-05 | major bump, playbook, reusable template, 7-step process, 4-tier verification, DEP-1..5 invariants, R3, M3 | `dependency_governance_v1` |
+| [0063](0063-typescript-6-bump.md) | TypeScript 5.7→6.0.2 Bump (First ADR-0062 Instance) | **Implemented** | 2026-05-05 | typescript 6, dependency bump, ui_v4, svelte-check, vitest, vite build, A/B test, R3, M3 | `dependency_governance_v1` |
 
 ---
 
