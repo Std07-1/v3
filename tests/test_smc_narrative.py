@@ -814,3 +814,119 @@ class TestTooFarGuard:
         )
         assert nb.mode == "wait"
         assert nb.sub_mode == "too_far"
+
+
+# ── BH-5: NarrativeBlock.to_wire() instance method ─────────
+
+
+class TestNarrativeBlockToWire:
+    """`/api/v3/narrative/snapshot` calls `block.to_wire()` (instance method).
+    Pre-fix: AttributeError 500 (method missing). Post-fix: must match the
+    output of `narrative_to_wire(block)` byte-for-byte."""
+
+    def _empty_block(self):
+        return NarrativeBlock(
+            mode="wait",
+            sub_mode="",
+            headline="empty",
+            bias_summary="",
+            scenarios=[],
+            next_area="",
+            fvg_context="",
+            market_phase="ranging",
+            warnings=[],
+        )
+
+    def _populated_block(self):
+        sc = ActiveScenario(
+            zone_id="z1",
+            direction="long",
+            entry_desc="OB▲ A 5144-5225",
+            trigger="approaching",
+            trigger_desc="approaching: 15 pts from zone",
+            target_desc="PDL 5062",
+            invalidation="Above 5230",
+        )
+        return NarrativeBlock(
+            mode="trade",
+            sub_mode="aligned",
+            headline="🟢 BUY setup ready",
+            bias_summary="HTF bullish aligned",
+            scenarios=[sc],
+            next_area="5144 BUY OB (A/6)",
+            fvg_context="FVG bull 5100-5120",
+            market_phase="trending_up",
+            warnings=[],
+            current_session="london",
+            in_killzone=True,
+            session_context="London KZ active — high probability",
+            range_exhaustion_summary="Day exhausted 0.85",
+        )
+
+    def test_method_exists(self):
+        """Pre-fix this raised AttributeError → 500 in /narrative/snapshot."""
+        nb = self._empty_block()
+        wire = nb.to_wire()
+        assert isinstance(wire, dict)
+
+    def test_method_matches_module_function_empty(self):
+        """`block.to_wire()` === `narrative_to_wire(block)` byte-for-byte."""
+        nb = self._empty_block()
+        assert nb.to_wire() == narrative_to_wire(nb)
+
+    def test_method_matches_module_function_populated(self):
+        nb = self._populated_block()
+        assert nb.to_wire() == narrative_to_wire(nb)
+
+    def test_range_exhaustion_null_compact(self):
+        """ADR-0053: range_exhaustion_summary excluded when empty (matches
+        SmcSnapshot.to_wire() pattern)."""
+        nb = self._empty_block()
+        wire = nb.to_wire()
+        assert "range_exhaustion_summary" not in wire
+
+        nb_pop = self._populated_block()
+        wire_pop = nb_pop.to_wire()
+        assert wire_pop["range_exhaustion_summary"] == "Day exhausted 0.85"
+
+    def test_scenario_to_wire_method(self):
+        """ActiveScenario.to_wire() — also instance method, used inside
+        NarrativeBlock.to_wire() scenarios serialization."""
+        sc = ActiveScenario(
+            zone_id="z1",
+            direction="short",
+            entry_desc="e",
+            trigger="ready",
+            trigger_desc="td",
+            target_desc=None,
+            invalidation="inv",
+        )
+        wire = sc.to_wire()
+        assert wire == {
+            "zone_id": "z1",
+            "direction": "short",
+            "entry_desc": "e",
+            "trigger": "ready",
+            "trigger_desc": "td",
+            "target_desc": None,
+            "invalidation": "inv",
+        }
+
+    def test_scenario_with_target(self):
+        """target_desc is Optional[str] — None case + present case."""
+        sc_with = ActiveScenario("z1", "long", "e", "approaching", "td", "PDL 5062", "inv")
+        sc_none = ActiveScenario("z2", "long", "e", "approaching", "td", None, "inv")
+        assert sc_with.to_wire()["target_desc"] == "PDL 5062"
+        assert sc_none.to_wire()["target_desc"] is None
+
+    def test_warnings_serialize_as_list(self):
+        """`warnings` field — defensive `list(...)` preserves contents but
+        also handles tuple inputs (legacy paths)."""
+        nb = NarrativeBlock(
+            mode="wait", sub_mode="", headline="", bias_summary="",
+            scenarios=[], next_area="", fvg_context="", market_phase="ranging",
+            warnings=["no_target_found", "computation_error"],
+        )
+        wire = nb.to_wire()
+        assert wire["warnings"] == ["no_target_found", "computation_error"]
+        assert isinstance(wire["warnings"], list)

@@ -546,7 +546,7 @@ def _enforce_payload_cap(
 
 def _bars_window_resolve_uds(request: web.Request) -> Any:
     """Return UDS instance from app or a 503 envelope response if missing."""
-    from runtime.ws.ws_server import APP_UDS  # local import — avoid cycle
+    from runtime.ws.app_keys import APP_UDS  # SSOT, avoids __main__ import drift
 
     uds = request.app.get(APP_UDS)
     if uds is None:
@@ -639,7 +639,7 @@ def _parse_bars_window_since_ms(
 def _validate_bars_window_symbol(
     request: web.Request,
 ) -> tuple[Optional[str], Optional[web.Response]]:
-    from runtime.ws.ws_server import APP_FULL_CONFIG  # local import — avoid cycle
+    from runtime.ws.app_keys import APP_FULL_CONFIG  # SSOT, avoids __main__ drift
 
     raw = (request.query.get("symbol") or "").strip()
     if not raw:
@@ -647,7 +647,7 @@ def _validate_bars_window_symbol(
             "missing_symbol", "?symbol is required", status=400
         )
     cfg = request.app.get(APP_FULL_CONFIG) or {}
-    allowed = cfg.get("symbols") or []
+    allowed = list(cfg.get("symbols") or [])
     if raw not in allowed:
         return None, _error_response(
             "symbol_invalid",
@@ -911,19 +911,49 @@ def _validate_smc_zones_symbol(
 def _parse_smc_zones_tf(
     request: web.Request,
 ) -> tuple[Optional[str], Optional[web.Response]]:
-    raw = (request.query.get("tf") or "").strip().upper()
+    """Accept tf in two formats — alpha label OR seconds (ADR-0059 §3.1.2 contract harmonization).
+
+    Cowork bot historically sends `tf=900` (seconds, mirroring `narrative/snapshot`
+    convention). Internal callers send `tf=M15` (alpha, the documented contract).
+    Both resolve to the same internal label so /smc/zones works for either.
+
+    Mapping seconds → label:
+      900   → M15
+      3600  → H1
+      14400 → H4
+
+    Anything else (M5/300, M30/1800, D1/86400 — all not in zones whitelist) →
+    400 tf_invalid with explicit allowed list (both formats listed).
+    """
+    raw = (request.query.get("tf") or "").strip()
     if not raw:
         return None, _error_response(
             "missing_tf", "?tf is required (M15, H1 or H4)", status=400
         )
-    if raw not in SMC_ZONES_TF_LABEL_TO_S:
-        return None, _error_response(
-            "tf_invalid",
-            f"?tf '{raw}' not allowed",
-            status=400,
-            allowed=list(SMC_ZONES_TF_LABEL_TO_S.keys()),
-        )
-    return raw, None
+
+    # Path 1: alpha label (M15 / H1 / H4 — case-insensitive)
+    raw_alpha = raw.upper()
+    if raw_alpha in SMC_ZONES_TF_LABEL_TO_S:
+        return raw_alpha, None
+
+    # Path 2: seconds (900 / 3600 / 14400)
+    try:
+        tf_s = int(raw)
+        for label, seconds in SMC_ZONES_TF_LABEL_TO_S.items():
+            if seconds == tf_s:
+                return label, None
+    except (TypeError, ValueError):
+        pass
+
+    # Both paths exhausted — explicit 400 with both formats in allowed list
+    allowed_alpha = list(SMC_ZONES_TF_LABEL_TO_S.keys())
+    allowed_seconds = [str(s) for s in SMC_ZONES_TF_LABEL_TO_S.values()]
+    return None, _error_response(
+        "tf_invalid",
+        f"?tf '{raw}' not allowed (use M15/H1/H4 or seconds 900/3600/14400)",
+        status=400,
+        allowed=allowed_alpha + allowed_seconds,
+    )
 
 
 def _parse_smc_zones_limit(
@@ -1519,7 +1549,10 @@ async def _handle_smc_levels(request: web.Request) -> web.Response:
     (M15 1 bar + D1 N bars + session_states) → assemble → cap_check → respond.
     """
     import time as _time
-    from runtime.ws.ws_server import APP_FULL_CONFIG, APP_UDS
+    from runtime.ws.app_keys import (
+        APP_FULL_CONFIG,
+        APP_UDS,
+    )  # SSOT, avoids __main__ drift
 
     auth_err = _validate_token(request)
     if auth_err is not None:
@@ -1784,7 +1817,7 @@ async def audit_middleware(
 
 # Late import keeps endpoints.py importable in tests that don't pull ws_server.
 def _resolve_smc_runner(request: web.Request) -> Any:
-    from runtime.ws.ws_server import APP_SMC_RUNNER  # local import — avoid cycle
+    from runtime.ws.app_keys import APP_SMC_RUNNER  # SSOT, avoids __main__ drift
 
     runner = request.app.get(APP_SMC_RUNNER)
     if runner is None:
@@ -1797,7 +1830,7 @@ def _resolve_smc_runner(request: web.Request) -> Any:
 
 
 def _default_symbol(request: web.Request) -> str:
-    from runtime.ws.ws_server import APP_FULL_CONFIG  # local import — avoid cycle
+    from runtime.ws.app_keys import APP_FULL_CONFIG  # SSOT, avoids __main__ drift
 
     cfg = request.app.get(APP_FULL_CONFIG) or {}
     symbols = cfg.get("symbols") or []

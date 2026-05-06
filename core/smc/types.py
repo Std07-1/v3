@@ -347,6 +347,18 @@ class ActiveScenario:
     target_desc: Optional[str]  # "PDL 5062" | None (BH-4)
     invalidation: str  # "Above 5230"
 
+    def to_wire(self) -> Dict[str, Any]:
+        """S6: wire format → ui_v4 ActiveScenario type."""
+        return {
+            "zone_id": self.zone_id,
+            "direction": self.direction,
+            "entry_desc": self.entry_desc,
+            "trigger": self.trigger,
+            "trigger_desc": self.trigger_desc,
+            "target_desc": self.target_desc,
+            "invalidation": self.invalidation,
+        }
+
 
 @dataclasses.dataclass(frozen=True)
 class NarrativeBlock:
@@ -372,6 +384,39 @@ class NarrativeBlock:
     session_context: str = ""  # "London KZ active — high probability"
     # ADR-0053: range exhaustion display phrase ("" якщо early/mid/None)
     range_exhaustion_summary: str = ""
+
+    def to_wire(self) -> Dict[str, Any]:
+        """S6: wire format → ui_v4 NarrativeBlock type.
+
+        Used by:
+        - GET /api/v3/narrative/snapshot (ADR-0058 endpoint)
+        - ws_server delta_loop frame builder
+        - Cowork bot (ADR-0059 §3.1 reference flow)
+
+        Output shape matches `core.smc.narrative.narrative_to_wire(block)`
+        exactly (instance-method facade over the module-level function so
+        callers can use the more pythonic `block.to_wire()` form).
+        ADR-0053 range_exhaustion_summary is null-compact (only included
+        when populated), matching SmcSnapshot.to_wire() pattern.
+        """
+        d: Dict[str, Any] = {
+            "mode": self.mode,
+            "sub_mode": self.sub_mode,
+            "headline": self.headline,
+            "bias_summary": self.bias_summary,
+            "scenarios": [s.to_wire() for s in self.scenarios],
+            "next_area": self.next_area,
+            "fvg_context": self.fvg_context,
+            "market_phase": self.market_phase,
+            "warnings": list(self.warnings),
+            "current_session": self.current_session,
+            "in_killzone": self.in_killzone,
+            "session_context": self.session_context,
+        }
+        # ADR-0053: null-compact — include only when populated.
+        if self.range_exhaustion_summary:
+            d["range_exhaustion_summary"] = self.range_exhaustion_summary
+        return d
 
 
 # -------------------- Premium/Discount State (ADR-0041) --------------------
