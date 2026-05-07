@@ -586,6 +586,42 @@ def main() -> None:
     finally:
         writer.close()
 
+    # Dedup-on-finish: коли --force активний (overwrite mode), append-only
+    # JSONL writer лишає stale records. Видаляємо дублікати по open_time_ms
+    # (last-wins). Захищає external readers без UDS dedup logic (cowork scanner).
+    if args.force and not args.dry_run:
+        from pathlib import Path
+
+        from tools.repair.dedup_jsonl_lastwins import dedup_file
+
+        logging.info("═══ DEDUP-ON-FINISH (force=True) ═══")
+        derived_tfs = [tf for tf in DERIVE_ORDER if tf != TF_M1_S]
+        dedup_total = 0
+        for symbol in symbols:
+            sym_dir = symbol.replace("/", "_")
+            for tf_s in derived_tfs:
+                tf_dir = f"tf_{tf_s}"
+                # Iterate days inside the rebuild range we used for this symbol
+                _start_ms = (
+                    int(parse_iso_utc(args.start).timestamp() * 1000)
+                    if args.start
+                    else 0
+                )
+                _end_ms = (
+                    int(parse_iso_utc(args.end).timestamp() * 1000)
+                    if args.end
+                    else int(time.time() * 1000)
+                )
+                if _start_ms == 0:
+                    continue
+                for day in iter_day_keys_utc(_start_ms, _end_ms):
+                    p = Path(data_root) / sym_dir / tf_dir / f"part-{day}.jsonl"
+                    if not p.exists():
+                        continue
+                    _, _, dupes = dedup_file(p, dry_run=False)
+                    dedup_total += dupes
+        logging.info("DEDUP_TOTAL dupes_removed=%d", dedup_total)
+
     # Підсумок
     logging.info("═══ REBUILD SUMMARY ═══")
     for sym, stats in total_stats.items():
