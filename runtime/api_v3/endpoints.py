@@ -41,6 +41,7 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
 from aiohttp import web
@@ -1873,6 +1874,18 @@ def register_routes(
     # ADR-0059 §3.1.2 — paginated zones endpoint (slice 059.2).
     app.router.add_get("/api/v3/smc/zones", _handle_smc_zones)
     app.router.add_get("/api/v3/smc/levels", _handle_smc_levels)
+    # ADR-001 (cowork.001) — persistent thesis memory under /api/v3/cowork/*.
+    # Imported lazily to avoid a circular import (runtime.api_v3.cowork imports
+    # helpers from this module).
+    from runtime.api_v3.cowork import register_cowork_routes
+
+    # cowork.005 — event_flag endpoint reads `event_flag.json` from this dir
+    # (same dir the watcher daemon writes to). Env-driven SSOT.
+    cowork_triggers_dir_env = os.environ.get("COWORK_TRIGGERS_DIR", "").strip()
+    cowork_triggers_dir = (
+        Path(cowork_triggers_dir_env) if cowork_triggers_dir_env else None
+    )
+    register_cowork_routes(app, triggers_dir=cowork_triggers_dir)
     # Catch-all so typos under /api/v3/ return a structured 404 envelope
     # (F-S2-004) instead of aiohttp's plain text default.
     app.router.add_route("*", "/api/v3/{tail:.*}", _handle_v3_not_found)

@@ -32,9 +32,11 @@ TOKEN_PREFIX = "tk_"
 TOKEN_HEX_LEN = 64  # 32 bytes * 2 chars/byte (secrets.token_bytes(32).hex())
 TOKEN_FULL_LEN = len(TOKEN_PREFIX) + TOKEN_HEX_LEN  # 67
 
-# F-S1-007: only "read" is implemented in slice 058.1. Unknown scopes
+# F-S1-007: only "read" was implemented in slice 058.1. cowork.001 (ADR-001)
+# adds "cowork_write" — narrow scope that grants only POST /api/v3/cowork/published
+# (per-handler check in `runtime/api_v3/cowork.py:_require_scope`). Unknown scopes
 # (including future "read:XAU/USD") fail-closed via lookup() returning None.
-VALID_SCOPES = frozenset({"read"})
+VALID_SCOPES = frozenset({"read", "cowork_write"})
 
 
 @dataclass(frozen=True)
