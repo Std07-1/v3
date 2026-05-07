@@ -207,7 +207,7 @@ app.main (supervisor)
 | DrawingToolbar | ✅ Glass-like, CSS custom properties, micro-interactions | DrawingToolbar.svelte | ADR-0008 |
 | Theming | ✅ 3 themes (dark/black/light) + `applyThemeCssVars()` на `:root` | themes.ts, App.svelte | ADR-0008 |
 | ChartHud | ✅ Variant H shell: thesis bar (symbol+price+P/D chip+headline) + tactical strip (stage-driven visibility, bias pills, session, inv, target) + accent bar (READY/TRIGGERED) | ChartHud.svelte, PdBadge.svelte | ADR-0036, ADR-0041 |
-| Interaction | ✅ Y-zoom, Y-pan, scroll, keyboard shortcuts | interaction.ts | — |
+| Interaction | ✅ Y-zoom (wheel-on-axis + axis-drag), Y-pan (pane drag, shift+wheel), X-pan (LWC time-axis drag), dblclick reset, keyboard shortcuts. **Single-owner Y-scale** через `state.manualRange` (LWC native price-axis drag вимкнено) | interaction.ts, engine.ts | ADR-0064 |
 | DiagPanel | ✅ FE diagnostics, WS state, frame freshness | DiagPanel.svelte | — |
 | WSConnection | ✅ Quiet degraded, reconnect backoff | connection.ts | — |
 
@@ -827,7 +827,7 @@ v3/
 - Config frame (T8/S24): `_build_config_frame()` sent on connect before full frame. Policy bridge: symbols, TFs, delta_poll_interval_s, version.
 - Config SSOT (T10/S26): `ws_server.py` → `core.config_loader.load_system_config()` (єдиний SSOT, не дублює).
 - Chart parity (P3): engine.ts rewrite (volume, D1 +3h offset, UTC formatters, follow mode, rAF throttle, tooltip). V3 feature-complete.
-- Interaction (P3.3-P3.5): Y-zoom (wheel), Y-pan (drag), dblclick auto-reset — `interaction.ts` (385 LOC).
+- Interaction (P3.3-P3.5 + ADR-0064): Y-zoom (wheel-on-axis + axis-drag), Y-pan (pane drag, shift+wheel), dblclick auto-reset — `interaction.ts`. **Single-owner Y-scale**: `state.manualRange` через `autoscaleInfoProvider`. LWC native price-axis drag вимкнено (`axisPressedMouseMove.price=false` в `engine.ts`) — усунули split-brain freeze bug.
 - HUD (P3.1-P3.2): ChartHud.svelte (frosted glass, OHLCV + Δ + UTC clock, streaming dot, pulse, wheel TF cycling).
 - OhlcvTooltip (P3.6): crosshair cursor tooltip.
 - SymbolTfPicker: SSOT symbols/TFs from server via config frame (T5/T8).

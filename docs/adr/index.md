@@ -73,6 +73,7 @@
 | [0061](0061-vps-reconciliation-2026-05-05.md) | VPS Reconciliation 2026-05-05 (Force-Local Sync to origin/main) | **Implemented** | 2026-05-05 | VPS reconciliation, force-local, git reset, provenance check, tar backup, 60s observation, data_v3 sync, R3, M3 | `deploy_discipline_v1` |
 | [0062](0062-major-bump-playbook.md) | Major Dependency Bump Playbook (Reusable Template) | **Accepted** | 2026-05-05 | major bump, playbook, reusable template, 7-step process, 4-tier verification, DEP-1..5 invariants, R3, M3 | `dependency_governance_v1` |
 | [0063](0063-typescript-6-bump.md) | TypeScript 5.7→6.0.2 Bump (First ADR-0062 Instance) | **Implemented** | 2026-05-05 | typescript 6, dependency bump, ui_v4, svelte-check, vitest, vite build, A/B test, R3, M3 | `dependency_governance_v1` |
+| [0064](0064-price-axis-vertical-scale-single-owner.md) | Price-Axis Vertical Scale — Single Owner (LWC vs autoscaleInfoProvider) | **Implemented** | 2026-05-06 | UI freeze fix, axisPressedMouseMove, autoscaleInfoProvider, manualRange, split-brain, custom axis-drag zoom, interaction.ts, engine.ts, R2, M3 | `chart_interaction_stability_v1` |
 
 ---
 

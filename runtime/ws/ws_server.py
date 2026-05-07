@@ -95,25 +95,29 @@ class SmcRunnerLike(Protocol):
     def warmup(self, uds: UdsLike) -> None: ...
 
 
-APP_HEARTBEAT_S = web.AppKey("heartbeat_s", int)
-APP_DELTA_POLL_S = web.AppKey("delta_poll_s", float)
-APP_WS_SESSIONS = web.AppKey("ws_sessions", dict)
-APP_CONFIG_PATH = web.AppKey("config_path", str)
-APP_BOOT_ID = web.AppKey("boot_id", str)
-APP_FULL_CONFIG = web.AppKey("full_config", dict)
-APP_SYMBOLS_SET = web.AppKey("symbols_set", set)
-APP_TF_ALLOWLIST = web.AppKey("tf_allowlist", set)
-APP_PREVIEW_TF_SET = web.AppKey("preview_tf_set", set)
-APP_D1_TICK_RELAY_TFS = web.AppKey("d1_tick_relay_tfs", set)
-APP_TICK_REDIS_CLIENT = web.AppKey("tick_redis_client", RedisLike)
-APP_TICK_REDIS_NS = web.AppKey("tick_redis_ns", str)
-APP_UDS_EXECUTOR = web.AppKey("uds_executor", ThreadPoolExecutor)
-APP_UDS = web.AppKey("uds", UdsLike)
-APP_SMC_RUNNER = web.AppKey("smc_runner", SmcRunnerLike)
-APP_CORS_ORIGINS = web.AppKey("cors_origins", set)
-APP_GLOBAL_DELTA_TASK = web.AppKey("global_delta_task", asyncio.Task)
-APP_BG_SMC_TASK = web.AppKey("bg_smc_task", asyncio.Task)
-APP_WAKE_ENGINE = web.AppKey("wake_engine", object)  # ADR-0049: WakeEngine instance
+# AppKey-визначення винесені в runtime.ws.app_keys (SSOT, fix для __main__/module
+# double-import bug — див. docstring у app_keys.py та changelog 2026-05-06).
+from runtime.ws.app_keys import (  # noqa: E402
+    APP_BG_SMC_TASK,
+    APP_BOOT_ID,
+    APP_CONFIG_PATH,
+    APP_CORS_ORIGINS,
+    APP_D1_TICK_RELAY_TFS,
+    APP_DELTA_POLL_S,
+    APP_FULL_CONFIG,
+    APP_GLOBAL_DELTA_TASK,
+    APP_HEARTBEAT_S,
+    APP_PREVIEW_TF_SET,
+    APP_SMC_RUNNER,
+    APP_SYMBOLS_SET,
+    APP_TF_ALLOWLIST,
+    APP_TICK_REDIS_CLIENT,
+    APP_TICK_REDIS_NS,
+    APP_UDS,
+    APP_UDS_EXECUTOR,
+    APP_WAKE_ENGINE,
+    APP_WS_SESSIONS,
+)
 
 # CORS: РґРѕР·РІРѕР»РµРЅС– origins РґР»СЏ cross-origin (Vercel / Cloudflare Pages)
 # РљРѕРЅС„С–Рі: ws_server.cors_allowed_origins РІ config.json

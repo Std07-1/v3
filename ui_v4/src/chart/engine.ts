@@ -165,7 +165,10 @@ export class ChartEngine {
         horzTouchDrag: true,
       },
       handleScale: {
-        axisPressedMouseMove: { time: true, price: true },
+        // price=false: LWC native price-axis drag conflicts with our custom autoscaleInfoProvider
+        // (state.manualRange) and freezes chart. We own vertical scale via wheel-on-axis +
+        // pane drag → state.manualRange. See interaction.ts.
+        axisPressedMouseMove: { time: true, price: false },
         axisDoubleClickReset: { time: true, price: true },
         mouseWheel: true,
         pinch: true,

@@ -122,6 +122,32 @@ export function setupPriceScaleInteractions(
 ): () => void {
     const cleanups: Array<() => void> = [];
 
+    // ─── Debug probes (always on; remove after diagnosis) ───
+    const dbg = (tag: string, payload?: Record<string, unknown>) => {
+        // eslint-disable-next-line no-console
+        console.log(`[PriceAxis] ${tag}`, payload ?? {});
+    };
+    dbg('SETUP', { container: container.tagName, hasChart: !!chart, hasSeries: !!series });
+
+    // Window-level wheel logger — catches EVERY wheel including ones that bypass our container handler
+    const windowWheelLogger = (event: WheelEvent) => {
+        const pointer = getRelativePointer(event, container);
+        const { paneWidth, paneHeight, priceScaleWidth } = getPaneMetrics(chart, container);
+        dbg('window.wheel', {
+            target: (event.target as HTMLElement)?.tagName,
+            x: Math.round(pointer.x),
+            y: Math.round(pointer.y),
+            paneW: Math.round(paneWidth),
+            paneH: Math.round(paneHeight),
+            axisW: Math.round(priceScaleWidth),
+            inAxis: isPointerInPriceAxis(event, container, chart),
+            inPane: isPointerInsidePane(event, container, chart),
+            deltaY: event.deltaY,
+        });
+    };
+    window.addEventListener('wheel', windowWheelLogger, { capture: true, passive: true });
+    cleanups.push(() => window.removeEventListener('wheel', windowWheelLogger, { capture: true } as any));
+
     const state: PriceScaleState = {
         manualRange: null,
         lastAutoRange: null,
@@ -136,6 +162,18 @@ export function setupPriceScaleInteractions(
         baseRange: null,
         pointerId: null,
     };
+
+    // Axis-drag vertical zoom state (replaces LWC native axisPressedMouseMove.price)
+    // Drag down on price axis = expand range (zoom out); drag up = contract (zoom in).
+    // Anchor at midpoint of current range. SSOT for vertical scale via state.manualRange.
+    const axisZoomState: {
+        active: boolean;
+        startY: number;
+        startRange: PriceRange | null;
+        pointerId: number | null;
+    } = { active: false, startY: 0, startRange: null, pointerId: null };
+
+    const AXIS_ZOOM_INTENSITY = 0.005; // per px
 
     // ─── autoscaleInfoProvider (V3: chart_adapter_lite.js:360-380) ───
     // Зберігає manualRange між перемалюваннями LWC
@@ -227,12 +265,21 @@ export function setupPriceScaleInteractions(
 
     function applyWheelZoom(event: { clientY: number; deltaY: number }) {
         const currentRange = getEffectivePriceRange();
-        if (!currentRange) return;
+        if (!currentRange) {
+            dbg('wheelZoom.skip', { reason: 'no_effective_range', manualRange: state.manualRange, lastAutoRange: state.lastAutoRange });
+            return;
+        }
         const rect = container.getBoundingClientRect();
         const anchor = series.coordinateToPrice(event.clientY - rect.top);
-        if (anchor === null || !Number.isFinite(anchor)) return;
+        if (anchor === null || !Number.isFinite(anchor)) {
+            dbg('wheelZoom.skip', { reason: 'anchor_null', anchor, currentRange });
+            return;
+        }
         const span = currentRange.max - currentRange.min;
-        if (!(span > 0)) return;
+        if (!(span > 0)) {
+            dbg('wheelZoom.skip', { reason: 'invalid_span', span, currentRange });
+            return;
+        }
         const intensity = 0.002;
         const scale = Math.exp(Math.min(Math.abs(event.deltaY), 600) * intensity);
         const factor = event.deltaY < 0 ? 1 / scale : scale;
@@ -269,8 +316,10 @@ export function setupPriceScaleInteractions(
         const inPane = isPointerInsidePane(event, container, chart);
 
         if (!inAxis && !(event.shiftKey && inPane)) {
+            dbg('wheel.skip', { inAxis, inPane, shift: event.shiftKey });
             return; // Не наша зона — дозволити LWC обробити X-zoom/scroll
         }
+        dbg('wheel.handle', { inAxis, inPane, shift: event.shiftKey, deltaY: event.deltaY });
 
         event.preventDefault();
         event.stopPropagation();
@@ -305,18 +354,20 @@ export function setupPriceScaleInteractions(
     // V3: chart_adapter_lite.js:660-800
 
     const setLibraryDragEnabled = (enabled: boolean) => {
+        dbg('lwc.pressedMouseMove', { enabled });
         try {
             chart.applyOptions({
                 handleScroll: {
                     pressedMouseMove: enabled,
                 },
             });
-        } catch {
-            // noop
+        } catch (e) {
+            dbg('lwc.pressedMouseMove.error', { err: String(e) });
         }
     };
 
-    const stopVerticalPan = () => {
+    const stopVerticalPan = (origin: string = 'unknown') => {
+        dbg('pan.stop', { origin, pending: panState.pending, active: panState.active });
         if (!panState.pending) return;
         panState.pending = false;
         panState.active = false;
@@ -374,23 +425,67 @@ export function setupPriceScaleInteractions(
 
     // Pointer events (V3: chart_adapter_lite.js:730-790)
     const handlePointerDown = (event: PointerEvent) => {
+        const inAxis = isPointerInPriceAxis(event, container, chart);
+        const inPane = isPointerInsidePane(event, container, chart);
+        dbg('pointerdown', { inAxis, inPane, button: event.button, target: (event.target as HTMLElement)?.tagName });
         if (!event || event.button !== 0) return;
-        if (!isPointerInsidePane(event, container, chart)) return;
+        if (inAxis) {
+            const range = getEffectivePriceRange();
+            if (!range) return;
+            ensureManualRange(range);
+            axisZoomState.active = true;
+            axisZoomState.startY = event.clientY;
+            axisZoomState.startRange = state.manualRange ? { ...state.manualRange } : { ...range };
+            axisZoomState.pointerId = event.pointerId;
+            event.preventDefault();
+            dbg('axisZoom.start', { startRange: axisZoomState.startRange });
+            return;
+        }
+        if (!inPane) return;
         beginPan(event.clientX, event.clientY, event.pointerId);
     };
     container.addEventListener('pointerdown', handlePointerDown, true);
     cleanups.push(() => container.removeEventListener('pointerdown', handlePointerDown, true));
 
     const handlePointerMove = (event: PointerEvent) => {
+        if (axisZoomState.active && axisZoomState.startRange) {
+            if (axisZoomState.pointerId !== null && event.pointerId !== axisZoomState.pointerId) return;
+            const { paneHeight } = getPaneMetrics(chart, container);
+            if (!paneHeight) return;
+            const dy = event.clientY - axisZoomState.startY;
+            // dy>0 (drag down) → expand; dy<0 (drag up) → contract. Anchor = midpoint.
+            const scale = Math.exp(dy * AXIS_ZOOM_INTENSITY);
+            const mid = (axisZoomState.startRange.min + axisZoomState.startRange.max) / 2;
+            const half = (axisZoomState.startRange.max - axisZoomState.startRange.min) / 2;
+            const next = normalizeRange({ min: mid - half * scale, max: mid + half * scale });
+            if (next) applyManualRange(next);
+            event.preventDefault();
+            return;
+        }
         movePan(event, event.clientX, event.clientY);
     };
     window.addEventListener('pointermove', handlePointerMove, true);
     cleanups.push(() => window.removeEventListener('pointermove', handlePointerMove, true));
 
-    const handlePointerUp = () => stopVerticalPan();
+    // Window-level pointerup logger — fires for ANY release including price-axis releases (LWC native drag end)
+    const handlePointerUp = (event: PointerEvent) => {
+        dbg('pointerup.window', {
+            target: (event.target as HTMLElement)?.tagName,
+            panPending: panState.pending,
+            panActive: panState.active,
+            axisZoom: axisZoomState.active,
+            manualRange: state.manualRange,
+        });
+        if (axisZoomState.active) {
+            axisZoomState.active = false;
+            axisZoomState.startRange = null;
+            axisZoomState.pointerId = null;
+        }
+        stopVerticalPan('pointerup');
+    };
     window.addEventListener('pointerup', handlePointerUp, true);
     window.addEventListener('pointercancel', handlePointerUp, true);
-    window.addEventListener('blur', stopVerticalPan);
+    window.addEventListener('blur', () => stopVerticalPan('blur'));
     cleanups.push(() => window.removeEventListener('pointerup', handlePointerUp, true));
     cleanups.push(() => window.removeEventListener('pointercancel', handlePointerUp, true));
     cleanups.push(() => window.removeEventListener('blur', stopVerticalPan));
