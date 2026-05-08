@@ -224,6 +224,7 @@ export class ChartEngine {
     this.volumeSeries = this.chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
       priceScaleId: '',
+      lastValueVisible: false, // PATCH-01: hide preview "0" axis label
     });
     this.volumeSeries.priceScale().applyOptions({
       scaleMargins: { top: 0.895, bottom: 0 },
