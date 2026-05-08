@@ -16,7 +16,8 @@ import {
 } from 'lightweight-charts';
 import {
   type ThemeName, type CandleStyleName,
-  THEMES, CANDLE_STYLES,
+  THEMES,
+  resolveCandleStyle, VOLUME_ALPHA_BY_THEME,
   loadTheme, saveTheme, loadCandleStyle, saveCandleStyle,
 } from './themes';
 import type { Candle, T_MS } from '../types';
@@ -38,7 +39,8 @@ function _withAlpha(color: string, alpha: number): string {
   return color;
 }
 
-// Default volume colors (classic style)
+// Default volume alpha (kept for backward-compat fallback only).
+// PATCH 02e: live alpha now comes from VOLUME_ALPHA_BY_THEME[currentTheme].
 const VOLUME_ALPHA = 0.32;
 const D1_OFFSET_MS = 10_800_000; // +3h: FXCM D1 open 22:00/21:00 UTC → nominal date
 
@@ -128,9 +130,17 @@ export class ChartEngine {
   ) {
     this._onCrosshair = onCrosshairMove;
 
-    // Init volume colors from default candle style
-    this._volUpColor = _withAlpha(CANDLE_STYLES.classic.upColor, VOLUME_ALPHA);
-    this._volDownColor = _withAlpha(CANDLE_STYLES.classic.downColor, VOLUME_ALPHA);
+    // ADR-0066 PATCH 02e: Init volume colors via resolveCandleStyle for the
+    // saved (style, theme) pair so the seed already matches what
+    // applyCandleStyle/applyTheme would apply on first frame.
+    {
+      const _seedTheme = loadTheme();
+      const _seedStyle = loadCandleStyle();
+      const _seedResolved = resolveCandleStyle(_seedStyle, _seedTheme);
+      const _seedAlpha = VOLUME_ALPHA_BY_THEME[_seedTheme] ?? VOLUME_ALPHA;
+      this._volUpColor = _withAlpha(_seedResolved.upColor, _seedAlpha);
+      this._volDownColor = _withAlpha(_seedResolved.downColor, _seedAlpha);
+    }
 
     // ─── Chart options (V3 parity: DARK_CHART_OPTIONS, chart_adapter_lite.js:101-148) ───
     this.chart = createChart(container, {
@@ -647,17 +657,26 @@ export class ChartEngine {
   }
 
   // ─── P3.11: Multi-theme switching (V3: setTheme, chart_adapter_lite.js:1212-1224) ───
+  // ADR-0066 PATCH 02e: theme switch refreshes candle palette so styles like
+  // stealth/white that have per-theme overrides re-render visibly on the new bg.
   applyTheme(name: ThemeName): void {
     const t = THEMES[name];
     if (!t) return;
     this.chart.applyOptions(t.chart as any);
     saveTheme(name);
+    // Refresh candle palette using the new theme's overrides.
+    // applyCandleStyle internally syncs volume colors via _refreshVolumeColors.
+    this.applyCandleStyle(this.currentCandleStyle);
   }
 
   // ─── P3.12: Candle style presets + Entry 078 §2 volume color sync ───
+  // ADR-0066 PATCH 02e: reads resolveCandleStyle(name, currentTheme) — merges
+  // default variant with per-theme override (stealth/dark, white/light, etc).
+  // Volume alpha is theme-aware via VOLUME_ALPHA_BY_THEME (light needs higher
+  // alpha to avoid ghosting on off-white bg).
   applyCandleStyle(name: CandleStyleName): void {
-    const s = CANDLE_STYLES[name];
-    if (!s) return;
+    const theme = this.currentTheme;
+    const s = resolveCandleStyle(name, theme);
     this.series.applyOptions({
       upColor: s.upColor,
       downColor: s.downColor,
@@ -666,9 +685,9 @@ export class ChartEngine {
       wickUpColor: s.wickUpColor,
       wickDownColor: s.wickDownColor,
     });
-    // Entry 078: sync volume colors with candle style
-    this._volUpColor = _withAlpha(s.upColor, VOLUME_ALPHA);
-    this._volDownColor = _withAlpha(s.downColor, VOLUME_ALPHA);
+    const alpha = VOLUME_ALPHA_BY_THEME[theme] ?? VOLUME_ALPHA;
+    this._volUpColor = _withAlpha(s.upColor, alpha);
+    this._volDownColor = _withAlpha(s.downColor, alpha);
     this._refreshVolumeColors();
     saveCandleStyle(name);
   }

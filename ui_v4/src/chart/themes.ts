@@ -181,11 +181,17 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
 export const THEME_NAMES: ThemeName[] = ['dark', 'black', 'light'];
 
 // ─── Candle style presets (V3: CANDLE_STYLES, chart_adapter_lite.js:162-198) ───
+//
+// ADR-0066 PATCH 02e (Tier 8): Theme×Candle adaptation.
+// CANDLE_STYLES holds `default` palette per style + optional per-theme overrides.
+// resolveCandleStyle(style, theme) returns the merged CandleStyleDef.
+// All consumers (engine.applyCandleStyle, App.svelte picker swatch) MUST go
+// through resolveCandleStyle — never read CANDLE_STYLES[name].default directly.
 
 export type CandleStyleName = 'classic' | 'gray' | 'stealth' | 'white' | 'hollow';
 
-export interface CandleStyleDef {
-    label: string;
+/** Color-only candle variant (no label). Per-theme overrides are Partial<CandleVariant>. */
+export interface CandleVariant {
     upColor: string;
     downColor: string;
     borderUpColor: string;
@@ -194,40 +200,115 @@ export interface CandleStyleDef {
     wickDownColor: string;
 }
 
-export const CANDLE_STYLES: Record<CandleStyleName, CandleStyleDef> = {
+/** Public style entry: label + default variant + optional per-theme overrides. */
+export interface CandleStyleByTheme {
+    label: string;
+    default: CandleVariant;
+    dark?: Partial<CandleVariant>;
+    black?: Partial<CandleVariant>;
+    light?: Partial<CandleVariant>;
+}
+
+/** Resolved candle style (label + merged variant) — return type of resolveCandleStyle. */
+export interface CandleStyleDef extends CandleVariant {
+    label: string;
+}
+
+export const CANDLE_STYLES: Record<CandleStyleName, CandleStyleByTheme> = {
     classic: {
         label: 'Classic',
-        upColor: '#26a69a', downColor: '#ef5350',
-        borderUpColor: '#26a69a', borderDownColor: '#ef5350',
-        wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+        default: {
+            upColor: '#26a69a', downColor: '#ef5350',
+            borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+            wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+        },
     },
     gray: {
         label: 'Gray',
-        upColor: '#9aa0a6', downColor: 'rgba(255,255,255,0)',
-        borderUpColor: '#9aa0a6', borderDownColor: '#5f6368',
-        wickUpColor: '#9aa0a6', wickDownColor: '#5f6368',
+        default: {
+            upColor: '#9aa0a6', downColor: 'rgba(255,255,255,0)',
+            borderUpColor: '#9aa0a6', borderDownColor: '#5f6368',
+            wickUpColor: '#9aa0a6', wickDownColor: '#5f6368',
+        },
+        // ADR-0066 §579: black bg makes #5f6368 down-border ~3.5:1 (WCAG fail).
+        black: { borderDownColor: '#9aa0a6', wickDownColor: '#9aa0a6' },
     },
     stealth: {
         label: 'Stealth',
-        upColor: '#3a3f44', downColor: '#1f2327',
-        borderUpColor: '#3a3f44', borderDownColor: '#1f2327',
-        wickUpColor: '#3a3f44', wickDownColor: '#1f2327',
+        default: {
+            upColor: '#3a3f44', downColor: '#1f2327',
+            borderUpColor: '#3a3f44', borderDownColor: '#1f2327',
+            wickUpColor: '#3a3f44', wickDownColor: '#1f2327',
+        },
+        // ADR-0066 §580: dark grays on dark bg = invisible. Brighten for dark/black.
+        dark: {
+            upColor: '#7c8189', downColor: '#5d6268',
+            borderUpColor: '#7c8189', borderDownColor: '#5d6268',
+            wickUpColor: '#7c8189', wickDownColor: '#5d6268',
+        },
+        black: {
+            upColor: '#7c8189', downColor: '#5d6268',
+            borderUpColor: '#7c8189', borderDownColor: '#5d6268',
+            wickUpColor: '#7c8189', wickDownColor: '#5d6268',
+        },
     },
     white: {
         label: 'White',
-        upColor: '#e2e5e9', downColor: '#2f3338',
-        borderUpColor: '#e2e5e9', borderDownColor: '#2f3338',
-        wickUpColor: '#e2e5e9', wickDownColor: '#2f3338',
+        default: {
+            upColor: '#e2e5e9', downColor: '#2f3338',
+            borderUpColor: '#e2e5e9', borderDownColor: '#2f3338',
+            wickUpColor: '#e2e5e9', wickDownColor: '#2f3338',
+        },
+        // ADR-0066 §581: #e2e5e9 on white bodies = ~1.06:1 invisible.
+        light: {
+            upColor: '#cfd2d6', downColor: '#2f3338',
+            borderUpColor: '#cfd2d6', borderDownColor: '#2f3338',
+            wickUpColor: '#cfd2d6', wickDownColor: '#2f3338',
+        },
     },
     hollow: {
         label: 'Hollow',
-        upColor: 'rgba(255,255,255,0)', downColor: '#ef5350',
-        borderUpColor: '#26a69a', borderDownColor: '#ef5350',
-        wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+        default: {
+            upColor: 'rgba(255,255,255,0)', downColor: '#ef5350',
+            borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+            wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+        },
+        // ADR-0066 §582: up border #26a69a on white reads ~2.4:1, marginal.
+        light: {
+            borderUpColor: '#1a8580', wickUpColor: '#1a8580',
+            borderDownColor: '#c7423f', wickDownColor: '#c7423f',
+        },
     },
 };
 
 export const CANDLE_STYLE_NAMES: CandleStyleName[] = ['classic', 'gray', 'stealth', 'white', 'hollow'];
+
+/** Resolve a candle style for a given theme — merges default + per-theme overrides.
+ *  Public API for all consumers (engine, picker swatch). */
+export function resolveCandleStyle(
+    style: CandleStyleName,
+    theme: ThemeName,
+): CandleStyleDef {
+    const entry = CANDLE_STYLES[style];
+    if (!entry) {
+        // Fallback to classic if unknown style requested.
+        const fallback = CANDLE_STYLES.classic;
+        return { label: fallback.label, ...fallback.default };
+    }
+    return {
+        label: entry.label,
+        ...entry.default,
+        ...(entry[theme] ?? {}),
+    };
+}
+
+/** Volume bar alpha per theme. Light needs higher alpha to avoid ghosting on
+ *  off-white bg (ADR-0066 Tier 8 §672, GAP-5). */
+export const VOLUME_ALPHA_BY_THEME: Record<ThemeName, number> = {
+    dark: 0.32,
+    black: 0.36,
+    light: 0.42,
+};
 
 // ─── localStorage persistence ───
 

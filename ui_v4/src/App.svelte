@@ -23,6 +23,7 @@
     THEME_NAMES,
     CANDLE_STYLES,
     CANDLE_STYLE_NAMES,
+    resolveCandleStyle,
     loadTheme,
     loadCandleStyle,
     applyThemeCssVars,
@@ -576,7 +577,7 @@
             >
               <span
                 class="tr-swatch"
-                style:background={CANDLE_STYLES[cs].upColor}
+                style:background={resolveCandleStyle(cs, activeTheme).upColor}
               ></span>
               {CANDLE_STYLES[cs].label}
             </button>
