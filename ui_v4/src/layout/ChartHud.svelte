@@ -630,6 +630,7 @@
                         class="hud-bias-pill"
                         class:bull={p.bias === "bullish"}
                         class:bear={p.bias === "bearish"}
+                        class:current={p.label === currentTf}
                         >{p.label}<span class="bias-arrow">{p.arrow}</span
                         >{#if p.momDots}<span class="bias-mom {p.momCls}"
                                 >{p.momDots}</span
@@ -880,6 +881,25 @@
     }
     .hud-bias-pill.bear {
         color: #ef5350;
+    }
+    /* ADR-0066 Tier 4 amendment §1118 GAP-6: 1.5px gold underbar on active TF.
+       Marks the currently-displayed TF among the bias strip without filled-bg. */
+    .hud-bias-pill.current {
+        position: relative;
+        padding-bottom: 2px;
+    }
+    .hud-bias-pill.current::after {
+        content: "";
+        position: absolute;
+        left: 4px;
+        right: 4px;
+        bottom: -1px;
+        height: 1.5px;
+        background: var(--accent);
+        border-radius: 1px;
+    }
+    :global([data-theme="light"]) .hud-bias-pill.current::after {
+        background: var(--accent-deep);
     }
     .bias-arrow {
         font-size: var(--t8-size);
