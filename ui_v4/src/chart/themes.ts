@@ -2,6 +2,11 @@
 // P3.11 Multi-theme + P3.12 Candle styles — SSOT визначення.
 // V3 parity: chart_adapter_lite.js:102-153 (теми), :158-199 (стилі свічок).
 // Persistence: localStorage ('v4_theme', 'v4_candle_style').
+//
+// ADR-0066 PATCH 02b: dark theme palette MIRRORS ui_v4/src/styles/tokens.css `:root`.
+// LWC applyOptions() consumes raw hex (cannot resolve CSS vars at runtime), so values
+// are duplicated by necessity. **Edit BOTH places** when tokens shift; mismatch = drift.
+// Black/light theme alignment → PATCH 02c (will use [data-theme="..."] overrides in tokens.css).
 
 import { CrosshairMode, LineStyle } from 'lightweight-charts';
 
@@ -63,30 +68,32 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
     dark: {
         label: 'Dark',
         chart: {
-            layout: { background: { color: 'transparent' }, textColor: '#d5d5d5' },
+            // ADR-0066: textColor = --text-2 (#9B9BB0); grid = --border @ 0.4 (#30363D)
+            layout: { background: { color: 'transparent' }, textColor: '#9B9BB0' },
             grid: {
-                vertLines: { color: 'rgba(43, 56, 70, 0.4)' },
-                horzLines: { color: 'rgba(43, 56, 70, 0.4)' },
+                vertLines: { color: 'rgba(48, 54, 61, 0.6)' },
+                horzLines: { color: 'rgba(48, 54, 61, 0.6)' },
             },
             crosshair: {
                 mode: CrosshairMode.Normal,
-                vertLine: { color: 'rgba(213, 213, 213, 0.35)', width: 1, style: LineStyle.Dashed },
-                horzLine: { color: 'rgba(213, 213, 213, 0.35)', width: 1, style: LineStyle.Dashed },
+                vertLine: { color: 'rgba(230, 237, 243, 0.35)', width: 1, style: LineStyle.Dashed },
+                horzLine: { color: 'rgba(230, 237, 243, 0.35)', width: 1, style: LineStyle.Dashed },
             },
         },
-        appBg: '#131722',
+        // ADR-0066 token mirror: --bg / --elev / --card / --border / --text-1 / --accent
+        appBg: '#0D1117',                              // --bg
         hudBg: 'transparent',
-        hudText: '#d1d4dc',
+        hudText: '#E6EDF3',                            // --text-1
         hudBorder: 'transparent',
-        statusBarBg: '#1e222d',
-        menuBg: 'rgba(30, 34, 45, 0.92)',
-        menuBorder: 'rgba(255, 255, 255, 0.08)',
-        drawingColor: '#c8cdd6',
-        drawingRectFill: 'rgba(200, 205, 214, 0.10)',
-        toolbarBg: 'rgba(19, 23, 34, 0.6)',
-        toolbarBorder: 'rgba(255, 255, 255, 0.1)',
-        toolbarHoverBg: 'rgba(255, 255, 255, 0.08)',
-        toolbarActiveColor: '#3d9aff',
+        statusBarBg: '#161B22',                        // --elev
+        menuBg: 'rgba(28, 33, 40, 0.92)',              // --card @ 0.92
+        menuBorder: 'rgba(48, 54, 61, 0.8)',           // --border
+        drawingColor: '#E6EDF3',                       // --text-1
+        drawingRectFill: 'rgba(230, 237, 243, 0.10)',
+        toolbarBg: 'rgba(13, 17, 23, 0.6)',            // --bg @ 0.6
+        toolbarBorder: 'rgba(48, 54, 61, 0.8)',        // --border
+        toolbarHoverBg: 'rgba(230, 237, 243, 0.08)',
+        toolbarActiveColor: '#D4A017',                 // --accent (gold, replaces #3d9aff blue)
         pdEqLineColor: 'rgba(255, 255, 255, 0.40)',
         pdBadgeDiscountBg: 'rgba(46, 204, 113, 0.15)',
         pdBadgeDiscountText: '#2ecc71',
@@ -254,6 +261,9 @@ export function saveCandleStyle(name: CandleStyleName): void {
 export function applyThemeCssVars(name: ThemeName): void {
     const t = THEMES[name];
     if (!t) return;
+    // ADR-0066 PATCH 02b: expose theme name to CSS so tokens.css can layer
+    // [data-theme="black"] / [data-theme="light"] surface overrides (PATCH 02c).
+    document.documentElement.dataset.theme = name;
     const s = document.documentElement.style;
     s.setProperty('--toolbar-btn-color', t.drawingColor);
     s.setProperty('--toolbar-bg', t.toolbarBg);
