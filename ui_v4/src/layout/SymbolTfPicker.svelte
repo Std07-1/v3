@@ -80,7 +80,7 @@
         border: 1px solid #363a45;
         border-radius: 4px;
         padding: 4px 8px;
-        font-size: 13px;
+        font-size: var(--t1-size);
         cursor: pointer;
         outline: none;
     }

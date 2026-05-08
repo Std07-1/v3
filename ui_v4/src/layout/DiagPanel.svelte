@@ -224,14 +224,14 @@
         border-radius: 10px;
         padding: 12px 14px;
         box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
-        font-size: 11px;
+        font-size: var(--t3-size);
         color: #b2b5be;
         pointer-events: auto;
         backdrop-filter: blur(12px);
     }
     .diag-title {
         margin: 0 0 10px;
-        font-size: 14px;
+        font-size: var(--t0-size);
         color: var(--text-1);
         font-weight: 700;
     }
@@ -240,7 +240,7 @@
     }
     .diag-section h4 {
         margin: 0 0 4px;
-        font-size: 11px;
+        font-size: var(--t3-size);
         color: #787b86;
         text-transform: uppercase;
         letter-spacing: 0.6px;
@@ -274,7 +274,7 @@
         max-height: 120px;
         overflow-y: auto;
         font-family: "Roboto Mono", monospace;
-        font-size: 10px;
+        font-size: var(--t4-size);
     }
     .warn-line {
         padding: 1px 0;

@@ -119,7 +119,7 @@
         padding: 3px 10px;
         background: #1e222d;
         border-top: 1px solid #2a2e39;
-        font-size: 12px;
+        font-size: var(--t3a-size);
         color: #787b86;
         min-height: 24px;
     }
@@ -146,7 +146,7 @@
 
     .status-detail {
         margin-left: auto;
-        font-size: 11px;
+        font-size: var(--t3-size);
         color: #5d606b;
         max-width: 300px;
         overflow: hidden;
@@ -158,7 +158,7 @@
     .diag-btn {
         all: unset;
         cursor: pointer;
-        font-size: 12px;
+        font-size: var(--t3a-size);
         padding: 0 4px;
         opacity: 0.5;
         transition: opacity 0.15s;

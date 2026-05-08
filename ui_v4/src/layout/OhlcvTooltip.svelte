@@ -85,7 +85,7 @@
         display: flex;
         flex-direction: column;
         gap: 1px;
-        font-size: 12px;
+        font-size: var(--t3a-size);
         font-family: "Roboto Mono", monospace, sans-serif;
         pointer-events: none;
         white-space: nowrap;
@@ -96,12 +96,12 @@
         gap: 3px;
     }
     .leg-row-secondary {
-        font-size: 11px;
+        font-size: var(--t3-size);
         opacity: 0.8;
     }
     .leg-lbl {
         opacity: 0.45;
-        font-size: 11px;
+        font-size: var(--t3-size);
     }
     .leg-val {
         font-weight: 500;

@@ -87,7 +87,7 @@
         border-radius: 4px;
     }
     .bias-pill {
-        font-size: 9px;
+        font-size: var(--t6-size);
         font-weight: 600;
         padding: 1px 4px;
         border-radius: 3px;
@@ -109,11 +109,11 @@
         border: 1px solid rgba(239, 83, 80, 0.3);
     }
     .arrow {
-        font-size: 7px;
+        font-size: var(--t8-size);
         margin-left: 1px;
     }
     .mom {
-        font-size: 8px;
+        font-size: var(--t7-size);
         margin-left: 2px;
         letter-spacing: 0px;
     }

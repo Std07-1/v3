@@ -250,12 +250,12 @@
     .overlay-desc {
         color: #b2b5be;
         margin: 0 0 4px;
-        font-size: 14px;
+        font-size: var(--t0-size);
     }
 
     .overlay-detail-short {
         color: #5d606b;
-        font-size: 12px;
+        font-size: var(--t3a-size);
         margin: 0 0 20px;
     }
 
@@ -270,7 +270,7 @@
         padding: 8px 20px;
         border: none;
         border-radius: 6px;
-        font-size: 14px;
+        font-size: var(--t0-size);
         cursor: pointer;
         font-weight: 600;
     }
@@ -296,7 +296,7 @@
         background: none;
         border: none;
         color: #5d606b;
-        font-size: 12px;
+        font-size: var(--t3a-size);
         cursor: pointer;
         padding: 4px;
     }
@@ -311,7 +311,7 @@
 
     .details-table {
         width: 100%;
-        font-size: 11px;
+        font-size: var(--t3-size);
         border-collapse: collapse;
     }
 

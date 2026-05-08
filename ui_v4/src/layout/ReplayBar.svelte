@@ -174,7 +174,7 @@
     .rb-btn {
         all: unset;
         cursor: pointer;
-        font-size: 12px;
+        font-size: var(--t3a-size);
         padding: 4px 10px;
         border-radius: 6px;
         color: #8b8f9a;
@@ -203,7 +203,7 @@
 
     .rb-speed {
         font-family: "Roboto Mono", monospace, sans-serif;
-        font-size: 11px;
+        font-size: var(--t3-size);
         min-width: 36px;
         text-align: center;
         color: #f0b90b;
@@ -215,7 +215,7 @@
 
     .rb-exit {
         color: #ef5350;
-        font-size: 13px;
+        font-size: var(--t1-size);
         font-weight: bold;
         padding: 4px 8px;
     }
@@ -225,7 +225,7 @@
     }
 
     .rb-info {
-        font-size: 10px;
+        font-size: var(--t4-size);
         color: #787b86;
         font-family: "Roboto Mono", monospace, sans-serif;
         white-space: nowrap;

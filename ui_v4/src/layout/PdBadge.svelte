@@ -21,7 +21,7 @@
 
 <style>
     .pd-chip {
-        font-size: 9px;
+        font-size: var(--t6-size);
         font-weight: 700;
         font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
         padding: 1px 5px;

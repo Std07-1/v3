@@ -672,7 +672,7 @@
   }
   .tr-brightness {
     cursor: pointer;
-    font-size: 14px;
+    font-size: var(--t0-size);
     opacity: 0.6;
     transition: opacity 0.15s;
     user-select: none;
@@ -683,7 +683,7 @@
   .tr-diag-btn {
     all: unset;
     cursor: pointer;
-    font-size: 13px;
+    font-size: var(--t1-size);
     opacity: 0.5;
     transition: opacity 0.15s;
   }
@@ -691,7 +691,7 @@
     opacity: 1;
   }
   .tr-clock {
-    font-size: 11px;
+    font-size: var(--t3-size);
     font-family: "Roboto Mono", monospace, sans-serif;
     white-space: nowrap;
   }
@@ -704,7 +704,7 @@
     right: 4px;
     z-index: 35;
     cursor: pointer;
-    font-size: 10px;
+    font-size: var(--t4-size);
     font-weight: 700;
     letter-spacing: 0.5px;
     padding: 4px 10px;
@@ -727,7 +727,7 @@
     bottom: 4px;
     right: 4px;
     z-index: 35;
-    font-size: 10px;
+    font-size: var(--t4-size);
     font-weight: 700;
     letter-spacing: 1px;
     padding: 5px 12px;
@@ -751,7 +751,7 @@
   .tr-picker-btn {
     all: unset;
     cursor: pointer;
-    font-size: 13px;
+    font-size: var(--t1-size);
     opacity: 0.45;
     transition: opacity 0.15s;
     padding: 0 2px;
@@ -780,7 +780,7 @@
     all: unset;
     cursor: pointer;
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: var(--t3-size);
     color: #8b8f9a;
     border-radius: 4px;
     transition: background 0.12s;

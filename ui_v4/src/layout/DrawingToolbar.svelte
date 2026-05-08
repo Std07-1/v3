@@ -115,7 +115,7 @@
     color: var(--toolbar-btn-color, #c8cdd6);
     opacity: 0.45;
     cursor: pointer;
-    font-size: 10px;
+    font-size: var(--t4-size);
     line-height: 1;
     padding: 2px 0;
     width: 100%;
@@ -143,7 +143,7 @@
     height: 22px;
     border-radius: 4px;
     transition: all 0.15s ease;
-    font-size: 11px;
+    font-size: var(--t3-size);
     line-height: 22px;
     text-align: center;
     padding: 0;

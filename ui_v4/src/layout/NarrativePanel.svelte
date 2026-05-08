@@ -164,7 +164,7 @@
         background: rgba(19, 23, 34, 0.85);
         backdrop-filter: blur(6px);
         color: #c0c4cc;
-        font-size: 11px;
+        font-size: var(--t3-size);
         font-weight: 600;
         cursor: pointer;
         transition: all 0.15s ease;
@@ -185,14 +185,14 @@
         flex: 1;
     }
     .phase-badge {
-        font-size: 9px;
+        font-size: var(--t6-size);
         padding: 1px 5px;
         border-radius: 3px;
         background: rgba(120, 123, 134, 0.15);
         color: #8b8f9a;
     }
     .expand-arrow {
-        font-size: 10px;
+        font-size: var(--t4-size);
         color: #5d6068;
     }
 
@@ -203,7 +203,7 @@
         border-radius: 6px;
         background: rgba(19, 23, 34, 0.9);
         backdrop-filter: blur(6px);
-        font-size: 10px;
+        font-size: var(--t4-size);
         color: #a0a4b0;
         display: flex;
         flex-direction: column;
@@ -249,7 +249,7 @@
         color: #ef5350;
     }
     .sc-trigger {
-        font-size: 9px;
+        font-size: var(--t6-size);
         margin-top: 2px;
         padding: 2px 6px;
         border-radius: 3px;
@@ -272,22 +272,22 @@
     }
     .sc-target {
         color: var(--accent);
-        font-size: 9px;
+        font-size: var(--t6-size);
         margin-top: 1px;
     }
     .sc-invalidation {
         color: #ef5350;
-        font-size: 9px;
+        font-size: var(--t6-size);
         margin-top: 1px;
         opacity: 0.7;
     }
     .fvg-ctx {
         color: #2ecc71;
-        font-size: 9px;
+        font-size: var(--t6-size);
     }
     .warnings {
         color: #ff9800;
-        font-size: 9px;
+        font-size: var(--t6-size);
     }
 
     /* ADR-0049: Archi Thesis */
@@ -302,16 +302,16 @@
         display: flex;
         align-items: center;
         gap: 4px;
-        font-size: 9px;
+        font-size: var(--t6-size);
     }
-    .archi-icon { font-size: 10px; }
+    .archi-icon { font-size: var(--t4-size); }
     .archi-label {
         font-weight: 700;
         color: #b388ff;
-        font-size: 9px;
+        font-size: var(--t6-size);
     }
     .conviction {
-        font-size: 8px;
+        font-size: var(--t7-size);
         padding: 1px 4px;
         border-radius: 3px;
     }
@@ -319,7 +319,7 @@
     .conviction-medium { color: #ffa726; background: rgba(255, 167, 38, 0.12); }
     .conviction-low { color: #8b8f9a; background: rgba(120, 123, 134, 0.12); }
     .freshness {
-        font-size: 7px;
+        font-size: var(--t8-size);
         padding: 1px 3px;
         border-radius: 2px;
         margin-left: auto;
@@ -328,13 +328,13 @@
     .freshness-aging { color: #ffa726; }
     .freshness-stale { color: #ef5350; }
     .archi-thesis {
-        font-size: 10px;
+        font-size: var(--t4-size);
         color: #d0d4e0;
         margin-top: 3px;
         line-height: 1.4;
     }
     .archi-detail {
-        font-size: 9px;
+        font-size: var(--t6-size);
         color: var(--accent);
         margin-top: 2px;
     }
@@ -351,7 +351,7 @@
         margin-top: 4px;
         padding-top: 3px;
         border-top: 1px solid rgba(120, 123, 134, 0.08);
-        font-size: 8px;
+        font-size: var(--t7-size);
         color: #5d6068;
     }
     .presence-dot {
@@ -371,6 +371,6 @@
     .presence-text { flex: 1; }
     .presence-conditions {
         color: #8b8f9a;
-        font-size: 7px;
+        font-size: var(--t8-size);
     }
 </style>
