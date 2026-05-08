@@ -44,10 +44,15 @@
         border-color: rgba(239, 83, 80, 0.4);
         background: rgba(239, 83, 80, 0.1);
     }
+    /* ADR-0066 PATCH 06b-ext: amber pill -> gold (var(--accent)).
+       Previously rgb(255, 167, 38) generic orange; now brand gold per Tier 4
+       amendment. Note: full Premium-always-gold + Discount-always-bull
+       semantic restructure is deferred (PdBadge directional logic vs Tier 4
+       conflict requires ADR clarification). */
     .pd-chip.amber {
-        color: #ffa726;
-        border-color: rgba(255, 167, 38, 0.45);
-        background: rgba(255, 167, 38, 0.12);
+        color: var(--accent);
+        border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
     }
     .pd-chip.neutral {
         color: rgba(255, 255, 255, 0.5);

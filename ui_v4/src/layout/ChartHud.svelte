@@ -1242,9 +1242,11 @@
         font-size: 9px;
         font-weight: 700;
         font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
-        color: #ff9800;
-        background: rgba(255, 152, 0, 0.1);
-        border: 1px solid rgba(255, 152, 0, 0.3);
+        /* ADR-0066 Tier 4 amendment: session active pill in gold (was #ff9800).
+           bg 16% / border 40% per Tier 4 dark; light/black overrides via [data-theme]. */
+        color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 16%, transparent);
+        border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
         padding: 1px 5px;
         border-radius: 3px;
         letter-spacing: 0.5px;
