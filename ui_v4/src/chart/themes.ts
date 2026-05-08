@@ -105,30 +105,32 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
     black: {
         label: 'Black',
         chart: {
-            layout: { background: { color: '#000000' }, textColor: '#d5d5d5' },
+            // ADR-0066 PATCH 02c: text/grid use --text-2 / --border tokens for cross-theme harmony
+            layout: { background: { color: '#000000' }, textColor: '#9B9BB0' },
             grid: {
-                vertLines: { color: 'rgba(255, 255, 255, 0.05)' },
-                horzLines: { color: 'rgba(255, 255, 255, 0.05)' },
+                vertLines: { color: 'rgba(48, 54, 61, 0.4)' },
+                horzLines: { color: 'rgba(48, 54, 61, 0.4)' },
             },
             crosshair: {
                 mode: CrosshairMode.Normal,
-                vertLine: { color: 'rgba(255, 255, 255, 0.25)', width: 1, style: LineStyle.Dashed },
-                horzLine: { color: 'rgba(255, 255, 255, 0.25)', width: 1, style: LineStyle.Dashed },
+                vertLine: { color: 'rgba(230, 237, 243, 0.30)', width: 1, style: LineStyle.Dashed },
+                horzLine: { color: 'rgba(230, 237, 243, 0.30)', width: 1, style: LineStyle.Dashed },
             },
         },
-        appBg: '#000000',
+        // ADR-0066 token mirror (black variant): true black canvas, --elev/--card stay
+        appBg: '#000000',                              // true black identity
         hudBg: 'transparent',
-        hudText: '#d1d4dc',
+        hudText: '#E6EDF3',                            // --text-1
         hudBorder: 'transparent',
-        statusBarBg: '#111111',
+        statusBarBg: '#0A0A0A',                        // black-tinted --elev
         menuBg: 'rgba(20, 20, 20, 0.92)',
-        menuBorder: 'rgba(255, 255, 255, 0.08)',
-        drawingColor: '#c8cdd6',
-        drawingRectFill: 'rgba(200, 205, 214, 0.10)',
-        toolbarBg: 'rgba(10, 10, 10, 0.6)',
-        toolbarBorder: 'rgba(255, 255, 255, 0.08)',
-        toolbarHoverBg: 'rgba(255, 255, 255, 0.08)',
-        toolbarActiveColor: '#3d9aff',
+        menuBorder: 'rgba(48, 54, 61, 0.6)',           // --border @ 0.6
+        drawingColor: '#E6EDF3',                       // --text-1
+        drawingRectFill: 'rgba(230, 237, 243, 0.10)',
+        toolbarBg: 'rgba(0, 0, 0, 0.6)',
+        toolbarBorder: 'rgba(48, 54, 61, 0.6)',        // --border
+        toolbarHoverBg: 'rgba(230, 237, 243, 0.08)',
+        toolbarActiveColor: '#D4A017',                 // --accent (gold)
         pdEqLineColor: 'rgba(255, 255, 255, 0.40)',
         pdBadgeDiscountBg: 'rgba(46, 204, 113, 0.18)',
         pdBadgeDiscountText: '#27ae60',
@@ -140,30 +142,32 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
     light: {
         label: 'Light',
         chart: {
-            layout: { background: { color: '#ffffff' }, textColor: '#333333' },
+            // ADR-0066 PATCH 02c: dark text on white, neutral grid — keeps mirror discipline
+            layout: { background: { color: '#FFFFFF' }, textColor: '#45455A' },     // --text-4 inverted role
             grid: {
-                vertLines: { color: 'rgba(0, 0, 0, 0.06)' },
-                horzLines: { color: 'rgba(0, 0, 0, 0.06)' },
+                vertLines: { color: 'rgba(48, 54, 61, 0.10)' },
+                horzLines: { color: 'rgba(48, 54, 61, 0.10)' },
             },
             crosshair: {
                 mode: CrosshairMode.Normal,
-                vertLine: { color: 'rgba(0, 0, 0, 0.2)', width: 1, style: LineStyle.Dashed },
-                horzLine: { color: 'rgba(0, 0, 0, 0.2)', width: 1, style: LineStyle.Dashed },
+                vertLine: { color: 'rgba(13, 17, 23, 0.30)', width: 1, style: LineStyle.Dashed },
+                horzLine: { color: 'rgba(13, 17, 23, 0.30)', width: 1, style: LineStyle.Dashed },
             },
         },
-        appBg: '#ffffff',
+        // ADR-0066 token mirror (light variant): inverted scale; --accent-soft for AA contrast on white
+        appBg: '#FFFFFF',
         hudBg: 'transparent',
-        hudText: '#131722',
+        hudText: '#0D1117',                            // mirrors --bg as text on white
         hudBorder: 'transparent',
-        statusBarBg: '#f0f0f0',
-        menuBg: 'rgba(255, 255, 255, 0.92)',
-        menuBorder: 'rgba(0, 0, 0, 0.08)',
-        drawingColor: '#434651',
-        drawingRectFill: 'rgba(67, 70, 81, 0.10)',
-        toolbarBg: 'rgba(242, 245, 248, 0.7)',
-        toolbarBorder: 'rgba(0, 0, 0, 0.05)',
-        toolbarHoverBg: 'rgba(0, 0, 0, 0.06)',
-        toolbarActiveColor: '#2962ff',
+        statusBarBg: '#F4F6F8',                        // soft elev on white
+        menuBg: 'rgba(255, 255, 255, 0.94)',
+        menuBorder: 'rgba(48, 54, 61, 0.18)',
+        drawingColor: '#1C2128',                       // --card as ink on white (high contrast)
+        drawingRectFill: 'rgba(28, 33, 40, 0.08)',
+        toolbarBg: 'rgba(244, 246, 248, 0.7)',
+        toolbarBorder: 'rgba(48, 54, 61, 0.12)',
+        toolbarHoverBg: 'rgba(13, 17, 23, 0.06)',
+        toolbarActiveColor: '#B8881A',                 // --accent-soft (gold AA on white)
         pdEqLineColor: 'rgba(0, 0, 0, 0.35)',
         pdBadgeDiscountBg: 'rgba(39, 174, 96, 0.12)',
         pdBadgeDiscountText: '#1e8449',
