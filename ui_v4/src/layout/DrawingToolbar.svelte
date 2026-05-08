@@ -156,9 +156,9 @@
   }
 
   .tool-btn.active {
-    color: var(--toolbar-active-color, #3d9aff);
+    color: var(--toolbar-active-color, #D4A017);
     opacity: 1;
-    background: rgba(61, 154, 255, 0.15);
-    box-shadow: 0 0 8px rgba(61, 154, 255, 0.25);
+    background: color-mix(in srgb, var(--toolbar-active-color, #D4A017) 15%, transparent);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--toolbar-active-color, #D4A017) 25%, transparent);
   }
 </style>

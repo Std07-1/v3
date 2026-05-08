@@ -46,6 +46,16 @@
   --info:         #5487FF;   /* dialog accents, links — UI semantics blue */
   --warn:         #FFB347;   /* WAIT / STAY OUT pills */
 
+  /* Deep variants (light-theme pill text + active indicators per Tier 4 amendment) */
+  --accent-deep:  #8E6A12;   /* gold family, AA on light surface */
+  --bull-deep:    #178A5B;   /* discount/READY pill text on light */
+  --bear-deep:    #B53641;   /* WARNING pill text on light */
+  --warn-deep:    #A8732A;   /* WAIT/STAY OUT pill text on light */
+
+  /* Surface tokens (Tier 9.2 — mark plate, splash backdrop, soft elevation) */
+  --surface-1:    #161B22;   /* subtle elevated surface (dark default = --elev) */
+  --border-mute:  #21262D;   /* soft border (plate edge, divider variant) */
+
   /* ─── Tier 5 · Typographic scale ─── */
 
   --font-sans:    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -88,11 +98,37 @@
 
 /*
  * Theme variants — apply via <html data-theme="black"> or "light".
- * PATCH 02a: scaffolds only `dark` (default). Black/light come in PATCH 02b
- * once themes.ts consumes tokens (currently themes.ts holds inline values
- * for all three themes, which we preserve for visual parity).
+ * PATCH 02b/c migrated `themes.ts` to mirror tokens for LWC chart options
+ * (which cannot read CSS vars at runtime). PATCH 06b adds the
+ * data-theme selectors below for chrome `.svelte` components that consume
+ * tokens directly via var(--*).
  *
- * The `:root` block above IS the dark theme. Black / light overrides land
- * in PATCH 02b together with the themes.ts refactor — adding them here
- * without consumers would be dead CSS.
+ * The `:root` block above IS the dark theme. Black / light overrides
+ * narrow surface/text/border roles only — accents stay gold across all
+ * three themes (with `--accent-soft` on light for AA contrast on white,
+ * `--accent-deep` for pill text & active indicators on light per ADR §413).
  */
+
+[data-theme="black"] {
+  --bg:           #000000;   /* true black canvas */
+  --elev:         #0A0A0A;
+  --card:         #14141C;
+  --border:       #2A2A3A;
+  --surface-1:    #0A0A0A;
+  --border-mute:  #1A1A1A;
+}
+
+[data-theme="light"] {
+  --bg:           #FFFFFF;
+  --elev:         #F4F6F8;
+  --card:         #F0F2F5;
+  --border:       #D1D5DA;
+  --text-1:       #0D1117;   /* dark ink on white */
+  --text-2:       #45455A;
+  --text-3:       #6B6B80;
+  --text-4:       #9B9BB0;
+  --accent:       #B8881A;   /* AA-compliant gold on white (--accent-soft) */
+  --warn:         #A8732A;   /* warn-deep used as warn on light per Tier 4 */
+  --surface-1:    #FFFFFF;
+  --border-mute:  #E1E4E8;
+}

@@ -276,7 +276,7 @@
     }
 
     .btn-primary {
-        background: #4a90d9;
+        background: var(--accent);
         color: #fff;
     }
     .btn-primary:hover {
@@ -285,7 +285,7 @@
 
     .btn-secondary {
         background: #2a2e39;
-        color: #d1d4dc;
+        color: var(--text-1);
         border: 1px solid #363a45;
     }
     .btn-secondary:hover {

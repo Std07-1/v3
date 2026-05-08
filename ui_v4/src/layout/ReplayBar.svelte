@@ -185,7 +185,7 @@
         line-height: 1;
     }
     .rb-btn:hover {
-        color: #d1d4dc;
+        color: var(--text-1);
         background: rgba(255, 255, 255, 0.08);
         border-color: rgba(255, 255, 255, 0.14);
     }

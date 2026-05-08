@@ -113,7 +113,7 @@
   let chartPaneRef: any = $state(null);
   let activeTheme: ThemeName = $state(loadTheme());
   let appBg = $derived(THEMES[activeTheme]?.appBg ?? "#131722");
-  let hudText = $derived(THEMES[activeTheme]?.hudText ?? "#d1d4dc");
+  let hudText = $derived(THEMES[activeTheme]?.hudText ?? "var(--text-1)");
   let menuBg = $derived(
     (THEMES[activeTheme] as any)?.menuBg ?? "rgba(30, 34, 45, 0.92)",
   );
@@ -628,7 +628,7 @@
     ); /* P1: JS-driven viewport height, dvh fallback */
     overflow: hidden;
     /* background set dynamically via style:background= for theme switching */
-    color: #d1d4dc;
+    color: var(--text-1);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
       sans-serif;
   }
@@ -790,11 +790,11 @@
   }
   .tr-dd-item:hover {
     background: rgba(128, 128, 128, 0.15);
-    color: #d1d4dc;
+    color: var(--text-1);
   }
   .tr-dd-item.active {
-    background: rgba(74, 144, 217, 0.2);
-    color: #4a90d9;
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    color: var(--accent);
     font-weight: 600;
   }
   .tr-swatch {

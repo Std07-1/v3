@@ -76,7 +76,7 @@
 
     .picker-select {
         background: #2a2e39;
-        color: #d1d4dc;
+        color: var(--text-1);
         border: 1px solid #363a45;
         border-radius: 4px;
         padding: 4px 8px;
@@ -86,11 +86,11 @@
     }
 
     .picker-select:hover {
-        border-color: #4a90d9;
+        border-color: var(--accent);
     }
 
     .picker-select:focus {
-        border-color: #4a90d9;
-        box-shadow: 0 0 0 1px #4a90d950;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 31%, transparent);
     }
 </style>

@@ -133,7 +133,7 @@
 
     .status-label {
         font-weight: 600;
-        color: #d1d4dc;
+        color: var(--text-1);
     }
 
     .status-item {

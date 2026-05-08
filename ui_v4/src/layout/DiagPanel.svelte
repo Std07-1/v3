@@ -232,7 +232,7 @@
     .diag-title {
         margin: 0 0 10px;
         font-size: 14px;
-        color: #d1d4dc;
+        color: var(--text-1);
         font-weight: 700;
     }
     .diag-section {

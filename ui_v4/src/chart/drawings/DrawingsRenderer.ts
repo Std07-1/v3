@@ -96,6 +96,10 @@ export class DrawingsRenderer {
   // ADR-0007: theme-aware кольори (кешовані, оновлюються через refreshThemeColors)
   private themeBaseColor = '#c8cdd6';
   private themeRectFill = 'rgba(200, 205, 214, 0.10)';
+  // ADR-0066 PATCH 06b: accent color for draft/hovered/selected drawings.
+  // Default #D4A017 (gold) replaces the prior blue accent; dynamic value
+  // refreshed from --toolbar-active-color CSS var via refreshThemeColors().
+  private themeAccentColor = '#D4A017';
 
   // listeners
   private ro: ResizeObserver;
@@ -199,6 +203,8 @@ export class DrawingsRenderer {
     const s = getComputedStyle(this.canvas);
     this.themeBaseColor = s.getPropertyValue('--drawing-base-color').trim() || '#c8cdd6';
     this.themeRectFill = s.getPropertyValue('--drawing-rect-fill').trim() || 'rgba(200, 205, 214, 0.10)';
+    // ADR-0066 PATCH 06b: read --toolbar-active-color (set by themes.ts applyThemeCssVars)
+    this.themeAccentColor = s.getPropertyValue('--toolbar-active-color').trim() || '#D4A017';
     this.scheduleRender();
   }
 
@@ -768,7 +774,7 @@ export class DrawingsRenderer {
       const hovered = this.hovered?.id === d.id;
       const selected = this.selectedId === d.id;
 
-      this.ctx.strokeStyle = isDraft ? '#3d9aff' : (hovered || selected ? '#3d9aff' : baseColor);
+      this.ctx.strokeStyle = isDraft ? this.themeAccentColor : (hovered || selected ? this.themeAccentColor : baseColor);
       this.ctx.lineWidth = d.meta?.lineWidth ?? 1;
       this.ctx.setLineDash(isDraft ? [4, 4] : []);
 
@@ -852,7 +858,7 @@ export class DrawingsRenderer {
   private renderHandles(d: Drawing): void {
     this.ctx.save();
     this.ctx.setLineDash([]);
-    this.ctx.fillStyle = '#3d9aff';
+    this.ctx.fillStyle = this.themeAccentColor;
     this.ctx.strokeStyle = '#ffffff';
     this.ctx.lineWidth = 1;
 

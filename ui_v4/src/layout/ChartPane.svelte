@@ -765,7 +765,7 @@
   }
   .scrollback-indicator.loading {
     background: rgba(74, 144, 217, 0.18);
-    color: #4a90d9;
+    color: var(--accent);
     border: 1px solid rgba(74, 144, 217, 0.25);
   }
   .scrollback-indicator.wall {
@@ -778,7 +778,7 @@
     width: 10px;
     height: 10px;
     border: 2px solid rgba(74, 144, 217, 0.3);
-    border-top-color: #4a90d9;
+    border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
     vertical-align: middle;
@@ -864,7 +864,7 @@
   }
   /* Per-kind active colours (matches overlay rendering palette) */
   .smc-toggle.active {
-    color: #4a90d9;
+    color: var(--accent);
     border-color: rgba(74, 144, 217, 0.3);
     background: rgba(74, 144, 217, 0.1);
   }
@@ -905,7 +905,7 @@
   }
   /* ADR-0028 Φ0: Focus/Research mode toggle */
   .smc-toggle.smc-t-mode {
-    color: #4a90d9;
+    color: var(--accent);
     border-color: rgba(74, 144, 217, 0.3);
     background: none;
     min-width: 18px;

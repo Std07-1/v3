@@ -271,7 +271,7 @@
         color: #8b8f9a;
     }
     .sc-target {
-        color: #4a90d9;
+        color: var(--accent);
         font-size: 9px;
         margin-top: 1px;
     }
@@ -335,7 +335,7 @@
     }
     .archi-detail {
         font-size: 9px;
-        color: #4a90d9;
+        color: var(--accent);
         margin-top: 2px;
     }
     .archi-inv {

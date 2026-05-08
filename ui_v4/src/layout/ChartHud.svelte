@@ -18,7 +18,7 @@
         lastBarOpen,
         lastBarTs,
         onSwitch,
-        themeText = "#d1d4dc",
+        themeText = "var(--text-1)",
         menuBg = "rgba(30, 34, 45, 0.92)",
         menuBorder = "rgba(255, 255, 255, 0.08)",
         biasMap = {} as Record<string, string>,
@@ -751,7 +751,7 @@
         }
         50% {
             transform: scale(1.1);
-            color: #4a90d9;
+            color: var(--accent);
         }
         100% {
             transform: scale(1);
@@ -830,7 +830,7 @@
 
     .hud-menu-item.active {
         background: rgba(74, 144, 217, 0.2);
-        color: #4a90d9;
+        color: var(--accent);
         font-weight: 600;
     }
 
@@ -954,7 +954,7 @@
         transition: opacity 0.15s ease;
     }
     .hud-narrative.trade {
-        color: #4a90d9;
+        color: var(--accent);
     }
     .hud-narrative.wait {
         color: #8b8f9a;
@@ -1097,7 +1097,7 @@
         color: #8b8f9a;
     }
     .ntt-target {
-        color: #4a90d9;
+        color: var(--accent);
         font-size: 9px;
         cursor: default;
         transition: opacity 0.12s ease;
