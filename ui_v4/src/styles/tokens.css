@@ -1,0 +1,98 @@
+/*
+ * tokens.css — Visual Identity SSOT (ADR-0066 Tier 4–5)
+ *
+ * CSS custom properties for AI·ONE v3 design system.
+ * Consumed by: chart/themes.ts (PATCH 02b), .svelte components (PATCH 06).
+ *
+ * PATCH 02a status: file authored, imported once via main.ts.
+ *   No consumers yet → zero visual change vs pre-PATCH-02 baseline.
+ *   Migration to consumers lands in PATCH 02b (themes.ts) and PATCH 06
+ *   (chrome typography enforcement).
+ *
+ * Rules:
+ *   - Edit ONLY here. Do not duplicate hex literals in .svelte / .ts files.
+ *   - New tokens require ADR amendment (extend Tier 4 palette table).
+ *   - Theme variants (black, light) layer via [data-theme="..."] selectors.
+ *
+ * SSOT cross-ref:
+ *   docs/adr/ADR-0066-visual-identity-system.md §Tier 4 (palette migration table)
+ *   docs/adr/ADR-0066-visual-identity-system.md §Tier 5 (typographic scale)
+ */
+
+:root {
+  /* ─── Tier 4 · Palette (P-A2 Hybrid) ─── */
+
+  /* Surfaces (dark canonical) */
+  --bg:           #0D1117;   /* app background, chart canvas */
+  --elev:         #161B22;   /* elevated panels (status bar, modal bg) */
+  --card:         #1C2128;   /* cards, dropdown menus, pills bg */
+  --border:       #30363D;   /* dividers, card borders, group separators */
+
+  /* Trading semantics (perceptual delta < 3% vs LWC defaults) */
+  --bull:         #22CC8F;
+  --bear:         #ED4554;
+
+  /* Brand accent — gold (XAU thematic, replaces ad-hoc blue) */
+  --accent:       #D4A017;
+  --accent-soft:  #B8881A;
+
+  /* Text scale */
+  --text-1:       #E6EDF3;   /* primary numbers, labels */
+  --text-2:       #9B9BB0;   /* secondary numbers, sub-labels */
+  --text-3:       #6B6B80;   /* tertiary, TF strip, ATR/RV */
+  --text-4:       #45455A;   /* hints, disabled, watermarks */
+
+  /* Functional (separated from brand accent) */
+  --info:         #5487FF;   /* dialog accents, links — UI semantics blue */
+  --warn:         #FFB347;   /* WAIT / STAY OUT pills */
+
+  /* ─── Tier 5 · Typographic scale ─── */
+
+  --font-sans:    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* T1: primary numbers (price) */
+  --t1-size:      13px;
+  --t1-weight:    600;
+
+  /* T2: primary labels (symbol, state words) */
+  --t2-size:      13px;
+  --t2-weight:    600;
+
+  /* T3: secondary numbers (price change, clock) */
+  --t3-size:      11px;
+  --t3-weight:    500;
+
+  /* T4: pills (state, session, badges) */
+  --t4-size:      10px;
+  --t4-weight:    600;
+
+  /* T5: tertiary (TF strip, ATR/RV, bias arrows) */
+  --t5-size:      10px;
+  --t5-weight:    400;
+
+  /* ─── Spacing system (Tier 5 spec table) ─── */
+
+  --pill-h:           18px;
+  --pill-pad:         1px 7px;
+  --pill-radius:      4px;
+  --icon-size:        14px;
+  --icon-target:      26px;
+  --row-h:            22px;
+  --gap-row:          6px;
+  --gap-inline:       8px;
+  --gap-group:        4px;
+  --separator-h:      14px;
+  --active-underbar:  1.5px;
+}
+
+/*
+ * Theme variants — apply via <html data-theme="black"> or "light".
+ * PATCH 02a: scaffolds only `dark` (default). Black/light come in PATCH 02b
+ * once themes.ts consumes tokens (currently themes.ts holds inline values
+ * for all three themes, which we preserve for visual parity).
+ *
+ * The `:root` block above IS the dark theme. Black / light overrides land
+ * in PATCH 02b together with the themes.ts refactor — adding them here
+ * without consumers would be dead CSS.
+ */
