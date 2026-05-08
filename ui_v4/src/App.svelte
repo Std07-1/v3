@@ -14,6 +14,7 @@
   import ReplayBar from "./layout/ReplayBar.svelte";
   import Brand from "./layout/Brand.svelte";
   import AboutModal from "./layout/AboutModal.svelte";
+  import Splash from "./layout/Splash.svelte";
 
   // ADR-0027: Client-side replay store
   import { replayStore } from "./stores/replayStore.svelte";
@@ -207,6 +208,18 @@
   // ADR-0066 PATCH 04: AboutModal open state (triggered by Brand wordmark click).
   let aboutOpen = $state(false);
 
+  // ADR-0066 PATCH 04b: Splash overlay during initial WS warming.
+  // Shown when no first frame has arrived yet AND status is non-fatal
+  // (CONNECTING / HEALTHY-but-no-data). Auto-hides on first WS frame.
+  let firstFrameArrived = $state(false);
+  let splashVisible = $derived(
+    !firstFrameArrived &&
+    statusInfo.status !== "OFFLINE" &&
+    statusInfo.status !== "EDGE_BLOCKED" &&
+    statusInfo.status !== "WS_UNAVAILABLE" &&
+    statusInfo.status !== "FRONTEND_ERROR",
+  );
+
   // P3.14: Diagnostic panel toggle (Ctrl+Shift+D)
   let diagVisible = $state(false);
   function handleGlobalKeydown(e: KeyboardEvent) {
@@ -326,6 +339,10 @@
         lastPrice = last.c;
         lastBarOpen = last.o;
         lastBarTs = Date.now(); // time of last WS frame, not candle open
+      }
+      // ADR-0066 PATCH 04b: dismiss splash on first frame with data
+      if (!firstFrameArrived && (f.frame_type === "full" || (candles && candles.length > 0))) {
+        firstFrameArrived = true;
       }
     }
   });
@@ -634,6 +651,9 @@
 
   <!-- ADR-0066 PATCH 04: About + Credits modal. Opened from Brand wordmark click. -->
   <AboutModal open={aboutOpen} onClose={() => (aboutOpen = false)} />
+
+  <!-- ADR-0066 PATCH 04b: Cold-load splash with Brand lockup, hides on first frame. -->
+  <Splash visible={splashVisible} />
 </main>
 
 <style>

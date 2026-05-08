@@ -1,0 +1,144 @@
+<!--
+  src/layout/Splash.svelte — ADR-0066 PATCH 04b (Tier 6 slot 4)
+  Brand lockup overlay shown during initial WS warming (cold-load).
+  Disappears on first render frame OR when stale > 3s (stale fallback so
+  splash never blocks chart visibility on slow WS).
+-->
+
+<script lang="ts">
+    import Brand from "./Brand.svelte";
+
+    interface Props {
+        /** Whether to show splash. App.svelte computes this from
+         *  initial state (no first frame yet) AND non-fatal status. */
+        visible: boolean;
+    }
+
+    const { visible }: Props = $props();
+
+    // Splash UX:
+    //   - Appears immediately when `visible` first becomes true.
+    //   - STAYS visible for at least MIN_SHOW_MS so user perceives brand
+    //     identity even if WS connects in <50ms (which it usually does
+    //     locally — without this guarantee splash flashes invisibly).
+    //   - Dismisses MAX_SHOW_MS after first appear regardless, so a
+    //     never-arriving WS doesn't stick splash forever.
+    //   - Once dismissed, never re-shows in this session (reconnect UX
+    //     belongs to StatusOverlay, not splash).
+    const MIN_SHOW_MS = 800;
+    const MAX_SHOW_MS = 5000;
+
+    let appeared = $state(false);
+    let dismissed = $state(false);
+
+    $effect(() => {
+        if (visible && !appeared) {
+            appeared = true;
+            const t = setTimeout(() => {
+                dismissed = true;
+            }, MIN_SHOW_MS);
+            const tMax = setTimeout(() => {
+                dismissed = true;
+            }, MAX_SHOW_MS);
+            return () => {
+                clearTimeout(t);
+                clearTimeout(tMax);
+            };
+        }
+    });
+
+    let renderSplash = $derived(appeared && !dismissed);
+</script>
+
+{#if renderSplash}
+    <div class="splash" role="status" aria-live="polite" aria-busy="true">
+        <div class="splash-content">
+            <Brand variant="lockup" size={36} />
+            <div class="spinner" aria-hidden="true">
+                <span class="spinner-dot"></span>
+                <span class="spinner-dot"></span>
+                <span class="spinner-dot"></span>
+            </div>
+            <p class="status-text">Connecting…</p>
+        </div>
+    </div>
+{/if}
+
+<style>
+    .splash {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg);
+        animation: splash-fade-in 200ms ease, splash-fade-out 600ms ease 1500ms forwards;
+        pointer-events: none;
+    }
+
+    /* Light theme: switch to off-white bg matching app */
+    :global([data-theme="light"]) .splash {
+        background: var(--bg);
+    }
+
+    @keyframes splash-fade-in {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+    @keyframes splash-fade-out {
+        from { opacity: 1; }
+        to { opacity: 0.96; }
+    }
+
+    .splash-content {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 24px;
+        animation: splash-content-rise 500ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    @keyframes splash-content-rise {
+        from {
+            opacity: 0;
+            transform: translateY(8px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .spinner {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        justify-content: center;
+    }
+    .spinner-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--accent);
+        animation: spinner-pulse 1.2s infinite ease-in-out;
+        opacity: 0.4;
+    }
+    .spinner-dot:nth-child(2) {
+        animation-delay: 0.2s;
+    }
+    .spinner-dot:nth-child(3) {
+        animation-delay: 0.4s;
+    }
+    @keyframes spinner-pulse {
+        0%, 100% { opacity: 0.4; transform: scale(1); }
+        50% { opacity: 1; transform: scale(1.3); }
+    }
+
+    .status-text {
+        margin: 0;
+        font-family: var(--font-mono);
+        font-size: var(--t3-size);
+        color: var(--text-3);
+        letter-spacing: 0.05em;
+    }
+</style>
