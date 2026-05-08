@@ -746,7 +746,7 @@
     color: #8b8f9a;
   }
   .no-data-detail {
-    font-size: 12px;
+    font-size: var(--t3a-size);
     color: #5d6068;
   }
 
@@ -757,7 +757,7 @@
     left: 12px;
     transform: translateY(-50%);
     z-index: 25;
-    font-size: 11px;
+    font-size: var(--t3-size);
     padding: 4px 10px;
     border-radius: 6px;
     pointer-events: none;
@@ -803,7 +803,7 @@
     pointer-events: auto;
   }
   .smc-trigger {
-    font-size: 9px;
+    font-size: var(--t6-size);
     font-weight: 700;
     padding: 2px 7px;
     border-radius: 4px;
@@ -845,7 +845,7 @@
     }
   }
   .smc-toggle {
-    font-size: 9px;
+    font-size: var(--t6-size);
     font-weight: 600;
     padding: 2px 6px;
     border-radius: 4px;

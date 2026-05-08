@@ -727,7 +727,7 @@
     .hud-slot {
         all: unset;
         cursor: pointer;
-        font-size: 13px;
+        font-size: var(--t1-size);
         font-weight: 600;
         color: inherit;
         padding: 2px 6px;
@@ -760,13 +760,13 @@
 
     .hud-sep {
         opacity: 0.35;
-        font-size: 13px;
+        font-size: var(--t1-size);
         user-select: none;
         display: none;
     }
 
     .hud-price {
-        font-size: 13px;
+        font-size: var(--t1-size);
         font-weight: 600;
         font-family: "Roboto Mono", monospace, sans-serif;
     }
@@ -817,7 +817,7 @@
         all: unset;
         cursor: pointer;
         padding: 5px 10px;
-        font-size: 12px;
+        font-size: var(--t3a-size);
         color: inherit;
         border-radius: 4px;
         transition: background 0.12s;
@@ -850,7 +850,7 @@
 
     /* Price change indicator */
     .hud-chg {
-        font-size: 11px;
+        font-size: var(--t3-size);
         font-weight: 500;
         font-family: "Roboto Mono", monospace, sans-serif;
         letter-spacing: -0.3px;
@@ -864,7 +864,7 @@
 
     /* ADR-0031: Inline bias pills */
     .hud-bias-pill {
-        font-size: 9px;
+        font-size: var(--t6-size);
         font-weight: 600;
         padding: 1px 4px;
         border-radius: 3px;
@@ -882,11 +882,11 @@
         color: #ef5350;
     }
     .bias-arrow {
-        font-size: 7px;
+        font-size: var(--t8-size);
         margin-left: 1px;
     }
     .bias-mom {
-        font-size: 8px;
+        font-size: var(--t7-size);
         margin-left: 1px;
         opacity: 0.7;
     }
@@ -925,7 +925,7 @@
         height: 20px;
         border-radius: 4px;
         transition: all 0.15s ease;
-        font-size: 11px;
+        font-size: var(--t3-size);
         line-height: 20px;
         text-align: center;
         padding: 0;
@@ -944,7 +944,7 @@
         display: inline-flex;
         align-items: center;
         gap: 3px;
-        font-size: 9px;
+        font-size: var(--t6-size);
         font-weight: 600;
         letter-spacing: 0.3px;
         pointer-events: auto;
@@ -970,7 +970,7 @@
         color: #ef5350;
     }
     .narr-trigger {
-        font-size: 8px;
+        font-size: var(--t7-size);
         opacity: 0.8;
     }
     .narr-trigger-ready {
@@ -986,11 +986,11 @@
         color: #8b8f9a;
     }
     .narr-phase {
-        font-size: 7px;
+        font-size: var(--t8-size);
         opacity: 0.6;
     }
     .narr-kz {
-        font-size: 7px;
+        font-size: var(--t8-size);
         font-weight: 600;
         color: #ff9800;
         background: rgba(255, 152, 0, 0.15);
@@ -1012,7 +1012,7 @@
         backdrop-filter: blur(8px);
         border: 1px solid rgba(120, 123, 134, 0.2);
         border-radius: 6px;
-        font-size: 10px;
+        font-size: var(--t4-size);
         font-weight: 400;
         color: #a0a4b0;
         white-space: normal;
@@ -1028,7 +1028,7 @@
     .ntt-headline {
         font-weight: 600;
         color: #c0c4cc;
-        font-size: 11px;
+        font-size: var(--t3-size);
     }
     .ntt-bias {
         color: #8b8f9a;
@@ -1064,7 +1064,7 @@
         color: #ef5350;
     }
     .ntt-trig {
-        font-size: 9px;
+        font-size: var(--t6-size);
         padding: 1px 4px;
         border-radius: 3px;
         background: rgba(120, 123, 134, 0.08);
@@ -1098,7 +1098,7 @@
     }
     .ntt-target {
         color: var(--accent);
-        font-size: 9px;
+        font-size: var(--t6-size);
         cursor: default;
         transition: opacity 0.12s ease;
         opacity: 0.8;
@@ -1108,7 +1108,7 @@
     }
     .ntt-inv {
         color: #ef5350;
-        font-size: 9px;
+        font-size: var(--t6-size);
         opacity: 0.5;
         cursor: default;
         transition: opacity 0.12s ease;
@@ -1121,7 +1121,7 @@
     }
     .ntt-fvg {
         color: #2ecc71;
-        font-size: 9px;
+        font-size: var(--t6-size);
         opacity: 0.8;
         cursor: default;
         transition: opacity 0.12s ease;
@@ -1131,7 +1131,7 @@
     }
     .ntt-warn {
         color: #ff9800;
-        font-size: 9px;
+        font-size: var(--t6-size);
         opacity: 0.8;
         cursor: default;
         transition: opacity 0.12s ease;
@@ -1141,14 +1141,14 @@
     }
     .ntt-session {
         color: #42a5f5;
-        font-size: 9px;
+        font-size: var(--t6-size);
         opacity: 0.8;
         margin-top: 2px;
     }
     /* Expandable description on hover */
     .ntt-expand {
         display: none;
-        font-size: 8px;
+        font-size: var(--t7-size);
         font-weight: 400;
         font-style: italic;
         color: rgba(210, 215, 225, 0.7);
@@ -1223,14 +1223,14 @@
         background: rgba(255, 255, 255, 0.06);
     }
     .shell-stlbl {
-        font-size: 11px;
+        font-size: var(--t3-size);
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.05em;
         color: var(--st, rgba(255, 255, 255, 0.42));
     }
     .shell-stctx {
-        font-size: 9px;
+        font-size: var(--t6-size);
         color: rgba(255, 255, 255, 0.35);
         overflow: hidden;
         text-overflow: ellipsis;
@@ -1239,7 +1239,7 @@
     }
 
     .tact-session {
-        font-size: 9px;
+        font-size: var(--t6-size);
         font-weight: 700;
         font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
         /* ADR-0066 Tier 4 amendment: session active pill in gold (was #ff9800).
@@ -1310,7 +1310,7 @@
         background: rgba(255, 255, 255, 0.04);
     }
     .mc-label {
-        font-size: 8px;
+        font-size: var(--t7-size);
         text-transform: uppercase;
         font-weight: 500;
         letter-spacing: 0.1em;
@@ -1318,7 +1318,7 @@
         margin-bottom: 2px;
     }
     .mc-val {
-        font-size: 10px;
+        font-size: var(--t4-size);
         color: rgba(255, 255, 255, 0.72);
         line-height: 1.4;
     }
@@ -1330,7 +1330,7 @@
     }
     .mc-warn {
         grid-column: span 2;
-        font-size: 9px;
+        font-size: var(--t6-size);
         color: rgba(251, 191, 36, 0.6);
         border-top: 0.5px solid rgba(255, 255, 255, 0.06);
         margin-top: 4px;
@@ -1353,7 +1353,7 @@
         margin-bottom: 5px;
     }
     .mc-sig-dir {
-        font-size: 9px;
+        font-size: var(--t6-size);
         font-weight: 600;
         letter-spacing: 0.06em;
     }
@@ -1364,14 +1364,14 @@
         color: rgba(252, 129, 129, 0.95);
     }
     .mc-sig-state {
-        font-size: 8px;
+        font-size: var(--t7-size);
         text-transform: uppercase;
         letter-spacing: 0.1em;
         color: rgba(255, 255, 255, 0.35);
     }
     .mc-sig-conf {
         margin-left: auto;
-        font-size: 9px;
+        font-size: var(--t6-size);
         font-weight: 600;
         color: var(--st, rgba(255, 255, 255, 0.42));
     }
@@ -1398,7 +1398,7 @@
         white-space: nowrap;
     }
     .sub-sep {
-        font-size: 10px;
+        font-size: var(--t4-size);
         opacity: 0.18;
         user-select: none;
         line-height: 1;
@@ -1420,7 +1420,7 @@
             position: fixed;
             bottom: 4px;
             right: 4px;
-            font-size: 10px;
+            font-size: var(--t4-size);
             font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
             opacity: 0.55;
             white-space: nowrap;
@@ -1434,7 +1434,7 @@
             gap: 5px;
         }
         .hud-slot {
-            font-size: 12px;
+            font-size: var(--t3a-size);
             padding: 2px 4px;
         }
         /* Flush left edge of first slot with sub-row content */
@@ -1442,10 +1442,10 @@
             padding-left: 1px;
         }
         .hud-price {
-            font-size: 12px;
+            font-size: var(--t3a-size);
         }
         .hud-chg {
-            font-size: 10px;
+            font-size: var(--t4-size);
         }
         /* Hide narrative inline on mobile — too much info for small screen */
         .hud-narrative {
@@ -1456,11 +1456,11 @@
             display: none;
         }
         .shell-stlbl {
-            font-size: 9px;
+            font-size: var(--t6-size);
         }
         /* Compact bias pills */
         .hud-bias-pill {
-            font-size: 8px;
+            font-size: var(--t7-size);
             padding: 0 3px;
         }
         .hud-sub {
@@ -1473,11 +1473,11 @@
         }
         .hud-menu-item {
             padding: 8px 12px;
-            font-size: 14px;
+            font-size: var(--t0-size);
         }
         .hud-menu-tf .hud-menu-item {
             padding: 8px 10px;
-            font-size: 13px;
+            font-size: var(--t1-size);
         }
         /* ─── Bottom-sheet micro-card on mobile ─── */
         .mc-backdrop {
@@ -1539,10 +1539,10 @@
             padding: 8px 16px 12px;
         }
         .mc-label {
-            font-size: 9px;
+            font-size: var(--t6-size);
         }
         .mc-val {
-            font-size: 12px;
+            font-size: var(--t3a-size);
         }
     }
 </style>
