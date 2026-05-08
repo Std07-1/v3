@@ -5,7 +5,7 @@
 | Field          | Value                                                    |
 | -------------- | -------------------------------------------------------- |
 | ID             | ADR-0066                                                 |
-| Status         | PARTIALLY IMPLEMENTED (rev 3 — 2026-05-08; PATCH 02a/b/c shipped, 02d / 02e / 03 / 04 / 05 / 06a / 06b pending) |
+| Status         | PARTIALLY IMPLEMENTED (rev 4 — 2026-05-08; PATCH 02a/b/c shipped, 02d / 02e / 03 / 04 / 05 / 06a / 06b pending; rev 4 absorbs exploration-board GAP-1–6 + crosshair/focus/disabled gaps as scope extensions — no new slices) |
 | Date           | 2026-05-08                                               |
 | Authors        | Станіслав                                                |
 | Supersedes     | —                                                        |
@@ -117,6 +117,47 @@ source of truth, no double-init flicker.
    that time. Addressed by **PATCH 02e** (new Tier 8 below) — explicit
    amendment to ADR-0007 scope handled in this ADR because it's the
    theme-system that surfaced the failure.
+8. **Crosshair literal in engine constructor not in original PATCH 02d scope**
+   (audit 2026-05-08, post-rev-3). `engine.ts:84-94` hardcodes
+   `vertLine.color: 'rgba(213,213,213,0.35)'` and same for `horzLine`.
+   On `light` theme this renders near-white-on-white — crosshair becomes
+   invisible. Originally rev 2 listed this in the same `engine.ts:138-148`
+   bundle but only called out `textColor` and `gridLines`. Rev 4 explicitly
+   extends PATCH 02d scope to include `crosshair.vertLine.color` and
+   `crosshair.horzLine.color` reads from `THEMES[name].chart.crosshair.*`
+   (themes table must carry these fields per theme; light gets a darker
+   variant such as `rgba(60,60,80,0.35)` or `var(--text-3)` alpha-applied).
+9. **Pill `rgba(212,160,23,0.16)` ignores light background** (audit 2026-05-08,
+   exploration board). Pill bg opacity tuned for dark/black; on `light`
+   the gold-on-white pill (ASIA / PREMIUM / TF active / state) renders at
+   ~1.4:1 vs `#FFFFFF` — user cannot see active state. Same applies to
+   `#FAFBFC` off-white. Resolution: opacity table per theme (see Tier 4
+   amendment block below) — dark/black keep `0.16`, light bumps to `0.22`
+   with text shifted to `--accent-deep` (`#8E6A12`). Closed in PATCH 06b.
+10. **Light bg pure `#FFFFFF` is hostile to hollow/white candles and to
+    rounded corners** (exploration board, 2026-05-08). Pure white gives
+    harsh glow on `border-radius` and zero contrast for the few candle
+    cells that already sit at the bright end of the spectrum. Decision:
+    light bg shifts from `#FFFFFF` to **off-white `#FAFBFC`** (GitHub-style),
+    keeps WCAG ratios on `--accent-soft` (`#B8881A` on `#FAFBFC` ≈ 5.0:1,
+    still passes AA). Closed in PATCH 06b along with token table refresh
+    (`--bg` light row and `[data-theme="light"]` selector in `tokens.css`).
+
+### Pre-rev-4 exploration board observations now part of spec
+
+A standalone HTML exploration board (rendered 3 themes × brand elements
+side-by-side, 15-cell candle matrix, pill/state previews per theme) was
+produced 2026-05-08 between rev 3 and rev 4 to ground the amendment in
+actual visual evidence. Findings translated into:
+
+- Drifts #8–#10 above (crosshair, pill opacity, off-white bg)
+- Tier 4 amendment block (pill opacity per theme + active indicator + focus + disabled)
+- NEW Tier 9 (Brand Element Theme Adaptation — mark plate, Brand.svelte tokens, splash 3-theme audit)
+- Verify-section extensions for PATCH 02d / 02e / 03 / 04 / 06b
+
+Board is not committed (one-shot artifact); the decisions it produced
+live only in this ADR. Future agents starting work on PATCH 03/04/06b
+**read the rev 4 sections, not the board**.
 
 ### Where the engine + index.html stand on PATCH 05 prerequisites
 
@@ -369,6 +410,89 @@ This pill table replaces the current ad-hoc orange (`#ff9800` in
 `tact-session`, blue `#4a90d9` in active TF, mixed) — it's the single
 visible color shift per token migration.
 
+#### Tier 4 amendment (rev 4) — Per-theme opacity, active indicator, focus, disabled
+
+The pill table above gives single opacity values tuned for dark. On light
+(and slightly on black) those values either disappear or over-shout. The
+following per-theme overrides land via `[data-theme="..."]` selectors in
+`tokens.css` and via the candle/volume resolver from Tier 8 (volume alpha
+shares the same per-theme curve).
+
+**Pill background opacity per theme** (closes drift #9, GAP-2):
+
+| Pill semantic              | dark `#0D1117` | black `#000000` | light `#FAFBFC`                       |
+| -------------------------- | -------------- | --------------- | ------------------------------------- |
+| Session active             | `0.16`         | `0.20`          | `0.22` bg + text → `--accent-deep`    |
+| Premium                    | `0.12`         | `0.16`          | `0.18` bg + text → `--accent-deep`    |
+| Discount                   | `0.12`         | `0.16`          | `0.18` bg + text → `--bull-deep`      |
+| State · WAIT/STAY OUT      | `0.16`         | `0.18`          | `0.20` bg + text → `--warn-deep`      |
+| State · READY/TRIGGERED    | `0.16`         | `0.20`          | `0.22` bg + text → `--bull-deep`      |
+| State · WARNING            | `0.16`         | `0.18`          | `0.20` bg + text → `--bear-deep`      |
+| TF active pill             | `0.16`         | `0.20`          | `0.22` bg + text → `--accent-deep`    |
+| Feature gate (SMC F)       | `--card` + 40% border | `--card` + 40% border | `--card` + 50% border         |
+
+**Why semi-solid + darker text on light** (GAP-2 decision rationale): pill
+shape parity is preserved across themes (user sees "the same pill, only
+darker"), which beats reverse-text (gold-on-white) when 3–4 pills sit
+in a row (TF strip) — reverse-text becomes visually noisy at row scale.
+
+**Deep accent tokens added (`tokens.css`)**:
+
+| Token            | Value      | Purpose                                                  |
+| ---------------- | ---------- | -------------------------------------------------------- |
+| `--accent-deep`  | `#8E6A12`  | Pill text on light theme (gold family, AA on `#FAFBFC`)  |
+| `--bull-deep`    | `#178A5B`  | Discount/READY pill text on light                         |
+| `--bear-deep`    | `#B53641`  | WARNING pill text on light                                |
+| `--warn-deep`    | `#A8732A`  | WAIT/STAY OUT pill text on light                          |
+
+Deep tokens are light-only by default; on dark/black the existing
+`--accent` / `--bull` / `--bear` / `--warn` continue to be used for pill
+text (sufficient contrast against semi-transparent gold/green/red bg).
+
+**Active indicator pattern** (closes GAP-6):
+
+| Theme   | Pattern                                                                         |
+| ------- | ------------------------------------------------------------------------------- |
+| dark    | 1.5px gold underbar (`--accent`), 6px inset from icon edges                     |
+| black   | 1.5px gold underbar (`--accent`), 6px inset — same as dark                       |
+| light   | 1.5px deep-gold underbar (`--accent-deep`), 6px inset — contrast against `#FAFBFC` |
+
+Underbar is the single canonical active indicator across all themes
+(toolbar buttons, theme picker, candle-style picker, TF active tab in
+header). No filled-bg active state — underbar reads as "this is
+selected" without competing with content.
+
+**Focus ring per theme** (closes GAP-8, keyboard a11y):
+
+| Theme   | Focus ring                                                                     |
+| ------- | ------------------------------------------------------------------------------ |
+| dark    | `0 0 0 2px var(--accent)` (gold on near-black, ~6.8:1)                         |
+| black   | `0 0 0 2px var(--accent)` (gold on pure-black, ~7.4:1)                         |
+| light   | `0 0 0 2px var(--accent-deep)` (deep-gold on `#FAFBFC`, ~5.0:1)                |
+
+Focus ring uses `outline-offset: 1px` so it sits clear of pill borders
+without overlapping adjacent elements. Applied via `:focus-visible`
+(not `:focus`) so mouse clicks don't trigger ring.
+
+**Disabled state opacity per theme** (closes GAP-9):
+
+| Theme   | Disabled opacity | Notes                                                  |
+| ------- | ---------------- | ------------------------------------------------------ |
+| dark    | `0.40`           | Current behavior — unchanged                            |
+| black   | `0.45`           | Slight bump — pure-black makes 0.40 read as too dim    |
+| light   | `0.55`           | Higher — 0.40 on `#FAFBFC` washes out, 0.55 reads disabled-but-present |
+
+**Crosshair color per theme** (closes drift #8 / GAP-7, scope of PATCH 02d):
+
+| Theme   | `crosshair.vertLine.color` and `horzLine.color`            |
+| ------- | ---------------------------------------------------------- |
+| dark    | `rgba(213,213,213,0.35)` — unchanged                       |
+| black   | `rgba(213,213,213,0.40)` — slight bump on pure black       |
+| light   | `rgba(60,60,80,0.40)` — dark-on-light for visibility        |
+
+These fields are added to `THEMES[name].chart.crosshair.*` in `themes.ts`
+and consumed by PATCH 02d (engine constructor parity slice).
+
 ### Tier 6 · Brand placement matrix
 
 The 11 deployment slots and what each renders:
@@ -490,6 +614,101 @@ style-name semantics) is preserved. The change is internal to
 rebalance luminance to stay readable on the new background — which
 is the trader-correct behavior anyway (the failure mode it replaces
 is "candles disappear when I switch to dark").
+
+**Volume alpha shares the same resolver** (closes GAP-5, rev 4): the
+`engine.ts` `_volUpColor` / `_volDownColor` setters are extended to read
+`_withAlpha(resolveCandleStyle(name, theme).upColor, VOLUME_ALPHA_BY_THEME[theme])`
+ where `VOLUME_ALPHA_BY_THEME = { dark: 0.32, black: 0.36, light: 0.42 }`.
+Light theme needs higher alpha so volume bars don't ghost out against
+off-white. Single resolver, no duplication — ~3 LOC extension to PATCH 02e
+rather than a new slice.
+
+### Tier 9 · Brand Element Theme Adaptation (rev 4)
+
+Dark/black/light themes affect not only chart pane but every brand-bearing
+surface: wordmark, mark, lockup, splash. Rev 4 codifies the per-theme
+behavior so PATCH 03/04 land coherently across themes rather than
+shipping as "dark works, light is sticker-ish".
+
+#### 9.1 Wordmark color per theme (GAP-3, Brand.svelte token enforcement)
+
+| Element     | dark `#0D1117`        | black `#000000`        | light `#FAFBFC`             |
+| ----------- | --------------------- | ---------------------- | --------------------------- |
+| `AI`        | `var(--text-1)`       | `var(--text-1)`        | `var(--text-1)` (dark text) |
+| `ONE`       | `var(--text-2)` 75%   | `var(--text-2)` 75%    | `var(--text-2)` 75%         |
+| dot `·`     | `var(--accent)`       | `var(--accent)`        | `var(--accent-deep)`        |
+| tagline     | `var(--text-3)`       | `var(--text-3)`        | `var(--text-3)`             |
+| `v3` label  | `var(--text-3)`       | `var(--text-3)`        | `var(--text-3)`             |
+
+**Brand.svelte token enforcement (GAP-3 closure)**: `ui_v4/src/layout/Brand.svelte`
+MUST consume tokens via `var(--*)` only — zero hex literals. PATCH 03 verify
+includes `grep -E '#[0-9a-fA-F]{3,8}' ui_v4/src/layout/Brand.svelte` returns
+zero hits. Same rule for `lockup-full.svg` if rendered as inline SVG with
+`currentColor` (sets fill via parent `color: var(--text-1)`).
+
+#### 9.2 Mark plate strategy (GAP-1, Option B — adaptive)
+
+Three options were considered (board section 01):
+
+- **A. Static dark plate everywhere** — mark always sits on `#0D1117`
+  rounded plate. On light theme this looks like a sticker glued onto
+  white — breaks the visual integration.
+- **B. Adaptive plate** — chosen. On dark/black: no plate (transparent
+  bg, mark sits directly on theme bg). On light: subtle plate using
+  `--surface-1` + 1px `--border-mute` border, `border-radius: 10px`
+  matching mark spec. Plate provides necessary visual anchor on light
+  without sticker effect.
+- **C. No plate ever** — mark loses readability on light at small sizes
+  (32px and below) because gradient `#D4A017 → #22CC8F` lacks contrast
+  against `#FAFBFC` at thin strokes.
+
+**Plate spec per theme** (Brand.svelte renders this):
+
+| Theme   | Plate background          | Plate border                    | Border-radius |
+| ------- | ------------------------- | ------------------------------- | ------------- |
+| dark    | none (transparent)        | none                            | n/a           |
+| black   | none (transparent)        | none                            | n/a           |
+| light   | `var(--surface-1)`        | `1px solid var(--border-mute)`  | 10px          |
+
+Where `--surface-1` and `--border-mute` are NEW tokens added in PATCH 06b
+(or moved earlier into PATCH 02d if Brand.svelte ships before 06b):
+
+| Token            | dark      | black     | light       | Purpose                              |
+| ---------------- | --------- | --------- | ----------- | ------------------------------------ |
+| `--surface-1`    | `#161B22` | `#0A0A0A` | `#FFFFFF`   | Subtle elevated surface (plate, card)|
+| `--border-mute`  | `#21262D` | `#1A1A1A` | `#E1E4E8`   | Soft border (plate edge, dividers)   |
+
+Mark gradient itself (`#D4A017 → #22CC8F` per Tier 3) is unchanged across
+themes — the gradient is the brand signature; only the plate underneath
+adapts.
+
+#### 9.3 Splash overlay readability per theme (GAP-4)
+
+Splash overlay (`StatusOverlay.svelte` extended in PATCH 04) renders the
+full lockup over a dimmed chart bg during WS warming. Per theme:
+
+| Theme   | Backdrop                            | Lockup contrast                                   |
+| ------- | ----------------------------------- | ------------------------------------------------- |
+| dark    | `rgba(13,17,23,0.85)` (var of bg)   | wordmark `--text-1` reads at >12:1 — strong       |
+| black   | `rgba(0,0,0,0.88)`                  | wordmark `--text-1` reads at >18:1 — strongest    |
+| light   | `rgba(250,251,252,0.92)`            | wordmark `--text-1` (dark) reads at >10:1 — strong |
+
+Warming progress bar uses `--accent` on dark/black, `--accent-deep` on
+light (same pattern as pill text and active indicator). Tagline always
+at `--text-3` opacity — stays subordinate to wordmark across all themes.
+
+PATCH 04 verify includes screenshot diff of splash on all 3 themes (one
+failure cell = slice not done).
+
+#### 9.4 Tier 9 promotion criteria
+
+If the brand surface grows beyond what Tier 9 covers (e.g., per-symbol
+mark variants, seasonal/event branding, animated splash variants per
+theme, AR/embed contexts), promote to standalone **ADR-0067 — Brand
+Adaptation System**. Until then, Tier 9 is the SSOT. Triggers for
+promotion: (a) >5 themes, (b) seasonal mark variants needed, (c) per-symbol
+mark/wordmark deviations, (d) embed-target adaptation (e.g., Telegram
+WebApp dark/light forced).
 
 ### Tier 7 · TradingView attribution compliance
 
@@ -619,8 +838,8 @@ run after.
 | 1  | PATCH 02a | Create `tokens.css` SSOT (palette + typography + spacing). Import once via `main.ts`. Zero consumers, zero visual delta. | ~95   | 2     | small  | ✅ shipped `c7f8428` |
 | 2  | PATCH 02b | Mirror tokens into `THEMES.dark` (`themes.ts`) + rewire `applyThemeCssVars` to set `<html data-theme>`. Toolbar accent → gold via CSS-var path. | ~30   | 1     | small  | ✅ shipped `f0689b1` |
 | 3  | PATCH 02c | Mirror tokens into `THEMES.black` and `THEMES.light` (`--accent-soft` for WCAG AA on white). Brand consistency across 3 themes. | ~35   | 1     | small  | ✅ shipped `03a201f` |
-| 4  | **PATCH 02d** | **Engine constructor parity fix**: replace `engine.ts:138-148` hardcoded `#d5d5d5` / `'rgba(43,56,70,0.4)'` / `'rgba(213,213,213,0.35)'` with `THEMES.dark.chart.*` references **OR** call `applyTheme(savedTheme)` unconditionally on init. Removes split-brain between constructor defaults and `THEMES.dark`. **Mandatory before PATCH 06b** so dark-default users see token-driven chart palette. | ~15  | 1   | small | ⏳ pending |
-| 4b | **PATCH 02e** | **Theme × candle adaptation matrix** (Tier 8): restructure `CANDLE_STYLES` in `themes.ts` to `Record<CandleStyleName, CandleStyleByTheme>` with `resolveCandleStyle(style, theme)` resolver; rewire `engine.ts` `applyCandleStyle()` to use resolver and `applyTheme()` to re-apply candle style on theme switch. Adds per-theme overrides for `stealth`/`white`/`gray`/`hollow` so all 15 cells pass ≥3.0:1 contrast. **Depends on PATCH 02d** (shared constructor refactor). | ~80 | 2   | medium | ⏳ pending |
+| 4  | **PATCH 02d** | **Engine constructor parity fix** (rev 4 expanded scope): replace `engine.ts:138-148` hardcoded `#d5d5d5` / `'rgba(43,56,70,0.4)'` AND `engine.ts:84-94` `crosshair.vertLine.color` / `horzLine.color` `'rgba(213,213,213,0.35)'` literals with `THEMES.dark.chart.*` references; add `crosshair.vertLine.color` + `horzLine.color` fields to `THEMES[dark|black|light].chart.crosshair` per Tier 4 amendment table. Removes split-brain between constructor defaults and `THEMES.dark` AND closes drift #8 (crosshair invisible on light). **Mandatory before PATCH 06b**. | ~25 | 2 | small | ⏳ pending |
+| 4b | **PATCH 02e** | **Theme × candle adaptation matrix** (Tier 8) + **per-theme volume alpha** (GAP-5): restructure `CANDLE_STYLES` in `themes.ts` to `Record<CandleStyleName, CandleStyleByTheme>` with `resolveCandleStyle(style, theme)` resolver; rewire `engine.ts` `applyCandleStyle()` to use resolver and `applyTheme()` to re-apply candle style on theme switch. Adds per-theme overrides for `stealth`/`white`/`gray`/`hollow` so all 15 cells pass ≥3.0:1 contrast. Volume alpha extended to `VOLUME_ALPHA_BY_THEME` (dark 0.32, black 0.36, light 0.42) sharing the same resolver — no duplicate function. **Depends on PATCH 02d** (shared constructor refactor). | ~95 | 2 | medium | ⏳ pending |
 | 5  | PATCH 03  | Asset deployment (mark + wordmark SVG/PNG + favicon + manifest), `Brand.svelte` component. Creates `ui_v4/public/brand/`. | ~140  | 6–8   | medium | ⏳ pending |
 | 6  | PATCH 04  | `AboutModal.svelte` + Credits tab (`oss-notices.ts`) + wordmark click wiring + `StatusOverlay` splash extension.   | ~150  | 4–5   | medium | ⏳ pending |
 | 7  | PATCH 05  | `attributionLogo: false` in `engine.ts` chart layout opts + dynamic tab title `$effect` in `App.svelte` + favicon link + bg/color tokens in `index.html` inline `<style>`. | ~30   | 3     | small  | ⏳ pending |
@@ -663,11 +882,15 @@ element reads `#E6EDF3` — visible drift on the same surface.
 2. WCAG AA contrast verified: `#B8881A` on `#FFFFFF` text passes (light); `#D4A017` on `#0D1117` and `#000000` passes (dark/black).
 3. Switch theme via picker; toolbar accent + status bar tint shift correctly.
 
-**PATCH 02d (Engine constructor parity) — ⏳ pending verify:**
+**PATCH 02d (Engine constructor parity) — ⏳ pending verify (rev 4 expanded):**
 
 1. `engine.ts:138-148` constructor no longer carries `#d5d5d5` / `'rgba(43,56,70,0.4)'` literals.
-2. Default-dark user reload: chart price-axis text renders at `#9B9BB0`, grid at `rgba(48,54,61,0.6)` (DevTools computed style on canvas inspector).
-3. Switching theme to black/light/back-to-dark produces the same chart palette as initial load (no double-init flicker).
+2. `engine.ts:84-94` constructor no longer carries `'rgba(213,213,213,0.35)'` for crosshair vertLine/horzLine; reads from `THEMES.dark.chart.crosshair.*`.
+3. `THEMES[dark|black|light].chart.crosshair.{vertLine,horzLine}.color` fields exist per Tier 4 amendment table.
+4. Default-dark user reload: chart price-axis text renders at `#9B9BB0`, grid at `rgba(48,54,61,0.6)` (DevTools computed style on canvas inspector).
+5. Switching theme to black/light/back-to-dark produces the same chart palette as initial load (no double-init flicker).
+6. **Crosshair visibility on light theme**: hover chart on `light` — crosshair lines visible (dark-on-off-white per Tier 4 amendment), not invisible white-on-white.
+7. `npx tsc --noEmit` clean.
 
 **PATCH 02e (Theme × candle adaptation) — ⏳ pending verify:**
 
@@ -681,24 +904,29 @@ element reads `#E6EDF3` — visible drift on the same surface.
    - `hollow × light`: up borders (`#1a8580`) ≥3.0:1 against `#FFFFFF`.
    - All other 10 cells: no regression vs PATCH 02c baseline.
 4. Theme switch (e.g., dark → light) with `stealth` selected: candles immediately re-render with light-theme palette, no manual style re-pick required.
-5. Volume bars per theme switch: `_refreshVolumeColors()` produces alpha-derived volume colors matching the theme-resolved candle (Entry 078 invariant preserved).
+5. Volume bars per theme switch: `_refreshVolumeColors()` produces alpha-derived volume colors matching the theme-resolved candle AND the per-theme `VOLUME_ALPHA_BY_THEME` value (dark 0.32, black 0.36, light 0.42); shared resolver, no duplicate function (GAP-5).
 6. localStorage round-trip: persisted style+theme on reload renders identically to in-session switch.
 7. `npx tsc --noEmit` clean; no `any` introduced in resolver.
 
-**PATCH 03 (assets) — ⏳ pending:**
+**PATCH 03 (assets) — ⏳ pending verify (rev 4 expanded):**
 
 1. Browser tab shows new favicon (16×16 mark visible at favorites bar).
 2. PWA install (Add to Home Screen) shows mark, not default — when manifest is added.
 3. `Brand.svelte` renders wordmark at three sizes (16/32/canonical) without layout shift.
 4. SVG assets pass aXe accessibility check (alt text present where applicable).
+5. **Brand.svelte token enforcement (GAP-3)**: `grep -E '#[0-9a-fA-F]{3,8}' ui_v4/src/layout/Brand.svelte` returns zero hits. All colors via `var(--*)`.
+6. **Mark plate per theme (GAP-1, Tier 9.2)**: render Brand.svelte mark variant on all 3 themes — dark/black show no plate (transparent), light shows `--surface-1` plate with `--border-mute` border at 10px radius. No "sticker" appearance on light.
+7. Wordmark color shifts per theme per Tier 9.1 table (dot is `--accent` on dark/black, `--accent-deep` on light).
 
-**PATCH 04 (AboutModal + Splash) — ⏳ pending:**
+**PATCH 04 (AboutModal + Splash) — ⏳ pending verify (rev 4 expanded):**
 
 1. Wordmark click in HUD top-left opens AboutModal with focus trap.
 2. AboutModal shows new header (lockup + version line + build-date).
 3. Credits tab lists all OSS deps with NOTICE text reproduced verbatim.
 4. Splash overlay renders during WS warming with Brand lockup above warming progress; disappears on `status === 'live'`.
 5. Esc and backdrop-click close AboutModal.
+6. **Splash 3-theme audit (GAP-4, Tier 9.3)**: trigger splash on dark / black / light themes — lockup contrast ≥5:1 against backdrop on all three; warming progress bar uses `--accent` on dark/black, `--accent-deep` on light; tagline at `--text-3` opacity, subordinate to wordmark on all three.
+7. AboutModal renders correctly on all 3 themes (no theme-specific layout breakage).
 
 **PATCH 05 (attribution + tab title + index.html cleanup) — ⏳ pending:**
 
@@ -714,12 +942,18 @@ element reads `#E6EDF3` — visible drift on the same surface.
 3. Zoom test (browser zoom 75%, 100%, 125%, 150%) — chrome scales gracefully.
 4. `npx tsc --noEmit` clean.
 
-**PATCH 06b (color literal sweep) — ⏳ pending:**
+**PATCH 06b (color literal sweep) — ⏳ pending verify (rev 4 expanded):**
 
 1. `grep -E '#4a90d9|#3d9aff|#d1d4dc' ui_v4/src/` returns zero hits.
 2. Theme-switch test: hover a drawing on each theme; selection accent matches theme's `toolbarActiveColor` (gold/gold-soft), not stale `#3d9aff`.
 3. `[data-theme="black"]` / `[data-theme="light"]` selectors in `tokens.css` override surfaces that need theme-specific tints.
 4. `tokens.css` self-comment updated to reflect the actual decision (black/light layered via `[data-theme]` here for non-LWC; LWC continues to read `themes.ts` mirror).
+5. **Pill opacity per theme (Tier 4 amendment, GAP-2)**: Inspect ASIA / PREMIUM / TF active / state pills on all 3 themes — background opacity matches Tier 4 amendment table; light theme pill text reads `--accent-deep` / `--bull-deep` / `--bear-deep` / `--warn-deep`, contrast ≥4.5:1 vs pill bg.
+6. **Active indicator pattern (GAP-6)**: 1.5px underbar on dark/black is `--accent`; on light is `--accent-deep`. No filled-bg active state.
+7. **Focus ring per theme (GAP-8)**: tab through toolbar with keyboard — focus ring visible on all 3 themes (`--accent` 2px on dark/black, `--accent-deep` 2px on light, `outline-offset: 1px`). Triggered only by `:focus-visible`, not mouse click.
+8. **Disabled state opacity (GAP-9)**: disabled toolbar buttons render at 0.40 on dark, 0.45 on black, 0.55 on light — reads as disabled-but-present on all three.
+9. **Light bg shift to off-white (drift #10)**: `--bg` light token = `#FAFBFC` (not `#FFFFFF`); `index.html` inline `<style>` for light theme matches; rounded corners no longer give harsh glow.
+10. **Deep accent tokens land**: `--accent-deep`, `--bull-deep`, `--bear-deep`, `--warn-deep`, `--surface-1`, `--border-mute` exist in `tokens.css` per Tier 4 amendment + Tier 9.2 tables.
 
 ### Exit gates
 
@@ -791,13 +1025,18 @@ Estimated rollback time: 5 minutes.
 - **Candle style system promotion.** PATCH 02e adapts the existing 5
   styles to 3 themes via per-theme overrides inside `themes.ts`. If the
   catalog grows beyond ~8 styles or ~5 themes, the resolver becomes a
-  larger surface deserving its own ADR (provisional **ADR-0067 \u2014
-  Candle Style Adaptation Matrix**). Triggers for promotion: (a) a
-  third group of users (e.g., colorblind preset) demands its own style
-  family; (b) candle palette starts encoding signal semantics
-  (e.g., grade-tinted candles per ADR-0029); (c) introduction of
-  per-symbol candle defaults (XAU vs BTC distinct palettes). Until any
-  of those, Tier 8 in this ADR is sufficient SSOT.
+  larger surface deserving its own ADR. Triggers: (a) a third group of
+  users (e.g., colorblind preset) demands its own style family;
+  (b) candle palette starts encoding signal semantics (e.g., grade-tinted
+  candles per ADR-0029); (c) introduction of per-symbol candle defaults
+  (XAU vs BTC distinct palettes). Until any of those, Tier 8 in this ADR
+  is sufficient SSOT.
+- **Brand adaptation system promotion.** Tier 9 (rev 4) covers wordmark
+  + mark plate + splash adaptation across 3 themes. If brand surface
+  grows beyond this (per-symbol mark variants, seasonal/event branding,
+  animated splash per theme, embed-target adaptation), promote to
+  standalone **ADR-0067 — Brand Adaptation System**. Triggers per Tier
+  9.4. Until then, Tier 9 in this ADR is sufficient SSOT.
 - **Standalone /credits page.** If SEO or external linking demand
   arises, the Credits tab content can be promoted to a static
   `ui_v4/public/credits.html` served by aiohttp at `/credits`. Until
