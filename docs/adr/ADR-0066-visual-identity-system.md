@@ -410,6 +410,54 @@ This pill table replaces the current ad-hoc orange (`#ff9800` in
 `tact-session`, blue `#4a90d9` in active TF, mixed) — it's the single
 visible color shift per token migration.
 
+#### Tier 5 amendment (rev 4.2 · PATCH 06a-1) — extended scale T0/T3a/T6/T7/T8
+
+Reality audit before PATCH 06a discovered 136 inline `font-size` hits across
+chrome `.svelte` files. T1–T5 (13/11/10) covers ~30 of them. The remaining
+~106 use sizes (9, 8, 7, 12, 14+) that the original scale does not name.
+Per Tier 5 invariant ("new elements MUST extend this scale, not introduce
+ad-hoc sizes"), the scale extends rather than tolerating drift.
+
+| Tier | Use                                                    | Font            | Size  | Weight | Color           | Examples                                                  |
+| ---- | ------------------------------------------------------ | --------------- | ----- | ------ | --------------- | --------------------------------------------------------- |
+| T0   | Headings (modal headers, status banners, splash)       | Inter           | 14px  | 600    | `--text-1`      | StatusOverlay heading, AboutModal title                   |
+| T3a  | Body text, descriptions, intermediate readout          | Inter           | 12px  | 500    | `--text-2`      | tooltip body, narrative description, status detail        |
+| T6   | Micro-pills (HTF bias, narrative inline state)         | JetBrains Mono  | 9px   | 600    | varies          | `D1↑` bias pill, narrative `WAIT`/`TRADE` inline          |
+| T7   | Tiny labels (momentum dots, trigger sub-labels)        | JetBrains Mono  | 8px   | 400    | `--text-3`      | bias-mom dots, narr-trigger sub-text                      |
+| T8   | Footnote (KZ badge, micro-annotations)                 | JetBrains Mono  | 7px   | 600    | varies          | `KZ` killzone badge, narr-phase indicators                |
+
+Heading tier T0 covers chrome up to 14px. Sizes >14px (modal/splash 18-32px)
+remain inline — they are out-of-chrome (component-local, e.g., AboutModal
+hero, splash lockup) and document themselves at usage site.
+
+Weight tokens unchanged for T1–T5. T0 uses 600 (heading-bold). T3a uses 500
+(body-medium). T6 uses 600 (pill-bold). T7 uses 400 (default-light). T8 uses
+600 (compact-bold). Bold-700 variants (currently 8 inline hits across
+`.tact-session`, `.pd-chip`) remain inline — they are intentional emphasis
+above the standard scale and do not warrant a token (would create T1-bold,
+T4-bold, T6-bold proliferation). Documented as Approved Exception.
+
+Implementation order:
+
+- **PATCH 06a-1** (this slice): ADR amendment + `tokens.css` extends
+  `--t0-*`, `--t3a-*`, `--t6-*`, `--t7-*`, `--t8-*` size+weight tokens. No
+  `.svelte` migration. ~50 LOC.
+- **PATCH 06a-2** (~75 LOC): Migrate font-size in `ChartHud.svelte` and
+  `ChartPane.svelte` (the two largest hit-density files) to `var(--t*-size)`.
+- **PATCH 06a-3** (~75 LOC): Migrate remaining chrome `.svelte`
+  (`SymbolTfPicker`, `StatusBar`, `StatusOverlay`, `ReplayBar`, `DiagPanel`,
+  `NarrativePanel`, `BiasBanner`, `DrawingToolbar`).
+
+Verify of full PATCH 06a series:
+
+1. `grep -rE "font-size:\s*[0-9]+px" ui_v4/src/layout/ ui_v4/src/App.svelte`
+   returns 0 hits except the documented Approved Exceptions (modal/splash
+   headings ≥18px and `font-weight: 700` bold emphases).
+2. Visual diff: chrome looks identical pre/post — token migration is
+   semantic-preserving (sizes unchanged, only the source moves to tokens).
+3. Bundle size delta near-zero (CSS var references compress same as literals).
+4. Browser zoom 75/100/125/150% — chrome scales uniformly via tokens.
+
 #### Tier 4 amendment (rev 4) — Per-theme opacity, active indicator, focus, disabled
 
 The pill table above gives single opacity values tuned for dark. On light

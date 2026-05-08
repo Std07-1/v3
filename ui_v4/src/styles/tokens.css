@@ -61,6 +61,10 @@
   --font-sans:    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono:    'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
+  /* T0: headings (modal headers, status banners) — Tier 5 amendment rev 4.2 */
+  --t0-size:      14px;
+  --t0-weight:    600;
+
   /* T1: primary numbers (price) */
   --t1-size:      13px;
   --t1-weight:    600;
@@ -73,6 +77,10 @@
   --t3-size:      11px;
   --t3-weight:    500;
 
+  /* T3a: body text, descriptions, tooltip body — Tier 5 amendment rev 4.2 */
+  --t3a-size:     12px;
+  --t3a-weight:   500;
+
   /* T4: pills (state, session, badges) */
   --t4-size:      10px;
   --t4-weight:    600;
@@ -80,6 +88,18 @@
   /* T5: tertiary (TF strip, ATR/RV, bias arrows) */
   --t5-size:      10px;
   --t5-weight:    400;
+
+  /* T6: micro-pills (HTF bias pill, narrative inline) — Tier 5 amendment rev 4.2 */
+  --t6-size:      9px;
+  --t6-weight:    600;
+
+  /* T7: tiny labels (momentum dots, trigger sub-text) — Tier 5 amendment rev 4.2 */
+  --t7-size:      8px;
+  --t7-weight:    400;
+
+  /* T8: footnote (KZ badge, micro-annotations) — Tier 5 amendment rev 4.2 */
+  --t8-size:      7px;
+  --t8-weight:    600;
 
   /* ─── Spacing system (Tier 5 spec table) ─── */
 
