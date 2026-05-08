@@ -139,6 +139,11 @@ export class ChartEngine {
       layout: {
         background: { color: 'transparent' },
         textColor: THEMES.dark.chart.layout.textColor,
+        // ADR-0066 PATCH 05: hide TradingView attribution logo. NOTICE
+        // compliance lands via PATCH 04 Credits tab (AboutModal). Until
+        // PATCH 04 ships, attribution remains in package LICENSE / NOTICE
+        // files only — acceptable for local dev, loud-flag for production.
+        attributionLogo: false,
       },
       grid: {
         vertLines: { color: THEMES.dark.chart.grid.vertLines.color },

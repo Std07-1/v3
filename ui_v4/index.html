@@ -10,8 +10,17 @@
     <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
-    <title>AiOne Trading — UI v4</title>
+    <title>AI · ONE v3</title>
     <style>
+        /* ADR-0066 PATCH 05: minimal token stub in <head> to avoid FOUC
+           before tokens.css loads via main.ts. Values mirror tokens.css
+           dark canonical (--bg / --text-1). Full token system arrives at
+           runtime via main.ts import. */
+        :root {
+            --bg: #0D1117;
+            --text-1: #E6EDF3;
+        }
+
         html,
         body {
             margin: 0;
@@ -23,8 +32,8 @@
             touch-action: pan-x pan-y;
             -ms-touch-action: pan-x pan-y;
             -webkit-tap-highlight-color: transparent;
-            background: #131722;
-            color: #d1d4dc;
+            background: var(--bg);
+            color: var(--text-1);
             font-family: system-ui, -apple-system, sans-serif;
         }
 

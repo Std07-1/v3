@@ -335,6 +335,15 @@
     cfgTfs = c.tfs;
   });
 
+  // ADR-0066 PATCH 05: dynamic tab title — `AI · ONE v3 — {SYMBOL} {TF}`.
+  // Strips `/` from forex symbols (XAU/USD -> XAUUSD per ADR §1100).
+  $effect(() => {
+    const sym = hudSymbol.replace(/\//g, "");
+    const tf = hudTf;
+    document.title =
+      sym && tf ? `AI · ONE v3 — ${sym} ${tf}` : "AI · ONE v3";
+  });
+
   // --- Actions ---
 
   function scrollback(ms: T_MS) {
