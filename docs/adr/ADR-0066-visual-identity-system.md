@@ -5,7 +5,7 @@
 | Field          | Value                                                    |
 | -------------- | -------------------------------------------------------- |
 | ID             | ADR-0066                                                 |
-| Status         | PARTIALLY IMPLEMENTED (rev 2 — 2026-05-08; PATCH 02a/b/c shipped, 02d / 03 / 04 / 05 / 06a / 06b pending) |
+| Status         | PARTIALLY IMPLEMENTED (rev 3 — 2026-05-08; PATCH 02a/b/c shipped, 02d / 02e / 03 / 04 / 05 / 06a / 06b pending) |
 | Date           | 2026-05-08                                               |
 | Authors        | Станіслав                                                |
 | Supersedes     | —                                                        |
@@ -104,6 +104,19 @@ source of truth, no double-init flicker.
    manifest. Untouched until PATCH 03.
 6. **No `Brand.svelte`, no `AboutModal.svelte`, no `oss-notices.ts`** in
    `ui_v4/src/`. All PATCH 03/04 deliverables remain to be built.
+7. **`CANDLE_STYLES` ignores theme** (audit 2026-05-08, post-rev-2). The
+   table is `Record<CandleStyleName, CandleStyleDef>` — single palette
+   per style, applied identically on dark / black / light. Cross-product
+   (3 themes × 5 styles = 15 cells) has multiple visibility failures:
+   `stealth` is invisible on dark/black (dark grays on dark bg),
+   `white` up-bodies are invisible on light (`#e2e5e9` on `#FFFFFF`),
+   `gray` down-borders read at ~3.5:1 contrast on `black` (WCAG AA fails
+   for 4.5:1 UI element threshold), `hollow` up-bodies are transparent
+   (works on dark/black showing bg, marginal on light). This was missed
+   during ADR-0007 / Entry 078 because only one dark theme existed at
+   that time. Addressed by **PATCH 02e** (new Tier 8 below) — explicit
+   amendment to ADR-0007 scope handled in this ADR because it's the
+   theme-system that surfaced the failure.
 
 ### Where the engine + index.html stand on PATCH 05 prerequisites
 
@@ -287,9 +300,18 @@ PATCH 02d (engine.ts) or PATCH 06b (`.svelte` sweep) or PATCH 05 (index.html).
 
 - `themes.ts` `pdBadge*` and `pdEqLineColor` fields (6 entries) — owned by
   ADR-0041 (P/D Badge + EQ line).
-- `themes.ts` `CANDLE_STYLES` palette — owned by ADR-0007 / Entry 078;
-  bull/bear shifts here would change candle body colors and break trader
-  muscle memory across symbols. Keep separate.
+- `themes.ts` `CANDLE_STYLES` **bull/bear semantic shift** (e.g.,
+  `#26a69a → #22CC8F`) — owned by ADR-0007 / Entry 078; would change
+  candle body colors and break trader muscle memory across symbols.
+  Keep separate.
+- **EXCEPTION (PATCH 02e, Tier 8 below)**: theme-aware adaptation of
+  existing `CANDLE_STYLES` IS in scope here, because theme×style
+  visibility failures (stealth on dark, white on light, gray on black)
+  are a direct consequence of this ADR introducing 3 themes against a
+  table that assumed 1. Adapting palettes to render correctly per
+  theme is **not** a semantic shift — bull stays "green-ish", bear
+  stays "red-ish"; only luminance is rebalanced per background.
+  Trader muscle memory is preserved.
 
 Rationale: bull/bear shifts are minor (within 3% perceptual delta) — a
 trader's muscle memory survives. Accent shift `blue → gold` is the
@@ -364,6 +386,110 @@ The 11 deployment slots and what each renders:
 | 9  | Telegram bot signature        | `— Archi · AI · ONE v3` (appended to every outbound message)              | compact text   |
 | 10 | Telegram bot avatar           | mark M-v3, 256×256 PNG, gradient                                          | mark only      |
 | 11 | Marketing / docs / README     | full lockup or wordmark only depending on context                         | full lockup or wordmark |
+
+### Tier 8 · Theme × Candle Style Adaptation (PATCH 02e)
+
+**Problem.** The current `CANDLE_STYLES` table in
+[`themes.ts`](../../ui_v4/src/chart/themes.ts) is
+`Record<CandleStyleName, CandleStyleDef>` — one palette per style,
+applied to all themes. With 3 themes (`dark` `#0D1117`, `black`
+`#000000`, `light` `#FFFFFF`) × 5 styles
+(`classic` / `gray` / `stealth` / `white` / `hollow`) = 15 cells, the
+following combinations break visibility or contrast:
+
+| Style ↓ / Theme → | dark `#0D1117` | black `#000000` | light `#FFFFFF` |
+| ----------------- | -------------- | --------------- | --------------- |
+| `classic`         | ✅              | ✅               | ✅               |
+| `gray`            | ⚠️ down border weak | ❌ down border `#5f6368` ≈ 3.5:1 (WCAG AA fail for UI) | ✅               |
+| `stealth`         | ❌ dark grays on dark bg, candles invisible | ❌ candles fully invisible | ✅               |
+| `white`           | ✅              | ✅               | ❌ up `#e2e5e9` on `#FFFFFF` ≈ 1.06:1, bodies invisible |
+| `hollow`          | ✅              | ✅               | ⚠️ up border `#26a69a` on white reads ~2.4:1, marginal |
+
+**Decision.** Restructure `CANDLE_STYLES` to a 2D resolver indexed by
+`(styleName, themeName)`, with a default fallback per style. Keep
+public API of `applyCandleStyle(name)` unchanged; resolution against
+current theme happens inside `themes.ts`. `applyTheme(name)` MUST
+re-apply the current candle style after switching theme so candle
+palette refreshes.
+
+Proposed shape (illustrative, final form decided in PATCH 02e):
+
+```ts
+type CandleStyleByTheme = {
+  default: CandleStyleDef;                          // fallback per style
+  dark?:  Partial<CandleStyleDef>;                  // overrides per theme
+  black?: Partial<CandleStyleDef>;
+  light?: Partial<CandleStyleDef>;
+};
+export const CANDLE_STYLES: Record<CandleStyleName, CandleStyleByTheme> = {
+  classic: { default: { upColor: '#26a69a', downColor: '#ef5350', /* … */ } },
+  // styles below override per theme where the default fails:
+  gray:    { default: { /* current gray */ }, black: { borderDownColor: '#9aa0a6' } },
+  stealth: { default: { upColor: '#3a3f44', downColor: '#1f2327', /* … */ },
+             dark:    { upColor: '#7c8189', downColor: '#5d6268', /* … */ },
+             black:   { upColor: '#7c8189', downColor: '#5d6268', /* … */ } },
+  white:   { default: { upColor: '#e2e5e9', downColor: '#2f3338', /* … */ },
+             light:   { upColor: '#cfd2d6', downColor: '#2f3338', /* … */ } },
+  hollow:  { default: { /* current hollow */ },
+             light:   { borderUpColor: '#1a8580', wickUpColor: '#1a8580',
+                        borderDownColor: '#c7423f', wickDownColor: '#c7423f' } },
+};
+
+export function resolveCandleStyle(
+  style: CandleStyleName, theme: ThemeName,
+): CandleStyleDef {
+  const entry = CANDLE_STYLES[style];
+  return { ...entry.default, ...(entry[theme] ?? {}) };
+}
+```
+
+**Engine wiring** (changes in `engine.ts` PATCH 02e):
+
+1. `applyCandleStyle(name)` reads `resolveCandleStyle(name, this.currentTheme)`
+   instead of `CANDLE_STYLES[name]` directly.
+2. `applyTheme(name)` calls `this.applyCandleStyle(this.currentCandleStyle)`
+   at the end — so theme switch refreshes candle palette using the new
+   theme's overrides. (Volume colors auto-refresh via existing
+   `_refreshVolumeColors()`.)
+3. Constructor init: PATCH 02d already standardizes constructor to read
+   `THEMES.dark.chart.*`; same slice extends to read
+   `resolveCandleStyle(savedStyle, savedTheme)` instead of literal
+   `CANDLE_STYLES.classic`.
+
+**Per-cell luminance contract** (acceptance threshold, WCAG-informed):
+
+- Candle body or border vs background: **≥ 3.0:1** for graphical objects
+  (WCAG 1.4.11). Each adapted cell verified with contrast checker.
+- Up-color vs down-color must remain perceptually distinct
+  (≥ 25 ΔE) — preserves bull/bear at-a-glance discrimination.
+- Bull stays in green family (hue 140–180°), bear in red family
+  (hue 0–20° or 340–360°). No semantic crossing.
+
+**Why not the 3 alternatives:**
+
+- **Option A — Drop incompatible** (filter picker per theme): would
+  surface `(2 themes × 1 style) + (1 theme × 1 style) = 3 missing
+  cells` to user, looks like a bug rather than a feature.
+- **Option B — Auto-swap** (force `classic` if incompatible): magical,
+  user loses their style choice on theme switch. Toast disclaimer
+  doesn't fix the loss of intent.
+- **Option D — Edit literals only** (raise stealth grays globally):
+  fixes stealth on dark by breaking it on light. Whack-a-mole; no
+  invariant restored.
+
+Option C (theme-aware variants) is the only one that **structurally**
+makes the table sound: every (theme, style) cell is now a first-class
+coordinate, with explicit overrides where the default fails. Adding a
+4th theme later means filling N more `?:` overrides — no surface
+breakage, no picker filtering, no auto-swap surprise.
+
+**Why this does not break ADR-0007 / Entry 078:** the public API
+(`applyCandleStyle(name)`, persisted user choice in localStorage,
+style-name semantics) is preserved. The change is internal to
+`themes.ts`. Trader-visible behavior: when toggling theme, candles
+rebalance luminance to stay readable on the new background — which
+is the trader-correct behavior anyway (the failure mode it replaces
+is "candles disappear when I switch to dark").
 
 ### Tier 7 · TradingView attribution compliance
 
@@ -494,6 +620,7 @@ run after.
 | 2  | PATCH 02b | Mirror tokens into `THEMES.dark` (`themes.ts`) + rewire `applyThemeCssVars` to set `<html data-theme>`. Toolbar accent → gold via CSS-var path. | ~30   | 1     | small  | ✅ shipped `f0689b1` |
 | 3  | PATCH 02c | Mirror tokens into `THEMES.black` and `THEMES.light` (`--accent-soft` for WCAG AA on white). Brand consistency across 3 themes. | ~35   | 1     | small  | ✅ shipped `03a201f` |
 | 4  | **PATCH 02d** | **Engine constructor parity fix**: replace `engine.ts:138-148` hardcoded `#d5d5d5` / `'rgba(43,56,70,0.4)'` / `'rgba(213,213,213,0.35)'` with `THEMES.dark.chart.*` references **OR** call `applyTheme(savedTheme)` unconditionally on init. Removes split-brain between constructor defaults and `THEMES.dark`. **Mandatory before PATCH 06b** so dark-default users see token-driven chart palette. | ~15  | 1   | small | ⏳ pending |
+| 4b | **PATCH 02e** | **Theme × candle adaptation matrix** (Tier 8): restructure `CANDLE_STYLES` in `themes.ts` to `Record<CandleStyleName, CandleStyleByTheme>` with `resolveCandleStyle(style, theme)` resolver; rewire `engine.ts` `applyCandleStyle()` to use resolver and `applyTheme()` to re-apply candle style on theme switch. Adds per-theme overrides for `stealth`/`white`/`gray`/`hollow` so all 15 cells pass ≥3.0:1 contrast. **Depends on PATCH 02d** (shared constructor refactor). | ~80 | 2   | medium | ⏳ pending |
 | 5  | PATCH 03  | Asset deployment (mark + wordmark SVG/PNG + favicon + manifest), `Brand.svelte` component. Creates `ui_v4/public/brand/`. | ~140  | 6–8   | medium | ⏳ pending |
 | 6  | PATCH 04  | `AboutModal.svelte` + Credits tab (`oss-notices.ts`) + wordmark click wiring + `StatusOverlay` splash extension.   | ~150  | 4–5   | medium | ⏳ pending |
 | 7  | PATCH 05  | `attributionLogo: false` in `engine.ts` chart layout opts + dynamic tab title `$effect` in `App.svelte` + favicon link + bg/color tokens in `index.html` inline `<style>`. | ~30   | 3     | small  | ⏳ pending |
@@ -541,6 +668,22 @@ element reads `#E6EDF3` — visible drift on the same surface.
 1. `engine.ts:138-148` constructor no longer carries `#d5d5d5` / `'rgba(43,56,70,0.4)'` literals.
 2. Default-dark user reload: chart price-axis text renders at `#9B9BB0`, grid at `rgba(48,54,61,0.6)` (DevTools computed style on canvas inspector).
 3. Switching theme to black/light/back-to-dark produces the same chart palette as initial load (no double-init flicker).
+
+**PATCH 02e (Theme × candle adaptation) — ⏳ pending verify:**
+
+1. `CANDLE_STYLES` shape changed to `Record<CandleStyleName, CandleStyleByTheme>` with `default` + optional per-theme overrides; `resolveCandleStyle(style, theme)` exported and unit-callable.
+2. `engine.ts` `applyCandleStyle(name)` reads `resolveCandleStyle(name, this.currentTheme)`; `applyTheme(name)` invokes `this.applyCandleStyle(this.currentCandleStyle)` at end.
+3. **15-cell visual matrix audit** (3 themes × 5 styles, screenshots in PR):
+   - `stealth × dark`: candle bodies clearly visible against `#0D1117`; up/down distinguishable.
+   - `stealth × black`: same vs `#000000`.
+   - `white × light`: up bodies (`#cfd2d6`) clearly visible against `#FFFFFF`.
+   - `gray × black`: down border ≥3.0:1 against `#000000`.
+   - `hollow × light`: up borders (`#1a8580`) ≥3.0:1 against `#FFFFFF`.
+   - All other 10 cells: no regression vs PATCH 02c baseline.
+4. Theme switch (e.g., dark → light) with `stealth` selected: candles immediately re-render with light-theme palette, no manual style re-pick required.
+5. Volume bars per theme switch: `_refreshVolumeColors()` produces alpha-derived volume colors matching the theme-resolved candle (Entry 078 invariant preserved).
+6. localStorage round-trip: persisted style+theme on reload renders identically to in-session switch.
+7. `npx tsc --noEmit` clean; no `any` introduced in resolver.
 
 **PATCH 03 (assets) — ⏳ pending:**
 
@@ -615,6 +758,7 @@ is purely visual + asset + component additions).
 | PATCH 02b  | ✅ shipped | `git revert f0689b1` — `themes.ts` dark + `applyThemeCssVars` revert.                     |
 | PATCH 02c  | ✅ shipped | `git revert 03a201f` — `themes.ts` black + light revert.                                  |
 | PATCH 02d  | ⏳ pending | `git revert {commit}` — restore `engine.ts` constructor literals.                         |
+| PATCH 02e  | ⏳ pending | `git revert {commit}` — restore flat `CANDLE_STYLES` shape and engine direct-lookup. Style choice persisted in localStorage stays; resolver vanishes; visibility regressions return on broken cells. Safe — public API preserved across revert. |
 | PATCH 03   | ⏳ pending | `git revert {commit}` — remove asset files; `Brand.svelte` revert                         |
 | PATCH 04   | ⏳ pending | `git revert {commit}` — remove `AboutModal.svelte`, `oss-notices.ts`, restore StatusOverlay |
 | PATCH 05   | ⏳ pending | `git revert {commit}` — `attributionLogo: false` reverts; restore tab-title; remove favicon link; restore `index.html` literals |
@@ -642,6 +786,18 @@ Estimated rollback time: 5 minutes.
   then 3 fade-in) for splash screen — animation ADR if pursued.
 - **Light-mode theme.** Currently only dark theme exists. Light theme
   would require a separate token set; defer until/unless requested.
+  *(Update 2026-05-08: light theme already exists per PATCH 02c; this
+  bullet is stale and slated for removal in next ADR cleanup pass.)*
+- **Candle style system promotion.** PATCH 02e adapts the existing 5
+  styles to 3 themes via per-theme overrides inside `themes.ts`. If the
+  catalog grows beyond ~8 styles or ~5 themes, the resolver becomes a
+  larger surface deserving its own ADR (provisional **ADR-0067 \u2014
+  Candle Style Adaptation Matrix**). Triggers for promotion: (a) a
+  third group of users (e.g., colorblind preset) demands its own style
+  family; (b) candle palette starts encoding signal semantics
+  (e.g., grade-tinted candles per ADR-0029); (c) introduction of
+  per-symbol candle defaults (XAU vs BTC distinct palettes). Until any
+  of those, Tier 8 in this ADR is sufficient SSOT.
 - **Standalone /credits page.** If SEO or external linking demand
   arises, the Credits tab content can be promoted to a static
   `ui_v4/public/credits.html` served by aiohttp at `/credits`. Until
