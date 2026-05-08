@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="AI · ONE v3 mark">
+  <!--
+    ADR-0066 Tier 3 — M-v3 mark (master, 64×64 viewBox).
+    V geometry: outer (9,14)→(32,51)→(55,14)→(49,14)→(32,42)→(15,14)→(9,14).
+    3 geometry: top arc M 39 30 Q 49 30 49 35 Q 49 39 44 39
+                bottom arc M 44 39 Q 49 39 49 43 Q 49 48 39 48.
+    Gradient: #D4A017 (bottom-left) → #22CC8F (top-right).
+    Swing-low marker: small bull-green circle at V vertex.
+  -->
+  <defs>
+    <linearGradient id="m3grad" x1="0" y1="64" x2="64" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#D4A017"/>
+      <stop offset="100%" stop-color="#22CC8F"/>
+    </linearGradient>
+  </defs>
+
+  <!-- V (hollow polygon: outer perimeter minus inner cutout via even-odd fill) -->
+  <path
+    fill="url(#m3grad)"
+    fill-rule="evenodd"
+    d="M 9 14 L 15 14 L 32 42 L 49 14 L 55 14 L 32 51 Z"
+  />
+
+  <!-- 3 (stroke composed of two quadratic arcs joined at midpoint) -->
+  <path
+    fill="none"
+    stroke="url(#m3grad)"
+    stroke-width="2.6"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    d="M 39 30 Q 49 30 49 35 Q 49 39 44 39 Q 49 39 49 43 Q 49 48 39 48"
+  />
+
+  <!-- Swing-low marker at V vertex (Tier 3 — 64+/256 only) -->
+  <circle cx="32" cy="51" r="1.8" fill="#22CC8F"/>
+</svg>

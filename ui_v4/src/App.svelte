@@ -12,6 +12,7 @@
   import StatusOverlay from "./layout/StatusOverlay.svelte";
   import DiagPanel from "./layout/DiagPanel.svelte";
   import ReplayBar from "./layout/ReplayBar.svelte";
+  import Brand from "./layout/Brand.svelte";
 
   // ADR-0027: Client-side replay store
   import { replayStore } from "./stores/replayStore.svelte";
@@ -484,6 +485,12 @@
   <!-- Main content area -->
   <div class="main-content">
     <div class="chart-wrapper">
+      <!-- ADR-0066 PATCH 03 slot 7: brand wordmark, top-left of chart pane.
+           PATCH 04 will wire onclick to AboutModal. For now the click is a
+           no-op placeholder; presence + theme-awareness verified in 03. -->
+      <div class="brand-slot">
+        <Brand variant="wordmark" size={14} clickable title="AI · ONE v3 — about" />
+      </div>
       <DrawingToolbar {activeTool} onSelectTool={(t) => (activeTool = t)} />
       <ChartPane
         bind:this={chartPaneRef}
@@ -649,6 +656,25 @@
     -webkit-touch-callout: none; /* disable iOS callout on long-press */
     -webkit-user-select: none;
     user-select: none;
+  }
+
+  /* ADR-0066 PATCH 03 slot 7: brand wordmark on chart top-left.
+     Fixed-position so it sits above HUD without nesting inside it.
+     z-index 36 (above HUD z=35, below dropdowns z=100). */
+  .brand-slot {
+    position: absolute;
+    bottom: 22px;
+    left: 12px;
+    z-index: 36;
+    pointer-events: auto;
+    opacity: 0.88;
+    transition: opacity 0.15s ease;
+  }
+  .brand-slot:hover {
+    opacity: 1;
+  }
+  @media (max-width: 768px) {
+    .brand-slot { bottom: 18px; left: 6px; }
   }
 
   /* Entry 078: Compact top-right bar — no bg, shifted left from price axis */

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 36" role="img" aria-label="AI · ONE">
+  <!--
+    ADR-0066 Tier 2 — Wordmark W-A · Classic Graphite.
+    AI: Inter 800, color --text-1 (#E6EDF3).
+    ONE: Inter 800, color --text-2 (#9B9BB0) at 75% opacity.
+    Dot ·: gold (--accent #D4A017), 7px breathing on each side.
+    Tracking: −1.5%.
+    Min size 16px (below this, use mark instead).
+  -->
+  <style>
+    .ai, .one { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-weight: 800; font-size: 28px; letter-spacing: -0.42px; }
+    .ai { fill: #E6EDF3; }
+    .one { fill: #9B9BB0; opacity: 0.75; }
+    .dot { fill: #D4A017; }
+  </style>
+  <text x="0"   y="28" class="ai">AI</text>
+  <text x="40"  y="28" class="dot" font-family="Inter, sans-serif" font-weight="800" font-size="28">·</text>
+  <text x="55"  y="28" class="one">ONE</text>
+</svg>

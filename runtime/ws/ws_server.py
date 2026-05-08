@@ -3110,6 +3110,10 @@ def build_app(
         app.router.add_get("/", _spa_index)
         # РЎС‚Р°С‚РёС‡РЅС– Р°СЃСЃРµС‚Рё (JS/CSS/images)
         app.router.add_static("/assets", os.path.join(_ui_dist, "assets"))
+        # ADR-0066 PATCH 03: brand assets (favicon SVG, wordmark, mark variants)
+        _brand_dir = os.path.join(_ui_dist, "brand")
+        if os.path.isdir(_brand_dir):
+            app.router.add_static("/brand", _brand_dir)
         _log.info("UI_V4_STATIC registered dist=%s", _ui_dist)
     else:
         _log.info(
