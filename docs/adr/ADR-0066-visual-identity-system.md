@@ -5,7 +5,7 @@
 | Field          | Value                                                    |
 | -------------- | -------------------------------------------------------- |
 | ID             | ADR-0066                                                 |
-| Status         | PARTIALLY IMPLEMENTED (rev 4 — 2026-05-08; PATCH 02a/b/c shipped, 02d / 02e / 03 / 04 / 05 / 06a / 06b pending; rev 4 absorbs exploration-board GAP-1–6 + crosshair/focus/disabled gaps as scope extensions — no new slices) |
+| Status         | PARTIALLY IMPLEMENTED (rev 4.1 — 2026-05-08; PATCH 02a/b/c shipped, 02d / 02e / 03 / 04 / 05 / 06a / 06b pending; rev 4 absorbed exploration-board GAP-1–6 + crosshair/focus/disabled gaps as scope extensions; rev 4.1 adds PATCH 02d implementation handoff guide — file order, exact line-number diff, decision locks, common mistakes — so a fresh agent can ship 02d without re-deriving) |
 | Date           | 2026-05-08                                               |
 | Authors        | Станіслав                                                |
 | Supersedes     | —                                                        |
@@ -43,7 +43,7 @@ Grep evidence at audit time (search across `ui_v4/src/`):
 
 | File                                | Line(s)            | Literal              | Will be addressed by                  |
 | ----------------------------------- | ------------------ | -------------------- | ------------------------------------- |
-| `chart/engine.ts`                   | 138-148            | `#d5d5d5`, `rgba(43,56,70,0.4)`, `rgba(213,213,213,0.35)` | **PATCH 02d** (Engine constructor — see trap below) |
+| `chart/engine.ts`                   | 142 (textColor), 145-146 (grid), 151+156 (crosshair) | `#d5d5d5`, `rgba(43,56,70,0.4)`, `rgba(213,213,213,0.35)` | **PATCH 02d** (Engine constructor — see trap below) |
 | `chart/drawings/DrawingsRenderer.ts` | 771, 855          | `#3d9aff`            | PATCH 06b (color migration sweep)     |
 | `layout/ChartHud.svelte`            | 21 (prop default)  | `#d1d4dc`            | PATCH 06b                             |
 | `layout/ChartPane.svelte`           | 768, 781, 867, 908 | `#4a90d9`            | PATCH 06b                             |
@@ -490,8 +490,12 @@ without overlapping adjacent elements. Applied via `:focus-visible`
 | black   | `rgba(213,213,213,0.40)` — slight bump on pure black       |
 | light   | `rgba(60,60,80,0.40)` — dark-on-light for visibility        |
 
-These fields are added to `THEMES[name].chart.crosshair.*` in `themes.ts`
-and consumed by PATCH 02d (engine constructor parity slice).
+These crosshair color values **update existing fields** in
+`THEMES[name].chart.crosshair.{vertLine,horzLine}.color` (fields were
+created in PATCH 02b/c with placeholder `rgba(230,237,243,...)` /
+`rgba(13,17,23,...)` values). PATCH 02d replaces those values with the
+table above and lifts the constructor literals at the same time. **Do
+not add new fields** — only edit existing `color:` strings.
 
 ### Tier 6 · Brand placement matrix
 
@@ -575,10 +579,12 @@ export function resolveCandleStyle(
    at the end — so theme switch refreshes candle palette using the new
    theme's overrides. (Volume colors auto-refresh via existing
    `_refreshVolumeColors()`.)
-3. Constructor init: PATCH 02d already standardizes constructor to read
-   `THEMES.dark.chart.*`; same slice extends to read
-   `resolveCandleStyle(savedStyle, savedTheme)` instead of literal
-   `CANDLE_STYLES.classic`.
+3. Constructor init: PATCH 02d standardizes constructor to read
+   `THEMES.dark.chart.*` for **chart text / grid / crosshair only**.
+   The literal `CANDLE_STYLES.classic.upColor` / `.downColor` reads at
+   `engine.ts:124-126` (volume seed) and the `applyCandleStyle(savedStyle)`
+   bypass at `engine.ts:188` are **out of scope for PATCH 02d** — PATCH 02e
+   replaces them with `resolveCandleStyle(savedStyle, savedTheme)`.
 
 **Per-cell luminance contract** (acceptance threshold, WCAG-informed):
 
@@ -838,7 +844,7 @@ run after.
 | 1  | PATCH 02a | Create `tokens.css` SSOT (palette + typography + spacing). Import once via `main.ts`. Zero consumers, zero visual delta. | ~95   | 2     | small  | ✅ shipped `c7f8428` |
 | 2  | PATCH 02b | Mirror tokens into `THEMES.dark` (`themes.ts`) + rewire `applyThemeCssVars` to set `<html data-theme>`. Toolbar accent → gold via CSS-var path. | ~30   | 1     | small  | ✅ shipped `f0689b1` |
 | 3  | PATCH 02c | Mirror tokens into `THEMES.black` and `THEMES.light` (`--accent-soft` for WCAG AA on white). Brand consistency across 3 themes. | ~35   | 1     | small  | ✅ shipped `03a201f` |
-| 4  | **PATCH 02d** | **Engine constructor parity fix** (rev 4 expanded scope): replace `engine.ts:138-148` hardcoded `#d5d5d5` / `'rgba(43,56,70,0.4)'` AND `engine.ts:84-94` `crosshair.vertLine.color` / `horzLine.color` `'rgba(213,213,213,0.35)'` literals with `THEMES.dark.chart.*` references; add `crosshair.vertLine.color` + `horzLine.color` fields to `THEMES[dark|black|light].chart.crosshair` per Tier 4 amendment table. Removes split-brain between constructor defaults and `THEMES.dark` AND closes drift #8 (crosshair invisible on light). **Mandatory before PATCH 06b**. | ~25 | 2 | small | ⏳ pending |
+| 4  | **PATCH 02d** | **Engine constructor parity fix** (rev 4 expanded scope): replace `engine.ts` constructor literals at `textColor` (line 142), `grid.{vertLines,horzLines}.color` (lines 145-146), and `crosshair.{vertLine,horzLine}.color` (lines 151+156) with `THEMES.dark.chart.*` references; **update existing** crosshair color values in all 3 themes (`THEMES.dark` / `.black` / `.light`) per Tier 4 amendment table — fields already exist from 02b/c, only `color:` strings change. Removes split-brain between constructor defaults and `THEMES.dark` AND closes drift #8 (crosshair invisible on light). **Mandatory before PATCH 06b**. See Implementation guide section above for edit order + exact diff. | ~25 | 2 | small | ⏳ pending |
 | 4b | **PATCH 02e** | **Theme × candle adaptation matrix** (Tier 8) + **per-theme volume alpha** (GAP-5): restructure `CANDLE_STYLES` in `themes.ts` to `Record<CandleStyleName, CandleStyleByTheme>` with `resolveCandleStyle(style, theme)` resolver; rewire `engine.ts` `applyCandleStyle()` to use resolver and `applyTheme()` to re-apply candle style on theme switch. Adds per-theme overrides for `stealth`/`white`/`gray`/`hollow` so all 15 cells pass ≥3.0:1 contrast. Volume alpha extended to `VOLUME_ALPHA_BY_THEME` (dark 0.32, black 0.36, light 0.42) sharing the same resolver — no duplicate function. **Depends on PATCH 02d** (shared constructor refactor). | ~95 | 2 | medium | ⏳ pending |
 | 5  | PATCH 03  | Asset deployment (mark + wordmark SVG/PNG + favicon + manifest), `Brand.svelte` component. Creates `ui_v4/public/brand/`. | ~140  | 6–8   | medium | ⏳ pending |
 | 6  | PATCH 04  | `AboutModal.svelte` + Credits tab (`oss-notices.ts`) + wordmark click wiring + `StatusOverlay` splash extension.   | ~150  | 4–5   | medium | ⏳ pending |
@@ -855,6 +861,154 @@ so ADR-0065 PATCH 07 is unblocked.
 constructor still emits `#d5d5d5` to LWC for default-dark users, the
 chart's price-axis text would read `#d5d5d5` while every other chrome
 element reads `#E6EDF3` — visible drift on the same surface.
+
+---
+
+## Implementation guide — PATCH 02d (Engine constructor parity)
+
+This section is the **executable runbook** for an implementing agent.
+Reading the PATCH 02d row + Tier 4 amendment is necessary but not
+sufficient — the following nails down exact lines, code templates, and
+forbidden moves so a fresh agent does not invent details.
+
+### Pre-flight reality check (do BEFORE editing)
+
+1. Scope is exactly two files: `ui_v4/src/chart/engine.ts` and
+   `ui_v4/src/chart/themes.ts`. Nothing else. If the change wants to
+   expand, **STOP** — that is no longer 02d.
+2. Re-read the `ThemeDef` interface in `themes.ts` (~lines 17-65) and
+   the three theme literals (`dark`, `black`, `light`). The
+   `chart.crosshair.{vertLine,horzLine}.color` fields **already exist**
+   on all 3 themes (set during PATCH 02b/c with placeholder `rgba`
+   values). PATCH 02d **edits the values in place** — it does NOT add
+   new fields, does NOT change the field shape.
+3. Open `engine.ts` and locate the `this.chart = createChart(container, {...})`
+   call (currently around line 137). Verify the literals you intend to
+   replace are still where this guide says (line numbers below). If the
+   structure has drifted by >5 lines, **first** update the Reality Audit
+   table line numbers, **then** proceed.
+
+### Edit order (mandatory)
+
+Step 1 = `themes.ts`. Step 2 = `engine.ts`. Reverse order means the
+constructor temporarily reads stale crosshair values from `themes.ts`
+and the verify step "switching theme produces same palette as initial
+load" passes silently for the wrong reason.
+
+### Step 1 — `themes.ts` crosshair value updates
+
+Update `vertLine.color` and `horzLine.color` in all three themes to the
+Tier 4 amendment values. Do **not** touch `width`, `style`, `mode`, or
+any surrounding field. Do not add per-theme comments — the existing
+`// ADR-0066 …` headers above each theme already document the SSOT
+origin.
+
+| Theme  | New `vertLine.color` and `horzLine.color`        | Replaces (current 02c value)              |
+| ------ | ------------------------------------------------- | ----------------------------------------- |
+| dark   | `'rgba(213, 213, 213, 0.35)'`                     | `'rgba(230, 237, 243, 0.35)'`             |
+| black  | `'rgba(213, 213, 213, 0.40)'`                     | `'rgba(230, 237, 243, 0.30)'`             |
+| light  | `'rgba(60, 60, 80, 0.40)'`                        | `'rgba(13, 17, 23, 0.30)'`                |
+
+Light value rationale: `rgba(60,60,80,0.40)` reads ~3.5:1 against
+`#FFFFFF` (or `#FAFBFC` post-drift-#10), passes WCAG 1.4.11 (≥3.0:1 for
+graphical objects). Do not lower opacity.
+
+### Step 2 — `engine.ts` constructor literal replacement
+
+`THEMES` is already imported at the top of `engine.ts` (line 13-21) — no
+new import needed. `CrosshairMode.Normal` and `LineStyle.Dashed` continue
+to be referenced from `'lightweight-charts'` — keep those identifiers
+as-is.
+
+Replace the following five values inside `createChart(container, { … })`:
+
+| Line | Old literal                                                                            | New reference                                                                                                |
+| ---- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| 142  | `textColor: '#d5d5d5'`                                                                 | `textColor: THEMES.dark.chart.layout.textColor`                                                              |
+| 145  | `vertLines: { color: 'rgba(43, 56, 70, 0.4)' }`                                        | `vertLines: { color: THEMES.dark.chart.grid.vertLines.color }`                                               |
+| 146  | `horzLines: { color: 'rgba(43, 56, 70, 0.4)' }`                                        | `horzLines: { color: THEMES.dark.chart.grid.horzLines.color }`                                               |
+| 151  | `vertLine: { color: 'rgba(213, 213, 213, 0.35)', width: 1, style: LineStyle.Dashed }`  | `vertLine: { color: THEMES.dark.chart.crosshair.vertLine.color, width: 1, style: LineStyle.Dashed }`         |
+| 156  | `horzLine: { color: 'rgba(213, 213, 213, 0.35)', width: 1, style: LineStyle.Dashed }`  | `horzLine: { color: THEMES.dark.chart.crosshair.horzLine.color, width: 1, style: LineStyle.Dashed }`         |
+
+All other constructor lines (autoSize, devicePixelRatio, handleScroll,
+handleScale, rightPriceScale, timeScale, localization) are **untouched**.
+
+### Out of scope (do NOT touch in PATCH 02d)
+
+- `engine.ts:124-126` — `_volUpColor = _withAlpha(CANDLE_STYLES.classic.upColor, VOLUME_ALPHA)` and `_volDownColor`. PATCH 02e scope.
+- `engine.ts:184` — `if (savedTheme !== 'dark') this.applyTheme(savedTheme)`.
+  **Keep guard.** After 02d the constructor matches `THEMES.dark.chart.*`,
+  so dark users do not need re-init; the guard correctly skips one
+  redundant `applyOptions` call. Removing the guard is a behavioral
+  change unrelated to 02d.
+- `engine.ts:186` — `if (savedStyle !== 'classic') this.applyCandleStyle(savedStyle)`. PATCH 02e scope.
+- `engine.ts` constructor `attributionLogo` flag. PATCH 05 scope.
+- Any `.svelte` color literal. PATCH 06b scope.
+- `index.html` inline `<style>`. PATCH 05 scope.
+- `tokens.css`. Untouched in 02d.
+- `pdBadge*` / `pdEqLineColor` fields in `themes.ts`. ADR-0041 scope, explicitly out per Tier 4.
+
+### Decision locks (do NOT revisit)
+
+- **Fix strategy = option (b)** (constructor reads `THEMES.dark.chart.*`).
+  Option (a) (call `applyTheme` unconditionally on init) was considered
+  and rejected: doubles init for dark users, may flicker during cold
+  start.
+- **Crosshair color values = Tier 4 amendment table.** Do NOT carry
+  over the previous `rgba(230, 237, 243, ...)` "white-ish" tone — the
+  amendment intentionally tunes per theme.
+- **Field shape = `chart.crosshair.{vertLine,horzLine}.color`** (string).
+  Do NOT introduce a `crosshairColor` shortcut or restructure the
+  nested object. ThemeDef interface stays as-is.
+
+### Common mistakes that will block ship
+
+1. **Editing `engine.ts` before `themes.ts`** → constructor reads stale
+   crosshair values; theme-switch round-trip verify gives a misleading
+   pass.
+2. **Adding a new `crosshair.color` field on the theme** → ThemeDef
+   shape mismatch; either tsc fails or LWC silently ignores the field.
+3. **Removing `width: 1, style: LineStyle.Dashed`** when replacing
+   `color:` → LWC defaults width to 1 but **style defaults to Solid**.
+   Crosshair would render solid → visible regression.
+4. **Touching the `applyTheme` line 184 guard** → behavioral change
+   outside 02d scope; will be reverted in review.
+5. **Touching candle/volume init** → mixes 02d with 02e; K6 "one-slice-
+   one-verify" violation; reviewer will reject.
+6. **Replacing `'rgba(213, 213, 213, 0.35)'` constructor literal with
+   the *theme value* literal directly** (e.g. typing `'rgba(213, 213, 213, 0.35)'`
+   in place of the theme reference) → breaks SSOT; constructor must
+   reference `THEMES.dark.chart.*`, not duplicate the value.
+
+### Acceptance gate (run before changelog)
+
+From repo root:
+
+```sh
+cd ui_v4 && npx tsc --noEmit && npx vite build
+```
+
+Both must succeed with no new warnings vs PATCH 02c baseline. Then run
+the 7-point PATCH 02d verify list (below in `## Verification`).
+
+### Verification beyond `tsc + vite build` (canvas color reality check)
+
+LWC renders text/grid/crosshair to `<canvas>` — values are not visible
+through DevTools `getComputedStyle`. Use one of these to confirm the
+actual color reaching LWC:
+
+- **Code path inspection** (cheapest): in DevTools Sources, set a
+  breakpoint at the `createChart(container, {...})` call; on hit,
+  evaluate `THEMES.dark.chart.layout.textColor` in the console — must
+  print `'#9B9BB0'`.
+- **Console check after init**: `chart.options().layout.textColor` —
+  must equal `'#9B9BB0'` for default-dark, `'#9B9BB0'` for black,
+  `'#45455A'` for light.
+- **Visual screenshot diff** (optional): screenshot price-axis numbers
+  before vs after on default-dark with cleared localStorage; expected
+  difference = subtle (text shifts from `#d5d5d5` very-light to
+  `#9B9BB0` cooler-medium). If they look identical, the fix did not
+  land.
 
 ---
 
@@ -884,13 +1038,25 @@ element reads `#E6EDF3` — visible drift on the same surface.
 
 **PATCH 02d (Engine constructor parity) — ⏳ pending verify (rev 4 expanded):**
 
-1. `engine.ts:138-148` constructor no longer carries `#d5d5d5` / `'rgba(43,56,70,0.4)'` literals.
-2. `engine.ts:84-94` constructor no longer carries `'rgba(213,213,213,0.35)'` for crosshair vertLine/horzLine; reads from `THEMES.dark.chart.crosshair.*`.
-3. `THEMES[dark|black|light].chart.crosshair.{vertLine,horzLine}.color` fields exist per Tier 4 amendment table.
-4. Default-dark user reload: chart price-axis text renders at `#9B9BB0`, grid at `rgba(48,54,61,0.6)` (DevTools computed style on canvas inspector).
-5. Switching theme to black/light/back-to-dark produces the same chart palette as initial load (no double-init flicker).
-6. **Crosshair visibility on light theme**: hover chart on `light` — crosshair lines visible (dark-on-off-white per Tier 4 amendment), not invisible white-on-white.
-7. `npx tsc --noEmit` clean.
+> See `## Implementation guide — PATCH 02d` section above for the executable
+> runbook (file order, exact diff, out-of-scope, decision locks, common
+> mistakes). The list below is the **acceptance checklist** — every item
+> must produce evidence in the PATCH 02d changelog entry.
+
+1. `engine.ts` line 142 (`textColor`) and lines 145-146 (`grid.{vertLines,horzLines}.color`) no longer carry the `#d5d5d5` / `'rgba(43, 56, 70, 0.4)'` literals; they reference `THEMES.dark.chart.layout.textColor` and `THEMES.dark.chart.grid.{vertLines,horzLines}.color`.
+2. `engine.ts` lines 151 + 156 (`crosshair.{vertLine,horzLine}.color`) no longer carry the `'rgba(213, 213, 213, 0.35)'` literal; they reference `THEMES.dark.chart.crosshair.{vertLine,horzLine}.color`. `width: 1, style: LineStyle.Dashed` preserved on both.
+3. `THEMES[dark|black|light].chart.crosshair.{vertLine,horzLine}.color` values match the Tier 4 amendment table (dark `rgba(213,213,213,0.35)`, black `rgba(213,213,213,0.40)`, light `rgba(60,60,80,0.40)`). Field shape unchanged — only `color:` value edited.
+4. **Canvas color reality check** (canvas pixels are not in DOM,
+   `getComputedStyle` will not work). In DevTools console after the
+   chart loads, evaluate `chart.options().layout.textColor` — must
+   print `'#9B9BB0'` on default-dark cold load. Same check for grid:
+   `chart.options().grid.vertLines.color` must equal
+   `'rgba(48, 54, 61, 0.6)'`. Alternative: breakpoint inside the
+   `createChart(container, {...})` call and inspect `THEMES.dark.chart.*`
+   values directly.
+5. Switching theme to black/light/back-to-dark via the picker produces the same chart palette as the corresponding initial-load case (no double-init flicker, no stale dark colors leaking on light).
+6. **Crosshair visibility on light theme**: hover the chart on `light` — crosshair lines visible (dark-on-off-white per Tier 4 amendment), not invisible white-on-white.
+7. Acceptance gate runs clean from `ui_v4/`: `npx tsc --noEmit` zero errors **and** `npx vite build` succeeds with no new warnings vs PATCH 02c baseline. Bundle size delta < 0.5 KB.
 
 **PATCH 02e (Theme × candle adaptation) — ⏳ pending verify:**
 
