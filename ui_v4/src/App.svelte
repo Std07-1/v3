@@ -13,6 +13,7 @@
   import DiagPanel from "./layout/DiagPanel.svelte";
   import ReplayBar from "./layout/ReplayBar.svelte";
   import Brand from "./layout/Brand.svelte";
+  import AboutModal from "./layout/AboutModal.svelte";
 
   // ADR-0027: Client-side replay store
   import { replayStore } from "./stores/replayStore.svelte";
@@ -202,6 +203,9 @@
   function handleCandleStyleChange(name: CandleStyleName) {
     chartPaneRef?.applyCandleStyle(name);
   }
+
+  // ADR-0066 PATCH 04: AboutModal open state (triggered by Brand wordmark click).
+  let aboutOpen = $state(false);
 
   // P3.14: Diagnostic panel toggle (Ctrl+Shift+D)
   let diagVisible = $state(false);
@@ -485,11 +489,16 @@
   <!-- Main content area -->
   <div class="main-content">
     <div class="chart-wrapper">
-      <!-- ADR-0066 PATCH 03 slot 7: brand wordmark, top-left of chart pane.
-           PATCH 04 will wire onclick to AboutModal. For now the click is a
-           no-op placeholder; presence + theme-awareness verified in 03. -->
+      <!-- ADR-0066 PATCH 03+04 slot 7: brand wordmark, bottom-left.
+           Click opens AboutModal (PATCH 04). Theme-aware via Brand.svelte. -->
       <div class="brand-slot">
-        <Brand variant="wordmark" size={14} clickable title="AI · ONE v3 — about" />
+        <Brand
+          variant="wordmark"
+          size={14}
+          clickable
+          title="AI · ONE v3 — click for About + Credits"
+          onclick={() => (aboutOpen = true)}
+        />
       </div>
       <DrawingToolbar {activeTool} onSelectTool={(t) => (activeTool = t)} />
       <ChartPane
@@ -622,6 +631,9 @@
 
   <!-- P3.14: Diagnostic panel (Ctrl+Shift+D) -->
   <DiagPanel visible={diagVisible} />
+
+  <!-- ADR-0066 PATCH 04: About + Credits modal. Opened from Brand wordmark click. -->
+  <AboutModal open={aboutOpen} onClose={() => (aboutOpen = false)} />
 </main>
 
 <style>
