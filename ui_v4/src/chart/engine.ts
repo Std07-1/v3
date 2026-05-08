@@ -138,21 +138,21 @@ export class ChartEngine {
       devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
       layout: {
         background: { color: 'transparent' },
-        textColor: '#d5d5d5',
+        textColor: THEMES.dark.chart.layout.textColor,
       },
       grid: {
-        vertLines: { color: 'rgba(43, 56, 70, 0.4)' },
-        horzLines: { color: 'rgba(43, 56, 70, 0.4)' },
+        vertLines: { color: THEMES.dark.chart.grid.vertLines.color },
+        horzLines: { color: THEMES.dark.chart.grid.horzLines.color },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
         vertLine: {
-          color: 'rgba(213, 213, 213, 0.35)',
+          color: THEMES.dark.chart.crosshair.vertLine.color,
           width: 1,
           style: LineStyle.Dashed,
         },
         horzLine: {
-          color: 'rgba(213, 213, 213, 0.35)',
+          color: THEMES.dark.chart.crosshair.horzLine.color,
           width: 1,
           style: LineStyle.Dashed,
         },

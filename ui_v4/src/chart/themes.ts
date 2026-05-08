@@ -76,8 +76,8 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
             },
             crosshair: {
                 mode: CrosshairMode.Normal,
-                vertLine: { color: 'rgba(230, 237, 243, 0.35)', width: 1, style: LineStyle.Dashed },
-                horzLine: { color: 'rgba(230, 237, 243, 0.35)', width: 1, style: LineStyle.Dashed },
+                vertLine: { color: 'rgba(213, 213, 213, 0.35)', width: 1, style: LineStyle.Dashed },
+                horzLine: { color: 'rgba(213, 213, 213, 0.35)', width: 1, style: LineStyle.Dashed },
             },
         },
         // ADR-0066 token mirror: --bg / --elev / --card / --border / --text-1 / --accent
@@ -113,8 +113,8 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
             },
             crosshair: {
                 mode: CrosshairMode.Normal,
-                vertLine: { color: 'rgba(230, 237, 243, 0.30)', width: 1, style: LineStyle.Dashed },
-                horzLine: { color: 'rgba(230, 237, 243, 0.30)', width: 1, style: LineStyle.Dashed },
+                vertLine: { color: 'rgba(213, 213, 213, 0.40)', width: 1, style: LineStyle.Dashed },
+                horzLine: { color: 'rgba(213, 213, 213, 0.40)', width: 1, style: LineStyle.Dashed },
             },
         },
         // ADR-0066 token mirror (black variant): true black canvas, --elev/--card stay
@@ -150,8 +150,8 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
             },
             crosshair: {
                 mode: CrosshairMode.Normal,
-                vertLine: { color: 'rgba(13, 17, 23, 0.30)', width: 1, style: LineStyle.Dashed },
-                horzLine: { color: 'rgba(13, 17, 23, 0.30)', width: 1, style: LineStyle.Dashed },
+                vertLine: { color: 'rgba(60, 60, 80, 0.40)', width: 1, style: LineStyle.Dashed },
+                horzLine: { color: 'rgba(60, 60, 80, 0.40)', width: 1, style: LineStyle.Dashed },
             },
         },
         // ADR-0066 token mirror (light variant): inverted scale; --accent-soft for AA contrast on white
