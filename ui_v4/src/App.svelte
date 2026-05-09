@@ -10,10 +10,10 @@
   import DrawingToolbar from "./layout/DrawingToolbar.svelte";
   import ChartHud from "./layout/ChartHud.svelte";
   import StatusOverlay from "./layout/StatusOverlay.svelte";
-  import DiagPanel from "./layout/DiagPanel.svelte";
   import ReplayBar from "./layout/ReplayBar.svelte";
-  import Brand from "./layout/Brand.svelte";
-  import AboutModal from "./layout/AboutModal.svelte";
+  import InfoModal from "./layout/InfoModal.svelte";
+  import BrandWatermark from "./layout/BrandWatermark.svelte";
+  import CommandRailOverflow from "./layout/CommandRailOverflow.svelte";
   import Splash from "./layout/Splash.svelte";
   import NarrativePanel from "./layout/NarrativePanel.svelte";
   import CommandRail from "./layout/CommandRail.svelte";
@@ -25,10 +25,6 @@
   import type { ThemeName, CandleStyleName } from "./chart/lwc";
   import {
     THEMES,
-    THEME_NAMES,
-    CANDLE_STYLES,
-    CANDLE_STYLE_NAMES,
-    resolveCandleStyle,
     loadTheme,
     loadCandleStyle,
     applyThemeCssVars,
@@ -141,32 +137,9 @@
     } catch {}
   }
   let brightness = $state(loadBrightness());
-  let brightnessIcon = $derived(brightness >= 1.0 ? "☀" : "🌙");
 
-  // Theme + Candle style pickers (moved from ChartHud to top-right-bar)
-  let trThemeOpen = $state(false);
-  let trStyleOpen = $state(false);
+  // Active theme + candle style — passed to CommandRailOverflow as props.
   let activeCandleStyle: CandleStyleName = $state(loadCandleStyle());
-
-  function trToggleTheme(e: MouseEvent) {
-    e.stopPropagation();
-    trStyleOpen = false;
-    trThemeOpen = !trThemeOpen;
-  }
-  function trToggleStyle(e: MouseEvent) {
-    e.stopPropagation();
-    trThemeOpen = false;
-    trStyleOpen = !trStyleOpen;
-  }
-  function trSelectTheme(name: ThemeName) {
-    trThemeOpen = false;
-    handleThemeChange(name);
-  }
-  function trSelectStyle(name: CandleStyleName) {
-    trStyleOpen = false;
-    activeCandleStyle = name;
-    handleCandleStyleChange(name);
-  }
 
   function handleBrightnessWheel(e: WheelEvent) {
     e.preventDefault();
@@ -176,16 +149,7 @@
     saveBrightness(brightness);
   }
 
-  // Entry 077: Top-right compact bar (clock + health dot + diag toggle)
-  const STATUS_COLORS: Record<string, string> = {
-    HEALTHY: "#26a69a",
-    CONNECTING: "#f0b90b",
-    STALLED: "#ef5350",
-    WS_UNAVAILABLE: "#ef5350",
-    EDGE_BLOCKED: "#ef5350",
-    OFFLINE: "#ef5350",
-    FRONTEND_ERROR: "#ef5350",
-  };
+  // ADR-0065 rev 2: Top-right command rail UTC clock (no health dot — moved to ChartHud).
   let clockNow = $state(Date.now());
   let clockInterval: ReturnType<typeof setInterval> | null = null;
   let utcStr = $derived(
@@ -204,11 +168,34 @@
     applyThemeCssVars(name);
   }
   function handleCandleStyleChange(name: CandleStyleName) {
+    activeCandleStyle = name;
     chartPaneRef?.applyCandleStyle(name);
   }
 
-  // ADR-0066 PATCH 04: AboutModal open state (triggered by Brand wordmark click).
-  let aboutOpen = $state(false);
+  // ADR-0065 rev 2 Tier 2: Overflow menu (☰) state.
+  let overflowOpen = $state(false);
+  function toggleOverflow(e: MouseEvent) {
+    e.stopPropagation();
+    overflowOpen = !overflowOpen;
+  }
+  function closeOverflow() {
+    overflowOpen = false;
+  }
+
+  // ADR-0068: Single InfoModal instance, defaultTab controlled by last opener.
+  // - Brand watermark click → "about"
+  // - Overflow menu Diagnostics item → "diagnostics"
+  // - Ctrl+Shift+D → "diagnostics"
+  let infoOpen = $state(false);
+  let infoTab = $state<"about" | "credits" | "diagnostics">("about");
+  function openAbout() {
+    infoTab = "about";
+    infoOpen = true;
+  }
+  function openDiagnostics() {
+    infoTab = "diagnostics";
+    infoOpen = true;
+  }
 
   // ADR-0066 PATCH 04b: Splash overlay during initial WS warming.
   // Shown when no first frame has arrived yet AND status is non-fatal
@@ -216,18 +203,17 @@
   let firstFrameArrived = $state(false);
   let splashVisible = $derived(
     !firstFrameArrived &&
-    statusInfo.status !== "OFFLINE" &&
-    statusInfo.status !== "EDGE_BLOCKED" &&
-    statusInfo.status !== "WS_UNAVAILABLE" &&
-    statusInfo.status !== "FRONTEND_ERROR",
+      statusInfo.status !== "OFFLINE" &&
+      statusInfo.status !== "EDGE_BLOCKED" &&
+      statusInfo.status !== "WS_UNAVAILABLE" &&
+      statusInfo.status !== "FRONTEND_ERROR",
   );
 
-  // P3.14: Diagnostic panel toggle (Ctrl+Shift+D)
-  let diagVisible = $state(false);
+  // P3.14: Ctrl+Shift+D → open InfoModal[diagnostics] (legacy DiagPanel removed).
   function handleGlobalKeydown(e: KeyboardEvent) {
     if (e.ctrlKey && e.shiftKey && e.key === "D") {
       e.preventDefault();
-      diagVisible = !diagVisible;
+      openDiagnostics();
       return;
     }
     // Drawing hotkeys (drawing_tools_v1: audit T1 розблоковано)
@@ -343,7 +329,10 @@
         lastBarTs = Date.now(); // time of last WS frame, not candle open
       }
       // ADR-0066 PATCH 04b: dismiss splash on first frame with data
-      if (!firstFrameArrived && (f.frame_type === "full" || (candles && candles.length > 0))) {
+      if (
+        !firstFrameArrived &&
+        (f.frame_type === "full" || (candles && candles.length > 0))
+      ) {
         firstFrameArrived = true;
       }
     }
@@ -365,8 +354,7 @@
   $effect(() => {
     const sym = hudSymbol.replace(/\//g, "");
     const tf = hudTf;
-    document.title =
-      sym && tf ? `AI · ONE v3 — ${sym} ${tf}` : "AI · ONE v3";
+    document.title = sym && tf ? `AI · ONE v3 — ${sym} ${tf}` : "AI · ONE v3";
   });
 
   // --- Actions ---
@@ -508,17 +496,11 @@
   <!-- Main content area -->
   <div class="main-content">
     <div class="chart-wrapper">
-      <!-- ADR-0066 PATCH 03+04 slot 7: brand wordmark, bottom-left.
-           Click opens AboutModal (PATCH 04). Theme-aware via Brand.svelte. -->
-      <div class="brand-slot">
-        <Brand
-          variant="wordmark"
-          size={14}
-          clickable
-          title="AI · ONE v3 — click for About + Credits"
-          onclick={() => (aboutOpen = true)}
-        />
-      </div>
+      <!-- ADR-0068 Slice 3 / Part A: Brand watermark — locked slot bottom-left
+           above LWC time axis. Click opens InfoModal[About]. DO NOT MOVE.
+           See: ui_v4/src/layout/BrandWatermark.svelte header + memory file
+           /memories/repo/brand-watermark-locked-slot.md -->
+      <BrandWatermark onclick={openAbout} />
       <DrawingToolbar {activeTool} onSelectTool={(t) => (activeTool = t)} />
       <ChartPane
         bind:this={chartPaneRef}
@@ -563,93 +545,59 @@
     {/if}
   </div>
 
-  <!-- ADR-0027: Replay enter button (top-right, near clock bar) -->
-  {#if !replayStore.active}
-    <button
-      class="replay-enter-btn"
-      onclick={handleEnterReplay}
-      title="Enter Replay Mode">Replay</button
-    >
-  {:else}
-    <span class="replay-badge">REPLAY</span>
-  {/if}
-
-  <!-- Entry 078: Compact top-right bar (health dot + brightness + pickers + diag + clock) -->
+  <!-- ADR-0065 rev 2 Tier 1: Top-right inline command rail.
+       Layout: [ATR · RV · M{tf}-cd · UTC]  |  ▶ replay  |  ☰ overflow
+       Mobile <640px reflow: status row + ▶ hidden, lishaye [☰]. -->
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    class="top-right-bar"
-    onclick={() => {
-      trThemeOpen = false;
-      trStyleOpen = false;
-    }}
-  >
-    <!-- ADR-0065 (PROPOSED, partial Variant B): peripheral trader context
-         (ATR · RV · countdown). Client-side compute from frame.candles. -->
-    <CommandRail
-      candles={frame?.candles}
-      currentTf={hudTf}
-      nowMs={clockNow}
-    />
+  <div class="top-right-bar" onclick={closeOverflow}>
+    <!-- Tier 1 status row: ATR/RV/countdown + UTC clock -->
+    <div class="tr-status-row">
+      <CommandRail
+        candles={frame?.candles}
+        currentTf={hudTf}
+        nowMs={clockNow}
+      />
+      <span class="tr-clock" style:color={hudText}>{utcStr} UTC</span>
+    </div>
 
-    <!-- Theme picker -->
-    <div class="tr-picker-wrap">
-      <button class="tr-picker-btn" onclick={trToggleTheme} title="Theme"
-        >◐</button
+    <span class="tr-sep tr-sep-status"></span>
+
+    <!-- Replay enter button -->
+    {#if !replayStore.active}
+      <button
+        class="tr-replay-btn"
+        onclick={handleEnterReplay}
+        title="Enter Replay Mode"
+        aria-label="Enter replay mode">▶</button
       >
-      {#if trThemeOpen}
-        <div class="tr-dropdown" onclick={(e) => e.stopPropagation()}>
-          {#each THEME_NAMES as t}
-            <button
-              class="tr-dd-item"
-              class:active={t === activeTheme}
-              onclick={() => trSelectTheme(t)}>{THEMES[t].label}</button
-            >
-          {/each}
-        </div>
-      {/if}
-    </div>
-    <!-- Candle style picker -->
-    <div class="tr-picker-wrap">
-      <button class="tr-picker-btn" onclick={trToggleStyle} title="Candle style"
-        >▮</button
+    {:else}
+      <span class="tr-replay-badge">REPLAY</span>
+    {/if}
+
+    <!-- Tier 2: ☰ Overflow menu trigger -->
+    <div class="tr-overflow-wrap" onclick={(e) => e.stopPropagation()}>
+      <button
+        class="tr-overflow-btn"
+        class:open={overflowOpen}
+        onclick={toggleOverflow}
+        title="More options (theme, style, brightness, diagnostics)"
+        aria-haspopup="menu"
+        aria-expanded={overflowOpen}
+        aria-label="More options">☰</button
       >
-      {#if trStyleOpen}
-        <div class="tr-dropdown" onclick={(e) => e.stopPropagation()}>
-          {#each CANDLE_STYLE_NAMES as cs}
-            <button
-              class="tr-dd-item"
-              class:active={cs === activeCandleStyle}
-              onclick={() => trSelectStyle(cs)}
-            >
-              <span
-                class="tr-swatch"
-                style:background={resolveCandleStyle(cs, activeTheme).upColor}
-              ></span>
-              {CANDLE_STYLES[cs].label}
-            </button>
-          {/each}
-        </div>
-      {/if}
+      <CommandRailOverflow
+        open={overflowOpen}
+        {activeTheme}
+        activeStyle={activeCandleStyle}
+        {brightness}
+        onSelectTheme={handleThemeChange}
+        onSelectStyle={handleCandleStyleChange}
+        onBrightnessWheel={handleBrightnessWheel}
+        onOpenDiagnostics={openDiagnostics}
+        onClose={closeOverflow}
+      />
     </div>
-    <span class="tr-sep"></span>
-    <span
-      class="tr-dot"
-      style:background={STATUS_COLORS[statusInfo.status] ?? "#888"}
-    ></span>
-    <span
-      class="tr-brightness"
-      onwheel={handleBrightnessWheel}
-      title={`Brightness ${Math.round(brightness * 100)}% — scroll to adjust`}
-      >{brightnessIcon}</span
-    >
-    <span class="tr-sep"></span>
-    <button
-      class="tr-diag-btn"
-      onclick={() => (diagVisible = !diagVisible)}
-      title="Diagnostics (Ctrl+Shift+D)">🔧</button
-    >
-    <span class="tr-clock" style:color={hudText}>{utcStr} UTC</span>
   </div>
 
   <!-- Overlay for critical states -->
@@ -660,11 +608,12 @@
     onReload={handleReload}
   />
 
-  <!-- P3.14: Diagnostic panel (Ctrl+Shift+D) -->
-  <DiagPanel visible={diagVisible} />
-
-  <!-- ADR-0066 PATCH 04: About + Credits modal. Opened from Brand wordmark click. -->
-  <AboutModal open={aboutOpen} onClose={() => (aboutOpen = false)} />
+  <!-- ADR-0068: Single InfoModal — defaultTab driven by openAbout/openDiagnostics. -->
+  <InfoModal
+    open={infoOpen}
+    onClose={() => (infoOpen = false)}
+    defaultTab={infoTab}
+  />
 
   <!-- ADR-0066 PATCH 04b: Cold-load splash with Brand lockup, hides on first frame. -->
   <Splash visible={splashVisible} />
@@ -704,27 +653,13 @@
     user-select: none;
   }
 
-  /* ADR-0066 PATCH 03 slot 7: brand wordmark on chart top-left.
-     Fixed-position so it sits above HUD without nesting inside it.
-     z-index 36 (above HUD z=35, below dropdowns z=100). */
-  .brand-slot {
-    position: absolute;
-    bottom: 22px;
-    left: 12px;
-    z-index: 36;
-    pointer-events: auto;
-    opacity: 0.88;
-    transition: opacity 0.15s ease;
-  }
-  .brand-slot:hover {
-    opacity: 1;
-  }
-  @media (max-width: 768px) {
-    .brand-slot { bottom: 18px; left: 6px; }
-  }
+  /* ADR-0068 Slice 3 / Part A: Brand watermark slot lives in BrandWatermark.svelte
+     (locked CSS — desktop bottom:36/left:12, mobile bottom:30/left:6).
+     DO NOT add .brand-slot rules here. */
 
-  /* Entry 078: Compact top-right bar — no bg, shifted left from price axis */
-  /* ADR-0043 P5: right: 64px → 4px (усунення overlap з smc-panel, D7 fix) */
+  /* ADR-0065 rev 2 Tier 1: Top-right inline command rail.
+     Layout: [ATR · RV · M{tf}-cd · UTC] | ▶ replay | ☰ overflow
+     ADR-0043 P5: right:4px (no overlap with smc-panel). */
   .top-right-bar {
     position: fixed;
     top: 8px;
@@ -737,155 +672,101 @@
     background: transparent;
     pointer-events: auto;
   }
-  .tr-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-  .tr-brightness {
-    cursor: pointer;
-    font-size: var(--t0-size);
-    opacity: 0.6;
-    transition: opacity 0.15s;
-    user-select: none;
-  }
-  .tr-brightness:hover {
-    opacity: 1;
-  }
-  .tr-diag-btn {
-    all: unset;
-    cursor: pointer;
-    font-size: var(--t1-size);
-    opacity: 0.5;
-    transition: opacity 0.15s;
-  }
-  .tr-diag-btn:hover {
-    opacity: 1;
+  .tr-status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
   .tr-clock {
     font-size: var(--t3-size);
     font-family: "Roboto Mono", monospace, sans-serif;
     white-space: nowrap;
   }
-
-  /* ADR-0027: Replay enter button — prominent capsule */
-  .replay-enter-btn {
-    all: unset;
-    position: fixed;
-    bottom: 4px;
-    right: 4px;
-    z-index: 35;
-    cursor: pointer;
-    font-size: var(--t4-size);
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    padding: 4px 10px;
-    border-radius: 6px;
-    color: #8b8f9a;
-    background: rgba(30, 34, 45, 0.85);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    backdrop-filter: blur(8px);
-    transition: all 0.18s ease;
-    pointer-events: auto;
-  }
-  .replay-enter-btn:hover {
-    color: #f0b90b;
-    background: rgba(240, 185, 11, 0.1);
-    border-color: rgba(240, 185, 11, 0.25);
-    box-shadow: 0 0 8px rgba(240, 185, 11, 0.1);
-  }
-  .replay-badge {
-    position: fixed;
-    bottom: 4px;
-    right: 4px;
-    z-index: 35;
-    font-size: var(--t4-size);
-    font-weight: 700;
-    letter-spacing: 1px;
-    padding: 5px 12px;
-    border-radius: 6px;
-    color: #f0b90b;
-    background: rgba(240, 185, 11, 0.08);
-    border: 1px solid rgba(240, 185, 11, 0.3);
-    pointer-events: none;
-  }
-
-  /* Theme/Candle picker: separator + inline dropdowns */
-  .tr-sep {
+  .tr-sep,
+  .tr-sep-status {
     width: 1px;
     height: 12px;
     background: rgba(255, 255, 255, 0.08);
     flex-shrink: 0;
   }
-  .tr-picker-wrap {
-    position: relative;
-  }
-  .tr-picker-btn {
+
+  /* Tier 1 ▶ replay button (peripheral capsule, never primary) */
+  .tr-replay-btn {
     all: unset;
     cursor: pointer;
     font-size: var(--t1-size);
-    opacity: 0.45;
-    transition: opacity 0.15s;
-    padding: 0 2px;
     line-height: 1;
-  }
-  .tr-picker-btn:hover {
-    opacity: 0.9;
-  }
-  .tr-dropdown {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    display: flex;
-    flex-direction: row;
-    gap: 2px;
-    padding: 4px;
-    background: rgba(30, 34, 45, 0.94);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 8px;
-    backdrop-filter: blur(12px);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-    z-index: 100;
-    white-space: nowrap;
-  }
-  .tr-dd-item {
-    all: unset;
-    cursor: pointer;
-    padding: 4px 8px;
-    font-size: var(--t3-size);
-    color: #8b8f9a;
+    padding: 2px 8px;
     border-radius: 4px;
-    transition: background 0.12s;
-    display: flex;
-    align-items: center;
-    gap: 4px;
+    color: var(--text-3, #8b8f9a);
+    opacity: 0.7;
+    transition:
+      opacity 0.15s ease,
+      color 0.15s ease,
+      background 0.15s ease;
   }
-  .tr-dd-item:hover {
-    background: rgba(128, 128, 128, 0.15);
-    color: var(--text-1);
+  .tr-replay-btn:hover {
+    opacity: 1;
+    color: var(--accent, #d4a017);
+    background: color-mix(in srgb, var(--accent, #d4a017) 10%, transparent);
   }
-  .tr-dd-item.active {
-    background: color-mix(in srgb, var(--accent) 20%, transparent);
-    color: var(--accent);
-    font-weight: 600;
+  .tr-replay-btn:focus-visible {
+    outline: 1px solid var(--accent, #d4a017);
+    outline-offset: 2px;
   }
-  .tr-swatch {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 2px;
+  .tr-replay-badge {
+    font-size: var(--t3-size);
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    color: var(--accent, #d4a017);
+    background: color-mix(in srgb, var(--accent, #d4a017) 8%, transparent);
+    border: 1px solid
+      color-mix(in srgb, var(--accent, #d4a017) 30%, transparent);
   }
 
-  /* ═══ P5: Mobile responsive (768px breakpoint) ═══ */
-  @media (max-width: 768px) {
-    /* Hide entire top-right bar — clock moved to HUD row */
+  /* Tier 2: ☰ overflow button — anchor for CommandRailOverflow dropdown */
+  .tr-overflow-wrap {
+    position: relative;
+  }
+  .tr-overflow-btn {
+    all: unset;
+    cursor: pointer;
+    font-size: var(--t2-size);
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--text-3, #8b8f9a);
+    opacity: 0.7;
+    transition:
+      opacity 0.15s ease,
+      color 0.15s ease,
+      background 0.15s ease;
+  }
+  .tr-overflow-btn:hover,
+  .tr-overflow-btn.open {
+    opacity: 1;
+    color: var(--text-1);
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .tr-overflow-btn:focus-visible {
+    outline: 1px solid var(--accent, #d4a017);
+    outline-offset: 2px;
+  }
+
+  /* ═══ ADR-0065 rev 2 Tier 3: Mobile reflow (640px breakpoint) ═══
+     <640px: hide status row + ▶ replay; keep ☰ overflow visible. */
+  @media (max-width: 640px) {
     .top-right-bar {
-      display: none !important;
+      right: 12px;
+      padding: 5px 8px;
+      gap: 4px;
     }
-    /* Hide replay controls on mobile */
-    .replay-enter-btn,
-    .replay-badge {
+    .tr-status-row,
+    .tr-sep-status,
+    .tr-replay-btn,
+    .tr-replay-badge {
       display: none;
     }
   }

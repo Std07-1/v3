@@ -51,20 +51,10 @@ Claude Desktop task ─GET─► /api/v3/cowork/recent_thesis ─┐
 
 | Tier | Що | Slice | Status |
 |---|---|---|---|
-| **T1** | Channel context window — останні N тез як PRIOR CONTEXT для наступного scan | cowork.001 | ✅ Implemented (2026-05-06) |
-| **T2** | Self-eval cycle — оцінка попередніх тез через post-hoc price action | TBD | Future |
-| **T3** | Lesson journal — зведені error patterns + успішні setups | TBD | Future |
-| **T4** | Cross-agent share — Архі читає cowork тези через `/api/v3/cowork/recent_thesis` (НЕ shared files) | TBD | Future |
-
-### Operational layer (ADR-002)
-
-| Slice | Component | Status |
-|---|---|---|
-| **cowork.001** | `register_cowork_routes()` + `GET /recent_thesis` + `POST /published` | ✅ Deployed |
-| **cowork.002** | Prompt rewrite + `cowork_operational_frame_v3.md` runbook | ✅ Done (docs) |
-| **cowork.003** | Pure cadence runner (`cowork/runner.py`) + 33 unit tests | ✅ Deployed |
-| **cowork.004** | Event watcher daemon (`tools/cowork/event_watcher.py`) + supervisor conf + 24 tests | ✅ Deployed |
-| **cowork.005** | `evaluate_event_flag_payload` extract + `GET /api/v3/cowork/event_flag` + 7 endpoint tests | ✅ Deployed (2026-05-07) |
+| **T1** | Channel context window — останні N тез як PRIOR CONTEXT для наступного scan | cowork.001 | Planned (next) |
+| **T2** | Self-eval cycle — оцінка попередніх тез через post-hoc price action | cowork.002 | Future |
+| **T3** | Lesson journal — зведені error patterns + успішні setups | cowork.003 | Future |
+| **T4** | Cross-agent share — Архі читає cowork тези через `/api/v3/cowork/recent_thesis` (НЕ shared files) | cowork.004 | Future |
 
 ---
 

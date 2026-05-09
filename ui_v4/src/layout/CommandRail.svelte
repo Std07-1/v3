@@ -168,6 +168,8 @@
 </div>
 
 <style>
+  /* CR-2.5: cells render inline within parent .top-right-bar flex.
+     No own border/padding — visual separation provided by parent .tr-sep. */
   .cmd-rail {
     display: inline-flex;
     align-items: center;
@@ -176,9 +178,6 @@
     font-size: var(--t3a-size, 12px);
     color: var(--text-2, #9b9bb0);
     line-height: 1;
-    padding: 0 10px;
-    border-right: 1px solid var(--border-mute, #21262d);
-    margin-right: 4px;
     user-select: none;
   }
   .cell {

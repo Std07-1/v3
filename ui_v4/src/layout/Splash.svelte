@@ -70,7 +70,7 @@
         position: fixed;
         inset: 0;
         /* z-index 9999: covers HUD (35), SMC overlay tooltips (~100),
-           AboutModal backdrop (200), DiagPanel — splash MUST be top-most
+           InfoModal backdrop (200), DiagPanel — splash MUST be top-most
            or partial chart/overlay bleeds through. */
         z-index: 9999;
         display: flex;
@@ -84,8 +84,12 @@
     }
 
     @keyframes splash-fade-in {
-        from { opacity: 0; }
-        to { opacity: 1; }
+        from {
+            opacity: 0;
+        }
+        to {
+            opacity: 1;
+        }
     }
 
     .splash-content {
@@ -127,8 +131,15 @@
         animation-delay: 0.4s;
     }
     @keyframes spinner-pulse {
-        0%, 100% { opacity: 0.4; transform: scale(1); }
-        50% { opacity: 1; transform: scale(1.3); }
+        0%,
+        100% {
+            opacity: 0.4;
+            transform: scale(1);
+        }
+        50% {
+            opacity: 1;
+            transform: scale(1.3);
+        }
     }
 
     .status-text {

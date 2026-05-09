@@ -142,7 +142,6 @@ ui_v4/src/chart/ChartPane.svelte
 # ── Тимчасове ────────────────────────────────────────────────
 *.tmp
 *.bak
-*.bak.*
 setup_v3.sh
 
 trader-v3/
