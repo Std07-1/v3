@@ -875,6 +875,7 @@
         align-items: center;
         gap: 1px;
         pointer-events: none;
+        opacity: 0.65;
     }
     .hud-bias-pill.bull {
         color: #26a69a;
@@ -882,24 +883,10 @@
     .hud-bias-pill.bear {
         color: #ef5350;
     }
-    /* ADR-0066 Tier 4 amendment §1118 GAP-6: 1.5px gold underbar on active TF.
-       Marks the currently-displayed TF among the bias strip without filled-bg. */
+    /* ADR-0066 Tier 4: active TF pill — bolder weight only (no underbar, reads as "closing bar" artifact). */
     .hud-bias-pill.current {
-        position: relative;
-        padding-bottom: 2px;
-    }
-    .hud-bias-pill.current::after {
-        content: "";
-        position: absolute;
-        left: 4px;
-        right: 4px;
-        bottom: -1px;
-        height: 1.5px;
-        background: var(--accent);
-        border-radius: 1px;
-    }
-    :global([data-theme="light"]) .hud-bias-pill.current::after {
-        background: var(--accent-deep);
+        font-weight: 800;
+        opacity: 1;
     }
     .bias-arrow {
         font-size: var(--t8-size);

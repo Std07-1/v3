@@ -211,7 +211,7 @@ def _build_stage_context(
         sc = narrative.scenarios[0]
         if sc.entry_desc:
             parts.append(sc.entry_desc)
-    return " · ".join(parts) if parts else stage.upper()
+    return " · ".join(parts) if parts else ""
 
 
 # ── Micro card ──────────────────────────────────────────────

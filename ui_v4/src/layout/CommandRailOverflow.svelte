@@ -20,6 +20,8 @@
         resolveCandleStyle,
     } from "../chart/lwc";
 
+    import type { DisplayMode } from "../chart/overlay/DisplayBudget";
+
     interface Props {
         open: boolean;
         activeTheme: ThemeName;
@@ -28,7 +30,14 @@
         onSelectTheme: (t: ThemeName) => void;
         onSelectStyle: (s: CandleStyleName) => void;
         onBrightnessWheel: (e: WheelEvent) => void;
+        onBrightnessStep?: (direction: number) => void;
         onClose: () => void;
+        // ADR-0065 Phase 1: SMC panel + Focus/Research mode moved here from ChartPane
+        smcPanelOpen?: boolean;
+        displayMode?: DisplayMode;
+        onOpenDiagnostics?: () => void;
+        onToggleSmc?: () => void;
+        onToggleDisplayMode?: () => void;
     }
 
     const {
@@ -39,7 +48,13 @@
         onSelectTheme,
         onSelectStyle,
         onBrightnessWheel,
+        onBrightnessStep,
         onClose,
+        smcPanelOpen = false,
+        displayMode = "focus",
+        onOpenDiagnostics,
+        onToggleSmc,
+        onToggleDisplayMode,
     }: Props = $props();
 
     type SubmenuKey = "theme" | "style" | null;
@@ -52,11 +67,11 @@
 
     function handleThemePick(t: ThemeName) {
         onSelectTheme(t);
-        onClose();
+        openSubmenu = null; // close submenu only; main menu stays open (ADR-0065 UX fix)
     }
     function handleStylePick(s: CandleStyleName) {
         onSelectStyle(s);
-        onClose();
+        openSubmenu = null; // close submenu only; main menu stays open
     }
 
     function handleKeydown(e: KeyboardEvent) {
@@ -86,6 +101,46 @@
         aria-label="More options"
         onclick={(e) => e.stopPropagation()}
     >
+        <!-- ADR-0065 Phase 1: SMC panel toggle -->
+        {#if onToggleSmc}
+            <button
+                class="menu-item menu-toggle"
+                class:active={smcPanelOpen}
+                role="menuitemcheckbox"
+                aria-checked={smcPanelOpen}
+                onclick={() => {
+                    onToggleSmc?.();
+                    onClose();
+                }}
+            >
+                <span class="mi-label">SMC layers</span>
+                <span class="mi-state">{smcPanelOpen ? "●" : "○"}</span>
+            </button>
+        {/if}
+
+        <!-- ADR-0065 Phase 1: Focus/Research display mode toggle -->
+        {#if onToggleDisplayMode}
+            <button
+                class="menu-item menu-toggle"
+                class:research-mode={displayMode === "research"}
+                role="menuitemcheckbox"
+                aria-checked={displayMode === "research"}
+                onclick={() => {
+                    onToggleDisplayMode?.();
+                    // ADR-0065 UX fix: keep menu open so user can compare F/R result
+                }}
+            >
+                <span class="mi-label">Display</span>
+                <span class="mi-state"
+                    >{displayMode === "focus" ? "Focus" : "Research"}</span
+                >
+            </button>
+        {/if}
+
+        {#if onToggleSmc || onToggleDisplayMode}
+            <div class="menu-divider" role="separator"></div>
+        {/if}
+
         <!-- Theme submenu -->
         <div class="menu-item-row">
             <button
@@ -157,23 +212,43 @@
             {/if}
         </div>
 
-        <!-- Brightness row: scroll anywhere over the row to adjust. -->
+        <!-- Brightness row: ◀/▶ click buttons + LED dots. Scroll wheel also works. -->
         <div
             class="menu-item brightness-row"
             role="menuitem"
-            tabindex="0"
+            tabindex="-1"
             onwheel={onBrightnessWheel}
-            title="Brightness {brightnessPct}% — scroll to adjust"
+            title="Brightness {brightnessPct}%"
         >
             <span class="mi-label">Brightness</span>
-            <span
-                class="brightness-leds"
-                aria-label="Brightness {brightnessPct}%"
-            >
-                {#each [1, 2, 3, 4, 5] as i}
-                    <span class="led" class:lit={i <= litCount}></span>
-                {/each}
-            </span>
+            <div class="bri-controls">
+                <button
+                    class="bri-step"
+                    tabindex="-1"
+                    aria-label="Dimmer"
+                    onclick={(e) => {
+                        e.stopPropagation();
+                        onBrightnessStep?.(-1);
+                    }}>◀</button
+                >
+                <span
+                    class="brightness-leds"
+                    aria-label="Brightness {brightnessPct}%"
+                >
+                    {#each [1, 2, 3, 4, 5] as i}
+                        <span class="led" class:lit={i <= litCount}></span>
+                    {/each}
+                </span>
+                <button
+                    class="bri-step"
+                    tabindex="-1"
+                    aria-label="Brighter"
+                    onclick={(e) => {
+                        e.stopPropagation();
+                        onBrightnessStep?.(1);
+                    }}>▶</button
+                >
+            </div>
         </div>
     </div>
 {/if}
@@ -189,11 +264,11 @@
         max-height: min(360px, 60vh);
         overflow-y: auto;
         padding: 4px;
-        background: var(--card, rgba(30, 34, 45, 0.96));
-        border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+        /* Solid bg to prevent SMC/F bleed-through (ADR-0065 Phase 1 fix) */
+        background: var(--bg, #0d1117);
+        border: 1px solid var(--border-mute, rgba(255, 255, 255, 0.08));
         border-radius: 8px;
-        box-shadow: var(--elev, 0 8px 24px rgba(0, 0, 0, 0.4));
-        backdrop-filter: blur(12px);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
         font-family: var(
             --font-sans,
             -apple-system,
@@ -219,6 +294,22 @@
         transition:
             background 0.12s ease,
             color 0.12s ease;
+    }
+    .menu-toggle .mi-state {
+        font-size: var(--t3-size, 12px);
+        color: var(--text-3, #5d6068);
+        letter-spacing: 0.02em;
+    }
+    .menu-toggle.active .mi-state {
+        color: var(--accent, #d4a017);
+    }
+    .menu-toggle.research-mode .mi-state {
+        color: #4a90d9;
+    }
+    .menu-divider {
+        height: 1px;
+        background: var(--border-mute, rgba(255, 255, 255, 0.07));
+        margin: 2px 6px;
     }
     .menu-item:hover,
     .menu-item:focus-visible {
@@ -288,7 +379,24 @@
         flex-shrink: 0;
     }
     .brightness-row {
-        cursor: ns-resize;
+        cursor: default;
+    }
+    .bri-controls {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    .bri-step {
+        all: unset;
+        cursor: pointer;
+        font-size: var(--t4-size, 11px);
+        color: var(--text-3, #6d7080);
+        padding: 0 3px;
+        line-height: 1;
+        transition: color 0.12s ease;
+    }
+    .bri-step:hover {
+        color: var(--accent, #d4a017);
     }
     .brightness-leds {
         display: inline-flex;

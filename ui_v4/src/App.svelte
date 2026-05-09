@@ -45,6 +45,7 @@
   import { metaStore } from "./stores/meta";
 
   import type { T_MS, UiWarning, RenderFrame, ActiveTool } from "./types";
+  import type { DisplayMode } from "./chart/overlay/DisplayBudget";
 
   // --- WS URL: same-origin у prod, explicit у dev (Правило §11) ---
   // Dev (Vite :5173): import.meta.env.DEV=true → ws://localhost:8000/ws
@@ -60,6 +61,11 @@
   let actions: ReturnType<typeof createActions> | null = null;
 
   let activeTool: ActiveTool = $state(null);
+
+  // ADR-0065 Phase 1: SMC panel open + display mode lifted here from ChartPane.
+  // CommandRailOverflow is the single trigger surface; ChartPane is a $bindable consumer.
+  let smcPanelOpen = $state(false);
+  let displayMode = $state<DisplayMode>("focus");
 
   // Symbol/TF persistence (drawing_tools_v1)
   // Priority: URL query params > localStorage
@@ -148,6 +154,14 @@
     brightness = Math.max(0.8, Math.min(1.2, +(brightness + delta).toFixed(2)));
     saveBrightness(brightness);
   }
+  // ADR-0065 UX fix: ◀/▶ step buttons — 5 steps across [0.8, 1.2] = 0.08 each
+  function handleBrightnessStep(direction: number) {
+    brightness = Math.max(
+      0.8,
+      Math.min(1.2, +(brightness + direction * 0.08).toFixed(2)),
+    );
+    saveBrightness(brightness);
+  }
 
   // ADR-0065 rev 2: Top-right command rail UTC clock (no health dot — moved to ChartHud).
   let clockNow = $state(Date.now());
@@ -177,6 +191,8 @@
   function toggleOverflow(e: MouseEvent) {
     e.stopPropagation();
     overflowOpen = !overflowOpen;
+    // Mutual exclusion: overflow and SMC panel must not overlap (ADR-0065 UX fix)
+    if (overflowOpen) smcPanelOpen = false;
   }
   function closeOverflow() {
     overflowOpen = false;
@@ -495,7 +511,9 @@
 <main class="app-layout" style:background={appBg}>
   <!-- Main content area -->
   <div class="main-content">
-    <div class="chart-wrapper">
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="chart-wrapper" onclick={closeOverflow}>
       <!-- ADR-0068 Slice 3 / Part A: Brand watermark — locked slot bottom-left
            above LWC time axis. Click opens InfoModal[About]. DO NOT MOVE.
            See: ui_v4/src/layout/BrandWatermark.svelte header + memory file
@@ -510,10 +528,9 @@
         {brightness}
         {activeTool}
         {magnetEnabled}
+        bind:smcPanelOpen
+        bind:displayMode
       />
-      <!-- ADR-0066 PATCH 07: NarrativePanel pinned top-right of chart pane.
-           Always visible when narrative data present. AI co-pilot surface. -->
-      <NarrativePanel narrative={cachedNarrative} />
 
       <!-- P3.1-P3.2: Frosted-glass HUD overlay -->
       <ChartHud
@@ -551,6 +568,10 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="top-right-bar" onclick={closeOverflow}>
+    <!-- ADR-0065 Phase 1: NarrativePanel as leftmost inline pill in the rail row.
+         Compact by default; expanded body drops absolute below bar. -->
+    <NarrativePanel narrative={cachedNarrative} inline={true} />
+
     <!-- Tier 1 status row: ATR/RV/countdown + UTC clock -->
     <div class="tr-status-row">
       <CommandRail
@@ -594,8 +615,14 @@
         onSelectTheme={handleThemeChange}
         onSelectStyle={handleCandleStyleChange}
         onBrightnessWheel={handleBrightnessWheel}
+        onBrightnessStep={handleBrightnessStep}
         onOpenDiagnostics={openDiagnostics}
         onClose={closeOverflow}
+        {smcPanelOpen}
+        {displayMode}
+        onToggleSmc={() => (smcPanelOpen = !smcPanelOpen)}
+        onToggleDisplayMode={() =>
+          (displayMode = displayMode === "focus" ? "research" : "focus")}
       />
     </div>
   </div>
@@ -658,12 +685,12 @@
      DO NOT add .brand-slot rules here. */
 
   /* ADR-0065 rev 2 Tier 1: Top-right inline command rail.
-     Layout: [ATR · RV · M{tf}-cd · UTC] | ▶ replay | ☰ overflow
-     ADR-0043 P5: right:4px (no overlap with smc-panel). */
+     Layout: [NarrativePanel pill] [ATR · RV · M{tf}-cd · UTC] | ▶ replay | ☰ overflow
+     ADR-0065 Phase 1: right:64px — clears LWC price scale (~54px) + 10px gap. */
   .top-right-bar {
     position: fixed;
     top: 8px;
-    right: 4px;
+    right: 64px;
     z-index: 35;
     display: flex;
     align-items: center;

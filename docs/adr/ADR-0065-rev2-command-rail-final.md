@@ -279,3 +279,98 @@ Revert per slice (each slice is one commit):
 - Slice 1 revert → restores rev 1 MVP state (commit `e6b8497`). No data migration. No backend coordination required.
 
 If the SMC F backend signal lands separately and rev 2 needs to be fully unwound, the signal can stay (harmless without consumer); only frontend reverts.
+
+---
+
+## Amendment: UX Refinements (2026-05-09)
+
+> **Status**: IMPLEMENTED — built, verified (build `index-CAp6u945.js`).
+> These decisions were locked during the session that completed slices 1+2.
+> They are **invariants** — must NOT be reverted without a new ADR amendment.
+
+### A1 · Menu stays open after item picks (non-close items)
+
+During slice 2 implementation, the original Tier 2 spec said "click on a non-submenu item (after action runs)" closes the menu. This was revised:
+
+| Control | Close on pick? | Rationale |
+|---|---|---|
+| Theme picker (Dark / Black / Light) | ❌ submenu closes only (`openSubmenu = null`), main menu stays | User needs to compare themes without re-opening menu |
+| Style picker (Classic / Gray / Stealth / …) | ❌ same pattern | Same rationale |
+| DisplayMode toggle (F / R) | ❌ `onClose()` NOT called | User needs to compare Focus/Research result live while menu is open |
+| SMC toggle | ✅ `onClose()` IS called | SMC panel and overflow must never co-exist (see A3) |
+| Diagnostics | ✅ `onClose()` IS called | Diag panel is a large surface; menu over it = noise |
+
+**Invariant**: Theme / Style / DisplayMode picks MUST NOT call `onClose()`. Only SMC and Diagnostics toggles close the menu.
+
+### A2 · Brightness ◀/▶ step buttons
+
+The Tier 2 Brightness row spec (scroll wheel only) was extended with explicit step buttons:
+
+```html
+<button class="bri-step" onclick={(e) => { e.stopPropagation(); onBrightnessStep?.(-1); }}>◀</button>
+<span class="brightness-leds" ...>  <!-- 5 LEDs showing current level -->
+<button class="bri-step" onclick={(e) => { e.stopPropagation(); onBrightnessStep?.(1); }}>▶</button>
+```
+
+- Step size: `0.08` (range `[0.8, 1.2]` = 5 equal steps)
+- Prop: `onBrightnessStep?: (direction: number) => void` added to `CommandRailOverflow` props
+- `handleBrightnessStep(direction: number)` in `App.svelte`:
+  ```ts
+  brightness = Math.max(0.8, Math.min(1.2, +(brightness + direction * 0.08).toFixed(2)));
+  saveBrightness(brightness);
+  ```
+- Scroll wheel (`onBrightnessWheel`) is **preserved** — both input methods coexist
+- Cursor on brightness row changed to `default` (was `ns-resize` — removed, confusing on non-scroll input)
+
+**Invariant**: Both `onBrightnessStep` (click) and `onBrightnessWheel` (scroll) MUST coexist. Neither replaces the other.
+
+### A3 · Mutual exclusion: overflow ↔ SMC panel
+
+Two overlapping surfaces (overflow dropdown at z=100, SMC panel at z=36) must never be open simultaneously:
+
+**Rule 1 — Opening overflow closes SMC:**
+```ts
+function toggleOverflow(e: MouseEvent) {
+    e.stopPropagation();
+    overflowOpen = !overflowOpen;
+    if (overflowOpen) smcPanelOpen = false;  // mutual exclusion
+}
+```
+
+**Rule 2 — SMC toggle in overflow closes overflow:**
+`CommandRailOverflow` SMC toggle item calls `onClose()` (see A1 table above).
+
+**Invariant**: At any given moment, `overflowOpen && smcPanelOpen` MUST be `false`. Any future code path that opens one surface must close the other.
+
+### A4 · Chart click closes overflow
+
+The `.chart-wrapper` element has `onclick={closeOverflow}`, ensuring any click on the chart area (including candle interaction, drawing, etc.) dismisses the overflow dropdown:
+
+```svelte
+<div class="chart-wrapper" onclick={closeOverflow}>
+```
+
+`ChartPane.svelte` does NOT `stopPropagation()` on its container click, so clicks bubble up to this handler.
+
+**Invariant**: Chart area interaction MUST close the overflow. Do not add `stopPropagation()` to `.chart-wrapper` children unless explicitly justified (and even then, add explicit `closeOverflow()` call before propagation stops).
+
+### A5 · Updated "Tier 2 menu close triggers" (replaces original list)
+
+The original list in this ADR ("click outside menu, ESC key, click on a non-submenu item, focus blur outside menu") is superseded by this amendment. Correct list:
+
+```
+Close overflow:
+  - click outside menu (chart area, anywhere outside dropdown bounds)
+  - ESC key
+  - SMC toggle inside menu (→ mutual exclusion)
+  - Diagnostics toggle inside menu
+  - Opening SMC panel directly (☰ still visible, but overflow is closed)
+
+DOES NOT close overflow:
+  - Theme pick (Dark / Black / Light)
+  - Style pick (any style)
+  - DisplayMode toggle (F / R)
+  - Brightness ◀ / ▶ step buttons
+  - Brightness scroll wheel
+  - Submenu open/close (opening a submenu does not close the parent menu)
+```

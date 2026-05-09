@@ -1,14 +1,22 @@
 ﻿<!-- src/layout/NarrativePanel.svelte вЂ” ADR-0033: Context Flow Narrative Panel -->
 <script lang="ts">
     import type { NarrativeBlock } from "../types";
+    import { untrack } from "svelte";
 
-    const { narrative }: { narrative: NarrativeBlock | null } = $props();
+    interface Props {
+        narrative: NarrativeBlock | null;
+        // ADR-0065 Phase 1: inline=true → compact pill inside .top-right-bar flex.
+        // Expanded body drops as position:absolute below the bar.
+        // inline=false (default) → legacy floating panel position:absolute top-right.
+        inline?: boolean;
+    }
 
-    // ADR-0066 PATCH 07: default expanded so trader sees scenarios + archi
-    // thesis immediately on page load. User can collapse manually; the
-    // SC-6 auto-collapse (10s after expand toggle) only applies AFTER
-    // user-initiated expansion, not the default state.
-    let expanded = $state(true);
+    const { narrative, inline = false }: Props = $props();
+
+    // When inline, default collapsed (compact pill). When floating, default expanded.
+    // untrack() reads the prop's initial value without subscribing — correct Svelte 5
+    // pattern when prop is static after mount (silences state_referenced_locally).
+    let expanded = $state(untrack(() => !inline));
     let autoTimer: ReturnType<typeof setTimeout> | null = null;
 
     // SC-6: auto-collapse 10s after expand
@@ -34,8 +42,12 @@
 {#if narrative}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div class="narrative-panel" onclick={(e) => e.stopPropagation()}>
-        <!-- 1-line headline bar (always visible) -->
+    <div
+        class="narrative-panel"
+        class:inline
+        onclick={(e) => e.stopPropagation()}
+    >
+        <!-- Compact pill (always visible) -->
         <button
             class="headline-bar"
             class:trade={narrative.mode === "trade"}
@@ -46,11 +58,11 @@
             {#if narrative.market_phase === "trending_up" || narrative.market_phase === "trending_down"}
                 <span class="phase-badge"
                     >{narrative.market_phase === "trending_up"
-                        ? "в†‘trend"
-                        : "в†“trend"}</span
+                        ? "↑trend"
+                        : "↓trend"}</span
                 >
             {/if}
-            <span class="expand-arrow">{expanded ? "в–ѕ" : "в–ё"}</span>
+            <span class="expand-arrow">{expanded ? "▾" : "▸"}</span>
         </button>
 
         {#if expanded}
@@ -67,7 +79,7 @@
                                 class:long={sc.direction === "long"}
                                 class:short={sc.direction === "short"}
                             >
-                                {sc.direction === "long" ? "в–І" : "в–ј"}
+                                {sc.direction === "long" ? "▲" : "▼"}
                                 {sc.entry_desc}
                             </span>
                         </div>
@@ -75,9 +87,9 @@
                             {sc.trigger_desc}
                         </div>
                         {#if sc.target_desc}
-                            <div class="sc-target">в†’ {sc.target_desc}</div>
+                            <div class="sc-target">→ {sc.target_desc}</div>
                         {/if}
-                        <div class="sc-invalidation">вњ• {sc.invalidation}</div>
+                        <div class="sc-invalidation">✕ {sc.invalidation}</div>
                     </div>
                 {/each}
 
@@ -95,7 +107,7 @@
                 <!-- Warnings -->
                 {#if narrative.warnings.length > 0}
                     <div class="row warnings">
-                        вљ  {narrative.warnings.join(", ")}
+                        ⚠ {narrative.warnings.join(", ")}
                     </div>
                 {/if}
 
@@ -103,8 +115,8 @@
                 {#if narrative.archi_thesis}
                     <div class="archi-section">
                         <div class="archi-header">
-                            <span class="archi-icon">рџ§ </span>
-                            <span class="archi-label">РђСЂС‡С–</span>
+                            <span class="archi-icon">🧠</span>
+                            <span class="archi-label">Арчі</span>
                             <span class="conviction conviction-{narrative.archi_thesis.conviction}">
                                 {narrative.archi_thesis.conviction}
                             </span>
@@ -115,9 +127,9 @@
                         <div class="archi-thesis">{narrative.archi_thesis.thesis}</div>
                         {#if narrative.archi_thesis.key_level}
                             <div class="archi-detail">
-                                рџЋЇ {narrative.archi_thesis.key_level}
+                                🎯 {narrative.archi_thesis.key_level}
                                 {#if narrative.archi_thesis.invalidation}
-                                    <span class="archi-inv">вњ• {narrative.archi_thesis.invalidation}</span>
+                                    <span class="archi-inv">✕ {narrative.archi_thesis.invalidation}</span>
                                 {/if}
                             </div>
                         {/if}
@@ -131,7 +143,7 @@
                         <span class="presence-text">
                             {narrative.archi_presence.status}
                             {#if narrative.archi_presence.silence_h > 0}
-                                В· {narrative.archi_presence.silence_h}h ago
+                                · {narrative.archi_presence.silence_h}h ago
                             {/if}
                         </span>
                         {#if narrative.archi_presence.conditions > 0}
@@ -147,9 +159,7 @@
 {/if}
 
 <style>
-    /* ADR-0066 PATCH 07: pin to top-right under top-right toolbar so it
-       does NOT overlap HUD top-left or SMC overlay tooltips on chart body.
-       Width capped at 380px so it does not encroach on chart canvas. */
+    /* ── Floating mode (default, legacy): position:absolute top-right of chart ── */
     .narrative-panel {
         position: absolute;
         top: 50px;
@@ -160,7 +170,6 @@
         pointer-events: auto;
         font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
     }
-    /* Mobile: span more width, drop closer to top */
     @media (max-width: 768px) {
         .narrative-panel {
             top: 44px;
@@ -170,6 +179,40 @@
             min-width: 0;
         }
     }
+
+    /* ── Inline mode (ADR-0065 Phase 1): sits as flex item in .top-right-bar ── */
+    .narrative-panel.inline {
+        position: relative;   /* override absolute — flex item in parent row */
+        top: auto;
+        right: auto;
+        z-index: auto;        /* stacking managed by parent .top-right-bar z:35 */
+        max-width: none;
+        min-width: 0;
+    }
+    /* When inline + expanded: body drops BELOW the bar row absolutely.
+       Parent .top-right-bar is position:fixed so this positions within it. */
+    .narrative-panel.inline .narrative-body {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        z-index: 200;
+        min-width: 280px;
+        max-width: 400px;
+        margin-top: 0;
+    }
+    /* Inline headline-bar: compact pill, no full-width stretch */
+    .narrative-panel.inline .headline-bar {
+        width: auto;
+        white-space: nowrap;
+        padding: 2px 8px;
+        max-width: 220px;
+    }
+    .narrative-panel.inline .headline-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 160px;
+    }
+
     .headline-bar {
         display: flex;
         align-items: center;

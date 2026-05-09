@@ -35,21 +35,31 @@
   } from "../stores/smcStore";
   import { replayStore } from "../stores/replayStore.svelte";
 
-  const {
-    currentFrame = null,
-    scrollback,
-    addUiWarning,
-    brightness = 1.0,
-    activeTool = null,
-    magnetEnabled = false,
-  }: {
+  interface Props {
     currentFrame?: RenderFrame | null;
     scrollback: (ms: T_MS) => void;
     addUiWarning: (w: UiWarning) => void;
     brightness?: number;
     activeTool?: ActiveTool;
     magnetEnabled?: boolean;
-  } = $props();
+    // ADR-0065 Phase 1: SMC panel open + display mode lifted to App.svelte
+    // (controlled via CommandRailOverflow menu). Both are $bindable so
+    // ChartPane can still write (key handlers, frame updates) and the
+    // overflow menu reflects current state.
+    smcPanelOpen?: boolean;
+    displayMode?: DisplayMode;
+  }
+
+  let {
+    currentFrame = null,
+    scrollback,
+    addUiWarning,
+    brightness = 1.0,
+    activeTool = null,
+    magnetEnabled = false,
+    smcPanelOpen = $bindable(false),
+    displayMode = $bindable<DisplayMode>("focus"),
+  }: Props = $props();
 
   // ADR-0024: локальний стан SMC overlay (оновлюється інкрементально)
   let smcData: SmcData = $state(EMPTY_SMC_DATA);
@@ -64,9 +74,6 @@
   let showBOS = $state(true);
   let showFR = $state(true);
   let showDIS = $state(true);
-  let smcPanelOpen = $state(false);
-  // ADR-0028 Φ0: Focus/Research display mode
-  let displayMode: DisplayMode = $state("focus");
   // Crosshair data for tooltip (OHLCV + cursor position)
   let crosshairData: CrosshairData | null = $state(null);
 
@@ -658,43 +665,9 @@
         >
       </div>
     {/if}
-    <!-- ADR-0028 Φ0: Focus / Research display mode toggle (key: F) -->
-    <button
-      class="smc-trigger"
-      class:open={smcPanelOpen}
-      onclick={() => (smcPanelOpen = !smcPanelOpen)}
-      onwheel={(e) => {
-        e.preventDefault();
-        const allOn =
-          showOB &&
-          showFVG &&
-          showSW &&
-          showLVL &&
-          showBOS &&
-          showFR &&
-          showDIS;
-        const next = !allOn;
-        showOB = next;
-        showFVG = next;
-        showSW = next;
-        showLVL = next;
-        showBOS = next;
-        showFR = next;
-        showDIS = next;
-      }}
-      title="Toggle SMC controls (scroll: all on/off)"
-      >{smcPanelOpen ? "✕" : "SMC"}</button
-    >
-    <button
-      class="smc-toggle smc-t-mode"
-      class:research={displayMode === "research"}
-      onclick={() =>
-        (displayMode = displayMode === "focus" ? "research" : "focus")}
-      title={displayMode === "focus"
-        ? "Focus mode (F to toggle)"
-        : "Research mode (F to toggle)"}
-      >{displayMode === "focus" ? "F" : "R"}</button
-    >
+    <!-- ADR-0065 Phase 1: SMC trigger + F toggle moved to CommandRailOverflow.
+         The .smc-grid layer buttons still render here when smcPanelOpen=true.
+         Trigger and focus toggle are now in the ☰ overflow menu. -->
   </div>
 </div>
 
@@ -802,33 +775,8 @@
     gap: 3px;
     pointer-events: auto;
   }
-  .smc-trigger {
-    font-size: var(--t6-size);
-    font-weight: 700;
-    padding: 2px 7px;
-    border-radius: 4px;
-    border: 1px solid transparent;
-    background: none;
-    color: #7b8ba8;
-    cursor: pointer;
-    transition: all 0.18s ease;
-    line-height: 1.4;
-    letter-spacing: 0.5px;
-    white-space: nowrap;
-    min-width: 28px;
-    text-align: center;
-  }
-  .smc-trigger:hover,
-  .smc-trigger.open {
-    color: #c0d0e4;
-    border-color: rgba(74, 144, 217, 0.45);
-    background: rgba(40, 48, 65, 0.75);
-  }
-  .smc-trigger.open {
-    color: #ef5350;
-    border-color: rgba(239, 83, 80, 0.3);
-    background: rgba(239, 83, 80, 0.08);
-  }
+  /* .smc-trigger and .smc-t-mode removed — ADR-0065 Phase 1:
+     trigger + focus/research toggle moved to CommandRailOverflow menu. */
   .smc-grid {
     display: flex;
     gap: 2px;
@@ -903,20 +851,6 @@
     border-color: rgba(0, 230, 118, 0.35);
     background: rgba(0, 230, 118, 0.1);
   }
-  /* ADR-0028 Φ0: Focus/Research mode toggle */
-  .smc-toggle.smc-t-mode {
-    color: var(--accent);
-    border-color: rgba(74, 144, 217, 0.3);
-    background: none;
-    min-width: 18px;
-    text-align: center;
-  }
-  .smc-toggle.smc-t-mode.research {
-    color: #ff9800;
-    border-color: rgba(255, 152, 0, 0.35);
-    background: none;
-  }
-
   /* ═══ Mobile: hide SMC panel ═══ */
   @media (max-width: 768px) {
     .smc-panel {
