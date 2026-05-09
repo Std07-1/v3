@@ -16,6 +16,7 @@
   import AboutModal from "./layout/AboutModal.svelte";
   import Splash from "./layout/Splash.svelte";
   import NarrativePanel from "./layout/NarrativePanel.svelte";
+  import CommandRail from "./layout/CommandRail.svelte";
 
   // ADR-0027: Client-side replay store
   import { replayStore } from "./stores/replayStore.svelte";
@@ -583,6 +584,14 @@
       trStyleOpen = false;
     }}
   >
+    <!-- ADR-0065 (PROPOSED, partial Variant B): peripheral trader context
+         (ATR · RV · countdown). Client-side compute from frame.candles. -->
+    <CommandRail
+      candles={frame?.candles}
+      currentTf={hudTf}
+      nowMs={clockNow}
+    />
+
     <!-- Theme picker -->
     <div class="tr-picker-wrap">
       <button class="tr-picker-btn" onclick={trToggleTheme} title="Theme"
