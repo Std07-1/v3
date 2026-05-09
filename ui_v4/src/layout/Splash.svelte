@@ -31,19 +31,20 @@
     let appeared = $state(false);
     let dismissed = $state(false);
 
+    // Single-shot effect: arms a one-way timer the first time `visible` becomes
+    // true. We DO NOT return a cleanup — Svelte 5 re-runs effects on any state
+    // change inside (including our own `appeared = true`), and cleanup would
+    // clear the timer immediately, leaving the splash stuck on screen.
+    // The timer is harmless if component unmounts (state is gone with it).
     $effect(() => {
         if (visible && !appeared) {
             appeared = true;
-            const t = setTimeout(() => {
+            setTimeout(() => {
                 dismissed = true;
             }, MIN_SHOW_MS);
-            const tMax = setTimeout(() => {
+            setTimeout(() => {
                 dismissed = true;
             }, MAX_SHOW_MS);
-            return () => {
-                clearTimeout(t);
-                clearTimeout(tMax);
-            };
         }
     });
 
@@ -68,27 +69,23 @@
     .splash {
         position: fixed;
         inset: 0;
-        z-index: 50;
+        /* z-index 9999: covers HUD (35), SMC overlay tooltips (~100),
+           AboutModal backdrop (200), DiagPanel — splash MUST be top-most
+           or partial chart/overlay bleeds through. */
+        z-index: 9999;
         display: flex;
         align-items: center;
         justify-content: center;
+        /* Fully opaque solid bg — never expose chart canvas behind. */
         background: var(--bg);
-        animation: splash-fade-in 200ms ease, splash-fade-out 600ms ease 1500ms forwards;
-        pointer-events: none;
-    }
-
-    /* Light theme: switch to off-white bg matching app */
-    :global([data-theme="light"]) .splash {
-        background: var(--bg);
+        opacity: 1;
+        animation: splash-fade-in 200ms ease;
+        pointer-events: auto;
     }
 
     @keyframes splash-fade-in {
         from { opacity: 0; }
         to { opacity: 1; }
-    }
-    @keyframes splash-fade-out {
-        from { opacity: 1; }
-        to { opacity: 0.96; }
     }
 
     .splash-content {
