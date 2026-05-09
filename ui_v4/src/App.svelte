@@ -15,6 +15,7 @@
   import Brand from "./layout/Brand.svelte";
   import AboutModal from "./layout/AboutModal.svelte";
   import Splash from "./layout/Splash.svelte";
+  import NarrativePanel from "./layout/NarrativePanel.svelte";
 
   // ADR-0027: Client-side replay store
   import { replayStore } from "./stores/replayStore.svelte";
@@ -527,6 +528,10 @@
         {activeTool}
         {magnetEnabled}
       />
+      <!-- ADR-0066 PATCH 07: NarrativePanel pinned top-right of chart pane.
+           Always visible when narrative data present. AI co-pilot surface. -->
+      <NarrativePanel narrative={cachedNarrative} />
+
       <!-- P3.1-P3.2: Frosted-glass HUD overlay -->
       <ChartHud
         symbols={cfgSymbols}

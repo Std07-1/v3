@@ -4,7 +4,11 @@
 
     const { narrative }: { narrative: NarrativeBlock | null } = $props();
 
-    let expanded = $state(false);
+    // ADR-0066 PATCH 07: default expanded so trader sees scenarios + archi
+    // thesis immediately on page load. User can collapse manually; the
+    // SC-6 auto-collapse (10s after expand toggle) only applies AFTER
+    // user-initiated expansion, not the default state.
+    let expanded = $state(true);
     let autoTimer: ReturnType<typeof setTimeout> | null = null;
 
     // SC-6: auto-collapse 10s after expand
@@ -143,15 +147,28 @@
 {/if}
 
 <style>
+    /* ADR-0066 PATCH 07: pin to top-right under top-right toolbar so it
+       does NOT overlap HUD top-left or SMC overlay tooltips on chart body.
+       Width capped at 380px so it does not encroach on chart canvas. */
     .narrative-panel {
         position: absolute;
-        top: 36px;
-        left: 240px;
+        top: 50px;
+        right: 12px;
         z-index: 34;
-        max-width: 420px;
-        min-width: 200px;
+        max-width: 380px;
+        min-width: 240px;
         pointer-events: auto;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+    }
+    /* Mobile: span more width, drop closer to top */
+    @media (max-width: 768px) {
+        .narrative-panel {
+            top: 44px;
+            right: 4px;
+            left: 4px;
+            max-width: none;
+            min-width: 0;
+        }
     }
     .headline-bar {
         display: flex;
