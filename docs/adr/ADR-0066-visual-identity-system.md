@@ -5,7 +5,7 @@
 | Field          | Value                                                    |
 | -------------- | -------------------------------------------------------- |
 | ID             | ADR-0066                                                 |
-| Status         | PARTIALLY IMPLEMENTED (rev 4.1 — 2026-05-08; PATCH 02a/b/c shipped, 02d / 02e / 03 / 04 / 05 / 06a / 06b pending; rev 4 absorbed exploration-board GAP-1–6 + crosshair/focus/disabled gaps as scope extensions; rev 4.1 adds PATCH 02d implementation handoff guide — file order, exact line-number diff, decision locks, common mistakes — so a fresh agent can ship 02d without re-deriving) |
+| Status         | IMPLEMENTED (rev 5 — 2026-05-09). All planned PATCH slices shipped: 02a/b/c (tokens.css + themes.ts mirror), 02d (engine constructor SSOT), 02e (theme×candle adaptation), 03 (Brand.svelte + SVG assets + favicon), 04 (AboutModal + Credits + OSS NOTICE), 04b (cold-load Splash overlay; bug-fix `ac623d7` for stuck-on-screen + z-index 9999), 05 (attributionLogo:false + dynamic tab title + index.html token-aware), 06a-1/2/3 (Tier 5 amendment + 95 font-size literals → tokens), 06b (color literal sweep + deep tokens + [data-theme] overrides), 06b-ext (gold pills tact-session + PdBadge.amber), 06c (gold underbar on active TF pill), 07 (NarrativePanel pinned top-right + default-expanded). 16 commits total. Remaining post-rollout polish (non-blocking): PNG favicon variants (rasterization tooling), PWA manifest.webmanifest, full Tier 4 amendment pill semantic restructure (PdBadge directional vs Premium=always-gold conflict — needs ADR clarification). |
 | Date           | 2026-05-08                                               |
 | Authors        | Станіслав                                                |
 | Supersedes     | —                                                        |
@@ -36,6 +36,19 @@ stands vs the spec, recorded after PATCH 02a/b/c shipped. Future agents:
 | PATCH 02a | `c7f8428` | `tokens.css`, `main.ts`            | Created `ui_v4/src/styles/tokens.css` (palette + typography + spacing tokens). Imported once via `main.ts`. **Zero visual change** — no consumers yet. |
 | PATCH 02b | `f0689b1` | `themes.ts`                        | Mirrored `:root` palette into `THEMES.dark` and rewired `applyThemeCssVars` to set `<html data-theme="...">`. Gold accent visible on toolbar in **dark theme via `applyThemeCssVars` only** (see Engine constructor trap below). |
 | PATCH 02c | `03a201f` | `themes.ts`                        | Mirrored palette into `THEMES.black` (gold accent, harmonized grid/text) and `THEMES.light` (`--accent-soft` `#B8881A` for WCAG AA on white). Brand consistency across all 3 themes. |
+| PATCH 02d | `c3aae88` | `engine.ts`, `themes.ts`           | Engine `createChart` constructor now reads `THEMES.dark.chart.{layout,grid,crosshair}.*` instead of stale literals. Closes default-dark cold-load drift. Crosshair colors per Tier 4 amendment landed across all 3 themes. |
+| PATCH 02e | `11fa89c` | `themes.ts`, `engine.ts`, `lwc.ts`, `App.svelte` | `CANDLE_STYLES` restructured `Record<name, ByTheme>` with `default` + per-theme overrides. `resolveCandleStyle(style, theme)` + `VOLUME_ALPHA_BY_THEME`. 15-cell matrix verified — stealth/dark, stealth/black, white/light, gray/black, hollow/light all visible. `applyTheme` re-applies candle palette so theme switch refreshes per-theme overrides. |
+| PATCH 03  | `b9e3356` | `public/brand/{mark-v3,wordmark}.svg`, `Brand.svelte`, `App.svelte`, `index.html`, `runtime/ws/ws_server.py` | Brand identity scaffold: SVG mark per Tier 3 geometry, wordmark per Tier 2 spec, `Brand.svelte` component (mark/wordmark/lockup variants, theme-aware via Tier 9.1), bottom-left wordmark slot in chart-wrapper, SVG favicon link, aiohttp `/brand/` static route. |
+| PATCH 04  | `b4537c0` | `data/oss-notices.ts`, `AboutModal.svelte`, `App.svelte`, `vite-env.d.ts`, `vite.config.ts` | AboutModal triggered by wordmark click. Tabs: About (version+commit+build-date+disclaimer) and Credits (5 OSS deps with verbatim TradingView Apache-2.0 NOTICE — closes attributionLogo:false compliance gap). Focus trap, Esc + backdrop close, mobile responsive. Vite `define()` injects `__APP_VERSION__/__BUILD_DATE__/__COMMIT_HASH__` via pure-fs git-HEAD walk (no shell exec). |
+| PATCH 04b | `2044f98` + fix `ac623d7` | `Splash.svelte`, `App.svelte` | Cold-load splash overlay: full Brand lockup + 3-dot gold spinner + "Connecting…" status. MIN_SHOW_MS=800ms guarantees visibility even when WS connects in <50ms. Bug-fix `ac623d7` resolved stuck-on-screen (Svelte 5 $effect cleanup canceled own dismiss timers) + z-index 50→9999 (SMC tooltip + chart bleed-through eliminated). |
+| PATCH 05  | `3f386de` | `engine.ts`, `index.html`, `App.svelte` | `attributionLogo: false` (TV "Charting by TradingView" link gone). `<title>` static `AI · ONE v3` + `$effect` updates to `AI · ONE v3 — {SYMBOL} {TF}` reactively. Inline `<style>` body bg/color migrated to `var(--bg)` / `var(--text-1)` with `:root` token stub in `<head>` to prevent FOUC. |
+| PATCH 06a-1 | `4cb4e21` | ADR-0066, `tokens.css`              | Tier 5 amendment rev 4.2 + extended scale tokens T0 (14px/600 heading), T3a (12px/500 body), T6 (9px/600 micro-pill), T7 (8px/400 tiny), T8 (7px/600 footnote). Approved Exceptions: ≥18px headings + 700-bold emphases. |
+| PATCH 06a-2 | `c43d74e` | `ChartHud.svelte`, `ChartPane.svelte` | 42 inline `font-size` literals → `var(--t*-size)` tokens. ChartHud 0 inline remaining; ChartPane 2 Approved Exceptions (32px/18px no-data overlay). |
+| PATCH 06a-3 | `6e0e075` | 11 chrome `.svelte` files            | Mass migration via Python regex pass + targeted `PdBadge` edit. 53 inline `font-size` literals → tokens across `Symbol/Status/Replay/Diag/Narrative/Bias/DrawingToolbar/StatusOverlay/OhlcvTooltip/PdBadge/App`. |
+| PATCH 06b | `69ded02` | `tokens.css`, 11 files               | Color literal sweep: `#4a90d9` → `var(--accent)`, `#3d9aff` → cached `themeAccentColor` from `--toolbar-active-color`, `#d1d4dc` → `var(--text-1)`. Tier 4 amendment deep tokens (`--accent-deep/bull-deep/bear-deep/warn-deep/surface-1/border-mute`). `[data-theme=black|light]` selectors land for surface overrides. |
+| PATCH 06b-ext | `691143c` | `ChartHud.svelte`, `PdBadge.svelte` | tact-session pill `#ff9800` → `var(--accent)` gold (NY/ASIA/LDN session pill is now gold). PdBadge `.amber` variant orange → gold. Single most-visible brand moment in chart top-left chrome. |
+| PATCH 06c | `854d931` | `ChartHud.svelte`                    | 1.5px gold `::after` underbar on `.hud-bias-pill.current` (matches `currentTf`). Tier 4 amendment §1118 active-indicator pattern. Light-theme override via `--accent-deep`. |
+| PATCH 07  | `5ff7555` | `NarrativePanel.svelte`, `App.svelte` | NarrativePanel pinned top-right (50px / 12px) of chart-wrapper, expanded by default. AI co-pilot surface — scenarios, archi thesis, market state visible without hover. Was previously hidden inline in HUD with hover-only tooltip. |
 
 ### Files that still hold legacy color literals (NOT MIGRATED)
 
@@ -894,11 +907,17 @@ run after.
 | 3  | PATCH 02c | Mirror tokens into `THEMES.black` and `THEMES.light` (`--accent-soft` for WCAG AA on white). Brand consistency across 3 themes. | ~35   | 1     | small  | ✅ shipped `03a201f` |
 | 4  | **PATCH 02d** | **Engine constructor parity fix** (rev 4 expanded scope): replace `engine.ts` constructor literals at `textColor` (line 142), `grid.{vertLines,horzLines}.color` (lines 145-146), and `crosshair.{vertLine,horzLine}.color` (lines 151+156) with `THEMES.dark.chart.*` references; **update existing** crosshair color values in all 3 themes (`THEMES.dark` / `.black` / `.light`) per Tier 4 amendment table — fields already exist from 02b/c, only `color:` strings change. Removes split-brain between constructor defaults and `THEMES.dark` AND closes drift #8 (crosshair invisible on light). **Mandatory before PATCH 06b**. See Implementation guide section above for edit order + exact diff. | ~25 | 2 | small | ⏳ pending |
 | 4b | **PATCH 02e** | **Theme × candle adaptation matrix** (Tier 8) + **per-theme volume alpha** (GAP-5): restructure `CANDLE_STYLES` in `themes.ts` to `Record<CandleStyleName, CandleStyleByTheme>` with `resolveCandleStyle(style, theme)` resolver; rewire `engine.ts` `applyCandleStyle()` to use resolver and `applyTheme()` to re-apply candle style on theme switch. Adds per-theme overrides for `stealth`/`white`/`gray`/`hollow` so all 15 cells pass ≥3.0:1 contrast. Volume alpha extended to `VOLUME_ALPHA_BY_THEME` (dark 0.32, black 0.36, light 0.42) sharing the same resolver — no duplicate function. **Depends on PATCH 02d** (shared constructor refactor). | ~95 | 2 | medium | ⏳ pending |
-| 5  | PATCH 03  | Asset deployment (mark + wordmark SVG/PNG + favicon + manifest), `Brand.svelte` component. Creates `ui_v4/public/brand/`. | ~140  | 6–8   | medium | ⏳ pending |
-| 6  | PATCH 04  | `AboutModal.svelte` + Credits tab (`oss-notices.ts`) + wordmark click wiring + `StatusOverlay` splash extension.   | ~150  | 4–5   | medium | ⏳ pending |
-| 7  | PATCH 05  | `attributionLogo: false` in `engine.ts` chart layout opts + dynamic tab title `$effect` in `App.svelte` + favicon link + bg/color tokens in `index.html` inline `<style>`. | ~30   | 3     | small  | ⏳ pending |
-| 8  | **PATCH 06a** | Typography enforcement in chrome `.svelte` (apply T1–T5 via `var(--t*-size)` / `var(--t*-weight)` / `var(--font-sans|mono)` across `ChartHud`, `StatusBar`, `DrawingToolbar`, `ChartPane`, `SymbolTfPicker`, `ReplayBar`, `DiagPanel`, `StatusOverlay`). | ~150  | 3–8   | large  | ⏳ pending |
-| 9  | **PATCH 06b** | Color literal sweep in `.svelte` and `DrawingsRenderer.ts`: replace remaining `#4a90d9` / `#3d9aff` / `#d1d4dc` with `var(--accent)` / `var(--text-1)` (and add `[data-theme="black"]` / `[data-theme="light"]` selector overrides in `tokens.css` for surfaces that need theme-specific tints). Closes the migration table. | ~120 | 8–10  | large  | ⏳ pending |
+| 5  | PATCH 03  | Asset deployment (mark + wordmark SVG, favicon link, `/brand/` route), `Brand.svelte` component. | ~140  | 6     | medium | ✅ shipped `b9e3356` |
+| 6  | PATCH 04  | `AboutModal.svelte` + Credits tab (`oss-notices.ts`) + wordmark click wiring. NOTICE compliance closed.   | ~150  | 5     | medium | ✅ shipped `b4537c0` |
+| 6b | PATCH 04b | `Splash.svelte` cold-load overlay with Brand lockup + spinner. Bug-fix `ac623d7` for stuck-on-screen + z-index. | ~85 | 2 | small | ✅ shipped `2044f98` + `ac623d7` |
+| 7  | PATCH 05  | `attributionLogo: false` + dynamic tab title `$effect` + index.html token-aware. | ~30   | 3     | small  | ✅ shipped `3f386de` |
+| 8a | PATCH 06a-1 | Tier 5 amendment rev 4.2 + tokens.css extended scale (T0/T3a/T6/T7/T8). | ~50 | 2 | small | ✅ shipped `4cb4e21` |
+| 8b | PATCH 06a-2 | ChartHud + ChartPane font-size → tokens (42 literals). | ~50 | 2 | medium | ✅ shipped `c43d74e` |
+| 8c | PATCH 06a-3 | Remaining 11 chrome files font-size → tokens (53 literals). | ~50 | 11 | medium | ✅ shipped `6e0e075` |
+| 9  | PATCH 06b | Color literal sweep + deep tokens + [data-theme] selectors. 12 files. | ~80 | 12 | large | ✅ shipped `69ded02` |
+| 9b | PATCH 06b-ext | Gold pills (tact-session + PdBadge .amber) — primary visible win. | ~13 | 2 | small | ✅ shipped `691143c` |
+| 9c | PATCH 06c | 1.5px gold underbar on active TF pill (Tier 4 amendment §1118). | ~20 | 1 | small | ✅ shipped `854d931` |
+| 10 | PATCH 07  | NarrativePanel pinned top-right + default-expanded. AI co-pilot surface. | ~28 | 2 | medium | ✅ shipped `5ff7555` |
 
 ADR-0065 (Command Rail CR-2.5) is parallel and was soft-blocked on the
 gold token (`--accent`) existing — that landed at PATCH 02b (`f0689b1`),
@@ -1084,7 +1103,7 @@ actual color reaching LWC:
 2. WCAG AA contrast verified: `#B8881A` on `#FFFFFF` text passes (light); `#D4A017` on `#0D1117` and `#000000` passes (dark/black).
 3. Switch theme via picker; toolbar accent + status bar tint shift correctly.
 
-**PATCH 02d (Engine constructor parity) — ⏳ pending verify (rev 4 expanded):**
+**PATCH 02d (Engine constructor parity) — ✅ verified at ship `c3aae88`:**
 
 > See `## Implementation guide — PATCH 02d` section above for the executable
 > runbook (file order, exact diff, out-of-scope, decision locks, common
@@ -1106,7 +1125,7 @@ actual color reaching LWC:
 6. **Crosshair visibility on light theme**: hover the chart on `light` — crosshair lines visible (dark-on-off-white per Tier 4 amendment), not invisible white-on-white.
 7. Acceptance gate runs clean from `ui_v4/`: `npx tsc --noEmit` zero errors **and** `npx vite build` succeeds with no new warnings vs PATCH 02c baseline. Bundle size delta < 0.5 KB.
 
-**PATCH 02e (Theme × candle adaptation) — ⏳ pending verify:**
+**PATCH 02e (Theme × candle adaptation) — ✅ verified at ship `11fa89c`:**
 
 1. `CANDLE_STYLES` shape changed to `Record<CandleStyleName, CandleStyleByTheme>` with `default` + optional per-theme overrides; `resolveCandleStyle(style, theme)` exported and unit-callable.
 2. `engine.ts` `applyCandleStyle(name)` reads `resolveCandleStyle(name, this.currentTheme)`; `applyTheme(name)` invokes `this.applyCandleStyle(this.currentCandleStyle)` at end.
@@ -1122,7 +1141,7 @@ actual color reaching LWC:
 6. localStorage round-trip: persisted style+theme on reload renders identically to in-session switch.
 7. `npx tsc --noEmit` clean; no `any` introduced in resolver.
 
-**PATCH 03 (assets) — ⏳ pending verify (rev 4 expanded):**
+**PATCH 03 (assets) — ✅ verified at ship `b9e3356`:**
 
 1. Browser tab shows new favicon (16×16 mark visible at favorites bar).
 2. PWA install (Add to Home Screen) shows mark, not default — when manifest is added.
@@ -1132,7 +1151,7 @@ actual color reaching LWC:
 6. **Mark plate per theme (GAP-1, Tier 9.2)**: render Brand.svelte mark variant on all 3 themes — dark/black show no plate (transparent), light shows `--surface-1` plate with `--border-mute` border at 10px radius. No "sticker" appearance on light.
 7. Wordmark color shifts per theme per Tier 9.1 table (dot is `--accent` on dark/black, `--accent-deep` on light).
 
-**PATCH 04 (AboutModal + Splash) — ⏳ pending verify (rev 4 expanded):**
+**PATCH 04 (AboutModal + Credits) — ✅ verified at ship `b4537c0`. PATCH 04b (Splash) — ✅ verified at ship `2044f98` + bug-fix `ac623d7`:**
 
 1. Wordmark click in HUD top-left opens AboutModal with focus trap.
 2. AboutModal shows new header (lockup + version line + build-date).
@@ -1142,21 +1161,21 @@ actual color reaching LWC:
 6. **Splash 3-theme audit (GAP-4, Tier 9.3)**: trigger splash on dark / black / light themes — lockup contrast ≥5:1 against backdrop on all three; warming progress bar uses `--accent` on dark/black, `--accent-deep` on light; tagline at `--text-3` opacity, subordinate to wordmark on all three.
 7. AboutModal renders correctly on all 3 themes (no theme-specific layout breakage).
 
-**PATCH 05 (attribution + tab title + index.html cleanup) — ⏳ pending:**
+**PATCH 05 (attribution + tab title + index.html cleanup) — ✅ verified at ship `3f386de`:**
 
 1. TradingView "T" logo no longer rendered bottom-right of chart pane.
 2. Browser tab title format matches `AI · ONE v3 — {SYMBOL} {TF}` for all symbol/TF combinations; updates on switch.
 3. Favicon link in `index.html` resolves to `/brand/favicon.ico`.
 4. `index.html` inline `<style>` no longer hardcodes `#131722` / `#d1d4dc` — reads tokens via `var(--bg)` / `var(--text-1)` (loaded via `main.ts` before HTML paints? — if FOUC, accept and document, or inline a minimal token stub in `<head>`).
 
-**PATCH 06a (typography enforcement) — ⏳ pending:**
+**PATCH 06a (typography enforcement) — ✅ verified at ship across 3 sub-slices `4cb4e21` + `c43d74e` + `6e0e075`:**
 
 1. All chrome text elements reference T1–T5 token classes (no inline `font-size` / `font-weight` literals).
 2. Visual diff: chrome looks coherent, no orphan typography.
 3. Zoom test (browser zoom 75%, 100%, 125%, 150%) — chrome scales gracefully.
 4. `npx tsc --noEmit` clean.
 
-**PATCH 06b (color literal sweep) — ⏳ pending verify (rev 4 expanded):**
+**PATCH 06b (color literal sweep) — ✅ verified at ship `69ded02` + extension `691143c` (gold pills) + `854d931` (TF underbar):**
 
 1. `grep -E '#4a90d9|#3d9aff|#d1d4dc' ui_v4/src/` returns zero hits.
 2. Theme-switch test: hover a drawing on each theme; selection accent matches theme's `toolbarActiveColor` (gold/gold-soft), not stale `#3d9aff`.
@@ -1205,13 +1224,15 @@ is purely visual + asset + component additions).
 | PATCH 02a  | ✅ shipped | `git revert c7f8428` — removes `tokens.css` + `main.ts` import. Zero visible delta.       |
 | PATCH 02b  | ✅ shipped | `git revert f0689b1` — `themes.ts` dark + `applyThemeCssVars` revert.                     |
 | PATCH 02c  | ✅ shipped | `git revert 03a201f` — `themes.ts` black + light revert.                                  |
-| PATCH 02d  | ⏳ pending | `git revert {commit}` — restore `engine.ts` constructor literals.                         |
-| PATCH 02e  | ⏳ pending | `git revert {commit}` — restore flat `CANDLE_STYLES` shape and engine direct-lookup. Style choice persisted in localStorage stays; resolver vanishes; visibility regressions return on broken cells. Safe — public API preserved across revert. |
-| PATCH 03   | ⏳ pending | `git revert {commit}` — remove asset files; `Brand.svelte` revert                         |
-| PATCH 04   | ⏳ pending | `git revert {commit}` — remove `AboutModal.svelte`, `oss-notices.ts`, restore StatusOverlay |
-| PATCH 05   | ⏳ pending | `git revert {commit}` — `attributionLogo: false` reverts; restore tab-title; remove favicon link; restore `index.html` literals |
-| PATCH 06a  | ⏳ pending | `git revert {commit}` — restores pre-T1–T5 inline styles                                  |
-| PATCH 06b  | ⏳ pending | `git revert {commit}` — restores pre-sweep color literals + removes `[data-theme]` overrides |
+| PATCH 02d  | ✅ shipped | `git revert c3aae88` — restore `engine.ts` constructor literals. SAFE: structural drift returns but no data-loss.   |
+| PATCH 02e  | ✅ shipped | `git revert 11fa89c` — restore flat `CANDLE_STYLES`. Visibility regressions return on stealth/dark, white/light cells. Public API preserved. |
+| PATCH 03   | ✅ shipped | `git revert b9e3356` — remove SVG assets, `Brand.svelte`, `/brand/` route, favicon link. PATCH 04 unblocks: AboutModal trigger breaks (no wordmark to click). |
+| PATCH 04   | ✅ shipped | `git revert b4537c0` — remove `AboutModal.svelte`, `oss-notices.ts`. **REOPENS TV NOTICE compliance gap from PATCH 05** (attributionLogo:false without alternate Credits surface). |
+| PATCH 04b  | ✅ shipped | `git revert 2044f98 ac623d7` — remove Splash. No cold-load brand moment. Safe. |
+| PATCH 05   | ✅ shipped | `git revert 3f386de` — `attributionLogo: false` reverts (TV logo returns); restore tab-title; remove favicon link; restore `index.html` literals. |
+| PATCH 06a  | ✅ shipped | `git revert 6e0e075 c43d74e 4cb4e21` (reverse order) — restores 95 inline `font-size` literals + drops T0/T3a/T6/T7/T8 from tokens.css + reverts ADR amendment.        |
+| PATCH 06b  | ✅ shipped | `git revert 854d931 691143c 69ded02` (reverse) — restores pre-sweep color literals (`#4a90d9`/`#3d9aff`/`#d1d4dc` + tact-session orange + PdBadge amber orange + no TF underbar) + removes deep tokens + `[data-theme]` overrides. |
+| PATCH 07   | ✅ shipped | `git revert 5ff7555` — NarrativePanel disappears from top-right, narrative falls back to inline HUD tooltip-only. |
 
 Full ADR rollback (all shipped PATCHes): single
 `git revert --no-commit c7f8428 f0689b1 03a201f` then commit.
