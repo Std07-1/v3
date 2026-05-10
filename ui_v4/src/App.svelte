@@ -198,6 +198,35 @@
     overflowOpen = false;
   }
 
+  // Click-outside-to-close for ☰ overflow.
+  // Why a document listener (not just chart-wrapper onclick): on mobile
+  // taps on the LWC chart canvas don't reliably bubble through the wrapper
+  // (canvas event capture + touch-vs-click semantics). Same pattern as
+  // ADR-0070 Tier 4 for NarrativePanel — the .tr-overflow-wrap has
+  // stopPropagation() on its onclick, so taps INSIDE the menu never reach
+  // the document and the listener won't auto-close it from its own click.
+  // setTimeout(0) defers attachment past the click that opened the menu.
+  $effect(() => {
+    if (!overflowOpen) return;
+    function handleOutsideClick(e: Event) {
+      const wrap = document.querySelector('.tr-overflow-wrap');
+      if (wrap && !wrap.contains(e.target as Node)) {
+        overflowOpen = false;
+      }
+    }
+    const t = setTimeout(() => {
+      document.addEventListener('click', handleOutsideClick);
+      // touchend covers iOS Safari edge cases where click events on canvas
+      // are suppressed during gesture sequences (pan, pinch follow-ups).
+      document.addEventListener('touchend', handleOutsideClick);
+    }, 0);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener('click', handleOutsideClick);
+      document.removeEventListener('touchend', handleOutsideClick);
+    };
+  });
+
   // ADR-0068: Single InfoModal instance, defaultTab controlled by last opener.
   // - Brand watermark click → "about"
   // - Overflow menu Diagnostics item → "diagnostics"
