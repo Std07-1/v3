@@ -569,8 +569,11 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="top-right-bar" onclick={closeOverflow}>
     <!-- ADR-0065 Phase 1: NarrativePanel as leftmost inline pill in the rail row.
-         Compact by default; expanded body drops absolute below bar. -->
-    <NarrativePanel narrative={cachedNarrative} inline={true} />
+         Compact by default; expanded body drops absolute below bar.
+         .narrative-wrap hidden on mobile (see @media block below). -->
+    <div class="narrative-wrap">
+      <NarrativePanel narrative={cachedNarrative} inline={true} />
+    </div>
 
     <!-- Tier 1 status row: ATR/RV/countdown + UTC clock -->
     <div class="tr-status-row">
@@ -793,7 +796,9 @@
     .tr-status-row,
     .tr-sep-status,
     .tr-replay-btn,
-    .tr-replay-badge {
+    .tr-replay-badge,
+    .tr-overflow-wrap,
+    .narrative-wrap {
       display: none;
     }
   }

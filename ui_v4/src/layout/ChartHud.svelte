@@ -1486,7 +1486,6 @@
             padding: 8px 10px;
             font-size: var(--t1-size);
         }
-        /* ─── Bottom-sheet micro-card on mobile ─── */
         .mc-backdrop {
             display: block;
             position: fixed;

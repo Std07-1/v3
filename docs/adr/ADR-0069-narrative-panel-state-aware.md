@@ -5,7 +5,7 @@
 | Field          | Value                                                     |
 | -------------- | --------------------------------------------------------- |
 | ID             | ADR-0069                                                   |
-| Status         | ACCEPTED (with 2 named Open Decisions, see §Open)         |
+| Status         | ACCEPTED — rev 2 (2026-05-09): §A and §B both RESOLVED. See §Open for resolution paths. |
 | Date           | 2026-05-09                                                |
 | Authors        | Станіслав                                                 |
 | Supersedes     | —                                                         |
@@ -258,45 +258,81 @@ Verify: resize devtools to 600px → panel full-width under chrome rail. Trigger
 
 ## Open decisions
 
-### §A · `agent_state` backend signal contract
+### §A · `agent_state` backend signal contract — RESOLVED rev 2 (2026-05-09)
 
 **Question**: which backend field surfaces the discrete agent state?
 
-Options:
-1. New `frame.smc.narrative.agent_state: AgentState` (string enum from the 8-value set).
-2. Derive from existing fields (e.g., `frame.smc.narrative.scenario` + `frame.smc.signals[]` — frontend infers state).
+Options considered:
+
+1. New `frame.smc.narrative.agent_state: AgentState` (string enum from
+   the 8-value set).
+2. Derive from existing fields (e.g., `frame.smc.narrative.scenario` +
+   `frame.smc.signals[]` — frontend infers state).
 3. New `/api/status` field surfaced separately from frame.
 
-**Recommendation**: Option 1, keeps panel rendering pure-from-frame and explicit-state. ADR-0033 narrative engine likely already has internal state — surface it. Resolve before Slice 1 ships, otherwise Slice 1 ships with null-fallback (always compact, `[ — ]` badge) and tracks `[degraded-pending-signal]`.
+**Resolution: Hybrid (Option 2 → Option 1 path)** — neither original
+option alone, chosen 2026-05-09 after backend audit revealed all required
+state is already on the wire.
 
-### §B · Banner color rule + override-vs-state-transition stickiness
+Backend audit confirms all 8 ADR-0069 agent states are derivable from
+existing frame fields without backend amendment. Source refs:
 
-Two coupled questions deferred per design conversation:
+- [`core/smc/narrative.py:803 narrative_to_wire`](../../core/smc/narrative.py#L803)
+- [`ui_v4/src/types.ts:130 NarrativeBlock`](../../ui_v4/src/types.ts#L130)
+- [`ui_v4/src/types.ts:151 ShellStage`](../../ui_v4/src/types.ts#L151)
 
-**B.1 Banner background tint**: should banner always use one tint
-(e.g., warning-soft) regardless of which Banner-state triggered it
-(`watching` vs `bias_confirmed`), or vary per state?
+Derivation table:
 
-- Option A: Always warning-tint (`--warn` at low alpha) — banner ≡ "needs attention", source of attention is in the text not the color.
-- Option B: Vary — `watching` uses neutral tint, `bias_confirmed` uses bias direction tint (`--bull` / `--bear` low alpha).
+| Output `agent_state` | Derivation rule (frontend, SSOT)                                                                       |
+| -------------------- | ------------------------------------------------------------------------------------------------------ |
+| `market_closed`      | `narrative.sub_mode === 'market_closed'`                                                                 |
+| `triggered`          | `shell.stage === 'triggered'`                                                                           |
+| `ready`              | `shell.stage === 'ready'`                                                                               |
+| `prepare`            | `shell.stage === 'prepare'`                                                                             |
+| `stay_out`           | `shell.stage === 'stayout'`                                                                             |
+| `bias_confirmed`     | `narrative.mode === 'wait'` AND `narrative.bias_summary` non-empty AND `scenarios[0]?.trigger === 'approaching'` |
+| `watching`           | `narrative.mode === 'wait'` AND `scenarios.length > 0` AND no `bias_summary`                            |
+| `awaiting_setup`     | `narrative.mode === 'wait'` AND `scenarios.length === 0` (default fallback when above unmatched)        |
 
-**B.2 Override-vs-state-transition stickiness**: when user collapses
-banner/expanded to compact via override, then agent state transitions
-to a more critical state (e.g., `watching` → `ready`), should the
-override be respected (stay compact) or reset (auto-expand)?
+Implementation contract: a pure helper `deriveAgentState(narrative, shell): AgentState` lives in `ui_v4/src/lib/agentState.ts` (or co-located with NarrativePanel). Slice 1 reads from this helper. The 8-value union `AgentState` type lives in `ui_v4/src/types.ts`.
 
-- Option A: Override always wins within session — trader chose compact, system respects until session ends or user clicks expand again.
-- Option B: Override resets on escalation (Banner → Expanded transition), preserves on de-escalation. Critical states force re-attention.
-- Option C: Tiered — override respected for ≤1 escalation step, reset after that.
+**Forward path to Option 1**: backend MAY later add explicit
+`frame.smc.narrative.agent_state: AgentState` field as **additive,
+non-breaking** opt-in. NarrativePanel reads explicit when present, falls
+back to `deriveAgentState(...)` otherwise. Single switch point preserves
+the contract. Backend coordination is optional, not blocking.
 
-**Resolution path**: both B.1 and B.2 require live trader feedback to
-decide. Slice 2 must not ship without resolution. Recommended interim
-approach if forced to ship Slice 2 before resolution:
-- B.1 → Option A (always warning-tint) as least-surprising default.
-- B.2 → Option B (escalation resets override) as safest default — favors signal preservation over stickiness; user can re-collapse if annoyed.
+**Why not Option 1 alone**: would have shipped Slice 1 with null-fallback (always compact `[ — ]`) for 1-2 weeks until backend amendment lands. Hybrid avoids that regression while keeping the door open for explicit signal later.
 
-Both interim defaults are easily reversible without contract change
-(localized to render logic).
+**Why not Option 2 alone**: drift risk — derivation logic could diverge from backend intent over time. Hybrid preserves the explicit-signal escape hatch.
+
+**Trade-off accepted**: derivation rules are MVP — corner cases (`bias_confirmed` vs `watching` boundary, transient `prepare` flicker) may need refinement after live observation. ADR-0033 may amend wire to add `agent_state` if frontend derivation proves brittle.
+
+### §B · Banner color rule + override-vs-state-transition stickiness — RESOLVED rev 2 (2026-05-09)
+
+Both questions resolved with the interim defaults from §B's recommendation block, accepted 2026-05-09 without need for live trader feedback round (defaults are reversible if feedback later surfaces friction).
+
+**B.1 Banner background tint — RESOLVED: Option A (always warning-tint)**
+
+Banner uses `color-mix(in srgb, var(--warn) 14%, transparent)` background and `var(--warn)` left-border accent (1.5px) regardless of which Banner-state triggered it (`watching` vs `bias_confirmed`).
+
+Rationale: banner ≡ "peripheral attention required" — color reserved for **urgency channel**, not state-type channel. State type lives in the pill text. Cleaner mental model + avoids color noise as more banner-routed states are added.
+
+**B.2 Override stickiness — RESOLVED: Option B (escalation resets override)**
+
+When user collapses banner/expanded to compact via override (sessionStorage keyed by `(symbol, tf)`):
+
+- **Escalation** (Banner-state → Expanded-state, e.g., `watching` → `ready` or `triggered`): override **resets**, panel re-expands automatically. User attention forced for critical states.
+- **De-escalation** (Expanded-state → Banner-state, e.g., `triggered` → `watching` after position close): override **preserved**, panel stays compact.
+- **Lateral** (within same tier, e.g., `awaiting_setup` → `stay_out`): override preserved.
+
+Rationale: trader workflow safety > UX stickiness. Missing a `ready`
+signal because of an earlier user-collapse is worse than a brief
+auto-expand surprise. Trader can re-collapse manually if annoyed. Both
+interim defaults are localized to render logic — easily reversible
+without contract change.
+
+Implementation: NarrativePanel keeps a `lastSeenTier: 'compact' | 'banner' | 'expanded' | null` in sessionStorage alongside the override. On state change, compute new tier; if `tier > lastSeenTier`, clear override + update `lastSeenTier`. Otherwise preserve override.
 
 ---
 
