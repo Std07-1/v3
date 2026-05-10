@@ -97,18 +97,18 @@ export function tierOfMode(mode: Mode): Tier {
 }
 
 /** Short-display label for the agent_state badge (T4 mono caps).
- *  Returns empty string for `awaiting_setup` — narrative.headline already
- *  carries the message in Ukrainian; English badge was redundant noise.
+ *  Returns "" for states whose narrative.headline OR HUD shell-stage pill
+ *  already carries the message — duplicate badge would be redundant noise.
  *  Returns '—' when state is null (unknown / not yet supplied). */
 export function badgeLabel(state: AgentState | null): string {
     if (!state) return '—';
     switch (state) {
         case 'market_closed':
-            return 'CLOSED';
+            return ''; // ChartHud shell-stage pill + headline already say this
         case 'awaiting_setup':
-            return '';
+            return ''; // headline + body already carry the state
         case 'stay_out':
-            return 'STAY OUT';
+            return ''; // ChartHud shell-stage "STAY OUT" pill is canonical
         case 'watching':
             return 'WATCHING';
         case 'bias_confirmed':
