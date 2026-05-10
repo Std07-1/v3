@@ -1,120 +1,77 @@
 <!--
-  CommandRail.svelte — Variant B (client-side compute, frontend-only)
-  Implements partial scope of ADR-0065 CR-2.5: peripheral trader context
-  surfaced inline in top-right-bar. Backend payload not required.
-
+  CommandRail.svelte — peripheral trader context inline in top-right-bar.
   Slots (left → right):
-    [ATR(14) of current TF]  [RV(20) of current bar]  [↻ countdown to bar close]
-
-  Data source: frame.candles[] (ui_v4/src/types.ts:Candle, fields t_ms,o,h,l,c,v).
-  All compute is $derived; no I/O, no store, no side effects.
-
-  Invariants:
-    - If candles undefined / <2 → render dashes (degraded-but-loud, not silent zero).
-    - ATR uses Wilder TR over last 14 *closed* bars (skip last = preview/forming).
-    - RV  uses last *closed* bar volume / SMA(volume, 20) of bars before it.
-    - Countdown uses bar.t_ms + tfMs - nowMs (open-excl, end-excl per I2).
-    - tfS=0 or invalid → dashes.
+    [ATR(14) of current TF]    ← backend SSOT, NO frontend recompute (X28)
+    [↻ countdown to bar close] ← display arithmetic (wallclock + tf bucket)
 
   ADR refs:
-    - ADR-0065 Command Rail (PROPOSED) — partial implementation, status remains PROPOSED
-      until full slot contract + theme integration shipped.
-    - ADR-0066 Tier 4 (gold accent), Tier 5 (typography tokens) — consumed via vars only.
+    - ADR-0065 rev 2 (CR-2.5 final layout)
+    - ADR-0066 Tier 4 (gold accent), Tier 5 (typography tokens)
+    - X28 invariant: frontend MUST NOT re-derive backend SSOT.
+      ATR previously computed locally from candles — REMOVED. Now reads
+      `frame.atr` shipped by ws_server (engine.get_atr, same as REST
+      /api/context.atr).
 
-  Out of scope (Variant B explicit):
-    - SMC F (feature gate indicator) — needs backend signal
-    - Mobile reflow — desktop-first MVP
-    - Slot contract / declarative rail order — defer to ADR-0065 rev 2
-    - Replacement of theme/style/diag pickers — those stay as user-controls
+  REMOVED (X28 violation):
+    - ATR compute from candles[] (was: SMA of TR over last 14)
+    - RV (relative volume) cell entirely — no backend equivalent yet,
+      separate ADR + backend slice needed before re-introducing.
+
+  Countdown is intentionally retained in UI: it's wallclock subtraction
+  (next_bar_close_ms - now_ms), not domain compute. Anchor map mirrors
+  backend bucket_start convention (D1=22:00 UTC, H4=23:00 UTC, others=0).
+
+  Out of scope:
+    - SMC F badge — needs backend feature gate signal
+    - Mobile reflow — desktop-first MVP (hidden via @media <600px)
 -->
 <script lang="ts">
-  import type { Candle } from "../types";
-
   type Props = {
-    candles: Candle[] | undefined;
-    currentTf: string;        // TF in seconds, string ("900", "3600"...)
-    nowMs: number;            // live clock from parent $state
+    /** ATR(14) for current symbol+tf, sourced from backend (frame.atr).
+     *  null when no frame yet OR frame missing the field (legacy server). */
+    atr: number | null;
+    /** TF label ("M15", "H1", ...) — converted to seconds via inverse map. */
+    currentTf: string;
+    /** Live wallclock from parent $state (ticks every 1s). */
+    nowMs: number;
   };
 
-  const { candles, currentTf, nowMs }: Props = $props();
+  const { atr, currentTf, nowMs }: Props = $props();
 
-  // ─── TF parsing ────────────────────────────────────────────────────────
-  const tfS = $derived.by(() => {
-    const n = Number.parseInt(currentTf, 10);
-    return Number.isFinite(n) && n > 0 ? n : 0;
-  });
+  // ─── TF label → seconds (inverse of App.svelte _S_TO_LABEL) ────────────
+  const _LABEL_TO_S: Record<string, number> = {
+    M1: 60,
+    M3: 180,
+    M5: 300,
+    M15: 900,
+    M30: 1800,
+    H1: 3600,
+    H4: 14400,
+    D1: 86400,
+  };
+  const tfS = $derived(_LABEL_TO_S[currentTf] ?? 0);
   const tfMs = $derived(tfS * 1000);
-  const tfLabel = $derived.by(() => {
-    switch (tfS) {
-      case 60: return "M1";
-      case 180: return "M3";
-      case 300: return "M5";
-      case 900: return "M15";
-      case 1800: return "M30";
-      case 3600: return "H1";
-      case 14400: return "H4";
-      case 86400: return "D1";
-      default: return tfS ? `${tfS}s` : "—";
-    }
-  });
+  const tfLabel = $derived(currentTf || "—");
 
-  // ─── ATR(14) on closed bars ────────────────────────────────────────────
-  // Wilder True Range = max(h-l, |h - prev_c|, |l - prev_c|)
-  // Use simple SMA of TR over last 14 closed bars (Wilder-equivalent for stationary
-  // window; acceptable for peripheral context, not for signal generation).
-  const ATR_PERIOD = 14;
-  const atr = $derived.by(() => {
-    if (!candles || candles.length < ATR_PERIOD + 2) return null;
-    // last bar = forming (preview); skip it
-    const closed = candles.slice(0, -1);
-    if (closed.length < ATR_PERIOD + 1) return null;
-    const window = closed.slice(-(ATR_PERIOD + 1));
-    let sum = 0;
-    for (let i = 1; i < window.length; i++) {
-      const cur = window[i];
-      const prev = window[i - 1];
-      const tr = Math.max(
-        cur.h - cur.l,
-        Math.abs(cur.h - prev.c),
-        Math.abs(cur.l - prev.c),
-      );
-      sum += tr;
-    }
-    return sum / ATR_PERIOD;
-  });
+  // ─── Bucket anchor per TF (mirrors backend resolve_anchor_offset_ms) ───
+  // D1 anchors at 22:00 UTC (FXCM session boundary), H4 at 23:00 UTC,
+  // others at epoch midnight (0). Matches core/utils/buckets.bucket_start_ms.
+  const _ANCHOR_MS_BY_TFS: Record<number, number> = {
+    14400: 82800000, // H4 — 23:00 UTC = 82800s
+    86400: 79200000, // D1 — 22:00 UTC = 79200s
+  };
 
-  // ─── RV(20) — current closed bar volume / SMA(v, 20) of prior closed bars ──
-  const RV_PERIOD = 20;
-  const rv = $derived.by(() => {
-    if (!candles || candles.length < RV_PERIOD + 2) return null;
-    const closed = candles.slice(0, -1);
-    if (closed.length < RV_PERIOD + 1) return null;
-    const lastClosed = closed[closed.length - 1];
-    const lastV = lastClosed.v;
-    if (lastV == null || lastV <= 0) return null;
-    const priorWindow = closed.slice(-(RV_PERIOD + 1), -1);
-    let sum = 0;
-    let n = 0;
-    for (const b of priorWindow) {
-      if (b.v != null && b.v > 0) {
-        sum += b.v;
-        n++;
-      }
-    }
-    if (n < RV_PERIOD / 2) return null; // insufficient sample
-    const sma = sum / n;
-    if (sma <= 0) return null;
-    return lastV / sma;
-  });
-
-  // ─── Countdown to current bar close ────────────────────────────────────
+  // ─── Countdown (wallclock + bucket math) ───────────────────────────────
+  // Display arithmetic per X28: not domain computation, just `next_close - now`.
   const countdownMs = $derived.by(() => {
-    if (!candles || candles.length === 0 || tfMs === 0) return null;
-    const last = candles[candles.length - 1];
-    const closeMs = last.t_ms + tfMs;
+    if (tfMs === 0) return null;
+    const anchorMs = _ANCHOR_MS_BY_TFS[tfS] ?? 0;
+    const bucketOpen =
+      Math.floor((nowMs - anchorMs) / tfMs) * tfMs + anchorMs;
+    const closeMs = bucketOpen + tfMs;
     const remain = closeMs - nowMs;
-    if (remain < 0 || remain > tfMs) return null; // stale or invalid
-    return remain;
+    // Bounded: 0..tfMs always (wallclock anchor guarantees this); guard anyway.
+    return remain >= 0 && remain <= tfMs ? remain : null;
   });
   const countdownStr = $derived.by(() => {
     if (countdownMs == null) return "—:—";
@@ -124,44 +81,29 @@
     return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
   });
 
-  // ─── Formatters ────────────────────────────────────────────────────────
+  // ─── ATR formatter ─────────────────────────────────────────────────────
+  // Backend returns 1.0 as fallback when no bars (engine.get_atr); we cannot
+  // distinguish from real ATR=1.0, so we display as-is. Adaptive precision:
+  // large prices (XAU ~4500 → ATR ~80) → 1 decimal; small ratios → 2 dec.
   function fmtAtr(v: number | null): string {
     if (v == null) return "—";
-    // Adaptive precision: large prices (XAU ~4500) → 1 decimal,
-    // small (BTC ratio etc) → 2 decimals.
     return v >= 10 ? v.toFixed(1) : v.toFixed(2);
   }
-  function fmtRv(v: number | null): string {
-    if (v == null) return "—";
-    return v.toFixed(2) + "×";
-  }
-
-  // ─── RV emphasis class ─────────────────────────────────────────────────
-  // Visual signal: RV > 1.5× = elevated activity (gold), RV < 0.5× = quiet (dim)
-  const rvClass = $derived.by(() => {
-    if (rv == null) return "";
-    if (rv >= 1.5) return "rv-hot";
-    if (rv <= 0.5) return "rv-cool";
-    return "";
-  });
 </script>
 
-<div class="cmd-rail" role="status" aria-label="Market context: ATR, relative volume, bar countdown">
-  <span class="cell" title="ATR(14) on {tfLabel} closed bars — average true range">
+<div
+  class="cmd-rail"
+  role="status"
+  aria-label="Market context: ATR, bar close countdown"
+>
+  <span class="cell" title="ATR(14) on {tfLabel} — backend value (engine.get_atr)">
     <span class="lbl">ATR</span>
     <span class="val">{fmtAtr(atr)}</span>
   </span>
 
   <span class="sep">·</span>
 
-  <span class="cell {rvClass}" title="Relative volume — current bar volume vs 20-bar SMA">
-    <span class="lbl">RV</span>
-    <span class="val">{fmtRv(rv)}</span>
-  </span>
-
-  <span class="sep">·</span>
-
-  <span class="cell" title="Countdown to {tfLabel} bar close">
+  <span class="cell" title="Countdown to {tfLabel} bar close (wallclock + tf bucket)">
     <span class="lbl">↻ {tfLabel}</span>
     <span class="val mono">{countdownStr}</span>
   </span>
@@ -203,18 +145,8 @@
     font-weight: 400;
   }
 
-  /* RV emphasis: high activity → brand gold, low → dim */
-  .cell.rv-hot .val {
-    color: var(--accent, #d4a017);
-  }
-  .cell.rv-cool .val {
-    color: var(--text-2, #9b9bb0);
-    opacity: 0.7;
-  }
-
-  /* Mobile collapse: hide the rail on narrow viewports — the existing
-     top-right-bar already collapses pickers on <480px (App.svelte:874).
-     Trader peripheral context is desktop-first. */
+  /* Mobile collapse: hide rail on narrow viewports. Trader peripheral
+     context is desktop-first; mobile keeps just the ☰ overflow trigger. */
   @media (max-width: 600px) {
     .cmd-rail {
       display: none;

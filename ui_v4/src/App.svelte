@@ -581,10 +581,12 @@
       />
     </div>
 
-    <!-- Tier 1 status row: ATR/RV/countdown + UTC clock -->
+    <!-- Tier 1 status row: ATR (backend SSOT) + countdown + UTC clock.
+         RV cell removed: no backend equivalent yet (separate ADR needed).
+         Countdown is display arithmetic (wallclock + tf bucket math) per X28. -->
     <div class="tr-status-row">
       <CommandRail
-        candles={frame?.candles}
+        atr={frame?.atr ?? null}
         currentTf={hudTf}
         nowMs={clockNow}
       />

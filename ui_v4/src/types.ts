@@ -298,6 +298,12 @@ export interface RenderFrame {
   smc_delta?: SmcDeltaWire;
   /** F8: trend bias Сѓ full/replay frames */
   trend_bias?: string | null;
+  /** X28-fix: backend ATR (engine.get_atr) for current symbol+tf.
+   *  Same source as REST /api/context.atr. Engine returns 1.0 fallback
+   *  when no bars; treat 1.0 as "potentially fallback" rather than a real
+   *  ATR=1.0 value. Surfaces in full and delta frames.
+   *  Consumed by: CommandRail (peripheral chrome). */
+  atr?: number;
   /** ADR-0029: confluence grade per zone (full + delta on complete bars, ADR-0042) */
   zone_grades?: Record<string, ZoneGradeInfo>;
   /** ADR-0031: per-TF trend bias map (full + delta on complete bars, ADR-0042) */

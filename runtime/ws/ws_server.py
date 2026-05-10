@@ -412,6 +412,7 @@ def _build_full_frame(
     bias_map: Optional[Dict[str, str]] = None,
     momentum_map: Optional[Dict] = None,
     pd_state: Optional[Dict] = None,
+    atr: Optional[float] = None,
 ) -> Dict[str, Any]:
     # T6/S19: output guard вЂ” validate candle shapes before send
     guard_warns = _guard_candles_output(candles, symbol, tf_label, "full")
@@ -455,6 +456,11 @@ def _build_full_frame(
         frame["momentum_map"] = momentum_map
     if pd_state:
         frame["pd_state"] = pd_state
+    # X28-fix: surface backend ATR (engine.get_atr) so UI consumes SSOT
+    # instead of recomputing from raw candles. Same source as REST
+    # /api/context.atr endpoint (runtime/api_v3/endpoints.py:1335).
+    if atr is not None:
+        frame["atr"] = atr
     return frame
 
 
@@ -656,6 +662,23 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                 pd_state = _smc_runner.get_pd_state(session.symbol, session.tf_s)
             except Exception as _pd_exc:
                 _log.warning("WS_PD_STATE_ERR sym=%s err=%s", session.symbol, _pd_exc)
+        # X28-fix: surface backend ATR (peripheral chrome context).
+        # Engine returns 1.0 fallback when state has no bars; we pass through
+        # so UI shows what backend canonically sees. Cross-checks REST
+        # /api/context.atr (same source: runner._engine.get_atr).
+        atr_val: Optional[float] = None
+        if _smc_runner is not None:
+            try:
+                atr_val = float(
+                    _smc_runner._engine.get_atr(session.symbol, session.tf_s)
+                )
+            except Exception as _atr_exc:
+                _log.debug(
+                    "WS_ATR_ERR sym=%s tf=%s err=%s",
+                    session.symbol,
+                    session.tf_s,
+                    _atr_exc,
+                )
         frame = _build_full_frame(
             session,
             candles,
@@ -667,6 +690,7 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
             bias_map=bias_map,
             momentum_map=momentum_map,
             pd_state=pd_state,
+            atr=atr_val,
         )
         # ADR-0033 N4: narrative in full frame + delta on complete bars. current_price from last candle.
         if _smc_runner is not None and candles:
@@ -1141,6 +1165,20 @@ async def _global_delta_loop(app: web.Application) -> None:
                         _smc_runner = (
                             app[APP_SMC_RUNNER] if APP_SMC_RUNNER in app else None
                         )
+                        # X28-fix: surface backend ATR in delta too — UI buffer
+                        # would otherwise lose ATR between full frames.
+                        if _smc_runner is not None:
+                            try:
+                                frame["atr"] = float(
+                                    _smc_runner._engine.get_atr(symbol, tf_s)
+                                )
+                            except Exception:
+                                _log.debug(
+                                    "WS_DELTA_ATR_ERR sym=%s tf=%s",
+                                    symbol,
+                                    tf_s,
+                                    exc_info=True,
+                                )
                         if _smc_runner is not None:
                             for _ev in seen_events.values():
                                 if _ev.get("complete"):
