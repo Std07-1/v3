@@ -150,7 +150,7 @@ export function resolveAgentState(
 // Important: status alone does NOT mean bot is alive — that's gated by
 // thesis presence + freshness in compactPillText below.
 const _ARCHI_STATUS_UK: Record<string, string> = {
-    sleeping: 'чекає умов',
+    sleeping: 'спить',
     watching: 'спостерігає',
     analyzing: 'аналізує',
     alert: 'сигнал',
