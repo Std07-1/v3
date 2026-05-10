@@ -11,6 +11,7 @@
         tierOf,
         tierOfMode,
         badgeLabel,
+        compactPillText,
         type Mode,
     } from "../lib/agentState";
 
@@ -152,19 +153,17 @@
             aria-label="Agent narrative — {badgeLabel(agentState)}"
         >
             <!-- ADR-0069 Slice 1: agent state badge (T4 mono caps).
-                 Hidden when badgeLabel returns "" (awaiting_setup state —
-                 headline already carries the message). -->
+                 Hidden when badgeLabel returns "" (states whose presence
+                 is already shown elsewhere in chrome). -->
             {#if badgeLabel(agentState)}
                 <span class="state-badge state-{agentState}">{badgeLabel(agentState)}</span>
             {/if}
-            <span class="headline-text">{narrative.headline}</span>
-            {#if narrative.market_phase === "trending_up" || narrative.market_phase === "trending_down"}
-                <span class="phase-badge"
-                    >{narrative.market_phase === "trending_up"
-                        ? "↑trend"
-                        : "↓trend"}</span
-                >
-            {/if}
+            <!-- Compact pill text — action-first system narrative synthesis,
+                 archi_presence fallback. NOT narrative.headline directly:
+                 headline is system-narrative scope, pill is новий кут. -->
+            <span class="headline-text">{compactPillText(narrative, agentState)}</span>
+            <!-- §5 removal: ↑trend phase-badge dropped — bias pills (left HUD)
+                 already carry HTF direction; market_phase here was redundant. -->
             <span class="expand-arrow" aria-hidden="true"
                 >{mode === "expanded" ? "▾" : "▸"}</span
             >

@@ -131,3 +131,74 @@ export function resolveAgentState(
     if (narrative?.agent_state) return narrative.agent_state;
     return deriveAgentState(narrative, shell);
 }
+
+// ─── Compact pill text synthesis ──────────────────────────────────────
+// Per user direction: pill content is a "шпаргалка" — pulled from system
+// narrative (scenarios, levels, thesis) action-first. When narrative has
+// nothing actionable (awaiting_setup / market_closed) — fall back to
+// archi_presence.status (Ukrainian) so trader sees what Архi is doing
+// instead of a dead "—" or generic "no setup".
+//
+// Important: this helper does NOT touch the системний наратив body content.
+// It only chooses what to render in the compact pill (новий кут scope).
+
+const _ARCHI_STATUS_UK: Record<string, string> = {
+    sleeping: 'спить',
+    watching: 'спостерігає',
+    analyzing: 'аналізує',
+    active: 'активний',
+};
+
+function _arrowFor(direction: string | undefined): string {
+    return direction === 'long' ? '▲' : direction === 'short' ? '▼' : '·';
+}
+
+/** Build the action-first one-line summary for the compact pill.
+ *  Empty string fallback (caller may decide to hide pill text entirely). */
+export function compactPillText(
+    narrative: NarrativeBlock | null,
+    state: AgentState,
+): string {
+    if (!narrative) return '';
+    const sc = narrative.scenarios?.[0];
+
+    // Action-first by tier 3 (expanded territory) — most actionable first
+    switch (state) {
+        case 'triggered':
+            if (sc) return `${_arrowFor(sc.direction)} ${sc.entry_desc}`;
+            break;
+        case 'ready':
+            if (sc) return `${_arrowFor(sc.direction)} ${sc.entry_desc}`;
+            break;
+        case 'prepare':
+            if (sc) {
+                const trig = sc.trigger_desc || sc.entry_desc;
+                return `${_arrowFor(sc.direction)} ${trig}`;
+            }
+            break;
+        case 'watching':
+        case 'bias_confirmed':
+            if (sc) {
+                const lvl = sc.entry_desc || sc.trigger_desc;
+                return `${_arrowFor(sc.direction)} ОЧІКУЄ ${lvl}`;
+            }
+            break;
+        case 'stay_out':
+            // Prefer first warning (degraded reason), else next_area context
+            if (narrative.warnings && narrative.warnings.length > 0) {
+                return narrative.warnings[0];
+            }
+            break;
+    }
+
+    // Fallback: archi_presence (always shipped by backend per ADR-0049)
+    const presence = narrative.archi_presence;
+    if (presence) {
+        const statusUk = _ARCHI_STATUS_UK[presence.status] || presence.status;
+        const focus = presence.focus ? ` · ${presence.focus}` : '';
+        return `Архі ${statusUk}${focus}`;
+    }
+
+    // Last resort: backend's own next_area hint (rare path — presence missing)
+    return narrative.next_area || '';
+}

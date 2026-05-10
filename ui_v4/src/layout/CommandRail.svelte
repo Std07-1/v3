@@ -104,7 +104,9 @@
   <span class="sep">·</span>
 
   <span class="cell" title="Countdown to {tfLabel} bar close (wallclock + tf bucket)">
-    <span class="lbl">↻ {tfLabel}</span>
+    <!-- §6 removal: ↻ icon dropped (it implied refresh-button affordance
+         when in fact the countdown is read-only; M15 label suffices). -->
+    <span class="lbl">{tfLabel}</span>
     <span class="val mono">{countdownStr}</span>
   </span>
 </div>
