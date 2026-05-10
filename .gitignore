@@ -105,8 +105,9 @@ ui_v4/.env.example
 план реалізації системи.md
 
 # ── Tools (діагностичні, не core) ───────────────────────────
+# tools/diag/ — трекується! gate_unexpected_gap_budget.py робить `from tools.diag.classify_m5_gaps`
+# Щоб CI exit-gates не падали, увесь tools/diag/ має бути в репо.
 /tools/tail_guard.py
-/tools/diag/
 /tools/audit/
 /tools/_diag_*.py
 /tools/_check_*.py
