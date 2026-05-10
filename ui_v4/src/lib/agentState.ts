@@ -97,14 +97,16 @@ export function tierOfMode(mode: Mode): Tier {
 }
 
 /** Short-display label for the agent_state badge (T4 mono caps).
- *  Falls back to '—' when state is null (unknown / not yet supplied). */
+ *  Returns empty string for `awaiting_setup` — narrative.headline already
+ *  carries the message in Ukrainian; English badge was redundant noise.
+ *  Returns '—' when state is null (unknown / not yet supplied). */
 export function badgeLabel(state: AgentState | null): string {
     if (!state) return '—';
     switch (state) {
         case 'market_closed':
             return 'CLOSED';
         case 'awaiting_setup':
-            return 'AWAITING';
+            return '';
         case 'stay_out':
             return 'STAY OUT';
         case 'watching':

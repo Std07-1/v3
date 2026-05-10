@@ -151,8 +151,12 @@
             aria-expanded={mode === "expanded"}
             aria-label="Agent narrative — {badgeLabel(agentState)}"
         >
-            <!-- ADR-0069 Slice 1: agent state badge (T4 mono caps) -->
-            <span class="state-badge state-{agentState}">{badgeLabel(agentState)}</span>
+            <!-- ADR-0069 Slice 1: agent state badge (T4 mono caps).
+                 Hidden when badgeLabel returns "" (awaiting_setup state —
+                 headline already carries the message). -->
+            {#if badgeLabel(agentState)}
+                <span class="state-badge state-{agentState}">{badgeLabel(agentState)}</span>
+            {/if}
             <span class="headline-text">{narrative.headline}</span>
             {#if narrative.market_phase === "trending_up" || narrative.market_phase === "trending_down"}
                 <span class="phase-badge"
