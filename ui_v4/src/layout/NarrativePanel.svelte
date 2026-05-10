@@ -122,6 +122,28 @@
     let liveAnnouncement = $derived(
         mode === "expanded" ? "Narrative expanded" : "Narrative collapsed",
     );
+
+    // Click-outside-to-collapse — when expanded, any click outside the
+    // .narrative-panel (including chart canvas) collapses to compact.
+    // Inside-NP clicks have e.stopPropagation() on the root <div>, so
+    // they never reach this document listener. setTimeout(0) ensures we
+    // do not immediately catch the click that just opened the panel.
+    $effect(() => {
+        if (mode !== "expanded") return;
+        function handleOutsideClick(e: MouseEvent) {
+            const panel = document.querySelector(".narrative-panel");
+            if (panel && !panel.contains(e.target as Node)) {
+                collapse();
+            }
+        }
+        const t = setTimeout(() => {
+            document.addEventListener("click", handleOutsideClick);
+        }, 0);
+        return () => {
+            clearTimeout(t);
+            document.removeEventListener("click", handleOutsideClick);
+        };
+    });
 </script>
 
 {#if narrative}
