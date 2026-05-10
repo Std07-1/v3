@@ -37,7 +37,6 @@ Untitled-*.txt
 
 # — Claude Code (local agent config + memory) ————————
 .claude/
-CLAUDE.md
 
 # — Copilot customization (local) ————————————————————
 /.copilot/
