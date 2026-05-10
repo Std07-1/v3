@@ -144,7 +144,26 @@ export interface NarrativeBlock {
   // ADR-0049: Archi intelligence layer
   archi_thesis?: ArchiThesis;
   archi_presence?: ArchiPresence;
+  // ADR-0069 §A: optional explicit agent_state (additive, non-breaking).
+  // When present, NarrativePanel uses it directly. When absent, uses
+  // deriveAgentState(narrative, shell) from src/lib/agentState.ts.
+  agent_state?: AgentState;
 }
+
+// ADR-0069 — agent state taxonomy. 8 values driving NarrativePanel
+// 3-mode state machine (compact / banner / expanded). Drives via
+// `frame.smc.narrative.agent_state` when backend supplies it (Option 1
+// per §A) OR derived in frontend from existing `narrative.{mode,sub_mode,
+// scenarios[].trigger,bias_summary}` + `shell.stage` (Option 2 / Hybrid).
+export type AgentState =
+  | 'market_closed'
+  | 'awaiting_setup'
+  | 'stay_out'
+  | 'watching'
+  | 'bias_confirmed'
+  | 'prepare'
+  | 'ready'
+  | 'triggered';
 
 // -------------------- Shell (ADR-0036) --------------------
 

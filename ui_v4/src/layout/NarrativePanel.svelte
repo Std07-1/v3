@@ -1,59 +1,158 @@
-﻿<!-- src/layout/NarrativePanel.svelte вЂ” ADR-0033: Context Flow Narrative Panel -->
+﻿<!-- src/layout/NarrativePanel.svelte — ADR-0033 + ADR-0069 Slice 1
+     3-mode state machine (compact / banner / expanded) driven by
+     resolved agent_state. Slice 1 ships compact + expanded; banner-tier
+     states route to expanded until Slice 2 lands the dedicated render.
+-->
 <script lang="ts">
-    import type { NarrativeBlock } from "../types";
-    import { untrack } from "svelte";
+    import type { NarrativeBlock, ShellPayload } from "../types";
+    import {
+        resolveAgentState,
+        modeOf,
+        tierOf,
+        tierOfMode,
+        badgeLabel,
+        type Mode,
+    } from "../lib/agentState";
 
     interface Props {
         narrative: NarrativeBlock | null;
-        // ADR-0065 Phase 1: inline=true → compact pill inside .top-right-bar flex.
-        // Expanded body drops as position:absolute below the bar.
-        // inline=false (default) → legacy floating panel position:absolute top-right.
+        // ADR-0069: shell surface to derive agent_state when narrative.agent_state
+        // is absent on the wire (Hybrid §A path). Optional — null falls back to
+        // narrative-only derivation in src/lib/agentState.ts.
+        shell?: ShellPayload | null;
+        // sessionStorage key dimensions per ADR §132-134 (override scoped per pair).
+        currentSymbol?: string;
+        currentTf?: string;
+        // Legacy ADR-0065 Phase 1 prop kept for caller-compat (inline pill in .top-right-bar).
         inline?: boolean;
     }
 
-    const { narrative, inline = false }: Props = $props();
+    const {
+        narrative,
+        shell = null,
+        currentSymbol = "",
+        currentTf = "",
+        inline = false,
+    }: Props = $props();
 
-    // When inline, default collapsed (compact pill). When floating, default expanded.
-    // untrack() reads the prop's initial value without subscribing — correct Svelte 5
-    // pattern when prop is static after mount (silences state_referenced_locally).
-    let expanded = $state(untrack(() => !inline));
-    let autoTimer: ReturnType<typeof setTimeout> | null = null;
+    // ── Resolved agent_state (explicit if backend supplies, else derived) ──
+    let agentState = $derived(resolveAgentState(narrative, shell));
+    let stateTier = $derived(tierOf(agentState));
 
-    // SC-6: auto-collapse 10s after expand
-    function toggle() {
-        expanded = !expanded;
-        if (autoTimer) clearTimeout(autoTimer);
-        if (expanded) {
-            autoTimer = setTimeout(() => {
-                expanded = false;
-            }, 10000);
+    // ── Override management (ADR §126-135 + §B.2 escalation reset) ──
+    // Keyed per (symbol, tf) so each pair has its own user-collapse memory.
+    // Override = user explicitly forced a mode by clicking. Cleared on
+    // tier-escalation (lastSeenTier < newTier), preserved on de-escalation
+    // and lateral transitions.
+    function storageKey(prefix: string): string {
+        return `np-${prefix}-${currentSymbol || "_"}-${currentTf || "_"}`;
+    }
+    function readSession(prefix: string): string | null {
+        try {
+            return sessionStorage.getItem(storageKey(prefix));
+        } catch {
+            return null;
+        }
+    }
+    function writeSession(prefix: string, val: string | null): void {
+        try {
+            const k = storageKey(prefix);
+            if (val === null) sessionStorage.removeItem(k);
+            else sessionStorage.setItem(k, val);
+        } catch {
+            /* noop — sessionStorage may be unavailable */
         }
     }
 
-    // Trigger color class вЂ” per-scenario (P4 fix: was global from [0])
+    let override = $state<Mode | null>(null);
+    let lastSeenTier = $state<number | null>(null);
+
+    // Hydrate from sessionStorage on mount (per pair). Re-hydrate when key changes.
+    $effect(() => {
+        // Side-effect: read sessionStorage when symbol/tf changes.
+        const ov = readSession("override") as Mode | null;
+        const lst = readSession("lastSeenTier");
+        override = ov && (ov === "compact" || ov === "banner" || ov === "expanded") ? ov : null;
+        lastSeenTier = lst ? parseInt(lst, 10) : null;
+    });
+
+    // Escalation reset (ADR §B.2): when state tier rises above lastSeen,
+    // clear override so the new (larger) mode wins. De-escalation preserves.
+    $effect(() => {
+        const t = stateTier;
+        if (lastSeenTier === null || t > lastSeenTier) {
+            // Escalation OR first observation — clear override + record tier.
+            override = null;
+            lastSeenTier = t;
+            writeSession("override", null);
+            writeSession("lastSeenTier", String(t));
+        } else if (t < lastSeenTier) {
+            // De-escalation — preserve override, but record new lastSeenTier.
+            lastSeenTier = t;
+            writeSession("lastSeenTier", String(t));
+        }
+        // t === lastSeenTier (lateral): no change.
+    });
+
+    // ── Resolved mode (override wins; otherwise derived from state tier) ──
+    let mode = $derived<Mode>(modeOf(agentState, override));
+
+    // ── User actions ──
+    function expand() {
+        override = "expanded";
+        writeSession("override", "expanded");
+    }
+    function collapse() {
+        override = "compact";
+        writeSession("override", "compact");
+    }
+    function toggle() {
+        if (mode === "compact") expand();
+        else collapse();
+    }
+    function onKeydown(e: KeyboardEvent) {
+        if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggle();
+        }
+    }
+
+    // Trigger color class — per-scenario (P4 fix: was global from [0])
     function getTriggerClass(trigger: string): string {
         if (trigger === "ready") return "trigger-ready";
         if (trigger === "triggered") return "trigger-triggered";
         if (trigger === "in_zone") return "trigger-inzone";
         return "trigger-approaching";
     }
+
+    // ARIA aria-live announce on mode change (polite — non-disruptive).
+    let liveAnnouncement = $derived(
+        mode === "expanded" ? "Narrative expanded" : "Narrative collapsed",
+    );
 </script>
 
 {#if narrative}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
         class="narrative-panel"
         class:inline
+        class:mode-compact={mode === "compact"}
+        class:mode-expanded={mode === "expanded"}
         onclick={(e) => e.stopPropagation()}
     >
-        <!-- Compact pill (always visible) -->
+        <!-- Compact pill / Expanded header (always visible click target) -->
         <button
             class="headline-bar"
             class:trade={narrative.mode === "trade"}
             class:counter={narrative.sub_mode === "counter"}
             onclick={toggle}
+            onkeydown={onKeydown}
+            type="button"
+            aria-expanded={mode === "expanded"}
+            aria-label="Agent narrative — {badgeLabel(agentState)}"
         >
+            <!-- ADR-0069 Slice 1: agent state badge (T4 mono caps) -->
+            <span class="state-badge state-{agentState}">{badgeLabel(agentState)}</span>
             <span class="headline-text">{narrative.headline}</span>
             {#if narrative.market_phase === "trending_up" || narrative.market_phase === "trending_down"}
                 <span class="phase-badge"
@@ -62,11 +161,20 @@
                         : "↓trend"}</span
                 >
             {/if}
-            <span class="expand-arrow">{expanded ? "▾" : "▸"}</span>
+            <span class="expand-arrow" aria-hidden="true"
+                >{mode === "expanded" ? "▾" : "▸"}</span
+            >
         </button>
 
-        {#if expanded}
-            <div class="narrative-body">
+        <!-- aria-live region: announces mode changes politely to AT users -->
+        <div class="sr-only" aria-live="polite">{liveAnnouncement}</div>
+
+        {#if mode === "expanded"}
+            <div
+                class="narrative-body"
+                role="region"
+                aria-label="Agent narrative details — {badgeLabel(agentState)}"
+            >
                 <!-- Bias summary -->
                 <div class="row bias-row">{narrative.bias_summary}</div>
 
@@ -230,6 +338,48 @@
         transition: all 0.15s ease;
         text-align: left;
         line-height: 1.4;
+    }
+    .headline-bar:focus-visible {
+        outline: 2px solid var(--accent, #d4a017);
+        outline-offset: 1px;
+    }
+
+    /* ADR-0069 Slice 1: agent state badge — T4 mono caps, tier-tinted color */
+    .state-badge {
+        font-family: var(--font-mono, "JetBrains Mono", "SF Mono", monospace);
+        font-size: var(--t6-size);
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        padding: 1px 5px;
+        border-radius: 3px;
+        background: color-mix(in srgb, var(--text-3, #6b6b80) 14%, transparent);
+        color: var(--text-2, #9b9bb0);
+        flex-shrink: 0;
+    }
+    /* Tier 1 (compact) — neutral; Tier 2 (banner) — warn-tinted; Tier 3 — accent */
+    .state-badge.state-watching,
+    .state-badge.state-bias_confirmed {
+        background: color-mix(in srgb, var(--warn, #ffb347) 14%, transparent);
+        color: var(--warn, #ffb347);
+    }
+    .state-badge.state-prepare,
+    .state-badge.state-ready,
+    .state-badge.state-triggered {
+        background: color-mix(in srgb, var(--accent, #d4a017) 16%, transparent);
+        color: var(--accent, #d4a017);
+    }
+
+    /* Screen-reader-only utility (per WAI-ARIA recommended pattern) */
+    .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
     }
     .headline-bar:hover {
         border-color: rgba(74, 144, 217, 0.4);

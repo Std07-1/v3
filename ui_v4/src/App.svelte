@@ -572,7 +572,13 @@
          Compact by default; expanded body drops absolute below bar.
          .narrative-wrap hidden on mobile (see @media block below). -->
     <div class="narrative-wrap">
-      <NarrativePanel narrative={cachedNarrative} inline={true} />
+      <NarrativePanel
+        narrative={cachedNarrative}
+        shell={cachedShell}
+        currentSymbol={hudSymbol}
+        currentTf={hudTf}
+        inline={true}
+      />
     </div>
 
     <!-- Tier 1 status row: ATR/RV/countdown + UTC clock -->
