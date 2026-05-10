@@ -5,7 +5,7 @@
 | Field          | Value                                                     |
 | -------------- | --------------------------------------------------------- |
 | ID             | ADR-0069                                                   |
-| Status         | ACCEPTED — rev 2 (2026-05-09): §A and §B both RESOLVED. See §Open for resolution paths. |
+| Status         | ACCEPTED — rev 2 (2026-05-09): §A and §B both RESOLVED. See §Open for resolution paths. **SUPERSEDED IN PART by ADR-0070** (2026-05-09): scope of NP narrowed to PURE Арчi-surface — `narrative.bias_summary`, `scenarios[]`, `warnings`, `fvg_context`, `next_area`, `headline` are NO LONGER rendered by NP per ADR-0070 §Tier 2 + §Tier 3. State machine (compact / banner / expanded) + override logic from this ADR remain authoritative. Read ADR-0070 BEFORE editing NP. |
 | Date           | 2026-05-09                                                |
 | Authors        | Станіслав                                                 |
 | Supersedes     | —                                                         |
