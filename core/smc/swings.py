@@ -113,6 +113,41 @@ def compute_atr(bars: List[CandleBar], period: int = 14) -> float:
     return atr if atr > 0.0 else 1.0  # rail: atr > 0
 
 
+def compute_rv(bars: List[CandleBar], period: int = 20) -> float:
+    """Relative Volume — last bar's volume / SMA(volume, period) of prior bars.
+
+    ADR-0070 §Tier 1 + amendment: backend SSOT for RV. Shipped as
+    `frame.rv` in ws_server, consumed by CommandRail (frontend MUST NOT
+    re-derive — X28).
+
+    Returns 1.0 fallback when:
+      - bars empty / fewer than period+1 bars
+      - last bar volume null/zero (preview/forming)
+      - prior window has fewer than period/2 valid volume samples
+      - SMA collapses to <=0
+    1.0 means "neutral / no signal" per RV convention (1.0× = average).
+    """
+    if not bars or len(bars) < period + 1:
+        return 1.0
+    last = bars[-1]
+    last_v = getattr(last, "v", None)
+    if last_v is None or last_v <= 0:
+        return 1.0
+    # Prior window = `period` bars BEFORE the last one.
+    prior = bars[-(period + 1):-1]
+    valid: List[float] = []
+    for b in prior:
+        v = getattr(b, "v", None)
+        if v is not None and v > 0:
+            valid.append(float(v))
+    if len(valid) < period // 2:
+        return 1.0
+    sma = sum(valid) / len(valid)
+    if sma <= 0:
+        return 1.0
+    return float(last_v) / sma
+
+
 def find_impulse_start(
     bars: List[CandleBar],
     end_idx: int,

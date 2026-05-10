@@ -5,13 +5,13 @@
 | Field          | Value                                                                |
 | -------------- | -------------------------------------------------------------------- |
 | ID             | ADR-0070                                                              |
-| Status         | ACCEPTED                                                              |
-| Date           | 2026-05-09                                                            |
+| Status         | ACCEPTED (rev 2 — RV restored as backend SSOT, ATR dual format)        |
+| Date           | 2026-05-09 (rev 2: 2026-05-10)                                        |
 | Authors        | Станіслав                                                             |
 | Supersedes     | —                                                                     |
 | Builds on      | ADR-0065 rev 2 (CR-2.5 layout); ADR-0069 rev 2 (NP state machine); ADR-0049 (Архi presence + thesis); ADR-0066 rev 5 (tokens) |
 | Locks          | The four user-facing surfaces in the top-right corner of the chart pane: CommandRail, NarrativePanel compact pill, NarrativePanel expanded body, and the boundary against системний наратив v3. |
-| Affects layers | `ui_v4/src/lib/agentState.ts`, `ui_v4/src/layout/NarrativePanel.svelte`, `ui_v4/src/layout/CommandRail.svelte`, `ui_v4/src/App.svelte`, `runtime/ws/ws_server.py` (frame.atr field) |
+| Affects layers | `ui_v4/src/lib/agentState.ts`, `ui_v4/src/layout/NarrativePanel.svelte`, `ui_v4/src/layout/CommandRail.svelte`, `ui_v4/src/App.svelte`, `runtime/ws/ws_server.py` (frame.atr + frame.rv fields), `core/smc/swings.py` (compute_rv), `core/smc/engine.py` (get_rv) |
 
 ---
 
@@ -65,13 +65,14 @@ non-overlapping contracts.
 
 ### Tier 1 · CommandRail — peripheral market context
 
-**Slot composition (left → right)**: `[ATR(14) of current TF] · [TF label + countdown to bar close] · [UTC clock]`.
+**Slot composition (left → right)** *(rev 2)*: `[ATR(14) of current TF · ATR%] · [RV(20) of current TF] · [TF label + countdown to bar close] · [UTC clock]`.
 
 **Data sources (X28-strict)**:
 
 | Slot       | Source                                                                                          | Formula in UI |
 | ---------- | ----------------------------------------------------------------------------------------------- | ------------- |
-| ATR        | `frame.atr` shipped by backend `ws_server._build_full_frame` + delta path. Source: `_smc_runner._engine.get_atr(symbol, tf_s)`. Same value as REST `/api/context.atr`. | none — formatter only (`fmtAtr` adaptive precision) |
+| ATR        | `frame.atr` shipped by backend `ws_server._build_full_frame` + delta path. Source: `_smc_runner._engine.get_atr(symbol, tf_s)`. Same value as REST `/api/context.atr`. | none for absolute — formatter only (`fmtAtr` adaptive precision). For ATR% sub-cell: `(atr / lastPrice) * 100`. **Display normalization, NOT re-derivation** — domain ATR still comes from backend; `lastPrice` is the chart's last candle close. ATR% hidden when `atr === 1.0` (backend fallback sentinel) to avoid noise. |
+| RV         | `frame.rv` shipped by backend (rev 2). Source: `_smc_runner._engine.get_rv(symbol, tf_s)` → `core/smc/swings.compute_rv` (last bar volume / SMA(volume, 20) of prior bars; 1.0 fallback when no data, null/zero last-bar volume, or insufficient samples). | none — formatter only (`fmtRv` → `"1.42x"`). 1.0 displayed as `1.00x` (neutral / no signal per RV convention). |
 | Countdown  | Wallclock + bucket math: `Math.floor((nowMs - anchorMs) / tfMs) * tfMs + anchorMs + tfMs - nowMs`. Anchor map mirrors `core/utils/buckets.bucket_start_ms` (D1 = 79200000, H4 = 82800000, others = 0). | display arithmetic only — NOT domain compute |
 | UTC clock  | `clockNow` $state ticking every 1s in App.svelte                                                | format `HH:MM` |
 
@@ -80,8 +81,12 @@ non-overlapping contracts.
 - Any frontend computation of ATR / Wilder TR / SMA / EMA / RV / any
   domain indicator from raw `candles[]`. X28 violation. If a new indicator
   is needed, backend ships it as a frame field; this ADR will be amended.
-- RV (relative volume) cell — explicitly removed from CommandRail. Has no
-  backend equivalent. Future re-introduction requires backend slice + ADR.
+- ~~RV (relative volume) cell — explicitly removed from CommandRail.~~
+  *(rev 2: RV restored, but ONLY as backend SSOT via `frame.rv`. Frontend
+  recompute from `candles[].v` remains forbidden.)*
+- ATR % normalization is permitted as **display arithmetic** (atr /
+  lastPrice). It is NOT a re-derivation of ATR — domain value still
+  comes from backend; we only render a % view alongside the absolute.
 - Decorative icons that look interactive (`↻` removed). If a future cell
   needs an icon, it MUST be either truly clickable OR semantically
   obvious as decorative (e.g., `⏱` for timer).
@@ -269,8 +274,10 @@ decision; backend semantics unchanged.
 
 For Sunday-closed XAU/USD, M15 (typical observation case during this session):
 
-- **CommandRail**: shows `ATR 4.55 · M15 03:42 · 21:06 UTC` (or whatever
-  current values) — RV cell gone, ↻ icon gone.
+- **CommandRail** *(rev 2)*: shows `ATR 4.55 · 0.10% · RV 1.00x · M15 03:42 · 21:06 UTC`
+  (or whatever current values). ATR carries dual-format (absolute · %),
+  RV restored as backend SSOT (1.00x = neutral when fallback or actual
+  match-average), ↻ icon stays gone.
 - **NP compact pill**: shows `Арчі спить · 0.5h` (when bot offline) OR
   Арчi's actual thesis text (when bot wrote one and it's fresh).
   Does NOT show `narrative.headline` ever.
@@ -281,10 +288,18 @@ For Sunday-closed XAU/USD, M15 (typical observation case during this session):
 
 ### Backend dependency
 
-`runtime/ws/ws_server.py` ships `frame.atr` from `_smc_runner._engine.get_atr(symbol, tf_s)`.
-Same value as REST `/api/context.atr`. **Backend restart required** to
-activate this field after ws_server.py changes; UI has graceful
-`atr={frame?.atr ?? null}` fallback to `"—"` if field is absent.
+`runtime/ws/ws_server.py` ships:
+
+- `frame.atr` from `_smc_runner._engine.get_atr(symbol, tf_s)` —
+  same value as REST `/api/context.atr`.
+- `frame.rv` *(rev 2)* from `_smc_runner._engine.get_rv(symbol, tf_s)` —
+  delegates to `core/smc/swings.compute_rv` (last bar volume / SMA(20)
+  of prior bars; 1.0 fallback). No REST endpoint yet (UI-only consumer).
+
+Both fields are populated in the full-frame path AND the delta path so
+the UI buffer stays in sync between full frames. **Backend restart
+required** to activate either field after ws_server.py / engine.py /
+swings.py changes; UI has graceful `?? null` fallback rendering `"—"`.
 
 ### Test cases (manual smoke after any future change in TR corner)
 
@@ -337,6 +352,40 @@ Shipped in 9 commits during 2026-05-09 session (chronological order):
 | `039ba8b` | fix(np): NarrativePanel = pure Арчi-surface (strip system narrative content)   | Tier 2 + Tier 3 scope lock |
 | `a9b66cc` | feat(np): click-outside collapses expanded body (chart click hides NP)         | Tier 4 UX |
 
+### Rev 2 amendment (2026-05-10) — RV restored as backend SSOT + ATR dual format
+
+**Trigger**: trader feedback on rev 1 — "ATR alone is not enough peripheral
+context" (volume spike awareness lost when RV cell dropped); "ATR absolute
+without % normalization is hard to compare across symbols / TFs".
+
+**Backend slice** (X28-compliant — domain compute lives backend-side):
+
+| File | Change |
+| ---- | ------ |
+| `core/smc/swings.py` | New `compute_rv(bars, period=20)` — last bar volume / SMA(volume, 20) of prior bars. Returns 1.0 (neutral) when no data, fewer than `period+1` bars, last-bar volume null/zero, fewer than `period/2` valid prior samples, or SMA collapses to ≤0. |
+| `core/smc/engine.py` | New `Engine.get_rv(symbol, tf_s, period=20)` — wraps `compute_rv` over `state.bars_list()`; 1.0 fallback when state missing. Mirrors `get_atr` shape. |
+| `runtime/ws/ws_server.py` | `_build_full_frame` accepts `rv: Optional[float]` and ships as `frame["rv"]`. Full-frame path computes `rv_val = _smc_runner._engine.get_rv(...)`. Delta path also injects `frame["rv"]` (mirrors ATR pattern — UI buffer stays in sync between full frames). |
+
+**Wire / UI slice**:
+
+| File | Change |
+| ---- | ------ |
+| `ui_v4/src/types.ts` | `RenderFrame.rv?: number` added with X28 doc comment. |
+| `ui_v4/src/App.svelte` | CommandRail invocation passes `rv={frame?.rv ?? null}` and `lastPrice={lastPrice}`. |
+| `ui_v4/src/layout/CommandRail.svelte` | RV cell re-added (between ATR and TF/countdown). ATR cell gets sub-span `· {pct}%` next to absolute value (display normalization, hidden when `atr === 1.0` fallback). |
+
+**X28 compliance**: RV domain value is computed in backend (`engine.get_rv`),
+shipped via `frame.rv`, and rendered as-is by UI. The ATR % sub-cell is
+**display arithmetic** (`atr / lastPrice`), not a re-derivation of ATR —
+the domain value still comes from backend. Both rules from rev 1 §Tier 1
+forbidden list remain in force; only the "no RV cell" line is lifted
+because RV now has a backend-SSOT path.
+
+**Rollback for rev 2**: revert the wire/UI commits (CommandRail RV cell,
+App.svelte props, types.ts field) and the backend commits (`compute_rv`,
+`get_rv`, `frame.rv` injection in `_build_full_frame` + delta path) —
+strict reverse order. UI gracefully falls back when `frame.rv` is absent.
+
 ---
 
 ## Rollback
@@ -383,7 +432,8 @@ ADR-0070 adds on top: scope (Арчi-only), wording, click-outside, X28-fix.
 
 If a future change suggests:
 
-- "Let's compute ATR / RV / any indicator in CommandRail from candles" → STOP. Read §Tier 1 forbidden list. Backend ADR + slice required first.
+- "Let's compute ATR / RV / any indicator in CommandRail from candles" → STOP. Read §Tier 1 forbidden list. Backend ADR + slice required first. RV exists as `frame.rv` (rev 2 amendment) — consume that, do not re-derive.
+- "Let's drop the ATR % sub-cell, only show absolute" → It is the rev 2 contract. Discuss before stripping.
 - "Let's show {bias_summary | scenarios | warnings | next_area} in NP" → STOP. Read §Tier 3 forbidden list. NP is Арчi-only.
 - "Let's translate `sleeping` as something more elegant than 'спить'" → STOP. Read §Wording. Literal mapping is canonical.
 - "Let's spell the agent's name as 'Архі'" → STOP. It is `Арчі`. Always.

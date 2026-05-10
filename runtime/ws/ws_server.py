@@ -413,6 +413,7 @@ def _build_full_frame(
     momentum_map: Optional[Dict] = None,
     pd_state: Optional[Dict] = None,
     atr: Optional[float] = None,
+    rv: Optional[float] = None,
 ) -> Dict[str, Any]:
     # T6/S19: output guard вЂ” validate candle shapes before send
     guard_warns = _guard_candles_output(candles, symbol, tf_label, "full")
@@ -461,6 +462,11 @@ def _build_full_frame(
     # /api/context.atr endpoint (runtime/api_v3/endpoints.py:1335).
     if atr is not None:
         frame["atr"] = atr
+    # ADR-0070 amendment: backend SSOT for relative volume (X28).
+    # Frontend MUST consume frame["rv"] as-is — no re-derivation from raw
+    # candle volumes. 1.0 = neutral / no signal (RV convention).
+    if rv is not None:
+        frame["rv"] = rv
     return frame
 
 
@@ -667,6 +673,7 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
         # so UI shows what backend canonically sees. Cross-checks REST
         # /api/context.atr (same source: runner._engine.get_atr).
         atr_val: Optional[float] = None
+        rv_val: Optional[float] = None
         if _smc_runner is not None:
             try:
                 atr_val = float(
@@ -678,6 +685,19 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                     session.symbol,
                     session.tf_s,
                     _atr_exc,
+                )
+            # ADR-0070 amendment: backend SSOT for relative volume (X28).
+            # 1.0 fallback (neutral) when no data or null/zero last-bar volume.
+            try:
+                rv_val = float(
+                    _smc_runner._engine.get_rv(session.symbol, session.tf_s)
+                )
+            except Exception as _rv_exc:
+                _log.debug(
+                    "WS_RV_ERR sym=%s tf=%s err=%s",
+                    session.symbol,
+                    session.tf_s,
+                    _rv_exc,
                 )
         frame = _build_full_frame(
             session,
@@ -691,6 +711,7 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
             momentum_map=momentum_map,
             pd_state=pd_state,
             atr=atr_val,
+            rv=rv_val,
         )
         # ADR-0033 N4: narrative in full frame + delta on complete bars. current_price from last candle.
         if _smc_runner is not None and candles:
@@ -1175,6 +1196,20 @@ async def _global_delta_loop(app: web.Application) -> None:
                             except Exception:
                                 _log.debug(
                                     "WS_DELTA_ATR_ERR sym=%s tf=%s",
+                                    symbol,
+                                    tf_s,
+                                    exc_info=True,
+                                )
+                            # ADR-0070 amendment: backend SSOT for relative
+                            # volume (X28). Mirrors ATR rationale — keep UI in
+                            # sync between full frames.
+                            try:
+                                frame["rv"] = float(
+                                    _smc_runner._engine.get_rv(symbol, tf_s)
+                                )
+                            except Exception:
+                                _log.debug(
+                                    "WS_DELTA_RV_ERR sym=%s tf=%s",
                                     symbol,
                                     tf_s,
                                     exc_info=True,

@@ -304,6 +304,12 @@ export interface RenderFrame {
    *  ATR=1.0 value. Surfaces in full and delta frames.
    *  Consumed by: CommandRail (peripheral chrome). */
   atr?: number;
+  /** ADR-0070 amendment: backend SSOT for relative volume (X28).
+   *  engine.get_rv → last bar volume / SMA(volume, 20) of prior bars.
+   *  1.0 = neutral / no signal (fallback when no data, null/zero last-bar
+   *  volume, or insufficient samples). Surfaces in full and delta frames.
+   *  Consumed by: CommandRail. Frontend MUST NOT re-derive from candles. */
+  rv?: number;
   /** ADR-0029: confluence grade per zone (full + delta on complete bars, ADR-0042) */
   zone_grades?: Record<string, ZoneGradeInfo>;
   /** ADR-0031: per-TF trend bias map (full + delta on complete bars, ADR-0042) */

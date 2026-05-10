@@ -581,12 +581,14 @@
       />
     </div>
 
-    <!-- Tier 1 status row: ATR (backend SSOT) + countdown + UTC clock.
-         RV cell removed: no backend equivalent yet (separate ADR needed).
+    <!-- Tier 1 status row: ATR + RV (backend SSOT, ADR-0070) + countdown + UTC clock.
+         lastPrice passed for ATR % normalization (display arithmetic OK per X28).
          Countdown is display arithmetic (wallclock + tf bucket math) per X28. -->
     <div class="tr-status-row">
       <CommandRail
         atr={frame?.atr ?? null}
+        rv={frame?.rv ?? null}
+        lastPrice={lastPrice}
         currentTf={hudTf}
         nowMs={clockNow}
       />

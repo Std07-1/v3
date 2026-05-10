@@ -403,6 +403,21 @@ class SmcEngine:
 
         return compute_atr(state.bars_list(), period=period)
 
+    def get_rv(self, symbol: str, tf_s: int, period: int = 20) -> float:
+        """RV(20) for (symbol, tf) — backend SSOT for relative volume.
+
+        Last bar volume / SMA(volume, period) of prior bars. Returns 1.0
+        fallback (neutral) when no data, insufficient samples, or last bar
+        has null/zero volume (preview/forming). ADR-0070 amendment §Tier 1 —
+        shipped via ws_server `frame.rv`; CommandRail consumes as-is (X28).
+        """
+        state = self._states.get((symbol, tf_s))
+        if state is None or not state.bars_list():
+            return 1.0
+        from core.smc.swings import compute_rv
+
+        return compute_rv(state.bars_list(), period=period)
+
     def get_bars(self, symbol: str, tf_s: int) -> List[CandleBar]:
         """ADR-0053: public accessor for bar buffer. [] if (symbol, tf_s) not tracked."""
         state = self._states.get((symbol, tf_s))

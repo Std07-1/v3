@@ -1,21 +1,18 @@
 <!--
   CommandRail.svelte — peripheral trader context inline in top-right-bar.
   Slots (left → right):
-    [ATR(14) of current TF]    ← backend SSOT, NO frontend recompute (X28)
+    [ATR(14) of current TF]    ← backend SSOT (frame.atr) + display % normalize
+    [RV(20) of current TF]     ← backend SSOT (frame.rv), 1.0 = neutral
     [↻ countdown to bar close] ← display arithmetic (wallclock + tf bucket)
 
   ADR refs:
     - ADR-0065 rev 2 (CR-2.5 final layout)
     - ADR-0066 Tier 4 (gold accent), Tier 5 (typography tokens)
+    - ADR-0070 amendment (RV restored, ATR dual-format value · percent)
     - X28 invariant: frontend MUST NOT re-derive backend SSOT.
-      ATR previously computed locally from candles — REMOVED. Now reads
-      `frame.atr` shipped by ws_server (engine.get_atr, same as REST
-      /api/context.atr).
-
-  REMOVED (X28 violation):
-    - ATR compute from candles[] (was: SMA of TR over last 14)
-    - RV (relative volume) cell entirely — no backend equivalent yet,
-      separate ADR + backend slice needed before re-introducing.
+      ATR + RV come from `frame.atr` / `frame.rv` (engine.get_atr /
+      engine.get_rv). The "%" form is display normalization
+      (atr / lastPrice * 100), NOT a re-derivation of the domain value.
 
   Countdown is intentionally retained in UI: it's wallclock subtraction
   (next_bar_close_ms - now_ms), not domain compute. Anchor map mirrors
@@ -30,13 +27,20 @@
     /** ATR(14) for current symbol+tf, sourced from backend (frame.atr).
      *  null when no frame yet OR frame missing the field (legacy server). */
     atr: number | null;
+    /** RV(20) — backend SSOT (frame.rv). 1.0 = neutral / no signal.
+     *  null when no frame yet OR field missing (legacy server). */
+    rv: number | null;
+    /** Last price (frame's last candle close) — used ONLY to normalize ATR
+     *  into a % display alongside the absolute value. Display arithmetic per
+     *  X28; domain ATR still comes from backend. */
+    lastPrice: number | null;
     /** TF label ("M15", "H1", ...) — converted to seconds via inverse map. */
     currentTf: string;
     /** Live wallclock from parent $state (ticks every 1s). */
     nowMs: number;
   };
 
-  const { atr, currentTf, nowMs }: Props = $props();
+  const { atr, rv, lastPrice, currentTf, nowMs }: Props = $props();
 
   // ─── TF label → seconds (inverse of App.svelte _S_TO_LABEL) ────────────
   const _LABEL_TO_S: Record<string, number> = {
@@ -89,23 +93,48 @@
     if (v == null) return "—";
     return v >= 10 ? v.toFixed(1) : v.toFixed(2);
   }
+  // ATR as % of lastPrice — display normalization, NOT re-derivation.
+  // Hidden when lastPrice missing or ATR is the 1.0 fallback (would mislead).
+  const atrPctStr = $derived.by(() => {
+    if (atr == null || lastPrice == null || lastPrice <= 0) return "";
+    if (atr === 1.0) return ""; // backend fallback sentinel — skip % to avoid noise
+    const pct = (atr / lastPrice) * 100;
+    return `${pct.toFixed(2)}%`;
+  });
+
+  // ─── RV formatter ──────────────────────────────────────────────────────
+  // Backend returns 1.0 as fallback (no data, null/zero last-bar volume,
+  // insufficient samples). 1.0 = neutral / no signal per RV convention.
+  // Display as multiplier with 'x' suffix: "1.42x", "0.87x".
+  function fmtRv(v: number | null): string {
+    if (v == null) return "—";
+    return `${v.toFixed(2)}x`;
+  }
 </script>
 
 <div
   class="cmd-rail"
   role="status"
-  aria-label="Market context: ATR, bar close countdown"
+  aria-label="Market context: ATR, relative volume, bar close countdown"
 >
   <span class="cell" title="ATR(14) on {tfLabel} — backend value (engine.get_atr)">
     <span class="lbl">ATR</span>
     <span class="val">{fmtAtr(atr)}</span>
+    {#if atrPctStr}
+      <span class="sub">· {atrPctStr}</span>
+    {/if}
+  </span>
+
+  <span class="sep">·</span>
+
+  <span class="cell" title="RV(20) on {tfLabel} — backend value (engine.get_rv); 1.0 = neutral">
+    <span class="lbl">RV</span>
+    <span class="val">{fmtRv(rv)}</span>
   </span>
 
   <span class="sep">·</span>
 
   <span class="cell" title="Countdown to {tfLabel} bar close (wallclock + tf bucket)">
-    <!-- §6 removal: ↻ icon dropped (it implied refresh-button affordance
-         when in fact the countdown is read-only; M15 label suffices). -->
     <span class="lbl">{tfLabel}</span>
     <span class="val mono">{countdownStr}</span>
   </span>
@@ -141,6 +170,11 @@
   }
   .val.mono {
     font-feature-settings: "tnum";
+  }
+  .sub {
+    opacity: 0.55;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
   }
   .sep {
     opacity: 0.3;
