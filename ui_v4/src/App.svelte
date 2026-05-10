@@ -801,9 +801,11 @@
      no access to theme/style/diagnostics. Was buggy hidden previously. */
   @media (max-width: 640px) {
     .top-right-bar {
-      /* Respect iOS notch / home indicator on devices that report
-         safe-area insets; falls back to 0 elsewhere via index.html :root. */
-      right: calc(12px + var(--safe-right, 0px));
+      /* Mobile right offset MUST clear the LWC price scale (minimumWidth: 44px
+         per chart/engine.ts isMobile branch) — at 12px the ☰ landed directly on
+         price labels (4800.00 etc). 56px = 44 axis + 12 breathing. Safe-area
+         adds iPhone notch insets where present. */
+      right: calc(56px + var(--safe-right, 0px));
       top: calc(8px + var(--safe-top, 0px));
       padding: 5px 8px;
       gap: 4px;
