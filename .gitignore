@@ -36,8 +36,8 @@ _tmp_jsonl_stress
 Untitled-*.txt
 
 # — Claude Code (local agent config + memory) ————————
-.claude/
-CLAUDE.md
+#.claude/
+#CLAUDE.md
 
 # — Copilot customization (local) ————————————————————
 /.copilot/
@@ -72,8 +72,7 @@ ui_v4/dist/
 /cowork/data/_archive/
 
 # ── Журнали, стан, діагностика ──────────────────────────────
-/changelog.jsonl
-/CHANGELOG.md
+# changelog.jsonl — трекується (потрібен для роботи з інших машин)
 /rebuild_state.json
 *.log
 logs/

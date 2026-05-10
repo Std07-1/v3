@@ -1,0 +1,5 @@
+# Не трекуємо machine-specific і ephemeral файли
+agent-memory/
+scheduled_tasks.lock
+settings.local.json
+settings.json.bak

@@ -10,7 +10,7 @@
 | Authors        | Станіслав                                                 |
 | Supersedes     | —                                                         |
 | Builds on      | ADR-0066 rev 5 (tokens, T1–T5 typography); ADR-0033 (narrative engine — backend signal source) |
-| Coordinates with | ADR-0065 rev 2 (CR-2.5 sits in slot 1; NarrativePanel slot 2 immediately below); ADR-0068 (chrome real-estate freed) |
+| Coordinates with | ADR-0065 rev 2 (CR-2.5 and NarrativePanel share the same `.top-right-bar` row — NP as leftmost inline-pill); ADR-0068 (chrome real-estate freed) |
 | Affects layers | `ui_v4/` chrome (`App.svelte`, existing `NarrativePanel.svelte`); contract field `frame.smc.narrative.agent_state` (or equivalent — see Open §A) |
 
 ---
@@ -43,10 +43,12 @@ agent's current state. Premium real-estate rule:
 > in the product. Spend it only when the agent has something time-
 > critical to say. Otherwise, collapse.
 
-ADR-0065 rev 2 places NarrativePanel in slot 2 (under CR-2.5). Without
-this state-aware contract, slot 2 either always-takes-180px (wastes
-real-estate in idle) or always-takes-28px (loses signal in critical).
-The 3-mode contract resolves the trade-off.
+NarrativePanel lives **inline inside `.top-right-bar`** as the leftmost
+item — same horizontal row as CR-2.5 (ATR · RV · cd · UTC · ▶ · ☰).
+This was intentionally moved from the "slot 2 under CR-2.5" spec in the
+original draft to avoid layout complexity. The 3-mode state machine still
+applies: Compact pill stays inline; Banner and Expanded drop as
+`position: absolute` below the bar without shifting the row height.
 
 This ADR also formalizes the **agent_state contract** — the backend
 must surface a discrete agent state field; if it doesn't yet, that's a
@@ -136,21 +138,19 @@ Override interaction with state changes — see Open §B.
 
 ### Layout & positioning
 
-- Slot: directly under CR-2.5 in the `top-right-bar` column. ADR-0065
-  rev 2 reserves vertical band immediately under the rail.
-- Width: matches CR-2.5 width (≤300px desktop, ≤120px is too narrow
-  for narrative — on mobile the panel goes full-width below chrome,
-  see Mobile below).
+- Slot: **inline-pill inside `.top-right-bar`**, leftmost item before
+  ATR · RV · cd · UTC · ▶ · ☰. NOT a separate band under the rail.
+- Compact mode: pill stays inline, `~28px` height, row height unchanged.
+- Banner / Expanded: drop as `position: absolute` below the bar.
+  `top-right-bar` keeps fixed height — no layout shift to chart.
 - z-index: above chart, below modals/menus.
-- Transition: mode change uses 160ms height + opacity ease. No layout
-  shift to chart (chart container has fixed height; panel grows into
-  reserved band, doesn't push chart).
+- Transition: mode change uses 160ms height + opacity ease.
 
 ### Mobile (`<640px`)
 
 | Mode     | Mobile behavior                                                  |
 | -------- | ---------------------------------------------------------------- |
-| Compact  | Full-width strip under CR-2.5 mobile rail                         |
+| Compact  | Inline pill inside mobile chrome row (leftmost)                   |
 | Banner   | Full-width strip; tap-to-expand                                   |
 | Expanded | Full-width sheet, dismiss via swipe-down or `→` collapse button   |
 
