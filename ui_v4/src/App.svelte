@@ -796,20 +796,48 @@
   }
 
   /* ═══ ADR-0065 rev 2 Tier 3: Mobile reflow (640px breakpoint) ═══
-     <640px: hide status row + ▶ replay; keep ☰ overflow visible. */
+     <640px: hide ATR/RV row + ▶ replay; KEEP ☰ overflow visible.
+     The ☰ is the only chrome trigger on mobile — without it user has
+     no access to theme/style/diagnostics. Was buggy hidden previously. */
   @media (max-width: 640px) {
     .top-right-bar {
-      right: 12px;
+      /* Respect iOS notch / home indicator on devices that report
+         safe-area insets; falls back to 0 elsewhere via index.html :root. */
+      right: calc(12px + var(--safe-right, 0px));
+      top: calc(8px + var(--safe-top, 0px));
       padding: 5px 8px;
       gap: 4px;
     }
+    /* Hidden: ATR/RV peripheral row (small screen — chrome economy),
+       replay button + badge (replay UX is desktop-first MVP),
+       NP narrative pill (Архі-surface deferred to mobile sheet ADR-0071). */
     .tr-status-row,
     .tr-sep-status,
     .tr-replay-btn,
     .tr-replay-badge,
-    .tr-overflow-wrap,
     .narrative-wrap {
       display: none;
+    }
+    /* ☰ stays visible — it's the only entry point to overflow menu on mobile.
+       Apple HIG / Material Design min touch target = 44×44px. Bump padding
+       so the actual hit-box meets that, even though glyph is small. */
+    .tr-overflow-btn {
+      min-width: 44px;
+      min-height: 44px;
+      padding: 10px 12px;
+      font-size: var(--t1-size, 18px);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    /* Disable text selection on mobile chrome — accidental long-press on the
+       ☰ glyph during a chart pan was selecting the character. Narrative text
+       and chart-rendered content remain selectable (canvas isn't selectable
+       anyway, narrative panels carry their own user-select rules if needed). */
+    .top-right-bar,
+    .tr-overflow-btn {
+      user-select: none;
+      -webkit-user-select: none;
     }
   }
 </style>

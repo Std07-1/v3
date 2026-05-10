@@ -190,11 +190,16 @@ export class ChartEngine {
       },
       // V3 parity: chart_adapter_lite.js:67-75
       // P4: compact price scale on mobile (44px vs default 56px)
+      // Mobile "max area" tuning: drop axis border + tick marks (visual chrome
+      // only — labels still render); tighten top/bottom margins so wicks reach
+      // closer to viewport edges on a small screen.
       rightPriceScale: {
-        borderVisible: true,
-        ticksVisible: true,
+        borderVisible: false,
+        ticksVisible: false,
         autoScale: true,
-        scaleMargins: { top: 0.12, bottom: 0.18 },
+        scaleMargins: isMobile
+          ? { top: 0.06, bottom: 0.12 }
+          : { top: 0.12, bottom: 0.18 },
         ...(isMobile ? { minimumWidth: 44 } : {}),
       },
       // V3 parity: chart_adapter_lite.js:76-98

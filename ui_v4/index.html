@@ -3,9 +3,28 @@
 
 <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <!-- viewport-fit=cover extends content under iOS notch / home indicator;
+         user-scalable=no kills accidental pinch-zoom on chart canvas. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="description"
         content="AiOne SMC Trading Platform — real-time institutional order flow analysis, Smart Money Concepts overlay, multi-timeframe charts" />
+    <!-- Mobile chrome blend: address bar + notification bar paint with our
+         dark background, visually merging into the chart UI. Without full
+         PWA standalone (separate ADR), this is the cheapest "feels native"
+         win — bar still exists but stops looking like a separate strip. -->
+    <meta name="theme-color" content="#0D1117" />
+    <!-- iOS: when "Add to Home Screen", launches in standalone mode (no
+         Safari chrome). black-translucent makes the status bar overlay our
+         content so we use the full viewport. Until install, no-op. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="AI · ONE" />
+    <!-- Android equivalent (deprecated alias `mobile-web-app-capable` kept
+         for older Chrome / WebViews that ignore manifest standalone hints). -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <!-- Stop iOS Safari from auto-detecting and styling phone-number-like
+         strings (timestamps, prices) as tap-to-call links. -->
+    <meta name="format-detection" content="telephone=no" />
     <!-- Cache-bust: force mobile/TG browsers to always fetch fresh HTML -->
     <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
@@ -31,6 +50,8 @@
             height: 100%;
             height: var(--app-vh, 100dvh);
             overflow: hidden;
+            /* overscroll-behavior:none kills pull-to-refresh on Chrome/Safari
+               so a downward-swipe on the chart never reloads the app mid-trade. */
             overscroll-behavior: none;
             touch-action: pan-x pan-y;
             -ms-touch-action: pan-x pan-y;
@@ -38,6 +59,16 @@
             background: var(--bg);
             color: var(--text-1);
             font-family: system-ui, -apple-system, sans-serif;
+        }
+        /* Safe-area on iOS notch / home indicator. env() returns 0 on devices
+           without notch, so this is a no-op on desktop and Android. The chart
+           canvas itself is full-bleed; only fixed chrome (top-right-bar,
+           BrandWatermark) needs to dodge the notch — they read these vars. */
+        :root {
+            --safe-top: env(safe-area-inset-top, 0px);
+            --safe-right: env(safe-area-inset-right, 0px);
+            --safe-bottom: env(safe-area-inset-bottom, 0px);
+            --safe-left: env(safe-area-inset-left, 0px);
         }
 
         /* P3: eliminate 300ms tap delay on interactive elements */
