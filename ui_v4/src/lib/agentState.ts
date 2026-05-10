@@ -196,7 +196,7 @@ export function compactPillText(
     if (presence) {
         const statusUk = _ARCHI_STATUS_UK[presence.status] || presence.status;
         const focus = presence.focus ? ` · ${presence.focus}` : '';
-        return `Архі ${statusUk}${focus}`;
+        return `Арчі ${statusUk}${focus}`;
     }
 
     // Last resort: backend's own next_area hint (rare path — presence missing)
