@@ -142,11 +142,19 @@ export function resolveAgentState(
 // Important: this helper does NOT touch the системний наратив body content.
 // It only chooses what to render in the compact pill (новий кут scope).
 
+// Wake-engine semantic mapping (per wake_types.py:144 + wake_engine.py:319-320):
+//   "watching"  = wake conditions all met, armed for trigger
+//   "sleeping"  = wake conditions not all met, agent dozing
+//   "analyzing" = bot actively running Sonnet analysis call
+//   "alert"     = urgent/triggered signal state
+// Important: status alone does NOT mean bot is alive — that's gated by
+// thesis presence + freshness in compactPillText below.
 const _ARCHI_STATUS_UK: Record<string, string> = {
-    sleeping: 'спить',
+    sleeping: 'чекає умов',
     watching: 'спостерігає',
     analyzing: 'аналізує',
-    active: 'активний',
+    alert: 'сигнал',
+    active: 'активний', // legacy (older PresenceStatus values)
 };
 
 function _arrowFor(direction: string | undefined): string {
@@ -191,9 +199,28 @@ export function compactPillText(
             break;
     }
 
-    // Fallback: archi_presence (always shipped by backend per ADR-0049)
+    // Fallback path — Арчі-presence-driven copy.
+    //
+    // CRITICAL: archi_presence.status comes from WakeEngine (platform side)
+    // and reflects "wake conditions armed" — NOT "bot process is alive".
+    // Backend ships status="watching" even when the Архi bot is killed.
+    // Real liveness gate = `archi_thesis` field, written by the bot to
+    // Redis after each Sonnet analysis. If thesis is missing OR went
+    // 'stale' (per narrative_enricher.py freshness rule) → bot is silent
+    // → render "вимкнений" with silence hours rather than fake "спостерігає".
     const presence = narrative.archi_presence;
+    const thesis = narrative.archi_thesis;
+    const botAlive = !!thesis && thesis.freshness !== 'stale';
+
+    if (presence && !botAlive) {
+        // Offline / silent — surface that truthfully + silence_h hint.
+        const silence =
+            presence.silence_h > 0 ? ` · ${presence.silence_h.toFixed(1)}h` : '';
+        return `Арчі вимкнений${silence}`;
+    }
+
     if (presence) {
+        // Bot alive (thesis-fresh) — use WakeEngine semantic status.
         const statusUk = _ARCHI_STATUS_UK[presence.status] || presence.status;
         const focus = presence.focus ? ` · ${presence.focus}` : '';
         return `Арчі ${statusUk}${focus}`;
