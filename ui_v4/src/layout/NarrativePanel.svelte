@@ -118,14 +118,6 @@
         }
     }
 
-    // Trigger color class — per-scenario (P4 fix: was global from [0])
-    function getTriggerClass(trigger: string): string {
-        if (trigger === "ready") return "trigger-ready";
-        if (trigger === "triggered") return "trigger-triggered";
-        if (trigger === "in_zone") return "trigger-inzone";
-        return "trigger-approaching";
-    }
-
     // ARIA aria-live announce on mode change (polite — non-disruptive).
     let liveAnnouncement = $derived(
         mode === "expanded" ? "Narrative expanded" : "Narrative collapsed",
@@ -178,51 +170,11 @@
                 role="region"
                 aria-label="Agent narrative details — {badgeLabel(agentState)}"
             >
-                <!-- Bias summary -->
-                <div class="row bias-row">{narrative.bias_summary}</div>
-
-                <!-- Scenarios -->
-                {#each narrative.scenarios as sc, i}
-                    <div class="scenario" class:alt={i > 0}>
-                        <div class="sc-header">
-                            <span
-                                class="sc-dir"
-                                class:long={sc.direction === "long"}
-                                class:short={sc.direction === "short"}
-                            >
-                                {sc.direction === "long" ? "▲" : "▼"}
-                                {sc.entry_desc}
-                            </span>
-                        </div>
-                        <div class="sc-trigger {getTriggerClass(sc.trigger)}">
-                            {sc.trigger_desc}
-                        </div>
-                        {#if sc.target_desc}
-                            <div class="sc-target">→ {sc.target_desc}</div>
-                        {/if}
-                        <div class="sc-invalidation">✕ {sc.invalidation}</div>
-                    </div>
-                {/each}
-
-                {#if narrative.scenarios.length === 0}
-                    <div class="row dim">
-                        {narrative.next_area || "Awaiting setup..."}
-                    </div>
-                {/if}
-
-                <!-- FVG context -->
-                {#if narrative.fvg_context}
-                    <div class="row fvg-ctx">{narrative.fvg_context}</div>
-                {/if}
-
-                <!-- Warnings -->
-                {#if narrative.warnings.length > 0}
-                    <div class="row warnings">
-                        ⚠ {narrative.warnings.join(", ")}
-                    </div>
-                {/if}
-
-                <!-- ADR-0049: Archi Thesis Layer -->
+                <!-- ADR-0049: Архi Thesis Layer (PURE Арчi-surface scope).
+                     System narrative content (bias_summary, scenarios,
+                     warnings, fvg_context, next_area) intentionally NOT
+                     rendered here per user direction: НП є новий кут /
+                     Архi area, системний наратив v3 живе деінде. -->
                 {#if narrative.archi_thesis}
                     <div class="archi-section">
                         <div class="archi-header">

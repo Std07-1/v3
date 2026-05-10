@@ -157,75 +157,51 @@ const _ARCHI_STATUS_UK: Record<string, string> = {
     active: 'активний', // legacy (older PresenceStatus values)
 };
 
-function _arrowFor(direction: string | undefined): string {
-    return direction === 'long' ? '▲' : direction === 'short' ? '▼' : '·';
-}
-
-/** Build the action-first one-line summary for the compact pill.
- *  Empty string fallback (caller may decide to hide pill text entirely). */
+/** Build the compact pill one-liner. PURE Арчi-surface scope: pill text
+ *  comes ONLY from archi_thesis (when bot wrote one) or archi_presence
+ *  (when bot is alive but hasn't written yet) or offline indicator.
+ *
+ *  Системний наратив content (bias_summary, scenarios, warnings,
+ *  fvg_context, next_area) is INTENTIONALLY NOT consulted here — those
+ *  belong on different surfaces, not in this corner.
+ *
+ *  Returns "" when there is nothing Архi-related to say. */
 export function compactPillText(
     narrative: NarrativeBlock | null,
-    state: AgentState,
+    _state: AgentState, // kept in signature for caller compat; unused here
 ): string {
     if (!narrative) return '';
-    const sc = narrative.scenarios?.[0];
 
-    // Action-first by tier 3 (expanded territory) — most actionable first
-    switch (state) {
-        case 'triggered':
-            if (sc) return `${_arrowFor(sc.direction)} ${sc.entry_desc}`;
-            break;
-        case 'ready':
-            if (sc) return `${_arrowFor(sc.direction)} ${sc.entry_desc}`;
-            break;
-        case 'prepare':
-            if (sc) {
-                const trig = sc.trigger_desc || sc.entry_desc;
-                return `${_arrowFor(sc.direction)} ${trig}`;
-            }
-            break;
-        case 'watching':
-        case 'bias_confirmed':
-            if (sc) {
-                const lvl = sc.entry_desc || sc.trigger_desc;
-                return `${_arrowFor(sc.direction)} ОЧІКУЄ ${lvl}`;
-            }
-            break;
-        case 'stay_out':
-            // Prefer first warning (degraded reason), else next_area context
-            if (narrative.warnings && narrative.warnings.length > 0) {
-                return narrative.warnings[0];
-            }
-            break;
-    }
-
-    // Fallback path — Арчі-presence-driven copy.
-    //
-    // CRITICAL: archi_presence.status comes from WakeEngine (platform side)
-    // and reflects "wake conditions armed" — NOT "bot process is alive".
-    // Backend ships status="watching" even when the Архi bot is killed.
-    // Real liveness gate = `archi_thesis` field, written by the bot to
-    // Redis after each Sonnet analysis. If thesis is missing OR went
-    // 'stale' (per narrative_enricher.py freshness rule) → bot is silent
-    // → render "вимкнений" with silence hours rather than fake "спостерігає".
     const presence = narrative.archi_presence;
     const thesis = narrative.archi_thesis;
+    // Liveness gate per ADR-0049 + narrative_enricher freshness rule.
+    // Bot writes thesis to Redis on every Sonnet call — stale freshness
+    // OR missing thesis means bot has been silent for too long.
     const botAlive = !!thesis && thesis.freshness !== 'stale';
 
+    // 1. Bot alive AND has fresh thesis → show Арчi's actual voice.
+    if (botAlive && thesis) {
+        return thesis.thesis;
+    }
+
+    // 2. Bot offline (no thesis OR stale) → truthful offline copy.
     if (presence && !botAlive) {
-        // Offline / silent — surface that truthfully + silence_h hint.
         const silence =
-            presence.silence_h > 0 ? ` · ${presence.silence_h.toFixed(1)}h` : '';
+            presence.silence_h > 0
+                ? ` · ${presence.silence_h.toFixed(1)}h`
+                : '';
         return `Арчі вимкнений${silence}`;
     }
 
+    // 3. Bot alive but hasn't written thesis yet → presence-driven status.
+    //    (Cold start / brand-new symbol where Архi hasn't analyzed yet.)
     if (presence) {
-        // Bot alive (thesis-fresh) — use WakeEngine semantic status.
         const statusUk = _ARCHI_STATUS_UK[presence.status] || presence.status;
         const focus = presence.focus ? ` · ${presence.focus}` : '';
         return `Арчі ${statusUk}${focus}`;
     }
 
-    // Last resort: backend's own next_area hint (rare path — presence missing)
-    return narrative.next_area || '';
+    // 4. Nothing Архi-related shipped at all — empty pill text.
+    //    (Caller may collapse the pill entirely.)
+    return '';
 }
