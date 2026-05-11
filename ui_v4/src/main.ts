@@ -13,4 +13,21 @@ const el = document.getElementById('app');
 if (!el) throw new Error('Mount target #app not found');
 const app = mount(App, { target: el });
 
+// ADR-0071 P5 — Service Worker registration (PWA shell-only V1).
+// Skipped у dev mode (Vite localhost:5173 + HMR) — SW конфліктує з HMR.
+// Production registers /sw.js → enables install prompt + offline fallback.
+// No skipWaiting у V1 — new SW activates на user reload.
+if ('serviceWorker' in navigator && !import.meta.env.DEV) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('/sw.js', { scope: '/' })
+      .then((reg) => {
+        console.log('[PWA] SW registered, scope:', reg.scope);
+      })
+      .catch((err) => {
+        console.warn('[PWA] SW register failed:', err);
+      });
+  });
+}
+
 export default app;

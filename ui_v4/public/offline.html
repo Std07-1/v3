@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#0D1117" />
+<title>AI · ONE v3 — offline</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    background: #0D1117;
+    color: #E6EDF3;
+    font-family: system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+  }
+  .wrap {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    padding: 24px;
+    text-align: center;
+  }
+  .mark {
+    width: 96px;
+    height: 96px;
+    opacity: 0.9;
+  }
+  .line {
+    font-family: "JetBrains Mono", "SF Mono", monospace;
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    color: #9B9BB0;
+    text-transform: uppercase;
+  }
+  .line b { color: #D4A017; font-weight: 600; }
+  .text {
+    font-size: 15px;
+    color: #C0C4CC;
+    max-width: 320px;
+    line-height: 1.5;
+  }
+  .retry {
+    margin-top: 12px;
+    background: linear-gradient(135deg, #D4A017 0%, #22CC8F 100%);
+    border: 0;
+    color: #0D1117;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 12px 28px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: transform 0.15s ease, opacity 0.15s ease;
+  }
+  .retry:hover { transform: translateY(-1px); opacity: 0.92; }
+  .retry:active { transform: translateY(0); }
+  .footer {
+    position: fixed;
+    bottom: 20px;
+    font-size: 11px;
+    color: #5D6068;
+    font-family: monospace;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <img class="mark" src="/brand/mark-v4.svg" alt="V3" />
+  <div class="line"><b>Підключення втрачено</b></div>
+  <div class="text">Чарт offline. Live-дані недоступні поки немає з'єднання з сервером.</div>
+  <button class="retry" onclick="location.reload()">Спробувати знову</button>
+</div>
+<div class="footer">AI · ONE v3 · PWA shell</div>
+</body>
+</html>

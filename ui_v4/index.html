@@ -31,11 +31,16 @@
     <meta http-equiv="Expires" content="0" />
     <title>AI · ONE v3</title>
     <!-- ADR-0066 PATCH 03 slot 2 — owner redesign 2026-05-12: V3 mark v4
-         (precise contour trace from spec image, gold→teal gradient #D4A017→#22CC8F
-         on dark canvas #060F20). Replaces mark-v3.svg (V triangle + small "3" curve).
-         viewBox 256×256 з вбудованим background — favicon видно і на light, і на
-         dark browser themes. PNG variants для PWA generated via gen-icons script. -->
+         (precise contour trace from spec image, gold→teal gradient #D4A017→#22CC8F).
+         viewBox tight crop "68 69 116 116" для max favicon density. -->
     <link rel="icon" type="image/svg+xml" href="/brand/mark-v4.svg" />
+    <!-- ADR-0071 P1 — PNG favicon fallbacks (older browsers / non-SVG support). -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png" />
+    <!-- ADR-0071 P1 — PWA manifest (Chrome/Edge install prompt + standalone). -->
+    <link rel="manifest" href="/manifest.json" />
+    <!-- ADR-0071 P1 — Apple touch icon (iOS Safari "Add to Home Screen"). -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon-180.png" />
     <style>
         /* ADR-0066 PATCH 05: minimal token stub in <head> to avoid FOUC
            before tokens.css loads via main.ts. Values mirror tokens.css

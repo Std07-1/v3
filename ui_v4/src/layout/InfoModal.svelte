@@ -13,6 +13,7 @@
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
     import Brand from "./Brand.svelte";
+    import InstallButton from "./InstallButton.svelte";
     import DiagnosticsView from "./DiagnosticsView.svelte";
     import { OSS_NOTICES } from "../data/oss-notices";
 
@@ -171,6 +172,10 @@
                             analytical tools — final trading decisions remain
                             with the operator.
                         </p>
+                        <!-- ADR-0071 P6 — PWA install prompt у About tab.
+                             Self-hides якщо встановлено / dismissed / browser
+                             не підтримує beforeinstallprompt (iOS Safari fallback). -->
+                        <InstallButton />
                     </div>
                 {:else if activeTab === "credits"}
                     <div class="tab-pane">

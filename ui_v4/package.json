@@ -8,7 +8,8 @@
         "build": "vite build",
         "preview": "vite preview",
         "typecheck": "svelte-check --tsconfig ./tsconfig.json",
-        "test": "vitest run"
+        "test": "vitest run",
+        "gen-icons": "node scripts/gen-icons.mjs"
     },
     "dependencies": {
         "lightweight-charts": "5.1.0",
@@ -17,11 +18,12 @@
     "devDependencies": {
         "@sveltejs/vite-plugin-svelte": "^5.0.0",
         "@tsconfig/svelte": "^5.0.4",
+        "@types/uuid": "^10.0.0",
+        "sharp": "^0.34.5",
         "svelte": "^5.0.0",
         "svelte-check": "^4.0.0",
         "typescript": "^6.0.2",
         "vite": "^6.0.0",
-        "@types/uuid": "^10.0.0",
         "vitest": "^2.0.0"
     }
 }
