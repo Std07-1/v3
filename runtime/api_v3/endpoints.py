@@ -914,8 +914,7 @@ def _parse_smc_zones_tf(
 ) -> tuple[Optional[str], Optional[web.Response]]:
     """Accept tf in two formats — alpha label OR seconds (ADR-0059 §3.1.2 contract harmonization).
 
-    Cowork bot historically sends `tf=900` (seconds, mirroring `narrative/snapshot`
-    convention). Internal callers send `tf=M15` (alpha, the documented contract).
+    External callers may send `tf=900` (seconds) or `tf=M15` (alpha, the documented contract).
     Both resolve to the same internal label so /smc/zones works for either.
 
     Mapping seconds → label:
@@ -1175,7 +1174,7 @@ def _cursor_decode(
     """Parse opaque cursor → dict or 400 error envelope.
 
     Errors split: `cursor_invalid` for base64 problems, `cursor_corrupt` for
-    JSON / shape problems — gives cowork operators a clear hint.
+    JSON / shape problems — gives callers a clear hint.
     """
     if not raw:
         return None, _error_response(
@@ -1230,7 +1229,7 @@ def _smc_zones_apply_cursor(
 
     Returns `(remaining_zones, warnings)`. When the cursor's snapshot_id no
     longer matches the current snapshot, we still serve the next page on a
-    best-effort basis but emit `cursor_stale` so cowork can decide whether to
+    best-effort basis but emit `cursor_stale` so the caller can decide whether to
     restart pagination.
     """
     warnings: List[str] = []
@@ -1874,18 +1873,6 @@ def register_routes(
     # ADR-0059 §3.1.2 — paginated zones endpoint (slice 059.2).
     app.router.add_get("/api/v3/smc/zones", _handle_smc_zones)
     app.router.add_get("/api/v3/smc/levels", _handle_smc_levels)
-    # ADR-001 (cowork.001) — persistent thesis memory under /api/v3/cowork/*.
-    # Imported lazily to avoid a circular import (runtime.api_v3.cowork imports
-    # helpers from this module).
-    from runtime.api_v3.cowork import register_cowork_routes
-
-    # cowork.005 — event_flag endpoint reads `event_flag.json` from this dir
-    # (same dir the watcher daemon writes to). Env-driven SSOT.
-    cowork_triggers_dir_env = os.environ.get("COWORK_TRIGGERS_DIR", "").strip()
-    cowork_triggers_dir = (
-        Path(cowork_triggers_dir_env) if cowork_triggers_dir_env else None
-    )
-    register_cowork_routes(app, triggers_dir=cowork_triggers_dir)
     # Catch-all so typos under /api/v3/ return a structured 404 envelope
     # (F-S2-004) instead of aiohttp's plain text default.
     app.router.add_route("*", "/api/v3/{tail:.*}", _handle_v3_not_found)

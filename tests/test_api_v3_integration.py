@@ -457,7 +457,7 @@ async def test_v30_reader_tolerates_v31_envelope(aiohttp_client, tmp_path):
         assert required in body, f"missing v3.0 key: {required}"
     # New v3.1 fields are inside data.* — a v3.0 reader that whitelists fields
     # would silently drop them (forward compat). Here we simply assert they
-    # exist and have stable types so cowork can opt in safely.
+    # exist and have stable types.
     data = body["data"]
     assert "snapshot_id" in data
     assert isinstance(data["snapshot_id"], str)

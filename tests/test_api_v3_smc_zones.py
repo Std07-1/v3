@@ -415,7 +415,7 @@ async def test_smc_zones_validation_errors(aiohttp_client, tmp_path):
 
 async def test_smc_zones_tf_accepts_seconds_format(aiohttp_client, tmp_path):
     """ADR-0059 contract harmonization: ?tf accepts BOTH alpha labels (M15/H1/H4)
-    AND seconds (900/3600/14400). Cowork bot historically sends seconds, while
+    AND seconds (900/3600/14400). External callers may send seconds while the
     documented contract is alpha labels — endpoint normalizes both to internal
     label so neither caller breaks.
     """
@@ -434,18 +434,18 @@ async def test_smc_zones_tf_accepts_seconds_format(aiohttp_client, tmp_path):
     uds = _StubUds({900: [_make_m15_bar(close=100.0)]})
     client = await aiohttp_client(_build_app(runner=runner, uds=uds, tmp_path=tmp_path))
 
-    # Seconds format (cowork convention) — must succeed
+    # Seconds format (tf=900/3600/14400) — must succeed
     for tf_seconds, expected_label in [("900", "M15"), ("3600", "H1"), ("14400", "H4")]:
         res = await client.get(
             f"/api/v3/smc/zones?symbol=XAU/USD&tf={tf_seconds}", headers=_auth()
         )
-        assert res.status == 200, (
-            f"tf={tf_seconds} should succeed (resolves to {expected_label}); got {res.status}"
-        )
+        assert (
+            res.status == 200
+        ), f"tf={tf_seconds} should succeed (resolves to {expected_label}); got {res.status}"
         body = await res.json()
-        assert body["data"]["tf"] == expected_label, (
-            f"tf={tf_seconds} should resolve to {expected_label}; got {body['data']['tf']!r}"
-        )
+        assert (
+            body["data"]["tf"] == expected_label
+        ), f"tf={tf_seconds} should resolve to {expected_label}; got {body['data']['tf']!r}"
 
     # Alpha format (case-insensitive) — must succeed
     for tf_alpha, expected_label in [("M15", "M15"), ("h1", "H1"), ("H4", "H4")]:
@@ -466,9 +466,9 @@ async def test_smc_zones_tf_accepts_seconds_format(aiohttp_client, tmp_path):
         assert body["data"]["code"] == "tf_invalid"
         # Error response includes both formats in `allowed`
         allowed = body["data"]["allowed"]
-        assert "M15" in allowed and "900" in allowed, (
-            f"allowed list should include both formats; got {allowed!r}"
-        )
+        assert (
+            "M15" in allowed and "900" in allowed
+        ), f"allowed list should include both formats; got {allowed!r}"
 
 
 async def test_smc_zones_warmup_no_m15_bar(aiohttp_client, tmp_path):

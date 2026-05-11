@@ -67,10 +67,6 @@ ui_v4/dist/
 # ── Trader Bot (PROPRIETARY, не в репо) ─────────────────────
 /trader-v3/
 
-# ── Cowork — code IS in repo, runtime data is NOT (CW2/CW4) ─
-/cowork/data/published_thesis*.jsonl
-/cowork/data/_archive/
-
 # ── Журнали, стан, діагностика ──────────────────────────────
 # changelog.jsonl — трекується (потрібен для роботи з інших машин)
 /rebuild_state.json

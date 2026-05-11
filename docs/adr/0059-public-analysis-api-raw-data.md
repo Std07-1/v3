@@ -1,6 +1,6 @@
 # ADR-0059: Public Analysis API — Raw Data Access for External Consumers
 
-- **Status**: Deferred (2026-05-04) — paused pending dedicated deploy session; см. changelog `20260504-008`
+- **Status**: **Withdrawn — Failed Experiment** (2026-05-11). Cowork ідея визнана провальною: ~1500 преміум-запитів витрачено на промпт-tuning, 5-scenario gate так і не пройдено, прийнятої цінності бот не дав. Endpoints, runner, event_watcher, supervisor program, runtime data, токен `cowork_event_watcher` — повністю видалено (локально + VPS). Зберігається лише як запис прийнятого і відхиленого рішення. Початковий статус: Deferred (2026-05-04).
 - **Date**: 2026-05-04
 - **Author**: Стас
 - **Initiative**: `public_api_v1` (continuation)

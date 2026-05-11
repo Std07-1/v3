@@ -19,7 +19,7 @@
 | Проєкт | Тип документації | Аудиторія | Ритм оновлень |
 |--------|------------------|-----------|---------------|
 | **v3 platform** | Архітектурна (ADR, contracts, system overview, config reference) | Інженери, AI agents | При кожному патчі |
-| **trader-v3 (Арчі)** | Operational + AI-facing (CURRENT_STATE, ARCHITECTURE, CODEMAP, CLAUDE.md, personality prompt) | AI agents (Copilot, Claude Desktop, Cowork), оператор (Стас), сам Арчі | При кожному deploy, постійно |
+| **trader-v3 (Арчі)** | Operational + AI-facing (CURRENT_STATE, ARCHITECTURE, CODEMAP, CLAUDE.md, personality prompt) | AI agents (Copilot, Claude Desktop), оператор (Стас), сам Арчі | При кожному deploy, постійно |
 
 **Твій головний замовник** — не людина о 02:00 ночі (хоча і він теж). Твій головний замовник — **новий AI agent**, який читає CLAUDE.md і має за 30 секунд зрозуміти: що працює, що ні, де код, як деплоїти, що не чіпати.
 
@@ -57,7 +57,7 @@
 | Пріоритет | Документ | Аудиторія | Що містить | SLA |
 |-----------|----------|-----------|------------|-----|
 | **P0** | `docs/CURRENT_STATE.md` | AI agents, оператор | **Live snapshot**: що задеплоєно, що працює, що ні, backlog, deploy commands | **Кожен deploy** |
-| **P0** | `CLAUDE.md` (repo root) | AI agents (Claude Desktop, Copilot, Cowork) | Повний контекст: архітектура, рішення, трапи, задачі, git state, VPS reference | При зміні архітектури |
+| **P0** | `CLAUDE.md` (repo root) | AI agents (Claude Desktop, Copilot) | Повний контекст: архітектура, рішення, трапи, задачі, git state, VPS reference | При зміні архітектури |
 | **P0** | `docs/ARCHITECTURE.md` | Архітектори, AI agents | Чому система побудована так: invariants, design rationale, module responsibilities | При зміні архітектури |
 | **P1** | `docs/CODEMAP.md` | AI agents, розробники | Кожен модуль: що робить, що експортує, залежності, трапи | При зміні модулів |
 | **P1** | `smc_trader_prompt_v3.md` | Арчі (personality DNA) | Промпт ~750 рядків = "ДНК" Арчі. НЕ РЕДАГУВАТИ зміст, тільки перевіряти що references актуальні |
@@ -232,7 +232,7 @@ Fix: {що змінити}
 
 ### 6.2 `CLAUDE.md` (trader-v3 root)
 
-**AI onboarding doc.** Кожен новий Claude/Copilot/Cowork session починається з нього.
+**AI onboarding doc.** Кожен новий Claude/Copilot session починається з нього.
 
 Що тримати актуальним:
 - **§6 Поточний стан** — deployed features, NOT deployed, commit hashes

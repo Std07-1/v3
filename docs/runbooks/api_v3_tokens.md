@@ -40,10 +40,10 @@ python -m tools.api_v3.revoke_token --consumer old_news_bot
 ```bash
 cd /opt/smc-v3
 PYTHONPATH=. .venv/bin/python -m tools.api_v3.issue_token \
-    --consumer cowork_bot \
+    --consumer external_consumer \
     --scope read \
     --ttl-days 90
-# stderr: OK consumer='cowork_bot' scope='read' ttl_days=90 expires=2026-08-01T...Z
+# stderr: OK consumer='external_consumer' scope='read' ttl_days=90 expires=2026-08-01T...Z
 # stdout: tk_a3f4...
 ```
 
@@ -56,14 +56,14 @@ ADR §3.4 — **7 днів grace** для покриття weekend deployments +
 
 1. **День 0**: видати новий токен
    ```bash
-   .venv/bin/python -m tools.api_v3.issue_token --consumer cowork_bot --ttl-days 90
+   .venv/bin/python -m tools.api_v3.issue_token --consumer external_consumer --ttl-days 90
    ```
-2. **День 0**: повідомити consumer (Telegram): «Новий токен: `tk_NEW`. Старий `tk_OLD` працюватиме до `<old_expires + 7d>`.»
+2. **День 0**: повідомити consumer (вибраний канал): «Новий токен: `tk_NEW`. Старий `tk_OLD` працюватиме до `<old_expires + 7d>`.»
 3. **День 0–1**: consumer оновлює свою конфігурацію
 4. **День 0–7**: обидва токени активні. Verify через `list_tokens`:
    ```bash
    .venv/bin/python -m tools.api_v3.list_tokens
-   # бачимо обидва запити для cowork_bot
+   # бачимо обидва запити для external_consumer
    ```
 5. **День 7**: monitor `data_v3/_audit/api_v3_access.jsonl` — старий токен має бути silent (zero hits протягом 24h)
 6. **День 7**: revoke старий токен:
@@ -79,7 +79,7 @@ Recommended path = S2 (rotation).
 
 ```bash
 .venv/bin/python -m tools.api_v3.extend_token --token tk_X --days 90
-# stdout: OK extended token=tk_X... consumer='cowork_bot' new_expires=2026-08-01...Z
+# stdout: OK extended token=tk_X... consumer='external_consumer' new_expires=2026-08-01...Z
 ```
 
 `extend_token` атомарно перезаписує і Redis TTL, і `expires` поле в JSON value (audit accuracy).

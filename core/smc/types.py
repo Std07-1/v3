@@ -206,9 +206,7 @@ class SmcLevel:
 
 
 # ── Range Exhaustion (ADR-0053) ──────────────────────────────────────────────
-RANGE_ANCHOR_KINDS = frozenset(
-    {"d1_open", "london_open", "ny_open", "week_open"}
-)
+RANGE_ANCHOR_KINDS = frozenset({"d1_open", "london_open", "ny_open", "week_open"})
 RANGE_PHASES = frozenset({"early", "mid", "late", "exhausted"})
 
 
@@ -391,7 +389,6 @@ class NarrativeBlock:
         Used by:
         - GET /api/v3/narrative/snapshot (ADR-0058 endpoint)
         - ws_server delta_loop frame builder
-        - Cowork bot (ADR-0059 §3.1 reference flow)
 
         Output shape matches `core.smc.narrative.narrative_to_wire(block)`
         exactly (instance-method facade over the module-level function so

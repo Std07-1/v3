@@ -1,6 +1,6 @@
 # ADR-0058: Public Read-Only API + Token Auth для External Consumers
 
-- **Status**: Accepted (2026-05-03, post Compliance review — 0 S0, 8 S1 amendments applied, 5 S2 amendments applied)
+- **Status**: Accepted (2026-05-03, post Compliance review — 0 S0, 8 S1 amendments applied, 5 S2 amendments applied). **Update 2026-05-11**: ADR-0059 (cowork analysis API) withdrawn as failed experiment — token auth infrastructure залишається в коді як general-purpose mechanism. На VPS активний 1 token (`old_news_bot`), token `cowork_event_watcher` revoked.
 - **Date**: 2026-05-03
 - **Author**: Стас
 - **Initiative**: `public_api_v1`
