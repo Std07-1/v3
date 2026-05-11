@@ -830,17 +830,23 @@
      no access to theme/style/diagnostics. Was buggy hidden previously. */
   @media (max-width: 640px) {
     .top-right-bar {
-      /* True top-right corner anchor — viewport edge, not chart edge.
-         Screen widths vary (320px–428px+), price scale width may shift with
-         autoScale; anchoring to viewport keeps ☰ in the same physical spot
-         regardless of device. Backdrop on the button (below) handles the
-         visual collision with price-scale labels rendered beneath. */
-      right: calc(4px + var(--safe-right, 0px));
-      top: calc(4px + var(--safe-top, 0px));
-      padding: 5px 8px;
+      /* ☰ position — empirically locked 2026-05-11 via live mobile tuning.
+         Geometry (measured on actual device, NOT calculated):
+           [ chart canvas ............ ☰ ][ price scale ]
+                                      ↑ │  ↑ "4712.00" etc
+                                      │ 4px gap
+                                      44px from viewport right edge
+         Mobile price scale renders at ~40px wide on this device (LESS than
+         engine.ts isMobile minimumWidth:44 — owner-verified, do NOT trust
+         minimumWidth as actual width). right:44 = 40 scale + 4 gap.
+         If price-scale width changes (engine.ts override or different
+         device), re-measure: take screenshot, count pixels from right edge
+         to where labels start, set right = that + desired gap.
+         top:2px aligns vertically with ChartHud row 1 (XAU/USD · WAIT). */
+      right: calc(44px + var(--safe-right, 0px));
+      top: calc(2px + var(--safe-top, 0px));
+      padding: 0;
       gap: 4px;
-      /* Ensure ☰ sits above LWC price-scale layer; z-index of parent is
-         already high but mobile WebViews are inconsistent — explicit wins. */
       z-index: 40;
     }
     /* Hidden: ATR/RV peripheral row (small screen — chrome economy),
@@ -853,32 +859,32 @@
     .narrative-wrap {
       display: none;
     }
-    /* ☰ stays visible — it's the only entry point to overflow menu on mobile.
-       Apple HIG / Material Design min touch target = 44×44px. Bump padding
-       so the actual hit-box meets that, even though glyph is small.
-       Explicit backdrop + border because at right:4px the button sits on top
-       of the LWC right-price-scale labels (4960.00 etc) — it MUST be
-       self-contained visually or it reads as part of the price column. */
+    /* ☰ on mobile: fully transparent button + glyph anchored to top of
+       hit-box so it visually sits ON THE SAME ROW as ChartHud row 1
+       (XAU/USD · M15 · WAIT). 44×44px hit-area preserved via asymmetric
+       padding (small top, large bottom). User explicit: "прозоре · в
+       одному row з ціною · відступи від ціни". */
     .tr-overflow-btn {
       min-width: 44px;
       min-height: 44px;
-      padding: 10px 12px;
+      /* top: 2px → glyph appears at row 1 vertical center.
+         bottom: 22px → invisible hit-extension downward (into row 2 area). */
+      padding: 2px 12px 22px 12px;
       font-size: var(--t1-size, 18px);
+      line-height: 1;
       display: inline-flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
-      background: rgba(13, 17, 23, 0.85);
-      border: 1px solid rgba(120, 123, 134, 0.25);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border-radius: 8px;
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      /* Legibility above any layer (price labels, candles, grid). */
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
     }
-    /* @supports fallback for old Android WebView lacking backdrop-filter.
-       Solid bg matches our dark canonical, no transparency dependence. */
-    @supports not (backdrop-filter: blur(8px)) {
-      .tr-overflow-btn {
-        background: #0D1117;
-      }
+    /* Tap feedback only on :active — no idle plate. */
+    .tr-overflow-btn:active {
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
     }
     /* Disable text selection on mobile chrome — accidental long-press on the
        ☰ glyph during a chart pan was selecting the character. Narrative text
