@@ -67,6 +67,10 @@
   let smcPanelOpen = $state(false);
   let displayMode = $state<DisplayMode>("focus");
 
+  // ADR-0073 option D — Crosshair toggle прибрано (2026-05-12).
+  // LWC applyOptions після init не реактивує labelVisible (quirk).
+  // `labelVisible: false` lock назавжди у engine.ts crosshair config.
+
   // Symbol/TF persistence (drawing_tools_v1)
   // Priority: URL query params > localStorage
   // Seconds→label map for URL params (screenshot bot sends ?tf=3600)

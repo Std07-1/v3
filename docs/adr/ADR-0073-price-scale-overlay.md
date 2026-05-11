@@ -5,8 +5,8 @@
 | Поле           | Значення                                                              |
 | -------------- | --------------------------------------------------------------------- |
 | ID             | ADR-0073                                                              |
-| Статус         | **ACCEPTED** (rev 2 — owner sign-off 2026-05-12 після Sonnet 4.6 deep-review B1/B2/H1–H3/L1–L4 + 4 cleanup tweaks) |
-| Дата           | 2026-05-11 (rev 2: 2026-05-12; ACCEPTED: 2026-05-12)                  |
+| Статус         | **ACCEPTED** (rev 5 — option D minimal-style LWC native, 2026-05-12; rev 2/3/4 all retracted) |
+| Дата           | 2026-05-11 (rev 2/3/4/5: 2026-05-12)                                  |
 | Автори         | Станіслав + Opus 4.7 + Sonnet 4.6 review agents                       |
 | Замінює        | —                                                                     |
 | Розширює       | ADR-0024 §18.7 (правила overlay-рендеру LWC — double-RAF при range change); ADR-0066 (visual identity tokens); ADR-0072 (mobile canonical — позиція ☰ буде amend-нута). Виправлено rev 2: ADR-0042 викинуто (category error — це state-sync, не display-budget). |
@@ -73,6 +73,188 @@
   — chip не під пальцем.
 
 **§"Відкриті питання" розв'язано** (rev 1 §Open Questions → rev 2 §"Розв'язані відповіді" нижче). Стара секція ще лишається для historical context, але всі 7 питань тепер мають locked answers у §Decision.
+
+---
+
+## Changelog rev 2 → rev 3 (2026-05-12)
+
+**Тригер**: rev 2 implementation attempt (P2-P6 + hybrid pivot) розкрив дві
+архітектурні правди:
+
+1. **Pure overlay (`visible: false`) НЕ ламає LWC math** — `priceToCoordinate` /
+   `coordinateToPrice` працюють і коли scale прихована (моє припущення в rev 2
+   що ламає — було неправильним; реальний bug був у `dataByIndex(Math.floor(to))`
+   що повертає null через `timeScale.rightOffset:3`).
+2. **Y-zoom infrastructure ВЖЕ існує** у `interaction.ts` (state.manualRange +
+   autoscaleProvider + applyWheelZoom + axisZoomState). Триггериться через
+   `isPointerInPriceAxis()` що fallback-ує до `PRICE_AXIS_FALLBACK_WIDTH_PX = 60`
+   коли LWC `priceScale.width()` повертає 0 (тобто коли scale прихована).
+   **Тобто Y-zoom працює "з коробки" — ми просто визначаємо HIT ZONE.**
+
+Owner-rejected rev 2 hybrid pivot ("ні підлаштовуємось") → переходимо до
+**own-implementation V2** (повне володіння):
+
+**Архітектурні зміни rev 3**:
+
+- `rightPriceScale.visible: false` (повертається з rev 2 hybrid pivot)
+- `PRICE_AXIS_FALLBACK_WIDTH_PX: 60 → 30` (per owner spec "правий 30px canvas").
+  Y-zoom (wheel anchor + drag + pan) автоматично спрацьовує у цих 30px завдяки
+  існуючому `isPointerInPriceAxis` fallback path.
+- **Custom magnet** у `_drawCrosshairPriceLabel` (новий метод, rev 3 only): при
+  `_magnetEnabled=true`, displayed price у chip snap-иться до найближчого з 4
+  OHLC values (open / high / low / close) поточного видимого бара. Реалізація:
+  ~15 LOC у OverlayRenderer. **НЕ використовує LWC `CrosshairMode.Magnet`** —
+  той не працює без visible scale + має іншу логіку.
+- `dataByIndex(Math.floor(logical.to))` → `dataByIndex(lastIndex, MismatchDirection.NearestLeft)`.
+  Bug fix причини "chip без price" з rev 2. Виявлено перед rollback.
+- `OVERLAY_STRIP_WIDTH_PX: 56 → 30` для синхронізації з Y-zoom hit zone.
+  Labels still right-align to `cssW - 4` (можуть візуально виходити за 30px
+  smartphone-формат для довгих BTC цін — це OK, labels float на overlay).
+
+**Що rev 3 НЕ зачіпає** (rev 2 contracts лишаються):
+
+- B1/B2/H1/H2/H3 fixes — всі залишаються (B1 series.priceToCoordinate, B2
+  param capture, H1 _drawChip helper, H2 priceFormatter, H3 hardcoded hex)
+- A3 dashed connector V1, A4 touch offset
+- 2 toggles ("Crosshair price" + "Magnet") default OFF з localStorage
+- Periodic labels density clamp(3,n,12)
+- ☰ anchor через `--overlay-strip-width` CSS var (значення 30 тепер)
+
+**LWC залишається**: candles render, grid render, volume render, crosshair lines
+(vert/horz dashed), `priceToCoordinate` / `coordinateToPrice` math primitives.
+
+**LWC більше НЕ використовується для**: магніт snap, Y-zoom drag, Y-zoom wheel
+(вже не використовувався — `interaction.ts` володіє), price-scale labels,
+last-value chip, price-line (всі ці — наш overlay).
+
+---
+
+## Changelog rev 3 → rev 4 (2026-05-12) — Hybrid Pivot BACK
+
+**Тригер**: rev 3 own-implementation deploy attempt (build green локально) показав
+що мої припущення про LWC behavior без емпіричної перевірки були неправильними.
+
+**Підтверджені помилки rev 3**:
+
+1. **Y-zoom drag НЕ працював** з `rightPriceScale.visible: false`. Причина:
+   `interaction.ts:getPaneMetrics` коли LWC scale прихована — `priceScale.width()`
+   повертає 0, але `paneSize().width` повертає **full canvas width** (LWC pane
+   розширюється у місце прихованої scale). Result: `paneWidth = full canvas`,
+   `axisLeft = paneWidth = right edge`, `axisRight = right edge` → `isPointerInPriceAxis`
+   FALSE для будь-якої mouse позиції. Існуюча Y-zoom infrastructure ніколи не
+   тригериться. `PRICE_AXIS_FALLBACK_WIDTH_PX` fallback працює тільки коли
+   `paneSize.width === 0` (chart not ready) — після першого render мертвий.
+
+2. **Periodic labels likely НЕ render** з `visible: false`. Моє rev 3 changelog
+   стверджував "LWC math primitives працюють регардлес of scale visibility (чиста
+   математика)" — це було **припущення без empіричної перевірки**. Owner
+   тестував: "не видно нічого". Likely `getVisibleRange()` повертає null коли
+   scale hidden → `_drawPriceLabels` early-returns.
+
+**Pivot BACK to hybrid** (per owner direction "пробуємо B"):
+
+- `rightPriceScale.visible: false` → `visible: true`
+- Додано `textColor: 'rgba(0, 0, 0, 0)'` (LWC labels invisible)
+- Додано `borderVisible: false` (без вертикальної лінії)
+- Додано `ticksVisible: false` (без tick marks)
+- Додано `minimumWidth: 30` (точне sync з `OVERLAY_STRIP_WIDTH_PX` + `PRICE_AXIS_FALLBACK_WIDTH_PX`)
+
+**Тепер працює**:
+
+- Y-zoom (wheel/drag/pan) через нормальний path `isPointerInPriceAxis`:
+  `priceScaleWidth = 30 > 0` → axis detection coverage 30px справа
+- `priceToCoordinate` / `coordinateToPrice` повертають валідні значення
+- `getVisibleRange()` повертає валідний діапазон → periodic labels render
+
+**Наш overlay лишається повним**: periodic labels, lastValue chip + dashed
+connector, crosshair chip toggle, own magnet snap (4 OHLC), gradient backdrop
+hint. Рендериться поверх invisible LWC strip.
+
+**LWC magnet** (`CrosshairMode.Magnet`) — НЕ використовуємо. Наш magnet toggle
+у overflow menu drive-ить own implementation у `_drawCrosshairPriceLabel`.
+`engine.ts setCrosshairMagnet` метод лишається в коді як unused (можливо для
+майбутнього use case), але ChartPane $effect calls `overlayRenderer.setMagnetEnabled`.
+
+**Архітектурний lesson**: pure overlay vs LWC integration — НЕ можна реалізувати
+без переписування LWC math primitives. Hybrid `visible:true + invisible text` —
+це РЕАЛІСТИЧНА архітектура, не compromise. Pure approach виявився не "elegantna
+purity", а "wishful thinking без empirical testing". rev 4 — чесне визнання.
+
+---
+
+## Changelog rev 4 → rev 5 (2026-05-12) — Option D Minimal-Style Final
+
+**Тригер**: rev 4 hybrid attempt теж дав візуальні артефакти що owner не сприйняв
+("свічок не видно у scale зоні" — LWC reservує 30px незалежно від textColor).
+Спроба додати власний overlay (rev 2/3/4) на додачу до LWC викликала ланцюг
+проблем (Y-zoom не працював, magnet не реактивував, crosshair toggle не
+applyOptions-нувся). Owner direction: "повний rollback" → потім ідея "option D
+minimal-style" (мінімально стилізувати LWC native, без overlay).
+
+**Що ship-иться у rev 5** (final, 5 LOC NET від pre-ADR-0073 у engine.ts):
+
+```typescript
+layout: {
+  ...,
+  fontSize: isMobile ? 10 : 12,    // mobile compactness
+},
+crosshair: {
+  ...,
+  horzLine: {
+    ...,
+    labelVisible: false,             // crosshair price chip OFF (owner pref)
+  },
+},
+rightPriceScale: {
+  borderVisible: true,               // restored (false ламає crosshair chip rendering quirk)
+  ticksVisible: false,
+  autoScale: true,
+  minimumWidth: 30,                  // компактна вузька strip (vs default 56)
+  scaleMargins: ...,
+},
+```
+
+**Що ВИДАЛЕНО** (rev 2/3/4 attempts retracted):
+
+- OverlayRenderer custom price-label methods (`_drawPriceLabels`,
+  `_drawLastValueChip`, `_drawCrosshairPriceLabel`, `_drawPriceStripBackdrop`)
+- `_drawChip` helper, `_computeNiceInterval`, `_enumerateLabelPrices`
+- Own magnet snap (4 OHLC) state + setter
+- Crosshair chip toggle UI + state + localStorage + ChartPane $effect wires
+- `OVERLAY_STRIP_WIDTH_PX` constant + `--overlay-strip-width` CSS var
+- `setCrosshairLabelVisible` engine method (LWC `applyOptions` після init не
+  реактивує `labelVisible` — quirk не вирішений; toggle мав би shake-ефект)
+- `setCrosshairMagnet` engine method (LWC native не використовуємо)
+- `MismatchDirection` import + `dataByIndex(NearestLeft)` (overlay немає →
+  не потрібно)
+- Gradient backdrop hint у правому 30px
+
+**Що залишається з рев 2 amendments**:
+
+- ADR-0072 NarrativeSheet forward-ref `0073→0074` (мобільна Архі-surface
+  тепер ADR-0074, ще не написана). Не реверту — це окрема правда.
+- README_DEV.md surface contracts row для ADR-0073 — зміст оновити пізніше
+  з actual ship (5 LOC engine.ts diff, не 200+ overlay).
+- `interaction.ts` `PRICE_AXIS_FALLBACK_WIDTH_PX` = 30 (sync з minimumWidth:30
+  для кращого Y-zoom hit-zone fallback path).
+
+**Console hygiene** (rev 5 окремий tweak): `interaction.ts` debug `dbg()`
+тепер gated через `window.__priceAxisDebug` flag (default OFF). Раніше logs
+друкувались always-on — owner повідомив spam у DevTools. Для майбутніх debug:
+у DevTools `window.__priceAxisDebug = true` → reload → logs знову.
+
+**Stash зберігаємо** (`git stash@{0}`) — повний код P2-P6 + toggles + rev 3/4
+attempts. Якщо колись виявиться що power-user хоче власний overlay (е.g.,
+адаптивні chip-и для multi-symbol comparison) — recover через `git stash pop`.
+
+**Final architectural ledger**:
+
+- Trader-facing: LWC native chip (теал/червоний), LWC native periodic labels
+  (~10-12px depending on viewport), LWC native crosshair lines, LWC native Y-zoom
+  drag/wheel, LWC native magnet (default Normal, no toggle UI).
+- Лиш одна зміна chrome: `crosshair.horzLine.labelVisible: false` (chip що
+  follow-ить курсор приховано — owner pref).
+- Mobile: smaller font (10px) автоматично робить scale ~30-40% компактнішим.
 
 ---
 

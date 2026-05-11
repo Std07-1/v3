@@ -122,10 +122,15 @@ export function setupPriceScaleInteractions(
 ): () => void {
     const cleanups: Array<() => void> = [];
 
-    // ─── Debug probes (always on; remove after diagnosis) ───
+    // ─── Debug probes (gated by window.__priceAxisDebug flag) ───
+    // ADR-0073 option D (2026-05-12) — диагноз закінчено, дефолт OFF.
+    // Для майбутніх debug сесій: у DevTools `window.__priceAxisDebug = true`
+    // ПЕРЕД refresh сторінки → logs знову активні. Без перебудови коду.
     const dbg = (tag: string, payload?: Record<string, unknown>) => {
-        // eslint-disable-next-line no-console
-        console.log(`[PriceAxis] ${tag}`, payload ?? {});
+        if (typeof window !== 'undefined' && (window as { __priceAxisDebug?: boolean }).__priceAxisDebug) {
+            // eslint-disable-next-line no-console
+            console.log(`[PriceAxis] ${tag}`, payload ?? {});
+        }
     };
     dbg('SETUP', { container: container.tagName, hasChart: !!chart, hasSeries: !!series });
 

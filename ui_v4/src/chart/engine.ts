@@ -149,6 +149,12 @@ export class ChartEngine {
       layout: {
         background: { color: 'transparent' },
         textColor: THEMES.dark.chart.layout.textColor,
+        // ADR-0073 option D (2026-05-12) — mobile compactness: smaller font
+        // shrinks LWC price labels (~50px → ~36px content for typical XAU)
+        // + time-axis labels внизу теж менші → +4px вертикалі чарта.
+        // Desktop без змін (12px standard). Trade: mobile labels трошки менші
+        // але читабельні. Замінює вигадану overlay-replacement з rev 2/3/4.
+        fontSize: isMobile ? 10 : 12,
         // ADR-0066 PATCH 05: hide TradingView attribution logo. NOTICE
         // compliance lands via PATCH 04 Credits tab (AboutModal). Until
         // PATCH 04 ships, attribution remains in package LICENSE / NOTICE
@@ -170,6 +176,11 @@ export class ChartEngine {
           color: THEMES.dark.chart.crosshair.horzLine.color,
           width: 1,
           style: LineStyle.Dashed,
+          // ADR-0073 option D (2026-05-12) — default OFF.
+          // Owner-toggle через overflow menu "Crosshair price". LWC default true.
+          // Ховаємо chip що follow-ить курсор по price-scale (трейдеру не завжди
+          // треба, а курсор + chip = візуальний noise). State persists localStorage.
+          labelVisible: false,
         },
       },
       // V3 parity: chart_adapter_lite.js:52-66
@@ -189,18 +200,27 @@ export class ChartEngine {
         pinch: true,
       },
       // V3 parity: chart_adapter_lite.js:67-75
-      // P4: compact price scale on mobile (44px vs default 56px)
-      // Mobile "max area" tuning: drop axis border + tick marks (visual chrome
-      // only — labels still render); tighten top/bottom margins so wicks reach
-      // closer to viewport edges on a small screen.
+      // ADR-0073 option D (2026-05-12) — minimal-style LWC native scale.
+      // Замість заміни LWC власним overlay (rev 2/3/4 attempts всі failed),
+      // мінімально стилізуємо LWC native: ticks off, tighter minimumWidth
+      // (30 — компактніше за default 56). LWC сам володіє labels, last-value
+      // chip (теал/червоний), magnet, Y-zoom drag. На mobile fontSize 10
+      // (layout.fontSize) додатково shrink labels.
+      //
+      // Diagnostic test (2026-05-12): borderVisible тимчасово RESTORED до true
+      // після того що user повідомив "Crosshair price chip не працює коли ON".
+      // Гіпотеза: LWC при `borderVisible:false + ticksVisible:false` (всі chrome
+      // off) не рендерить crosshair label. Якщо chip з'являється з border on —
+      // підтверджено quirk → можна потім попробувати `borderColor: 'transparent'`
+      // (chip works AND border invisible).
       rightPriceScale: {
-        borderVisible: false,
+        borderVisible: true,
         ticksVisible: false,
         autoScale: true,
+        minimumWidth: 30,
         scaleMargins: isMobile
           ? { top: 0.06, bottom: 0.12 }
           : { top: 0.12, bottom: 0.18 },
-        ...(isMobile ? { minimumWidth: 44 } : {}),
       },
       // V3 parity: chart_adapter_lite.js:76-98
       timeScale: {
@@ -709,6 +729,12 @@ export class ChartEngine {
       },
     });
   }
+
+  // ADR-0073 option D — Crosshair label toggle attempt видалено (2026-05-12).
+  // Reason: LWC `applyOptions({crosshair:{horzLine:{labelVisible:true}}})` після
+  // init з `labelVisible:false` не реактивує label (LWC quirk або internal lock).
+  // Toggle UI прибрано — `labelVisible:false` залишається locked у init.
+  // Trader читає ціни з LWC native periodic price labels (на scale strip).
 
   // ─── destroy ───
   destroy(): void {
