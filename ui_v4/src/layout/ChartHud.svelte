@@ -8,6 +8,7 @@
     import { derivePdBadge } from "../stores/shellState";
     import PdBadge from "./PdBadge.svelte";
     import { BIAS_TF_LABELS, BIAS_TF_ORDER } from "../constants/tfLabels";
+    import { dismissOnOutside } from "../lib/actions/dismissOnOutside";
 
     const {
         symbols,
@@ -236,12 +237,9 @@
         tfOpen = !tfOpen;
     }
 
-    // Close dropdowns + micro-card on outside click
-    function handleWindowClick() {
-        symbolOpen = false;
-        tfOpen = false;
-        microCardOpen = false;
-    }
+    // Outside-dismiss now handled per-element через use:dismissOnOutside
+    // (lib/actions/dismissOnOutside.ts) на trigger-wrappers нижче. Раніше
+    // тут був svelte:window onclick який не fire-ив від canvas tap на mobile.
 
     // ─── Wheel cycling (V3: attachHudWheelControls) ───
     function handleSymbolWheel(e: WheelEvent) {
@@ -267,9 +265,17 @@
     }
 </script>
 
-<svelte:window onclick={handleWindowClick} />
-
-<div class="hud-stack {shellStageClass}">
+<div
+    class="hud-stack {shellStageClass}"
+    use:dismissOnOutside={{
+        enabled: symbolOpen || tfOpen || microCardOpen,
+        onDismiss: () => {
+            symbolOpen = false;
+            tfOpen = false;
+            microCardOpen = false;
+        },
+    }}
+>
     <div class="hud" style:color={themeText}>
         <div class="hud-row">
             <!-- Symbol slot -->
@@ -1419,18 +1425,48 @@
     /* Landscape phone reflow (orthogonal to <768px portrait block below).
        Modern phones landscape go up to ~932px wide → don't trigger 768px
        breakpoint. Catch via height: any phone landscape is <500px tall,
-       no tablet is. User-confirmed scope 2026-05-11:
-       - .hud-narrative: inline "WAIT · APPROACH..." chip near WAIT badge
-       - .shell-stctx: stage context text "HTF bearish — шукаємо структуру..."
-         that lives next to .shell-stlbl (stage label like CONFIRM/PREPARE).
-         Already hidden at <768px portrait via existing @media block — this
-         second clause covers landscape phones (>768 wide, <500 tall). */
+       no tablet is. Owner-flagged 2026-05-11: "верхушка краде місце" —
+       у landscape phones height = 360-400px, ChartHud + top-right-bar
+       забирали 70-90px = 20-25% екрану. Compact:
+       - hide narrative + shell context
+       - hide sub-row (session + P/D + bias) — у landscape пріоритет = чарт,
+         ці деталі доступні у InfoModal[Diagnostics] + tooltip price row
+       - reduce font sizes on main row to t3a (12px)
+       - drop padding so HUD lине лівого краю + один row замість двох
+       - reset hud-stack gap (no sub-row to space from) */
     @media (orientation: landscape) and (max-height: 500px) {
         .hud-narrative {
             display: none;
         }
         .shell-stctx {
             display: none;
+        }
+        .hud-sub {
+            display: none;
+        }
+        .hud-stack {
+            gap: 0;
+            top: 0;
+            left: 2px;
+        }
+        .hud {
+            padding: 2px 4px;
+        }
+        .hud-row {
+            gap: 5px;
+        }
+        .hud-slot {
+            font-size: var(--t3a-size);
+            padding: 1px 4px;
+        }
+        .hud-price {
+            font-size: var(--t3a-size);
+        }
+        .hud-chg {
+            font-size: var(--t4-size);
+        }
+        .shell-stlbl {
+            font-size: var(--t6-size);
         }
     }
 

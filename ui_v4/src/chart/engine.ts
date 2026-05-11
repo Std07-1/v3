@@ -183,7 +183,12 @@ export class ChartEngine {
           labelVisible: false,
         },
       },
-      // V3 parity: chart_adapter_lite.js:52-66
+      // V3 parity: chart_adapter_lite.js:52-66.
+      // LWC defaults (all true). Crosshair-lock на long-press реалізовано
+      // у `setupLongPressCrosshairLock()` (chart/longPressLock.ts) через
+      // capture-phase touch interception — не через applyOptions toggle
+      // (LWC v5 runtime не реактивує handleScroll прапори надійно для
+      // vertical pan; emp. 2026-05-11).
       handleScroll: {
         mouseWheel: true,
         pressedMouseMove: true,

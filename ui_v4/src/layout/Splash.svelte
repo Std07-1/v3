@@ -54,7 +54,10 @@
 {#if renderSplash}
     <div class="splash" role="status" aria-live="polite" aria-busy="true">
         <div class="splash-content">
-            <Brand variant="lockup" size={36} />
+            <!-- ADR-0066 PATCH 03 slot 2: V3 mark-v4 (gold→teal gradient).
+                 Stacked above lockup для full brand identity на cold-load. -->
+            <Brand variant="mark" size={72} />
+            <Brand variant="lockup" size={32} />
             <div class="spinner" aria-hidden="true">
                 <span class="spinner-dot"></span>
                 <span class="spinner-dot"></span>
@@ -96,8 +99,17 @@
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 24px;
+        gap: 18px;
         animation: splash-content-rise 500ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    /* Landscape phone: tighter stack — height <500px не вмістить великий
+       72px mark + lockup + spinner + status з 24px gaps. Зменшуємо mark,
+       gap, ховаємо status text як другорядний (spinner = enough feedback). */
+    @media (orientation: landscape) and (max-height: 500px) {
+        .splash-content {
+            gap: 10px;
+        }
     }
     @keyframes splash-content-rise {
         from {

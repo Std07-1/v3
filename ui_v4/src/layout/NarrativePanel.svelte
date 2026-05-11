@@ -14,6 +14,7 @@
         compactPillText,
         type Mode,
     } from "../lib/agentState";
+    import { dismissOnOutside } from "../lib/actions/dismissOnOutside";
 
     interface Props {
         narrative: NarrativeBlock | null;
@@ -126,27 +127,10 @@
         mode === "expanded" ? "Narrative expanded" : "Narrative collapsed",
     );
 
-    // Click-outside-to-collapse — when expanded, any click outside the
-    // .narrative-panel (including chart canvas) collapses to compact.
-    // Inside-NP clicks have e.stopPropagation() on the root <div>, so
-    // they never reach this document listener. setTimeout(0) ensures we
-    // do not immediately catch the click that just opened the panel.
-    $effect(() => {
-        if (mode !== "expanded") return;
-        function handleOutsideClick(e: MouseEvent) {
-            const panel = document.querySelector(".narrative-panel");
-            if (panel && !panel.contains(e.target as Node)) {
-                collapse();
-            }
-        }
-        const t = setTimeout(() => {
-            document.addEventListener("click", handleOutsideClick);
-        }, 0);
-        return () => {
-            clearTimeout(t);
-            document.removeEventListener("click", handleOutsideClick);
-        };
-    });
+    // Outside-dismiss handled через use:dismissOnOutside на root <div>
+    // (lib/actions/dismissOnOutside.ts) — uniform pattern, mobile-friendly
+    // (touchend + click + Escape). Раніше тут був ad-hoc document listener
+    // що ловив тільки click → не fire-ив від canvas tap на mobile.
 </script>
 
 {#if narrative}
@@ -158,6 +142,10 @@
         class:mode-banner={mode === "banner"}
         class:mode-expanded={mode === "expanded"}
         onclick={(e) => e.stopPropagation()}
+        use:dismissOnOutside={{
+            enabled: mode === "expanded",
+            onDismiss: collapse,
+        }}
     >
         <!-- Compact pill / Expanded header (always visible click target) -->
         <button

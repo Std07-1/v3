@@ -40,6 +40,7 @@
   } from "./app/frameRouter";
   import { diagStore } from "./app/diagState";
   import { mainStatus } from "./app/diagSelectors";
+  import { dismissOnOutside } from "./lib/actions/dismissOnOutside";
   import type { StatusInfo } from "./app/diagSelectors";
   import { stopEdgeProbe, probeNow } from "./app/edgeProbe";
   import { metaStore } from "./stores/meta";
@@ -202,34 +203,10 @@
     overflowOpen = false;
   }
 
-  // Click-outside-to-close for ☰ overflow.
-  // Why a document listener (not just chart-wrapper onclick): on mobile
-  // taps on the LWC chart canvas don't reliably bubble through the wrapper
-  // (canvas event capture + touch-vs-click semantics). Same pattern as
-  // ADR-0070 Tier 4 for NarrativePanel — the .tr-overflow-wrap has
-  // stopPropagation() on its onclick, so taps INSIDE the menu never reach
-  // the document and the listener won't auto-close it from its own click.
-  // setTimeout(0) defers attachment past the click that opened the menu.
-  $effect(() => {
-    if (!overflowOpen) return;
-    function handleOutsideClick(e: Event) {
-      const wrap = document.querySelector('.tr-overflow-wrap');
-      if (wrap && !wrap.contains(e.target as Node)) {
-        overflowOpen = false;
-      }
-    }
-    const t = setTimeout(() => {
-      document.addEventListener('click', handleOutsideClick);
-      // touchend covers iOS Safari edge cases where click events on canvas
-      // are suppressed during gesture sequences (pan, pinch follow-ups).
-      document.addEventListener('touchend', handleOutsideClick);
-    }, 0);
-    return () => {
-      clearTimeout(t);
-      document.removeEventListener('click', handleOutsideClick);
-      document.removeEventListener('touchend', handleOutsideClick);
-    };
-  });
+  // Outside-click/touch/Escape dismiss: централізована action
+  // dismissOnOutside (lib/actions/dismissOnOutside.ts) — єдиний паттерн
+  // для всіх dismissable panels у UI. Раніше тут був ad-hoc $effect що
+  // дублював 4 окремі реалізації в App/ChartPane/ChartHud/NarrativePanel.
 
   // ADR-0068: Single InfoModal instance, defaultTab controlled by last opener.
   // - Brand watermark click → "about"
@@ -555,9 +532,7 @@
 <main class="app-layout" style:background={appBg}>
   <!-- Main content area -->
   <div class="main-content">
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="chart-wrapper" onclick={closeOverflow}>
+    <div class="chart-wrapper">
       <!-- ADR-0068 Slice 3 / Part A: Brand watermark — locked slot bottom-left
            above LWC time axis. Click opens InfoModal[About]. DO NOT MOVE.
            See: ui_v4/src/layout/BrandWatermark.svelte header + memory file
@@ -609,9 +584,7 @@
   <!-- ADR-0065 rev 2 Tier 1: Top-right inline command rail.
        Layout: [ATR · RV · M{tf}-cd · UTC]  |  ▶ replay  |  ☰ overflow
        Mobile <640px reflow: status row + ▶ hidden, lishaye [☰]. -->
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="top-right-bar" onclick={closeOverflow}>
+  <div class="top-right-bar">
     <!-- ADR-0065 Phase 1: NarrativePanel as leftmost inline pill in the rail row.
          Compact by default; expanded body drops absolute below bar.
          .narrative-wrap hidden on mobile (see @media block below). -->
@@ -654,7 +627,14 @@
     {/if}
 
     <!-- Tier 2: ☰ Overflow menu trigger -->
-    <div class="tr-overflow-wrap" onclick={(e) => e.stopPropagation()}>
+    <div
+      class="tr-overflow-wrap"
+      onclick={(e) => e.stopPropagation()}
+      use:dismissOnOutside={{
+        enabled: overflowOpen,
+        onDismiss: closeOverflow,
+      }}
+    >
       <button
         class="tr-overflow-btn"
         class:open={overflowOpen}
@@ -828,11 +808,19 @@
       color 0.15s ease,
       background 0.15s ease;
   }
-  .tr-overflow-btn:hover,
+  /* Hover wrapped у hover-capable media — на mobile тач не лишав sticky
+     підсвітку (owner-flagged 2026-05-11 "слід від того квадрату").
+     .open NEVER paints a background — menu itself is the active indicator.
+     Тільки колір/opacity змінюємо щоб ☰ був видимий поверх chart. */
+  @media (hover: hover) {
+    .tr-overflow-btn:hover {
+      opacity: 1;
+      color: var(--text-1);
+    }
+  }
   .tr-overflow-btn.open {
     opacity: 1;
     color: var(--text-1);
-    background: rgba(255, 255, 255, 0.06);
   }
   .tr-overflow-btn:focus-visible {
     outline: 1px solid var(--accent, #d4a017);
@@ -852,15 +840,21 @@
     .tr-replay-badge {
       display: none;
     }
-    /* Mirror ChartHud .hud-stack vertical anchor so CommandRail status
-       row aligns with ChartHud row 1 (XAU/USD · WAIT). Default
-       top:8px + padding-top:5px = content y=13; ChartHud is at
-       top:1px + padding-top:6px = content y=7. Match by setting
-       top:1px + padding-top:6px here. Owner-flagged 2026-05-11:
-       "row 1 зміщені у перевернутому стані". */
+    /* ChartHud у landscape підняли в один row (top:0, padding:2px 4px),
+       тож top-right-bar теж пригортаємо до краю — мінімум хром-плити,
+       максимум чарту. tr-clock + CommandRail компактні (t4/t5 розміри).
+       Owner-flagged 2026-05-11: "верхушка краде місце". */
     .top-right-bar {
-      top: calc(1px + var(--safe-top, 0px));
-      padding: 6px 12px;
+      top: calc(0px + var(--safe-top, 0px));
+      padding: 2px 8px;
+      gap: 6px;
+    }
+    .tr-clock {
+      font-size: var(--t4-size);
+    }
+    .tr-overflow-btn {
+      font-size: var(--t3-size);
+      padding: 1px 4px;
     }
   }
 

@@ -18,6 +18,8 @@
     type CandleStyleName,
   } from "../chart/lwc";
   import { setupPriceScaleInteractions } from "../chart/interaction";
+  import { setupLongPressCrosshairLock } from "../chart/longPressLock";
+  import { dismissOnOutside } from "../lib/actions/dismissOnOutside";
   import { OverlayRenderer } from "../chart/overlay/OverlayRenderer";
   import type { DisplayMode } from "../chart/overlay/DisplayBudget";
   import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
@@ -86,6 +88,7 @@
   let overlayRenderer: OverlayRenderer;
   let drawingsRenderer: DrawingsRenderer;
   let interactionCleanup: (() => void) | null = null;
+  let longPressLockCleanup: (() => void) | null = null;
 
   let ro: ResizeObserver | null = null;
 
@@ -217,6 +220,17 @@
         drawingsRenderer?.notifyPriceRangeChanged();
         overlayRenderer?.notifyPriceRangeChanged();
       },
+    );
+
+    // Long-press crosshair-lock (mobile): hold 300ms → chart freeze →
+    // pure crosshair drag. Desktop (mouse) не зачіпається. Approach C:
+    // capture-phase touch interception + manual setCrosshairPosition бо
+    // LWC v5 applyOptions(handleScroll) runtime не контролює vertical pan.
+    // Див. chart/longPressLock.ts header.
+    longPressLockCleanup = setupLongPressCrosshairLock(
+      lwcHostRef,
+      chartEngine.chart,
+      chartEngine.series,
     );
 
     ro = new ResizeObserver(() => {
@@ -570,6 +584,8 @@
   onDestroy(() => {
     interactionCleanup?.();
     interactionCleanup = null;
+    longPressLockCleanup?.();
+    longPressLockCleanup = null;
     ro?.disconnect();
     ro = null;
     overlayRenderer?.destroy();
@@ -578,15 +594,7 @@
   });
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div
-  class="chart-container"
-  bind:this={wrapperRef}
-  onclick={() => {
-    if (smcPanelOpen) smcPanelOpen = false;
-  }}
->
+<div class="chart-container" bind:this={wrapperRef}>
   <div
     class="layer lwc-layer"
     bind:this={lwcHostRef}
@@ -616,9 +624,18 @@
   {:else if scrollbackState === "wall" && leftEdgeVisible}
     <div class="scrollback-indicator wall">No more history available</div>
   {/if}
-  <!-- N3: SMC layer toggles — per-kind colour coding -->
+  <!-- N3: SMC layer toggles — per-kind colour coding.
+       use:dismissOnOutside замикає panel при click/touch поза .smc-panel
+       (chart canvas, ChartHud, etc) ABO Escape — uniform pattern. -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="smc-panel" onclick={(e) => e.stopPropagation()}>
+  <div
+    class="smc-panel"
+    onclick={(e) => e.stopPropagation()}
+    use:dismissOnOutside={{
+      enabled: smcPanelOpen,
+      onDismiss: () => (smcPanelOpen = false),
+    }}
+  >
     {#if smcPanelOpen}
       <div class="smc-grid">
         <button
@@ -851,10 +868,20 @@
     border-color: rgba(0, 230, 118, 0.35);
     background: rgba(0, 230, 118, 0.1);
   }
-  /* ═══ Mobile: hide SMC panel ═══ */
+  /* ═══ Mobile: reposition SMC panel ═══
+     ADR-0072 reflow: на мобільному топ-бар коротший, .smc-panel
+     перекривав ChartHud. Зсуваємо нижче top-row + ближче до правого
+     краю. Кнопки в .smc-grid залишаються тапабельні (≥28px hit area). */
   @media (max-width: 768px) {
     .smc-panel {
-      display: none;
+      top: 80px;
+      right: 8px;
+      gap: 2px;
+    }
+    .smc-toggle {
+      padding: 4px 6px;
+      min-width: 28px;
+      min-height: 24px;
     }
   }
 </style>

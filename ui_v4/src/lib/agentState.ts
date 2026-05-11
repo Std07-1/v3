@@ -141,6 +141,23 @@ export function resolveAgentState(
 // Important: this helper does NOT touch the системний наратив body content.
 // It only chooses what to render in the compact pill (новий кут scope).
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  🔒 LOCKED: PUBLIC-FACING agent pill text — NO "Арчі" mention 🔒
+// ═══════════════════════════════════════════════════════════════════════════
+//  Owner-direction 2026-05-11: brand "Арчі" = brand-internal scope only
+//  (owner + sponsors). Public users (free + paying) see neutral one-word
+//  English status: Sleeping / Watching / Analyzing / Alert / Off / Idle.
+//
+//  Дозволені правки:
+//    - додавати нові wake-engine status keys (sync з wake_types.py)
+//    - перекладати на інші мови ЯКЩО додаємо locale система (зараз EN-only)
+//    - tweak status labels (Watching→Standby, etc) з owner approval
+//  Заборонені правки без owner approval:
+//    - додати "Арчі" / "Archi" / "Архи" у будь-який return string
+//    - експонувати internal bot details (model name, Claude, OpenAI, etc)
+//    - показувати raw silence_h без прозорого UX контексту
+// ═══════════════════════════════════════════════════════════════════════════
+//
 // Wake-engine semantic mapping (per wake_types.py:144 + wake_engine.py:319-320):
 //   "watching"  = wake conditions all met, armed for trigger
 //   "sleeping"  = wake conditions not all met, agent dozing
@@ -148,15 +165,15 @@ export function resolveAgentState(
 //   "alert"     = urgent/triggered signal state
 // Important: status alone does NOT mean bot is alive — that's gated by
 // thesis presence + freshness in compactPillText below.
-const _ARCHI_STATUS_UK: Record<string, string> = {
-    sleeping: 'спить',
-    watching: 'спостерігає',
-    analyzing: 'аналізує',
-    alert: 'сигнал',
-    active: 'активний', // legacy (older PresenceStatus values)
+const _ARCHI_STATUS_EN: Record<string, string> = {
+    sleeping: 'Sleeping',
+    watching: 'Watching',
+    analyzing: 'Analyzing',
+    alert: 'Alert',
+    active: 'Active', // legacy (older PresenceStatus values)
 };
 
-/** Build the compact pill one-liner. PURE Арчi-surface scope: pill text
+/** Build the compact pill one-liner. PURE agent-surface scope: pill text
  *  comes ONLY from archi_thesis (when bot wrote one) or archi_presence
  *  (when bot is alive but hasn't written yet) or offline indicator.
  *
@@ -164,12 +181,14 @@ const _ARCHI_STATUS_UK: Record<string, string> = {
  *  fvg_context, next_area) is INTENTIONALLY NOT consulted here — those
  *  belong on different surfaces, not in this corner.
  *
- *  Returns "" when there is nothing Архi-related to say. */
+ *  Returns single-word English status by default (owner-direction:
+ *  public-facing text must not mention "Арчі"). Thesis text from bot
+ *  passes through verbatim (it's strategic narrative, brand-neutral). */
 export function compactPillText(
     narrative: NarrativeBlock | null,
     _state: AgentState, // kept in signature for caller compat; unused here
 ): string {
-    if (!narrative) return '';
+    if (!narrative) return 'Idle';
 
     const presence = narrative.archi_presence;
     const thesis = narrative.archi_thesis;
@@ -178,29 +197,30 @@ export function compactPillText(
     // OR missing thesis means bot has been silent for too long.
     const botAlive = !!thesis && thesis.freshness !== 'stale';
 
-    // 1. Bot alive AND has fresh thesis → show Арчi's actual voice.
+    // 1. Bot alive AND has fresh thesis → pass through bot's narrative.
+    //    Thesis text is brand-neutral strategic content (no "Арчі" inside).
     if (botAlive && thesis) {
         return thesis.thesis;
     }
 
-    // 2. Bot offline (no thesis OR stale) → truthful offline copy.
+    // 2. Bot offline (no thesis OR stale) → single-word "Off" + silence.
     if (presence && !botAlive) {
         const silence =
             presence.silence_h > 0
                 ? ` · ${presence.silence_h.toFixed(1)}h`
                 : '';
-        return `Арчі вимкнений${silence}`;
+        return `Off${silence}`;
     }
 
-    // 3. Bot alive but hasn't written thesis yet → presence-driven status.
-    //    (Cold start / brand-new symbol where Архi hasn't analyzed yet.)
+    // 3. Bot alive but hasn't written thesis yet → single-word status.
     if (presence) {
-        const statusUk = _ARCHI_STATUS_UK[presence.status] || presence.status;
+        const statusEn = _ARCHI_STATUS_EN[presence.status] ?? presence.status;
         const focus = presence.focus ? ` · ${presence.focus}` : '';
-        return `Арчі ${statusUk}${focus}`;
+        return `${statusEn}${focus}`;
     }
 
-    // 4. Nothing Архi-related shipped at all — empty pill text.
-    //    (Caller may collapse the pill entirely.)
-    return '';
+    // 4. Nothing shipped at all — neutral fallback so pill stays visible
+    //    (was: empty → panel rendered as just an arrow → owner-reported
+    //    "інколи пропадає" 2026-05-11).
+    return 'Idle';
 }
