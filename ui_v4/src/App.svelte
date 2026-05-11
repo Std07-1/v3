@@ -830,14 +830,18 @@
      no access to theme/style/diagnostics. Was buggy hidden previously. */
   @media (max-width: 640px) {
     .top-right-bar {
-      /* Mobile right offset MUST clear the LWC price scale (minimumWidth: 44px
-         per chart/engine.ts isMobile branch) — at 12px the ☰ landed directly on
-         price labels (4800.00 etc). 56px = 44 axis + 12 breathing. Safe-area
-         adds iPhone notch insets where present. */
-      right: calc(56px + var(--safe-right, 0px));
-      top: calc(8px + var(--safe-top, 0px));
+      /* True top-right corner anchor — viewport edge, not chart edge.
+         Screen widths vary (320px–428px+), price scale width may shift with
+         autoScale; anchoring to viewport keeps ☰ in the same physical spot
+         regardless of device. Backdrop on the button (below) handles the
+         visual collision with price-scale labels rendered beneath. */
+      right: calc(4px + var(--safe-right, 0px));
+      top: calc(4px + var(--safe-top, 0px));
       padding: 5px 8px;
       gap: 4px;
+      /* Ensure ☰ sits above LWC price-scale layer; z-index of parent is
+         already high but mobile WebViews are inconsistent — explicit wins. */
+      z-index: 40;
     }
     /* Hidden: ATR/RV peripheral row (small screen — chrome economy),
        replay button + badge (replay UX is desktop-first MVP),
@@ -851,7 +855,10 @@
     }
     /* ☰ stays visible — it's the only entry point to overflow menu on mobile.
        Apple HIG / Material Design min touch target = 44×44px. Bump padding
-       so the actual hit-box meets that, even though glyph is small. */
+       so the actual hit-box meets that, even though glyph is small.
+       Explicit backdrop + border because at right:4px the button sits on top
+       of the LWC right-price-scale labels (4960.00 etc) — it MUST be
+       self-contained visually or it reads as part of the price column. */
     .tr-overflow-btn {
       min-width: 44px;
       min-height: 44px;
@@ -860,6 +867,18 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      background: rgba(13, 17, 23, 0.85);
+      border: 1px solid rgba(120, 123, 134, 0.25);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border-radius: 8px;
+    }
+    /* @supports fallback for old Android WebView lacking backdrop-filter.
+       Solid bg matches our dark canonical, no transparency dependence. */
+    @supports not (backdrop-filter: blur(8px)) {
+      .tr-overflow-btn {
+        background: #0D1117;
+      }
     }
     /* Disable text selection on mobile chrome — accidental long-press on the
        ☰ glyph during a chart pan was selecting the character. Narrative text
