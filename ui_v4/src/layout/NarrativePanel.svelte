@@ -1,7 +1,7 @@
-﻿<!-- src/layout/NarrativePanel.svelte — ADR-0033 + ADR-0069 Slice 1
+﻿<!-- src/layout/NarrativePanel.svelte — ADR-0033 + ADR-0069 Slice 1+2
      3-mode state machine (compact / banner / expanded) driven by
-     resolved agent_state. Slice 1 ships compact + expanded; banner-tier
-     states route to expanded until Slice 2 lands the dedicated render.
+     resolved agent_state. Slice 2 ships the dedicated banner render
+     (36px, warn-tinted left border) for watching / bias_confirmed.
 -->
 <script lang="ts">
     import type { NarrativeBlock, ShellPayload } from "../types";
@@ -73,7 +73,10 @@
         // Side-effect: read sessionStorage when symbol/tf changes.
         const ov = readSession("override") as Mode | null;
         const lst = readSession("lastSeenTier");
-        override = ov && (ov === "compact" || ov === "banner" || ov === "expanded") ? ov : null;
+        override =
+            ov && (ov === "compact" || ov === "banner" || ov === "expanded")
+                ? ov
+                : null;
         lastSeenTier = lst ? parseInt(lst, 10) : null;
     });
 
@@ -152,6 +155,7 @@
         class="narrative-panel"
         class:inline
         class:mode-compact={mode === "compact"}
+        class:mode-banner={mode === "banner"}
         class:mode-expanded={mode === "expanded"}
         onclick={(e) => e.stopPropagation()}
     >
@@ -170,18 +174,48 @@
                  Hidden when badgeLabel returns "" (states whose presence
                  is already shown elsewhere in chrome). -->
             {#if badgeLabel(agentState)}
-                <span class="state-badge state-{agentState}">{badgeLabel(agentState)}</span>
+                <span class="state-badge state-{agentState}"
+                    >{badgeLabel(agentState)}</span
+                >
             {/if}
             <!-- Compact pill text — action-first system narrative synthesis,
                  archi_presence fallback. NOT narrative.headline directly:
                  headline is system-narrative scope, pill is новий кут. -->
-            <span class="headline-text">{compactPillText(narrative, agentState)}</span>
+            <span class="headline-text"
+                >{compactPillText(narrative, agentState)}</span
+            >
             <!-- §5 removal: ↑trend phase-badge dropped — bias pills (left HUD)
                  already carry HTF direction; market_phase here was redundant. -->
             <span class="expand-arrow" aria-hidden="true"
                 >{mode === "expanded" ? "▾" : "▸"}</span
             >
         </button>
+
+        <!-- ADR-0069 Slice 2: Banner render (tier 2: watching / bias_confirmed).
+             36px fixed-height bar, warn-tinted left border, condensed headline.
+             Clicking expands to full expanded view (escalation). -->
+        {#if mode === "banner"}
+            <button
+                class="banner-bar state-{agentState}"
+                onclick={expand}
+                onkeydown={onKeydown}
+                type="button"
+                aria-expanded={false}
+                aria-label="Agent narrative — {badgeLabel(
+                    agentState,
+                )} — tap to expand"
+            >
+                {#if badgeLabel(agentState)}
+                    <span class="state-badge state-{agentState}"
+                        >{badgeLabel(agentState)}</span
+                    >
+                {/if}
+                <span class="banner-headline"
+                    >{compactPillText(narrative, agentState)}</span
+                >
+                <span class="banner-arrow" aria-hidden="true">▸</span>
+            </button>
+        {/if}
 
         <!-- aria-live region: announces mode changes politely to AT users -->
         <div class="sr-only" aria-live="polite">{liveAnnouncement}</div>
@@ -202,19 +236,30 @@
                         <div class="archi-header">
                             <span class="archi-icon">🧠</span>
                             <span class="archi-label">Арчі</span>
-                            <span class="conviction conviction-{narrative.archi_thesis.conviction}">
+                            <span
+                                class="conviction conviction-{narrative
+                                    .archi_thesis.conviction}"
+                            >
                                 {narrative.archi_thesis.conviction}
                             </span>
-                            <span class="freshness freshness-{narrative.archi_thesis.freshness}">
+                            <span
+                                class="freshness freshness-{narrative
+                                    .archi_thesis.freshness}"
+                            >
                                 {narrative.archi_thesis.freshness}
                             </span>
                         </div>
-                        <div class="archi-thesis">{narrative.archi_thesis.thesis}</div>
+                        <div class="archi-thesis">
+                            {narrative.archi_thesis.thesis}
+                        </div>
                         {#if narrative.archi_thesis.key_level}
                             <div class="archi-detail">
                                 🎯 {narrative.archi_thesis.key_level}
                                 {#if narrative.archi_thesis.invalidation}
-                                    <span class="archi-inv">✕ {narrative.archi_thesis.invalidation}</span>
+                                    <span class="archi-inv"
+                                        >✕ {narrative.archi_thesis
+                                            .invalidation}</span
+                                    >
                                 {/if}
                             </div>
                         {/if}
@@ -224,7 +269,10 @@
                 <!-- ADR-0049: Archi Presence -->
                 {#if narrative.archi_presence}
                     <div class="presence-row">
-                        <span class="presence-dot presence-{narrative.archi_presence.status}"></span>
+                        <span
+                            class="presence-dot presence-{narrative
+                                .archi_presence.status}"
+                        ></span>
                         <span class="presence-text">
                             {narrative.archi_presence.status}
                             {#if narrative.archi_presence.silence_h > 0}
@@ -253,7 +301,13 @@
         max-width: 380px;
         min-width: 240px;
         pointer-events: auto;
-        font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+        font-family: var(
+            --font-sans,
+            -apple-system,
+            BlinkMacSystemFont,
+            "Segoe UI",
+            sans-serif
+        );
     }
     @media (max-width: 768px) {
         .narrative-panel {
@@ -267,10 +321,10 @@
 
     /* ── Inline mode (ADR-0065 Phase 1): sits as flex item in .top-right-bar ── */
     .narrative-panel.inline {
-        position: relative;   /* override absolute — flex item in parent row */
+        position: relative; /* override absolute — flex item in parent row */
         top: auto;
         right: auto;
-        z-index: auto;        /* stacking managed by parent .top-right-bar z:35 */
+        z-index: auto; /* stacking managed by parent .top-right-bar z:35 */
         max-width: none;
         min-width: 0;
     }
@@ -491,7 +545,9 @@
         gap: 4px;
         font-size: var(--t6-size);
     }
-    .archi-icon { font-size: var(--t4-size); }
+    .archi-icon {
+        font-size: var(--t4-size);
+    }
     .archi-label {
         font-weight: 700;
         color: #b388ff;
@@ -502,18 +558,33 @@
         padding: 1px 4px;
         border-radius: 3px;
     }
-    .conviction-high { color: #26a69a; background: rgba(38, 166, 154, 0.15); }
-    .conviction-medium { color: #ffa726; background: rgba(255, 167, 38, 0.12); }
-    .conviction-low { color: #8b8f9a; background: rgba(120, 123, 134, 0.12); }
+    .conviction-high {
+        color: #26a69a;
+        background: rgba(38, 166, 154, 0.15);
+    }
+    .conviction-medium {
+        color: #ffa726;
+        background: rgba(255, 167, 38, 0.12);
+    }
+    .conviction-low {
+        color: #8b8f9a;
+        background: rgba(120, 123, 134, 0.12);
+    }
     .freshness {
         font-size: var(--t8-size);
         padding: 1px 3px;
         border-radius: 2px;
         margin-left: auto;
     }
-    .freshness-fresh { color: #26a69a; }
-    .freshness-aging { color: #ffa726; }
-    .freshness-stale { color: #ef5350; }
+    .freshness-fresh {
+        color: #26a69a;
+    }
+    .freshness-aging {
+        color: #ffa726;
+    }
+    .freshness-stale {
+        color: #ef5350;
+    }
     .archi-thesis {
         font-size: var(--t4-size);
         color: #d0d4e0;
@@ -547,15 +618,32 @@
         border-radius: 50%;
         flex-shrink: 0;
     }
-    .presence-sleeping { background: #5d6068; }
-    .presence-watching { background: #ffa726; }
-    .presence-analyzing { background: #42a5f5; animation: pulse 1.5s infinite; }
-    .presence-active { background: #26a69a; animation: pulse 1s infinite; }
-    @keyframes pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.4; }
+    .presence-sleeping {
+        background: #5d6068;
     }
-    .presence-text { flex: 1; }
+    .presence-watching {
+        background: #ffa726;
+    }
+    .presence-analyzing {
+        background: #42a5f5;
+        animation: pulse 1.5s infinite;
+    }
+    .presence-active {
+        background: #26a69a;
+        animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+        0%,
+        100% {
+            opacity: 1;
+        }
+        50% {
+            opacity: 0.4;
+        }
+    }
+    .presence-text {
+        flex: 1;
+    }
     .presence-conditions {
         color: #8b8f9a;
         font-size: var(--t8-size);

@@ -76,15 +76,14 @@ export function tierOf(state: AgentState): Tier {
     }
 }
 
-/** Mode resolution. Slice 1: tier 1 → compact, tier 2+3 → expanded
- *  (banner-tier states fall through until Slice 2 ships Banner render).
+/** Mode resolution per ADR-0069 Slice 2.
  *  Override (set by user click) wins per ADR §126-135 with B.2 escalation
  *  reset rule applied by caller (this function is purely structural). */
 export function modeOf(state: AgentState, override: Mode | null): Mode {
     if (override) return override;
     const t = tierOf(state);
     if (t === 1) return 'compact';
-    // Slice 1 fallback: tier 2 banner → expanded until Slice 2 lands.
+    if (t === 2) return 'banner'; // Slice 2: watching / bias_confirmed → banner
     return 'expanded';
 }
 
