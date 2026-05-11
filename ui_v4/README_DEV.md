@@ -107,3 +107,38 @@ src/
 - `RenderFrame` / `WsAction` — визначені в `types.ts` (SSOT)
 - `schema_v = 'ui_v4_v2'` — guard у `frameRouter.ts`
 - Зміна контрактів потребує **ADR** (заборонено змінювати без узгодження)
+
+## Surface contracts (locked ADRs — ЧИТАТИ перед UI змінами)
+
+| Surface | ADR | Що locked |
+|---------|-----|-----------|
+| Desktop top-right corner (CommandRail + NarrativePanel pill + ☰) | [ADR-0070](../docs/adr/ADR-0070-tr-corner-canonical.md) | ATR/RV з `frame.atr`/`frame.rv` (X28), NP scope = pure Архі-surface, click-outside-collapse, wording (`Арчі`), liveness via `archi_thesis.freshness` |
+| **Mobile** (portrait `<640px` + landscape phone `max-height:500px`) | [ADR-0072](../docs/adr/ADR-0072-mobile-canonical-layout.md) | ☰ position empirical (right:44, top:2, transparent — **NO backdrop "пятно"**), portrait hide-list, landscape hide-list (different — keeps status row), vertical row 1 alignment, `(orientation: landscape) and (max-height: 500px)` detection |
+| CommandRail layout (CR-2.5) | [ADR-0065 rev 2](../docs/adr/ADR-0065-rev2-command-rail-final.md) | Slot composition, ☰ overflow contract, mobile breakpoint baseline |
+| NarrativePanel state machine | [ADR-0069](../docs/adr/ADR-0069-narrative-panel-state-aware.md) | 3-mode (compact/banner/expanded), agent_state derivation, sessionStorage override, escalation reset |
+| BrandWatermark slot | [ADR-0068](../docs/adr/ADR-0068-brand-surface-info-hub.md) | Bottom-left LOCKED (do NOT move): desktop 36/12, mobile 30/6 |
+| Visual identity (tokens, themes) | [ADR-0066 rev 5](../docs/adr/ADR-0066-visual-identity-system.md) | Color tokens, T1-T8 typography, candle style matrix |
+| PWA Full Standalone (manifest + SW) | [ADR-0071](../docs/adr/ADR-0071-pwa-full-standalone.md) | **PROPOSED** — manual SW shell-only V1, never cache `/api/*` or WS data |
+
+### Перед будь-якою mobile UI зміною
+
+1. Прочитай **ADR-0072 §Forbidden patterns** — список того що **гарантовано викине rollback** (backdrop на `☰`, calc() з `minimumWidth`, NP pill на mobile, тощо).
+2. Виміри геометрії — **empirical, not theoretical**. Live screenshot, count pixels.
+   ADR-0072 §Empirical measurements має re-measurement protocol.
+3. Якщо потрібен новий surface на mobile — створи новий ADR-NNNN, не дописуй
+   у ADR-0072 (його scope locked).
+4. Localhost dev (`npm run dev`) НЕ симулює mobile WebView точно — тестуй через
+   справжній телефон + Chrome DevTools mobile emulation як baseline.
+
+### Mobile breakpoints — quick reference
+
+| Regime | Detection | Where applies |
+|--------|-----------|---------------|
+| Portrait phone | `@media (max-width: 640px)` | App.svelte chrome |
+| Portrait phone (HUD) | `@media (max-width: 768px)` | ChartHud (historical, ADR-0072 §Decision A) |
+| Landscape phone | `@media (orientation: landscape) and (max-height: 500px)` | App.svelte + ChartHud (ADR-0072 §Decision B) |
+| Tablet | none of the above | Desktop layout applies |
+| Desktop | none of the above | Default |
+
+Не використовувати `(max-width: 900px)` для landscape phone — захопить tablets теж.
+Канонічно: `orientation + max-height` per ADR-0072 §"Why this query".

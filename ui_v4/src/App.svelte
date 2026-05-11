@@ -824,6 +824,31 @@
     outline-offset: 2px;
   }
 
+  /* Landscape phone reflow (orthogonal to portrait <640px below).
+     Modern phones in landscape are 720-932px WIDE — well above 640px —
+     so the portrait media query below does NOT fire. We catch them via
+     height: any phone landscape is <500px tall, no tablet is.
+     User-confirmed scope 2026-05-11: hide NP pill + replay button.
+     KEEP CommandRail status row (ATR/RV/M15-cd/UTC) — landscape has
+     horizontal real estate, peripheral context still useful. */
+  @media (orientation: landscape) and (max-height: 500px) {
+    .narrative-wrap,
+    .tr-replay-btn,
+    .tr-replay-badge {
+      display: none;
+    }
+    /* Mirror ChartHud .hud-stack vertical anchor so CommandRail status
+       row aligns with ChartHud row 1 (XAU/USD · WAIT). Default
+       top:8px + padding-top:5px = content y=13; ChartHud is at
+       top:1px + padding-top:6px = content y=7. Match by setting
+       top:1px + padding-top:6px here. Owner-flagged 2026-05-11:
+       "row 1 зміщені у перевернутому стані". */
+    .top-right-bar {
+      top: calc(1px + var(--safe-top, 0px));
+      padding: 6px 12px;
+    }
+  }
+
   /* ═══ ADR-0065 rev 2 Tier 3: Mobile reflow (640px breakpoint) ═══
      <640px: hide ATR/RV row + ▶ replay; KEEP ☰ overflow visible.
      The ☰ is the only chrome trigger on mobile — without it user has

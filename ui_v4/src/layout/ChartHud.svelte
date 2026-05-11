@@ -1416,6 +1416,24 @@
         display: none;
     }
 
+    /* Landscape phone reflow (orthogonal to <768px portrait block below).
+       Modern phones landscape go up to ~932px wide → don't trigger 768px
+       breakpoint. Catch via height: any phone landscape is <500px tall,
+       no tablet is. User-confirmed scope 2026-05-11:
+       - .hud-narrative: inline "WAIT · APPROACH..." chip near WAIT badge
+       - .shell-stctx: stage context text "HTF bearish — шукаємо структуру..."
+         that lives next to .shell-stlbl (stage label like CONFIRM/PREPARE).
+         Already hidden at <768px portrait via existing @media block — this
+         second clause covers landscape phones (>768 wide, <500 tall). */
+    @media (orientation: landscape) and (max-height: 500px) {
+        .hud-narrative {
+            display: none;
+        }
+        .shell-stctx {
+            display: none;
+        }
+    }
+
     /* ═══ P5: Mobile responsive (768px breakpoint) ═══ */
     @media (max-width: 768px) {
         .hud-stack {
