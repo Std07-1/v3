@@ -9,7 +9,7 @@
 // evicts old caches. NO skipWaiting() — user reload activates explicitly.
 // ────────────────────────────────────────────────────────────────────────
 
-const SW_VERSION = 'v1-2026-05-12';
+const SW_VERSION = 'v1-2026-05-11b';
 const SHELL_CACHE = `shell-${SW_VERSION}`;
 const SHELL_PRECACHE = [
   '/',
@@ -56,7 +56,8 @@ self.addEventListener('fetch', (e) => {
       fetch(e.request)
         .then((res) => {
           // Cache fresh navigation responses for offline fallback.
-          if (res && res.ok && res.type === 'basic') {
+          // POST requests cannot be cached (Cache API limitation).
+          if (res && res.ok && res.type === 'basic' && e.request.method === 'GET') {
             const clone = res.clone();
             caches.open(SHELL_CACHE).then((c) => c.put(e.request, clone));
           }
@@ -69,8 +70,8 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // Same-origin static assets: cache-first.
-  if (url.origin === self.location.origin) {
+  // Same-origin static assets: cache-first (GET only — POST not cacheable).
+  if (url.origin === self.location.origin && e.request.method === 'GET') {
     e.respondWith(
       caches.match(e.request).then((cached) => {
         if (cached) return cached;
