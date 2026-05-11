@@ -398,12 +398,23 @@
     cfgTfs = c.tfs;
   });
 
-  // ADR-0066 PATCH 05: dynamic tab title — `AI · ONE v3 — {SYMBOL} {TF}`.
+  // Dynamic tab title — `{SYMBOL} {PRICE}` (минімально для max info-density).
   // Strips `/` from forex symbols (XAU/USD -> XAUUSD per ADR §1100).
+  // Фавікон лишається mark-v3.svg (ADR-0066), wordmark + TF з title видалено
+  // для PWA standalone та узагалі економії місця у tab strip.
+  // Fallback chain: sym+price → sym → "AI · ONE" (boot state).
   $effect(() => {
     const sym = hudSymbol.replace(/\//g, "");
-    const tf = hudTf;
-    document.title = sym && tf ? `AI · ONE v3 — ${sym} ${tf}` : "AI · ONE v3";
+    const price = lastPrice;
+    if (sym && price != null && Number.isFinite(price)) {
+      // Adaptive precision — XAU 2 decimals, BTC 2, smaller alts may need more.
+      // For V1 keep 2 (matches priceFormatter default for major instruments).
+      document.title = `${sym} ${price.toFixed(2)}`;
+    } else if (sym) {
+      document.title = sym;
+    } else {
+      document.title = "AI · ONE";
+    }
   });
 
   // --- Actions ---

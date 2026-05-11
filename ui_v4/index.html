@@ -30,9 +30,12 @@
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
     <title>AI · ONE v3</title>
-    <!-- ADR-0066 PATCH 03 slot 2: SVG favicon (modern browsers).
-         PNG/ICO variants pending — requires rasterization tooling. -->
-    <link rel="icon" type="image/svg+xml" href="/brand/mark-v3.svg" />
+    <!-- ADR-0066 PATCH 03 slot 2 — owner redesign 2026-05-12: V3 mark v4
+         (precise contour trace from spec image, gold→teal gradient #D4A017→#22CC8F
+         on dark canvas #060F20). Replaces mark-v3.svg (V triangle + small "3" curve).
+         viewBox 256×256 з вбудованим background — favicon видно і на light, і на
+         dark browser themes. PNG variants для PWA generated via gen-icons script. -->
+    <link rel="icon" type="image/svg+xml" href="/brand/mark-v4.svg" />
     <style>
         /* ADR-0066 PATCH 05: minimal token stub in <head> to avoid FOUC
            before tokens.css loads via main.ts. Values mirror tokens.css

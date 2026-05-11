@@ -32,7 +32,13 @@
 </script>
 
 {#if variant === "mark"}
-    <!-- Mark only — geometric V3 per Tier 3 -->
+    <!-- Mark only — V3 per owner redesign 2026-05-12 (mark-v4.svg).
+         Replaces previous inline path (V triangle + small "3" curve) with
+         <img> reference to canonical /brand/mark-v4.svg (precise contour
+         trace, gold→teal gradient + dark canvas background built into SVG).
+         Trade: lose theme-aware CSS-var gradient (gradient stops baked).
+         Gain: single source of truth (favicon + Brand component =
+         identical pixel-for-pixel). -->
     <span
         class="brand-mark"
         class:clickable
@@ -43,28 +49,7 @@
         style:--mark-size="{size}px"
         {title}
     >
-        <svg viewBox="0 0 64 64" role="img" aria-label={title}>
-            <defs>
-                <linearGradient id="m3grad-{size}" x1="0" y1="64" x2="64" y2="0" gradientUnits="userSpaceOnUse">
-                    <stop offset="0%" stop-color="var(--accent)" />
-                    <stop offset="100%" stop-color="var(--bull, #22CC8F)" />
-                </linearGradient>
-            </defs>
-            <path
-                fill="url(#m3grad-{size})"
-                fill-rule="evenodd"
-                d="M 9 14 L 15 14 L 32 42 L 49 14 L 55 14 L 32 51 Z"
-            />
-            <path
-                fill="none"
-                stroke="url(#m3grad-{size})"
-                stroke-width="2.6"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M 39 30 Q 49 30 49 35 Q 49 39 44 39 Q 49 39 49 43 Q 49 48 39 48"
-            />
-            <circle cx="32" cy="51" r="1.8" fill="var(--bull, #22CC8F)" />
-        </svg>
+        <img src="/brand/mark-v4.svg" alt={title} width={size} height={size} />
     </span>
 {:else if variant === "wordmark"}
     <!-- Wordmark only — AI · ONE per Tier 2 -->
