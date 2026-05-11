@@ -119,6 +119,7 @@ src/
 | BrandWatermark slot | [ADR-0068](../docs/adr/ADR-0068-brand-surface-info-hub.md) | Bottom-left LOCKED (do NOT move): desktop 36/12, mobile 30/6 |
 | Visual identity (tokens, themes) | [ADR-0066 rev 5](../docs/adr/ADR-0066-visual-identity-system.md) | Color tokens, T1-T8 typography, candle style matrix |
 | PWA Full Standalone (manifest + SW) | [ADR-0071](../docs/adr/ADR-0071-pwa-full-standalone.md) | **PROPOSED** — manual SW shell-only V1, never cache `/api/*` or WS data |
+| Price Scale Overlay (custom canvas labels) | [ADR-0073](../docs/adr/ADR-0073-price-scale-overlay.md) | **ACCEPTED rev 2** — hide LWC `rightPriceScale`, render periodic labels + lastValue chip + crosshair chip + dashed connector у OverlayRenderer. B1/B2 LWC API blockers закриті (`series.priceToCoordinate` тільки, `subscribeCrosshairMove(param)` capture). H3: hardcode hex для canvas (no CSS vars). Edge-to-edge свічки, reclaim ~44px chart width |
 
 ### Перед будь-якою mobile UI зміною
 

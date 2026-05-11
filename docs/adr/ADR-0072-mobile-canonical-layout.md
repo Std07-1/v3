@@ -87,7 +87,7 @@ not re-litigated here.
 | `.tr-status-row` | App.svelte | ATR/RV/M15-cd/UTC peripheral row — too noisy on narrow screen |
 | `.tr-sep-status` | App.svelte | dependent separator |
 | `.tr-replay-btn` + `.tr-replay-badge` | App.svelte | replay UX is desktop-first MVP |
-| `.narrative-wrap` (NP pill) | App.svelte | Архі pill deferred to ADR-0073 mobile NarrativeSheet |
+| `.narrative-wrap` (NP pill) | App.svelte | Архі pill deferred to ADR-0074 mobile NarrativeSheet (shifted from 0073 — 0073 тепер зайнято Price Scale Overlay, ACCEPTED 2026-05-12) |
 | `.hud-narrative` | ChartHud | inline "WAIT · APPROACH..." — too dense for thumb-zone |
 | `.shell-stctx` | ChartHud | "HTF bearish — шукаємо структуру..." stage_context text |
 
@@ -328,8 +328,8 @@ discuss before coding:
 | ---------- | ------------- |
 | "Add `background` / `border` / `backdrop-filter` to `.tr-overflow-btn` at idle" | Owner-rejected as "пятно". Tap-state `:active` is the only allowed visual feedback. |
 | "Set `☰ right` to a calc() based on engine.ts `minimumWidth`" | Empirical, not theoretical. Live measurement gives ~40px price-scale width on this device, NOT 44+. Use the measured number. |
-| "Show NP pill on landscape mobile because there's room" | Архі-surface mobile contract is ADR-0073 (NarrativeSheet bottom-peek), not the desktop NP pill. Mobile NP path is an explicit different component. |
-| "Show system narrative on mobile because it adds context" | ADR-0070 §Boundary + this ADR. Mobile is too dense for system narrative chips. If a mobile narrative surface is needed, ADR-0073 covers it. |
+| "Show NP pill on landscape mobile because there's room" | Архі-surface mobile contract is ADR-0074 (NarrativeSheet bottom-peek; shifted from 0073), not the desktop NP pill. Mobile NP path is an explicit different component. |
+| "Show system narrative on mobile because it adds context" | ADR-0070 §Boundary + this ADR. Mobile is too dense for system narrative chips. If a mobile narrative surface is needed, ADR-0074 covers it (shifted from 0073 — 0073 тепер Price Scale Overlay). |
 | "Use `(max-width: ...)` to detect landscape phone" | Modern phones in landscape exceed 640/768/900px wide. Use `(orientation: landscape) and (max-height: 500px)` — owner-validated geometry from this ADR. |
 | "Bump `.top-right-bar top` to 8px in landscape because it looks 'too high'" | The 1px aligns with ChartHud baseline (calculated in §"Vertical alignment"). 8px misaligns by 6px. |
 | "Hide CommandRail status row in landscape too (mirror portrait)" | Owner-rejected — landscape gives horizontal real estate, peripheral context fits. Portrait hide is because narrow vertical screen needs every horizontal pixel for chart. |
@@ -394,18 +394,23 @@ Landscape phone is a distinct viewport regime, not "wider portrait":
 Trying to express this with portrait media queries forces ugly compound
 selectors. Two clean orthogonal blocks read better.
 
-### Forward-ref to ADR-0073 (mobile Архі-surface)
+### Forward-ref to ADR-0074 (mobile Архі-surface, shifted from ADR-0073)
 
-Mobile NP scope was deferred from ADR-0070 to a future ADR-0073 which
+**Note (2026-05-12 ADR-0072 amendment per ADR-0073 ACCEPTED)**: ADR-0073
+тепер зайнято **Price Scale Overlay**. Mobile NarrativeSheet forward-ref
+shift до ADR-0074 (ще не написана).
+
+Mobile NP scope was deferred from ADR-0070 to a future ADR-0074 which
 will introduce a NarrativeSheet bottom-peek component. That ADR will
 need to dodge:
+
 - `.brand-watermark` at `bottom:30px left:6px` (ADR-0068 locked)
 - `.hud-clock` at `bottom:4px right:4px` (this ADR)
-- `☰` at top-right (this ADR)
+- `☰` at top-right (this ADR + ADR-0073 amendment — після ACCEPTED ADR-0073, ☰ переїде з right:44 на right:8)
 
 Mobile NarrativeSheet placement strawman: bottom-peek slide-up sheet
 anchored at `bottom: 60px` (clears watermark + clock) with swipe-down
-dismiss. Detail not specified here — ADR-0073 will own it.
+dismiss. Detail not specified here — ADR-0074 will own it.
 
 ### Why `text-shadow` on `☰` glyph instead of contrast color swap
 

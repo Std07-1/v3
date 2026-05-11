@@ -5,8 +5,8 @@
 | Поле           | Значення                                                              |
 | -------------- | --------------------------------------------------------------------- |
 | ID             | ADR-0073                                                              |
-| Статус         | PROPOSED (rev 2 — addresses Sonnet 4.6 deep-review B1/B2/H1–H3/L1–L4) |
-| Дата           | 2026-05-11 (rev 2: 2026-05-12)                                        |
+| Статус         | **ACCEPTED** (rev 2 — owner sign-off 2026-05-12 після Sonnet 4.6 deep-review B1/B2/H1–H3/L1–L4 + 4 cleanup tweaks) |
+| Дата           | 2026-05-11 (rev 2: 2026-05-12; ACCEPTED: 2026-05-12)                  |
 | Автори         | Станіслав + Opus 4.7 + Sonnet 4.6 review agents                       |
 | Замінює        | —                                                                     |
 | Розширює       | ADR-0024 §18.7 (правила overlay-рендеру LWC — double-RAF при range change); ADR-0066 (visual identity tokens); ADR-0072 (mobile canonical — позиція ☰ буде amend-нута). Виправлено rev 2: ADR-0042 викинуто (category error — це state-sync, не display-budget). |
