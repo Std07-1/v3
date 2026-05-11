@@ -2,8 +2,7 @@
 
 Use case: after rebuild_from_m1.py --force appends new bars without removing
 stale ones, leaving (open_time_ms duplicate, different h/l/c) pairs in JSONL.
-External readers without UDS dedup logic (e.g. cowork scanner) read
-top-down and pick stale first record.
+External readers without UDS dedup logic read top-down and pick stale first record.
 
 This tool:
   1. Reads file as list[dict].
@@ -111,7 +110,9 @@ def main() -> int:
         print(f"no files matched", file=sys.stderr)
         return 2
 
-    print(f"=== {'DRY-RUN' if args.dry_run else 'COMMIT'} mode, {len(targets)} files ===")
+    print(
+        f"=== {'DRY-RUN' if args.dry_run else 'COMMIT'} mode, {len(targets)} files ==="
+    )
     total_in = total_out = total_dupes = 0
     for p in sorted(targets):
         i, o, d = dedup_file(p, dry_run=args.dry_run)

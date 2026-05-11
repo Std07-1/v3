@@ -37,7 +37,6 @@ from runtime.store.ssot_jsonl import (
     tail_last_bar_time_ms,
 )
 
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -280,7 +279,9 @@ def rebuild_one_symbol(
         target_tf_ms = target_tf_s * 1000
         b0 = bucket_start_ms(start_ms, target_tf_ms, 0)
         for bucket_open in range(b0, end_ms, target_tf_ms):
-            if not force and _has_on_disk(disk_cache, data_root, symbol, target_tf_s, bucket_open):
+            if not force and _has_on_disk(
+                disk_cache, data_root, symbol, target_tf_s, bucket_open
+            ):
                 stats[f"tf_{target_tf_s}_existed"] += 1
                 continue
             result = derive_bar(
@@ -305,7 +306,9 @@ def rebuild_one_symbol(
     d1_ao_ms = d1_anchor_s * 1000
     b0_d1 = bucket_start_ms(start_ms, d1_tf_ms, d1_ao_ms)
     for bucket_open in range(b0_d1, end_ms, d1_tf_ms):
-        if not force and _has_on_disk(disk_cache, data_root, symbol, d1_tf_s, bucket_open):
+        if not force and _has_on_disk(
+            disk_cache, data_root, symbol, d1_tf_s, bucket_open
+        ):
             stats[f"tf_{d1_tf_s}_existed"] += 1
             continue
         result = derive_bar(
@@ -372,7 +375,9 @@ def rebuild_one_symbol(
         written = 0
         existed = 0
         for bucket_open in range(b0, end_ms, target_tf_ms):
-            if not force and _has_on_disk(disk_cache, data_root, symbol, target_tf_s, bucket_open):
+            if not force and _has_on_disk(
+                disk_cache, data_root, symbol, target_tf_s, bucket_open
+            ):
                 existed += 1
                 continue
 
@@ -514,7 +519,8 @@ def main() -> None:
     )
     parser.add_argument("--config", type=str, default=None, help="Шлях до config.json.")
     parser.add_argument(
-        "--force", action="store_true",
+        "--force",
+        action="store_true",
         help="Перезаписати вже існуючі derived бари (після ремонту M1 gaps).",
     )
     args = parser.parse_args()
@@ -588,7 +594,7 @@ def main() -> None:
 
     # Dedup-on-finish: коли --force активний (overwrite mode), append-only
     # JSONL writer лишає stale records. Видаляємо дублікати по open_time_ms
-    # (last-wins). Захищає external readers без UDS dedup logic (cowork scanner).
+    # (last-wins). Захищає external readers без UDS dedup logic.
     if args.force and not args.dry_run:
         from pathlib import Path
 
