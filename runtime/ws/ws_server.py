@@ -3187,7 +3187,44 @@ def build_app(
         _brand_dir = os.path.join(_ui_dist, "brand")
         if os.path.isdir(_brand_dir):
             app.router.add_static("/brand", _brand_dir)
-        _log.info("UI_V4_STATIC registered dist=%s", _ui_dist)
+        # ADR-0071 — PWA assets: icons dir + manifest + service worker + offline page.
+        # Each registered explicitly (aiohttp routes need exact paths or static dirs).
+        # /icons/* — PNG raster icons generated via gen-icons.mjs.
+        _icons_dir = os.path.join(_ui_dist, "icons")
+        if os.path.isdir(_icons_dir):
+            app.router.add_static("/icons", _icons_dir)
+
+        # /manifest.json — PWA manifest (Chrome/Edge install prompt prereq).
+        _manifest = os.path.join(_ui_dist, "manifest.json")
+        if os.path.isfile(_manifest):
+            async def _serve_manifest(request: web.Request) -> web.FileResponse:
+                return web.FileResponse(_manifest)
+            app.router.add_get("/manifest.json", _serve_manifest)
+
+        # /sw.js — Service Worker. CRITICAL: must be served at SCOPE root (/)
+        # for SW.scope='/' registration. Cache-Control:no-cache рекомендоване
+        # щоб update detection працював; aiohttp default headers OK для V1.
+        _sw = os.path.join(_ui_dist, "sw.js")
+        if os.path.isfile(_sw):
+            async def _serve_sw(request: web.Request) -> web.FileResponse:
+                return web.FileResponse(_sw)
+            app.router.add_get("/sw.js", _serve_sw)
+
+        # /offline.html — branded fallback served by SW при network failure.
+        _offline = os.path.join(_ui_dist, "offline.html")
+        if os.path.isfile(_offline):
+            async def _serve_offline(request: web.Request) -> web.FileResponse:
+                return web.FileResponse(_offline)
+            app.router.add_get("/offline.html", _serve_offline)
+
+        # /robots.txt — SEO standard.
+        _robots = os.path.join(_ui_dist, "robots.txt")
+        if os.path.isfile(_robots):
+            async def _serve_robots(request: web.Request) -> web.FileResponse:
+                return web.FileResponse(_robots)
+            app.router.add_get("/robots.txt", _serve_robots)
+
+        _log.info("UI_V4_STATIC registered dist=%s (PWA assets included)", _ui_dist)
     else:
         _log.info(
             "UI_V4_STATIC_SKIP dist not found at %s "
