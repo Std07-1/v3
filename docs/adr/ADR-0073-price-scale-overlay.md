@@ -460,7 +460,8 @@ Desktop теж виграє (більше не треба dodge 64px), але de
 
 | Пропозиція | Чому заборонено |
 |------------|-----------------|
-| Обчислити `priceToCoordinate` самостійно (наприклад linear interpolation `low..high`) | LWC володіє price-to-pixel mapping, включно з log/percentage modes. **Завжди викликати `this.series.priceToCoordinate(price)`** (rev 2 B1 fix — НЕ `chart.priceScale('right').priceToCoordinate()`, такого методу НЕ існує у `IPriceScaleApi`, typings.d.ts:2160-2210). |
+| Обчислити `priceToCoordinate` самостійно (наприклад linear interpolation `low..high`) | LWC володіє price-to-pixel mapping, включно з log/percentage modes. Use `this.series.priceToCoordinate(price)`. |
+| Викликати `chart.priceScale('right').priceToCoordinate(price)` | (rev 2 B1) **МЕТОД НЕ ІСНУЄ В API.** `IPriceScaleApi` (typings.d.ts:2160-2210) має ТІЛЬКИ `applyOptions / options / width / setVisibleRange / getVisibleRange / setAutoScale`. `priceToCoordinate` живе ТІЛЬКИ на `ISeriesApi` (typings.d.ts:2264). Перевірено проти `lightweight-charts@5.1.0`. Завжди `this.series.priceToCoordinate(price)` — і коли scale прихований через `visible:false`, метод продовжує працювати (verified: pane height завжди обчислюється). |
 | Викликати `subscribeCrosshairMove(() => ...)` zero-arg lambda | (rev 2 B2 fix) Param губиться, crosshair price label не отримає Y/price. **Завжди `(param: MouseEventParams) => {...}`** з `param.point?.y` + `series.coordinateToPrice(y)` або `param.seriesData.get(this.series)?.value`. На `param.point === undefined` — clear stored state. |
 | Hardcode price format (наприклад `.toFixed(2)`) | (rev 2 H2 fix) Use `this.series.priceFormatter().format(price)` — повертає `IPriceFormatter`, symbol-aware. **НЕ** `series.priceFormat.precision` (candle series у engine.ts:232-241 НЕ має explicit `priceFormat`; LWC auto-detect не reliable). |
 | `ctx.fillStyle = 'var(--text-3)'` чи будь-яка інша CSS var у canvas API | (rev 2 H3 fix) Canvas НЕ читає CSS vars — silently no-op. **Hardcode hex з ADR-0066 tokens.css**: `#6B6B80` для dark/black, `#4A4A55` для light (WCAG AA). Per-theme branch через `_isLightTheme`. |
@@ -483,7 +484,7 @@ Desktop теж виграє (більше не треба dodge 64px), але de
 | P2 | engine.ts: `rightPriceScale.visible:false` + `lastValueVisible:false` (priceLineVisible вже false — retain). **Audit M2**: `getChartAreaWidth()` fallback при `width()===0` повертає `cssW` (не `cssW-65`) | `ui_v4/src/chart/engine.ts`, `ui_v4/src/chart/overlay/OverlayRenderer.ts` (audit only) | ~5 + audit | P1 accepted |
 | P3 | OverlayRenderer.ts: `_drawPriceLabels` (periodic labels) + `_computeNiceInterval` + `_enumerateLabelPrices` + `_drawChip` helper (H1). B1 fix: `series.priceToCoordinate`. H2 fix: `series.priceFormatter().format()`. H3 fix: hardcoded hex per `_isLightTheme`. Density clamp(3,n,12). | `ui_v4/src/chart/overlay/OverlayRenderer.ts` | ~70 | P2 |
 | P3.5 | **Vitest cases (rev 2 A6)**: `_computeNiceInterval` (100-unit→10/20, 0.5-cent→0.05/0.1, 100k-unit→10k), `_enumerateLabelPrices` (clamp, range alignment) | `ui_v4/src/chart/overlay/__tests__/OverlayRenderer.priceLabels.spec.ts` (NEW) | ~50 | P3 |
-| P4 | OverlayRenderer.ts: `_drawLastValueChip` + **dashed connector (rev 2 A3 V1)** з lastBar X до chip Y. teal/red bg per direction. | `ui_v4/src/chart/overlay/OverlayRenderer.ts` | ~35 | P3 |
+| P4 | OverlayRenderer.ts: `_drawLastValueChip` (~25 LOC — chip render + bg/fg + Y position) + **dashed connector (rev 2 A3 V1)** з lastBar X до chip Y (~10 LOC — `ctx.setLineDash([4,4])` + stroke). teal/red bg per direction. Total ~35 LOC (rev 1 було ~25 без connector). | `ui_v4/src/chart/overlay/OverlayRenderer.ts` | **~35 (25+10)** | P3 |
 | P5 | OverlayRenderer.ts: `_drawCrosshairPriceLabel` + **B2 fix** у `subscribeCrosshairMove` (capture param). **A2 collision** suppress last-value коли `abs(Δy) < 14px`. **A4 touch offset** -20px. | `ui_v4/src/chart/overlay/OverlayRenderer.ts` | ~30 | P4 |
 | P6 | App.svelte: позиція ☰ (right:44→8 mobile + landscape) | `ui_v4/src/App.svelte` | ~5 | P2 |
 | P7 | Visual verification across symbols/themes/viewports (21 manual smoke cases + unit tests pass) | manual + automated | — | P3.5, P4, P5, P6 |
@@ -625,9 +626,14 @@ Background defeats the "edge-to-edge" purpose (ми б re-вводили strip-l
 
 ### Performance budget
 
+> **Note (rev 2 L1 follow-up)**: self-contained estimate, **NOT** extending
+> external framework. ADR-0042 (Delta Frame State Synchronization) НЕ
+> регулює render-perf budget — ця секція стоїть на своїх ногах. Не шукай
+> ADR-0042 marker для цього бюджету.
+
 - LWC redraws на власному RAF (~60 fps на idle, on-demand на interaction)
 - Наш overlay redraws через `scheduleDoubleRaf` на range/crosshair events (НЕ кожен frame)
-- Per-redraw cost: 8 labels × (text measure ~0.05ms + fillText ~0.1ms) + 1 chip = <2ms
+- Per-redraw cost (V1 з A3 connector): 8 labels × (text measure ~0.05ms та fillText ~0.1ms), плюс 1 chip ~0.3ms, плюс 1 dashed line stroke ~0.1ms — разом **~1.6ms**
 - Well within 16ms RAF budget
 
 ### Майбутні V2 enhancements (НЕ в scope)
