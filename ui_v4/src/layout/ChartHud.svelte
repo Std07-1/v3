@@ -1425,15 +1425,15 @@
     /* Landscape phone reflow (orthogonal to <768px portrait block below).
        Modern phones landscape go up to ~932px wide → don't trigger 768px
        breakpoint. Catch via height: any phone landscape is <500px tall,
-       no tablet is. Owner-flagged 2026-05-11: "верхушка краде місце" —
-       у landscape phones height = 360-400px, ChartHud + top-right-bar
-       забирали 70-90px = 20-25% екрану. Compact:
-       - hide narrative + shell context
-       - hide sub-row (session + P/D + bias) — у landscape пріоритет = чарт,
-         ці деталі доступні у InfoModal[Diagnostics] + tooltip price row
-       - reduce font sizes on main row to t3a (12px)
-       - drop padding so HUD lине лівого краю + один row замість двох
-       - reset hud-stack gap (no sub-row to space from) */
+       no tablet is. Owner-iter 2026-05-11:
+       - hide narrative + shell context (мобільна шумінка не потрібна)
+       - reduce font sizes на main row до t3a (12px)
+       - drop padding щоб HUD лине лівого краю
+       - tight hud-stack gap (2px замість 4px) — sub-row повертаємо, але
+         компактно. Owner-flagged 2026-05-11: sub-row (session + P/D +
+         bias pills) ВАЖЛИВИЙ для landscape теж — це HTF bias overview.
+         Спочатку hide-нув заради "верхушка краде місце", але вирішили
+         compact-варіант: t6 font + tight padding. */
     @media (orientation: landscape) and (max-height: 500px) {
         .hud-narrative {
             display: none;
@@ -1441,11 +1441,10 @@
         .shell-stctx {
             display: none;
         }
-        .hud-sub {
-            display: none;
-        }
         .hud-stack {
-            gap: 0;
+            /* gap 4→2 — менший зазор між row 1 (price/symbol) та row 2
+               (bias pills). Sub-row повертається у landscape. */
+            gap: 2px;
             top: 0;
             left: 2px;
         }
@@ -1464,6 +1463,21 @@
         }
         .hud-chg {
             font-size: var(--t4-size);
+        }
+        /* Sub-row compact: tighter padding + smaller min-height. Bias
+           pills вже t6 (10-11px) — нормально читається на phone. */
+        .hud-sub {
+            padding: 0 4px;
+            min-height: 12px;
+            gap: 3px;
+        }
+        .tact-session {
+            font-size: var(--t7-size);
+            padding: 0 3px;
+        }
+        .hud-bias-pill {
+            font-size: var(--t7-size);
+            padding: 0 3px;
         }
         .shell-stlbl {
             font-size: var(--t6-size);

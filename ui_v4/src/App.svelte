@@ -723,11 +723,15 @@
 
   /* ADR-0065 rev 2 Tier 1: Top-right inline command rail.
      Layout: [NarrativePanel pill] [ATR · RV · M{tf}-cd · UTC] | ▶ replay | ☰ overflow
-     ADR-0065 Phase 1: right:64px — clears LWC price scale (~54px) + 10px gap. */
+     right:67px — clears LWC price scale (~54px) + 13px breathing room до ☰.
+     Iter 2026-05-11:
+       64 (original) → 70 (після shrink ☰ 44→28) → 67 (owner -3 fine-tune).
+     Desktop і landscape phone успадковують це значення (landscape media
+     query не override-ить right). */
   .top-right-bar {
     position: fixed;
     top: 8px;
-    right: 64px;
+    right: 67px;
     z-index: 35;
     display: flex;
     align-items: center;
@@ -864,21 +868,26 @@
      no access to theme/style/diagnostics. Was buggy hidden previously. */
   @media (max-width: 640px) {
     .top-right-bar {
-      /* ☰ position — empirically locked 2026-05-11 via live mobile tuning.
-         Geometry (measured on actual device, NOT calculated):
+      /* ☰ position — empirically tuned via live mobile (4 iterations).
+         Geometry:
            [ chart canvas ............ ☰ ][ price scale ]
                                       ↑ │  ↑ "4712.00" etc
-                                      │ 4px gap
-                                      44px from viewport right edge
-         Mobile price scale renders at ~40px wide on this device (LESS than
-         engine.ts isMobile minimumWidth:44 — owner-verified, do NOT trust
-         minimumWidth as actual width). right:44 = 40 scale + 4 gap.
-         If price-scale width changes (engine.ts override or different
-         device), re-measure: take screenshot, count pixels from right edge
-         to where labels start, set right = that + desired gap.
+                                      │ 16px gap
+                                      56px from viewport right edge
+         Iter (всі 2026-05-11, owner-tuned via screenshots):
+           44 (original 44×44 ☰)
+           → 50 (після shrink 44→28, +6 щоб компенсувати lost margin)
+           → 54 (owner: "ще 4 пункти px")
+           → 56 (owner: "ще + 2px" — final).
+         Mobile price scale renders at ~40px wide. right:56 = 40 + 16 gap.
+         Якщо price-scale width зміниться — re-measure: screenshot, count
+         pixels від right edge до price labels, set right = that + 16px.
          top:2px aligns vertically with ChartHud row 1 (XAU/USD · WAIT). */
-      right: calc(44px + var(--safe-right, 0px));
-      top: calc(2px + var(--safe-top, 0px));
+      right: calc(56px + var(--safe-right, 0px));
+      /* top:0 (was 2): lift ☰ щоб icon center збігався з row 1 text
+         center (XAU/USD · WAIT). Owner-flagged 2026-05-11 ("трошки
+         підняти й вирівняти по першому row"). */
+      top: calc(0px + var(--safe-top, 0px));
       padding: 0;
       gap: 4px;
       z-index: 40;
@@ -893,32 +902,40 @@
     .narrative-wrap {
       display: none;
     }
-    /* ☰ on mobile: fully transparent button + glyph anchored to top of
-       hit-box so it visually sits ON THE SAME ROW as ChartHud row 1
-       (XAU/USD · M15 · WAIT). 44×44px hit-area preserved via asymmetric
-       padding (small top, large bottom). User explicit: "прозоре · в
-       одному row з ціною · відступи від ціни". */
+    /* ☰ on mobile: icon-sized hit area, fully transparent — без plate.
+       Owner-direction 2026-05-11: "відклик має бути на саму іконку".
+       Геометрія:
+         min-width 28: горизонтальний tap-target (палець розкид)
+         min-height 22: вертикально tight щоб icon center align-ився з
+                        row 1 HUD text center (~11px від bar-top:0).
+                        Попереднє 28 ставило icon center на y=14, що
+                        зміщувало ☰ нижче WAIT (~5px нижче).
+         padding 2: icon (font 18) у 22px button → ~2px зверху/знизу. */
     .tr-overflow-btn {
-      min-width: 44px;
-      min-height: 44px;
-      /* top: 2px → glyph appears at row 1 vertical center.
-         bottom: 22px → invisible hit-extension downward (into row 2 area). */
-      padding: 2px 12px 22px 12px;
+      min-width: 28px;
+      min-height: 22px;
+      padding: 2px;
       font-size: var(--t1-size, 18px);
       line-height: 1;
       display: inline-flex;
-      align-items: flex-start;
+      align-items: center;
       justify-content: center;
       background: transparent;
       border: 0;
-      border-radius: 0;
+      border-radius: 4px;
       /* Legibility above any layer (price labels, candles, grid). */
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
     }
-    /* Tap feedback only on :active — no idle plate. */
+    /* No tap-plate — icon-only feedback through text-shadow + opacity flip
+       via .open class що додається на toggle. */
     .tr-overflow-btn:active {
-      background: rgba(255, 255, 255, 0.08);
-      border-radius: 6px;
+      background: transparent;
+    }
+    /* Suppress focus-visible outline на mobile — фокус після tap залишав
+       gold 1px outline rectangle (== square trace). Keyboard a11y менш
+       релевантна на touch device. */
+    .tr-overflow-btn:focus-visible {
+      outline: none;
     }
     /* Disable text selection on mobile chrome — accidental long-press on the
        ☰ glyph during a chart pan was selecting the character. Narrative text

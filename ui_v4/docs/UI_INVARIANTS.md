@@ -23,6 +23,7 @@ LWC pan blocked у capture phase) → drag = pure crosshair drag через manu
 `chart.setCrosshairPosition()`. TradingView-mobile / Binance app pattern.
 
 **Critical invariants**:
+
 - Capture-phase touchmove interception (NOT applyOptions toggling — LWC v5.1.0
   не реактивує handleScroll runtime для vertical pan, доведено емпірично)
 - `setCrosshairPosition` на КОЖЕН touchmove (NOT subscribeCrosshairMove —
@@ -40,6 +41,7 @@ only, v2 +pressedMouseMove, v3 capture-phase). Заміна на applyOptions to
 
 **File**: [`src/lib/actions/dismissOnOutside.ts`](../src/lib/actions/dismissOnOutside.ts)
 **Consumers** (станом на 2026-05-11):
+
 - [`App.svelte`](../src/App.svelte) — ☰ overflow menu
 - [`ChartPane.svelte`](../src/layout/ChartPane.svelte) — SMC layer panel
 - [`ChartHud.svelte`](../src/layout/ChartHud.svelte) — symbol/TF dropdowns + micro-card
@@ -52,6 +54,7 @@ only, v2 +pressedMouseMove, v3 capture-phase). Заміна на applyOptions to
 прив'язаний panel коли event поза node.
 
 **Critical invariants**:
+
 - **touchend listener ОБОВ'ЯЗКОВИЙ** — LWC `preventDefault()` на канвасі
   блокує синтез click event для chart taps. Без touchend dropdowns не
   закриваються від tap'у на чарт.
@@ -74,6 +77,7 @@ panel onclick + ontouchend) — drift, mobile-buggy. Один централіз
 "AI · ONE", NOT lockup). `<Brand variant="mark" size={20} />`.
 
 **Critical invariants**:
+
 - Position: `bottom: 36px, left: 12px` desktop / `bottom: 30px, left: 6px`
   mobile (acima time axis labels)
 - Variant: `mark` (not wordmark/lockup) — brand-internal scope, mark-only
@@ -98,6 +102,7 @@ thesis text passes through verbatim коли свіжий (це brand-neutral st
 narrative, не self-introduction).
 
 **Critical invariants**:
+
 - НІКОЛИ не додавати "Арчі" / "Archi" / "Архи" у будь-який return string
 - НІКОЛИ не експонувати internal bot details (model name, Claude, OpenAI)
 - Single-word states (NOT "Bot is sleeping", NOT "Архі spить")
@@ -105,6 +110,25 @@ narrative, не self-introduction).
 **Why locked**: brand "Арчі" — brand-internal scope (owner + sponsors).
 Public users (free + paying tiers) бачать neutral status що виглядає як
 data feed/analytics indicator, не AI-bot personality. Це comm strategy.
+
+---
+
+## Empirically tuned values (not locked, but documented)
+
+Це значення які знайдено iter-tuning-ом і документовані inline для майбутніх re-tunes. Не "locked" як invariant-и вище, але якщо хочеш міняти — спочатку прочитай context.
+
+### `.top-right-bar right:` (☰ position vs LWC price scale)
+
+| Контекст | Value | Gap to price scale |
+|---|---|---|
+| Desktop / landscape phone | `67px` | ~13px |
+| Mobile portrait (<640px) | `56px` | ~16px |
+
+**File**: [`src/App.svelte`](../src/App.svelte) `.top-right-bar` CSS
+**Memory**: [repo_top_right_bar_position_tuning.md](/memories/repo/repo_top_right_bar_position_tuning.md) (procedure для re-tune)
+
+Iteration history (2026-05-11, 4 iters): 64→70→67 desktop / 44→50→54→56 mobile.
+Inline comments у App.svelte містять той самий журнал.
 
 ---
 

@@ -169,6 +169,11 @@
     .brand-lockup {
         display: inline-flex;
         flex-direction: column;
+        /* align-items:center — wordmark row + tagline можуть мати різні
+           intrinsic widths (tagline довший). Без center child-elements
+           default до flex-start (left-aligned). На splash це візуально
+           виглядало як off-center brand block. Owner-flagged 2026-05-11. */
+        align-items: center;
         gap: 4px;
         font-family: var(--font-sans);
     }
@@ -188,6 +193,9 @@
         font-weight: 400;
         color: var(--text-3);
         letter-spacing: 0.02em;
+        /* text-align:center страхує коли tagline wrap-иться на 2 рядки —
+           кожен рядок остається центрованим, не left-aligned. */
+        text-align: center;
     }
     .brand-lockup.clickable {
         cursor: pointer;

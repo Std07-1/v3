@@ -100,6 +100,13 @@
         flex-direction: column;
         align-items: center;
         gap: 18px;
+        /* max-width страхує від edge-clipping на narrow viewports
+           (mobile portrait <400px) — owner-screenshot 2026-05-11 показав
+           AI · ONE wordmark обрізаний зліва бо tagline ширша за screen.
+           padding-inline дає мінімум 16px gutter з обох боків. */
+        max-width: 100vw;
+        padding-inline: 16px;
+        box-sizing: border-box;
         animation: splash-content-rise 500ms cubic-bezier(0.22, 1, 0.36, 1);
     }
 
