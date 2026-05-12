@@ -9,11 +9,10 @@ import {
   HIT_TOLERANCE_PX,
   HANDLE_RADIUS_PX,
   HANDLE_RADIUS_HOVER_PX,
-  distToHLine,
   distToPoint,
-  distToSegment,
-  distToRectEdge,
 } from '../interaction/geometry';
+import { getToolModule, TOOL_REGISTRY } from './tools';
+import type { RenderContext } from './tools';
 
 type HorzScaleItem = Time;
 
@@ -409,33 +408,17 @@ export class DrawingsRenderer {
         }
       }
 
-      let dist = Infinity;
+      // ADR-0074 T1: delegate hit-test до TOOL_REGISTRY. Tool-specific
+      // geometry math живе у tools/*Tool.ts модулях.
+      const tool = getToolModule(d.type);
+      if (!tool) continue;
+      const result = tool.hitTest(d, cursorX, cursorY, HIT_TOLERANCE_PX, this.toX, this.toY);
+      if (!result.hit) continue;
 
-      if (d.type === 'hline') {
-        const y = this.toY(d.points[0].price);
-        if (y !== null) dist = distToHLine(cursorY, y);
-      } else if (d.type === 'trend') {
-        const x1 = this.toX(d.points[0].t_ms), y1 = this.toY(d.points[0].price);
-        const x2 = this.toX(d.points[1].t_ms), y2 = this.toY(d.points[1].price);
-        if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
-          dist = distToSegment(cursorX, cursorY, x1, y1, x2, y2);
-        }
-      } else if (d.type === 'rect') {
-        const x1 = this.toX(d.points[0].t_ms), y1 = this.toY(d.points[0].price);
-        const x2 = this.toX(d.points[1].t_ms), y2 = this.toY(d.points[1].price);
-        if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
-          const minX = Math.min(x1, x2);
-          const maxX = Math.max(x1, x2);
-          const minY = Math.min(y1, y2);
-          const maxY = Math.max(y1, y2);
-          dist = distToRectEdge(cursorX, cursorY, minX, minY, maxX, maxY, HIT_TOLERANCE_PX);
-        }
-      }
-
-      if (dist <= minDist) {
-        minDist = dist;
+      if (result.distance <= minDist) {
+        minDist = result.distance;
         best = { id: d.id, handleIdx: null };
-        if (dist === 0) break;
+        if (result.distance === 0) break;
       }
     }
 
@@ -769,66 +752,29 @@ export class DrawingsRenderer {
     const toX = (ms: T_MS): number | null => this.toX(ms);
     const toY = (p: number): number | null => this.toY(p);
 
+    // ADR-0074 T1: delegate render до TOOL_REGISTRY. Tool-specific canvas
+    // operations (stroke, fill, lineDash) живуть у tools/*Tool.ts модулях.
+    // Renderer лише оркеструє: prepare context, виклик tool.render(), cache AABB.
     const drawItem = (d: Drawing, isDraft = false) => {
+      const tool = getToolModule(d.type);
+      if (!tool) return;
+
       const baseColor = d.meta?.color ?? this.themeBaseColor;
-      const hovered = this.hovered?.id === d.id;
-      const selected = this.selectedId === d.id;
-
-      this.ctx.strokeStyle = isDraft ? this.themeAccentColor : (hovered || selected ? this.themeAccentColor : baseColor);
-      this.ctx.lineWidth = d.meta?.lineWidth ?? 1;
-      this.ctx.setLineDash(isDraft ? [4, 4] : []);
-
-      // AABB helpers
-      const aabb = (points: { x: number; y: number }[]) => {
-        const xs = points.map((p) => p.x);
-        const ys = points.map((p) => p.y);
-        return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+      const rc: RenderContext = {
+        ctx: this.ctx,
+        toX,
+        toY,
+        baseColor,
+        accentColor: this.themeAccentColor,
+        rectFill: this.themeRectFill,
+        isDraft,
+        isHovered: this.hovered?.id === d.id,
+        isSelected: this.selectedId === d.id,
+        cssW,
+        cssH,
       };
-
-      if (d.type === 'hline') {
-        const y = toY(d.points[0].price);
-        if (y === null) return;
-
-        this.aabbById.set(d.id, { minX: 0, maxX: cssW, minY: y, maxY: y });
-
-        this.ctx.beginPath();
-        this.ctx.moveTo(0, y);
-        this.ctx.lineTo(cssW, y);
-        this.ctx.stroke();
-        return;
-      }
-
-      if (d.type === 'trend' && d.points.length === 2) {
-        const x1 = toX(d.points[0].t_ms), y1 = toY(d.points[0].price);
-        const x2 = toX(d.points[1].t_ms), y2 = toY(d.points[1].price);
-        if (x1 === null || y1 === null || x2 === null || y2 === null) return;
-
-        this.aabbById.set(d.id, aabb([{ x: x1, y: y1 }, { x: x2, y: y2 }]));
-
-        this.ctx.beginPath();
-        this.ctx.moveTo(x1, y1);
-        this.ctx.lineTo(x2, y2);
-        this.ctx.stroke();
-        return;
-      }
-
-      if (d.type === 'rect' && d.points.length === 2) {
-        const x1 = toX(d.points[0].t_ms), y1 = toY(d.points[0].price);
-        const x2 = toX(d.points[1].t_ms), y2 = toY(d.points[1].price);
-        if (x1 === null || y1 === null || x2 === null || y2 === null) return;
-
-        const minX = Math.min(x1, x2);
-        const minY = Math.min(y1, y2);
-        const w = Math.abs(x2 - x1);
-        const h = Math.abs(y2 - y1);
-
-        this.aabbById.set(d.id, { minX, minY, maxX: minX + w, maxY: minY + h });
-
-        this.ctx.fillStyle = isDraft ? 'rgba(61, 154, 255, 0.10)' : this.themeRectFill;
-        this.ctx.fillRect(minX, minY, w, h);
-        this.ctx.strokeRect(minX, minY, w, h);
-        return;
-      }
+      const aabb = tool.render(d, rc);
+      if (aabb) this.aabbById.set(d.id, aabb);
     };
 
     for (const d of this.drawings) drawItem(d, false);
