@@ -41,6 +41,7 @@
   import { diagStore } from "./app/diagState";
   import { mainStatus } from "./app/diagSelectors";
   import { dismissOnOutside } from "./lib/actions/dismissOnOutside";
+  import { setupKeyboard } from "./stores/keyboard.svelte";
   import type { StatusInfo } from "./app/diagSelectors";
   import { stopEdgeProbe, probeNow } from "./app/edgeProbe";
   import { metaStore } from "./stores/meta";
@@ -248,55 +249,32 @@
       statusInfo.status !== "FRONTEND_ERROR",
   );
 
-  // P3.14: Ctrl+Shift+D → open InfoModal[diagnostics] (legacy DiagPanel removed).
-  function handleGlobalKeydown(e: KeyboardEvent) {
-    if (e.ctrlKey && e.shiftKey && e.key === "D") {
-      e.preventDefault();
-      openDiagnostics();
-      return;
-    }
-    // Drawing hotkeys (drawing_tools_v1: audit T1 розблоковано)
-    if (
-      e.target instanceof HTMLInputElement ||
-      e.target instanceof HTMLTextAreaElement
-    )
-      return;
-    if (e.ctrlKey && e.key === "z") {
-      e.preventDefault();
-      chartPaneRef?.undo();
-      return;
-    }
-    if (e.ctrlKey && e.key === "y") {
-      e.preventDefault();
-      chartPaneRef?.redo();
-      return;
-    }
-    if (e.key === "Escape") {
-      activeTool = null;
-      chartPaneRef?.cancelDraft();
-      return;
-    }
-    const k = e.key.toLowerCase();
-    if (k === "t") {
-      activeTool = activeTool === "trend" ? null : "trend";
-      return;
-    }
-    if (k === "h") {
-      activeTool = activeTool === "hline" ? null : "hline";
-      return;
-    }
-    if (k === "r") {
-      activeTool = activeTool === "rect" ? null : "rect";
-      return;
-    }
-    if (k === "e") {
-      activeTool = activeTool === "eraser" ? null : "eraser";
-      return;
-    }
-    // ADR-0074 T4: re-enabled. T5 (keyboard store) централізує цей mapping.
-    if (k === "g") {
-      toggleMagnet();
-      return;
+  // ADR-0074 T5: keyboard mapping винесено у stores/keyboard.svelte.ts
+  // (pure mapKeyToAction + setupKeyboard side-effect). Wiring у onMount нижче.
+  // Side-effect handler — single-source rendezvous between mapped action
+  // і App state (activeTool / magnetEnabled / undo/redo / diagnostics).
+  function handleKeyboardAction(action: import("./stores/keyboard.svelte").KeyboardAction): void {
+    switch (action.kind) {
+      case "set_tool":
+        // Toggle: re-press same hotkey → deactivate. Else switch tool.
+        activeTool = activeTool === action.tool ? null : action.tool;
+        break;
+      case "cancel_draft":
+        activeTool = null;
+        chartPaneRef?.cancelDraft();
+        break;
+      case "toggle_magnet":
+        toggleMagnet();
+        break;
+      case "undo":
+        chartPaneRef?.undo();
+        break;
+      case "redo":
+        chartPaneRef?.redo();
+        break;
+      case "open_diagnostics":
+        openDiagnostics();
+        break;
     }
   }
 
@@ -448,9 +426,12 @@
     }
   }
 
-  // Drawing hotkeys: merged into handleGlobalKeydown (drawing_tools_v1)
+  // Drawing hotkeys: handled через setupKeyboard store (ADR-0074 T5).
 
   // --- Lifecycle ---
+
+  // ADR-0074 T5: keyboard cleanup ref — встановлюється у onMount, викликається у onDestroy.
+  let keyboardCleanup: (() => void) | null = null;
 
   onMount(() => {
     // 1. Global error handler → DiagState
@@ -484,6 +465,10 @@
 
     // ADR-0007: initial CSS custom properties для поточної теми
     applyThemeCssVars(activeTheme);
+
+    // ADR-0074 T5: keyboard mapper + dispatcher. Pure mapping live у
+    // stores/keyboard.svelte.ts; side-effect handler виконує App-state mutations.
+    keyboardCleanup = setupKeyboard(handleKeyboardAction);
   });
 
   onDestroy(() => {
@@ -494,6 +479,8 @@
     ws?.close();
     stopEdgeProbe();
     if (clockInterval) clearInterval(clockInterval);
+    keyboardCleanup?.();
+    keyboardCleanup = null;
     window.removeEventListener("error", onGlobalError);
     window.removeEventListener("unhandledrejection", onUnhandledRejection);
     window.removeEventListener("online", onOnline);
@@ -543,7 +530,6 @@
   }
 </script>
 
-<svelte:window onkeydown={handleGlobalKeydown} />
 
 <main class="app-layout" style:background={appBg}>
   <!-- Main content area -->
