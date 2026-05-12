@@ -262,13 +262,17 @@ export class DrawingsRenderer {
   }
 
   // ---- converters ----
-  private toX(t_ms: number): number | null {
+  // ADR-0074 T1 bugfix: arrow class fields замість prototype methods —
+  // arrow форма auto-binds `this`, тому ref-passing `this.toX` до ToolModule
+  // не втрачає контекст. Регулярні методи треба було б wrapper-ити у
+  // arrow closures на кожен виклик (alloc per hit-test).
+  private toX = (t_ms: number): number | null => {
     return this.chartApi.timeScale().timeToCoordinate((t_ms / 1000) as import('lightweight-charts').Time);
-  }
+  };
 
-  private toY(price: number): number | null {
+  private toY = (price: number): number | null => {
     return this.seriesApi.priceToCoordinate(price);
-  }
+  };
 
   private fromX(x: number): T_MS | null {
     const t = this.chartApi.timeScale().coordinateToTime(x);
@@ -442,7 +446,8 @@ export class DrawingsRenderer {
       }
 
       // ADR-0074 T1: delegate hit-test до TOOL_REGISTRY. Tool-specific
-      // geometry math живе у tools/*Tool.ts модулях.
+      // geometry math живе у tools/*Tool.ts модулях. this.toX/this.toY —
+      // arrow class fields, auto-binded → safe передавати як ref без wrap.
       const tool = getToolModule(d.type);
       if (!tool) continue;
       const result = tool.hitTest(d, cursorX, cursorY, tol, this.toX, this.toY);
