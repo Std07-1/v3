@@ -1,5 +1,31 @@
+<!--
+  src/layout/DrawingToolbar.svelte — ADR-0074 T3 (Drawing Tools V1 redesign).
+
+  Зміни проти попередньої версії (164 LOC, unicode glyphs 22×22):
+    - Inline SVG icons (Lucide-style stroke geometry, no new dependency)
+    - Always-visible labels (Ukrainian), hotkey badge `<kbd>`
+    - Button sizes CSS-var-driven (--drawing-toolbar-btn-size):
+        desktop 32×32, mobile (pointer:coarse) 44×44 — WCAG 2.1 AA по факту
+    - 5 buttons: cursor (no-tool mode) + hline + trend + rect + eraser
+      Cursor — OQ2 resolution rev 1.1: explicit "no tool" state replaces
+      implicit "click outside to deselect".
+    - Layout:
+        Desktop:        left-edge vertical column; expanded 140px з labels
+                        OR collapsed 36px icon-only (user toggle persisted)
+        Mobile portrait: bottom-LEFT vertical stack 44×44 icon-only;
+                        position bottom: env(safe-area-inset-bottom) per
+                        ADR-0071 PWA + ADR-0074 OQ3 resolution.
+        Mobile landscape: top-left vertical icon-only 32×32 (compact).
+
+  Hotkey display: registry hotkey як `<kbd>`. trend показує `\` per
+  ADR-0074 §6, але keyboard binding ще `t` до Slice T5 (paralleled).
+  Slice T5 уніфікує keyboard store → display й binding match.
+
+  Magnet — DEFERRED до Slice T4 (окремий button + onToggleMagnet prop).
+-->
 <script lang="ts">
   import type { ActiveTool } from "../types";
+  import { TOOL_REGISTRY } from "../chart/drawings/tools";
 
   const {
     activeTool,
@@ -24,89 +50,152 @@
     } catch {}
   }
 
-  const tools: {
+  // Inline Lucide-style SVG icons. ~24×24 viewBox, stroke=currentColor.
+  // ~200-400 bytes each, ~1.5KB total raw — менше за lucide-svelte tree-shake.
+  // Source: Lucide v0.460 (MIT) — mouse-pointer-2 / minus / trending-up / square / x.
+  type ToolBtn = {
     id: ActiveTool;
-    icon: string;
-    title: string;
+    label: string;
     hotkey: string;
-  }[] = [
-    { id: "hline", icon: "━", title: "Горизонтальна лінія", hotkey: "H" },
-    { id: "trend", icon: "╱", title: "Трендова лінія", hotkey: "T" },
-    { id: "rect", icon: "▭", title: "Прямокутник", hotkey: "R" },
-    { id: "eraser", icon: "✕", title: "Видалити", hotkey: "E" },
+    iconPath: string; // inner SVG markup (paths/lines/etc)
+  };
+
+  const ICON_CURSOR =
+    '<path d="M4 4l16.4 6.8a.5.5 0 0 1 .05.9L13.2 15.5 9.5 22.45a.5.5 0 0 1-.9-.05L4 4z"/>';
+  const ICON_HLINE = '<path d="M3 12h18"/>';
+  const ICON_TREND =
+    '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>';
+  const ICON_RECT = '<rect x="3" y="3" width="18" height="18" rx="2"/>';
+  const ICON_ERASER =
+    '<path d="M21 21H8a2 2 0 0 1-1.42-.587l-3.994-3.999a2 2 0 0 1 0-2.828l10-10a2 2 0 0 1 2.829 0l5.999 6a2 2 0 0 1 0 2.828L12.834 21"/><path d="m5.082 11.09 8.828 8.828"/>';
+
+  // Toolbar buttons — order matters (cursor first як "default", eraser last
+  // як destructive). Hotkeys беруться з ToolModule.hotkey для tools що у
+  // registry, hardcoded для cursor/eraser що НЕ Drawing entities.
+  const buttons: ToolBtn[] = [
+    {
+      id: null,
+      label: "Курсор",
+      hotkey: "Esc",
+      iconPath: ICON_CURSOR,
+    },
+    {
+      id: "hline",
+      label: "Горизонталь",
+      hotkey: TOOL_REGISTRY.get("hline")?.hotkey?.toUpperCase() ?? "H",
+      iconPath: ICON_HLINE,
+    },
+    {
+      id: "trend",
+      label: "Трендова",
+      hotkey: TOOL_REGISTRY.get("trend")?.hotkey ?? "T",
+      iconPath: ICON_TREND,
+    },
+    {
+      id: "rect",
+      label: "Прямокутник",
+      hotkey: TOOL_REGISTRY.get("rect")?.hotkey?.toUpperCase() ?? "R",
+      iconPath: ICON_RECT,
+    },
+    {
+      id: "eraser",
+      label: "Гумка",
+      hotkey: "E",
+      iconPath: ICON_ERASER,
+    },
   ];
+
+  function handleClick(id: ActiveTool) {
+    // Toggle: re-click активного інструменту → деактивує (null).
+    // Cursor button: id вже null → onSelectTool(null) у будь-якому випадку.
+    if (id === null) {
+      onSelectTool(null);
+    } else {
+      onSelectTool(activeTool === id ? null : id);
+    }
+  }
+
+  // Cursor button "active" коли немає інструменту вибрано — explicit indicator.
+  function isActive(id: ActiveTool): boolean {
+    if (id === null) return activeTool === null;
+    return activeTool === id;
+  }
 </script>
 
 <div class="drawing-toolbar" class:collapsed>
   <button
     class="collapse-btn"
-    onclick={() => toggleCollapsed()}
+    onclick={toggleCollapsed}
     title={collapsed ? "Розгорнути" : "Згорнути"}
     type="button"
+    aria-label={collapsed ? "Expand toolbar" : "Collapse toolbar"}
+    aria-expanded={!collapsed}
   >
     {collapsed ? "›" : "‹"}
   </button>
 
-  {#if !collapsed}
-    <div class="tools-group">
-      {#each tools as tool}
-        <button
-          class="tool-btn"
-          class:active={activeTool === tool.id}
-          onclick={() => onSelectTool(activeTool === tool.id ? null : tool.id)}
-          title={`${tool.title} [${tool.hotkey}]`}
-          type="button"
+  <div class="tools-group" role="toolbar" aria-label="Drawing tools">
+    {#each buttons as btn (btn.id ?? "_cursor")}
+      <button
+        class="tool-btn"
+        class:active={isActive(btn.id)}
+        onclick={() => handleClick(btn.id)}
+        title={`${btn.label} [${btn.hotkey}]`}
+        type="button"
+        aria-label={btn.label}
+        aria-pressed={isActive(btn.id)}
+      >
+        <svg
+          class="tool-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.75"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
         >
-          {tool.icon}
-        </button>
-      {/each}
-    </div>
-  {/if}
-
-  <!-- DEFERRED: magnet UI disabled — snap logic preserved, needs debugging (drawing_tools_v1)
-  {#if !collapsed}
-    <div class="tool-separator"></div>
-    <button
-      class="tool-btn magnet-btn"
-      class:active={magnetEnabled}
-      onclick={() => onToggleMagnet?.()}
-      title={`Magnet: ${magnetEnabled ? "ON" : "OFF"} [G]`}
-      type="button"
-    >
-      🧲
-    </button>
-  {/if}
-  -->
+          {@html btn.iconPath}
+        </svg>
+        {#if !collapsed}
+          <span class="tool-label">{btn.label}</span>
+          <kbd class="tool-hotkey">{btn.hotkey}</kbd>
+        {/if}
+      </button>
+    {/each}
+  </div>
 </div>
 
 <style>
-  /* ADR-0007: Glass-like toolbar з CSS custom properties */
+  /* ADR-0074 T3: redesigned toolbar.
+     CSS-var driven sizes (tokens.css --drawing-toolbar-*).
+     Backdrop-filter blur для glass effect (preserved з ADR-0008). */
   .drawing-toolbar {
     position: absolute;
-    left: 0;
+    left: 8px;
     top: 80px;
+    z-index: 50;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 0;
-    padding: 4px 3px;
+    align-items: stretch;
+    gap: var(--drawing-toolbar-gap, 4px);
+    padding: 6px 4px;
     background: var(--toolbar-bg, rgba(19, 23, 34, 0.6));
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     border: 1px solid var(--toolbar-border, rgba(255, 255, 255, 0.1));
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-    width: 28px;
-    z-index: 50;
-    transition:
-      width 0.2s ease,
-      padding 0.2s ease;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
     pointer-events: auto;
+    transition: width 0.2s ease;
   }
-
+  /* Default desktop expanded width: icon + label + kbd fit. */
+  .drawing-toolbar:not(.collapsed) {
+    width: 156px;
+  }
   .drawing-toolbar.collapsed {
-    width: 16px;
-    padding: 4px 1px;
+    width: calc(var(--drawing-toolbar-btn-size, 32px) + 12px);
+    padding: 6px 4px;
   }
 
   .collapse-btn {
@@ -121,7 +210,6 @@
     width: 100%;
     transition: opacity 0.15s;
   }
-
   .collapse-btn:hover {
     opacity: 0.85;
   }
@@ -129,36 +217,142 @@
   .tools-group {
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    padding: 2px 0;
+    gap: var(--drawing-toolbar-gap, 4px);
   }
 
   .tool-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--drawing-toolbar-label-offset, 8px);
     background: none;
     border: none;
     color: var(--toolbar-btn-color, #c8cdd6);
-    opacity: 0.6;
+    opacity: 0.72;
     cursor: pointer;
-    width: 22px;
-    height: 22px;
-    border-radius: 4px;
-    transition: all 0.15s ease;
-    font-size: var(--t3-size);
-    line-height: 22px;
-    text-align: center;
-    padding: 0;
+    min-height: var(--drawing-toolbar-btn-size, 32px);
+    padding: 4px 6px;
+    border-radius: 6px;
+    transition:
+      background 0.12s ease,
+      opacity 0.12s ease,
+      color 0.12s ease;
+    text-align: left;
+    font-family: var(
+      --font-sans,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      sans-serif
+    );
   }
-
+  .drawing-toolbar.collapsed .tool-btn {
+    justify-content: center;
+    padding: 0;
+    min-width: var(--drawing-toolbar-btn-size, 32px);
+    width: var(--drawing-toolbar-btn-size, 32px);
+  }
   .tool-btn:hover {
     opacity: 1;
     background: var(--toolbar-hover-bg, rgba(255, 255, 255, 0.08));
-    box-shadow: 0 0 4px var(--toolbar-hover-bg, rgba(255, 255, 255, 0.08));
+  }
+  .tool-btn:focus-visible {
+    outline: 1px solid var(--accent, #d4a017);
+    outline-offset: 1px;
+  }
+  .tool-btn.active {
+    color: var(--toolbar-active-color, #d4a017);
+    opacity: 1;
+    background: color-mix(
+      in srgb,
+      var(--toolbar-active-color, #d4a017) 14%,
+      transparent
+    );
+    box-shadow: inset 2px 0 0
+      color-mix(in srgb, var(--toolbar-active-color, #d4a017) 70%, transparent);
   }
 
-  .tool-btn.active {
-    color: var(--toolbar-active-color, #D4A017);
+  .tool-icon {
+    width: var(--drawing-toolbar-icon-size, 16px);
+    height: var(--drawing-toolbar-icon-size, 16px);
+    flex-shrink: 0;
+    display: block;
+  }
+  .tool-label {
+    flex: 1 1 auto;
+    font-size: var(--t3-size, 12px);
+    font-weight: 500;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tool-hotkey {
+    flex-shrink: 0;
+    font-family: var(--font-mono, "SF Mono", "Consolas", monospace);
+    font-size: var(--t6-size, 10px);
+    font-weight: 500;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-3, #6b6b80);
+    opacity: 0.8;
+  }
+  .tool-btn.active .tool-hotkey {
+    background: color-mix(
+      in srgb,
+      var(--toolbar-active-color, #d4a017) 18%,
+      transparent
+    );
+    color: var(--toolbar-active-color, #d4a017);
     opacity: 1;
-    background: color-mix(in srgb, var(--toolbar-active-color, #D4A017) 15%, transparent);
-    box-shadow: 0 0 8px color-mix(in srgb, var(--toolbar-active-color, #D4A017) 25%, transparent);
+  }
+
+  /* ═══ Mobile landscape phone (max-height:500px landscape) ═══
+     Compact icon-only column, top-left. Не залежить від collapse state —
+     малий екран = forced collapse для chart real estate. */
+  @media (orientation: landscape) and (max-height: 500px) {
+    .drawing-toolbar {
+      width: calc(var(--drawing-toolbar-btn-size, 32px) + 12px) !important;
+      top: 4px;
+      left: 4px;
+      padding: 4px 4px;
+    }
+    .drawing-toolbar .tool-label,
+    .drawing-toolbar .tool-hotkey,
+    .collapse-btn {
+      display: none;
+    }
+    .tool-btn {
+      justify-content: center;
+      padding: 0;
+      min-width: var(--drawing-toolbar-btn-size, 32px);
+      width: var(--drawing-toolbar-btn-size, 32px);
+    }
+  }
+
+  /* ═══ Mobile portrait (≤640px portrait) ═══
+     ADR-0074 §3 + OQ3 resolution: bottom-LEFT з safe-area inset.
+     Залишає bottom-CENTER/RIGHT під future NarrativeSheet (ADR-0075+).
+     Forced icon-only (44×44 — WCAG 2.1 AA target по факту з --drawing-*-px). */
+  @media (max-width: 640px) and (orientation: portrait) {
+    .drawing-toolbar {
+      top: auto !important;
+      bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
+      left: calc(env(safe-area-inset-left, 0px) + 8px);
+      width: calc(var(--drawing-toolbar-btn-size, 44px) + 12px) !important;
+      padding: 6px 4px;
+    }
+    .drawing-toolbar .tool-label,
+    .drawing-toolbar .tool-hotkey,
+    .collapse-btn {
+      display: none;
+    }
+    .tool-btn {
+      justify-content: center;
+      padding: 0;
+      min-width: var(--drawing-toolbar-btn-size, 44px);
+      width: var(--drawing-toolbar-btn-size, 44px);
+    }
   }
 </style>

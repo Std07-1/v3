@@ -172,6 +172,12 @@
   --drawing-hit-tolerance-px: 10;
   --drawing-handle-radius-px: 5;
   --drawing-handle-radius-hover-px: 8;
+  /* Toolbar geometry — CSS-only (читають .drawing-toolbar .tool-btn styles).
+     Desktop default: 32×32 btn, 16px icon, 4px gap. */
+  --drawing-toolbar-btn-size: 32px;
+  --drawing-toolbar-icon-size: 16px;
+  --drawing-toolbar-gap: 4px;
+  --drawing-toolbar-label-offset: 8px;
 }
 
 @media (pointer: coarse) {
@@ -179,5 +185,9 @@
     --drawing-hit-tolerance-px: 16;
     --drawing-handle-radius-px: 7;
     --drawing-handle-radius-hover-px: 10;
+    /* Mobile: 44×44 WCAG 2.1 AA tap target; 20px icon; 6px gap. */
+    --drawing-toolbar-btn-size: 44px;
+    --drawing-toolbar-icon-size: 20px;
+    --drawing-toolbar-gap: 6px;
   }
 }
