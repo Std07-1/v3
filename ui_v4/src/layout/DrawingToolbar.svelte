@@ -30,9 +30,16 @@
   const {
     activeTool,
     onSelectTool,
+    magnetEnabled = false,
+    onToggleMagnet,
   }: {
     activeTool: ActiveTool;
     onSelectTool: (tool: ActiveTool) => void;
+    /** ADR-0074 T4: snap-to-OHLC magnet mode. Persisted у localStorage
+     *  `v4_magnet_enabled` через App.svelte saveMagnet(). Active state visual
+     *  matches drawing-tool buttons (gold accent + inset border). */
+    magnetEnabled?: boolean;
+    onToggleMagnet?: () => void;
   } = $props();
 
   function loadCollapsed(): boolean {
@@ -68,6 +75,9 @@
   const ICON_RECT = '<rect x="3" y="3" width="18" height="18" rx="2"/>';
   const ICON_ERASER =
     '<path d="M21 21H8a2 2 0 0 1-1.42-.587l-3.994-3.999a2 2 0 0 1 0-2.828l10-10a2 2 0 0 1 2.829 0l5.999 6a2 2 0 0 1 0 2.828L12.834 21"/><path d="m5.082 11.09 8.828 8.828"/>';
+  // Lucide "magnet" — U-shaped horseshoe magnet, intuitive snap metaphor.
+  const ICON_MAGNET =
+    '<path d="m6 15-4-4 6.75-6.77a7.79 7.79 0 0 1 11 11L13 22l-4-4 6.39-6.36a2.14 2.14 0 0 0-3-3L6 15"/><path d="m5 8 4 4"/><path d="m12 15 4 4"/>';
 
   // Toolbar buttons — order matters (cursor first як "default", eraser last
   // як destructive). Hotkeys беруться з ToolModule.hotkey для tools що у
@@ -163,6 +173,40 @@
         {/if}
       </button>
     {/each}
+
+    <!-- ADR-0074 T4: Magnet toggle. Modal toggle (НЕ drawing tool) —
+         не входить у buttons[] iteration бо логіка active state інша
+         (magnetEnabled bool, не activeTool match). Visual divider above
+         виділяє modal-vs-drawing-tool boundary. -->
+    {#if onToggleMagnet}
+      <div class="tool-divider" aria-hidden="true"></div>
+      <button
+        class="tool-btn magnet-btn"
+        class:active={magnetEnabled}
+        onclick={onToggleMagnet}
+        title={`Magnet (snap-to-OHLC): ${magnetEnabled ? "ON" : "OFF"} [G]`}
+        type="button"
+        aria-label="Magnet snap-to-OHLC"
+        aria-pressed={magnetEnabled}
+      >
+        <svg
+          class="tool-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.75"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          {@html ICON_MAGNET}
+        </svg>
+        {#if !collapsed}
+          <span class="tool-label">Магніт</span>
+          <kbd class="tool-hotkey">G</kbd>
+        {/if}
+      </button>
+    {/if}
   </div>
 </div>
 
@@ -218,6 +262,14 @@
     display: flex;
     flex-direction: column;
     gap: var(--drawing-toolbar-gap, 4px);
+  }
+
+  /* ADR-0074 T4: visual separator між drawing tools (cursor..eraser) і
+     modal toggles (magnet). 1px hairline matching toolbar border style. */
+  .tool-divider {
+    height: 1px;
+    margin: 4px 4px;
+    background: var(--toolbar-border, rgba(255, 255, 255, 0.1));
   }
 
   .tool-btn {

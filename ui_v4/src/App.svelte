@@ -112,7 +112,9 @@
     } catch {}
   }
 
-  // Magnet mode: snap drawings to candle OHLC (drawing_tools_v1, PATCH 3)
+  // Magnet mode: snap drawings to candle OHLC (drawing_tools_v1, PATCH 3).
+  // ADR-0074 T4: re-enabled у toolbar UI + hotkey G після прибраного
+  // DEFERRED block з old DrawingToolbar (заміненого у T3 rewrite).
   function loadMagnet(): boolean {
     try {
       return localStorage.getItem("v4_magnet_enabled") === "1";
@@ -120,7 +122,18 @@
       return false;
     }
   }
+  function saveMagnet(enabled: boolean): void {
+    try {
+      localStorage.setItem("v4_magnet_enabled", enabled ? "1" : "0");
+    } catch {
+      /* quota / private mode — silent */
+    }
+  }
   let magnetEnabled = $state(loadMagnet());
+  function toggleMagnet(): void {
+    magnetEnabled = !magnetEnabled;
+    saveMagnet(magnetEnabled);
+  }
 
   // P3.11/P3.12: ChartPane ref for theme/style delegation
   let chartPaneRef: any = $state(null);
@@ -280,8 +293,11 @@
       activeTool = activeTool === "eraser" ? null : "eraser";
       return;
     }
-    // DEFERRED: magnet hotkey disabled (drawing_tools_v1)
-    // if (k === "g") { toggleMagnet(); return; }
+    // ADR-0074 T4: re-enabled. T5 (keyboard store) централізує цей mapping.
+    if (k === "g") {
+      toggleMagnet();
+      return;
+    }
   }
 
   // P3.1: HUD tracking — symbol/tf/price/timestamp from last frame
@@ -538,7 +554,12 @@
            See: ui_v4/src/layout/BrandWatermark.svelte header + memory file
            /memories/repo/brand-watermark-locked-slot.md -->
       <BrandWatermark onclick={openAbout} />
-      <DrawingToolbar {activeTool} onSelectTool={(t) => (activeTool = t)} />
+      <DrawingToolbar
+        {activeTool}
+        onSelectTool={(t) => (activeTool = t)}
+        {magnetEnabled}
+        onToggleMagnet={toggleMagnet}
+      />
       <ChartPane
         bind:this={chartPaneRef}
         currentFrame={frame}
