@@ -152,3 +152,32 @@
   --surface-1:    #FFFFFF;
   --border-mute:  #E1E4E8;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * Drawing UX tokens — ADR-0074 T2 (Drawing Tools V1)
+ * ═══════════════════════════════════════════════════════════════════════
+ * Hit-test geometry для chart drawings (hline, trend, rect, + ADR-B tools).
+ * Tokens читаються DrawingsRenderer.refreshThemeColors() ОДИН раз і
+ * кешуються у numeric fields (FP10: НЕ викликати getComputedStyle у
+ * hit-test hot path = browser style recalc per frame).
+ *
+ * Desktop default: 10/5/8 — WCAG 2.1 AA на 1×DPR. На retina (2-3×DPR)
+ * це 20-30 device-px tolerance → comfortable mouse hover.
+ *
+ * Mobile (pointer:coarse) override: 16/7/10 — WCAG 2.1 AA target 44×44
+ * виконується по факту (handle 14px visible × hover 20px з tolerance 16
+ * = effective ~36-46px tap-zone на 1-3×DPR).
+ */
+:root {
+  --drawing-hit-tolerance-px: 10;
+  --drawing-handle-radius-px: 5;
+  --drawing-handle-radius-hover-px: 8;
+}
+
+@media (pointer: coarse) {
+  :root {
+    --drawing-hit-tolerance-px: 16;
+    --drawing-handle-radius-px: 7;
+    --drawing-handle-radius-hover-px: 10;
+  }
+}

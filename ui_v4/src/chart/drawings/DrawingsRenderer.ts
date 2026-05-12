@@ -22,6 +22,18 @@ function timeToSec(time: HorzScaleItem): number {
   return Date.UTC(time.year, time.month - 1, time.day, 0, 0, 0, 0) / 1000;
 }
 
+/** Parse a CSS custom property як positive number (px-without-unit).
+ *  ADR-0074 T2: tokens.css declarates `--drawing-hit-tolerance-px: 10`
+ *  (raw number, no `px` suffix). parseFloat tolerates trailing whitespace +
+ *  optional unit. Returns fallback якщо missing/invalid (degraded-but-loud
+ *  не required — це pure perceptual UX value, not data correctness). */
+function parsePxToken(s: CSSStyleDeclaration, name: string, fallback: number): number {
+  const raw = s.getPropertyValue(name).trim();
+  if (!raw) return fallback;
+  const n = parseFloat(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 function cloneDrawing(d: Drawing): Drawing {
   return {
     id: d.id,
@@ -100,6 +112,14 @@ export class DrawingsRenderer {
   // refreshed from --toolbar-active-color CSS var via refreshThemeColors().
   private themeAccentColor = '#D4A017';
 
+  // ADR-0074 T2: hit-test geometry cached from CSS vars (--drawing-*).
+  // Defaults match geometry.ts HIT_TOLERANCE_PX/HANDLE_RADIUS_PX constants
+  // (fallback якщо tokens.css не loaded або CSS var missing).
+  // FP10: НЕ read getComputedStyle у hit-test loop — refresh-ить per theme/init.
+  private hitTolerancePx = HIT_TOLERANCE_PX;
+  private handleRadiusPx = HANDLE_RADIUS_PX;
+  private handleRadiusHoverPx = HANDLE_RADIUS_HOVER_PX;
+
   // listeners
   private ro: ResizeObserver;
 
@@ -157,6 +177,12 @@ export class DrawingsRenderer {
 
     this.setupInteractionsCapture();
 
+    // ADR-0074 T2: prime hit-test geometry cache + theme colors з CSS-vars
+    // на init. Без цього виклику mobile користувачі без theme-switch отримують
+    // desktop fallback geometry (10/5/8) замість platform-aware (16/7/10).
+    // Safe навіть якщо canvas yet not styled — fallbacks WCAG-compliant.
+    this.refreshThemeColors();
+
     // НЕ загружаємо тут — чекаємо на setStorageKey(sym, tf) від ChartPane,
     // щоб уникнути витоку drawings з глобального ключа 'v4_drawings' у per-TF ключі.
   }
@@ -196,14 +222,20 @@ export class DrawingsRenderer {
     this.snapConfig.enabled = enabled;
   }
 
-  /** ADR-0007: оновити кольори теми з CSS custom properties.
-   *  Canvas не читає CSS vars напряму — кешуємо при зміні теми. */
+  /** ADR-0007 + ADR-0074 T2: оновити кольори теми + hit-test geometry з CSS
+   *  custom properties. Canvas не читає CSS vars напряму — кешуємо одноразово
+   *  (на init, на change theme, на media query change). Hit-test loop читає
+   *  з numeric fields (FP10 zero getComputedStyle у hot path). */
   refreshThemeColors(): void {
     const s = getComputedStyle(this.canvas);
     this.themeBaseColor = s.getPropertyValue('--drawing-base-color').trim() || '#c8cdd6';
     this.themeRectFill = s.getPropertyValue('--drawing-rect-fill').trim() || 'rgba(200, 205, 214, 0.10)';
     // ADR-0066 PATCH 06b: read --toolbar-active-color (set by themes.ts applyThemeCssVars)
     this.themeAccentColor = s.getPropertyValue('--toolbar-active-color').trim() || '#D4A017';
+    // ADR-0074 T2: drawing UX geometry tokens (platform-aware via @media pointer:coarse)
+    this.hitTolerancePx = parsePxToken(s, '--drawing-hit-tolerance-px', HIT_TOLERANCE_PX);
+    this.handleRadiusPx = parsePxToken(s, '--drawing-handle-radius-px', HANDLE_RADIUS_PX);
+    this.handleRadiusHoverPx = parsePxToken(s, '--drawing-handle-radius-hover-px', HANDLE_RADIUS_HOVER_PX);
     this.scheduleRender();
   }
 
@@ -381,7 +413,7 @@ export class DrawingsRenderer {
           const hy = this.toY(d.points[j].price);
           if (hx === null || hy === null) continue;
 
-          if (distToPoint(cursorX, cursorY, hx, hy) <= HIT_TOLERANCE_PX) {
+          if (distToPoint(cursorX, cursorY, hx, hy) <= this.hitTolerancePx) {
             return { id: d.id, handleIdx: j };
           }
         }
@@ -389,8 +421,9 @@ export class DrawingsRenderer {
     }
 
     // 2) body scan (z-index: останній зверху)
+    const tol = this.hitTolerancePx;
     let best: HitState | null = null;
-    let minDist = HIT_TOLERANCE_PX;
+    let minDist = tol;
 
     for (let i = this.drawings.length - 1; i >= 0; i--) {
       const d = this.drawings[i];
@@ -399,10 +432,10 @@ export class DrawingsRenderer {
       const aabb = this.aabbById.get(d.id);
       if (aabb) {
         if (
-          cursorX < aabb.minX - HIT_TOLERANCE_PX ||
-          cursorX > aabb.maxX + HIT_TOLERANCE_PX ||
-          cursorY < aabb.minY - HIT_TOLERANCE_PX ||
-          cursorY > aabb.maxY + HIT_TOLERANCE_PX
+          cursorX < aabb.minX - tol ||
+          cursorX > aabb.maxX + tol ||
+          cursorY < aabb.minY - tol ||
+          cursorY > aabb.maxY + tol
         ) {
           continue;
         }
@@ -412,7 +445,7 @@ export class DrawingsRenderer {
       // geometry math живе у tools/*Tool.ts модулях.
       const tool = getToolModule(d.type);
       if (!tool) continue;
-      const result = tool.hitTest(d, cursorX, cursorY, HIT_TOLERANCE_PX, this.toX, this.toY);
+      const result = tool.hitTest(d, cursorX, cursorY, tol, this.toX, this.toY);
       if (!result.hit) continue;
 
       if (result.distance <= minDist) {
@@ -814,7 +847,7 @@ export class DrawingsRenderer {
       if (x === null || y === null) continue;
 
       const isHoverHandle = this.hovered?.id === d.id && this.hovered.handleIdx === i;
-      const r = isHoverHandle ? HANDLE_RADIUS_HOVER_PX : HANDLE_RADIUS_PX;
+      const r = isHoverHandle ? this.handleRadiusHoverPx : this.handleRadiusPx;
 
       this.ctx.beginPath();
       this.ctx.arc(x, y, r, 0, Math.PI * 2);

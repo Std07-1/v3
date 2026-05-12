@@ -1,9 +1,15 @@
 // src/chart/interaction/geometry.ts
 // SSOT: вся математика в Screen Space (CSS px)
+//
+// ADR-0074 T2: HIT_TOLERANCE_PX / HANDLE_RADIUS_PX / HANDLE_RADIUS_HOVER_PX
+// тепер служать ТІЛЬКИ fallback defaults коли CSS vars відсутні. Live values
+// resolve-ляться через tokens.css `--drawing-*` + DrawingsRenderer cache.
+// Bumped 6→10 / 3.5→5 / 5→8 щоб desktop fallbacks матчили WCAG 2.1 AA target.
+// Mobile (@media pointer:coarse у tokens.css) overrides до 16/7/10.
 
-export const HIT_TOLERANCE_PX = 6;
-export const HANDLE_RADIUS_PX = 3.5;
-export const HANDLE_RADIUS_HOVER_PX = 5;
+export const HIT_TOLERANCE_PX = 10;
+export const HANDLE_RADIUS_PX = 5;
+export const HANDLE_RADIUS_HOVER_PX = 8;
 
 export function distToHLine(cursorY: number, lineY: number): number {
   return Math.abs(cursorY - lineY);
