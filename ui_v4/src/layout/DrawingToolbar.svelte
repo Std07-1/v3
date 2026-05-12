@@ -360,51 +360,20 @@
     opacity: 1;
   }
 
-  /* ═══ Mobile landscape phone (max-height:500px landscape) ═══
-     Compact icon-only column, top-left. Не залежить від collapse state —
-     малий екран = forced collapse для chart real estate. */
+  /* ═══ Mobile (landscape OR portrait) ═══
+     TEMP HIDE 2026-05-12 owner-direction: drawing tools на mobile тимчасово
+     вимкнено через відомі баги (touch hit-test issues, draft commit edge
+     cases). Desktop версія зберігається. Повернемо після resolution.
+     Original layout стилі preserved у git history (commit 510ef18 + bae95b0)
+     — restoration = revert цього media block. */
   @media (orientation: landscape) and (max-height: 500px) {
     .drawing-toolbar {
-      width: calc(var(--drawing-toolbar-btn-size, 32px) + 12px) !important;
-      top: 4px;
-      left: 4px;
-      padding: 4px 4px;
-    }
-    .drawing-toolbar .tool-label,
-    .drawing-toolbar .tool-hotkey,
-    .collapse-btn {
       display: none;
-    }
-    .tool-btn {
-      justify-content: center;
-      padding: 0;
-      min-width: var(--drawing-toolbar-btn-size, 32px);
-      width: var(--drawing-toolbar-btn-size, 32px);
     }
   }
-
-  /* ═══ Mobile portrait (≤640px portrait) ═══
-     ADR-0074 §3 + OQ3 resolution: bottom-LEFT з safe-area inset.
-     Залишає bottom-CENTER/RIGHT під future NarrativeSheet (ADR-0075+).
-     Forced icon-only (44×44 — WCAG 2.1 AA target по факту з --drawing-*-px). */
   @media (max-width: 640px) and (orientation: portrait) {
     .drawing-toolbar {
-      top: auto !important;
-      bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
-      left: calc(env(safe-area-inset-left, 0px) + 8px);
-      width: calc(var(--drawing-toolbar-btn-size, 44px) + 12px) !important;
-      padding: 6px 4px;
-    }
-    .drawing-toolbar .tool-label,
-    .drawing-toolbar .tool-hotkey,
-    .collapse-btn {
       display: none;
-    }
-    .tool-btn {
-      justify-content: center;
-      padding: 0;
-      min-width: var(--drawing-toolbar-btn-size, 44px);
-      width: var(--drawing-toolbar-btn-size, 44px);
     }
   }
 </style>
