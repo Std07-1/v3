@@ -49,12 +49,24 @@ export function isTextInputFocused(): boolean {
     return false;
 }
 
-/** Pure key→action mapping. Renderer-агностичний, no DOM access крім
- *  isTextInputFocused() (для focus-guard). Easy to unit-test з mock
- *  KeyboardEvent + jsdom активного елементу.
+/** Minimal KeyboardEvent shape потрібний для mapping. Вмисно вузький —
+ *  uunit tests можуть passing plain object без DOM dependency.
+ *  Real DOM KeyboardEvent assignable до цього shape. */
+export interface KeyInput {
+    readonly key: string;
+    readonly ctrlKey: boolean;
+    readonly shiftKey: boolean;
+}
+
+/** Pure key→action mapping. Renderer-агностичний.
  *
- *  Returns null коли key не bound (caller робить no-op). */
-export function mapKeyToAction(e: KeyboardEvent): KeyboardAction | null {
+ *  Focus-guard injection (isInputFocused param) дає чисте unit-testing
+ *  без DOM mocking — default читає document.activeElement, тест passes
+ *  custom stub. Returns null коли key не bound (caller робить no-op). */
+export function mapKeyToAction(
+    e: KeyInput,
+    isInputFocused: () => boolean = isTextInputFocused,
+): KeyboardAction | null {
     // ── Combos з модифікаторами — НЕ guard-ed (Ctrl+Z working навіть у text input) ──
     if (e.ctrlKey && e.shiftKey && e.key === 'D') {
         return { kind: 'open_diagnostics' };
@@ -73,7 +85,7 @@ export function mapKeyToAction(e: KeyboardEvent): KeyboardAction | null {
     }
 
     // ── Single-letter hotkeys — focus-guarded ──
-    if (isTextInputFocused()) return null;
+    if (isInputFocused()) return null;
 
     const k = e.key.toLowerCase();
     if (k === 'h') return { kind: 'set_tool', tool: 'hline' };
