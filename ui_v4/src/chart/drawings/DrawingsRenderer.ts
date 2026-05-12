@@ -50,7 +50,6 @@ type HitState = { id: string; handleIdx: number | null };
 type SnapConfig = {
   enabled: boolean;
   mode: 'ohlc' | 'hl' | 'close';
-  radius_px: number;
 };
 
 export class DrawingsRenderer {
@@ -97,7 +96,7 @@ export class DrawingsRenderer {
   private hoverDirty = false;
 
   // snap (default OFF — controlled by toolbar magnet toggle, persisted in localStorage)
-  private snapConfig: SnapConfig = { enabled: false, mode: 'ohlc', radius_px: 30 };
+  private snapConfig: SnapConfig = { enabled: false, mode: 'ohlc' };
   private lastSnap: { x: number; y: number } | null = null; // visual snap indicator
 
   // warning throttle
@@ -304,9 +303,9 @@ export class DrawingsRenderer {
           ? [bar.high, bar.low]
           : [bar.high, bar.low, bar.open, bar.close];
 
+    // Find nearest OHLC by Y-pixel distance.
     let bestPrice = rawPrice;
     let bestDist = Infinity;
-
     for (const p of candidates) {
       const py = this.seriesApi.priceToCoordinate(p);
       if (py === null) continue;
@@ -317,14 +316,21 @@ export class DrawingsRenderer {
       }
     }
 
-    if (bestDist <= this.snapConfig.radius_px) {
-      // Visual snap indicator: mark snapped point
-      const snapY = this.seriesApi.priceToCoordinate(bestPrice);
-      this.lastSnap = snapY !== null ? { x, y: snapY } : null;
-      return bestPrice;
+    // Snap only within threshold — prevents "flying" when cursor is outside the
+    // bar's price range (e.g. cursor at bottom Y≈450 but all OHLC at Y≈150-200).
+    // 120px covers normal hover-near-candle distances (debug: 6–104px) while
+    // rejecting far mismatches (200–400px = cursor below candles snapping to top).
+    // Old radius was 30px (too tight); "always snap" = no threshold (too loose).
+    const SNAP_RADIUS_PX = 120;
+    if (bestDist > SNAP_RADIUS_PX) {
+      this.lastSnap = null;
+      return rawPrice;
     }
-    this.lastSnap = null;
-    return rawPrice;
+
+    // Visual snap indicator
+    const snapY = this.seriesApi.priceToCoordinate(bestPrice);
+    this.lastSnap = snapY !== null ? { x, y: snapY } : null;
+    return bestPrice;
   }
 
   // ---- CommandStack локальне застосування ----
@@ -480,11 +486,44 @@ export class DrawingsRenderer {
 
       // Tool drawing (draft) -> блокуємо LWC
       if (this.activeTool && this.activeTool !== 'eraser') {
-        if (!this.draft) return;
+        if (!this.draft) {
+          // hline: create preview draft on hover so user sees where line will land.
+          // trend/rect: draft is created only on 1st click — but ми все ж compute
+          // snap preview якщо magnet ON, щоб green dot indicator біг за курсором
+          // показуючи де snap приземлиться при click. TradingView-mobile pattern.
+          if (this.activeTool === 'hline') {
+            const rawP = this.fromY(y);
+            const t = this.fromX(x);
+            if (rawP !== null && t !== null) {
+              const price = this.getSnappedPrice(x, y, rawP);
+              this.draft = { id: uuidv4(), type: 'hline', points: [{ t_ms: t, price }] };
+              e.preventDefault();
+              e.stopPropagation();
+              this.scheduleRender();
+            }
+          } else if (this.snapConfig.enabled) {
+            // trend/rect hover preview: compute snap target → updates lastSnap
+            // as side-effect → render shows green dot. Без створення draft —
+            // draft starts on 1st click як before.
+            const rawP = this.fromY(y);
+            if (rawP !== null) {
+              this.getSnappedPrice(x, y, rawP);
+              this.scheduleRender();
+            }
+          }
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         this.updateDraft(x, y);
         return;
+      }
+
+      // No active tool → clear stale snap indicator (left over from previous
+      // tool session). Без цього green dot "застрягав" після Esc.
+      if (this.lastSnap !== null) {
+        this.lastSnap = null;
+        this.scheduleRender();
       }
 
       // Eraser hover (але не блокуємо LWC)
@@ -620,9 +659,11 @@ export class DrawingsRenderer {
     const price = this.getSnappedPrice(x, y, rawPrice);
 
     if (this.activeTool === 'hline') {
+      // hline draft was created during hover (pointermove) and finishDraft() commits it.
+      // This path is reached only if user clicked without hovering (edge case).
       const d: Drawing = { id: uuidv4(), type: 'hline', points: [{ t_ms, price }] };
       this.commandStack.push({ type: 'ADD', drawing: d });
-      // Tool stays active for continuous drawing; Escape to exit
+      this.draft = null;
       return;
     }
 
@@ -642,9 +683,12 @@ export class DrawingsRenderer {
     let t_ms = this.fromX(x);
     let rawPrice = this.fromY(y);
 
+    // For hline (1-point draft), fallback to points[0]; for trend/rect to points[1].
+    const lastIdx = this.draft.type === 'hline' ? 0 : 1;
+
     // ADR-0008: при null — fallback до останніх відомих координат (уникає "freeze" на краях)
-    if (t_ms === null) t_ms = this.draft.points[1].t_ms;
-    if (rawPrice === null) rawPrice = this.draft.points[1].price;
+    if (t_ms === null) t_ms = this.draft.points[lastIdx].t_ms;
+    if (rawPrice === null) rawPrice = this.draft.points[lastIdx].price;
     if (t_ms === null || rawPrice === null) {
       this.warnOnce('tool_map_move_null', 'drawing_coord_null', `tool pointermove: cannot map x=${x},y=${y}`);
       return;
@@ -652,18 +696,22 @@ export class DrawingsRenderer {
 
     const price = this.getSnappedPrice(x, y, rawPrice);
 
-    this.draft.points[1] = { t_ms, price };
+    this.draft.points[lastIdx] = { t_ms, price };
     this.scheduleRender();
   }
 
   private finishDraft(): void {
     if (!this.draft) return;
 
-    const a = this.draft.points[0];
-    const b = this.draft.points[1];
-    const isZero = a.t_ms === b.t_ms && a.price === b.price;
-
-    if (!isZero) this.commandStack.push({ type: 'ADD', drawing: cloneDrawing(this.draft) });
+    if (this.draft.points.length < 2) {
+      // 1-point drawing (hline): always valid — commit as-is.
+      this.commandStack.push({ type: 'ADD', drawing: cloneDrawing(this.draft) });
+    } else {
+      const a = this.draft.points[0];
+      const b = this.draft.points[1];
+      const isZero = a.t_ms === b.t_ms && a.price === b.price;
+      if (!isZero) this.commandStack.push({ type: 'ADD', drawing: cloneDrawing(this.draft) });
+    }
 
     this.draft = null;
     // Tool stays active for continuous drawing (TradingView-style); Escape to exit
@@ -818,8 +866,12 @@ export class DrawingsRenderer {
     for (const d of this.drawings) drawItem(d, false);
     if (this.draft) drawItem(this.draft, true);
 
-    // 2) snap indicator (magnet visual feedback)
-    if (this.lastSnap && this.draft) {
+    // 2) snap indicator (magnet visual feedback).
+    // Раніше gated `&& this.draft` — green dot з'являвся тільки коли user уже
+    // почав малювати. Тепер показуємо щойно lastSnap встановлено (під час
+    // hover preview для trend/rect, draft preview для hline, drag handles).
+    // Очищення lastSnap при tool deactivate робиться в pointermove handler.
+    if (this.lastSnap) {
       this.ctx.save();
       this.ctx.strokeStyle = '#00e676';
       this.ctx.fillStyle = 'rgba(0, 230, 118, 0.25)';
