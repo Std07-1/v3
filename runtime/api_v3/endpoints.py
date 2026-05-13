@@ -1147,7 +1147,9 @@ def _smc_zones_compute_snapshot_id(sorted_wire_zones: List[Dict[str, Any]]) -> s
     underlying zone set changes (add / remove / re-grade reorders proximity).
     """
     raw = ",".join(str(z.get("id") or "") for z in sorted_wire_zones)
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+    # usedforsecurity=False — це fingerprint для cache-key/ETag (CWE-327
+    # не застосовується); пояснюємо bandit через kwarg, а не nosec.
+    return hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
 # RFC 4648 §5 urlsafe base64 alphabet + padding char.

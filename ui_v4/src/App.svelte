@@ -240,6 +240,13 @@
   // ADR-0066 PATCH 04b: Splash overlay during initial WS warming.
   // Shown when no first frame has arrived yet AND status is non-fatal
   // (CONNECTING / HEALTHY-but-no-data). Auto-hides on first WS frame.
+  // NB: statusInfo declared here (not later) so $derived splashVisible can
+  // reference it without TS temporal-dead-zone error.
+  let statusInfo: StatusInfo = $state({
+    status: "CONNECTING" as const,
+    detail: "",
+    critical: false,
+  });
   let firstFrameArrived = $state(false);
   let splashVisible = $derived(
     !firstFrameArrived &&
@@ -299,11 +306,6 @@
   let cachedNarrative: import("./types").NarrativeBlock | null = $state(null);
   let cachedShell: import("./types").ShellPayload | null = $state(null);
   let cachedPdState: import("./types").PdState | null = $state(null);
-  let statusInfo: StatusInfo = $state({
-    status: "CONNECTING" as const,
-    detail: "",
-    critical: false,
-  });
 
   let _pairRestored = false; // restore saved symbol/TF on first full frame per connection
 

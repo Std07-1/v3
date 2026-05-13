@@ -488,12 +488,16 @@ export function setupPriceScaleInteractions(
         }
         stopVerticalPan('pointerup');
     };
+    // Blur listener wrapped в named const щоб removeEventListener міг
+    // знайти той самий reference (без цього cleanup був no-op =
+    // memory leak + TS overload mismatch на (origin?: string) => void).
+    const onWindowBlur = (): void => stopVerticalPan('blur');
     window.addEventListener('pointerup', handlePointerUp, true);
     window.addEventListener('pointercancel', handlePointerUp, true);
-    window.addEventListener('blur', () => stopVerticalPan('blur'));
+    window.addEventListener('blur', onWindowBlur);
     cleanups.push(() => window.removeEventListener('pointerup', handlePointerUp, true));
     cleanups.push(() => window.removeEventListener('pointercancel', handlePointerUp, true));
-    cleanups.push(() => window.removeEventListener('blur', stopVerticalPan));
+    cleanups.push(() => window.removeEventListener('blur', onWindowBlur));
 
     // ─── Double-click on price axis → resetViewAndFollow ───
     // V3: chart_adapter_lite.js:798-803

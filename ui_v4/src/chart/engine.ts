@@ -145,7 +145,8 @@ export class ChartEngine {
     // ─── Chart options (V3 parity: DARK_CHART_OPTIONS, chart_adapter_lite.js:101-148) ───
     this.chart = createChart(container, {
       autoSize: true,
-      devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+      // NB: LWC v5 не має chart-level `devicePixelRatio` option (TS rejects).
+      // DPR керується через CSS resize + внутрішній canvas transform у LWC.
       layout: {
         background: { color: 'transparent' },
         textColor: THEMES.dark.chart.layout.textColor,

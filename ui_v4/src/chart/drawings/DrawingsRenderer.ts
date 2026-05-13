@@ -11,7 +11,7 @@ import {
   HANDLE_RADIUS_HOVER_PX,
   distToPoint,
 } from '../interaction/geometry';
-import { getToolModule, TOOL_REGISTRY } from './tools';
+import { getToolModule } from './tools';
 import type { RenderContext } from './tools';
 
 type HorzScaleItem = Time;

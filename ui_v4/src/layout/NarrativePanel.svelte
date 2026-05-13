@@ -9,7 +9,6 @@
         resolveAgentState,
         modeOf,
         tierOf,
-        tierOfMode,
         badgeLabel,
         compactPillText,
         type Mode,
