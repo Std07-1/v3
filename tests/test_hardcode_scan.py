@@ -2,6 +2,10 @@
 
 Створюємо тимчасовий fixture-файл з відомими патернами
 і перевіряємо що scan_repo() їх знаходить.
+
+`tools/audit/` — dev-only діагностика, виключена з репо через .gitignore.
+Тест skip-иться у CI коли модуля немає; локально працює якщо tools/audit/
+присутній у робочому tree.
 """
 from __future__ import annotations
 
@@ -9,9 +13,17 @@ import os
 import sys
 import unittest
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tools.audit.hardcode_scan import scan_repo, _PATTERNS
+try:
+    from tools.audit.hardcode_scan import scan_repo, _PATTERNS
+except ModuleNotFoundError:
+    pytest.skip(
+        "tools.audit недоступний (dev-only, виключений з .gitignore)",
+        allow_module_level=True,
+    )
 
 
 class TestHardcodeScanPatterns(unittest.TestCase):
