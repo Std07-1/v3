@@ -52,7 +52,9 @@
         onClose,
         smcPanelOpen = false,
         displayMode = "focus",
-        onOpenDiagnostics,
+        // onOpenDiagnostics — Props field збережений (parent App.svelte:665
+        // wires openDiagnostics); UI-кнопка ще не додана. Не destructure-имо
+        // щоб уникнути svelte-check unused-binding.
         onToggleSmc,
         onToggleDisplayMode,
     }: Props = $props();
