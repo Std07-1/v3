@@ -12,7 +12,7 @@
         "gen-icons": "node scripts/gen-icons.mjs"
     },
     "dependencies": {
-        "lightweight-charts": "5.1.0",
+        "lightweight-charts": "5.2.0",
         "uuid": "^13.0.0"
     },
     "devDependencies": {
