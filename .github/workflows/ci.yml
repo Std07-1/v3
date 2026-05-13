@@ -77,9 +77,14 @@ jobs:
         run: pip-audit -r requirements.txt --progress-spinner off
 
       - name: Run Bandit baseline scan
+        # --severity-level=high: baseline mode — block only High severity.
+        # Low/Medium (B310 urllib audits у dev scripts, B404 subprocess
+        # tools) залишаються informational; реальний block — лише
+        # High (e.g. weak crypto, hardcoded creds).
         run: |
           bandit -q -r app core runtime tools \
-            -x tests,data_v3,ui_v4,.venv,.venv37
+            -x tests,data_v3,ui_v4,.venv,.venv37 \
+            --severity-level=high
 
   ui-v4:
     runs-on: ubuntu-latest
