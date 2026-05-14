@@ -24,7 +24,6 @@ from core.smc.signals import (
     synthesize_signals,
 )
 
-
 # ── Fixtures ──────────────────────────────────────────────────────
 
 
@@ -274,7 +273,9 @@ class TestConfidence:
         """All factors max → 100."""
         bias_map = {"86400": "bullish", "14400": "bullish"}
         gi = {"score": 8}
-        snap = _snapshot(swings=[_swing("bos", 2880.0), _swing("choch", 2870.0)])
+        snap = _snapshot(
+            swings=[_swing("bos_bull", 2880.0), _swing("choch_bull", 2870.0)]
+        )
         momentum = {"900": {"b": 3, "r": 0}}
         weights = CFG["confidence_weights"]
         score, factors = _calc_confidence(
@@ -1050,7 +1051,7 @@ class TestSynthesizeSignals:
         )
         snap = _snapshot(
             zones=[zone],
-            swings=[_swing("bos", 2845.0), _swing("choch", 2855.0)],
+            swings=[_swing("bos_bear", 2845.0), _swing("choch_bear", 2855.0)],
             levels=[_level("pdl", 2840.0)],
         )
         narr = _narrative(

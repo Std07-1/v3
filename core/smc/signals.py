@@ -220,13 +220,18 @@ def _calc_confidence(
     else:
         factors["bias_alignment"] = 0
 
-    # 2. Structure (recent BOS/CHoCH in direction)
+    # 2. Structure (recent BOS/CHoCH aligned with trade direction).
+    # SWING_KINDS uses suffixed forms: "bos_bull"/"bos_bear", "choch_bull"/"choch_bear".
+    # Old code compared against bare "bos"/"choch" which never matched → structure
+    # factor was silently 0, degrading every signal confidence by 25% (P0 fix).
+    bos_kind = "bos_bull" if direction == "long" else "bos_bear"
+    choch_kind = "choch_bull" if direction == "long" else "choch_bear"
     bos_count = 0
     choch_count = 0
     for sw in snapshot.swings[-20:]:
-        if sw.kind == "bos":
+        if sw.kind == bos_kind:
             bos_count += 1
-        elif sw.kind == "choch":
+        elif sw.kind == choch_kind:
             choch_count += 1
     if choch_count > 0 and bos_count > 0:
         factors["structure"] = 100

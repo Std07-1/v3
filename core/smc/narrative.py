@@ -27,16 +27,83 @@ logger = logging.getLogger(__name__)
 
 # ── Headlines (ADR-0033 §3.2) ──────────────────────────────
 
-_MODE_HEADLINES = {
-    ("trade", "aligned", "long"): "\U0001f7e2 BUY \u2014 сетап готовий",
-    ("trade", "aligned", "short"): "\U0001f534 SELL \u2014 сетап готовий",
-    ("trade", "reduced", "long"): "\U0001f7e2 BUY \u2014 змішаний HTF",
-    ("trade", "reduced", "short"): "\U0001f534 SELL \u2014 змішаний HTF",
-    ("trade", "counter", "long"): "\U0001f7e1 BUY \u2014 проти тренду",
-    ("trade", "counter", "short"): "\U0001f7e1 SELL \u2014 проти тренду",
+# Trigger-aware trade headlines: key = (mode, sub_mode, direction, trigger_state).
+# sub_mode="aligned"  → full HTF agreement + inside killzone (or no session data).
+# sub_mode="reduced"  → outside killzone; structure valid but timing window uncertain.
+# Trigger states: "ready" > "triggered" > "in_zone" > "approaching" (IOFED, ADR-0033 T-2).
+_TRADE_HEADLINES = {
+    # ALIGNED — full HTF agreement, optimal timing window
+    ("trade", "aligned", "long", "ready"): "\U0001f7e2 BUY \u2014 ГОТОВИЙ ДО ВХОДУ",
+    (
+        "trade",
+        "aligned",
+        "long",
+        "triggered",
+    ): "\U0001f7e2 BUY \u2014 тригер, шукаємо вхід",
+    (
+        "trade",
+        "aligned",
+        "long",
+        "in_zone",
+    ): "\U0001f7e1 BUY \u2014 у зоні, чекаємо CHoCH",
+    (
+        "trade",
+        "aligned",
+        "long",
+        "approaching",
+    ): "\U0001f7e1 BUY \u2014 наближення до зони",
+    ("trade", "aligned", "short", "ready"): "\U0001f534 SELL \u2014 ГОТОВИЙ ДО ВХОДУ",
+    (
+        "trade",
+        "aligned",
+        "short",
+        "triggered",
+    ): "\U0001f534 SELL \u2014 тригер, шукаємо вхід",
+    (
+        "trade",
+        "aligned",
+        "short",
+        "in_zone",
+    ): "\U0001f7e1 SELL \u2014 у зоні, чекаємо CHoCH",
+    (
+        "trade",
+        "aligned",
+        "short",
+        "approaching",
+    ): "\U0001f7e1 SELL \u2014 наближення до зони",
+    # REDUCED — outside killzone (valid structure, timing window not ideal)
+    ("trade", "reduced", "long", "ready"): "\U0001f7e2 BUY \u2014 готовий (поза KZ)",
+    ("trade", "reduced", "long", "triggered"): "\U0001f7e1 BUY \u2014 тригер (поза KZ)",
+    ("trade", "reduced", "long", "in_zone"): "\U0001f7e1 BUY \u2014 у зоні (поза KZ)",
+    (
+        "trade",
+        "reduced",
+        "long",
+        "approaching",
+    ): "\U0001f7e1 BUY \u2014 підхід (поза KZ)",
+    ("trade", "reduced", "short", "ready"): "\U0001f534 SELL \u2014 готовий (поза KZ)",
+    (
+        "trade",
+        "reduced",
+        "short",
+        "triggered",
+    ): "\U0001f7e1 SELL \u2014 тригер (поза KZ)",
+    ("trade", "reduced", "short", "in_zone"): "\U0001f7e1 SELL \u2014 у зоні (поза KZ)",
+    (
+        "trade",
+        "reduced",
+        "short",
+        "approaching",
+    ): "\U0001f7e1 SELL \u2014 підхід (поза KZ)",
 }
-_WAIT_HEADLINE = "\U0001f7e1 Немає сетапу \u2014 чекаємо"
-_TOO_FAR_HEADLINE = "\U0001f7e1 Зона далеко \u2014 чекаємо"
+# Wait-mode headlines per sub_mode
+_WAIT_HEADLINES = {
+    "too_far": "\U0001f7e1 Зона далеко \u2014 чекаємо підходу",
+    "counter": "\U0001f7e0 Контртренд \u2014 зона є, але проти HTF",
+    "reduced": "\U0001f7e1 HTF змішаний \u2014 чекаємо",
+    "no_session": "\U0001f550 Поза сесією \u2014 зона є, чекаємо активності",
+    "": "\u2b1c Немає зон \u2014 ринок без структури",
+}
 _DEGRADED_HEADLINE = "\u26a0 Наратив недоступний"
 
 # ── TF labels ───────────────────────────────────────────────
@@ -77,9 +144,7 @@ def _build_range_exhaustion_summary(range_state):
     anchor_label = _RANGE_ANCHOR_LABELS.get(anchor_kind, anchor_kind)
     arrow = "up" if traveled_dir > 0 else "down"
     hint = _RANGE_PHASE_HINTS[phase]
-    return "{} {} {:.2f} ATR ({}) - {}".format(
-        anchor_label, arrow, mult, phase, hint
-    )
+    return "{} {} {:.2f} ATR ({}) - {}".format(anchor_label, arrow, mult, phase, hint)
 
 
 _TF_LABELS = {
@@ -438,8 +503,10 @@ def _detect_market_phase(swings, config):
 # ── Bias Summary (T-8) ─────────────────────────────────────
 
 
-def _build_bias_summary(alignment, htf_direction, bias_map, zone, is_counter=False):
-    # type: (str, Optional[str], Dict[str, str], Optional[SmcZone], bool) -> str
+def _build_bias_summary(
+    alignment, htf_direction, bias_map, zone, momentum_map=None, is_counter=False
+):
+    # type: (str, Optional[str], Dict[str, str], Optional[SmcZone], Optional[Dict[str, dict]], bool) -> str
     if alignment == "no_data":
         return "HTF: \u043e\u0447\u0456\u043a\u0443\u0454\u043c\u043e \u0441\u0442\u0440\u0443\u043a\u0442\u0443\u0440\u0443"
     if alignment == "partial":
@@ -464,9 +531,18 @@ def _build_bias_summary(alignment, htf_direction, bias_map, zone, is_counter=Fal
         )
     if zone and "premium" in getattr(zone, "kind", ""):
         return "H4 відкат до premium OB \u2014 чекаємо відбій"
-    return "HTF {dir} \u2014 шукаємо структуру для входу".format(
+    base = "HTF {dir} \u2014 шукаємо структуру для входу".format(
         dir=htf_direction or ""
     )
+    # P2: momentum context — displacement bars confirm directional intent (ADR-0033 Rev 2)
+    if momentum_map:
+        bull_total = sum(m.get("b", 0) for m in momentum_map.values())
+        bear_total = sum(m.get("r", 0) for m in momentum_map.values())
+        if htf_direction == "bullish" and bull_total >= 2:
+            base += " \u00b7 бичачий імпульс \u2191"
+        elif htf_direction == "bearish" and bear_total >= 2:
+            base += " \u00b7 ведмежий імпульс \u2193"
+    return base
 
 
 # ── Session Context (ADR-0035 §5.1) ─────────────────────────
@@ -569,7 +645,7 @@ def _synthesize_impl(
     snapshot,
     bias_map,
     zone_grades,
-    momentum_map,  # TODO(momentum): integrate into bias_summary/headline generation (v2)
+    momentum_map,
     viewer_tf_s,
     current_price,
     atr,
@@ -577,7 +653,7 @@ def _synthesize_impl(
     session_info=None,
     range_exhaustion=None,
 ):
-    # type: (SmcSnapshot, Dict[str, str], Dict[str, dict], Dict[str, dict], int, float, float, dict, Optional[Tuple[str, bool]]) -> NarrativeBlock
+    # type: (SmcSnapshot, Dict[str, str], Dict[str, dict], Dict[str, dict], int, float, float, dict, Optional[Tuple[str, bool]], Optional[object]) -> NarrativeBlock
     warnings = []  # type: List[str]
     min_grade = config.get("trade_min_grade", "A")
     min_score = config.get("trade_min_score", 6)
@@ -648,13 +724,40 @@ def _synthesize_impl(
 
     # Build direction from primary (already computed above)
 
-    # Headline
-    if mode == "trade" and direction:
-        headline = _MODE_HEADLINES.get((mode, sub_mode, direction), _WAIT_HEADLINE)
-    elif sub_mode == "too_far":
-        headline = _TOO_FAR_HEADLINE
+    # Step 3.5: Session-aware mode adjustments (ADR-0035).
+    # Extracted before headline so session guards influence headline selection.
+    current_session = ""
+    in_killzone = False
+    session_context = ""
+    if session_info is not None:
+        current_session = session_info[0] or ""
+        in_killzone = bool(session_info[1])
+        session_context = _build_session_context(current_session, in_killzone)
+        # Guard: no active session (dead zone between sessions) → cannot call trade
+        if mode == "trade" and not current_session:
+            mode, sub_mode = "wait", "no_session"
+            warnings.append("outside_session")
+        # Killzone downgrade: inside a session but outside its killzone window
+        elif mode == "trade" and not in_killzone:
+            if sub_mode == "aligned":
+                sub_mode = "reduced"
+                warnings.append("outside_killzone")
+
+    # Step 3.6: Primary trigger state (resolved once; drives headline + primary scenario)
+    primary_trigger = None  # type: Optional[str]
+    if primary_zone and mode == "trade":
+        primary_trigger = _resolve_trigger_state(
+            snapshot, primary_zone, viewer_tf_s, current_price, atr, config
+        )
+
+    # Step 4: Headline — all mode / session / trigger state is now known
+    if mode == "trade" and direction and primary_trigger:
+        headline = _TRADE_HEADLINES.get(
+            (mode, sub_mode, direction, primary_trigger),
+            _WAIT_HEADLINES.get(sub_mode, _WAIT_HEADLINES[""]),
+        )
     else:
-        headline = _WAIT_HEADLINE
+        headline = _WAIT_HEADLINES.get(sub_mode, _WAIT_HEADLINES[""])
 
     # Scenarios (T-1: max 2)
     scenarios = []  # type: List[ActiveScenario]
@@ -692,6 +795,7 @@ def _synthesize_impl(
         htf_direction,
         bias_map,
         primary_zone,
+        momentum_map=momentum_map,
         is_counter=(sub_mode == "counter"),
     )
 
@@ -703,25 +807,6 @@ def _synthesize_impl(
 
     # Next area
     next_area = _build_next_area(snapshot, zone_grades)
-
-    # ADR-0035: session context
-    current_session = ""
-    in_killzone = False
-    session_context = ""
-    if session_info:
-        current_session = session_info[0] or ""
-        in_killzone = bool(session_info[1])
-        session_context = _build_session_context(current_session, in_killzone)
-        # Killzone downgrade: if trade mode but NOT in killzone → downgrade sub_mode
-        if mode == "trade" and not in_killzone and current_session:
-            if sub_mode == "aligned":
-                sub_mode = "reduced"
-                warnings.append("outside_killzone")
-                headline = (
-                    _MODE_HEADLINES.get((mode, sub_mode, direction), headline)
-                    if direction
-                    else headline
-                )
 
     # ADR-0053: range exhaustion phrase (silent for early/mid/None)
     range_exhaustion_summary = _build_range_exhaustion_summary(range_exhaustion)
