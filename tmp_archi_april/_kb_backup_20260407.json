@@ -1,0 +1,472 @@
+{
+  "playbooks": [
+    {
+      "text": "PB_LONDON_SWEEP_LONG: sweep London Low → M15 CHoCH закриття вище swing high → entry OB/FVG zone → SL нижче sweep low → TP1 Asia High. НЕ працює якщо H4 bearish і ціна в H4 premium після CHoCH",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "PB_LONDON_LOW_07_04: sweep 4607 → M15 CHoCH → entry 4648 SL 4620 (28p) TP1 4664 (16.9p) R:R 1.9:1. Виконано +16.9p. H4 bearish обмежив TP до Asia High замість TP2 4694",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "PB_ASIA_SWEEP_REVERSAL: Asia Low swept → compression → London CHoCH M15 → entry retest OB → TP Asia High. 07.04: Asia Low 4615.70 swept → London підтвердив → відскок до 4664.44",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "PB_NY_LOW_SWEEP: sweep NY Low (напр. 4644.51) → M5 CHoCH закриття вище попереднього swing high → entry 4645–4652 → SL під 4640 → TP1 4664 (Asia H) TP2 4694 (London H). Обов'язково: CHoCH close > swing high, не wick",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "PB_LONDON_CONTINUATION: sweep Asia H/L → compression → London Open CHoCH M15 → OB entry → TP EQH/EQL. НЕ торгуй якщо sweep < 10 pips або H4 конфліктує без CHoCH підтвердження",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "PB_TF_CONFLICT_D1_H4: D1↑ H4↓ → вхід ТІЛЬКИ з H4 discount зони (4553–4630) + M15 CHoCH + displacement. TP обмежений першим H4 опором (Asia High / NY High). Без H4 CHoCH — wait mode",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "PB_M5_MICRO_ENTRY: push up → sweep down до зони → retest вгору. Вхід на retest candle після sweep, не на початку push. 07.04 16:00: push 4662 → sweep 4652 → retest 4659 = A-grade entry point",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "PB_IOFED: HTF POI ідентифікація → Observe compression/accumulation → LTF CHoCH підтвердження → OB/FVG entry → SL/TP визначення. CHoCH = close вище swing high, не просто wick",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "PB_EQL_SWEEP_LONG: sweep EQL (Asia H + Prev 4H Hi кластер) → M15 CHoCH вгору → лонг → TP EQH. 06.04 сценарій: sweep EQL 4644 → CHoCH → TP 4696. Умова: D1 bullish тримається",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "PB_FOMO_BLOCK: якщо entry zone пройдена +20p без входу → НЕ ганятись. Чекати pullback до нової M15 support/FVG або пропустити сетап. 07.04: зона 4625–4632 пройдена → pullback чекали до 4635–4642",
+      "ts": 1775579290,
+      "source": "curator"
+    }
+  ],
+  "situations": [
+    {
+      "text": "07.04 London Low 4607.10 sweep → відскок 4607→4648 (+41p) → entry 4648 SL 4620 TP1 4664. TP1 hit +16.9p. Outcome: SUCCESS. H4 bearish обмежив до TP1",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "07.04 14:20 M5 різкий відскок +30p за 5хв (4615→4645) при H4 bearish → ціна в premium 68.6% (4653). Outcome: НЕ entry. Правило: premium при H4 bearish = wait pullback до EQ 4635–4642",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "07.04 CHoCH M15 від лоу 4624 (15:00) → entry zone 4635–4642 → рух +26p до 4650 за 15хв. Outcome: actionable. Підтверджений CHoCH + FVG = вхід без зайвих фільтрів",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "07.04 15:10 M5 ціна 4642.32 (high попередньої свічки) але close 4639.40. Outcome: CHoCH НЕ підтверджений. Правило: close > swing high = CHoCH; wick = fake. Вхід заборонений",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "07.04 TP1 Asia High 4664.91 hit (+16.9p від 4648). H4 bearish + Asia H + NY High кластер 4664–4670 = обов'язкова фіксація 50–70%. Outcome: SUCCESS — план виконаний",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "06.04 вхід 4685 лонг без підтвердження, R:R 0.1:1. Outcome: удача але не механіка. Порівняння: 07.04 вхід 4648 CHoCH + sweep R:R 1.9:1 = системний трейд",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "07.04 11:10 sweep London Low 4628.43, відскок до 4642 за одну M5 свічку. Entry zone 4634–4648. Outcome: CHoCH M5 після sweep = A+ сетап. Без CHoCH — не вхід",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "07.04 Asia Low 4615.70 пробитий London сесією. Outcome: hard invalidation всіх лонг сценаріїв до M15 CHoCH підтвердження. H4 bearish + Asia Low пробитий = структурно ведмеже",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "07.04 London Low 4607.10 sweep, але Prev Asia Low 4600.14 не пробитий (дистанція ~7p). Outcome: D1 bullish збережений. Правило: Prev Asia Low = справжній invalidation, не поточний London Low",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "07.04 16:00 M5: push 4662 → sweep 4652 → retest 4659. Outcome: класична micro-entry структура. Вхід мав бути на retest, не на початку push",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "07.04 Asia Low 4615.70 swept → London підтвердив → відскок до Asia High 4664.44. SMC очікував sweep на 04-07 02:00 (L=4619.60) як сигнал для entry на retest",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "07.04 sweep NY Low 4644.51 → entry zone 4645–4652, SL під 4640, TP1 4664, TP2 4694. R:R мін 2:1. Тригер: M5 CHoCH close вище 4659 (попередній swing high)",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "06.04 London Low 4636.37 sweep без CHoCH — не вхід. M5 показала ведмежий displacement 4650→4628 (22p) — momentum ще вниз. Sweep без CHoCH = шум",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "07.04 вхід лонг при ціні 4648 SL під London Low 4607 = 41p ризику, TP2 4664 = 16p reward = 0.4:1. Outcome: математично неторгований. Структурно валідний але R:R катастрофа",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "04-06 London Low sweep 4628.43 → розворот +20.6p за годину. H4 свічка підтвердила Low 4636 Close 4670. Повторюваний механізм London сесії для XAU",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "XAU/USD 12:20 NY High 4670.52 → два bearish M5 після торкання. Ціна в PREMIUM 100% (range 4628–4663) + H4 bearish = природний стелі. Outcome: short setup або wait",
+      "ts": 1775579290,
+      "source": "curator"
+    }
+  ],
+  "rules_hard": [
+    {
+      "text": "НІКОЛИ entry без CHoCH підтвердження (close вище swing high) на M15 мінімум — wick = fake, не рахується",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "НІКОЛИ лонг у H4 premium зоні (>50% H4 range) при H4 bearish bias без підтвердженого H4 CHoCH вгору",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "R:R мінімум 2:1 — якщо математично не досягається від поточної ціни, сетап пропускається навіть при валідній структурі",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "При пробої Asia Low (справжній invalidation рівень) — скидаємо весь bullish сценарій до появи M15 CHoCH з HTF confluence",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "2 losses підряд = СТОП мінімум 4 години. High-impact news ±30 хв = нульова активність",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Якщо entry zone пройдена більше +20p без входу — НЕ ганятись, чекати pullback або пропустити сетап",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "П'ятниця після 19:00 UTC та понеділок ранок — лише спостереження, без входів",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Sweep сам по собі НЕ є сигналом входу — обов'язково підтвердження CHoCH після sweep",
+      "ts": 1775579290,
+      "source": "curator"
+    }
+  ],
+  "rules_soft": [
+    {
+      "text": "D1↑ H4↓ конфлікт → вхід лонг тільки з H4 discount зони + M15 CHoCH. TP обмежений першим H4 опором (Asia H або NY H), не повний рух",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "При H4 bearish + Asia High (чи NY High) кластер → фіксація 50–70% позиції обов'язкова, залишок на BE з TP2 тільки після пробою кластеру",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "London Open може давати додатковий sweep навіть після Asia Low sweep вночі — не входити лонг одразу після першого sweep, чекати CHoCH M15",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Після Asia Low sweep очікування CHoCH може тривати 1–2 години або сетап не з'явиться зовсім — бездіяльність = захист капіталу",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "COT NET LONG 160k+ контрактів на Gold підтримує D1 bullish навіть при H4 bearish — враховувати при оцінці контр-трендових сетапів",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Геополітика ≠ автоматичний лонг XAU. DXY може рости як safe haven одночасно → тисне на XAU. Локальний конфлікт дає spike 2–4 год, потім корекція",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "«Buy the rumor, sell the news»: інституціонали входять ЗАЗДАЛЕГІДЬ. Spike на новині = роздріб купує профіт у тих хто виходить",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Обережно з entry після 17:00 UTC — ліквідність падає, OB можуть не спрацювати",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Economic calendar як пасивний фільтр: перевірка high-impact подій у найближчі 2 години при кожному аналізі — автоматично змінює рекомендацію",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Якщо є підтверджений CHoCH + FVG зона — це actionable entry, не чекай зайвих фільтрів (надмірна обережність = упущений сетап)",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "При D1↑ H4↓: Prev Asia Low = справжній invalidation, не поточний London Low. Дистанція між ними критична (~7p може бути sweep, не breakout)",
+      "ts": 1775579290,
+      "source": "curator"
+    }
+  ],
+  "xau_behavior": [
+    {
+      "text": "Asia range XAU = 15–40 pips. Якщо >50 = unusual, чекай consolidation. Asia готує setup через compression, справжня direction в London 07–10 UTC",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "London Open може дати sweep в обидва боки навіть якщо Asia вже swept один бік — це збір ліквідності перед справжнім рухом",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "XAU часто робить compression замість immediate reversal після ключового рівня — це accumulation, не weakness. Чекати пробою, не guess",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Класична компресія між рівнями: ціна облизує нижній рівень але HEAD магніт (EQL нижче) ще не swept — лонг передчасний до збору нижньої ліквідності",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "London High = рівень ліквідності де ціна може зробити sweep і розвернутись, не TP для лонгу. Вхід лонг з метою London High = торгівля в зону де продавці чекають",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "XAU може повністю перевизначити range при pullback — false discount signals: ціна входить у discount, потім range redefines. Адаптуй рівні",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Частково заповнені FVG = магніти для закриття перед continuation. При наближенні до FVG — очікуй зупинку або розворот",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Після strong move XAU: pullback → compression → wait → directional entry з liquidity target. Більше часу для completion ніж здається",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "D1↑ але H4↓ = XAU може тривало сидіти в compression. Чекай переможця (H4 CHoCH або discount retest) замість угадування напрямку",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Equal highs після compression = вища ймовірність sweep перед continuation — це inducement, не реальний пробій",
+      "ts": 1775579290,
+      "source": "curator"
+    }
+  ],
+  "структура_ринку": [
+    {
+      "text": "BOS = continuation тренду, CHoCH = перший злам проти тренду (early warning, не підтвердження). CHoCH на M15 після sweep = entry trigger",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "CHoCH підтверджений = close свічки ВИЩЕ попереднього swing high. Wick до рівня = fake CHoCH, вхід заборонений",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "H4 bearish при D1 bullish 07.04.2026: H4 закрилась нижче 4644.08 о 10:00 = підтвердження ведмедів. Entry лонг тільки після H4 CHoCH або з H4 discount + M15 CHoCH",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Конфлікт H4↓ D1↑: при розбіжності чекати M15 CHoCH або sweep+reversal, не входити в нейтральній зоні між TF. Нейтраль = wait",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Asia Low пробитий = hard invalidation лонг сценаріїв дня до появи M15 CHoCH з HTF confluence. H4 bearish + Asia Low пробитий домінує над D1 bullish",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "HTF bias alignment: M15 bullish при D1+H4 bearish = retrace, НЕ reversal. Торгувати тільки в напрямку старшого TF",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Grade matrix: A+(8+ confluence факторів)=БЕРИ, A(6-7)=тільки в killzone, B(4-5)=стій, C(0-3)=ігноруй. Менше 8 = знизь розмір або пропусти",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "D1 = глобальний bias, H4 = операційний тренд, H1 = перехідна структура, M15 = decision/entry trigger, M5 = timing мікровхід",
+      "ts": 1775579290,
+      "source": "curator"
+    }
+  ],
+  "зони_та_poi": [
+    {
+      "text": "OB валідний якщо перед ним displacement: body >1.5x ATR показує SM рухає ціну. Без displacement — звичайна свічка, не OB",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Sweep + displacement + HTF alignment = найсильніший confluence (A+ grade). Кожен елемент окремо — не достатньо",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "OTE зона = 62–79% fib від swing. При HTF alignment + OB в OTE = підвищена ймовірність reversal",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "FVG частково заповнений = магніт для повного закриття. Вхід з незакритого FVG як POI — обов'язково враховуй магнітний ефект",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "H4 discount зона (нижня половина H4 range) = зона де лонг при D1 bullish дозволений. Premium (верхня половина) = заборона без H4 CHoCH",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Asia High + NY High кластер (напр. 4664–4670 на 07.04) = зона де H4 bearish bias блокує continuation. Фіксація обов'язкова при наближенні",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Prev Asia Low = справжній invalidation рівень для D1 bullish thesis. London Low — лише локальний рівень для sweep, не критичний бар'єр",
+      "ts": 1775579290,
+      "source": "curator"
+    }
+  ],
+  "ліквідність": [
+    {
+      "text": "EQH/EQL та PDH/PDL = магніти SM для sweep. Equal highs після compression = inducement перед continuation у протилежний бік",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "London Low sweep типова глибина: 30–40 pips від попередньої зони (07.04: 4644→4607 = 37p за 2 M5 свічки). Очікуй, не дивуйся",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Asia Low sweep: SMC очікує sweep → потім retest для entry, не вхід на початку руху. 07.04 Asia Low sweep на 02:00 = сигнал для entry на retest",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "NY Low sweep → reversal: класичний liquidity sweep у NY сесії. Entry після M5 CHoCH close вище swing high, SL під sweep low",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Sweep під London Low + відскок: якщо Prev Asia Low (~7p нижче) не пробитий — це sweep ліквідності, не breakout. D1 bullish збережений",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Inducement vs справжній sweep: якщо ліквідність зібрана вище більш глибокого рівня — це sweep, не breakout. Prev Asia Low = справжній рівень",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "При лонзі в зону де ціна іде до London High = торгівля в зону де продавці чекають на ліквідність. London High = potential reversal, не TP",
+      "ts": 1775579290,
+      "source": "curator"
+    }
+  ],
+  "помилки_та_уроки": [
+    {
+      "text": "06.04 вхід 4685 лонг (вже -11p від entry 4675) з TP London High 4694 = 9p потенціалу. Класичний 'останній вагон': R:R від'ємний апріорі. Урок: перевіряй R:R ДО входу, не після",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "06.04 DISCIPLINE GATE FAIL: немає BOS/CHoCH LTF, H4 bearish, вхід у premium 58.6% без підтвердження. Результат — удача, не система. Однаковий символ різна якість: 06.04 R:R 0.1:1 vs 07.04 R:R 1.9:1",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "07.04 вхід лонг заблокований о 13:50 (ціна 4650): D1↑ M15↑ але H4↓ → вхід заборонений. Правило: H4 bearish домінує над молодшими TF навіть при подвійному bullish підтвердженні знизу",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "07.04 після CHoCH ціна вже +23p від entry zone при H4 premium — chase FOMO. Урок: якщо зона пройдена, чекай pullback, не входь за ціною",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "07.04 16:00 вхід мав бути на retest свічки (4659) після sweep (4652), а не на початку push (4662). Класична помилка overtrading — вхід без підтвердження мікроструктури",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "07.04 11:15 wick до 4642.32 (swing high) але close 4639.40 → CHoCH не підтверджений, вхід заборонений. Вхід на wick = торгівля проти структури. Урок: тільки close підтверджує CHoCH",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Вхід у лонг після M15 CHoCH при SL під London Low 4607 (41p) з TP2 4664 (16p) = R:R 0.4:1. Структурно валідний сетап математично неторгований. Урок: завжди рахуй R:R від поточної ціни входу",
+      "ts": 1775579290,
+      "source": "curator"
+    }
+  ],
+  "macro_та_context": [
+    {
+      "text": "«Геополітика = лонг XAU» — міф. DXY зростає як safe haven одночасно з геополітичним ризиком → тисне на XAU. Золото може не рости або падати попри війну",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "Локальний геополітичний конфлікт (не загроза доларовій системі): XAU spike перші 2–4 години → корекція. Купувати на новині = купувати профіт у інституціоналів що виходять",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "«Buy the rumor, sell the news»: інституціонали входять ЗАЗДАЛЕГІДЬ. Spike на новині = роздрібний рефлекс. Перший spike вгору — шукай SHORT, не лонг",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "COT NET LONG 160k+ контрактів Gold (L/S ratio 4.66) = підтримка D1 bullish bias навіть при H4 bearish. Позиційні гравці задають напрямок на вищих TF",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "DXY та XAU: обратна кореляція в нормальних умовах. При extreme risk-off (глобальна криза) — обидва можуть рости. При локальному конфлікті — DXY safe haven домінує",
+      "ts": 1775579290,
+      "source": "curator"
+    },
+    {
+      "text": "High-impact news ±30 хв = нульова активність незалежно від сетапу. Economic calendar як пасивний фільтр при кожному аналізі — автоматично змінює рекомендацію",
+      "ts": 1775579290,
+      "source": "curator"
+    }
+  ]
+}
