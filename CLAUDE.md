@@ -367,8 +367,8 @@ ssh aione-vps 'for i in 1 2 3 4 5 6; do echo "=== T+$((i*10))s ==="; supervisorc
   - Platform: `/opt/smc-v3/`
   - Trader-v3 (Архі): `/opt/smc-trader-v3/`
 - **Timeframes**: `[60, 180, 300, 900, 1800, 3600, 14400, 86400]` (M1–D1)
-- **D1 anchor**: 79200s (22:00 UTC, ADR-0023)
-- **H4 anchor**: 82800s (23:00 UTC)
+- **D1 anchor**: 75600s (21:00 UTC) літо / 79200s (22:00 UTC) зима — DST-залежний; SSOT: `config.json:day_anchor_offset_s_d1`
+- **H4 anchor**: 79200s (22:00 UTC) літо / 82800s (23:00 UTC) зима — DST-залежний; SSOT: `config.json:day_anchor_offset_s`
 
 ---
 

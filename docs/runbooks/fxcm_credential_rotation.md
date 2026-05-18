@@ -187,20 +187,35 @@ XAU/USD: записано=3240 first=2026-05-15T20:46Z last=2026-05-18T15:47Z
 >
 > **CLI**: `--symbol X --start YYYY-MM-DD --end YYYY-MM-DD` (нема `--all` — викликати окремо per-symbol).
 
+> ⚠️ **CRITICAL**: `--end` є **END-EXCLUSIVE** — дата `--end` **НЕ** включається в rebuild.
+> Щоб включити всі бари за `2026-05-18`, треба `--end 2026-05-19`.
+> **Помилка incident #1**: `--end 2026-05-18` не обробила жоден бар з 18 травня.
+
+> ⚠️ **CRITICAL**: Якщо derived TF вже існують (live derive або попередній rebuild), ОБОВ'ЯЗКОВО додавай `--force`.
+> Без `--force`, `_has_on_disk()` бачить існуючі файли і пропускає запис (`existed` counter, `written=0`).
+> **Помилка incident #1**: пропустили `--force` → partial H4 бари (src=1/4) залишились нетронутими.
+
 ```bash
-# Per-symbol — D1 derive відбувається in-process через ADR-0023 cascade
+# Per-symbol — END DATE = target_date + 1 day (end-exclusive!), + --force для overwrite partial bars
 ssh aione-vps "cd /opt/smc-v3 && \
-  ./.venv/bin/python -m tools.rebuild_from_m1 --symbol 'XAU/USD' --start 2026-05-15 --end 2026-05-18 2>&1 | tail -40"
+  ./.venv/bin/python -m tools.rebuild_from_m1 --symbol 'XAU/USD' --start 2026-05-15 --end 2026-05-19 --force 2>&1 | tail -40"
 
 ssh aione-vps "cd /opt/smc-v3 && \
-  ./.venv/bin/python -m tools.rebuild_from_m1 --symbol 'XAG/USD' --start 2026-05-15 --end 2026-05-18 2>&1 | tail -40"
+  ./.venv/bin/python -m tools.rebuild_from_m1 --symbol 'XAG/USD' --start 2026-05-15 --end 2026-05-19 --force 2>&1 | tail -40"
 ```
 
 **Параметри**:
 - `--symbol` — обов'язково (без default = all). Для всіх FXCM-символів — окремий виклик
-- `--start` / `--end` — ISO date (UTC), напіввідкритий інтервал \[start, end\]
+- `--start` / `--end` — ISO date (UTC), **напіввідкритий інтервал \[start, end)** = END-EXCLUSIVE
+- `--force` — **обов'язковий** якщо derived bars вже є на диску (live derive або попередній rebuild)
 - `--dry-run` (опціонально) — без запису, тільки звіт
 - результат: M3, M5, M15, M30, H1, H4 стають consistent з оновленим M1
+
+**Як перевірити що rebuild спрацював**:
+```
+REBUILD_DONE symbol=XAU/USD elapsed=0.8s stats={... "tf_14400_written": 11, "tf_14400_existed": 0, ...}
+```
+Якщо `tf_14400_existed > 0` і `tf_14400_written = 0` → ти пропустив `--force`.
 
 **Чому окремий tool а не in-process**: `derive_engine.py` працює в live-режимі (tick-by-tick). Для backfill потрібна batch-обробка з диску — це `rebuild_from_m1`.
 
@@ -212,6 +227,27 @@ Stage 1: M1 → M3 written=40 existed=...
 Cascade: TF 900, 1800, 3600, 14400 — written/existed counts
 Final summary: m1=1365 written=79 existed=817
 ```
+
+---
+
+## 7b. Phase 4b — ws_server ОБОВ'ЯЗКОВИЙ restart після rebuild
+
+> ⚠️ **CRITICAL**: ws_server тримає UDS snapshot **в пам'яті**. Після `rebuild_from_m1` JSONL-файли оновлені на диску, але ws_server **не знає** про це — він продовжує роздавати stale bars з Redis/RAM snapshot.
+>
+> **Симптом якщо пропустити**: Archi і UI бачать «gap» (наприклад 13:42-16:42 UTC замість повного 00:00-16:42 UTC), навіть якщо M1 на диску повний. Archi формує помилкові тези типу "gap_up bounce".
+
+```bash
+# Restart ws_server після rebuild — примусово перечитує всі JSONL з диску
+ssh aione-vps 'sudo supervisorctl restart smc:smc-ws'
+
+# Observation window 60s — чекаємо SMC warmup (D9.1)
+ssh aione-vps 'for i in 1 2 3 4 5 6; do echo "=== T+$((i*10))s ==="; sleep 10; sudo supervisorctl status smc:smc-ws; tail -n 3 /var/log/smc-v3/ws_server.stderr.log | grep -E "WARMUP|RUNNING|ERROR"; done'
+```
+
+**Acceptance criteria після restart**:
+- `SMC_RUNNER_WARMUP_DONE ok=20 err=0` в логах
+- `SMC_WARMUP_OK sym=XAU/USD tf=14400 bars=500` — H4 warmed up з правильними барами
+- supervisorctl: `RUNNING` uptime > 60s
 
 ---
 
@@ -283,6 +319,10 @@ ssh aione-vps 'cp /opt/smc-v3/.env.bak.TIMESTAMP /opt/smc-v3/.env && \
 | Backfill пише `0 нових барів` | broker віддає ті ж бари що вже на диску (dedup працює) | Збільшити `--n` або зменшити `--date-to` |
 | `connection timeout` під час backfill | FXCM rate limit | Перерва 5 хв, ретрай меншими батчами (`--n 1000` x several) |
 | D1 anchor роз'їзд (свічка зміщена на години) | пробували `fetch_tf_backfill --tf 86400` напряму з FXCM | Видалити пошкоджені D1 файли, перебудувати через `rebuild_from_m1` (D1 derives in-process via ADR-0023) |
+| **H4 bars incomplete after rebuild** (`src=1/4`, `src=3/4`) | Не вказав `--force` → існуючі partial bars залишились (rebuild пропустив їх) | Повторити з `--force`. Перевірити: `tf_14400_written` > 0 і `tf_14400_existed` = 0 |
+| **rebuild_from_m1 не обробив target date** | `--end` END-EXCLUSIVE: `--end 2026-05-18` не включає 18 травня | Завжди `--end = target_date + 1`: `--end 2026-05-19` для даних 18 травня |
+| **UI/Archi бачить gap після rebuild** | ws_server НЕ перезапустили → читає stale UDS snapshot з RAM | `sudo supervisorctl restart smc:smc-ws` + 60s observation (Фаза 7b) |
+| **JSONL `head -1` показує не найстарший бар** | Після backfill нові (старі) бари appended в кінець файлу (out-of-order) | Читати через `python3 -c "...json.loads(l)['open_time_ms']..."` + sorted min/max. Не довіряти `head -1` після backfill |
 
 ---
 
@@ -312,5 +352,9 @@ ssh aione-vps 'cp /opt/smc-v3/.env.bak.TIMESTAMP /opt/smc-v3/.env && \
 4. Edit `.env`: Method A (sed з PowerShell) АБО Method B (nano всередині SSH сесії). **НЕ cmd.exe inline `ssh ... "...$(date)..."`** — parens trap.
 5. Start back → 60s D9.1 observe (`supervisorctl status` + `tail fxcm.stderr.log`)
 6. `./.venv37/bin/python -m tools.fetch_tf_backfill --tf 60 --symbol X --n N` × XAU/USD, XAG/USD (dual venv: .venv37 для SDK)
-7. `./.venv/bin/python -m tools.rebuild_from_m1 --symbol X --start FROM --end TO` × XAU/USD, XAG/USD (.venv — звичайний)
-8. Verify M1 age < 300s + H4 forming bar + `/api/status` clean
+7. `./.venv/bin/python -m tools.rebuild_from_m1 --symbol X --start FROM --end TO+1_DAY --force` × XAU/USD, XAG/USD (.venv — звичайний)
+   ⚠️ `--end` є END-EXCLUSIVE: `--end 2026-05-18` НЕ включає 18 травня → використовуй `--end 2026-05-19`
+   ⚠️ `--force` обов'язковий якщо derived bars вже є на диску (live derive або попередній rebuild)
+8. `sudo supervisorctl restart smc:smc-ws` + 60s observation → чекаємо `SMC_WARMUP_OK tf=14400`
+   ⚠️ ws_server ОБОВ'ЯЗКОВИЙ restart після rebuild — інакше UDS RAM snapshot застарілий
+9. Verify M1 age < 300s + H4 forming bar + `/api/status` clean
