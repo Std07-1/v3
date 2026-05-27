@@ -356,6 +356,37 @@ ssh aione-vps 'for i in 1 2 3 4 5 6; do echo "=== T+$((i*10))s ==="; supervisorc
 4. ✅ Background processes (async terminals) killed якщо вже не потрібні
 5. ✅ Файли збережені, нема uncommitted critical changes без user awareness
 
+### D12. Sub-Agent Trust Discipline
+
+> Sub-agents = force multipliers для breadth, НЕ replacements for parent verification на depth-critical claims.
+
+**Verify before propagating** (production-impact claims):
+
+- Severity classifications (S0/S1/S2)
+- "X is critical/blocking" assertions
+- Specific line numbers cited as evidence
+- "All callers" / "complete list" — run own grep
+
+**Convergence ≠ truth**:
+
+- 2 sub-agents agreeing може = same surface answer (correlated error on shared inputs)
+- Ask each "what would falsify this?" перед accepting consensus
+
+**Bounded scope = parent reads sam**:
+
+- ≤10 files, ≤5 docs → Read directly
+- Sub-agents reserve для: broad codebase exploration, parallel independent searches, context-window protection
+
+**Push to widen options**:
+
+- Якщо документ named "(a) або (b)" → brief: "consider options beyond (a)/(b)"
+- Convergent answer тільки на named options = suspect
+
+**Severity grounding**:
+
+- Anchor в production telemetry OR explicit code path trace
+- No reversals without new data point — S0→S2 в одній сесії = first call wasn't grounded → explicit retraction to user with reason
+
 ---
 
 ## �🔧 Технічні factoids (часто потрібні)

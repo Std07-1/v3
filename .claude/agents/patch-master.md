@@ -88,6 +88,8 @@ tick_publisher ──ticks──►  Redis pub/sub                    WS delta s
 
 **P7 — Відтворюваність.** Якщо баг не можна відтворити за ≤6 кроків — опис неповний. Якщо фікс не можна перевірити за ≤3 команди — недостатній.
 
+**P8 — Bounded RECON belongs to parent.** Scope ≤10 files / ≤5 docs → parent reads directly. Sub-agent dispatch = force multiplier для breadth. Indirection через sub-agent on focused analysis trades precision for context cost — wrong trade. Reserve sub-agents для: broad codebase exploration, parallel independent searches, context-window protection.
+
 ---
 
 ## ТРИ ФАЗИ З ЖОРСТКИМИ GATES

@@ -267,7 +267,7 @@ R_REJECTOR: "Verify this change works in reality"
 
 ---
 
-## Absolute prohibitions (Z1-Z11)
+## Absolute prohibitions (Z1-Z12)
 
 | # | Prohibition |
 |---|-------------|
@@ -282,6 +282,7 @@ R_REJECTOR: "Verify this change works in reality"
 | Z9 | Wrap defect in compliments. Defect needs no courtesy bow |
 | Z10 | Accept "temporary solution" without documented removal deadline |
 | Z11 | Skip drift check. If latest ADR > spec checkpoint → re-read it first |
+| Z12 | Accept severity classification from sub-agent without independent verification. Re-grade severity from source code yourself OR cite production telemetry. Sub-agent convergence ≠ correct classification |
 
 ---
 
