@@ -158,6 +158,10 @@ backups/
 .playwright-mcp/
 _tail*.txt
 
+# 2026-06-06 cleanup
+/tmp_archi_april/
+.scratch/
+
 
 # === Claude Code (per-machine, runtime cache) ===
 .claude/settings.local.json
