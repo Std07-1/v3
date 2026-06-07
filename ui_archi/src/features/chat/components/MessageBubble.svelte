@@ -1,17 +1,24 @@
 <!--
-    MessageBubble — один баббл чату (user / archi).
+    MessageBubble — один баббл чату (user / archi). Design: Б v2 (presence через mood-фон).
 
     Props:
       - message: ChatMessage
-      - grouped: boolean (true = без відступу зверху, примикає до попереднього того ж автора)
-      - ttsSupported: boolean (показувати кнопку "озвучити" для archi бабблів)
+      - grouped: boolean (примикає до попереднього того ж автора)
+      - ttsSupported: boolean (кнопка "озвучити" для archi)
 
     Events:
-      - onspeak(text: string) — клік на кнопці TTS
+      - onspeak(text: string)
+
+    Design (ADR — chat depth Б v2):
+      - Архі: настрій живе на ФОНІ баблів (mood-tint, тече з --accent) — без orb-аватара.
+      - Ти: солідний сірий, тихий — без accent.
+      - Цифри/рівні: mono + тонкий тон (без кольорового бокса).
+      - Борделес: розділення фоном+тінню. Солідні поверхні (текст не на чорному — анти-halation).
 
     Security (T1 XSS):
-      - user bubbles: escapeHtml + \n → <br />
-      - archi bubbles: marked.parse → sanitizeHtml (src/lib/sanitize.ts, allowlist tags)
+      - user: escapeHtml + \n→<br />
+      - archi: marked.parse → sanitizeHtml (allowlist)
+      - highlightNumbers застосовується ПІСЛЯ sanitize, lookahead не чіпає вміст тегів.
 -->
 <script lang="ts">
     import { marked } from "marked";
@@ -43,12 +50,22 @@
         });
     }
 
+    /** Підсвічує ціни/рівні/час (mono-tint). Lookahead `(?![^<]*>)` пропускає
+        вміст тегів — не ламає атрибути/розмітку у вже-санітизованому HTML. */
+    function highlightNumbers(html: string): string {
+        return html.replace(
+            /(\d{1,2}:\d{2}|\d{4}(?:\.\d+)?(?:-\d{4})?)(?![^<]*>)/g,
+            '<span class="num">$1</span>',
+        );
+    }
+
     function renderMessageHtml(msg: ChatMessage): string {
         if (msg.role === "user") {
-            return escapeHtml(msg.text).replace(/\n/g, "<br />");
+            const safe = escapeHtml(msg.text).replace(/\n/g, "<br />");
+            return highlightNumbers(safe);
         }
         const rendered = marked.parse(msg.text) as string;
-        return sanitizeHtml(rendered);
+        return highlightNumbers(sanitizeHtml(rendered));
     }
 
     function formatTs(ts_ms: number): string {
@@ -91,15 +108,15 @@
 <style>
     .bubble-row {
         display: flex;
-        max-width: 82%;
+        max-width: 80%;
         position: relative;
     }
     .bubble-row.user { align-self: flex-end; }
     .bubble-row.archi { align-self: flex-start; }
-    .bubble-row.grouped { margin-top: -2px; }
+    .bubble-row.grouped { margin-top: -4px; }
 
     .bubble {
-        padding: 8px 14px;
+        padding: 9px 14px;
         border-radius: 18px;
         max-width: 100%;
         word-break: break-word;
@@ -116,23 +133,31 @@
         -webkit-user-select: text;
         -webkit-touch-callout: default;
     }
+
+    /* ── Ти: солідний сірий, тихий (без accent) ── */
     .bubble-row.user .bubble {
-        background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+        background: var(--surface2);
         color: var(--text);
-        border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
         border-bottom-right-radius: 6px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
     }
     .bubble-row.user.grouped .bubble { border-top-right-radius: 6px; }
+
+    /* ── Архі: настрій на ФОНІ баблів (тече з --accent). Солідна поверхня —
+       текст лежить на surface, не на чорному (анти-halation). ── */
     .bubble-row.archi .bubble {
-        background: var(--surface);
+        background: linear-gradient(135deg,
+            color-mix(in srgb, var(--accent) 15%, var(--surface)) 0%,
+            color-mix(in srgb, var(--accent) 6%, var(--surface)) 100%);
         color: var(--text);
         border-bottom-left-radius: 6px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
     }
     .bubble-row.archi.grouped .bubble { border-top-left-radius: 6px; }
 
     .bubble-text {
         font-size: 14.5px;
-        line-height: 1.5;
+        line-height: 1.55;
         white-space: pre-wrap;
     }
     .bubble-text :global(p) { margin: 0 0 0.55em; }
@@ -141,18 +166,21 @@
     .bubble-text :global(blockquote) {
         margin: 0.45em 0;
         padding-left: 10px;
-        border-left: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+        border-left: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
         color: var(--text-muted);
     }
     .bubble-text :global(code) {
         font-family: var(--font-mono);
         font-size: 0.88em;
-        background: var(--surface2);
+        background: color-mix(in srgb, var(--surface2) 70%, transparent);
         padding: 1px 4px;
         border-radius: 4px;
     }
-    .bubble-row.user .bubble-text :global(code) {
-        background: color-mix(in srgb, var(--accent) 18%, var(--surface2));
+    /* Цифри/рівні — спокійні: mono + тонкий тон, БЕЗ кольорового бокса */
+    .bubble-text :global(.num) {
+        font-family: var(--font-mono);
+        font-size: 0.9em;
+        color: color-mix(in srgb, var(--accent) 32%, var(--text));
     }
 
     .bubble-meta {
@@ -162,8 +190,7 @@
         gap: 5px;
         margin-top: 2px;
     }
-    .bubble-ts { font-size: 10px; opacity: 0.45; }
-    .bubble-row.user .bubble-ts { opacity: 0.45; }
+    .bubble-ts { font-size: 10px; opacity: 0.4; }
 
     .src-tg {
         font-size: 8px;

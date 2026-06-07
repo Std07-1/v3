@@ -8,12 +8,14 @@
 }
 
 :root {
-    --bg: #0f0f11;
-    --surface: #1a1a1f;
-    --surface2: #222228;
-    --border: #2a2a35;
-    --text: #e4e4f0;
-    --text-muted: #6b6b80;
+    /* Палітра пом'якшена проти halation (яскравий текст на чорному = різь/блюр):
+       текст не білий-glare, фон не чорний — вужча яскравісна прірва, око відпочиває. */
+    --bg: #131319;
+    --surface: #1d1d25;
+    --surface2: #26262f;
+    --border: #30303c;
+    --text: #d1d2dc;
+    --text-muted: #7b7b90;
     --accent: #7c6fff;
     --accent-dim: #3d3580;
     --positive: #4ade80;

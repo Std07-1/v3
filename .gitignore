@@ -28,6 +28,9 @@ _tmp_jsonl_stress
 /.antigravity/
 # .github/ — НЕ ігнорувати! Містить CI, dependabot, copilot-instructions
 /.github/.agent/
+
+# ── ui_archi local dev harness (1:1 preview, scratch lab, private Архі data) ───
+ui_archi/.devharness/
 /.idea/
 *.swp
 *.swo

@@ -86,8 +86,11 @@
         gap: 8px;
         height: 44px;
         padding: 0 14px;
-        border-bottom: 1px solid var(--border);
-        background: color-mix(in srgb, var(--surface) 94%, var(--bg));
+        /* Скляний sticky header — контент блюриться під ним */
+        border-bottom: 1px solid var(--card-border);
+        background: color-mix(in srgb, var(--surface) 72%, transparent);
+        backdrop-filter: blur(16px) saturate(140%);
+        -webkit-backdrop-filter: blur(16px) saturate(140%);
         flex-shrink: 0;
         position: sticky;
         top: 0;
