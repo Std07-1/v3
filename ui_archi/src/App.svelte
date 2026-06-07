@@ -16,6 +16,7 @@
     import Mind from "./views/Mind.svelte";
     import Workspace from "./views/Workspace.svelte";
     import Logs from "./views/Logs.svelte";
+    import Icon from "./lib/Icon.svelte";
 
     // ── routing (hash-based) ──
     let route = $state(window.location.hash.replace("#", "") || "/chat");
@@ -99,13 +100,26 @@
 
     // ── P3: Mood → Accent color ──
     const MOOD_COLORS: Record<string, string> = {
-        calm: "#5487FF",
+        // ⚙ робочий стан
         focused: "#22CC8F",
+        analytical: "#2DD4BF",
         alert: "#F5A623",
-        stressed: "#ED4554",
-        excited: "#9B59B6",
-        cautious: "#fb923c",
-        frustrated: "#ED4554",
+        cautious: "#FBBF24",
+        determined: "#10B981",
+        // ◈ впевненість
+        confident: "#3B82F6",
+        uncertain: "#94A3B8",
+        conflicted: "#A78BFA",
+        // ✦ позитив
+        calm: "#60A5FA",
+        excited: "#C084FC",
+        satisfied: "#4ADE80",
+        hopeful: "#5EEAD4",
+        curious: "#38BDF8",
+        // ⚠ напруга
+        frustrated: "#F87171",
+        tense: "#FB7185",
+        weary: "#8B8BA7",
     };
     const DEFAULT_ACCENT = "#7c6fff";
 
@@ -269,12 +283,20 @@
 </script>
 
 {#if !token}
-    <!-- ── Auth Screen ── -->
+    <!-- ── Auth Screen (premium redesign — living orb, mood-driven accent) ── -->
     <div class="auth-screen">
+        <div class="aura"><span></span><span></span></div>
         <div class="auth-card">
-            <div class="auth-icon">🤖</div>
-            <h1 class="auth-title">Archi Console</h1>
-            <p class="auth-sub">Приватний доступ. Введи Bearer токен.</p>
+            <div class="orb-wrap">
+                <div class="ring r1"></div>
+                <div class="ring r2"></div>
+                <div class="ring r3"></div>
+                <div class="orb"></div>
+            </div>
+            <h1 class="auth-title">Archi</h1>
+            <p class="auth-sub">
+                Торговий розум, що <b>живе ринком</b>.<br />Приватний доступ.
+            </p>
             <form
                 onsubmit={(e) => {
                     e.preventDefault();
@@ -282,14 +304,16 @@
                 }}
                 class="auth-form"
             >
-                <input
-                    class="token-input"
-                    type="password"
-                    bind:value={tokenInput}
-                    placeholder="Bearer token..."
-                    autocomplete="off"
-                    spellcheck="false"
-                />
+                <div class="field">
+                    <input
+                        class="token-input"
+                        type="password"
+                        bind:value={tokenInput}
+                        placeholder="Bearer token"
+                        autocomplete="off"
+                        spellcheck="false"
+                    />
+                </div>
                 <button class="btn-primary" type="submit">Увійти</button>
             </form>
             {#if authError}<p class="auth-error">{authError}</p>{/if}
@@ -299,7 +323,10 @@
     <!-- ── App Shell ── -->
     <div class="shell">
         <nav class="sidebar">
-            <div class="logo">⬡ Archi</div>
+            <div class="brand">
+                <div class="brand-orb"></div>
+                <span class="brand-name">Archi</span>
+            </div>
             <ul class="nav-links">
                 <li>
                     <button
@@ -307,7 +334,7 @@
                         class:active={route === "/chat" || route === ""}
                         onclick={() => nav("/chat")}
                     >
-                        <span class="nav-icon">💬</span> Chat
+                        <span class="nav-icon"><Icon name="chat" /></span> Chat
                     </button>
                 </li>
                 <li>
@@ -316,7 +343,7 @@
                         class:active={route === "/feed"}
                         onclick={() => nav("/feed")}
                     >
-                        <span class="nav-icon">⚡</span> Feed
+                        <span class="nav-icon"><Icon name="feed" /></span> Feed
                     </button>
                 </li>
                 <li>
@@ -325,7 +352,7 @@
                         class:active={route === "/thinking"}
                         onclick={() => nav("/thinking")}
                     >
-                        <span class="nav-icon">🧠</span> Thinking
+                        <span class="nav-icon"><Icon name="thinking" /></span> Thinking
                     </button>
                 </li>
                 <li>
@@ -334,7 +361,7 @@
                         class:active={route === "/relationship"}
                         onclick={() => nav("/relationship")}
                     >
-                        <span class="nav-icon">💙</span> Relationship
+                        <span class="nav-icon"><Icon name="relationship" /></span> Relationship
                     </button>
                 </li>
                 <li>
@@ -343,7 +370,7 @@
                         class:active={route === "/mind"}
                         onclick={() => nav("/mind")}
                     >
-                        <span class="nav-icon">🧩</span> Mind
+                        <span class="nav-icon"><Icon name="mind" /></span> Mind
                     </button>
                 </li>
                 <li>
@@ -352,7 +379,7 @@
                         class:active={route === "/workspace"}
                         onclick={() => nav("/workspace")}
                     >
-                        <span class="nav-icon">🏠</span> Workspace
+                        <span class="nav-icon"><Icon name="workspace" /></span> Workspace
                     </button>
                 </li>
                 <li>
@@ -361,7 +388,7 @@
                         class:active={route === "/logs"}
                         onclick={() => nav("/logs")}
                     >
-                        <span class="nav-icon">📋</span> Logs
+                        <span class="nav-icon"><Icon name="logs" /></span> Logs
                     </button>
                 </li>
             </ul>
@@ -375,7 +402,7 @@
                     ? "Сповіщення увімкнено"
                     : "Увімкнути сповіщення"}
             >
-                <span class="notif-bell">{notifEnabled ? "🔔" : "🔕"}</span>
+                <span class="notif-bell"><Icon name={notifEnabled ? "bell" : "belloff"} size={14} /></span>
                 <span class="notif-label"
                     >{notifEnabled ? "Сповіщення" : "Увімкнути"}</span
                 >
@@ -529,31 +556,31 @@
                                 class:active={route === "/chat" || route === ""}
                                 onclick={() => nav("/chat")}
                             >
-                                <span class="switcher-emoji">💬</span>
+                                <span class="switcher-emoji"><Icon name="chat" size={16} /></span>
                                 <span>Chat</span>
                             </button>
                             <button onclick={() => nav("/feed")}>
-                                <span class="switcher-emoji">⚡</span>
+                                <span class="switcher-emoji"><Icon name="feed" size={16} /></span>
                                 <span>Feed</span>
                             </button>
                             <button onclick={() => nav("/thinking")}>
-                                <span class="switcher-emoji">🧠</span>
+                                <span class="switcher-emoji"><Icon name="thinking" size={16} /></span>
                                 <span>Thinking</span>
                             </button>
                             <button onclick={() => nav("/relationship")}>
-                                <span class="switcher-emoji">💙</span>
+                                <span class="switcher-emoji"><Icon name="relationship" size={16} /></span>
                                 <span>Relationship</span>
                             </button>
                             <button onclick={() => nav("/mind")}>
-                                <span class="switcher-emoji">🧩</span>
+                                <span class="switcher-emoji"><Icon name="mind" size={16} /></span>
                                 <span>Mind</span>
                             </button>
                             <button onclick={() => nav("/workspace")}>
-                                <span class="switcher-emoji">🏠</span>
+                                <span class="switcher-emoji"><Icon name="workspace" size={16} /></span>
                                 <span>Workspace</span>
                             </button>
                             <button onclick={() => nav("/logs")}>
-                                <span class="switcher-emoji">📋</span>
+                                <span class="switcher-emoji"><Icon name="logs" size={16} /></span>
                                 <span>Logs</span>
                             </button>
                         </div>
@@ -568,49 +595,49 @@
                     onclick={() => nav("/chat")}
                     aria-label="Chat"
                 >
-                    <span class="bn-pill"><span class="bn-icon">💬</span></span>
+                    <span class="bn-pill"><span class="bn-icon"><Icon name="chat" size={22} /></span></span>
                 </button>
                 <button
                     class:active={route === "/feed"}
                     onclick={() => nav("/feed")}
                     aria-label="Feed"
                 >
-                    <span class="bn-pill"><span class="bn-icon">⚡</span></span>
+                    <span class="bn-pill"><span class="bn-icon"><Icon name="feed" size={22} /></span></span>
                 </button>
                 <button
                     class:active={route === "/thinking"}
                     onclick={() => nav("/thinking")}
                     aria-label="Thinking"
                 >
-                    <span class="bn-pill"><span class="bn-icon">🧠</span></span>
+                    <span class="bn-pill"><span class="bn-icon"><Icon name="thinking" size={22} /></span></span>
                 </button>
                 <button
                     class:active={route === "/relationship"}
                     onclick={() => nav("/relationship")}
                     aria-label="Relationship"
                 >
-                    <span class="bn-pill"><span class="bn-icon">💙</span></span>
+                    <span class="bn-pill"><span class="bn-icon"><Icon name="relationship" size={22} /></span></span>
                 </button>
                 <button
                     class:active={route === "/mind"}
                     onclick={() => nav("/mind")}
                     aria-label="Mind"
                 >
-                    <span class="bn-pill"><span class="bn-icon">🧩</span></span>
+                    <span class="bn-pill"><span class="bn-icon"><Icon name="mind" size={22} /></span></span>
                 </button>
                 <button
                     class:active={route === "/workspace"}
                     onclick={() => nav("/workspace")}
                     aria-label="Workspace"
                 >
-                    <span class="bn-pill"><span class="bn-icon">🏠</span></span>
+                    <span class="bn-pill"><span class="bn-icon"><Icon name="workspace" size={22} /></span></span>
                 </button>
                 <button
                     class:active={route === "/logs"}
                     onclick={() => nav("/logs")}
                     aria-label="Logs"
                 >
-                    <span class="bn-pill"><span class="bn-icon">📋</span></span>
+                    <span class="bn-pill"><span class="bn-icon"><Icon name="logs" size={22} /></span></span>
                 </button>
             </nav>
         </div>
@@ -618,75 +645,123 @@
 {/if}
 
 <style>
-    /* ── Auth Screen ── */
+    /* ── Auth Screen (premium redesign — orb presence + mood-driven glow) ── */
     .auth-screen {
         min-height: var(--app-vh, 100vh);
         display: flex;
         align-items: center;
         justify-content: center;
-        background: var(--bg);
+        position: relative;
+        overflow: hidden;
+        background:
+            radial-gradient(1100px 760px at 50% -12%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 60%),
+            radial-gradient(820px 640px at 86% 112%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 55%),
+            var(--bg);
     }
+    .aura { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
+    .aura span { position: absolute; border-radius: 50%; filter: blur(60px); opacity: 0.5; }
+    .aura span:nth-child(1) {
+        width: 500px; height: 500px; left: 8%; top: 12%;
+        background: radial-gradient(circle, color-mix(in srgb, var(--accent) 35%, transparent), transparent 70%);
+        animation: aura-drift1 18s ease-in-out infinite;
+    }
+    .aura span:nth-child(2) {
+        width: 440px; height: 440px; right: 6%; bottom: 8%;
+        background: radial-gradient(circle, color-mix(in srgb, var(--accent) 26%, transparent), transparent 70%);
+        animation: aura-drift2 22s ease-in-out infinite;
+    }
+    @keyframes aura-drift1 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(40px,30px) scale(1.1); } }
+    @keyframes aura-drift2 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(-30px,-40px) scale(1.08); } }
+
     .auth-card {
-        width: 360px;
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 40px 32px;
+        position: relative;
+        z-index: 2;
+        width: 380px;
+        padding: 48px 40px 36px;
+        background: color-mix(in srgb, var(--surface) 70%, transparent);
+        backdrop-filter: blur(24px) saturate(140%);
+        -webkit-backdrop-filter: blur(24px) saturate(140%);
+        border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+        border-radius: 28px;
+        box-shadow:
+            0 30px 80px rgba(0, 0, 0, 0.55),
+            0 1px 0 rgba(255, 255, 255, 0.06) inset;
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 16px;
+        animation: auth-rise 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both;
     }
-    .auth-icon {
-        font-size: 40px;
+    @keyframes auth-rise { from { opacity: 0; transform: translateY(24px) scale(0.98); } to { opacity: 1; transform: none; } }
+
+    /* living Archi presence */
+    .orb-wrap { position: relative; width: 132px; height: 132px; margin-bottom: 24px; display: grid; place-items: center; }
+    .ring { position: absolute; inset: 0; border-radius: 50%; border: 1px solid var(--accent); opacity: 0; }
+    .ring.r1 { animation: orb-pulse 3.6s ease-out infinite; }
+    .ring.r2 { animation: orb-pulse 3.6s ease-out infinite 1.2s; }
+    .ring.r3 { animation: orb-pulse 3.6s ease-out infinite 2.4s; }
+    @keyframes orb-pulse { 0% { transform: scale(0.55); opacity: 0.7; } 100% { transform: scale(1.15); opacity: 0; } }
+    .orb {
+        width: 84px; height: 84px; border-radius: 50%;
+        background: radial-gradient(circle at 35% 30%, #fff 0%, color-mix(in srgb, var(--accent) 55%, #fff) 22%, var(--accent) 55%, color-mix(in srgb, var(--accent) 72%, #000) 100%);
+        box-shadow:
+            0 0 50px 6px color-mix(in srgb, var(--accent) 55%, transparent),
+            0 0 100px 18px color-mix(in srgb, var(--accent) 25%, transparent),
+            0 8px 30px rgba(0, 0, 0, 0.4);
+        animation: orb-breathe 4.2s ease-in-out infinite;
+        position: relative;
     }
+    .orb::after {
+        content: ''; position: absolute; inset: 0; border-radius: 50%;
+        background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.7), transparent 38%);
+        mix-blend-mode: screen;
+    }
+    @keyframes orb-breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+
     .auth-title {
-        font-size: 20px;
-        font-weight: 600;
-        color: var(--text);
+        font-size: 30px; font-weight: 700; letter-spacing: -0.02em;
+        background: linear-gradient(180deg, #fff, color-mix(in srgb, var(--accent) 30%, #fff));
+        -webkit-background-clip: text; background-clip: text; color: transparent;
     }
     .auth-sub {
-        font-size: 13px;
-        color: var(--text-muted);
-        text-align: center;
+        margin-top: 8px; font-size: 13.5px; color: var(--text-muted);
+        text-align: center; line-height: 1.5;
     }
-    .auth-form {
-        width: 100%;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-    }
+    .auth-sub b { color: color-mix(in srgb, var(--accent) 55%, #fff); font-weight: 500; }
+    .auth-form { width: 100%; margin-top: 28px; display: flex; flex-direction: column; gap: 12px; }
+    .field { position: relative; }
     .token-input {
-        width: 100%;
-        padding: 10px 12px;
-        background: var(--surface2);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        color: var(--text);
-        font-family: var(--font-mono);
-        font-size: 13px;
-        outline: none;
+        width: 100%; padding: 13px 15px;
+        background: color-mix(in srgb, var(--bg) 60%, transparent);
+        border: 1px solid rgba(255, 255, 255, 0.07);
+        border-radius: 13px; color: var(--text);
+        font-family: var(--font-mono); font-size: 13px; outline: none;
+        transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
     }
+    .token-input::placeholder { color: var(--text-muted); }
     .token-input:focus {
         border-color: var(--accent);
+        background: color-mix(in srgb, var(--bg) 85%, transparent);
+        box-shadow:
+            0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent),
+            0 0 30px color-mix(in srgb, var(--accent) 18%, transparent);
     }
     .btn-primary {
-        padding: 10px;
-        background: var(--accent);
-        color: white;
-        border: none;
-        border-radius: var(--radius);
-        font-size: 14px;
-        font-weight: 500;
-        cursor: pointer;
+        margin-top: 4px; padding: 13px; border: none; border-radius: 13px;
+        color: #fff; font-size: 14.5px; font-weight: 600; cursor: pointer;
+        background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 70%, #fff), var(--accent) 55%, color-mix(in srgb, var(--accent) 80%, #000));
+        box-shadow:
+            0 8px 24px color-mix(in srgb, var(--accent) 35%, transparent),
+            0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+        transition: transform 0.12s, box-shadow 0.2s, filter 0.2s;
     }
     .btn-primary:hover {
-        filter: brightness(1.1);
+        transform: translateY(-1px); filter: brightness(1.08);
+        box-shadow:
+            0 12px 34px color-mix(in srgb, var(--accent) 50%, transparent),
+            0 0 0 1px rgba(255, 255, 255, 0.12) inset;
     }
-    .auth-error {
-        font-size: 12px;
-        color: var(--danger);
-    }
+    .btn-primary:active { transform: translateY(0); }
+    .auth-error { font-size: 12px; color: var(--danger); margin-top: 4px; }
 
     /* ── Shell ── */
     .shell {
@@ -706,12 +781,47 @@
         padding: 16px 12px;
         gap: 8px;
     }
-    .logo {
-        font-size: 15px;
+    .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 8px 14px;
+    }
+    .brand-orb {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        position: relative;
+        background: radial-gradient(circle at 35% 30%, #fff, color-mix(in srgb, var(--accent) 55%, #fff) 25%, var(--accent) 60%, color-mix(in srgb, var(--accent) 72%, #000));
+        box-shadow:
+            0 0 16px 2px color-mix(in srgb, var(--accent) 50%, transparent),
+            0 0 30px 6px color-mix(in srgb, var(--accent) 22%, transparent);
+        animation: brand-breathe 4s ease-in-out infinite;
+    }
+    .brand-orb::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.6), transparent 40%);
+        mix-blend-mode: screen;
+    }
+    @keyframes brand-breathe {
+        0%, 100% {
+            transform: scale(1);
+            box-shadow: 0 0 16px 2px color-mix(in srgb, var(--accent) 50%, transparent), 0 0 30px 6px color-mix(in srgb, var(--accent) 22%, transparent);
+        }
+        50% {
+            transform: scale(1.08);
+            box-shadow: 0 0 22px 3px color-mix(in srgb, var(--accent) 65%, transparent), 0 0 40px 9px color-mix(in srgb, var(--accent) 30%, transparent);
+        }
+    }
+    .brand-name {
+        font-size: 16px;
         font-weight: 700;
-        color: var(--accent);
-        padding: 4px 8px 12px;
-        letter-spacing: 0.02em;
+        letter-spacing: -0.01em;
+        color: var(--text);
     }
     .nav-links {
         list-style: none;
@@ -746,7 +856,10 @@
         color: var(--text);
     }
     .nav-icon {
-        font-size: 15px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
     }
     .sidebar-footer {
         padding-top: 8px;
@@ -936,35 +1049,27 @@
         gap: 4px;
     }
 
-    /* Mood colors */
-    .mood-dot[data-mood="calm"] {
-        background: #60a5fa;
-        animation-duration: 3s;
-    }
-    .mood-dot[data-mood="focused"] {
-        background: #34d399;
-        animation-duration: 2s;
-    }
-    .mood-dot[data-mood="alert"] {
-        background: #fbbf24;
-        animation-duration: 1.5s;
-    }
-    .mood-dot[data-mood="stressed"] {
-        background: #f87171;
-        animation-duration: 1s;
-    }
-    .mood-dot[data-mood="cautious"] {
-        background: #fb923c;
-        animation-duration: 1.8s;
-    }
-    .mood-dot[data-mood="frustrated"] {
-        background: #f87171;
-        animation-duration: 0.8s;
-    }
-    .mood-dot[data-mood="excited"] {
-        background: #c084fc;
-        animation-duration: 1.2s;
-    }
+    /* Mood colors — 16 станів, 4 набори (синхронізовано з MOOD_COLORS + бот whitelist) */
+    /* ⚙ робочий стан */
+    .mood-dot[data-mood="focused"] { background: #22cc8f; animation-duration: 2s; }
+    .mood-dot[data-mood="analytical"] { background: #2dd4bf; animation-duration: 2.4s; }
+    .mood-dot[data-mood="alert"] { background: #f5a623; animation-duration: 1.5s; }
+    .mood-dot[data-mood="cautious"] { background: #fbbf24; animation-duration: 1.8s; }
+    .mood-dot[data-mood="determined"] { background: #10b981; animation-duration: 1.8s; }
+    /* ◈ впевненість */
+    .mood-dot[data-mood="confident"] { background: #3b82f6; animation-duration: 2.2s; }
+    .mood-dot[data-mood="uncertain"] { background: #94a3b8; animation-duration: 2.6s; }
+    .mood-dot[data-mood="conflicted"] { background: #a78bfa; animation-duration: 1.4s; }
+    /* ✦ позитив */
+    .mood-dot[data-mood="calm"] { background: #60a5fa; animation-duration: 3s; }
+    .mood-dot[data-mood="excited"] { background: #c084fc; animation-duration: 1.2s; }
+    .mood-dot[data-mood="satisfied"] { background: #4ade80; animation-duration: 2.8s; }
+    .mood-dot[data-mood="hopeful"] { background: #5eead4; animation-duration: 2.5s; }
+    .mood-dot[data-mood="curious"] { background: #38bdf8; animation-duration: 1.6s; }
+    /* ⚠ напруга */
+    .mood-dot[data-mood="frustrated"] { background: #f87171; animation-duration: 0.8s; }
+    .mood-dot[data-mood="tense"] { background: #fb7185; animation-duration: 1s; }
+    .mood-dot[data-mood="weary"] { background: #8b8ba7; animation-duration: 3.2s; }
 
     @keyframes mood-pulse {
         0%,
@@ -1065,8 +1170,9 @@
             background: color-mix(in srgb, var(--accent) 14%, var(--surface2));
         }
         .switcher-emoji {
-            font-size: 15px;
-            line-height: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
         }
         .bottom-nav {
             display: flex;
@@ -1127,8 +1233,9 @@
             transform: translateY(-1px);
         }
         .bn-icon {
-            font-size: 22px;
-            line-height: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
         }
     }
 </style>

@@ -1,0 +1,90 @@
+# Archi Console — Design System
+
+> Premium UI-редизайн (2026-06-07). Принцип: **Архі — живий AI-партнер, і UI це передає** (не generic dashboard). Жива присутність = orb + настрій + чисті лінійні іконки.
+>
+> Цей файл — SSOT дизайн-системи. Хочеш додати/змінити настрій чи іконку — все тут.
+
+---
+
+## 1. Orb — жива присутність Архі
+
+Центральний елемент бренду. Замість `🤖` emoji — gradient-сфера що **дихає** і **світиться поточним настроєм Архі**.
+
+**Де:**
+- **Login** (`App.svelte`, auth-екран) — великий orb 84px + 3 pulse-кільця присутності + ambient-аура на фоні.
+- **Sidebar** (`App.svelte`, `.brand`) — малий orb 28px поряд з "Archi" wordmark.
+
+**Як працює:**
+- Колір orb = `var(--accent)` (CSS-змінна на `documentElement`).
+- `--accent` встановлюється з настрою: `App.svelte` `$effect` → `MOOD_COLORS[mood]` → `document.documentElement.style.setProperty("--accent", color)`. Якщо настрою нема → `DEFAULT_ACCENT` (#7c6fff).
+- **Плавний перехід кольору**: `theme.css` має `@property --accent` + `transition: --accent 1.5s` — orb м'яко тече кольором при зміні настрою (focused→stressed = зелений м'яко в червоний).
+- Анімація: `@keyframes orb-breathe` (scale 1↔1.06, 4.2s) + `orb-pulse` кільця (login).
+
+---
+
+## 2. Mood-палітра — 16 настроїв, 4 набори
+
+Архі **сам обирає** настрій через `emit_directives.mood` (I7 — це його стан, не наш). Orb світиться відповідним кольором.
+
+| Набір | Настрої (UI-колір) |
+|---|---|
+| ⚙ **Робочий стан** | focused `#22CC8F` · analytical `#2DD4BF` · alert `#F5A623` · cautious `#FBBF24` · determined `#10B981` |
+| ◈ **Впевненість** | confident `#3B82F6` · uncertain `#94A3B8` · conflicted `#A78BFA` |
+| ✦ **Позитив** | calm `#60A5FA` · excited `#C084FC` · satisfied `#4ADE80` · hopeful `#5EEAD4` · curious `#38BDF8` |
+| ⚠ **Напруга** | frustrated `#F87171` · tense `#FB7185` · weary `#8B8BA7` |
+
+### ⚠ 3 МІСЦЯ СИНХРОНІЗАЦІЇ (додати/змінити настрій → оновити ВСІ 3)
+
+1. **`trader-v3/bot/state/metacognition_state.py`** → `_MOOD_ALLOWED` (frozenset) — whitelist, що боту дозволено застосувати. Поза whitelist → `apply_mood` тихо ігнорує.
+2. **`trader-v3/bot/state/directives_tool.py`** → `mood` `enum` + `description` — що Архі **бачить** як опції в схемі emit_directives (description згрупований за наборами).
+3. **`ui_archi/src/App.svelte`** → `MOOD_COLORS` (orb-колір) **+** `.mood-dot[data-mood="..."]` CSS (крапка в directives-panel + швидкість дихання).
+
+> **Розсинхрон ламає тихо**: mood у bot без UI-кольору → orb default-фіолет. UI-колір без bot-whitelist → ніколи не вмикається. Тримай 3 місця в синхроні.
+
+### Як додати настрій
+1. Додай рядок у `_MOOD_ALLOWED` (категорію в коментарі).
+2. Додай у `enum` + онови `description` (категорія).
+3. Додай у `MOOD_COLORS` + `.mood-dot` (колір + animation-duration: спокій повільніше ~3s, напруга швидше ~0.8-1s — швидкість = емоційний темп).
+
+---
+
+## 3. Іконки — `Icon.svelte`
+
+Lucide-style лінійні SVG (тонкий штрих, `currentColor` → успадковують accent). Замінили emoji в усій навігації.
+
+**Компонент:** `ui_archi/src/lib/Icon.svelte`
+**Використання:** `<Icon name="chat" size={18} />`
+**Доступні:** `chat, feed, thinking, relationship, mind, workspace, logs, bell, belloff`
+**Де застосовано** (`App.svelte`): sidebar nav · mobile bottom-nav · section-switcher menu · notif-toggle.
+
+### Як додати іконку
+1. Знайди Lucide-path (lucide.dev, 24×24 viewBox).
+2. Додай у `ICONS` map в `Icon.svelte`: `назва: '<path d="..."/>'` (multi-path/rect — конкатенуй).
+3. Використай `<Icon name="назва" />`. Контейнер: `display: inline-flex; align-items: center` (вирівнювання SVG).
+
+---
+
+## 4. Принципи глибини (premium feel)
+
+- **Скло**: `backdrop-filter: blur(24px) saturate(140%)` + `color-mix(in srgb, var(--surface) 70%, transparent)` напівпрозорий surface.
+- **Glow**: `box-shadow` з `color-mix(in srgb, var(--accent) X%, transparent)` — світіння реагує на настрій.
+- **Ambient**: повільні radial-аури на фоні (login, `aura-drift` keyframes).
+- **Усе на `var(--accent)`** → нуль hardcoded кольорів у нових елементах, все mood-driven.
+
+---
+
+## Карта файлів
+
+| Файл | Що |
+|---|---|
+| `ui_archi/src/App.svelte` | login auth-екран + shell (sidebar/nav/orb/directives-panel) + `MOOD_COLORS` + `$effect` mood→accent |
+| `ui_archi/src/lib/Icon.svelte` | SVG icon set + `ICONS` map |
+| `ui_archi/src/lib/theme.css` | токени (`--bg/--surface/--accent/...`) + `@property --accent` + `transition: --accent 1.5s` |
+| `trader-v3/bot/state/metacognition_state.py` | `_MOOD_ALLOWED` whitelist + `apply_mood` |
+| `trader-v3/bot/state/directives_tool.py` | mood `enum` + description |
+
+## Що далі (premium roadmap)
+- Глибина на views (Feed/Mind/Workspace — скло+glow панелі)
+- Mood-специфічна швидкість дихання orb (зараз єдина 4.2s)
+- Майбутні набори настроїв (pattern встановлено — copy 3 місця)
+- Micro-interactions (hover/entrance на nav, panels)
