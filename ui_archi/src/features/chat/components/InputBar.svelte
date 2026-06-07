@@ -316,6 +316,12 @@
         align-items: stretch;
         gap: 4px;
     }
+    /* У колонці flex:1 розподіляє ВИСОТУ → колапсує textarea до min-height і
+       ріже текст. flex:0 0 auto → використовується реальна style.height (auto-grow). */
+    .pill.multiline .ta {
+        flex: 0 0 auto;
+        width: 100%;
+    }
     .pill.multiline .trail {
         justify-content: flex-end;
         width: 100%;
