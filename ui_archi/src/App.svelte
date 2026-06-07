@@ -131,24 +131,17 @@
     let keyboardOpen = $state(false);
     let viewportRaf: number | null = null;
 
-    function hasTextEntryFocus(): boolean {
-        const active = document.activeElement;
-        return !!(
-            active instanceof HTMLElement &&
-            (active.tagName === "TEXTAREA" ||
-                active.tagName === "INPUT" ||
-                active.isContentEditable)
-        );
-    }
-
     function updateViewportLayout() {
         const vv = window.visualViewport;
         const vh = vv?.height ?? window.innerHeight;
         const isMobile = window.matchMedia(MOBILE_BREAKPOINT).matches;
-        const textEntryFocused = hasTextEntryFocus();
+        // Клавіатура РЕАЛЬНО займає екран (visualViewport коротший за layout),
+        // а не просто фокус інпута. Інакше баг: сховав клавіатуру кнопкою —
+        // інпут лишився focused → keyboardOpen=true → нав не повертався.
+        const keyboardUp = !!vv && window.innerHeight - vv.height > 150;
 
         document.documentElement.style.setProperty("--app-vh", `${vh}px`);
-        keyboardOpen = isMobile && textEntryFocused;
+        keyboardOpen = isMobile && keyboardUp;
         document.body.classList.toggle("is-mobile", isMobile);
         document.body.classList.toggle("keyboard-open", keyboardOpen);
     }
