@@ -377,11 +377,13 @@
         color: var(--text);
     }
     .send:disabled { cursor: not-allowed; }
+    /* armed = той самий мініатюрний літачок, лише accent-колір (готово).
+       Без синього кружка/тіні — консистентно з порожнім станом. */
     .send.armed {
-        background: var(--accent);
-        color: #fff;
-        box-shadow: 0 4px 12px
-            color-mix(in srgb, var(--accent) 45%, transparent);
+        color: var(--accent);
+    }
+    .send.armed:hover {
+        background: color-mix(in srgb, var(--accent) 14%, var(--surface2));
     }
     .send.armed:hover { transform: translateY(-1px); }
     .send.armed:active { transform: scale(0.94); }
