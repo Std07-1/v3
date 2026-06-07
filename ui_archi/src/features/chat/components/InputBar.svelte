@@ -197,6 +197,14 @@
     {/if}
 
     <div class="pill" class:focused class:has-text={hasText} class:multiline>
+        <div class="lead">
+            <VoiceButton
+                disabled={sending}
+                ontranscript={onVoiceTranscript}
+                bind:error={voiceError}
+            />
+            <EmojiPicker disabled={sending} oninsert={onEmojiInsert} />
+        </div>
         <textarea
             class="ta"
             name="archi_chat_input"
@@ -214,32 +222,23 @@
             autocomplete="off"
             disabled={sending}
         ></textarea>
-
-        <div class="trail">
-            <VoiceButton
-                disabled={sending}
-                ontranscript={onVoiceTranscript}
-                bind:error={voiceError}
-            />
-            <EmojiPicker disabled={sending} oninsert={onEmojiInsert} />
-            <button
-                class="send"
-                class:armed={canSend}
-                onclick={onsend}
-                disabled={!canSend}
-                title="Відправити (Ctrl/Cmd+Enter)"
-                aria-label="Відправити повідомлення"
-            >
-                {#if sending}
-                    <span class="spin" aria-hidden="true"></span>
-                {:else}
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <path d="M5 12h14" />
-                        <path d="M13 6l6 6-6 6" />
-                    </svg>
-                {/if}
-            </button>
-        </div>
+        <button
+            class="send"
+            class:armed={canSend}
+            onclick={onsend}
+            disabled={!canSend}
+            title="Відправити (Ctrl/Cmd+Enter)"
+            aria-label="Відправити повідомлення"
+        >
+            {#if sending}
+                <span class="spin" aria-hidden="true"></span>
+            {:else}
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M22 2 11 13" />
+                    <path d="M22 2 15 22 11 13 2 9z" />
+                </svg>
+            {/if}
+        </button>
     </div>
 </div>
 
@@ -310,22 +309,20 @@
             0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent),
             0 14px 34px rgba(0, 0, 0, 0.22);
     }
-    /* Multiline: текст на всю ширину, кнопки рядком під ним (зручно для довгих) */
+    /* Multiline: текст на всю ширину (1-й ряд), кнопки під ним (2-й ряд).
+       flex-wrap + ta(flex-basis 100%) переносить lead+send на наступний ряд.
+       mic/emoji ЗАВЖДИ зліва, send ЗАВЖДИ справа (обидва стани) — нічого не стрибає. */
     .pill.multiline {
-        flex-direction: column;
-        align-items: stretch;
-        gap: 4px;
+        flex-wrap: wrap;
+        align-items: center;
     }
-    /* У колонці flex:1 розподіляє ВИСОТУ → колапсує textarea до min-height і
-       ріже текст. flex:0 0 auto → використовується реальна style.height (auto-grow). */
     .pill.multiline .ta {
-        flex: 0 0 auto;
+        order: -1;
+        flex: 1 1 100%;
         width: 100%;
     }
-    .pill.multiline .trail {
-        justify-content: flex-end;
-        width: 100%;
-        padding-bottom: 0;
+    .pill.multiline .send {
+        margin-left: auto;
     }
 
     .ta {
@@ -348,7 +345,7 @@
     .ta::placeholder { color: var(--text-muted); }
     .ta:disabled { opacity: 0.55; }
 
-    .trail {
+    .lead {
         display: flex;
         align-items: center;
         gap: 2px;
@@ -358,12 +355,12 @@
 
     /* Send button: ghost while empty, solid accent when armed. */
     .send {
-        width: 34px;
-        height: 34px;
+        width: 28px;
+        height: 28px;
         margin-left: 2px;
         border-radius: 50%;
-        border: 1px solid var(--border);
-        background: transparent;
+        border: none;
+        background: none;
         color: var(--text-muted);
         cursor: pointer;
         display: flex;
@@ -372,14 +369,16 @@
         flex-shrink: 0;
         transition:
             background 0.15s,
-            border-color 0.15s,
             color 0.15s,
             transform 0.08s;
+    }
+    .send:hover:not(.armed):not(:disabled) {
+        background: color-mix(in srgb, var(--accent) 12%, var(--surface2));
+        color: var(--text);
     }
     .send:disabled { cursor: not-allowed; }
     .send.armed {
         background: var(--accent);
-        border-color: var(--accent);
         color: #fff;
         box-shadow: 0 4px 12px
             color-mix(in srgb, var(--accent) 45%, transparent);
@@ -408,6 +407,6 @@
             padding: 12px 4px 12px 14px;
             max-height: min(28vh, 196px);
         }
-        .send { width: 38px; height: 38px; }
+        .send { width: 32px; height: 32px; }
     }
 </style>

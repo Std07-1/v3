@@ -22,6 +22,7 @@
 -->
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
+    import Icon from "../../../lib/Icon.svelte";
 
     let {
         disabled = false,
@@ -102,19 +103,18 @@
         title={listening ? "Зупинити" : "Голос"}
         aria-label={listening ? "Зупинити запис" : "Розпочати голосовий ввід"}
     >
-        {listening ? "🔴" : "🎤"}
+        <Icon name="mic" size={18} />
     </button>
 {/if}
 
 <style>
     .ia-btn {
-        width: 38px;
-        height: 38px;
+        width: 32px;
+        height: 32px;
         border-radius: 50%;
         border: none;
         background: none;
         cursor: pointer;
-        font-size: 18px;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -122,18 +122,18 @@
         transition: background 0.15s, color 0.15s;
     }
     .ia-btn:hover {
-        background: var(--surface2);
+        background: color-mix(in srgb, var(--accent) 12%, var(--surface2));
         color: var(--text);
     }
     .ia-btn.recording {
-        color: #e05555;
+        color: var(--danger);
         animation: rec-pulse 1s ease infinite;
     }
     @keyframes rec-pulse {
-        0%, 100% { box-shadow: 0 0 0 0 rgba(224, 85, 85, 0.35); }
-        50% { box-shadow: 0 0 0 6px rgba(224, 85, 85, 0); }
+        0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 35%, transparent); }
+        50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--danger) 0%, transparent); }
     }
     @media (max-width: 768px) {
-        .ia-btn { width: 42px; height: 42px; }
+        .ia-btn { width: 36px; height: 36px; }
     }
 </style>

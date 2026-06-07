@@ -14,6 +14,8 @@
       - oninsert(emoji: string) — клік по emoji cell (panel сам закривається)
 -->
 <script lang="ts">
+    import Icon from "../../../lib/Icon.svelte";
+
     let {
         disabled = false,
         oninsert = (_emoji: string): void => {},
@@ -43,25 +45,59 @@
 
     let open = $state(false);
     let cat = $state(0);
+    let anchorEl: HTMLElement;
+    let alignLeft = $state(true); // панель відкривається у бік де є місце
+
+    function toggle(): void {
+        if (!open) {
+            const r = anchorEl?.getBoundingClientRect();
+            // кнопка в лівій половині → панель ліворуч-якорена (відкрити праворуч)
+            alignLeft = r ? r.left < window.innerWidth / 2 : true;
+        }
+        open = !open;
+    }
 
     function pick(e: string): void {
         oninsert(e);
         open = false;
     }
+
+    // Outside-dismiss: тап поза якорем/панеллю або Esc → закрити.
+    $effect(() => {
+        if (!open) return;
+        const onDown = (e: Event) => {
+            if (anchorEl && !anchorEl.contains(e.target as Node)) open = false;
+        };
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") open = false;
+        };
+        // setTimeout — щоб не зловити сам клік відкриття
+        const id = setTimeout(() => {
+            document.addEventListener("pointerdown", onDown);
+            document.addEventListener("keydown", onKey);
+        }, 0);
+        return () => {
+            clearTimeout(id);
+            document.removeEventListener("pointerdown", onDown);
+            document.removeEventListener("keydown", onKey);
+        };
+    });
 </script>
 
-<div class="emoji-anchor">
+<div class="emoji-anchor" bind:this={anchorEl}>
     <button
         class="ia-btn"
-        onclick={() => {
-            open = !open;
-        }}
+        onclick={toggle}
         {disabled}
         title="Емодзі"
         aria-label="Відкрити панель емодзі"
-    >😊</button>
+    ><Icon name="smile" size={18} /></button>
     {#if open}
-        <div class="emoji-panel">
+        <div
+            class="emoji-panel"
+            class:align-left={alignLeft}
+            class:align-right={!alignLeft}
+        >
             <div class="emoji-tabs">
                 {#each EMOJI_CATS as c, ci}
                     <button
@@ -90,13 +126,12 @@
 
 <style>
     .ia-btn {
-        width: 38px;
-        height: 38px;
+        width: 32px;
+        height: 32px;
         border-radius: 50%;
         border: none;
         background: none;
         cursor: pointer;
-        font-size: 18px;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -104,24 +139,28 @@
         transition: background 0.15s, color 0.15s;
     }
     .ia-btn:hover {
-        background: var(--surface2);
+        background: color-mix(in srgb, var(--accent) 12%, var(--surface2));
         color: var(--text);
+    }
+    @media (max-width: 768px) {
+        .ia-btn { width: 36px; height: 36px; }
     }
 
     .emoji-anchor { position: relative; }
     .emoji-panel {
         position: absolute;
-        bottom: 48px;
-        right: 0;
-        width: 280px;
+        bottom: calc(100% + 8px);
+        width: min(280px, calc(100vw - 24px));
         background: var(--surface);
         border: 1px solid var(--border);
         border-radius: 14px;
-        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
-        z-index: 60;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+        z-index: 200;
         overflow: hidden;
         animation: emojiIn 0.15s ease-out;
     }
+    .emoji-panel.align-left { left: 0; }
+    .emoji-panel.align-right { right: 0; }
     @keyframes emojiIn {
         from { opacity: 0; transform: translateY(8px) scale(0.95); }
         to { opacity: 1; transform: none; }
@@ -165,10 +204,5 @@
     .emoji-cell:hover {
         background: var(--surface2);
         transform: scale(1.15);
-    }
-
-    @media (max-width: 768px) {
-        .ia-btn { width: 42px; height: 42px; }
-        .emoji-panel { width: 260px; right: -12px; }
     }
 </style>
