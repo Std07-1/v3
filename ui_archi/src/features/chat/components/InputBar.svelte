@@ -49,6 +49,7 @@
 
     let textareaEl: HTMLTextAreaElement;
     let focused = $state(false);
+    let multiline = $state(false); // >~1.5 рядки → текст на всю ширину, кнопки під ним
     let hint = $state("");
     let hintTimer: ReturnType<typeof setTimeout> | null = null;
     let voiceError = $state("");
@@ -77,6 +78,7 @@
         const target = clamp(natural, min, max);
         textareaEl.style.height = `${target}px`;
         textareaEl.style.overflowY = natural > target ? "auto" : "hidden";
+        multiline = natural > min + 22; // >~1.5 рядки → full-width текст, кнопки під ним
     }
 
     export function focus(): void {
@@ -194,7 +196,7 @@
         <div class="bar-err voice">{voiceError}</div>
     {/if}
 
-    <div class="pill" class:focused class:has-text={hasText}>
+    <div class="pill" class:focused class:has-text={hasText} class:multiline>
         <textarea
             class="ta"
             name="archi_chat_input"
@@ -307,6 +309,17 @@
         box-shadow:
             0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent),
             0 14px 34px rgba(0, 0, 0, 0.22);
+    }
+    /* Multiline: текст на всю ширину, кнопки рядком під ним (зручно для довгих) */
+    .pill.multiline {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+    }
+    .pill.multiline .trail {
+        justify-content: flex-end;
+        width: 100%;
+        padding-bottom: 0;
     }
 
     .ta {
