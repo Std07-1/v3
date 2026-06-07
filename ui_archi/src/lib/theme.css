@@ -23,6 +23,24 @@
     --radius: 8px;
     --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
     --font-ui: system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+    /* ── Premium depth (views depth — glass + glow, all on --accent) ── */
+    /* Картки: напівпрозоре скло замість плаского surface. Значення тут = SSOT,
+       views їх референсять (Svelte scope не дає стилізувати .mind-card з global). */
+    --card-bg: color-mix(in srgb, var(--surface) 82%, transparent);
+    --card-border: color-mix(in srgb, var(--accent) 9%, var(--border));
+    --card-glass: blur(16px) saturate(140%);
+    --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.26),
+        0 14px 34px -20px rgba(0, 0, 0, 0.5);
+    /* Hover/active: тінь несе настрій (accent-glow) + легке підняття */
+    --card-glow: 0 1px 2px rgba(0, 0, 0, 0.26),
+        0 18px 44px -18px color-mix(in srgb, var(--accent) 24%, transparent);
+    /* Ambient «світло зсередини» для контент-зони — як аура login, тільки тонше */
+    --ambient: radial-gradient(1100px 520px at 50% -6%,
+            color-mix(in srgb, var(--accent) 6%, transparent), transparent 58%),
+        radial-gradient(720px 480px at 100% 2%,
+            color-mix(in srgb, var(--accent) 4%, transparent), transparent 55%);
+
     transition: --accent 1.5s ease;
 }
 

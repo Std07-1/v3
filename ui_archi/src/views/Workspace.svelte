@@ -496,13 +496,17 @@
     }
     .ws-card.pinned {
         border-left: 3px solid var(--accent);
+        /* Pinned несе accent → світіння настрою */
+        box-shadow: 0 8px 22px -16px color-mix(in srgb, var(--accent) 40%, transparent);
     }
     .ws-card.alert {
         border-left: 3px solid #ef4444;
+        box-shadow: 0 8px 22px -16px rgba(239, 68, 68, 0.5);
     }
     .ws-card.task {
         border-left: 3px solid #10b981;
         background: linear-gradient(90deg, rgba(16, 185, 129, 0.04) 0%, transparent 60%);
+        box-shadow: 0 8px 22px -16px rgba(16, 185, 129, 0.45);
     }
     .ws-card.task.pinned {
         border-left-color: #10b981;
@@ -618,7 +622,10 @@
         padding: 10px 14px;
         border-left: 2px solid rgba(16, 185, 129, 0.55);
         background: rgba(16, 185, 129, 0.05);
-        border-radius: 0 4px 4px 0;
+        backdrop-filter: blur(10px) saturate(125%);
+        -webkit-backdrop-filter: blur(10px) saturate(125%);
+        border-radius: 0 8px 8px 0;
+        box-shadow: var(--card-shadow);
         display: flex;
         flex-direction: column;
         gap: 8px;

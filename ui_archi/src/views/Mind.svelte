@@ -901,10 +901,14 @@
 
     /* ── Hero section ── */
     .hero-section {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 8px;
+        background: var(--card-bg);
+        backdrop-filter: var(--card-glass);
+        -webkit-backdrop-filter: var(--card-glass);
+        border: 1px solid var(--card-border);
+        border-radius: 12px;
         padding: 16px;
+        /* Hero несе настрій → glow на accent */
+        box-shadow: var(--card-glow);
     }
     .hero-row {
         display: flex;
@@ -1064,10 +1068,20 @@
         gap: 8px;
     }
     .mind-card {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 8px;
+        background: var(--card-bg);
+        backdrop-filter: var(--card-glass);
+        -webkit-backdrop-filter: var(--card-glass);
+        border: 1px solid var(--card-border);
+        border-radius: 10px;
         padding: 12px 14px;
+        box-shadow: var(--card-shadow);
+        transition:
+            box-shadow 0.2s,
+            border-color 0.2s;
+    }
+    .mind-card:hover {
+        border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+        box-shadow: var(--card-glow);
     }
 
     /* ── Watch level cards ── */
@@ -1215,16 +1229,22 @@
     }
     .note-card {
         cursor: pointer;
-        border-radius: 8px;
+        border-radius: 10px;
         padding: 10px 12px;
-        background: var(--surface);
-        border: 1px solid var(--border);
+        background: var(--card-bg);
+        backdrop-filter: var(--card-glass);
+        -webkit-backdrop-filter: var(--card-glass);
+        border: 1px solid var(--card-border);
+        box-shadow: var(--card-shadow);
         transition:
             border-color 0.2s,
-            background 0.2s;
+            box-shadow 0.2s,
+            transform 0.2s;
     }
     .note-card:hover {
-        border-color: var(--accent);
+        border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+        box-shadow: var(--card-glow);
+        transform: translateY(-1px);
     }
     .nc-status {
         font-size: 12px;
@@ -1363,10 +1383,13 @@
         margin-left: 4px;
     }
     .proposal-card {
-        background: var(--surface);
+        background: var(--card-bg);
+        backdrop-filter: var(--card-glass);
+        -webkit-backdrop-filter: var(--card-glass);
         border: 1px solid rgba(245, 158, 11, 0.25);
-        border-radius: 8px;
+        border-radius: 10px;
         padding: 14px;
+        box-shadow: var(--card-shadow);
         display: flex;
         flex-direction: column;
         gap: 8px;

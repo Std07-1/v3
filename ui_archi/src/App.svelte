@@ -788,34 +788,35 @@
         padding: 6px 8px 14px;
     }
     .brand-orb {
-        width: 28px;
-        height: 28px;
+        width: 26px;
+        height: 26px;
         border-radius: 50%;
         flex-shrink: 0;
         position: relative;
-        background: radial-gradient(circle at 35% 30%, #fff, color-mix(in srgb, var(--accent) 55%, #fff) 25%, var(--accent) 60%, color-mix(in srgb, var(--accent) 72%, #000));
+        /* Приглушена сфера настрою — без білого ядра й halo, сидить у темі.
+           Login-orb лишається ярким героєм; цей — тиха периферійна присутність. */
+        background: radial-gradient(circle at 36% 32%,
+            color-mix(in srgb, var(--accent) 50%, #fff) 0%,
+            var(--accent) 48%,
+            color-mix(in srgb, var(--accent) 72%, #000) 100%);
+        /* Тільки тонкий rim для об'єму — нуль світіння в кутку */
         box-shadow:
-            0 0 16px 2px color-mix(in srgb, var(--accent) 50%, transparent),
-            0 0 30px 6px color-mix(in srgb, var(--accent) 22%, transparent);
-        animation: brand-breathe 4s ease-in-out infinite;
+            0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent),
+            0 2px 8px -3px color-mix(in srgb, var(--accent) 30%, transparent);
+        animation: brand-breathe 6s ease-in-out infinite;
     }
     .brand-orb::after {
         content: '';
         position: absolute;
         inset: 0;
         border-radius: 50%;
-        background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.6), transparent 40%);
-        mix-blend-mode: screen;
+        /* Тонкий sheen для об'єму, без screen-перепалу */
+        background: radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.22), transparent 46%);
     }
+    /* Тихе дихання: лише opacity + мікро-scale, БЕЗ пульсації світіння */
     @keyframes brand-breathe {
-        0%, 100% {
-            transform: scale(1);
-            box-shadow: 0 0 16px 2px color-mix(in srgb, var(--accent) 50%, transparent), 0 0 30px 6px color-mix(in srgb, var(--accent) 22%, transparent);
-        }
-        50% {
-            transform: scale(1.08);
-            box-shadow: 0 0 22px 3px color-mix(in srgb, var(--accent) 65%, transparent), 0 0 40px 9px color-mix(in srgb, var(--accent) 30%, transparent);
-        }
+        0%, 100% { transform: scale(1); opacity: 0.78; }
+        50% { transform: scale(1.03); opacity: 0.92; }
     }
     .brand-name {
         font-size: 16px;
@@ -920,12 +921,14 @@
         display: flex;
         flex-direction: column;
         overflow: hidden;
-        background: var(--bg);
+        /* Ambient «світло зсередини» живе тут (стабільно, не скролиться),
+           контент прозорий → аура просвічує крізь скляні картки */
+        background: var(--ambient), var(--bg);
     }
     .content {
         flex: 1;
         overflow-y: auto;
-        background: var(--bg);
+        background: transparent;
     }
     /* Chat needs its own internal scroll — disable outer scroll */
     .content.chat-layout {

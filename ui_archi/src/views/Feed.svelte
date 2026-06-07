@@ -504,7 +504,10 @@
         gap: 10px;
         padding: 10px 20px;
         background: rgba(251, 191, 36, 0.08);
+        backdrop-filter: blur(12px) saturate(130%);
+        -webkit-backdrop-filter: blur(12px) saturate(130%);
         border-bottom: 2px solid rgba(251, 191, 36, 0.3);
+        box-shadow: 0 10px 30px -20px rgba(251, 191, 36, 0.55);
         flex-shrink: 0;
     }
     .scenario-icon {
@@ -566,6 +569,8 @@
     .card-prominent {
         border-left: 3px solid #fbbf24;
         background: rgba(251, 191, 36, 0.04);
+        /* Signal-події підняті — м'яке янтарне світіння */
+        box-shadow: 0 8px 22px -16px rgba(251, 191, 36, 0.5);
     }
     .card-prominent .event-text {
         color: var(--text);
@@ -573,6 +578,8 @@
     .card-critical {
         border-left: 3px solid #f87171;
         background: rgba(248, 113, 113, 0.06);
+        /* Alert/error — підняті, червоне світіння */
+        box-shadow: 0 8px 22px -16px rgba(248, 113, 113, 0.55);
     }
     .card-critical .event-text {
         color: var(--text);
