@@ -20,14 +20,11 @@
 
     // ── routing (hash-based) ──
     let route = $state(window.location.hash.replace("#", "") || "/chat");
-    let sectionSwitcherOpen = $state(false);
     window.addEventListener("hashchange", () => {
         route = window.location.hash.replace("#", "") || "/chat";
-        sectionSwitcherOpen = false;
     });
 
     function nav(path: string) {
-        sectionSwitcherOpen = false;
         window.location.hash = path;
     }
 
@@ -163,12 +160,6 @@
             updateViewportLayout();
         });
     }
-
-    $effect(() => {
-        if (!(route === "/chat" || route === "") || !keyboardOpen) {
-            sectionSwitcherOpen = false;
-        }
-    });
 
     onMount(() => {
         updateViewportLayout();
@@ -534,59 +525,6 @@
                     <div class="empty-state">404 — не знайдено</div>
                 {/if}
             </main>
-
-            {#if (route === "/chat" || route === "") && keyboardOpen}
-                <div class="section-switcher">
-                    <button
-                        class="section-switcher-toggle"
-                        class:active={sectionSwitcherOpen}
-                        onclick={() => {
-                            sectionSwitcherOpen = !sectionSwitcherOpen;
-                        }}
-                        aria-expanded={sectionSwitcherOpen}
-                        aria-label="Перемкнути розділ"
-                    >
-                        <span class="section-switcher-icon">☰</span>
-                        <span class="section-switcher-label">Розділи</span>
-                    </button>
-
-                    {#if sectionSwitcherOpen}
-                        <div class="section-switcher-menu">
-                            <button
-                                class:active={route === "/chat" || route === ""}
-                                onclick={() => nav("/chat")}
-                            >
-                                <span class="switcher-emoji"><Icon name="chat" size={16} /></span>
-                                <span>Chat</span>
-                            </button>
-                            <button onclick={() => nav("/feed")}>
-                                <span class="switcher-emoji"><Icon name="feed" size={16} /></span>
-                                <span>Feed</span>
-                            </button>
-                            <button onclick={() => nav("/thinking")}>
-                                <span class="switcher-emoji"><Icon name="thinking" size={16} /></span>
-                                <span>Thinking</span>
-                            </button>
-                            <button onclick={() => nav("/relationship")}>
-                                <span class="switcher-emoji"><Icon name="relationship" size={16} /></span>
-                                <span>Relationship</span>
-                            </button>
-                            <button onclick={() => nav("/mind")}>
-                                <span class="switcher-emoji"><Icon name="mind" size={16} /></span>
-                                <span>Mind</span>
-                            </button>
-                            <button onclick={() => nav("/workspace")}>
-                                <span class="switcher-emoji"><Icon name="workspace" size={16} /></span>
-                                <span>Workspace</span>
-                            </button>
-                            <button onclick={() => nav("/logs")}>
-                                <span class="switcher-emoji"><Icon name="logs" size={16} /></span>
-                                <span>Logs</span>
-                            </button>
-                        </div>
-                    {/if}
-                </div>
-            {/if}
 
             <!-- ── Bottom Nav (mobile only — icon-only with underline) ── -->
             <nav class="bottom-nav">
@@ -1031,9 +969,6 @@
     .bottom-nav {
         display: none;
     }
-    .section-switcher {
-        display: none;
-    }
 
     /* ── Mood dot (pulsing) ── */
     .mood-dot {
@@ -1100,82 +1035,6 @@
         .content {
             padding-bottom: var(--mobile-nav-space);
             transition: padding-bottom 0.22s ease;
-        }
-        .section-switcher {
-            position: fixed;
-            top: max(12px, calc(env(safe-area-inset-top) + 4px));
-            right: 12px;
-            z-index: 130;
-            display: flex;
-            flex-direction: column;
-            align-items: flex-end;
-            gap: 8px;
-        }
-        .section-switcher-toggle {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 9px 12px;
-            border-radius: 999px;
-            border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-            background: color-mix(in srgb, var(--surface) 96%, var(--bg));
-            color: var(--text);
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
-            cursor: pointer;
-            transition:
-                border-color 0.15s,
-                transform 0.15s;
-        }
-        .section-switcher-toggle.active {
-            border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-        }
-        .section-switcher-toggle:active {
-            transform: scale(0.98);
-        }
-        .section-switcher-icon {
-            font-size: 13px;
-            line-height: 1;
-        }
-        .section-switcher-label {
-            font-size: 12px;
-            font-weight: 600;
-            letter-spacing: 0.01em;
-        }
-        .section-switcher-menu {
-            width: min(228px, calc(100vw - 24px));
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 8px;
-            padding: 10px;
-            border-radius: 18px;
-            border: 1px solid var(--border);
-            background: color-mix(in srgb, var(--surface) 97%, var(--bg));
-            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
-        }
-        .section-switcher-menu button {
-            display: flex;
-            align-items: center;
-            justify-content: flex-start;
-            gap: 8px;
-            min-height: 42px;
-            padding: 10px 12px;
-            border-radius: 12px;
-            border: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
-            background: var(--surface2);
-            color: var(--text-muted);
-            cursor: pointer;
-            font-size: 12px;
-            font-weight: 500;
-        }
-        .section-switcher-menu button.active {
-            color: var(--text);
-            border-color: color-mix(in srgb, var(--accent) 35%, transparent);
-            background: color-mix(in srgb, var(--accent) 14%, var(--surface2));
-        }
-        .switcher-emoji {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
         }
         .bottom-nav {
             display: flex;
