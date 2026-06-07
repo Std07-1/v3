@@ -78,6 +78,17 @@
     let bubbleHtml = $derived(renderMessageHtml(message));
     let timeLabel = $derived(formatTs(message.ts_ms));
     let isTelegramSource = $derived((message as any).source === "telegram");
+
+    let copied = $state(false);
+    async function copyText(): Promise<void> {
+        try {
+            await navigator.clipboard.writeText(message.text);
+            copied = true;
+            setTimeout(() => (copied = false), 1200);
+        } catch {
+            // clipboard заблоковано — тихо (не критично)
+        }
+    }
 </script>
 
 <div
@@ -93,13 +104,27 @@
             {#if isTelegramSource}
                 <span class="src-tg">TG</span>
             {/if}
-            {#if message.role === "archi" && ttsSupported}
+            {#if message.role === "archi"}
                 <button
-                    class="btn-tts"
-                    onclick={() => onspeak(message.text)}
-                    title="Озвучити"
-                    aria-label="Озвучити повідомлення"
-                >🔊</button>
+                    class="btn-copy"
+                    onclick={copyText}
+                    title="Копіювати"
+                    aria-label="Копіювати текст"
+                >
+                    {#if copied}
+                        <span class="copied">✓</span>
+                    {:else}
+                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+                    {/if}
+                </button>
+                {#if ttsSupported}
+                    <button
+                        class="btn-tts"
+                        onclick={() => onspeak(message.text)}
+                        title="Озвучити"
+                        aria-label="Озвучити повідомлення"
+                    >🔊</button>
+                {/if}
             {/if}
         </div>
     </div>
@@ -212,6 +237,22 @@
     }
     .bubble:hover .btn-tts { opacity: 0.5; }
     .btn-tts:hover { opacity: 1 !important; }
+
+    /* Копіювати — ледь видимий завжди (тапабельно на мобільному), повний на hover */
+    .btn-copy {
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        color: var(--text-muted);
+        opacity: 0.4;
+        transition: opacity 0.15s, color 0.15s;
+    }
+    .bubble:hover .btn-copy { opacity: 0.75; }
+    .btn-copy:hover { opacity: 1; color: var(--text); }
+    .btn-copy .copied { color: var(--positive); font-size: 12px; line-height: 1; }
 
     @media (max-width: 768px) {
         .bubble-row { max-width: 88%; }

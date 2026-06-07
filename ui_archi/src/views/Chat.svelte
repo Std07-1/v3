@@ -129,6 +129,16 @@
     function scrollToBottom(): void {
         if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
     }
+    // ── Scroll-to-bottom кнопка + entrance-gate ──
+    let atBottom = $state(true);
+    let mountedAt = $state(0); // entrance тільки для свіжих (ts_ms > mountedAt)
+    function onScroll(): void {
+        atBottom = isNearBottom();
+    }
+    function jumpToBottom(): void {
+        scrollToBottom();
+        atBottom = true;
+    }
     function isSelectingMessageText(): boolean {
         const sel = window.getSelection?.();
         if (!sel || sel.isCollapsed) return false;
@@ -247,6 +257,7 @@
         if (chatStore.loading) return;
         if (chatStore.messages.length === 0) return;
         _initialScrollDone = true;
+        mountedAt = Date.now(); // далі нові повідомлення = свіжі → entrance-анімація
         void tick().then(() => {
             // instant (без smooth) — менше мерехтіння при відкритті вкладки
             if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
@@ -324,7 +335,8 @@
     />
 {/if}
 
-<div class="scroll" bind:this={scrollEl}>
+<div class="scroll-wrap">
+<div class="scroll" bind:this={scrollEl} onscroll={onScroll}>
     {#if loading}
         <div class="empty">
             <div class="empty-icon">💬</div>
@@ -342,6 +354,7 @@
                 class="msg-block"
                 class:grouped={msg.grouped}
                 class:streaming={msg.streaming === true}
+                class:fresh={mountedAt > 0 && msg.ts_ms > mountedAt}
             >
                 <MessageBubble
                     message={msg}
@@ -371,6 +384,15 @@
                 <span class="thinking-label">Арчі думає</span>
             </div>
         {/if}
+    {/if}
+</div>
+    {#if !atBottom}
+        <button
+            class="scroll-btn"
+            onclick={jumpToBottom}
+            aria-label="До останнього повідомлення"
+            title="До останнього"
+        >↓</button>
     {/if}
 </div>
 
@@ -413,6 +435,55 @@
         margin-top: 0;
     }
 
+    /* Entrance — тільки свіжі повідомлення (не вся історія на mount) */
+    .msg-block.fresh {
+        animation: msgIn 0.22s ease-out;
+    }
+    @keyframes msgIn {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Scroll-to-bottom кнопка (плаває над scroll-зоною) */
+    .scroll-wrap {
+        position: relative;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+    .scroll-btn {
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        bottom: 14px;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+        background: color-mix(in srgb, var(--surface2) 88%, var(--bg));
+        backdrop-filter: blur(8px);
+        color: var(--text);
+        font-size: 16px;
+        line-height: 1;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 6px 18px -6px rgba(0, 0, 0, 0.55);
+        transition: border-color 0.15s, background 0.15s;
+        animation: sbIn 0.18s ease-out;
+        z-index: 4;
+    }
+    .scroll-btn:hover {
+        border-color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 14%, var(--surface2));
+    }
+    @keyframes sbIn {
+        from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+        to { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+
     /* Streaming bubble (ADR-0053 S3): blinking cursor на bubble-text.
      * MessageBubble не знає про streaming, тож цілимо через global descendant. */
     :global(.msg-block.streaming .bubble::after) {
@@ -446,30 +517,54 @@
     .thinking {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 9px;
         align-self: flex-start;
-        padding: 6px 12px;
-        border-radius: 14px;
-        background: var(--surface);
+        padding: 9px 14px;
+        border-radius: 18px;
+        border-bottom-left-radius: 6px;
+        /* Mood-tinted як Б v2 архі-баббл — присутність Архі перед відповіддю */
+        background: linear-gradient(135deg,
+            color-mix(in srgb, var(--accent) 15%, var(--surface)) 0%,
+            color-mix(in srgb, var(--accent) 6%, var(--surface)) 100%);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
         color: var(--text-muted);
-        font-size: 12px;
-        margin-top: 4px;
+        font-size: 13px;
+        margin-top: 8px;
     }
     .td {
         width: 5px;
         height: 5px;
         border-radius: 50%;
-        background: currentColor;
-        opacity: 0.35;
-        animation: td-pulse 1.2s ease-in-out infinite;
+        background: color-mix(in srgb, var(--accent) 55%, var(--text-muted));
+        animation: td-pulse 1.3s ease-in-out infinite;
     }
-    .td:nth-child(2) { animation-delay: 0.15s; }
-    .td:nth-child(3) { animation-delay: 0.3s; }
+    .td:nth-child(2) { animation-delay: 0.18s; }
+    .td:nth-child(3) { animation-delay: 0.36s; }
     @keyframes td-pulse {
-        0%, 100% { opacity: 0.2; transform: scale(0.8); }
-        50% { opacity: 1; transform: scale(1.15); }
+        0%, 100% { opacity: 0.25; transform: translateY(0); }
+        50% { opacity: 1; transform: translateY(-3px); }
     }
-    .thinking-label { margin-left: 2px; }
+    /* Живий shimmer — світло пробігає текстом (жива «думка», не статика) */
+    .thinking-label {
+        margin-left: 2px;
+        background: linear-gradient(
+            90deg,
+            var(--text-muted) 0%,
+            var(--text-muted) 38%,
+            color-mix(in srgb, var(--accent) 60%, var(--text)) 50%,
+            var(--text-muted) 62%,
+            var(--text-muted) 100%
+        );
+        background-size: 220% 100%;
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        animation: thinkShimmer 2.2s linear infinite;
+    }
+    @keyframes thinkShimmer {
+        0% { background-position: 150% 0; }
+        100% { background-position: -70% 0; }
+    }
 
     @media (max-width: 768px) {
         .scroll { padding: 10px 12px 8px; }
