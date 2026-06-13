@@ -177,3 +177,6 @@ _tail*.txt
 /docs/_archive/
 /ui_v4/_archive/
 *.bak.*
+
+# Claude Code editor config (local dev tooling — not for public repo)
+.claude/
