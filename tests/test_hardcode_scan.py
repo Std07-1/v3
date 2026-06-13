@@ -9,9 +9,18 @@ import os
 import sys
 import unittest
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tools.audit.hardcode_scan import scan_repo, _PATTERNS
+# tools/audit/ is gitignored local-only dev tooling (.gitignore:110) — absent on
+# the CI checkout. Skip rather than collection-error when the module is missing.
+_hardcode_scan = pytest.importorskip(
+    "tools.audit.hardcode_scan",
+    reason="tools/audit is gitignored local-only tooling (absent on CI checkout)",
+)
+scan_repo = _hardcode_scan.scan_repo
+_PATTERNS = _hardcode_scan._PATTERNS
 
 
 class TestHardcodeScanPatterns(unittest.TestCase):

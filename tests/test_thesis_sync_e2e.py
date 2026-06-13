@@ -36,7 +36,15 @@ import pytest
 _V3_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_V3_ROOT / "trader-v3"))
 
-from bot.transport.wake_sync import _sync_thesis, _THESIS_KEY_TPL  # noqa: E402
+# trader-v3/ is absent on the platform CI checkout (separate repo, X31). This
+# cross-repo e2e contract test can only run in a full local checkout — skip it
+# gracefully when the bot package is not importable, rather than collection-erroring.
+_wake_sync = pytest.importorskip(
+    "bot.transport.wake_sync",
+    reason="trader-v3/bot not checked out (cross-repo e2e; full local stack only)",
+)
+_sync_thesis = _wake_sync._sync_thesis
+_THESIS_KEY_TPL = _wake_sync._THESIS_KEY_TPL
 
 from core.smc.wake_types import PresenceStatus  # noqa: E402
 from runtime.smc.narrative_enricher import NarrativeEnricher  # noqa: E402
