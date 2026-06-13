@@ -171,3 +171,9 @@ _tail*.txt
 .claude/agent-memory/
 .claude/scheduled_tasks.lock
 .claude/.cache/
+
+# Public-repo hygiene (2026-06-13) — archived scratch / internal notes, not for visitors
+/tools/_archive_patches/
+/docs/_archive/
+/ui_v4/_archive/
+*.bak.*
