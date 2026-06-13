@@ -60,25 +60,11 @@ def gate_tick_agg_volume_zero():
     )
 
 
-def gate_ui_preview_polling_cap():
-    """app.js UPDATES_BACKOFF_PREVIEW_MS не перевищує 1000."""
-    path = os.path.join(REPO, "ui_v4", "src", "App.svelte")
-    src = open(path, encoding="utf-8").read()
-    # Шукаємо UPDATES_BACKOFF_PREVIEW_MS = [...]
-    import re
-
-    m = re.search(r"UPDATES_BACKOFF_PREVIEW_MS\s*=\s*\[([^\]]+)\]", src)
-    if not m:
-        _check("ui_preview_polling_cap_1s", False, "pattern not found")
-        return
-    vals = [int(x.strip()) for x in m.group(1).split(",") if x.strip()]
-    max_val = max(vals) if vals else 0
-    ok = max_val <= 1000
-    _check(
-        "ui_preview_polling_cap_1s",
-        ok,
-        f"values={vals} max={max_val}",
-    )
+# gate_ui_preview_polling_cap() видалено 2026-06-12: перевіряв
+# UPDATES_BACKOFF_PREVIEW_MS — HTTP-polling backoff зі старого vanilla app.js
+# (P2X.6-T1 era). UI v4 отримує дані через WS push; константа в ui_v4 ніколи
+# не існувала (git log -S по всій історії — нуль), тож підгейт перевіряв
+# мертвий механізм і перманентно валив CI.
 
 
 def run_gate(inputs):
@@ -88,7 +74,6 @@ def run_gate(inputs):
     gate_worker_has_calendar_gate()
     gate_config_has_calendar_mapping()
     gate_tick_agg_volume_zero()
-    gate_ui_preview_polling_cap()
 
     passed = sum(1 for r in RESULTS if r["ok"])
     total = len(RESULTS)

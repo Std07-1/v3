@@ -23,8 +23,16 @@ def _join_module(tokens: List[tokenize.TokenInfo]) -> str:
     return "".join(parts)
 
 
-def _scan_imports(text: str, forbidden_modules: Tuple[str, ...]) -> List[str]:
-    hits: List[str] = []
+def _scan_imports(
+    text: str, forbidden_modules: Tuple[str, ...]
+) -> List[Tuple[str, List[str]]]:
+    """Return (module, imported_symbols) per import of a forbidden module.
+
+    `from M import a, b`  → (M, ['a', 'b']);  plain `import M` → (M, []).
+    Symbols let the caller allow read-only helpers — the gate forbids direct
+    *writers*, not the mere presence of the module name.
+    """
+    hits: List[Tuple[str, List[str]]] = []
     toks = list(tokenize.generate_tokens(io.StringIO(text).readline))
     n = len(toks)
     i = 0
@@ -40,9 +48,26 @@ def _scan_imports(text: str, forbidden_modules: Tuple[str, ...]) -> List[str]:
                 module_tokens.append(t)
                 i += 1
             module = _join_module(module_tokens)
+            # collect imported symbols after `import` until end-of-statement;
+            # drop the alias name in `x as y` (keep the original x).
+            symbols: List[str] = []
+            skip_alias = False
+            i += 1  # step past the `import` token
+            while i < n:
+                t = toks[i]
+                if t.type in (tokenize.NEWLINE, tokenize.NL, tokenize.SEMI):
+                    break
+                if t.type == tokenize.NAME:
+                    if t.string == "as":
+                        skip_alias = True
+                    elif skip_alias:
+                        skip_alias = False
+                    else:
+                        symbols.append(t.string)
+                i += 1
             for prefix in forbidden_modules:
                 if module.startswith(prefix):
-                    hits.append(module)
+                    hits.append((module, symbols))
                     break
         elif tok.type == tokenize.NAME and tok.string == "import":
             module_tokens = []
@@ -56,7 +81,7 @@ def _scan_imports(text: str, forbidden_modules: Tuple[str, ...]) -> List[str]:
             module = _join_module(module_tokens)
             for prefix in forbidden_modules:
                 if module.startswith(prefix):
-                    hits.append(module)
+                    hits.append((module, []))
                     break
         i += 1
     return hits
@@ -79,6 +104,12 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
         forbidden_modules = tuple(str(x) for x in forbidden)
     else:
         forbidden_modules = _default_forbidden_modules()
+    # Read-only helpers explicitly allowed: the gate forbids direct *writers*,
+    # so importing a pure reader from an otherwise-forbidden module is fine.
+    allow = inputs.get("allow_symbols")
+    allow_symbols = (
+        frozenset(str(x) for x in allow) if isinstance(allow, list) else frozenset()
+    )
 
     hits: List[str] = []
     scanned = 0
@@ -93,8 +124,12 @@ def run_gate(inputs: Dict[str, Any]) -> Dict[str, Any]:
                 "metrics": {},
             }
         scanned += 1
-        modules = _scan_imports(text, forbidden_modules)
-        for module in modules:
+        for module, symbols in _scan_imports(text, forbidden_modules):
+            # OK only if EVERY imported symbol is an allow-listed reader.
+            # Bare `import M` (symbols == []) is never excused — it exposes
+            # the whole module including its writers.
+            if symbols and all(s in allow_symbols for s in symbols):
+                continue
             hits.append(f"{path}:{module}")
 
     ok = len(hits) == 0

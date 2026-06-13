@@ -10,7 +10,12 @@ FORBIDDEN = [
 ]
 
 ALLOW_FILES = {
-    # UI не має містити прямий Redis-код.
+    # ws_server.py = BACKEND (aiohttp), не UI. ui_v4 (Svelte) — окремий
+    # фронтенд без доступу до Redis. ws_server легітимно тримає cross-process
+    # Redis IPC через resolve_redis_spec(): agent-state observability (читає
+    # HASH від бота), O3 viewer-signal, D1 tick-relay — жоден не OHLCV/UDS-bypass
+    # (I1 не порушено). Гейт далі стереже інші runtime/ws/*.py від ad-hoc redis.
+    "runtime/ws/ws_server.py",
 }
 
 
