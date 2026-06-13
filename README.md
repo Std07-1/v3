@@ -4,6 +4,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 
+![AI·ONE v3 — live XAU/USD M15 chart with SMC markup (FVG, BOS, CHoCH, EQH) and Archi's autonomous market thesis](docs/assets/hero.png)
+
 **Real-time Smart Money Concepts (SMC) analytics for gold, indices and crypto** — a
 broker-grade data pipeline (FXCM / Binance) feeding a live WebSocket chart, wired over
 Redis to **Archi**, an autonomous Claude trading agent that reasons, remembers, and
