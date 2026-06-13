@@ -1,3 +1,7 @@
 -r requirements.txt
 pytest>=9,<10
 pytest-asyncio>=1,<2
+# fastapi.testclient.TestClient (starlette) requires an HTTP client at import
+# time — without it, test_api_v3_* collection raises RuntimeError on a clean
+# install. Present locally via dev deps; pinned here so CI has it too.
+httpx>=0.27,<1.0
