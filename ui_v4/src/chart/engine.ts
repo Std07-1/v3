@@ -145,7 +145,9 @@ export class ChartEngine {
     // ─── Chart options (V3 parity: DARK_CHART_OPTIONS, chart_adapter_lite.js:101-148) ───
     this.chart = createChart(container, {
       autoSize: true,
-      devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+      // (DPR is auto-handled by lightweight-charts 5.0 — no chart option;
+      // the former `devicePixelRatio` key was not in TimeChartOptions and
+      // was silently ignored at runtime, so removing it is behavior-neutral.)
       layout: {
         background: { color: 'transparent' },
         textColor: THEMES.dark.chart.layout.textColor,

@@ -490,10 +490,14 @@ export function setupPriceScaleInteractions(
     };
     window.addEventListener('pointerup', handlePointerUp, true);
     window.addEventListener('pointercancel', handlePointerUp, true);
-    window.addEventListener('blur', () => stopVerticalPan('blur'));
+    // Named handler so removeEventListener targets the SAME reference — the
+    // previous inline arrow could never be removed (leak) and `stopVerticalPan`
+    // (origin?: string) is not a valid FocusEvent listener type.
+    const handleBlur = () => stopVerticalPan('blur');
+    window.addEventListener('blur', handleBlur);
     cleanups.push(() => window.removeEventListener('pointerup', handlePointerUp, true));
     cleanups.push(() => window.removeEventListener('pointercancel', handlePointerUp, true));
-    cleanups.push(() => window.removeEventListener('blur', stopVerticalPan));
+    cleanups.push(() => window.removeEventListener('blur', handleBlur));
 
     // ─── Double-click on price axis → resetViewAndFollow ───
     // V3: chart_adapter_lite.js:798-803

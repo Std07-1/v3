@@ -52,7 +52,6 @@
         onClose,
         smcPanelOpen = false,
         displayMode = "focus",
-        onOpenDiagnostics,
         onToggleSmc,
         onToggleDisplayMode,
     }: Props = $props();

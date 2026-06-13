@@ -14,7 +14,7 @@
 // scratch buffers). FP10: НЕ викликати `getComputedStyle` тут — renderer
 // caches CSS-vars і передає numeric values через RenderContext.
 
-import type { Drawing, DrawingPoint } from '../../../types';
+import type { Drawing } from '../../../types';
 
 /** Контекст рендеру переданий tool-у з DrawingsRenderer.
  *  toX/toY повертають null коли точка поза visible range — tool MUST

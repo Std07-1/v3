@@ -240,14 +240,9 @@
   // ADR-0066 PATCH 04b: Splash overlay during initial WS warming.
   // Shown when no first frame has arrived yet AND status is non-fatal
   // (CONNECTING / HEALTHY-but-no-data). Auto-hides on first WS frame.
+  // splashVisible derived lives below statusInfo's declaration to avoid a
+  // temporal-dead-zone reference ($state statusInfo is initialised later).
   let firstFrameArrived = $state(false);
-  let splashVisible = $derived(
-    !firstFrameArrived &&
-      statusInfo.status !== "OFFLINE" &&
-      statusInfo.status !== "EDGE_BLOCKED" &&
-      statusInfo.status !== "WS_UNAVAILABLE" &&
-      statusInfo.status !== "FRONTEND_ERROR",
-  );
 
   // ADR-0074 T5: keyboard mapping винесено у stores/keyboard.svelte.ts
   // (pure mapKeyToAction + setupKeyboard side-effect). Wiring у onMount нижче.
@@ -304,6 +299,15 @@
     detail: "",
     critical: false,
   });
+
+  // ADR-0066 PATCH 04b (cont.): splash hides on first frame OR fatal status.
+  let splashVisible = $derived(
+    !firstFrameArrived &&
+      statusInfo.status !== "OFFLINE" &&
+      statusInfo.status !== "EDGE_BLOCKED" &&
+      statusInfo.status !== "WS_UNAVAILABLE" &&
+      statusInfo.status !== "FRONTEND_ERROR",
+  );
 
   let _pairRestored = false; // restore saved symbol/TF on first full frame per connection
 
@@ -660,7 +664,6 @@
         onSelectStyle={handleCandleStyleChange}
         onBrightnessWheel={handleBrightnessWheel}
         onBrightnessStep={handleBrightnessStep}
-        onOpenDiagnostics={openDiagnostics}
         onClose={closeOverflow}
         {smcPanelOpen}
         {displayMode}
