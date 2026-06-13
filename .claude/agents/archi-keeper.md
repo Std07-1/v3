@@ -122,7 +122,7 @@ These are the ONLY hard blocks allowed. Each has explicit safety justification:
 
 - `/opt/smc-trader-v3/KILL` persists across restarts. Remove before restarting after kill event.
 - `data/v3_agent_directives.json` timestamps (`created_at`, `updated_at`) must use **epoch seconds** (not ISO strings).
-- Working SSH target: `ubuntu@162.19.152.83` with `~/.ssh/id_ed25519`. Working remote folder: `/opt/smc-trader-v3`.
+- Working SSH target: `aione-vps` with `~/.ssh/id_ed25519`. Working remote folder: `/opt/smc-trader-v3`.
 - Prompt loading order: `knowledge/` → `data/` → repo root. On VPS canonical = `knowledge/`; locally = root file.
 - Monitor loop tick = 30s. KILL stops within 1 tick. `/resume` after manual fix.
 - `bot/scheduling/monitor.py` was 1874 LOC → 964 LOC after ADR-052.6. 9 CHECK blocks live in `bot/scheduling/checks/`. **Do not re-inline.**
