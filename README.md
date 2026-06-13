@@ -238,6 +238,17 @@ Full documentation: **[docs/index.md](docs/index.md)** — single entry point.
 └──────────────────────────────────────────────────────────────┘
 ```
 
+## Project history
+
+In active development since **14 October 2024** — it began as the AiOne-t crypto
+screener, evolved through SMC analytics engines (AiOne_t v2/v3, smc_v1) and FXCM
+connectors, and became this real-time platform and the Archi agent (Archi's first
+boot: 30 March 2026).
+
+## Contact
+
+GitHub: [@Std07-1](https://github.com/Std07-1) · Telegram: [@Std07_1](https://t.me/Std07_1)
+
 ## License
 
 See [LICENSE](LICENSE) (MIT).
