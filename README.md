@@ -4,18 +4,33 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 
-> **⚠️ Disclaimer — Not Financial Advice**
->
-> Цей програмний продукт є **аналітичним інструментом** для візуалізації та дослідження ринкових даних.
-> Він **НЕ є** інвестиційною порадою, торговою рекомендацією, або фінансовою консультацією.
->
-> - SMC-зони, рівні, оцінки (A+/A/B/C), та будь-які інші аналітичні індикатори — це **технічні мітки**,
->   а не сигнали до дії. Вони не гарантують жодного результату.
-> - **Минулі результати не гарантують майбутніх**. Торгівля на фінансових ринках пов'язана з
->   суттєвим ризиком втрати капіталу. Ви можете втратити більше, ніж інвестували.
-> - Автор(и) не несуть відповідальності за фінансові збитки, спричинені використанням цього ПЗ.
->   Див. [DISCLAIMER.md](DISCLAIMER.md) та [LICENSE](LICENSE) для повних умов.
-> - Перед прийняттям торгових рішень проконсультуйтесь з ліцензованим фінансовим радником.
+**Real-time Smart Money Concepts (SMC) analytics for gold, indices and crypto** — a
+broker-grade data pipeline (FXCM / Binance) feeding a live WebSocket chart, wired over
+Redis to **Archi**, an autonomous Claude trading agent that reasons, remembers, and
+decides for itself.
+
+**▶ Live: [aione-smc.com](https://aione-smc.com/)**
+
+### Why it isn't just another trading bot
+
+- **Autonomy-first AI agent** — Archi sets its own wake conditions, runs a 7-layer
+  memory, writes its own market thesis, and is *never silently overridden*. Code
+  advises; the agent decides (constitutional invariant **I7**).
+- **Hard data invariants** — a single `UnifiedDataStore` write-center, `Final > Preview`,
+  degraded-but-loud (no silent fallbacks). Every non-trivial decision is captured in
+  **47+ ADRs**.
+- **$0 analytics** — SMC structure (BOS / CHoCH), order blocks, FVG, liquidity,
+  premium/discount and confluence scoring are computed **in-process** — no paid
+  signal feeds.
+- **Built like production** — dual-venv broker isolation, exit-gates, security scan,
+  green CI, and a real FXCM real-time stream. Maturity is tracked honestly (**M3 → M7**),
+  not faked.
+
+> **⚠️ Not financial advice.** Analytical / research tool only — SMC labels are technical
+> markers, not signals. Trading carries substantial risk of loss. Full terms:
+> **[DISCLAIMER.md](DISCLAIMER.md)** · [LICENSE](LICENSE).
+
+---
 
 Торгова платформа "дані → аналітика/SMC → UI → торгова взаємодія" з жорсткими інваріантами та **UnifiedDataStore (UDS)** як єдиним write-center.
 
