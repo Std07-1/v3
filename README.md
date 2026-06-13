@@ -247,7 +247,7 @@ boot: 30 March 2026).
 
 ## Contact
 
-GitHub: [@Std07-1](https://github.com/Std07-1) · Telegram: [@Std07_1](https://t.me/Std07_1)
+Channel (live SMC analysis from Archi): [@smc_v3](https://t.me/smc_v3) · GitHub: [@Std07-1](https://github.com/Std07-1)
 
 ## License
 
