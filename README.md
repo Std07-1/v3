@@ -1,4 +1,8 @@
-﻿# Trading Platform v3 (FXCM Connector + UDS + UI)
+# Trading Platform v3 (FXCM Connector + UDS + UI)
+
+[![CI](https://github.com/Std07-1/v3/actions/workflows/ci.yml/badge.svg)](https://github.com/Std07-1/v3/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 
 > **⚠️ Disclaimer — Not Financial Advice**
 >
@@ -10,7 +14,7 @@
 > - **Минулі результати не гарантують майбутніх**. Торгівля на фінансових ринках пов'язана з
 >   суттєвим ризиком втрати капіталу. Ви можете втратити більше, ніж інвестували.
 > - Автор(и) не несуть відповідальності за фінансові збитки, спричинені використанням цього ПЗ.
->   Див. [LICENSE](LICENSE) (Sections 11–12) для повних умов.
+>   Див. [DISCLAIMER.md](DISCLAIMER.md) та [LICENSE](LICENSE) для повних умов.
 > - Перед прийняттям торгових рішень проконсультуйтесь з ліцензованим фінансовим радником.
 
 Торгова платформа "дані → аналітика/SMC → UI → торгова взаємодія" з жорсткими інваріантами та **UnifiedDataStore (UDS)** як єдиним write-center.
