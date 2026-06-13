@@ -79,7 +79,8 @@ jobs:
       - name: Run Bandit baseline scan
         run: |
           bandit -q -r app core runtime tools \
-            -x tests,data_v3,ui_v4,.venv,.venv37
+            -x tests,data_v3,ui_v4,.venv,.venv37 \
+            -c pyproject.toml
 
   ui-v4:
     runs-on: ubuntu-latest

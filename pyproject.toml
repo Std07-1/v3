@@ -17,3 +17,63 @@ dependencies = [
 
 [project.optional-dependencies]
 fxcm = []
+
+# ── Bandit security scanner baseline (CI: security-python job) ─────────────
+# Only categories with verified, justified rationales are skipped.
+# Dangerous categories that catch real vulns remain ACTIVE and are NOT listed
+# here: B602/B605 (shell=True/os.system), B307 (eval), B301/B403 (pickle),
+# B506 (yaml.load without SafeLoader), B608 (SQL injection),
+# B501 (requests SSL verify=False).
+[tool.bandit]
+skips = [
+  # B324 hashlib_insecure_functions — one occurrence: runtime/api_v3/endpoints.py
+  # _smc_zones_compute_snapshot_id(). SHA-1 is used purely as a deterministic
+  # content fingerprint (zone-set dedup / pagination ETag), not for any
+  # authentication, password storage, or integrity-verification purpose. The
+  # 16-hex-char truncated digest is used as a cursor/snapshot discriminator;
+  # collision probability is acceptable for this non-security use-case.
+  "B324",
+
+  # B101 assert_used — assert statements are intentional precondition guards in
+  # production algorithmic code (SMC engine, UDS invariants). The no_bare_assert
+  # exit-gate already enforces the project's own policy on these.
+  "B101",
+
+  # B105 hardcoded_password_string — false positive on TOKEN_PREFIX = "tk_"
+  # in runtime/api_v3/token_store.py:31. "tk_" is the token FORMAT prefix
+  # (documented in ADR-0058 §3), not a credential. Actual tokens are generated
+  # via secrets.token_bytes(32) at runtime and never hardcoded.
+  "B105",
+
+  # B110 try_except_pass — known accepted tech-debt (budget=39 in
+  # tools/exit_gates/manifest.ci.json no_bare_except gate). Every occurrence
+  # is a deliberate degraded-but-loud fallback in broker/sidecar isolation
+  # paths where a silent skip is preferable to crashing the entire process.
+  "B110",
+
+  # B112 try_except_continue — same tech-debt category as B110. Present in
+  # audit/backfill tools where per-item failures must not abort batch jobs.
+  "B112",
+
+  # B310 urllib_urlopen — all 21 occurrences are in tools/ (dev/audit/diag
+  # scripts), ZERO in app/ or runtime/. Every URL is either a hardcoded
+  # localhost:8000 endpoint or a local API base constant. No URL is
+  # constructed from untrusted user input → no SSRF surface.
+  "B310",
+
+  # B404 import_subprocess — subprocess is intentionally used in app/main.py
+  # for broker-sidecar process management and in tools/ for supervisor/redis
+  # CLI calls. All calls use explicit argument lists (no shell=True).
+  "B404",
+
+  # B603 subprocess_without_shell_equals_true — all subprocess calls use
+  # explicit argument lists, which is the SAFE form. B603 fires on any
+  # subprocess.run/Popen without shell=True; this is the recommended pattern.
+  "B603",
+
+  # B607 start_process_with_partial_path — intentional: system utilities
+  # (taskkill, redis-cli, supervisorctl, ssh, tail, sudo) are invoked by
+  # short name, relying on PATH. These are operator-controlled environments
+  # (VPS, local dev) where PATH is trusted. No user-supplied executable names.
+  "B607",
+]

@@ -1147,6 +1147,8 @@ def _smc_zones_compute_snapshot_id(sorted_wire_zones: List[Dict[str, Any]]) -> s
     underlying zone set changes (add / remove / re-grade reorders proximity).
     """
     raw = ",".join(str(z.get("id") or "") for z in sorted_wire_zones)
+    # SHA-1 used purely as a content fingerprint (zone-set dedup / ETag), not for auth or integrity.
+    # B324 suppressed via [tool.bandit] skips in pyproject.toml.
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
