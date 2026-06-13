@@ -6,9 +6,11 @@
     import {
         getDirectives,
         refreshDirectives,
+        applyDirectives,
         startPolling,
         stopPolling,
     } from "./lib/state.svelte";
+    import type { Directives } from "./lib/types";
     import Feed from "./views/Feed.svelte";
     import Thinking from "./views/Thinking.svelte";
     import Relationship from "./views/Relationship.svelte";
@@ -90,8 +92,13 @@
 
     $effect(() => {
         if (token) {
-            startPolling();
-            return () => stopPolling();
+            startPolling(); // fallback / cold-start; SSE drives live updates
+            connectLiveSSE(); // Фаза 3a: real-time directives + notif
+            return () => {
+                stopPolling();
+                notifSSE?.close();
+                notifSSE = null;
+            };
         }
     });
 
@@ -196,40 +203,47 @@
 
     function toggleNotifications() {
         if (notifEnabled) {
-            // turn off
+            // turn off browser notifications ONLY — the live SSE stays connected
+            // (Фаза 3a: SSE now drives real-time state, not just notifications).
             notifEnabled = false;
             localStorage.setItem("archi_notif", "0");
-            notifSSE?.close();
-            notifSSE = null;
             return;
         }
         if (!("Notification" in window)) return;
         if (Notification.permission === "granted") {
             notifEnabled = true;
             localStorage.setItem("archi_notif", "1");
-            connectNotifSSE();
+            connectLiveSSE();
         } else if (Notification.permission !== "denied") {
             Notification.requestPermission().then((perm) => {
                 if (perm === "granted") {
                     notifEnabled = true;
                     localStorage.setItem("archi_notif", "1");
-                    connectNotifSSE();
+                    connectLiveSSE();
                 }
             });
         }
     }
 
-    function connectNotifSSE() {
-        if (notifSSE || !token || !notifEnabled) return;
+    // Фаза 3a (2026-06-13): live SSE — connects ALWAYS (not gated on notifEnabled),
+    // applies directives changes to shared state in real time so mood/думка/scenario
+    // no longer lag 30s while watching. Browser notifications stay opt-in + tab-hidden.
+    function connectLiveSSE() {
+        if (notifSSE || !token) return;
         const url = `/api/archi/stream?token=${encodeURIComponent(token)}`;
         const es = new EventSource(url);
         notifSSE = es;
 
         es.onmessage = (evt: MessageEvent) => {
-            if (!document.hidden) return; // only notify when tab not visible
             try {
                 const msg = JSON.parse(evt.data);
-                if (msg.type === "feed" && msg.data) {
+                // LIVE state update — always, regardless of tab visibility
+                if (msg.type === "directives" && msg.data) {
+                    applyDirectives(msg.data as Directives);
+                    return;
+                }
+                // Feed → browser notification only when tab hidden + opted in + important
+                if (msg.type === "feed" && msg.data && document.hidden && notifEnabled) {
                     const ev = msg.data;
                     const imp = ev.importance ?? 1;
                     if (imp < 3) return;
@@ -249,15 +263,14 @@
         es.onerror = () => {
             notifSSE?.close();
             notifSSE = null;
-            // Reconnect after 15s
-            if (notifEnabled) setTimeout(() => connectNotifSSE(), 15_000);
+            if (token) setTimeout(() => connectLiveSSE(), 15_000); // reconnect
         };
     }
 
     // Auto-connect notification SSE if already enabled
     $effect(() => {
         if (token && notifEnabled) {
-            connectNotifSSE();
+            connectLiveSSE();
         }
         return () => {
             notifSSE?.close();

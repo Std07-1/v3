@@ -52,6 +52,26 @@ export async function refreshAll(brief = true): Promise<void> {
     await Promise.all([refreshDirectives(brief), refreshAgentState()]);
 }
 
+// ── live apply (SSE push, no fetch) ──
+// Фаза 3a (2026-06-13): the /api/archi/stream SSE pushes directives changes in
+// real time, but the UI only polled (30s lag) + used SSE for background notifs.
+// These let the live stream update state instantly so mood/думка/scenario stop
+// lagging on the console while the owner is watching.
+
+export function applyDirectives(d: Directives | null): void {
+    if (!d) return;
+    directives = d;
+    lastDirectivesSyncMs = Date.now();
+    directivesError = "";
+}
+
+export function applyAgentState(s: AgentState | null): void {
+    if (!s) return;
+    agentState = s;
+    lastAgentStateSyncMs = Date.now();
+    agentStateError = "";
+}
+
 // ── polling lifecycle ──
 
 export function startPolling(intervalMs = POLL_INTERVAL_MS): void {
