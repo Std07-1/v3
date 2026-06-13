@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_wake_engine.py вЂ” Unit tests for ADR-0049 Wake Engine components.
 
 Tests pure logic only (core/smc/wake_check.py, core/smc/auto_wake.py, wake_types).

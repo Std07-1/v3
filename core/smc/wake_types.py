@@ -1,4 +1,4 @@
-﻿"""
+"""
 core/smc/wake_types.py вЂ” Canonical types for WakeEngine (ADR-0049).
 
 Pure dataclasses, zero I/O. Imported by:

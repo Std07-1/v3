@@ -1,4 +1,4 @@
-﻿"""
+"""
 core/smc/wake_check.py вЂ” Pure $0 condition checker (ADR-0049).
 
 All functions: data in в†’ bool/value out. Zero I/O.

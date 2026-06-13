@@ -1,4 +1,4 @@
-﻿"""
+"""
 runtime/smc/narrative_enricher.py вЂ” Thesis + Presence injection into wire frame (ADR-0049 P5).
 
 Reads Archi's thesis from Redis cache (written by bot after each Sonnet analysis).

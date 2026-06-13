@@ -1,4 +1,4 @@
-﻿"""
+"""
 runtime/ws/ws_server.py вЂ” aiohttp WebSocket СЃРµСЂРІРµСЂ РґР»СЏ ui_v4.
 
 P1: skeleton + heartbeat.

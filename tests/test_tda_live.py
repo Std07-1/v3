@@ -228,15 +228,17 @@ class TestOnBarFilters:
             mock_cascade.assert_not_called()
 
     def test_disabled_ignored(self):
+        # hour=13 = would-fire bar (ADR-0051) — proves the *enabled* guard blocks
         runner = _make_runner(enabled=False)
-        bar = _m15_bar(hour=8)
+        bar = _m15_bar(hour=13)
         with patch("runtime.smc.tda_live.run_tda_cascade") as mock_cascade:
             runner.on_bar(SYM, M15_S, bar, None)
             mock_cascade.assert_not_called()
 
     def test_unknown_symbol_ignored(self):
+        # hour=13 = would-fire bar (ADR-0051) — proves the *symbol* guard blocks
         runner = _make_runner(symbols=["XAU/USD"])
-        bar = _m15_bar(hour=8, symbol="EUR/USD")
+        bar = _m15_bar(hour=13, symbol="EUR/USD")
         bar_eurusd = CandleBar(
             symbol="EUR/USD",
             tf_s=M15_S,
@@ -263,13 +265,13 @@ class TestOnBarFilters:
 class TestCascadeTrigger:
 
     @patch("runtime.smc.tda_live.run_tda_cascade")
-    def test_cascade_in_london_window(self, mock_cascade, tmp_path):
-        """M15 bar at 08:00 UTC → cascade triggers → signal stored."""
+    def test_cascade_fires_at_london_close(self, mock_cascade, tmp_path):
+        """M15 bar at 13:00 UTC (london_end, ADR-0051) → cascade triggers → signal stored."""
         sig = _make_signal()
         mock_cascade.return_value = sig
 
         runner = _make_runner(tmp_path=tmp_path)
-        bar = _m15_bar(hour=8)
+        bar = _m15_bar(hour=13)
         runner.on_bar(SYM, M15_S, bar, None)
 
         assert mock_cascade.called
@@ -287,26 +289,30 @@ class TestCascadeTrigger:
         mock_cascade.assert_not_called()
 
     @patch("runtime.smc.tda_live.run_tda_cascade")
-    def test_cascade_after_london_skipped_until_next_day(self, mock_cascade):
-        """M15 bar at 14:00 UTC (after London window london_end=13) → no cascade today."""
+    def test_cascade_during_london_window_waits(self, mock_cascade):
+        """M15 bar at 10:00 UTC (inside London, before london_end=13) → no cascade yet.
+
+        ADR-0051: cascade waits for London close so Stage 3 sees the full H1
+        window — firing mid-window saw 0 complete H1 bars → NO_NARRATIVE.
+        """
         runner = _make_runner()
-        bar = _m15_bar(hour=14)
+        bar = _m15_bar(hour=10)
         runner.on_bar(SYM, M15_S, bar, None)
         mock_cascade.assert_not_called()
 
     @patch("runtime.smc.tda_live.run_tda_cascade")
     def test_cascade_once_per_day(self, mock_cascade, tmp_path):
-        """Cascade runs ONCE per day. Second London bar → no re-run."""
+        """Cascade runs ONCE per day. Second post-close bar → no re-run."""
         sig = _make_signal()
         mock_cascade.return_value = sig
 
         runner = _make_runner(tmp_path=tmp_path)
 
-        bar1 = _m15_bar(hour=8, minute=0)
+        bar1 = _m15_bar(hour=13, minute=0)
         runner.on_bar(SYM, M15_S, bar1, None)
         assert mock_cascade.call_count == 1
 
-        bar2 = _m15_bar(hour=8, minute=15)
+        bar2 = _m15_bar(hour=13, minute=15)
         runner.on_bar(SYM, M15_S, bar2, None)
         assert mock_cascade.call_count == 1  # NOT 2
 
@@ -315,7 +321,7 @@ class TestCascadeTrigger:
         """Cascade returns None → no signal stored."""
         mock_cascade.return_value = None
         runner = _make_runner()
-        bar = _m15_bar(hour=8)
+        bar = _m15_bar(hour=13)
         runner.on_bar(SYM, M15_S, bar, None)
 
         assert mock_cascade.called
@@ -326,7 +332,8 @@ class TestCascadeTrigger:
         """Cascade throws → error logged, no crash."""
         mock_cascade.side_effect = RuntimeError("boom")
         runner = _make_runner()
-        bar = _m15_bar(hour=8)
+        # hour=13: must actually reach the cascade call for side_effect to fire
+        bar = _m15_bar(hour=13)
         # Should not raise
         runner.on_bar(SYM, M15_S, bar, None)
         assert runner.get_signal(SYM) is None
@@ -346,14 +353,14 @@ class TestTradeManagement:
         mock_cascade.return_value = sig
 
         runner = _make_runner(tmp_path=tmp_path)
-        # Trigger cascade
-        bar1 = _m15_bar(hour=8, minute=0)
+        # Trigger cascade (hour=13 = london_end, ADR-0051)
+        bar1 = _m15_bar(hour=13, minute=0)
         runner.on_bar(SYM, M15_S, bar1, None)
         # bar1 triggers cascade AND first trade update → bars_elapsed=1
         assert runner.get_signal(SYM).trade.bars_elapsed == 1
 
         # Next M15 bar — trade should be updated by update_trade
-        bar2 = _m15_bar(hour=8, minute=15, o=2002.0, h=2008.0, low=2000.0, c=2006.0)
+        bar2 = _m15_bar(hour=13, minute=15, o=2002.0, h=2008.0, low=2000.0, c=2006.0)
         runner.on_bar(SYM, M15_S, bar2, None)
         updated_sig = runner.get_signal(SYM)
         assert updated_sig is not None
@@ -371,11 +378,11 @@ class TestTradeManagement:
         mock_cascade.return_value = sig
 
         runner = _make_runner(tmp_path=tmp_path)
-        bar1 = _m15_bar(hour=8)
+        bar1 = _m15_bar(hour=13)
         runner.on_bar(SYM, M15_S, bar1, None)
 
         # Bar that hits SL (low = 1985 < sl = 1990)
-        bar_sl = _m15_bar(hour=8, minute=15, o=1995.0, h=1997.0, low=1985.0, c=1988.0)
+        bar_sl = _m15_bar(hour=13, minute=15, o=1995.0, h=1997.0, low=1985.0, c=1988.0)
         runner.on_bar(SYM, M15_S, bar_sl, None)
         result = runner.get_signal(SYM)
         assert result is not None
@@ -389,17 +396,17 @@ class TestTradeManagement:
         mock_cascade.return_value = sig
 
         runner = _make_runner(tmp_path=tmp_path)
-        bar1 = _m15_bar(hour=8)
+        bar1 = _m15_bar(hour=13)
         runner.on_bar(SYM, M15_S, bar1, None)
 
         # Close via SL
-        bar_sl = _m15_bar(hour=8, minute=15, o=1995.0, h=1997.0, low=1985.0, c=1988.0)
+        bar_sl = _m15_bar(hour=13, minute=15, o=1995.0, h=1997.0, low=1985.0, c=1988.0)
         runner.on_bar(SYM, M15_S, bar_sl, None)
         closed_sig = runner.get_signal(SYM)
         assert closed_sig.trade.status == "closed"
 
         # Another bar — should NOT change anything
-        bar3 = _m15_bar(hour=8, minute=30, o=1988.0, h=1992.0, low=1980.0, c=1985.0)
+        bar3 = _m15_bar(hour=13, minute=30, o=1988.0, h=1992.0, low=1980.0, c=1985.0)
         runner.on_bar(SYM, M15_S, bar3, None)
         same_sig = runner.get_signal(SYM)
         assert same_sig.trade.bars_elapsed == closed_sig.trade.bars_elapsed
@@ -419,7 +426,7 @@ class TestPersistence:
         mock_cascade.return_value = sig
 
         runner1 = _make_runner(tmp_path=tmp_path)
-        bar = _m15_bar(hour=8)
+        bar = _m15_bar(hour=13)
         runner1.on_bar(SYM, M15_S, bar, None)
         assert runner1.get_signal(SYM) is not None
         runner1._save_state()

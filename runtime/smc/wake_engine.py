@@ -1,4 +1,4 @@
-﻿"""
+"""
 runtime/smc/wake_engine.py вЂ” WakeEngine: I/O orchestration for wake system (ADR-0049).
 
 Lives in ws_server process (in-process, like SmcRunner).

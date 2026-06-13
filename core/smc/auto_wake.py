@@ -1,4 +1,4 @@
-﻿"""
+"""
 core/smc/auto_wake.py вЂ” Platform-generated wake conditions (ADR-0049 Strategy B).
 
 Platform looks at SMC data already computed by SmcRunner and generates
