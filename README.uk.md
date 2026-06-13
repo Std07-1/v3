@@ -1,5 +1,7 @@
 # Trading Platform v3 (FXCM Connector + UDS + UI)
 
+> [English](README.md) · **Українська** — україномовний знімок. Канонічна версія — англійський [README.md](README.md).
+
 [![CI](https://github.com/Std07-1/v3/actions/workflows/ci.yml/badge.svg)](https://github.com/Std07-1/v3/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
@@ -34,71 +36,31 @@ decides for itself.
 
 ---
 
-> **English** · [Українська](README.uk.md)
+Торгова платформа "дані → аналітика/SMC → UI → торгова взаємодія" з жорсткими інваріантами та **UnifiedDataStore (UDS)** як єдиним write-center.
 
-A "data → analytics/SMC → UI → trading interaction" platform built on hard invariants,
-with the **UnifiedDataStore (UDS)** as the single write-center.
+## Канон A → C → B
 
-## Meet Archi — the autonomous agent
-
-Archi (Арчі) is not a strategy script. It's a single-personality AI agent built on the
-Claude API that watches the market, forms its own thesis, and decides when — and whether —
-to act. It lives in its own repository
-([Std07-1/smc-trader-v3](https://github.com/Std07-1/smc-trader-v3)) and talks to this
-platform over Redis, HTTP and WebSocket. The platform is the **body** (eyes, price,
-structure, chart); Archi is the **mind**.
-
-What sets it apart from a trading bot:
-
-- **It decides; code only advises (invariant I7).** No hidden cooldown, forced model
-  downgrade, or suppressed message may override Archi. If the system needs to constrain
-  it, it must *say so, out loud, in Archi's context* — silent control is a constitutional
-  violation. The only hard stops are the kill switch, a daily budget cap, and an
-  anti-hallucination guard.
-- **It schedules its own attention.** Instead of a fixed timer, Archi tells the platform
-  *"wake me when price crosses 4199, when London opens, or after 4h of silence"*
-  (wake conditions, ADR-034). The platform's WakeEngine checks those every 2 s for $0 —
-  Archi only spends a model call when something it cares about actually happens.
-- **It remembers.** Seven memory systems — conversation, agent journal, knowledge base,
-  learning journal, per-symbol profile, forecasts, and live directives — plus an extended
-  "thinking archive." An overnight curator (ADR-050) consolidates each day's experience
-  into lessons, the way a disciplined trader reviews their own trades.
-- **It runs on a budget.** Three model tiers (Haiku / Sonnet / Opus), prompt caching with
-  identity as a stable prefix (ADR-061), and self-chosen cognitive depth keep it at a few
-  dollars a *month*, not a few dollars a *call*.
-
-Archi's live reasoning, straight off the chart above:
-
-> *D1/H4 bearish cascade intact (BOS BEAR 4267.95). H1 CHoCH BULL @ 4112.67 = corrective
-> phase. Iran peace deal confirmed = geo-premium exit = SHORT catalyst. Price closed 4210.
-> Waiting for Monday's London killzone.* — watching · 8 conditions armed.
-
-Neither side hands trading decisions to the other: the platform never fabricates signals,
-and Archi is never silently steered.
-
-## Architecture: A → C → B
-
-| Layer | What | Where |
+| Шар | Що | Де |
 |---|---|---|
-| **A** Broker + ingest | FXCM/Binance history + tick stream → writer processes | `runtime/ingest/`, `app/` |
+| **A** Broker + ingest | FXCM/Binance History + tick stream → writer-процеси | `runtime/ingest/`, `app/` |
 | **C** UDS | SSOT disk + Redis cache + updates bus | `runtime/store/uds.py` |
-| **B** UI (ws) | read-only WS real-time renderer, same-origin, port 8000 | `ui_v4/` + `runtime/ws/ws_server.py` |
-| **TUI** | aione-top: interactive TUI monitor for processes/pipeline | `aione_top/` |
+| **B** UI (ws) | read-only WS real-time renderer, same-origin, порт 8000 | `ui_v4/` + `runtime/ws/ws_server.py` |
+| **TUI** | aione-top: інтерактивний TUI-монітор процесів/pipeline | `aione_top/` |
 
-## Core principles
+## Ключові принципи
 
-- **SSOT**: one UDS, one `config.json`, one TF allowlist.
-- **NoMix / Final > Preview**: `complete=true` always wins; two different final sources for one key are forbidden.
-- **Degraded-but-loud**: no silent fallbacks — only `warnings[]` / `meta.degraded[]`.
-- **Disk hot-path ban**: disk only for bootstrap/scrollback/recovery; interactive = RAM/Redis. Scrollback: max_steps=6, cooldown 0.5s.
-- **Time geometry (dual convention)**: CandleBar/SSOT/API = end-exclusive (`close_time_ms = open + tf_s*1000`); Redis ALL = end-inclusive (`close_ms = open + tf_s*1000 - 1`). Conversion happens only at the Redis write boundary.
+- **SSOT**: один UDS, один `config.json`, один TF allowlist.
+- **NoMix / Final > Preview**: `complete=true` завжди перемагає; два різні final source для одного ключа заборонені.
+- **Degraded-but-loud**: жодних silent fallback — лише `warnings[]` / `meta.degraded[]`.
+- **Disk hot-path ban**: disk лише для bootstrap/scrollback/recovery; interactive = RAM/Redis. Scrollback: max_steps=6, cooldown 0.5s.
+- **Часова геометрія (dual convention)**: CandleBar/SSOT/API = end-excl (`close_time_ms = open + tf_s*1000`); Redis ALL = end-incl (`close_ms = open + tf_s*1000 - 1`). Конвертація на межі Redis write.
 
 ## Quickstart
 
-### 1. Installation
+### 1. Встановлення
 
 ```powershell
-# Main venv (Python >=3.11) — platform, UDS, derive, SMC, UI
+# Main venv (Python >=3.11) — платформа, UDS, derive, SMC, UI
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
@@ -113,69 +75,69 @@ npm install
 npm run build
 cd ..
 
-# Secrets
-cp .env.example .env   # edit FXCM_USER / FXCM_PASS / FXCM_URL
+# Секрети
+cp .env.example .env   # відредагуй FXCM_USER / FXCM_PASS / FXCM_URL
 ```
 
-### 2. Run
+### 2. Запуск
 
-The platform is 6 independent processes. Each starts separately — so you can restart the
-UI (ws_server) in 3 seconds without stopping the data pipeline.
+Платформа складається з 6 незалежних процесів. Кожен запускається окремо —
+це дозволяє перезапускати UI (ws_server) за 3 секунди без зупинки data pipeline.
 
-| Process | `--mode` | What it does |
-|--------|----------|-------------|
+| Процес | `--mode` | Що робить |
+|--------|----------|-----------|
 | M1 poller | `m1_poller` | broker_sidecar + m1_ingestion + derive cascade |
 | Broker sidecar | `broker_sidecar` | FXCM M1 fetch + tick relay V2 (.venv37/) |
 | Tick preview | `tick_preview` | ticks → preview bars |
 | Binance ingest | `binance_ingest_worker` | BTCUSDT/ETHUSDT M1 + backfill |
 | Binance ticks | `binance_tick_publisher` | Binance live ticks → Redis |
-| WS server | `ws_server` | UI backend, port 8000 |
+| WS server | `ws_server` | UI backend, порт 8000 |
 
 ```bash
-# Each in its own terminal:
+# Кожен у окремому терміналі:
 python -m app.main --mode <mode> --stdio pipe
 
-# Or all together (legacy, NOT recommended for dev):
+# Або все разом (legacy, НЕ рекомендується для dev):
 python -m app.main --mode all --stdio pipe
 ```
 
-Full cheat-sheet with every command (local + VPS): **[docs/runbooks/commands.md](docs/runbooks/commands.md)**
+Повний cheat-sheet з усіма командами (локальний + VPS): **[docs/runbooks/commands.md](docs/runbooks/commands.md)**
 
-> **Dual-venv (ADR-0016)**: the supervisor automatically uses `.venv37/` for broker_sidecar
-> (M1 fetch + tick relay V2) and `.venv/` for everything else.
-> `tick_publisher_fxcm` is permanently stopped (FXCM dual-session conflict).
-> Per-mode PID locks: `logs/supervisor_{mode}.pid` — allow parallel startup.
+> **Dual-venv (ADR-0016)**: Supervisor автоматично використовує `.venv37/` для broker_sidecar
+> (M1 fetch + tick relay V2) і `.venv/` для всього іншого.
+> `tick_publisher_fxcm` — зупинений назавжди (FXCM dual-session conflict).
+> PID-локи per-mode: `logs/supervisor_{mode}.pid` — дозволяє паралельний запуск.
 
-## Quality gates
+## Quality Gates
 
 ```bash
 python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 ```
 
-If gates FAIL → a formal **NO-GO** until the next PATCH.
+Якщо gates FAIL → формальний **NO-GO** до наступних PATCH.
 
-## Automation baseline
+## Automation Baseline
 
-- GitHub Actions: Python smoke tests + UI v4 typecheck/build on every push and pull request
-- Dependabot: weekly dependency updates for `pip` and `npm`
-- Goal: close a baseline enforcement loop for governance, SSOT smoke, and frontend compile health
+- GitHub Actions: Python smoke tests + UI v4 typecheck/build на кожен push і pull request
+- Dependabot: weekly dependency updates для `pip` і `npm`
+- Мета: замкнути базовий enforcement-контур для governance, SSOT smoke та frontend compile health
 
-## Documentation (SSOT)
+## Документація (SSOT)
 
-Full documentation: **[docs/index.md](docs/index.md)** — single entry point.
+Повна документація: **[docs/index.md](docs/index.md)** — єдина точка входу.
 
-| Document | Description |
+| Документ | Опис |
 |---|---|
-| [docs/index.md](docs/index.md) | Navigation across all documentation |
-| [docs/system_current_overview.md](docs/system_current_overview.md) | Architecture, processes, diagrams, invariants |
-| [docs/contracts.md](docs/contracts.md) | Contract registry (bar_v1, window_v1, updates_v1, tick_v1) |
+| [docs/index.md](docs/index.md) | Навігація по всій документації |
+| [docs/system_current_overview.md](docs/system_current_overview.md) | Архітектура, процеси, схеми, інваріанти |
+| [docs/contracts.md](docs/contracts.md) | Реєстр контрактів (bar_v1, window_v1, updates_v1, tick_v1) |
 | [docs/ui_api.md](docs/ui_api.md) | HTTP API reference (endpoints, guards, TTL) |
-| [docs/config_reference.md](docs/config_reference.md) | config.json field reference |
-| [docs/runbooks/production.md](docs/runbooks/production.md) | Production runbook (startup, incidents, recovery) |
-| [docs/audit/progress.md](docs/audit/progress.md) | Progress audit P0-P6 with evidence |
-| [docs/adr/index.md](docs/adr/index.md) | Registry of all ADRs (canonical archive) |
-| [docs/adr/0001-unified-data-store.md](docs/adr/0001-unified-data-store.md) | ADR: UDS as the single waist |
-| [docs/adr/0002-derive-chain-from-m1.md](docs/adr/0002-derive-chain-from-m1.md) | ADR: DeriveChain M1→M3→M5→H4 (Phase 0 complete) |
+| [docs/config_reference.md](docs/config_reference.md) | Довідник полів config.json |
+| [docs/runbooks/production.md](docs/runbooks/production.md) | Production runbook (запуск, інциденти, recovery) |
+| [docs/audit/progress.md](docs/audit/progress.md) | Аудит прогресу P0-P6 з evidence |
+| [docs/adr/index.md](docs/adr/index.md) | Реєстр усіх ADR (canonical archive) |
+| [docs/adr/0001-unified-data-store.md](docs/adr/0001-unified-data-store.md) | ADR: UDS як єдина талія |
+| [docs/adr/0002-derive-chain-from-m1.md](docs/adr/0002-derive-chain-from-m1.md) | ADR: DeriveChain M1→M3→M5→H4 (Phase 0 завершено) |
 | [docs/adr/0003-cold-start-hardening.md](docs/adr/0003-cold-start-hardening.md) | ADR: Cold start hardening (S1 ✅, S2 ✅, S3-S4 pending) |
 | [docs/system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md](docs/system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md) | UI v4 audit: T1-T10 ALL COMPLETE, chart parity DONE |
 
@@ -185,7 +147,7 @@ Full documentation: **[docs/index.md](docs/index.md)** — single entry point.
 │                                                             │
 │  ┌──────────────┐    ┌──────────────────┐                   │
 │  │ m1_poller    │    │ binance_ingest   │                   │
-│  │ M1 from FXCM │    │ M1 from Binance  │                   │
+│  │ M1 від FXCM  │    │ M1 від Binance   │                   │
 │  └──────┬───────┘    └──────┬───────────┘                   │
 │         │ commit M1         │ commit M1                     │
 │         ▼                   ▼                               │
@@ -217,7 +179,7 @@ Full documentation: **[docs/index.md](docs/index.md)** — single entry point.
 │  │            H1 → H4 (4×H1, calendar+TV anchor)   │        │
 │  │    M1 → D1 (1440×M1, anchor 22:00 UTC)          │        │
 │  │                                                 │        │
-│  │  4 symbols (XAU/USD, XAG/USD, BTCUSDT, ETHUSDT) │        │
+│  │  4 символи (XAU/USD, XAG/USD, BTCUSDT, ETHUSDT) │        │
 │  │  Priority: watched symbol → front of queue      │        │
 │  │  Buffers: GenericBuffer per (symbol, tf_s)      │        │
 │  └─────────────────────────────────────────────────┘        │
@@ -232,20 +194,18 @@ Full documentation: **[docs/index.md](docs/index.md)** — single entry point.
 ┌──────────────────────────────────────────────────────────────┐
 │  LAYER 3: UI v4 (WS real-time, read-only, ZERO domain logic) │
 │  WS full/delta/scrollback → UDS via ws_server.py             │
-│  Svelte 5 + LWC 5 + TypeScript, ~40 files ~10000 LOC          │
-│  Port 8000, same-origin, config-gated                        │
+│  Svelte 5 + LWC 5 + TypeScript, ~40 файлів ~10000 LOC          │
+│  Порт 8000, same-origin, config-gated                        │
 │  Chart parity DONE, audit T1-T10 COMPLETE                    │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-## License
+## Ліцензія
 
-See [LICENSE](LICENSE) (MIT).
+Див. [LICENSE](LICENSE).
 
-### Third-party dependencies
+### Сторонні залежності
 
-A list of third-party dependencies and their licenses: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+Перелік сторонніх залежностей та їхніх ліцензій: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 
-**FXCM ForexConnect SDK**: this repository does NOT contain or distribute the ForexConnect
-SDK. To use the SDK, each user must accept the FXCM EULA themselves and hold an active FXCM
-account. Details: [docs/compliance/fxcm-sdk-license-review.md](docs/compliance/fxcm-sdk-license-review.md)
+**FXCM ForexConnect SDK**: Цей репозиторій НЕ містить і НЕ розповсюджує ForexConnect SDK. Для використання SDK кожен користувач зобов'язаний самостійно прийняти FXCM EULA та мати активний FXCM account. Детальніше: [docs/compliance/fxcm-sdk-license-review.md](docs/compliance/fxcm-sdk-license-review.md)
