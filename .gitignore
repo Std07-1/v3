@@ -158,6 +158,10 @@ ui_archi/dist/
 # 2026-04-21 cleanup
 ui_archi/dist[0-9]*/
 backups/
+
+# 2026-06-13 ui_archi_v2 fork (WIP copy; original ui_archi untouched). node_modules covered globally.
+ui_archi_v2/dist/
+ui_archi_v2/.devharness/
 .playwright-mcp/
 _tail*.txt
 
