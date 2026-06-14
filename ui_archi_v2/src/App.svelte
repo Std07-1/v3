@@ -5,12 +5,15 @@
     import { onMount } from "svelte";
     import {
         getDirectives,
+        getAgentState,
         refreshDirectives,
         applyDirectives,
         startPolling,
         stopPolling,
     } from "./lib/state.svelte";
     import type { Directives } from "./lib/types";
+    import PresenceLayer from "./features/presence/PresenceLayer.svelte";
+    import { derivePresenceMode, type PresenceMode } from "./features/presence/presenceState";
     import Feed from "./views/Feed.svelte";
     import Thinking from "./views/Thinking.svelte";
     import Relationship from "./views/Relationship.svelte";
@@ -28,8 +31,30 @@
     });
 
     function nav(path: string) {
+        if (path !== "/gorn" && path !== "" && path !== route) ringWake += 1; // перехід у view → іскри
         window.location.hash = path;
     }
+
+    // ── Постійна присутність (Slice C): кільце на рівні застосунку ──
+    let agentStateP = $derived(getAgentState());
+    let presenceMode = $state<PresenceMode>("sleep");
+    let ringAccent = $state("#7c6fff");
+    let ringWake = $state(0);
+    let presenceFocused = $derived(!(route === "/gorn" || route === ""));
+    let _lastThought: string | null = null;
+    let _lastImpulseMs = 0;
+    function presenceTick(): void {
+        const now = Date.now();
+        const st = getAgentState();
+        const dir = getDirectives();
+        if (!_lastImpulseMs && typeof st?.ts_ms === "number" && st.ts_ms) _lastImpulseMs = st.ts_ms;
+        ringAccent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || ringAccent;
+        const th = ((st?.inner_thought as string) || (dir?.inner_thought as string) || "").trim();
+        if (th && th !== _lastThought) { if (_lastThought !== null) _lastImpulseMs = now; _lastThought = th; }
+        presenceMode = derivePresenceMode(st, dir, _lastImpulseMs, now);
+    }
+    $effect(() => { void agentStateP; void getDirectives(); presenceTick(); });
+    onMount(() => { const id = setInterval(presenceTick, 1000); return () => clearInterval(id); });
 
     // ── ГОРН focus-room: сайдбар геть, жаринки-нав reveal на hover/edge-touch ──
     const NAV = [
@@ -349,6 +374,12 @@
 {:else}
     <!-- ── App Shell ── -->
     <div class="shell" class:gorn-focus={gornFocus}>
+        <PresenceLayer
+            mode={presenceMode}
+            accent={ringAccent}
+            focused={presenceFocused}
+            wakeNonce={ringWake}
+        />
         {#if gornFocus}
             <!-- edge-тригер: hover (десктоп) / дотик краю (мобілка) кличе жаринки -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -802,6 +833,8 @@
         flex-direction: column;
         padding: 16px 12px;
         gap: 8px;
+        position: relative;
+        z-index: 2; /* над PresenceLayer */
         transition:
             margin-left 0.45s cubic-bezier(0.4, 0, 0.2, 1),
             opacity 0.35s ease;
@@ -1015,9 +1048,9 @@
         display: flex;
         flex-direction: column;
         overflow: hidden;
-        /* Ambient «світло зсередини» живе тут (стабільно, не скролиться),
-           контент прозорий → аура просвічує крізь скляні картки */
-        background: var(--ambient), var(--bg);
+        position: relative;
+        z-index: 2; /* над PresenceLayer (z:1); прозорий фон → кільце просвічує */
+        background: transparent;
     }
     .content {
         flex: 1;

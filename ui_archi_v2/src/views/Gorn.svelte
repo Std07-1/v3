@@ -7,7 +7,6 @@
 -->
 <script lang="ts">
     import { onMount } from "svelte";
-    import PresenceRing from "../features/presence/PresenceRing.svelte";
     import {
         derivePresenceMode,
         presenceModeLabel,
@@ -118,10 +117,7 @@
 </script>
 
 <div class="gorn">
-    <div class="ring-wrap">
-        <PresenceRing {mode} {accent} {wakeNonce} />
-    </div>
-
+    <!-- кільце тепер дає постійний PresenceLayer (App-рівень); тут лише слова -->
     <div class="words">
         <div class="status" class:asleep={mode === "sleep"}>
             {presenceModeLabel(mode)}
@@ -147,16 +143,11 @@
     .gorn {
         flex: 1;
         min-height: 0;
-        display: grid;
-        grid-template-rows: 1fr auto;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end; /* слова під кільцем (кільце з PresenceLayer по центру) */
         align-items: center;
-        padding: 0 16px 4vh;
-    }
-    .ring-wrap {
-        min-height: 0;
-        width: 100%;
-        height: 100%;
-        max-height: 56vh;
+        padding: 0 16px 7vh;
     }
     .words {
         text-align: center;
@@ -217,7 +208,6 @@
         opacity: 0.75;
     }
     @media (max-width: 768px) {
-        .ring-wrap { max-height: 44vh; }
         .thought { font-size: 16px; }
     }
 </style>
