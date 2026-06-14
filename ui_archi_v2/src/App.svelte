@@ -31,6 +31,35 @@
         window.location.hash = path;
     }
 
+    // ── ГОРН focus-room: сайдбар геть, жаринки-нав reveal на hover/edge-touch ──
+    const NAV = [
+        { path: "/gorn", icon: "flame", label: "ГОРН" },
+        { path: "/chat", icon: "chat", label: "Chat" },
+        { path: "/feed", icon: "feed", label: "Feed" },
+        { path: "/thinking", icon: "thinking", label: "Thinking" },
+        { path: "/relationship", icon: "relationship", label: "Relationship" },
+        { path: "/mind", icon: "mind", label: "Mind" },
+        { path: "/workspace", icon: "workspace", label: "Workspace" },
+        { path: "/logs", icon: "logs", label: "Logs" },
+    ];
+    let gornFocus = $derived(route === "/gorn" || route === "");
+    let navRevealed = $state(false);
+    let navHideTimer: ReturnType<typeof setTimeout> | null = null;
+    function scheduleNavHide(delay = 2600) {
+        if (navHideTimer) clearTimeout(navHideTimer);
+        navHideTimer = setTimeout(() => { navRevealed = false; }, delay);
+    }
+    function revealNav() {
+        navRevealed = true;
+        scheduleNavHide();
+    }
+    function holdNav() {
+        if (navHideTimer) { clearTimeout(navHideTimer); navHideTimer = null; }
+    }
+    function isNavActive(path: string): boolean {
+        return route === path || (path === "/gorn" && route === "");
+    }
+
     // ── chat draft + handoff state ──
     let chatDraft = $state("");
     let chatHandoff = $state<ChatHandoff | null>(null);
@@ -319,7 +348,36 @@
     </div>
 {:else}
     <!-- ── App Shell ── -->
-    <div class="shell">
+    <div class="shell" class:gorn-focus={gornFocus}>
+        {#if gornFocus}
+            <!-- edge-тригер: hover (десктоп) / дотик краю (мобілка) кличе жаринки -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+                class="edge-trigger"
+                onmouseenter={revealNav}
+                ontouchstart={revealNav}
+            ></div>
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <nav
+                class="ember-nav"
+                class:revealed={navRevealed}
+                onmouseenter={holdNav}
+                onmouseleave={() => scheduleNavHide()}
+                ontouchstart={holdNav}
+            >
+                {#each NAV as item}
+                    <button
+                        class="ember"
+                        class:active={isNavActive(item.path)}
+                        title={item.label}
+                        aria-label={item.label}
+                        onclick={() => nav(item.path)}
+                    >
+                        <Icon name={item.icon} size={20} />
+                    </button>
+                {/each}
+            </nav>
+        {/if}
         <nav class="sidebar">
             <div class="brand">
                 <div class="brand-orb"></div>
@@ -744,6 +802,78 @@
         flex-direction: column;
         padding: 16px 12px;
         gap: 8px;
+        transition:
+            margin-left 0.45s cubic-bezier(0.4, 0, 0.2, 1),
+            opacity 0.35s ease;
+    }
+
+    /* ── ГОРН focus-room: сайдбар з'їжджає, кільце на весь простір ── */
+    .shell.gorn-focus .sidebar {
+        margin-left: -182px;
+        opacity: 0;
+        pointer-events: none;
+    }
+    .edge-trigger {
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 24px;
+        z-index: 50;
+    }
+    .ember-nav {
+        position: fixed;
+        left: 0;
+        top: 50%;
+        transform: translate(-118%, -50%);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 10px 8px;
+        z-index: 60;
+        background: color-mix(in srgb, var(--surface) 52%, transparent);
+        backdrop-filter: blur(16px) saturate(140%);
+        -webkit-backdrop-filter: blur(16px) saturate(140%);
+        border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--border));
+        border-left: none;
+        border-radius: 0 16px 16px 0;
+        box-shadow: 0 24px 60px -26px rgba(0, 0, 0, 0.6);
+        opacity: 0;
+        transition:
+            transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1),
+            opacity 0.3s ease;
+    }
+    .ember-nav.revealed {
+        transform: translate(0, -50%);
+        opacity: 1;
+    }
+    .ember {
+        width: 40px;
+        height: 40px;
+        display: grid;
+        place-items: center;
+        background: none;
+        border: none;
+        border-radius: 12px;
+        color: color-mix(in srgb, var(--accent) 50%, var(--text-muted));
+        opacity: 0.62;
+        cursor: pointer;
+        transition:
+            opacity 0.15s,
+            background 0.15s,
+            color 0.15s,
+            transform 0.15s;
+    }
+    .ember:hover {
+        opacity: 1;
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+        color: var(--text);
+        transform: translateX(2px);
+    }
+    .ember.active {
+        opacity: 1;
+        color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
     }
     .brand {
         display: flex;
@@ -1057,6 +1187,13 @@
     @media (max-width: 768px) {
         .sidebar {
             display: none;
+        }
+        /* focus-room: повна імерсія — нав через дотик краю, bottom-nav геть */
+        .shell.gorn-focus .bottom-nav {
+            display: none;
+        }
+        .edge-trigger {
+            width: 32px;
         }
         .right-panel {
             --mobile-nav-space: calc(60px + env(safe-area-inset-bottom));
