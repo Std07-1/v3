@@ -15,15 +15,16 @@
     import Thinking from "./views/Thinking.svelte";
     import Relationship from "./views/Relationship.svelte";
     import Chat from "./views/Chat.svelte";
+    import Gorn from "./views/Gorn.svelte";
     import Mind from "./views/Mind.svelte";
     import Workspace from "./views/Workspace.svelte";
     import Logs from "./views/Logs.svelte";
     import Icon from "./lib/Icon.svelte";
 
     // ── routing (hash-based) ──
-    let route = $state(window.location.hash.replace("#", "") || "/chat");
+    let route = $state(window.location.hash.replace("#", "") || "/gorn");
     window.addEventListener("hashchange", () => {
-        route = window.location.hash.replace("#", "") || "/chat";
+        route = window.location.hash.replace("#", "") || "/gorn";
     });
 
     function nav(path: string) {
@@ -328,7 +329,16 @@
                 <li>
                     <button
                         class="nav-item"
-                        class:active={route === "/chat" || route === ""}
+                        class:active={route === "/gorn" || route === ""}
+                        onclick={() => nav("/gorn")}
+                    >
+                        <span class="nav-icon"><Icon name="flame" /></span> ГОРН
+                    </button>
+                </li>
+                <li>
+                    <button
+                        class="nav-item"
+                        class:active={route === "/chat"}
                         onclick={() => nav("/chat")}
                     >
                         <span class="nav-icon"><Icon name="chat" /></span> Chat
@@ -501,15 +511,18 @@
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
             class="right-panel"
-            class:chat-route={route === "/chat" || route === ""}
+            class:chat-route={route === "/chat"}
             class:keyboard-open={keyboardOpen}
         >
             <main
                 class="content"
-                class:chat-layout={route === "/chat" || route === ""}
+                class:gorn-layout={route === "/gorn" || route === ""}
+                class:chat-layout={route === "/chat"}
                 class:logs-layout={route === "/logs"}
             >
-                {#if route === "/chat" || route === ""}
+                {#if route === "/gorn" || route === ""}
+                    <Gorn />
+                {:else if route === "/chat"}
                     <Chat {...getChatProps()} />
                 {:else if route === "/feed"}
                     <Feed onchat={openChatHandoff} />
@@ -535,7 +548,14 @@
             <!-- ── Bottom Nav (mobile only — icon-only with underline) ── -->
             <nav class="bottom-nav">
                 <button
-                    class:active={route === "/chat" || route === ""}
+                    class:active={route === "/gorn" || route === ""}
+                    onclick={() => nav("/gorn")}
+                    aria-label="ГОРН"
+                >
+                    <span class="bn-pill"><span class="bn-icon"><Icon name="flame" size={22} /></span></span>
+                </button>
+                <button
+                    class:active={route === "/chat"}
                     onclick={() => nav("/chat")}
                     aria-label="Chat"
                 >
@@ -876,6 +896,12 @@
     }
     /* Chat needs its own internal scroll — disable outer scroll */
     .content.chat-layout {
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+    /* ГОРН — присутність на весь екран, без зовнішнього скролу */
+    .content.gorn-layout {
         overflow: hidden;
         display: flex;
         flex-direction: column;
