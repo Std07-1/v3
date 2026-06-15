@@ -23,12 +23,14 @@
         accent = "#7c6fff",
         focused = false,
         wakeNonce = 0,
+        idle = false,
         onArchiClick,
     } = $props<{
         mode?: PresenceMode;
         accent?: string;
         focused?: boolean;
         wakeNonce?: number;
+        idle?: boolean;
         onArchiClick?: () => void;
     }>();
 
@@ -65,6 +67,8 @@
     let wakeBurstTimers: ReturnType<typeof setTimeout>[] = [];
     let hovered = false;   // курсор над Архі (тягнешся забрати увагу)
     let hoverGlow = 0;     // згладжена органічна реакція кільця на наведення
+    let idleDim = 1;       // idle-dim: кільце тьмяніє коли користувач довго без уваги
+    let fxDirty = false;   // перф: чи треба чистити канвас іскор (тільки коли були іскри)
     let failed = $state(false);
 
     const cur = { fx: 0.5, fy: 0.5, r: 0.2, color: SLEEP_RGB.slice(), pulse: 0.42, alive: 0.16 };
@@ -137,7 +141,9 @@ void main(){
     }
     function resize(): void {
         if (!gl) return;
-        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        // перф: кільце = м'який glow, високий dpr невидимий → кліпимо (моб 1.0, десктоп 1.5)
+        const isMobile = window.matchMedia("(max-width: 768px)").matches;
+        dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1 : 1.5);
         cssW = window.innerWidth; cssH = window.innerHeight;
         const bw = Math.round(cssW * dpr), bh = Math.round(cssH * dpr);
         ring.width = bw; ring.height = bh; gl.viewport(0, 0, bw, bh);
@@ -171,6 +177,11 @@ void main(){
     }
     function drawSparks(dt: number): void {
         if (!fxc) return;
+        if (sparks.length === 0) {           // перф: нема іскор → не чистимо канвас щокадру
+            if (fxDirty) { fxc.clearRect(0, 0, cssW, cssH); fxDirty = false; }
+            return;
+        }
+        fxDirty = true;
         for (let i = sparks.length - 1; i >= 0; i--) {
             const s = sparks[i];
             s.x += s.vx; s.y += s.vy; s.vy += 0.05; s.vx *= 0.965; s.vy *= 0.965; s.life -= dt / s.max;
@@ -240,8 +251,9 @@ void main(){
         // видиме дихання радіуса (живий навіть на home; мікро у сні через cur.alive)
         // + органічна реакція на наведення (плавне розгоряння+набухання, не плоский glow)
         hoverGlow = lerp(hoverGlow, hovered ? 1 : 0, 0.1);
+        idleDim = lerp(idleDim, idle ? 0.5 : 1, 0.04); // плавне тьмяніння без уваги
         const rOut = cur.r * (1 + 0.03 * breath * cur.alive + hoverGlow * 0.05);
-        const pulseOut = cur.pulse + hoverGlow * 0.45;
+        const pulseOut = (cur.pulse + hoverGlow * 0.45) * idleDim;
         const m = Math.min(cssW, cssH);
         const ucx = (cur.fx * cssW - cssW / 2) / m, ucy = (cssH / 2 - cur.fy * cssH) / m;
         gl.uniform2f(U.u_res, ring.width, ring.height); gl.uniform1f(U.u_time, now);

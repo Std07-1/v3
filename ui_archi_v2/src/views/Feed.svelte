@@ -504,8 +504,7 @@
         gap: 10px;
         padding: 10px 20px;
         background: rgba(251, 191, 36, 0.08);
-        backdrop-filter: blur(12px) saturate(130%);
-        -webkit-backdrop-filter: blur(12px) saturate(130%);
+        /* перф: без backdrop-filter (re-raster при скролі); фон і так над щільним вікном */
         border-bottom: 2px solid rgba(251, 191, 36, 0.3);
         box-shadow: 0 10px 30px -20px rgba(251, 191, 36, 0.55);
         flex-shrink: 0;
@@ -596,6 +595,9 @@
         padding: 10px 24px;
         border-bottom: 1px solid var(--border);
         transition: background 0.1s;
+        /* перф: не рендерити картки поза екраном (віртуалізація-лайт) — довгий список летить */
+        content-visibility: auto;
+        contain-intrinsic-size: auto 64px;
     }
     .event-card:hover {
         background: var(--surface);

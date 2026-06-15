@@ -78,6 +78,24 @@
     }
     $effect(() => { syncWindow(route); });
 
+    // ── idle-dim: сцена/кільце тьмяніє коли користувач довго без уваги (90с) ──
+    let idle = $state(false);
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    function bumpIdle(): void {
+        if (idle) idle = false;
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => { idle = true; }, 90_000);
+    }
+    onMount(() => {
+        const evs = ["pointermove", "pointerdown", "keydown", "wheel", "touchstart"];
+        for (const e of evs) window.addEventListener(e, bumpIdle, { passive: true });
+        bumpIdle();
+        return () => {
+            for (const e of evs) window.removeEventListener(e, bumpIdle);
+            if (idleTimer) clearTimeout(idleTimer);
+        };
+    });
+
     // ── ГОРН focus-room: сайдбар геть, жаринки-нав reveal на hover/edge-touch ──
     const NAV = [
         { path: "/gorn", icon: "flame", label: "ГОРН" },
@@ -394,12 +412,13 @@
     </div>
 {:else}
     <!-- ── App Shell ── -->
-    <div class="shell" class:viewing={presenceFocused}>
+    <div class="shell" class:viewing={presenceFocused} class:idle={idle}>
         <PresenceLayer
             mode={presenceMode}
             accent={ringAccent}
             focused={presenceFocused}
             wakeNonce={ringWake}
+            idle={idle}
             onArchiClick={() => nav("/gorn")}
         />
 
@@ -759,8 +778,10 @@
         animation: field-breathe 6.5s ease-in-out infinite;
     }
     @keyframes field-breathe {
-        0%, 100% { transform: scale(1); filter: brightness(0.82); }
-        50% { transform: scale(1.07); filter: brightness(1.3); }
+        /* перф: лише масштаб (GPU-composited, дешево) — без filter:brightness (дорогий repaint).
+           10% хід добре видно на м'якій аурі; opacity лишається для плавного fade-in (.on transition) */
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.1); }
     }
 
     /* ── ДІМ-шар: ГОРН (кільце по центру дає PresenceLayer, тут слова) ── */
@@ -787,18 +808,16 @@
         align-items: center;
         justify-content: center;
         pointer-events: none; /* поза вікном кліки проходять до кільця-хотспота */
+        transition: opacity 0.7s ease; /* idle-dim */
     }
+    /* idle-dim: користувач довго без уваги → сцена м'яко тьмяніє (кільце тьмяніє в PresenceLayer) */
+    .shell.idle .window-overlay { opacity: 0.82; }
+    .shell.idle:not(.viewing) .home-layer { opacity: 0.5; } /* лише на home (у view воно й так сховане) */
     .window-dock {
         position: relative; /* шринк-врап вікна → ✕ виноситься за його кут */
         pointer-events: auto;
-        transform-origin: center center;
-        /* вікно стоїть майже спокійно (Стас: не дихає / ледь) — 0.25%, повільно.
-           «Дихають разом» несе поле-аура (.presence-field), не саме вікно. */
-        animation: dock-breathe 7s ease-in-out infinite;
-    }
-    @keyframes dock-breathe {
-        0%, 100% { transform: scale(1); }
-        50% { transform: scale(1.0025); }
+        /* БЕЗ дихання-масштабу: неперервний scale на батьку вікна → суб-піксельний ре-растер →
+           РОЗМИТИЙ текст (це й була причина). Вікно стоїть чітко; «дихають разом» несе поле-аура. */
     }
     .center-window {
         position: relative;
@@ -806,9 +825,10 @@
         width: min(70vw, 1240px);
         height: min(90vh, 920px);
         /* Преміум-картка «вийнята з глибини»: скло + глибока тінь + mood-halo + forge-тепло */
-        background: color-mix(in srgb, var(--surface) 88%, transparent);
-        backdrop-filter: blur(24px) saturate(150%);
-        -webkit-backdrop-filter: blur(24px) saturate(150%);
+        /* перф: БЕЗ backdrop-filter — blur(24) re-раститься щокадру при скролі довгих списків
+           (Feed = найгірше). Над темним тлом скло майже невидиме → робимо фон щільнішим,
+           картка лишається преміум через border + тінь + forge-кромку. */
+        background: color-mix(in srgb, var(--surface) 94%, transparent);
         border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
         border-radius: 22px;
         box-shadow:
@@ -819,28 +839,26 @@
         overflow: hidden;
         opacity: 0;
         visibility: hidden;
-        transform: scale(0.66);
-        filter: blur(22px);
+        transform: scale(0.9);
+        /* перф: БЕЗ filter:blur — анімація блюру = re-raster щокадру (стопор на переході).
+           Recede на закритті = лише scale+opacity (GPU-composited, плавно). */
         transition:
-            opacity 0.5s ease,
-            filter 0.5s ease,
-            transform 0.6s cubic-bezier(0.2, 0.85, 0.25, 1),
-            visibility 0.5s;
+            opacity 0.45s ease,
+            transform 0.5s cubic-bezier(0.2, 0.85, 0.25, 1),
+            visibility 0.45s;
     }
     .center-window.shown {
         opacity: 1;
         visibility: visible;
-        transform: scale(1);
-        filter: blur(0);
-        /* вхід = depth (V1, обрано Стасом на всі views): перекриває transition на відкритті;
-           закриття = recede через transition (коли .shown знято) */
-        animation: win-enter 0.74s cubic-bezier(0.16, 0.84, 0.24, 1.06) both;
+        transform: none; /* у спокої — БЕЗ трансформу → текст чіткий (3D-трансформ розмиває як текстуру) */
+        filter: none;
+        animation: win-enter 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) both;
     }
-    /* depth — справжня 3D-глибина: летить у Z з нахилом, тьмяне+блюр → наперед із догоном */
+    /* depth БЕЗ filter:blur (блюр-анімація = стопор). Глибина = 3D-рух (translateZ) + opacity;
+       кінець = transform:none → у спокої текст чіткий, без розмиття-текстури. */
     @keyframes win-enter {
-        from { opacity: 0; visibility: visible; transform: perspective(1200px) translateZ(-360px) rotateX(7deg); filter: blur(20px) brightness(0.62); }
-        58% { opacity: 1; }
-        to { opacity: 1; visibility: visible; transform: perspective(1200px) translateZ(0) rotateX(0deg); filter: blur(0) brightness(1); }
+        from { opacity: 0; visibility: visible; transform: perspective(1200px) translateZ(-320px) rotateX(6deg); }
+        to { opacity: 1; visibility: visible; transform: none; }
     }
     .window-body {
         width: 100%;
