@@ -23,11 +23,13 @@
         accent = "#7c6fff",
         focused = false,
         wakeNonce = 0,
+        onArchiClick,
     } = $props<{
         mode?: PresenceMode;
         accent?: string;
         focused?: boolean;
         wakeNonce?: number;
+        onArchiClick?: () => void;
     }>();
 
     type Behaviour = { rate: number; amp: number; pulse: number; alive: number };
@@ -47,11 +49,12 @@
     function viewTarget() {
         return window.matchMedia("(max-width: 768px)").matches
             ? { fx: 0.5, fy: 0.12, r: 0.065 }   // мобілка: якір угорі над вікном
-            : { fx: 0.12, fy: 0.5, r: 0.075 };  // desktop: відступ ліворуч, поряд із центр-вікном
+            : { fx: 0.09, fy: 0.5, r: 0.075 };  // desktop: відступає далі ліворуч (Стас: «віддали трошки»)
     }
 
     let ring: HTMLCanvasElement;
     let fxCanvas: HTMLCanvasElement;
+    let hotspot: HTMLDivElement | undefined;
     let fxc: CanvasRenderingContext2D | null = null;
     let gl: WebGLRenderingContext | null = null;
     let raf = 0;
@@ -59,6 +62,9 @@
     let startMs = 0, lastMs = 0, wakeAt = -10;
     let lastWakeNonce = 0;
     let audioCtx: AudioContext | null = null;
+    let wakeBurstTimers: ReturnType<typeof setTimeout>[] = [];
+    let hovered = false;   // курсор над Архі (тягнешся забрати увагу)
+    let hoverGlow = 0;     // згладжена органічна реакція кільця на наведення
     let failed = $state(false);
 
     const cur = { fx: 0.5, fy: 0.5, r: 0.2, color: SLEEP_RGB.slice(), pulse: 0.42, alive: 0.16 };
@@ -150,6 +156,19 @@ void main(){
                 vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd - 0.6, life: 1, max: 0.45 + Math.random() * 0.6, w: 0.8 + Math.random() * 1.8 });
         }
     }
+    function clearWakeBursts(): void {
+        for (const t of wakeBurstTimers) clearTimeout(t);
+        wakeBurstTimers = [];
+    }
+    // forge-«тяга»: рій іскор-жару + клац — зусилля, що тягне вікно з глибини.
+    // Стаґер (3 хвилі) = багатший імпульс, ніж один сплеск (патерн зі study).
+    function forgePull(): void {
+        clearWakeBursts();
+        burst(46, 1.0);
+        lockClick();
+        wakeBurstTimers.push(setTimeout(() => burst(28, 0.85), 90));
+        wakeBurstTimers.push(setTimeout(() => burst(18, 0.7), 190));
+    }
     function drawSparks(dt: number): void {
         if (!fxc) return;
         for (let i = sparks.length - 1; i >= 0; i--) {
@@ -199,7 +218,7 @@ void main(){
             lastWakeNonce = wakeNonce;
             if (startMs > 0) {
                 wakeAt = (performance.now() - startMs) / 1000;
-                burst(40, 1.0); lockClick();
+                forgePull();
             }
         }
     });
@@ -218,14 +237,25 @@ void main(){
         let breath = Math.sin(now * beh.rate);
         if (mode === "think") breath = 0.55 * Math.sin(now * 1.6) + 0.3 * Math.sin(now * 2.73 + 1.3) + 0.15 * Math.sin(now * 4.11 + 2.1);
         cur.pulse = lerp(cur.pulse, beh.pulse * (1 + beh.amp * breath) + wake * 0.6, 0.12);
+        // видиме дихання радіуса (живий навіть на home; мікро у сні через cur.alive)
+        // + органічна реакція на наведення (плавне розгоряння+набухання, не плоский glow)
+        hoverGlow = lerp(hoverGlow, hovered ? 1 : 0, 0.1);
+        const rOut = cur.r * (1 + 0.03 * breath * cur.alive + hoverGlow * 0.05);
+        const pulseOut = cur.pulse + hoverGlow * 0.45;
         const m = Math.min(cssW, cssH);
         const ucx = (cur.fx * cssW - cssW / 2) / m, ucy = (cssH / 2 - cur.fy * cssH) / m;
         gl.uniform2f(U.u_res, ring.width, ring.height); gl.uniform1f(U.u_time, now);
         gl.uniform3f(U.u_color, cur.color[0], cur.color[1], cur.color[2]);
-        gl.uniform2f(U.u_center, ucx, ucy); gl.uniform1f(U.u_radius, cur.r);
-        gl.uniform1f(U.u_pulse, cur.pulse); gl.uniform1f(U.u_wake, wake);
+        gl.uniform2f(U.u_center, ucx, ucy); gl.uniform1f(U.u_radius, rOut);
+        gl.uniform1f(U.u_pulse, pulseOut); gl.uniform1f(U.u_wake, wake);
         gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); gl.drawArrays(gl.TRIANGLES, 0, 3);
         drawSparks(dt);
+        // клік-зона приклеєна до кільця (його екранна позиція) — лише у фокусі
+        if (focused && hotspot) {
+            const o = ringScreen(), d = Math.max(72, o.r * 1.9);
+            hotspot.style.width = hotspot.style.height = `${d}px`;
+            hotspot.style.transform = `translate(${o.x - d / 2}px, ${o.y - d / 2}px)`;
+        }
         raf = requestAnimationFrame(frame);
     }
 
@@ -243,6 +273,7 @@ void main(){
     });
     onDestroy(() => {
         cancelAnimationFrame(raf);
+        clearWakeBursts();
         window.removeEventListener("resize", resize);
         window.removeEventListener("pointerdown", ensureAudio);
         audioCtx?.close().catch(() => {});
@@ -255,12 +286,31 @@ void main(){
     {#if failed}
         <div class="p-fallback" style="--c:{mode === 'sleep' ? '#4a5470' : mode === 'alert' ? '#e0644a' : accent}"></div>
     {/if}
+    <!-- клік-по-Арчі = забрати увагу назад (закрити вікно). Активна лише у фокусі. -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+        class="archi-hotspot"
+        class:on={focused}
+        bind:this={hotspot}
+        onpointerdown={() => onArchiClick?.()}
+        onpointerenter={() => (hovered = true)}
+        onpointerleave={() => (hovered = false)}
+        title="забрати увагу — назад у ГОРН"
+    ></div>
 </div>
 
 <style>
     .presence-layer { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
     .p-ring, .p-fx { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
     .p-ring.hidden { display: none; }
+    /* Клік-зона приклеєна до кільця через JS-transform (frame loop) — нуль дублювання геометрії. */
+    .archi-hotspot {
+        position: absolute; top: 0; left: 0; width: 0; height: 0;
+        border-radius: 50%; pointer-events: none; cursor: pointer;
+        transition: box-shadow 0.2s ease;
+    }
+    .archi-hotspot.on { pointer-events: auto; }
+    /* реакція на наведення — органічна, у самому кільці (WebGL hoverGlow), не CSS-glow */
     .p-fallback {
         position: absolute; top: 50%; left: 50%; width: 30%; aspect-ratio: 1;
         transform: translate(-50%, -50%); border-radius: 50%; border: 2px solid var(--c);

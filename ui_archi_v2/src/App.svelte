@@ -56,6 +56,28 @@
     $effect(() => { void agentStateP; void getDirectives(); presenceTick(); });
     onMount(() => { const id = setInterval(presenceTick, 1000); return () => clearInterval(id); });
 
+    // ── C2: ГОРН = дім (кільце в центрі), будь-який view = центр-вікно ──
+    // Арчі тягне вікно з глибини у фокус (іскри вже б'ють із nav), сам відступає вбік.
+    // ✕ або клік-по-Арчі забирають увагу → вікно тоне, кільце вертається в центр.
+    let panelRoute = $state<string | null>(null); // який view у вікні (null = дім)
+    let windowShown = $state(false);               // драйвить матеріалізацію з глибини
+    let winTimer: ReturnType<typeof setTimeout> | null = null;
+    function clearWinTimer() { if (winTimer) { clearTimeout(winTimer); winTimer = null; } }
+    function syncWindow(r: string): void {
+        clearWinTimer(); // race-fix: один перехід за раз (як clearTimers у study)
+        if (r === "/gorn" || r === "") {
+            windowShown = false; // вікно тоне в глибину
+            winTimer = setTimeout(() => {
+                if (route === "/gorn" || route === "") panelRoute = null;
+            }, 620);
+        } else {
+            panelRoute = r;      // контент вантажиться за blur (у глибині)
+            windowShown = false; // гарантуємо from-стан, щоб перехід відіграв
+            winTimer = setTimeout(() => { windowShown = true; }, 140);
+        }
+    }
+    $effect(() => { syncWindow(route); });
+
     // ── ГОРН focus-room: сайдбар геть, жаринки-нав reveal на hover/edge-touch ──
     const NAV = [
         { path: "/gorn", icon: "flame", label: "ГОРН" },
@@ -67,7 +89,6 @@
         { path: "/workspace", icon: "workspace", label: "Workspace" },
         { path: "/logs", icon: "logs", label: "Logs" },
     ];
-    let gornFocus = $derived(route === "/gorn" || route === "");
     let navRevealed = $state(false);
     let navHideTimer: ReturnType<typeof setTimeout> | null = null;
     function scheduleNavHide(delay = 2600) {
@@ -373,327 +394,123 @@
     </div>
 {:else}
     <!-- ── App Shell ── -->
-    <div class="shell" class:gorn-focus={gornFocus}>
+    <div class="shell" class:viewing={presenceFocused}>
         <PresenceLayer
             mode={presenceMode}
             accent={ringAccent}
             focused={presenceFocused}
             wakeNonce={ringWake}
+            onArchiClick={() => nav("/gorn")}
         />
-        {#if gornFocus}
-            <!-- edge-тригер: hover (десктоп) / дотик краю (мобілка) кличе жаринки -->
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div
-                class="edge-trigger"
-                onmouseenter={revealNav}
-                ontouchstart={revealNav}
-            ></div>
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <nav
-                class="ember-nav"
-                class:revealed={navRevealed}
-                onmouseenter={holdNav}
-                onmouseleave={() => scheduleNavHide()}
-                ontouchstart={holdNav}
-            >
-                {#each NAV as item}
-                    <button
-                        class="ember"
-                        class:active={isNavActive(item.path)}
-                        title={item.label}
-                        aria-label={item.label}
-                        onclick={() => nav(item.path)}
-                    >
-                        <Icon name={item.icon} size={20} />
-                    </button>
-                {/each}
-            </nav>
-        {/if}
-        <nav class="sidebar">
-            <div class="brand">
-                <div class="brand-orb"></div>
-                <span class="brand-name">Archi</span>
-            </div>
-            <ul class="nav-links">
-                <li>
-                    <button
-                        class="nav-item"
-                        class:active={route === "/gorn" || route === ""}
-                        onclick={() => nav("/gorn")}
-                    >
-                        <span class="nav-icon"><Icon name="flame" /></span> ГОРН
-                    </button>
-                </li>
-                <li>
-                    <button
-                        class="nav-item"
-                        class:active={route === "/chat"}
-                        onclick={() => nav("/chat")}
-                    >
-                        <span class="nav-icon"><Icon name="chat" /></span> Chat
-                    </button>
-                </li>
-                <li>
-                    <button
-                        class="nav-item"
-                        class:active={route === "/feed"}
-                        onclick={() => nav("/feed")}
-                    >
-                        <span class="nav-icon"><Icon name="feed" /></span> Feed
-                    </button>
-                </li>
-                <li>
-                    <button
-                        class="nav-item"
-                        class:active={route === "/thinking"}
-                        onclick={() => nav("/thinking")}
-                    >
-                        <span class="nav-icon"><Icon name="thinking" /></span> Thinking
-                    </button>
-                </li>
-                <li>
-                    <button
-                        class="nav-item"
-                        class:active={route === "/relationship"}
-                        onclick={() => nav("/relationship")}
-                    >
-                        <span class="nav-icon"><Icon name="relationship" /></span> Relationship
-                    </button>
-                </li>
-                <li>
-                    <button
-                        class="nav-item"
-                        class:active={route === "/mind"}
-                        onclick={() => nav("/mind")}
-                    >
-                        <span class="nav-icon"><Icon name="mind" /></span> Mind
-                    </button>
-                </li>
-                <li>
-                    <button
-                        class="nav-item"
-                        class:active={route === "/workspace"}
-                        onclick={() => nav("/workspace")}
-                    >
-                        <span class="nav-icon"><Icon name="workspace" /></span> Workspace
-                    </button>
-                </li>
-                <li>
-                    <button
-                        class="nav-item"
-                        class:active={route === "/logs"}
-                        onclick={() => nav("/logs")}
-                    >
-                        <span class="nav-icon"><Icon name="logs" /></span> Logs
-                    </button>
-                </li>
-            </ul>
 
-            <!-- ── Notification toggle ── -->
-            <button
-                class="notif-toggle"
-                class:active={notifEnabled}
-                onclick={toggleNotifications}
-                title={notifEnabled
-                    ? "Сповіщення увімкнено"
-                    : "Увімкнути сповіщення"}
-            >
-                <span class="notif-bell"><Icon name={notifEnabled ? "bell" : "belloff"} size={14} /></span>
-                <span class="notif-label"
-                    >{notifEnabled ? "Сповіщення" : "Увімкнути"}</span
-                >
-            </button>
+        <!-- Спільне поле (концепт 6): кільце+вікно в одній аурі світла, що м'яко дихає.
+             Несе «вони разом»; вікно саме стоїть спокійно. З'являється лише у фокусі. -->
+        <div class="presence-field" class:on={presenceFocused}></div>
 
-            <!-- ── Directives panel ── -->
-            {#if directives}
-                <div class="directives-panel">
-                    <div class="dir-title">Стан Арчі</div>
-                    {#if directives.kill_switch_active}
-                        <div class="dir-row danger">⛔ KILL SWITCH</div>
-                    {/if}
-                    {#if directives.economy_mode_active}
-                        <div class="dir-row warning">⚡ eco mode</div>
-                    {/if}
-                    {#if directives.mode}
-                        <div class="dir-row">
-                            <span class="dir-label">режим</span>
-                            <span class="dir-val badge-sm mode"
-                                >{directives.mode}</span
-                            >
-                        </div>
-                    {/if}
-                    {#if directives.mood}
-                        <div class="dir-row">
-                            <span class="dir-label">настрій</span>
-                            <span class="dir-val mood-val">
-                                <span
-                                    class="mood-dot"
-                                    data-mood={directives.mood}
-                                ></span>
-                                {directives.mood}
-                            </span>
-                        </div>
-                    {/if}
-                    {#if directives.focus_symbol}
-                        <div class="dir-row">
-                            <span class="dir-label">символ</span>
-                            <span class="dir-val badge-sm gold"
-                                >{directives.focus_symbol}</span
-                            >
-                        </div>
-                    {/if}
-                    {#if directives.active_scenario}
-                        {@const _sc = directives.active_scenario}
-                        {@const _scText = typeof _sc === 'object' && _sc !== null
-                            ? ((_sc as Record<string, unknown>).thesis
-                                ? String((_sc as Record<string, unknown>).thesis)
-                                : ((_sc as Record<string, unknown>).direction
-                                    ? String((_sc as Record<string, unknown>).direction)
-                                    : '—'))
-                            : String(_sc)}
-                        <div class="dir-row">
-                            <span class="dir-label">сценарій</span>
-                            <span class="dir-val scenario" title={_scText}
-                                >{_scText}</span
-                            >
-                        </div>
-                    {/if}
-                    {#if directives.token_usage_today != null}
-                        {@const _tok = directives.token_usage_today as
-                            | Record<string, number>
-                            | number}
-                        {@const _total =
-                            typeof _tok === "object" && _tok !== null
-                                ? (_tok.input_tokens ?? 0) +
-                                  (_tok.output_tokens ?? 0)
-                                : Number(_tok)}
-                        <div class="dir-row">
-                            <span class="dir-label">токени</span>
-                            <span class="dir-val"
-                                >{isNaN(_total)
-                                    ? "?"
-                                    : _total.toLocaleString()}</span
-                            >
-                        </div>
-                    {/if}
-                    {#if directives.inner_thought}
-                        <div class="dir-thought">
-                            "{directives.inner_thought}"
-                        </div>
-                    {/if}
-                </div>
-            {/if}
-
-            <div class="sidebar-footer">
-                <button
-                    class="btn-ghost small"
-                    onclick={() => {
-                        setToken("");
-                        token = "";
-                    }}
-                >
-                    Вийти
-                </button>
-            </div>
-        </nav>
-
+        <!-- жаринки-нав: hover (десктоп) кличе стрічку. На ВСІХ маршрутах (focus-everywhere). -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
-            class="right-panel"
-            class:chat-route={route === "/chat"}
-            class:keyboard-open={keyboardOpen}
+            class="edge-trigger"
+            onmouseenter={revealNav}
+            ontouchstart={revealNav}
+        ></div>
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <nav
+            class="ember-nav"
+            class:revealed={navRevealed}
+            onmouseenter={holdNav}
+            onmouseleave={() => scheduleNavHide()}
+            ontouchstart={holdNav}
         >
-            <main
-                class="content"
-                class:gorn-layout={route === "/gorn" || route === ""}
-                class:chat-layout={route === "/chat"}
-                class:logs-layout={route === "/logs"}
-            >
-                {#if route === "/gorn" || route === ""}
-                    <Gorn />
-                {:else if route === "/chat"}
-                    <Chat {...getChatProps()} />
-                {:else if route === "/feed"}
-                    <Feed onchat={openChatHandoff} />
-                {:else if route === "/thinking"}
-                    <Thinking
-                        onchat={(text: string) => {
-                            openChatDraft(text);
-                        }}
-                    />
-                {:else if route === "/relationship"}
-                    <Relationship onchat={openChatHandoff} />
-                {:else if route === "/mind"}
-                    <Mind onchat={openChatHandoff} />
-                {:else if route === "/workspace"}
-                    <Workspace onchat={openChatHandoff} />
-                {:else if route === "/logs"}
-                    <Logs onchat={openChatHandoff} />
-                {:else}
-                    <div class="empty-state">404 — не знайдено</div>
-                {/if}
-            </main>
+            {#each NAV as item}
+                <button
+                    class="ember"
+                    class:active={isNavActive(item.path)}
+                    title={item.label}
+                    aria-label={item.label}
+                    onclick={() => nav(item.path)}
+                >
+                    <Icon name={item.icon} size={20} />
+                </button>
+            {/each}
+        </nav>
 
-            <!-- ── Bottom Nav (mobile only — icon-only with underline) ── -->
-            <nav class="bottom-nav">
-                <button
-                    class:active={route === "/gorn" || route === ""}
-                    onclick={() => nav("/gorn")}
-                    aria-label="ГОРН"
-                >
-                    <span class="bn-pill"><span class="bn-icon"><Icon name="flame" size={22} /></span></span>
-                </button>
-                <button
-                    class:active={route === "/chat"}
-                    onclick={() => nav("/chat")}
-                    aria-label="Chat"
-                >
-                    <span class="bn-pill"><span class="bn-icon"><Icon name="chat" size={22} /></span></span>
-                </button>
-                <button
-                    class:active={route === "/feed"}
-                    onclick={() => nav("/feed")}
-                    aria-label="Feed"
-                >
-                    <span class="bn-pill"><span class="bn-icon"><Icon name="feed" size={22} /></span></span>
-                </button>
-                <button
-                    class:active={route === "/thinking"}
-                    onclick={() => nav("/thinking")}
-                    aria-label="Thinking"
-                >
-                    <span class="bn-pill"><span class="bn-icon"><Icon name="thinking" size={22} /></span></span>
-                </button>
-                <button
-                    class:active={route === "/relationship"}
-                    onclick={() => nav("/relationship")}
-                    aria-label="Relationship"
-                >
-                    <span class="bn-pill"><span class="bn-icon"><Icon name="relationship" size={22} /></span></span>
-                </button>
-                <button
-                    class:active={route === "/mind"}
-                    onclick={() => nav("/mind")}
-                    aria-label="Mind"
-                >
-                    <span class="bn-pill"><span class="bn-icon"><Icon name="mind" size={22} /></span></span>
-                </button>
-                <button
-                    class:active={route === "/workspace"}
-                    onclick={() => nav("/workspace")}
-                    aria-label="Workspace"
-                >
-                    <span class="bn-pill"><span class="bn-icon"><Icon name="workspace" size={22} /></span></span>
-                </button>
-                <button
-                    class:active={route === "/logs"}
-                    onclick={() => nav("/logs")}
-                    aria-label="Logs"
-                >
-                    <span class="bn-pill"><span class="bn-icon"><Icon name="logs" size={22} /></span></span>
-                </button>
-            </nav>
+        <!-- тихі універсальні контроли (були в сайдбарі): сповіщення + вихід -->
+        <div class="app-controls">
+            <button
+                class="ctl"
+                class:active={notifEnabled}
+                onclick={toggleNotifications}
+                title={notifEnabled ? "Сповіщення увімкнено" : "Увімкнути сповіщення"}
+                aria-label="Сповіщення"
+            >
+                <Icon name={notifEnabled ? "bell" : "belloff"} size={16} />
+            </button>
+            <button
+                class="ctl"
+                onclick={() => { setToken(""); token = ""; }}
+                title="Вийти"
+                aria-label="Вийти"
+            >
+                <Icon name="logout" size={16} />
+            </button>
         </div>
+        <!-- ДІМ: ГОРН — кільце по центру (PresenceLayer) + слова Арчі. Тане, коли є фокус. -->
+        <div class="home-layer" class:dim={presenceFocused}>
+            <Gorn />
+        </div>
+
+        <!-- ВІКНО: будь-який view = центр-вікно, що Арчі тягне з глибини у фокус.
+             ✕ або клік-по-Арчі (PresenceLayer) забирають увагу → вікно тоне. -->
+        <div class="window-overlay">
+            {#if panelRoute}
+                <div class="window-dock">
+                    <section class="center-window" class:shown={windowShown}>
+                        <div class="window-body">
+                            {#if panelRoute === "/chat"}
+                                <Chat {...getChatProps()} />
+                            {:else if panelRoute === "/feed"}
+                                <Feed onchat={openChatHandoff} />
+                            {:else if panelRoute === "/thinking"}
+                                <Thinking
+                                    onchat={(text: string) => {
+                                        openChatDraft(text);
+                                    }}
+                                />
+                            {:else if panelRoute === "/relationship"}
+                                <Relationship onchat={openChatHandoff} />
+                            {:else if panelRoute === "/mind"}
+                                <Mind onchat={openChatHandoff} />
+                            {:else if panelRoute === "/workspace"}
+                                <Workspace onchat={openChatHandoff} />
+                            {:else if panelRoute === "/logs"}
+                                <Logs onchat={openChatHandoff} />
+                            {/if}
+                        </div>
+                    </section>
+                    <!-- ✕ за кутом вікна (window-dock шринк-врап) → не б'ється з хедерами views -->
+                    <button
+                        class="window-close"
+                        class:visible={windowShown}
+                        onclick={() => nav("/gorn")}
+                        aria-label="Закрити"
+                        title="Закрити (або клік по Арчі)">✕</button>
+                </div>
+            {/if}
+        </div>
+
+        <!-- Bottom Nav (mobile only) -->
+        <nav class="bottom-nav">
+            {#each NAV as item}
+                <button
+                    class:active={isNavActive(item.path)}
+                    onclick={() => nav(item.path)}
+                    aria-label={item.label}
+                >
+                    <span class="bn-pill"><span class="bn-icon"><Icon name={item.icon} size={22} /></span></span>
+                </button>
+            {/each}
+        </nav>
     </div>
 {/if}
 
@@ -816,35 +633,48 @@
     .btn-primary:active { transform: translateY(0); }
     .auth-error { font-size: 12px; color: var(--danger); margin-top: 4px; }
 
-    /* ── Shell ── */
+    /* ── Shell (C2: фіксовані шари — кільце, дім, вікно — один поверх одного) ── */
     .shell {
-        display: flex;
+        position: relative;
         height: var(--app-vh, 100vh);
         overflow: hidden;
     }
 
-    /* ── Sidebar ── */
-    .sidebar {
-        width: 180px;
-        flex-shrink: 0;
-        background: var(--surface);
-        border-right: 1px solid var(--border);
+    /* ── Тихі універсальні контроли (top-right): сповіщення + вихід ── */
+    .app-controls {
+        position: fixed;
+        top: 14px;
+        right: 16px;
+        z-index: 65;
         display: flex;
-        flex-direction: column;
-        padding: 16px 12px;
-        gap: 8px;
-        position: relative;
-        z-index: 2; /* над PresenceLayer */
-        transition:
-            margin-left 0.45s cubic-bezier(0.4, 0, 0.2, 1),
-            opacity 0.35s ease;
+        gap: 6px;
+        opacity: 0.42;
+        transition: opacity 0.2s ease;
     }
-
-    /* ── ГОРН focus-room: сайдбар з'їжджає, кільце на весь простір ── */
-    .shell.gorn-focus .sidebar {
-        margin-left: -182px;
-        opacity: 0;
-        pointer-events: none;
+    .app-controls:hover {
+        opacity: 1;
+    }
+    .ctl {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        background: color-mix(in srgb, var(--surface) 55%, transparent);
+        backdrop-filter: blur(12px) saturate(140%);
+        -webkit-backdrop-filter: blur(12px) saturate(140%);
+        border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
+        border-radius: 10px;
+        color: var(--text-muted);
+        cursor: pointer;
+        transition: color 0.15s, border-color 0.15s, background 0.15s;
+    }
+    .ctl:hover {
+        color: var(--text);
+        border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+    }
+    .ctl.active {
+        color: var(--accent);
+        border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
     }
     .edge-trigger {
         position: fixed;
@@ -908,256 +738,142 @@
         color: var(--accent);
         background: color-mix(in srgb, var(--accent) 14%, transparent);
     }
-    .brand {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 6px 8px 14px;
-    }
-    .brand-orb {
-        width: 26px;
-        height: 26px;
-        border-radius: 50%;
-        flex-shrink: 0;
-        position: relative;
-        /* Приглушена сфера настрою — без білого ядра й halo, сидить у темі.
-           Login-orb лишається ярким героєм; цей — тиха периферійна присутність. */
-        background: radial-gradient(circle at 36% 32%,
-            color-mix(in srgb, var(--accent) 50%, #fff) 0%,
-            var(--accent) 48%,
-            color-mix(in srgb, var(--accent) 72%, #000) 100%);
-        /* Тільки тонкий rim для об'єму — нуль світіння в кутку */
-        box-shadow:
-            0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent),
-            0 2px 8px -3px color-mix(in srgb, var(--accent) 30%, transparent);
-        animation: brand-breathe 6s ease-in-out infinite;
-    }
-    .brand-orb::after {
-        content: '';
-        position: absolute;
+    /* ── Спільне поле (концепт 6): аура світла, що огортає кільце+вікно й дихає ── */
+    .presence-field {
+        position: fixed;
         inset: 0;
-        border-radius: 50%;
-        /* Тонкий sheen для об'єму, без screen-перепалу */
-        background: radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.22), transparent 46%);
+        z-index: 2; /* над кільцем (z:1), під вікном (z:3) */
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.7s ease;
+        /* радіус між кільцем (зліва) і вікном (центр) → обидва всередині одного поля */
+        background: radial-gradient(
+            58% 52% at 40% 50%,
+            color-mix(in srgb, var(--accent) 15%, transparent),
+            transparent 70%
+        );
     }
-    /* Тихе дихання: лише opacity + мікро-scale, БЕЗ пульсації світіння */
-    @keyframes brand-breathe {
-        0%, 100% { transform: scale(1); opacity: 0.78; }
-        50% { transform: scale(1.03); opacity: 0.92; }
+    .presence-field.on {
+        opacity: 1;
+        /* дихання поля = масштаб м'якого гало (без opacity-блимання) */
+        animation: field-breathe 6.5s ease-in-out infinite;
     }
-    .brand-name {
-        font-size: 16px;
-        font-weight: 700;
-        letter-spacing: -0.01em;
-        color: var(--text);
+    @keyframes field-breathe {
+        0%, 100% { transform: scale(1); filter: brightness(0.82); }
+        50% { transform: scale(1.07); filter: brightness(1.3); }
     }
-    .nav-links {
-        list-style: none;
+
+    /* ── ДІМ-шар: ГОРН (кільце по центру дає PresenceLayer, тут слова) ── */
+    .home-layer {
+        position: fixed;
+        inset: 0;
+        z-index: 2; /* над кільцем (z:1), під вікном (z:3) */
         display: flex;
         flex-direction: column;
-        gap: 2px;
-        flex: 1;
+        pointer-events: none; /* слова не інтерактивні; кліки йдуть до кільця */
+        transition: opacity 0.5s ease, filter 0.5s ease;
     }
-    .nav-item {
-        width: 100%;
+    .home-layer.dim {
+        opacity: 0;
+        filter: blur(6px);
+    }
+
+    /* ── ВІКНО-шар: view виринає з глибини у центр (Арчі тягне у фокус) ── */
+    .window-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 3;
         display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 10px;
-        background: none;
-        border: none;
-        border-radius: 6px;
-        color: var(--text-muted);
-        font-size: 13px;
-        cursor: pointer;
-        text-align: left;
-        transition:
-            background 0.1s,
-            color 0.1s;
-    }
-    .nav-item:hover {
-        background: var(--surface2);
-        color: var(--text);
-    }
-    .nav-item.active {
-        background: var(--accent-dim);
-        color: var(--text);
-    }
-    .nav-icon {
-        display: inline-flex;
         align-items: center;
         justify-content: center;
-        flex-shrink: 0;
+        pointer-events: none; /* поза вікном кліки проходять до кільця-хотспота */
     }
-    .sidebar-footer {
-        padding-top: 8px;
-        border-top: 1px solid var(--border);
+    .window-dock {
+        position: relative; /* шринк-врап вікна → ✕ виноситься за його кут */
+        pointer-events: auto;
+        transform-origin: center center;
+        /* вікно стоїть майже спокійно (Стас: не дихає / ледь) — 0.25%, повільно.
+           «Дихають разом» несе поле-аура (.presence-field), не саме вікно. */
+        animation: dock-breathe 7s ease-in-out infinite;
     }
-    .btn-ghost {
-        background: none;
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        color: var(--text-muted);
-        cursor: pointer;
-        padding: 6px 12px;
+    @keyframes dock-breathe {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.0025); }
     }
-    .btn-ghost:hover {
-        color: var(--text);
-        border-color: var(--text-muted);
-    }
-    .btn-ghost.small {
-        font-size: 12px;
-        padding: 4px 10px;
-    }
-
-    /* ── Notification toggle ── */
-    .notif-toggle {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        width: 100%;
-        padding: 6px 10px;
-        background: none;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        color: var(--text-muted);
-        font-size: 12px;
-        cursor: pointer;
-        transition:
-            border-color 0.15s,
-            color 0.15s;
-    }
-    .notif-toggle:hover {
-        border-color: var(--accent);
-        color: var(--text);
-    }
-    .notif-toggle.active {
-        border-color: var(--accent);
-        color: var(--accent);
-    }
-    .notif-bell {
-        font-size: 14px;
-    }
-    .notif-label {
-        font-weight: 500;
-    }
-
-    /* ── Content ── */
-    .right-panel {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        overflow: hidden;
+    .center-window {
         position: relative;
-        z-index: 2; /* над PresenceLayer (z:1); прозорий фон → кільце просвічує */
-        background: transparent;
-    }
-    .content {
-        flex: 1;
-        overflow-y: auto;
-        background: transparent;
-    }
-    /* Chat needs its own internal scroll — disable outer scroll */
-    .content.chat-layout {
+        /* C3 «більша присутність»: домінує на широких екранах, кільце дихає зліва */
+        width: min(70vw, 1240px);
+        height: min(90vh, 920px);
+        /* Преміум-картка «вийнята з глибини»: скло + глибока тінь + mood-halo + forge-тепло */
+        background: color-mix(in srgb, var(--surface) 88%, transparent);
+        backdrop-filter: blur(24px) saturate(150%);
+        -webkit-backdrop-filter: blur(24px) saturate(150%);
+        border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+        border-radius: 22px;
+        box-shadow:
+            0 60px 150px -50px rgba(0, 0, 0, 0.82),
+            0 0 120px -36px color-mix(in srgb, var(--accent) 30%, transparent),
+            0 -3px 40px -14px color-mix(in srgb, #ff9a4d 26%, transparent),
+            inset 0 1px 0 color-mix(in srgb, #ffcaa0 34%, transparent);
         overflow: hidden;
+        opacity: 0;
+        visibility: hidden;
+        transform: scale(0.66);
+        filter: blur(22px);
+        transition:
+            opacity 0.5s ease,
+            filter 0.5s ease,
+            transform 0.6s cubic-bezier(0.2, 0.85, 0.25, 1),
+            visibility 0.5s;
+    }
+    .center-window.shown {
+        opacity: 1;
+        visibility: visible;
+        transform: scale(1);
+        filter: blur(0);
+    }
+    .window-body {
+        width: 100%;
+        height: 100%;
         display: flex;
         flex-direction: column;
+        min-height: 0; /* щоб view (height:100%) скролив усередині */
     }
-    /* ГОРН — присутність на весь екран, без зовнішнього скролу */
-    .content.gorn-layout {
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
-    }
-    .content.logs-layout {
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
-    }
-
-    /* ── Directives panel ── */
-    .directives-panel {
-        margin: 8px 4px;
-        padding: 10px 10px;
-        background: var(--surface2);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-    }
-    .dir-title {
-        font-size: 10px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
+    .window-close {
+        position: absolute;
+        top: -14px;
+        right: -14px;
+        z-index: 6;
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--surface2) 92%, var(--bg));
+        border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+        box-shadow: 0 8px 22px -8px rgba(0, 0, 0, 0.6);
         color: var(--text-muted);
-        margin-bottom: 4px;
+        font-size: 15px;
+        line-height: 1;
+        cursor: pointer;
+        opacity: 0;
+        transform: scale(0.8);
+        transition:
+            color 0.15s,
+            border-color 0.15s,
+            background 0.15s,
+            opacity 0.3s ease 0.12s,
+            transform 0.3s cubic-bezier(0.2, 0.85, 0.25, 1) 0.12s;
     }
-    .dir-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 4px;
-        font-size: 11px;
+    .window-close.visible {
+        opacity: 1;
+        transform: scale(1);
+    }
+    .window-close:hover {
         color: var(--text);
-    }
-    .dir-row.danger {
-        color: #f87171;
-        font-weight: 600;
-    }
-    .dir-row.warning {
-        color: #fbbf24;
-        font-weight: 500;
-    }
-    .dir-label {
-        color: var(--text-muted);
-        flex-shrink: 0;
-    }
-    .dir-val {
-        text-align: right;
-        max-width: 90px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-    .dir-val.scenario {
-        color: var(--accent);
-        font-size: 10px;
-    }
-    .badge-sm {
-        font-size: 10px;
-        padding: 1px 5px;
-        border-radius: 4px;
-        white-space: nowrap;
-    }
-    .badge-sm.gold {
-        background: rgba(251, 191, 36, 0.12);
-        color: #fbbf24;
-    }
-    .badge-sm.mode {
-        background: var(--accent-dim);
-        color: var(--accent);
-    }
-    .dir-thought {
-        font-size: 10px;
-        color: var(--text-muted);
-        font-style: italic;
-        line-height: 1.4;
-        margin-top: 4px;
-        padding-top: 4px;
-        border-top: 1px solid var(--border);
-        overflow: hidden;
-        display: -webkit-box;
-        line-clamp: 3;
-        -webkit-line-clamp: 3;
-        -webkit-box-orient: vertical;
-    }
-
-    .empty-state {
-        padding: 60px;
-        text-align: center;
-        color: var(--text-muted);
+        border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+        background: var(--surface2);
     }
 
     /* ── Bottom Nav (hidden on desktop) ── */
@@ -1165,79 +881,56 @@
         display: none;
     }
 
-    /* ── Mood dot (pulsing) ── */
-    .mood-dot {
-        display: inline-block;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: var(--accent);
-        animation: mood-pulse 2s ease-in-out infinite;
-        vertical-align: middle;
-        margin-right: 4px;
-    }
-    .mood-val {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-    }
-
-    /* Mood colors — 16 станів, 4 набори (синхронізовано з MOOD_COLORS + бот whitelist) */
-    /* ⚙ робочий стан */
-    .mood-dot[data-mood="focused"] { background: #22cc8f; animation-duration: 2s; }
-    .mood-dot[data-mood="analytical"] { background: #2dd4bf; animation-duration: 2.4s; }
-    .mood-dot[data-mood="alert"] { background: #f5a623; animation-duration: 1.5s; }
-    .mood-dot[data-mood="cautious"] { background: #fbbf24; animation-duration: 1.8s; }
-    .mood-dot[data-mood="determined"] { background: #10b981; animation-duration: 1.8s; }
-    /* ◈ впевненість */
-    .mood-dot[data-mood="confident"] { background: #3b82f6; animation-duration: 2.2s; }
-    .mood-dot[data-mood="uncertain"] { background: #94a3b8; animation-duration: 2.6s; }
-    .mood-dot[data-mood="conflicted"] { background: #a78bfa; animation-duration: 1.4s; }
-    /* ✦ позитив */
-    .mood-dot[data-mood="calm"] { background: #60a5fa; animation-duration: 3s; }
-    .mood-dot[data-mood="excited"] { background: #c084fc; animation-duration: 1.2s; }
-    .mood-dot[data-mood="satisfied"] { background: #4ade80; animation-duration: 2.8s; }
-    .mood-dot[data-mood="hopeful"] { background: #5eead4; animation-duration: 2.5s; }
-    .mood-dot[data-mood="curious"] { background: #38bdf8; animation-duration: 1.6s; }
-    /* ⚠ напруга */
-    .mood-dot[data-mood="frustrated"] { background: #f87171; animation-duration: 0.8s; }
-    .mood-dot[data-mood="tense"] { background: #fb7185; animation-duration: 1s; }
-    .mood-dot[data-mood="weary"] { background: #8b8ba7; animation-duration: 3.2s; }
-
-    @keyframes mood-pulse {
-        0%,
-        100% {
-            opacity: 1;
-            transform: scale(1);
-        }
-        50% {
-            opacity: 0.5;
-            transform: scale(0.7);
-        }
-    }
-
     /* ── Mobile ── */
     @media (max-width: 768px) {
-        .sidebar {
+        /* мобілка: нав = bottom-nav; жаринки-стрічка десктопна — геть */
+        .edge-trigger,
+        .ember-nav {
             display: none;
         }
-        /* focus-room: повна імерсія — нав через дотик краю, bottom-nav геть */
-        .shell.gorn-focus .bottom-nav {
-            display: none;
+        .app-controls {
+            top: 10px;
+            right: 10px;
         }
-        .edge-trigger {
-            width: 32px;
+        /* у фокусі вікно-аркуш має власну ✕ — контроли ховаємо, щоб не накладались */
+        .shell.viewing .app-controls {
+            opacity: 0;
+            pointer-events: none;
         }
-        .right-panel {
-            --mobile-nav-space: calc(60px + env(safe-area-inset-bottom));
-        }
-        .right-panel.chat-route.keyboard-open {
-            --mobile-nav-space: 0px;
-        }
-        .content {
-            padding-bottom: var(--mobile-nav-space);
+
+        /* вікно = аркуш знизу; кільце-якір угорі лишається видимим */
+        .window-overlay {
+            align-items: flex-end;
+            padding-bottom: calc(56px + env(safe-area-inset-bottom));
             transition: padding-bottom 0.22s ease;
         }
+        .center-window {
+            width: 96vw;
+            height: calc(var(--app-vh, 100vh) * 0.72);
+            border-radius: 20px 20px 0 0;
+            transform-origin: bottom center;
+        }
+        /* мобілка: ✕ всередину кута (за кутом — зрізалось би краєм екрана на аркуші 96vw) */
+        .window-close {
+            top: 8px;
+            right: 8px;
+        }
+        /* мобілка: поле зміщене вгору — кільце-якір угорі, аркуш знизу */
+        .presence-field {
+            background: radial-gradient(
+                70% 46% at 50% 40%,
+                color-mix(in srgb, var(--accent) 15%, transparent),
+                transparent 70%
+            );
+        }
+        /* клавіатура: вікно на весь, bottom-nav та відступ геть */
+        :global(body.keyboard-open) .window-overlay {
+            padding-bottom: 0;
+        }
+        :global(body.keyboard-open) .center-window {
+            height: calc(var(--app-vh, 100vh) - 56px);
+        }
+
         .bottom-nav {
             display: flex;
             position: fixed;
@@ -1255,7 +948,7 @@
                 transform 0.22s ease,
                 opacity 0.22s ease;
         }
-        .right-panel.chat-route.keyboard-open .bottom-nav {
+        :global(body.keyboard-open) .bottom-nav {
             transform: translateY(120%);
             opacity: 0;
             pointer-events: none;
