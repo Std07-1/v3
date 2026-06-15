@@ -832,6 +832,15 @@
         visibility: visible;
         transform: scale(1);
         filter: blur(0);
+        /* вхід = depth (V1, обрано Стасом на всі views): перекриває transition на відкритті;
+           закриття = recede через transition (коли .shown знято) */
+        animation: win-enter 0.74s cubic-bezier(0.16, 0.84, 0.24, 1.06) both;
+    }
+    /* depth — справжня 3D-глибина: летить у Z з нахилом, тьмяне+блюр → наперед із догоном */
+    @keyframes win-enter {
+        from { opacity: 0; visibility: visible; transform: perspective(1200px) translateZ(-360px) rotateX(7deg); filter: blur(20px) brightness(0.62); }
+        58% { opacity: 1; }
+        to { opacity: 1; visibility: visible; transform: perspective(1200px) translateZ(0) rotateX(0deg); filter: blur(0) brightness(1); }
     }
     .window-body {
         width: 100%;
@@ -909,6 +918,10 @@
             height: calc(var(--app-vh, 100vh) * 0.72);
             border-radius: 20px 20px 0 0;
             transform-origin: bottom center;
+        }
+        /* мобілка: desktop-depth-вхід (перспектива) не пасує аркушу — лишаємо transition (sheet) */
+        .center-window.shown {
+            animation: none;
         }
         /* мобілка: ✕ всередину кута (за кутом — зрізалось би краєм екрана на аркуші 96vw) */
         .window-close {
