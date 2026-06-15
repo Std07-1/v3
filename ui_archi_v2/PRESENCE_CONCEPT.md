@@ -158,32 +158,44 @@ baseline 8==8 доведено git-stash, всі 8 пре-існуючі у Pres
 > delegated-handler — `el.click()` через eval працює.
 
 ## C3 — РОБОТА (15.06, схвалено Стасом живцем; коміт на main)
-✅ **Вигляд вікна**: «більша присутність» `min(70vw,1240px)×min(90vh,920px)` (65% на 1920);
-картка (скло88%+blur24+border accent22+radius22+forge-кромка); ✕ винесена за кут (`window-dock`).
-✅ **Зв'язок = «спільне поле»** (концепт 6, обрано з 6 ескізів): `.presence-field` — аура accent~15%
-між кільцем↔вікном, дихає (scale 7%+brightness). Вікно майже спокійне (0.25%); поле несе «разом».
-✅ **Кільце**: дихає РАДІУСОМ (видимо на home, мікро у сні через `cur.alive`); hover = органічна
-реакція в самому кільці (WebGL `hoverGlow` lerp: розгоряється+набухає), НЕ CSS-glow. focused fx=0.09.
-✅ **ГОРН-home** очищено: «погляд:»+пігулки геть (dead-code прибрано).
-✅ **Вхід вікна = depth (V1) на ВСІ views** (обрано з 4 ескізів `entry-study.html`: depth/з-кільця/iris/rise;
-пробували per-view chat=depth+думки=з-кільця → Стас обрав depth на все). Справжня 3D-глибина: летить
-у Z з нахилом+блюр+тьмяне → наперед із догоном (`@keyframes win-enter`). Закриття = recede через transition.
-✅ **Центрування** — Стас: «зараз ніби норм», лишили; дуже-щільний стан не проблема поки.
+✅ **Вигляд вікна**: «більша присутність» `min(70vw,1240px)×min(90vh,920px)` (65% на 1920); картка
+(border accent22 + radius22 + глибока тінь + forge-кромка); ✕ за кутом (`window-dock`). **БЕЗ backdrop-filter**
+(перф: blur(24) re-раститься щокадру скролу → Feed гальмувало); фон щільний 94%.
+✅ **Зв'язок = «спільне поле»** (концепт 6 з 6 ескізів): `.presence-field` — аура accent~15% між кільцем↔вікном,
+дихає МАСШТАБОМ (10%, БЕЗ filter:brightness — перф). Вікно стоїть ЧІТКО (не дихає — див. нижче чому).
+✅ **Кільце**: дихає РАДІУСОМ (видимо на home; мікро у сні через `cur.alive`); hover = органічна WebGL-реакція
+(`hoverGlow` lerp); idle-dim (`idleDim` lerp). focused fx=0.09. DPR-кліп (моб 1.0 / десктоп 1.5 — перф).
+✅ **ГОРН-home** очищено: «погляд:»+пігулки геть.
+✅ **Вхід вікна = depth (V1) на ВСІ views** — 3D-глибина (perspective+translateZ, БЕЗ filter:blur — блюр-анімація
+= стопор переходу), у спокої `transform:none`. (з 4 ескізів `entry-study.html`; per-view пробували → depth на все).
+✅ **ЧІТКІСТЬ ТЕКСТУ ВІКНА (корінь «вікна розмиті»)** = неперервний scale-подих `window-dock` (навіть 0.25%) →
+суб-піксельний ре-растер → розмитий текст. ПРИБРАНО. **УРОК: будь-який постійний scale на контейнері з текстом = блюр.**
+✅ **idle-dim** — сцена/кільце тьмяніють після 90с без уваги (App `bumpIdle`: pointermove/key/wheel/touch).
+✅ **Feed-перф** — `content-visibility:auto` на картках (off-screen не рендеряться) + scenario без backdrop;
+іскри не чистять канвас щокадру коли порожньо.
+✅ **Видалено `PresenceRing.svelte`** (мертвий після C2, нуль посилань).
+✅ **Центрування** — Стас «зараз норм», лишили.
 ❌ **ВІДКИНУТО (не повторювати):** opacity-flicker дихання · heat-shimmer feTurbulence («по нулям»)
 · світло-кромка spill · пряма лінія-міст · entry-варіанти V2-з-кільця/iris/rise (depth переміг).
 **Правило: зв'язок з ПОВЕДІНКИ двох тіл, не «третій елемент».**
 
-### C3 — ВІДКЛАДЕНО (Стас явно відхилив на цій сесії — взяти в наступній)
-(1) кільце-жива-присутність-біля-вікна (відклав ще раніше); (2) **per-view fit** — потребує демо-даних:
-насіяти фікстури Mind/Workspace/Logs/Relationship (зараз 0 записів), тоді щільність; (3) Slice B **idle-dim**
-(сцена тьмяніє без уваги); (4) прибрати застарілий `PresenceRing.svelte` (grep що не змонтований ПЕРЕД rm —
-після C2 центр дає PresenceLayer); (5) центрування на ультраширокому (як дозріє).
+### C3 — ВІДКЛАДЕНО (наступному агенту/сесії)
+(1) **per-view fit → ІНШОМУ АГЕНТУ** (Стас передав). Потребує демо-даних: насіяти фікстури
+Mind/Workspace/Logs/Relationship (зараз 0 записів у harness), тоді щільність кожного у новому розмірі вікна.
+(2) кільце-жива-присутність-біля-вікна (відклав ще раніше); (3) центрування на ультраширокому (як дозріє).
 
-### DEPLOY — статус
-Білд готовий+верифікований. **Шлях не тривіальний:** `ui_archi_v2` = ФОРК; `archi.aione-smc.com` →
-`/opt/smc-v3/ui_archi/dist` (ОРИГІНАЛ). Деплой v2 = cutover (замінити dist оригіналу на v2-dist, або
-repoint nginx) — це РІШЕННЯ + production-замінa живого UI. dist root-owned → scp /tmp + sudo cp + chmod 755.
-ЧЕКАЄ: (а) рішення cutover vs паралельний субдомен, (б) explicit GO Стаса.
+### DEPLOY — ✅ ЖИВИЙ на `gorn.aione-smc.com` (паралельний субдомен, 15.06)
+Рішення Стаса: **паралельний субдомен** — оригінал `archi.aione-smc.com` НЕдоторканий.
+- **VPS**: v2-dist → `/opt/smc-v3/ui_archi_v2/dist`; nginx `sites-enabled/gorn` (клон archi: server_name+root+CSP-host;
+  SSL = self-signed оригіналу `archi-selfsigned.crt`, CF Full приймає); `nginx -t`→reload.
+- **Деплой нового білда** = **scp dist** (НЕ git pull — dist gitignored):
+  `cd ui_archi_v2 && npm run build && scp -r dist/* aione-vps:/opt/smc-v3/ui_archi_v2/dist/ && ssh aione-vps 'chmod -R a+rX /opt/smc-v3/ui_archi_v2/dist'`
+- **DNS**: Стас додав CNAME `gorn`→`archi.aione-smc.com` proxied (Cloudflare). CF Universal SSL покриває `*.aione-smc.com`.
+- ✅ **LIVE** (відкрив з телефона). Коміти `411f3ce`/`6f0f7d1`/`747e56a` на main, **origin НЕ пушено** (push окремо — за словом Стаса).
+- ⚠ **Verify тільки SNI**: `curl -k --resolve gorn.aione-smc.com:443:127.0.0.1 https://gorn.aione-smc.com/` на VPS = ground-truth.
+  `-H "Host:"` без SNI → дефолтний 443=archi → БРЕШЕ (однаковий хеш).
+- ⚠ **Egress**: цей хмарний сендбокс має egress-allowlist (`host_not_allowed` 403) — gorn НЕ дістати ЗВІДСИ;
+  перевіряти ззовні (телефон/звич. браузер) або origin-side (SSH curl на VPS).
 
 ## Доведені референси (на диску, gitignored `.devharness/`)
 - **`transition-study.html`** — ПОВНА хореографія Slice C доведена: іскри-жар → тягне вікно в ЦЕНТР з глибини → Арчі відступає вбік → ✕/клік-по-Арчі. Desktop + `📱 вузький` (мобілка). Бери звідси шейдер/іскри/таймінги (race-fix: clearTimers на кожен перехід).
