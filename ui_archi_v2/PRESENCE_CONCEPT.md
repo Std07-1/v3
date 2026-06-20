@@ -215,3 +215,31 @@ ring side-shrunk (читабельно, не за вікном) · клік-по
 `src/views/Gorn.svelte` (текст ГОРН) · `src/App.svelte` (shell, nav, focus-room, PresenceLayer wiring).
 
 **Перший крок наступної сесії:** прочитати цей handoff + archi_self_image.md → почати C2 з (1) прибрати сайдбар-блок + focus-everywhere, (2) views як центр-вікна з кільцем збоку. Консультувати Арчі (web_inbox) на структурних рішеннях його тіла.
+
+---
+
+# 🏎️ HANDOFF (2026-06-17) — перф-сесія «ГОРН швидкий та ефективний»
+
+> Сесія перфу тіла. Усе закомічено+пушено `8c1d0ee` (origin/main), задеплоєно `index-CH-_cRQn.js` на gorn.
+
+**Що зроблено (фронт-only, причина → фікс):**
+1. **Кільце вішало** (повноекранний WebGL-шейдер@60fps + immortal rAF) → `PresenceLayer`: scissor-бокс довкола
+   обода (не full-screen quad) + адаптивний FPS-throttle (60 wake/іскри · 30 рух · 14 спокій · 6 sleep · 4 idle) +
+   frame-rate-independent лерпи. Двигун НЕ вимикається (Архі «жевріє»).
+2. **Справжній корінь підвисання (НЕ кільце!)** — `/api/archi/stream` реплеїть весь feed-бэклог (~500) на конект →
+   `Feed.svelte` робив O(n²) + сотні ре-рендерів. Фікс: O(1) dedup (Set) + батч-флаш (50мс) + cap 300 + **dotsk**
+   (відсік бэклогу за `ts ≤ maxSeenTs`) + race-fix (SSE підключаємо ПІСЛЯ `await refresh()`).
+3. **Windowing** — спільний `lib/lazyList.svelte.ts` (createLazyList) + `lib/actions/onScrollEnd.ts`: рендер 20 +
+   докладання на скрол. На Feed/Workspace/Logs/Thinking. `.lazy-sentinel` глобальний у `theme.css`.
+   (Mind/Relationship = дашборди дрібних секцій → N/A; Chat = реверс-скрол → лишено.)
+4. **Slim directives** — `state.svelte` lite/full split: фоновий 30с-поллінг `258KB → 2.8KB` (~90×); full 258KB
+   лише on-demand коли відкрито Feed/Chat/Workspace/Mind. App/Gorn/presence на lite (brief 7 ключів вистачає).
+
+**Метод-уроки (durable):** ring-фікс був НЕ в домінанту (діагноз читанням без профілю живого; «локально норм»
+брехало бо harness не стрімив SSE) — справжній корінь знайдено лише вимірявши SSE на VPS. **headless-прев'ю НЕ
+диспатчить scroll-події/IntersectionObserver на програмний scroll** (нема compositing) → infinite-scroll довів
+через `dispatchEvent(new Event('scroll'))` + `preview_resize` width/height (не preset) дає реальний viewport.
+
+**НЕ зроблено (наступні перф-варіанти, за бажанням):** memoize markdown (Thinking 332KB/Workspace — фронт, легко) ·
+ETag/304 + gzip-JSON + in-proc cache directives + платформний SSE root-фікс (усе ПЛАТФОРМА — під git-sync, бо
+рестарт core-daemon + drift). ⚠ accent дефолт у harness = pre-existing (App не чіпав) — перевірити на gorn.
