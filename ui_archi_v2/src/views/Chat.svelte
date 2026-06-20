@@ -28,7 +28,8 @@
 <script lang="ts">
     import { onMount, onDestroy, tick } from "svelte";
     import {
-        getDirectives,
+        getFullDirectives,
+        refreshDirectives,
         getAgentState,
         getLastDirectivesSyncMs,
         getLastAgentStateSyncMs,
@@ -66,7 +67,14 @@
     let inputText = $state("");
 
     // ── Shell snapshot (only for topbar pill + live-dot) ──
-    let directives = $derived(getDirectives());
+    // full directives тягнемо самі (топбар bias/symbol/session = full-поля),
+    // бо фоновий поллінг тепер lite. Лише поки Chat відкритий.
+    let directives = $derived(getFullDirectives());
+    $effect(() => {
+        refreshDirectives(false);
+        const id = setInterval(() => refreshDirectives(false), 30_000);
+        return () => clearInterval(id);
+    });
     let agentState = $derived(getAgentState());
     let lastDirSync = $derived(getLastDirectivesSyncMs());
     let lastStateSync = $derived(getLastAgentStateSyncMs());

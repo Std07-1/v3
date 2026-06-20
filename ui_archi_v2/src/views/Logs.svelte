@@ -2,6 +2,8 @@
     import { onMount, onDestroy } from "svelte";
     import { api, ApiError } from "../lib/api";
     import type { ChatHandoff, LogLine } from "../lib/types";
+    import { createLazyList } from "../lib/lazyList.svelte";
+    import { onScrollEnd } from "../lib/actions/onScrollEnd";
 
     let {
         onchat = (_handoff: ChatHandoff): void => {},
@@ -15,6 +17,14 @@
     let autoRefresh = $state(true);
     let refreshId: ReturnType<typeof setInterval>;
     let loadError = $state("");
+
+    // ── windowing: рендеримо лише видимі рядки, докладаємо на скрол ──
+    const lazy = createLazyList<LogLine>({ initial: 20, step: 20 });
+    $effect(() => {
+        void filter;
+        lazy.reset(); // зміна фільтра → з початку
+    });
+    const visibleLines = $derived(lazy.slice(lines));
 
     async function fetchLogs() {
         try {
@@ -141,7 +151,7 @@
         </div>
     </div>
 
-    <div class="logs-body">
+    <div class="logs-body" use:onScrollEnd={() => lazy.more(lines.length)}>
         {#if loading && lines.length === 0}
             <div class="empty-state">Завантаження…</div>
         {:else if loadError}
@@ -149,7 +159,7 @@
         {:else if lines.length === 0}
             <div class="empty-state">Порожньо</div>
         {:else}
-            {#each lines as line, i (i)}
+            {#each visibleLines as line, i (i)}
                 <div
                     class="log-line"
                     class:is-error={line.level === "ERROR"}
@@ -170,6 +180,9 @@
                     </button>
                 </div>
             {/each}
+            {#if lazy.hasMore(lines.length)}
+                <div class="lazy-sentinel">···</div>
+            {/if}
         {/if}
     </div>
 </div>

@@ -61,7 +61,7 @@
     let gl: WebGLRenderingContext | null = null;
     let raf = 0;
     let dpr = 1, cssW = 1, cssH = 1;
-    let startMs = 0, lastMs = 0, wakeAt = -10;
+    let startMs = 0, lastDraw = 0, wakeAt = -10;
     let lastWakeNonce = 0;
     let audioCtx: AudioContext | null = null;
     let wakeBurstTimers: ReturnType<typeof setTimeout>[] = [];
@@ -236,22 +236,39 @@ void main(){
 
     const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
     function frame(ms: number): void {
+        raf = requestAnimationFrame(frame); // re-arm завжди; малювання — за throttle нижче
         if (!gl) return;
-        if (startMs === 0) { startMs = ms; lastMs = ms; }
-        const now = (ms - startMs) / 1000, dt = Math.min(0.05, (ms - lastMs) / 1000); lastMs = ms;
-        const beh = BEHAVIOUR[mode] ?? BEHAVIOUR.calm, t = tgt();
-        cur.fx = lerp(cur.fx, t.fx, 0.07); cur.fy = lerp(cur.fy, t.fy, 0.07); cur.r = lerp(cur.r, t.r, 0.07);
+        if (startMs === 0) { startMs = ms; lastDraw = ms - 16; }
+        const now = (ms - startMs) / 1000;
+        const beh = BEHAVIOUR[mode as PresenceMode] ?? BEHAVIOUR.calm, t = tgt();
         const wake = Math.max(0, Math.exp(-(now - wakeAt) * 6.5));
         const tc = targetColor();
-        for (let i = 0; i < 3; i++) cur.color[i] = lerp(cur.color[i], tc[i], 0.045);
-        cur.alive = lerp(cur.alive, beh.alive, 0.045);
+
+        // ── Вісь 2: адаптивний FPS. Двигун НЕ вимикається (Архі: «жевріє, не гасне») —
+        //    дихання йде з абсолютного now, тож рідші кадри його НЕ сповільнюють/зупиняють,
+        //    лише роблять дешевшим (≥14fps на ≤0.65Гц = гладко). Кадри коштують там де є рух. ──
+        const moving =
+            Math.abs(cur.fx - t.fx) > 1e-3 || Math.abs(cur.fy - t.fy) > 1e-3 ||
+            Math.abs(cur.r - t.r) > 1e-3 || Math.abs(cur.alive - beh.alive) > 1e-2 ||
+            Math.abs(hoverGlow - (hovered ? 1 : 0)) > 1e-2 ||
+            Math.abs(idleDim - (idle ? 0.5 : 1)) > 1e-2 ||
+            Math.abs(cur.color[0] - tc[0]) > 8e-3 || Math.abs(cur.color[1] - tc[1]) > 8e-3 || Math.abs(cur.color[2] - tc[2]) > 8e-3;
+        const fps = (wake > 0.02 || sparks.length) ? 60 : moving ? 30 : idle ? 4 : (mode === "sleep" ? 6 : 14);
+        if (ms - lastDraw < 1000 / fps - 1) return;
+        const dt = Math.min(0.05, (ms - lastDraw) / 1000);
+        const fStep = dt * 60; // frame-rate-independent: throttle не сповільнює переходи (60fps→fStep=1, baseline)
+        lastDraw = ms;
+
+        cur.fx = lerp(cur.fx, t.fx, 0.07 * fStep); cur.fy = lerp(cur.fy, t.fy, 0.07 * fStep); cur.r = lerp(cur.r, t.r, 0.07 * fStep);
+        for (let i = 0; i < 3; i++) cur.color[i] = lerp(cur.color[i], tc[i], 0.045 * fStep);
+        cur.alive = lerp(cur.alive, beh.alive, 0.045 * fStep);
         let breath = Math.sin(now * beh.rate);
         if (mode === "think") breath = 0.55 * Math.sin(now * 1.6) + 0.3 * Math.sin(now * 2.73 + 1.3) + 0.15 * Math.sin(now * 4.11 + 2.1);
-        cur.pulse = lerp(cur.pulse, beh.pulse * (1 + beh.amp * breath) + wake * 0.6, 0.12);
+        cur.pulse = lerp(cur.pulse, beh.pulse * (1 + beh.amp * breath) + wake * 0.6, Math.min(0.6, 0.12 * fStep));
         // видиме дихання радіуса (живий навіть на home; мікро у сні через cur.alive)
         // + органічна реакція на наведення (плавне розгоряння+набухання, не плоский glow)
-        hoverGlow = lerp(hoverGlow, hovered ? 1 : 0, 0.1);
-        idleDim = lerp(idleDim, idle ? 0.5 : 1, 0.04); // плавне тьмяніння без уваги
+        hoverGlow = lerp(hoverGlow, hovered ? 1 : 0, Math.min(0.6, 0.1 * fStep));
+        idleDim = lerp(idleDim, idle ? 0.5 : 1, Math.min(0.6, 0.04 * fStep)); // плавне тьмяніння без уваги
         const rOut = cur.r * (1 + 0.03 * breath * cur.alive + hoverGlow * 0.05);
         const pulseOut = (cur.pulse + hoverGlow * 0.45) * idleDim;
         const m = Math.min(cssW, cssH);
@@ -260,7 +277,23 @@ void main(){
         gl.uniform3f(U.u_color, cur.color[0], cur.color[1], cur.color[2]);
         gl.uniform2f(U.u_center, ucx, ucy); gl.uniform1f(U.u_radius, rOut);
         gl.uniform1f(U.u_pulse, pulseOut); gl.uniform1f(U.u_wake, wake);
-        gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+        // ── Вісь 1: scissor до боксу кільця — GPU шейдить лише обід+glow, не весь екран.
+        //    reach = extent де edgeFade→0 (radius*2.7) + дихання(1.08) + wake + запас.
+        //    Повний clear (scissor вимкнено) щокадру стирає слід при русі → нуль привидів. ──
+        const reachPx = ((cur.r * 1.08 + wake * 0.04) * 2.7 + 0.05) * m;
+        const cxPx = cur.fx * cssW, cyPx = cur.fy * cssH; // scissor origin = bottom-left
+        const sx = Math.max(0, Math.floor((cxPx - reachPx) * dpr));
+        const sy = Math.max(0, Math.floor((cssH - cyPx - reachPx) * dpr));
+        const sw = Math.min(ring.width - sx, Math.ceil(2 * reachPx * dpr));
+        const sh = Math.min(ring.height - sy, Math.ceil(2 * reachPx * dpr));
+        gl.disable(gl.SCISSOR_TEST);
+        gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+        if (sw > 0 && sh > 0) {
+            gl.enable(gl.SCISSOR_TEST); gl.scissor(sx, sy, sw, sh);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+            gl.disable(gl.SCISSOR_TEST);
+        }
         drawSparks(dt);
         // клік-зона приклеєна до кільця (його екранна позиція) — лише у фокусі
         if (focused && hotspot) {
@@ -268,7 +301,6 @@ void main(){
             hotspot.style.width = hotspot.style.height = `${d}px`;
             hotspot.style.transform = `translate(${o.x - d / 2}px, ${o.y - d / 2}px)`;
         }
-        raf = requestAnimationFrame(frame);
     }
 
     onMount(() => {

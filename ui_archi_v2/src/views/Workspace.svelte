@@ -1,15 +1,17 @@
 <script lang="ts">
     import { api, ApiError } from "../lib/api";
     import type { ChatHandoff, WorkspaceItem, Directives } from "../lib/types";
-    import { getDirectives, refreshDirectives } from "../lib/state.svelte";
+    import { getFullDirectives, refreshDirectives } from "../lib/state.svelte";
     import { marked } from "marked";
     import { sanitizeHtml } from "../lib/sanitize";
+    import { createLazyList } from "../lib/lazyList.svelte";
+    import { onScrollEnd } from "../lib/actions/onScrollEnd";
 
     let {
         onchat = (_handoff: ChatHandoff): void => {},
     }: { onchat?: (handoff: ChatHandoff) => void } = $props();
 
-    let directives = $derived(getDirectives());
+    let directives = $derived(getFullDirectives());
     let loading = $state(true);
     let error = $state("");
     let showArchived = $state(false);
@@ -85,6 +87,15 @@
             .sort((a: WorkspaceItem, b: WorkspaceItem) => b.created_at - a.created_at),
     );
 
+    // ── windowing: рендеримо лише видимі активні items, докладаємо на скрол ──
+    const lazy = createLazyList<WorkspaceItem>({ initial: 20, step: 20 });
+    $effect(() => {
+        void filterKind;
+        void searchText;
+        lazy.reset();
+    });
+    const visibleActiveItems = $derived(lazy.slice(activeItems));
+
     const ICONS: Record<string, string> = {
         pin: "📌",
         note: "📝",
@@ -143,7 +154,7 @@
         loading = true;
         error = "";
         try {
-            await refreshDirectives();
+            await refreshDirectives(false); // full — Workspace потребує workspace_items
         } catch (e) {
             if (e instanceof ApiError && e.status === 401) {
                 error = "Невірний токен.";
@@ -210,7 +221,10 @@
     {/if}
 
     <!-- ── Workspace Items ── -->
-    <div class="items-list">
+    <div
+        class="items-list"
+        use:onScrollEnd={() => lazy.more(activeItems.length)}
+    >
         {#if loading && allItems().length === 0}
             <div class="empty-state">Завантаження…</div>
         {:else if activeItems.length === 0 && archivedItems.length === 0}
@@ -231,7 +245,7 @@
                 {/if}
             </div>
         {:else}
-            {#each activeItems as item (item.id)}
+            {#each visibleActiveItems as item (item.id)}
                 {@const task = isTask(item)}
                 {@const hasProgress = Array.isArray(item.progress_log) && item.progress_log.length > 0}
                 {@const isExpanded = expanded[item.id] ?? (task || hasProgress || item.content.length <= 300)}
@@ -331,6 +345,9 @@
                     {/if}
                 </div>
             {/each}
+            {#if lazy.hasMore(activeItems.length)}
+                <div class="lazy-sentinel">···</div>
+            {/if}
         {/if}
 
         <!-- ── Archived ── -->

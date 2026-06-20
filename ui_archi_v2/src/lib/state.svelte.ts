@@ -9,7 +9,11 @@ import { api } from "./api";
 import type { Directives, AgentState } from "./types";
 
 // ── reactive atoms ──
+// directives = LITE (brief, ~3KB): presence/home/mood — политься щочасто + SSE.
+// fullDirectives = FULL (~258KB): великі поля (workspace_items, історія) для
+// Feed/Chat/Workspace/Mind — тягнеться лише ON-DEMAND коли view відкрито, НЕ у фоні.
 let directives = $state<Directives | null>(null);
+let fullDirectives = $state<Directives | null>(null);
 let agentState = $state<AgentState | null>(null);
 let lastDirectivesSyncMs = $state(0);
 let lastAgentStateSyncMs = $state(0);
@@ -25,7 +29,8 @@ const POLL_INTERVAL_MS = 30_000;
 export async function refreshDirectives(brief = true): Promise<Directives | null> {
     try {
         const d = await api.directives(brief);
-        directives = d;
+        if (brief) directives = d; // lite → presence/home/mood
+        else fullDirectives = d; // full → детальні views (on-demand)
         lastDirectivesSyncMs = Date.now();
         directivesError = "";
         return d;
@@ -76,8 +81,10 @@ export function applyAgentState(s: AgentState | null): void {
 
 export function startPolling(intervalMs = POLL_INTERVAL_MS): void {
     stopPolling();
-    refreshAll(false);
-    pollTimer = setInterval(() => refreshAll(false), intervalMs);
+    // Фоновий поллінг = LITE (brief ~3KB), не full 258KB. Детальні views
+    // тягнуть full самі on-demand. Це знімає 258KB кожні 30с з гарячого шляху.
+    refreshAll(true);
+    pollTimer = setInterval(() => refreshAll(true), intervalMs);
 }
 
 export function stopPolling(): void {
@@ -90,7 +97,11 @@ export function stopPolling(): void {
 // ── read-only exports ──
 
 export function getDirectives(): Directives | null {
-    return directives;
+    return directives; // LITE — presence/home/mood
+}
+
+export function getFullDirectives(): Directives | null {
+    return fullDirectives; // FULL — Feed/Chat/Workspace/Mind (тягнуть on-demand)
 }
 
 export function getAgentState(): AgentState | null {

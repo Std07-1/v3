@@ -2,7 +2,7 @@
     import { onMount, onDestroy } from "svelte";
     import { api, ApiError } from "../lib/api";
     import {
-        getDirectives,
+        getFullDirectives,
         refreshDirectives,
         getAgentState,
         getLastDirectivesSyncMs,
@@ -135,7 +135,7 @@
         error = "";
         try {
             await refreshDirectives(false); // brief=0 → full state
-            data = getDirectives();
+            data = getFullDirectives();
             // Load owner note in parallel
             api.ownerNote()
                 .then((n) => {

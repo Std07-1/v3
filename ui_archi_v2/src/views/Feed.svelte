@@ -1,7 +1,9 @@
 ﻿<script lang="ts">
     import { api, ApiError, getToken } from "../lib/api";
-    import { getDirectives, refreshDirectives } from "../lib/state.svelte";
+    import { getFullDirectives, refreshDirectives } from "../lib/state.svelte";
     import type { ChatHandoff, FeedEvent, Directives } from "../lib/types";
+    import { createLazyList } from "../lib/lazyList.svelte";
+    import { onScrollEnd } from "../lib/actions/onScrollEnd";
 
     let {
         onchat = (_handoff: ChatHandoff): void => {},
@@ -12,10 +14,21 @@
     let error = $state("");
     let lastRefresh = $state("");
     let sseConnected = $state(false);
-    let directives = $derived(getDirectives());
+    let directives = $derived(getFullDirectives());
 
     // IDs of events that just arrived via SSE (for fade-in animation)
     let newEventIds = $state<Set<string | number>>(new Set());
+
+    // ── burst-proof SSE ──
+    // Платформа реплеїть весь feed-бэклог (~500 подій) залпом на конект.
+    // Без цього handler робив events.some() O(n) + ре-рендер на КОЖНУ подію →
+    // O(n²) + сотні ре-рендерів = фриз на відкритті. Тому: O(1) dedup (Set),
+    // батч у ОДИН реактивний апдейт (мікротаск), і cap списку.
+    const MAX_EVENTS = 300;
+    let seenKeys = new Set<string | number>();
+    let pendingNew: FeedEvent[] = [];
+    let flushScheduled = false;
+    let maxSeenTs = 0; // найновіший завантажений ts → відсік бэклог-реплею стріму
 
     // ── Filters + Search ──
     let activeFilter = $state("all");
@@ -49,6 +62,15 @@
         }
         return result;
     });
+
+    // ── windowing: у DOM лише видиме, докладаємо на скрол вниз (ГОРН-ефективність) ──
+    const lazy = createLazyList<FeedEvent>({ initial: 20, step: 20 });
+    $effect(() => {
+        void activeFilter;
+        void searchQuery;
+        lazy.reset(); // новий фільтр/пошук → з початку списку
+    });
+    const visibleEvents = $derived(lazy.slice(filteredEvents));
 
     const TYPE_ICONS: Record<string, string> = {
         analysis: "🧠",
@@ -218,7 +240,9 @@
                 api.feed(100),
                 refreshDirectives(false),
             ]);
-            events = feedRes.events ?? [];
+            events = (feedRes.events ?? []).slice(0, MAX_EVENTS);
+            seenKeys = new Set(events.map((e) => e.id ?? e.ts_ms));
+            maxSeenTs = events.reduce((m, e) => Math.max(m, e.ts_ms ?? 0), 0);
             lastRefresh = new Date().toLocaleTimeString("uk-UA");
         } catch (e) {
             if (e instanceof ApiError && e.status === 401) {
@@ -232,6 +256,28 @@
     }
 
     // в”Ђв”Ђ SSE real-time stream в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    // Злити накопичений залп SSE-подій в ОДИН реактивний апдейт (не 500).
+    function flushPending(): void {
+        flushScheduled = false;
+        if (pendingNew.length === 0) return;
+        const batch = pendingNew;
+        pendingNew = [];
+        // SSE віддає oldest→newest; reverse → newest зверху, потім cap
+        events = [...batch.reverse(), ...events].slice(0, MAX_EVENTS);
+        // fade-in лише для справжнього real-time (малий батч); бэклог-залп — без блимання
+        if (batch.length <= 5) {
+            const keys = new Set<string | number>(
+                batch.map((e) => e.id ?? e.ts_ms),
+            );
+            newEventIds = new Set([...newEventIds, ...keys]);
+            setTimeout(() => {
+                newEventIds = new Set(
+                    [...newEventIds].filter((k) => !keys.has(k)),
+                );
+            }, 1200);
+        }
+    }
+
     function connectSSE(): () => void {
         const token = getToken();
         const url = `/api/archi/stream?token=${encodeURIComponent(token)}`;
@@ -249,20 +295,20 @@
                 const msg = JSON.parse(evt.data);
                 if (msg.type === "feed" && msg.data) {
                     const ev: FeedEvent = msg.data;
+                    const ts = ev.ts_ms ?? 0;
+                    // Бэклог-реплей: стрім вивалює всю історію на конект, а її ми вже
+                    // маємо з api.feed(100). Відсікаємо все НЕ новіше завантаженого →
+                    // обробляємо лише справжній real-time (платформний root — окремо).
+                    if (ts && ts <= maxSeenTs) return;
                     const key = ev.id ?? ev.ts_ms;
-                    // Prepend only if not already in list
-                    const exists = events.some(
-                        (e) => (e.id ?? e.ts_ms) === key,
-                    );
-                    if (!exists) {
-                        events = [ev, ...events];
-                        // Mark for fade-in, clear after animation
-                        newEventIds = new Set([...newEventIds, key]);
-                        setTimeout(() => {
-                            newEventIds = new Set(
-                                [...newEventIds].filter((k) => k !== key),
-                            );
-                        }, 1200);
+                    if (!seenKeys.has(key)) {     // O(1) dedup — не O(n) scan
+                        seenKeys.add(key);
+                        if (ts > maxSeenTs) maxSeenTs = ts;
+                        pendingNew.push(ev);
+                        if (!flushScheduled) {     // батч: коалесуємо realtime-сплески у 50мс
+                            flushScheduled = true;
+                            setTimeout(flushPending, 50);
+                        }
                     }
                 }
             } catch {
@@ -274,8 +320,14 @@
     }
 
     $effect(() => {
-        refresh();
-        const stopSSE = connectSSE();
+        let stopSSE = () => {};
+        // SSE підключаємо ПІСЛЯ refresh: щоб maxSeenTs/seenKeys були готові до
+        // залпу-реплею. Інакше залп летить при maxSeenTs=0 → бэклог проскакує
+        // dotsk і додається, а потім refresh перетирає список = зайва робота +
+        // блимання + загублені realtime-події на старті.
+        refresh().then(() => {
+            stopSSE = connectSSE();
+        });
         // Fallback 60s poll (SSE covers real-time, poll catches missed events)
         const id = setInterval(refresh, 60_000);
         return () => {
@@ -357,7 +409,10 @@
         </div>
     </div>
     <!-- ── Events ── -->
-    <div class="events-list">
+    <div
+        class="events-list"
+        use:onScrollEnd={() => lazy.more(filteredEvents.length)}
+    >
         {#if loading && events.length === 0}
             <div class="empty-state">Завантаження…</div>
         {:else if filteredEvents.length === 0}
@@ -365,7 +420,7 @@
                 {events.length === 0 ? "Подій немає" : "Нічого не знайдено"}
             </div>
         {:else}
-            {#each filteredEvents as ev (ev.id ?? ev.ts_ms)}
+            {#each visibleEvents as ev (ev.id ?? ev.ts_ms)}
                 {@const key = ev.id ?? ev.ts_ms}
                 {@const style = cardStyle(ev)}
                 <div
@@ -414,6 +469,9 @@
                     </div>
                 </div>
             {/each}
+            {#if lazy.hasMore(filteredEvents.length)}
+                <div class="lazy-sentinel">···</div>
+            {/if}
         {/if}
     </div>
 </div>

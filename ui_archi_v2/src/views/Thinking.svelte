@@ -3,6 +3,8 @@
     import type { ThinkingEntry } from "../lib/types";
     import { marked } from "marked";
     import { sanitizeHtml } from "../lib/sanitize";
+    import { createLazyList } from "../lib/lazyList.svelte";
+    import { onScrollEnd } from "../lib/actions/onScrollEnd";
 
     let {
         onchat = (_text: string): void => {},
@@ -40,6 +42,15 @@
             return true;
         }),
     );
+
+    // ── windowing: рендеримо лише видимі записи, докладаємо на скрол ──
+    const lazy = createLazyList<ThinkingEntry>({ initial: 20, step: 20 });
+    $effect(() => {
+        void filterType;
+        void searchText;
+        lazy.reset();
+    });
+    const visibleEntries = $derived(lazy.slice(filteredEntries));
 
     // в”Ђв”Ђ T3 model colors в”Ђв”Ђ
     function modelColor(model?: string): string {
@@ -174,7 +185,7 @@
     {/if}
 
     <!-- в”Ђв”Ђ Entries в”Ђв”Ђ -->
-    <div class="entries-list">
+    <div class="entries-list" use:onScrollEnd={() => lazy.more(filteredEntries.length)}>
         {#if loading && entries.length === 0}
             <div class="empty-state">Завантаження…</div>
         {:else if filteredEntries.length === 0}
@@ -184,7 +195,7 @@
                     : "Нічого не відповідає фільтру"}
             </div>
         {:else}
-            {#each filteredEntries as entry, i}
+            {#each visibleEntries as entry, i}
                 <div class="entry-card">
                     <div
                         class="entry-header"
@@ -267,6 +278,9 @@
                     {/if}
                 </div>
             {/each}
+            {#if lazy.hasMore(filteredEntries.length)}
+                <div class="lazy-sentinel">···</div>
+            {/if}
         {/if}
     </div>
 
