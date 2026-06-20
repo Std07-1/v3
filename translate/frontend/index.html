@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f1115" />
+  <meta name="description" content="Локальний автономний перекладач — швидкий, точний, офлайн" />
+  <title>Перекладач</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="bar">
+      <select id="source" class="lang" aria-label="Мова джерела"></select>
+      <button id="swap" class="swap" title="Поміняти місцями" aria-label="Поміняти мови">⇄</button>
+      <select id="target" class="lang" aria-label="Мова перекладу"></select>
+    </header>
+
+    <section class="panel">
+      <textarea
+        id="input"
+        class="text"
+        placeholder="Введіть текст…"
+        autocomplete="off"
+        spellcheck="false"
+        maxlength="5000"></textarea>
+      <div class="meta">
+        <span id="counter" class="counter">0 / 5000</span>
+        <button id="clear" class="ghost" title="Очистити">✕</button>
+      </div>
+    </section>
+
+    <button id="translate" class="primary">Перекласти</button>
+
+    <section class="panel out">
+      <div id="output" class="text result" aria-live="polite"></div>
+      <div class="meta">
+        <span id="status" class="status"></span>
+        <button id="copy" class="ghost" title="Скопіювати" hidden>⧉</button>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

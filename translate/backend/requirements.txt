@@ -1,0 +1,7 @@
+# Ядро backend (без важких рушіїв перекладу).
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+redis==5.2.1
+anyio==4.7.0

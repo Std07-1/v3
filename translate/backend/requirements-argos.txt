@@ -1,0 +1,2 @@
+# Залежності легкого рушія Argos Translate (engine=argos).
+argostranslate==1.9.6
