@@ -7,7 +7,7 @@ aiohttp>=3.9,<4.0
 python-binance>=1.0.36
 
 # Public read-only API sidecar (ADR-0058, slice 058.1)
-fastapi>=0.110,<1.0
+fastapi>=0.136.1,<1.0
 uvicorn[standard]>=0.27,<1.0
 
 # FXCM ForexConnect SDK — НЕ інсталюється у цей venv.
