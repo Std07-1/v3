@@ -310,7 +310,7 @@
                             ${Number(
                                 (data as any).estimated_cost_usd_today,
                             ).toFixed(2)}
-                            / ${Number((data as any).budget_limit ?? 6).toFixed(0)}
+                            / ${Number((data as any).budget_limit_usd ?? 3).toFixed(0)}
                         </span>
                     {/if}
                     <button
