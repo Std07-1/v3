@@ -158,6 +158,9 @@ class SmcRunner:
         # Bounded ring (last 50, FIFO drop) to cap RAM. All 4 symbols (XAU/XAG/BTC/ETH)
         # use identical path — on_bar_dict is symbol-agnostic.
         self._recent_structure_events: Dict[str, List[Dict[str, Any]]] = {}
+        # ADR-0075: closed-bar events for WakeEngine candle_close (mirror of the
+        # structure-events buffer; broker "finale"/complete bar = the close).
+        self._recent_bar_closes: Dict[str, List[Dict[str, Any]]] = {}
         # ADR-0039: previous signal state per (symbol, tf_s) for lifecycle continuity
         self._prev_signals: Dict[Tuple[str, int], list] = {}
         self._journal = SignalJournal(full_cfg)
@@ -450,6 +453,23 @@ class SmcRunner:
             _log.debug("SMC_BAR_SKIP sym=%s tf=%s reason=bad_dict", symbol, tf_s)
             return None
 
+        # ADR-0075: buffer closed-bar events for WakeEngine candle_close.
+        # Broker "finale" (cb.complete) IS the closed bar (I3 Final>Preview) —
+        # no open_ms inference needed. Mirrors the structure-events buffer.
+        if cb.complete:
+            with self._lock:
+                _bcbuf = self._recent_bar_closes.setdefault(symbol, [])
+                _bcbuf.append(
+                    {
+                        "tf_s": cb.tf_s,
+                        "close": cb.c,
+                        "open_time_ms": cb.open_time_ms,
+                        "ts_ms": cb.close_time_ms,
+                    }
+                )
+                if len(_bcbuf) > 100:
+                    del _bcbuf[: len(_bcbuf) - 100]  # FIFO drop oldest
+
         # ADR-0035: feed M1 bars to engine for session H/L computation
         if tf_s == 60:
             self._engine.feed_m1_bar(cb)
@@ -566,6 +586,23 @@ class SmcRunner:
         """
         with self._lock:
             buf = self._recent_structure_events.get(symbol, [])
+            if since_ts_ms <= 0:
+                return list(buf)
+            return [e for e in buf if e.get("ts_ms", 0) >= since_ts_ms]
+
+    def get_recent_bar_closes(
+        self, symbol: str, since_ts_ms: int = 0
+    ) -> List[Dict[str, Any]]:
+        """ADR-0075: drain closed-bar events for WakeEngine candle_close.
+
+        Returns closed bars with ts_ms (close_time_ms) >= since_ts_ms.
+        Symbol-agnostic; thread-safe (acquires self._lock).
+
+        Wire format consumed by core.smc.wake_check.check_condition():
+            [{tf_s: int, close: float, open_time_ms: int, ts_ms: int}, ...]
+        """
+        with self._lock:
+            buf = self._recent_bar_closes.get(symbol, [])
             if since_ts_ms <= 0:
                 return list(buf)
             return [e for e in buf if e.get("ts_ms", 0) >= since_ts_ms]

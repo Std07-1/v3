@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 
 
 class WakeConditionKind(str, enum.Enum):
-    """7 types of wake conditions. All $0 checks (numeric comparisons)."""
+    """8 types of wake conditions. All $0 checks (numeric comparisons)."""
 
     PRICE_CROSS = "price_cross"
     PRICE_ZONE_TOUCH = "price_zone_touch"
@@ -32,6 +32,7 @@ class WakeConditionKind(str, enum.Enum):
     MAX_SILENCE = "max_silence"
     SCHEDULED = "scheduled"
     STRUCTURE_BREAK = "structure_break"
+    CANDLE_CLOSE = "candle_close"  # ADR-0075: close (not touch) above/below level on a TF
 
 
 class FeatureTier(str, enum.Enum):

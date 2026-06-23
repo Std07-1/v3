@@ -198,6 +198,17 @@ class WakeEngine:
                 "WAKE_STRUCTURE_EVENTS_UNAVAILABLE sym=%s reason=smc_runner_missing_method",
                 symbol,
             )
+        # ADR-0075: drain closed-bar events for CANDLE_CLOSE (since last wake).
+        try:
+            bar_close_events = self._smc.get_recent_bar_closes(
+                symbol, since_ts_ms=last_wake
+            )
+        except AttributeError:
+            bar_close_events = []
+            _log.warning(
+                "WAKE_BAR_CLOSES_UNAVAILABLE sym=%s reason=smc_runner_missing_method",
+                symbol,
+            )
         fired: List[WakeCondition] = []
         for cond in all_conditions:
             if check_condition(
@@ -208,6 +219,7 @@ class WakeEngine:
                 ts_ms,
                 last_wake_ts_ms=last_wake,
                 structure_events=structure_events,
+                bar_close_events=bar_close_events,
             ):
                 fired.append(cond)
 

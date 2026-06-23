@@ -29,6 +29,7 @@ def check_condition(
     ts_ms: int,
     last_wake_ts_ms: int = 0,
     structure_events: Optional[List[Dict[str, Any]]] = None,
+    bar_close_events: Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
     """Check one wake condition against current market state.
 
@@ -97,6 +98,27 @@ def check_condition(
             tf_match = target_tf is None or ev.get("tf_s") == target_tf
             type_match = not target_type or (ev.get("type", "") or "").lower() == target_type
             if tf_match and type_match:
+                return True
+        return False
+
+    if kind == WakeConditionKind.CANDLE_CLOSE:
+        # ADR-0075: a CLOSED bar (broker finale) on tf_s closed above/below level.
+        # Distinct from PRICE_CROSS (touch): needs the bar's close, supplied via
+        # bar_close_events drained from SmcRunner (events since last wake).
+        if not bar_close_events:
+            return False
+        level = float(p.get("level", 0))
+        direction = p.get("direction", "above")
+        target_tf = p.get("tf_s")
+        if not level:
+            return False
+        for ev in bar_close_events:
+            if target_tf is not None and ev.get("tf_s") != target_tf:
+                continue
+            close = float(ev.get("close", 0))
+            if direction == "above" and close >= level:
+                return True
+            if direction == "below" and close <= level:
                 return True
         return False
 
