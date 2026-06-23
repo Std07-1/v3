@@ -172,12 +172,10 @@ Full documentation: **[docs/index.md](docs/index.md)** — single entry point.
 | [docs/ui_api.md](docs/ui_api.md) | HTTP API reference (endpoints, guards, TTL) |
 | [docs/config_reference.md](docs/config_reference.md) | config.json field reference |
 | [docs/runbooks/production.md](docs/runbooks/production.md) | Production runbook (startup, incidents, recovery) |
-| [docs/audit/progress.md](docs/audit/progress.md) | Progress audit P0-P6 with evidence |
 | [docs/adr/index.md](docs/adr/index.md) | Registry of all ADRs (canonical archive) |
 | [docs/adr/0001-unified-data-store.md](docs/adr/0001-unified-data-store.md) | ADR: UDS as the single waist |
 | [docs/adr/0002-derive-chain-from-m1.md](docs/adr/0002-derive-chain-from-m1.md) | ADR: DeriveChain M1→M3→M5→H4 (Phase 0 complete) |
 | [docs/adr/0003-cold-start-hardening.md](docs/adr/0003-cold-start-hardening.md) | ADR: Cold start hardening (S1 ✅, S2 ✅, S3-S4 pending) |
-| [docs/system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md](docs/system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md) | UI v4 audit: T1-T10 ALL COMPLETE, chart parity DONE |
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
