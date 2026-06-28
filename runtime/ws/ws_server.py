@@ -2048,6 +2048,8 @@ def build_app(
 
     async def _api_agent_state(request: web.Request) -> web.Response:
         """GET /api/agent/state вЂ” latest agent state snapshot."""
+        if not _archi_auth(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
         if _agent_redis_client is None:
             return web.json_response(
                 {"error": "agent_redis_not_configured"}, status=503
@@ -2063,6 +2065,8 @@ def build_app(
 
     async def _api_agent_feed(request: web.Request) -> web.Response:
         """GET /api/agent/feed?limit=50 вЂ” chronological event log."""
+        if not _archi_auth(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
         if _agent_redis_client is None:
             return web.json_response(
                 {"error": "agent_redis_not_configured"}, status=503
