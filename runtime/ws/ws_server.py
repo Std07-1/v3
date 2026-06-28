@@ -2152,17 +2152,45 @@ def build_app(
     if _console_enabled:
         _log.info("ARCHI_CONSOLE: enabled data_dir=%s", _console_data_dir)
 
+    # ADR-0076 P1: unified auth SSOT (runtime.api.auth). _archi_auth delegates
+    # to check_bearer -> constant-time compare (F4) + fail-CLOSED when
+    # enabled-but-no-token (F1; was a fail-open dev shortcut).
+    from runtime.api.auth import AuthConfig, check_bearer
+
+    _console_auth_cfg = AuthConfig(
+        enabled=_console_enabled,
+        token=_console_token,
+        allow_no_token_dev_mode=bool(
+            _console_cfg.get("allow_no_token_dev_mode", False)
+        ),
+    )
+    if (
+        _console_enabled
+        and not _console_token
+        and not _console_auth_cfg.allow_no_token_dev_mode
+    ):
+        # I5 degraded-but-loud: console mounted but no token -> every request is
+        # DENIED. Surface it once at boot instead of silently opening the door.
+        _log.error(
+            "ARCHI_AUTH_MISCONFIG: agent_console enabled but no token configured "
+            "(set ARCHI_AUTH_TOKEN env) -- ALL /api/agent/* and /api/archi/* "
+            "requests will be DENIED until a token is set"
+        )
+
     def _archi_auth(request: web.Request) -> bool:
-        """Return True if request carries valid Bearer token."""
-        if not _console_enabled:
-            return False
-        if not _console_token:
-            return True  # token not configured в†’ open (dev mode)
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            return auth_header[7:].strip() == _console_token
-        # also accept ?token= query param for browser direct access
-        return request.query.get("token", "") == _console_token
+        """True iff request carries a valid console credential (ADR-0076 P1).
+
+        Delegates to runtime.api.auth.check_bearer (SSOT): constant-time compare
+        and fail-CLOSED when enabled-but-no-token. Accepts Authorization: Bearer
+        <tok> or ?token=<tok> -- the query form exists only for EventSource SSE,
+        which cannot set request headers (see chatApi.openChatStream).
+        """
+        allowed, _reason = check_bearer(
+            request.headers.get("Authorization", ""),
+            request.query.get("token", ""),
+            _console_auth_cfg,
+        )
+        return allowed
 
     async def _api_archi_thinking(request: web.Request) -> web.Response:
         """GET /api/archi/thinking?limit=50&offset=0 вЂ” Thinking Archive."""
