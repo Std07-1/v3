@@ -4,6 +4,7 @@
      Keyboard: Space=play/pause, ←/→=step, Shift+←/→=step×10, Esc=exit -->
 <script lang="ts">
     import { replayStore } from "../stores/replayStore.svelte";
+    import { hintsOn } from "../stores/uiHints";
 
     const { onExit }: { onExit: () => void } = $props();
 
@@ -91,14 +92,14 @@
     <button
         class="rb-btn"
         onclick={() => replayStore.stepBack(1)}
-        title="Step back (←)">◀◀</button
+        title={$hintsOn ? "Step back (←)" : undefined}>◀◀</button
     >
 
     <!-- Play / Pause -->
     <button
         class="rb-btn rb-play"
         onclick={() => replayStore.togglePlay()}
-        title={replayStore.playing ? "Pause (Space)" : "Play (Space)"}
+        title={$hintsOn ? (replayStore.playing ? "Pause (Space)" : "Play (Space)") : undefined}
         >{replayStore.playing ? "⏸" : "▶"}</button
     >
 
@@ -106,7 +107,7 @@
     <button
         class="rb-btn"
         onclick={() => replayStore.stepForward(1)}
-        title="Step forward (→)">▶▶</button
+        title={$hintsOn ? "Step forward (→)" : undefined}>▶▶</button
     >
 
     <!-- Scrubber -->
@@ -141,11 +142,11 @@
     <button
         class="rb-btn rb-speed"
         onclick={() => replayStore.nextSpeed()}
-        title="Speed (click to cycle)">{replayStore.speed}×</button
+        title={$hintsOn ? "Speed (click to cycle)" : undefined}>{replayStore.speed}×</button
     >
 
     <!-- Exit -->
-    <button class="rb-btn rb-exit" onclick={onExit} title="Exit replay (Esc)"
+    <button class="rb-btn rb-exit" onclick={onExit} title={$hintsOn ? "Exit replay (Esc)" : undefined}
         >✕</button
     >
 </div>

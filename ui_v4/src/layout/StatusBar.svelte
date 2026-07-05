@@ -3,6 +3,7 @@
 <!-- 1s tick для stale re-derive (diagSelectors потребує now). -->
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
+    import { hintsOn } from "../stores/uiHints";
     import type { StatusInfo } from "../app/diagSelectors";
     import { resolveStatus } from "../app/diagSelectors";
     import { diagStore } from "../app/diagState";
@@ -105,7 +106,7 @@
         <button
             class="diag-btn"
             onclick={onDiagToggle}
-            title="Diagnostics (Ctrl+Shift+D)">🔧</button
+            title={$hintsOn ? "Diagnostics (Ctrl+Shift+D)" : undefined}>🔧</button
         >
     {/if}
 </footer>

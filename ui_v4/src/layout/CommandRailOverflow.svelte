@@ -38,6 +38,12 @@
         onOpenDiagnostics?: () => void;
         onToggleSmc?: () => void;
         onToggleDisplayMode?: () => void;
+        /** Drawing-tool hover labels: always-show (true) vs polite (false). */
+        hintsEnabled?: boolean;
+        onToggleHints?: () => void;
+        /** Drawing toolbar visibility on/off. */
+        toolsEnabled?: boolean;
+        onToggleTools?: () => void;
     }
 
     const {
@@ -54,6 +60,10 @@
         displayMode = "focus",
         onToggleSmc,
         onToggleDisplayMode,
+        hintsEnabled = false,
+        onToggleHints,
+        toolsEnabled = true,
+        onToggleTools,
     }: Props = $props();
 
     type SubmenuKey = "theme" | "style" | null;
@@ -136,7 +146,35 @@
             </button>
         {/if}
 
-        {#if onToggleSmc || onToggleDisplayMode}
+        <!-- Drawing tools on/off (show/hide the drawing toolbar) -->
+        {#if onToggleTools}
+            <button
+                class="menu-item menu-toggle"
+                class:active={toolsEnabled}
+                role="menuitemcheckbox"
+                aria-checked={toolsEnabled}
+                onclick={() => onToggleTools?.()}
+            >
+                <span class="mi-label">Малювання</span>
+                <span class="mi-state">{toolsEnabled ? "●" : "○"}</span>
+            </button>
+        {/if}
+
+        <!-- Drawing-tool hover labels: always-show vs polite (default) -->
+        {#if onToggleHints}
+            <button
+                class="menu-item menu-toggle"
+                class:active={hintsEnabled}
+                role="menuitemcheckbox"
+                aria-checked={hintsEnabled}
+                onclick={() => onToggleHints?.()}
+            >
+                <span class="mi-label">Підказки</span>
+                <span class="mi-state">{hintsEnabled ? "●" : "○"}</span>
+            </button>
+        {/if}
+
+        {#if onToggleSmc || onToggleDisplayMode || onToggleHints || onToggleTools}
             <div class="menu-divider" role="separator"></div>
         {/if}
 
@@ -217,7 +255,7 @@
             role="menuitem"
             tabindex="-1"
             onwheel={onBrightnessWheel}
-            title="Brightness {brightnessPct}%"
+            title={hintsEnabled ? `Brightness ${brightnessPct}%` : undefined}
         >
             <span class="mi-label">Brightness</span>
             <div class="bri-controls">

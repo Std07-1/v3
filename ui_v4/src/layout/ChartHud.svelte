@@ -9,6 +9,7 @@
     import PdBadge from "./PdBadge.svelte";
     import { BIAS_TF_LABELS, BIAS_TF_ORDER } from "../constants/tfLabels";
     import { dismissOnOutside } from "../lib/actions/dismissOnOutside";
+    import { hintsOn } from "../stores/uiHints";
 
     const {
         symbols,
@@ -284,7 +285,7 @@
                 class:pulse={pulseSymbol}
                 onclick={toggleSymbol}
                 onwheel={handleSymbolWheel}
-                title="Scroll to cycle symbols"
+                title={$hintsOn ? "Scroll to cycle symbols" : undefined}
             >
                 {currentSymbol || "…"}
             </button>
@@ -295,7 +296,7 @@
                 class:pulse={pulseTf}
                 onclick={toggleTf}
                 onwheel={handleTfWheel}
-                title="Scroll to cycle timeframes"
+                title={$hintsOn ? "Scroll to cycle timeframes" : undefined}
             >
                 {currentTf || "…"}
             </button>
@@ -322,11 +323,13 @@
                 class="hud-dot"
                 class:streaming={streamState === "streaming"}
                 class:paused={streamState === "paused"}
-                title={streamState === "streaming"
-                    ? "Live"
-                    : streamState === "paused"
-                      ? "Stale (>12s)"
-                      : "No data"}
+                title={$hintsOn
+                    ? streamState === "streaming"
+                        ? "Live"
+                        : streamState === "paused"
+                          ? "Stale (>12s)"
+                          : "No data"
+                    : undefined}
             ></span>
 
             <!-- Clock (mobile only — replaces .top-right-bar clock) -->
@@ -462,7 +465,7 @@
                         class="shell-stage"
                         onclick={toggleMicroCard}
                         type="button"
-                        title="Натисніть для деталей"
+                        title={$hintsOn ? "Натисніть для деталей" : undefined}
                     >
                         <span class="shell-stlbl">{shell.stage_label}</span>
                         {#if shell.stage_context}
@@ -484,7 +487,9 @@
                             <div class="mc-grid">
                                 <div
                                     class="mc-field"
-                                    title="Поточний торговий режим"
+                                    title={$hintsOn
+                                        ? "Поточний торговий режим"
+                                        : undefined}
                                 >
                                     <div class="mc-label">Режим</div>
                                     <div class="mc-val acc">
@@ -493,7 +498,9 @@
                                 </div>
                                 <div
                                     class="mc-field"
-                                    title="Причина поточного режиму"
+                                    title={$hintsOn
+                                        ? "Причина поточного режиму"
+                                        : undefined}
                                 >
                                     <div class="mc-label">Чому</div>
                                     <div class="mc-val">
@@ -502,7 +509,9 @@
                                 </div>
                                 <div
                                     class="mc-field"
-                                    title="Яка умова потрібна для переходу"
+                                    title={$hintsOn
+                                        ? "Яка умова потрібна для переходу"
+                                        : undefined}
                                 >
                                     <div class="mc-label">Що потрібно</div>
                                     <div class="mc-val">
@@ -512,7 +521,9 @@
                                 {#if shell.micro_card.what_cancels && shell.micro_card.what_cancels !== "—"}
                                     <div
                                         class="mc-field"
-                                        title="Умова, яка скасує поточний сценарій"
+                                        title={$hintsOn
+                                            ? "Умова, яка скасує поточний сценарій"
+                                            : undefined}
                                     >
                                         <div class="mc-label">Що скасує</div>
                                         <div class="mc-val red">
@@ -551,7 +562,9 @@
                                         >
                                         <span
                                             class="mc-sig-conf"
-                                            title="Confidence score"
+                                            title={$hintsOn
+                                                ? "Confidence score"
+                                                : undefined}
                                         >
                                             {sig.confidence ?? 0}%
                                         </span>
@@ -559,8 +572,10 @@
                                     <div class="mc-grid mc-sig-grid">
                                         <div
                                             class="mc-field"
-                                            title="Ціна входу ({sig.entry_method ??
-                                                'unknown'})"
+                                            title={$hintsOn
+                                                ? `Ціна входу (${sig.entry_method ??
+                                                      "unknown"})`
+                                                : undefined}
                                         >
                                             <div class="mc-label">Entry</div>
                                             <div class="mc-val entry">
@@ -570,7 +585,9 @@
                                         </div>
                                         <div
                                             class="mc-field"
-                                            title="R:R відношення ризик/прибуток"
+                                            title={$hintsOn
+                                                ? "R:R відношення ризик/прибуток"
+                                                : undefined}
                                         >
                                             <div class="mc-label">R:R</div>
                                             <div class="mc-val">
@@ -578,7 +595,12 @@
                                                     "—"}:1
                                             </div>
                                         </div>
-                                        <div class="mc-field" title="Стоп-лосс">
+                                        <div
+                                            class="mc-field"
+                                            title={$hintsOn
+                                                ? "Стоп-лосс"
+                                                : undefined}
+                                        >
                                             <div class="mc-label">SL</div>
                                             <div class="mc-val sl">
                                                 {sig.stop_loss?.toFixed(2) ??
@@ -587,7 +609,7 @@
                                         </div>
                                         <div
                                             class="mc-field"
-                                            title="Тейк-профіт"
+                                            title={$hintsOn ? "Тейк-профіт" : undefined}
                                         >
                                             <div class="mc-label">TP</div>
                                             <div class="mc-val tp">
@@ -628,7 +650,7 @@
             <button
                 class="hud-bias-area"
                 onclick={toggleBias}
-                title="Hide HTF bias"
+                title={$hintsOn ? "Hide HTF bias" : undefined}
                 type="button"
             >
                 {#each biasPills as p (p.label)}
@@ -648,7 +670,7 @@
             <button
                 class="hud-bias-toggle"
                 onclick={toggleBias}
-                title="Show HTF bias">║</button
+                title={$hintsOn ? "Show HTF bias" : undefined}>║</button
             >
         {/if}
     </div>

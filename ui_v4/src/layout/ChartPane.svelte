@@ -36,6 +36,7 @@
     EMPTY_SMC_DATA,
   } from "../stores/smcStore";
   import { replayStore } from "../stores/replayStore.svelte";
+  import { hintsOn } from "../stores/uiHints";
 
   interface Props {
     currentFrame?: RenderFrame | null;
@@ -642,43 +643,43 @@
           class="smc-toggle smc-t-ob"
           class:active={showOB}
           onclick={() => (showOB = !showOB)}
-          title="Order Blocks">OB</button
+          title={$hintsOn ? "Order Blocks" : undefined}>OB</button
         >
         <button
           class="smc-toggle smc-t-fvg"
           class:active={showFVG}
           onclick={() => (showFVG = !showFVG)}
-          title="Fair Value Gaps">FVG</button
+          title={$hintsOn ? "Fair Value Gaps" : undefined}>FVG</button
         >
         <button
           class="smc-toggle smc-t-sw"
           class:active={showSW}
           onclick={() => (showSW = !showSW)}
-          title="Swings">SW</button
+          title={$hintsOn ? "Swings" : undefined}>SW</button
         >
         <button
           class="smc-toggle smc-t-lvl"
           class:active={showLVL}
           onclick={() => (showLVL = !showLVL)}
-          title="Levels">LVL</button
+          title={$hintsOn ? "Levels" : undefined}>LVL</button
         >
         <button
           class="smc-toggle smc-t-bos"
           class:active={showBOS}
           onclick={() => (showBOS = !showBOS)}
-          title="BOS / CHoCH">BOS</button
+          title={$hintsOn ? "BOS / CHoCH" : undefined}>BOS</button
         >
         <button
           class="smc-toggle smc-t-fr"
           class:active={showFR}
           onclick={() => (showFR = !showFR)}
-          title="Williams Fractals">FR</button
+          title={$hintsOn ? "Williams Fractals" : undefined}>FR</button
         >
         <button
           class="smc-toggle smc-t-dis"
           class:active={showDIS}
           onclick={() => (showDIS = !showDIS)}
-          title="Displacement">DIS</button
+          title={$hintsOn ? "Displacement" : undefined}>DIS</button
         >
       </div>
     {/if}

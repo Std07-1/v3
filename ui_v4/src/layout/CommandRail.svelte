@@ -23,6 +23,8 @@
     - Mobile reflow — desktop-first MVP (hidden via @media <600px)
 -->
 <script lang="ts">
+  import { hintsOn } from "../stores/uiHints";
+
   type Props = {
     /** ATR(14) for current symbol+tf, sourced from backend (frame.atr).
      *  null when no frame yet OR frame missing the field (legacy server). */
@@ -117,7 +119,7 @@
   role="status"
   aria-label="Market context: ATR, relative volume, bar close countdown"
 >
-  <span class="cell" title="ATR(14) on {tfLabel} — backend value (engine.get_atr)">
+  <span class="cell" title={$hintsOn ? `ATR(14) on ${tfLabel} — backend value (engine.get_atr)` : undefined}>
     <span class="lbl">ATR</span>
     <span class="val">{fmtAtr(atr)}</span>
     {#if atrPctStr}
@@ -127,14 +129,14 @@
 
   <span class="sep">·</span>
 
-  <span class="cell" title="RV(20) on {tfLabel} — backend value (engine.get_rv); 1.0 = neutral">
+  <span class="cell" title={$hintsOn ? `RV(20) on ${tfLabel} — backend value (engine.get_rv); 1.0 = neutral` : undefined}>
     <span class="lbl">RV</span>
     <span class="val">{fmtRv(rv)}</span>
   </span>
 
   <span class="sep">·</span>
 
-  <span class="cell" title="Countdown to {tfLabel} bar close (wallclock + tf bucket)">
+  <span class="cell" title={$hintsOn ? `Countdown to ${tfLabel} bar close (wallclock + tf bucket)` : undefined}>
     <span class="lbl">{tfLabel}</span>
     <span class="val mono">{countdownStr}</span>
   </span>

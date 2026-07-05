@@ -8,6 +8,7 @@
 
   import ChartPane from "./layout/ChartPane.svelte";
   import DrawingToolbar from "./layout/DrawingToolbar.svelte";
+  import { hintsOn, toggleHints } from "./stores/uiHints";
   import ChartHud from "./layout/ChartHud.svelte";
   import StatusOverlay from "./layout/StatusOverlay.svelte";
   import ReplayBar from "./layout/ReplayBar.svelte";
@@ -134,6 +135,32 @@
   function toggleMagnet(): void {
     magnetEnabled = !magnetEnabled;
     saveMagnet(magnetEnabled);
+  }
+
+  // "Підказки" hover-hint setting lives in the shared `uiHints` store
+  // (imported above) — it governs the drawing labels AND the control
+  // tooltips across the chart chrome.
+
+  // Drawing tools on/off: menu toggle "Малювання". Shows/hides the whole
+  // drawing toolbar. Persisted; default ON.
+  function loadDrawingTools(): boolean {
+    try {
+      return localStorage.getItem("v4_drawing_tools") !== "0"; // default ON
+    } catch {
+      return true;
+    }
+  }
+  function saveDrawingTools(enabled: boolean): void {
+    try {
+      localStorage.setItem("v4_drawing_tools", enabled ? "1" : "0");
+    } catch {
+      /* quota / private mode — silent */
+    }
+  }
+  let drawingToolsEnabled = $state(loadDrawingTools());
+  function toggleDrawingTools(): void {
+    drawingToolsEnabled = !drawingToolsEnabled;
+    saveDrawingTools(drawingToolsEnabled);
   }
 
   // P3.11/P3.12: ChartPane ref for theme/style delegation
@@ -544,12 +571,15 @@
            See: ui_v4/src/layout/BrandWatermark.svelte header + memory file
            /memories/repo/brand-watermark-locked-slot.md -->
       <BrandWatermark onclick={openAbout} />
-      <DrawingToolbar
-        {activeTool}
-        onSelectTool={(t) => (activeTool = t)}
-        {magnetEnabled}
-        onToggleMagnet={toggleMagnet}
-      />
+      {#if drawingToolsEnabled}
+        <DrawingToolbar
+          {activeTool}
+          onSelectTool={(t) => (activeTool = t)}
+          {magnetEnabled}
+          onToggleMagnet={toggleMagnet}
+          alwaysShowHints={$hintsOn}
+        />
+      {/if}
       <ChartPane
         bind:this={chartPaneRef}
         currentFrame={frame}
@@ -630,7 +660,7 @@
       <button
         class="tr-replay-btn"
         onclick={handleEnterReplay}
-        title="Enter Replay Mode"
+        title={$hintsOn ? "Enter Replay Mode" : undefined}
         aria-label="Enter replay mode">▶</button
       >
     {:else}
@@ -650,7 +680,7 @@
         class="tr-overflow-btn"
         class:open={overflowOpen}
         onclick={toggleOverflow}
-        title="More options (theme, style, brightness, diagnostics)"
+        title={$hintsOn ? "More options (theme, style, brightness, diagnostics)" : undefined}
         aria-haspopup="menu"
         aria-expanded={overflowOpen}
         aria-label="More options">☰</button
@@ -670,6 +700,10 @@
         onToggleSmc={() => (smcPanelOpen = !smcPanelOpen)}
         onToggleDisplayMode={() =>
           (displayMode = displayMode === "focus" ? "research" : "focus")}
+        hintsEnabled={$hintsOn}
+        onToggleHints={toggleHints}
+        toolsEnabled={drawingToolsEnabled}
+        onToggleTools={toggleDrawingTools}
       />
     </div>
   </div>
