@@ -170,8 +170,8 @@
  */
 :root {
   --drawing-hit-tolerance-px: 10;
-  --drawing-handle-radius-px: 5;
-  --drawing-handle-radius-hover-px: 8;
+  /* ADR-0079 концепт: делікатна стала крапка (візуальний радіус; hit = tolerance вище) */
+  --drawing-handle-radius-px: 3.5;
   /* Toolbar geometry — CSS-only (читають .drawing-toolbar .tool-btn styles).
      Desktop default: 32×32 btn, 16px icon, 4px gap. */
   --drawing-toolbar-btn-size: 32px;
@@ -183,8 +183,7 @@
 @media (pointer: coarse) {
   :root {
     --drawing-hit-tolerance-px: 16;
-    --drawing-handle-radius-px: 7;
-    --drawing-handle-radius-hover-px: 10;
+    --drawing-handle-radius-px: 4.5;
     /* Mobile: 44×44 WCAG 2.1 AA tap target; 20px icon; 6px gap. */
     --drawing-toolbar-btn-size: 44px;
     --drawing-toolbar-icon-size: 20px;

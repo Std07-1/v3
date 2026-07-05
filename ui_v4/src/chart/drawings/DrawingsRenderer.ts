@@ -8,7 +8,6 @@ import { CommandStack, type CommandAction } from './CommandStack';
 import {
   HIT_TOLERANCE_PX,
   HANDLE_RADIUS_PX,
-  HANDLE_RADIUS_HOVER_PX,
   distToPoint,
 } from '../interaction/geometry';
 import { getToolModule } from './tools';
@@ -52,6 +51,21 @@ type SnapConfig = {
   mode: 'ohlc' | 'hl' | 'close';
 };
 
+// Концепт «делікатний об'єкт»: наведення проявляє редагування + видалення на
+// самому об'єкті. × прив'язане до ЦЕНТРУ лінії; радіус = клікабельна+реакційна зона.
+// Радіуси трохи більші за візуал → реагує ~1мм РАНІШЕ (не «майже поклав курсор»).
+const DELETE_BTN_RADIUS_PX = 13;
+const HANDLE_REACT_MARGIN_PX = 4;
+
+// Приціл на кінцях: тонкий crosshair з ВІДКРИТИМ центром (видно точку на свічці),
+// напівпрозорий, з темним halo для читабельності на світлих свічках. Hotspot = центр.
+const CURSOR_RETICLE =
+  "url(\"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24'>" +
+  "<g fill='none' stroke-linecap='round'>" +
+  "<path d='M12 4v5M12 15v5M4 12h5M15 12h5' stroke='black' stroke-opacity='.45' stroke-width='3'/>" +
+  "<path d='M12 4v5M12 15v5M4 12h5M15 12h5' stroke='white' stroke-opacity='.92' stroke-width='1.3'/>" +
+  "</g></svg>\") 12 12, crosshair";
+
 export class DrawingsRenderer {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
@@ -77,6 +91,9 @@ export class DrawingsRenderer {
   // v3 selection state
   private selectedId: string | null = null;
   private hovered: HitState | null = null;
+
+  // hover-афорданс: делікатне × по центру активної фігури (позиція + id для hit-test)
+  private deleteBtn: { id: string; x: number; y: number } | null = null;
 
   private dragState:
     | null
@@ -122,7 +139,6 @@ export class DrawingsRenderer {
   // FP10: НЕ read getComputedStyle у hit-test loop — refresh-ить per theme/init.
   private hitTolerancePx = HIT_TOLERANCE_PX;
   private handleRadiusPx = HANDLE_RADIUS_PX;
-  private handleRadiusHoverPx = HANDLE_RADIUS_HOVER_PX;
 
   // listeners
   private ro: ResizeObserver;
@@ -261,7 +277,6 @@ export class DrawingsRenderer {
     // ADR-0074 T2: drawing UX geometry tokens (platform-aware via @media pointer:coarse)
     this.hitTolerancePx = parsePxToken(s, '--drawing-hit-tolerance-px', HIT_TOLERANCE_PX);
     this.handleRadiusPx = parsePxToken(s, '--drawing-handle-radius-px', HANDLE_RADIUS_PX);
-    this.handleRadiusHoverPx = parsePxToken(s, '--drawing-handle-radius-hover-px', HANDLE_RADIUS_HOVER_PX);
     this.scheduleRender();
   }
 
@@ -441,16 +456,23 @@ export class DrawingsRenderer {
 
   // ---- v3 hit-testing ----
   private performHitTest(cursorX: number, cursorY: number): HitState | null {
-    // 1) handles для selectedId
-    if (this.selectedId) {
-      const d = this.drawings.find((x) => x.id === this.selectedId);
+    // 0) delete-× keep-alive: над кнопкою × рахуємо як hit тіла активної фігури,
+    //    щоб афорданси не зникали, поки курсор тягнеться до × (× стоїть НАД лінією).
+    if (this.deleteBtn && distToPoint(cursorX, cursorY, this.deleteBtn.x, this.deleteBtn.y) <= DELETE_BTN_RADIUS_PX) {
+      return { id: this.deleteBtn.id, handleIdx: null };
+    }
+
+    // 1) handles активної фігури (під курсором АБО вибраної) — хапати кінці
+    const activeId = this.hovered?.id ?? this.selectedId;
+    if (activeId) {
+      const d = this.drawings.find((x) => x.id === activeId);
       if (d) {
         for (let j = 0; j < d.points.length; j++) {
           const hx = this.toX(d.points[j].t_ms);
           const hy = this.toY(d.points[j].price);
           if (hx === null || hy === null) continue;
 
-          if (distToPoint(cursorX, cursorY, hx, hy) <= this.hitTolerancePx) {
+          if (distToPoint(cursorX, cursorY, hx, hy) <= this.hitTolerancePx + HANDLE_REACT_MARGIN_PX) {
             return { id: d.id, handleIdx: j };
           }
         }
@@ -594,6 +616,20 @@ export class DrawingsRenderer {
           const d = this.drawings.find((q) => q.id === hit.id);
           if (d) this.commandStack.push({ type: 'DELETE', drawing: cloneDrawing(d) });
         }
+        return;
+      }
+
+      // Delete × (hover-афорданс по центру) — пріоритет над вибором/drag.
+      if (this.deleteBtn && distToPoint(x, y, this.deleteBtn.x, this.deleteBtn.y) <= DELETE_BTN_RADIUS_PX) {
+        e.preventDefault();
+        e.stopPropagation();
+        const target = this.drawings.find((q) => q.id === this.deleteBtn!.id);
+        if (target) this.commandStack.push({ type: 'DELETE', drawing: cloneDrawing(target) });
+        this.deleteBtn = null;
+        this.selectedId = null;
+        this.hovered = null;
+        this.updateCursor();
+        this.scheduleRender();
         return;
       }
 
@@ -881,7 +917,18 @@ export class DrawingsRenderer {
       return;
     }
     if (this.hovered) {
-      this.interactionEl.style.cursor = this.hovered.handleIdx !== null ? 'pointer' : 'grab';
+      const overX = !!this.deleteBtn && !!this.lastCursor &&
+        distToPoint(this.lastCursor.x, this.lastCursor.y, this.deleteBtn.x, this.deleteBtn.y) <= DELETE_BTN_RADIUS_PX;
+      if (this.hovered.handleIdx !== null) {
+        // кінець → приціл (open-center reticle): бачиш точку на свічці, не затуляє
+        this.interactionEl.style.cursor = CURSOR_RETICLE;
+      } else if (overX) {
+        // × → звичайний курсор (не рука) — тонка стрілка не ховає червоний ×
+        this.interactionEl.style.cursor = 'default';
+      } else {
+        // тіло → рука-хват (взяв-повів)
+        this.interactionEl.style.cursor = 'grab';
+      }
       return;
     }
     this.interactionEl.style.cursor = '';
@@ -950,35 +997,77 @@ export class DrawingsRenderer {
       this.ctx.restore();
     }
 
-    // 3) handles для selected
-    if (this.selectedId) {
-      const d = this.drawings.find((q) => q.id === this.selectedId);
-      if (d) this.renderHandles(d);
+    // 3) hover-афорданси (концепт: наведення проявляє редагування + видалення).
+    //    Активна фігура = під курсором АБО вибрана; тільки у cursor-режимі.
+    //    Крапки-кінці (renderHandles) + делікатне × по центру (видалити).
+    this.deleteBtn = null;
+    if (this.activeTool === null) {
+      const activeId = this.hovered?.id ?? this.selectedId;
+      if (activeId) {
+        const d = this.drawings.find((q) => q.id === activeId);
+        if (d) {
+          this.renderHandles(d);
+          const aabb = this.aabbById.get(d.id);
+          if (aabb) {
+            const cx = (aabb.minX + aabb.maxX) / 2;
+            const cy = (aabb.minY + aabb.maxY) / 2;
+            const overX = !!this.lastCursor && distToPoint(this.lastCursor.x, this.lastCursor.y, cx, cy) <= DELETE_BTN_RADIUS_PX;
+            this.renderDeleteButton(cx, cy, overX);
+            this.deleteBtn = { id: d.id, x: cx, y: cy };
+          }
+        }
+      }
     }
   }
 
   private renderHandles(d: Drawing): void {
     this.ctx.save();
     this.ctx.setLineDash([]);
-    this.ctx.fillStyle = this.themeAccentColor;
-    this.ctx.strokeStyle = '#ffffff';
-    this.ctx.lineWidth = 1;
+    this.ctx.lineWidth = 1.5;
 
     for (let i = 0; i < d.points.length; i++) {
+      // Наведену крапку НЕ малюємо — там уже приціл (crosshair), кільце зайве.
+      if (this.hovered?.id === d.id && this.hovered.handleIdx === i) continue;
+
       const x = this.toX(d.points[i].t_ms);
       const y = this.toY(d.points[i].price);
       if (x === null || y === null) continue;
 
-      const isHoverHandle = this.hovered?.id === d.id && this.hovered.handleIdx === i;
-      const r = isHoverHandle ? this.handleRadiusHoverPx : this.handleRadiusPx;
+      // Стала крапка (не росте на hover) — не затуляє точку прицілювання.
+      const r = this.handleRadiusPx;
 
+      // порожня крапка: ЛИШЕ золоте кільце, центр прозорий — видно свічку крізь нього
       this.ctx.beginPath();
       this.ctx.arc(x, y, r, 0, Math.PI * 2);
-      this.ctx.fill();
+      this.ctx.strokeStyle = this.themeAccentColor;
       this.ctx.stroke();
     }
 
     this.ctx.restore();
+  }
+
+  /** Делікатне × по центру активної фігури (концепт: видалити на об'єкті).
+   *  Без фону-кружка — лише хрестик; тонка тінь дає читабельність на лінії й на тлі.
+   *  active (курсор над ×) → червоніє (--bear), семантика «видалити». */
+  private renderDeleteButton(cx: number, cy: number, active: boolean): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.lineCap = 'round';
+    // хрестик — червоніє коли курсор над ним (реакція). Halo не потрібне: над ×
+    // ставимо звичайний тонкий курсор (updateCursor), він не ховає червоний ×.
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.60)';
+    ctx.shadowBlur = 3;
+    ctx.strokeStyle = active ? '#ED4554' : 'rgba(232, 237, 244, 0.92)';
+    ctx.lineWidth = active ? 1.7 : 1.5;
+    const s = 3.5;
+    ctx.beginPath();
+    ctx.moveTo(cx - s, cy - s);
+    ctx.lineTo(cx + s, cy + s);
+    ctx.moveTo(cx + s, cy - s);
+    ctx.lineTo(cx - s, cy + s);
+    ctx.stroke();
+    ctx.restore();
   }
 
   destroy(): void {
