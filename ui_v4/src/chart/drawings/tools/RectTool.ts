@@ -35,13 +35,19 @@ export const RectTool: ToolModule = {
         const h = Math.abs(y2 - y1);
 
         const { ctx, baseColor, accentColor, rectFill, isDraft, isHovered, isSelected } = rc;
-        ctx.strokeStyle = isDraft || isHovered || isSelected ? accentColor : baseColor;
-        ctx.fillStyle = isDraft ? DRAFT_FILL : rectFill;
-        ctx.lineWidth = d.meta?.lineWidth ?? 1;
+        // ADR-0078: color-preserving hover/select (див. TrendTool). Fill — без
+        // тіні; stroke зберігає колір + glow на hover/select; draft — accent-пунктир.
+        const highlight = !isDraft && (isHovered || isSelected);
         ctx.setLineDash(isDraft ? [4, 4] : []);
-
+        ctx.fillStyle = isDraft ? DRAFT_FILL : rectFill;
+        ctx.shadowBlur = 0;
         ctx.fillRect(minX, minY, w, h);
+        ctx.strokeStyle = isDraft ? accentColor : baseColor;
+        ctx.lineWidth = (d.meta?.lineWidth ?? 1) + (highlight ? 1 : 0);
+        ctx.shadowColor = highlight ? baseColor : 'transparent';
+        ctx.shadowBlur = highlight ? 6 : 0;
         ctx.strokeRect(minX, minY, w, h);
+        ctx.shadowBlur = 0; // reset — не протікати тінню на наступні фігури
 
         return { minX, minY, maxX: minX + w, maxY: minY + h };
     },

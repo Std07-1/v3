@@ -22,14 +22,20 @@ export const HLineTool: ToolModule = {
         if (y === null) return null;
 
         const { ctx, baseColor, accentColor, isDraft, isHovered, isSelected, cssW } = rc;
-        ctx.strokeStyle = isDraft || isHovered || isSelected ? accentColor : baseColor;
-        ctx.lineWidth = d.meta?.lineWidth ?? 1;
+        // ADR-0078: color-preserving hover/select (див. TrendTool). Committed —
+        // свій колір + glow; draft — accent-пунктир.
+        const highlight = !isDraft && (isHovered || isSelected);
+        ctx.strokeStyle = isDraft ? accentColor : baseColor;
+        ctx.lineWidth = (d.meta?.lineWidth ?? 1) + (highlight ? 1 : 0);
         ctx.setLineDash(isDraft ? [4, 4] : []);
+        ctx.shadowColor = highlight ? baseColor : 'transparent';
+        ctx.shadowBlur = highlight ? 6 : 0;
 
         ctx.beginPath();
         ctx.moveTo(0, y);
         ctx.lineTo(cssW, y);
         ctx.stroke();
+        ctx.shadowBlur = 0; // reset — не протікати тінню на наступні фігури
 
         return { minX: 0, maxX: cssW, minY: y, maxY: y };
     },

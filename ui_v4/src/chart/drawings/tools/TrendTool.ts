@@ -25,14 +25,22 @@ export const TrendTool: ToolModule = {
         if (x1 === null || y1 === null || x2 === null || y2 === null) return null;
 
         const { ctx, baseColor, accentColor, isDraft, isHovered, isSelected } = rc;
-        ctx.strokeStyle = isDraft || isHovered || isSelected ? accentColor : baseColor;
-        ctx.lineWidth = d.meta?.lineWidth ?? 1;
+        // ADR-0078: committed-фігури ЗБЕРІГАЮТЬ свій колір на hover/select — стан
+        // показуємо glow+товщиною, не accent-перефарбуванням. Раніше золото ховало
+        // справжній колір і колізувало з палітрою (меню кольору «брехало»). Draft
+        // (ще без кольору) лишається accent-пунктиром.
+        const highlight = !isDraft && (isHovered || isSelected);
+        ctx.strokeStyle = isDraft ? accentColor : baseColor;
+        ctx.lineWidth = (d.meta?.lineWidth ?? 1) + (highlight ? 1 : 0);
         ctx.setLineDash(isDraft ? [4, 4] : []);
+        ctx.shadowColor = highlight ? baseColor : 'transparent';
+        ctx.shadowBlur = highlight ? 6 : 0;
 
         ctx.beginPath();
         ctx.moveTo(x1, y1);
         ctx.lineTo(x2, y2);
         ctx.stroke();
+        ctx.shadowBlur = 0; // reset — не протікати тінню на наступні фігури
 
         return {
             minX: Math.min(x1, x2),

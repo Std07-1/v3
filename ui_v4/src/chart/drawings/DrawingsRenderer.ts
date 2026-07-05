@@ -698,11 +698,10 @@ export class DrawingsRenderer {
         this.onContextMenu(null);
         return;
       }
-      // Виділяємо фігуру — візуальний зв'язок «меню діє на цю».
-      this.selectedId = d.id;
-      this.hovered = { id: d.id, handleIdx: null };
-      this.updateCursor();
-      this.scheduleRender();
+      // Ціль природно під курсором (hover) → glow-підсвітка; НЕ виділяємо
+      // примусово (без lingering selection після закриття меню). Справжній
+      // колір фігури зберігається завдяки color-preserving hover/select у
+      // tool-render (ADR-0078) — меню кольору й полотно завжди збігаються.
       this.onContextMenu({ id: d.id, screenX: e.clientX, screenY: e.clientY, color: d.meta?.color ?? null });
     };
 
