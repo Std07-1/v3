@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
 import { MismatchDirection } from 'lightweight-charts';
 
-import type { Drawing, ActiveTool, WsAction, T_MS, UiWarning } from '../../types';
+import type { Drawing, ActiveTool, WsAction, T_MS, UiWarning, DrawingContextRequest } from '../../types';
 import { CommandStack, type CommandAction } from './CommandStack';
 import {
   HIT_TOLERANCE_PX,
@@ -64,6 +64,11 @@ export class DrawingsRenderer {
   private readonly addUiWarning: (w: UiWarning) => void;
 
   public readonly commandStack: CommandStack;
+
+  /** ADR-0078: right-click на фігурі → UI-шар показує міні-меню (Видалити / Колір).
+   *  null → меню вимкнено, renderer лишається повністю робочим. Встановлюється
+   *  з ChartPane після конструювання (public seam, без constructor-churn). */
+  public onContextMenu: ((req: DrawingContextRequest | null) => void) | null = null;
 
   private drawings: Drawing[] = [];
   private activeTool: ActiveTool = null;
@@ -126,6 +131,7 @@ export class DrawingsRenderer {
   private onPointerDownCapture!: (e: PointerEvent) => void;
   private onPointerUpCapture!: (e: PointerEvent) => void;
   private onPointerCancelCapture!: (e: PointerEvent) => void;
+  private onContextMenuCapture!: (e: MouseEvent) => void;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -214,6 +220,27 @@ export class DrawingsRenderer {
   cancelDraft(): void {
     this.draft = null;
     this.scheduleRender();
+  }
+
+  /** ADR-0078: видалити фігуру за id (undoable DELETE, та сама команда, що й гумка). */
+  deleteById(id: string): void {
+    const d = this.drawings.find((x) => x.id === id);
+    if (!d) return;
+    this.commandStack.push({ type: 'DELETE', drawing: cloneDrawing(d) });
+  }
+
+  /** ADR-0078: змінити колір фігури (undoable UPDATE meta.color).
+   *  color=null → прибрати override, повернутись до кольору теми. */
+  recolorById(id: string, color: string | null): void {
+    const d = this.drawings.find((x) => x.id === id);
+    if (!d) return;
+    const prev = cloneDrawing(d);
+    const next = cloneDrawing(d);
+    const meta = { ...(next.meta ?? {}) };
+    if (color === null) delete meta.color;
+    else meta.color = color;
+    next.meta = Object.keys(meta).length > 0 ? meta : undefined;
+    this.commandStack.push({ type: 'UPDATE', prev, next });
   }
 
   /** Магнітний режим: прив'язка інструментів до OHLC свічок */
@@ -534,6 +561,12 @@ export class DrawingsRenderer {
     };
 
     this.onPointerDownCapture = (e) => {
+      // ADR-0078: лише ліва кнопка малює/вибирає/тягне. Без цього guard
+      // right-click (button 2) під час draft потрапляв у finishDraft() і
+      // КОМІТив фігуру мимоволі; middle-click (button 1) так само стартував
+      // draft/selection. Touch/pen primary contact = button 0 → проходить.
+      if (e.button !== 0) return;
+
       const rect = this.interactionEl.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
@@ -640,10 +673,44 @@ export class DrawingsRenderer {
       this.scheduleRender();
     };
 
+    // ADR-0078: right-click граматика. Owner-рішення: right-click на чарті
+    // НІКОЛИ не показує native-меню браузера (консистентний pro-tool-філ).
+    // Пріоритет: draft-cancel → фігура→міні-меню → порожньо (просто душимо).
+    this.onContextMenuCapture = (e) => {
+      e.preventDefault();
+      // draft активний → скасувати незакомічену фігуру (симетрія до Escape).
+      if (this.draft) {
+        this.cancelDraft();
+        return;
+      }
+      // Меню лише якщо right-click влучив у фігуру і UI-шар підписаний.
+      if (!this.onContextMenu) return;
+      const rect = this.interactionEl.getBoundingClientRect();
+      const hit = this.performHitTest(e.clientX - rect.left, e.clientY - rect.top);
+      // Промах по порожньому — закриваємо будь-яке відкрите меню (null), бо
+      // dismissOnOutside реагує на click/Escape, але не на right-click.
+      if (!hit) {
+        this.onContextMenu(null);
+        return;
+      }
+      const d = this.drawings.find((x) => x.id === hit.id);
+      if (!d) {
+        this.onContextMenu(null);
+        return;
+      }
+      // Виділяємо фігуру — візуальний зв'язок «меню діє на цю».
+      this.selectedId = d.id;
+      this.hovered = { id: d.id, handleIdx: null };
+      this.updateCursor();
+      this.scheduleRender();
+      this.onContextMenu({ id: d.id, screenX: e.clientX, screenY: e.clientY, color: d.meta?.color ?? null });
+    };
+
     this.interactionEl.addEventListener('pointermove', this.onPointerMoveCapture, { capture: true });
     this.interactionEl.addEventListener('pointerdown', this.onPointerDownCapture, { capture: true });
     this.interactionEl.addEventListener('pointerup', this.onPointerUpCapture, { capture: true });
     this.interactionEl.addEventListener('pointercancel', this.onPointerCancelCapture, { capture: true });
+    this.interactionEl.addEventListener('contextmenu', this.onContextMenuCapture);
   }
 
   // ---- tool create (v2) ----
@@ -923,5 +990,6 @@ export class DrawingsRenderer {
     this.interactionEl.removeEventListener('pointerdown', this.onPointerDownCapture, { capture: true } as any);
     this.interactionEl.removeEventListener('pointerup', this.onPointerUpCapture, { capture: true } as any);
     this.interactionEl.removeEventListener('pointercancel', this.onPointerCancelCapture, { capture: true } as any);
+    this.interactionEl.removeEventListener('contextmenu', this.onContextMenuCapture);
   }
 }

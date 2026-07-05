@@ -7,6 +7,7 @@
     UiWarning,
     SmcData,
     ActiveTool,
+    DrawingContextRequest,
   } from "../types";
 
   import {
@@ -24,6 +25,7 @@
   import type { DisplayMode } from "../chart/overlay/DisplayBudget";
   import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
+  import DrawingContextMenu from "./DrawingContextMenu.svelte";
   // PdBadge moved to ChartHud inline (ADR-0041 §5a Variant H)
   // NarrativePanel moved to ChartHud inline (ADR-0033)
   // BiasBanner moved to ChartHud (ADR-0031: inline after star)
@@ -88,6 +90,8 @@
   let chartEngine: ChartEngine;
   let overlayRenderer: OverlayRenderer;
   let drawingsRenderer: DrawingsRenderer;
+  // ADR-0078: активний запит на контекстне міні-меню фігури (null = закрито).
+  let ctxMenu: DrawingContextRequest | null = $state(null);
   let interactionCleanup: (() => void) | null = null;
   let longPressLockCleanup: (() => void) | null = null;
 
@@ -206,6 +210,11 @@
       () => {}, // noop: drawings client-only (ADR-0005)
       addUiWarning,
     );
+
+    // ADR-0078: right-click на фігурі → renderer просить UI показати міні-меню.
+    drawingsRenderer.onContextMenu = (req) => {
+      ctxMenu = req;
+    };
 
     // Expose purge method for console debugging: window.__purgeDrawings()
     (window as any).__purgeDrawings = () =>
@@ -688,6 +697,23 @@
          Trigger and focus toggle are now in the ☰ overflow menu. -->
   </div>
 </div>
+
+<!-- ADR-0078: контекстне міні-меню фігури (right-click). position:fixed з екранних
+     координат курсора. Рендериться ПОЗА .chart-container (interactionEl) — інакше
+     capture-phase pointerdown малювання ловив би реальний клік по свотчу/кнопці як
+     клік по чарту (стартував draft під меню). Dismiss: поза меню / Escape. -->
+<DrawingContextMenu
+  request={ctxMenu}
+  onDelete={(id) => {
+    drawingsRenderer?.deleteById(id);
+    ctxMenu = null;
+  }}
+  onRecolor={(id, color) => {
+    drawingsRenderer?.recolorById(id, color);
+    ctxMenu = null;
+  }}
+  onClose={() => (ctxMenu = null)}
+/>
 
 <style>
   .chart-container {

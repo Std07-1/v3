@@ -255,6 +255,16 @@ export interface Drawing {
 
 export type ActiveTool = 'hline' | 'trend' | 'rect' | 'eraser' | null;
 
+/** ADR-0078: right-click на закомічену фігуру → запит на показ контекстного
+ *  міні-меню (Видалити / Колір). Renderer віддає id, екранну позицію курсора
+ *  та поточний колір фігури (null = колір теми). UI-шар рендерить меню. */
+export interface DrawingContextRequest {
+  id: string;
+  screenX: number;
+  screenY: number;
+  color: string | null;
+}
+
 // -------------------- Warnings --------------------
 export type UiWarningCode =
   | 'overlay_coord_null'
