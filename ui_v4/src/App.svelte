@@ -47,7 +47,18 @@
   import { stopEdgeProbe, probeNow } from "./app/edgeProbe";
   import { metaStore } from "./stores/meta";
 
-  import type { T_MS, UiWarning, RenderFrame, ActiveTool } from "./types";
+  import type {
+    T_MS,
+    UiWarning,
+    RenderFrame,
+    ActiveTool,
+    DrawingType,
+  } from "./types";
+  import DrawingStyleFlyout from "./layout/DrawingStyleFlyout.svelte";
+  import {
+    DRAWING_COLOR_ROLES,
+    type DrawingColorRole,
+  } from "./chart/drawings/colorRoles";
   import type { DisplayMode } from "./chart/overlay/DisplayBudget";
 
   // --- WS URL: same-origin у prod, explicit у dev (Правило §11) ---
@@ -135,6 +146,64 @@
   function toggleMagnet(): void {
     magnetEnabled = !magnetEnabled;
     saveMagnet(magnetEnabled);
+  }
+
+  // ─── ADR-0080 (surface-2): style flyout + per-tool defaults ───
+  // Right-click на іконці інструмента → frosted flyout (колір/товщина/стиль).
+  // Дефолт кольору тримається per-tool як семантична РОЛЬ (colorRoles.ts SSOT),
+  // persisted у localStorage `v4_drawing_defaults`. P-A: тільки colorRole; canvas
+  // застосування + live-до-вибраного = наступний slice.
+  interface ToolStyle {
+    colorRole: DrawingColorRole;
+  }
+  const STYLEABLE_TOOLS: DrawingType[] = ["hline", "trend", "rect"];
+
+  function loadToolDefaults(): Record<DrawingType, ToolStyle> {
+    const base = {
+      hline: { colorRole: "neutral" as DrawingColorRole },
+      trend: { colorRole: "neutral" as DrawingColorRole },
+      rect: { colorRole: "neutral" as DrawingColorRole },
+    };
+    try {
+      const parsed = JSON.parse(
+        localStorage.getItem("v4_drawing_defaults") ?? "{}",
+      );
+      for (const k of STYLEABLE_TOOLS) {
+        const role = parsed?.[k]?.colorRole;
+        if (DRAWING_COLOR_ROLES.some((r) => r.role === role))
+          base[k].colorRole = role;
+      }
+    } catch {
+      /* corrupt / private mode — defaults */
+    }
+    return base;
+  }
+  function saveToolDefaults(): void {
+    try {
+      localStorage.setItem("v4_drawing_defaults", JSON.stringify(toolDefaults));
+    } catch {
+      /* quota / private mode — silent */
+    }
+  }
+  let toolDefaults = $state<Record<DrawingType, ToolStyle>>(loadToolDefaults());
+  let styleFlyout = $state<{
+    tool: DrawingType;
+    anchorX: number;
+    anchorY: number;
+  } | null>(null);
+
+  function openStyleFlyout(tool: DrawingType, anchor: DOMRect): void {
+    styleFlyout = { tool, anchorX: anchor.right, anchorY: anchor.top };
+  }
+  function pickColorRole(role: DrawingColorRole): void {
+    if (!styleFlyout) return;
+    // Reassign (новий top-level reference) — детерміновано тригерить $effect
+    // ChartPane→renderer.setToolDefaults, не покладаючись на deep-proxy liveness.
+    toolDefaults = {
+      ...toolDefaults,
+      [styleFlyout.tool]: { colorRole: role },
+    };
+    saveToolDefaults();
   }
 
   // "Підказки" hover-hint setting lives in the shared `uiHints` store
@@ -578,6 +647,7 @@
           {magnetEnabled}
           onToggleMagnet={toggleMagnet}
           alwaysShowHints={$hintsOn}
+          onOpenStyle={openStyleFlyout}
         />
       {/if}
       <ChartPane
@@ -588,6 +658,7 @@
         {brightness}
         {activeTool}
         {magnetEnabled}
+        drawingDefaults={toolDefaults}
         bind:smcPanelOpen
         bind:displayMode
       />
@@ -721,6 +792,18 @@
     open={infoOpen}
     onClose={() => (infoOpen = false)}
     defaultTab={infoTab}
+  />
+
+  <!-- ADR-0080 (surface-2): style flyout — right-click на іконці інструмента.
+       position:fixed з екранного anchor-rect; поза chart-wrapper (як
+       DrawingContextMenu) — dismiss на click/Escape поза. -->
+  <DrawingStyleFlyout
+    request={styleFlyout}
+    colorRole={styleFlyout
+      ? toolDefaults[styleFlyout.tool].colorRole
+      : "neutral"}
+    onPickColor={pickColorRole}
+    onClose={() => (styleFlyout = null)}
   />
 
   <!-- ADR-0066 PATCH 04b: Cold-load splash with Brand lockup, hides on first frame. -->

@@ -3,8 +3,9 @@ import { v4 as uuidv4 } from 'uuid';
 import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
 import { MismatchDirection } from 'lightweight-charts';
 
-import type { Drawing, ActiveTool, WsAction, T_MS, UiWarning, DrawingContextRequest } from '../../types';
+import type { Drawing, ActiveTool, WsAction, T_MS, UiWarning, DrawingContextRequest, DrawingType, DrawingColorRole } from '../../types';
 import { CommandStack, type CommandAction } from './CommandStack';
+import { buildRoleColorMap } from './colorRoles';
 import {
   HIT_TOLERANCE_PX,
   HANDLE_RADIUS_PX,
@@ -132,6 +133,15 @@ export class DrawingsRenderer {
   // Default #D4A017 (gold) replaces the prior blue accent; dynamic value
   // refreshed from --toolbar-active-color CSS var via refreshThemeColors().
   private themeAccentColor = '#D4A017';
+
+  // ADR-0080 (surface-2): роль→hex мапа (theme-aware), кешована з CSS-vars у
+  // refreshThemeColors (canvas не читає var() напряму). Резолв colorRole фігури.
+  private roleColors: Record<DrawingColorRole, string> = buildRoleColorMap(() => '');
+
+  // ADR-0080 (surface-2): дефолт-стиль per tool для НОВИХ фігур. Ставиться з
+  // App через setToolDefaults (SSOT = localStorage v4_drawing_defaults). Впливає
+  // лише на створення — існуючі фігури не чіпає.
+  private toolDefaults: Partial<Record<DrawingType, { colorRole?: DrawingColorRole }>> = {};
 
   // ADR-0074 T2: hit-test geometry cached from CSS vars (--drawing-*).
   // Defaults match geometry.ts HIT_TOLERANCE_PX/HANDLE_RADIUS_PX constants
@@ -264,6 +274,27 @@ export class DrawingsRenderer {
     this.snapConfig.enabled = enabled;
   }
 
+  /** ADR-0080 (surface-2): дефолт-стиль per tool для нових фігур (з App state,
+   *  SSOT localStorage). Впливає лише на створення — існуючі не перефарбовує. */
+  setToolDefaults(defaults: Partial<Record<DrawingType, { colorRole?: DrawingColorRole }>>): void {
+    this.toolDefaults = defaults;
+  }
+
+  /** Резолв кольору фігури: роль (theme-aware token) → legacy hex → база теми. */
+  private resolveColor(meta: Drawing['meta']): string {
+    if (meta?.colorRole) return this.roleColors[meta.colorRole] ?? this.themeBaseColor;
+    if (meta?.color) return meta.color;
+    return this.themeBaseColor;
+  }
+
+  /** Meta для НОВОЇ фігури з дефолту інструмента. neutral (= база теми) не пишемо
+   *  → фігура лишається без meta (theme-aware база, legacy-сумісно). */
+  private defaultMeta(type: DrawingType): Drawing['meta'] | undefined {
+    const role = this.toolDefaults[type]?.colorRole;
+    if (!role || role === 'neutral') return undefined;
+    return { colorRole: role };
+  }
+
   /** ADR-0007 + ADR-0074 T2: оновити кольори теми + hit-test geometry з CSS
    *  custom properties. Canvas не читає CSS vars напряму — кешуємо одноразово
    *  (на init, на change theme, на media query change). Hit-test loop читає
@@ -274,6 +305,8 @@ export class DrawingsRenderer {
     this.themeRectFill = s.getPropertyValue('--drawing-rect-fill').trim() || 'rgba(200, 205, 214, 0.10)';
     // ADR-0066 PATCH 06b: read --toolbar-active-color (set by themes.ts applyThemeCssVars)
     this.themeAccentColor = s.getPropertyValue('--toolbar-active-color').trim() || '#D4A017';
+    // ADR-0080: роль→hex мапа з тих самих токенів (SSOT colorRoles.ts).
+    this.roleColors = buildRoleColorMap((v) => s.getPropertyValue(v));
     // ADR-0074 T2: drawing UX geometry tokens (platform-aware via @media pointer:coarse)
     this.hitTolerancePx = parsePxToken(s, '--drawing-hit-tolerance-px', HIT_TOLERANCE_PX);
     this.handleRadiusPx = parsePxToken(s, '--drawing-handle-radius-px', HANDLE_RADIUS_PX);
@@ -545,7 +578,7 @@ export class DrawingsRenderer {
             const t = this.fromX(x);
             if (rawP !== null && t !== null) {
               const price = this.getSnappedPrice(x, y, rawP);
-              this.draft = { id: uuidv4(), type: 'hline', points: [{ t_ms: t, price }] };
+              this.draft = { id: uuidv4(), type: 'hline', points: [{ t_ms: t, price }], meta: this.defaultMeta('hline') };
               e.preventDefault();
               e.stopPropagation();
               this.scheduleRender();
@@ -763,7 +796,7 @@ export class DrawingsRenderer {
     if (this.activeTool === 'hline') {
       // hline draft was created during hover (pointermove) and finishDraft() commits it.
       // This path is reached only if user clicked without hovering (edge case).
-      const d: Drawing = { id: uuidv4(), type: 'hline', points: [{ t_ms, price }] };
+      const d: Drawing = { id: uuidv4(), type: 'hline', points: [{ t_ms, price }], meta: this.defaultMeta('hline') };
       this.commandStack.push({ type: 'ADD', drawing: d });
       this.draft = null;
       return;
@@ -774,6 +807,7 @@ export class DrawingsRenderer {
         id: uuidv4(),
         type: this.activeTool,
         points: [{ t_ms, price }, { t_ms, price }],
+        meta: this.defaultMeta(this.activeTool),
       };
       this.scheduleRender();
     }
@@ -958,7 +992,7 @@ export class DrawingsRenderer {
       const tool = getToolModule(d.type);
       if (!tool) return;
 
-      const baseColor = d.meta?.color ?? this.themeBaseColor;
+      const baseColor = this.resolveColor(d.meta);
       const rc: RenderContext = {
         ctx: this.ctx,
         toX,

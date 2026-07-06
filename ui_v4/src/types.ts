@@ -237,6 +237,14 @@ export interface SignalAlert {
 // -------------------- Drawings --------------------
 export type DrawingType = 'hline' | 'trend' | 'rect';
 
+/** ADR-0080 (surface-2): семантична роль-колір. Резолвиться у token-хекс при
+ *  рендері (theme-aware). SSOT списку ролей + label/cssVar — chart/drawings/
+ *  colorRoles.ts (re-exports цей тип). */
+export type DrawingColorRole = 'neutral' | 'accent' | 'bull' | 'bear' | 'info' | 'warn';
+
+/** ADR-0080: стиль лінії фігури (крок 4 surface-2). */
+export type DrawingLineStyle = 'solid' | 'dashed' | 'dotted';
+
 export interface DrawingPoint {
   t_ms: T_MS;
   price: number;
@@ -247,8 +255,13 @@ export interface Drawing {
   type: DrawingType;
   points: DrawingPoint[];
   meta?: {
+    /** ADR-0080: семантична роль-колір (theme-aware). Резолвиться у renderer.
+     *  Legacy `color` (concrete hex) лишається fallback для старих фігур. */
+    colorRole?: DrawingColorRole;
     color?: string;
     lineWidth?: number;
+    /** ADR-0080 (крок 4): solid | dashed | dotted. Undefined = solid. */
+    lineStyle?: DrawingLineStyle;
     locked?: boolean;
   };
 }

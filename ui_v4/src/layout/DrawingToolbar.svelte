@@ -17,7 +17,7 @@
   the 2026-05-12 hide was created for — do NOT silently re-enable here.
 -->
 <script lang="ts">
-  import type { ActiveTool } from "../types";
+  import type { ActiveTool, DrawingType } from "../types";
   import { TOOL_REGISTRY } from "../chart/drawings/tools";
 
   const {
@@ -26,6 +26,7 @@
     magnetEnabled = false,
     onToggleMagnet,
     alwaysShowHints = false,
+    onOpenStyle,
   }: {
     activeTool: ActiveTool;
     onSelectTool: (tool: ActiveTool) => void;
@@ -36,7 +37,22 @@
     /** Menu toggle "показувати підказки": when true, hover labels always
      *  show (no polite suppression). Default false = polite timing. */
     alwaysShowHints?: boolean;
+    /** ADR-0080 (surface-2): right-click на іконці drawing-інструмента →
+     *  App відкриває frosted style-flyout (колір/товщина/стиль). anchor =
+     *  екранний rect іконки. Cursor/eraser/magnet стилю не мають. */
+    onOpenStyle?: (tool: DrawingType, anchor: DOMRect) => void;
   } = $props();
+
+  // Лише справжні drawing-типи мають налаштування стилю (не cursor/eraser).
+  const STYLEABLE = new Set<ActiveTool>(["hline", "trend", "rect"]);
+
+  function handleContext(e: MouseEvent, id: ActiveTool): void {
+    // Native-меню задушене (консистентний pro-tool right-click, як на полотні).
+    e.preventDefault();
+    if (!onOpenStyle || !STYLEABLE.has(id)) return;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    onOpenStyle(id as DrawingType, rect);
+  }
 
   // Inline Lucide-style SVG icons. ~24×24 viewBox, stroke=currentColor.
   // Source: Lucide v0.460 (MIT) — mouse-pointer-2 / minus / trending-up /
@@ -275,6 +291,7 @@
         class="tool-btn"
         class:active={isActive(btn.id)}
         onclick={() => handleClick(btn.id)}
+        oncontextmenu={(e) => handleContext(e, btn.id)}
         onpointerenter={() => tipEnter(btn.id ?? "_cursor")}
         onpointerleave={() => tipLeave(btn.id ?? "_cursor")}
         onpointermove={() => tipMove(btn.id ?? "_cursor")}
@@ -306,6 +323,7 @@
         class="tool-btn magnet-btn"
         class:active={magnetEnabled}
         onclick={onToggleMagnet}
+        oncontextmenu={(e) => e.preventDefault()}
         onpointerenter={() => tipEnter("_magnet")}
         onpointerleave={() => tipLeave("_magnet")}
         onpointermove={() => tipMove("_magnet")}

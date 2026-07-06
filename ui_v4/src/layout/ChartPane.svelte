@@ -8,6 +8,8 @@
     SmcData,
     ActiveTool,
     DrawingContextRequest,
+    DrawingType,
+    DrawingColorRole,
   } from "../types";
 
   import {
@@ -47,6 +49,8 @@
     brightness?: number;
     activeTool?: ActiveTool;
     magnetEnabled?: boolean;
+    /** ADR-0080 (surface-2): per-tool дефолт-стиль для нових фігур (App SSOT). */
+    drawingDefaults?: Partial<Record<DrawingType, { colorRole: DrawingColorRole }>>;
     // ADR-0065 Phase 1: SMC panel open + display mode lifted to App.svelte
     // (controlled via CommandRailOverflow menu). Both are $bindable so
     // ChartPane can still write (key handlers, frame updates) and the
@@ -62,6 +66,7 @@
     brightness = 1.0,
     activeTool = null,
     magnetEnabled = false,
+    drawingDefaults = {},
     smcPanelOpen = $bindable(false),
     displayMode = $bindable<DisplayMode>("focus"),
   }: Props = $props();
@@ -257,6 +262,10 @@
   });
   $effect(() => {
     drawingsRenderer?.setMagnetEnabled(magnetEnabled ?? false);
+  });
+  // ADR-0080 (surface-2): per-tool дефолт-стиль → renderer (нові фігури).
+  $effect(() => {
+    drawingsRenderer?.setToolDefaults(drawingDefaults);
   });
 
   $effect(() => {
