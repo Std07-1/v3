@@ -9,9 +9,9 @@
      ліній (не кружки — правдиво до об'єкта), кожен = семантична роль (SSOT
      colorRoles.ts). Товщина/стиль — наступні кроки (порядок owner-а).
 
-     P-A: оболонка + тригер. onPickColor оновлює дефолт інструмента (localStorage);
-     застосування до полотна (canvas resolveColor) + live-до-вибраного = наступний
-     slice. Dismiss: click/touch поза / Escape (переюз dismissOnOutside). -->
+     Два режими: tool (App, дефолт нових фігур) та object (ChartPane, live-preview
+     на вибраній фігурі + Видалити). Dismiss: перший pointerdown поза (клік по
+     чарту поглинається — не малює) / Escape. Див. «Dismiss-граматика» нижче. -->
 <script lang="ts">
   import {
     DRAWING_COLOR_ROLES,
@@ -22,7 +22,6 @@
     DRAWING_LINE_STYLES,
     type DrawingLineStyle,
   } from "../chart/drawings/lineStyles";
-  import { dismissOnOutside } from "../lib/actions/dismissOnOutside";
 
   interface Props {
     /** null → закрито. anchor = екранна позиція, від якої flyout відкривається
@@ -68,6 +67,44 @@
     return style === "dashed" ? "7 4" : style === "dotted" ? "0.01 4" : "none";
   }
 
+  // ─── Dismiss-граматика ───
+  // Перший клік ПОЗА flyout (ліва АБО права кнопка) = лише закрити. Якщо клік
+  // прийшовся по чарту (.chart-container) — ПОГЛИНУТИ його (capture на window
+  // спрацьовує ДО capture-хендлерів малювання на interactionEl → жодного
+  // draft/commit/pan цим кліком; «я ще не готовий» — owner). Клік по іншому UI
+  // (тулбар, HUD) закриває і проходить далі — перемкнути інструмент можна одразу.
+  // Escape = закрити (і не летіти далі в chart-хендлери). Замінює dismissOnOutside
+  // (той реагує лише на click і не вміє поглинати pointerdown).
+  let flyoutEl: HTMLDivElement | undefined = $state();
+
+  $effect(() => {
+    if (!request) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (flyoutEl && e.target instanceof Node && flyoutEl.contains(e.target))
+        return; // клік всередині — хай працюють кнопки
+      const overChart =
+        e.target instanceof Element && !!e.target.closest(".chart-container");
+      if (overChart) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      onClose();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("pointerdown", onPointerDown, { capture: true });
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, {
+        capture: true,
+      });
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+    };
+  });
+
   // Смисл поточного кольору (заголовок) + його токен для тонування.
   let current = $derived(roleSpec(colorRole) ?? DRAWING_COLOR_ROLES[0]);
   let sampleColor = $derived(`var(${current.cssVar}, ${current.fallback})`);
@@ -94,10 +131,10 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     class="flyout"
+    bind:this={flyoutEl}
     style:left="{left}px"
     style:top="{top}px"
     onclick={(e) => e.stopPropagation()}
-    use:dismissOnOutside={{ enabled: true, onDismiss: onClose }}
   >
     <!-- Заголовок = смисл кольору (тонований) + жива лінія-зразок праворуч. -->
     <div class="head">

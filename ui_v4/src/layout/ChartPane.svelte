@@ -267,6 +267,11 @@
   $effect(() => {
     drawingsRenderer?.setToolDefaults(drawingDefaults);
   });
+  // «Підказки новачка»: hover-пояснення зон/структур на overlay гейтяться
+  // спільним ☰-перемикачем «Підказки» (узгоджено з тулбаром і title-хромом).
+  $effect(() => {
+    overlayRenderer?.setHintsEnabled($hintsOn);
+  });
 
   $effect(() => {
     if (currentFrame && chartEngine) {

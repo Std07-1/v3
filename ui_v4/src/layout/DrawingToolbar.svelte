@@ -9,7 +9,8 @@
       never occludes the chart when you are working elsewhere. An armed tool
       (or magnet) keeps it lit — you always see what will happen on next click.
     - Per-icon hover label: a tidy pill (name + hotkey) reveals to the right of
-      each icon on hover — replaces the old always-on label row.
+      each icon on hover. Gated by the shared "Підказки" toggle (☰ menu,
+      stores/uiHints) — off = fully silent (supersedes ADR-0077 polite timing).
     - 6 icons: cursor (no-tool) · hline · trend · rect · eraser · magnet.
       Magnet is a modal toggle (magnetEnabled), not an ActiveTool.
 
@@ -19,13 +20,13 @@
 <script lang="ts">
   import type { ActiveTool, DrawingType } from "../types";
   import { TOOL_REGISTRY } from "../chart/drawings/tools";
+  import { hintsOn } from "../stores/uiHints";
 
   const {
     activeTool,
     onSelectTool,
     magnetEnabled = false,
     onToggleMagnet,
-    alwaysShowHints = false,
     onOpenStyle,
   }: {
     activeTool: ActiveTool;
@@ -34,9 +35,6 @@
      *  `v4_magnet_enabled` через App.svelte saveMagnet(). */
     magnetEnabled?: boolean;
     onToggleMagnet?: () => void;
-    /** Menu toggle "показувати підказки": when true, hover labels always
-     *  show (no polite suppression). Default false = polite timing. */
-    alwaysShowHints?: boolean;
     /** ADR-0080 (surface-2): right-click на іконці drawing-інструмента →
      *  App відкриває frosted style-flyout (колір/товщина/стиль). anchor =
      *  екранний rect іконки. Cursor/eraser/magnet стилю не мають. */
@@ -177,111 +175,39 @@
   });
 
   // ─────────────────────────────────────────────────────────────────
-  // Per-icon "polite" hover label timing.
-  //  #1: hover → TIP_DELAY → show for TIP_SHOW, then hide.
-  //  #2: hold the cursor still on the icon for TIP_DWELL → show for
-  //      TIP_SHOW_LONG (the "I didn't catch it" re-read), then hide.
-  //  #3+: silent — the label has done its job.
-  //  Reset: leave the icon for TIP_RESET and its counter clears, so a
-  //  later fresh hover starts the cycle again.
-  //  alwaysShowHints (menu toggle) bypasses all this — plain show-on-hover
-  //  that stays until you leave (learning mode).
+  // Hover-лейбли інструментів = «підказки новачка» (спільний перемикач
+  // «Підказки» у ☰-меню, стор uiHints — узгоджено з зонами/структурами
+  // OverlayRenderer і title-підказками хрому). Вимкнено → повна тиша;
+  // увімкнено → лейбл на hover після TIP_DELAY, тримається доки курсор
+  // на іконці. Суперсідить polite-таймінг ADR-0077 (два стани, не три —
+  // щоб поведінка була передбачувана і не забувалась).
   // ─────────────────────────────────────────────────────────────────
   const TIP_DELAY = 450;
-  const TIP_SHOW = 1500;
-  const TIP_SHOW_LONG = 3000;
-  const TIP_DWELL = 600;
-  const TIP_RESET = 4000;
-  const TIP_MAX = 2;
 
   let shownKey = $state<string | null>(null);
-  const revealCounts = new Map<string, number>();
-  const resetTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let hoverKey: string | null = null;
   let delayTimer: ReturnType<typeof setTimeout> | 0 = 0;
-  let hideTimer: ReturnType<typeof setTimeout> | 0 = 0;
-  let dwellTimer: ReturnType<typeof setTimeout> | 0 = 0;
-
-  function clearTipTimers(): void {
-    if (delayTimer) clearTimeout(delayTimer);
-    if (hideTimer) clearTimeout(hideTimer);
-    if (dwellTimer) clearTimeout(dwellTimer);
-    delayTimer = hideTimer = dwellTimer = 0;
-  }
-
-  function reveal(key: string, long: boolean): void {
-    const c = revealCounts.get(key) ?? 0;
-    if (!alwaysShowHints && c >= TIP_MAX) return; // label has done its job
-    revealCounts.set(key, c + 1);
-    shownKey = key;
-    if (hideTimer) clearTimeout(hideTimer);
-    hideTimer = setTimeout(
-      () => hideTip(key),
-      long ? TIP_SHOW_LONG : TIP_SHOW,
-    );
-  }
-
-  function hideTip(key: string): void {
-    if (shownKey === key) shownKey = null;
-    if (hideTimer) clearTimeout(hideTimer);
-    hideTimer = 0;
-    // Re-arm the dwell re-summon while still hovering and under the cap.
-    if (
-      !alwaysShowHints &&
-      hoverKey === key &&
-      (revealCounts.get(key) ?? 0) < TIP_MAX
-    ) {
-      armDwell(key);
-    }
-  }
-
-  function armDwell(key: string): void {
-    if (dwellTimer) clearTimeout(dwellTimer);
-    dwellTimer = setTimeout(() => {
-      if (hoverKey === key) reveal(key, true);
-    }, TIP_DWELL);
-  }
 
   function tipEnter(key: string): void {
-    clearTipTimers();
     hoverKey = key;
-    const rt = resetTimers.get(key);
-    if (rt) {
-      clearTimeout(rt);
-      resetTimers.delete(key);
-    }
-    if (alwaysShowHints) {
-      delayTimer = setTimeout(() => {
-        if (hoverKey === key) shownKey = key;
-      }, TIP_DELAY);
-      return;
-    }
-    if ((revealCounts.get(key) ?? 0) >= TIP_MAX) return; // silent — seen enough
+    if (!$hintsOn) return; // підказки вимкнено в меню — тиша
+    if (delayTimer) clearTimeout(delayTimer);
     delayTimer = setTimeout(() => {
-      if (hoverKey === key) reveal(key, false);
+      if (hoverKey === key) shownKey = key;
     }, TIP_DELAY);
-  }
-
-  function tipMove(key: string): void {
-    // Movement resets the dwell "hold still" countdown.
-    if (dwellTimer && hoverKey === key) armDwell(key);
   }
 
   function tipLeave(key: string): void {
     if (hoverKey === key) hoverKey = null;
-    clearTipTimers();
+    if (delayTimer) clearTimeout(delayTimer);
+    delayTimer = 0;
     if (shownKey === key) shownKey = null;
-    // After TIP_RESET away, forget this icon's count so it can teach again.
-    const prev = resetTimers.get(key);
-    if (prev) clearTimeout(prev);
-    resetTimers.set(
-      key,
-      setTimeout(() => {
-        revealCounts.delete(key);
-        resetTimers.delete(key);
-      }, TIP_RESET),
-    );
   }
+
+  // Перемикач вимкнули, поки лейбл видно → сховати одразу.
+  $effect(() => {
+    if (!$hintsOn) shownKey = null;
+  });
 </script>
 
 <div class="drawing-toolbar" bind:this={hostEl}>
@@ -294,7 +220,6 @@
         oncontextmenu={(e) => handleContext(e, btn.id)}
         onpointerenter={() => tipEnter(btn.id ?? "_cursor")}
         onpointerleave={() => tipLeave(btn.id ?? "_cursor")}
-        onpointermove={() => tipMove(btn.id ?? "_cursor")}
         type="button"
         aria-label={btn.label}
         aria-pressed={isActive(btn.id)}
@@ -326,7 +251,6 @@
         oncontextmenu={(e) => e.preventDefault()}
         onpointerenter={() => tipEnter("_magnet")}
         onpointerleave={() => tipLeave("_magnet")}
-        onpointermove={() => tipMove("_magnet")}
         type="button"
         aria-label="Магніт (snap-to-OHLC)"
         aria-pressed={magnetEnabled}

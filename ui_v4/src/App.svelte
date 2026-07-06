@@ -665,7 +665,6 @@
           onSelectTool={(t) => (activeTool = t)}
           {magnetEnabled}
           onToggleMagnet={toggleMagnet}
-          alwaysShowHints={$hintsOn}
           onOpenStyle={openStyleFlyout}
         />
       {/if}

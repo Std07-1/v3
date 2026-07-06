@@ -220,6 +220,11 @@ export class OverlayRenderer {
   private _hitAreas: HitArea[] = [];
   private _tooltipEl: HTMLDivElement | null = null;
   private _tooltipVisible = false;
+  // «Підказки новачка»: зони (FVG/OB) + структури (BOS/CHoCH/swings/fractals/
+  // displacement/inducement) — усі hover-пояснення гейтяться спільним
+  // перемикачем «Підказки» (☰-меню, stores/uiHints). Off (default) = чистий
+  // графік, нічого не відволікає. Ставиться з ChartPane через setHintsEnabled.
+  private _hintsEnabled = false;
 
   private readonly onUiWarning?: (w: UiWarning) => void;
   private readonly warningThrottleMs: number;
@@ -247,9 +252,20 @@ export class OverlayRenderer {
   }
 
   // ── Tooltip init ──────────────────────────────────────────────────
+  /** «Підказки новачка» on/off (спільний ☰-перемикач). Off → миттєво ховає
+   *  відкриту підказку; mousemove-хендлер далі мовчить до повторного увімкнення. */
+  setHintsEnabled(on: boolean): void {
+    this._hintsEnabled = on;
+    if (!on && this._tooltipEl) {
+      this._tooltipEl.style.display = 'none';
+      this._tooltipVisible = false;
+    }
+  }
+
   private _initTooltip(): void {
     // Create tooltip DOM element
     const tip = document.createElement('div');
+    tip.className = 'smc-tooltip';
     tip.style.cssText = `
       position:absolute; pointer-events:none; z-index:100;
       background:rgba(20,23,32,0.92); color:#c8cad0; border:1px solid rgba(255,255,255,0.12);
@@ -267,6 +283,14 @@ export class OverlayRenderer {
 
     // Mousemove handler
     hitTarget.addEventListener('mousemove', (e: MouseEvent) => {
+      // Підказки вимкнено в меню → тиша (сховати, якщо встигла з'явитись).
+      if (!this._hintsEnabled) {
+        if (this._tooltipVisible && this._tooltipEl) {
+          this._tooltipEl.style.display = 'none';
+          this._tooltipVisible = false;
+        }
+        return;
+      }
       const rect = this.canvas.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
