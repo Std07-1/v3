@@ -212,7 +212,7 @@
       wrapperRef,
       chartEngine.chart,
       chartEngine.series,
-      () => {}, // noop: drawings client-only (ADR-0005)
+      () => {}, // noop: drawings client-only (ADR-0007 §Persistence; ADR-0074 D7)
       addUiWarning,
     );
 
@@ -307,11 +307,10 @@
           prevSymbol = currentFrame.symbol ?? "";
           prevTf = currentFrame.tf ?? "";
 
-          // Drawings support during replay
+          // Drawings support during replay (ADR-0082: per-symbol стор, cross-TF)
           if (currentFrame.frame_type === "full") {
             const sym = currentFrame.symbol ?? "";
-            const tf = currentFrame.tf ?? "";
-            if (sym && tf) drawingsRenderer?.setStorageKey(sym, tf);
+            if (sym) drawingsRenderer?.setStorageKey(sym);
             drawingsRenderer?.setAll(currentFrame.drawings ?? []);
           }
           // Chart + SMC update буде зроблено cursor $effect (tracks cursorIndex)
@@ -477,10 +476,10 @@
       }
 
       if (currentFrame.frame_type === "full") {
-        // Switch drawing storage to this symbol+TF pair
+        // ADR-0082: per-symbol drawing store (cross-TF sync — той самий символ
+        // на всіх TF; setStorageKey early-return на незмінному символі).
         const sym = currentFrame.symbol ?? "";
-        const tf = currentFrame.tf ?? "";
-        if (sym && tf) drawingsRenderer?.setStorageKey(sym, tf);
+        if (sym) drawingsRenderer?.setStorageKey(sym);
         drawingsRenderer?.setAll(currentFrame.drawings ?? []);
       } else if (currentFrame.frame_type === "drawing_ack") {
         const d = currentFrame.drawings?.[0];

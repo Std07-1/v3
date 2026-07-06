@@ -221,8 +221,8 @@ export class DrawingsRenderer {
     // Safe навіть якщо canvas yet not styled — fallbacks WCAG-compliant.
     this.refreshThemeColors();
 
-    // НЕ загружаємо тут — чекаємо на setStorageKey(sym, tf) від ChartPane,
-    // щоб уникнути витоку drawings з глобального ключа 'v4_drawings' у per-TF ключі.
+    // НЕ загружаємо тут — чекаємо на setStorageKey(symbol) від ChartPane
+    // (ADR-0082: per-symbol стор, спільний усіма TF).
   }
 
   setAll(drawings: Drawing[]): void {
@@ -479,16 +479,61 @@ export class DrawingsRenderer {
   // ---- localStorage persistence ----
   private storageKey = 'v4_drawings';
 
-  /** Оновити ключ збереження (при зміні symbol/TF). Зберігає поточні → завантажує нові. */
-  setStorageKey(symbol: string, tf: string): void {
-    // Save current drawings to OLD key (if we have any)
-    if (this.drawings.length > 0) this.saveToStorage();
-    // Switch key
-    this.storageKey = `v4_drawings_${symbol}_${tf}`;
-    // Load drawings for new key (always resets this.drawings)
+  /** ADR-0082: перемкнути стор на СИМВОЛ (per-symbol, спільний усіма TF —
+   *  cross-TF sync). Ключ не змінився (той самий символ, напр. TF-switch) →
+   *  early-return: малювання лишаються в пам'яті й самі перемальовуються під
+   *  новий TF (rAF). Новий символ → flush попереднього + завантаження нового
+   *  (з one-time міграцією legacy per-TF сторів). `tf` більше не в ключі. */
+  setStorageKey(symbol: string): void {
+    const nextKey = `v4_drawings_${symbol}`;
+    if (nextKey === this.storageKey) {
+      // Той самий символ (TF-switch) — стан тримаємо, лише перемальовуємо під новий TF.
+      this.scheduleRender();
+      return;
+    }
+    if (this.drawings.length > 0) this.saveToStorage(); // flush попереднього символу
+    this.storageKey = nextKey;
+    this.migrateLegacyPerTf(symbol);
     this.loadFromStorage();
-    // Migration: видалити legacy глобальний ключ, що спричиняв витік drawings між TF
+    // Legacy глобальний ключ без символу (до ADR-0007) — прибрати.
     try { localStorage.removeItem('v4_drawings'); } catch { /* ok */ }
+  }
+
+  /** ADR-0082 D4: one-time міграція — злити всі legacy per-TF стори символу
+   *  (`v4_drawings_{symbol}_{tf}`) у per-symbol ключ по id (UUID → нуль колізій),
+   *  далі видалити legacy. Ідемпотентно: після міграції legacy зникли → наступні
+   *  завантаження просто читають per-symbol. Не втрачає жодної фігури. */
+  private migrateLegacyPerTf(symbol: string): void {
+    const legacyPrefix = `v4_drawings_${symbol}_`;
+    const legacyKeys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(legacyPrefix)) legacyKeys.push(k);
+    }
+    if (legacyKeys.length === 0) return;
+    try {
+      const byId = new Map<string, Drawing>();
+      // Наявний per-symbol стор — база (пріоритет над legacy при збігу id).
+      const existingRaw = localStorage.getItem(this.storageKey);
+      if (existingRaw) {
+        const arr = JSON.parse(existingRaw);
+        if (Array.isArray(arr)) for (const d of arr) if (d?.id) byId.set(d.id, d);
+      }
+      for (const lk of legacyKeys) {
+        const raw = localStorage.getItem(lk);
+        if (!raw) continue;
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) for (const d of arr) if (d?.id && !byId.has(d.id)) byId.set(d.id, d);
+      }
+      localStorage.setItem(this.storageKey, JSON.stringify([...byId.values()]));
+      legacyKeys.forEach((k) => localStorage.removeItem(k));
+      console.info(
+        '[DrawingsRenderer] cross-TF migration: злито %d legacy per-TF сторів → %s (%d фігур)',
+        legacyKeys.length, this.storageKey, byId.size,
+      );
+    } catch {
+      // Corrupt legacy — не блокуємо завантаження (loadFromStorage прочитає що є).
+    }
   }
 
   /** Очистити ВСІ збережені drawings з localStorage (всі символи/TF).
