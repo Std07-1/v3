@@ -265,13 +265,20 @@ export class OverlayRenderer {
   private _initTooltip(): void {
     // Create tooltip DOM element
     const tip = document.createElement('div');
+    // Frosted-glass на house-токенах (ADR-0066) — theme-aware (light card на
+    // light-темі → світлий frosted + темний текст), узгоджено зі style-flyout
+    // (ADR-0080) і context-menu (ADR-0078). Раніше hardcoded dark = важкий бокс
+    // на білому тлі (design-неузгодженість, спіймано theme-review).
     tip.className = 'smc-tooltip';
     tip.style.cssText = `
       position:absolute; pointer-events:none; z-index:100;
-      background:rgba(20,23,32,0.92); color:#c8cad0; border:1px solid rgba(255,255,255,0.12);
-      border-radius:4px; padding:6px 10px; font:11px/1.4 monospace;
+      background:color-mix(in srgb, var(--card, #141720) 90%, transparent);
+      -webkit-backdrop-filter:blur(14px) saturate(1.4); backdrop-filter:blur(14px) saturate(1.4);
+      color:var(--text-1, #c8cad0);
+      border:1px solid color-mix(in srgb, var(--text-1, #e6edf3) 12%, transparent);
+      border-radius:8px; padding:6px 10px; font:11px/1.5 var(--font-mono, ui-monospace, monospace);
       max-width:280px; white-space:pre-wrap; display:none;
-      box-shadow:0 2px 8px rgba(0,0,0,0.4);
+      box-shadow:0 6px 18px -10px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.25);
     `;
     this.canvas.parentElement?.appendChild(tip);
     this._tooltipEl = tip;
