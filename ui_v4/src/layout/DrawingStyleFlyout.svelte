@@ -22,6 +22,11 @@
     DRAWING_LINE_STYLES,
     type DrawingLineStyle,
   } from "../chart/drawings/lineStyles";
+  import {
+    DRAWING_PRESETS,
+    matchPreset,
+    type DrawingPreset,
+  } from "../chart/drawings/drawingPresets";
 
   interface Props {
     /** null → закрито. anchor = екранна позиція, від якої flyout відкривається
@@ -37,11 +42,14 @@
     onPickColor: (role: DrawingColorRole) => void;
     onPickWidth: (width: number) => void;
     onPickStyle: (style: DrawingLineStyle) => void;
+    /** Намір-пресет: застосувати трійцю колір+товщина+стиль разом. */
+    onPickPreset: (preset: DrawingPreset) => void;
     /** object-режим: live-preview на фігурі. Наведення → значення; вихід з ряду
      *  → null (відкат). Undefined у tool-режимі (нема об'єкта). */
     onPreviewColor?: (role: DrawingColorRole | null) => void;
     onPreviewWidth?: (width: number | null) => void;
     onPreviewStyle?: (style: DrawingLineStyle | null) => void;
+    onPreviewPreset?: (preset: DrawingPreset | null) => void;
     /** object-режим: видалити фігуру (undoable). Undefined у tool-режимі. */
     onDelete?: () => void;
     onClose: () => void;
@@ -54,12 +62,30 @@
     onPickColor,
     onPickWidth,
     onPickStyle,
+    onPickPreset,
     onPreviewColor,
     onPreviewWidth,
     onPreviewStyle,
+    onPreviewPreset,
     onDelete,
     onClose,
   }: Props = $props();
+
+  // Активний намір: пресет, чия трійця точно = поточний стан (інакше null=кастом).
+  let activePreset = $derived(matchPreset(colorRole, lineWidth, lineStyle));
+
+  // SVG dash-pattern пресетного прев'ю (дзеркалить svgDash для стилю пресета).
+  function presetDash(p: DrawingPreset): string {
+    return p.lineStyle === "dashed"
+      ? "7 4"
+      : p.lineStyle === "dotted"
+        ? "0.01 4"
+        : "none";
+  }
+  function presetColor(p: DrawingPreset): string {
+    const spec = DRAWING_COLOR_ROLES.find((r) => r.role === p.colorRole);
+    return spec ? `var(${spec.cssVar}, ${spec.fallback})` : "currentColor";
+  }
 
   // SVG dash-візерунок для прев'ю chips (dotted → round-cap крапки: нульовий
   // штрих = круг діаметром stroke-width, як canvas dashPattern).
@@ -113,9 +139,9 @@
   const WIDTHS = [1, 2, 3, 4];
 
   // Позиція: праворуч від іконки, clamp у viewport (щоб не вилазив за край).
-  const FLYOUT_W = 188;
+  const FLYOUT_W = 212;
   const GAP = 8;
-  let flyoutH = $derived(request?.showDelete ? 190 : 154);
+  let flyoutH = $derived(request?.showDelete ? 240 : 204);
   let left = $derived(
     request
       ? Math.min(request.anchorX + GAP, window.innerWidth - FLYOUT_W - GAP)
@@ -151,6 +177,39 @@
           opacity="0.9"
         />
       </svg>
+    </div>
+
+    <div class="sep"></div>
+
+    <!-- Наміри-пресети — готова трійця колір+товщина+стиль на 1 клік (над
+         гранульованими рядами). object-режим: наведення → live-preview, вихід → відкат. -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="presets" onmouseleave={() => onPreviewPreset?.(null)}>
+      {#each DRAWING_PRESETS as p (p.id)}
+        <button
+          class="preset"
+          class:active={p.id === activePreset}
+          title={p.label}
+          aria-label={p.label}
+          aria-pressed={p.id === activePreset}
+          onmouseenter={() => onPreviewPreset?.(p)}
+          onclick={() => onPickPreset(p)}
+        >
+          <svg viewBox="0 0 40 8" aria-hidden="true">
+            <line
+              x1="3"
+              y1="4"
+              x2="37"
+              y2="4"
+              stroke={presetColor(p)}
+              stroke-width={p.lineWidth}
+              stroke-linecap={p.lineStyle === "dotted" ? "round" : "butt"}
+              stroke-dasharray={presetDash(p)}
+            />
+          </svg>
+          <span class="plabel">{p.label}</span>
+        </button>
+      {/each}
     </div>
 
     <div class="sep"></div>
@@ -265,7 +324,7 @@
     flex-direction: column;
     gap: 2px;
     padding: 7px 9px 8px;
-    width: 188px;
+    width: 212px;
     background: color-mix(in srgb, var(--card, #1c2128) 46%, transparent);
     -webkit-backdrop-filter: blur(22px) saturate(1.4);
     backdrop-filter: blur(22px) saturate(1.4);
@@ -297,6 +356,64 @@
     justify-content: space-between;
     gap: 10px;
     padding: 1px 3px 2px;
+  }
+
+  /* Наміри-пресети — 4 chips (мала лінія у своїй трійці + назва наміру). */
+  .presets {
+    display: flex;
+    align-items: stretch;
+    justify-content: space-between;
+    gap: 4px;
+    padding: 1px 1px 0;
+  }
+  .preset {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 5px 2px 4px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    cursor: pointer;
+    transition:
+      background 0.12s ease,
+      border-color 0.12s ease,
+      transform 0.1s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .preset svg {
+    width: 34px;
+    height: 8px;
+    display: block;
+    opacity: 0.92;
+  }
+  .plabel {
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: 0.2px;
+    line-height: 1;
+    color: var(--text-2, #9b9bb0);
+    white-space: nowrap;
+  }
+  .preset:hover {
+    background: color-mix(in srgb, var(--text-1, #fff) 7%, transparent);
+    transform: translateY(-1px);
+  }
+  .preset:hover .plabel {
+    color: var(--text-1, #e6edf3);
+  }
+  .preset:focus-visible {
+    outline: none;
+    border-color: color-mix(in srgb, var(--text-1, #fff) 24%, transparent);
+  }
+  .preset.active {
+    background: color-mix(in srgb, var(--accent, #d4a017) 12%, transparent);
+    border-color: color-mix(in srgb, var(--accent, #d4a017) 42%, transparent);
+  }
+  .preset.active .plabel {
+    color: var(--text-1, #e6edf3);
   }
   .meaning {
     font-size: 11.5px;

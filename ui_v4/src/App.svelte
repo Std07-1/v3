@@ -60,6 +60,7 @@
     DRAWING_COLOR_ROLES,
     type DrawingColorRole,
   } from "./chart/drawings/colorRoles";
+  import type { DrawingPreset } from "./chart/drawings/drawingPresets";
   import type { DisplayMode } from "./chart/overlay/DisplayBudget";
 
   // --- WS URL: same-origin у prod, explicit у dev (Правило §11) ---
@@ -222,6 +223,20 @@
     if (!styleFlyout) return;
     const t = styleFlyout.tool;
     toolDefaults = { ...toolDefaults, [t]: { ...toolDefaults[t], lineStyle: style } };
+    saveToolDefaults();
+  }
+  // Намір-пресет: застосувати трійцю до дефолту інструмента (нові фігури).
+  function pickPreset(preset: DrawingPreset): void {
+    if (!styleFlyout) return;
+    const t = styleFlyout.tool;
+    toolDefaults = {
+      ...toolDefaults,
+      [t]: {
+        colorRole: preset.colorRole,
+        lineWidth: preset.lineWidth,
+        lineStyle: preset.lineStyle,
+      },
+    };
     saveToolDefaults();
   }
 
@@ -828,6 +843,7 @@
     onPickColor={pickColorRole}
     onPickWidth={pickWidth}
     onPickStyle={pickStyle}
+    onPickPreset={pickPreset}
     onClose={() => (styleFlyout = null)}
   />
 

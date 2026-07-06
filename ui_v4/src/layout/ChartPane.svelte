@@ -739,6 +739,29 @@
     drawingsRenderer?.updateMetaById(ctxMenu.id, { lineStyle: style });
     ctxMenu = { ...ctxMenu, lineStyle: style };
   }}
+  onPickPreset={(preset) => {
+    if (!ctxMenu) return;
+    const patch = {
+      colorRole: preset.colorRole,
+      lineWidth: preset.lineWidth,
+      lineStyle: preset.lineStyle,
+    };
+    drawingsRenderer?.updateMetaById(ctxMenu.id, patch);
+    ctxMenu = { ...ctxMenu, ...patch };
+  }}
+  onPreviewPreset={(preset) => {
+    if (!ctxMenu) return;
+    drawingsRenderer?.previewMeta(
+      ctxMenu.id,
+      preset === null
+        ? null
+        : {
+            colorRole: preset.colorRole,
+            lineWidth: preset.lineWidth,
+            lineStyle: preset.lineStyle,
+          },
+    );
+  }}
   onPreviewColor={(role) => {
     if (ctxMenu)
       drawingsRenderer?.previewMeta(ctxMenu.id, role === null ? null : { colorRole: role });
