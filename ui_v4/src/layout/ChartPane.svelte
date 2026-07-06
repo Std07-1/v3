@@ -717,20 +717,31 @@
     ? { anchorX: ctxMenu.screenX, anchorY: ctxMenu.screenY, showDelete: true }
     : null}
   colorRole={ctxMenu?.colorRole ?? "neutral"}
+  lineWidth={ctxMenu?.lineWidth ?? 1}
   onPickColor={(role) => {
     if (!ctxMenu) return;
-    drawingsRenderer?.recolorRoleById(ctxMenu.id, role);
-    ctxMenu = { ...ctxMenu, colorRole: role }; // active-бар слідує за вибором
+    drawingsRenderer?.updateMetaById(ctxMenu.id, { colorRole: role });
+    ctxMenu = { ...ctxMenu, colorRole: role }; // active-стан слідує за вибором
+  }}
+  onPickWidth={(width) => {
+    if (!ctxMenu) return;
+    drawingsRenderer?.updateMetaById(ctxMenu.id, { lineWidth: width });
+    ctxMenu = { ...ctxMenu, lineWidth: width };
   }}
   onPreviewColor={(role) => {
-    if (ctxMenu) drawingsRenderer?.previewColorRole(ctxMenu.id, role);
+    if (ctxMenu)
+      drawingsRenderer?.previewMeta(ctxMenu.id, role === null ? null : { colorRole: role });
+  }}
+  onPreviewWidth={(width) => {
+    if (ctxMenu)
+      drawingsRenderer?.previewMeta(ctxMenu.id, width === null ? null : { lineWidth: width });
   }}
   onDelete={() => {
     if (ctxMenu) drawingsRenderer?.deleteById(ctxMenu.id);
     ctxMenu = null;
   }}
   onClose={() => {
-    if (ctxMenu) drawingsRenderer?.previewColorRole(ctxMenu.id, null);
+    if (ctxMenu) drawingsRenderer?.previewMeta(ctxMenu.id, null);
     ctxMenu = null;
   }}
 />

@@ -150,19 +150,20 @@
 
   // ─── ADR-0080 (surface-2): style flyout + per-tool defaults ───
   // Right-click на іконці інструмента → frosted flyout (колір/товщина/стиль).
-  // Дефолт кольору тримається per-tool як семантична РОЛЬ (colorRoles.ts SSOT),
-  // persisted у localStorage `v4_drawing_defaults`. P-A: тільки colorRole; canvas
-  // застосування + live-до-вибраного = наступний slice.
+  // Дефолт тримається per-tool: колір = семантична РОЛЬ (colorRoles.ts SSOT),
+  // товщина = px. Persisted у localStorage `v4_drawing_defaults`. Впливає на нові
+  // фігури (canvas resolveColor/defaultMeta); live-до-вибраного = object-режим.
   interface ToolStyle {
     colorRole: DrawingColorRole;
+    lineWidth: number;
   }
   const STYLEABLE_TOOLS: DrawingType[] = ["hline", "trend", "rect"];
 
   function loadToolDefaults(): Record<DrawingType, ToolStyle> {
     const base = {
-      hline: { colorRole: "neutral" as DrawingColorRole },
-      trend: { colorRole: "neutral" as DrawingColorRole },
-      rect: { colorRole: "neutral" as DrawingColorRole },
+      hline: { colorRole: "neutral" as DrawingColorRole, lineWidth: 1 },
+      trend: { colorRole: "neutral" as DrawingColorRole, lineWidth: 1 },
+      rect: { colorRole: "neutral" as DrawingColorRole, lineWidth: 1 },
     };
     try {
       const parsed = JSON.parse(
@@ -172,6 +173,8 @@
         const role = parsed?.[k]?.colorRole;
         if (DRAWING_COLOR_ROLES.some((r) => r.role === role))
           base[k].colorRole = role;
+        const w = parsed?.[k]?.lineWidth;
+        if (typeof w === "number" && w >= 1 && w <= 4) base[k].lineWidth = w;
       }
     } catch {
       /* corrupt / private mode — defaults */
@@ -195,14 +198,18 @@
   function openStyleFlyout(tool: DrawingType, anchor: DOMRect): void {
     styleFlyout = { tool, anchorX: anchor.right, anchorY: anchor.top };
   }
+  // Merge-reassign (новий top-level reference) — детерміновано тригерить $effect
+  // ChartPane→renderer.setToolDefaults; merge зберігає інші поля (колір/товщина).
   function pickColorRole(role: DrawingColorRole): void {
     if (!styleFlyout) return;
-    // Reassign (новий top-level reference) — детерміновано тригерить $effect
-    // ChartPane→renderer.setToolDefaults, не покладаючись на deep-proxy liveness.
-    toolDefaults = {
-      ...toolDefaults,
-      [styleFlyout.tool]: { colorRole: role },
-    };
+    const t = styleFlyout.tool;
+    toolDefaults = { ...toolDefaults, [t]: { ...toolDefaults[t], colorRole: role } };
+    saveToolDefaults();
+  }
+  function pickWidth(width: number): void {
+    if (!styleFlyout) return;
+    const t = styleFlyout.tool;
+    toolDefaults = { ...toolDefaults, [t]: { ...toolDefaults[t], lineWidth: width } };
     saveToolDefaults();
   }
 
@@ -805,7 +812,9 @@
     colorRole={styleFlyout
       ? toolDefaults[styleFlyout.tool].colorRole
       : "neutral"}
+    lineWidth={styleFlyout ? toolDefaults[styleFlyout.tool].lineWidth : 1}
     onPickColor={pickColorRole}
+    onPickWidth={pickWidth}
     onClose={() => (styleFlyout = null)}
   />
 

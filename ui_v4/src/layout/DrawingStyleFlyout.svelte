@@ -27,25 +27,41 @@
     request: { anchorX: number; anchorY: number; showDelete?: boolean } | null;
     /** Поточна роль-колір: дефолт інструмента (tool) або фігури (object). */
     colorRole: DrawingColorRole;
+    /** Поточна товщина лінії (px). Прев'ю chips тоновані поточним кольором. */
+    lineWidth: number;
     onPickColor: (role: DrawingColorRole) => void;
-    /** object-режим: live-preview на фігурі. Наведення ролі → role; вихід з
-     *  палітри → null (відкат). Undefined у tool-режимі (нема об'єкта). */
+    onPickWidth: (width: number) => void;
+    /** object-режим: live-preview на фігурі. Наведення → значення; вихід з ряду
+     *  → null (відкат). Undefined у tool-режимі (нема об'єкта). */
     onPreviewColor?: (role: DrawingColorRole | null) => void;
+    onPreviewWidth?: (width: number | null) => void;
     /** object-режим: видалити фігуру (undoable). Undefined у tool-режимі. */
     onDelete?: () => void;
     onClose: () => void;
   }
-  let { request, colorRole, onPickColor, onPreviewColor, onDelete, onClose }: Props =
-    $props();
+  let {
+    request,
+    colorRole,
+    lineWidth,
+    onPickColor,
+    onPickWidth,
+    onPreviewColor,
+    onPreviewWidth,
+    onDelete,
+    onClose,
+  }: Props = $props();
 
   // Смисл поточного кольору (заголовок) + його токен для тонування.
   let current = $derived(roleSpec(colorRole) ?? DRAWING_COLOR_ROLES[0]);
   let sampleColor = $derived(`var(${current.cssVar}, ${current.fallback})`);
 
+  // Товщини лінії (px) — прев'ю у поточному кольорі (правдиве комбо).
+  const WIDTHS = [1, 2, 3, 4];
+
   // Позиція: праворуч від іконки, clamp у viewport (щоб не вилазив за край).
   const FLYOUT_W = 188;
   const GAP = 8;
-  let flyoutH = $derived(request?.showDelete ? 118 : 82);
+  let flyoutH = $derived(request?.showDelete ? 154 : 118);
   let left = $derived(
     request
       ? Math.min(request.anchorX + GAP, window.innerWidth - FLYOUT_W - GAP)
@@ -101,6 +117,38 @@
           onclick={() => onPickColor(r.role)}
         >
           <span class="bar"></span>
+        </button>
+      {/each}
+    </div>
+
+    <div class="sep"></div>
+
+    <!-- Товщина — chips з прев'ю лінії у ПОТОЧНОМУ кольорі (правдиве комбо).
+         object-режим: наведення → live-preview на фігурі, вихід → відкат. -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="widths" onmouseleave={() => onPreviewWidth?.(null)}>
+      {#each WIDTHS as w (w)}
+        <button
+          class="width"
+          class:active={w === lineWidth}
+          title={`${w}px`}
+          aria-label={`Товщина ${w}px`}
+          aria-pressed={w === lineWidth}
+          onmouseenter={() => onPreviewWidth?.(w)}
+          onclick={() => onPickWidth(w)}
+        >
+          <svg viewBox="0 0 40 14" aria-hidden="true">
+            <line
+              x1="4"
+              y1="7"
+              x2="36"
+              y2="7"
+              stroke={sampleColor}
+              stroke-width={w}
+              stroke-linecap="round"
+              opacity="0.9"
+            />
+          </svg>
         </button>
       {/each}
     </div>
@@ -235,6 +283,46 @@
   .role.active .bar {
     opacity: 1;
     height: 2.5px;
+  }
+
+  /* Товщина — chips з прев'ю лінії (у поточному кольорі). */
+  .widths {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    padding: 2px 1px 0;
+  }
+  .width {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 22px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    transition:
+      background 0.12s ease,
+      border-color 0.12s ease;
+  }
+  .width svg {
+    width: 30px;
+    height: 12px;
+    display: block;
+  }
+  .width:hover {
+    background: color-mix(in srgb, var(--text-1, #fff) 8%, transparent);
+  }
+  .width:focus-visible {
+    outline: none;
+    border-color: color-mix(in srgb, var(--text-1, #fff) 24%, transparent);
+  }
+  .width.active {
+    background: color-mix(in srgb, var(--text-1, #fff) 7%, transparent);
+    border-color: color-mix(in srgb, var(--text-1, #fff) 20%, transparent);
   }
 
   /* object-режим: рядок «Видалити» під палітрою (мова DrawingContextMenu). */

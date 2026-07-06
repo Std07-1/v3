@@ -47,6 +47,9 @@ type ScreenAabb = { minX: number; minY: number; maxX: number; maxY: number };
 
 type HitState = { id: string; handleIdx: number | null };
 
+// ADR-0080 (surface-2): частковий meta-патч для preview/commit (колір/товщина/стиль).
+type DrawingMetaPatch = Partial<NonNullable<Drawing['meta']>>;
+
 type SnapConfig = {
   enabled: boolean;
   mode: 'ohlc' | 'hl' | 'close';
@@ -145,7 +148,7 @@ export class DrawingsRenderer {
   // ADR-0080 (surface-2): дефолт-стиль per tool для НОВИХ фігур. Ставиться з
   // App через setToolDefaults (SSOT = localStorage v4_drawing_defaults). Впливає
   // лише на створення — існуючі фігури не чіпає.
-  private toolDefaults: Partial<Record<DrawingType, { colorRole?: DrawingColorRole }>> = {};
+  private toolDefaults: Partial<Record<DrawingType, DrawingMetaPatch>> = {};
 
   // ADR-0074 T2: hit-test geometry cached from CSS vars (--drawing-*).
   // Defaults match geometry.ts HIT_TOLERANCE_PX/HANDLE_RADIUS_PX constants
@@ -259,31 +262,28 @@ export class DrawingsRenderer {
     this.commandStack.push({ type: 'DELETE', drawing: cloneDrawing(d) });
   }
 
-  /** ADR-0080 (2b): live-preview ролі на фігурі БЕЗ commit (hover у flyout).
-   *  role=null → відкотити до оригіналу. Не чіпає commandStack/localStorage —
-   *  суто візуальний. Оригінал meta зберігається при першому дотику до фігури. */
-  previewColorRole(id: string, role: DrawingColorRole | null): void {
+  /** ADR-0080 (2b/3/4): live-preview meta-патчу на фігурі БЕЗ commit (hover у
+   *  flyout — колір/товщина/стиль). patch=null → відкотити до оригіналу. Не чіпає
+   *  commandStack/localStorage. Оригінал meta зберігається при першому дотику. */
+  previewMeta(id: string, patch: DrawingMetaPatch | null): void {
     const d = this.drawings.find((x) => x.id === id);
     if (!d) return;
     if (!this.previewOrig || this.previewOrig.id !== id) {
       this.previewOrig = { id, meta: d.meta ? { ...d.meta } : undefined };
     }
-    if (role === null) {
+    if (patch === null) {
       d.meta = this.previewOrig.meta ? { ...this.previewOrig.meta } : undefined;
       this.previewOrig = null;
     } else {
-      const meta = { ...(d.meta ?? {}) };
-      meta.colorRole = role;
-      delete meta.color; // роль перекриває legacy hex у прев'ю
-      d.meta = meta;
+      d.meta = this.applyMetaPatch(d.meta, patch);
     }
     this.scheduleRender();
   }
 
-  /** ADR-0080 (2b): закріпити роль на фігурі (undoable UPDATE meta.colorRole).
-   *  Спершу знімає активний preview (щоб commit ішов від ОРИГІНАЛУ, не від
-   *  превʼю-стану), потім пушить UPDATE. Роль стає SSOT кольору (legacy hex геть). */
-  recolorRoleById(id: string, role: DrawingColorRole): void {
+  /** ADR-0080 (2b/3/4): закріпити meta-патч на фігурі (undoable UPDATE). Спершу
+   *  знімає активний preview (щоб commit ішов від ОРИГІНАЛУ, не від прев'ю-стану),
+   *  потім пушить UPDATE. */
+  updateMetaById(id: string, patch: DrawingMetaPatch): void {
     if (this.previewOrig && this.previewOrig.id === id) {
       const d0 = this.drawings.find((x) => x.id === id);
       if (d0) d0.meta = this.previewOrig.meta ? { ...this.previewOrig.meta } : undefined;
@@ -293,11 +293,16 @@ export class DrawingsRenderer {
     if (!d) return;
     const prev = cloneDrawing(d);
     const next = cloneDrawing(d);
-    const meta = { ...(next.meta ?? {}) };
-    meta.colorRole = role;
-    delete meta.color;
-    next.meta = meta;
+    next.meta = this.applyMetaPatch(next.meta, patch);
     this.commandStack.push({ type: 'UPDATE', prev, next });
+  }
+
+  /** Накласти meta-патч поверх поточного meta. colorRole перекриває legacy hex
+   *  (роль стає SSOT кольору). Спільна логіка preview + commit. */
+  private applyMetaPatch(base: Drawing['meta'], patch: DrawingMetaPatch): NonNullable<Drawing['meta']> {
+    const meta = { ...(base ?? {}), ...patch };
+    if (patch.colorRole !== undefined) delete meta.color;
+    return meta;
   }
 
   /** Магнітний режим: прив'язка інструментів до OHLC свічок */
@@ -307,7 +312,7 @@ export class DrawingsRenderer {
 
   /** ADR-0080 (surface-2): дефолт-стиль per tool для нових фігур (з App state,
    *  SSOT localStorage). Впливає лише на створення — існуючі не перефарбовує. */
-  setToolDefaults(defaults: Partial<Record<DrawingType, { colorRole?: DrawingColorRole }>>): void {
+  setToolDefaults(defaults: Partial<Record<DrawingType, DrawingMetaPatch>>): void {
     this.toolDefaults = defaults;
   }
 
@@ -318,12 +323,16 @@ export class DrawingsRenderer {
     return this.themeBaseColor;
   }
 
-  /** Meta для НОВОЇ фігури з дефолту інструмента. neutral (= база теми) не пишемо
-   *  → фігура лишається без meta (theme-aware база, legacy-сумісно). */
+  /** Meta для НОВОЇ фігури з дефолту інструмента. Дефолтні значення (neutral колір
+   *  = база теми, 1px товщина) не пишемо → фігура лишається без відповідного поля
+   *  (theme-aware база, legacy-сумісно). */
   private defaultMeta(type: DrawingType): Drawing['meta'] | undefined {
-    const role = this.toolDefaults[type]?.colorRole;
-    if (!role || role === 'neutral') return undefined;
-    return { colorRole: role };
+    const d = this.toolDefaults[type];
+    if (!d) return undefined;
+    const meta: DrawingMetaPatch = {};
+    if (d.colorRole && d.colorRole !== 'neutral') meta.colorRole = d.colorRole;
+    if (d.lineWidth && d.lineWidth !== 1) meta.lineWidth = d.lineWidth;
+    return Object.keys(meta).length > 0 ? meta : undefined;
   }
 
   /** ADR-0007 + ADR-0074 T2: оновити кольори теми + hit-test geometry з CSS
@@ -802,7 +811,7 @@ export class DrawingsRenderer {
       // примусово (без lingering selection після закриття меню). Справжній
       // колір фігури зберігається завдяки color-preserving hover/select у
       // tool-render (ADR-0078) — палітра flyout й полотно завжди збігаються.
-      this.onContextMenu({ id: d.id, screenX: e.clientX, screenY: e.clientY, colorRole: d.meta?.colorRole ?? null });
+      this.onContextMenu({ id: d.id, screenX: e.clientX, screenY: e.clientY, colorRole: d.meta?.colorRole ?? null, lineWidth: d.meta?.lineWidth ?? 1 });
     };
 
     this.interactionEl.addEventListener('pointermove', this.onPointerMoveCapture, { capture: true });
