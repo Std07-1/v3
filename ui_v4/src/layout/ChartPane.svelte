@@ -27,7 +27,7 @@
   import type { DisplayMode } from "../chart/overlay/DisplayBudget";
   import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
-  import DrawingContextMenu from "./DrawingContextMenu.svelte";
+  import DrawingStyleFlyout from "./DrawingStyleFlyout.svelte";
   // PdBadge moved to ChartHud inline (ADR-0041 §5a Variant H)
   // NarrativePanel moved to ChartHud inline (ADR-0033)
   // BiasBanner moved to ChartHud (ADR-0031: inline after star)
@@ -707,21 +707,32 @@
   </div>
 </div>
 
-<!-- ADR-0078: контекстне міні-меню фігури (right-click). position:fixed з екранних
-     координат курсора. Рендериться ПОЗА .chart-container (interactionEl) — інакше
-     capture-phase pointerdown малювання ловив би реальний клік по свотчу/кнопці як
-     клік по чарту (стартував draft під меню). Dismiss: поза меню / Escape. -->
-<DrawingContextMenu
-  request={ctxMenu}
-  onDelete={(id) => {
-    drawingsRenderer?.deleteById(id);
+<!-- ADR-0080 (surface-2, 2b): right-click на фігурі → style-flyout в object-режимі
+     (палітра ролей з live-preview + Видалити). Поглинає колірні крапки ADR-0078.
+     position:fixed з екранних координат курсора; ПОЗА .chart-container (interactionEl)
+     — інакше capture-pointerdown малювання ловив би клік по бару як клік по чарту.
+     Dismiss: поза / Escape (onClose знімає активний preview). -->
+<DrawingStyleFlyout
+  request={ctxMenu
+    ? { anchorX: ctxMenu.screenX, anchorY: ctxMenu.screenY, showDelete: true }
+    : null}
+  colorRole={ctxMenu?.colorRole ?? "neutral"}
+  onPickColor={(role) => {
+    if (!ctxMenu) return;
+    drawingsRenderer?.recolorRoleById(ctxMenu.id, role);
+    ctxMenu = { ...ctxMenu, colorRole: role }; // active-бар слідує за вибором
+  }}
+  onPreviewColor={(role) => {
+    if (ctxMenu) drawingsRenderer?.previewColorRole(ctxMenu.id, role);
+  }}
+  onDelete={() => {
+    if (ctxMenu) drawingsRenderer?.deleteById(ctxMenu.id);
     ctxMenu = null;
   }}
-  onRecolor={(id, color) => {
-    drawingsRenderer?.recolorById(id, color);
+  onClose={() => {
+    if (ctxMenu) drawingsRenderer?.previewColorRole(ctxMenu.id, null);
     ctxMenu = null;
   }}
-  onClose={() => (ctxMenu = null)}
 />
 
 <style>

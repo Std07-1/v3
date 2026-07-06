@@ -794,11 +794,14 @@
     defaultTab={infoTab}
   />
 
-  <!-- ADR-0080 (surface-2): style flyout — right-click на іконці інструмента.
-       position:fixed з екранного anchor-rect; поза chart-wrapper (як
-       DrawingContextMenu) — dismiss на click/Escape поза. -->
+  <!-- ADR-0080 (surface-2): style flyout у TOOL-режимі — right-click на іконці
+       інструмента (дефолт нових фігур). object-режим (right-click на фігурі)
+       монтується окремо в ChartPane. position:fixed з екранного anchor-rect;
+       поза chart-wrapper — dismiss на click/Escape поза. -->
   <DrawingStyleFlyout
-    request={styleFlyout}
+    request={styleFlyout
+      ? { anchorX: styleFlyout.anchorX, anchorY: styleFlyout.anchorY }
+      : null}
     colorRole={styleFlyout
       ? toolDefaults[styleFlyout.tool].colorRole
       : "neutral"}

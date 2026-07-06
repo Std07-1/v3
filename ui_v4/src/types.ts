@@ -268,14 +268,14 @@ export interface Drawing {
 
 export type ActiveTool = 'hline' | 'trend' | 'rect' | 'eraser' | null;
 
-/** ADR-0078: right-click на закомічену фігуру → запит на показ контекстного
- *  міні-меню (Видалити / Колір). Renderer віддає id, екранну позицію курсора
- *  та поточний колір фігури (null = колір теми). UI-шар рендерить меню. */
+/** ADR-0078/0080: right-click на закомічену фігуру → запит на показ style-flyout
+ *  (Видалити + палітра ролей з live-preview). Renderer віддає id, екранну позицію
+ *  курсора та поточну роль-колір фігури (null = база теми / legacy hex). */
 export interface DrawingContextRequest {
   id: string;
   screenX: number;
   screenY: number;
-  color: string | null;
+  colorRole: DrawingColorRole | null;
 }
 
 // -------------------- Warnings --------------------

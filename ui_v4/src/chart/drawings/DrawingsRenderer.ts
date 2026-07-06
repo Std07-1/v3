@@ -96,6 +96,10 @@ export class DrawingsRenderer {
   // hover-афорданс: делікатне × по центру активної фігури (позиція + id для hit-test)
   private deleteBtn: { id: string; x: number; y: number } | null = null;
 
+  // ADR-0080 (surface-2, 2b): live-preview кольору у style-flyout. Тримає ОРИГІНАЛ
+  // meta фігури, поки flyout наводить ролі — щоб вихід без кліку відкотив точно.
+  private previewOrig: { id: string; meta: Drawing['meta'] } | null = null;
+
   private dragState:
     | null
     | {
@@ -255,17 +259,44 @@ export class DrawingsRenderer {
     this.commandStack.push({ type: 'DELETE', drawing: cloneDrawing(d) });
   }
 
-  /** ADR-0078: змінити колір фігури (undoable UPDATE meta.color).
-   *  color=null → прибрати override, повернутись до кольору теми. */
-  recolorById(id: string, color: string | null): void {
+  /** ADR-0080 (2b): live-preview ролі на фігурі БЕЗ commit (hover у flyout).
+   *  role=null → відкотити до оригіналу. Не чіпає commandStack/localStorage —
+   *  суто візуальний. Оригінал meta зберігається при першому дотику до фігури. */
+  previewColorRole(id: string, role: DrawingColorRole | null): void {
+    const d = this.drawings.find((x) => x.id === id);
+    if (!d) return;
+    if (!this.previewOrig || this.previewOrig.id !== id) {
+      this.previewOrig = { id, meta: d.meta ? { ...d.meta } : undefined };
+    }
+    if (role === null) {
+      d.meta = this.previewOrig.meta ? { ...this.previewOrig.meta } : undefined;
+      this.previewOrig = null;
+    } else {
+      const meta = { ...(d.meta ?? {}) };
+      meta.colorRole = role;
+      delete meta.color; // роль перекриває legacy hex у прев'ю
+      d.meta = meta;
+    }
+    this.scheduleRender();
+  }
+
+  /** ADR-0080 (2b): закріпити роль на фігурі (undoable UPDATE meta.colorRole).
+   *  Спершу знімає активний preview (щоб commit ішов від ОРИГІНАЛУ, не від
+   *  превʼю-стану), потім пушить UPDATE. Роль стає SSOT кольору (legacy hex геть). */
+  recolorRoleById(id: string, role: DrawingColorRole): void {
+    if (this.previewOrig && this.previewOrig.id === id) {
+      const d0 = this.drawings.find((x) => x.id === id);
+      if (d0) d0.meta = this.previewOrig.meta ? { ...this.previewOrig.meta } : undefined;
+      this.previewOrig = null;
+    }
     const d = this.drawings.find((x) => x.id === id);
     if (!d) return;
     const prev = cloneDrawing(d);
     const next = cloneDrawing(d);
     const meta = { ...(next.meta ?? {}) };
-    if (color === null) delete meta.color;
-    else meta.color = color;
-    next.meta = Object.keys(meta).length > 0 ? meta : undefined;
+    meta.colorRole = role;
+    delete meta.color;
+    next.meta = meta;
     this.commandStack.push({ type: 'UPDATE', prev, next });
   }
 
@@ -770,8 +801,8 @@ export class DrawingsRenderer {
       // Ціль природно під курсором (hover) → glow-підсвітка; НЕ виділяємо
       // примусово (без lingering selection після закриття меню). Справжній
       // колір фігури зберігається завдяки color-preserving hover/select у
-      // tool-render (ADR-0078) — меню кольору й полотно завжди збігаються.
-      this.onContextMenu({ id: d.id, screenX: e.clientX, screenY: e.clientY, color: d.meta?.color ?? null });
+      // tool-render (ADR-0078) — палітра flyout й полотно завжди збігаються.
+      this.onContextMenu({ id: d.id, screenX: e.clientX, screenY: e.clientY, colorRole: d.meta?.colorRole ?? null });
     };
 
     this.interactionEl.addEventListener('pointermove', this.onPointerMoveCapture, { capture: true });

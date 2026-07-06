@@ -13,7 +13,6 @@
      застосування до полотна (canvas resolveColor) + live-до-вибраного = наступний
      slice. Dismiss: click/touch поза / Escape (переюз dismissOnOutside). -->
 <script lang="ts">
-  import type { DrawingType } from "../types";
   import {
     DRAWING_COLOR_ROLES,
     roleSpec,
@@ -22,15 +21,22 @@
   import { dismissOnOutside } from "../lib/actions/dismissOnOutside";
 
   interface Props {
-    /** null → закрито. tool = який інструмент; anchor = екранна позиція іконки
-     *  (права грань + верх), від якої flyout відкривається праворуч. */
-    request: { tool: DrawingType; anchorX: number; anchorY: number } | null;
-    /** Поточна роль-колір дефолту цього інструмента (для зразка + active-бару). */
+    /** null → закрито. anchor = екранна позиція, від якої flyout відкривається
+     *  праворуч (іконки в tool-режимі / курсора в object-режимі).
+     *  showDelete → object-режим (right-click на фігурі): рядок «Видалити». */
+    request: { anchorX: number; anchorY: number; showDelete?: boolean } | null;
+    /** Поточна роль-колір: дефолт інструмента (tool) або фігури (object). */
     colorRole: DrawingColorRole;
     onPickColor: (role: DrawingColorRole) => void;
+    /** object-режим: live-preview на фігурі. Наведення ролі → role; вихід з
+     *  палітри → null (відкат). Undefined у tool-режимі (нема об'єкта). */
+    onPreviewColor?: (role: DrawingColorRole | null) => void;
+    /** object-режим: видалити фігуру (undoable). Undefined у tool-режимі. */
+    onDelete?: () => void;
     onClose: () => void;
   }
-  let { request, colorRole, onPickColor, onClose }: Props = $props();
+  let { request, colorRole, onPickColor, onPreviewColor, onDelete, onClose }: Props =
+    $props();
 
   // Смисл поточного кольору (заголовок) + його токен для тонування.
   let current = $derived(roleSpec(colorRole) ?? DRAWING_COLOR_ROLES[0]);
@@ -38,15 +44,15 @@
 
   // Позиція: праворуч від іконки, clamp у viewport (щоб не вилазив за край).
   const FLYOUT_W = 188;
-  const FLYOUT_H = 82;
   const GAP = 8;
+  let flyoutH = $derived(request?.showDelete ? 118 : 82);
   let left = $derived(
     request
       ? Math.min(request.anchorX + GAP, window.innerWidth - FLYOUT_W - GAP)
       : 0,
   );
   let top = $derived(
-    request ? Math.max(GAP, Math.min(request.anchorY, window.innerHeight - FLYOUT_H - GAP)) : 0,
+    request ? Math.max(GAP, Math.min(request.anchorY, window.innerHeight - flyoutH - GAP)) : 0,
   );
 </script>
 
@@ -79,8 +85,10 @@
 
     <div class="sep"></div>
 
-    <!-- Палітра ролей — лінії-бари (правдиво до об'єкта, не кружки). -->
-    <div class="roles">
+    <!-- Палітра ролей — лінії-бари (правдиво до об'єкта, не кружки).
+         object-режим: наведення → live-preview на фігурі, вихід з палітри → відкат. -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="roles" onmouseleave={() => onPreviewColor?.(null)}>
       {#each DRAWING_COLOR_ROLES as r (r.role)}
         <button
           class="role"
@@ -89,12 +97,25 @@
           title={r.label}
           aria-label={r.label}
           aria-pressed={r.role === colorRole}
+          onmouseenter={() => onPreviewColor?.(r.role)}
           onclick={() => onPickColor(r.role)}
         >
           <span class="bar"></span>
         </button>
       {/each}
     </div>
+
+    {#if request.showDelete && onDelete}
+      <div class="sep"></div>
+      <button class="delete" onclick={() => onDelete?.()}>
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 6h18" />
+          <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+        </svg>
+        <span>Видалити</span>
+      </button>
+    {/if}
   </div>
 {/if}
 
@@ -214,5 +235,38 @@
   .role.active .bar {
     opacity: 1;
     height: 2.5px;
+  }
+
+  /* object-режим: рядок «Видалити» під палітрою (мова DrawingContextMenu). */
+  .delete {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 5px;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: var(--text-2, #9b9bb0);
+    font-family: inherit;
+    font-size: 11.5px;
+    font-weight: 450;
+    letter-spacing: 0.2px;
+    text-align: left;
+    cursor: pointer;
+    transition:
+      background 0.12s ease,
+      color 0.12s ease;
+  }
+  .delete svg {
+    opacity: 0.75;
+    transition: opacity 0.12s ease;
+  }
+  .delete:hover {
+    background: color-mix(in srgb, var(--bear, #ed4554) 13%, transparent);
+    color: var(--bear, #ed4554);
+  }
+  .delete:hover svg {
+    opacity: 1;
   }
 </style>
