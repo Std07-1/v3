@@ -332,6 +332,7 @@ export class DrawingsRenderer {
     const meta: DrawingMetaPatch = {};
     if (d.colorRole && d.colorRole !== 'neutral') meta.colorRole = d.colorRole;
     if (d.lineWidth && d.lineWidth !== 1) meta.lineWidth = d.lineWidth;
+    if (d.lineStyle && d.lineStyle !== 'solid') meta.lineStyle = d.lineStyle;
     return Object.keys(meta).length > 0 ? meta : undefined;
   }
 
@@ -811,7 +812,7 @@ export class DrawingsRenderer {
       // примусово (без lingering selection після закриття меню). Справжній
       // колір фігури зберігається завдяки color-preserving hover/select у
       // tool-render (ADR-0078) — палітра flyout й полотно завжди збігаються.
-      this.onContextMenu({ id: d.id, screenX: e.clientX, screenY: e.clientY, colorRole: d.meta?.colorRole ?? null, lineWidth: d.meta?.lineWidth ?? 1 });
+      this.onContextMenu({ id: d.id, screenX: e.clientX, screenY: e.clientY, colorRole: d.meta?.colorRole ?? null, lineWidth: d.meta?.lineWidth ?? 1, lineStyle: d.meta?.lineStyle ?? 'solid' });
     };
 
     this.interactionEl.addEventListener('pointermove', this.onPointerMoveCapture, { capture: true });

@@ -718,6 +718,7 @@
     : null}
   colorRole={ctxMenu?.colorRole ?? "neutral"}
   lineWidth={ctxMenu?.lineWidth ?? 1}
+  lineStyle={ctxMenu?.lineStyle ?? "solid"}
   onPickColor={(role) => {
     if (!ctxMenu) return;
     drawingsRenderer?.updateMetaById(ctxMenu.id, { colorRole: role });
@@ -728,6 +729,11 @@
     drawingsRenderer?.updateMetaById(ctxMenu.id, { lineWidth: width });
     ctxMenu = { ...ctxMenu, lineWidth: width };
   }}
+  onPickStyle={(style) => {
+    if (!ctxMenu) return;
+    drawingsRenderer?.updateMetaById(ctxMenu.id, { lineStyle: style });
+    ctxMenu = { ...ctxMenu, lineStyle: style };
+  }}
   onPreviewColor={(role) => {
     if (ctxMenu)
       drawingsRenderer?.previewMeta(ctxMenu.id, role === null ? null : { colorRole: role });
@@ -735,6 +741,10 @@
   onPreviewWidth={(width) => {
     if (ctxMenu)
       drawingsRenderer?.previewMeta(ctxMenu.id, width === null ? null : { lineWidth: width });
+  }}
+  onPreviewStyle={(style) => {
+    if (ctxMenu)
+      drawingsRenderer?.previewMeta(ctxMenu.id, style === null ? null : { lineStyle: style });
   }}
   onDelete={() => {
     if (ctxMenu) drawingsRenderer?.deleteById(ctxMenu.id);

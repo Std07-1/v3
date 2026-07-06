@@ -8,6 +8,7 @@
 
 import type { Drawing } from '../../../types';
 import { distToRectEdge } from '../../interaction/geometry';
+import { dashPattern } from '../lineStyles';
 import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './types';
 
 /** Draft fill — використовуємо semi-transparent blue для контрасту з final
@@ -38,7 +39,8 @@ export const RectTool: ToolModule = {
         // ADR-0078: color-preserving hover/select (див. TrendTool). Fill — без
         // тіні; stroke зберігає колір + glow на hover/select; draft — accent-пунктир.
         const highlight = !isDraft && (isHovered || isSelected);
-        ctx.setLineDash(isDraft ? [4, 4] : []);
+        ctx.setLineDash(isDraft ? [4, 4] : dashPattern(d.meta?.lineStyle, d.meta?.lineWidth ?? 1));
+        ctx.lineCap = d.meta?.lineStyle === 'dotted' ? 'round' : 'butt';
         ctx.fillStyle = isDraft ? DRAFT_FILL : rectFill;
         ctx.shadowBlur = 0;
         ctx.fillRect(minX, minY, w, h);

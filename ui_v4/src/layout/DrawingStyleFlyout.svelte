@@ -18,6 +18,10 @@
     roleSpec,
     type DrawingColorRole,
   } from "../chart/drawings/colorRoles";
+  import {
+    DRAWING_LINE_STYLES,
+    type DrawingLineStyle,
+  } from "../chart/drawings/lineStyles";
   import { dismissOnOutside } from "../lib/actions/dismissOnOutside";
 
   interface Props {
@@ -29,12 +33,16 @@
     colorRole: DrawingColorRole;
     /** Поточна товщина лінії (px). Прев'ю chips тоновані поточним кольором. */
     lineWidth: number;
+    /** Поточний стиль лінії (solid/dashed/dotted). */
+    lineStyle: DrawingLineStyle;
     onPickColor: (role: DrawingColorRole) => void;
     onPickWidth: (width: number) => void;
+    onPickStyle: (style: DrawingLineStyle) => void;
     /** object-режим: live-preview на фігурі. Наведення → значення; вихід з ряду
      *  → null (відкат). Undefined у tool-режимі (нема об'єкта). */
     onPreviewColor?: (role: DrawingColorRole | null) => void;
     onPreviewWidth?: (width: number | null) => void;
+    onPreviewStyle?: (style: DrawingLineStyle | null) => void;
     /** object-режим: видалити фігуру (undoable). Undefined у tool-режимі. */
     onDelete?: () => void;
     onClose: () => void;
@@ -43,13 +51,22 @@
     request,
     colorRole,
     lineWidth,
+    lineStyle,
     onPickColor,
     onPickWidth,
+    onPickStyle,
     onPreviewColor,
     onPreviewWidth,
+    onPreviewStyle,
     onDelete,
     onClose,
   }: Props = $props();
+
+  // SVG dash-візерунок для прев'ю chips (dotted → round-cap крапки: нульовий
+  // штрих = круг діаметром stroke-width, як canvas dashPattern).
+  function svgDash(style: DrawingLineStyle): string {
+    return style === "dashed" ? "7 4" : style === "dotted" ? "0.01 4" : "none";
+  }
 
   // Смисл поточного кольору (заголовок) + його токен для тонування.
   let current = $derived(roleSpec(colorRole) ?? DRAWING_COLOR_ROLES[0]);
@@ -61,7 +78,7 @@
   // Позиція: праворуч від іконки, clamp у viewport (щоб не вилазив за край).
   const FLYOUT_W = 188;
   const GAP = 8;
-  let flyoutH = $derived(request?.showDelete ? 154 : 118);
+  let flyoutH = $derived(request?.showDelete ? 190 : 154);
   let left = $derived(
     request
       ? Math.min(request.anchorX + GAP, window.innerWidth - FLYOUT_W - GAP)
@@ -146,6 +163,39 @@
               stroke={sampleColor}
               stroke-width={w}
               stroke-linecap="round"
+              opacity="0.9"
+            />
+          </svg>
+        </button>
+      {/each}
+    </div>
+
+    <div class="sep"></div>
+
+    <!-- Стиль лінії — chips solid/dashed/dotted (прев'ю в поточному кольорі).
+         object-режим: наведення → live-preview на фігурі, вихід → відкат. -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="styles" onmouseleave={() => onPreviewStyle?.(null)}>
+      {#each DRAWING_LINE_STYLES as s (s.style)}
+        <button
+          class="lstyle"
+          class:active={s.style === lineStyle}
+          title={s.label}
+          aria-label={s.label}
+          aria-pressed={s.style === lineStyle}
+          onmouseenter={() => onPreviewStyle?.(s.style)}
+          onclick={() => onPickStyle(s.style)}
+        >
+          <svg viewBox="0 0 44 12" aria-hidden="true">
+            <line
+              x1="3"
+              y1="6"
+              x2="41"
+              y2="6"
+              stroke={sampleColor}
+              stroke-width="2"
+              stroke-linecap={s.style === "dotted" ? "round" : "butt"}
+              stroke-dasharray={svgDash(s.style)}
               opacity="0.9"
             />
           </svg>
@@ -321,6 +371,46 @@
     border-color: color-mix(in srgb, var(--text-1, #fff) 24%, transparent);
   }
   .width.active {
+    background: color-mix(in srgb, var(--text-1, #fff) 7%, transparent);
+    border-color: color-mix(in srgb, var(--text-1, #fff) 20%, transparent);
+  }
+
+  /* Стиль лінії — chips solid/dashed/dotted (прев'ю в поточному кольорі). */
+  .styles {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    padding: 2px 1px 0;
+  }
+  .lstyle {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 22px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    transition:
+      background 0.12s ease,
+      border-color 0.12s ease;
+  }
+  .lstyle svg {
+    width: 34px;
+    height: 10px;
+    display: block;
+  }
+  .lstyle:hover {
+    background: color-mix(in srgb, var(--text-1, #fff) 8%, transparent);
+  }
+  .lstyle:focus-visible {
+    outline: none;
+    border-color: color-mix(in srgb, var(--text-1, #fff) 24%, transparent);
+  }
+  .lstyle.active {
     background: color-mix(in srgb, var(--text-1, #fff) 7%, transparent);
     border-color: color-mix(in srgb, var(--text-1, #fff) 20%, transparent);
   }

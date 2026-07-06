@@ -53,6 +53,7 @@
     RenderFrame,
     ActiveTool,
     DrawingType,
+    DrawingLineStyle,
   } from "./types";
   import DrawingStyleFlyout from "./layout/DrawingStyleFlyout.svelte";
   import {
@@ -156,15 +157,18 @@
   interface ToolStyle {
     colorRole: DrawingColorRole;
     lineWidth: number;
+    lineStyle: DrawingLineStyle;
   }
   const STYLEABLE_TOOLS: DrawingType[] = ["hline", "trend", "rect"];
+  const LINE_STYLES: DrawingLineStyle[] = ["solid", "dashed", "dotted"];
 
   function loadToolDefaults(): Record<DrawingType, ToolStyle> {
-    const base = {
-      hline: { colorRole: "neutral" as DrawingColorRole, lineWidth: 1 },
-      trend: { colorRole: "neutral" as DrawingColorRole, lineWidth: 1 },
-      rect: { colorRole: "neutral" as DrawingColorRole, lineWidth: 1 },
-    };
+    const mk = (): ToolStyle => ({
+      colorRole: "neutral",
+      lineWidth: 1,
+      lineStyle: "solid",
+    });
+    const base = { hline: mk(), trend: mk(), rect: mk() };
     try {
       const parsed = JSON.parse(
         localStorage.getItem("v4_drawing_defaults") ?? "{}",
@@ -175,6 +179,8 @@
           base[k].colorRole = role;
         const w = parsed?.[k]?.lineWidth;
         if (typeof w === "number" && w >= 1 && w <= 4) base[k].lineWidth = w;
+        const st = parsed?.[k]?.lineStyle;
+        if (LINE_STYLES.includes(st)) base[k].lineStyle = st;
       }
     } catch {
       /* corrupt / private mode — defaults */
@@ -210,6 +216,12 @@
     if (!styleFlyout) return;
     const t = styleFlyout.tool;
     toolDefaults = { ...toolDefaults, [t]: { ...toolDefaults[t], lineWidth: width } };
+    saveToolDefaults();
+  }
+  function pickStyle(style: DrawingLineStyle): void {
+    if (!styleFlyout) return;
+    const t = styleFlyout.tool;
+    toolDefaults = { ...toolDefaults, [t]: { ...toolDefaults[t], lineStyle: style } };
     saveToolDefaults();
   }
 
@@ -813,8 +825,10 @@
       ? toolDefaults[styleFlyout.tool].colorRole
       : "neutral"}
     lineWidth={styleFlyout ? toolDefaults[styleFlyout.tool].lineWidth : 1}
+    lineStyle={styleFlyout ? toolDefaults[styleFlyout.tool].lineStyle : "solid"}
     onPickColor={pickColorRole}
     onPickWidth={pickWidth}
+    onPickStyle={pickStyle}
     onClose={() => (styleFlyout = null)}
   />
 

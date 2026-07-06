@@ -7,6 +7,7 @@
 
 import type { Drawing } from '../../../types';
 import { distToSegment } from '../../interaction/geometry';
+import { dashPattern } from '../lineStyles';
 import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './types';
 
 export const TrendTool: ToolModule = {
@@ -32,7 +33,8 @@ export const TrendTool: ToolModule = {
         const highlight = !isDraft && (isHovered || isSelected);
         ctx.strokeStyle = isDraft ? accentColor : baseColor;
         ctx.lineWidth = (d.meta?.lineWidth ?? 1) + (highlight ? 1 : 0);
-        ctx.setLineDash(isDraft ? [4, 4] : []);
+        ctx.setLineDash(isDraft ? [4, 4] : dashPattern(d.meta?.lineStyle, d.meta?.lineWidth ?? 1));
+        ctx.lineCap = d.meta?.lineStyle === 'dotted' ? 'round' : 'butt';
         ctx.shadowColor = highlight ? baseColor : 'transparent';
         ctx.shadowBlur = highlight ? 6 : 0;
 

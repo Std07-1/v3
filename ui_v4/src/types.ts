@@ -277,6 +277,7 @@ export interface DrawingContextRequest {
   screenY: number;
   colorRole: DrawingColorRole | null;
   lineWidth: number;
+  lineStyle: DrawingLineStyle;
 }
 
 // -------------------- Warnings --------------------
