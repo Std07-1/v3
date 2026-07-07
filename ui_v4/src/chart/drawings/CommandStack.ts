@@ -48,6 +48,13 @@ export class CommandStack {
     this.pointer--;
   }
 
+  /** ADR-0084 polish (audit v2): скинути історію — Ctrl+Z не має тягнути
+   *  фігури через межу символу (стек чиститься при symbol-switch). */
+  clear(): void {
+    this.stack = [];
+    this.pointer = -1;
+  }
+
   redo(): void {
     if (this.pointer >= this.stack.length - 1) return;
 

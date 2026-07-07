@@ -125,7 +125,13 @@ export class DrawingsRenderer {
   // Оновлюється дешевим guard-ом (length+lastTime) у forceRender — O(n) rebuild
   // лише коли дані реально змінились, НЕ щокадру (FP10-дух: без churn у hot path).
   private barTimesSec: number[] = [];
+  private barTimesFirst = NaN;
   private barTimesLast = NaN;
+  // Перф (audit v2): LWC data() алокує O(n) на кожен виклик — між перевірками
+  // тримаємо кеш до RECHECK_MS (пан/зум між тіками реюзає кеш безкоштовно;
+  // новий бар підхоплюється ≤250мс — непомітно, рендер і так тікає частіше).
+  private barTimesCheckedAt = 0;
+  private static readonly BAR_TIMES_RECHECK_MS = 250;
   // ADR-0083: медіанний крок барів (сек) для екстраполяції за краями —
   // gap-стійкий (weekend/session крайова пара не «розтягує» future-якорі).
   private barStepSec = 0;
@@ -173,6 +179,7 @@ export class DrawingsRenderer {
   // listeners
   private ro: ResizeObserver;
   private onStorageEvent!: (e: StorageEvent) => void;
+  private onVisibleRangeChange!: () => void;
 
   private onPointerMoveCapture!: (e: PointerEvent) => void;
   private onPointerDownCapture!: (e: PointerEvent) => void;
@@ -219,7 +226,8 @@ export class DrawingsRenderer {
     if (this.canvas.parentElement) this.ro.observe(this.canvas.parentElement);
 
     // Range trigger — renderSync (not rAF) to eliminate 1-frame lag during scroll/zoom
-    this.chartApi.timeScale().subscribeVisibleTimeRangeChange(() => this.renderSync());
+    this.onVisibleRangeChange = () => this.renderSync();
+    this.chartApi.timeScale().subscribeVisibleTimeRangeChange(this.onVisibleRangeChange);
 
     // ADR-0008: Y-axis sync — відбувається через callback notifyPriceRangeChanged(),
     // а не через wheel/dblclick listeners (ті блокуються interaction.ts:stopImmediatePropagation).
@@ -243,6 +251,9 @@ export class DrawingsRenderer {
     // розбіжності ~мс замість «до наступного save».
     this.onStorageEvent = (e) => {
       if (e.key !== this.storageKey || e.storageArea !== localStorage) return;
+      // Зовнішній стан = нова істина: активний preview-снапшот забуваємо,
+      // інакше revert відкотив би СВІЖИЙ commit іншої вкладки (audit v2).
+      this.previewOrig = null;
       this.loadFromStorage();
     };
     window.addEventListener('storage', this.onStorageEvent);
@@ -252,6 +263,9 @@ export class DrawingsRenderer {
   }
 
   setAll(drawings: Drawing[]): void {
+    // Full frame = ймовірна заміна серії (TF/symbol switch) — негайна
+    // ревалідація кешу барів (audit v2: guard-протикання на switch).
+    this.refreshBarTimes(true);
     // Server-sync: only overwrite if server sends actual drawings.
     // If empty (client-only mode), keep localStorage drawings.
     if (!drawings || drawings.length === 0) return;
@@ -305,6 +319,18 @@ export class DrawingsRenderer {
     } else {
       d.meta = this.applyMetaPatch(d.meta, patch);
     }
+    this.scheduleRender();
+  }
+
+  /** Audit v2: зняти активний live-preview (якщо є) — повернути фігурі
+   *  оригінальний meta. Кличеться ПЕРЕД undo/redo (ChartPane): інакше
+   *  applyLocally→saveToStorage персистив би незакомічений прев'ю-стан
+   *  (і розсилав його cross-tab). */
+  revertPreview(): void {
+    if (!this.previewOrig) return;
+    const d = this.drawings.find((x) => x.id === this.previewOrig!.id);
+    if (d) d.meta = this.previewOrig.meta ? { ...this.previewOrig.meta } : undefined;
+    this.previewOrig = null;
     this.scheduleRender();
   }
 
@@ -410,14 +436,24 @@ export class DrawingsRenderer {
   // не втрачає контекст. Регулярні методи треба було б wrapper-ити у
   // arrow closures на кожен виклик (alloc per hit-test).
 
-  /** ADR-0082 D6: оновити кеш часів барів, якщо серія змінилась (guard:
-   *  length + lastTime — O(1); rebuild O(n) лише на реальну зміну даних). */
-  private refreshBarTimes(): void {
+  /** ADR-0082 D6 (+audit v2 hardening): оновити кеш часів барів, якщо серія
+   *  змінилась. Guard = (length, FIRST, last) — first ловить symbol/TF-switch,
+   *  де length+last випадково збіглись (різний інтер'єр). data() алокує O(n)
+   *  на виклик → між перевірками кеш вважається свіжим RECHECK_MS (пан/зум
+   *  реюзає задарма; `force` — негайна перевірка на відомих зламах кешу). */
+  private refreshBarTimes(force = false): void {
+    const now = performance.now();
+    if (!force && now - this.barTimesCheckedAt < DrawingsRenderer.BAR_TIMES_RECHECK_MS) return;
+    this.barTimesCheckedAt = now;
+
     const bars = this.seriesApi.data();
     const n = bars.length;
+    const firstT = n > 0 ? timeToSec(bars[0].time as HorzScaleItem) : NaN;
     const lastT = n > 0 ? timeToSec(bars[n - 1].time as HorzScaleItem) : NaN;
-    if (n === this.barTimesSec.length && (lastT === this.barTimesLast || (Number.isNaN(lastT) && Number.isNaN(this.barTimesLast)))) return;
+    const same = (a: number, b: number) => a === b || (Number.isNaN(a) && Number.isNaN(b));
+    if (n === this.barTimesSec.length && same(firstT, this.barTimesFirst) && same(lastT, this.barTimesLast)) return;
     this.barTimesSec = bars.map((b) => timeToSec(b.time as HorzScaleItem));
+    this.barTimesFirst = firstT;
     this.barTimesLast = lastT;
     this.barStepSec = medianStep(this.barTimesSec);
   }
@@ -546,6 +582,10 @@ export class DrawingsRenderer {
     }
     if (this.drawings.length > 0) this.saveToStorage(); // flush попереднього символу
     this.storageKey = nextKey;
+    // Audit v2: undo-стек НЕ переживає символ — інакше Ctrl+Z матеріалізував
+    // би фігури чужого символу в новий стор. Preview-снапшот теж чистимо.
+    this.commandStack.clear();
+    this.previewOrig = null;
     this.migrateLegacyPerTf(symbol);
     this.loadFromStorage();
     // Legacy глобальний ключ без символу (до ADR-0007) — прибрати.
@@ -632,6 +672,24 @@ export class DrawingsRenderer {
     //    щоб афорданси не зникали, поки курсор тягнеться до × (× стоїть НАД лінією).
     if (this.deleteBtn && distToPoint(cursorX, cursorY, this.deleteBtn.x, this.deleteBtn.y) <= DELETE_BTN_RADIUS_PX) {
       return { id: this.deleteBtn.id, handleIdx: null };
+    }
+    // 0b) audit v2 (confirmed): для interiorIsBody-фігур (rect) курсор УСЕРЕДИНІ
+    //     AABB = hit тіла — інтер'єр rect не є hit (лише грань), тож дорогою від
+    //     грані до центрального × той зникав і був недосяжний hover-ом. Бонус:
+    //     тіло rect тягнеться зсередини (як у TV). Для ray/trend/hline НЕ діє
+    //     (їх AABB ≠ фігура).
+    if (this.deleteBtn) {
+      const target = this.drawings.find((q) => q.id === this.deleteBtn!.id);
+      if (target && getToolModule(target.type)?.interiorIsBody) {
+        const aabb = this.aabbById.get(this.deleteBtn.id);
+        if (
+          aabb &&
+          cursorX >= aabb.minX && cursorX <= aabb.maxX &&
+          cursorY >= aabb.minY && cursorY <= aabb.maxY
+        ) {
+          return { id: this.deleteBtn.id, handleIdx: null };
+        }
+      }
     }
 
     // 1) handles активної фігури (під курсором АБО вибраної) — хапати кінці
@@ -1125,11 +1183,25 @@ export class DrawingsRenderer {
   }
 
   private forceRender(): void {
-    // ADR-0082 D6: свіжий кеш часів барів — раз на кадр (guard всередині O(1)).
+    // ADR-0082 D6: свіжий кеш часів барів (guard + throttle всередині).
     this.refreshBarTimes();
 
-    const cssW = this.canvas.width / this.dpr;
-    const cssH = this.canvas.height / this.dpr;
+    const canvasW = this.canvas.width / this.dpr;
+    const canvasH = this.canvas.height / this.dpr;
+
+    // Audit v2 / owner-репорт (в): малювання НЕ заходить на цінову шкалу і
+    // часову вісь — робоча площина = пана чарта. LWC віддає розміри осей
+    // (дешеві getters); fallback → повний canvas (деградація видима, не тиха).
+    let paneW = canvasW;
+    let paneH = canvasH;
+    try {
+      const psw = this.chartApi.priceScale('right').width();
+      const tsh = this.chartApi.timeScale().height();
+      if (psw > 0 && psw < canvasW) paneW = canvasW - psw;
+      if (tsh > 0 && tsh < canvasH) paneH = canvasH - tsh;
+    } catch { /* до першого layout LWC — повний canvas */ }
+    const cssW = paneW;
+    const cssH = paneH;
 
     // 1) hover compute (latest-wins) — 1 раз/кадр
     if (this.hoverDirty && this.lastCursor) {
@@ -1138,8 +1210,15 @@ export class DrawingsRenderer {
       this.updateCursor();
     }
 
-    this.ctx.clearRect(0, 0, cssW, cssH);
+    this.ctx.clearRect(0, 0, canvasW, canvasH);
     this.aabbById.clear();
+
+    // Belt до cssW/cssH вище: жоден штрих (glow/тінь/лейбл включно) не
+    // протікає на шкали.
+    this.ctx.save();
+    this.ctx.beginPath();
+    this.ctx.rect(0, 0, paneW, paneH);
+    this.ctx.clip();
 
     const toX = (ms: T_MS): number | null => this.toX(ms);
     const toY = (p: number): number | null => this.toY(p);
@@ -1194,7 +1273,8 @@ export class DrawingsRenderer {
 
     // 3) hover-афорданси (концепт: наведення проявляє редагування + видалення).
     //    Активна фігура = під курсором АБО вибрана; тільки у cursor-режимі.
-    //    Крапки-кінці (renderHandles) + делікатне × по центру (видалити).
+    //    Крапки-кінці (renderHandles) + делікатне × (видалити). Позиція × —
+    //    tool.deleteAnchor (ray: середина ВИДИМОГО сегмента) або центр AABB.
     this.deleteBtn = null;
     if (this.activeTool === null) {
       const activeId = this.hovered?.id ?? this.selectedId;
@@ -1202,10 +1282,21 @@ export class DrawingsRenderer {
         const d = this.drawings.find((q) => q.id === activeId);
         if (d) {
           this.renderHandles(d);
-          const aabb = this.aabbById.get(d.id);
-          if (aabb) {
-            const cx = (aabb.minX + aabb.maxX) / 2;
-            const cy = (aabb.minY + aabb.maxY) / 2;
+          const tool = getToolModule(d.type);
+          let cx: number | null = null;
+          let cy: number | null = null;
+          const anchor = tool?.deleteAnchor?.(d, toX, toY, cssW, cssH);
+          if (anchor) {
+            cx = anchor.x;
+            cy = anchor.y;
+          } else {
+            const aabb = this.aabbById.get(d.id);
+            if (aabb) {
+              cx = (aabb.minX + aabb.maxX) / 2;
+              cy = (aabb.minY + aabb.maxY) / 2;
+            }
+          }
+          if (cx !== null && cy !== null) {
             const overX = !!this.lastCursor && distToPoint(this.lastCursor.x, this.lastCursor.y, cx, cy) <= DELETE_BTN_RADIUS_PX;
             this.renderDeleteButton(cx, cy, overX);
             this.deleteBtn = { id: d.id, x: cx, y: cy };
@@ -1213,12 +1304,16 @@ export class DrawingsRenderer {
         }
       }
     }
+
+    this.ctx.restore(); // pane-clip (шкали чисті)
   }
 
   private renderHandles(d: Drawing): void {
     this.ctx.save();
     this.ctx.setLineDash([]);
     this.ctx.lineWidth = 1.5;
+
+    const secondary = getToolModule(d.type)?.secondaryHandles;
 
     for (let i = 0; i < d.points.length; i++) {
       // Наведену крапку НЕ малюємо — там уже приціл (crosshair), кільце зайве.
@@ -1228,8 +1323,11 @@ export class DrawingsRenderer {
       const y = this.toY(d.points[i].price);
       if (x === null || y === null) continue;
 
-      // Стала крапка (не росте на hover) — не затуляє точку прицілювання.
-      const r = this.handleRadiusPx;
+      // Вторинний якір (ray: напрямна точка) — менший і тьмяніший: ієрархія
+      // замість «двох однакових крапок на кінці» (owner-репорт б).
+      const isSecondary = secondary?.includes(i) ?? false;
+      const r = isSecondary ? this.handleRadiusPx * 0.75 : this.handleRadiusPx;
+      this.ctx.globalAlpha = isSecondary ? 0.55 : 1;
 
       // порожня крапка: ЛИШЕ золоте кільце, центр прозорий — видно свічку крізь нього
       this.ctx.beginPath();
@@ -1237,6 +1335,7 @@ export class DrawingsRenderer {
       this.ctx.strokeStyle = this.themeAccentColor;
       this.ctx.stroke();
     }
+    this.ctx.globalAlpha = 1;
 
     this.ctx.restore();
   }
@@ -1269,6 +1368,7 @@ export class DrawingsRenderer {
     this.ro.disconnect();
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
     window.removeEventListener('storage', this.onStorageEvent);
+    this.chartApi.timeScale().unsubscribeVisibleTimeRangeChange(this.onVisibleRangeChange);
 
     this.interactionEl.removeEventListener('pointermove', this.onPointerMoveCapture, { capture: true } as any);
     this.interactionEl.removeEventListener('pointerdown', this.onPointerDownCapture, { capture: true } as any);

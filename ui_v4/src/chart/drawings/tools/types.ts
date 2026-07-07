@@ -85,6 +85,30 @@ export interface ToolModule {
      */
     render(d: Drawing, rc: RenderContext): ScreenAabb | null;
 
+    /** ADR-0084 polish: індекси «вторинних» якорів (рендеряться делікатніше —
+     *  менші/тьмяніші кільця). Ray: [1] — p2 лише задає напрямок, візуально
+     *  підпорядкований стартовій точці. Відсутнє → всі якорі первинні. */
+    readonly secondaryHandles?: readonly number[];
+
+    /** ADR-0084 polish (audit v2 confirmed): інтер'єр AABB = тіло фігури.
+     *  Rect: true — hover/drag/keep-alive до × працюють ЗСЕРЕДИНИ (грань-only
+     *  hit лишав × недосяжним). Для лінійних фігур НЕ ставити (AABB ≠ фігура). */
+    readonly interiorIsBody?: boolean;
+
+    /**
+     * ADR-0084 polish: позиція delete-× афорданса (ADR-0079). Відсутнє →
+     * renderer використовує центр AABB (коректно для trend/hline/rect).
+     * Ray перевизначає: середина ВИДИМОГО сегмента — центр кліпнутого AABB
+     * не лежить на лінії, × «висів у пустоті».
+     */
+    deleteAnchor?(
+        d: Drawing,
+        toX: (t_ms: number) => number | null,
+        toY: (price: number) => number | null,
+        cssW: number,
+        cssH: number,
+    ): { x: number; y: number } | null;
+
     /**
      * Hit-test проти drawing з cursor у CSS-px. tolerance = caller's hit
      * tolerance budget (renderer caches з CSS-var, default 10px desktop /

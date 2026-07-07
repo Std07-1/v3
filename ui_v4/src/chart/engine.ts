@@ -234,7 +234,9 @@ export class ChartEngine {
         borderVisible: false,
         // ADR-0083 D4 (owner: «як у ТВ»): постійний TV-стиль зазор праворуч —
         // місце малювати в майбутнє БЕЗ pan-у (draw-into-future). Було 3.
-        rightOffset: 10,
+        // Mobile (audit v2): малювання приховане (@media) — 10 барів = ~23%
+        // портретного чарта змарновано; лишаємо компактні 3.
+        rightOffset: isMobile ? 3 : 10,
         barSpacing: 8,
         maxBarSpacing: 50,
         timeVisible: true,

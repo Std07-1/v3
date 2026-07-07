@@ -122,9 +122,13 @@
   let _lastReplayIdx = 0;
 
   export function undo() {
+    // Audit v2: transient live-preview знімається ПЕРЕД undo — інакше
+    // saveToStorage персистив би незакомічений прев'ю-meta (і cross-tab).
+    drawingsRenderer?.revertPreview();
     drawingsRenderer?.commandStack.undo();
   }
   export function redo() {
+    drawingsRenderer?.revertPreview();
     drawingsRenderer?.commandStack.redo();
   }
   export function cancelDraft() {

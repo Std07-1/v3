@@ -21,6 +21,9 @@ export const RectTool: ToolModule = {
     label: 'Прямокутник',
     icon: 'square', // Lucide icon name (T3 wires it)
     hotkey: 'r',
+    // Audit v2 (confirmed): інтер'єр = тіло — hover/keep-alive/drag зсередини
+    // (інакше делікатне × у центрі було недосяжне hover-ом).
+    interiorIsBody: true,
 
     render(d: Drawing, rc: RenderContext): ScreenAabb | null {
         if (d.points.length < 2) return null;

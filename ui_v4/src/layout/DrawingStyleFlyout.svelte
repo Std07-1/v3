@@ -324,6 +324,9 @@
     flex-direction: column;
     gap: 2px;
     padding: 7px 9px 8px;
+    /* audit v2: border-box — інакше реальна ширина = 212+18+2=232px і clamp
+       (FLYOUT_W=212) пускав правий край за екран. */
+    box-sizing: border-box;
     width: 212px;
     background: color-mix(in srgb, var(--card, #1c2128) 46%, transparent);
     -webkit-backdrop-filter: blur(22px) saturate(1.4);

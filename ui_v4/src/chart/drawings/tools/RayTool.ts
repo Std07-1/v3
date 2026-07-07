@@ -32,6 +32,37 @@ export const RayTool: ToolModule = {
     label: 'Промінь',
     icon: 'move-up-right',
     hotkey: 'y',
+    // p2 лише задає напрямок — рендериться делікатніше за стартовий якір
+    // (owner: «дві крапки на кінці» читались як шум; ієрархія лікує).
+    secondaryHandles: [1],
+
+    /** delete-× на СЕРЕДИНІ видимого сегмента: центр кліпнутого AABB не
+     *  лежить на лінії (× «висів у пустоті» — owner-репорт + скрін). Кліп
+     *  p1→far до canvas параметрично (Liang-Barsky lite), × при t середньому. */
+    deleteAnchor(d, toX, toY, cssW, cssH) {
+        if (d.points.length < 2) return null;
+        const x1 = toX(d.points[0].t_ms);
+        const y1 = toY(d.points[0].price);
+        const x2 = toX(d.points[1].t_ms);
+        const y2 = toY(d.points[1].price);
+        if (x1 === null || y1 === null || x2 === null || y2 === null) return null;
+        const far = farPoint(x1, y1, x2, y2);
+        const dx = far.x - x1;
+        const dy = far.y - y1;
+        let tMin = 0;
+        let tMax = 1;
+        const clip = (p: number, q: number): boolean => {
+            // p*t <= q — оновити [tMin,tMax]; false → сегмент повністю поза.
+            if (p === 0) return q >= 0;
+            const r = q / p;
+            if (p < 0) { if (r > tMax) return false; if (r > tMin) tMin = r; }
+            else { if (r < tMin) return false; if (r < tMax) tMax = r; }
+            return true;
+        };
+        if (!clip(-dx, x1) || !clip(dx, cssW - x1) || !clip(-dy, y1) || !clip(dy, cssH - y1)) return null;
+        const tMid = (tMin + tMax) / 2;
+        return { x: x1 + dx * tMid, y: y1 + dy * tMid };
+    },
 
     render(d: Drawing, rc: RenderContext): ScreenAabb | null {
         if (d.points.length < 2) return null;
