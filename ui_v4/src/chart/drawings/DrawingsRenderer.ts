@@ -6,7 +6,7 @@ import { MismatchDirection } from 'lightweight-charts';
 import type { Drawing, ActiveTool, WsAction, T_MS, UiWarning, DrawingContextRequest, DrawingType, DrawingColorRole } from '../../types';
 import { CommandStack, type CommandAction } from './CommandStack';
 import { buildRoleColorMap } from './colorRoles';
-import { timeToFractionalIndex, fractionalIndexToTime } from './timeMap';
+import { timeToFractionalIndex, fractionalIndexToTime, medianStep } from './timeMap';
 import {
   HIT_TOLERANCE_PX,
   HANDLE_RADIUS_PX,
@@ -123,6 +123,9 @@ export class DrawingsRenderer {
   // лише коли дані реально змінились, НЕ щокадру (FP10-дух: без churn у hot path).
   private barTimesSec: number[] = [];
   private barTimesLast = NaN;
+  // ADR-0083: медіанний крок барів (сек) для екстраполяції за краями —
+  // gap-стійкий (weekend/session крайова пара не «розтягує» future-якорі).
+  private barStepSec = 0;
 
   // RAF render
   private dpr = 1;
@@ -411,6 +414,7 @@ export class DrawingsRenderer {
     if (n === this.barTimesSec.length && (lastT === this.barTimesLast || (Number.isNaN(lastT) && Number.isNaN(this.barTimesLast)))) return;
     this.barTimesSec = bars.map((b) => timeToSec(b.time as HorzScaleItem));
     this.barTimesLast = lastT;
+    this.barStepSec = medianStep(this.barTimesSec);
   }
 
   // ADR-0082 D6: час → X через ДРОБОВИЙ logical-індекс (інтерполяція між
@@ -420,7 +424,7 @@ export class DrawingsRenderer {
   // Кеш оновлюється у forceRender (раз/кадр); тут — лише читання (hot path:
   // рендер + hit-test на pointer events; стейлість ≤1 кадру прийнятна).
   private toX = (t_ms: number): number | null => {
-    const idx = timeToFractionalIndex(this.barTimesSec, t_ms / 1000);
+    const idx = timeToFractionalIndex(this.barTimesSec, t_ms / 1000, this.barStepSec);
     if (idx === null) return null;
     return this.chartApi.timeScale().logicalToCoordinate(idx as import('lightweight-charts').Logical);
   };
@@ -434,7 +438,7 @@ export class DrawingsRenderer {
   private fromX(x: number): T_MS | null {
     const logical = this.chartApi.timeScale().coordinateToLogical(x);
     if (logical === null) return null;
-    const tSec = fractionalIndexToTime(this.barTimesSec, logical as number);
+    const tSec = fractionalIndexToTime(this.barTimesSec, logical as number, this.barStepSec);
     if (tSec === null) return null;
     return Math.round(tSec * 1000) as T_MS;
   }
