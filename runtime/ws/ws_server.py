@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import glob
 import json
 import logging
 import os
@@ -327,7 +328,76 @@ def _guard_candles_output(
     return warnings
 
 
-# в”Ђв”Ђ Session в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# -- Thinking archive (ADR-018 rotation-aware reader) -----------------------
+_THINKING_LIVE_FILE = "v3_thinking_archive.jsonl"
+_THINKING_ROTATED_GLOB = "v3_thinking_archive_*.jsonl"
+
+
+def _list_thinking_files(data_dir: str) -> list[str]:
+    """Newest-first archive file list: live head, then rotated by name desc.
+
+    Writer (trader-v3 ThinkingArchive) appends to the live file and, on 5 MB,
+    renames it to ``v3_thinking_archive_<YYYYMMDD_HHMMSS>.jsonl``. The live
+    file is therefore always freshest; rotated files carry a UTC strftime
+    suffix that sorts lexicographically == chronologically, so descending name
+    order == newest-first. The live file leads unconditionally.
+    """
+    files: list[str] = []
+    live = os.path.join(data_dir, _THINKING_LIVE_FILE)
+    if os.path.exists(live):
+        files.append(live)
+    rotated = glob.glob(os.path.join(data_dir, _THINKING_ROTATED_GLOB))
+    rotated.sort(key=os.path.basename, reverse=True)
+    files.extend(rotated)
+    return files
+
+
+def _read_thinking_records(
+    data_dir: str, limit: int, offset: int
+) -> tuple[list, int]:
+    """Read the thinking archive across live + rotated files, newest-first.
+
+    Returns ``(page, total)`` where ``page`` is the ``offset:offset+limit``
+    slice in newest-first order (same wire order the single-file reader used
+    via ``entries.reverse()``), and ``total`` counts every non-empty record
+    across all files.
+
+    Lazy: page records are JSON-decoded only until ``offset+limit`` are
+    collected; further files are line-counted for ``total`` without decoding
+    their entries. I5 degraded-but-loud: a corrupt JSON line on the page is
+    skipped with a warning (never crashes); a file that vanished between glob
+    and open (rotation/cleanup race) is skipped.
+    """
+    want = offset + limit
+    page: list = []
+    total = 0
+    for fpath in _list_thinking_files(data_dir):
+        try:
+            with open(fpath, "r", encoding="utf-8") as fh:
+                lines = [ln.strip() for ln in fh]
+        except OSError as exc:
+            # File disappeared between glob and open, or unreadable -> skip loud.
+            _log.warning("THINKING_READ_SKIP_FILE: %s (%s)", fpath, exc)
+            continue
+        lines = [ln for ln in lines if ln]
+        total += len(lines)
+        if len(page) >= want:
+            # Already have the full page; only need remaining files' counts.
+            continue
+        # Within a file the writer appends oldest->newest; reverse for
+        # newest-first, then decode only what the page still needs.
+        for ln in reversed(lines):
+            if len(page) >= want:
+                break
+            try:
+                page.append(json.loads(ln))
+            except (json.JSONDecodeError, ValueError):
+                _log.warning("THINKING_READ_BAD_JSON: %s", fpath)
+                continue
+    return page[offset : offset + limit], total
+
+
+# -- Session ----------------------------------------------------------------
 
 
 class WsSession:
@@ -2193,32 +2263,20 @@ def build_app(
         return allowed
 
     async def _api_archi_thinking(request: web.Request) -> web.Response:
-        """GET /api/archi/thinking?limit=50&offset=0 вЂ” Thinking Archive."""
+        """GET /api/archi/thinking?limit=50&offset=0 вЂ” Thinking Archive.
+
+        Reads across the live archive + all rotated ``v3_thinking_archive_*``
+        files (newest-first) so history survives rotation (ADR-018). Thin
+        wrapper over the pure ``_read_thinking_records`` helper.
+        """
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         if not _console_data_dir:
             return web.json_response({"error": "data_dir_not_configured"}, status=503)
-        import os as _os
-
-        fpath = _os.path.join(_console_data_dir, "v3_thinking_archive.jsonl")
         try:
             limit = min(int(request.query.get("limit", "50")), _console_thinking_max)
             offset = max(0, int(request.query.get("offset", "0")))
-            entries: list = []
-            if _os.path.exists(fpath):
-                with open(fpath, "r", encoding="utf-8") as _fh:
-                    for _line in _fh:
-                        _line = _line.strip()
-                        if not _line:
-                            continue
-                        try:
-                            entries.append(json.loads(_line))
-                        except (json.JSONDecodeError, ValueError):
-                            continue
-            # newest first
-            entries.reverse()
-            total = len(entries)
-            page = entries[offset : offset + limit]
+            page, total = _read_thinking_records(_console_data_dir, limit, offset)
             return web.json_response(
                 {"entries": page, "total": total, "offset": offset, "limit": limit}
             )
