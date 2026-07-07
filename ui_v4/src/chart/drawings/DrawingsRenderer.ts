@@ -92,6 +92,9 @@ export class DrawingsRenderer {
   private drawings: Drawing[] = [];
   private activeTool: ActiveTool = null;
   private draft: Drawing | null = null;
+  // ADR-0084 D2: measure ephemeral — 2-й клік «заморожує» вимір (draft лишається
+  // на екрані), наступний клік чистить і починає новий. Ніколи не комітиться.
+  private measureFrozen = false;
 
   // v3 selection state
   private selectedId: string | null = null;
@@ -267,6 +270,7 @@ export class DrawingsRenderer {
   setTool(tool: ActiveTool): void {
     this.activeTool = tool;
     this.draft = null;
+    this.measureFrozen = false;
 
     // UX: курсор тільки коли tool активний або є hovered/drag
     this.updateCursor();
@@ -275,6 +279,7 @@ export class DrawingsRenderer {
 
   cancelDraft(): void {
     this.draft = null;
+    this.measureFrozen = false;
     this.scheduleRender();
   }
 
@@ -729,6 +734,9 @@ export class DrawingsRenderer {
           }
           return;
         }
+        // ADR-0084 D2: заморожений вимір не слідує за курсором; чарт дихає
+        // (без preventDefault — pan/crosshair працюють до наступного кліку).
+        if (this.draft.type === 'measure' && this.measureFrozen) return;
         e.preventDefault();
         e.stopPropagation();
         this.updateDraft(x, y);
@@ -764,8 +772,13 @@ export class DrawingsRenderer {
       if (this.activeTool && this.activeTool !== 'eraser') {
         e.preventDefault();
         e.stopPropagation();
-        if (this.draft) {
-          // 2nd click: commit draft
+        // ADR-0084 D2: заморожений вимір → клік чистить його і починає новий.
+        if (this.draft?.type === 'measure' && this.measureFrozen) {
+          this.draft = null;
+          this.measureFrozen = false;
+          this.handleToolPointerDown(e.pointerId, x, y);
+        } else if (this.draft) {
+          // 2nd click: commit draft (measure → freeze, див. finishDraft)
           this.finishDraft();
         } else {
           // 1st click: create draft (hline is instant, trend/rect start preview)
@@ -936,12 +949,13 @@ export class DrawingsRenderer {
       return;
     }
 
-    if (this.activeTool === 'trend' || this.activeTool === 'rect') {
+    if (this.activeTool === 'trend' || this.activeTool === 'rect' || this.activeTool === 'ray' || this.activeTool === 'measure') {
       this.draft = {
         id: uuidv4(),
         type: this.activeTool,
         points: [{ t_ms, price }, { t_ms, price }],
-        meta: this.defaultMeta(this.activeTool),
+        // measure — ephemeral, стилі не застосовуються (ADR-0084 D2)
+        meta: this.activeTool === 'measure' ? undefined : this.defaultMeta(this.activeTool),
       };
       this.scheduleRender();
     }
@@ -972,6 +986,14 @@ export class DrawingsRenderer {
 
   private finishDraft(): void {
     if (!this.draft) return;
+
+    // ADR-0084 D2: measure НЕ комітиться — 2-й клік заморожує результат на
+    // екрані (draft лишається), наступний клік почне новий вимір.
+    if (this.draft.type === 'measure') {
+      this.measureFrozen = true;
+      this.scheduleRender();
+      return;
+    }
 
     if (this.draft.points.length < 2) {
       // 1-point drawing (hline): always valid — commit as-is.
@@ -1137,6 +1159,8 @@ export class DrawingsRenderer {
         baseColor,
         accentColor: this.themeAccentColor,
         rectFill: this.themeRectFill,
+        bullColor: this.roleColors.bull,
+        bearColor: this.roleColors.bear,
         isDraft,
         isHovered: this.hovered?.id === d.id,
         isSelected: this.selectedId === d.id,

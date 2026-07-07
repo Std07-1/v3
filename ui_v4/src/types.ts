@@ -235,7 +235,9 @@ export interface SignalAlert {
 }
 
 // -------------------- Drawings --------------------
-export type DrawingType = 'hline' | 'trend' | 'rect';
+// ADR-0084: 'ray' — персистентний промінь; 'measure' — EPHEMERAL лінійка
+// (живе лише як draft: не комітиться, не зберігається, не hit-test'иться).
+export type DrawingType = 'hline' | 'trend' | 'rect' | 'ray' | 'measure';
 
 /** ADR-0080 (surface-2): семантична роль-колір. Резолвиться у token-хекс при
  *  рендері (theme-aware). SSOT списку ролей + label/cssVar — chart/drawings/
@@ -266,7 +268,7 @@ export interface Drawing {
   };
 }
 
-export type ActiveTool = 'hline' | 'trend' | 'rect' | 'eraser' | null;
+export type ActiveTool = 'hline' | 'trend' | 'rect' | 'ray' | 'measure' | 'eraser' | null;
 
 /** ADR-0078/0080: right-click на закомічену фігуру → запит на показ style-flyout
  *  (Видалити + палітра ролей з live-preview). Renderer віддає id, екранну позицію

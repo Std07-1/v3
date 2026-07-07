@@ -41,8 +41,9 @@
     onOpenStyle?: (tool: DrawingType, anchor: DOMRect) => void;
   } = $props();
 
-  // Лише справжні drawing-типи мають налаштування стилю (не cursor/eraser).
-  const STYLEABLE = new Set<ActiveTool>(["hline", "trend", "rect"]);
+  // Лише справжні drawing-типи мають налаштування стилю (не cursor/eraser;
+  // measure — ephemeral, стилів не має, ADR-0084 D2).
+  const STYLEABLE = new Set<ActiveTool>(["hline", "trend", "rect", "ray"]);
 
   function handleContext(e: MouseEvent, id: ActiveTool): void {
     // Native-меню задушене (консистентний pro-tool right-click, як на полотні).
@@ -68,6 +69,11 @@
   const ICON_TREND =
     '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>';
   const ICON_RECT = '<rect x="3" y="3" width="18" height="18" rx="2"/>';
+  // Lucide move-up-right — промінь (напрямлений у верх-право, ADR-0084).
+  const ICON_RAY = '<path d="M13 5H19V11"/><path d="M19 5L5 19"/>';
+  // Lucide ruler — лінійка (ADR-0084).
+  const ICON_MEASURE =
+    '<path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z"/><path d="m14.5 12.5 2-2"/><path d="m11.5 9.5 2-2"/><path d="m8.5 6.5 2-2"/><path d="m17.5 15.5 2-2"/>';
   const ICON_ERASER =
     '<path d="M21 21H8a2 2 0 0 1-1.42-.587l-3.994-3.999a2 2 0 0 1 0-2.828l10-10a2 2 0 0 1 2.829 0l5.999 6a2 2 0 0 1 0 2.828L12.834 21"/><path d="m5.082 11.09 8.828 8.828"/>';
   // Lucide "magnet" — U-shaped horseshoe magnet, intuitive snap metaphor.
@@ -92,10 +98,22 @@
       iconPath: ICON_TREND,
     },
     {
+      id: "ray",
+      label: "Промінь",
+      hotkey: TOOL_REGISTRY.get("ray")?.hotkey?.toUpperCase() ?? "Y",
+      iconPath: ICON_RAY,
+    },
+    {
       id: "rect",
       label: "Прямокутник",
       hotkey: TOOL_REGISTRY.get("rect")?.hotkey?.toUpperCase() ?? "R",
       iconPath: ICON_RECT,
+    },
+    {
+      id: "measure",
+      label: "Лінійка",
+      hotkey: TOOL_REGISTRY.get("measure")?.hotkey?.toUpperCase() ?? "M",
+      iconPath: ICON_MEASURE,
     },
     { id: "eraser", label: "Гумка", hotkey: "E", iconPath: ICON_ERASER },
   ];

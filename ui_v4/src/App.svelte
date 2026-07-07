@@ -160,7 +160,8 @@
     lineWidth: number;
     lineStyle: DrawingLineStyle;
   }
-  const STYLEABLE_TOOLS: DrawingType[] = ["hline", "trend", "rect"];
+  // measure — ephemeral (ADR-0084 D2), стилів не має → не тут.
+  const STYLEABLE_TOOLS: DrawingType[] = ["hline", "trend", "rect", "ray"];
   const LINE_STYLES: DrawingLineStyle[] = ["solid", "dashed", "dotted"];
 
   function loadToolDefaults(): Record<DrawingType, ToolStyle> {
@@ -169,7 +170,7 @@
       lineWidth: 1,
       lineStyle: "solid",
     });
-    const base = { hline: mk(), trend: mk(), rect: mk() };
+    const base = { hline: mk(), trend: mk(), rect: mk(), ray: mk(), measure: mk() };
     try {
       const parsed = JSON.parse(
         localStorage.getItem("v4_drawing_defaults") ?? "{}",

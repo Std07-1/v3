@@ -94,6 +94,9 @@ export function mapKeyToAction(
     //   binding підтримує BOTH `t` (legacy) + `\` (new) — soft transition
     //   без user-confusion. Future: deprecate `t` після 1-2 sprint.
     if (k === 'r') return { kind: 'set_tool', tool: 'rect' };
+    // ADR-0084: y = raY (промінь), m = measure (лінійка)
+    if (k === 'y') return { kind: 'set_tool', tool: 'ray' };
+    if (k === 'm') return { kind: 'set_tool', tool: 'measure' };
     if (k === 'e') return { kind: 'set_tool', tool: 'eraser' };
     if (k === 'g') return { kind: 'toggle_magnet' };
     return null;

@@ -32,6 +32,10 @@ export interface RenderContext {
     readonly accentColor: string;
     /** Fill для rect-shaped tools (semi-transparent). */
     readonly rectFill: string;
+    /** ADR-0084 (optional, additive): напрямні кольори для MeasureTool
+     *  (bull/bear токени theme-aware з roleColors renderer-а). */
+    readonly bullColor?: string;
+    readonly bearColor?: string;
     /** Render-state hints. Tool varies stroke/fill based on these. */
     readonly isDraft: boolean;
     readonly isHovered: boolean;
@@ -59,7 +63,7 @@ export type HitTestResult =
  *  або у DrawingsRenderer; tool-instances singleton-и у TOOL_REGISTRY. */
 export interface ToolModule {
     /** Discriminator у Drawing.type. Має збігатись з ключем у TOOL_REGISTRY. */
-    readonly id: 'hline' | 'trend' | 'rect';
+    readonly id: 'hline' | 'trend' | 'rect' | 'ray' | 'measure';
 
     /** Скільки точок очікує draft state machine.
      *  1 = instant commit на 1-st click (e.g. hline)

@@ -12,17 +12,21 @@ import type { DrawingType } from '../../../types';
 import { HLineTool } from './HLineTool';
 import { TrendTool } from './TrendTool';
 import { RectTool } from './RectTool';
+import { RayTool } from './RayTool';
+import { MeasureTool } from './MeasureTool';
 import type { ToolModule } from './types';
 
-/** Read-only registry. Iteration order = insertion order (hline → trend → rect)
- *  для deterministic toolbar rendering у T3. */
+/** Read-only registry. Iteration order = insertion order
+ *  (hline → trend → ray → rect → measure) для deterministic toolbar rendering. */
 export const TOOL_REGISTRY: ReadonlyMap<DrawingType, ToolModule> = new Map<
     DrawingType,
     ToolModule
 >([
     [HLineTool.id, HLineTool],
     [TrendTool.id, TrendTool],
+    [RayTool.id, RayTool],
     [RectTool.id, RectTool],
+    [MeasureTool.id, MeasureTool],
 ]);
 
 /** Type-safe lookup. Throws у dev mode для unknown type щоб виявити drift
