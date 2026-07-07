@@ -6,6 +6,7 @@ import { MismatchDirection } from 'lightweight-charts';
 import type { Drawing, ActiveTool, WsAction, T_MS, UiWarning, DrawingContextRequest, DrawingType, DrawingColorRole } from '../../types';
 import { CommandStack, type CommandAction } from './CommandStack';
 import { buildRoleColorMap } from './colorRoles';
+import { timeToFractionalIndex, fractionalIndexToTime } from './timeMap';
 import {
   HIT_TOLERANCE_PX,
   HANDLE_RADIUS_PX,
@@ -117,6 +118,12 @@ export class DrawingsRenderer {
   // hit-test/cache
   private aabbById = new Map<string, ScreenAabb>();
 
+  // ADR-0082 D6: кеш часів барів (сек) поточного TF для fractional time-мапінгу.
+  // Оновлюється дешевим guard-ом (length+lastTime) у forceRender — O(n) rebuild
+  // лише коли дані реально змінились, НЕ щокадру (FP10-дух: без churn у hot path).
+  private barTimesSec: number[] = [];
+  private barTimesLast = NaN;
+
   // RAF render
   private dpr = 1;
   private rafId: number | null = null;
@@ -159,6 +166,7 @@ export class DrawingsRenderer {
 
   // listeners
   private ro: ResizeObserver;
+  private onStorageEvent!: (e: StorageEvent) => void;
 
   private onPointerMoveCapture!: (e: PointerEvent) => void;
   private onPointerDownCapture!: (e: PointerEvent) => void;
@@ -220,6 +228,18 @@ export class DrawingsRenderer {
     // desktop fallback geometry (10/5/8) замість platform-aware (16/7/10).
     // Safe навіть якщо canvas yet not styled — fallbacks WCAG-compliant.
     this.refreshThemeColors();
+
+    // ADR-0082 D7: cross-tab конвергенція. Дві вкладки ділять per-symbol ключ,
+    // але тримають НЕЗАЛЕЖНІ in-memory копії — save зі «застарілої» вкладки
+    // мовчки перетирав фігури іншої (last-writer-wins, спіймано live: трендова
+    // зникла без жодного вводу). Storage-event (шлеться лише ІНШИМ вкладкам)
+    // → приймаємо зовнішній стан негайно → вкладки конвергують, вікно
+    // розбіжності ~мс замість «до наступного save».
+    this.onStorageEvent = (e) => {
+      if (e.key !== this.storageKey || e.storageArea !== localStorage) return;
+      this.loadFromStorage();
+    };
+    window.addEventListener('storage', this.onStorageEvent);
 
     // НЕ загружаємо тут — чекаємо на setStorageKey(symbol) від ChartPane
     // (ADR-0082: per-symbol стор, спільний усіма TF).
@@ -381,18 +401,42 @@ export class DrawingsRenderer {
   // arrow форма auto-binds `this`, тому ref-passing `this.toX` до ToolModule
   // не втрачає контекст. Регулярні методи треба було б wrapper-ити у
   // arrow closures на кожен виклик (alloc per hit-test).
+
+  /** ADR-0082 D6: оновити кеш часів барів, якщо серія змінилась (guard:
+   *  length + lastTime — O(1); rebuild O(n) лише на реальну зміну даних). */
+  private refreshBarTimes(): void {
+    const bars = this.seriesApi.data();
+    const n = bars.length;
+    const lastT = n > 0 ? timeToSec(bars[n - 1].time as HorzScaleItem) : NaN;
+    if (n === this.barTimesSec.length && (lastT === this.barTimesLast || (Number.isNaN(lastT) && Number.isNaN(this.barTimesLast)))) return;
+    this.barTimesSec = bars.map((b) => timeToSec(b.time as HorzScaleItem));
+    this.barTimesLast = lastT;
+  }
+
+  // ADR-0082 D6: час → X через ДРОБОВИЙ logical-індекс (інтерполяція між
+  // сусідніми барами + екстраполяція за краями). Раніше timeToCoordinate
+  // повертав null для t, якого нема серед барів TF — якір з M15 (10:15)
+  // ЗНИКАВ на H1 (бар лише 10:00); trend/rect «блимали/стрибали» між TF.
+  // Кеш оновлюється у forceRender (раз/кадр); тут — лише читання (hot path:
+  // рендер + hit-test на pointer events; стейлість ≤1 кадру прийнятна).
   private toX = (t_ms: number): number | null => {
-    return this.chartApi.timeScale().timeToCoordinate((t_ms / 1000) as import('lightweight-charts').Time);
+    const idx = timeToFractionalIndex(this.barTimesSec, t_ms / 1000);
+    if (idx === null) return null;
+    return this.chartApi.timeScale().logicalToCoordinate(idx as import('lightweight-charts').Logical);
   };
 
   private toY = (price: number): number | null => {
     return this.seriesApi.priceToCoordinate(price);
   };
 
+  // Інверсія — теж дробова: sub-bar точність якоря при малюванні/перетягуванні
+  // (замість квантування до часу бару, симетрично до toX).
   private fromX(x: number): T_MS | null {
-    const t = this.chartApi.timeScale().coordinateToTime(x);
-    if (t === null) return null;
-    return (timeToSec(t) * 1000) as T_MS;
+    const logical = this.chartApi.timeScale().coordinateToLogical(x);
+    if (logical === null) return null;
+    const tSec = fractionalIndexToTime(this.barTimesSec, logical as number);
+    if (tSec === null) return null;
+    return Math.round(tSec * 1000) as T_MS;
   }
 
   private fromY(y: number): number | null {
@@ -1055,6 +1099,9 @@ export class DrawingsRenderer {
   }
 
   private forceRender(): void {
+    // ADR-0082 D6: свіжий кеш часів барів — раз на кадр (guard всередині O(1)).
+    this.refreshBarTimes();
+
     const cssW = this.canvas.width / this.dpr;
     const cssH = this.canvas.height / this.dpr;
 
@@ -1193,6 +1240,7 @@ export class DrawingsRenderer {
   destroy(): void {
     this.ro.disconnect();
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
+    window.removeEventListener('storage', this.onStorageEvent);
 
     this.interactionEl.removeEventListener('pointermove', this.onPointerMoveCapture, { capture: true } as any);
     this.interactionEl.removeEventListener('pointerdown', this.onPointerDownCapture, { capture: true } as any);
