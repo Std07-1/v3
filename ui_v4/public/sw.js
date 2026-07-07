@@ -9,7 +9,11 @@
 // evicts old caches. NO skipWaiting() — user reload activates explicitly.
 // ────────────────────────────────────────────────────────────────────────
 
-const SW_VERSION = 'v1-2026-05-11b';
+// v2 (ADR-0082 hotfix): navigation fetch з cache:'no-cache' — SW's fetch()
+// шанував евристичний HTTP-кеш браузера, тож «network-first» міг повернути
+// ЗАСТАРІЛИЙ index.html зі старим hashed-bundle (мікс builds між вкладками).
+// Bump версії виселяє shell-кеші, що тримали старі копії HTML.
+const SW_VERSION = 'v2-2026-07-07';
 const SHELL_CACHE = `shell-${SW_VERSION}`;
 const SHELL_PRECACHE = [
   '/',
@@ -25,7 +29,12 @@ self.addEventListener('install', (e) => {
   e.waitUntil(
     caches.open(SHELL_CACHE).then((c) => c.addAll(SHELL_PRECACHE))
   );
-  // No skipWaiting() — explicit reload activates new SW (no mid-trade flicker).
+  // v2: skipWaiting УВІМКНЕНО (перегляд V1-рішення). Без нього клієнти з
+  // отруєним HTTP-кешем (stale index → старий bundle) сидять на v1 до
+  // закриття УСІХ вкладок. Наш SW shell-only — активація v2 не міняє
+  // відкриту сторінку (жодного mid-trade flicker), лише лагодить наступні
+  // навігації через no-cache fetch.
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', (e) => {
@@ -51,9 +60,11 @@ self.addEventListener('fetch', (e) => {
   if (e.request.headers.get('upgrade') === 'websocket') return;
 
   // Navigation (HTML doc): network-first → cache → offline fallback.
+  // cache:'no-cache' — оминаємо евристичний HTTP-кеш (ревалідація по ETag,
+  // 304 = дешево); інакше «network-first» повертав застарілий index.html.
   if (e.request.mode === 'navigate') {
     e.respondWith(
-      fetch(e.request)
+      fetch(e.request, { cache: 'no-cache' })
         .then((res) => {
           // Cache fresh navigation responses for offline fallback.
           // POST requests cannot be cached (Cache API limitation).

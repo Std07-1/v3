@@ -3209,7 +3209,15 @@ def build_app(
     if os.path.isfile(_ui_index):
 
         async def _spa_index(request: web.Request) -> web.FileResponse:
-            return web.FileResponse(_ui_index)
+            # ADR-0082 hotfix: index.html БЕЗ Cache-Control потрапляв у
+            # евристичний HTTP-кеш браузера (10% віку файлу) → застарілий HTML
+            # посилався на СТАРИЙ hashed-bundle → різні вкладки/навігації
+            # виконували РІЗНІ builds (спіймано live: DMvQM1ig і RxIMeZdv у
+            # сусідніх переходах). no-cache = завжди ревалідація; ETag робить
+            # її дешевим 304. Hashed /assets лишаються cache-first — їм safe.
+            return web.FileResponse(
+                _ui_index, headers={"Cache-Control": "no-cache"}
+            )
 
         # SPA fallback: index.html РґР»СЏ РєРѕСЂРµРЅСЏ
         app.router.add_get("/", _spa_index)
@@ -3234,12 +3242,15 @@ def build_app(
             app.router.add_get("/manifest.json", _serve_manifest)
 
         # /sw.js — Service Worker. CRITICAL: must be served at SCOPE root (/)
-        # for SW.scope='/' registration. Cache-Control:no-cache рекомендоване
-        # щоб update detection працював; aiohttp default headers OK для V1.
+        # for SW.scope='/' registration. Cache-Control:no-cache ОБОВ'ЯЗКОВЕ
+        # (ADR-0082 hotfix): без нього update detection SW гальмує на
+        # евристичному HTTP-кеші так само, як index.html вище.
         _sw = os.path.join(_ui_dist, "sw.js")
         if os.path.isfile(_sw):
             async def _serve_sw(request: web.Request) -> web.FileResponse:
-                return web.FileResponse(_sw)
+                return web.FileResponse(
+                    _sw, headers={"Cache-Control": "no-cache"}
+                )
             app.router.add_get("/sw.js", _serve_sw)
 
         # /offline.html — branded fallback served by SW при network failure.
