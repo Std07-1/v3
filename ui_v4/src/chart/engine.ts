@@ -232,7 +232,9 @@ export class ChartEngine {
       // V3 parity: chart_adapter_lite.js:76-98
       timeScale: {
         borderVisible: false,
-        rightOffset: 3, // follow mode: ~3 bars right padding
+        // ADR-0083 D4 (owner: «як у ТВ»): постійний TV-стиль зазор праворуч —
+        // місце малювати в майбутнє БЕЗ pan-у (draw-into-future). Було 3.
+        rightOffset: 10,
         barSpacing: 8,
         maxBarSpacing: 50,
         timeVisible: true,
