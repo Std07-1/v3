@@ -17,4 +17,4 @@ forexconnect==1.6.43
 redis>=4.0,<6.0
 
 # Env loading
-python-dotenv>=0.21,<1.0
+python-dotenv>=0.21,<2.0
