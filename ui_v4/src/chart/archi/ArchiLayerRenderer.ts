@@ -7,17 +7,31 @@
 // нуль команд/undo. Джерело істини = wire; Арчі-об'єкти НІКОЛИ не потрапляють
 // у user-стор (ADR-0085 §6.7).
 //
-// Візуальна мова (D3, owner: --info синій): dash-dot «сигнальний дріт» для
-// рівнів, напівпрозора смуга для зон, лейбл «⏰ 4380 · Арчі» (halo-техніка
-// ADR-0079), freshness-альфа (старі будильники тьмяніють, нічого не миготить).
+// Візуальна мова (D3, owner: --info синій): тонкий делікатний dash-dot «дріт»
+// для рівнів, напівпрозора смуга для зон, frosted-таблетка праворуч (house-мова
+// flyout/tooltip ADR-0080/0081) з монограм-ромбом Арчі замість тексту, freshness-
+// альфа (старі будильники тьмяніють, нічого не миготить). Лінії йдуть НЕ на весь
+// екран, а від свічки-якоря (created_at/thesis_updated — момент, де Арчі поставив
+// рівень) праворуч: timeToFractionalIndex (як малювання, gap-safe) → x-старту.
 // Pane-clip: шар не заходить на цінову шкалу/часову вісь (патерн ADR-0084).
 
-import type { IChartApi, ISeriesApi } from 'lightweight-charts';
+import type { IChartApi, ISeriesApi, Time, Logical } from 'lightweight-charts';
 import type { ArchiChartCondition, ArchiChartData } from '../../types';
+import { timeToFractionalIndex, medianStep } from '../drawings/timeMap';
+
+/** LWC bar.time → сек (number | 'YYYY-MM-DD' | BusinessDay). */
+function timeToSec(t: Time): number {
+  if (typeof t === 'number') return t;
+  if (typeof t === 'string') return new Date(t).getTime() / 1000;
+  return Date.UTC(t.year, t.month - 1, t.day, 0, 0, 0, 0) / 1000;
+}
 
 // Dash-dot: «сигнальний дріт» — відрізняється і від SMC-levels, і від
-// user-стилів (solid/dashed/dotted) → лінію Арчі впізнаєш миттєво.
-const DASH_DOT = [7, 3, 2, 3];
+// user-стилів (solid/dashed/dotted) → лінію Арчі впізнаєш миттєво. Тонкий
+// крок (owner tune: «тонші й делікатніші»).
+const DASH_DOT = [5, 4, 1, 4];
+const LINE_W = 0.75;          // тонша лінія (owner tune)
+const LINE_ALPHA_MULT = 0.78; // делікатніша — не домінує над свічками
 
 // Freshness (дзеркалить пороги NarrativeEnricher: <1г fresh, 1-4г aging).
 const FRESH_H = 1;
@@ -26,7 +40,7 @@ const ALPHA_FRESH = 1.0;
 const ALPHA_AGING = 0.7;
 const ALPHA_STALE = 0.45;
 
-const ZONE_FILL_ALPHA = 0.06;
+const ZONE_FILL_ALPHA = 0.1; // owner tune: «зону підніми трохи»
 const ZONE_BORDER_ALPHA = 0.4;
 const PILL_FONT = 'ui-sans-serif, -apple-system, "Segoe UI", Inter, sans-serif';
 
@@ -99,7 +113,13 @@ export class ArchiLayerRenderer {
   private infoColor = '#5487FF';
   private bearColor = '#ED4554';
   private cardColor = '#1c2128';
-  private text2Color = '#9b9bb0';
+
+  // Часи барів (сек) для anchor-x лінії. Кеш throttleд — .data() щокадру під час
+  // пану дорогий; перечитуємо лише коли змінилась довжина/останній бар.
+  private barTimesSec: number[] = [];
+  private barTimesLast = NaN;
+  private barTimesCheckedAt = 0;
+  private static readonly BAR_RECHECK_MS = 250;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -206,7 +226,6 @@ export class ArchiLayerRenderer {
     this.infoColor = s.getPropertyValue('--info').trim() || '#5487FF';
     this.bearColor = s.getPropertyValue('--bear').trim() || '#ED4554';
     this.cardColor = s.getPropertyValue('--card').trim() || '#1c2128';
-    this.text2Color = s.getPropertyValue('--text-2').trim() || '#9b9bb0';
     this.scheduleRender();
   }
 
@@ -248,6 +267,8 @@ export class ArchiLayerRenderer {
     if (!this.visible || d == null || ((!conds || conds.length === 0) && !hasThesis))
       return;
 
+    this.refreshBarTimes(); // anchor-x лінії від свічки-якоря
+
     // Pane-clip (ADR-0084): шар не заходить на шкали. Fallback → повний canvas.
     let paneW = canvasW;
     let paneH = canvasH;
@@ -275,26 +296,77 @@ export class ArchiLayerRenderer {
     // P4: рівні тези поверх будильників (головні рівні аналізу Арчі).
     if (hasThesis) {
       const tAlpha = freshnessAlpha(d!.thesis_updated_at_ms ?? 0);
+      const tAnchor = d!.thesis_updated_at_ms;
       if (d!.key_level_price != null) {
-        this.renderThesisLine(d!.key_level_price, this.infoColor, false, 'Ключовий рівень тези', paneW, tAlpha);
+        this.renderThesisLine(d!.key_level_price, this.infoColor, false, 'Ключовий рівень тези', paneW, tAlpha, tAnchor);
       }
       if (d!.invalidation_price != null) {
-        this.renderThesisLine(d!.invalidation_price, this.bearColor, true, 'Рівень інвалідації тези', paneW, tAlpha);
+        this.renderThesisLine(d!.invalidation_price, this.bearColor, true, 'Рівень інвалідації тези', paneW, tAlpha, tAnchor);
       }
     }
 
     this.ctx.restore();
   }
 
+  /** Часи барів (сек) для anchor-x. Throttleд: перечитуємо лише коли реально
+   *  змінились (довжина або останній бар) — .data() під час пану дорогий. */
+  private refreshBarTimes(): void {
+    const now = performance.now();
+    if (now - this.barTimesCheckedAt < ArchiLayerRenderer.BAR_RECHECK_MS) return;
+    this.barTimesCheckedAt = now;
+    const bars = this.seriesApi.data();
+    const n = bars.length;
+    if (n === 0) { this.barTimesSec = []; this.barTimesLast = NaN; return; }
+    const lastT = timeToSec(bars[n - 1].time as Time);
+    if (n === this.barTimesSec.length && lastT === this.barTimesLast) return;
+    this.barTimesSec = bars.map((b) => timeToSec(b.time as Time));
+    this.barTimesLast = lastT;
+  }
+
+  /** Момент (ms), де Арчі поставив рівень → x на чарті (gap-safe, як малювання).
+   *  null → якір поза даними/невідомий → caller падає на повну ширину.
+   *
+   *  ⚠ LWC-квірк (verified 2026-07-11): `logicalToCoordinate(fractional)`
+   *  повертає 0 — координата існує ЛИШЕ для цілого logical. Тому інтерполюємо
+   *  вручну між двома цілими викликами (sub-bar точність без дробового аргу). */
+  private anchorX(tMs: number | undefined): number | null {
+    if (!tMs || this.barTimesSec.length === 0) return null;
+    const step = medianStep(this.barTimesSec);
+    const idx = timeToFractionalIndex(this.barTimesSec, tMs / 1000, step);
+    if (idx === null) return null;
+    const ts = this.chartApi.timeScale();
+    const i0 = Math.floor(idx);
+    const c0 = ts.logicalToCoordinate(i0 as Logical);
+    if (c0 === null) return null;
+    const frac = idx - i0;
+    if (frac === 0) return c0;
+    const c1 = ts.logicalToCoordinate((i0 + 1) as Logical);
+    return c1 === null ? c0 : c0 + frac * (c1 - c0);
+  }
+
+  /** Старт лінії від свічки-якоря (клампнутий у пану). Якір невідомий → 0
+   *  (повна ширина). Стоп-край справа = остання свічка: рівень НЕ починається у
+   *  майбутній whitespace — якір за межами даних (stale-бари, де умова датована
+   *  пізніше за останній бар) сідає на праву свічку, а не колапсує. */
+  private lineStartX(tMs: number | undefined, paneW: number): number {
+    const ax = this.anchorX(tMs);
+    if (ax === null) return 0;
+    const n = this.barTimesSec.length;
+    const lastBarX = n > 0 ? this.chartApi.timeScale().logicalToCoordinate((n - 1) as Logical) : null;
+    const cap = lastBarX !== null ? Math.min(lastBarX, paneW) : paneW - 24;
+    return Math.max(0, Math.min(ax, cap));
+  }
+
   private renderLevel(c: ArchiChartCondition, paneW: number, alpha: number): void {
     const y = this.seriesApi.priceToCoordinate(c.level!);
     if (y === null) return;
     const ctx = this.ctx;
-    ctx.strokeStyle = withAlpha(this.infoColor, alpha);
-    ctx.lineWidth = 1;
+    const x0 = this.lineStartX(c.created_at_ms, paneW);
+    ctx.strokeStyle = withAlpha(this.infoColor, alpha * LINE_ALPHA_MULT);
+    ctx.lineWidth = LINE_W;
     ctx.setLineDash(DASH_DOT);
     ctx.beginPath();
-    ctx.moveTo(0, y);
+    ctx.moveTo(x0, y);
     ctx.lineTo(paneW, y);
     ctx.stroke();
     ctx.setLineDash([]);
@@ -311,15 +383,16 @@ export class ArchiLayerRenderer {
     const top = Math.min(yHigh, yLow);
     const h = Math.abs(yLow - yHigh);
     const ctx = this.ctx;
+    const x0 = this.lineStartX(c.created_at_ms, paneW);
     ctx.fillStyle = withAlpha(this.infoColor, ZONE_FILL_ALPHA * alpha);
-    ctx.fillRect(0, top, paneW, h);
+    ctx.fillRect(x0, top, paneW - x0, h);
     ctx.strokeStyle = withAlpha(this.infoColor, ZONE_BORDER_ALPHA * alpha);
-    ctx.lineWidth = 1;
+    ctx.lineWidth = LINE_W;
     ctx.setLineDash(DASH_DOT);
     ctx.beginPath();
-    ctx.moveTo(0, top);
+    ctx.moveTo(x0, top);
     ctx.lineTo(paneW, top);
-    ctx.moveTo(0, top + h);
+    ctx.moveTo(x0, top + h);
     ctx.lineTo(paneW, top + h);
     ctx.stroke();
     ctx.setLineDash([]);
@@ -330,8 +403,8 @@ export class ArchiLayerRenderer {
     this.hoverTargets.push({ y: top + h, text: zText });
   }
 
-  /** P4: рівень тези — solid (key/ціль) або dashed (invalidation). Товща за
-   *  будильники (це головні рівні аналізу Арчі, не автоматичні тригери). */
+  /** P4: рівень тези — solid (key/ціль) або dashed (invalidation). Трохи товща
+   *  за будильники (головні рівні аналізу Арчі), але лишається делікатною. */
   private renderThesisLine(
     price: number,
     color: string,
@@ -339,15 +412,17 @@ export class ArchiLayerRenderer {
     hoverText: string,
     paneW: number,
     alpha: number,
+    anchorMs: number | undefined,
   ): void {
     const y = this.seriesApi.priceToCoordinate(price);
     if (y === null) return;
     const ctx = this.ctx;
-    ctx.strokeStyle = withAlpha(color, alpha);
-    ctx.lineWidth = dashed ? 1.2 : 1.4;
-    ctx.setLineDash(dashed ? [6, 4] : []);
+    const x0 = this.lineStartX(anchorMs, paneW);
+    ctx.strokeStyle = withAlpha(color, alpha * LINE_ALPHA_MULT);
+    ctx.lineWidth = dashed ? 0.85 : 1;
+    ctx.setLineDash(dashed ? [5, 4] : []);
     ctx.beginPath();
-    ctx.moveTo(0, y);
+    ctx.moveTo(x0, y);
     ctx.lineTo(paneW, y);
     ctx.stroke();
     ctx.setLineDash([]);
@@ -356,22 +431,20 @@ export class ArchiLayerRenderer {
   }
 
   /** Преміум-таблетка праворуч на лінії (house frosted-мова flyout/tooltip):
-   *  колірна акцент-смужка + ціна (колір) + тонке «Арчі» (muted). Без emoji.
+   *  міні-орб Арчі (ехо presence-orb з консолі ГОРН — один маленький знак
+   *  замість тексту «Арчі») + ціна (колір лінії). Без emoji.
    *  Anti-collision: центр таблетки зсувається, якщо близько до попередньої. */
   private renderPill(priceText: string, y: number, color: string, alpha: number, paneW: number): void {
     const ctx = this.ctx;
-    const H = 18;
+    const H = 17;
     const R = 5;
     const PAD = 7;
-    const ACCENT_W = 3;
+    const ORB_SLOT = 8; // резерв під орб+гало
     const GAP = 6;
-    const CAP = 'Арчі';
 
     ctx.font = '600 11px ' + PILL_FONT;
     const priceW = ctx.measureText(priceText).width;
-    ctx.font = '9px ' + PILL_FONT;
-    const capW = ctx.measureText(CAP).width;
-    const pillW = PAD + ACCENT_W + GAP + priceW + 5 + capW + PAD;
+    const pillW = PAD + ORB_SLOT + GAP + priceW + PAD;
 
     const x = Math.max(2, paneW - pillW - 4);
     // Anti-collision по центру таблетки (лінія лишається на своєму y).
@@ -395,20 +468,23 @@ export class ArchiLayerRenderer {
     ctx.lineWidth = 1;
     ctx.stroke();
 
-    // Акцент-смужка (колір лінії).
+    // Міні-орб Арчі: гало-кільце + ядро (колір лінії) = присутність, не текст.
+    const ocx = x + PAD + ORB_SLOT / 2;
+    ctx.beginPath();
+    ctx.arc(ocx, cy, 4, 0, Math.PI * 2);
+    ctx.strokeStyle = withAlpha(color, 0.35 * alpha);
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(ocx, cy, 2.5, 0, Math.PI * 2);
     ctx.fillStyle = withAlpha(color, Math.min(1, alpha + 0.1));
-    ctx.fillRect(x + PAD, top + 4, ACCENT_W, H - 8);
+    ctx.fill();
 
-    // Ціна (колір лінії) + «Арчі» (muted).
+    // Ціна (колір лінії).
     ctx.textBaseline = 'middle';
-    let tx = x + PAD + ACCENT_W + GAP;
     ctx.font = '600 11px ' + PILL_FONT;
     ctx.fillStyle = withAlpha(color, Math.min(1, alpha + 0.15));
-    ctx.fillText(priceText, tx, cy + 0.5);
-    tx += priceW + 5;
-    ctx.font = '9px ' + PILL_FONT;
-    ctx.fillStyle = withAlpha(this.text2Color, alpha);
-    ctx.fillText(CAP, tx, cy + 0.5);
+    ctx.fillText(priceText, x + PAD + ORB_SLOT + GAP, cy + 0.5);
     ctx.textBaseline = 'alphabetic';
   }
 
