@@ -219,6 +219,11 @@ export class ArchiLayerRenderer {
     const canvasW = this.canvas.width / this.dpr;
     const canvasH = this.canvas.height / this.dpr;
     this.ctx.clearRect(0, 0, canvasW, canvasH);
+    // ПЕРЕД early-return (audit v3 confirmed): скидаємо hover/label-стани на
+    // КОЖНОМУ кадрі, включно з порожнім/схованим — інакше hoverTargets
+    // переживали clear → фантомний tooltip для зниклої лінії.
+    this.labelYs = [];
+    this.hoverTargets = [];
 
     const d = this.data;
     const conds = d?.conditions;
@@ -236,9 +241,6 @@ export class ArchiLayerRenderer {
       if (psw > 0 && psw < canvasW) paneW = canvasW - psw;
       if (tsh > 0 && tsh < canvasH) paneH = canvasH - tsh;
     } catch { /* до першого layout LWC */ }
-
-    this.labelYs = []; // reset anti-collision щокадру
-    this.hoverTargets = []; // reset hover-цілі (P5)
 
     this.ctx.save();
     this.ctx.beginPath();
