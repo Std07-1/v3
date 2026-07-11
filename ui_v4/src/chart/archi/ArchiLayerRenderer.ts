@@ -28,7 +28,19 @@ const ALPHA_STALE = 0.45;
 
 const ZONE_FILL_ALPHA = 0.06;
 const ZONE_BORDER_ALPHA = 0.4;
-const LABEL_FONT = '10px ui-monospace, SFMono-Regular, Consolas, monospace';
+const PILL_FONT = 'ui-sans-serif, -apple-system, "Segoe UI", Inter, sans-serif';
+
+/** Path заокругленого прямокутника (canvas roundRect не всюди — робимо руками). */
+function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
+  const rr = Math.min(r, h / 2, w / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
 
 // TF-лейбл для candle_close (config tf_allowlist — 8 значень, локальна мапа).
 const TF_LABELS: Record<number, string> = {
@@ -86,6 +98,8 @@ export class ArchiLayerRenderer {
   // Кольори з токенів (кеш; canvas не читає var() — патерн DrawingsRenderer).
   private infoColor = '#5487FF';
   private bearColor = '#ED4554';
+  private cardColor = '#1c2128';
+  private text2Color = '#9b9bb0';
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -191,6 +205,8 @@ export class ArchiLayerRenderer {
     const s = getComputedStyle(this.canvas);
     this.infoColor = s.getPropertyValue('--info').trim() || '#5487FF';
     this.bearColor = s.getPropertyValue('--bear').trim() || '#ED4554';
+    this.cardColor = s.getPropertyValue('--card').trim() || '#1c2128';
+    this.text2Color = s.getPropertyValue('--text-2').trim() || '#9b9bb0';
     this.scheduleRender();
   }
 
@@ -260,10 +276,10 @@ export class ArchiLayerRenderer {
     if (hasThesis) {
       const tAlpha = freshnessAlpha(d!.thesis_updated_at_ms ?? 0);
       if (d!.key_level_price != null) {
-        this.renderThesisLine(d!.key_level_price, this.infoColor, false, '◆', 'ціль', 'Ключовий рівень тези', paneW, tAlpha);
+        this.renderThesisLine(d!.key_level_price, this.infoColor, false, 'Ключовий рівень тези', paneW, tAlpha);
       }
       if (d!.invalidation_price != null) {
-        this.renderThesisLine(d!.invalidation_price, this.bearColor, true, '✕', 'інвалід', 'Рівень інвалідації тези', paneW, tAlpha);
+        this.renderThesisLine(d!.invalidation_price, this.bearColor, true, 'Рівень інвалідації тези', paneW, tAlpha);
       }
     }
 
@@ -283,8 +299,8 @@ export class ArchiLayerRenderer {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    const tf = c.kind === 'candle_close' && c.tf_s ? TF_LABELS[c.tf_s] ?? '' : '';
-    this.renderLabel(`⏰ ${fmtPrice(c.level!)}${tf ? ` ${tf}` : ''} · Арчі`, paneW, y, alpha);
+    const tf = c.kind === 'candle_close' && c.tf_s ? ` ${TF_LABELS[c.tf_s] ?? ''}` : '';
+    this.renderPill(`${fmtPrice(c.level!)}${tf}`, y, this.infoColor, alpha, paneW);
     this.hoverTargets.push({ y, text: c.reason || `Будильник ${fmtPrice(c.level!)}` });
   }
 
@@ -308,7 +324,7 @@ export class ArchiLayerRenderer {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    this.renderLabel(`⏰ зона ${fmtPrice(c.zone_low!)}–${fmtPrice(c.zone_high!)} · Арчі`, paneW, top, alpha);
+    this.renderPill(`${fmtPrice(c.zone_low!)}–${fmtPrice(c.zone_high!)}`, top, this.infoColor, alpha, paneW);
     const zText = c.reason || `Зона ${fmtPrice(c.zone_low!)}–${fmtPrice(c.zone_high!)}`;
     this.hoverTargets.push({ y: top, text: zText });
     this.hoverTargets.push({ y: top + h, text: zText });
@@ -320,8 +336,6 @@ export class ArchiLayerRenderer {
     price: number,
     color: string,
     dashed: boolean,
-    icon: string,
-    tag: string,
     hoverText: string,
     paneW: number,
     alpha: number,
@@ -337,28 +351,65 @@ export class ArchiLayerRenderer {
     ctx.lineTo(paneW, y);
     ctx.stroke();
     ctx.setLineDash([]);
-    this.renderLabel(`${icon} ${fmtPrice(price)} · ${tag} Арчі`, paneW, y, alpha, color);
+    this.renderPill(fmtPrice(price), y, color, alpha, paneW);
     this.hoverTargets.push({ y, text: `${hoverText} (${fmtPrice(price)})` });
   }
 
-  /** Лейбл праворуч біля краю пани; halo-тінь (техніка delete-× ADR-0079) —
-   *  читабельний на свічках будь-якої теми без фонової плашки. */
-  private renderLabel(text: string, paneW: number, y: number, alpha: number, color?: string): void {
+  /** Преміум-таблетка праворуч на лінії (house frosted-мова flyout/tooltip):
+   *  колірна акцент-смужка + ціна (колір) + тонке «Арчі» (muted). Без emoji.
+   *  Anti-collision: центр таблетки зсувається, якщо близько до попередньої. */
+  private renderPill(priceText: string, y: number, color: string, alpha: number, paneW: number): void {
     const ctx = this.ctx;
-    ctx.font = LABEL_FONT;
-    const w = ctx.measureText(text).width;
-    const x = Math.max(4, paneW - w - 8);
-    // Anti-collision: якщо лейбл близько до вже намальованого (той самий рівень
-    // — напр. будильник збігається з ціллю тези), зсуваємо вниз на 12px, щоб
-    // обидва читались. Лінія лишається на своєму y, зсувається лише підпис.
-    let ly = Math.max(10, y - 5);
-    while (this.labelYs.some((prev) => Math.abs(prev - ly) < 12)) ly += 12;
-    this.labelYs.push(ly);
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
-    ctx.shadowBlur = 3;
-    ctx.fillStyle = withAlpha(color ?? this.infoColor, Math.min(1, alpha + 0.15));
-    ctx.fillText(text, x, ly);
+    const H = 18;
+    const R = 5;
+    const PAD = 7;
+    const ACCENT_W = 3;
+    const GAP = 6;
+    const CAP = 'Арчі';
+
+    ctx.font = '600 11px ' + PILL_FONT;
+    const priceW = ctx.measureText(priceText).width;
+    ctx.font = '9px ' + PILL_FONT;
+    const capW = ctx.measureText(CAP).width;
+    const pillW = PAD + ACCENT_W + GAP + priceW + 5 + capW + PAD;
+
+    const x = Math.max(2, paneW - pillW - 4);
+    // Anti-collision по центру таблетки (лінія лишається на своєму y).
+    let cy = y;
+    while (this.labelYs.some((prev) => Math.abs(prev - cy) < H + 2)) cy += H + 2;
+    this.labelYs.push(cy);
+    const top = cy - H / 2;
+
+    // Frosted-плашка (color-mix недоступний на canvas → напівпрозорий card +
+    // колірна рамка = преміум-скло без backdrop-blur).
+    roundRectPath(ctx, x, top, pillW, H, R);
+    ctx.fillStyle = withAlpha(this.cardColor, 0.9 * alpha + 0.08);
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.35)';
+    ctx.shadowBlur = 6;
+    ctx.shadowOffsetY = 1;
+    ctx.fill();
     ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+    roundRectPath(ctx, x, top, pillW, H, R);
+    ctx.strokeStyle = withAlpha(color, 0.4 * alpha);
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Акцент-смужка (колір лінії).
+    ctx.fillStyle = withAlpha(color, Math.min(1, alpha + 0.1));
+    ctx.fillRect(x + PAD, top + 4, ACCENT_W, H - 8);
+
+    // Ціна (колір лінії) + «Арчі» (muted).
+    ctx.textBaseline = 'middle';
+    let tx = x + PAD + ACCENT_W + GAP;
+    ctx.font = '600 11px ' + PILL_FONT;
+    ctx.fillStyle = withAlpha(color, Math.min(1, alpha + 0.15));
+    ctx.fillText(priceText, tx, cy + 0.5);
+    tx += priceW + 5;
+    ctx.font = '9px ' + PILL_FONT;
+    ctx.fillStyle = withAlpha(this.text2Color, alpha);
+    ctx.fillText(CAP, tx, cy + 0.5);
+    ctx.textBaseline = 'alphabetic';
   }
 
   destroy(): void {
