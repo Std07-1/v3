@@ -5,7 +5,7 @@
 | Поле | Значення |
 | ---- | -------- |
 | ID | ADR-0085 |
-| Статус | **Accepted** (owner-go 2026-07-08: колір `--info` ✓, toggle default ON ✓; P7 відкладено до окремого слова) — імплементація v1 триває |
+| Статус | **Implemented** (v1: P1-P6 live-verified 2026-07-11; P4 числові рівні тези — platform-сторона готова, чекає companion trader-v3 ADR-093 для повного циклу; P7 zone-рамка відкладено за owner-словом) — owner-go: колір `--info` ✓, toggle default ON ✓ |
 | Дата | 2026-07-07 |
 | Автори | Станіслав (owner, vision) + Opus 4.8 (архітектор: RECON + специфікація) |
 | Будується на | ADR-0048/0049 (WakeEngine + NarrativeEnricher — ЗАДЕПЛОЄНІ), ADR-0075 (bar-close kinds), ADR-0084 (tools registry — патерни рендера) |

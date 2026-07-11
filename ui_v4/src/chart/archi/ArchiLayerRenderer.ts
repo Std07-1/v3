@@ -67,6 +67,17 @@ export class ArchiLayerRenderer {
   // Anti-collision лейблів у межах кадру: зайняті y-рядки лейблів (CSS-px).
   private labelYs: number[] = [];
 
+  // P5: hover-reason. Цілі (y-рядок + повний reason) — оновлюються щокадру;
+  // mousemove на контейнері показує tooltip коли курсор ≤ HOVER_TOL від лінії.
+  // Гейт спільним ☰-перемикачем «Підказки» (ADR-0081, як зони/структури).
+  private hoverTargets: { y: number; text: string }[] = [];
+  private tooltipEl: HTMLDivElement | null = null;
+  private hintsEnabled = false;
+  private onContainerMove: ((e: MouseEvent) => void) | null = null;
+  private onContainerLeave: (() => void) | null = null;
+  private hoverContainer: HTMLElement | null = null;
+  private static readonly HOVER_TOL = 6;
+
   private dpr = 1;
   private rafId: number | null = null;
   private ro: ResizeObserver;
@@ -105,7 +116,61 @@ export class ArchiLayerRenderer {
     this.onVisibleRangeChange = () => this.renderSync();
     this.chartApi.timeScale().subscribeVisibleTimeRangeChange(this.onVisibleRangeChange);
 
+    this.initTooltip();
     this.refreshThemeColors();
+  }
+
+  /** P5: hover-tooltip (frosted, house-токени — дзеркалить .smc-tooltip
+   *  ADR-0081). Слухає mousemove на контейнері (canvas = pointer-events:none).
+   *  Показ гейтиться `hintsEnabled` (спільний ☰-перемикач). */
+  private initTooltip(): void {
+    const parent = this.canvas.parentElement;
+    if (!parent) return;
+    const tip = document.createElement('div');
+    tip.className = 'archi-tooltip';
+    tip.style.cssText = `
+      position:absolute; pointer-events:none; z-index:60;
+      background:color-mix(in srgb, var(--card, #141720) 90%, transparent);
+      -webkit-backdrop-filter:blur(14px) saturate(1.4); backdrop-filter:blur(14px) saturate(1.4);
+      color:var(--text-1, #e6edf3);
+      border:1px solid color-mix(in srgb, var(--info, #5487ff) 40%, transparent);
+      border-radius:8px; padding:6px 10px; font:11px/1.4 var(--font-sans, sans-serif);
+      max-width:280px; white-space:pre-wrap; display:none;
+      box-shadow:0 6px 18px -10px rgba(0,0,0,0.5);
+    `;
+    parent.appendChild(tip);
+    this.tooltipEl = tip;
+    this.hoverContainer = parent;
+
+    this.onContainerMove = (e: MouseEvent) => {
+      if (!this.hintsEnabled || !this.visible || !this.tooltipEl) return;
+      const rect = this.canvas.getBoundingClientRect();
+      const my = e.clientY - rect.top;
+      let hit: string | null = null;
+      for (const t of this.hoverTargets) {
+        if (Math.abs(my - t.y) <= ArchiLayerRenderer.HOVER_TOL) { hit = t.text; break; }
+      }
+      if (hit) {
+        this.tooltipEl.textContent = hit;
+        this.tooltipEl.style.display = 'block';
+        const mx = e.clientX - rect.left;
+        this.tooltipEl.style.left = `${Math.min(mx + 12, rect.width - 290)}px`;
+        this.tooltipEl.style.top = `${my + 14}px`;
+      } else if (this.tooltipEl.style.display !== 'none') {
+        this.tooltipEl.style.display = 'none';
+      }
+    };
+    this.onContainerLeave = () => {
+      if (this.tooltipEl) this.tooltipEl.style.display = 'none';
+    };
+    parent.addEventListener('mousemove', this.onContainerMove);
+    parent.addEventListener('mouseleave', this.onContainerLeave);
+  }
+
+  /** P5: спільний ☰-перемикач «Підказки» гейтить hover-reason (ADR-0081). */
+  setHintsEnabled(on: boolean): void {
+    this.hintsEnabled = on;
+    if (!on && this.tooltipEl) this.tooltipEl.style.display = 'none';
   }
 
   /** frame.archi_chart: present → застосувати (порожній = очистити);
@@ -173,6 +238,7 @@ export class ArchiLayerRenderer {
     } catch { /* до першого layout LWC */ }
 
     this.labelYs = []; // reset anti-collision щокадру
+    this.hoverTargets = []; // reset hover-цілі (P5)
 
     this.ctx.save();
     this.ctx.beginPath();
@@ -192,10 +258,10 @@ export class ArchiLayerRenderer {
     if (hasThesis) {
       const tAlpha = freshnessAlpha(d!.thesis_updated_at_ms ?? 0);
       if (d!.key_level_price != null) {
-        this.renderThesisLine(d!.key_level_price, this.infoColor, false, '◆', 'ціль', paneW, tAlpha);
+        this.renderThesisLine(d!.key_level_price, this.infoColor, false, '◆', 'ціль', 'Ключовий рівень тези', paneW, tAlpha);
       }
       if (d!.invalidation_price != null) {
-        this.renderThesisLine(d!.invalidation_price, this.bearColor, true, '✕', 'інвалід', paneW, tAlpha);
+        this.renderThesisLine(d!.invalidation_price, this.bearColor, true, '✕', 'інвалід', 'Рівень інвалідації тези', paneW, tAlpha);
       }
     }
 
@@ -217,6 +283,7 @@ export class ArchiLayerRenderer {
 
     const tf = c.kind === 'candle_close' && c.tf_s ? TF_LABELS[c.tf_s] ?? '' : '';
     this.renderLabel(`⏰ ${fmtPrice(c.level!)}${tf ? ` ${tf}` : ''} · Арчі`, paneW, y, alpha);
+    this.hoverTargets.push({ y, text: c.reason || `Будильник ${fmtPrice(c.level!)}` });
   }
 
   private renderZone(c: ArchiChartCondition, paneW: number, alpha: number): void {
@@ -240,6 +307,9 @@ export class ArchiLayerRenderer {
     ctx.setLineDash([]);
 
     this.renderLabel(`⏰ зона ${fmtPrice(c.zone_low!)}–${fmtPrice(c.zone_high!)} · Арчі`, paneW, top, alpha);
+    const zText = c.reason || `Зона ${fmtPrice(c.zone_low!)}–${fmtPrice(c.zone_high!)}`;
+    this.hoverTargets.push({ y: top, text: zText });
+    this.hoverTargets.push({ y: top + h, text: zText });
   }
 
   /** P4: рівень тези — solid (key/ціль) або dashed (invalidation). Товща за
@@ -250,6 +320,7 @@ export class ArchiLayerRenderer {
     dashed: boolean,
     icon: string,
     tag: string,
+    hoverText: string,
     paneW: number,
     alpha: number,
   ): void {
@@ -265,6 +336,7 @@ export class ArchiLayerRenderer {
     ctx.stroke();
     ctx.setLineDash([]);
     this.renderLabel(`${icon} ${fmtPrice(price)} · ${tag} Арчі`, paneW, y, alpha, color);
+    this.hoverTargets.push({ y, text: `${hoverText} (${fmtPrice(price)})` });
   }
 
   /** Лейбл праворуч біля краю пани; halo-тінь (техніка delete-× ADR-0079) —
@@ -291,5 +363,11 @@ export class ArchiLayerRenderer {
     this.ro.disconnect();
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
     this.chartApi.timeScale().unsubscribeVisibleTimeRangeChange(this.onVisibleRangeChange);
+    if (this.hoverContainer) {
+      if (this.onContainerMove) this.hoverContainer.removeEventListener('mousemove', this.onContainerMove);
+      if (this.onContainerLeave) this.hoverContainer.removeEventListener('mouseleave', this.onContainerLeave);
+    }
+    this.tooltipEl?.remove();
+    this.tooltipEl = null;
   }
 }

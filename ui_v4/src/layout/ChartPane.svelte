@@ -293,6 +293,7 @@
   // спільним ☰-перемикачем «Підказки» (узгоджено з тулбаром і title-хромом).
   $effect(() => {
     overlayRenderer?.setHintsEnabled($hintsOn);
+    archiRenderer?.setHintsEnabled($hintsOn); // ADR-0085 P5: hover-reason gate
   });
   // ADR-0085 D5: шар Арчі — поле присутнє → застосувати (порожнє = очистити);
   // відсутнє у delta → тримати попереднє; відсутнє у FULL → очистити
