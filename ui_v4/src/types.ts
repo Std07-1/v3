@@ -282,6 +282,27 @@ export interface DrawingContextRequest {
   lineStyle: DrawingLineStyle;
 }
 
+// -------------------- Archi on chart (ADR-0085) --------------------
+/** Одна чартова wake-умова Арчі (source=="bot", числа з бекенда — X28).
+ *  price_cross/candle_close → level(+direction, tf_s для close);
+ *  price_zone_touch → zone_high/zone_low. */
+export interface ArchiChartCondition {
+  kind: 'price_cross' | 'price_zone_touch' | 'candle_close';
+  reason: string;          // людське пояснення Арчі (обрізане 140 на сервері)
+  created_at_ms: number;   // для freshness-альфи (P3)
+  level?: number;
+  direction?: string;
+  zone_high?: number;
+  zone_low?: number;
+  tf_s?: number;
+}
+
+/** frame.archi_chart — read-only шар Арчі (ADR-0085). Порожній conditions=[]
+ *  = «будильників нема» (шар чиститься); поле відсутнє = вимкнено/старий сервер. */
+export interface ArchiChartData {
+  conditions: ArchiChartCondition[];
+}
+
 // -------------------- Warnings --------------------
 export type UiWarningCode =
   | 'overlay_coord_null'
@@ -355,6 +376,9 @@ export interface RenderFrame {
   signal_alerts?: SignalAlert[];
   /** ADR-0035: refreshed session levels in delta (full-replace session kinds) */
   session_levels?: SmcLevel[];
+  /** ADR-0085: read-only шар Арчі (числові будильники; full + delta).
+   *  Присутнє → застосувати (порожнє = очистити); відсутнє → тримати попереднє. */
+  archi_chart?: ArchiChartData;
   drawings?: Drawing[];
 
   replay?: {

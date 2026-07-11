@@ -26,6 +26,7 @@
   import { OverlayRenderer } from "../chart/overlay/OverlayRenderer";
   import type { DisplayMode } from "../chart/overlay/DisplayBudget";
   import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
+  import { ArchiLayerRenderer } from "../chart/archi/ArchiLayerRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
   import DrawingStyleFlyout from "./DrawingStyleFlyout.svelte";
   // PdBadge moved to ChartHud inline (ADR-0041 §5a Variant H)
@@ -90,7 +91,9 @@
   let wrapperRef: HTMLDivElement;
   let lwcHostRef: HTMLDivElement;
   let overlayCanvasRef: HTMLCanvasElement;
+  let archiCanvasRef: HTMLCanvasElement;
   let drawingsCanvasRef: HTMLCanvasElement;
+  let archiRenderer: ArchiLayerRenderer | undefined;
 
   let chartEngine: ChartEngine;
   let overlayRenderer: OverlayRenderer;
@@ -141,7 +144,10 @@
     overlayRenderer?.setLightTheme(name === "light");
     overlayRenderer?.setPdEqLineColor(THEMES[name].pdEqLineColor);
     // ADR-0007: CSS vars вже встановлені в App.svelte → кешуємо для canvas через rAF
-    requestAnimationFrame(() => drawingsRenderer?.refreshThemeColors());
+    requestAnimationFrame(() => {
+      drawingsRenderer?.refreshThemeColors();
+      archiRenderer?.refreshThemeColors(); // ADR-0085
+    });
   }
   export function applyCandleStyle(name: CandleStyleName): void {
     chartEngine?.applyCandleStyle(name);
@@ -211,6 +217,14 @@
       },
     );
 
+    // ADR-0085: read-only шар Арчі МІЖ SMC-overlay і user-drawings
+    // (агент між контекстом і рукою трейдера).
+    archiRenderer = new ArchiLayerRenderer(
+      archiCanvasRef,
+      chartEngine.chart,
+      chartEngine.series,
+    );
+
     drawingsRenderer = new DrawingsRenderer(
       drawingsCanvasRef,
       wrapperRef,
@@ -238,6 +252,7 @@
       () => {
         drawingsRenderer?.notifyPriceRangeChanged();
         overlayRenderer?.notifyPriceRangeChanged();
+        archiRenderer?.notifyPriceRangeChanged();
       },
     );
 
@@ -275,6 +290,17 @@
   // спільним ☰-перемикачем «Підказки» (узгоджено з тулбаром і title-хромом).
   $effect(() => {
     overlayRenderer?.setHintsEnabled($hintsOn);
+  });
+  // ADR-0085 D5: шар Арчі — поле присутнє → застосувати (порожнє = очистити);
+  // відсутнє у delta → тримати попереднє; відсутнє у FULL → очистити
+  // (вимкнено в config / символ без двигуна).
+  $effect(() => {
+    if (!currentFrame) return;
+    if ("archi_chart" in currentFrame && currentFrame.archi_chart) {
+      archiRenderer?.setData(currentFrame.archi_chart);
+    } else if (currentFrame.frame_type === "full") {
+      archiRenderer?.setData(null);
+    }
   });
 
   $effect(() => {
@@ -616,6 +642,7 @@
     ro?.disconnect();
     ro = null;
     overlayRenderer?.destroy();
+    archiRenderer?.destroy();
     drawingsRenderer?.destroy();
     chartEngine?.destroy?.();
   });
@@ -629,6 +656,8 @@
   ></div>
   <OhlcvTooltip data={crosshairData} />
   <canvas class="layer overlay-layer" bind:this={overlayCanvasRef}></canvas>
+  <!-- ADR-0085: шар Арчі МІЖ SMC-контекстом і рукою трейдера -->
+  <canvas class="layer archi-layer" bind:this={archiCanvasRef}></canvas>
   <canvas
     class="layer drawings-layer"
     bind:this={drawingsCanvasRef}
