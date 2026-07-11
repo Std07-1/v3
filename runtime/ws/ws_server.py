@@ -458,6 +458,16 @@ def _archi_chart_wire(app: Any, symbol: str) -> Optional[Dict[str, Any]]:
         we = app.get(APP_WAKE_ENGINE)
         if we is None:
             return None
+
+        # ADR-0085 P4: числові рівні тези (optional, з enricher-кешу).
+        thesis_levels: Optional[Dict[str, Any]] = None
+        _enr = app.get("_narrative_enricher")
+        if _enr is not None:
+            try:
+                thesis_levels = _enr.get_thesis_chart_levels(symbol)
+            except Exception:
+                thesis_levels = None
+
         conds = sorted(
             we.get_bot_conditions(symbol),
             key=lambda c: c.created_at_ms,
@@ -487,7 +497,13 @@ def _archi_chart_wire(app: Any, symbol: str) -> Optional[Dict[str, Any]]:
                 _log.debug("ARCHI_CHART_BAD_COND sym=%s kind=%s: %s", symbol, c.kind.value, bad)
                 continue
             out.append(item)
-        return {"conditions": out}
+        # Поле присутнє, якщо є будильники АБО числові рівні тези.
+        if not out and thesis_levels is None:
+            return {"conditions": []}  # порожній маркер — чистить шар (D1)
+        result: Dict[str, Any] = {"conditions": out}
+        if thesis_levels is not None:
+            result.update(thesis_levels)
+        return result
     except Exception:
         _log.debug("ARCHI_CHART_WIRE_ERR sym=%s", symbol, exc_info=True)
         return None

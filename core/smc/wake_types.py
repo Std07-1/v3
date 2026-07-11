@@ -168,3 +168,8 @@ class ThesisLayer:
     invalidation: str  # "Break above 4730 invalidates sell thesis"
     updated_at_ms: int = 0
     freshness: str = "stale"  # "fresh" (<1h) | "aging" (1-4h) | "stale" (>4h)
+    # ADR-0085 P4: optional numeric levels for chart layer (X28 — числа, не
+    # парсинг рядків). Заповнюються ботом (companion trader-v3 ADR-093) поруч
+    # із текстовими key_level/invalidation. None → лінії тези не рендеряться.
+    key_level_price: Optional[float] = None
+    invalidation_price: Optional[float] = None

@@ -298,9 +298,13 @@ export interface ArchiChartCondition {
 }
 
 /** frame.archi_chart — read-only шар Арчі (ADR-0085). Порожній conditions=[]
- *  = «будильників нема» (шар чиститься); поле відсутнє = вимкнено/старий сервер. */
+ *  = «будильників нема» (шар чиститься); поле відсутнє = вимкнено/старий сервер.
+ *  P4: числові рівні тези (optional, з companion trader-v3 ADR-093). */
 export interface ArchiChartData {
   conditions: ArchiChartCondition[];
+  key_level_price?: number;      // головний рівень тези (solid --info)
+  invalidation_price?: number;   // рівень інвалідації (dashed --bear)
+  thesis_updated_at_ms?: number; // для freshness-альфи ліній тези
 }
 
 // -------------------- Warnings --------------------

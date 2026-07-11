@@ -148,6 +148,14 @@ class NarrativeEnricher:
             else:
                 freshness = "stale"
 
+            # ADR-0085 P4: optional numeric levels (X28 — числа з бекенда).
+            def _opt_float(k: str) -> Optional[float]:
+                v = data.get(k, "")
+                try:
+                    return float(v) if v not in ("", None) else None
+                except (TypeError, ValueError):
+                    return None
+
             self._thesis_cache[symbol] = ThesisLayer(
                 thesis=data.get("thesis", ""),
                 conviction=data.get("conviction", ""),
@@ -155,6 +163,8 @@ class NarrativeEnricher:
                 invalidation=data.get("invalidation", ""),
                 updated_at_ms=updated_ms,
                 freshness=freshness,
+                key_level_price=_opt_float("key_level_price"),
+                invalidation_price=_opt_float("invalidation_price"),
             )
             self._thesis_cache_ts[symbol] = time.time()
 
@@ -165,3 +175,22 @@ class NarrativeEnricher:
         """Check if thesis cache is stale and needs Redis re-read."""
         last_ts = self._thesis_cache_ts.get(symbol, 0.0)
         return (time.time() - last_ts) > _THESIS_CACHE_TTL
+
+    def get_thesis_chart_levels(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """ADR-0085 P4: числові рівні тези для frame.archi_chart (з кешу).
+
+        Повертає {key_level_price?, invalidation_price?, thesis_updated_at_ms}
+        лише якщо є хоч одне число. None → лінії тези не рендеряться (шар живе
+        на wake-умовах). НУЛЬ нових Redis I/O — читає _thesis_cache.
+        """
+        t = self._thesis_cache.get(symbol)
+        if t is None:
+            return None
+        if t.key_level_price is None and t.invalidation_price is None:
+            return None
+        out: Dict[str, Any] = {"thesis_updated_at_ms": int(t.updated_at_ms or 0)}
+        if t.key_level_price is not None:
+            out["key_level_price"] = float(t.key_level_price)
+        if t.invalidation_price is not None:
+            out["invalidation_price"] = float(t.invalidation_price)
+        return out

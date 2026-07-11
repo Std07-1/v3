@@ -64,6 +64,8 @@ export class ArchiLayerRenderer {
 
   private data: ArchiChartData | null = null;
   private visible = true; // P6: ☰-toggle «Арчі на чарті» (default ON — owner)
+  // Anti-collision лейблів у межах кадру: зайняті y-рядки лейблів (CSS-px).
+  private labelYs: number[] = [];
 
   private dpr = 1;
   private rafId: number | null = null;
@@ -72,6 +74,7 @@ export class ArchiLayerRenderer {
 
   // Кольори з токенів (кеш; canvas не читає var() — патерн DrawingsRenderer).
   private infoColor = '#5487FF';
+  private bearColor = '#ED4554';
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -122,6 +125,7 @@ export class ArchiLayerRenderer {
   refreshThemeColors(): void {
     const s = getComputedStyle(this.canvas);
     this.infoColor = s.getPropertyValue('--info').trim() || '#5487FF';
+    this.bearColor = s.getPropertyValue('--bear').trim() || '#ED4554';
     this.scheduleRender();
   }
 
@@ -151,8 +155,12 @@ export class ArchiLayerRenderer {
     const canvasH = this.canvas.height / this.dpr;
     this.ctx.clearRect(0, 0, canvasW, canvasH);
 
-    const conds = this.data?.conditions;
-    if (!this.visible || !conds || conds.length === 0) return;
+    const d = this.data;
+    const conds = d?.conditions;
+    const hasThesis =
+      d != null && (d.key_level_price != null || d.invalidation_price != null);
+    if (!this.visible || d == null || ((!conds || conds.length === 0) && !hasThesis))
+      return;
 
     // Pane-clip (ADR-0084): шар не заходить на шкали. Fallback → повний canvas.
     let paneW = canvasW;
@@ -164,17 +172,30 @@ export class ArchiLayerRenderer {
       if (tsh > 0 && tsh < canvasH) paneH = canvasH - tsh;
     } catch { /* до першого layout LWC */ }
 
+    this.labelYs = []; // reset anti-collision щокадру
+
     this.ctx.save();
     this.ctx.beginPath();
     this.ctx.rect(0, 0, paneW, paneH);
     this.ctx.clip();
 
-    for (const c of conds) {
+    for (const c of conds ?? []) {
       const alpha = freshnessAlpha(c.created_at_ms);
       if ((c.kind === 'price_cross' || c.kind === 'candle_close') && c.level != null) {
         this.renderLevel(c, paneW, alpha);
       } else if (c.kind === 'price_zone_touch' && c.zone_high != null && c.zone_low != null) {
         this.renderZone(c, paneW, alpha);
+      }
+    }
+
+    // P4: рівні тези поверх будильників (головні рівні аналізу Арчі).
+    if (hasThesis) {
+      const tAlpha = freshnessAlpha(d!.thesis_updated_at_ms ?? 0);
+      if (d!.key_level_price != null) {
+        this.renderThesisLine(d!.key_level_price, this.infoColor, false, '◆', 'ціль', paneW, tAlpha);
+      }
+      if (d!.invalidation_price != null) {
+        this.renderThesisLine(d!.invalidation_price, this.bearColor, true, '✕', 'інвалід', paneW, tAlpha);
       }
     }
 
@@ -221,17 +242,47 @@ export class ArchiLayerRenderer {
     this.renderLabel(`⏰ зона ${fmtPrice(c.zone_low!)}–${fmtPrice(c.zone_high!)} · Арчі`, paneW, top, alpha);
   }
 
+  /** P4: рівень тези — solid (key/ціль) або dashed (invalidation). Товща за
+   *  будильники (це головні рівні аналізу Арчі, не автоматичні тригери). */
+  private renderThesisLine(
+    price: number,
+    color: string,
+    dashed: boolean,
+    icon: string,
+    tag: string,
+    paneW: number,
+    alpha: number,
+  ): void {
+    const y = this.seriesApi.priceToCoordinate(price);
+    if (y === null) return;
+    const ctx = this.ctx;
+    ctx.strokeStyle = withAlpha(color, alpha);
+    ctx.lineWidth = dashed ? 1.2 : 1.4;
+    ctx.setLineDash(dashed ? [6, 4] : []);
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(paneW, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    this.renderLabel(`${icon} ${fmtPrice(price)} · ${tag} Арчі`, paneW, y, alpha, color);
+  }
+
   /** Лейбл праворуч біля краю пани; halo-тінь (техніка delete-× ADR-0079) —
    *  читабельний на свічках будь-якої теми без фонової плашки. */
-  private renderLabel(text: string, paneW: number, y: number, alpha: number): void {
+  private renderLabel(text: string, paneW: number, y: number, alpha: number, color?: string): void {
     const ctx = this.ctx;
     ctx.font = LABEL_FONT;
     const w = ctx.measureText(text).width;
     const x = Math.max(4, paneW - w - 8);
-    const ly = Math.max(10, y - 5);
+    // Anti-collision: якщо лейбл близько до вже намальованого (той самий рівень
+    // — напр. будильник збігається з ціллю тези), зсуваємо вниз на 12px, щоб
+    // обидва читались. Лінія лишається на своєму y, зсувається лише підпис.
+    let ly = Math.max(10, y - 5);
+    while (this.labelYs.some((prev) => Math.abs(prev - ly) < 12)) ly += 12;
+    this.labelYs.push(ly);
     ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
     ctx.shadowBlur = 3;
-    ctx.fillStyle = withAlpha(this.infoColor, Math.min(1, alpha + 0.15));
+    ctx.fillStyle = withAlpha(color ?? this.infoColor, Math.min(1, alpha + 0.15));
     ctx.fillText(text, x, ly);
     ctx.shadowBlur = 0;
   }
