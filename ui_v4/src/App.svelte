@@ -267,6 +267,24 @@
     saveDrawingTools(drawingToolsEnabled);
   }
 
+  // ADR-0085 P6: шар Арчі на чарті on/off (☰-меню). Persist; default ON.
+  function loadArchiChart(): boolean {
+    try {
+      return localStorage.getItem("v4_archi_chart") !== "0"; // default ON
+    } catch {
+      return true;
+    }
+  }
+  let archiChartEnabled = $state(loadArchiChart());
+  function toggleArchiChart(): void {
+    archiChartEnabled = !archiChartEnabled;
+    try {
+      localStorage.setItem("v4_archi_chart", archiChartEnabled ? "1" : "0");
+    } catch {
+      /* quota / private mode — silent */
+    }
+  }
+
   // P3.11/P3.12: ChartPane ref for theme/style delegation
   let chartPaneRef: any = $state(null);
   let activeTheme: ThemeName = $state(loadTheme());
@@ -693,6 +711,7 @@
         {activeTool}
         {magnetEnabled}
         drawingDefaults={toolDefaults}
+        {archiChartEnabled}
         bind:smcPanelOpen
         bind:displayMode
       />
@@ -809,6 +828,8 @@
         onToggleHints={toggleHints}
         toolsEnabled={drawingToolsEnabled}
         onToggleTools={toggleDrawingTools}
+        {archiChartEnabled}
+        onToggleArchiChart={toggleArchiChart}
       />
     </div>
   </div>

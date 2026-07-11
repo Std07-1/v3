@@ -52,6 +52,8 @@
     magnetEnabled?: boolean;
     /** ADR-0080 (surface-2): per-tool дефолт-стиль для нових фігур (App SSOT). */
     drawingDefaults?: Partial<Record<DrawingType, { colorRole: DrawingColorRole }>>;
+    /** ADR-0085 P6: показ шару Арчі на чарті (☰-toggle, default ON). */
+    archiChartEnabled?: boolean;
     // ADR-0065 Phase 1: SMC panel open + display mode lifted to App.svelte
     // (controlled via CommandRailOverflow menu). Both are $bindable so
     // ChartPane can still write (key handlers, frame updates) and the
@@ -68,6 +70,7 @@
     activeTool = null,
     magnetEnabled = false,
     drawingDefaults = {},
+    archiChartEnabled = true,
     smcPanelOpen = $bindable(false),
     displayMode = $bindable<DisplayMode>("focus"),
   }: Props = $props();
@@ -301,6 +304,11 @@
     } else if (currentFrame.frame_type === "full") {
       archiRenderer?.setData(null);
     }
+  });
+  // ADR-0085 P6: ☰-toggle «Арчі на чарті» — клієнтський show/hide без
+  // перерахунку даних (шар лишається в пам'яті).
+  $effect(() => {
+    archiRenderer?.setVisible(archiChartEnabled);
   });
 
   $effect(() => {

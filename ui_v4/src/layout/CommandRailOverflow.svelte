@@ -44,6 +44,9 @@
         /** Drawing toolbar visibility on/off. */
         toolsEnabled?: boolean;
         onToggleTools?: () => void;
+        /** ADR-0085 P6: шар Арчі на чарті on/off (лінії-будильники + теза). */
+        archiChartEnabled?: boolean;
+        onToggleArchiChart?: () => void;
     }
 
     const {
@@ -64,6 +67,8 @@
         onToggleHints,
         toolsEnabled = true,
         onToggleTools,
+        archiChartEnabled = true,
+        onToggleArchiChart,
     }: Props = $props();
 
     type SubmenuKey = "theme" | "style" | null;
@@ -174,7 +179,21 @@
             </button>
         {/if}
 
-        {#if onToggleSmc || onToggleDisplayMode || onToggleHints || onToggleTools}
+        <!-- ADR-0085 P6: шар Арчі на чарті (лінії-будильники) -->
+        {#if onToggleArchiChart}
+            <button
+                class="menu-item menu-toggle"
+                class:active={archiChartEnabled}
+                role="menuitemcheckbox"
+                aria-checked={archiChartEnabled}
+                onclick={() => onToggleArchiChart?.()}
+            >
+                <span class="mi-label">Арчі на чарті</span>
+                <span class="mi-state">{archiChartEnabled ? "●" : "○"}</span>
+            </button>
+        {/if}
+
+        {#if onToggleSmc || onToggleDisplayMode || onToggleHints || onToggleTools || onToggleArchiChart}
             <div class="menu-divider" role="separator"></div>
         {/if}
 
