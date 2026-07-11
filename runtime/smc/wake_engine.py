@@ -353,6 +353,29 @@ class WakeEngine:
             return next(iter(self._presence.values()))
         return PresenceStatus()
 
+    #: ADR-0085: kind-и з просторовим представленням на ціновій осі.
+    #: session/silence/scheduled/volatility/structure — не-чартові.
+    _CHARTABLE_KINDS = frozenset(
+        {
+            WakeConditionKind.PRICE_CROSS,
+            WakeConditionKind.PRICE_ZONE_TOUCH,
+            WakeConditionKind.CANDLE_CLOSE,
+        }
+    )
+
+    def get_bot_conditions(self, symbol: str) -> List[WakeCondition]:
+        """ADR-0085 P1: чартові умови Арчі для wire frame (`archi_chart`).
+
+        Читає кеш `_bot_conditions` (оновлюється кожні 30с) — НУЛЬ нових
+        Redis-звернень. Фільтр: лише source=="bot" (голос Арчі; platform
+        auto_wake = дубль SMC-зон, у wire не йде) і лише чартові kind-и.
+        """
+        return [
+            c
+            for c in self._bot_conditions.get(symbol, [])
+            if c.source == "bot" and c.kind in self._CHARTABLE_KINDS
+        ]
+
     # в”Ђв”Ђ Redis helpers (sync вЂ” called via run_in_executor) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     def _redis_push_event(self, key: str, event_json: str) -> None:

@@ -1,613 +1,617 @@
 {
-    "symbol": "XAU/USD",
-    "symbols": [
-        "XAU/USD",
-        "XAG/USD",
-        "BTCUSDT",
-        "ETHUSDT"
-    ],
-    "data_root": "./data_v3",
-    "broker_python": ".venv37/Scripts/python.exe",
-    "safety_delay_s": 2,
-    "m1_poller": {
-        "enabled": true,
-        "tail_fetch_n": 5,
-        "safety_delay_s": 8,
-        "m3_derive_enabled": true,
-        "backfill_enabled": true,
-        "backfill_max_bars": 1440,
-        "tail_catchup_max_bars": 5000,
-        "live_recover_threshold_bars": 3,
-        "live_recover_max_bars_per_cycle": 120,
-        "live_recover_cooldown_s": 5,
-        "live_recover_max_total_bars": 5000,
-        "live_recover_log_interval_s": 60,
-        "stale_s": 720
+  "symbol": "XAU/USD",
+  "symbols": [
+    "XAU/USD",
+    "XAG/USD",
+    "BTCUSDT",
+    "ETHUSDT"
+  ],
+  "data_root": "./data_v3",
+  "broker_python": ".venv37/Scripts/python.exe",
+  "safety_delay_s": 2,
+  "m1_poller": {
+    "enabled": true,
+    "tail_fetch_n": 5,
+    "safety_delay_s": 8,
+    "m3_derive_enabled": true,
+    "backfill_enabled": true,
+    "backfill_max_bars": 1440,
+    "tail_catchup_max_bars": 5000,
+    "live_recover_threshold_bars": 3,
+    "live_recover_max_bars_per_cycle": 120,
+    "live_recover_cooldown_s": 5,
+    "live_recover_max_total_bars": 5000,
+    "live_recover_log_interval_s": 60,
+    "stale_s": 720
+  },
+  "broker_base_tfs_s": [],
+  "derived_tfs_s": [
+    14400,
+    86400
+  ],
+  "tf_allowlist_s": [
+    60,
+    180,
+    300,
+    900,
+    1800,
+    3600,
+    14400,
+    86400
+  ],
+  "preview_tick_enabled": true,
+  "preview_tick_tfs_s": [
+    60,
+    180,
+    300,
+    900,
+    1800,
+    3600,
+    14400,
+    86400
+  ],
+  "preview_tick_publish_min_interval_ms": 250,
+  "preview_curr_ttl_s": 1800,
+  "broker_ipc_reply_ttl_s": 120,
+  "tick_auto_promote_m1": true,
+  "ui_stitching_enabled": false,
+  "tick_stream_enabled": true,
+  "tick_stream_symbols": [],
+  "tick_stream_min_interval_ms": 200,
+  "tick_stream_last_tick_ttl_s": 30,
+  "tick_stream_price_mode": "bid",
+  "d1_live_tick_relay_enabled": true,
+  "d1_live_tick_relay_tfs_s": [
+    86400
+  ],
+  "calendar_gate_enabled": true,
+  "market_calendar_by_group": {
+    "fx_24x5_utc_summer": {
+      "market_weekend_open_dow": 6,
+      "market_weekend_open_hm": "21:00",
+      "market_weekend_close_dow": 4,
+      "market_weekend_close_hm": "20:55",
+      "market_daily_break_start_hm": "00:00",
+      "market_daily_break_end_hm": "00:00",
+      "market_daily_breaks": [
+        [
+          "20:55",
+          "21:30"
+        ]
+      ]
     },
-    "broker_base_tfs_s": [],
-    "derived_tfs_s": [
-        14400,
-        86400
-    ],
-    "tf_allowlist_s": [
-        60,
-        180,
-        300,
-        900,
-        1800,
-        3600,
-        14400,
-        86400
-    ],
-    "preview_tick_enabled": true,
-    "preview_tick_tfs_s": [
-        60,
-        180,
-        300,
-        900,
-        1800,
-        3600,
-        14400,
-        86400
-    ],
-    "preview_tick_publish_min_interval_ms": 250,
-    "preview_curr_ttl_s": 1800,
-    "broker_ipc_reply_ttl_s": 120,
-    "tick_auto_promote_m1": true,
-    "ui_stitching_enabled": false,
-    "tick_stream_enabled": true,
-    "tick_stream_symbols": [],
-    "tick_stream_min_interval_ms": 200,
-    "tick_stream_last_tick_ttl_s": 30,
-    "tick_stream_price_mode": "bid",
-    "d1_live_tick_relay_enabled": true,
-    "d1_live_tick_relay_tfs_s": [
-        86400
-    ],
-    "calendar_gate_enabled": true,
-    "market_calendar_by_group": {
-        "fx_24x5_utc_summer": {
-            "market_weekend_open_dow": 6,
-            "market_weekend_open_hm": "21:00",
-            "market_weekend_close_dow": 4,
-            "market_weekend_close_hm": "20:55",
-            "market_daily_break_start_hm": "00:00",
-            "market_daily_break_end_hm": "00:00",
-            "market_daily_breaks": [
-                [
-                    "20:55",
-                    "21:30"
-                ]
-            ]
-        },
-        "cfd_us_22_23": {
-            "market_weekend_open_dow": 6,
-            "market_weekend_open_hm": "22:00",
-            "market_weekend_close_dow": 4,
-            "market_weekend_close_hm": "20:45",
-            "market_daily_break_start_hm": "21:00",
-            "market_daily_break_end_hm": "22:00"
-        },
-        "cfd_eu_21_07": {
-            "market_weekend_open_dow": 0,
-            "market_weekend_open_hm": "07:00",
-            "market_weekend_close_dow": 4,
-            "market_weekend_close_hm": "21:00",
-            "market_daily_break_start_hm": "21:00",
-            "market_daily_break_end_hm": "07:00"
-        },
-        "cfd_hk_main": {
-            "market_weekend_open_dow": 0,
-            "market_weekend_open_hm": "01:15",
-            "market_weekend_close_dow": 4,
-            "market_weekend_close_hm": "19:00",
-            "market_daily_break_start_hm": "19:00",
-            "market_daily_break_end_hm": "01:15",
-            "market_daily_breaks": [
-                [
-                    "04:00",
-                    "05:00"
-                ],
-                [
-                    "08:30",
-                    "09:15"
-                ]
-            ]
-        },
-        "crypto_24x7": {
-            "market_weekend_open_dow": 0,
-            "market_weekend_open_hm": "00:00",
-            "market_weekend_close_dow": 6,
-            "market_weekend_close_hm": "23:59",
-            "market_daily_break_start_hm": "00:00",
-            "market_daily_break_end_hm": "00:00"
-        }
+    "cfd_us_22_23": {
+      "market_weekend_open_dow": 6,
+      "market_weekend_open_hm": "22:00",
+      "market_weekend_close_dow": 4,
+      "market_weekend_close_hm": "20:45",
+      "market_daily_break_start_hm": "21:00",
+      "market_daily_break_end_hm": "22:00"
     },
-    "market_calendar_symbol_groups": {
-        "XAU/USD": "cfd_us_22_23",
-        "XAG/USD": "cfd_us_22_23",
-        "NGAS": "cfd_us_22_23",
-        "SPX500": "cfd_us_22_23",
-        "NAS100": "cfd_us_22_23",
-        "US30": "cfd_us_22_23",
-        "GER30": "cfd_eu_21_07",
-        "EUSTX50": "cfd_eu_21_07",
-        "HKG33": "cfd_hk_main",
-        "GBP/CAD": "fx_24x5_utc_summer",
-        "NZD/CAD": "fx_24x5_utc_summer",
-        "USD/CAD": "fx_24x5_utc_summer",
-        "USD/JPY": "fx_24x5_utc_summer",
-        "BTCUSDT": "crypto_24x7",
-        "ETHUSDT": "crypto_24x7"
+    "cfd_eu_21_07": {
+      "market_weekend_open_dow": 0,
+      "market_weekend_open_hm": "07:00",
+      "market_weekend_close_dow": 4,
+      "market_weekend_close_hm": "21:00",
+      "market_daily_break_start_hm": "21:00",
+      "market_daily_break_end_hm": "07:00"
     },
-    "market_ignore_minutes_utc": [
-        "2026-02-01T23:02:00Z"
-    ],
-    "market_boundary_slip_minutes_per_day": 2,
-    "day_anchor_offset_s": 79200,
-    "day_anchor_offset_s_alt": 82800,
-    "day_anchor_offset_s_alt2": 0,
-    "day_anchor_offset_s_d1": 75600,
-    "day_anchor_offset_s_d1_alt": 79200,
-    "ssot_jsonl_fsync": false,
-    "ui_debug": true,
-    "group_logs_enabled": true,
-    "redis_priming_enabled": true,
-    "redis_priming_budget_s": 15,
-    "redis_priming_tfs_s": [
-        60,
-        180,
-        300,
-        900,
-        1800,
-        3600,
-        14400,
-        86400
-    ],
-    "redis_priming_symbols": [],
-    "min_coldload_bars_by_tf_s": {
-        "60": 1440,
-        "180": 480,
-        "300": 2016,
-        "900": 672,
-        "1800": 150,
-        "3600": 720,
-        "14400": 1080,
-        "86400": 365
-    },
-    "redis": {
-        "enabled": true,
-        "host": "127.0.0.1",
-        "port": 6379,
-        "db": 1,
-        "namespace": "v3_local",
-        "allow_env_override": false,
-        "ttl_by_tf_s": {
-            "60": 86400,
-            "180": 86400,
-            "300": 259200,
-            "900": 259200,
-            "1800": 259200,
-            "3600": 259200,
-            "14400": 604800,
-            "86400": 604800
-        },
-        "tail_n_by_tf_s": {
-            "60": 10080,
-            "180": 3360,
-            "300": 10000,
-            "900": 5000,
-            "1800": 3000,
-            "3600": 5000,
-            "14400": 5000,
-            "86400": 2000
-        }
-    },
-    "channels": {
-        "prefix": "fxcm_local",
-        "ohlcv": "fxcm_local:ohlcv",
-        "price_tick": "fxcm_local:price_tik",
-        "status": "fxcm_local:status",
-        "commands": "fxcm_local:commands",
-        "heartbeat": "fxcm_local:heartbeat"
-    },
-    "bootstrap": {
-        "prime_ready_timeout_s": 120,
-        "initial_backfill_m1_bars": 1440,
-        "cascade_catchup_m1_bars": 10080,
-        "historical_crawl_enabled": true,
-        "historical_crawl_m1_per_run": 1440,
-        "historical_crawl_interval_s": 3600,
-        "historical_crawl_max_days": 30,
-        "derive_warmup_bars_by_tf": {
-            "60": 10080,
-            "300": 20,
-            "900": 10,
-            "1800": 10,
-            "3600": 10
-        },
-        "ui_warmup_bars_by_tf": {
-            "60": 10080,
-            "180": 3360,
-            "300": 2016,
-            "900": 2000,
-            "1800": 1000,
-            "3600": 2000,
-            "14400": 2000,
-            "86400": 1000
-        },
-        "ui_cold_start_bars_by_tf": {
-            "60": 10080,
-            "180": 3360,
-            "300": 2016,
-            "900": 2000,
-            "1800": 1000,
-            "3600": 2000,
-            "14400": 2000,
-            "86400": 1000
-        }
-    },
-    "known_broker_outages": [
-        {
-            "symbol": "NAS100",
-            "from_utc": "2026-02-04T20:40:00Z",
-            "to_utc": "2026-02-04T21:50:00Z",
-            "reason": "FXCM data outage mid-session"
-        },
-        {
-            "symbol": "NGAS",
-            "from_utc": "2026-01-26T23:00:00Z",
-            "to_utc": "2026-01-26T23:05:00Z",
-            "reason": "FXCM opening bar missing after break"
-        },
-        {
-            "symbol": "NGAS",
-            "from_utc": "2026-02-09T09:45:00Z",
-            "to_utc": "2026-02-09T09:50:00Z",
-            "reason": "FXCM data outage"
-        },
-        {
-            "symbol": "NGAS",
-            "from_utc": "2026-02-09T11:30:00Z",
-            "to_utc": "2026-02-09T11:35:00Z",
-            "reason": "FXCM data outage"
-        },
-        {
-            "symbol": "NGAS",
-            "from_utc": "2026-02-09T12:35:00Z",
-            "to_utc": "2026-02-09T12:40:00Z",
-            "reason": "FXCM data outage"
-        }
-    ],
-    "ws_server": {
-        "enabled": true,
-        "host": "127.0.0.1",
-        "port": 8000,
-        "heartbeat_interval_s": 30,
-        "delta_poll_interval_s": 1.0,
-        "bg_smc_poll_interval_s": 10.0,
-        "cors_allowed_origins": []
-    },
-    "wake_engine": {
-        "enabled": true,
-        "zone_proximity_atr": 2.0,
-        "max_silence_hours": 3.0,
-        "grade_accept": [
-            "A+",
-            "A"
+    "cfd_hk_main": {
+      "market_weekend_open_dow": 0,
+      "market_weekend_open_hm": "01:15",
+      "market_weekend_close_dow": 4,
+      "market_weekend_close_hm": "19:00",
+      "market_daily_break_start_hm": "19:00",
+      "market_daily_break_end_hm": "01:15",
+      "market_daily_breaks": [
+        [
+          "04:00",
+          "05:00"
         ],
-        "zone_score_min": 6,
-        "accumulator_threshold": 5.0,
-        "accumulator_decay": 0.95,
-        "event_cooldown_s": {
-            "price_zone_touch": 1800,
-            "session_open": 7200,
-            "structure_break": 1200,
-            "bias_divergence": 3600,
-            "accumulator": 0,
-            "max_silence": 0,
-            "_default": 600
-        },
-        "dedup_include_zone_id": false
+        [
+          "08:30",
+          "09:15"
+        ]
+      ]
     },
-    "agent_console": {
-        "enabled": true,
-        "data_dir": "/opt/smc-trader-v3/data",
-        "auth_token": "",
-        "thinking_max_items": 100,
-        "feed_max_items": 200
+    "crypto_24x7": {
+      "market_weekend_open_dow": 0,
+      "market_weekend_open_hm": "00:00",
+      "market_weekend_close_dow": 6,
+      "market_weekend_close_hm": "23:59",
+      "market_daily_break_start_hm": "00:00",
+      "market_daily_break_end_hm": "00:00"
+    }
+  },
+  "market_calendar_symbol_groups": {
+    "XAU/USD": "cfd_us_22_23",
+    "XAG/USD": "cfd_us_22_23",
+    "NGAS": "cfd_us_22_23",
+    "SPX500": "cfd_us_22_23",
+    "NAS100": "cfd_us_22_23",
+    "US30": "cfd_us_22_23",
+    "GER30": "cfd_eu_21_07",
+    "EUSTX50": "cfd_eu_21_07",
+    "HKG33": "cfd_hk_main",
+    "GBP/CAD": "fx_24x5_utc_summer",
+    "NZD/CAD": "fx_24x5_utc_summer",
+    "USD/CAD": "fx_24x5_utc_summer",
+    "USD/JPY": "fx_24x5_utc_summer",
+    "BTCUSDT": "crypto_24x7",
+    "ETHUSDT": "crypto_24x7"
+  },
+  "market_ignore_minutes_utc": [
+    "2026-02-01T23:02:00Z"
+  ],
+  "market_boundary_slip_minutes_per_day": 2,
+  "day_anchor_offset_s": 79200,
+  "day_anchor_offset_s_alt": 82800,
+  "day_anchor_offset_s_alt2": 0,
+  "day_anchor_offset_s_d1": 75600,
+  "day_anchor_offset_s_d1_alt": 79200,
+  "ssot_jsonl_fsync": false,
+  "ui_debug": true,
+  "group_logs_enabled": true,
+  "redis_priming_enabled": true,
+  "redis_priming_budget_s": 15,
+  "redis_priming_tfs_s": [
+    60,
+    180,
+    300,
+    900,
+    1800,
+    3600,
+    14400,
+    86400
+  ],
+  "redis_priming_symbols": [],
+  "min_coldload_bars_by_tf_s": {
+    "60": 1440,
+    "180": 480,
+    "300": 2016,
+    "900": 672,
+    "1800": 150,
+    "3600": 720,
+    "14400": 1080,
+    "86400": 365
+  },
+  "redis": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 6379,
+    "db": 1,
+    "namespace": "v3_local",
+    "allow_env_override": false,
+    "ttl_by_tf_s": {
+      "60": 86400,
+      "180": 86400,
+      "300": 259200,
+      "900": 259200,
+      "1800": 259200,
+      "3600": 259200,
+      "14400": 604800,
+      "86400": 604800
     },
-    "api_v3": {
-        "enabled": true,
-        "analysis_enabled": true,
-        "signals_dir": "data_v3/_signals"
+    "tail_n_by_tf_s": {
+      "60": 10080,
+      "180": 3360,
+      "300": 10000,
+      "900": 5000,
+      "1800": 3000,
+      "3600": 5000,
+      "14400": 5000,
+      "86400": 2000
+    }
+  },
+  "channels": {
+    "prefix": "fxcm_local",
+    "ohlcv": "fxcm_local:ohlcv",
+    "price_tick": "fxcm_local:price_tik",
+    "status": "fxcm_local:status",
+    "commands": "fxcm_local:commands",
+    "heartbeat": "fxcm_local:heartbeat"
+  },
+  "bootstrap": {
+    "prime_ready_timeout_s": 120,
+    "initial_backfill_m1_bars": 1440,
+    "cascade_catchup_m1_bars": 10080,
+    "historical_crawl_enabled": true,
+    "historical_crawl_m1_per_run": 1440,
+    "historical_crawl_interval_s": 3600,
+    "historical_crawl_max_days": 30,
+    "derive_warmup_bars_by_tf": {
+      "60": 10080,
+      "300": 20,
+      "900": 10,
+      "1800": 10,
+      "3600": 10
     },
-    "smc": {
-        "enabled": true,
-        "lookback_bars": 500,
-        "swing_period": 5,
-        "fractal_period": 2,
-        "compute_tfs": [
-            300,
-            900,
-            3600,
-            14400,
-            86400
-        ],
+    "ui_warmup_bars_by_tf": {
+      "60": 10080,
+      "180": 3360,
+      "300": 2016,
+      "900": 2000,
+      "1800": 1000,
+      "3600": 2000,
+      "14400": 2000,
+      "86400": 1000
+    },
+    "ui_cold_start_bars_by_tf": {
+      "60": 10080,
+      "180": 3360,
+      "300": 2016,
+      "900": 2000,
+      "1800": 1000,
+      "3600": 2000,
+      "14400": 2000,
+      "86400": 1000
+    }
+  },
+  "known_broker_outages": [
+    {
+      "symbol": "NAS100",
+      "from_utc": "2026-02-04T20:40:00Z",
+      "to_utc": "2026-02-04T21:50:00Z",
+      "reason": "FXCM data outage mid-session"
+    },
+    {
+      "symbol": "NGAS",
+      "from_utc": "2026-01-26T23:00:00Z",
+      "to_utc": "2026-01-26T23:05:00Z",
+      "reason": "FXCM opening bar missing after break"
+    },
+    {
+      "symbol": "NGAS",
+      "from_utc": "2026-02-09T09:45:00Z",
+      "to_utc": "2026-02-09T09:50:00Z",
+      "reason": "FXCM data outage"
+    },
+    {
+      "symbol": "NGAS",
+      "from_utc": "2026-02-09T11:30:00Z",
+      "to_utc": "2026-02-09T11:35:00Z",
+      "reason": "FXCM data outage"
+    },
+    {
+      "symbol": "NGAS",
+      "from_utc": "2026-02-09T12:35:00Z",
+      "to_utc": "2026-02-09T12:40:00Z",
+      "reason": "FXCM data outage"
+    }
+  ],
+  "ws_server": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8000,
+    "heartbeat_interval_s": 30,
+    "delta_poll_interval_s": 1.0,
+    "bg_smc_poll_interval_s": 10.0,
+    "cors_allowed_origins": []
+  },
+  "wake_engine": {
+    "enabled": true,
+    "zone_proximity_atr": 2.0,
+    "max_silence_hours": 3.0,
+    "grade_accept": [
+      "A+",
+      "A"
+    ],
+    "zone_score_min": 6,
+    "accumulator_threshold": 5.0,
+    "accumulator_decay": 0.95,
+    "event_cooldown_s": {
+      "price_zone_touch": 1800,
+      "session_open": 7200,
+      "structure_break": 1200,
+      "bias_divergence": 3600,
+      "accumulator": 0,
+      "max_silence": 0,
+      "_default": 600
+    },
+    "dedup_include_zone_id": false,
+    "archi_chart": {
+      "enabled": true,
+      "max_lines": 6
+    }
+  },
+  "agent_console": {
+    "enabled": true,
+    "data_dir": "/opt/smc-trader-v3/data",
+    "auth_token": "",
+    "thinking_max_items": 100,
+    "feed_max_items": 200
+  },
+  "api_v3": {
+    "enabled": true,
+    "analysis_enabled": true,
+    "signals_dir": "data_v3/_signals"
+  },
+  "smc": {
+    "enabled": true,
+    "lookback_bars": 500,
+    "swing_period": 5,
+    "fractal_period": 2,
+    "compute_tfs": [
+      300,
+      900,
+      3600,
+      14400,
+      86400
+    ],
+    "ob": {
+      "enabled": true,
+      "min_impulse_atr_mult": 1.5,
+      "atr_period": 14,
+      "max_active_per_side": 5,
+      "track_breakers": true
+    },
+    "fvg": {
+      "enabled": true,
+      "min_gap_atr_mult": 0.2,
+      "max_active": 15
+    },
+    "structure": {
+      "enabled": true,
+      "confirmation_bars": 1
+    },
+    "levels": {
+      "enabled": true,
+      "tolerance_atr_mult": 0.1,
+      "min_touches": 2,
+      "max_levels": 4
+    },
+    "premium_discount": {
+      "calc_enabled": true,
+      "show_badge": true,
+      "show_eq_line": true,
+      "show_zones": false,
+      "eq_pdh_coincidence_atr_mult": 0.5,
+      "eq_low": 45,
+      "eq_high": 55
+    },
+    "inducement": {
+      "enabled": true,
+      "minor_period": 3,
+      "reversal_atr_mult": 0.5,
+      "confirmation_bars": 3,
+      "max_inducements": 10
+    },
+    "momentum": {
+      "enabled": true,
+      "min_body_atr_mult": 1.5,
+      "max_wick_ratio": 0.3,
+      "lookback_bars": 10,
+      "max_display": 15
+    },
+    "max_zones_per_tf": 10,
+    "max_zone_height_atr_mult": 4.0,
+    "hide_mitigated": true,
+    "decay_start_bars": 30,
+    "decay_fast_bars": 150,
+    "fvg_grace_bars": 3,
+    "display": {
+      "proximity_atr_mult": 6.0,
+      "max_display_zones": 10,
+      "max_display_levels": 6,
+      "max_display_swings": 20,
+      "min_display_strength": 0.25,
+      "mitigated_ttl_bars": 20,
+      "focus_budget_per_side": 3,
+      "focus_budget_total": 12,
+      "structure_label_max": 4,
+      "fvg_display_cap": 6,
+      "fvg_ob_overlap_hide": false,
+      "max_display_fractals": 30
+    },
+    "narrative": {
+      "enabled": true,
+      "trade_min_grade": "A",
+      "trade_min_score": 6,
+      "trade_max_distance_atr": 5.0,
+      "fvg_trade_min_score": 99,
+      "target_max_atr_distance": 12,
+      "max_scenarios": 2,
+      "market_phase_enabled": true,
+      "phase_hysteresis_bars": 3,
+      "fvg_context_enabled": true,
+      "target_lookback_bars": 100,
+      "trigger_structure_lookback_bars": 5,
+      "trigger_proximity_atr": 3.0,
+      "trigger_displacement_window": 3,
+      "max_wire_bytes": 600
+    },
+    "shell": {
+      "enabled": true,
+      "strip_tfs": [
+        86400,
+        14400,
+        3600,
+        900
+      ]
+    },
+    "signals": {
+      "_deprecated_by": "smc.tda_cascade (ADR-0040). Active fallback when tda_cascade.enabled=false.",
+      "enabled": false,
+      "entry_method": "ote",
+      "sl_buffer_atr": 0.2,
+      "tp_atr_multiplier": 2.0,
+      "approach_atr_mult": 1.5,
+      "signal_ttl_bars": 50,
+      "max_active_signals": 3,
+      "min_risk_reward": 1.5,
+      "confidence_weights": {
+        "bias_alignment": 0.3,
+        "structure": 0.25,
+        "confluence_grade": 0.2,
+        "session": 0.15,
+        "momentum": 0.1
+      }
+    },
+    "signal_journal": {
+      "enabled": true,
+      "path": "data_v3/_signals",
+      "execution_tf_s": 900
+    },
+    "context_stack": {
+      "enabled": true,
+      "institutional_budget": 1,
+      "intraday_budget": 1,
+      "local_budget": 2
+    },
+    "performance": {
+      "max_compute_ms": 10,
+      "log_slow_threshold_ms": 5
+    },
+    "confluence": {
+      "sweep_lookback_bars": 10,
+      "fvg_lookforward_bars": 3,
+      "extremum_tolerance_atr": 0.3,
+      "strong_impulse_threshold": 0.7,
+      "grade_thresholds": {
+        "a_plus": 8,
+        "a": 6,
+        "b": 4
+      },
+      "fvg_grade_thresholds": {
+        "a_plus": 6,
+        "a": 4,
+        "b": 2
+      }
+    },
+    "tf_overrides": {
+      "300": {
+        "swing_period": 3,
         "ob": {
-            "enabled": true,
-            "min_impulse_atr_mult": 1.5,
-            "atr_period": 14,
-            "max_active_per_side": 5,
-            "track_breakers": true
+          "min_impulse_atr_mult": 0.8
         },
         "fvg": {
-            "enabled": true,
-            "min_gap_atr_mult": 0.2,
-            "max_active": 15
-        },
-        "structure": {
-            "enabled": true,
-            "confirmation_bars": 1
-        },
-        "levels": {
-            "enabled": true,
-            "tolerance_atr_mult": 0.1,
-            "min_touches": 2,
-            "max_levels": 4
-        },
-        "premium_discount": {
-            "calc_enabled": true,
-            "show_badge": true,
-            "show_eq_line": true,
-            "show_zones": false,
-            "eq_pdh_coincidence_atr_mult": 0.5,
-            "eq_low": 45,
-            "eq_high": 55
-        },
-        "inducement": {
-            "enabled": true,
-            "minor_period": 3,
-            "reversal_atr_mult": 0.5,
-            "confirmation_bars": 3,
-            "max_inducements": 10
-        },
-        "momentum": {
-            "enabled": true,
-            "min_body_atr_mult": 1.5,
-            "max_wick_ratio": 0.3,
-            "lookback_bars": 10,
-            "max_display": 15
-        },
-        "max_zones_per_tf": 10,
-        "max_zone_height_atr_mult": 4.0,
-        "hide_mitigated": true,
-        "decay_start_bars": 30,
-        "decay_fast_bars": 150,
-        "fvg_grace_bars": 3,
-        "display": {
-            "proximity_atr_mult": 6.0,
-            "max_display_zones": 10,
-            "max_display_levels": 6,
-            "max_display_swings": 20,
-            "min_display_strength": 0.25,
-            "mitigated_ttl_bars": 20,
-            "focus_budget_per_side": 3,
-            "focus_budget_total": 12,
-            "structure_label_max": 4,
-            "fvg_display_cap": 6,
-            "fvg_ob_overlap_hide": false,
-            "max_display_fractals": 30
-        },
-        "narrative": {
-            "enabled": true,
-            "trade_min_grade": "A",
-            "trade_min_score": 6,
-            "trade_max_distance_atr": 5.0,
-            "fvg_trade_min_score": 99,
-            "target_max_atr_distance": 12,
-            "max_scenarios": 2,
-            "market_phase_enabled": true,
-            "phase_hysteresis_bars": 3,
-            "fvg_context_enabled": true,
-            "target_lookback_bars": 100,
-            "trigger_structure_lookback_bars": 5,
-            "trigger_proximity_atr": 3.0,
-            "trigger_displacement_window": 3,
-            "max_wire_bytes": 600
-        },
-        "shell": {
-            "enabled": true,
-            "strip_tfs": [
-                86400,
-                14400,
-                3600,
-                900
-            ]
-        },
-        "signals": {
-            "_deprecated_by": "smc.tda_cascade (ADR-0040). Active fallback when tda_cascade.enabled=false.",
-            "enabled": false,
-            "entry_method": "ote",
-            "sl_buffer_atr": 0.2,
-            "tp_atr_multiplier": 2.0,
-            "approach_atr_mult": 1.5,
-            "signal_ttl_bars": 50,
-            "max_active_signals": 3,
-            "min_risk_reward": 1.5,
-            "confidence_weights": {
-                "bias_alignment": 0.30,
-                "structure": 0.25,
-                "confluence_grade": 0.20,
-                "session": 0.15,
-                "momentum": 0.10
-            }
-        },
-        "signal_journal": {
-            "enabled": true,
-            "path": "data_v3/_signals",
-            "execution_tf_s": 900
-        },
-        "context_stack": {
-            "enabled": true,
-            "institutional_budget": 1,
-            "intraday_budget": 1,
-            "local_budget": 2
-        },
-        "performance": {
-            "max_compute_ms": 10,
-            "log_slow_threshold_ms": 5
-        },
-        "confluence": {
-            "sweep_lookback_bars": 10,
-            "fvg_lookforward_bars": 3,
-            "extremum_tolerance_atr": 0.3,
-            "strong_impulse_threshold": 0.7,
-            "grade_thresholds": {
-                "a_plus": 8,
-                "a": 6,
-                "b": 4
-            },
-            "fvg_grade_thresholds": {
-                "a_plus": 6,
-                "a": 4,
-                "b": 2
-            }
-        },
-        "tf_overrides": {
-            "300": {
-                "swing_period": 3,
-                "ob": {
-                    "min_impulse_atr_mult": 0.8
-                },
-                "fvg": {
-                    "min_gap_atr_mult": 0.1
-                }
-            },
-            "900": {
-                "swing_period": 3,
-                "ob": {
-                    "min_impulse_atr_mult": 1.0
-                },
-                "fvg": {
-                    "min_gap_atr_mult": 0.15
-                }
-            }
-        },
-        "sessions": {
-            "enabled": true,
-            "definitions": {
-                "asia": {
-                    "label": "Asia",
-                    "open_utc": "00:00",
-                    "close_utc": "07:00",
-                    "killzone_start_utc": "00:00",
-                    "killzone_end_utc": "03:00"
-                },
-                "london": {
-                    "label": "London",
-                    "open_utc": "07:00",
-                    "close_utc": "16:00",
-                    "killzone_start_utc": "07:00",
-                    "killzone_end_utc": "10:00"
-                },
-                "newyork": {
-                    "label": "New York",
-                    "open_utc": "12:00",
-                    "close_utc": "21:00",
-                    "killzone_start_utc": "12:00",
-                    "killzone_end_utc": "15:00"
-                }
-            },
-            "level_budget_per_session": 2,
-            "previous_session_ttl_bars": 500,
-            "sweep_lookback_bars": 30,
-            "sweep_body_ok": false
-        },
-        "tda": {
-            "enabled": false,
-            "ifvg_enabled": true,
-            "ifvg_max_active": 4,
-            "breaker_enabled": true,
-            "breaker_choch_lookback_bars": 10
-        },
-        "range_exhaustion": {
-            "_comment": "ADR-0053: ATR-based Daily/Session Travel Gauge. Staged rollout: enabled=false until P2 tests + R_BUG_HUNTER review.",
-            "enabled": false,
-            "atr_period": 14,
-            "session_atr_scale": 6.0,
-            "exhaustion_cap": 1.5,
-            "week_gap_cap": 0.5,
-            "phase_thresholds": {
-                "early_max": 0.35,
-                "mid_max": 0.70,
-                "late_max": 1.00
-            },
-            "confidence_delta_map": {
-                "early": 0.0,
-                "mid": 0.0,
-                "late": -0.15,
-                "exhausted": -0.30
-            },
-            "primary_anchor_rules": {
-                "asia": "d1_open",
-                "london": "london_open",
-                "ny": "ny_open",
-                "weekend": "week_open"
-            }
-        },
-        "tda_cascade": {
-            "_comment": "ADR-0040: TDA 4-stage daily cascade. Replaces ADR-0039 zone-reactive signals when enabled.",
-            "enabled": true,
-            "macro_min_bars": 5,
-            "macro_lookback_bars": 20,
-            "macro_slope_lookback": 10,
-            "macro_slope_threshold": 0.03,
-            "h4_min_bars": 5,
-            "h4_confirm_bars": 10,
-            "h4_cutoff_hour_utc": 7,
-            "asia_start_hour_utc": 23,
-            "asia_end_hour_utc": 7,
-            "london_start_hour_utc": 8,
-            "london_end_hour_utc": 13,
-            "asia_min_range_pts": 5.0,
-            "asia_min_h1_bars": 2,
-            "entry_search_start_utc": 9,
-            "entry_search_end_utc": 16,
-            "fvg_min_atr_ratio": 0.15,
-            "fvg_min_abs_pts": 1.0,
-            "fvg_proximity_pts": 200.0,
-            "sl_buffer_ratio": 0.5,
-            "rr_target": 3.0,
-            "min_rr": 2.5,
-            "max_open_bars_m15": 96,
-            "partial_tp_enabled": true,
-            "partial_tp_at_r": 1.0,
-            "partial_tp_pct": 0.5,
-            "trail_start_r": 2.0,
-            "trail_behind_r": 1.0,
-            "grade_enabled": true,
-            "min_grade_for_entry": "C"
+          "min_gap_atr_mult": 0.1
         }
+      },
+      "900": {
+        "swing_period": 3,
+        "ob": {
+          "min_impulse_atr_mult": 1.0
+        },
+        "fvg": {
+          "min_gap_atr_mult": 0.15
+        }
+      }
     },
-    "binance": {
-        "enabled": true,
-        "symbols": [
-            "BTCUSDT",
-            "ETHUSDT"
-        ],
-        "api_futures": true,
-        "tail_fetch_n": 5,
-        "safety_delay_s": 10,
-        "backfill_enabled": true,
-        "backfill_max_bars": 1440,
-        "day_anchor_offset_s": 0,
-        "d1_anchor_offset_s": 0,
-        "tick_ws_enabled": true,
-        "tick_ws_reconnect_base_s": 3,
-        "tick_ws_reconnect_max_s": 30
+    "sessions": {
+      "enabled": true,
+      "definitions": {
+        "asia": {
+          "label": "Asia",
+          "open_utc": "00:00",
+          "close_utc": "07:00",
+          "killzone_start_utc": "00:00",
+          "killzone_end_utc": "03:00"
+        },
+        "london": {
+          "label": "London",
+          "open_utc": "07:00",
+          "close_utc": "16:00",
+          "killzone_start_utc": "07:00",
+          "killzone_end_utc": "10:00"
+        },
+        "newyork": {
+          "label": "New York",
+          "open_utc": "12:00",
+          "close_utc": "21:00",
+          "killzone_start_utc": "12:00",
+          "killzone_end_utc": "15:00"
+        }
+      },
+      "level_budget_per_session": 2,
+      "previous_session_ttl_bars": 500,
+      "sweep_lookback_bars": 30,
+      "sweep_body_ok": false
     },
-    "updates": {
-        "retain": 2000
+    "tda": {
+      "enabled": false,
+      "ifvg_enabled": true,
+      "ifvg_max_active": 4,
+      "breaker_enabled": true,
+      "breaker_choch_lookback_bars": 10
+    },
+    "range_exhaustion": {
+      "_comment": "ADR-0053: ATR-based Daily/Session Travel Gauge. Staged rollout: enabled=false until P2 tests + R_BUG_HUNTER review.",
+      "enabled": false,
+      "atr_period": 14,
+      "session_atr_scale": 6.0,
+      "exhaustion_cap": 1.5,
+      "week_gap_cap": 0.5,
+      "phase_thresholds": {
+        "early_max": 0.35,
+        "mid_max": 0.7,
+        "late_max": 1.0
+      },
+      "confidence_delta_map": {
+        "early": 0.0,
+        "mid": 0.0,
+        "late": -0.15,
+        "exhausted": -0.3
+      },
+      "primary_anchor_rules": {
+        "asia": "d1_open",
+        "london": "london_open",
+        "ny": "ny_open",
+        "weekend": "week_open"
+      }
+    },
+    "tda_cascade": {
+      "_comment": "ADR-0040: TDA 4-stage daily cascade. Replaces ADR-0039 zone-reactive signals when enabled.",
+      "enabled": true,
+      "macro_min_bars": 5,
+      "macro_lookback_bars": 20,
+      "macro_slope_lookback": 10,
+      "macro_slope_threshold": 0.03,
+      "h4_min_bars": 5,
+      "h4_confirm_bars": 10,
+      "h4_cutoff_hour_utc": 7,
+      "asia_start_hour_utc": 23,
+      "asia_end_hour_utc": 7,
+      "london_start_hour_utc": 8,
+      "london_end_hour_utc": 13,
+      "asia_min_range_pts": 5.0,
+      "asia_min_h1_bars": 2,
+      "entry_search_start_utc": 9,
+      "entry_search_end_utc": 16,
+      "fvg_min_atr_ratio": 0.15,
+      "fvg_min_abs_pts": 1.0,
+      "fvg_proximity_pts": 200.0,
+      "sl_buffer_ratio": 0.5,
+      "rr_target": 3.0,
+      "min_rr": 2.5,
+      "max_open_bars_m15": 96,
+      "partial_tp_enabled": true,
+      "partial_tp_at_r": 1.0,
+      "partial_tp_pct": 0.5,
+      "trail_start_r": 2.0,
+      "trail_behind_r": 1.0,
+      "grade_enabled": true,
+      "min_grade_for_entry": "C"
     }
+  },
+  "binance": {
+    "enabled": true,
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT"
+    ],
+    "api_futures": true,
+    "tail_fetch_n": 5,
+    "safety_delay_s": 10,
+    "backfill_enabled": true,
+    "backfill_max_bars": 1440,
+    "day_anchor_offset_s": 0,
+    "d1_anchor_offset_s": 0,
+    "tick_ws_enabled": true,
+    "tick_ws_reconnect_base_s": 3,
+    "tick_ws_reconnect_max_s": 30
+  },
+  "updates": {
+    "retain": 2000
+  }
 }

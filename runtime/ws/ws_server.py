@@ -436,6 +436,63 @@ class WsSession:
 # в”Ђв”Ђ Frame builders в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 
+def _archi_chart_wire(app: Any, symbol: str) -> Optional[Dict[str, Any]]:
+    """ADR-0085 P1: зібрати `frame.archi_chart` — числові будильники Арчі.
+
+    Джерело: WakeEngine._bot_conditions кеш (30с TTL) через get_bot_conditions
+    — НУЛЬ нових Redis I/O. Лише source=="bot" + чартові kind-и (фільтр у
+    getter-і). Сортування: найсвіжіші перші; cap = config max_lines.
+    Повертає None ЛИШЕ коли вимкнено/нема двигуна (поле відсутнє у frame).
+    Умов нема → {"conditions": []} — порожній маркер їде у wire, щоб зняття
+    будильника Арчі пропагувалось НЕГАЙНО (UI чистить шар), не чекаючи full.
+    Corrupt-параметри умови → skip item (деградація per-item, лог debug — I5).
+    """
+    try:
+        cfg = (
+            app.get(APP_FULL_CONFIG, {})
+            .get("wake_engine", {})
+            .get("archi_chart", {})
+        )
+        if not cfg.get("enabled", True):
+            return None
+        we = app.get(APP_WAKE_ENGINE)
+        if we is None:
+            return None
+        conds = sorted(
+            we.get_bot_conditions(symbol),
+            key=lambda c: c.created_at_ms,
+            reverse=True,
+        )
+        max_lines = int(cfg.get("max_lines", 6))
+        out: list[Dict[str, Any]] = []
+        for c in conds[:max_lines]:
+            p = c.params or {}
+            item: Dict[str, Any] = {
+                "kind": c.kind.value,
+                "reason": (c.reason or "")[:140],
+                "created_at_ms": int(c.created_at_ms or 0),
+            }
+            try:
+                if c.kind.value == "price_cross":
+                    item["level"] = float(p["level"])
+                    item["direction"] = str(p.get("direction", ""))
+                elif c.kind.value == "price_zone_touch":
+                    item["zone_high"] = float(p["zone_high"])
+                    item["zone_low"] = float(p["zone_low"])
+                elif c.kind.value == "candle_close":
+                    item["level"] = float(p["level"])
+                    item["direction"] = str(p.get("direction", ""))
+                    item["tf_s"] = int(p.get("tf_s", 0))
+            except (KeyError, TypeError, ValueError) as bad:
+                _log.debug("ARCHI_CHART_BAD_COND sym=%s kind=%s: %s", symbol, c.kind.value, bad)
+                continue
+            out.append(item)
+        return {"conditions": out}
+    except Exception:
+        _log.debug("ARCHI_CHART_WIRE_ERR sym=%s", symbol, exc_info=True)
+        return None
+
+
 def _build_meta(session: WsSession, app: Any = None, **extra: Any) -> Dict[str, Any]:
     meta: Dict[str, Any] = {
         "schema_v": SCHEMA_V,
@@ -820,6 +877,10 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                                 )
                         except Exception as _enr_exc:
                             _log.debug("NARRATIVE_ENRICH_ERR: %s", _enr_exc)
+                    # ADR-0085 P1: числові будильники Арчі на чарт
+                    _ac = _archi_chart_wire(app, session.symbol)
+                    if _ac is not None:
+                        frame["archi_chart"] = _ac
                     # ADR-0039: signal engine wiring (before shell, so signal feeds shell)
                     _primary_sig = None
                     try:
@@ -1432,6 +1493,14 @@ async def _global_delta_loop(app: web.Application) -> None:
                                     None,
                                 ):
                                     forming_by_target.pop((symbol, tf_s), None)
+
+                    # ADR-0085 P1: будильники Арчі в КОЖНОМУ delta (не лише
+                    # complete-bar) — зняття/поява пропагується ≤2с+30с кеш,
+                    # порожній маркер {"conditions":[]} чистить шар негайно.
+                    if frame is not None and "archi_chart" not in frame:
+                        _ac_delta = _archi_chart_wire(app, symbol)
+                        if _ac_delta is not None:
+                            frame["archi_chart"] = _ac_delta
 
                     t1 = time.perf_counter()
                     t_ser_ms = (t1 - t0) * 1000.0
