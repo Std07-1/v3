@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 
 
 class WakeConditionKind(str, enum.Enum):
-    """8 types of wake conditions. All $0 checks (numeric comparisons)."""
+    """9 types of wake conditions. All $0 checks (numeric comparisons)."""
 
     PRICE_CROSS = "price_cross"
     PRICE_ZONE_TOUCH = "price_zone_touch"
@@ -33,6 +33,8 @@ class WakeConditionKind(str, enum.Enum):
     SCHEDULED = "scheduled"
     STRUCTURE_BREAK = "structure_break"
     CANDLE_CLOSE = "candle_close"  # ADR-0075: close (not touch) above/below level on a TF
+    # ADR-0087: anticipatory forecast — probable CHoCH/BOS approaching (advisory)
+    STRUCTURE_IMMINENT = "structure_imminent"
 
 
 class FeatureTier(str, enum.Enum):
@@ -58,6 +60,11 @@ class WakeCondition:
       max_silence:      {"hours": 3}
       scheduled:        {"hour_utc": 8, "minute_utc": 0}
       structure_break:  {"tf_s": 900, "type": "bos"}
+      structure_imminent (ADR-0087, resolved by generate_imminent_conditions):
+                        {"tf_s": 900, "leading_tf_s": 300, "target": "choch_bear",
+                         "level": 4712.4, "direction": "below",
+                         "protected_swing": "hl", "prox_atr": 1.0,
+                         "window_s": 1800, "atr_tf": 8.4}
     reason: human-readable explanation (injected into РђСЂС‡С–'s wake prompt)
     source: "bot" (РђСЂС‡С– defined) or "platform" (AutoWakeGenerator)
     """
