@@ -101,6 +101,40 @@ def check_condition(
                 return True
         return False
 
+    if kind == WakeConditionKind.STRUCTURE_IMMINENT:
+        # ADR-0087: anticipatory structure forecast (advisory, CHoCH-first).
+        # Params are resolved by generate_imminent_conditions() — level,
+        # direction and atr_tf arrive ready; two triggers below.
+        level = float(p.get("level", 0))
+        direction = p.get("direction", "")
+        if not level or direction not in ("above", "below"):
+            return False
+        # §2.2b `pending`: price crossed the protected level intrabar —
+        # break in progress, awaiting close + confirmation.
+        if direction == "above" and price >= level:
+            return True
+        if direction == "below" and price <= level:
+            return True
+        # §2.2 `mtf`: approach within prox + fresh aligned leading-TF
+        # confirmed event (LTF structure leads HTF structure).
+        atr_tf = float(p.get("atr_tf", 0)) or atr
+        if abs(price - level) > float(p.get("prox_atr", 1.0)) * atr_tf:
+            return False
+        if not structure_events:
+            return False
+        leading_tf = p.get("leading_tf_s")
+        want_direction = "bullish" if direction == "above" else "bearish"
+        window_ms = int(p.get("window_s", 1800)) * 1000
+        for ev in structure_events:
+            if leading_tf is not None and ev.get("tf_s") != leading_tf:
+                continue
+            if (ev.get("direction") or "") != want_direction:
+                continue
+            if ts_ms - int(ev.get("ts_ms", 0)) > window_ms:
+                continue
+            return True
+        return False
+
     if kind == WakeConditionKind.CANDLE_CLOSE:
         # ADR-0075: a CLOSED bar (broker finale) on tf_s closed above/below level.
         # Distinct from PRICE_CROSS (touch): needs the bar's close, supplied via
