@@ -303,12 +303,33 @@
       "price_zone_touch": 1800,
       "session_open": 7200,
       "structure_break": 1200,
+      "structure_imminent": 900,
       "bias_divergence": 3600,
       "accumulator": 0,
       "max_silence": 0,
       "_default": 600
     },
     "dedup_include_zone_id": false,
+    "structure_imminent": {
+      "enabled": true,
+      "targets": [
+        "choch"
+      ],
+      "tf_pairs": [
+        [
+          300,
+          900
+        ],
+        [
+          900,
+          3600
+        ]
+      ],
+      "prox_atr": 1.0,
+      "arm_radius_atr": 2.0,
+      "window_s": 1800,
+      "max_conditions": 4
+    },
     "archi_chart": {
       "enabled": true,
       "max_lines": 6

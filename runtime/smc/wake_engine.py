@@ -37,6 +37,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
 from core.smc.auto_wake import generate_platform_conditions
+from core.smc.structure_forecast import generate_imminent_conditions
 from core.smc.wake_check import check_condition
 from core.smc.wake_types import (
     AwarenessAccumulator,
@@ -52,6 +53,14 @@ _log = logging.getLogger(__name__)
 _BOT_CACHE_TTL = 30.0  # refresh bot conditions from Redis every 30s
 _EVENT_LIST_MAX = 100  # max events in Redis list (LTRIM)
 _PRESENCE_REFRESH_S = 60.0  # rebuild presence every 60s (for UI, not critical)
+
+
+def _imminent_phase(price: float, params: Dict[str, Any]) -> str:
+    """ADR-0087: which trigger fired — 'pending' (level crossed) or 'mtf'."""
+    level = float(params.get("level", 0))
+    if params.get("direction") == "above":
+        return "pending" if price >= level else "mtf"
+    return "pending" if price <= level else "mtf"
 
 
 class WakeEngine:
@@ -172,6 +181,39 @@ class WakeEngine:
             config=self._config.get("wake_engine", {}),
         )
 
+        # ── 2b. Imminent structure forecast conditions (ADR-0087, pure $0) ──
+        _im_cfg = self._config.get("wake_engine", {}).get("structure_imminent", {})
+        if _im_cfg.get("enabled", False):
+            _pairs = [
+                (int(lead_tf), int(tgt_tf))
+                for lead_tf, tgt_tf in _im_cfg.get(
+                    "tf_pairs", [[300, 900], [900, 3600]]
+                )
+            ]
+            try:
+                _fc_snaps: Dict[int, Any] = {}
+                _fc_atr: Dict[int, float] = {}
+                for _lead_tf, _tgt_tf in _pairs:
+                    _raw_snap = self._smc.get_raw_snapshot(symbol, _tgt_tf)
+                    if _raw_snap is not None:
+                        _fc_snaps[_tgt_tf] = _raw_snap
+                        _fc_atr[_tgt_tf] = self._smc.get_atr(symbol, _tgt_tf)
+                platform_conds = platform_conds + generate_imminent_conditions(
+                    tf_pairs=_pairs,
+                    snapshots=_fc_snaps,
+                    atr_by_tf=_fc_atr,
+                    current_price=price,
+                    ts_ms=ts_ms,
+                    config=_im_cfg,
+                )
+            except AttributeError:
+                # Older SmcRunner without raw accessor — degraded-but-loud (I5)
+                _log.warning(
+                    "WAKE_IMMINENT_UNAVAILABLE sym=%s "
+                    "reason=smc_runner_missing_get_raw_snapshot",
+                    symbol,
+                )
+
         # в”Ђв”Ђ 3. Merge (bot overrides platform for same kind) в”Ђв”Ђв”Ђв”Ђв”Ђ
         all_conditions = list(bot_conds) + [
             pc
@@ -249,6 +291,14 @@ class WakeEngine:
                 _zone_id = fired[0].params.get("zone_id", "")
                 if _zone_id:
                     _dedup_key = f"{symbol}:{kind}:{_zone_id}"
+            # ADR-0087: imminent dedup per (tf, direction, level) — different
+            # levels are different forecasts, must not suppress each other
+            if fired and kind == WakeConditionKind.STRUCTURE_IMMINENT.value:
+                _ip = fired[0].params
+                _dedup_key = (
+                    f"{symbol}:{kind}:{_ip.get('tf_s')}:{_ip.get('direction')}"
+                    f":{round(float(_ip.get('level', 0)), 1)}"
+                )
             _prev_event = self._event_dedup.get(_dedup_key)
             if _prev_event is not None:
                 _prev_ts, _prev_price = _prev_event
@@ -280,6 +330,28 @@ class WakeEngine:
                             }
                             for c in fired
                             if c.params.get("zone_id")
+                        ]
+                        if fired
+                        else []
+                    ),
+                    # ADR-0087: forecast context — which imminent conditions
+                    # fired and via which trigger (pending | mtf)
+                    "fired_imminent": (
+                        [
+                            {
+                                "target": c.params.get("target", ""),
+                                "tf_s": c.params.get("tf_s", 0),
+                                "leading_tf_s": c.params.get("leading_tf_s", 0),
+                                "level": c.params.get("level", 0),
+                                "protected_swing": c.params.get(
+                                    "protected_swing", ""
+                                ),
+                                "direction": c.params.get("direction", ""),
+                                "atr_tf": c.params.get("atr_tf", 0),
+                                "phase": _imminent_phase(price, c.params),
+                            }
+                            for c in fired
+                            if c.kind == WakeConditionKind.STRUCTURE_IMMINENT
                         ]
                         if fired
                         else []
