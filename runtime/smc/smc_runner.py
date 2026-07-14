@@ -607,6 +607,20 @@ class SmcRunner:
                 return list(buf)
             return [e for e in buf if e.get("ts_ms", 0) >= since_ts_ms]
 
+    def get_raw_snapshot(self, symbol: str, tf_s: int) -> Optional[SmcSnapshot]:
+        """ADR-0087 P3: raw per-TF snapshot for structure forecast.
+
+        Thin pass-through to engine state (S1: read-only, no side effects).
+        Deliberately NOT get_snapshot()/get_display_snapshot(): the display
+        composite injects HTF CHoCH/BOS into lower-TF swings, which would
+        corrupt the armed-level replay in core/smc/structure_forecast.py.
+        Returns None before warmup (empty snapshot has no swings).
+        """
+        snap = self._engine.get_snapshot(symbol, tf_s)
+        if snap is None or not snap.swings:
+            return None
+        return snap
+
     def get_snapshot(self, symbol: str, tf_s: int) -> Optional[SmcSnapshot]:
         """Для full frame build — composite snapshot з cross-TF display mapping.
 
