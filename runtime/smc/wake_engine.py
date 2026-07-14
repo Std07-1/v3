@@ -213,6 +213,11 @@ class WakeEngine:
                     "reason=smc_runner_missing_get_raw_snapshot",
                     symbol,
                 )
+            except Exception as exc:
+                # I5: forecast failure must NOT kill the symbol tick — the
+                # outer tick() catch is _log.debug (silent), and dying here
+                # would drop ALL wake conditions incl. max_silence safety net
+                _log.warning("WAKE_IMMINENT_ERR sym=%s err=%s", symbol, exc)
 
         # в”Ђв”Ђ 3. Merge (bot overrides platform for same kind) в”Ђв”Ђв”Ђв”Ђв”Ђ
         all_conditions = list(bot_conds) + [
