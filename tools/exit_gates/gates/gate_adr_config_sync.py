@@ -96,9 +96,9 @@ def run_gate(inputs: dict) -> dict:
         config = json.loads(config_path.read_text(encoding="utf-8"))
     except Exception as exc:
         return {
-            "passed": False,
-            "violations": [f"Cannot read config: {exc}"],
-            "checked": 0,
+            "ok": False,
+            "details": f"Cannot read config: {exc}",
+            "metrics": {"checked": 0, "violations": 1},
         }
 
     for dotpath, adr_number in _FEATURE_ADR_MAP.items():
@@ -132,7 +132,7 @@ def run_gate(inputs: dict) -> dict:
                 )
 
     return {
-        "passed": len(violations) == 0,
-        "violations": violations,
-        "checked": checked,
+        "ok": len(violations) == 0,
+        "details": "; ".join(violations),
+        "metrics": {"checked": checked, "violations": len(violations)},
     }
