@@ -97,6 +97,8 @@ class WakeEngine:
 
         # Event dedup: {dedup_key: (ts_ms, price)} вЂ” suppress repeated events
         self._event_dedup: Dict[str, tuple] = {}
+        # ADR-0087 E2: супресії imminent видимі (D-03), не тиха діра
+        self._imminent_suppressed: int = 0
 
         # Presence cache
         self._presence: Dict[str, PresenceStatus] = {}
@@ -279,6 +281,117 @@ class WakeEngine:
 
         accumulator_fired = acc.score >= acc.threshold
 
+        # ── 6a. ADR-0087 errata 2026-07-15: structure_imminent публікується
+        # НЕЗАЛЕЖНО. Спільний single-event-per-tick шлях (kind=fired[0])
+        # голодував прогноз: zone_touch майже завжди попереду списку, а його
+        # cooldown-`return` гасив весь tick. Replay на проді: 17/17 CHoCH за
+        # 24h мали б pending-fire — опубліковано 0. Окрема подія, окремий
+        # dedup-ключ (tf, direction, level), cooldown зі спільного словника.
+        imminent_fired = [
+            c for c in fired if c.kind == WakeConditionKind.STRUCTURE_IMMINENT
+        ]
+        fired = [
+            c for c in fired if c.kind != WakeConditionKind.STRUCTURE_IMMINENT
+        ]
+        _fired_presence = imminent_fired + fired
+        # D-05: score НА МОМЕНТ tick — 6a-reset нижче не має занулити
+        # accumulator_score у meta загальної події цього ж tick
+        _acc_score_tick = acc.score
+        # D-02: dedup-словник без eviction ріс би вічно (imminent множить
+        # простір ключів per-level) — прюнимо стейл старше доби
+        if len(self._event_dedup) > 1024:
+            _cutoff_ms = ts_ms - 86_400_000
+            self._event_dedup = {
+                k: v for k, v in self._event_dedup.items() if v[0] >= _cutoff_ms
+            }
+        if imminent_fired:
+            _im_cd = self._config.get("wake_engine", {}).get("event_cooldown_s", {})
+            _im_cd_ms = (
+                int(_im_cd.get("structure_imminent", _im_cd.get("_default", 600)))
+                * 1000
+            )
+            _im_published = False
+            for _ic in imminent_fired:
+                _ip = _ic.params
+                _iphase = _imminent_phase(price, _ip)
+                # E2 (D-01): phase у ключі — mtf і pending мають ОКРЕМІ
+                # бюджети, інакше mtf-подія гасила б ескалацію «перетин
+                # ПРЯМО ЗАРАЗ» на ті ж (tf, direction, level) на весь cooldown
+                _ikey = (
+                    f"{symbol}:structure_imminent:{_ip.get('tf_s')}"
+                    f":{_ip.get('direction')}:{round(float(_ip.get('level', 0)), 1)}"
+                    f":{_iphase}"
+                )
+                _iprev = self._event_dedup.get(_ikey)
+                if _iprev is not None and (ts_ms - _iprev[0]) < _im_cd_ms:
+                    self._imminent_suppressed += 1
+                    _log.debug(
+                        "WAKE_IMMINENT_SUPPRESSED key=%s total=%d",
+                        _ikey,
+                        self._imminent_suppressed,
+                    )
+                    continue
+                try:
+                    _ijson = json.dumps(
+                        {
+                            "ts_ms": ts_ms,
+                            "symbol": symbol,
+                            "kind": WakeConditionKind.STRUCTURE_IMMINENT.value,
+                            "reason": _ic.reason,
+                            "price": price,
+                            "meta": {
+                                # D-04: базові поля — паритет із загальною подією
+                                "atr": round(atr, 2),
+                                "session": session_info.get("current_session", ""),
+                                "accumulator_score": round(_acc_score_tick, 2),
+                                "conditions_total": len(all_conditions),
+                                "conditions_fired": len(_fired_presence),
+                                "fired_imminent": [
+                                    {
+                                        "target": _ip.get("target", ""),
+                                        "tf_s": _ip.get("tf_s", 0),
+                                        "leading_tf_s": _ip.get("leading_tf_s", 0),
+                                        "level": _ip.get("level", 0),
+                                        "protected_swing": _ip.get(
+                                            "protected_swing", ""
+                                        ),
+                                        "direction": _ip.get("direction", ""),
+                                        "atr_tf": _ip.get("atr_tf", 0),
+                                        "phase": _iphase,
+                                    }
+                                ],
+                            },
+                        },
+                        ensure_ascii=False,
+                    )
+                    await loop.run_in_executor(
+                        self._executor,
+                        self._redis_push_event,
+                        f"{self._ns}:wake:events",
+                        _ijson,
+                    )
+                    _log.info(
+                        "WAKE_EVENT fired: sym=%s kind=structure_imminent "
+                        "price=%.2f reason='%s'",
+                        symbol,
+                        price,
+                        _ic.reason[:80],
+                    )
+                except Exception as exc:
+                    _log.warning("WakeEngine Redis push error (imminent): %s", exc)
+                    continue
+                self._event_dedup[_ikey] = (ts_ms, price)
+                _im_published = True
+            if _im_published:
+                self._accumulators[symbol] = AwarenessAccumulator(
+                    threshold=acc.threshold,
+                    decay=acc.decay,
+                    last_wake_price=price,
+                )
+                acc = self._accumulators[symbol]
+                accumulator_fired = False
+                self._last_wake_ts[symbol] = ts_ms
+
         # в”Ђв”Ђ 6. Fire events if needed (with dedup cooldown) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         if fired or accumulator_fired:
             reason = fired[0].reason if fired else f"accumulator_score={acc.score:.2f}"
@@ -296,14 +409,6 @@ class WakeEngine:
                 _zone_id = fired[0].params.get("zone_id", "")
                 if _zone_id:
                     _dedup_key = f"{symbol}:{kind}:{_zone_id}"
-            # ADR-0087: imminent dedup per (tf, direction, level) — different
-            # levels are different forecasts, must not suppress each other
-            if fired and kind == WakeConditionKind.STRUCTURE_IMMINENT.value:
-                _ip = fired[0].params
-                _dedup_key = (
-                    f"{symbol}:{kind}:{_ip.get('tf_s')}:{_ip.get('direction')}"
-                    f":{round(float(_ip.get('level', 0)), 1)}"
-                )
             _prev_event = self._event_dedup.get(_dedup_key)
             if _prev_event is not None:
                 _prev_ts, _prev_price = _prev_event
@@ -321,7 +426,8 @@ class WakeEngine:
                 meta={
                     "atr": round(atr, 2),
                     "session": session_info.get("current_session", ""),
-                    "accumulator_score": round(acc.score, 2),
+                    # D-05: score на момент tick, не після 6a-reset
+                    "accumulator_score": round(_acc_score_tick, 2),
                     "conditions_total": len(all_conditions),
                     "conditions_fired": len(fired),
                     # ADR-037: aggregate all fired zones into meta
@@ -339,28 +445,8 @@ class WakeEngine:
                         if fired
                         else []
                     ),
-                    # ADR-0087: forecast context — which imminent conditions
-                    # fired and via which trigger (pending | mtf)
-                    "fired_imminent": (
-                        [
-                            {
-                                "target": c.params.get("target", ""),
-                                "tf_s": c.params.get("tf_s", 0),
-                                "leading_tf_s": c.params.get("leading_tf_s", 0),
-                                "level": c.params.get("level", 0),
-                                "protected_swing": c.params.get(
-                                    "protected_swing", ""
-                                ),
-                                "direction": c.params.get("direction", ""),
-                                "atr_tf": c.params.get("atr_tf", 0),
-                                "phase": _imminent_phase(price, c.params),
-                            }
-                            for c in fired
-                            if c.kind == WakeConditionKind.STRUCTURE_IMMINENT
-                        ]
-                        if fired
-                        else []
-                    ),
+                    # ADR-0087 errata: imminent events публікуються окремим
+                    # блоком 6a вище — сюди вони більше не потрапляють
                 },
             )
 
@@ -408,8 +494,8 @@ class WakeEngine:
         self._presence[symbol] = PresenceStatus(
             status="watching" if all_conditions else "sleeping",
             focus=(
-                fired[0].reason[:100]
-                if fired
+                _fired_presence[0].reason[:100]
+                if _fired_presence
                 else (all_conditions[0].reason[:100] if all_conditions else "")
             ),
             silence_since_h=(ts_ms - last_wake) / 3_600_000 if last_wake > 0 else 0.0,

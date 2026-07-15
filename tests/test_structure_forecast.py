@@ -9,6 +9,7 @@ Verifies:
   - check_condition STRUCTURE_IMMINENT: `pending` and `mtf` triggers
 """
 
+import json
 from types import SimpleNamespace
 
 from core.model.bars import CandleBar
@@ -358,3 +359,203 @@ class TestCheckImminent:
         assert (
             _check(_imminent_cond(direction="sideways"), price=2000.0) is False
         )
+
+
+# ── 4. WakeEngine publish: imminent НЕ голодує (ADR-0087 errata) ──
+
+
+class _FakeRedis:
+    """Capture LPUSH-ed events; minimal surface for WakeEngine."""
+
+    def __init__(self):
+        self.pushed = []
+
+    def lpush(self, key, value):
+        self.pushed.append((key, value))
+
+    def ltrim(self, key, start, end):
+        pass
+
+    def get(self, key):
+        return None
+
+
+class _FakeSmc:
+    """Minimal SmcRunner stub: one in-zone price + one crossed CHoCH level."""
+
+    def __init__(self, price, swings, bias, structure_events=None):
+        self._price = price
+        self._swings = swings
+        self._bias = bias
+        self._structure_events = structure_events or []
+        self._engine = SimpleNamespace(
+            get_atr=lambda symbol, tf_s, period=14: 10.0,
+            _session_windows=None,
+            _config=None,
+        )
+
+    def get_last_price(self, symbol):
+        return self._price
+
+    def get_atr(self, symbol, tf_s, period=14):
+        return 10.0
+
+    def get_snapshot(self, symbol, tf_s):
+        # auto_wake zone source: active zone AROUND price → zone_touch fires
+        zone = SimpleNamespace(
+            id="z1", high=self._price + 5, low=self._price - 5,
+            kind="ob", status="active",
+        )
+        return SimpleNamespace(swings=[], zones=[zone], trend_bias="bullish")
+
+    def get_raw_snapshot(self, symbol, tf_s):
+        return SimpleNamespace(swings=self._swings, trend_bias=self._bias)
+
+    def get_bias_map(self, symbol):
+        return {}
+
+    def get_zone_grades(self, symbol, tf_s):
+        return None
+
+    def get_recent_structure_events(self, symbol, since_ts_ms=0):
+        return list(self._structure_events)
+
+    def get_recent_bar_closes(self, symbol, since_ts_ms=0):
+        return []
+
+
+def _make_engine(fake_redis, fake_smc):
+    import concurrent.futures
+
+    from runtime.smc.wake_engine import WakeEngine
+
+    return WakeEngine(
+        redis_client=fake_redis,
+        namespace="test_ns",
+        executor=concurrent.futures.ThreadPoolExecutor(max_workers=1),
+        smc_runner=fake_smc,
+        symbols=[SYM],
+        config={
+            "wake_engine": {
+                "event_cooldown_s": {
+                    "price_zone_touch": 1800,
+                    "structure_imminent": 900,
+                    "_default": 600,
+                },
+                "structure_imminent": {
+                    "enabled": True,
+                    "targets": ["choch"],
+                    "tf_pairs": [[300, 900]],
+                    "prox_atr": 1.0,
+                    "arm_radius_atr": 2.0,
+                    "window_s": 1800,
+                    "max_conditions": 4,
+                },
+            }
+        },
+    )
+
+
+def _pending_scenario_swings(price):
+    """Bullish M15 structure with protected HL ABOVE price → pending cross."""
+    return [
+        _swing("hh", price + 20, 1000),
+        _swing("hl", price + 2, 2000),  # price вже НИЖЧЕ HL → pending
+        _swing("bos_bull", price + 15, 3000),
+        _swing("hl", price + 2, 4000),
+    ]
+
+
+class TestEnginePublishNoStarvation:
+    """ADR-0087 errata: zone_touch у тому ж tick НЕ ковтає imminent."""
+
+    def _run_tick(self, engine, ts_ms=1_000_000):
+        import asyncio
+
+        async def drive():
+            loop = asyncio.get_running_loop()
+            await engine._tick_symbol(SYM, ts_ms, loop)
+
+        asyncio.run(drive())
+
+    def _kinds(self, fake_redis):
+        return [json.loads(v)["kind"] for _, v in fake_redis.pushed]
+
+    def test_imminent_published_alongside_zone_touch(self):
+        price = 2000.0
+        r = _FakeRedis()
+        engine = _make_engine(
+            r, _FakeSmc(price, _pending_scenario_swings(price), "bullish")
+        )
+        self._run_tick(engine)
+        kinds = self._kinds(r)
+        assert "structure_imminent" in kinds, kinds
+        assert "price_zone_touch" in kinds, kinds
+        ev = next(
+            json.loads(v) for _, v in r.pushed
+            if json.loads(v)["kind"] == "structure_imminent"
+        )
+        fi = ev["meta"]["fired_imminent"][0]
+        assert fi["target"] == "choch_bear"
+        assert fi["phase"] == "pending"
+
+    def test_imminent_survives_zone_cooldown_return(self):
+        price = 2000.0
+        r = _FakeRedis()
+        engine = _make_engine(
+            r, _FakeSmc(price, _pending_scenario_swings(price), "bullish")
+        )
+        ts = 1_000_000
+        # zone_touch у свіжому cooldown + мала дельта ціни → general блок
+        # робить early-return; imminent все одно має опублікуватись
+        engine._event_dedup[f"{SYM}:price_zone_touch"] = (ts - 1000, price)
+        self._run_tick(engine, ts_ms=ts)
+        kinds = self._kinds(r)
+        assert kinds == ["structure_imminent"], kinds
+
+    def test_imminent_own_cooldown_suppresses_repeat(self):
+        price = 2000.0
+        r = _FakeRedis()
+        engine = _make_engine(
+            r, _FakeSmc(price, _pending_scenario_swings(price), "bullish")
+        )
+        self._run_tick(engine, ts_ms=1_000_000)
+        n_after_first = self._kinds(r).count("structure_imminent")
+        assert n_after_first == 1
+        # другий tick через 10s — той самий (tf, direction, level, phase)
+        self._run_tick(engine, ts_ms=1_010_000)
+        assert self._kinds(r).count("structure_imminent") == 1
+        assert engine._imminent_suppressed >= 1  # D-03: супресія полічена
+
+    def test_mtf_then_pending_escalation_not_suppressed(self):
+        """E2/D-01: pending-ескалація МАЄ пройти крізь cooldown mtf-події."""
+        ts1 = 1_000_000
+        # ціна НАД рівнем (у prox, не beyond) + свіжа aligned M5-подія → mtf
+        level = 2002.0
+        smc = _FakeSmc(
+            level + 5.0,  # 0.5 ATR над HL → prox, не перетин
+            _pending_scenario_swings(level - 2.0),  # HL = level
+            "bullish",
+            structure_events=[{
+                "tf_s": 300, "type": "choch", "direction": "bearish",
+                "ts_ms": ts1 - 60_000, "price": level + 3,
+            }],
+        )
+        r = _FakeRedis()
+        engine = _make_engine(r, smc)
+        self._run_tick(engine, ts_ms=ts1)
+        imminent = [
+            json.loads(v) for _, v in r.pushed
+            if json.loads(v)["kind"] == "structure_imminent"
+        ]
+        assert len(imminent) == 1
+        assert imminent[0]["meta"]["fired_imminent"][0]["phase"] == "mtf"
+        # через 60s (усередині cooldown 900s) ціна ПЕРЕТИНАЄ рівень → pending
+        smc._price = level - 1.0
+        self._run_tick(engine, ts_ms=ts1 + 60_000)
+        imminent = [
+            json.loads(v) for _, v in r.pushed
+            if json.loads(v)["kind"] == "structure_imminent"
+        ]
+        phases = [e["meta"]["fired_imminent"][0]["phase"] for e in imminent]
+        assert phases == ["mtf", "pending"], phases

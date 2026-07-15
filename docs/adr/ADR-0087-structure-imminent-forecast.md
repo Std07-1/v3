@@ -178,10 +178,13 @@ P_imminent = sigmoid( k · Π fᵢ^wᵢ − b )        fᵢ ∈ [0,1]
 **Пороги**: `0.6` для BOS / `0.7` для CHoCH — reversal шумніший, ціна false
 wake вища.
 
-**Anti-flicker**: подія фаєриться раз на ключ `(tf_s, level, direction)` до
-інвалідації (ціна пішла геть > `invalidate_atr`) або до confirmed-події; поверх
-цього — стандартний `event_cooldown_s.structure_imminent` (dedup-механіка
-`[VERIFIED runtime/smc/wake_engine.py:240-247]`).
+**Anti-flicker (уточнено errata E2)**: подія фаєриться раз на ключ
+`(tf_s, level, direction, phase)` у межах `event_cooldown_s.structure_imminent`.
+`phase` у ключі принциповий: `mtf` («наближається») і `pending» («перетин
+прямо зараз») — окремі бюджети, інакше рання mtf-подія гасила б ескалацію до
+pending на той самий рівень — найцінніший сигнал у канонічній послідовності.
+Максимум 2 події на рівень за cooldown-вікно. Супресії лічаться
+(`_imminent_suppressed`, debug-лог) — не сліпа зона.
 
 **Калібрування — telemetry-first**: кожен fired imminent пише вектор факторів +
 outcome (`confirmed_within_n_bars` / `failed`) у meta події → ваги тюняться з
@@ -332,5 +335,54 @@ P5→P6 (Фаза 2, якщо go). P7 після P4.
    наступному ADR по structure), armed-рівні перевести на прямий експорт і
    видалити реплей.
 4. Wire-контракт бота: чи пропустить `wake_reader` невідомий kind
-   `structure_imminent` (whitelist trader-v3 ADR-078)? Перевірити при P7 —
-   якщо дропає мовчки, companion ADR має додати kind ДО деплою платформи.
+   `structure_imminent` (whitelist trader-v3 ADR-078)? ✅ **Закрито
+   2026-07-15**: whitelist'а нема — парсер вимагає лише поле `"kind"`
+   `[VERIFIED trader-v3/bot/transport/wake_reader.py:84]`,
+   `format_wake_prompt` рендерить будь-який kind + reason.
+
+---
+
+## 11. Errata
+
+### E1 (2026-07-15): publish-голодування — imminent ніколи не публікувався
+
+**Симптом**: за перші 21h на проді — 0 подій `structure_imminent` при ~15
+confirmed CHoCH на M15/H1. Read-only replay на живих барах: **17/17** CHoCH
+мали б `pending`-fire до підтвердження.
+
+**Root cause**: P4-wiring поклався на наявний publish-шлях WakeEngine, який
+публікує МАКСИМУМ ОДИН event на tick з `kind = fired[0]`, а при
+dedup-cooldown першої умови робить `return` на весь tick. Ціна майже завжди
+сидить у/біля зон → `price_zone_touch` попереду списку (169 подій за 21h) →
+imminent або деградував до непомітного `meta.fired_imminent` у чужій події
+(бот рендерить лише kind+reason), або гасився early-return'ом. Провал класу
+D15: pure-логіка була ідеально протестована, wiring — ні.
+
+**Fix**: окремий publish-блок 6a для `structure_imminent` ДО general-блоку:
+власний dedup-ключ `(tf, direction, level)`, cooldown зі спільного
+`event_cooldown_s`, скидання accumulator + `last_wake_ts` при публікації.
+Подія тепер завжди виходить із `kind="structure_imminent"` — як і обіцяв
+контракт §2.4. Регресія закрита трьома інтеграційними тестами `_tick_symbol`
+(zone_touch поруч; zone у cooldown-return; власний cooldown imminent) —
+першими інтеграційними тестами publish-шляху взагалі.
+
+**Урок (у скарбничку D15)**: «событие у meta чужої події» ≠ «подія
+опублікована». Для LLM-споживача видимість = kind+reason; усе інше — тиша.
+
+### E2 (2026-07-15): знахідки adversarial-ревʼю фікса E1 (bug-hunter)
+
+Ревʼю E1-диффа: S0/S1 введених нема; 1×S2 + 4×S3, усі закриті тим самим
+патчем:
+
+- **D-01 (S2)**: dedup-ключ без `phase` гасив ескалацію mtf→pending на той
+  самий рівень протягом cooldown → `phase` додано в ключ (§2.3 уточнено).
+- **D-02 (S3)**: `_event_dedup` без eviction (imminent множить ключі
+  per-level) → prune стейлу >24h при >1024 ключів.
+- **D-03 (S3)**: тиха cooldown-супресія → лічильник `_imminent_suppressed`
+  + debug-лог.
+- **D-04 (S3)**: асиметрія meta imminent- vs загальної події → додано
+  `accumulator_score`/`conditions_total`/`conditions_fired`. Surfacing
+  `fired_imminent` у промпт Арчі — досі companion P7 (бот рендерить лише
+  kind+reason).
+- **D-05 (S3)**: `accumulator_score` у meta загальної події брався ПІСЛЯ
+  6a-reset (показував 0) → знімок score на початку tick.
