@@ -184,3 +184,5 @@ _tail*.txt
 
 # Claude Code editor config (local dev tooling — not for public repo)
 .claude/
+
+ui_ochi/dist/

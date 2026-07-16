@@ -1,0 +1,131 @@
+/* ── Очі Арчі — Dark Minimal Console Theme ── */
+/* Скопійовано з ui_archi_v2 (self-contained: консоль НЕ імпортує ui_v4 tokens.css).
+   Тон — теплий, преміальний, мінімалістичний. Око відпочиває: текст не білий-glare,
+   фон не чорний — вужча яскравісна прірва проти halation. */
+
+/* Register --accent for smooth mood-driven transitions */
+@property --accent {
+    syntax: '<color>';
+    inherits: true;
+    initial-value: #7c6fff;
+}
+
+:root {
+    --bg: #131319;
+    --surface: #1d1d25;
+    --surface2: #26262f;
+    --border: #30303c;
+    --text: #d1d2dc;
+    --text-muted: #7b7b90;
+    --accent: #7c6fff;
+    --accent-dim: #3d3580;
+    --positive: #4ade80;
+    --warning: #fbbf24;
+    --danger: #f87171;
+    --gold: #f0b429;
+    --radius: 8px;
+    --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    --font-ui: system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+    /* ── Premium depth (glass + glow, all on --accent) ── */
+    --card-bg: color-mix(in srgb, var(--surface) 82%, transparent);
+    --card-border: color-mix(in srgb, var(--accent) 9%, var(--border));
+    --card-glass: blur(16px) saturate(140%);
+    --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.26),
+        0 14px 34px -20px rgba(0, 0, 0, 0.5);
+    --card-glow: 0 1px 2px rgba(0, 0, 0, 0.26),
+        0 18px 44px -18px color-mix(in srgb, var(--accent) 24%, transparent);
+    --ambient: radial-gradient(1100px 520px at 50% -6%,
+            color-mix(in srgb, var(--accent) 6%, transparent), transparent 58%),
+        radial-gradient(720px 480px at 100% 2%,
+            color-mix(in srgb, var(--accent) 4%, transparent), transparent 55%);
+
+    transition: --accent 1.5s ease;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html,
+body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+#app {
+    height: 100%;
+}
+
+a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+/* ── Markdown / prose ── */
+.prose {
+    line-height: 1.65;
+}
+
+.prose p {
+    margin-bottom: 0.6em;
+}
+
+.prose code {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    background: var(--surface2);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--accent);
+}
+
+.prose pre {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 0.82em;
+    margin: 0.5em 0;
+}
+
+.prose blockquote {
+    border-left: 3px solid var(--accent-dim);
+    padding-left: 12px;
+    color: var(--text-muted);
+    margin: 0.5em 0;
+}
