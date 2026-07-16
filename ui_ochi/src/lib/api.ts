@@ -5,6 +5,8 @@
  * /api/archi/wakes. Помилки — loud (кидаємо ApiError), стори вирішують degraded.
  */
 
+import { markAuthExpired } from '../stores/authStore.svelte';
+
 const TOKEN_KEY = 'archi_token';
 
 export function getToken(): string {
@@ -40,7 +42,13 @@ async function apiFetch<T>(
         ? { Authorization: `Bearer ${token}` }
         : {};
     const res = await fetch(url.toString(), { headers });
-    if (res.status === 401) throw new ApiError(401, 'unauthorized');
+    if (res.status === 401) {
+        // Токен протух/ротований: чистимо і піднімаємо сигнал — App показує
+        // token-gate знову, замість вічного failing-poll під брехливим «офлайн».
+        clearToken();
+        markAuthExpired();
+        throw new ApiError(401, 'unauthorized');
+    }
     if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new ApiError(res.status, (body as { error?: string }).error ?? 'request_failed');

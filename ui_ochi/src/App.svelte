@@ -9,7 +9,11 @@
 <script lang="ts">
     import "./lib/theme.css";
     import { onMount } from "svelte";
-    import { getToken, setToken } from "./lib/api";
+    import { getToken, setToken, clearToken } from "./lib/api";
+    import {
+        isAuthExpired,
+        resetAuthExpired,
+    } from "./stores/authStore.svelte";
     import {
         startNowPolling,
         stopNowPolling,
@@ -23,6 +27,8 @@
     let token = $state(getToken());
     let tokenInput = $state("");
     let authError = $state("");
+    // 401 → api.ts чистить токен і піднімає сигнал → gate повертається (I5 loud).
+    let authExpired = $derived(isAuthExpired());
 
     function submitToken() {
         if (!tokenInput.trim()) {
@@ -32,6 +38,14 @@
         setToken(tokenInput);
         token = tokenInput.trim();
         authError = "";
+        resetAuthExpired();
+    }
+
+    function logout() {
+        clearToken();
+        token = "";
+        tokenInput = "";
+        resetAuthExpired();
     }
 
     // ── presence snapshot (reactive via module-level $state) ──
@@ -68,9 +82,9 @@
         document.documentElement.style.setProperty("--accent", color);
     });
 
-    // ── polling lifecycle (лише коли є токен) ──
+    // ── polling lifecycle (лише коли є валідний токен) ──
     $effect(() => {
-        if (token) {
+        if (token && !authExpired) {
             startNowPolling();
             return () => stopNowPolling();
         }
@@ -84,7 +98,7 @@
     });
 </script>
 
-{#if !token}
+{#if !token || authExpired}
     <!-- ── Token gate (як ui_archi_v2: living orb + mood-driven accent) ── -->
     <div class="auth-screen">
         <div class="aura"><span></span><span></span></div>
@@ -118,12 +132,17 @@
                 </div>
                 <button class="btn-primary" type="submit">Увійти</button>
             </form>
-            {#if authError}<p class="auth-error">{authError}</p>{/if}
+            {#if authExpired}
+                <p class="auth-error">Токен більше не приймається — увійди знову.</p>
+            {:else if authError}
+                <p class="auth-error">{authError}</p>
+            {/if}
         </div>
     </div>
 {:else}
     <!-- ── App: дві зони ── -->
     <div class="page">
+        <button class="logout" onclick={logout} title="Забути токен">Вийти</button>
         <div class="col">
             <PresenceHeader now={nowSnap} {offline} {nowMs} />
             <WakeFilm {nowMs} />
@@ -137,6 +156,25 @@
         min-height: 100vh;
         background: var(--bg);
         background-image: var(--ambient);
+        position: relative;
+    }
+    .logout {
+        position: absolute;
+        top: 14px;
+        right: 16px;
+        z-index: 5;
+        padding: 5px 12px;
+        background: transparent;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        color: var(--text-muted);
+        font-size: 12px;
+        cursor: pointer;
+        transition: color 0.15s, border-color 0.15s;
+    }
+    .logout:hover {
+        color: var(--text);
+        border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
     }
     .col {
         max-width: 720px;

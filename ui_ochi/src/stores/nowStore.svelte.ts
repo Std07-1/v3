@@ -18,14 +18,21 @@ let fetchFailed = $state(false);
 let errorCode = $state('');
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+// Покоління запиту: відповідь, що прийшла ПІСЛЯ новішої (повільна мережа,
+// out-of-order), не сміє перетерти свіжий знімок старішим.
+let requestGen = 0;
 
 async function refreshNow(): Promise<void> {
+    const gen = ++requestGen;
     try {
-        now = await api.now();
+        const snapshot = await api.now();
+        if (gen !== requestGen) return; // прийшла застаріла відповідь — ігноруємо
+        now = snapshot;
         lastSyncMs = Date.now();
         fetchFailed = false;
         errorCode = '';
     } catch (err) {
+        if (gen !== requestGen) return;
         // I5: не ковтаємо — піднімаємо offline + код для банера/діагностики.
         fetchFailed = true;
         errorCode = err instanceof Error ? err.message : 'now_fetch_failed';
