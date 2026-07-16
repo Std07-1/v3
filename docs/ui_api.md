@@ -571,6 +571,8 @@ Authorization: Bearer <token з config.json:archi_console.auth_token>
 |---|---|---|
 | `/api/archi/chat` | POST | Відправка повідомлення Арчі (→ Claude + directives context) |
 | `/api/archi/thinking` | GET | Історія thinking entries (пагінація, фільтри) |
+| `/api/archi/wakes` | GET | «Очі Арчі»: кіноплівка пробуджень (ADR-0088) |
+| `/api/archi/now` | GET | «Очі Арчі»: серверний знімок «стан зараз» (ADR-0088) |
 | `/api/archi/feed` | GET | Стрічка подій агента |
 | `/api/agent/directives` | GET | Директиви агента (`?brief=0` для повного дампу) |
 | `/api/agent/consciousness` | GET | Стан свідомості (mood, inner_thought, metacognition) |
@@ -595,5 +597,120 @@ Authorization: Bearer <token з config.json:archi_console.auth_token>
 { "reply": "...", "inner_thought": "...", "mood": "focused" }
 ```
 
-> SSOT код: `runtime/ws/ws_server.py` (agent endpoints), `ui_archi/src/lib/api.ts` (client).
-> Деталі: `trader-v3/docs/adr/ADR-025-archi-console.md`.
+### GET /api/archi/wakes (ADR-0088)
+
+Кіноплівка пробуджень: сервер джойнить `v3_wake_log.jsonl` (SSOT списку) +
+`v3_wake_trace.jsonl` (дзеркало, trader-v3/ADR-097) + thinking-архів у ГОТОВІ картки.
+UI = dumb renderer (X28). Keyset newest-first, clamp `limit` 1..100.
+
+```
+GET /api/archi/wakes?limit=30&before_ts=<ts>
+```
+
+| Query | Тип | Опис |
+|---|---|---|
+| `limit` | int | Карток на сторінку (clamp 1..100, default 30) |
+| `before_ts` | int | Курсор: віддає лише `ts < before_ts` (пропусти для найновішої сторінки) |
+
+```json
+{
+  "wakes": [
+    {
+      "ts": 1783019000, "wake_id": "wake_1783019000_ab12",
+      "reason": "Watch level fired @4700", "call_type": "platform_wake",
+      "model": "claude-sonnet-4-6", "in": 12000, "out": 800, "cache_read": 9000,
+      "truncated": false, "cost": 0.021, "ack": "бачу пробій, апдейчу тезу",
+      "emit_warning": "", "watch": 2, "wake_conditions": 3, "wake_at": 1,
+      "scenario": "sc-london-short", "vp": null, "delivered": true,
+      "msg_len": 480, "price": 4700.5,
+      "category": "watch", "alert": true,
+      "trace": {
+        "mirror": "⏰ Розбудило: platform watch 4700 …", "mirror_light": true,
+        "ack": "бачу пробій, апдейчу тезу", "emit_warning": "",
+        "message": "XAU підійшов до 4700 зверху …"
+      },
+      "thinking": "Ціна торкнулась 4700 — рівень інвалідації …", "thinking_ts": 1783018995
+    },
+    {
+      "ts": 1782900000, "wake_id": "wake_1782900000_cd34",
+      "reason": "timer:next_check_heartbeat +30m", "call_type": "proactive",
+      "model": "claude-haiku-4-5", "in": 5000, "out": 200, "cache_read": 4800,
+      "truncated": false, "cost": 0.003, "ack": "", "emit_warning": "",
+      "watch": 1, "wake_conditions": 2, "wake_at": 1, "scenario": null, "vp": null,
+      "delivered": false, "msg_len": 0, "price": 4712.0,
+      "category": "heartbeat", "alert": false,
+      "trace": null, "thinking": null, "thinking_ts": null
+    }
+  ],
+  "total": 187, "oldest_ts": 1782900000
+}
+```
+
+| Поле картки | Опис |
+|---|---|
+| *(усі поля `v3_wake_log.jsonl`)* | verbatim: ts, wake_id, reason, call_type, model, in/out/cache_read, truncated, cost, ack, emit_warning, watch, wake_conditions, wake_at, scenario, vp, delivered, msg_len, price |
+| `category` | `heartbeat`\|`wake_at`\|`watch`\|`ritual`\|`vp`\|`other` (сервер, X28) |
+| `alert` | bool — справжній тригер спрацював (alert) vs рутина (тихо) |
+| `trace` | дзеркало пробудження `{mirror, mirror_light, ack, emit_warning, message}` або `null` (старі пробудження до ADR-097) |
+| `thinking` / `thinking_ts` | найближчий thinking (\|Δ\|≤600s + збіг `call_type`) або `null` |
+
+### GET /api/archi/now (ADR-0088)
+
+Серверний знімок «стан зараз»: presence (`agent:state`) + директиви (файл) + теза (Redis) +
+ціна (`SmcRunner.get_last_price`, I1) + армовані рівні з СЕРВЕРНИМИ `delta`/`delta_pct` (X28).
+Недоступне джерело → поле `null` + запис у `degraded[]`, HTTP **200** (I5).
+
+```
+GET /api/archi/now?symbol=XAU/USD
+```
+
+| Query | Тип | Опис |
+|---|---|---|
+| `symbol` | string | Символ фокусу (fallback: `wake_conditions.params.symbol`; без нього ціна/теза = null) |
+
+```json
+{
+  "symbol": "XAU/USD", "generated_ms": 1783019100000,
+  "price": 4700.5, "stale": false,
+  "state": { "ts_ms": "1783019090000", "mood": "focused", "health": "ok",
+    "next_wake_ms": "1783020900000", "next_wake_reason": "London open",
+    "inner_thought": "тримаю short-тезу, чекаю ретест 4700", "market_session": "london",
+    "budget_pct": "8.4", "calls_today": "14", "has_virtual_position": "0", "last_error": "" },
+  "directives": { "mood": "focused", "inner_thought": "…",
+    "active_scenario": {"id": "sc-london-short", "direction": "short", "invalidation": 4720.0,
+      "entry_zone_low": 4695.0, "entry_zone_high": 4705.0, "targets": [4670.0, 4650.0],
+      "confidence": 0.6, "status": "waiting"},
+    "virtual_position": null, "kill_switch_active": false, "consecutive_errors": 0,
+    "budget_strategy": "normal", "next_check_minutes": 30,
+    "thought_history": [{"ts": 1783018800, "text": "…", "mood": "calm"}],
+    "watch_levels": [{"id": "wl1", "price": 4720.0, "direction": "above"}],
+    "wake_at": [{"id": "deep_brief", "time_epoch": 1783020900.0}],
+    "wake_conditions": [{"id": "wc1", "kind": "price_cross",
+      "params": {"price": 4700.0, "direction": "below"}}],
+    "last_emit_warning": "", "token_usage_today": {"input": 120000, "output": 8000} },
+  "thesis": { "thesis": "D1 bearish, чекаю ретест OB 4700-4705", "conviction": "high",
+    "key_level": "4700", "invalidation": "4720", "key_level_price": 4700.0,
+    "invalidation_price": 4720.0, "updated_at_ms": 1783018000000, "age_ms": 1100000 },
+  "armed": [
+    {"level": 4700.0, "direction": "below", "source": "wake_condition", "kind": "price_cross",
+     "id": "wc1", "delta": -0.5, "delta_pct": -0.0106},
+    {"level": 4720.0, "direction": "above", "source": "watch_level", "kind": "watch_level",
+     "id": "wl1", "delta": 19.5, "delta_pct": 0.4148}
+  ],
+  "degraded": []
+}
+```
+
+| Поле | Опис |
+|---|---|
+| `price` | current price або `null` (немає символу/раннера) |
+| `stale` | `true` якщо `agent:state.ts_ms` старіший за 15 хв (бот ймовірно спить) |
+| `state` | `agent:state` HASH (str→str) або `null` |
+| `directives` | whitelist «стану зараз» (приватна історія/reasoning не проходять) |
+| `thesis` | whitelist тези + серверний `age_ms`, або `null` |
+| `armed[]` | армовані рівні (watch + wake_conditions), найближчі до ціни першими; `delta`/`delta_pct` рахує сервер (X28) |
+| `degraded[]` | причини часткової деградації: `redis_not_configured`, `state_stale`, `thesis_unavailable`, `price_unavailable`, `symbol_unknown`, `directives_unavailable` |
+
+> SSOT код: `runtime/ws/ws_server.py` (agent endpoints), `runtime/ws/wake_cards.py` (pure
+> джойн — ADR-0088), `ui_archi/src/lib/api.ts` (client).
+> Деталі: `trader-v3/docs/adr/ADR-025-archi-console.md`, `docs/adr/ADR-0088-ochi-archi-wake-observability.md`.
