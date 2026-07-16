@@ -652,7 +652,7 @@ GET /api/archi/wakes?limit=30&before_ts=<ts>
 | `category` | `heartbeat`\|`wake_at`\|`watch`\|`ritual`\|`vp`\|`other` (сервер, X28) |
 | `alert` | bool — справжній тригер спрацював (alert) vs рутина (тихо) |
 | `trace` | дзеркало пробудження `{mirror, mirror_light, ack, emit_warning, message}` або `null` (старі пробудження до ADR-097) |
-| `thinking` / `thinking_ts` | найближчий thinking (\|Δ\|≤600s + збіг `call_type`) або `null` |
+| `thinking` / `thinking_ts` | thinking-запис, приписаний картці 1:1 (взаємно-найближчий за ts у вікні ±600s + family `call_type`: архів штампує парасольку `proactive` для всіх проактивних пробуджень), або `null`. Один запис архіву → щонайбільше одна картка (ADR-0088 R3); best-effort — точного wake_id-ключа на боці writer-а не існує |
 
 ### GET /api/archi/now (ADR-0088)
 
@@ -704,12 +704,12 @@ GET /api/archi/now?symbol=XAU/USD
 | Поле | Опис |
 |---|---|
 | `price` | current price або `null` (немає символу/раннера) |
-| `stale` | `true` якщо `agent:state.ts_ms` старіший за 15 хв (бот ймовірно спить) |
+| `stale` | `true` якщо `agent:state.ts_ms` старіший за 15 хв АБО `agent:state` відсутній зовсім (TTL 6h минув на мертвому боті) — «бот точно не свіжий» |
 | `state` | `agent:state` HASH (str→str) або `null` |
 | `directives` | whitelist «стану зараз» (приватна історія/reasoning не проходять) |
 | `thesis` | whitelist тези + серверний `age_ms`, або `null` |
 | `armed[]` | армовані рівні (watch + wake_conditions), найближчі до ціни першими; `delta`/`delta_pct` рахує сервер (X28) |
-| `degraded[]` | причини часткової деградації: `redis_not_configured`, `state_stale`, `thesis_unavailable`, `price_unavailable`, `symbol_unknown`, `directives_unavailable` |
+| `degraded[]` | причини часткової деградації: `data_dir_not_configured`, `redis_not_configured`, `state_unavailable`, `state_no_data`, `state_stale`, `thesis_unavailable`, `price_unavailable`, `symbol_unknown`, `directives_unavailable` |
 
 > SSOT код: `runtime/ws/ws_server.py` (agent endpoints), `runtime/ws/wake_cards.py` (pure
 > джойн — ADR-0088), `ui_archi/src/lib/api.ts` (client).

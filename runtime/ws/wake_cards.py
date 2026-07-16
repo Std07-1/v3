@@ -160,34 +160,65 @@ def _match_trace(
     return {field: trace.get(field) for field in _TRACE_FIELDS}
 
 
-def _match_thinking(
-    wake: dict, thinking_records: Optional[list[dict]]
-) -> tuple[Optional[str], Optional[int]]:
-    """Найближчий thinking-запис по ts з |Δ| ≤ вікна ТА збігом call_type.
+# thinking-архів трейдера штампує лише ТРИ мітки call_type [VERIFIED trader-v3
+# bot/agent/core.py:1694 'reactive' / :2679 'proactive' / :3309 'daily_review'] —
+# 'proactive' = парасолька для ВСІХ проактивних пробуджень (platform_wake, observation,
+# curator, awareness_accumulator, …), тоді як wake_log пише ФАКТИЧНИЙ call_type.
+# Без нормалізації thinking не джойнився б саме для alert-карток (platform_wake).
+_ARCHIVE_EXACT_LABELS = frozenset({"reactive", "daily_review"})
+
+
+def _archive_call_type(wake_call_type: Any) -> str:
+    """Мітка, під якою thinking-архів зберіг би запис для цього wake call_type."""
+    label = str(wake_call_type or "")
+    return label if label in _ARCHIVE_EXACT_LABELS else "proactive"
+
+
+def _assign_thinking(
+    page: list[dict], thinking_records: Optional[list[dict]]
+) -> dict[int, tuple[Optional[str], Optional[int]]]:
+    """1:1 джойн: кожен thinking-запис віддається щонайбільше ОДНІЙ картці сторінки.
+
+    Наївний per-wake nearest тягнув ОДИН запис на кілька сусідніх пробуджень
+    (mis-attribution: сусідній heartbeat без власного thinking показував чуже
+    reasoning — ADR-0088 R3). Тут навпаки: для кожного thinking-запису шукаємо
+    найближчий wake (|Δts| ≤ вікна + family call_type), потім кожен wake бере
+    найближчий із «своїх» записів. Повертає {index сторінки: (thinking, ts)}.
 
     ``thinking_records`` — заздалегідь прочитаний зріз архіву (ws_server передає
-    результат ``_read_thinking_records``). Немає кандидата → ``(None, None)``.
+    результат ``_read_thinking_records``). Best-effort: архів не несе wake_id
+    (точного 1:1 ключа не існує на боці writer-а), тож ts-skew лишається
+    теоретично можливим — але дублювання одного запису виключене структурно.
     """
     if not thinking_records:
-        return None, None
-    call_type = wake.get("call_type")
-    wake_ts = wake.get("ts")
-    if not isinstance(wake_ts, (int, float)):
-        return None, None
-    best: Optional[dict] = None
-    best_delta = _THINKING_JOIN_WINDOW_S + 1
-    for rec in thinking_records:
-        if rec.get("call_type") != call_type:
+        return {}
+    best_wake_for_rec: dict[int, tuple[float, int]] = {}
+    for wake_idx, wake in enumerate(page):
+        wake_ts = wake.get("ts")
+        if not isinstance(wake_ts, (int, float)):
             continue
-        rec_ts = rec.get("ts")
-        if not isinstance(rec_ts, (int, float)):
+        family = _archive_call_type(wake.get("call_type"))
+        for rec_idx, rec in enumerate(thinking_records):
+            if rec.get("call_type") != family:
+                continue
+            rec_ts = rec.get("ts")
+            if not isinstance(rec_ts, (int, float)):
+                continue
+            delta = abs(rec_ts - wake_ts)
+            if delta > _THINKING_JOIN_WINDOW_S:
+                continue
+            current = best_wake_for_rec.get(rec_idx)
+            if current is None or delta < current[0]:
+                best_wake_for_rec[rec_idx] = (delta, wake_idx)
+    assigned: dict[int, tuple[Optional[str], Optional[int]]] = {}
+    assigned_delta: dict[int, float] = {}
+    for rec_idx, (delta, wake_idx) in best_wake_for_rec.items():
+        if wake_idx in assigned_delta and delta >= assigned_delta[wake_idx]:
             continue
-        delta = abs(rec_ts - wake_ts)
-        if delta <= _THINKING_JOIN_WINDOW_S and delta < best_delta:
-            best, best_delta = rec, delta
-    if best is None:
-        return None, None
-    return best.get("thinking"), best.get("ts")
+        rec = thinking_records[rec_idx]
+        assigned_delta[wake_idx] = delta
+        assigned[wake_idx] = (rec.get("thinking"), rec.get("ts"))
+    return assigned
 
 
 def read_wake_cards(
@@ -223,13 +254,14 @@ def read_wake_cards(
 
     by_id, by_ts = _index_traces(_load_jsonl(root / WAKE_TRACE_FILE))
 
+    thinking_by_idx = _assign_thinking(page, thinking_records)
     cards: list[dict] = []
-    for wake in page:
+    for wake_idx, wake in enumerate(page):
         card = dict(wake)  # усі поля wake_log verbatim
         card["category"] = categorize_wake(wake)
         card["alert"] = classify_alert(wake)
         card["trace"] = _match_trace(wake, by_id, by_ts)
-        thinking, thinking_ts = _match_thinking(wake, thinking_records)
+        thinking, thinking_ts = thinking_by_idx.get(wake_idx, (None, None))
         card["thinking"] = thinking
         card["thinking_ts"] = thinking_ts
         cards.append(card)
@@ -408,8 +440,12 @@ def build_now_view(
     напр. ``state_stale``). HTTP лишається 200 — деградація гучна, не 500 (I5).
     ``armed`` рахується сервером (X28): фронт лише малює delta/delta_pct.
     """
-    stale: Optional[bool] = None
-    if state is not None:
+    if state is None:
+        # agent:state зник (Redis TTL 6h минув на мертвому боті) = точно НЕ свіжий.
+        # Без цього UI показував би «живого» Арчі саме коли він мертвий найдовше —
+        # інвертований degraded-loud (I5); причину (state_no_data/…) кладе handler.
+        stale = True
+    else:
         ts_ms = _to_int(state.get("ts_ms"))
         stale = ts_ms is None or (now_ms - ts_ms) > STATE_STALE_MS
         if stale:

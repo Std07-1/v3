@@ -95,6 +95,39 @@ def test_thinking_join_null_beyond_window(tmp_path: Path) -> None:
     assert cards[0]["thinking_ts"] is None
 
 
+def test_thinking_one_record_attaches_only_to_nearest_wake(tmp_path: Path) -> None:
+    # ADR-0088 R3: сусідній heartbeat без власного thinking НЕ показує чуже
+    # reasoning — один запис архіву → щонайбільше ОДНА (найближча) картка.
+    _write_jsonl(
+        tmp_path / "v3_wake_log.jsonl",
+        [_wake(1000, "w1", call_type="proactive"),
+         _wake(1180, "w2", call_type="proactive")],  # обидва в межах 600s від запису
+    )
+    thinking = [{"ts": 1000, "call_type": "proactive", "thinking": "думка w1"}]
+    cards, _, _ = read_wake_cards(str(tmp_path), limit=30, thinking_records=thinking)
+    by_id = {c["wake_id"]: c for c in cards}
+    assert by_id["w1"]["thinking"] == "думка w1"
+    assert by_id["w2"]["thinking"] is None  # не тягне чужий запис
+
+
+def test_thinking_family_match_platform_wake(tmp_path: Path) -> None:
+    # Архів штампує парасольку 'proactive' для ВСІХ проактивних пробуджень
+    # (core.py:2679), wake_log пише фактичний call_type — alert-картка
+    # platform_wake мусить джойнити 'proactive'-запис (інакше thinking
+    # систематично null саме там, де найцінніший).
+    _write_jsonl(tmp_path / "v3_wake_log.jsonl",
+                 [_wake(3000, "w1", call_type="platform_wake",
+                        reason="Watch level fired @4700")])
+    thinking = [{"ts": 2990, "call_type": "proactive", "thinking": "пробій 4700"}]
+    cards, _, _ = read_wake_cards(str(tmp_path), limit=30, thinking_records=thinking)
+    assert cards[0]["thinking"] == "пробій 4700"
+    # а 'reactive'-запис до проактивної родини не належить
+    thinking_reactive = [{"ts": 2990, "call_type": "reactive", "thinking": "чат"}]
+    cards2, _, _ = read_wake_cards(str(tmp_path), limit=30,
+                                   thinking_records=thinking_reactive)
+    assert cards2[0]["thinking"] is None
+
+
 # ── keyset-пагінація ──────────────────────────────────────────────────────────
 
 
@@ -163,6 +196,42 @@ def test_ritual_and_vp_categories() -> None:
     assert classify_alert({"reason": "virtual_position tp hit"}) is True
 
 
+def test_classification_mirror_matches_trader_source() -> None:
+    """Крос-репо анти-дрейф гейт (ADR-0088 R1): платформна копія classify/categorize
+    звіряється з trader-джерелом bot/state/wake_log.py, виконаним напряму з файла
+    (X31: без імпорту trader-пакета). Поза монорепо-layout — SKIP (як
+    trader-side test_wake_params_contract.py): зелений прогін без цього тесту
+    ≠ контракт перевірено.
+    """
+    import importlib.util
+
+    trader_src = (Path(__file__).resolve().parents[1]
+                  / "trader-v3" / "bot" / "state" / "wake_log.py")
+    if not trader_src.exists():
+        import pytest
+        pytest.skip("trader-v3 поза layout — крос-репо звірка недоступна")
+    spec = importlib.util.spec_from_file_location("_trader_wake_log", trader_src)
+    assert spec is not None and spec.loader is not None
+    trader = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(trader)
+    fixtures = [
+        {"call_type": "platform_wake", "reason": "щось"},
+        {"call_type": "proactive", "reason": "Watch level fired @4700"},
+        {"call_type": "proactive", "reason": "timer:next_check_heartbeat +30m"},
+        {"call_type": "proactive", "reason": "timer:morning_briefing — брифінг"},
+        {"call_type": "proactive", "reason": "timer:evening_consciousness"},
+        {"call_type": "proactive", "reason": "timer:gbp_gdp_0716 — подія"},
+        {"call_type": "proactive", "reason": "timer:"},
+        {"call_type": "proactive", "reason": "virtual_position tp hit!"},
+        {"call_type": "observation", "reason": "чекаю M15 CHoCH"},
+        {"call_type": "proactive", "reason": ""},
+    ]
+    for rec in fixtures:
+        assert categorize_wake(rec) == trader.categorize_wake(rec), rec
+        expected_alert = trader.classify_wake(rec) == "alert"
+        assert classify_alert(rec) is expected_alert, rec
+
+
 # ── build_now_view: armed дельти + деградації ─────────────────────────────────
 
 
@@ -200,6 +269,14 @@ def test_now_view_stale_flag_and_degraded() -> None:
                                 thesis=None, price=None, now_ms=now_ms, degraded=[])
     assert body_stale["stale"] is True
     assert "state_stale" in body_stale["degraded"]
+
+
+def test_now_view_stale_true_when_state_missing() -> None:
+    # agent:state зник (TTL 6h на мертвому боті) → stale=True, а не null:
+    # інакше UI показує «живого» Арчі саме коли він мертвий найдовше (I5).
+    body = build_now_view(symbol="XAU/USD", state=None, directives=None,
+                          thesis=None, price=None, now_ms=1_000_000, degraded=[])
+    assert body["stale"] is True
 
 
 def test_now_view_thesis_whitelist_and_age() -> None:
