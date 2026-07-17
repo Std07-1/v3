@@ -210,10 +210,6 @@
         color: var(--accent);
         border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
     }
-    .badge.type {
-        font-family: var(--font-mono);
-        font-size: 10px;
-    }
     .ago {
         font-size: 11.5px;
         color: var(--text-muted);
