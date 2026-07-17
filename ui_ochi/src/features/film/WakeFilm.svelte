@@ -12,6 +12,18 @@
 
     let { nowMs }: { nowMs: number } = $props();
 
+    // Межа епох: картки з дзеркалом (ADR-097) vs старіші без нього. Замість
+    // «недоступне» на кожній старій картці — ОДИН роздільник на межі (i5 чесно,
+    // без 200 повторів шуму). Якщо дзеркал ще нема взагалі — один рядок зверху.
+    let anyTrace = $derived(filmStore.cards.some((c) => c.trace));
+
+    function isEpochBoundary(i: number): boolean {
+        if (i === 0) return false;
+        const prev = filmStore.cards[i - 1];
+        const cur = filmStore.cards[i];
+        return Boolean(prev.trace) && !cur.trace;
+    }
+
     onMount(() => {
         void filmStore.init();
     });
@@ -37,8 +49,19 @@
     {:else if filmStore.cards.length === 0}
         <div class="film-empty">Пробуджень поки немає.</div>
     {:else}
+        {#if !anyTrace}
+            <div class="epoch-note">
+                👁 Дзеркала пробуджень почали записуватись (ADR-097) — зʼявляться
+                на нових картках із наступного пробудження.
+            </div>
+        {/if}
         <div class="cards">
-            {#each filmStore.cards as card (card.wake_id || card.ts)}
+            {#each filmStore.cards as card, i (card.wake_id || card.ts)}
+                {#if isEpochBoundary(i)}
+                    <div class="epoch-divider">
+                        — старіші пробудження: до запису дзеркал (ADR-097) —
+                    </div>
+                {/if}
                 <WakeCard {card} {nowMs} />
             {/each}
         </div>
@@ -95,6 +118,22 @@
         color: var(--text-muted);
         padding: 18px;
         letter-spacing: 0.04em;
+    }
+    .epoch-note {
+        font-size: 12px;
+        color: var(--text-muted);
+        padding: 8px 12px;
+        border: 1px dashed var(--border);
+        border-radius: 8px;
+        line-height: 1.5;
+    }
+    .epoch-divider {
+        text-align: center;
+        font-size: 11px;
+        color: var(--text-muted);
+        letter-spacing: 0.06em;
+        padding: 4px 0 0;
+        opacity: 0.8;
     }
     .cards {
         display: flex;

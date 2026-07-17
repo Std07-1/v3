@@ -51,6 +51,19 @@
     let callTypeLabel = $derived(
         card.call_type ? (CALL_TYPE_LABEL[card.call_type] ?? card.call_type) : "",
     );
+
+    // Причина часто = «timer:xxx — Людський опис»: людську частину — в заголовок,
+    // технічний id — дрібним чипом (суто presentation-спліт рядка, не домен).
+    let reasonHuman = $derived.by(() => {
+        const raw = (card.reason ?? "—").trim();
+        const sep = raw.indexOf(" — ");
+        return sep > 0 ? raw.slice(sep + 3).trim() : raw;
+    });
+    let reasonTech = $derived.by(() => {
+        const raw = (card.reason ?? "").trim();
+        const sep = raw.indexOf(" — ");
+        return sep > 0 ? raw.slice(0, sep).trim() : "";
+    });
 </script>
 
 <article class="wake" class:muted={!delivered}>
@@ -58,7 +71,7 @@
     <div class="head">
         <div class="reason-row">
             <span class="clock" aria-hidden="true">⏰</span>
-            <span class="reason">{card.reason ?? "—"}</span>
+            <span class="reason">{reasonHuman}</span>
         </div>
         <div class="badges">
             {#if card.alert}
@@ -67,34 +80,32 @@
             {#if categoryLabel}
                 <span class="badge cat">{categoryLabel}</span>
             {/if}
-            {#if callTypeLabel}
-                <span class="badge type">{callTypeLabel}</span>
-            {/if}
             <time class="ago" title={abs}>{ago}</time>
         </div>
     </div>
+    {#if reasonTech || callTypeLabel}
+        <div class="tech-row">
+            {#if reasonTech}<span class="tech" title="технічний тригер">{reasonTech}</span>{/if}
+            {#if callTypeLabel}<span class="tech" title="тип виклику">{callTypeLabel}</span>{/if}
+        </div>
+    {/if}
 
-    <!-- 👁 дзеркало (collapsed) -->
+    <!-- 👁 дзеркало + 🧠 thinking (collapsed; відсутні — просто не рендеряться,
+         межу «до/після запису дзеркал» показує один роздільник у плівці) -->
     {#if mirror}
         <details class="fold">
             <summary>
-                <span class="ico" aria-hidden="true">👁</span> дзеркало
+                <span class="ico" aria-hidden="true">👁</span> що побачив Арчі
                 {#if mirrorLight}<span class="tag-light">light</span>{/if}
             </summary>
             <pre class="mono-block">{mirror}</pre>
         </details>
-    {:else}
-        <div class="absent">👁 дзеркало недоступне (до v3_wake_trace)</div>
     {/if}
-
-    <!-- 🧠 thinking (collapsed) -->
     {#if thinking}
         <details class="fold">
             <summary><span class="ico" aria-hidden="true">🧠</span> мислення</summary>
             <pre class="mono-block">{thinking}</pre>
         </details>
-    {:else}
-        <div class="absent">🧠 мислення не знайдено в архіві</div>
     {/if}
 
     <!-- ✅ ack / emit_warning -->
@@ -111,9 +122,9 @@
     {:else if message}
         <div class="line msg"><span class="ico" aria-hidden="true">📣</span> {message}</div>
     {:else}
-        <div class="line msg absent-inline">
+        <div class="line msg absent-inline" title="повний текст повідомлень зберігається для нових пробуджень (ADR-097)">
             <span class="ico" aria-hidden="true">📣</span>
-            повідомлення надіслано ({card.msg_len} симв.) — текст недоступний
+            {card.msg_len} симв.
         </div>
     {/if}
 
@@ -208,6 +219,21 @@
         color: var(--text-muted);
         white-space: nowrap;
     }
+    .tech-row {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-top: -4px;
+    }
+    .tech {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        color: var(--text-muted);
+        opacity: 0.75;
+        background: var(--surface);
+        border-radius: 5px;
+        padding: 1px 6px;
+    }
 
     /* collapsed folds */
     .fold {
@@ -253,16 +279,6 @@
         overflow-y: auto;
     }
 
-    /* absent placeholders */
-    .absent {
-        font-size: 11.5px;
-        color: var(--text-muted);
-        padding: 5px 10px;
-        border: 1px dashed var(--border);
-        border-radius: 8px;
-        opacity: 0.8;
-    }
-
     /* lines */
     .line {
         display: flex;
@@ -278,20 +294,21 @@
     .line.msg { color: var(--text); }
     .line.absent-inline { color: var(--text-muted); }
 
-    /* meter */
+    /* meter — службовий футер, максимально тихий */
     .meter {
         display: flex;
         align-items: center;
         gap: 10px;
         flex-wrap: wrap;
         margin-top: 2px;
-        padding-top: 8px;
+        padding-top: 7px;
         border-top: 1px solid var(--border);
         font-family: var(--font-mono);
-        font-size: 11.5px;
+        font-size: 10.5px;
         color: var(--text-muted);
+        opacity: 0.85;
     }
-    .meter .model { color: var(--text); }
+    .meter .model { color: var(--text-muted); }
     .meter .cost { color: var(--gold); font-weight: 600; }
     .meter .trunc { color: var(--danger); }
 </style>
