@@ -306,7 +306,7 @@
       "structure_imminent": 900,
       "bias_divergence": 3600,
       "accumulator": 0,
-      "max_silence": 0,
+      "max_silence": 3600,
       "_default": 600
     },
     "dedup_include_zone_id": false,

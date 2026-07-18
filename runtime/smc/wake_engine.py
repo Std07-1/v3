@@ -95,6 +95,15 @@ class WakeEngine:
         self._prev_prices: Dict[str, float] = {}
         self._last_wake_ts: Dict[str, int] = {}  # ms
 
+        # ADR-0089: executor-heartbeat пульс бота (HGET {ns}:archi:pulse
+        # heartbeat, кеш разом із bot conditions). MAX_SILENCE міряється ВІД
+        # НЬОГО → семантика = executor dead-man («бот живий?»), а не
+        # самовимірювання власного потоку подій (форензика 17.07: двигун
+        # ресетив свій же лічильник → 11.5h тиші Арчі невидимі). 0 = ключа ще
+        # нема (бот до ADR-099-3) → legacy self-measure + one-shot warn.
+        self._pulse_heartbeat_ms: int = 0
+        self._pulse_warned: bool = False
+
         # Event dedup: {dedup_key: (ts_ms, price)} вЂ” suppress repeated events
         self._event_dedup: Dict[str, tuple] = {}
         # ADR-0087 E2: супресії imminent видимі (D-03), не тиха діра
@@ -120,6 +129,7 @@ class WakeEngine:
         if now - self._bot_cache_ts > _BOT_CACHE_TTL:
             try:
                 await self._refresh_bot_conditions(loop)
+                await self._refresh_pulse(loop)  # ADR-0089: той самий каданс
                 self._bot_cache_ts = now
             except Exception as exc:
                 _log.debug("WakeEngine bot conditions refresh error: %s", exc)
@@ -260,13 +270,28 @@ class WakeEngine:
             )
         fired: List[WakeCondition] = []
         for cond in all_conditions:
+            # ADR-0089: MAX_SILENCE = executor dead-man — міряємо від published
+            # heartbeat бота, НЕ від власного потоку подій двигуна (той ресетив
+            # сам себе: кожен fired event оновлював _last_wake_ts → «тиша»
+            # ніколи не росла, 17.07 = 11.5h тиші Арчі невидимі). Fallback на
+            # legacy self-measure лише доки бот не публікує pulse (one-shot warn).
+            _silence_anchor = last_wake
+            if cond.kind == WakeConditionKind.MAX_SILENCE:
+                if self._pulse_heartbeat_ms > 0:
+                    _silence_anchor = self._pulse_heartbeat_ms
+                elif not self._pulse_warned:
+                    self._pulse_warned = True
+                    _log.warning(
+                        "WAKE_PULSE_ABSENT: {ns}:archi:pulse нема — MAX_SILENCE "
+                        "деградує до legacy self-measure (двигун міряє себе)"
+                    )
             if check_condition(
                 cond,
                 price,
                 atr,
                 session_info,
                 ts_ms,
-                last_wake_ts_ms=last_wake,
+                last_wake_ts_ms=_silence_anchor,
                 structure_events=structure_events,
                 bar_close_events=bar_close_events,
             ):
@@ -582,6 +607,31 @@ class WakeEngine:
             self._executor,
             self._redis_load_bot_conditions,
         )
+
+    async def _refresh_pulse(self, loop: asyncio.AbstractEventLoop) -> None:
+        """ADR-0089: refresh executor-heartbeat пульс бота (via executor)."""
+        self._pulse_heartbeat_ms = await loop.run_in_executor(
+            self._executor,
+            self._redis_load_pulse_heartbeat,
+        )
+
+    def _redis_load_pulse_heartbeat(self) -> int:
+        """HGET {ns}:archi:pulse heartbeat → ms (0 = ключа/поля нема).
+
+        Писар — trader-v3 wake_sync (кожен синк). Stale heartbeat = мертвий/
+        завислий виконавець → MAX_SILENCE стає чесним dead-man. Значення на
+        диску — epoch СЕКУНДИ (конвенція бота) → тут конвертуємо в ms.
+        """
+        try:
+            raw = self._redis.hget(f"{self._ns}:archi:pulse", "heartbeat")
+            if raw is None:
+                return 0
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", errors="replace")
+            return int(float(raw) * 1000)
+        except Exception as exc:  # noqa: BLE001 — I5: пульс не сміє валити tick
+            _log.debug("WAKE_PULSE_READ_ERR: %s", exc)
+            return 0
 
     # ── Helpers ─────────────────────────────────────────────────────────────
 

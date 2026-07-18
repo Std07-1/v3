@@ -359,3 +359,46 @@ class TestTypes:
             price=4680.0, meta={"atr": 45.0},
         )
         assert ev.symbol == "XAU/USD"
+
+
+class TestPulseHeartbeat:
+    """ADR-0089: MAX_SILENCE = executor dead-man — міряє від published pulse."""
+
+    def _engine_shell(self, fake_redis):
+        # Мінімальна оболонка для pure-методу читання пульсу (без повного init:
+        # WakeEngine.__init__ тягне smc_runner/config — для loader-юніта зайве).
+        from runtime.smc.wake_engine import WakeEngine
+
+        eng = object.__new__(WakeEngine)
+        eng._redis = fake_redis
+        eng._ns = "v3_local"
+        return eng
+
+    def test_pulse_loader_reads_heartbeat_seconds_to_ms(self):
+        class _R:
+            def hget(self, key, field):
+                assert key == "v3_local:archi:pulse" and field == "heartbeat"
+                return b"1784318028.84"
+
+        eng = self._engine_shell(_R())
+        assert eng._redis_load_pulse_heartbeat() == int(1784318028.84 * 1000)
+
+    def test_pulse_loader_absent_key_returns_zero(self):
+        class _R:
+            def hget(self, key, field):
+                return None
+
+        eng = self._engine_shell(_R())
+        assert eng._redis_load_pulse_heartbeat() == 0
+
+    def test_pulse_loader_garbage_and_error_degrade_to_zero(self):
+        class _RGarbage:
+            def hget(self, key, field):
+                return b"\xff\xfenot-a-number"
+
+        class _RBoom:
+            def hget(self, key, field):
+                raise ConnectionError("redis down")
+
+        assert self._engine_shell(_RGarbage())._redis_load_pulse_heartbeat() == 0
+        assert self._engine_shell(_RBoom())._redis_load_pulse_heartbeat() == 0
