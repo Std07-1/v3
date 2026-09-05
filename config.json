@@ -2,9 +2,7 @@
   "symbol": "XAU/USD",
   "symbols": [
     "XAU/USD",
-    "XAG/USD",
-    "BTCUSDT",
-    "ETHUSDT"
+    "XAG/USD"
   ],
   "data_root": "./data_v3",
   "broker_python": ".venv37/Scripts/python.exe",
@@ -616,7 +614,7 @@
     }
   },
   "binance": {
-    "enabled": true,
+    "enabled": false,
     "symbols": [
       "BTCUSDT",
       "ETHUSDT"
