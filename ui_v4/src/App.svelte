@@ -30,7 +30,6 @@
     loadCandleStyle,
     applyThemeCssVars,
   } from "./chart/lwc";
-
   import {
     handleWSFrame,
     currentFrame,
@@ -470,7 +469,30 @@
     if (f && f.frame_type === "full" && !_pairRestored) {
       _pairRestored = true;
       const saved = loadLastPair();
-      if (saved && (saved.symbol !== f.symbol || saved.tf !== f.tf)) {
+      // Збережений символ міг бути знятий з config.json:symbols (як BTC/ETH 05.09.2026):
+      // сервер на switch відповідає порожнім кадром unknown_symbol і чарт лишається
+      // порожнім назавжди. Фолбек = серверний дефолт f.symbol; TF лишаємо, якщо дозволений.
+      // Гучно (uiWarning), storage перезаписуємо, щоб не повторювалось при кожному вході.
+      const savedSymbolAllowed =
+        !saved || cfgSymbols.length === 0 || cfgSymbols.includes(saved.symbol);
+      if (saved && !savedSymbolAllowed) {
+        const defSymbol = f.symbol ?? cfgSymbols[0];
+        const defTf = f.tf ?? saved.tf;
+        const tf = cfgTfs.includes(saved.tf) ? saved.tf : defTf;
+        addUiWarning({
+          code: "schema_mismatch",
+          kind: "router",
+          id: "saved_symbol_fallback",
+          details: `saved symbol "${saved.symbol}" not in server allowlist — fallback ${defSymbol}:${tf}`,
+        });
+        saveLastPair(defSymbol, tf);
+        if (tf !== defTf) {
+          actions?.switchSymbolTf(defSymbol, tf);
+          hudSymbol = defSymbol;
+          hudTf = tf;
+          return; // Don't render this default frame
+        }
+      } else if (saved && (saved.symbol !== f.symbol || saved.tf !== f.tf)) {
         // Send switch immediately — server will send correct full frame
         actions?.switchSymbolTf(saved.symbol, saved.tf);
         // Speculatively patch HUD to avoid flicker until correct full frame arrives
