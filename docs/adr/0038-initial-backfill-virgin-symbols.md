@@ -260,6 +260,13 @@ M1 бари НАЗАД у минуле. Тільки M1 на диск. HTF з'я
 | **Market-hours Index** | US30, GER40 | Пн-Пт, обмежено | FXCM | ✅ (якщо virgin) | ❌ (FXCM guard) | cascade = perfect |
 | **Commodity** | XAG, XPT | Пн-Пт, сесії | FXCM | ✅ (якщо virgin) | ❌ (FXCM guard) | cascade = perfect |
 
+> **Erratum (2026-09-06, ADR-0054 rev 2 §1.7)**: для FXCM-рядків «Phase 2.5 ✅ (якщо virgin)» **хибно**.
+> Phase 2.5 gated на `fetch_m1_range` (`runtime/ingest/polling/m1_poller.py:659`), якого `FxcmHistoryProvider` і `BrokerRedisProxy` не мають
+> → `INITIAL_BACKFILL_SKIP reason=provider_no_fetch_m1_range`, virgin FXCM-символ стартує з `tail_fetch_n=5` барів,
+> а `initial_backfill_skipped=provider_unsupported` не потрапляє в `degraded[]` (I5-дірка).
+> Правильно: FXCM Phase 2.5 = ❌ до реалізації `fetch_m1_range` для FXCM (ADR-0054 rev 2 P0.5);
+> засів — offline `tools/fetch_tf_backfill --tf 60` (ADR-0054 rev 2 §3.1).
+
 **Ключові висновки:**
 
 - **Crawl = Binance-only** зараз. Природній guard: `hasattr(provider, 'fetch_m1_range')`.
