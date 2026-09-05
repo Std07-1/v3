@@ -111,8 +111,8 @@
             "module": "tools.exit_gates.gates.gate_no_bare_except",
             "inputs": {
                 "root": ".",
-                "max_violations": 39,
-                "ratchet_note": "2026-06-12: waterline frozen at 39 (was 8 in Mar, 21 in Apr, 30 in May — gate was permanently red so it protected nothing). New violations now fail CI again. ONLY decrease this number as except blocks get logging (X9/I5 cleanup, separate patches); never increase.",
+                "max_violations": 38,
+                "ratchet_note": "2026-06-12: waterline frozen at 39 (was 8 in Mar, 21 in Apr, 30 in May — gate was permanently red so it protected nothing). New violations now fail CI again. ONLY decrease this number as except blocks get logging (X9/I5 cleanup, separate patches); never increase. 2026-09-05: 44→38 — 6 post-07.07 мовчазних коерцій зроблено гучними (narrative_enricher._opt_float WARN; ws_server archi_chart thesis_levels one-shot WARN + wakes before_ts DEBUG; wake_cards clamp/_to_int/_to_float DEBUG; відсутність None/порожній рядок лишається тихою); waterline 38.",
                 "scan_dirs": [
                     "core",
                     "runtime",

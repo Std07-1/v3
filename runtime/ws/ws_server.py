@@ -37,6 +37,8 @@ from core.config_loader import (
 )
 
 _log = logging.getLogger(__name__)
+# ADR-0085 archi_chart: one-shot WARN per symbol (I5 без спаму — delta_loop кличе кожні 2s).
+_ARCHI_CHART_THESIS_WARNED: set[str] = set()
 
 # в”Ђв”Ђ Constants в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 SCHEMA_V = "ui_v4_v2"
@@ -465,8 +467,13 @@ def _archi_chart_wire(app: Any, symbol: str) -> Optional[Dict[str, Any]]:
         if _enr is not None:
             try:
                 thesis_levels = _enr.get_thesis_chart_levels(symbol)
-            except Exception:
+            except Exception as exc:
                 thesis_levels = None
+                if symbol not in _ARCHI_CHART_THESIS_WARNED:
+                    _ARCHI_CHART_THESIS_WARNED.add(symbol)
+                    _log.warning(
+                        "ARCHI_CHART_THESIS_LEVELS_FAIL sym=%s err=%s", symbol, exc
+                    )
 
         conds = sorted(
             we.get_bot_conditions(symbol),
@@ -3067,6 +3074,7 @@ def build_app(
                 try:
                     before_ts = int(_bt_raw)
                 except ValueError:
+                    _log.debug("WAKES_BEFORE_TS_INVALID raw=%r", _bt_raw)
                     before_ts = None
             thinking_page, _ = _read_thinking_records(
                 _console_data_dir, _WAKE_THINKING_SCAN, 0

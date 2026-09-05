@@ -450,3 +450,43 @@ class TestEnrichWire:
         )
         assert "archi_thesis" in wire_btc
         assert "BTC" in wire_btc["archi_thesis"]["thesis"]
+
+
+# ─── I5: не-числовий рівень тези — гучно (2026-09-05, no_bare_except 44→38) ──────
+
+
+class TestNumericLevelContract:
+    """ADR-0085 P4: ``key_level_price``/``invalidation_price`` — числа від бота.
+    Відсутність → None тихо; нечислове сміття → None + WARNING (контракт-дрейф)."""
+
+    def test_absent_level_is_silent(self, caplog) -> None:
+        import logging
+
+        r = FakeRedis()
+        key = _THESIS_KEY_TPL.format(ns="ns", sym="XAU_USD")
+        r.hset(key, mapping={"thesis": "X", "updated_at_ms": str(int(time.time() * 1000))})
+        enricher = _make_enricher(r, ns="ns")
+        with caplog.at_level(logging.WARNING, logger="runtime.smc.narrative_enricher"):
+            enricher.refresh_thesis_sync("XAU/USD")
+        cached = enricher._thesis_cache.get("XAU/USD")
+        assert cached is not None and cached.key_level_price is None
+        assert caplog.records == []
+
+    def test_garbage_level_is_loud(self, caplog) -> None:
+        import logging
+
+        r = FakeRedis()
+        key = _THESIS_KEY_TPL.format(ns="ns", sym="XAU_USD")
+        r.hset(key, mapping={
+            "thesis": "X",
+            "updated_at_ms": str(int(time.time() * 1000)),
+            "key_level_price": "4680,5",  # кома замість крапки — реальний клас дрейфу
+        })
+        enricher = _make_enricher(r, ns="ns")
+        with caplog.at_level(logging.WARNING, logger="runtime.smc.narrative_enricher"):
+            enricher.refresh_thesis_sync("XAU/USD")
+        cached = enricher._thesis_cache.get("XAU/USD")
+        assert cached is not None and cached.key_level_price is None  # деградація, не падіння
+        assert [r_.getMessage() for r_ in caplog.records] == [
+            "THESIS_LEVEL_NOT_NUMERIC sym=XAU/USD key=key_level_price value='4680,5'"
+        ]

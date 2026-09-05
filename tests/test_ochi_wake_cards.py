@@ -291,3 +291,40 @@ def test_now_view_thesis_whitelist_and_age() -> None:
     assert tv["key_level_price"] == 4680.0  # рядок → float
     assert tv["age_ms"] == 100_000  # now - updated
     assert "secret_internal" not in tv  # whitelist-only
+
+
+# ── I5: коерція — відсутність тиха, сміття гучне (2026-09-05, no_bare_except 44→38) ──
+
+
+def test_coercion_absence_is_silent_garbage_is_logged(caplog) -> None:
+    """``_to_int``/``_to_float``: None/"" → None без жодного логу (нормальна відсутність
+    поля в директивах); нечислове сміття → None + DEBUG (контракт-дрейф видимий)."""
+    import logging
+
+    from runtime.ws.wake_cards import _to_float, _to_int
+
+    with caplog.at_level(logging.DEBUG, logger="wake_cards"):
+        assert _to_float(None) is None and _to_float("") is None
+        assert _to_int(None) is None and _to_int("") is None
+        assert caplog.records == []
+        assert _to_float("abc") is None
+        assert _to_int("1.5x") is None
+        assert _to_float("4680.5") == 4680.5 and _to_int("900000") == 900000
+    assert [r.getMessage() for r in caplog.records] == [
+        "WAKE_CARDS_NOT_FLOAT value='abc'",
+        "WAKE_CARDS_NOT_INT value='1.5x'",
+    ]
+
+
+def test_clamp_wake_limit_logs_only_garbage(caplog) -> None:
+    """?limit відсутній → default тихо; ?limit=сміття → default + DEBUG."""
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="wake_cards"):
+        assert clamp_wake_limit(None, default=30) == 30
+        assert clamp_wake_limit("", default=30) == 30
+        assert caplog.records == []
+        assert clamp_wake_limit("сміття", default=30) == 30
+    assert [r.getMessage() for r in caplog.records] == [
+        "WAKE_LIMIT_INVALID raw='сміття' default=30"
+    ]

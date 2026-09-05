@@ -151,9 +151,15 @@ class NarrativeEnricher:
             # ADR-0085 P4: optional numeric levels (X28 — числа з бекенда).
             def _opt_float(k: str) -> Optional[float]:
                 v = data.get(k, "")
+                if v in ("", None):
+                    return None
                 try:
-                    return float(v) if v not in ("", None) else None
+                    return float(v)
                 except (TypeError, ValueError):
+                    # I5: бот записав не-число у числове поле тези — контракт-дрейф, гучно.
+                    _log.warning(
+                        "THESIS_LEVEL_NOT_NUMERIC sym=%s key=%s value=%r", symbol, k, v
+                    )
                     return None
 
             self._thesis_cache[symbol] = ThesisLayer(

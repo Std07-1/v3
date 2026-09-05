@@ -271,10 +271,14 @@ def read_wake_cards(
 
 
 def clamp_wake_limit(raw: Any, default: int = 30) -> int:
-    """Затиснути ?limit до [WAKE_LIMIT_MIN, WAKE_LIMIT_MAX]; сміття → ``default``."""
+    """Затиснути ?limit до [WAKE_LIMIT_MIN, WAKE_LIMIT_MAX]. Відсутній → ``default``
+    тихо; сміття → ``default`` + DEBUG (I5: деградація видима, не мовчазна)."""
+    if raw in (None, ""):
+        return default
     try:
         value = int(raw)
     except (TypeError, ValueError):
+        _log.debug("WAKE_LIMIT_INVALID raw=%r default=%d", raw, default)
         return default
     return max(WAKE_LIMIT_MIN, min(WAKE_LIMIT_MAX, value))
 
@@ -309,16 +313,24 @@ _THESIS_FLOAT_FIELDS = ("key_level_price", "invalidation_price")
 
 
 def _to_int(value: Any) -> Optional[int]:
+    """int або None. Відсутність (None/"") — тихо; сміття — DEBUG (I5)."""
+    if value in (None, ""):
+        return None
     try:
         return int(value)
     except (TypeError, ValueError):
+        _log.debug("WAKE_CARDS_NOT_INT value=%r", value)
         return None
 
 
 def _to_float(value: Any) -> Optional[float]:
+    """float або None. Відсутність (None/"") — тихо; сміття — DEBUG (I5)."""
+    if value in (None, ""):
+        return None
     try:
         return float(value)
     except (TypeError, ValueError):
+        _log.debug("WAKE_CARDS_NOT_FLOAT value=%r", value)
         return None
 
 
