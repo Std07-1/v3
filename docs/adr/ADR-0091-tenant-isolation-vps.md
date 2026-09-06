@@ -119,7 +119,7 @@ sshd key-only, fail2ban (sshd, nginx-botsearch, nginx-req-limit), nginx `limit_r
 |---|---|---|
 | **P1** платформа під `smc` | user `smc` (nologin, без sudo; legacy `/home/smc/smc_v1` → root-only бекап), HOME `/var/lib/smc`, `ubuntu` ∈ `smc`; `/opt/smc-v3` = ubuntu:smc g+rX + setgid; `data_v3`, `History`, `logs`, `/var/log/smc-v3` = smc:smc g+rwX; `.env` 640 ubuntu:smc, `.env.bak.*` 600; supervisor `user=smc`, `umask=002`, `HOME`, без `ANTHROPIC_API_KEY`/`COWORK_TRIGGERS_DIR`; logrotate `create smc smc`; `/opt/family-agent/data` 750; `/opt/traccar/{conf,data}` 750, `traccar.xml` 640 | **DONE 06.09 05:12 UTC** (bekап `/root/smc-v3.conf.bak.*`, rollback `/root/smc-user-rollback-*.sh`); шаблон `ee408b7` |
 | **P1b** SEC-06 WS rails + nginx-зони в репо | див. §1.2 | **DONE** `1ace5f9`, `ee408b7` |
-| **P2** Redis auth + ACL | `requirepass` + `aclfile /etc/redis/users.acl` (користувачі §3 п.3); `config.json` `redis.password_env`; клієнти платформи читають пароль з `.env` (`REDIS_PASSWORD`); бот — зі свого `.env` (companion trader-v3 нотатка, X31: лише env); db0 legacy-ключі → аудит і видалення | ⏳ (weekend; rollback = `requirepass ""`) |
+| **P2** Redis auth + ACL | Було: `default on nopass ~* +@all` на loopback — будь-який процес машини (RCE у публічному ws_server, скомпрометований сусід) мав повний доступ до db0+db1 і admin-команд. Стало: 4 ACL-користувачі — `smc_platform` (`~v3_local:*`, `-@admin -flushall -flushdb -keys -swapdb -acl`), `smc_bridge` (лише `agent|archi|feedback|thesis|tick:last|wake` ключі), `archi` (готовий для бота, пароль чекає), `smc_admin` (людина/діагностика); **`default off`**. Креденшели — з env програми (`AI_ONE_REDIS_USERNAME`/`AI_ONE_REDIS_PASSWORD`), не з `config.json` (git-singleton). Код: `RedisSpec.auth_kwargs()` + 17 клієнтів + CI-гейт `redis_clients_use_auth`. Паролі: `/root/redis-acl-<ts>.txt` (600). Персистенція — `CONFIG REWRITE` у `redis.conf` (не `aclfile`: його не можна задати без рестарту), перевірено рестартом Redis. **Redis 6.0.16: `&<channel>` у `ACL SETUSER` не підтримується (з 6.2)** — канали не обмежуються, pub/sub `fxcm_local:price_tik` лишається відкритим для будь-кого, хто пройшов AUTH. db0 (19 legacy-ключів `v3:`/`v3_prod:`/`ai_one:`) недосяжна платформі — аудит і видалення окремо | **DONE** `70d632f` + VPS 06.09 09:55–10:00 UTC |
 | **P3** bridge/archi користувачі | з ADR-0090 S1: `smcbridge` user; `/opt/smc-trader-v3/data` → `archi:archi` 750 + ACL read для `smcbridge` до S6; `smc` втрачає read на дані бота (`sudo -u smc test -r … = fail`) | ⏳ (після ADR-0090 S1) |
 | **P4** приватні сервіси | `family` і `tgguard` users (nologin), homes 700, `.env` 600; Traccar лишається root, але `web.address=127.0.0.1` (тунель і так локальний) + порти 5xxx лише на loopback, якщо пристрої йдуть через `gps.m7x2kids.com`; Cloudflare Access на `app.m7x2kids.com` | ⏳ (Traccar-зміни — з owner-go, це дитячий застосунок) |
 | **P5** hardening публічного коду | `api_v3 _client_ip`: `CF-Connecting-IP` → `X-Real-IP` → останній hop XFF; archi vhost: `listen 80 → 301`, `limit_req` на `/api/archi/`, `?token=` лише на SSE-роутах; фіксовані коди помилок замість `str(e)`; `/api/context`: символ ∉ allowlist → 400; SSE без `ACAO:*`; CSP без `unsafe-inline` (hash/nonce) | ⏳ (2 патчі ≤150 LOC) |
@@ -147,9 +147,13 @@ ps -eo user,cmd | grep -E "[r]untime.ws.ws_server|[a]pp\.main|[b]roker_sidecar|[
 sudo -u smc sudo -n true; echo $?                                    # → 1 (нема sudo)
 for p in /opt/family-agent/.env /opt/family-agent/data /opt/smc-trader-v3/.env /opt/backups /opt/traccar/conf/traccar.xml; do sudo -u smc test -r "$p" && echo "LEAK $p"; done   # → нічого
 sudo cat /proc/$(pgrep -f runtime.ws.ws_server | head -1)/environ | tr '\0' '\n' | grep -c ANTHROPIC   # → 0
-# P2
-redis-cli -n 1 PING                                                   # → NOAUTH
-redis-cli --user smc --pass "$REDIS_PASSWORD" -n 1 FLUSHDB            # → NOPERM
+# P2 (виконано 06.09 09:55–10:00 UTC — усі рядки як у коментарях)
+redis-cli PING                                                        # → NOAUTH Authentication required
+redis-cli --user smc_platform --pass "$P" -n 0 GET v3:status:snapshot  # → NOPERM (db0 недосяжна)
+redis-cli --user smc_platform --pass "$P" CONFIG GET maxmemory         # → NOPERM (admin заборонено)
+redis-cli --user smc_bridge --pass "$B" -n 1 GET v3_local:ohlcv:tail:XAU_USD:60  # → NOPERM (чужі ключі)
+sudo systemctl restart redis-server && redis-cli --user smc_admin --pass "$A" ACL LIST | wc -l  # → 5 (ACL пережили рестарт)
+redis-cli --user smc_admin --pass "$A" CLIENT LIST | grep -oP 'user=\K\S+' | sort | uniq -c    # → smc_platform×8, smc_bridge×1
 # публічна поверхня (SEC-06, доведено 06.09 05:24 UTC)
 # 10 сокетів з одного IP → 8 open + 2×503; switch flood → switch_throttled; 12 дій → 4×action_rate_limited
 ```
@@ -171,7 +175,7 @@ redis-cli --user smc --pass "$REDIS_PASSWORD" -n 1 FLUSHDB            # → NOPE
 |---|---|---|
 | P1 платформа під smc + права приватних каталогів | ✅ DONE | 2026-09-06 05:12 UTC; `ee408b7` |
 | P1b SEC-06 rails + nginx-зони | ✅ DONE | `1ace5f9`, `ee408b7` |
-| P2 Redis auth + ACL | ⏳ | — |
+| P2 Redis auth + ACL | ✅ 2026-09-06 | `70d632f` (код) + VPS 09:55–10:00 UTC (ACL, `default off`, `CONFIG REWRITE`) |
 | P3 bridge/archi users | ⏳ (після ADR-0090 S1) | — |
 | P4 приватні сервіси | ⏳ (owner-go) | — |
 | P5 hardening коду | ⏳ | — |
@@ -183,7 +187,9 @@ redis-cli --user smc --pass "$REDIS_PASSWORD" -n 1 FLUSHDB            # → NOPE
 ## Rollback
 
 - P1: `/root/smc-user-rollback-20260906-051235.sh` (conf з бекапу, `chown -R ubuntu:ubuntu`, reread/update).
-- P2: `requirepass ""` + `aclfile` off + restart redis; клієнти працюють без пароля (env порожній = без auth).
+- P2: `sudo cp /root/redis.conf.bak.<ts> /etc/redis/redis.conf && sudo systemctl restart redis-server`
+  (повертає `default on nopass`) + прибрати `AI_ONE_REDIS_*` з supervisor-конфігів і `supervisorctl update`.
+  Код rollback не потребує: порожній env = клієнт без креденшелів (backward compatible).
 - P4/P5: `git revert` відповідних патчів; права каталогів — `chmod` назад за таблицею §1.
 
 ---
@@ -192,3 +198,14 @@ redis-cli --user smc --pass "$REDIS_PASSWORD" -n 1 FLUSHDB            # → NOPE
 
 - 2026-09-06: Created (Accepted). P1/P1b виконано того ж дня і доведено живими перевірками (§6).
   RECON: VPS-інвентар (масковані секрети) + workflow «public-surface» проти коду.
+- 2026-09-06: P2 виконано (owner «закривай дірку»). Порядок з окремими rollback: код (`70d632f`,
+  backward compatible) → ACL-користувачі → env у supervisor → `default off` → `CONFIG REWRITE` →
+  перевірка рестартом Redis. Пастки, спіймані живою перевіркою: (1) `&*` у `ACL SETUSER` — синтаксис
+  Redis 6.2+, на 6.0.16 усі `SETUSER` мовчки падали (вивід був у `/dev/null`), а env уже вказував на
+  неіснуючих користувачів → `smc-fxcm` FATAL, `invalid username-password pair`; лікується прибиранням
+  `&*` (у 6.0 канали ACL не обмежує взагалі — це лишається відкритим питанням до апгрейду Redis);
+  (2) без `CONFIG REWRITE` ребут дав би Redis без ACL + платформу з креденшелами = повний down, тому
+  персистенцію перевірено справжнім `systemctl restart redis-server`, а не припущенням.
+  Наслідок для інструментів: `tools/diag/*` і будь-який `redis-cli` тепер потребують `--user/--pass`
+  (див. runbook). Бот: користувач `archi` створений, пароль у `/root/redis-acl-<ts>.txt` — вписати
+  в його `.env` при вмиканні Арчі.

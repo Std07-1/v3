@@ -157,6 +157,13 @@ curl -s http://127.0.0.1:8000/api/config | python -m json.tool
 
 ### Redis ключі
 
+> **З 06.09.2026 Redis під ACL (ADR-0091 P2)**: `default off`, тож `redis-cli` без креденшелів дає
+> `NOAUTH`. Для діагностики: `redis-cli --user smc_admin --pass "$(sudo grep ^smc_admin= /root/redis-acl-*.txt | cut -d= -f2)" --no-auth-warning -n 1 …`.
+> Сервіси беруть креденшели з env своєї supervisor-програми (`AI_ONE_REDIS_USERNAME`/`AI_ONE_REDIS_PASSWORD`).
+> `invalid username-password pair` у логах = ACL-користувача нема або пароль розійшовся з env.
+> Скрипти `tools/diag/*.py` з hardcoded підключенням без пароля більше не працюють — це очікувано.
+
+
 ```bash
 redis-cli -n 1 KEYS "v3_local:ohlcv:*"
 redis-cli -n 1 KEYS "v3_local:prime:*"
