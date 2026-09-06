@@ -24,6 +24,11 @@ from typing import Any, Dict, List, Optional
 # value = ADR number string (без leading zeros у деяких випадках — підтримуємо обидва)
 _FEATURE_ADR_MAP: Dict[str, str] = {
     "smc.tda": "0034",
+    # ADR-0090 S4: єдина агентська секція; wake_engine усередині — ADR-0049
+    "agent_bridge": "0090",
+    "agent_bridge.wake_engine": "0049",
+    "agent_bridge.console": "0090",
+    "agent_bridge.public_snapshot": "0090",
     # Додати нові feature→ADR mappings за потребою:
     # "smc.some_feature": "NNNN",
 }
@@ -48,9 +53,17 @@ _BLOCKED_STATUSES = frozenset(
     }
 )
 
-_STATUS_RE = re.compile(
-    r"^\s*-\s*\*\*Статус\*\*\s*:\s*\*\*(.+?)\*\*",
-    re.MULTILINE | re.IGNORECASE,
+# Три форми запису статусу в ADR (усі зустрічаються в docs/adr):
+#   - **Статус**: **Accepted**        (bullet, bold value)
+#   - **Status**: Accepted            (bullet, plain value)
+#   | Статус | **Accepted** (…) |     (metadata table)
+_STATUS_PATTERNS = tuple(
+    re.compile(pattern, re.MULTILINE | re.IGNORECASE)
+    for pattern in (
+        r"^\s*-\s*\*\*(?:Статус|Status)\*\*\s*:\s*\*\*(.+?)\*\*",
+        r"^\s*-\s*\*\*(?:Статус|Status)\*\*\s*:\s*([^*\n|]+?)\s*$",
+        r"^\|\s*(?:Статус|Status)\s*\|\s*\*\*(.+?)\*\*",
+    )
 )
 
 
@@ -67,8 +80,8 @@ def _resolve_config_value(config: dict, dotpath: str) -> Optional[dict]:
 
 def _extract_adr_status(adr_dir: Path, adr_number: str) -> Optional[str]:
     """Знайти ADR файл за номером і витягти статус."""
-    # Шукаємо файл що починається з номера
-    candidates = sorted(adr_dir.glob(f"{adr_number}-*.md"))
+    # Дві схеми імен у docs/adr: `NNNN-name.md` (до 0085) і `ADR-NNNN-name.md` (з 0086)
+    candidates = sorted(adr_dir.glob(f"{adr_number}-*.md")) + sorted(adr_dir.glob(f"ADR-{adr_number}-*.md"))
     if not candidates:
         return None
     # Беремо перший (канонічний) файл, не *a.md дублікати
@@ -77,10 +90,11 @@ def _extract_adr_status(adr_dir: Path, adr_number: str) -> Optional[str]:
         text = adr_file.read_text(encoding="utf-8", errors="replace")
     except Exception:
         return None
-    match = _STATUS_RE.search(text)
-    if not match:
-        return None
-    return match.group(1).strip().lower()
+    for pattern in _STATUS_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return match.group(1).strip().lower()
+    return None
 
 
 def run_gate(inputs: dict) -> dict:

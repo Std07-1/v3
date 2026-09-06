@@ -128,6 +128,14 @@
             }
         },
         {
+            "name": "platform_config_no_agent_keys",
+            "module": "tools.exit_gates.gates.gate_platform_config_no_agent_keys",
+            "inputs": {
+                "root": ".",
+                "config_path": "config.json"
+            }
+        },
+        {
             "name": "dual_python",
             "module": "tools.exit_gates.gates.gate_dual_python",
             "inputs": {

@@ -60,3 +60,6 @@ APP_WAKE_ENGINE = web.AppKey("wake_engine", object)
 
 # SEC-06: WS connection/action rails (WsLimits) — config.json:ws_server.*
 APP_WS_LIMITS = web.AppKey("ws_limits", object)
+
+# ADR-0090 S4: розв'язана секція config.json:agent_bridge (AgentBridgeConfig)
+APP_AGENT_BRIDGE_CFG = web.AppKey("agent_bridge_cfg", object)

@@ -107,7 +107,8 @@
    `/opt/smc-v3` і Redis-ключами платформи.
 2. **AI = клієнт.** Усе, що існує заради агента, живе в `runtime/agent_bridge/` і працює як окремий процес
    `smc-agent-bridge` (127.0.0.1:8010), окремий unix-user (ADR-0091), `agent_bridge.enabled=false`
-   за замовчуванням у репо, `true` лише в VPS-overlay.
+   за замовчуванням у репо; на хості вмикається лише env `AI_ONE_AGENT_BRIDGE_ENABLED=1` у
+   supervisor-програмі (config.json = git-singleton, overlay заборонений `gate_config_singleton`).
 3. **Контракти UI не змінюються.** Три SPA б'ють у ті самі шляхи; змінюється лише `proxy_pass` у nginx.
    Виняток — `frame.archi_chart`/`archi_thesis`/`archi_presence` у WS-кадрі (§3.3).
 4. **Платформа не є writer у чужий стан.** Роути, що пишуть файли бота, переїжджають у bridge як є (S1),
@@ -120,7 +121,7 @@
 | **S1** Bridge app + console/ochi/public routes | `runtime/agent_bridge/{app.py,routes_console.py,routes_ochi.py,wake_cards.py,public_snapshot.py}`; `_archi_auth` → `runtime/api/auth.check_bearer` (ADR-0076) у bridge; `[program:smc-agent-bridge]` у **новому** `tools/agent-bridge.supervisor.conf` (не в групі `smc`); nginx `archi/gorn/ochi` → `127.0.0.1:8010`; ws_server: маунти `:3177-3207` і блок `:2306-2454` видалено | move ≈1 700 LOC; new ≈120 | bridge up: `curl -H 'Authorization: Bearer …' 127.0.0.1:8010/api/archi/now` = 200; ws_server: `grep -c "/api/archi" runtime/ws/ws_server.py` = 0; існуючі тести ochi/public проходять під новим імпортом |
 | **S2** WakeEngine у bridge | `runtime/agent_bridge/wake_engine.py` (move 699 LOC) з власним 2-с циклом; SMC-вхід = localhost-only `GET /api/internal/smc_snapshot?symbol=` на ws_server (`allow 127.0.0.1`, не проксюється nginx) — рівно ті поля, що `WakeEngine._tick_symbol` читає з `SmcRunner` сьогодні (`wake_engine.py:79, 143-200`); pure `core/smc/wake_check.py`, `wake_types.py`, `auto_wake.py`, `structure_forecast.py` лишаються в core | move 699; new ≈100 (endpoint + клієнт) | wake_events у Redis з'являються при вимкненому `ws_server.wake_engine` (його більше нема) і ввімкненому bridge; latency wake ≤5 с (лог `WAKE_EVENT` vs `tick_last`) |
 | **S3** Overlay замість полів кадру | `NarrativeEnricher` (202 LOC) + `_archi_chart_wire` (`:441-512`) → bridge; `GET /api/agent/overlay?symbol=&tf=` → `{archi_chart, archi_thesis, archi_presence}` (bearer або публічний — owner-рішення, див. §7); ws_server: `render_frame`/`delta_loop` без enrichment (`:884-906`, `:1523-1526`, `:1600-1612` видалено); `ui_v4` ArchiLayer/NarrativePanel полять overlay при увімкненому toggle | move ≈260; new ≈80 (endpoint + ui fetch) | `render_frame` не містить ключів `archi_*` (новий тест); overlay endpoint 200 з тими самими числами, що раніше в кадрі (порівняння на одному snapshot) |
-| **S4** Config SSOT | `config.json`: секція `agent_bridge: {enabled:false, port:8010, data_dir:"", wake_engine:{…}, console:{…}, public_snapshot:{enabled:false}}`; top-level `wake_engine`/`agent_console` знято; `tools/check_config.py`: assert нема top-level ключів `archi\|agent\|wake\|thesis`; `gate_adr_config_sync`: `agent_bridge` → ADR-0090 | ≈40 | check_config + гейт зелені; ws_server стартує без секції `agent_bridge` |
+| **S4** Config SSOT | `config.json`: секція `agent_bridge` (§3.6); top-level `wake_engine`/`agent_console` знято; резолвер `runtime/agent_bridge/config.py` + `APP_AGENT_BRIDGE_CFG`; новий CI exit-gate `platform_config_no_agent_keys` (top-level ключі `archi\|agent\|wake\|thesis\|narrative\|presence` заборонені, крім `agent_bridge`); `gate_adr_config_sync`: `agent_bridge*` → ADR-0090/0049, три форми статусу, схема імен `ADR-NNNN-*` | ≈150 з тестами | `run_exit_gates` (обидва маніфести) + `pytest tests/test_agent_bridge_config.py` зелені; ws_server стартує без секції `agent_bridge` |
 | **S5** Репо-гігієна | `tools/bot_patches/`, `check_archi*`, `check_wake.py`, `check_directives*.py`, `reset_budget.py`, `diag/archi_*` → `trader-v3/tools/` (один коміт у кожному репо); три SPA → `agent_bridge/ui/` (шляхи API без змін); `gate_ui_no_direct_redis.py`: ws_server знято з `ALLOW_FILES`; 8 тестів → `tests/agent_bridge/`; новий тест `test_ws_server_has_no_agent_surface` | move; new ≈40 | гейт без винятку зелений; `pytest tests/agent_bridge` зелений |
 | **S6** Writes → bot-owned | `owner-note`, `proposals/review`, `chat` → проксі до endpoint бота (companion trader-v3 ADR); bridge стає strictly read-only щодо файлів бота; `agent_bridge.data_dir` знімається | new ≈60 (+ trader-v3) | `sudo -u <bridge-user> test -w /opt/smc-trader-v3/data` = fail; UI Арчі працює |
 | **S7** Client-agnostic імена | `archi_chart/archi_thesis/archi_presence` → `client_levels/client_thesis/client_presence` + поле `source`; docstring `narrative_enricher.py:4-12` без «no one knows is AI-driven» | ≈60 (wire + types.ts + тести) | контракт-тест wire |
@@ -165,15 +166,20 @@ trader-v3 (smc_trader_v3, окремий program)  ◄──► Redis IPC (wake:
 
 ```jsonc
 "agent_bridge": {
-  "enabled": false,                 // репо-дефолт; VPS overlay = true
+  "enabled": false,                 // репо-дефолт; на хості — лише env AI_ONE_AGENT_BRIDGE_ENABLED=1 (overlay заборонений)
   "host": "127.0.0.1", "port": 8010,
-  "data_dir": "",                   // до S6: /opt/smc-trader-v3/data (read-only через group); після S6 — знімається
+  "data_dir": "/opt/smc-trader-v3/data", // git-singleton, тому шлях тут; read-only через group; після S6 — знімається
   "smc_snapshot_url": "http://127.0.0.1:8000/api/internal/smc_snapshot",
-  "wake_engine": { ...поточна секція wake_engine без змін... },
-  "console":     { "auth_token_env": "ARCHI_AUTH_TOKEN", "thinking_max_items": 100, "feed_max_items": 200 },
+  "wake_engine": { ...поточна секція wake_engine без змін (enabled діє лише при agent_bridge.enabled)... },
+  "console":     { "enabled": true, "auth_token_env": "ARCHI_AUTH_TOKEN", "allow_no_token_dev_mode": false,
+                   "thinking_max_items": 100, "feed_max_items": 200 },
   "public_snapshot": { "enabled": false, "ttl_s": 5 }
 }
 ```
+
+Резолвер `runtime/agent_bridge/config.py` (`resolve_agent_bridge_config`): секція відсутня → усе вимкнено;
+невалідне значення env = ValueError на старті; off-стан логується `AGENT_BRIDGE_DISABLED`, env-override —
+`AGENT_BRIDGE_ENABLED_BY_ENV` (I5). Токен консолі — лише з env за ім'ям `console.auth_token_env`.
 
 ### 3.7 Docs-слайс (текст, без коду; виконано `ee03177`, до S4)
 
@@ -235,7 +241,7 @@ trader-v3 (smc_trader_v3, окремий program)  ◄──► Redis IPC (wake:
 
 | Слайс | Команда/перевірка | Очікувано |
 |---|---|---|
-| S4 | `python -m tools.check_config`; `run_exit_gates` | 0 top-level agent-ключів; гейти ok |
+| S4 | `python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.ci.json` (гейт `platform_config_no_agent_keys`); `pytest tests/test_agent_bridge_config.py` | 0 top-level agent-ключів; гейти ok; 18 тестів |
 | S1 | `grep -cE "/api/(archi\|agent\|public)" runtime/ws/ws_server.py`; bridge `curl :8010/api/archi/now` | 0; 200 з bearer, 401 без |
 | S2 | лог bridge `WAKE_EVENT`, Redis `LLEN wake:events` росте; ws_server лог без `WakeEngine` | подія ≤5 с після умови |
 | S3 | `python -c` build_full_frame → keys | нема `archi_*`; overlay 200 |
@@ -280,3 +286,10 @@ trader-v3 (smc_trader_v3, окремий program)  ◄──► Redis IPC (wake:
   `prompts/arhci-handoff`, `role_spec_patch_master` Z13/Z14, skills) — переозначення створило б протиріччя;
   правило «platform-код не читає/пише файли клієнта поза `runtime/agent_bridge/`» = нове **X40**.
   Залишок: `role_spec_*`/`prompts/*`/`skills/contradiction-audit` ще пишуть «I0–I7» — окремий doc-keeper прохід.
+- 2026-09-06: S4 реалізовано з відхиленнями від плану (амендовано §3.0 п.2, §3.1, §3.6, §6): (1) «VPS overlay»
+  неможливий — `gate_config_singleton` забороняє `config.local.json` і `AI_ONE_CONFIG_PATH`; замість нього env
+  `AI_ONE_AGENT_BRIDGE_ENABLED` у supervisor-програмі хоста; (2) `data_dir` лишається VPS-шляхом у git-singleton
+  до S6; (3) `console` отримує `enabled` + `allow_no_token_dev_mode` (перенесено як є з `agent_console`);
+  (4) `tools/check_config.py` — бот-скрипт для `/opt/smc-trader-v3/config.json` (кандидат S5), тому перевірка
+  top-level ключів = CI exit-gate `platform_config_no_agent_keys`. Рев'ю: workflow 3 лінзи + верифікатори,
+  5 підтверджених S3 (усі виправлено), 8 спростовано як pre-existing/поза патчем.

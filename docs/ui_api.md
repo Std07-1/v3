@@ -566,10 +566,8 @@ Default fallback: 300 барів (`DEFAULT_COLD_START_BARS`).
 `ws_server.py` на приватному hostname. Всі потребують Bearer token auth:
 
 ```
-Authorization: Bearer <token з config.json:agent_console.auth_token>
+Authorization: Bearer <token з env-змінної, ім'я = config.json:agent_bridge.console.auth_token_env (default ARCHI_AUTH_TOKEN)>
 ```
-
-> Після ADR-0090 S4 ключ переїжджає в `config.json:agent_bridge.auth_token`.
 
 ### HTTP Endpoints
 

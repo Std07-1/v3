@@ -121,7 +121,12 @@ from runtime.ws.app_keys import (  # noqa: E402
     APP_UDS_EXECUTOR,
     APP_WAKE_ENGINE,
     APP_WS_LIMITS,
+    APP_AGENT_BRIDGE_CFG,
     APP_WS_SESSIONS,
+)
+from runtime.agent_bridge.config import (  # noqa: E402
+    AGENT_BRIDGE_ENABLED_ENV,
+    resolve_agent_bridge_config,
 )
 
 # CORS: РґРѕР·РІРѕР»РµРЅС– origins РґР»СЏ cross-origin (Vercel / Cloudflare Pages)
@@ -503,11 +508,10 @@ def _archi_chart_wire(app: Any, symbol: str) -> Optional[Dict[str, Any]]:
     Corrupt-параметри умови → skip item (деградація per-item, лог debug — I5).
     """
     try:
-        cfg = (
-            app.get(APP_FULL_CONFIG, {})
-            .get("wake_engine", {})
-            .get("archi_chart", {})
-        )
+        _bridge = app.get(APP_AGENT_BRIDGE_CFG)
+        if _bridge is None:
+            return None
+        cfg = _bridge.wake_engine.get("archi_chart", {})
         if not cfg.get("enabled", True):
             return None
         we = app.get(APP_WAKE_ENGINE)
@@ -2166,6 +2170,26 @@ def build_app(
     app[APP_CONFIG_PATH] = config_path
     app[APP_BOOT_ID] = uuid.uuid4().hex[:16]
     app[APP_FULL_CONFIG] = full_cfg
+    # ADR-0090 S4: єдина секція для всього агентського; env-override логуємо гучно
+    _bridge_cfg = resolve_agent_bridge_config(full_cfg)
+    app[APP_AGENT_BRIDGE_CFG] = _bridge_cfg
+    if _bridge_cfg.enabled_source == "env":
+        _log.warning(
+            "AGENT_BRIDGE_ENABLED_BY_ENV: %s overrides config.json agent_bridge.enabled -> %s",
+            AGENT_BRIDGE_ENABLED_ENV,
+            _bridge_cfg.enabled,
+        )
+    elif not _bridge_cfg.enabled:
+        # I5: master switch off = wake_engine/console/archi_chart НЕ стартують навіть при
+        # їхніх власних enabled=true — кажемо це один раз на старті, а не мовчимо
+        _log.info(
+            "AGENT_BRIDGE_DISABLED: agent_bridge.enabled=false (source=config) -> "
+            "WakeEngine/NarrativeEnricher/console/archi_chart not started "
+            "(wake_engine.enabled=%s console.enabled=%s); set env %s=1 to enable on this host",
+            bool(_bridge_cfg.wake_engine.get("enabled", False)),
+            _bridge_cfg.console.enabled,
+            AGENT_BRIDGE_ENABLED_ENV,
+        )
 
     # Symbol/TF sets from config (T10: imports at top-level)
     symbols_list = full_cfg.get("symbols", [])
@@ -2411,14 +2435,13 @@ def build_app(
 
     # ── /api/archi/* — Archi Console (ADR-025) ─────────────────────────────
     # Private API: Bearer token auth + file reads from bot data dir.
-    _console_cfg = load_system_config(resolve_config_path()).get("agent_console", {})
-    _console_enabled: bool = bool(_console_cfg.get("enabled", False))
-    _console_token: str = os.environ.get("ARCHI_AUTH_TOKEN", "") or str(
-        _console_cfg.get("auth_token", "")
-    )
-    _console_data_dir: str = str(_console_cfg.get("data_dir", ""))
-    _console_thinking_max: int = int(_console_cfg.get("thinking_max_items", 100))
-    _console_feed_max: int = int(_console_cfg.get("feed_max_items", 200))
+    # ADR-0090 S4: усе з config.json:agent_bridge (console.* + data_dir); токен лише з env
+    _console_cfg = _bridge_cfg.console
+    _console_enabled: bool = _bridge_cfg.console_enabled
+    _console_token: str = _console_cfg.resolve_token()
+    _console_data_dir: str = _bridge_cfg.data_dir
+    _console_thinking_max: int = _console_cfg.thinking_max_items
+    _console_feed_max: int = _console_cfg.feed_max_items
     if _console_enabled:
         _log.info("ARCHI_CONSOLE: enabled data_dir=%s", _console_data_dir)
 
@@ -2430,9 +2453,7 @@ def build_app(
     _console_auth_cfg = AuthConfig(
         enabled=_console_enabled,
         token=_console_token,
-        allow_no_token_dev_mode=bool(
-            _console_cfg.get("allow_no_token_dev_mode", False)
-        ),
+        allow_no_token_dev_mode=_console_cfg.allow_no_token_dev_mode,
     )
     if (
         _console_enabled
@@ -2442,9 +2463,10 @@ def build_app(
         # I5 degraded-but-loud: console mounted but no token -> every request is
         # DENIED. Surface it once at boot instead of silently opening the door.
         _log.error(
-            "ARCHI_AUTH_MISCONFIG: agent_console enabled but no token configured "
-            "(set ARCHI_AUTH_TOKEN env) -- ALL /api/agent/* and /api/archi/* "
-            "requests will be DENIED until a token is set"
+            "ARCHI_AUTH_MISCONFIG: agent_bridge.console enabled but no token configured "
+            "(set env %s) -- ALL /api/agent/* and /api/archi/* "
+            "requests will be DENIED until a token is set",
+            _console_cfg.auth_token_env,
         )
 
     def _archi_auth(request: web.Request) -> bool:
@@ -3706,8 +3728,8 @@ def build_app(
 
         # ADR-0049: WakeEngine вЂ” $0 wake condition checker in delta_loop
         _full_cfg = app_ctx.get(APP_FULL_CONFIG, {})
-        _wake_cfg = _full_cfg.get("wake_engine", {})
-        if _wake_cfg.get("enabled", False) and _smc_r is not None:
+        _bridge_rt = app_ctx.get(APP_AGENT_BRIDGE_CFG)
+        if _bridge_rt is not None and _bridge_rt.wake_engine_enabled and _smc_r is not None:
             try:
                 _wake_redis = app_ctx.get(APP_TICK_REDIS_CLIENT)
                 _wake_ns = app_ctx.get(APP_TICK_REDIS_NS, "v3_local")
@@ -3721,7 +3743,7 @@ def build_app(
                         executor=_exec,
                         smc_runner=_smc_r,
                         symbols=_wake_symbols,
-                        config=_full_cfg,
+                        config=_bridge_rt.wake_engine,
                     )
                     app_ctx[APP_WAKE_ENGINE] = _we
                     _log.info(

@@ -29,7 +29,7 @@ from typing import Any, Optional
 
 _log = logging.getLogger("wake_cards")
 
-# ── Файли-джерела (пишуться ботом Арчі у agent_console.data_dir) ──────────────
+# ── Файли-джерела (пишуться зовнішнім клієнтом у agent_bridge.data_dir, ADR-0090) ──────────────
 WAKE_LOG_FILE = "v3_wake_log.jsonl"  # SSOT списку пробуджень (trader-v3 wake_log.py)
 WAKE_TRACE_FILE = "v3_wake_trace.jsonl"  # durable дзеркало пробудження (trader-v3 ADR-097)
 

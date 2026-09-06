@@ -198,6 +198,28 @@
 Відмови = degraded-but-loud: `WS_REJECT`/`WS_ACTION_RATE_LIMITED`/`WS_SWITCH_REJECT` у логах + error frame
 `switch_throttled`/`action_rate_limited` клієнту. Heartbeat aiohttp (ping/pong) = `heartbeat_interval_s`.
 
+---
+
+## Agent bridge (ADR-0090, `agent_bridge.*`)
+
+Єдина секція для всього, що існує заради зовнішнього AI-клієнта. Top-level ключів `wake_engine`,
+`agent_console`, `public_snapshot` більше немає — стереже CI-гейт `platform_config_no_agent_keys`.
+Резолвер: `runtime/agent_bridge/config.py` (`resolve_agent_bridge_config`).
+
+| Ключ | Дефолт | Значення |
+|---|---|---|
+| `enabled` | false | головний перемикач; репо-дефолт = вимкнено. `wake_engine.enabled` і `console.enabled` діють лише при `enabled=true` |
+| env `AI_ONE_AGENT_BRIDGE_ENABLED` | — | перекриває `enabled` на конкретному хості (`1/0/true/false/yes/no/on/off`), бо config.json = git-singleton без overlay (`gate_config_singleton`). Інше значення = ValueError на старті; override логується `AGENT_BRIDGE_ENABLED_BY_ENV` |
+| `host` / `port` | 127.0.0.1 / 8010 | адреса окремого процесу bridge (S1); до S1 не використовується |
+| `data_dir` | /opt/smc-trader-v3/data | каталог даних клієнта, який читає консоль (до S6; після S6 знімається) |
+| `smc_snapshot_url` | http://127.0.0.1:8000/api/internal/smc_snapshot | SMC-вхід bridge (S2) |
+| `wake_engine.*` | як у ADR-0049/0087 | параметри WakeEngine; секція передається в `WakeEngine(config=…)` напряму |
+| `console.enabled` | true | маунт `/api/archi/*` (лише при `enabled=true`). `/api/agent/state` і `/api/agent/feed` до S1 змонтовані завжди; при вимкненому bridge auth fail-closed → 401 |
+| `console.auth_token_env` | ARCHI_AUTH_TOKEN | ім'я env-змінної з Bearer-токеном; токен у config.json не зберігається |
+| `console.allow_no_token_dev_mode` | false | ADR-0076 F1: enabled без токена = fail-closed |
+| `console.thinking_max_items` / `feed_max_items` | 100 / 200 | ліміти пагінації консолі |
+| `public_snapshot.enabled` / `ttl_s` | false / 5 | `/api/public/snapshot` (ADR-0086); маунт переїжджає в bridge на S1 |
+
 ## Redis
 
 | Ключ | Тип | Опис |

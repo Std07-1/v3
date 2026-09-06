@@ -65,7 +65,7 @@ tools:
 
 **"Wake Engine не видає events":**
 - `redis_inspect(pattern="v3_local:wake:*")` — Wake events в Redis bus
-- Config: `config.json:wake_engine.enabled=true`?
+- Config: `config.json:agent_bridge.enabled=true` (або env `AI_ONE_AGENT_BRIDGE_ENABLED=1` у supervisor-програмі) та `agent_bridge.wake_engine.enabled=true`? Лог старту: `AGENT_BRIDGE_DISABLED` / `AGENT_BRIDGE_ENABLED_BY_ENV`
 - `log_tail(process="ws_server")` → WakeEngine init logs
 
 **"Арчі (trader-v3) не реагує":** (VPS)

@@ -84,6 +84,7 @@ class WakeEngine:
         self._executor = executor
         self._smc = smc_runner
         self._symbols = symbols or []
+        # ADR-0090 S4: `config` = секція config.json:agent_bridge.wake_engine (не повний конфіг)
         self._config = config or {}
 
         # Bot-defined conditions cache (refreshed every 30s from Redis)
@@ -190,11 +191,11 @@ class WakeEngine:
             session_info=session_info,
             ts_ms=ts_ms,
             zone_grades=zone_grades,
-            config=self._config.get("wake_engine", {}),
+            config=self._config,
         )
 
         # ── 2b. Imminent structure forecast conditions (ADR-0087, pure $0) ──
-        _im_cfg = self._config.get("wake_engine", {}).get("structure_imminent", {})
+        _im_cfg = self._config.get("structure_imminent", {})
         if _im_cfg.get("enabled", False):
             _pairs = [
                 (int(lead_tf), int(tgt_tf))
@@ -330,7 +331,7 @@ class WakeEngine:
                 k: v for k, v in self._event_dedup.items() if v[0] >= _cutoff_ms
             }
         if imminent_fired:
-            _im_cd = self._config.get("wake_engine", {}).get("event_cooldown_s", {})
+            _im_cd = self._config.get("event_cooldown_s", {})
             _im_cd_ms = (
                 int(_im_cd.get("structure_imminent", _im_cd.get("_default", 600)))
                 * 1000
@@ -423,7 +424,7 @@ class WakeEngine:
             kind = fired[0].kind.value if fired else "accumulator"
 
             # Dedup: per-kind cooldown + zone aggregation (ADR-037)
-            _we_cfg = self._config.get("wake_engine", {})
+            _we_cfg = self._config
             _cooldowns = _we_cfg.get("event_cooldown_s", {})
             _cooldown_s = _cooldowns.get(kind, _cooldowns.get("_default", 600))
             _min_interval_ms = int(_cooldown_s) * 1000

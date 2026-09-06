@@ -435,23 +435,22 @@ def _make_engine(fake_redis, fake_smc):
         executor=concurrent.futures.ThreadPoolExecutor(max_workers=1),
         smc_runner=fake_smc,
         symbols=[SYM],
+        # ADR-0090 S4: WakeEngine отримує секцію agent_bridge.wake_engine напряму
         config={
-            "wake_engine": {
-                "event_cooldown_s": {
-                    "price_zone_touch": 1800,
-                    "structure_imminent": 900,
-                    "_default": 600,
-                },
-                "structure_imminent": {
-                    "enabled": True,
-                    "targets": ["choch"],
-                    "tf_pairs": [[300, 900]],
-                    "prox_atr": 1.0,
-                    "arm_radius_atr": 2.0,
-                    "window_s": 1800,
-                    "max_conditions": 4,
-                },
-            }
+            "event_cooldown_s": {
+                "price_zone_touch": 1800,
+                "structure_imminent": 900,
+                "_default": 600,
+            },
+            "structure_imminent": {
+                "enabled": True,
+                "targets": ["choch"],
+                "tf_pairs": [[300, 900]],
+                "prox_atr": 1.0,
+                "arm_radius_atr": 2.0,
+                "window_s": 1800,
+                "max_conditions": 4,
+            },
         },
     )
 

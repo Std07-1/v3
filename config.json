@@ -291,59 +291,70 @@
     "bg_smc_poll_interval_s": 10.0,
     "cors_allowed_origins": []
   },
-  "wake_engine": {
-    "enabled": true,
-    "zone_proximity_atr": 2.0,
-    "max_silence_hours": 3.0,
-    "grade_accept": [
-      "A+",
-      "A"
-    ],
-    "zone_score_min": 6,
-    "accumulator_threshold": 5.0,
-    "accumulator_decay": 0.95,
-    "event_cooldown_s": {
-      "price_zone_touch": 1800,
-      "session_open": 7200,
-      "structure_break": 1200,
-      "structure_imminent": 900,
-      "bias_divergence": 3600,
-      "accumulator": 0,
-      "max_silence": 3600,
-      "_default": 600
-    },
-    "dedup_include_zone_id": false,
-    "structure_imminent": {
-      "enabled": true,
-      "targets": [
-        "choch"
-      ],
-      "tf_pairs": [
-        [
-          300,
-          900
-        ],
-        [
-          900,
-          3600
-        ]
-      ],
-      "prox_atr": 1.0,
-      "arm_radius_atr": 2.0,
-      "window_s": 1800,
-      "max_conditions": 4
-    },
-    "archi_chart": {
-      "enabled": true,
-      "max_lines": 6
-    }
-  },
-  "agent_console": {
-    "enabled": true,
+  "agent_bridge": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 8010,
     "data_dir": "/opt/smc-trader-v3/data",
-    "auth_token": "",
-    "thinking_max_items": 100,
-    "feed_max_items": 200
+    "smc_snapshot_url": "http://127.0.0.1:8000/api/internal/smc_snapshot",
+    "wake_engine": {
+      "enabled": true,
+      "zone_proximity_atr": 2.0,
+      "max_silence_hours": 3.0,
+      "grade_accept": [
+        "A+",
+        "A"
+      ],
+      "zone_score_min": 6,
+      "accumulator_threshold": 5.0,
+      "accumulator_decay": 0.95,
+      "event_cooldown_s": {
+        "price_zone_touch": 1800,
+        "session_open": 7200,
+        "structure_break": 1200,
+        "structure_imminent": 900,
+        "bias_divergence": 3600,
+        "accumulator": 0,
+        "max_silence": 3600,
+        "_default": 600
+      },
+      "dedup_include_zone_id": false,
+      "structure_imminent": {
+        "enabled": true,
+        "targets": [
+          "choch"
+        ],
+        "tf_pairs": [
+          [
+            300,
+            900
+          ],
+          [
+            900,
+            3600
+          ]
+        ],
+        "prox_atr": 1.0,
+        "arm_radius_atr": 2.0,
+        "window_s": 1800,
+        "max_conditions": 4
+      },
+      "archi_chart": {
+        "enabled": true,
+        "max_lines": 6
+      }
+    },
+    "console": {
+      "enabled": true,
+      "auth_token_env": "ARCHI_AUTH_TOKEN",
+      "allow_no_token_dev_mode": false,
+      "thinking_max_items": 100,
+      "feed_max_items": 200
+    },
+    "public_snapshot": {
+      "enabled": false,
+      "ttl_s": 5
+    }
   },
   "api_v3": {
     "enabled": true,
