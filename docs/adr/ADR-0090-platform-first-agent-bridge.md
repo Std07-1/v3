@@ -118,7 +118,7 @@
 
 | Слайс | Що | Обсяг | Verify |
 |---|---|---|---|
-| **S1** Bridge app + console/ochi/public routes | `runtime/agent_bridge/{app.py,routes_console.py,routes_ochi.py,wake_cards.py,public_snapshot.py}`; `_archi_auth` → `runtime/api/auth.check_bearer` (ADR-0076) у bridge; `[program:smc-agent-bridge]` у **новому** `tools/agent-bridge.supervisor.conf` (не в групі `smc`); nginx `archi/gorn/ochi` → `127.0.0.1:8010`; ws_server: маунти `:3177-3207` і блок `:2306-2454` видалено | move ≈1 700 LOC; new ≈120 | bridge up: `curl -H 'Authorization: Bearer …' 127.0.0.1:8010/api/archi/now` = 200; ws_server: `grep -c "/api/archi" runtime/ws/ws_server.py` = 0; існуючі тести ochi/public проходять під новим імпортом |
+| **S1** Bridge app + console/ochi routes | `runtime/agent_bridge/{app,context,routes_console,routes_ochi,thinking_archive,wake_cards,__main__}.py` (handler'и перенесені verbatim в `register_*_routes(app, ctx)`; `_archi_auth` → `BridgeContext.authorize` над `runtime.api.auth.check_bearer`; `wake_cards.py` — git mv; thinking-helpers → `thinking_archive.read_thinking_records`); `[program:smc-agent-bridge]` у **новому** `tools/agent-bridge.supervisor.conf` (поза групою smc; вимкнений bridge = живий процес лише з `GET /api/bridge/health` `enabled:false`, приватні маршрути 404 — supervisor бачить RUNNING, без BACKOFF/FATAL); `tools/archi-nginx.conf` → `127.0.0.1:8010`; ws_server: блок консолі/agent-маршрутів видалено (−995 LOC), Redis-клієнт лишається для `/api/v3` TokenStore/kill_switch. **Не переносилось**: `runtime/api/public_snapshot.py` + його маунт (untracked WIP ADR-0086) — лишається в ws_server із `_console_data_dir`; переїде разом із WIP. Ціна для `/api/archi/now` — Redis `{ns}:tick:last:{SYM}` (як `/api/context`), не SmcRunner: поза сесією `price=null` + `degraded:[price_unavailable]`. Health без auth: `GET /api/bridge/health` | move ≈1 020; new ≈300 (+тести) | `pytest tests/test_agent_bridge_app.py tests/test_ws_server_no_agent_surface.py`; живий процес: `AI_ONE_AGENT_BRIDGE_ENABLED=1 ARCHI_AUTH_TOKEN=x python -m runtime.agent_bridge --port 8011` → health 200, `/api/archi/now` 401/200; `grep -cE "/api/(archi\|agent)" runtime/ws/ws_server.py` = 0 у закоміченому дереві |
 | **S2** WakeEngine у bridge | `runtime/agent_bridge/wake_engine.py` (move 699 LOC) з власним 2-с циклом; SMC-вхід = localhost-only `GET /api/internal/smc_snapshot?symbol=` на ws_server (`allow 127.0.0.1`, не проксюється nginx) — рівно ті поля, що `WakeEngine._tick_symbol` читає з `SmcRunner` сьогодні (`wake_engine.py:79, 143-200`); pure `core/smc/wake_check.py`, `wake_types.py`, `auto_wake.py`, `structure_forecast.py` лишаються в core | move 699; new ≈100 (endpoint + клієнт) | wake_events у Redis з'являються при вимкненому `ws_server.wake_engine` (його більше нема) і ввімкненому bridge; latency wake ≤5 с (лог `WAKE_EVENT` vs `tick_last`) |
 | **S3** Overlay замість полів кадру | `NarrativeEnricher` (202 LOC) + `_archi_chart_wire` (`:441-512`) → bridge; `GET /api/agent/overlay?symbol=&tf=` → `{archi_chart, archi_thesis, archi_presence}` (bearer або публічний — owner-рішення, див. §7); ws_server: `render_frame`/`delta_loop` без enrichment (`:884-906`, `:1523-1526`, `:1600-1612` видалено); `ui_v4` ArchiLayer/NarrativePanel полять overlay при увімкненому toggle | move ≈260; new ≈80 (endpoint + ui fetch) | `render_frame` не містить ключів `archi_*` (новий тест); overlay endpoint 200 з тими самими числами, що раніше в кадрі (порівняння на одному snapshot) |
 | **S4** Config SSOT | `config.json`: секція `agent_bridge` (§3.6); top-level `wake_engine`/`agent_console` знято; резолвер `runtime/agent_bridge/config.py` + `APP_AGENT_BRIDGE_CFG`; новий CI exit-gate `platform_config_no_agent_keys` (top-level ключі `archi\|agent\|wake\|thesis\|narrative\|presence` заборонені, крім `agent_bridge`); `gate_adr_config_sync`: `agent_bridge*` → ADR-0090/0049, три форми статусу, схема імен `ADR-NNNN-*` | ≈150 з тестами | `run_exit_gates` (обидва маніфести) + `pytest tests/test_agent_bridge_config.py` зелені; ws_server стартує без секції `agent_bridge` |
@@ -153,6 +153,19 @@ trader-v3 (smc_trader_v3, окремий program)  ◄──► Redis IPC (wake:
   Binance вимкнено — ADR-0054 rev 2 §3.0). `smc-agent-bridge` — **окремий** program у власному conf-файлі.
 - `restart smc:smc-ws` не чіпає bridge і бота; `restart smc-agent-bridge` не чіпає графік. Бот перезапускається
   лише своїми `ops/archi-on|off`.
+
+**Деплой S1 на VPS (після go; поки Арчі OFF — bridge може лишатись вимкненим):**
+
+1. `git pull` (S4+S1) → `sudo supervisorctl restart smc:smc-ws` — консоль зникає з `:8000` (лог `AGENT_BRIDGE_DISABLED`).
+2. `sudo cp tools/agent-bridge.supervisor.conf /etc/supervisor/conf.d/agent-bridge.conf`; у `environment=` цього файлу
+   виставити `AI_ONE_AGENT_BRIDGE_ENABLED="1"` (коли потрібна консоль) і `ARCHI_AUTH_TOKEN="…"` (перенести зі
+   `smc-ws`, потім прибрати звідти); `sudo supervisorctl reread && sudo supervisorctl update`.
+3. Smoke: `curl -s 127.0.0.1:8010/api/bridge/health`; `curl -s 127.0.0.1:8010/api/agent/state` → 401; з Bearer → 200/204.
+4. nginx (backup у `/root/` спершу): `sites-enabled/archi` і `sites-enabled/gorn` — `proxy_pass` для `/api/archi/` та
+   `/api/agent/` → `http://127.0.0.1:8010/...`; `/api/public/` (gorn) лишити на `:8000` до переїзду WIP;
+   `sudo nginx -t && sudo systemctl reload nginx`; origin-smoke `curl -sk --resolve archi.aione-smc.com:443:127.0.0.1 https://archi.aione-smc.com/api/agent/state` → 401.
+5. Observation 60 с (ADR-0060 D9.1): `supervisorctl status smc-agent-bridge smc:smc-ws`, `tail -n 50 /var/log/smc-v3/agent_bridge.stderr.log`.
+6. Rollback: nginx backup назад + `sudo supervisorctl stop smc-agent-bridge`; платформа — `git checkout c4b300e -- .` + restart smc:smc-ws.
 
 ### 3.5 Що лишається в платформі і чому
 
@@ -242,7 +255,7 @@ trader-v3 (smc_trader_v3, окремий program)  ◄──► Redis IPC (wake:
 | Слайс | Команда/перевірка | Очікувано |
 |---|---|---|
 | S4 | `python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.ci.json` (гейт `platform_config_no_agent_keys`); `pytest tests/test_agent_bridge_config.py` | 0 top-level agent-ключів; гейти ok; 18 тестів |
-| S1 | `grep -cE "/api/(archi\|agent\|public)" runtime/ws/ws_server.py`; bridge `curl :8010/api/archi/now` | 0; 200 з bearer, 401 без |
+| S1 | `grep -cE "/api/(archi\|agent)" runtime/ws/ws_server.py` (закомічене дерево; WIP додає лише `/api/public`); `pytest tests/test_agent_bridge_app.py tests/test_ws_server_no_agent_surface.py`; живий процес `python -m runtime.agent_bridge --port 8011` + `curl /api/bridge/health`, `/api/archi/now` | 0; 12 тестів; health 200, 401 без bearer / 200 з |
 | S2 | лог bridge `WAKE_EVENT`, Redis `LLEN wake:events` росте; ws_server лог без `WakeEngine` | подія ≤5 с після умови |
 | S3 | `python -c` build_full_frame → keys | нема `archi_*`; overlay 200 |
 | S5 | `run_exit_gates` (`ui_no_direct_redis` без винятку); `pytest tests/agent_bridge` | ok |
@@ -293,3 +306,9 @@ trader-v3 (smc_trader_v3, окремий program)  ◄──► Redis IPC (wake:
   (4) `tools/check_config.py` — бот-скрипт для `/opt/smc-trader-v3/config.json` (кандидат S5), тому перевірка
   top-level ключів = CI exit-gate `platform_config_no_agent_keys`. Рев'ю: workflow 3 лінзи + верифікатори,
   5 підтверджених S3 (усі виправлено), 8 спростовано як pre-existing/поза патчем.
+- 2026-09-06: S1 виконано move-only (амендовано §3.1 S1, §3.4 деплой, §6). Відхилення від плану:
+  (1) `public_snapshot.py` не переносився — untracked WIP ADR-0086, маунт лишається в ws_server із
+  `_console_data_dir`; (2) ціна `/api/archi/now` — Redis `tick:last` замість SmcRunner (bridge = окремий
+  процес; tick mid замість M1 close, поза сесією `price_unavailable`); (3) ws_server лишає Redis-клієнт для
+  `/api/v3`; (4) додано `GET /api/bridge/health` без auth для smoke/supervisor; (5) `_read_thinking_records`
+  → `thinking_archive.read_thinking_records`. Рев'ю: workflow 4 лінзи + адверсарні верифікатори (23 агенти) — 12 підтверджених (S2: supervisor класифікує exit до startsecs як failed start → BACKOFF→FATAL; тому вимкнений bridge лишається RUNNING лише з health; решта S3 — семантика ціни в docs, застарілі коментарі, мертвий local у закоміченому дереві, runbook 502), усе виправлено; 7 спростовано як pre-existing/поза патчем.

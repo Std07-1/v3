@@ -1,6 +1,6 @@
 """Unit tests for rotation-aware thinking-archive reader (C1).
 
-Covers the pure helper ``runtime.ws.ws_server._read_thinking_records`` that
+Covers the pure helper ``runtime.agent_bridge.thinking_archive.read_thinking_records`` that
 backs ``GET /api/archi/thinking``. The single-file reader broke on 2026-07-07
 when the archive first rotated (5 MB -> ``v3_thinking_archive_*.jsonl``): the
 UI showed only the 2 records in the fresh live file instead of months of
@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from runtime.ws.ws_server import _read_thinking_records
+from runtime.agent_bridge.thinking_archive import read_thinking_records as _read_thinking_records
 
 
 def _write_jsonl(path: Path, records: list[dict]) -> None:

@@ -1,7 +1,7 @@
 /**
  * Контракт «Очі Арчі» — wire-типи read-side спостережуваності агента.
  *
- * SSOT сервера: runtime/ws/wake_cards.py (join wake_log + trace + thinking) та
+ * SSOT сервера: runtime/agent_bridge/wake_cards.py (join wake_log + trace + thinking) та
  * /api/archi/now (presence + directives + thesis + armed). Фронт = dumb renderer
  * (X28): показує value як є, домен (category/alert/Δ/delta_pct/thesis-age/stale)
  * рахує бекенд. УСІ enrichment-поля тут optional — старі wakes не мають

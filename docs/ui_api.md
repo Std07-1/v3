@@ -561,9 +561,10 @@ Default fallback: 300 барів (`DEFAULT_COLD_START_BARS`).
 ## 11. Agent adapter API (agent_bridge, ADR-0090)
 
 Ендпоінти для підключеного AI-клієнта та його вебінтерфейсу (`ui_archi/`). Не є частиною
-публічної поверхні платформи: за ADR-0090 вони переїжджають у окремий процес
-`runtime/agent_bridge/` (off за замовчуванням); до завершення слайсу S1 їх обслуговує
-`ws_server.py` на приватному hostname. Всі потребують Bearer token auth:
+публічної поверхні платформи: їх обслуговує окремий процес `smc-agent-bridge`
+(`runtime/agent_bridge/`, 127.0.0.1:8010, ADR-0090 S1), куди nginx приватних hostname'ів
+проксює `/api/archi/*` і `/api/agent/*`; `ws_server` (:8000) цих маршрутів не має.
+Health без auth: `GET /api/bridge/health`. Решта потребує Bearer token auth:
 
 ```
 Authorization: Bearer <token з env-змінної, ім'я = config.json:agent_bridge.console.auth_token_env (default ARCHI_AUTH_TOKEN)>
@@ -661,7 +662,7 @@ GET /api/archi/wakes?limit=30&before_ts=<ts>
 ### GET /api/archi/now (ADR-0088)
 
 Серверний знімок «стан зараз»: presence (`agent:state`) + директиви (файл) + теза (Redis) +
-ціна (`SmcRunner.get_last_price`, I1) + армовані рівні з СЕРВЕРНИМИ `delta`/`delta_pct` (X28).
+ціна (Redis `tick:last` — той самий ключ, що `/api/context`; TTL ~30 с) + армовані рівні з СЕРВЕРНИМИ `delta`/`delta_pct` (X28).
 Недоступне джерело → поле `null` + запис у `degraded[]`, HTTP **200** (I5).
 
 ```
@@ -707,7 +708,7 @@ GET /api/archi/now?symbol=XAU/USD
 
 | Поле | Опис |
 |---|---|
-| `price` | current price або `null` (немає символу/раннера) |
+| `price` | current price або `null` (немає символу / `tick:last` відсутній чи протух — поза торговою сесією; тоді `degraded` містить `price_unavailable`, `armed[].delta` = null) |
 | `stale` | `true` якщо `agent:state.ts_ms` старіший за 15 хв АБО `agent:state` відсутній зовсім (TTL 6h минув на мертвому боті) — «бот точно не свіжий» |
 | `state` | `agent:state` HASH (str→str) або `null` |
 | `directives` | whitelist «стану зараз» (приватна історія/reasoning не проходять) |
@@ -715,6 +716,6 @@ GET /api/archi/now?symbol=XAU/USD
 | `armed[]` | армовані рівні (watch + wake_conditions), найближчі до ціни першими; `delta`/`delta_pct` рахує сервер (X28) |
 | `degraded[]` | причини часткової деградації: `data_dir_not_configured`, `redis_not_configured`, `state_unavailable`, `state_no_data`, `state_stale`, `thesis_unavailable`, `price_unavailable`, `symbol_unknown`, `directives_unavailable` |
 
-> SSOT код: `runtime/ws/ws_server.py` (agent endpoints), `runtime/ws/wake_cards.py` (pure
+> SSOT код: `runtime/agent_bridge/routes_console.py`, `routes_ochi.py` (endpoints), `runtime/agent_bridge/wake_cards.py` (pure
 > джойн — ADR-0088), `ui_archi/src/lib/api.ts` (client).
 > Деталі: `trader-v3/docs/adr/ADR-025-archi-console.md`, `docs/adr/ADR-0088-ochi-archi-wake-observability.md`.

@@ -1,6 +1,6 @@
 """Unit tests для «Очі Арчі» read-side helpers (ADR-0088).
 
-Покриває pure-ядро ``runtime.ws.wake_cards`` що бек-ендить два endpoint-и:
+Покриває pure-ядро ``runtime.agent_bridge.wake_cards`` що бек-ендить два endpoint-и:
 ``GET /api/archi/wakes`` (кіноплівка пробуджень) та ``GET /api/archi/now``
 (стан зараз). Джойн трьох джерел трейдера у ГОТОВІ картки — UI = dumb renderer
 (X28). Усі шляхи pure (tmp-dir фікстури, без aiohttp / Redis).
@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from runtime.ws.wake_cards import (
+from runtime.agent_bridge.wake_cards import (
     STATE_STALE_MS,
     build_now_view,
     categorize_wake,
@@ -301,7 +301,7 @@ def test_coercion_absence_is_silent_garbage_is_logged(caplog) -> None:
     поля в директивах); нечислове сміття → None + DEBUG (контракт-дрейф видимий)."""
     import logging
 
-    from runtime.ws.wake_cards import _to_float, _to_int
+    from runtime.agent_bridge.wake_cards import _to_float, _to_int
 
     with caplog.at_level(logging.DEBUG, logger="wake_cards"):
         assert _to_float(None) is None and _to_float("") is None

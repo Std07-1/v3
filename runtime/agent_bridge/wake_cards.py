@@ -1,4 +1,4 @@
-"""runtime.ws.wake_cards — «Очі Арчі»: read-side складання спостережуваності агента.
+"""runtime.agent_bridge.wake_cards — «Очі Арчі»: read-side складання спостережуваності агента.
 
 Платформа джойнить приватні джерела трейдера Арчі (data_dir консолі) у ГОТОВІ картки
 для SPA «Очі Арчі» — UI лишається dumb renderer (X28): фронт нічого не перераховує,
@@ -29,7 +29,7 @@ from typing import Any, Optional
 
 _log = logging.getLogger("wake_cards")
 
-# ── Файли-джерела (пишуться зовнішнім клієнтом у agent_bridge.data_dir, ADR-0090) ──────────────
+# ── Файли-джерела (пишуться зовнішнім клієнтом у agent_bridge.data_dir; читає процес bridge, ADR-0090 S1) ──────────────
 WAKE_LOG_FILE = "v3_wake_log.jsonl"  # SSOT списку пробуджень (trader-v3 wake_log.py)
 WAKE_TRACE_FILE = "v3_wake_trace.jsonl"  # durable дзеркало пробудження (trader-v3 ADR-097)
 

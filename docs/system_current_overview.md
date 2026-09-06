@@ -928,8 +928,9 @@ non_critical:  5s → 10s → 20s → 40s → 80s → 120s → 120s → 120s →
 `smc`, окремий unix-user — ADR-0091). Вимкнено за замовчуванням (`agent_bridge.enabled=false`);
 без нього платформа працює повністю.
 
-**Стан міграції**: до завершення слайсів S1–S3 ці ендпоінти ще обслуговує `ws_server.py`
-(Bearer auth, приватний hostname). Перелік і контракти — `docs/ui_api.md` §11; план слайсів —
+**Стан міграції**: S1 виконано — HTTP-маршрути консолі/«Очей» обслуговує `smc-agent-bridge`
+(:8010, `python -m runtime.agent_bridge`; Bearer auth, приватний hostname); WakeEngine (S2) і
+thesis-overlay у кадрі (S3) ще в `ws_server.py`. Перелік і контракти — `docs/ui_api.md` §11; план слайсів —
 ADR-0090 §3.
 
 > Деталі клієнта (views, транспорт, Redis IPC) — у його репозиторії: `trader-v3/docs/`.

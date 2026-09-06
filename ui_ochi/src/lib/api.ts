@@ -1,7 +1,7 @@
 /**
  * API-клієнт «Очі Арчі». Bearer-токен з localStorage під тим самим ключем, що
  * ui_archi_v2 (`archi_token`) — обидві консолі шерять один токен (той самий
- * серверний auth-контур _archi_auth). Ендпоінти read-only: /api/archi/now,
+ * серверний auth-контур bridge, ADR-0076 check_bearer). Ендпоінти read-only: /api/archi/now,
  * /api/archi/wakes. Помилки — loud (кидаємо ApiError), стори вирішують degraded.
  */
 

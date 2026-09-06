@@ -230,6 +230,10 @@ server {
 3. Перевірити логи: `logs/ws_server.err.log`, `logs/m1_poller.err.log`
 4. Перевірити restart-loop: `grep SUPERVISOR_RESTART logs/*.log`
 5. Для CF-only ingress перевірити firewall: `sudo ufw status numbered`
+5a. Для Archi/gorn (ADR-0090 S1): `/api/archi/*` і `/api/agent/*` проксюються на `127.0.0.1:8010` = program
+    `smc-agent-bridge` (поза `[group:smc]`): `sudo supervisorctl status smc-agent-bridge`,
+    `curl -s 127.0.0.1:8010/api/bridge/health` (`enabled:false` = вимкнено env-перемикачем, маршрути 404),
+    `grep -E 'AGENT_BRIDGE' /var/log/smc-v3/agent_bridge.stdout.log | tail`
 6. Для Archi перевірити origin без Cloudflare: `curl -sk --resolve archi.aione-smc.com:443:127.0.0.1 https://archi.aione-smc.com/`
 
 **Типові причини**:
@@ -240,6 +244,7 @@ server {
 - UI видалено з пулу після 10 restart-спроб (SUPERVISOR_EXHAUSTED)
 - Неповний Cloudflare allowlist у host firewall (`80/443`)
 - Для Archi: відсутній nginx proxy для `/api/agent/`
+- Для Archi: `smc-agent-bridge` не запущений або вимкнений (`AI_ONE_AGENT_BRIDGE_ENABLED` не `1` у його supervisor-conf)
 
 **Рішення**: Перезапустити `python -m app.main --mode all`.
 
@@ -248,6 +253,8 @@ server {
 1. Додати відсутні Cloudflare ranges у UFW для `80/tcp` і `443/tcp`
 2. Переконатись, що Archi nginx proxy covers both `/api/archi/` і `/api/agent/`
 3. Перезавантажити nginx: `sudo nginx -t ; sudo systemctl reload nginx`
+4. Bridge: у `/etc/supervisor/conf.d/agent-bridge.conf` виставити `AI_ONE_AGENT_BRIDGE_ENABLED="1"` + `ARCHI_AUTH_TOKEN`,
+   `sudo supervisorctl reread && sudo supervisorctl update && sudo supervisorctl restart smc-agent-bridge` — не `app.main`
 
 ---
 
