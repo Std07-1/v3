@@ -186,3 +186,6 @@ _tail*.txt
 .claude/
 
 ui_ochi/dist/
+
+# Cloudflare wrangler cache (kidlock tooling, not platform)
+.wrangler/
