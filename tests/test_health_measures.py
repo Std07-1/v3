@@ -207,3 +207,12 @@ def test_real_data_defects_stay_red():
     casc = measure_cascade([m3_copy_of_first], src, target_tf_ms=180_000, source_tf_ms=M1_MS, anchor_offsets_ms=[0])
     assert casc.mismatched == 1
     assert grade_symbol_tf(cascade=casc).grade == "RED"
+
+
+def test_age_survives_a_weekend_gap():
+    """У неділю останній торговий M1-бакет лежить ~2600 бакетів позаду: age має рахуватись."""
+    friday_close = BASE
+    weekend = lambda ms: ms <= friday_close  # noqa: E731
+    now = friday_close + 3 * 24 * 60 * M1_MS  # три доби потому
+    a = measure_age([friday_close], now_ms=now, tf_ms=M1_MS, anchor_offset_ms=0, is_trading_fn=weekend)
+    assert a.age_buckets == 0, "ринок закритий — відставання нульове, а не None"

@@ -26,6 +26,9 @@ from core.model.bars import CandleBar
 
 IsTradingFn = Callable[[int], bool]
 
+# Скільки бакетів назад шукаємо останній торговий: 2 тижні M1 (довгі вихідні + свята).
+MAX_BACKWARD_PROBES = 20_160
+
 
 @dataclasses.dataclass(frozen=True)
 class AgeResult:
@@ -138,8 +141,10 @@ def measure_age(
     current_open = bucket_start_ms(now_ms, tf_ms, anchor_offset_ms)
     expected = None
     probe = current_open - tf_ms
-    # Останній ЗАКРИТИЙ торговий бакет: поточний ще формується.
-    for _ in range(512):
+    # Останній ЗАКРИТИЙ торговий бакет: поточний ще формується. Ліміт має покривати
+    # вихідні: у неділю останній торговий M1-бакет лежить ~2600 бакетів позаду, тож
+    # маленьке вікно давало age=None (не «свіжо», а «не змогли порахувати»).
+    for _ in range(MAX_BACKWARD_PROBES):
         if probe <= last_open:
             expected = last_open
             break
