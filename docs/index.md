@@ -111,14 +111,14 @@
 | `ui_v4/src/chart/overlay/DisplayBudget.ts` | Display budget filter (ADR-0028) |
 | **[trader_coverage.md](trader_coverage.md)** | **Трейдерські концепти → ADR → Модуль** — карта захисту (що читати перед зміною будь-якого SMC-компонента) |
 
-### 6. Agent Console — ui_archi (trader-v3)
+### 6. Зовнішні клієнти — опційний адаптер (agent_bridge, ADR-0090)
 
 | Документ | Зміст |
 |---|---|
-| [system_current_overview.md § Agent Console](system_current_overview.md#agent-console--ui_archi-adr-025-trader-v3) | Архітектура, views, транспорт |
-| [ui_api.md § Agent Console API](ui_api.md#11-agent-console-api-ui_archi-adr-025) | HTTP + SSE endpoints, Bearer auth |
-| `trader-v3/docs/adr/ADR-025-archi-console.md` | ADR: problem, architecture, views, API contracts, implementation plan |
-| `ui_archi/` | SPA: Svelte 5 + Vite + TypeScript (Feed, Chat, Mind, Relationship, Logs) |
+| [ADR-0090](adr/ADR-0090-platform-first-agent-bridge.md) | Рішення: платформа = тіло без мозку; агентні ендпоінти → окремий процес `runtime/agent_bridge/` (off за замовчуванням) |
+| [system_current_overview.md § Зовнішні клієнти](system_current_overview.md#зовнішні-клієнти--опційний-адаптер-agent_bridge-adr-0090) | Топологія: що лишається в ws_server, що переїжджає |
+| [ui_api.md § Agent adapter API](ui_api.md#11-agent-adapter-api-agent_bridge-adr-0090) | HTTP + SSE endpoints адаптера, Bearer auth |
+| `trader-v3/docs/` | Правила, стан і ADR самого клієнта (окремий репозиторій) |
 
 ### 7. Runbooks (експлуатація)
 

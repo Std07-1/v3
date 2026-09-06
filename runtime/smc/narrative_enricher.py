@@ -1,22 +1,22 @@
 """
-runtime/smc/narrative_enricher.py вЂ” Thesis + Presence injection into wire frame (ADR-0049 P5).
+runtime/smc/narrative_enricher.py — Thesis + Presence injection into wire frame (ADR-0049 P5).
 
-Reads Archi's thesis from Redis cache (written by bot after each Sonnet analysis).
-Injects into wire frame narrative alongside PresenceStatus from WakeEngine.
+Reads an external client's thesis from the Redis cache (written by the connected agent
+after its own analysis) and injects it into the wire-frame narrative alongside the
+PresenceStatus from WakeEngine.
 
-This creates the "premium analytics" layer that no one knows is AI-driven:
-  - Thesis: "Р–РґСѓ sweep PDL 4650 в†’ reaction С–Р· London killzone"
-  - Conviction: "high"
-  - Key level: "PDL 4650"
-  - Invalidation: "Break above 4730"
-  - Presence: "watching", accumulator score, next possible wake
+Fields carried: thesis text, conviction, key level, invalidation, presence state,
+accumulator score, next possible wake.
+
+Status: agent-specific overlay. Per ADR-0090 S3 it moves out of the frame into the
+optional agent bridge (GET /api/agent/overlay); until then it stays read-only here.
 
 Invariants:
-  - I7: NarrativeEnricher READS thesis, NEVER writes. Bot = author.
+  - Read-only: NarrativeEnricher READS the thesis, NEVER writes. The client is the author.
   - S1: read-only, does NOT write to UDS.
   - K2: Redis ops via run_in_executor (non-blocking).
 
-Pattern: same as WakeEngine Redis reads вЂ” sync calls via executor.
+Pattern: same as WakeEngine Redis reads — sync calls via executor.
 """
 from __future__ import annotations
 

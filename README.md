@@ -4,23 +4,24 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 
-![AI·ONE v3 — live XAU/USD M15 chart with SMC markup (FVG, BOS, CHoCH, EQH) and Archi's autonomous market thesis](docs/assets/hero.png)
+![AI·ONE v3 — live XAU/USD M15 chart with SMC markup (FVG, BOS, CHoCH, EQH, premium/discount); the annotation card is an external client's thesis delivered through the read-only API](docs/assets/hero.png)
 
 **Real-time Smart Money Concepts (SMC) analytics for gold, indices and crypto** — a
-broker-grade data pipeline (FXCM / Binance) feeding a live WebSocket chart, wired over
-Redis to **Archi**, an autonomous Claude trading agent that reasons, remembers, and
-decides for itself.
+broker-grade data pipeline (FXCM / Binance) feeding a live WebSocket chart, with a
+read-only HTTP/WS API that any external client — a dashboard, a research notebook, or
+an AI agent — can connect to and read.
 
 **▶ Live: [aione-smc.com](https://aione-smc.com/)**
 
-### Why it isn't just another trading bot
+### What it is
 
-- **Autonomy-first AI agent** — Archi sets its own wake conditions, runs a 7-layer
-  memory, writes its own market thesis, and is *never silently overridden*. Code
-  advises; the agent decides (constitutional invariant **I7**).
+- **A trading platform, not a bot.** It ingests broker data, keeps a single source of
+  truth, computes SMC structure and serves a live chart. It never places orders and never
+  fabricates signals. External clients — including AI agents — connect to it and *read*
+  (ADR-0058, ADR-0090); their reasoning is not part of the platform.
 - **Hard data invariants** — a single `UnifiedDataStore` write-center, `Final > Preview`,
   degraded-but-loud (no silent fallbacks). Every non-trivial decision is captured in
-  **47+ ADRs**.
+  **90+ ADRs**.
 - **$0 analytics** — SMC structure (BOS / CHoCH), order blocks, FVG, liquidity,
   premium/discount and confluence scoring are computed **in-process** — no paid
   signal feeds.
@@ -39,42 +40,23 @@ decides for itself.
 A "data → analytics/SMC → UI → trading interaction" platform built on hard invariants,
 with the **UnifiedDataStore (UDS)** as the single write-center.
 
-## Meet Archi — the autonomous agent
+## External clients
 
-Archi (Арчі) is not a strategy script. It's a single-personality AI agent built on the
-Claude API that watches the market, forms its own thesis, and decides when — and whether —
-to act. It lives in its own repository
-([Std07-1/smc-trader-v3](https://github.com/Std07-1/smc-trader-v3)) and talks to this
-platform over Redis, HTTP and WebSocket. The platform is the **body** (eyes, price,
-structure, chart); Archi is the **mind**.
+The platform is client-agnostic: anything that speaks HTTP or WebSocket can read it.
 
-What sets it apart from a trading bot:
+- **Read-only public API** (ADR-0058) — five `GET /api/v3/*` endpoints behind an API key:
+  bars, SMC snapshot, status. Rate-limited, no write path.
+- **Live WebSocket** — the same `full` / `delta` frames the chart renders, for any
+  same-origin consumer.
+- **Optional agent bridge** (ADR-0090) — a separate, off-by-default process for a
+  connected AI agent (wake conditions, thesis overlay). It runs beside the platform,
+  not inside it, and the platform does not depend on it.
 
-- **It decides; code only advises (invariant I7).** No hidden cooldown, forced model
-  downgrade, or suppressed message may override Archi. If the system needs to constrain
-  it, it must *say so, out loud, in Archi's context* — silent control is a constitutional
-  violation. The only hard stops are the kill switch, a daily budget cap, and an
-  anti-hallucination guard.
-- **It schedules its own attention.** Instead of a fixed timer, Archi tells the platform
-  *"wake me when price crosses 4199, when London opens, or after 4h of silence"*
-  (wake conditions, ADR-034). The platform's WakeEngine checks those every 2 s for $0 —
-  Archi only spends a model call when something it cares about actually happens.
-- **It remembers.** Seven memory systems — conversation, agent journal, knowledge base,
-  learning journal, per-symbol profile, forecasts, and live directives — plus an extended
-  "thinking archive." An overnight curator (ADR-050) consolidates each day's experience
-  into lessons, the way a disciplined trader reviews their own trades.
-- **It runs on a budget.** Three model tiers (Haiku / Sonnet / Opus), prompt caching with
-  identity as a stable prefix (ADR-061), and self-chosen cognitive depth keep it at a few
-  dollars a *month*, not a few dollars a *call*.
-
-Archi's live reasoning, straight off the chart above:
-
-> *D1/H4 bearish cascade intact (BOS BEAR 4267.95). H1 CHoCH BULL @ 4112.67 = corrective
-> phase. Iran peace deal confirmed = geo-premium exit = SHORT catalyst. Price closed 4210.
-> Waiting for Monday's London killzone.* — watching · 8 conditions armed.
-
-Neither side hands trading decisions to the other: the platform never fabricates signals,
-and Archi is never silently steered.
+One such client is an autonomous trading agent kept in its own repository
+([Std07-1/smc-trader-v3](https://github.com/Std07-1/smc-trader-v3)). Its rules,
+personality and decisions live there; this repository documents only the read-only
+surface it consumes. Neither side hands trading decisions to the other: the platform
+never fabricates signals, and no client can steer what the chart shows.
 
 ## Architecture: A → C → B
 
@@ -240,12 +222,12 @@ Full documentation: **[docs/index.md](docs/index.md)** — single entry point.
 
 In active development since **14 October 2024** — it began as the AiOne-t crypto
 screener, evolved through SMC analytics engines (AiOne_t v2/v3, smc_v1) and FXCM
-connectors, and became this real-time platform and the Archi agent (Archi's first
-boot: 30 March 2026).
+connectors, and became this real-time platform. Its first external AI client was
+connected on 30 March 2026 (kept in a separate repository).
 
 ## Contact
 
-Channel (live SMC analysis from Archi): [@smc_v3](https://t.me/smc_v3) · GitHub: [@Std07-1](https://github.com/Std07-1)
+Channel (SMC market commentary): [@smc_v3](https://t.me/smc_v3) · GitHub: [@Std07-1](https://github.com/Std07-1)
 
 ## License
 

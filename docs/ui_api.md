@@ -27,7 +27,7 @@ UDS ініціалізується з `role="reader"` — будь-яка спр
 8. [Guards та rails](#8-guards-та-rails)
 9. [Конфігурація](#9-конфігурація)
 10. [Reconnect та відмовостійкість](#10-reconnect-та-відмовостійкість)
-11. [Agent Console API (ui_archi)](#11-agent-console-api-ui_archi-adr-025)
+11. [Agent adapter API (agent_bridge)](#11-agent-adapter-api-agent_bridge-adr-0090)
 
 ---
 
@@ -558,12 +558,18 @@ Default fallback: 300 барів (`DEFAULT_COLD_START_BARS`).
 
 ---
 
-## 11. Agent Console API (ui_archi, ADR-025)
+## 11. Agent adapter API (agent_bridge, ADR-0090)
 
-Ендпоінти для Archi Console (ui_archi). Всі потребують Bearer token auth:
+Ендпоінти для підключеного AI-клієнта та його вебінтерфейсу (`ui_archi/`). Не є частиною
+публічної поверхні платформи: за ADR-0090 вони переїжджають у окремий процес
+`runtime/agent_bridge/` (off за замовчуванням); до завершення слайсу S1 їх обслуговує
+`ws_server.py` на приватному hostname. Всі потребують Bearer token auth:
+
 ```
-Authorization: Bearer <token з config.json:archi_console.auth_token>
+Authorization: Bearer <token з config.json:agent_console.auth_token>
 ```
+
+> Після ADR-0090 S4 ключ переїжджає в `config.json:agent_bridge.auth_token`.
 
 ### HTTP Endpoints
 

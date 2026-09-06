@@ -10,7 +10,7 @@
 
 Прочитай ці файли **повністю** на початку кожної сесії:
 
-1. **`.github/copilot-instructions.md`** — SSOT правил для всіх агентів. Інваріанти I0–I7,
+1. **`.github/copilot-instructions.md`** — SSOT правил для всіх агентів. Інваріанти I0–I6,
    severities S0–S6, заборони X1–X33, ADR workflow, role routing, evidence markers.
    **Ці правила діють і для тебе. Ти не виключення.**
 2. **`AGENTS.md`** — системний довідник: структура проекту, build/run, dual-venv (Python
@@ -93,14 +93,12 @@
 - Trader-v3 = self-contained subsystem. Має власні ADR, docs, config.
 - Якщо зміна Арчі вимагає platform feature → окремий v3 ADR з platform perspective.
 
-### P5. `trader-v3/` Autonomy-First (I7, ADR-024)
+### P5. `trader-v3/` — окрема підсистема зі своїми правилами (ADR-0090)
 
-- Арчі = автономний AI-агент. Код = **advisory + explain**, рішення приймає Арчі.
-- **Заборонено**: hard block (cooldown, force model downgrade, suppress, timer re-injection)
-  без safety justification
-- **Дозволені** hard blocks: kill switch, daily $ hard cap, owner-only, anti-hallucination
-- Прийоми типу `if blocked: return` без пояснення Арчі = I7 violation
-- Перед PATCH в `trader-v3/` — прочитай `trader-v3/docs/adr/ADR-024-autonomy-charter.md`
+- Правила бота (autonomy I7, hard-block policy, особистість) живуть у
+  `trader-v3/docs/adr/ADR-024-autonomy-charter.md`. Платформа їх не дублює.
+- Platform-код не читає і не пише файли/стан бота поза `runtime/agent_bridge/` (X40).
+- Перед PATCH всередині `trader-v3/` — прочитай ADR-024 там.
 
 ### P6. UDS = вузька талія (I1)
 
@@ -148,7 +146,7 @@
 
 - Fix point (один)
 - SSOT routing (де живе істина)
-- I0–I7 check (нічого не порушив?)
+- I0–I6 check (нічого не порушив?)
 - Alternatives ≥2 (чому саме цей варіант)
 - Blast radius (хто ще зачеплений)
 
@@ -181,7 +179,7 @@
 
 Зупиняйся і **НЕ** додавай нові фічі, якщо:
 
-- Порушені інваріанти I0–I7
+- Порушені інваріанти I0–I6
 - З'явився split-brain (два джерела істини)
 - З'явився silent fallback
 - Зміна торкається контрактів/даних без ADR + rollback

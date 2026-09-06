@@ -20,7 +20,7 @@
 9. [UI Render Pipeline](#ui-render-pipeline--повний-потік-даних-ui_v4-ws-only)
 10. [Annotated tree](#annotated-tree-ascii-актуальний)
 11. [Stop-rules та режими](#stop-rules-та-режими)
-12. [Agent Console — ui_archi](#agent-console--ui_archi-adr-025-trader-v3)
+12. [Зовнішні клієнти — опційний адаптер](#зовнішні-клієнти--опційний-адаптер-agent_bridge-adr-0090)
 
 ---
 
@@ -916,29 +916,23 @@ non_critical:  5s → 10s → 20s → 40s → 80s → 120s → 120s → 120s →
 7. `scrollback` action → `to_ms` → UDS `read_window` → `scrollback` frame.
 8. `heartbeat` кожні 30с.
 
-## Agent Console — ui_archi (ADR-025, trader-v3)
+## Зовнішні клієнти — опційний адаптер (agent_bridge, ADR-0090)
 
-Окрема SPA для моніторингу AI-агента Арчі (trader-v3). Розгорнута на `archi.aione-smc.com` (Cloudflare Access).
+Платформа client-agnostic: будь-який зовнішній читач (дашборд, ноутбук, AI-агент) споживає
+`/ws`, `/api/status`, `/api/context` і read-only `/api/v3/*` (ADR-0058). Логіка, стан і правила
+клієнта живуть у його власному репозиторії; платформа їх не містить і від них не залежить.
 
-**Стек**: Svelte 5 (runes) + Vite + TypeScript. Окрема директорія `ui_archi/`, збирається в `ui_archi/dist/`.
+**Agent bridge** (ADR-0090): агент-специфічні ендпоінти (`/api/archi/*`, `/api/agent/*`, SSE
+`/api/notif-stream`, `/api/archi/stream`), WakeEngine і thesis-overlay виносяться з `ws_server.py`
+в окремий процес `runtime/agent_bridge/` (127.0.0.1:8010, окремий supervisor program поза групою
+`smc`, окремий unix-user — ADR-0091). Вимкнено за замовчуванням (`agent_bridge.enabled=false`);
+без нього платформа працює повністю.
 
-**Транспорт**: HTTP API (`/api/archi/*`, `/api/agent/*`) + SSE (`/api/notif-stream`, `/api/archi/stream`). Bearer token auth. Ендпоінти живуть у `ws_server.py` (port 8000, same-origin з ui_v4).
+**Стан міграції**: до завершення слайсів S1–S3 ці ендпоінти ще обслуговує `ws_server.py`
+(Bearer auth, приватний hostname). Перелік і контракти — `docs/ui_api.md` §11; план слайсів —
+ADR-0090 §3.
 
-**Views**:
-
-| View | Що показує |
-|------|-----------|
-| Feed | Стрічка подій агента (аналіз, сигнали, алерти, торги, системні). Фільтри по типу + текстовий пошук |
-| Chat | Двосторонній чат з Арчі (web → Redis IPC → bot). Контекстні quick-actions що адаптуються до стану ринку |
-| Mind | Робоча пам'ять агента: inner_thought, scratchpad, watch_levels, mental_model, metacognition |
-| Relationship | Стан відносин owner↔agent, memo, mood |
-| Logs | Лог-переглядач бота |
-
-**Сповіщення**: Browser Push Notifications через SSE `/api/notif-stream` (тільки `importance ≥ 3`, коли `document.hidden`).
-
-**Bot integration** (trader-v3): `web_inbox.py` — Redis IPC consumer для web-повідомлень. `handlers.py:_sync_to_redis_chat()` — sync TG→Redis для ui_archi.
-
-> Деталі: `trader-v3/docs/adr/ADR-025-archi-console.md`, `ui_archi/README_DEV.md`
+> Деталі клієнта (views, транспорт, Redis IPC) — у його репозиторії: `trader-v3/docs/`.
 
 ---
 

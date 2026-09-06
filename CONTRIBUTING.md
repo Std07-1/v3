@@ -4,16 +4,16 @@ Thanks for your interest. This is an opinionated, invariant-driven platform — 
 sharp contributions that respect the architecture are very welcome; large unscoped
 rewrites are not.
 
-> **Status**: actively developed, AI-native. Much of the code is written by AI agents
+> **Status**: actively developed. Much of the code is written with AI coding assistants
 > under strict governance (see [`.github/`](.github/)). The same rules apply to every
-> contributor, human or agent.
+> contributor, human or assistant.
 
 ## Read first
 
 Before changing anything, read — in order:
 
 1. [`.github/copilot-instructions.md`](.github/copilot-instructions.md) — the SSOT for all
-   rules: invariants `I0–I7`, severities `S0–S6`, the ADR workflow, evidence markers.
+   rules: invariants `I0–I6`, severities `S0–S6`, the ADR workflow, evidence markers.
 2. [`AGENTS.md`](AGENTS.md) — project structure, build/run, dual-venv, test inventory.
 3. [`docs/adr/index.md`](docs/adr/index.md) — every non-trivial decision already made.
    Don't re-invent what's already decided; supersede with a new ADR instead.
@@ -25,8 +25,6 @@ A change that breaks any of these will be rejected:
 - **I1 — UDS is the single write-center.** All OHLCV writes/reads go through
   `runtime/store/uds.py`. No parallel writers, no direct Redis writes from the UI.
 - **I3 — Final > Preview.** `complete=true` always wins; one key has exactly one final source.
-- **I7 — Autonomy-first (Archi).** Code advises; the agent decides. No silent cooldown,
-  forced downgrade, or suppressed message.
 - **Degraded-but-loud.** No silent fallbacks — surface `warnings[]` / `meta.degraded[]`.
   `except: pass` is forbidden.
 - **Frontend is a dumb renderer.** No domain recompute (grade, bias, phase) in the UI.

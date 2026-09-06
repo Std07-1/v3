@@ -28,7 +28,8 @@ If you discover a security vulnerability in Trading Platform v3, please report i
 
 ## Security Design Principles
 
-- All services bind to `127.0.0.1` (localhost only)
+- All platform processes bind to `127.0.0.1`; the only ingress is nginx behind Cloudflare (see Deployment Boundary)
+- Platform processes run as a dedicated unprivileged unix user (`smc`, no sudo) on shared hosts (ADR-0091)
 - Secrets stored in `.env` (gitignored), never committed
 - Credentials are never logged
 - SSOT JSONL writes protected against path traversal
@@ -38,10 +39,13 @@ If you discover a security vulnerability in Trading Platform v3, please report i
 ## Deployment Boundary
 
 - **Default baseline**: all services bind to `127.0.0.1`, single-user workstation deployment.
-- **Sanctioned public surface (ADR-0058)**: a single read-only HTTP API is exposed via Cloudflare → nginx → loopback `aiohttp` (`runtime/api_v3/endpoints.py`). Five `GET /api/v3/*` endpoints, every request requires `X-API-Key`.
+- **Sanctioned public surface (public site + ADR-0058)**: Cloudflare → nginx (UFW admits only Cloudflare IP ranges on `:80/:443`) → loopback `aiohttp` `ws_server` (`:8000`).
+  Publicly reachable: the chart SPA, `/ws`, `/api/status`, `/api/context`, and five read-only `GET /api/v3/*` endpoints (`runtime/api_v3/endpoints.py`); every `/api/v3/*` request requires `X-API-Key`.
+  WS connections are capped per server and per IP and actions are token-bucket limited (SEC-06, `config.json:ws_server.*`).
   - Token format: `tk_{64 hex}` (32 bytes from `secrets.token_bytes`), stored in Redis with `SETEX` TTL (default 90 days).
   - Token issuance/revocation tooling: `tools/api_v3/{issue_token,list_tokens,revoke_token}.py`. Runbook: [docs/runbooks/api_v3_tokens.md](docs/runbooks/api_v3_tokens.md).
-  - All other ports (`ws_server` raw `:8000`, Redis `:6379`, internal supervisor) remain bound to `127.0.0.1`. UFW only permits Cloudflare egress IPs on `:80/:443`.
+  - Agent-adapter endpoints (`/api/archi/*`, `/api/agent/*`, SSE streams) are served only on a private hostname with Bearer auth and are being extracted into a separate off-by-default process (ADR-0090).
+  - Redis `:6379` and supervisor stay on loopback; the raw `:8000` port is never exposed. Shared-host tenant isolation (per-service users, Redis ACL) is tracked in ADR-0091.
 - Any further network exposure, multi-user access, or hosted deployment requires a fresh compliance/security review (R_COMPLIANCE).
 - Commercial, team, hosted, or redistributed use requires separate written permission from FXCM while ForexConnect remains in the stack.
 

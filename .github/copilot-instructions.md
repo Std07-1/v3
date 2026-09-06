@@ -47,7 +47,7 @@
 Три фази `RECON → DESIGN → CUT` з жорсткими gates. Повна специфікація: `.github/role_spec_patch_master_v1.md`
 
 - **RECON**: root cause + evidence, failure model ≥3, proof pack з repro
-- **DESIGN**: fix point, SSOT routing, I0–I7 check, alternatives ≥2, blast radius
+- **DESIGN**: fix point, SSOT routing, I0–I6 check, alternatives ≥2, blast radius
 - **CUT**: min-diff, rail ≥1, test ≥1, self-check 10/10, changelog (S0/S1), verify
 
 ### SSOT точки (де living truth)
@@ -65,7 +65,7 @@
 | Level Rendering Rules | `OverlayRenderer.ts:renderLevels()` + ADR-0026 (L1–L6) | Full-width lines, приховування підписів, merge без фізичного overlap |
 | Zone Rendering Rules | `OverlayRenderer.ts:renderZones()` + ADR-0024c (Z1–Z10) | Рендер без grade, мітигація по тіні, зони без lifecycle |
 | CandleBar field names | `core/model/bars.py:CandleBar` → `.o .h .low .c .v` | Використання `.l` замість `.low` (wire dict `l` ≠ dataclass `.low`) |
-| Archi autonomy governance | `trader-v3/docs/adr/ADR-024-autonomy-charter.md` + `trader-v3/docs/ARCHITECTURE.md` §3a | Hard block без safety justification, приховані обмеження (I7) |
+| Межа зовнішнього клієнта (trader-v3) | ADR-0090 §3 (platform-side) + `trader-v3/docs/adr/ADR-024-autonomy-charter.md` (правила бота = його SSOT) | Правила/логіка бота у platform docs чи коді; platform-код, що читає/пише файли бота (X40, X31) |
 
 ### Централізація vs inline (правило 3-х місць)
 
@@ -108,7 +108,7 @@ ADR section мусить мати:
 
 ### Пріоритет при конфліктах
 
-Інваріанти I0–I7 > S0–S6 (SMC) > Активна роль (R_PATCH_MASTER / R_BUG_HUNTER / R_SMC_CHIEF / R_DOC_KEEPER) > ADR > docs > коментарі у коді.
+Інваріанти I0–I6 > S0–S6 (SMC) > Активна роль (R_PATCH_MASTER / R_BUG_HUNTER / R_SMC_CHIEF / R_DOC_KEEPER) > ADR > docs > коментарі у коді.
 
 ---
 
@@ -204,8 +204,9 @@ binance_ingest_worker ───► BTCUSDT/ETHUSDT M1 ──► UDS     applyUpd
 | I3 | Final > Preview (NoMix) | Final завжди перемагає preview. Для одного ключа — один final source. |
 | I4 | Один update-потік | UI оновлюється через `events(upsert)` з `/api/updates`. Жодних parallel шляхів. |
 | I5 | Degraded-but-loud | Silent fallback заборонено. Будь-яка деградація = явний сигнал. |
-| I6 | Stop-rule | Якщо зміна ламає I0–I5, I7 → зупинити PATCH, зробити ADR. |
-| I7 | Autonomy-First (Арчі) | `trader-v3/`: жодних прихованих обмежень для AI-агента Арчі. Код = advisory + explain, рішення = Арчі. Hard block лише safety rail (kill switch, budget hard cap). ADR-024 (trader-v3). |
+| I6 | Stop-rule | Якщо зміна ламає I0–I5 → зупинити PATCH, зробити ADR. |
+
+> I7 «Autonomy-First» — інваріант бота Арчі, не платформи. Живе в `trader-v3/docs/adr/ADR-024-autonomy-charter.md`; platform-код не має що ним захищати (ADR-0090 §3.7).
 
 ---
 
@@ -390,7 +391,7 @@ ui/   ← звертається до runtime тільки через HTTP/WS а
 | **S5** | Config SSOT: all params from `config.json:smc` | No hardcoded thresholds |
 | **S6** | Wire format matches `ui_v4` TypeScript types | Contract gate |
 
-> **Пріоритет**: I0–I7 > S0–S6. SMC не може послабити платформенні інваріанти.
+> **Пріоритет**: I0–I6 > S0–S6. SMC не може послабити платформенні інваріанти.
 
 ---
 
@@ -799,8 +800,8 @@ Feature flag у `config.json` може бути `enabled: true` **тільки**
 | X26 | `enabled: true` у config.json для ADR зі статусом Proposed або Deprecated (K5 ADR Status Gate) |
 | X27 | ADR-driven slice торкає >3 файлів без окремого verify (K6 One Slice = One Gate) |
 | X28 | Frontend re-derives/re-classifies backend SSOT дані (label, grade, bias, phase, scenario). UI = dumb renderer (G1): показує `value` як є, без власної логіки класифікації. Directional coloring/formatting = OK, перерахунок домену = ЗАБОРОНЕНО. Прецедент: P/D label split-brain (changelog 20260322-005) |
-| X29 | `trader-v3/`: hard block (cooldown, model force-downgrade, suppress, timer re-injection) без safety justification. I7: максимум = warning + explain, рішення = Арчі. Виключення: kill switch, daily $ hard cap, owner-only guard, anti-hallucination |
-| X30 | `trader-v3/`: приховане обмеження яке Арчі не бачить в логах/промпті/контексті. Кожне обмеження = transparent + justified + challengeable (I7, ADR-024) |
+| X29 | `trader-v3/`: hard block (cooldown, model force-downgrade, suppress, timer re-injection) без safety justification. Правило бота, SSOT = `trader-v3/docs/adr/ADR-024-autonomy-charter.md` (I7 там); platform SSOT його не дублює (ADR-0090 §3.7) |
+| X30 | `trader-v3/`: приховане обмеження, яке бот не бачить у логах/промпті/контексті. Правило бота, SSOT = ADR-024 (trader-v3); тут лише покажчик |
 | X31 | **Cross-repo contamination**: при роботі над `trader-v3/` заборонено створювати/змінювати ADR, документацію, конфіги чи код у v3 platform (`docs/`, `core/`, `runtime/`, `ui_v4/`, `config.json`). Арчі ADR живуть ТІЛЬКИ в `trader-v3/docs/adr/`. Platform ADR — ТІЛЬКИ в `docs/adr/`. Якщо зміна Арчі потребує platform feature — окремий v3 ADR з platform perspective |
 | X32 | **data/ dumping**: заборонено зберігати runtime data Арчі (`*_directives.json`, `*_conversation.json`, `*_journal.json`) у v3 root. Runtime data живе ТІЛЬКИ в `trader-v3/data/` або на VPS |
 | X33 | **Silent file truncation**: після кожного `replace_string_in_file` / `multi_replace_string_in_file` на файлі **>1500 рядків** обов'язково: (a) AST parse (для .py) або повне читання останніх 30 рядків, (b) звірка `wc -l` до/після — delta >50 рядків без явного `[shrink]` у наміру = STOP, повернути файл з backup. Прецедент: 2026-04-19 monitor.py truncation mid-function (тільки deploy виявив SyntaxError). Recommended tool: `python -m tools.file_guardian check` після session |
@@ -810,4 +811,5 @@ Feature flag у `config.json` може бути `enabled: true` **тільки**
 | X37 | **Mixed abstraction levels у функції**: `connect_redis()` + `compute_atr()` + `format_log_line()` в одній функції — STOP, розбий по фазах. Функція >50 LOC без чіткої розбивки на phase functions з docstrings = STOP. F9 принцип "Читається зверху вниз як історія" |
 | X38 | **Generic names у production**: `data`, `result`, `tmp`, `x`, `obj`, `do_stuff()`, `helper()` — заборонено. Семантичні назви розповідають інтент: `bars_window`, `confluence_score`, `pending_zones`, `_resolve_anchor_offset_ms()`. F9 craftsmanship |
 | X39 | **Maturity regression**: жоден patch не може опустити Maturity ladder нижче поточного M-рівня (зараз M3). Якщо patch додає hack/workaround/silent fallback/duplication — це регрес. STOP, перепиши на production-grade. F9 Maturity rule |
+| X40 | **Platform reads the client, never the reverse**: platform-код (`runtime/`, `core/`, `ui_v4/`) що імпортує, читає або пише файли чи стан зовнішнього клієнта (`agent_console.data_dir`, directives, chat, owner-note) поза `runtime/agent_bridge/` (ADR-0090 §3.1). Платформа = торгова платформа; клієнт читає її через `/ws`, `/api/v3/*`, bridge — не навпаки |
 

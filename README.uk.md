@@ -6,29 +6,30 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 
-![AI·ONE v3 — live XAU/USD M15 chart with SMC markup (FVG, BOS, CHoCH, EQH) and Archi's autonomous market thesis](docs/assets/hero.png)
+![AI·ONE v3 — live XAU/USD M15 chart with SMC markup (FVG, BOS, CHoCH, EQH, premium/discount); the annotation card is an external client's thesis delivered through the read-only API](docs/assets/hero.png)
 
-**Real-time Smart Money Concepts (SMC) analytics for gold, indices and crypto** — a
-broker-grade data pipeline (FXCM / Binance) feeding a live WebSocket chart, wired over
-Redis to **Archi**, an autonomous Claude trading agent that reasons, remembers, and
-decides for itself.
+**Real-time Smart Money Concepts (SMC) аналітика для золота, індексів і крипти** —
+broker-grade конвеєр даних (FXCM / Binance), живий WebSocket-графік і read-only
+HTTP/WS API, до якого може підключитись і читати будь-який зовнішній клієнт —
+дашборд, дослідницький ноутбук або AI-агент.
 
 **▶ Live: [aione-smc.com](https://aione-smc.com/)**
 
-### Why it isn't just another trading bot
+### Що це
 
-- **Autonomy-first AI agent** — Archi sets its own wake conditions, runs a 7-layer
-  memory, writes its own market thesis, and is *never silently overridden*. Code
-  advises; the agent decides (constitutional invariant **I7**).
-- **Hard data invariants** — a single `UnifiedDataStore` write-center, `Final > Preview`,
-  degraded-but-loud (no silent fallbacks). Every non-trivial decision is captured in
-  **47+ ADRs**.
-- **$0 analytics** — SMC structure (BOS / CHoCH), order blocks, FVG, liquidity,
-  premium/discount and confluence scoring are computed **in-process** — no paid
-  signal feeds.
-- **Built like production** — dual-venv broker isolation, exit-gates, security scan,
-  green CI, and a real FXCM real-time stream. Maturity is tracked honestly (**M3 → M7**),
-  not faked.
+- **Торгова платформа, не бот.** Приймає дані брокера, тримає єдине джерело істини,
+  обчислює SMC-структуру і віддає живий графік. Ніколи не виставляє ордери і не вигадує
+  сигнали. Зовнішні клієнти — зокрема AI-агенти — підключаються і *читають*
+  (ADR-0058, ADR-0090); їхні міркування не є частиною платформи.
+- **Жорсткі інваріанти даних** — єдиний write-center `UnifiedDataStore`, `Final > Preview`,
+  degraded-but-loud (жодних silent fallback). Кожне нетривіальне рішення зафіксоване
+  у **90+ ADR**.
+- **Аналітика за $0** — SMC-структура (BOS / CHoCH), order blocks, FVG, ліквідність,
+  premium/discount і confluence scoring рахуються **in-process** — без платних
+  сигнальних фідів.
+- **Побудовано як production** — dual-venv ізоляція брокера, exit-gates, security scan,
+  зелений CI, реальний real-time потік FXCM. Зрілість рахується чесно (**M3 → M7**),
+  не імітується.
 
 > **⚠️ Not financial advice.** Analytical / research tool only — SMC labels are technical
 > markers, not signals. Trading carries substantial risk of loss. Full terms:
