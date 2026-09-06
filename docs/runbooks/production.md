@@ -163,7 +163,6 @@ curl -s http://127.0.0.1:8000/api/config | python -m json.tool
 > `invalid username-password pair` у логах = ACL-користувача нема або пароль розійшовся з env.
 > Скрипти `tools/diag/*.py` з hardcoded підключенням без пароля більше не працюють — це очікувано.
 
-
 ```bash
 redis-cli -n 1 KEYS "v3_local:ohlcv:*"
 redis-cli -n 1 KEYS "v3_local:prime:*"
