@@ -279,7 +279,7 @@ trader-v3 (smc_trader_v3, окремий program)  ◄──► Redis IPC (wake:
 | Слайс | Статус | Коміт |
 |---|---|---|
 | S4 config | ✅ 2026-09-06 | `c4b300e` (env-override замість overlay; CI-гейт `platform_config_no_agent_keys`; деплой на VPS окремо, за go) |
-| S1 bridge + routes | ⏳ | — |
+| S1 bridge + routes | ✅ 2026-09-06 | `0de10de` (move-only; public_snapshot WIP лишається в ws_server; деплой VPS за go) |
 | S2 WakeEngine | ⏳ | — |
 | S3 overlay | ⏳ | — |
 | S5 репо-гігієна | ⏳ | — |
@@ -311,4 +311,7 @@ trader-v3 (smc_trader_v3, окремий program)  ◄──► Redis IPC (wake:
   `_console_data_dir`; (2) ціна `/api/archi/now` — Redis `tick:last` замість SmcRunner (bridge = окремий
   процес; tick mid замість M1 close, поза сесією `price_unavailable`); (3) ws_server лишає Redis-клієнт для
   `/api/v3`; (4) додано `GET /api/bridge/health` без auth для smoke/supervisor; (5) `_read_thinking_records`
-  → `thinking_archive.read_thinking_records`. Рев'ю: workflow 4 лінзи + адверсарні верифікатори (23 агенти) — 12 підтверджених (S2: supervisor класифікує exit до startsecs як failed start → BACKOFF→FATAL; тому вимкнений bridge лишається RUNNING лише з health; решта S3 — семантика ціни в docs, застарілі коментарі, мертвий local у закоміченому дереві, runbook 502), усе виправлено; 7 спростовано як pre-existing/поза патчем.
+  → `thinking_archive.read_thinking_records`. Рев'ю: workflow 4 лінзи + адверсарні верифікатори (23 агенти) — 12 підтверджених (S2: supervisor
+  класифікує exit до startsecs як failed start → BACKOFF→FATAL; тому вимкнений bridge лишається
+  RUNNING лише з health; решта S3 — семантика ціни в docs, застарілі коментарі, мертвий local у
+  закоміченому дереві, runbook 502), усе виправлено; 7 спростовано як pre-existing/поза патчем.
