@@ -1,15 +1,15 @@
 """
-core/smc/auto_wake.py вЂ” Platform-generated wake conditions (ADR-0049 Strategy B).
+core/smc/auto_wake.py — Platform-generated wake conditions (ADR-0049 Strategy B).
 
 Platform looks at SMC data already computed by SmcRunner and generates
 baseline wake conditions WITHOUT bot participation. This breaks the deadlock:
 
-  Bot in IDLE в†’ can't set conditions в†’ platform does it в†’ bot wakes up
+  Bot in IDLE → can't set conditions → platform does it → bot wakes up
 
-I7 compliant: platform doesn't decide FOR РђСЂС‡С– вЂ” only wakes him.
+I7 compliant: platform doesn't decide FOR Арчі — only wakes him.
 S0 compliant: pure function, no I/O, no Redis, no HTTP.
 
-Pattern: same as synthesize_narrative() in core/smc/narrative.py вЂ”
+Pattern: same as synthesize_narrative() in core/smc/narrative.py —
   accepts multi-TF snapshots dict, returns structured result.
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ from core.smc.types import SmcSnapshot, SmcZone
 from core.smc.wake_types import WakeCondition, WakeConditionKind
 
 
-# в”Ђв”Ђ Defaults (overridable via config.json wake_engine section) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── Defaults (overridable via config.json wake_engine section) ──────────────
 
 DEFAULT_ZONE_PROXIMITY_ATR = 2.0    # wake when price within 2 ATR of A+/A zone
 DEFAULT_MAX_SILENCE_HOURS = 3.0     # default max_silence safety net
@@ -45,7 +45,7 @@ def generate_platform_conditions(
     Called by WakeEngine every 2s tick. Pure function, $0 cost.
 
     Args:
-        snapshots:    {tf_s: SmcSnapshot} вЂ” multi-TF view
+        snapshots:    {tf_s: SmcSnapshot} — multi-TF view
                       D1 (86400) for bias, H4 (14400) + H1 (3600) for zones
         bias_map:     {tf_s: "bullish"|"bearish"|None}
         atr:          ATR of reference TF (H4 preferred)
@@ -53,7 +53,7 @@ def generate_platform_conditions(
         session_info: {"current_session": "london", "is_open": True,
                        "next_session": "new_york", "next_open_min": 45}
         ts_ms:        current timestamp ms
-        zone_grades:  {zone_id: {"grade": "A+", "score": 8}} вЂ” optional enrichment
+        zone_grades:  {zone_id: {"grade": "A+", "score": 8}} — optional enrichment
         config:       optional override for defaults
 
     Returns:
@@ -71,7 +71,7 @@ def generate_platform_conditions(
     conditions: List[WakeCondition] = []
     now_ms = ts_ms or int(time.time() * 1000)
 
-    # в”Ђв”Ђ 1. Zone proximity conditions в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── 1. Zone proximity conditions ─────────────────────────────
     # Collect all active zones from multi-TF snapshots, filter by grade,
     # sort by distance to price, take top 3.
     zone_candidates: List[tuple] = []  # (distance_atr, zone, tf_s)
@@ -94,7 +94,7 @@ def generate_platform_conditions(
             elif current_price < z.low:
                 dist = z.low - current_price
             else:
-                dist = 0  # price inside zone вЂ” definitely trigger
+                dist = 0  # price inside zone — definitely trigger
             dist_atr = dist / atr
             if dist_atr <= proximity_atr:
                 zone_candidates.append((dist_atr, z, tf_s))
@@ -121,7 +121,7 @@ def generate_platform_conditions(
             created_at_ms=now_ms,
         ))
 
-    # в”Ђв”Ђ 2. Session transition conditions в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── 2. Session transition conditions ─────────────────────────
     # London and NY opens are always interesting for XAU/USD.
     next_session = session_info.get("next_session", "")
     next_open_min = session_info.get("next_open_min", -1)
@@ -137,7 +137,7 @@ def generate_platform_conditions(
             created_at_ms=now_ms,
         ))
 
-    # в”Ђв”Ђ 3. Bias divergence detection в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── 3. Bias divergence detection ─────────────────────────────
     # D1 bearish but H4 bullish (or vice versa) = potential reversal point
     d1_bias = bias_map.get(86400, "")
     h4_bias = bias_map.get(14400, "")
@@ -150,7 +150,7 @@ def generate_platform_conditions(
             created_at_ms=now_ms,
         ))
 
-    # в”Ђв”Ђ 4. Default max_silence (always present) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── 4. Default max_silence (always present) ──────────────────
     conditions.append(WakeCondition(
         kind=WakeConditionKind.MAX_SILENCE,
         params={"hours": max_silence_h},

@@ -100,7 +100,7 @@ whitespace-ignored). `O_w` порожній ⟹ VPS-working **вже == origin**
 | `runtime/api_v3/__init__.py` | 0/0 | 0/0 | SAFE DISCARD | mode/CRLF only | HIGH |
 | `runtime/api_v3/auth_validator.py` | 0/0 | 0/0 | SAFE DISCARD | mode/CRLF only | HIGH |
 | `runtime/api_v3/kill_switch.py` | 0/0 | 0/0 | SAFE DISCARD | mode/CRLF only | HIGH |
-| `runtime/ws/ws_server.py` | +3412/−3294 | **+1/−1** | SAFE DISCARD | єдиний diff = UTF-8 **BOM**+mojibake (`﻿"""`, `СЃРµСЂРІРµСЂ`); origin чистіший | HIGH |
+| `runtime/ws/ws_server.py` | +3412/−3294 | **+1/−1** | SAFE DISCARD | єдиний diff = UTF-8 **BOM**+mojibake (`﻿"""`, `сервер`); origin чистіший | HIGH |
 | `runtime/api_v3/token_store.py` | +4/−2 | +5/−2 | SAFE DISCARD | working має `cowork_write` scope; origin = `{"read"}` (cowork видалено) | HIGH |
 | `runtime/api_v3/endpoints.py` | +1896/−1883 | +16/−5 | SAFE DISCARD | working реєструє `/api/v3/cowork/*`; origin — ні (failed experiment) | HIGH |
 

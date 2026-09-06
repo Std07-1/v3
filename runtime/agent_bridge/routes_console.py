@@ -35,7 +35,7 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
     _read_thinking_records = read_thinking_records
 
     async def _api_agent_state(request: web.Request) -> web.Response:
-        """GET /api/agent/state вЂ” latest agent state snapshot."""
+        """GET /api/agent/state — latest agent state snapshot."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         if _agent_redis_client is None:
@@ -52,7 +52,7 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
             return web.json_response({"error": "redis_read_failed"}, status=503)
 
     async def _api_agent_feed(request: web.Request) -> web.Response:
-        """GET /api/agent/feed?limit=50 вЂ” chronological event log."""
+        """GET /api/agent/feed?limit=50 — chronological event log."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         if _agent_redis_client is None:
@@ -76,7 +76,7 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
             return web.json_response({"error": "redis_read_failed"}, status=503)
 
     async def _api_archi_thinking(request: web.Request) -> web.Response:
-        """GET /api/archi/thinking?limit=50&offset=0 вЂ” Thinking Archive.
+        """GET /api/archi/thinking?limit=50&offset=0 — Thinking Archive.
 
         Reads across the live archive + all rotated ``v3_thinking_archive_*``
         files (newest-first) so history survives rotation (ADR-018). Thin
@@ -98,7 +98,7 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
             return web.json_response({"error": "read_failed"}, status=503)
 
     async def _api_archi_directives(request: web.Request) -> web.Response:
-        """GET /api/archi/directives вЂ” agent directives snapshot."""
+        """GET /api/archi/directives — agent directives snapshot."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         if not _console_data_dir:
@@ -111,7 +111,7 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
                 return web.json_response({"error": "no_data"}, status=204)
             with open(fpath, "r", encoding="utf-8") as _fh:
                 data = json.loads(_fh.read())
-            # Return only safe/display fields вЂ” strip inner_thought if requested
+            # Return only safe/display fields — strip inner_thought if requested
             brief = request.query.get("brief", "0") == "1"
             if brief:
                 safe_keys = [
@@ -133,7 +133,7 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
             return web.json_response({"error": "read_failed"}, status=503)
 
     async def _api_archi_feed(request: web.Request) -> web.Response:
-        """GET /api/archi/feed?limit=50 вЂ” event feed with auth."""
+        """GET /api/archi/feed?limit=50 — event feed with auth."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         if _agent_redis_client is None:
@@ -155,7 +155,7 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
             return web.json_response({"error": "redis_read_failed"}, status=503)
 
     async def _api_archi_stream(request: web.Request) -> web.StreamResponse:
-        """GET /api/archi/stream вЂ” SSE stream: feed events + directives changes."""
+        """GET /api/archi/stream — SSE stream: feed events + directives changes."""
         if not _archi_auth(request):
             return web.Response(status=401)  # type: ignore[return-value]
         import os as _os
@@ -182,7 +182,7 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
 
         try:
             while True:
-                # в”Ђв”Ђ Check feed (Redis LIST) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+                # ── Check feed (Redis LIST) ──────────────────────────────
                 if redis_cl is not None:
                     try:
                         curr_len: int = await loop.run_in_executor(
@@ -206,7 +206,7 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
                     except Exception as _e:
                         _log.debug("ARCHI_STREAM_REDIS_ERR: %s", _e)
 
-                # в”Ђв”Ђ Check directives file mtime в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+                # ── Check directives file mtime ──────────────────────────
                 if _console_data_dir:
                     dir_path = _os.path.join(
                         _console_data_dir, "v3_agent_directives.json"
@@ -240,7 +240,7 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
                     except Exception as _e:
                         _log.debug("ARCHI_STREAM_DIR_ERR: %s", _e)
 
-                # в”Ђв”Ђ Keep-alive comment every 2s в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+                # ── Keep-alive comment every 2s ──────────────────────────
                 await resp.write(b": ping\n\n")
                 await _asyncio.sleep(2)
 
@@ -250,7 +250,7 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
         return resp
 
     async def _api_archi_relationship(request: web.Request) -> web.Response:
-        """GET /api/archi/relationship вЂ” relationship memo snapshot."""
+        """GET /api/archi/relationship — relationship memo snapshot."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         if not _console_data_dir:
@@ -268,13 +268,13 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
             _log.warning("API_ARCHI_RELATIONSHIP_FAIL: %s", _e)
             return web.json_response({"error": "read_failed"}, status=503)
 
-    # в”Ђв”Ђ /api/archi/chat вЂ” unified chat (proxy to bot via Redis IPC) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── /api/archi/chat — unified chat (proxy to bot via Redis IPC) ──────
     _ARCHI_CHAT_KEY = f"{_agent_ns}:archi:chat"
     _ARCHI_CHAT_MAX = 500
     _ARCHI_WEB_INBOX_KEY = f"{_agent_ns}:archi:web_inbox"
 
     async def _api_archi_chat_post(request: web.Request) -> web.Response:
-        """POST /api/archi/chat вЂ” saves user message and pushes to bot inbox.
+        """POST /api/archi/chat — saves user message and pushes to bot inbox.
 
         Bot process picks up from web_inbox, calls Claude with full personality,
         and writes reply to the same chat key. Frontend polls for reply.
@@ -321,7 +321,7 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
             return web.json_response({"error": "write_failed"}, status=503)
 
     async def _api_archi_chat_get(request: web.Request) -> web.Response:
-        """GET /api/archi/chat?limit=50 вЂ” chat history (oldest first)."""
+        """GET /api/archi/chat?limit=50 — chat history (oldest first)."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         if _agent_redis_client is None:
@@ -564,9 +564,9 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
             _log.warning("API_ARCHI_CHAT_REACT_FAIL: %s", _e)
             return web.json_response({"error": "write_failed"}, status=503)
 
-    # в”Ђв”Ђ /api/archi/logs вЂ” read bot supervisor log from data_dir в”Ђв”Ђ
+    # ── /api/archi/logs — read bot supervisor log from data_dir ──
     async def _api_archi_logs(request: web.Request) -> web.Response:
-        """GET /api/archi/logs?lines=50&level=all вЂ” read recent bot log lines."""
+        """GET /api/archi/logs?lines=50&level=all — read recent bot log lines."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         lines_limit = min(int(request.query.get("lines", "80")), 500)
@@ -626,9 +626,9 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
             _log.warning("API_ARCHI_LOGS_FAIL: %s", e)
             return web.json_response({"error": str(e), "lines": []}, status=500)
 
-    # в”Ђв”Ђ /api/archi/owner-note вЂ” user status note Archi can read в”Ђв”Ђ
+    # ── /api/archi/owner-note — user status note Archi can read ──
     async def _api_archi_owner_note_get(request: web.Request) -> web.Response:
-        """GET /api/archi/owner-note вЂ” read owner's note for Archi."""
+        """GET /api/archi/owner-note — read owner's note for Archi."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         note_path = os.path.join(_console_data_dir, "owner_note.json")
@@ -644,7 +644,7 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
             return web.json_response({"error": str(e)}, status=500)
 
     async def _api_archi_owner_note_post(request: web.Request) -> web.Response:
-        """POST /api/archi/owner-note вЂ” save owner's note."""
+        """POST /api/archi/owner-note — save owner's note."""
         if not _archi_auth(request):
             return web.json_response({"error": "unauthorized"}, status=401)
         try:
@@ -675,9 +675,9 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
 
-    # в”Ђв”Ђ /api/archi/proposals/review вЂ” ADR-028 P3 J5 approval в”Ђв”Ђ
+    # ── /api/archi/proposals/review — ADR-028 P3 J5 approval ──
     async def _api_archi_proposals_review(request: web.Request) -> web.Response:
-        """POST /api/archi/proposals/review вЂ” approve or reject a pending proposal.
+        """POST /api/archi/proposals/review — approve or reject a pending proposal.
 
         Body: {"id": "p<ts>", "approved": true|false}
         Reads v3_agent_directives.json, applies the decision, saves.
@@ -698,7 +698,7 @@ def register_console_routes(app: web.Application, ctx: BridgeContext) -> None:
             if not _os.path.exists(directives_path):
                 return web.json_response({"error": "no_directives"}, status=404)
 
-            # Load в†’ patch в†’ save (atomic replace)
+            # Load → patch → save (atomic replace)
             with open(directives_path, "r", encoding="utf-8") as _fh:
                 raw = json.loads(_fh.read())
 

@@ -1,5 +1,5 @@
 """
-tests/test_wake_engine.py вЂ” Unit tests for ADR-0049 Wake Engine components.
+tests/test_wake_engine.py — Unit tests for ADR-0049 Wake Engine components.
 
 Tests pure logic only (core/smc/wake_check.py, core/smc/auto_wake.py, wake_types).
 Zero I/O, zero Redis, zero mocks needed.
@@ -25,7 +25,7 @@ from core.smc.wake_check import check_condition, accumulator_tick
 from core.smc.auto_wake import generate_platform_conditions
 
 
-# в”Ђв”Ђ Fixtures в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── Fixtures ───────────────────────────────────────────────────────────────
 
 class FakeZone:
     """Minimal zone stub matching SmcZone interface."""
@@ -47,7 +47,7 @@ class FakeSnapshot:
         self.trend_bias = ""
 
 
-# в”Ђв”Ђ check_condition tests в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── check_condition tests ──────────────────────────────────────────────────
 
 class TestCheckCondition:
     """Test each WakeConditionKind."""
@@ -108,9 +108,9 @@ class TestCheckCondition:
             params={"atr_mult": 2.0, "last_bar_range": 100.0},
             reason="test",
         )
-        # range=100 > 2.0 * 45 = 90 в†’ True
+        # range=100 > 2.0 * 45 = 90 → True
         assert check_condition(cond, 4680.0, 45.0, {}, 1000) is True
-        # ATR = 60, range=100 < 2.0 * 60 = 120 в†’ False
+        # ATR = 60, range=100 < 2.0 * 60 = 120 → False
         assert check_condition(cond, 4680.0, 60.0, {}, 1000) is False
 
     def test_max_silence_never_woke(self):
@@ -119,7 +119,7 @@ class TestCheckCondition:
             params={"hours": 3},
             reason="test",
         )
-        # Never woke в†’ True immediately
+        # Never woke → True immediately
         assert check_condition(cond, 4680.0, 45.0, {}, 1000, last_wake_ts_ms=0) is True
 
     def test_max_silence_elapsed(self):
@@ -129,10 +129,10 @@ class TestCheckCondition:
             reason="test",
         )
         now_ms = int(time.time() * 1000)
-        # Last wake 4h ago в†’ True
+        # Last wake 4h ago → True
         last_wake = now_ms - (4 * 3_600_000)
         assert check_condition(cond, 4680.0, 45.0, {}, now_ms, last_wake_ts_ms=last_wake) is True
-        # Last wake 1h ago в†’ False
+        # Last wake 1h ago → False
         last_wake = now_ms - (1 * 3_600_000)
         assert check_condition(cond, 4680.0, 45.0, {}, now_ms, last_wake_ts_ms=last_wake) is False
 
@@ -169,21 +169,21 @@ class TestCheckCondition:
         assert check_condition(cond, 4680.0, 45.0, {}, ts_ms_9) is False
 
 
-# в”Ђв”Ђ accumulator_tick tests в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── accumulator_tick tests ─────────────────────────────────────────────────
 
 class TestAccumulatorTick:
     """Test awareness accumulator math."""
 
     def test_basic_score_increase(self):
         acc = AwarenessAccumulator(score=0.0, threshold=5.0)
-        # Price moved 10 points, ATR=45 в†’ normalized = 10/45 в‰€ 0.222
+        # Price moved 10 points, ATR=45 → normalized = 10/45 ≈ 0.222
         new_acc = accumulator_tick(acc, 4690.0, 4680.0, 45.0, ts=1000.0)
         assert new_acc.score > 0
         assert abs(new_acc.score - 10 / 45) < 0.01
 
     def test_decay_over_time(self):
         acc = AwarenessAccumulator(score=3.0, threshold=5.0, decay=0.95, last_tick_ts=100.0)
-        # 1 minute later в†’ score *= 0.95^1
+        # 1 minute later → score *= 0.95^1
         new_acc = accumulator_tick(acc, 4680.0, 4680.0, 45.0, ts=160.0)
         expected = 3.0 * 0.95  # no price delta (same price)
         assert abs(new_acc.score - expected) < 0.01
@@ -206,7 +206,7 @@ class TestAccumulatorTick:
 
     def test_threshold_reached(self):
         acc = AwarenessAccumulator(score=4.5, threshold=5.0)
-        # Big move: 50 points / ATR 45 в‰€ 1.11 в†’ 4.5 + 1.11 = 5.61 >= 5.0
+        # Big move: 50 points / ATR 45 ≈ 1.11 → 4.5 + 1.11 = 5.61 >= 5.0
         new_acc = accumulator_tick(acc, 4730.0, 4680.0, 45.0, ts=1000.0)
         assert new_acc.score >= new_acc.threshold
 
@@ -218,7 +218,7 @@ class TestAccumulatorTick:
         assert new_acc.score != acc.score
 
 
-# в”Ђв”Ђ generate_platform_conditions tests в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── generate_platform_conditions tests ─────────────────────────────────────
 
 class TestAutoWake:
     """Test platform condition generator."""
@@ -246,7 +246,7 @@ class TestAutoWake:
             snapshots={14400: snap},
             bias_map={},
             atr=45.0,
-            current_price=4650.0,  # 30 points below zone_low = 30/45 в‰€ 0.67 ATR
+            current_price=4650.0,  # 30 points below zone_low = 30/45 ≈ 0.67 ATR
             session_info={},
             ts_ms=1000,
             zone_grades={"z1": {"grade": "A+", "score": 8}},
@@ -272,7 +272,7 @@ class TestAutoWake:
         assert len(zone_conds) == 0
 
     def test_bias_divergence(self):
-        """D1 bearish + H4 bullish в†’ structure_break."""
+        """D1 bearish + H4 bullish → structure_break."""
         result = generate_platform_conditions(
             snapshots={},
             bias_map={86400: "bearish", 14400: "bullish"},
@@ -324,7 +324,7 @@ class TestAutoWake:
         assert len(result) <= 10
 
 
-# в”Ђв”Ђ Type correctness tests в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── Type correctness tests ─────────────────────────────────────────────────
 
 class TestTypes:
     """Test dataclass construction and frozen invariants."""

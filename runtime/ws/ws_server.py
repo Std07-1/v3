@@ -1,16 +1,16 @@
 """
-runtime/ws/ws_server.py вЂ” aiohttp WebSocket СЃРµСЂРІРµСЂ РґР»СЏ ui_v4.
+runtime/ws/ws_server.py — aiohttp WebSocket сервер для ui_v4.
 
 P1: skeleton + heartbeat.
 P2: UDS reader integration (full frame, switch, delta, scrollback).
 
-Р†РЅРІР°СЂС–Р°РЅС‚Рё:
-  W0: WS-СЃРµСЂРІРµСЂ = UDS reader only (role="reader")
-  W1: schema_v = "ui_v4_v2" РЅР° РєРѕР¶РЅРѕРјСѓ frame
-  W2: meta.seq СЃС‚СЂРѕРіРѕ Р·СЂРѕСЃС‚Р°С” per-connection (heartbeat/full/delta/scrollback)
-  W7: heartbeat РєРѕР¶РЅС– в‰¤30s
+Інваріанти:
+  W0: WS-сервер = UDS reader only (role="reader")
+  W1: schema_v = "ui_v4_v2" на кожному frame
+  W2: meta.seq строго зростає per-connection (heartbeat/full/delta/scrollback)
+  W7: heartbeat кожні ≤30s
 
-Р—Р°РїСѓСЃРє: python -m runtime.ws.ws_server --port 8000
+Запуск: python -m runtime.ws.ws_server --port 8000
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ _log = logging.getLogger(__name__)
 # ADR-0085 archi_chart: one-shot WARN per symbol (I5 без спаму — delta_loop кличе кожні 2s).
 _ARCHI_CHART_THESIS_WARNED: set[str] = set()
 
-# в”Ђв”Ђ Constants в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── Constants ──────────────────────────────────────────
 SCHEMA_V = "ui_v4_v2"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -61,7 +61,7 @@ class UdsLike(Protocol):
 
 
 class SmcRunnerLike(Protocol):
-    _engine: Any  # SmcEngine вЂ” accessed by diagnostics endpoints
+    _engine: Any  # SmcEngine — accessed by diagnostics endpoints
 
     def get_snapshot(self, symbol: str, tf_s: int) -> Any: ...
 
@@ -128,9 +128,9 @@ from runtime.agent_bridge.config import (  # noqa: E402
     resolve_agent_bridge_config,
 )
 
-# CORS: РґРѕР·РІРѕР»РµРЅС– origins РґР»СЏ cross-origin (Vercel / Cloudflare Pages)
-# РљРѕРЅС„С–Рі: ws_server.cors_allowed_origins РІ config.json
-# РЇРєС‰Рѕ СЃРїРёСЃРѕРє РїРѕСЂРѕР¶РЅС–Р№ вЂ” CORS headers РЅРµ РґРѕРґР°СЋС‚СЊСЃСЏ (same-origin СЂРµР¶РёРј)
+# CORS: дозволені origins для cross-origin (Vercel / Cloudflare Pages)
+# Конфіг: ws_server.cors_allowed_origins в config.json
+# Якщо список порожній — CORS headers не додаються (same-origin режим)
 _CORS_HEADERS_COMMON = {
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
@@ -145,8 +145,8 @@ _D1_TICK_RELAY_ENABLED_DEFAULT = False
 _D1_TICK_RELAY_TFS_DEFAULT: set = set()
 
 # P11: scrollback disk rails
-SCROLLBACK_MAX_STEPS = 12  # РјР°РєСЃ С‡Р°РЅРєС–РІ scrollback per session per symbol+tf
-SCROLLBACK_COOLDOWN_S = 0.5  # РјС–РЅС–РјР°Р»СЊРЅРёР№ С–РЅС‚РµСЂРІР°Р» РјС–Р¶ scrollback РІС–Рґ РѕРґРЅРѕРіРѕ РєР»С–С”РЅС‚Р°
+SCROLLBACK_MAX_STEPS = 12  # макс чанків scrollback per session per symbol+tf
+SCROLLBACK_COOLDOWN_S = 0.5  # мінімальний інтервал між scrollback від одного клієнта
 
 # SEC-06: WS connection/action rails — SSOT-дефолти; override через config.json:ws_server.*
 WS_MAX_CLIENTS_DEFAULT = 200  # одночасних WS-сесій на процес (0 = без ліміту)
@@ -191,8 +191,8 @@ def _client_ip(request: web.Request) -> str:
     """Реальна адреса клієнта: X-Real-IP ставить nginx (після realip_cloudflare), інакше peer."""
     return (request.headers.get("X-Real-IP") or request.remote or "?").strip()
 
-# TF label в†” seconds mapping (types.ts WsAction.switch.tf)
-# Canonical labels: uppercase M1, M5, H1 etc. (СЏРє Сѓ С„СЂРѕРЅС‚РµРЅРґС– SymbolTfPicker)
+# TF label ↔ seconds mapping (types.ts WsAction.switch.tf)
+# Canonical labels: uppercase M1, M5, H1 etc. (як у фронтенді SymbolTfPicker)
 _TF_CANONICAL_LABELS: Dict[str, int] = {
     "M1": 60,
     "M3": 180,
@@ -223,11 +223,11 @@ _TF_LABEL_TO_S.update(
 )
 _TF_S_TO_LABEL: Dict[int, str] = {v: k for k, v in _TF_CANONICAL_LABELS.items()}
 
-# в”Ђв”Ђ Helpers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── Helpers ────────────────────────────────────────────
 
 
 def _load_full_config(config_path: str) -> Dict[str, Any]:
-    """Р—Р°РІР°РЅС‚Р°Р¶СѓС” РїРѕРІРЅРёР№ config.json С‡РµСЂРµР· core.config_loader (T10/S26 SSOT)."""
+    """Завантажує повний config.json через core.config_loader (T10/S26 SSOT)."""
     try:
         resolved = resolve_config_path(config_path)
         return load_system_config(resolved)
@@ -237,7 +237,7 @@ def _load_full_config(config_path: str) -> Dict[str, Any]:
 
 
 def _canonicalize_symbol(raw: str, symbols: set) -> str:
-    """РќРѕСЂРјР°Р»С–Р·СѓС” СЃРёРјРІРѕР»: EUR_USD в†’ EUR/USD."""
+    """Нормалізує символ: EUR_USD → EUR/USD."""
     if raw in symbols:
         return raw
     if "_" in raw:
@@ -248,7 +248,7 @@ def _canonicalize_symbol(raw: str, symbols: set) -> str:
 
 
 def _cold_start_limit(tf_s: int, cfg: Dict[str, Any]) -> int:
-    """РџРѕРІРµСЂС‚Р°С” РєС–Р»СЊРєС–СЃС‚СЊ Р±Р°СЂС–РІ РґР»СЏ cold start РїРѕ TF."""
+    """Повертає кількість барів для cold start по TF."""
     bootstrap = cfg.get("bootstrap", {})
     cold_map = bootstrap.get("ui_cold_start_bars_by_tf", {})
     raw = cold_map.get(str(tf_s))
@@ -266,13 +266,13 @@ def _cold_start_limit(tf_s: int, cfg: Dict[str, Any]) -> int:
     return DEFAULT_COLD_START_BARS
 
 
-# в”Ђв”Ђ Output Guard (T6/S19: WS candle shape + monotonicity) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── Output Guard (T6/S19: WS candle shape + monotonicity) ──────
 
 
 def _guard_candle_shape(candle: dict) -> Optional[str]:
-    """Р’Р°Р»С–РґСѓС” РѕРґРёРЅ v4 Candle dict. РџРѕРІРµСЂС‚Р°С” issue string Р°Р±Рѕ None СЏРєС‰Рѕ OK.
+    """Валідує один v4 Candle dict. Повертає issue string або None якщо OK.
 
-    РљРѕРЅС‚СЂР°РєС‚: types.ts Candle {t_ms: int, o: float, h: float, l: float, c: float, v: float}
+    Контракт: types.ts Candle {t_ms: int, o: float, h: float, l: float, c: float, v: float}
     """
     if not isinstance(candle, dict):
         return "candle_not_dict"
@@ -302,19 +302,19 @@ def _guard_candles_output(
     tf_label: str,
     frame_type: str,
 ) -> list:
-    """Output guard РґР»СЏ РјР°СЃРёРІСѓ candles РїРµСЂРµРґ РІС–РґРїСЂР°РІРєРѕСЋ РєР»С–С”РЅС‚Сѓ (T6/S19).
+    """Output guard для масиву candles перед відправкою клієнту (T6/S19).
 
-    - Р”СЂРѕРїР°С” candles Р· РїРѕРіР°РЅРѕСЋ С„РѕСЂРјРѕСЋ (degraded-but-loud).
-    - РџРµСЂРµРІС–СЂСЏС” РјРѕРЅРѕС‚РѕРЅРЅС–СЃС‚СЊ t_ms (no duplicates, sorted asc).
-    - РџРѕРІРµСЂС‚Р°С” СЃРїРёСЃРѕРє warnings.
+    - Дропає candles з поганою формою (degraded-but-loud).
+    - Перевіряє монотонність t_ms (no duplicates, sorted asc).
+    - Повертає список warnings.
 
-    РњСѓС‚СѓС” candles in-place (РІРёРґР°Р»СЏС” bad).
+    Мутує candles in-place (видаляє bad).
     """
     warnings: list = []
     if not candles:
         return warnings
 
-    # в”Ђв”Ђ Pass 1: shape guard вЂ” РґСЂРѕРїР°С”РјРѕ РїРѕРіР°РЅС– в”Ђв”Ђ
+    # ── Pass 1: shape guard — дропаємо погані ──
     valid = []
     for i, c in enumerate(candles):
         issue = _guard_candle_shape(c)
@@ -343,7 +343,7 @@ def _guard_candles_output(
             dropped + len(valid),
         )
 
-    # в”Ђв”Ђ Pass 2: РјРѕРЅРѕС‚РѕРЅРЅС–СЃС‚СЊ t_ms (sorted asc, no dup) в”Ђв”Ђ
+    # ── Pass 2: монотонність t_ms (sorted asc, no dup) ──
     if len(candles) >= 2:
         dup_count = 0
         unsorted_count = 0
@@ -408,10 +408,10 @@ class WsSession:
         self.last_update_seq: Optional[int] = 0
         self.ws: web.WebSocketResponse = ws
         self._scrollback_count: int = (
-            0  # P11: РєС–Р»СЊРєС–СЃС‚СЊ scrollback РґР»СЏ РїРѕС‚РѕС‡РЅРѕРіРѕ symbol+tf
+            0  # P11: кількість scrollback для поточного symbol+tf
         )
         self._scrollback_last_ts: float = (
-            0  # P11: timestamp РѕСЃС‚Р°РЅРЅСЊРѕРіРѕ scrollback
+            0  # P11: timestamp останнього scrollback
         )
         self.client_ip: str = "?"  # SEC-06: для per-IP ліміту (X-Real-IP)
         self._action_tokens: float = float(WS_ACTIONS_BURST_DEFAULT)  # SEC-06 token bucket
@@ -423,7 +423,7 @@ class WsSession:
         return self.seq
 
 
-# в”Ђв”Ђ Frame builders в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── Frame builders ─────────────────────────────────────
 
 
 def _archi_chart_wire(app: Any, symbol: str) -> Optional[Dict[str, Any]]:
@@ -529,7 +529,7 @@ def _build_error_frame(
     message: str,
     app: Any = None,
 ) -> Dict[str, Any]:
-    """S20/S25: error response frame вЂ” degraded-but-loud РґР»СЏ РєР»С–С”РЅС‚Р°."""
+    """S20/S25: error response frame — degraded-but-loud для клієнта."""
     return {
         "type": "render_frame",
         "frame_type": "error",
@@ -552,14 +552,14 @@ def _build_full_frame(
     atr: Optional[float] = None,
     rv: Optional[float] = None,
 ) -> Dict[str, Any]:
-    # T6/S19: output guard вЂ” validate candle shapes before send
+    # T6/S19: output guard — validate candle shapes before send
     guard_warns = _guard_candles_output(candles, symbol, tf_label, "full")
     meta = _build_meta(session, app=app)
     all_warnings = list(warnings or []) + guard_warns
     if all_warnings:
         meta["warnings"] = all_warnings
-    # P1в†’P2: config payload вЂ” UI С‡РёС‚Р°С” symbols/tfs Р· СЃРµСЂРІРµСЂР° (SSOT)
-    # tfs = canonical labels (["M1","M3",...]) вЂ” UI switch РЅР°РґСЃРёР»Р°С” СЃР°РјРµ labels
+    # P1→P2: config payload — UI читає symbols/tfs з сервера (SSOT)
+    # tfs = canonical labels (["M1","M3",...]) — UI switch надсилає саме labels
     if app is not None:
         cfg = app.get(APP_FULL_CONFIG, {})
         allowlist_s = sorted(app.get(APP_TF_ALLOWLIST, set()))
@@ -659,10 +659,10 @@ def _build_config_frame(
     session: WsSession,
     app: Any,
 ) -> Dict[str, Any]:
-    """T8/S24: dedicated config frame вЂ” policy bridge for UI.
+    """T8/S24: dedicated config frame — policy bridge for UI.
 
-    Р’С–РґРїСЂР°РІР»СЏС”С‚СЊСЃСЏ РѕРґСЂР°Р·Сѓ РїСЂРё connect, РґРѕ full frame.
-    UI РѕС‚СЂРёРјСѓС” symbols/tfs/defaults РЅР°РІС–С‚СЊ СЏРєС‰Рѕ UDS РЅРµРґРѕСЃС‚СѓРїРЅРёР№.
+    Відправляється одразу при connect, до full frame.
+    UI отримує symbols/tfs/defaults навіть якщо UDS недоступний.
     """
     cfg = app.get(APP_FULL_CONFIG, {})
     allowlist_s = sorted(app.get(APP_TF_ALLOWLIST, set()))
@@ -683,7 +683,7 @@ def _build_config_frame(
     }
 
 
-# в”Ђв”Ђ UDS async wrappers (blocking I/O в†’ executor) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── UDS async wrappers (blocking I/O → executor) ──────
 
 
 async def _uds_read_window(
@@ -693,7 +693,7 @@ async def _uds_read_window(
     limit: int,
     to_open_ms: Optional[int] = None,
 ) -> Any:
-    """Async wrapper РґР»СЏ UDS read_window (blocking Redis/Disk I/O)."""
+    """Async wrapper для UDS read_window (blocking Redis/Disk I/O)."""
     from runtime.store.uds import WindowSpec, ReadPolicy
 
     uds = app[APP_UDS] if APP_UDS in app else None
@@ -706,10 +706,10 @@ async def _uds_read_window(
         to_open_ms=to_open_ms,
         cold_load=to_open_ms is None,
     )
-    # P11: scrollback (to_open_ms) = "explicit" (disk РґРѕР·РІРѕР»РµРЅРѕ Р·Р°РІР¶РґРё);
-    #      cold-start/switch = "bootstrap" (disk С‚С–Р»СЊРєРё РІ bootstrap РІС–РєРЅС–).
-    # P2: disk_policy="explicit" РґР»СЏ РІСЃС–С… reads вЂ” ws_server РѕРєСЂРµРјРёР№ РїСЂРѕС†РµСЃ,
-    # Р№РѕРіРѕ RAM/Redis РјРѕР¶СѓС‚СЊ Р±СѓС‚Рё stale. Disk Р·Р°РІР¶РґРё Р°РєС‚СѓР°Р»СЊРЅРёР№.
+    # P11: scrollback (to_open_ms) = "explicit" (disk дозволено завжди);
+    #      cold-start/switch = "bootstrap" (disk тільки в bootstrap вікні).
+    # P2: disk_policy="explicit" для всіх reads — ws_server окремий процес,
+    # його RAM/Redis можуть бути stale. Disk завжди актуальний.
     policy = ReadPolicy(disk_policy="explicit", prefer_redis=True)
     loop = asyncio.get_event_loop()
     executor = app[APP_UDS_EXECUTOR]
@@ -723,7 +723,7 @@ async def _uds_read_updates(
     since_seq: Optional[int],
     include_preview: bool,
 ) -> Any:
-    """Async wrapper РґР»СЏ UDS read_updates (blocking)."""
+    """Async wrapper для UDS read_updates (blocking)."""
     from runtime.store.uds import UpdatesSpec
 
     uds = app[APP_UDS] if APP_UDS in app else None
@@ -742,7 +742,7 @@ async def _uds_read_updates(
 
 
 async def _send_full_frame(session: WsSession, app: web.Application) -> None:
-    """Р§РёС‚Р°С” UDS read_window в†’ map в†’ full frame в†’ send."""
+    """Читає UDS read_window → map → full frame → send."""
     if session.symbol is None or session.tf_s is None:
         return
     cfg = app.get(APP_FULL_CONFIG, {})
@@ -766,7 +766,7 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                 "WS_CANDLE_MAP_DROPPED client=%s dropped=%d", session.client_id, dropped
             )
         warnings.extend(getattr(result, "warnings", []))
-        # SMC: inject snapshot into full frame (ADR-0024 В§6.1)
+        # SMC: inject snapshot into full frame (ADR-0024 §6.1)
         smc_wire: Optional[Dict[str, Any]] = None
         _smc_runner = app[APP_SMC_RUNNER] if APP_SMC_RUNNER in app else None
         if _smc_runner is not None:
@@ -949,10 +949,10 @@ async def _safe_broadcast(
     sessions: Dict[str, "WsSession"],
     timeout_s: float = BROADCAST_SEND_TIMEOUT_S,
 ) -> float:
-    """ADR-0011 BC5+BC6: broadcast Р· per-client seq + timeout + degraded-but-loud.
+    """ADR-0011 BC5+BC6: broadcast з per-client seq + timeout + degraded-but-loud.
 
-    Р”Р»СЏ РєРѕР¶РЅРѕРіРѕ РєР»С–С”РЅС‚Р°: С–РЅР¶РµРєС‚РёС‚СЊ session.next_seq() РІ meta.seq,
-    СЃРµСЂС–Р°Р»С–Р·СѓС”, РІС–РґРїСЂР°РІР»СЏС” Р· timeout. РџРѕРІРµСЂС‚Р°С” t_send_ms.
+    Для кожного клієнта: інжектить session.next_seq() в meta.seq,
+    серіалізує, відправляє з timeout. Повертає t_send_ms.
     """
     if not recipients:
         return 0.0
@@ -999,11 +999,11 @@ def _seed_forming_from_uds(
     bucket_open_ms: int,
     fallback_price: float,
 ) -> Dict[str, Any]:
-    """Seed forming candle Р· UDS (РїРѕС‚РѕС‡РЅРёР№ Р±Р°СЂ РґР»СЏ bucket_open_ms).
+    """Seed forming candle з UDS (поточний бар для bucket_open_ms).
 
-    РџС–СЃР»СЏ СЂРµСЃС‚Р°СЂС‚Сѓ forming_by_target = {}. Р‘РµР· seed open = РїРµСЂС€РёР№ С‚С–Рє
-    (С…РёР±РЅРёР№ D1 open). РЇРєС‰Рѕ UDS РјР°С” Р±Р°СЂ РґР»СЏ С†СЊРѕРіРѕ bucket вЂ” Р±РµСЂРµС‚СЊСЃСЏ O/H/L.
-    РЇРєС‰Рѕ UDS С‰Рµ РїРѕСЂРѕР¶РЅС–Р№ вЂ” fallback РЅР° tick_price (degraded-but-loud).
+    Після рестарту forming_by_target = {}. Без seed open = перший тік
+    (хибний D1 open). Якщо UDS має бар для цього bucket — береться O/H/L.
+    Якщо UDS ще порожній — fallback на tick_price (degraded-but-loud).
     """
     uds = app.get("_uds")
     if uds is not None:
@@ -1041,10 +1041,10 @@ def _seed_forming_from_uds(
                     }
         except Exception as exc:
             _log.warning("D1_FORMING_SEED_ERR sym=%s err=%s", symbol, exc)
-    # Fallback: РЅРµРјР°С” UDS РґР°РЅРёС… в†’ С‡РёСЃС‚РёР№ С‚С–Рє (degraded-but-loud)
+    # Fallback: немає UDS даних → чистий тік (degraded-but-loud)
     _log.warning(
         "D1_FORMING_NO_SEED sym=%s open_ms=%d price=%.2f "
-        "вЂ” open Р±СѓРґРµ РїРµСЂС€РёРј С‚С–РєРѕРј РїС–СЃР»СЏ СЂРµСЃС‚Р°СЂС‚Сѓ",
+        "— open буде першим тіком після рестарту",
         symbol,
         bucket_open_ms,
         fallback_price,
@@ -1060,7 +1060,7 @@ def _seed_forming_from_uds(
 
 
 async def _global_delta_loop(app: web.Application) -> None:
-    """ADR-0011: Global Background task: poll UDS read_updates в†’ serialize once в†’ fanout."""
+    """ADR-0011: Global Background task: poll UDS read_updates → serialize once → fanout."""
     poll_s = app.get(APP_DELTA_POLL_S, DEFAULT_DELTA_POLL_S)
     preview_tfs: set = app.get(APP_PREVIEW_TF_SET, set())
     forming_by_target: Dict[tuple[str, int], Dict[str, Any]] = (
@@ -1176,9 +1176,9 @@ async def _global_delta_loop(app: web.Application) -> None:
                                     if tick_price > 0 and tick_ts_ms > 0:
                                         forming = forming_by_target.get((symbol, tf_s))
                                         if forming is None:
-                                            # в”Ђв”Ђ ADR: seed forming Р· UDS РїСЂРё СЂРµСЃС‚Р°СЂС‚С– в”Ђв”Ђ
-                                            # Р‘РµР· seed open = РїРµСЂС€РёР№ С‚С–Рє РїС–СЃР»СЏ СЂРµСЃС‚Р°СЂС‚Сѓ (С…РёР±РЅРёР№).
-                                            # Р§РёС‚Р°С”РјРѕ РїРѕС‚РѕС‡РЅРёР№ Р±Р°СЂ Р· UDS С‰РѕР± СѓСЃРїР°РґРєСѓРІР°С‚Рё O/H/L.
+                                            # ── ADR: seed forming з UDS при рестарті ──
+                                            # Без seed open = перший тік після рестарту (хибний).
+                                            # Читаємо поточний бар з UDS щоб успадкувати O/H/L.
                                             from core.buckets import (
                                                 bucket_start_ms,
                                                 resolve_anchor_offset_ms,
@@ -1324,7 +1324,7 @@ async def _global_delta_loop(app: web.Application) -> None:
                             "meta": meta,
                         }
 
-                        # SMC: notify runner on complete bars в†’ inject delta if has_changes
+                        # SMC: notify runner on complete bars → inject delta if has_changes
                         _smc_runner = (
                             app[APP_SMC_RUNNER] if APP_SMC_RUNNER in app else None
                         )
@@ -1552,7 +1552,7 @@ async def _global_delta_loop(app: web.Application) -> None:
             for k in stale_keys:
                 forming_by_target.pop(k, None)
 
-            # в”Ђв”Ђ ADR-0035: M1 feed for session H/L live tracking в”Ђв”Ђ
+            # ── ADR-0035: M1 feed for session H/L live tracking ──
             # Poll M1 updates for each active symbol and feed to SmcRunner.
             # This ensures session levels update as new M1 bars complete,
             # even when M1 is not a subscribed display TF.
@@ -1576,7 +1576,7 @@ async def _global_delta_loop(app: web.Application) -> None:
                     except Exception as m1_exc:
                         _log.debug("WS_M1_SESSION_FEED_ERR sym=%s err=%s", sym, m1_exc)
 
-            # в”Ђв”Ђ ADR-0049: WakeEngine tick ($0, in-process) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+            # ── ADR-0049: WakeEngine tick ($0, in-process) ──────────────────
             _wake_eng = app.get(APP_WAKE_ENGINE)
             if _wake_eng is not None:
                 try:
@@ -1585,7 +1585,7 @@ async def _global_delta_loop(app: web.Application) -> None:
                 except Exception as _wake_exc:
                     _log.debug("WS_WAKE_ENGINE_TICK_ERR: %s", _wake_exc)
 
-            # в”Ђв”Ђ ADR-0049: NarrativeEnricher thesis refresh (via executor) в”Ђв”Ђ
+            # ── ADR-0049: NarrativeEnricher thesis refresh (via executor) ──
             _enricher = app.get("_narrative_enricher")
             if _enricher is not None:
                 try:
@@ -1606,11 +1606,11 @@ async def _global_delta_loop(app: web.Application) -> None:
 
 
 async def _bg_smc_feed_loop(app: web.Application) -> None:
-    """ADR-0040: С„РѕРЅРѕРІРёР№ feed ALL symbols Г— compute_tfs РґР»СЏ SMC/TDA cascade.
+    """ADR-0040: фоновий feed ALL symbols × compute_tfs для SMC/TDA cascade.
 
-    РћРєСЂРµРјР° coroutine Р· РїРѕРІС–Р»СЊРЅРёРј С–РЅС‚РµСЂРІР°Р»РѕРј (bg_smc_poll_interval_s, default 10s).
-    HTF Р±Р°СЂРё (D1/H4/H1/M15) Р·РјС–РЅСЋСЋС‚СЊСЃСЏ СЂС–РґРєРѕ вЂ” polling РєРѕР¶РЅСѓ 1s РЅР°РґР»РёС€РєРѕРІРёР№.
-    Р—Р°РїСѓСЃРєР°С”С‚СЊСЃСЏ РІ _start_bg_tasks РїС–СЃР»СЏ warmup SMC runner.
+    Окрема coroutine з повільним інтервалом (bg_smc_poll_interval_s, default 10s).
+    HTF бари (D1/H4/H1/M15) змінюються рідко — polling кожну 1s надлишковий.
+    Запускається в _start_bg_tasks після warmup SMC runner.
     """
     ws_cfg = app.get(APP_FULL_CONFIG, {}).get("ws_server", {})
     poll_s = float(ws_cfg.get("bg_smc_poll_interval_s", DEFAULT_BG_SMC_POLL_S))
@@ -1650,7 +1650,7 @@ async def _bg_smc_feed_loop(app: web.Application) -> None:
                             bg_tf,
                             bg_exc,
                         )
-                # в”Ђв”Ђ M1 feed for _last_prices + session H/L (ADR-0035 bg path) в”Ђв”Ђ
+                # ── M1 feed for _last_prices + session H/L (ADR-0035 bg path) ──
                 # When ws_clients=0 the delta_loop doesn't feed M1 bars,
                 # so _last_prices freezes. Poll M1 here to keep price fresh.
                 try:
@@ -1672,7 +1672,7 @@ async def _bg_smc_feed_loop(app: web.Application) -> None:
         pass
 
 
-# в”Ђв”Ђ WS Handler в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── WS Handler ─────────────────────────────────────────
 
 
 async def ws_handler(request: web.Request) -> web.StreamResponse:
@@ -1709,9 +1709,9 @@ async def ws_handler(request: web.Request) -> web.StreamResponse:
     symbols = cfg.get("symbols", [])
     default_symbol = symbols[0] if symbols else "XAU/USD"
     session.symbol = default_symbol
-    session.tf_s = 1800  # M30 default вЂ” sync Р· SymbolTfPicker default
+    session.tf_s = 1800  # M30 default — sync з SymbolTfPicker default
 
-    # T8/S24: config frame (policy bridge) вЂ” Р·Р°РІР¶РґРё, РЅРµР·Р°Р»РµР¶РЅРѕ РІС–Рґ UDS
+    # T8/S24: config frame (policy bridge) — завжди, незалежно від UDS
     try:
         config_frame = _build_config_frame(session, app)
         await ws.send_json(config_frame)
@@ -1776,11 +1776,11 @@ async def ws_handler(request: web.Request) -> web.StreamResponse:
     return ws
 
 
-_MAX_WS_MSG_BYTES = 65536  # SEC-05: 64 KB limit РґР»СЏ WS РїРѕРІС–РґРѕРјР»РµРЅСЊ
+_MAX_WS_MSG_BYTES = 65536  # SEC-05: 64 KB limit для WS повідомлень
 
 
 def _sanitize_log(value: str, max_len: int = 120) -> str:
-    """SEC-03: РІРёРґР°Р»СЏС” control characters РґР»СЏ Р±РµР·РїРµС‡РЅРѕРіРѕ Р»РѕРіСѓРІР°РЅРЅСЏ."""
+    """SEC-03: видаляє control characters для безпечного логування."""
     import re as _re
 
     if not isinstance(value, str):
@@ -1804,10 +1804,10 @@ def _consume_action_token(session: WsSession, limits: WsLimits, now: float) -> b
 
 
 async def _handle_action(session: WsSession, raw: str, app: web.Application) -> None:
-    """Р РѕР·Р±РёСЂР°С” РІС…С–РґРЅРµ РїРѕРІС–РґРѕРјР»РµРЅРЅСЏ РІС–Рґ РєР»С–С”РЅС‚Р°. P2: switch + scrollback.
+    """Розбирає вхідне повідомлення від клієнта. P2: switch + scrollback.
 
-    S20: JSON/schema errors в†’ error frame РєР»С–С”РЅС‚Сѓ (degraded-but-loud).
-    S25: Unknown action в†’ error frame + Р»РѕРі (РЅРµ silent ignore).
+    S20: JSON/schema errors → error frame клієнту (degraded-but-loud).
+    S25: Unknown action → error frame + лог (не silent ignore).
     """
     # SEC-05: message size guard
     if len(raw) > _MAX_WS_MSG_BYTES:
@@ -1860,7 +1860,7 @@ async def _handle_action(session: WsSession, raw: str, app: web.Application) -> 
     elif action == "scrollback":
         await _handle_scrollback(session, data, app)
     else:
-        # S25: unknown action в†’ error frame (degraded-but-loud, РЅРµ silent ignore)
+        # S25: unknown action → error frame (degraded-but-loud, не silent ignore)
         _log.warning("WS_ACTION_UNKNOWN client=%s action=%s", session.client_id, action)
         err = _build_error_frame(
             session, "unknown_action", "Unknown action: %s" % action, app=app
@@ -1871,7 +1871,7 @@ async def _handle_action(session: WsSession, raw: str, app: web.Application) -> 
 async def _handle_switch(
     session: WsSession, data: Dict[str, Any], app: web.Application
 ) -> None:
-    """РћР±СЂРѕР±РєР° switch action: Р·РјС–РЅРёС‚Рё symbol/tf в†’ РЅРѕРІРёР№ full frame."""
+    """Обробка switch action: змінити symbol/tf → новий full frame."""
     # SEC-06: cooldown між switch (кожен switch = cold-start read + SMC snapshot + серіалізація)
     limits: WsLimits = app.get(APP_WS_LIMITS) or WsLimits()
     now_s = time.time()
@@ -1945,7 +1945,7 @@ async def _handle_switch(
 async def _handle_scrollback(
     session: WsSession, data: Dict[str, Any], app: web.Application
 ) -> None:
-    """РћР±СЂРѕР±РєР° scrollback action: UDS read_window(to_open_ms) в†’ scrollback frame.
+    """Обробка scrollback action: UDS read_window(to_open_ms) → scrollback frame.
 
     P11 rails: max_steps + cooldown per session/symbol+tf.
     """
@@ -2003,7 +2003,7 @@ async def _handle_scrollback(
     session._scrollback_count += 1
     session._scrollback_last_ts = now
     cfg = app.get(APP_FULL_CONFIG, {})
-    # Scrollback chunk: РјРµРЅС€Рµ РЅС–Р¶ cold start
+    # Scrollback chunk: менше ніж cold start
     limit = min(_cold_start_limit(session.tf_s, cfg), 500)
     warnings: list = []
     try:
@@ -2035,7 +2035,7 @@ async def _handle_scrollback(
         )
     except Exception as exc:
         _log.warning("WS_SCROLLBACK_ERROR client=%s err=%s", session.client_id, exc)
-        # Р—Р°РІР¶РґРё РІС–РґРїРѕРІС–РґР°С”РјРѕ РїСѓСЃС‚РёРј frame вЂ” С–РЅР°РєС€Рµ РєР»С–С”РЅС‚ Р·Р°СЃС‚СЂСЏРіРЅРµ
+        # Завжди відповідаємо пустим frame — інакше клієнт застрягне
         try:
             tf_label = _TF_S_TO_LABEL.get(session.tf_s, f"{session.tf_s}s")
             frame = _build_scrollback_frame(
@@ -2051,11 +2051,11 @@ async def _handle_scrollback(
             pass
 
 
-# в”Ђв”Ђ UDS init в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── UDS init ───────────────────────────────────────────
 
 
 def _init_uds(app: web.Application, config_path: str, cfg: Dict[str, Any]) -> None:
-    """Р†РЅС–С†С–Р°Р»С–Р·СѓС” UDS reader. W0: role='reader', writer_components=False."""
+    """Ініціалізує UDS reader. W0: role='reader', writer_components=False."""
     try:
         from runtime.store.uds import build_uds_from_config
         import os
@@ -2075,7 +2075,7 @@ def _init_uds(app: web.Application, config_path: str, cfg: Dict[str, Any]) -> No
         _log.warning("WS_UDS_INIT_FAILED err=%s (running without UDS)", exc)
 
 
-# в”Ђв”Ђ App factory в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── App factory ────────────────────────────────────────
 
 
 def build_app(
@@ -2083,11 +2083,11 @@ def build_app(
     config_path: str = "config.json",
     uds: Any = None,
 ) -> web.Application:
-    """РЎС‚РІРѕСЂСЋС” aiohttp Application Р· WS endpoint.
+    """Створює aiohttp Application з WS endpoint.
 
     Args:
-        config_path: С€Р»СЏС… РґРѕ config.json
-        uds: Р·РѕРІРЅС–С€РЅС–Р№ UDS instance (РґР»СЏ С‚РµСЃС‚С–РІ). РЇРєС‰Рѕ None вЂ” P2 auto-init.
+        config_path: шлях до config.json
+        uds: зовнішній UDS instance (для тестів). Якщо None — P2 auto-init.
     """
     full_cfg = _load_full_config(config_path)
     ws_cfg = full_cfg.get("ws_server", {}) if isinstance(full_cfg, dict) else {}
@@ -2129,7 +2129,7 @@ def build_app(
     preview_set, _ = preview_tf_allowlist_from_cfg(full_cfg)
     app[APP_PREVIEW_TF_SET] = preview_set
 
-    # ADR-0012 P3: D1 live tick relay вЂ” Redis client + config flags
+    # ADR-0012 P3: D1 live tick relay — Redis client + config flags
     _d1_relay_enabled = bool(
         full_cfg.get("d1_live_tick_relay_enabled", _D1_TICK_RELAY_ENABLED_DEFAULT)
     )
@@ -2165,7 +2165,7 @@ def build_app(
             _log.warning("D1_TICK_RELAY_INIT_FAILED err=%s (disabled)", relay_exc)
 
     # Dedicated thread pool for UDS blocking I/O (limit thread explosion)
-    # min(4, cpu_count) вЂ” 2 Р±СѓР»Рѕ РЅРµРґРѕСЃС‚Р°С‚РЅСЊРѕ РґР»СЏ РїР°СЂР°Р»РµР»СЊРЅРёС… /api/bars + /api/updates
+    # min(4, cpu_count) — 2 було недостатньо для паралельних /api/bars + /api/updates
     import os as _os
 
     _uds_workers = min(4, _os.cpu_count() or 4)
@@ -2179,7 +2179,7 @@ def build_app(
     else:
         _init_uds(app, config_path, full_cfg)
 
-    # SMC Runner init (ADR-0024 В§6.1) вЂ” in-process, same event loop as ws_server
+    # SMC Runner init (ADR-0024 §6.1) — in-process, same event loop as ws_server
     _smc_section = full_cfg.get("smc", {}) if isinstance(full_cfg, dict) else {}
     if _smc_section.get("enabled", False):
         try:
@@ -2197,10 +2197,10 @@ def build_app(
             )
         except Exception as _smc_init_exc:
             _log.warning(
-                "WS_SMC_RUNNER_INIT_FAILED err=%s вЂ” SMC disabled", _smc_init_exc
+                "WS_SMC_RUNNER_INIT_FAILED err=%s — SMC disabled", _smc_init_exc
             )
 
-    # в”Ђв”Ђ CORS middleware (cross-origin: Vercel / Cloudflare Pages) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── CORS middleware (cross-origin: Vercel / Cloudflare Pages) ──────
     _cors_origins_raw = ws_cfg.get("cors_allowed_origins", [])
     _cors_origins = set(str(o).rstrip("/") for o in _cors_origins_raw if o)
     app[APP_CORS_ORIGINS] = _cors_origins
@@ -2211,7 +2211,7 @@ def build_app(
     async def cors_middleware(request, handler):
         origin = request.headers.get("Origin", "")
         allowed = app.get(APP_CORS_ORIGINS, set())
-        # РЇРєС‰Рѕ CORS РЅРµ РЅР°Р»Р°С€С‚РѕРІР°РЅРёР№ Р°Р±Рѕ origin РЅРµ РІ СЃРїРёСЃРєСѓ вЂ” РїСЂРѕРїСѓСЃРєР°С”РјРѕ
+        # Якщо CORS не налаштований або origin не в списку — пропускаємо
         if not allowed or origin not in allowed:
             return await handler(request)
         # Preflight OPTIONS
@@ -2220,14 +2220,14 @@ def build_app(
             resp.headers["Access-Control-Allow-Origin"] = origin
             resp.headers.update(_CORS_HEADERS_COMMON)
             return resp
-        # Р—РІРёС‡Р°Р№РЅРёР№ Р·Р°РїРёС‚ вЂ” РґРѕРґР°С”РјРѕ CORS headers
+        # Звичайний запит — додаємо CORS headers
         resp = await handler(request)
         resp.headers["Access-Control-Allow-Origin"] = origin
         return resp
 
     app.middlewares.append(cors_middleware)
 
-    # в”Ђв”Ђ /api/status вЂ” edge probe endpoint (РґР»СЏ Vercel cross-origin) в”Ђв”Ђв”Ђв”Ђ
+    # ── /api/status — edge probe endpoint (для Vercel cross-origin) ────
     async def _api_status(request: web.Request) -> web.Response:
         uds_ok = APP_UDS in app
         sessions_count = len(app[APP_WS_SESSIONS])
@@ -2323,12 +2323,12 @@ def build_app(
 
     # ADR-0090 S1: консоль клієнта та agent-observability маршрути живуть в окремому
     # процесі runtime/agent_bridge (smc-agent-bridge :8010); тут їх немає.
-    # в”Ђв”Ђ /api/context вЂ” SMC context for external consumers (bot, TUI) в”Ђв”Ђв”Ђ
+    # ── /api/context — SMC context for external consumers (bot, TUI) ───
     async def _api_context(request: web.Request) -> web.Response:
-        """РџРѕРІРµСЂС‚Р°С” РїРѕС‚РѕС‡РЅРёР№ SMC РєРѕРЅС‚РµРєСЃС‚ РґР»СЏ symbol+tf.
+        """Повертає поточний SMC контекст для symbol+tf.
 
         GET /api/context?symbol=BTCUSDT&tf=M15
-        Р’РёРєРѕСЂРёСЃС‚РѕРІСѓС”С‚СЊСЃСЏ Telegram-Р±РѕС‚РѕРј РґР»СЏ Р·Р±Р°РіР°С‡РµРЅРЅСЏ Р°РЅР°Р»С–Р·Сѓ.
+        Використовується Telegram-ботом для збагачення аналізу.
         """
         symbol_raw = request.query.get("symbol", "")
         tf_raw = request.query.get("tf", "M15")
@@ -2353,23 +2353,23 @@ def build_app(
             ctx["error"] = "smc_runner not available"
             return web.json_response(ctx)
 
-        # last_price вЂ” РІС–Рґ SmcRunner (РѕРЅРѕРІР»СЋС”С‚СЊСЃСЏ РїСЂРё РєРѕР¶РЅРѕРјСѓ M1 bar)
+        # last_price — від SmcRunner (оновлюється при кожному M1 bar)
         _last_price = _smc_runner.get_last_price(symbol)
         if _last_price > 0:
             ctx["last_price"] = _last_price
 
-        # bias_map вЂ” HTF alignment
+        # bias_map — HTF alignment
         try:
             bm = _smc_runner.get_bias_map(symbol)
             if bm:
-                # РџРµСЂРµС‚РІРѕСЂСЋС”РјРѕ РєР»СЋС‡С– tf_s в†’ label РґР»СЏ С‡РёС‚Р°Р±РµР»СЊРЅРѕСЃС‚С–
+                # Перетворюємо ключі tf_s → label для читабельності
                 ctx["bias_map"] = {
                     _TF_S_TO_LABEL.get(int(k), k): v for k, v in bm.items()
                 }
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"bias_map: {exc}")
 
-        # pd_state вЂ” premium/discount
+        # pd_state — premium/discount
         try:
             pd = _smc_runner.get_pd_state(symbol, tf_s)
             if pd:
@@ -2377,16 +2377,16 @@ def build_app(
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"pd_state: {exc}")
 
-        # zones + zone_grades вЂ” active SMC zones
+        # zones + zone_grades — active SMC zones
         try:
             snap = _smc_runner.get_snapshot(symbol, tf_s)
             if snap is not None:
                 wire = snap.to_wire()
-                # РўС–Р»СЊРєРё Р°РєС‚РёРІРЅС– Р·РѕРЅРё (РЅРµ mitigated)
+                # Тільки активні зони (не mitigated)
                 ctx["zones"] = wire.get("zones", [])
                 ctx["levels"] = wire.get("levels", [])
                 ctx["trend_bias"] = wire.get("trend_bias")
-                # swings вЂ” filtered to structure events only (BOS/CHoCH/displacement)
+                # swings — filtered to structure events only (BOS/CHoCH/displacement)
                 _STRUCTURE_KINDS = {
                     "bos_bull",
                     "bos_bear",
@@ -2416,7 +2416,7 @@ def build_app(
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"session_levels: {exc}")
 
-        # momentum_map вЂ” displacement intensity per TF
+        # momentum_map — displacement intensity per TF
         try:
             mm = _smc_runner.get_momentum_map(symbol)
             if mm:
@@ -2459,7 +2459,7 @@ def build_app(
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"candles: {exc}")
 
-        # narrative вЂ” market phase, scenario, mode
+        # narrative — market phase, scenario, mode
         narr = None
         try:
             _atr_est = 1.0
@@ -2486,7 +2486,7 @@ def build_app(
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"signals: {exc}")
 
-        # в”Ђв”Ђ tick_price: real-time tick from Redis (sub-second freshness) в”Ђв”Ђ
+        # ── tick_price: real-time tick from Redis (sub-second freshness) ──
         try:
             tick_redis = (
                 app[APP_TICK_REDIS_CLIENT] if APP_TICK_REDIS_CLIENT in app else None
@@ -2510,7 +2510,7 @@ def build_app(
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"tick_price: {exc}")
 
-        # в”Ђв”Ђ data_quality: auto-computed freshness metadata в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        # ── data_quality: auto-computed freshness metadata ──────────
         try:
             now_ms = int(time.time() * 1000)
             dq: Dict[str, Any] = {"server_ts_ms": now_ms, "tf_freshness": {}}
@@ -2531,7 +2531,7 @@ def build_app(
                         _dq_age_s = (now_ms - _dq_last_ms) / 1000
                         _dq_expected_s = (
                             _dq_tf * 2.5
-                        )  # bar should arrive within ~2.5Г— TF
+                        )  # bar should arrive within ~2.5× TF
                         dq["tf_freshness"][_dq_label] = {
                             "last_bar_ms": _dq_last_ms,
                             "age_s": round(_dq_age_s),
@@ -2559,7 +2559,7 @@ def build_app(
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"data_quality: {exc}")
 
-        # в”Ђв”Ђ h4_forming: synthesized forming H4 candle from M1 bars в”Ђв”Ђ
+        # ── h4_forming: synthesized forming H4 candle from M1 bars ──
         try:
             if tf_s == 14400 or int(request.query.get("include_h4_forming", "0")):
                 from core.buckets import bucket_start_ms, resolve_anchor_offset_ms
@@ -2606,13 +2606,13 @@ def build_app(
     app.router.add_get("/api/context", _api_context)
     app.router.add_get("/ws", ws_handler)
 
-    # в”Ђв”Ђ Same-origin SPA serving (РџСЂР°РІРёР»Рѕ В§11: UI + API = РѕРґРёРЅ РїСЂРѕС†РµСЃ) в”Ђв”Ђ
-    # Р РѕР·РґР°С‡Р° ui_v4/dist/ СЏРєС‰Рѕ dist С–СЃРЅСѓС” (РїС–СЃР»СЏ npm run build)
+    # ── Same-origin SPA serving (Правило §11: UI + API = один процес) ──
+    # Роздача ui_v4/dist/ якщо dist існує (після npm run build)
     _ws_dir = os.path.dirname(os.path.abspath(__file__))
     _ui_dist = os.path.normpath(os.path.join(_ws_dir, "..", "..", "ui_v4", "dist"))
     _ui_src = os.path.normpath(os.path.join(_ws_dir, "..", "..", "ui_v4", "src"))
     _ui_index = os.path.join(_ui_dist, "index.html")
-    # D7: stale dist/ detection вЂ” РїРѕСЂС–РІРЅСЏС‚Рё mtime dist/index.html vs max(src/**)
+    # D7: stale dist/ detection — порівняти mtime dist/index.html vs max(src/**)
     if os.path.isfile(_ui_index) and os.path.isdir(_ui_src):
         try:
             _dist_mtime = os.path.getmtime(_ui_index)
@@ -2627,13 +2627,13 @@ def build_app(
             )
             if _src_mtime > _dist_mtime:
                 _log.warning(
-                    "UI_V4_DIST_STALE dist/index.html older than src/ by %.0fs вЂ” "
+                    "UI_V4_DIST_STALE dist/index.html older than src/ by %.0fs — "
                     "run 'cd ui_v4 && npm run build' to rebuild",
                     _src_mtime - _dist_mtime,
                 )
         except Exception:
             _log.debug("UI_V4_DIST_STALE_CHECK_FAILED", exc_info=True)
-            pass  # best-effort, РЅРµ Р±Р»РѕРєСѓС”РјРѕ СЃС‚Р°СЂС‚
+            pass  # best-effort, не блокуємо старт
     if os.path.isfile(_ui_index):
 
         async def _spa_index(request: web.Request) -> web.FileResponse:
@@ -2647,9 +2647,9 @@ def build_app(
                 _ui_index, headers={"Cache-Control": "no-cache"}
             )
 
-        # SPA fallback: index.html РґР»СЏ РєРѕСЂРµРЅСЏ
+        # SPA fallback: index.html для кореня
         app.router.add_get("/", _spa_index)
-        # РЎС‚Р°С‚РёС‡РЅС– Р°СЃСЃРµС‚Рё (JS/CSS/images)
+        # Статичні ассети (JS/CSS/images)
         app.router.add_static("/assets", os.path.join(_ui_dist, "assets"))
         # ADR-0066 PATCH 03: brand assets (favicon SVG, wordmark, mark variants)
         _brand_dir = os.path.join(_ui_dist, "brand")
@@ -2716,7 +2716,7 @@ def build_app(
             app_ctx[APP_GLOBAL_DELTA_TASK] = asyncio.ensure_future(
                 _global_delta_loop(app_ctx)
             )
-        # SMC warmup in executor (blocking UDS reads, РЅРµ Р±Р»РѕРєСѓС” event loop)
+        # SMC warmup in executor (blocking UDS reads, не блокує event loop)
         _smc_r = app_ctx[APP_SMC_RUNNER] if APP_SMC_RUNNER in app_ctx else None
         _uds_r = app_ctx[APP_UDS] if APP_UDS in app_ctx else None
         _exec = app_ctx[APP_UDS_EXECUTOR]
@@ -2725,11 +2725,11 @@ def build_app(
                 asyncio.get_event_loop().run_in_executor(_exec, _smc_r.warmup, _uds_r)
             )
             _log.info("WS_SMC_WARMUP_SCHEDULED")
-        # ADR-0040: BG SMC feed loop вЂ” РѕРєСЂРµРјР° coroutine Р· РїРѕРІС–Р»СЊРЅРёРј poll (default 10s)
+        # ADR-0040: BG SMC feed loop — окрема coroutine з повільним poll (default 10s)
         if APP_UDS in app_ctx and _smc_r is not None:
             app_ctx[APP_BG_SMC_TASK] = asyncio.ensure_future(_bg_smc_feed_loop(app_ctx))
 
-        # ADR-0049: WakeEngine вЂ” $0 wake condition checker in delta_loop
+        # ADR-0049: WakeEngine — $0 wake condition checker in delta_loop
         _full_cfg = app_ctx.get(APP_FULL_CONFIG, {})
         _bridge_rt = app_ctx.get(APP_AGENT_BRIDGE_CFG)
         if _bridge_rt is not None and _bridge_rt.wake_engine_enabled and _smc_r is not None:
@@ -2754,7 +2754,7 @@ def build_app(
                         _wake_symbols,
                         _wake_ns,
                     )
-                    # NarrativeEnricher вЂ” thesis injection, same Redis
+                    # NarrativeEnricher — thesis injection, same Redis
                     from runtime.smc.narrative_enricher import NarrativeEnricher
 
                     _ne = NarrativeEnricher(
@@ -2789,7 +2789,7 @@ def build_app(
     return app
 
 
-# в”Ђв”Ђ Port bind with retry (Windows TIME_WAIT resilience) в”Ђв”Ђ
+# ── Port bind with retry (Windows TIME_WAIT resilience) ──
 
 _BIND_MAX_RETRIES = 5
 _BIND_RETRY_DELAY_S = 3.0
@@ -2811,13 +2811,13 @@ def _run_with_retry(
     max_retries: int = _BIND_MAX_RETRIES,
     retry_delay: float = _BIND_RETRY_DELAY_S,
 ) -> None:
-    """Р—Р°РїСѓСЃРє aiohttp Р· retry РґР»СЏ port bind (Windows TIME_WAIT)."""
+    """Запуск aiohttp з retry для port bind (Windows TIME_WAIT)."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.set_exception_handler(_ws_exception_handler)
     runner = web.AppRunner(
         app, access_log=None
-    )  # РІРёРјРєРЅРµРЅРѕ access log (P4: ~227k СЂСЏРґРєС–РІ/РґРµРЅСЊ С€СѓРјСѓ)
+    )  # вимкнено access log (P4: ~227k рядків/день шуму)
     loop.run_until_complete(runner.setup())
 
     for attempt in range(1, max_retries + 1):
@@ -2860,7 +2860,7 @@ def _run_with_retry(
         loop.close()
 
 
-# в”Ђв”Ђ CLI entrypoint в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── CLI entrypoint ─────────────────────────────────────
 
 
 def main() -> None:

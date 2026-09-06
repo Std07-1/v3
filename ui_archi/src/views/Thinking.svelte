@@ -16,7 +16,7 @@
     let error = $state("");
     let expanded = $state<Record<number, boolean>>({});
 
-    // в”Ђв”Ђ T1.3 filter + search в”Ђв”Ђ
+    // ── T1.3 filter + search ──
     let filterType = $state("");
     let searchText = $state("");
 
@@ -41,7 +41,7 @@
         }),
     );
 
-    // в”Ђв”Ђ T3 model colors в”Ђв”Ђ
+    // ── T3 model colors ──
     function modelColor(model?: string): string {
         if (!model) return "model-default";
         const m = model.toLowerCase();
@@ -51,7 +51,7 @@
         return "model-default";
     }
 
-    // в”Ђв”Ђ T3 copy button в”Ђв”Ђ
+    // ── T3 copy button ──
     let copied = $state<Record<number, boolean>>({});
     async function copyEntry(i: number, entry: ThinkingEntry) {
         const text = [
@@ -123,7 +123,7 @@
 </script>
 
 <div class="view">
-    <!-- в”Ђв”Ђ Header в”Ђв”Ђ -->
+    <!-- ── Header ── -->
     <div class="view-header">
         <h2>🧠 Thinking Archive</h2>
         <div class="header-right">
@@ -138,7 +138,7 @@
         </div>
     </div>
 
-    <!-- в”Ђв”Ђ Filter bar в”Ђв”Ђ -->
+    <!-- ── Filter bar ── -->
     <div class="filter-bar">
         <div class="type-pills">
             <button
@@ -173,7 +173,7 @@
         <div class="error-box">{error}</div>
     {/if}
 
-    <!-- в”Ђв”Ђ Entries в”Ђв”Ђ -->
+    <!-- ── Entries ── -->
     <div class="entries-list">
         {#if loading && entries.length === 0}
             <div class="empty-state">Завантаження…</div>
@@ -255,7 +255,7 @@
                         </div>
                     {/if}
 
-                    <!-- Thinking block вЂ” collapsible -->
+                    <!-- Thinking block — collapsible -->
                     {#if expanded[i] && entry.thinking}
                         <div class="thinking-block">
                             <div class="thinking-label">💭 inner thinking</div>
@@ -270,7 +270,7 @@
         {/if}
     </div>
 
-    <!-- в”Ђв”Ђ Pagination в”Ђв”Ђ -->
+    <!-- ── Pagination ── -->
     {#if pages > 1}
         <div class="pagination">
             <button
@@ -317,7 +317,7 @@
         gap: 12px;
     }
 
-    /* в”Ђв”Ђ Filter bar в”Ђв”Ђ */
+    /* ── Filter bar ── */
     .filter-bar {
         display: flex;
         align-items: center;

@@ -1,11 +1,11 @@
 """
-core/smc/wake_check.py вЂ” Pure $0 condition checker (ADR-0049).
+core/smc/wake_check.py — Pure $0 condition checker (ADR-0049).
 
-All functions: data in в†’ bool/value out. Zero I/O.
+All functions: data in → bool/value out. Zero I/O.
 Testable with pytest, no mocks needed.
 
 Invariants:
-  - I0: core в†’ does NOT import runtime
+  - I0: core → does NOT import runtime
   - S0: zero I/O, zero Redis, zero HTTP
 """
 from __future__ import annotations
@@ -79,7 +79,7 @@ def check_condition(
     if kind == WakeConditionKind.MAX_SILENCE:
         hours = float(p.get("hours", 3))
         if last_wake_ts_ms <= 0:
-            return True  # never woke before в†’ trigger immediately
+            return True  # never woke before → trigger immediately
         elapsed_h = (ts_ms - last_wake_ts_ms) / 3_600_000
         return elapsed_h >= hours
 
@@ -191,13 +191,13 @@ def accumulator_tick(
     score = acc.score
     events_log = deque(acc.events_log, maxlen=50)
 
-    # в”Ђв”Ђ Decay based on elapsed time в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── Decay based on elapsed time ──────────────────────────────
     if acc.last_tick_ts > 0 and ts > acc.last_tick_ts:
         elapsed_min = (ts - acc.last_tick_ts) / 60.0
         if elapsed_min > 0:
             score *= acc.decay ** elapsed_min
 
-    # в”Ђв”Ђ Price movement (main signal) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── Price movement (main signal) ─────────────────────────────
     if prev_price > 0 and price > 0:
         delta = abs(price - prev_price)
         normalized = delta / atr if atr > 1.0 else delta
@@ -210,12 +210,12 @@ def accumulator_tick(
                 "ts": ts,
             })
 
-    # в”Ђв”Ђ Session change bonus в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── Session change bonus ─────────────────────────────────────
     for ev in session_events or []:
         score += 1.0
         events_log.append({"type": "session", "event": ev, "ts": ts})
 
-    # в”Ђв”Ђ Gap bonus в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── Gap bonus ────────────────────────────────────────────────
     if gap_detected:
         score += 2.0
         events_log.append({"type": "gap", "ts": ts})

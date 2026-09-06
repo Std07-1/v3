@@ -231,7 +231,7 @@
         }
     }
 
-    // в”Ђв”Ђ SSE real-time stream в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    // ── SSE real-time stream ──────────────────────────────────────────
     function connectSSE(): () => void {
         const token = getToken();
         const url = `/api/archi/stream?token=${encodeURIComponent(token)}`;
@@ -286,7 +286,7 @@
 </script>
 
 <div class="view">
-    <!-- в”Ђв”Ђ Header в”Ђв”Ђ -->
+    <!-- ── Header ── -->
     <div class="view-header">
         <h2>⚡ Activity Feed</h2>
         <div class="header-right">
@@ -305,7 +305,7 @@
         </div>
     </div>
 
-    <!-- в”Ђв”Ђ Error в”Ђв”Ђ -->
+    <!-- ── Error ── -->
     {#if error}
         <div class="error-box">{error}</div>
     {/if}

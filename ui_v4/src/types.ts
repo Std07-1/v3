@@ -1,8 +1,8 @@
 ﻿// src/types.ts
-// SSOT С‚РёРїРё РґР»СЏ UI v4 (Slices 0вЂ“5). РЈРєСЂР°С—РЅСЃСЊРєС– РєРѕРјРµРЅС‚Р°СЂС–. Р‘РµР· silent fallback.
+// SSOT типи для UI v4 (Slices 0–5). Українські коментарі. Без silent fallback.
 
-export type T_MS = number;  // Р”РѕРјРµРЅРЅРёР№ С‡Р°СЃ: Unix milliseconds
-export type T_SEC = number; // LWC С‡Р°СЃ: UTCTimestamp seconds
+export type T_MS = number;  // Доменний час: Unix milliseconds
+export type T_SEC = number; // LWC час: UTCTimestamp seconds
 
 // -------------------- Bars --------------------
 export interface Candle {
@@ -23,14 +23,14 @@ export interface SmcPoint {
 export interface SmcZone {
   id: string;
   start_ms: T_MS;
-  end_ms?: T_MS; // open-ended РґРѕР·РІРѕР»РµРЅРѕ
+  end_ms?: T_MS; // open-ended дозволено
   high: number;
   low: number;
-  // ADR-0024 В§5.1: 'ob_bull'|'ob_bear'|'fvg_bull'|'fvg_bear'|'premium'|'discount'|
-  // legacy: 'fvg'|'ob'|'liquidity'. ГњР±РµСЂРµР¶РµРјРѕ СЏРє string РґР»СЏ backward-compat (В§6.1a)
+  // ADR-0024 §5.1: 'ob_bull'|'ob_bear'|'fvg_bull'|'fvg_bear'|'premium'|'discount'|
+  // legacy: 'fvg'|'ob'|'liquidity'. Üбережемо як string для backward-compat (§6.1a)
   kind: string;
   status?: string;   // 'active'|'tested'|'mitigated'|'partially_filled'|'filled'
-  strength?: number; // 0.0вЂ“1.0
+  strength?: number; // 0.0–1.0
   // ADR-0024c Phase 2: cross-TF zone identification + Context Stack
   tf_s?: number;                // Origin TF (seconds)
   context_layer?: string;       // 'institutional'|'intraday'|'local' (Context Stack layer)
@@ -46,9 +46,9 @@ export interface SmcSwing {
 
 export interface SmcLevel {
   id: string;
-  kind?: string;     // ADR-0024b: СЂС–РІРµРЅСЊ kind РґР»СЏ per-kind styling (pdh, pdl, h1_h, eq_highs, ...)
+  kind?: string;     // ADR-0024b: рівень kind для per-kind styling (pdh, pdl, h1_h, eq_highs, ...)
   price: number;
-  t_ms?: T_MS;      // РѕРїС†С–Р№РЅРѕ (С‡Р°СЃ С„РѕСЂРјСѓРІР°РЅРЅСЏ СЂС–РІРЅСЏ)
+  t_ms?: T_MS;      // опційно (час формування рівня)
 }
 
 /** ADR-0041: Premium/Discount badge state (always-on when calc_enabled). */
@@ -56,7 +56,7 @@ export interface PdState {
   range_high: number;
   range_low: number;
   equilibrium: number;
-  pd_percent: number;   // 0.0вЂ“100.0
+  pd_percent: number;   // 0.0–100.0
   label: 'PREMIUM' | 'DISCOUNT' | 'EQ';
 }
 
@@ -79,8 +79,8 @@ export interface ZoneGradeInfo {
 }
 
 /**
- * ADR-0024 В§5: Wire format С–РЅРєСЂРµРјРµРЅС‚Р°Р»СЊРЅРѕС— РґРµР»СЊС‚Рё SMC (WS delta frame).
- * Р’С–РґРїРѕРІС–РґР°С” SmcDelta.to_wire() РІ runtime/smc/smc_runner.py.
+ * ADR-0024 §5: Wire format інкрементальної дельти SMC (WS delta frame).
+ * Відповідає SmcDelta.to_wire() в runtime/smc/smc_runner.py.
  */
 export interface SmcDeltaWire {
   new_zones: SmcZone[];
@@ -94,18 +94,18 @@ export interface SmcDeltaWire {
 
 // -------------------- Narrative (ADR-0033) --------------------
 
-/** ADR-0033: РѕРґРёРЅ actionable scenario РґР»СЏ С‚СЂРµР№РґРµСЂР° (max 2: primary + alternative). */
+/** ADR-0033: один actionable scenario для трейдера (max 2: primary + alternative). */
 export interface ActiveScenario {
   zone_id: string;
   direction: 'long' | 'short';
   entry_desc: string;
   trigger: 'approaching' | 'in_zone' | 'triggered' | 'ready';
   trigger_desc: string;
-  target_desc: string | null;    // null СЏРєС‰Рѕ target РЅРµРІС–РґРѕРјРёР№ (BH-4)
+  target_desc: string | null;    // null якщо target невідомий (BH-4)
   invalidation: string;
 }
 
-/** ADR-0033 + ADR-0035: РїРѕРІРЅРёР№ narrative block РґР»СЏ РѕРґРЅРѕРіРѕ symbol+viewer_tf. */
+/** ADR-0033 + ADR-0035: повний narrative block для одного symbol+viewer_tf. */
 // ADR-0049: Archi thesis layer (from NarrativeEnricher)
 export interface ArchiThesis {
   thesis: string;
@@ -140,7 +140,7 @@ export interface NarrativeBlock {
   // ADR-0035: session context
   current_session?: string;       // "london" | "newyork" | "asia" | ""
   in_killzone?: boolean;          // true if inside killzone window
-  session_context?: string;       // "London KZ active вЂ” high probability"
+  session_context?: string;       // "London KZ active — high probability"
   // ADR-0049: Archi intelligence layer
   archi_thesis?: ArchiThesis;
   archi_presence?: ArchiPresence;
@@ -179,12 +179,12 @@ export interface TacticalStrip {
   alignment_type: string;            // "htf_aligned" | "mixed"
   alignment_direction: string | null; // "bullish" | "bearish" | null
   chips: TfChip[];
-  tag_text: string;     // "РљРѕРЅС‚РµРєСЃС‚ С‡РёСЃС‚РёР№" | "H1 РїСЂРѕС‚Рё С‚СЂРµРЅРґСѓ"
+  tag_text: string;     // "Контекст чистий" | "H1 проти тренду"
   tag_variant: string;  // "ok_bull" | "ok_bear" | "warn" | "danger"
 }
 
 export interface MicroCard {
-  mode_text: string;     // "Р§РµРєР°С”РјРѕ" | "Р“РѕС‚СѓС”РјРѕСЃСЊ" | "Р“РѕС‚РѕРІРёР№ РґРѕ РІС…РѕРґСѓ"
+  mode_text: string;     // "Чекаємо" | "Готуємось" | "Готовий до входу"
   why_text: string;      // bias_summary
   what_needed: string;   // trigger_desc or fallback
   what_cancels: string;  // invalidation or fallback
@@ -193,8 +193,8 @@ export interface MicroCard {
 
 export interface ShellPayload {
   stage: ShellStage;
-  stage_label: string;    // "WAIT" | "SHORT В· READY" etc.
-  stage_context: string;  // "Bearish HTF В· Inside supply В· Waiting CHoCH"
+  stage_label: string;    // "WAIT" | "SHORT · READY" etc.
+  stage_context: string;  // "Bearish HTF · Inside supply · Waiting CHoCH"
   micro_card: MicroCard;
   tactical_strip: TacticalStrip;
   signal: SignalSpec | null;  // ADR-0039: primary signal from signal engine
@@ -213,7 +213,7 @@ export interface SignalSpec {
   risk_reward: number;
   entry_method: string;
   entry_desc: string;
-  confidence: number;       // 0вЂ“100
+  confidence: number;       // 0–100
   confidence_factors: Record<string, number>;
   grade: string;
   state: string;            // pending|approaching|active|ready|invalidated|completed|expired
@@ -253,7 +253,7 @@ export interface DrawingPoint {
 }
 
 export interface Drawing {
-  id: string; // SSOT: UUID Р·РіРµРЅРµСЂРѕРІР°РЅРёР№ РєР»С–С”РЅС‚РѕРј
+  id: string; // SSOT: UUID згенерований клієнтом
   type: DrawingType;
   points: DrawingPoint[];
   meta?: {
@@ -346,9 +346,9 @@ export interface RenderFrame {
   zones?: SmcZone[];
   swings?: SmcSwing[];
   levels?: SmcLevel[];
-  /** ADR-0024: С–РЅРєСЂРµРјРµРЅС‚Р°Р»СЊРЅС– Р·РјС–РЅРё SMC РІ delta РєР°РґСЂР°С… */
+  /** ADR-0024: інкрементальні зміни SMC в delta кадрах */
   smc_delta?: SmcDeltaWire;
-  /** F8: trend bias Сѓ full/replay frames */
+  /** F8: trend bias у full/replay frames */
   trend_bias?: string | null;
   /** X28-fix: backend ATR (engine.get_atr) for current symbol+tf.
    *  Same source as REST /api/context.atr. Engine returns 1.0 fallback

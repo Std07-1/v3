@@ -1,9 +1,9 @@
 """
-runtime/smc/wake_engine.py вЂ” WakeEngine: I/O orchestration for wake system (ADR-0049).
+runtime/smc/wake_engine.py — WakeEngine: I/O orchestration for wake system (ADR-0049).
 
 Lives in ws_server process (in-process, like SmcRunner).
 Ticks every 2 seconds from _global_delta_loop.
-Redis ops вЂ” via run_in_executor (existing pattern in ws_server.py).
+Redis ops — via run_in_executor (existing pattern in ws_server.py).
 
 Lifecycle:
     engine = WakeEngine(redis_client, namespace, executor, smc_runner)
@@ -18,12 +18,12 @@ Architecture:
     3. Merge (bot overrides platform for same kind+level)
     4. Check all via wake_check ($0)
     5. Tick accumulator ($0)
-    6. If match в†’ LPUSH event to Redis list (via run_in_executor)
+    6. If match → LPUSH event to Redis list (via run_in_executor)
     7. Build PresenceStatus for wire frame
 
 Invariants:
     - S1: read-only, does NOT write to UDS
-    - I7: platform doesn't decide for РђСЂС‡С–, only informs
+    - I7: platform doesn't decide for Арчі, only informs
     - K2 fix: all Redis ops via run_in_executor (non-blocking in async loop)
 """
 
@@ -49,7 +49,7 @@ from core.smc.wake_types import (
 
 _log = logging.getLogger(__name__)
 
-# в”Ђв”Ђ Timing constants в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── Timing constants ────────────────────────────────────────────────────────
 _BOT_CACHE_TTL = 30.0  # refresh bot conditions from Redis every 30s
 _EVENT_LIST_MAX = 100  # max events in Redis list (LTRIM)
 _PRESENCE_REFRESH_S = 60.0  # rebuild presence every 60s (for UI, not critical)
@@ -66,7 +66,7 @@ def _imminent_phase(price: float, params: Dict[str, Any]) -> str:
 class WakeEngine:
     """Platform-side wake condition checker + event publisher.
 
-    Reads SmcRunner state (snapshots, prices, ATR) вЂ” all in-memory, $0.
+    Reads SmcRunner state (snapshots, prices, ATR) — all in-memory, $0.
     Checks conditions. Fires events to Redis list for bot consumption.
     """
 
@@ -105,7 +105,7 @@ class WakeEngine:
         self._pulse_heartbeat_ms: int = 0
         self._pulse_warned: bool = False
 
-        # Event dedup: {dedup_key: (ts_ms, price)} вЂ” suppress repeated events
+        # Event dedup: {dedup_key: (ts_ms, price)} — suppress repeated events
         self._event_dedup: Dict[str, tuple] = {}
         # ADR-0087 E2: супресії imminent видимі (D-03), не тиха діра
         self._imminent_suppressed: int = 0
@@ -119,7 +119,7 @@ class WakeEngine:
             self._symbols,
         )
 
-    # в”Ђв”Ђ Main tick (called from delta_loop every 2s) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── Main tick (called from delta_loop every 2s) ─────────────────────────
 
     async def tick(self, ts_ms: int) -> None:
         """One WakeEngine tick. Called from _global_delta_loop."""
@@ -145,7 +145,7 @@ class WakeEngine:
         self, symbol: str, ts_ms: int, loop: asyncio.AbstractEventLoop
     ) -> None:
         """Tick one symbol: check conditions, accumulator, fire events."""
-        # в”Ђв”Ђ Gather SMC state (all in-memory, $0) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        # ── Gather SMC state (all in-memory, $0) ────────────────
         price = self._smc.get_last_price(symbol)
         if price <= 0:
             return
@@ -179,10 +179,10 @@ class WakeEngine:
         # Session info (from calendar if available)
         session_info = self._get_session_info(symbol)
 
-        # в”Ђв”Ђ 1. Bot-defined conditions в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        # ── 1. Bot-defined conditions ───────────────────────────
         bot_conds = self._bot_conditions.get(symbol, [])
 
-        # в”Ђв”Ђ 2. Platform-generated conditions (pure, $0) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        # ── 2. Platform-generated conditions (pure, $0) ─────────
         platform_conds = generate_platform_conditions(
             snapshots=snapshots,
             bias_map=bias_map_int,
@@ -232,7 +232,7 @@ class WakeEngine:
                 # would drop ALL wake conditions incl. max_silence safety net
                 _log.warning("WAKE_IMMINENT_ERR sym=%s err=%s", symbol, exc)
 
-        # в”Ђв”Ђ 3. Merge (bot overrides platform for same kind) в”Ђв”Ђв”Ђв”Ђв”Ђ
+        # ── 3. Merge (bot overrides platform for same kind) ─────
         all_conditions = list(bot_conds) + [
             pc
             for pc in platform_conds
@@ -298,7 +298,7 @@ class WakeEngine:
             ):
                 fired.append(cond)
 
-        # в”Ђв”Ђ 5. Tick accumulator ($0) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        # ── 5. Tick accumulator ($0) ────────────────────────────
         acc = self._accumulators.get(symbol, AwarenessAccumulator())
         from core.smc.wake_check import accumulator_tick
 
@@ -418,7 +418,7 @@ class WakeEngine:
                 accumulator_fired = False
                 self._last_wake_ts[symbol] = ts_ms
 
-        # в”Ђв”Ђ 6. Fire events if needed (with dedup cooldown) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        # ── 6. Fire events if needed (with dedup cooldown) ───────
         if fired or accumulator_fired:
             reason = fired[0].reason if fired else f"accumulator_score={acc.score:.2f}"
             kind = fired[0].kind.value if fired else "accumulator"
@@ -441,7 +441,7 @@ class WakeEngine:
                 _elapsed_ms = ts_ms - _prev_ts
                 _price_delta = abs(price - _prev_price)
                 if _elapsed_ms < _min_interval_ms and _price_delta < atr * 0.5:
-                    return  # suppress вЂ” same condition, no significant price change
+                    return  # suppress — same condition, no significant price change
 
             event = WakeEvent(
                 ts_ms=ts_ms,
@@ -476,7 +476,7 @@ class WakeEngine:
                 },
             )
 
-            # LPUSH to Redis list (via executor вЂ” non-blocking)
+            # LPUSH to Redis list (via executor — non-blocking)
             try:
                 event_json = json.dumps(
                     {
@@ -516,7 +516,7 @@ class WakeEngine:
             self._last_wake_ts[symbol] = ts_ms
             self._event_dedup[_dedup_key] = (ts_ms, price)
 
-        # в”Ђв”Ђ 7. Build presence status в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        # ── 7. Build presence status ────────────────────────────
         self._presence[symbol] = PresenceStatus(
             status="watching" if all_conditions else "sleeping",
             focus=(
@@ -531,7 +531,7 @@ class WakeEngine:
             accumulator_threshold=acc.threshold,
         )
 
-    # в”Ђв”Ђ Public API в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── Public API ──────────────────────────────────────────────────────────
 
     def get_presence(self, symbol: str = "") -> PresenceStatus:
         """Return cached presence for wire frame enrichment."""
@@ -565,7 +565,7 @@ class WakeEngine:
             if c.source == "bot" and c.kind in self._CHARTABLE_KINDS
         ]
 
-    # в”Ђв”Ђ Redis helpers (sync вЂ” called via run_in_executor) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── Redis helpers (sync — called via run_in_executor) ───────────────────
 
     def _redis_push_event(self, key: str, event_json: str) -> None:
         """Sync Redis LPUSH + LTRIM. Called via executor."""

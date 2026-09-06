@@ -1,5 +1,5 @@
 """
-core/smc/wake_types.py вЂ” Canonical types for WakeEngine (ADR-0049).
+core/smc/wake_types.py — Canonical types for WakeEngine (ADR-0049).
 
 Pure dataclasses, zero I/O. Imported by:
   - core/smc/wake_check.py      (pure condition checking)
@@ -8,7 +8,7 @@ Pure dataclasses, zero I/O. Imported by:
   - trader-v3/bot/transport/wake_reader.py  (bot-side event parsing)
 
 Invariants:
-  - I0: core в†’ does NOT import runtime
+  - I0: core → does NOT import runtime
   - S0: zero I/O, zero Redis, zero HTTP
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from collections import deque
 from typing import Any, Dict, List, Optional
 
 
-# в”Ђв”Ђв”Ђ Enums в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ─── Enums ──────────────────────────────────────────────────────────────────
 
 
 class WakeConditionKind(str, enum.Enum):
@@ -38,18 +38,18 @@ class WakeConditionKind(str, enum.Enum):
 
 
 class FeatureTier(str, enum.Enum):
-    """Subscription tier for wire frame field gating (ADR-0049 В§5)."""
+    """Subscription tier for wire frame field gating (ADR-0049 §5)."""
 
     FREE = "free"
     PREMIUM = "premium"
 
 
-# в”Ђв”Ђв”Ђ Wake Condition & Event в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ─── Wake Condition & Event ─────────────────────────────────────────────────
 
 
 @dataclasses.dataclass(frozen=True)
 class WakeCondition:
-    """One wake condition. Set by bot (РђСЂС‡С–) OR by platform (AutoWakeGenerator).
+    """One wake condition. Set by bot (Арчі) OR by platform (AutoWakeGenerator).
 
     kind:   check type (WakeConditionKind)
     params: kind-dependent parameters:
@@ -65,8 +65,8 @@ class WakeCondition:
                          "level": 4712.4, "direction": "below",
                          "protected_swing": "hl", "prox_atr": 1.0,
                          "window_s": 1800, "atr_tf": 8.4}
-    reason: human-readable explanation (injected into РђСЂС‡С–'s wake prompt)
-    source: "bot" (РђСЂС‡С– defined) or "platform" (AutoWakeGenerator)
+    reason: human-readable explanation (injected into Арчі's wake prompt)
+    source: "bot" (Арчі defined) or "platform" (AutoWakeGenerator)
     """
 
     kind: WakeConditionKind
@@ -78,7 +78,7 @@ class WakeCondition:
 
 @dataclasses.dataclass(frozen=True)
 class WakeEvent:
-    """A fired wake event вЂ” result of condition match.
+    """A fired wake event — result of condition match.
 
     Written to Redis list by WakeEngine (platform side).
     Read by bot via WakeReader (polling every 30s).
@@ -92,12 +92,12 @@ class WakeEvent:
     meta: Dict[str, Any]  # atr, session, zone_id, accumulator_score, etc.
 
 
-# в”Ђв”Ђв”Ђ Awareness в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ─── Awareness ──────────────────────────────────────────────────────────────
 
 
 @dataclasses.dataclass(frozen=True)
 class AwarenessState:
-    """What changed since last wake вЂ” digest for bot.
+    """What changed since last wake — digest for bot.
 
     Bot receives this with WakeEvent so it knows everything it missed.
     Like an automatic "morning briefing" between wakes.
@@ -118,13 +118,13 @@ class AwarenessAccumulator:
 
     Every tick: score += |price_delta| / ATR (normalized movement).
     Decay: score *= decay each minute (prevents infinite buildup).
-    When score >= threshold в†’ wake even without explicit condition match.
+    When score >= threshold → wake even without explicit condition match.
 
     This is the safety net for unpredictable events: flash crash, gap open,
-    trending day where no explicit condition was set. РђСЂС‡С– can tune
+    trending day where no explicit condition was set. Арчі can tune
     threshold and decay via directives.
 
-    Math: threshold=5.0, decay=0.95/min в†’ need ~3 ATR move in 10 min to trigger.
+    Math: threshold=5.0, decay=0.95/min → need ~3 ATR move in 10 min to trigger.
     For XAU/USD with ATR(H4)~45: need ~135 points in 10 min = flash crash.
     """
 
@@ -138,21 +138,21 @@ class AwarenessAccumulator:
     last_wake_price: float = 0.0
 
 
-# в”Ђв”Ђв”Ђ Presence & Thesis (UI layer) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ─── Presence & Thesis (UI layer) ──────────────────────────────────────────
 
 
 @dataclasses.dataclass(frozen=True)
 class PresenceStatus:
-    """РђСЂС‡С–'s presence status for UI (NarrativePanel).
+    """Арчі's presence status for UI (NarrativePanel).
 
     Built by WakeEngine every tick. Published in wire frame.
-    Shows user: РђСЂС‡С– is working, not frozen. Reduces "silent bot" anxiety.
+    Shows user: Арчі is working, not frozen. Reduces "silent bot" anxiety.
     """
 
     status: str = "sleeping"  # "watching" | "sleeping" | "analyzing" | "alert"
-    focus: str = ""  # "С‡РµРєР°СЋ РїСЂРѕР±РѕСЋ 4850 Р°Р±Рѕ London open"
+    focus: str = ""  # "чекаю пробою 4850 або London open"
     silence_since_h: float = 0.0
-    next_possible_wake: str = ""  # "London open (08:00 UTC) Р°Р±Рѕ price > 4850"
+    next_possible_wake: str = ""  # "London open (08:00 UTC) або price > 4850"
     active_conditions: int = 0
     accumulator_score: float = 0.0
     accumulator_threshold: float = 5.0
@@ -162,16 +162,16 @@ class PresenceStatus:
 
 @dataclasses.dataclass(frozen=True)
 class ThesisLayer:
-    """РђСЂС‡С–-generated thesis overlay for NarrativeBlock.
+    """Арчі-generated thesis overlay for NarrativeBlock.
 
     Written by bot to Redis after each Sonnet analysis.
     Platform reads (NarrativeEnricher) and injects into wire frame.
-    Platform NEVER writes thesis вЂ” invariant I7 (Autonomy-First).
+    Platform NEVER writes thesis — invariant I7 (Autonomy-First).
     """
 
-    thesis: str  # "Р–РґСѓ sweep PDL 4650 в†’ reaction С–Р· London killzone"
+    thesis: str  # "Жду sweep PDL 4650 → reaction із London killzone"
     conviction: str  # "high" | "medium" | "low"
-    key_level: str  # "PDL 4650 вЂ” main target for liquidity sweep"
+    key_level: str  # "PDL 4650 — main target for liquidity sweep"
     invalidation: str  # "Break above 4730 invalidates sell thesis"
     updated_at_ms: int = 0
     freshness: str = "stale"  # "fresh" (<1h) | "aging" (1-4h) | "stale" (>4h)

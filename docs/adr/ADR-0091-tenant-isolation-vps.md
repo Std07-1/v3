@@ -209,3 +209,9 @@ redis-cli --user smc_admin --pass "$A" CLIENT LIST | grep -oP 'user=\K\S+' | sor
   Наслідок для інструментів: `tools/diag/*` і будь-який `redis-cli` тепер потребують `--user/--pass`
   (див. runbook). Бот: користувач `archi` створений, пароль у `/root/redis-acl-<ts>.txt` — вписати
   в його `.env` при вмиканні Арчі.
+- 2026-09-06: db0 очищено (owner «видали ті db0 ключі»): 19 legacy-ключів `v3:updates:*`,
+  `v3:status:snapshot`, `v3_prod:status:snapshot`, `ai_one:ui:smc_viewer_snapshot` — залишки
+  старих namespace, недосяжні платформі після ACL. Доведено мертвими перед видаленням:
+  `OBJECT IDLETIME` не скидався, `MONITOR` 15 с не показав жодної команди в db0 (при 33 у db1),
+  після `DEL` ключі не відродились за 60 с. Бекап усього інстансу:
+  `/root/redis-dump-before-db0-purge-20260906-095505.rdb`. db0 = 0, db1 = 201 без змін.

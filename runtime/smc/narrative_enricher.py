@@ -71,20 +71,20 @@ class NarrativeEnricher:
         """Add thesis + presence to narrative wire dict. Sync, in-memory.
 
         Called during frame building. Uses cached thesis (refreshed async).
-        Does NOT mutate input dict вЂ” returns new dict.
+        Does NOT mutate input dict — returns new dict.
 
         Args:
             narrative_wire: existing narrative dict from narrative_to_wire()
             symbol:         trading symbol
             presence:       PresenceStatus from WakeEngine (optional)
-            tier:           "free" or "premium" вЂ” gates thesis fields
+            tier:           "free" or "premium" — gates thesis fields
 
         Returns:
             Enriched narrative dict with 'archi_thesis' and 'archi_presence' keys.
         """
         result = dict(narrative_wire)  # shallow copy, don't mutate original
 
-        # в”Ђв”Ђ Presence (always included, all tiers) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        # ── Presence (always included, all tiers) ──────────────────
         if presence is not None:
             result["archi_presence"] = {
                 "status": presence.status,
@@ -96,7 +96,7 @@ class NarrativeEnricher:
                 "accumulator_threshold": presence.accumulator_threshold,
             }
 
-        # в”Ђв”Ђ Thesis (premium only when gating enabled) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+        # ── Thesis (premium only when gating enabled) ──────────────
         thesis = self._thesis_cache.get(symbol)
         if thesis is not None and thesis.thesis:
             if tier == "premium" or tier == "free":  # TODO: gate when subscription ready
@@ -127,7 +127,7 @@ class NarrativeEnricher:
             if not raw:
                 return
 
-            # Redis returns bytes вЂ” decode
+            # Redis returns bytes — decode
             data: Dict[str, str] = {}
             for k, v in raw.items():
                 k_str = k.decode("utf-8") if isinstance(k, bytes) else str(k)
