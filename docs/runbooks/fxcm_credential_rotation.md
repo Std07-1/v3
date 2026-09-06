@@ -315,7 +315,7 @@ ssh aione-vps 'cp /opt/smc-v3/.env.bak.TIMESTAMP /opt/smc-v3/.env && \
 | `Login failed` після restart | trailing space у USER/PASS після `sed` | `cat -A /opt/smc-v3/.env \| grep FXCM` → шукати `$` після значення; повторити sed з акуратнішими лапками |
 | `ImportError: No module named forexconnect` при backfill | Запустив `fetch_tf_backfill` через `.venv/bin/python` замість `.venv37/bin/python` | ОБОВ'ЯЗКОВО `.venv37/bin/python -m tools.fetch_tf_backfill ...` |
 | `ModuleNotFoundError: tools.backfill_cascade` | Стара назва. Правильно — `tools.rebuild_from_m1` | Виправити команду на `python -m tools.rebuild_from_m1 --symbol X --start ... --end ...` |
-| M1 приходять, але H4 stale | `_derived_tail_state.json` застряг | `restart smc:smc-ws` |
+| M1 приходять, але H4 stale | derive-цикл у ws_server не тікає (`_derived_tail_state.json` — мертвий файл, ADR-0054 §1.3) | `restart smc:smc-ws` |
 | Backfill пише `0 нових барів` | broker віддає ті ж бари що вже на диску (dedup працює) | Збільшити `--n` або зменшити `--date-to` |
 | `connection timeout` під час backfill | FXCM rate limit | Перерва 5 хв, ретрай меншими батчами (`--n 1000` x several) |
 | D1 anchor роз'їзд (свічка зміщена на години) | пробували `fetch_tf_backfill --tf 86400` напряму з FXCM | Видалити пошкоджені D1 файли, перебудувати через `rebuild_from_m1` (D1 derives in-process via ADR-0023) |

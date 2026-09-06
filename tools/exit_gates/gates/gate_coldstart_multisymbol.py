@@ -6,13 +6,16 @@
 Підгейти (static):
 1. all_symbols_have_data_dirs — кожен символ має каталог у data_v3/
 2. all_symbols_have_all_tfs — кожен символ має tf_300..tf_86400
-3. derived_state_covers_all — _derived_tail_state.json містить усі символи
-4. rebuild_tool_has_batch — rebuild_derived.py підтримує --all flag
-5. priming_budget_sufficient — redis_priming_budget_s >= 5
+3. rebuild_tool_has_batch — rebuild_from_m1.py має CLI (--symbol/--config)
+4. priming_budget_sufficient — redis_priming_budget_s >= 5
 
 Підгейти (data, sample):
-6. m5_recent_data — хоча б 1 bar у tf_300 за останні 7 днів для кожного символу (sample)
-7. derived_recent_data — хоча б 1 bar у tf_3600 за останні 7 днів для XAU/USD (sample)
+5. m5_recent_data — хоча б 1 bar у tf_300 за останні 7 днів для кожного символу (sample)
+6. derived_recent_data — хоча б 1 bar у tf_3600 за останні 7 днів для symbols[0] (sample)
+
+ADR-0054 §3.1 P0.3: підгейт `derived_state_covers_all` прибрано — він вимагав
+присутності символу в `data_v3/_derived_tail_state.json`, у якого немає жодного
+писаря (мертвий стан з лютого), тобто блокував кожен новий символ без причини.
 """
 
 from __future__ import annotations
@@ -135,29 +138,7 @@ def run_gate(inputs: dict) -> dict:
         }
     )
 
-    # --- Підгейт 3: derived_tail_state covers all ---
-    state_path = data_root / "_derived_tail_state.json"
-    state_symbols: List[str] = []
-    missing_state: List[str] = []
-    if state_path.exists():
-        try:
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            state_symbols = list((state.get("symbols") or {}).keys())
-        except Exception:
-            pass
-    for sym in symbols:
-        if sym not in state_symbols:
-            missing_state.append(sym)
-    ok3 = len(missing_state) == 0
-    results.append(
-        {
-            "name": "derived_state_covers_all",
-            "ok": ok3,
-            "details": "ok" if ok3 else f"відсутні у state: {', '.join(missing_state)}",
-        }
-    )
-
-    # --- Підгейт 4: rebuild_from_m1.py has CLI ---
+    # --- Підгейт 3: rebuild_from_m1.py has CLI ---
     rebuild_py = root / "tools" / "rebuild_from_m1.py"
     has_all = False
     if rebuild_py.exists():
@@ -174,7 +155,7 @@ def run_gate(inputs: dict) -> dict:
         }
     )
 
-    # --- Підгейт 5: priming budget >= 5 ---
+    # --- Підгейт 4: priming budget >= 5 ---
     priming_budget = cfg.get("redis_priming_budget_s", 2)
     ok5 = int(priming_budget) >= 5
     results.append(
@@ -189,7 +170,7 @@ def run_gate(inputs: dict) -> dict:
         }
     )
 
-    # --- Підгейт 6: M5 recent data (sample) ---
+    # --- Підгейт 5: M5 recent data (sample) ---
     now_ms = int(time.time() * 1000)
     cutoff_ms = now_ms - SEVEN_DAYS_MS
     stale_m5: List[str] = []
@@ -207,7 +188,7 @@ def run_gate(inputs: dict) -> dict:
         }
     )
 
-    # --- Підгейт 7: derived recent data (sample — XAU/USD H1) ---
+    # --- Підгейт 6: derived recent data (sample — XAU/USD H1) ---
     sample_sym = symbols[0] if symbols else "XAU/USD"
     tf_dir_h1 = data_root / _symbol_dir_name(sample_sym) / "tf_3600"
     latest_h1 = _latest_bar_ms_in_dir(tf_dir_h1)
@@ -232,7 +213,6 @@ def run_gate(inputs: dict) -> dict:
             "sub_gates_total": len(results),
             "sub_gates_ok": sum(1 for r in results if r["ok"]),
             "symbols_count": len(symbols),
-            "state_symbols_count": len(state_symbols),
         },
     }
 

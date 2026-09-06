@@ -67,6 +67,6 @@ python -m tools.rebuild_from_m1
 Канонічний rebuild tool — `tools/rebuild_from_m1.py`. Source = M1 (SSOT).
 Використовує `core/derive.py` API, calendar-aware, append-only.
 
-- Rebuild виконується **послідовно** по символах (без паралельності), щоб уникнути race condition на `_derived_tail_state.json`.
+- Rebuild виконується **послідовно** по символах (append без lock у ті самі part-файли, що й live writer — ADR-0054 §3.1 P0.2), щоб уникнути race condition на `_derived_tail_state.json`.
 - Якщо для символу немає M5-даних на диску — він буде у FAIL-списку, exit code = 2.
 - Перед запуском платформи (`python -m app.main --mode all`) рекомендується виконати цей rebuild одноразово.

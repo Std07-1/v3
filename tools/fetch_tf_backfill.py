@@ -9,8 +9,15 @@ from typing import List, Set
 
 from env_profile import load_env_secrets
 from core.config_loader import pick_config_path, load_system_config, env_str
+from core.derive import DERIVE_SOURCE
 from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
 from runtime.store.ssot_jsonl import JsonlAppender
+
+
+# Усе, що будує DeriveEngine з M1, заборонено тягнути з брокера напряму.
+# frozenset(DERIVE_SOURCE) = {180, 300, 900, 1800, 3600, 14400, 86400}; M1 (60) —
+# єдиний source-TF ланцюга, тому в множині його немає за побудовою.
+DERIVED_ONLY_TFS = frozenset(DERIVE_SOURCE)
 
 
 def _setup_logging() -> None:
@@ -80,18 +87,22 @@ def main() -> int:
     ap.add_argument("--date-to", default=None, help="Кінцева дата UTC ISO (default: now)")
     ap.add_argument("--n", type=int, required=True, help="Кількість барів")
     ap.add_argument("--force-derived-tf", action="store_true", default=False,
-                    help="Дозволити fetch derived-only TF (H4). Небезпечно — anchor mismatch!")
+                    help="Дозволити fetch derived-only TF. Небезпечно — anchor mismatch!")
     args = ap.parse_args()
 
-    # Guard: H4 (14400) є derived-only TF (ADR-0002). FXCM H4 має інший anchor grid.
-    # Бари H4 будуються тільки через DeriveEngine (M1→...→H1→H4).
-    DERIVED_ONLY_TFS = {14400}  # H4
+    # Guard: з брокера тягнемо ТІЛЬКИ M1. Усе інше будує DeriveEngine на своїй
+    # сітці якорів (ADR-0002 H4, ADR-0023 D1); прямий fetch дає anchor mismatch —
+    # інцидент з D1 у runbook fxcm_credential_rotation.md §«D1 anchor роз'їзд».
+    # SSOT множини — core.derive.DERIVE_CHAIN (через DERIVE_SOURCE), а не літерал:
+    # новий TF у ланцюзі має автоматично потрапляти під guard (ADR-0054 §3.1 P0.1).
     if args.tf in DERIVED_ONLY_TFS and not args.force_derived_tf:
         logging.error(
-            "TF=%ds є derived-only (ADR-0002). FXCM має інший anchor grid. "
-            "Використовуйте rebuild_from_m1 замість прямого fetch. "
+            "TF=%ds є derived-only (деривується з %ds за core.derive.DERIVE_CHAIN). "
+            "FXCM має інший anchor grid → бари роз'їдуться. "
+            "Правильний шлях: fetch --tf 60, далі rebuild_from_m1. "
             "Якщо дійсно потрібно — додайте --force-derived-tf.",
             args.tf,
+            DERIVE_SOURCE[args.tf][0],
         )
         return 1
 
