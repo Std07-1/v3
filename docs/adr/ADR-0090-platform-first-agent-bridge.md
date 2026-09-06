@@ -175,7 +175,7 @@ trader-v3 (smc_trader_v3, окремий program)  ◄──► Redis IPC (wake:
 }
 ```
 
-### 3.7 Docs-слайс (текст, без коду; виконується разом із S4)
+### 3.7 Docs-слайс (текст, без коду; виконано `ee03177`, до S4)
 
 | Місце | Зараз | Стає |
 |---|---|---|
@@ -187,6 +187,10 @@ trader-v3 (smc_trader_v3, окремий program)  ◄──► Redis IPC (wake:
 | `docs/index.md:114-121`, `system_current_overview.md:23,919-941`, `docs/ui_api.md:561-587` | «Agent Console» як шар платформи | «Optional adapter for external clients (agent_bridge, config-gated, bearer, private hostname)»; view-by-view описи → `agent_bridge/ui/README` |
 | `SECURITY.md:31,40` | «all services bind 127.0.0.1, single-user workstation» | реальна топологія (§3.2) + вимоги ізоляції з ADR-0091 |
 | `runtime/smc/narrative_enricher.py:4-12` | «premium analytics layer that no one knows is AI-driven» | «інжектує опубліковану зовнішнім клієнтом тезу; платформа не авторка контенту» |
+
+> Виконання (`ee03177`): усе з таблиці, крім X29/X30 — їх сенс (hard block / hidden constraint) залишено як
+> покажчики на ADR-024, бо ці номери цитують prompts, role specs і skills; межа платформи винесена в нове **X40**.
+> «I0–I7» у `role_spec_*`/`prompts/*` — залишок для окремого проходу.
 
 ---
 
@@ -262,7 +266,7 @@ trader-v3 (smc_trader_v3, окремий program)  ◄──► Redis IPC (wake:
 | S5 репо-гігієна | ⏳ | — |
 | S6 writes → bot | ⏳ | — |
 | S7 імена | ⏳ | — |
-| Docs-слайс §3.7 | ⏳ | — |
+| Docs-слайс §3.7 | ✅ 2026-09-06 | `ee03177` (нове X40; X29/X30 збережено як покажчики) |
 
 ---
 
@@ -271,3 +275,8 @@ trader-v3 (smc_trader_v3, окремий program)  ◄──► Redis IPC (wake:
 - 2026-09-06: Created (Accepted за owner-рішенням). RECON: workflow 3 лінзи (coupling-map, docs-framing,
   public-surface) проти `ed4ca99`…`1ace5f9`; факти §1.2 з file:line. Того ж дня без цього ADR зроблено
   quick wins ADR-0091 P1 (платформа під `smc`, ANTHROPIC-ключ знято з env ws_server, SEC-06 rails).
+- 2026-09-06: Docs-слайс §3.7 виконано (`ee03177`). Відхилення від таблиці: X29/X30 залишено з оригінальним
+  сенсом як покажчики на `trader-v3/ADR-024` (їх цитують `.github/instructions/trader-v3.instructions.md`,
+  `prompts/arhci-handoff`, `role_spec_patch_master` Z13/Z14, skills) — переозначення створило б протиріччя;
+  правило «platform-код не читає/пише файли клієнта поза `runtime/agent_bridge/`» = нове **X40**.
+  Залишок: `role_spec_*`/`prompts/*`/`skills/contradiction-audit` ще пишуть «I0–I7» — окремий doc-keeper прохід.
