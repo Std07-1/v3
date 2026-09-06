@@ -76,11 +76,28 @@ def _read_bars(data_root: str, symbol: str, tf_s: int) -> List[CandleBar]:
                             v=float(d.get("v", 0.0)),
                             complete=bool(d.get("complete", True)),
                             src=str(d.get("src", "history")),
+                            extensions=dict(d.get("extensions") or {}),
                         )
                     )
         except OSError as exc:
             _log.warning("HEALTH_READ_FAIL path=%s err=%s", path, exc)
     return bars
+
+
+def _declares_partial(bar: CandleBar) -> bool:
+    """Чи бар САМ повідомив, що зібраний не з повного набору (ADR-0013b маркери).
+
+    ADR-0015 Option C: `complete=true` означає «бакет минув», а не «N з N», і такі бари
+    легальні. Health-check має ловити МОВЧАЗНІ розбіжності, а не задокументовані:
+    інакше він тоне у 37 тисячах чесно позначених барів і перестає бути сигналом.
+    """
+    ext = bar.extensions or {}
+    return bool(
+        ext.get("partial")
+        or ext.get("boundary_partial")
+        or ext.get("partial_calendar_pause")
+        or ext.get("partial_reasons")
+    )
 
 
 def _legal_anchors_ms(cfg: Dict[str, Any], tf_s: int, primary_ms: int) -> List[int]:
@@ -152,6 +169,7 @@ def check_symbol(
             cascade = measure_cascade(
                 bars, bars_by_tf[source_tf],
                 target_tf_ms=tf_ms, source_tf_ms=tf_to_ms(source_tf), anchor_offsets_ms=anchors_ms,
+                declares_partial_fn=_declares_partial,
             )
 
         grade = grade_symbol_tf(age=age, holes=holes, geometry=geometry, cascade=cascade, depth=depth)
@@ -174,6 +192,7 @@ def check_symbol(
             "cascade": (
                 None if cascade is None
                 else {"checked": cascade.checked, "mismatched": cascade.mismatched,
+                      "declared_partial": cascade.declared_partial,
                       "skipped_incomplete": cascade.skipped_incomplete}
             ),
         }
@@ -229,11 +248,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         for tf, d in res["tfs"].items():
             flag = {"GREEN": "  ok", "YELLOW": "WARN", "RED": " RED"}[d["grade"]]
             casc = d["cascade"]
-            casc_txt = "-" if casc is None else f"{casc['checked']}/{casc['mismatched']}"
+            casc_txt = (
+                "-" if casc is None
+                else f"{casc['checked']}/{casc['mismatched']}(+{casc['declared_partial']}p)"
+            )
             print(
                 f"  [{flag}] tf_{tf:<6} bars={d['bars']:<7} {d['first']} .. {d['last']}"
                 f"  age={d['age_buckets']} holes={d['holes']['missing']}/{d['holes']['expected']}"
-                f" cascade(chk/bad)={casc_txt}"
+                f" cascade(chk/мовчазних+позначених)={casc_txt}"
                 + (f"  {','.join(d['reasons'])}" if d["reasons"] else "")
             )
 

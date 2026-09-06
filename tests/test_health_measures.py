@@ -216,3 +216,33 @@ def test_age_survives_a_weekend_gap():
     now = friday_close + 3 * 24 * 60 * M1_MS  # три доби потому
     a = measure_age([friday_close], now_ms=now, tf_ms=M1_MS, anchor_offset_ms=0, is_trading_fn=weekend)
     assert a.age_buckets == 0, "ринок закритий — відставання нульове, а не None"
+
+
+def _bar_ext(open_ms, tf_ms, ext, **kw):
+    b = _bar(open_ms, tf_ms, **kw)
+    return CandleBar(symbol=b.symbol, tf_s=b.tf_s, open_time_ms=b.open_time_ms,
+                     close_time_ms=b.close_time_ms, o=b.o, h=b.h, low=b.low, c=b.c,
+                     v=b.v, complete=b.complete, src=b.src, extensions=ext)
+
+
+def test_declared_partial_is_not_counted_as_silent_mismatch():
+    """ADR-0015: бар із чесним маркером — задокументований компроміс, не дефект."""
+    src = _m1_hour(BASE)[:3]
+    declared = _bar_ext(BASE, 180_000, {"partial": True, "boundary_partial": True,
+                                        "source_count": 1, "expected_count": 3,
+                                        "partial_reasons": ["boundary_gap"]},
+                        o=src[0].o, h=src[0].h, low=src[0].low, c=src[0].c)
+    r = measure_cascade([declared], src, target_tf_ms=180_000, source_tf_ms=M1_MS,
+                        anchor_offsets_ms=[0], declares_partial_fn=lambda b: bool(b.extensions.get("partial")))
+    assert (r.mismatched, r.declared_partial) == (0, 1)
+    assert grade_symbol_tf(cascade=r).grade == "GREEN"
+
+
+def test_silent_mismatch_without_markers_stays_red():
+    """А бар, який відрізняється і мовчить, — саме те, що health-check має ловити."""
+    src = _m1_hour(BASE)[:3]
+    silent = _bar_ext(BASE, 180_000, {}, o=src[0].o, h=999.0, low=src[0].low, c=src[-1].c)
+    r = measure_cascade([silent], src, target_tf_ms=180_000, source_tf_ms=M1_MS,
+                        anchor_offsets_ms=[0], declares_partial_fn=lambda b: bool(b.extensions.get("partial")))
+    assert (r.mismatched, r.declared_partial) == (1, 0)
+    assert grade_symbol_tf(cascade=r).grade == "RED"

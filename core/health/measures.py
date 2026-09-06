@@ -64,10 +64,18 @@ class GeometryResult:
 
 @dataclasses.dataclass(frozen=True)
 class CascadeResult:
-    """Чи derived-бари відтворюються з source-барів."""
+    """Чи derived-бари відтворюються з source-барів.
+
+    ``declared_partial`` — розбіжності, про які сам бар чесно попередив у ``extensions``
+    (ADR-0013b маркери; ADR-0015 Option C: ``complete=true`` означає «бакет минув», а не
+    «зібрано N з N»). Це не дефект даних, а задокументований компроміс.
+    ``mismatched`` лишає тільки МОВЧАЗНІ розбіжності — бар відрізняється від агрегації
+    і нічого про це не каже. Саме їх і має ловити health-check.
+    """
 
     checked: int
     mismatched: int
+    declared_partial: int
     skipped_incomplete: int
     mismatch_samples: Tuple[int, ...]
 
@@ -227,6 +235,7 @@ def measure_cascade(
     target_tf_ms: int,
     source_tf_ms: int,
     anchor_offsets_ms: Sequence[int],
+    declares_partial_fn: Optional[Callable[[CandleBar], bool]] = None,
     price_epsilon: float = 1e-9,
     max_samples: int = 5,
 ) -> CascadeResult:
@@ -244,6 +253,7 @@ def measure_cascade(
 
     checked = 0
     skipped = 0
+    declared = 0
     mismatched: List[int] = []
     for bar in derived_bars:
         children = sorted(
@@ -260,10 +270,14 @@ def measure_cascade(
             or abs(max(c.h for c in children) - bar.h) > price_epsilon
             or abs(min(c.low for c in children) - bar.low) > price_epsilon
         ):
-            mismatched.append(bar.open_time_ms)
+            if declares_partial_fn is not None and declares_partial_fn(bar):
+                declared += 1
+            else:
+                mismatched.append(bar.open_time_ms)
     return CascadeResult(
         checked=checked,
         mismatched=len(mismatched),
+        declared_partial=declared,
         skipped_incomplete=skipped,
         mismatch_samples=tuple(mismatched[:max_samples]),
     )
