@@ -2,7 +2,8 @@
   "symbol": "XAU/USD",
   "symbols": [
     "XAU/USD",
-    "XAG/USD"
+    "XAG/USD",
+    "NAS100"
   ],
   "data_root": "./data_v3",
   "broker_python": ".venv37/Scripts/python.exe",
