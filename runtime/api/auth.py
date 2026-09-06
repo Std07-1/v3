@@ -42,6 +42,16 @@ class AuthConfig:
         )
 
 
+def constant_time_equal(presented: str, expected: str) -> bool:
+    """Порівняння секретів без витоку таймінгу; безпечне для будь-якого Unicode.
+
+    ``hmac.compare_digest`` на ``str`` кидає TypeError для non-ASCII символів —
+    клієнт із токеном «…» отримував 500 зі стектрейсом замість 401 (знайдено на
+    origin після ADR-0090 S1). Порівнюємо UTF-8 байти: будь-який вхід → bool.
+    """
+    return hmac.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
+
+
 def check_bearer(
     auth_header: str,
     query_token: str,
@@ -61,11 +71,11 @@ def check_bearer(
         return (False, "deny_no_token_configured")
     if auth_header.startswith("Bearer "):
         presented = auth_header[7:].strip()
-        if hmac.compare_digest(presented, cfg.token):
+        if constant_time_equal(presented, cfg.token):
             return (True, "ok_bearer")
         return (False, "deny_bad_token")
     if query_token:
-        if hmac.compare_digest(query_token, cfg.token):
+        if constant_time_equal(query_token, cfg.token):
             return (True, "ok_query_token")
         return (False, "deny_bad_token")
     return (False, "deny_missing")
@@ -87,4 +97,4 @@ def hmac_verify(payload: bytes, signature: str, secret: str) -> bool:
     if not secret or not signature:
         return False
     expected = hmac_sign(payload, secret)
-    return hmac.compare_digest(expected, signature)
+    return constant_time_equal(expected, signature)

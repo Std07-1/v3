@@ -25,6 +25,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Mapping
 
+from runtime.api.auth import constant_time_equal
+
 CsrfReason = Literal[
     "ok",
     "ok_disabled",
@@ -87,7 +89,7 @@ def check_csrf(
         return (False, "deny_missing_cookie")
     if not header_val:
         return (False, "deny_missing_header")
-    if not hmac.compare_digest(cookie_val, header_val):
+    if not constant_time_equal(cookie_val, header_val):
         return (False, "deny_token_mismatch")
     if ts_ms is not None:
         now = now_ms if now_ms is not None else int(time.time() * 1000)
