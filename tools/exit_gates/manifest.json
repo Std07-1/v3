@@ -262,6 +262,13 @@
             }
         },
         {
+            "name": "redis_clients_use_auth",
+            "module": "tools.exit_gates.gates.gate_redis_clients_use_auth",
+            "inputs": {
+                "root": "."
+            }
+        },
+        {
             "name": "platform_config_no_agent_keys",
             "module": "tools.exit_gates.gates.gate_platform_config_no_agent_keys",
             "inputs": {

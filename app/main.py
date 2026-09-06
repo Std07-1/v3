@@ -360,6 +360,7 @@ def _wait_for_prime_ready(config_path: str, timeout_s: int = 30) -> bool:
         host=spec.host,
         port=spec.port,
         db=spec.db,
+        **spec.auth_kwargs(),
         decode_responses=True,
         socket_timeout=0.5,
         socket_connect_timeout=0.5,
@@ -497,6 +498,7 @@ def _redis_preflight(config_path: str) -> bool:
             host=spec.host,
             port=spec.port,
             db=spec.db,
+            **spec.auth_kwargs(),
             socket_timeout=2.0,
             socket_connect_timeout=2.0,
         )

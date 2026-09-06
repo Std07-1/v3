@@ -1084,6 +1084,7 @@ async def _global_delta_loop(app: web.Application) -> None:
                 host=_v_spec.host,
                 port=_v_spec.port,
                 db=_v_spec.db,
+                **_v_spec.auth_kwargs(),
                 socket_timeout=1.0,
                 socket_connect_timeout=1.0,
                 decode_responses=False,
@@ -2149,6 +2150,7 @@ def build_app(
                     host=spec.host,
                     port=spec.port,
                     db=spec.db,
+                    **spec.auth_kwargs(),
                     socket_timeout=2.0,
                     socket_connect_timeout=2.0,
                     decode_responses=False,
@@ -2257,6 +2259,7 @@ def build_app(
             host=_agent_spec.host,
             port=_agent_spec.port,
             db=_agent_spec.db,
+            **_agent_spec.auth_kwargs(),
             socket_connect_timeout=2,
             decode_responses=True,
         )

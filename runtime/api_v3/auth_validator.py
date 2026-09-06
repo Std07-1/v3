@@ -46,6 +46,10 @@ REDIS_PORT = int(os.environ.get("API_V3_REDIS_PORT", "6379"))
 REDIS_DB = int(os.environ.get("API_V3_REDIS_DB", "1"))
 REDIS_NAMESPACE = os.environ.get("API_V3_REDIS_NS", "v3_local")
 REDIS_SOCKET_TIMEOUT_S = float(os.environ.get("API_V3_REDIS_TIMEOUT_S", "2.0"))
+# ADR-0091 P2: ті самі env, що й у решти платформи (runtime.store.redis_spec) —
+# порожні = сервер без ACL/requirepass.
+REDIS_USERNAME = os.environ.get("AI_ONE_REDIS_USERNAME", "")
+REDIS_PASSWORD = os.environ.get("AI_ONE_REDIS_PASSWORD", "")
 
 # Lazy singletons — created on first request, allow tests to monkeypatch.
 _redis_client: Optional[redis_lib.Redis] = None
@@ -56,10 +60,16 @@ def _get_store() -> TokenStore:
     """Lazy singleton. Built on first call so import doesn't require Redis."""
     global _redis_client, _token_store
     if _token_store is None:
+        _redis_auth = {}
+        if REDIS_USERNAME:
+            _redis_auth["username"] = REDIS_USERNAME
+        if REDIS_PASSWORD:
+            _redis_auth["password"] = REDIS_PASSWORD
         _redis_client = redis_lib.Redis(
             host=REDIS_HOST,
             port=REDIS_PORT,
             db=REDIS_DB,
+            **_redis_auth,
             decode_responses=True,
             socket_timeout=REDIS_SOCKET_TIMEOUT_S,
             socket_connect_timeout=REDIS_SOCKET_TIMEOUT_S,

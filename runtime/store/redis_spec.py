@@ -9,6 +9,10 @@ from typing import Any, Optional
 _LOG_ONCE_KEYS = set()  # type: set
 
 
+REDIS_USERNAME_ENV = "AI_ONE_REDIS_USERNAME"
+REDIS_PASSWORD_ENV = "AI_ONE_REDIS_PASSWORD"
+
+
 @dataclass(frozen=True)
 class RedisSpec:
     host: str
@@ -22,6 +26,22 @@ class RedisSpec:
     cfg_namespace: str
     mismatch: bool
     mismatch_fields: list[str]
+    username: str = ""
+    password: str = ""
+
+    def auth_kwargs(self) -> dict[str, str]:
+        """ACL-креденшели для ``redis.Redis(**spec.auth_kwargs())``.
+
+        Порожній dict = сервер без ``requirepass``/ACL (дефолт репо і dev).
+        Джерело — env програми (ADR-0091 P2), не config.json: конфіг = git-singleton,
+        секрети в ньому не живуть. Пароль без імені = default-user з ``requirepass``.
+        """
+        kwargs: dict[str, str] = {}
+        if self.username:
+            kwargs["username"] = self.username
+        if self.password:
+            kwargs["password"] = self.password
+        return kwargs
 
 
 def _env_str(key: str) -> Optional[str]:
@@ -140,6 +160,16 @@ def resolve_redis_spec(
                     "UDS_REDIS_ENV_OVERRIDE_IGNORED fields=%s",
                     ",".join(mismatch_fields),
                 )
+    username = _env_str(REDIS_USERNAME_ENV) or ""
+    password = _env_str(REDIS_PASSWORD_ENV) or ""
+    if log and password and f"auth:{role}" not in _LOG_ONCE_KEYS:
+        _LOG_ONCE_KEYS.add(f"auth:{role}")
+        logging.info(
+            "UDS_REDIS_AUTH role=%s user=%s (пароль з env %s)",
+            role,
+            username or "default",
+            REDIS_PASSWORD_ENV,
+        )
     return RedisSpec(
         host=host,
         port=port,
@@ -152,4 +182,6 @@ def resolve_redis_spec(
         cfg_namespace=cfg_namespace,
         mismatch=mismatch,
         mismatch_fields=mismatch_fields,
+        username=username,
+        password=password,
     )

@@ -217,6 +217,7 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
         host=spec.host,
         port=spec.port,
         db=spec.db,
+        **spec.auth_kwargs(),
         decode_responses=True,
         socket_timeout=30,
         socket_connect_timeout=5,

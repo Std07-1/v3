@@ -97,6 +97,7 @@ def _connect_redis(full_cfg: Mapping[str, Any]) -> Optional[Any]:
             host=spec.host,
             port=spec.port,
             db=spec.db,
+            **spec.auth_kwargs(),
             socket_connect_timeout=REDIS_CONNECT_TIMEOUT_S,
             decode_responses=True,
         )

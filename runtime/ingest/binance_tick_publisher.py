@@ -236,6 +236,7 @@ def main() -> int:
         host=spec.host,
         port=spec.port,
         db=spec.db,
+        **spec.auth_kwargs(),
         socket_timeout=30,
         socket_connect_timeout=5,
     )

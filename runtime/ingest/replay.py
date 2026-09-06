@@ -181,6 +181,7 @@ def _flush_redis_namespace(cfg: Dict[str, Any]) -> int:
             host=spec.host,
             port=spec.port,
             db=spec.db,
+            **spec.auth_kwargs(),
             decode_responses=True,
             socket_timeout=5,
             socket_connect_timeout=5,

@@ -432,6 +432,7 @@ def build_redis_snapshot_writer(config_path: str) -> Optional[RedisSnapshotWrite
         host=spec.host,
         port=spec.port,
         db=spec.db,
+        **spec.auth_kwargs(),
         decode_responses=True,
     )
     try:
