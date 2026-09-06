@@ -48,10 +48,15 @@ def grade_symbol_tf(
     if geometry is not None:
         if geometry.total == 0:
             red.append("no_bars")
-        for field in ("exact_dup", "unsorted", "align_bad", "close_bad", "ohlc_bad"):
+        for field in ("exact_dup", "align_bad", "close_bad", "ohlc_bad"):
             value = getattr(geometry, field)
             if value:
                 red.append(f"{field}={value}")
+        if geometry.unsorted:
+            # Порядок рядків у part-файлі — не дефект даних: читачі сортують, а
+            # backfill законно дописує старіші бари після новіших. Значення саме
+            # як сигнал безладу у файлі, не як стоп для аналізу.
+            yellow.append(f"unsorted={geometry.unsorted}")
 
     if cascade is not None and cascade.mismatched:
         red.append(f"cascade_mismatch={cascade.mismatched}")

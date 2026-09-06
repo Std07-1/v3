@@ -178,3 +178,32 @@ def test_holes_tolerance_moves_verdict(missing_ratio, expected):
     holes = measure_holes([BASE], start_ms=BASE, end_ms=BASE + 3 * M1_MS, tf_ms=M1_MS,
                           anchor_offset_ms=0, is_trading_fn=ALWAYS)
     assert grade_symbol_tf(holes=holes, max_missing_ratio=missing_ratio).grade == expected
+
+
+# ── регресії на дві хиби самого виміру (знайдені прогоном на живих даних) ────
+def test_anchor_on_closing_edge_is_legal_too():
+    """D1 якориться на 21:00 = перша хвилина перерви; вимога «якір торгується» його б відкинула."""
+    break_start = BASE + 75_600_000  # 21:00
+    trades_until_break = lambda ms: ms < break_start  # noqa: E731
+    assert check_anchor_on_session_edge(break_start, tf_ms=D1_MS, is_trading_fn=trades_until_break) is True
+
+
+def test_anchor_inside_session_is_rejected():
+    mid_session = BASE + 43_200_000  # 12:00, торговість не змінюється
+    assert check_anchor_on_session_edge(mid_session, tf_ms=D1_MS, is_trading_fn=ALWAYS) is False
+
+
+def test_unsorted_is_yellow_not_red():
+    """Backfill законно дописує старіші бари після новіших — читачі сортують."""
+    bars = [_bar(BASE + M1_MS, M1_MS), _bar(BASE, M1_MS)]
+    g = grade_symbol_tf(geometry=measure_geometry(bars, tf_ms=M1_MS, anchor_offsets_ms=[0]))
+    assert g.grade == "YELLOW" and any("unsorted" in r for r in g.reasons)
+
+
+def test_real_data_defects_stay_red():
+    """А ось копія однієї M1 замість агрегації (реальний дефект XAG M3) — RED."""
+    src = _m1_hour(BASE)[:3]
+    m3_copy_of_first = _bar(BASE, 180_000, o=src[0].o, h=src[0].h, low=src[0].low, c=src[0].c)
+    casc = measure_cascade([m3_copy_of_first], src, target_tf_ms=180_000, source_tf_ms=M1_MS, anchor_offsets_ms=[0])
+    assert casc.mismatched == 1
+    assert grade_symbol_tf(cascade=casc).grade == "RED"
