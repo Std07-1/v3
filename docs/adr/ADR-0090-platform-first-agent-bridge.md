@@ -282,7 +282,7 @@ trader-v3 (smc_trader_v3, окремий program)  ◄──► Redis IPC (wake:
 | S1 bridge + routes | ✅ 2026-09-06 | `0de10de` (move-only; public_snapshot WIP лишається в ws_server; деплой VPS за go) |
 | S2 WakeEngine | ⏳ | — |
 | S3 overlay | ⏳ | — |
-| S5 репо-гігієна | ⏳ | — |
+| S5 репо-гігієна | ✅ 2026-09-06 (частково) | архів бот-тулзів зроблено; SPA і whitelist `ui_no_direct_redis` — окремо |
 | S6 writes → bot | ⏳ | — |
 | S7 імена | ⏳ | — |
 | Docs-слайс §3.7 | ✅ 2026-09-06 | `ee03177` (нове X40; X29/X30 збережено як покажчики) |
@@ -330,3 +330,11 @@ trader-v3 (smc_trader_v3, окремий program)  ◄──► Redis IPC (wake:
   S5: бот-скриптів у `tools/` ~75, а не ~10; це історичний архів у репозиторії власника — видалення/перенос
   потребує його рішення; зняття ws_server з whitelist `ui_no_direct_redis` неможливе без окремого патчу
   (два платформні `import redis` лишаються). Порядок слайсів після S1 — за рішенням власника.
+- 2026-09-06: S5 закрито в частині інструментів (owner: «в архів їх всі»): 29 трекованих бот-скриптів
+  (`bot_patches/` 12 + `check_archi*`, `check_wake`, `check_directives*`, `check_config`, `check_stats_date`,
+  `clean_channel_beliefs`, `fix_market_memory`, `reset_budget`, `reset_breaker`, `diag/{archi_health,archi_state_dump,
+  check_conv,kb_audit,_check_timers}`) → `tools/_archive_bot/` через `git mv` + README; локальний untracked
+  `_archive_patches/` (70 файлів) перенесено фізично, правило `.gitignore` переставлено на нове місце.
+  Доведено перед переносом: платформа не імпортує жоден із них (скан `core/runtime/app/tests/exit_gates/workflows`).
+  Активні `tools/` більше не містять жодного `/opt/smc-trader-v3`. **Поза скоупом**: три SPA (у `ui_archi_v2` живе
+  WIP) і зняття ws_server з `ALLOW_FILES` гейта `ui_no_direct_redis` (два платформні `import redis` лишаються).
