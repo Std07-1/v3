@@ -28,7 +28,7 @@ If you discover a security vulnerability in Trading Platform v3, please report i
 
 ## Security Design Principles
 
-- All platform processes bind to `127.0.0.1`; the only ingress is nginx behind Cloudflare (see Deployment Boundary)
+- All platform processes bind to `127.0.0.1` (localhost only); the only ingress is nginx behind Cloudflare (see Deployment Boundary)
 - Platform processes run as a dedicated unprivileged unix user (`smc`, no sudo) on shared hosts (ADR-0091)
 - Secrets stored in `.env` (gitignored), never committed
 - Credentials are never logged
