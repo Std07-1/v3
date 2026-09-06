@@ -290,6 +290,14 @@ trader-v3 (smc_trader_v3, окремий program)  ◄──► Redis IPC (wake:
 ---
 
 ## Changelog
+- 2026-09-06 08:11 UTC: **S4+S1 задеплоєно на VPS** (owner go; `34e839f`, ts `20260906-081119`, бекапи в
+  `/root/deploy-bak-20260906-081119/`): `smc-ws` рестарт (лог `AGENT_BRIDGE_DISABLED` — WakeEngine/overlay off,
+  Арчі OFF), program `smc-agent-bridge` RUNNING з env `AI_ONE_AGENT_BRIDGE_ENABLED="1"` + токен (конф 600),
+  nginx `archi`/`gorn` → :8010 для `/api/archi/`, `/api/agent/` (`/api/public/` лишився :8000 — WIP), observation
+  60 с чистий, публічний сайт 200. Токен ще й у env `smc-ws` (прибрати = `supervisorctl update` групи smc →
+  окреме вікно). Пастка верифікації: `grep -oP … | head -1` по conf зачепив коментар шаблону з `…` (U+2026) →
+  bearer «…» → 500; корінь у SSOT auth (`hmac.compare_digest(str,str)` TypeError на non-ASCII) — виправлено
+  `c29c6d6` (`constant_time_equal`, UTF-8 байти) і задеплоєно рестартом bridge.
 
 - 2026-09-06: Created (Accepted за owner-рішенням). RECON: workflow 3 лінзи (coupling-map, docs-framing,
   public-surface) проти `ed4ca99`…`1ace5f9`; факти §1.2 з file:line. Того ж дня без цього ADR зроблено
