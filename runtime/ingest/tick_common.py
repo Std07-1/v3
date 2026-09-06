@@ -7,7 +7,7 @@ core.config_loader.env_str та runtime.ingest.market_calendar.MarketCalendar.
 from __future__ import annotations
 
 import logging
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Dict, List, Sequence, Tuple
 
 from core.config_loader import env_str
 from runtime.ingest.market_calendar import MarketCalendar
@@ -116,3 +116,68 @@ def calendar_from_group(group_cfg: dict) -> Optional[MarketCalendar]:
             "TICK_COMMON_CALENDAR_BUILD_FAILED group_cfg=%r", group_cfg, exc_info=True
         )
         return None
+
+
+# ---------------------------------------------------------------------------
+# Fail-fast мапінгу календарів (ADR-0054 §3.1 P0.4)
+# ---------------------------------------------------------------------------
+def resolve_symbol_calendars(
+    cfg: dict,
+    symbols: Sequence[str],
+    *,
+    where: str,
+) -> "Tuple[Dict[str, MarketCalendar], List[str]]":
+    """Побудувати календар на кожен символ; символи без валідного — відсіяти гучно.
+
+    Символ без запису в ``market_calendar_symbol_groups``, з групою, якої немає в
+    ``market_calendar_by_group``, або з групою, що не будується — це помилка конфігурації.
+    Мовчазний ``calendar=None`` означав би полінг 24/7 (усі споживачі трактують None як
+    «ринок завжди відкритий»), тому такий символ не отримує календаря і не стартує.
+
+    Args:
+        cfg: повний config.json.
+        symbols: символи, які збирається обслуговувати воркер.
+        where: ім'я воркера для лог-префікса.
+
+    Returns:
+        ``(calendars, rejected)`` — мапа символ→календар і список відсіяних символів.
+    """
+    by_group = cfg.get("market_calendar_by_group") or {}
+    sym_groups = cfg.get("market_calendar_symbol_groups") or {}
+    calendars: Dict[str, MarketCalendar] = {}
+    rejected: List[str] = []
+    for sym in symbols:
+        group = sym_groups.get(sym)
+        if not group:
+            logging.error(
+                "CALENDAR_GROUP_MISSING where=%s symbol=%s reason=no_group_mapping "
+                "— символ не стартує (додайте його у market_calendar_symbol_groups)",
+                where, sym,
+            )
+            rejected.append(sym)
+            continue
+        group_cfg = by_group.get(group)
+        if not isinstance(group_cfg, dict):
+            logging.error(
+                "CALENDAR_GROUP_MISSING where=%s symbol=%s group=%s reason=group_not_in_config "
+                "— символ не стартує",
+                where, sym, group,
+            )
+            rejected.append(sym)
+            continue
+        cal = calendar_from_group(group_cfg)
+        if cal is None:
+            logging.error(
+                "CALENDAR_GROUP_MISSING where=%s symbol=%s group=%s reason=build_failed "
+                "— символ не стартує",
+                where, sym, group,
+            )
+            rejected.append(sym)
+            continue
+        calendars[sym] = cal
+    if rejected:
+        logging.error(
+            "CALENDAR_SYMBOLS_REJECTED where=%s rejected=%s active=%s",
+            where, ",".join(rejected), ",".join(sorted(calendars)),
+        )
+    return calendars, rejected

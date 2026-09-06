@@ -18,7 +18,7 @@ import json
 import logging
 import os
 import time
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from core.buckets import bucket_start_ms
 from core.config_loader import load_system_config as load_config, pick_config_path
@@ -492,6 +492,41 @@ def _tf_label(tf_s: int) -> str:
 # ─── CLI entrypoint ───────────────────────────────────────────────
 
 
+def dedup_derived_in_ranges(
+    data_root: str,
+    symbol_ranges: Dict[str, Tuple[int, int]],
+) -> int:
+    """Прибрати дублікати open_time_ms (last-wins) у derived part-файлах.
+
+    Діапазон береться з ФАКТИЧНО перебудованого вікна на символ, а не з `--start`:
+    без цього `--force` без `--start` мовчки не дедуплікував нічого (ADR-0054 §3.1 P0.2).
+    Символ без запису в ``symbol_ranges`` = пропущений під час rebuild, тут не чіпаємо.
+
+    Returns:
+        Скільки дублікатів видалено сумарно.
+    """
+    from pathlib import Path
+
+    from tools.repair.dedup_jsonl_lastwins import dedup_file
+
+    derived_tfs = [tf for tf in DERIVE_ORDER if tf != TF_M1_S]
+    dedup_total = 0
+    for symbol, (start_ms, end_ms) in sorted(symbol_ranges.items()):
+        if start_ms <= 0 or end_ms <= start_ms:
+            raise ValueError(
+                f"dedup range невалідний symbol={symbol} start={start_ms} end={end_ms}"
+            )
+        sym_dir = symbol.replace("/", "_")
+        for tf_s in derived_tfs:
+            for day in iter_day_keys_utc(start_ms, end_ms):
+                p = Path(data_root) / sym_dir / f"tf_{tf_s}" / f"part-{day}.jsonl"
+                if not p.exists():
+                    continue
+                _, _, dupes = dedup_file(p, dry_run=False)
+                dedup_total += dupes
+    return dedup_total
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Rebuild derived TFs (M3→H4) з M1 даних на диску.",
@@ -518,6 +553,15 @@ def main() -> None:
         help="Кінець діапазону (ISO UTC, наприклад 2026-03-01).",
     )
     parser.add_argument("--config", type=str, default=None, help="Шлях до config.json.")
+    parser.add_argument(
+        "--writers-stopped",
+        action="store_true",
+        help=(
+            "Підтверджую: smc-fxcm/smc-ticks/smc-preview зупинені. Потрібно для символів "
+            "з config.json:symbols — rebuild append-ить у ті самі part-файли, що й live writer "
+            "(ADR-0054 §3.1 P0.2)."
+        ),
+    )
     parser.add_argument(
         "--force",
         action="store_true",
@@ -547,7 +591,21 @@ def main() -> None:
         day_anchor_offset_s_alt2=cfg.get("day_anchor_offset_s_alt2"),
     )
 
+    # ADR-0054 §3.1 P0.2: rebuild пише append-only у ті самі part-файли, що й live
+    # writer, без lock. Для символу з config.json:symbols це тихе джерело дублікатів,
+    # тому вимагаємо явного підтвердження, що ingest зупинено.
+    _live = [s for s in symbols if s in set(cfg.get("symbols", []))]
+    if _live and not args.writers_stopped and not args.dry_run:
+        logging.error(
+            "REBUILD_REFUSED symbols=%s у config.json:symbols — зупиніть smc-fxcm/smc-ticks/"
+            "smc-preview і додайте --writers-stopped (або запускайте з --dry-run)",
+            ",".join(_live),
+        )
+        raise SystemExit(2)
+
     total_stats: Dict[str, Dict[str, int]] = {}
+    # Фактичні вікна rebuild на символ — джерело діапазону для dedup-on-finish
+    symbol_ranges: Dict[str, Tuple[int, int]] = {}
     try:
         for symbol in symbols:
             logging.info("═══ REBUILD START symbol=%s ═══", symbol)
@@ -589,6 +647,7 @@ def main() -> None:
                 force=args.force,
             )
             total_stats[symbol] = stats
+            symbol_ranges[symbol] = (start_ms, end_ms)
     finally:
         writer.close()
 
@@ -596,37 +655,15 @@ def main() -> None:
     # JSONL writer лишає stale records. Видаляємо дублікати по open_time_ms
     # (last-wins). Захищає external readers без UDS dedup logic.
     if args.force and not args.dry_run:
-        from pathlib import Path
-
-        from tools.repair.dedup_jsonl_lastwins import dedup_file
-
         logging.info("═══ DEDUP-ON-FINISH (force=True) ═══")
-        derived_tfs = [tf for tf in DERIVE_ORDER if tf != TF_M1_S]
-        dedup_total = 0
-        for symbol in symbols:
-            sym_dir = symbol.replace("/", "_")
-            for tf_s in derived_tfs:
-                tf_dir = f"tf_{tf_s}"
-                # Iterate days inside the rebuild range we used for this symbol
-                _start_ms = (
-                    int(parse_iso_utc(args.start).timestamp() * 1000)
-                    if args.start
-                    else 0
-                )
-                _end_ms = (
-                    int(parse_iso_utc(args.end).timestamp() * 1000)
-                    if args.end
-                    else int(time.time() * 1000)
-                )
-                if _start_ms == 0:
-                    continue
-                for day in iter_day_keys_utc(_start_ms, _end_ms):
-                    p = Path(data_root) / sym_dir / tf_dir / f"part-{day}.jsonl"
-                    if not p.exists():
-                        continue
-                    _, _, dupes = dedup_file(p, dry_run=False)
-                    dedup_total += dupes
-        logging.info("DEDUP_TOTAL dupes_removed=%d", dedup_total)
+        skipped = [s for s in symbols if s not in symbol_ranges]
+        if skipped:
+            # I5: не мовчазний пропуск — символи без rebuild не дедуплікуються свідомо
+            logging.warning("DEDUP_SKIP symbols=%s (rebuild не виконувався)", ",".join(skipped))
+        dedup_total = dedup_derived_in_ranges(data_root, symbol_ranges)
+        logging.info(
+            "DEDUP_TOTAL dupes_removed=%d symbols=%d", dedup_total, len(symbol_ranges)
+        )
 
     # Підсумок
     logging.info("═══ REBUILD SUMMARY ═══")

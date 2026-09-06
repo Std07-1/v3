@@ -27,6 +27,7 @@ from env_profile import load_env_secrets
 from runtime.ingest.derive_engine import DeriveEngine
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.tick_common import (
+    resolve_symbol_calendars,
     symbols_from_cfg,
     calendar_from_group,
 )
@@ -1375,15 +1376,17 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
     )
 
     # Будуємо календарі
-    cal_by_group = cfg.get("market_calendar_by_group", {})
-    cal_sym_groups = cfg.get("market_calendar_symbol_groups", {})
+    # ADR-0054 P0.4: символ без валідного календаря не стартує (замість тихих 24/7)
+    calendars, rejected = resolve_symbol_calendars(cfg, symbols, where="m1_poller")
+    if rejected:
+        symbols = [s for s in symbols if s not in set(rejected)]
+    if not symbols:
+        logging.error("M1_POLLER_NO_SYMBOLS — жоден символ не має календаря")
+        return None
 
     pollers: List[M1SymbolPoller] = []
     for sym in symbols:
-        group = cal_sym_groups.get(sym)
-        cal: Optional[MarketCalendar] = None
-        if group and isinstance(cal_by_group.get(group), dict):
-            cal = calendar_from_group(cal_by_group[group])
+        cal = calendars[sym]
 
         pollers.append(
             M1SymbolPoller(
@@ -1413,13 +1416,9 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
         # ADR-0023: D1 anchor (22:00 UTC = 79200s)
         d1_anchor_offset_s = int(cfg.get("day_anchor_offset_s_d1", 0))
         # Calendar per symbol для DeriveEngine
-        calendars_for_engine: Dict[str, MarketCalendar] = {}
-        for sym in symbols:
-            group = cal_sym_groups.get(sym)
-            if group and isinstance(cal_by_group.get(group), dict):
-                cal_obj = calendar_from_group(cal_by_group[group])
-                if cal_obj is not None:
-                    calendars_for_engine[sym] = cal_obj
+        calendars_for_engine: Dict[str, MarketCalendar] = {
+            sym: calendars[sym] for sym in symbols
+        }
 
         derive_engine = DeriveEngine(
             symbols=symbols,

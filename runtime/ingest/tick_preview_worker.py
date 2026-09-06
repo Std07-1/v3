@@ -12,6 +12,7 @@ from core.buckets import bucket_start_ms as _bucket_start_ms, resolve_anchor_off
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.tick_agg import TickAggregator
 from runtime.ingest.tick_common import (
+    resolve_symbol_calendars,
     pick_tick_channel,
     symbols_from_cfg,
     build_symbol_aliases,
@@ -724,30 +725,20 @@ def main() -> int:
         writer_components=False,
     )
 
-    # --- Build per-symbol calendars ---
+    # --- Build per-symbol calendars (ADR-0054 P0.4: fail-fast замість тихих 24/7) ---
     calendars: Dict[str, MarketCalendar] = {}
     all_symbols = preview_cfg.symbols or symbols_from_cfg(cfg)
-    cal_groups = cfg.get("market_calendar_symbol_groups", {})
-    cal_by_group = cfg.get("market_calendar_by_group", {})
-    if (
-        isinstance(cal_groups, dict)
-        and isinstance(cal_by_group, dict)
-        and bool(cfg.get("calendar_gate_enabled", False))
-    ):
-        for sym in all_symbols:
-            grp_name = cal_groups.get(sym)
-            if not grp_name:
-                continue
-            grp_cfg = cal_by_group.get(grp_name)
-            if not isinstance(grp_cfg, dict):
-                continue
-            cal = calendar_from_group(grp_cfg)
-            if cal is not None:
-                calendars[sym] = cal
+    if bool(cfg.get("calendar_gate_enabled", False)):
+        calendars, rejected = resolve_symbol_calendars(
+            cfg, all_symbols, where="tick_preview_worker"
+        )
+        if rejected:
+            # Символ без календаря не превʼюїмо: інакше він тік би 24/7 у вихідні
+            all_symbols = [s for s in all_symbols if s not in set(rejected)]
         logging.info(
             "TickPreview: calendar gate для %d/%d символів",
             len(calendars),
-            len(all_symbols),
+            len(calendars) + len(rejected),
         )
 
     auto_promote_m1 = bool(cfg.get("tick_auto_promote_m1", False))

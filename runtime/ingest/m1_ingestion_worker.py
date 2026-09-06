@@ -26,7 +26,7 @@ from runtime.ingest.polling.m1_poller import (
     M1PollerRunner,
     set_flat_bar_max_volume,
 )
-from runtime.ingest.tick_common import symbols_from_cfg, calendar_from_group
+from runtime.ingest.tick_common import symbols_from_cfg, calendar_from_group, resolve_symbol_calendars
 from runtime.store.redis_spec import resolve_redis_spec
 from runtime.store.uds import build_uds_from_config
 
@@ -256,16 +256,17 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
         writer_components=True,
     )
 
-    # Calendars
-    cal_by_group = cfg.get("market_calendar_by_group", {})
-    cal_sym_groups = cfg.get("market_calendar_symbol_groups", {})
+    # Calendars (ADR-0054 P0.4: символ без валідного календаря не стартує)
+    calendars, rejected = resolve_symbol_calendars(cfg, symbols, where="m1_ingestion_worker")
+    if rejected:
+        symbols = [s for s in symbols if s not in set(rejected)]
+    if not symbols:
+        logging.error("M1_INGESTION_WORKER_NO_SYMBOLS — жоден символ не має календаря")
+        return None
 
     pollers: list[M1SymbolPoller] = []
     for sym in symbols:
-        group = cal_sym_groups.get(sym)
-        cal: Optional[MarketCalendar] = None
-        if group and isinstance(cal_by_group.get(group), dict):
-            cal = calendar_from_group(cal_by_group[group])
+        cal = calendars[sym]
 
         pollers.append(
             M1SymbolPoller(
@@ -293,13 +294,10 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
     if derive_enabled:
         anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
         d1_anchor_offset_s = int(cfg.get("day_anchor_offset_s_d1", 0))
-        calendars_for_engine: Dict[str, MarketCalendar] = {}
-        for sym in symbols:
-            group = cal_sym_groups.get(sym)
-            if group and isinstance(cal_by_group.get(group), dict):
-                cal_obj = calendar_from_group(cal_by_group[group])
-                if cal_obj is not None:
-                    calendars_for_engine[sym] = cal_obj
+        # Той самий резолв, що й для поллерів — один календар на символ
+        calendars_for_engine: Dict[str, MarketCalendar] = {
+            sym: calendars[sym] for sym in symbols
+        }
 
         derive_engine = DeriveEngine(
             symbols=symbols,
