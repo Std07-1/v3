@@ -15,7 +15,7 @@ import asyncio
 from aiohttp import WSMsgType
 from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
 
-from runtime.ws.ws_server import APP_HEARTBEAT_S, build_app, SCHEMA_V
+from runtime.ws.ws_server import APP_HEARTBEAT_S, APP_WS_LIMITS, WsLimits, build_app, SCHEMA_V
 
 pytestmark = pytest.mark.asyncio
 
@@ -346,3 +346,73 @@ async def test_ws_default_tf_m30(aiohttp_client, ws_app_mock_uds):
         assert msg["tf"] == "M30", f"expected M30, got {msg['tf']}"
     finally:
         await ws.close()
+
+
+# ── SEC-06: WS rails — max_clients / per-IP / action token bucket / switch cooldown ──
+
+
+async def _next_frame_of_type(ws, frame_type, limit=12):
+    """Читає кадри до першого з потрібним frame_type (config/full/error…)."""
+    for _ in range(limit):
+        msg = await ws.receive(timeout=5)
+        if msg.type != WSMsgType.TEXT:
+            continue
+        frame = json.loads(msg.data)
+        if frame.get("frame_type") == frame_type:
+            return frame
+    raise AssertionError(f"no frame_type={frame_type} within {limit} frames")
+
+
+async def test_ws_switch_within_cooldown_is_throttled(aiohttp_client, ws_app_mock_uds):
+    """SEC-06: другий switch у межах cooldown → error frame switch_throttled, без нового full frame."""
+    client = await aiohttp_client(ws_app_mock_uds)
+    ws = await client.ws_connect("/ws")
+    await _next_frame_of_type(ws, "full")
+    await ws.send_json({"action": "switch", "symbol": "XAU/USD", "tf": "M5"})
+    await _next_frame_of_type(ws, "full")
+    await ws.send_json({"action": "switch", "symbol": "XAU/USD", "tf": "M15"})
+    err = await _next_frame_of_type(ws, "error")
+    assert err["error"]["code"] == "switch_throttled"
+    await ws.close()
+
+
+async def test_ws_action_flood_hits_token_bucket(aiohttp_client, ws_app_mock_uds):
+    """SEC-06: burst=3, refill=0 → перші 3 дії обробляються (unknown_action), 4-та = action_rate_limited."""
+    ws_app_mock_uds[APP_WS_LIMITS] = WsLimits(actions_burst=3, actions_per_s=0.0)
+    client = await aiohttp_client(ws_app_mock_uds)
+    ws = await client.ws_connect("/ws")
+    await _next_frame_of_type(ws, "full")
+    codes = []
+    for _ in range(4):
+        await ws.send_json({"action": "noop"})
+        codes.append((await _next_frame_of_type(ws, "error"))["error"]["code"])
+    assert codes == ["unknown_action", "unknown_action", "unknown_action", "action_rate_limited"]
+    await ws.close()
+
+
+async def test_ws_max_clients_rejects_with_503(aiohttp_client, ws_app_mock_uds):
+    """SEC-06: max_clients=1 → друге з'єднання відхилено ДО upgrade (HTTP 503), перше живе."""
+    import aiohttp
+
+    ws_app_mock_uds[APP_WS_LIMITS] = WsLimits(max_clients=1, max_clients_per_ip=0)
+    client = await aiohttp_client(ws_app_mock_uds)
+    ws1 = await client.ws_connect("/ws")
+    await _next_frame_of_type(ws1, "full")
+    with pytest.raises(aiohttp.WSServerHandshakeError) as exc_info:
+        await client.ws_connect("/ws")
+    assert exc_info.value.status == 503
+    await ws1.close()
+
+
+async def test_ws_max_clients_per_ip_rejects(aiohttp_client, ws_app_mock_uds):
+    """SEC-06: max_clients_per_ip=1 → друга сесія з тієї ж адреси відхилена (503), загальний ліміт не зачеплено."""
+    import aiohttp
+
+    ws_app_mock_uds[APP_WS_LIMITS] = WsLimits(max_clients=0, max_clients_per_ip=1)
+    client = await aiohttp_client(ws_app_mock_uds)
+    ws1 = await client.ws_connect("/ws")
+    await _next_frame_of_type(ws1, "full")
+    with pytest.raises(aiohttp.WSServerHandshakeError) as exc_info:
+        await client.ws_connect("/ws")
+    assert exc_info.value.status == 503
+    await ws1.close()

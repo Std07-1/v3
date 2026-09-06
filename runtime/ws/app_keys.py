@@ -57,3 +57,6 @@ APP_BG_SMC_TASK = web.AppKey("bg_smc_task", asyncio.Task)
 
 # ── ADR-0049: Wake Engine ─────────────────────────────────────────────────
 APP_WAKE_ENGINE = web.AppKey("wake_engine", object)
+
+# SEC-06: WS connection/action rails (WsLimits) — config.json:ws_server.*
+APP_WS_LIMITS = web.AppKey("ws_limits", object)

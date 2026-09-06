@@ -282,6 +282,11 @@
     "host": "127.0.0.1",
     "port": 8000,
     "heartbeat_interval_s": 30,
+    "max_clients": 200,
+    "max_clients_per_ip": 8,
+    "actions_burst": 10,
+    "actions_per_s": 2.0,
+    "switch_cooldown_s": 1.0,
     "delta_poll_interval_s": 1.0,
     "bg_smc_poll_interval_s": 10.0,
     "cors_allowed_origins": []

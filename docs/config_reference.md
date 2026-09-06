@@ -185,6 +185,19 @@
 
 ---
 
+## WS Server rails (SEC-06, `ws_server.*`)
+
+| Ключ | Дефолт | Значення |
+|---|---|---|
+| `max_clients` | 200 | одночасних WS-сесій на процес; перевищення → HTTP 503 до upgrade (0 = без ліміту) |
+| `max_clients_per_ip` | 8 | сесій з однієї адреси (`X-Real-IP` від nginx після `realip_cloudflare.conf`); 0 = без ліміту |
+| `actions_burst` | 10 | token bucket на сесію: скільки дій підряд без паузи; 0 = без ліміту |
+| `actions_per_s` | 2.0 | refill token bucket (дій/с) |
+| `switch_cooldown_s` | 1.0 | мінімальний інтервал між `switch` (кожен = cold-start read + SMC snapshot); 0 = вимкнено |
+
+Відмови = degraded-but-loud: `WS_REJECT`/`WS_ACTION_RATE_LIMITED`/`WS_SWITCH_REJECT` у логах + error frame
+`switch_throttled`/`action_rate_limited` клієнту. Heartbeat aiohttp (ping/pong) = `heartbeat_interval_s`.
+
 ## Redis
 
 | Ключ | Тип | Опис |

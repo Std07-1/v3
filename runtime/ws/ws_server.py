@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import time
+from dataclasses import dataclass
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional, Protocol, cast
@@ -119,6 +120,7 @@ from runtime.ws.app_keys import (  # noqa: E402
     APP_UDS,
     APP_UDS_EXECUTOR,
     APP_WAKE_ENGINE,
+    APP_WS_LIMITS,
     APP_WS_SESSIONS,
 )
 
@@ -141,6 +143,49 @@ _D1_TICK_RELAY_TFS_DEFAULT: set = set()
 # P11: scrollback disk rails
 SCROLLBACK_MAX_STEPS = 12  # РјР°РєСЃ С‡Р°РЅРєС–РІ scrollback per session per symbol+tf
 SCROLLBACK_COOLDOWN_S = 0.5  # РјС–РЅС–РјР°Р»СЊРЅРёР№ С–РЅС‚РµСЂРІР°Р» РјС–Р¶ scrollback РІС–Рґ РѕРґРЅРѕРіРѕ РєР»С–С”РЅС‚Р°
+
+# SEC-06: WS connection/action rails — SSOT-дефолти; override через config.json:ws_server.*
+WS_MAX_CLIENTS_DEFAULT = 200  # одночасних WS-сесій на процес (0 = без ліміту)
+WS_MAX_CLIENTS_PER_IP_DEFAULT = 8  # сесій з однієї адреси (X-Real-IP від nginx після realip)
+WS_ACTIONS_BURST_DEFAULT = 10  # token bucket: burst дій на сесію (0 = без ліміту)
+WS_ACTIONS_PER_S_DEFAULT = 2.0  # token bucket: refill дій/с
+WS_SWITCH_COOLDOWN_S_DEFAULT = 1.0  # мінімум між switch: кожен = cold-start read + SMC snapshot
+
+
+@dataclass(frozen=True)
+class WsLimits:
+    """SEC-06: rails WS-сервера (нуль = відповідний ліміт вимкнено)."""
+
+    max_clients: int = WS_MAX_CLIENTS_DEFAULT
+    max_clients_per_ip: int = WS_MAX_CLIENTS_PER_IP_DEFAULT
+    actions_burst: int = WS_ACTIONS_BURST_DEFAULT
+    actions_per_s: float = WS_ACTIONS_PER_S_DEFAULT
+    switch_cooldown_s: float = WS_SWITCH_COOLDOWN_S_DEFAULT
+
+
+def _ws_limits_from_cfg(ws_cfg: Dict[str, Any]) -> WsLimits:
+    """config.json:ws_server.* → WsLimits. Відсутній ключ = дефолт; сміття = дефолт + WARN (I5)."""
+
+    def _num(key: str, default: Any, cast: Any) -> Any:
+        raw = ws_cfg.get(key, default)
+        try:
+            return cast(raw)
+        except (TypeError, ValueError):
+            _log.warning("WS_LIMITS_CONFIG_INVALID key=%s value=%r default=%r", key, raw, default)
+            return default
+
+    return WsLimits(
+        max_clients=_num("max_clients", WS_MAX_CLIENTS_DEFAULT, int),
+        max_clients_per_ip=_num("max_clients_per_ip", WS_MAX_CLIENTS_PER_IP_DEFAULT, int),
+        actions_burst=_num("actions_burst", WS_ACTIONS_BURST_DEFAULT, int),
+        actions_per_s=_num("actions_per_s", WS_ACTIONS_PER_S_DEFAULT, float),
+        switch_cooldown_s=_num("switch_cooldown_s", WS_SWITCH_COOLDOWN_S_DEFAULT, float),
+    )
+
+
+def _client_ip(request: web.Request) -> str:
+    """Реальна адреса клієнта: X-Real-IP ставить nginx (після realip_cloudflare), інакше peer."""
+    return (request.headers.get("X-Real-IP") or request.remote or "?").strip()
 
 # TF label в†” seconds mapping (types.ts WsAction.switch.tf)
 # Canonical labels: uppercase M1, M5, H1 etc. (СЏРє Сѓ С„СЂРѕРЅС‚РµРЅРґС– SymbolTfPicker)
@@ -414,6 +459,10 @@ class WsSession:
         "ws",
         "_scrollback_count",
         "_scrollback_last_ts",
+        "client_ip",
+        "_action_tokens",
+        "_action_refill_ts",
+        "_switch_last_ts",
     )
 
     def __init__(self, ws: web.WebSocketResponse) -> None:
@@ -429,6 +478,10 @@ class WsSession:
         self._scrollback_last_ts: float = (
             0  # P11: timestamp РѕСЃС‚Р°РЅРЅСЊРѕРіРѕ scrollback
         )
+        self.client_ip: str = "?"  # SEC-06: для per-IP ліміту (X-Real-IP)
+        self._action_tokens: float = float(WS_ACTIONS_BURST_DEFAULT)  # SEC-06 token bucket
+        self._action_refill_ts: float = 0.0
+        self._switch_last_ts: float = 0.0  # SEC-06: cooldown між switch
 
     def next_seq(self) -> int:
         self.seq += 1
@@ -1687,13 +1740,31 @@ async def _bg_smc_feed_loop(app: web.Application) -> None:
 # в”Ђв”Ђ WS Handler в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 
-async def ws_handler(request: web.Request) -> web.WebSocketResponse:
-    ws = web.WebSocketResponse(heartbeat=None)
+async def ws_handler(request: web.Request) -> web.StreamResponse:
+    app = request.app
+    sessions: Dict[str, WsSession] = app[APP_WS_SESSIONS]
+    limits: WsLimits = app.get(APP_WS_LIMITS) or WsLimits()
+    client_ip = _client_ip(request)
+    # SEC-06: capacity rails ДО upgrade — відмова коштує HTTP 503, не сесію в пам'яті
+    if limits.max_clients > 0 and len(sessions) >= limits.max_clients:
+        _log.warning("WS_REJECT reason=max_clients(%d) ip=%s", limits.max_clients, client_ip)
+        return web.Response(status=503, text="ws_capacity")
+    if limits.max_clients_per_ip > 0:
+        per_ip = sum(1 for s in sessions.values() if s.client_ip == client_ip)
+        if per_ip >= limits.max_clients_per_ip:
+            _log.warning(
+                "WS_REJECT reason=max_clients_per_ip(%d) ip=%s", limits.max_clients_per_ip, client_ip
+            )
+            return web.Response(status=503, text="ws_capacity_ip")
+
+    hb_interval = app.get(APP_HEARTBEAT_S, DEFAULT_HEARTBEAT_S)
+    # SEC-06: aiohttp ping/pong закриває мертвих peer-ів; max_msg_size ріже фрейм ДО буферизації
+    ws = web.WebSocketResponse(heartbeat=float(hb_interval), max_msg_size=_MAX_WS_MSG_BYTES)
     await ws.prepare(request)
 
     session = WsSession(ws)
-    app = request.app
-    sessions: Dict[str, WsSession] = app[APP_WS_SESSIONS]
+    session.client_ip = client_ip
+    session._action_tokens = float(limits.actions_burst)
     sessions[session.client_id] = session
 
     _log.info("WS_CONNECT client_id=%s remote=%s", session.client_id, request.remote)
@@ -1724,8 +1795,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         except Exception as exc:
             _log.warning("WS_HELLO_FAIL client_id=%s err=%s", session.client_id, exc)
 
-    # Heartbeat task
-    hb_interval = app.get(APP_HEARTBEAT_S, DEFAULT_HEARTBEAT_S)
+    # Heartbeat task (hb_interval визначено вище, до upgrade)
 
     async def _heartbeat_loop() -> None:
         try:
@@ -1783,6 +1853,21 @@ def _sanitize_log(value: str, max_len: int = 120) -> str:
     return _re.sub(r"[\x00-\x1f\x7f]", "", value)[:max_len]
 
 
+def _consume_action_token(session: WsSession, limits: WsLimits, now: float) -> bool:
+    """SEC-06 token bucket per session: burst=actions_burst, refill=actions_per_s/с; burst 0 = вимкнено."""
+    if limits.actions_burst <= 0:
+        return True
+    elapsed = max(0.0, now - session._action_refill_ts)
+    session._action_refill_ts = now
+    session._action_tokens = min(
+        float(limits.actions_burst), session._action_tokens + elapsed * limits.actions_per_s
+    )
+    if session._action_tokens < 1.0:
+        return False
+    session._action_tokens -= 1.0
+    return True
+
+
 async def _handle_action(session: WsSession, raw: str, app: web.Application) -> None:
     """Р РѕР·Р±РёСЂР°С” РІС…С–РґРЅРµ РїРѕРІС–РґРѕРјР»РµРЅРЅСЏ РІС–Рґ РєР»С–С”РЅС‚Р°. P2: switch + scrollback.
 
@@ -1799,13 +1884,24 @@ async def _handle_action(session: WsSession, raw: str, app: web.Application) -> 
         )
         await session.ws.send_json(err)
         return
+    # SEC-06: token bucket — flood дій не доходить до parse/switch
+    limits: WsLimits = app.get(APP_WS_LIMITS) or WsLimits()
+    if not _consume_action_token(session, limits, time.time()):
+        _log.warning(
+            "WS_ACTION_RATE_LIMITED client=%s ip=%s", session.client_id, session.client_ip
+        )
+        err = _build_error_frame(
+            session, "action_rate_limited", "Too many actions, slow down", app=app
+        )
+        await session.ws.send_json(err)
+        return
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         _log.warning(
             "WS_ACTION_INVALID client=%s reason=json_error raw=%.200s",
             session.client_id,
-            raw,
+            _sanitize_log(raw, 200),  # SEC-03: без log injection
         )
         err = _build_error_frame(session, "json_parse_error", "Invalid JSON", app=app)
         await session.ws.send_json(err)
@@ -1814,7 +1910,7 @@ async def _handle_action(session: WsSession, raw: str, app: web.Application) -> 
         _log.warning(
             "WS_ACTION_INVALID client=%s reason=missing_action raw=%.200s",
             session.client_id,
-            raw,
+            _sanitize_log(raw, 200),  # SEC-03: без log injection
         )
         err = _build_error_frame(
             session, "missing_action", "Message must have 'action' field", app=app
@@ -1841,6 +1937,17 @@ async def _handle_switch(
     session: WsSession, data: Dict[str, Any], app: web.Application
 ) -> None:
     """РћР±СЂРѕР±РєР° switch action: Р·РјС–РЅРёС‚Рё symbol/tf в†’ РЅРѕРІРёР№ full frame."""
+    # SEC-06: cooldown між switch (кожен switch = cold-start read + SMC snapshot + серіалізація)
+    limits: WsLimits = app.get(APP_WS_LIMITS) or WsLimits()
+    now_s = time.time()
+    if limits.switch_cooldown_s > 0 and now_s - session._switch_last_ts < limits.switch_cooldown_s:
+        _log.warning(
+            "WS_SWITCH_REJECT client=%s reason=cooldown ip=%s", session.client_id, session.client_ip
+        )
+        err = _build_error_frame(session, "switch_throttled", "switch cooldown active", app=app)
+        await session.ws.send_json(err)
+        return
+    session._switch_last_ts = now_s
     symbols_set: set = app.get(APP_SYMBOLS_SET, set())
     tf_allowlist: set = app.get(APP_TF_ALLOWLIST, set())
 
@@ -2051,6 +2158,7 @@ def build_app(
     ws_cfg = full_cfg.get("ws_server", {}) if isinstance(full_cfg, dict) else {}
     app = web.Application()
     app[APP_HEARTBEAT_S] = int(ws_cfg.get("heartbeat_interval_s", DEFAULT_HEARTBEAT_S))
+    app[APP_WS_LIMITS] = _ws_limits_from_cfg(ws_cfg)  # SEC-06
     app[APP_DELTA_POLL_S] = float(
         ws_cfg.get("delta_poll_interval_s", DEFAULT_DELTA_POLL_S)
     )
