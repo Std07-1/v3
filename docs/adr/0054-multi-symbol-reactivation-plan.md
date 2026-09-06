@@ -172,18 +172,41 @@ K5-гейт rev 1 («`symbols` не змінюється до Accepted+Фаза 
 
 **Ціль**: зробити засів історії virgin FXCM-символу відтворюваною offline-процедурою і прибрати відомі пастки інструментів. Без Фази 0 жоден крок Фаз 2-3 не виконуваний (§0).
 
-**P0.1 `tools/fetch_tf_backfill.py` (S2, ≤40 LOC)**: `DERIVED_ONLY_TFS = {180,300,900,1800,3600,14400,86400}` (лише `--tf 60` без
-`--force-derived-tf`; зараз guard тільки на H4, а прямий D1 уже дав anchor-інцидент — runbook `fxcm_credential_rotation.md:321`);
-`--repeat N`/`--from <ISO>` для ланцюжкового backward-fetch з паузою; підсумок first/last/holes.
-До патчу — пейджинг руками через `--date-to` (працює, доведено 05.09: 9 викликів × n=8640 на символ).
-**P0.2 `tools/rebuild_from_m1.py` (S2)**: `--force` без `--start` мовчки пропускає dedup-on-finish (`:611-622`, `if _start_ms == 0: continue`)
-→ fail loud або брати `head_first_bar_time_ms` як start. Запускати **тільки** для символу поза config або при зупиненому
-`smc-fxcm`/`smc-ticks`/`smc-preview` (append без lock у ті самі part-файли, що й live writer).
-**P0.3 `gate_coldstart_multisymbol.py`**: прибрати sub-gate 3 `derived_state_covers_all` (мертвий файл); `data_v3/_derived_tail_state.json` → `data_v3/_audit/` (D13.5: лише цей файл).
-**P0.4 Fail-fast календаря (I5)**: символ із `symbols` без групи в `market_calendar_symbol_groups` або з невідомою групою →
-`CALENDAR_GROUP_MISSING` ERROR + `degraded[]`, для FXCM-воркерів — не стартувати символ
-(зараз `tick_preview_worker.py:738-741`, `m1_poller.py:1380-1386` тихо працюють 24/7 без календаря).
-**P0.5 (бажано, разово)**: `FxcmHistoryProvider.fetch_m1_range()` + sidecar-операція → ADR-0038 Phase 2.5 і historical crawl автоматично вмикаються для FXCM. Якщо зроблено — Фаза 0 для наступних символів скорочується до «додати в config».
+**P0.1a guard — ✅ `c8cacc9`**: множина derived-only TF = `frozenset(core.derive.DERIVE_SOURCE)`, а **не** літерал
+з цього ADR: SSOT ланцюга вже існує, і новий TF у `DERIVE_CHAIN` має підпадати під guard автоматично (D15.2).
+M1 (60) не потрапляє в множину за побудовою — він source, а не target. Помилка тепер називає source-TF.
+До патчу guard закривав лише H4, тому прямий `--tf 86400` проходив і вже дав anchor-інцидент
+(runbook `fxcm_credential_rotation.md` §«D1 anchor роз'їзд»). Тести: `tests/test_fetch_tf_backfill_guard.py` (10).
+**P0.1b пейджинг — ⏳ не робимо в Фазі 0**: `--repeat N`/`--from <ISO>`/summary — окремий слайс. Ручний пейджинг
+через `--date-to` працює; «9 викликів × n=8640» — ad-hoc історія оболонки, у runbook записаний одиничний виклик.
+**P0.2 — ✅ `4f1b726`**: діапазон dedup береться з **фактично** перебудованого вікна на символ (ті самі `start_ms`/`end_ms`,
+що вже друкуються в `REBUILD_RANGE`), через нову чисту функцію `dedup_derived_in_ranges()`. Пропущений через SKIP символ
+логується `DEDUP_SKIP`, невалідний діапазон = `ValueError` — замість тихого `dupes_removed=0`, який раніше читався як
+«крок пройшов чисто». Прекондиція «зупинені writer'и» стала виконуваною: `--writers-stopped`; без неї символ із
+`config.json:symbols` дає `REBUILD_REFUSED` (rc=2), `--dry-run` проходить вільно. Тести: 6.
+**P0.3 — ✅ `c8cacc9`**: sub-gate `derived_state_covers_all` прибрано (7→6 підгейтів, метрику `state_symbols_count` знято).
+Доведено власним грепом: у `data_v3/_derived_tail_state.json` немає жодного писаря, єдиний читач у репо — сам гейт.
+**Відхилення**: файл **не** переїжджає в `data_v3/_audit/` — це живий каталог audit-логів `api_v3`
+(default `audit_dir` у `runtime/api_v3/endpoints.py`), а не архів. Мертвий файл лишається де є (весь `data_v3/`
+gitignored) і просто перестає щось означати; згадки в runbook-ах виправлено на реальну причину stale H4.
+Baseline гейта 5/7 → 4/6 з тими самими двома реальними FAIL — гейт не притуплено. Тести: 4.
+**P0.4 — ✅ `4f1b726`**: `resolve_symbol_calendars()` у `runtime/ingest/tick_common.py` — одна реалізація на всі
+ingest-воркери: `CALENDAR_GROUP_MISSING` з причиною (`no_group_mapping` / `group_not_in_config` / `build_failed`),
+символ відсіюється, здорові стартують далі, порожній список = гучна відмова воркера.
+**Відхилення 1**: воркерів **три**, не два — прод-шлях FXCM це `m1_ingestion_worker` (його стартує `app/main`
+разом із `broker_sidecar`), а `m1_poller` лише legacy-фолбек; патч на двох названих в ADR файлах лишив би живу
+гілку без guard. Замінено 5 копій ідіоми (по 2 у кожному поллері + 1 у preview); лишились `binance_ingest_worker`
+(вимкнений), `replay` (offline), `smc_runner` (не ingest) — поза скоупом.
+**Відхилення 2**: хелпер у `runtime/ingest/`, а не в `core/` — `MarketCalendar` живе в runtime, а `core` не має
+права імпортувати runtime (`gate_dependency_rule`).
+**Відхилення 3**: `degraded[]` як каналу фактично не існує — `set_cache_state` не має жодного виклику,
+тому сигнал іде в лог (ERROR), а не у видуманий масив. Тести: `tests/test_calendar_group_fail_fast.py` (9).
+**P0.5 (переоцінено RECON 06.09; НЕ в Фазі 0)**: мінімум **пʼять** місць, не «разово»: провайдер (py3.7),
+нова операція sidecar, `fetch_m1_range` у `BrokerRedisProxy` **з пагінацією** (1440 барів initial_backfill проти
+`_MAX_BARS_PER_CMD=200` — без неї Phase 2.5 тихо віддасть 200 і виглядатиме робочою), проброс
+`initial_backfill_m1_bars`, і гучний `initial_backfill_skipped` (зараз `provider_unsupported` не потрапляє в
+`bootstrap_degraded`). Порядок деплою критичний: новий proxy проти старого sidecar = 15 с BLPOP-таймаут і тихий `[]`.
+**Помилка ADR**: historical crawl **не** вмикається автоматично — цикл існує лише в `binance_ingest_worker`.
 **P0.6** Зафіксувати константу глибини FXCM M1-історії: один пробний виклик `--tf 60 --n 1000 --date-to <now-60d>` на NAS100; результат → `docs/config_reference.md`.
 
 **Процедура seed per symbol** (символ **ще не** в `config.json:symbols`):
@@ -199,8 +222,10 @@ K5-гейт rev 1 («`symbols` не змінюється до Accepted+Фаза 
 5. Перевірка засіву існуючими інструментами: `rebuild_from_m1` без `SKIP symbol=`, `tools/dedup_derived_jsonl.py` dry-run = 0 дублікатів,
    `gate_coldstart_multisymbol` (без sub-gate 3) OK. Повна перевірка `symbol_health_check --young` [TO-BE-BUILT, Фаза 1] — у Фазі 2 п.2.
 
-**Exit gate Фази 0**: P0.1-P0.4 змержені з тестами; NAS100 засіяно (п.5); XAU/XAG без нових дублікатів і без `DERIVE_REJECT` за 24h
-(існуючі gates). Повний baseline GREEN = exit gate Фази 1, не Фази 0 (порядок 0→1→2 не циклічний).
+**Exit gate Фази 0**: P0.1a-P0.4 змержені з тестами — ✅ `c8cacc9`, `4f1b726` (29 нових тестів, pytest 1249,
+CI-гейти 18/18). Лишилось: засів NAS100 (п.5) у вікно закритого ринку і P0.6 (константа глибини M1) —
+обидва потребують живої FXCM-сесії. XAU/XAG без нових дублікатів і без `DERIVE_REJECT` за 24h (існуючі gates).
+Повний baseline GREEN = exit gate Фази 1, не Фази 0 (порядок 0→1→2 не циклічний).
 
 ### 3.2 Фаза 1 — Regression Net (spec rev 2, 3-5 днів)
 
