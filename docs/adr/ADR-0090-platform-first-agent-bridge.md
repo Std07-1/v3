@@ -265,7 +265,7 @@ trader-v3 (smc_trader_v3, окремий program)  ◄──► Redis IPC (wake:
 
 | Слайс | Статус | Коміт |
 |---|---|---|
-| S4 config | ⏳ | — |
+| S4 config | ✅ 2026-09-06 | `c4b300e` (env-override замість overlay; CI-гейт `platform_config_no_agent_keys`; деплой на VPS окремо, за go) |
 | S1 bridge + routes | ⏳ | — |
 | S2 WakeEngine | ⏳ | — |
 | S3 overlay | ⏳ | — |
