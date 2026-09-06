@@ -51,10 +51,17 @@ class HolesResult:
 
 @dataclasses.dataclass(frozen=True)
 class GeometryResult:
-    """Структурні дефекти ряду барів."""
+    """Структурні дефекти ряду барів.
+
+    ``exact_dup`` — скільки зайвих записів на бакет. SSOT append-only, тому повторний
+    запис ІДЕНТИЧНОГО бару (rebuild/backfill) легальний і нешкідливий: читач злипає їх
+    і бачить те саме. Небезпечний лише ``dup_conflicting`` — коли на один бакет лежать
+    РІЗНІ значення, бо тоді результат вирішує порядок у файлі.
+    """
 
     total: int
     exact_dup: int
+    dup_conflicting: int
     unsorted: int
     align_bad: int
     close_bad: int
@@ -205,6 +212,10 @@ def measure_geometry(
     """
     opens = [b.open_time_ms for b in bars]
     exact_dup = len(opens) - len(set(opens))
+    by_open: Dict[int, set] = {}
+    for bar in bars:
+        by_open.setdefault(bar.open_time_ms, set()).add((bar.o, bar.h, bar.low, bar.c))
+    dup_conflicting = sum(1 for values in by_open.values() if len(values) > 1)
     unsorted = sum(1 for a, b in zip(opens, opens[1:]) if b < a)
     align_bad_list = [
         o
@@ -220,6 +231,7 @@ def measure_geometry(
     return GeometryResult(
         total=len(bars),
         exact_dup=exact_dup,
+        dup_conflicting=dup_conflicting,
         unsorted=unsorted,
         align_bad=len(align_bad_list),
         close_bad=close_bad,

@@ -185,7 +185,8 @@ def check_symbol(
             "age_buckets": age.age_buckets,
             "holes": {"missing": holes.missing, "expected": holes.expected},
             "geometry": {
-                "exact_dup": geometry.exact_dup, "unsorted": geometry.unsorted,
+                "exact_dup": geometry.exact_dup, "dup_conflicting": geometry.dup_conflicting,
+                "unsorted": geometry.unsorted,
                 "align_bad": geometry.align_bad, "close_bad": geometry.close_bad,
                 "ohlc_bad": geometry.ohlc_bad,
             },

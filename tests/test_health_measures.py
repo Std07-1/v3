@@ -246,3 +246,19 @@ def test_silent_mismatch_without_markers_stays_red():
                         anchor_offsets_ms=[0], declares_partial_fn=lambda b: bool(b.extensions.get("partial")))
     assert (r.mismatched, r.declared_partial) == (1, 0)
     assert grade_symbol_tf(cascade=r).grade == "RED"
+
+
+def test_identical_duplicate_is_yellow_not_red():
+    """Append-only SSOT легально дописує той самий бар; читач злипає — графіку байдуже."""
+    same = [_bar(BASE, M1_MS), _bar(BASE, M1_MS)]
+    g = measure_geometry(same, tf_ms=M1_MS, anchor_offsets_ms=[0])
+    assert (g.exact_dup, g.dup_conflicting) == (1, 0)
+    assert grade_symbol_tf(geometry=g).grade == "YELLOW"
+
+
+def test_conflicting_duplicate_is_red():
+    """А різні значення на один бакет — результат вирішує порядок у файлі."""
+    clash = [_bar(BASE, M1_MS, c=1.5), _bar(BASE, M1_MS, c=9.9)]
+    g = measure_geometry(clash, tf_ms=M1_MS, anchor_offsets_ms=[0])
+    assert g.dup_conflicting == 1
+    assert grade_symbol_tf(geometry=g).grade == "RED"

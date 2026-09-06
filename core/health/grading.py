@@ -48,10 +48,14 @@ def grade_symbol_tf(
     if geometry is not None:
         if geometry.total == 0:
             red.append("no_bars")
-        for field in ("exact_dup", "align_bad", "close_bad", "ohlc_bad"):
+        for field in ("dup_conflicting", "align_bad", "close_bad", "ohlc_bad"):
             value = getattr(geometry, field)
             if value:
                 red.append(f"{field}={value}")
+        if geometry.exact_dup and not geometry.dup_conflicting:
+            # Повторний запис ІДЕНТИЧНОГО бару — легальний наслідок append-only SSOT
+            # (rebuild/backfill дописує те саме). Читач злипає їх, графік не страждає.
+            yellow.append(f"exact_dup={geometry.exact_dup}")
         if geometry.unsorted:
             # Порядок рядків у part-файлі — не дефект даних: читачі сортують, а
             # backfill законно дописує старіші бари після новіших. Значення саме
