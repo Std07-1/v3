@@ -419,6 +419,11 @@ def _kill_tree(pid: int) -> None:
     On Windows, .venv/Scripts/python.exe is a trampoline launcher that spawns
     the real python.exe as a child.  proc.terminate() only kills the trampoline,
     leaving the real worker orphaned.  taskkill /T walks the full tree.
+
+    POSIX: TERM лише прямій дитині (ADR-0054 §3.6 п.3). Раніше тут був ``killpg`` по
+    process group — а вона спільна з самим app.main (Popen без start_new_session), тож
+    app.main убивав себе першим, ``_terminate`` не доходив до ``proc.kill()``, і завислий
+    у нативному виклику sidecar переживав ``supervisorctl restart`` сиротою (06.09.2026).
     """
     if os.name == "nt":
         try:
@@ -433,15 +438,30 @@ def _kill_tree(pid: int) -> None:
     else:
         import signal as _sig
 
-        getpgid = getattr(os, "getpgid", None)
-        killpg = getattr(os, "killpg", None)
         try:
-            if callable(getpgid) and callable(killpg):
-                killpg(getpgid(pid), _sig.SIGTERM)
-            else:
-                os.kill(pid, _sig.SIGTERM)
+            os.kill(pid, _sig.SIGTERM)
         except (ProcessLookupError, OSError):
             pass
+
+
+def _install_sigterm_handler() -> None:
+    """SIGTERM → KeyboardInterrupt у головному потоці (ADR-0054 §3.6 п.3).
+
+    Без обробника supervisor-ний TERM убиває app.main default-дією за мілісекунди: блок
+    ``finally`` з ``_terminate()`` (TERM дитині → wait → SIGKILL) не виконується, і дитина,
+    що не змогла обробити свій TERM, лишається сиротою. Перетворюємо TERM на той самий
+    шлях, що й Ctrl+C. Повторний TERM під час зупинки ігноруємо, щоб не перервати cleanup.
+    """
+    if os.name == "nt":
+        return
+    import signal as _sig
+
+    def _on_sigterm(signum: int, _frame: object) -> None:
+        _sig.signal(_sig.SIGTERM, _sig.SIG_IGN)
+        logging.info("SUPERVISOR_SIGTERM signum=%s — зупиняю дочірні процеси", signum)
+        raise KeyboardInterrupt
+
+    _sig.signal(_sig.SIGTERM, _on_sigterm)
 
 
 def _terminate(item: ChildProcess, timeout_s: int = 5) -> None:
@@ -592,6 +612,7 @@ def _release_pid_lock(log_dir: Path, mode: str = "all") -> None:
 def main() -> int:
     args = _parse_args()
     _setup_logging(verbose=bool(args.verbose))
+    _install_sigterm_handler()
 
     stdio = args.stdio
     if stdio is None:

@@ -40,10 +40,13 @@ import signal
 import sys
 import time
 
+from typing import Optional
+
 from core.config_loader import pick_config_path, load_system_config, env_str
 from core.model.bars import ms_to_utc_dt
 from env_profile import load_env_secrets
 from runtime.store.redis_spec import resolve_redis_spec
+from runtime.ingest.loop_watchdog import LoopWatchdog, arm_exit_timer
 from runtime.ingest.tick_common import (
     pick_tick_channel,
     symbols_from_cfg,
@@ -68,7 +71,8 @@ except Exception:
 _CMD_QUEUE_SUFFIX = "broker:m1:cmd"
 _BARS_QUEUE_SUFFIX = "broker:m1:bars"
 _MAX_LIST_LEN = 10000  # LTRIM safety rail (ADR-0016 §F4)
-_BLPOP_TIMEOUT_S = 5  # seconds
+_BLPOP_TIMEOUT_S = 1  # seconds; 1с (не 5) — щоб цикл бачив _running швидко і
+# shutdown устигав зробити чистий logout до ескалацій app.main/grace-таймера
 _DEFAULT_IPC_REPLY_TTL_S = 120  # config.json:broker_ipc_reply_ttl_s
 
 _ipc_reply_ttl_s = _DEFAULT_IPC_REPLY_TTL_S  # overridden in main() from config
@@ -76,7 +80,15 @@ _RECONNECT_COOLDOWN_S = 30
 _MAX_BARS_PER_CMD = 200  # guard against huge requests
 _CONTRACT_VERSION = 1
 
+# ADR-0054 §3.6 п.3 (інцидент 06.09.2026): get_history/login у FXCM SDK — синхронні нативні
+# виклики без таймауту. Здоровий get_history ≈ 30 мс, найбільший tail_catchup (n=200) ≈ 250 мс;
+# 90 с = запас ×300. Grace для SIGTERM має бути < supervisor stopwaitsecs (15 с).
+_DEFAULT_WATCHDOG_S = 90
+_DEFAULT_SIGTERM_GRACE_S = 8
+
 _running = True
+_watchdog = None  # type: Optional[LoopWatchdog]
+_sigterm_grace_s = _DEFAULT_SIGTERM_GRACE_S
 
 
 def _setup_logging() -> None:
@@ -90,6 +102,22 @@ def _signal_handler(sig, _frame):
     global _running
     _running = False
     logging.info("BROKER_SIDECAR_SIGNAL sig=%s", sig)
+    # ЧЕСНО про покриття (рев'ю 07.09): цей обробник виконується лише в ГОЛОВНОМУ потоці
+    # між байткодами. Якщо потік УЖЕ завис у нативному виклику — обробник не виконається
+    # і таймер не буде озброєно; той сценарій закривають LoopWatchdog (exit 75) і
+    # app.main._terminate (TERM→wait→SIGKILL). Таймер тут — страховка для вужчого кейсу:
+    # сигнал оброблено (потік був у Python, напр. під час blpop), а цикл ПІСЛЯ цього
+    # входить у довгий нативний виклик (PEP 475 ретраїть blpop без перевірки _running)
+    # або logout тягнеться довше grace. Grace 8с: пізніше за ескалацію app.main (~TERM+5с),
+    # тож під supervisor у нормі не стріляє; діє при standalone-запуску.
+    arm_exit_timer(_sigterm_grace_s, reason="sig=%s" % sig)
+
+
+def _interruptible_sleep(total_s: float) -> None:
+    """Cooldown, який відпускає SIGTERM щосекунди (замість блокуючого time.sleep)."""
+    deadline = time.monotonic() + total_s
+    while _running and time.monotonic() < deadline:
+        time.sleep(max(0.0, min(1.0, deadline - time.monotonic())))
 
 
 def _build_provider(cfg):
@@ -427,8 +455,16 @@ def main():
         logging.error("BROKER_SIDECAR_REDIS_DISABLED")
         return 1
 
-    global _ipc_reply_ttl_s
+    global _ipc_reply_ttl_s, _watchdog, _sigterm_grace_s
     _ipc_reply_ttl_s = int(cfg.get("broker_ipc_reply_ttl_s", _DEFAULT_IPC_REPLY_TTL_S))
+    # ADR-0054 §3.6 п.3: нагляд за головним циклом під нативними викликами FXCM
+    _sigterm_grace_s = int(cfg.get("broker_sidecar_sigterm_grace_s", _DEFAULT_SIGTERM_GRACE_S))
+    _watchdog = LoopWatchdog(int(cfg.get("broker_sidecar_watchdog_s", _DEFAULT_WATCHDOG_S)))
+    _watchdog.start_thread()
+    logging.info(
+        "BROKER_SIDECAR_WATCHDOG_ARMED timeout_s=%s sigterm_grace_s=%s",
+        cfg.get("broker_sidecar_watchdog_s", _DEFAULT_WATCHDOG_S), _sigterm_grace_s,
+    )
     cmd_key = "%s:%s" % (spec.namespace, _CMD_QUEUE_SUFFIX)
     bars_key = "%s:%s" % (spec.namespace, _BARS_QUEUE_SUFFIX)
 
@@ -506,13 +542,21 @@ def main():
         # Ensure FXCM session
         if not connected:
             try:
-                provider.__enter__()
+                _watchdog.enter("login")
+                try:
+                    provider.__enter__()
+                finally:
+                    _watchdog.leave()
                 connected = True
                 _consecutive_failures = 0
                 # Subscribe to OFFERS for tick relay (V2)
                 tick_listener = None
                 if tick_relay is not None:
-                    tick_listener = _setup_tick_sub(provider._fx, tick_relay)
+                    _watchdog.enter("subscribe_offers")
+                    try:
+                        tick_listener = _setup_tick_sub(provider._fx, tick_relay)
+                    finally:
+                        _watchdog.leave()
                 logging.info("BROKER_SIDECAR_FXCM_CONNECTED")
             except Exception as exc:
                 _consecutive_failures += 1
@@ -531,7 +575,7 @@ def main():
                     exc,
                     _RECONNECT_COOLDOWN_S,
                 )
-                time.sleep(_RECONNECT_COOLDOWN_S)
+                _interruptible_sleep(_RECONNECT_COOLDOWN_S)
                 continue
 
         # Wait for command
@@ -546,20 +590,26 @@ def main():
             continue  # timeout, loop back
 
         _key, cmd_raw = result  # type: ignore[misc]
+        _watchdog.enter("cmd:%s" % cmd_raw[:120])
         try:
             needs_reconnect = _handle_command(provider, cmd_raw, redis_cli, bars_key)
         except Exception as exc:
             logging.warning("BROKER_SIDECAR_HANDLE_ERROR err=%s", exc)
             needs_reconnect = True
+        finally:
+            _watchdog.leave()
 
         if needs_reconnect:
             logging.warning("BROKER_SIDECAR_RECONNECTING reason=provider_error")
             connected = False
             tick_listener = None  # release OFFERS subscription
+            _watchdog.enter("logout")
             try:
                 provider.__exit__(None, None, None)
             except Exception:
                 logging.debug("BROKER_SIDECAR_EXIT_CLEANUP_FAIL", exc_info=True)
+            finally:
+                _watchdog.leave()
 
     # Cleanup
     logging.info("BROKER_SIDECAR_SHUTDOWN")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -58,24 +59,59 @@ def test_kill_tree_uses_taskkill_on_windows(monkeypatch):
     ]
 
 
-def test_kill_tree_uses_killpg_on_posix(monkeypatch):
-    calls = []
+def test_kill_tree_терм_лише_прямій_дитині_на_posix(monkeypatch):
+    """ADR-0054 §3.6 п.3: не killpg по власній групі (app.main гинув першим), а os.kill(pid)."""
+    import signal
+
+    kills = []
+    killpg_calls = []
 
     monkeypatch.setattr(supervisor_main.os, "name", "posix")
     monkeypatch.setattr(
-        supervisor_main.os, "getpgid", lambda pid: pid + 10, raising=False
+        supervisor_main.os, "kill", lambda pid, sig: kills.append((pid, sig)), raising=False
     )
     monkeypatch.setattr(
-        supervisor_main.os,
-        "killpg",
-        lambda pgid, sig: calls.append((pgid, sig)),
-        raising=False,
+        supervisor_main.os, "killpg", lambda pgid, sig: killpg_calls.append(pgid), raising=False
     )
 
     supervisor_main._kill_tree(100)
 
-    assert len(calls) == 1
-    assert calls[0][0] == 110
+    assert kills == [(100, signal.SIGTERM)]
+    assert killpg_calls == []
+
+
+def test_sigterm_handler_піднімає_keyboardinterrupt_і_ігнорує_повтор(monkeypatch):
+    """SIGTERM має пройти тим самим шляхом, що Ctrl+C → finally → _terminate() дітей."""
+    import signal
+
+    installed = {}
+
+    def _fake_signal(signum, handler):
+        installed[signum] = handler
+
+    monkeypatch.setattr(supervisor_main.os, "name", "posix")
+    monkeypatch.setattr(signal, "signal", _fake_signal)
+
+    supervisor_main._install_sigterm_handler()
+    handler = installed[signal.SIGTERM]
+    assert callable(handler)
+
+    with pytest.raises(KeyboardInterrupt):
+        handler(signal.SIGTERM, None)
+    # повторний TERM під час cleanup — ігнорується, а не перериває _terminate()
+    assert installed[signal.SIGTERM] is signal.SIG_IGN
+
+
+def test_sigterm_handler_не_втручається_на_windows(monkeypatch):
+    import signal
+
+    called = []
+    monkeypatch.setattr(supervisor_main.os, "name", "nt")
+    monkeypatch.setattr(signal, "signal", lambda *a: called.append(a))
+
+    supervisor_main._install_sigterm_handler()
+
+    assert called == []
 
 
 def test_terminate_kills_tree_and_closes_handles(monkeypatch):
