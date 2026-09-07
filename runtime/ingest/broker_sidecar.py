@@ -78,6 +78,9 @@ _DEFAULT_IPC_REPLY_TTL_S = 120  # config.json:broker_ipc_reply_ttl_s
 _ipc_reply_ttl_s = _DEFAULT_IPC_REPLY_TTL_S  # overridden in main() from config
 _RECONNECT_COOLDOWN_S = 30
 _MAX_BARS_PER_CMD = 200  # guard against huge requests
+# ADR-0054 §3.6 п.1: воркер чекає реплай 15с (_BLPOP_TIMEOUT_S у m1_ingestion_worker);
+# команда, старша за це + запас, гарантовано без слухача — реплай пішов би в мертвий ключ.
+_CMD_STALE_AFTER_S = 20
 _CONTRACT_VERSION = 1
 
 # ADR-0054 §3.6 п.3 (інцидент 06.09.2026): get_history/login у FXCM SDK — синхронні нативні
@@ -145,6 +148,21 @@ def _build_provider(cfg):
     )
 
 
+def _flush_cmd_queue(redis_cli, cmd_key):
+    """ADR-0054 §3.6 п.4: при (re)connect скинути накопичені команди.
+
+    Усі вони старші за BLPOP-таймаут воркера (реплаї пішли б у мертві ключі), а дренаж
+    затору 07.09 коштував 3.5 хв таймаутів свіжим запитам. Воркер повторить сам.
+    """
+    try:
+        backlog = int(redis_cli.llen(cmd_key))
+        if backlog:
+            redis_cli.delete(cmd_key)
+            logging.warning("BROKER_SIDECAR_CMD_QUEUE_FLUSHED n=%d", backlog)
+    except Exception as exc:
+        logging.warning("BROKER_SIDECAR_CMD_QUEUE_FLUSH_FAIL err=%s", exc)
+
+
 def _handle_command(provider, cmd_raw, redis_cli, bars_key):
     """Обробити одну команду fetch і записати результат у Redis.
 
@@ -164,6 +182,21 @@ def _handle_command(provider, cmd_raw, redis_cli, bars_key):
             "BROKER_SIDECAR_CMD_VERSION_MISMATCH v=%s expected=%d", v, _CONTRACT_VERSION
         )
         return False
+
+    # ADR-0054 §3.6 п.1: протухла команда (воркер давно відвалився по таймауту) —
+    # дропаємо гучно і БЕЗ реплаю; без ts_ms (старий контракт) — обробляємо як раніше.
+    ts_ms = cmd.get("ts_ms")
+    if ts_ms is not None:
+        try:
+            age_s = max(0.0, time.time() - float(ts_ms) / 1000.0)
+        except (TypeError, ValueError):
+            age_s = 0.0
+        if age_s > _CMD_STALE_AFTER_S:
+            logging.warning(
+                "BROKER_SIDECAR_CMD_STALE_DROPPED age_s=%.0f limit_s=%d req_id=%s symbol=%s",
+                age_s, _CMD_STALE_AFTER_S, cmd.get("req_id", ""), cmd.get("symbol", ""),
+            )
+            return False
 
     action = cmd.get("cmd", "")
     req_id = str(cmd.get("req_id", "") or "")
@@ -557,6 +590,7 @@ def main():
                         tick_listener = _setup_tick_sub(provider._fx, tick_relay)
                     finally:
                         _watchdog.leave()
+                _flush_cmd_queue(redis_cli, cmd_key)
                 logging.info("BROKER_SIDECAR_FXCM_CONNECTED")
             except Exception as exc:
                 _consecutive_failures += 1

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import time
 import logging
 import uuid
 from typing import Any, Dict, List, Optional
@@ -43,6 +44,10 @@ _CMD_QUEUE_SUFFIX = "broker:m1:cmd"
 _BARS_QUEUE_SUFFIX = "broker:m1:bars"
 _CONTRACT_VERSION = 1
 _BLPOP_TIMEOUT_S = 15  # timeout for response from sidecar
+# ADR-0054 §3.6 п.2: при заторі команд не докидати нові (05.09 у черзі без TTL
+# накопичилось ~25k, 06.09 — 936; sidecar потім дренив їх у мертві reply-ключі).
+# Нормальний LLEN ≈ 0-2 (один запит на символ у польоті).
+_CMD_QUEUE_CONGESTED_LEN = 10
 
 
 class BrokerRedisProxy:
@@ -81,6 +86,20 @@ class BrokerRedisProxy:
             else:
                 date_to_ms = int(date_to_utc)
 
+        # ADR-0054 §3.6 п.2: LLEN-гейт — затор означає, що sidecar не встигає або завис;
+        # нова команда лише подовжить дренаж після відновлення (інцидент 06-07.09).
+        try:
+            backlog = int(self._redis.llen(self._cmd_key))
+        except Exception as exc:
+            logging.warning("BROKER_PROXY_LLEN_ERROR err=%s", exc)
+            backlog = 0
+        if backlog >= _CMD_QUEUE_CONGESTED_LEN:
+            logging.warning(
+                "BROKER_PROXY_QUEUE_CONGESTED llen=%d limit=%d symbol=%s — команду не додано",
+                backlog, _CMD_QUEUE_CONGESTED_LEN, symbol,
+            )
+            return []
+
         cmd = json.dumps(
             {
                 "v": _CONTRACT_VERSION,
@@ -90,6 +109,8 @@ class BrokerRedisProxy:
                 "symbol": symbol,
                 "n_bars": n,
                 "date_to_ms": date_to_ms,
+                # ADR-0054 §3.6 п.1: вік команди — sidecar дропає протухлі без реплаю
+                "ts_ms": int(time.time() * 1000),
             }
         )
         self._redis.rpush(self._cmd_key, cmd)
