@@ -34,6 +34,7 @@
     handleWSFrame,
     currentFrame,
     currentPair,
+    frameCarriesCurrentPrice,
     resetFrameRouter,
     serverConfig,
     setBootIdChangeCallback,
@@ -517,7 +518,12 @@
     // Track price/time from frames for HUD
     if (f) {
       const candles = f.candles;
-      if (candles && candles.length > 0) {
+      // scrollback несе історію ліворуч від вікна — не поточну ціну (frameRouter SSOT)
+      if (
+        frameCarriesCurrentPrice(f.frame_type) &&
+        candles &&
+        candles.length > 0
+      ) {
         const last = candles[candles.length - 1];
         lastPrice = last.c;
         lastBarOpen = last.o;

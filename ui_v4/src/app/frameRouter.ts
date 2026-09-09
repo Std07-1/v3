@@ -49,6 +49,20 @@ export function addUiWarning(code: UiWarning['code'], kind: UiWarning['kind'], d
   uiWarnings.update(arr => [w, ...arr].slice(0, 50));
 }
 
+/**
+ * Чи останній бар кадру = ПОТОЧНА ціна (для HUD), а не історія.
+ *
+ * `scrollback` — єдиний кадр, чиї свічки за визначенням лежать ЛІВОРУЧ від вікна:
+ * його останній бар — найстаріший із догружених, і сервер віддає межу inclusive
+ * (контракт зафіксовано в chart/engine.ts prependData). Тому брати з нього ціну =
+ * показати ціну місячної давнини. На символі з живим тіком хиба маскується
+ * наступним delta; на закритому ринку залипає (NAS100 D1 06.09.2026: HUD показував
+ * 26646.45 від 19.04 замість 29490.97 від 03.09).
+ */
+export function frameCarriesCurrentPrice(frameType: string | undefined): boolean {
+  return frameType !== 'scrollback';
+}
+
 // -------------------- Main handler --------------------
 
 export function handleWSFrame(raw: unknown): void {
