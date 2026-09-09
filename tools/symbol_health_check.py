@@ -28,6 +28,7 @@ from core.config_loader import load_system_config, resolve_config_path
 from core.derive import DERIVE_SOURCE, resolve_cascade_anchor_s
 from core.health import (
     check_anchor_on_session_edge,
+    compare_reports,
     grade_symbol_tf,
     measure_age,
     measure_cascade,
@@ -223,6 +224,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--days", type=int, default=DEFAULT_WINDOW_DAYS, help="вікно для holes/age")
     parser.add_argument("--json", type=str, default=None, help="записати звіт у файл")
     parser.add_argument("--gate", action="store_true", help="rc=1 якщо є не-GREEN символ")
+    parser.add_argument(
+        "--compare",
+        type=str,
+        default=None,
+        help="baseline-JSON: порівняти з ним; rc=1 при будь-якому погіршенні (ADR-0054 §3.4)",
+    )
+    parser.add_argument(
+        "--gate-symbols",
+        type=str,
+        default=None,
+        help="через кому: перевіряти регресію лише на цих символах (напр. вже активні)",
+    )
     parser.add_argument("--config", type=str, default=None)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -265,9 +278,33 @@ def main(argv: Optional[List[str]] = None) -> int:
             json.dump(report, fh, ensure_ascii=False, indent=2)
         print(f"\nJSON: {args.json}")
 
+    rc = 0
+
+    if args.compare:
+        with open(args.compare, "r", encoding="utf-8") as fh:
+            baseline = json.load(fh)
+        only = [s.strip() for s in args.gate_symbols.split(",")] if args.gate_symbols else None
+        cmp_res = compare_reports(baseline, report, only_symbols=only)
+        print("")
+        print("=== ПОРІВНЯННЯ з %s ===" % args.compare)
+        print("  перевірено символів: %s" % (", ".join(cmp_res.compared_symbols) or "-"))
+        if cmp_res.new_symbols:
+            print("  нових (не в baseline, не перевіряються): %s" % ", ".join(cmp_res.new_symbols))
+        for reg in cmp_res.missing_symbols:
+            print("  ЗНИК символ: %s" % reg)
+        for reg in cmp_res.improvements:
+            print("  краще: %s" % reg.describe())
+        for reg in cmp_res.regressions:
+            print("  РЕГРЕСІЯ: %s" % reg.describe())
+        if cmp_res.ok:
+            print("  => регресій немає")
+        else:
+            print("  => РЕГРЕСІЙ: %d" % (len(cmp_res.regressions) + len(cmp_res.missing_symbols)))
+            rc = 1
+
     if args.gate and any(r["grade"] != "GREEN" for r in report["symbols"].values()):
-        return 1
-    return 0
+        rc = 1
+    return rc
 
 
 if __name__ == "__main__":

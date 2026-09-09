@@ -3,6 +3,7 @@
 Нуль I/O і нуль імпортів з ``runtime``: календар приходить у виміри як
 ``is_trading_fn``. I/O-оболонка — ``tools/symbol_health_check.py``.
 """
+from core.health.compare import CompareResult, Regression, compare_reports
 from core.health.grading import Grade, grade_symbol_tf
 from core.health.measures import (
     AgeResult,
@@ -21,6 +22,9 @@ from core.health.measures import (
 )
 
 __all__ = [
+    "CompareResult",
+    "Regression",
+    "compare_reports",
     "Grade",
     "grade_symbol_tf",
     "AgeResult",
