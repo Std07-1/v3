@@ -186,7 +186,7 @@ binance_ingest_worker ───► BTCUSDT/ETHUSDT M1 ──► UDS     applyUpd
 | TF allowlist | `60, 180, 300, 900, 1800, 3600, 14400, 86400` (M1–D1) |
 | Derive chain | `M1→M3(×3)→M5(×5)→M15(×3)→M30(×2)→H1(×2)→H4(×4)` + `M1→D1(×1440)` |
 | Broker-only TF | немає (всі TF derived, ADR-0023) |
-| Символи | 4 (XAU/USD, XAG/USD, BTCUSDT, ETHUSDT) |
+| Символи | 4 FXCM (XAU/USD, XAG/USD, NAS100, SPX500); Binance OFF з 05.09.2026 |
 | Preview interval | 250ms min |
 | Redis tail (M1) | 10080 барів |
 | Bootstrap timeout | 120s |

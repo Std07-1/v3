@@ -371,7 +371,7 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 | `test_tick_preview_calendar.py` | Tick preview + calendar gate |
 | `test_structure_v2.py` | Structure V2: BOS/CHoCH canonical (ADR-0047) |
 
-> **59 test files total** on disk (as of 2026-04-26). Table above lists key tests; run `pytest tests/ -v` for full coverage.
+> **59 test files total** on disk (as of 2026-04-26); 1308 тестів станом на 2026-09-10. Table above lists key tests; run `pytest tests/ -v` for full coverage.
 
 ---
 
@@ -427,7 +427,7 @@ logging.warning("DEGRADED_REASON symbol=%s tf=%s", sym, tf)
 
 ```json
 {
-  "symbols": ["XAU/USD", "XAG/USD", "BTCUSDT", "ETHUSDT"],  // 4 активних символи
+  "symbols": ["XAU/USD", "XAG/USD", "NAS100", "SPX500"],  // 4 активних FXCM-символи (Binance OFF з 05.09.2026)
   "tf_allowlist_s": [60, 180, 300, 900, 1800, 3600, 14400, 86400],
   "redis": { "enabled": true, "host": "127.0.0.1", "port": 6379, "db": 1 },
   "ws_server": { "enabled": true, "host": "127.0.0.1", "port": 8000 },

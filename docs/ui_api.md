@@ -193,7 +193,7 @@ Client                          Server
   "type": "render_frame",
   "frame_type": "config",
   "config": {
-    "symbols": ["XAU/USD", "XAG/USD", "BTCUSDT", "ETHUSDT"],
+    "symbols": ["XAU/USD", "XAG/USD", "NAS100", "SPX500"],
     "tfs": ["M1", "M3", "M5", "M15", "M30", "H1", "H4", "D1"],
     "default_symbol": "XAU/USD",
     "default_tf": "M30"
@@ -247,7 +247,7 @@ Client                          Server
     "boot_id": "a1b2c3d4e5f67890",
     "warnings": [],
     "config": {
-      "symbols": ["XAU/USD", "XAG/USD", "BTCUSDT", "ETHUSDT"],
+      "symbols": ["XAU/USD", "XAG/USD", "NAS100", "SPX500"],
       "tfs": ["M1", "M3", "M5", "M15", "M30", "H1", "H4", "D1"]
     }
   }
