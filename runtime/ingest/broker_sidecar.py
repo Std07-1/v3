@@ -190,6 +190,12 @@ def _handle_command(provider, cmd_raw, redis_cli, bars_key):
         try:
             age_s = max(0.0, time.time() - float(ts_ms) / 1000.0)
         except (TypeError, ValueError):
+            # Битий ts_ms = зламаний контракт продюсера, а не «стара команда».
+            # Не дропаємо (щоб не втратити валідний запит), але й не мовчимо.
+            logging.warning(
+                "BROKER_SIDECAR_CMD_TS_INVALID ts_ms=%r req_id=%s symbol=%s",
+                ts_ms, cmd.get("req_id", ""), cmd.get("symbol", ""),
+            )
             age_s = 0.0
         if age_s > _CMD_STALE_AFTER_S:
             logging.warning(
