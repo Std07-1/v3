@@ -5,10 +5,15 @@
 """
 from __future__ import annotations
 
+import datetime as dt
+
 import pytest
 
 from core.health import (
+    AgeResult,
+    bucket_has_trading_minute,
     check_anchor_on_session_edge,
+    expected_bucket_opens,
     grade_symbol_tf,
     measure_age,
     measure_cascade,
@@ -262,3 +267,94 @@ def test_conflicting_duplicate_is_red():
     g = measure_geometry(clash, tf_ms=M1_MS, anchor_offsets_ms=[0])
     assert g.dup_conflicting == 1
     assert grade_symbol_tf(geometry=g).grade == "RED"
+
+
+# ── якір HTF усередині перерви (ADR-0054 §3.8 п.1) ──────────────────────────
+D1_ANCHOR_MS = 75_600_000  # 21:00 UTC — літній `day_anchor_offset_s_d1` з config.json
+
+
+def _cfd_us_is_trading(ms: int) -> bool:
+    """Спрощений `cfd_us_22_23`: денна перерва 21:00–22:00, вихідні Пт 21:00 → Нд 22:00.
+
+    Головне тут — що D1-якір (21:00) припадає САМЕ на перерву: це та геометрія, на якій
+    вимір був сліпим для 13 з 15 символів config.json.
+    """
+    t = dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc)
+    weekday, hour = t.weekday(), t.hour
+    if weekday == 5:  # субота
+        return False
+    if weekday == 6:  # неділя — торги лише з 22:00
+        return hour >= 22
+    if weekday == 4 and hour >= 21:  # п'ятниця закривається на 21:00
+        return False
+    return not 21 <= hour < 22  # щоденна перерва
+
+
+def _d1_bucket(day_offset: int) -> int:
+    """Відкриття D1-бакета: 2026-01-05 (понеділок) 21:00 UTC + N діб."""
+    monday = int(dt.datetime(2026, 1, 5, 21, 0, tzinfo=dt.timezone.utc).timestamp()) * 1000
+    return monday + day_offset * D1_MS
+
+
+def test_bucket_is_expected_when_its_first_minute_is_a_break():
+    """D1 якориться на ЗАКРИТТІ дня, тому «торгується перша хвилина» — хибний предикат."""
+    monday = _d1_bucket(0)
+    assert _cfd_us_is_trading(monday) is False, "якірна хвилина справді в перерві"
+    assert bucket_has_trading_minute(monday, monday + D1_MS, _cfd_us_is_trading) is True
+    exp = expected_bucket_opens(monday, monday + 7 * D1_MS, D1_MS, D1_ANCHOR_MS, _cfd_us_is_trading)
+    assert exp == [_d1_bucket(i) for i in (0, 1, 2, 3, 6)], "5 торгових діб на тиждень"
+
+
+def test_fully_closed_market_bucket_is_not_expected():
+    """Субота цілком у вихідних — бакет не очікується (контроль до тесту вище)."""
+    saturday = _d1_bucket(5)
+    assert bucket_has_trading_minute(saturday, saturday + D1_MS, _cfd_us_is_trading) is False
+
+
+def test_d1_holes_are_visible_when_series_is_truncated():
+    """Той самий дефект, що ховався: ряд обірвано, а звіт показував holes=0/0."""
+    present = [_d1_bucket(0), _d1_bucket(1)]  # решти тижня немає
+    h = measure_holes(present, start_ms=_d1_bucket(0), end_ms=_d1_bucket(7),
+                      tf_ms=D1_MS, anchor_offset_ms=D1_ANCHOR_MS, is_trading_fn=_cfd_us_is_trading)
+    assert (h.expected, h.missing) == (5, 3)
+
+
+def test_d1_age_counts_lag_instead_of_reporting_zero():
+    """Старий предикат не знаходив жодного торгового бакета і тихо віддавав age=0."""
+    now = _d1_bucket(3) + 10 * 60 * 60 * 1000  # четвер, середина торгової доби
+    a = measure_age([_d1_bucket(0)], now_ms=now, tf_ms=D1_MS,
+                    anchor_offset_ms=D1_ANCHOR_MS, is_trading_fn=_cfd_us_is_trading)
+    assert a.expected_last_open_ms == _d1_bucket(2)
+    assert a.age_buckets == 2
+
+
+def test_d1_age_zero_when_last_bar_is_the_last_closed_bucket():
+    """Контроль: свіжий ряд не має «відставати» через новий предикат."""
+    now = _d1_bucket(3) + 10 * 60 * 60 * 1000
+    a = measure_age([_d1_bucket(2)], now_ms=now, tf_ms=D1_MS,
+                    anchor_offset_ms=D1_ANCHOR_MS, is_trading_fn=_cfd_us_is_trading)
+    assert a.age_buckets == 0
+
+
+def test_forming_bucket_is_not_counted_as_a_hole():
+    """Незакритий бакет — не дірка: бар для нього ще пишеться."""
+    start = _d1_bucket(0)
+    mid_of_second_day = _d1_bucket(1) + 10 * 60 * 60 * 1000
+    exp = expected_bucket_opens(start, mid_of_second_day, D1_MS, D1_ANCHOR_MS, _cfd_us_is_trading)
+    assert exp == [_d1_bucket(0)], "другий бакет ще формується"
+
+
+def _unmeasurable_age(last_open_ms: int | None) -> AgeResult:
+    return AgeResult(last_open_ms=last_open_ms, expected_last_open_ms=None, age_buckets=None)
+
+
+def test_unknown_age_is_loud_not_silent():
+    """I5: ряд є, а відставання не порахувалось — це деградація, не «ok»."""
+    g = grade_symbol_tf(age=_unmeasurable_age(BASE))
+    assert g.grade == "YELLOW"
+    assert "age_unknown" in g.reasons
+
+
+def test_empty_series_does_not_add_age_unknown_noise():
+    """Порожній ряд і так RED через no_bars — другий раз про нього не кричимо."""
+    assert grade_symbol_tf(age=_unmeasurable_age(None)).reasons == []

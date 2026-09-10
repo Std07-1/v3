@@ -67,6 +67,11 @@ def grade_symbol_tf(
 
     if age is not None and age.age_buckets is not None and age.age_buckets > max_age_buckets:
         red.append(f"age_buckets={age.age_buckets}")
+    if age is not None and age.last_open_ms is not None and age.age_buckets is None:
+        # I5 degraded-but-loud: «не змогли порахувати» — це не «свіжо». Мовчазний None
+        # тут і ховав D1-вимір, поки той був сліпим (ADR-0054 §3.8 п.1): ряд є, бари є,
+        # а відставання невідоме — такий рядок звіту не має виглядати чистим.
+        yellow.append("age_unknown")
 
     if holes is not None and holes.missing:
         ratio = holes.missing / holes.expected if holes.expected else 1.0

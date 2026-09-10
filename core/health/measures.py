@@ -26,8 +26,12 @@ from core.model.bars import CandleBar
 
 IsTradingFn = Callable[[int], bool]
 
-# Скільки бакетів назад шукаємо останній торговий: 2 тижні M1 (довгі вихідні + свята).
-MAX_BACKWARD_PROBES = 20_160
+# Крок календаря: `is_trading_fn` визначена на хвилинах, тому всі проби — хвилинні.
+MINUTE_MS = 60_000
+
+# Скільки ХВИЛИН назад шукаємо останню торгову: 2 тижні (довгі вихідні + свята).
+# Саме хвилин, а не бакетів, тому горизонт однаковий для M1 і для D1.
+MAX_BACKWARD_MINUTE_PROBES = 20_160
 
 
 @dataclasses.dataclass(frozen=True)
@@ -99,6 +103,29 @@ class DepthResult:
     required: int
 
 
+def bucket_has_trading_minute(
+    bucket_open_ms: int,
+    bucket_close_ms: int,
+    is_trading_fn: IsTradingFn,
+) -> bool:
+    """Чи є в бакеті хоч одна торгова хвилина — тобто чи має writer дати для нього бар.
+
+    Це предикат САМОГО writer'а: ``derive_bar`` збирає source-бари з торгових слотів
+    бакета і віддає ``None`` лише коли не набралось жодного
+    (``core/derive.py`` → ``_collect_boundary_tolerant``: ``if not bars: return None``).
+
+    Дешевий сурогат «торгується ПЕРША хвилина бакета» тут не працює і саме він зробив
+    D1-вимір сліпим (ADR-0054 §3.8 п.1): D1 у нас якориться на ЗАКРИТТІ дня
+    (21:00 UTC влітку = перша хвилина денної перерви), тому для 13 з 15 символів
+    ``config.json`` очікуваних D1-бакетів виходило РІВНО НУЛЬ — ні дірок, ні
+    відставання не міг показати жоден звіт.
+    """
+    for minute_ms in range(bucket_open_ms, bucket_close_ms, MINUTE_MS):
+        if is_trading_fn(minute_ms):
+            return True
+    return False
+
+
 def expected_bucket_opens(
     start_ms: int,
     end_ms: int,
@@ -106,17 +133,25 @@ def expected_bucket_opens(
     anchor_offset_ms: int,
     is_trading_fn: IsTradingFn,
 ) -> List[int]:
-    """Торгові відкриття бакетів у ``[start_ms, end_ms)`` за календарем.
+    """Торгові бакети, що ПОВНІСТЮ лежать у ``[start_ms, end_ms)``.
 
-    Бакет очікується, якщо торгується його **перша хвилина**: саме так живий writer
-    вирішує, чи взагалі буде бар.Напіввідкритий інтервал — як у ``market_calendar``.
+    Дві умови, і обидві — про writer'а, а не про календар сам по собі:
+
+    - бакет містить торгову хвилину (``bucket_has_trading_minute``);
+    - бакет уже закрився до ``end_ms`` — незакритий бакет не «дірка», бар для нього
+      ще пишеться. Тому діапазон обрізаний на ``tf_ms``, а не на ``end_ms``.
     """
     if tf_ms <= 0 or end_ms <= start_ms:
         return []
     first = bucket_start_ms(start_ms, tf_ms, anchor_offset_ms)
     if first < start_ms:
         first += tf_ms
-    return [b for b in range(first, end_ms, tf_ms) if is_trading_fn(b)]
+    last_open_exclusive = end_ms - tf_ms + 1
+    return [
+        b
+        for b in range(first, last_open_exclusive, tf_ms)
+        if bucket_has_trading_minute(b, b + tf_ms, is_trading_fn)
+    ]
 
 
 def normalize_open_to_grid(
@@ -154,19 +189,19 @@ def measure_age(
         return AgeResult(last_open_ms=None, expected_last_open_ms=None, age_buckets=None)
     last_open = max(opens)
     current_open = bucket_start_ms(now_ms, tf_ms, anchor_offset_ms)
+    # Останній ЗАКРИТИЙ бакет, за який writer мав дати бар (поточний ще формується) —
+    # це бакет, що містить останню торгову ХВИЛИНУ перед поточним бакетом.
+    # Шукаємо саму хвилину, а не питаємо «чи торгується відкриття бакета»: у D1
+    # відкриття припадає на денну перерву, тож старий предикат не знаходив жодного
+    # бакета, доходив до ``last_open`` і тихо повертав age=0 навіть для ряду,
+    # обірваного два місяці тому (ADR-0054 §3.8 п.1).
     expected = None
-    probe = current_open - tf_ms
-    # Останній ЗАКРИТИЙ торговий бакет: поточний ще формується. Ліміт має покривати
-    # вихідні: у неділю останній торговий M1-бакет лежить ~2600 бакетів позаду, тож
-    # маленьке вікно давало age=None (не «свіжо», а «не змогли порахувати»).
-    for _ in range(MAX_BACKWARD_PROBES):
-        if probe <= last_open:
-            expected = last_open
+    probe_minute = current_open - MINUTE_MS
+    for _ in range(MAX_BACKWARD_MINUTE_PROBES):
+        if is_trading_fn(probe_minute):
+            expected = bucket_start_ms(probe_minute, tf_ms, anchor_offset_ms)
             break
-        if is_trading_fn(probe):
-            expected = probe
-            break
-        probe -= tf_ms
+        probe_minute -= MINUTE_MS
     if expected is None:
         return AgeResult(last_open_ms=last_open, expected_last_open_ms=None, age_buckets=None)
     return AgeResult(
