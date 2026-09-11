@@ -27,6 +27,13 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.config_loader import load_system_config, pick_config_path
 from core.model.bars import CandleBar
+from runtime.ingest.market_calendar import MarketCalendar
+from runtime.ingest.tick_common import resolve_symbol_calendars
+from runtime.store.redis_spec import (
+    REDIS_PASSWORD_ENV,
+    REDIS_USERNAME_ENV,
+    resolve_redis_spec,
+)
 from runtime.store.ssot_jsonl import (
     iter_day_keys_utc,
     load_day_open_times,
@@ -52,6 +59,9 @@ _FETCH_RETRIES = 5
 _FETCH_RETRY_DELAY_S = 5.0
 _CMD_QUEUE_SUFFIX = "broker:m1:cmd"
 _BARS_QUEUE_SUFFIX = "broker:m1:bars"
+# Запас сторінок понад довжину вікна: брокер інколи віддає менше 200 барів навіть
+# у торгові хвилини — тоді курсор посувається менше, і сторінок треба більше.
+_PAGE_BUDGET_SLACK = 2
 
 
 # ─── Gap detection ─────────────────────────────────────────────────
@@ -62,12 +72,13 @@ def detect_m1_gaps(
     symbol: str,
     start_ms: int,
     end_ms: int,
-    calendar: Optional[Any] = None,
+    calendar: MarketCalendar,
 ) -> List[int]:
     """Повертає список open_time_ms для пропущених M1 бакетів.
 
-    Порівнює існуючий набір відкритих часів із очікуваним
-    (кожні 60s від start_ms до end_ms).
+    Дірка — торгова хвилина (за ``calendar``) без бару в SSOT. Календар обов'язковий:
+    без нього кожна хвилина закритого ринку ставала «діркою». Свят календар не знає,
+    тож святкова хвилина для нього торгова.
     """
     # Align to minute boundaries (critical for --hours mode)
     start_ms = (start_ms // TF_M1_MS) * TF_M1_MS
@@ -82,15 +93,7 @@ def detect_m1_gaps(
     gaps: List[int] = []
     t = start_ms
     while t <= end_ms:
-        if t not in existing:
-            # Calendar check — пропускаємо closed market
-            if calendar is not None:
-                try:
-                    if not calendar.is_market_open_at_ms(t, symbol):
-                        t += TF_M1_MS
-                        continue
-                except Exception:
-                    pass
+        if t not in existing and calendar.is_trading_minute(t):
             gaps.append(t)
         t += TF_M1_MS
 
@@ -145,6 +148,8 @@ def _fetch_from_sidecar(
             "symbol": symbol,
             "n_bars": min(n_bars, _MAX_BARS_PER_FETCH),
             "date_to_ms": date_to_ms,
+            # ADR-0054 §3.6: вік команди — протухлу sidecar дропне, а не обслужить пізно
+            "ts_ms": int(time.time() * 1000),
         }
     )
     redis_cli.rpush(cmd_key, cmd)
@@ -206,6 +211,18 @@ def _fetch_from_sidecar(
     return bars
 
 
+def _page_budget(start_ms: int, end_ms: int) -> int:
+    """Скільки сторінок треба, щоб курсор дійшов від ``end_ms`` назад до ``start_ms``.
+
+    Рахуємо від ДОВЖИНИ вікна, а не від кількості дірок: курсор іде назад по
+    ``_MAX_BARS_PER_FETCH`` барів незалежно від того, скільки з них — дірки. Стара
+    формула ``дірок // 200 + 5`` на добовому вікні з 43 дірками давала 5 сторінок
+    (~1000 хв із 1380) і тихо обривалась, не дійшовши до ранніх дірок.
+    """
+    span_min = (end_ms - start_ms) // TF_M1_MS + 1
+    return -(-span_min // _MAX_BARS_PER_FETCH) + _PAGE_BUDGET_SLACK
+
+
 def fetch_m1_for_range(
     redis_cli: Any,
     namespace: str,
@@ -223,7 +240,10 @@ def fetch_m1_for_range(
     cursor_ms: Optional[int] = end_ms + TF_M1_MS  # exclusive end
     fetched_opens: Set[int] = set()
     page = 0
-    max_pages = (len(gap_opens) // _MAX_BARS_PER_FETCH) + 5  # safety
+    max_pages = _page_budget(start_ms, end_ms)
+    stop_reason: Optional[str] = None  # None після циклу = вичерпали бюджет сторінок
+    # Скільки барів брокер реально віддав: відрізняє «хвилин нема» від «відповіді нема».
+    broker_bars_total = 0
 
     while page < max_pages:
         page += 1
@@ -264,7 +284,10 @@ def fetch_m1_for_range(
                 symbol,
                 _FETCH_RETRIES,
             )
+            stop_reason = "page_failed"
             break
+
+        broker_bars_total += len(bars)
 
         # Фільтруємо: тільки бари, що потрапляють у gaps
         matched = [
@@ -289,6 +312,7 @@ def fetch_m1_for_range(
         # Перевіряємо чи покрили весь діапазон
         if fetched_opens >= gap_opens:
             log.info("REPAIR_FETCH_COMPLETE всі %d гапів покрито", len(gap_opens))
+            stop_reason = "complete"
             break
 
         # Зсуваємо cursor для наступної сторінки
@@ -298,10 +322,35 @@ def fetch_m1_for_range(
                 _ms_to_hm(oldest_ms),
                 _ms_to_hm(start_ms),
             )
+            stop_reason = "reached_start"
             break
 
         cursor_ms = oldest_ms  # date_to = exclusive, fetch bars before this
         time.sleep(1.0)  # throttle між сторінками
+
+    if stop_reason is None:
+        # Не дійшли до start і не покрили всі дірки: «fetched < gaps» тут означає
+        # «не догребли», а не «у брокера цих хвилин немає».
+        log.warning(
+            "REPAIR_FETCH_PAGE_BUDGET_EXHAUSTED symbol=%s pages=%d remaining=%d "
+            "— звузь вікно --start/--end",
+            symbol,
+            page,
+            len(gap_opens - fetched_opens),
+        )
+
+    missing_at_broker = len(gap_opens - fetched_opens)
+    if stop_reason == "reached_start" and missing_at_broker:
+        # Курсор пройшов усе вікно: дірки, яких немає серед барів брокера, у брокера й
+        # не існують. Це відповідь на питання ремонту, а не збій sidecar чи FXCM.
+        log.warning(
+            "REPAIR_BROKER_LACKS_MINUTES symbol=%s missing_at_broker=%d of gaps=%d "
+            "broker_bars=%d — бекфіл їх не поверне",
+            symbol,
+            missing_at_broker,
+            len(gap_opens),
+            broker_bars_total,
+        )
 
     if not all_bars:
         log.warning(
@@ -493,7 +542,7 @@ def main() -> None:
     )
 
     # Step 1: Detect gaps
-    calendar = _try_load_calendar(cfg, symbol)
+    calendar = _load_calendar(cfg, symbol)
     gaps = detect_m1_gaps(data_root, symbol, start_ms, end_ms, calendar)
 
     if not gaps:
@@ -568,19 +617,15 @@ def main() -> None:
 
     if result["total_written"] > 0:
         log.info("")
-        log.info("✓ M1 записано на диск.")
-        log.info("Тепер перебудуй derived TF + перезапусти платформу:")
+        log.info("✓ M1 записано на диск. Derived TF і Redis цього ще НЕ бачать.")
+        # Готову команду rebuild не друкуємо: «круглі» дати вікна тихо пишуть
+        # партіальний крайній H4, а --force дає конфліктні дублікати, які два шляхи
+        # читання розв'язують протилежно (tail = last-wins, range = first-wins).
         log.info(
-            '  python -m tools.rebuild_from_m1 --symbol "%s" --start "%s" --end "%s"',
-            symbol,
-            dt.datetime.fromtimestamp(
-                min(g[0] for g in gap_groups) / 1000, dt.timezone.utc
-            ).strftime("%Y-%m-%d"),
-            dt.datetime.fromtimestamp(
-                max(g[1] for g in gap_groups) / 1000, dt.timezone.utc
-            ).strftime("%Y-%m-%d"),
+            "  1) rebuild_from_m1 БЕЗ --force, вікно по D1-якорю з config "
+            "(літо: --start <дата>T21:00:00 --end <дата+2>T21:00:00), writer'и зупинені"
         )
-        log.info("  python -m app.main --mode all --stdio pipe")
+        log.info("  2) рестарт smc-fxcm — Redis перепрайміться з диску (smc-ticks не чіпати)")
     else:
         log.warning("Жоден бар не записано. Перевір broker_sidecar і FXCM логін.")
 
@@ -594,7 +639,13 @@ def _try_probe_broker(
     """В DRY-RUN: спробувати підключитись і показати скільки барів можна дотягнути."""
     redis_cli, namespace = _connect_redis(cfg)
     if redis_cli is None:
-        log.info("Redis недоступний (dry-run probe пропущено).")
+        # Без probe висновок «у брокера немає цих хвилин» неможливий — кажемо це прямо,
+        # щоб відсутність рядка PROBE ніхто не прочитав як відповідь.
+        log.warning(
+            "PROBE_NOT_RUN symbol=%s — Redis недоступний; про наявність хвилин у брокера "
+            "нічого не відомо",
+            symbol,
+        )
         return
 
     global_start = min(g[0] for g in gap_groups)
@@ -615,49 +666,73 @@ def _try_probe_broker(
         )
     else:
         log.warning(
-            "PROBE: broker повернув 0 барів. "
-            "Перевір: broker_sidecar працює? FXCM connected?"
+            "PROBE: жодної з %d дірок не отримано — причина вище: "
+            "REPAIR_BROKER_LACKS_MINUTES = у брокера їх немає; "
+            "REPAIR_FETCH_PAGE_FAILED / TIMEOUT = брокер не відповів",
+            len(all_gap_opens),
         )
 
 
 def _connect_redis(cfg: dict) -> Tuple[Any, str]:
-    """Створює Redis клієнт. Повертає (redis_cli, namespace) або (None, '')."""
+    """Redis-клієнт з тими самими ACL-креденшелами, що й у сервісів (ADR-0091 P2).
+
+    Креденшели — з env ``AI_ONE_REDIS_USERNAME``/``AI_ONE_REDIS_PASSWORD``, не з
+    config.json. На VPS вони живуть в ``environment=`` програм supervisor, а НЕ в
+    ``.env``, тож запуск із голого shell їх не має — і тоді кажемо про це прямо,
+    замість мовчки пропускати probe. Повертає (redis_cli, namespace) або (None, "").
+    """
     try:
         import redis as redis_lib
     except ImportError:
         log.error("redis package не встановлено")
         return None, ""
 
-    redis_cfg = cfg.get("redis", {})
-    host = redis_cfg.get("host", "127.0.0.1")
-    port = redis_cfg.get("port", 6379)
-    db = redis_cfg.get("db", 1)
-    namespace = redis_cfg.get("namespace", "v3_local")
-
-    try:
-        redis_cli = redis_lib.Redis(host=host, port=port, db=db, decode_responses=True)
-        redis_cli.ping()
-    except Exception as exc:
-        log.error("Redis connection failed: %s", exc)
+    spec = resolve_redis_spec(cfg, role="repair_m1_gaps")
+    if spec is None:
+        log.error("REPAIR_REDIS_DISABLED — секції redis немає або redis.enabled=false")
         return None, ""
 
-    return redis_cli, namespace
-
-
-def _try_load_calendar(cfg: dict, symbol: str) -> Optional[Any]:
-    """Спробувати завантажити MarketCalendar для символу."""
     try:
-        from runtime.ingest.tick_common import calendar_from_group
+        redis_cli = redis_lib.Redis(
+            host=spec.host,
+            port=spec.port,
+            db=spec.db,
+            **spec.auth_kwargs(),
+            decode_responses=True,
+        )
+        redis_cli.ping()
+    except redis_lib.exceptions.AuthenticationError as exc:
+        log.error(
+            "REPAIR_REDIS_AUTH_FAILED user=%s err=%s — задай env %s і %s тієї ж ролі, що "
+            "в supervisor (значення: конфіг supervisor або /root/redis-acl-*.txt; не друкуй їх)",
+            spec.username or "default",
+            exc,
+            REDIS_USERNAME_ENV,
+            REDIS_PASSWORD_ENV,
+        )
+        return None, ""
+    except redis_lib.exceptions.RedisError as exc:
+        log.error("REPAIR_REDIS_CONNECT_FAILED err=%s", exc)
+        return None, ""
 
-        groups = cfg.get("symbol_groups", [])
-        for group in groups:
-            syms = group.get("symbols", [])
-            if symbol in syms:
-                cal = calendar_from_group(group)
-                return cal
-    except Exception:
-        pass
-    return None
+    return redis_cli, spec.namespace
+
+
+def _load_calendar(cfg: dict, symbol: str) -> MarketCalendar:
+    """Календар символу за SSOT-мапою config (fail-fast, як у воркерів).
+
+    Без календаря інструмент не працює взагалі: він рахував би кожну хвилину
+    закритого ринку діркою. Раніше саме так і було — функція читала ключ
+    ``symbol_groups``, якого в config немає, і глушила виняток, тож календар
+    завжди був None.
+    """
+    calendars, rejected = resolve_symbol_calendars(cfg, [symbol], where="repair_m1_gaps")
+    if rejected or symbol not in calendars:
+        raise SystemExit(
+            f"REPAIR_CALENDAR_MISSING symbol={symbol} — додай його у "
+            "market_calendar_symbol_groups (config.json)"
+        )
+    return calendars[symbol]
 
 
 def _parse_iso_ms(s: str) -> int:
