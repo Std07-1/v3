@@ -216,95 +216,93 @@ def _selftest_ssot_guard() -> bool:
         return app.drop_preview_total() == 1 and not has_files
 
 
-def tail_last_bar_time_ms(data_root: str, symbol: str, tf_s: int) -> Optional[int]:
-    """Знаходить останній open_time_ms для (symbol,tf_s) через tail JSONL файлів.
-
-    Мінімізує читання: беремо найновіший part-*.jsonl і читаємо його з кінця.
-    """
-    sym_dir = symbol.replace("/", "_")
-    tf_dir = f"tf_{tf_s}"
-    dir_path = os.path.join(data_root, sym_dir, tf_dir)
+def _part_paths_sorted(data_root: str, symbol: str, tf_s: int) -> List[str]:
+    """Шляхи part-файлів за зростанням доби. Ім'я part-YYYYMMDD = календарна доба open_time_ms."""
+    dir_path = os.path.join(data_root, symbol.replace("/", "_"), f"tf_{tf_s}")
     if not os.path.isdir(dir_path):
-        return None
-
+        return []
     parts = [
-        p
-        for p in os.listdir(dir_path)
+        p for p in os.listdir(dir_path)
         if p.startswith("part-") and p.endswith(".jsonl")
     ]
-    if not parts:
-        return None
     parts.sort()  # YYYYMMDD => лексикографічно ок
-    latest = os.path.join(dir_path, parts[-1])
+    return [os.path.join(dir_path, p) for p in parts]
 
-    # Читаємо "хвіст" (останній валідний JSON рядок).
+
+def _scan_bounds(path: str) -> Optional[Tuple[int, int, int, int]]:
+    """(min, max, перший-у-файлі, останній-у-файлі) open_time_ms; None якщо барів немає."""
+    lo = hi = first = last = None
     try:
-        with open(latest, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            chunk = 8192
-            buf = b""
-            pos = size
-            while pos > 0:
-                step = min(chunk, pos)
-                pos -= step
-                f.seek(pos)
-                buf = f.read(step) + buf
-                if b"\n" in buf:
-                    break
-            lines = buf.splitlines()
-            for raw in reversed(lines):
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    obj = json.loads(raw.decode("utf-8"))
-                    return int(obj["open_time_ms"])
-                except Exception:
-                    logging.debug("SSOT_TAIL_PARSE_FAIL path=%s", latest)
-                    continue
-    except Exception:
-        logging.debug("SSOT_TAIL_READ_FAIL path=%s", latest, exc_info=True)
-        return None
-
-    return None
-
-
-def head_first_bar_time_ms(data_root: str, symbol: str, tf_s: int) -> Optional[int]:
-    """Знаходить перший open_time_ms для (symbol,tf_s) через head JSONL файлів."""
-    sym_dir = symbol.replace("/", "_")
-    tf_dir = f"tf_{tf_s}"
-    dir_path = os.path.join(data_root, sym_dir, tf_dir)
-    if not os.path.isdir(dir_path):
-        return None
-
-    parts = [
-        p
-        for p in os.listdir(dir_path)
-        if p.startswith("part-") and p.endswith(".jsonl")
-    ]
-    if not parts:
-        return None
-    parts.sort()
-    first_path = os.path.join(dir_path, parts[0])
-
-    try:
-        with open(first_path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
                 try:
-                    obj = json.loads(line)
-                    return int(obj["open_time_ms"])
+                    open_ms = int(json.loads(line)["open_time_ms"])
                 except Exception:
-                    logging.debug("SSOT_HEAD_PARSE_FAIL path=%s", first_path)
+                    logging.debug("SSOT_BOUNDS_PARSE_FAIL path=%s", path)
                     continue
+                if first is None:
+                    first = lo = hi = open_ms
+                last = open_ms
+                lo = min(lo, open_ms)
+                hi = max(hi, open_ms)
     except Exception:
-        logging.debug("SSOT_HEAD_READ_FAIL path=%s", first_path, exc_info=True)
+        logging.debug("SSOT_BOUNDS_READ_FAIL path=%s", path, exc_info=True)
         return None
+    if first is None:
+        return None
+    return lo, hi, first, last
 
+
+def tail_last_bar_time_ms(data_root: str, symbol: str, tf_s: int) -> Optional[int]:
+    """Найбільший open_time_ms для (symbol, tf_s) на диску.
+
+    МАКСИМУМ у найновішому part-файлі, а не його останній рядок: файл не зобов'язаний
+    бути відсортованим за часом — `tools/fetch_tf_backfill` дописує сторінки історії у
+    зворотному порядку і лишає шов на кожному кроці ланцюжка. Раніше функція читала
+    лише останній 8 КБ чанк і брала з нього останній валідний рядок, тож на шві
+    повертала занижене значення; `tools/rebuild_from_m1` бере це значення як типовий
+    `--end`, тобто перебудова мовчки не доходила до найсвіжіших барів.
+    """
+    for path in reversed(_part_paths_sorted(data_root, symbol, tf_s)):
+        bounds = _scan_bounds(path)
+        if bounds is None:
+            continue
+        _lo, hi, _first, last = bounds
+        if hi != last:
+            logging.warning(
+                "SSOT_PART_UNSORTED path=%s max_open_ms=%d last_line_open_ms=%d "
+                "behind_ms=%d — межу історії взято з максимуму",
+                path, hi, last, hi - last,
+            )
+        return hi
     return None
+
+
+def head_first_bar_time_ms(data_root: str, symbol: str, tf_s: int) -> Optional[int]:
+    """Найменший open_time_ms для (symbol, tf_s) на диску.
+
+    МІНІМУМ у найстарішому part-файлі, а не його перший рядок — з тієї ж причини, що
+    й у `tail_last_bar_time_ms`. Завищений початок історії робить типовий `--start`
+    у `tools/rebuild_from_m1` пізнішим за справжній, тобто найстаріші бари мовчки
+    лишаються поза перебудовою.
+    """
+    for path in _part_paths_sorted(data_root, symbol, tf_s):
+        bounds = _scan_bounds(path)
+        if bounds is None:
+            continue
+        lo, _hi, first, _last = bounds
+        if lo != first:
+            logging.warning(
+                "SSOT_PART_UNSORTED path=%s min_open_ms=%d first_line_open_ms=%d "
+                "ahead_ms=%d — межу історії взято з мінімуму",
+                path, lo, first, first - lo,
+            )
+        return lo
+    return None
+
 
 
 def iter_day_keys_utc(start_ms: int, end_ms: int) -> List[str]:
