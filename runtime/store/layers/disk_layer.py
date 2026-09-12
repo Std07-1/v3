@@ -313,8 +313,14 @@ def _read_jsonl_tail_filtered(
     return out
 
 
-def _read_last_jsonl(path: str) -> Optional[dict[str, Any]]:
-    last_obj: Optional[dict[str, Any]] = None
+def _scan_open_ms(path: str) -> Optional[tuple[int, int]]:
+    """(максимальний, останній-у-файлі) open_time_ms; None якщо валідних барів немає.
+
+    Повертає обидва значення, бо саме їх розбіжність і є сигналом, що part-файл не
+    відсортований за часом (див. `DiskLayer.last_open_ms`).
+    """
+    max_open_ms: Optional[int] = None
+    last_line_open_ms: Optional[int] = None
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
@@ -334,11 +340,15 @@ def _read_last_jsonl(path: str) -> Optional[dict[str, Any]]:
                 open_ms = obj.get("open_time_ms")
                 if not isinstance(open_ms, int):
                     continue
-                last_obj = obj
+                last_line_open_ms = open_ms
+                if max_open_ms is None or open_ms > max_open_ms:
+                    max_open_ms = open_ms
     except FileNotFoundError:
         logging.debug("DISK_LAYER_LAST_JSON_FILE_MISSING path=%s", path, exc_info=True)
         return None
-    return last_obj
+    if max_open_ms is None or last_line_open_ms is None:
+        return None
+    return max_open_ms, last_line_open_ms
 
 
 class DiskLayer:
@@ -399,11 +409,35 @@ class DiskLayer:
         )
 
     def last_open_ms(self, symbol: str, tf_s: int) -> Optional[int]:
-        parts = self.list_parts(symbol, tf_s)
-        if not parts:
-            return None
-        last_obj = _read_last_jsonl(parts[-1])
-        if not last_obj:
-            return None
-        open_ms = last_obj.get("open_time_ms")
-        return int(open_ms) if isinstance(open_ms, int) else None
+        """Найбільший open_time_ms на диску — джерело watermark UDS.
+
+        МАКСИМУМ, а не останній рядок файла: part-файл не зобов'язаний бути
+        відсортованим за часом. `tools/fetch_tf_backfill` дописує сторінки історії у
+        зворотному порядку і лишає шов на кожному кроці ланцюжка (health-check бачить
+        це як `unsorted=15..17` на кожному засіяному символі). Останній рядок такого
+        файла старіший за максимум, а занижений watermark нічого не блокує — навпаки,
+        пускає назад бари, які на диску вже є (`uds._watermark_drop_reason`:
+        `open_ms > wm` → приймається), і вони дописуються вдруге.
+
+        Ім'я `part-YYYYMMDD` — це календарна доба `open_time_ms` без жодного якоря
+        (`ssot_jsonl`), тому імена строго монотонні за часом і максимум завжди лежить
+        у найновішому файлі. Старіші читаємо лише тоді, коли найновіший не дав жодного
+        валідного бару: інакше порожній або битий файл дав би `watermark=None`, тобто
+        прийняв би назад усю історію.
+        """
+        for path in reversed(self.list_parts(symbol, tf_s)):
+            scanned = _scan_open_ms(path)
+            if scanned is None:
+                continue
+            max_open_ms, last_line_open_ms = scanned
+            if max_open_ms != last_line_open_ms:
+                logger.warning(
+                    "DISK_PART_UNSORTED path=%s max_open_ms=%d last_line_open_ms=%d "
+                    "behind_ms=%d — watermark узято з максимуму",
+                    path,
+                    max_open_ms,
+                    last_line_open_ms,
+                    max_open_ms - last_line_open_ms,
+                )
+            return max_open_ms
+        return None
