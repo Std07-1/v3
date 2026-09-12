@@ -4,7 +4,8 @@
     "XAU/USD",
     "XAG/USD",
     "NAS100",
-    "SPX500"
+    "SPX500",
+    "US30"
   ],
   "data_root": "./data_v3",
   "broker_python": ".venv37/Scripts/python.exe",
