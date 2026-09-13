@@ -186,3 +186,31 @@ def test_commit_together_with_dry_run_is_refused(tmp_path, monkeypatch):
     assert srt.main() == 2
     assert srt.read_lines(path) == original
 
+
+def test_file_never_disappears_during_rewrite(tmp_path, monkeypatch):
+    """Читач не мусить спіймати мить, коли part-файла за його іменем немає.
+
+    Ловимо це так: підміняємо os.replace і в момент виклику перевіряємо, що шлях
+    призначення ще/вже існує під своїм іменем.
+    """
+    original = _seam()
+    path = _write(tmp_path, original)
+    ordered, _bars, _inv = srt.plan_file(path)
+
+    real_replace = os.replace
+    seen = []
+
+    def spy(src, dst):
+        seen.append((str(src), str(dst), os.path.exists(path)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(srt.os, "replace", spy)
+    backup = srt.rewrite_atomic(path, ordered)
+
+    assert len(seen) == 1, "має бути рівно одна підміна — саме tmp -> part"
+    src, dst, existed = seen[0]
+    assert src.endswith(".tmp") and dst == path
+    assert existed, "у мить підміни part-файл мусить існувати"
+    assert srt.read_lines(backup) == original
+    assert Counter(srt.read_lines(path)) == Counter(original)
+

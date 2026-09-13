@@ -7,10 +7,13 @@
 рядків замість найновіших N барів, а health через це тримає кожен засіяний символ у YELLOW.
 
 Що робить і чого НЕ робить:
-  * СТАБІЛЬНО сортує рядки за `open_time_ms`. Стабільність тут не косметика: у системі два
-    несумісні тай-брейки дублікатів — TAIL бере last-wins, RANGE first-wins. Стабільний
-    сорт зберігає взаємний порядок записів з однаковим `open_time_ms`, тому обидва тай-брейки
-    після сортування обирають ТОЙ САМИЙ запис, що й до нього.
+  * СТАБІЛЬНО сортує рядки за `open_time_ms`. Стабільність тут не косметика. Обидва дедупи
+    (`disk_layer._dedup_open_ms`, `uds._ensure_sorted_dedup`) стабільно сортують за ключем,
+    а переможця обирає `_choose_better_bar`: complete → final src → більший ts, і лише при
+    ПОВНІЙ нічиї — пізніший у вхідному порядку. Отже порядок рядків вирішує саме тоді, коли
+    записи нерозрізненні за якістю; стабільний сорт зберігає їхній взаємний порядок, тому
+    після сортування обирається ТОЙ САМИЙ запис, що й до нього. 178 файлів мають дублікати.
+    Near-dedup D1 (поріг `tf_ms // 12`) залежить лише від ключів і до порядку байдужий.
   * Рядок переписується БАЙТ-У-БАЙТ: жодного re-serialize JSON (інакше змінився б порядок
     ключів і формат чисел).
   * НЕ дедуплікує, НЕ відкидає, НЕ додає. Дедуп — окреме рішення зі своєю семантикою
@@ -33,6 +36,7 @@ import glob
 import json
 import logging
 import os
+import shutil
 import sys
 import time
 from collections import Counter
@@ -83,16 +87,28 @@ def plan_file(path: str) -> Tuple[Optional[List[str]], int, int]:
 
 
 def rewrite_atomic(path: str, ordered: List[str]) -> str:
-    """.bak.<ts> поряд, запис у .tmp з fsync, потім os.replace."""
+    """Підміна без жодної миті, коли файла за його іменем не існує.
+
+    Порядок важливий. Наївне «спершу перейменувати оригінал у .bak, потім підставити
+    .tmp» лишає вікно, у якому part-файла немає: читач у цю мить (ws_server живий і
+    читає диск) отримає FileNotFoundError і МОВЧКИ пропустить файл — у графіку зʼявиться
+    дірка на рівному місці. Тому: спершу пишемо .tmp і фсинкаємо, далі бекап робимо
+    жорстким лінком на СТАРИЙ inode (os.link не чіпає ім'я path), і лише потім один
+    атомарний os.replace. Файл існує весь час; читач бачить або старий вміст, або новий.
+    """
     stamp = int(time.time())
     backup = "%s.bak.%d" % (path, stamp)
-    os.replace(path, backup)
     tmp = "%s.tmp" % path
     with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
         for line in ordered:
             fh.write(line + "\n")
         fh.flush()
         os.fsync(fh.fileno())
+    try:
+        os.link(path, backup)
+    except OSError:
+        # ФС без жорстких лінків — падаємо назад на копію (теж не чіпає ім'я path).
+        shutil.copy2(path, backup)
     os.replace(tmp, path)
     return backup
 
