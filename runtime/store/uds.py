@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from core.model.bar_choice import choose_better_bar
 from core.model.bars import CandleBar, FINAL_SOURCES
 from core.config_loader import (
     tf_allowlist_from_cfg,
@@ -1952,34 +1953,6 @@ def _load_cfg(config_path: str) -> dict[str, Any]:
         return {}
 
 
-def _bar_is_complete(bar: dict[str, Any]) -> bool:
-    val = bar.get("complete")
-    return bool(val) if isinstance(val, bool) else bool(val)
-
-
-def _bar_is_final_source(bar: dict[str, Any]) -> bool:
-    src = bar.get("src")
-    return isinstance(src, str) and src in FINAL_SOURCES
-
-
-def _choose_better_bar(
-    existing: dict[str, Any], incoming: dict[str, Any]
-) -> dict[str, Any]:
-    existing_complete = _bar_is_complete(existing)
-    incoming_complete = _bar_is_complete(incoming)
-    if incoming_complete and not existing_complete:
-        return incoming
-    if existing_complete and not incoming_complete:
-        return existing
-    existing_final = _bar_is_final_source(existing)
-    incoming_final = _bar_is_final_source(incoming)
-    if incoming_final and not existing_final:
-        return incoming
-    if existing_final and not incoming_final:
-        return existing
-    return existing
-
-
 def _get_open_ms(bar: dict[str, Any]) -> Optional[int]:
     value = bar.get("open_time_ms")
     if isinstance(value, int):
@@ -2042,7 +2015,9 @@ def _ensure_sorted_dedup(
         if existing is None:
             deduped[open_ms] = bar
             continue
-        deduped[open_ms] = _choose_better_bar(existing, bar)
+        # Єдиний вибирач (ADR-0094): sorted() стабільний, тож дублікати йдуть у порядку файла,
+        # і нічия дістається пізнішому запису — як у TAIL-шляху.
+        deduped[open_ms] = choose_better_bar(existing, bar)
         dropped += 1
 
     result = [deduped[k] for k in sorted(deduped.keys())]
@@ -2056,7 +2031,11 @@ def _ensure_sorted_dedup(
             prev_ms = _get_open_ms(prev) or 0
             cur_ms = _get_open_ms(bar) or 0
             if 0 < (cur_ms - prev_ms) < near_threshold:
-                merged[-1] = _choose_better_bar(prev, bar)
+                # Тут члени — РІЗНІ open_ms (DST-джитер якоря), а не записи одного ключа, тож
+                # «пізніший запис» не означає нічого. Аргументи переставлено навмисно: нічия, як і
+                # до ADR-0094, лишається за раннім баром (tests/test_near_dedup_d1.py), а
+                # complete / final / partial / ts діють симетрично. Сезонний вибір якоря — ADR-0092.
+                merged[-1] = choose_better_bar(bar, prev)
                 dropped += 1
             else:
                 merged.append(bar)

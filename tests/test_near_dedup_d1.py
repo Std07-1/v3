@@ -39,7 +39,8 @@ class TestNearDedupD1:
     def test_near_dupes_merged_keep_first(self):
         """history@21:00 + derived@22:00 → merged to 1 bar.
 
-        Both are final sources + complete, so _choose_better_bar keeps
+        Both are final sources + complete, so core.model.bar_choice (called as
+        choose_better_bar(bar, prev) in near-dedup, ADR-0094) keeps
         existing (first by sort order = earlier open_ms).
         """
         ot_21 = 1729112400000  # Oct 16 21:00 UTC
