@@ -1,4 +1,9 @@
-"""Dedup JSONL bar files by open_time_ms (last-wins).
+"""Dedup JSONL bar files by open_time_ms — переможець обирається ЄДИНИМ вибирачем читачів (ADR-0094).
+
+Імʼя модуля історичне: колись це був чистий last-wins. Тепер переможця групи обирає
+`core.model.bar_choice.choose_better_bar` — той самий, що й у TAIL/RANGE-читачів
+(complete → final src → не-partial → ts → нічия: пізніший запис). Інакше ремонт міг би лишити
+на диску partial-бар, який читач відкидає, тобто сам ремонт міняв би свічку на графіку.
 
 Use case: after rebuild_from_m1.py --force appends new bars without removing
 stale ones, leaving (open_time_ms duplicate, different h/l/c) pairs in JSONL.
@@ -6,7 +11,7 @@ External readers without UDS dedup logic read top-down and pick stale first reco
 
 This tool:
   1. Reads file as list[dict].
-  2. Groups by open_time_ms, keeps LAST occurrence per key.
+  2. Groups by open_time_ms, keeps the winner of core.model.bar_choice (ties: later line).
   3. Sorts by open_time_ms ASC.
   4. Atomically rewrites: write to .tmp, fsync, rename.
   5. Creates .bak.<unix_ts> backup before rewrite.
@@ -25,6 +30,8 @@ import os
 import sys
 import time
 from pathlib import Path
+
+from core.model.bar_choice import choose_better_bar
 
 
 def dedup_file(path: Path, dry_run: bool = False) -> tuple[int, int, int]:
@@ -54,7 +61,9 @@ def dedup_file(path: Path, dry_run: bool = False) -> tuple[int, int, int]:
             continue
         if ot not in by_open:
             order.append(ot)
-        by_open[ot] = obj  # last-wins
+        existing = by_open.get(ot)
+        # Рядки йдуть у порядку файла — нічия вибирача дістається пізнішому запису.
+        by_open[ot] = obj if existing is None else choose_better_bar(existing, obj)
 
     # sort ascending by open_time_ms (canonical order)
     sorted_keys = sorted(by_open.keys())
