@@ -1,0 +1,160 @@
+"""Впорядкування part-файлів за open_time_ms — перестановка рядків, і нічого більше.
+
+Найнебезпечніше тут не «не відсортувалось», а «відсортувалось і тихо змінило дані».
+Тому кожен тест перевіряє одну з властивостей, порушення якої було б непомітним:
+мультимножина рядків та сама, текст рядка байт-у-байт той самий, а записи з однаковим
+`open_time_ms` зберігають взаємний порядок — бо TAIL-шлях бере last-wins, а RANGE
+first-wins, і переставляння дублікатів мовчки переписало б, який запис виграє.
+"""
+from __future__ import annotations
+
+import json
+import os
+from collections import Counter
+
+import pytest
+
+from tools.repair import sort_jsonl_by_open_ms as srt
+
+M1_MS = 60_000
+BASE_MS = 1_780_000_000_000 // M1_MS * M1_MS
+
+
+def _line(open_ms: int, marker: str = "a") -> str:
+    return json.dumps({
+        "symbol": "XAU/USD", "tf_s": 60, "open_time_ms": open_ms,
+        "close_time_ms": open_ms + M1_MS, "o": 1.0, "h": 2.0, "low": 0.5,
+        "c": 1.5, "v": 10.0, "complete": True, "src": marker,
+    })
+
+
+def _write(tmp_path, lines) -> str:
+    d = tmp_path / "XAU_USD" / "tf_60"
+    d.mkdir(parents=True, exist_ok=True)
+    path = str(d / "part-20260601.jsonl")
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        for ln in lines:
+            fh.write(ln + "\n")
+    return path
+
+
+def _seam(n_new: int = 50, n_old: int = 50):
+    """Порядок, який лишає сіяння: свіжа сторінка, за нею старіша."""
+    newer = [_line(BASE_MS + i * M1_MS) for i in range(n_old, n_old + n_new)]
+    older = [_line(BASE_MS + i * M1_MS) for i in range(0, n_old)]
+    return newer + older
+
+
+def test_seam_is_reordered_into_time_order(tmp_path):
+    path = _write(tmp_path, _seam())
+    ordered, bars, inversions = srt.plan_file(path)
+    assert bars == 100 and inversions == 1
+    keys = [srt.open_ms_of(ln) for ln in ordered]
+    assert keys == sorted(keys)
+
+
+def test_result_is_exactly_a_permutation(tmp_path):
+    """Жодного рядка не додано, не втрачено і не переписано."""
+    original = _seam()
+    path = _write(tmp_path, original)
+    ordered, _bars, _inv = srt.plan_file(path)
+    assert Counter(ordered) == Counter(original)
+
+
+def test_duplicate_open_ms_keeps_relative_order(tmp_path):
+    """Стабільність: і first-wins, і last-wins після сортування беруть той самий запис."""
+    dup_ms = BASE_MS + 10 * M1_MS
+    original = [
+        _line(BASE_MS + 40 * M1_MS),
+        _line(dup_ms, "перший"),
+        _line(BASE_MS + 5 * M1_MS),
+        _line(dup_ms, "другий"),
+        _line(dup_ms, "третій"),
+    ]
+    path = _write(tmp_path, original)
+    ordered, _bars, _inv = srt.plan_file(path)
+    dups = [json.loads(ln)["src"] for ln in ordered if srt.open_ms_of(ln) == dup_ms]
+    assert dups == ["перший", "другий", "третій"]
+
+
+def test_already_sorted_file_is_not_rewritten(tmp_path):
+    """23 тисячі файлів переважно впорядковані — їх не можна чіпати взагалі."""
+    path = _write(tmp_path, [_line(BASE_MS + i * M1_MS) for i in range(10)])
+    ordered, _bars, inversions = srt.plan_file(path)
+    assert ordered is None and inversions == 0
+
+
+def test_line_text_is_preserved_byte_for_byte(tmp_path):
+    """Ніякого re-serialize JSON: порядок ключів і формат чисел лишаються як були."""
+    odd = '{"open_time_ms": %d, "zzz": 1, "o": 1.50, "src": "history"}' % (BASE_MS + M1_MS)
+    original = [odd, _line(BASE_MS)]
+    path = _write(tmp_path, original)
+    ordered, _bars, _inv = srt.plan_file(path)
+    srt.rewrite_atomic(path, ordered)
+    assert srt.read_lines(path) == [_line(BASE_MS), odd]
+
+
+def test_rewrite_is_atomic_and_leaves_a_backup(tmp_path):
+    original = _seam()
+    path = _write(tmp_path, original)
+    ordered, _bars, _inv = srt.plan_file(path)
+    backup = srt.rewrite_atomic(path, ordered)
+    assert os.path.isfile(backup)
+    assert srt.read_lines(backup) == original, "бекап мусить бути ДОПАТЧЕВИМ вмістом"
+    assert not os.path.exists(path + ".tmp")
+    assert Counter(srt.read_lines(path)) == Counter(original)
+
+
+def test_unparsable_line_blocks_the_file(tmp_path):
+    """Контроль: файл, який ми не можемо повністю пояснити, не переписуємо."""
+    path = _write(tmp_path, [_line(BASE_MS + M1_MS), '{"немає": "ключа"}', _line(BASE_MS)])
+    before = srt.read_lines(path)
+    ordered, _bars, _inv = srt.plan_file(path)
+    assert ordered is None
+    assert srt.read_lines(path) == before
+
+
+def test_commit_without_writers_stopped_is_refused(tmp_path, monkeypatch):
+    """Перепис під живим writer'ом губить бари (os.replace відчіпляє відкритий FD)."""
+    monkeypatch.setattr("sys.argv", ["sort_jsonl_by_open_ms", "--commit", "--root", str(tmp_path)])
+    assert srt.main() == 2
+
+
+def test_dry_run_changes_nothing(tmp_path, monkeypatch):
+    original = _seam()
+    path = _write(tmp_path, original)
+    monkeypatch.setattr("sys.argv", ["sort_jsonl_by_open_ms", "--root", str(tmp_path)])
+    assert srt.main() == 0
+    assert srt.read_lines(path) == original
+
+
+def test_commit_fixes_only_unsorted_files(tmp_path, monkeypatch):
+    seam_path = _write(tmp_path, _seam())
+    clean_dir = tmp_path / "US30" / "tf_60"
+    clean_dir.mkdir(parents=True)
+    clean_path = str(clean_dir / "part-20260601.jsonl")
+    clean_lines = [_line(BASE_MS + i * M1_MS) for i in range(10)]
+    with open(clean_path, "w", encoding="utf-8", newline="\n") as fh:
+        for ln in clean_lines:
+            fh.write(ln + "\n")
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["sort_jsonl_by_open_ms", "--commit", "--writers-stopped", "--root", str(tmp_path)],
+    )
+    assert srt.main() == 0
+    keys = [srt.open_ms_of(ln) for ln in srt.read_lines(seam_path)]
+    assert keys == sorted(keys)
+    assert srt.read_lines(clean_path) == clean_lines
+    assert not [p for p in os.listdir(clean_dir) if ".bak." in p], "чистий файл не мусить мати бекапу"
+
+
+@pytest.mark.parametrize("n_old,n_new", [(1, 1), (1, 500), (500, 1)])
+def test_seam_shapes(tmp_path, n_old, n_new):
+    """Шов будь-якої форми лишається перестановкою."""
+    original = _seam(n_new=n_new, n_old=n_old)
+    path = _write(tmp_path, original)
+    ordered, _bars, _inv = srt.plan_file(path)
+    assert Counter(ordered) == Counter(original)
+    keys = [srt.open_ms_of(ln) for ln in ordered]
+    assert keys == sorted(keys)
