@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 import os
@@ -9,6 +10,18 @@ from typing import Any, Optional
 from core.model.bar_choice import choose_better_bar, is_complete, is_final_source
 
 logger = logging.getLogger("disk_layer")
+
+
+def _part_day_start_ms(path: str) -> Optional[int]:
+    """Початок UTC-доби з імені `part-YYYYMMDD.jsonl`; None для неканонічного імені (такий файл читаємо)."""
+    name = os.path.basename(path)
+    if len(name) != len("part-YYYYMMDD.jsonl") or not name[5:13].isdigit():
+        return None
+    try:
+        day = dt.datetime.strptime(name[5:13], "%Y%m%d").replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return None
+    return int(day.timestamp()) * 1000
 
 
 def _select_newest_keys(
@@ -41,6 +54,11 @@ def _select_newest_keys(
         return []
     by_key: dict[int, list[dict[str, Any]]] = {}
     for path in reversed(paths):
+        day_start_ms = _part_day_start_ms(path)
+        if to_open_ms is not None and day_start_ms is not None and day_start_ms > to_open_ms:
+            # Уся доба пізніша за `to`: жоден її бар не пройде фільтр, файл можна не відкривати.
+            # Без цього scrollback у далеке минуле читав усю новішу історію (~285 мс на запит).
+            continue
         reached_since = False
         try:
             with open(path, encoding="utf-8") as f:

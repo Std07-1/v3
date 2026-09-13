@@ -132,6 +132,34 @@ def test_reading_stops_before_older_part_files(tmp_path, monkeypatch):
     assert len(opened) == 2, opened
 
 
+def test_scrollback_does_not_open_days_after_to(tmp_path, monkeypatch):
+    """Доба, що починається після `to`, не може дати жодного ключа ≤ to — її файл не відкривається."""
+    layer = _write_corpus(tmp_path, [_bar(BASE + d * DAY + i * M1) for d in range(5) for i in range(100)])
+    opened = []
+    real_open = open
+
+    def spy(path, *args, **kwargs):
+        opened.append(str(path))
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(dl_mod, "open", spy, raising=False)
+    to = BASE + 1 * DAY + 50 * M1
+    bars, _geom = layer.read_window_with_geom(SYMBOL, 60, 80, to_open_ms=to, use_tail=False)
+    expected = sorted([BASE + i * M1 for i in range(100)] + [BASE + DAY + i * M1 for i in range(51)])[-80:]
+    assert _opens(bars) == expected
+    # Доба `to` дала 51 ключ (< 80), тож дочитано ще попередню; три пізніші доби не відкривались.
+    assert sorted(opened) == sorted(layer.list_parts(SYMBOL, 60)[:2]), opened
+
+
+def test_non_canonical_part_name_is_still_read(tmp_path):
+    """Контроль: файл з імʼям, з якого доби не взяти, не пропускається за датою."""
+    d = tmp_path / "XAU_USD" / "tf_60"
+    d.mkdir(parents=True)
+    (d / "part-latest.jsonl").write_text(json.dumps(_bar(BASE + 5 * M1)) + "\n", encoding="utf-8")
+    bars, _geom = DiskLayer(str(tmp_path)).read_window_with_geom(SYMBOL, 60, 10, to_open_ms=BASE + 10 * M1)
+    assert _opens(bars) == [BASE + 5 * M1]
+
+
 def test_unreadable_part_file_is_loud_and_skipped(tmp_path, caplog):
     layer = _write_corpus(tmp_path, [_bar(BASE + i * M1) for i in range(10)])
     (tmp_path / "XAU_USD" / "tf_60" / ("part-%s.jsonl" % _day_key(BASE + DAY))).mkdir()
