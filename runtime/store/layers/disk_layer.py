@@ -7,7 +7,7 @@ from collections import deque
 from collections.abc import Set as AbstractSet
 from typing import Any, Iterable, Optional
 
-from core.model.bars import FINAL_SOURCES
+from core.model.bar_choice import choose_better_bar, is_complete, is_final_source
 
 logger = logging.getLogger("disk_layer")
 
@@ -111,25 +111,6 @@ def _needs_dedup_by_open_ms(bars: list[dict[str, Any]]) -> bool:
     return False
 
 
-def _bar_is_complete(bar: dict[str, Any]) -> bool:
-    val = bar.get("complete")
-    if val is None:
-        return False
-    return bool(val) if isinstance(val, bool) else bool(val)
-
-
-def _bar_is_final_source(
-    bar: dict[str, Any], final_sources: Optional[AbstractSet[str]] = None
-) -> bool:
-    src = bar.get("src")
-    if not isinstance(src, str):
-        return False
-    if src == "":
-        src = "history"
-    sources = final_sources or FINAL_SOURCES
-    return src in sources
-
-
 def _bar_has_canonical_ohlc(bar: dict[str, Any]) -> bool:
     o = bar.get("o", bar.get("open"))
     h = bar.get("h", bar.get("high"))
@@ -155,61 +136,27 @@ def _bar_passes_filters(
     skip_preview: bool,
     final_sources: Optional[AbstractSet[str]],
 ) -> bool:
-    is_complete = _bar_is_complete(bar)
-    if skip_preview and not is_complete:
+    complete = is_complete(bar)
+    if skip_preview and not complete:
         return False
     if final_only:
-        if is_complete:
-            if not _bar_is_final_source(bar, final_sources):
+        if complete:
+            if not is_final_source(bar, final_sources):
                 return False
         else:
-            if not _bar_is_final_source(bar, final_sources):
+            if not is_final_source(bar, final_sources):
                 return False
             if not _bar_has_canonical_ohlc(bar):
                 return False
     return True
 
 
-def _bar_ts_priority(bar: dict[str, Any]) -> Optional[int]:
-    event_ts = bar.get("event_ts")
-    if isinstance(event_ts, int):
-        return event_ts
-    ssot_write_ts_ms = bar.get("ssot_write_ts_ms")
-    if isinstance(ssot_write_ts_ms, int):
-        return ssot_write_ts_ms
-    return None
-
-
-def _choose_better_bar(
-    existing: dict[str, Any], incoming: dict[str, Any]
-) -> dict[str, Any]:
-    existing_complete = _bar_is_complete(existing)
-    incoming_complete = _bar_is_complete(incoming)
-    if incoming_complete and not existing_complete:
-        return incoming
-    if existing_complete and not incoming_complete:
-        return existing
-    existing_final = _bar_is_final_source(existing)
-    incoming_final = _bar_is_final_source(incoming)
-    if incoming_final and not existing_final:
-        return incoming
-    if existing_final and not incoming_final:
-        return existing
-    existing_ts = _bar_ts_priority(existing)
-    incoming_ts = _bar_ts_priority(incoming)
-    if incoming_ts is not None and existing_ts is not None:
-        if incoming_ts > existing_ts:
-            return incoming
-        if incoming_ts < existing_ts:
-            return existing
-    elif incoming_ts is not None and existing_ts is None:
-        return incoming
-    elif existing_ts is not None and incoming_ts is None:
-        return existing
-    return incoming
-
-
 def _dedup_open_ms(bars: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Згортає дублікати open_time_ms єдиним вибирачем (ADR-0094).
+
+    `bars` мусять іти в порядку файла: крок нічиєї вибирача віддає перемогу пізнішому запису.
+    `_finalize_tail_with_geom` сортує стабільно, тож взаємний порядок дублікатів зберігається.
+    """
     deduped: dict[int, dict[str, Any]] = {}
     dropped = 0
     for bar in bars:
@@ -220,7 +167,7 @@ def _dedup_open_ms(bars: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], in
         if existing is None:
             deduped[open_ms] = bar
             continue
-        deduped[open_ms] = _choose_better_bar(existing, bar)
+        deduped[open_ms] = choose_better_bar(existing, bar)
         dropped += 1
     result = [deduped[k] for k in sorted(deduped.keys())]
     return result, dropped

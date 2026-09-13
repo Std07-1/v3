@@ -62,7 +62,12 @@ def test_all_consumers_see_same_object():
     from core.model.bars import FINAL_SOURCES as canonical
     from runtime.store.uds import FINAL_SOURCES as from_uds
     from runtime.store.ssot_jsonl import FINAL_SOURCES as from_ssot
-    from runtime.store.layers.disk_layer import FINAL_SOURCES as from_disk
+    # ADR-0094: disk_layer більше не читає FINAL_SOURCES сам — перевірку «final src» для нього (і для
+    # uds, і для ремонтного дедупу) робить єдиний вибирач core.model.bar_choice. Справжній споживач тут він.
+    from core.model.bar_choice import FINAL_SOURCES as from_bar_choice
+    import runtime.store.layers.disk_layer as disk_layer
+    import core.model.bar_choice as bar_choice
     assert canonical is from_uds, "uds повертає інший об'єкт"
     assert canonical is from_ssot, "ssot_jsonl повертає інший об'єкт"
-    assert canonical is from_disk, "disk_layer повертає інший об'єкт"
+    assert canonical is from_bar_choice, "bar_choice повертає інший об'єкт"
+    assert disk_layer.is_final_source is bar_choice.is_final_source, "disk_layer обходить єдиний вибирач"
