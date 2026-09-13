@@ -121,12 +121,20 @@ def main() -> int:
     ap.add_argument("--tf", default=None, help="TF у секундах через кому")
     ap.add_argument("--commit", action="store_true", help="Насправді переписати (інакше dry-run)")
     ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Явний dry-run (поведінка за замовчуванням; разом із --commit — помилка)",
+    )
+    ap.add_argument(
         "--writers-stopped",
         action="store_true",
         help="Підтверджую: smc-fxcm/smc-preview/smc-ticks зупинені (os.replace відчіпляє відкритий FD)",
     )
     args = ap.parse_args()
 
+    if args.commit and args.dry_run:
+        log.error("SORT_JSONL_REFUSED --commit і --dry-run разом — незрозуміло, чого від нас хочуть")
+        return 2
     if args.commit and not args.writers_stopped:
         log.error("SORT_JSONL_REFUSED --commit потребує --writers-stopped: перепис під живим writer'ом губить бари")
         return 2

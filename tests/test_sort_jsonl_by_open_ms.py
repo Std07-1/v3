@@ -3,8 +3,14 @@
 Найнебезпечніше тут не «не відсортувалось», а «відсортувалось і тихо змінило дані».
 Тому кожен тест перевіряє одну з властивостей, порушення якої було б непомітним:
 мультимножина рядків та сама, текст рядка байт-у-байт той самий, а записи з однаковим
-`open_time_ms` зберігають взаємний порядок — бо TAIL-шлях бере last-wins, а RANGE
-first-wins, і переставляння дублікатів мовчки переписало б, який запис виграє.
+`open_time_ms` зберігають взаємний порядок.
+
+Останнє — несуче. Обидва дедупи (`disk_layer._dedup_open_ms` і `uds._ensure_sorted_dedup`)
+стабільно сортують за ключем, а переможця обирає `_choose_better_bar`: complete → final
+src → більший ts, і лише при ПОВНІЙ нічиї — пізніший у вхідному порядку. Тобто порядок
+рядків вирішує саме тоді, коли записи нерозрізненні за якістю; перестановка дублікатів
+мовчки переписала б, який з них потрапить на графік. Near-dedup D1 (поріг tf_ms//12)
+залежить лише від ключів і до порядку рядків байдужий.
 """
 from __future__ import annotations
 
@@ -158,3 +164,25 @@ def test_seam_shapes(tmp_path, n_old, n_new):
     assert Counter(ordered) == Counter(original)
     keys = [srt.open_ms_of(ln) for ln in ordered]
     assert keys == sorted(keys)
+
+
+def test_explicit_dry_run_flag_works_and_changes_nothing(tmp_path, monkeypatch):
+    """Докстрінг документує --dry-run — отже команда з нього мусить запускатись."""
+    original = _seam()
+    path = _write(tmp_path, original)
+    monkeypatch.setattr("sys.argv", ["sort_jsonl_by_open_ms", "--dry-run", "--root", str(tmp_path)])
+    assert srt.main() == 0
+    assert srt.read_lines(path) == original
+
+
+def test_commit_together_with_dry_run_is_refused(tmp_path, monkeypatch):
+    """Контроль: суперечлива пара прапорців — відмова, а не мовчазний вибір одного з них."""
+    original = _seam()
+    path = _write(tmp_path, original)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["sort_jsonl_by_open_ms", "--commit", "--dry-run", "--writers-stopped", "--root", str(tmp_path)],
+    )
+    assert srt.main() == 2
+    assert srt.read_lines(path) == original
+
