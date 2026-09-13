@@ -3,40 +3,15 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections import deque
 from collections.abc import Set as AbstractSet
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 from core.model.bar_choice import choose_better_bar, is_complete, is_final_source
 
 logger = logging.getLogger("disk_layer")
 
 
-def _iter_lines_reverse(path: str) -> Iterable[bytes]:
-    try:
-        with open(path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            pos = f.tell()
-            buf = b""
-            chunk = 8192
-            while pos > 0:
-                step = min(chunk, pos)
-                pos -= step
-                f.seek(pos)
-                buf = f.read(step) + buf
-                while b"\n" in buf:
-                    idx = buf.rfind(b"\n")
-                    line = buf[idx + 1 :]
-                    buf = buf[:idx]
-                    yield line
-            if buf:
-                yield buf
-    except Exception:
-        logger.debug("DISK_ITER_REVERSE_FAIL path=%s", path, exc_info=True)
-        return
-
-
-def _read_jsonl_filtered(
+def _select_newest_keys(
     paths: list[str],
     since_open_ms: Optional[int],
     to_open_ms: Optional[int],
@@ -46,10 +21,29 @@ def _read_jsonl_filtered(
     skip_preview: bool,
     final_sources: Optional[AbstractSet[str]],
 ) -> list[dict[str, Any]]:
-    buf: deque[dict[str, Any]] = deque(maxlen=max(1, limit))
-    for p in paths:
+    """Вікно читання: `limit` найновіших РІЗНИХ open_time_ms у (since, to] — спільне для TAIL і RANGE.
+
+    До ADR-0094 P2 обидва читачі брали останні N РЯДКІВ (TAIL — з кінця файлів, RANGE — через
+    deque(maxlen)), а part-файл не зобовʼязаний бути відсортованим: `tools/fetch_tf_backfill` лишає шов
+    на кожному кроці ланцюжка сіяння. На такому файлі вікно мало дірку — заміряно 775 M1-барів
+    відставання — і сортування прочитаного її не лікувало: те, чого не прочитали, не відновити.
+
+    Тепер ключі відбираються за значенням. Part-файли обходяться від найновішого, кожен читається
+    ЦІЛКОМ, і обхід зупиняється, щойно назбирано `limit` ключів або зачеплено межу `since`: імʼя
+    `part-YYYYMMDD` — календарна доба open_time_ms без якоря (`ssot_jsonl`), тож кожен старіший файл
+    містить лише менші ключі (скан 1 440 469 барів: 0 перетинів сусідніх файлів). Зайвим читається
+    не більше одного файла.
+
+    Повертаються ВСІ записи обраних ключів — за зростанням ключа і в порядку файла всередині ключа,
+    щоб вибирач дублікатів (`core.model.bar_choice`) бачив цілу групу, а нічия дісталась пізнішому запису.
+    """
+    if limit <= 0:
+        return []
+    by_key: dict[int, list[dict[str, Any]]] = {}
+    for path in reversed(paths):
+        reached_since = False
         try:
-            with open(p, encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -57,18 +51,16 @@ def _read_jsonl_filtered(
                     try:
                         obj = json.loads(line)
                     except Exception:
-                        logger.debug("DISK_JSON_DECODE_FAIL path=%s", p)
+                        logger.debug("DISK_JSON_DECODE_FAIL path=%s", path)
                         continue
-
                     open_ms = obj.get("open_time_ms")
                     if not isinstance(open_ms, int):
                         continue
-
                     if since_open_ms is not None and open_ms <= since_open_ms:
+                        reached_since = True
                         continue
                     if to_open_ms is not None and open_ms > to_open_ms:
                         continue
-
                     if not _bar_passes_filters(
                         obj,
                         final_only=final_only,
@@ -76,15 +68,18 @@ def _read_jsonl_filtered(
                         final_sources=final_sources,
                     ):
                         continue
-
-                    buf.append(obj)
+                    by_key.setdefault(open_ms, []).append(obj)
         except FileNotFoundError:
-            logger.debug("DISK_FILE_GONE path=%s", p)
+            logger.debug("DISK_FILE_GONE path=%s", path)
             continue
-
-    out = list(buf)
-    out.sort(key=lambda x: x.get("open_time_ms", 0))
-    return out
+        except OSError:
+            # Нечитабельний SSOT-файл — не тиха дірка у вікні, а гучний сигнал (I5).
+            logger.warning("DISK_PART_READ_FAILED path=%s", path, exc_info=True)
+            continue
+        if len(by_key) >= limit or reached_since:
+            break
+    keys = sorted(by_key)[-limit:]
+    return [bar for key in keys for bar in by_key[key]]
 
 
 def _needs_sort_by_open_ms(bars: list[dict[str, Any]]) -> bool:
@@ -173,58 +168,6 @@ def _dedup_open_ms(bars: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], in
     return result, dropped
 
 
-def _read_jsonl_tail_filtered_with_geom(
-    paths: list[str],
-    since_open_ms: Optional[int],
-    to_open_ms: Optional[int],
-    limit: int,
-    *,
-    final_only: bool,
-    skip_preview: bool,
-    final_sources: Optional[AbstractSet[str]],
-) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
-    if limit <= 0:
-        return [], None
-    out: list[dict[str, Any]] = []
-    for p in reversed(paths):
-        for raw in _iter_lines_reverse(p):
-            if len(out) >= limit:
-                break
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                obj = json.loads(raw.decode("utf-8"))
-            except Exception:
-                logging.debug(
-                    "DISK_LAYER_TAIL_JSON_DECODE_FAILED path=%s raw=%r",
-                    p,
-                    raw,
-                    exc_info=True,
-                )
-                continue
-            open_ms = obj.get("open_time_ms")
-            if not isinstance(open_ms, int):
-                continue
-            if to_open_ms is not None and open_ms > to_open_ms:
-                continue
-            if since_open_ms is not None and open_ms <= since_open_ms:
-                out.reverse()
-                return _finalize_tail_with_geom(out)
-            if not _bar_passes_filters(
-                obj,
-                final_only=final_only,
-                skip_preview=skip_preview,
-                final_sources=final_sources,
-            ):
-                continue
-            out.append(obj)
-        if len(out) >= limit:
-            break
-    out.reverse()
-    return _finalize_tail_with_geom(out)
-
-
 def _finalize_tail_with_geom(
     out: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
@@ -236,28 +179,6 @@ def _finalize_tail_with_geom(
     deduped, dropped = _dedup_open_ms(out)
     geom = {"sorted": True, "dedup_dropped": dropped}
     return deduped, geom
-
-
-def _read_jsonl_tail_filtered(
-    paths: list[str],
-    since_open_ms: Optional[int],
-    to_open_ms: Optional[int],
-    limit: int,
-    *,
-    final_only: bool,
-    skip_preview: bool,
-    final_sources: Optional[AbstractSet[str]],
-) -> list[dict[str, Any]]:
-    out, _geom = _read_jsonl_tail_filtered_with_geom(
-        paths,
-        since_open_ms,
-        to_open_ms,
-        limit,
-        final_only=final_only,
-        skip_preview=skip_preview,
-        final_sources=final_sources,
-    )
-    return out
 
 
 def _scan_open_ms(path: str) -> Optional[tuple[int, int]]:
@@ -332,28 +253,18 @@ class DiskLayer:
         parts = self.list_parts(symbol, tf_s)
         if not parts:
             return [], None
-        if use_tail:
-            return _read_jsonl_tail_filtered_with_geom(
-                parts,
-                since_open_ms,
-                to_open_ms,
-                limit,
-                final_only=final_only,
-                skip_preview=skip_preview,
-                final_sources=final_sources,
-            )
-        return (
-            _read_jsonl_filtered(
-                parts,
-                since_open_ms,
-                to_open_ms,
-                limit,
-                final_only=final_only,
-                skip_preview=skip_preview,
-                final_sources=final_sources,
-            ),
-            None,
+        window = _select_newest_keys(
+            parts,
+            since_open_ms,
+            to_open_ms,
+            limit,
+            final_only=final_only,
+            skip_preview=skip_preview,
+            final_sources=final_sources,
         )
+        if use_tail:
+            return _finalize_tail_with_geom(window)
+        return window, None
 
     def last_open_ms(self, symbol: str, tf_s: int) -> Optional[int]:
         """Найбільший open_time_ms на диску — джерело watermark UDS.
