@@ -104,6 +104,9 @@ def rewrite_atomic(path: str, ordered: List[str]) -> str:
             fh.write(line + "\n")
         fh.flush()
         os.fsync(fh.fileno())
+    # Режим доступу — як у оригіналу: інструмент обіцяє лише переставити рядки, а не змінити права
+    # (на проді частина part-файлів має 666, а новий файл від smc з umask 002 отримав би 664).
+    shutil.copymode(path, tmp)
     try:
         os.link(path, backup)
     except OSError:

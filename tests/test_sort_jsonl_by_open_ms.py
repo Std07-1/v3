@@ -111,6 +111,16 @@ def test_rewrite_is_atomic_and_leaves_a_backup(tmp_path):
     assert Counter(srt.read_lines(path)) == Counter(original)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="права доступу POSIX")
+def test_rewrite_keeps_file_mode(tmp_path):
+    """Лише перестановка рядків: режим доступу оригіналу мусить зберегтись."""
+    path = _write(tmp_path, _seam())
+    os.chmod(path, 0o666)
+    ordered, _bars, _inv = srt.plan_file(path)
+    srt.rewrite_atomic(path, ordered)
+    assert os.stat(path).st_mode & 0o777 == 0o666
+
+
 def test_unparsable_line_blocks_the_file(tmp_path):
     """Контроль: файл, який ми не можемо повністю пояснити, не переписуємо."""
     path = _write(tmp_path, [_line(BASE_MS + M1_MS), '{"немає": "ключа"}', _line(BASE_MS)])
