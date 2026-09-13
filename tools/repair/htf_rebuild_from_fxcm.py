@@ -8,7 +8,7 @@
   1. Fetch барів з FXCM через FxcmHistoryProvider
   2. Валідація batch (monotonic, no-dup, complete, src)
   3. Append до JSONL через JsonlAppender (append-only)
-  4. DiskLayer reader dedup: last-appended bar wins (_choose_better_bar)
+  4. Reader dedup: core.model.bar_choice.choose_better_bar (ADR-0094; on a full tie the last-appended bar wins)
   5. Redis refresh через UDS.bootstrap_prime_from_disk
 
 Режими:
