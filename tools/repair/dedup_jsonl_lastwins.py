@@ -44,6 +44,7 @@ def dedup_file(path: Path, dry_run: bool = False) -> tuple[int, int, int]:
     lines_in = len(raw_lines)
 
     by_open: dict[int, dict] = {}
+    last_line_by_open: dict[int, dict] = {}
     order: list[int] = []
     parse_errors = 0
     for line in raw_lines:
@@ -61,6 +62,7 @@ def dedup_file(path: Path, dry_run: bool = False) -> tuple[int, int, int]:
             continue
         if ot not in by_open:
             order.append(ot)
+        last_line_by_open[ot] = obj
         existing = by_open.get(ot)
         # Рядки йдуть у порядку файла — нічия вибирача дістається пізнішому запису.
         by_open[ot] = obj if existing is None else choose_better_bar(existing, obj)
@@ -70,9 +72,19 @@ def dedup_file(path: Path, dry_run: bool = False) -> tuple[int, int, int]:
     lines_out = len(sorted_keys)
     dupes = lines_in - lines_out - parse_errors
 
+    # Скільки ключів виграв НЕ останній рядок. До ADR-0094 тут завжди було 0 (чистий last-wins);
+    # тепер цілий старий бар перемагає свіжий partial — зокрема після `rebuild_from_m1 --force`,
+    # і оператор мусить це бачити, а не думати, що перебудову застосовано.
+    kept_not_last = [ot for ot in sorted_keys if by_open[ot] is not last_line_by_open[ot]]
     print(
-        f"{path.name}: in={lines_in} out={lines_out} dupes={dupes} parse_err={parse_errors}"
+        f"{path.name}: in={lines_in} out={lines_out} dupes={dupes} parse_err={parse_errors} "
+        f"kept_not_last={len(kept_not_last)}"
     )
+    if kept_not_last:
+        print(
+            f"  DEDUP_KEPT_NOT_LAST file={path.name} keys={len(kept_not_last)} — переміг не останній "
+            f"рядок (complete / final / не-partial / ts, ADR-0094); open_ms={kept_not_last[:3]}"
+        )
 
     if dry_run:
         return (lines_in, lines_out, dupes)

@@ -496,7 +496,7 @@ def dedup_derived_in_ranges(
     data_root: str,
     symbol_ranges: Dict[str, Tuple[int, int]],
 ) -> int:
-    """Прибрати дублікати open_time_ms (last-wins) у derived part-файлах.
+    """Прибрати дублікати open_time_ms у derived part-файлах єдиним вибирачем (ADR-0094).
 
     Діапазон береться з ФАКТИЧНО перебудованого вікна на символ, а не з `--start`:
     без цього `--force` без `--start` мовчки не дедуплікував нічого (ADR-0054 §3.1 P0.2).
@@ -651,9 +651,11 @@ def main() -> None:
     finally:
         writer.close()
 
-    # Dedup-on-finish: коли --force активний (overwrite mode), append-only
-    # JSONL writer лишає stale records. Видаляємо дублікати по open_time_ms
-    # (last-wins). Захищає external readers без UDS dedup logic.
+    # Dedup-on-finish: коли --force активний, append-only JSONL writer лишає stale records.
+    # Переможця обирає core.model.bar_choice (ADR-0094), а НЕ last-wins: цілий старий бар
+    # перемагає щойно перебудований partial. Такі ключі dedup_file друкує як
+    # DEDUP_KEPT_NOT_LAST — перебудову там не застосовано, і старший TF, зібраний у цьому ж
+    # прогоні з перебудованого дочірнього бару, може дати cascade_mismatch у health.
     if args.force and not args.dry_run:
         logging.info("═══ DEDUP-ON-FINISH (force=True) ═══")
         skipped = [s for s in symbols if s not in symbol_ranges]

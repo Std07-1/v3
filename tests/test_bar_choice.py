@@ -14,6 +14,7 @@ import pytest
 
 from core.model.bar_choice import (
     choose_better_bar,
+    choose_better_near_duplicate,
     is_complete,
     is_final_source,
     is_partial,
@@ -242,3 +243,26 @@ def test_new_rule_differs_from_legacy_range_only_by_documented_steps():
                 and _legacy_final(existing, True) == _legacy_final(incoming, True))
         )
         assert explained, (a, b, new, old)
+
+
+# ── near-dedup D1: бари з РІЗНИМИ open_ms ────────────────────────────────────
+def test_near_duplicate_tie_goes_to_earlier_bar():
+    assert choose_better_near_duplicate(_bar(marker="early"), _bar(marker="late"))["marker"] == "early"
+
+
+def test_near_duplicate_respects_complete_and_final():
+    assert choose_better_near_duplicate(_bar(complete=False, marker="e"), _bar(marker="l"))["marker"] == "l"
+    assert choose_better_near_duplicate(_bar(src="preview", marker="e"), _bar(marker="l"))["marker"] == "l"
+    assert choose_better_near_duplicate(_bar(marker="e"), _bar(src="preview", marker="l"))["marker"] == "e"
+
+
+def test_near_duplicate_ignores_partial_and_timestamp():
+    """Обидва поля доживають не до всіх шляхів читання (partial зрізає Redis, ts = close у Redis/RAM)."""
+    assert choose_better_near_duplicate(_bar(partial=True, marker="e"), _bar(partial=False, marker="l"))["marker"] == "e"
+    assert choose_better_near_duplicate(_bar(ts=1, marker="e"), _bar(ts=2, marker="l"))["marker"] == "e"
+
+
+def test_boundary_partial_alone_is_not_partial():
+    """38 018 барів на диску мають boundary_partial без partial — це звичайні бари на межі сесії."""
+    assert is_partial({"extensions": {"boundary_partial": True}}) is False
+    assert is_partial({"extensions": {"boundary_partial": True, "partial": True}}) is True

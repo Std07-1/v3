@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from core.model.bar_choice import choose_better_bar
+from core.model.bar_choice import choose_better_bar, choose_better_near_duplicate
 from core.model.bars import CandleBar, FINAL_SOURCES
 from core.config_loader import (
     tf_allowlist_from_cfg,
@@ -2031,11 +2031,10 @@ def _ensure_sorted_dedup(
             prev_ms = _get_open_ms(prev) or 0
             cur_ms = _get_open_ms(bar) or 0
             if 0 < (cur_ms - prev_ms) < near_threshold:
-                # Тут члени — РІЗНІ open_ms (DST-джитер якоря), а не записи одного ключа, тож
-                # «пізніший запис» не означає нічого. Аргументи переставлено навмисно: нічия, як і
-                # до ADR-0094, лишається за раннім баром (tests/test_near_dedup_d1.py), а
-                # complete / final / partial / ts діють симетрично. Сезонний вибір якоря — ADR-0092.
-                merged[-1] = choose_better_bar(bar, prev)
+                # Члени — РІЗНІ open_ms (DST-джитер якоря), а не записи одного ключа: окреме вужче
+                # правило (complete, src; нічия -> ранній), бо partial і ts доживають не до всіх
+                # шляхів читання. Сезонний вибір якоря — ADR-0092.
+                merged[-1] = choose_better_near_duplicate(prev, bar)
                 dropped += 1
             else:
                 merged.append(bar)

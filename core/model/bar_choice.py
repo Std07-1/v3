@@ -46,6 +46,12 @@ def is_final_source(
 
 
 def is_partial(bar: Mapping[str, Any]) -> bool:
+    """Лише `extensions.partial` — НЕ `boundary_partial`.
+
+    На диску 38 018 барів мають `boundary_partial` без `partial`: це звичайні бари на межі сесії,
+    де бракує безкоштовних граничних хвилин, а не неповні дані. Правило C виміряне саме на
+    `partial`; розширення визначення змусило б їх програвати дублікатам без жодного виміру.
+    """
     extensions = bar.get("extensions")
     return isinstance(extensions, Mapping) and bool(extensions.get("partial"))
 
@@ -83,3 +89,27 @@ def choose_better_bar(
             return incoming
         return existing
     return incoming
+
+
+# Near-dedup бачить бари з РІЗНИМИ open_ms, і лише ці поля доживають до кожного шляху читання.
+_NEAR_DUPLICATE_PREFERENCE = (is_complete, is_final_source)
+
+
+def choose_better_near_duplicate(
+    earlier: Mapping[str, Any], later: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """Переможець із двох D1-барів з РІЗНИМИ open_ms ближче за поріг near-dedup (DST-джитер якоря).
+
+    Це не записи одного ключа, тож правило свідомо вужче за `choose_better_bar` — лише complete і src,
+    а нічия дістається РАННЬОМУ бару, як і до ADR-0094. Причина — узгодженість шляхів читання:
+      * `partial` зрізається на межі Redis (`_redis_payload_bar_to_canonical` не несе `extensions`),
+        тож у Redis його немає, а на диску й у RAM — є;
+      * `ts` у Redis- і RAM-барах дорівнює `close_time_ms` (`event_ts = close`), тобто кодує open і
+        завжди віддавав би перемогу пізнішому бару, тоді як на диску `ts` немає.
+    Будь-який із цих кроків знову малював би різну D1-свічку на cold-load і scrollback.
+    """
+    for prefers in _NEAR_DUPLICATE_PREFERENCE:
+        earlier_ok, later_ok = prefers(earlier), prefers(later)
+        if earlier_ok != later_ok:
+            return later if later_ok else earlier
+    return earlier

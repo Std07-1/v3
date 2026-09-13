@@ -92,21 +92,54 @@ def test_repair_dedup_dry_run_changes_nothing(tmp_path, capsys):
     assert path.read_text(encoding="utf-8") == before
 
 
-def test_near_dedup_keeps_earlier_bar_on_tie_but_prefers_whole():
-    """Near-dedup D1: нічия як і раніше за раннім баром; partial програє повному в обидва боки."""
-    ot_21, ot_22 = 1_729_112_400_000, 1_729_116_000_000
-    tie, _ = _ensure_sorted_dedup([_bar("21", open_ms=ot_21, src="history"),
-                                   _bar("22", open_ms=ot_22)], tf_ms=86_400_000)
-    assert [b["marker"] for b in tie] == ["21"]
-    early_partial, _ = _ensure_sorted_dedup([_bar("21p", open_ms=ot_21, partial=True),
-                                             _bar("22w", open_ms=ot_22, partial=False)], tf_ms=86_400_000)
-    assert [b["marker"] for b in early_partial] == ["22w"]
-    late_partial, _ = _ensure_sorted_dedup([_bar("21w", open_ms=ot_21, partial=False),
-                                            _bar("22p", open_ms=ot_22, partial=True)], tf_ms=86_400_000)
-    assert [b["marker"] for b in late_partial] == ["21w"]
+D1_MS = 86_400_000
+OT_21, OT_22 = 1_729_112_400_000, 1_729_116_000_000  # 16.10 21:00 і 22:00 UTC — DST-джитер якоря
 
 
-def test_only_one_bar_chooser_exists_in_the_repo():
+def _d1(open_ms, *, fmt, partial=False, complete=True, src="history"):
+    """Той самий D1-бар у формі, в якій його бачить кожен шлях читання.
+
+    disk  — рядок part-файла: extensions є, ts немає;
+    ram   — LWC-елемент RAM-вікна: extensions зберігаються, event_ts = close (uds.py ~1848);
+    redis — канонічний бар з Redis-payload: extensions зрізано, event_ts = close (uds.py ~1940).
+    """
+    bar = {"open_time_ms": open_ms, "close_time_ms": open_ms + D1_MS, "o": 1.0, "h": 2.0, "low": 0.5,
+           "c": 1.5, "v": 10.0, "complete": complete, "src": src}
+    if fmt in ("disk", "ram") and partial:
+        bar["extensions"] = {"partial": True}
+    if fmt in ("ram", "redis") and complete:
+        bar["event_ts"] = open_ms + D1_MS
+    return bar
+
+
+def _near_winner(fmt, earlier_kw, later_kw):
+    result, _geom = _ensure_sorted_dedup(
+        [_d1(OT_21, fmt=fmt, **earlier_kw), _d1(OT_22, fmt=fmt, **later_kw)], tf_ms=D1_MS
+    )
+    assert len(result) == 1, "near-пару мусить бути злито"
+    return result[0]["open_time_ms"]
+
+
+NEAR_CASES = {
+    "повна нічия": ({}, {}, OT_21),
+    "ранній partial на диску": ({"partial": True}, {}, OT_21),
+    "пізній partial на диску": ({}, {"partial": True}, OT_21),
+    "пізній не final": ({}, {"src": "preview"}, OT_21),
+    "ранній не final": ({"src": "preview"}, {}, OT_22),
+}
+
+
+@pytest.mark.parametrize("case", sorted(NEAR_CASES))
+def test_near_dedup_picks_the_same_d1_bar_on_every_read_path(case):
+    """Регресія, яку спіймало ревʼю P1: ts=close у Redis/RAM віддавав перемогу пізнішому бару,
+    а на диску без ts перемагав ранній — cold-load і scrollback знову малювали різну D1-свічку."""
+    earlier_kw, later_kw, expected = NEAR_CASES[case]
+    winners = {fmt: _near_winner(fmt, earlier_kw, later_kw) for fmt in ("disk", "ram", "redis")}
+    assert set(winners.values()) == {expected}, winners
+
+
+@pytest.mark.parametrize("name", ["choose_better_bar", "choose_better_near_duplicate"])
+def test_only_one_bar_chooser_exists_in_the_repo(name):
     """Гейт: друга однойменна функція вибору і стала причиною ADR-0094 — вона не мусить повернутись."""
     definitions = []
     for top in ("core", "runtime", "tools", "app"):
@@ -116,6 +149,19 @@ def test_only_one_bar_chooser_exists_in_the_repo():
             except (SyntaxError, UnicodeDecodeError):
                 continue
             for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.lstrip("_") == "choose_better_bar":
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.lstrip("_") == name:
                     definitions.append("%s:%d" % (path.relative_to(REPO).as_posix(), node.lineno))
     assert len(definitions) == 1 and definitions[0].startswith("core/model/bar_choice.py:"), definitions
+
+
+def test_repair_dedup_says_loudly_when_the_last_line_lost(tmp_path, capsys):
+    """Після ADR-0094 перебудований partial може програти старому цілому — оператор мусить це бачити."""
+    dedup_file(_write(tmp_path, GROUPS["partial_last"]))
+    assert "DEDUP_KEPT_NOT_LAST" in capsys.readouterr().out
+
+
+def test_repair_dedup_stays_quiet_when_the_last_line_wins(tmp_path, capsys):
+    """Контроль: звичайна нічия — переміг останній рядок, тривоги немає."""
+    dedup_file(_write(tmp_path, GROUPS["full_tie"]))
+    out = capsys.readouterr().out
+    assert "kept_not_last=0" in out and "DEDUP_KEPT_NOT_LAST" not in out
