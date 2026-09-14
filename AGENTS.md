@@ -490,8 +490,8 @@ REDIS_PORT=6379
 # Перезбірка derived барів з M1
 python -m tools.rebuild_from_m1 --symbol XAU/USD --tf 300
 
-# Deduplication M1/M3
-python -m tools.dedup_rebuild_m1m3 --symbol XAU/USD
+# Дедуп part-файлів тим самим вибирачем, що й читачі (ADR-0094); спершу --dry-run, запис лише при зупинених writer'ах
+python -m tools.repair.dedup_jsonl_lastwins --glob "data_v3/XAU_USD/tf_60/part-*.jsonl" --dry-run
 
 # Purge broken bars
 python -m tools.purge_broken_bars --symbol XAU/USD --tf 14400

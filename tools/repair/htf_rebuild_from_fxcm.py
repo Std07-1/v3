@@ -43,8 +43,10 @@ from typing import Any, Dict, List, Set, cast
 
 from env_profile import load_env_secrets
 from core.config_loader import pick_config_path, load_system_config, env_str
+from core.model.bar_choice import choose_better_bar
 from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
 from runtime.store.ssot_jsonl import JsonlAppender
+from tools.repair.jsonl_rewrite import open_ms_of
 
 LOG = logging.getLogger("htf_rebuild")
 
@@ -117,21 +119,23 @@ def _read_all_bars_raw(tf_dir: str) -> List[Dict[str, Any]]:
     """Зчитує ВСІ рядки з усіх part-YYYYMMDD.jsonl у каталозі.
 
     Повертає список dict (raw JSON), відсортований по open_time_ms.
-    Пропускає порожні/некоректні рядки.
+    Пропускає порожні рядки; рядок без цілого open_time_ms — ValueError (HTF_REWRITE_UNPARSABLE).
     """
     bars: List[Dict[str, Any]] = []
     pattern = os.path.join(tf_dir, "part-*.jsonl")
     for path in sorted(glob.glob(pattern)):
         with open(path, "r", encoding="utf-8") as f:
-            for line in f:
+            for line_no, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
                     continue
-                try:
-                    bar = json.loads(line)
-                    bars.append(bar)
-                except Exception:
-                    continue
+                if open_ms_of(line) is None:
+                    # Перепис TF пише файли лише з розібраних барів: пропущений тут рядок зник би з SSOT.
+                    raise ValueError(
+                        "HTF_REWRITE_UNPARSABLE path=%s line=%d — рядок без цілого open_time_ms; "
+                        "перепис TF скасовано" % (path, line_no)
+                    )
+                bars.append(json.loads(line))
     bars.sort(key=lambda b: b.get("open_time_ms", 0))
     return bars
 
@@ -215,18 +219,17 @@ def rewrite_range(
 
     merged = kept + fxcm_dicts
 
-    # 4. Сортування + dedup
+    # 4. Сортування + dedup тим самим вибирачем, що й читачі (ADR-0094). Сорт стабільний: записи одного
+    # ключа лишаються в порядку диска, FXCM-бари — після них. Раніше тут лишався ПЕРШИЙ запис, тож перепис
+    # TF міг закріпити на диску partial-бар, який читач відкидав.
     merged.sort(key=lambda b: b.get("open_time_ms", 0))
-    deduped: List[Dict[str, Any]] = []
-    seen_opens: Set[int] = set()
-    dup_count = 0
+    winners: Dict[int, Dict[str, Any]] = {}
     for b in merged:
         ot = b.get("open_time_ms", 0)
-        if ot in seen_opens:
-            dup_count += 1
-            continue
-        seen_opens.add(ot)
-        deduped.append(b)
+        current = winners.get(ot)
+        winners[ot] = b if current is None else choose_better_bar(current, b)
+    deduped = list(winners.values())
+    dup_count = len(merged) - len(deduped)
 
     after_count = len(deduped)
 

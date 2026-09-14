@@ -30,6 +30,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from core.config_loader import pick_config_path, load_system_config
+from core.model.bar_choice import choose_better_bar
 from core.model.bars import CandleBar
 from env_profile import load_env_secrets
 from runtime.ingest.derive_engine import DeriveEngine
@@ -88,20 +89,18 @@ def _read_m1_bars_from_disk(
             log.debug("REPLAY_FILE_GONE path=%s", path)
             continue
 
-    # Сортування по open_time_ms (обов'язково для UDS watermark monotonicity)
+    # Сортування по open_time_ms (обов'язково для UDS watermark monotonicity). Сорт стабільний:
+    # записи одного ключа лишаються в порядку диска — нічия вибирача дістається пізнішому.
     bars.sort(key=lambda x: x.get("open_time_ms", 0))
 
-    # Дедуплікація по open_time_ms (last wins)
-    seen: Dict[int, int] = {}
-    unique: List[Dict[str, Any]] = []
+    # Дедуплікація тим самим вибирачем, що й читачі UDS (ADR-0094): replay мусить відтворювати
+    # ту свічку, яку показує графік, а не останній рядок (той може бути partial).
+    winners: Dict[int, Dict[str, Any]] = {}
     for bar in bars:
         oms = bar.get("open_time_ms", 0)
-        if oms in seen:
-            # Заміна дублікату (останній wins — як у production)
-            unique[seen[oms]] = bar
-        else:
-            seen[oms] = len(unique)
-            unique.append(bar)
+        current = winners.get(oms)
+        winners[oms] = bar if current is None else choose_better_bar(current, bar)
+    unique = list(winners.values())
 
     log.info(
         "REPLAY_LOADED symbol=%s files=%d bars=%d (deduped from %d)",

@@ -67,37 +67,6 @@ def validate_batch(bars: list, tf_s: int) -> List[str]:
     return errors
 
 
-def merge_dedup_last_wins(
-    existing: List[Dict[str, Any]],
-    incoming: List[Dict[str, Any]],
-    from_open_ms: int,
-    to_open_ms: int,
-) -> List[Dict[str, Any]]:
-    """Замінити бари в [from_open_ms..to_open_ms] на incoming. Last wins dedup.
-
-    Повертає merged+sorted+deduped list.
-    """
-    kept = [
-        b
-        for b in existing
-        if not (from_open_ms <= b.get("open_time_ms", 0) <= to_open_ms)
-    ]
-    merged = kept + list(incoming)
-    merged.sort(key=lambda b: b.get("open_time_ms", 0))
-
-    deduped: List[Dict[str, Any]] = []
-    seen: Dict[int, int] = {}
-    for b in merged:
-        ot = b.get("open_time_ms", 0)
-        if ot in seen:
-            # last wins: замінюємо попередній бар
-            deduped[seen[ot]] = b
-        else:
-            seen[ot] = len(deduped)
-            deduped.append(b)
-    return deduped
-
-
 def validate_monotonic(bars: List[Dict[str, Any]]) -> bool:
     """Перевірка: open_time_ms строго зростає."""
     prev = -1

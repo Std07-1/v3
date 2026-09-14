@@ -1,10 +1,12 @@
 """Ремонтний дедуп part-файлів не має права змінювати те, чого не мусить.
 
-Навіщо цей файл. Перед SSOT-дедупом 97 файлів на проді (ADR-0094 §7 п.4–5) у двох ремонтних
-інструментах знайшлося три тихі дефекти: `dedup_jsonl_lastwins` мовчки викидав нерозбірні рядки й
-пересеріалізовував JSON переможців (змінював байти кожного рядка файла), а `dedup_derived_jsonl`
-обирав переможця власним рангом джерела, не бачачи partial, — тобто міг лишити на диску не той бар,
-що показують читачі. Кожен тест тут падає на коді до 2026-09-14.
+Навіщо цей файл. Перед SSOT-дедупом 97 файлів на проді (ADR-0094 §7 п.4–5) ремонтні шляхи виявились
+тихо небезпечними: `dedup_jsonl_lastwins` мовчки викидав нерозбірні рядки й пересеріалізовував JSON
+переможців; `dedup_derived_jsonl` обирав переможця власним рангом джерела, не бачачи partial;
+`htf_rebuild_from_fxcm.rewrite_range` при перепису всього TF лишав ПЕРШИЙ запис дубліката і викидав
+нерозбірні рядки з усієї історії; replay брав останній рядок. Кожен міг лишити на диску (або відтворити)
+не той бар, що показують читачі. Тести поведінкові (переможець ремонту == переможець читача) і, крім
+контролів, падають на коді до 2026-09-14.
 """
 from __future__ import annotations
 
@@ -14,9 +16,11 @@ from pathlib import Path
 
 import pytest
 
+from runtime.ingest.replay import _read_m1_bars_from_disk
 from runtime.store.uds import _ensure_sorted_dedup
 from tools import dedup_derived_jsonl
 from tools.repair import dedup_jsonl_lastwins as dedup
+from tools.repair.htf_rebuild_from_fxcm import _read_all_bars_raw, rewrite_range
 from tools.repair.jsonl_rewrite import read_lines
 
 OPEN_MS = 1_774_974_960_000
@@ -148,6 +152,41 @@ def test_derived_dedup_keeps_what_readers_show(tmp_path, capsys, name):
     assert dedup_derived_jsonl.dedup_symbol(str(tmp_path), "XAU/USD", dry_run=False) == 1
     kept = [json.loads(line)["marker"] for line in read_lines(str(path))]
     assert kept == [expected] == [_reader_winner(bars)]
+
+
+def test_htf_rewrite_range_keeps_what_readers_show_outside_the_range(tmp_path):
+    """Перепис TF переписує ВСЮ історію; дублікат поза діапазоном раніше розвʼязувався першим записом."""
+    h4_ms = 14_400_000
+    base = 1_774_972_800_000 // h4_ms * h4_ms
+    tf_dir = tmp_path / "XAU_USD" / "tf_14400"
+    stale_partial = dict(_bar("partial", open_ms=base, partial=True, src="history"), tf_s=14400)
+    whole = dict(_bar("whole", open_ms=base, partial=False, src="history"), tf_s=14400)
+    _write(tf_dir, [json.dumps(stale_partial), json.dumps(whole)])
+    fxcm = [dict(_bar("fxcm", open_ms=base + h4_ms, src="history"), tf_s=14400)]
+    result = rewrite_range(str(tmp_path), "XAU/USD", 14400, fxcm, base + h4_ms, base + h4_ms, dry_run=False)
+    assert result["status"] == "committed" and result["dup_removed"] == 1
+    kept = {b["open_time_ms"]: b["marker"] for b in _read_all_bars_raw(str(tf_dir))}
+    assert kept == {base: "whole", base + h4_ms: "fxcm"}
+    assert kept[base] == _reader_winner([stale_partial, whole])
+
+
+def test_htf_rewrite_range_refuses_a_tf_with_an_unparsable_line(tmp_path):
+    """Перепис TF пише файли лише з розібраних барів — нерозбірний рядок раніше зникав з усієї історії."""
+    tf_dir = tmp_path / "XAU_USD" / "tf_14400"
+    path = _write(tf_dir, [json.dumps(_bar("a")), '{"open_time_ms": 17749', json.dumps(_bar("b", open_ms=OPEN_MS + 1))])
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="HTF_REWRITE_UNPARSABLE"):
+        rewrite_range(str(tmp_path), "XAU/USD", 14400, [], OPEN_MS, OPEN_MS, dry_run=False)
+    assert path.read_bytes() == before
+
+
+def test_replay_replays_the_candle_the_chart_shows(tmp_path):
+    """Replay відтворює свічку графіка, а не останній рядок (той може бути partial)."""
+    whole = dict(_bar("whole", partial=False, src="history"), tf_s=60)
+    partial = dict(_bar("partial", partial=True, src="history"), tf_s=60)
+    _write(tmp_path / "XAU_USD" / "tf_60", [json.dumps(whole), json.dumps(partial)])
+    replayed = _read_m1_bars_from_disk(str(tmp_path), "XAU/USD")
+    assert [b["marker"] for b in replayed] == ["whole"] == [_reader_winner([whole, partial])]
 
 
 def test_derived_dedup_dry_run_writes_nothing(tmp_path, capsys):

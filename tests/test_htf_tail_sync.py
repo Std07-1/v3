@@ -1,8 +1,8 @@
 """tests/test_htf_tail_sync.py
 
 Тести для tools/repair/htf_tail_sync_from_fxcm.py.
-Фокус: validate_batch, merge_dedup_last_wins, validate_monotonic,
-       bar_summary, sync_one (dry-run), report content.
+Фокус: validate_batch, validate_monotonic, bar_summary, sync_one (dry-run), report content.
+Злиття діапазону з дедупом живе в htf_rebuild_from_fxcm.rewrite_range (tests/test_htf_rebuild.py).
 """
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ import pytest
 from core.model.bars import CandleBar
 from tools.repair.htf_tail_sync_from_fxcm import (
     validate_batch,
-    merge_dedup_last_wins,
     validate_monotonic,
     bar_summary,
     _write_json_report,
@@ -77,55 +76,6 @@ class TestValidateBatch:
         bars = [_make_bar(1000, src="derived")]
         errs = validate_batch(bars, 14400)
         assert any("src=" in e for e in errs)
-
-
-class TestMergeDedup:
-    """merge_dedup_last_wins: existing + incoming → merged sorted deduped."""
-
-    def test_no_overlap(self):
-        existing = [
-            {"open_time_ms": 1000, "c": 1.1},
-            {"open_time_ms": 2000, "c": 1.2},
-        ]
-        incoming = [
-            {"open_time_ms": 3000, "c": 1.3},
-        ]
-        result = merge_dedup_last_wins(existing, incoming, 3000, 3000)
-        assert len(result) == 3
-        assert result[0]["open_time_ms"] == 1000
-        assert result[2]["open_time_ms"] == 3000
-
-    def test_overlap_last_wins(self):
-        existing = [
-            {"open_time_ms": 1000, "c": 1.1},
-            {"open_time_ms": 2000, "c": 1.2},
-        ]
-        incoming = [
-            {"open_time_ms": 2000, "c": 9.9},
-        ]
-        result = merge_dedup_last_wins(existing, incoming, 2000, 2000)
-        assert len(result) == 2
-        # incoming wins for dup key
-        bar_2000 = [b for b in result if b["open_time_ms"] == 2000][0]
-        assert bar_2000["c"] == 9.9
-
-    def test_range_replace(self):
-        existing = [
-            {"open_time_ms": 1000, "c": 1.0},
-            {"open_time_ms": 2000, "c": 2.0},
-            {"open_time_ms": 3000, "c": 3.0},
-            {"open_time_ms": 4000, "c": 4.0},
-        ]
-        incoming = [
-            {"open_time_ms": 2000, "c": 22.0},
-            {"open_time_ms": 3000, "c": 33.0},
-        ]
-        result = merge_dedup_last_wins(existing, incoming, 2000, 3000)
-        assert len(result) == 4
-        assert result[1]["c"] == 22.0
-        assert result[2]["c"] == 33.0
-        assert result[0]["c"] == 1.0
-        assert result[3]["c"] == 4.0
 
 
 class TestValidateMonotonic:
