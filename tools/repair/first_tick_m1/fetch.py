@@ -1,9 +1,11 @@
 """Фаза fetch: перезабір M1 з FXCM FIRST_TICK у staging поза data_v3 під рейками (ADR-0096 §3.3 B). Python 3.7.
 
-Батько не логіниться в FXCM; кожна доба — окремий дочірній процес (`fetch_call`) зі свіжим cwd, дедлайном
-кожного кроку всередині дитини і жорстким таймаутом батька. Перед кожним викликом — ліміт викликів, ліміт відмов
-поспіль, пауза між логінами і рейка закритого ринку (`fetch_rails`). Після кожного виклику — маніфест прогону
-`_runs/<run_id>.json`. SIGTERM/SIGHUP/Ctrl+C посеред виклику вбивають дитину і фіналізують маніфест.
+Батько не логіниться в FXCM. Одна дитина (`fetch_call`) = одна сесія FXCM на пакет до --days-per-session діб
+(свіжий cwd, дедлайн кожного get_history всередині дитини, таймаут батька на всю сесію). Перед кожною сесією —
+ліміт викликів get_history, ліміт відмов поспіль, пауза між логінами і рейка закритого ринку на всю сесію
+(`fetch_rails`). Дитину вбили посеред доби — доба невдала, наступна сесія починає з наступної доби; доби, яких дитина
+не почала, лишаються в черзі. Після кожної сесії — маніфест прогону `_runs/<run_id>.json`. SIGTERM/SIGHUP/Ctrl+C
+посеред сесії вбивають дитину і фіналізують маніфест.
 rc: 0 усе закомічено або законно пропущено; 1 є невдалі доби; 2 відмова до виклику; 3 зупинка рейкою;
 128+signum зупинено сигналом.
 """
@@ -16,12 +18,12 @@ import datetime as dt
 import logging
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.config_loader import env_str, load_system_config, pick_config_path
 from env_profile import load_env_secrets
 from tools.repair.first_tick_m1 import common as c
-from tools.repair.first_tick_m1.fetch_call import execute_call, remove_inflight
+from tools.repair.first_tick_m1.fetch_call import execute_session, remove_path
 from tools.repair.first_tick_m1.fetch_child import CREDENTIAL_ENV_KEYS
 from tools.repair.first_tick_m1.fetch_rails import (
     FetchContext, FetchDeps, FetchOptions, FetchRefused, check_rails, market_open_reason,
@@ -57,7 +59,7 @@ def _locked_run(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext) -> int:
     calls: List[Dict[str, Any]] = run["calls"]
     with c.StopSignals("FT_FETCH") as signals:
         try:
-            stop = _run_calls(opts, deps, ctx, run, run_id, queue)
+            stop = _run_sessions(opts, deps, ctx, run, run_id, queue)
             signals.disarm()
         except BaseException as exc:
             # Сигнал, Ctrl+C чи відмова самого батька посеред прогону: дитину вже вбив run_child, маніфест прогону
@@ -66,7 +68,7 @@ def _locked_run(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext) -> int:
             stopped_by_signal = isinstance(exc, c.StopSignal)
             run.update(stop_reason=c.log_event(
                 logging.ERROR, "FT_FETCH_STOPPED_BY_SIGNAL" if stopped_by_signal else "FT_FETCH_CRASHED",
-                day=(run["in_flight"] or {}).get("day"), err="%s: %s" % (type(exc).__name__, exc)),
+                in_flight=_in_flight_text(run), err="%s: %s" % (type(exc).__name__, exc)),
                 finished_at_utc=c.utc_iso(deps.now_ms()), rc=exc.exit_code if stopped_by_signal else None)
             c.write_json_atomic(_run_path(ctx, run_id), run)
             if not stopped_by_signal:
@@ -81,44 +83,67 @@ def _locked_run(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext) -> int:
     return rc
 
 
-def _run_calls(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, run: Dict[str, Any], run_id: str,
-               queue: List[dt.date]) -> Optional[str]:
-    """Виклики по черзі під рейками; маніфест — після кожного; повертає причину зупинки або None."""
-    calls: List[Dict[str, Any]] = run["calls"]
-    stop, failures_in_row = market_open_reason(ctx, opts, deps.now_ms()), 0
-    for index, day in enumerate(queue):
-        stop = stop or _stop_before_call(opts, deps, ctx, calls, failures_in_row, len(queue) - index, day)
+def _run_sessions(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, run: Dict[str, Any], run_id: str,
+                  queue: List[dt.date]) -> Optional[str]:
+    """Сесії по черзі під рейками; маніфест — після кожної; повертає причину зупинки або None.
+
+    Кожна сесія або дає ≥1 запис доби (обмежено --max-calls), або збільшує лічильник відмов поспіль (обмежено
+    --max-consecutive-failures) — цикл скінченний, навіть коли логін відмовляє щоразу.
+    """
+    pending = list(queue)
+    stop, failures_in_row = market_open_reason(ctx, opts, deps.now_ms(), _batch_size(opts, run, pending)), 0
+    while pending and not stop:
+        batch_size, stop = _stop_before_session(opts, deps, ctx, run, failures_in_row, pending)
         if stop:
             break
-        run["in_flight"] = {"day": c.day_key(day)}
-        record = execute_call(ctx, opts, deps, run_id, len(calls) + 1, day)
+        batch, pending = pending[:batch_size], pending[batch_size:]
+        seq = len(run["sessions"]) + 1
+        run["in_flight"] = {"session": seq, "days": [c.day_key(day) for day in batch]}
+        outcome = execute_session(ctx, opts, deps, run_id, seq, len(run["calls"]) + 1, batch)
         run["in_flight"] = None
-        calls.append(dataclasses.asdict(record))
-        failures_in_row = 0 if record.status == "ok" else failures_in_row + 1
-        if record.status == "unkillable":
-            stop = c.log_event(logging.ERROR, "FT_FETCH_STOPPED_UNKILLABLE_CHILD", day=record.day)
+        run["sessions"].append(dataclasses.asdict(outcome.session))
+        run["calls"].extend(dataclasses.asdict(record) for record in outcome.calls)
+        pending = list(outcome.unattempted) + pending
+        for record in outcome.calls:
+            failures_in_row = 0 if record.status == "ok" else failures_in_row + 1
+        if not outcome.calls:
+            failures_in_row += 1  # сесія без жодної доби (логін, конфіг): теж відмова поспіль
+        if outcome.session.status == "unkillable":
+            stop = c.log_event(logging.ERROR, "FT_FETCH_STOPPED_UNKILLABLE_CHILD", session=seq)
         c.write_json_atomic(_run_path(ctx, run_id), run)
     return stop
+
+
+def _stop_before_session(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, run: Dict[str, Any],
+                         failures_in_row: int, pending: List[dt.date]) -> Tuple[int, Optional[str]]:
+    """Рейки перед сесією: ліміт викликів → ліміт відмов поспіль → пауза між логінами → ринок закритий усю сесію."""
+    next_day = c.day_key(pending[0])
+    if len(run["calls"]) >= opts.max_calls:
+        return 0, c.log_event(logging.ERROR, "FT_FETCH_MAX_CALLS_REACHED", days_left=len(pending), next_day=next_day)
+    if failures_in_row >= opts.max_consecutive_failures:
+        return 0, c.log_event(logging.ERROR, "FT_FETCH_TOO_MANY_FAILURES", in_row=failures_in_row, next_day=next_day)
+    if run["sessions"]:
+        deps.sleep(opts.call_interval_s)
+    batch_size = _batch_size(opts, run, pending)
+    return batch_size, market_open_reason(ctx, opts, deps.now_ms(), batch_size)
+
+
+def _batch_size(opts: FetchOptions, run: Dict[str, Any], pending: List[dt.date]) -> int:
+    """Діб у наступній сесії: не більше --days-per-session, черги і залишку --max-calls (мінімум 1 для рейки ринку)."""
+    return max(1, min(opts.days_per_session, len(pending), opts.max_calls - len(run["calls"])))
+
+
+def _in_flight_text(run: Dict[str, Any]) -> Optional[str]:
+    in_flight = run["in_flight"]
+    return None if in_flight is None else "session:%d:%s" % (in_flight["session"], ",".join(in_flight["days"]))
 
 
 def _print_summary(opts: FetchOptions, ctx: FetchContext, run: Dict[str, Any], run_id: str) -> None:
     calls = run["calls"]
     failed = sum(1 for call in calls if call["status"] != "ok")
-    print("FT_FETCH_SUMMARY symbol=%s calls=%d committed=%d failed=%d skipped=%d rc=%s run=%s" % (
-        opts.symbol, len(calls), len(calls) - failed, failed, len(run["skipped"]), run["rc"], _run_path(ctx, run_id)))
-
-
-def _stop_before_call(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, calls: List[Dict[str, Any]],
-                      failures_in_row: int, days_left: int, day: dt.date) -> Optional[str]:
-    """Рейки перед викликом: ліміт викликів → ліміт відмов поспіль → пауза між логінами → закритий ринок."""
-    if len(calls) == opts.max_calls:
-        return c.log_event(logging.ERROR, "FT_FETCH_MAX_CALLS_REACHED", days_left=days_left, next_day=c.day_key(day))
-    if failures_in_row == opts.max_consecutive_failures:
-        return c.log_event(logging.ERROR, "FT_FETCH_TOO_MANY_FAILURES", in_row=failures_in_row,
-                           next_day=c.day_key(day))
-    if calls:
-        deps.sleep(opts.call_interval_s)
-    return market_open_reason(ctx, opts, deps.now_ms())
+    print("FT_FETCH_SUMMARY symbol=%s sessions=%d calls=%d committed=%d failed=%d skipped=%d rc=%s run=%s" % (
+        opts.symbol, len(run["sessions"]), len(calls), len(calls) - failed, failed, len(run["skipped"]), run["rc"],
+        _run_path(ctx, run_id)))
 
 
 def _day_queue(opts: FetchOptions, ctx: FetchContext, skipped: List[Dict[str, str]]) -> List[dt.date]:
@@ -147,11 +172,14 @@ def _staged_valid(ctx: FetchContext, opts: FetchOptions, day: dt.date) -> bool:
 
 
 def _dry_run(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext) -> int:
-    queue = _day_queue(opts, ctx, [])
-    for day in queue:
-        print("FT_FETCH_DRY_RUN day=%s decision=fetch" % c.day_key(day))
-    rc = 3 if market_open_reason(ctx, opts, deps.now_ms()) else 0
-    print("FT_FETCH_SUMMARY symbol=%s calls=0 planned=%d dry_run=1 rc=%d" % (opts.symbol, len(queue), rc))
+    queue = _day_queue(opts, ctx, [])[:opts.max_calls]
+    for index, day in enumerate(queue):
+        print("FT_FETCH_DRY_RUN day=%s session=%d decision=fetch" % (c.day_key(day), index // opts.days_per_session + 1))
+    sessions = -(-len(queue) // opts.days_per_session)
+    first_batch = max(1, min(opts.days_per_session, len(queue)))
+    rc = 3 if market_open_reason(ctx, opts, deps.now_ms(), first_batch) else 0
+    print("FT_FETCH_SUMMARY symbol=%s calls=0 planned=%d sessions=%d dry_run=1 rc=%d" % (
+        opts.symbol, len(queue), sessions, rc))
     return rc
 
 
@@ -163,8 +191,8 @@ def _run_manifest(opts: FetchOptions, ctx: FetchContext, run_id: str, now_ms: in
             "started_at_utc": c.utc_iso(now_ms), "finished_at_utc": None,
             "rails": {"calendar_group": ctx.calendar_group, "guard_minutes": opts.guard_minutes,
                       "call_timeout_s": opts.call_timeout_s, "max_calls": opts.max_calls,
-                      "min_age_days": opts.min_age_days},
-            "calls": [], "skipped": [], "in_flight": None, "stop_reason": None, "rc": None}
+                      "days_per_session": opts.days_per_session, "min_age_days": opts.min_age_days},
+            "sessions": [], "calls": [], "skipped": [], "in_flight": None, "stop_reason": None, "rc": None}
 
 
 def _run_path(ctx: FetchContext, run_id: str) -> str:
@@ -177,7 +205,7 @@ def _clean_inflight(staging_root: str) -> None:
     inflight = os.path.join(staging_root, "_inflight")
     stale = sorted(os.listdir(inflight)) if os.path.isdir(inflight) else []
     for name in stale:
-        remove_inflight(os.path.join(inflight, name))
+        remove_path(os.path.join(inflight, name))
     if stale:
         c.log_event(logging.WARNING, "FT_FETCH_INFLIGHT_STALE_REMOVED", n=len(stale))
 
@@ -199,7 +227,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     for flag, default in (("--max-calls", c.MAX_CALLS_DEFAULT), ("--call-timeout-s", c.CALL_TIMEOUT_DEFAULT_S),
                           ("--call-interval-s", c.CALL_INTERVAL_DEFAULT_S), ("--guard-minutes", c.GUARD_MINUTES_DEFAULT),
                           ("--min-age-days", c.MIN_AGE_DAYS_DEFAULT),
-                          ("--max-consecutive-failures", c.MAX_CONSECUTIVE_FAILURES_DEFAULT)):
+                          ("--max-consecutive-failures", c.MAX_CONSECUTIVE_FAILURES_DEFAULT),
+                          ("--days-per-session", c.DAYS_PER_SESSION_DEFAULT)):
         parser.add_argument(flag, type=int, default=default)
     parser.add_argument("--only-missing", action="store_true")
     parser.add_argument("--dry-run", action="store_true")

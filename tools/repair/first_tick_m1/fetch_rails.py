@@ -33,6 +33,7 @@ class FetchOptions:
     guard_minutes: int = c.GUARD_MINUTES_DEFAULT
     min_age_days: int = c.MIN_AGE_DAYS_DEFAULT
     max_consecutive_failures: int = c.MAX_CONSECUTIVE_FAILURES_DEFAULT
+    days_per_session: int = c.DAYS_PER_SESSION_DEFAULT
     only_missing: bool = False
     dry_run: bool = False
 
@@ -95,10 +96,10 @@ def check_rails(opts: FetchOptions, deps: FetchDeps) -> FetchContext:
     return FetchContext(data_root, staging_root, sdk_cwd, calendars[opts.symbol], group, days)
 
 
-def market_open_reason(ctx: FetchContext, opts: FetchOptions, now_ms: int) -> Optional[str]:
-    """Торгова хвилина у [now − guard, now + найдовша сесія + guard] — виклик заборонено; текст події або None."""
+def market_open_reason(ctx: FetchContext, opts: FetchOptions, now_ms: int, days: int) -> Optional[str]:
+    """Торгова хвилина у [now − guard, now + найдовша сесія з `days` діб + guard] — сесію заборонено; текст або None."""
     guard_ms = opts.guard_minutes * c.MINUTE_MS
-    horizon_ms = c.session_timeout_s(opts.call_timeout_s, 1) * 1000
+    horizon_ms = c.session_timeout_s(opts.call_timeout_s, days) * 1000
     minute = c.first_trading_minute(ctx.calendar, now_ms - guard_ms, now_ms + horizon_ms + guard_ms)
     if minute is None:
         return None
@@ -119,6 +120,8 @@ def _check_arguments(opts: FetchOptions) -> List[dt.date]:
         (_within(opts.guard_minutes, c.GUARD_MINUTES_RANGE), "FT_FETCH_GUARD_OUT_OF_RANGE", opts.guard_minutes),
         (_within(opts.min_age_days, c.MIN_AGE_DAYS_RANGE), "FT_FETCH_MIN_AGE_OUT_OF_RANGE", opts.min_age_days),
         (opts.max_consecutive_failures >= 1, "FT_FETCH_BAD_FAILURE_LIMIT", opts.max_consecutive_failures),
+        (_within(opts.days_per_session, c.DAYS_PER_SESSION_RANGE), "FT_FETCH_DAYS_PER_SESSION_OUT_OF_RANGE",
+         opts.days_per_session),
     ]
     for ok, code, value in checks:
         if not ok:

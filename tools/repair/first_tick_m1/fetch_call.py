@@ -1,7 +1,9 @@
-"""Один виклик fetch: свіжий cwd SDK, дитина з таймаутом, розбір результату, коміт доби в staging. Python 3.7.
+"""Одна сесія fetch: свіжий cwd SDK, дитина на пакет діб, розбір кожної доби, коміт у staging (ADR-0096 §3.3 B).
 
-Батько не довіряє дитині: рядки inflight перевалідовуються (схема, прапорці, запит, лічильники) і лише тоді
-атомарно стають добою staging. Будь-яка відмова лишає попередню валідну добу staging недоторканою.
+Батько не довіряє дитині: рядки кожної доби перевалідовуються (схема, прапорці, запит, лічильники) і лише тоді
+атомарно стають добою staging. Будь-яка відмова лишає попередню валідну добу staging недоторканою. Доба, на якій
+дитину вбили (дедлайн, таймаут батька, падіння), — невдала; доби, яких дитина не почала, повертаються в чергу.
+Python 3.7.
 """
 
 from __future__ import annotations
@@ -12,62 +14,81 @@ import json
 import logging
 import os
 import shutil
+import signal
 from typing import Any, Dict, List, Optional, Tuple
 
 from tools.repair.first_tick_m1.common import (
     REPO_ROOT, day_key, log_event, request_window, session_timeout_s, sym_dir, utc_iso,
 )
-from tools.repair.first_tick_m1.fetch_child import EXIT_EMPTY, EXIT_STAGING_INVALID
+from tools.repair.first_tick_m1.fetch_child import EXIT_SDK_ERROR, SESSION_RESULT, day_files
 from tools.repair.first_tick_m1.staging import StagingInvalid, validate_rows, write_day_atomic
 
 CHILD_MODULE = "tools.repair.first_tick_m1.fetch_child"
+# Код виходу дитини, убитої SIGALRM власного дедлайну (Popen: −signum); на Windows сигналу немає.
+_DEADLINE_RETURNCODE = -int(getattr(signal, "SIGALRM", 0)) or None
 
 
 @dataclasses.dataclass
 class CallRecord:
+    """Одна доба — один get_history у сесії `session`."""
+
     seq: int
+    session: int
     day: str
-    status: str  # ok | timeout | child_error | invalid | empty | unkillable
-    returncode: Optional[int]
-    duration_s: float
+    status: str  # ok | empty | invalid | child_error | deadline | timeout | unkillable
+    duration_s: Optional[float] = None
     rows: Optional[int] = None
     raw_open_not_tick: Optional[int] = None
     sha256: Optional[str] = None
     detail: Optional[str] = None
 
 
-def execute_call(ctx: Any, opts: Any, deps: Any, run_id: str, seq: int, day: dt.date) -> CallRecord:
-    """Виклик однієї доби: результат — запис для маніфесту прогону; staging змінюється лише при status ok."""
-    tag = "%s-%04d" % (run_id, seq)
-    call_dir = os.path.join(ctx.sdk_cwd, "call-" + tag)
-    os.mkdir(call_dir)  # exist_ok=False: спільний кеш History/ між викликами віддав би стару версію доби
-    inflight = os.path.join(ctx.staging_root, "_inflight")
+@dataclasses.dataclass
+class SessionRecord:
+    """Один логін FXCM: доби пакета, чим закінчився процес дитини і які доби він не почав."""
+
+    seq: int
+    days: List[str]
+    status: str  # ok | child_error | deadline | timeout | unkillable
+    returncode: Optional[int]
+    duration_s: float
+    unattempted: List[str]
+    detail: Optional[str] = None
+
+
+@dataclasses.dataclass
+class SessionOutcome:
+    session: SessionRecord
+    calls: List[CallRecord]
+    unattempted: List[dt.date]
+
+
+def execute_session(ctx: Any, opts: Any, deps: Any, run_id: str, session_seq: int, first_call_seq: int,
+                    days: List[dt.date]) -> SessionOutcome:
+    """Сесія пакета діб: staging змінюється лише для діб зі status ok; решта — записи для маніфесту прогону."""
+    tag = "%s-s%04d" % (run_id, session_seq)
+    call_dir = os.path.join(ctx.sdk_cwd, "session-" + tag)
+    os.mkdir(call_dir)  # exist_ok=False: спільний кеш History/ між сесіями віддав би стару версію доби
+    out_dir = os.path.join(ctx.staging_root, "_inflight", tag)
     log_dir = os.path.join(ctx.staging_root, "_runs", run_id)
-    for directory in (inflight, log_dir):
-        os.makedirs(directory, exist_ok=True)
-    out_path, result_path = os.path.join(inflight, tag + ".jsonl"), os.path.join(inflight, tag + ".result.json")
-    argv = [deps.python_executable, "-u", "-m", CHILD_MODULE, "--symbol", opts.symbol, "--day", day_key(day),
-            "--out", out_path, "--result", result_path, "--deadline-s", str(opts.call_timeout_s)]
-    log_path = os.path.join(log_dir, "call-%04d-%s-%s.log" % (seq, sym_dir(opts.symbol), day_key(day)))
+    os.makedirs(out_dir)
+    os.makedirs(log_dir, exist_ok=True)
+    keys = [day_key(day) for day in days]
+    argv = [deps.python_executable, "-u", "-m", CHILD_MODULE, "--symbol", opts.symbol, "--days", ",".join(keys),
+            "--out-dir", out_dir, "--deadline-s", str(opts.call_timeout_s)]
+    log_path = os.path.join(log_dir, "session-%04d-%s-%s-%s.log" % (session_seq, sym_dir(opts.symbol), keys[0],
+                                                                    keys[-1]))
     outcome = None
     try:
-        outcome = deps.run_child(argv, cwd=call_dir, env=child_env(), timeout_s=session_timeout_s(opts.call_timeout_s, 1),
-                                 log_path=log_path)
-        record = CallRecord(seq, day_key(day), outcome.status, outcome.returncode, round(outcome.duration_s, 3))
-        if outcome.status == "exited":
-            _resolve_exited(record, ctx, opts, deps, run_id, day, out_path, result_path)
+        outcome = deps.run_child(argv, cwd=call_dir, env=child_env(),
+                                 timeout_s=session_timeout_s(opts.call_timeout_s, len(days)), log_path=log_path)
+        result = _resolve_session(ctx, opts, deps, run_id, session_seq, first_call_seq, days, outcome, out_dir)
     finally:
-        if outcome is None or outcome.status != "unkillable":  # живому процесу теку не забираємо
-            _remove_tree(call_dir)
-        for path in (out_path, result_path):
-            remove_inflight(path)
-    if record.status == "ok":
-        log_event(logging.INFO, "FT_FETCH_DAY_COMMITTED", symbol=opts.symbol, day=record.day, rows=record.rows,
-                  open_not_tick=record.raw_open_not_tick, sha256=record.sha256)
-    else:
-        log_event(logging.WARNING, "FT_FETCH_DAY_FAILED", symbol=opts.symbol, day=record.day, status=record.status,
-                  rc=record.returncode, detail=record.detail)
-    return record
+        if outcome is None or outcome.status != "unkillable":  # живому процесу теки не забираємо
+            remove_path(call_dir)
+            remove_path(out_dir)
+    _log_session(opts, result)
+    return result
 
 
 def child_env() -> Dict[str, str]:
@@ -77,22 +98,62 @@ def child_env() -> Dict[str, str]:
     return env
 
 
-def _resolve_exited(record: CallRecord, ctx: Any, opts: Any, deps: Any, run_id: str, day: dt.date, out_path: str,
-                    result_path: str) -> None:
-    result, problem = _read_result(result_path)
-    if record.returncode == EXIT_EMPTY:
-        record.status, record.detail = "empty", "0 рядків у добі"
-        return
-    if record.returncode == EXIT_STAGING_INVALID:
-        record.status, record.detail = "invalid", (result or {}).get("error") or problem
-        return
-    if record.returncode != 0 or result is None or result.get("status") != "ok":
-        record.status = "child_error"
-        record.detail = (result or {}).get("error") or problem or "rc=%s status=%s" % (
-            record.returncode, (result or {}).get("status"))
-        return
+def _resolve_session(ctx: Any, opts: Any, deps: Any, run_id: str, session_seq: int, first_call_seq: int,
+                     days: List[dt.date], outcome: Any, out_dir: str) -> SessionOutcome:
+    session_result, problem = _read_json_object(os.path.join(out_dir, SESSION_RESULT))
+    status, detail = _session_status(outcome, session_result, problem)
+    calls: List[CallRecord] = []
+    unattempted: List[dt.date] = []
+    for index, day in enumerate(days):
+        started_path, rows_path, result_path = day_files(out_dir, day_key(day))
+        seq = first_call_seq + len(calls)
+        if os.path.exists(result_path):
+            calls.append(_resolve_day(ctx, opts, deps, run_id, session_seq, seq, day, rows_path, result_path))
+            continue
+        if os.path.exists(started_path):
+            # Дитину вбили (чи вона впала) посеред цієї доби: доба невдала, наступна сесія почне з наступної.
+            calls.append(CallRecord(seq, session_seq, day_key(day), "child_error" if status == "ok" else status,
+                                    detail=detail or "result_missing"))
+            unattempted = days[index + 1:]
+        else:
+            unattempted = days[index:]
+        break
+    record = SessionRecord(session_seq, [day_key(day) for day in days], status, outcome.returncode,
+                           round(outcome.duration_s, 3), [day_key(day) for day in unattempted], detail)
+    return SessionOutcome(record, calls, unattempted)
+
+
+def _session_status(outcome: Any, session_result: Optional[Dict[str, Any]],
+                    problem: Optional[str]) -> Tuple[str, Optional[str]]:
+    """Чим закінчилась дитина: ok лише коли процес вийшов 0 і сам звітував ok."""
+    if outcome.status in ("timeout", "unkillable"):
+        return outcome.status, "session_timeout"
+    if _DEADLINE_RETURNCODE is not None and outcome.returncode == _DEADLINE_RETURNCODE:
+        return "deadline", "child_deadline_sigalrm"
+    if outcome.returncode == 0 and session_result is not None and session_result.get("status") == "ok":
+        return "ok", None
+    if outcome.returncode == EXIT_SDK_ERROR and session_result is not None:
+        return "child_error", "%s: %s" % (session_result.get("stage"), session_result.get("error"))
+    return "child_error", problem or "rc=%s session=%s" % (outcome.returncode, (session_result or {}).get("status"))
+
+
+def _resolve_day(ctx: Any, opts: Any, deps: Any, run_id: str, session_seq: int, seq: int, day: dt.date,
+                 rows_path: str, result_path: str) -> CallRecord:
+    key = day_key(day)
+    record = CallRecord(seq, session_seq, key, "child_error")
+    result, problem = _read_json_object(result_path)
+    if result is None or result.get("day") != key:
+        record.detail = problem or "result_day_mismatch"
+        return record
+    record.duration_s = result.get("call_duration_s")
+    if result.get("status") in ("empty", "invalid"):
+        record.status, record.detail = result["status"], result.get("error") or "0 рядків у добі"
+        return record
+    if result.get("status") != "ok":
+        record.detail = result.get("error") or "status=%s" % result.get("status")
+        return record
     try:
-        rows = _read_inflight_rows(out_path)
+        rows = _read_inflight_rows(rows_path)
         flags = sum(1 for row in rows if isinstance(row, dict) and row.get("raw_open_not_tick") is True)
         if result.get("request") != request_window(day):
             raise StagingInvalid("request_mismatch", "result.request=%r" % (result.get("request"),))
@@ -102,23 +163,39 @@ def _resolve_exited(record: CallRecord, ctx: Any, opts: Any, deps: Any, run_id: 
         validate_rows(opts.symbol, day, rows)
     except StagingInvalid as exc:
         record.status, record.detail = "invalid", str(exc)
-        return
+        return record
     meta = {"request": result["request"], "rows_outside_day_dropped": dropped, "run_id": run_id,
-            "fetched_at_utc": utc_iso(deps.now_ms()), "call_seq": record.seq, "call_duration_s": record.duration_s,
+            "fetched_at_utc": utc_iso(deps.now_ms()), "call_seq": seq, "call_duration_s": record.duration_s,
             "sdk": result.get("sdk")}
     manifest = write_day_atomic(ctx.staging_root, opts.symbol, day, rows, meta)
     record.status, record.rows, record.raw_open_not_tick, record.sha256 = "ok", len(rows), flags, manifest["sha256"]
+    return record
 
 
-def _read_result(path: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def _log_session(opts: Any, outcome: SessionOutcome) -> None:
+    for record in outcome.calls:
+        if record.status == "ok":
+            log_event(logging.INFO, "FT_FETCH_DAY_COMMITTED", symbol=opts.symbol, day=record.day, rows=record.rows,
+                      open_not_tick=record.raw_open_not_tick, sha256=record.sha256, session=record.session)
+        else:
+            log_event(logging.WARNING, "FT_FETCH_DAY_FAILED", symbol=opts.symbol, day=record.day,
+                      status=record.status, detail=record.detail, session=record.session)
+    session = outcome.session
+    log_event(logging.INFO if session.status == "ok" else logging.WARNING, "FT_FETCH_SESSION_DONE",
+              symbol=opts.symbol, session=session.seq, status=session.status, rc=session.returncode,
+              days=len(session.days), calls=len(outcome.calls), unattempted=",".join(session.unattempted) or None,
+              detail=session.detail)
+
+
+def _read_json_object(path: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     if not os.path.exists(path):
         return None, "result_missing"
     try:
         with open(path, "rb") as fh:
-            result = json.loads(fh.read().decode("utf-8"))
+            payload = json.loads(fh.read().decode("utf-8"))
     except (OSError, ValueError, UnicodeDecodeError) as exc:
         return None, "result_unreadable: %s" % exc
-    return (result, None) if isinstance(result, dict) else (None, "result_not_object")
+    return (payload, None) if isinstance(payload, dict) else (None, "result_not_object")
 
 
 def _read_inflight_rows(path: str) -> List[Any]:
@@ -134,21 +211,18 @@ def _read_inflight_rows(path: str) -> List[Any]:
         raise StagingInvalid("schema", "inflight %s: %s" % (path, exc))
 
 
-def remove_inflight(path: str) -> None:
-    """Незакомічений файл дитини: прибрати; невдача не змінює staging, але видима (наступний прогін прибере)."""
-    if not os.path.exists(path):
+def remove_path(path: str) -> None:
+    """Тека сесії чи залишок inflight (кеш SDK, незакомічені файли дитини): прибрати; невдача не змінює staging,
+    але видима — наступний прогін прибере."""
+    if not os.path.lexists(path):
         return
     try:
-        os.remove(path)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
     except OSError as exc:
-        log_event(logging.WARNING, "FT_FETCH_INFLIGHT_CLEANUP_FAILED", path=path, err=exc)
-
-
-def _remove_tree(path: str) -> None:
-    try:
-        shutil.rmtree(path)
-    except OSError as exc:
-        log_event(logging.WARNING, "FT_FETCH_CALL_DIR_CLEANUP_FAILED", path=path, err=exc)
+        log_event(logging.WARNING, "FT_FETCH_SESSION_DIR_CLEANUP_FAILED", path=path, err=exc)
 
 
 def _is_int(value: Any) -> bool:
