@@ -25,7 +25,7 @@
 13. [H4/D1 broker fetch](#13-h4d1-broker-fetch)
 14. [Preview-plane (tick stream)](#14-preview-plane-tick-stream)
 15. [Від UDS до UI: /api/bars і /api/updates](#15-від-uds-до-ui-apibars-і-apiupdates)
-16. [PREVIOUS_CLOSE stitching](#16-previous_close-stitching)
+16. [PREVIOUS_CLOSE і stitching (історія)](#16-previous_close-і-stitching-історія)
 17. [Типові пастки і edge cases](#17-типові-пастки-і-edge-cases)
 18. [Конфігурація (config.json SSOT)](#18-конфігурація-configjson-ssot)
 19. [Діагностика і перевірка](#19-діагностика-і-перевірка)
@@ -93,7 +93,7 @@ arr = self._fx.get_history(symbol, timeframe, date_from, date_to, count)
 
 - Open = Close попереднього бару (штучне stitching від брокера)
 - Створює артефакти: чергування volume (high/low), рвані переходи через breaks
-- Ми робимо stitching самі в UI (`open[i] = close[i-1]`), а не через брокера
+- Склеювання в UI немає і не вмикається: розриви між свічками показуються, як у TradingView
 
 ### 2.3 Нормалізація відповіді
 
@@ -493,8 +493,7 @@ Preview-plane живе виключно в Redis (`{NS}:preview:*`). Не на �
 1. UI запитує: `GET /api/bars?symbol=XAU/USD&tf_s=60&limit=5000`
 2. Server → `UDS.read_window()` → Redis snap (prefer) → RAM → Disk (тільки scrollback)
 3. Конвертація: `open_time_ms → time` (epoch_s, LWC format)
-4. Stitching: `open[i] = close[i-1]` (якщо увімкнено)
-5. Відповідь: `{ bars: [...], meta: {...}, warnings: [...] }`
+4. Відповідь: `{ bars: [...], meta: {...}, warnings: [...] }`
 
 ### 15.2 /api/updates (live)
 
@@ -505,17 +504,14 @@ Preview-plane живе виключно в Redis (`{NS}:preview:*`). Не на �
 
 ---
 
-## 16. PREVIOUS_CLOSE stitching
+## 16. PREVIOUS_CLOSE і stitching (історія)
 
-### 16.1 Що це
+### 16.1 Що було
 
-"TV-like smooth candles": `open[i] = close[i-1]`. Візуально свічки не мають гепів між собою.
+Колись `/api/bars` (ui_chart_v3) склеював свічки `open[i] = close[i-1]` під ключем `ui_stitching_enabled`.
+Цього коду більше немає; ключ ніхто не читає.
 
-### 16.2 Де застосовується
-
-**Тільки в `/api/bars`** (display layer). SSOT на диску **НЕ модифікується**.
-
-### 16.3 Чому не через FXCM
+### 16.2 Чому не через FXCM
 
 FXCM має свій PREVIOUS_CLOSE mode, але він штучно склеює свічки: перша свічка сесії відкривається вчорашньою ціною. Провайдер передає FIRST_TICK явно (ADR-0096). Власного stitching в UI немає: ключ `ui_stitching_enabled` ніхто не читає.
 
@@ -733,6 +729,6 @@ core/
 - `runtime/ingest/polling/time_buckets.py` — floor_bucket_start_ms (consolidated into core/buckets.py)
     ↓
 /api/updates → UI applyUpdates()               ← live оновлення графіку
-/api/bars → UI setBars()                       ← cold-load (з stitching)
+/api/bars → UI setBars()                       ← cold-load
 
 ```

@@ -41,7 +41,7 @@ Supervisor (`app.main --mode all`) керує 6 процесами. UDS є це�
 читання/запису: writer-и пишуть через UDS (SSOT disk + Redis snapshots +
 updates bus), UI читає через UDS. Preview-plane (M1/M3) живе в Redis keyspace,
 final-и з M1 poller проходять bridge до preview ring (final>preview).
-`ui_stitching_enabled` = false за замовчуванням — показуємо реальні гепи (TV-like);
+Склеювання свічок немає (`ui_stitching_enabled` — мертвий ключ, ADR-0096) — показуємо реальні розриви (TV-like);
 SSOT на диску не модифікується.
 
 > **ADR-0002 завершено**: engine_b M5 polling вимкнено (m5_polling_enabled=false), derived_tfs_s=[]. Всі TF M1→H4 через m1_poller/DeriveEngine.  

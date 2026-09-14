@@ -140,7 +140,7 @@
 | `preview_tick_publish_min_interval_ms` | int | 250 | Мін інтервал між публікаціями preview в Redis |
 | `preview_curr_ttl_s` | int | 1800 | TTL preview_curr ключа в Redis |
 | `tick_auto_promote_m1` | bool | true | Auto-promote: на переході M1 бакету → публікувати як complete (до приходу History final) |
-| `ui_stitching_enabled` | bool | false | Stitching open[i]=close[i-1] для UI. **false** = показувати реальні гепи (як TV) |
+| `ui_stitching_enabled` | bool | false | **Мертвий ключ** (ADR-0096): жоден код не читає; склеювання свічок немає, розриви показуються як у TV |
 
 ---
 

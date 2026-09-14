@@ -49,7 +49,7 @@
 - tick_stream_price_mode="bid" (щоб preview не стрибав при заміні на history)
 - tick_auto_promote_m1=true (mock‑final з тиків)
 - m1_poller.enabled=true
-- ui_stitching_enabled=true (лише display‑stitching у /api/bars)
+- `ui_stitching_enabled` — мертвий ключ: жоден код його не читає (ADR-0096), склеювання свічок немає
 
 ## 4) Типові пастки та як їх уникати
 
@@ -76,7 +76,8 @@
 1. /api/updates (M1)
    - Має бути source=history для final і preview_tick для preview.
 2. /api/bars (M1)
-   - open == prev close (з UI stitching) та немає gap.
+   - open першої свічки сесії ≠ close попередньої — розрив на відкритті сесії є нормою (як у TV, ADR-0096);
+     посеред сесії open і попередній close відрізняються на тіки.
 3. Логи:
    - TickPreview: TICK_PREVIEW_STATS
    - M1 Poller: M1_POLLER_STATS
