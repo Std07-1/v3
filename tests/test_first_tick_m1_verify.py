@@ -174,13 +174,15 @@ def test_rollback_restores_original_bytes_and_refuses_if_current_not_after(tmp_p
     part.write_bytes(patched + (line(ssot_bar(at(SESSION, 22, 5), 1.0, 2.0, 0.5, 1.5)) + "\n").encode())
     assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), deps) == 2  # хтось писав після apply
     part.write_bytes(patched)
-    assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), deps) == 0
-    assert part.read_bytes() == original["XAU_USD/tf_60/part-20260726.jsonl"]
     writer = WriterScan(True, None, 1, (ProcMatch(777, "runtime.ingest.m1_ingestion_worker", ("python",)),), (), 0)
     busy = WriteDeps(now_ms=lambda: NOW, scan_writers=lambda dirs: writer, geteuid=None, load_cfg=sc.cfg)
-    before = part.read_bytes()
     assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), busy) == 3
-    assert part.read_bytes() == before
+    assert part.read_bytes() == patched
+    assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), deps) == 0
+    assert part.read_bytes() == original["XAU_USD/tf_60/part-20260726.jsonl"]
+    # Повторний відкат уже відновленого: запису немає, тож і живий записувач не заважає — rc 0, байти ті самі.
+    assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), busy) == 0
+    assert part.read_bytes() == original["XAU_USD/tf_60/part-20260726.jsonl"]
 
 
 
@@ -210,3 +212,77 @@ def test_cli_phases_plan_apply_verify_rollback_on_copy(tmp_path, monkeypatch, ca
     restored = {k: v for k, v in tree_digest(copy_root).items() if ".bak." not in k}
     assert restored == prod_before
     assert cli(["unknown-phase"]) == 2
+
+
+def _two_files_applied(tmp_path):
+    """Дві переписані доби (26.07 і 27.07): відкат іде у зворотному порядку — спершу 27.07."""
+    sc = Scenario(tmp_path / "prod")
+    close = sc.session(SESSION, 22, 0, 3, 4055.42)
+    sc.session(dt.date(2026, 7, 27), 0, 0, 3, close)
+    sc.write()
+    plan_dir = tmp_path / "plan"
+    assert run_plan(PlanOptions(sc.symbol, SESSION, dt.date(2026, 7, 27), str(sc.staging), str(plan_dir)),
+                    sc.cfg()) == 0
+    deps = WriteDeps(now_ms=lambda: NOW, scan_writers=lambda dirs: CLEAR, geteuid=None, load_cfg=sc.cfg)
+    original = tree_digest(sc.data)
+    manifest = tmp_path / "apply.json"
+    opts = ApplyOptions(str(plan_dir), sha256_file(plan_dir / "PLAN.json"), str(sc.staging), manifest_out=str(manifest))
+    assert run_apply(opts, deps) == 0
+    assert [f["status"] for f in json.loads(manifest.read_text(encoding="utf-8"))["files"]] == ["rewritten"] * 2
+    return sc, manifest, deps, original
+
+
+@pytest.mark.parametrize("interrupt", [OSError("No space left on device"), KeyboardInterrupt()])
+def test_rollback_interrupted_on_second_file_rerun_completes(tmp_path, monkeypatch, interrupt):
+    """Ловить попередню перевірку «sha == після для всіх»: відкат, перерваний на 2-му файлі, повторно відмовляв
+    ROLLBACK_CURRENT_CHANGED — перший файл уже «до». Повторний запуск мусить завершити відкат."""
+    from tools.repair.first_tick_m1 import rollback as rollback_mod
+
+    sc, manifest, deps, original = _two_files_applied(tmp_path)
+    real_rewrite, calls = rollback_mod.rewrite_atomic, []
+
+    def failing_rewrite(path, lines, before_replace=None):
+        calls.append(path)
+        if len(calls) == 2:
+            raise interrupt
+        return real_rewrite(path, lines, before_replace=before_replace)
+
+    monkeypatch.setattr(rollback_mod, "rewrite_atomic", failing_rewrite)
+    with pytest.raises(type(interrupt)):
+        run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), deps)
+    (first_report,) = list(tmp_path.glob("apply.json.rollback-*.json"))
+    report = json.loads(first_report.read_text(encoding="utf-8"))
+    assert report["status"] == ("interrupted" if isinstance(interrupt, KeyboardInterrupt) else "failed")
+    assert [(f["part"].rsplit("-", 1)[1], f["status"]) for f in report["files"]] == [
+        ("20260727.jsonl", "restored"), ("20260726.jsonl", "not_restored")]
+    monkeypatch.setattr(rollback_mod, "rewrite_atomic", real_rewrite)
+    assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), deps) == 0
+    restored = {k: v for k, v in tree_digest(sc.data).items() if ".bak." not in k}
+    assert restored == original
+    (second_report,) = [p for p in tmp_path.glob("apply.json.rollback-*.json") if p != first_report]
+    statuses = [f["status"] for f in json.loads(second_report.read_text(encoding="utf-8"))["files"]]
+    assert statuses == ["already_restored", "restored"]
+
+
+def test_rollback_sigterm_mid_file_finalizes_report_rc_128_plus_signum(tmp_path, monkeypatch):
+    import signal
+
+    from tools.repair.first_tick_m1 import rollback as rollback_mod
+
+    sc, manifest, deps, original = _two_files_applied(tmp_path)
+    real_rewrite = rollback_mod.rewrite_atomic
+
+    def rewrite_then_sigterm(path, lines, before_replace=None):
+        backup = real_rewrite(path, lines, before_replace=before_replace)
+        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+        return backup
+
+    monkeypatch.setattr(rollback_mod, "rewrite_atomic", rewrite_then_sigterm)
+    assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), deps) == 128 + signal.SIGTERM
+    (report_path,) = list(tmp_path.glob("apply.json.rollback-*.json"))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "interrupted" and "ROLLBACK_STOPPED_BY_SIGNAL" in report["stop_reason"]
+    assert [f["status"] for f in report["files"]] == ["restored"]  # вирок диска: os.replace встиг
+    monkeypatch.setattr(rollback_mod, "rewrite_atomic", real_rewrite)
+    assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), deps) == 0
+    assert {k: v for k, v in tree_digest(sc.data).items() if ".bak." not in k} == original
