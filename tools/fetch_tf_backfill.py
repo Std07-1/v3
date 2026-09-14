@@ -37,9 +37,21 @@ def _pick_symbol(cfg: dict) -> str:
     return "XAU/USD"
 
 
+# Курсор ланцюжка засіву: `first=` цієї партії = `--date-to` наступної. Один формат для друку і розбору.
+# До 2026-09-14 курсор друкувався без секунд, а `--date-to` приймав лише з секундами або саму дату —
+# оператор обрізав курсор до доби, і кожен крок лишав дірку від 00:00 до першого бару попередньої
+# партії: у XAU/XAG по 10 дірок на символ, до ~12 год кожна (ADR-0094 P4, root/uncovered).
+CURSOR_FMT = "%Y-%m-%dT%H:%M:%SZ"
+_ACCEPTED_DATE_FMTS = ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d")
+
+
+def _format_cursor(open_ms: int) -> str:
+    return dt.datetime.fromtimestamp(open_ms / 1000, tz=dt.timezone.utc).strftime(CURSOR_FMT)
+
+
 def _parse_date_utc(s: str) -> dt.datetime:
     s = s.replace("Z", "").replace("+00:00", "").strip()
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+    for fmt in _ACCEPTED_DATE_FMTS:
         try:
             return dt.datetime.strptime(s, fmt).replace(tzinfo=dt.timezone.utc)
         except ValueError:
@@ -175,7 +187,7 @@ def main() -> int:
             for symbol in sym_list:
                 logging.info(
                     "%s: запит %d TF=%d барів до %s …",
-                    symbol, args.n, args.tf, date_to.strftime("%Y-%m-%dT%H:%MZ"),
+                    symbol, args.n, args.tf, date_to.strftime(CURSOR_FMT),
                 )
                 if args.tf == 60:
                     bars = provider.fetch_last_n_m1(symbol, n=args.n, date_to_utc=date_to)
@@ -187,6 +199,12 @@ def main() -> int:
                     continue
 
                 first_ms = bars[0].open_time_ms
+                # Точний курсор наступного кроку — з ПОВЕРНЕНИХ брокером барів, до dedup: навіть
+                # якщо все вже є на диску, ланцюжок мусить іти від справжнього першого бару.
+                logging.info(
+                    "%s: BACKFILL_NEXT --date-to %s (перший бар цієї партії; дублікат межі прибере dedup)",
+                    symbol, _format_cursor(first_ms),
+                )
                 last_ms = bars[-1].open_time_ms
                 existing = _load_existing_opens(data_root, symbol, args.tf, first_ms, last_ms)
                 before = len(bars)
@@ -204,8 +222,8 @@ def main() -> int:
                     logging.info(
                         "%s: записано=%d first=%s last=%s",
                         symbol, len(bars),
-                        dt.datetime.fromtimestamp(bars[0].open_time_ms / 1000, tz=dt.timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%dT%H:%MZ"),
-                        dt.datetime.fromtimestamp(bars[-1].open_time_ms / 1000, tz=dt.timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%dT%H:%MZ"),
+                        _format_cursor(bars[0].open_time_ms),
+                        _format_cursor(bars[-1].open_time_ms),
                     )
                 else:
                     logging.info("%s: 0 нових барів (усе вже є)", symbol)
