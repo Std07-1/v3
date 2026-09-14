@@ -56,8 +56,10 @@ def baked_scan(days: Sequence[Tuple[str, Optional[Sequence[Dict[str, Any]]], boo
     """Ланцюжок рядків staging за днями `(day, rows|None, has_part)` у хронологічному порядку.
 
     Доба з part-файлом без staging розриває ланцюжок (її рядків не знаємо); доба без обох — прозора (субота).
-    eq_prev = попередній рядок ланцюжка існує і |o − prev_c| ≤ eps. Run — максимальна послідовність eq_prev;
-    «запечений», якщо хоч один рядок має open поза [low, high].
+    eq_prev = попередній рядок ланцюжка існує і |o − prev_c| ≤ eps. Run — максимальна послідовність eq_prev
+    разом з рядком-якорем перед нею (його close і є їхній open); «запечений», якщо хоч один рядок run-а має open
+    поза [low, high]. Якір входить, бо «запечений» рядок на межі контексту (Нд 23:59 без п'ятниці) сам eq_prev
+    не має, а ранкові хвилини понеділка тягнуть саме його close.
     """
     chain: List[Tuple[Dict[str, Any], bool, str]] = []
     segment_starts, previous = {0}, None
@@ -80,14 +82,15 @@ def baked_scan(days: Sequence[Tuple[str, Optional[Sequence[Dict[str, Any]]], boo
         end = index
         while end + 1 < len(chain) and chain[end + 1][1]:
             end += 1
-        members = [chain[i][0] for i in range(index, end + 1)]
+        anchor = index - 1  # eq_prev гарантує попередника в тому самому сегменті
+        members = [chain[i][0] for i in range(anchor, end + 1)]
         outside = sum(1 for row in members if row["raw_open_not_tick"])
         if outside:
             run = {"first_open_ms": members[0]["open_time_ms"], "last_open_ms": members[-1]["open_time_ms"],
                    "rows": len(members), "open_outside_range_rows": outside}
             runs.append(run)
             baked_keys.update(row["open_time_ms"] for row in members)
-            if index - 1 in segment_starts or end + 1 == len(chain) or end + 1 in segment_starts:
+            if anchor in segment_starts or end + 1 == len(chain) or end + 1 in segment_starts:
                 edge_runs.append(run)
         index = end + 1
     share = _eq_prev_share(chain, segment_starts)

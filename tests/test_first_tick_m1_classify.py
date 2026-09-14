@@ -74,9 +74,10 @@ def test_in_range_rows_chained_to_baked_row_are_skip_baked():
     baked = _chain(monday, [(10.0, 10.6, 9.9, 10.5), (10.5, 10.9, 10.4, 10.8), (10.8, 10.7, 10.1, 10.2),
                             (10.2, 10.5, 10.0, 10.4), (10.45, 10.6, 10.3, 10.5)])
     scan = baked_scan([(day_key(monday), baked, True)], CLOSE_EPS_DEFAULT)
-    assert scan.baked_keys == frozenset(row["open_time_ms"] for row in baked[1:4])
-    assert scan.runs == ({"first_open_ms": baked[1]["open_time_ms"], "last_open_ms": baked[3]["open_time_ms"],
-                          "rows": 3, "open_outside_range_rows": 1},)
+    # run = якір baked[0] (його close — open baked[1]) + eq_prev baked[1..3]; baked[4] уже не o == prev_c.
+    assert scan.baked_keys == frozenset(row["open_time_ms"] for row in baked[0:4])
+    assert scan.runs == ({"first_open_ms": baked[0]["open_time_ms"], "last_open_ms": baked[3]["open_time_ms"],
+                          "rows": 4, "open_outside_range_rows": 1},)
     in_range = baked[1]
     bar = ssot_bar(in_range["open_time_ms"], 10.5, 10.9, 10.4, 10.8)
     assert classify_key(_winner(bar), in_range, _ctx(baked_keys=scan.baked_keys))["reason"] == "baked_run"

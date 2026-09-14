@@ -88,6 +88,59 @@ def write_part(data_root, day: dt.date, lines, symbol: str = SYMBOL) -> Path:
     return path
 
 
+class Scenario:
+    """SSOT у PREVIOUS_CLOSE і staging у FIRST_TICK для тих самих хвилин — вхід plan/apply/verify.
+
+    Кожна хвилина: перший тік `first = prev_c + d`, close `c`, діапазон тіків навколо; PREV-бар має o = prev_c і
+    H/L, розтягнуті до нього (як писав провайдер до ADR-0096), staging — сирі тіки.
+    """
+
+    _D = (0.37, -0.21, 0.44, -0.18, 0.29)
+    _E = (0.12, -0.33, 0.25, 0.08, -0.15, 0.4)
+
+    def __init__(self, root, symbol: str = SYMBOL):
+        self.root = Path(root)
+        self.data = self.root / "data"
+        self.staging = self.root / "staging"
+        self.symbol = symbol
+        self.parts: dict = {}
+        self.staged: dict = {}
+
+    def session(self, day: dt.date, hour: int, minute: int, n: int, prev_close: float, stage: bool = True) -> float:
+        for i in range(n):
+            open_ms = at(day, hour, minute) + i * MINUTE
+            first = round(prev_close + self._D[i % 5], 2)
+            close = round(first + self._E[i % 6], 2)
+            high, low = round(max(first, close) + 0.11, 2), round(min(first, close) - 0.13, 2)
+            self.parts.setdefault(day, []).append(
+                line(ssot_bar(open_ms, prev_close, max(high, prev_close), min(low, prev_close), close, float(20 + i),
+                              symbol=self.symbol)))
+            if stage:
+                self.staged.setdefault(day, []).append(staged_row(open_ms, first, high, low, close, 20 + i))
+            prev_close = close
+        return prev_close
+
+    def add(self, day: dt.date, bar: dict = None, row: dict = None, text: str = None) -> None:
+        if bar is not None or text is not None:
+            self.parts.setdefault(day, []).append(text if text is not None else line(bar))
+        if row is not None:
+            self.staged.setdefault(day, []).append(row)
+
+    def write(self) -> "Scenario":
+        from tools.repair.first_tick_m1.common import request_window
+        from tools.repair.first_tick_m1.staging import write_day_atomic
+
+        for day, lines in self.parts.items():
+            write_part(self.data, day, lines, symbol=self.symbol)
+        for day, rows in self.staged.items():
+            ordered = sorted(rows, key=lambda r: r["open_time_ms"])
+            write_day_atomic(self.staging, self.symbol, day, ordered, fetch_meta(request=request_window(day)))
+        return self
+
+    def cfg(self) -> dict:
+        return make_cfg(str(self.data))
+
+
 def tree_digest(root) -> dict:
     """{відносний шлях: байти} усього дерева — доказ «нічого не змінено»."""
     root = Path(root)
