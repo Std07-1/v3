@@ -154,8 +154,10 @@ def _rewrite_file(item: Dict[str, Any], loaded: LoadedPlan, target: rails.Target
     new_lines = render_patched_lines(lines, patches)
     if c.sha256_bytes(lines_bytes(new_lines)) != item["sha256_after"]:
         raise _Stop("failed", 1, c.log_event(logging.ERROR, "APPLY_PLAN_DIVERGED", path=path, detail="sha_after"))
-    record["backup"] = os.path.abspath(rewrite_atomic(path, new_lines))
-    record.update(sha256_after_actual=c.sha256_file(path), status="rewritten", at_utc=c.utc_iso(deps.now_ms()))
+    backup = rewrite_atomic(path, new_lines)
+    # Статус — одразу після os.replace: будь-яка подальша відмова не мусить сховати, що файл уже переписано.
+    record.update(backup=os.path.abspath(backup), status="rewritten", at_utc=c.utc_iso(deps.now_ms()))
+    record["sha256_after_actual"] = c.sha256_file(path)
     if record["sha256_after_actual"] != item["sha256_after"]:
         raise _Stop("failed", 1, c.log_event(logging.ERROR, "APPLY_WRITE_VERIFY_FAILED", path=path,
                                              backup=record["backup"]))
