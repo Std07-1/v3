@@ -33,33 +33,19 @@ from __future__ import annotations
 
 import argparse
 import glob
-import json
 import logging
 import os
-import shutil
 import sys
-import time
 from collections import Counter
 from typing import List, Optional, Tuple
 
 from core.config_loader import load_system_config, pick_config_path
+from tools.repair.jsonl_rewrite import open_ms_of, read_lines, rewrite_atomic
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
 
-
-def read_lines(path: str) -> List[str]:
-    """Непорожні рядки файла без завершального переводу рядка."""
-    with open(path, encoding="utf-8") as fh:
-        return [ln.rstrip("\n").rstrip("\r") for ln in fh if ln.strip()]
-
-
-def open_ms_of(line: str) -> Optional[int]:
-    try:
-        value = json.loads(line)["open_time_ms"]
-    except Exception:
-        return None
-    return value if isinstance(value, int) else None
+__all__ = ["open_ms_of", "plan_file", "read_lines", "rewrite_atomic"]
 
 
 def plan_file(path: str) -> Tuple[Optional[List[str]], int, int]:
@@ -84,36 +70,6 @@ def plan_file(path: str) -> Tuple[Optional[List[str]], int, int]:
         )
         return None, len(lines), inversions
     return ordered, len(lines), inversions
-
-
-def rewrite_atomic(path: str, ordered: List[str]) -> str:
-    """Підміна без жодної миті, коли файла за його іменем не існує.
-
-    Порядок важливий. Наївне «спершу перейменувати оригінал у .bak, потім підставити
-    .tmp» лишає вікно, у якому part-файла немає: читач у цю мить (ws_server живий і
-    читає диск) отримає FileNotFoundError і МОВЧКИ пропустить файл — у графіку зʼявиться
-    дірка на рівному місці. Тому: спершу пишемо .tmp і фсинкаємо, далі бекап робимо
-    жорстким лінком на СТАРИЙ inode (os.link не чіпає ім'я path), і лише потім один
-    атомарний os.replace. Файл існує весь час; читач бачить або старий вміст, або новий.
-    """
-    stamp = int(time.time())
-    backup = "%s.bak.%d" % (path, stamp)
-    tmp = "%s.tmp" % path
-    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-        for line in ordered:
-            fh.write(line + "\n")
-        fh.flush()
-        os.fsync(fh.fileno())
-    # Режим доступу — як у оригіналу: інструмент обіцяє лише переставити рядки, а не змінити права
-    # (на проді частина part-файлів має 666, а новий файл від smc з umask 002 отримав би 664).
-    shutil.copymode(path, tmp)
-    try:
-        os.link(path, backup)
-    except OSError:
-        # ФС без жорстких лінків — падаємо назад на копію (теж не чіпає ім'я path).
-        shutil.copy2(path, backup)
-    os.replace(tmp, path)
-    return backup
 
 
 def iter_part_files(root: str, symbols: Optional[List[str]], tfs: Optional[List[int]]) -> List[str]:
