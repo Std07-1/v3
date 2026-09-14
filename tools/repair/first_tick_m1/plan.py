@@ -18,6 +18,7 @@ from core.config_loader import load_system_config, pick_config_path
 from runtime.ingest.broker.fxcm.provider import OPEN_PRICE_MODE_NAME
 from runtime.ingest.polling import m1_poller
 from runtime.ingest.tick_common import resolve_symbol_calendars
+from runtime.ws.candle_map import DISPLAY_FLAT_MAX_VOLUME
 from tools.repair.first_tick_m1 import common as c
 from tools.repair.first_tick_m1 import plan_io
 from tools.repair.first_tick_m1.classify import (
@@ -84,7 +85,8 @@ def build_plan(opts: PlanOptions, cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], 
     plan = {
         "format": plan_io.PLAN_FORMAT, "tool_version": c.TOOL_VERSION, "symbol": opts.symbol, "tf_s": c.TF_S,
         "day_from": c.day_key(opts.day_from), "day_to": c.day_key(opts.day_to),
-        "params": {"close_eps": opts.close_eps, "flat_bar_max_volume": flat_max, "open_price_mode": OPEN_PRICE_MODE_NAME,
+        "params": {"close_eps": opts.close_eps, "flat_bar_max_volume": flat_max,
+                   "display_flat_max_volume": DISPLAY_FLAT_MAX_VOLUME, "open_price_mode": OPEN_PRICE_MODE_NAME,
                    "calendar_group": group, "calendar": dataclasses.asdict(calendar),
                    "suspect_eq_prev_share": c.SUSPECT_EQ_PREV_SHARE, "suspect_min_rows": c.SUSPECT_MIN_ROWS},
         "inputs": {"parts": parts, "staging": [_staging_input(opts, day, staged[day]) for day in context]},
@@ -149,6 +151,9 @@ def _classify_part(part: Any, staged_rows: Dict[int, Dict[str, Any]], ctx: Class
     v_differs = sum(1 for r in records if r.get("v_differs"))
     if v_differs:
         warnings.append(_warning("PLAN_V_DIFFERS", day, "keys=%d" % v_differs))
+    would_hide = sum(1 for r in records if r["cat"] == "SKIP_WOULD_HIDE")
+    if would_hide:
+        warnings.append(_warning("PLAN_WOULD_HIDE", day, "keys=%d" % would_hide))
     return records
 
 

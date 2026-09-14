@@ -4,7 +4,9 @@
 лише звужує старий (зняття розтягування до штучного open), фінальний бар геометрично цілий, а брокер віддав
 справжній перший тік. «Запечений» FIRST_TICK (§1.4) — o == close попередньої у 100% хвилин, частина open поза
 [low, high]: такі рядки і весь їхній ланцюжок o == prev_c лишаються «не доведено» (SKIP_BAKED) і перезабираються
-пізніше. Перша умова, що спрацювала, визначає категорію.
+пізніше. Бар, що після заміни стане O=H=L=C з обсягом ≤ порогу candle_map, не переписується (SKIP_WOULD_HIDE):
+кеш-бар Redis не несе extensions, тож на cold-load свічку сховало б навіть із маркером trading_flat. Перша умова,
+що спрацювала, визначає категорію.
 """
 
 from __future__ import annotations
@@ -17,13 +19,14 @@ from core.model.bar_choice import is_complete, is_final_source
 from core.model.bars import CandleBar, normalize_ohlc
 from runtime.ingest.broker.fxcm.provider import extract_ohlc
 from runtime.ingest.polling.m1_poller import _is_flat
+from runtime.ws.candle_map import is_display_flat_ohlcv
 from tools.repair.first_tick_m1.common import (
     CLOSE_EPS_MAX, MINUTE_MS, SUSPECT_EQ_PREV_SHARE, SUSPECT_MIN_ROWS, TF_S, day_key, day_of_ms, sha256_bytes,
 )
 from tools.repair.first_tick_m1.ssot_part import Winner, detect_line_style
 
 CATEGORIES = ("REPLACE", "SAME", "SKIP_BAKED", "SKIP_CLOSE_MISMATCH", "SKIP_RANGE_EXPANDS", "SKIP_FLAT_NON_TRADING",
-              "SKIP_WINNER_INELIGIBLE", "MISSING_IN_STAGING", "EXTRA_IN_STAGING")
+              "SKIP_WOULD_HIDE", "SKIP_WINNER_INELIGIBLE", "MISSING_IN_STAGING", "EXTRA_IN_STAGING")
 OHLCV = ("o", "h", "low", "c", "v")
 
 
@@ -139,6 +142,11 @@ def classify_key(winner: Winner, staged: Optional[Dict[str, Any]], ctx: Classify
     extensions = bar.get("extensions") or {}
     if extensions.get("trading_flat") and not flat:
         raise PlanInvariantBroken("PLAN_INVARIANT_BROKEN k=%d: trading_flat бар став не пласким" % key)
+    if is_display_flat_ohlcv(new_o, new_h, new_low, old_c, float(bar["v"])):
+        # Redis cold-load віддає кеш-бар без extensions: candle_map сховав би O=H=L=C з малим обсягом навіть із
+        # trading_flat на диску. До окремого патча межі Redis (ADR-0096 §3.3 B) такий ключ лишається PREV.
+        return dict(evidence, cat="SKIP_WOULD_HIDE", reason="display_flat_without_extensions",
+                    normalized={"o": new_o, "h": new_h, "low": new_low})
     if day_key(day_of_ms(key)) in ctx.suspect_days:
         # Доба з ≥90% o == prev_c — «запечена» за часткою: заміна тут не доведена, перезабір пізніше.
         return dict(evidence, cat="SKIP_BAKED", reason="suspect_day")

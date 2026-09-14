@@ -13,6 +13,7 @@ import json
 import pytest
 
 from ft_m1_support import DAY, at, calendar, line, ssot_bar, staged_row
+from runtime.ws.candle_map import map_bar_to_candle_v4
 from tools.repair.first_tick_m1 import classify
 from tools.repair.first_tick_m1.classify import ClassifyContext, baked_scan, classify_key, extra_entry
 from tools.repair.first_tick_m1.common import CLOSE_EPS_DEFAULT, day_key
@@ -129,15 +130,35 @@ def test_missing_and_extra_are_reported_and_extra_never_planned_as_write():
     assert extra["cat"] == "EXTRA_IN_STAGING" and "line" not in extra and "new" not in extra
 
 
-def test_flat_result_in_trading_minute_adds_trading_flat():
-    bar = ssot_bar(KEY, 4055.42, 4092.36, 4055.42, 4092.36, v=3.0)
-    row = staged_row(KEY, 4092.36, 4092.36, 4092.36, 4092.36, volume=3)
+def _redis_cold_load_candle(key, new, bar):
+    """Свічка так, як її віддасть candle_map для кеш-бару Redis — без extensions (redis_snapshot._bar_to_cache_bar)."""
+    return map_bar_to_candle_v4({"open_time_ms": key, "o": new["o"], "h": new["h"], "low": new["low"], "c": bar["c"],
+                                 "v": bar["v"]}, tf_s=60)
+
+
+@pytest.mark.parametrize("volume", [3, 5, 7, 10])
+def test_flat_result_with_display_volume_is_skip_would_hide(volume):
+    """Ловить trading_flat як «порятунок»: Redis cold-load не несе extensions — O=H=L=C з v ≤ 10 candle_map сховає.
+    v=5..10 (п.7 ревʼю): live-пласкість (v ≤ 4) цих не бачить, trading_flat не ставився б узагалі."""
+    bar = ssot_bar(KEY, 4055.42, 4092.36, 4055.42, 4092.36, v=float(volume))
+    row = staged_row(KEY, 4092.36, 4092.36, 4092.36, 4092.36, volume=volume)
     entry = classify_key(_winner(bar), row, _ctx())
-    assert (entry["cat"], entry["trading_flat_add"]) == ("REPLACE", True)
-    busy = classify_key(_winner(dict(bar, v=5.0)), dict(row, Volume=5), _ctx())
-    assert (busy["cat"], busy["trading_flat_add"]) == ("REPLACE", False)
-    marked = classify_key(_winner(dict(bar, extensions={"trading_flat": True})), row, _ctx())
-    assert (marked["cat"], marked["trading_flat_add"]) == ("REPLACE", False)
+    assert (entry["cat"], entry["reason"]) == ("SKIP_WOULD_HIDE", "display_flat_without_extensions")
+    assert _redis_cold_load_candle(KEY, entry["normalized"], bar) is None
+    if volume <= 4:  # маркер live ставить лише пласкій за m1_poller (v ≤ 4) — на Redis cold-load він не діє
+        marked = classify_key(_winner(dict(bar, extensions={"trading_flat": True})), row, _ctx())
+        assert marked["cat"] == "SKIP_WOULD_HIDE"
+
+
+def test_flat_result_above_display_volume_replaces_and_stays_visible():
+    """Контроль: v=11 — поза порогом candle_map, свічка видима і з Redis; trading_flat не додається (live v ≤ 4)."""
+    bar = ssot_bar(KEY, 4055.42, 4092.36, 4055.42, 4092.36, v=11.0)
+    row = staged_row(KEY, 4092.36, 4092.36, 4092.36, 4092.36, volume=11)
+    entry = classify_key(_winner(bar), row, _ctx())
+    assert (entry["cat"], entry["trading_flat_add"]) == ("REPLACE", False)
+    assert _redis_cold_load_candle(KEY, entry["new"], bar) is not None
+    non_flat = classify_key(_winner(dict(PREV_BAR, v=3.0)), dict(FIRST_TICK_ROW, Volume=3), _ctx())
+    assert non_flat["cat"] == "REPLACE"
 
 
 def test_flat_result_in_calendar_pause_is_skip_flat_non_trading():

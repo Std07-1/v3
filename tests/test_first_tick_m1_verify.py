@@ -36,7 +36,8 @@ def _repaired(tmp_path):
     rows = [  # хвилина: PREV (o, h, low, c, v) і FIRST_TICK (o, h, low, c)
         (1, (4055.42, 4093.19, 4055.42, 4092.36, 31.0), (4089.98, 4093.19, 4086.33, 4092.36)),
         (2, (4092.36, 4094.00, 4091.10, 4093.50, 12.0), (4092.40, 4094.00, 4091.10, 4093.50)),
-        (3, (4093.50, 4093.80, 4093.50, 4093.80, 2.0), (4093.80, 4093.80, 4093.80, 4093.80)),  # однотікова
+        # однотікова з v=2: після заміни O=H=L=C — кеш Redis без extensions сховав би її → SKIP_WOULD_HIDE, лишається PREV
+        (3, (4093.50, 4093.80, 4093.50, 4093.80, 2.0), (4093.80, 4093.80, 4093.80, 4093.80)),
     ]
     for minute, prev, first in rows:
         key = at(SESSION, 22, minute)
@@ -70,11 +71,14 @@ def test_end_to_end_prev_history_repaired_and_verified(tmp_path):
         assert (bar["o"], bar["h"], bar["low"], bar["c"], bar["v"]) == (4089.98, 4093.19, 4086.33, 4092.36, 31.0)
         assert _bar(before, name, at(SESSION, 22, 1))["low"] == 4055.42
         flat = _bar(after, name, at(SESSION, 22, 3))
-        assert (flat["o"], flat["low"], flat["extensions"]) == (4093.80, 4093.80, {"trading_flat": True})
+        assert (flat["o"], flat["low"], "extensions" in flat) == (4093.50, 4093.50, False)
     assert after["TAIL"] == after["RANGE"]
+    plan = json.loads((plan_dir / "PLAN.json").read_text(encoding="utf-8"))
+    assert plan["totals"]["SKIP_WOULD_HIDE"] == 1 and plan["params"]["display_flat_max_volume"] == 10.0
+    assert {"code": "PLAN_WOULD_HIDE", "day": "20260726", "detail": "keys=1"} in plan["warnings"]
     baked_after = read_views(str(sc.data), sc.symbol, BAKED)
     assert _bar(baked_after, "TAIL", at(BAKED, 22, 1))["o"] == 4346.23  # «запечений» лишився PREV
-    assert json.loads(manifest.read_text(encoding="utf-8"))["files"][0]["replaced"] == 3
+    assert json.loads(manifest.read_text(encoding="utf-8"))["files"][0]["replaced"] == 2
     assert run_verify(VerifyOptions(str(manifest), str(tmp_path / "work"))) == 0
 
 
