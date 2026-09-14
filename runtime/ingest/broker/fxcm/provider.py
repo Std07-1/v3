@@ -20,6 +20,8 @@ except Exception:  # noqa: BLE001
 # сесії тягнула вчорашню ціну в O і L/H, а за нею — D1/H4/… (XAU D1 27.07.2026: наш O=L=4055.42,
 # FXCM FIRST_TICK і TradingView — O≈4090). До ADR-0096 параметр не передавався зовсім.
 OPEN_PRICE_MODE_NAME = "FIRST_TICK"
+# Допуск порівняння open з [low, high] — нижче за крок ціни будь-якого символу (XAG 0.001, NAS100 0.05).
+_OPEN_RANGE_EPS = 1e-9
 
 
 def _resolve_open_price_mode() -> Any:
@@ -257,12 +259,18 @@ def normalize_history_to_bars(
         )
         rows = []
 
+    open_not_tick: List[int] = []
     for r in rows:
         try:
             open_ms = extract_open_time_ms(r)
             close_ms = open_ms + tf_s * 1000
 
             o, h, low, c = extract_ohlc(r)
+            if o > h + _OPEN_RANGE_EPS or o < low - _OPEN_RANGE_EPS:
+                # У FIRST_TICK open поза [low, high] — не тік цієї свічки: у брокера на цей проміжок немає тікової
+                # історії і він підставив close попередньої (виміряно 14.09: Нд 22:00 → Пн 07:00 UTC). Нормалізація
+                # нижче розтягне H/L до такого open — тож проміжок мусить бути видно, а не мовчки записаний.
+                open_not_tick.append(open_ms)
             # Нормалізація OHLC: broker може повернути h < close (bid/ask артефакт)
             h = max(o, h, low, c)
             low = min(o, h, low, c)
@@ -311,6 +319,12 @@ def normalize_history_to_bars(
         except Exception as e:
             logging.warning("Пропуск history-row: %s", str(e))
 
+    if open_not_tick:
+        logging.warning(
+            "FXCM_OPEN_NOT_FIRST_TICK symbol=%s tf_s=%s bars=%d of=%d first_open_ms=%s last_open_ms=%s "
+            "— open поза [low, high]: брокер не мав першого тіку, свічка потребує оновлення після (ADR-0096)",
+            symbol, tf_s, len(open_not_tick), len(rows), min(open_not_tick), max(open_not_tick),
+        )
     out.sort(key=lambda x: x.open_time_ms)
     return out
 

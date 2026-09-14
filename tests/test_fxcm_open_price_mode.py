@@ -111,3 +111,29 @@ def test_the_only_road_to_sdk_history_is_the_provider_with_explicit_mode():
     assert calls, "гейт нічого не знайшов — перевір, чи не змінився шлях провайдера"
     offenders = [c for c in calls if c[0] != "runtime/ingest/broker/fxcm/provider.py" or not c[2]]
     assert offenders == [], offenders
+
+
+def _row(minute, o, h, low, c):
+    import datetime as dt
+
+    return {"Date": dt.datetime(2026, 9, 13, 22, minute, tzinfo=dt.timezone.utc),
+            "BidOpen": o, "BidHigh": h, "BidLow": low, "BidClose": c, "Volume": 10.0}
+
+
+def test_open_outside_range_is_reported_loudly(caplog):
+    """Виміряно 14.09: на Нд 22:00 → Пн 07:00 UTC брокер у FIRST_TICK віддав open = close попередньої свічки,
+    поза [low, high] (XAU 22:01: o 4346.23, h 4337.69). Нормалізація розтягує H до такого open — без сигналу
+    проміжок записався б мовчки з тим самим артефактом, що й у PREVIOUS_CLOSE."""
+    rows = [_row(1, 4346.23, 4337.69, 4330.62, 4331.55), _row(2, 4331.60, 4335.00, 4331.00, 4334.00)]
+    with caplog.at_level(logging.WARNING):
+        bars = provider_mod.normalize_history_to_bars("XAU/USD", 60, rows, src="history")
+    assert len(bars) == 2
+    assert "FXCM_OPEN_NOT_FIRST_TICK symbol=XAU/USD tf_s=60 bars=1 of=2" in caplog.text
+
+
+def test_open_inside_range_stays_quiet(caplog):
+    """Контроль: справжній перший тік (26.07 22:01: o 4089.98 у [4086.33, 4093.19]) — тиша."""
+    rows = [_row(1, 4089.98, 4093.19, 4086.33, 4092.36)]
+    with caplog.at_level(logging.WARNING):
+        provider_mod.normalize_history_to_bars("XAU/USD", 60, rows, src="history")
+    assert "FXCM_OPEN_NOT_FIRST_TICK" not in caplog.text
