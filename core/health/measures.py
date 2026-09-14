@@ -10,6 +10,7 @@
 - ``holes`` — яких торгових бакетів немає взагалі.
 - ``geometry`` — дублікати, порядок, вирівнювання по сітці, узгодженість close_ms.
 - ``cascade`` — чи derived-бар справді дорівнює агрегації свого source.
+- ``root`` — чи derived-бар дорівнює агрегації M1 у своєму бакеті (корінь ланцюга, ADR-0002).
 - ``history_depth`` — чи вистачає глибини для SMC (lookback вищих TF).
 
 Клас дефекту, заради якого це існує: 06.09 засів NAS100 виглядав цілим (M1 і H4
@@ -18,10 +19,12 @@
 """
 from __future__ import annotations
 
+import bisect
 import dataclasses
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from core.buckets import bucket_start_ms
+from core.model.bar_choice import choose_better_bar
 from core.model.bars import CandleBar
 
 IsTradingFn = Callable[[int], bool]
@@ -88,6 +91,26 @@ class CascadeResult:
     mismatched: int
     declared_partial: int
     skipped_incomplete: int
+    mismatch_samples: Tuple[int, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class RootResult:
+    """Чи derived-бари дорівнюють агрегації M1 у своєму бакеті — корені ланцюга деривації.
+
+    Навіщо окремо від ``cascade``. Каскад порівнює лише сусідні рівні і пропускає бакети з
+    неповним набором дітей: M30, зібраний колись із застарілого M15, узгоджений з тим M15 і
+    для каскаду чистий, хоча з M1 розходиться. На живих даних 14.09.2026 каскад бачив 137
+    розбіжностей на XAU/XAG, а проти M1 їх 659 — плюс 6 на SPX500, який каскад вважав GREEN.
+
+    ``uncovered`` — бари, у бакеті яких M1 немає зовсім (історія, старша за M1-покриття,
+    наприклад брокерський імпорт): перевірити їх нема чим, це не дефект і не «ок».
+    """
+
+    checked: int
+    mismatched: int
+    declared_partial: int
+    uncovered: int
     mismatch_samples: Tuple[int, ...]
 
 
@@ -275,6 +298,37 @@ def measure_geometry(
     )
 
 
+def _choice_view(bar: CandleBar) -> Dict[str, Any]:
+    """Поля, на які дивиться єдиний вибирач `core.model.bar_choice`."""
+    return {"complete": bar.complete, "src": bar.src, "extensions": bar.extensions}
+
+
+def ssot_winners(bars: Sequence[CandleBar]) -> List[CandleBar]:
+    """Згорнути дублікати open_time_ms так, як їх згортають читачі (ADR-0094), за зростанням ключа.
+
+    Вимір мусить бачити рівно те, що бачить графік. До цього health перевіряв КОЖЕН запис
+    дубліката (переможений запис батька давав хибну «розбіжність каскаду» — 18 таких на
+    XAU/XAG), а дітей згортав позиційно — третім вибирачем у репо. `bars` — у порядку диска:
+    нічия вибирача дістається пізнішому запису.
+    """
+    chosen: Dict[int, Tuple[CandleBar, Dict[str, Any]]] = {}
+    for bar in bars:
+        view = _choice_view(bar)
+        previous = chosen.get(bar.open_time_ms)
+        if previous is None or choose_better_bar(previous[1], view) is view:
+            chosen[bar.open_time_ms] = (bar, view)
+    return [chosen[key][0] for key in sorted(chosen)]
+
+
+def _matches_aggregate(bar: CandleBar, children: Sequence[CandleBar], price_epsilon: float) -> bool:
+    return (
+        abs(children[0].o - bar.o) <= price_epsilon
+        and abs(children[-1].c - bar.c) <= price_epsilon
+        and abs(max(c.h for c in children) - bar.h) <= price_epsilon
+        and abs(min(c.low for c in children) - bar.low) <= price_epsilon
+    )
+
+
 def measure_cascade(
     derived_bars: Sequence[CandleBar],
     source_bars: Sequence[CandleBar],
@@ -302,21 +356,14 @@ def measure_cascade(
     skipped = 0
     declared = 0
     mismatched: List[int] = []
-    for bar in derived_bars:
-        children = sorted(
-            {c.open_time_ms: c for c in by_bucket.get(bar.open_time_ms, [])}.values(),
-            key=lambda b: b.open_time_ms,
-        )
+    # І батьків, і дітей — так, як їх показують читачі (ADR-0094), а не кожен запис на диску.
+    for bar in ssot_winners(derived_bars):
+        children = ssot_winners(by_bucket.get(bar.open_time_ms, []))
         if len(children) < expected_children:
             skipped += 1
             continue
         checked += 1
-        if (
-            abs(children[0].o - bar.o) > price_epsilon
-            or abs(children[-1].c - bar.c) > price_epsilon
-            or abs(max(c.h for c in children) - bar.h) > price_epsilon
-            or abs(min(c.low for c in children) - bar.low) > price_epsilon
-        ):
+        if not _matches_aggregate(bar, children, price_epsilon):
             if declares_partial_fn is not None and declares_partial_fn(bar):
                 declared += 1
             else:
@@ -326,6 +373,47 @@ def measure_cascade(
         mismatched=len(mismatched),
         declared_partial=declared,
         skipped_incomplete=skipped,
+        mismatch_samples=tuple(mismatched[:max_samples]),
+    )
+
+
+def measure_root_consistency(
+    derived_bars: Sequence[CandleBar],
+    m1_bars: Sequence[CandleBar],
+    *,
+    tf_ms: int,
+    declares_partial_fn: Optional[Callable[[CandleBar], bool]] = None,
+    price_epsilon: float = 1e-9,
+    max_samples: int = 5,
+) -> RootResult:
+    """Кожен derived-бар (як його бачать читачі) проти агрегації M1 у ``[open, open + tf_ms)``.
+
+    Бакет не мусить мати ПОВНИЙ набір хвилин: derived-бар будується з тих хвилин, що є, тож
+    на незмінному M1 агрегація збігається і з частковим набором. Розбіжність означає, що бар
+    зібрано з інших даних, ніж зараз лежать у M1 (M1 перезалили, бар не перебудували).
+    """
+    minutes = ssot_winners(m1_bars)
+    keys = [bar.open_time_ms for bar in minutes]
+    checked = declared = uncovered = 0
+    mismatched: List[int] = []
+    for bar in ssot_winners(derived_bars):
+        lo = bisect.bisect_left(keys, bar.open_time_ms)
+        hi = bisect.bisect_left(keys, bar.open_time_ms + tf_ms)
+        if lo == hi:
+            uncovered += 1
+            continue
+        checked += 1
+        if _matches_aggregate(bar, minutes[lo:hi], price_epsilon):
+            continue
+        if declares_partial_fn is not None and declares_partial_fn(bar):
+            declared += 1
+        else:
+            mismatched.append(bar.open_time_ms)
+    return RootResult(
+        checked=checked,
+        mismatched=len(mismatched),
+        declared_partial=declared,
+        uncovered=uncovered,
         mismatch_samples=tuple(mismatched[:max_samples]),
     )
 

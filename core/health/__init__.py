@@ -3,7 +3,7 @@
 Нуль I/O і нуль імпортів з ``runtime``: календар приходить у виміри як
 ``is_trading_fn``. I/O-оболонка — ``tools/symbol_health_check.py``.
 """
-from core.health.compare import CompareResult, Regression, compare_reports
+from core.health.compare import HEALTH_MEASURE_VERSION, CompareResult, Regression, compare_reports
 from core.health.grading import Grade, grade_symbol_tf
 from core.health.measures import (
     AgeResult,
@@ -11,6 +11,7 @@ from core.health.measures import (
     DepthResult,
     GeometryResult,
     HolesResult,
+    RootResult,
     bucket_has_trading_minute,
     check_anchor_on_session_edge,
     expected_bucket_opens,
@@ -19,10 +20,13 @@ from core.health.measures import (
     measure_depth,
     measure_geometry,
     measure_holes,
+    measure_root_consistency,
     normalize_open_to_grid,
+    ssot_winners,
 )
 
 __all__ = [
+    "HEALTH_MEASURE_VERSION",
     "CompareResult",
     "Regression",
     "compare_reports",
@@ -33,6 +37,7 @@ __all__ = [
     "DepthResult",
     "GeometryResult",
     "HolesResult",
+    "RootResult",
     "bucket_has_trading_minute",
     "check_anchor_on_session_edge",
     "expected_bucket_opens",
@@ -41,5 +46,7 @@ __all__ = [
     "measure_depth",
     "measure_geometry",
     "measure_holes",
+    "measure_root_consistency",
     "normalize_open_to_grid",
+    "ssot_winners",
 ]
