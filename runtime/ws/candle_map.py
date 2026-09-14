@@ -16,6 +16,10 @@ from typing import List, Optional, Tuple, cast
 
 _log = logging.getLogger(__name__)
 
+# Поріг обсягу display-flat свічки (ADR-0012 P1: 4→10 — EUSTX50 V=6, GER30/HKG33 V=5). Одне джерело і для
+# ремонту M1 (ADR-0096 §3.3 B): ключ, що після заміни стане таким, candle_map сховає без маркера trading_flat.
+DISPLAY_FLAT_MAX_VOLUME = 10.0
+
 
 def _pick(bar: dict, primary: str, fallback: str) -> Optional[float]:
     """Вибирає числове значення з bar: спочатку primary, потім fallback."""
@@ -38,7 +42,7 @@ def _pick(bar: dict, primary: str, fallback: str) -> Optional[float]:
 
 
 def _is_display_flat_bar(bar: dict) -> bool:
-    """Flat bar = O==H==L==C + low volume (≤4). Weekend/pause artifact від брокера.
+    """Flat bar = O==H==L==C + low volume (≤ DISPLAY_FLAT_MAX_VOLUME). Weekend/pause artifact від брокера.
 
     Фільтрується на рівні display (не SSOT). Відповідає logic
     m1_poller._is_flat + overlay._is_flat_preview_bar.
@@ -57,11 +61,14 @@ def _is_display_flat_bar(bar: dict) -> bool:
     c = bar.get("close", bar.get("c"))
     v = bar.get("volume", bar.get("v", 0.0))
     if all(isinstance(x, (int, float)) for x in (o, h, lo, c)):
-        if (
-            o == h == lo == c and float(v) <= 10.0
-        ):  # ADR-0012 P1: 4→10 (EUSTX50 V=6, GER30/HKG33 V=5)
+        if is_display_flat_ohlcv(o, h, lo, c, v):
             return True
     return False
+
+
+def is_display_flat_ohlcv(o: float, h: float, low: float, c: float, v: float) -> bool:
+    """O==H==L==C з обсягом ≤ DISPLAY_FLAT_MAX_VOLUME: без маркера `trading_flat` display таку свічку ховає."""
+    return o == h == low == c and float(v) <= DISPLAY_FLAT_MAX_VOLUME
 
 
 # HTF (H4/D1): flat bar filter = тільки weekend artifacts (Fri/Sat UTC open).
