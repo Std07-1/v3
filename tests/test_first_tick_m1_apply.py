@@ -277,3 +277,25 @@ def test_apply_lock_held_rc2(planned, tmp_path):
     before = tree_digest(sc.data)
     assert run_apply(_opts(sc, plan_dir, plan_id, tmp_path), _deps(sc)) == 2
     assert tree_digest(sc.data) == before
+
+
+def test_apply_unexpected_error_mid_write_leaves_accurate_manifest(planned, tmp_path, monkeypatch):
+    """Диск/права відмовили на другому файлі: маніфест — failed з першим rewritten, не вічний «running»."""
+    sc, plan_dir, plan_id = planned
+    from tools.repair.first_tick_m1 import apply as apply_mod
+
+    real_rewrite, calls = apply_mod.rewrite_atomic, []
+
+    def failing_rewrite(path, lines):
+        calls.append(path)
+        if len(calls) == 2:
+            raise OSError("No space left on device")
+        return real_rewrite(path, lines)
+
+    monkeypatch.setattr(apply_mod, "rewrite_atomic", failing_rewrite)
+    with pytest.raises(OSError):
+        run_apply(_opts(sc, plan_dir, plan_id, tmp_path), _deps(sc))
+    manifest = _manifest(tmp_path)
+    assert manifest["status"] == "failed" and "APPLY_UNEXPECTED_ERROR" in manifest["stop_reason"]
+    assert [f["status"] for f in manifest["files"]] == ["rewritten", "not_started"]
+    assert not (plan_dir / ".apply.lock").exists()

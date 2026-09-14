@@ -58,7 +58,15 @@ def _locked_run(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext) -> int:
         stop = stop or _stop_before_call(opts, deps, ctx, calls, failures_in_row, len(queue) - index, day)
         if stop:
             break
-        record = execute_call(ctx, opts, deps, run_id, len(calls) + 1, day)
+        try:
+            record = execute_call(ctx, opts, deps, run_id, len(calls) + 1, day)
+        except Exception as exc:
+            # Відмова самого батька (диск, права): маніфест прогону фіксує, на якій добі зупинились; виняток — далі.
+            run.update(stop_reason=c.log_event(logging.ERROR, "FT_FETCH_CRASHED", day=c.day_key(day),
+                                               err="%s: %s" % (type(exc).__name__, exc)),
+                       finished_at_utc=c.utc_iso(deps.now_ms()))
+            c.write_json_atomic(_run_path(ctx, run_id), run)
+            raise
         calls.append(dataclasses.asdict(record))
         failures_in_row = 0 if record.status == "ok" else failures_in_row + 1
         if record.status == "unkillable":

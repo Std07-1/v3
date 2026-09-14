@@ -110,6 +110,12 @@ def _run_locked(opts: ApplyOptions, deps: rails.WriteDeps, cfg: Dict[str, Any], 
     except rails.TargetRefused as refused:
         started = any(f["status"] == "rewritten" for f in manifest["files"])
         return _finish(manifest, manifest_path, "interrupted" if started else "refused", refused.rc, refused.text, deps)
+    except Exception as exc:
+        # Непередбачена відмова (диск, права) посеред запису: маніфест мусить сказати, що вже переписано, а не
+        # лишитись «running» — інакше rollback/verify не знатимуть стану. Виняток летить далі.
+        _finish(manifest, manifest_path, "failed", 1, c.log_event(
+            logging.ERROR, "APPLY_UNEXPECTED_ERROR", err="%s: %s" % (type(exc).__name__, exc)), deps)
+        raise
     return _finish(manifest, manifest_path, "ok", 0, None, deps)
 
 

@@ -330,3 +330,17 @@ def test_missing_credentials_refused_before_any_call_rc2(env):
     child = FakeChild(clock)
     assert run_fetch(_opts(env), _deps(env, clock, child, credentials=False)) == 2
     assert child.calls == []
+
+
+def test_parent_crash_is_recorded_in_run_manifest_and_lock_released(env):
+    clock = Clock(SATURDAY_NOON)
+
+    def crashing_child(argv, cwd, env, timeout_s, log_path):
+        raise OSError("disk full")
+
+    with pytest.raises(OSError):
+        run_fetch(_opts(env, days=DAYS[:2]), _deps(env, clock, crashing_child))
+    run = _run_manifest(env)
+    assert "FT_FETCH_CRASHED day=20260720" in run["stop_reason"] and run["calls"] == []
+    assert not (env["staging"] / "_fetch.lock").exists()
+    assert list(Path(os.path.realpath(env["sdk"])).iterdir()) == []  # тека виклику прибрана і при відмові
