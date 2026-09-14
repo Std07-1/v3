@@ -1,7 +1,7 @@
 """core/health/grading.py — вимір → вердикт (ADR-0054 §3.2 Grading).
 
 RED    — дефект даних, який ламає SMC-аналіз: зсунута сітка, побитий OHLC,
-         дублікати, розбіжність каскаду, відставання понад допуск.
+         дублікати, розбіжність каскаду або кореня M1, відставання понад допуск.
 YELLOW — те, що не бреше, але й не готове: молода історія, дірки в межах допуску.
 GREEN  — можна рахувати SMC.
 
@@ -12,7 +12,7 @@ from __future__ import annotations
 import dataclasses
 from typing import List, Optional
 
-from core.health.measures import AgeResult, CascadeResult, DepthResult, GeometryResult, HolesResult
+from core.health.measures import AgeResult, CascadeResult, DepthResult, GeometryResult, HolesResult, RootResult
 
 RED = "RED"
 YELLOW = "YELLOW"
@@ -37,6 +37,7 @@ def grade_symbol_tf(
     holes: Optional[HolesResult] = None,
     geometry: Optional[GeometryResult] = None,
     cascade: Optional[CascadeResult] = None,
+    root: Optional[RootResult] = None,
     depth: Optional[DepthResult] = None,
     max_age_buckets: int = 1,
     max_missing_ratio: float = 0.0,
@@ -64,6 +65,11 @@ def grade_symbol_tf(
 
     if cascade is not None and cascade.mismatched:
         red.append(f"cascade_mismatch={cascade.mismatched}")
+    if root is not None and root.mismatched:
+        # Бар мовчки не дорівнює агрегації M1, з якої мав бути зібраний (ADR-0002): графік
+        # показує свічку з даних, яких у SSOT уже немає. Каскад це пропускає, якщо застарів
+        # цілий ланцюжок рівнів разом (ADR-0094 P4).
+        red.append(f"root_mismatch={root.mismatched}")
 
     if age is not None and age.age_buckets is not None and age.age_buckets > max_age_buckets:
         red.append(f"age_buckets={age.age_buckets}")
