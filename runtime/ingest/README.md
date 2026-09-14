@@ -54,8 +54,10 @@
 ## 4) Типові пастки та як їх уникати
 
 1) **PREVIOUS_CLOSE у FXCM History**
-   - Дає артефакт: чергування обсягів (high/low) + рвані переходи.
-   - Рішення: використовувати FIRST_TICK (default) + UI stitching.
+   - Дефолт SDK — саме PREVIOUS_CLOSE (`forexconnect/ForexConnect.py:423`): open кожної свічки = close
+     попередньої, перша свічка сесії тягне вчорашню ціну в O і L/H.
+   - Рішення (ADR-0096): провайдер явно передає `candle_open_price_mode=FIRST_TICK`; UI stitching не існує
+     і не вмикається — розриви між свічками показуються, як у TradingView.
 
 2) **Зворотний порядок барів від History**
    - Якщо ingest не сортований, watermark викидає старі бари як stale.

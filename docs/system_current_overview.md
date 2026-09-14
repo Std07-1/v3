@@ -673,7 +673,7 @@ v3/
 │   ├── ingest/
 │   │   ├── broker/
 │   │   │   ├── fxcm/
-│   │   │   │   └── provider.py    # FxcmHistoryProvider (FXCM History API, PREVIOUS_CLOSE mode)
+│   │   │   │   └── provider.py    # FxcmHistoryProvider (FXCM History API, FIRST_TICK — ADR-0096)
 │   │   │   └── binance/
 │   │   │       └── provider.py    # BinanceHistoryProvider (Futures API, 24/7, anchor=0, ADR-0037)
 │   │   ├── binance_ingest_worker.py # Binance M1 ingest + backward crawl (ADR-0037/0038)

@@ -52,7 +52,7 @@
 * Preview-plane ізольований: Redis preview keyspace (curr/tail/updates), allowlist TF=60/180, /api/bars для preview читає read_preview_window, include_preview ігнорується для не-preview TF (warning include_preview_ignored), NoMix guard активний; exit-gates: preview_not_on_disk і no_preview_in_final_redis.
 * TickAggregator (runtime/ingest/tick_agg.py) інтегровано у tick-stream pipeline: tick_publisher_fxcm → Redis PubSub → tick_preview_worker → TickAggregator → UDS preview keyspace. Schema guard tick_v1 на вході, 0-ticks loud.
 * M1Poller (runtime/ingest/polling/m1_poller.py): FXCM M1 History → final M1 + derive M3 → UDS commit_final_bar. Finals bridge: final M1/M3 публікується до preview ring (final>preview). Calendar gate, watermark, adaptive fetch, warmup.
-* PREVIOUS_CLOSE stitching у /api/bars: open[i]=close[i-1] для TV-like smooth candles (підтримує LWC + full field formats).
+* PREVIOUS_CLOSE stitching у /api/bars: open[i]=close[i-1] для TV-like smooth candles (підтримує LWC + full field formats). *[Виправлення 2026-09-14, ADR-0096: stitching у поточному коді не існує; PREVIOUS_CLOSE жив у самих даних — дефолт SDK FXCM.]*
 
 **Висновок станом на 2026-02-11:** UDS — write-center для всіх data planes. Tick-stream wiring done. M1 poller + finals bridge done. Preview-plane ізольовано. Всі 8 TF (M1–D1) працюють без price gaps.
 
@@ -409,7 +409,7 @@ C) **UDS layered (рекомендовано)**
 
 * ~~tick-stream wiring до TickAggregator (preview-plane)~~ — done (tick_publisher + tick_preview_worker).
 * M1 poller (final M1/M3 з History API) + finals bridge + warmup + calendar gate — done.
-* PREVIOUS_CLOSE stitching у /api/bars — done.
+* PREVIOUS_CLOSE stitching у /api/bars — done. *[Виправлення 2026-09-14: див. ADR-0096.]*
 
 **Preview vs Final (NoMix):**
 

@@ -80,7 +80,10 @@ arr = self._fx.get_history(symbol, timeframe, date_from, date_to, count)
 
 ### 2.2 Price Mode: FIRST_TICK vs PREVIOUS_CLOSE
 
-**FIRST_TICK (наш default):**
+> Виправлення 2026-09-14 (ADR-0096): до цієї дати провайдер параметр НЕ передавав, а дефолт SDK — PREVIOUS_CLOSE,
+> тож уся історія M1 записана в режимі PREVIOUS_CLOSE. Тепер `provider.py` передає FIRST_TICK явно.
+
+**FIRST_TICK (обраний режим, ADR-0096):**
 
 - Open кожного бару = перший реальний BID тик в цьому періоді
 - Між barами можуть бути "гепи" (open ≠ prev_close) — **це нормально**
@@ -514,7 +517,7 @@ Preview-plane живе виключно в Redis (`{NS}:preview:*`). Не на �
 
 ### 16.3 Чому не через FXCM
 
-FXCM має свій PREVIOUS_CLOSE mode, але він створює артефакти (чергування volume, рвані переходи через breaks). Ми використовуємо FIRST_TICK від FXCM + власне stitching в UI layer.
+FXCM має свій PREVIOUS_CLOSE mode, але він штучно склеює свічки: перша свічка сесії відкривається вчорашньою ціною. Провайдер передає FIRST_TICK явно (ADR-0096). Власного stitching в UI немає: ключ `ui_stitching_enabled` ніхто не читає.
 
 ---
 
