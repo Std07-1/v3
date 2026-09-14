@@ -67,7 +67,8 @@ def run_apply(opts: ApplyOptions, deps: rails.WriteDeps) -> int:
 
 
 def _preflight(opts: ApplyOptions, cfg: Dict[str, Any]) -> Tuple[LoadedPlan, rails.Target]:
-    """Кроки 1–2: план той, що назвав оператор; ціль prod/copy; plan_dir/staging/маніфест поза data_root."""
+    """Кроки 1–2: план той, що назвав оператор; ціль prod/copy; шляхи запису в межах цілі; plan_dir/staging/маніфест
+    поза data_root."""
     if not c.GUARD_MINUTES_RANGE[0] <= opts.guard_minutes <= c.GUARD_MINUTES_RANGE[1]:
         raise rails.refuse(2, "APPLY_GUARD_OUT_OF_RANGE", guard_minutes=opts.guard_minutes)
     loaded = load_plan(opts.plan_dir)
@@ -76,6 +77,8 @@ def _preflight(opts: ApplyOptions, cfg: Dict[str, Any]) -> Tuple[LoadedPlan, rai
     if c.fxcm_symbol_problem(cfg, loaded.plan["symbol"]):
         raise rails.refuse(2, "APPLY_SYMBOL_NOT_FXCM", symbol=loaded.plan["symbol"])
     target = rails.resolve_target(cfg, opts.data_root, opts.copy, "APPLY")
+    rails.require_contained(cfg, target, "APPLY", [path for item in loaded.plan["files"] if item["rewrite"]
+                                                   for path in rails.part_write_paths(target, item["part"])])
     rails.require_outside(target, "APPLY", plan_dir=opts.plan_dir, staging_root=opts.staging_root,
                           manifest_out=opts.manifest_out)
     return loaded, target
@@ -144,7 +147,7 @@ def _apply_files(opts: ApplyOptions, deps: rails.WriteDeps, cfg: Dict[str, Any],
     for index, item in enumerate(todo):
         if target.kind == "prod":
             _prod_rails(opts, deps, cfg, manifest, tf_dir, (), during=True)
-        _rewrite_file(item, loaded, target, manifest["files"][index], deps, persist)
+        _rewrite_file(cfg, item, loaded, target, manifest["files"][index], deps, persist)
         persist()
 
 
@@ -166,9 +169,10 @@ def _prod_rails(opts: ApplyOptions, deps: rails.WriteDeps, cfg: Dict[str, Any], 
         rails.owner_check(deps, list(owned), "APPLY")
 
 
-def _rewrite_file(item: Dict[str, Any], loaded: LoadedPlan, target: rails.Target, record: Dict[str, Any],
-                  deps: rails.WriteDeps, persist: Callable[[], None]) -> None:
+def _rewrite_file(cfg: Dict[str, Any], item: Dict[str, Any], loaded: LoadedPlan, target: rails.Target,
+                  record: Dict[str, Any], deps: rails.WriteDeps, persist: Callable[[], None]) -> None:
     path = under(target.data_root, item["part"])
+    rails.require_contained(cfg, target, "APPLY", rails.part_write_paths(target, item["part"]))
     with open(path, "rb") as fh:
         raw = fh.read()
     if c.sha256_bytes(raw) != item["sha256_before"]:
@@ -189,6 +193,7 @@ def _rewrite_file(item: Dict[str, Any], loaded: LoadedPlan, target: rails.Target
     persist()
 
     def backup_ready(backup: str) -> None:
+        rails.require_contained(cfg, target, "APPLY", [backup])
         record["backup"] = os.path.abspath(backup)
         persist()
 

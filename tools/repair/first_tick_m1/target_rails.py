@@ -1,9 +1,11 @@
 """Рейки цілі запису для apply і rollback: prod чи копія, записувачі, закритий ринок, власник файлів (ADR-0096 §3.3 B).
 
 Ціль «prod» — корінь, що збігається з data_root конфігу; все інше — «copy» і лише з явним --copy (копія не
-всередині проду). На проді запис дозволено лише коли скан /proc довів: записувачів немає, ринок кожного символу
-конфігу закритий у [now − guard, now + guard] (зупинка smc-fxcm зупиняє інжест усіх символів), а цільові файли
-належать тому, хто пише (запуск від root зробив би їх root-власними — живі записувачі не змогли б дописувати).
+всередині проду). Кожен шлях запису після realpath — усередині кореня цілі, а для копії — поза продом (symlink чи
+junction у корені копії не веде запис у прод). На проді запис дозволено лише коли скан /proc довів: записувачів
+немає, ринок кожного символу конфігу закритий у [now − guard, now + guard] (зупинка smc-fxcm зупиняє інжест усіх
+символів), а цільові файли належать тому, хто пише (запуск від root зробив би їх root-власними — живі записувачі не
+змогли б дописувати).
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from runtime.ingest.tick_common import resolve_symbol_calendars, symbols_from_cfg
 from tools.repair.first_tick_m1 import common as c
 from tools.repair.first_tick_m1.writers_guard import WriterScan
+from tools.repair.jsonl_rewrite import rewrite_tmp_path
 
 
 class TargetRefused(Exception):
@@ -52,6 +55,28 @@ def resolve_target(cfg: Dict[str, Any], data_root_arg: Optional[str], copy_flag:
     if kind == "copy" and c.paths_overlap(data_root, configured):
         raise refuse(2, prefix + "_COPY_OVERLAPS_PROD", data_root=data_root, configured=configured)
     return Target(data_root, kind)
+
+
+def require_contained(cfg: Dict[str, Any], target: Target, prefix: str, paths: Sequence[str]) -> None:
+    """Кожен шлях запису після realpath — усередині кореня цілі; для копії ще й не перетинає configured prod root.
+
+    Перевірка кореня копії (`resolve_target`) не бачить symlink/junction усередині нього: каталог tf_60, part-файл
+    чи його `.tmp`, що ведуть у прод, провели б `rewrite_atomic` у прод-файли повз рейки записувачів, ринку і
+    власника. Перевіряється кожен шлях, яким піде запис, — перед першим записом і перед кожним файлом.
+    """
+    configured = c.resolve_data_root(cfg, None)
+    for path in paths:
+        real = os.path.realpath(path)
+        if target.kind == "copy" and c.paths_overlap(real, configured):
+            raise refuse(2, prefix + "_COPY_OVERLAPS_PROD", path=path, realpath=real, configured=configured)
+        if not c.path_within(real, target.data_root):
+            raise refuse(2, prefix + "_TARGET_OUTSIDE_ROOT", path=path, realpath=real, data_root=target.data_root)
+
+
+def part_write_paths(target: Target, rel_part: str) -> List[str]:
+    """Шляхи, якими `rewrite_atomic` пише part-файл: його каталог, сам файл і тимчасовий файл поруч."""
+    path = os.path.join(target.data_root, *rel_part.split("/"))
+    return [os.path.dirname(path), path, rewrite_tmp_path(path)]
 
 
 def require_outside(target: Target, prefix: str, **paths: Optional[str]) -> None:

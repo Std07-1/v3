@@ -425,3 +425,89 @@ def test_apply_keyboard_interrupt_after_replace_finalizes_manifest_and_reraises(
     manifest = _manifest(tmp_path)
     assert manifest["status"] == "interrupted" and "APPLY_INTERRUPTED" in manifest["stop_reason"]
     assert [f["status"] for f in manifest["files"]] == ["rewritten", "not_started"]
+
+
+def _link_dir(link, target):
+    """Каталог-посилання: symlink, а на Windows без прав — junction (його теж розвʼязує realpath)."""
+    try:
+        os.symlink(str(target), str(link), target_is_directory=True)
+    except (OSError, NotImplementedError):
+        if os.name != "nt":
+            pytest.skip("symlink на каталог недоступний")
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+
+
+def _link_file(link, target):
+    try:
+        os.symlink(str(target), str(link))
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink на файл недоступний (Windows без Developer Mode)")
+
+
+def _copy_opts(sc, plan_dir, plan_id, tmp_path, copy_root):
+    return _opts(sc, plan_dir, plan_id, tmp_path, copy=True, data_root=str(copy_root),
+                 manifest_out=str(tmp_path / "manifests" / "copy.json"))
+
+
+def test_apply_copy_with_tf_dir_linked_into_prod_refused_rc2_prod_untouched(planned, tmp_path):
+    """Ловить перевірку лише кореня копії: tf_60 копії — посилання на прод, apply --copy переписав би прод повз
+    рейки записувачів, ринку і власника."""
+    sc, plan_dir, plan_id = planned
+    copy_root = tmp_path / "copy"
+    (copy_root / "XAU_USD").mkdir(parents=True)
+    _link_dir(copy_root / "XAU_USD" / "tf_60", sc.data / "XAU_USD" / "tf_60")
+    prod_before = tree_digest(sc.data)
+    assert run_apply(_copy_opts(sc, plan_dir, plan_id, tmp_path, copy_root), _deps(sc)) == 2
+    assert tree_digest(sc.data) == prod_before and _backups(sc) == []
+
+
+@pytest.mark.parametrize("linked", ["part", "tmp"])
+def test_apply_copy_with_part_or_tmp_symlink_into_prod_refused_rc2(planned, tmp_path, linked):
+    """`.tmp` поруч із part-файлом копії, що веде у прод: open(tmp, "w") переписав би прод-файл цілком."""
+    sc, plan_dir, plan_id = planned
+    copy_root = tmp_path / "copy"
+    shutil.copytree(sc.data, copy_root)
+    prod_part = _part(sc, MON)
+    copy_part = copy_root / "XAU_USD" / "tf_60" / prod_part.name
+    if linked == "part":
+        copy_part.unlink()
+        _link_file(copy_part, prod_part)
+    else:
+        _link_file(Path(str(copy_part) + ".tmp"), prod_part)
+    prod_before = tree_digest(sc.data)
+    assert run_apply(_copy_opts(sc, plan_dir, plan_id, tmp_path, copy_root), _deps(sc)) == 2
+    assert tree_digest(sc.data) == prod_before
+
+
+def test_apply_prod_part_symlink_outside_root_refused_rc2(planned, tmp_path):
+    sc, plan_dir, plan_id = planned
+    outside = tmp_path / "outside" / _part(sc, MON).name
+    outside.parent.mkdir()
+    shutil.copyfile(_part(sc, MON), outside)
+    _part(sc, MON).unlink()
+    _link_file(_part(sc, MON), outside)
+    before = (tree_digest(sc.data), outside.read_bytes())
+    assert run_apply(_opts(sc, plan_dir, plan_id, tmp_path), _deps(sc)) == 2
+    assert (tree_digest(sc.data), outside.read_bytes()) == before
+
+
+def test_rollback_copy_with_tf_dir_linked_into_prod_refused_rc2(planned, tmp_path):
+    """Дзеркало для rollback: після apply на копії її tf_60 підмінено посиланням на прод (з тими самими байтами
+    «після» і бекапами) — відкат писав би в прод."""
+    from tools.repair.first_tick_m1.rollback import RollbackOptions, run_rollback
+
+    sc, plan_dir, plan_id = planned
+    copy_root = tmp_path / "copy"
+    shutil.copytree(sc.data, copy_root)
+    assert run_apply(_copy_opts(sc, plan_dir, plan_id, tmp_path, copy_root), _deps(sc)) == 0
+    copy_tf = copy_root / "XAU_USD" / "tf_60"
+    for name in os.listdir(copy_tf):  # прод «виглядає» як пропатчена копія: без рейки відкат пройшов би
+        shutil.copyfile(copy_tf / name, sc.data / "XAU_USD" / "tf_60" / name)
+    copy_tf.rename(copy_root / "XAU_USD" / "tf_60_real")
+    _link_dir(copy_tf, sc.data / "XAU_USD" / "tf_60")
+    prod_before = tree_digest(sc.data)
+    manifest = tmp_path / "manifests" / "copy.json"
+    assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest), copy=True), _deps(sc)) == 2
+    assert tree_digest(sc.data) == prod_before

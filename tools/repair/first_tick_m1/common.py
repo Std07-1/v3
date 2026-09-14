@@ -128,6 +128,15 @@ def paths_overlap(first: Any, second: Any) -> bool:
     return common in (a, b)
 
 
+def path_within(path: Any, root: Any) -> bool:
+    """Шлях (після realpath) дорівнює кореню або лежить усередині нього."""
+    inner, outer = norm_path(path), norm_path(root)
+    try:
+        return os.path.commonpath([inner, outer]) == outer
+    except ValueError:  # різні диски Windows
+        return False
+
+
 def fxcm_symbol_problem(cfg: Dict[str, Any], symbol: str) -> Optional[str]:
     """Чому символ не є FXCM-символом конфігу (None — є). Binance-символи пише інший записувач."""
     if symbol not in symbols_from_cfg(cfg):

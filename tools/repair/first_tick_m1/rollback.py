@@ -1,6 +1,7 @@
 """Фаза rollback: повернути part-файли до байтів з бекапів apply — дзеркало apply (ADR-0096 §3.3 B, ADR §6).
 
-Ті самі рейки цілі (prod/copy, записувачі, ринок, власник, лок plan_dir). До запису доводиться для ВСІХ файлів:
+Ті самі рейки цілі (prod/copy, realpath шляхів запису в межах цілі і поза продом для копії, записувачі, ринок,
+власник, лок plan_dir). До запису доводиться для ВСІХ файлів:
 поточний sha == sha після apply (ніхто не писав після ремонту) і sha бекапу == sha до apply. Відновлення — у
 зворотному порядку через rewrite_atomic; після кожного файла sha == до apply. Маніфест `ft_m1_rollback_v1`
 поруч з маніфестом apply. rc: 0 відновлено; 1 звірка після запису не зійшлась; 2 відмова до запису;
@@ -62,6 +63,8 @@ def _run_locked(opts: RollbackOptions, deps: rails.WriteDeps, cfg: Dict[str, Any
         return 0
     paths = [under(target.data_root, f["part"]) for f in todo]
     tf_dir = under(target.data_root, posixpath.dirname(todo[0]["part"]))
+    for record in todo:
+        rails.require_contained(cfg, target, "ROLLBACK", _write_paths(target, record))
     if target.kind == "prod":
         rails.writers_check(deps, tf_dir, "ROLLBACK")
         rails.market_check(cfg, deps.now_ms(), opts.guard_minutes, "ROLLBACK")
@@ -80,15 +83,17 @@ def _run_locked(opts: RollbackOptions, deps: rails.WriteDeps, cfg: Dict[str, Any
     c.write_json_atomic(out_path, report)
     rc = 0
     for record, path in zip(todo, paths):
-        if target.kind == "prod":
-            try:
+        try:
+            rails.require_contained(cfg, target, "ROLLBACK", _write_paths(target, record))
+            if target.kind == "prod":
                 rails.writers_check(deps, tf_dir, "ROLLBACK")
-            except rails.TargetRefused as refused:
-                report.update(status="interrupted", rc=refused.rc, stop_reason=refused.text,
-                              finished_at_utc=c.utc_iso(deps.now_ms()))
-                c.write_json_atomic(out_path, report)
-                raise
-        backup_of_patched = rewrite_atomic(path, read_lines(record["backup"]))
+        except rails.TargetRefused as refused:
+            report.update(status="interrupted", rc=refused.rc, stop_reason=refused.text,
+                          finished_at_utc=c.utc_iso(deps.now_ms()))
+            c.write_json_atomic(out_path, report)
+            raise
+        backup_of_patched = rewrite_atomic(path, read_lines(record["backup"]), before_replace=lambda backup: (
+            rails.require_contained(cfg, target, "ROLLBACK", [backup])))
         restored = c.sha256_file(path)
         status = "restored" if restored == record["sha256_before"] else "verify_failed"
         report["files"].append({"part": record["part"], "sha256_restored": restored, "status": status,
@@ -103,6 +108,11 @@ def _run_locked(opts: RollbackOptions, deps: rails.WriteDeps, cfg: Dict[str, Any
     print("FT_ROLLBACK_SUMMARY status=%s rc=%d files=%d manifest=%s" % (report["status"], rc, len(report["files"]),
                                                                         out_path))
     return rc
+
+
+def _write_paths(target: rails.Target, record: Dict[str, Any]) -> List[str]:
+    """Шляхи відкату одного файла: каталог, part-файл, його .tmp і бекап apply, з якого читаються байти."""
+    return rails.part_write_paths(target, record["part"]) + ([record["backup"]] if record.get("backup") else [])
 
 
 def _rewritten_on_disk(applied: Dict[str, Any], data_root: str) -> List[Dict[str, Any]]:

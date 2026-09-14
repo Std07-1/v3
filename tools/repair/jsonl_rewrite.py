@@ -65,6 +65,11 @@ def key_groups(lines: List[str]) -> Dict[int, KeyGroup]:
     return {key: KeyGroup(winner=winners[key][0], members=tuple(members[key])) for key in sorted(winners)}
 
 
+def rewrite_tmp_path(path: str) -> str:
+    """Тимчасовий файл `rewrite_atomic` для `path` — теж шлях запису (рейки цілі перевіряють і його)."""
+    return "%s.tmp" % path
+
+
 def rewrite_atomic(path: str, lines: List[str], before_replace: Optional[Callable[[str], None]] = None) -> str:
     """Записати `lines` замість вмісту `path`; повертає шлях бекапу з допатчевим вмістом.
 
@@ -79,7 +84,7 @@ def rewrite_atomic(path: str, lines: List[str], before_replace: Optional[Callabl
     маніфест, записує шлях бекапу ДО підміни — процес, убитий одразу після os.replace, не лишить
     переписаний файл без відомого бекапу. Виняток із хука скасовує підміну (`path` не змінено).
     """
-    tmp = "%s.tmp" % path
+    tmp = rewrite_tmp_path(path)
     with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
         for line in lines:
             fh.write(line + "\n")
