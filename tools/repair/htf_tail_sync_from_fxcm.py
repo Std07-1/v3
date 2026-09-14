@@ -597,15 +597,18 @@ def main() -> int:
     t = report["totals"]
     LOG.info(
         "=== ПІДСУМОК: mode=%s fetched=%d committed=%d "
-        "val_errors=%d fetch_errors=%d ===",
+        "val_errors=%d fetch_errors=%d rewrite_errors=%d unexpected_errors=%d ===",
         mode,
         t["fetched"],
         t["committed"],
         t["validation_errors"],
         t["fetch_errors"],
+        t["rewrite_errors"],
+        t["unexpected_errors"],
     )
 
-    if t["validation_errors"] > 0 or t["fetch_errors"] > 0:
+    # Хвіст, який не синхронізовано (зокрема HTF_REWRITE_UNPARSABLE), — не успіх.
+    if any(t[k] > 0 for k in ("validation_errors", "fetch_errors", "rewrite_errors", "unexpected_errors")):
         return 1
     return 0
 

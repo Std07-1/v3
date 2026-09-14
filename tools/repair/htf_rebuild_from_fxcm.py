@@ -123,7 +123,10 @@ def _read_all_bars_raw(tf_dir: str) -> List[Dict[str, Any]]:
     """
     bars: List[Dict[str, Any]] = []
     pattern = os.path.join(tf_dir, "part-*.jsonl")
-    for path in sorted(glob.glob(pattern)):
+    # Файли — від новішого до старішого, як їх обходять читачі (`disk_layer._select_newest_keys`): після
+    # стабільного сорту записи одного ключа стоять у тому ж порядку, що в групі читача, і нічия вибирача
+    # дістається тому самому запису навіть для (аномального) дубліката у двох part-файлах.
+    for path in sorted(glob.glob(pattern), reverse=True):
         with open(path, "r", encoding="utf-8") as f:
             for line_no, line in enumerate(f, 1):
                 line = line.strip()
@@ -172,10 +175,10 @@ def rewrite_range(
     """Замінює діапазон [from_open_ms .. to_open_ms] у SSOT JSONL на FXCM бари.
 
     Алгоритм:
-      1. Зчитати всі існуючі бари з part-файлів.
+      1. Зчитати всі існуючі бари з part-файлів (нерозбірний рядок — status=validation_error, нічого не пишемо).
       2. Видалити бари з open_time_ms у [from_open_ms .. to_open_ms].
-      3. Додати FXCM бари (серіалізовані через to_dict()).
-      4. Відсортувати по open_time_ms, dedup.
+      3. Дублікати диска поза діапазоном — тим самим вибирачем, що й читачі (ADR-0094).
+      4. FXCM-бари: у діапазоні заміняють, поза діапазоном лише ДОПОВНЮЮТЬ — бар диска там не чіпаємо.
       5. Перегрупувати по днях.
       6. Записати у temp файл, потім atomic os.replace().
 
@@ -196,7 +199,12 @@ def rewrite_range(
     }
 
     # 1. Зчитати існуючі бари
-    existing = _read_all_bars_raw(tf_dir)
+    try:
+        existing = _read_all_bars_raw(tf_dir)
+    except ValueError as exc:
+        LOG.error("%s tf_s=%d: %s", symbol, tf_s, exc)
+        result.update({"status": "validation_error", "error": str(exc)})
+        return result
     before_count = len(existing)
 
     # 2. Видалити бари у діапазоні
@@ -217,19 +225,25 @@ def rewrite_range(
             continue
         fxcm_dicts.append(cast(Any, b).to_dict())
 
-    merged = kept + fxcm_dicts
-
-    # 4. Сортування + dedup тим самим вибирачем, що й читачі (ADR-0094). Сорт стабільний: записи одного
-    # ключа лишаються в порядку диска, FXCM-бари — після них. Раніше тут лишався ПЕРШИЙ запис, тож перепис
-    # TF міг закріпити на диску partial-бар, який читач відкидав.
-    merged.sort(key=lambda b: b.get("open_time_ms", 0))
-    winners: Dict[int, Dict[str, Any]] = {}
-    for b in merged:
+    # 4. Дублікати диска — тим самим вибирачем, що й читачі (ADR-0094); `existing` уже в порядку груп
+    # читача. Раніше тут лишався ПЕРШИЙ запис, тож перепис TF міг закріпити на диску partial-бар.
+    by_open: Dict[int, Dict[str, Any]] = {}
+    for b in kept:
         ot = b.get("open_time_ms", 0)
-        current = winners.get(ot)
-        winners[ot] = b if current is None else choose_better_bar(current, b)
-    deduped = list(winners.values())
-    dup_count = len(merged) - len(deduped)
+        current = by_open.get(ot)
+        by_open[ot] = b if current is None else choose_better_bar(current, b)
+    kept_keys = len(by_open)
+
+    # 5. FXCM: у діапазоні ключів диска вже немає (крок 2) — бар брокера займає місце; поза діапазоном
+    # оператор нічого не просив міняти, тож бар диска лишається, а брокерський лише доповнює пропуск.
+    fxcm_inserted = 0
+    for b in fxcm_dicts:
+        ot = b.get("open_time_ms", 0)
+        if ot not in by_open:
+            by_open[ot] = b
+            fxcm_inserted += 1
+    deduped = [by_open[ot] for ot in sorted(by_open)]
+    dup_count = len(kept) + len(fxcm_dicts) - len(deduped)
 
     after_count = len(deduped)
 
@@ -237,8 +251,8 @@ def rewrite_range(
         {
             "before_count": before_count,
             "removed_in_range": removed_count,
-            "fxcm_inserted": len(fxcm_dicts),
-            "kept_outside": len(kept),
+            "fxcm_inserted": fxcm_inserted,
+            "kept_outside": kept_keys,
             "dup_removed": dup_count,
             "after_count": after_count,
         }

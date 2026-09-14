@@ -42,8 +42,6 @@ def rewrite_atomic(path: str, lines: List[str]) -> str:
     жорстким лінком на СТАРИЙ inode (os.link не чіпає ім'я path), і лише потім один
     атомарний os.replace. Файл існує весь час; читач бачить або старий вміст, або новий.
     """
-    stamp = int(time.time())
-    backup = "%s.bak.%d" % (path, stamp)
     tmp = "%s.tmp" % path
     with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
         for line in lines:
@@ -53,10 +51,31 @@ def rewrite_atomic(path: str, lines: List[str]) -> str:
     # Режим доступу — як у оригіналу: ремонт міняє рядки, а не права (на проді частина
     # part-файлів має 666, а новий файл від smc з umask 002 отримав би 664).
     shutil.copymode(path, tmp)
-    try:
-        os.link(path, backup)
-    except OSError:
-        # ФС без жорстких лінків — падаємо назад на копію (теж не чіпає ім'я path).
-        shutil.copy2(path, backup)
+    backup = _backup_old_inode(path)
     os.replace(tmp, path)
     return backup
+
+
+def _backup_old_inode(path: str) -> str:
+    """Бекап допатчевого вмісту під ВІЛЬНИМ іменем `.bak.<unix_ts>[.<n>]`.
+
+    Бекап — єдина копія рядків, які ремонт прибрав. Другий перепис того самого файла в ту саму
+    секунду (сорт, одразу за ним дедуп) не має права його затерти: колись тут `copy2` перезаписував
+    попередній `.bak.<ts>`, щойно `os.link` падав з FileExistsError.
+    """
+    base = "%s.bak.%d" % (path, int(time.time()))
+    attempt = 0
+    while True:
+        backup = base if attempt == 0 else "%s.%d" % (base, attempt)
+        attempt += 1
+        try:
+            os.link(path, backup)
+            return backup
+        except FileExistsError:
+            continue
+        except OSError:
+            # ФС без жорстких лінків — копія (теж не чіпає ім'я path), лише у вільне ім'я.
+            if os.path.lexists(backup):
+                continue
+            shutil.copy2(path, backup)
+            return backup

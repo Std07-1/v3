@@ -67,7 +67,9 @@ def _read_m1_bars_from_disk(
         return []
 
     bars: List[Dict[str, Any]] = []
-    for path in paths:
+    # Від новішого файла до старішого, як їх обходять читачі (`disk_layer._select_newest_keys`): після
+    # стабільного сорту нічия вибирача дістається тому самому запису, що й на графіку.
+    for path in reversed(paths):
         try:
             with open(path, encoding="utf-8") as f:
                 for line in f:
@@ -90,7 +92,7 @@ def _read_m1_bars_from_disk(
             continue
 
     # Сортування по open_time_ms (обов'язково для UDS watermark monotonicity). Сорт стабільний:
-    # записи одного ключа лишаються в порядку диска — нічия вибирача дістається пізнішому.
+    # записи одного ключа лишаються в порядку груп читача.
     bars.sort(key=lambda x: x.get("open_time_ms", 0))
 
     # Дедуплікація тим самим вибирачем, що й читачі UDS (ADR-0094): replay мусить відтворювати

@@ -492,6 +492,17 @@ def _tf_label(tf_s: int) -> str:
 # ─── CLI entrypoint ───────────────────────────────────────────────
 
 
+class DedupRefused(RuntimeError):
+    """Dedup-on-finish відмовив хоч одному файлу (DEDUP_UNPARSABLE): дублікати `--force` там лишились."""
+
+    def __init__(self, paths: List[str], dupes_removed: int) -> None:
+        super().__init__(
+            "DEDUP_REFUSED files=%d dupes_removed_elsewhere=%d first=%s" % (len(paths), dupes_removed, paths[0])
+        )
+        self.paths = paths
+        self.dupes_removed = dupes_removed
+
+
 def dedup_derived_in_ranges(
     data_root: str,
     symbol_ranges: Dict[str, Tuple[int, int]],
@@ -504,13 +515,17 @@ def dedup_derived_in_ranges(
 
     Returns:
         Скільки дублікатів видалено сумарно.
+
+    Raises:
+        DedupRefused: після обходу ВСІХ файлів, якщо хоч один не переписано (нерозбірний рядок).
     """
     from pathlib import Path
 
-    from tools.repair.dedup_jsonl_lastwins import dedup_file
+    from tools.repair.dedup_jsonl_lastwins import run_dedup
 
     derived_tfs = [tf for tf in DERIVE_ORDER if tf != TF_M1_S]
     dedup_total = 0
+    refused: List[str] = []
     for symbol, (start_ms, end_ms) in sorted(symbol_ranges.items()):
         if start_ms <= 0 or end_ms <= start_ms:
             raise ValueError(
@@ -522,8 +537,15 @@ def dedup_derived_in_ranges(
                 p = Path(data_root) / sym_dir / f"tf_{tf_s}" / f"part-{day}.jsonl"
                 if not p.exists():
                     continue
-                _, _, dupes = dedup_file(p, dry_run=False)
-                dedup_total += dupes
+                plan = run_dedup(p, dry_run=False)
+                if plan is None:
+                    continue
+                dedup_total += plan.lines_in - plan.lines_out
+                if plan.refused:
+                    refused.append(str(p))
+    if refused:
+        # Решту файлів уже дедупнуто; відмовлені лишили дублікати перебудови — це не «0 прибрано».
+        raise DedupRefused(refused, dedup_total)
     return dedup_total
 
 
@@ -662,7 +684,11 @@ def main() -> None:
         if skipped:
             # I5: не мовчазний пропуск — символи без rebuild не дедуплікуються свідомо
             logging.warning("DEDUP_SKIP symbols=%s (rebuild не виконувався)", ",".join(skipped))
-        dedup_total = dedup_derived_in_ranges(data_root, symbol_ranges)
+        try:
+            dedup_total = dedup_derived_in_ranges(data_root, symbol_ranges)
+        except DedupRefused as refusal:
+            logging.error("%s — перебудову записано, дублікати у цих файлах лишились", refusal)
+            raise SystemExit(1)
         logging.info(
             "DEDUP_TOTAL dupes_removed=%d symbols=%d", dedup_total, len(symbol_ranges)
         )
