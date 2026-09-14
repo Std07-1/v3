@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.model.bars import CandleBar, assert_invariants, utc_dt_to_ms
 from runtime.ingest.market_calendar import MarketCalendar
@@ -22,6 +22,20 @@ except Exception:  # noqa: BLE001
 OPEN_PRICE_MODE_NAME = "FIRST_TICK"
 # Допуск порівняння open з [low, high] — нижче за крок ціни будь-якого символу (XAG 0.001, NAS100 0.05).
 _OPEN_RANGE_EPS = 1e-9
+# Поля рядка SDK, які ремонт історії (ADR-0096 §3.3 B) зберігає сирими: dtype `ForexConnect.get_history`
+# для барів — Date, BidOpen..BidClose, AskOpen..AskClose (f8), Volume (i4).
+RAW_ROW_FIELDS = (
+    "BidOpen", "BidHigh", "BidLow", "BidClose", "AskOpen", "AskHigh", "AskLow", "AskClose", "Volume",
+)
+
+
+def is_open_outside_range(o: float, h: float, low: float) -> bool:
+    """Open поза [low, high] — рядок брокера не несе першого тіку (ADR-0096 §1.4).
+
+    Єдине визначення «не перший тік» і для live-нормалізації, і для staging ремонту історії: друга
+    копія умови розійшлась би з першою, і ремонт записав би те, що live вважає артефактом.
+    """
+    return o > h + _OPEN_RANGE_EPS or o < low - _OPEN_RANGE_EPS
 
 
 def _resolve_open_price_mode() -> Any:
@@ -132,13 +146,18 @@ class FxcmHistoryProvider:
         return self
 
     def _get_history(
-        self, symbol: str, timeframe: str, date_to_utc: Optional[dt.datetime], n: int
+        self,
+        symbol: str,
+        timeframe: str,
+        date_to_utc: Optional[dt.datetime],
+        n: int,
+        date_from_utc: Optional[dt.datetime] = None,
     ) -> Any:
         """Єдиний виклик SDK за барами: режим ціни відкриття передається явно, не дефолтом SDK."""
         return self._fx.get_history(  # type: ignore[union-attr]
             symbol,
             timeframe,
-            None,
+            date_from_utc,
             date_to_utc,
             n,
             candle_open_price_mode=self._open_price_mode,
@@ -197,6 +216,32 @@ class FxcmHistoryProvider:
             anchor_offset_s=self._anchor_offset_for_tf(60),
             anchor_offset_s_alts=self._anchor_offset_alts_for_tf(60),
         )
+
+    def fetch_m1_raw_range(
+        self, symbol: str, date_from_utc: dt.datetime, date_to_utc: dt.datetime
+    ) -> List[Dict[str, Any]]:
+        """Сирі рядки M1 брокера за [date_from, date_to] у FIRST_TICK — вхід staging ремонту історії.
+
+        Навмисно не як `fetch_last_n_m1`: помилку SDK не ковтає (для staging «порожньо» і «впало» —
+        різні речі), OHLC не нормалізує (нормалізація розтягнула б H/L до «запеченого» open, ADR-0096
+        §1.4), не сортує і не фільтрує — це робить staging, де кожне відкидання рахується.
+        """
+        if self._fx is None:
+            raise RuntimeError("FXCM сесія не відкрита.")
+        for name, value in (("date_from_utc", date_from_utc), ("date_to_utc", date_to_utc)):
+            if value.tzinfo is None:
+                raise ValueError("%s має бути UTC tz-aware." % name)
+        if date_from_utc >= date_to_utc:
+            raise ValueError("FXCM_RAW_RANGE_EMPTY_WINDOW from=%s to=%s" % (date_from_utc, date_to_utc))
+        history_rows = self._get_history(symbol, "m1", date_to_utc, -1, date_from_utc=date_from_utc)
+        if history_rows is None:
+            raise RuntimeError("FXCM_RAW_RANGE_NONE symbol=%s — SDK повернув None замість масиву" % symbol)
+        raw_rows = [_raw_row(row) for row in history_rows]
+        logging.info(
+            "FXCM_RAW_RANGE symbol=%s from=%s to=%s rows=%d mode=%s",
+            symbol, date_from_utc.isoformat(), date_to_utc.isoformat(), len(raw_rows), OPEN_PRICE_MODE_NAME,
+        )
+        return raw_rows
 
     def fetch_last_n_tf(
         self,
@@ -266,7 +311,7 @@ def normalize_history_to_bars(
             close_ms = open_ms + tf_s * 1000
 
             o, h, low, c = extract_ohlc(r)
-            if o > h + _OPEN_RANGE_EPS or o < low - _OPEN_RANGE_EPS:
+            if is_open_outside_range(o, h, low):
                 # У FIRST_TICK open поза [low, high] — не тік цієї свічки: у брокера на цей проміжок немає тікової
                 # історії і він підставив close попередньої (виміряно 14.09: Нд 22:00 → Пн 07:00 UTC). Нормалізація
                 # нижче розтягне H/L до такого open — тож проміжок мусить бути видно, а не мовчки записаний.
@@ -425,6 +470,24 @@ def extract_ohlc(row: Any) -> Tuple[float, float, float, float]:
             )
             continue
     raise ValueError("history_row_missing_ohlc")
+
+
+def _raw_row(row: Any) -> Dict[str, Any]:
+    """Рядок SDK → dict сирих значень (`open_time_ms` + RAW_ROW_FIELDS); відсутнє поле — гучна відмова."""
+    raw: Dict[str, Any] = {"open_time_ms": extract_open_time_ms(row)}
+    for field in RAW_ROW_FIELDS:
+        try:
+            value = row[field]
+        except (KeyError, IndexError, ValueError) as exc:
+            raise ValueError("FXCM_RAW_ROW_FIELD_MISSING field=%s" % field) from exc
+        if field == "Volume":
+            volume = int(value)
+            if volume != value:
+                raise ValueError("FXCM_RAW_ROW_VOLUME_NOT_INTEGER value=%r" % (value,))
+            raw[field] = volume
+        else:
+            raw[field] = float(value)
+    return raw
 
 
 def extract_volume(row: Any) -> float:
