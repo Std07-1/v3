@@ -100,14 +100,23 @@ def detect_raw_swings(
 
 
 def compute_atr(bars: List[CandleBar], period: int = 14) -> float:
-    """Average True Range — helper для OB/FVG strength (S5: period з config)."""
+    """Average True Range — helper для OB/FVG strength (S5: period з config).
+
+    True Range враховує розрив від попереднього close (як ta.tr у TradingView). До ADR-0096 свічки від
+    FXCM приходили в режимі PREVIOUS_CLOSE, де H/L уже містили попередній close, тож `h − low` випадково
+    дорівнював TR; з першим тіком розрив на відкритті сесії лишається між свічками і мусить потрапити в ATR.
+    """
     if not bars:
         return 1.0  # fallback, ніколи не вернути 0
     n = min(len(bars), period)
     total = 0.0
     for i in range(1, n + 1):
         b = bars[-i]
-        tr = b.h - b.low  # simplified TR (no prior close — достатньо для M1+)
+        if i < len(bars):
+            prev_close = bars[-i - 1].c
+            tr = max(b.h, prev_close) - min(b.low, prev_close)
+        else:
+            tr = b.h - b.low  # найстаріший бар ряду — попереднього close немає
         total += tr
     atr = total / n
     return atr if atr > 0.0 else 1.0  # rail: atr > 0

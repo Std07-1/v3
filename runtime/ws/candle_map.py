@@ -47,6 +47,10 @@ def _is_display_flat_bar(bar: dict) -> bool:
     ext = bar.get("extensions", {})
     if isinstance(ext, dict) and ext.get("calendar_pause_flat"):
         return True
+    if isinstance(ext, dict) and ext.get("trading_flat"):
+        # Інжест за календарем визнав хвилину торговою (m1_poller): це справжня однотікова свічка,
+        # не артефакт паузи. З ціною відкриття першим тіком (ADR-0096) таких стає більше — TV малює їх рискою.
+        return False
     o = bar.get("open", bar.get("o"))
     h = bar.get("high", bar.get("h"))
     lo = bar.get("low", bar.get("l"))
