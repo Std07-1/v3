@@ -1,7 +1,10 @@
-"""Dedup derived JSONL files (M3–D1) — видаляє дублікати по open_time_ms.
+"""Dedup derived JSONL files (M3–D1) — усі part-файли символу через SSOT-дедуп (ADR-0094).
 
-Фікс для проблеми cascade_catchup reset_watermark(0) яка дописувала
-усі derived бари при кожному рестарті.
+Зʼявився як фікс для cascade_catchup reset_watermark(0), що дописував усі derived бари при
+кожному рестарті. До 2026-09-14 мав власний вибирач (`_SRC_RANK`: history > derived, partial
+не бачив) — тобто на диску міг лишити не той бар, який показують читачі. Тепер це лише обхід
+файлів: переможця обирає `tools.repair.dedup_jsonl_lastwins` (єдиний вибирач
+`core.model.bar_choice`, рядок байт-у-байт, бекап, нерозбірні рядки блокують перепис).
 
 Використання:
   python -m tools.dedup_derived_jsonl --all
@@ -9,17 +12,17 @@
   python -m tools.dedup_derived_jsonl --all --dry-run
 """
 
-import json
+import argparse
+import logging
 import os
 import sys
-import logging
-import argparse
-from collections import OrderedDict
+from pathlib import Path
 from typing import List
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.config_loader import load_system_config, pick_config_path
+from tools.repair.dedup_jsonl_lastwins import dedup_file
 
 log = logging.getLogger("dedup_derived")
 logging.basicConfig(
@@ -28,82 +31,14 @@ logging.basicConfig(
 )
 
 DERIVED_TFS = [180, 300, 900, 1800, 3600, 14400, 86400]
-_SRC_RANK = {"history": 3, "derived": 2, "tick_promoted": 1}
 
 
 def _sym_dir(sym: str) -> str:
     return sym.replace("/", "_")
 
 
-def _dedup_file(path: str, dry_run: bool) -> int:
-    """Дедуплікує один JSONL файл in-place. Повертає кількість видалених дублів."""
-    with open(path, encoding="utf-8") as fh:
-        lines = [ln.strip() for ln in fh if ln.strip()]
-
-    if not lines:
-        return 0
-
-    by_key: "OrderedDict[int, str]" = OrderedDict()
-    bars_parsed: "OrderedDict[int, dict]" = OrderedDict()
-
-    for raw_line in lines:
-        bar = json.loads(raw_line)
-        ot = bar["open_time_ms"]
-        existing = bars_parsed.get(ot)
-        if existing is None:
-            by_key[ot] = raw_line
-            bars_parsed[ot] = bar
-        else:
-            # Зберігаємо кращий бар
-            old_rank = _SRC_RANK.get(existing.get("src", ""), 0)
-            new_rank = _SRC_RANK.get(bar.get("src", ""), 0)
-            if new_rank > old_rank or (
-                new_rank == old_rank and bar.get("complete", False)
-            ):
-                by_key[ot] = raw_line
-                bars_parsed[ot] = bar
-
-    dropped = len(lines) - len(by_key)
-    if dropped == 0:
-        return 0
-
-    if dry_run:
-        log.info(
-            "DRY_RUN %s: %d lines → %d unique, %d dupes",
-            path,
-            len(lines),
-            len(by_key),
-            dropped,
-        )
-        return dropped
-
-    # Перезаписування: write tmp → replace (або fallback на Windows якщо файл locked)
-    tmp_path = path + ".dedup.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as fh:
-        for line in by_key.values():
-            fh.write(line + "\n")
-    try:
-        os.replace(tmp_path, path)
-    except PermissionError:
-        # Windows: файл може бути locked іншим процесом
-        bak_path = path + ".bak"
-        try:
-            if os.path.exists(bak_path):
-                os.remove(bak_path)
-            os.rename(path, bak_path)
-            os.rename(tmp_path, path)
-            os.remove(bak_path)
-        except PermissionError:
-            log.warning("SKIP_LOCKED %s (file locked by another process)", path)
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-            return 0
-    log.info("DEDUPED %s: %d → %d (-%d dupes)", path, len(lines), len(by_key), dropped)
-    return dropped
-
-
 def dedup_symbol(data_root: str, sym: str, dry_run: bool) -> int:
-    """Дедуплікує всі derived TF файли для символу."""
+    """Дедуплікує всі derived TF файли для символу; повертає кількість прибраних дублікатів."""
     total_dropped = 0
     sym_dir = os.path.join(data_root, _sym_dir(sym))
     if not os.path.isdir(sym_dir):
@@ -117,8 +52,7 @@ def dedup_symbol(data_root: str, sym: str, dry_run: bool) -> int:
         for fname in sorted(os.listdir(tf_dir)):
             if not fname.endswith(".jsonl"):
                 continue
-            fpath = os.path.join(tf_dir, fname)
-            dropped = _dedup_file(fpath, dry_run)
+            _lines_in, _lines_out, dropped = dedup_file(Path(tf_dir) / fname, dry_run=dry_run)
             total_dropped += dropped
 
     return total_dropped
