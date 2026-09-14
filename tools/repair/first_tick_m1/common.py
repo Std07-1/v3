@@ -98,6 +98,13 @@ def now_utc_iso() -> str:
     return utc_iso(int(time.time() * 1000))
 
 
+def request_window(day: dt.date) -> Dict[str, Any]:
+    """Запит однієї доби D до get_history: [D − REQUEST_MARGIN_BEFORE_S, D + 1 доба], усі рядки (-1)."""
+    start = day_start_ms(day)
+    return {"date_from_utc": utc_iso(start - REQUEST_MARGIN_BEFORE_S * 1000), "date_to_utc": utc_iso(start + DAY_MS),
+            "quotes_count": -1}
+
+
 def resolve_data_root(cfg: Dict[str, Any], override: Optional[str]) -> str:
     """Абсолютний realpath кореня SSOT; відносний шлях — від кореня репо, не від cwd (fetch іде з іншого cwd)."""
     raw = override if override else str(cfg.get("data_root") or "./data_v3")

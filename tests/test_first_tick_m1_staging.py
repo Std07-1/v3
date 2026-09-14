@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -157,7 +158,8 @@ def test_load_refuses_half_missing_day(tmp_path):
     assert caught.value.reason == "half_missing"
 
 
-FETCH_SIDE = ("__init__", "common", "staging")
+FETCH_SIDE = ("__init__", "__main__", "common", "staging", "fetch", "fetch_rails", "fetch_call", "fetch_runner",
+              "fetch_child")
 PLATFORM_ONLY = ("runtime.store", "redis", "aiohttp") + tuple(
     "tools.repair.first_tick_m1." + name
     for name in ("plan", "plan_io", "apply", "verify", "rollback", "classify", "ssot_part", "writers_guard",
@@ -169,7 +171,9 @@ PLATFORM_ONLY = ("runtime.store", "redis", "aiohttp") + tuple(
 def test_fetch_side_modules_parse_as_python37_and_import_no_platform(name):
     """Fetch іде в .venv37 (Python 3.7): синтаксис 3.8+ або модульний імпорт платформних залежностей зламав би
     його лише на VPS. Імпорт фаз plan/apply/verify у __main__ — лише всередині функцій."""
-    tree = ast.parse((PACKAGE / (name + ".py")).read_text(encoding="utf-8"), feature_version=(3, 7))
+    # У самому Python 3.7 (.venv37) парсер і є 3.7 — feature_version з'явився лише в 3.8.
+    grammar = {"feature_version": (3, 7)} if sys.version_info >= (3, 8) else {}
+    tree = ast.parse((PACKAGE / (name + ".py")).read_text(encoding="utf-8"), **grammar)
     module_level = []
     for node in tree.body:
         if isinstance(node, ast.Import):
