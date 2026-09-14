@@ -14,7 +14,9 @@ import os
 import shutil
 from typing import Any, Dict, List, Optional, Tuple
 
-from tools.repair.first_tick_m1.common import REPO_ROOT, day_key, log_event, request_window, sym_dir, utc_iso
+from tools.repair.first_tick_m1.common import (
+    REPO_ROOT, day_key, log_event, request_window, session_timeout_s, sym_dir, utc_iso,
+)
 from tools.repair.first_tick_m1.fetch_child import EXIT_EMPTY, EXIT_STAGING_INVALID
 from tools.repair.first_tick_m1.staging import StagingInvalid, validate_rows, write_day_atomic
 
@@ -45,11 +47,12 @@ def execute_call(ctx: Any, opts: Any, deps: Any, run_id: str, seq: int, day: dt.
         os.makedirs(directory, exist_ok=True)
     out_path, result_path = os.path.join(inflight, tag + ".jsonl"), os.path.join(inflight, tag + ".result.json")
     argv = [deps.python_executable, "-u", "-m", CHILD_MODULE, "--symbol", opts.symbol, "--day", day_key(day),
-            "--out", out_path, "--result", result_path]
+            "--out", out_path, "--result", result_path, "--deadline-s", str(opts.call_timeout_s)]
     log_path = os.path.join(log_dir, "call-%04d-%s-%s.log" % (seq, sym_dir(opts.symbol), day_key(day)))
     outcome = None
     try:
-        outcome = deps.run_child(argv, cwd=call_dir, env=child_env(), timeout_s=opts.call_timeout_s, log_path=log_path)
+        outcome = deps.run_child(argv, cwd=call_dir, env=child_env(), timeout_s=session_timeout_s(opts.call_timeout_s, 1),
+                                 log_path=log_path)
         record = CallRecord(seq, day_key(day), outcome.status, outcome.returncode, round(outcome.duration_s, 3))
         if outcome.status == "exited":
             _resolve_exited(record, ctx, opts, deps, run_id, day, out_path, result_path)

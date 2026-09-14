@@ -96,9 +96,10 @@ def check_rails(opts: FetchOptions, deps: FetchDeps) -> FetchContext:
 
 
 def market_open_reason(ctx: FetchContext, opts: FetchOptions, now_ms: int) -> Optional[str]:
-    """Торгова хвилина у [now − guard, now + timeout + guard] — виклик заборонено; текст події або None."""
+    """Торгова хвилина у [now − guard, now + найдовша сесія + guard] — виклик заборонено; текст події або None."""
     guard_ms = opts.guard_minutes * c.MINUTE_MS
-    minute = c.first_trading_minute(ctx.calendar, now_ms - guard_ms, now_ms + opts.call_timeout_s * 1000 + guard_ms)
+    horizon_ms = c.session_timeout_s(opts.call_timeout_s, 1) * 1000
+    minute = c.first_trading_minute(ctx.calendar, now_ms - guard_ms, now_ms + horizon_ms + guard_ms)
     if minute is None:
         return None
     return c.log_event(logging.ERROR, "FT_FETCH_REFUSED_MARKET_OPEN", symbol=opts.symbol,

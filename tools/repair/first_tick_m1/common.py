@@ -31,6 +31,8 @@ MAX_CALLS_DEFAULT = 30  # логінів за прогін: один вихід�
 MAX_CALLS_CEILING = 300
 CALL_TIMEOUT_DEFAULT_S = 180  # get_history — синхронний нативний виклик без таймауту (ADR-0054 §3.6)
 CALL_TIMEOUT_RANGE_S = (30, 900)
+# Кроки сесії дитини поза get_history, кожен під тим самим дедлайном: логін і логаут.
+SESSION_OVERHEAD_STEPS = 2
 KILL_WAIT_S = 15
 CALL_INTERVAL_DEFAULT_S = 5  # пауза між логінами; нуль заборонено — частоту логінів брокера не виміряно
 CALL_INTERVAL_RANGE_S = (1, 600)
@@ -105,6 +107,15 @@ def request_window(day: dt.date) -> Dict[str, Any]:
     start = day_start_ms(day)
     return {"date_from_utc": utc_iso(start - REQUEST_MARGIN_BEFORE_S * 1000), "date_to_utc": utc_iso(start + DAY_MS),
             "quotes_count": -1}
+
+
+def session_timeout_s(call_timeout_s: int, days: int) -> int:
+    """Найдовша можлива сесія дитини: логін, get_history кожної доби і логаут — кожен до `call_timeout_s`.
+
+    Таймаут батька і вікно закритого ринку рахуються від неї: дедлайн усередині дитини перевзводиться на кожному
+    кроці, тож коротший таймаут батька вбивав би здорову сесію, а коротше вікно пускало б сесію у відкритий ринок.
+    """
+    return call_timeout_s * (days + SESSION_OVERHEAD_STEPS)
 
 
 def resolve_data_root(cfg: Dict[str, Any], override: Optional[str]) -> str:

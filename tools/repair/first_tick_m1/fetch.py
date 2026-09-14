@@ -1,9 +1,11 @@
 """Фаза fetch: перезабір M1 з FXCM FIRST_TICK у staging поза data_v3 під рейками (ADR-0096 §3.3 B). Python 3.7.
 
-Батько не логіниться в FXCM; кожна доба — окремий дочірній процес (`fetch_call`) зі свіжим cwd і жорстким
-таймаутом. Перед кожним викликом — ліміт викликів, ліміт відмов поспіль, пауза між логінами і рейка
-закритого ринку (`fetch_rails`). Після кожного виклику — маніфест прогону `_runs/<run_id>.json`.
-rc: 0 усе закомічено або законно пропущено; 1 є невдалі доби; 2 відмова до виклику; 3 зупинка рейкою.
+Батько не логіниться в FXCM; кожна доба — окремий дочірній процес (`fetch_call`) зі свіжим cwd, дедлайном
+кожного кроку всередині дитини і жорстким таймаутом батька. Перед кожним викликом — ліміт викликів, ліміт відмов
+поспіль, пауза між логінами і рейка закритого ринку (`fetch_rails`). Після кожного виклику — маніфест прогону
+`_runs/<run_id>.json`. SIGTERM/SIGHUP/Ctrl+C посеред виклику вбивають дитину і фіналізують маніфест.
+rc: 0 усе закомічено або законно пропущено; 1 є невдалі доби; 2 відмова до виклику; 3 зупинка рейкою;
+128+signum зупинено сигналом.
 """
 
 from __future__ import annotations
@@ -53,32 +55,57 @@ def _locked_run(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext) -> int:
     run = _run_manifest(opts, ctx, run_id, now_ms)
     queue = _day_queue(opts, ctx, run["skipped"])
     calls: List[Dict[str, Any]] = run["calls"]
-    stop, failures_in_row = market_open_reason(ctx, opts, now_ms), 0
+    with c.StopSignals("FT_FETCH") as signals:
+        try:
+            stop = _run_calls(opts, deps, ctx, run, run_id, queue)
+            signals.disarm()
+        except BaseException as exc:
+            # Сигнал, Ctrl+C чи відмова самого батька посеред прогону: дитину вже вбив run_child, маніфест прогону
+            # фіксує, на якій добі зупинились. Сигнал — rc 128+signum, решта летить далі.
+            signals.disarm()
+            stopped_by_signal = isinstance(exc, c.StopSignal)
+            run.update(stop_reason=c.log_event(
+                logging.ERROR, "FT_FETCH_STOPPED_BY_SIGNAL" if stopped_by_signal else "FT_FETCH_CRASHED",
+                day=(run["in_flight"] or {}).get("day"), err="%s: %s" % (type(exc).__name__, exc)),
+                finished_at_utc=c.utc_iso(deps.now_ms()), rc=exc.exit_code if stopped_by_signal else None)
+            c.write_json_atomic(_run_path(ctx, run_id), run)
+            if not stopped_by_signal:
+                raise
+            _print_summary(opts, ctx, run, run_id)
+            return exc.exit_code
+    failed = sum(1 for call in calls if call["status"] != "ok")
+    rc = 3 if stop else (1 if failed else 0)
+    run.update(finished_at_utc=c.utc_iso(deps.now_ms()), stop_reason=stop, rc=rc)
+    c.write_json_atomic(_run_path(ctx, run_id), run)
+    _print_summary(opts, ctx, run, run_id)
+    return rc
+
+
+def _run_calls(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, run: Dict[str, Any], run_id: str,
+               queue: List[dt.date]) -> Optional[str]:
+    """Виклики по черзі під рейками; маніфест — після кожного; повертає причину зупинки або None."""
+    calls: List[Dict[str, Any]] = run["calls"]
+    stop, failures_in_row = market_open_reason(ctx, opts, deps.now_ms()), 0
     for index, day in enumerate(queue):
         stop = stop or _stop_before_call(opts, deps, ctx, calls, failures_in_row, len(queue) - index, day)
         if stop:
             break
-        try:
-            record = execute_call(ctx, opts, deps, run_id, len(calls) + 1, day)
-        except Exception as exc:
-            # Відмова самого батька (диск, права): маніфест прогону фіксує, на якій добі зупинились; виняток — далі.
-            run.update(stop_reason=c.log_event(logging.ERROR, "FT_FETCH_CRASHED", day=c.day_key(day),
-                                               err="%s: %s" % (type(exc).__name__, exc)),
-                       finished_at_utc=c.utc_iso(deps.now_ms()))
-            c.write_json_atomic(_run_path(ctx, run_id), run)
-            raise
+        run["in_flight"] = {"day": c.day_key(day)}
+        record = execute_call(ctx, opts, deps, run_id, len(calls) + 1, day)
+        run["in_flight"] = None
         calls.append(dataclasses.asdict(record))
         failures_in_row = 0 if record.status == "ok" else failures_in_row + 1
         if record.status == "unkillable":
             stop = c.log_event(logging.ERROR, "FT_FETCH_STOPPED_UNKILLABLE_CHILD", day=record.day)
         c.write_json_atomic(_run_path(ctx, run_id), run)
+    return stop
+
+
+def _print_summary(opts: FetchOptions, ctx: FetchContext, run: Dict[str, Any], run_id: str) -> None:
+    calls = run["calls"]
     failed = sum(1 for call in calls if call["status"] != "ok")
-    rc = 3 if stop else (1 if failed else 0)
-    run.update(finished_at_utc=c.utc_iso(deps.now_ms()), stop_reason=stop, rc=rc)
-    c.write_json_atomic(_run_path(ctx, run_id), run)
-    print("FT_FETCH_SUMMARY symbol=%s calls=%d committed=%d failed=%d skipped=%d rc=%d run=%s" % (
-        opts.symbol, len(calls), len(calls) - failed, failed, len(run["skipped"]), rc, _run_path(ctx, run_id)))
-    return rc
+    print("FT_FETCH_SUMMARY symbol=%s calls=%d committed=%d failed=%d skipped=%d rc=%s run=%s" % (
+        opts.symbol, len(calls), len(calls) - failed, failed, len(run["skipped"]), run["rc"], _run_path(ctx, run_id)))
 
 
 def _stop_before_call(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, calls: List[Dict[str, Any]],
@@ -137,7 +164,7 @@ def _run_manifest(opts: FetchOptions, ctx: FetchContext, run_id: str, now_ms: in
             "rails": {"calendar_group": ctx.calendar_group, "guard_minutes": opts.guard_minutes,
                       "call_timeout_s": opts.call_timeout_s, "max_calls": opts.max_calls,
                       "min_age_days": opts.min_age_days},
-            "calls": [], "skipped": [], "stop_reason": None, "rc": None}
+            "calls": [], "skipped": [], "in_flight": None, "stop_reason": None, "rc": None}
 
 
 def _run_path(ctx: FetchContext, run_id: str) -> str:

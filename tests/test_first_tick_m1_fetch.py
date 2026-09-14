@@ -11,13 +11,16 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import signal
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 from ft_m1_support import SYMBOL, at, fetch_meta, line, make_cfg, raw_row, ssot_bar, staged_row, write_part
-from tools.repair.first_tick_m1 import common, fetch_child
+from tools.repair.first_tick_m1 import common, fetch_child, fetch_runner
 from tools.repair.first_tick_m1.fetch import FetchDeps, FetchOptions, run_fetch
 from tools.repair.first_tick_m1.fetch_runner import ChildOutcome, run_child
 from tools.repair.first_tick_m1.staging import day_paths, load_day, rows_bytes, write_day_atomic
@@ -52,7 +55,10 @@ class FakeChild:
         assert argv[1:4] == ["-u", "-m", "tools.repair.first_tick_m1.fetch_child"]
         assert os.path.isdir(cwd) and os.listdir(cwd) == []
         assert env["PYTHONPATH"].split(os.pathsep)[0] == str(common.REPO_ROOT)
-        self.calls.append({"cwd": cwd, "day": args["--day"], "timeout_s": timeout_s})
+        # Дедлайн кожного кроку — у дитини; таймаут батька покриває логін, get_history і логаут.
+        assert timeout_s == common.session_timeout_s(int(args["--deadline-s"]), 1)
+        self.calls.append({"cwd": cwd, "day": args["--day"], "timeout_s": timeout_s,
+                           "deadline_s": int(args["--deadline-s"])})
         self.clock.now += self.advance_ms
         day = common.parse_day_key(args["--day"])
         kind = self.behaviour.get(args["--day"], "ok")
@@ -276,25 +282,44 @@ def test_only_missing_skips_valid_and_refetches_invalid_day(env):
 
 
 class _FakeProvider:
-    def __init__(self, rows=None, error=None):
-        self.rows, self.error, self.windows = rows or [], error, []
+    def __init__(self, rows=None, error=None, fetch_error=None, events=None):
+        self.rows, self.error, self.fetch_error, self.windows = rows or [], error, fetch_error, []
+        self.events = events if events is not None else []
 
     def __enter__(self):
+        self.events.append("login")
         if self.error is not None:
             raise self.error
         return self
 
     def __exit__(self, *exc):
+        self.events.append("logout")
         return False
 
     def fetch_m1_raw_range(self, symbol, date_from, date_to):
+        self.events.append("get_history")
         self.windows.append((symbol, date_from, date_to))
+        if self.fetch_error is not None:
+            raise self.fetch_error
         return list(self.rows)
+
+
+class RecordingDeadline:
+    """Дедлайн дитини без signal.alarm: порядок перевзведень пишеться в той самий журнал, що й кроки провайдера."""
+
+    def __init__(self, events):
+        self.events = events
+
+    def arm(self, stage):
+        self.events.append("arm:" + stage)
+
+    def cancel(self):
+        self.events.append("cancel")
 
 
 def _child_args(tmp_path, day):
     return ["--symbol", SYMBOL, "--day", common.day_key(day), "--out", str(tmp_path / "out.jsonl"),
-            "--result", str(tmp_path / "result.json")]
+            "--result", str(tmp_path / "result.json"), "--deadline-s", "180"]
 
 
 def test_child_main_with_fake_provider_writes_raw_rows_result_and_exit_codes(tmp_path, monkeypatch):
@@ -303,7 +328,8 @@ def test_child_main_with_fake_provider_writes_raw_rows_result_and_exit_codes(tmp
             raw_row(at(day, 22, 1), 4346.23, 4337.69, 4330.62, 4331.55),
             raw_row(at(day, 22, 0), 4089.98, 4093.19, 4086.33, 4092.36)]
     provider = _FakeProvider(rows)
-    assert fetch_child.main(_child_args(tmp_path, day), provider_factory=lambda cfg: provider) == 0
+    assert fetch_child.main(_child_args(tmp_path, day), provider_factory=lambda cfg: provider,
+                            deadline=RecordingDeadline([])) == 0
     out_rows = [json.loads(x) for x in (tmp_path / "out.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [r["open_time_ms"] for r in out_rows] == [at(day, 22, 0), at(day, 22, 1)]
     assert [r["raw_open_not_tick"] for r in out_rows] == [False, True]
@@ -315,12 +341,14 @@ def test_child_main_with_fake_provider_writes_raw_rows_result_and_exit_codes(tmp
     assert common.utc_iso(int(date_from.timestamp() * 1000)) == result["request"]["date_from_utc"]
     assert common.utc_iso(int(date_to.timestamp() * 1000)) == result["request"]["date_to_utc"]
 
-    assert fetch_child.main(_child_args(tmp_path, day), provider_factory=lambda cfg: _FakeProvider(rows[:1])) == 13
+    assert fetch_child.main(_child_args(tmp_path, day), provider_factory=lambda cfg: _FakeProvider(rows[:1]),
+                            deadline=RecordingDeadline([])) == 13
     assert json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))["status"] == "empty"
 
     monkeypatch.setenv("FXCM_PASSWORD", "s3cr3t-pass")
     failing = _FakeProvider(error=RuntimeError("login failed for password s3cr3t-pass"))
-    assert fetch_child.main(_child_args(tmp_path, day), provider_factory=lambda cfg: failing) == 11
+    assert fetch_child.main(_child_args(tmp_path, day), provider_factory=lambda cfg: failing,
+                            deadline=RecordingDeadline([])) == 11
     result_text = (tmp_path / "result.json").read_text(encoding="utf-8")
     assert "s3cr3t-pass" not in result_text and "RuntimeError" in json.loads(result_text)["error"]
 
@@ -344,3 +372,131 @@ def test_parent_crash_is_recorded_in_run_manifest_and_lock_released(env):
     assert "FT_FETCH_CRASHED day=20260720" in run["stop_reason"] and run["calls"] == []
     assert not (env["staging"] / "_fetch.lock").exists()
     assert list(Path(os.path.realpath(env["sdk"])).iterdir()) == []  # тека виклику прибрана і при відмові
+
+
+def test_child_deadline_rearmed_before_login_get_history_and_logout(tmp_path):
+    """Ловить дедлайн лише в батька: Ctrl+C/SIGHUP батька лишали дитину в get_history без дедлайну. Кожен крок
+    сесії перевзводить будильник дитини — і логаут після відмови get_history теж."""
+    day = DAYS[0]
+    events = []
+    provider = _FakeProvider([raw_row(at(day, 22, 0), 4089.98, 4093.19, 4086.33, 4092.36)], events=events)
+    assert fetch_child.main(_child_args(tmp_path, day), provider_factory=lambda cfg: provider,
+                            deadline=RecordingDeadline(events)) == 0
+    expected = ["arm:login", "login", "arm:get_history", "get_history", "arm:logout", "logout", "cancel"]
+    assert events == expected
+    events.clear()
+    failing = _FakeProvider(fetch_error=RuntimeError("SDK boom"), events=events)
+    assert fetch_child.main(_child_args(tmp_path, day), provider_factory=lambda cfg: failing,
+                            deadline=RecordingDeadline(events)) == 11
+    assert events == expected
+
+
+@pytest.mark.skipif(not hasattr(signal, "alarm"), reason="signal.alarm — лише POSIX")
+def test_process_deadline_kernel_kills_blocked_child(tmp_path):
+    """SIGALRM з SIG_DFL: процес завершує ядро, без обробника в Python — так само і посеред нативного виклику."""
+    code = ("from tools.repair.first_tick_m1.fetch_child import ProcessDeadline; import time; "
+            "ProcessDeadline(1).arm('get_history'); time.sleep(30)")
+    started = time.monotonic()
+    proc = subprocess.run([sys.executable, "-c", code], env=dict(os.environ, PYTHONPATH=str(common.REPO_ROOT)),
+                          timeout=25)
+    assert proc.returncode == -signal.SIGALRM and time.monotonic() - started < 20
+
+
+@pytest.mark.skipif(hasattr(signal, "alarm"), reason="на POSIX дедлайн доступний")
+def test_process_deadline_unavailable_is_loud(caplog):
+    fetch_child.ProcessDeadline(5).arm("login")
+    assert "FT_FETCH_CHILD_DEADLINE_UNAVAILABLE" in caplog.text
+
+
+def test_run_child_parent_interrupted_kills_child_and_reraises(tmp_path, monkeypatch):
+    """Ловить дедлайн, що тримає лише батько: Ctrl+C (чи StopSignal) посеред очікування лишав дитину живою."""
+    spawned = []
+    real_popen = subprocess.Popen
+
+    class InterruptedWait(real_popen):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            spawned.append(self)
+            self.interrupted = False
+
+        def wait(self, timeout=None):
+            if timeout == 60 and not self.interrupted:
+                self.interrupted = True
+                raise KeyboardInterrupt()
+            return super().wait(timeout=timeout)
+
+    monkeypatch.setattr(fetch_runner.subprocess, "Popen", InterruptedWait)
+    with pytest.raises(KeyboardInterrupt):
+        run_child([sys.executable, "-c", "import time; time.sleep(60)"], str(tmp_path), dict(os.environ), 60,
+                  str(tmp_path / "child.log"))
+    (proc,) = spawned
+    try:
+        assert proc.poll() is not None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
+def test_run_child_passes_parent_death_signal_preexec(tmp_path, monkeypatch):
+    seen = {}
+
+    def preexec():
+        raise AssertionError("виконується лише в дитині")
+
+    class CapturingPopen:
+        def __init__(self, argv, **kwargs):
+            seen.update(kwargs)
+            self.pid, self.returncode = 1, 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(fetch_runner, "parent_death_preexec", lambda: preexec)
+    monkeypatch.setattr(fetch_runner.subprocess, "Popen", CapturingPopen)
+    assert run_child(["x"], str(tmp_path), {}, 5, str(tmp_path / "child.log")).status == "exited"
+    assert seen["preexec_fn"] is preexec
+
+
+def _alive(pid):
+    try:
+        with open("/proc/%d/stat" % pid) as fh:
+            return fh.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="PR_SET_PDEATHSIG — лише Linux")
+def test_parent_sigkill_takes_child_with_it_on_linux(tmp_path):
+    """SIGKILL батька не лишає дитину з сесією FXCM: ядро шле їй SIGKILL (PR_SET_PDEATHSIG)."""
+    pid_file = tmp_path / "child.pid"
+    child_code = "import os, time; open(%r, 'w').write(str(os.getpid())); time.sleep(120)" % str(pid_file)
+    parent_code = ("import os, sys; from tools.repair.first_tick_m1.fetch_runner import run_child; "
+                   "run_child([sys.executable, '-c', %r], %r, dict(os.environ), 120, %r)"
+                   % (child_code, str(tmp_path), str(tmp_path / "child.log")))
+    parent = subprocess.Popen([sys.executable, "-c", parent_code],
+                              env=dict(os.environ, PYTHONPATH=str(common.REPO_ROOT)))
+    deadline = time.monotonic() + 20
+    while not (pid_file.exists() and pid_file.read_text()):
+        assert time.monotonic() < deadline, "дитина не стартувала"
+        time.sleep(0.05)
+    child_pid = int(pid_file.read_text())
+    parent.kill()
+    parent.wait()
+    while _alive(child_pid):
+        assert time.monotonic() < deadline, "дитина пережила SIGKILL батька"
+        time.sleep(0.05)
+
+
+def test_sigterm_during_call_records_run_and_returns_128_plus_signum(env):
+    """SIGTERM батьку посеред виклику: маніфест прогону фіналізовано з добою, лок знято, staging не змінено."""
+    clock = Clock(SATURDAY_NOON)
+
+    def child_receiving_sigterm(argv, **kwargs):
+        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+
+    assert run_fetch(_opts(env, days=DAYS[:2]), _deps(env, clock, child_receiving_sigterm)) == 128 + signal.SIGTERM
+    run = _run_manifest(env)
+    assert "FT_FETCH_STOPPED_BY_SIGNAL day=20260720" in run["stop_reason"] and run["rc"] == 128 + signal.SIGTERM
+    assert run["calls"] == [] and not (env["staging"] / "_fetch.lock").exists()
+    assert load_day(env["staging"], SYMBOL, DAYS[0]) is None
