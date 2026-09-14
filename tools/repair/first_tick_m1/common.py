@@ -8,7 +8,9 @@ import hashlib
 import json
 import logging
 import os
+import signal
 import socket
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
@@ -219,3 +221,66 @@ def _read_holder(path: str) -> str:
             return fh.read().decode("utf-8", errors="replace").strip()
     except OSError as exc:
         return "<unreadable: %s>" % exc
+
+
+# Сигнали, якими оператор чи supervisor зупиняють процес; SIGHUP — закрита SSH-сесія (на Windows його немає).
+STOP_SIGNAL_NAMES = ("SIGTERM", "SIGHUP", "SIGINT")
+
+
+class StopSignal(BaseException):
+    """Сигнал зупинки як виняток: робота переривається тим самим шляхом фіналізації, що й будь-яка відмова.
+
+    BaseException, а не Exception: гілки `except Exception` посеред роботи не мають права його проковтнути.
+    """
+
+    def __init__(self, signum: int) -> None:
+        super().__init__("signal %d" % signum)
+        self.signum = signum
+
+    @property
+    def exit_code(self) -> int:
+        """Код виходу за конвенцією shell для процесу, зупиненого сигналом."""
+        return 128 + self.signum
+
+
+class StopSignals:
+    """Обробники SIGTERM/SIGHUP/SIGINT на час роботи, що пише стан (маніфест, staging).
+
+    Перший сигнал піднімає StopSignal у головному потоці. Після цього (або після `disarm`, коли почалась
+    фіналізація) сигнали лише фіксуються в лозі: другий Ctrl+C не має права обірвати запис маніфесту. Поза
+    головним потоком обробники поставити неможливо — це видно в лозі, а не мовчки.
+    """
+
+    def __init__(self, prefix: str) -> None:
+        self.prefix = prefix
+        self.armed = True
+        self.received: Optional[int] = None
+        self._previous: Dict[int, Any] = {}
+
+    def __enter__(self) -> "StopSignals":
+        if threading.current_thread() is not threading.main_thread():
+            log_event(logging.WARNING, self.prefix + "_SIGNAL_HANDLERS_UNAVAILABLE", reason="not_main_thread")
+            return self
+        for name in STOP_SIGNAL_NAMES:
+            signum = getattr(signal, name, None)
+            if signum is not None:
+                self._previous[signum] = signal.signal(signum, self._handle)
+        return self
+
+    def __exit__(self, *exc_info: Any) -> bool:
+        for signum, previous in self._previous.items():
+            signal.signal(signum, previous if previous is not None else signal.SIG_DFL)
+        self._previous = {}
+        return False
+
+    def disarm(self) -> None:
+        """Почалась фіналізація: далі сигнали не перериваються, а фіксуються."""
+        self.armed = False
+
+    def _handle(self, signum: int, frame: Any) -> None:
+        if self.received is None:
+            self.received = signum
+        if self.armed:
+            self.armed = False
+            raise StopSignal(signum)
+        log_event(logging.WARNING, self.prefix + "_SIGNAL_DEFERRED", signal=signum)

@@ -12,6 +12,7 @@ import datetime as dt
 import json
 import os
 import shutil
+import signal
 from pathlib import Path
 
 import pytest
@@ -286,11 +287,11 @@ def test_apply_unexpected_error_mid_write_leaves_accurate_manifest(planned, tmp_
 
     real_rewrite, calls = apply_mod.rewrite_atomic, []
 
-    def failing_rewrite(path, lines):
+    def failing_rewrite(path, lines, before_replace=None):
         calls.append(path)
         if len(calls) == 2:
             raise OSError("No space left on device")
-        return real_rewrite(path, lines)
+        return real_rewrite(path, lines, before_replace=before_replace)
 
     monkeypatch.setattr(apply_mod, "rewrite_atomic", failing_rewrite)
     with pytest.raises(OSError):
@@ -299,3 +300,114 @@ def test_apply_unexpected_error_mid_write_leaves_accurate_manifest(planned, tmp_
     assert manifest["status"] == "failed" and "APPLY_UNEXPECTED_ERROR" in manifest["stop_reason"]
     assert [f["status"] for f in manifest["files"]] == ["rewritten", "not_started"]
     assert not (plan_dir / ".apply.lock").exists()
+
+
+def _interrupt_after_replace(monkeypatch, on_call, action):
+    """rewrite_atomic, що на виклику `on_call` після справжнього os.replace виконує `action` (сигнал, kill)."""
+    from tools.repair.first_tick_m1 import apply as apply_mod
+
+    real_rewrite, calls = apply_mod.rewrite_atomic, []
+
+    def rewrite(path, lines, before_replace=None):
+        calls.append(path)
+        backup = real_rewrite(path, lines, before_replace=before_replace)
+        if len(calls) == on_call:
+            action()
+        return backup
+
+    monkeypatch.setattr(apply_mod, "rewrite_atomic", rewrite)
+
+
+class _Killed(BaseException):
+    """SIGKILL: процес зник, фіналізації не буде — тест бере знімок маніфесту в цю мить."""
+
+
+def test_apply_killed_right_after_replace_rollback_and_verify_see_rewritten_file(planned, tmp_path, monkeypatch):
+    """Ловить статус лише в памʼяті: kill одразу після os.replace лишав маніфест без файла — rollback rc=0 не
+    відкочував пропатчений файл. Знімок маніфесту в мить kill мусить мати намір і бекап."""
+    from tools.repair.first_tick_m1.rollback import RollbackOptions, run_rollback
+    from tools.repair.first_tick_m1.verify import VerifyOptions, run_verify
+
+    sc, plan_dir, plan_id = planned
+    originals = {day: _part(sc, day).read_bytes() for day in (MON, TUE)}
+    killed = tmp_path / "killed.json"
+
+    def kill():
+        shutil.copyfile(tmp_path / "manifests" / "apply.json", killed)
+        raise _Killed()
+
+    _interrupt_after_replace(monkeypatch, 1, kill)
+    with pytest.raises(_Killed):
+        run_apply(_opts(sc, plan_dir, plan_id, tmp_path), _deps(sc))
+    snapshot = json.loads(killed.read_text(encoding="utf-8"))
+    record = snapshot["files"][0]
+    assert (snapshot["status"], record["status"]) == ("running", "replacing")
+    assert Path(record["backup"]).read_bytes() == originals[MON] and _part(sc, MON).read_bytes() != originals[MON]
+    assert run_verify(VerifyOptions(str(killed), str(tmp_path / "work"))) == 0
+    assert run_rollback(RollbackOptions(str(killed), sha256_file(killed)), _deps(sc)) == 0
+    assert {day: _part(sc, day).read_bytes() for day in (MON, TUE)} == originals
+
+
+def test_apply_killed_before_replace_file_is_not_treated_as_rewritten(planned, tmp_path, monkeypatch):
+    """Намір записано, бекап є, але os.replace не відбувся: rollback/verify не мають права «відкотити» чи звіряти."""
+    from tools.repair.first_tick_m1 import apply as apply_mod
+    from tools.repair.first_tick_m1.rollback import RollbackOptions, run_rollback
+    from tools.repair.first_tick_m1.verify import VerifyOptions, run_verify
+
+    sc, plan_dir, plan_id = planned
+    original = _part(sc, MON).read_bytes()
+    killed = tmp_path / "killed.json"
+    real_rewrite = apply_mod.rewrite_atomic
+
+    def rewrite(path, lines, before_replace=None):
+        def hook(backup):
+            before_replace(backup)
+            shutil.copyfile(tmp_path / "manifests" / "apply.json", killed)
+            raise _Killed()
+
+        return real_rewrite(path, lines, before_replace=hook)
+
+    monkeypatch.setattr(apply_mod, "rewrite_atomic", rewrite)
+    with pytest.raises(_Killed):
+        run_apply(_opts(sc, plan_dir, plan_id, tmp_path), _deps(sc))
+    assert json.loads(killed.read_text(encoding="utf-8"))["files"][0]["status"] == "replacing"
+    assert _part(sc, MON).read_bytes() == original
+    finalized = _manifest(tmp_path)["files"][0]
+    assert (finalized["status"], finalized["replace_aborted"]) == ("not_started", True)
+    assert run_rollback(RollbackOptions(str(killed), sha256_file(killed)), _deps(sc)) == 0
+    assert _part(sc, MON).read_bytes() == original
+    assert run_verify(VerifyOptions(str(killed), str(tmp_path / "work"))) == 0
+
+
+def test_apply_sigterm_after_replace_finalizes_manifest_rc_128_plus_signum(planned, tmp_path, monkeypatch):
+    """Ловить відсутність обробника SIGTERM: сигнал посеред другого файла — маніфест interrupted, обидва файли
+    rewritten (другий — вироком диска), rc 143, лок знято."""
+    sc, plan_dir, plan_id = planned
+    handler_before = signal.getsignal(signal.SIGTERM)
+
+    def sigterm():
+        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+
+    _interrupt_after_replace(monkeypatch, 2, sigterm)
+    assert run_apply(_opts(sc, plan_dir, plan_id, tmp_path), _deps(sc)) == 128 + signal.SIGTERM
+    manifest = _manifest(tmp_path)
+    assert manifest["status"] == "interrupted" and "APPLY_STOPPED_BY_SIGNAL" in manifest["stop_reason"]
+    assert [f["status"] for f in manifest["files"]] == ["rewritten", "rewritten"]
+    assert manifest["files"][1]["sha256_after_actual"] == sha256_file(_part(sc, TUE))
+    assert not (plan_dir / ".apply.lock").exists()
+    assert signal.getsignal(signal.SIGTERM) == handler_before
+
+
+def test_apply_keyboard_interrupt_after_replace_finalizes_manifest_and_reraises(planned, tmp_path, monkeypatch):
+    """Ловить `except Exception`: Ctrl+C (KeyboardInterrupt) лишав маніфест «running» без переписаного файла."""
+    sc, plan_dir, plan_id = planned
+
+    def ctrl_c():
+        raise KeyboardInterrupt()
+
+    _interrupt_after_replace(monkeypatch, 1, ctrl_c)
+    with pytest.raises(KeyboardInterrupt):
+        run_apply(_opts(sc, plan_dir, plan_id, tmp_path), _deps(sc))
+    manifest = _manifest(tmp_path)
+    assert manifest["status"] == "interrupted" and "APPLY_INTERRUPTED" in manifest["stop_reason"]
+    assert [f["status"] for f in manifest["files"]] == ["rewritten", "not_started"]

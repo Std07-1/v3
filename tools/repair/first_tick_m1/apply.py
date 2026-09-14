@@ -2,10 +2,13 @@
 
 Порядок рейок: sha плану (оператор назвав саме цей план) → ціль prod/copy → лок → (prod) записувачі, ринок,
 власник → кожен вхід плану ті самі байти → для кожного файла: повторні записувачі й ринок, sha до, кожен запис
-плану збігається з рядком-переможцем, sha після рендеру == план → rewrite_atomic → sha на диску == план.
-Маніфест `ft_m1_apply_v1` оновлюється після кожного файла.
+плану збігається з рядком-переможцем, sha після рендеру == план → намір `replacing` у маніфест (fsync) →
+rewrite_atomic (шлях бекапу — у маніфест до os.replace) → sha на диску == план.
+Маніфест `ft_m1_apply_v1` оновлюється до і після кожного файла; сигнал, Ctrl+C чи будь-яка відмова фіналізують
+його вироком диска для кожного файла (`apply_manifest`).
 rc: 0 усе переписано і звірено; 1 зупинка на розбіжності/звірці (частково, маніфест точний); 2 відмова до
-запису; 3 записувачі не доведено зупиненими або ринок відкритий (до запису — нічого; посеред — interrupted).
+запису; 3 записувачі не доведено зупиненими або ринок відкритий (до запису — нічого; посеред — interrupted);
+128+signum зупинено сигналом (маніфест фіналізовано).
 """
 
 from __future__ import annotations
@@ -16,9 +19,10 @@ import json
 import logging
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.config_loader import load_system_config, pick_config_path
+from tools.repair.first_tick_m1 import apply_manifest as am
 from tools.repair.first_tick_m1 import common as c
 from tools.repair.first_tick_m1 import target_rails as rails
 from tools.repair.first_tick_m1.classify import OHLCV
@@ -27,7 +31,7 @@ from tools.repair.first_tick_m1.ssot_part import Patch, canonical_problem, lines
 from tools.repair.first_tick_m1.writers_guard import scan_writers
 from tools.repair.jsonl_rewrite import key_groups, open_ms_of, read_lines, rewrite_atomic
 
-APPLY_FORMAT = "ft_m1_apply_v1"
+APPLY_FORMAT = am.APPLY_FORMAT
 
 
 @dataclasses.dataclass(frozen=True)
@@ -92,31 +96,52 @@ def _run_locked(opts: ApplyOptions, deps: rails.WriteDeps, cfg: Dict[str, Any], 
                 "stop_reason": None, "rc": None, "guard": {"skipped": "copy"}, "market": {"checked": False},
                 "files": [_file_record(item, loaded) for item in todo]}
     c.write_json_atomic(manifest_path, manifest)
-    try:
+
+    def persist() -> None:
+        c.write_json_atomic(manifest_path, manifest)
+
+    with c.StopSignals("APPLY") as signals:
+        try:
+            try:
+                status, rc, reason = "ok", 0, None
+                _apply_files(opts, deps, cfg, loaded, target, manifest, tf_dir, todo, persist)
+            except _Stop as stop:
+                status, rc, reason = stop.status, stop.rc, stop.text
+            except rails.TargetRefused as refused:
+                status, rc, reason = "refused", refused.rc, refused.text
+            signals.disarm()
+        except BaseException as exc:
+            # Будь-що інше посеред запису — сигнал, Ctrl+C, ENOSPC, баг: маніфест мусить сказати правду про кожен
+            # файл (вирок диска для `replacing`), а не лишитись «running». Сигнал — rc 128+signum, решта — далі.
+            signals.disarm()
+            stopped = isinstance(exc, (c.StopSignal, KeyboardInterrupt, SystemExit))
+            code = "APPLY_STOPPED_BY_SIGNAL" if isinstance(exc, c.StopSignal) else (
+                "APPLY_INTERRUPTED" if stopped else "APPLY_UNEXPECTED_ERROR")
+            text = c.log_event(logging.ERROR, code, err="%s: %s" % (type(exc).__name__, exc))
+            exit_code = exc.exit_code if isinstance(exc, c.StopSignal) else 1
+            _finish(manifest, manifest_path, "interrupted" if stopped else "failed", exit_code, text, target, deps)
+            if isinstance(exc, c.StopSignal):
+                return exit_code
+            raise
+    return _finish(manifest, manifest_path, status, rc, reason, target, deps)
+
+
+def _apply_files(opts: ApplyOptions, deps: rails.WriteDeps, cfg: Dict[str, Any], loaded: LoadedPlan,
+                 target: rails.Target, manifest: Dict[str, Any], tf_dir: str, todo: List[Dict[str, Any]],
+                 persist: Callable[[], None]) -> None:
+    """Рейки і перепис файлів по черзі; зупинка — _Stop/TargetRefused, маніфест фіналізує викликач."""
+    if target.kind == "prod":
+        _prod_rails(opts, deps, cfg, manifest, tf_dir, [under(target.data_root, item["part"]) for item in todo])
+    mismatches = input_mismatches(loaded.plan, target.data_root, opts.staging_root)
+    if mismatches:
+        for path, expected, actual in mismatches:
+            print("APPLY_PLAN_INPUT_CHANGED path=%s expected=%s actual=%s" % (path, expected, actual))
+        raise _Stop("refused", 2, c.log_event(logging.ERROR, "APPLY_PLAN_INPUT_CHANGED", n=len(mismatches)))
+    for index, item in enumerate(todo):
         if target.kind == "prod":
-            _prod_rails(opts, deps, cfg, manifest, tf_dir, [under(target.data_root, item["part"]) for item in todo])
-        mismatches = input_mismatches(plan, target.data_root, opts.staging_root)
-        if mismatches:
-            for path, expected, actual in mismatches:
-                print("APPLY_PLAN_INPUT_CHANGED path=%s expected=%s actual=%s" % (path, expected, actual))
-            raise _Stop("refused", 2, c.log_event(logging.ERROR, "APPLY_PLAN_INPUT_CHANGED", n=len(mismatches)))
-        for index, item in enumerate(todo):
-            if target.kind == "prod":
-                _prod_rails(opts, deps, cfg, manifest, tf_dir, (), during=True)
-            _rewrite_file(item, loaded, target, manifest["files"][index], deps)
-            c.write_json_atomic(manifest_path, manifest)
-    except _Stop as stop:
-        return _finish(manifest, manifest_path, stop.status, stop.rc, stop.text, deps)
-    except rails.TargetRefused as refused:
-        started = any(f["status"] == "rewritten" for f in manifest["files"])
-        return _finish(manifest, manifest_path, "interrupted" if started else "refused", refused.rc, refused.text, deps)
-    except Exception as exc:
-        # Непередбачена відмова (диск, права) посеред запису: маніфест мусить сказати, що вже переписано, а не
-        # лишитись «running» — інакше rollback/verify не знатимуть стану. Виняток летить далі.
-        _finish(manifest, manifest_path, "failed", 1, c.log_event(
-            logging.ERROR, "APPLY_UNEXPECTED_ERROR", err="%s: %s" % (type(exc).__name__, exc)), deps)
-        raise
-    return _finish(manifest, manifest_path, "ok", 0, None, deps)
+            _prod_rails(opts, deps, cfg, manifest, tf_dir, (), during=True)
+        _rewrite_file(item, loaded, target, manifest["files"][index], deps, persist)
+        persist()
 
 
 def _prod_rails(opts: ApplyOptions, deps: rails.WriteDeps, cfg: Dict[str, Any], manifest: Dict[str, Any], tf_dir: str,
@@ -138,7 +163,7 @@ def _prod_rails(opts: ApplyOptions, deps: rails.WriteDeps, cfg: Dict[str, Any], 
 
 
 def _rewrite_file(item: Dict[str, Any], loaded: LoadedPlan, target: rails.Target, record: Dict[str, Any],
-                  deps: rails.WriteDeps) -> None:
+                  deps: rails.WriteDeps, persist: Callable[[], None]) -> None:
     path = under(target.data_root, item["part"])
     with open(path, "rb") as fh:
         raw = fh.read()
@@ -154,9 +179,17 @@ def _rewrite_file(item: Dict[str, Any], loaded: LoadedPlan, target: rails.Target
     new_lines = render_patched_lines(lines, patches)
     if c.sha256_bytes(lines_bytes(new_lines)) != item["sha256_after"]:
         raise _Stop("failed", 1, c.log_event(logging.ERROR, "APPLY_PLAN_DIVERGED", path=path, detail="sha_after"))
-    backup = rewrite_atomic(path, new_lines)
-    # Статус — одразу після os.replace: будь-яка подальша відмова не мусить сховати, що файл уже переписано.
-    record.update(backup=os.path.abspath(backup), status="rewritten", at_utc=c.utc_iso(deps.now_ms()))
+    # Намір — у маніфест з fsync ДО перепису, шлях бекапу — до os.replace: процес, убитий будь-де між ними,
+    # лишає `replacing`, і вирок виносить диск (apply_manifest.disk_state), а не памʼять цього процесу.
+    record.update(status="replacing", intent_at_utc=c.utc_iso(deps.now_ms()))
+    persist()
+
+    def backup_ready(backup: str) -> None:
+        record["backup"] = os.path.abspath(backup)
+        persist()
+
+    rewrite_atomic(path, new_lines, before_replace=backup_ready)
+    record.update(status="rewritten", at_utc=c.utc_iso(deps.now_ms()))
     record["sha256_after_actual"] = c.sha256_file(path)
     if record["sha256_after_actual"] != item["sha256_after"]:
         raise _Stop("failed", 1, c.log_event(logging.ERROR, "APPLY_WRITE_VERIFY_FAILED", path=path,
@@ -183,11 +216,14 @@ def _file_record(item: Dict[str, Any], loaded: LoadedPlan) -> Dict[str, Any]:
     return {"day": item["day"], "part": item["part"], "sha256_before": item["sha256_before"],
             "sha256_after_planned": item["sha256_after"], "sha256_after_actual": None, "backup": None,
             "replaced": len(replaces), "trading_flat_added": sum(1 for e in replaces if e["trading_flat_add"]),
-            "status": "not_started", "at_utc": None}
+            "status": "not_started", "intent_at_utc": None, "at_utc": None}
 
 
-def _finish(manifest: Dict[str, Any], path: str, status: str, rc: int, reason: Optional[str],
+def _finish(manifest: Dict[str, Any], path: str, status: str, rc: int, reason: Optional[str], target: rails.Target,
             deps: rails.WriteDeps) -> int:
+    am.reconcile_replacing(manifest, target.data_root)
+    if status == "refused" and am.touched_records(manifest):
+        status = "interrupted"  # відмова рейки посеред прогону: частина файлів уже переписана
     manifest.update(status=status, rc=rc, stop_reason=reason, finished_at_utc=c.utc_iso(deps.now_ms()))
     c.write_json_atomic(path, manifest)
     done = [f for f in manifest["files"] if f["status"] == "rewritten"]

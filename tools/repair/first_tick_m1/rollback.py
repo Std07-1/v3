@@ -18,6 +18,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from core.config_loader import load_system_config, pick_config_path
+from tools.repair.first_tick_m1 import apply_manifest as am
 from tools.repair.first_tick_m1 import common as c
 from tools.repair.first_tick_m1 import target_rails as rails
 from tools.repair.first_tick_m1.plan_io import under
@@ -39,7 +40,7 @@ def run_rollback(opts: RollbackOptions, deps: rails.WriteDeps) -> int:
         if c.sha256_file(opts.apply_manifest) != opts.expect_manifest_sha:
             raise rails.refuse(2, "ROLLBACK_MANIFEST_SHA_MISMATCH", manifest=opts.apply_manifest)
         applied = c.read_json(opts.apply_manifest)
-        if applied.get("format") != "ft_m1_apply_v1":
+        if applied.get("format") != am.APPLY_FORMAT:
             raise rails.refuse(2, "ROLLBACK_MANIFEST_FORMAT", manifest=opts.apply_manifest)
         target = rails.resolve_target(cfg, applied["data_root"], opts.copy, "ROLLBACK")
         with c.exclusive_lock(os.path.join(applied["plan_dir"], ".apply.lock")):
@@ -55,7 +56,7 @@ def run_rollback(opts: RollbackOptions, deps: rails.WriteDeps) -> int:
 
 def _run_locked(opts: RollbackOptions, deps: rails.WriteDeps, cfg: Dict[str, Any], applied: Dict[str, Any],
                 target: rails.Target) -> int:
-    todo = list(reversed([f for f in applied["files"] if f["status"] == "rewritten"]))
+    todo = list(reversed(_rewritten_on_disk(applied, target.data_root)))
     if not todo:
         print("FT_ROLLBACK_SUMMARY status=ok rc=0 files=0 reason=nothing_rewritten")
         return 0
@@ -65,10 +66,10 @@ def _run_locked(opts: RollbackOptions, deps: rails.WriteDeps, cfg: Dict[str, Any
         rails.writers_check(deps, tf_dir, "ROLLBACK")
         rails.market_check(cfg, deps.now_ms(), opts.guard_minutes, "ROLLBACK")
         rails.owner_check(deps, paths, "ROLLBACK")
-    changed = [path for f, path in zip(todo, paths) if c.sha256_file(path) != f["sha256_after_actual"]]
+    changed = [path for f, path in zip(todo, paths) if am.disk_state(f, target.data_root) != am.DISK_AFTER]
     if changed:
         raise rails.refuse(2, "ROLLBACK_CURRENT_CHANGED", files=",".join(changed))
-    broken = [f["backup"] for f in todo if c.sha256_file(f["backup"]) != f["sha256_before"]]
+    broken = [f["backup"] for f in todo if not f.get("backup") or c.sha256_file(f["backup"]) != f["sha256_before"]]
     if broken:
         raise rails.refuse(2, "ROLLBACK_BACKUP_CHANGED", files=",".join(broken))
     out_path = "%s.rollback-%s-%d.json" % (opts.apply_manifest, time.strftime(
@@ -102,6 +103,18 @@ def _run_locked(opts: RollbackOptions, deps: rails.WriteDeps, cfg: Dict[str, Any
     print("FT_ROLLBACK_SUMMARY status=%s rc=%d files=%d manifest=%s" % (report["status"], rc, len(report["files"]),
                                                                         out_path))
     return rc
+
+
+def _rewritten_on_disk(applied: Dict[str, Any], data_root: str) -> List[Dict[str, Any]]:
+    """Файли, які apply переписав, за вироком диска: `rewritten` — завжди; `replacing`/`unknown` (процес загинув
+    до фіналізації) — якщо файл не «до» (after → відкотити, other → відмова нижче)."""
+    out = []
+    for record in am.touched_records(applied):
+        if record["status"] != "rewritten" and am.disk_state(record, data_root) == am.DISK_BEFORE:
+            c.log_event(logging.WARNING, "ROLLBACK_FILE_NOT_REPLACED", part=record["part"], status=record["status"])
+            continue
+        out.append(record)
+    return out
 
 
 def main(argv: Optional[List[str]] = None) -> int:

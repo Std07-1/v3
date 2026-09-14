@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 from core.model.bars import FINAL_SOURCES
 from runtime.store.layers.disk_layer import DiskLayer
 from runtime.store.uds import _ensure_sorted_dedup
+from tools.repair.first_tick_m1 import apply_manifest as am
 from tools.repair.first_tick_m1 import common as c
 from tools.repair.first_tick_m1.plan_io import PlanCorrupt, load_plan, under
 from tools.repair.jsonl_rewrite import read_lines
@@ -127,19 +128,26 @@ def diff_lines(before_lines: Sequence[str], after_lines: Sequence[str], planned_
 
 def _load_inputs(opts: VerifyOptions) -> Any:
     manifest = c.read_json(opts.apply_manifest)
-    if not isinstance(manifest, dict) or manifest.get("format") != "ft_m1_apply_v1":
+    if not isinstance(manifest, dict) or manifest.get("format") != am.APPLY_FORMAT:
         raise VerifyInputError("VERIFY_MANIFEST_FORMAT")
-    if manifest.get("status") not in ("ok", "interrupted", "failed"):
+    if manifest.get("status") not in ("ok", "interrupted", "failed", "running"):
         raise VerifyInputError("VERIFY_MANIFEST_STATUS status=%s" % manifest.get("status"))
+    if manifest["status"] == "running":
+        c.log_event(logging.WARNING, "VERIFY_MANIFEST_NOT_FINALIZED", manifest=opts.apply_manifest)
     loaded = load_plan(manifest["plan_dir"])
     if loaded.plan_id != manifest["plan_id"]:
         raise VerifyInputError("VERIFY_PLAN_SHA_MISMATCH")
-    rewritten = [f for f in manifest["files"] if f["status"] == "rewritten"]
-    for record in rewritten:
-        if c.sha256_file(record["backup"]) != record["sha256_before"]:
-            raise VerifyInputError("VERIFY_BACKUP_SHA_MISMATCH backup=%s" % record["backup"])
-        if c.sha256_file(under(manifest["data_root"], record["part"])) != record["sha256_after_actual"]:
-            raise VerifyInputError("VERIFY_CURRENT_SHA_MISMATCH part=%s" % record["part"])
+    rewritten = []
+    for record in am.touched_records(manifest):
+        state = am.disk_state(record, manifest["data_root"])
+        if record["status"] != "rewritten" and state == am.DISK_BEFORE:
+            c.log_event(logging.WARNING, "VERIFY_FILE_NOT_REPLACED", part=record["part"], status=record["status"])
+            continue  # процес загинув до os.replace: файл не переписано, звіряти нічого
+        if not record.get("backup") or c.sha256_file(record["backup"]) != record["sha256_before"]:
+            raise VerifyInputError("VERIFY_BACKUP_SHA_MISMATCH backup=%s" % record.get("backup"))
+        if state != am.DISK_AFTER:
+            raise VerifyInputError("VERIFY_CURRENT_SHA_MISMATCH part=%s disk=%s" % (record["part"], state))
+        rewritten.append(record)
     return manifest, loaded, rewritten
 
 

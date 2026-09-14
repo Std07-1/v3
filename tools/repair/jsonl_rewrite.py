@@ -15,7 +15,7 @@ import json
 import os
 import shutil
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from core.model.bar_choice import choose_better_bar
 
@@ -65,7 +65,7 @@ def key_groups(lines: List[str]) -> Dict[int, KeyGroup]:
     return {key: KeyGroup(winner=winners[key][0], members=tuple(members[key])) for key in sorted(winners)}
 
 
-def rewrite_atomic(path: str, lines: List[str]) -> str:
+def rewrite_atomic(path: str, lines: List[str], before_replace: Optional[Callable[[str], None]] = None) -> str:
     """Записати `lines` замість вмісту `path`; повертає шлях бекапу з допатчевим вмістом.
 
     Порядок важливий. Наївне «спершу перейменувати оригінал у .bak, потім підставити
@@ -74,6 +74,10 @@ def rewrite_atomic(path: str, lines: List[str]) -> str:
     дірка на рівному місці. Тому: спершу пишемо .tmp і фсинкаємо, далі бекап робимо
     жорстким лінком на СТАРИЙ inode (os.link не чіпає ім'я path), і лише потім один
     атомарний os.replace. Файл існує весь час; читач бачить або старий вміст, або новий.
+
+    `before_replace(backup)` викликається, коли бекап уже є, а `path` ще старий: інструмент, що веде
+    маніфест, записує шлях бекапу ДО підміни — процес, убитий одразу після os.replace, не лишить
+    переписаний файл без відомого бекапу. Виняток із хука скасовує підміну (`path` не змінено).
     """
     tmp = "%s.tmp" % path
     with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
@@ -85,6 +89,8 @@ def rewrite_atomic(path: str, lines: List[str]) -> str:
     # part-файлів має 666, а новий файл від smc з umask 002 отримав би 664).
     shutil.copymode(path, tmp)
     backup = _backup_old_inode(path)
+    if before_replace is not None:
+        before_replace(backup)
     os.replace(tmp, path)
     return backup
 
