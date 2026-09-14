@@ -15,15 +15,25 @@
 
 | Фаза | Середовище | Пише | rc |
 |---|---|---|---|
-| fetch | `.venv37`, cwd поза репо | лише staging | 0 усе ок · 1 є невдалі доби · 2 відмова до виклику · 3 зупинка рейкою |
+| fetch | `.venv37`, cwd поза репо | лише staging | 0 усе ок · 1 є невдалі доби · 2 відмова до виклику · 3 зупинка рейкою · 128+signum сигнал |
 | plan | `.venv` | лише plan_dir | 0 план · 1 план, є відмовлені part-файли · 2 плану немає |
-| apply | `.venv` | part-файли (rewrite_atomic) | 0 ок · 1 розбіжність/звірка (частково) · 2 відмова до запису · 3 записувачі/ринок |
+| apply | `.venv` | part-файли (rewrite_atomic) | 0 ок · 1 розбіжність/звірка (частково) · 2 відмова до запису · 3 записувачі/ринок · 128+signum сигнал |
 | verify | `.venv` | лише work_dir | 0 порушень немає · 1 порушення · 2 вхідна помилка |
-| rollback | `.venv` | part-файли з бекапів | як apply |
+| rollback | `.venv` | part-файли з бекапів | як apply; 3 — ще й файл змінився посеред відкату |
 
 Категорії плану: `REPLACE` (записується), `SAME`, `SKIP_BAKED` (open поза [low, high], ланцюжок o == prev_c з
 таким рядком, або доба з часткою o == prev_c ≥ 0.9), `SKIP_CLOSE_MISMATCH`, `SKIP_RANGE_EXPANDS`,
-`SKIP_FLAT_NON_TRADING`, `SKIP_WINNER_INELIGIBLE`, `MISSING_IN_STAGING`, `EXTRA_IN_STAGING` (ніколи не пишеться).
+`SKIP_RANGE_CHANGED_BEYOND_STRETCH` (звузилась межа, якої PREVIOUS_CLOSE не розтягував — інша версія даних),
+`SKIP_FLAT_NON_TRADING`, `SKIP_WOULD_HIDE` (після заміни O=H=L=C з v ≤ 10 — Redis cold-load сховав би свічку;
+лишається PREV до патча межі Redis, ADR §3.3 B), `SKIP_WINNER_INELIGIBLE`, `MISSING_IN_STAGING`,
+`EXTRA_IN_STAGING` (ніколи не пишеться).
+
+Сесії fetch: одна дитина = один логін FXCM на пакет до `--days-per-session` діб (дефолт 7, 1..14), кожна доба —
+окремий `get_history` під власним дедлайном (`--call-timeout-s`, перевзводиться перед кожним кроком усередині
+дитини). `--max-calls` рахує `get_history` (доби), не логіни. Оцінка логінів: ⌈діб / days_per_session⌉ + по
+одному на кожну перервану сесію (дедлайн, відмова SDK, логін). Приклад: 5 символів × ~260 торгових діб ≈ 1300 діб
+→ ≈ 186 логінів замість ≈ 1300; за вихідні з `--max-calls 300` — ≈ 43 логіни. `--dry-run` друкує `sessions=`.
+Пауза `--call-interval-s` — між сесіями.
 
 ## 2. Пілот (одна минула доба XAU у вихідні)
 
@@ -45,7 +55,10 @@ cd /opt/smc-v3 && .venv/bin/python -m tools.repair.first_tick_m1 plan \
 - `v_differs=0` (обсяг не замінюється; ненульове значення — ознака іншої версії даних, розібрати до apply);
 - `refused_files=0`: якщо на проді знайдуться CRLF/неканонічні part-файли — окремий нормалізаційний патч, не B.
 
-Частота логінів FXCM не виміряна: пілот розширювати `--max-calls 1 → 5 → 30`; будь-який `exit 11` поспіль — стоп.
+Частота логінів FXCM не виміряна: пілот — одна сесія на одну добу (`--max-calls 1`), далі одна сесія на тиждень
+(`--max-calls 7`), далі кілька сесій (`--max-calls 30` = 5 логінів); будь-яка сесія `child_error` із `login` у
+`sessions[].detail` поспіль — стоп і розбір. Невдала доба посеред сесії (`deadline`/`timeout` у `calls[]`) —
+перезабирається наступним прогоном з `--only-missing`.
 
 ## 3. Доказ на копії
 
@@ -70,9 +83,12 @@ verify rc=0 обовʼязковий.
 2. `sudo -n supervisorctl stop smc:smc-fxcm smc:smc-preview` — з префіксом `smc:` (без нього мовчки не
    зупиняє; apply це зловить як `APPLY_WRITERS_RUNNING`). smc-binance не зупиняти: пише лише binance-символи,
    для них інструмент відмовляє.
-3. apply без `--copy` і без `--data-root` (ціль = data_root конфігу), той самий `--expect-plan-sha`.
-   Рейки: скан `/proc` (записувачі за argv і FD на запис), ринок усіх символів закритий ±30 хв, власник файлів ==
-   euid (не запускати від root), усі входи плану — ті самі байти.
+3. apply без `--copy` і без `--data-root` (ціль = data_root конфігу), той самий `--expect-plan-sha`, НОВИЙ
+   `--manifest-out` (наявний файл → `APPLY_MANIFEST_EXISTS` rc=2: маніфест частково застосованого прогону не
+   затирається). Рейки: realpath кожного шляху запису в межах data_root, скан `/proc` (записувачі за argv і FD на
+   запис), ринок усіх символів закритий ±30 хв, власник файлів == euid (не запускати від root), усі входи плану —
+   ті самі байти. Перерваний apply (сигнал, Ctrl+C, kill) — маніфест каже правду: `replacing` вирішує диск
+   (verify/rollback звіряють sha); далі — verify або rollback за цим маніфестом, не повторний apply.
 4. verify по маніфесту apply → rc=0.
 5. `sudo -n supervisorctl start smc:smc-fxcm smc:smc-preview`; `sudo -n supervisorctl restart smc:smc-ws`
    (RAM/Redis-кеш старих значень).
@@ -80,7 +96,9 @@ verify rc=0 обовʼязковий.
    слайса C — очікувано.
 
 Відкат: `rollback --apply-manifest <m> --expect-manifest-sha $(sha256sum <m> | cut -d' ' -f1)` при зупинених
-записувачах (відмовляє, якщо файл змінився після apply); крайній випадок — tar з кроку 1.
+записувачах (відмовляє, якщо файл не «до» і не «після» apply). Перерваний відкат — той самий виклик ще раз:
+файли, уже повернуті до байтів «до», пропускаються (`already_restored` у звіті), решта відкочується; кожен запуск
+пише новий звіт `<m>.rollback-*.json`. Крайній випадок — tar з кроку 1.
 
 ## 5. Пакети
 
