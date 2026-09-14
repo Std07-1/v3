@@ -10,11 +10,22 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import shutil
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
+
+from core.model.bar_choice import choose_better_bar
+
+
+@dataclasses.dataclass(frozen=True)
+class KeyGroup:
+    """Рядки одного `open_time_ms` у файлі: індекси в порядку файла і той, що бачать читачі."""
+
+    winner: int
+    members: Tuple[int, ...]
 
 
 def read_lines(path: str) -> List[str]:
@@ -30,6 +41,28 @@ def open_ms_of(line: str) -> Optional[int]:
     except Exception:
         return None
     return value if isinstance(value, int) else None
+
+
+def key_groups(lines: List[str]) -> Dict[int, KeyGroup]:
+    """Групи рядків за ключем і переможець кожної — тим самим вибирачем і в тому самому порядку, що читачі.
+
+    Рядки обходяться в порядку файла: крок нічиєї `choose_better_bar` віддає перемогу пізнішому запису.
+    Рядки без цілого `open_time_ms` читачі пропускають — у групи вони не входять. Спільне для дедупу
+    (прибирає переможених) і ремонту значень (патчить саме переможця, ADR-0096 §3.3 B): друга копія
+    фолда розійшлась би з першою так само, як колись розійшлися вибирачі (ADR-0094).
+    """
+    winners: Dict[int, Tuple[int, dict]] = {}
+    members: Dict[int, List[int]] = {}
+    for index, line in enumerate(lines):
+        key = open_ms_of(line)
+        if key is None:
+            continue
+        bar = json.loads(line)
+        members.setdefault(key, []).append(index)
+        current = winners.get(key)
+        if current is None or choose_better_bar(current[1], bar) is bar:
+            winners[key] = (index, bar)
+    return {key: KeyGroup(winner=winners[key][0], members=tuple(members[key])) for key in sorted(winners)}
 
 
 def rewrite_atomic(path: str, lines: List[str]) -> str:

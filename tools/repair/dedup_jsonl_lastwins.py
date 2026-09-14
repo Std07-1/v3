@@ -31,13 +31,11 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import glob
-import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
-from core.model.bar_choice import choose_better_bar
-from tools.repair.jsonl_rewrite import open_ms_of, read_lines, rewrite_atomic
+from tools.repair.jsonl_rewrite import key_groups, read_lines, rewrite_atomic
 
 
 @dataclasses.dataclass(frozen=True)
@@ -65,26 +63,14 @@ class DedupPlan:
 
 def plan_dedup(path: Path) -> DedupPlan:
     lines = read_lines(str(path))
-    winners: Dict[int, Tuple[int, dict]] = {}
-    last_index: Dict[int, int] = {}
-    unparsable = 0
-    for index, line in enumerate(lines):
-        key = open_ms_of(line)
-        if key is None:
-            unparsable += 1
-            continue
-        bar = json.loads(line)
-        last_index[key] = index
-        current = winners.get(key)
-        # Рядки йдуть у порядку файла — нічия вибирача дістається пізнішому запису.
-        if current is None or choose_better_bar(current[1], bar) is bar:
-            winners[key] = (index, bar)
-    keys = sorted(winners)
+    # Фолд переможців — спільний з ремонтом значень (`jsonl_rewrite.key_groups`), у порядку файла.
+    groups = key_groups(lines)
+    keys = sorted(groups)
     return DedupPlan(
         lines_in=len(lines),
-        unparsable=unparsable,
-        kept=tuple(lines[winners[key][0]] for key in keys),
-        kept_not_last=tuple(key for key in keys if winners[key][0] != last_index[key]),
+        unparsable=len(lines) - sum(len(group.members) for group in groups.values()),
+        kept=tuple(lines[groups[key].winner] for key in keys),
+        kept_not_last=tuple(key for key in keys if groups[key].winner != groups[key].members[-1]),
     )
 
 
