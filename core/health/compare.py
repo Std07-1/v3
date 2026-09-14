@@ -19,6 +19,12 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 _GRADE_RANK = {"GREEN": 0, "YELLOW": 1, "RED": 2}
 
+# Версія СЕМАНТИКИ виміру. Вердикт звіту залежить від того, що саме міряли: версія 2 (ADR-0094 P4)
+# дедуплікує батьків і дітей як читачі та додала перевірку кожного derived-бару проти M1. Через це
+# символ, який v1 вважав GREEN, під v2 чесно стає RED (SPX500: 6 барів мовчки ≠ M1) — хоча дані не
+# змінились. Порівняти вердикти різних версій = хибна «регресія» і хибний відкат активації.
+HEALTH_MEASURE_VERSION = 2
+
 # (шлях у звіті TF, людська назва). Усі — «більше = гірше».
 _WORSE_IF_UP: Tuple[Tuple[Tuple[str, ...], str], ...] = (
     (("holes", "missing"), "дірок"),
@@ -28,6 +34,7 @@ _WORSE_IF_UP: Tuple[Tuple[Tuple[str, ...], str], ...] = (
     (("geometry", "close_bad"), "хибних close"),
     (("geometry", "ohlc_bad"), "хибних OHLC"),
     (("cascade", "mismatched"), "мовчазних розбіжностей каскаду"),
+    (("root", "mismatched"), "мовчазних розбіжностей з M1"),
 )
 
 
@@ -52,6 +59,12 @@ class CompareResult:
     new_symbols: List[str]
     missing_symbols: List[str]
     compared_symbols: List[str]
+    measure_versions: Tuple[int, int] = (HEALTH_MEASURE_VERSION, HEALTH_MEASURE_VERSION)
+
+    @property
+    def verdicts_comparable(self) -> bool:
+        """Вердикти порівнювались лише якщо обидва звіти зняті однією версією виміру."""
+        return self.measure_versions[0] == self.measure_versions[1]
 
     @property
     def ok(self) -> bool:
@@ -86,6 +99,9 @@ def compare_reports(
     after_syms: Dict[str, Any] = dict(after.get("symbols") or {})
 
     gate = set(only_symbols) if only_symbols else set(before_syms)
+    # Звіт без поля — знятий до появи версіонування, тобто семантикою v1.
+    versions = (int(before.get("measure_version", 1)), int(after.get("measure_version", 1)))
+    compare_verdicts = versions[0] == versions[1]
     regressions: List[Regression] = []
     improvements: List[Regression] = []
 
@@ -96,7 +112,7 @@ def compare_reports(
             continue  # зафіксовано окремо як missing_symbols
 
         b_grade, a_grade = b_sym.get("grade"), a_sym.get("grade")
-        if _GRADE_RANK.get(str(a_grade), -1) > _GRADE_RANK.get(str(b_grade), -1):
+        if compare_verdicts and _GRADE_RANK.get(str(a_grade), -1) > _GRADE_RANK.get(str(b_grade), -1):
             regressions.append(Regression(symbol, "-", "вердикт символу", b_grade, a_grade))
 
         b_tfs: Dict[str, Any] = dict(b_sym.get("tfs") or {})
@@ -107,7 +123,7 @@ def compare_reports(
                 regressions.append(Regression(symbol, tf, "TF зник зі звіту", "є", "немає"))
                 continue
 
-            if _GRADE_RANK.get(str(a_tf.get("grade")), -1) > _GRADE_RANK.get(str(b_tf.get("grade")), -1):
+            if compare_verdicts and _GRADE_RANK.get(str(a_tf.get("grade")), -1) > _GRADE_RANK.get(str(b_tf.get("grade")), -1):
                 regressions.append(Regression(symbol, tf, "вердикт", b_tf.get("grade"), a_tf.get("grade")))
 
             # Втрата барів — завжди регресія: активація не має права стирати історію.
@@ -130,6 +146,7 @@ def compare_reports(
         new_symbols=sorted(set(after_syms) - set(before_syms)),
         missing_symbols=sorted((gate & set(before_syms)) - set(after_syms)),
         compared_symbols=sorted(gate & set(before_syms) & set(after_syms)),
+        measure_versions=versions,
     )
 
 

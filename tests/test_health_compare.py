@@ -127,3 +127,49 @@ def test_відсутній_вимір_не_падає():
     before = _report({"XAU/USD": _sym(tfs={"60": tf})})
     after = _report({"XAU/USD": _sym(tfs={"60": dict(tf)})})
     assert compare_reports(before, after).ok is True
+
+
+# ── ADR-0094 P4: корінь M1 і версія виміру ──────────────────────────────────
+def _tf_root(grade="GREEN", root=0):
+    tf = _tf(grade=grade)
+    tf["root"] = {"checked": 100, "mismatched": root, "declared_partial": 0, "uncovered": 0}
+    return tf
+
+
+def test_більше_розбіжностей_з_m1_регресія():
+    before = dict(_report({"XAU/USD": _sym(tfs={"900": _tf_root(root=1)})}), measure_version=2)
+    after = dict(_report({"XAU/USD": _sym(tfs={"900": _tf_root(root=4)})}), measure_version=2)
+    res = compare_reports(before, after)
+    assert not res.ok and any(r.measure == "мовчазних розбіжностей з M1" for r in res.regressions)
+
+
+def test_baseline_без_кореня_не_дає_хибної_регресії():
+    """Старий baseline не має поля root — числове порівняння просто пропускає вимір."""
+    before = _report({"XAU/USD": _sym(tfs={"900": _tf()})})
+    after = dict(_report({"XAU/USD": _sym(tfs={"900": _tf_root(root=6)})}), measure_version=2)
+    res = compare_reports(before, after)
+    assert not [r for r in res.regressions if r.measure == "мовчазних розбіжностей з M1"]
+
+
+def test_вердикти_різних_версій_виміру_не_порівнюються():
+    """SPX500: v1 бачив GREEN, v2 чесно бачить RED — дані ті самі, відкату не має бути."""
+    before = _report({"SPX500": _sym(grade="GREEN", tfs={"900": _tf(grade="GREEN")})})
+    after = dict(_report({"SPX500": _sym(grade="RED", tfs={"900": _tf_root(grade="RED", root=2)})}), measure_version=2)
+    res = compare_reports(before, after)
+    assert res.verdicts_comparable is False and res.measure_versions == (1, 2)
+    assert not [r for r in res.regressions if "вердикт" in r.measure]
+
+
+def test_різні_версії_але_числова_регресія_все_одно_ловиться():
+    before = _report({"XAU/USD": _sym(tfs={"60": _tf(holes=2)})})
+    after = dict(_report({"XAU/USD": _sym(tfs={"60": _tf_root(root=0)})}), measure_version=2)
+    after["symbols"]["XAU/USD"]["tfs"]["60"]["holes"]["missing"] = 9
+    res = compare_reports(before, after)
+    assert any(r.measure == "дірок" for r in res.regressions)
+
+
+def test_контроль_однакова_версія_погіршення_вердикту_регресія():
+    before = dict(_report({"SPX500": _sym(grade="GREEN")}), measure_version=2)
+    after = dict(_report({"SPX500": _sym(grade="RED")}), measure_version=2)
+    res = compare_reports(before, after)
+    assert res.verdicts_comparable is True and not res.ok
