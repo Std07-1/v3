@@ -115,6 +115,24 @@ def test_close_within_eps_but_outside_new_range_is_mismatch():
     assert (entry["cat"], entry["reason"]) == ("SKIP_CLOSE_MISMATCH", "close_outside_new_range")
 
 
+@pytest.mark.parametrize("prev, row, reason", [
+    # стара h ≠ новій і ≠ старому open (low розтягнутий до open) — high звузився не через PREVIOUS_CLOSE
+    ((4055.42, 4093.19, 4055.42, 4092.36), (4089.98, 4093.00, 4086.33, 4092.36), "high_changed_not_stretched"),
+    # старий open на верхній межі (розтягнув h), а low звузився — його open не торкався
+    ((4093.19, 4093.19, 4080.00, 4092.36), (4089.98, 4093.19, 4086.33, 4092.36), "low_changed_not_stretched"),
+])
+def test_range_narrowed_where_prev_did_not_stretch_is_skipped(prev, row, reason):
+    """Ловить слабку умову «новий діапазон ⊆ старого»: звужена межа, що не дорівнювала старому open, — інші тіки,
+    не зняття розтягування (зонди §1.3: PREV змінює лише межу, за яку вийшов штучний open)."""
+    entry = classify_key(_winner(ssot_bar(KEY, *prev, v=31.0)), staged_row(KEY, *row, volume=31), _ctx())
+    assert (entry["cat"], entry["reason"]) == ("SKIP_RANGE_CHANGED_BEYOND_STRETCH", reason)
+    index = 1 if reason.startswith("high") else 2  # позиція h чи low у (o, h, low, c)
+    within_eps = list(row)
+    within_eps[index] = prev[index] + (-5e-10 if index == 1 else 5e-10)  # звуження в межах eps — та сама межа
+    control = classify_key(_winner(ssot_bar(KEY, *prev, v=31.0)), staged_row(KEY, *within_eps, volume=31), _ctx())
+    assert control["cat"] == "REPLACE"
+
+
 @pytest.mark.parametrize("field, value", [("BidHigh", 4093.19 + 1e-12), ("BidLow", 4055.42 - 1e-12)])
 def test_range_expanding_row_is_skip_range_expands(field, value):
     """Ловить eps у порівнянні діапазону: розширення навіть на 1e-12 — інші дані, а не зняття розтягування."""
@@ -204,8 +222,8 @@ def test_suspect_day_share_marks_same_suspect():
     row = rows[5]
     same_bar = ssot_bar(row["open_time_ms"], row["BidOpen"], row["BidHigh"], row["BidLow"], row["BidClose"])
     assert classify_key(_winner(same_bar), row, ctx)["suspect"] is True
-    prev_bar = dict(same_bar, o=row["BidOpen"] - 0.3, low=row["BidOpen"] - 0.6)
-    assert classify_key(_winner(prev_bar), dict(row, BidLow=row["BidOpen"] - 0.55), ctx)["reason"] == "suspect_day"
+    prev_bar = dict(same_bar, o=row["BidOpen"] - 0.6, low=row["BidOpen"] - 0.6)  # low розтягнутий до штучного open
+    assert classify_key(_winner(prev_bar), row, ctx)["reason"] == "suspect_day"
 
     control, close = [], 10.0
     for minute in range(40):  # ~52% — як контроль Binance

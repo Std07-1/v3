@@ -1,8 +1,8 @@
 """Чиста класифікація ключа M1: чи можна замінити o/h/low рядка-переможця значеннями FIRST_TICK (ADR-0096 §3.3 B).
 
 Заміна дозволена лише коли доведено, що рядок staging — той самий бар: close збігся в межах eps, новий діапазон
-лише звужує старий (зняття розтягування до штучного open), фінальний бар геометрично цілий, а брокер віддав
-справжній перший тік. «Запечений» FIRST_TICK (§1.4) — o == close попередньої у 100% хвилин, частина open поза
+лише звужує старий і лише там, де PREVIOUS_CLOSE його розтягнув (стара межа — або та сама, або дорівнює старому
+open), фінальний бар геометрично цілий, а брокер віддав справжній перший тік. «Запечений» FIRST_TICK (§1.4) — o == close попередньої у 100% хвилин, частина open поза
 [low, high]: такі рядки і весь їхній ланцюжок o == prev_c лишаються «не доведено» (SKIP_BAKED) і перезабираються
 пізніше. Бар, що після заміни стане O=H=L=C з обсягом ≤ порогу candle_map, не переписується (SKIP_WOULD_HIDE):
 кеш-бар Redis не несе extensions, тож на cold-load свічку сховало б навіть із маркером trading_flat. Перша умова,
@@ -25,8 +25,9 @@ from tools.repair.first_tick_m1.common import (
 )
 from tools.repair.first_tick_m1.ssot_part import Winner, detect_line_style
 
-CATEGORIES = ("REPLACE", "SAME", "SKIP_BAKED", "SKIP_CLOSE_MISMATCH", "SKIP_RANGE_EXPANDS", "SKIP_FLAT_NON_TRADING",
-              "SKIP_WOULD_HIDE", "SKIP_WINNER_INELIGIBLE", "MISSING_IN_STAGING", "EXTRA_IN_STAGING")
+CATEGORIES = ("REPLACE", "SAME", "SKIP_BAKED", "SKIP_CLOSE_MISMATCH", "SKIP_RANGE_EXPANDS",
+              "SKIP_RANGE_CHANGED_BEYOND_STRETCH", "SKIP_FLAT_NON_TRADING", "SKIP_WOULD_HIDE", "SKIP_WINNER_INELIGIBLE",
+              "MISSING_IN_STAGING", "EXTRA_IN_STAGING")
 OHLCV = ("o", "h", "low", "c", "v")
 
 
@@ -130,6 +131,10 @@ def classify_key(winner: Winner, staged: Optional[Dict[str, Any]], ctx: Classify
                     normalized={"o": new_o, "h": new_h, "low": new_low})
     if not (new_low <= min(new_o, old_c) and max(new_o, old_c) <= new_h):
         return dict(evidence, cat="SKIP_CLOSE_MISMATCH", reason="close_outside_new_range")
+    beyond = range_change_beyond_stretch(bar, new_h, new_low, ctx.close_eps)
+    if beyond:
+        return dict(evidence, cat="SKIP_RANGE_CHANGED_BEYOND_STRETCH", reason=beyond,
+                    normalized={"o": new_o, "h": new_h, "low": new_low})
     v_differs = float(bar["v"]) != float(staged["Volume"])
     if (new_o, new_h, new_low) == (float(bar["o"]), float(bar["h"]), float(bar["low"])):
         same = dict(base, cat="SAME", v_differs=v_differs)
@@ -152,6 +157,21 @@ def classify_key(winner: Winner, staged: Optional[Dict[str, Any]], ctx: Classify
         return dict(evidence, cat="SKIP_BAKED", reason="suspect_day")
     return dict(evidence, cat="REPLACE", new={"o": new_o, "h": new_h, "low": new_low},
                 trading_flat_add=bool(flat and trading and not extensions.get("trading_flat")), v_differs=v_differs)
+
+
+def range_change_beyond_stretch(bar: Dict[str, Any], new_h: float, new_low: float, eps: float) -> Optional[str]:
+    """Чому зміна меж — не зняття розтягування PREVIOUS_CLOSE (None — лише зняття).
+
+    PREVIOUS_CLOSE брав open = close попередньої і розтягував до нього лише ту межу, за яку той вийшов (§1.3).
+    Отже кожна стара межа — або справжня (== нова в межах eps), або сам старий open. Звужена межа, що не
+    дорівнювала старому open, означає інші тіки в барі — інша версія даних, а не ремонт open.
+    """
+    old_o, old_h, old_low = float(bar["o"]), float(bar["h"]), float(bar["low"])
+    if abs(new_h - old_h) > eps and abs(old_h - old_o) > eps:
+        return "high_changed_not_stretched"
+    if abs(new_low - old_low) > eps and abs(old_low - old_o) > eps:
+        return "low_changed_not_stretched"
+    return None
 
 
 def extra_entry(staged: Dict[str, Any]) -> Dict[str, Any]:
