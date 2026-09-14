@@ -150,6 +150,19 @@ def test_apply_writer_appears_mid_run_rc3_manifest_interrupted(planned, tmp_path
     assert _part(sc, TUE).read_bytes() == tue_before
 
 
+def test_apply_existing_manifest_refused_rc2_first_manifest_bytes_untouched(planned, tmp_path):
+    """Ловить перезапис маніфесту: повторний apply з тим самим --manifest-out затирав опис частково застосованого
+    прогону — rollback більше не знав би, що понеділок уже переписано."""
+    sc, plan_dir, plan_id = planned
+    assert run_apply(_opts(sc, plan_dir, plan_id, tmp_path), _deps(sc, scans=[CLEAR, CLEAR, WRITER])) == 3
+    manifest_path = tmp_path / "manifests" / "apply.json"
+    first = manifest_path.read_bytes()
+    data_before = tree_digest(sc.data)
+    assert run_apply(_opts(sc, plan_dir, plan_id, tmp_path), _deps(sc)) == 2
+    assert manifest_path.read_bytes() == first and tree_digest(sc.data) == data_before
+    assert not (plan_dir / ".apply.lock").exists()
+
+
 def test_apply_input_changed_after_checks_stops_before_rewrite_rc3(planned, tmp_path):
     """Ловить звірку sha лише на старті: неприхований записувач дописав бар між рейками і переписом файла."""
     sc, plan_dir, plan_id = planned
@@ -208,7 +221,8 @@ def test_apply_owner_mismatch_rc2(planned, tmp_path):
     assert run_apply(_opts(sc, plan_dir, plan_id, tmp_path), _deps(sc, geteuid=lambda: foreign_euid)) == 2
     assert tree_digest(sc.data) == before
     own_euid = os.stat(_part(sc, MON)).st_uid
-    assert run_apply(_opts(sc, plan_dir, plan_id, tmp_path), _deps(sc, geteuid=lambda: own_euid)) == 0
+    opts = _opts(sc, plan_dir, plan_id, tmp_path, manifest_out=str(tmp_path / "manifests" / "own.json"))
+    assert run_apply(opts, _deps(sc, geteuid=lambda: own_euid)) == 0
 
 
 def test_apply_market_open_on_prod_rc3(planned, tmp_path):

@@ -95,7 +95,11 @@ def _run_locked(opts: ApplyOptions, deps: rails.WriteDeps, cfg: Dict[str, Any], 
                 "started_at_utc": c.utc_iso(deps.now_ms()), "finished_at_utc": None, "status": "running",
                 "stop_reason": None, "rc": None, "guard": {"skipped": "copy"}, "market": {"checked": False},
                 "files": [_file_record(item, loaded) for item in todo]}
-    c.write_json_atomic(manifest_path, manifest)
+    try:
+        # Лише новий файл: маніфест частково застосованого прогону — єдиний опис того, що вже переписано.
+        c.create_json_exclusive(manifest_path, manifest)
+    except FileExistsError:
+        return _print_refusal(c.log_event(logging.ERROR, "APPLY_MANIFEST_EXISTS", manifest=manifest_path), 2)
 
     def persist() -> None:
         c.write_json_atomic(manifest_path, manifest)

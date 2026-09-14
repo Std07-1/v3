@@ -175,6 +175,15 @@ def write_json_atomic(path: Any, obj: Any) -> None:
     os.replace(tmp, str(path))
 
 
+def create_json_exclusive(path: Any, obj: Any) -> None:
+    """Канонічний JSON у НОВИЙ файл (O_CREAT|O_EXCL + fsync); файл уже є — FileExistsError, байти не зачеплено."""
+    fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(canonical_json_bytes(obj))
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
 def read_json(path: Any) -> Any:
     with open(str(path), "rb") as fh:
         return json.loads(fh.read().decode("utf-8"))
