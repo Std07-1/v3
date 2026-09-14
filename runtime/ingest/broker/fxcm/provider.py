@@ -15,6 +15,24 @@ except Exception:  # noqa: BLE001
     ForexConnect = None  # type: ignore
     fxcorepy = None  # type: ignore
 
+# Ціна відкриття свічки = перший тік у бакеті (ADR-0096). Дефолт SDK — PREVIOUS_CLOSE
+# (forexconnect/ForexConnect.py:423): open кожної свічки = close попередньої, тож перша свічка
+# сесії тягнула вчорашню ціну в O і L/H, а за нею — D1/H4/… (XAU D1 27.07.2026: наш O=L=4055.42,
+# FXCM FIRST_TICK і TradingView — O≈4090). До ADR-0096 параметр не передавався зовсім.
+OPEN_PRICE_MODE_NAME = "FIRST_TICK"
+
+
+def _resolve_open_price_mode() -> Any:
+    """Enum режиму FIRST_TICK з SDK; без нього — гучна відмова, а не тихий дефолт PREVIOUS_CLOSE."""
+    mode = getattr(getattr(fxcorepy, "O2GCandleOpenPriceMode", None), OPEN_PRICE_MODE_NAME, None)
+    if mode is None:
+        raise RuntimeError(
+            "FXCM_OPEN_PRICE_MODE_UNAVAILABLE: у forexconnect немає "
+            "fxcorepy.O2GCandleOpenPriceMode.%s — без нього SDK віддає PREVIOUS_CLOSE (ADR-0096)"
+            % OPEN_PRICE_MODE_NAME
+        )
+    return mode
+
 
 def tf_s_to_fxcm_timeframe(tf_s: int) -> str:
     mapping = {
@@ -66,6 +84,7 @@ class FxcmHistoryProvider:
             raise RuntimeError(
                 "Не вдалося імпортувати forexconnect. Перевірте встановлення SDK/обгортки."
             )
+        self._open_price_mode = _resolve_open_price_mode()
         self._user_id = user_id
         self._password = password
         self._url = url
@@ -107,7 +126,21 @@ class FxcmHistoryProvider:
         self._fx = ForexConnect()
         # Не логуємо пароль.
         self._fx.login(self._user_id, self._password, self._url, self._connection)
+        logging.info("FXCM_HISTORY_OPEN_MODE mode=%s", OPEN_PRICE_MODE_NAME)
         return self
+
+    def _get_history(
+        self, symbol: str, timeframe: str, date_to_utc: Optional[dt.datetime], n: int
+    ) -> Any:
+        """Єдиний виклик SDK за барами: режим ціни відкриття передається явно, не дефолтом SDK."""
+        return self._fx.get_history(  # type: ignore[union-attr]
+            symbol,
+            timeframe,
+            None,
+            date_to_utc,
+            n,
+            candle_open_price_mode=self._open_price_mode,
+        )
 
     def __exit__(self, exc_type, exc, tb) -> None:
         try:
@@ -131,18 +164,8 @@ class FxcmHistoryProvider:
         if date_to_utc is not None and date_to_utc.tzinfo is None:
             raise ValueError("date_to_utc має бути UTC tz-aware.")
 
-        # timeframe = "m1" (стандартний ідентифікатор) :contentReference[oaicite:2]{index=2}
-        # FIRST_TICK mode (default): кожен бар має своє реальне BID open.
-        # PREVIOUS_CLOSE від FXCM створює артефакт: парне чергування volume (high/low)
-        # та непослідовне stitching. UI stitching (open[i]=close[i-1]) робиться окремо.
         try:
-            arr = self._fx.get_history(
-                symbol,
-                "m1",
-                None,
-                date_to_utc,
-                n,
-            )
+            arr = self._get_history(symbol, "m1", date_to_utc, n)
         except Exception as e:  # noqa: BLE001
             self._set_last_error(f"помилка запиту {symbol}", e)
             logging.warning("FXCM_HISTORY_ERROR symbol=%s err=%s", symbol, e)
@@ -187,15 +210,8 @@ class FxcmHistoryProvider:
             raise ValueError("date_to_utc має бути UTC tz-aware.")
 
         tf_name = tf_s_to_fxcm_timeframe(tf_s)
-        # FIRST_TICK mode — без PREVIOUS_CLOSE (артефакт volume alternation).
         try:
-            arr = self._fx.get_history(
-                symbol,
-                tf_name,
-                None,
-                date_to_utc,
-                n,
-            )
+            arr = self._get_history(symbol, tf_name, date_to_utc, n)
         except Exception as e:  # noqa: BLE001
             self._set_last_error(f"помилка TF={tf_name} {symbol}", e)
             logging.warning(
