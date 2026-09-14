@@ -11,6 +11,15 @@
     python -m tools.symbol_health_check --symbol NAS100
     python -m tools.symbol_health_check --all --days 30 --json out.json
     python -m tools.symbol_health_check --symbol XAU/USD --gate   # rc=1 якщо не GREEN
+    python -m tools.symbol_health_check --all --days 2 --compare base.json --gate-symbols "XAU/USD,NAS100"
+
+Коди виходу: 0 — ок; 1 — регресія або не-GREEN під --gate (за рунбуком активації — ВІДКАТ);
+2 — не вказано символів; 3 — baseline знято іншою версією виміру (`measure_version`): вердикти
+не порівнювались, відкочувати нічого, перезніміть baseline.
+
+Версія виміру 2 (ADR-0094 P4): батьки й діти згортаються так, як їх показують читачі, і кожен
+derived-бар звіряється з агрегацією M1 у своєму бакеті (`root`). Каскад сусідніх рівнів цього не
+бачив: 14.09.2026 він показував 137 розбіжностей на XAU/XAG, а проти M1 — 659.
 """
 from __future__ import annotations
 
@@ -27,6 +36,7 @@ from core.buckets import resolve_anchor_offset_ms, tf_to_ms
 from core.config_loader import load_system_config, resolve_config_path
 from core.derive import DERIVE_SOURCE, resolve_cascade_anchor_s
 from core.health import (
+    HEALTH_MEASURE_VERSION,
     check_anchor_on_session_edge,
     compare_reports,
     grade_symbol_tf,
@@ -35,6 +45,7 @@ from core.health import (
     measure_depth,
     measure_geometry,
     measure_holes,
+    measure_root_consistency,
 )
 from core.model.bars import CandleBar
 from runtime.ingest.tick_common import resolve_symbol_calendars
@@ -173,7 +184,15 @@ def check_symbol(
                 declares_partial_fn=_declares_partial,
             )
 
-        grade = grade_symbol_tf(age=age, holes=holes, geometry=geometry, cascade=cascade, depth=depth)
+        # Корінь ланцюга: кожен derived-бар проти M1 у своєму бакеті (ADR-0094 P4). Каскад вище
+        # бачить лише сусідній рівень і не помітить, якщо застарів цілий ланцюжок разом.
+        root = None
+        if tf_s != 60 and bars and bars_by_tf.get(60):
+            root = measure_root_consistency(
+                bars, bars_by_tf[60], tf_ms=tf_ms, declares_partial_fn=_declares_partial,
+            )
+
+        grade = grade_symbol_tf(age=age, holes=holes, geometry=geometry, cascade=cascade, root=root, depth=depth)
         if grade.grade == "RED" or (grade.grade == "YELLOW" and worst == "GREEN"):
             worst = grade.grade
         tfs[str(tf_s)] = {
@@ -196,6 +215,11 @@ def check_symbol(
                 else {"checked": cascade.checked, "mismatched": cascade.mismatched,
                       "declared_partial": cascade.declared_partial,
                       "skipped_incomplete": cascade.skipped_incomplete}
+            ),
+            "root": (
+                None if root is None
+                else {"checked": root.checked, "mismatched": root.mismatched,
+                      "declared_partial": root.declared_partial, "uncovered": root.uncovered}
             ),
         }
 
@@ -250,6 +274,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     now_ms = int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)
     report = {
         "generated_at": _iso(now_ms),
+        "measure_version": HEALTH_MEASURE_VERSION,
         "window_days": args.days,
         "symbols": {
             sym: check_symbol(cfg, sym, data_root=data_root, now_ms=now_ms, window_days=args.days)
@@ -266,10 +291,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "-" if casc is None
                 else f"{casc['checked']}/{casc['mismatched']}(+{casc['declared_partial']}p)"
             )
+            root = d.get("root")
+            root_txt = (
+                "-" if root is None
+                else f"{root['checked']}/{root['mismatched']}(+{root['declared_partial']}p,{root['uncovered']} без M1)"
+            )
             print(
                 f"  [{flag}] tf_{tf:<6} bars={d['bars']:<7} {d['first']} .. {d['last']}"
                 f"  age={d['age_buckets']} holes={d['holes']['missing']}/{d['holes']['expected']}"
-                f" cascade(chk/мовчазних+позначених)={casc_txt}"
+                f" cascade(chk/мовчазних+позначених)={casc_txt} root={root_txt}"
                 + (f"  {','.join(d['reasons'])}" if d["reasons"] else "")
             )
 
@@ -287,6 +317,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         cmp_res = compare_reports(baseline, report, only_symbols=only)
         print("")
         print("=== ПОРІВНЯННЯ з %s ===" % args.compare)
+        if not cmp_res.verdicts_comparable:
+            print("  !!! BASELINE ЗНЯТО ІНШОЮ ВЕРСІЄЮ ВИМІРУ (v%d, зараз v%d): вердикти не порівнювались, "
+                  "лише числові виміри. Це НЕ сигнал до відкату — перезніміть baseline поточним інструментом."
+                  % cmp_res.measure_versions)
         print("  перевірено символів: %s" % (", ".join(cmp_res.compared_symbols) or "-"))
         if cmp_res.new_symbols:
             print("  нових (не в baseline, не перевіряються): %s" % ", ".join(cmp_res.new_symbols))
@@ -296,11 +330,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("  краще: %s" % reg.describe())
         for reg in cmp_res.regressions:
             print("  РЕГРЕСІЯ: %s" % reg.describe())
-        if cmp_res.ok:
-            print("  => регресій немає")
-        else:
+        if not cmp_res.ok:
             print("  => РЕГРЕСІЙ: %d" % (len(cmp_res.regressions) + len(cmp_res.missing_symbols)))
             rc = 1
+        elif not cmp_res.verdicts_comparable:
+            # Окремий код: rc=1 за рунбуком означає відкат, а тут відкочувати нічого — треба новий baseline.
+            print("  => числових регресій немає, але baseline непорівнюваний (rc=3)")
+            rc = 3
+        else:
+            print("  => регресій немає")
 
     if args.gate and any(r["grade"] != "GREEN" for r in report["symbols"].values()):
         rc = 1
