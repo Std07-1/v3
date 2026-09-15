@@ -16,6 +16,10 @@
 - Один пропущений M1 mid-session → каскадний збій аж до H4
 - `_collect_boundary_tolerant()` толерує лише boundary gaps (session open/close), не mid-session
 
+> **Замінюється ADR-0097 (Proposed, 2026-09-15)** — рішення власника 15.09.2026; чинності набирає з увімкненням derive_policy.mode=tv: у режимі `derive_policy.mode=tv` бюджету
+> пропусків немає — бар будується з наявних хвилин, як у TradingView, а деградацію показують `m1_cover` і
+> `gap_suspect`. Цей ADR лишається чинним для `mode=legacy` (байт-у-байт поточна поведінка).
+
 ## Рішення
 
 Розширити `_collect_boundary_tolerant()` у `core/derive.py`:
