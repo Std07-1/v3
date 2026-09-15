@@ -290,7 +290,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                           ("--days-per-session", c.DAYS_PER_SESSION_DEFAULT)):
         parser.add_argument(flag, type=int, default=default)
     parser.add_argument("--max-logins", type=int, default=None,
-                        help="логінів FXCM за прогін (1..%d); дефолт ⌈max-calls / days-per-session⌉"
+                        help="логінів FXCM за прогін (1..%d); дефолт ceil(max-calls / days-per-session)"
                         % c.MAX_LOGINS_CEILING)
     parser.add_argument("--only-missing", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
