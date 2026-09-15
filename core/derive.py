@@ -178,7 +178,7 @@ class GenericBuffer:
         """Чи всі trading-слоти від start_ms до end_ms (end-excl) є в буфері."""
         step = self._tf_ms
         for t in range(start_ms, end_ms, step):
-            if is_trading_fn is not None and not is_trading_fn(t):
+            if not _slot_has_trading(t, step, is_trading_fn):
                 continue
             if t not in self._by_open_ms:
                 return False
@@ -197,7 +197,7 @@ class GenericBuffer:
         step = self._tf_ms
         out: List[CandleBar] = []
         for t in range(start_ms, end_ms, step):
-            if is_trading_fn is not None and not is_trading_fn(t):
+            if not _slot_has_trading(t, step, is_trading_fn):
                 continue
             b = self._by_open_ms.get(t)
             if b is None:
@@ -215,7 +215,7 @@ class GenericBuffer:
         step = self._tf_ms
         missing = 0
         for t in range(start_ms, end_ms, step):
-            if is_trading_fn is not None and not is_trading_fn(t):
+            if not _slot_has_trading(t, step, is_trading_fn):
                 continue
             if t not in self._by_open_ms:
                 missing += 1
@@ -323,8 +323,9 @@ def _collect_boundary_tolerant(
     """Збір source-барів з толерантністю до boundary та mid-session gaps.
 
     Boundary tolerance (Entry 075):
-    - session open: is_trading_fn(t)=True, is_trading_fn(t - step)=False
-    - session close: is_trading_fn(t)=True, is_trading_fn(t + step)=False
+    - session open: слот t торговий, слот t - step — ні
+    - session close: слот t торговий, слот t + step — ні
+    (слот торговий, якщо в ньому є хоч одна торгова хвилина — `_slot_has_trading`)
 
     Mid-session tolerance (ADR-0005):
     - Gap у середині сесії дозволений якщо mid_session_skips ≤ max_mid_session_gaps.
@@ -341,7 +342,7 @@ def _collect_boundary_tolerant(
 
     for t in range(start_ms, end_ms, step):
         # Не торговий — пропускаємо (calendar pause / break)
-        if not is_trading_fn(t):
+        if not _slot_has_trading(t, step, is_trading_fn):
             continue
 
         bar = source_buffer.get(t)
@@ -350,8 +351,8 @@ def _collect_boundary_tolerant(
             continue
 
         # Бар відсутній. Перевіряємо чи це session boundary gap.
-        is_open_boundary = not is_trading_fn(t - step)   # перша хвилина сесії
-        is_close_boundary = not is_trading_fn(t + step)  # остання хвилина сесії
+        is_open_boundary = not _slot_has_trading(t - step, step, is_trading_fn)   # перший слот сесії
+        is_close_boundary = not _slot_has_trading(t + step, step, is_trading_fn)  # останній слот сесії
 
         if is_open_boundary or is_close_boundary:
             boundary_skips += 1
@@ -460,7 +461,7 @@ def derive_bar(
     step = source_buffer.tf_ms
     expected_trading = sum(
         1 for t in range(bucket_open_ms, bucket_close_ms, step)
-        if is_trading_fn(t)
+        if _slot_has_trading(t, step, is_trading_fn)
     )
 
     result = aggregate_bars(
@@ -508,6 +509,24 @@ def _has_any_trading_in_range(
         if is_trading_fn(t):
             return True
     return False
+
+
+def _slot_has_trading(
+    slot_open_ms: int,
+    slot_ms: int,
+    is_trading_fn: Optional[Callable[[int], bool]],
+) -> bool:
+    """Чи торговий слот джерела: є хоч одна торгова хвилина в [slot_open_ms, slot_open_ms + slot_ms).
+
+    Єдиний предикат «слот входить в агрегат» для has_range/range_bars/missing_count і boundary-tolerant
+    збору — той самий, яким derive_triggers вирішує, КОЛИ будувати бар (ADR-0054 §3.8 п.2). Раніше слот
+    судили за першою хвилиною: сесія, що відкривається не на межі слота (GER30 00:30, FX 21:30, HK 01:15),
+    викидала з H4 цілий H1 з торговими хвилинами — GER30 22:00 без 00:30–00:59 щодня.
+    Без календаря торговий кожен слот; для M1-джерела перевіряється рівно одна хвилина, як і раніше.
+    """
+    if is_trading_fn is None:
+        return True
+    return _has_any_trading_in_range(slot_open_ms, slot_open_ms + slot_ms, is_trading_fn)
 
 
 # ---------------------------------------------------------------------------
