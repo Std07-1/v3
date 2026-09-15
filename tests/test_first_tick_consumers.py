@@ -4,9 +4,9 @@
 - `core.smc.swings.compute_atr` рахував TR як `h − low`. У режимі PREVIOUS_CLOSE H/L свічки вже містили
   попередній close, тож це випадково дорівнювало справжньому TR; з першим тіком розрив на відкритті сесії
   лишається МІЖ свічками — ATR тихо менший за TradingView (H1 до −25% після гепу NAS100 13.09).
-- `runtime.ws.candle_map` ховав будь-яку пласку свічку з v ≤ 10. У PREVIOUS_CLOSE однотікова хвилина мала
-  open = попередній close і пласкою не була; з першим тіком вона O=H=L=C і зникала б з графіка, хоча інжест
-  за календарем записав її як торгову (`trading_flat`).
+- `runtime.ws.candle_map` ховає пласку свічку з v ≤ 10. З першим тіком однотікова хвилина стає O=H=L=C і таких
+  більше (засів FIRST_TICK 15.09: GER30 ~1% хвилин, EUSTX50 8.8%). Рішення власника 15.09: TradingView пласких
+  барів не показує — графік їх ховає й надалі, навіть з маркером `trading_flat`; у SSOT і похідних TF бар лишається.
 """
 from __future__ import annotations
 
@@ -54,15 +54,19 @@ def _flat_m1(extensions=None, v=1.0):
     return bar
 
 
-def test_single_tick_trading_minute_stays_on_the_chart():
-    """Інжест позначив хвилину торговою — свічка-риска мусить дійти до графіка, як у TV."""
-    candle = map_bar_to_candle_v4(_flat_m1({"trading_flat": True}), tf_s=60)
-    assert candle is not None and candle["o"] == candle["c"] == 7686.13
+def test_single_tick_trading_minute_is_hidden_like_tradingview():
+    """Однотікова торгова хвилина (маркер інжесту `trading_flat`) на графік не йде: TV пласких барів не показує."""
+    assert map_bar_to_candle_v4(_flat_m1({"trading_flat": True}), tf_s=60) is None
 
 
-def test_unmarked_flat_bar_is_still_hidden():
-    """Контроль: без маркера лишається старий фільтр артефактів паузи."""
+def test_unmarked_flat_bar_is_hidden():
     assert map_bar_to_candle_v4(_flat_m1(), tf_s=60) is None
+
+
+def test_flat_bar_with_real_volume_stays_on_the_chart():
+    """Контроль межі фільтра: пласка хвилина з v > 10 — не артефакт, лишається."""
+    candle = map_bar_to_candle_v4(_flat_m1({"trading_flat": True}, v=11.0), tf_s=60)
+    assert candle is not None and candle["o"] == candle["c"] == 7686.13
 
 
 def test_calendar_pause_flat_is_hidden_even_if_marked_trading():
