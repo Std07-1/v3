@@ -68,7 +68,7 @@ class SessionOutcome:
 
 @dataclasses.dataclass(frozen=True)
 class ParentStop:
-    """Що робити, коли батька зупинили посеред сесії: зняти обробники (`disarm`) і записати сесію `stopped` (`record`)."""
+    """Батька зупинили посеред сесії: зняти обробники (`disarm`) і записати сесію `stopped` у маніфест (`record`)."""
 
     disarm: Callable[[], None]
     record: Callable[[SessionOutcome], None]

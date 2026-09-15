@@ -3,8 +3,9 @@
 Батько не логіниться в FXCM. Одна дитина (`fetch_call`) = одна сесія FXCM на пакет до --days-per-session діб
 (свіжий cwd, дедлайн кожного get_history всередині дитини, таймаут батька на всю сесію). Перед кожною сесією —
 ліміт викликів get_history, ліміт логінів (сесія без жодної доби теж логін), ліміт відмов поспіль, пауза між
-логінами і рейка закритого ринку на всю сесію (`fetch_rails`). Дитину вбили посеред доби — доба невдала, наступна сесія починає з наступної доби; доби, яких дитина
-не почала, лишаються в черзі. Після кожної сесії — маніфест прогону `_runs/<run_id>.json`. SIGTERM/SIGHUP/Ctrl+C
+логінами і рейка закритого ринку на всю сесію (`fetch_rails`). Дитину вбили посеред доби — доба невдала, наступна
+сесія починає з наступної доби; доби, яких дитина не почала, лишаються в черзі. Після кожної сесії — маніфест
+прогону `_runs/<run_id>.json`. SIGTERM/SIGHUP/Ctrl+C
 посеред сесії вбивають дитину; доби, які вона встигла віддати, комітяться, сесія `stopped` з ними — у маніфест;
 далі маніфест фіналізовано. Фінальний запис маніфесту — ще під обробниками.
 rc: 0 усе закомічено або законно пропущено; 1 є невдалі доби або сесії (зокрема логаут, що відмовив після
@@ -104,6 +105,11 @@ def _run_sessions(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, run: D
     Кожна сесія — логін: їх не більше --max-logins, тож цикл скінченний, навіть коли логін відмовляє щоразу і
     жодна доба не витрачає --max-calls.
     """
+    def record_stopped(stopped: SessionOutcome) -> None:
+        _record_session(run, stopped)
+        c.write_json_atomic(_run_path(ctx, run_id), run)
+
+    parent_stop = ParentStop(disarm=signals.disarm, record=record_stopped)
     pending = list(queue)
     stop = market_open_reason(ctx, opts, deps.now_ms(), _batch_size(opts, run, pending))
     while pending and not stop:
@@ -113,13 +119,7 @@ def _run_sessions(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, run: D
         batch, pending = pending[:batch_size], pending[batch_size:]
         seq = len(run["sessions"]) + 1
         run["in_flight"] = {"session": seq, "days": [c.day_key(day) for day in batch]}
-
-        def record_stopped(stopped: SessionOutcome) -> None:
-            _record_session(run, stopped)
-            c.write_json_atomic(_run_path(ctx, run_id), run)
-
-        outcome = execute_session(ctx, opts, deps, run_id, seq, len(run["calls"]) + 1, batch,
-                                  ParentStop(disarm=signals.disarm, record=record_stopped))
+        outcome = execute_session(ctx, opts, deps, run_id, seq, len(run["calls"]) + 1, batch, parent_stop)
         run["in_flight"] = None
         _record_session(run, outcome)
         pending = list(outcome.unattempted) + pending
@@ -290,7 +290,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                           ("--days-per-session", c.DAYS_PER_SESSION_DEFAULT)):
         parser.add_argument(flag, type=int, default=default)
     parser.add_argument("--max-logins", type=int, default=None,
-                        help="логінів FXCM за прогін (1..%d); дефолт ⌈max-calls / days-per-session⌉" % c.MAX_LOGINS_CEILING)
+                        help="логінів FXCM за прогін (1..%d); дефолт ⌈max-calls / days-per-session⌉"
+                        % c.MAX_LOGINS_CEILING)
     parser.add_argument("--only-missing", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     opts = FetchOptions(**vars(parser.parse_args(argv)))

@@ -114,7 +114,7 @@ def _discard_tmp(tmp: str) -> None:
     try:
         os.remove(tmp)
     except OSError as exc:
-        logging.getLogger("tools.repair.jsonl_rewrite").error("JSONL_REWRITE_TMP_CLEANUP_FAILED path=%s err=%s", tmp, exc)
+        logging.getLogger(__name__).error("JSONL_REWRITE_TMP_CLEANUP_FAILED path=%s err=%s", tmp, exc)
 
 
 def _backup_old_inode(path: str) -> str:

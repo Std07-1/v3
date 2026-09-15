@@ -135,13 +135,13 @@ def _check_arguments(opts: FetchOptions) -> List[dt.date]:
 
 
 def _max_logins(opts: FetchOptions) -> int:
-    """Стеля логінів прогону: явний --max-logins або ⌈max_calls / days_per_session⌉, урізаний до MAX_LOGINS_CEILING."""
+    """Стеля логінів прогону: явний --max-logins або ⌈max_calls / days_per_session⌉, не більше MAX_LOGINS_CEILING."""
     if opts.max_logins is not None:
         return opts.max_logins
     derived = -(-opts.max_calls // opts.days_per_session)
     if derived > c.MAX_LOGINS_CEILING:
-        c.log_event(logging.WARNING, "FT_FETCH_MAX_LOGINS_DEFAULT_CAPPED", derived=derived, ceiling=c.MAX_LOGINS_CEILING,
-                    max_calls=opts.max_calls, days_per_session=opts.days_per_session)
+        c.log_event(logging.WARNING, "FT_FETCH_MAX_LOGINS_DEFAULT_CAPPED", derived=derived,
+                    ceiling=c.MAX_LOGINS_CEILING, max_calls=opts.max_calls, days_per_session=opts.days_per_session)
     return min(derived, c.MAX_LOGINS_CEILING)
 
 

@@ -173,8 +173,8 @@ def _backup_recorder(cfg: Dict[str, Any], target: rails.Target, entry: Dict[str,
         if c.sha256_file(backup) != entry["sha256_after"] or c.sha256_file(path) != entry["sha256_after"]:
             entry.update(status="not_restored", restore_aborted=True)
             persist()
-            raise rails.refuse(3, "ROLLBACK_CURRENT_CHANGED_DURING_ROLLBACK", part=entry["part"], stage="before_replace",
-                               backup_of_patched=entry["backup_of_patched"])
+            raise rails.refuse(3, "ROLLBACK_CURRENT_CHANGED_DURING_ROLLBACK", part=entry["part"],
+                               stage="before_replace", backup_of_patched=entry["backup_of_patched"])
 
     return backup_ready
 
