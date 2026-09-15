@@ -64,7 +64,7 @@ def run_apply(opts: ApplyOptions, deps: rails.WriteDeps) -> int:
         with c.exclusive_lock(os.path.join(opts.plan_dir, ".apply.lock")):
             return _run_locked(opts, deps, cfg, loaded, target)
     except c.LockHeld as held:
-        return _print_refusal(c.log_event(logging.ERROR, "APPLY_LOCK_HELD", holder=held.holder), 2)
+        return _print_refusal(c.log_event(logging.ERROR, "APPLY_LOCK_HELD", holder=held.holder, reason=held.reason), 2)
 
 
 def _preflight(opts: ApplyOptions, cfg: Dict[str, Any]) -> Tuple[LoadedPlan, rails.Target]:

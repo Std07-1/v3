@@ -306,3 +306,19 @@ def test_rollback_signal_during_final_report_write_returns_128_plus_signum(tmp_p
     assert (report["status"], report["rc"]) == ("ok", 128 + signal.SIGTERM)
     assert "ROLLBACK_SIGNAL_DURING_FINALIZE" in report["stop_reason"]
     assert {k: v for k, v in tree_digest(sc.data).items() if ".bak." not in k} == original
+
+
+def test_rollback_after_killed_apply_removes_abandoned_lock_of_this_host(tmp_path, monkeypatch):
+    """apply убито SIGKILL — `.apply.lock` лишився з pid, якого вже немає: rollback не має відмовляти LOCK_HELD."""
+    import socket
+
+    from tools.repair.first_tick_m1 import common
+
+    sc, manifest, deps, original = _two_files_applied(tmp_path)
+    plan_dir = Path(json.loads(manifest.read_text(encoding="utf-8"))["plan_dir"])
+    holder = {"pid": 999999, "host": socket.gethostname(), "started_at_utc": "2026-09-26T11:59:00Z"}
+    (plan_dir / ".apply.lock").write_bytes(common.canonical_json_bytes(holder))
+    monkeypatch.setattr(common, "pid_alive", lambda pid: pid != 999999)
+    assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), deps) == 0
+    assert {k: v for k, v in tree_digest(sc.data).items() if ".bak." not in k} == original
+    assert not (plan_dir / ".apply.lock").exists()

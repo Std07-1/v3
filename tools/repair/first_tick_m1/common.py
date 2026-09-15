@@ -227,19 +227,22 @@ def log_event(level: int, code: str, **fields: Any) -> str:
 
 
 class LockHeld(RuntimeError):
-    def __init__(self, path: str, holder: str) -> None:
-        super().__init__("lock held: %s holder=%s" % (path, holder))
+    def __init__(self, path: str, holder: str, reason: str) -> None:
+        super().__init__("lock held: %s holder=%s reason=%s" % (path, holder, reason))
         self.path = path
         self.holder = holder
+        self.reason = reason  # pid_alive | other_host | pid_liveness_unknown | holder_unparsable | holder_changed
 
 
 @contextlib.contextmanager
 def exclusive_lock(path: str) -> Iterator[None]:
-    """Лок O_CREAT|O_EXCL з {pid, host, started_at_utc}; зайнятий — LockHeld (зняття — вручну після перевірки pid)."""
-    try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    except FileExistsError:
-        raise LockHeld(path, _read_holder(path))
+    """Лок O_CREAT|O_EXCL з {pid, host, started_at_utc}; зайнятий — LockHeld з причиною.
+
+    Лок процесу, що зник на ЦЬОМУ host (SIGKILL, OOM, перезавантаження), знімається сам і гучно
+    (FT_LOCK_STALE_REMOVED): holder.host == поточний host і процесу holder.pid немає. Живий pid, інший host (спільний
+    диск), нерозбірний holder чи ОС без перевірки pid — відмова: знімає оператор після перевірки на тому host.
+    """
+    fd = _acquire_lock_fd(path)
     with os.fdopen(fd, "wb") as fh:
         fh.write(canonical_json_bytes({"pid": os.getpid(), "host": socket.gethostname(),
                                        "started_at_utc": now_utc_iso()}))
@@ -254,12 +257,77 @@ def exclusive_lock(path: str) -> Iterator[None]:
             log_event(logging.ERROR, "FT_LOCK_RELEASE_FAILED", path=path, err=exc)
 
 
-def _read_holder(path: str) -> str:
+def pid_alive(pid: int) -> Optional[bool]:
+    """Чи є на цьому host процес `pid`: True/False; None — не визначити (Windows: там `os.kill(pid, 0)` не перевірка,
+    а TerminateProcess). Зомбі і процес іншого користувача — живі: лок не знімається."""
+    if pid <= 0:
+        return None
+    if os.path.isdir("/proc/self"):
+        return os.path.exists("/proc/%d" % pid)
+    if os.name != "posix":
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _acquire_lock_fd(path: str) -> int:
+    """fd нового лока; покинутий лок цього host знімається один раз, решта — LockHeld."""
+    try:
+        return _create_lock_file(path)
+    except FileExistsError:
+        observed = _read_lock_bytes(path)
+    reason = _lock_held_reason(observed)
+    if reason is None and _read_lock_bytes(path) != observed:
+        reason = "holder_changed"  # хтось переписав лок між читанням і зняттям — це вже не той покинутий лок
+    if reason is not None:
+        raise LockHeld(path, _holder_text(observed), reason)
+    os.remove(path)
+    log_event(logging.WARNING, "FT_LOCK_STALE_REMOVED", path=path, holder=_holder_text(observed),
+              host=socket.gethostname())
+    try:
+        return _create_lock_file(path)
+    except FileExistsError:  # інший процес устиг узяти лок між зняттям і створенням — він і власник
+        raise LockHeld(path, _holder_text(_read_lock_bytes(path)), "holder_changed")
+
+
+def _create_lock_file(path: str) -> int:
+    return os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+
+
+def _lock_held_reason(raw: Optional[bytes]) -> Optional[str]:
+    """Чому лок чинний; None — покинутий: holder цього host, процесу holder.pid немає."""
+    try:
+        holder = json.loads(raw.decode("utf-8")) if raw is not None else None
+    except (UnicodeDecodeError, ValueError):
+        holder = None
+    pid = holder.get("pid") if isinstance(holder, dict) else None
+    host = holder.get("host") if isinstance(holder, dict) else None
+    if not isinstance(pid, int) or isinstance(pid, bool) or not isinstance(host, str):
+        return "holder_unparsable"
+    if host != socket.gethostname():
+        return "other_host"
+    alive = pid_alive(pid)
+    if alive is None:
+        return "pid_liveness_unknown"
+    return "pid_alive" if alive else None
+
+
+def _read_lock_bytes(path: str) -> Optional[bytes]:
     try:
         with open(path, "rb") as fh:
-            return fh.read().decode("utf-8", errors="replace").strip()
+            return fh.read()
     except OSError as exc:
-        return "<unreadable: %s>" % exc
+        log_event(logging.WARNING, "FT_LOCK_HOLDER_UNREADABLE", path=path, err=exc)
+        return None
+
+
+def _holder_text(raw: Optional[bytes]) -> str:
+    return "<unreadable>" if raw is None else raw.decode("utf-8", errors="replace").strip()
 
 
 # Сигнали, якими оператор чи supervisor зупиняють процес; SIGHUP — закрита SSH-сесія (на Windows його немає).

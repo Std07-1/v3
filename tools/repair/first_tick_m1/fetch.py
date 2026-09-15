@@ -46,7 +46,7 @@ def run_fetch(opts: FetchOptions, deps: FetchDeps) -> int:
         with c.exclusive_lock(os.path.join(ctx.staging_root, "_fetch.lock")):
             return _locked_run(opts, deps, ctx)
     except c.LockHeld as held:
-        c.log_event(logging.ERROR, "FT_FETCH_LOCK_HELD", path=held.path, holder=held.holder)
+        c.log_event(logging.ERROR, "FT_FETCH_LOCK_HELD", path=held.path, holder=held.holder, reason=held.reason)
         return 2
 
 

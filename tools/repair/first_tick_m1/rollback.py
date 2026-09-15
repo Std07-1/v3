@@ -55,7 +55,7 @@ def run_rollback(opts: RollbackOptions, deps: rails.WriteDeps) -> int:
         return refused.rc
     except c.LockHeld as held:
         print("FT_ROLLBACK_SUMMARY status=refused rc=2 reason=%s" % c.log_event(
-            logging.ERROR, "ROLLBACK_LOCK_HELD", holder=held.holder))
+            logging.ERROR, "ROLLBACK_LOCK_HELD", holder=held.holder, reason=held.reason))
         return 2
 
 
