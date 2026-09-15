@@ -35,3 +35,4 @@ def test_hook_failure_cancels_replace(tmp_path):
     with pytest.raises(OSError):
         rewrite_atomic(str(path), ['{"a":2}'], before_replace=hook)
     assert path.read_bytes() == b'{"a":1}\n'
+    assert not Path(str(path) + ".tmp").exists()  # скасована підміна не лишає .tmp у каталозі part-файлів

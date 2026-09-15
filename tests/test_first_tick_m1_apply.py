@@ -527,3 +527,28 @@ def test_apply_signal_during_final_manifest_write_returns_128_plus_signum(planne
     assert "APPLY_SIGNAL_DURING_FINALIZE" in manifest["stop_reason"]
     assert [f["status"] for f in manifest["files"]] == ["rewritten", "rewritten"]
     assert not (plan_dir / ".apply.lock").exists()
+
+
+def test_apply_bar_appended_between_sha_check_and_backup_link_cancels_replace_rc3(planned, tmp_path, monkeypatch):
+    """Ловить вікно між звіркою sha і os.link: бар, дописаний саме тоді, лягав лише в бекап (жорсткий лінк), а
+    os.replace стирав його з part-файла — і apply звітував rc 0."""
+    from tools.repair.first_tick_m1 import apply as apply_mod
+
+    sc, plan_dir, plan_id = planned
+    original = _part(sc, MON).read_bytes()
+    appended = (line(ssot_bar(at(MON, 0, 9), 1.0, 2.0, 0.5, 1.5)) + "\n").encode()
+    real_rewrite = apply_mod.rewrite_atomic
+
+    def append_then_rewrite(path, lines, before_replace=None):
+        with open(path, "ab") as fh:
+            fh.write(appended)
+        return real_rewrite(path, lines, before_replace=before_replace)
+
+    monkeypatch.setattr(apply_mod, "rewrite_atomic", append_then_rewrite)
+    assert run_apply(_opts(sc, plan_dir, plan_id, tmp_path), _deps(sc)) == 3
+    assert _part(sc, MON).read_bytes() == original + appended and not Path(str(_part(sc, MON)) + ".tmp").exists()
+    manifest = _manifest(tmp_path)
+    assert manifest["status"] == "interrupted" and "APPLY_INPUT_CHANGED_DURING_APPLY" in manifest["stop_reason"]
+    record = manifest["files"][0]
+    assert (record["status"], record["replace_aborted"]) == ("not_started", True)
+    assert [f["status"] for f in manifest["files"]] == ["not_started", "not_started"]

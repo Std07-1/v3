@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import os
 import shutil
 import time
@@ -82,7 +83,8 @@ def rewrite_atomic(path: str, lines: List[str], before_replace: Optional[Callabl
 
     `before_replace(backup)` викликається, коли бекап уже є, а `path` ще старий: інструмент, що веде
     маніфест, записує шлях бекапу ДО підміни — процес, убитий одразу після os.replace, не лишить
-    переписаний файл без відомого бекапу. Виняток із хука скасовує підміну (`path` не змінено).
+    переписаний файл без відомого бекапу. Виняток із хука скасовує підміну: `path` не змінено, `.tmp` прибрано
+    (бекап лишається — він уже названий у маніфесті).
     """
     tmp = rewrite_tmp_path(path)
     with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
@@ -95,9 +97,21 @@ def rewrite_atomic(path: str, lines: List[str], before_replace: Optional[Callabl
     shutil.copymode(path, tmp)
     backup = _backup_old_inode(path)
     if before_replace is not None:
-        before_replace(backup)
+        try:
+            before_replace(backup)
+        except BaseException:
+            _discard_tmp(tmp)
+            raise
     os.replace(tmp, path)
     return backup
+
+
+def _discard_tmp(tmp: str) -> None:
+    """Підміну скасовано: тимчасовий файл не лишається поруч із part-файлом; невдача прибирання — гучна."""
+    try:
+        os.remove(tmp)
+    except OSError as exc:
+        logging.getLogger("tools.repair.jsonl_rewrite").error("JSONL_REWRITE_TMP_CLEANUP_FAILED path=%s err=%s", tmp, exc)
 
 
 def _backup_old_inode(path: str) -> str:

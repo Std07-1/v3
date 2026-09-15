@@ -148,7 +148,8 @@ def _restore_files(cfg: Dict[str, Any], deps: rails.WriteDeps, target: rails.Tar
         report["files"].append(entry)
         persist()
         path = under(target.data_root, record["part"])
-        rewrite_atomic(path, read_lines(record["backup"]), before_replace=_backup_recorder(cfg, target, entry, persist))
+        rewrite_atomic(path, read_lines(record["backup"]),
+                       before_replace=_backup_recorder(cfg, target, entry, path, persist))
         entry["sha256_restored"] = c.sha256_file(path)
         entry["status"] = "restored" if entry["sha256_restored"] == record["sha256_before"] else "verify_failed"
         persist()
@@ -158,13 +159,19 @@ def _restore_files(cfg: Dict[str, Any], deps: rails.WriteDeps, target: rails.Tar
     return 0
 
 
-def _backup_recorder(cfg: Dict[str, Any], target: rails.Target, entry: Dict[str, Any],
+def _backup_recorder(cfg: Dict[str, Any], target: rails.Target, entry: Dict[str, Any], path: str,
                      persist: Callable[[], None]) -> Callable[[str], None]:
-    """Хук rewrite_atomic: бекап пропатченого файла — у межах цілі і у звіті ДО os.replace."""
+    """Хук rewrite_atomic: бекап пропатченого файла — у межах цілі і у звіті ДО os.replace; його байти — ті самі
+    «після apply», інакше хтось писав між звіркою і os.link, і відкат стер би дописане — підміну скасовано."""
     def backup_ready(backup: str) -> None:
         rails.require_contained(cfg, target, "ROLLBACK", [backup])
         entry["backup_of_patched"] = os.path.abspath(backup)
         persist()
+        if c.sha256_file(backup) != entry["sha256_after"] or c.sha256_file(path) != entry["sha256_after"]:
+            entry.update(status="not_restored", restore_aborted=True)
+            persist()
+            raise rails.refuse(3, "ROLLBACK_CURRENT_CHANGED_DURING_ROLLBACK", part=entry["part"], stage="before_replace",
+                               backup_of_patched=entry["backup_of_patched"])
 
     return backup_ready
 

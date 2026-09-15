@@ -322,3 +322,27 @@ def test_rollback_after_killed_apply_removes_abandoned_lock_of_this_host(tmp_pat
     assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), deps) == 0
     assert {k: v for k, v in tree_digest(sc.data).items() if ".bak." not in k} == original
     assert not (plan_dir / ".apply.lock").exists()
+
+
+def test_rollback_bar_appended_between_check_and_backup_link_cancels_restore_rc3(tmp_path, monkeypatch):
+    """Дзеркало apply: бар, дописаний між звіркою «після» і os.link, відкат стирав би з part-файла при rc 0."""
+    from tools.repair.first_tick_m1 import rollback as rollback_mod
+
+    sc, manifest, deps, _original = _two_files_applied(tmp_path)
+    part = sc.data / "XAU_USD" / "tf_60" / "part-20260727.jsonl"  # відкат іде у зворотному порядку — 27.07 перший
+    patched = part.read_bytes()
+    appended = (line(ssot_bar(at(dt.date(2026, 7, 27), 0, 9), 1.0, 2.0, 0.5, 1.5)) + "\n").encode()
+    real_rewrite = rollback_mod.rewrite_atomic
+
+    def append_then_rewrite(path, lines, before_replace=None):
+        with open(path, "ab") as fh:
+            fh.write(appended)
+        return real_rewrite(path, lines, before_replace=before_replace)
+
+    monkeypatch.setattr(rollback_mod, "rewrite_atomic", append_then_rewrite)
+    assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), deps) == 3
+    assert part.read_bytes() == patched + appended
+    (report_path,) = list(tmp_path.glob("apply.json.rollback-*.json"))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "interrupted" and "ROLLBACK_CURRENT_CHANGED_DURING_ROLLBACK" in report["stop_reason"]
+    assert [(f["status"], f.get("restore_aborted")) for f in report["files"]] == [("not_restored", True)]

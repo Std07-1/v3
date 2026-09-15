@@ -3,7 +3,7 @@
 Порядок рейок: sha плану (оператор назвав саме цей план) → ціль prod/copy → лок → (prod) записувачі, ринок,
 власник → кожен вхід плану ті самі байти → для кожного файла: повторні записувачі й ринок, sha до, кожен запис
 плану збігається з рядком-переможцем, sha після рендеру == план → намір `replacing` у маніфест (fsync) →
-rewrite_atomic (шлях бекапу — у маніфест до os.replace) → sha на диску == план.
+rewrite_atomic (шлях бекапу — у маніфест, sha бекапу == sha до — до os.replace) → sha на диску == план.
 Маніфест `ft_m1_apply_v1` оновлюється до і після кожного файла; сигнал, Ctrl+C чи будь-яка відмова фіналізують
 його вироком диска для кожного файла (`apply_manifest`).
 rc: 0 усе переписано і звірено; 1 зупинка на розбіжності/звірці (частково, маніфест точний); 2 відмова до
@@ -202,6 +202,13 @@ def _rewrite_file(cfg: Dict[str, Any], item: Dict[str, Any], loaded: LoadedPlan,
         rails.require_contained(cfg, target, "APPLY", [backup])
         record["backup"] = os.path.abspath(backup)
         persist()
+        # Бекап — жорсткий лінк (чи копія) файла в мить перепису: бар, дописаний між звіркою sha і os.link, жив би
+        # лише в бекапі, а os.replace стер би його з part-файла. Не ті байти, що бачив план, — підміну скасовано.
+        if c.sha256_file(backup) != item["sha256_before"] or c.sha256_file(path) != item["sha256_before"]:
+            record.update(status="not_started", replace_aborted=True)
+            persist()
+            raise _Stop("interrupted", 3, c.log_event(logging.ERROR, "APPLY_INPUT_CHANGED_DURING_APPLY", path=path,
+                                                      stage="before_replace", backup=record["backup"]))
 
     rewrite_atomic(path, new_lines, before_replace=backup_ready)
     record.update(status="rewritten", at_utc=c.utc_iso(deps.now_ms()))
