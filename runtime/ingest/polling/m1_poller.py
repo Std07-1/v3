@@ -26,6 +26,12 @@ from core.model.bars import CandleBar, ms_to_utc_dt
 from env_profile import load_env_secrets
 from runtime.ingest.derive_engine import DeriveEngine
 from runtime.ingest.market_calendar import MarketCalendar
+from runtime.ingest.m1_session_filter import (
+    FLAT_BAR_MAX_VOLUME_DEFAULT,
+    VERDICT_PAUSE_NONFLAT_ANOMALY,
+    classify_m1_for_ssot,
+    is_flat_m1,
+)
 from runtime.ingest.tick_common import (
     resolve_symbol_calendars,
     symbols_from_cfg,
@@ -45,7 +51,7 @@ _M1_MS = 60_000
 
 # Flat bar: O==H==L==C з малим обсягом (calendar-pause маркер від брокера)
 # SSOT: config.json → flat_bar_max_volume. Дефолт 4 (як у конфігу).
-_FLAT_BAR_MAX_VOLUME_DEFAULT = 4
+_FLAT_BAR_MAX_VOLUME_DEFAULT = FLAT_BAR_MAX_VOLUME_DEFAULT
 _flat_bar_max_volume: int = _FLAT_BAR_MAX_VOLUME_DEFAULT
 
 
@@ -56,7 +62,7 @@ def set_flat_bar_max_volume(v: int) -> None:
 
 
 def _is_flat(bar: CandleBar) -> bool:
-    return bar.o == bar.h == bar.low == bar.c and bar.v <= _flat_bar_max_volume
+    return is_flat_m1(bar, _flat_bar_max_volume)
 
 
 def _expected_closed_m1_ms(now_ms: int) -> int:
@@ -266,60 +272,24 @@ class M1SymbolPoller:
         if bar.tf_s != 60 or not bar.complete:
             return False
 
-        # Calendar-aware flat bar classification
-        trading = self._is_market_open(bar.open_time_ms)
-        flat = _is_flat(bar)
-
-        if flat and trading:
-            # Flat під час торгових — приймаємо з маркером (grid completeness)
-            bar = CandleBar(
-                symbol=bar.symbol,
-                tf_s=bar.tf_s,
-                open_time_ms=bar.open_time_ms,
-                close_time_ms=bar.close_time_ms,
-                o=bar.o,
-                h=bar.h,
-                low=bar.low,
-                c=bar.c,
-                v=bar.v,
-                complete=bar.complete,
-                src=bar.src,
-                extensions={**bar.extensions, "trading_flat": True},
+        # Правило SSOT за календарем — спільне з tools/fetch_tf_backfill (runtime/ingest/m1_session_filter.py)
+        classified, verdict = classify_m1_for_ssot(
+            bar, self._is_market_open(bar.open_time_ms), _flat_bar_max_volume
+        )
+        if classified is None:
+            return False
+        bar = classified
+        if verdict == VERDICT_PAUSE_NONFLAT_ANOMALY:
+            logging.warning(
+                "M1_NONFLAT_IN_PAUSE symbol=%s open_ms=%s o=%.5f h=%.5f l=%.5f c=%.5f v=%.0f",
+                self._symbol,
+                bar.open_time_ms,
+                bar.o,
+                bar.h,
+                bar.low,
+                bar.c,
+                bar.v,
             )
-
-        if not trading:
-            if flat:
-                # Flat під час паузи → скіпаємо (шум від брокера)
-                return False
-            else:
-                # Non-flat під час паузи → аномалія, але приймаємо
-                bar = CandleBar(
-                    symbol=bar.symbol,
-                    tf_s=bar.tf_s,
-                    open_time_ms=bar.open_time_ms,
-                    close_time_ms=bar.close_time_ms,
-                    o=bar.o,
-                    h=bar.h,
-                    low=bar.low,
-                    c=bar.c,
-                    v=bar.v,
-                    complete=bar.complete,
-                    src=bar.src,
-                    extensions={
-                        **bar.extensions,
-                        "calendar_pause_nonflat_anomaly": True,
-                    },
-                )
-                logging.warning(
-                    "M1_NONFLAT_IN_PAUSE symbol=%s open_ms=%s o=%.5f h=%.5f l=%.5f c=%.5f v=%.0f",
-                    self._symbol,
-                    bar.open_time_ms,
-                    bar.o,
-                    bar.h,
-                    bar.low,
-                    bar.c,
-                    bar.v,
-                )
 
         result = self._uds.commit_final_bar(bar)
         if result.ok:
