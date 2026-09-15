@@ -287,7 +287,9 @@ class StopSignals:
 
     Перший сигнал піднімає StopSignal у головному потоці. Після цього (або після `disarm`, коли почалась
     фіналізація) сигнали лише фіксуються в лозі: другий Ctrl+C не має права обірвати запис маніфесту. Поза
-    головним потоком обробники поставити неможливо — це видно в лозі, а не мовчки.
+    головним потоком обробники поставити неможливо — це видно в лозі, а не мовчки. Сигнал, успадкований як SIG_IGN
+    (`nohup` ігнорує SIGHUP саме для довгого fetch після закриття SSH), лишається ігнорованим — оператор так
+    вирішив; обробник для нього не ставиться, і це видно в лозі.
     """
 
     def __init__(self, prefix: str) -> None:
@@ -302,8 +304,12 @@ class StopSignals:
             return self
         for name in STOP_SIGNAL_NAMES:
             signum = getattr(signal, name, None)
-            if signum is not None:
-                self._previous[signum] = signal.signal(signum, self._handle)
+            if signum is None:
+                continue
+            if signal.getsignal(signum) == signal.SIG_IGN:
+                log_event(logging.WARNING, self.prefix + "_SIGNAL_IGNORED_INHERITED", signal=name)
+                continue
+            self._previous[signum] = signal.signal(signum, self._handle)
         return self
 
     def __exit__(self, *exc_info: Any) -> bool:

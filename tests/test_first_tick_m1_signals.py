@@ -6,11 +6,14 @@
 """
 from __future__ import annotations
 
+import os
 import signal
+import subprocess
+import sys
 
 import pytest
 
-from tools.repair.first_tick_m1.common import StopSignal, StopSignals
+from tools.repair.first_tick_m1.common import REPO_ROOT, StopSignal, StopSignals
 
 
 def test_first_signal_raises_stop_signal_with_shell_exit_code():
@@ -30,6 +33,32 @@ def test_disarmed_gate_defers_signal_without_raising(caplog):
         signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
         assert signals.received == signal.SIGINT
     assert "TEST_SIGNAL_DEFERRED" in caplog.text
+
+
+def test_inherited_sig_ign_is_kept_and_logged(caplog):
+    """Ловить затирання успадкованого SIG_IGN: `nohup` ігнорує SIGHUP, щоб довгий fetch пережив закриту SSH-сесію, а
+    безумовний обробник перетворював SIGHUP назад на зупинку. Інші сигнали обробник отримують як і раніше."""
+    ignored = signal.SIGTERM  # є і на Windows; SIGHUP — лише POSIX
+    before = signal.signal(ignored, signal.SIG_IGN)
+    try:
+        with StopSignals("TEST") as signals:
+            assert signal.getsignal(ignored) == signal.SIG_IGN
+            assert getattr(signal.getsignal(signal.SIGINT), "__self__", None) is signals
+        assert signal.getsignal(ignored) == signal.SIG_IGN
+        assert "TEST_SIGNAL_IGNORED_INHERITED signal=SIGTERM" in caplog.text
+    finally:
+        signal.signal(ignored, before)
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="SIGHUP — лише POSIX")
+def test_nohup_process_survives_real_sighup_under_stop_signals(tmp_path):
+    code = ("import os, signal, sys; from tools.repair.first_tick_m1.common import StopSignals\n"
+            "signal.signal(signal.SIGHUP, signal.SIG_IGN)\n"
+            "with StopSignals('TEST'):\n"
+            "    os.kill(os.getpid(), signal.SIGHUP)\n"
+            "sys.exit(7)\n")
+    proc = subprocess.run([sys.executable, "-c", code], env=dict(os.environ, PYTHONPATH=str(REPO_ROOT)), timeout=30)
+    assert proc.returncode == 7
 
 
 def test_stop_signal_is_not_swallowed_by_except_exception():
