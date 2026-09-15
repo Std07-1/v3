@@ -17,7 +17,10 @@ from tools.repair.first_tick_m1.common import (
     TOOL_VERSION, canonical_json_bytes, sha256_bytes, sha256_file, sym_dir, write_json_atomic,
 )
 
-PLAN_FORMAT = "ft_m1_plan_v1"
+# Формат плану — окремо від TOOL_VERSION (ним звʼязаний і формат доби staging): v2 — правила SKIP_WOULD_HIDE і
+# SKIP_RANGE_CHANGED_BEYOND_STRETCH. План v1 міг назвати REPLACE ключі, які нові правила пропускають, тож apply його
+# не приймає; staging, забраний до бампу, лишається чинним — перепланувати можна без жодного виклику брокера.
+PLAN_FORMAT = "ft_m1_plan_v2"
 PLAN_FILE = "PLAN.json"
 
 
@@ -77,8 +80,11 @@ def load_plan(plan_dir: str) -> LoadedPlan:
         plan = json.loads(raw.decode("utf-8"))
     except (OSError, ValueError, UnicodeDecodeError) as exc:
         raise PlanCorrupt("APPLY_PLAN_CORRUPT", "PLAN.json: %s" % exc)
-    if not isinstance(plan, dict) or (plan.get("format"), plan.get("tool_version")) != (PLAN_FORMAT, TOOL_VERSION):
-        raise PlanCorrupt("APPLY_PLAN_CORRUPT", "format/tool_version")
+    if not isinstance(plan, dict):
+        raise PlanCorrupt("APPLY_PLAN_CORRUPT", "PLAN.json не обʼєкт")
+    if (plan.get("format"), plan.get("tool_version")) != (PLAN_FORMAT, TOOL_VERSION):
+        raise PlanCorrupt("APPLY_PLAN_FORMAT_UNSUPPORTED", "format=%s tool_version=%s expected=%s/%s action=replan" % (
+            plan.get("format"), plan.get("tool_version"), PLAN_FORMAT, TOOL_VERSION))
     if canonical_json_bytes(plan) != raw:
         raise PlanCorrupt("APPLY_PLAN_CORRUPT", "PLAN.json не канонічний")
     entries: Dict[str, List[Dict[str, Any]]] = {}

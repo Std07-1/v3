@@ -582,3 +582,17 @@ def test_apply_part_deleted_mid_run_interrupted_rc3(planned, tmp_path):
     manifest = _manifest(tmp_path)
     assert manifest["status"] == "interrupted" and "APPLY_INPUT_CHANGED_DURING_APPLY" in manifest["stop_reason"]
     assert [f["status"] for f in manifest["files"]] == ["rewritten", "not_started"]
+
+
+def test_apply_plan_of_previous_format_refused_rc2_staging_stays_valid(planned, tmp_path, capsys):
+    """Ловить план старих правил класифікації: ft_m1_plan_v1 міг назвати REPLACE ключі, які тепер SKIP_WOULD_HIDE чи
+    SKIP_RANGE_CHANGED_BEYOND_STRETCH, і apply його приймав. Формат плану бампнуто окремо від staging."""
+    sc, plan_dir, _plan_id = planned
+    legacy_id = _tamper(plan_dir, lambda plan, _dir: plan.update(format="ft_m1_plan_v1"))
+    before = tree_digest(sc.data)
+    assert run_apply(_opts(sc, plan_dir, legacy_id, tmp_path), _deps(sc)) == 2
+    assert "APPLY_PLAN_FORMAT_UNSUPPORTED detail=format=ft_m1_plan_v1" in capsys.readouterr().out
+    assert tree_digest(sc.data) == before and not (tmp_path / "manifests").exists()
+    _day_file, staging_manifest = day_paths(sc.staging, sc.symbol, MON)
+    written = json.loads(Path(staging_manifest).read_text(encoding="utf-8"))
+    assert (written["format"], written["tool_version"]) == ("ft_m1_staging_day_v1", 1)  # staging до бампу — чинний
