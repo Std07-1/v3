@@ -346,3 +346,13 @@ def test_rollback_bar_appended_between_check_and_backup_link_cancels_restore_rc3
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["status"] == "interrupted" and "ROLLBACK_CURRENT_CHANGED_DURING_ROLLBACK" in report["stop_reason"]
     assert [(f["status"], f.get("restore_aborted")) for f in report["files"]] == [("not_restored", True)]
+
+
+def test_rollback_backup_deleted_refused_rc2_before_any_write(tmp_path, capsys):
+    """Ловить сирий FileNotFoundError: бекап apply прибрано (гігієна) — rollback падав трасою, а не відмовою."""
+    sc, manifest, deps, _original = _two_files_applied(tmp_path)
+    Path(json.loads(manifest.read_text(encoding="utf-8"))["files"][1]["backup"]).unlink()
+    before = tree_digest(sc.data)
+    assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), deps) == 2
+    assert "ROLLBACK_BACKUP_MISSING" in capsys.readouterr().out
+    assert tree_digest(sc.data) == before and list(tmp_path.glob("apply.json.rollback-*.json")) == []

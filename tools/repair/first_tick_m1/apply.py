@@ -1,7 +1,8 @@
 """Фаза apply: заміна o/h/low рядків-переможців за планом — байт-у-байт решта файла (ADR-0096 §3.3 B).
 
-Порядок рейок: sha плану (оператор назвав саме цей план) → ціль prod/copy → лок → (prod) записувачі, ринок,
-власник → кожен вхід плану ті самі байти → для кожного файла: повторні записувачі й ринок, sha до, кожен запис
+Порядок рейок: sha плану (оператор назвав саме цей план) → ціль prod/copy → лок → (prod) записувачі, ринок →
+кожен вхід плану ті самі байти (відсутній файл — теж розбіжність) → (prod) власник → для кожного файла: повторні
+записувачі й ринок, sha до (файл зник — interrupted), кожен запис
 плану збігається з рядком-переможцем, sha після рендеру == план → намір `replacing` у маніфест (fsync) →
 rewrite_atomic (шлях бекапу — у маніфест, sha бекапу == sha до — до os.replace) → sha на диску == план.
 Маніфест `ft_m1_apply_v1` оновлюється до і після кожного файла; сигнал, Ctrl+C чи будь-яка відмова фіналізують
@@ -144,21 +145,25 @@ def _apply_files(opts: ApplyOptions, deps: rails.WriteDeps, cfg: Dict[str, Any],
                  persist: Callable[[], None]) -> None:
     """Рейки і перепис файлів по черзі; зупинка — _Stop/TargetRefused, маніфест фіналізує викликач."""
     if target.kind == "prod":
-        _prod_rails(opts, deps, cfg, manifest, tf_dir, [under(target.data_root, item["part"]) for item in todo])
+        _prod_rails(opts, deps, cfg, manifest, tf_dir)
     mismatches = input_mismatches(loaded.plan, target.data_root, opts.staging_root)
     if mismatches:
         for path, expected, actual in mismatches:
             print("APPLY_PLAN_INPUT_CHANGED path=%s expected=%s actual=%s" % (path, expected, actual))
         raise _Stop("refused", 2, c.log_event(logging.ERROR, "APPLY_PLAN_INPUT_CHANGED", n=len(mismatches)))
+    if target.kind == "prod":
+        # Власник — після звірки входів: зниклий part-файл уже відмовлено як APPLY_PLAN_INPUT_CHANGED, а не os.stat.
+        rails.owner_check(deps, [under(target.data_root, item["part"]) for item in todo], "APPLY")
     for index, item in enumerate(todo):
         if target.kind == "prod":
-            _prod_rails(opts, deps, cfg, manifest, tf_dir, (), during=True)
+            _prod_rails(opts, deps, cfg, manifest, tf_dir, during=True)
         _rewrite_file(cfg, item, loaded, target, manifest["files"][index], deps, persist)
         persist()
 
 
 def _prod_rails(opts: ApplyOptions, deps: rails.WriteDeps, cfg: Dict[str, Any], manifest: Dict[str, Any], tf_dir: str,
-                owned: Any, during: bool = False) -> None:
+                during: bool = False) -> None:
+    """Записувачі і ринок; перед першим файлом звіт скану — у маніфест."""
     try:
         report = rails.writers_check(deps, tf_dir, "APPLY")
     except rails.TargetRefused as refused:
@@ -171,16 +176,18 @@ def _prod_rails(opts: ApplyOptions, deps: rails.WriteDeps, cfg: Dict[str, Any], 
     except rails.TargetRefused as refused:
         manifest["market"] = {"checked": True, "refused": refused.text}
         raise
-    if not during:
-        rails.owner_check(deps, list(owned), "APPLY")
 
 
 def _rewrite_file(cfg: Dict[str, Any], item: Dict[str, Any], loaded: LoadedPlan, target: rails.Target,
                   record: Dict[str, Any], deps: rails.WriteDeps, persist: Callable[[], None]) -> None:
     path = under(target.data_root, item["part"])
     rails.require_contained(cfg, target, "APPLY", rails.part_write_paths(target, item["part"]))
-    with open(path, "rb") as fh:
-        raw = fh.read()
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except FileNotFoundError:
+        raise _Stop("interrupted", 3, c.log_event(logging.ERROR, "APPLY_INPUT_CHANGED_DURING_APPLY", path=path,
+                                                  detail="missing"))
     if c.sha256_bytes(raw) != item["sha256_before"]:
         raise _Stop("interrupted", 3, c.log_event(logging.ERROR, "APPLY_INPUT_CHANGED_DURING_APPLY", path=path))
     lines = read_lines(path)

@@ -113,7 +113,8 @@ def _run_locked(opts: RollbackOptions, deps: rails.WriteDeps, cfg: Dict[str, Any
 
 
 def _classify(records: List[Dict[str, Any]], data_root: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """(відкотити, уже «до») за диском; файл не «до» і не «після» або бекап не той — відмова до будь-якого запису."""
+    """(відкотити, уже «до») за диском; файл не «до» і не «після», бекапу немає або він не той — відмова до будь-якого
+    запису (і до звіту)."""
     todo, skipped, changed = [], [], []
     for record in records:
         state = am.disk_state(record, data_root)
@@ -125,8 +126,10 @@ def _classify(records: List[Dict[str, Any]], data_root: str) -> Tuple[List[Dict[
             changed.append("%s:%s" % (record["part"], state))
     if changed:
         raise rails.refuse(2, "ROLLBACK_CURRENT_CHANGED", files=",".join(changed))
-    broken = [str(f.get("backup")) for f in todo
-              if not f.get("backup") or c.sha256_file(f["backup"]) != f["sha256_before"]]
+    missing = [str(f.get("backup")) for f in todo if not f.get("backup") or not os.path.isfile(f["backup"])]
+    if missing:  # бекапи прибрано (гігієна §6) — відкат можливий лише з tar, не з цього маніфесту
+        raise rails.refuse(2, "ROLLBACK_BACKUP_MISSING", files=",".join(missing))
+    broken = [f["backup"] for f in todo if c.sha256_file(f["backup"]) != f["sha256_before"]]
     if broken:
         raise rails.refuse(2, "ROLLBACK_BACKUP_CHANGED", files=",".join(broken))
     for record in skipped:

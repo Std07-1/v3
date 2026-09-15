@@ -552,3 +552,33 @@ def test_apply_bar_appended_between_sha_check_and_backup_link_cancels_replace_rc
     record = manifest["files"][0]
     assert (record["status"], record["replace_aborted"]) == ("not_started", True)
     assert [f["status"] for f in manifest["files"]] == ["not_started", "not_started"]
+
+
+def test_apply_planned_part_deleted_after_plan_refused_rc2_not_raw_error(planned, tmp_path):
+    """Ловить сирий FileNotFoundError: перевірка власника (os.stat) ішла до звірки входів, і зниклий після плану
+    part-файл валив apply APPLY_UNEXPECTED_ERROR замість відмови APPLY_PLAN_INPUT_CHANGED."""
+    sc, plan_dir, plan_id = planned
+    _part(sc, TUE).unlink()
+    before = tree_digest(sc.data)
+    own_euid = os.stat(_part(sc, MON)).st_uid
+    assert run_apply(_opts(sc, plan_dir, plan_id, tmp_path), _deps(sc, geteuid=lambda: own_euid)) == 2
+    manifest = _manifest(tmp_path)
+    assert manifest["status"] == "refused" and "APPLY_PLAN_INPUT_CHANGED" in manifest["stop_reason"]
+    assert tree_digest(sc.data) == before
+
+
+def test_apply_part_deleted_mid_run_interrupted_rc3(planned, tmp_path):
+    sc, plan_dir, plan_id = planned
+    calls = []
+
+    def scan_deleting_tuesday(dirs):
+        calls.append(dirs)
+        if len(calls) == 3:  # перевірка перед другим файлом
+            _part(sc, TUE).unlink()
+        return CLEAR
+
+    deps = WriteDeps(now_ms=lambda: SATURDAY_NOON, scan_writers=scan_deleting_tuesday, geteuid=None, load_cfg=sc.cfg)
+    assert run_apply(_opts(sc, plan_dir, plan_id, tmp_path), deps) == 3
+    manifest = _manifest(tmp_path)
+    assert manifest["status"] == "interrupted" and "APPLY_INPUT_CHANGED_DURING_APPLY" in manifest["stop_reason"]
+    assert [f["status"] for f in manifest["files"]] == ["rewritten", "not_started"]
