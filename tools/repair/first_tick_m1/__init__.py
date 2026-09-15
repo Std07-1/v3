@@ -15,7 +15,7 @@
   rollback — .venv, дзеркало apply за маніфестом; класифікує кожен файл за диском, тож перерваний відкат
              завершується повторним запуском.
 
-Модулі fetch-сторони (__init__, __main__, common, staging, fetch*, fetch_runner, fetch_child) мусять
-розбиратись і імпортуватись у Python 3.7 і не тягнути платформних залежностей — гейт у
-tests/test_first_tick_m1_staging.py.
+Модулі fetch-сторони (__init__, __main__, common, staging, fetch*, fetch_runner, fetch_child, а також
+tools/repair/durable_fs) мусять розбиратись і імпортуватись у Python 3.7 і не тягнути платформних залежностей —
+гейт у tests/test_first_tick_m1_staging.py.
 """
