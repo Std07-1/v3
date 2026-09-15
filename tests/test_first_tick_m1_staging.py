@@ -167,13 +167,18 @@ PLATFORM_ONLY = ("runtime.store", "redis", "aiohttp") + tuple(
 )
 
 
-@pytest.mark.parametrize("name", FETCH_SIDE)
-def test_fetch_side_modules_parse_as_python37_and_import_no_platform(name):
+# Модулі tools/repair поза пакетом, які імпортує fetch-сторона.
+FETCH_SIDE_SHARED = ("durable_fs",)
+
+
+@pytest.mark.parametrize("path", [PACKAGE / (name + ".py") for name in FETCH_SIDE]
+                         + [PACKAGE.parent / (name + ".py") for name in FETCH_SIDE_SHARED], ids=lambda p: p.stem)
+def test_fetch_side_modules_parse_as_python37_and_import_no_platform(path):
     """Fetch іде в .venv37 (Python 3.7): синтаксис 3.8+ або модульний імпорт платформних залежностей зламав би
     його лише на VPS. Імпорт фаз plan/apply/verify у __main__ — лише всередині функцій."""
     # У самому Python 3.7 (.venv37) парсер і є 3.7 — feature_version з'явився лише в 3.8.
     grammar = {"feature_version": (3, 7)} if sys.version_info >= (3, 8) else {}
-    tree = ast.parse((PACKAGE / (name + ".py")).read_text(encoding="utf-8"), **grammar)
+    tree = ast.parse(path.read_text(encoding="utf-8"), **grammar)
     module_level = []
     for node in tree.body:
         if isinstance(node, ast.Import):

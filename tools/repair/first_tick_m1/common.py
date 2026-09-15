@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
 from runtime.ingest.tick_common import symbols_from_cfg
+from tools.repair.durable_fs import fsync_parent_dir
 
 logger = logging.getLogger("first_tick_m1")
 
@@ -196,13 +197,15 @@ def canonical_json_bytes(obj: Any) -> bytes:
 
 
 def write_json_atomic(path: Any, obj: Any) -> None:
-    """Канонічний JSON через .tmp + fsync + один os.replace: читач бачить старий або новий файл, не половину."""
+    """Канонічний JSON через .tmp + fsync + один os.replace + fsync каталогу: читач бачить старий або новий файл, не
+    половину, а після збою живлення ім'я не повертається до старої версії."""
     tmp = "%s.tmp" % path
     with open(tmp, "wb") as fh:
         fh.write(canonical_json_bytes(obj))
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, str(path))
+    fsync_parent_dir(str(path))
 
 
 def create_json_exclusive(path: Any, obj: Any) -> None:
@@ -212,6 +215,7 @@ def create_json_exclusive(path: Any, obj: Any) -> None:
         fh.write(canonical_json_bytes(obj))
         fh.flush()
         os.fsync(fh.fileno())
+    fsync_parent_dir(str(path))
 
 
 def read_json(path: Any) -> Any:

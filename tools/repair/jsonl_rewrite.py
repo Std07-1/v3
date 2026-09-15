@@ -19,6 +19,7 @@ import time
 from typing import Callable, Dict, List, Optional, Tuple
 
 from core.model.bar_choice import choose_better_bar
+from tools.repair.durable_fs import fsync_parent_dir
 
 
 @dataclasses.dataclass(frozen=True)
@@ -79,7 +80,8 @@ def rewrite_atomic(path: str, lines: List[str], before_replace: Optional[Callabl
     читає диск) отримає FileNotFoundError і МОВЧКИ пропустить файл — у графіку зʼявиться
     дірка на рівному місці. Тому: спершу пишемо .tmp і фсинкаємо, далі бекап робимо
     жорстким лінком на СТАРИЙ inode (os.link не чіпає ім'я path), і лише потім один
-    атомарний os.replace. Файл існує весь час; читач бачить або старий вміст, або новий.
+    атомарний os.replace і fsync каталогу (після збою живлення ім'я не повертається до допатчевого inode). Файл
+    існує весь час; читач бачить або старий вміст, або новий.
 
     `before_replace(backup)` викликається, коли бекап уже є, а `path` ще старий: інструмент, що веде
     маніфест, записує шлях бекапу ДО підміни — процес, убитий одразу після os.replace, не лишить
@@ -103,6 +105,7 @@ def rewrite_atomic(path: str, lines: List[str], before_replace: Optional[Callabl
             _discard_tmp(tmp)
             raise
     os.replace(tmp, path)
+    fsync_parent_dir(path)
     return backup
 
 
