@@ -147,3 +147,24 @@ def tree_digest(root) -> dict:
     if not root.exists():
         return {}
     return {p.relative_to(root).as_posix(): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def signal_during_final_write(monkeypatch, report_format: str) -> dict:
+    """`write_json_atomic`, що в мить першого фінального запису звіту `report_format` (є finished_at_utc) викликає
+    поточний обробник SIGTERM — так, ніби supervisor надіслав сигнал саме тоді. Повертає {"handler": ...}: обробник,
+    що стояв у цю мить (поза `with StopSignals` це вже SIG_DFL, і сигнал убив би процес зі звітом `running`)."""
+    import signal
+
+    from tools.repair.first_tick_m1 import common
+
+    real_write, seen = common.write_json_atomic, {}
+
+    def write(path, obj):
+        if not seen and isinstance(obj, dict) and obj.get("format") == report_format and obj.get("finished_at_utc"):
+            handler = seen["handler"] = signal.getsignal(signal.SIGTERM)
+            if callable(handler):
+                handler(signal.SIGTERM, None)
+        real_write(path, obj)
+
+    monkeypatch.setattr(common, "write_json_atomic", write)
+    return seen

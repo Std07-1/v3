@@ -8,7 +8,8 @@ apply → відкотити, бекап мусить мати sha до; інш�
 перед кожним файлом повторні рейки і sha, намір `restoring` у звіт, після — sha == до apply. Звіт
 `ft_m1_rollback_v1` поруч з маніфестом apply фіналізується на будь-якій зупинці (except BaseException).
 rc: 0 відновлено (або вже було); 1 звірка після запису не зійшлась; 2 відмова до запису; 3 записувачі не доведено
-зупиненими, ринок відкритий або файл змінився посеред відкату; 128+signum зупинено сигналом.
+зупиненими, ринок відкритий або файл змінився посеред відкату; 128+signum зупинено сигналом (фіналізація йде ще
+під обробниками, тож і сигнал посеред неї).
 """
 
 from __future__ import annotations
@@ -99,11 +100,16 @@ def _run_locked(opts: RollbackOptions, deps: rails.WriteDeps, cfg: Dict[str, Any
                 "ROLLBACK_INTERRUPTED" if stopped else "ROLLBACK_UNEXPECTED_ERROR")
             text = c.log_event(logging.ERROR, code, err="%s: %s" % (type(exc).__name__, exc))
             exit_code = exc.exit_code if isinstance(exc, c.StopSignal) else 1
-            _finish(report, out_path, "interrupted" if stopped else "failed", exit_code, text, target, deps)
+            _finalize(report, out_path, "interrupted" if stopped else "failed", exit_code, text, target, deps)
+            _print_summary(report, out_path)
             if isinstance(exc, c.StopSignal):
                 return exit_code
             raise
-    return _finish(report, out_path, status, rc, reason, target, deps)
+        # Фіналізація — ще під обробниками: сигнал у мить запису звіту відкладено й повернуто як 128+signum.
+        exit_code = c.finalize_under_signals(signals, lambda signum: _finalize(
+            report, out_path, status, rc, reason, target, deps, signum))
+    _print_summary(report, out_path)
+    return exit_code
 
 
 def _classify(records: List[Dict[str, Any]], data_root: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -163,20 +169,27 @@ def _backup_recorder(cfg: Dict[str, Any], target: rails.Target, entry: Dict[str,
     return backup_ready
 
 
-def _finish(report: Dict[str, Any], out_path: str, status: str, rc: int, reason: Optional[str], target: rails.Target,
-            deps: rails.WriteDeps) -> int:
+def _finalize(report: Dict[str, Any], out_path: str, status: str, rc: int, reason: Optional[str],
+              target: rails.Target, deps: rails.WriteDeps, signum: Optional[int] = None) -> int:
+    """Фінальний звіт: вирок диска для кожного `restoring`, статус і rc (128+signum, якщо прийшов сигнал)."""
     for entry in report["files"]:
         if entry["status"] == "restoring":  # зупинка між наміром і звіркою: вирок диска
             digest = c.sha256_file(under(target.data_root, entry["part"]))
             verdicts = {entry["sha256_before"]: "restored", entry["sha256_after"]: "not_restored"}
             entry.update(sha256_restored=digest, status=verdicts.get(digest, "unknown"))
+    if signum is not None:
+        rc = 128 + signum
+        reason = reason or c.log_event(logging.WARNING, "ROLLBACK_SIGNAL_DURING_FINALIZE", signal=signum)
     report.update(status=status, rc=rc, stop_reason=reason, finished_at_utc=c.utc_iso(deps.now_ms()))
     c.write_json_atomic(out_path, report)
+    return rc
+
+
+def _print_summary(report: Dict[str, Any], out_path: str) -> None:
     restored = sum(1 for entry in report["files"] if entry["status"] == "restored")
     already = sum(1 for entry in report["files"] if entry["status"] in ("already_restored", "not_replaced"))
     print("FT_ROLLBACK_SUMMARY status=%s rc=%d restored=%d already_before=%d manifest=%s" % (
-        status, rc, restored, already, out_path))
-    return rc
+        report["status"], report["rc"], restored, already, out_path))
 
 
 def _create_report(opts: RollbackOptions, deps: rails.WriteDeps, report: Dict[str, Any]) -> str:

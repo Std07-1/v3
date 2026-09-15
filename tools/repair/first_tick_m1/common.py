@@ -13,7 +13,7 @@ import socket
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 from runtime.ingest.tick_common import symbols_from_cfg
 
@@ -329,3 +329,18 @@ class StopSignals:
             self.armed = False
             raise StopSignal(signum)
         log_event(logging.WARNING, self.prefix + "_SIGNAL_DEFERRED", signal=signum)
+
+
+def finalize_under_signals(signals: StopSignals, finalize: Callable[[Optional[int]], int]) -> int:
+    """Фінальний звіт роботи, записаний ще під обробниками (після `disarm`); повертає код виходу.
+
+    `finalize(signum)` пише звіт і повертає rc; signum — сигнал, отриманий до цієї миті (None — не було), і тоді rc
+    = 128+signum. Поза `with StopSignals` сигнал посеред запису вбив би процес зі звітом `running`, а відкладений
+    сигнал губився б з rc 0. Сигнал, що прийшов посеред першого запису, лише відкладено — звіт переписується ще раз
+    уже з ним (фіксується перший сигнал, тож проходів не більше двох).
+    """
+    seen = signals.received
+    rc = finalize(seen)
+    if signals.received != seen:
+        rc = finalize(signals.received)
+    return rc

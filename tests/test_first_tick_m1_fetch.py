@@ -21,7 +21,9 @@ from pathlib import Path
 
 import pytest
 
-from ft_m1_support import SYMBOL, at, fetch_meta, line, make_cfg, raw_row, ssot_bar, staged_row, write_part
+from ft_m1_support import (
+    SYMBOL, at, fetch_meta, line, make_cfg, raw_row, signal_during_final_write, ssot_bar, staged_row, write_part,
+)
 from tools.repair.first_tick_m1 import common, fetch_call, fetch_child, fetch_runner
 from tools.repair.first_tick_m1.fetch import FetchDeps, FetchOptions, run_fetch
 from tools.repair.first_tick_m1.fetch_runner import ChildOutcome, run_child
@@ -670,3 +672,15 @@ def test_sigterm_during_session_records_run_and_returns_128_plus_signum(env):
     assert run["rc"] == 128 + signal.SIGTERM and run["calls"] == [] and run["sessions"] == []
     assert not (env["staging"] / "_fetch.lock").exists()
     assert load_day(env["staging"], SYMBOL, DAYS[0]) is None
+
+
+def test_signal_during_final_manifest_write_returns_128_plus_signum(env, monkeypatch):
+    """Ловить фіналізацію поза обробниками: фінальний маніфест писався після виходу з StopSignals — SIGTERM у цю мить
+    убивав процес із маніфестом без rc, а сигнал між disarm і виходом губився з rc 0."""
+    seen = signal_during_final_write(monkeypatch, "ft_m1_fetch_run_v1")
+    clock = Clock(SATURDAY_NOON)
+    assert run_fetch(_opts(env, days=DAYS[:2]), _deps(env, clock, FakeChild(clock))) == 128 + signal.SIGTERM
+    assert isinstance(getattr(seen["handler"], "__self__", None), common.StopSignals)
+    run = _run_manifest(env)
+    assert run["rc"] == 128 + signal.SIGTERM and "FT_FETCH_SIGNAL_DURING_FINALIZE" in run["stop_reason"]
+    assert [c["status"] for c in run["calls"]] == ["ok", "ok"] and not (env["staging"] / "_fetch.lock").exists()

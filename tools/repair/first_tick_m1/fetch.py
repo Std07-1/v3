@@ -5,9 +5,9 @@
 ліміт викликів get_history, ліміт логінів (сесія без жодної доби теж логін), ліміт відмов поспіль, пауза між
 логінами і рейка закритого ринку на всю сесію (`fetch_rails`). Дитину вбили посеред доби — доба невдала, наступна сесія починає з наступної доби; доби, яких дитина
 не почала, лишаються в черзі. Після кожної сесії — маніфест прогону `_runs/<run_id>.json`. SIGTERM/SIGHUP/Ctrl+C
-посеред сесії вбивають дитину і фіналізують маніфест.
+посеред сесії вбивають дитину і фіналізують маніфест; фінальний запис маніфесту — ще під обробниками.
 rc: 0 усе закомічено або законно пропущено; 1 є невдалі доби; 2 відмова до виклику; 3 зупинка рейкою;
-128+signum зупинено сигналом.
+128+signum зупинено сигналом (і коли сигнал прийшов посеред фіналізації).
 """
 
 from __future__ import annotations
@@ -56,7 +56,6 @@ def _locked_run(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext) -> int:
     _clean_inflight(ctx.staging_root)
     run = _run_manifest(opts, ctx, run_id, now_ms)
     queue = _day_queue(opts, ctx, run["skipped"])
-    calls: List[Dict[str, Any]] = run["calls"]
     with c.StopSignals("FT_FETCH") as signals:
         try:
             stop = _run_sessions(opts, deps, ctx, run, run_id, queue)
@@ -75,11 +74,22 @@ def _locked_run(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext) -> int:
                 raise
             _print_summary(opts, ctx, run, run_id)
             return exc.exit_code
-    failed = sum(1 for call in calls if call["status"] != "ok")
+        # Фіналізація — ще під обробниками: сигнал у мить запису маніфесту відкладено й чесно повернуто як 128+signum.
+        rc = c.finalize_under_signals(signals, lambda signum: _finalize_run(ctx, deps, run, run_id, stop, signum))
+    _print_summary(opts, ctx, run, run_id)
+    return rc
+
+
+def _finalize_run(ctx: FetchContext, deps: FetchDeps, run: Dict[str, Any], run_id: str, stop: Optional[str],
+                  signum: Optional[int]) -> int:
+    """Фінальний маніфест завершеного прогону: rc за викликами і рейками, або 128+signum, якщо прийшов сигнал."""
+    failed = sum(1 for call in run["calls"] if call["status"] != "ok")
     rc = 3 if stop else (1 if failed else 0)
+    if signum is not None:
+        rc = 128 + signum
+        stop = stop or c.log_event(logging.WARNING, "FT_FETCH_SIGNAL_DURING_FINALIZE", signal=signum)
     run.update(finished_at_utc=c.utc_iso(deps.now_ms()), stop_reason=stop, rc=rc)
     c.write_json_atomic(_run_path(ctx, run_id), run)
-    _print_summary(opts, ctx, run, run_id)
     return rc
 
 

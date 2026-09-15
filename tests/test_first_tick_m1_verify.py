@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from ft_m1_support import Scenario, at, line, ssot_bar, staged_row, tree_digest, write_part
+from ft_m1_support import Scenario, at, line, signal_during_final_write, ssot_bar, staged_row, tree_digest, write_part
 from runtime.store.layers.disk_layer import DiskLayer
 from tools.repair.first_tick_m1 import verify as verify_mod
 from tools.repair.first_tick_m1.apply import ApplyOptions, run_apply
@@ -289,4 +289,20 @@ def test_rollback_sigterm_mid_file_finalizes_report_rc_128_plus_signum(tmp_path,
     assert [f["status"] for f in report["files"]] == ["restored"]  # вирок диска: os.replace встиг
     monkeypatch.setattr(rollback_mod, "rewrite_atomic", real_rewrite)
     assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), deps) == 0
+    assert {k: v for k, v in tree_digest(sc.data).items() if ".bak." not in k} == original
+
+
+def test_rollback_signal_during_final_report_write_returns_128_plus_signum(tmp_path, monkeypatch):
+    import signal
+
+    from tools.repair.first_tick_m1.common import StopSignals
+
+    sc, manifest, deps, original = _two_files_applied(tmp_path)
+    seen = signal_during_final_write(monkeypatch, "ft_m1_rollback_v1")
+    assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), deps) == 128 + signal.SIGTERM
+    assert isinstance(getattr(seen["handler"], "__self__", None), StopSignals)
+    (report_path,) = list(tmp_path.glob("apply.json.rollback-*.json"))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert (report["status"], report["rc"]) == ("ok", 128 + signal.SIGTERM)
+    assert "ROLLBACK_SIGNAL_DURING_FINALIZE" in report["stop_reason"]
     assert {k: v for k, v in tree_digest(sc.data).items() if ".bak." not in k} == original

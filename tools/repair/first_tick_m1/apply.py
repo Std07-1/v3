@@ -8,7 +8,8 @@ rewrite_atomic (шлях бекапу — у маніфест до os.replace) �
 його вироком диска для кожного файла (`apply_manifest`).
 rc: 0 усе переписано і звірено; 1 зупинка на розбіжності/звірці (частково, маніфест точний); 2 відмова до
 запису; 3 записувачі не доведено зупиненими або ринок відкритий (до запису — нічого; посеред — interrupted);
-128+signum зупинено сигналом (маніфест фіналізовано).
+128+signum зупинено сигналом (маніфест фіналізовано; фіналізація йде ще під обробниками, тож і сигнал посеред
+неї дає 128+signum).
 """
 
 from __future__ import annotations
@@ -126,11 +127,16 @@ def _run_locked(opts: ApplyOptions, deps: rails.WriteDeps, cfg: Dict[str, Any], 
                 "APPLY_INTERRUPTED" if stopped else "APPLY_UNEXPECTED_ERROR")
             text = c.log_event(logging.ERROR, code, err="%s: %s" % (type(exc).__name__, exc))
             exit_code = exc.exit_code if isinstance(exc, c.StopSignal) else 1
-            _finish(manifest, manifest_path, "interrupted" if stopped else "failed", exit_code, text, target, deps)
+            _finalize(manifest, manifest_path, "interrupted" if stopped else "failed", exit_code, text, target, deps)
+            _print_summary(manifest, manifest_path)
             if isinstance(exc, c.StopSignal):
                 return exit_code
             raise
-    return _finish(manifest, manifest_path, status, rc, reason, target, deps)
+        # Фіналізація — ще під обробниками: сигнал у мить запису маніфесту відкладено й повернуто як 128+signum.
+        exit_code = c.finalize_under_signals(signals, lambda signum: _finalize(
+            manifest, manifest_path, status, rc, reason, target, deps, signum))
+    _print_summary(manifest, manifest_path)
+    return exit_code
 
 
 def _apply_files(opts: ApplyOptions, deps: rails.WriteDeps, cfg: Dict[str, Any], loaded: LoadedPlan,
@@ -228,23 +234,31 @@ def _file_record(item: Dict[str, Any], loaded: LoadedPlan) -> Dict[str, Any]:
             "status": "not_started", "intent_at_utc": None, "at_utc": None}
 
 
-def _finish(manifest: Dict[str, Any], path: str, status: str, rc: int, reason: Optional[str], target: rails.Target,
-            deps: rails.WriteDeps) -> int:
+def _finalize(manifest: Dict[str, Any], path: str, status: str, rc: int, reason: Optional[str], target: rails.Target,
+              deps: rails.WriteDeps, signum: Optional[int] = None) -> int:
+    """Фінальний маніфест: вирок диска для кожного `replacing`, статус і rc (128+signum, якщо прийшов сигнал)."""
     am.reconcile_replacing(manifest, target.data_root)
     if status == "refused" and am.touched_records(manifest):
         status = "interrupted"  # відмова рейки посеред прогону: частина файлів уже переписана
+    if signum is not None:
+        rc = 128 + signum
+        reason = reason or c.log_event(logging.WARNING, "APPLY_SIGNAL_DURING_FINALIZE", signal=signum)
     manifest.update(status=status, rc=rc, stop_reason=reason, finished_at_utc=c.utc_iso(deps.now_ms()))
     c.write_json_atomic(path, manifest)
+    return rc
+
+
+def _print_summary(manifest: Dict[str, Any], path: str) -> None:
     done = [f for f in manifest["files"] if f["status"] == "rewritten"]
+    rc = manifest["rc"]
     print("FT_APPLY_SUMMARY status=%s rc=%d files=%d replaced=%d trading_flat_added=%d target=%s manifest=%s" % (
-        status, rc, len(done), sum(f["replaced"] for f in done), sum(f["trading_flat_added"] for f in done),
-        manifest["target"], path))
+        manifest["status"], rc, len(done), sum(f["replaced"] for f in done),
+        sum(f["trading_flat_added"] for f in done), manifest["target"], path))
     if done:
         print("FT_APPLY_NEXT verify: python -m tools.repair.first_tick_m1 verify --apply-manifest %s" % path)
     if done and rc:
         print("FT_APPLY_NEXT rollback: python -m tools.repair.first_tick_m1 rollback --apply-manifest %s "
               "--expect-manifest-sha %s" % (path, c.sha256_file(path)))
-    return rc
 
 
 def _print_refusal(text: str, rc: int) -> int:

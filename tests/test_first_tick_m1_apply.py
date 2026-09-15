@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from ft_m1_support import Scenario, at, line, ssot_bar, staged_row, tree_digest
+from ft_m1_support import Scenario, at, line, signal_during_final_write, ssot_bar, staged_row, tree_digest
 from tools.repair.first_tick_m1 import plan_io
 from tools.repair.first_tick_m1.apply import ApplyOptions, run_apply
 from tools.repair.first_tick_m1.common import canonical_json_bytes, sha256_bytes, sha256_file
@@ -511,3 +511,19 @@ def test_rollback_copy_with_tf_dir_linked_into_prod_refused_rc2(planned, tmp_pat
     manifest = tmp_path / "manifests" / "copy.json"
     assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest), copy=True), _deps(sc)) == 2
     assert tree_digest(sc.data) == prod_before
+
+
+def test_apply_signal_during_final_manifest_write_returns_128_plus_signum(planned, tmp_path, monkeypatch):
+    """Ловить фіналізацію поза обробниками: сигнал у мить фінального запису маніфесту губився (rc 0) або вбивав процес
+    з маніфестом `running`. Робота завершена — статус ok, але rc і маніфест кажуть про сигнал."""
+    from tools.repair.first_tick_m1.common import StopSignals
+
+    sc, plan_dir, plan_id = planned
+    seen = signal_during_final_write(monkeypatch, "ft_m1_apply_v1")
+    assert run_apply(_opts(sc, plan_dir, plan_id, tmp_path), _deps(sc)) == 128 + signal.SIGTERM
+    assert isinstance(getattr(seen["handler"], "__self__", None), StopSignals)
+    manifest = _manifest(tmp_path)
+    assert (manifest["status"], manifest["rc"]) == ("ok", 128 + signal.SIGTERM)
+    assert "APPLY_SIGNAL_DURING_FINALIZE" in manifest["stop_reason"]
+    assert [f["status"] for f in manifest["files"]] == ["rewritten", "rewritten"]
+    assert not (plan_dir / ".apply.lock").exists()
