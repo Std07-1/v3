@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from collections import Counter
 from typing import List, Set, Tuple
 
 from env_profile import load_env_secrets
@@ -13,6 +14,14 @@ from core.config_loader import pick_config_path, load_system_config, env_str
 from core.derive import DERIVE_SOURCE
 from core.model.bars import CandleBar
 from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
+from runtime.ingest.m1_session_filter import (
+    FLAT_BAR_MAX_VOLUME_DEFAULT,
+    VERDICT_PAUSE_FLAT_DROPPED,
+    VERDICT_PAUSE_NONFLAT_ANOMALY,
+    classify_m1_for_ssot,
+)
+from runtime.ingest.market_calendar import MarketCalendar
+from runtime.ingest.tick_common import resolve_symbol_calendars
 from runtime.store.ssot_jsonl import JsonlAppender
 
 
@@ -80,6 +89,23 @@ def _split_unclosed(bars: List[CandleBar], now_ms: int, safety_ms: int) -> Tuple
     closed = [b for b in bars if b.close_time_ms + safety_ms <= now_ms]
     unclosed = [b for b in bars if b.close_time_ms + safety_ms > now_ms]
     return closed, unclosed
+
+
+def _filter_m1_by_session(
+    bars: List[CandleBar], calendar: MarketCalendar, flat_max_volume: int
+) -> Tuple[List[CandleBar], Counter]:
+    """Те саме правило SSOT, що в живому M1-полері: пласкі бари поза сесією не пишуться, неплаский поза сесією — з маркером.
+
+    Засів раніше писав усе, що віддав брокер: NAS100 і US30 мають пласкі хвилини Сб 22:00 саме з засіву (15.09).
+    """
+    kept: List[CandleBar] = []
+    verdicts: Counter = Counter()
+    for bar in bars:
+        classified, verdict = classify_m1_for_ssot(bar, calendar.is_trading_minute(bar.open_time_ms), flat_max_volume)
+        verdicts[verdict] += 1
+        if classified is not None:
+            kept.append(classified)
+    return kept, verdicts
 
 
 def _load_existing_opens(data_root: str, symbol: str, tf_s: int, start_ms: int, end_ms: int) -> Set[int]:
@@ -155,6 +181,13 @@ def main() -> int:
     if not sym_list:
         logging.error("Порожній список символів")
         return 2
+    # Календар обовʼязковий: без нього не відрізнити хвилину сесії від шуму брокера після закриття (fail-closed,
+    # як у живих воркерах). Хибний календар видно з лічильника pause_nonflat_anomaly у лозі кожного кроку.
+    calendars, rejected = resolve_symbol_calendars(cfg, sym_list, where="fetch_tf_backfill")
+    if rejected:
+        logging.error("BACKFILL_REFUSED symbols=%s — немає календаря сесії (market_calendar_symbol_groups)", ",".join(rejected))
+        return 2
+    flat_max_volume = int(cfg.get("flat_bar_max_volume", FLAT_BAR_MAX_VOLUME_DEFAULT))
 
     if args.date_to:
         date_to = _parse_date_utc(args.date_to)
@@ -234,6 +267,15 @@ def main() -> int:
                     logging.warning(
                         "%s: BACKFILL_UNCLOSED_DROPPED n=%d first=%s — бар ще формується, його допише полер або наступний засів",
                         symbol, len(unclosed), _format_cursor(unclosed[0].open_time_ms),
+                    )
+                if args.tf == 60:
+                    bars, verdicts = _filter_m1_by_session(bars, calendars[symbol], flat_max_volume)
+                    level = logging.WARNING if verdicts[VERDICT_PAUSE_NONFLAT_ANOMALY] else logging.INFO
+                    logging.log(
+                        level,
+                        "%s: BACKFILL_SESSION_FILTER %s — пласкі поза сесією не пишуться (%s), непласкі поза сесією з маркером (%s)",
+                        symbol, dict(sorted(verdicts.items())),
+                        VERDICT_PAUSE_FLAT_DROPPED, VERDICT_PAUSE_NONFLAT_ANOMALY,
                     )
                 if not bars:
                     logging.info("%s: 0 закритих барів у партії", symbol)
