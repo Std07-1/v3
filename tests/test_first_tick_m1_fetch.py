@@ -55,11 +55,13 @@ class FakeChild:
     Поведінка доби: ok; empty; invalid (дитина сама відхилила рядки); flag_mismatch (дитина пише ok — батько
     перевалідовує і відхиляє); no_result (вийшла 0 без result доби); sdk_error (get_history відмовив — result
     error, сесію перервано rc 11); deadline (дедлайн усередині дитини вбив процес посеред доби).
-    `login_error` — логін відмовив, жодна доба не почата.
+    `login_error` — логін відмовив, жодна доба не почата. `logout` — після останньої доби: "error" (виняток
+    логауту, rc 11) або "deadline" (SIGALRM дитини посеред логауту, session.result не записано).
     """
 
-    def __init__(self, clock, behaviour=None, advance_ms=0, login_error=False):
+    def __init__(self, clock, behaviour=None, advance_ms=0, login_error=False, logout=None):
         self.clock, self.behaviour, self.advance_ms, self.login_error = clock, behaviour or {}, advance_ms, login_error
+        self.logout = logout
         self.calls = []
 
     def __call__(self, argv, cwd, env, timeout_s, log_path):
@@ -93,7 +95,14 @@ class FakeChild:
                 session.update(stage="get_history:" + key, error=result["error"])
                 common.write_json_atomic(os.path.join(out_dir, fetch_child.SESSION_RESULT), session)
                 return ChildOutcome("exited", fetch_child.EXIT_SDK_ERROR, 0.1)
-        session.update(status="ok", stage="logout", completed=len(keys))
+        if self.logout == "deadline":
+            return ChildOutcome("exited", SIGALRM_RC, 180.0)
+        session.update(stage="logout", completed=len(keys))
+        if self.logout == "error":
+            session["error"] = "RuntimeError: logout failed"
+            common.write_json_atomic(os.path.join(out_dir, fetch_child.SESSION_RESULT), session)
+            return ChildOutcome("exited", fetch_child.EXIT_SDK_ERROR, 0.1)
+        session["status"] = "ok"
         common.write_json_atomic(os.path.join(out_dir, fetch_child.SESSION_RESULT), session)
         return ChildOutcome("exited", 0, 0.1)
 
@@ -234,7 +243,7 @@ def test_login_failure_retries_same_batch_until_failure_limit(env):
     assert run_fetch(_opts(env, max_consecutive_failures=3), _deps(env, clock, child)) == 3
     assert [call["days"] for call in child.calls] == [_keys(DAYS[:5])] * 3
     run = _run_manifest(env)
-    assert run["calls"] == [] and "FT_FETCH_TOO_MANY_FAILURES" in run["stop_reason"]
+    assert run["calls"] == [] and "FT_FETCH_TOO_MANY_SESSION_FAILURES in_row=3" in run["stop_reason"]
     assert [s["unattempted"] for s in run["sessions"]] == [_keys(DAYS[:5])] * 3
     assert "login" in run["sessions"][0]["detail"]
 
@@ -270,6 +279,28 @@ def test_derived_max_logins_capped_at_ceiling(env, capsys):
     opts = _opts(env, max_calls=common.MAX_CALLS_CEILING, days_per_session=1, dry_run=True)
     assert run_fetch(opts, _deps(env, clock, FakeChild(clock))) == 0
     assert "max_logins=%d" % common.MAX_LOGINS_CEILING in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("logout", ["error", "deadline"])
+def test_logout_failure_is_failed_session_stops_at_limit(env, sigalrm_rc, capsys, logout):
+    """Ловить відмову логауту, що не рахувалась: усі доби ok, а сесію не закрито (виняток логауту чи SIGALRM після
+    останньої доби) — було rc 0, failed=0, і так без кінця. Тепер це відмова сесії: три поспіль — стоп, rc 3,
+    отримані доби закомічено, у підсумку sessions_failed=3."""
+    clock = Clock(SATURDAY_NOON)
+    child = FakeChild(clock, logout=logout)
+    assert run_fetch(_opts(env, days_per_session=1, max_consecutive_failures=3), _deps(env, clock, child)) == 3
+    assert [call["days"] for call in child.calls] == [[key] for key in _keys(DAYS[:3])]
+    run = _run_manifest(env)
+    assert "FT_FETCH_TOO_MANY_SESSION_FAILURES in_row=3" in run["stop_reason"]
+    assert [c["status"] for c in run["calls"]] == ["ok"] * 3 and [s["unattempted"] for s in run["sessions"]] == [[]] * 3
+    assert all(load_day(env["staging"], SYMBOL, day) is not None for day in DAYS[:3])
+    assert "sessions_failed=3" in capsys.readouterr().out
+
+
+def test_single_logout_failure_makes_run_rc1(env, capsys):
+    clock = Clock(SATURDAY_NOON)
+    assert run_fetch(_opts(env, days=DAYS[:1]), _deps(env, clock, FakeChild(clock, logout="error"))) == 1
+    assert _run_manifest(env)["rc"] == 1 and "sessions_failed=1 calls=1 committed=1 failed=0" in capsys.readouterr().out
 
 
 def test_max_calls_caps_run_trims_last_session_and_reports_days_left(env):

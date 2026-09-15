@@ -7,7 +7,8 @@
 не почала, лишаються в черзі. Після кожної сесії — маніфест прогону `_runs/<run_id>.json`. SIGTERM/SIGHUP/Ctrl+C
 посеред сесії вбивають дитину; доби, які вона встигла віддати, комітяться, сесія `stopped` з ними — у маніфест;
 далі маніфест фіналізовано. Фінальний запис маніфесту — ще під обробниками.
-rc: 0 усе закомічено або законно пропущено; 1 є невдалі доби; 2 відмова до виклику; 3 зупинка рейкою;
+rc: 0 усе закомічено або законно пропущено; 1 є невдалі доби або сесії (зокрема логаут, що відмовив після
+останньої доби); 2 відмова до виклику; 3 зупинка рейкою;
 128+signum зупинено сигналом (і коли сигнал прийшов посеред фіналізації).
 """
 
@@ -84,9 +85,10 @@ def _locked_run(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext) -> int:
 
 def _finalize_run(ctx: FetchContext, deps: FetchDeps, run: Dict[str, Any], run_id: str, stop: Optional[str],
                   signum: Optional[int]) -> int:
-    """Фінальний маніфест завершеного прогону: rc за викликами і рейками, або 128+signum, якщо прийшов сигнал."""
+    """Фінальний маніфест завершеного прогону: rc за добами, сесіями і рейками, або 128+signum, якщо прийшов сигнал."""
     failed = sum(1 for call in run["calls"] if call["status"] != "ok")
-    rc = 3 if stop else (1 if failed else 0)
+    sessions_failed = sum(1 for session in run["sessions"] if session["status"] != "ok")
+    rc = 3 if stop else (1 if failed or sessions_failed else 0)
     if signum is not None:
         rc = 128 + signum
         stop = stop or c.log_event(logging.WARNING, "FT_FETCH_SIGNAL_DURING_FINALIZE", signal=signum)
@@ -103,9 +105,9 @@ def _run_sessions(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, run: D
     жодна доба не витрачає --max-calls.
     """
     pending = list(queue)
-    stop, failures_in_row = market_open_reason(ctx, opts, deps.now_ms(), _batch_size(opts, run, pending)), 0
+    stop = market_open_reason(ctx, opts, deps.now_ms(), _batch_size(opts, run, pending))
     while pending and not stop:
-        batch_size, stop = _stop_before_session(opts, deps, ctx, run, failures_in_row, pending)
+        batch_size, stop = _stop_before_session(opts, deps, ctx, run, pending)
         if stop:
             break
         batch, pending = pending[:batch_size], pending[batch_size:]
@@ -121,10 +123,6 @@ def _run_sessions(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, run: D
         run["in_flight"] = None
         _record_session(run, outcome)
         pending = list(outcome.unattempted) + pending
-        for record in outcome.calls:
-            failures_in_row = 0 if record.status == "ok" else failures_in_row + 1
-        if not outcome.calls:
-            failures_in_row += 1  # сесія без жодної доби (логін, конфіг): теж відмова поспіль
         if outcome.session.status == "unkillable":
             stop = c.log_event(logging.ERROR, "FT_FETCH_STOPPED_UNKILLABLE_CHILD", session=seq)
         c.write_json_atomic(_run_path(ctx, run_id), run)
@@ -137,20 +135,36 @@ def _record_session(run: Dict[str, Any], outcome: SessionOutcome) -> None:
 
 
 def _stop_before_session(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, run: Dict[str, Any],
-                         failures_in_row: int, pending: List[dt.date]) -> Tuple[int, Optional[str]]:
-    """Рейки перед сесією: ліміт викликів → ліміт логінів → ліміт відмов поспіль → пауза → ринок закритий усю сесію."""
+                         pending: List[dt.date]) -> Tuple[int, Optional[str]]:
+    """Рейки перед сесією: ліміт викликів → ліміт логінів → відмови поспіль (діб, потім сесій) → пауза → ринок
+    закритий усю сесію. Відмови поспіль рахуються з хвоста маніфесту прогону: доби — `calls`, сесії — `sessions`
+    (сесія не ok — логін, дедлайн, SDK, логаут після останньої доби: доби в ній ok, а сесію не закрито штатно)."""
     next_day = c.day_key(pending[0])
     if len(run["calls"]) >= opts.max_calls:
         return 0, c.log_event(logging.ERROR, "FT_FETCH_MAX_CALLS_REACHED", days_left=len(pending), next_day=next_day)
     if len(run["sessions"]) >= ctx.max_logins:
         return 0, c.log_event(logging.ERROR, "FT_FETCH_MAX_LOGINS_REACHED", logins=len(run["sessions"]),
                               days_left=len(pending), next_day=next_day)
+    failures_in_row, session_failures_in_row = _trailing_failures(run["calls"]), _trailing_failures(run["sessions"])
     if failures_in_row >= opts.max_consecutive_failures:
         return 0, c.log_event(logging.ERROR, "FT_FETCH_TOO_MANY_FAILURES", in_row=failures_in_row, next_day=next_day)
+    if session_failures_in_row >= opts.max_consecutive_failures:
+        return 0, c.log_event(logging.ERROR, "FT_FETCH_TOO_MANY_SESSION_FAILURES", in_row=session_failures_in_row,
+                              last_status=run["sessions"][-1]["status"], next_day=next_day)
     if run["sessions"]:
         deps.sleep(opts.call_interval_s)
     batch_size = _batch_size(opts, run, pending)
     return batch_size, market_open_reason(ctx, opts, deps.now_ms(), batch_size)
+
+
+def _trailing_failures(records: List[Dict[str, Any]]) -> int:
+    """Скільки останніх записів маніфесту поспіль — не ok."""
+    count = 0
+    for record in reversed(records):
+        if record["status"] == "ok":
+            break
+        count += 1
+    return count
 
 
 def _batch_size(opts: FetchOptions, run: Dict[str, Any], pending: List[dt.date]) -> int:
@@ -166,9 +180,10 @@ def _in_flight_text(run: Dict[str, Any]) -> Optional[str]:
 def _print_summary(opts: FetchOptions, ctx: FetchContext, run: Dict[str, Any], run_id: str) -> None:
     calls = run["calls"]
     failed = sum(1 for call in calls if call["status"] != "ok")
-    print("FT_FETCH_SUMMARY symbol=%s sessions=%d calls=%d committed=%d failed=%d skipped=%d rc=%s run=%s" % (
-        opts.symbol, len(run["sessions"]), len(calls), len(calls) - failed, failed, len(run["skipped"]), run["rc"],
-        _run_path(ctx, run_id)))
+    sessions_failed = sum(1 for session in run["sessions"] if session["status"] != "ok")
+    print("FT_FETCH_SUMMARY symbol=%s sessions=%d sessions_failed=%d calls=%d committed=%d failed=%d skipped=%d "
+          "rc=%s run=%s" % (opts.symbol, len(run["sessions"]), sessions_failed, len(calls), len(calls) - failed, failed,
+                            len(run["skipped"]), run["rc"], _run_path(ctx, run_id)))
 
 
 def _day_queue(opts: FetchOptions, ctx: FetchContext, skipped: List[Dict[str, str]]) -> List[dt.date]:
