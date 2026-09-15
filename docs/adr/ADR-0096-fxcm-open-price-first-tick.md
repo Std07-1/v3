@@ -5,7 +5,7 @@
 | Поле | Значення |
 | ---- | -------- |
 | ID | ADR-0096 |
-| Статус | **Proposed** (2026-09-14). Код слайса A — у гілці `fix/fxcm-first-tick`, не в `main` і не на проді: деплой змінює живі свічки і потребує рестарту `smc-fxcm`. Слайси B–D пишуть у дані — кожен окреме «го» власника |
+| Статус | **Accepted** (2026-09-15): слайс A задеплоєно 2026-09-15 21:05 UTC (`db73fab`, перерва ринку, рестарт `smc-fxcm` → `smc-preview` → `smc-ws`; у лозі `FXCM_HISTORY_OPEN_MODE mode=FIRST_TICK`). Слайси B–D пишуть у дані — кожен окреме «го» власника |
 | Дата | 2026-09-14 |
 | Автори | Станіслав (owner: звірка XAU D1 з TradingView) + Claude Opus 5 (корінь у SDK, зонд брокера, аудит 18 агентів зі скептиками) |
 | Будується на | ADR-0001 (UDS), ADR-0002 (деривація з M1), ADR-0016 (dual venv, FXCM SDK у `.venv37`), ADR-0094 (один вибирач, health v2 root) |
@@ -193,6 +193,11 @@ FIRST_TICK. `HEALTH_MEASURE_VERSION` 3, baseline перезняти. До рем
 
 ## Changelog
 
+- 2026-09-15 21:05 UTC — **Accepted, слайс A на проді** (`db73fab`, ff-merge гілки в main). Вікно перерви 21:00–22:00:
+  після SSOT-дедупу 97 файлів (ADR-0094 P1.6) зупинені `smc-fxcm`/`smc-preview` запущено з новим кодом; у
+  `broker_sidecar.err.log` `FXCM_HISTORY_OPEN_MODE mode=FIRST_TICK`, `M1_POLLER_REDIS_PRIME symbols=5 primed_bars=187549`;
+  спостереження 120 с: усі RUNNING, ERROR/Traceback 0. Повний прогін на чистому checkout `db73fab`: 1449 passed, 6 skipped.
+  Жива перевірка першої сесії (22:00 UTC) — окремим записом.
 - 2026-09-15 — власник: «TradingView не показує пласкі бари». Зміну `candle_map` (показ `trading_flat`) відкочено до
   деплою: графік ховає пласкі свічки v ≤ 10, як до ADR-0096. Вимір на засіві FIRST_TICK: GER30 ~1%, EUSTX50 8.8%
   хвилин пласкі; на дисках живих символів (ще PREVIOUS_CLOSE) пласких 0–31 за 60 діб.
