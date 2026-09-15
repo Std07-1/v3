@@ -669,7 +669,8 @@ def test_sigterm_during_session_records_run_and_returns_128_plus_signum(env):
     assert run_fetch(_opts(env, days=DAYS[:2]), _deps(env, clock, child_receiving_sigterm)) == 128 + signal.SIGTERM
     run = _run_manifest(env)
     assert "FT_FETCH_STOPPED_BY_SIGNAL in_flight=session:1:20260720,20260721" in run["stop_reason"]
-    assert run["rc"] == 128 + signal.SIGTERM and run["calls"] == [] and run["sessions"] == []
+    assert run["rc"] == 128 + signal.SIGTERM and run["calls"] == []
+    assert [(s["status"], s["unattempted"]) for s in run["sessions"]] == [("stopped", _keys(DAYS[:2]))]
     assert not (env["staging"] / "_fetch.lock").exists()
     assert load_day(env["staging"], SYMBOL, DAYS[0]) is None
 
@@ -684,3 +685,63 @@ def test_signal_during_final_manifest_write_returns_128_plus_signum(env, monkeyp
     run = _run_manifest(env)
     assert run["rc"] == 128 + signal.SIGTERM and "FT_FETCH_SIGNAL_DURING_FINALIZE" in run["stop_reason"]
     assert [c["status"] for c in run["calls"]] == ["ok", "ok"] and not (env["staging"] / "_fetch.lock").exists()
+
+
+def _child_stopped_after_two_days(clock, stop):
+    """Дитина віддала дві доби пакета, почала третю — і тут батька зупиняють (`stop()` у run_child)."""
+    def child(argv, cwd, env, timeout_s, log_path):
+        FakeChild(clock, behaviour={common.day_key(DAYS[2]): "no_result"})(argv, cwd, env, timeout_s, log_path)
+        out_dir = dict(zip(argv[4::2], argv[5::2]))["--out-dir"]
+        os.remove(os.path.join(out_dir, fetch_child.SESSION_RESULT))  # сесія ще триває
+        stop()
+
+    return child
+
+
+def test_parent_signal_mid_batch_commits_days_already_received(env):
+    """Ловить викидання отриманих діб: SIGTERM батьку після двох діб пакета з п'яти прибирав out_dir разом із ними,
+    run.calls лишався порожнім. Тепер доби закомічено, сесія stopped з ними в маніфесті, решта — не почата."""
+    clock = Clock(SATURDAY_NOON)
+    child = _child_stopped_after_two_days(clock, lambda: signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None))
+    assert run_fetch(_opts(env), _deps(env, clock, child)) == 128 + signal.SIGTERM
+    assert [load_day(env["staging"], SYMBOL, day) is not None for day in DAYS[:3]] == [True, True, False]
+    run = _run_manifest(env)
+    assert [(c["day"], c["status"], c["session"]) for c in run["calls"]] == [
+        ("20260720", "ok", 1), ("20260721", "ok", 1), ("20260722", "stopped", 1)]
+    (session,) = run["sessions"]
+    assert (session["status"], session["unattempted"]) == ("stopped", _keys(DAYS[3:5]))
+    assert "parent_stopped: StopSignal" in session["detail"] and "FT_FETCH_STOPPED_BY_SIGNAL" in run["stop_reason"]
+    assert list((env["staging"] / "_inflight").iterdir()) == []
+
+
+def test_parent_crash_mid_batch_salvage_not_interrupted_by_second_signal(env, monkeypatch):
+    """Розбір отриманих діб — під знятими обробниками: SIGTERM посеред коміту після краху батька не обриває коміт
+    (без disarm StopSignal вилітав із середини розбору і друга доба губилась разом із записом сесії)."""
+    clock = Clock(SATURDAY_NOON)
+    real_write_day = fetch_call.write_day_atomic
+
+    def write_day_then_signal(*args, **kwargs):
+        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+        return real_write_day(*args, **kwargs)
+
+    def crash():
+        monkeypatch.setattr(fetch_call, "write_day_atomic", write_day_then_signal)
+        raise OSError("disk full")
+
+    with pytest.raises(OSError):
+        run_fetch(_opts(env), _deps(env, clock, _child_stopped_after_two_days(clock, crash)))
+    assert [load_day(env["staging"], SYMBOL, day) is not None for day in DAYS[:2]] == [True, True]
+    run = _run_manifest(env)
+    assert [c["status"] for c in run["calls"]] == ["ok", "ok", "stopped"] and run["sessions"][0]["status"] == "stopped"
+    assert "FT_FETCH_CRASHED" in run["stop_reason"]
+
+
+def test_stale_inflight_days_from_killed_parent_are_logged(env, caplog):
+    tag_dir = env["staging"] / "_inflight" / "20260912T110000Z-77-s0001"
+    tag_dir.mkdir(parents=True)
+    for name in ("20260720.started", "20260720.result.json", "20260721.started", fetch_child.SESSION_RESULT):
+        (tag_dir / name).write_bytes(b"{}")
+    clock = Clock(SATURDAY_NOON)
+    assert run_fetch(_opts(env, days=DAYS[:1]), _deps(env, clock, FakeChild(clock))) == 0
+    assert "FT_FETCH_INFLIGHT_STALE_DAYS session=20260912T110000Z-77-s0001 days=20260720" in caplog.text
+    assert list((env["staging"] / "_inflight").iterdir()) == []

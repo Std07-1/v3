@@ -5,7 +5,8 @@
 ліміт викликів get_history, ліміт логінів (сесія без жодної доби теж логін), ліміт відмов поспіль, пауза між
 логінами і рейка закритого ринку на всю сесію (`fetch_rails`). Дитину вбили посеред доби — доба невдала, наступна сесія починає з наступної доби; доби, яких дитина
 не почала, лишаються в черзі. Після кожної сесії — маніфест прогону `_runs/<run_id>.json`. SIGTERM/SIGHUP/Ctrl+C
-посеред сесії вбивають дитину і фіналізують маніфест; фінальний запис маніфесту — ще під обробниками.
+посеред сесії вбивають дитину; доби, які вона встигла віддати, комітяться, сесія `stopped` з ними — у маніфест;
+далі маніфест фіналізовано. Фінальний запис маніфесту — ще під обробниками.
 rc: 0 усе закомічено або законно пропущено; 1 є невдалі доби; 2 відмова до виклику; 3 зупинка рейкою;
 128+signum зупинено сигналом (і коли сигнал прийшов посеред фіналізації).
 """
@@ -23,8 +24,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.config_loader import env_str, load_system_config, pick_config_path
 from env_profile import load_env_secrets
 from tools.repair.first_tick_m1 import common as c
-from tools.repair.first_tick_m1.fetch_call import execute_session, remove_path
-from tools.repair.first_tick_m1.fetch_child import CREDENTIAL_ENV_KEYS
+from tools.repair.first_tick_m1.fetch_call import ParentStop, SessionOutcome, execute_session, remove_path
+from tools.repair.first_tick_m1.fetch_child import CREDENTIAL_ENV_KEYS, SESSION_RESULT
 from tools.repair.first_tick_m1.fetch_rails import (
     FetchContext, FetchDeps, FetchOptions, FetchRefused, check_rails, market_open_reason,
 )
@@ -58,11 +59,12 @@ def _locked_run(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext) -> int:
     queue = _day_queue(opts, ctx, run["skipped"])
     with c.StopSignals("FT_FETCH") as signals:
         try:
-            stop = _run_sessions(opts, deps, ctx, run, run_id, queue)
+            stop = _run_sessions(opts, deps, ctx, run, run_id, queue, signals)
             signals.disarm()
         except BaseException as exc:
-            # Сигнал, Ctrl+C чи відмова самого батька посеред прогону: дитину вже вбив run_child, маніфест прогону
-            # фіксує, на якій добі зупинились. Сигнал — rc 128+signum, решта летить далі.
+            # Сигнал, Ctrl+C чи відмова самого батька посеред прогону: дитину вже вбив run_child, отримані доби
+            # закомічено й записано сесією `stopped` (fetch_call); маніфест прогону фіксує, на якій добі зупинились.
+            # Сигнал — rc 128+signum, решта летить далі.
             signals.disarm()
             stopped_by_signal = isinstance(exc, c.StopSignal)
             run.update(stop_reason=c.log_event(
@@ -94,7 +96,7 @@ def _finalize_run(ctx: FetchContext, deps: FetchDeps, run: Dict[str, Any], run_i
 
 
 def _run_sessions(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, run: Dict[str, Any], run_id: str,
-                  queue: List[dt.date]) -> Optional[str]:
+                  queue: List[dt.date], signals: c.StopSignals) -> Optional[str]:
     """Сесії по черзі під рейками; маніфест — після кожної; повертає причину зупинки або None.
 
     Кожна сесія — логін: їх не більше --max-logins, тож цикл скінченний, навіть коли логін відмовляє щоразу і
@@ -109,10 +111,15 @@ def _run_sessions(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, run: D
         batch, pending = pending[:batch_size], pending[batch_size:]
         seq = len(run["sessions"]) + 1
         run["in_flight"] = {"session": seq, "days": [c.day_key(day) for day in batch]}
-        outcome = execute_session(ctx, opts, deps, run_id, seq, len(run["calls"]) + 1, batch)
+
+        def record_stopped(stopped: SessionOutcome) -> None:
+            _record_session(run, stopped)
+            c.write_json_atomic(_run_path(ctx, run_id), run)
+
+        outcome = execute_session(ctx, opts, deps, run_id, seq, len(run["calls"]) + 1, batch,
+                                  ParentStop(disarm=signals.disarm, record=record_stopped))
         run["in_flight"] = None
-        run["sessions"].append(dataclasses.asdict(outcome.session))
-        run["calls"].extend(dataclasses.asdict(record) for record in outcome.calls)
+        _record_session(run, outcome)
         pending = list(outcome.unattempted) + pending
         for record in outcome.calls:
             failures_in_row = 0 if record.status == "ok" else failures_in_row + 1
@@ -122,6 +129,11 @@ def _run_sessions(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, run: D
             stop = c.log_event(logging.ERROR, "FT_FETCH_STOPPED_UNKILLABLE_CHILD", session=seq)
         c.write_json_atomic(_run_path(ctx, run_id), run)
     return stop
+
+
+def _record_session(run: Dict[str, Any], outcome: SessionOutcome) -> None:
+    run["sessions"].append(dataclasses.asdict(outcome.session))
+    run["calls"].extend(dataclasses.asdict(record) for record in outcome.calls)
 
 
 def _stop_before_session(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, run: Dict[str, Any],
@@ -216,12 +228,30 @@ def _run_path(ctx: FetchContext, run_id: str) -> str:
 
 
 def _clean_inflight(staging_root: str) -> None:
+    """Теки сесій, які лишив батько, убитий без фіналізації (SIGKILL, OOM): прибрати; доби з result у них — у лог.
+
+    Такі доби не комітяться: маніфест їхнього прогону не фіналізовано, а дитина могла загинути посеред запису. Вони
+    видимі (FT_FETCH_INFLIGHT_STALE_DAYS) і перезабираються прогоном з --only-missing.
+    """
     inflight = os.path.join(staging_root, "_inflight")
     stale = sorted(os.listdir(inflight)) if os.path.isdir(inflight) else []
     for name in stale:
-        remove_path(os.path.join(inflight, name))
+        path = os.path.join(inflight, name)
+        days = _inflight_result_days(path)
+        if days:
+            c.log_event(logging.WARNING, "FT_FETCH_INFLIGHT_STALE_DAYS", session=name, days=",".join(days),
+                        action="not_committed_refetch_with_only_missing")
+        remove_path(path)
     if stale:
         c.log_event(logging.WARNING, "FT_FETCH_INFLIGHT_STALE_REMOVED", n=len(stale))
+
+
+def _inflight_result_days(session_dir: str) -> List[str]:
+    if not os.path.isdir(session_dir):
+        return []
+    suffix = ".result.json"
+    return sorted(name[:-len(suffix)] for name in os.listdir(session_dir)
+                  if name.endswith(suffix) and name != SESSION_RESULT)
 
 
 def _env_has_credentials() -> bool:

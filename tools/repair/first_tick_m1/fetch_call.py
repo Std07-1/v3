@@ -3,7 +3,8 @@
 Батько не довіряє дитині: рядки кожної доби перевалідовуються (схема, прапорці, запит, лічильники) і лише тоді
 атомарно стають добою staging. Будь-яка відмова лишає попередню валідну добу staging недоторканою. Доба, на якій
 дитину вбили (дедлайн, таймаут батька, падіння), — невдала; доби, яких дитина не почала, повертаються в чергу.
-Python 3.7.
+Батька зупинили посеред сесії (сигнал, Ctrl+C, відмова) — доби, які дитина вже віддала, не викидаються: розбір і
+коміт під знятими обробниками, сесія `stopped` — у маніфест прогону, потім виняток летить далі. Python 3.7.
 """
 
 from __future__ import annotations
@@ -15,12 +16,14 @@ import logging
 import os
 import shutil
 import signal
-from typing import Any, Dict, List, Optional, Tuple
+import time
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from tools.repair.first_tick_m1.common import (
     REPO_ROOT, day_key, log_event, request_window, session_timeout_s, sym_dir, utc_iso,
 )
 from tools.repair.first_tick_m1.fetch_child import EXIT_SDK_ERROR, SESSION_RESULT, day_files
+from tools.repair.first_tick_m1.fetch_runner import ChildOutcome
 from tools.repair.first_tick_m1.staging import StagingInvalid, validate_rows, write_day_atomic
 
 CHILD_MODULE = "tools.repair.first_tick_m1.fetch_child"
@@ -35,7 +38,7 @@ class CallRecord:
     seq: int
     session: int
     day: str
-    status: str  # ok | empty | invalid | child_error | deadline | timeout | unkillable
+    status: str  # ok | empty | invalid | child_error | deadline | timeout | unkillable | stopped
     duration_s: Optional[float] = None
     rows: Optional[int] = None
     raw_open_not_tick: Optional[int] = None
@@ -49,7 +52,7 @@ class SessionRecord:
 
     seq: int
     days: List[str]
-    status: str  # ok | child_error | deadline | timeout | unkillable
+    status: str  # ok | child_error | deadline | timeout | unkillable | stopped (батька зупинили посеред сесії)
     returncode: Optional[int]
     duration_s: float
     unattempted: List[str]
@@ -63,8 +66,16 @@ class SessionOutcome:
     unattempted: List[dt.date]
 
 
+@dataclasses.dataclass(frozen=True)
+class ParentStop:
+    """Що робити, коли батька зупинили посеред сесії: зняти обробники (`disarm`) і записати сесію `stopped` (`record`)."""
+
+    disarm: Callable[[], None]
+    record: Callable[[SessionOutcome], None]
+
+
 def execute_session(ctx: Any, opts: Any, deps: Any, run_id: str, session_seq: int, first_call_seq: int,
-                    days: List[dt.date]) -> SessionOutcome:
+                    days: List[dt.date], parent_stop: ParentStop) -> SessionOutcome:
     """Сесія пакета діб: staging змінюється лише для діб зі status ok; решта — записи для маніфесту прогону."""
     tag = "%s-s%04d" % (run_id, session_seq)
     call_dir = os.path.join(ctx.sdk_cwd, "session-" + tag)
@@ -78,10 +89,16 @@ def execute_session(ctx: Any, opts: Any, deps: Any, run_id: str, session_seq: in
             "--out-dir", out_dir, "--deadline-s", str(opts.call_timeout_s)]
     log_path = os.path.join(log_dir, "session-%04d-%s-%s-%s.log" % (session_seq, sym_dir(opts.symbol), keys[0],
                                                                     keys[-1]))
-    outcome = None
+    outcome, started = None, time.monotonic()
     try:
-        outcome = deps.run_child(argv, cwd=call_dir, env=child_env(),
-                                 timeout_s=session_timeout_s(opts.call_timeout_s, len(days)), log_path=log_path)
+        try:
+            outcome = deps.run_child(argv, cwd=call_dir, env=child_env(),
+                                     timeout_s=session_timeout_s(opts.call_timeout_s, len(days)), log_path=log_path)
+        except BaseException as exc:
+            # run_child уже вбив і дочекався дитину; отримані доби — у staging і маніфест, до прибирання out_dir.
+            _salvage_stopped_session(ctx, opts, deps, run_id, session_seq, first_call_seq, days, out_dir,
+                                     round(time.monotonic() - started, 3), exc, parent_stop)
+            raise
         result = _resolve_session(ctx, opts, deps, run_id, session_seq, first_call_seq, days, outcome, out_dir)
     finally:
         if outcome is None or outcome.status != "unkillable":  # живому процесу теки не забираємо
@@ -96,6 +113,24 @@ def child_env() -> Dict[str, str]:
     existing = env.get("PYTHONPATH")
     env["PYTHONPATH"] = str(REPO_ROOT) + (os.pathsep + existing if existing else "")
     return env
+
+
+def _salvage_stopped_session(ctx: Any, opts: Any, deps: Any, run_id: str, session_seq: int, first_call_seq: int,
+                             days: List[dt.date], out_dir: str, duration_s: float, exc: BaseException,
+                             parent_stop: ParentStop) -> None:
+    """Батька зупинили посеред сесії: доби з result — тим самим розбором, що й завершена сесія, під знятими
+    обробниками (другий сигнал не обриває коміт); сесія `stopped` — у маніфест. Відмова розбору не підміняє
+    зупинку: вона гучна в лозі, а виняток зупинки летить далі у викликача."""
+    parent_stop.disarm()
+    try:
+        outcome = _resolve_session(ctx, opts, deps, run_id, session_seq, first_call_seq, days,
+                                   ChildOutcome("stopped", None, duration_s), out_dir)
+        outcome.session.detail = "parent_stopped: %s: %s" % (type(exc).__name__, exc)
+        _log_session(opts, outcome)
+        parent_stop.record(outcome)
+    except Exception as salvage_exc:
+        log_event(logging.ERROR, "FT_FETCH_SESSION_SALVAGE_FAILED", symbol=opts.symbol, session=session_seq,
+                  stop="%s: %s" % (type(exc).__name__, exc), err="%s: %s" % (type(salvage_exc).__name__, salvage_exc))
 
 
 def _resolve_session(ctx: Any, opts: Any, deps: Any, run_id: str, session_seq: int, first_call_seq: int,
@@ -126,6 +161,8 @@ def _resolve_session(ctx: Any, opts: Any, deps: Any, run_id: str, session_seq: i
 def _session_status(outcome: Any, session_result: Optional[Dict[str, Any]],
                     problem: Optional[str]) -> Tuple[str, Optional[str]]:
     """Чим закінчилась дитина: ok лише коли процес вийшов 0 і сам звітував ok."""
+    if outcome.status == "stopped":
+        return "stopped", "parent_stopped"
     if outcome.status in ("timeout", "unkillable"):
         return outcome.status, "session_timeout"
     if _DEADLINE_RETURNCODE is not None and outcome.returncode == _DEADLINE_RETURNCODE:

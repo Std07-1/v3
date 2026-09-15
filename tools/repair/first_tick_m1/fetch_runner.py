@@ -30,7 +30,7 @@ PR_SET_PDEATHSIG = 1  # <linux/prctl.h>
 
 @dataclasses.dataclass(frozen=True)
 class ChildOutcome:
-    status: str  # "exited" | "timeout" | "unkillable"
+    status: str  # "exited" | "timeout" | "unkillable"; "stopped" — лише fetch_call: батька зупинили посеред очікування
     returncode: Optional[int]
     duration_s: float
 
