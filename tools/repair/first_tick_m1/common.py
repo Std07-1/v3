@@ -34,6 +34,10 @@ MAX_CALLS_CEILING = 300
 # логінів за прогін ≈ ceil(діб / days_per_session) + по одному на кожну перервану сесію.
 DAYS_PER_SESSION_DEFAULT = 7
 DAYS_PER_SESSION_RANGE = (1, 14)
+# Логінів FXCM за прогін — окремо від --max-calls: сесія, що не дала жодної доби (логін відмовив чи завис, дитина
+# впала до першої доби), бюджет get_history не витрачає. Дефолт — ⌈max_calls / days_per_session⌉ (прогін без
+# перерваних сесій), стеля — ≈ ⌈MAX_CALLS_CEILING / DAYS_PER_SESSION_DEFAULT⌉ з запасом на перервані сесії.
+MAX_LOGINS_CEILING = 60
 CALL_TIMEOUT_DEFAULT_S = 180  # get_history — синхронний нативний виклик без таймауту (ADR-0054 §3.6)
 CALL_TIMEOUT_RANGE_S = (30, 900)
 # Кроки сесії дитини поза get_history, кожен під тим самим дедлайном: логін і логаут.
@@ -51,6 +55,7 @@ APPLY_GUARD_MINUTES_DEFAULT = 30
 MIN_AGE_DAYS_DEFAULT = 7
 MIN_AGE_DAYS_RANGE = (0, 60)
 MAX_CONSECUTIVE_FAILURES_DEFAULT = 3
+MAX_CONSECUTIVE_FAILURES_RANGE = (1, 10)  # стеля: 10 невдалих сесій поспіль — уже не збіг, а відмова брокера
 CLOSE_EPS_DEFAULT = 1e-9
 CLOSE_EPS_MAX = 1e-6  # нижче за найменший крок ціни 5 символів (0.001): більший eps пропустив би інший close
 # «Запечений» проміжок: o == prev_c у 100% хвилин; справжній FIRST_TICK — 0/60; Binance — 52% (§1.3–1.4).

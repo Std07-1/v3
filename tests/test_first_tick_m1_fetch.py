@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -236,6 +237,39 @@ def test_login_failure_retries_same_batch_until_failure_limit(env):
     assert "login" in run["sessions"][0]["detail"]
 
 
+def test_failing_login_capped_by_max_logins_even_with_budget_left(env):
+    """Ловить логіни поза бюджетом: сесія без жодної доби не витрачає --max-calls, тож при --max-calls 1 логін, що
+    відмовляє щоразу, повторювався до ліміту відмов поспіль. Дефолт --max-logins = ⌈1 / 7⌉ = 1 — рівно один логін."""
+    clock = Clock(SATURDAY_NOON)
+    child = FakeChild(clock, login_error=True)
+    assert run_fetch(_opts(env, max_calls=1), _deps(env, clock, child)) == 3
+    assert len(child.calls) == 1
+    run = _run_manifest(env)
+    assert "FT_FETCH_MAX_LOGINS_REACHED logins=1" in run["stop_reason"] and run["rails"]["max_logins"] == 1
+    explicit_clock = Clock(SATURDAY_NOON)
+    explicit = FakeChild(explicit_clock, login_error=True)
+    shutil.rmtree(env["staging"])
+    assert run_fetch(_opts(env, max_logins=2, max_consecutive_failures=10), _deps(env, explicit_clock, explicit)) == 3
+    assert len(explicit.calls) == 2
+
+
+@pytest.mark.parametrize("field, value", [("max_logins", 0), ("max_logins", common.MAX_LOGINS_CEILING + 1),
+                                          ("max_consecutive_failures", 0),
+                                          ("max_consecutive_failures", common.MAX_CONSECUTIVE_FAILURES_RANGE[1] + 1)])
+def test_login_and_failure_limits_over_ceiling_refused_rc2(env, field, value):
+    clock = Clock(SATURDAY_NOON)
+    child = FakeChild(clock)
+    assert run_fetch(_opts(env, **{field: value}), _deps(env, clock, child)) == 2
+    assert child.calls == [] and not env["staging"].exists()
+
+
+def test_derived_max_logins_capped_at_ceiling(env, capsys):
+    clock = Clock(SATURDAY_NOON)
+    opts = _opts(env, max_calls=common.MAX_CALLS_CEILING, days_per_session=1, dry_run=True)
+    assert run_fetch(opts, _deps(env, clock, FakeChild(clock))) == 0
+    assert "max_logins=%d" % common.MAX_LOGINS_CEILING in capsys.readouterr().out
+
+
 def test_max_calls_caps_run_trims_last_session_and_reports_days_left(env):
     clock = Clock(SATURDAY_NOON)
     child = FakeChild(clock)
@@ -388,7 +422,7 @@ def test_dry_run_reports_planned_sessions_without_calls(env, capsys):
     child = FakeChild(clock)
     assert run_fetch(_opts(env, days_per_session=2, dry_run=True), _deps(env, clock, child)) == 0
     out = capsys.readouterr().out
-    assert child.calls == [] and "planned=5 sessions=3 dry_run=1" in out
+    assert child.calls == [] and "planned=5 sessions=3 max_logins=15 dry_run=1" in out
     assert "FT_FETCH_DRY_RUN day=20260724 session=3 decision=fetch" in out
 
 

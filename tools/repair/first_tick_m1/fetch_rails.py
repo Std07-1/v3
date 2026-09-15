@@ -34,6 +34,7 @@ class FetchOptions:
     min_age_days: int = c.MIN_AGE_DAYS_DEFAULT
     max_consecutive_failures: int = c.MAX_CONSECUTIVE_FAILURES_DEFAULT
     days_per_session: int = c.DAYS_PER_SESSION_DEFAULT
+    max_logins: Optional[int] = None  # None — ⌈max_calls / days_per_session⌉, не більше MAX_LOGINS_CEILING
     only_missing: bool = False
     dry_run: bool = False
 
@@ -59,6 +60,7 @@ class FetchContext:
     calendar: Any
     calendar_group: str
     days: List[dt.date]
+    max_logins: int
 
 
 class FetchRefused(Exception):
@@ -93,7 +95,7 @@ def check_rails(opts: FetchOptions, deps: FetchDeps) -> FetchContext:
         if day_end_ms + opts.min_age_days * c.DAY_MS > now_ms:
             raise _refuse("FT_FETCH_DAY_TOO_RECENT", day=c.day_key(day), min_age_days=opts.min_age_days)
     group = cfg["market_calendar_symbol_groups"][opts.symbol]
-    return FetchContext(data_root, staging_root, sdk_cwd, calendars[opts.symbol], group, days)
+    return FetchContext(data_root, staging_root, sdk_cwd, calendars[opts.symbol], group, days, _max_logins(opts))
 
 
 def market_open_reason(ctx: FetchContext, opts: FetchOptions, now_ms: int, days: int) -> Optional[str]:
@@ -119,7 +121,10 @@ def _check_arguments(opts: FetchOptions) -> List[dt.date]:
          opts.call_interval_s),
         (_within(opts.guard_minutes, c.GUARD_MINUTES_RANGE), "FT_FETCH_GUARD_OUT_OF_RANGE", opts.guard_minutes),
         (_within(opts.min_age_days, c.MIN_AGE_DAYS_RANGE), "FT_FETCH_MIN_AGE_OUT_OF_RANGE", opts.min_age_days),
-        (opts.max_consecutive_failures >= 1, "FT_FETCH_BAD_FAILURE_LIMIT", opts.max_consecutive_failures),
+        (_within(opts.max_consecutive_failures, c.MAX_CONSECUTIVE_FAILURES_RANGE), "FT_FETCH_BAD_FAILURE_LIMIT",
+         opts.max_consecutive_failures),
+        (opts.max_logins is None or 1 <= opts.max_logins <= c.MAX_LOGINS_CEILING, "FT_FETCH_MAX_LOGINS_OUT_OF_RANGE",
+         opts.max_logins),
         (_within(opts.days_per_session, c.DAYS_PER_SESSION_RANGE), "FT_FETCH_DAYS_PER_SESSION_OUT_OF_RANGE",
          opts.days_per_session),
     ]
@@ -127,6 +132,17 @@ def _check_arguments(opts: FetchOptions) -> List[dt.date]:
         if not ok:
             raise _refuse(code, value=value)
     return days
+
+
+def _max_logins(opts: FetchOptions) -> int:
+    """Стеля логінів прогону: явний --max-logins або ⌈max_calls / days_per_session⌉, урізаний до MAX_LOGINS_CEILING."""
+    if opts.max_logins is not None:
+        return opts.max_logins
+    derived = -(-opts.max_calls // opts.days_per_session)
+    if derived > c.MAX_LOGINS_CEILING:
+        c.log_event(logging.WARNING, "FT_FETCH_MAX_LOGINS_DEFAULT_CAPPED", derived=derived, ceiling=c.MAX_LOGINS_CEILING,
+                    max_calls=opts.max_calls, days_per_session=opts.days_per_session)
+    return min(derived, c.MAX_LOGINS_CEILING)
 
 
 def _check_roots(staging_root: str, sdk_cwd: str, data_root: str, create: bool) -> None:

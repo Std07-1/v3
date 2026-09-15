@@ -30,10 +30,14 @@
 
 Сесії fetch: одна дитина = один логін FXCM на пакет до `--days-per-session` діб (дефолт 7, 1..14), кожна доба —
 окремий `get_history` під власним дедлайном (`--call-timeout-s`, перевзводиться перед кожним кроком усередині
-дитини). `--max-calls` рахує `get_history` (доби), не логіни. Оцінка логінів: ⌈діб / days_per_session⌉ + по
-одному на кожну перервану сесію (дедлайн, відмова SDK, логін). Приклад: 5 символів × ~260 торгових діб ≈ 1300 діб
-→ ≈ 186 логінів замість ≈ 1300; за вихідні з `--max-calls 300` — ≈ 43 логіни. `--dry-run` друкує `sessions=`.
-Пауза `--call-interval-s` — між сесіями.
+дитини). `--max-calls` рахує `get_history` (доби), не логіни. Логіни рахує `--max-logins` (дефолт
+⌈max-calls / days-per-session⌉, стеля 60): кожна сесія — логін, і та, що не дала жодної доби (логін відмовив чи
+завис, дитина впала до першої доби) — теж; ліміт перевіряється перед кожною сесією (`FT_FETCH_MAX_LOGINS_REACHED`,
+rc 3). Оцінка логінів: ⌈діб / days_per_session⌉ + по одному на кожну перервану сесію (дедлайн, відмова SDK, логін,
+логаут) — перервана сесія з'їдає логін із того самого бюджету, тож прогін із перерваними сесіями зупиниться за
+логінами раніше, ніж за `--max-calls`. Приклад: 5 символів × ~260 торгових діб ≈ 1300 діб → ≈ 186 логінів замість
+≈ 1300; за вихідні з `--max-calls 300` — ≈ 43 логіни. Ліміт відмов поспіль `--max-consecutive-failures` — 1..10.
+`--dry-run` друкує `sessions=` і `max_logins=`. Пауза `--call-interval-s` — між сесіями.
 
 ## 2. Пілот (одна минула доба XAU у вихідні)
 
@@ -41,7 +45,7 @@
 cd /opt/smc-v3-ft
 PYTHONPATH=/opt/smc-v3 /opt/smc-v3/.venv37/bin/python -m tools.repair.first_tick_m1 fetch \
   --symbol XAU/USD --from 2026-07-26 --to 2026-07-26 \
-  --staging-root /opt/smc-v3-ft/staging --sdk-cwd /opt/smc-v3-ft/sdk --max-calls 1
+  --staging-root /opt/smc-v3-ft/staging --sdk-cwd /opt/smc-v3-ft/sdk --max-calls 1 --max-logins 1
 cd /opt/smc-v3 && .venv/bin/python -m tools.repair.first_tick_m1 plan \
   --symbol XAU/USD --from 2026-07-26 --to 2026-07-26 \
   --staging-root /opt/smc-v3-ft/staging --plan-dir /opt/smc-v3-ft/plans/xau-20260726
@@ -55,8 +59,9 @@ cd /opt/smc-v3 && .venv/bin/python -m tools.repair.first_tick_m1 plan \
 - `v_differs=0` (обсяг не замінюється; ненульове значення — ознака іншої версії даних, розібрати до apply);
 - `refused_files=0`: якщо на проді знайдуться CRLF/неканонічні part-файли — окремий нормалізаційний патч, не B.
 
-Частота логінів FXCM не виміряна: пілот — одна сесія на одну добу (`--max-calls 1`), далі одна сесія на тиждень
-(`--max-calls 7`), далі кілька сесій (`--max-calls 30` = 5 логінів); будь-яка сесія `child_error` із `login` у
+Частота логінів FXCM не виміряна: пілот — рівно один логін на одну добу (`--max-calls 1`, отже `--max-logins` = 1;
+логін, що відмовив, не повторюється), далі одна сесія на тиждень (`--max-calls 7`), далі кілька сесій
+(`--max-calls 30` = не більше 5 логінів, разом із перерваними); будь-яка сесія `child_error` із `login` у
 `sessions[].detail` поспіль — стоп і розбір. Невдала доба посеред сесії (`deadline`/`timeout` у `calls[]`) —
 перезабирається наступним прогоном з `--only-missing`.
 

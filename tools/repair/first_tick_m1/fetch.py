@@ -2,8 +2,8 @@
 
 Батько не логіниться в FXCM. Одна дитина (`fetch_call`) = одна сесія FXCM на пакет до --days-per-session діб
 (свіжий cwd, дедлайн кожного get_history всередині дитини, таймаут батька на всю сесію). Перед кожною сесією —
-ліміт викликів get_history, ліміт відмов поспіль, пауза між логінами і рейка закритого ринку на всю сесію
-(`fetch_rails`). Дитину вбили посеред доби — доба невдала, наступна сесія починає з наступної доби; доби, яких дитина
+ліміт викликів get_history, ліміт логінів (сесія без жодної доби теж логін), ліміт відмов поспіль, пауза між
+логінами і рейка закритого ринку на всю сесію (`fetch_rails`). Дитину вбили посеред доби — доба невдала, наступна сесія починає з наступної доби; доби, яких дитина
 не почала, лишаються в черзі. Після кожної сесії — маніфест прогону `_runs/<run_id>.json`. SIGTERM/SIGHUP/Ctrl+C
 посеред сесії вбивають дитину і фіналізують маніфест.
 rc: 0 усе закомічено або законно пропущено; 1 є невдалі доби; 2 відмова до виклику; 3 зупинка рейкою;
@@ -87,8 +87,8 @@ def _run_sessions(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, run: D
                   queue: List[dt.date]) -> Optional[str]:
     """Сесії по черзі під рейками; маніфест — після кожної; повертає причину зупинки або None.
 
-    Кожна сесія або дає ≥1 запис доби (обмежено --max-calls), або збільшує лічильник відмов поспіль (обмежено
-    --max-consecutive-failures) — цикл скінченний, навіть коли логін відмовляє щоразу.
+    Кожна сесія — логін: їх не більше --max-logins, тож цикл скінченний, навіть коли логін відмовляє щоразу і
+    жодна доба не витрачає --max-calls.
     """
     pending = list(queue)
     stop, failures_in_row = market_open_reason(ctx, opts, deps.now_ms(), _batch_size(opts, run, pending)), 0
@@ -116,10 +116,13 @@ def _run_sessions(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, run: D
 
 def _stop_before_session(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext, run: Dict[str, Any],
                          failures_in_row: int, pending: List[dt.date]) -> Tuple[int, Optional[str]]:
-    """Рейки перед сесією: ліміт викликів → ліміт відмов поспіль → пауза між логінами → ринок закритий усю сесію."""
+    """Рейки перед сесією: ліміт викликів → ліміт логінів → ліміт відмов поспіль → пауза → ринок закритий усю сесію."""
     next_day = c.day_key(pending[0])
     if len(run["calls"]) >= opts.max_calls:
         return 0, c.log_event(logging.ERROR, "FT_FETCH_MAX_CALLS_REACHED", days_left=len(pending), next_day=next_day)
+    if len(run["sessions"]) >= ctx.max_logins:
+        return 0, c.log_event(logging.ERROR, "FT_FETCH_MAX_LOGINS_REACHED", logins=len(run["sessions"]),
+                              days_left=len(pending), next_day=next_day)
     if failures_in_row >= opts.max_consecutive_failures:
         return 0, c.log_event(logging.ERROR, "FT_FETCH_TOO_MANY_FAILURES", in_row=failures_in_row, next_day=next_day)
     if run["sessions"]:
@@ -172,14 +175,14 @@ def _staged_valid(ctx: FetchContext, opts: FetchOptions, day: dt.date) -> bool:
 
 
 def _dry_run(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext) -> int:
-    queue = _day_queue(opts, ctx, [])[:opts.max_calls]
+    queue = _day_queue(opts, ctx, [])[:min(opts.max_calls, ctx.max_logins * opts.days_per_session)]
     for index, day in enumerate(queue):
         print("FT_FETCH_DRY_RUN day=%s session=%d decision=fetch" % (c.day_key(day), index // opts.days_per_session + 1))
     sessions = -(-len(queue) // opts.days_per_session)
     first_batch = max(1, min(opts.days_per_session, len(queue)))
     rc = 3 if market_open_reason(ctx, opts, deps.now_ms(), first_batch) else 0
-    print("FT_FETCH_SUMMARY symbol=%s calls=0 planned=%d sessions=%d dry_run=1 rc=%d" % (
-        opts.symbol, len(queue), sessions, rc))
+    print("FT_FETCH_SUMMARY symbol=%s calls=0 planned=%d sessions=%d max_logins=%d dry_run=1 rc=%d" % (
+        opts.symbol, len(queue), sessions, ctx.max_logins, rc))
     return rc
 
 
@@ -191,6 +194,7 @@ def _run_manifest(opts: FetchOptions, ctx: FetchContext, run_id: str, now_ms: in
             "started_at_utc": c.utc_iso(now_ms), "finished_at_utc": None,
             "rails": {"calendar_group": ctx.calendar_group, "guard_minutes": opts.guard_minutes,
                       "call_timeout_s": opts.call_timeout_s, "max_calls": opts.max_calls,
+                      "max_logins": ctx.max_logins, "max_consecutive_failures": opts.max_consecutive_failures,
                       "days_per_session": opts.days_per_session, "min_age_days": opts.min_age_days},
             "sessions": [], "calls": [], "skipped": [], "in_flight": None, "stop_reason": None, "rc": None}
 
@@ -230,6 +234,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                           ("--max-consecutive-failures", c.MAX_CONSECUTIVE_FAILURES_DEFAULT),
                           ("--days-per-session", c.DAYS_PER_SESSION_DEFAULT)):
         parser.add_argument(flag, type=int, default=default)
+    parser.add_argument("--max-logins", type=int, default=None,
+                        help="логінів FXCM за прогін (1..%d); дефолт ⌈max-calls / days-per-session⌉" % c.MAX_LOGINS_CEILING)
     parser.add_argument("--only-missing", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     opts = FetchOptions(**vars(parser.parse_args(argv)))
