@@ -5,11 +5,13 @@ import datetime as dt
 import json
 import logging
 import os
-from typing import List, Set
+import time
+from typing import List, Set, Tuple
 
 from env_profile import load_env_secrets
 from core.config_loader import pick_config_path, load_system_config, env_str
 from core.derive import DERIVE_SOURCE
+from core.model.bars import CandleBar
 from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
 from runtime.store.ssot_jsonl import JsonlAppender
 
@@ -57,6 +59,27 @@ def _parse_date_utc(s: str) -> dt.datetime:
         except ValueError:
             continue
     raise ValueError("Невідомий формат дати: %s" % s)
+
+
+# Засів «до зараз» (без --date-to або з курсором у поточній хвилині) отримує від брокера і бар, що ще
+# формується: FXCM віддає його як звичайний рядок історії, нормалізація ставить complete=true. 15.09.2026
+# так на диск ліг GER30 17:12 з v=41 проти ~130 у сусідів. Повторний засів його не виправить: бари, чиї
+# open вже є на диску, пропускаються. Тому бар пишемо лише закритим з запасом, який дає брокеру M1-полер
+# (m1_poller.safety_delay_s): у цьому вікні FXCM ще доправляє щойно закриту хвилину.
+_DEFAULT_CLOSE_SAFETY_S = 8
+
+
+def _close_safety_ms(cfg: dict) -> int:
+    m1_cfg = cfg.get("m1_poller")
+    safety_s = m1_cfg.get("safety_delay_s", _DEFAULT_CLOSE_SAFETY_S) if isinstance(m1_cfg, dict) else _DEFAULT_CLOSE_SAFETY_S
+    return int(safety_s) * 1000
+
+
+def _split_unclosed(bars: List[CandleBar], now_ms: int, safety_ms: int) -> Tuple[List[CandleBar], List[CandleBar]]:
+    """Ділить партію на закриті (close + запас <= now) і ті, що ще формуються або щойно закрились."""
+    closed = [b for b in bars if b.close_time_ms + safety_ms <= now_ms]
+    unclosed = [b for b in bars if b.close_time_ms + safety_ms > now_ms]
+    return closed, unclosed
 
 
 def _load_existing_opens(data_root: str, symbol: str, tf_s: int, start_ms: int, end_ms: int) -> Set[int]:
@@ -151,6 +174,7 @@ def main() -> int:
     day_anchor_offset_s_alt2 = cfg.get("day_anchor_offset_s_alt2", None)
     day_anchor_offset_s_d1 = cfg.get("day_anchor_offset_s_d1", None)
     day_anchor_offset_s_d1_alt = cfg.get("day_anchor_offset_s_d1_alt", None)
+    close_safety_ms = _close_safety_ms(cfg)
 
     logging.info(
         "Backfill TF=%d: symbols=%d date_to=%s n=%d out=%s",
@@ -205,6 +229,15 @@ def main() -> int:
                     "%s: BACKFILL_NEXT --date-to %s (перший бар цієї партії; дублікат межі прибере dedup)",
                     symbol, _format_cursor(first_ms),
                 )
+                bars, unclosed = _split_unclosed(bars, int(time.time() * 1000), close_safety_ms)
+                if unclosed:
+                    logging.warning(
+                        "%s: BACKFILL_UNCLOSED_DROPPED n=%d first=%s — бар ще формується, його допише полер або наступний засів",
+                        symbol, len(unclosed), _format_cursor(unclosed[0].open_time_ms),
+                    )
+                if not bars:
+                    logging.info("%s: 0 закритих барів у партії", symbol)
+                    continue
                 last_ms = bars[-1].open_time_ms
                 existing = _load_existing_opens(data_root, symbol, args.tf, first_ms, last_ms)
                 before = len(bars)
