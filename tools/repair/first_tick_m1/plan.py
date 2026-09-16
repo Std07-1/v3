@@ -76,6 +76,12 @@ def build_plan(opts: PlanOptions, cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], 
         if item["entries"]:
             entries[item["entries"]] = plan_io.entries_bytes(records)
             item["entries_sha256"] = c.sha256_bytes(entries[item["entries"]])
+    if not any(item["entries"] for item in files):
+        # Ні part-файлів, ні діб staging у діапазоні: далі план був би порожній, а PLAN.json без entries не
+        # завантажується — оператор отримував сиру трасу замість іменованої відмови.
+        raise PlanRefused(c.log_event(logging.ERROR, "PLAN_NO_INPUTS", symbol=opts.symbol,
+                                      day_from=c.day_key(opts.day_from), day_to=c.day_key(opts.day_to),
+                                      hint="перевірте --from/--to, --staging-root і що fetch дійсно поклав доби"))
     planned_keys = {c.day_key(day) for day in days}
     for day in days:
         if c.day_key(day) in scan.suspect_days:

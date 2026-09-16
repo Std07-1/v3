@@ -32,6 +32,7 @@ _PATCHED_FIELDS = ("o", "h", "low", "extensions")
 class VerifyOptions:
     apply_manifest: str
     work_dir: Optional[str] = None
+    allow_incomplete: bool = False
 
 
 class VerifyInputError(Exception):
@@ -67,13 +68,49 @@ def run_verify(opts: VerifyOptions) -> int:
             violations.append("VERIFY_TAIL_RANGE_DIVERGED day=%s" % record["day"])
         elif before["TAIL"] != before["RANGE"]:
             warnings.append("VERIFY_TAIL_RANGE_DIFFERED_BEFORE day=%s" % record["day"])
+    # Покриття плану: rc=0 мусить означати «план застосовано ВЕСЬ», а не лише «те, що переписано, переписано
+    # правильно». Частковий apply (рейка during, зміна входу, сигнал) лишав 17 діб місяця у PREVIOUS_CLOSE, а
+    # ранбук читав rc=0 як «полагоджено» — дві сигнальні точки з протилежним знаком, останнє слово зелене.
+    not_applied = _unapplied_files(manifest, loaded)
+    if not_applied:
+        for part, state in not_applied[:20]:
+            print("VERIFY_FILE_NOT_APPLIED part=%s disk=%s" % (part, state))
+        if len(not_applied) > 20:
+            print("VERIFY_FILE_NOT_APPLIED ... ще %d файлів" % (len(not_applied) - 20))
     for text in warnings:
         c.log_event(logging.WARNING, text)
     for text in violations:
         print(text)
-    print("FT_VERIFY_SUMMARY files=%d violations=%d warnings=%d work_dir=%s rc=%d" % (
-        len(rewritten), len(violations), len(warnings), work, 1 if violations else 0))
-    return 1 if violations else 0
+    incomplete = bool(not_applied) and not opts.allow_incomplete
+    rc = 1 if violations or incomplete else 0
+    print("FT_VERIFY_SUMMARY files=%d planned_files=%d not_applied=%d violations=%d warnings=%d work_dir=%s rc=%d%s" % (
+        len(rewritten), _planned_file_count(loaded), len(not_applied), len(violations), len(warnings), work, rc,
+        " FT_VERIFY_INCOMPLETE=1" if incomplete else ""))
+    if incomplete:
+        print("FT_VERIFY_NEXT: доперепланувати решту діб у НОВИЙ plan_dir і застосувати (apply на цей план уже "
+              "відмовить APPLY_PLAN_INPUT_CHANGED); свідомо прийняти часткове — --allow-incomplete")
+    return rc
+
+
+def _planned_file_count(loaded: Any) -> int:
+    return sum(1 for item in loaded.plan.get("files", []) if item.get("rewrite"))
+
+
+def _unapplied_files(manifest: Dict[str, Any], loaded: Any) -> List[Any]:
+    """Файли, які план просив переписати, а на диску вони не у стані «після»: (part, стан диска або 'not_in_manifest')."""
+    by_part = {record["part"]: record for record in manifest["files"]}
+    out = []
+    for item in loaded.plan.get("files", []):
+        if not item.get("rewrite"):
+            continue
+        record = by_part.get(item["part"])
+        if record is None:
+            out.append((item["part"], "not_in_manifest"))
+            continue
+        state = am.disk_state(record, manifest["data_root"])
+        if state != am.DISK_AFTER:
+            out.append((item["part"], state))
+    return out
 
 
 def read_views(root: str, symbol: str, day: Any) -> Dict[str, List[Dict[str, Any]]]:
@@ -169,4 +206,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m tools.repair.first_tick_m1 verify")
     parser.add_argument("--apply-manifest", required=True)
     parser.add_argument("--work-dir")
+    parser.add_argument("--allow-incomplete", action="store_true",
+                        help="Не вважати порушенням те, що частина запланованих файлів не застосована")
     return run_verify(VerifyOptions(**vars(parser.parse_args(argv))))

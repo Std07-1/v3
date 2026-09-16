@@ -357,7 +357,10 @@ def test_apply_killed_right_after_replace_rollback_and_verify_see_rewritten_file
     record = snapshot["files"][0]
     assert (snapshot["status"], record["status"]) == ("running", "replacing")
     assert Path(record["backup"]).read_bytes() == originals[MON] and _part(sc, MON).read_bytes() != originals[MON]
-    assert run_verify(VerifyOptions(str(killed), str(tmp_path / "work"))) == 0
+    # Частковий apply: переписаний файл звірено без порушень, але план НЕ покритий — verify мусить бути червоним
+    # (інакше ранбук читає rc=0 як «полагоджено»); свідоме прийняття часткового — --allow-incomplete.
+    assert run_verify(VerifyOptions(str(killed), str(tmp_path / "work"))) == 1
+    assert run_verify(VerifyOptions(str(killed), str(tmp_path / "work2"), allow_incomplete=True)) == 0
     assert run_rollback(RollbackOptions(str(killed), sha256_file(killed)), _deps(sc)) == 0
     assert {day: _part(sc, day).read_bytes() for day in (MON, TUE)} == originals
 
@@ -390,7 +393,9 @@ def test_apply_killed_before_replace_file_is_not_treated_as_rewritten(planned, t
     assert (finalized["status"], finalized["replace_aborted"]) == ("not_started", True)
     assert run_rollback(RollbackOptions(str(killed), sha256_file(killed)), _deps(sc)) == 0
     assert _part(sc, MON).read_bytes() == original
-    assert run_verify(VerifyOptions(str(killed), str(tmp_path / "work"))) == 0
+    # Жодного файла не переписано: порушень немає, але й план не покритий → rc=1 з FT_VERIFY_INCOMPLETE.
+    assert run_verify(VerifyOptions(str(killed), str(tmp_path / "work"))) == 1
+    assert run_verify(VerifyOptions(str(killed), str(tmp_path / "work2"), allow_incomplete=True)) == 0
 
 
 def test_apply_sigterm_after_replace_finalizes_manifest_rc_128_plus_signum(planned, tmp_path, monkeypatch):

@@ -18,9 +18,11 @@ from tools.repair.first_tick_m1.common import (
 )
 
 # Формат плану — окремо від TOOL_VERSION (ним звʼязаний і формат доби staging): v2 — правила SKIP_WOULD_HIDE і
-# SKIP_RANGE_CHANGED_BEYOND_STRETCH. План v1 міг назвати REPLACE ключі, які нові правила пропускають, тож apply його
-# не приймає; staging, забраний до бампу, лишається чинним — перепланувати можна без жодного виклику брокера.
-PLAN_FORMAT = "ft_m1_plan_v2"
+# SKIP_RANGE_CHANGED_BEYOND_STRETCH; v3 — правило SKIP_V_DIFFERS (інший tick volume = інша витяжка брокера, заміна
+# o/h/low дала б бар, якого не було ні в одній версії даних). План старшого формату міг назвати REPLACE ключі, які
+# нові правила пропускають, тож apply його не приймає; staging, забраний до бампу, лишається чинним — перепланувати
+# можна без жодного виклику брокера.
+PLAN_FORMAT = "ft_m1_plan_v3"
 PLAN_FILE = "PLAN.json"
 
 

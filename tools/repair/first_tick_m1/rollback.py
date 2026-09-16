@@ -15,6 +15,7 @@ rc: 0 відновлено (або вже було); 1 звірка після �
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import logging
 import os
@@ -48,7 +49,14 @@ def run_rollback(opts: RollbackOptions, deps: rails.WriteDeps) -> int:
         if applied.get("format") != am.APPLY_FORMAT:
             raise rails.refuse(2, "ROLLBACK_MANIFEST_FORMAT", manifest=opts.apply_manifest)
         target = rails.resolve_target(cfg, applied["data_root"], opts.copy, "ROLLBACK")
-        with c.exclusive_lock(os.path.join(applied["plan_dir"], ".apply.lock")):
+        # Лок живе в plan_dir, а ранбук трактує плани як витратні (§5) — прибраний plan_dir давав сиру трасу в
+        # найгіршу мить. Відкат не читає з plan_dir НІЧОГО, крім лока: порожня тека повертає роботу.
+        with contextlib.ExitStack() as stack:
+            try:
+                stack.enter_context(c.exclusive_lock(os.path.join(applied["plan_dir"], ".apply.lock")))
+            except OSError as exc:
+                raise rails.refuse(2, "ROLLBACK_PLAN_DIR_MISSING", plan_dir=applied["plan_dir"], error=str(exc),
+                                   hint="mkdir -p <plan_dir> і повторити: відкат читає лише маніфест і бекапи")
             return _run_locked(opts, deps, cfg, applied, target)
     except rails.TargetRefused as refused:
         print("FT_ROLLBACK_SUMMARY status=refused rc=%d reason=%s" % (refused.rc, refused.text))
@@ -198,8 +206,13 @@ def _finalize(report: Dict[str, Any], out_path: str, status: str, rc: int, reaso
 def _print_summary(report: Dict[str, Any], out_path: str) -> None:
     restored = sum(1 for entry in report["files"] if entry["status"] == "restored")
     already = sum(1 for entry in report["files"] if entry["status"] in ("already_restored", "not_replaced"))
-    print("FT_ROLLBACK_SUMMARY status=%s rc=%d restored=%d already_before=%d manifest=%s" % (
-        report["status"], report["rc"], restored, already, out_path))
+    # Шлях бекапу пропатченого вмісту — у зведенні, а не лише в json: саме його §6 «Гігієна» просить прибрати
+    # окремим списком (rollback лишає його всередині data_root, і в маніфесті apply його немає).
+    own_backups = [entry["backup_of_patched"] for entry in report["files"] if entry.get("backup_of_patched")]
+    print("FT_ROLLBACK_SUMMARY status=%s rc=%d restored=%d already_before=%d own_backups=%d manifest=%s" % (
+        report["status"], report["rc"], restored, already, len(own_backups), out_path))
+    for path in own_backups:
+        print("FT_ROLLBACK_OWN_BACKUP %s" % path)
 
 
 def _create_report(opts: RollbackOptions, deps: rails.WriteDeps, report: Dict[str, Any]) -> str:

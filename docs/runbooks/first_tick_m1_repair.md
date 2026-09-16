@@ -1,7 +1,10 @@
 # Runbook: ремонт open/high/low M1 з FXCM FIRST_TICK (ADR-0096 §3.3 B)
 
 > Інструмент: `python -m tools.repair.first_tick_m1 <fetch|plan|apply|verify|rollback>`.
-> Кожен крок, що пише в `data_v3` на проді, — окреме «го» власника. Усе — від користувача `smc`.
+> Кожен крок, що пише в `data_v3` на проді, — окреме «го» власника. Усе — від користувача `smc` (він `nologin`, тож
+> кожна команда — через sudo з явним HOME, інакше SDK не знайде свій кеш):
+> `sudo -n -u smc env HOME=/var/lib/smc PYTHONPATH=/opt/smc-v3 /opt/smc-v3/.venv37/bin/python -m tools.repair.first_tick_m1 …`
+> (фази plan/apply/verify/rollback — тим самим способом, але з `/opt/smc-v3/.venv/bin/python`).
 
 ## 0. Передумови
 
@@ -97,7 +100,11 @@ verify rc=0 обовʼязковий.
    запис), ринок усіх символів закритий ±30 хв, власник файлів == euid (не запускати від root), усі входи плану —
    ті самі байти. Перерваний apply (сигнал, Ctrl+C, kill) — маніфест каже правду: `replacing` вирішує диск
    (verify/rollback звіряють sha); далі — verify або rollback за цим маніфестом, не повторний apply.
-4. verify по маніфесту apply → rc=0.
+4. verify по маніфесту apply → **rc=0**. rc=0 означає і «змінились рівно заплановані o/h/low», і «план застосовано
+   ВЕСЬ»: файли плану, яких немає у стані «після», друкуються як `VERIFY_FILE_NOT_APPLIED` і дають
+   `FT_VERIFY_INCOMPLETE=1` з rc=1. Якщо apply завершився не нулем (рейка during, зміна входу, сигнал) — це саме той
+   випадок: доперепланувати решту діб у НОВИЙ plan_dir (apply на цей план уже відмовить `APPLY_PLAN_INPUT_CHANGED`) і
+   застосувати. Свідомо прийняти часткове (напр. перед відкатом) — `--allow-incomplete`.
 5. `sudo -n supervisorctl start smc:smc-fxcm smc:smc-preview`; `sudo -n supervisorctl restart smc:smc-ws`
    (RAM/Redis-кеш старих значень).
 6. Вікно спостереження 120 с (D9.1); served == disk для 3 ключів; health root покаже розбіжність O на derived до
@@ -113,23 +120,39 @@ OOM, перезавантаження), лишає лок — наступний
 поточний, процесу з його pid немає). Відмова `*_LOCK_HELD` з `reason=`:
 - `pid_alive` — процес живий: дочекатись або зупинити його штатно, лок не чіпати;
 - `other_host` (спільний диск) — на host із лока `ps -p <pid>`; лише якщо процесу там немає — `rm` лока і повтор;
-- `holder_unparsable` / `pid_liveness_unknown` — прочитати лок (`cat`), перевірити pid вручну, лише тоді `rm`.
+- `holder_unparsable` / `pid_liveness_unknown` — прочитати лок (`cat`), перевірити pid вручну, лише тоді `rm`;
+- `holder_changed` — лок змінився між читанням і зняттям (хтось узяв його паралельно): нічого не чіпати, повторити
+  команду; якщо повторюється — шукати другий запущений процес інструмента.
+
+Прибраний `plan_dir` (плани — витратні, §5) відкату не блокує: `rollback` відмовляє іменовано
+`ROLLBACK_PLAN_DIR_MISSING` (rc 2, нічого не записано), бо там живе лок; `mkdir -p <plan_dir>` і повтор — відкат
+читає лише маніфест і бекапи.
 
 ## 5. Пакети
 
 - Далі — по місяцю/символу: fetch (кілька вихідних, `--only-missing` для продовження), plan на місяць, копія,
   прод. Зміна будь-якого входу після плану (перезабір доби staging, дописаний бар) → apply відмовить
   `APPLY_PLAN_INPUT_CHANGED`; план будується наново в новий plan_dir.
-- План попереднього формату (`ft_m1_plan_v1`, до правил SKIP_WOULD_HIDE / SKIP_RANGE_CHANGED_BEYOND_STRETCH) apply і
-  verify відмовляють `APPLY_PLAN_FORMAT_UNSUPPORTED` (rc 2) — перепланувати в новий plan_dir; staging лишається
-  чинним, перезабір не потрібен.
+- План попереднього формату (`ft_m1_plan_v1` / `ft_m1_plan_v2`, до правил SKIP_WOULD_HIDE /
+  SKIP_RANGE_CHANGED_BEYOND_STRETCH / SKIP_V_DIFFERS) apply і verify відмовляють `APPLY_PLAN_FORMAT_UNSUPPORTED`
+  (rc 2) — перепланувати в новий plan_dir; staging лишається чинним, перезабір не потрібен.
+- Хвилини `SKIP_V_DIFFERS` (брокер віддав інший tick volume — інша витяжка) лишаються PREV: ремонт value-only не
+  заміняє `v`, а писати діапазон з однієї версії даних і обсяг з іншої заборонено. Перезабрати добу пізніше.
+- Діапазон без жодного part-файла і жодної доби staging → `PLAN_NO_INPUTS` (rc 2): перевірити `--from/--to`,
+  `--staging-root` і що fetch дійсно поклав доби.
 - `SKIP_BAKED` доби перезабирати не раніше ніж через 7 діб (`--min-age-days` за замовчуванням 7) і перепланувати.
 - Хвилини `SKIP_FLAT_NON_TRADING` (зимові 21:00–21:59 металів) лишаються PREV до ADR-0095.
 
 ## 6. Гігієна
 
-- Бекапи `part-*.jsonl.bak.<ts>` (жорсткі лінки, простір = старий файл) інструмент НЕ видаляє. Власник прибирає
+- Бекапи `part-*.jsonl.bak.<ts>[.<n>]` (жорсткі лінки, простір = старий файл) інструмент НЕ видаляє. Власник прибирає
   їх за списком `files[].backup` маніфесту apply після verify rc=0 і тижня спостереження; перед видаленням —
   перелічити scope (D13.5). Після видалення бекапів rollback за цим маніфестом відмовить `ROLLBACK_BACKUP_MISSING`
   (rc 2, нічого не записано) — відкат тоді лише з tar кроку §4.1.
+- **Свої бекапи відкату.** `rollback` теж лишає в `data_v3` жорсткий лінк пропатченого вмісту
+  (`part-*.jsonl.bak.<ts>[.<n>]`). Їх у маніфесті apply немає — шляхи друкує саме відкат
+  (`FT_ROLLBACK_OWN_BACKUP`, поле `files[].backup_of_patched` у звіті `<m>.rollback-*.json`). Прибирати за цим
+  списком; вони безпечні до видалення одразу після успішного відкату.
+- Залишок `part-*.jsonl.tmp` у теці SSOT означає аварію між записом і `os.replace`: читачі його не бачать
+  (фільтр `part-*.jsonl`), видаляти після перевірки, що жоден процес інструмента не працює.
 - Staging, плани і маніфести — у `/opt/smc-v3-ft`, не в `data_v3` і не в git.

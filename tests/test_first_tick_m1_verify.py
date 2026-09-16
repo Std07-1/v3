@@ -356,3 +356,26 @@ def test_rollback_backup_deleted_refused_rc2_before_any_write(tmp_path, capsys):
     assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), deps) == 2
     assert "ROLLBACK_BACKUP_MISSING" in capsys.readouterr().out
     assert tree_digest(sc.data) == before and list(tmp_path.glob("apply.json.rollback-*.json")) == []
+
+
+def test_rollback_plan_dir_removed_refuses_loudly_and_works_after_mkdir(tmp_path, capsys):
+    """Ловить сиру трасу: plan_dir прибрано (ранбук §5 трактує плани як витратні), а лок береться саме там.
+
+    Раунд ревʼю 16.09 (S2): відкат не читає з plan_dir нічого, крім лока, тож відмова мусить бути іменованою, а
+    порожня тека — повертати роботу.
+    """
+    sc, manifest, deps, original = _two_files_applied(tmp_path)
+    plan_dir = Path(json.loads(manifest.read_text(encoding="utf-8"))["plan_dir"])
+    shutil.rmtree(plan_dir)
+    before = tree_digest(sc.data)
+
+    assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), deps) == 2
+    out = capsys.readouterr().out
+    assert "ROLLBACK_PLAN_DIR_MISSING" in out and "FT_ROLLBACK_SUMMARY status=refused rc=2" in out
+    assert tree_digest(sc.data) == before and list(tmp_path.glob("apply.json.rollback-*.json")) == []
+
+    plan_dir.mkdir(parents=True)
+    assert run_rollback(RollbackOptions(str(manifest), sha256_file(manifest)), deps) == 0
+    # Порівнюємо самі part-файли: rollback додатково лишає свій `.bak.<ts>` (жорсткий лінк пропатченого inode).
+    parts_now = {rel: data for rel, data in tree_digest(sc.data).items() if rel.endswith(".jsonl")}
+    assert parts_now == {rel: data for rel, data in original.items() if rel.endswith(".jsonl")}

@@ -26,8 +26,8 @@ from tools.repair.first_tick_m1.common import (
 from tools.repair.first_tick_m1.ssot_part import Winner, detect_line_style
 
 CATEGORIES = ("REPLACE", "SAME", "SKIP_BAKED", "SKIP_CLOSE_MISMATCH", "SKIP_RANGE_EXPANDS",
-              "SKIP_RANGE_CHANGED_BEYOND_STRETCH", "SKIP_FLAT_NON_TRADING", "SKIP_WOULD_HIDE", "SKIP_WINNER_INELIGIBLE",
-              "MISSING_IN_STAGING", "EXTRA_IN_STAGING")
+              "SKIP_RANGE_CHANGED_BEYOND_STRETCH", "SKIP_V_DIFFERS", "SKIP_FLAT_NON_TRADING", "SKIP_WOULD_HIDE",
+              "SKIP_WINNER_INELIGIBLE", "MISSING_IN_STAGING", "EXTRA_IN_STAGING")
 OHLCV = ("o", "h", "low", "c", "v")
 
 
@@ -139,6 +139,12 @@ def classify_key(winner: Winner, staged: Optional[Dict[str, Any]], ctx: Classify
     if (new_o, new_h, new_low) == (float(bar["o"]), float(bar["h"]), float(bar["low"])):
         same = dict(base, cat="SAME", v_differs=v_differs)
         return dict(same, suspect=True) if day_key(day_of_ms(key)) in ctx.suspect_days else same
+    if v_differs:
+        # Інший tick volume у тій самій хвилині = інший набір тіків, тобто ІНША витяжка брокера. Ремонт value-only
+        # не заміняє v, тож заміна o/h/low дала б бар, якого не було ні в одній версії даних. Той самий висновок
+        # інструмент уже робить механічною категорією SKIP_RANGE_CHANGED_BEYOND_STRETCH — тут він мусить бути теж.
+        return dict(evidence, cat="SKIP_V_DIFFERS", reason="volume_from_other_extraction",
+                    normalized={"o": new_o, "h": new_h, "low": new_low})
     after = CandleBar(bar["symbol"], TF_S, key, key + MINUTE_MS, new_o, new_h, new_low, old_c, float(bar["v"]), True,
                       bar["src"], {})
     flat, trading = _is_flat(after), ctx.calendar.is_trading_minute(key)

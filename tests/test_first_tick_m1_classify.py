@@ -233,3 +233,21 @@ def test_suspect_day_share_marks_same_suspect():
     control_scan = baked_scan([(day_key(monday), control, True)], CLOSE_EPS_DEFAULT)
     assert control_scan.suspect_days == frozenset()
     assert 0.4 < control_scan.eq_prev_share[day_key(monday)] < 0.6
+
+
+def test_volume_from_another_extraction_is_not_written():
+    """Інший tick volume = інший набір тіків: заміна o/h/low дала б бар, якого не було ні в одній версії даних.
+
+    Раунд ревʼю 16.09 (S3): v_differs лише рахувався у зведенні, а ключ ішов у REPLACE зі старим v.
+    """
+    entry = classify_key(_winner(PREV_BAR), dict(FIRST_TICK_ROW, Volume=99), _ctx())
+    assert (entry["cat"], entry["reason"]) == ("SKIP_V_DIFFERS", "volume_from_other_extraction")
+    assert entry["normalized"] == {"o": 4089.98, "h": 4093.19, "low": 4086.33}
+    assert "new" not in entry  # apply нічого не переписує
+
+
+def test_same_values_with_other_volume_stay_same_not_skipped():
+    """Контроль межі: коли значення й так однакові, писати нічого — категорія лишається SAME із прапорцем v_differs."""
+    bar = ssot_bar(KEY, 4089.98, 4093.19, 4086.33, 4092.36, v=12.0)
+    entry = classify_key(_winner(bar), dict(FIRST_TICK_ROW, Volume=99), _ctx())
+    assert (entry["cat"], entry["v_differs"]) == ("SAME", True)

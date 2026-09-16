@@ -172,3 +172,15 @@ def test_plan_dir_inside_data_root_or_non_empty_refused_rc2(tmp_path, where):
     assert run_plan(_opts(sc, plan_dir), sc.cfg()) == 2
     assert tree_digest(sc.data) == before
     assert not (plan_dir / "PLAN.json").exists()
+
+
+def test_plan_refuses_range_without_any_inputs_rc2(tmp_path, capsys):
+    """Ловить сиру трасу: діапазон без жодного part-файла і жодної доби staging (типова помилка --from/--to).
+
+    Раунд ревʼю 16.09 (S3): PLAN.json без entries не завантажується, тож оператор бачив трасу замість причини.
+    """
+    sc = _scenario(tmp_path)
+    empty = dt.date(2027, 1, 4)
+    assert run_plan(_opts(sc, tmp_path / "plan", day_from=empty, day_to=empty + dt.timedelta(days=1)), sc.cfg()) == 2
+    assert "PLAN_NO_INPUTS" in capsys.readouterr().out
+    assert not (tmp_path / "plan").exists() or os.listdir(tmp_path / "plan") == []
