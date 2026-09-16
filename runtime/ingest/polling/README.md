@@ -220,7 +220,8 @@ M1SymbolPoller.poll_once():
 | --- | --- | --- |
 | `fx_24x5_utc_winter` | GBP/CAD, NZD/CAD, USD/CAD, USD/JPY | 21:55-22:30 UTC |
 | `cfd_us_22_23` | XAU/USD, XAG/USD, NAS100, US30, SPX500, NGAS | 22:00-23:00 UTC |
-| `cfd_eu_21_07` | GER30, EUSTX50 | 21:00-07:00 UTC |
+| `cfd_eu_eustx50` | EUSTX50 | літо 20:00-06:00, зима 21:00-07:00 UTC |
+| `cfd_eu_ger30` | GER30 | літо 20:00-00:30, зима 21:00-00:30 UTC |
 | `cfd_hk_main` | HKG33 | 19:00-01:15, 04:00-05:00, 08:30-09:15 UTC |
 
 ### 5.3 Визначення "торговельна хвилина"
@@ -610,7 +611,7 @@ FXCM має свій PREVIOUS_CLOSE mode, але він штучно склею�
 ```json
 "market_calendar_symbol_groups": {
     "XAU/USD": "cfd_us_22_23",
-    "GER30": "cfd_eu_21_07",
+    "GER30": "cfd_eu_ger30",
     "HKG33": "cfd_hk_main",
     ...
 },
