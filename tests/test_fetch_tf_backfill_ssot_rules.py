@@ -16,6 +16,7 @@ import pytest
 
 import tools.fetch_tf_backfill as backfill
 from core.model.bars import CandleBar
+from runtime.ingest.m1_session_filter import resolve_close_safety_ms, split_closed_bars
 
 M1_MS = 60_000
 SAFETY_MS = 8_000
@@ -42,7 +43,7 @@ def test_split_keeps_only_bars_closed_with_the_broker_safety_margin():
     now_ms = 1_789_492_348_000  # 17:12:28 — хвилина 17:12 ще формується
     forming = _bar(1_789_492_320_000, v=41.0)
     just_closed = _bar(forming.open_time_ms - M1_MS)  # закрилась о 17:12:00, запас 8 с минув
-    closed, unclosed = backfill._split_unclosed([just_closed, forming], now_ms, SAFETY_MS)
+    closed, unclosed = split_closed_bars([just_closed, forming], now_ms, SAFETY_MS)
     assert closed == [just_closed]
     assert unclosed == [forming]
 
@@ -50,16 +51,17 @@ def test_split_keeps_only_bars_closed_with_the_broker_safety_margin():
 def test_split_holds_back_a_minute_closed_inside_the_safety_window():
     close_ms = 1_789_492_320_000
     bar = _bar(close_ms - M1_MS)
-    assert backfill._split_unclosed([bar], close_ms + SAFETY_MS - 1, SAFETY_MS) == ([], [bar])
-    assert backfill._split_unclosed([bar], close_ms + SAFETY_MS, SAFETY_MS) == ([bar], [])
+    assert split_closed_bars([bar], close_ms + SAFETY_MS - 1, SAFETY_MS) == ([], [bar])
+    assert split_closed_bars([bar], close_ms + SAFETY_MS, SAFETY_MS) == ([bar], [])
 
 
 @pytest.mark.parametrize("cfg, expected_ms", [
     ({"m1_poller": {"safety_delay_s": 10}}, 10_000),
     ({}, 8_000),
+    ({"m1_poller": {"safety_delay_s": "хибне"}}, 8_000),
 ])
 def test_safety_margin_comes_from_the_m1_poller_config(cfg, expected_ms):
-    assert backfill._close_safety_ms(cfg) == expected_ms
+    assert resolve_close_safety_ms(cfg) == expected_ms
 
 
 class _FakeProvider:
@@ -78,7 +80,7 @@ class _FakeProvider:
         return list(type(self).bars)
 
 
-def _run_main(tmp_path: Path, monkeypatch, bars, *, with_calendar=True):
+def _run_main(tmp_path: Path, monkeypatch, bars, *, with_calendar=True, extra_argv=()):
     data_root = tmp_path / "data_v3"
     cfg = {"data_root": str(data_root), "m1_poller": {"safety_delay_s": 8}}
     if with_calendar:
@@ -93,7 +95,8 @@ def _run_main(tmp_path: Path, monkeypatch, bars, *, with_calendar=True):
     monkeypatch.setattr(_FakeProvider, "bars", bars)
     monkeypatch.setattr(backfill, "FxcmHistoryProvider", _FakeProvider)
     monkeypatch.setattr(backfill.time, "time", lambda: NOW_MS / 1000)
-    monkeypatch.setattr("sys.argv", ["fetch_tf_backfill", "--tf", "60", "--symbol", "GER30", "--n", str(len(bars))])
+    monkeypatch.setattr("sys.argv", ["fetch_tf_backfill", "--tf", "60", "--symbol", "GER30", "--n", str(len(bars))]
+                        + list(extra_argv))
     rc = backfill.main()
     written = [json.loads(line) for part in sorted((data_root / "GER30" / "tf_60").glob("part-*.jsonl"))
                for line in part.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -122,6 +125,33 @@ def test_main_drops_flat_bars_outside_session_and_marks_the_rest_like_the_poller
     assert set(by_open) == {in_session, in_session + M1_MS, SATURDAY_22 - 30 * M1_MS}
     assert by_open[in_session + M1_MS]["extensions"] == {"trading_flat": True}
     assert by_open[SATURDAY_22 - 30 * M1_MS]["extensions"] == {"calendar_pause_nonflat_anomaly": True}
+
+
+def test_main_refuses_the_batch_when_many_minutes_fall_outside_the_calendar(tmp_path: Path, monkeypatch):
+    """Хибний календар не має тихо їсти справжні хвилини: понад допуск — відмова rc 1, нічого не записано."""
+    off = [_flat(SATURDAY_22 - (i + 1) * M1_MS) for i in range(6)]
+    in_session = _bar(NOW_MS // M1_MS * M1_MS - 10 * M1_MS)
+    rc, written = _run_main(tmp_path, monkeypatch, [in_session] + off)
+    assert rc == 1
+    assert written == []
+
+
+def test_main_writes_the_batch_off_calendar_when_operator_allows_it(tmp_path: Path, monkeypatch):
+    """--allow-off-calendar — свідоме рішення оператора: пласкі поза сесією все одно не пишуться."""
+    off = [_flat(SATURDAY_22 - (i + 1) * M1_MS) for i in range(6)]
+    in_session = _bar(NOW_MS // M1_MS * M1_MS - 10 * M1_MS)
+    rc, written = _run_main(tmp_path, monkeypatch, [in_session] + off, extra_argv=["--allow-off-calendar"])
+    assert rc == 0
+    assert [row["open_time_ms"] for row in written] == [in_session.open_time_ms]
+
+
+def test_main_tolerates_a_couple_of_minutes_around_the_session_edge(tmp_path: Path, monkeypatch):
+    """Дві-три хвилини навколо межі сесії — не ознака хибного календаря, партія пишеться без відмови."""
+    edge = [_flat(SATURDAY_22 - M1_MS), _flat(SATURDAY_22 - 2 * M1_MS)]
+    in_session = _bar(NOW_MS // M1_MS * M1_MS - 10 * M1_MS)
+    rc, written = _run_main(tmp_path, monkeypatch, [in_session] + edge)
+    assert rc == 0
+    assert [row["open_time_ms"] for row in written] == [in_session.open_time_ms]
 
 
 def test_main_refuses_a_symbol_without_session_calendar(tmp_path: Path, monkeypatch):

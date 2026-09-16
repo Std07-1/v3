@@ -12,7 +12,7 @@ TradingView таких барів не показує, а в SSOT вони ла�
 from __future__ import annotations
 
 import dataclasses
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from core.model.bars import CandleBar
 
@@ -23,6 +23,38 @@ VERDICT_TRADING = "trading"
 VERDICT_TRADING_FLAT = "trading_flat"
 VERDICT_PAUSE_FLAT_DROPPED = "pause_flat_dropped"
 VERDICT_PAUSE_NONFLAT_ANOMALY = "pause_nonflat_anomaly"
+
+
+# Запас, який дає брокеру M1-полер, перш ніж вважати хвилину закритою: у цьому вікні FXCM ще доправляє щойно
+# закриту хвилину. SSOT — config.json `m1_poller.safety_delay_s`.
+_CLOSE_SAFETY_S_DEFAULT = 8
+
+
+def resolve_close_safety_ms(cfg: dict) -> int:
+    m1_cfg = cfg.get("m1_poller")
+    raw = m1_cfg.get("safety_delay_s", _CLOSE_SAFETY_S_DEFAULT) if isinstance(m1_cfg, dict) else _CLOSE_SAFETY_S_DEFAULT
+    try:
+        return max(0, int(raw)) * 1000
+    except (TypeError, ValueError):
+        return _CLOSE_SAFETY_S_DEFAULT * 1000
+
+
+def split_closed_bars(bars: List[CandleBar], now_ms: int, safety_ms: int) -> Tuple[List[CandleBar], List[CandleBar]]:
+    """Ділить партію на закриті (close + запас <= now) і ті, що ще формуються або щойно закрились."""
+    closed = [b for b in bars if b.close_time_ms + safety_ms <= now_ms]
+    unclosed = [b for b in bars if b.close_time_ms + safety_ms > now_ms]
+    return closed, unclosed
+
+
+def resolve_flat_max_volume(cfg: dict) -> int:
+    """Порог пласкості з config (SSOT `flat_bar_max_volume`), з тим самим clamp, що й у полері."""
+    raw = cfg.get("flat_bar_max_volume")
+    if raw is None:
+        return FLAT_BAR_MAX_VOLUME_DEFAULT
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return FLAT_BAR_MAX_VOLUME_DEFAULT
 
 
 def is_flat_m1(bar: CandleBar, flat_max_volume: int) -> bool:

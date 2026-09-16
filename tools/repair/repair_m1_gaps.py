@@ -27,6 +27,14 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.config_loader import load_system_config, pick_config_path
 from core.model.bars import CandleBar
+from runtime.ingest.m1_session_filter import (
+    FLAT_BAR_MAX_VOLUME_DEFAULT,
+    VERDICT_PAUSE_NONFLAT_ANOMALY,
+    classify_m1_for_ssot,
+    resolve_close_safety_ms,
+    resolve_flat_max_volume,
+    split_closed_bars,
+)
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.tick_common import resolve_symbol_calendars
 from runtime.store.redis_spec import (
@@ -371,6 +379,32 @@ def fetch_m1_for_range(
 # ─── Repair via rewrite_range ──────────────────────────────────────
 
 
+def _filter_fetched_bars(
+    bars: List[CandleBar],
+    calendar: Optional[MarketCalendar],
+    flat_max_volume: int,
+    now_ms: Optional[int],
+    close_safety_ms: int,
+) -> Tuple[List[CandleBar], Dict[str, int]]:
+    """Спільне правило M1→SSOT (`runtime/ingest/m1_session_filter`) плюс відсів хвилини, що ще формується."""
+    verdicts: Dict[str, int] = {}
+    if now_ms is not None:
+        bars, unclosed = split_closed_bars(bars, now_ms, close_safety_ms)
+        if unclosed:
+            verdicts["unclosed"] = len(unclosed)
+    if calendar is None:
+        return bars, verdicts
+    kept: List[CandleBar] = []
+    for bar in bars:
+        classified, verdict = classify_m1_for_ssot(
+            bar, calendar.is_trading_minute(bar.open_time_ms), flat_max_volume
+        )
+        verdicts[verdict] = verdicts.get(verdict, 0) + 1
+        if classified is not None:
+            kept.append(classified)
+    return kept, verdicts
+
+
 def repair_gaps(
     data_root: str,
     symbol: str,
@@ -379,6 +413,10 @@ def repair_gaps(
     redis_cli: Any,
     namespace: str,
     dry_run: bool = True,
+    calendar: Optional[MarketCalendar] = None,
+    flat_max_volume: int = FLAT_BAR_MAX_VOLUME_DEFAULT,
+    now_ms: Optional[int] = None,
+    close_safety_ms: int = 8_000,
 ) -> Dict[str, Any]:
     """Ремонтує M1 гапи: один fetch + append до JSONL.
 
@@ -406,11 +444,33 @@ def repair_gaps(
             "groups": [{"status": "NO_DATA_FROM_BROKER"}],
         }
 
+    # Те саме правило M1→SSOT, що в полері й засіві (runtime/ingest/m1_session_filter.py), і той самий захист від
+    # хвилини, що ще формується: інструмент ремонту — третій записувач M1, і без цього він повертав би в SSOT
+    # рівно те, що двоє інших уже відкидають.
+    fetched = len(bars)
+    bars, verdicts = _filter_fetched_bars(bars, calendar, flat_max_volume, now_ms, close_safety_ms)
+    if verdicts:
+        log.log(
+            logging.WARNING if verdicts.get(VERDICT_PAUSE_NONFLAT_ANOMALY) or verdicts.get("unclosed") else logging.INFO,
+            "REPAIR_SESSION_FILTER symbol=%s fetched=%d kept=%d verdicts=%s",
+            symbol, fetched, len(bars), dict(sorted(verdicts.items())),
+        )
+    if not bars:
+        return {
+            "symbol": symbol,
+            "total_gaps": total_gaps,
+            "total_fetched": fetched,
+            "total_written": 0,
+            "dry_run": dry_run,
+            "groups": [{"status": "ALL_FILTERED_BY_SESSION_RULE", "verdicts": dict(verdicts)}],
+        }
+
     if dry_run:
         return {
             "symbol": symbol,
             "total_gaps": total_gaps,
-            "total_fetched": len(bars),
+            "total_fetched": fetched,
+            "total_kept": len(bars),
             "total_written": 0,
             "dry_run": True,
             "groups": [
@@ -424,7 +484,8 @@ def repair_gaps(
     return {
         "symbol": symbol,
         "total_gaps": total_gaps,
-        "total_fetched": len(bars),
+        "total_fetched": fetched,
+        "total_kept": len(bars),
         "total_written": written,
         "dry_run": False,
         "groups": [
@@ -600,6 +661,10 @@ def main() -> None:
             redis_cli=redis_cli,
             namespace=namespace,
             dry_run=False,
+            calendar=calendar,
+            flat_max_volume=resolve_flat_max_volume(cfg),
+            now_ms=int(time.time() * 1000),
+            close_safety_ms=resolve_close_safety_ms(cfg),
         )
     finally:
         redis_cli.close()
