@@ -15,10 +15,12 @@ from core.derive import DERIVE_SOURCE
 from core.model.bars import CandleBar
 from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
 from runtime.ingest.m1_session_filter import (
-    FLAT_BAR_MAX_VOLUME_DEFAULT,
     VERDICT_PAUSE_FLAT_DROPPED,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
     classify_m1_for_ssot,
+    resolve_close_safety_ms,
+    resolve_flat_max_volume,
+    split_closed_bars,
 )
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.tick_common import resolve_symbol_calendars
@@ -73,39 +75,46 @@ def _parse_date_utc(s: str) -> dt.datetime:
 # Засів «до зараз» (без --date-to або з курсором у поточній хвилині) отримує від брокера і бар, що ще
 # формується: FXCM віддає його як звичайний рядок історії, нормалізація ставить complete=true. 15.09.2026
 # так на диск ліг GER30 17:12 з v=41 проти ~130 у сусідів. Повторний засів його не виправить: бари, чиї
-# open вже є на диску, пропускаються. Тому бар пишемо лише закритим з запасом, який дає брокеру M1-полер
-# (m1_poller.safety_delay_s): у цьому вікні FXCM ще доправляє щойно закриту хвилину.
-_DEFAULT_CLOSE_SAFETY_S = 8
+# open вже є на диску, пропускаються. Тому бар пишемо лише закритим — правило і запас спільні для всіх
+# записувачів M1: `runtime/ingest/m1_session_filter.resolve_close_safety_ms` / `split_closed_bars`.
 
 
-def _close_safety_ms(cfg: dict) -> int:
-    m1_cfg = cfg.get("m1_poller")
-    safety_s = m1_cfg.get("safety_delay_s", _DEFAULT_CLOSE_SAFETY_S) if isinstance(m1_cfg, dict) else _DEFAULT_CLOSE_SAFETY_S
-    return int(safety_s) * 1000
-
-
-def _split_unclosed(bars: List[CandleBar], now_ms: int, safety_ms: int) -> Tuple[List[CandleBar], List[CandleBar]]:
-    """Ділить партію на закриті (close + запас <= now) і ті, що ще формуються або щойно закрились."""
-    closed = [b for b in bars if b.close_time_ms + safety_ms <= now_ms]
-    unclosed = [b for b in bars if b.close_time_ms + safety_ms > now_ms]
-    return closed, unclosed
+# Скільки хвилин поза календарем у партії ще можна списати на межу сесії (брокер віддає хвилину-дві навколо межі),
+# а не на хибний календар. Понад це — засів відмовляється писати: інакше при хибному календарі (GER30 у config
+# 07–21 проти справжніх 00:31–19:59) тихо зникало б ~390 справжніх хвилин на добу, і жоден детектор цього не
+# побачив би, бо детектор — той самий календар.
+_OFF_CALENDAR_ALLOWANCE = 3
 
 
 def _filter_m1_by_session(
     bars: List[CandleBar], calendar: MarketCalendar, flat_max_volume: int
-) -> Tuple[List[CandleBar], Counter]:
+) -> Tuple[List[CandleBar], Counter, List[int]]:
     """Те саме правило SSOT, що в живому M1-полері: пласкі бари поза сесією не пишуться, неплаский поза сесією — з маркером.
 
     Засів раніше писав усе, що віддав брокер: NAS100 і US30 мають пласкі хвилини Сб 22:00 саме з засіву (15.09).
+    Третій елемент — open_ms усіх хвилин поза календарем, щоб оператор бачив, ЯКІ саме, а не лише скільки.
     """
     kept: List[CandleBar] = []
     verdicts: Counter = Counter()
+    off_calendar: List[int] = []
     for bar in bars:
-        classified, verdict = classify_m1_for_ssot(bar, calendar.is_trading_minute(bar.open_time_ms), flat_max_volume)
+        trading = calendar.is_trading_minute(bar.open_time_ms)
+        classified, verdict = classify_m1_for_ssot(bar, trading, flat_max_volume)
         verdicts[verdict] += 1
+        if not trading:
+            off_calendar.append(bar.open_time_ms)
         if classified is not None:
             kept.append(classified)
-    return kept, verdicts
+    return kept, verdicts, off_calendar
+
+
+def _describe_off_calendar(off_calendar: List[int]) -> str:
+    """Години UTC з кількостями + перша й остання хвилина — щоб хибний календар було видно з одного рядка."""
+    hours = Counter(dt.datetime.fromtimestamp(ms / 1000, tz=dt.timezone.utc).strftime("%H") for ms in off_calendar)
+    return "n=%d first=%s last=%s by_hour=%s" % (
+        len(off_calendar), _format_cursor(min(off_calendar)), _format_cursor(max(off_calendar)),
+        dict(sorted(hours.items())),
+    )
 
 
 def _load_existing_opens(data_root: str, symbol: str, tf_s: int, start_ms: int, end_ms: int) -> Set[int]:
@@ -149,6 +158,9 @@ def main() -> int:
     ap.add_argument("--n", type=int, required=True, help="Кількість барів")
     ap.add_argument("--force-derived-tf", action="store_true", default=False,
                     help="Дозволити fetch derived-only TF. Небезпечно — anchor mismatch!")
+    ap.add_argument("--allow-off-calendar", action="store_true", default=False,
+                    help=("Писати партію, навіть якщо брокер віддав більше за %d хвилин поза календарем групи "
+                          "(інакше засів відмовляється: ймовірно хибний календар)" % _OFF_CALENDAR_ALLOWANCE))
     args = ap.parse_args()
 
     # Guard: з брокера тягнемо ТІЛЬКИ M1. Усе інше будує DeriveEngine на своїй
@@ -187,7 +199,7 @@ def main() -> int:
     if rejected:
         logging.error("BACKFILL_REFUSED symbols=%s — немає календаря сесії (market_calendar_symbol_groups)", ",".join(rejected))
         return 2
-    flat_max_volume = int(cfg.get("flat_bar_max_volume", FLAT_BAR_MAX_VOLUME_DEFAULT))
+    flat_max_volume = resolve_flat_max_volume(cfg)
 
     if args.date_to:
         date_to = _parse_date_utc(args.date_to)
@@ -207,7 +219,7 @@ def main() -> int:
     day_anchor_offset_s_alt2 = cfg.get("day_anchor_offset_s_alt2", None)
     day_anchor_offset_s_d1 = cfg.get("day_anchor_offset_s_d1", None)
     day_anchor_offset_s_d1_alt = cfg.get("day_anchor_offset_s_d1_alt", None)
-    close_safety_ms = _close_safety_ms(cfg)
+    close_safety_ms = resolve_close_safety_ms(cfg)
 
     logging.info(
         "Backfill TF=%d: symbols=%d date_to=%s n=%d out=%s",
@@ -237,6 +249,7 @@ def main() -> int:
 
     total_written = 0
     total_skipped = 0
+    total_verdicts: Counter = Counter()
     errors: List[str] = []
 
     try:
@@ -262,23 +275,39 @@ def main() -> int:
                     "%s: BACKFILL_NEXT --date-to %s (перший бар цієї партії; дублікат межі прибере dedup)",
                     symbol, _format_cursor(first_ms),
                 )
-                bars, unclosed = _split_unclosed(bars, int(time.time() * 1000), close_safety_ms)
+                bars, unclosed = split_closed_bars(bars, int(time.time() * 1000), close_safety_ms)
                 if unclosed:
                     logging.warning(
                         "%s: BACKFILL_UNCLOSED_DROPPED n=%d first=%s — бар ще формується, його допише полер або наступний засів",
                         symbol, len(unclosed), _format_cursor(unclosed[0].open_time_ms),
                     )
                 if args.tf == 60:
-                    bars, verdicts = _filter_m1_by_session(bars, calendars[symbol], flat_max_volume)
-                    level = logging.WARNING if verdicts[VERDICT_PAUSE_NONFLAT_ANOMALY] else logging.INFO
+                    bars, verdicts, off_calendar = _filter_m1_by_session(bars, calendars[symbol], flat_max_volume)
+                    total_verdicts.update(verdicts)
                     logging.log(
-                        level,
-                        "%s: BACKFILL_SESSION_FILTER %s — пласкі поза сесією не пишуться (%s), непласкі поза сесією з маркером (%s)",
+                        logging.WARNING if off_calendar else logging.INFO,
+                        "%s: BACKFILL_SESSION_FILTER %s%s",
                         symbol, dict(sorted(verdicts.items())),
-                        VERDICT_PAUSE_FLAT_DROPPED, VERDICT_PAUSE_NONFLAT_ANOMALY,
+                        " | поза календарем: " + _describe_off_calendar(off_calendar) if off_calendar else "",
+                    )
+                    if len(off_calendar) > _OFF_CALENDAR_ALLOWANCE and not args.allow_off_calendar:
+                        logging.error(
+                            "%s: BACKFILL_CALENDAR_SUSPECT %s — брокер віддає хвилини поза календарем групи; "
+                            "або календар символу хибний (перевірте market_calendar_by_group), або це справді "
+                            "позасесійний шум. Нічого не записано. Свідомо продовжити: --allow-off-calendar",
+                            symbol, _describe_off_calendar(off_calendar),
+                        )
+                        errors.append(symbol)
+                        continue
+                else:
+                    logging.info(
+                        "%s: фільтр сесії не застосовано (TF=%d ≠ 60; правило M1→SSOT — лише для хвилин)",
+                        symbol, args.tf,
                     )
                 if not bars:
-                    logging.info("%s: 0 закритих барів у партії", symbol)
+                    logging.info(
+                        "%s: після відсіву нічого не лишилось (закритих барів у партії 0)", symbol,
+                    )
                     continue
                 last_ms = bars[-1].open_time_ms
                 existing = _load_existing_opens(data_root, symbol, args.tf, first_ms, last_ms)
@@ -305,9 +334,13 @@ def main() -> int:
     finally:
         writer.close()
 
-    logging.info(
-        "=== ПІДСУМОК: записано=%d пропущено(dedup)=%d помилок=%d ===",
-        total_written, total_skipped, len(errors),
+    dropped = total_verdicts[VERDICT_PAUSE_FLAT_DROPPED]
+    anomalies = total_verdicts[VERDICT_PAUSE_NONFLAT_ANOMALY]
+    logging.log(
+        logging.WARNING if dropped or anomalies else logging.INFO,
+        "=== ПІДСУМОК: записано=%d пропущено(dedup)=%d відсіяно(пласкі поза сесією)=%d "
+        "аномалій(непласкі поза сесією)=%d помилок=%d ===",
+        total_written, total_skipped, dropped, anomalies, len(errors),
     )
     return 1 if errors else 0
 

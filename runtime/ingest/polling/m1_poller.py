@@ -31,6 +31,7 @@ from runtime.ingest.m1_session_filter import (
     VERDICT_PAUSE_NONFLAT_ANOMALY,
     classify_m1_for_ssot,
     is_flat_m1,
+    resolve_flat_max_volume,
 )
 from runtime.ingest.tick_common import (
     resolve_symbol_calendars,
@@ -1301,10 +1302,9 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
         stale_s,
     )
 
-    # SSOT: flat_bar_max_volume з config.json (верхній рівень)
-    flat_vol_raw = cfg.get("flat_bar_max_volume")
-    if flat_vol_raw is not None:
-        set_flat_bar_max_volume(int(flat_vol_raw))
+    # SSOT: flat_bar_max_volume з config.json (верхній рівень) — нормалізація спільна із засівом
+    set_flat_bar_max_volume(resolve_flat_max_volume(cfg))
+    if cfg.get("flat_bar_max_volume") is not None:
         logging.info(
             "M1_POLLER_FLAT_BAR_MAX_VOLUME=%d (from config)", _flat_bar_max_volume
         )

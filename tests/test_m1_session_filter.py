@@ -79,6 +79,47 @@ def test_live_poller_ingest_applies_the_same_rule(caplog):
     assert "M1_NONFLAT_IN_PAUSE" in caplog.text
 
 
+@pytest.mark.parametrize("cfg, expected", [
+    ({}, 4),
+    ({"flat_bar_max_volume": 10}, 10),
+    ({"flat_bar_max_volume": -3}, 0),
+    ({"flat_bar_max_volume": "хибне"}, 4),
+])
+def test_flat_threshold_normalization_is_shared_by_every_writer(cfg, expected):
+    """Один clamp для полера, засіву і ремонту — інакше на тому самому конфізі вони розходяться."""
+    from runtime.ingest.m1_session_filter import resolve_flat_max_volume
+    assert resolve_flat_max_volume(cfg) == expected
+
+
+def test_repair_tool_applies_the_same_rule_and_drops_the_forming_minute(monkeypatch):
+    """Третій записувач M1 (ремонт дірок) теж не пише пласке поза сесією і хвилину, що формується."""
+    from runtime.ingest.market_calendar import MarketCalendar
+    from tools.repair import repair_m1_gaps as rmg
+
+    calendar = MarketCalendar(enabled=True, weekend_close_dow=4, weekend_close_hm="20:45", weekend_open_dow=6,
+                              weekend_open_hm="22:00", daily_break_start_hm="21:00", daily_break_end_hm="22:00",
+                              daily_break_enabled=True)
+    wednesday_noon = 1_788_955_200_000  # 2026-09-09 12:00 UTC
+    saturday = 1_789_250_400_000  # 2026-09-12 22:00 UTC — вихідні
+    now_ms = wednesday_noon + 3 * 60_000 + 30_000
+
+    def _at(open_ms, template):
+        return CandleBar(symbol="SYM", tf_s=60, open_time_ms=open_ms, close_time_ms=open_ms + 60_000, o=template.o,
+                         h=template.h, low=template.low, c=template.c, v=template.v, complete=True, src="history")
+
+    fetched = [_at(wednesday_noon, REGULAR), _at(saturday, FLAT), _at(wednesday_noon + 3 * 60_000, REGULAR)]
+    monkeypatch.setattr(rmg, "fetch_m1_for_range", lambda *a, **k: list(fetched))
+    written = {}
+    monkeypatch.setattr(rmg, "_append_bars_to_jsonl", lambda root, sym, bars: written.setdefault("bars", bars) and 0 or len(bars))
+
+    result = rmg.repair_gaps(data_root="/nowhere", symbol="SYM", gap_groups=[(wednesday_noon, wednesday_noon)],
+                             all_gap_opens={wednesday_noon}, redis_cli=object(), namespace="ns", dry_run=False,
+                             calendar=calendar, flat_max_volume=4, now_ms=now_ms, close_safety_ms=8_000)
+
+    assert [b.open_time_ms for b in written["bars"]] == [wednesday_noon]
+    assert result["total_fetched"] == 3 and result["total_kept"] == 1
+
+
 def test_existing_extensions_are_kept_and_input_is_not_mutated():
     bar = _bar(5.0, 5.0, 5.0, 5.0, 1.0, extensions={"source_note": "x"})
     out, _ = classify_m1_for_ssot(bar, trading=True, flat_max_volume=4)
