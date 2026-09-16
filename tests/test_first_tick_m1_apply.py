@@ -600,4 +600,4 @@ def test_apply_plan_of_previous_format_refused_rc2_staging_stays_valid(planned, 
     assert tree_digest(sc.data) == before and not (tmp_path / "manifests").exists()
     _day_file, staging_manifest = day_paths(sc.staging, sc.symbol, MON)
     written = json.loads(Path(staging_manifest).read_text(encoding="utf-8"))
-    assert (written["format"], written["tool_version"]) == ("ft_m1_staging_day_v1", 1)  # staging до бампу — чинний
+    assert (written["format"], written["tool_version"]) == ("ft_m1_staging_day_v2", 1)  # staging до бампу — чинний

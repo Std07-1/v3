@@ -204,11 +204,23 @@ def _day_queue(opts: FetchOptions, ctx: FetchContext, skipped: List[Dict[str, st
 
 
 def _staged_valid(ctx: FetchContext, opts: FetchOptions, day: dt.date) -> bool:
+    """Чи можна пропустити добу в --only-missing: вона є, валідна і не обрізана (або спроби вичерпані)."""
     try:
-        return load_day(ctx.staging_root, opts.symbol, day) is not None
+        staged = load_day(ctx.staging_root, opts.symbol, day)
     except StagingInvalid as exc:
         c.log_event(logging.WARNING, "FT_FETCH_DAY_STAGING_INVALID_REFETCH", day=c.day_key(day), reason=exc.reason)
         return False
+    if staged is None:
+        return False
+    coverage, attempts = staged.manifest.get("coverage"), int(staged.manifest.get("attempts", 1))
+    if coverage is not None and coverage < opts.day_coverage_min and attempts < opts.max_day_attempts:
+        # Обрізана доба (SDK віддав лише хвіст) інакше лишалась би «валідною» назавжди саме в тому режимі, який
+        # ранбук радить для продовження. Тонкі й святкові доби приймаються після max_day_attempts спроб.
+        c.log_event(logging.WARNING, "FT_FETCH_DAY_LOW_COVERAGE_REFETCH", day=c.day_key(day), coverage=coverage,
+                    expected=staged.manifest.get("trading_minutes_expected"), rows=staged.manifest.get("rows"),
+                    attempts=attempts)
+        return False
+    return True
 
 
 def _dry_run(opts: FetchOptions, deps: FetchDeps, ctx: FetchContext) -> int:
@@ -287,8 +299,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                           ("--call-interval-s", c.CALL_INTERVAL_DEFAULT_S), ("--guard-minutes", c.GUARD_MINUTES_DEFAULT),
                           ("--min-age-days", c.MIN_AGE_DAYS_DEFAULT),
                           ("--max-consecutive-failures", c.MAX_CONSECUTIVE_FAILURES_DEFAULT),
-                          ("--days-per-session", c.DAYS_PER_SESSION_DEFAULT)):
+                          ("--days-per-session", c.DAYS_PER_SESSION_DEFAULT),
+                          ("--max-day-attempts", c.MAX_DAY_ATTEMPTS_DEFAULT)):
         parser.add_argument(flag, type=int, default=default)
+    parser.add_argument("--day-coverage-min", type=float, default=c.DAY_COVERAGE_MIN_DEFAULT,
+                        help=("частка торгових хвилин доби, нижче якої доба вважається обрізаною і --only-missing "
+                              "забирає її ще раз (дефолт %.2f, до --max-day-attempts спроб)"
+                              % c.DAY_COVERAGE_MIN_DEFAULT))
     parser.add_argument("--max-logins", type=int, default=None,
                         help="логінів FXCM за прогін (1..%d); дефолт ceil(max-calls / days-per-session)"
                         % c.MAX_LOGINS_CEILING)

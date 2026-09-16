@@ -20,11 +20,11 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from tools.repair.first_tick_m1.common import (
-    REPO_ROOT, day_key, log_event, request_window, session_timeout_s, sym_dir, utc_iso,
+    REPO_ROOT, day_key, log_event, request_window, session_timeout_s, sym_dir, trading_minutes_in_day, utc_iso,
 )
 from tools.repair.first_tick_m1.fetch_child import EXIT_SDK_ERROR, SESSION_RESULT, day_files
 from tools.repair.first_tick_m1.fetch_runner import ChildOutcome
-from tools.repair.first_tick_m1.staging import StagingInvalid, validate_rows, write_day_atomic
+from tools.repair.first_tick_m1.staging import StagingInvalid, load_day, validate_rows, write_day_atomic
 
 CHILD_MODULE = "tools.repair.first_tick_m1.fetch_child"
 # Код виходу дитини, убитої SIGALRM власного дедлайну (Popen: −signum); на Windows сигналу немає.
@@ -174,6 +174,15 @@ def _session_status(outcome: Any, session_result: Optional[Dict[str, Any]],
     return "child_error", problem or "rc=%s session=%s" % (outcome.returncode, (session_result or {}).get("status"))
 
 
+def _previous_attempts(ctx: Any, opts: Any, day: dt.date) -> int:
+    """Скільки разів цю добу вже забирали (маніфест попередньої спроби, якщо він читається)."""
+    try:
+        staged = load_day(ctx.staging_root, opts.symbol, day)
+    except StagingInvalid:
+        return 0
+    return int(staged.manifest.get("attempts", 0)) if staged else 0
+
+
 def _resolve_day(ctx: Any, opts: Any, deps: Any, run_id: str, session_seq: int, seq: int, day: dt.date,
                  rows_path: str, result_path: str) -> CallRecord:
     key = day_key(day)
@@ -201,10 +210,17 @@ def _resolve_day(ctx: Any, opts: Any, deps: Any, run_id: str, session_seq: int, 
     except StagingInvalid as exc:
         record.status, record.detail = "invalid", str(exc)
         return record
+    expected = trading_minutes_in_day(ctx.calendar, day)
     meta = {"request": result["request"], "rows_outside_day_dropped": dropped, "run_id": run_id,
             "fetched_at_utc": utc_iso(deps.now_ms()), "call_seq": seq, "call_duration_s": record.duration_s,
-            "sdk": result.get("sdk")}
+            "sdk": result.get("sdk"), "trading_minutes_expected": expected,
+            "attempts": _previous_attempts(ctx, opts, day) + 1}
     manifest = write_day_atomic(ctx.staging_root, opts.symbol, day, rows, meta)
+    if expected and len(rows) < expected * opts.day_coverage_min:
+        # Обрізана відповідь SDK (форма date_from + quotes_count=-1 у проді не обкатана) або край доступної
+        # глибини: доба лишається на диску, але --only-missing забере її ще раз (до max_day_attempts).
+        log_event(logging.WARNING, "FT_FETCH_DAY_LOW_COVERAGE", symbol=opts.symbol, day=key, rows=len(rows),
+                  expected=expected, coverage=manifest["coverage"], attempts=manifest["attempts"])
     record.status, record.rows, record.raw_open_not_tick, record.sha256 = "ok", len(rows), flags, manifest["sha256"]
     return record
 

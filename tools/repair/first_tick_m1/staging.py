@@ -25,7 +25,10 @@ from tools.repair.first_tick_m1.common import (
     write_json_atomic,
 )
 
-STAGING_DAY_FORMAT = "ft_m1_staging_day_v1"
+# v2 — доба несе покриття: торгові хвилини календаря (`trading_minutes_expected`) і частку отриманих
+# (`coverage`). Без цього обрізана відповідь SDK (`date_from` + `quotes_count=-1` віддала лише хвіст) комітилась
+# як валідна доба, і `--only-missing` більше ніколи її не перезабирав.
+STAGING_DAY_FORMAT = "ft_m1_staging_day_v2"
 ROW_KEYS = ("open_time_ms",) + tuple(RAW_ROW_FIELDS) + ("raw_open_not_tick",)
 _PRICE_FIELDS = tuple(field for field in RAW_ROW_FIELDS if field != "Volume")
 
@@ -123,6 +126,10 @@ def write_day_atomic(staging_root: Any, symbol: str, day: dt.date, rows: List[Di
         open_price_mode=OPEN_PRICE_MODE_NAME, request=meta["request"], rows=len(rows),
         rows_outside_day_dropped=meta["rows_outside_day_dropped"],
         raw_open_not_tick=sum(1 for row in rows if row["raw_open_not_tick"]),
+        trading_minutes_expected=meta["trading_minutes_expected"],
+        coverage=(round(len(rows) / meta["trading_minutes_expected"], 6)
+                  if meta["trading_minutes_expected"] else None),
+        attempts=meta["attempts"],
         first_open_ms=rows[0]["open_time_ms"], last_open_ms=rows[-1]["open_time_ms"], sha256=sha256_bytes(body),
         bytes=len(body), fetched_at_utc=meta["fetched_at_utc"], run_id=meta["run_id"], call_seq=meta["call_seq"],
         call_duration_s=meta["call_duration_s"], sdk=meta["sdk"],
@@ -150,6 +157,8 @@ def load_day(staging_root: Any, symbol: str, day: dt.date) -> Optional[StagedDay
         raise StagingInvalid("identity", "manifest=%s" % manifest_file)
     if manifest.get("open_price_mode") != OPEN_PRICE_MODE_NAME:
         raise StagingInvalid("mode", "open_price_mode=%r" % (manifest.get("open_price_mode"),))
+    if not _is_int(manifest.get("trading_minutes_expected")) or not _is_int(manifest.get("attempts")):
+        raise StagingInvalid("coverage_fields", "manifest=%s" % manifest_file)
     with open(day_file, "rb") as fh:
         raw = fh.read()
     if sha256_bytes(raw) != manifest.get("sha256"):

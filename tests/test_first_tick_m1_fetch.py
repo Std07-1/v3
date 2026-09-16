@@ -445,9 +445,33 @@ def test_only_missing_skips_valid_and_refetches_invalid_day(env):
     Path(day_paths(env["staging"], SYMBOL, invalid_day)[0]).write_bytes(b"corrupted\n")
     clock = Clock(SATURDAY_NOON)
     child = FakeChild(clock)
-    assert run_fetch(_opts(env, days=DAYS[:3], only_missing=True), _deps(env, clock, child)) == 0
+    # day_coverage_min=0 — цей тест про «валідна проти зламаної»; рейка покриття — окремим тестом
+    assert run_fetch(_opts(env, days=DAYS[:3], only_missing=True, day_coverage_min=0.0), _deps(env, clock, child)) == 0
     assert [call["days"] for call in child.calls] == [_keys([invalid_day, absent_day])]
     assert load_day(env["staging"], SYMBOL, invalid_day).manifest["call_seq"] == 1
+
+
+
+def test_only_missing_refetches_truncated_day_until_attempts_are_spent(env):
+    """Обрізана доба (SDK віддав лише хвіст) більше не «валідна назавжди» саме в режимі для продовження.
+
+    Раунд ревʼю 16.09 (S3): доба комітилась ok без жодного порогу, і --only-missing її пропускав; діру бачив лише
+    plan (MISSING_IN_STAGING). Тонкі й святкові доби приймаються після max_day_attempts спроб.
+    """
+    truncated_day = DAYS[0]
+    write_day_atomic(env["staging"], SYMBOL, truncated_day, [staged_row(at(truncated_day, 10, 0), 1.0, 2.0, 0.5, 1.5)],
+                     fetch_meta(request=common.request_window(truncated_day), trading_minutes_expected=1380,
+                                attempts=1))
+    clock = Clock(SATURDAY_NOON)
+    child = FakeChild(clock)
+    opts = dict(days=DAYS[:1], only_missing=True, day_coverage_min=0.8, max_day_attempts=2)
+    assert run_fetch(_opts(env, **opts), _deps(env, clock, child)) == 0
+    assert [call["days"] for call in child.calls] == [_keys([truncated_day])]
+    # Друга спроба записана в маніфест; далі доба приймається як є (щоб святкові не перезабирались вічно)
+    assert load_day(env["staging"], SYMBOL, truncated_day).manifest["attempts"] == 2
+    child_again = FakeChild(clock)
+    assert run_fetch(_opts(env, **opts), _deps(env, clock, child_again)) == 0
+    assert child_again.calls == []
 
 
 def test_dry_run_reports_planned_sessions_without_calls(env, capsys):

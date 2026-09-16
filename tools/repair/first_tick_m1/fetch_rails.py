@@ -37,6 +37,10 @@ class FetchOptions:
     max_logins: Optional[int] = None  # None — ⌈max_calls / days_per_session⌉, не більше MAX_LOGINS_CEILING
     only_missing: bool = False
     dry_run: bool = False
+    # Доба, у якій брокер віддав менше за цю частку торгових хвилин календаря, вважається обрізаною: --only-missing
+    # забирає її ще раз, доки спроб не стане max_day_attempts (тонкі й святкові доби так приймаються після повтору).
+    day_coverage_min: float = c.DAY_COVERAGE_MIN_DEFAULT
+    max_day_attempts: int = c.MAX_DAY_ATTEMPTS_DEFAULT
 
 
 @dataclasses.dataclass(frozen=True)

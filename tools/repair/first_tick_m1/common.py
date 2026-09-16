@@ -54,6 +54,8 @@ APPLY_GUARD_MINUTES_DEFAULT = 30
 # Доба молодша за тиждень не забирається: «запечений» FIRST_TICK бачили саме на поточному тижні, минулі
 # тижні — справжні (ADR-0096 §1.4); свіжу добу план однаково відсік би як SKIP_BAKED — виклик згорів би.
 MIN_AGE_DAYS_DEFAULT = 7
+DAY_COVERAGE_MIN_DEFAULT = 0.8
+MAX_DAY_ATTEMPTS_DEFAULT = 2
 MIN_AGE_DAYS_RANGE = (0, 60)
 MAX_CONSECUTIVE_FAILURES_DEFAULT = 3
 MAX_CONSECUTIVE_FAILURES_RANGE = (1, 10)  # стеля: 10 невдалих сесій поспіль — уже не збіг, а відмова брокера
@@ -167,6 +169,12 @@ def fxcm_symbol_problem(cfg: Dict[str, Any], symbol: str) -> Optional[str]:
     if isinstance(binance, dict) and symbol in (binance.get("symbols") or []):
         return "binance_symbol"
     return None
+
+
+def trading_minutes_in_day(calendar: Any, day: dt.date) -> int:
+    """Скільки хвилин доби торгові за календарем — очікуване покриття доби staging (1440 перевірок, дешево)."""
+    start = day_start_ms(day)
+    return sum(1 for index in range(1440) if calendar.is_trading_minute(start + index * MINUTE_MS))
 
 
 def first_trading_minute(calendar: Any, start_ms: int, end_ms: int) -> Optional[int]:

@@ -61,6 +61,8 @@ def fetch_meta(**overrides) -> dict:
                     "quotes_count": -1},
         "rows_outside_day_dropped": 0, "fetched_at_utc": "2026-09-19T12:00:00Z", "run_id": "20260919T120000Z-1",
         "call_seq": 1, "call_duration_s": 1.5, "sdk": {"python": "3.7.0", "forexconnect": "1.6.43"},
+        # Формат доби v2: покриття календарем і номер спроби (рейка обрізаної доби)
+        "trading_minutes_expected": 1380, "attempts": 1,
     }
     meta.update(overrides)
     return meta
