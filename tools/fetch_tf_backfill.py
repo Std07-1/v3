@@ -18,6 +18,7 @@ from runtime.ingest.m1_session_filter import (
     VERDICT_PAUSE_FLAT_DROPPED,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
     classify_m1_for_ssot,
+    is_session_open_minute,
     resolve_close_safety_ms,
     resolve_flat_max_volume,
     split_closed_bars,
@@ -99,7 +100,10 @@ def _filter_m1_by_session(
     off_calendar: List[int] = []
     for bar in bars:
         trading = calendar.is_trading_minute(bar.open_time_ms)
-        classified, verdict = classify_m1_for_ssot(bar, trading, flat_max_volume)
+        classified, verdict = classify_m1_for_ssot(
+            bar, trading, flat_max_volume,
+            session_open_minute=is_session_open_minute(bar.open_time_ms, calendar.is_trading_minute),
+        )
         verdicts[verdict] += 1
         if not trading:
             off_calendar.append(bar.open_time_ms)

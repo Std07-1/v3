@@ -31,6 +31,7 @@ from runtime.ingest.m1_session_filter import (
     FLAT_BAR_MAX_VOLUME_DEFAULT,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
     classify_m1_for_ssot,
+    is_session_open_minute,
     resolve_close_safety_ms,
     resolve_flat_max_volume,
     split_closed_bars,
@@ -397,7 +398,8 @@ def _filter_fetched_bars(
     kept: List[CandleBar] = []
     for bar in bars:
         classified, verdict = classify_m1_for_ssot(
-            bar, calendar.is_trading_minute(bar.open_time_ms), flat_max_volume
+            bar, calendar.is_trading_minute(bar.open_time_ms), flat_max_volume,
+            session_open_minute=is_session_open_minute(bar.open_time_ms, calendar.is_trading_minute),
         )
         verdicts[verdict] = verdicts.get(verdict, 0) + 1
         if classified is not None:
