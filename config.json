@@ -5,7 +5,8 @@
     "XAG/USD",
     "NAS100",
     "SPX500",
-    "US30"
+    "US30",
+    "EUSTX50"
   ],
   "data_root": "./data_v3",
   "broker_python": ".venv37/Scripts/python.exe",
