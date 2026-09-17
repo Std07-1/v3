@@ -125,3 +125,39 @@ def test_existing_extensions_are_kept_and_input_is_not_mutated():
     out, _ = classify_m1_for_ssot(bar, trading=True, flat_max_volume=4)
     assert out.extensions == {"source_note": "x", "trading_flat": True}
     assert bar.extensions == {"source_note": "x"}
+
+
+def test_flat_bar_in_the_reopen_minute_is_broker_placeholder_and_not_written():
+    """17.09 22:00 NAS100 і SPX500: O=H=L=C, v=3, ціна = закриттю сесії; той самий запит за 12 хв уже нічого не давав.
+
+    Вимір на проді: 110 нормальних барів хвилини перевідкриття NAS100 мають обсяг 229…5811 і ненульовий діапазон,
+    тож правило вузьке — під нього підпадає лише заглушка.
+    """
+    from runtime.ingest.m1_session_filter import VERDICT_REOPEN_FLAT_DROPPED
+    out, verdict = classify_m1_for_ssot(FLAT, trading=True, flat_max_volume=4, session_open_minute=True)
+    assert (out, verdict) == (None, VERDICT_REOPEN_FLAT_DROPPED)
+
+
+def test_normal_reopen_bar_stays():
+    """Контроль: справжній бар хвилини перевідкриття (обсяг і діапазон є) пишеться як звичайний."""
+    out, verdict = classify_m1_for_ssot(REGULAR, trading=True, flat_max_volume=4, session_open_minute=True)
+    assert (out, verdict) == (REGULAR, VERDICT_TRADING)
+
+
+def test_flat_minute_inside_session_still_stays_with_marker():
+    """Контроль межі: однотікова хвилина ВСЕРЕДИНІ сесії — справжня, лишається з маркером trading_flat."""
+    out, verdict = classify_m1_for_ssot(FLAT, trading=True, flat_max_volume=4, session_open_minute=False)
+    assert verdict == VERDICT_TRADING_FLAT and out.extensions == {"trading_flat": True}
+
+
+def test_session_open_minute_detection_uses_the_previous_minute():
+    """Хвилина перевідкриття = торгова, а попередня — ні (перерва або вихідні)."""
+    from runtime.ingest.market_calendar import MarketCalendar
+    from runtime.ingest.m1_session_filter import is_session_open_minute
+    cal = MarketCalendar(enabled=True, weekend_close_dow=4, weekend_close_hm="20:45", weekend_open_dow=6,
+                         weekend_open_hm="22:00", daily_break_start_hm="21:00", daily_break_end_hm="22:00",
+                         daily_break_enabled=True)
+    reopen = 1_789_596_000_000  # 2026-09-16 22:00 UTC — перша хвилина після денної перерви
+    assert is_session_open_minute(reopen, cal.is_trading_minute)
+    assert not is_session_open_minute(reopen + 60_000, cal.is_trading_minute)
+    assert not is_session_open_minute(reopen - 60_000, cal.is_trading_minute)

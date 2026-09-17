@@ -29,8 +29,10 @@ from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.m1_session_filter import (
     FLAT_BAR_MAX_VOLUME_DEFAULT,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
+    VERDICT_REOPEN_FLAT_DROPPED,
     classify_m1_for_ssot,
     is_flat_m1,
+    is_session_open_minute,
     resolve_flat_max_volume,
 )
 from runtime.ingest.tick_common import (
@@ -219,6 +221,12 @@ class M1SymbolPoller:
             return True
         return self._calendar.is_trading_minute(now_ms)
 
+    def _is_session_open_minute(self, open_ms: int) -> bool:
+        """Перша торгова хвилина сесії — там плаский бар є заглушкою брокера (m1_session_filter)."""
+        if self._calendar is None or not self._calendar.enabled:
+            return False
+        return is_session_open_minute(open_ms, self._calendar.is_trading_minute)
+
     def _check_calendar_state(self, now_ms: int) -> bool:
         """Повертає True якщо ринок відкритий. Логує зміни стану."""
         is_open = self._is_market_open(now_ms)
@@ -275,9 +283,16 @@ class M1SymbolPoller:
 
         # Правило SSOT за календарем — спільне з tools/fetch_tf_backfill (runtime/ingest/m1_session_filter.py)
         classified, verdict = classify_m1_for_ssot(
-            bar, self._is_market_open(bar.open_time_ms), _flat_bar_max_volume
+            bar, self._is_market_open(bar.open_time_ms), _flat_bar_max_volume,
+            session_open_minute=self._is_session_open_minute(bar.open_time_ms),
         )
         if classified is None:
+            if verdict == VERDICT_REOPEN_FLAT_DROPPED:
+                logging.warning(
+                    "M1_REOPEN_FLAT_DROPPED symbol=%s open_ms=%s o=%.5f v=%.0f — заглушка брокера у хвилині "
+                    "перевідкриття (тіків ще немає), у SSOT не йде",
+                    self._symbol, bar.open_time_ms, bar.o, bar.v,
+                )
             return False
         bar = classified
         if verdict == VERDICT_PAUSE_NONFLAT_ANOMALY:
