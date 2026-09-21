@@ -428,6 +428,8 @@
   let lastPrice: number | null = $state(null);
   let lastBarTs: number | null = $state(null);
   let lastBarOpen: number | null = $state(null);
+  // Час відкриття останньої свічки кадру + її TF — таймер CommandRail бере сітку H4/D1 з даних бекенда (X28)
+  let lastCandle: { tf: string; t_ms: number } | null = $state(null);
 
   // --- Reactive subscriptions ---
   const unsubPair = currentPair.subscribe((p) => {
@@ -528,6 +530,7 @@
         lastPrice = last.c;
         lastBarOpen = last.o;
         lastBarTs = Date.now(); // time of last WS frame, not candle open
+        if (f.tf) lastCandle = { tf: f.tf, t_ms: last.t_ms };
       }
       // ADR-0066 PATCH 04b: dismiss splash on first frame with data
       if (
@@ -800,6 +803,7 @@
         rv={frame?.rv ?? null}
         lastPrice={lastPrice}
         currentTf={hudTf}
+        {lastCandle}
         nowMs={clockNow}
       />
       <span class="tr-clock" style:color={hudText}>{utcStr} UTC</span>

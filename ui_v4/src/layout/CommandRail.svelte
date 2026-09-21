@@ -15,8 +15,9 @@
       (atr / lastPrice * 100), NOT a re-derivation of the domain value.
 
   Countdown is intentionally retained in UI: it's wallclock subtraction
-  (next_bar_close_ms - now_ms), not domain compute. Anchor map mirrors
-  backend bucket_start convention (D1=22:00 UTC, H4=23:00 UTC, others=0).
+  (next_bar_close_ms - now_ms), not domain compute. Сітку H4/D1 таймер бере
+  з даних бекенда: відкриття останньої свічки цього TF mod tf (сезонний якір
+  живе лише на бекенді); інші TF вирівняні до епохи (якір 0).
 
   Out of scope:
     - SMC F badge — needs backend feature gate signal
@@ -38,11 +39,13 @@
     lastPrice: number | null;
     /** TF label ("M15", "H1", ...) — converted to seconds via inverse map. */
     currentTf: string;
+    /** Остання свічка кадру (її TF і час відкриття) — джерело сітки H4/D1. */
+    lastCandle: { tf: string; t_ms: number } | null;
     /** Live wallclock from parent $state (ticks every 1s). */
     nowMs: number;
   };
 
-  const { atr, rv, lastPrice, currentTf, nowMs }: Props = $props();
+  const { atr, rv, lastPrice, currentTf, lastCandle, nowMs }: Props = $props();
 
   // ─── TF label → seconds (inverse of App.svelte _S_TO_LABEL) ────────────
   const _LABEL_TO_S: Record<string, number> = {
@@ -59,19 +62,21 @@
   const tfMs = $derived(tfS * 1000);
   const tfLabel = $derived(currentTf || "—");
 
-  // ─── Bucket anchor per TF (mirrors backend resolve_anchor_offset_ms) ───
-  // D1 anchors at 22:00 UTC (FXCM session boundary), H4 at 23:00 UTC,
-  // others at epoch midnight (0). Matches core/utils/buckets.bucket_start_ms.
-  const _ANCHOR_MS_BY_TFS: Record<number, number> = {
-    14400: 82800000, // H4 — 23:00 UTC = 82800s
-    86400: 79200000, // D1 — 22:00 UTC = 79200s
-  };
+  // ─── Bucket anchor ────────────────────────────────────────────────────
+  // H4/D1 мають сезонний якір (17:00 NY — літо/зима), SSOT на бекенді; UI не дублює
+  // таблицю якорів (раніше тут були зашиті зимові 23:00/22:00 → таймер цілив у чужу
+  // межу). Якір = відкриття останньої свічки саме цього TF mod tf. Коротші TF — 0.
+  const _ANCHORED_MIN_TF_S = 14400;
+  const anchorMs = $derived.by((): number | null => {
+    if (tfS < _ANCHORED_MIN_TF_S) return 0;
+    if (!lastCandle || lastCandle.tf !== currentTf) return null;
+    return ((lastCandle.t_ms % tfMs) + tfMs) % tfMs;
+  });
 
   // ─── Countdown (wallclock + bucket math) ───────────────────────────────
   // Display arithmetic per X28: not domain computation, just `next_close - now`.
   const countdownMs = $derived.by(() => {
-    if (tfMs === 0) return null;
-    const anchorMs = _ANCHOR_MS_BY_TFS[tfS] ?? 0;
+    if (tfMs === 0 || anchorMs == null) return null;
     const bucketOpen =
       Math.floor((nowMs - anchorMs) / tfMs) * tfMs + anchorMs;
     const closeMs = bucketOpen + tfMs;
