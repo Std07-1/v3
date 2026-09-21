@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import datetime
 import threading
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock
@@ -225,6 +226,57 @@ class TestOverdueFullChain:
         for tf_s in DERIVE_ORDER:
             depth = DeriveEngine._OVERDUE_LOOKBACK.get(tf_s)
             assert depth is not None, f"TF {tf_s} missing from _OVERDUE_LOOKBACK"
-            # D1 (86400): lookback=1 достатній (один bucket = 24h)
-            min_depth = 1 if tf_s == 86400 else 2
+            # D1 (86400): святкову п'ятницю видно лише з неділі 22:00 — 3 bucket-и назад (ADR-0097)
+            min_depth = 3 if tf_s == 86400 else 2
             assert depth >= min_depth, f"TF {tf_s} lookback={depth} too shallow (min={min_depth})"
+
+
+class _WeekdayCalendar:
+    """Торгово 22:00→21:00 UTC нд–пт, break 21:00–22:00, вихідні пт 21:00 → нд 22:00."""
+
+    def is_trading_minute(self, ms: int) -> bool:
+        t = datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc)
+        if t.hour == 21:
+            return False
+        weekday = t.weekday()  # пн=0 … нд=6
+        if weekday == 5:
+            return False
+        if weekday == 4 and t.hour >= 22:
+            return False
+        if weekday == 6 and t.hour < 22:
+            return False
+        return True
+
+
+class TestOverdueHolidayD1:
+    """ADR-0097: святкова п'ятниця з раннім закривом стає D1-баром, щойно відкрилась неділя."""
+
+    D1_ANCHOR_S = 75_600  # 21:00 UTC
+
+    def test_holiday_friday_d1_is_built_on_sunday_reopen(self) -> None:
+        sym = "TEST/SYM"
+        engine = DeriveEngine(
+            symbols=[sym],
+            d1_anchor_offset_s=self.D1_ANCHOR_S,
+            calendars={sym: _WeekdayCalendar()},
+            cascade_tfs_s={86400},
+            commit_tfs_s={86400},
+        )
+        uds = _mock_uds()
+        engine.register_symbol_uds(sym, uds)
+
+        utc = datetime.timezone.utc
+        bucket_open = int(datetime.datetime(2026, 7, 2, 21, 0, tzinfo=utc).timestamp() * 1000)  # чт 21:00
+        early_close = int(datetime.datetime(2026, 7, 3, 17, 0, tzinfo=utc).timestamp() * 1000)  # пт 17:00
+        sunday_reopen = int(datetime.datetime(2026, 7, 5, 22, 0, tzinfo=utc).timestamp() * 1000)
+        day_minutes = (early_close - bucket_open - 3_600_000) // 60_000  # мінус break 21:00–22:00
+        engine.warmup_bars(_make_m1_bars(sym, bucket_open + 3_600_000, day_minutes))
+
+        assert engine.check_overdue_buckets(now_ms=early_close + 3 * 3_600_000) == []
+
+        engine.warmup_bars([_make_bar(sym, 60, sunday_reopen)])
+        committed = engine.check_overdue_buckets(now_ms=sunday_reopen + 60_000)
+
+        assert [(b.tf_s, b.open_time_ms) for b in committed] == [(86400, bucket_open)]
+        assert "thin_session" in committed[0].extensions["partial_reasons"]
+

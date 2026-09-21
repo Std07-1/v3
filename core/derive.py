@@ -12,7 +12,7 @@ Dependency Rule: core/ не імпортує runtime/ui/tools.
 from __future__ import annotations
 
 import bisect
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 
 from core.model.bars import CandleBar, assert_invariants
 from core.buckets import bucket_start_ms as _bucket_start_ms
@@ -55,6 +55,12 @@ MAX_MID_SESSION_GAPS: int = 3
 MAX_MID_SESSION_GAPS_BY_TF: Dict[int, int] = {
     86400: 15,  # D1: 1440 M1 slots, breaks/gaps можуть бути ширші
 }
+
+# ADR-0097 (рішення власника 15.09 «не викидаємо, як у TradingView»): TF, чий бар будується з НАЯВНИХ
+# source-барів понад бюджет пропусків — але лише коли джерело дійшло до останнього торгового слота bucket
+# (доба закрита даними, а не годинником). Свято/ранній закрив/тонкий день = бар з того, що було, а не
+# відсутній день. Без фронтиру — None, як і раніше: незакриту добу final-ом не фіксуємо.
+FRONTIER_BUILT_TFS: FrozenSet[int] = frozenset({86400})
 
 
 # ---------------------------------------------------------------------------
@@ -318,9 +324,11 @@ def _collect_boundary_tolerant(
     start_ms: int,
     end_ms: int,
     is_trading_fn: Callable[[int], bool],
-    max_mid_session_gaps: int = 0,
+    max_mid_session_gaps: Optional[int] = 0,
 ) -> Optional[Tuple[List[CandleBar], int]]:
     """Збір source-барів з толерантністю до boundary та mid-session gaps.
+
+    `max_mid_session_gaps=None` — без стелі: береться все наявне (ADR-0097, лише під доведений фронтир).
 
     Boundary tolerance (Entry 075):
     - session open: слот t торговий, слот t - step — ні
@@ -360,7 +368,7 @@ def _collect_boundary_tolerant(
 
         # Mid-session gap (ADR-0005): дозволяємо в межах бюджету
         mid_session_skips += 1
-        if mid_session_skips > max_mid_session_gaps:
+        if max_mid_session_gaps is not None and mid_session_skips > max_mid_session_gaps:
             return None
 
     if not bars:
@@ -390,6 +398,8 @@ def derive_bar(
     2. Що source_buffer.tf_s == очікуваний source TF.
     3. Що всі trading-слоти в діапазоні [bucket_open_ms, bucket_close_ms) є.
        Fallback: boundary-tolerant збір (пропуск барів на межі сесії).
+       TF з FRONTIER_BUILT_TFS понад бюджет — з наявних барів, якщо джерело дійшло до останнього
+       торгового слота (ADR-0097; extension partial_reasons += "thin_session").
     4. Aggregate → CandleBar.
 
     Boundary tolerance (degraded-but-loud, §9):
@@ -453,6 +463,15 @@ def derive_bar(
         source_buffer, bucket_open_ms, bucket_close_ms, is_trading_fn,
         max_mid_session_gaps=tf_max_gaps,
     )
+    built_past_budget = False
+    if not result_tol and target_tf_s in FRONTIER_BUILT_TFS and _source_reached_bucket_end(
+        source_buffer, bucket_open_ms, bucket_close_ms, is_trading_fn
+    ):
+        result_tol = _collect_boundary_tolerant(
+            source_buffer, bucket_open_ms, bucket_close_ms, is_trading_fn,
+            max_mid_session_gaps=None,
+        )
+        built_past_budget = result_tol is not None
     if not result_tol:
         return None
     bars, mid_gaps = result_tol
@@ -485,6 +504,8 @@ def derive_bar(
         reasons = []
     if "boundary_gap" not in reasons:
         reasons.append("boundary_gap")
+    if built_past_budget and "thin_session" not in reasons:
+        reasons.append("thin_session")
     result.extensions["partial_reasons"] = reasons
     if mid_gaps > 0:
         result.extensions["mid_session_gaps"] = mid_gaps
@@ -527,6 +548,43 @@ def _slot_has_trading(
     if is_trading_fn is None:
         return True
     return _has_any_trading_in_range(slot_open_ms, slot_open_ms + slot_ms, is_trading_fn)
+
+
+def _last_trading_slot_ms(
+    bucket_open_ms: int,
+    bucket_close_ms: int,
+    slot_ms: int,
+    is_trading_fn: Callable[[int], bool],
+) -> Optional[int]:
+    """Останній торговий source-слот bucket-а (крок назад від номінального кінця через паузу/break).
+
+    None — у bucket нема жодного торгового слота (вихідний).
+    """
+    candidate = bucket_close_ms - slot_ms
+    while candidate >= bucket_open_ms:
+        if _slot_has_trading(candidate, slot_ms, is_trading_fn):
+            return candidate
+        candidate -= slot_ms
+    return None
+
+
+def _source_reached_bucket_end(
+    source_buffer: GenericBuffer,
+    bucket_open_ms: int,
+    bucket_close_ms: int,
+    is_trading_fn: Callable[[int], bool],
+) -> bool:
+    """Фронтир доведено даними: джерело має бар не раніше останнього торгового слота bucket-а.
+
+    Брокер віддає хвилини по порядку, тож коли прийшов останній слот доби (або перша хвилина
+    наступної сесії) — все, що брокер мав для цієї доби, вже в буфері; пропуски = тонкий ринок/свято,
+    а не недовантаження.
+    """
+    latest_ms = source_buffer.latest_open_ms()
+    if latest_ms is None:
+        return False
+    last_slot_ms = _last_trading_slot_ms(bucket_open_ms, bucket_close_ms, source_buffer.tf_ms, is_trading_fn)
+    return last_slot_ms is not None and latest_ms >= last_slot_ms
 
 
 # ---------------------------------------------------------------------------
@@ -581,17 +639,11 @@ def derive_triggers(
 
         # Calendar-aware: якщо останній слот non-trading, крокуємо назад
         if is_trading_fn is not None:
-            candidate = expected_last_source
-            while candidate >= bucket_open:
-                if _has_any_trading_in_range(
-                    candidate, candidate + source_tf_ms, is_trading_fn
-                ):
-                    break
-                candidate -= source_tf_ms
-            else:
+            last_trading = _last_trading_slot_ms(bucket_open, bucket_end, source_tf_ms, is_trading_fn)
+            if last_trading is None:
                 # Жодного торгового слоту в bucket — пропускаємо
                 continue
-            expected_last_source = candidate
+            expected_last_source = last_trading
 
         if source_bar.open_time_ms == expected_last_source:
             result.append((target_tf_s, bucket_open))

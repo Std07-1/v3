@@ -223,5 +223,86 @@ class TestDeriveBarD1(unittest.TestCase):
         self.assertEqual(result.tf_s, D1_TF_S)
 
 
+def _session_calendar(bucket_open_ms: int, session_minutes: int):
+    """Календар: торгові перші session_minutes хвилин кожної доби від bucket_open_ms (далі — break)."""
+
+    def is_trading(ms: int) -> bool:
+        return (ms - bucket_open_ms) % D1_TF_MS < session_minutes * M1_TF_MS
+
+    return is_trading
+
+
+class TestD1BuiltFromAvailableMinutes(unittest.TestCase):
+    """ADR-0097: тонка/святкова доба = D1 з наявних хвилин, щойно джерело дійшло до кінця доби."""
+
+    SESSION_MIN = 1380  # 22:00→21:00 торгово, 21:00→22:00 break
+
+    def _derive(self, buf: GenericBuffer, target_tf_s: int = D1_TF_S, bucket_open_ms: int = D1_BUCKET_OPEN_MS):
+        return derive_bar(
+            symbol="XAU/USD",
+            target_tf_s=target_tf_s,
+            source_buffer=buf,
+            bucket_open_ms=bucket_open_ms,
+            anchor_offset_s=H4_ANCHOR,
+            d1_anchor_offset_s=D1_ANCHOR,
+            is_trading_fn=_session_calendar(D1_BUCKET_OPEN_MS, self.SESSION_MIN),
+        )
+
+    def _holiday_day(self) -> GenericBuffer:
+        """Ранній закрив: торгувались лише перші 1140 хвилин із 1380 (240 бракує — як 07.09 Labor Day)."""
+        buf = GenericBuffer(M1_TF_S, max_keep=4000)
+        for i in range(1140):
+            buf.upsert(_make_m1(D1_BUCKET_OPEN_MS + i * M1_TF_MS, close_price=100.0 + i * 0.01))
+        return buf
+
+    def test_holiday_day_is_not_finalized_before_the_source_reaches_day_end(self) -> None:
+        self.assertIsNone(self._derive(self._holiday_day()))
+
+    def test_holiday_day_is_built_once_the_next_session_minute_arrives(self) -> None:
+        buf = self._holiday_day()
+        buf.upsert(_make_m1(D1_BUCKET_OPEN_MS + D1_TF_MS))  # перша хвилина наступної сесії
+
+        bar = self._derive(buf)
+
+        self.assertIsNotNone(bar)
+        self.assertEqual(bar.open_time_ms, D1_BUCKET_OPEN_MS)
+        self.assertAlmostEqual(bar.c, 100.0 + 1139 * 0.01)
+        self.assertEqual(bar.v, 1140 * 10)
+        self.assertIn("thin_session", bar.extensions["partial_reasons"])
+        self.assertEqual(bar.extensions["source_count"], 1140)
+        self.assertEqual(bar.extensions["expected_count"], self.SESSION_MIN)
+
+    def test_thin_day_is_built_when_its_last_trading_minute_arrives(self) -> None:
+        buf = GenericBuffer(M1_TF_S, max_keep=4000)
+        silent = set(range(300, 330))  # 30 хвилин без угод посеред сесії
+        for i in range(self.SESSION_MIN):
+            if i not in silent:
+                buf.upsert(_make_m1(D1_BUCKET_OPEN_MS + i * M1_TF_MS))
+
+        bar = self._derive(buf)
+
+        self.assertIsNotNone(bar)
+        self.assertEqual(bar.extensions["mid_session_gaps"], 30)
+        self.assertIn("thin_session", bar.extensions["partial_reasons"])
+
+    def test_day_within_budget_carries_no_thin_session_mark(self) -> None:
+        buf = GenericBuffer(M1_TF_S, max_keep=4000)
+        for i in range(self.SESSION_MIN):
+            if i not in (500, 501):
+                buf.upsert(_make_m1(D1_BUCKET_OPEN_MS + i * M1_TF_MS))
+
+        bar = self._derive(buf)
+
+        self.assertIsNotNone(bar)
+        self.assertNotIn("thin_session", bar.extensions["partial_reasons"])
+
+    def test_other_tfs_keep_the_gap_budget(self) -> None:
+        buf = GenericBuffer(M1_TF_S, max_keep=4000)
+        buf.upsert(_make_m1(D1_BUCKET_OPEN_MS))
+        buf.upsert(_make_m1(D1_BUCKET_OPEN_MS + 10 * M1_TF_MS))  # фронтир далеко за M5
+
+        self.assertIsNone(self._derive(buf, target_tf_s=300, bucket_open_ms=D1_BUCKET_OPEN_MS))
+
+
 if __name__ == "__main__":
     unittest.main()
