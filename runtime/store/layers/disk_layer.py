@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from collections.abc import Callable, Set as AbstractSet
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from core.model.bar_choice import choose_better_bar, is_complete, is_final_source
 
@@ -35,8 +35,9 @@ def _is_foreign_row(row: dict[str, Any], expected_dir_key: str) -> bool:
     return row_symbol is not None and _symbol_dir_key(str(row_symbol)) != expected_dir_key
 
 
-# Рядок чужого символу: (шлях part-файла, open_time_ms, поле symbol рядка).
-ForeignRow = tuple[str, int, Any]
+# Рядок чужого символу: (шлях part-файла, open_time_ms, поле symbol рядка). `typing.Tuple`, а не `tuple[...]`: псевдонім
+# обчислюється під час імпорту, а модуль імпортує й `tools/fetch_tf_backfill` у .venv37 (Python 3.7).
+ForeignRow = Tuple[str, int, Any]
 
 
 def _log_foreign_rows(symbol: str, foreign_rows: list[ForeignRow]) -> None:
