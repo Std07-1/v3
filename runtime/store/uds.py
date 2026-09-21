@@ -125,6 +125,8 @@ def _disk_bar_to_candle(
         if v_val is None:
             v_val = raw.get("v", 0.0)
         return CandleBar(
+            # Символ каталогу, а не рядка: рядки чужого символу сюди не доходять — DiskLayer відмовляє їм гучно
+            # (DISK_BAR_SYMBOL_MISMATCH reason=symbol_mismatch); рядок без поля symbol — легасі свого каталогу.
             symbol=symbol,
             tf_s=int(tf_s),
             open_time_ms=int(open_ms),

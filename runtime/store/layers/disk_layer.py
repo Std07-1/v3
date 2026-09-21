@@ -24,6 +24,32 @@ def _part_day_start_ms(path: str) -> Optional[int]:
     return int(day.timestamp()) * 1000
 
 
+def _symbol_dir_key(symbol: str) -> str:
+    """Імʼя каталогу символу в SSOT: `XAU/USD` → `XAU_USD`."""
+    return symbol.replace("/", "_")
+
+
+def _is_foreign_row(row: dict[str, Any], expected_dir_key: str) -> bool:
+    """Рядок чужого символу в каталозі: поле `symbol` є і веде в інший каталог. Рядок без поля — свій (легасі)."""
+    row_symbol = row.get("symbol")
+    return row_symbol is not None and _symbol_dir_key(str(row_symbol)) != expected_dir_key
+
+
+def _log_foreign_rows(symbol: str, foreign_rows: list[tuple[str, int, Any]]) -> None:
+    """Гучна відмова (I5): раніше `uds._disk_bar_to_candle` мовчки перепідписував такий рядок символом каталогу —
+    так 4 D1-свічки XAG/USD (≈25/67/90) опинились на графіку XAU/USD, а guard у `prime_from_bars` їх не бачив."""
+    first_path, first_open_ms, _ = foreign_rows[0]
+    logger.warning(
+        "DISK_BAR_SYMBOL_MISMATCH reason=symbol_mismatch symbol=%s rejected=%d row_symbols=%s first=%s open_ms=%d — "
+        "рядок чужого символу в каталозі, у вікно читання не йде",
+        symbol,
+        len(foreign_rows),
+        sorted({str(row_symbol) for _path, _open_ms, row_symbol in foreign_rows}),
+        first_path,
+        first_open_ms,
+    )
+
+
 def _select_newest_keys(
     paths: list[str],
     since_open_ms: Optional[int],
@@ -33,6 +59,7 @@ def _select_newest_keys(
     final_only: bool,
     skip_preview: bool,
     final_sources: Optional[AbstractSet[str]],
+    symbol: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Вікно читання: `limit` найновіших РІЗНИХ open_time_ms у (since, to] — спільне для TAIL і RANGE.
 
@@ -49,9 +76,14 @@ def _select_newest_keys(
 
     Повертаються ВСІ записи обраних ключів — за зростанням ключа і в порядку файла всередині ключа,
     щоб вибирач дублікатів (`core.model.bar_choice`) бачив цілу групу, а нічия дісталась пізнішому запису.
+
+    З `symbol` рядки чужого символу відсіюються ДО групування за ключем (інакше чужий рядок того самого
+    open_time_ms міг би виграти нічию у вибирача) і гучно логуються — `DISK_BAR_SYMBOL_MISMATCH`.
     """
     if limit <= 0:
         return []
+    expected_dir_key = _symbol_dir_key(symbol) if symbol is not None else None
+    foreign_rows: list[tuple[str, int, Any]] = []
     by_key: dict[int, list[dict[str, Any]]] = {}
     for path in reversed(paths):
         day_start_ms = _part_day_start_ms(path)
@@ -79,6 +111,9 @@ def _select_newest_keys(
                         continue
                     if to_open_ms is not None and open_ms > to_open_ms:
                         continue
+                    if expected_dir_key is not None and _is_foreign_row(obj, expected_dir_key):
+                        foreign_rows.append((path, open_ms, obj.get("symbol")))
+                        continue
                     if not _bar_passes_filters(
                         obj,
                         final_only=final_only,
@@ -96,6 +131,8 @@ def _select_newest_keys(
             continue
         if len(by_key) >= limit or reached_since:
             break
+    if foreign_rows:
+        _log_foreign_rows(str(symbol), foreign_rows)
     keys = sorted(by_key)[-limit:]
     return [bar for key in keys for bar in by_key[key]]
 
@@ -244,7 +281,7 @@ class DiskLayer:
         self._data_root = data_root
 
     def list_parts(self, symbol: str, tf_s: int) -> list[str]:
-        d = os.path.join(self._data_root, symbol.replace("/", "_"), f"tf_{tf_s}")
+        d = os.path.join(self._data_root, _symbol_dir_key(symbol), f"tf_{tf_s}")
         if not os.path.isdir(d):
             return []
         parts = [
@@ -279,6 +316,7 @@ class DiskLayer:
             final_only=final_only,
             skip_preview=skip_preview,
             final_sources=final_sources,
+            symbol=symbol,
         )
         if use_tail:
             return _finalize_tail_with_geom(window)
