@@ -1,6 +1,8 @@
 # ADR-0044: HTF Live Preview — Incremental HTF Accumulator для D1/H4 Forming Candle
 
-- **Статус**: Proposed
+- **Статус**: Implemented (`_HTFRunningAccumulator` у tick_preview_worker на проді); 2026-09-21: D1 tick-relay
+  ADR-0012 P3 виведено (`d1_live_tick_relay_enabled=false`) — друге джерело формуючої D1 засівалось першим тіком
+  (`D1_FORMING_NO_SEED`) і малювало доджі поверх preview-D1; Redis-клієнт тіків тепер не залежить від прапорця relay
 - **Дата**: 2026-03-24
 - **Автор**: R_ARCHITECT
 - **Initiative**: `htf_live_preview_v1`

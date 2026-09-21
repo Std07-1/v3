@@ -118,7 +118,8 @@ Client                          Server
 | `tf` | string | TF label (`"M15"`, `"1h"`, `"H4"`) або seconds як рядок (`"900"`) |
 
 **Поведінка**: валідує symbol проти `symbols_set`, tf проти `tf_allowlist`. При успіху:
-оновлює сесію, скидає `last_update_seq` та scrollback counter, надсилає новий **full frame**.
+оновлює сесію, скидає курсор delta (прив'язаний до `(symbol, tf)`, ADR-0011 поправка 21.09) та scrollback counter,
+надсилає новий **full frame**; full-кадр несе в хвості формуючу свічку поточного бакета з preview, якщо вона є.
 
 **При помилці**: надсилає full frame з порожніми candles + warning `["unknown_symbol"]` або `["tf_not_allowed"]`.
 

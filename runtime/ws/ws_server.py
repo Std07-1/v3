@@ -29,6 +29,7 @@ from typing import Any, Dict, Optional, Protocol, cast
 from aiohttp import web, WSMsgType
 
 from runtime.ws.candle_map import map_bars_to_candles_v4
+from runtime.ws.forming_tail import read_forming_candle
 from core.config_loader import (
     load_system_config,
     resolve_config_path,
@@ -390,7 +391,7 @@ class WsSession:
         "seq",
         "symbol",
         "tf_s",
-        "last_update_seq",
+        "_delta_cursor",
         "ws",
         "_scrollback_count",
         "_scrollback_last_ts",
@@ -405,7 +406,10 @@ class WsSession:
         self.seq: int = 0
         self.symbol: Optional[str] = None
         self.tf_s: Optional[int] = None
-        self.last_update_seq: Optional[int] = 0
+        # Курсор delta = (symbol, tf_s, seq) тієї цілі, чиє кільце його видало.
+        # None = adopt-tail на першому poll. Ніколи не 0: 0 < min кільця = вічний
+        # gap для всієї групи через min_seq (D2, розслідування 21.09).
+        self._delta_cursor: Optional[tuple[str, int, int]] = None
         self.ws: web.WebSocketResponse = ws
         self._scrollback_count: int = (
             0  # P11: кількість scrollback для поточного symbol+tf
@@ -421,6 +425,62 @@ class WsSession:
     def next_seq(self) -> int:
         self.seq += 1
         return self.seq
+
+    def delta_cursor(self, target: tuple[str, int]) -> Optional[int]:
+        """seq курсора для target; None, якщо курсор чужої цілі або сесія вже на іншій парі.
+
+        Структурний захист від гонки switch у _global_delta_loop: курсор, прочитаний
+        з кільця однієї цілі, ніколи не застосовується до кільця іншої.
+        """
+        cursor = self._delta_cursor
+        if cursor is None or cursor[:2] != target or (self.symbol, self.tf_s) != target:
+            return None
+        return cursor[2]
+
+    def store_delta_cursor(self, target: tuple[str, int], seq: int) -> bool:
+        """Записує курсор лише поки сесія на target; False = сесія вже перемкнулась (запис відкинуто)."""
+        if (self.symbol, self.tf_s) != target:
+            return False
+        self._delta_cursor = (target[0], target[1], int(seq))
+        return True
+
+    def reset_delta_cursor(self) -> None:
+        """Після full-кадру / switch: наступний poll робить adopt-tail."""
+        self._delta_cursor = None
+
+
+def _apply_group_cursor(
+    subscribers: tuple,
+    target: tuple[str, int],
+    cursor: int,
+    *,
+    advance_active: bool,
+) -> list:
+    """Записує курсор групи (symbol, tf_s) і повертає сесії, яким шлеться кадр.
+
+    - курсор None (щойно full/switch) → adopt: отримує курсор, кадр НЕ шлеться;
+    - advance_active → активні теж отримують курсор (події віддано або gap fast-forward);
+    - сесія, що за час await перемкнулась на іншу ціль, не отримує ні курсора, ні кадру.
+    """
+    recipients = []
+    for s in subscribers:
+        if s.delta_cursor(target) is None:
+            s.store_delta_cursor(target, cursor)
+        else:
+            recipients.append(s)
+            if advance_active:
+                s.store_delta_cursor(target, cursor)
+    return recipients
+
+
+def _cursor_gap_reason(result: Any) -> Optional[str]:
+    """reason gap з UpdatesResult (warning "cursor_gap" + meta.extensions.gap) або None."""
+    if "cursor_gap" not in (getattr(result, "warnings", None) or []):
+        return None
+    meta = getattr(result, "meta", None)
+    ext = meta.get("extensions") if isinstance(meta, dict) else None
+    gap = ext.get("gap") if isinstance(ext, dict) else None
+    return str(gap.get("reason", "unknown")) if isinstance(gap, dict) else "unknown"
 
 
 # ── Frame builders ─────────────────────────────────────
@@ -928,6 +988,29 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                 _log.warning(
                     "WS_NARRATIVE_ERR sym=%s err=%s", session.symbol, _narr_exc
                 )
+        # D4: формуюча свічка з preview у хвіст — ПІСЛЯ SMC/narrative/signals вище:
+        # вони беруть candles[-1] як закритий бар (_last_c/_atr_est), формуюча зіпсувала б їх
+        if session.tf_s in app.get(APP_PREVIEW_TF_SET, set()):
+            try:
+                forming = await asyncio.get_event_loop().run_in_executor(
+                    app[APP_UDS_EXECUTOR],
+                    read_forming_candle,
+                    app[APP_UDS],
+                    session.symbol,
+                    session.tf_s,
+                    candles,
+                    int(time.time() * 1000),
+                )
+                if forming is not None:
+                    frame["candles"] = candles + [forming]
+            except Exception as _ft_exc:
+                _log.warning(
+                    "WS_FORMING_TAIL_ERR sym=%s tf=%s err=%s",
+                    session.symbol,
+                    tf_label,
+                    _ft_exc,
+                )
+                frame["meta"].setdefault("warnings", []).append("forming_tail_unavailable")
         await session.ws.send_json(frame)
         _log.debug(
             "WS_FULL_PUSH client=%s symbol=%s tf=%s candles=%d seq=%d",
@@ -937,10 +1020,11 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
             len(candles),
             session.seq,
         )
-        # Adopt cursor for delta after full frame
-        session.last_update_seq = None  # will adopt-tail on first poll
     except Exception as exc:
         _log.warning("WS_FULL_FRAME_ERROR client=%s err=%s", session.client_id, exc)
+    finally:
+        # Після будь-якого full (успіх, uds_unavailable, збій) — adopt-tail на першому poll
+        session.reset_delta_cursor()
 
 
 async def _safe_broadcast(
@@ -1129,12 +1213,13 @@ async def _global_delta_loop(app: web.Application) -> None:
             for (symbol, tf_s), group_sessions in subs_by_target.items():
                 include_preview = tf_s in preview_tfs
                 subscribers = tuple(group_sessions)
+                target = (symbol, tf_s)
 
                 min_seq = None
                 for s in subscribers:
-                    if s.last_update_seq is not None:
-                        if min_seq is None or s.last_update_seq < min_seq:
-                            min_seq = s.last_update_seq
+                    s_seq = s.delta_cursor(target)
+                    if s_seq is not None and (min_seq is None or s_seq < min_seq):
+                        min_seq = s_seq
 
                 t0 = time.perf_counter()
                 frame = None
@@ -1150,6 +1235,19 @@ async def _global_delta_loop(app: web.Application) -> None:
                     tf_label = _TF_S_TO_LABEL.get(tf_s, f"{tf_s}s")
 
                     if not events:
+                        # I5: gap / курсор «з майбутнього» → fast-forward усієї групи,
+                        # інакше min_seq тримає gap на кожному poll назавжди (D2).
+                        gap_reason = _cursor_gap_reason(result)
+                        if gap_reason is not None:
+                            _log.warning(
+                                "WS_CURSOR_GAP_FASTFORWARD target=%s:%s reason=%s since=%s cursor=%s subs=%d",
+                                symbol,
+                                tf_label,
+                                gap_reason,
+                                min_seq,
+                                cursor,
+                                len(subscribers),
+                            )
                         d1_relay_tfs: set = app[APP_D1_TICK_RELAY_TFS]
                         tick_redis = (
                             app[APP_TICK_REDIS_CLIENT]
@@ -1250,33 +1348,31 @@ async def _global_delta_loop(app: web.Application) -> None:
                                     tick_exc,
                                 )
 
-                        if frame is not None:
+                        # Єдине місце запису курсора гілки без подій (adopt + gap
+                        # fast-forward), ДО await broadcast — пізніший запис міг би
+                        # лягти на сесію, що вже перемкнулась.
+                        active_recipients = _apply_group_cursor(
+                            subscribers,
+                            target,
+                            cursor,
+                            advance_active=gap_reason is not None,
+                        )
+                        if frame is not None and active_recipients:
                             t1 = time.perf_counter()
                             t_ser_ms = (t1 - t0) * 1000.0
-                            active_recipients = []
-                            for s in subscribers:
-                                if s.last_update_seq is None:
-                                    s.last_update_seq = cursor
-                                else:
-                                    active_recipients.append(s)
-                            if active_recipients:
-                                t_send_ms = await _safe_broadcast(
-                                    frame,
-                                    tuple(active_recipients),
-                                    sessions,
-                                )
-                                _log.debug(
-                                    "WS_BROADCAST_METRICS sym=%s tf=%s subs=%d t_ser_ms=%.2f t_send_ms=%.2f",
-                                    symbol,
-                                    tf_label,
-                                    len(active_recipients),
-                                    t_ser_ms,
-                                    t_send_ms,
-                                )
-
-                        for s in subscribers:
-                            if s.last_update_seq is None:
-                                s.last_update_seq = cursor
+                            t_send_ms = await _safe_broadcast(
+                                frame,
+                                tuple(active_recipients),
+                                sessions,
+                            )
+                            _log.debug(
+                                "WS_BROADCAST_METRICS sym=%s tf=%s subs=%d t_ser_ms=%.2f t_send_ms=%.2f",
+                                symbol,
+                                tf_label,
+                                len(active_recipients),
+                                t_ser_ms,
+                                t_send_ms,
+                            )
                         continue
 
                     seen_events: Dict[int, dict] = {}
@@ -1516,13 +1612,9 @@ async def _global_delta_loop(app: web.Application) -> None:
                     t1 = time.perf_counter()
                     t_ser_ms = (t1 - t0) * 1000.0
 
-                    active_recipients = []
-                    for s in subscribers:
-                        if s.last_update_seq is None:
-                            s.last_update_seq = cursor
-                        else:
-                            active_recipients.append(s)
-                            s.last_update_seq = cursor
+                    active_recipients = _apply_group_cursor(
+                        subscribers, target, cursor, advance_active=True
+                    )
 
                     if active_recipients and frame is not None:
                         t_send_ms = await _safe_broadcast(
@@ -1927,7 +2019,7 @@ async def _handle_switch(
     old_sym, old_tf = session.symbol, session.tf_s
     session.symbol = symbol
     session.tf_s = tf_s
-    session.last_update_seq = None  # reset cursor for new pair
+    session.reset_delta_cursor()  # курсор старої пари недійсний для нового кільця
     session._scrollback_count = 0  # P11: reset scrollback budget on switch
 
     _log.info(
@@ -2075,6 +2167,44 @@ def _init_uds(app: web.Application, config_path: str, cfg: Dict[str, Any]) -> No
         _log.warning("WS_UDS_INIT_FAILED err=%s (running without UDS)", exc)
 
 
+def _init_tick_redis_client(app: web.Application, cfg: Dict[str, Any]) -> None:
+    """Redis-клієнт читання tick:last (APP_TICK_REDIS_CLIENT) + namespace — незалежно від relay.
+
+    Споживачі: /api/context.tick_price, WakeEngine/NarrativeEnricher і D1 relay (ADR-0012 P3,
+    лише якщо увімкнено). Раніше клієнт створювався тільки при relay=on, тож вимкнення relay
+    мовчки прибирало tick_price і ламало старт WakeEngine (вердикт скептика 21.09).
+    """
+    app[APP_TICK_REDIS_NS] = ""
+    try:
+        from runtime.store.redis_spec import resolve_redis_spec
+        import redis as _redis_lib
+
+        spec = resolve_redis_spec(cfg, role="tick_reader", log=False)
+        if spec is None:
+            _log.warning(
+                "TICK_REDIS_CLIENT_SKIP: redis disabled in config -> "
+                "no tick_price / D1 relay / WakeEngine redis"
+            )
+            return
+        app[APP_TICK_REDIS_CLIENT] = _redis_lib.Redis(
+            host=spec.host,
+            port=spec.port,
+            db=spec.db,
+            **spec.auth_kwargs(),
+            socket_timeout=2.0,
+            socket_connect_timeout=2.0,
+            decode_responses=False,
+        )
+        app[APP_TICK_REDIS_NS] = spec.namespace
+        _log.info(
+            "TICK_REDIS_CLIENT_INIT ns=%s d1_relay_tfs=%s",
+            spec.namespace,
+            sorted(app[APP_D1_TICK_RELAY_TFS]),
+        )
+    except Exception as exc:
+        _log.warning("TICK_REDIS_CLIENT_INIT_FAILED err=%s", exc)
+
+
 # ── App factory ────────────────────────────────────────
 
 
@@ -2129,7 +2259,7 @@ def build_app(
     preview_set, _ = preview_tf_allowlist_from_cfg(full_cfg)
     app[APP_PREVIEW_TF_SET] = preview_set
 
-    # ADR-0012 P3: D1 live tick relay — Redis client + config flags
+    # ADR-0012 P3: D1 live tick relay — лише прапорці; tick-клієнт окремо (не залежить від relay)
     _d1_relay_enabled = bool(
         full_cfg.get("d1_live_tick_relay_enabled", _D1_TICK_RELAY_ENABLED_DEFAULT)
     )
@@ -2137,32 +2267,7 @@ def build_app(
     app[APP_D1_TICK_RELAY_TFS] = (
         set(int(x) for x in _d1_relay_tfs_raw) if _d1_relay_enabled else set()
     )
-    app[APP_TICK_REDIS_NS] = ""
-    _d1_relay_tfs = app[APP_D1_TICK_RELAY_TFS]
-    if _d1_relay_enabled and _d1_relay_tfs:
-        try:
-            from runtime.store.redis_spec import resolve_redis_spec
-            import redis as _redis_lib
-
-            spec = resolve_redis_spec(full_cfg, role="tick_relay", log=False)
-            if spec is not None:
-                app[APP_TICK_REDIS_CLIENT] = _redis_lib.Redis(
-                    host=spec.host,
-                    port=spec.port,
-                    db=spec.db,
-                    **spec.auth_kwargs(),
-                    socket_timeout=2.0,
-                    socket_connect_timeout=2.0,
-                    decode_responses=False,
-                )
-                app[APP_TICK_REDIS_NS] = spec.namespace
-                _log.info(
-                    "D1_TICK_RELAY_INIT enabled=1 tfs=%s ns=%s",
-                    app[APP_D1_TICK_RELAY_TFS],
-                    spec.namespace,
-                )
-        except Exception as relay_exc:
-            _log.warning("D1_TICK_RELAY_INIT_FAILED err=%s (disabled)", relay_exc)
+    _init_tick_redis_client(app, full_cfg)
 
     # Dedicated thread pool for UDS blocking I/O (limit thread explosion)
     # min(4, cpu_count) — 2 було недостатньо для паралельних /api/bars + /api/updates

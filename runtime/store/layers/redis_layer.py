@@ -124,21 +124,8 @@ class RedisLayer:
             # P2: since_seq is None → adopt-tail (перший poll після loadBarsFull)
             # Повертаємо events=[], cursor_seq=max_seq (fast-forward)
             if since_seq is None:
-                last_seq_raw = self._client.get(seq_key)
-                if isinstance(last_seq_raw, bytes):
-                    last_seq_raw = last_seq_raw.decode("utf-8")
-                try:
-                    cursor_seq = int(last_seq_raw) if last_seq_raw is not None else 0
-                except Exception:
-                    logger.debug(
-                        "REDIS_LAYER_CURSOR_PARSE_FAILED symbol=%s tf_s=%s raw=%r",
-                        symbol,
-                        tf_s,
-                        last_seq_raw,
-                        exc_info=True,
-                    )
-                    cursor_seq = 0
-                return [], cursor_seq, None, None
+                last_published = self._read_last_published_seq(seq_key, symbol, tf_s)
+                return [], last_published or 0, None, None
 
             raw_list = self._client.lrange(list_key, -max(1, int(retain)), -1)
             events: list[dict[str, Any]] = []
@@ -175,9 +162,26 @@ class RedisLayer:
                 gap = {
                     "first_seq_available": min_seq,
                     "last_seq_available": max_seq if max_seq is not None else min_seq,
+                    "reason": "cursor_behind",
                 }
                 cursor_seq = max_seq if max_seq is not None else min_seq
                 return [], int(cursor_seq), gap, None
+
+            # Курсор «з майбутнього» (скинутий лічильник Redis або курсор чужого
+            # кільця): кожна нова подія має seq <= since_seq і відкидається мовчки
+            # годинами. Лічильник читаємо лише коли кільце не доводить курсор
+            # (since_seq > max у списку або кільце порожнє): INCR іде перед RPUSH,
+            # тож since_seq <= лічильника — це вікно публікації, а не gap.
+            if max_seq is None or since_seq > max_seq:
+                last_published = self._read_last_published_seq(seq_key, symbol, tf_s)
+                if last_published is not None and since_seq > last_published:
+                    ff_seq = max(last_published, max_seq or 0)
+                    gap = {
+                        "first_seq_available": min_seq,
+                        "last_seq_available": ff_seq,
+                        "reason": "cursor_ahead",
+                    }
+                    return [], ff_seq, gap, None
 
             if limit > 0 and len(events) > limit:
                 events = events[-limit:]
@@ -198,6 +202,29 @@ class RedisLayer:
                 exc_info=True,
             )
             return [], since_seq if since_seq is not None else 0, None, str(exc)
+
+    def _read_last_published_seq(
+        self, seq_key: str, symbol: str, tf_s: int
+    ) -> Optional[int]:
+        """Останній виданий seq кільця (лічильник INCR); ключа нема → 0.
+
+        None = значення не парситься: викликач не може судити про курсор.
+        """
+        last_seq_raw = self._client.get(seq_key)
+        if last_seq_raw is None:
+            return 0
+        if isinstance(last_seq_raw, bytes):
+            last_seq_raw = last_seq_raw.decode("utf-8")
+        try:
+            return int(last_seq_raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                "REDIS_LAYER_CURSOR_PARSE_FAILED symbol=%s tf_s=%s raw=%r",
+                symbol,
+                tf_s,
+                last_seq_raw,
+            )
+            return None
 
     def get_prime_ready_payload(
         self, component: str = "m1"

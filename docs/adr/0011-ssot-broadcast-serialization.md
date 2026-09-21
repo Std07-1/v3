@@ -194,3 +194,21 @@ async def _guarded_send(s):
 3. **Split-brain Guard (`frameRouter.ts`)**:
    - **Дія**: Додано перевірку: якщо прилітає `delta` або `scrollback` фрейм, чиї `symbol` або `tf` не співпадають з `currentPair`, фрейм негайно **відкидається** з логуванням попередження (`schema_mismatch`).
    - **Обґрунтування**: Інваріант I5 (Degraded-but-Loud). Замість мовчазного показу неправильного стану (split-brain), краще явно дропнути невалідний фрейм і залогувати помилку. Сервер ніколи не повинен надсилати дельти з чужого TF підписникам.
+
+---
+
+## Поправка 2026-09-21: курсор delta прив'язаний до цілі
+
+Розслідування «графік глухне після switch» (аудит графіка проти TV, changelog 20260921-006) довело гонку:
+`_global_delta_loop` знімав підписників, чекав `read_updates`/broadcast, а потім записував курсор у сесію,
+яка за цей час перемкнулась на іншу пару → сесія отримувала курсор чужого кільця (gap навіки або «майбутній»
+курсор — тиша годинами), а через `min_seq` отрута йшла на всю групу. Зміни:
+
+- `WsSession._delta_cursor = (symbol, tf_s, seq)`; `delta_cursor(target)` повертає seq лише для поточної цілі
+  сесії, `store_delta_cursor` відкидає запис чужої цілі. `min_seq` групи рахується через `delta_cursor`.
+  Усі три місця запису (гілка з подіями, без подій, relay) зведені в `_apply_group_cursor`.
+- Курсор нової сесії — `None` (раніше 0 → gap для групи XAU/USD:M30 на кожному connect); `_send_full_frame`
+  скидає курсор у `None` у `finally` (шляхи result None / except теж).
+- Gap (`cursor_behind`) і курсор, більший за лічильник кільця (`cursor_ahead`, RedisLayer) → fast-forward усім
+  підписникам цілі + WARN `WS_CURSOR_GAP_FASTFORWARD`.
+- Пункти 2–3 вище («`min(session.last_update_seq)`», «`last_update_seq=None`») читати в цій термінології.
