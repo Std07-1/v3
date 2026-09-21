@@ -5,11 +5,13 @@ import pytest
 
 from core.model.bars import CandleBar
 from runtime.ingest.m1_session_filter import (
+    DEFAULT_PAUSE_POLICY,
     VERDICT_PAUSE_FLAT_DROPPED,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
     VERDICT_TRADING,
     VERDICT_TRADING_FLAT,
-    classify_m1_for_ssot,
+    PausePolicy,
+    classify_m1_by_calendar,
     is_flat_m1,
 )
 
@@ -21,6 +23,22 @@ def _bar(o, h, low, c, v, extensions=None) -> CandleBar:
 
 FLAT = _bar(5.0, 5.0, 5.0, 5.0, 1.0)
 REGULAR = _bar(5.0, 6.0, 4.0, 5.5, 100.0)
+_BAR_OPEN_MS = 60_000
+
+
+# Календарі-функції для барів `_bar` (хвилина 60_000): факти про хвилину дає лише календар — як у записувачів.
+def _trading_always(_open_ms):
+    return True
+
+
+def _pause_near_edge(open_ms):
+    """Хвилина бару — пауза за 2 хв до відкриття: біля краю сесії, але не перша хвилина паузи після закриття."""
+    return open_ms >= _BAR_OPEN_MS + 2 * 60_000
+
+
+def _session_opens_at_bar(open_ms):
+    """Хвилина бару — перша торгова після перерви."""
+    return open_ms >= _BAR_OPEN_MS
 
 
 @pytest.mark.parametrize("bar, trading, expected_verdict, expected_marker", [
@@ -29,20 +47,21 @@ REGULAR = _bar(5.0, 6.0, 4.0, 5.5, 100.0)
     (REGULAR, False, VERDICT_PAUSE_NONFLAT_ANOMALY, "calendar_pause_nonflat_anomaly"),
 ])
 def test_bars_that_reach_ssot_carry_the_session_marker(bar, trading, expected_verdict, expected_marker):
-    out, verdict = classify_m1_for_ssot(bar, trading, flat_max_volume=4)
+    calendar = _trading_always if trading else _pause_near_edge
+    out, verdict = classify_m1_by_calendar(bar, calendar, 4, DEFAULT_PAUSE_POLICY)
     assert verdict == expected_verdict
     assert out is not None and (out.o, out.h, out.low, out.c, out.v) == (bar.o, bar.h, bar.low, bar.c, bar.v)
     assert out.extensions == ({} if expected_marker is None else {expected_marker: True})
 
 
 def test_flat_bar_outside_session_never_reaches_ssot():
-    assert classify_m1_for_ssot(FLAT, trading=False, flat_max_volume=4) == (None, VERDICT_PAUSE_FLAT_DROPPED)
+    assert classify_m1_by_calendar(FLAT, _pause_near_edge, 4, DEFAULT_PAUSE_POLICY) == (None, VERDICT_PAUSE_FLAT_DROPPED)
 
 
 def test_flat_with_volume_above_threshold_is_a_regular_bar():
     heavy_flat = _bar(5.0, 5.0, 5.0, 5.0, 5.0)
     assert not is_flat_m1(heavy_flat, 4)
-    assert classify_m1_for_ssot(heavy_flat, trading=False, flat_max_volume=4)[1] == VERDICT_PAUSE_NONFLAT_ANOMALY
+    assert classify_m1_by_calendar(heavy_flat, _pause_near_edge, 4, DEFAULT_PAUSE_POLICY)[1] == VERDICT_PAUSE_NONFLAT_ANOMALY
 
 
 class _RecordingUds:
@@ -94,9 +113,9 @@ def test_live_poller_pause_noise_margin_comes_from_constructor():
                     o=5.0, h=6.0, low=4.0, c=5.5, v=100.0, complete=True, src="history")
     narrow, wide = _RecordingUds(), _RecordingUds()
     assert M1SymbolPoller(symbol="SYM", provider=object(), uds=narrow, calendar=_us_cfd_calendar(),
-                          pause_noise_margin_min=60)._ingest_bar(bar) is False  # noqa: SLF001
+                          pause_policy=PausePolicy(noise_margin_min=60))._ingest_bar(bar) is False  # noqa: SLF001
     assert M1SymbolPoller(symbol="SYM", provider=object(), uds=wide, calendar=_us_cfd_calendar(),
-                          pause_noise_margin_min=1439)._ingest_bar(bar) is True  # noqa: SLF001
+                          pause_policy=PausePolicy(noise_margin_min=1439))._ingest_bar(bar) is True  # noqa: SLF001
     assert narrow.committed == [] and wide.committed[0].extensions == {"calendar_pause_nonflat_anomaly": True}
 
 
@@ -150,14 +169,14 @@ def test_repair_filter_drops_deep_pause_bar_as_noise_and_keeps_edge_anomaly():
     saturday = _m1_at(SATURDAY_0743, 63.01, 63.02, 63.01, 63.02, 5.0)
     edge = _m1_at(_utc_ms(2026, 9, 16, 21, 0), 5.0, 5.1, 5.0, 5.1, 3.0)
     kept, verdicts = rmg._filter_fetched_bars([saturday, edge], _us_cfd_calendar(), 4, None, 8_000,  # noqa: SLF001
-                                              pause_noise_margin_min=60)
+                                              pause_policy=DEFAULT_PAUSE_POLICY)
     assert [b.open_time_ms for b in kept] == [edge.open_time_ms]
     assert verdicts == {VERDICT_PAUSE_NOISE_DROPPED: 1, VERDICT_PAUSE_NONFLAT_ANOMALY: 1}
 
 
 def test_existing_extensions_are_kept_and_input_is_not_mutated():
     bar = _bar(5.0, 5.0, 5.0, 5.0, 1.0, extensions={"source_note": "x"})
-    out, _ = classify_m1_for_ssot(bar, trading=True, flat_max_volume=4)
+    out, _ = classify_m1_by_calendar(bar, _trading_always, 4, DEFAULT_PAUSE_POLICY)
     assert out.extensions == {"source_note": "x", "trading_flat": True}
     assert bar.extensions == {"source_note": "x"}
 
@@ -169,19 +188,19 @@ def test_flat_bar_in_the_reopen_minute_is_broker_placeholder_and_not_written():
     тож правило вузьке — під нього підпадає лише заглушка.
     """
     from runtime.ingest.m1_session_filter import VERDICT_REOPEN_FLAT_DROPPED
-    out, verdict = classify_m1_for_ssot(FLAT, trading=True, flat_max_volume=4, session_open_minute=True)
+    out, verdict = classify_m1_by_calendar(FLAT, _session_opens_at_bar, 4, DEFAULT_PAUSE_POLICY)
     assert (out, verdict) == (None, VERDICT_REOPEN_FLAT_DROPPED)
 
 
 def test_normal_reopen_bar_stays():
     """Контроль: справжній бар хвилини перевідкриття (обсяг і діапазон є) пишеться як звичайний."""
-    out, verdict = classify_m1_for_ssot(REGULAR, trading=True, flat_max_volume=4, session_open_minute=True)
+    out, verdict = classify_m1_by_calendar(REGULAR, _session_opens_at_bar, 4, DEFAULT_PAUSE_POLICY)
     assert (out, verdict) == (REGULAR, VERDICT_TRADING)
 
 
 def test_flat_minute_inside_session_still_stays_with_marker():
     """Контроль межі: однотікова хвилина ВСЕРЕДИНІ сесії — справжня, лишається з маркером trading_flat."""
-    out, verdict = classify_m1_for_ssot(FLAT, trading=True, flat_max_volume=4, session_open_minute=False)
+    out, verdict = classify_m1_by_calendar(FLAT, _trading_always, 4, DEFAULT_PAUSE_POLICY)
     assert verdict == VERDICT_TRADING_FLAT and out.extensions == {"trading_flat": True}
 
 
@@ -229,8 +248,7 @@ SATURDAY_0743 = _utc_ms(2026, 9, 19, 7, 43)  # XAG Сб 19.09 07:43 — субо
 def test_classify_by_calendar_bar_deep_in_weekend_pause_is_dropped_as_noise(o, h, low, c, v):
     from runtime.ingest.m1_session_filter import VERDICT_PAUSE_NOISE_DROPPED, classify_m1_by_calendar
     bar = _m1_at(SATURDAY_0743, o, h, low, c, v)
-    out = classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, flat_max_volume=4,
-                                  pause_noise_margin_min=60)
+    out = classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4, DEFAULT_PAUSE_POLICY)
     assert out == (None, VERDICT_PAUSE_NOISE_DROPPED)
 
 
@@ -239,9 +257,9 @@ def test_classify_by_calendar_pause_bar_near_session_edge_keeps_anomaly_and_flat
     from runtime.ingest.m1_session_filter import classify_m1_by_calendar
     is_trading = _us_cfd_calendar().is_trading_minute
     first_break_minute = _utc_ms(2026, 9, 16, 21, 0)
-    nonflat, verdict = classify_m1_by_calendar(_m1_at(first_break_minute, 5.0, 5.1, 5.0, 5.1, 3.0), is_trading, 4, 60)
+    nonflat, verdict = classify_m1_by_calendar(_m1_at(first_break_minute, 5.0, 5.1, 5.0, 5.1, 3.0), is_trading, 4, DEFAULT_PAUSE_POLICY)
     assert verdict == VERDICT_PAUSE_NONFLAT_ANOMALY and nonflat.extensions == {"calendar_pause_nonflat_anomaly": True}
-    flat = classify_m1_by_calendar(_m1_at(first_break_minute, 5.0, 5.0, 5.0, 5.0, 1.0), is_trading, 4, 60)
+    flat = classify_m1_by_calendar(_m1_at(first_break_minute, 5.0, 5.0, 5.0, 5.0, 1.0), is_trading, 4, DEFAULT_PAUSE_POLICY)
     assert flat == (None, VERDICT_PAUSE_FLAT_DROPPED)
 
 
@@ -253,21 +271,21 @@ def test_classify_by_calendar_margin_boundary_is_inclusive(minute, expected_verd
     """Межа DST-зсуву (60 хв) належить краю сесії: зимова справжня хвилина 21:44 під літнім календарем — anomaly."""
     from runtime.ingest.m1_session_filter import classify_m1_by_calendar
     bar = _m1_at(_utc_ms(2026, 9, 18, 21, minute), 5.0, 5.1, 5.0, 5.1, 120.0)
-    assert classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4, 60)[1] == expected_verdict
+    assert classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4, DEFAULT_PAUSE_POLICY)[1] == expected_verdict
 
 
 def test_classify_by_calendar_flat_reopen_minute_still_dropped_as_placeholder():
     """Спільний хелпер несе й правило перевідкриття: плаский бар 22:00 після перерви — заглушка брокера."""
     from runtime.ingest.m1_session_filter import VERDICT_REOPEN_FLAT_DROPPED, classify_m1_by_calendar
     bar = _m1_at(_utc_ms(2026, 9, 16, 22, 0), 5.0, 5.0, 5.0, 5.0, 3.0)
-    assert classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4, 60) == (
+    assert classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4, DEFAULT_PAUSE_POLICY) == (
         None, VERDICT_REOPEN_FLAT_DROPPED)
 
 
 def test_classify_by_calendar_disabled_calendar_never_drops_as_noise():
     from runtime.ingest.m1_session_filter import classify_m1_by_calendar
     bar = _m1_at(SATURDAY_0743, 5.0, 5.1, 5.0, 5.1, 3.0)
-    assert classify_m1_by_calendar(bar, lambda _ms: True, 4, 60) == (bar, VERDICT_TRADING)
+    assert classify_m1_by_calendar(bar, lambda _ms: True, 4, DEFAULT_PAUSE_POLICY) == (bar, VERDICT_TRADING)
 
 
 @pytest.mark.parametrize("open_ms, expected", [
@@ -296,23 +314,61 @@ def test_minutes_to_session_edge_search_is_bounded_by_the_margin():
     assert max(abs(ms - SATURDAY_0743) for ms in calls) == 60 * 60_000
 
 
-@pytest.mark.parametrize("cfg, expected", [
-    ({}, 60),
-    ({"m1_session_filter": {"pause_noise_margin_min": 90}}, 90),
-    ({"m1_session_filter": {"pause_noise_margin_min": 0}}, 1),
-    ({"m1_session_filter": {"pause_noise_margin_min": "хибне"}}, 60),
-    ({"m1_session_filter": "хибне"}, 60),
+@pytest.mark.parametrize("cfg, expected_margin, expected_log", [
+    ({"m1_session_filter": {"pause_noise_margin_min": 90}}, 90, None),
+    ({}, 60, "M1_SESSION_FILTER_CONFIG_MISSING raw=None"),
+    ({"m1_session_filter": {}}, 60, "M1_SESSION_FILTER_CONFIG_DEFAULT key=pause_noise_margin_min default=60"),
+    ({"m1_session_filter": {"pause_noise_margin_min": 0}}, 1,
+     "M1_SESSION_FILTER_CONFIG_CLAMPED key=pause_noise_margin_min raw=0 value=1"),
+    ({"m1_session_filter": {"pause_noise_margin_min": "хибне"}}, 60,
+     "M1_SESSION_FILTER_CONFIG_INVALID key=pause_noise_margin_min raw='хибне' default=60"),
+    ({"m1_session_filter": "хибне"}, 60, "M1_SESSION_FILTER_CONFIG_MISSING raw='хибне'"),
 ])
-def test_resolve_pause_noise_margin_min_normalizes_config(cfg, expected):
-    from runtime.ingest.m1_session_filter import resolve_pause_noise_margin_min
-    assert resolve_pause_noise_margin_min(cfg) == expected
+def test_resolve_pause_policy_is_loud_on_fallback_and_clamp(caplog, cfg, expected_margin, expected_log):
+    """I5: дефолт або clamp замість значення з config змінюють те, що пишеться в SSOT, — тому WARNING із сирим значенням."""
+    import logging
+    from runtime.ingest.m1_session_filter import resolve_pause_policy
+    with caplog.at_level(logging.WARNING):
+        assert resolve_pause_policy(cfg).noise_margin_min == expected_margin
+    if expected_log is None:
+        assert "M1_SESSION_FILTER_CONFIG" not in caplog.text
+    else:
+        assert expected_log in caplog.text
 
 
-def test_resolve_pause_noise_margin_min_repo_config_carries_the_key():
-    """SSOT запасу — config.json, а не дефолт у коді: ключ має бути в репо-конфігу."""
+def test_resolve_pause_policy_repo_config_carries_every_key_without_fallback(caplog):
+    """SSOT правил паузи — config.json, а не дефолти в коді: репо-конфіг резолвиться без жодного WARNING."""
     import json
+    import logging
     from pathlib import Path
-    from runtime.ingest.m1_session_filter import resolve_pause_noise_margin_min
+    from runtime.ingest.m1_session_filter import resolve_pause_policy
     cfg = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text(encoding="utf-8"))
-    assert "pause_noise_margin_min" in cfg["m1_session_filter"]
-    assert resolve_pause_noise_margin_min(cfg) == cfg["m1_session_filter"]["pause_noise_margin_min"]
+    with caplog.at_level(logging.WARNING):
+        policy = resolve_pause_policy(cfg)
+    assert "M1_SESSION_FILTER_CONFIG" not in caplog.text
+    assert policy.noise_margin_min == cfg["m1_session_filter"]["pause_noise_margin_min"]
+
+
+# --- Рішення приватне, рейки обов'язкові (ADR-0099 §3.1, D15.2) -------------------------------------------------
+
+def test_writers_have_a_single_public_entry_point_to_the_rule():
+    """Колишня публічна `classify_m1_for_ssot` з дефолтними рейками давала записувачу тихо лишитися без правила
+    глибини чи перевідкриття. Тепер публічна лише `classify_m1_by_calendar`, яка бере факти з календаря сама."""
+    import runtime.ingest.m1_session_filter as session_filter
+    assert not hasattr(session_filter, "classify_m1_for_ssot")
+
+
+def test_decision_rails_are_keyword_only_and_required():
+    from runtime.ingest.m1_session_filter import _decide_verdict  # перевіряємо саме контракт рейок
+    with pytest.raises(TypeError):
+        _decide_verdict(REGULAR, flat_max_volume=4, trading=False, session_open_minute=False)  # без deep_in_pause
+    with pytest.raises(TypeError):
+        _decide_verdict(REGULAR, 4, False, False, False)  # позиційно — заборонено
+
+
+def test_calendar_suspected_policy_writes_deep_pause_bar_as_anomaly():
+    """Політика «календар під підозрою» (засів з --allow-off-calendar) не відкидає неплаский бар за положенням."""
+    bar = _m1_at(SATURDAY_0743, 5.0, 6.0, 4.0, 5.5, 300.0)
+    out, verdict = classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4,
+                                           DEFAULT_PAUSE_POLICY.with_calendar_suspected())
+    assert verdict == VERDICT_PAUSE_NONFLAT_ANOMALY and out.extensions == {"calendar_pause_nonflat_anomaly": True}

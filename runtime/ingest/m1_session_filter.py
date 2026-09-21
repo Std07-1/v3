@@ -14,11 +14,15 @@ TradingView таких барів не показує, а в SSOT вони ла�
   12 хвилин уже не повертав цієї хвилини взагалі). Вимір на проді: 110 барів хвилини перевідкриття NAS100 мають
   обсяг 229…5811 (медіана 1482) і ненульовий діапазон — заглушка відрізняється на порядки, тож правило вузьке.
 
+Обґрунтування і виміри — ADR-0099. Публічна точка правила одна — `classify_m1_by_calendar`; параметри паузи — один
+`resolve_pause_policy` з config.
+
 Модуль чистий і сумісний з Python 3.7: ним користуються і живий M1-полер, і `tools/fetch_tf_backfill` у .venv37.
 """
 from __future__ import annotations
 
 import dataclasses
+import logging
 from typing import Callable, List, Optional, Tuple
 
 from core.model.bars import CandleBar
@@ -39,6 +43,24 @@ _M1_MS = 60_000
 # межі сесії при переході DST: хвилина паузи, до якої торгова ближче за годину, може бути справжньою торговою
 # хвилиною під хибним сезоном календаря, тому там лишається маркер anomaly, а не відкидання.
 PAUSE_NOISE_MARGIN_MIN_DEFAULT = 60
+
+
+@dataclasses.dataclass(frozen=True)
+class PausePolicy:
+    """Правила M1→SSOT для хвилин паузи (ADR-0099), зведені з config `m1_session_filter` одним `resolve_pause_policy`.
+
+    None у правилі означає, що правило вимкнене. Так засів з `--allow-off-calendar` (календар під підозрою) пише хвилини
+    паузи з маркером anomaly, а не відкидає їх за положенням у календарі.
+    """
+
+    noise_margin_min: Optional[int]
+
+    def with_calendar_suspected(self) -> "PausePolicy":
+        """Копія без правил, що відкидають неплаский бар за положенням у календарі (ADR-0099 §3.5)."""
+        return dataclasses.replace(self, noise_margin_min=None)
+
+
+DEFAULT_PAUSE_POLICY = PausePolicy(noise_margin_min=PAUSE_NOISE_MARGIN_MIN_DEFAULT)
 
 
 # Запас, який дає брокеру M1-полер, перш ніж вважати хвилину закритою: у цьому вікні FXCM ще доправляє щойно
@@ -73,20 +95,44 @@ def resolve_flat_max_volume(cfg: dict) -> int:
         return FLAT_BAR_MAX_VOLUME_DEFAULT
 
 
-def resolve_pause_noise_margin_min(cfg: dict) -> int:
-    """Запас від краю сесії з config (SSOT `m1_session_filter.pause_noise_margin_min`), спільний для всіх записувачів.
+def resolve_pause_policy(cfg: dict) -> PausePolicy:
+    """Політика паузи з config (SSOT `m1_session_filter`), одна для всіх записувачів M1.
 
-    Нижня межа 1: кожна хвилина паузи лежить щонайменше за 1 хв від торгової, тож запас 0 тихо вимкнув би рейку
-    anomaly біля країв (саме вона ловить DST і хибний календар).
+    Запас глибини — щонайменше 1: кожна хвилина паузи лежить щонайменше за 1 хв від торгової, тож запас 0 тихо вимкнув
+    би рейку anomaly біля країв (саме вона ловить DST і хибний календар).
     """
     section = cfg.get("m1_session_filter")
-    raw = section.get("pause_noise_margin_min") if isinstance(section, dict) else None
+    if not isinstance(section, dict):
+        logging.warning(
+            "M1_SESSION_FILTER_CONFIG_MISSING raw=%r — секції m1_session_filter у config немає, правила паузи з дефолтів",
+            section,
+        )
+        section = {}
+    return PausePolicy(
+        noise_margin_min=_resolve_config_int(section, "pause_noise_margin_min", PAUSE_NOISE_MARGIN_MIN_DEFAULT, 1),
+    )
+
+
+def _resolve_config_int(section: dict, key: str, default: int, minimum: int) -> int:
+    """Ціле з секції `m1_session_filter`. Відсутнє або бите — дефолт, менше за minimum — clamp; обидва випадки дають
+    WARNING із сирим значенням (I5), бо тихий дефолт тут змінює те, що пишеться в SSOT."""
+    raw = section.get(key)
     if raw is None:
-        return PAUSE_NOISE_MARGIN_MIN_DEFAULT
+        logging.warning("M1_SESSION_FILTER_CONFIG_DEFAULT key=%s default=%d — ключа в config немає", key, default)
+        return default
     try:
-        return max(1, int(raw))
+        value = int(raw)
     except (TypeError, ValueError):
-        return PAUSE_NOISE_MARGIN_MIN_DEFAULT
+        logging.warning(
+            "M1_SESSION_FILTER_CONFIG_INVALID key=%s raw=%r default=%d — не ціле число, взято дефолт", key, raw, default,
+        )
+        return default
+    if value < minimum:
+        logging.warning(
+            "M1_SESSION_FILTER_CONFIG_CLAMPED key=%s raw=%r value=%d — менше за мінімум, взято мінімум", key, raw, minimum,
+        )
+        return minimum
+    return value
 
 
 def is_flat_m1(bar: CandleBar, flat_max_volume: int) -> bool:
@@ -111,25 +157,35 @@ def minutes_to_session_edge(open_ms: int, is_trading_fn: Callable[[int], bool], 
 
 
 def classify_m1_by_calendar(bar: CandleBar, is_trading_fn: Callable[[int], bool], flat_max_volume: int,
-                            pause_noise_margin_min: int) -> Tuple[Optional[CandleBar], str]:
-    """Правило M1→SSOT для записувача: факти про хвилину — з календаря, рішення — `classify_m1_for_ssot`.
+                            pause_policy: PausePolicy) -> Tuple[Optional[CandleBar], str]:
+    """Правило M1→SSOT для записувача (ADR-0099 §3.1): факти про хвилину — з календаря, рішення — `_decide_verdict`.
 
-    Одна точка для полера, засіву й ремонту дірок: інакше кожен із трьох записувачів рахував би «перевідкриття» і
-    «глибоко в паузі» по-своєму, і на тому самому барі вони розійшлися б.
+    Єдина публічна точка правила для полера, засіву й ремонту дірок. Інакше кожен із трьох записувачів рахував би
+    «перевідкриття» і «глибоко в паузі» по-своєму, і на тому самому барі вони розійшлися б.
+    Повертає (бар для запису або None, вердикт); вхідний бар не змінюється.
     """
     open_ms = bar.open_time_ms
     trading = is_trading_fn(open_ms)
-    return classify_m1_for_ssot(
-        bar, trading, flat_max_volume,
+    return _decide_verdict(
+        bar,
+        flat_max_volume=flat_max_volume,
+        trading=trading,
         session_open_minute=trading and is_session_open_minute(open_ms, is_trading_fn),
-        deep_in_pause=not trading and minutes_to_session_edge(open_ms, is_trading_fn, pause_noise_margin_min) is None,
+        deep_in_pause=not trading and _is_deep_in_pause(open_ms, is_trading_fn, pause_policy.noise_margin_min),
     )
 
 
-def classify_m1_for_ssot(bar: CandleBar, trading: bool, flat_max_volume: int,
-                         session_open_minute: bool = False,
-                         deep_in_pause: bool = False) -> Tuple[Optional[CandleBar], str]:
-    """Повертає (бар для запису або None, вердикт). Вхідний бар не змінюється."""
+def _is_deep_in_pause(open_ms: int, is_trading_fn: Callable[[int], bool], noise_margin_min: Optional[int]) -> bool:
+    """Хвилина паузи далі за запас від найближчої торгової. None — правило глибини вимкнене."""
+    if noise_margin_min is None:
+        return False
+    return minutes_to_session_edge(open_ms, is_trading_fn, noise_margin_min) is None
+
+
+def _decide_verdict(bar: CandleBar, *, flat_max_volume: int, trading: bool, session_open_minute: bool,
+                    deep_in_pause: bool) -> Tuple[Optional[CandleBar], str]:
+    """Таблиця ADR-0099 §3.1. Функція приватна, а факти про хвилину — обов'язкові keyword-only без дефолтів: записувач
+    не може тихо лишитися без правила, забувши передати один із фактів (D15.2)."""
     flat = is_flat_m1(bar, flat_max_volume)
     if trading:
         if not flat:

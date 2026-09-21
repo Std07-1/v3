@@ -23,7 +23,7 @@ from env_profile import load_env_secrets
 from runtime.ingest.broker.binance.provider import BinanceHistoryProvider
 from runtime.ingest.derive_engine import DeriveEngine
 from runtime.ingest.market_calendar import MarketCalendar
-from runtime.ingest.m1_session_filter import resolve_pause_noise_margin_min
+from runtime.ingest.m1_session_filter import resolve_pause_policy
 from runtime.ingest.polling.m1_poller import (
     M1SymbolPoller,
     M1PollerRunner,
@@ -198,6 +198,8 @@ def build_binance_ingest_worker(
     cal_by_group = cfg.get("market_calendar_by_group", {})
     cal_sym_groups = cfg.get("market_calendar_symbol_groups", {})
 
+    # Правила паузи M1→SSOT (ADR-0099); crypto_24x7 паузи не має, але правило одне для всіх записувачів
+    pause_policy = resolve_pause_policy(cfg)
     pollers: list[M1SymbolPoller] = []
     for sym in symbols:
         group = cal_sym_groups.get(sym)
@@ -214,7 +216,7 @@ def build_binance_ingest_worker(
                 tail_fetch_n=tail_fetch_n,
                 m3_derive=True,
                 tail_catchup_max_bars=backfill_max_bars,
-                pause_noise_margin_min=resolve_pause_noise_margin_min(cfg),
+                pause_policy=pause_policy,
             )
         )
 

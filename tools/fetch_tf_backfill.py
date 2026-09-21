@@ -18,10 +18,11 @@ from runtime.ingest.m1_session_filter import (
     VERDICT_PAUSE_FLAT_DROPPED,
     VERDICT_PAUSE_NOISE_DROPPED,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
+    PausePolicy,
     classify_m1_by_calendar,
     resolve_close_safety_ms,
     resolve_flat_max_volume,
-    resolve_pause_noise_margin_min,
+    resolve_pause_policy,
     split_closed_bars,
 )
 from runtime.ingest.market_calendar import MarketCalendar
@@ -89,7 +90,7 @@ _OFF_CALENDAR_ALLOWANCE = 3
 
 
 def _filter_m1_by_session(
-    bars: List[CandleBar], calendar: MarketCalendar, flat_max_volume: int, pause_noise_margin_min: int
+    bars: List[CandleBar], calendar: MarketCalendar, flat_max_volume: int, pause_policy: PausePolicy
 ) -> Tuple[List[CandleBar], Counter, List[int]]:
     """Те саме правило SSOT, що в живому M1-полері (`m1_session_filter.classify_m1_by_calendar`): шум глибоко в паузі
     і пласкі бари поза сесією не пишуться, неплаский біля краю сесії — з маркером anomaly.
@@ -104,9 +105,7 @@ def _filter_m1_by_session(
     off_calendar: List[int] = []
     for bar in bars:
         trading = calendar.is_trading_minute(bar.open_time_ms)
-        classified, verdict = classify_m1_by_calendar(
-            bar, calendar.is_trading_minute, flat_max_volume, pause_noise_margin_min
-        )
+        classified, verdict = classify_m1_by_calendar(bar, calendar.is_trading_minute, flat_max_volume, pause_policy)
         verdicts[verdict] += 1
         if not trading:
             off_calendar.append(bar.open_time_ms)
@@ -208,7 +207,7 @@ def main() -> int:
         logging.error("BACKFILL_REFUSED symbols=%s — немає календаря сесії (market_calendar_symbol_groups)", ",".join(rejected))
         return 2
     flat_max_volume = resolve_flat_max_volume(cfg)
-    pause_noise_margin_min = resolve_pause_noise_margin_min(cfg)
+    pause_policy = resolve_pause_policy(cfg)
 
     if args.date_to:
         date_to = _parse_date_utc(args.date_to)
@@ -292,7 +291,7 @@ def main() -> int:
                     )
                 if args.tf == 60:
                     bars, verdicts, off_calendar = _filter_m1_by_session(
-                        bars, calendars[symbol], flat_max_volume, pause_noise_margin_min
+                        bars, calendars[symbol], flat_max_volume, pause_policy
                     )
                     total_verdicts.update(verdicts)
                     logging.log(
@@ -351,8 +350,8 @@ def main() -> int:
     logging.log(
         logging.WARNING if dropped or noise or anomalies else logging.INFO,
         "=== ПІДСУМОК: записано=%d пропущено(dedup)=%d відсіяно(пласкі поза сесією)=%d "
-        "відсіяно(шум глибоко в паузі, margin=%d хв)=%d аномалій(непласкі біля краю сесії)=%d помилок=%d ===",
-        total_written, total_skipped, dropped, pause_noise_margin_min, noise, anomalies, len(errors),
+        "відсіяно(шум глибоко в паузі, margin=%s хв)=%d аномалій(непласкі біля краю сесії)=%d помилок=%d ===",
+        total_written, total_skipped, dropped, pause_policy.noise_margin_min, noise, anomalies, len(errors),
     )
     return 1 if errors else 0
 

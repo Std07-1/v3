@@ -27,15 +27,16 @@ from env_profile import load_env_secrets
 from runtime.ingest.derive_engine import DeriveEngine
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.m1_session_filter import (
+    DEFAULT_PAUSE_POLICY,
     FLAT_BAR_MAX_VOLUME_DEFAULT,
-    PAUSE_NOISE_MARGIN_MIN_DEFAULT,
+    PausePolicy,
     VERDICT_PAUSE_NOISE_DROPPED,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
     VERDICT_REOPEN_FLAT_DROPPED,
     classify_m1_by_calendar,
     is_flat_m1,
     resolve_flat_max_volume,
-    resolve_pause_noise_margin_min,
+    resolve_pause_policy,
 )
 from runtime.ingest.m1_session_open import (
     BAR_CORRECT_AS_IS,
@@ -171,13 +172,13 @@ class M1SymbolPoller:
         live_recover_timeout_s: int = 600,
         stale_s: int = 720,
         session_open_policy: SessionOpenRebuildPolicy = DISABLED_POLICY,
-        pause_noise_margin_min: int = PAUSE_NOISE_MARGIN_MIN_DEFAULT,
+        pause_policy: PausePolicy = DEFAULT_PAUSE_POLICY,
     ) -> None:
         self._symbol = symbol
         self._provider = provider
         self._uds = uds
-        # SSOT: config.json → m1_session_filter.pause_noise_margin_min (resolve_pause_noise_margin_min у будівниках)
-        self._pause_noise_margin_min = max(1, int(pause_noise_margin_min))
+        # SSOT: config.json → m1_session_filter (resolve_pause_policy у будівниках, ADR-0099)
+        self._pause_policy = pause_policy
         self._calendar = calendar
         self._tail_n = max(2, tail_fetch_n)
         self._m3_derive = m3_derive
@@ -298,7 +299,7 @@ class M1SymbolPoller:
 
         # Правило SSOT за календарем — спільне із засівом і ремонтом дірок (runtime/ingest/m1_session_filter.py)
         classified, verdict = classify_m1_by_calendar(
-            bar, self._is_market_open, _flat_bar_max_volume, self._pause_noise_margin_min
+            bar, self._is_market_open, _flat_bar_max_volume, self._pause_policy
         )
         if classified is None:
             if verdict == VERDICT_REOPEN_FLAT_DROPPED:
@@ -312,10 +313,10 @@ class M1SymbolPoller:
                 # великим обсягом, і це має бути видно, а не тихо зникнути.
                 self._pause_noise_dropped += 1
                 logging.warning(
-                    "M1_PAUSE_NOISE_DROPPED symbol=%s open_ms=%s o=%.5f h=%.5f l=%.5f c=%.5f v=%.0f margin_min=%d "
+                    "M1_PAUSE_NOISE_DROPPED symbol=%s open_ms=%s o=%.5f h=%.5f l=%.5f c=%.5f v=%.0f margin_min=%s "
                     "dropped_total=%d — хвилина глибоко в паузі сесії, шум брокера у SSOT не йде",
                     self._symbol, bar.open_time_ms, bar.o, bar.h, bar.low, bar.c, bar.v,
-                    self._pause_noise_margin_min, self._pause_noise_dropped,
+                    self._pause_policy.noise_margin_min, self._pause_noise_dropped,
                 )
             return False
         bar = classified
@@ -1450,6 +1451,8 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
             "M1_POLLER_FLAT_BAR_MAX_VOLUME=%d (default, config key missing)",
             _flat_bar_max_volume,
         )
+    # Правила паузи M1→SSOT (ADR-0099) — один resolve на всі символи
+    pause_policy = resolve_pause_policy(cfg)
 
     # Ініціалізуємо FXCM provider
     from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
@@ -1514,7 +1517,7 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
                 live_recover_timeout_s=lr_timeout,
                 stale_s=stale_s,
                 session_open_policy=session_open_policy,
-                pause_noise_margin_min=resolve_pause_noise_margin_min(cfg),
+                pause_policy=pause_policy,
             )
         )
 

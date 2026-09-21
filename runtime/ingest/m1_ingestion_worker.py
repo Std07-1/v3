@@ -22,7 +22,7 @@ from core.model.bars import CandleBar
 from env_profile import load_env_secrets
 from runtime.ingest.derive_engine import DeriveEngine
 from runtime.ingest.market_calendar import MarketCalendar
-from runtime.ingest.m1_session_filter import resolve_pause_noise_margin_min
+from runtime.ingest.m1_session_filter import resolve_pause_policy
 from runtime.ingest.polling.m1_poller import (
     M1SymbolPoller,
     M1PollerRunner,
@@ -278,6 +278,8 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
     flat_vol_raw = cfg.get("flat_bar_max_volume")
     if flat_vol_raw is not None:
         set_flat_bar_max_volume(int(flat_vol_raw))
+    # Правила паузи M1→SSOT (ADR-0099) — один resolve на всі символи
+    pause_policy = resolve_pause_policy(cfg)
 
     # UDS
     data_root = str(cfg.get("data_root", "./data_v3"))
@@ -321,7 +323,7 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
                 live_recover_timeout_s=lr_timeout,
                 stale_s=stale_s,
                 session_open_policy=session_open_policy,
-                pause_noise_margin_min=resolve_pause_noise_margin_min(cfg),
+                pause_policy=pause_policy,
             )
         )
 
