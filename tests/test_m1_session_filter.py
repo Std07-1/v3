@@ -362,11 +362,15 @@ def test_writers_have_a_single_public_entry_point_to_the_rule():
 
 
 def test_decision_rails_are_keyword_only_and_required():
+    """Контракт рейок через сигнатуру, а не через TypeError від випадкової кількості аргументів (рев'ю D-05): кожен
+    факт про хвилину — KEYWORD_ONLY без дефолту; позиційний лише сам бар."""
+    import inspect
     from runtime.ingest.m1_session_filter import _decide_verdict  # перевіряємо саме контракт рейок
-    with pytest.raises(TypeError):
-        _decide_verdict(REGULAR, flat_max_volume=4, trading=False, session_open_minute=False)  # без deep_in_pause
-    with pytest.raises(TypeError):
-        _decide_verdict(REGULAR, 4, False, False, False)  # позиційно — заборонено
+    params = list(inspect.signature(_decide_verdict).parameters.values())
+    assert [p.name for p in params if p.kind is not inspect.Parameter.KEYWORD_ONLY] == ["bar"]
+    rails = [p for p in params if p.kind is inspect.Parameter.KEYWORD_ONLY]
+    assert {p.name for p in rails} >= {"flat_max_volume", "trading", "session_open_minute", "deep_in_pause"}
+    assert all(p.default is inspect.Parameter.empty for p in rails)
 
 
 def test_calendar_suspected_policy_writes_deep_pause_bar_as_anomaly():
