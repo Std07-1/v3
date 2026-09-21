@@ -22,6 +22,7 @@ from runtime.ingest import broker_sidecar
 from runtime.ingest import m1_session_open as so
 from runtime.ingest.broker.fxcm import provider as provider_mod
 from runtime.ingest.m1_ingestion_worker import BrokerRedisProxy
+from runtime.ingest.polling import m1_poller as poller_mod
 
 FIRST_TICK = object()
 EUSTX50_OPEN_MS = int(dt.datetime(2026, 9, 21, 6, 1, tzinfo=dt.timezone.utc).timestamp() * 1000)
@@ -390,3 +391,141 @@ def test_policy_comes_from_config_and_absent_section_means_disabled():
 def test_broken_policy_config_is_refused_loudly(section):
     with pytest.raises((ValueError, KeyError)):
         so.resolve_session_open_rebuild_policy({"m1_poller": {"session_open_rebuild": section}})
+
+
+# ---------------------------------------------------------------------------
+# P4 — полер: перебудова ДО коміту і до правила M1→SSOT
+# ---------------------------------------------------------------------------
+POLICY = so.SessionOpenRebuildPolicy(enabled=True, gap_ms=15 * 60_000, max_volume_deficit=5,
+                                     price_step_by_symbol={"EUSTX50": 0.01, "XAU/USD": 0.01})
+FRIDAY_LAST_OPEN_MS = _ms("2026-09-18T19:59:00")
+
+
+class _RecordingUds:
+    def __init__(self):
+        self.committed = []
+
+    def commit_final_bar(self, bar):
+        self.committed.append(bar)
+        return types.SimpleNamespace(ok=True, reason="ok")
+
+
+class _DirectTicks:
+    """Провайдер полера з t1: віддає тіки, None (таймаут/відмова) або кидає виняток."""
+
+    def __init__(self, ticks=None, raises=None):
+        self.ticks, self.raises, self.calls = ticks, raises, []
+
+    def fetch_t1_bid_ticks(self, symbol, from_ms, to_ms):
+        self.calls.append((symbol, from_ms, to_ms))
+        if self.raises is not None:
+            raise self.raises
+        return self.ticks
+
+
+def _poller(provider, policy=POLICY, watermark_ms=FRIDAY_LAST_OPEN_MS, calendar=None, symbol="EUSTX50"):
+    poller_mod.set_flat_bar_max_volume(4)
+    uds = _RecordingUds()
+    poller = poller_mod.M1SymbolPoller(symbol=symbol, provider=provider, uds=uds, calendar=calendar,
+                                       session_open_policy=policy)
+    poller._watermark_ms = watermark_ms  # noqa: SLF001
+    return poller, uds
+
+
+def test_poller_commits_the_rebuilt_first_bar_after_the_weekend(caplog):
+    provider = _DirectTicks(ticks=_spread(EUSTX50_OPEN_MS, EUSTX50_BIDS))
+    poller, uds = _poller(provider)
+    with caplog.at_level(logging.INFO):
+        assert poller._ingest_bar(EUSTX50_BAKED) is True  # noqa: SLF001
+    committed, = uds.committed
+    assert (committed.o, committed.h, committed.low, committed.c, committed.v) == (6281.63, 6284.20, 6280.90, 6283.10, 10)
+    assert committed.extensions == {"session_open_rebuilt": True, "open_before": 6239.79}
+    assert provider.calls == [("EUSTX50", EUSTX50_OPEN_MS, EUSTX50_OPEN_MS + 60_000)]
+    assert "FXCM_SESSION_OPEN_REBUILT symbol=EUSTX50" in caplog.text
+
+
+@pytest.mark.parametrize("provider, reason", [
+    (_DirectTicks(ticks=None), "reason=t1_unavailable"),                       # проксі: таймаут/помилка sidecar
+    (_DirectTicks(raises=ConnectionError("redis down")), "reason=t1_error: redis down"),
+    (_DirectTicks(ticks=[]), "reason=no_ticks_in_minute"),                     # тікова історія ще порожня
+    (object(), "reason=provider_without_t1"),
+])
+def test_unproven_open_commits_the_broker_bar_loudly_as_provisional(provider, reason, caplog):
+    poller, uds = _poller(provider)
+    with caplog.at_level(logging.WARNING):
+        assert poller._ingest_bar(EUSTX50_BAKED) is True  # noqa: SLF001
+    committed, = uds.committed
+    assert (committed.o, committed.low, committed.v) == (6239.79, 6239.79, 10)  # бар брокера без змін
+    assert committed.extensions == {"open_provisional": True}
+    assert "FXCM_SESSION_OPEN_BAKED symbol=EUSTX50" in caplog.text and reason in caplog.text
+
+
+def test_symbol_without_price_step_is_provisional_not_guessed(caplog):
+    bar = dataclasses.replace(EUSTX50_BAKED, symbol="US30")
+    provider = _DirectTicks(ticks=_spread(EUSTX50_OPEN_MS, EUSTX50_BIDS))
+    poller, uds = _poller(provider, symbol="US30")
+    with caplog.at_level(logging.WARNING):
+        poller._ingest_bar(bar)  # noqa: SLF001
+    assert uds.committed[0].extensions == {"open_provisional": True}
+    assert provider.calls == [] and "reason=price_step_missing" in caplog.text
+
+
+def test_mid_session_bar_never_asks_for_ticks():
+    """Звичайний цикл не гальмує: сусідня хвилина в торговий час — без t1 і без маркерів."""
+    provider = _DirectTicks(ticks=[])
+    noon = _ms("2026-09-21T12:01:00")
+    poller, uds = _poller(provider, watermark_ms=noon - 60_000, calendar=_weekday_break_calendar())
+    regular = _m1("EUSTX50", noon, 6281.0, 6282.0, 6280.0, 6281.5, 50)
+    assert poller._ingest_bar(regular) is True  # noqa: SLF001
+    assert provider.calls == [] and uds.committed == [regular]
+
+
+def test_bar_not_newer_than_watermark_never_asks_for_ticks():
+    """Calendar-відкриття, яке вже закомічено (повтор від брокера): UDS його відкине, t1 — зайвий запит."""
+    reopen = _ms("2026-09-21T22:00:00")
+    provider = _DirectTicks(ticks=[])
+    poller, _uds = _poller(provider, watermark_ms=reopen, calendar=_weekday_break_calendar())
+    poller._ingest_bar(_m1("EUSTX50", reopen, 6281.0, 6282.0, 6280.0, 6281.5, 50))  # noqa: SLF001
+    assert provider.calls == []
+
+
+def test_disabled_policy_keeps_the_old_behaviour_exactly():
+    provider = _DirectTicks(ticks=_spread(EUSTX50_OPEN_MS, EUSTX50_BIDS))
+    poller, uds = _poller(provider, policy=so.DISABLED_POLICY)
+    poller._ingest_bar(EUSTX50_BAKED)  # noqa: SLF001
+    assert provider.calls == [] and uds.committed == [EUSTX50_BAKED]
+
+
+def test_ssot_rule_sees_the_rebuilt_bar_not_the_baked_one():
+    """Бар брокера не пласкій (запечений open), а справжня хвилина — два тіки за однією ціною: правило M1→SSOT
+    має бачити саме перебудований бар і позначити його trading_flat."""
+    bar = _m1("EUSTX50", EUSTX50_OPEN_MS, o=6239.79, h=6250.0, low=6239.79, c=6250.0, v=2)
+    ticks = [(EUSTX50_OPEN_MS + 5_000, 6250.0), (EUSTX50_OPEN_MS + 40_000, 6250.0)]
+    poller, uds = _poller(_DirectTicks(ticks=ticks))
+    assert poller._ingest_bar(bar) is True  # noqa: SLF001
+    committed, = uds.committed
+    assert (committed.o, committed.h, committed.low, committed.c) == (6250.0, 6250.0, 6250.0, 6250.0)
+    assert committed.extensions == {"session_open_rebuilt": True, "open_before": 6239.79, "trading_flat": True}
+
+
+def test_end_to_end_poller_through_proxy_and_real_sidecar_handler():
+    """Повний конвеєр одного процесу з іншим: полер → BrokerRedisProxy → Redis → broker_sidecar._handle_command
+    → провайдер t1 → реплай → перебудова → коміт."""
+    sidecar_provider = _TickProvider(ticks=_spread(EUSTX50_OPEN_MS, EUSTX50_BIDS))
+    proxy = BrokerRedisProxy(_LoopbackRedis(sidecar_provider), NS)
+    poller, uds = _poller(proxy)
+    assert poller._ingest_bar(EUSTX50_BAKED) is True  # noqa: SLF001
+    assert uds.committed[0].o == 6281.63
+    assert sidecar_provider.calls == [("EUSTX50", EUSTX50_OPEN_MS, EUSTX50_OPEN_MS + 60_000)]
+
+
+def test_writer_policy_loader_is_loud_about_broken_config_and_missing_steps(caplog):
+    broken = {"m1_poller": {"session_open_rebuild": {"enabled": True, "gap_min": 0, "max_volume_deficit": 5,
+                                                     "price_step_by_symbol": {}}}}
+    with caplog.at_level(logging.WARNING):
+        assert poller_mod.load_session_open_policy(broken, ["XAU/USD"]) == so.DISABLED_POLICY
+        ok = {"m1_poller": {"session_open_rebuild": {"enabled": True, "gap_min": 15, "max_volume_deficit": 5,
+                                                     "price_step_by_symbol": {"XAU/USD": 0.01}}}}
+        assert poller_mod.load_session_open_policy(ok, ["XAU/USD", "US30"]).enabled is True
+    assert "M1_SESSION_OPEN_REBUILD_CONFIG_INVALID" in caplog.text
+    assert "M1_SESSION_OPEN_REBUILD_NO_PRICE_STEP symbols=['US30']" in caplog.text

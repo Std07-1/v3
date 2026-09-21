@@ -19,7 +19,7 @@ import os
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.config_loader import pick_config_path, load_system_config
 from core.model.bars import CandleBar, ms_to_utc_dt
@@ -32,6 +32,14 @@ from runtime.ingest.m1_session_filter import (
     classify_m1_for_ssot,
     is_flat_m1,
     resolve_flat_max_volume,
+)
+from runtime.ingest.m1_session_open import (
+    DISABLED_POLICY,
+    SessionOpenRebuildPolicy,
+    is_first_bar_after_break,
+    mark_open_provisional,
+    rebuild_session_open_bar,
+    resolve_session_open_rebuild_policy,
 )
 from runtime.ingest.tick_common import (
     resolve_symbol_calendars,
@@ -157,6 +165,7 @@ class M1SymbolPoller:
         live_recover_max_consecutive_empty: int = 5,
         live_recover_timeout_s: int = 600,
         stale_s: int = 720,
+        session_open_policy: SessionOpenRebuildPolicy = DISABLED_POLICY,
     ) -> None:
         self._symbol = symbol
         self._provider = provider
@@ -211,6 +220,9 @@ class M1SymbolPoller:
 
         # Calendar state tracking
         self._last_market_open: Optional[bool] = None
+
+        # ADR-0096 слайс E: перша хвилина після перерви — open з тікової історії брокера
+        self._session_open_policy = session_open_policy
 
     # -- Calendar gate ---------------------------------------------------
 
@@ -272,6 +284,8 @@ class M1SymbolPoller:
             return False
         if bar.tf_s != 60 or not bar.complete:
             return False
+        # ADR-0096 слайс E: запечений open першої хвилини сесії — до правила M1→SSOT, яке бачить уже справжній бар
+        bar = self._rebuild_session_open(bar)
 
         # Правило SSOT за календарем — спільне з tools/fetch_tf_backfill (runtime/ingest/m1_session_filter.py)
         classified, verdict = classify_m1_for_ssot(
@@ -321,6 +335,62 @@ class M1SymbolPoller:
                 bar.open_time_ms,
             )
         return False
+
+    # -- Перша хвилина після перерви (ADR-0096 слайс E) -----------------
+
+    def _rebuild_session_open(self, bar: CandleBar) -> CandleBar:
+        """Перша M1 після перерви: open з тікової історії брокера замість запеченого close перед перервою.
+
+        Бар комітиться один раз, тож виправити можна лише тут, до коміту. Запит t1 — тільки для барів
+        «перших після перерви» (кілька на добу), звичайний цикл не гальмує. Не доведено тіками — бар брокера
+        без змін, з маркером open_provisional і WARN FXCM_SESSION_OPEN_BAKED.
+        """
+        policy = self._session_open_policy
+        if not policy.enabled:
+            return bar
+        if self._watermark_ms is not None and bar.open_time_ms <= self._watermark_ms:
+            return bar  # не новіший за watermark — UDS однаково відкине (stale/duplicate), тіки не потрібні
+        is_trading_fn = None
+        if self._calendar is not None and self._calendar.enabled:
+            is_trading_fn = self._calendar.is_trading_minute
+        if not is_first_bar_after_break(bar.open_time_ms, self._watermark_ms, policy.gap_ms, is_trading_fn):
+            return bar
+        rebuilt, reason, ticks_fetched = self._rebuild_from_broker_ticks(bar, policy)
+        if rebuilt is not None:
+            logging.info(
+                "FXCM_SESSION_OPEN_REBUILT symbol=%s open_ms=%s o_before=%.5f o=%.5f h=%.5f l=%.5f c=%.5f "
+                "v=%.0f ticks=%s",
+                self._symbol, bar.open_time_ms, bar.o, rebuilt.o, rebuilt.h, rebuilt.low, rebuilt.c, rebuilt.v,
+                ticks_fetched,
+            )
+            return rebuilt
+        logging.warning(
+            "FXCM_SESSION_OPEN_BAKED symbol=%s open_ms=%s reason=%s o=%.5f h=%.5f l=%.5f c=%.5f v=%.0f ticks=%s "
+            "— open першої хвилини після перерви не доведено тіками брокера, бар іде з open_provisional",
+            self._symbol, bar.open_time_ms, reason, bar.o, bar.h, bar.low, bar.c, bar.v, ticks_fetched,
+        )
+        return mark_open_provisional(bar)
+
+    def _rebuild_from_broker_ticks(
+        self, bar: CandleBar, policy: SessionOpenRebuildPolicy
+    ) -> Tuple[Optional[CandleBar], str, Optional[int]]:
+        """(перебудований бар або None, причина, скільки тіків віддав брокер або None, якщо не віддав)."""
+        price_step = policy.price_step_by_symbol.get(self._symbol)
+        if price_step is None:
+            return None, "price_step_missing", None
+        fetch_ticks = getattr(self._provider, "fetch_t1_bid_ticks", None)
+        if fetch_ticks is None:
+            return None, "provider_without_t1", None
+        try:
+            ticks = fetch_ticks(self._symbol, bar.open_time_ms, bar.close_time_ms)
+        except Exception as exc:  # noqa: BLE001 — будь-яка відмова транспорту = «не доведено», гучно у виклику
+            return None, "t1_error: %s" % exc, None
+        if ticks is None:
+            return None, "t1_unavailable", None
+        rebuilt, reason = rebuild_session_open_bar(
+            bar, ticks, price_step, max_volume_deficit=policy.max_volume_deficit
+        )
+        return rebuilt, reason, len(ticks)
 
     # -- Main poll -------------------------------------------------------
 
@@ -1251,6 +1321,30 @@ class M1PollerRunner:
 # ---------------------------------------------------------------------------
 # Побудова з конфігу (composition)
 # ---------------------------------------------------------------------------
+def load_session_open_policy(cfg: dict, symbols: List[str]) -> SessionOpenRebuildPolicy:
+    """Політика перебудови першої хвилини (ADR-0096 слайс E) для записувача M1 — стан завжди у лозі.
+
+    Битий конфіг вимикає перебудову з ERROR (ingest не зупиняється); символ без кроку ціни — WARN на старті,
+    його перші хвилини підуть з open_provisional.
+    """
+    try:
+        policy = resolve_session_open_rebuild_policy(cfg)
+    except (KeyError, TypeError, ValueError) as exc:
+        logging.error("M1_SESSION_OPEN_REBUILD_CONFIG_INVALID err=%s — перебудову вимкнено", exc)
+        return DISABLED_POLICY
+    logging.info(
+        "M1_SESSION_OPEN_REBUILD enabled=%s gap_ms=%d max_volume_deficit=%d",
+        policy.enabled, policy.gap_ms, policy.max_volume_deficit,
+    )
+    missing_step = [sym for sym in symbols if sym not in policy.price_step_by_symbol]
+    if policy.enabled and missing_step:
+        logging.warning(
+            "M1_SESSION_OPEN_REBUILD_NO_PRICE_STEP symbols=%s — перші хвилини цих символів підуть з open_provisional",
+            missing_step,
+        )
+    return policy
+
+
 def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
     """Будує M1PollerRunner з config.json. Повертає None якщо вимкнено."""
     cfg = load_system_config(config_path)
@@ -1354,6 +1448,7 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
         logging.error("M1_POLLER_NO_SYMBOLS — жоден символ не має календаря")
         return None
 
+    session_open_policy = load_session_open_policy(cfg, symbols)
     pollers: List[M1SymbolPoller] = []
     for sym in symbols:
         cal = calendars[sym]
@@ -1375,6 +1470,7 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
                 live_recover_max_consecutive_empty=lr_max_consecutive_empty,
                 live_recover_timeout_s=lr_timeout,
                 stale_s=stale_s,
+                session_open_policy=session_open_policy,
             )
         )
 

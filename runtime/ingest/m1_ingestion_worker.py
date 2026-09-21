@@ -25,6 +25,7 @@ from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.polling.m1_poller import (
     M1SymbolPoller,
     M1PollerRunner,
+    load_session_open_policy,
     set_flat_bar_max_volume,
 )
 from runtime.ingest.tick_common import symbols_from_cfg, calendar_from_group, resolve_symbol_calendars
@@ -296,6 +297,7 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
         logging.error("M1_INGESTION_WORKER_NO_SYMBOLS — жоден символ не має календаря")
         return None
 
+    session_open_policy = load_session_open_policy(cfg, symbols)
     pollers: list[M1SymbolPoller] = []
     for sym in symbols:
         cal = calendars[sym]
@@ -317,6 +319,7 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
                 live_recover_max_consecutive_empty=lr_max_consecutive_empty,
                 live_recover_timeout_s=lr_timeout,
                 stale_s=stale_s,
+                session_open_policy=session_open_policy,
             )
         )
 
