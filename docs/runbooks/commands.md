@@ -161,7 +161,7 @@ sudo supervisorctl restart smc:smc-ws
 
 ```bash
 sudo supervisorctl restart smc:smc-fxcm           # FXCM broker reconnect
-sudo supervisorctl restart smc:smc-ticks           # FXCM tick stream
+# smc:smc-ticks — НЕ ЗАПУСКАТИ: smc:smc-ticks зупинено 07.09.2026 (DEPRECATED); тики йдуть через broker_sidecar TICK_RELAY. restart/start підняв би другу FXCM-сесію (клас інциденту 06–07.09).
 sudo supervisorctl restart smc:smc-preview         # tick preview worker
 sudo supervisorctl restart smc:smc-binance         # Binance ingest
 sudo supervisorctl restart smc:smc-binance-ticks   # Binance tick stream

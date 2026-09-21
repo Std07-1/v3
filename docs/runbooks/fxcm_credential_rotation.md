@@ -43,7 +43,7 @@ FXCM **Demo-акаунти живуть обмежений час** (зазви�
 | Шар | Що змінюється | Де | Чому саме там |
 |---|---|---|---|
 | Secrets | `FXCM_USERNAME`, `FXCM_PASSWORD` | VPS `/opt/smc-v3/.env` | SSOT для broker `.venv37` + helper tools. Локального `.env` з FXCM creds немає за дизайном (X31 — не дублюємо secrets між машинами) |
-| Process | `smc:smc-fxcm`, `smc:smc-ticks` | supervisor (`/etc/supervisor/conf.d/smc-v3.conf`) | broker_sidecar читає `.env` тільки на старті → restart обов'язковий |
+| Process | `smc:smc-fxcm` (тики — у ньому ж, broker_sidecar TICK_RELAY; `smc:smc-ticks` не запускати) | supervisor (`/etc/supervisor/conf.d/smc-v3.conf`) | broker_sidecar читає `.env` тільки на старті → restart обов'язковий |
 | Data | M1 jsonl tail для FXCM-символів | `/opt/smc-v3/data_v3/{XAU_USD,XAG_USD}/tf_60/` | SSOT OHLCV. Binance символи (BTCUSDT, ETHUSDT) не зачеплені |
 | Derived | M3, M5, M15, M30, H1, H4, D1 | `/opt/smc-v3/data_v3/{SYM}/tf_{N}/` | Перебудовується каскадно з M1 (`tools.backfill_cascade` + ADR-0023 для D1) |
 
@@ -94,7 +94,7 @@ ssh aione-vps 'ls -la /opt/smc-v3/.env.bak.*'
 
 ```bash
 # щоб не було race: ще працює зі старим, але .env вже з новим
-ssh aione-vps 'sudo supervisorctl stop smc:smc-fxcm smc:smc-ticks smc:smc-preview'
+ssh aione-vps 'sudo supervisorctl stop smc:smc-fxcm smc:smc-preview'
 ```
 
 ### 5.3a Method A — sed з PowerShell / bash (швидко, повторювано)
@@ -130,7 +130,7 @@ grep '^FXCM_PASSWORD=' /opt/smc-v3/.env | sed 's/=.*/=***MASKED***/'
 ### 5.4 Перезапустити + observation window 60s (D9.1)
 
 ```bash
-ssh aione-vps 'sudo supervisorctl start smc:smc-fxcm smc:smc-ticks smc:smc-preview && for i in 1 2 3 4 5 6; do echo "=== T+$((i*10))s ==="; sleep 10; sudo supervisorctl status smc:smc-fxcm smc:smc-ticks; tail -n 5 /var/log/smc-v3/fxcm.stderr.log; done'
+ssh aione-vps 'sudo supervisorctl start smc:smc-fxcm smc:smc-preview && for i in 1 2 3 4 5 6; do echo "=== T+$((i*10))s ==="; sleep 10; sudo supervisorctl status smc:smc-fxcm smc:smc-preview; tail -n 5 /var/log/smc-v3/fxcm.stderr.log; done'
 ```
 
 **Очікувані сигнали успіху** (у логах):
@@ -300,7 +300,7 @@ ssh aione-vps 'ls -t /opt/smc-v3/.env.bak.* | head -3'
 
 # Відкат creds (replace TIMESTAMP)
 ssh aione-vps 'cp /opt/smc-v3/.env.bak.TIMESTAMP /opt/smc-v3/.env && \
-               sudo supervisorctl restart smc:smc-fxcm smc:smc-ticks'
+               sudo supervisorctl restart smc:smc-fxcm smc:smc-preview'
 ```
 
 > Зауваження: rollback **не повертає демо до життя** — він просто відновлює попередній стан конфігу. Якщо старий expired, треба знову Phase 1+.
@@ -348,7 +348,7 @@ ssh aione-vps 'cp /opt/smc-v3/.env.bak.TIMESTAMP /opt/smc-v3/.env && \
 **Маршрут switch-over (швидкий cheat-sheet)**:
 1. Pre-flight: `tail /var/log/smc-v3/fxcm.stderr.log` → confirm auth fail
 2. Get new demo creds (FXCM website) → save locally as `.env.fxcm.new` АБО plan для nano-on-VPS
-3. SSH to VPS: backup `.env` (timestamped) → stop `smc:smc-fxcm smc:smc-ticks smc:smc-preview`
+3. SSH to VPS: backup `.env` (timestamped) → stop `smc:smc-fxcm smc:smc-preview` (`smc:smc-ticks` не чіпати — DEPRECATED 07.09)
 4. Edit `.env`: Method A (sed з PowerShell) АБО Method B (nano всередині SSH сесії). **НЕ cmd.exe inline `ssh ... "...$(date)..."`** — parens trap.
 5. Start back → 60s D9.1 observe (`supervisorctl status` + `tail fxcm.stderr.log`)
 6. `./.venv37/bin/python -m tools.fetch_tf_backfill --tf 60 --symbol X --n N` × XAU/USD, XAG/USD (dual venv: .venv37 для SDK)

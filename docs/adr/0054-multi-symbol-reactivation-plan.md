@@ -280,7 +280,7 @@ XAU/XAG без нових дублікатів і без `DERIVE_REJECT` за 24
 2. Фаза 0 для NAS100 (seed + rebuild) **при живих** XAU/XAG, але fetch M1 — у вікно закритого ринку (сб/нд) або при зупинених
    `smc-fxcm`/`smc-ticks` (одна FXCM-сесія на логін); `rebuild_from_m1` для символу поза config — будь-коли.
 3. NAS100 у `config.json:symbols` — **останнім у списку** (щоб збій його bootstrap не передував існуючим);
-   `sudo supervisorctl restart smc:smc-fxcm smc:smc-ticks smc:smc-preview smc:smc-ws` (явний перелік, не `smc:*` — див. §3.4 п.4).
+   `sudo supervisorctl restart smc:smc-fxcm smc:smc-preview smc:smc-ws` (явний перелік, не `smc:*` — див. §3.4 п.4; `smc:smc-ticks` з 07.09 DEPRECATED — не запускати, див. примітку 21.09).
 4. **3 послідовні рестарти** тих самих чотирьох програм з інтервалом ≥ одного повного M5-бакета + tail-catchup.
 5. `health_check --compare HEALTH-A --gate-symbols XAU/USD,XAG/USD`: дублікати JSONL = 0, кількість derived-барів незмінна, redis≡disk, cmd-черга 0, сиріт нема, `OVERDUE_CHECK_ERR`/`DERIVE_REJECT` = 0 за 24h.
 
@@ -313,8 +313,12 @@ XAU/XAG без нових дублікатів і без `DERIVE_REJECT` за 24
 
 1. Фаза 0 seed для `<NEW>` (символ поза config; fetch M1 — у вікно закритого ринку або при зупинених `smc-fxcm`/`smc-ticks`).
 2. `health_check --baseline PRE.json` на всіх активних = GREEN (інакше STOP).
+2a. (21.09.2026) Підписка на ціни в рахунку FXCM: рядок OFFERS `<NEW>` має `SubscriptionStatus=T`
+   (`/tmp/p5/offers_status.py`, лише читання, окрема коротка сесія). History працює й без підписки, а тіків (tick relay →
+   preview → формуюча свічка, живий заголовок) без неї нема — SPX500 і EUSTX50 жили так тижнями (увімкнено 21.09, changelog 20260921-003).
+   Зміна підписки = зміна налаштувань рахунку → лише з дозволу власника.
 3. `<NEW>` у `config.json:symbols[]` **останнім**; коміт; на VPS `git pull` (deploy = git, ADR-0060).
-4. `sudo supervisorctl restart smc:smc-fxcm smc:smc-ticks smc:smc-preview smc:smc-ws` — явний перелік у цьому порядку
+4. `sudo supervisorctl restart smc:smc-fxcm smc:smc-preview smc:smc-ws` — явний перелік у цьому порядку (smc-fxcm праймить Redis з диска раніше за ws; `smc:smc-ticks` не запускати — DEPRECATED 07.09)
    (`supervisorctl` обробляє імена послідовно; у conf нема `priority=`). **Не** `smc:*`: wildcard підняв би `autostart=false`
    `smc-binance*` у BACKOFF/FATAL, бо воркери виходять миттєво при `binance.enabled=false`, і забруднив би `supervisorctl status`.
    Observation 60-120s. Агрегатні докази bootstrap: `M1_POLLER_REDIS_PRIME symbols=N+1`, `DERIVE_ENGINE_WARMUP symbols=N+1`;
@@ -495,7 +499,7 @@ Per-symbol rollback (Фаза 3), **rev 2 під supervisor і нормаліз�
 ```bash
 # 1. config: прибрати <SYMBOL> із symbols[] (git revert коміту активації → git pull на VPS)
 # 2. рестарт чотирьох програм у явному порядку (НЕ smc:* — wildcard підняв би autostart=false smc-binance* у FATAL)
-sudo supervisorctl restart smc:smc-fxcm smc:smc-ticks smc:smc-preview smc:smc-ws
+sudo supervisorctl restart smc:smc-fxcm smc:smc-preview smc:smc-ws   # smc:smc-ticks — DEPRECATED 07.09, не запускати
 # 3. Redis cleanup — ключі нормалізовані redis_keys.symbol_key ('/'→'_'); частина ключів symbol-terminal
 S=$(echo '<SYMBOL>' | tr / _)
 for p in "v3_local:ohlcv:*:$S:*" "v3_local:preview:*:$S:*" "v3_local:updates:*:$S:*" "v3_local:tick:last:$S" "v3_local:wake:conditions:$S" "v3_local:thesis:$S"; do
