@@ -23,6 +23,7 @@ from env_profile import load_env_secrets
 from runtime.ingest.broker.binance.provider import BinanceHistoryProvider
 from runtime.ingest.derive_engine import DeriveEngine
 from runtime.ingest.market_calendar import MarketCalendar
+from runtime.ingest.m1_session_filter import resolve_pause_noise_margin_min
 from runtime.ingest.polling.m1_poller import (
     M1SymbolPoller,
     M1PollerRunner,
@@ -213,6 +214,7 @@ def build_binance_ingest_worker(
                 tail_fetch_n=tail_fetch_n,
                 m3_derive=True,
                 tail_catchup_max_bars=backfill_max_bars,
+                pause_noise_margin_min=resolve_pause_noise_margin_min(cfg),
             )
         )
 

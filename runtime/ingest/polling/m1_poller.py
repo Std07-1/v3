@@ -28,12 +28,14 @@ from runtime.ingest.derive_engine import DeriveEngine
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.m1_session_filter import (
     FLAT_BAR_MAX_VOLUME_DEFAULT,
+    PAUSE_NOISE_MARGIN_MIN_DEFAULT,
+    VERDICT_PAUSE_NOISE_DROPPED,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
     VERDICT_REOPEN_FLAT_DROPPED,
-    classify_m1_for_ssot,
+    classify_m1_by_calendar,
     is_flat_m1,
-    is_session_open_minute,
     resolve_flat_max_volume,
+    resolve_pause_noise_margin_min,
 )
 from runtime.ingest.m1_session_open import (
     BAR_CORRECT_AS_IS,
@@ -169,10 +171,13 @@ class M1SymbolPoller:
         live_recover_timeout_s: int = 600,
         stale_s: int = 720,
         session_open_policy: SessionOpenRebuildPolicy = DISABLED_POLICY,
+        pause_noise_margin_min: int = PAUSE_NOISE_MARGIN_MIN_DEFAULT,
     ) -> None:
         self._symbol = symbol
         self._provider = provider
         self._uds = uds
+        # SSOT: config.json → m1_session_filter.pause_noise_margin_min (resolve_pause_noise_margin_min у будівниках)
+        self._pause_noise_margin_min = max(1, int(pause_noise_margin_min))
         self._calendar = calendar
         self._tail_n = max(2, tail_fetch_n)
         self._m3_derive = m3_derive
@@ -218,6 +223,7 @@ class M1SymbolPoller:
         self._committed_m3 = 0
         self._errors = 0
         self._calendar_skips = 0
+        self._pause_noise_dropped = 0
         self._gaps_detected = 0
         self._already_caught_up = 0
 
@@ -233,12 +239,6 @@ class M1SymbolPoller:
         if self._calendar is None or not self._calendar.enabled:
             return True
         return self._calendar.is_trading_minute(now_ms)
-
-    def _is_session_open_minute(self, open_ms: int) -> bool:
-        """Перша торгова хвилина сесії — там плаский бар є заглушкою брокера (m1_session_filter)."""
-        if self._calendar is None or not self._calendar.enabled:
-            return False
-        return is_session_open_minute(open_ms, self._calendar.is_trading_minute)
 
     def _check_calendar_state(self, now_ms: int) -> bool:
         """Повертає True якщо ринок відкритий. Логує зміни стану."""
@@ -296,10 +296,9 @@ class M1SymbolPoller:
         # ADR-0096 слайс E: запечений open першої хвилини сесії — до правила M1→SSOT, яке бачить уже справжній бар
         bar = self._rebuild_session_open(bar)
 
-        # Правило SSOT за календарем — спільне з tools/fetch_tf_backfill (runtime/ingest/m1_session_filter.py)
-        classified, verdict = classify_m1_for_ssot(
-            bar, self._is_market_open(bar.open_time_ms), _flat_bar_max_volume,
-            session_open_minute=self._is_session_open_minute(bar.open_time_ms),
+        # Правило SSOT за календарем — спільне із засівом і ремонтом дірок (runtime/ingest/m1_session_filter.py)
+        classified, verdict = classify_m1_by_calendar(
+            bar, self._is_market_open, _flat_bar_max_volume, self._pause_noise_margin_min
         )
         if classified is None:
             if verdict == VERDICT_REOPEN_FLAT_DROPPED:
@@ -307,6 +306,16 @@ class M1SymbolPoller:
                     "M1_REOPEN_FLAT_DROPPED symbol=%s open_ms=%s o=%.5f v=%.0f — заглушка брокера у хвилині "
                     "перевідкриття (тіків ще немає), у SSOT не йде",
                     self._symbol, bar.open_time_ms, bar.o, bar.v,
+                )
+            elif verdict == VERDICT_PAUSE_NOISE_DROPPED:
+                # Кожен відкинутий бар — у лог з OHLCV: при хибному календарі тут потечуть справжні хвилини з
+                # великим обсягом, і це має бути видно, а не тихо зникнути.
+                self._pause_noise_dropped += 1
+                logging.warning(
+                    "M1_PAUSE_NOISE_DROPPED symbol=%s open_ms=%s o=%.5f h=%.5f l=%.5f c=%.5f v=%.0f margin_min=%d "
+                    "dropped_total=%d — хвилина глибоко в паузі сесії, шум брокера у SSOT не йде",
+                    self._symbol, bar.open_time_ms, bar.o, bar.h, bar.low, bar.c, bar.v,
+                    self._pause_noise_margin_min, self._pause_noise_dropped,
                 )
             return False
         bar = classified
@@ -913,6 +922,7 @@ class M1SymbolPoller:
             "m3_committed": self._committed_m3,
             "errors": self._errors,
             "calendar_skips": self._calendar_skips,
+            "pause_noise_dropped": self._pause_noise_dropped,
             "gaps_detected": self._gaps_detected,
             "caught_up_skips": self._already_caught_up,
             "watermark_ms": self._watermark_ms,
@@ -1330,18 +1340,20 @@ class M1PollerRunner:
         total_m3 = sum(p.stats["m3_committed"] for p in self._pollers)
         total_err = sum(p.stats["errors"] for p in self._pollers)
         total_cal_skip = sum(p.stats["calendar_skips"] for p in self._pollers)
+        total_pause_noise = sum(p.stats["pause_noise_dropped"] for p in self._pollers)
         total_gaps = sum(p.stats["gaps_detected"] for p in self._pollers)
         total_caught = sum(p.stats["caught_up_skips"] for p in self._pollers)
         recovering = sum(1 for p in self._pollers if p.stats.get("recover_active"))
         total_stale = sum(p.stats.get("stale_count", 0) for p in self._pollers)
         logging.info(
-            "M1_POLLER_STATS symbols=%d m1=%d m3=%d err=%d cal_skip=%d "
+            "M1_POLLER_STATS symbols=%d m1=%d m3=%d err=%d cal_skip=%d pause_noise=%d "
             "gaps=%d caught_up=%d recovering=%d stale=%d",
             len(self._pollers),
             total_m1,
             total_m3,
             total_err,
             total_cal_skip,
+            total_pause_noise,
             total_gaps,
             total_caught,
             recovering,
@@ -1502,6 +1514,7 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
                 live_recover_timeout_s=lr_timeout,
                 stale_s=stale_s,
                 session_open_policy=session_open_policy,
+                pause_noise_margin_min=resolve_pause_noise_margin_min(cfg),
             )
         )
 

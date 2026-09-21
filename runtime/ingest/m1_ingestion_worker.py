@@ -22,6 +22,7 @@ from core.model.bars import CandleBar
 from env_profile import load_env_secrets
 from runtime.ingest.derive_engine import DeriveEngine
 from runtime.ingest.market_calendar import MarketCalendar
+from runtime.ingest.m1_session_filter import resolve_pause_noise_margin_min
 from runtime.ingest.polling.m1_poller import (
     M1SymbolPoller,
     M1PollerRunner,
@@ -320,6 +321,7 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
                 live_recover_timeout_s=lr_timeout,
                 stale_s=stale_s,
                 session_open_policy=session_open_policy,
+                pause_noise_margin_min=resolve_pause_noise_margin_min(cfg),
             )
         )
 

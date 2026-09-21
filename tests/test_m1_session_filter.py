@@ -55,7 +55,8 @@ class _RecordingUds:
 
 
 def test_live_poller_ingest_applies_the_same_rule(caplog):
-    """Контроль рефакторингу: полер поводиться як до винесення правила (пауза: плаский відкинуто, неплаский — з WARN)."""
+    """Полер застосовує спільне правило: глибоко в паузі — шум (відкинуто з WARN і лічильником), біля краю сесії
+    неплаский — anomaly з WARN, однотіковий у сесії — trading_flat."""
     from runtime.ingest.market_calendar import MarketCalendar
     from runtime.ingest.polling.m1_poller import M1SymbolPoller, set_flat_bar_max_volume
 
@@ -66,7 +67,8 @@ def test_live_poller_ingest_applies_the_same_rule(caplog):
     uds = _RecordingUds()
     poller = M1SymbolPoller(symbol="SYM", provider=object(), uds=uds, calendar=calendar)
     wednesday_noon = 1_788_955_200_000  # 2026-09-09 12:00 UTC
-    saturday = 1_789_250_400_000  # 2026-09-12 22:00 UTC — вихідні за календарем
+    wednesday_break = wednesday_noon + 9 * 3_600_000  # 2026-09-09 21:00 UTC — перша хвилина денної перерви
+    saturday = 1_789_250_400_000  # 2026-09-12 22:00 UTC — вихідні за календарем, доба від обох країв
 
     def at(open_ms, template):
         return CandleBar(symbol="SYM", tf_s=60, open_time_ms=open_ms, close_time_ms=open_ms + 60_000, o=template.o,
@@ -74,9 +76,28 @@ def test_live_poller_ingest_applies_the_same_rule(caplog):
 
     assert poller._ingest_bar(at(saturday, FLAT)) is False  # noqa: SLF001
     assert poller._ingest_bar(at(wednesday_noon, FLAT)) is True  # noqa: SLF001
-    assert poller._ingest_bar(at(saturday + 60_000, REGULAR)) is True  # noqa: SLF001
+    assert poller._ingest_bar(at(wednesday_break, REGULAR)) is True  # noqa: SLF001
+    assert poller._ingest_bar(at(saturday + 60_000, REGULAR)) is False  # noqa: SLF001
     assert [b.extensions for b in uds.committed] == [{"trading_flat": True}, {"calendar_pause_nonflat_anomaly": True}]
     assert "M1_NONFLAT_IN_PAUSE" in caplog.text
+    assert caplog.text.count("M1_PAUSE_NOISE_DROPPED") == 2
+    assert poller.stats["pause_noise_dropped"] == 2
+
+
+def test_live_poller_pause_noise_margin_comes_from_constructor():
+    """Запас приходить у полер параметром (будівники беруть його з config): ширший запас — той самий бар уже anomaly."""
+    from runtime.ingest.polling.m1_poller import M1SymbolPoller, set_flat_bar_max_volume
+
+    set_flat_bar_max_volume(4)
+    saturday_2201 = 1_789_250_460_000  # 2026-09-12 22:01 UTC: до Пт 20:44 — 1517 хв, до Нд 22:00 — 1439 хв
+    bar = CandleBar(symbol="SYM", tf_s=60, open_time_ms=saturday_2201, close_time_ms=saturday_2201 + 60_000,
+                    o=5.0, h=6.0, low=4.0, c=5.5, v=100.0, complete=True, src="history")
+    narrow, wide = _RecordingUds(), _RecordingUds()
+    assert M1SymbolPoller(symbol="SYM", provider=object(), uds=narrow, calendar=_us_cfd_calendar(),
+                          pause_noise_margin_min=60)._ingest_bar(bar) is False  # noqa: SLF001
+    assert M1SymbolPoller(symbol="SYM", provider=object(), uds=wide, calendar=_us_cfd_calendar(),
+                          pause_noise_margin_min=1439)._ingest_bar(bar) is True  # noqa: SLF001
+    assert narrow.committed == [] and wide.committed[0].extensions == {"calendar_pause_nonflat_anomaly": True}
 
 
 @pytest.mark.parametrize("cfg, expected", [

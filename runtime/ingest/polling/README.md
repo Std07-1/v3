@@ -253,14 +253,17 @@ Flat bar: `O == H == L == C` і `volume ≤ flat_bar_max_volume` (SSOT: `config.
 
 ### 6.2 Класифікація (calendar-aware)
 
-`_ingest_bar()` класифікує кожен бар:
+`_ingest_bar()` класифікує кожен бар спільним правилом `runtime/ingest/m1_session_filter.classify_m1_by_calendar`
+(те саме правило в `tools/fetch_tf_backfill` і `tools/repair/repair_m1_gaps`):
 
 | Стан ринку | Flat? | Дія |
 | --- | --- | --- |
 | Trading | No | ✅ Приймаємо як є |
 | Trading | Yes | ✅ Приймаємо + `extensions.trading_flat=true` (grid completeness) |
-| Closed (break) | Yes | ❌ **Скіпаємо** (шум від брокера) |
-| Closed (break) | No | ⚠️ Приймаємо + `extensions.calendar_pause_nonflat_anomaly=true` + WARNING лог |
+| Trading, перша хвилина сесії | Yes | ❌ **Скіпаємо** — заглушка брокера на перевідкритті, WARNING `M1_REOPEN_FLAT_DROPPED` |
+| Closed, далі `m1_session_filter.pause_noise_margin_min` (60) хв від торгової | будь-який | ❌ **Скіпаємо** — шум брокера, WARNING `M1_PAUSE_NOISE_DROPPED` з OHLCV і лічильником |
+| Closed, біля краю сесії | Yes | ❌ **Скіпаємо** (шум від брокера) |
+| Closed, біля краю сесії | No | ⚠️ Приймаємо + `extensions.calendar_pause_nonflat_anomaly=true` + WARNING лог (DST / хибний календар) |
 
 ### 6.3 Вплив на M3 деривацію
 
@@ -645,7 +648,8 @@ FXCM має свій PREVIOUS_CLOSE mode, але він штучно склею�
 | `M1_LIVE_RECOVER_DONE symbol=XAU/USD reason=caught_up` | Вихід з recover |
 | `M1_STALE symbol=XAU/USD silence_s=800` | Stale detection спрацювало |
 | `M1_TAIL_CATCHUP symbol=XAU/USD missing=350 written=348` | Tail catchup результат |
-| `M1_NONFLAT_IN_PAUSE symbol=XAU/USD` | Аномалія: non-flat під час break |
+| `M1_NONFLAT_IN_PAUSE symbol=XAU/USD` | Аномалія: non-flat під час break біля краю сесії |
+| `M1_PAUSE_NOISE_DROPPED symbol=XAG/USD ... dropped_total=13` | Бар глибоко в паузі відкинуто як шум; великий `v` тут = підозра на хибний календар |
 
 ### 19.2 HTTP endpoints для перевірки
 
