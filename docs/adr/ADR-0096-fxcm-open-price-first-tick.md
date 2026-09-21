@@ -190,7 +190,7 @@ NAS100 1913/1999, 2196 > 1461, open 30299.71 ≠ 30299.59. Тобто на мо�
   суботній шум — t1 не запитують: їх далі обробляє правило сесії, а watermark не рухається, тож інакше запит і
   WARN повторювались би щоциклу) і «першого після перерви» (попередній закомічений M1 старший за `gap_min` = 15 хв
   АБО календар: хвилина торгова, попередня — ні) — запит t1 і перебудова ДО `commit_final_bar` і ДО правила
-  M1→SSOT (`classify_m1_for_ssot` бачить перебудований бар). Тіків не отримано / 0 тіків / немає кроку ціни → бар
+  M1→SSOT (`classify_m1_by_calendar`, ADR-0099, бачить перебудований бар). Тіків не отримано / 0 тіків / немає кроку ціни → бар
   брокера з `open_provisional` + WARN `FXCM_SESSION_OPEN_BAKED reason=…`.
 - SSOT: `config.json:m1_poller.session_open_rebuild` (enabled — лише JSON true/false, gap_min,
   price_step_by_symbol); K5-гейт `m1_poller.session_open_rebuild → 0096`.

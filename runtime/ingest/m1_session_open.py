@@ -19,6 +19,7 @@ import dataclasses
 from typing import Any, Callable, Dict, FrozenSet, Mapping, Optional, Sequence, Tuple
 
 from core.model.bars import CandleBar, normalize_ohlc
+from runtime.ingest.m1_session_filter import is_session_open_minute
 
 _M1_MS = 60 * 1000
 _CONFIG_SECTION = "session_open_rebuild"  # config.json → m1_poller.session_open_rebuild
@@ -89,9 +90,8 @@ def is_first_bar_after_break(
         return True
     if is_trading_fn is None:
         return False
-    # Календарна частина = m1_session_filter.is_session_open_minute з гілки fix/m1-session-noise-ingest-rails
-    # (ще не в main); при її злитті — делегувати туди, щоб правило «перша хвилина сесії» жило в одному місці (X35).
-    return is_trading_fn(open_ms) and not is_trading_fn(open_ms - _M1_MS)
+    # Календарна частина — те саме правило «перша хвилина сесії», що й у правилі M1→SSOT (одне місце, X35)
+    return is_session_open_minute(open_ms, is_trading_fn)
 
 
 def rebuild_session_open_bar(
