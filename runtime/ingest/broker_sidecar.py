@@ -279,7 +279,21 @@ def _handle_command(provider, cmd_raw, redis_cli, bars_key):
     if action == "fetch_t1" and symbol:
         return _handle_fetch_t1(provider, cmd, redis_cli, target_key, reply_to, req_id, symbol)
     if action != "fetch_m1" or not symbol:
-        logging.warning("BROKER_SIDECAR_CMD_UNKNOWN cmd=%s symbol=%s", action, symbol)
+        logging.warning("BROKER_SIDECAR_CMD_UNKNOWN cmd=%s symbol=%s req_id=%s", action, symbol, req_id)
+        if reply_to:
+            # Воркер чекає свій per-request ключ: мовчання = 15 с таймауту на кожен запит (розсинхрон версій
+            # воркера і sidecar); явна відмова — одразу і з причиною.
+            _push_reply(
+                redis_cli,
+                target_key,
+                reply_to,
+                {
+                    "v": _CONTRACT_VERSION,
+                    "req_id": req_id,
+                    "symbol": symbol,
+                    "error": "unknown_cmd cmd=%r symbol=%r" % (action, symbol),
+                },
+            )
         return False
 
     # Convert date_to_ms → datetime (provider expects tz-aware UTC)

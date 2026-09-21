@@ -247,6 +247,56 @@ def test_sidecar_refuses_a_window_other_than_one_minute_without_calling_the_brok
     assert provider.calls == []
 
 
+@pytest.mark.parametrize("tick_count, expect_error", [(20000, False), (20001, True)])
+def test_sidecar_refuses_an_oversized_tick_reply_instead_of_truncating(tick_count, expect_error):
+    """Запобіжник 20000 тіків: більше — error too_many_ticks і порожні ticks (обрізання дало б хибний діапазон)."""
+    provider = _TickProvider(ticks=[(EUSTX50_OPEN_MS + i % 60_000, 6281.63) for i in range(tick_count)])
+    redis_cli = _LoopbackRedis(provider, answer=False)
+    raw = json.dumps({"v": 1, "cmd": "fetch_t1", "req_id": "r1", "reply_to": BARS_KEY + ":r1", "symbol": "XAU/USD",
+                      "from_ms": EUSTX50_OPEN_MS, "to_ms": EUSTX50_OPEN_MS + 60_000})
+    assert broker_sidecar._handle_command(provider, raw, redis_cli, BARS_KEY) is False
+    reply = json.loads(redis_cli.queues[BARS_KEY + ":r1"][0])
+    if expect_error:
+        assert reply["error"].startswith("too_many_ticks n=20001 limit=20000") and reply["ticks"] == []
+    else:
+        assert reply["error"] is None and len(reply["ticks"]) == 20000
+
+
+@pytest.mark.parametrize("cmd_name, symbol", [("fetch_t2", "XAU/USD"), ("fetch_t1", ""), ("", "XAU/USD")])
+def test_sidecar_answers_an_unknown_command_instead_of_silence(cmd_name, symbol):
+    """Рев'ю D-04: воркер чекає реплай 15 с — невідома команда (розсинхрон версій) отримує явну відмову одразу."""
+    redis_cli = _LoopbackRedis(_TickProvider(), answer=False)
+    raw = json.dumps({"v": 1, "cmd": cmd_name, "req_id": "r9", "reply_to": BARS_KEY + ":r9", "symbol": symbol})
+    assert broker_sidecar._handle_command(_TickProvider(), raw, redis_cli, BARS_KEY) is False
+    reply = json.loads(redis_cli.queues[BARS_KEY + ":r9"][0])
+    assert reply["req_id"] == "r9" and reply["error"].startswith("unknown_cmd")
+
+
+def test_sidecar_unknown_command_without_reply_to_stays_off_the_legacy_queue():
+    redis_cli = _LoopbackRedis(_TickProvider(), answer=False)
+    raw = json.dumps({"v": 1, "cmd": "fetch_t2", "req_id": "r9", "symbol": "XAU/USD"})
+    broker_sidecar._handle_command(_TickProvider(), raw, redis_cli, BARS_KEY)
+    assert redis_cli.queues == {}
+
+
+class _CommandRenamingRedis(_LoopbackRedis):
+    """Loopback, де команда приходить до sidecar під іншим іменем — імітація sidecar, що її не знає."""
+
+    def rpush(self, key, value):
+        if key == CMD_KEY:
+            renamed = dict(json.loads(value), cmd="fetch_t9")
+            value = json.dumps(renamed)
+        return super().rpush(key, value)
+
+
+def test_proxy_gets_unknown_cmd_as_a_loud_none(caplog):
+    """Проксі (новий воркер) бачить відмову як None з WARN одразу, а не як 15 с тиші."""
+    with caplog.at_level(logging.WARNING):
+        got = BrokerRedisProxy(_CommandRenamingRedis(_TickProvider()), NS).fetch_t1_bid_ticks("XAU/USD", 0, 60_000)
+    assert got is None
+    assert "BROKER_PROXY_FETCH_ERROR cmd=fetch_t1 symbol=XAU/USD err=unknown_cmd" in caplog.text
+
+
 def test_proxy_timeout_is_none_not_an_empty_minute(caplog, monkeypatch):
     import runtime.ingest.m1_ingestion_worker as worker_mod
 
