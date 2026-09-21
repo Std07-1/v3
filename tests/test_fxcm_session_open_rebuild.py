@@ -529,3 +529,24 @@ def test_writer_policy_loader_is_loud_about_broken_config_and_missing_steps(capl
         assert poller_mod.load_session_open_policy(ok, ["XAU/USD", "US30"]).enabled is True
     assert "M1_SESSION_OPEN_REBUILD_CONFIG_INVALID" in caplog.text
     assert "M1_SESSION_OPEN_REBUILD_NO_PRICE_STEP symbols=['US30']" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# P5 — SSOT конфіг: кожен активний FXCM-символ має крок ціни
+# ---------------------------------------------------------------------------
+
+
+def test_repo_config_enables_rebuild_with_a_price_step_for_every_active_fxcm_symbol():
+    """Новий символ без кроку ціни мовчки не зламає нічого (WARN + provisional), але тут це ловиться до деплою."""
+    import pathlib
+
+    from core.config_loader import load_system_config
+    from runtime.ingest.tick_common import symbols_from_cfg
+
+    cfg = load_system_config(str(pathlib.Path(__file__).resolve().parents[1] / "config.json"))
+    policy = so.resolve_session_open_rebuild_policy(cfg)
+    binance = cfg.get("binance") or {}
+    binance_symbols = set(binance.get("symbols", [])) if binance.get("enabled") else set()
+    fxcm_symbols = [sym for sym in symbols_from_cfg(cfg) if sym not in binance_symbols]
+    assert policy.enabled and policy.gap_ms == 15 * 60_000 and policy.max_volume_deficit == 5
+    assert fxcm_symbols and [sym for sym in fxcm_symbols if sym not in policy.price_step_by_symbol] == []
