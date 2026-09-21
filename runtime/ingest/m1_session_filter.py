@@ -44,16 +44,27 @@ _M1_MS = 60_000
 # хвилиною під хибним сезоном календаря, тому там лишається маркер anomaly, а не відкидання.
 PAUSE_NOISE_MARGIN_MIN_DEFAULT = 60
 
+# Тривога хибного календаря (ADR-0099 §3.3); SSOT — config.json → m1_session_filter.pause_noise_alarm_*. Виміри
+# 2025-10…2026-06: шум у паузі має v ≤ 5 і до 42 різних хвилин за 60 хв (XAG); справжні хвилини — v ≥ 20 у 99.7–99.9%
+# і потік ~60 за 60 хв. Тому v ≥ 20 або понад 50 хвилин шуму за 60 хв часу барів — ознака, що у відсів пішла торгівля.
+PAUSE_NOISE_ALARM_WINDOW_MIN_DEFAULT = 60
+PAUSE_NOISE_ALARM_MAX_DROPPED_DEFAULT = 50
+PAUSE_NOISE_ALARM_MIN_VOLUME_DEFAULT = 20
+
 
 @dataclasses.dataclass(frozen=True)
 class PausePolicy:
     """Правила M1→SSOT для хвилин паузи (ADR-0099), зведені з config `m1_session_filter` одним `resolve_pause_policy`.
 
     None у правилі означає, що правило вимкнене. Так засів з `--allow-off-calendar` (календар під підозрою) пише хвилини
-    паузи з маркером anomaly, а не відкидає їх за положенням у календарі.
+    паузи з маркером anomaly, а не відкидає їх за положенням у календарі. Поля `alarm_*` — пороги тривоги хибного
+    календаря в живому полері (`runtime/ingest/polling/m1_drop_ledger.py`).
     """
 
     noise_margin_min: Optional[int]
+    alarm_window_min: int = PAUSE_NOISE_ALARM_WINDOW_MIN_DEFAULT
+    alarm_max_dropped: int = PAUSE_NOISE_ALARM_MAX_DROPPED_DEFAULT
+    alarm_min_volume: int = PAUSE_NOISE_ALARM_MIN_VOLUME_DEFAULT
 
     def with_calendar_suspected(self) -> "PausePolicy":
         """Копія без правил, що відкидають неплаский бар за положенням у календарі (ADR-0099 §3.5)."""
@@ -110,6 +121,12 @@ def resolve_pause_policy(cfg: dict) -> PausePolicy:
         section = {}
     return PausePolicy(
         noise_margin_min=_resolve_config_int(section, "pause_noise_margin_min", PAUSE_NOISE_MARGIN_MIN_DEFAULT, 1),
+        alarm_window_min=_resolve_config_int(
+            section, "pause_noise_alarm_window_min", PAUSE_NOISE_ALARM_WINDOW_MIN_DEFAULT, 1),
+        alarm_max_dropped=_resolve_config_int(
+            section, "pause_noise_alarm_max_dropped", PAUSE_NOISE_ALARM_MAX_DROPPED_DEFAULT, 1),
+        alarm_min_volume=_resolve_config_int(
+            section, "pause_noise_alarm_min_volume", PAUSE_NOISE_ALARM_MIN_VOLUME_DEFAULT, 1),
     )
 
 

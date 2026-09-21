@@ -374,7 +374,7 @@ def test_calendar_suspected_policy_writes_deep_pause_bar_as_anomaly():
     assert verdict == VERDICT_PAUSE_NONFLAT_ANOMALY and out.extensions == {"calendar_pause_nonflat_anomaly": True}
 
 
-# --- Облік відкинутих хвилин (ADR-0099 §3.4) -------------------------------------------------------------------------
+# --- Облік відкинутих хвилин і тривога хибного календаря (ADR-0099 §3.3–3.4) ---------------------------------------
 
 class _ReplayProvider:
     """Брокер, що на кожен запит віддає ту саму партію — як FXCM, поки watermark полера не рухається."""
@@ -416,9 +416,63 @@ def test_reopen_placeholder_is_reported_once_across_poll_cycles(monkeypatch, cap
     assert caplog.text.count("M1_REOPEN_FLAT_DROPPED") == 1
 
 
+def test_trading_like_noise_raises_false_calendar_alarm_with_stats(monkeypatch, caplog):
+    """Рев'ю п.8: справжні за обсягом хвилини глибоко в «паузі» — ознака хибного календаря. Один ERROR на вікно і
+    лічильник у M1_POLLER_STATS."""
+    import logging
+    from runtime.ingest.polling.m1_poller import M1PollerRunner
+    trading_like = [_m1_at(SATURDAY_0743 + i * 60_000, 63.0, 63.2, 62.9, 63.1, 180.0) for i in range(3)]
+    poller = _poller_polling_at(monkeypatch, _ReplayProvider(trading_like), SUNDAY_2205)
+    poller.poll_once()
+    alarms = [r for r in caplog.records if "M1_PAUSE_NOISE_ALARM" in r.getMessage()]
+    assert len(alarms) == 1 and alarms[0].levelno == logging.ERROR and "reason=volume" in alarms[0].getMessage()
+    assert poller.stats["pause_noise_alarms"] == 1
+    runner = M1PollerRunner(pollers=[poller], provider=object(), uds=object(), redis_tail_n={})
+    with caplog.at_level(logging.INFO):
+        runner._maybe_log_stats(force=True)  # noqa: SLF001
+    assert "pause_noise=3 noise_alarm=1" in caplog.text
+
+
+def test_noise_alarm_on_volume_is_throttled_per_bar_time_window():
+    from runtime.ingest.polling.m1_drop_ledger import ALARM_REASON_VOLUME, DroppedM1Ledger
+    policy = DEFAULT_PAUSE_POLICY
+    ledger = DroppedM1Ledger(policy)
+    heavy = float(policy.alarm_min_volume)
+    first = ledger.observe_noise(SATURDAY_0743, heavy)
+    assert first is not None and first.reason == ALARM_REASON_VOLUME and first.suppressed_since_last == 0
+    assert ledger.observe_noise(SATURDAY_0743 + 60_000, heavy) is None  # те саме вікно — придушено, не спам
+    next_window = ledger.observe_noise(SATURDAY_0743 + policy.alarm_window_min * 60_000, heavy)
+    assert next_window is not None and next_window.suppressed_since_last == 1
+
+
+def test_noise_like_volume_below_alarm_threshold_is_quiet():
+    from runtime.ingest.polling.m1_drop_ledger import DroppedM1Ledger
+    ledger = DroppedM1Ledger(DEFAULT_PAUSE_POLICY)
+    assert ledger.observe_noise(SATURDAY_0743, float(DEFAULT_PAUSE_POLICY.alarm_min_volume) - 1) is None
+
+
+def test_noise_alarm_on_density_counts_distinct_minutes_in_bar_time_window():
+    from runtime.ingest.polling.m1_drop_ledger import ALARM_REASON_DENSITY, DroppedM1Ledger
+    policy = DEFAULT_PAUSE_POLICY
+    assert policy.alarm_max_dropped < policy.alarm_window_min  # щільний потік шуму вміщується у вікно
+    ledger = DroppedM1Ledger(policy)
+    alarms = [ledger.observe_noise(SATURDAY_0743 + i * 60_000, 2.0) for i in range(policy.alarm_max_dropped + 1)]
+    assert alarms[:-1] == [None] * policy.alarm_max_dropped
+    assert alarms[-1].reason == ALARM_REASON_DENSITY
+    assert alarms[-1].noise_in_window == policy.alarm_max_dropped + 1
+
+
+def test_sparse_noise_over_hours_is_not_an_alarm_even_when_processed_in_one_batch():
+    """Вікно — за часом барів: після вихідних полер за цикл доганяє всю суботу, і це не тривога."""
+    from runtime.ingest.polling.m1_drop_ledger import DroppedM1Ledger
+    ledger = DroppedM1Ledger(DEFAULT_PAUSE_POLICY)
+    every_two_minutes_for_three_hours = [SATURDAY_0743 + i * 120_000 for i in range(90)]
+    assert all(ledger.observe_noise(open_ms, 2.0) is None for open_ms in every_two_minutes_for_three_hours)
+
+
 def test_dropped_minutes_memory_is_bounded():
     from runtime.ingest.polling.m1_drop_ledger import DroppedM1Ledger
-    ledger = DroppedM1Ledger(capacity=2)
+    ledger = DroppedM1Ledger(DEFAULT_PAUSE_POLICY, capacity=2)
     assert ledger.first_drop(60_000) and ledger.first_drop(120_000)
     assert not ledger.first_drop(120_000)
     assert ledger.first_drop(180_000)  # витісняє найстаршу

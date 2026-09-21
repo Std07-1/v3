@@ -40,7 +40,10 @@
     }
   },
   "m1_session_filter": {
-    "pause_noise_margin_min": 60
+    "pause_noise_margin_min": 60,
+    "pause_noise_alarm_window_min": 60,
+    "pause_noise_alarm_max_dropped": 50,
+    "pause_noise_alarm_min_volume": 20
   },
   "broker_base_tfs_s": [],
   "derived_tfs_s": [

@@ -181,7 +181,7 @@ class M1SymbolPoller:
         self._uds = uds
         # SSOT: config.json → m1_session_filter (resolve_pause_policy у будівниках, ADR-0099)
         self._pause_policy = pause_policy
-        self._dropped_ledger = DroppedM1Ledger()
+        self._dropped_ledger = DroppedM1Ledger(pause_policy)
         self._calendar = calendar
         self._tail_n = max(2, tail_fetch_n)
         self._m3_derive = m3_derive
@@ -228,6 +228,7 @@ class M1SymbolPoller:
         self._errors = 0
         self._calendar_skips = 0
         self._pause_noise_dropped = 0
+        self._pause_noise_alarms = 0
         self._gaps_detected = 0
         self._already_caught_up = 0
 
@@ -292,7 +293,7 @@ class M1SymbolPoller:
         """WARN і лічильник відкинутого бару — рівно один раз на хвилину (ADR-0099 §3.4); плаский у паузі — мовчки.
 
         Кожен відкинутий бар іде в лог з OHLCV: при хибному календарі тут потечуть справжні хвилини з великим обсягом,
-        і це має бути видно, а не тихо зникнути.
+        і це має бути видно (тривога M1_PAUSE_NOISE_ALARM), а не тихо зникнути.
         """
         if verdict == VERDICT_PAUSE_FLAT_DROPPED or not self._dropped_ledger.first_drop(bar.open_time_ms):
             return
@@ -310,6 +311,16 @@ class M1SymbolPoller:
                 self._symbol, bar.open_time_ms, bar.o, bar.h, bar.low, bar.c, bar.v,
                 self._pause_policy.noise_margin_min, self._pause_noise_dropped,
             )
+            alarm = self._dropped_ledger.observe_noise(bar.open_time_ms, bar.v)
+            if alarm is not None:
+                self._pause_noise_alarms += 1
+                logging.error(
+                    "M1_PAUSE_NOISE_ALARM symbol=%s reason=%s open_ms=%s v=%.0f noise_in_window=%d window_min=%d "
+                    "suppressed=%d — шум глибоко в паузі схожий на торгівлю: ймовірно, календар символу хибний "
+                    "(сезон, група, свято), і справжні хвилини йдуть у відсів",
+                    self._symbol, alarm.reason, bar.open_time_ms, bar.v, alarm.noise_in_window,
+                    self._pause_policy.alarm_window_min, alarm.suppressed_since_last,
+                )
         else:
             logging.warning(
                 "M1_DROPPED symbol=%s open_ms=%s verdict=%s v=%.0f — бар не йде в SSOT за правилом сесії",
@@ -940,6 +951,7 @@ class M1SymbolPoller:
             "errors": self._errors,
             "calendar_skips": self._calendar_skips,
             "pause_noise_dropped": self._pause_noise_dropped,
+            "pause_noise_alarms": self._pause_noise_alarms,
             "gaps_detected": self._gaps_detected,
             "caught_up_skips": self._already_caught_up,
             "watermark_ms": self._watermark_ms,
@@ -1358,12 +1370,13 @@ class M1PollerRunner:
         total_err = sum(p.stats["errors"] for p in self._pollers)
         total_cal_skip = sum(p.stats["calendar_skips"] for p in self._pollers)
         total_pause_noise = sum(p.stats["pause_noise_dropped"] for p in self._pollers)
+        total_noise_alarms = sum(p.stats["pause_noise_alarms"] for p in self._pollers)
         total_gaps = sum(p.stats["gaps_detected"] for p in self._pollers)
         total_caught = sum(p.stats["caught_up_skips"] for p in self._pollers)
         recovering = sum(1 for p in self._pollers if p.stats.get("recover_active"))
         total_stale = sum(p.stats.get("stale_count", 0) for p in self._pollers)
         logging.info(
-            "M1_POLLER_STATS symbols=%d m1=%d m3=%d err=%d cal_skip=%d pause_noise=%d "
+            "M1_POLLER_STATS symbols=%d m1=%d m3=%d err=%d cal_skip=%d pause_noise=%d noise_alarm=%d "
             "gaps=%d caught_up=%d recovering=%d stale=%d",
             len(self._pollers),
             total_m1,
@@ -1371,6 +1384,7 @@ class M1PollerRunner:
             total_err,
             total_cal_skip,
             total_pause_noise,
+            total_noise_alarms,
             total_gaps,
             total_caught,
             recovering,
