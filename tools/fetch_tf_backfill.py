@@ -16,11 +16,12 @@ from core.model.bars import CandleBar
 from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
 from runtime.ingest.m1_session_filter import (
     VERDICT_PAUSE_FLAT_DROPPED,
+    VERDICT_PAUSE_NOISE_DROPPED,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
-    classify_m1_for_ssot,
-    is_session_open_minute,
+    classify_m1_by_calendar,
     resolve_close_safety_ms,
     resolve_flat_max_volume,
+    resolve_pause_noise_margin_min,
     split_closed_bars,
 )
 from runtime.ingest.market_calendar import MarketCalendar
@@ -88,21 +89,23 @@ _OFF_CALENDAR_ALLOWANCE = 3
 
 
 def _filter_m1_by_session(
-    bars: List[CandleBar], calendar: MarketCalendar, flat_max_volume: int
+    bars: List[CandleBar], calendar: MarketCalendar, flat_max_volume: int, pause_noise_margin_min: int
 ) -> Tuple[List[CandleBar], Counter, List[int]]:
-    """Те саме правило SSOT, що в живому M1-полері: пласкі бари поза сесією не пишуться, неплаский поза сесією — з маркером.
+    """Те саме правило SSOT, що в живому M1-полері (`m1_session_filter.classify_m1_by_calendar`): шум глибоко в паузі
+    і пласкі бари поза сесією не пишуться, неплаский біля краю сесії — з маркером anomaly.
 
     Засів раніше писав усе, що віддав брокер: NAS100 і US30 мають пласкі хвилини Сб 22:00 саме з засіву (15.09).
-    Третій елемент — open_ms усіх хвилин поза календарем, щоб оператор бачив, ЯКІ саме, а не лише скільки.
+    Третій елемент — open_ms усіх хвилин поза календарем (зокрема відкинутих як шум), щоб оператор бачив, ЯКІ саме,
+    а не лише скільки: допуск _OFF_CALENDAR_ALLOWANCE рахує їх усі, інакше хибний календар (справжні хвилини глибоко
+    в «паузі») тихо пішов би у шум.
     """
     kept: List[CandleBar] = []
     verdicts: Counter = Counter()
     off_calendar: List[int] = []
     for bar in bars:
         trading = calendar.is_trading_minute(bar.open_time_ms)
-        classified, verdict = classify_m1_for_ssot(
-            bar, trading, flat_max_volume,
-            session_open_minute=is_session_open_minute(bar.open_time_ms, calendar.is_trading_minute),
+        classified, verdict = classify_m1_by_calendar(
+            bar, calendar.is_trading_minute, flat_max_volume, pause_noise_margin_min
         )
         verdicts[verdict] += 1
         if not trading:
@@ -198,12 +201,14 @@ def main() -> int:
         logging.error("Порожній список символів")
         return 2
     # Календар обовʼязковий: без нього не відрізнити хвилину сесії від шуму брокера після закриття (fail-closed,
-    # як у живих воркерах). Хибний календар видно з лічильника pause_nonflat_anomaly у лозі кожного кроку.
+    # як у живих воркерах). Хибний календар видно з лічильників pause_nonflat_anomaly / pause_noise_dropped у лозі
+    # кожного кроку, а понад _OFF_CALENDAR_ALLOWANCE хвилин поза календарем засів відмовляється писати.
     calendars, rejected = resolve_symbol_calendars(cfg, sym_list, where="fetch_tf_backfill")
     if rejected:
         logging.error("BACKFILL_REFUSED symbols=%s — немає календаря сесії (market_calendar_symbol_groups)", ",".join(rejected))
         return 2
     flat_max_volume = resolve_flat_max_volume(cfg)
+    pause_noise_margin_min = resolve_pause_noise_margin_min(cfg)
 
     if args.date_to:
         date_to = _parse_date_utc(args.date_to)
@@ -286,7 +291,9 @@ def main() -> int:
                         symbol, len(unclosed), _format_cursor(unclosed[0].open_time_ms),
                     )
                 if args.tf == 60:
-                    bars, verdicts, off_calendar = _filter_m1_by_session(bars, calendars[symbol], flat_max_volume)
+                    bars, verdicts, off_calendar = _filter_m1_by_session(
+                        bars, calendars[symbol], flat_max_volume, pause_noise_margin_min
+                    )
                     total_verdicts.update(verdicts)
                     logging.log(
                         logging.WARNING if off_calendar else logging.INFO,
@@ -339,12 +346,13 @@ def main() -> int:
         writer.close()
 
     dropped = total_verdicts[VERDICT_PAUSE_FLAT_DROPPED]
+    noise = total_verdicts[VERDICT_PAUSE_NOISE_DROPPED]
     anomalies = total_verdicts[VERDICT_PAUSE_NONFLAT_ANOMALY]
     logging.log(
-        logging.WARNING if dropped or anomalies else logging.INFO,
+        logging.WARNING if dropped or noise or anomalies else logging.INFO,
         "=== ПІДСУМОК: записано=%d пропущено(dedup)=%d відсіяно(пласкі поза сесією)=%d "
-        "аномалій(непласкі поза сесією)=%d помилок=%d ===",
-        total_written, total_skipped, dropped, anomalies, len(errors),
+        "відсіяно(шум глибоко в паузі, margin=%d хв)=%d аномалій(непласкі біля краю сесії)=%d помилок=%d ===",
+        total_written, total_skipped, dropped, pause_noise_margin_min, noise, anomalies, len(errors),
     )
     return 1 if errors else 0
 

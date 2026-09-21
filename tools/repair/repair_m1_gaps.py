@@ -29,11 +29,13 @@ from core.config_loader import load_system_config, pick_config_path
 from core.model.bars import CandleBar
 from runtime.ingest.m1_session_filter import (
     FLAT_BAR_MAX_VOLUME_DEFAULT,
+    PAUSE_NOISE_MARGIN_MIN_DEFAULT,
+    VERDICT_PAUSE_NOISE_DROPPED,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
-    classify_m1_for_ssot,
-    is_session_open_minute,
+    classify_m1_by_calendar,
     resolve_close_safety_ms,
     resolve_flat_max_volume,
+    resolve_pause_noise_margin_min,
     split_closed_bars,
 )
 from runtime.ingest.market_calendar import MarketCalendar
@@ -386,6 +388,7 @@ def _filter_fetched_bars(
     flat_max_volume: int,
     now_ms: Optional[int],
     close_safety_ms: int,
+    pause_noise_margin_min: int = PAUSE_NOISE_MARGIN_MIN_DEFAULT,
 ) -> Tuple[List[CandleBar], Dict[str, int]]:
     """Спільне правило M1→SSOT (`runtime/ingest/m1_session_filter`) плюс відсів хвилини, що ще формується."""
     verdicts: Dict[str, int] = {}
@@ -397,9 +400,8 @@ def _filter_fetched_bars(
         return bars, verdicts
     kept: List[CandleBar] = []
     for bar in bars:
-        classified, verdict = classify_m1_for_ssot(
-            bar, calendar.is_trading_minute(bar.open_time_ms), flat_max_volume,
-            session_open_minute=is_session_open_minute(bar.open_time_ms, calendar.is_trading_minute),
+        classified, verdict = classify_m1_by_calendar(
+            bar, calendar.is_trading_minute, flat_max_volume, pause_noise_margin_min
         )
         verdicts[verdict] = verdicts.get(verdict, 0) + 1
         if classified is not None:
@@ -419,6 +421,7 @@ def repair_gaps(
     flat_max_volume: int = FLAT_BAR_MAX_VOLUME_DEFAULT,
     now_ms: Optional[int] = None,
     close_safety_ms: int = 8_000,
+    pause_noise_margin_min: int = PAUSE_NOISE_MARGIN_MIN_DEFAULT,
 ) -> Dict[str, Any]:
     """Ремонтує M1 гапи: один fetch + append до JSONL.
 
@@ -450,10 +453,13 @@ def repair_gaps(
     # хвилини, що ще формується: інструмент ремонту — третій записувач M1, і без цього він повертав би в SSOT
     # рівно те, що двоє інших уже відкидають.
     fetched = len(bars)
-    bars, verdicts = _filter_fetched_bars(bars, calendar, flat_max_volume, now_ms, close_safety_ms)
+    bars, verdicts = _filter_fetched_bars(
+        bars, calendar, flat_max_volume, now_ms, close_safety_ms, pause_noise_margin_min
+    )
     if verdicts:
+        loud = (VERDICT_PAUSE_NONFLAT_ANOMALY, VERDICT_PAUSE_NOISE_DROPPED, "unclosed")
         log.log(
-            logging.WARNING if verdicts.get(VERDICT_PAUSE_NONFLAT_ANOMALY) or verdicts.get("unclosed") else logging.INFO,
+            logging.WARNING if any(verdicts.get(v) for v in loud) else logging.INFO,
             "REPAIR_SESSION_FILTER symbol=%s fetched=%d kept=%d verdicts=%s",
             symbol, fetched, len(bars), dict(sorted(verdicts.items())),
         )
@@ -667,6 +673,7 @@ def main() -> None:
             flat_max_volume=resolve_flat_max_volume(cfg),
             now_ms=int(time.time() * 1000),
             close_safety_ms=resolve_close_safety_ms(cfg),
+            pause_noise_margin_min=resolve_pause_noise_margin_min(cfg),
         )
     finally:
         redis_cli.close()

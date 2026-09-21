@@ -23,6 +23,8 @@ SAFETY_MS = 8_000
 # Середа 2026-09-09 12:00:30 UTC — усередині сесії календаря нижче.
 NOW_MS = int(dt.datetime(2026, 9, 9, 12, 0, 30, tzinfo=dt.timezone.utc).timestamp() * 1000)
 SATURDAY_22 = int(dt.datetime(2026, 9, 5, 22, 0, tzinfo=dt.timezone.utc).timestamp() * 1000)  # до NOW_MS, бар закритий
+# Нд 21:30 — пауза, але за 30 хв до відкриття 22:00: «біля краю сесії», де лишається маркер anomaly.
+SUNDAY_2130 = int(dt.datetime(2026, 9, 6, 21, 30, tzinfo=dt.timezone.utc).timestamp() * 1000)
 CALENDAR_GROUP = {
     "market_weekend_open_dow": 6, "market_weekend_open_hm": "22:00",
     "market_weekend_close_dow": 4, "market_weekend_close_hm": "20:45",
@@ -80,9 +82,10 @@ class _FakeProvider:
         return list(type(self).bars)
 
 
-def _run_main(tmp_path: Path, monkeypatch, bars, *, with_calendar=True, extra_argv=()):
+def _run_main(tmp_path: Path, monkeypatch, bars, *, with_calendar=True, extra_argv=(), extra_cfg=None):
     data_root = tmp_path / "data_v3"
     cfg = {"data_root": str(data_root), "m1_poller": {"safety_delay_s": 8}}
+    cfg.update(extra_cfg or {})
     if with_calendar:
         cfg["market_calendar_by_group"] = {"test_group": CALENDAR_GROUP}
         cfg["market_calendar_symbol_groups"] = {"GER30": "test_group"}
@@ -116,15 +119,28 @@ def test_main_drops_flat_bars_outside_session_and_marks_the_rest_like_the_poller
     bars = [
         _bar(in_session),
         _flat(in_session + M1_MS),            # однотікова хвилина сесії — лишається з маркером
-        _flat(SATURDAY_22 - 60 * M1_MS),      # Сб 21:00: вихідні, плаский шум брокера — не пишеться
-        _bar(SATURDAY_22 - 30 * M1_MS),       # Сб 21:30: неплаский поза сесією — аномалія, пишеться з маркером
+        _flat(SATURDAY_22 - 60 * M1_MS),      # Сб 21:00: глибоко у вихідних, плаский шум брокера — не пишеться
+        _bar(SATURDAY_22 - 30 * M1_MS),       # Сб 21:30: глибоко у вихідних, неплаский — теж шум, не пишеться
+        _bar(SUNDAY_2130),                    # Нд 21:30: пауза біля краю сесії — аномалія, пишеться з маркером
     ]
     rc, written = _run_main(tmp_path, monkeypatch, bars)
     assert rc == 0
     by_open = {row["open_time_ms"]: row for row in written}
-    assert set(by_open) == {in_session, in_session + M1_MS, SATURDAY_22 - 30 * M1_MS}
+    assert set(by_open) == {in_session, in_session + M1_MS, SUNDAY_2130}
     assert by_open[in_session + M1_MS]["extensions"] == {"trading_flat": True}
-    assert by_open[SATURDAY_22 - 30 * M1_MS]["extensions"] == {"calendar_pause_nonflat_anomaly": True}
+    assert by_open[SUNDAY_2130]["extensions"] == {"calendar_pause_nonflat_anomaly": True}
+
+
+def test_main_pause_noise_margin_comes_from_config(tmp_path: Path, monkeypatch):
+    """Засів бере запас із config (m1_session_filter.pause_noise_margin_min): при запасі на всю добу Сб 21:30 уже
+    «біля краю» (до Нд 22:00 — 1470 хв) і пишеться як аномалія, а не відкидається як шум."""
+    in_session = NOW_MS // M1_MS * M1_MS - 10 * M1_MS
+    saturday_2130 = SATURDAY_22 - 30 * M1_MS
+    rc, written = _run_main(tmp_path, monkeypatch, [_bar(in_session), _bar(saturday_2130)],
+                            extra_cfg={"m1_session_filter": {"pause_noise_margin_min": 1470}})
+    assert rc == 0
+    by_open = {row["open_time_ms"]: row for row in written}
+    assert by_open[saturday_2130]["extensions"] == {"calendar_pause_nonflat_anomaly": True}
 
 
 def test_main_refuses_the_batch_when_many_minutes_fall_outside_the_calendar(tmp_path: Path, monkeypatch):

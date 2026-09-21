@@ -96,6 +96,7 @@
 | `connector_retry_max_s` | int | 3600 | Максимальний інтервал ретрі (exp backoff) |
 | `connector_wake_ahead_s` | int | 900 | За скільки секунд до відкриття ринку будити конектор |
 | `flat_bar_max_volume` | int | 4 | Макс volume для позначки бару як "flat" (calendar pause) |
+| `m1_session_filter.pause_noise_margin_min` | int | 60 | Правило M1→SSOT (`runtime/ingest/m1_session_filter`, усі три записувачі M1): хвилина паузи, до якої найближча торгова далі за цей запас, відкидається як шум брокера незалежно від обсягу (`pause_noise_dropped`, лог `M1_PAUSE_NOISE_DROPPED`). Ближче — плаский відкидається, неплаский пишеться з `calendar_pause_nonflat_anomaly`. 60 = зсув межі сесії при DST; мінімум 1 |
 
 ---
 

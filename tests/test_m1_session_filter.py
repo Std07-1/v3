@@ -141,6 +141,20 @@ def test_repair_tool_applies_the_same_rule_and_drops_the_forming_minute(monkeypa
     assert result["total_fetched"] == 3 and result["total_kept"] == 1
 
 
+def test_repair_filter_drops_deep_pause_bar_as_noise_and_keeps_edge_anomaly():
+    """Ремонт дірок — той самий вердикт, що полер і засів: Сб неплаский — шум, Ср 21:00 неплаский — anomaly;
+    запас приходить параметром (main бере його з config)."""
+    from runtime.ingest.m1_session_filter import VERDICT_PAUSE_NOISE_DROPPED
+    from tools.repair import repair_m1_gaps as rmg
+
+    saturday = _m1_at(SATURDAY_0743, 63.01, 63.02, 63.01, 63.02, 5.0)
+    edge = _m1_at(_utc_ms(2026, 9, 16, 21, 0), 5.0, 5.1, 5.0, 5.1, 3.0)
+    kept, verdicts = rmg._filter_fetched_bars([saturday, edge], _us_cfd_calendar(), 4, None, 8_000,  # noqa: SLF001
+                                              pause_noise_margin_min=60)
+    assert [b.open_time_ms for b in kept] == [edge.open_time_ms]
+    assert verdicts == {VERDICT_PAUSE_NOISE_DROPPED: 1, VERDICT_PAUSE_NONFLAT_ANOMALY: 1}
+
+
 def test_existing_extensions_are_kept_and_input_is_not_mutated():
     bar = _bar(5.0, 5.0, 5.0, 5.0, 1.0, extensions={"source_note": "x"})
     out, _ = classify_m1_for_ssot(bar, trading=True, flat_max_volume=4)
