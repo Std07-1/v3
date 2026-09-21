@@ -64,20 +64,27 @@ PAUSE_NOISE_ALARM_MIN_VOLUME_DEFAULT = 20
 class PausePolicy:
     """Правила M1→SSOT для хвилин паузи (ADR-0099), зведені з config `m1_session_filter` одним `resolve_pause_policy`.
 
-    None у правилі означає, що правило вимкнене. Так засів з `--allow-off-calendar` (календар під підозрою) пише хвилини
-    паузи з маркером anomaly, а не відкидає їх за положенням у календарі. Поля `alarm_*` — пороги тривоги хибного
-    календаря в живому полері (`runtime/ingest/polling/m1_drop_ledger.py`).
+    `edge_stale_max_volume` None — правило застарілого краю вимкнене (K=0). Поля `alarm_*` — пороги тривоги хибного
+    календаря; `alarm_min_volume` — ще й єдиний критерій «бар схожий на торгівлю» (`is_trading_like_volume`) для
+    тривоги полера, допуску засіву і прапора `--allow-off-calendar` (ADR-0099 §3.3, §3.5).
     """
 
-    noise_margin_min: Optional[int]
+    noise_margin_min: int
     edge_stale_max_volume: Optional[int] = FLAT_BAR_MAX_VOLUME_DEFAULT * PAUSE_EDGE_STALE_VOLUME_MULT_DEFAULT
     alarm_window_min: int = PAUSE_NOISE_ALARM_WINDOW_MIN_DEFAULT
     alarm_max_dropped: int = PAUSE_NOISE_ALARM_MAX_DROPPED_DEFAULT
     alarm_min_volume: int = PAUSE_NOISE_ALARM_MIN_VOLUME_DEFAULT
+    calendar_suspected: bool = False
+
+    def is_trading_like_volume(self, volume: float) -> bool:
+        """Обсяг справжньої торгівлі, а не шуму паузи: шум v ≤ 5, справжні хвилини v ≥ 20 у 99.7–99.9%."""
+        return volume >= self.alarm_min_volume
 
     def with_calendar_suspected(self) -> "PausePolicy":
-        """Копія без правил, що відкидають неплаский бар за положенням у календарі (ADR-0099 §3.5)."""
-        return dataclasses.replace(self, noise_margin_min=None, edge_stale_max_volume=None)
+        """Календар під підозрою (засів з `--allow-off-calendar`, ADR-0099 §3.5): бар, схожий на торгівлю, не
+        відкидається за положенням у календарі — пишеться з маркером anomaly. Шум з малим обсягом відкидається, як і
+        раніше: інакше суботні мікросвічки йшли б у SSOT."""
+        return dataclasses.replace(self, calendar_suspected=True)
 
 
 DEFAULT_PAUSE_POLICY = PausePolicy(noise_margin_min=PAUSE_NOISE_MARGIN_MIN_DEFAULT)
@@ -195,22 +202,19 @@ def classify_m1_by_calendar(bar: CandleBar, is_trading_fn: Callable[[int], bool]
     """
     open_ms = bar.open_time_ms
     trading = is_trading_fn(open_ms)
+    # Календар під підозрою: бар, схожий на торгівлю, може бути справжньою хвилиною — положення в календарі його не
+    # відкидає (лишається anomaly). Шум з малим обсягом відкидається за положенням і тоді.
+    position_drops = not (pause_policy.calendar_suspected and pause_policy.is_trading_like_volume(bar.v))
     return _decide_verdict(
         bar,
         flat_max_volume=flat_max_volume,
         trading=trading,
         session_open_minute=trading and is_session_open_minute(open_ms, is_trading_fn),
-        deep_in_pause=not trading and _is_deep_in_pause(open_ms, is_trading_fn, pause_policy.noise_margin_min),
+        deep_in_pause=(not trading and position_drops
+                       and minutes_to_session_edge(open_ms, is_trading_fn, pause_policy.noise_margin_min) is None),
         first_pause_minute=not trading and is_trading_fn(open_ms - _M1_MS),
-        edge_stale_max_volume=pause_policy.edge_stale_max_volume,
+        edge_stale_max_volume=pause_policy.edge_stale_max_volume if position_drops else None,
     )
-
-
-def _is_deep_in_pause(open_ms: int, is_trading_fn: Callable[[int], bool], noise_margin_min: Optional[int]) -> bool:
-    """Хвилина паузи далі за запас від найближчої торгової. None — правило глибини вимкнене."""
-    if noise_margin_min is None:
-        return False
-    return minutes_to_session_edge(open_ms, is_trading_fn, noise_margin_min) is None
 
 
 def _decide_verdict(bar: CandleBar, *, flat_max_volume: int, trading: bool, session_open_minute: bool,

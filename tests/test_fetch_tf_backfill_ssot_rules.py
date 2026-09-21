@@ -143,22 +143,42 @@ def test_main_pause_noise_margin_comes_from_config(tmp_path: Path, monkeypatch):
     assert by_open[saturday_2130]["extensions"] == {"calendar_pause_nonflat_anomaly": True}
 
 
-def test_main_refuses_the_batch_when_many_minutes_fall_outside_the_calendar(tmp_path: Path, monkeypatch):
-    """Хибний календар не має тихо їсти справжні хвилини: понад допуск — відмова rc 1, нічого не записано."""
-    off = [_flat(SATURDAY_22 - (i + 1) * M1_MS) for i in range(6)]
+def _deep_weekend_bars(count, *, v):
+    """Неплаські бари глибоко у вихідних (Сб 21:59, 21:58, …), обсяг v."""
+    return [_bar(SATURDAY_22 - (i + 1) * M1_MS, o=5.0, h=5.1, low=5.0, c=5.1, v=v) for i in range(count)]
+
+
+def test_main_refuses_the_batch_when_trading_like_minutes_fall_outside_the_calendar(tmp_path: Path, monkeypatch):
+    """Рев'ю D-01: хибний календар не має тихо їсти справжні хвилини. 5 глибоких барів з обсягом торгівлі
+    (v ≥ m1_session_filter.pause_noise_alarm_min_volume, той самий критерій, що тривога полера) — понад допуск 3:
+    відмова rc 1, нічого не записано."""
     in_session = _bar(NOW_MS // M1_MS * M1_MS - 10 * M1_MS)
-    rc, written = _run_main(tmp_path, monkeypatch, [in_session] + off)
+    rc, written = _run_main(tmp_path, monkeypatch, [in_session] + _deep_weekend_bars(5, v=20.0))
     assert rc == 1
     assert written == []
 
 
-def test_main_writes_the_batch_off_calendar_when_operator_allows_it(tmp_path: Path, monkeypatch):
-    """--allow-off-calendar — свідоме рішення оператора: пласкі поза сесією все одно не пишуться."""
-    off = [_flat(SATURDAY_22 - (i + 1) * M1_MS) for i in range(6)]
+@pytest.mark.parametrize("extra_argv", [(), ("--allow-off-calendar",)])
+def test_main_weekend_noise_with_small_volume_is_dropped_without_refusal(tmp_path: Path, monkeypatch, extra_argv):
+    """Рев'ю D-01: партія XAG/US30 через вихідні завжди має суботній шум (v 1–5). Він не йде в допуск — відмови
+    немає — і відкидається навіть з --allow-off-calendar (раніше з прапором ішов у SSOT як anomaly)."""
     in_session = _bar(NOW_MS // M1_MS * M1_MS - 10 * M1_MS)
-    rc, written = _run_main(tmp_path, monkeypatch, [in_session] + off, extra_argv=["--allow-off-calendar"])
+    weekend_noise = _deep_weekend_bars(10, v=5.0) + [_flat(SATURDAY_22 - (20 + i) * M1_MS) for i in range(3)]
+    rc, written = _run_main(tmp_path, monkeypatch, [in_session] + weekend_noise, extra_argv=list(extra_argv))
     assert rc == 0
     assert [row["open_time_ms"] for row in written] == [in_session.open_time_ms]
+
+
+def test_main_writes_trading_like_off_calendar_bars_as_anomaly_when_operator_allows_it(tmp_path: Path, monkeypatch):
+    """--allow-off-calendar — свідоме рішення оператора: хвилини з обсягом торгівлі пишуться з маркером anomaly."""
+    in_session = _bar(NOW_MS // M1_MS * M1_MS - 10 * M1_MS)
+    trading_like = _deep_weekend_bars(5, v=20.0)
+    rc, written = _run_main(tmp_path, monkeypatch, [in_session] + trading_like, extra_argv=["--allow-off-calendar"])
+    assert rc == 0
+    by_open = {row["open_time_ms"]: row for row in written}
+    assert set(by_open) == {in_session.open_time_ms} | {bar.open_time_ms for bar in trading_like}
+    assert all(by_open[bar.open_time_ms]["extensions"] == {"calendar_pause_nonflat_anomaly": True}
+               for bar in trading_like)
 
 
 def test_main_tolerates_a_couple_of_minutes_around_the_session_edge(tmp_path: Path, monkeypatch):

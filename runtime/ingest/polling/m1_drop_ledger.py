@@ -82,7 +82,7 @@ class DroppedM1Ledger:
         return alarm
 
     def _alarm_reason(self, volume: float, noise_in_window: int) -> Optional[str]:
-        if volume >= self._policy.alarm_min_volume:
+        if self._policy.is_trading_like_volume(volume):
             return ALARM_REASON_VOLUME
         if noise_in_window > self._policy.alarm_max_dropped:
             return ALARM_REASON_DENSITY

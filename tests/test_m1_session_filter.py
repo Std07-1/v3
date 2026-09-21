@@ -505,15 +505,25 @@ def test_edge_stale_rule_takes_only_the_first_pause_minute_after_close(open_ms, 
     assert (out is None) == (expected_verdict == "pause_edge_stale_dropped")
 
 
-@pytest.mark.parametrize("policy", [
-    DEFAULT_PAUSE_POLICY.with_calendar_suspected(),
-    PausePolicy(noise_margin_min=60, edge_stale_max_volume=None),
-])
-def test_edge_stale_rule_off_keeps_the_2100_bar_as_anomaly(policy):
-    """Календар під підозрою (засів з --allow-off-calendar) або K=0 у config — 21:00 пишеться з маркером anomaly."""
+def test_edge_stale_rule_off_keeps_the_2100_bar_as_anomaly():
+    """K=0 у config — правило застарілого краю вимкнене: 21:00 з малим v пишеться з маркером anomaly."""
     bar = _m1_at(_utc_ms(2026, 9, 16, 21, 0), 5.0, 5.1, 5.0, 5.1, 3.0)
-    out, verdict = classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4, policy)
+    out, verdict = classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4,
+                                           PausePolicy(noise_margin_min=60, edge_stale_max_volume=None))
     assert verdict == VERDICT_PAUSE_NONFLAT_ANOMALY and out.extensions == {"calendar_pause_nonflat_anomaly": True}
+
+
+@pytest.mark.parametrize("open_ms, volume, expected_verdict", [
+    (SATURDAY_0743, 5.0, "pause_noise_dropped"),                      # суботній шум — відкидається і під підозрою
+    (_utc_ms(2026, 9, 16, 21, 0), 3.0, "pause_edge_stale_dropped"),  # застарілий край з малим v — теж
+    (SATURDAY_0743, 20.0, VERDICT_PAUSE_NONFLAT_ANOMALY),             # обсяг торгівлі — не відкидається за положенням
+])
+def test_calendar_suspected_keeps_only_trading_like_bars(open_ms, volume, expected_verdict):
+    """Рев'ю D-01: підозра на календар (--allow-off-calendar) рятує лише бари з обсягом торгівлі
+    (`PausePolicy.is_trading_like_volume`, той самий критерій, що тривога полера), а не суботній шум."""
+    bar = _m1_at(open_ms, 5.0, 5.1, 5.0, 5.1, volume)
+    policy = DEFAULT_PAUSE_POLICY.with_calendar_suspected()
+    assert classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4, policy)[1] == expected_verdict
 
 
 @pytest.mark.parametrize("cfg, expected_max_volume", [

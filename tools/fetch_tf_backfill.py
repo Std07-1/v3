@@ -83,10 +83,12 @@ def _parse_date_utc(s: str) -> dt.datetime:
 # записувачів M1: `runtime/ingest/m1_session_filter.resolve_close_safety_ms` / `split_closed_bars`.
 
 
-# Скільки хвилин поза календарем у партії ще можна списати на межу сесії (брокер віддає хвилину-дві навколо межі),
-# а не на хибний календар. Понад це — засів відмовляється писати: інакше при хибному календарі (GER30 у config
-# 07–21 проти справжніх 00:31–19:59) тихо зникало б ~390 справжніх хвилин на добу, і жоден детектор цього не
-# побачив би, бо детектор — той самий календар.
+# Скільки хвилин поза календарем, СХОЖИХ НА ТОРГІВЛЮ, у партії ще можна списати на межу сесії (брокер віддає
+# хвилину-дві навколо межі), а не на хибний календар. Понад це — засів відмовляється писати: інакше при хибному
+# календарі (GER30 у config 07–21 проти справжніх 00:31–19:59) тихо зникало б ~390 справжніх хвилин на добу, і жоден
+# детектор цього не побачив би, бо детектор — той самий календар. «Схожа на торгівлю» — неплаский бар біля краю
+# (anomaly) або глибоко в паузі з обсягом торгівлі (`PausePolicy.is_trading_like_volume` — той самий критерій, що
+# тривога полера). Шум з малим обсягом у допуск не йде: партія через вихідні його завжди має (XAG, US30).
 _OFF_CALENDAR_ALLOWANCE = 3
 
 
@@ -97,22 +99,27 @@ def _filter_m1_by_session(
     і пласкі бари поза сесією не пишуться, неплаский біля краю сесії — з маркером anomaly.
 
     Засів раніше писав усе, що віддав брокер: NAS100 і US30 мають пласкі хвилини Сб 22:00 саме з засіву (15.09).
-    Третій елемент — open_ms усіх хвилин поза календарем (зокрема відкинутих як шум), щоб оператор бачив, ЯКІ саме,
-    а не лише скільки: допуск _OFF_CALENDAR_ALLOWANCE рахує їх усі, інакше хибний календар (справжні хвилини глибоко
-    в «паузі») тихо пішов би у шум.
+    Третій елемент — open_ms хвилин поза календарем, схожих на торгівлю (див. _OFF_CALENDAR_ALLOWANCE): саме їх рахує
+    допуск, і оператор бачить, ЯКІ саме, а не лише скільки.
     """
     kept: List[CandleBar] = []
     verdicts: Counter = Counter()
-    off_calendar: List[int] = []
+    trading_like_off_calendar: List[int] = []
     for bar in bars:
-        trading = calendar.is_trading_minute(bar.open_time_ms)
         classified, verdict = classify_m1_by_calendar(bar, calendar.is_trading_minute, flat_max_volume, pause_policy)
         verdicts[verdict] += 1
-        if not trading:
-            off_calendar.append(bar.open_time_ms)
+        if _is_trading_like_off_calendar(bar, verdict, pause_policy):
+            trading_like_off_calendar.append(bar.open_time_ms)
         if classified is not None:
             kept.append(classified)
-    return kept, verdicts, off_calendar
+    return kept, verdicts, trading_like_off_calendar
+
+
+def _is_trading_like_off_calendar(bar: CandleBar, verdict: str, pause_policy: PausePolicy) -> bool:
+    """Хвилина поза календарем, що може бути справжньою: anomaly біля краю або шум з обсягом торгівлі."""
+    if verdict == VERDICT_PAUSE_NONFLAT_ANOMALY:
+        return True
+    return verdict == VERDICT_PAUSE_NOISE_DROPPED and pause_policy.is_trading_like_volume(bar.v)
 
 
 def _describe_off_calendar(off_calendar: List[int]) -> str:
@@ -166,11 +173,11 @@ def main() -> int:
     ap.add_argument("--force-derived-tf", action="store_true", default=False,
                     help="Дозволити fetch derived-only TF. Небезпечно — anchor mismatch!")
     ap.add_argument("--allow-off-calendar", action="store_true", default=False,
-                    help=("Писати партію, навіть якщо брокер віддав більше за %d хвилин поза календарем групи "
-                          "(інакше засів відмовляється: ймовірно хибний календар). Календар під підозрою, тому "
-                          "правила глибини паузи і застарілого краю вимикаються: неплаский бар поза календарем "
-                          "пишеться з маркером calendar_pause_nonflat_anomaly, пласкі поза сесією не пишуться "
-                          "(ADR-0099 §3.5)" % _OFF_CALENDAR_ALLOWANCE))
+                    help=("Писати партію, навіть якщо брокер віддав більше за %d хвилин поза календарем групи, "
+                          "схожих на торгівлю (інакше засів відмовляється: ймовірно хибний календар). Календар під "
+                          "підозрою, тому бар поза календарем з обсягом торгівлі не відкидається за положенням, а "
+                          "пишеться з маркером calendar_pause_nonflat_anomaly; шум з малим обсягом і пласкі поза "
+                          "сесією не пишуться (ADR-0099 §3.5)" % _OFF_CALENDAR_ALLOWANCE))
     args = ap.parse_args()
 
     # Guard: з брокера тягнемо ТІЛЬКИ M1. Усе інше будує DeriveEngine на своїй
@@ -213,12 +220,12 @@ def main() -> int:
     flat_max_volume = resolve_flat_max_volume(cfg)
     pause_policy = resolve_pause_policy(cfg)
     if args.allow_off_calendar:
-        # Прапор = календар під підозрою: відкидати неплаский бар за положенням у ньому не можна — це може бути
-        # справжня хвилина. Такий бар пишеться з маркером anomaly і видно в лозі, пласкі відсіюються, як і раніше.
+        # Прапор = календар під підозрою: бар з обсягом торгівлі поза календарем може бути справжньою хвилиною — не
+        # відкидається за положенням, а пишеться з маркером anomaly. Шум з малим обсягом відсіюється, як і раніше.
         pause_policy = pause_policy.with_calendar_suspected()
         logging.warning(
-            "BACKFILL_CALENDAR_RULES_RELAXED --allow-off-calendar: правила глибини паузи і застарілого краю вимкнено — "
-            "неплаский бар поза календарем пишеться з маркером calendar_pause_nonflat_anomaly, пласкі не пишуться"
+            "BACKFILL_CALENDAR_RULES_RELAXED --allow-off-calendar: бар поза календарем з v >= %d пишеться з маркером "
+            "calendar_pause_nonflat_anomaly; шум з меншим обсягом і пласкі не пишуться", pause_policy.alarm_min_volume,
         )
 
     if args.date_to:
@@ -302,22 +309,24 @@ def main() -> int:
                         symbol, len(unclosed), _format_cursor(unclosed[0].open_time_ms),
                     )
                 if args.tf == 60:
-                    bars, verdicts, off_calendar = _filter_m1_by_session(
+                    bars, verdicts, trading_like_off_calendar = _filter_m1_by_session(
                         bars, calendars[symbol], flat_max_volume, pause_policy
                     )
                     total_verdicts.update(verdicts)
                     logging.log(
-                        logging.WARNING if off_calendar else logging.INFO,
+                        logging.WARNING if trading_like_off_calendar else logging.INFO,
                         "%s: BACKFILL_SESSION_FILTER %s%s",
                         symbol, dict(sorted(verdicts.items())),
-                        " | поза календарем: " + _describe_off_calendar(off_calendar) if off_calendar else "",
+                        " | поза календарем, схожі на торгівлю: " + _describe_off_calendar(trading_like_off_calendar)
+                        if trading_like_off_calendar else "",
                     )
-                    if len(off_calendar) > _OFF_CALENDAR_ALLOWANCE and not args.allow_off_calendar:
+                    if len(trading_like_off_calendar) > _OFF_CALENDAR_ALLOWANCE and not args.allow_off_calendar:
                         logging.error(
-                            "%s: BACKFILL_CALENDAR_SUSPECT %s — брокер віддає хвилини поза календарем групи; "
-                            "або календар символу хибний (перевірте market_calendar_by_group), або це справді "
-                            "позасесійний шум. Нічого не записано. Свідомо продовжити: --allow-off-calendar",
-                            symbol, _describe_off_calendar(off_calendar),
+                            "%s: BACKFILL_CALENDAR_SUSPECT %s — брокер віддає поза календарем групи хвилини, схожі "
+                            "на торгівлю (anomaly біля краю або v >= %d глибоко в паузі); ймовірно календар символу "
+                            "хибний (перевірте market_calendar_by_group). Нічого не записано. Свідомо продовжити: "
+                            "--allow-off-calendar",
+                            symbol, _describe_off_calendar(trading_like_off_calendar), pause_policy.alarm_min_volume,
                         )
                         errors.append(symbol)
                         continue
