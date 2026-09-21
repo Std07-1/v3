@@ -1,14 +1,15 @@
 """Перша M1 після перерви: запечені компоненти бару — з тікової історії брокера (ADR-0096 слайс E).
 
-FXCM віддає першу хвилину кожної сесії (денна перерва, вихідні) з open — і high або low — рівним close перед
-перервою. Полер комітить бар один раз, тож без перебудови запечене значення лишається назавжди і тягне M1…D1
-(гігантська перша свічка сесії).
+FXCM віддає першу хвилину кожної сесії (денна перерва, вихідні) з open — і high або low — рівним ціні до перерви.
+Полер комітить бар один раз, тож без перебудови запечене значення лишається назавжди і тягне M1…D1 (гігантська
+перша свічка сесії).
 
-Перебудовується ЛИШЕ запечене: open — першим тіком хвилини; high/low — лише той, що дорівнює close перед
-перервою, з тіків і close. Решта бару (c, v, незапечений екстремум) — брокерська. Звірки «тіки = бар» за
-close чи обсягом немає свідомо: на T+8 с тікова історія й m1 брокера не узгоджені ні за кількістю тіків, ні
-за close (замір 21.09 15:34–15:36 UTC: XAU 1190 тіків при v=818, EUSTX50 close тіку 6327.63 проти 6328.13) —
-такі гейти відкидали б майже кожне відкриття.
+Запечення визначається тіками самої хвилини, а не нашим close перед перервою (бар перед перервою буває округлений:
+XAU/XAG 16.09 prev close 4381.00 при запеченому o 4380.77): open, що лежить ПОЗА діапазоном реальних тіків хвилини
+(±½ кроку), не є жодною з цін цієї хвилини. Справжній open навіть при розбіжності серій t1 і m1 у 1–2 кроки лежить
+усередині (NAS100: open 30299.59 при тіках [30290.71, 30302.71]). Перебудовується ЛИШЕ запечене: open — першим за
+часом тіком; high/low — лише той, що дорівнював запеченому open, з тіків і close. c і v — брокерські. Звірки
+«тіки = бар» за close чи обсягом немає свідомо: на T+8 с серії не узгоджені (замір 21.09 15:34–15:36 UTC).
 
 Модуль чистий (без I/O і логів) і сумісний з Python 3.7. Рішення — тут; запит тіків і лог — у полері.
 """
@@ -29,13 +30,12 @@ MARKER_LOW_BEFORE = "low_before"
 MARKER_PROVISIONAL = "open_provisional"
 
 REASON_REBUILT = "rebuilt"
-REASON_NOT_BAKED = "open_not_baked"
-REASON_OPEN_EQUALS_PREV_CLOSE = "first_tick_equals_prev_close"
+REASON_OPEN_WITHIN_TICKS = "open_within_ticks"
 REASON_NO_TICKS = "no_ticks_in_minute"
 REASON_PRICE_STEP_INVALID = "price_step_invalid"
 
 # Причини, з якими бар брокера вже правильний: лишається як є, без маркера і без WARN.
-BAR_CORRECT_AS_IS: FrozenSet[str] = frozenset({REASON_NOT_BAKED, REASON_OPEN_EQUALS_PREV_CLOSE})
+BAR_CORRECT_AS_IS: FrozenSet[str] = frozenset({REASON_OPEN_WITHIN_TICKS})
 
 
 @dataclasses.dataclass(frozen=True)
@@ -61,6 +61,7 @@ def resolve_session_open_rebuild_policy(cfg: Dict[str, Any]) -> SessionOpenRebui
     section = m1_cfg.get(_CONFIG_SECTION) if isinstance(m1_cfg, dict) else None
     if not isinstance(section, dict):
         return DISABLED_POLICY
+    enabled = bool(section.get("enabled", False))
     gap_min = int(section["gap_min"])
     steps = section["price_step_by_symbol"]
     if gap_min < 1 or not isinstance(steps, dict):
@@ -69,11 +70,7 @@ def resolve_session_open_rebuild_policy(cfg: Dict[str, Any]) -> SessionOpenRebui
     bad = sorted(sym for sym, step in price_steps.items() if not step > 0)
     if bad:
         raise ValueError("m1_poller.%s.price_step_by_symbol: крок має бути > 0: %s" % (_CONFIG_SECTION, bad))
-    return SessionOpenRebuildPolicy(
-        enabled=bool(section.get("enabled", False)),
-        gap_ms=gap_min * _M1_MS,
-        price_step_by_symbol=price_steps,
-    )
+    return SessionOpenRebuildPolicy(enabled=enabled, gap_ms=gap_min * _M1_MS, price_step_by_symbol=price_steps)
 
 
 def is_first_bar_after_break(
@@ -89,42 +86,40 @@ def is_first_bar_after_break(
         return True
     if is_trading_fn is None:
         return False
+    # Календарна частина = m1_session_filter.is_session_open_minute з гілки fix/m1-session-noise-ingest-rails
+    # (ще не в main); при її злитті — делегувати туди, щоб правило «перша хвилина сесії» жило в одному місці (X35).
     return is_trading_fn(open_ms) and not is_trading_fn(open_ms - _M1_MS)
-
-
-def is_open_baked(bar: CandleBar, prev_close: float, price_step: float) -> bool:
-    """Open першої хвилини = close перед перервою (±½ кроку) — ознака запеченого бару брокера."""
-    return _same_price(bar.o, prev_close, price_step)
 
 
 def rebuild_session_open_bar(
     bar: CandleBar,
     ticks: Sequence[Tuple[int, float]],
     price_step: float,
-    prev_close: float,
 ) -> Tuple[Optional[CandleBar], str]:
     """(перебудований бар, REASON_REBUILT) або (None, причина). Вхідний бар не змінюється.
 
-    Не запечений (o ≠ prev_close) → REASON_NOT_BAKED. Запечений: o = перший тік хвилини [open_ms, close_ms);
-    high/low замінюється лише той, що дорівнює prev_close (запечений екстремум), на max/min(тіки, c); c і v —
-    брокерські. Перший тік = prev_close → справжнє відкриття на тій самій ціні (REASON_OPEN_EQUALS_PREV_CLOSE).
+    Тіки — лише з [open_ms, close_ms), порядок — за часом. open у межах [min − ½ кроку, max + ½ кроку] тіків →
+    бар справжній (REASON_OPEN_WITHIN_TICKS). Інакше запечений: o = перший за часом тік; high = max(тіки, c),
+    якщо брокерський high дорівнював запеченому open (запечена ціна була екстремумом), інакше брокерський; low —
+    дзеркально; нормалізація h ≥ max(o, c), low ≤ min(o, c); c і v — брокерські.
     """
     if not price_step > 0:
         return None, REASON_PRICE_STEP_INVALID
-    if not is_open_baked(bar, prev_close, price_step):
-        return None, REASON_NOT_BAKED
-    minute_bids = [bid for _tick_ms, bid in sorted(
+    minute_ticks = sorted(
         (tick for tick in ticks if bar.open_time_ms <= tick[0] < bar.close_time_ms), key=lambda tick: tick[0]
-    )]
-    if not minute_bids:
+    )
+    if not minute_ticks:
         return None, REASON_NO_TICKS
-    new_open = minute_bids[0]
-    if _same_price(new_open, prev_close, price_step):
-        return None, REASON_OPEN_EQUALS_PREV_CLOSE
-    new_high = max(max(minute_bids), bar.c) if _same_price(bar.h, prev_close, price_step) else bar.h
-    new_low = min(min(minute_bids), bar.c) if _same_price(bar.low, prev_close, price_step) else bar.low
-    o, h, low, c = normalize_ohlc(new_open, new_high, new_low, bar.c)
-    extensions = {**bar.extensions, MARKER_REBUILT: True, MARKER_OPEN_BEFORE: bar.o}
+    bids = [bid for _tick_ms, bid in minute_ticks]
+    half_step = price_step / 2.0
+    ticks_low, ticks_high = min(bids), max(bids)
+    if ticks_low - half_step <= bar.o <= ticks_high + half_step:
+        return None, REASON_OPEN_WITHIN_TICKS
+    baked_open = bar.o
+    new_high = max(ticks_high, bar.c) if _same_price(bar.h, baked_open, price_step) else bar.h
+    new_low = min(ticks_low, bar.c) if _same_price(bar.low, baked_open, price_step) else bar.low
+    o, h, low, c = normalize_ohlc(bids[0], new_high, new_low, bar.c)
+    extensions = {**bar.extensions, MARKER_REBUILT: True, MARKER_OPEN_BEFORE: baked_open}
     if h != bar.h:
         extensions[MARKER_HIGH_BEFORE] = bar.h
     if low != bar.low:
@@ -133,7 +128,7 @@ def rebuild_session_open_bar(
 
 
 def mark_open_provisional(bar: CandleBar) -> CandleBar:
-    """Open не доведено тіками: бар брокера без змін, з маркером для аудиту і подальшого ремонту."""
+    """Open не перевірено тіками: бар брокера без змін, з маркером для аудиту і подальшого ремонту (settle)."""
     return dataclasses.replace(bar, extensions={**bar.extensions, MARKER_PROVISIONAL: True})
 
 
