@@ -351,6 +351,10 @@ class M1SymbolPoller:
             return bar
         if self._watermark_ms is not None and bar.open_time_ms <= self._watermark_ms:
             return bar  # не новіший за watermark — UDS однаково відкине (stale/duplicate), тіки не потрібні
+        if not self._is_market_open(bar.open_time_ms):
+            # Бар паузи (пласка заглушка 22:00, суботній шум) далі відкине/позначить правило M1→SSOT; watermark не
+            # рушить, тож без цієї перевірки кожен цикл (і live_recover) запитував би t1 і писав WARN по колу.
+            return bar
         is_trading_fn = None
         if self._calendar is not None and self._calendar.enabled:
             is_trading_fn = self._calendar.is_trading_minute

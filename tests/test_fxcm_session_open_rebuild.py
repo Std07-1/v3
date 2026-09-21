@@ -540,6 +540,34 @@ def test_mid_session_bar_never_asks_for_ticks():
     assert provider.calls == [] and uds.committed == [regular]
 
 
+def test_pause_bars_never_ask_for_ticks_and_never_warn(caplog):
+    """Рев'ю D-02: пачка барів паузи (пласкі 21:00–21:04 у денній перерві, суботній шум, неплаский бар у перерві) —
+    правило M1→SSOT їх відкидає/позначає, watermark не рухається. 0 запитів t1, 0 WARN BAKED, і так щоциклу."""
+    friday = _ms("2026-09-18T20:59:00")
+    pause = [_m1("EUSTX50", _ms("2026-09-21T21:0%d:00" % i), 6281.0, 6281.0, 6281.0, 6281.0, 1) for i in range(5)]
+    pause.append(_m1("EUSTX50", _ms("2026-09-19T12:00:00"), 6281.0, 6281.0, 6281.0, 6281.0, 2))    # субота
+    pause.append(_m1("EUSTX50", _ms("2026-09-21T21:30:00"), 6281.0, 6283.0, 6280.0, 6282.0, 40))   # неплаский у перерві
+    provider = _DirectTicks(ticks=_spread(EUSTX50_OPEN_MS, EUSTX50_BIDS))
+    poller, _uds = _poller(provider, watermark_ms=friday, calendar=_weekday_break_calendar())
+    with caplog.at_level(logging.WARNING):
+        for _cycle in range(3):
+            for bar in pause:
+                poller._ingest_bar(bar)  # noqa: SLF001
+    assert provider.calls == []
+    assert "FXCM_SESSION_OPEN_BAKED" not in caplog.text
+
+
+def test_first_trading_bar_after_the_pause_asks_for_ticks_exactly_once():
+    """Контроль D-02: після бару паузи перший торговий бар 22:00 іде в перебудову — один запит t1."""
+    reopen = _ms("2026-09-21T22:00:00")
+    provider = _DirectTicks(ticks=[(reopen + 5_000, 6281.63), (reopen + 30_000, 6284.14)])
+    poller, uds = _poller(provider, watermark_ms=_ms("2026-09-21T20:59:00"), calendar=_weekday_break_calendar())
+    poller._ingest_bar(_m1("EUSTX50", _ms("2026-09-21T21:00:00"), 6239.79, 6239.79, 6239.79, 6239.79, 1))  # noqa: SLF001
+    poller._ingest_bar(_m1("EUSTX50", reopen, 6239.79, 6284.14, 6239.79, 6284.14, 2))  # noqa: SLF001
+    assert provider.calls == [("EUSTX50", reopen, reopen + 60_000)]
+    assert uds.committed[-1].o == 6281.63
+
+
 def test_bar_not_newer_than_watermark_never_asks_for_ticks():
     """Calendar-відкриття, яке вже закомічено (повтор від брокера): UDS його відкине, t1 — зайвий запит."""
     reopen = _ms("2026-09-21T22:00:00")
