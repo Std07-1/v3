@@ -189,6 +189,8 @@ def _handle_fetch_t1(provider, cmd, redis_cli, target_key, reply_to, req_id, sym
     try:
         from_ms, to_ms = int(cmd["from_ms"]), int(cmd["to_ms"])
     except (KeyError, TypeError, ValueError):
+        # Гучно нижче: реплай error=invalid_window + WARN BROKER_SIDECAR_T1_ERROR; тут — деталь розбору
+        logging.debug("BROKER_SIDECAR_T1_WINDOW_PARSE_FAILED req_id=%s", req_id, exc_info=True)
         from_ms = to_ms = 0
     if 0 < to_ms - from_ms <= _MAX_T1_WINDOW_MS:
         ticks, error, needs_reconnect = _fetch_t1_ticks(provider, symbol, from_ms, to_ms)

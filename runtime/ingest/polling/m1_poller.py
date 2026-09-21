@@ -383,7 +383,9 @@ class M1SymbolPoller:
             return None, "provider_without_t1", None
         try:
             ticks = fetch_ticks(self._symbol, bar.open_time_ms, bar.close_time_ms)
-        except Exception as exc:  # noqa: BLE001 — будь-яка відмова транспорту = «не доведено», гучно у виклику
+        except Exception as exc:  # noqa: BLE001 — будь-яка відмова транспорту = «не доведено»
+            # Гучно у виклику (WARN FXCM_SESSION_OPEN_BAKED reason=t1_error); тут — traceback для розбору
+            logging.debug("M1_SESSION_OPEN_T1_EXCEPTION symbol=%s", self._symbol, exc_info=True)
             return None, "t1_error: %s" % exc, None
         if ticks is None:
             return None, "t1_unavailable", None
