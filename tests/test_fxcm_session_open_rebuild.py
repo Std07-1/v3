@@ -620,6 +620,18 @@ def test_first_trading_bar_after_the_pause_asks_for_ticks_exactly_once():
     assert uds.committed[-1].o == 6281.63
 
 
+def test_flat_reopen_placeholder_is_not_mixed_with_ticks():
+    """Пласка заглушка 22:00 (O=H=L=C = ціна до перерви, v=3) при наявних тіках лишається брокерською: перебудова
+    дала б змішаний бар (справжній open + застарілий close). t1 не запитується."""
+    reopen = _ms("2026-09-21T22:00:00")
+    provider = _DirectTicks(ticks=[(reopen + 5_000, 6281.63), (reopen + 30_000, 6284.14)])
+    poller, uds = _poller(provider, watermark_ms=_ms("2026-09-21T20:59:00"), calendar=_weekday_break_calendar())
+    placeholder = _m1("EUSTX50", reopen, 6239.79, 6239.79, 6239.79, 6239.79, 3)
+    poller._ingest_bar(placeholder)  # noqa: SLF001
+    assert provider.calls == []
+    assert (uds.committed[-1].o, uds.committed[-1].h, uds.committed[-1].low, uds.committed[-1].c) == (6239.79,) * 4
+
+
 def test_bar_not_newer_than_watermark_never_asks_for_ticks():
     """Calendar-відкриття, яке вже закомічено (повтор від брокера): UDS його відкине, t1 — зайвий запит."""
     reopen = _ms("2026-09-21T22:00:00")

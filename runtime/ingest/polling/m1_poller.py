@@ -355,6 +355,11 @@ class M1SymbolPoller:
             # Бар паузи (пласка заглушка 22:00, суботній шум) далі відкине/позначить правило M1→SSOT; watermark не
             # рушить, тож без цієї перевірки кожен цикл (і live_recover) запитував би t1 і писав WARN по колу.
             return bar
+        if is_flat_m1(bar, _flat_bar_max_volume):
+            # Пласка заглушка брокера (O=H=L=C = ціна до перерви, мізерний v): перебудовувати нема з чого — тіки дали б
+            # змішаний бар (справжній open + застарілий close і хвіст до нього). Бар брокера як є — його класифікує
+            # правило M1→SSOT (рев'ю гілки шуму D-02, 21.09).
+            return bar
         is_trading_fn = None
         if self._calendar is not None and self._calendar.enabled:
             is_trading_fn = self._calendar.is_trading_minute
