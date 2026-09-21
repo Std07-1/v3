@@ -331,7 +331,7 @@ def test_resolve_pause_policy_is_loud_on_fallback_and_clamp(caplog, cfg, expecte
     with caplog.at_level(logging.WARNING):
         assert resolve_pause_policy(cfg).noise_margin_min == expected_margin
     if expected_log is None:
-        assert "M1_SESSION_FILTER_CONFIG" not in caplog.text
+        assert "key=pause_noise_margin_min" not in caplog.text
     else:
         assert expected_log in caplog.text
 
@@ -372,3 +372,54 @@ def test_calendar_suspected_policy_writes_deep_pause_bar_as_anomaly():
     out, verdict = classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4,
                                            DEFAULT_PAUSE_POLICY.with_calendar_suspected())
     assert verdict == VERDICT_PAUSE_NONFLAT_ANOMALY and out.extensions == {"calendar_pause_nonflat_anomaly": True}
+
+
+# --- Облік відкинутих хвилин (ADR-0099 §3.4) -------------------------------------------------------------------------
+
+class _ReplayProvider:
+    """Брокер, що на кожен запит віддає ту саму партію — як FXCM, поки watermark полера не рухається."""
+
+    def __init__(self, bars):
+        self._bars = list(bars)
+
+    def fetch_last_n_m1(self, symbol, n, date_to_utc=None):
+        return list(self._bars)
+
+
+SUNDAY_2205 = _utc_ms(2026, 9, 20, 22, 5)  # Нд: ринок відкрився о 22:00, останній закритий M1 — 22:04
+
+
+def _poller_polling_at(monkeypatch, provider, now_ms):
+    from runtime.ingest.polling import m1_poller
+    m1_poller.set_flat_bar_max_volume(4)
+    monkeypatch.setattr(m1_poller, "_utc_now_ms", lambda: now_ms)
+    return m1_poller.M1SymbolPoller(symbol="XAG/USD", provider=provider, uds=_RecordingUds(),
+                                    calendar=_us_cfd_calendar())
+
+
+def test_poll_once_twice_on_the_same_noise_counts_and_warns_once(monkeypatch, caplog):
+    """Рев'ю п.2: відкинутий бар не рухає watermark, тож кожен цикл брокер віддає його знову. Раніше лічильник і WARN
+    завищувались утричі (13 унікальних → 39); тепер хвилина рахується один раз."""
+    noise = _m1_at(SATURDAY_0743, 63.01, 63.02, 63.01, 63.02, 5.0)
+    poller = _poller_polling_at(monkeypatch, _ReplayProvider([noise]), SUNDAY_2205)
+    poller.poll_once()
+    poller.poll_once()
+    assert caplog.text.count("M1_PAUSE_NOISE_DROPPED") == 1
+    assert poller.stats["pause_noise_dropped"] == 1
+
+
+def test_reopen_placeholder_is_reported_once_across_poll_cycles(monkeypatch, caplog):
+    reopen_placeholder = _m1_at(_utc_ms(2026, 9, 20, 22, 0), 5.0, 5.0, 5.0, 5.0, 3.0)
+    poller = _poller_polling_at(monkeypatch, _ReplayProvider([reopen_placeholder]), SUNDAY_2205)
+    poller.poll_once()
+    poller.poll_once()
+    assert caplog.text.count("M1_REOPEN_FLAT_DROPPED") == 1
+
+
+def test_dropped_minutes_memory_is_bounded():
+    from runtime.ingest.polling.m1_drop_ledger import DroppedM1Ledger
+    ledger = DroppedM1Ledger(capacity=2)
+    assert ledger.first_drop(60_000) and ledger.first_drop(120_000)
+    assert not ledger.first_drop(120_000)
+    assert ledger.first_drop(180_000)  # витісняє найстаршу
+    assert ledger.first_drop(60_000)  # за межею пам'яті — знову «вперше»: пам'ять не росте без меж

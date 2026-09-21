@@ -30,6 +30,7 @@ from runtime.ingest.m1_session_filter import (
     DEFAULT_PAUSE_POLICY,
     FLAT_BAR_MAX_VOLUME_DEFAULT,
     PausePolicy,
+    VERDICT_PAUSE_FLAT_DROPPED,
     VERDICT_PAUSE_NOISE_DROPPED,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
     VERDICT_REOPEN_FLAT_DROPPED,
@@ -47,6 +48,7 @@ from runtime.ingest.m1_session_open import (
     rebuild_session_open_bar,
     resolve_session_open_rebuild_policy,
 )
+from runtime.ingest.polling.m1_drop_ledger import DroppedM1Ledger
 from runtime.ingest.tick_common import (
     resolve_symbol_calendars,
     symbols_from_cfg,
@@ -179,6 +181,7 @@ class M1SymbolPoller:
         self._uds = uds
         # SSOT: config.json → m1_session_filter (resolve_pause_policy у будівниках, ADR-0099)
         self._pause_policy = pause_policy
+        self._dropped_ledger = DroppedM1Ledger()
         self._calendar = calendar
         self._tail_n = max(2, tail_fetch_n)
         self._m3_derive = m3_derive
@@ -285,6 +288,34 @@ class M1SymbolPoller:
 
     # -- Ingest bar (calendar-aware) ------------------------------------
 
+    def _report_dropped_bar(self, bar: CandleBar, verdict: str) -> None:
+        """WARN і лічильник відкинутого бару — рівно один раз на хвилину (ADR-0099 §3.4); плаский у паузі — мовчки.
+
+        Кожен відкинутий бар іде в лог з OHLCV: при хибному календарі тут потечуть справжні хвилини з великим обсягом,
+        і це має бути видно, а не тихо зникнути.
+        """
+        if verdict == VERDICT_PAUSE_FLAT_DROPPED or not self._dropped_ledger.first_drop(bar.open_time_ms):
+            return
+        if verdict == VERDICT_REOPEN_FLAT_DROPPED:
+            logging.warning(
+                "M1_REOPEN_FLAT_DROPPED symbol=%s open_ms=%s o=%.5f v=%.0f — заглушка брокера у хвилині "
+                "перевідкриття (тіків ще немає), у SSOT не йде",
+                self._symbol, bar.open_time_ms, bar.o, bar.v,
+            )
+        elif verdict == VERDICT_PAUSE_NOISE_DROPPED:
+            self._pause_noise_dropped += 1
+            logging.warning(
+                "M1_PAUSE_NOISE_DROPPED symbol=%s open_ms=%s o=%.5f h=%.5f l=%.5f c=%.5f v=%.0f margin_min=%s "
+                "dropped_total=%d — хвилина глибоко в паузі сесії, шум брокера у SSOT не йде",
+                self._symbol, bar.open_time_ms, bar.o, bar.h, bar.low, bar.c, bar.v,
+                self._pause_policy.noise_margin_min, self._pause_noise_dropped,
+            )
+        else:
+            logging.warning(
+                "M1_DROPPED symbol=%s open_ms=%s verdict=%s v=%.0f — бар не йде в SSOT за правилом сесії",
+                self._symbol, bar.open_time_ms, verdict, bar.v,
+            )
+
     def _ingest_bar(self, bar: CandleBar) -> bool:
         """Calendar-aware ingest: маркує flat бари під час паузи.
 
@@ -302,22 +333,7 @@ class M1SymbolPoller:
             bar, self._is_market_open, _flat_bar_max_volume, self._pause_policy
         )
         if classified is None:
-            if verdict == VERDICT_REOPEN_FLAT_DROPPED:
-                logging.warning(
-                    "M1_REOPEN_FLAT_DROPPED symbol=%s open_ms=%s o=%.5f v=%.0f — заглушка брокера у хвилині "
-                    "перевідкриття (тіків ще немає), у SSOT не йде",
-                    self._symbol, bar.open_time_ms, bar.o, bar.v,
-                )
-            elif verdict == VERDICT_PAUSE_NOISE_DROPPED:
-                # Кожен відкинутий бар — у лог з OHLCV: при хибному календарі тут потечуть справжні хвилини з
-                # великим обсягом, і це має бути видно, а не тихо зникнути.
-                self._pause_noise_dropped += 1
-                logging.warning(
-                    "M1_PAUSE_NOISE_DROPPED symbol=%s open_ms=%s o=%.5f h=%.5f l=%.5f c=%.5f v=%.0f margin_min=%s "
-                    "dropped_total=%d — хвилина глибоко в паузі сесії, шум брокера у SSOT не йде",
-                    self._symbol, bar.open_time_ms, bar.o, bar.h, bar.low, bar.c, bar.v,
-                    self._pause_policy.noise_margin_min, self._pause_noise_dropped,
-                )
+            self._report_dropped_bar(bar, verdict)
             return False
         bar = classified
         if verdict == VERDICT_PAUSE_NONFLAT_ANOMALY:
