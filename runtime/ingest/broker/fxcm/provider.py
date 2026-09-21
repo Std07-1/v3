@@ -4,7 +4,7 @@ import datetime as dt
 import logging
 from typing import Any, List, Optional, Tuple
 
-from core.model.bars import CandleBar, assert_invariants, utc_dt_to_ms
+from core.model.bars import CandleBar, assert_invariants, ms_to_utc_dt, utc_dt_to_ms
 from runtime.ingest.market_calendar import MarketCalendar
 
 # ⚠️ Імпорт ForexConnect може відрізнятись залежно від вашого SDK/обгортки.
@@ -22,6 +22,14 @@ except Exception:  # noqa: BLE001
 OPEN_PRICE_MODE_NAME = "FIRST_TICK"
 # Допуск порівняння open з [low, high] — нижче за крок ціни будь-якого символу (XAG 0.001, NAS100 0.05).
 _OPEN_RANGE_EPS = 1e-9
+
+# Тікова історія брокера (ADR-0096 слайс E). Свічки FXCM у нас — Bid: у dtype свічки SDK немає поля «Open»,
+# тож extract_ohlc бере BidOpen/BidHigh/BidLow/BidClose (forexconnect/ForexConnect.py:471). Тіки, з яких
+# перебудовується свічка, мусять бути тією самою стороною ціни.
+TICK_TIMEFRAME = "t1"
+TICK_PRICE_FIELD = "Bid"
+# quotes_count у SDK: -1 = усі тіки проміжку [date_from, date_to], без ліміту за кількістю.
+_ALL_QUOTES_IN_RANGE = -1
 
 
 def _resolve_open_price_mode() -> Any:
@@ -132,13 +140,18 @@ class FxcmHistoryProvider:
         return self
 
     def _get_history(
-        self, symbol: str, timeframe: str, date_to_utc: Optional[dt.datetime], n: int
+        self,
+        symbol: str,
+        timeframe: str,
+        date_to_utc: Optional[dt.datetime],
+        n: int,
+        date_from_utc: Optional[dt.datetime] = None,
     ) -> Any:
-        """Єдиний виклик SDK за барами: режим ціни відкриття передається явно, не дефолтом SDK."""
+        """Єдиний виклик SDK за історією (свічки і тіки): режим ціни відкриття передається явно, не дефолтом SDK."""
         return self._fx.get_history(  # type: ignore[union-attr]
             symbol,
             timeframe,
-            None,
+            date_from_utc,
             date_to_utc,
             n,
             candle_open_price_mode=self._open_price_mode,
@@ -229,6 +242,57 @@ class FxcmHistoryProvider:
             anchor_offset_s=self._anchor_offset_for_tf(tf_s),
             anchor_offset_s_alts=self._anchor_offset_alts_for_tf(tf_s),
         )
+
+    def fetch_t1_bid_ticks(
+        self, symbol: str, from_ms: int, to_ms: int
+    ) -> Optional[List[Tuple[int, float]]]:
+        """Тіки брокера (Bid) за проміжок [from_ms, to_ms]: [(tick_ts_ms, bid), ...] у порядку брокера.
+
+        None — запит не вдався (лог + consume_last_error); [] — у проміжку тіків немає. Точне вікно
+        хвилини ріже споживач (runtime/ingest/m1_session_open.py), провайдер — лише транспорт.
+        """
+        if self._fx is None:
+            raise RuntimeError("FXCM сесія не відкрита.")
+        try:
+            rows = self._get_history(
+                symbol,
+                TICK_TIMEFRAME,
+                ms_to_utc_dt(to_ms),
+                _ALL_QUOTES_IN_RANGE,
+                date_from_utc=ms_to_utc_dt(from_ms),
+            )
+        except Exception as e:  # noqa: BLE001
+            self._set_last_error(f"помилка t1 {symbol}", e)
+            logging.warning(
+                "FXCM_TICK_HISTORY_ERROR symbol=%s from_ms=%s to_ms=%s err=%s",
+                symbol, from_ms, to_ms, e,
+            )
+            return None
+        return normalize_tick_rows(symbol, rows)
+
+
+def normalize_tick_rows(symbol: str, tick_rows: Any) -> List[Tuple[int, float]]:
+    """Рядки t1 з ForexConnect.get_history() (Date, Bid, Ask) → [(tick_ts_ms, bid)].
+
+    Битий рядок (без часу чи Bid) не вгадується: його пропущено, а кількість пропусків — у WARN.
+    """
+    ticks: List[Tuple[int, float]] = []
+    if tick_rows is None:
+        return ticks
+    seen = 0
+    skipped = 0
+    for row in tick_rows:
+        seen += 1
+        try:
+            ticks.append((extract_open_time_ms(row), float(row[TICK_PRICE_FIELD])))
+        except (KeyError, IndexError, TypeError, ValueError):
+            skipped += 1
+    if skipped:
+        logging.warning(
+            "FXCM_TICK_ROWS_SKIPPED symbol=%s skipped=%d of=%d — рядки t1 без часу чи %s",
+            symbol, skipped, seen, TICK_PRICE_FIELD,
+        )
+    return ticks
 
 
 def normalize_history_to_bars(
@@ -368,10 +432,10 @@ def extract_open_time_ms(row: Any) -> int:
             import numpy as np  # type: ignore
 
             if isinstance(val, np.datetime64):
-                # Переводимо в ms (numpy datetime64 без tz; трактуємо як UTC)
+                # Переводимо в ms (numpy datetime64 без tz; трактуємо як UTC). Цілочисельне ділення: float
+                # губить 1 мс на часі тіку з мілісекундами (M8[ns] ~1.8e18 > 2^53) — тік 06:01:00.000 став би 06:00:59.999.
                 epoch = np.datetime64("1970-01-01T00:00:00")
-                ts = (val - epoch) / np.timedelta64(1, "ms")
-                return int(ts)
+                return int((val - epoch) // np.timedelta64(1, "ms"))
         except Exception:
             logging.debug("FXCM_NUMPY_DT64_PARSE_FAIL val=%r", val, exc_info=True)
 
