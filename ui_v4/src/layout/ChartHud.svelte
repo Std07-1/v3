@@ -268,6 +268,7 @@
 
 <div
     class="hud-stack {shellStageClass}"
+    class:menu-open={symbolOpen || tfOpen}
     use:dismissOnOutside={{
         enabled: symbolOpen || tfOpen || microCardOpen,
         onDismiss: () => {
@@ -735,6 +736,11 @@
         flex-direction: column;
         gap: 4px;
         pointer-events: auto;
+    }
+    /* Відкрите меню символу/TF опускається на рівень лівої панелі малювання (DrawingToolbar z 50, підказка 60):
+       без підйому панель перекривала пункт «M1» — клік ішов в інструмент, M1 не вибирався. */
+    .hud-stack.menu-open {
+        z-index: 61;
     }
 
     .hud {
