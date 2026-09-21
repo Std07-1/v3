@@ -161,17 +161,19 @@ def test_repair_tool_applies_the_same_rule_and_drops_the_forming_minute(monkeypa
 
 
 def test_repair_filter_drops_deep_pause_bar_as_noise_and_keeps_edge_anomaly():
-    """Ремонт дірок — той самий вердикт, що полер і засів: Сб неплаский — шум, Ср 21:00 неплаский — anomaly;
-    запас приходить параметром (main бере його з config)."""
-    from runtime.ingest.m1_session_filter import VERDICT_PAUSE_NOISE_DROPPED
+    """Ремонт дірок — той самий вердикт, що полер і засів: Сб неплаский — шум, 21:00 з v=3 — застарілий край,
+    21:00 з обсягом торгівлі — anomaly; політика приходить параметром (main бере її з config)."""
+    from runtime.ingest.m1_session_filter import VERDICT_PAUSE_EDGE_STALE_DROPPED, VERDICT_PAUSE_NOISE_DROPPED
     from tools.repair import repair_m1_gaps as rmg
 
     saturday = _m1_at(SATURDAY_0743, 63.01, 63.02, 63.01, 63.02, 5.0)
-    edge = _m1_at(_utc_ms(2026, 9, 16, 21, 0), 5.0, 5.1, 5.0, 5.1, 3.0)
-    kept, verdicts = rmg._filter_fetched_bars([saturday, edge], _us_cfd_calendar(), 4, None, 8_000,  # noqa: SLF001
-                                              pause_policy=DEFAULT_PAUSE_POLICY)
+    edge = _m1_at(_utc_ms(2026, 9, 16, 21, 0), 5.0, 5.1, 5.0, 5.1, 30.0)
+    stale = _m1_at(_utc_ms(2026, 9, 17, 21, 0), 5.0, 5.1, 5.0, 5.1, 3.0)
+    kept, verdicts = rmg._filter_fetched_bars([saturday, edge, stale], _us_cfd_calendar(), 4, None,  # noqa: SLF001
+                                              8_000, pause_policy=DEFAULT_PAUSE_POLICY)
     assert [b.open_time_ms for b in kept] == [edge.open_time_ms]
-    assert verdicts == {VERDICT_PAUSE_NOISE_DROPPED: 1, VERDICT_PAUSE_NONFLAT_ANOMALY: 1}
+    assert verdicts == {VERDICT_PAUSE_NOISE_DROPPED: 1, VERDICT_PAUSE_NONFLAT_ANOMALY: 1,
+                        VERDICT_PAUSE_EDGE_STALE_DROPPED: 1}
 
 
 def test_existing_extensions_are_kept_and_input_is_not_mutated():
@@ -253,11 +255,12 @@ def test_classify_by_calendar_bar_deep_in_weekend_pause_is_dropped_as_noise(o, h
 
 
 def test_classify_by_calendar_pause_bar_near_session_edge_keeps_anomaly_and_flat_drop():
-    """Біля краю (21:00 — перша хвилина денної перерви) — чинна поведінка: неплаский → anomaly, плаский → drop."""
+    """Біля краю (21:01 — друга хвилина денної перерви): неплаский → anomaly; 21:00 плаский → drop."""
     from runtime.ingest.m1_session_filter import classify_m1_by_calendar
     is_trading = _us_cfd_calendar().is_trading_minute
     first_break_minute = _utc_ms(2026, 9, 16, 21, 0)
-    nonflat, verdict = classify_m1_by_calendar(_m1_at(first_break_minute, 5.0, 5.1, 5.0, 5.1, 3.0), is_trading, 4, DEFAULT_PAUSE_POLICY)
+    nonflat, verdict = classify_m1_by_calendar(_m1_at(first_break_minute + 60_000, 5.0, 5.1, 5.0, 5.1, 3.0), is_trading,
+                                               4, DEFAULT_PAUSE_POLICY)
     assert verdict == VERDICT_PAUSE_NONFLAT_ANOMALY and nonflat.extensions == {"calendar_pause_nonflat_anomaly": True}
     flat = classify_m1_by_calendar(_m1_at(first_break_minute, 5.0, 5.0, 5.0, 5.0, 1.0), is_trading, 4, DEFAULT_PAUSE_POLICY)
     assert flat == (None, VERDICT_PAUSE_FLAT_DROPPED)
@@ -430,7 +433,7 @@ def test_trading_like_noise_raises_false_calendar_alarm_with_stats(monkeypatch, 
     runner = M1PollerRunner(pollers=[poller], provider=object(), uds=object(), redis_tail_n={})
     with caplog.at_level(logging.INFO):
         runner._maybe_log_stats(force=True)  # noqa: SLF001
-    assert "pause_noise=3 noise_alarm=1" in caplog.text
+    assert "pause_noise=3 edge_stale=0 noise_alarm=1" in caplog.text
 
 
 def test_noise_alarm_on_volume_is_throttled_per_bar_time_window():
@@ -477,3 +480,55 @@ def test_dropped_minutes_memory_is_bounded():
     assert not ledger.first_drop(120_000)
     assert ledger.first_drop(180_000)  # витісняє найстаршу
     assert ledger.first_drop(60_000)  # за межею пам'яті — знову «вперше»: пам'ять не росте без меж
+
+
+# --- Застарілий край: клас «хвилина 21:00» (ADR-0099 §3.2, рев'ю п.4) ---------------------------------------------
+
+@pytest.mark.parametrize("open_ms, volume, expected_verdict", [
+    (_utc_ms(2026, 9, 16, 21, 0), 3.0, "pause_edge_stale_dropped"),  # 21:00 — перша хвилина перерви, ~3 застарілі тіки
+    (_utc_ms(2026, 9, 16, 21, 0), 8.0, "pause_edge_stale_dropped"),  # поріг 4 × K=2 включний
+    (_utc_ms(2026, 9, 16, 21, 0), 9.0, VERDICT_PAUSE_NONFLAT_ANOMALY),  # понад поріг — anomaly, як і раніше
+    (_utc_ms(2026, 9, 18, 20, 45), 3.0, "pause_edge_stale_dropped"),  # Пт 20:45 — перша хвилина вихідних
+    (_utc_ms(2026, 9, 16, 21, 59), 3.0, VERDICT_PAUSE_NONFLAT_ANOMALY),  # остання перед відкриттям — не чіпаємо
+    (_utc_ms(2026, 9, 16, 21, 1), 3.0, VERDICT_PAUSE_NONFLAT_ANOMALY),  # друга хвилина перерви — не чіпаємо
+])
+def test_edge_stale_rule_takes_only_the_first_pause_minute_after_close(open_ms, volume, expected_verdict):
+    """Вузьке правило: лише перша хвилина паузи після закриття. Ширше «біля краю з малим v» під несезонним календарем
+    узимку з'їло б 58/57 справжніх хвилин XAU/XAG замість 1/1 (ADR-0099 §2 E)."""
+    bar = _m1_at(open_ms, 5.0, 5.1, 5.0, 5.1, volume)
+    out, verdict = classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4, DEFAULT_PAUSE_POLICY)
+    assert verdict == expected_verdict
+    assert (out is None) == (expected_verdict == "pause_edge_stale_dropped")
+
+
+@pytest.mark.parametrize("policy", [
+    DEFAULT_PAUSE_POLICY.with_calendar_suspected(),
+    PausePolicy(noise_margin_min=60, edge_stale_max_volume=None),
+])
+def test_edge_stale_rule_off_keeps_the_2100_bar_as_anomaly(policy):
+    """Календар під підозрою (засів з --allow-off-calendar) або K=0 у config — 21:00 пишеться з маркером anomaly."""
+    bar = _m1_at(_utc_ms(2026, 9, 16, 21, 0), 5.0, 5.1, 5.0, 5.1, 3.0)
+    out, verdict = classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4, policy)
+    assert verdict == VERDICT_PAUSE_NONFLAT_ANOMALY and out.extensions == {"calendar_pause_nonflat_anomaly": True}
+
+
+@pytest.mark.parametrize("cfg, expected_max_volume", [
+    ({"flat_bar_max_volume": 5, "m1_session_filter": {"pause_edge_stale_volume_mult": 3}}, 15),
+    ({"flat_bar_max_volume": 4, "m1_session_filter": {"pause_edge_stale_volume_mult": 0}}, None),
+])
+def test_edge_stale_threshold_is_flat_threshold_times_config_multiplier(cfg, expected_max_volume):
+    from runtime.ingest.m1_session_filter import resolve_pause_policy
+    assert resolve_pause_policy(cfg).edge_stale_max_volume == expected_max_volume
+
+
+def test_poller_drops_stale_2100_minute_once_with_warn_and_counter(caplog):
+    from runtime.ingest.polling.m1_poller import M1SymbolPoller, set_flat_bar_max_volume
+    set_flat_bar_max_volume(4)
+    uds = _RecordingUds()
+    poller = M1SymbolPoller(symbol="NAS100", provider=object(), uds=uds, calendar=_us_cfd_calendar())
+    stale = _m1_at(_utc_ms(2026, 9, 15, 21, 0), 24300.5, 24301.0, 24300.5, 24301.0, 3.0)
+    assert poller._ingest_bar(stale) is False  # noqa: SLF001
+    assert poller._ingest_bar(stale) is False  # noqa: SLF001 — повторний fetch тієї самої хвилини
+    assert uds.committed == []
+    assert caplog.text.count("M1_PAUSE_EDGE_STALE_DROPPED") == 1
+    assert poller.stats["pause_edge_stale_dropped"] == 1

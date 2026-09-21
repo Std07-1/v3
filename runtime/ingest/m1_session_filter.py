@@ -7,6 +7,8 @@ TradingView таких барів не показує, а в SSOT вони ла�
   записується незалежно від пласкості й обсягу: це шум брокера (Сб 19.09 XAG 13 і US30 11 мікросвічок з v 2–5, діапазон
   1–2 кроки), а поріг обсягу його не відсікає — у XAG є суботні бари з v=5;
 - хвилина паузи біля краю сесії, плаский бар → не записується (шум брокера);
+- ПЕРША хвилина паузи після закриття, неплаский бар з малим обсягом (v ≤ flat_bar_max_volume × K) → не записується:
+  це застарілі тіки брокера після закриття (клас «хвилина 21:00», ADR-0099 §3.2); у тижневому архіві брокера її немає;
 - хвилина паузи біля краю сесії, неплаский бар → записується з маркером `calendar_pause_nonflat_anomaly`, записувач
   кричить у лог (ознака хибного календаря або DST — саме біля краю межа сесії зсувається, мовчки викидати не можна);
 - ПЕРША торгова хвилина сесії, плаский бар → не записується: у брокера в цю мить ще немає тіків, і він віддає
@@ -36,6 +38,7 @@ VERDICT_PAUSE_FLAT_DROPPED = "pause_flat_dropped"
 VERDICT_PAUSE_NONFLAT_ANOMALY = "pause_nonflat_anomaly"
 VERDICT_REOPEN_FLAT_DROPPED = "reopen_flat_dropped"
 VERDICT_PAUSE_NOISE_DROPPED = "pause_noise_dropped"
+VERDICT_PAUSE_EDGE_STALE_DROPPED = "pause_edge_stale_dropped"
 
 _M1_MS = 60_000
 
@@ -43,6 +46,11 @@ _M1_MS = 60_000
 # межі сесії при переході DST: хвилина паузи, до якої торгова ближче за годину, може бути справжньою торговою
 # хвилиною під хибним сезоном календаря, тому там лишається маркер anomaly, а не відкидання.
 PAUSE_NOISE_MARGIN_MIN_DEFAULT = 60
+
+# Застарілий край (ADR-0099 §3.2); SSOT — config.json → m1_session_filter.pause_edge_stale_volume_mult (K). Поріг
+# обсягу = flat_bar_max_volume × K = 8: шум у паузі має v ≤ 5, клас 21:00 — ~3 тіки, а справжня хвилина 21:00 узимку
+# (під несезонним календарем) з v ≤ 8 трапилась по 1 на символ за зиму — стільки ж, скільки при K=1. 0 вимикає правило.
+PAUSE_EDGE_STALE_VOLUME_MULT_DEFAULT = 2
 
 # Тривога хибного календаря (ADR-0099 §3.3); SSOT — config.json → m1_session_filter.pause_noise_alarm_*. Виміри
 # 2025-10…2026-06: шум у паузі має v ≤ 5 і до 42 різних хвилин за 60 хв (XAG); справжні хвилини — v ≥ 20 у 99.7–99.9%
@@ -62,13 +70,14 @@ class PausePolicy:
     """
 
     noise_margin_min: Optional[int]
+    edge_stale_max_volume: Optional[int] = FLAT_BAR_MAX_VOLUME_DEFAULT * PAUSE_EDGE_STALE_VOLUME_MULT_DEFAULT
     alarm_window_min: int = PAUSE_NOISE_ALARM_WINDOW_MIN_DEFAULT
     alarm_max_dropped: int = PAUSE_NOISE_ALARM_MAX_DROPPED_DEFAULT
     alarm_min_volume: int = PAUSE_NOISE_ALARM_MIN_VOLUME_DEFAULT
 
     def with_calendar_suspected(self) -> "PausePolicy":
         """Копія без правил, що відкидають неплаский бар за положенням у календарі (ADR-0099 §3.5)."""
-        return dataclasses.replace(self, noise_margin_min=None)
+        return dataclasses.replace(self, noise_margin_min=None, edge_stale_max_volume=None)
 
 
 DEFAULT_PAUSE_POLICY = PausePolicy(noise_margin_min=PAUSE_NOISE_MARGIN_MIN_DEFAULT)
@@ -119,8 +128,11 @@ def resolve_pause_policy(cfg: dict) -> PausePolicy:
             section,
         )
         section = {}
+    edge_stale_mult = _resolve_config_int(
+        section, "pause_edge_stale_volume_mult", PAUSE_EDGE_STALE_VOLUME_MULT_DEFAULT, 0)
     return PausePolicy(
         noise_margin_min=_resolve_config_int(section, "pause_noise_margin_min", PAUSE_NOISE_MARGIN_MIN_DEFAULT, 1),
+        edge_stale_max_volume=resolve_flat_max_volume(cfg) * edge_stale_mult if edge_stale_mult > 0 else None,
         alarm_window_min=_resolve_config_int(
             section, "pause_noise_alarm_window_min", PAUSE_NOISE_ALARM_WINDOW_MIN_DEFAULT, 1),
         alarm_max_dropped=_resolve_config_int(
@@ -189,6 +201,8 @@ def classify_m1_by_calendar(bar: CandleBar, is_trading_fn: Callable[[int], bool]
         trading=trading,
         session_open_minute=trading and is_session_open_minute(open_ms, is_trading_fn),
         deep_in_pause=not trading and _is_deep_in_pause(open_ms, is_trading_fn, pause_policy.noise_margin_min),
+        first_pause_minute=not trading and is_trading_fn(open_ms - _M1_MS),
+        edge_stale_max_volume=pause_policy.edge_stale_max_volume,
     )
 
 
@@ -200,7 +214,8 @@ def _is_deep_in_pause(open_ms: int, is_trading_fn: Callable[[int], bool], noise_
 
 
 def _decide_verdict(bar: CandleBar, *, flat_max_volume: int, trading: bool, session_open_minute: bool,
-                    deep_in_pause: bool) -> Tuple[Optional[CandleBar], str]:
+                    deep_in_pause: bool, first_pause_minute: bool,
+                    edge_stale_max_volume: Optional[int]) -> Tuple[Optional[CandleBar], str]:
     """Таблиця ADR-0099 §3.1. Функція приватна, а факти про хвилину — обов'язкові keyword-only без дефолтів: записувач
     не може тихо лишитися без правила, забувши передати один із фактів (D15.2)."""
     flat = is_flat_m1(bar, flat_max_volume)
@@ -214,6 +229,8 @@ def _decide_verdict(bar: CandleBar, *, flat_max_volume: int, trading: bool, sess
         return None, VERDICT_PAUSE_NOISE_DROPPED
     if flat:
         return None, VERDICT_PAUSE_FLAT_DROPPED
+    if first_pause_minute and edge_stale_max_volume is not None and bar.v <= edge_stale_max_volume:
+        return None, VERDICT_PAUSE_EDGE_STALE_DROPPED
     return _with_marker(bar, "calendar_pause_nonflat_anomaly"), VERDICT_PAUSE_NONFLAT_ANOMALY
 
 

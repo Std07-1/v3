@@ -15,6 +15,7 @@ from core.derive import DERIVE_SOURCE
 from core.model.bars import CandleBar
 from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
 from runtime.ingest.m1_session_filter import (
+    VERDICT_PAUSE_EDGE_STALE_DROPPED,
     VERDICT_PAUSE_FLAT_DROPPED,
     VERDICT_PAUSE_NOISE_DROPPED,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
@@ -346,12 +347,15 @@ def main() -> int:
 
     dropped = total_verdicts[VERDICT_PAUSE_FLAT_DROPPED]
     noise = total_verdicts[VERDICT_PAUSE_NOISE_DROPPED]
+    edge_stale = total_verdicts[VERDICT_PAUSE_EDGE_STALE_DROPPED]
     anomalies = total_verdicts[VERDICT_PAUSE_NONFLAT_ANOMALY]
     logging.log(
-        logging.WARNING if dropped or noise or anomalies else logging.INFO,
+        logging.WARNING if dropped or noise or edge_stale or anomalies else logging.INFO,
         "=== ПІДСУМОК: записано=%d пропущено(dedup)=%d відсіяно(пласкі поза сесією)=%d "
-        "відсіяно(шум глибоко в паузі, margin=%s хв)=%d аномалій(непласкі біля краю сесії)=%d помилок=%d ===",
-        total_written, total_skipped, dropped, pause_policy.noise_margin_min, noise, anomalies, len(errors),
+        "відсіяно(шум глибоко в паузі, margin=%s хв)=%d відсіяно(застарілий край, v<=%s)=%d "
+        "аномалій(непласкі біля краю сесії)=%d помилок=%d ===",
+        total_written, total_skipped, dropped, pause_policy.noise_margin_min, noise,
+        pause_policy.edge_stale_max_volume, edge_stale, anomalies, len(errors),
     )
     return 1 if errors else 0
 

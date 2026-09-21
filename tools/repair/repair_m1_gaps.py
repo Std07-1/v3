@@ -31,6 +31,7 @@ from runtime.ingest.m1_session_filter import (
     DEFAULT_PAUSE_POLICY,
     FLAT_BAR_MAX_VOLUME_DEFAULT,
     PausePolicy,
+    VERDICT_PAUSE_EDGE_STALE_DROPPED,
     VERDICT_PAUSE_NOISE_DROPPED,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
     classify_m1_by_calendar,
@@ -456,7 +457,7 @@ def repair_gaps(
         bars, calendar, flat_max_volume, now_ms, close_safety_ms, pause_policy
     )
     if verdicts:
-        loud = (VERDICT_PAUSE_NONFLAT_ANOMALY, VERDICT_PAUSE_NOISE_DROPPED, "unclosed")
+        loud = (VERDICT_PAUSE_NONFLAT_ANOMALY, VERDICT_PAUSE_NOISE_DROPPED, VERDICT_PAUSE_EDGE_STALE_DROPPED, "unclosed")
         log.log(
             logging.WARNING if any(verdicts.get(v) for v in loud) else logging.INFO,
             "REPAIR_SESSION_FILTER symbol=%s fetched=%d kept=%d verdicts=%s",
