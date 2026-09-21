@@ -167,7 +167,10 @@ def main() -> int:
                     help="Дозволити fetch derived-only TF. Небезпечно — anchor mismatch!")
     ap.add_argument("--allow-off-calendar", action="store_true", default=False,
                     help=("Писати партію, навіть якщо брокер віддав більше за %d хвилин поза календарем групи "
-                          "(інакше засів відмовляється: ймовірно хибний календар)" % _OFF_CALENDAR_ALLOWANCE))
+                          "(інакше засів відмовляється: ймовірно хибний календар). Календар під підозрою, тому "
+                          "правила глибини паузи і застарілого краю вимикаються: неплаский бар поза календарем "
+                          "пишеться з маркером calendar_pause_nonflat_anomaly, пласкі поза сесією не пишуться "
+                          "(ADR-0099 §3.5)" % _OFF_CALENDAR_ALLOWANCE))
     args = ap.parse_args()
 
     # Guard: з брокера тягнемо ТІЛЬКИ M1. Усе інше будує DeriveEngine на своїй
@@ -209,6 +212,14 @@ def main() -> int:
         return 2
     flat_max_volume = resolve_flat_max_volume(cfg)
     pause_policy = resolve_pause_policy(cfg)
+    if args.allow_off_calendar:
+        # Прапор = календар під підозрою: відкидати неплаский бар за положенням у ньому не можна — це може бути
+        # справжня хвилина. Такий бар пишеться з маркером anomaly і видно в лозі, пласкі відсіюються, як і раніше.
+        pause_policy = pause_policy.with_calendar_suspected()
+        logging.warning(
+            "BACKFILL_CALENDAR_RULES_RELAXED --allow-off-calendar: правила глибини паузи і застарілого краю вимкнено — "
+            "неплаский бар поза календарем пишеться з маркером calendar_pause_nonflat_anomaly, пласкі не пишуться"
+        )
 
     if args.date_to:
         date_to = _parse_date_utc(args.date_to)

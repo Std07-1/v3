@@ -174,3 +174,28 @@ def test_main_refuses_a_symbol_without_session_calendar(tmp_path: Path, monkeypa
     rc, written = _run_main(tmp_path, monkeypatch, [_bar(NOW_MS // M1_MS * M1_MS - 5 * M1_MS)], with_calendar=False)
     assert rc == 2
     assert written == []
+
+
+def test_allow_off_calendar_writes_deep_pause_nonflat_bar_as_anomaly(tmp_path: Path, monkeypatch, caplog):
+    """Рев'ю п.3: прапор — підозра на хибний календар. Правило глибини вимкнене: глибокий неплаский бар пишеться з
+    маркером anomaly (справжня хвилина під хибним календарем не зникає), пласкі поза сесією — як і раніше, ні."""
+    in_session = NOW_MS // M1_MS * M1_MS - 10 * M1_MS
+    saturday_2130 = SATURDAY_22 - 30 * M1_MS  # глибоко у вихідних: без прапора — шум, не пишеться
+    off_calendar_flats = [_flat(SATURDAY_22 - (i + 1) * M1_MS) for i in range(6)]
+    rc, written = _run_main(tmp_path, monkeypatch, [_bar(in_session), _bar(saturday_2130)] + off_calendar_flats,
+                            extra_argv=["--allow-off-calendar"])
+    assert rc == 0
+    by_open = {row["open_time_ms"]: row for row in written}
+    assert set(by_open) == {in_session, saturday_2130}
+    assert by_open[saturday_2130]["extensions"] == {"calendar_pause_nonflat_anomaly": True}
+    assert "BACKFILL_CALENDAR_RULES_RELAXED" in caplog.text
+
+
+def test_without_the_flag_the_same_deep_pause_bar_is_noise(tmp_path: Path, monkeypatch, caplog):
+    """Контроль: без прапора той самий бар — шум глибоко в паузі, і правила не послаблено."""
+    in_session = NOW_MS // M1_MS * M1_MS - 10 * M1_MS
+    saturday_2130 = SATURDAY_22 - 30 * M1_MS
+    rc, written = _run_main(tmp_path, monkeypatch, [_bar(in_session), _bar(saturday_2130)])
+    assert rc == 0
+    assert [row["open_time_ms"] for row in written] == [in_session]
+    assert "BACKFILL_CALENDAR_RULES_RELAXED" not in caplog.text
