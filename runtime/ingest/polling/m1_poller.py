@@ -1494,8 +1494,6 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
             "M1_POLLER_FLAT_BAR_MAX_VOLUME=%d (default, config key missing)",
             _flat_bar_max_volume,
         )
-    # Правила паузи M1→SSOT (ADR-0099) — один resolve на всі символи
-    pause_policy = resolve_pause_policy(cfg)
 
     # Ініціалізуємо FXCM provider
     from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
@@ -1560,7 +1558,7 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
                 live_recover_timeout_s=lr_timeout,
                 stale_s=stale_s,
                 session_open_policy=session_open_policy,
-                pause_policy=pause_policy,
+                pause_policy=resolve_pause_policy(cfg, sym),  # ADR-0099: правила паузи залежать від групи символу
             )
         )
 

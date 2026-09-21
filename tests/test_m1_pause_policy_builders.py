@@ -132,5 +132,5 @@ def test_every_m1_writer_resolves_pause_policy_through_the_shared_resolver(build
     import importlib
     import inspect
     source = inspect.getsource(importlib.import_module(builder_module))
-    assert "resolve_pause_policy(cfg)" in source
+    assert "resolve_pause_policy(cfg, " in source  # на символ: застарілий край залежить від групи
     assert '"m1_session_filter"' not in source and "'m1_session_filter'" not in source

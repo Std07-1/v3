@@ -278,8 +278,6 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
     flat_vol_raw = cfg.get("flat_bar_max_volume")
     if flat_vol_raw is not None:
         set_flat_bar_max_volume(int(flat_vol_raw))
-    # Правила паузи M1→SSOT (ADR-0099) — один resolve на всі символи
-    pause_policy = resolve_pause_policy(cfg)
 
     # UDS
     data_root = str(cfg.get("data_root", "./data_v3"))
@@ -323,7 +321,7 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
                 live_recover_timeout_s=lr_timeout,
                 stale_s=stale_s,
                 session_open_policy=session_open_policy,
-                pause_policy=pause_policy,
+                pause_policy=resolve_pause_policy(cfg, sym),  # ADR-0099: правила паузи залежать від групи символу
             )
         )
 

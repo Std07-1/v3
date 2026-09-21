@@ -24,6 +24,9 @@ def _bar(o, h, low, c, v, extensions=None) -> CandleBar:
 FLAT = _bar(5.0, 5.0, 5.0, 5.0, 1.0)
 REGULAR = _bar(5.0, 6.0, 4.0, 5.5, 100.0)
 _BAR_OPEN_MS = 60_000
+# Політика групи cfd_us_22_23 з репо-config: застарілий край діє (поріг 4 × K=2). DEFAULT_PAUSE_POLICY його не має:
+# правило вмикається лише для груп із config (рев'ю D-03).
+_US_CFD_POLICY = PausePolicy(noise_margin_min=60, edge_stale_max_volume=8)
 
 
 # Календарі-функції для барів `_bar` (хвилина 60_000): факти про хвилину дає лише календар — як у записувачів.
@@ -170,7 +173,7 @@ def test_repair_filter_drops_deep_pause_bar_as_noise_and_keeps_edge_anomaly():
     edge = _m1_at(_utc_ms(2026, 9, 16, 21, 0), 5.0, 5.1, 5.0, 5.1, 30.0)
     stale = _m1_at(_utc_ms(2026, 9, 17, 21, 0), 5.0, 5.1, 5.0, 5.1, 3.0)
     kept, verdicts = rmg._filter_fetched_bars([saturday, edge, stale], _us_cfd_calendar(), 4, None,  # noqa: SLF001
-                                              8_000, pause_policy=DEFAULT_PAUSE_POLICY)
+                                              8_000, pause_policy=_US_CFD_POLICY)
     assert [b.open_time_ms for b in kept] == [edge.open_time_ms]
     assert verdicts == {VERDICT_PAUSE_NOISE_DROPPED: 1, VERDICT_PAUSE_NONFLAT_ANOMALY: 1,
                         VERDICT_PAUSE_EDGE_STALE_DROPPED: 1}
@@ -332,7 +335,7 @@ def test_resolve_pause_policy_is_loud_on_fallback_and_clamp(caplog, cfg, expecte
     import logging
     from runtime.ingest.m1_session_filter import resolve_pause_policy
     with caplog.at_level(logging.WARNING):
-        assert resolve_pause_policy(cfg).noise_margin_min == expected_margin
+        assert resolve_pause_policy(cfg, "XAU/USD").noise_margin_min == expected_margin
     if expected_log is None:
         assert "key=pause_noise_margin_min" not in caplog.text
     else:
@@ -347,7 +350,7 @@ def test_resolve_pause_policy_repo_config_carries_every_key_without_fallback(cap
     from runtime.ingest.m1_session_filter import resolve_pause_policy
     cfg = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text(encoding="utf-8"))
     with caplog.at_level(logging.WARNING):
-        policy = resolve_pause_policy(cfg)
+        policy = resolve_pause_policy(cfg, "XAU/USD")
     assert "M1_SESSION_FILTER_CONFIG" not in caplog.text
     assert policy.noise_margin_min == cfg["m1_session_filter"]["pause_noise_margin_min"]
 
@@ -500,7 +503,7 @@ def test_edge_stale_rule_takes_only_the_first_pause_minute_after_close(open_ms, 
     """Вузьке правило: лише перша хвилина паузи після закриття. Ширше «біля краю з малим v» під несезонним календарем
     узимку з'їло б 58/57 справжніх хвилин XAU/XAG замість 1/1 (ADR-0099 §2 E)."""
     bar = _m1_at(open_ms, 5.0, 5.1, 5.0, 5.1, volume)
-    out, verdict = classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4, DEFAULT_PAUSE_POLICY)
+    out, verdict = classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4, _US_CFD_POLICY)
     assert verdict == expected_verdict
     assert (out is None) == (expected_verdict == "pause_edge_stale_dropped")
 
@@ -522,24 +525,53 @@ def test_calendar_suspected_keeps_only_trading_like_bars(open_ms, volume, expect
     """Рев'ю D-01: підозра на календар (--allow-off-calendar) рятує лише бари з обсягом торгівлі
     (`PausePolicy.is_trading_like_volume`, той самий критерій, що тривога полера), а не суботній шум."""
     bar = _m1_at(open_ms, 5.0, 5.1, 5.0, 5.1, volume)
-    policy = DEFAULT_PAUSE_POLICY.with_calendar_suspected()
+    policy = _US_CFD_POLICY.with_calendar_suspected()
     assert classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4, policy)[1] == expected_verdict
 
 
-@pytest.mark.parametrize("cfg, expected_max_volume", [
-    ({"flat_bar_max_volume": 5, "m1_session_filter": {"pause_edge_stale_volume_mult": 3}}, 15),
-    ({"flat_bar_max_volume": 4, "m1_session_filter": {"pause_edge_stale_volume_mult": 0}}, None),
+@pytest.mark.parametrize("mult, groups, symbol, expected_max_volume", [
+    (3, ["cfd_us_22_23"], "NAS100", 15),        # поріг = flat_bar_max_volume (5) × K
+    (0, ["cfd_us_22_23"], "NAS100", None),      # K=0 — правило вимкнене
+    (3, ["cfd_us_22_23"], "EUSTX50", None),     # група не в списку — правило вимкнене (рев'ю D-03)
+    (3, None, "NAS100", None),                  # ключа груп немає — вимкнене (не відкидати за замовчуванням)
 ])
-def test_edge_stale_threshold_is_flat_threshold_times_config_multiplier(cfg, expected_max_volume):
+def test_edge_stale_threshold_is_per_calendar_group_from_config(mult, groups, symbol, expected_max_volume):
     from runtime.ingest.m1_session_filter import resolve_pause_policy
-    assert resolve_pause_policy(cfg).edge_stale_max_volume == expected_max_volume
+    section = {"pause_edge_stale_volume_mult": mult}
+    if groups is not None:
+        section["pause_edge_stale_groups"] = groups
+    cfg = {"flat_bar_max_volume": 5, "m1_session_filter": section,
+           "market_calendar_symbol_groups": {"NAS100": "cfd_us_22_23", "EUSTX50": "cfd_eu_eustx50"}}
+    assert resolve_pause_policy(cfg, symbol).edge_stale_max_volume == expected_max_volume
+
+
+def test_repo_config_edge_stale_keeps_eustx50_first_pause_minute_and_drops_nas100_2100():
+    """Рев'ю D-03 на репо-config: у EUSTX50 20:00 UTC — перша хвилина паузи, але узимку це справжня торгова хвилина з
+    малим v (влітку та сама місцева година v ≤ 8 у 44 з 123 днів) — лишається anomaly. NAS100 21:00 — відкидається."""
+    import json
+    from pathlib import Path
+    from runtime.ingest.m1_session_filter import VERDICT_PAUSE_EDGE_STALE_DROPPED, resolve_pause_policy
+    from runtime.ingest.tick_common import resolve_symbol_calendars
+    cfg = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text(encoding="utf-8"))
+    calendars, _rejected = resolve_symbol_calendars(cfg, ["EUSTX50", "NAS100"], where="test")
+    eustx50_2000 = _m1_at(_utc_ms(2026, 9, 16, 20, 0), 5.0, 5.1, 5.0, 5.1, 3.0)
+    nas100_2100 = _m1_at(_utc_ms(2026, 9, 16, 21, 0), 5.0, 5.1, 5.0, 5.1, 3.0)
+    assert not calendars["EUSTX50"].is_trading_minute(eustx50_2000.open_time_ms)
+    assert calendars["EUSTX50"].is_trading_minute(eustx50_2000.open_time_ms - 60_000)  # перша хвилина паузи
+    eustx50 = classify_m1_by_calendar(eustx50_2000, calendars["EUSTX50"].is_trading_minute, 4,
+                                      resolve_pause_policy(cfg, "EUSTX50"))
+    nas100 = classify_m1_by_calendar(nas100_2100, calendars["NAS100"].is_trading_minute, 4,
+                                     resolve_pause_policy(cfg, "NAS100"))
+    assert eustx50[1] == VERDICT_PAUSE_NONFLAT_ANOMALY
+    assert nas100 == (None, VERDICT_PAUSE_EDGE_STALE_DROPPED)
 
 
 def test_poller_drops_stale_2100_minute_once_with_warn_and_counter(caplog):
     from runtime.ingest.polling.m1_poller import M1SymbolPoller, set_flat_bar_max_volume
     set_flat_bar_max_volume(4)
     uds = _RecordingUds()
-    poller = M1SymbolPoller(symbol="NAS100", provider=object(), uds=uds, calendar=_us_cfd_calendar())
+    poller = M1SymbolPoller(symbol="NAS100", provider=object(), uds=uds, calendar=_us_cfd_calendar(),
+                            pause_policy=_US_CFD_POLICY)
     stale = _m1_at(_utc_ms(2026, 9, 15, 21, 0), 24300.5, 24301.0, 24300.5, 24301.0, 3.0)
     assert poller._ingest_bar(stale) is False  # noqa: SLF001
     assert poller._ingest_bar(stale) is False  # noqa: SLF001 — повторний fetch тієї самої хвилини

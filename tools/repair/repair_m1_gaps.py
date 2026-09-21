@@ -673,7 +673,7 @@ def main() -> None:
             flat_max_volume=resolve_flat_max_volume(cfg),
             now_ms=int(time.time() * 1000),
             close_safety_ms=resolve_close_safety_ms(cfg),
-            pause_policy=resolve_pause_policy(cfg),
+            pause_policy=resolve_pause_policy(cfg, symbol),
         )
     finally:
         redis_cli.close()

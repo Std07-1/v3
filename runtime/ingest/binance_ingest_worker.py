@@ -198,8 +198,6 @@ def build_binance_ingest_worker(
     cal_by_group = cfg.get("market_calendar_by_group", {})
     cal_sym_groups = cfg.get("market_calendar_symbol_groups", {})
 
-    # Правила паузи M1→SSOT (ADR-0099); crypto_24x7 паузи не має, але правило одне для всіх записувачів
-    pause_policy = resolve_pause_policy(cfg)
     pollers: list[M1SymbolPoller] = []
     for sym in symbols:
         group = cal_sym_groups.get(sym)
@@ -216,7 +214,8 @@ def build_binance_ingest_worker(
                 tail_fetch_n=tail_fetch_n,
                 m3_derive=True,
                 tail_catchup_max_bars=backfill_max_bars,
-                pause_policy=pause_policy,
+                # ADR-0099: crypto_24x7 паузи не має, але правило одне для всіх записувачів M1
+                pause_policy=resolve_pause_policy(cfg, sym),
             )
         )
 

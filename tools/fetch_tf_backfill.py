@@ -218,14 +218,16 @@ def main() -> int:
         logging.error("BACKFILL_REFUSED symbols=%s — немає календаря сесії (market_calendar_symbol_groups)", ",".join(rejected))
         return 2
     flat_max_volume = resolve_flat_max_volume(cfg)
-    pause_policy = resolve_pause_policy(cfg)
+    # Правила паузи — на символ: застарілий край залежить від календарної групи (ADR-0099 §3.2)
+    pause_policies = {symbol: resolve_pause_policy(cfg, symbol) for symbol in sym_list}
     if args.allow_off_calendar:
         # Прапор = календар під підозрою: бар з обсягом торгівлі поза календарем може бути справжньою хвилиною — не
         # відкидається за положенням, а пишеться з маркером anomaly. Шум з малим обсягом відсіюється, як і раніше.
-        pause_policy = pause_policy.with_calendar_suspected()
+        pause_policies = {symbol: policy.with_calendar_suspected() for symbol, policy in pause_policies.items()}
         logging.warning(
             "BACKFILL_CALENDAR_RULES_RELAXED --allow-off-calendar: бар поза календарем з v >= %d пишеться з маркером "
-            "calendar_pause_nonflat_anomaly; шум з меншим обсягом і пласкі не пишуться", pause_policy.alarm_min_volume,
+            "calendar_pause_nonflat_anomaly; шум з меншим обсягом і пласкі не пишуться",
+            pause_policies[sym_list[0]].alarm_min_volume,
         )
 
     if args.date_to:
@@ -310,7 +312,7 @@ def main() -> int:
                     )
                 if args.tf == 60:
                     bars, verdicts, trading_like_off_calendar = _filter_m1_by_session(
-                        bars, calendars[symbol], flat_max_volume, pause_policy
+                        bars, calendars[symbol], flat_max_volume, pause_policies[symbol]
                     )
                     total_verdicts.update(verdicts)
                     logging.log(
@@ -326,7 +328,8 @@ def main() -> int:
                             "на торгівлю (anomaly біля краю або v >= %d глибоко в паузі); ймовірно календар символу "
                             "хибний (перевірте market_calendar_by_group). Нічого не записано. Свідомо продовжити: "
                             "--allow-off-calendar",
-                            symbol, _describe_off_calendar(trading_like_off_calendar), pause_policy.alarm_min_volume,
+                            symbol, _describe_off_calendar(trading_like_off_calendar),
+                            pause_policies[symbol].alarm_min_volume,
                         )
                         errors.append(symbol)
                         continue
@@ -372,10 +375,9 @@ def main() -> int:
     logging.log(
         logging.WARNING if dropped or noise or edge_stale or anomalies else logging.INFO,
         "=== ПІДСУМОК: записано=%d пропущено(dedup)=%d відсіяно(пласкі поза сесією)=%d "
-        "відсіяно(шум глибоко в паузі, margin=%s хв)=%d відсіяно(застарілий край, v<=%s)=%d "
+        "відсіяно(шум глибоко в паузі)=%d відсіяно(застарілий край)=%d "
         "аномалій(непласкі біля краю сесії)=%d помилок=%d ===",
-        total_written, total_skipped, dropped, pause_policy.noise_margin_min, noise,
-        pause_policy.edge_stale_max_volume, edge_stale, anomalies, len(errors),
+        total_written, total_skipped, dropped, noise, edge_stale, anomalies, len(errors),
     )
     return 1 if errors else 0
 

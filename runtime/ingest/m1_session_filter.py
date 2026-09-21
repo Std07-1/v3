@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, FrozenSet, List, Optional, Tuple
 
 from core.model.bars import CandleBar
 
@@ -50,6 +50,9 @@ PAUSE_NOISE_MARGIN_MIN_DEFAULT = 60
 # Застарілий край (ADR-0099 §3.2); SSOT — config.json → m1_session_filter.pause_edge_stale_volume_mult (K). Поріг
 # обсягу = flat_bar_max_volume × K = 8: шум у паузі має v ≤ 5, клас 21:00 — ~3 тіки, а справжня хвилина 21:00 узимку
 # (під несезонним календарем) з v ≤ 8 трапилась по 1 на символ за зиму — стільки ж, скільки при K=1. 0 вимикає правило.
+# Діє лише для календарних груп із `pause_edge_stale_groups` (рев'ю D-03): у EUSTX50/GER30 справжня хвилина 20:00 UTC
+# узимку має малий v (влітку та сама місцева година — v ≤ 8 у 44 з 123 днів), тож там правило з'їло б торгівлю.
+# Ключа немає — правило вимкнене (WARN): відкидати дані за замовчуванням не можна.
 PAUSE_EDGE_STALE_VOLUME_MULT_DEFAULT = 2
 
 # Тривога хибного календаря (ADR-0099 §3.3); SSOT — config.json → m1_session_filter.pause_noise_alarm_*. Виміри
@@ -70,7 +73,7 @@ class PausePolicy:
     """
 
     noise_margin_min: int
-    edge_stale_max_volume: Optional[int] = FLAT_BAR_MAX_VOLUME_DEFAULT * PAUSE_EDGE_STALE_VOLUME_MULT_DEFAULT
+    edge_stale_max_volume: Optional[int] = None
     alarm_window_min: int = PAUSE_NOISE_ALARM_WINDOW_MIN_DEFAULT
     alarm_max_dropped: int = PAUSE_NOISE_ALARM_MAX_DROPPED_DEFAULT
     alarm_min_volume: int = PAUSE_NOISE_ALARM_MIN_VOLUME_DEFAULT
@@ -122,9 +125,10 @@ def resolve_flat_max_volume(cfg: dict) -> int:
         return FLAT_BAR_MAX_VOLUME_DEFAULT
 
 
-def resolve_pause_policy(cfg: dict) -> PausePolicy:
-    """Політика паузи з config (SSOT `m1_session_filter`), одна для всіх записувачів M1.
+def resolve_pause_policy(cfg: dict, symbol: str) -> PausePolicy:
+    """Політика паузи символу з config (SSOT `m1_session_filter`), один resolve для всіх записувачів M1.
 
+    Символ обов'язковий: правило застарілого краю залежить від календарної групи символу (рев'ю D-03).
     Запас глибини — щонайменше 1: кожна хвилина паузи лежить щонайменше за 1 хв від торгової, тож запас 0 тихо вимкнув
     би рейку anomaly біля країв (саме вона ловить DST і хибний календар).
     """
@@ -137,9 +141,10 @@ def resolve_pause_policy(cfg: dict) -> PausePolicy:
         section = {}
     edge_stale_mult = _resolve_config_int(
         section, "pause_edge_stale_volume_mult", PAUSE_EDGE_STALE_VOLUME_MULT_DEFAULT, 0)
+    edge_stale_on = edge_stale_mult > 0 and _calendar_group(cfg, symbol) in _resolve_edge_stale_groups(section)
     return PausePolicy(
         noise_margin_min=_resolve_config_int(section, "pause_noise_margin_min", PAUSE_NOISE_MARGIN_MIN_DEFAULT, 1),
-        edge_stale_max_volume=resolve_flat_max_volume(cfg) * edge_stale_mult if edge_stale_mult > 0 else None,
+        edge_stale_max_volume=resolve_flat_max_volume(cfg) * edge_stale_mult if edge_stale_on else None,
         alarm_window_min=_resolve_config_int(
             section, "pause_noise_alarm_window_min", PAUSE_NOISE_ALARM_WINDOW_MIN_DEFAULT, 1),
         alarm_max_dropped=_resolve_config_int(
@@ -147,6 +152,23 @@ def resolve_pause_policy(cfg: dict) -> PausePolicy:
         alarm_min_volume=_resolve_config_int(
             section, "pause_noise_alarm_min_volume", PAUSE_NOISE_ALARM_MIN_VOLUME_DEFAULT, 1),
     )
+
+
+def _calendar_group(cfg: dict, symbol: str) -> Optional[str]:
+    groups = cfg.get("market_calendar_symbol_groups")
+    return groups.get(symbol) if isinstance(groups, dict) else None
+
+
+def _resolve_edge_stale_groups(section: dict) -> FrozenSet[str]:
+    """Групи, де діє застарілий край. Відсутній або битий ключ — правило вимкнене (порожня множина) з WARNING."""
+    raw = section.get("pause_edge_stale_groups")
+    if isinstance(raw, list) and all(isinstance(group, str) for group in raw):
+        return frozenset(raw)
+    logging.warning(
+        "M1_SESSION_FILTER_CONFIG_INVALID key=pause_edge_stale_groups raw=%r — очікується список груп календаря, "
+        "правило застарілого краю вимкнене", raw,
+    )
+    return frozenset()
 
 
 def _resolve_config_int(section: dict, key: str, default: int, minimum: int) -> int:
