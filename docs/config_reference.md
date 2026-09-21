@@ -63,9 +63,9 @@
 | `m1_poller.m3_derive_enabled` | bool | true | Будувати M3 з 3×M1 при кожному коміті |
 | `m1_poller.backfill_enabled` | bool | true | ⚠️ **DEAD CONFIG** — код не читає. Зарезервовано для майбутнього |
 | `m1_poller.backfill_max_bars` | int | 1440 | ⚠️ **DEAD CONFIG** — не реалізовано в m1_poller.py |
-| `m1_poller.session_open_rebuild.enabled` | bool | true | ADR-0096 слайс E: перша M1 після перерви з open = close перед перервою (запечена) — open і запечений high/low з тікової історії брокера (t1) до коміту. `false` = бар брокера як є |
+| `m1_poller.session_open_rebuild.enabled` | bool | true | ADR-0096 слайс E: для першої M1 після перерви — тіки хвилини (t1) до коміту; open поза діапазоном тіків = запечений → open і запечений high/low з тіків. `false` = бар брокера як є. Лише JSON `true`/`false` (рядок → ERROR, перебудову вимкнено) |
 | `m1_poller.session_open_rebuild.gap_min` | int | 15 | Бар «перший після перерви», якщо попередній закомічений M1 старший за N хв (або календар: хвилина торгова, попередня — ні) |
-| `m1_poller.session_open_rebuild.price_step_by_symbol` | {sym: float} | `{"XAU/USD": 0.01, "XAG/USD": 0.001, …}` | Крок котирування FXCM (10^-digits); ціни рівні при різниці ≤ ½ кроку (ознака запечення: open = close перед перервою). **Новий символ** без кроку → WARN `M1_SESSION_OPEN_REBUILD_NO_PRICE_STEP`, перші хвилини з `open_provisional` |
+| `m1_poller.session_open_rebuild.price_step_by_symbol` | {sym: float} | `{"XAU/USD": 0.01, "XAG/USD": 0.001, …}` | Крок котирування FXCM (10^-digits); допуск ½ кроку (запечений = open поза [min − ½, max + ½] тіків хвилини). **Новий символ** без кроку → WARN `M1_SESSION_OPEN_REBUILD_NO_PRICE_STEP`, перші хвилини з `open_provisional` |
 
 > **Warmup M1**: На cold start M1 poller завантажує `redis.tail_n_by_tf_s["60"]` = 2880 барів з диску в Redis.
 > M1Buffer (для M3 derive) ініціалізується всього 10 барами (хардкод у коді).

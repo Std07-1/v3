@@ -26,7 +26,7 @@
     "live_recover_log_interval_s": 60,
     "stale_s": 720,
     "session_open_rebuild": {
-      "_comment": "ADR-0096 слайс E: перша M1 після перерви з open = close перед перервою (запечена) — open і запечений high/low з тікової історії брокера (t1) до коміту; тіків немає → бар брокера з open_provisional + WARN FXCM_SESSION_OPEN_BAKED. price_step = крок котирування FXCM (10^-digits), виміряно на M1 проду 21.09",
+      "_comment": "ADR-0096 слайс E: перша M1 після перерви — тіки хвилини (t1) до коміту; open поза діапазоном тіків = запечений → open і запечений high/low з тіків, c і v брокерські; тіків немає → бар брокера з open_provisional + WARN FXCM_SESSION_OPEN_BAKED. enabled — лише true/false. price_step = крок котирування FXCM (10^-digits), виміряно на M1 проду 21.09",
       "enabled": true,
       "gap_min": 15,
       "price_step_by_symbol": {
