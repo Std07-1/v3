@@ -485,6 +485,8 @@ def test_policy_comes_from_config_and_absent_section_means_disabled():
     {"enabled": True, "gap_min": 0, "price_step_by_symbol": {}},
     {"enabled": True, "gap_min": 15, "price_step_by_symbol": {"XAU/USD": 0}},
     {"enabled": True, "price_step_by_symbol": {}},
+    {"enabled": "false", "gap_min": 15, "price_step_by_symbol": {}},  # bool("false") == True — не вгадувати
+    {"enabled": 1, "gap_min": 15, "price_step_by_symbol": {}},
 ])
 def test_broken_policy_config_is_refused_loudly(section):
     with pytest.raises((ValueError, KeyError)):
@@ -667,6 +669,15 @@ def test_writer_policy_loader_is_loud_about_broken_config_and_missing_steps(capl
         assert poller_mod.load_session_open_policy(ok, ["XAU/USD", "US30"]).enabled is True
     assert "M1_SESSION_OPEN_REBUILD_CONFIG_INVALID" in caplog.text
     assert "M1_SESSION_OPEN_REBUILD_NO_PRICE_STEP symbols=['US30']" in caplog.text
+
+
+def test_string_false_in_config_disables_rebuild_loudly_instead_of_enabling_it(caplog):
+    """Рев'ю D-06: "enabled": "false" (рядок) раніше вмикав перебудову через bool(); тепер — ERROR і вимкнено."""
+    cfg = {"m1_poller": {"session_open_rebuild": {"enabled": "false", "gap_min": 15,
+                                                  "price_step_by_symbol": {"XAU/USD": 0.01}}}}
+    with caplog.at_level(logging.ERROR):
+        assert poller_mod.load_session_open_policy(cfg, ["XAU/USD"]).enabled is False
+    assert "M1_SESSION_OPEN_REBUILD_CONFIG_INVALID" in caplog.text and "'false'" in caplog.text
 
 
 # ---------------------------------------------------------------------------

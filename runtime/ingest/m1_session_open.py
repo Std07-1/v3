@@ -56,12 +56,15 @@ DISABLED_POLICY = SessionOpenRebuildPolicy(enabled=False, gap_ms=0, price_step_b
 
 
 def resolve_session_open_rebuild_policy(cfg: Dict[str, Any]) -> SessionOpenRebuildPolicy:
-    """Політика з config; секції немає → вимкнено. Битий ключ → ValueError (записувач кричить і вимикає)."""
+    """Політика з config; секції немає → вимкнено. Битий ключ (зокрема enabled не bool) → ValueError."""
     m1_cfg = cfg.get("m1_poller")
     section = m1_cfg.get(_CONFIG_SECTION) if isinstance(m1_cfg, dict) else None
     if not isinstance(section, dict):
         return DISABLED_POLICY
-    enabled = bool(section.get("enabled", False))
+    enabled = section.get("enabled", False)
+    if not isinstance(enabled, bool):
+        # bool("false") == True: рядок чи число замість JSON true/false не вгадується, а відмовляє гучно.
+        raise ValueError("m1_poller.%s.enabled: очікується true/false, отримано %r" % (_CONFIG_SECTION, enabled))
     gap_min = int(section["gap_min"])
     steps = section["price_step_by_symbol"]
     if gap_min < 1 or not isinstance(steps, dict):

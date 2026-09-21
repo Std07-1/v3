@@ -20,7 +20,8 @@ except Exception:  # noqa: BLE001
 # сесії тягнула вчорашню ціну в O і L/H, а за нею — D1/H4/… (XAU D1 27.07.2026: наш O=L=4055.42,
 # FXCM FIRST_TICK і TradingView — O≈4090). До ADR-0096 параметр не передавався зовсім.
 OPEN_PRICE_MODE_NAME = "FIRST_TICK"
-# Допуск порівняння open з [low, high] — нижче за крок ціни будь-якого символу (XAG 0.001, NAS100 0.05).
+# Допуск порівняння open з [low, high] — нижче за крок ціни будь-якого символу (найменший — XAG 0.001; кроки всіх
+# символів: config.json m1_poller.session_open_rebuild.price_step_by_symbol).
 _OPEN_RANGE_EPS = 1e-9
 
 # Тікова історія брокера (ADR-0096 слайс E). Свічки FXCM у нас — Bid: у dtype свічки SDK немає поля «Open»,
