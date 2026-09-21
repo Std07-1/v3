@@ -264,8 +264,11 @@ Flat bar: `O == H == L == C` і `volume ≤ flat_bar_max_volume` (SSOT: `config.
 | Trading, перша хвилина сесії | Yes | ❌ **Скіпаємо** — заглушка брокера на перевідкритті, WARNING `M1_REOPEN_FLAT_DROPPED` |
 | Closed, далі `m1_session_filter.pause_noise_margin_min` (60) хв від торгової | будь-який | ❌ **Скіпаємо** — шум брокера, WARNING `M1_PAUSE_NOISE_DROPPED` з OHLCV і лічильником |
 | Closed, біля краю сесії | Yes | ❌ **Скіпаємо** (шум від брокера) |
-| Closed, перша хвилина паузи після закриття (напр. 21:00) | No, `v ≤ flat_bar_max_volume × pause_edge_stale_volume_mult` (4×2) | ❌ **Скіпаємо** — застарілі тіки після закриття, WARNING `M1_PAUSE_EDGE_STALE_DROPPED` з OHLCV |
+| Closed, перша хвилина паузи після закриття (напр. 21:00), група з `pause_edge_stale_groups` (cfd_us_22_23) | No, `v ≤ flat_bar_max_volume × pause_edge_stale_volume_mult` (4×2) | ❌ **Скіпаємо** — застарілі тіки після закриття, WARNING `M1_PAUSE_EDGE_STALE_DROPPED` з OHLCV |
 | Closed, біля краю сесії | No | ⚠️ Приймаємо + `extensions.calendar_pause_nonflat_anomaly=true` + WARNING лог (DST / хибний календар) |
+
+Порядок з ADR-0096 слайсом E: спершу `_rebuild_session_open` (перша M1 після перерви з тіків t1; пласку заглушку не
+перебудовує), потім правило вище.
 
 Кожна відкинута хвилина рахується й логується **один раз** (`m1_drop_ledger.DroppedM1Ledger`): відкинутий бар не рухає
 watermark, тож `poll_once`, `live_recover` і `tail_catchup` отримують його від брокера знову.
