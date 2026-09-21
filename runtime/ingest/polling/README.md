@@ -254,7 +254,8 @@ Flat bar: `O == H == L == C` і `volume ≤ flat_bar_max_volume` (SSOT: `config.
 ### 6.2 Класифікація (calendar-aware)
 
 `_ingest_bar()` класифікує кожен бар спільним правилом `runtime/ingest/m1_session_filter.classify_m1_by_calendar`
-(те саме правило в `tools/fetch_tf_backfill` і `tools/repair/repair_m1_gaps`):
+(те саме правило в `tools/fetch_tf_backfill` і `tools/repair/repair_m1_gaps`; обґрунтування і виміри — ADR-0099).
+Параметри — секція `config.json → m1_session_filter`, один `resolve_pause_policy` для всіх записувачів:
 
 | Стан ринку | Flat? | Дія |
 | --- | --- | --- |
@@ -263,7 +264,16 @@ Flat bar: `O == H == L == C` і `volume ≤ flat_bar_max_volume` (SSOT: `config.
 | Trading, перша хвилина сесії | Yes | ❌ **Скіпаємо** — заглушка брокера на перевідкритті, WARNING `M1_REOPEN_FLAT_DROPPED` |
 | Closed, далі `m1_session_filter.pause_noise_margin_min` (60) хв від торгової | будь-який | ❌ **Скіпаємо** — шум брокера, WARNING `M1_PAUSE_NOISE_DROPPED` з OHLCV і лічильником |
 | Closed, біля краю сесії | Yes | ❌ **Скіпаємо** (шум від брокера) |
+| Closed, перша хвилина паузи після закриття (напр. 21:00) | No, `v ≤ flat_bar_max_volume × pause_edge_stale_volume_mult` (4×2) | ❌ **Скіпаємо** — застарілі тіки після закриття, WARNING `M1_PAUSE_EDGE_STALE_DROPPED` з OHLCV |
 | Closed, біля краю сесії | No | ⚠️ Приймаємо + `extensions.calendar_pause_nonflat_anomaly=true` + WARNING лог (DST / хибний календар) |
+
+Кожна відкинута хвилина рахується й логується **один раз** (`m1_drop_ledger.DroppedM1Ledger`): відкинутий бар не рухає
+watermark, тож `poll_once`, `live_recover` і `tail_catchup` отримують його від брокера знову.
+
+Тривога хибного календаря — ERROR `M1_PAUSE_NOISE_ALARM`, якщо відкинутий шум глибоко в паузі схожий на торгівлю:
+`v ≥ pause_noise_alarm_min_volume` (20) або понад `pause_noise_alarm_max_dropped` (50) різних хвилин за
+`pause_noise_alarm_window_min` (60) хв часу барів. Не частіше одного ERROR на вікно, лічильник `noise_alarm` у
+`M1_POLLER_STATS`.
 
 ### 6.3 Вплив на M3 деривацію
 
@@ -641,7 +651,7 @@ FXCM має свій PREVIOUS_CLOSE mode, але він штучно склею�
 
 | Лог | Значення |
 | --- | --- |
-| `M1_POLLER_STATS symbols=13 m1=75 m3=24 err=0 cal_skip=0 gaps=6 caught_up=0 recovering=0 stale=0` | Агрегована статистика (кожні 5 хв) |
+| `M1_POLLER_STATS symbols=6 m1=75 m3=24 err=0 cal_skip=0 pause_noise=13 edge_stale=1 noise_alarm=0 gaps=6 caught_up=0 recovering=0 stale=0` | Агрегована статистика (кожні 5 хв). `pause_noise` / `edge_stale` — унікальні хвилини, відкинуті правилами паузи; `noise_alarm > 0` — перевірити календар символу |
 | `M1_CALENDAR_STATE symbol=XAU/USD state=closed` | Зміна calendar state |
 | `M1_GAP_DETECTED symbol=XAU/USD gap_bars=5` | Виявлено gap |
 | `M1_LIVE_RECOVER_START symbol=XAU/USD gap_bars=120` | Вхід в recover mode |
@@ -649,7 +659,10 @@ FXCM має свій PREVIOUS_CLOSE mode, але він штучно склею�
 | `M1_STALE symbol=XAU/USD silence_s=800` | Stale detection спрацювало |
 | `M1_TAIL_CATCHUP symbol=XAU/USD missing=350 written=348` | Tail catchup результат |
 | `M1_NONFLAT_IN_PAUSE symbol=XAU/USD` | Аномалія: non-flat під час break біля краю сесії |
-| `M1_PAUSE_NOISE_DROPPED symbol=XAG/USD ... dropped_total=13` | Бар глибоко в паузі відкинуто як шум; великий `v` тут = підозра на хибний календар |
+| `M1_PAUSE_NOISE_DROPPED symbol=XAG/USD ... dropped_total=13` | Бар глибоко в паузі відкинуто як шум (раз на хвилину); великий `v` тут = підозра на хибний календар |
+| `M1_PAUSE_EDGE_STALE_DROPPED symbol=NAS100 ... v=3 max_v=8` | Перша хвилина паузи після закриття з малим обсягом — застарілі тіки, відкинуто |
+| `M1_PAUSE_NOISE_ALARM symbol=XAG/USD reason=volume ...` (ERROR) | Шум глибоко в паузі схожий на торгівлю: календар символу ймовірно хибний (сезон, група, свято) |
+| `M1_SESSION_FILTER_CONFIG_DEFAULT` / `_INVALID` / `_CLAMPED` | Ключ `m1_session_filter` відсутній, битий або поза межами — взято дефолт або межу (сире значення в лозі) |
 
 ### 19.2 HTTP endpoints для перевірки
 
