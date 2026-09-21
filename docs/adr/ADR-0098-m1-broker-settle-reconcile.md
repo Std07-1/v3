@@ -122,9 +122,9 @@ Global lock), `/tmp/fxcm_seed_cwd`, `/tmp/fxcm_cold_cwd` (не холодний:
 Extensions:
 
 - провізорні маркери (`open_provisional`, `open_unsettled`, `close_suspect`, §3.5) знімаються;
-- класифікаційні маркери перераховує **той самий** класифікатор, що й живий інжест: `classify_m1_for_ssot`
-  [VERIFIED runtime/ingest/m1_session_filter.py:64-73] з сезонним календарем ADR-0095 §3.5. Settle не має власних
-  правил сесії (D15.2);
+- класифікаційні маркери перераховує **той самий** класифікатор, що й живий інжест:
+  `runtime/ingest/m1_session_filter.classify_m1_by_calendar` (правило — ADR-0099; рішення всередині приватне, тож
+  іншої точки входу немає) з сезонним календарем ADR-0095 §3.5. Settle не має власних правил сесії (D15.2);
 - провенанс — `extensions.settled = {week, server_crc, tool_version}`.
 
 Якщо рядок S2 дорівнює нашому — SAME, і заради нього файл не переписується.
