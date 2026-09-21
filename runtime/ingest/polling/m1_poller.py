@@ -34,9 +34,12 @@ from runtime.ingest.m1_session_filter import (
     resolve_flat_max_volume,
 )
 from runtime.ingest.m1_session_open import (
+    BAR_CORRECT_AS_IS,
     DISABLED_POLICY,
+    REASON_NOT_BAKED,
     SessionOpenRebuildPolicy,
     is_first_bar_after_break,
+    is_open_baked,
     mark_open_provisional,
     rebuild_session_open_bar,
     resolve_session_open_rebuild_policy,
@@ -208,6 +211,8 @@ class M1SymbolPoller:
 
         # Watermark — останній committed M1 open_ms
         self._watermark_ms: Optional[int] = None
+        # close бару на watermark — еталон «запеченого» open першої хвилини після перерви (ADR-0096 слайс E)
+        self._watermark_close: Optional[float] = None
         self._bars_on_disk: int = 0  # M1 bars знайдені на диску під час warmup
 
         # Counters
@@ -312,6 +317,7 @@ class M1SymbolPoller:
             # Оновлюємо watermark
             if self._watermark_ms is None or bar.open_time_ms > self._watermark_ms:
                 self._watermark_ms = bar.open_time_ms
+                self._watermark_close = bar.c
             # P0.3: оновлюємо час останнього нового бару
             self._last_new_bar_ts = time.time()
             # Каскадна деривація через DeriveEngine (ADR-0002 P2.3)
@@ -339,11 +345,11 @@ class M1SymbolPoller:
     # -- Перша хвилина після перерви (ADR-0096 слайс E) -----------------
 
     def _rebuild_session_open(self, bar: CandleBar) -> CandleBar:
-        """Перша M1 після перерви: open з тікової історії брокера замість запеченого close перед перервою.
+        """Перша M1 після перерви: запечені компоненти (open = close перед перервою) — з тікової історії брокера.
 
-        Бар комітиться один раз, тож виправити можна лише тут, до коміту. Запит t1 — тільки для барів
-        «перших після перерви» (кілька на добу), звичайний цикл не гальмує. Не доведено тіками — бар брокера
-        без змін, з маркером open_provisional і WARN FXCM_SESSION_OPEN_BAKED.
+        Бар комітиться один раз, тож виправити можна лише тут, до коміту. Запит t1 — тільки для запеченого
+        бару «першого після перерви» (кілька на добу), звичайний цикл не гальмує. Не запечений або перший тік
+        на тій самій ціні — бар як є (INFO). Тіків не отримано — бар брокера з open_provisional і WARN.
         """
         policy = self._session_open_policy
         if not policy.enabled:
@@ -355,29 +361,40 @@ class M1SymbolPoller:
             is_trading_fn = self._calendar.is_trading_minute
         if not is_first_bar_after_break(bar.open_time_ms, self._watermark_ms, policy.gap_ms, is_trading_fn):
             return bar
-        rebuilt, reason, ticks_fetched = self._rebuild_from_broker_ticks(bar, policy)
+        prev_close = self._watermark_close
+        rebuilt, reason, ticks_fetched = self._rebuild_baked_components(bar, policy, prev_close)
         if rebuilt is not None:
             logging.info(
-                "FXCM_SESSION_OPEN_REBUILT symbol=%s open_ms=%s o_before=%.5f o=%.5f h=%.5f l=%.5f c=%.5f "
-                "v=%.0f ticks=%s",
-                self._symbol, bar.open_time_ms, bar.o, rebuilt.o, rebuilt.h, rebuilt.low, rebuilt.c, rebuilt.v,
-                ticks_fetched,
+                "FXCM_SESSION_OPEN_REBUILT symbol=%s open_ms=%s prev_close=%.5f o=%.5f→%.5f h=%.5f→%.5f "
+                "l=%.5f→%.5f c=%.5f v=%.0f ticks=%s",
+                self._symbol, bar.open_time_ms, prev_close, bar.o, rebuilt.o, bar.h, rebuilt.h, bar.low,
+                rebuilt.low, rebuilt.c, rebuilt.v, ticks_fetched,
             )
             return rebuilt
+        if reason in BAR_CORRECT_AS_IS:
+            logging.info(
+                "FXCM_SESSION_OPEN_OK symbol=%s open_ms=%s reason=%s o=%.5f prev_close=%s — бар брокера як є",
+                self._symbol, bar.open_time_ms, reason, bar.o, prev_close,
+            )
+            return bar
         logging.warning(
-            "FXCM_SESSION_OPEN_BAKED symbol=%s open_ms=%s reason=%s o=%.5f h=%.5f l=%.5f c=%.5f v=%.0f ticks=%s "
-            "— open першої хвилини після перерви не доведено тіками брокера, бар іде з open_provisional",
-            self._symbol, bar.open_time_ms, reason, bar.o, bar.h, bar.low, bar.c, bar.v, ticks_fetched,
+            "FXCM_SESSION_OPEN_BAKED symbol=%s open_ms=%s reason=%s o=%.5f h=%.5f l=%.5f c=%.5f v=%.0f "
+            "prev_close=%s ticks=%s — open першої хвилини після перерви не виправлено, бар іде з open_provisional",
+            self._symbol, bar.open_time_ms, reason, bar.o, bar.h, bar.low, bar.c, bar.v, prev_close, ticks_fetched,
         )
         return mark_open_provisional(bar)
 
-    def _rebuild_from_broker_ticks(
-        self, bar: CandleBar, policy: SessionOpenRebuildPolicy
+    def _rebuild_baked_components(
+        self, bar: CandleBar, policy: SessionOpenRebuildPolicy, prev_close: Optional[float]
     ) -> Tuple[Optional[CandleBar], str, Optional[int]]:
-        """(перебудований бар або None, причина, скільки тіків віддав брокер або None, якщо не віддав)."""
+        """(перебудований бар або None, причина, скільки тіків віддав брокер або None, якщо не запитували)."""
         price_step = policy.price_step_by_symbol.get(self._symbol)
         if price_step is None:
             return None, "price_step_missing", None
+        if prev_close is None:
+            return None, "prev_close_unknown", None
+        if not is_open_baked(bar, prev_close, price_step):
+            return None, REASON_NOT_BAKED, None
         fetch_ticks = getattr(self._provider, "fetch_t1_bid_ticks", None)
         if fetch_ticks is None:
             return None, "provider_without_t1", None
@@ -389,9 +406,7 @@ class M1SymbolPoller:
             return None, "t1_error: %s" % exc, None
         if ticks is None:
             return None, "t1_unavailable", None
-        rebuilt, reason = rebuild_session_open_bar(
-            bar, ticks, price_step, max_volume_deficit=policy.max_volume_deficit
-        )
+        rebuilt, reason = rebuild_session_open_bar(bar, ticks, price_step, prev_close)
         return rebuilt, reason, len(ticks)
 
     # -- Main poll -------------------------------------------------------
@@ -667,6 +682,7 @@ class M1SymbolPoller:
                         or bar.open_time_ms > self._watermark_ms
                     ):
                         self._watermark_ms = bar.open_time_ms
+                        self._watermark_close = bar.c
                     loaded += 1
             self._bars_on_disk = loaded  # зберегти для Phase 2.5 trigger
             return loaded
@@ -1335,8 +1351,8 @@ def load_session_open_policy(cfg: dict, symbols: List[str]) -> SessionOpenRebuil
         logging.error("M1_SESSION_OPEN_REBUILD_CONFIG_INVALID err=%s — перебудову вимкнено", exc)
         return DISABLED_POLICY
     logging.info(
-        "M1_SESSION_OPEN_REBUILD enabled=%s gap_ms=%d max_volume_deficit=%d",
-        policy.enabled, policy.gap_ms, policy.max_volume_deficit,
+        "M1_SESSION_OPEN_REBUILD enabled=%s gap_ms=%d price_steps=%d",
+        policy.enabled, policy.gap_ms, len(policy.price_step_by_symbol),
     )
     missing_step = [sym for sym in symbols if sym not in policy.price_step_by_symbol]
     if policy.enabled and missing_step:

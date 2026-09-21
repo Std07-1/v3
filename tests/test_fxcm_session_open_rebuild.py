@@ -1,10 +1,11 @@
-"""Перша хвилина M1 після перерви — з тікової історії брокера, а не «запечена» (ADR-0096 слайс E).
+"""Перша хвилина M1 після перерви — запечені компоненти з тікової історії брокера (ADR-0096 слайс E).
 
 Навіщо цей файл. Перша M1 кожної сесії у FXCM приходить з open (і high або low) = close перед перервою;
 полер комітить її один раз, тож на M1…D1 стоїть гігантська перша свічка. Тікова історія того ж дня має лише
-справжні тіки (EUSTX50 21.09 06:01: 10 тіків від 6281.63, а m1 брокера o=l=6239.79 — close п'ятниці, v=10).
+справжні тіки (EUSTX50 21.09 06:01: перший тік 6281.63, а m1 брокера o=l=6239.79 — close п'ятниці, v=10).
+На T+8 с t1 і m1 не узгоджені ні за кількістю тіків, ні за close — тому перебудовується лише запечене.
 Тести йдуть по конвеєру: провайдер (t1 через єдиний вхід SDK) → sidecar/proxy (команда fetch_t1) →
-чиста перебудова з гейтами → полер до коміту.
+чиста перебудова → полер до коміту.
 """
 from __future__ import annotations
 
@@ -257,7 +258,7 @@ def test_proxy_timeout_is_none_not_an_empty_minute(caplog, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# P3 — чиста перебудова першої хвилини з гейтами
+# P3 — чиста перебудова: лише запечені компоненти
 # ---------------------------------------------------------------------------
 XAU_OPEN_MS = _ms("2026-09-20T22:01:00")
 NAS_OPEN_MS = _ms("2026-09-20T22:00:00")
@@ -274,77 +275,107 @@ def _spread(open_ms, bids):
     return [(open_ms + 5_000 + i * step_ms, bid) for i, bid in enumerate(bids)]
 
 
-# Проба 21.09 (/tmp/p5/t1_probe.py): o=l=6239.79 = close п'ятниці, v=10, 10 тіків від 6281.63.
-# Перший тік, o, v — з проби; решта цін тіків — ілюстрація в межах бару.
-EUSTX50_BIDS = [6281.63, 6282.00, 6283.40, 6280.90, 6281.20, 6282.50, 6283.90, 6284.20, 6283.00, 6283.10]
-EUSTX50_BAKED = _m1("EUSTX50", EUSTX50_OPEN_MS, o=6239.79, h=6284.20, low=6239.79, c=6283.10, v=10)
+# Проба 21.09 (/tmp/p5/t1_probe.py): m1 o=l=6239.79 (close п'ятниці) h=6284.14 c=6281.63 v=10; тіки 06:01:05…06:01:59,
+# перший і останній 6281.63, max 6284.14, min 6281.63. Проміжні ціни тіків — ілюстрація в цих межах.
+EUSTX50_PREV_CLOSE = 6239.79
+EUSTX50_BIDS = [6281.63, 6282.40, 6284.14, 6283.00, 6282.10, 6281.90, 6282.75, 6283.50, 6282.20, 6281.63]
+EUSTX50_BAKED = _m1("EUSTX50", EUSTX50_OPEN_MS, o=6239.79, h=6284.14, low=6239.79, c=6281.63, v=10)
+
+# XAU 20.09 22:01: m1 o=h=4380.77 l=4373.41 c=4374.2 v=388, prev_close 4380.77, перший тік 4375.62.
+XAU_PREV_CLOSE = 4380.77
+XAU_BIDS = [4375.62, 4376.80, 4377.15, 4374.90, 4373.95, 4374.20]
+XAU_BAKED = _m1("XAU/USD", XAU_OPEN_MS, o=4380.77, h=4380.77, low=4373.41, c=4374.2, v=388)
+
+# NAS100 20.09 22:00: m1 o=h=29677.82 l=29637.01 c=29640.31, перший тік 29644.01.
+NAS_PREV_CLOSE = 29677.82
+NAS_BIDS = [29644.01, 29650.46, 29641.59, 29640.31]
+NAS_BAKED = _m1("NAS100", NAS_OPEN_MS, o=29677.82, h=29677.82, low=29637.01, c=29640.31, v=1482)
 
 
-def test_eustx50_baked_monday_open_is_rebuilt_from_the_real_ticks():
+def test_eustx50_baked_monday_open_and_low_come_from_the_ticks():
     rebuilt, reason = so.rebuild_session_open_bar(EUSTX50_BAKED, _spread(EUSTX50_OPEN_MS, EUSTX50_BIDS), 0.01,
-                                                  max_volume_deficit=5)
+                                                  EUSTX50_PREV_CLOSE)
     assert reason == so.REASON_REBUILT
-    assert (rebuilt.o, rebuilt.h, rebuilt.low, rebuilt.c, rebuilt.v) == (6281.63, 6284.20, 6280.90, 6283.10, 10)
-    assert rebuilt.extensions == {"session_open_rebuilt": True, "open_before": 6239.79}
+    assert (rebuilt.o, rebuilt.h, rebuilt.low, rebuilt.c, rebuilt.v) == (6281.63, 6284.14, 6281.63, 6281.63, 10)
+    assert rebuilt.extensions == {"session_open_rebuilt": True, "open_before": 6239.79, "low_before": 6239.79}
     assert (rebuilt.open_time_ms, rebuilt.src, rebuilt.complete) == (EUSTX50_OPEN_MS, "history", True)
     assert EUSTX50_BAKED.o == 6239.79 and EUSTX50_BAKED.extensions == {}  # вхід не змінено
 
 
-def test_xau_open_baked_as_high_drops_to_the_real_tick_range():
-    """XAU 20.09 22:01: перший тік 4375.62, m1 o=h=4380.77, v=388 — запечений open стояв високо."""
-    bids = [4375.62] + [round(4372.0 + (i * 37 % 700) / 100, 2) for i in range(1, 387)]
-    bar = _m1("XAU/USD", XAU_OPEN_MS, o=4380.77, h=4380.77, low=min(bids), c=bids[-1], v=388)
-    rebuilt, reason = so.rebuild_session_open_bar(bar, _spread(XAU_OPEN_MS, bids), 0.01, max_volume_deficit=5)
+def test_xau_baked_high_is_rebuilt_and_the_real_low_is_kept():
+    rebuilt, reason = so.rebuild_session_open_bar(XAU_BAKED, _spread(XAU_OPEN_MS, XAU_BIDS), 0.01, XAU_PREV_CLOSE)
     assert reason == so.REASON_REBUILT
-    assert (rebuilt.o, rebuilt.h, rebuilt.low) == (4375.62, max(bids), min(bids))
-    assert rebuilt.h < 4380.77 and rebuilt.v == 388
+    assert (rebuilt.o, rebuilt.h, rebuilt.low, rebuilt.c, rebuilt.v) == (4375.62, 4377.15, 4373.41, 4374.2, 388)
+    assert rebuilt.extensions == {"session_open_rebuilt": True, "open_before": 4380.77, "high_before": 4380.77}
 
 
-def test_nas100_open_with_float_noise_in_close_still_matches_within_half_step():
-    """NAS100 22:00: перший тік 29644.01, m1 o=h=29677.82; ціни брокера мають float-шум (30287.710000000003)."""
-    bids = [29644.01, 29650.46, 29641.59, 29648.710000000003]
-    bar = _m1("NAS100", NAS_OPEN_MS, o=29677.82, h=29677.82, low=29641.59, c=29648.71, v=5)
-    rebuilt, reason = so.rebuild_session_open_bar(bar, _spread(NAS_OPEN_MS, bids), 0.01, max_volume_deficit=5)
-    assert reason == so.REASON_REBUILT and rebuilt.o == 29644.01 and rebuilt.h == 29650.46
+def test_nas100_baked_high_is_rebuilt_and_the_real_low_is_kept():
+    rebuilt, reason = so.rebuild_session_open_bar(NAS_BAKED, _spread(NAS_OPEN_MS, NAS_BIDS), 0.01, NAS_PREV_CLOSE)
+    assert reason == so.REASON_REBUILT
+    assert (rebuilt.o, rebuilt.h, rebuilt.low, rebuilt.c) == (29644.01, 29650.46, 29637.01, 29640.31)
 
 
-def test_ticks_outside_the_minute_are_ignored_and_order_does_not_matter():
-    """Вікно [open, close): тік за мілісекунду до і рівно на close — чужі; порядок брокера не визначає open."""
-    inside = [(EUSTX50_OPEN_MS, 6281.63), (EUSTX50_OPEN_MS + 30_000, 6284.20), (EUSTX50_OPEN_MS + 59_999, 6283.10)]
+def test_ticks_disagreeing_with_the_bar_on_count_and_close_still_fix_the_open():
+    """Замір T+8 с 21.09: тіків більше за v (XAU 1190 при v=818), close тіку ≠ close бару — гейтів на це немає:
+    перебудовується лише запечене, c і v — брокерські."""
+    noisy = XAU_BIDS[:-1] + [4376.00] + [4375.0] * 1000
+    rebuilt, reason = so.rebuild_session_open_bar(XAU_BAKED, _spread(XAU_OPEN_MS, noisy), 0.01, XAU_PREV_CLOSE)
+    assert reason == so.REASON_REBUILT
+    assert (rebuilt.o, rebuilt.c, rebuilt.v) == (4375.62, 4374.2, 388)
+
+
+def test_not_baked_bar_is_left_exactly_as_the_broker_sent_it():
+    real_open = dataclasses.replace(XAU_BAKED, o=4376.10, h=4377.50)
+    assert so.rebuild_session_open_bar(real_open, _spread(XAU_OPEN_MS, XAU_BIDS), 0.01, XAU_PREV_CLOSE) == \
+        (None, so.REASON_NOT_BAKED)
+    assert so.REASON_NOT_BAKED in so.BAR_CORRECT_AS_IS
+
+
+def test_first_tick_at_the_pre_break_price_is_a_real_open_not_provisional():
+    same = [XAU_PREV_CLOSE] + XAU_BIDS[1:]
+    assert so.rebuild_session_open_bar(XAU_BAKED, _spread(XAU_OPEN_MS, same), 0.01, XAU_PREV_CLOSE) == \
+        (None, so.REASON_OPEN_EQUALS_PREV_CLOSE)
+    assert so.REASON_OPEN_EQUALS_PREV_CLOSE in so.BAR_CORRECT_AS_IS
+
+
+def test_baked_detection_tolerates_broker_float_noise_within_half_step():
+    noisy_prev_close = 29677.820000000003
+    assert so.is_open_baked(NAS_BAKED, noisy_prev_close, 0.01)
+    assert not so.is_open_baked(NAS_BAKED, 29677.83, 0.01)  # рівно крок — інша ціна
+
+
+def test_first_tick_is_taken_by_time_inside_the_minute_not_by_broker_order():
+    """Вікно [open, close): тік за мілісекунду до і рівно на close — чужі; open — найраніший тік хвилини."""
+    inside = [(EUSTX50_OPEN_MS, 6281.63), (EUSTX50_OPEN_MS + 30_000, 6284.14), (EUSTX50_OPEN_MS + 59_999, 6281.63)]
     alien = [(EUSTX50_OPEN_MS - 1, 6100.0), (EUSTX50_OPEN_MS + 60_000, 6400.0)]
-    bar = _m1("EUSTX50", EUSTX50_OPEN_MS, o=6239.79, h=6284.20, low=6239.79, c=6283.10, v=3)
-    rebuilt, reason = so.rebuild_session_open_bar(bar, list(reversed(inside)) + alien, 0.01, max_volume_deficit=5)
+    rebuilt, reason = so.rebuild_session_open_bar(EUSTX50_BAKED, list(reversed(inside)) + alien, 0.01,
+                                                  EUSTX50_PREV_CLOSE)
     assert reason == so.REASON_REBUILT
-    assert (rebuilt.o, rebuilt.h, rebuilt.low) == (6281.63, 6284.20, 6281.63)
+    assert (rebuilt.o, rebuilt.h, rebuilt.low) == (6281.63, 6284.14, 6281.63)
 
 
-@pytest.mark.parametrize("ticks_kept, volume, expected", [
-    (10, 15, so.REASON_REBUILT),             # дефіцит рівно 5 — межа допуску
-    (10, 16, so.REASON_VOLUME_DEFICIT),      # тікова історія неповна (або ще не доїхала)
-    (10, 9, so.REASON_TICKS_EXCEED_VOLUME),  # тіків більше, ніж бачив бар — інша хвилина/дані
-])
-def test_volume_gate_proves_the_ticks_are_complete(ticks_kept, volume, expected):
-    bar = dataclasses.replace(EUSTX50_BAKED, v=volume)
-    _rebuilt, reason = so.rebuild_session_open_bar(bar, _spread(EUSTX50_OPEN_MS, EUSTX50_BIDS[:ticks_kept]), 0.01,
-                                                   max_volume_deficit=5)
-    assert reason == expected
+def test_normalization_keeps_ohlc_consistent_when_the_first_tick_is_outside_the_kept_extreme():
+    """Незапечений high брокера нижче за перший тік (t1 і m1 на T+8 с розходяться) → h піднімається до open."""
+    bar = _m1("EUSTX50", EUSTX50_OPEN_MS, o=6239.79, h=6281.00, low=6239.79, c=6280.50, v=5)
+    rebuilt, _reason = so.rebuild_session_open_bar(bar, [(EUSTX50_OPEN_MS + 1_000, 6281.63)], 0.01,
+                                                   EUSTX50_PREV_CLOSE)
+    assert (rebuilt.o, rebuilt.h, rebuilt.low, rebuilt.c) == (6281.63, 6281.63, 6280.50, 6280.50)
+    assert rebuilt.extensions["high_before"] == 6281.00
 
 
 @pytest.mark.parametrize("ticks, price_step, expected", [
     ([], 0.01, so.REASON_NO_TICKS),
-    (EUSTX50_BIDS[:-1] + [6283.11], 0.01, so.REASON_CLOSE_MISMATCH),     # останній тік на крок від close
-    (EUSTX50_BIDS[:-2] + [6284.21, 6283.10], 0.01, so.REASON_RANGE_OUTSIDE_BAR),  # тік вище за high брокера
-    (EUSTX50_BIDS, 0.0, so.REASON_PRICE_STEP_INVALID),
-    (EUSTX50_BIDS, float("nan"), so.REASON_PRICE_STEP_INVALID),
+    ([(EUSTX50_OPEN_MS + 60_000, 6281.63)], 0.01, so.REASON_NO_TICKS),  # тік лише з наступної хвилини
+    (_spread(EUSTX50_OPEN_MS, EUSTX50_BIDS), 0.0, so.REASON_PRICE_STEP_INVALID),
+    (_spread(EUSTX50_OPEN_MS, EUSTX50_BIDS), float("nan"), so.REASON_PRICE_STEP_INVALID),
 ])
-def test_gate_failures_leave_the_broker_bar_to_the_caller(ticks, price_step, expected):
-    rebuilt, reason = so.rebuild_session_open_bar(EUSTX50_BAKED, _spread(EUSTX50_OPEN_MS, ticks), price_step,
-                                                  max_volume_deficit=5)
-    assert (rebuilt, reason) == (None, expected)
+def test_unprovable_open_is_returned_to_the_caller_as_a_reason(ticks, price_step, expected):
+    assert so.rebuild_session_open_bar(EUSTX50_BAKED, ticks, price_step, EUSTX50_PREV_CLOSE) == (None, expected)
+    assert expected not in so.BAR_CORRECT_AS_IS
 
 
 def test_provisional_marker_keeps_the_broker_values_and_existing_extensions():
-    bar = _m1("XAU/USD", XAU_OPEN_MS, 4380.77, 4380.77, 4370.1, 4375.0, 388, extensions={"source_note": "x"})
+    bar = dataclasses.replace(XAU_BAKED, extensions={"source_note": "x"})
     marked = so.mark_open_provisional(bar)
     assert (marked.o, marked.h, marked.low, marked.c, marked.v) == (bar.o, bar.h, bar.low, bar.c, bar.v)
     assert marked.extensions == {"source_note": "x", "open_provisional": True}
@@ -375,18 +406,18 @@ def test_first_bar_after_break_by_data_gap_or_by_calendar(open_iso, prev_iso, us
 
 
 def test_policy_comes_from_config_and_absent_section_means_disabled():
-    cfg = {"m1_poller": {"session_open_rebuild": {"enabled": True, "gap_min": 15, "max_volume_deficit": 5,
+    cfg = {"m1_poller": {"session_open_rebuild": {"enabled": True, "gap_min": 15,
                                                   "price_step_by_symbol": {"XAU/USD": 0.01, "XAG/USD": 0.001}}}}
     policy = so.resolve_session_open_rebuild_policy(cfg)
-    assert (policy.enabled, policy.gap_ms, policy.max_volume_deficit) == (True, 15 * 60_000, 5)
+    assert (policy.enabled, policy.gap_ms) == (True, 15 * 60_000)
     assert dict(policy.price_step_by_symbol) == {"XAU/USD": 0.01, "XAG/USD": 0.001}
     assert so.resolve_session_open_rebuild_policy({"m1_poller": {}}) == so.DISABLED_POLICY
 
 
 @pytest.mark.parametrize("section", [
-    {"enabled": True, "gap_min": 0, "max_volume_deficit": 5, "price_step_by_symbol": {}},
-    {"enabled": True, "gap_min": 15, "max_volume_deficit": 5, "price_step_by_symbol": {"XAU/USD": 0}},
-    {"enabled": True, "gap_min": 15, "price_step_by_symbol": {}},
+    {"enabled": True, "gap_min": 0, "price_step_by_symbol": {}},
+    {"enabled": True, "gap_min": 15, "price_step_by_symbol": {"XAU/USD": 0}},
+    {"enabled": True, "price_step_by_symbol": {}},
 ])
 def test_broken_policy_config_is_refused_loudly(section):
     with pytest.raises((ValueError, KeyError)):
@@ -396,18 +427,22 @@ def test_broken_policy_config_is_refused_loudly(section):
 # ---------------------------------------------------------------------------
 # P4 — полер: перебудова ДО коміту і до правила M1→SSOT
 # ---------------------------------------------------------------------------
-POLICY = so.SessionOpenRebuildPolicy(enabled=True, gap_ms=15 * 60_000, max_volume_deficit=5,
+POLICY = so.SessionOpenRebuildPolicy(enabled=True, gap_ms=15 * 60_000,
                                      price_step_by_symbol={"EUSTX50": 0.01, "XAU/USD": 0.01})
 FRIDAY_LAST_OPEN_MS = _ms("2026-09-18T19:59:00")
 
 
 class _RecordingUds:
-    def __init__(self):
+    def __init__(self, tail=None):
         self.committed = []
+        self.tail = list(tail or [])
 
     def commit_final_bar(self, bar):
         self.committed.append(bar)
         return types.SimpleNamespace(ok=True, reason="ok")
+
+    def read_tail_candles(self, symbol, tf_s, n):
+        return list(self.tail)
 
 
 class _DirectTicks:
@@ -423,12 +458,14 @@ class _DirectTicks:
         return self.ticks
 
 
-def _poller(provider, policy=POLICY, watermark_ms=FRIDAY_LAST_OPEN_MS, calendar=None, symbol="EUSTX50"):
+def _poller(provider, policy=POLICY, watermark_ms=FRIDAY_LAST_OPEN_MS, prev_close=EUSTX50_PREV_CLOSE, calendar=None,
+            symbol="EUSTX50"):
     poller_mod.set_flat_bar_max_volume(4)
     uds = _RecordingUds()
     poller = poller_mod.M1SymbolPoller(symbol=symbol, provider=provider, uds=uds, calendar=calendar,
                                        session_open_policy=policy)
     poller._watermark_ms = watermark_ms  # noqa: SLF001
+    poller._watermark_close = prev_close  # noqa: SLF001
     return poller, uds
 
 
@@ -438,10 +475,11 @@ def test_poller_commits_the_rebuilt_first_bar_after_the_weekend(caplog):
     with caplog.at_level(logging.INFO):
         assert poller._ingest_bar(EUSTX50_BAKED) is True  # noqa: SLF001
     committed, = uds.committed
-    assert (committed.o, committed.h, committed.low, committed.c, committed.v) == (6281.63, 6284.20, 6280.90, 6283.10, 10)
-    assert committed.extensions == {"session_open_rebuilt": True, "open_before": 6239.79}
+    assert (committed.o, committed.h, committed.low, committed.c, committed.v) == (6281.63, 6284.14, 6281.63, 6281.63, 10)
+    assert committed.extensions == {"session_open_rebuilt": True, "open_before": 6239.79, "low_before": 6239.79}
     assert provider.calls == [("EUSTX50", EUSTX50_OPEN_MS, EUSTX50_OPEN_MS + 60_000)]
     assert "FXCM_SESSION_OPEN_REBUILT symbol=EUSTX50" in caplog.text
+    assert poller._watermark_close == 6281.63  # noqa: SLF001 — еталон для наступної перерви
 
 
 @pytest.mark.parametrize("provider, reason", [
@@ -450,7 +488,7 @@ def test_poller_commits_the_rebuilt_first_bar_after_the_weekend(caplog):
     (_DirectTicks(ticks=[]), "reason=no_ticks_in_minute"),                     # тікова історія ще порожня
     (object(), "reason=provider_without_t1"),
 ])
-def test_unproven_open_commits_the_broker_bar_loudly_as_provisional(provider, reason, caplog):
+def test_baked_open_without_ticks_commits_the_broker_bar_loudly_as_provisional(provider, reason, caplog):
     poller, uds = _poller(provider)
     with caplog.at_level(logging.WARNING):
         assert poller._ingest_bar(EUSTX50_BAKED) is True  # noqa: SLF001
@@ -460,21 +498,45 @@ def test_unproven_open_commits_the_broker_bar_loudly_as_provisional(provider, re
     assert "FXCM_SESSION_OPEN_BAKED symbol=EUSTX50" in caplog.text and reason in caplog.text
 
 
-def test_symbol_without_price_step_is_provisional_not_guessed(caplog):
-    bar = dataclasses.replace(EUSTX50_BAKED, symbol="US30")
+def test_not_baked_first_bar_is_committed_as_is_without_ticks_or_warning(caplog):
     provider = _DirectTicks(ticks=_spread(EUSTX50_OPEN_MS, EUSTX50_BIDS))
-    poller, uds = _poller(provider, symbol="US30")
+    real_open = dataclasses.replace(EUSTX50_BAKED, o=6281.63, low=6281.63)
+    poller, uds = _poller(provider)
+    with caplog.at_level(logging.INFO):
+        poller._ingest_bar(real_open)  # noqa: SLF001
+    assert uds.committed == [real_open] and provider.calls == []
+    assert "FXCM_SESSION_OPEN_OK symbol=EUSTX50" in caplog.text and "reason=open_not_baked" in caplog.text
+    assert "FXCM_SESSION_OPEN_BAKED" not in caplog.text
+
+
+def test_first_tick_at_the_pre_break_price_commits_the_bar_as_is_not_provisional(caplog):
+    provider = _DirectTicks(ticks=_spread(EUSTX50_OPEN_MS, [EUSTX50_PREV_CLOSE] + EUSTX50_BIDS[1:]))
+    poller, uds = _poller(provider)
+    with caplog.at_level(logging.INFO):
+        poller._ingest_bar(EUSTX50_BAKED)  # noqa: SLF001
+    assert uds.committed == [EUSTX50_BAKED]
+    assert "reason=first_tick_equals_prev_close" in caplog.text and "FXCM_SESSION_OPEN_BAKED" not in caplog.text
+
+
+@pytest.mark.parametrize("symbol, prev_close, reason", [
+    ("US30", EUSTX50_PREV_CLOSE, "reason=price_step_missing"),
+    ("EUSTX50", None, "reason=prev_close_unknown"),
+])
+def test_undecidable_bar_is_provisional_not_guessed(symbol, prev_close, reason, caplog):
+    bar = dataclasses.replace(EUSTX50_BAKED, symbol=symbol)
+    provider = _DirectTicks(ticks=_spread(EUSTX50_OPEN_MS, EUSTX50_BIDS))
+    poller, uds = _poller(provider, symbol=symbol, prev_close=prev_close)
     with caplog.at_level(logging.WARNING):
         poller._ingest_bar(bar)  # noqa: SLF001
     assert uds.committed[0].extensions == {"open_provisional": True}
-    assert provider.calls == [] and "reason=price_step_missing" in caplog.text
+    assert provider.calls == [] and reason in caplog.text
 
 
 def test_mid_session_bar_never_asks_for_ticks():
-    """Звичайний цикл не гальмує: сусідня хвилина в торговий час — без t1 і без маркерів."""
+    """Звичайний цикл не гальмує: сусідня хвилина в торговий час — без t1 і без маркерів, навіть якщо o == prev_c."""
     provider = _DirectTicks(ticks=[])
     noon = _ms("2026-09-21T12:01:00")
-    poller, uds = _poller(provider, watermark_ms=noon - 60_000, calendar=_weekday_break_calendar())
+    poller, uds = _poller(provider, watermark_ms=noon - 60_000, prev_close=6281.0, calendar=_weekday_break_calendar())
     regular = _m1("EUSTX50", noon, 6281.0, 6282.0, 6280.0, 6281.5, 50)
     assert poller._ingest_bar(regular) is True  # noqa: SLF001
     assert provider.calls == [] and uds.committed == [regular]
@@ -484,7 +546,7 @@ def test_bar_not_newer_than_watermark_never_asks_for_ticks():
     """Calendar-відкриття, яке вже закомічено (повтор від брокера): UDS його відкине, t1 — зайвий запит."""
     reopen = _ms("2026-09-21T22:00:00")
     provider = _DirectTicks(ticks=[])
-    poller, _uds = _poller(provider, watermark_ms=reopen, calendar=_weekday_break_calendar())
+    poller, _uds = _poller(provider, watermark_ms=reopen, prev_close=6281.0, calendar=_weekday_break_calendar())
     poller._ingest_bar(_m1("EUSTX50", reopen, 6281.0, 6282.0, 6280.0, 6281.5, 50))  # noqa: SLF001
     assert provider.calls == []
 
@@ -497,7 +559,7 @@ def test_disabled_policy_keeps_the_old_behaviour_exactly():
 
 
 def test_ssot_rule_sees_the_rebuilt_bar_not_the_baked_one():
-    """Бар брокера не пласкій (запечений open), а справжня хвилина — два тіки за однією ціною: правило M1→SSOT
+    """Бар брокера не пласкій (запечений open/low), а справжня хвилина — два тіки за однією ціною: правило M1→SSOT
     має бачити саме перебудований бар і позначити його trading_flat."""
     bar = _m1("EUSTX50", EUSTX50_OPEN_MS, o=6239.79, h=6250.0, low=6239.79, c=6250.0, v=2)
     ticks = [(EUSTX50_OPEN_MS + 5_000, 6250.0), (EUSTX50_OPEN_MS + 40_000, 6250.0)]
@@ -505,7 +567,18 @@ def test_ssot_rule_sees_the_rebuilt_bar_not_the_baked_one():
     assert poller._ingest_bar(bar) is True  # noqa: SLF001
     committed, = uds.committed
     assert (committed.o, committed.h, committed.low, committed.c) == (6250.0, 6250.0, 6250.0, 6250.0)
-    assert committed.extensions == {"session_open_rebuilt": True, "open_before": 6239.79, "trading_flat": True}
+    assert committed.extensions == {"session_open_rebuilt": True, "open_before": 6239.79, "low_before": 6239.79,
+                                    "trading_flat": True}
+
+
+def test_restart_during_the_break_knows_the_pre_break_close_from_disk():
+    """Рестарт у перерві: еталон prev_close береться з хвоста диску разом із watermark."""
+    friday_close = _m1("EUSTX50", FRIDAY_LAST_OPEN_MS, 6240.10, 6241.00, 6239.50, EUSTX50_PREV_CLOSE, 30)
+    older = _m1("EUSTX50", FRIDAY_LAST_OPEN_MS - 60_000, 6241.00, 6242.00, 6240.00, 6240.10, 25)
+    poller = poller_mod.M1SymbolPoller(symbol="EUSTX50", provider=object(), uds=_RecordingUds(tail=[friday_close, older]),
+                                       calendar=None, session_open_policy=POLICY)
+    assert poller.warmup_watermark(tail_n=10) == 2
+    assert (poller._watermark_ms, poller._watermark_close) == (FRIDAY_LAST_OPEN_MS, EUSTX50_PREV_CLOSE)  # noqa: SLF001
 
 
 def test_end_to_end_poller_through_proxy_and_real_sidecar_handler():
@@ -515,16 +588,15 @@ def test_end_to_end_poller_through_proxy_and_real_sidecar_handler():
     proxy = BrokerRedisProxy(_LoopbackRedis(sidecar_provider), NS)
     poller, uds = _poller(proxy)
     assert poller._ingest_bar(EUSTX50_BAKED) is True  # noqa: SLF001
-    assert uds.committed[0].o == 6281.63
+    assert (uds.committed[0].o, uds.committed[0].low) == (6281.63, 6281.63)
     assert sidecar_provider.calls == [("EUSTX50", EUSTX50_OPEN_MS, EUSTX50_OPEN_MS + 60_000)]
 
 
 def test_writer_policy_loader_is_loud_about_broken_config_and_missing_steps(caplog):
-    broken = {"m1_poller": {"session_open_rebuild": {"enabled": True, "gap_min": 0, "max_volume_deficit": 5,
-                                                     "price_step_by_symbol": {}}}}
+    broken = {"m1_poller": {"session_open_rebuild": {"enabled": True, "gap_min": 0, "price_step_by_symbol": {}}}}
     with caplog.at_level(logging.WARNING):
         assert poller_mod.load_session_open_policy(broken, ["XAU/USD"]) == so.DISABLED_POLICY
-        ok = {"m1_poller": {"session_open_rebuild": {"enabled": True, "gap_min": 15, "max_volume_deficit": 5,
+        ok = {"m1_poller": {"session_open_rebuild": {"enabled": True, "gap_min": 15,
                                                      "price_step_by_symbol": {"XAU/USD": 0.01}}}}
         assert poller_mod.load_session_open_policy(ok, ["XAU/USD", "US30"]).enabled is True
     assert "M1_SESSION_OPEN_REBUILD_CONFIG_INVALID" in caplog.text
@@ -548,5 +620,5 @@ def test_repo_config_enables_rebuild_with_a_price_step_for_every_active_fxcm_sym
     binance = cfg.get("binance") or {}
     binance_symbols = set(binance.get("symbols", [])) if binance.get("enabled") else set()
     fxcm_symbols = [sym for sym in symbols_from_cfg(cfg) if sym not in binance_symbols]
-    assert policy.enabled and policy.gap_ms == 15 * 60_000 and policy.max_volume_deficit == 5
+    assert policy.enabled and policy.gap_ms == 15 * 60_000
     assert fxcm_symbols and [sym for sym in fxcm_symbols if sym not in policy.price_step_by_symbol] == []
