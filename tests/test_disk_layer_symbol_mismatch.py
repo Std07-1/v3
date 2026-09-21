@@ -77,3 +77,38 @@ def test_uds_read_tail_candles_foreign_row_is_not_relabeled_as_directory_symbol(
     candles = uds.read_tail_candles("XAU/USD", 86400, 10)
 
     assert [(c.symbol, c.open_time_ms, c.o) for c in candles] == [("XAU/USD", DAY_20251219, 4300.0)]
+
+
+def test_foreign_row_is_reported_once_per_row_not_on_every_read(tmp_path, caplog):
+    """Рев'ю D-08: читання гаряче (кожен запит вікна) — WARN раз на чужий рядок, а не на кожне читання."""
+    _write_part(tmp_path, "XAU_USD", "20251219", [_d1_row("XAU/USD", DAY_20251219, 4300.0)])
+    _write_part(tmp_path, "XAU_USD", "20251220", [_d1_row("XAG/USD", DAY_20251220, 66.985)])
+    layer = DiskLayer(str(tmp_path))
+
+    with caplog.at_level(logging.WARNING, logger="disk_layer"):
+        for _ in range(3):
+            bars, _geom = layer.read_window_with_geom("XAU/USD", 86400, 10, use_tail=True)
+            assert [b["symbol"] for b in bars] == ["XAU/USD"]
+
+    assert caplog.text.count("DISK_BAR_SYMBOL_MISMATCH") == 1
+
+
+def test_last_open_ms_ignores_foreign_rows_and_reports_them(tmp_path, caplog):
+    """Рев'ю D-08: чужий новіший рядок не піднімає watermark UDS (інакше справжні бари відкидались би як stale)."""
+    _write_part(tmp_path, "XAU_USD", "20251219", [_d1_row("XAU/USD", DAY_20251219, 4300.0)])
+    _write_part(tmp_path, "XAU_USD", "20251220", [_d1_row("XAG/USD", DAY_20251220, 66.985)])
+    layer = DiskLayer(str(tmp_path))
+
+    with caplog.at_level(logging.WARNING, logger="disk_layer"):
+        assert layer.last_open_ms("XAU/USD", 86400) == DAY_20251219
+        assert layer.last_open_ms("XAU/USD", 86400) == DAY_20251219
+
+    assert caplog.text.count("DISK_BAR_SYMBOL_MISMATCH") == 1
+
+
+def test_last_open_ms_skips_foreign_row_inside_own_part_file(tmp_path):
+    """Чужий рядок усередині свого part-файла (новіший за свої) — теж не максимум."""
+    _write_part(tmp_path, "XAU_USD", "20251219", [_d1_row("XAU/USD", DAY_20251219, 4300.0),
+                                                  _d1_row("XAG/USD", DAY_20251220, 66.985)])
+
+    assert DiskLayer(str(tmp_path)).last_open_ms("XAU/USD", 86400) == DAY_20251219

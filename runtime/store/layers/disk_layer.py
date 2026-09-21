@@ -4,7 +4,7 @@ import datetime as dt
 import json
 import logging
 import os
-from collections.abc import Set as AbstractSet
+from collections.abc import Callable, Set as AbstractSet
 from typing import Any, Optional
 
 from core.model.bar_choice import choose_better_bar, is_complete, is_final_source
@@ -35,7 +35,11 @@ def _is_foreign_row(row: dict[str, Any], expected_dir_key: str) -> bool:
     return row_symbol is not None and _symbol_dir_key(str(row_symbol)) != expected_dir_key
 
 
-def _log_foreign_rows(symbol: str, foreign_rows: list[tuple[str, int, Any]]) -> None:
+# Рядок чужого символу: (шлях part-файла, open_time_ms, поле symbol рядка).
+ForeignRow = tuple[str, int, Any]
+
+
+def _log_foreign_rows(symbol: str, foreign_rows: list[ForeignRow]) -> None:
     """Гучна відмова (I5): раніше `uds._disk_bar_to_candle` мовчки перепідписував такий рядок символом каталогу —
     так 4 D1-свічки XAG/USD (≈25/67/90) опинились на графіку XAU/USD, а guard у `prime_from_bars` їх не бачив."""
     first_path, first_open_ms, _ = foreign_rows[0]
@@ -60,6 +64,7 @@ def _select_newest_keys(
     skip_preview: bool,
     final_sources: Optional[AbstractSet[str]],
     symbol: Optional[str] = None,
+    report_foreign_rows: Callable[[str, list[ForeignRow]], None] = _log_foreign_rows,
 ) -> list[dict[str, Any]]:
     """Вікно читання: `limit` найновіших РІЗНИХ open_time_ms у (since, to] — спільне для TAIL і RANGE.
 
@@ -78,12 +83,13 @@ def _select_newest_keys(
     щоб вибирач дублікатів (`core.model.bar_choice`) бачив цілу групу, а нічия дісталась пізнішому запису.
 
     З `symbol` рядки чужого символу відсіюються ДО групування за ключем (інакше чужий рядок того самого
-    open_time_ms міг би виграти нічию у вибирача) і гучно логуються — `DISK_BAR_SYMBOL_MISMATCH`.
+    open_time_ms міг би виграти нічию у вибирача) і передаються в `report_foreign_rows` — гучна відмова
+    `DISK_BAR_SYMBOL_MISMATCH` (DiskLayer дає звіт раз на рядок, а не на кожне читання).
     """
     if limit <= 0:
         return []
     expected_dir_key = _symbol_dir_key(symbol) if symbol is not None else None
-    foreign_rows: list[tuple[str, int, Any]] = []
+    foreign_rows: list[ForeignRow] = []
     by_key: dict[int, list[dict[str, Any]]] = {}
     for path in reversed(paths):
         day_start_ms = _part_day_start_ms(path)
@@ -132,7 +138,7 @@ def _select_newest_keys(
         if len(by_key) >= limit or reached_since:
             break
     if foreign_rows:
-        _log_foreign_rows(str(symbol), foreign_rows)
+        report_foreign_rows(str(symbol), foreign_rows)
     keys = sorted(by_key)[-limit:]
     return [bar for key in keys for bar in by_key[key]]
 
@@ -236,11 +242,15 @@ def _finalize_tail_with_geom(
     return deduped, geom
 
 
-def _scan_open_ms(path: str) -> Optional[tuple[int, int]]:
-    """(максимальний, останній-у-файлі) open_time_ms; None якщо валідних барів немає.
+def _scan_open_ms(
+    path: str, expected_dir_key: str, foreign_rows: list[ForeignRow]
+) -> Optional[tuple[int, int]]:
+    """(максимальний, останній-у-файлі) open_time_ms своїх рядків; None якщо валідних барів немає.
 
     Повертає обидва значення, бо саме їх розбіжність і є сигналом, що part-файл не
-    відсортований за часом (див. `DiskLayer.last_open_ms`).
+    відсортований за часом (див. `DiskLayer.last_open_ms`). Рядки чужого символу в
+    максимум не йдуть (рев'ю D-08): чужий новіший рядок підняв би watermark UDS, і
+    справжні бари відкидались би як stale. Вони дописуються у `foreign_rows`.
     """
     max_open_ms: Optional[int] = None
     last_line_open_ms: Optional[int] = None
@@ -263,6 +273,9 @@ def _scan_open_ms(path: str) -> Optional[tuple[int, int]]:
                 open_ms = obj.get("open_time_ms")
                 if not isinstance(open_ms, int):
                     continue
+                if _is_foreign_row(obj, expected_dir_key):
+                    foreign_rows.append((path, open_ms, obj.get("symbol")))
+                    continue
                 last_line_open_ms = open_ms
                 if max_open_ms is None or open_ms > max_open_ms:
                     max_open_ms = open_ms
@@ -279,6 +292,17 @@ class DiskLayer:
 
     def __init__(self, data_root: str) -> None:
         self._data_root = data_root
+        # Чужі рядки, про які вже звітовано: (шлях, open_time_ms). Читання гаряче (кожен запит вікна), а рядок той
+        # самий — WARN раз на рядок, не на кожне читання (рев'ю D-08). Розмір обмежений кількістю чужих рядків на диску.
+        self._reported_foreign_rows: set[tuple[str, int]] = set()
+
+    def _report_foreign_rows(self, symbol: str, foreign_rows: list[ForeignRow]) -> None:
+        """Гучна відмова лише для чужих рядків, про які ще не звітовано; повторне читання тих самих — мовчки."""
+        new_rows = [row for row in foreign_rows if (row[0], row[1]) not in self._reported_foreign_rows]
+        if not new_rows:
+            return
+        self._reported_foreign_rows.update((row[0], row[1]) for row in new_rows)
+        _log_foreign_rows(symbol, new_rows)
 
     def list_parts(self, symbol: str, tf_s: int) -> list[str]:
         d = os.path.join(self._data_root, _symbol_dir_key(symbol), f"tf_{tf_s}")
@@ -317,6 +341,7 @@ class DiskLayer:
             skip_preview=skip_preview,
             final_sources=final_sources,
             symbol=symbol,
+            report_foreign_rows=self._report_foreign_rows,
         )
         if use_tail:
             return _finalize_tail_with_geom(window)
@@ -339,8 +364,9 @@ class DiskLayer:
         валідного бару: інакше порожній або битий файл дав би `watermark=None`, тобто
         прийняв би назад усю історію.
         """
+        foreign_rows: list[ForeignRow] = []
         for path in reversed(self.list_parts(symbol, tf_s)):
-            scanned = _scan_open_ms(path)
+            scanned = _scan_open_ms(path, _symbol_dir_key(symbol), foreign_rows)
             if scanned is None:
                 continue
             max_open_ms, last_line_open_ms = scanned
@@ -353,5 +379,7 @@ class DiskLayer:
                     last_line_open_ms,
                     max_open_ms - last_line_open_ms,
                 )
+            self._report_foreign_rows(symbol, foreign_rows)
             return max_open_ms
+        self._report_foreign_rows(symbol, foreign_rows)
         return None
