@@ -39,6 +39,9 @@
       }
     }
   },
+  "m1_session_filter": {
+    "pause_noise_margin_min": 60
+  },
   "broker_base_tfs_s": [],
   "derived_tfs_s": [
     14400,

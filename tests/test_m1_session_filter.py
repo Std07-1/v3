@@ -161,3 +161,123 @@ def test_session_open_minute_detection_uses_the_previous_minute():
     assert is_session_open_minute(reopen, cal.is_trading_minute)
     assert not is_session_open_minute(reopen + 60_000, cal.is_trading_minute)
     assert not is_session_open_minute(reopen - 60_000, cal.is_trading_minute)
+
+
+# --- Шум глибоко в паузі: правило за відстанню від краю сесії (не за обсягом) ---------------------------------------
+
+def _utc_ms(year, month, day, hour, minute):
+    import datetime as dt
+    return int(dt.datetime(year, month, day, hour, minute, tzinfo=dt.timezone.utc).timestamp() * 1000)
+
+
+def _us_cfd_calendar():
+    """Календар групи cfd_us_22_23 з config.json: вихідні Пт 20:45 → Нд 22:00, денна перерва 21:00–22:00."""
+    from runtime.ingest.market_calendar import MarketCalendar
+    return MarketCalendar(enabled=True, weekend_close_dow=4, weekend_close_hm="20:45", weekend_open_dow=6,
+                          weekend_open_hm="22:00", daily_break_start_hm="21:00", daily_break_end_hm="22:00",
+                          daily_break_enabled=True)
+
+
+def _m1_at(open_ms, o, h, low, c, v):
+    return CandleBar(symbol="SYM", tf_s=60, open_time_ms=open_ms, close_time_ms=open_ms + 60_000, o=o, h=h, low=low,
+                     c=c, v=v, complete=True, src="history")
+
+
+SATURDAY_0743 = _utc_ms(2026, 9, 19, 7, 43)  # XAG Сб 19.09 07:43 — суботній шум брокера з v=5
+
+
+@pytest.mark.parametrize("o, h, low, c, v", [
+    (5.0, 5.0, 5.0, 5.0, 1.0),          # плаский
+    (63.01, 63.02, 63.01, 63.02, 5.0),  # XAG: діапазон 1 крок, v=5 — поріг пласкості v<=4 його не відсікав
+    (5.0, 6.0, 4.0, 5.5, 300.0),        # великий обсяг — правило не дивиться на обсяг
+])
+def test_classify_by_calendar_bar_deep_in_weekend_pause_is_dropped_as_noise(o, h, low, c, v):
+    from runtime.ingest.m1_session_filter import VERDICT_PAUSE_NOISE_DROPPED, classify_m1_by_calendar
+    bar = _m1_at(SATURDAY_0743, o, h, low, c, v)
+    out = classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, flat_max_volume=4,
+                                  pause_noise_margin_min=60)
+    assert out == (None, VERDICT_PAUSE_NOISE_DROPPED)
+
+
+def test_classify_by_calendar_pause_bar_near_session_edge_keeps_anomaly_and_flat_drop():
+    """Біля краю (21:00 — перша хвилина денної перерви) — чинна поведінка: неплаский → anomaly, плаский → drop."""
+    from runtime.ingest.m1_session_filter import classify_m1_by_calendar
+    is_trading = _us_cfd_calendar().is_trading_minute
+    first_break_minute = _utc_ms(2026, 9, 16, 21, 0)
+    nonflat, verdict = classify_m1_by_calendar(_m1_at(first_break_minute, 5.0, 5.1, 5.0, 5.1, 3.0), is_trading, 4, 60)
+    assert verdict == VERDICT_PAUSE_NONFLAT_ANOMALY and nonflat.extensions == {"calendar_pause_nonflat_anomaly": True}
+    flat = classify_m1_by_calendar(_m1_at(first_break_minute, 5.0, 5.0, 5.0, 5.0, 1.0), is_trading, 4, 60)
+    assert flat == (None, VERDICT_PAUSE_FLAT_DROPPED)
+
+
+@pytest.mark.parametrize("minute, expected_verdict", [
+    (44, VERDICT_PAUSE_NONFLAT_ANOMALY),  # Пт 21:44 — рівно 60 хв від останньої торгової 20:44: ще «біля краю»
+    (45, "pause_noise_dropped"),          # Пт 21:45 — 61 хв: уже шум
+])
+def test_classify_by_calendar_margin_boundary_is_inclusive(minute, expected_verdict):
+    """Межа DST-зсуву (60 хв) належить краю сесії: зимова справжня хвилина 21:44 під літнім календарем — anomaly."""
+    from runtime.ingest.m1_session_filter import classify_m1_by_calendar
+    bar = _m1_at(_utc_ms(2026, 9, 18, 21, minute), 5.0, 5.1, 5.0, 5.1, 120.0)
+    assert classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4, 60)[1] == expected_verdict
+
+
+def test_classify_by_calendar_flat_reopen_minute_still_dropped_as_placeholder():
+    """Спільний хелпер несе й правило перевідкриття: плаский бар 22:00 після перерви — заглушка брокера."""
+    from runtime.ingest.m1_session_filter import VERDICT_REOPEN_FLAT_DROPPED, classify_m1_by_calendar
+    bar = _m1_at(_utc_ms(2026, 9, 16, 22, 0), 5.0, 5.0, 5.0, 5.0, 3.0)
+    assert classify_m1_by_calendar(bar, _us_cfd_calendar().is_trading_minute, 4, 60) == (
+        None, VERDICT_REOPEN_FLAT_DROPPED)
+
+
+def test_classify_by_calendar_disabled_calendar_never_drops_as_noise():
+    from runtime.ingest.m1_session_filter import classify_m1_by_calendar
+    bar = _m1_at(SATURDAY_0743, 5.0, 5.1, 5.0, 5.1, 3.0)
+    assert classify_m1_by_calendar(bar, lambda _ms: True, 4, 60) == (bar, VERDICT_TRADING)
+
+
+@pytest.mark.parametrize("open_ms, expected", [
+    (_utc_ms(2026, 9, 16, 12, 0), 0),     # торгова
+    (_utc_ms(2026, 9, 16, 21, 0), 1),     # перша хвилина перерви (торгова 20:59)
+    (_utc_ms(2026, 9, 16, 21, 59), 1),    # остання хвилина перерви (торгова 22:00)
+    (_utc_ms(2026, 9, 16, 21, 30), 30),   # середина: до 22:00 — 30, до 20:59 — 31
+    (SATURDAY_0743, None),                # глибоко у вихідних — за межею пошуку
+])
+def test_minutes_to_session_edge_counts_to_nearest_trading_minute(open_ms, expected):
+    from runtime.ingest.m1_session_filter import minutes_to_session_edge
+    assert minutes_to_session_edge(open_ms, _us_cfd_calendar().is_trading_minute, max_minutes=60) == expected
+
+
+def test_minutes_to_session_edge_search_is_bounded_by_the_margin():
+    """Пошук не виходить за ±max_minutes: на вихідних (~49 год паузи) — сама хвилина плюс рівно 2×60 сусідніх."""
+    from runtime.ingest.m1_session_filter import minutes_to_session_edge
+    calls = []
+
+    def is_trading(ms):
+        calls.append(ms)
+        return False
+
+    assert minutes_to_session_edge(SATURDAY_0743, is_trading, max_minutes=60) is None
+    assert len(calls) == 1 + 2 * 60
+    assert max(abs(ms - SATURDAY_0743) for ms in calls) == 60 * 60_000
+
+
+@pytest.mark.parametrize("cfg, expected", [
+    ({}, 60),
+    ({"m1_session_filter": {"pause_noise_margin_min": 90}}, 90),
+    ({"m1_session_filter": {"pause_noise_margin_min": 0}}, 1),
+    ({"m1_session_filter": {"pause_noise_margin_min": "хибне"}}, 60),
+    ({"m1_session_filter": "хибне"}, 60),
+])
+def test_resolve_pause_noise_margin_min_normalizes_config(cfg, expected):
+    from runtime.ingest.m1_session_filter import resolve_pause_noise_margin_min
+    assert resolve_pause_noise_margin_min(cfg) == expected
+
+
+def test_resolve_pause_noise_margin_min_repo_config_carries_the_key():
+    """SSOT запасу — config.json, а не дефолт у коді: ключ має бути в репо-конфігу."""
+    import json
+    from pathlib import Path
+    from runtime.ingest.m1_session_filter import resolve_pause_noise_margin_min
+    cfg = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text(encoding="utf-8"))
+    assert "pause_noise_margin_min" in cfg["m1_session_filter"]
+    assert resolve_pause_noise_margin_min(cfg) == cfg["m1_session_filter"]["pause_noise_margin_min"]
