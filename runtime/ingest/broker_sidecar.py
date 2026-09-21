@@ -25,11 +25,14 @@ Redis queues (namespace з config.json):
     {ns}:price_tick — Redis PubSub channel (ticks)
     {ns}:tick:last:{sym} — last tick cache (TTL configurable)
 
-Command contract v1:
+Command contract v1 (спільні поля: req_id, reply_to, ts_ms):
   {"v": 1, "cmd": "fetch_m1", "symbol": "XAU/USD", "n_bars": 5, "date_to_ms": 1741392060000}
+  {"v": 1, "cmd": "fetch_t1", "symbol": "XAU/USD", "from_ms": 1789970460000, "to_ms": 1789970520000}
+    — тіки Bid з тікової історії брокера за вікно ≤ однієї хвилини (ADR-0096 слайс E)
 
 Response contract v1:
     {"v": 1, "req_id": "...", "symbol": "XAU/USD", "bars": [{...}, ...], "error": null}
+    {"v": 1, "req_id": "...", "symbol": "XAU/USD", "ticks": [[tick_ts_ms, bid], ...], "error": null}
 """
 
 from __future__ import annotations
@@ -82,6 +85,10 @@ _MAX_BARS_PER_CMD = 200  # guard against huge requests
 # команда, старша за це + запас, гарантовано без слухача — реплай пішов би в мертвий ключ.
 _CMD_STALE_AFTER_S = 20
 _CONTRACT_VERSION = 1
+# fetch_t1 обслуговує рівно одну хвилину M1 (перебудова першої хвилини після перерви, ADR-0096 слайс E).
+_MAX_T1_WINDOW_MS = 60 * 1000
+# Запобіжник розміру реплаю: хвилина XAU на новинах — тисячі тіків; більше — аномалія, а не дані для обрізання.
+_MAX_TICKS_PER_REPLY = 20000
 
 # ADR-0054 §3.6 п.3 (інцидент 06.09.2026): get_history/login у FXCM SDK — синхронні нативні
 # виклики без таймауту. Здоровий get_history ≈ 30 мс, найбільший tail_catchup (n=200) ≈ 250 мс;
@@ -163,8 +170,63 @@ def _flush_cmd_queue(redis_cli, cmd_key):
         logging.warning("BROKER_SIDECAR_CMD_QUEUE_FLUSH_FAIL err=%s", exc)
 
 
+def _push_reply(redis_cli, target_key, reply_to, payload):
+    """Реплай: per-request ключ (з TTL) або legacy спільна черга (з LTRIM) — один механізм для всіх команд."""
+    redis_cli.rpush(target_key, json.dumps(payload))
+    if reply_to:
+        redis_cli.expire(target_key, _ipc_reply_ttl_s)
+    else:
+        redis_cli.ltrim(target_key, -_MAX_LIST_LEN, -1)
+
+
+def _handle_fetch_t1(provider, cmd, redis_cli, target_key, reply_to, req_id, symbol):
+    """Тіки t1 за вікно ≤ однієї хвилини. Returns True, якщо FXCM-сесію треба перепідключити.
+
+    Відмова самої t1-історії — гучний error-реплай БЕЗ перепідключення: t1 допоміжний, а reconnect рве
+    OFFERS-підписку (тіки) і fetch_m1 усіх символів. last_error провайдера споживається тут, щоб не
+    приписатись наступній fetch_m1. Виняток (сесії немає) — reconnect, як у fetch_m1.
+    """
+    try:
+        from_ms, to_ms = int(cmd["from_ms"]), int(cmd["to_ms"])
+    except (KeyError, TypeError, ValueError):
+        from_ms = to_ms = 0
+    if 0 < to_ms - from_ms <= _MAX_T1_WINDOW_MS:
+        ticks, error, needs_reconnect = _fetch_t1_ticks(provider, symbol, from_ms, to_ms)
+    else:
+        ticks, needs_reconnect = [], False
+        error = "invalid_window from_ms=%r to_ms=%r" % (cmd.get("from_ms"), cmd.get("to_ms"))
+    reply = {
+        "v": _CONTRACT_VERSION,
+        "req_id": req_id,
+        "symbol": symbol,
+        "ticks": [[tick_ts_ms, bid] for tick_ts_ms, bid in ticks],
+        "error": error,
+    }
+    _push_reply(redis_cli, target_key, reply_to, reply)
+    if error:
+        logging.warning("BROKER_SIDECAR_T1_ERROR symbol=%s req_id=%s err=%s", symbol, req_id, error)
+    else:
+        logging.info("BROKER_SIDECAR_T1_FETCHED symbol=%s from_ms=%s ticks=%d", symbol, from_ms, len(ticks))
+    return needs_reconnect
+
+
+def _fetch_t1_ticks(provider, symbol, from_ms, to_ms):
+    """(ticks, error, needs_reconnect) для одного вікна t1; помилка — рядок для реплаю, не виняток."""
+    try:
+        ticks = provider.fetch_t1_bid_ticks(symbol, from_ms, to_ms)
+    except Exception as exc:
+        provider.consume_last_error()
+        return [], "t1_exception: %s" % exc, True
+    last_err = provider.consume_last_error()
+    if ticks is None:
+        return [], "t1_failed: %s" % (last_err[1] if last_err else "unknown"), False
+    if len(ticks) > _MAX_TICKS_PER_REPLY:
+        return [], "too_many_ticks n=%d limit=%d" % (len(ticks), _MAX_TICKS_PER_REPLY), False
+    return ticks, None, False
+
+
 def _handle_command(provider, cmd_raw, redis_cli, bars_key):
-    """Обробити одну команду fetch і записати результат у Redis.
+    """Обробити одну команду (fetch_m1 / fetch_t1) і записати результат у Redis.
 
     Returns True if FXCM session needs reconnection.
     """
@@ -212,6 +274,8 @@ def _handle_command(provider, cmd_raw, redis_cli, bars_key):
     date_to_ms = cmd.get("date_to_ms")
     target_key = reply_to or bars_key
 
+    if action == "fetch_t1" and symbol:
+        return _handle_fetch_t1(provider, cmd, redis_cli, target_key, reply_to, req_id, symbol)
     if action != "fetch_m1" or not symbol:
         logging.warning("BROKER_SIDECAR_CMD_UNKNOWN cmd=%s symbol=%s", action, symbol)
         return False
@@ -225,20 +289,18 @@ def _handle_command(provider, cmd_raw, redis_cli, bars_key):
         bars = provider.fetch_last_n_m1(symbol, n=n_bars, date_to_utc=date_to_utc)
     except Exception as exc:
         # Повертаємо error response, worker вирішить що робити
-        error_resp = json.dumps(
+        _push_reply(
+            redis_cli,
+            target_key,
+            reply_to,
             {
                 "v": _CONTRACT_VERSION,
                 "req_id": req_id,
                 "symbol": symbol,
                 "bars": [],
                 "error": str(exc),
-            }
+            },
         )
-        redis_cli.rpush(target_key, error_resp)
-        if reply_to:
-            redis_cli.expire(target_key, _ipc_reply_ttl_s)
-        else:
-            redis_cli.ltrim(target_key, -_MAX_LIST_LEN, -1)
         logging.warning("BROKER_SIDECAR_FETCH_ERROR symbol=%s err=%s", symbol, exc)
         return True  # needs reconnect
 
@@ -256,20 +318,18 @@ def _handle_command(provider, cmd_raw, redis_cli, bars_key):
 
     # Серіалізація: batch response
     bar_dicts = [b.to_dict() for b in bars] if bars else []
-    resp = json.dumps(
+    _push_reply(
+        redis_cli,
+        target_key,
+        reply_to,
         {
             "v": _CONTRACT_VERSION,
             "req_id": req_id,
             "symbol": symbol,
             "bars": bar_dicts,
             "error": None,
-        }
+        },
     )
-    redis_cli.rpush(target_key, resp)
-    if reply_to:
-        redis_cli.expire(target_key, _ipc_reply_ttl_s)
-    else:
-        redis_cli.ltrim(target_key, -_MAX_LIST_LEN, -1)
 
     if bars:
         logging.info(

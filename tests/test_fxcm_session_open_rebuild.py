@@ -116,3 +116,139 @@ def test_ticks_are_the_same_price_side_as_m1_candles():
     bar, = provider_mod.normalize_history_to_bars("XAU/USD", 60, [candle], src="history")
     assert (bar.o, bar.c) == (candle["BidOpen"], candle["BidClose"])
     assert provider_mod.TICK_PRICE_FIELD == "Bid"
+
+
+# ---------------------------------------------------------------------------
+# P2 — протокол sidecar ↔ worker: команда fetch_t1 з тим самим reply-механізмом
+# ---------------------------------------------------------------------------
+import json  # noqa: E402
+
+from runtime.ingest import broker_sidecar  # noqa: E402
+from runtime.ingest.m1_ingestion_worker import BrokerRedisProxy  # noqa: E402
+
+NS = "ns"
+CMD_KEY = "ns:broker:m1:cmd"
+BARS_KEY = "ns:broker:m1:bars"
+
+
+class _TickProvider:
+    """Провайдер sidecar-боку: віддає наперед задані тіки (або None/виняток) і пам'ятає запити."""
+
+    def __init__(self, ticks=None, error=None, raises=None):
+        self.ticks, self.error, self.raises = ticks, error, raises
+        self.calls = []
+        self._last_error = None
+
+    def fetch_t1_bid_ticks(self, symbol, from_ms, to_ms):
+        self.calls.append((symbol, from_ms, to_ms))
+        if self.raises is not None:
+            raise self.raises
+        if self.error is not None:
+            self._last_error = ("помилка t1 " + symbol, self.error)
+            return None
+        return list(self.ticks or [])
+
+    def fetch_last_n_m1(self, symbol, n, date_to_utc=None):
+        return []
+
+    def consume_last_error(self):
+        err, self._last_error = self._last_error, None
+        return err
+
+
+class _LoopbackRedis:
+    """Redis, де RPUSH у чергу команд синхронно виконує СПРАВЖНІЙ broker_sidecar._handle_command.
+
+    Так тест проходить реальний протокол обох боків: proxy (3.11) серіалізує → sidecar (3.7-код) обробляє →
+    реплай у per-request ключ → proxy розбирає.
+    """
+
+    def __init__(self, provider, answer=True):
+        self.provider, self.answer = provider, answer
+        self.queues, self.deleted, self.reconnects = {}, [], []
+
+    def rpush(self, key, value):
+        self.queues.setdefault(key, []).append(value)
+        if key == CMD_KEY and self.answer:
+            raw = self.queues[key].pop()
+            self.reconnects.append(broker_sidecar._handle_command(self.provider, raw, self, BARS_KEY))
+        return 1
+
+    def blpop(self, key, timeout=None):
+        queue = self.queues.get(key) or []
+        return (key, queue.pop(0)) if queue else None
+
+    def llen(self, key):
+        return len(self.queues.get(key, []))
+
+    def delete(self, key):
+        self.deleted.append(key)
+        self.queues.pop(key, None)
+
+    def expire(self, key, ttl_s):
+        return True
+
+    def ltrim(self, key, start, end):
+        return True
+
+
+def test_fetch_t1_roundtrip_through_real_sidecar_handler_returns_tick_tuples():
+    ticks = [(EUSTX50_OPEN_MS + 5_250, 6281.63), (EUSTX50_OPEN_MS + 59_900, 6283.10)]
+    provider = _TickProvider(ticks=ticks)
+    redis_cli = _LoopbackRedis(provider)
+
+    got = BrokerRedisProxy(redis_cli, NS).fetch_t1_bid_ticks("EUSTX50", EUSTX50_OPEN_MS, EUSTX50_OPEN_MS + 60_000)
+
+    assert got == ticks
+    assert provider.calls == [("EUSTX50", EUSTX50_OPEN_MS, EUSTX50_OPEN_MS + 60_000)]
+    assert redis_cli.reconnects == [False]
+    assert any(k.startswith(BARS_KEY + ":") for k in redis_cli.deleted)  # per-request ключ прибрано
+
+
+def test_fetch_m1_still_roundtrips_after_the_shared_request_refactor():
+    """Контроль рефакторингу проксі: fetch_m1 іде тим самим каналом і дає той самий результат."""
+    redis_cli = _LoopbackRedis(_TickProvider())
+    assert BrokerRedisProxy(redis_cli, NS).fetch_last_n_m1("XAU/USD", 5) == []
+    assert redis_cli.reconnects == [False]
+
+
+def test_t1_failure_is_loud_none_and_does_not_reconnect_the_session(caplog):
+    """Відмова t1-історії: error-реплай, proxy → None, sidecar НЕ рве сесію (OFFERS/тіки/fetch_m1 живуть),
+    а last_error спожито — наступна fetch_m1 не перепідключиться через чужу помилку."""
+    provider = _TickProvider(error="no tick history")
+    redis_cli = _LoopbackRedis(provider)
+    with caplog.at_level(logging.WARNING):
+        got = BrokerRedisProxy(redis_cli, NS).fetch_t1_bid_ticks("XAU/USD", 0, 60_000)
+    assert got is None
+    assert redis_cli.reconnects == [False]
+    assert provider.consume_last_error() is None
+    assert "BROKER_SIDECAR_T1_ERROR symbol=XAU/USD" in caplog.text
+    assert "BROKER_PROXY_FETCH_ERROR cmd=fetch_t1 symbol=XAU/USD" in caplog.text
+
+
+def test_t1_without_a_session_reconnects_like_fetch_m1():
+    redis_cli = _LoopbackRedis(_TickProvider(raises=RuntimeError("FXCM сесія не відкрита.")))
+    assert BrokerRedisProxy(redis_cli, NS).fetch_t1_bid_ticks("XAU/USD", 0, 60_000) is None
+    assert redis_cli.reconnects == [True]
+
+
+@pytest.mark.parametrize("from_ms, to_ms", [(0, 0), (60_000, 0), (0, 60_001), ("x", 60_000)])
+def test_sidecar_refuses_a_window_other_than_one_minute_without_calling_the_broker(from_ms, to_ms):
+    provider = _TickProvider(ticks=[(1, 1.0)])
+    redis_cli = _LoopbackRedis(provider, answer=False)
+    raw = json.dumps({"v": 1, "cmd": "fetch_t1", "req_id": "r1", "reply_to": BARS_KEY + ":r1", "symbol": "XAU/USD",
+                      "from_ms": from_ms, "to_ms": to_ms})
+    assert broker_sidecar._handle_command(provider, raw, redis_cli, BARS_KEY) is False
+    reply = json.loads(redis_cli.queues[BARS_KEY + ":r1"][0])
+    assert reply["error"].startswith("invalid_window") and reply["ticks"] == []
+    assert provider.calls == []
+
+
+def test_proxy_timeout_is_none_not_an_empty_minute(caplog, monkeypatch):
+    import runtime.ingest.m1_ingestion_worker as worker_mod
+
+    monkeypatch.setattr(worker_mod, "_BLPOP_TIMEOUT_S", 0)
+    with caplog.at_level(logging.WARNING):
+        got = BrokerRedisProxy(_LoopbackRedis(_TickProvider(), answer=False), NS).fetch_t1_bid_ticks("NAS100", 0, 60_000)
+    assert got is None
+    assert "BROKER_PROXY_TIMEOUT cmd=fetch_t1 symbol=NAS100" in caplog.text

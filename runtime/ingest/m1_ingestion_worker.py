@@ -15,7 +15,7 @@ import json
 import time
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.config_loader import pick_config_path, load_system_config
 from core.model.bars import CandleBar
@@ -51,10 +51,10 @@ _CMD_QUEUE_CONGESTED_LEN = 10
 
 
 class BrokerRedisProxy:
-    """Виконує fetch_last_n_m1 через Redis queue (замість прямого FXCM API).
+    """Виконує fetch_last_n_m1 / fetch_t1_bid_ticks через Redis queue (замість прямого FXCM API).
 
-    Надсилає команду fetch в broker_sidecar (Py 3.7),
-    отримує серіалізовані бари у відповідь.
+    Надсилає команду в broker_sidecar (Py 3.7), отримує серіалізовані бари чи тіки у відповідь.
+    Контракт команд — docstring runtime/ingest/broker_sidecar.py.
     """
 
     def __init__(self, redis_cli: Any, namespace: str) -> None:
@@ -70,21 +70,15 @@ class BrokerRedisProxy:
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         self._fx = None
 
-    def fetch_last_n_m1(
-        self,
-        symbol: str,
-        n: int,
-        date_to_utc: Any = None,
-    ) -> List[CandleBar]:
-        """Fetch M1 bars через broker_sidecar Redis queue."""
+    def _request(
+        self, cmd_name: str, symbol: str, params: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Одна команда до sidecar: LLEN-гейт → RPUSH → BLPOP per-request реплаю → перевірка контракту.
+
+        None — реплаю немає, він чужий або з помилкою; кожна причина — окремий WARN.
+        """
         req_id = uuid.uuid4().hex
         reply_key = "%s:%s" % (self._bars_key, req_id)
-        date_to_ms = None
-        if date_to_utc is not None:
-            if hasattr(date_to_utc, "timestamp"):
-                date_to_ms = int(date_to_utc.timestamp() * 1000)
-            else:
-                date_to_ms = int(date_to_utc)
 
         # ADR-0054 §3.6 п.2: LLEN-гейт — затор означає, що sidecar не встигає або завис;
         # нова команда лише подовжить дренаж після відновлення (інцидент 06-07.09).
@@ -95,73 +89,90 @@ class BrokerRedisProxy:
             backlog = 0
         if backlog >= _CMD_QUEUE_CONGESTED_LEN:
             logging.warning(
-                "BROKER_PROXY_QUEUE_CONGESTED llen=%d limit=%d symbol=%s — команду не додано",
-                backlog, _CMD_QUEUE_CONGESTED_LEN, symbol,
+                "BROKER_PROXY_QUEUE_CONGESTED llen=%d limit=%d cmd=%s symbol=%s — команду не додано",
+                backlog, _CMD_QUEUE_CONGESTED_LEN, cmd_name, symbol,
             )
-            return []
+            return None
 
-        cmd = json.dumps(
-            {
-                "v": _CONTRACT_VERSION,
-                "cmd": "fetch_m1",
-                "req_id": req_id,
-                "reply_to": reply_key,
-                "symbol": symbol,
-                "n_bars": n,
-                "date_to_ms": date_to_ms,
-                # ADR-0054 §3.6 п.1: вік команди — sidecar дропає протухлі без реплаю
-                "ts_ms": int(time.time() * 1000),
-            }
-        )
-        self._redis.rpush(self._cmd_key, cmd)
+        cmd = {
+            "v": _CONTRACT_VERSION,
+            "cmd": cmd_name,
+            "req_id": req_id,
+            "reply_to": reply_key,
+            "symbol": symbol,
+            **params,
+            # ADR-0054 §3.6 п.1: вік команди — sidecar дропає протухлі без реплаю
+            "ts_ms": int(time.time() * 1000),
+        }
+        self._redis.rpush(self._cmd_key, json.dumps(cmd))
 
-        # Wait for response
         result = self._redis.blpop(reply_key, timeout=_BLPOP_TIMEOUT_S)
+        self._redis.delete(reply_key)
         if result is None:
             logging.warning(
-                "BROKER_PROXY_TIMEOUT symbol=%s n=%d timeout=%ds req_id=%s",
-                symbol,
-                n,
-                _BLPOP_TIMEOUT_S,
-                req_id,
+                "BROKER_PROXY_TIMEOUT cmd=%s symbol=%s timeout=%ds req_id=%s",
+                cmd_name, symbol, _BLPOP_TIMEOUT_S, req_id,
             )
-            self._redis.delete(reply_key)
-            return []
+            return None
 
         _key, raw = result
         try:
             resp = json.loads(raw)
         except (json.JSONDecodeError, TypeError) as exc:
-            logging.warning("BROKER_PROXY_PARSE_ERROR err=%s", exc)
-            self._redis.delete(reply_key)
-            return []
-
-        self._redis.delete(reply_key)
+            logging.warning("BROKER_PROXY_PARSE_ERROR cmd=%s err=%s", cmd_name, exc)
+            return None
 
         if resp.get("req_id") != req_id:
             logging.warning(
-                "BROKER_PROXY_REQ_MISMATCH symbol=%s expected_req=%s got_req=%s",
-                symbol,
-                req_id,
-                resp.get("req_id"),
+                "BROKER_PROXY_REQ_MISMATCH cmd=%s symbol=%s expected_req=%s got_req=%s",
+                cmd_name, symbol, req_id, resp.get("req_id"),
             )
-            return []
-
+            return None
         if resp.get("symbol") != symbol:
             logging.warning(
-                "BROKER_PROXY_SYMBOL_MISMATCH expected=%s got=%s req_id=%s",
-                symbol,
-                resp.get("symbol"),
-                req_id,
+                "BROKER_PROXY_SYMBOL_MISMATCH cmd=%s expected=%s got=%s req_id=%s",
+                cmd_name, symbol, resp.get("symbol"), req_id,
             )
-            return []
-
+            return None
         if resp.get("error"):
             logging.warning(
-                "BROKER_PROXY_FETCH_ERROR symbol=%s err=%s",
-                symbol,
-                resp["error"],
+                "BROKER_PROXY_FETCH_ERROR cmd=%s symbol=%s err=%s", cmd_name, symbol, resp["error"],
             )
+            return None
+        return resp
+
+    def fetch_t1_bid_ticks(
+        self, symbol: str, from_ms: int, to_ms: int
+    ) -> Optional[List[Tuple[int, float]]]:
+        """Тіки Bid з тікової історії брокера за [from_ms, to_ms] (ADR-0096 слайс E).
+
+        None — тіків отримати не вдалося (таймаут/помилка/битий реплай, у логах); [] — брокер тіків не має.
+        """
+        resp = self._request("fetch_t1", symbol, {"from_ms": int(from_ms), "to_ms": int(to_ms)})
+        if resp is None:
+            return None
+        try:
+            return [(int(tick_ts_ms), float(bid)) for tick_ts_ms, bid in resp.get("ticks", [])]
+        except (TypeError, ValueError) as exc:
+            logging.warning("BROKER_PROXY_TICK_PARSE symbol=%s err=%s", symbol, exc)
+            return None
+
+    def fetch_last_n_m1(
+        self,
+        symbol: str,
+        n: int,
+        date_to_utc: Any = None,
+    ) -> List[CandleBar]:
+        """Fetch M1 bars через broker_sidecar Redis queue."""
+        date_to_ms = None
+        if date_to_utc is not None:
+            if hasattr(date_to_utc, "timestamp"):
+                date_to_ms = int(date_to_utc.timestamp() * 1000)
+            else:
+                date_to_ms = int(date_to_utc)
+
+        resp = self._request("fetch_m1", symbol, {"n_bars": n, "date_to_ms": date_to_ms})
+        if resp is None:
             return []
 
         bars: List[CandleBar] = []
