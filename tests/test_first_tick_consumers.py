@@ -4,9 +4,10 @@
 - `core.smc.swings.compute_atr` рахував TR як `h − low`. У режимі PREVIOUS_CLOSE H/L свічки вже містили
   попередній close, тож це випадково дорівнювало справжньому TR; з першим тіком розрив на відкритті сесії
   лишається МІЖ свічками — ATR тихо менший за TradingView (H1 до −25% після гепу NAS100 13.09).
-- `runtime.ws.candle_map` ховає пласку свічку з v ≤ 10. З першим тіком однотікова хвилина стає O=H=L=C і таких
-  більше (засів FIRST_TICK 15.09: GER30 ~1% хвилин, EUSTX50 8.8%). Рішення власника 15.09: TradingView пласких
-  барів не показує — графік їх ховає й надалі, навіть з маркером `trading_flat`; у SSOT і похідних TF бар лишається.
+- `runtime.ws.candle_map` ховав пласку свічку з v ≤ 10 за геометрією, а на HTF — за днем тижня. Після FIRST_TICK
+  однотікова торгова хвилина законно пласка, і фільтр видаляв справжні часові точки (вимір 21.09: EUSTX50
+  5287/106293 M1, 4.97%; GER30 675) — «рваний графік». Рішення власника 21.09 (аудит + контроль Binance/LWC):
+  display ховає ЛИШЕ явний маркер `calendar_pause_flat`; існування бару визначає upstream, не геометрія.
 """
 from __future__ import annotations
 
@@ -54,21 +55,39 @@ def _flat_m1(extensions=None, v=1.0):
     return bar
 
 
-def test_single_tick_trading_minute_is_hidden_like_tradingview():
-    """Однотікова торгова хвилина (маркер інжесту `trading_flat`) на графік не йде: TV пласких барів не показує."""
-    assert map_bar_to_candle_v4(_flat_m1({"trading_flat": True}), tf_s=60) is None
+def test_single_tick_trading_minute_stays_on_the_chart():
+    """Однотікова торгова хвилина (маркер trading_flat) — справжній бакет: лишається в серії, як у Binance/TV."""
+    candle = map_bar_to_candle_v4(_flat_m1({"trading_flat": True}), tf_s=60)
+    assert candle is not None and candle["o"] == candle["c"] == 7686.13
 
 
-def test_unmarked_flat_bar_is_hidden():
-    assert map_bar_to_candle_v4(_flat_m1(), tf_s=60) is None
+def test_unmarked_flat_bar_stays_display_does_not_reclassify():
+    """Без маркера display не перекласифіковує за геометрією: старі засіяні в сесії пласкі хвилини видимі."""
+    assert map_bar_to_candle_v4(_flat_m1(), tf_s=60) is not None
+
+
+def test_flat_bar_in_the_5_to_10_volume_band_stays():
+    """Ловить split-brain порогів: інжест (поріг 4) вважав v=7 звичайним баром, а display (поріг 10) ховав."""
+    assert map_bar_to_candle_v4(_flat_m1(v=7.0), tf_s=60) is not None
 
 
 def test_flat_bar_with_real_volume_stays_on_the_chart():
-    """Контроль межі фільтра: пласка хвилина з v > 10 — не артефакт, лишається."""
     candle = map_bar_to_candle_v4(_flat_m1({"trading_flat": True}, v=11.0), tf_s=60)
     assert candle is not None and candle["o"] == candle["c"] == 7686.13
 
 
-def test_calendar_pause_flat_is_hidden_even_if_marked_trading():
-    """Маркер паузи сильніший: суперечливий бар не показуємо."""
-    assert map_bar_to_candle_v4(_flat_m1({"calendar_pause_flat": True, "trading_flat": True}), tf_s=60) is None
+@pytest.mark.parametrize("tf_s", [60, 14400, 86400])
+def test_calendar_pause_flat_is_hidden_on_every_tf(tf_s):
+    """Єдине правило ховання — явний маркер артефакту паузи, однаково для M1, H4 і D1."""
+    assert map_bar_to_candle_v4(_flat_m1({"calendar_pause_flat": True}), tf_s=tf_s) is None
+    assert map_bar_to_candle_v4(_flat_m1({"calendar_pause_flat": True, "trading_flat": True}), tf_s=tf_s) is None
+
+
+@pytest.mark.parametrize("tf_s, weekday_open_ms", [
+    (14400, 1_789_077_600_000),  # 2026-09-11 06:00 UTC, п'ятниця — раніше ховався за днем тижня
+    (86400, 1_788_987_600_000),  # 2026-09-10 05:00 UTC, четвер
+])
+def test_flat_final_htf_bar_is_not_judged_by_weekday(tf_s, weekday_open_ms):
+    """День тижня — не lifecycle: завершений плаский H4/D1 без маркера паузи лишається видимим будь-якого дня."""
+    bar = dict(_flat_m1(), open_time_ms=weekday_open_ms, tf_s=tf_s, complete=True)
+    assert map_bar_to_candle_v4(bar, tf_s=tf_s) is not None

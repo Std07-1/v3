@@ -10,7 +10,6 @@ runtime/ws/candle_map.py — Конвертація v3 bar dict → ui_v4 Candle
 
 from __future__ import annotations
 
-import datetime
 import logging
 from typing import List, Optional, Tuple, cast
 
@@ -38,52 +37,19 @@ def _pick(bar: dict, primary: str, fallback: str) -> Optional[float]:
 
 
 def _is_display_flat_bar(bar: dict) -> bool:
-    """Flat bar = O==H==L==C + low volume (≤4). Weekend/pause artifact від брокера.
+    """Ховати бар = ЛИШЕ явна позначка інжесту `calendar_pause_flat` (артефакт паузи/вихідних від брокера).
 
-    Фільтрується на рівні display (не SSOT). Відповідає logic
-    m1_poller._is_flat + overlay._is_flat_preview_bar.
-    calendar_pause_flat extension теж рахується як flat.
+    Геометрія O=H=L=C — НЕ критерій відсутності: після FIRST_TICK (ADR-0096) однотікова торгова хвилина
+    законно пласка, і таких багато (вимір 21.09 на проді: EUSTX50 5287/106293 M1 ховалось, 4.97%, з них
+    5156 усередині сесії; GER30 675). Правило «flat + v≤10 → сховати» видаляло справжні часові точки з
+    серії — це і був «рваний графік», а поріг 10 ще й ширший за інжестовий 4 (бар v=5..10 інжест взагалі
+    не вважає пласким). Binance зберігає пласкі бакети і в klines, і в uiKlines; у LWC плаский OHLC —
+    валідний data point, «нема торгів» виражається окремим whitespace. Існування бару визначає
+    upstream-класифікація (m1_session_filter: артефакт → маркер або не пишеться), display не
+    перекласифіковує за геометрією і днем тижня.
     """
     ext = bar.get("extensions", {})
-    if isinstance(ext, dict) and ext.get("calendar_pause_flat"):
-        return True
-    o = bar.get("open", bar.get("o"))
-    h = bar.get("high", bar.get("h"))
-    lo = bar.get("low", bar.get("l"))
-    c = bar.get("close", bar.get("c"))
-    v = bar.get("volume", bar.get("v", 0.0))
-    if all(isinstance(x, (int, float)) for x in (o, h, lo, c)):
-        if (
-            o == h == lo == c and float(v) <= 10.0
-        ):  # ADR-0012 P1: 4→10 (EUSTX50 V=6, GER30/HKG33 V=5)
-            return True
-    return False
-
-
-# HTF (H4/D1): flat bar filter = тільки weekend artifacts (Fri/Sat UTC open).
-# Flat на HTF з Mon-Thu open = бар щойно відкрився (V=2, OHLC однакові) — зберігається.
-_HTF_FLAT_SKIP_TF_S = 14400  # >= H4
-
-
-def _is_weekend_open_utc(bar: dict) -> bool:
-    """Перевіряє чи open_time бару припадає на п'ятницю, суботу або неділю UTC.
-
-    Fri 22:00 UTC → covers Saturday (no trading).
-    Sat 22:00 UTC → covers Sunday (no trading).
-    Sun 21:00/22:00 UTC → D1 anchor open, flat artifact для індексів.
-    ADR-0012 P1: додано Sunday (wd=6).
-    """
-    oms = bar.get("open_time_ms") or bar.get("open_ms")
-    if oms is None:
-        t = bar.get("time")
-        if isinstance(t, (int, float)):
-            oms = int(t) * 1000
-    if not isinstance(oms, (int, float)) or oms <= 0:
-        return False
-    bar_dt = datetime.datetime.fromtimestamp(
-        int(oms) / 1000, tz=datetime.timezone.utc
-    ).replace(tzinfo=None)
-    return bar_dt.weekday() in (4, 5, 6)  # Friday=4, Saturday=5, Sunday=6
+    return isinstance(ext, dict) and bool(ext.get("calendar_pause_flat"))
 
 
 def map_bar_to_candle_v4(bar: dict, *, tf_s: int = 0) -> Optional[dict]:
@@ -92,21 +58,16 @@ def map_bar_to_candle_v4(bar: dict, *, tf_s: int = 0) -> Optional[dict]:
     Вхід: LWC dict (open/high/low/close/volume/open_time_ms) АБО
           SHORT dict (o/h/low/c/v/open_time_ms).
     Вихід: {"t_ms": int, "o": float, "h": float, "l": float, "c": float, "v": float}
-    Flat бари (O==H==L==C, v≤4, calendar_pause_flat) фільтруються (I5: degraded-but-loud).
-    HTF (>=H4): flat filter пропускається — flat означає early/incomplete bar.
+    Ховаються лише бари з явним маркером `calendar_pause_flat` — однаково для всіх TF; жодної
+    перекласифікації за геометрією, обсягом чи днем тижня (див. _is_display_flat_bar).
     """
     if not isinstance(bar, dict):
         _log.warning("CANDLE_MAP_REJECT reason=not_dict type=%s", type(bar).__name__)
         return None
 
-    # Flat bar filter — display-only (SSOT не змінюється)
-    # LTF (<H4): filter all flat bars.
-    # HTF (>=H4): filter тільки weekend flat bars (Fri/Sat UTC open).
+    # Display-фільтр (SSOT не змінюється): лише явний маркер інжесту
     if _is_display_flat_bar(bar):
-        if tf_s < _HTF_FLAT_SKIP_TF_S:
-            return None
-        if _is_weekend_open_utc(bar):
-            return None
+        return None
 
     # --- t_ms (epoch ms) ---
     t_ms = bar.get("open_time_ms")
