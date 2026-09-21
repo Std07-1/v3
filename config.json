@@ -39,6 +39,7 @@
       }
     }
   },
+  "flat_bar_max_volume": 4,
   "m1_session_filter": {
     "pause_noise_margin_min": 60,
     "pause_edge_stale_volume_mult": 2,

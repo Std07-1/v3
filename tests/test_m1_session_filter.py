@@ -122,16 +122,31 @@ def test_live_poller_pause_noise_margin_comes_from_constructor():
     assert narrow.committed == [] and wide.committed[0].extensions == {"calendar_pause_nonflat_anomaly": True}
 
 
-@pytest.mark.parametrize("cfg, expected", [
-    ({}, 4),
-    ({"flat_bar_max_volume": 10}, 10),
-    ({"flat_bar_max_volume": -3}, 0),
-    ({"flat_bar_max_volume": "хибне"}, 4),
+@pytest.mark.parametrize("cfg, expected, expected_log", [
+    ({"flat_bar_max_volume": 10}, 10, None),
+    ({}, 4, "M1_SESSION_FILTER_CONFIG_DEFAULT key=flat_bar_max_volume default=4"),
+    ({"flat_bar_max_volume": -3}, 0, "M1_SESSION_FILTER_CONFIG_CLAMPED key=flat_bar_max_volume raw=-3 value=0"),
+    ({"flat_bar_max_volume": "хибне"}, 4, "M1_SESSION_FILTER_CONFIG_INVALID key=flat_bar_max_volume raw='хибне'"),
 ])
-def test_flat_threshold_normalization_is_shared_by_every_writer(cfg, expected):
-    """Один clamp для полера, засіву і ремонту — інакше на тому самому конфізі вони розходяться."""
+def test_flat_threshold_normalization_is_shared_by_every_writer(caplog, cfg, expected, expected_log):
+    """Один clamp для полера, засіву і ремонту — інакше на тому самому конфізі вони розходяться. Дефолт чи clamp —
+    WARNING із сирим значенням (рев'ю D-07): поріг вирішує, що з паузи не піде в SSOT."""
+    import logging
     from runtime.ingest.m1_session_filter import resolve_flat_max_volume
-    assert resolve_flat_max_volume(cfg) == expected
+    with caplog.at_level(logging.WARNING):
+        assert resolve_flat_max_volume(cfg) == expected
+    if expected_log is None:
+        assert "key=flat_bar_max_volume" not in caplog.text
+    else:
+        assert expected_log in caplog.text
+
+
+def test_flat_threshold_key_is_in_repo_config():
+    """SSOT порогу — config.json: до рев'ю D-07 ключа не було, і живий воркер жив на дефолті з коду."""
+    import json
+    from pathlib import Path
+    cfg = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text(encoding="utf-8"))
+    assert cfg["flat_bar_max_volume"] == 4
 
 
 def test_repair_tool_applies_the_same_rule_and_drops_the_forming_minute(monkeypatch):

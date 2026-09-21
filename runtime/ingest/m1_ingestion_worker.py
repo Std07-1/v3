@@ -22,7 +22,7 @@ from core.model.bars import CandleBar
 from env_profile import load_env_secrets
 from runtime.ingest.derive_engine import DeriveEngine
 from runtime.ingest.market_calendar import MarketCalendar
-from runtime.ingest.m1_session_filter import resolve_pause_policy
+from runtime.ingest.m1_session_filter import resolve_flat_max_volume, resolve_pause_policy
 from runtime.ingest.polling.m1_poller import (
     M1SymbolPoller,
     M1PollerRunner,
@@ -275,9 +275,8 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
     stale_s = int(m1_cfg.get("stale_s", 720))
 
     # Flat bar max volume (SSOT)
-    flat_vol_raw = cfg.get("flat_bar_max_volume")
-    if flat_vol_raw is not None:
-        set_flat_bar_max_volume(int(flat_vol_raw))
+    # Той самий resolve, що в полері, засіві й ремонті: битий ключ не валить старт, відсутній — WARNING (рев'ю D-07)
+    set_flat_bar_max_volume(resolve_flat_max_volume(cfg))
 
     # UDS
     data_root = str(cfg.get("data_root", "./data_v3"))

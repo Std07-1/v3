@@ -115,14 +115,9 @@ def split_closed_bars(bars: List[CandleBar], now_ms: int, safety_ms: int) -> Tup
 
 
 def resolve_flat_max_volume(cfg: dict) -> int:
-    """Порог пласкості з config (SSOT `flat_bar_max_volume`), з тим самим clamp, що й у полері."""
-    raw = cfg.get("flat_bar_max_volume")
-    if raw is None:
-        return FLAT_BAR_MAX_VOLUME_DEFAULT
-    try:
-        return max(0, int(raw))
-    except (TypeError, ValueError):
-        return FLAT_BAR_MAX_VOLUME_DEFAULT
+    """Порог пласкості з config (SSOT `flat_bar_max_volume`), спільний для всіх записувачів M1. Відсутній, битий або
+    від'ємний — дефолт або 0 з WARNING (рев'ю D-07, I5): поріг вирішує, що з паузи не піде в SSOT."""
+    return _resolve_config_int(cfg, "flat_bar_max_volume", FLAT_BAR_MAX_VOLUME_DEFAULT, 0)
 
 
 def resolve_pause_policy(cfg: dict, symbol: str) -> PausePolicy:
@@ -172,8 +167,8 @@ def _resolve_edge_stale_groups(section: dict) -> FrozenSet[str]:
 
 
 def _resolve_config_int(section: dict, key: str, default: int, minimum: int) -> int:
-    """Ціле з секції `m1_session_filter`. Відсутнє або бите — дефолт, менше за minimum — clamp; обидва випадки дають
-    WARNING із сирим значенням (I5), бо тихий дефолт тут змінює те, що пишеться в SSOT."""
+    """Ціле з config (секції `m1_session_filter` або верхнього рівня). Відсутнє або бите — дефолт, менше за minimum —
+    clamp; обидва випадки дають WARNING із сирим значенням (I5), бо тихий дефолт тут змінює те, що пишеться в SSOT."""
     raw = section.get(key)
     if raw is None:
         logging.warning("M1_SESSION_FILTER_CONFIG_DEFAULT key=%s default=%d — ключа в config немає", key, default)
