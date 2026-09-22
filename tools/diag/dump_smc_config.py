@@ -1,6 +1,6 @@
 import json
 
-c = json.load(open("config.json"))
+c = json.load(open("config.json", encoding="utf-8"))
 smc = c.get("smc", {})
 print("=== SMC CONFIG ===")
 print(json.dumps(smc, indent=2)[:3000])

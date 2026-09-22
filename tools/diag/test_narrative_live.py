@@ -42,7 +42,7 @@ def _dicts_to_bars(dicts, tf_s):
 
 
 def main():
-    with open("config.json") as f:
+    with open("config.json", encoding="utf-8") as f:
         cfg = json.load(f)
 
     smc_cfg = SmcConfig.from_dict(cfg.get("smc", {}))

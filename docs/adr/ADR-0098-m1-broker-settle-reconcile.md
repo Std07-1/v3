@@ -172,7 +172,9 @@ feat/m1-open-refetch:tools/repair/first_tick_m1/common.py:31-41]. Цикл за�
   > все одно перезаписує рядок повністю з архіву брокера — перебудова E не заміна settle, а чесніший стан до нього.
 - `extensions.open_unsettled = True` і WARN — на запечених серіях від `tail_catchup`, `live_recover`,
   `initial_backfill`, `repair_m1_gaps`. Ознака: ланцюжок o == prev_c, де хоч один open поза [l, h]; для XAU і SPX500
-  — будь-яка серія o == prev_c довжиною ≥ 5. Наявний `FXCM_OPEN_NOT_FIRST_TICK` ловить лише ~9% запечених рядків.
+  — будь-яка серія o == prev_c довжиною ≥ 5. Рейка провайдера (після [ADR-0100](ADR-0100-previous-close-tv-parity.md)
+  — `FXCM_OPEN_NOT_PREV_CLOSE`) цієї ознаки не заміняє: вона міряє **паритет** `o == prev_c`, який у PREVIOUS_CLOSE
+  є нормою; попередня `FXCM_OPEN_NOT_FIRST_TICK` ловила лише ~9% запечених рядків.
 - `fetch_tf_backfill` відмовляє засівати незавершений тиждень, старший за свіжий хвіст, без явного прапора.
 - Рейка на останній бар перед перервою (за календарем; узимку — 21:59): цілі o/h/l/c у неплаского бару → WARN
   `FXCM_PREBREAK_ROUNDED` і `extensions.close_suspect`.

@@ -147,7 +147,7 @@ def test_open_not_equal_to_previous_close_is_reported_loudly(caplog):
 def test_gap_bar_with_open_outside_the_range_stays_quiet(caplog):
     """Регресія проти рейки FIRST_TICK: у PREVIOUS_CLOSE open (= close перед перервою) законно лежить поза
     [low, high] — H/L розтягуються до нього, і саме такий бар показує TV (XAU 21.09 22:00: L == O). Це не дефект.
-    Числа — реальна перша хвилина після перерви XAU 14.09 22:01 (o 4346.23, h 4337.69)."""
+    Числа — реальна перша хвилина після перерви XAU 13.09 22:01 (o 4346.23, h 4337.69)."""
     rows = [_row(0, 4340.00, 4347.00, 4339.00, 4346.23), _row(1, 4346.23, 4337.69, 4330.62, 4331.55)]
     with caplog.at_level(logging.WARNING):
         bars = provider_mod.normalize_history_to_bars("XAU/USD", 60, rows, src="history")
