@@ -66,6 +66,11 @@ def _utc_now_ms() -> int:
 # Helpers
 # ---------------------------------------------------------------------------
 _M1_MS = 60_000
+# Історія «останні n до date_to» від брокера включає й свічку, що відкрилась о date_to (= cutoff + 1 M1, ще
+# формується). Вона займає один із n слотів, тож без запасу найстарша потрібна хвилина випадає з відповіді:
+# 22.09.2026 17:28 tail_catchup missing=13 → fetched=12, хвилина 17:15 втрачена на 5 символах (за watermark —
+# live_recover її вже не бачить). Головний цикл цей запас має (`gap_bars + 1` у _compute_fetch_n).
+_FORMING_SLOT = 1
 
 # Flat bar: O==H==L==C з малим обсягом (calendar-pause маркер від брокера)
 # SSOT: config.json → flat_bar_max_volume. Дефолт 4 (як у конфігу).
@@ -625,7 +630,7 @@ class M1SymbolPoller:
         try:
             bars = self._provider.fetch_last_n_m1(
                 self._symbol,
-                n=n,
+                n=n + _FORMING_SLOT,
                 date_to_utc=date_to,
             )
         except Exception as exc:
@@ -887,12 +892,12 @@ class M1SymbolPoller:
                 policy="m1_tail_catchup_truncated",
             )
 
-        # Fetch: date_to = cutoff + 1 M1 (щоб точно включити cutoff)
+        # Fetch: date_to = cutoff + 1 M1 (щоб точно включити cutoff); +1 слот під формуючу свічку о date_to
         date_to = ms_to_utc_dt(cutoff_ms + _M1_MS)
         try:
             bars = self._provider.fetch_last_n_m1(
                 self._symbol,
-                n=n,
+                n=n + _FORMING_SLOT,
                 date_to_utc=date_to,
             )
         except Exception as exc:
