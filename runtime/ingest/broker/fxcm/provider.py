@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import math
 from typing import Any, List, Optional, Tuple
 
 from core.model.bars import CandleBar, assert_invariants, ms_to_utc_dt, utc_dt_to_ms
@@ -15,14 +16,16 @@ except Exception:  # noqa: BLE001
     ForexConnect = None  # type: ignore
     fxcorepy = None  # type: ignore
 
-# Ціна відкриття свічки = перший тік у бакеті (ADR-0096). Дефолт SDK — PREVIOUS_CLOSE
-# (forexconnect/ForexConnect.py:423): open кожної свічки = close попередньої, тож перша свічка
-# сесії тягнула вчорашню ціну в O і L/H, а за нею — D1/H4/… (XAU D1 27.07.2026: наш O=L=4055.42,
-# FXCM FIRST_TICK і TradingView — O≈4090). До ADR-0096 параметр не передавався зовсім.
-OPEN_PRICE_MODE_NAME = "FIRST_TICK"
-# Допуск порівняння open з [low, high] — нижче за крок ціни будь-якого символу (найменший — XAG 0.001; кроки всіх
-# символів: config.json m1_poller.session_open_rebuild.price_step_by_symbol).
-_OPEN_RANGE_EPS = 1e-9
+# Ціна відкриття свічки = close попередньої свічки (ADR-0100: контракт паритету з TradingView).
+# Вимір власника 21–22.09: TV FX:<символ> показує саме бари FXCM у режимі PREVIOUS_CLOSE — open == close
+# попереднього бару і на 15m, і на D1, і через денну перерву 21–22 UTC, і через вихідні (XAU 15m 21.09 22:00
+# O 4342.62 H 4350.60 L 4342.62 C 4349.61). Режим передається явно, бо дефолт SDK
+# (forexconnect/ForexConnect.py:423) — не контракт: саме залежність від дефолту закрив ADR-0096 §3.1.
+OPEN_PRICE_MODE_NAME = "PREVIOUS_CLOSE"
+# Допуск ланцюжкової рейки: у PREVIOUS_CLOSE брокер копіює close попередньої свічки в open, тож розбіжність
+# може бути лише на представленні float, а не на кроці ціни (кроки символів — config.json
+# m1_poller.session_open_rebuild.price_step_by_symbol).
+_PREV_CLOSE_CHAIN_REL_TOL = 1e-9
 
 # Тікова історія брокера (ADR-0096 слайс E). Свічки FXCM у нас — Bid: у dtype свічки SDK немає поля «Open»,
 # тож extract_ohlc бере BidOpen/BidHigh/BidLow/BidClose (forexconnect/ForexConnect.py:471). Тіки, з яких
@@ -34,12 +37,13 @@ _ALL_QUOTES_IN_RANGE = -1
 
 
 def _resolve_open_price_mode() -> Any:
-    """Enum режиму FIRST_TICK з SDK; без нього — гучна відмова, а не тихий дефолт PREVIOUS_CLOSE."""
+    """Enum режиму PREVIOUS_CLOSE з SDK; без нього — гучна відмова, а не режим за дефолтом SDK."""
     mode = getattr(getattr(fxcorepy, "O2GCandleOpenPriceMode", None), OPEN_PRICE_MODE_NAME, None)
     if mode is None:
         raise RuntimeError(
             "FXCM_OPEN_PRICE_MODE_UNAVAILABLE: у forexconnect немає "
-            "fxcorepy.O2GCandleOpenPriceMode.%s — без нього SDK віддає PREVIOUS_CLOSE (ADR-0096)"
+            "fxcorepy.O2GCandleOpenPriceMode.%s — режим свічок звівся б на дефолт SDK, а саме цю "
+            "залежність закрито (ADR-0096 §3.1, ADR-0100)"
             % OPEN_PRICE_MODE_NAME
         )
     return mode
@@ -310,6 +314,9 @@ def normalize_history_to_bars(
     - history_rows: numpy.ndarray зі структурованими полями.
     - Дата/час може зватись по-різному. Робимо allowlist ключів.
     - OHLC беремо по пріоритету: Open/High/Low/Close → BidOpen/BidHigh/... → Ask...
+
+    Рейка: розрив ланцюжка `o == prev.c` у батчі — WARN `FXCM_OPEN_NOT_PREV_CLOSE` (див. `open_chain_breaks`);
+    значення не змінюються.
     """
     out: List[CandleBar] = []
     if history_rows is None:
@@ -324,19 +331,15 @@ def normalize_history_to_bars(
         )
         rows = []
 
-    open_not_tick: List[int] = []
     for r in rows:
         try:
             open_ms = extract_open_time_ms(r)
             close_ms = open_ms + tf_s * 1000
 
             o, h, low, c = extract_ohlc(r)
-            if o > h + _OPEN_RANGE_EPS or o < low - _OPEN_RANGE_EPS:
-                # У FIRST_TICK open поза [low, high] — не тік цієї свічки: у брокера на цей проміжок немає тікової
-                # історії і він підставив close попередньої (виміряно 14.09: Нд 22:00 → Пн 07:00 UTC). Нормалізація
-                # нижче розтягне H/L до такого open — тож проміжок мусить бути видно, а не мовчки записаний.
-                open_not_tick.append(open_ms)
-            # Нормалізація OHLC: broker може повернути h < close (bid/ask артефакт)
+            # Нормалізація OHLC: у PREVIOUS_CLOSE open (= close попередньої свічки) законно лежить поза
+            # [low, high] на гепі — H/L розтягуються до нього, і саме так бар показує TV (XAU 21.09 22:00:
+            # L == O == 4342.62). Плюс брокер може повернути h < close (bid/ask артефакт).
             h = max(o, h, low, c)
             low = min(o, h, low, c)
             v = extract_volume(r)
@@ -384,14 +387,32 @@ def normalize_history_to_bars(
         except Exception as e:
             logging.warning("Пропуск history-row: %s", str(e))
 
-    if open_not_tick:
-        logging.warning(
-            "FXCM_OPEN_NOT_FIRST_TICK symbol=%s tf_s=%s bars=%d of=%d first_open_ms=%s last_open_ms=%s "
-            "— open поза [low, high]: брокер не мав першого тіку, свічка потребує оновлення після (ADR-0096)",
-            symbol, tf_s, len(open_not_tick), len(rows), min(open_not_tick), max(open_not_tick),
-        )
     out.sort(key=lambda x: x.open_time_ms)
+    chain_breaks = open_chain_breaks(out)
+    if chain_breaks:
+        logging.warning(
+            "FXCM_OPEN_NOT_PREV_CLOSE symbol=%s tf_s=%s bars=%d of=%d first_open_ms=%s last_open_ms=%s "
+            "— open ≠ close попереднього бару: ланцюжок PREVIOUS_CLOSE розірвано, свічка не 1:1 з TV (ADR-0100)",
+            symbol, tf_s, len(chain_breaks), len(out), min(chain_breaks), max(chain_breaks),
+        )
     return out
+
+
+def open_chain_breaks(bars: List[CandleBar]) -> List[int]:
+    """`open_time_ms` барів, чий open ≠ close попереднього бару послідовності (розрив ланцюжка PREVIOUS_CLOSE).
+
+    Це і є вимір паритету з TV: у PREVIOUS_CLOSE брокер копіює close попередньої свічки в open, тож на 1:1-даних
+    список майже порожній. Вимір на копії проду 22.09: доба PREV-епохи 14.09 — XAU M1 2 розриви з 1378 пар,
+    SPX500 1 з 1379 (обидва класи відомі: округлений бар 20:59 ADR-0098 і `session_open_rebuilt` ремонту -010);
+    доба FIRST_TICK-епохи 18.09 — 1244/1244 і 1243/1243, тобто кожен бар.
+    Перший бар послідовності не перевіряється — його попередник лишився за межею запиту. Бари мусять бути
+    відсортовані за часом.
+    """
+    return [
+        bar.open_time_ms
+        for prev, bar in zip(bars, bars[1:])
+        if not math.isclose(bar.o, prev.c, rel_tol=_PREV_CLOSE_CHAIN_REL_TOL, abs_tol=0.0)
+    ]
 
 
 def extract_open_time_ms(row: Any) -> int:

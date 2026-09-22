@@ -25,8 +25,8 @@
     "live_recover_log_interval_s": 60,
     "stale_s": 720,
     "session_open_rebuild": {
-      "_comment": "ADR-0096 слайс E: перша M1 після перерви — тіки хвилини (t1) до коміту; open поза діапазоном тіків = запечений → open і запечений high/low з тіків, c і v брокерські; тіків немає → бар брокера з open_provisional + WARN FXCM_SESSION_OPEN_BAKED. enabled — лише true/false. price_step = крок котирування FXCM (10^-digits), виміряно на M1 проду 21.09",
-      "enabled": true,
+      "_comment": "ADR-0100: ВИМКНЕНО — перша M1 після перерви має open = close перед перервою, це і є бар TV FX: (PREVIOUS_CLOSE), а перебудова з тіків робила дірку. Секція лишається задокументованим rollback (ADR-0096 §6 E): перша M1 після перерви — тіки хвилини (t1) до коміту; open поза діапазоном тіків = запечений → open і запечений high/low з тіків, c і v брокерські; тіків немає → бар брокера з open_provisional + WARN FXCM_SESSION_OPEN_BAKED. enabled — лише true/false. price_step = крок котирування FXCM (10^-digits), виміряно на M1 проду 21.09",
+      "enabled": false,
       "gap_min": 15,
       "price_step_by_symbol": {
         "XAU/USD": 0.01,

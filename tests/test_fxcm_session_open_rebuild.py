@@ -1,11 +1,15 @@
 """Перша хвилина M1 після перерви — запечені компоненти з тікової історії брокера (ADR-0096 слайс E).
 
-Навіщо цей файл. Перша M1 кожної сесії у FXCM приходить з open (і high або low) = close перед перервою;
-полер комітить її один раз, тож на M1…D1 стоїть гігантська перша свічка. Тікова історія того ж дня має лише
-справжні тіки (EUSTX50 21.09 06:01: перший тік 6281.63, а m1 брокера o=l=6239.79 — close п'ятниці, v=10).
-На T+8 с t1 і m1 не узгоджені ні за кількістю тіків, ні за close — тому перебудовується лише запечене.
-Тести йдуть по конвеєру: провайдер (t1 через єдиний вхід SDK) → sidecar/proxy (команда fetch_t1) →
-чиста перебудова → полер до коміту.
+⚠️ Механізм ВИМКНЕНО рішенням власника 22.09 (ADR-0100): open першої M1 після перерви = close перед перервою, і
+це рівно той бар, який показує TV FX: (PREVIOUS_CLOSE) — перебудова з тіків робила дірку відносно TV. Секція
+`m1_poller.session_open_rebuild` лишається задокументованим rollback (`enabled: false`), тож покриття механізму
+тут зберігається цілим: якщо його колись увімкнуть назад, воно мусить працювати так само, а не «як вийде».
+
+Навіщо цей файл. Перша M1 кожної сесії у FXCM приходить з open (і high або low) = close перед перервою; полер
+комітить її один раз. Тікова історія того ж дня має лише справжні тіки (EUSTX50 21.09 06:01: перший тік 6281.63,
+а m1 брокера o=l=6239.79 — close п'ятниці, v=10). На T+8 с t1 і m1 не узгоджені ні за кількістю тіків, ні за
+close — тому перебудовується лише запечене. Тести йдуть по конвеєру: провайдер (t1 через єдиний вхід SDK) →
+sidecar/proxy (команда fetch_t1) → чиста перебудова → полер до коміту.
 """
 from __future__ import annotations
 
@@ -25,7 +29,7 @@ from runtime.ingest.broker.fxcm import provider as provider_mod
 from runtime.ingest.m1_ingestion_worker import BrokerRedisProxy
 from runtime.ingest.polling import m1_poller as poller_mod
 
-FIRST_TICK = object()
+PREVIOUS_CLOSE = object()
 EUSTX50_OPEN_MS = int(dt.datetime(2026, 9, 21, 6, 1, tzinfo=dt.timezone.utc).timestamp() * 1000)
 
 
@@ -64,7 +68,7 @@ class _FakeForexConnect:
 def fake_sdk(monkeypatch):
     _FakeForexConnect.calls = []
     _FakeForexConnect.reply = []
-    fxcorepy = types.SimpleNamespace(O2GCandleOpenPriceMode=types.SimpleNamespace(FIRST_TICK=FIRST_TICK))
+    fxcorepy = types.SimpleNamespace(O2GCandleOpenPriceMode=types.SimpleNamespace(PREVIOUS_CLOSE=PREVIOUS_CLOSE))
     monkeypatch.setattr(provider_mod, "ForexConnect", _FakeForexConnect)
     monkeypatch.setattr(provider_mod, "fxcorepy", fxcorepy)
     return _FakeForexConnect
@@ -92,7 +96,7 @@ def test_t1_ticks_come_through_the_single_sdk_entry_for_the_exact_window(fake_sd
     assert (symbol, timeframe, quotes_count) == ("EUSTX50", "t1", -1)
     assert date_from == dt.datetime(2026, 9, 21, 6, 1, tzinfo=dt.timezone.utc)
     assert date_to == dt.datetime(2026, 9, 21, 6, 2, tzinfo=dt.timezone.utc)
-    assert kwargs.get("candle_open_price_mode") is FIRST_TICK
+    assert kwargs.get("candle_open_price_mode") is PREVIOUS_CLOSE
 
 
 def test_t1_sdk_failure_is_none_and_loud_not_an_empty_minute(fake_sdk, caplog):
@@ -694,21 +698,35 @@ def test_string_false_in_config_disables_rebuild_loudly_instead_of_enabling_it(c
 
 
 # ---------------------------------------------------------------------------
-# P5 — SSOT конфіг: кожен активний FXCM-символ має крок ціни
+# P5 — SSOT конфіг: перебудова вимкнена (ADR-0100), але rollback лишається готовим
 # ---------------------------------------------------------------------------
 
 
-def test_repo_config_enables_rebuild_with_a_price_step_for_every_active_fxcm_symbol():
-    """Новий символ без кроку ціни мовчки не зламає нічого (WARN + provisional), але тут це ловиться до деплою."""
-    import pathlib
+def test_repo_config_keeps_rebuild_disabled_because_previous_close_is_the_tv_bar():
+    """ADR-0100: open першої M1 після перерви = close перед перервою — це і є бар TV FX:, перебудова робила дірку.
+    Гейт проти тихого повернення: якщо хтось увімкне перебудову, це має бути рішенням з ADR, а не непоміченим
+    дифом конфігу."""
+    policy = so.resolve_session_open_rebuild_policy(_repo_config())
+    assert policy.enabled is False
 
-    from core.config_loader import load_system_config
+
+def test_repo_config_keeps_a_price_step_for_every_active_fxcm_symbol_so_rollback_is_not_a_guess():
+    """Секція = задокументований rollback (ADR-0096 §6 E). Новий символ без кроку ціни зламав би перебудову вже
+    після увімкнення (WARN + provisional) — тут це ловиться до деплою, поки rollback ще на папері."""
+    cfg = _repo_config()
     from runtime.ingest.tick_common import symbols_from_cfg
 
-    cfg = load_system_config(str(pathlib.Path(__file__).resolve().parents[1] / "config.json"))
     policy = so.resolve_session_open_rebuild_policy(cfg)
     binance = cfg.get("binance") or {}
     binance_symbols = set(binance.get("symbols", [])) if binance.get("enabled") else set()
     fxcm_symbols = [sym for sym in symbols_from_cfg(cfg) if sym not in binance_symbols]
-    assert policy.enabled and policy.gap_ms == 15 * 60_000
+    assert policy.gap_ms == 15 * 60_000
     assert fxcm_symbols and [sym for sym in fxcm_symbols if sym not in policy.price_step_by_symbol] == []
+
+
+def _repo_config():
+    import pathlib
+
+    from core.config_loader import load_system_config
+
+    return load_system_config(str(pathlib.Path(__file__).resolve().parents[1] / "config.json"))

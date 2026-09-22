@@ -29,8 +29,9 @@ _FEATURE_ADR_MAP: Dict[str, str] = {
     "agent_bridge.wake_engine": "0049",
     "agent_bridge.console": "0090",
     "agent_bridge.public_snapshot": "0090",
-    # ADR-0096 слайс E: перша M1 після перерви з тікової історії брокера
-    "m1_poller.session_open_rebuild": "0096",
+    # Перебудова першої M1 після перерви: механізм — ADR-0096 слайс E, чинне рішення (вимкнено,
+    # секція = задокументований rollback) — ADR-0100
+    "m1_poller.session_open_rebuild": "0100",
     # Додати нові feature→ADR mappings за потребою:
     # "smc.some_feature": "NNNN",
 }

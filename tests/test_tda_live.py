@@ -675,15 +675,20 @@ class TestSmcRunnerTdaIntegration:
 
 
 class TestConfigSsot:
-    """P8: Verify config.json:smc.tda_cascade round-trips through TdaCascadeConfig."""
+    """P8: Verify config.json:smc.tda_cascade round-trips through TdaCascadeConfig.
+
+    `encoding="utf-8"` явно, як у SSOT-завантажувачі (`core/config_loader.py:61`): без нього читання залежить
+    від локалі ОС — на Windows cp1251 будь-яка велика кирилична літера в комментарях config.json (0xD0 0x98)
+    валила ці тести, хоч файл коректний UTF-8.
+    """
 
     def test_config_json_has_tda_cascade_section(self):
-        with open("config.json") as f:
+        with open("config.json", encoding="utf-8") as f:
             cfg = json.load(f)
         assert "tda_cascade" in cfg["smc"], "smc.tda_cascade section missing"
 
     def test_config_round_trip_all_fields(self):
-        with open("config.json") as f:
+        with open("config.json", encoding="utf-8") as f:
             cfg = json.load(f)
         d = cfg["smc"]["tda_cascade"]
         tc = TdaCascadeConfig.from_dict(d)
@@ -703,13 +708,13 @@ class TestConfigSsot:
 
     def test_config_enabled_true_is_k5_compliant(self):
         """K5 Gate: ADR-0040 status=Implemented → enabled=true is allowed."""
-        with open("config.json") as f:
+        with open("config.json", encoding="utf-8") as f:
             cfg = json.load(f)
         assert cfg["smc"]["tda_cascade"]["enabled"] is True
 
     def test_signals_has_deprecation_marker(self):
         """smc.signals has _deprecated_by pointing to tda_cascade."""
-        with open("config.json") as f:
+        with open("config.json", encoding="utf-8") as f:
             cfg = json.load(f)
         assert "_deprecated_by" in cfg["smc"]["signals"]
         assert "tda_cascade" in cfg["smc"]["signals"]["_deprecated_by"]
