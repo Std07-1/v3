@@ -53,11 +53,12 @@
 
 ## 4) Типові пастки та як їх уникати
 
-1) **PREVIOUS_CLOSE у FXCM History**
-   - Дефолт SDK — саме PREVIOUS_CLOSE (`forexconnect/ForexConnect.py:423`): open кожної свічки = close
-     попередньої, перша свічка сесії тягне вчорашню ціну в O і L/H.
-   - Рішення (ADR-0096): провайдер явно передає `candle_open_price_mode=FIRST_TICK`; UI stitching не існує
-     і не вмикається — розриви між свічками показуються, як у TradingView.
+1) **Режим ціни відкриття у FXCM History не залишати на дефолт SDK**
+   - Дефолт SDK (`forexconnect/ForexConnect.py:423`) — PREVIOUS_CLOSE, але дефолт не є контрактом: доки
+     провайдер параметр не передавав, зміст кожного бару залежав від версії SDK і хибного коментаря.
+   - Рішення (ADR-0096 §3.1, значення за ADR-0100): провайдер явно передає
+     `candle_open_price_mode=PREVIOUS_CLOSE` — це і є бар TV `FX:` (`open[i] == close[i-1]`, H/L розтягнуті до
+     перенесеного open). Рейка `FXCM_OPEN_NOT_PREV_CLOSE` міряє контракт; UI stitching не існує і не потрібен.
 
 2) **Зворотний порядок барів від History**
    - Якщо ingest не сортований, watermark викидає старі бари як stale.
