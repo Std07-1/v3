@@ -195,7 +195,7 @@ def _corpus_with_seams_and_duplicates(rng):
 def _read_all(layer, limit, to, since):
     tail, _ = layer.read_window_with_geom(SYMBOL, 60, limit, to_open_ms=to, since_open_ms=since, use_tail=True)
     raw_range, _ = layer.read_window_with_geom(SYMBOL, 60, limit, to_open_ms=to, since_open_ms=since, use_tail=False)
-    range_bars, _ = _ensure_sorted_dedup(raw_range, tf_ms=M1)
+    range_bars, _ = _ensure_sorted_dedup(raw_range)
     return [json.dumps(b, sort_keys=True) for b in tail], [json.dumps(b, sort_keys=True) for b in range_bars]
 
 

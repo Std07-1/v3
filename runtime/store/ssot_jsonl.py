@@ -10,6 +10,13 @@ from core.model.bars import CandleBar, FINAL_SOURCES, assert_invariants, ms_to_u
 from core.session_anchor import H4_S, assert_on_season_grid, htf_anchor_offset_s
 
 
+class AnchorRuleMissingError(ValueError):
+    """Правило якоря H4/D1 символу недоступне: писар без резолвера або група календаря з невиміряною сіткою.
+
+    Окремий тип, щоб UDS відрізняв відмову бару від збою диска і не публікував бар у Redis/pubsub (ADR-0095 §3.3).
+    """
+
+
 class JsonlAppender:
     """Append-only JSONL writer із ротацією по даті open_time_utc (YYYYMMDD).
 
@@ -44,11 +51,16 @@ class JsonlAppender:
             assert_invariants(bar, anchor_offset_s=0)
             return
         if self._anchor_rule_for_symbol is None:
-            raise ValueError(
+            raise AnchorRuleMissingError(
                 "anchor_rule_missing symbol=%s tf_s=%d open_ms=%d — JsonlAppender без резолвера правила якоря "
                 "(ADR-0095 §3.3)" % (bar.symbol, bar.tf_s, bar.open_time_ms)
             )
-        rule = self._anchor_rule_for_symbol(bar.symbol)
+        try:
+            rule = self._anchor_rule_for_symbol(bar.symbol)
+        except ValueError as exc:  # символ без групи або група без виміряної сітки (htf_anchor_rule_resolver)
+            raise AnchorRuleMissingError(
+                "anchor_rule_missing symbol=%s tf_s=%d open_ms=%d cause=%s" % (bar.symbol, bar.tf_s, bar.open_time_ms, exc)
+            ) from exc
         assert_on_season_grid(bar.open_time_ms, bar.tf_s, rule)
         assert_invariants(bar, anchor_offset_s=htf_anchor_offset_s(bar.tf_s, bar.open_time_ms, rule))
 

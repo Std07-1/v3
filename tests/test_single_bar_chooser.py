@@ -47,7 +47,7 @@ def _tail_winner(group):
 
 
 def _range_winner(group):
-    result, _geom = _ensure_sorted_dedup([dict(b) for b in group], tf_ms=TF_MS)
+    result, _geom = _ensure_sorted_dedup([dict(b) for b in group])
     assert len(result) == 1
     return result[0]["marker"]
 
@@ -93,7 +93,7 @@ def test_repair_dedup_dry_run_changes_nothing(tmp_path, capsys):
 
 
 D1_MS = 86_400_000
-OT_21, OT_22 = 1_729_112_400_000, 1_729_116_000_000  # 16.10 21:00 і 22:00 UTC — DST-джитер якоря
+OT_21, OT_22 = 1_729_112_400_000, 1_729_116_000_000  # 16.10.2024 21:00 (літня сітка) і 22:00 UTC (поза сезоном)
 
 
 def _d1(open_ms, *, fmt, partial=False, complete=True, src="history"):
@@ -112,34 +112,30 @@ def _d1(open_ms, *, fmt, partial=False, complete=True, src="history"):
     return bar
 
 
-def _near_winner(fmt, earlier_kw, later_kw):
-    result, _geom = _ensure_sorted_dedup(
-        [_d1(OT_21, fmt=fmt, **earlier_kw), _d1(OT_22, fmt=fmt, **later_kw)], tf_ms=D1_MS
-    )
-    assert len(result) == 1, "near-пару мусить бути злито"
-    return result[0]["open_time_ms"]
+def _read_path_opens(fmt, earlier_kw, later_kw):
+    result, _geom = _ensure_sorted_dedup([_d1(OT_21, fmt=fmt, **earlier_kw), _d1(OT_22, fmt=fmt, **later_kw)])
+    return tuple(b["open_time_ms"] for b in result)
 
 
-NEAR_CASES = {
-    "повна нічия": ({}, {}, OT_21),
-    "ранній partial на диску": ({"partial": True}, {}, OT_21),
-    "пізній partial на диску": ({}, {"partial": True}, OT_21),
-    "пізній не final": ({}, {"src": "preview"}, OT_21),
-    "ранній не final": ({"src": "preview"}, {}, OT_22),
+D1_PAIRS = {
+    "повна нічия": ({}, {}),
+    "ранній partial на диску": ({"partial": True}, {}),
+    "пізній partial на диску": ({}, {"partial": True}),
+    "пізній не final": ({}, {"src": "preview"}),
+    "ранній не final": ({"src": "preview"}, {}),
 }
 
 
-@pytest.mark.parametrize("case", sorted(NEAR_CASES))
-def test_near_dedup_picks_the_same_d1_bar_on_every_read_path(case):
-    """Регресія, яку спіймало ревʼю P1: ts=close у Redis/RAM віддавав перемогу пізнішому бару,
-    а на диску без ts перемагав ранній — cold-load і scrollback знову малювали різну D1-свічку."""
-    earlier_kw, later_kw, expected = NEAR_CASES[case]
-    winners = {fmt: _near_winner(fmt, earlier_kw, later_kw) for fmt in ("disk", "ram", "redis")}
-    assert set(winners.values()) == {expected}, winners
+@pytest.mark.parametrize("case", sorted(D1_PAIRS))
+def test_d1_bars_of_one_day_are_not_merged_on_any_read_path(case):
+    """ADR-0095 §3.3: колишній near-dedup D1 (поріг 2 год) зливав 21:00 і 22:00 одного дня і тим тихо ховав D1 поза
+    сезонною сіткою. Читач сітку не фільтрує: на кожному шляху читання — обидва бари, однаково (ADR-0094)."""
+    earlier_kw, later_kw = D1_PAIRS[case]
+    opens = {fmt: _read_path_opens(fmt, earlier_kw, later_kw) for fmt in ("disk", "ram", "redis")}
+    assert set(opens.values()) == {(OT_21, OT_22)}, opens
 
 
-@pytest.mark.parametrize("name", ["choose_better_bar", "choose_better_near_duplicate"])
-def test_only_one_bar_chooser_exists_in_the_repo(name):
+def test_only_one_bar_chooser_exists_in_the_repo():
     """Гейт: друга однойменна функція вибору і стала причиною ADR-0094 — вона не мусить повернутись."""
     definitions = []
     for top in ("core", "runtime", "tools", "app"):
@@ -149,7 +145,7 @@ def test_only_one_bar_chooser_exists_in_the_repo(name):
             except (SyntaxError, UnicodeDecodeError):
                 continue
             for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.lstrip("_") == name:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.lstrip("_") == "choose_better_bar":
                     definitions.append("%s:%d" % (path.relative_to(REPO).as_posix(), node.lineno))
     assert len(definitions) == 1 and definitions[0].startswith("core/model/bar_choice.py:"), definitions
 

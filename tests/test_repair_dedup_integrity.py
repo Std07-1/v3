@@ -57,17 +57,17 @@ def _backups(path: Path):
     return sorted(p.name for p in path.parent.iterdir() if ".bak." in p.name)
 
 
-def _reader_winner(bars, tf_ms=TF_MS):
-    result, _geom = _ensure_sorted_dedup([dict(b) for b in bars], tf_ms=tf_ms)
+def _reader_winner(bars):
+    result, _geom = _ensure_sorted_dedup([dict(b) for b in bars])
     assert len(result) == 1
     return result[0]["marker"]
 
 
-def _disk_reader_markers(tf_dir: Path, tf_ms: int):
+def _disk_reader_markers(tf_dir: Path):
     """Що покаже читач UDS для кожного ключа каталогу — його ж кодом вибору вікна і дедупу."""
     paths = sorted(str(p) for p in tf_dir.glob("part-*.jsonl"))
     window = _select_newest_keys(paths, None, None, 10**9, final_only=False, skip_preview=False, final_sources=None)
-    result, _geom = _ensure_sorted_dedup(window, tf_ms=tf_ms)
+    result, _geom = _ensure_sorted_dedup(window)
     return {b["open_time_ms"]: b["marker"] for b in result}
 
 
@@ -252,11 +252,11 @@ def test_htf_rewrite_range_keeps_what_readers_show_outside_the_range(tmp_path, o
     tf_dir = tmp_path / "XAU_USD" / "tf_14400"
     group = WHOLE_VS_PARTIAL[order](open_ms=H4_BASE, src="history", tf_s=14400)
     _write(tf_dir, [json.dumps(b) for b in group], name="part-20260331.jsonl")
-    expected = _disk_reader_markers(tf_dir, H4_MS)[H4_BASE]
+    expected = _disk_reader_markers(tf_dir)[H4_BASE]
     fxcm = [_h4("fxcm", H4_BASE + H4_MS, src="history")]
     result = rewrite_range(str(tmp_path), "XAU/USD", 14400, fxcm, H4_BASE + H4_MS, H4_BASE + H4_MS, dry_run=False)
     assert result["status"] == "committed" and result["dup_removed"] == 1
-    assert _disk_reader_markers(tf_dir, H4_MS) == {H4_BASE: expected, H4_BASE + H4_MS: "fxcm"}
+    assert _disk_reader_markers(tf_dir) == {H4_BASE: expected, H4_BASE + H4_MS: "fxcm"}
     assert expected == "whole"
     on_disk = _read_all_bars_raw(str(tf_dir))
     assert len(on_disk) == len({b["open_time_ms"] for b in on_disk}), "дублікати не мусять лишитись на диску"
@@ -303,10 +303,10 @@ def test_htf_rewrite_range_cross_file_tie_matches_readers(tmp_path):
     tf_dir = tmp_path / "XAU_USD" / "tf_14400"
     key = H4_BASE  # 2026-03-31 — «своя» доба ключа саме part-20260331
     _cross_file_tie(tf_dir, key, 14400)
-    shown = _disk_reader_markers(tf_dir, H4_MS)[key]
+    shown = _disk_reader_markers(tf_dir)[key]
     far = H4_BASE - 1000 * H4_MS
     rewrite_range(str(tmp_path), "XAU/USD", 14400, [], far, far, dry_run=False)
-    assert _disk_reader_markers(tf_dir, H4_MS)[key] == shown
+    assert _disk_reader_markers(tf_dir)[key] == shown
 
 
 # ── replay ───────────────────────────────────────────────────────────────────
@@ -316,7 +316,7 @@ def test_replay_replays_the_candle_the_chart_shows(tmp_path, order):
     group = WHOLE_VS_PARTIAL[order](src="history", tf_s=60)
     _write(tmp_path / "XAU_USD" / "tf_60", [json.dumps(b) for b in group])
     replayed = _read_m1_bars_from_disk(str(tmp_path), "XAU/USD")
-    assert [b["marker"] for b in replayed] == ["whole"] == [_reader_winner(group, tf_ms=60_000)]
+    assert [b["marker"] for b in replayed] == ["whole"] == [_reader_winner(group)]
 
 
 def test_replay_cross_file_tie_matches_readers(tmp_path):
@@ -324,4 +324,4 @@ def test_replay_cross_file_tie_matches_readers(tmp_path):
     key = OPEN_MS // 60_000 * 60_000
     _cross_file_tie(tf_dir, key, 60)
     replayed = {b["open_time_ms"]: b["marker"] for b in _read_m1_bars_from_disk(str(tmp_path), "XAU/USD")}
-    assert replayed[key] == _disk_reader_markers(tf_dir, 60_000)[key]
+    assert replayed[key] == _disk_reader_markers(tf_dir)[key]

@@ -351,7 +351,7 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 | `test_m1_flat_bar_policy.py` | M1 flat bar filtering policy |
 | `test_m1_ingestion_ipc.py` | M1 ingestion IPC (broker sidecar) |
 | `test_market_calendar.py` | Market calendar breaks/sessions |
-| `test_near_dedup_d1.py` | D1 near-dedup logic |
+| `test_uds_read_d1_no_near_dedup.py` | Читач UDS не зливає D1 з різними open_ms (near-dedup прибрано, ADR-0095) |
 | `test_overdue_cascade.py` | Overdue cascade detection |
 | `test_qa_001.py` | QA regression #001 |
 | `test_qa_002.py` | QA regression #002 |

@@ -8,8 +8,9 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from core.model.bar_choice import choose_better_bar, choose_better_near_duplicate
+from core.model.bar_choice import choose_better_bar
 from core.model.bars import CandleBar, FINAL_SOURCES
+from core.session_anchor import OffSeasonGridError
 from core.config_loader import (
     tf_allowlist_from_cfg,
     preview_tf_allowlist_from_cfg,
@@ -28,7 +29,7 @@ from runtime.store.redis_snapshot import (
     build_redis_snapshot_writer,
 )
 from runtime.store.redis_spec import resolve_redis_spec
-from runtime.store.ssot_jsonl import JsonlAppender
+from runtime.store.ssot_jsonl import AnchorRuleMissingError, JsonlAppender
 
 Logging = logging.getLogger("uds")
 
@@ -562,7 +563,7 @@ class UnifiedDataStore:
         if spec.since_open_ms is None and spec.to_open_ms is None:
             ram_bars = self._ram.get_window(symbol, tf_s, spec.limit)
             if ram_bars is not None:
-                ram_bars, geom = _ensure_sorted_dedup(ram_bars, tf_ms=tf_s * 1000)
+                ram_bars, geom = _ensure_sorted_dedup(ram_bars)
                 if geom is not None:
                     _mark_geom_fix(meta, warnings, geom, source="ram", tf_s=tf_s)
                 # P1-unified: якщо RAM має менше барів ніж запитано і disk доступний,
@@ -797,7 +798,29 @@ class UnifiedDataStore:
                 self._commit_drop_last_log_ts = now_mono
             return CommitResult(False, drop_reason, False, False, False, warnings)
 
-        ssot_written = self._append_to_disk(bar, ssot_write_ts_ms, warnings)
+        try:
+            ssot_written = self._append_to_disk(bar, ssot_write_ts_ms, warnings)
+        except (OffSeasonGridError, AnchorRuleMissingError) as exc:
+            # ADR-0095 §3.3: писар відкинув H4/D1 поза сезонною сіткою або без правила якоря. Redis і pubsub не
+            # пишуться — бар, якого немає на диску, інакше жив би в UI до рестарту (split-brain); watermark і RAM теж.
+            reject_reason = "anchor_rule_missing"
+            expected_open_ms: Optional[int] = None
+            if isinstance(exc, OffSeasonGridError):
+                reject_reason, expected_open_ms = "bar_off_season_grid", exc.expected_open_ms
+            _OBS.inc_writer_drop(reject_reason, bar.tf_s)
+            warnings.append(reject_reason)
+            Logging.warning(
+                "UDS: commit_final_bar відмова reason=%s symbol=%s tf_s=%s open_ms=%s expected_open_ms=%s src=%s "
+                "— Redis/pubsub не записано | %s",
+                reject_reason,
+                bar.symbol,
+                bar.tf_s,
+                bar.open_time_ms,
+                expected_open_ms,
+                bar.src,
+                exc,
+            )
+            return CommitResult(False, reject_reason, False, False, False, warnings)
         redis_written = self._write_redis_snapshot(bar, warnings)
         updates_published = self._publish_update(bar, warnings)
         degraded_reasons: list[str] = []
@@ -1062,7 +1085,7 @@ class UnifiedDataStore:
                 if source == "preview_unavailable":
                     source = "preview_curr"
 
-        bars, geom = _ensure_sorted_dedup(bars, tf_ms=tf_s * 1000)
+        bars, geom = _ensure_sorted_dedup(bars)
         if geom is not None:
             _mark_geom_fix(meta, warnings, geom, source=source, tf_s=tf_s)
         lwc = self._bars_to_lwc(bars)
@@ -1456,6 +1479,8 @@ class UnifiedDataStore:
             _ = ssot_write_ts_ms
             self._jsonl.append(bar)
             return True
+        except (OffSeasonGridError, AnchorRuleMissingError):
+            raise  # відмова бару, а не збій диска: рішення про Redis/pubsub — у commit_final_bar
         except Exception as exc:
             warnings.append("ssot_write_failed")
             Logging.warning(
@@ -1579,7 +1604,7 @@ class UnifiedDataStore:
             use_tail=use_tail,
         )
         if geom is None:
-            bars, geom = _ensure_sorted_dedup(bars, tf_ms=spec.tf_s * 1000)
+            bars, geom = _ensure_sorted_dedup(bars)
         if geom is not None:
             _mark_geom_fix(
                 meta,
@@ -1750,7 +1775,7 @@ class UnifiedDataStore:
             )
             return None
 
-        bars, geom = _ensure_sorted_dedup(bars, tf_ms=spec.tf_s * 1000)
+        bars, geom = _ensure_sorted_dedup(bars)
         if geom is not None:
             _mark_geom_fix(
                 meta, warnings, geom, source=source or "redis_tail", tf_s=spec.tf_s
@@ -1944,16 +1969,27 @@ class UnifiedDataStore:
         }
 
 
-def _load_cfg(config_path: str) -> dict[str, Any]:
+def _load_cfg(config_path: str, *, strict: bool) -> dict[str, Any]:
+    """Config для `build_uds_from_config`.
+
+    strict (писар SSOT): нечитабельний config або JSON не-об'єкт — ValueError, старт відмовляє. Інакше писар стартував
+    би з {} і будував компоненти з дефолтів поза config. Читач деградує до {} з WARNING.
+    """
     try:
         with open(config_path, encoding="utf-8") as f:
             data = json.load(f)
-        if not isinstance(data, dict):
-            return {}
-        return data
-    except Exception:
-        Logging.debug("UDS_LOAD_CFG_FAILED path=%s", config_path, exc_info=True)
+    except (OSError, ValueError) as exc:
+        if strict:
+            raise ValueError("UDS_CONFIG_UNREADABLE path=%s err=%s" % (config_path, exc)) from exc
+        Logging.warning("UDS_CONFIG_UNREADABLE path=%s err=%s — читач стартує з порожнім config", config_path, exc)
         return {}
+    if not isinstance(data, dict):
+        if strict:
+            raise ValueError("UDS_CONFIG_NOT_OBJECT path=%s type=%s" % (config_path, type(data).__name__))
+        Logging.warning("UDS_CONFIG_NOT_OBJECT path=%s type=%s — читач стартує з порожнім config",
+                        config_path, type(data).__name__)
+        return {}
+    return data
 
 
 def _get_open_ms(bar: dict[str, Any]) -> Optional[int]:
@@ -1971,8 +2007,12 @@ def _get_open_ms(bar: dict[str, Any]) -> Optional[int]:
 
 def _ensure_sorted_dedup(
     bars: list[dict[str, Any]],
-    tf_ms: int = 0,
 ) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
+    """Сортування за open_time_ms і дедуп записів ОДНОГО ключа (ADR-0094).
+
+    Бари з різними open_ms не зливаються: читач сітку не фільтрує (ADR-0095 §3.3). Колишній near-dedup D1 (поріг
+    2 год, «DST-джитер 21:00/22:00») тихо ховав D1 поза сезонною сіткою; їх тепер ловлять писар і health.
+    """
     if len(bars) <= 1:
         return bars, None
 
@@ -1986,26 +2026,8 @@ def _ensure_sorted_dedup(
             needs_fix = True
             break
         prev_open = open_ms
-
-    # Near-dedup threshold: бари ближче ніж tf_ms // 12
-    # (2h для D1) — anchor jitter від DST / broker convention.
-    near_threshold = tf_ms // 12 if tf_ms >= 86400000 else 0
-    if not needs_fix and near_threshold <= 0:
+    if not needs_fix:
         return bars, None
-
-    # Навіть якщо порядок OK, перевіримо near-dupes для HTF
-    if not needs_fix and near_threshold > 0:
-        prev_open = None
-        for bar in bars:
-            open_ms = _get_open_ms(bar)
-            if open_ms is None:
-                continue
-            if prev_open is not None and 0 < (open_ms - prev_open) < near_threshold:
-                needs_fix = True
-                break
-            prev_open = open_ms
-        if not needs_fix:
-            return bars, None
 
     sorted_bars = sorted(bars, key=lambda x: _get_open_ms(x) or 0)
     deduped: dict[int, dict[str, Any]] = {}
@@ -2024,25 +2046,6 @@ def _ensure_sorted_dedup(
         dropped += 1
 
     result = [deduped[k] for k in sorted(deduped.keys())]
-
-    # Near-dedup: злити бари ближче ніж near_threshold
-    # (DST anchor jitter: history@21:00 vs derived@22:00)
-    if near_threshold > 0 and len(result) > 1:
-        merged: list[dict[str, Any]] = [result[0]]
-        for bar in result[1:]:
-            prev = merged[-1]
-            prev_ms = _get_open_ms(prev) or 0
-            cur_ms = _get_open_ms(bar) or 0
-            if 0 < (cur_ms - prev_ms) < near_threshold:
-                # Члени — РІЗНІ open_ms (DST-джитер якоря), а не записи одного ключа: окреме вужче
-                # правило (complete, src; нічия -> ранній), бо partial і ts доживають не до всіх
-                # шляхів читання. Сезонний вибір якоря — ADR-0092.
-                merged[-1] = choose_better_near_duplicate(prev, bar)
-                dropped += 1
-            else:
-                merged.append(bar)
-        result = merged
-
     geom = {"sorted": True, "dedup_dropped": dropped}
     return result, geom
 
@@ -2300,7 +2303,7 @@ def build_uds_from_config(
     writer_components: bool = False,
 ) -> UnifiedDataStore:
     global _REDIS_SPEC_BOOT_LOGGED
-    cfg = _load_cfg(config_path)
+    cfg = _load_cfg(config_path, strict=writer_components)
 
     if not _REDIS_SPEC_BOOT_LOGGED:
         _REDIS_SPEC_BOOT_LOGGED = True
