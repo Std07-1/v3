@@ -185,7 +185,8 @@ v3/
 │   ├── run_exit_gates.py  # Quality gates runner
 │   ├── exit_gates/        # 29 AST gates (dependency, contract, geometry, dual_python)
 │   ├── rebuild_from_m1.py # Canonical rebuild all derived TFs
-│   ├── repair/            # htf_rebuild, htf_tail_sync, repair_m1_gaps
+│   ├── repair/            # repair_m1_gaps, dedup_jsonl_lastwins, jsonl_rewrite
+│   ├── _archive/          # виведені з ужитку (htf_rebuild/htf_tail_sync з FXCM, ADR-0095 S5b)
 │   └── diag/              # classify gaps, clear redis, disk_max_open_ms
 │
 ├── tests/                 # pytest suite: SMC, UDS, WS, ingest, supervisor rails
@@ -345,9 +346,7 @@ python -m pytest tests/test_s*_*.py -v        # SSOT invariants
 | `test_app_main_supervisor.py` | Supervisor lifecycle, restart policy |
 | `test_cascade_no_dupes.py` | Derive cascade dedup |
 | `test_hardcode_scan.py` | Hardcoded values scan |
-| `test_htf_rebuild.py` | HTF rebuild correctness |
 | `test_htf_running_accumulator.py` | HTF running accumulator |
-| `test_htf_tail_sync.py` | HTF tail synchronization |
 | `test_m1_flat_bar_policy.py` | M1 flat bar filtering policy |
 | `test_m1_ingestion_ipc.py` | M1 ingestion IPC (broker sidecar) |
 | `test_market_calendar.py` | Market calendar breaks/sessions |

@@ -737,9 +737,8 @@ v3/
 │   │   ├── manifest.json          # реєстр gates (29 gate-модулів)
 │   │   └── gates/                 # gate_*.py (29 файлів)
 │   ├── repair/
-│   │   ├── htf_rebuild_from_fxcm.py  # controlled H4/D1 rebuild from FXCM raw
-│   │   ├── htf_tail_sync_from_fxcm.py # tail sync from FXCM
 │   │   └── repair_m1_gaps.py         # M1 gap repair utility
+│   ├── _archive/                     # виведені з ужитку: htf_rebuild/htf_tail_sync з FXCM (ADR-0095 S5b)
 │   └── diag/
 │       ├── classify_h1_gaps.py    # класифікація H1 gap-ів
 │       ├── classify_m5_gaps.py    # класифікація M5 gap-ів

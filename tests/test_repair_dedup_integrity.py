@@ -4,7 +4,8 @@
 тихо небезпечними: `dedup_jsonl_lastwins` мовчки викидав нерозбірні рядки й пересеріалізовував JSON
 переможців; `dedup_derived_jsonl` обирав переможця власним рангом джерела, не бачачи partial;
 `htf_rebuild_from_fxcm.rewrite_range` при перепису всього TF лишав ПЕРШИЙ запис дубліката і викидав
-нерозбірні рядки з усієї історії; replay брав останній рядок. Кожен міг лишити на диску (або відтворити)
+нерозбірні рядки з усієї історії (інструмент виведено з ужитку в ADR-0095 S5b — `tools/_archive/`, його
+тести прибрано разом з ним); replay брав останній рядок. Кожен міг лишити на диску (або відтворити)
 не той бар, що показують читачі.
 
 Адверсаріальне ревʼю перших фіксів додало ще три класи: відмова ремонту губилась у «0 прибрано» і rc=0;
@@ -26,13 +27,10 @@ from tools import dedup_derived_jsonl
 from tools.rebuild_from_m1 import DedupRefused, dedup_derived_in_ranges
 from tools.repair import dedup_jsonl_lastwins as dedup
 from tools.repair import jsonl_rewrite
-from tools.repair.htf_rebuild_from_fxcm import _read_all_bars_raw, rewrite_range
 from tools.repair.jsonl_rewrite import read_lines
 
 OPEN_MS = 1_774_974_960_000  # 2026-03-31 16:36 UTC
 TF_MS = 180_000
-H4_MS = 14_400_000
-H4_BASE = 1_774_972_800_000  # 2026-03-31 16:00 UTC, на сітці H4
 DAY_MS = 86_400_000
 
 
@@ -241,56 +239,7 @@ def test_rebuild_dedup_on_finish_fails_loud_after_deduping_the_rest(tmp_path, ca
     assert len(read_lines(str(fine))) == 1
 
 
-# ── htf_rebuild_from_fxcm.rewrite_range ──────────────────────────────────────
-def _h4(marker, open_ms, **kw):
-    return _bar(marker, open_ms=open_ms, tf_s=14400, **kw)
-
-
-@pytest.mark.parametrize("order", sorted(WHOLE_VS_PARTIAL))
-def test_htf_rewrite_range_keeps_what_readers_show_outside_the_range(tmp_path, order):
-    """Перепис TF переписує ВСЮ історію: дублікат поза діапазоном — тим самим вибирачем, і на диску один запис."""
-    tf_dir = tmp_path / "XAU_USD" / "tf_14400"
-    group = WHOLE_VS_PARTIAL[order](open_ms=H4_BASE, src="history", tf_s=14400)
-    _write(tf_dir, [json.dumps(b) for b in group], name="part-20260331.jsonl")
-    expected = _disk_reader_markers(tf_dir)[H4_BASE]
-    fxcm = [_h4("fxcm", H4_BASE + H4_MS, src="history")]
-    result = rewrite_range(str(tmp_path), "XAU/USD", 14400, fxcm, H4_BASE + H4_MS, H4_BASE + H4_MS, dry_run=False)
-    assert result["status"] == "committed" and result["dup_removed"] == 1
-    assert _disk_reader_markers(tf_dir) == {H4_BASE: expected, H4_BASE + H4_MS: "fxcm"}
-    assert expected == "whole"
-    on_disk = _read_all_bars_raw(str(tf_dir))
-    assert len(on_disk) == len({b["open_time_ms"] for b in on_disk}), "дублікати не мусять лишитись на диску"
-
-
-def test_htf_rewrite_range_leaves_disk_bars_outside_an_explicit_range(tmp_path):
-    """Батч FXCM ширший за явне вікно: бари диска поза вікном оператор міняти не просив."""
-    tf_dir = tmp_path / "XAU_USD" / "tf_14400"
-    disk = [_h4("disk_%d" % i, H4_BASE + i * H4_MS, src="history") for i in range(4)]
-    _write(tf_dir, [json.dumps(b) for b in disk], name="part-20260331.jsonl")
-    fxcm = [_h4("fxcm_%d" % i, H4_BASE + i * H4_MS, src="history") for i in range(5)]
-    lo, hi = H4_BASE + H4_MS, H4_BASE + 2 * H4_MS
-    result = rewrite_range(str(tmp_path), "XAU/USD", 14400, fxcm, lo, hi, dry_run=False)
-    assert result["status"] == "committed"
-    markers = {b["open_time_ms"]: b["marker"] for b in _read_all_bars_raw(str(tf_dir))}
-    assert [markers[H4_BASE + i * H4_MS] for i in range(5)] == ["disk_0", "fxcm_1", "fxcm_2", "disk_3", "fxcm_4"]
-    assert (result["kept_outside"], result["fxcm_inserted"], result["dup_removed"]) == (2, 3, 2)
-
-
-@pytest.mark.parametrize("bad", ['{"open_time_ms": 17749', json.dumps({"no_key": 1})])
-def test_htf_rewrite_range_refuses_a_tf_with_an_unparsable_line(tmp_path, bad):
-    """Перепис TF пише файли лише з розібраних барів — нерозбірний рядок раніше зникав з усієї історії.
-
-    Відмова — статус, а не виняток: CLI рахує її як помилку валідації, оновлює Redis для вже закомічених
-    TF і пише звіт, замість обірватись посеред прогону.
-    """
-    tf_dir = tmp_path / "XAU_USD" / "tf_14400"
-    path = _write(tf_dir, [json.dumps(_h4("a", H4_BASE)), bad, json.dumps(_h4("b", H4_BASE + H4_MS))])
-    before = path.read_bytes()
-    result = rewrite_range(str(tmp_path), "XAU/USD", 14400, [], H4_BASE, H4_BASE, dry_run=False)
-    assert result["status"] == "validation_error" and "HTF_REWRITE_UNPARSABLE" in result["error"]
-    assert path.read_bytes() == before
-
-
+# ── replay ───────────────────────────────────────────────────────────────────
 def _cross_file_tie(tf_dir: Path, open_ms: int, tf_s: int):
     """Аномалія, якої не створює жоден writer: той самий ключ у двох part-файлах, повна нічия."""
     _write(tf_dir, [json.dumps(_bar("own_day_file", open_ms=open_ms, src="history", tf_s=tf_s))],
@@ -299,17 +248,6 @@ def _cross_file_tie(tf_dir: Path, open_ms: int, tf_s: int):
            name="part-20260401.jsonl")
 
 
-def test_htf_rewrite_range_cross_file_tie_matches_readers(tmp_path):
-    tf_dir = tmp_path / "XAU_USD" / "tf_14400"
-    key = H4_BASE  # 2026-03-31 — «своя» доба ключа саме part-20260331
-    _cross_file_tie(tf_dir, key, 14400)
-    shown = _disk_reader_markers(tf_dir)[key]
-    far = H4_BASE - 1000 * H4_MS
-    rewrite_range(str(tmp_path), "XAU/USD", 14400, [], far, far, dry_run=False)
-    assert _disk_reader_markers(tf_dir)[key] == shown
-
-
-# ── replay ───────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("order", sorted(WHOLE_VS_PARTIAL))
 def test_replay_replays_the_candle_the_chart_shows(tmp_path, order):
     """Replay відтворює свічку графіка, а не останній чи перший рядок (котрийсь із них — partial)."""

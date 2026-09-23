@@ -810,4 +810,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Виведено з ужитку (ADR-0095 S5b): H4/D1 будуються лише з M1, нативні H4/D1 брокера в SSOT не пишуться
+    raise SystemExit("HTF_TOOL_RETIRED htf_rebuild_from_fxcm — див. tools/_archive/README.md (ADR-0095 S5b)")
