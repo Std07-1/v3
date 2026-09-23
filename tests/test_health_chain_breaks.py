@@ -354,4 +354,4 @@ def test_v3_baseline_without_chain_breaks_gives_no_false_regression():
     """Baseline v3 поля не має: вимір пропускається, вердикти через межу v4 не порівнюються (rc=3, не відкат)."""
     res = compare_reports(_report(None, measure_version=3), _report({"inner": 70, "at_gap": 147}))
     assert res.ok is True and res.verdicts_comparable is False
-    assert res.measure_versions == (3, HEALTH_MEASURE_VERSION) and HEALTH_MEASURE_VERSION == 4
+    assert res.measure_versions == (3, HEALTH_MEASURE_VERSION) and HEALTH_MEASURE_VERSION == 5

@@ -29,6 +29,12 @@ config інструмент не читає. Символ із невиміря�
 Версія виміру 4 (ADR-0101 C4): рядок M1 має `chain_breaks` — розриви open ≠ close попереднього видимого бару по всій
 історії, окремо без діри (`inner`, YELLOW) і на межі діри (`at_gap`), із найновішими семплами. Відкриття сесії, яке
 брокер пропускає (`session_open_grace_min` групи календаря: метали — 22:01), діри не доводить — розрив на ньому `inner`.
+
+Версія виміру 5 (ADR-0095 S6a): торговість хвилини — сезонний календар групи (`calendar_for_symbol`), а не плоскі
+поля (= літній розклад). Узимку перерва XAU 22:00–23:00: зимове відкриття сесії — `inner`, а не `at_gap`, дірки й вік
+зимових вікон рахуються за зимовим розкладом. Група без сезонних блоків чи з невалідним розкладом — RED
+`calendar_config_invalid`, символ без групи — RED `calendar_group_missing`. Baseline v4 проти v5 не порівнює виміри,
+залежні від календаря (дірки, вік, розриви ланцюга), і дає rc=3, а не хибний відкат.
 """
 from __future__ import annotations
 
@@ -64,7 +70,7 @@ from core.health import (
 )
 from core.model.bars import CandleBar
 from core.session_anchor import season_label
-from runtime.ingest.tick_common import resolve_symbol_calendars
+from runtime.ingest.tick_common import calendar_for_symbol
 
 _log = logging.getLogger("symbol_health")
 
@@ -142,16 +148,20 @@ def check_symbol(
     ``anchor_rule_for_symbol`` — резолвер правила якоря H4/D1 (``htf_anchor_rule_resolver``, ADR-0095),
     збудований раз на прогін.
     """
-    calendars, rejected = resolve_symbol_calendars(cfg, [symbol], where="symbol_health_check")
-    if rejected:
-        return {"symbol": symbol, "grade": "RED", "reasons": ["calendar_group_missing"], "tfs": {}}
+    try:
+        # Розклад сезону кожної хвилини (ADR-0095 §3.5): вимір іде по всій історії, тож і по зимових вікнах
+        calendar = calendar_for_symbol(cfg, symbol)
+    except ValueError as exc:
+        group_missing = str(exc).startswith("CALENDAR_GROUP_MISSING")
+        reason = "calendar_group_missing" if group_missing else "calendar_config_invalid"
+        _log.error("HEALTH_CALENDAR_UNAVAILABLE symbol=%s reason=%s err=%s", symbol, reason, exc)
+        return {"symbol": symbol, "grade": "RED", "reasons": [reason], "tfs": {}}
     try:
         rule = anchor_rule_for_symbol(symbol)
     except ValueError as exc:
         # Група календаря без виміряної сітки H4/D1 (ADR-0095 §8.4): міряти нема чим — не тихий якір.
         _log.error("HEALTH_HTF_ANCHOR_RULE_MISSING symbol=%s err=%s", symbol, exc)
         return {"symbol": symbol, "grade": "RED", "reasons": ["htf_anchor_rule_missing"], "tfs": {}}
-    calendar = calendars[symbol]
     is_trading = calendar.is_trading_minute
     # Невалідний ключ групи — ValueError з назвою групи (config-помилка на весь прогін, не вердикт символу)
     session_open_grace_min = session_open_grace_resolver(cfg)(symbol)
@@ -358,6 +368,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         if cmp_res.grid_skipped_measures:
             print("  H4/D1 через межу v3 (інша сітка) НЕ порівнювались: %s; решта чисел H4/D1 (бари, дублікати, "
                   "close, OHLC) — порівнювались." % ", ".join(cmp_res.grid_skipped_measures))
+        if cmp_res.calendar_skipped_measures:
+            print("  Через межу v5 (сезонний календар торговості) НЕ порівнювались на всіх TF: %s."
+                  % ", ".join(cmp_res.calendar_skipped_measures))
         print("  перевірено символів: %s" % (", ".join(cmp_res.compared_symbols) or "-"))
         if cmp_res.new_symbols:
             print("  нових (не в baseline, не перевіряються): %s" % ", ".join(cmp_res.new_symbols))
