@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from core.config_loader import pick_config_path, load_system_config
 from core.model.bars import CandleBar, ms_to_utc_dt
+from core.session_anchor import D1_S, H4_S, htf_bucket_start_ms
 from env_profile import load_env_secrets
 from runtime.ingest.derive_engine import DeriveEngine, build_derive_engine
 from runtime.ingest.market_calendar import MarketCalendar
@@ -1205,6 +1206,21 @@ class M1PollerRunner:
             )
             bootstrap_degraded.append("redis_priming: %s" % exc)
 
+        # 1b. Рейка ADR-0095 S4a2: останній H4/D1 на диску поза сезонною сіткою = код задеплоєно без міграції
+        #     даних (§3.8). Гучно, не фатально: деривація пише нову сітку, писар відкидає стару.
+        if self._derive_engine is not None:
+            try:
+                off_grid = self._htf_grid_mismatch_on_disk(symbols)
+                if off_grid:
+                    logging.warning(
+                        "BOOTSTRAP_DEGRADED phase=htf_grid_mismatch_on_disk bars=%s (ADR-0095 §3.8: дані не мігровано)",
+                        ",".join(off_grid),
+                    )
+                    bootstrap_degraded.append("htf_grid_mismatch_on_disk: %s" % ",".join(off_grid))
+            except Exception as exc:
+                logging.warning("BOOTSTRAP_DEGRADED phase=htf_grid_check err=%s", exc)
+                bootstrap_degraded.append("htf_grid_check: %s" % exc)
+
         # 2. Watermark warmup — читаємо tail до initial_backfill_m1_bars для точного
         #    підрахунку bars_on_disk, який використовується у Phase 2.5 trigger
         try:
@@ -1371,6 +1387,17 @@ class M1PollerRunner:
                 "M1_POLLER_BOOTSTRAP_DEGRADED phases=%s",
                 bootstrap_degraded,
             )
+
+    def _htf_grid_mismatch_on_disk(self, symbols: List[str]) -> List[str]:
+        """Останні H4/D1 на диску, що не стоять на сезонній сітці правила символу: `symbol:tf_s:open_ms`."""
+        mismatches: List[str] = []
+        for sym in symbols:
+            rule = self._derive_engine.anchor_rule_for(sym)
+            for tf_s in (H4_S, D1_S):
+                tail = self._uds.read_tail_candles(sym, tf_s, 1)
+                if tail and htf_bucket_start_ms(tail[-1].open_time_ms, tf_s, rule) != tail[-1].open_time_ms:
+                    mismatches.append("%s:%d:%d" % (sym, tf_s, tail[-1].open_time_ms))
+        return mismatches
 
     def _do_tail_catchup(self) -> None:
         """Tail catchup для всіх символів (потребує FXCM сесії)."""

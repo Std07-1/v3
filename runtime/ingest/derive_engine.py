@@ -218,6 +218,10 @@ class DeriveEngine:
             "uds_registered": len(self._uds_by_symbol),
         }
 
+    def anchor_rule_for(self, symbol: str) -> str:
+        """Правило якоря H4/D1 символу (ADR-0095); KeyError — символ не цього рушія."""
+        return self._anchor_rules[symbol]
+
     def check_overdue_buckets(self, now_ms: int) -> List[CandleBar]:
         """Перевірка та деривація прострочених bucket'ів (timer-based safety net).
 
