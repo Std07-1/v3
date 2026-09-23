@@ -164,6 +164,23 @@ def _watermark_drop_reason(open_ms: int, wm_open_ms: Optional[int]) -> Optional[
     return None
 
 
+# Коди відмови писаря SSOT: перший токен ValueError з JsonlAppender (core.model.bars.assert_invariants,
+# SSOT_PATH_TRAVERSAL). Обмежений набір міток writer_drops; невідомий ValueError — "ssot_value_error" (текст — у WARNING).
+_WRITER_REJECT_CODES = frozenset(
+    {"bar_bucket_misaligned", "bar_close_time_invalid", "derived_1m_forbidden", "ssot_path_traversal"}
+)
+
+
+def _writer_reject_reason(exc: ValueError) -> str:
+    """Причина відмови писаря SSOT для CommitResult і writer_drops (ADR-0095 §3.3)."""
+    if isinstance(exc, OffSeasonGridError):
+        return "bar_off_season_grid"
+    if isinstance(exc, AnchorRuleMissingError):
+        return "anchor_rule_missing"
+    code = str(exc).split(" ", 1)[0].lower()
+    return code if code in _WRITER_REJECT_CODES else "ssot_value_error"
+
+
 def _mark_degraded(meta: dict[str, Any], reason: str) -> None:
     ext = meta.setdefault("extensions", {})
     if isinstance(ext, dict):
@@ -800,13 +817,12 @@ class UnifiedDataStore:
 
         try:
             ssot_written = self._append_to_disk(bar, ssot_write_ts_ms, warnings)
-        except (OffSeasonGridError, AnchorRuleMissingError) as exc:
-            # ADR-0095 §3.3: писар відкинув H4/D1 поза сезонною сіткою або без правила якоря. Redis і pubsub не
-            # пишуться — бар, якого немає на диску, інакше жив би в UI до рестарту (split-brain); watermark і RAM теж.
-            reject_reason = "anchor_rule_missing"
-            expected_open_ms: Optional[int] = None
-            if isinstance(exc, OffSeasonGridError):
-                reject_reason, expected_open_ms = "bar_off_season_grid", exc.expected_open_ms
+        except ValueError as exc:
+            # ADR-0095 §3.3: писар SSOT відкинув бар (сезонна сітка, правило якоря, геометрія I2, derived M1, шлях).
+            # Redis, pubsub і preview ring не пишуться — бар, якого немає на диску, інакше жив би в UI до рестарту
+            # (split-brain); watermark і RAM теж не рухаються.
+            reject_reason = _writer_reject_reason(exc)
+            expected_open_ms = exc.expected_open_ms if isinstance(exc, OffSeasonGridError) else None
             _OBS.inc_writer_drop(reject_reason, bar.tf_s)
             warnings.append(reject_reason)
             Logging.warning(
@@ -1479,8 +1495,8 @@ class UnifiedDataStore:
             _ = ssot_write_ts_ms
             self._jsonl.append(bar)
             return True
-        except (OffSeasonGridError, AnchorRuleMissingError):
-            raise  # відмова бару, а не збій диска: рішення про Redis/pubsub — у commit_final_bar
+        except ValueError:
+            raise  # відмова бару писарем, а не збій диска: рішення про Redis/pubsub — у commit_final_bar
         except Exception as exc:
             warnings.append("ssot_write_failed")
             Logging.warning(
