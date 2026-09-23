@@ -246,6 +246,63 @@ def test_overdue_bar_already_on_disk_still_cascades(reason, caplog):
     assert "OVERDUE_DERIVE_REJECT" not in caplog.text
 
 
+# ── Відмова писаря в живому каскаді: те саме правило, що в overdue ───────────────────────────────────────────
+
+
+def _feed_live_quarter(engine: DeriveEngine) -> List[CandleBar]:
+    """15 M1 через on_bar (живий шлях): тригери M5 0:00 / 5:00 / 10:00, а M15 0:00 — лише з каскаду M5."""
+    return [b for i in range(15) for b in engine.on_bar(_bar(60, i * 60_000))]
+
+
+def _m5_refused(reason: str):
+    """Писар відповідає reason на кожен M5, а M15 приймає."""
+    return lambda bar: _result(True) if bar.tf_s == 900 else _result(False, reason)
+
+
+def _live_m5_m15_engine(uds) -> DeriveEngine:
+    engine = DeriveEngine(symbols=[SYM], anchor_rules={SYM: FXCM}, cascade_tfs_s={300, 900}, commit_tfs_s={300, 900})
+    engine.register_symbol_uds(SYM, uds)
+    return engine
+
+
+def test_live_reject_is_not_cascaded_and_retried_by_overdue(caplog):
+    uds = MagicMock()
+    uds.commit_final_bar.side_effect = _m5_refused("ssot_write_failed")  # збій диска на M5; M15 прийняв би
+    engine = _live_m5_m15_engine(uds)
+
+    with caplog.at_level(logging.WARNING, logger="derive_engine"):
+        committed = _feed_live_quarter(engine)
+
+    # M15 не зібрано з трьох M5, яких нема на диску
+    assert committed == []
+    written = [(c.args[0].tf_s, c.args[0].open_time_ms) for c in uds.commit_final_bar.call_args_list]
+    assert written == [(300, 0), (300, 300_000), (300, 600_000)]
+    assert engine.stats()["rejected"] == 3
+    assert caplog.text.count("DERIVE_REJECT tf=300") == 3
+
+    # Писар одужав: overdue повторює відкинуті M5 (їх не позначено побудованими) і лише тоді будує M15
+    uds.commit_final_bar.reset_mock()
+    uds.commit_final_bar.side_effect = None
+    uds.commit_final_bar.return_value = _result(True)
+    committed = engine.check_overdue_buckets(now_ms=20 * 60_000)
+
+    assert sorted((b.tf_s, b.open_time_ms) for b in committed) == [(300, 0), (300, 300_000), (300, 600_000), (900, 0)]
+
+
+@pytest.mark.parametrize("reason", ["stale", "duplicate"])
+def test_live_bar_already_on_disk_still_cascades_and_is_not_a_reject(reason, caplog):
+    uds = MagicMock()
+    uds.commit_final_bar.side_effect = _m5_refused(reason)
+    engine = _live_m5_m15_engine(uds)
+
+    with caplog.at_level(logging.WARNING, logger="derive_engine"):
+        committed = _feed_live_quarter(engine)
+
+    assert [(b.tf_s, b.open_time_ms) for b in committed] == [(900, 0)]
+    assert engine.stats()["rejected"] == 0  # та сама семантика лічильника, що в overdue
+    assert "DERIVE_REJECT" not in caplog.text
+
+
 # ── replay: config і правило перевіряються ДО очищення namespace Redis ──────────────────────────────────────
 
 

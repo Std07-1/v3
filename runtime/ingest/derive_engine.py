@@ -76,7 +76,7 @@ class DeriveEngine:
     - I0: core/ logic (derive_bar, derive_triggers) — pure, без I/O.
     - I1: запис тільки через UDS.commit_final_bar() (src="derived").
     - I3: final > preview зберігається (UDS watermark).
-    - I5: reject → loud warning (не silent fallback).
+    - I5: відмова писаря (крім stale/duplicate) → loud warning + stats.rejected, без каскаду; бакет повторює overdue.
     """
 
     def __init__(
@@ -453,16 +453,19 @@ class DeriveEngine:
                             symbol,
                             derived.open_time_ms,
                         )
-                    else:
+                    elif result.reason not in ("stale", "duplicate"):
+                        # Писар відмовив (I5), як в overdue: не каскадуємо — вищий TF не будується з бару, якого
+                        # нема на диску; бакет не потрапляє в буфер, тож check_overdue_buckets спробує його знову
                         self._stats_rejected += 1
-                        if result.reason not in ("stale", "duplicate"):
-                            log.warning(
-                                "DERIVE_REJECT tf=%d sym=%s open=%d reason=%s",
-                                target_tf_s,
-                                symbol,
-                                derived.open_time_ms,
-                                result.reason,
-                            )
+                        log.warning(
+                            "DERIVE_REJECT tf=%d sym=%s open=%d reason=%s",
+                            target_tf_s,
+                            symbol,
+                            derived.open_time_ms,
+                            result.reason,
+                        )
+                        continue
+                    # stale/duplicate — бар уже є на диску: каскад продовжуємо, у rejected не рахуємо
                 else:
                     self._stats_no_uds += 1
 
