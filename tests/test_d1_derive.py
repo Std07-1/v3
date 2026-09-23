@@ -4,10 +4,9 @@
 
 Перевіряє:
 1. D1 (86400) є в DERIVE_CHAIN, DERIVE_ORDER, DERIVE_SOURCE.
-2. resolve_cascade_anchor_s() (легасі, живе до S5c ADR-0095: gate_d1_anchor_alignment) — routing по TF.
-3. derive_triggers() на правилі якоря ADR-0095: D1 і H4 взимку на одній сітці 22:00 (79200).
-4. derive_bar() для D1 з ~1440 M1 барів (boundary-tolerant).
-5. Невідоме правило якоря — гучна відмова, а не тихий якір.
+2. derive_triggers() на правилі якоря ADR-0095: D1 і H4 взимку на одній сітці 22:00 (79200).
+3. derive_bar() для D1 з ~1440 M1 барів (boundary-tolerant).
+4. Невідоме правило якоря — гучна відмова, а не тихий якір.
 
 Рівень: core.
 """
@@ -23,7 +22,6 @@ from core.derive import (
     MAX_MID_SESSION_GAPS_BY_TF,
     derive_bar,
     derive_triggers,
-    resolve_cascade_anchor_s,
 )
 from core.model.bars import CandleBar
 from core.session_anchor import RULE_NY_CLOSE_US_DST, htf_anchor_offset_s
@@ -32,7 +30,6 @@ from core.session_anchor import RULE_NY_CLOSE_US_DST, htf_anchor_offset_s
 # ---------------------------------------------------------------------------
 # Константи для тестування
 # ---------------------------------------------------------------------------
-H4_ANCHOR = 82800   # легасі-ключ 23:00 UTC — лише для resolve_cascade_anchor_s
 D1_ANCHOR = 79200   # 22:00 UTC = 17:00 Нью-Йорка взимку (EST)
 FXCM = RULE_NY_CLOSE_US_DST
 M1_TF_S = 60
@@ -91,38 +88,6 @@ class TestDeriveChainD1(unittest.TestCase):
         """D1 має підвищений ліміт gap'ів."""
         self.assertIn(D1_TF_S, MAX_MID_SESSION_GAPS_BY_TF)
         self.assertGreaterEqual(MAX_MID_SESSION_GAPS_BY_TF[D1_TF_S], 10)
-
-
-class TestResolveCascadeAnchor(unittest.TestCase):
-    """resolve_cascade_anchor_s() — централізований anchor routing."""
-
-    def test_d1_returns_d1_anchor(self) -> None:
-        self.assertEqual(
-            resolve_cascade_anchor_s(86400, H4_ANCHOR, D1_ANCHOR),
-            D1_ANCHOR,
-        )
-
-    def test_h4_returns_h4_anchor(self) -> None:
-        self.assertEqual(
-            resolve_cascade_anchor_s(14400, H4_ANCHOR, D1_ANCHOR),
-            H4_ANCHOR,
-        )
-
-    def test_h1_returns_zero(self) -> None:
-        self.assertEqual(
-            resolve_cascade_anchor_s(3600, H4_ANCHOR, D1_ANCHOR),
-            0,
-        )
-
-    def test_m5_returns_zero(self) -> None:
-        self.assertEqual(
-            resolve_cascade_anchor_s(300, H4_ANCHOR, D1_ANCHOR),
-            0,
-        )
-
-    def test_defaults_are_zero(self) -> None:
-        self.assertEqual(resolve_cascade_anchor_s(86400), 0)
-        self.assertEqual(resolve_cascade_anchor_s(14400), 0)
 
 
 class TestDeriveTriggerD1(unittest.TestCase):

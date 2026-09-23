@@ -179,20 +179,22 @@
 
 ---
 
-## Day Anchors (для HTF bucket alignment)
+## Якір H4/D1 (`htf_anchor`, ADR-0095)
 
-> **DST-залежні значення!** Ці якорі змінюються при переході літній/зимовий час.
-> Повна процедура переходу: [`docs/runbooks/dst_transition.md`](../runbooks/dst_transition.md)
+> Якір — функція дати, а не число в config: сітка H4/D1 сама переходить через вихідні DST, ранбук
+> [`dst_transition.md`](../runbooks/dst_transition.md) якорів більше не перемикає.
 
-| Ключ | Тип | Літо (EDT) | Зима (EST) | Опис |
-| --- | --- | --- | --- | --- |
-| `day_anchor_offset_s` | int | **79200** (22:00 UTC) | **82800** (23:00 UTC) | H4 bucket alignment — поточний активний якір |
-| `day_anchor_offset_s_alt` | int | 82800 | 0 | Альт H4 якір (для backward compat при DST) |
-| `day_anchor_offset_s_alt2` | int | 0 | 79200 | Альт H4 якір 2 |
-| `day_anchor_offset_s_d1` | int | **75600** (21:00 UTC) | **79200** (22:00 UTC) | D1 bucket alignment — ADR-0023 |
-| `day_anchor_offset_s_d1_alt` | int | 79200 | 0 | Альт D1 якір (для backward compat) |
+| Ключ | Тип | Опис |
+| --- | --- | --- |
+| `htf_anchor.rule_by_calendar_group` | dict | Група календаря (`market_calendar_symbol_groups`) → правило якоря H4/D1. `ny_close_us_dst`: D1 відкривається о 17:00 America/New_York (21:00 UTC улітку, 22:00 UTC узимку), H4 = D1/6 від того самого відкриття. `utc_midnight`: Binance, 00:00 UTC. Група без правила — сітку брокера не виміряно: символ із неї отримує `ValueError HTF_ANCHOR_GROUP_UNMEASURED`, а не тихий default |
 
-**Пояснення**: Primary (`day_anchor_offset_s`, `_d1`) = поточний сезон. Alt/Alt2 = попередній сезон для `select_anchor_offset_for_open_ms()` — дозволяє читати старі бари без rebuild всієї історії.
+**Прибрані ключі (ADR-0095 S5c).** `day_anchor_offset_s`, `day_anchor_offset_s_alt`, `day_anchor_offset_s_alt2`,
+`day_anchor_offset_s_d1`, `day_anchor_offset_s_d1_alt`, `binance.day_anchor_offset_s`, `binance.d1_anchor_offset_s`.
+Config із будь-яким із них застарілий: `load_system_config` і UDS (`build_uds_from_config`, писар і читач)
+відмовляють `ValueError CONFIG_LEGACY_ANCHOR_KEY key=<ключ>`, тож процеси інжесту, preview і bridge не стартують.
+`ws_server` ловить помилку config, як і раніше: WARNING `WS_CONFIG load_error=CONFIG_LEGACY_ANCHOR_KEY…` і
+`WS_UDS_INIT_FAILED`, UI без даних. Exit gate `d1_anchor_alignment` перевіряє те саме (`no_legacy_anchor_keys`)
+і сітку H4/D1 на диску (`disk_data_anchor`).
 
 ---
 

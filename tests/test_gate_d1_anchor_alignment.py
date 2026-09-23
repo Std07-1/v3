@@ -146,3 +146,13 @@ def test_season_samples_fail_when_h4_leaves_d1_grid(tmp_path, monkeypatch):
     monkeypatch.setattr(gate, "htf_anchor_offset_s", lambda tf_s, ts, rule: 82_800 if tf_s == H4_S else real(tf_s, ts, rule))
     sub = _sub(gate.run_gate({"root": str(_root(tmp_path, _cfg()))}), "season_anchor_samples")
     assert sub["ok"] is False and "ny_close_us_dst/winter D1=79200 H4=82800" in sub["msg"]
+
+
+def test_legacy_anchor_key_in_config_fails_subgate(tmp_path):
+    """Та сама перевірка, якою load_system_config відмовляє старту (CONFIG_LEGACY_ANCHOR_KEY), — окремий FAIL гейта."""
+    cfg = _cfg(day_anchor_offset_s_d1=75600, binance={"enabled": False, "d1_anchor_offset_s": 0})
+    result = gate.run_gate({"root": str(_root(tmp_path, cfg))})
+    sub = _sub(result, "no_legacy_anchor_keys")
+    assert result["ok"] is False and sub["ok"] is False
+    assert sub["legacy_keys"] == ["day_anchor_offset_s_d1", "binance.d1_anchor_offset_s"]
+    assert "CONFIG_LEGACY_ANCHOR_KEY" in sub["msg"]

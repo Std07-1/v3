@@ -16,6 +16,7 @@ from core.config_loader import (
     preview_tf_allowlist_from_cfg,
     min_coldload_bars_from_cfg,
     htf_anchor_rule_resolver,
+    assert_no_legacy_anchor_keys,
     DEFAULT_PREVIEW_TF_ALLOWLIST,
     MAX_EVENTS_PER_RESPONSE,
 )
@@ -1993,6 +1994,8 @@ def _load_cfg(config_path: str, *, strict: bool) -> dict[str, Any]:
 
     strict (писар SSOT): нечитабельний config або JSON не-об'єкт — ValueError, старт відмовляє. Інакше писар стартував
     би з {} і будував компоненти з дефолтів поза config. Читач деградує до {} з WARNING.
+    Легасі-ключ якоря — ValueError CONFIG_LEGACY_ANCHOR_KEY в обох ролях: config прочитано, але він застарілий
+    (ADR-0095 §3.4), тому це відмова, а не деградація.
     """
     try:
         with open(config_path, encoding="utf-8") as f:
@@ -2008,6 +2011,7 @@ def _load_cfg(config_path: str, *, strict: bool) -> dict[str, Any]:
         Logging.warning("UDS_CONFIG_NOT_OBJECT path=%s type=%s — читач стартує з порожнім config",
                         config_path, type(data).__name__)
         return {}
+    assert_no_legacy_anchor_keys(data, config_path)
     return data
 
 

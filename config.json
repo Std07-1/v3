@@ -273,11 +273,6 @@
     "2026-02-01T23:02:00Z"
   ],
   "market_boundary_slip_minutes_per_day": 2,
-  "day_anchor_offset_s": 79200,
-  "day_anchor_offset_s_alt": 82800,
-  "day_anchor_offset_s_alt2": 0,
-  "day_anchor_offset_s_d1": 75600,
-  "day_anchor_offset_s_d1_alt": 79200,
   "ssot_jsonl_fsync": false,
   "ui_debug": true,
   "group_logs_enabled": true,
@@ -771,8 +766,6 @@
     "safety_delay_s": 10,
     "backfill_enabled": true,
     "backfill_max_bars": 1440,
-    "day_anchor_offset_s": 0,
-    "d1_anchor_offset_s": 0,
     "tick_ws_enabled": true,
     "tick_ws_reconnect_base_s": 3,
     "tick_ws_reconnect_max_s": 30

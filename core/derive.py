@@ -70,34 +70,6 @@ MAX_MID_SESSION_GAPS_BY_TF: Dict[int, int] = {
 FRONTIER_BUILT_TFS: FrozenSet[int] = frozenset({86400})
 
 
-# ---------------------------------------------------------------------------
-# resolve_cascade_anchor_s — SSOT для anchor routing по TF (ADR-0023)
-# ---------------------------------------------------------------------------
-def resolve_cascade_anchor_s(
-    target_tf_s: int,
-    h4_anchor_offset_s: int = 0,
-    d1_anchor_offset_s: int = 0,
-) -> int:
-    """Єдина точка визначення anchor offset для каскадної деривації.
-
-    Guardrail: будь-який новий HTF (Weekly тощо) — додати сюди.
-    Без цієї функції anchor routing дублюється у 5+ місцях.
-
-    Args:
-        target_tf_s: цільовий TF.
-        h4_anchor_offset_s: anchor для H4 (82800 = 23:00 UTC).
-        d1_anchor_offset_s: anchor для D1 (79200 = 22:00 UTC, ADR-0023).
-
-    Returns:
-        anchor offset в секундах.
-    """
-    if target_tf_s == 86400:
-        return d1_anchor_offset_s
-    elif target_tf_s >= 14400:
-        return h4_anchor_offset_s
-    return 0
-
-
 def _resolve_bucket(
     target_tf_s: int,
     bucket_open_ms: int,

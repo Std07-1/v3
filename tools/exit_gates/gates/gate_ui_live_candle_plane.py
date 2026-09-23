@@ -7,7 +7,7 @@
   1. overlay_read_only — /api/overlay не має write-викликів
   2. overlay_two_bar_contract — bars[0–2] + hold-prev-until-final
   3. overlay_anchor_sentinel_present — бакет формуючої H4/D1 на сезонній сітці (htf_bucket_start_ms +
-     резолвер правила символу), статичний легасі-якір resolve_anchor_offset_ms заборонено (ADR-0095 S9a)
+     резолвер правила символу), імена статичного легасі-якоря (RETIRED_ANCHOR_NAMES) заборонено (ADR-0095 S9a)
   4. ui_overlay_isolated_from_applyUpdates — overlay окремий від applyUpdates
   5. ui_polling_no_interval_storm — заборонено setInterval для polling
 """
@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import os
 from typing import Any, Dict, List, Optional, Tuple
+
+from core.config_loader import RETIRED_ANCHOR_NAMES
 
 # ---------------------------------------------------------------------------
 # Допоміжні
@@ -183,9 +185,10 @@ def _check_overlay_two_bar_contract(root: str) -> Tuple[bool, str, Dict[str, Any
 # ---------------------------------------------------------------------------
 # Sub-gate 3: overlay_anchor_sentinel_present
 # ADR-0095 S9a: бакет формуючої H4/D1 у ws_server — htf_bucket_start_ms за правилом символу
-# (APP_HTF_ANCHOR_RULE_FOR_SYMBOL). Статичний resolve_anchor_offset_ms — сторож: після прибирання
-# легасі-ключів (S5c) він тихо дав би якір 0. Колишній сентинел overlay_anchor_mismatch перевіряв
-# /api/overlay, якого в ws_server більше нема (див. підгейти 1–2), тож його знято.
+# (APP_HTF_ANCHOR_RULE_FOR_SYMBOL). Імена статичного легасі-якоря (RETIRED_ANCHOR_NAMES) — сторож: API
+# видалено в S5c разом із ключами в секундах, повернення ловить і tests/test_legacy_anchor_keys_gate.py.
+# Колишній сентинел overlay_anchor_mismatch перевіряв /api/overlay, якого в ws_server більше нема
+# (див. підгейти 1–2), тож його знято.
 # ---------------------------------------------------------------------------
 
 
@@ -207,7 +210,7 @@ def _check_overlay_anchor_sentinel(root: str) -> Tuple[bool, str, Dict[str, Any]
     has_rule_resolver = "APP_HTF_ANCHOR_RULE_FOR_SYMBOL" in src
     metrics["has_htf_anchor_rule_resolver"] = has_rule_resolver
 
-    has_legacy_anchor = "resolve_anchor_offset_ms" in src
+    has_legacy_anchor = any(name in src for name in RETIRED_ANCHOR_NAMES)
     metrics["has_legacy_resolve_anchor_offset_ms"] = has_legacy_anchor
 
     issues: List[str] = []

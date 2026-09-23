@@ -158,8 +158,8 @@ def _write_opens(root: Path, tf_s: int, opens) -> None:
 def test_d1_gap_anatomy_main_seasonal_across_2026_11_01(tmp_path, monkeypatch):
     """--date — торгова доба на сезонній сітці (ADR-0095 S5b): пт 30.10 — бакет чт 21:00, пн 02.11 — нд 22:00.
 
-    Легасі-ключ `day_anchor_offset_s_d1` = 75600 (літо) у config лишається до S5c, але інструмент його не
-    читає: з ним бакет понеділка став би нд 21:00, D1 на диску (нд 22:00) — «НЕМА», хибна cascade_hole.
+    Статичний літній якір (21:00) дав би бакет понеділка нд 21:00, D1 на диску (нд 22:00) — «НЕМА», хибна
+    cascade_hole. Легасі-ключів якоря в config більше нема: завантажувач їх відмовляє (ADR-0095 S5c).
     """
     mon_open, mon_close = _utc_ms(2026, 11, 1, 22), _utc_ms(2026, 11, 2, 21)
     feed_gap = range(_utc_ms(2026, 11, 2, 10), _utc_ms(2026, 11, 2, 11), M1_MS)
@@ -167,7 +167,6 @@ def test_d1_gap_anatomy_main_seasonal_across_2026_11_01(tmp_path, monkeypatch):
     _write_opens(tmp_path, 86400, [_utc_ms(2026, 10, 29, 21), mon_open])
     cfg = {
         "data_root": str(tmp_path),
-        "day_anchor_offset_s_d1": 75600,
         "market_calendar_symbol_groups": {"XAU/USD": "cfd_us_22_23"},
         "market_calendar_by_group": {"cfd_us_22_23": CFD_US_22_23},
         "htf_anchor": {"rule_by_calendar_group": {"cfd_us_22_23": "ny_close_us_dst"}},

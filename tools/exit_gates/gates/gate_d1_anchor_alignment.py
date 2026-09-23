@@ -3,11 +3,13 @@
 Підгейти:
 1. htf_anchor_rule_valid — секція `htf_anchor` валідна, правило резолвиться для кожного символу `symbols` (і
    `binance.symbols`, коли Binance увімкнено). Символ невиміряної групи — FAIL, а не тихий default.
-2. d1_in_derive_chain — (86400, 1440) є у DERIVE_CHAIN[60].
-3. d1_in_derived_tfs_s — 86400 є у config `derived_tfs_s`.
-4. season_anchor_samples — зразки літа і зими: `ny_close_us_dst` 75600 / 79200, `utc_midnight` 0; H4 і D1 на одній
+2. no_legacy_anchor_keys — у config нема легасі-ключів якоря в секундах (`LEGACY_ANCHOR_KEYS`, та сама перевірка,
+   якою `load_system_config` відмовляє старту — CONFIG_LEGACY_ANCHOR_KEY).
+3. d1_in_derive_chain — (86400, 1440) є у DERIVE_CHAIN[60].
+4. d1_in_derived_tfs_s — 86400 є у config `derived_tfs_s`.
+5. season_anchor_samples — зразки літа і зими: `ny_close_us_dst` 75600 / 79200, `utc_midnight` 0; H4 і D1 на одній
    сітці (відкриття D1 — бакет H4).
-5. disk_data_anchor — кожен рядок останнього part-файлу tf_86400 і tf_14400 кожного символу стоїть на сезонній
+6. disk_data_anchor — кожен рядок останнього part-файлу tf_86400 і tf_14400 кожного символу стоїть на сезонній
    сітці (`assert_on_season_grid`). Каталогу даних нема (CI) — пропуск.
 """
 from __future__ import annotations
@@ -16,7 +18,7 @@ import json
 import os
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from core.config_loader import htf_anchor_rule_resolver
+from core.config_loader import find_legacy_anchor_keys, htf_anchor_rule_resolver
 from core.derive import DERIVE_CHAIN
 from core.session_anchor import (
     D1_S,
@@ -84,6 +86,14 @@ def _check_rule_valid(root: str, cfg: Dict[str, Any]) -> CheckResult:
     if not rules:
         return False, "config.symbols порожній — сітку нема чим перевірити", {}
     return True, "правило якоря є для %d символів" % len(rules), {"rules": rules}
+
+
+def _check_no_legacy_keys(root: str, cfg: Dict[str, Any]) -> CheckResult:
+    found = find_legacy_anchor_keys(cfg)
+    if found:
+        return False, "CONFIG_LEGACY_ANCHOR_KEY key=%s — старт відмовить (ADR-0095 §3.4)" % ",".join(found), {
+            "legacy_keys": found}
+    return True, "легасі-ключів якоря нема", {}
 
 
 def _check_derive_chain(root: str, cfg: Dict[str, Any]) -> CheckResult:
@@ -181,6 +191,7 @@ def _check_disk_anchor(root: str, cfg: Dict[str, Any]) -> CheckResult:
 
 _CHECKS: Dict[str, Callable[[str, Dict[str, Any]], CheckResult]] = {
     "htf_anchor_rule_valid": _check_rule_valid,
+    "no_legacy_anchor_keys": _check_no_legacy_keys,
     "d1_in_derive_chain": _check_derive_chain,
     "d1_in_derived_tfs_s": _check_derived_tfs_s,
     "season_anchor_samples": _check_season_samples,

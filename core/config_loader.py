@@ -11,7 +11,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from core.session_anchor import HTF_ANCHOR_RULES
 
@@ -58,10 +58,55 @@ def load_system_config(path: str | None = None) -> Dict[str, Any]:
 
     Returns:
         Вміст config як dict.
+
+    Raises:
+        ValueError: CONFIG_LEGACY_ANCHOR_KEY — у config легасі-ключ якоря в секундах (ADR-0095 §3.4).
     """
     target = path or pick_config_path()
     with open(target, "r", encoding="utf-8") as f:
-        return json.load(f)
+        cfg = json.load(f)
+    assert_no_legacy_anchor_keys(cfg, target)
+    return cfg
+
+
+# ADR-0095 §3.4 (S5c): якір H4/D1 задає правило `htf_anchor`, а не секунди. Config із будь-яким із цих ключів
+# застарілий: завантажувач відмовляє (CONFIG_LEGACY_ANCHOR_KEY), а не ігнорує ключ мовчки. Це єдине місце цих
+# рядків у core/ runtime/ tools/ app/ — тест-сторож tests/test_legacy_anchor_keys_gate.py дозволяє їх лише тут.
+LEGACY_ANCHOR_KEYS = (
+    "day_anchor_offset_s",
+    "day_anchor_offset_s_alt",
+    "day_anchor_offset_s_alt2",
+    "day_anchor_offset_s_d1",
+    "day_anchor_offset_s_d1_alt",
+    "binance.day_anchor_offset_s",
+    "binance.d1_anchor_offset_s",
+)
+# Імена, що не повертаються в код: видалене API статичного якоря (ADR-0095 R6) і змінна оточення архівних
+# HTF-інструментів. Бакет H4/D1 — лише htf_bucket_start_ms / htf_anchor_offset_s за правилом символу.
+RETIRED_ANCHOR_NAMES = ("resolve_anchor_offset_ms", "resolve_cascade_anchor_s", "FXCM_DAY_ANCHOR_OFFSET_S")
+_ABSENT = object()
+
+
+def find_legacy_anchor_keys(cfg: Any) -> List[str]:
+    """Шляхи з LEGACY_ANCHOR_KEYS, присутні в config (навіть зі значенням null), у порядку константи."""
+    found = []
+    for key_path in LEGACY_ANCHOR_KEYS:
+        node = cfg
+        for part in key_path.split("."):
+            node = node.get(part, _ABSENT) if isinstance(node, dict) else _ABSENT
+        if node is not _ABSENT:
+            found.append(key_path)
+    return found
+
+
+def assert_no_legacy_anchor_keys(cfg: Any, source: str) -> None:
+    """Застарілий config — ValueError CONFIG_LEGACY_ANCHOR_KEY з іменами ключів, а не тихий якір (ADR-0095 §3.4)."""
+    found = find_legacy_anchor_keys(cfg)
+    if found:
+        raise ValueError(
+            "CONFIG_LEGACY_ANCHOR_KEY key=%s source=%s — якір H4/D1 задає правило htf_anchor, ключі в секундах "
+            "прибрано (ADR-0095 §3.4)" % (",".join(found), source)
+        )
 
 
 def env_str(key: str) -> Optional[str]:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional, Set
+from typing import Optional, Set
 
 
 def tf_to_ms(tf_s: int, *, tf_allowlist: Optional[Set[int]] = None) -> int:
@@ -19,16 +19,6 @@ def tf_to_ms(tf_s: int, *, tf_allowlist: Optional[Set[int]] = None) -> int:
     if not isinstance(tf_s, int) or tf_s <= 0:
         raise ValueError("invalid_tf_s=%s" % tf_s)
     return int(tf_s * 1000)
-
-
-def resolve_anchor_offset_ms(tf_s: int, cfg: dict[str, Any]) -> int:
-    day_anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0) or 0)
-    day_anchor_offset_s_d1 = cfg.get("day_anchor_offset_s_d1", None)
-    if tf_s == 86400 and day_anchor_offset_s_d1 is not None:
-        return max(0, int(day_anchor_offset_s_d1)) * 1000
-    if tf_s >= 14400:
-        return max(0, int(day_anchor_offset_s)) * 1000
-    return 0
 
 
 def bucket_start_ms(ts_ms: int, tf_ms: int, anchor_offset_ms: int) -> int:
