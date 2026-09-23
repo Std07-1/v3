@@ -5,16 +5,21 @@ import json
 import logging
 
 from core.model.bars import CandleBar
+import pytest
+
 from runtime.ingest.m1_session_filter import (
     MARKER_OPEN_CHAINED,
     SSOT_EDIT_CHAIN,
+    SSOT_EDIT_CHAIN_AFTER_FOLD,
     SSOT_EDIT_FOLD,
     PausePolicy,
+    VERDICT_PAUSE_EDGE_STALE_ALREADY_FOLDED,
     VERDICT_PAUSE_EDGE_STALE_DROPPED,
     VERDICT_PAUSE_EDGE_STALE_FOLDED,
     chain_open_to_prev_close,
     fold_edge_stale,
     normalize_m1_sequence,
+    open_breaks_chain,
     plan_m1_append,
 )
 from runtime.ingest.market_calendar import MarketCalendar
@@ -196,16 +201,85 @@ def test_plan_folds_the_stale_edge_into_a_new_last_session_minute_like_tv():
     assert plan.open_chained == 0 and plan.ssot_edits == ()
 
 
-def test_plan_names_the_fold_into_an_existing_last_session_minute():
-    """20:59 уже в SSOT, 21:00 полер відкинув: вкласти може лише settle — план не пише 21:00 і називає правку 20:59;
-    новий 22:01 прив'язується до close, який лежить на диску зараз."""
+def test_plan_names_the_fold_into_an_existing_last_session_minute_and_the_chain_after_it():
+    """20:59 уже в SSOT, 21:00 полер відкинув: вкласти може лише settle — план не пише 21:00 і називає правку 20:59.
+    Новий 22:01 пишеться в ланцюгу з close, що лежить на диску зараз (як у полера); його правка на вкладений close
+    рахується від брокерського бару — це рівно TV: o = low = 4357.74, без маркера ланцюга."""
     plan = _plan([STALE_2100, BAR_2201], [BAR_2059])
     assert [b.open_time_ms for b in plan.to_write] == [BAR_2201.open_time_ms]
-    assert plan.to_write[0].o == 4357.63 and plan.to_write[0].extensions[MARKER_OPEN_CHAINED] == 4357.74
-    (edit,) = plan.ssot_edits
-    assert edit.reason == SSOT_EDIT_FOLD and edit.current is BAR_2059
-    assert (edit.target.c, edit.target.v) == (4357.74, 520.0)
+    written = plan.to_write[0]
+    assert written.o == 4357.63 and written.extensions[MARKER_OPEN_CHAINED] == 4357.74
+    fold, chain_after = plan.ssot_edits
+    assert fold.reason == SSOT_EDIT_FOLD and fold.current is BAR_2059
+    assert (fold.target.c, fold.target.v) == (4357.74, 520.0)
+    assert chain_after.reason == SSOT_EDIT_CHAIN_AFTER_FOLD and chain_after.current is written
+    assert chain_after.target == BAR_2201
     assert (STALE_2100, VERDICT_PAUSE_EDGE_STALE_DROPPED) in plan.verdicts
+
+
+def test_plan_names_the_chain_of_the_existing_first_bar_after_the_folded_edge():
+    """22:01 уже в SSOT (полер прив'язав до закоміченого close 20:59): вкладення 21:00 у 20:59 тягне правку й 22:01 —
+    інакше після settle-правки 20:59 на відкритті лишився б розрив 0.11."""
+    poller_2201 = chain_open_to_prev_close(BAR_2059, BAR_2201)
+    plan = _plan([STALE_2100], [BAR_2059, poller_2201])
+    assert plan.to_write == ()
+    fold, chain_after = plan.ssot_edits
+    assert fold.reason == SSOT_EDIT_FOLD and fold.current is BAR_2059
+    assert chain_after.reason == SSOT_EDIT_CHAIN_AFTER_FOLD and chain_after.current is poller_2201
+    assert (chain_after.target.o, chain_after.target.c) == (4357.74, 4363.06)
+
+
+def test_plan_rerun_over_the_already_folded_edge_names_no_edit():
+    """Повторний засів того самого вікна: 21:00 на диск не пишеться (вкладена в 20:59), тож знову приходить новим
+    ключем. Її тіки вже в 20:59 (маркер late_ticks_folded) — вкласти вдруге означало б подвоїти обсяг (v 520 → 524)."""
+    first = _plan([BAR_2059, STALE_2100, BAR_2201])
+    rerun = _plan([STALE_2100], list(first.to_write), occupied_opens={b.open_time_ms for b in first.to_write})
+    assert rerun.to_write == () and rerun.ssot_edits == ()
+    assert rerun.verdicts == ((STALE_2100, VERDICT_PAUSE_EDGE_STALE_ALREADY_FOLDED),)
+
+
+def _visible_after_plan(ssot_bars, plan):
+    """SSOT після дозапису і всіх названих правок, застосованих буквально (так їх прочитав би оператор)."""
+    state = {b.open_time_ms: b for b in ssot_bars if not b.extensions.get("calendar_pause_flat")}
+    state.update({b.open_time_ms: b for b in plan.to_write})
+    for edit in plan.ssot_edits:
+        assert state[edit.current.open_time_ms] == edit.current  # current — бар таким, яким він лежить після дозапису
+        state[edit.current.open_time_ms] = edit.target
+    return [state[open_ms] for open_ms in sorted(state)]
+
+
+_TUE_2057 = TUE_2059 - 2 * M1_MS
+_POLLER_2059_AFTER_OUTAGE = _bar(TUE_2059, 4358.33, 4358.73, 4355.37, 4357.63, 516.0)  # o від close 20:56 = 4358.33
+_CLOSURE_SCENARIOS = {
+    # 22:01 у SSOT, прив'язаний полером до закоміченого close 20:59
+    "next_bar_in_ssot": ([STALE_2100], [BAR_2059, chain_open_to_prev_close(BAR_2059, BAR_2201)]),
+    # 22:01 новий: пишеться від close на диску
+    "next_bar_new": ([STALE_2100, BAR_2201], [BAR_2059]),
+    # дірка 20:57–20:58 перед наявним 20:59 і застарілий край після нього: той самий бар — і ланцюг, і вкладення
+    "chain_and_fold_on_one_bar": (
+        [_bar(_TUE_2057, 4358.33, 4358.45, 4358.30, 4358.40, 310.0),
+         _bar(_TUE_2057 + M1_MS, 4358.40, 4358.41, 4358.15, 4358.20, 290.0), STALE_2100],
+        [_bar(_TUE_2057 - M1_MS, 4358.0, 4358.4, 4357.9, 4358.33, 280.0), _POLLER_2059_AFTER_OUTAGE,
+         chain_open_to_prev_close(_POLLER_2059_AFTER_OUTAGE, BAR_2201)]),
+}
+
+
+@pytest.mark.parametrize("scenario", sorted(_CLOSURE_SCENARIOS))
+def test_named_edits_are_closed_under_the_chain_rule(scenario):
+    """Набір правок замкнений: дозапис + усі цілі разом не лишають розриву ланцюга; правка одна на ключ."""
+    bars, ssot_bars = _CLOSURE_SCENARIOS[scenario]
+    plan = _plan(bars, ssot_bars)
+    assert len({edit.current.open_time_ms for edit in plan.ssot_edits}) == len(plan.ssot_edits)
+    visible = _visible_after_plan(ssot_bars, plan)
+    assert [(b.open_time_ms, a.c, b.o) for a, b in zip(visible, visible[1:]) if open_breaks_chain(a.c, b.o)] == []
+    assert next(b for b in visible if b.open_time_ms == TUE_2059).c == 4357.74  # вкладений close, як у TV
+
+
+def test_chain_and_fold_of_one_bar_are_one_edit_with_both_rules():
+    bars, ssot_bars = _CLOSURE_SCENARIOS["chain_and_fold_on_one_bar"]
+    edit = next(e for e in _plan(bars, ssot_bars).ssot_edits if e.current.open_time_ms == TUE_2059)
+    assert edit.reason == "%s+%s" % (SSOT_EDIT_CHAIN, SSOT_EDIT_FOLD) and edit.current is _POLLER_2059_AFTER_OUTAGE
+    assert (edit.target.o, edit.target.c, edit.target.v) == (4358.20, 4357.74, 520.0)
 
 
 def test_plan_does_not_write_a_key_occupied_on_disk_by_any_row():

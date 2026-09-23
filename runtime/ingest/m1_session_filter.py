@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from typing import AbstractSet, Callable, FrozenSet, List, Optional, Sequence, Tuple
+from typing import AbstractSet, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 from core.model.bars import CandleBar
 
@@ -40,16 +40,20 @@ VERDICT_REOPEN_FLAT_DROPPED = "reopen_flat_dropped"
 VERDICT_PAUSE_NOISE_DROPPED = "pause_noise_dropped"
 VERDICT_PAUSE_EDGE_STALE_DROPPED = "pause_edge_stale_dropped"
 VERDICT_PAUSE_EDGE_STALE_FOLDED = "pause_edge_stale_folded"  # ADR-0101: вкладено в останню хвилину сесії (пакетні записувачі)
+# ADR-0101 C3: тіки цієї хвилини вже вкладені в бар SSOT перед нею (повторний засів того самого вікна) — правки немає
+VERDICT_PAUSE_EDGE_STALE_ALREADY_FOLDED = "pause_edge_stale_already_folded"
 
 # Суцільний ланцюг ADR-0101: допуск — представлення float, не крок ціни (як рейка ADR-0100 open_chain_breaks)
 _CHAIN_REL_TOL = 1e-9
 MARKER_OPEN_CHAINED = "open_chained_from"  # сирий open брокера на барі, чий open прив'язано до close попереднього
+MARKER_LATE_TICKS_FOLDED = "late_ticks_folded"  # обсяг застарілого краю, вкладеного в останню хвилину сесії
 # Маркер, за яким display ховає бар (runtime/ws/candle_map.py): такий бар не сусід у ланцюзі, але ключ його зайнятий
 _MARKER_HIDDEN_PAUSE_FLAT = "calendar_pause_flat"
 
 # Причини правки наявного бару SSOT, якої вимагає правило послідовності на межі дозапису (ADR-0101 C3)
 SSOT_EDIT_CHAIN = "chain"  # open бару SSOT ≠ close нового бару перед ним
 SSOT_EDIT_FOLD = "fold"  # застарілий край, чия попередня хвилина (остання хвилина сесії) уже в SSOT
+SSOT_EDIT_CHAIN_AFTER_FOLD = "chain_after_fold"  # перший видимий бар після вкладеного краю: open := вкладений close
 _SSOT_EDIT_LOG_LIMIT = 10  # скільки правок називати поіменно; решта — лічильником у зведенні
 
 _M1_MS = 60_000
@@ -309,7 +313,7 @@ def fold_edge_stale(last_session_bar: CandleBar, stale_bar: CandleBar) -> Candle
         low=min(last_session_bar.low, stale_bar.low),
         c=stale_bar.c,
         v=last_session_bar.v + stale_bar.v,
-        extensions={**last_session_bar.extensions, "late_ticks_folded": stale_bar.v},
+        extensions={**last_session_bar.extensions, MARKER_LATE_TICKS_FOLDED: stale_bar.v},
     )
 
 
@@ -355,10 +359,17 @@ class SsotEdit:
     Пакетний записувач (засів, ремонт дірок) працює поруч із живим полером і дописує лише ключі, яких у SSOT немає.
     Закомічений фінал він не змінює: друга версія ключа дописом — конфліктний дублікат, переможця якого вирішує
     порядок у файлі (ADR-0098 §3.7, health `dup_conflicting`), а заміна part-файла — лише офлайн при зупинених
-    записувачах (ADR-0098 §3.6). Тож правку застосовує settle, а записувач її називає — з точним значенням.
+    записувачах (ADR-0098 §3.6). Тож записувач правку лише називає, а робить її settle: рядок цілим з архіву брокера
+    і та сама нормалізація послідовності (ADR-0098 §3.2, ADR-0101 §3.3).
+
+    `current` — бар таким, яким він лежатиме в SSOT після дозапису: наявний або щойно дописаний (`chain_after_fold`).
+    `target` — що дає правило з даних записувача: для дописаного бару — від брокерського, для наявного — від рядка SSOT
+    як він є (розширення h/low від давнішого ланцюга рядок окремо не зберігає — їх знімає лише повна заміна settle).
+    Правка одна на ключ, і набір плану замкнений: цілі, застосовані разом, не лишають розриву ланцюга між барами,
+    які бачить план.
     """
 
-    reason: str  # SSOT_EDIT_CHAIN | SSOT_EDIT_FOLD
+    reason: str  # SSOT_EDIT_CHAIN | SSOT_EDIT_FOLD | SSOT_EDIT_CHAIN_AFTER_FOLD; кілька правил одного бару — через «+»
     current: CandleBar
     target: CandleBar
 
@@ -394,8 +405,10 @@ def plan_m1_append(
     і на межі вікна, і навколо кожного наявного бару всередині. Бар з `calendar_pause_flat` display ховає: у ланцюг
     він не йде, але ключ його зайнятий.
 
-    Наявного бару план не змінює, а називає правку (`SsotEdit`): бар SSOT одразу після серії, чий open розходиться з
-    close останнього нового бару; застарілий край, попередня хвилина якого вже в SSOT.
+    Наявного бару план не змінює, а називає правку (`SsotEdit`), одну на ключ: бар SSOT одразу після серії, чий open
+    розходиться з close останнього нового бару; застарілий край, попередня хвилина якого вже в SSOT, і перший видимий
+    бар після нього (open := вкладений close). Правки рахуються від `last` — останнього видимого бару таким, яким він
+    стане після дозапису і правок, тож набір замкнений: застосовані разом, цілі не лишають розриву ланцюга.
     """
     committed = set(occupied_opens) | {bar.open_time_ms for bar in ssot_bars}
     new_by_open = {bar.open_time_ms: bar for bar in bars if bar.open_time_ms not in committed}
@@ -403,9 +416,11 @@ def plan_m1_append(
                        if not bar.extensions.get(_MARKER_HIDDEN_PAUSE_FLAT)}
     to_write: List[CandleBar] = []
     verdicts: List[Tuple[CandleBar, str]] = []
-    edits: List[SsotEdit] = []
-    last: Optional[CandleBar] = None  # останній видимий бар послідовності: наявний у SSOT або щойно записаний
-    last_is_new = False
+    edits: Dict[int, SsotEdit] = {}  # open_ms → правка, у порядку називання
+    last: Optional[CandleBar] = None  # останній видимий бар послідовності таким, яким він стане після дозапису і правок
+    # Причина правки ланцюга для наступного бару SSOT. None — `last` такий, як на диску: розрив за ним (якщо є) не з
+    # цього дозапису, і план його не називає.
+    next_edit_reason: Optional[str] = None
     run: List[CandleBar] = []
     timeline: List[Optional[int]] = sorted(set(new_by_open) | set(visible_by_open))
     for open_ms in timeline + [None]:  # None — межа останньої серії
@@ -413,43 +428,67 @@ def plan_m1_append(
             run.append(new_by_open[open_ms])
             continue
         if run:
-            run_out, run_verdicts, fold = _normalize_run(
+            run_out, run_verdicts, folded_prev, run_planned = _normalize_run(
                 run, last, is_trading_fn=is_trading_fn, flat_max_volume=flat_max_volume, pause_policy=pause_policy)
             to_write.extend(run_out)
             verdicts.extend(run_verdicts)
-            if fold is not None:
-                edits.append(fold)
-            if run_out:
-                last, last_is_new = run_out[-1], True
+            if folded_prev is not None:
+                _name_ssot_edit(edits, SSOT_EDIT_FOLD, visible_by_open[folded_prev.open_time_ms], folded_prev)
+                last, next_edit_reason = folded_prev, SSOT_EDIT_CHAIN_AFTER_FOLD
+            for written, planned in zip(run_out, run_planned):
+                if planned != written:
+                    _name_ssot_edit(edits, SSOT_EDIT_CHAIN_AFTER_FOLD, written, planned)
+            if run_planned:
+                last, next_edit_reason = run_planned[-1], SSOT_EDIT_CHAIN
             run = []
         if open_ms is None:
             break
         ssot_bar = visible_by_open[open_ms]
-        if last_is_new:
-            chained = chain_open_to_prev_close(last, ssot_bar)
-            if chained is not ssot_bar:
-                edits.append(SsotEdit(SSOT_EDIT_CHAIN, ssot_bar, chained))
-        last, last_is_new = ssot_bar, False
-    return M1AppendPlan(tuple(to_write), tuple(verdicts), len(bars) - len(new_by_open), tuple(edits))
+        planned_ssot_bar = ssot_bar
+        if next_edit_reason is not None:
+            planned_ssot_bar = chain_open_to_prev_close(last, ssot_bar)
+            if planned_ssot_bar is not ssot_bar:
+                _name_ssot_edit(edits, next_edit_reason, ssot_bar, planned_ssot_bar)
+        last, next_edit_reason = planned_ssot_bar, None
+    return M1AppendPlan(tuple(to_write), tuple(verdicts), len(bars) - len(new_by_open), tuple(edits.values()))
 
 
 def _normalize_run(
     run: List[CandleBar], prev: Optional[CandleBar], *, is_trading_fn: Callable[[int], bool], flat_max_volume: int,
     pause_policy: PausePolicy,
-) -> Tuple[List[CandleBar], List[Tuple[CandleBar, str]], Optional[SsotEdit]]:
-    """Серія нових барів між видимими барами SSOT: правило послідовності від `prev` (наявного бару або None).
+) -> Tuple[List[CandleBar], List[Tuple[CandleBar, str]], Optional[CandleBar], List[CandleBar]]:
+    """Серія нових барів між видимими барами SSOT: правило послідовності від `prev` (бару SSOT таким, яким він стане
+    після правок, або None). Повертає (бари для запису; вердикти; `prev` із вкладеним краєм або None; бари серії
+    такими, якими вони стануть після правок).
 
-    Застарілий край на початку серії належить `prev`, якщо той — саме попередня хвилина: вкласти його може лише
-    settle, тож правило відкидає бар, а план називає правку `SSOT_EDIT_FOLD`.
+    Застарілий край на початку серії належить `prev`, якщо той — саме попередня хвилина. Вкласти його в закомічений
+    бар може лише settle: правило бар відкидає, нові бари пишуться в ланцюгу з close, що лежить на диску (як у живого
+    полера), а після правок серія йде від вкладеного close. `prev` з маркером `late_ticks_folded` уже містить тіки цієї
+    хвилини (повторний засів після вкладення): вкладати вдруге — подвоїти обсяг, тож правки немає. Ревізію брокера
+    вже вкладених тіків, як і будь-якого закоміченого ключа, перераховує settle.
     """
     out, verdicts = normalize_m1_sequence(run, is_trading_fn=is_trading_fn, flat_max_volume=flat_max_volume,
                                           pause_policy=pause_policy, prev_bar=prev)
     first_bar, first_verdict = verdicts[0]
-    fold = None
-    if (first_verdict == VERDICT_PAUSE_EDGE_STALE_DROPPED and prev is not None
+    if not (first_verdict == VERDICT_PAUSE_EDGE_STALE_DROPPED and prev is not None
             and prev.open_time_ms == first_bar.open_time_ms - _M1_MS):
-        fold = SsotEdit(SSOT_EDIT_FOLD, prev, fold_edge_stale(prev, first_bar))
-    return out, verdicts, fold
+        return out, verdicts, None, out
+    if MARKER_LATE_TICKS_FOLDED in prev.extensions:
+        verdicts[0] = (first_bar, VERDICT_PAUSE_EDGE_STALE_ALREADY_FOLDED)
+        return out, verdicts, None, out
+    folded_prev = fold_edge_stale(prev, first_bar)
+    planned, _ = normalize_m1_sequence(run, is_trading_fn=is_trading_fn, flat_max_volume=flat_max_volume,
+                                       pause_policy=pause_policy, prev_bar=folded_prev)
+    return out, verdicts, folded_prev, planned
+
+
+def _name_ssot_edit(edits: Dict[int, SsotEdit], reason: str, current: CandleBar, target: CandleBar) -> None:
+    """Одна правка на ключ. Той самий бар SSOT правиться вдруге лише так: ланцюг після серії перед ним, потім вкладення
+    краю за ним. Ціль уже містить обидва правила (рахувалась від `last`), `current` лишається рядком SSOT."""
+    earlier = edits.get(current.open_time_ms)
+    if earlier is not None:
+        reason, current = "%s+%s" % (earlier.reason, reason), earlier.current
+    edits[current.open_time_ms] = SsotEdit(reason, current, target)
 
 
 def report_m1_append_plan(plan: M1AppendPlan, *, where: str, symbol: str) -> None:
@@ -465,7 +504,8 @@ def report_m1_append_plan(plan: M1AppendPlan, *, where: str, symbol: str) -> Non
     for edit in plan.ssot_edits[:_SSOT_EDIT_LOG_LIMIT]:
         logging.warning(
             "M1_SSOT_EDIT_PENDING where=%s symbol=%s reason=%s open_ms=%d o=%.5f->%.5f h=%.5f->%.5f l=%.5f->%.5f "
-            "c=%.5f->%.5f v=%.0f->%.0f — закомічений бар записувач не переписує, до settle на графіку лишається як є",
+            "c=%.5f->%.5f v=%.0f->%.0f — бар SSOT (наявний або щойно дописаний) записувач не переписує, до settle на "
+            "графіку лишається як є",
             where, symbol, edit.reason, edit.current.open_time_ms, edit.current.o, edit.target.o, edit.current.h,
             edit.target.h, edit.current.low, edit.target.low, edit.current.c, edit.target.c, edit.current.v,
             edit.target.v,

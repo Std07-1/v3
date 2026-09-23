@@ -262,6 +262,27 @@ def test_main_folds_the_stale_edge_into_the_last_session_minute_like_tv(tmp_path
     assert "'pause_edge_stale_folded': 1" in caplog.text and "вкладено(застарілий край)=1" in caplog.text
 
 
+def test_main_rerun_over_the_folded_edge_writes_nothing_and_names_no_edit(tmp_path: Path, monkeypatch, caplog):
+    """Повторний засів того самого вікна: 21:00 на диску немає (вкладена в 20:59), брокер віддає її знову. Її тіки вже
+    в 20:59 — правки немає, лічильник «відсіяно(застарілий край)» не росте, WARN на коректних даних немає (D15.3)."""
+    bars = [
+        _bar(TUE_2059 - M1_MS, o=4358.0, h=4358.5, low=4357.9, c=4358.33, v=400.0),
+        _bar(TUE_2059, o=4358.33, h=4358.73, low=4355.37, c=4357.63, v=516.0),
+        _bar(TUE_2059 + M1_MS, o=4357.63, h=4357.74, low=4357.63, c=4357.74, v=4.0),
+        _bar(TUE_2059 + 62 * M1_MS, o=4357.74, h=4363.07, low=4357.74, c=4363.06, v=397.0),
+    ]
+    _rc, first_written = _run_main(tmp_path, monkeypatch, bars, extra_cfg=EDGE_STALE_CFG)
+    caplog.clear()
+    caplog.set_level(logging.INFO)
+    rc, written = _run_main(tmp_path, monkeypatch, bars, extra_cfg=EDGE_STALE_CFG)
+    assert rc == 0
+    assert written == first_written
+    assert "'pause_edge_stale_already_folded': 1" in caplog.text
+    assert "відсіяно(застарілий край)=0" in caplog.text and "правок_наявних_до_settle=0" in caplog.text
+    assert "M1_SSOT_EDIT_PENDING" not in caplog.text
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING and "M1_BATCH_SEQUENCE" in r.getMessage()]
+
+
 def test_main_chains_the_batch_start_to_the_ssot_bar_before_it(tmp_path: Path, monkeypatch):
     """Ланцюг тримається на межі партії: перший новий бар — від close останнього видимого бару SSOT перед нею."""
     _seed_ssot(tmp_path, [_bar(TUE_1200, o=2000.1, h=2000.3, low=1999.9, c=2000.0)])
