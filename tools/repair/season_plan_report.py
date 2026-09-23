@@ -92,7 +92,7 @@ def _symbol_notes(symbol_plan: SymbolPlan) -> List[str]:
         if no_source:
             scope = symbol_plan.scopes[tf_s]
             kept = sorted(scope.kept_keys)
-            notes.append("NO_SOURCE %s %s buckets=%d kept_rows=%d kept_off_grid=%d first=%s" % (
+            notes.append("NO_SOURCE %s %s buckets=%d kept_rows=%d removed_off_grid=%d first=%s" % (
                 ctx.sym_dir, _tf_label(tf_s), len(no_source), len(kept), scope.rows[ROW_KEPT_OFF_GRID],
                 ",".join(_utc(k) for k in (kept or no_source)[:_SAMPLES])))
     notes.append("SOURCE %s rule=%s season_rule=%s m1=%s..%s source_end=%s rejected_rows=%d" % (

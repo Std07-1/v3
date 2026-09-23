@@ -18,7 +18,8 @@ TF) — у наборі перебудови цього TF. Набір — зе�
 перебудовано, перебудовується), без формуючого хвоста. Бакет без жодної торгової хвилини свого рядка більше не має
 (DROP у звіті). Бакет з торговою хвилиною, для якого джерела немає (діра M1 до settle, H1 раніше початку історії),
 не перебудовується: рядок на диску лишається як є і вищий TF бере саме його (KEPT_NO_SOURCE, гучно) — видалити
-бар, якого нема з чого побудувати, план не вправі.
+бар, якого нема з чого побудувати, план не вправі. Виняток — рядок поза сіткою TF у такому бакеті: він дефект за
+визначенням (писар SSOT його відкинув би), тож прибирається (REMOVED_OFF_GRID_NO_SOURCE, гучно).
 """
 
 from __future__ import annotations
@@ -351,7 +352,8 @@ ROW_OFF_GRID = "removed_off_grid"  # ключ не на сітці TF — бак
 ROW_DROPPED = "dropped"  # бакет без жодної торгової хвилини, ключ будь-який
 ROW_DUPLICATE = "duplicate_removed"  # другий і далі рядки одного ключа
 ROW_KEPT_NO_SOURCE = "kept_no_source"  # бакет з торговою хвилиною без джерела — рядок лишається як є
-ROW_KEPT_OFF_GRID = "kept_off_grid"  # з них — ключ поза сіткою TF (H4/D1): лишається дефектом, гейт V1
+ROW_KEPT_OFF_GRID = "removed_off_grid_no_source"  # бакет без джерела, рядок поза сіткою TF — прибирається: такий
+# рядок — дефект за визначенням (писар SSOT його відкинув би, гейт V1), а правильного бару з чого будувати нема
 
 
 @dataclass
@@ -406,10 +408,13 @@ def plan_part_file(
         key = line.own_key
         bucket_ms = None if key is None else ctx.bucket_of(key, tf_s)
         if bucket_ms is None or bucket_ms not in scope.replaced:
+            if bucket_ms in scope.rebuild and bucket_ms != key:
+                removed.append(key)
+                rows[ROW_KEPT_OFF_GRID] += 1
+                continue
             if bucket_ms in scope.rebuild:
                 scope.kept_keys.append(key)
                 rows[ROW_KEPT_NO_SOURCE] += 1
-                rows[ROW_KEPT_OFF_GRID] += int(bucket_ms != key)
             out.append(line)
             continue
         rows[ROW_OLD] += 1

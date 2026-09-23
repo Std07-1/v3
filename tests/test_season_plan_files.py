@@ -149,3 +149,29 @@ def test_rows_over_an_m1_hole_are_kept_and_higher_tfs_are_built_from_them(tmp_pa
     assert all(f.tf_s != 300 for f in files), "M5 не змінюється"
     apply(files)
     assert plan(tmp_path)[0] == []
+
+
+def test_off_grid_row_in_a_bucket_without_source_is_removed_not_kept(tmp_path):
+    """Бакет без джерела (діра M1): рядок на сітці лишається (KEPT_NO_SOURCE), а рядок поза сіткою — прибирається:
+    він дефект за визначенням, писар SSOT його відкинув би, і гейт V1 зупинив би прогін (репетиція 23.09: XAU/XAG
+    H4 26.12/02.01 на легасі-сітці 03:00)."""
+    hole = ms(2026, 3, 10, 10)
+    bucket = ms(2026, 3, 10, 9)  # H4 літньої сітки 09:00–13:00 — повністю без M1
+    write_m1(tmp_path, FIRST, LAST, skip=set(range(bucket, bucket + H4_S * 1000, 60_000)))
+    run_rebuild_tool(tmp_path, FIRST, LAST + 60_000)
+    h4 = tmp_path / (TF_DIR % H4_S) / "part-20260310.jsonl"
+    legacy = json.dumps({"symbol": "XAU/USD", "tf_s": H4_S, "open_time_ms": hole,
+                         "close_time_ms": hole + H4_S * 1000, "o": 1.0, "h": 1.0, "low": 1.0, "c": 1.0,
+                         "v": 1.0, "complete": True, "src": "derived"}, separators=(",", ":"))
+    h4.write_text(h4.read_text(encoding="utf-8") + legacy + "\n", encoding="utf-8")
+
+    ctx = context(tmp_path)
+    rebuild, _tail = sp.complete_rebuild_set(ctx, [sp.seed_derived_from_m1(ctx, None)])
+    planned = sp.plan_bars(ctx, sp.SourceReader(str(tmp_path), "XAU/USD"), rebuild)
+    files, scopes = sp.plan_symbol_files(ctx, str(tmp_path), rebuild, planned)
+
+    assert scopes[H4_S].rows[sp.ROW_KEPT_OFF_GRID] == 1
+    h4_plan = [f for f in files if f.tf_s == H4_S and f.day == "20260310"]
+    assert h4_plan and hole in h4_plan[0].removed_keys
+    apply(files)
+    assert plan(tmp_path)[0] == []
