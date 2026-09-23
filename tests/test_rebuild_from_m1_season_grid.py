@@ -25,16 +25,13 @@ from tools import rebuild_from_m1
 UTC = dt.timezone.utc
 M1_MS = 60_000
 
-# cfd_us_22_23 з config.json: вихідні Пт 20:45 → Нд 22:00, перерва 21:00–22:00
+# Сезонна група cfd_us_22_23 з config.json (ADR-0095 §3.5): улітку вихідні Пт 20:45 → Нд 22:00, перерва 21:00–22:00;
+# узимку Пт 21:45 → Нд 23:00, перерва 22:00–23:00
+_REPO_CALENDAR_GROUP = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text(encoding="utf-8"))[
+    "market_calendar_by_group"]["cfd_us_22_23"]
 CFG = {
     "market_calendar_symbol_groups": {"XAU/USD": "cfd_us_22_23", "HKG33": "cfd_hk_main"},
-    "market_calendar_by_group": {
-        "cfd_us_22_23": {
-            "market_weekend_close_dow": 4, "market_weekend_close_hm": "20:45",
-            "market_weekend_open_dow": 6, "market_weekend_open_hm": "22:00",
-            "market_daily_break_start_hm": "21:00", "market_daily_break_end_hm": "22:00",
-        },
-    },
+    "market_calendar_by_group": {"cfd_us_22_23": _REPO_CALENDAR_GROUP},
     "htf_anchor": {"rule_by_calendar_group": {"cfd_us_22_23": RULE_NY_CLOSE_US_DST}},
 }
 
@@ -74,9 +71,11 @@ def _disk_bars(root: Path, tf_s: int) -> Dict[int, dict]:
 
 
 def test_rebuild_across_dst_weekend_2026_11_01_keeps_h4_d1_on_season_grid(tmp_path):
-    """Пт 30.10 — літня сітка (H4 17:00), нд 01.11 з 22:00 — зимова (22:00, 02:00); H4 нд 21:00 немає."""
+    """Пт 30.10 — літня сітка (H4 17:00), нд 01.11 з 22:00 — зимова (22:00, 02:00); H4 нд 21:00 немає.
+
+    Зимою ринок відкривається в неділю о 23:00, тож перший зимовий H4 22:00 починається з бару 23:00."""
     fri_opens = _write_m1(tmp_path, _ms(2026, 10, 30, 17), _ms(2026, 10, 30, 20, 44))
-    sun_opens = _write_m1(tmp_path, _ms(2026, 11, 1, 22), _ms(2026, 11, 2, 5, 59))
+    sun_opens = _write_m1(tmp_path, _ms(2026, 11, 1, 23), _ms(2026, 11, 2, 5, 59))
     writer = JsonlAppender(root=str(tmp_path), anchor_rule_for_symbol=htf_anchor_rule_resolver(CFG))
     try:
         stats = rebuild_from_m1.rebuild_one_symbol(
@@ -90,7 +89,8 @@ def test_rebuild_across_dst_weekend_2026_11_01_keeps_h4_d1_on_season_grid(tmp_pa
     assert sorted(h4) == [_ms(2026, 10, 30, 17), _ms(2026, 11, 1, 22), _ms(2026, 11, 2, 2)]
     assert _ms(2026, 11, 1, 21) not in h4, "обрубок доби переходу не вбирає годин наступної доби"
     first_winter = h4[_ms(2026, 11, 1, 22)]
-    assert first_winter["o"] == sun_opens[_ms(2026, 11, 1, 22)]
+    assert first_winter["o"] == sun_opens[_ms(2026, 11, 1, 23)]
+    assert not (first_winter.get("extensions") or {}).get("partial"), "22:00–22:59 зимою — вихідні, не пропуск"
     assert first_winter["c"] == pytest.approx(sun_opens[_ms(2026, 11, 2, 1, 59)] + 0.1)
     assert h4[_ms(2026, 10, 30, 17)]["o"] == fri_opens[_ms(2026, 10, 30, 17)]
 
@@ -196,3 +196,43 @@ def test_rebuild_chunks_are_consecutive_d1_buckets_covering_the_range(monkeypatc
     assert all(prev[1] == nxt[0] for prev, nxt in zip(chunks, chunks[1:]))
     # Сітка D1 крокує й через вихідні (сб 31.10 21:00 — бакет без торгівлі), з 01.11 доба відкривається о 22:00
     assert [c[0] for c in chunks[1:]] == [_ms(2026, 10, 29, 21), _ms(2026, 10, 31, 21), _ms(2026, 11, 2, 22)]
+
+
+def test_rebuild_winter_h4_1800_takes_h1_2100_by_seasonal_calendar(tmp_path):
+    """Пн 03.11.2025 (зима): H4 18:00–22:00 має чотири торгові H1, остання — 21:00 (перерва 22:00–23:00).
+
+    Статичний літній календар інструмента вважав 21:00–21:59 перервою і губив H1 21:00: H4 18:00 закривався
+    close 20:59 без жодного маркера (ADR-0095 S6a, «333 H4» зони B). Тепер розклад сезону хвилини.
+    """
+    opens = _write_m1(tmp_path, _ms(2025, 11, 3, 18), _ms(2025, 11, 3, 21, 59))
+    writer = JsonlAppender(root=str(tmp_path), anchor_rule_for_symbol=htf_anchor_rule_resolver(CFG))
+    try:
+        rebuild_from_m1.rebuild_one_symbol(
+            data_root=str(tmp_path), symbol="XAU/USD", start_ms=_ms(2025, 11, 3, 18), end_ms=_ms(2025, 11, 3, 22),
+            dry_run=False, cfg=CFG, writer=writer, anchor_rule=RULE_NY_CLOSE_US_DST,
+        )
+    finally:
+        writer.close()
+
+    h1 = _disk_bars(tmp_path, 3600)
+    assert sorted(h1) == [_ms(2025, 11, 3, hour) for hour in (18, 19, 20, 21)]
+    h4 = _disk_bars(tmp_path, H4_S)[_ms(2025, 11, 3, 18)]
+    assert h4["c"] == pytest.approx(opens[_ms(2025, 11, 3, 21, 59)] + 0.1)
+    assert h4["h"] == pytest.approx(opens[_ms(2025, 11, 3, 21, 59)] + 0.5)
+    assert not (h4.get("extensions") or {}).get("partial")
+
+
+def test_rebuild_main_refuses_symbol_without_season_blocks_before_any_write(tmp_path, monkeypatch):
+    """Група без `season_rule`/блоків summer і winter — REBUILD_REFUSED rc=2, а не тихий літній розклад узимку."""
+    _write_m1(tmp_path, _ms(2026, 10, 30, 17), _ms(2026, 10, 30, 17, 59))
+    flat_group = {key: value for key, value in _REPO_CALENDAR_GROUP.items()
+                  if key not in ("season_rule", "summer", "winter")}
+    cfg = dict(CFG, market_calendar_by_group={"cfd_us_22_23": flat_group}, data_root=str(tmp_path),
+               symbols=["XAU/USD"])
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["rebuild_from_m1", "--config", str(config_path), "--writers-stopped"])
+    with pytest.raises(SystemExit) as caught:
+        rebuild_from_m1.main()
+    assert caught.value.code == 2
+    assert sorted(p.name for p in (tmp_path / "XAU_USD").iterdir()) == ["tf_60"], "нічого не перебудовано"

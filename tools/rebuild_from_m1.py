@@ -35,7 +35,7 @@ from core.derive import (
 from core.model.bars import CandleBar
 from core.model.candle_chain import is_display_hidden
 from core.session_anchor import D1_S, htf_bucket_start_ms, htf_next_bucket_start_ms
-from runtime.ingest.market_calendar import MarketCalendar
+from runtime.ingest.tick_common import calendar_for_symbol
 from runtime.store.ssot_jsonl import (
     JsonlAppender,
     head_first_bar_time_ms,
@@ -176,45 +176,6 @@ def _mark_on_disk(
     idx.add(open_time_ms)
 
 
-# ─── Calendar ─────────────────────────────────────────────────────
-
-
-def _calendar_from_group(group_cfg: dict) -> Optional[MarketCalendar]:
-    """Побудувати MarketCalendar з конфігу calendar-групи."""
-    try:
-        daily_breaks_raw = group_cfg.get("market_daily_breaks", [])
-        daily_breaks = tuple(
-            (str(pair[0]), str(pair[1]))
-            for pair in daily_breaks_raw
-            if isinstance(pair, (list, tuple)) and len(pair) >= 2
-        )
-        return MarketCalendar(
-            enabled=True,
-            weekend_close_dow=int(group_cfg["market_weekend_close_dow"]),
-            weekend_close_hm=str(group_cfg["market_weekend_close_hm"]),
-            weekend_open_dow=int(group_cfg["market_weekend_open_dow"]),
-            weekend_open_hm=str(group_cfg["market_weekend_open_hm"]),
-            daily_break_start_hm=str(group_cfg["market_daily_break_start_hm"]),
-            daily_break_end_hm=str(group_cfg["market_daily_break_end_hm"]),
-            daily_break_enabled=True,
-            daily_breaks=daily_breaks,
-        )
-    except Exception:
-        return None
-
-
-def _build_calendar(cfg: dict, symbol: str) -> Optional[MarketCalendar]:
-    groups = cfg.get("market_calendar_by_group", {})
-    sym_groups = cfg.get("market_calendar_symbol_groups", {})
-    group_name = sym_groups.get(symbol)
-    if not group_name:
-        return None
-    group_cfg = groups.get(group_name)
-    if not isinstance(group_cfg, dict):
-        return None
-    return _calendar_from_group(group_cfg)
-
-
 # ─── Символи з конфігу ────────────────────────────────────────────
 
 
@@ -324,11 +285,12 @@ def rebuild_one_symbol(
     Кожен етап іде порціями `_rebuild_chunks`: у буфері джерела одна порція, а не весь діапазон, тож довгий
     прогін не витісняє найстаріших барів. Calendar-aware (boundary-tolerant). Бакети H4/D1 — на сезонній сітці
     `anchor_rule` (ADR-0095): якір і вікно агрегації свої в кожного бакета, а не один якір на весь прогін.
+    Календар — сезонний (`calendar_for_symbol`, ADR-0095 §3.5): розклад сезону кожної хвилини, тож зимова H1 21:00
+    XAU торгова, а 22:00 — перерва. Символ без групи чи з неповними сезонними блоками — ValueError, а не 24/7.
 
     Returns: stats dict {tf_s: written_count, ...}
     """
-    calendar = _build_calendar(cfg, symbol)
-    is_trading_fn = calendar.is_trading_minute if calendar else None
+    is_trading_fn = calendar_for_symbol(cfg, symbol).is_trading_minute
 
     disk_cache: Dict[str, set] = {}
     stats: Dict[str, int] = {"m1_loaded": 0, "m1_flat_skipped": 0}
@@ -634,6 +596,14 @@ def main() -> None:
         anchor_rules = {symbol: anchor_rule_for_symbol(symbol) for symbol in symbols}
     except ValueError as exc:
         logging.error("REBUILD_REFUSED правило якоря H4/D1 не визначене: %s", exc)
+        raise SystemExit(2)
+    # Сезонний календар кожного символу — теж до першого запису: без групи чи з неповними блоками summer/winter
+    # символ не будується ні 24/7, ні літнім розкладом узимку (ADR-0095 §3.5).
+    try:
+        for symbol in symbols:
+            calendar_for_symbol(cfg, symbol)
+    except ValueError as exc:
+        logging.error("REBUILD_REFUSED календар символу не будується: %s", exc)
         raise SystemExit(2)
 
     # Writer
