@@ -49,6 +49,7 @@ from core.config_loader import pick_config_path, load_system_config, env_str
 from core.model.bars import ms_to_utc_dt
 from env_profile import load_env_secrets
 from runtime.store.redis_spec import resolve_redis_spec
+from runtime.ingest.broker import MAX_BARS_PER_FETCH
 from runtime.ingest.loop_watchdog import LoopWatchdog, arm_exit_timer
 from runtime.ingest.tick_common import (
     pick_tick_channel,
@@ -80,7 +81,7 @@ _DEFAULT_IPC_REPLY_TTL_S = 120  # config.json:broker_ipc_reply_ttl_s
 
 _ipc_reply_ttl_s = _DEFAULT_IPC_REPLY_TTL_S  # overridden in main() from config
 _RECONNECT_COOLDOWN_S = 30
-_MAX_BARS_PER_CMD = 200  # guard against huge requests
+_MAX_BARS_PER_CMD = MAX_BARS_PER_FETCH  # guard against huge requests; SSOT — runtime/ingest/broker
 # ADR-0054 §3.6 п.1: воркер чекає реплай 15с (_BLPOP_TIMEOUT_S у m1_ingestion_worker);
 # команда, старша за це + запас, гарантовано без слухача — реплай пішов би в мертвий ключ.
 _CMD_STALE_AFTER_S = 20

@@ -154,13 +154,23 @@ M1SymbolPoller.poll_once():
      → gap=1-2: fetch 2 (дефолт)
      → gap≥3: fetch gap+1 (наздоганяємо), max MAX_FETCH_N=120
 
-  5) FXCM fetch_last_n_m1(symbol, n=fetch_n, date_to=expected+1M1)
-     → date_to обмежує fetch — не дає FXCM повертати бари "з майбутнього"
+  5) Добір від watermark: _fetch_since_watermark(expected, first_n=fetch_n, budget)
+     → FXCM fetch_last_n_m1(n ≤ MAX_BARS_PER_FETCH=200, date_to=expected+1M1): n останніх ІСНУЮЧИХ барів
+       з open ≤ date_to, разом із формуючим о date_to; sidecar ріже запит до 200 (SSOT: runtime/ingest/broker)
+     → якщо найстарший бар відповіді новіший за watermark+1M1 — гортаємо назад від нього сторінками по 200
+       (у просторі барів: паузи проходяться самі, бари паузи доходять до класифікатора §6)
+     → ніколи не пишемо лише найновішу сторінку: watermark перестрибнув би найстаріші хвилини гепа
+       (інцидент 22.09.2026, рев'ю 23.09.2026)
 
-  6) Фільтрація:
-     → bars = [b for b if b.open_time_ms <= expected]     # не новіші за cutoff
-     → bars = [b for b if b.open_time_ms > watermark]     # watermark pre-filter
-     → bars.sort(key=lambda b: b.open_time_ms)            # asc порядок
+  6) Фільтрація і порядок:
+     → лише (watermark, expected], asc; частковий добір (брокер відповів порожньо / виняток) не пишеться
+     → бюджет унікальних барів гепа вичерпано (live_recover_max_total_bars) → WARN M1_GAP_BEYOND_BUDGET:
+       найстаріша частина — дірка (ремонт repair_m1_gaps / settle ADR-0098); джерело правди — цей WARN,
+       gap_state один на процес і його перезаписують інші символи
+     → повтор: перша сторінка — одна спроба (порожньо = брокер лежить), глибока — до 3 спроб (разовий таймаут IPC)
+     → коміт не більше live_recover_max_bars_per_cycle (120) найстаріших барів за виклик: коміт ≈ 50 мс
+       (перезапис Redis-хвоста M1), великий геп інакше займав би цикл усіх символів хвилинами; решту
+       допише наступний цикл від нового watermark
 
   7) Ingest кожен бар: _ingest_bar(bar)
      → Calendar-aware flat bar classification (див. §6)
@@ -335,12 +345,14 @@ if self._watermark_ms is not None:
 
 `tail_catchup()` — викликається в `_bootstrap_warmup()` **ПЕРЕД** main loop:
 
-1. Обчислює `missing = expected - watermark` (кількість пропущених M1)
-2. Якщо `missing > tail_catchup_max_bars` (default 5000) → truncate + loud WARNING + `gap_state`
-3. Fetch від FXCM: `fetch_last_n_m1(n=missing, date_to=cutoff+1M1)`
-4. Фільтр: тільки `watermark < open_ms ≤ cutoff`
-5. Ingest всі бари (з calendar-aware flat filter, M3 derive)
-6. Після catchup: `gap_state = 0` якщо все заповнено
+1. Обчислює `missing = expected - watermark` (кількість пропущених M1, у хвилинах стіни)
+2. Добір від watermark тим самим `_fetch_since_watermark` (§7 п.5): перша сторінка `missing + 1`, далі назад
+   сторінками по 200, доки не дійде до watermark або бюджету `tail_catchup_max_bars` (сирих барів)
+3. Брокер порожньо / виняток → нічого не пишемо, `tail_catchup_error` (watermark не рухається)
+4. Ingest усі бари `(watermark, cutoff]` за зростанням (calendar-aware фільтр §6, M3 derive)
+5. Коміт ≤ `live_recover_max_bars_per_cycle` найстаріших (бутстрап не блокується); решта → INFO
+   `M1_TAIL_CATCHUP_BACKLOG` + `gap_state policy=m1_tail_catchup_backlog`, допише основний цикл від watermark.
+   Дійшли до watermark і все записали → `gap_state = 0`; бюджет вичерпано → `M1_GAP_BEYOND_BUDGET`
 
 ### 8.3 Конфігурація
 
@@ -350,7 +362,8 @@ if self._watermark_ms is not None:
 }
 ```
 
-5000 M1 = ~83 години = ~3.5 дні. Після довшого простою → gap_state degraded + live_recover подбере.
+5000 барів ≈ 3.5 торгові доби. Після довшого простою найстаріша частина лишається діркою — гучно
+(`M1_GAP_BEYOND_BUDGET`, `gap_state`), ремонт — `tools/repair/repair_m1_gaps.py` або settle ADR-0098.
 
 ---
 
@@ -364,16 +377,24 @@ if self._watermark_ms is not None:
 
 `_live_recover_check()` — викликається **після кожного poll_once()**:
 
-1. Обчислює gap: `(expected - watermark) / M1_MS`
-2. Якщо gap > `live_recover_threshold_bars` (default 3) → **enter recover mode**
+`poll_once` сам добирає будь-який геп до watermark (§7 п.5), тож recover вмикається лише коли брокер не
+відповів (порожньо / виняток) або бюджет вичерпано — тобто це стан «брокер у біді», а не кожне перевідкриття.
+
+1. Обчислює gap: `(expected - max(watermark, scanned_through)) / M1_MS`, де `scanned_through` — cutoff
+   останнього добору, що дійшов до watermark (тонкі хвилини без барів recover не вмикають; межа вибірки —
+   завжди watermark)
+2. Якщо gap > `live_recover_threshold_bars` (default 3) → **enter recover mode** (WARN `M1_LIVE_RECOVER_START`)
 3. В recover mode:
-   - Fetch з cooldown (`live_recover_cooldown_s=5`)
-   - Batch size = `min(gap, max_bars_per_cycle=120)`
-   - Budget limit: `live_recover_max_total_bars=5000`
+   - Fetch з cooldown (`live_recover_cooldown_s=5`) тим самим добором від watermark; перша сторінка
+     `min(gap, max_bars_per_cycle=120) + 1`
+   - Budget: добір — до `live_recover_max_total_bars=5000` унікальних барів гепа за спробу; сесія recover
+     завершується `max_total_reached`, коли записано стільки барів; коміт ≤ `max_bars_per_cycle` за цикл
+   - Поки recover активний, `poll_once` власної вибірки не робить (той самий добір — один раз на цикл)
    - Degraded-but-loud: `uds.set_gap_state(policy="m1_live_recover_active")`
    - Фазовий лог кожні `log_interval_s=60`
-4. Вихід з recover: `caught_up` або `max_total_reached` або `budget_exhausted`
-5. Після виходу: `gap_state = 0`
+4. Вихід з recover: `caught_up` (добір дійшов до watermark), `beyond_budget` (+ `M1_GAP_BEYOND_BUDGET`),
+   `broker_starved`, `timeout`, `max_total_reached`
+5. Після виходу: `gap_state = 0` (крім `beyond_budget` — там лишається дірка)
 
 ### 9.3 Конфігурація
 
@@ -611,9 +632,9 @@ Preview-plane живе виключно в Redis (`{NS}:preview:*`). Не на �
 | `m3_derive_enabled` | Деривація M3 з M1 | `true` |
 | `tail_catchup_max_bars` | Макс барів для tail catchup на bootstrap | `5000` |
 | `live_recover_threshold_bars` | Поріг гепу для входу в live recover | `3` |
-| `live_recover_max_bars_per_cycle` | Макс барів за один recover fetch | `120` |
+| `live_recover_max_bars_per_cycle` | Перша сторінка recover і стеля комітів за виклик (poll_once, recover, tail_catchup) | `120` |
 | `live_recover_cooldown_s` | Cooldown між recover fetch | `5` |
-| `live_recover_max_total_bars` | Бюджет recover (всього барів) | `5000` |
+| `live_recover_max_total_bars` | Бюджет добору гепа (унікальних барів за спробу) для poll_once і recover; записаних за сесію recover | `5000` |
 | `live_recover_log_interval_s` | Інтервал фазового логу в recover | `60` |
 | `stale_s` | Поріг stale detection (секунди без нового бару) | `720` |
 
@@ -664,7 +685,8 @@ Preview-plane живе виключно в Redis (`{NS}:preview:*`). Не на �
 | `M1_LIVE_RECOVER_START symbol=XAU/USD gap_bars=120` | Вхід в recover mode |
 | `M1_LIVE_RECOVER_DONE symbol=XAU/USD reason=caught_up` | Вихід з recover |
 | `M1_STALE symbol=XAU/USD silence_s=800` | Stale detection спрацювало |
-| `M1_TAIL_CATCHUP symbol=XAU/USD missing=350 written=348` | Tail catchup результат |
+| `M1_TAIL_CATCHUP symbol=XAU/USD missing=350 written=348` | Tail catchup результат (`missing` — хвилини стіни, `written` менше на тонкі хвилини/паузу) |
+| `M1_GAP_BEYOND_BUDGET symbol=XAU/USD hole_from=… hole_to=…` | Геп більший за бюджет добору — дірка в SSOT, ремонт `repair_m1_gaps` / settle |
 | `M1_NONFLAT_IN_PAUSE symbol=XAU/USD` | Аномалія: non-flat під час break біля краю сесії |
 | `M1_PAUSE_NOISE_DROPPED symbol=XAG/USD ... dropped_total=13` | Бар глибоко в паузі відкинуто як шум (раз на хвилину); великий `v` тут = підозра на хибний календар |
 | `M1_PAUSE_EDGE_STALE_DROPPED symbol=NAS100 ... v=3 max_v=8` | Перша хвилина паузи після закриття з малим обсягом — застарілі тіки, відкинуто |

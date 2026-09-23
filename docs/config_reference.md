@@ -74,14 +74,15 @@
 
 ## Live Recovery (M1) — ⚠️ DEPRECATED
 
-> **Декомісіоновано**: Live Recovery був частиною M5 connector pipeline. Після переходу на M1-based pipeline ці ключі не використовуються активно. Залишаються в config.json для зворотної сумісності.
+> **Активні** у M1-полері (`runtime/ingest/polling/m1_poller.py`, секція `m1_poller`): добір гепа від watermark
+> (`_fetch_since_watermark`, з 23.09.2026) і стан recover. Докладно — `runtime/ingest/polling/README.md` §7–§9.
 
 | Ключ | Тип | За замовч. | Опис |
 | --- | --- | --- | --- |
 | `live_recover_threshold_bars` | int | 3 | Мін кількість пропущених барів для активації recovery |
-| `live_recover_max_bars_per_cycle` | int | 120 | Макс барів за один цикл recovery |
+| `live_recover_max_bars_per_cycle` | int | 120 | Перша сторінка recover і стеля комітів гепа за виклик на символ |
 | `live_recover_cooldown_s` | int | 5 | Cooldown між recovery циклами |
-| `live_recover_max_total_bars` | int | 5000 | Загальний бюджет recovery барів |
+| `live_recover_max_total_bars` | int | 5000 | Бюджет добору гепа (унікальних барів за спробу, poll_once і recover); понад — `M1_GAP_BEYOND_BUDGET` |
 | `live_recover_log_interval_s` | int | 60 | Інтервал логування recovery |
 
 ---

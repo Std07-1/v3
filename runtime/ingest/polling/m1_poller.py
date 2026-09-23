@@ -49,6 +49,7 @@ from runtime.ingest.m1_session_open import (
     rebuild_session_open_bar,
     resolve_session_open_rebuild_policy,
 )
+from runtime.ingest.broker import MAX_BARS_PER_FETCH
 from runtime.ingest.polling.m1_drop_ledger import DroppedM1Ledger
 from runtime.ingest.tick_common import (
     resolve_symbol_calendars,
@@ -71,6 +72,12 @@ _M1_MS = 60_000
 # 22.09.2026 17:28 tail_catchup missing=13 → fetched=12, хвилина 17:15 втрачена на 5 символах (за watermark —
 # live_recover її вже не бачить). Головний цикл цей запас має (`gap_bars + 1` у _compute_fetch_n).
 _FORMING_SLOT = 1
+# Чим закінчився добір гепа (_fetch_since_watermark)
+GAP_REACHED = "reached"  # геп покрито до watermark: між watermark і cutoff брокер більше нічого не має
+GAP_BEYOND_BUDGET = "beyond_budget"  # бюджет сирих барів вичерпано раніше — найстаріша частина гепа лишається діркою
+GAP_BROKER_EMPTY = "broker_empty"  # брокер віддав порожньо (сесія мертва) — писати нічого не можна
+_PAGE_ATTEMPTS = 3  # спроб на глибоку сторінку добору гепа (перша — одна спроба)
+_PAGE_RETRY_PAUSE_S = 0.5
 
 # Flat bar: O==H==L==C з малим обсягом (calendar-pause маркер від брокера)
 # SSOT: config.json → flat_bar_max_volume. Дефолт 4 (як у конфігу).
@@ -157,7 +164,7 @@ class M1SymbolPoller:
     - Gap detection: loud якщо watermark відстає
     """
 
-    # Максимум барів за один fetch (захист від великих гепів)
+    # Перша сторінка звичайного опитування (gap + 1, не більше); більший геп догортається сторінками назад
     MAX_FETCH_N = 120  # 2 години M1
     # Після скількох пропущених хвилин вважати gap (для логу)
     GAP_WARN_THRESHOLD = 3
@@ -215,6 +222,9 @@ class M1SymbolPoller:
         self._recover_last_log_ts: float = 0.0
         self._recover_gap_at_start: int = 0
         self._recover_consecutive_empty: int = 0
+        # До цієї хвилини брокер нічого новішого за watermark не має (останній добір дійшов до watermark). Лише
+        # для тригера recover: тонкі хвилини без барів не вмикають його щохвилини. Межа вибірки — завжди watermark.
+        self._scanned_through_ms: int = 0
 
         # P0.3: stale detection (ADR-0002)
         self._stale_s = max(0, stale_s)
@@ -293,6 +303,114 @@ class M1SymbolPoller:
                 )
         # Fetch gap + 1 (щоб перекрити), але не більше ліміту
         return min(gap_bars + 1, self.MAX_FETCH_N)
+
+    # -- Добір гепа від watermark (ADR-0002 §P0.1/P0.2 «from watermark+1») --
+
+    def _fetch_since_watermark(
+        self, cutoff_ms: int, first_n: int, budget: int
+    ) -> Tuple[List[CandleBar], str, int]:
+        """Бари (watermark, cutoff] за зростанням, причина завершення (GAP_*) і скільки сирих барів віддав брокер.
+
+        Брокер віддає n останніх існуючих барів з open ≤ date_to — разом із тим, що відкрився о date_to (для
+        date_to = cutoff + 1 хв він формується) — і не більше MAX_BARS_PER_FETCH за запит. Якщо найстарший бар
+        відповіді ще новіший за watermark + 1 хв, між ними можуть бути бари: гортаємо назад від нього, як
+        repair_m1_gaps. У просторі барів паузи без барів проходяться самі, а бари паузи (шум, застарілий край)
+        доходять до класифікатора ADR-0099. Писати лише найновішу сторінку не можна — watermark перестрибнув би
+        найстаріші хвилини гепа назавжди (рев'ю dfca437, 23.09.2026). Бюджет — унікальні бари гепа. Сторінку, що
+        впала або прийшла порожньою, повторюємо; виняток останньої спроби — вгору.
+        """
+        watermark_ms = self._watermark_ms
+        collected: Dict[int, CandleBar] = {}
+        date_to_ms = cutoff_ms + _M1_MS
+        n = min(max(2, first_n), MAX_BARS_PER_FETCH)
+        fetched = 0
+        attempts = 1  # перша сторінка без повторів: порожньо/таймаут тут = брокер лежить, таймаути не множимо
+        while True:
+            raw = self._fetch_page_with_retry(n, date_to_ms, attempts)
+            if not raw:
+                # Для живого символу історія до date_to є завжди: порожньо = брокер лежить; частковий добір не пишемо
+                return [], GAP_BROKER_EMPTY, fetched
+            fetched += len(raw)
+            oldest_ms = min(b.open_time_ms for b in raw)
+            for bar in raw:
+                if bar.open_time_ms <= cutoff_ms and (
+                    watermark_ms is None or bar.open_time_ms > watermark_ms
+                ):
+                    collected.setdefault(bar.open_time_ms, bar)
+            if watermark_ms is None or oldest_ms <= watermark_ms + _M1_MS:
+                reason = GAP_REACHED
+                break
+            if oldest_ms >= date_to_ms:
+                # Старших барів у брокера немає (watermark старший за горизонт історії) — добирати нічого
+                logging.warning(
+                    "M1_GAP_HISTORY_HORIZON symbol=%s oldest=%s watermark=%s",
+                    self._symbol,
+                    ms_to_utc_dt(oldest_ms).isoformat(),
+                    ms_to_utc_dt(watermark_ms).isoformat(),
+                )
+                reason = GAP_REACHED
+                break
+            if len(collected) >= budget:
+                reason = GAP_BEYOND_BUDGET
+                break
+            date_to_ms = oldest_ms  # включно: найстарший отриманий бар повториться і відсіється
+            n = MAX_BARS_PER_FETCH
+            attempts = _PAGE_ATTEMPTS
+        return sorted(collected.values(), key=lambda b: b.open_time_ms), reason, fetched
+
+    def _fetch_page_with_retry(self, n: int, date_to_ms: int, attempts: int) -> List[CandleBar]:
+        """Сторінка брокера до `attempts` спроб: разовий таймаут IPC посеред гортання не обнуляє весь добір."""
+        for attempt in range(1, attempts + 1):
+            try:
+                raw = self._provider.fetch_last_n_m1(
+                    self._symbol,
+                    n=n,
+                    date_to_utc=ms_to_utc_dt(date_to_ms),
+                ) or []
+            except Exception:
+                if attempt == attempts:
+                    raise
+                raw = []
+            if raw:
+                return raw
+            if attempt < attempts:
+                time.sleep(_PAGE_RETRY_PAUSE_S)
+        return []
+
+    def _ingest_gap(self, bars: List[CandleBar], reason: str, cutoff_ms: int) -> Tuple[int, Optional[Tuple[int, int, int]]]:
+        """Комітить найстаріші бари добору, не більше live_recover_max_bars_per_cycle за виклик.
+
+        Решта гепа — наступним циклом від нового watermark (коміт ≈ 50 мс: великий геп інакше займав би цикл
+        усіх символів хвилинами). Повертає (записано, дірка для звіту або None): дірка — лише коли бюджет
+        вичерпано і найстаріша частина гепа недосяжна.
+        """
+        watermark_before = self._watermark_ms
+        batch = bars[: self._live_recover_max_bars_per_cycle]
+        written = sum(1 for bar in batch if self._ingest_bar(bar))
+        capped = len(batch) < len(bars)
+        if reason == GAP_REACHED and not capped:
+            self._scanned_through_ms = max(self._scanned_through_ms, cutoff_ms)
+        hole = None
+        if reason == GAP_BEYOND_BUDGET and watermark_before is not None:
+            hole = (batch[0].open_time_ms if batch else cutoff_ms + _M1_MS, watermark_before, cutoff_ms)
+        return written, hole
+
+    def _report_gap_beyond_budget(self, first_written_ms: int, watermark_before_ms: int, cutoff_ms: int) -> None:
+        """Геп більший за бюджет добору: найстаріша частина — дірка. Джерело правди — цей WARN; gap_state один на
+        процес і його перезаписують інші символи (ремонт — repair_m1_gaps / settle ADR-0098)."""
+        hole_to_ms = first_written_ms - _M1_MS
+        logging.warning(
+            "M1_GAP_BEYOND_BUDGET symbol=%s hole_from=%s hole_to=%s — дірку добирає лише repair_m1_gaps / settle",
+            self._symbol,
+            ms_to_utc_dt(watermark_before_ms + _M1_MS).isoformat(),
+            ms_to_utc_dt(hole_to_ms).isoformat(),
+        )
+        self._uds.set_gap_state(
+            backlog_bars=max(0, int((hole_to_ms - watermark_before_ms) // _M1_MS)),
+            gap_from_ms=watermark_before_ms + _M1_MS,
+            gap_to_ms=hole_to_ms,
+            policy="m1_gap_beyond_budget",
+        )
 
     # -- Ingest bar (calendar-aware) ------------------------------------
 
@@ -503,15 +621,17 @@ class M1SymbolPoller:
         # Adaptive fetch count
         fetch_n = self._compute_fetch_n(now_ms)
 
-        # Єдиний шлях: history M1 → фільтр закритих → sort → commit у UDS.
-        # Fetch: date_to = cutoff + 1 M1 (щоб точно включити cutoff бар)
-        date_to = ms_to_utc_dt(expected + _M1_MS) if expected > 0 else None
-        bars: List[CandleBar] = []
+        if self._recover_active:
+            # Recover уже добирає геп тим самим добором від watermark — друга вибірка в цьому циклі зайва
+            self._live_recover_check()
+            self._stale_check(now_ms)
+            return
+
+        # Єдиний шлях: history M1 від watermark до expected (сторінками назад, якщо геп не влазить у запит) → UDS.
+        hole: Optional[Tuple[int, int, int]] = None
         try:
-            bars = self._provider.fetch_last_n_m1(
-                self._symbol,
-                n=fetch_n,
-                date_to_utc=date_to,
+            bars, reason, _fetched = self._fetch_since_watermark(
+                expected, fetch_n, max(self._live_recover_max_total_bars, fetch_n)
             )
         except Exception as exc:
             self._errors += 1
@@ -523,21 +643,14 @@ class M1SymbolPoller:
                     self._errors,
                 )
         else:
-            # FXCM може повертати бари у зворотному порядку.
-            # Фільтр: тільки бари після watermark і до expected cutoff.
-            # Watermark pre-filter запобігає stale spam в UDS.
-            if expected > 0:
-                bars = [b for b in bars if b.open_time_ms <= expected]
-            if self._watermark_ms is not None:
-                bars = [b for b in bars if b.open_time_ms > self._watermark_ms]
-            bars.sort(key=lambda b: b.open_time_ms)
-
-            # Ingest кожен бар
-            for bar in bars:
-                self._ingest_bar(bar)
+            # Бари вже відфільтровані (watermark, expected] і відсортовані — watermark не перестрибує жодної хвилини
+            _written, hole = self._ingest_gap(bars, reason, expected)
 
         # P0.2: live recover після звичайного poll
         self._live_recover_check()
+        if hole is not None:
+            # Після recover: його finish чистить gap_state
+            self._report_gap_beyond_budget(*hole)
 
         # P0.3: stale detection
         self._stale_check(now_ms)
@@ -561,7 +674,8 @@ class M1SymbolPoller:
             return
         if self._watermark_ms is None:
             return  # немає watermark — обробляє bootstrap/tail_catchup
-        gap_bars = int((cutoff - self._watermark_ms) // _M1_MS)
+        # Геп від останнього повного добору: тонкі хвилини, яких у брокера немає, recover щохвилини не вмикають
+        gap_bars = int((cutoff - max(self._watermark_ms, self._scanned_through_ms)) // _M1_MS)
 
         # --- Вхід у recover ---
         if not self._recover_active:
@@ -595,8 +709,8 @@ class M1SymbolPoller:
             self._live_recover_finish("caught_up")
             return
 
-        # --- Вихід: бюджет вичерпано ---
-        if self._recover_total_fetched >= self._live_recover_max_total_bars:
+        # --- Вихід: бюджет вичерпано (записані бари сесії recover) ---
+        if self._recover_total_written >= self._live_recover_max_total_bars:
             self._live_recover_finish("max_total_reached")
             return
 
@@ -616,22 +730,11 @@ class M1SymbolPoller:
         if now_s - self._recover_last_fetch_ts < self._live_recover_cooldown_s:
             return
 
-        # --- Fetch batch ---
+        # --- Fetch: увесь геп від watermark (сторінками назад), перша сторінка — gap + слот формуючої ---
         n = min(gap_bars, self._live_recover_max_bars_per_cycle)
-        remaining_budget = (
-            self._live_recover_max_total_bars - self._recover_total_fetched
-        )
-        n = min(n, remaining_budget)
-        if n <= 0:
-            self._live_recover_finish("budget_exhausted")
-            return
-
-        date_to = ms_to_utc_dt(cutoff + _M1_MS)
         try:
-            bars = self._provider.fetch_last_n_m1(
-                self._symbol,
-                n=n + _FORMING_SLOT,
-                date_to_utc=date_to,
+            bars, reason, fetched_count = self._fetch_since_watermark(
+                cutoff, n + _FORMING_SLOT, self._live_recover_max_total_bars
             )
         except Exception as exc:
             self._errors += 1
@@ -644,23 +747,21 @@ class M1SymbolPoller:
             return
 
         self._recover_last_fetch_ts = now_s
-        fetched_count = len(bars) if bars else 0
-        self._recover_total_fetched += fetched_count
-        if fetched_count == 0:
+        if reason == GAP_BROKER_EMPTY:
             self._recover_consecutive_empty += 1
         else:
             self._recover_consecutive_empty = 0
+            self._recover_total_fetched += fetched_count
 
-        if bars:
-            bars = [
-                b
-                for b in bars
-                if b.open_time_ms > self._watermark_ms and b.open_time_ms <= cutoff
-            ]
-            bars.sort(key=lambda b: b.open_time_ms)
-            for bar in bars:
-                if self._ingest_bar(bar):
-                    self._recover_total_written += 1
+        written, hole = self._ingest_gap(bars, reason, cutoff)
+        self._recover_total_written += written
+        if hole is not None:
+            self._live_recover_finish("beyond_budget")
+            self._report_gap_beyond_budget(*hole)
+            return
+        if reason == GAP_REACHED and self._scanned_through_ms >= cutoff:
+            self._live_recover_finish("caught_up")
+            return
 
         # --- Оновити gap_state ---
         remaining_gap = int((cutoff - (self._watermark_ms or 0)) // _M1_MS)
@@ -871,34 +972,10 @@ class M1SymbolPoller:
         if missing <= 0:
             return {"tail_catchup_missing": 0}
 
-        n = min(missing, self._tail_catchup_max_bars)
-
-        # Якщо truncated — loud warning + gap_state (degraded-but-loud)
-        if missing > n:
-            backlog = missing - n
-            logging.warning(
-                "M1_TAIL_CATCHUP_TRUNCATED symbol=%s missing_total=%d "
-                "fetched=%d backlog=%d",
-                self._symbol,
-                missing,
-                n,
-                backlog,
-            )
-            gap_from_ms = self._watermark_ms + _M1_MS
-            self._uds.set_gap_state(
-                backlog_bars=backlog,
-                gap_from_ms=gap_from_ms,
-                gap_to_ms=cutoff_ms,
-                policy="m1_tail_catchup_truncated",
-            )
-
-        # Fetch: date_to = cutoff + 1 M1 (щоб точно включити cutoff); +1 слот під формуючу свічку о date_to
-        date_to = ms_to_utc_dt(cutoff_ms + _M1_MS)
+        # Увесь геп від watermark: сторінками назад від cutoff, доки не дійдемо до watermark або бюджету
         try:
-            bars = self._provider.fetch_last_n_m1(
-                self._symbol,
-                n=n + _FORMING_SLOT,
-                date_to_utc=date_to,
+            bars, reason, _fetched = self._fetch_since_watermark(
+                cutoff_ms, missing + _FORMING_SLOT, self._tail_catchup_max_bars
             )
         except Exception as exc:
             logging.warning(
@@ -911,36 +988,36 @@ class M1SymbolPoller:
                 "tail_catchup_fetched": 0,
                 "tail_catchup_error": str(exc),
             }
-
-        if not bars:
+        if reason == GAP_BROKER_EMPTY:
             return {
                 "tail_catchup_missing": missing,
                 "tail_catchup_fetched": 0,
+                "tail_catchup_error": "broker returned no bars",
             }
 
-        # Фільтр: тільки бари після watermark і до cutoff
-        bars = [
-            b
-            for b in bars
-            if b.open_time_ms > self._watermark_ms and b.open_time_ms <= cutoff_ms
-        ]
-        bars.sort(key=lambda b: b.open_time_ms)
-
-        written = 0
-        for bar in bars:
-            if self._ingest_bar(bar):
-                written += 1
-
-        # Очистити gap_state якщо все заповнено
-        final_gap = 0
-        if cutoff_ms > 0 and self._watermark_ms is not None:
-            final_gap = int((cutoff_ms - self._watermark_ms) // _M1_MS)
-        if final_gap <= 0:
+        # Не більше live_recover_max_bars_per_cycle за раз: решту гепа допишуть цикли poll/recover від watermark
+        written, hole = self._ingest_gap(bars, reason, cutoff_ms)
+        if hole is not None:
+            self._report_gap_beyond_budget(*hole)
+        elif self._scanned_through_ms >= cutoff_ms:
             self._uds.set_gap_state(
                 backlog_bars=0,
                 gap_from_ms=None,
                 gap_to_ms=None,
                 policy=None,
+            )
+        else:
+            backlog = int((cutoff_ms - (self._watermark_ms or cutoff_ms)) // _M1_MS)
+            logging.info(
+                "M1_TAIL_CATCHUP_BACKLOG symbol=%s backlog_minutes=%d — допише основний цикл",
+                self._symbol,
+                backlog,
+            )
+            self._uds.set_gap_state(
+                backlog_bars=backlog,
+                gap_from_ms=(self._watermark_ms or cutoff_ms) + _M1_MS,
+                gap_to_ms=cutoff_ms,
+                policy="m1_tail_catchup_backlog",
             )
 
         logging.info(

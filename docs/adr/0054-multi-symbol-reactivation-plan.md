@@ -419,6 +419,9 @@ XAU/XAG без нових дублікатів і без `DERIVE_REJECT` за 24
    `tail_catchup` просить до 5000, але sidecar мовчки ріже до 200 (`broker_sidecar.py:80,205`) без логу
    й прапорця у відповіді. **Будь-який простій довший за ~2 години лишає незакриту діру назавжди**,
    і в логах при цьому INFO про успіх.
+   **Закрито 23.09.2026 (changelog 20260923-002):** poll_once, live_recover і tail_catchup добирають геп
+   від watermark (`_fetch_since_watermark`: сторінки по `MAX_BARS_PER_FETCH` назад від cutoff, доки не
+   дійдуть до watermark); частковий добір не пишеться, геп понад бюджет — `M1_GAP_BEYOND_BUDGET` + `gap_state`.
 5. **DST — 100% ручна багатокрокова операція без сторожа (S1, дедлайн відомий).** На VPS нуль cron,
    нуль systemd-таймерів, `TZ=Etc/UTC`; `MarketCalendar` — фіксовані UTC HH:MM без tz; автоматичного
    вибору сезону за датою в коді немає взагалі. Ранбук `dst_transition.md` вимагає stop → правку 12 полів
