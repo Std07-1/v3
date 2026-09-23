@@ -92,47 +92,8 @@ def test_repair_dedup_dry_run_changes_nothing(tmp_path, capsys):
     assert path.read_text(encoding="utf-8") == before
 
 
-D1_MS = 86_400_000
-OT_21, OT_22 = 1_729_112_400_000, 1_729_116_000_000  # 16.10.2024 21:00 (літня сітка) і 22:00 UTC (поза сезоном)
-
-
-def _d1(open_ms, *, fmt, partial=False, complete=True, src="history"):
-    """Той самий D1-бар у формі, в якій його бачить кожен шлях читання.
-
-    disk  — рядок part-файла: extensions є, ts немає;
-    ram   — LWC-елемент RAM-вікна: extensions зберігаються, event_ts = close (uds.py ~1848);
-    redis — канонічний бар з Redis-payload: extensions зрізано, event_ts = close (uds.py ~1940).
-    """
-    bar = {"open_time_ms": open_ms, "close_time_ms": open_ms + D1_MS, "o": 1.0, "h": 2.0, "low": 0.5,
-           "c": 1.5, "v": 10.0, "complete": complete, "src": src}
-    if fmt in ("disk", "ram") and partial:
-        bar["extensions"] = {"partial": True}
-    if fmt in ("ram", "redis") and complete:
-        bar["event_ts"] = open_ms + D1_MS
-    return bar
-
-
-def _read_path_opens(fmt, earlier_kw, later_kw):
-    result, _geom = _ensure_sorted_dedup([_d1(OT_21, fmt=fmt, **earlier_kw), _d1(OT_22, fmt=fmt, **later_kw)])
-    return tuple(b["open_time_ms"] for b in result)
-
-
-D1_PAIRS = {
-    "повна нічия": ({}, {}),
-    "ранній partial на диску": ({"partial": True}, {}),
-    "пізній partial на диску": ({}, {"partial": True}),
-    "пізній не final": ({}, {"src": "preview"}),
-    "ранній не final": ({"src": "preview"}, {}),
-}
-
-
-@pytest.mark.parametrize("case", sorted(D1_PAIRS))
-def test_d1_bars_of_one_day_are_not_merged_on_any_read_path(case):
-    """ADR-0095 §3.3: колишній near-dedup D1 (поріг 2 год) зливав 21:00 і 22:00 одного дня і тим тихо ховав D1 поза
-    сезонною сіткою. Читач сітку не фільтрує: на кожному шляху читання — обидва бари, однаково (ADR-0094)."""
-    earlier_kw, later_kw = D1_PAIRS[case]
-    opens = {fmt: _read_path_opens(fmt, earlier_kw, later_kw) for fmt in ("disk", "ram", "redis")}
-    assert set(opens.values()) == {(OT_21, OT_22)}, opens
+# Пара D1 одного дня (21:00/22:00) більше не зливається (ADR-0095 §3.3): перевірка — через справжні шляхи
+# UnifiedDataStore.read_window у tests/test_uds_read_d1_no_near_dedup.py (W1fix).
 
 
 def test_only_one_bar_chooser_exists_in_the_repo():
