@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Dict, List
@@ -42,7 +43,7 @@ def _ms(y, mo, d, h=0, mi=0) -> int:
 
 
 def _write_m1(root: Path, first_ms: int, last_ms: int) -> Dict[int, float]:
-    """M1 XAU/USD кожну хвилину [first, last]; повертає open кожної хвилини."""
+    """M1 XAU/USD кожну хвилину [first, last] (дописує в part-файли); повертає open кожної хвилини."""
     opens: Dict[int, float] = {}
     by_day: Dict[str, List[str]] = {}
     for k, open_ms in enumerate(range(first_ms, last_ms + M1_MS, M1_MS)):
@@ -56,7 +57,8 @@ def _write_m1(root: Path, first_ms: int, last_ms: int) -> Dict[int, float]:
     tf_dir = root / "XAU_USD" / "tf_60"
     tf_dir.mkdir(parents=True, exist_ok=True)
     for day, lines in by_day.items():
-        (tf_dir / ("part-%s.jsonl" % day)).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        with open(tf_dir / ("part-%s.jsonl" % day), "a", encoding="utf-8") as part:
+            part.write("\n".join(lines) + "\n")
     return opens
 
 
@@ -109,3 +111,34 @@ def test_rebuild_main_refuses_symbol_without_measured_grid_before_any_write(tmp_
         rebuild_from_m1.main()
     assert caught.value.code == 2
     assert sorted(p.name for p in (tmp_path / "XAU_USD").iterdir()) == ["tf_60"], "XAU/USD не перебудовано"
+
+
+def test_rebuild_force_from_round_date_aligns_start_to_trading_day_open(tmp_path, monkeypatch, caplog):
+    """`--start 2026-05-15 --force`: торгова доба пт 15.05 відкрилась чт 14.05 21:00 UTC — прогін вирівнюється на неї.
+
+    Раніше джерело читалося від 00:00, тож H4/D1 14.05 21:00 будувались partial (H4 з 1 H1 із 3, D1 без перших двох
+    годин), а dedup `--force` не заходив у part-20260514: там лишалися старий цілий бар і новий partial.
+    """
+    _write_m1(tmp_path, _ms(2026, 5, 13, 22), _ms(2026, 5, 14, 20, 59))
+    _write_m1(tmp_path, _ms(2026, 5, 14, 22), _ms(2026, 5, 15, 20, 44))
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(dict(CFG, data_root=str(tmp_path), symbols=["XAU/USD"])), encoding="utf-8")
+
+    def run(*args: str) -> None:
+        monkeypatch.setattr(sys, "argv", ["rebuild_from_m1", "--config", str(config_path), "--symbol", "XAU/USD",
+                                          "--writers-stopped", *args])
+        rebuild_from_m1.main()
+
+    run("--start", "2026-05-13T21:00:00Z", "--end", "2026-05-16T00:00:00Z")
+    with caplog.at_level(logging.INFO):
+        run("--start", "2026-05-15", "--end", "2026-05-16", "--force")
+
+    for tf_s in (H4_S, D1_S):
+        part = tmp_path / "XAU_USD" / ("tf_%d" % tf_s) / "part-20260514.jsonl"
+        bars = [json.loads(line) for line in part.read_text(encoding="utf-8").splitlines() if line.strip()]
+        opens = [bar["open_time_ms"] for bar in bars]
+        assert len(opens) == len(set(opens)), "tf_%d: дублікат ключа у part-файлі попереднього дня" % tf_s
+        first = next(bar for bar in bars if bar["open_time_ms"] == _ms(2026, 5, 14, 21))
+        assert not (first.get("extensions") or {}).get("partial"), "tf_%d: перший бакет прогону — з цілої доби" % tf_s
+    assert ("REBUILD_RANGE_ALIGNED symbol=XAU/USD requested=2026-05-15T00:00:00+00:00 "
+            "aligned=2026-05-14T21:00:00+00:00") in caplog.text

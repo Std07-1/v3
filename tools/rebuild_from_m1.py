@@ -32,7 +32,7 @@ from core.derive import (
 )
 from core.model.bars import CandleBar
 from core.model.candle_chain import is_display_hidden
-from core.session_anchor import htf_bucket_start_ms, htf_next_bucket_start_ms
+from core.session_anchor import D1_S, htf_bucket_start_ms, htf_next_bucket_start_ms
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.store.ssot_jsonl import (
     JsonlAppender,
@@ -519,7 +519,10 @@ def main() -> None:
         "--start",
         type=str,
         default=None,
-        help="Початок діапазону (ISO UTC, наприклад 2025-01-01).",
+        help=(
+            "Початок діапазону (ISO UTC, наприклад 2025-01-01). Вирівнюється назад на відкриття торгової доби "
+            "символу (бакет D1 сезонної сітки)."
+        ),
     )
     parser.add_argument(
         "--end",
@@ -605,6 +608,21 @@ def main() -> None:
                     logging.warning("SKIP symbol=%s — M1 tail відсутній.", symbol)
                     continue
                 end_ms = tail_ms + TF_M1_MS
+
+            # Бакет H4/D1, що містить `start`, на сезонній сітці відкривається раніше за нього: торгова доба
+            # 17:00 NY починається попереднього вечора UTC. Без вирівнювання джерело читалося від `start`, тому
+            # перший H4/D1 будувався partial з обрізаних годин. Dedup `--force` при цьому не заходив у part-файл
+            # попереднього дня, і там лишалися обидва бари: старий цілий і новий partial. Тому вирівнюємо на
+            # відкриття торгової доби — найширшого похідного бакета.
+            aligned_start_ms = htf_bucket_start_ms(start_ms, D1_S, anchor_rules[symbol])
+            if aligned_start_ms != start_ms:
+                logging.info(
+                    "REBUILD_RANGE_ALIGNED symbol=%s requested=%s aligned=%s",
+                    symbol,
+                    dt.datetime.fromtimestamp(start_ms / 1000, dt.timezone.utc).isoformat(),
+                    dt.datetime.fromtimestamp(aligned_start_ms / 1000, dt.timezone.utc).isoformat(),
+                )
+                start_ms = aligned_start_ms
 
             logging.info(
                 "REBUILD_RANGE symbol=%s start=%s end=%s",
