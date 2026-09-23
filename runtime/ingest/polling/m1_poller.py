@@ -35,6 +35,7 @@ from runtime.ingest.m1_session_filter import (
     VERDICT_PAUSE_NOISE_DROPPED,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
     VERDICT_REOPEN_FLAT_DROPPED,
+    chain_open_to_prev_close,
     classify_m1_by_calendar,
     is_flat_m1,
     resolve_flat_max_volume,
@@ -237,6 +238,10 @@ class M1SymbolPoller:
 
         # Watermark — останній committed M1 open_ms
         self._watermark_ms: Optional[int] = None
+        # Останній закомічений M1 символу — ланцюг open = close попереднього (ADR-0101)
+        self._last_bar: Optional[CandleBar] = None
+        self._chained_total = 0
+        self._chain_log_last_ts = 0.0
         self._bars_on_disk: int = 0  # M1 bars знайдені на диску під час warmup
 
         # Counters
@@ -489,6 +494,11 @@ class M1SymbolPoller:
             self._report_dropped_bar(bar, verdict)
             return False
         bar = classified
+        if self._last_bar is not None and bar.open_time_ms > self._last_bar.open_time_ms:
+            chained = chain_open_to_prev_close(self._last_bar, bar)
+            if chained is not bar:
+                self._report_chained(bar, chained)
+                bar = chained
         if verdict == VERDICT_PAUSE_NONFLAT_ANOMALY:
             logging.warning(
                 "M1_NONFLAT_IN_PAUSE symbol=%s open_ms=%s o=%.5f h=%.5f l=%.5f c=%.5f v=%.0f",
@@ -504,6 +514,7 @@ class M1SymbolPoller:
         result = self._uds.commit_final_bar(bar)
         if result.ok:
             self._committed_m1 += 1
+            self._last_bar = bar
             # Оновлюємо watermark
             if self._watermark_ms is None or bar.open_time_ms > self._watermark_ms:
                 self._watermark_ms = bar.open_time_ms
@@ -530,6 +541,22 @@ class M1SymbolPoller:
                 bar.open_time_ms,
             )
         return False
+
+    def _report_chained(self, raw: CandleBar, chained: CandleBar) -> None:
+        """ADR-0101: open бару прив'язано до close попереднього — гучно (перші 5, далі раз на 60 с) і в лічильнику."""
+        self._chained_total += 1
+        now = time.time()
+        if self._chained_total <= 5 or now - self._chain_log_last_ts >= 60.0:
+            self._chain_log_last_ts = now
+            logging.warning(
+                "M1_OPEN_CHAINED symbol=%s open_ms=%s o=%.5f->%.5f delta=%.5f total=%d",
+                self._symbol,
+                raw.open_time_ms,
+                raw.o,
+                chained.o,
+                chained.o - raw.o,
+                self._chained_total,
+            )
 
     # -- Перша хвилина після перерви (ADR-0096 слайс E) -----------------
 
@@ -858,6 +885,11 @@ class M1SymbolPoller:
                         or bar.open_time_ms > self._watermark_ms
                     ):
                         self._watermark_ms = bar.open_time_ms
+                    # Ланцюг ADR-0101 — від останнього видимого бару (пласку паузу display ховає)
+                    if not bar.extensions.get("calendar_pause_flat") and (
+                        self._last_bar is None or bar.open_time_ms > self._last_bar.open_time_ms
+                    ):
+                        self._last_bar = bar
                     loaded += 1
             self._bars_on_disk = loaded  # зберегти для Phase 2.5 trigger
             return loaded
@@ -1040,6 +1072,7 @@ class M1SymbolPoller:
             "pause_noise_dropped": self._pause_noise_dropped,
             "pause_noise_alarms": self._pause_noise_alarms,
             "pause_edge_stale_dropped": self._pause_edge_stale_dropped,
+            "open_chained": self._chained_total,
             "gaps_detected": self._gaps_detected,
             "caught_up_skips": self._already_caught_up,
             "watermark_ms": self._watermark_ms,
@@ -1464,9 +1497,10 @@ class M1PollerRunner:
         total_caught = sum(p.stats["caught_up_skips"] for p in self._pollers)
         recovering = sum(1 for p in self._pollers if p.stats.get("recover_active"))
         total_stale = sum(p.stats.get("stale_count", 0) for p in self._pollers)
+        total_chained = sum(p.stats.get("open_chained", 0) for p in self._pollers)
         logging.info(
             "M1_POLLER_STATS symbols=%d m1=%d m3=%d err=%d cal_skip=%d pause_noise=%d edge_stale=%d noise_alarm=%d "
-            "gaps=%d caught_up=%d recovering=%d stale=%d",
+            "gaps=%d caught_up=%d recovering=%d stale=%d chained=%d",
             len(self._pollers),
             total_m1,
             total_m3,
@@ -1479,6 +1513,7 @@ class M1PollerRunner:
             total_caught,
             recovering,
             total_stale,
+            total_chained,
         )
 
 

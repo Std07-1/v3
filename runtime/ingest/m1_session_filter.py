@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from typing import Callable, FrozenSet, List, Optional, Tuple
+from typing import Callable, FrozenSet, List, Optional, Sequence, Tuple
 
 from core.model.bars import CandleBar
 
@@ -39,6 +39,10 @@ VERDICT_PAUSE_NONFLAT_ANOMALY = "pause_nonflat_anomaly"
 VERDICT_REOPEN_FLAT_DROPPED = "reopen_flat_dropped"
 VERDICT_PAUSE_NOISE_DROPPED = "pause_noise_dropped"
 VERDICT_PAUSE_EDGE_STALE_DROPPED = "pause_edge_stale_dropped"
+VERDICT_PAUSE_EDGE_STALE_FOLDED = "pause_edge_stale_folded"  # ADR-0101: вкладено в останню хвилину сесії (пакетні записувачі)
+
+# Суцільний ланцюг ADR-0101: допуск — представлення float, не крок ціни (як рейка ADR-0100 open_chain_breaks)
+_CHAIN_REL_TOL = 1e-9
 
 _M1_MS = 60_000
 
@@ -257,3 +261,80 @@ def _decide_verdict(bar: CandleBar, *, flat_max_volume: int, trading: bool, sess
 
 def _with_marker(bar: CandleBar, marker: str) -> CandleBar:
     return dataclasses.replace(bar, extensions={**bar.extensions, marker: True})
+
+
+# ---------------------------------------------------------------------------
+# Суцільний ланцюг свічок (ADR-0101): open = close попереднього існуючого бару
+# ---------------------------------------------------------------------------
+def open_breaks_chain(prev_close: float, bar_open: float) -> bool:
+    """Розрив ланцюга: open бару ≠ close попереднього в межах представлення float."""
+    return abs(bar_open - prev_close) > _CHAIN_REL_TOL * max(1.0, abs(prev_close))
+
+
+def chain_open_to_prev_close(prev: CandleBar, bar: CandleBar) -> CandleBar:
+    """ADR-0101 §3.2: open бару := close попереднього існуючого бару (конвенція PREVIOUS_CLOSE, як у TV).
+
+    Ревізія брокера переписує close(t), а open(t+1) лишає; ми відкидаємо застарілий край, чий close уже став open
+    наступної сесії. Без розриву повертає той самий об'єкт; з розривом — копію з h/low, що охоплюють новий open, і
+    маркером `open_chained_from` (сирий open брокера).
+    """
+    if not open_breaks_chain(prev.c, bar.o):
+        return bar
+    chained_open = prev.c
+    return dataclasses.replace(
+        bar,
+        o=chained_open,
+        h=max(bar.h, chained_open),
+        low=min(bar.low, chained_open),
+        extensions={**bar.extensions, "open_chained_from": bar.o},
+    )
+
+
+def fold_edge_stale(last_session_bar: CandleBar, stale_bar: CandleBar) -> CandleBar:
+    """ADR-0101 §3.2 (змінює ADR-0099 §3.2): пізні тіки першої хвилини паузи — в останній бар сесії, як у TV.
+
+    h/low охоплюють обидва, close і обсяг — з урахуванням пізніх тіків; маркер `late_ticks_folded` = обсяг вкладеного.
+    """
+    return dataclasses.replace(
+        last_session_bar,
+        h=max(last_session_bar.h, stale_bar.h),
+        low=min(last_session_bar.low, stale_bar.low),
+        c=stale_bar.c,
+        v=last_session_bar.v + stale_bar.v,
+        extensions={**last_session_bar.extensions, "late_ticks_folded": stale_bar.v},
+    )
+
+
+def normalize_m1_sequence(
+    bars: Sequence[CandleBar],
+    *,
+    is_trading_fn: Callable[[int], bool],
+    flat_max_volume: int,
+    pause_policy: PausePolicy,
+    prev_bar: Optional[CandleBar] = None,
+) -> Tuple[List[CandleBar], List[Tuple[CandleBar, str]]]:
+    """Правило послідовності M1 для пакетних записувачів (ADR-0101 §3.2): класифікація ADR-0099, вкладення
+    застарілого краю в попередню хвилину, ланцюг open = close попереднього.
+
+    `bars` — бари вікна (порядок довільний, ключ open_time_ms унікальний); `prev_bar` — останній бар SSOT перед
+    вікном, щоб ланцюг тримався і на межі. Повертає (бари для запису за зростанням; (вхідний бар, вердикт) по
+    кожному вхідному). Застарілий край без попередньої хвилини у вікні відкидається, як раніше.
+    """
+    out: List[CandleBar] = []
+    verdicts: List[Tuple[CandleBar, str]] = []
+    last = prev_bar
+    for bar in sorted(bars, key=lambda b: b.open_time_ms):
+        classified, verdict = classify_m1_by_calendar(bar, is_trading_fn, flat_max_volume, pause_policy)
+        if verdict == VERDICT_PAUSE_EDGE_STALE_DROPPED and out and out[-1].open_time_ms == bar.open_time_ms - _M1_MS:
+            out[-1] = fold_edge_stale(out[-1], bar)
+            last = out[-1]
+            verdicts.append((bar, VERDICT_PAUSE_EDGE_STALE_FOLDED))
+            continue
+        verdicts.append((bar, verdict))
+        if classified is None:
+            continue
+        if last is not None:
+            classified = chain_open_to_prev_close(last, classified)
+        out.append(classified)
+        last = classified
+    return out, verdicts
