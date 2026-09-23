@@ -302,6 +302,46 @@ def test_gap_beyond_budget_is_loud_and_kept_in_gap_state(monkeypatch, caplog):
     assert _written(uds) == _minutes(first_written, WED_1200 + 500 * M1_MS)
 
 
+def test_chain_is_not_pulled_across_the_hole_left_beyond_budget(monkeypatch, caplog):
+    """ADR-0101 §3.3: open першого бару після діри лишається брокерським — інакше свічка намалювала б рух ціни за
+    всю діру. Далі ланцюг тягнеться від нього, як завжди."""
+    broker = _Broker(now_ms=_at(WED_1200 + 500 * M1_MS))
+    poller, uds = _poller(monkeypatch, broker, WED_1200, tail_catchup_max_bars=300)
+    poller._last_bar = _bar(WED_1200, o=90.0, c=90.0)  # noqa: SLF001 — останній закомічений перед діркою
+    caplog.set_level(logging.WARNING)
+
+    poller.tail_catchup()
+
+    first_after_hole, second = uds.committed[0], uds.committed[1]
+    assert first_after_hole.o == 100.0 and "open_chained_from" not in first_after_hole.extensions
+    assert second.o == first_after_hole.c and second.extensions["open_chained_from"] == 100.0
+    assert "M1_CHAIN_GAP_BREAK" in caplog.text and poller.stats["chain_gap_breaks"] == 1
+
+
+def test_chain_is_not_pulled_across_the_history_horizon(monkeypatch):
+    horizon = WED_1200 + 100 * M1_MS
+    broker = _Broker(now_ms=_at(WED_1200 + 400 * M1_MS), horizon_ms=horizon)
+    poller, uds = _poller(monkeypatch, broker, WED_1200)
+    poller._last_bar = _bar(WED_1200, o=90.0, c=90.0)  # noqa: SLF001
+
+    poller.tail_catchup()
+
+    assert uds.committed[0].open_time_ms == horizon and uds.committed[0].o == 100.0
+    assert poller.stats["chain_gap_breaks"] == 1
+
+
+def test_chain_is_kept_when_the_gap_is_reached(monkeypatch):
+    """Геп добрано до watermark: між останнім закоміченим і першим добраним діри немає — ланцюг тягнеться."""
+    broker = _Broker(now_ms=_at(WED_1200 + 30 * M1_MS))
+    poller, uds = _poller(monkeypatch, broker, WED_1200)
+    poller._last_bar = _bar(WED_1200, o=90.0, c=90.0)  # noqa: SLF001
+
+    poller.tail_catchup()
+
+    assert uds.committed[0].o == 90.0 and uds.committed[0].extensions["open_chained_from"] == 100.0
+    assert poller.stats["chain_gap_breaks"] == 0
+
+
 @pytest.mark.parametrize("gap_minutes", [1, 3, 150, 199, 200, 201, 450])
 def test_poll_requests_never_exceed_broker_cap(monkeypatch, gap_minutes):
     broker = _Broker(now_ms=_at(WED_1200 + gap_minutes * M1_MS))

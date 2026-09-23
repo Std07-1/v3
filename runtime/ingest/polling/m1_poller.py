@@ -40,6 +40,7 @@ from runtime.ingest.m1_session_filter import (
     chain_open_to_prev_close,
     classify_m1_by_calendar,
     is_flat_m1,
+    open_breaks_chain,
     resolve_flat_max_volume,
     resolve_pause_policy,
 )
@@ -79,6 +80,11 @@ _FORMING_SLOT = 1
 GAP_REACHED = "reached"  # геп покрито до watermark: між watermark і cutoff брокер більше нічого не має
 GAP_BEYOND_BUDGET = "beyond_budget"  # бюджет сирих барів вичерпано раніше — найстаріша частина гепа лишається діркою
 GAP_BROKER_EMPTY = "broker_empty"  # брокер віддав порожньо (сесія мертва) — писати нічого не можна
+GAP_HISTORY_HORIZON = "history_horizon"  # старших барів у брокера немає: між watermark і добором — діра назавжди
+# Добір не дійшов до watermark: між останнім закоміченим баром і першим добраним — наша діра (ADR-0101 §3.3)
+_GAP_LEAVES_HOLE = frozenset({GAP_BEYOND_BUDGET, GAP_HISTORY_HORIZON})
+# Добір завершено: далі від брокера за цей геп нічого не прийде
+_GAP_SCAN_DONE = frozenset({GAP_REACHED, GAP_HISTORY_HORIZON})
 _PAGE_ATTEMPTS = 3  # спроб на глибоку сторінку добору гепа (перша — одна спроба)
 _PAGE_RETRY_PAUSE_S = 0.5
 _BULK_INGEST_WARN_BARS = 600  # добір, після якого цикл полера помітно довший (коміт ≈ 50 мс) — WARN
@@ -244,6 +250,7 @@ class M1SymbolPoller:
         self._last_bar: Optional[CandleBar] = None
         self._chained_total = 0
         self._chain_log_last_ts = 0.0
+        self._chain_gap_breaks = 0
         self._bars_on_disk: int = 0  # M1 bars знайдені на диску під час warmup
 
         # Counters
@@ -356,7 +363,7 @@ class M1SymbolPoller:
                     ms_to_utc_dt(oldest_ms).isoformat(),
                     ms_to_utc_dt(watermark_ms).isoformat(),
                 )
-                reason = GAP_REACHED
+                reason = GAP_HISTORY_HORIZON
                 break
             if len(collected) >= budget:
                 reason = GAP_BEYOND_BUDGET
@@ -394,6 +401,8 @@ class M1SymbolPoller:
         простою (коміт ≈ 50 мс): гучно, M1_GAP_BULK_INGEST. Дірка — лише коли бюджет вичерпано.
         """
         watermark_before = self._watermark_ms
+        if reason in _GAP_LEAVES_HOLE and bars:
+            self._break_chain_at_hole(bars[0])
         started = time.time()
         written = sum(1 for bar in bars if self._ingest_bar(bar))
         if len(bars) > _BULK_INGEST_WARN_BARS:
@@ -404,12 +413,29 @@ class M1SymbolPoller:
                 written,
                 time.time() - started,
             )
-        if reason == GAP_REACHED:
+        if reason in _GAP_SCAN_DONE:
             self._scanned_through_ms = max(self._scanned_through_ms, cutoff_ms)
         hole = None
         if reason == GAP_BEYOND_BUDGET and watermark_before is not None:
             hole = (bars[0].open_time_ms if bars else cutoff_ms + _M1_MS, watermark_before, cutoff_ms)
         return written, hole
+
+    def _break_chain_at_hole(self, first_after_hole: CandleBar) -> None:
+        """ADR-0101 §3.3: через нашу діру ланцюг не тягнеться — open першого бару після неї став би close бару до
+        неї, і свічка намалювала б рух ціни за всю діру. Розрив, якщо є, гучний; діру з ним добирає settle."""
+        if self._last_bar is not None and open_breaks_chain(self._last_bar.c, first_after_hole.o):
+            self._chain_gap_breaks += 1
+            logging.warning(
+                "M1_CHAIN_GAP_BREAK symbol=%s last_open_ms=%s next_open_ms=%s last_c=%.5f next_o=%.5f total=%d"
+                " — діра в даних, ланцюг не тягнеться (ремонт — settle)",
+                self._symbol,
+                self._last_bar.open_time_ms,
+                first_after_hole.open_time_ms,
+                self._last_bar.c,
+                first_after_hole.o,
+                self._chain_gap_breaks,
+            )
+        self._last_bar = None
 
     def _report_gap_beyond_budget(self, first_written_ms: int, watermark_before_ms: int, cutoff_ms: int) -> None:
         """Геп більший за бюджет добору: найстаріша частина — дірка. Джерело правди — цей WARN; gap_state один на
@@ -797,7 +823,7 @@ class M1SymbolPoller:
             self._live_recover_finish("beyond_budget")
             self._report_gap_beyond_budget(*hole)
             return
-        if reason == GAP_REACHED:
+        if reason in _GAP_SCAN_DONE:
             self._live_recover_finish("caught_up")
             return
 
@@ -1075,6 +1101,7 @@ class M1SymbolPoller:
             "pause_noise_alarms": self._pause_noise_alarms,
             "pause_edge_stale_dropped": self._pause_edge_stale_dropped,
             "open_chained": self._chained_total,
+            "chain_gap_breaks": self._chain_gap_breaks,
             "gaps_detected": self._gaps_detected,
             "caught_up_skips": self._already_caught_up,
             "watermark_ms": self._watermark_ms,
@@ -1526,9 +1553,10 @@ class M1PollerRunner:
         recovering = sum(1 for p in self._pollers if p.stats.get("recover_active"))
         total_stale = sum(p.stats.get("stale_count", 0) for p in self._pollers)
         total_chained = sum(p.stats.get("open_chained", 0) for p in self._pollers)
+        total_chain_gap_breaks = sum(p.stats.get("chain_gap_breaks", 0) for p in self._pollers)
         logging.info(
             "M1_POLLER_STATS symbols=%d m1=%d m3=%d err=%d cal_skip=%d pause_noise=%d edge_stale=%d noise_alarm=%d "
-            "gaps=%d caught_up=%d recovering=%d stale=%d chained=%d",
+            "gaps=%d caught_up=%d recovering=%d stale=%d chained=%d chain_gap_breaks=%d",
             len(self._pollers),
             total_m1,
             total_m3,
@@ -1542,6 +1570,7 @@ class M1PollerRunner:
             recovering,
             total_stale,
             total_chained,
+            total_chain_gap_breaks,
         )
 
 

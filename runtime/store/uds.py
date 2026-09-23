@@ -140,6 +140,9 @@ def _disk_bar_to_candle(
             v=float(v_val),
             complete=bool(raw.get("complete", True)),
             src=str(src),
+            # Маркери рядка (calendar_pause_flat, partial…) потрібні читачам хвоста: ланцюг полера (ADR-0101) і
+            # агрегація похідних пропускають прихований бар саме за маркером — без нього після рестарту він «торговий»
+            extensions=dict(raw["extensions"]) if isinstance(raw.get("extensions"), dict) else {},
         )
     except Exception:
         logging.debug(
