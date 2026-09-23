@@ -367,6 +367,46 @@ def test_worker_htf_preview_without_rules_raises():
         _make_htf_worker(symbols=("XAU/USD", "NAS100"))
 
 
+def test_worker_htf_preview_empty_allowlist_raises():
+    """Порожній allowlist = «приймати все» в on_tick: правило не перевірити заздалегідь — відмова в конструкторі.
+
+    Без рейки воркер створювався, а ValueError вилітав з on_tick і рвав pubsub-підписку на кожному тіку.
+    """
+    with pytest.raises(ValueError, match="HTF_PREVIEW_EMPTY_ALLOWLIST"):
+        _make_htf_worker(symbols=(), rules={})
+    with pytest.raises(ValueError, match="HTF_PREVIEW_EMPTY_ALLOWLIST"):
+        _make_htf_worker(symbols=())
+
+
+def test_main_all_symbols_rejected_exits_before_worker(monkeypatch, caplog):
+    """Усі символи відсіяні календарним гейтом — main() гучно виходить з кодом 2, воркер не створюється.
+
+    Інакше порожній allowlist перетворився б на «приймати все»: тіки без календаря і без правила якоря.
+    """
+    mod = tick_preview_worker_module
+    cfg = {
+        "preview_tick_enabled": True,
+        "preview_tick_tfs_s": [60, H4_S, D1_S],
+        "preview_tick_symbols": ["XAU/USD"],
+        "channels": {"price_tick": "test:ticks"},
+        "calendar_gate_enabled": True,
+    }
+    monkeypatch.setattr(mod, "_setup_logging", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "load_env_secrets", lambda: MagicMock(loaded=False))
+    monkeypatch.setattr(mod, "pick_config_path", lambda: "config.json")
+    monkeypatch.setattr(mod, "load_system_config", lambda _path: cfg)
+    monkeypatch.setattr(mod, "redis_lib", MagicMock())
+    monkeypatch.setattr(mod, "resolve_redis_spec", lambda _cfg, role: MagicMock())
+    monkeypatch.setattr(mod, "build_uds_from_config", MagicMock())
+    monkeypatch.setattr(mod, "resolve_symbol_calendars", lambda _cfg, syms, where: ({}, list(syms)))
+    monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(mod, "TickPreviewWorker", MagicMock(side_effect=AssertionError("воркер не має стартувати")))
+
+    with caplog.at_level("ERROR"):
+        assert mod.main() == 2
+    assert "TICK_PREVIEW_NO_SYMBOLS rejected=['XAU/USD']" in caplog.text
+
+
 def _cfg(groups, by_group):
     return {"market_calendar_symbol_groups": groups, "htf_anchor": {"rule_by_calendar_group": by_group}}
 

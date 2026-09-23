@@ -4,7 +4,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from env_profile import load_env_secrets
 from core.config_loader import htf_anchor_rule_resolver, pick_config_path, load_system_config
@@ -308,6 +308,12 @@ class TickPreviewWorker:
         # HTF accumulator: M1→H4/D1 preview (replaces tick-agg for these TFs)
         _htf_set = set(htf_preview_tfs or [])
         if _htf_set:
+            # Порожній allowlist = «приймати будь-який символ» (on_tick), тож правило не перевірити до
+            # першого тіку: ValueError вилетів би з on_tick і рвав би pubsub-підписку (ADR-0095 S4b)
+            if not symbols:
+                raise ValueError(
+                    "HTF_PREVIEW_EMPTY_ALLOWLIST: HTF preview потребує явного allowlist символів (ADR-0095 S4b)"
+                )
             # Правило якоря — на кожен символ allowlist ДО першого тіку (ADR-0095 S4b)
             anchor_rules = dict(htf_anchor_rules or {})
             missing = sorted(s for s in symbols if s not in anchor_rules)
@@ -759,6 +765,7 @@ def main() -> int:
 
     # --- Build per-symbol calendars (ADR-0054 P0.4: fail-fast замість тихих 24/7) ---
     calendars: Dict[str, MarketCalendar] = {}
+    rejected: List[str] = []
     all_symbols = preview_cfg.symbols or symbols_from_cfg(cfg)
     if bool(cfg.get("calendar_gate_enabled", False)):
         calendars, rejected = resolve_symbol_calendars(
@@ -772,6 +779,11 @@ def main() -> int:
             len(calendars),
             len(calendars) + len(rejected),
         )
+    if not all_symbols:
+        # Порожній allowlist воркер трактує як «приймати все» — це знову тіки без календаря і правила якоря
+        logging.error("TICK_PREVIEW_NO_SYMBOLS rejected=%s", rejected)
+        time.sleep(5.0)
+        return 2
 
     auto_promote_m1 = bool(cfg.get("tick_auto_promote_m1", False))
 
