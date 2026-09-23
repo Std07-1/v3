@@ -1,19 +1,26 @@
 """Суцільний ланцюг свічок (ADR-0101): open = close попереднього існуючого бару; застарілий край — у останній бар сесії."""
 from __future__ import annotations
 
+import json
 import logging
 
 from core.model.bars import CandleBar
 from runtime.ingest.m1_session_filter import (
+    MARKER_OPEN_CHAINED,
+    SSOT_EDIT_CHAIN,
+    SSOT_EDIT_FOLD,
     PausePolicy,
+    VERDICT_PAUSE_EDGE_STALE_DROPPED,
     VERDICT_PAUSE_EDGE_STALE_FOLDED,
     chain_open_to_prev_close,
     fold_edge_stale,
     normalize_m1_sequence,
+    plan_m1_append,
 )
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.polling import m1_poller as poller_mod
 from runtime.ingest.polling.m1_poller import M1SymbolPoller
+from runtime.store.ssot_jsonl import read_m1_chain_context
 
 M1_MS = 60_000
 TUE_2059 = 1_790_110_740_000  # 2026-09-22 20:59 UTC (XAU: остання хвилина сесії перед перервою)
@@ -130,3 +137,94 @@ def test_poller_without_prev_bar_writes_broker_open_as_is(monkeypatch):
     assert poller._ingest_bar(BAR_2201)  # noqa: SLF001
     assert uds.committed[-1].o == 4357.74 and "open_chained_from" not in uds.committed[-1].extensions
     assert poller_mod.chain_open_to_prev_close is chain_open_to_prev_close
+
+
+# --- Пакетні записувачі: дозапис нових ключів між барами SSOT (ADR-0101 C3) ------------------------------------------
+
+def _plan(bars, ssot_bars=(), **kwargs):
+    return plan_m1_append(bars, list(ssot_bars), is_trading_fn=_calendar().is_trading_minute, flat_max_volume=4,
+                          pause_policy=US_CFD_POLICY, **kwargs)
+
+
+def _hidden_pause_flat(open_ms: int) -> CandleBar:
+    return CandleBar(symbol="XAU/USD", tf_s=60, open_time_ms=open_ms, close_time_ms=open_ms + M1_MS, o=1.0, h=1.0,
+                     low=1.0, c=1.0, v=1.0, complete=True, src="history", extensions={"calendar_pause_flat": True})
+
+
+TUE_1900 = TUE_2059 - 119 * M1_MS  # 2026-09-22 19:00 UTC — усередині сесії
+
+
+def test_plan_chains_the_window_start_to_the_last_visible_ssot_bar_before_it():
+    """Перший новий бар прив'язується до останнього ВИДИМОГО бару SSOT перед вікном; пласку паузу display ховає —
+    сусідом вона не є, а її ключ зайнятий і не переписується."""
+    ssot_prev = _bar(TUE_1900, 2000.1, 2000.3, 1999.9, 2000.0, 300.0)
+    broker_same_key_as_hidden = _bar(TUE_1900 + M1_MS, 2000.0, 2000.2, 1999.8, 2000.1, 250.0)
+    new_bar = _bar(TUE_1900 + 2 * M1_MS, 2000.4, 2001.0, 2000.3, 2000.9, 310.0)
+    plan = _plan([broker_same_key_as_hidden, new_bar], [ssot_prev, _hidden_pause_flat(TUE_1900 + M1_MS)])
+    assert [b.open_time_ms for b in plan.to_write] == [new_bar.open_time_ms]
+    written = plan.to_write[0]
+    assert (written.o, written.h, written.low, written.c) == (2000.0, 2001.0, 2000.0, 2000.9)
+    assert written.extensions[MARKER_OPEN_CHAINED] == 2000.4
+    assert plan.already_in_ssot == 1 and plan.open_chained == 1 and plan.ssot_edits == ()
+
+
+def test_plan_names_the_chain_edit_of_the_ssot_bar_right_after_the_window_and_does_not_write_it():
+    """Бар SSOT одразу після вікна: закомічений фінал записувач не переписує (дубль ключа дописом — ADR-0098 §3.7),
+    а називає правку для settle з точним значенням."""
+    new_bar = _bar(TUE_1900, 2000.0, 2001.6, 1999.9, 2001.5, 300.0)
+    ssot_next = _bar(TUE_1900 + M1_MS, 2002.0, 2002.4, 2001.8, 2002.2, 280.0)
+    plan = _plan([new_bar], [ssot_next])
+    assert [b.open_time_ms for b in plan.to_write] == [new_bar.open_time_ms]
+    (edit,) = plan.ssot_edits
+    assert edit.reason == SSOT_EDIT_CHAIN and edit.current is ssot_next
+    assert (edit.target.o, edit.target.low, edit.target.c) == (2001.5, 2001.5, 2002.2)
+
+
+def test_plan_ssot_bar_after_the_window_already_in_chain_needs_no_edit():
+    new_bar = _bar(TUE_1900, 2000.0, 2002.1, 1999.9, 2002.0, 300.0)
+    plan = _plan([new_bar], [_bar(TUE_1900 + M1_MS, 2002.0, 2002.4, 2001.8, 2002.2, 280.0)])
+    assert plan.ssot_edits == () and plan.open_chained == 0
+
+
+def test_plan_folds_the_stale_edge_into_a_new_last_session_minute_like_tv():
+    """XAU 22.09: 20:59 c=4357.63 + 21:00 v=4 c=4357.74 → 20:59 c=4357.74 v=520; 22:01 o=4357.74 без правки."""
+    plan = _plan([BAR_2201, STALE_2100, BAR_2059])
+    assert [b.open_time_ms for b in plan.to_write] == [TUE_2059, BAR_2201.open_time_ms]
+    folded = plan.to_write[0]
+    assert (folded.c, folded.v, folded.extensions["late_ticks_folded"]) == (4357.74, 520.0, 4.0)
+    assert (STALE_2100, VERDICT_PAUSE_EDGE_STALE_FOLDED) in plan.verdicts
+    assert plan.open_chained == 0 and plan.ssot_edits == ()
+
+
+def test_plan_names_the_fold_into_an_existing_last_session_minute():
+    """20:59 уже в SSOT, 21:00 полер відкинув: вкласти може лише settle — план не пише 21:00 і називає правку 20:59;
+    новий 22:01 прив'язується до close, який лежить на диску зараз."""
+    plan = _plan([STALE_2100, BAR_2201], [BAR_2059])
+    assert [b.open_time_ms for b in plan.to_write] == [BAR_2201.open_time_ms]
+    assert plan.to_write[0].o == 4357.63 and plan.to_write[0].extensions[MARKER_OPEN_CHAINED] == 4357.74
+    (edit,) = plan.ssot_edits
+    assert edit.reason == SSOT_EDIT_FOLD and edit.current is BAR_2059
+    assert (edit.target.c, edit.target.v) == (4357.74, 520.0)
+    assert (STALE_2100, VERDICT_PAUSE_EDGE_STALE_DROPPED) in plan.verdicts
+
+
+def test_plan_does_not_write_a_key_occupied_on_disk_by_any_row():
+    plan = _plan([BAR_2059], occupied_opens={TUE_2059})
+    assert plan.to_write == () and plan.verdicts == () and plan.already_in_ssot == 1
+
+
+def test_read_m1_chain_context_sees_what_readers_see(tmp_path, caplog):
+    """Сусіди для ланцюга — з тим самим вибирачем, що в читачів (пізніший рядок перемагає), з extensions; рядок без
+    OHLC у ланцюг не йде — гучно."""
+    part = tmp_path / "XAU_USD" / "tf_60" / "part-20260922.jsonl"
+    part.parent.mkdir(parents=True)
+    stale_row = dict(BAR_2059.to_dict(), c=1.0)
+    hidden_row = _hidden_pause_flat(TUE_2059 + M1_MS).to_dict()
+    broken_row = {"open_time_ms": TUE_2059 + 2 * M1_MS, "complete": True, "src": "history"}
+    part.write_text("\n".join(json.dumps(row) for row in (stale_row, BAR_2059.to_dict(), hidden_row, broken_row)),
+                    encoding="utf-8")
+    caplog.set_level(logging.WARNING)
+    bars = read_m1_chain_context(str(tmp_path), "XAU/USD", TUE_2059, TUE_2059)
+    assert [(b.open_time_ms, b.c) for b in bars] == [(TUE_2059, 4357.63), (TUE_2059 + M1_MS, 1.0)]
+    assert bars[1].extensions == {"calendar_pause_flat": True}
+    assert "SSOT_M1_CONTEXT_ROWS_REJECTED" in caplog.text

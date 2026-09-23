@@ -8,6 +8,14 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.model.bars import CandleBar, FINAL_SOURCES, assert_invariants, ms_to_utc_dt
 from core.session_anchor import H4_S, assert_on_season_grid, htf_anchor_offset_s
+from runtime.store.layers.disk_layer import DiskLayer
+
+_M1_S = 60
+_M1_MS = _M1_S * 1000
+# Скільки часу навколо партії читає пакетний записувач M1, щоб знайти видимих сусідів для ланцюга (ADR-0101 C3).
+# Найдовша пауза календарів груп — вихідні з перервою (~2.1 доби), зі святом Різдва чи Нового року — до ~4 діб.
+# Сусід далі — межа історії або діра даних; тоді серія починає ланцюг з open брокера, а діру закриває settle.
+M1_CHAIN_NEIGHBOR_SPAN_MS = 5 * 86_400_000
 
 
 class AnchorRuleMissingError(ValueError):
@@ -265,6 +273,52 @@ def iter_day_keys_utc(start_ms: int, end_ms: int) -> List[str]:
         out.append(cur.strftime("%Y%m%d"))
         cur += dt.timedelta(days=1)
     return out
+
+
+def read_m1_chain_context(data_root: str, symbol: str, start_ms: int, end_ms: int) -> List[CandleBar]:
+    """Бари SSOT M1 у [start − span, end + span] так, як їх бачать читачі: вибирач дублікатів ADR-0094 і відсів
+    чужих та нефінальних рядків — через `DiskLayer`, з `extensions` (маркер `calendar_pause_flat`).
+
+    Пакетний записувач M1 бере з них сусідів партії для ланцюга ADR-0101 (`m1_session_filter.plan_m1_append`).
+    Рядок без OHLC у ланцюг не йде — гучно (I5), а не мовчки.
+    """
+    first_ms = start_ms - M1_CHAIN_NEIGHBOR_SPAN_MS
+    last_ms = end_ms + M1_CHAIN_NEIGHBOR_SPAN_MS
+    rows, _geom = DiskLayer(data_root).read_window_with_geom(
+        symbol, _M1_S, (last_ms - first_ms) // _M1_MS + 1, since_open_ms=first_ms - 1, to_open_ms=last_ms,
+        use_tail=True, final_only=True,
+    )
+    bars: List[CandleBar] = []
+    rejected: List[Any] = []
+    for row in rows:
+        try:
+            bars.append(_m1_row_to_bar(row, symbol))
+        except (KeyError, TypeError, ValueError):
+            rejected.append(row.get("open_time_ms"))
+    if rejected:
+        logging.warning(
+            "SSOT_M1_CONTEXT_ROWS_REJECTED symbol=%s rejected=%d first_open_ms=%s — рядок без OHLC у ланцюг не йде",
+            symbol, len(rejected), rejected[0],
+        )
+    return bars
+
+
+def _m1_row_to_bar(row: Dict[str, Any], symbol: str) -> CandleBar:
+    extensions = row.get("extensions")
+    return CandleBar(
+        symbol=symbol,
+        tf_s=_M1_S,
+        open_time_ms=int(row["open_time_ms"]),
+        close_time_ms=int(row["close_time_ms"]),
+        o=float(row["o"]),
+        h=float(row["h"]),
+        low=float(row["low"] if "low" in row else row["l"]),  # CandleBar — `.low`, легасі-рядок диска — "l"
+        c=float(row["c"]),
+        v=float(row.get("v", 0.0)),
+        complete=True,
+        src=str(row.get("src") or "history"),
+        extensions=dict(extensions) if isinstance(extensions, dict) else {},
+    )
 
 
 def load_day_open_times(data_root: str, symbol: str, tf_s: int, day: str) -> set[int]:
