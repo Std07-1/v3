@@ -88,6 +88,10 @@ _GAP_SCAN_DONE = frozenset({GAP_REACHED, GAP_HISTORY_HORIZON})
 _PAGE_ATTEMPTS = 3  # спроб на глибоку сторінку добору гепа (перша — одна спроба)
 _PAGE_RETRY_PAUSE_S = 0.5
 _BULK_INGEST_WARN_BARS = 600  # добір, після якого цикл полера помітно довший (коміт ≈ 50 мс) — WARN
+# Скільки overdue DeriveEngine чекає на хвилину, яку добір ще не знайшов: брокер публікує останню хвилину сесії
+# (20:59, Пт 20:44) із запізненням до ~30 с після опитування T+8 с (рев'ю 23.09: NAS100 09.09, SPX500 09.09, US30
+# 14.09, XAU 04.09 — похідні закриті без неї). SSOT — config.json m1_poller.overdue_grace_s.
+_OVERDUE_GRACE_S_DEFAULT = 180
 
 # Flat bar: O==H==L==C з малим обсягом (calendar-pause маркер від брокера)
 # SSOT: config.json → flat_bar_max_volume. Дефолт 4 (як у конфігу).
@@ -198,8 +202,10 @@ class M1SymbolPoller:
         stale_s: int = 720,
         session_open_policy: SessionOpenRebuildPolicy = DISABLED_POLICY,
         pause_policy: PausePolicy = DEFAULT_PAUSE_POLICY,
+        overdue_grace_s: int = _OVERDUE_GRACE_S_DEFAULT,
     ) -> None:
         self._symbol = symbol
+        self._overdue_grace_ms = max(0, int(overdue_grace_s)) * 1000
         self._provider = provider
         self._uds = uds
         # SSOT: config.json → m1_session_filter (resolve_pause_policy у будівниках, ADR-0099)
@@ -436,6 +442,23 @@ class M1SymbolPoller:
                 self._chain_gap_breaks,
             )
         self._last_bar = None
+
+    def overdue_frontier_ms(self, now_ms: int) -> int:
+        """Межа даних символу для overdue DeriveEngine: хвилини раніше за неї закомічені або підтверджено відсутні.
+
+        Overdue за годинником закривав бакет, поки остання його хвилина ще йшла від брокера (пізня 20:59) або брокер
+        лежав: похідні M3…D1 фіксувались урізаними, а правильний перерахунок UDS потім відкидав як duplicate (рев'ю
+        23.09, ~10 подій за 4 тижні на 5 символах). Тепер межа — max(watermark + 1 хв, min(добір + 1 хв, now − grace)):
+        хвилина, якої добір не знайшов, вважається відсутньою лише через grace. Через паузу календаря барів не буде,
+        тож межа переходить її одразу — тонка остання хвилина перед перервою чи вихідними не тримає H4/D1 до сесії.
+        """
+        frontier = self._watermark_ms + _M1_MS if self._watermark_ms is not None else 0
+        if self._scanned_through_ms:
+            frontier = max(frontier, min(self._scanned_through_ms + _M1_MS, now_ms - self._overdue_grace_ms))
+        if self._calendar is not None and self._calendar.enabled:
+            while frontier < now_ms and not self._calendar.is_trading_minute(frontier):
+                frontier += _M1_MS
+        return min(frontier, now_ms)
 
     def _report_gap_beyond_budget(self, first_written_ms: int, watermark_before_ms: int, cutoff_ms: int) -> None:
         """Геп більший за бюджет добору: найстаріша частина — дірка. Джерело правди — цей WARN; gap_state один на
@@ -1508,8 +1531,11 @@ class M1PollerRunner:
                 and now_ts - last_overdue_ts >= overdue_interval_s
             ):
                 try:
+                    now_ms = int(now_ts * 1000)
+                    # Overdue лише до межі даних кожного символу, не до годинника (рев'ю 23.09)
                     overdue = self._derive_engine.check_overdue_buckets(
-                        int(now_ts * 1000)
+                        now_ms,
+                        frontier_ms_by_symbol={p._symbol: p.overdue_frontier_ms(now_ms) for p in self._pollers},
                     )
                     if overdue:
                         logging.info(
@@ -1641,6 +1667,7 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
     lr_max_consecutive_empty = int(m1_cfg.get("live_recover_max_consecutive_empty", 5))
     lr_timeout = int(m1_cfg.get("live_recover_timeout_s", 600))
     stale_s = int(m1_cfg.get("stale_s", 720))
+    overdue_grace_s = int(m1_cfg.get("overdue_grace_s", _OVERDUE_GRACE_S_DEFAULT))
     logging.info(
         "M1_POLLER_CONFIG tail_catchup_max=%d lr_threshold=%d lr_max_cycle=%d "
         "lr_cooldown=%d lr_max_total=%d stale_s=%d",
@@ -1727,6 +1754,7 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
                 live_recover_timeout_s=lr_timeout,
                 stale_s=stale_s,
                 session_open_policy=session_open_policy,
+                overdue_grace_s=overdue_grace_s,
                 pause_policy=resolve_pause_policy(cfg, sym),  # ADR-0099: правила паузи залежать від групи символу
             )
         )

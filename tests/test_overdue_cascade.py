@@ -286,3 +286,55 @@ class TestOverdueHolidayD1:
         assert [(b.tf_s, b.open_time_ms) for b in committed] == [(86400, bucket_open)]
         assert "thin_session" in committed[0].extensions["partial_reasons"]
 
+
+
+class TestOverdueDataFrontier:
+    """Рев'ю 23.09: overdue закриває бакет лише за межею даних символу, не за годинником — пізня остання хвилина
+    чи простій брокера більше не фіксують урізаний бар назавжди."""
+
+    def test_bucket_waits_while_its_last_minute_is_beyond_the_data_frontier(self) -> None:
+        sym = "TEST/SYM"
+        # З календарем, як на проді: толерантна деривація зібрала б M5 з 4 хвилин із 5 (MAX_MID_SESSION_GAPS)
+        engine = DeriveEngine(symbols=[sym], anchor_rules={sym: FXCM}, calendars={sym: _WeekdayCalendar()},
+                              cascade_tfs_s={300}, commit_tfs_s={300})
+        uds = _mock_uds()
+        engine.register_symbol_uds(sym, uds)
+        engine.warmup_bars(_make_m1_bars(sym, 0, 4))  # 00:00–00:03, хвилина 00:04 ще не дійшла
+
+        # годинник уже далеко за бакетом, але дані лише до 00:04 — бакет 00:00–00:05 не закривається
+        assert engine.check_overdue_buckets(900_000, frontier_ms_by_symbol={sym: 240_000}) == []
+
+        engine.warmup_bars([_make_bar(sym, 60, 240_000)])
+        committed = engine.check_overdue_buckets(900_000, frontier_ms_by_symbol={sym: 300_000})
+        assert [(b.tf_s, b.open_time_ms, b.v) for b in committed] == [(300, 0, 500)]
+
+    def test_symbol_without_frontier_keeps_clock_behaviour(self) -> None:
+        sym = "TEST/SYM"
+        engine = DeriveEngine(symbols=[sym], anchor_rules={sym: FXCM}, cascade_tfs_s={300}, commit_tfs_s={300})
+        engine.register_symbol_uds(sym, _mock_uds())
+        engine.warmup_bars(_make_m1_bars(sym, 0, 5))
+        assert len(engine.check_overdue_buckets(900_000, frontier_ms_by_symbol={})) == 1
+
+    def test_recomputed_bar_diverging_from_the_committed_final_is_loud(self, caplog) -> None:
+        """Фінал уже закомічено урізаним (UDS відповідає duplicate) — перерахунок з повного джерела не мовчить."""
+        import logging
+
+        sym = "TEST/SYM"
+        engine = DeriveEngine(symbols=[sym], anchor_rules={sym: FXCM}, cascade_tfs_s={300}, commit_tfs_s={300})
+        uds = _mock_uds()
+        engine.register_symbol_uds(sym, uds)
+        engine.warmup_bars(_make_m1_bars(sym, 0, 4))
+        engine._buffers[(sym, 300)] = GenericBuffer(300)  # noqa: SLF001
+        truncated = CandleBar(symbol=sym, tf_s=300, open_time_ms=0, close_time_ms=300_000, o=100.0, h=101.0, low=99.0,
+                              c=100.5, v=400, complete=True, src="derived")
+        engine._buffers[(sym, 300)].upsert(truncated)  # noqa: SLF001
+        duplicate = MagicMock()
+        duplicate.ok = False
+        duplicate.reason = "duplicate"
+        uds.commit_final_bar.return_value = duplicate
+        caplog.set_level(logging.WARNING, logger="derive_engine")
+
+        engine.on_bar(_make_bar(sym, 60, 240_000))  # пізня остання хвилина бакета
+
+        assert "DERIVE_FINAL_DIVERGED tf=300" in caplog.text
+        assert engine.stats()["final_diverged"] == 1

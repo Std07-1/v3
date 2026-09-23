@@ -66,6 +66,15 @@ _BUFFER_MAX_KEEP: Dict[int, int] = {
 DEFAULT_COMMIT_TFS_S: Set[int] = set(DERIVE_ORDER)  # {180,300,900,1800,3600,14400}
 
 
+def _diverges(committed: Optional[CandleBar], recomputed: CandleBar) -> bool:
+    """Перерахунок того самого бакета дав інші OHLCV, ніж попередня версія (з якої фінал закомічено)."""
+    if committed is None:
+        return False
+    return (committed.o, committed.h, committed.low, committed.c, committed.v) != (
+        recomputed.o, recomputed.h, recomputed.low, recomputed.c, recomputed.v
+    )
+
+
 class DeriveEngine:
     """Каскадна деривація OHLCV з I/O commit через UDS.
 
@@ -125,6 +134,7 @@ class DeriveEngine:
         self._stats_derived: Dict[int, int] = {}
         self._stats_committed: Dict[int, int] = {}
         self._stats_rejected: int = 0
+        self._stats_final_diverged: int = 0
         self._stats_no_uds: int = 0
         self._stats_cascade_calls: int = 0
         self._start_ts = time.time()
@@ -213,6 +223,7 @@ class DeriveEngine:
             "committed_by_tf": dict(self._stats_committed),
             "committed_total": sum(self._stats_committed.values()),
             "rejected": self._stats_rejected,
+            "final_diverged": self._stats_final_diverged,
             "no_uds": self._stats_no_uds,
             "buffers": len(self._buffers),
             "uds_registered": len(self._uds_by_symbol),
@@ -222,7 +233,9 @@ class DeriveEngine:
         """Правило якоря H4/D1 символу (ADR-0095); KeyError — символ не цього рушія."""
         return self._anchor_rules[symbol]
 
-    def check_overdue_buckets(self, now_ms: int) -> List[CandleBar]:
+    def check_overdue_buckets(
+        self, now_ms: int, frontier_ms_by_symbol: Optional[Dict[str, int]] = None
+    ) -> List[CandleBar]:
         """Перевірка та деривація прострочених bucket'ів (timer-based safety net).
 
         Для кожного символу і TF перевіряє: чи є bucket, час якого вже минув
@@ -233,6 +246,10 @@ class DeriveEngine:
         (race, restart mid-bucket, out-of-order delivery).
         Викликається з m1_poller після кожного poll cycle або по таймеру.
 
+        `frontier_ms_by_symbol` — межа даних символу (`M1SymbolPoller.overdue_frontier_ms`): бакет закривається лише
+        тоді, коли межа його пройшла, а не годинник. Інакше пізня остання хвилина або простій брокера фіксували
+        урізаний бар назавжди (рев'ю 23.09). Символ без межі — за годинником, як раніше.
+
         Returns:
             Список newly committed derived барів.
         """
@@ -242,8 +259,11 @@ class DeriveEngine:
             lock = self._locks.get(symbol)
             if lock is None:
                 continue
+            effective_ms = now_ms
+            if frontier_ms_by_symbol is not None and symbol in frontier_ms_by_symbol:
+                effective_ms = min(now_ms, int(frontier_ms_by_symbol[symbol]))
             with lock:
-                committed.extend(self._check_overdue_for_symbol(symbol, now_ms))
+                committed.extend(self._check_overdue_for_symbol(symbol, effective_ms))
         return committed
 
     # Кількість попередніх bucket-ів для overdue-сканування per TF.
@@ -363,6 +383,22 @@ class DeriveEngine:
             self._buffers[key] = buf
         return buf
 
+    def _report_final_diverged(self, committed: CandleBar, recomputed: CandleBar) -> None:
+        """I5: у SSOT лишився фінал, що розходиться з перерахунком з повного джерела (UDS не переписує фінал).
+
+        Причина — фінал закрито раніше, ніж дійшла остання хвилина (пізня публікація брокера, простій); ремонт —
+        settle/S7 (ADR-0098, ADR-0095 S7). Кожна подія — один WARN з обома версіями.
+        """
+        self._stats_final_diverged += 1
+        log.warning(
+            "DERIVE_FINAL_DIVERGED tf=%d sym=%s open=%d committed=(%.5f %.5f %.5f %.5f %.0f) "
+            "recomputed=(%.5f %.5f %.5f %.5f %.0f) total=%d — SSOT тримає урізаний фінал, ремонт settle/S7",
+            recomputed.tf_s, recomputed.symbol, recomputed.open_time_ms,
+            committed.o, committed.h, committed.low, committed.c, committed.v,
+            recomputed.o, recomputed.h, recomputed.low, recomputed.c, recomputed.v,
+            self._stats_final_diverged,
+        )
+
     def _cascade(self, bar: CandleBar) -> List[CandleBar]:
         """Каскад: buffer → triggers → derive → commit/skip → recurse.
 
@@ -437,6 +473,9 @@ class DeriveEngine:
             self._stats_derived[target_tf_s] = (
                 self._stats_derived.get(target_tf_s, 0) + 1
             )
+            # Попередня версія бакета (з overdue чи раннього тригера) — щоб розбіжність з нею не була тихою
+            target_buf = self._buffers.get((symbol, target_tf_s))
+            prev_version = target_buf.get(bucket_open_ms) if target_buf is not None else None
 
             # 5. Commit (тільки commit_tfs_s)
             if target_tf_s in self._commit_tfs_s:
@@ -465,6 +504,9 @@ class DeriveEngine:
                             result.reason,
                         )
                         continue
+                    elif result.reason == "duplicate" and _diverges(prev_version, derived):
+                        # ADR-0102: фінал у SSOT розходиться з перерахунком — гучно, не тихо
+                        self._report_final_diverged(prev_version, derived)
                     # stale/duplicate — бар уже є на диску: каскад продовжуємо, у rejected не рахуємо
                 else:
                     self._stats_no_uds += 1

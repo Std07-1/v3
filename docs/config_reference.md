@@ -61,6 +61,7 @@
 | `m1_poller.tail_fetch_n` | int | 5 | Скільки M1 барів запитувати з FXCM History кожну хвилину |
 | `m1_poller.safety_delay_s` | int | 8 | Затримка після закриття M1 перед запитом (FXCM потрібно ~5-8с) |
 | `m1_poller.m3_derive_enabled` | bool | true | Будувати M3 з 3×M1 при кожному коміті |
+| `m1_poller.overdue_grace_s` | int | 180 | ADR-0102: overdue DeriveEngine закриває бакет лише за межею даних символу (`max(watermark + 1 хв, min(добір + 1 хв, now − grace))`, пауза календаря проходиться одразу). Grace — скільки чекати хвилину, якої добір ще не знайшов: брокер публікує останню хвилину сесії (20:59, Пт 20:44) до ~30 с пізніше за опитування T+8 с. 0 — межа = добір (пізня хвилина знову різатиме похідні) |
 | `m1_poller.backfill_enabled` | bool | true | ⚠️ **DEAD CONFIG** — код не читає. Зарезервовано для майбутнього |
 | `m1_poller.backfill_max_bars` | int | 1440 | ⚠️ **DEAD CONFIG** — не реалізовано в m1_poller.py |
 | `m1_poller.session_open_rebuild.enabled` | bool | **false** | **ADR-0100: вимкнено** — open першої M1 після перерви = close перед перервою, і це бар TV FX: (PREVIOUS_CLOSE); перебудова з тіків робила дірку. Секція лишається задокументованим rollback. `true` (ADR-0096 слайс E) = для першої M1 після перерви беруться тіки хвилини (t1) до коміту; open поза діапазоном тіків = запечений → open і запечений high/low з тіків. Лише JSON `true`/`false` (рядок → ERROR, перебудову вимкнено) |

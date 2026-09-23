@@ -151,7 +151,10 @@ _D1_TICK_RELAY_ENABLED_DEFAULT = False
 _D1_TICK_RELAY_TFS_DEFAULT: set = set()
 
 # P11: scrollback disk rails
-SCROLLBACK_MAX_STEPS = 12  # макс чанків scrollback per session per symbol+tf
+# Макс чанків scrollback per session per symbol+tf (скидається на switch). 12 давало стелю 1001 + 12×500 = 7001
+# барів — менше за повну історію D1 (XAU ≈ 10 150; нативний D1 брокера — з 1990, ≈ 9 300 на символ), тож глибина
+# просто не досягалась з графіка. 24 покриває повний D1 із запасом; для нижчих TF це і далі рейка проти зловживання.
+SCROLLBACK_MAX_STEPS = 24
 SCROLLBACK_COOLDOWN_S = 0.5  # мінімальний інтервал між scrollback від одного клієнта
 
 # SEC-06: WS connection/action rails — SSOT-дефолти; override через config.json:ws_server.*
