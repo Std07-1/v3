@@ -9,9 +9,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
+import sys
+from pathlib import Path
 
 from runtime.ingest.tick_common import calendar_from_group
-from tools.diag.d1_gap_anatomy import analyze_bucket
+from tools.diag.d1_gap_anatomy import analyze_bucket, main
 
 # Той самий календар, що в config.json для XAU/XAG/NAS100/SPX500/US30.
 CFD_US_22_23 = {
@@ -134,3 +137,50 @@ def test_scatter_by_run_max_is_the_calibration_output():
     assert sb["2"] == r["mid_session_missing"] and sb["10"] == r["mid_session_missing"]
     assert analyze_bucket(slots, set(slots) - drop, scatter_run_max=1,
                           is_trading_fn=_cal(CFD_US_22_23))["scatter"] == 0
+
+
+def _utc_ms(y, mo, d, h=0, mi=0) -> int:
+    return int(dt.datetime(y, mo, d, h, mi, tzinfo=dt.timezone.utc).timestamp()) * 1000
+
+
+def _write_opens(root: Path, tf_s: int, opens) -> None:
+    by_day: dict = {}
+    for open_ms in opens:
+        day = dt.datetime.fromtimestamp(open_ms / 1000, dt.timezone.utc).strftime("%Y%m%d")
+        by_day.setdefault(day, []).append(json.dumps({"open_time_ms": open_ms, "tf_s": tf_s}))
+    tf_dir = root / "XAU_USD" / ("tf_%d" % tf_s)
+    tf_dir.mkdir(parents=True, exist_ok=True)
+    for day, lines in by_day.items():
+        (tf_dir / ("part-%s.jsonl" % day)).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_d1_gap_anatomy_main_seasonal_across_2026_11_01(tmp_path, monkeypatch):
+    """--date — торгова доба на сезонній сітці (ADR-0095 S5b): пт 30.10 — бакет чт 21:00, пн 02.11 — нд 22:00.
+
+    Легасі-ключ `day_anchor_offset_s_d1` = 75600 (літо) у config лишається до S5c, але інструмент його не
+    читає: з ним бакет понеділка став би нд 21:00, D1 на диску (нд 22:00) — «НЕМА», хибна cascade_hole.
+    """
+    mon_open, mon_close = _utc_ms(2026, 11, 1, 22), _utc_ms(2026, 11, 2, 21)
+    feed_gap = range(_utc_ms(2026, 11, 2, 10), _utc_ms(2026, 11, 2, 11), M1_MS)
+    _write_opens(tmp_path, 60, [t for t in range(mon_open, mon_close, M1_MS) if t not in feed_gap])
+    _write_opens(tmp_path, 86400, [_utc_ms(2026, 10, 29, 21), mon_open])
+    cfg = {
+        "data_root": str(tmp_path),
+        "day_anchor_offset_s_d1": 75600,
+        "market_calendar_symbol_groups": {"XAU/USD": "cfd_us_22_23"},
+        "market_calendar_by_group": {"cfd_us_22_23": CFD_US_22_23},
+        "htf_anchor": {"rule_by_calendar_group": {"cfd_us_22_23": "ny_close_us_dst"}},
+    }
+    (tmp_path / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    report = tmp_path / "anatomy.json"
+    monkeypatch.setattr(sys, "argv", [
+        "d1_gap_anatomy", "--config", str(tmp_path / "config.json"), "--symbol", "XAU/USD",
+        "--date", "2026-10-30", "--date", "2026-11-02", "--json", str(report), "--show-boundary",
+    ])
+    main()
+    rows = {r["bucket_open_ms"]: r for r in json.loads(report.read_text(encoding="utf-8"))["rows"]}
+    assert sorted(rows) == [_utc_ms(2026, 10, 29, 21), mon_open]
+    friday, monday = rows[_utc_ms(2026, 10, 29, 21)], rows[mon_open]
+    assert (friday["session_date"], friday["d1_present"]) == ("2026-10-30 Fri", True)
+    assert (monday["session_date"], monday["d1_present"], monday["class"]) == ("2026-11-02 Mon", True, "feed_gap")
+    assert (monday["expected"], monday["missing"]) == (1380, 60)

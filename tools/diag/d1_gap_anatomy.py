@@ -38,6 +38,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 from core.config_loader import htf_anchor_rule_resolver, load_system_config, pick_config_path
 from core.derive import MAX_MID_SESSION_GAPS_BY_TF
 from core.health.measures import expected_bucket_opens
+from core.session_anchor import htf_bucket_start_ms, htf_next_bucket_start_ms
 from runtime.ingest.tick_common import resolve_symbol_calendars
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -222,37 +223,39 @@ def analyze_symbol(
     if rejected or symbol not in calendars:
         raise SystemExit("ANATOMY_CALENDAR_MISSING symbol=%s" % symbol)
     is_trading = calendars[symbol].is_trading_minute
-    anchor_ms = int(cfg.get("day_anchor_offset_s_d1", 0)) * 1000
+    # Бакет D1 і його вікно — сезонна сітка символу (ADR-0095): відкриття 17:00 America/New_York, доби
+    # переходу DST тривають 23 і 25 год. Один якір з config давав бакет на годину не там пів року.
+    rule = htf_anchor_rule_resolver(cfg)(symbol)
 
     if dates:
+        # Торгова доба `d` — бакет D1, що містить опівніч `d` (для 17:00 NY відкритий напередодні ввечері)
         buckets = [
-            int(
-                dt.datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=dt.timezone.utc).timestamp()
-            ) * 1000
-            + anchor_ms
-            - TF_D1_MS
+            htf_bucket_start_ms(
+                int(dt.datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=dt.timezone.utc).timestamp()) * 1000,
+                TF_D1_S,
+                rule,
+            )
             for d in dates
         ]
     else:
         first_m1 = _first_part_day_ms(data_root, symbol, TF_M1_S)
         start = max(now_ms - days * TF_D1_MS, first_m1 if first_m1 is not None else now_ms)
-        # Очікувані бакети — сезонна сітка символу (ADR-0095 S5a, API health); вікна й --date — S5b.
-        rule = htf_anchor_rule_resolver(cfg)(symbol)
         buckets = expected_bucket_opens(start, now_ms, tf_s=TF_D1_S, rule=rule, is_trading_fn=is_trading)
 
     d1_opens = _all_opens_by_glob(data_root, symbol, TF_D1_S)
     budget = MAX_MID_SESSION_GAPS_BY_TF.get(TF_D1_S, 3)
     rows: List[Dict[str, Any]] = []
     for b0 in buckets:
-        slots = [t for t in range(b0, b0 + TF_D1_MS, TF_M1_MS) if is_trading(t)]
-        present = _load_opens(data_root, symbol, TF_M1_S, b0, b0 + TF_D1_MS)
+        bucket_end = htf_next_bucket_start_ms(b0, TF_D1_S, rule)
+        slots = [t for t in range(b0, bucket_end, TF_M1_MS) if is_trading(t)]
+        present = _load_opens(data_root, symbol, TF_M1_S, b0, bucket_end)
         row = analyze_bucket(
             slots, present, scatter_run_max=scatter_run_max, is_trading_fn=is_trading
         )
         row["symbol"] = symbol
         row["bucket_open_ms"] = b0
         row["session_date"] = dt.datetime.fromtimestamp(
-            (b0 + TF_D1_MS) / 1000, dt.timezone.utc
+            (bucket_end - 1) / 1000, dt.timezone.utc
         ).strftime("%Y-%m-%d %a")
         row["d1_present"] = b0 in d1_opens
         row["legacy_budget"] = budget

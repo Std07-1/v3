@@ -474,15 +474,14 @@ def platform_config(section: str = "") -> str:
         f"({wcfg.get('host', '?')}:{wcfg.get('port', '?')})"
     )
 
-    # Anchors
-    lines.append(
-        f"\n**H4 anchor offset**: {cfg.get('day_anchor_offset_s', '?')}s "
-        f"({cfg.get('day_anchor_offset_s', 0) // 3600}:{(cfg.get('day_anchor_offset_s', 0) % 3600) // 60:02d} UTC)"
-    )
-    lines.append(
-        f"**D1 anchor offset**: {cfg.get('day_anchor_offset_s_d1', '?')}s "
-        f"({cfg.get('day_anchor_offset_s_d1', 0) // 3600}:{(cfg.get('day_anchor_offset_s_d1', 0) % 3600) // 60:02d} UTC)"
-    )
+    # Якір H4/D1 — правило за групою календаря, а не секунди (ADR-0095 §3.4): година UTC залежить від DST
+    rules = (cfg.get("htf_anchor") or {}).get("rule_by_calendar_group") or {}
+    lines.append("\n**H4/D1 anchor rule** (ADR-0095, група календаря → правило):")
+    if rules:
+        for grp, rule in sorted(rules.items()):
+            lines.append(f"  - `{grp}` → `{rule}`")
+    else:
+        lines.append("  - ❌ `htf_anchor.rule_by_calendar_group` відсутній — H4/D1 не будуються (CONFIG_HTF_ANCHOR_MISSING)")
 
     # Calendar groups
     groups = cfg.get("market_calendar_symbol_groups", {})
