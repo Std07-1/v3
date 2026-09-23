@@ -5,10 +5,13 @@
 from __future__ import annotations
 
 import ast
+import copy
 import datetime as dt
 import json
+import logging
 import os
 import subprocess
+import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -16,7 +19,13 @@ import pytest
 
 from core.session_anchor import RULE_NY_CLOSE_US_DST, calendar_season, season_label
 from runtime.ingest.market_calendar import SeasonalMarketCalendar
-from runtime.ingest.tick_common import SEASON_RULE_KEY, calendar_for_symbol, calendar_from_group
+from runtime.ingest.tick_common import (
+    SEASON_RULE_KEY,
+    calendar_for_symbol,
+    calendar_from_group,
+    flat_calendar_off_season,
+    resolve_symbol_calendars,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 UTC = dt.timezone.utc
@@ -40,27 +49,83 @@ def _trading(symbol: str, *moments) -> list:
     return [calendar.is_trading_minute(_ms(*moment)) for moment in moments]
 
 
-# --- Сторож дубліката: плоскі поля = summer до S6b -------------------------------------------------------------------
+# --- Сторож дубліката: плоскі поля = блок сезону за годинником до S6b ------------------------------------------------
+
+_EU_GROUPS = ("cfd_eu_eustx50", "cfd_eu_ger30")
+_US_GROUPS = ("fx_24x5_utc_summer", "cfd_us_22_23")
 
 
-def test_repo_config_seasonal_group_flat_fields_equal_summer_until_s6b():
-    """Плоскі поля сезонної групи — живий календар (споживачі до S6b), блок summer — вхід calendar_for_symbol.
+def test_repo_config_seasonal_group_flat_fields_follow_current_season_until_s6b():
+    """Плоскі поля сезонної групи — живий календар до S6b; вони мусять дорівнювати блоку сезону за годинником.
 
-    Дублікат тимчасовий: S6b (дедлайн 25.10.2026, ЄС переходить на зиму; США — 01.11.2026) переводить живих
-    споживачів на calendar_for_symbol і прибирає плоскі поля сезонних груп разом із цим тестом. Поки дубліката не
-    прибрано, розсинхрон не має пройти тихо (D15.2). Якщо 25.10 настало без S6b і ранбук перемкнув плоскі поля на
-    зиму — цей тест червоніє: S6b прострочено, а не тест застарів.
+    Дедлайн вшито в годинник: 25.10.2026 (ЄС) і 01.11.2026 (США) тест червоніє, доки ранбук `dst_transition` не
+    перемкне плоскі поля на зиму або S6b не прибере їх разом із цим тестом. Червоний після переходу означає, що
+    S6b прострочено або ранбук не виконано; тест при цьому не застарів. Блоки `summer`/`winter` під плоскі поля не
+    правити: це розклад сезону для calendar_for_symbol (health, rebuild_from_m1, S7). Живий процес на старті кидає
+    ERROR `CALENDAR_FLAT_OFF_SEASON` з тієї самої перевірки.
     """
-    seasonal = 0
-    for name, group in REPO_CFG["market_calendar_by_group"].items():
-        if group[SEASON_RULE_KEY] == "none":
-            continue
-        seasonal += 1
-        summer = group["summer"]
-        flat_schedule = {key: value for key, value in group.items() if key in summer}
-        assert flat_schedule == summer, name
-        assert calendar_from_group(group) == calendar_from_group(summer), name
-    assert seasonal == 4  # fx, cfd_us, EUSTX50, GER30
+    groups = REPO_CFG["market_calendar_by_group"]
+    seasonal = [name for name, group in groups.items() if group[SEASON_RULE_KEY] != "none"]
+    assert sorted(seasonal) == sorted(_EU_GROUPS + _US_GROUPS)
+    now_ms = int(time.time() * 1000)
+    off_season = {name: flat_calendar_off_season(groups[name], now_ms) for name in seasonal}
+    assert {name: season for name, season in off_season.items() if season} == {}
+
+
+def _flat_flipped_by_runbook(group_names, season: str) -> dict:
+    """Копія config репо, де ранбук переписав плоскі поля груп `group_names` блоком `season`."""
+    flipped = copy.deepcopy(REPO_CFG)
+    for name in group_names:
+        group = flipped["market_calendar_by_group"][name]
+        group.update(copy.deepcopy(group[season]))
+    return flipped
+
+
+@pytest.mark.parametrize(
+    "moment, flipped_to_winter, expected_off_season",
+    [
+        ((2026, 10, 24, 12), (), {}),
+        ((2026, 10, 26, 6, 30), (), {name: "winter" for name in _EU_GROUPS}),
+        ((2026, 10, 26, 6, 30), _EU_GROUPS, {}),
+        ((2026, 11, 2, 12), _EU_GROUPS, {name: "winter" for name in _US_GROUPS}),
+        ((2026, 11, 2, 12), _EU_GROUPS + _US_GROUPS, {}),
+        ((2026, 10, 24, 12), _EU_GROUPS, {name: "summer" for name in _EU_GROUPS}),
+    ],
+    ids=["before_switch", "eu_switched_no_runbook", "eu_runbook", "us_switched_no_runbook", "all_runbook",
+         "runbook_too_early"],
+)
+def test_flat_calendar_off_season_red_after_switch_green_after_runbook(moment, flipped_to_winter, expected_off_season):
+    """Сторож рахує сезон моменту: після переходу без ранбука червоний, після санкціонованого перемикання
+    (ADR-0095 §3.5) зелений, а перемикання зарано теж ловить. «Плоскі == summer» тут мовчав би 26.10."""
+    cfg = _flat_flipped_by_runbook(flipped_to_winter, "winter")
+    groups = cfg["market_calendar_by_group"]
+    off_season = {name: flat_calendar_off_season(group, _ms(*moment)) for name, group in groups.items()}
+    assert {name: season for name, season in off_season.items() if season} == expected_off_season
+
+
+def test_flat_calendar_off_season_sees_extra_flat_schedule_field():
+    """Зайве плоске поле розкладу (перерва, якої блок не має) — розсинхрон ефективного календаря, не лише полів."""
+    group = copy.deepcopy(REPO_CFG["market_calendar_by_group"]["cfd_eu_eustx50"])
+    group["market_daily_breaks"] = [["12:00", "12:30"]]
+    assert flat_calendar_off_season(group, _ms(2026, 9, 23, 12)) == "summer"
+
+
+def test_live_calendar_logs_flat_off_season_but_symbol_still_starts(caplog):
+    """Стан «25.10 без S6b і без ранбука»: живий плоский календар EUSTX50 торгує Пн 26.10 06:30, хоча ринок
+    відкривається о 07:00. Символ стартує (календар неточний, а не відсутній), але ERROR називає групу і сезон."""
+    monday_0630 = _ms(2026, 10, 26, 6, 30)
+    with caplog.at_level(logging.ERROR):
+        calendars, rejected = resolve_symbol_calendars(REPO_CFG, ["EUSTX50", "XAU/USD"], where="t", now_ms=monday_0630)
+    assert rejected == [] and calendars["EUSTX50"].is_trading_minute(monday_0630) is True
+    assert calendar_for_symbol(REPO_CFG, "EUSTX50").is_trading_minute(monday_0630) is False
+    errors = [record.getMessage() for record in caplog.records if "CALENDAR_FLAT_OFF_SEASON" in record.getMessage()]
+    assert len(errors) == 1 and "symbol=EUSTX50 group=cfd_eu_eustx50 season=winter" in errors[0]
+
+    caplog.clear()
+    with caplog.at_level(logging.ERROR):
+        resolve_symbol_calendars(_flat_flipped_by_runbook(_EU_GROUPS, "winter"), ["EUSTX50"], where="t",
+                                 now_ms=monday_0630)
+    assert not [record for record in caplog.records if "CALENDAR_FLAT_OFF_SEASON" in record.getMessage()]
 
 
 def test_repo_config_every_group_declares_season_rule_and_every_symbol_builds():

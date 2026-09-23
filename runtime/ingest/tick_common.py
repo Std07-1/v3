@@ -7,10 +7,17 @@ core.config_loader.env_str, core.session_anchor (сезони DST) та runtime.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Iterable, Optional, Dict, List, Sequence, Tuple
 
 from core.config_loader import env_str
-from core.session_anchor import CALENDAR_SEASON_RULES, SEASON_RULE_NONE, SEASON_SUMMER, SEASON_WINTER
+from core.session_anchor import (
+    CALENDAR_SEASON_RULES,
+    SEASON_RULE_NONE,
+    SEASON_SUMMER,
+    SEASON_WINTER,
+    calendar_season,
+)
 from runtime.ingest.market_calendar import MarketCalendar, SeasonalMarketCalendar
 
 
@@ -132,7 +139,8 @@ def calendar_for_symbol(cfg: dict, symbol: str) -> SeasonalMarketCalendar:
     календар 24/7 чи розклад не того сезону.
 
     До S6b (дедлайн 25.10.2026) живі споживачі беруть плоскі поля через ``resolve_symbol_calendars``, тож плоскі
-    поля сезонної групи = блок ``summer`` (тест-сторож); фабрика — для інструмента міграції S7 і health.
+    поля сезонної групи = блок поточного сезону (``flat_calendar_off_season``: тест-сторож і ERROR на старті живого
+    процесу); фабрика — для health, ``rebuild_from_m1`` та інструмента міграції S7.
     """
     group = (cfg.get("market_calendar_symbol_groups") or {}).get(symbol)
     group_cfg = (cfg.get("market_calendar_by_group") or {}).get(group) if group else None
@@ -175,6 +183,29 @@ def _build_group_schedule(schedule_cfg: dict, symbol: str, group: str, block: st
     return calendar
 
 
+def flat_calendar_off_season(group_cfg: dict, now_ms: int) -> Optional[str]:
+    """Сезон моменту ``now_ms``, блок якого плоскі поля сезонної групи не повторюють; None — повторюють.
+
+    До S6b живий календар — плоскі поля (``resolve_symbol_calendars``), а розклад сезону — блок ``summer`` чи
+    ``winter`` (``calendar_for_symbol``). Плоскі поля мусять дорівнювати блоку сезону за годинником: влітку — як є,
+    після переходу DST — після перемикання ранбуком `dst_transition` (ADR-0095 §3.5). Розбіжність — живий календар
+    не того сезону. Порівнюються і поля блоку, і ефективний календар: зайве плоске поле розкладу — теж розсинхрон.
+    Група ``none``, з невідомим правилом чи без блоку сезону — None: це відмови ``calendar_for_symbol``, а живий
+    календар від них не залежить.
+    """
+    season_rule = group_cfg.get(SEASON_RULE_KEY)
+    if season_rule not in CALENDAR_SEASON_RULES or season_rule == SEASON_RULE_NONE:
+        return None
+    season = calendar_season(now_ms, season_rule)
+    block = group_cfg.get(season)
+    if not isinstance(block, dict):
+        return None
+    flat_fields = {key: group_cfg.get(key) for key in block}
+    if flat_fields == block and calendar_from_group(group_cfg) == calendar_from_group(block):
+        return None
+    return season
+
+
 # ---------------------------------------------------------------------------
 # Fail-fast мапінгу календарів (ADR-0054 §3.1 P0.4)
 # ---------------------------------------------------------------------------
@@ -183,6 +214,7 @@ def resolve_symbol_calendars(
     symbols: Sequence[str],
     *,
     where: str,
+    now_ms: Optional[int] = None,
 ) -> "Tuple[Dict[str, MarketCalendar], List[str]]":
     """Побудувати календар на кожен символ; символи без валідного — відсіяти гучно.
 
@@ -191,10 +223,15 @@ def resolve_symbol_calendars(
     Мовчазний ``calendar=None`` означав би полінг 24/7 (усі споживачі трактують None як
     «ринок завжди відкритий»), тому такий символ не отримує календаря і не стартує.
 
+    Плоскі поля сезонної групи не того сезону (``flat_calendar_off_season``: перехід DST настав, а ранбук не
+    перемкнув їх і S6b не зроблено) — ERROR ``CALENDAR_FLAT_OFF_SEASON``. Символ стартує: календар неточний у
+    годинах перерв і вихідних, а не відсутній.
+
     Args:
         cfg: повний config.json.
         symbols: символи, які збирається обслуговувати воркер.
         where: ім'я воркера для лог-префікса.
+        now_ms: момент перевірки сезону (типово — годинник процесу).
 
     Returns:
         ``(calendars, rejected)`` — мапа символ→календар і список відсіяних символів.
@@ -203,6 +240,7 @@ def resolve_symbol_calendars(
     sym_groups = cfg.get("market_calendar_symbol_groups") or {}
     calendars: Dict[str, MarketCalendar] = {}
     rejected: List[str] = []
+    season_check_ms = int(time.time() * 1000) if now_ms is None else now_ms
     for sym in symbols:
         group = sym_groups.get(sym)
         if not group:
@@ -231,6 +269,14 @@ def resolve_symbol_calendars(
             )
             rejected.append(sym)
             continue
+        off_season = flat_calendar_off_season(group_cfg, season_check_ms)
+        if off_season is not None:
+            logging.error(
+                "CALENDAR_FLAT_OFF_SEASON where=%s symbol=%s group=%s season=%s — плоскі поля групи (живий "
+                "календар до S6b) не повторюють блок сезону: перемкніть їх ранбуком dst_transition або завершіть "
+                "S6b (ADR-0095 §3.5)",
+                where, sym, group, off_season,
+            )
         calendars[sym] = cal
     if rejected:
         logging.error(
