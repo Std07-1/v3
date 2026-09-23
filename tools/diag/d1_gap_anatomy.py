@@ -35,7 +35,7 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-from core.config_loader import load_system_config, pick_config_path
+from core.config_loader import htf_anchor_rule_resolver, load_system_config, pick_config_path
 from core.derive import MAX_MID_SESSION_GAPS_BY_TF
 from core.health.measures import expected_bucket_opens
 from runtime.ingest.tick_common import resolve_symbol_calendars
@@ -236,7 +236,9 @@ def analyze_symbol(
     else:
         first_m1 = _first_part_day_ms(data_root, symbol, TF_M1_S)
         start = max(now_ms - days * TF_D1_MS, first_m1 if first_m1 is not None else now_ms)
-        buckets = expected_bucket_opens(start, now_ms, TF_D1_MS, anchor_ms, is_trading)
+        # Очікувані бакети — сезонна сітка символу (ADR-0095 S5a, API health); вікна й --date — S5b.
+        rule = htf_anchor_rule_resolver(cfg)(symbol)
+        buckets = expected_bucket_opens(start, now_ms, tf_s=TF_D1_S, rule=rule, is_trading_fn=is_trading)
 
     d1_opens = _all_opens_by_glob(data_root, symbol, TF_D1_S)
     budget = MAX_MID_SESSION_GAPS_BY_TF.get(TF_D1_S, 3)

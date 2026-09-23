@@ -173,3 +173,16 @@ def test_контроль_однакова_версія_погіршення_в�
     after = dict(_report({"SPX500": _sym(grade="RED")}), measure_version=2)
     res = compare_reports(before, after)
     assert res.verdicts_comparable is True and not res.ok
+
+
+# ── ADR-0095 S5a: v3 — сезонна сітка H4/D1 ──────────────────────────────────
+def test_off_season_grid_growth_is_regression_within_v3():
+    tf_before, tf_after = _tf(), _tf()
+    tf_before["geometry"]["off_season_grid"] = 0
+    tf_after["geometry"]["off_season_grid"] = 2
+    before = dict(_report({"XAU/USD": _sym(tfs={"14400": tf_before})}), measure_version=3)
+    after = dict(_report({"XAU/USD": _sym(tfs={"14400": tf_after})}), measure_version=3)
+    res = compare_reports(before, after)
+    assert [(r.tf, r.measure, r.before, r.after) for r in res.regressions] == [
+        ("14400", "барів поза сезонною сіткою", 0, 2)
+    ]

@@ -8,13 +8,21 @@
 """
 from __future__ import annotations
 
+import datetime as dt
+
 from core.health import grade_symbol_tf, measure_cascade, measure_root_consistency, ssot_winners
 from core.model.bars import CandleBar
+from core.session_anchor import RULE_NY_CLOSE_US_DST
 
 M1_MS = 60_000
 M15_MS = 900_000
 M30_MS = 1_800_000
+H1_MS = 3_600_000
+H4_MS = 14_400_000
 BASE = 1_767_225_600_000  # 2026-01-01 00:00 UTC
+RULE = RULE_NY_CLOSE_US_DST
+# 01.11.2026: доба сб 31.10 має 25 год, її остання H4 — обрубок нд 21:00→22:00 (ADR-0095)
+FALL_STUB = int(dt.datetime(2026, 11, 1, 21, tzinfo=dt.timezone.utc).timestamp()) * 1000
 
 
 def _bar(open_ms, tf_ms, *, o, h, low, c, src="derived", ext=None, marker=""):
@@ -52,7 +60,7 @@ def test_cascade_ignores_the_losing_record_of_a_duplicated_parent():
     kids = _minutes(BASE, 15)
     stale = _bar(BASE, M15_MS, o=0.0, h=99.0, low=0.0, c=0.0)
     right = _aggregate(BASE, M15_MS, kids)
-    r = measure_cascade([stale, right], kids, target_tf_ms=M15_MS, source_tf_ms=M1_MS, anchor_offsets_ms=[0])
+    r = measure_cascade([stale, right], kids, target_tf_s=900, source_tf_s=60, rule=RULE)
     assert (r.checked, r.mismatched) == (1, 0)
 
 
@@ -60,7 +68,7 @@ def test_cascade_control_winner_itself_wrong_is_still_caught():
     kids = _minutes(BASE, 15)
     right = _aggregate(BASE, M15_MS, kids)
     stale = _bar(BASE, M15_MS, o=0.0, h=99.0, low=0.0, c=0.0)
-    r = measure_cascade([right, stale], kids, target_tf_ms=M15_MS, source_tf_ms=M1_MS, anchor_offsets_ms=[0])
+    r = measure_cascade([right, stale], kids, target_tf_s=900, source_tf_s=60, rule=RULE)
     assert r.mismatched == 1
 
 
@@ -69,15 +77,15 @@ def test_cascade_picks_children_the_way_readers_do():
     kids = _minutes(BASE, 15)
     partial_last = _bar(kids[7].open_time_ms, M1_MS, o=50, h=99, low=1, c=50, ext={"partial": True})
     parent = _aggregate(BASE, M15_MS, kids)
-    r = measure_cascade([parent], kids + [partial_last], target_tf_ms=M15_MS, source_tf_ms=M1_MS,
-                        anchor_offsets_ms=[0])
+    r = measure_cascade([parent], kids + [partial_last], target_tf_s=900, source_tf_s=60,
+                        rule=RULE)
     assert r.mismatched == 0
 
 
 # ── корінь M1 ────────────────────────────────────────────────────────────────
 def test_root_accepts_bar_equal_to_its_minutes():
     minutes = _minutes(BASE, 15)
-    r = measure_root_consistency([_aggregate(BASE, M15_MS, minutes)], minutes, tf_ms=M15_MS)
+    r = measure_root_consistency([_aggregate(BASE, M15_MS, minutes)], minutes, tf_s=900, rule=RULE)
     assert (r.checked, r.mismatched, r.uncovered) == (1, 0, 0)
 
 
@@ -85,7 +93,7 @@ def test_root_catches_bar_built_from_other_minutes():
     """M1 перезалили, бар не перебудували."""
     old_minutes = _minutes(BASE, 15)
     new_minutes = _minutes(BASE, 15, bump=3.0)
-    r = measure_root_consistency([_aggregate(BASE, M15_MS, old_minutes)], new_minutes, tf_ms=M15_MS)
+    r = measure_root_consistency([_aggregate(BASE, M15_MS, old_minutes)], new_minutes, tf_s=900, rule=RULE)
     assert (r.mismatched, r.mismatch_samples) == (1, (BASE,))
     assert grade_symbol_tf(root=r).grade == "RED"
 
@@ -93,21 +101,21 @@ def test_root_catches_bar_built_from_other_minutes():
 def test_root_does_not_blame_bar_built_from_the_minutes_that_exist():
     """Контроль: бакет із дірками в M1 — не дефект, якщо бар зібрано саме з наявних хвилин."""
     minutes = [m for i, m in enumerate(_minutes(BASE, 15)) if i not in (3, 4, 11)]
-    r = measure_root_consistency([_aggregate(BASE, M15_MS, minutes)], minutes, tf_ms=M15_MS)
+    r = measure_root_consistency([_aggregate(BASE, M15_MS, minutes)], minutes, tf_s=900, rule=RULE)
     assert r.mismatched == 0
 
 
 def test_root_declared_partial_is_reported_not_blamed():
     minutes = _minutes(BASE, 15, bump=3.0)
     bar = _aggregate(BASE, M15_MS, _minutes(BASE, 15), ext={"partial": True})
-    r = measure_root_consistency([bar], minutes, tf_ms=M15_MS, declares_partial_fn=_partial)
+    r = measure_root_consistency([bar], minutes, tf_s=900, rule=RULE, declares_partial_fn=_partial)
     assert (r.mismatched, r.declared_partial) == (0, 1)
 
 
 def test_root_bar_without_any_minutes_is_uncovered_not_ok():
     """Історія, старша за M1 (брокерський імпорт): перевірити нема чим — ні «ок», ні дефект."""
     r = measure_root_consistency([_bar(BASE, M15_MS, o=1, h=2, low=0, c=1)], _minutes(BASE + M15_MS, 15),
-                                 tf_ms=M15_MS)
+                                 tf_s=900, rule=RULE)
     assert (r.checked, r.uncovered, r.mismatched) == (0, 1, 0)
 
 
@@ -117,9 +125,9 @@ def test_root_sees_what_adjacent_cascade_cannot():
     stale_m15 = [_aggregate(BASE, M15_MS, _minutes(BASE, 15)),
                  _aggregate(BASE + M15_MS, M15_MS, _minutes(BASE + M15_MS, 15))]
     m30_from_stale = _aggregate(BASE, M30_MS, stale_m15)
-    cascade = measure_cascade([m30_from_stale], stale_m15, target_tf_ms=M30_MS, source_tf_ms=M15_MS,
-                              anchor_offsets_ms=[0])
-    root = measure_root_consistency([m30_from_stale], new_minutes, tf_ms=M30_MS)
+    cascade = measure_cascade([m30_from_stale], stale_m15, target_tf_s=1800, source_tf_s=900,
+                              rule=RULE)
+    root = measure_root_consistency([m30_from_stale], new_minutes, tf_s=1800, rule=RULE)
     assert cascade.mismatched == 0, "каскад бачить узгоджену пару і мовчить"
     assert root.mismatched == 1, "корінь бачить, що обидва рівні застаріли"
 
@@ -127,5 +135,23 @@ def test_root_sees_what_adjacent_cascade_cannot():
 def test_root_checks_the_winner_not_every_record():
     minutes = _minutes(BASE, 15)
     stale = _bar(BASE, M15_MS, o=0.0, h=99.0, low=0.0, c=0.0)
-    r = measure_root_consistency([stale, _aggregate(BASE, M15_MS, minutes)], minutes, tf_ms=M15_MS)
+    r = measure_root_consistency([stale, _aggregate(BASE, M15_MS, minutes)], minutes, tf_s=900, rule=RULE)
     assert (r.checked, r.mismatched) == (1, 0)
+
+
+# ── обрубок H4 доби переходу DST (ADR-0095) ────────────────────────────────
+def test_root_window_of_fall_stub_ends_at_next_bucket():
+    """Вікно обрубка — до відкриття нової доби (22:00), а не open + 4 год: хвилини 22:00+ належать іншому бару."""
+    stub_minutes = _minutes(FALL_STUB, 60)
+    next_bucket_minutes = _minutes(FALL_STUB + H1_MS, 30, bump=50.0)
+    stub = _aggregate(FALL_STUB, H4_MS, stub_minutes)
+    r = measure_root_consistency([stub], stub_minutes + next_bucket_minutes, tf_s=14_400, rule=RULE)
+    assert (r.checked, r.mismatched) == (1, 0)
+
+
+def test_cascade_fall_stub_is_complete_with_one_h1():
+    """Обрубок 1 год повний з одним H1: каскад його перевіряє, а не пропускає як неповний."""
+    h1 = _aggregate(FALL_STUB, H1_MS, _minutes(FALL_STUB, 60))
+    stub = _aggregate(FALL_STUB, H4_MS, [h1])
+    r = measure_cascade([stub], [h1], target_tf_s=14_400, source_tf_s=3600, rule=RULE)
+    assert (r.checked, r.mismatched, r.skipped_incomplete) == (1, 0, 0)

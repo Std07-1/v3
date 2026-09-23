@@ -20,6 +20,11 @@
 Версія виміру 2 (ADR-0094 P4): батьки й діти згортаються так, як їх показують читачі, і кожен
 derived-бар звіряється з агрегацією M1 у своєму бакеті (`root`). Каскад сусідніх рівнів цього не
 бачив: 14.09.2026 він показував 137 розбіжностей на XAU/XAG, а проти M1 — 659.
+
+Версія виміру 3 (ADR-0095 S5a): правило якоря H4/D1 — на символ з `htf_anchor_rule_resolver`, сітка одна,
+сезонна. Бар H4/D1 не на ній — `off_season_grid` (RED) з очікуваним відкриттям у звіті; легасі-якорів
+config інструмент не читає. Символ із невиміряною групою календаря — RED `htf_anchor_rule_missing`,
+а не тихий якір.
 """
 from __future__ import annotations
 
@@ -30,11 +35,10 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional
 
-from core.buckets import resolve_anchor_offset_ms, tf_to_ms
-from core.config_loader import load_system_config, resolve_config_path
-from core.derive import DERIVE_SOURCE, resolve_cascade_anchor_s
+from core.config_loader import htf_anchor_rule_resolver, load_system_config, resolve_config_path
+from core.derive import DERIVE_SOURCE
 from core.health import (
     HEALTH_MEASURE_VERSION,
     check_anchor_on_session_edge,
@@ -48,6 +52,7 @@ from core.health import (
     measure_root_consistency,
 )
 from core.model.bars import CandleBar
+from core.session_anchor import season_label
 from runtime.ingest.tick_common import resolve_symbol_calendars
 
 _log = logging.getLogger("symbol_health")
@@ -112,30 +117,6 @@ def _declares_partial(bar: CandleBar) -> bool:
     )
 
 
-def _legal_anchors_ms(cfg: Dict[str, Any], tf_s: int, primary_ms: int) -> List[int]:
-    """Легальні якорі для TF: основний + DST-альтернативи з config.
-
-    HTF-якір рухається з переходом на зимовий/літній час (D1 21:00/22:00, H4 22:00/23:00).
-    Бар на alt-якорі — не дефект, тому вимір має знати весь дозволений набір
-    (легасі-ключі config; писар SSOT з ADR-0095 S3a вже перевіряє рівність сезонній сітці, вимір переходить на
-    неї в S5a).
-    """
-    keys = (
-        ("day_anchor_offset_s_d1", "day_anchor_offset_s_d1_alt")
-        if tf_s == 86400
-        else ("day_anchor_offset_s", "day_anchor_offset_s_alt", "day_anchor_offset_s_alt2")
-    )
-    out = [primary_ms]
-    for key in keys:
-        raw = cfg.get(key)
-        if raw is None:
-            continue
-        value = int(raw) * 1000 % (tf_s * 1000)
-        if value not in out:
-            out.append(value)
-    return out
-
-
 def check_symbol(
     cfg: Dict[str, Any],
     symbol: str,
@@ -143,11 +124,22 @@ def check_symbol(
     data_root: str,
     now_ms: int,
     window_days: int,
+    anchor_rule_for_symbol: Callable[[str], str],
 ) -> Dict[str, Any]:
-    """Порахувати всі виміри для одного символу по кожному TF з allowlist."""
+    """Порахувати всі виміри для одного символу по кожному TF з allowlist.
+
+    ``anchor_rule_for_symbol`` — резолвер правила якоря H4/D1 (``htf_anchor_rule_resolver``, ADR-0095),
+    збудований раз на прогін.
+    """
     calendars, rejected = resolve_symbol_calendars(cfg, [symbol], where="symbol_health_check")
     if rejected:
         return {"symbol": symbol, "grade": "RED", "reasons": ["calendar_group_missing"], "tfs": {}}
+    try:
+        rule = anchor_rule_for_symbol(symbol)
+    except ValueError as exc:
+        # Група календаря без виміряної сітки H4/D1 (ADR-0095 §8.4): міряти нема чим — не тихий якір.
+        _log.error("HEALTH_HTF_ANCHOR_RULE_MISSING symbol=%s err=%s", symbol, exc)
+        return {"symbol": symbol, "grade": "RED", "reasons": ["htf_anchor_rule_missing"], "tfs": {}}
     calendar = calendars[symbol]
     is_trading = calendar.is_trading_minute
 
@@ -160,20 +152,12 @@ def check_symbol(
     for tf_s in tf_list:
         bars = bars_by_tf.get(tf_s, [])
         opens = [b.open_time_ms for b in bars]
-        tf_ms = tf_to_ms(tf_s)
-        anchor_ms = resolve_cascade_anchor_s(
-            tf_s,
-            h4_anchor_offset_s=int(cfg.get("day_anchor_offset_s", 0)),
-            d1_anchor_offset_s=int(cfg.get("day_anchor_offset_s_d1", 0)),
-        ) * 1000 or resolve_anchor_offset_ms(tf_s, cfg)
-        anchors_ms = _legal_anchors_ms(cfg, tf_s, anchor_ms)
 
-        age = measure_age(opens, now_ms=now_ms, tf_ms=tf_ms, anchor_offset_ms=anchor_ms, is_trading_fn=is_trading)
+        age = measure_age(opens, now_ms=now_ms, tf_s=tf_s, rule=rule, is_trading_fn=is_trading)
         holes = measure_holes(
-            opens, start_ms=window_start, end_ms=now_ms, tf_ms=tf_ms,
-            anchor_offset_ms=anchor_ms, is_trading_fn=is_trading,
+            opens, start_ms=window_start, end_ms=now_ms, tf_s=tf_s, rule=rule, is_trading_fn=is_trading,
         )
-        geometry = measure_geometry(bars, tf_ms=tf_ms, anchor_offsets_ms=anchors_ms)
+        geometry = measure_geometry(bars, tf_s=tf_s, rule=rule)
         depth = measure_depth(opens, required_bars=REQUIRED_BARS_BY_TF.get(tf_s, 0))
 
         cascade = None
@@ -181,7 +165,7 @@ def check_symbol(
         if source_tf and bars and bars_by_tf.get(source_tf):
             cascade = measure_cascade(
                 bars, bars_by_tf[source_tf],
-                target_tf_ms=tf_ms, source_tf_ms=tf_to_ms(source_tf), anchor_offsets_ms=anchors_ms,
+                target_tf_s=tf_s, source_tf_s=source_tf, rule=rule,
                 declares_partial_fn=_declares_partial,
             )
 
@@ -190,7 +174,7 @@ def check_symbol(
         root = None
         if tf_s != 60 and bars and bars_by_tf.get(60):
             root = measure_root_consistency(
-                bars, bars_by_tf[60], tf_ms=tf_ms, declares_partial_fn=_declares_partial,
+                bars, bars_by_tf[60], tf_s=tf_s, rule=rule, declares_partial_fn=_declares_partial,
             )
 
         grade = grade_symbol_tf(age=age, holes=holes, geometry=geometry, cascade=cascade, root=root, depth=depth)
@@ -210,6 +194,12 @@ def check_symbol(
                 "unsorted": geometry.unsorted,
                 "align_bad": geometry.align_bad, "close_bad": geometry.close_bad,
                 "ohlc_bad": geometry.ohlc_bad,
+                "off_season_grid": geometry.off_season_grid,
+                "off_season_grid_samples": [
+                    {"open": _iso(open_ms), "expected_open": _iso(expected_ms), "season": season_label(open_ms, rule),
+                     "open_ms": open_ms, "expected_open_ms": expected_ms}
+                    for open_ms, expected_ms in geometry.off_season_grid_samples
+                ],
             },
             "cascade": (
                 None if cascade is None
@@ -224,16 +214,14 @@ def check_symbol(
             ),
         }
 
+    d1_bars = bars_by_tf.get(86400)
     anchor_ok = check_anchor_on_session_edge(
-        _last_anchor_open(bars_by_tf.get(86400, []), int(cfg.get("day_anchor_offset_s_d1", 0))),
-        tf_ms=86_400_000,
-        is_trading_fn=is_trading,
-    ) if bars_by_tf.get(86400) else None
-    return {"symbol": symbol, "grade": worst, "d1_anchor_on_session_edge": anchor_ok, "tfs": tfs}
-
-
-def _last_anchor_open(bars: Sequence[CandleBar], d1_anchor_offset_s: int) -> int:
-    return max(b.open_time_ms for b in bars) if bars else 0
+        max(b.open_time_ms for b in d1_bars), tf_ms=86_400_000, is_trading_fn=is_trading,
+    ) if d1_bars else None
+    return {
+        "symbol": symbol, "grade": worst, "htf_anchor_rule": rule,
+        "d1_anchor_on_session_edge": anchor_ok, "tfs": tfs,
+    }
 
 
 def _iso(ms: Optional[int]) -> Optional[str]:
@@ -273,12 +261,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     now_ms = int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)
+    anchor_rule_for_symbol = htf_anchor_rule_resolver(cfg)
     report = {
         "generated_at": _iso(now_ms),
         "measure_version": HEALTH_MEASURE_VERSION,
         "window_days": args.days,
         "symbols": {
-            sym: check_symbol(cfg, sym, data_root=data_root, now_ms=now_ms, window_days=args.days)
+            sym: check_symbol(
+                cfg, sym, data_root=data_root, now_ms=now_ms, window_days=args.days,
+                anchor_rule_for_symbol=anchor_rule_for_symbol,
+            )
             for sym in symbols
         },
     }

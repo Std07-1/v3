@@ -20,15 +20,23 @@ from core.health import (
     measure_depth,
     measure_geometry,
     measure_holes,
-    normalize_open_to_grid,
 )
 from core.model.bars import CandleBar
+from core.session_anchor import RULE_NY_CLOSE_US_DST, RULE_UTC_MIDNIGHT, htf_bucket_start_ms
 
 M1_MS = 60_000
 H1_MS = 3_600_000
+H4_S = 14_400
+H4_MS = 14_400_000
+D1_S = 86_400
 D1_MS = 86_400_000
 BASE = 1_767_225_600_000  # 2026-01-01 00:00 UTC, вирівняно на добу
 ALWAYS = lambda _ms: True  # noqa: E731 — календар «24/7» для вимірів без сесій
+RULE = RULE_NY_CLOSE_US_DST  # ADR-0095: D1 о 17:00 America/New_York, H4 = D1/6
+
+
+def _utc(*args: int) -> int:
+    return int(dt.datetime(*args, tzinfo=dt.timezone.utc).timestamp()) * 1000
 
 
 def _bar(open_ms: int, tf_ms: int, *, o=1.0, h=2.0, low=0.5, c=1.5, src="derived") -> CandleBar:
@@ -41,29 +49,45 @@ def _bar(open_ms: int, tf_ms: int, *, o=1.0, h=2.0, low=0.5, c=1.5, src="derived
 # ── geometry ────────────────────────────────────────────────────────────────
 def test_clean_series_has_no_defects():
     bars = [_bar(BASE + i * M1_MS, M1_MS) for i in range(10)]
-    g = measure_geometry(bars, tf_ms=M1_MS, anchor_offsets_ms=[0])
+    g = measure_geometry(bars, tf_s=60, rule=RULE)
     assert (g.total, g.exact_dup, g.unsorted, g.align_bad, g.close_bad, g.ohlc_bad) == (10, 0, 0, 0, 0, 0)
 
 
 def test_duplicate_and_unsorted_are_counted_separately():
     bars = [_bar(BASE, M1_MS), _bar(BASE, M1_MS), _bar(BASE + 2 * M1_MS, M1_MS), _bar(BASE + M1_MS, M1_MS)]
-    g = measure_geometry(bars, tf_ms=M1_MS, anchor_offsets_ms=[0])
+    g = measure_geometry(bars, tf_s=60, rule=RULE)
     assert g.exact_dup == 1 and g.unsorted == 1
 
 
 def test_off_grid_bar_is_align_bad():
     bars = [_bar(BASE + 30_000, M1_MS)]  # пів-хвилини — не на сітці
-    assert measure_geometry(bars, tf_ms=M1_MS, anchor_offsets_ms=[0]).align_bad == 1
+    assert measure_geometry(bars, tf_s=60, rule=RULE).align_bad == 1
 
 
-def test_dst_alt_anchor_bar_is_legal_not_align_bad():
-    """D1 21:00 влітку і 22:00 взимку — обидва легальні; вимір не має кричати."""
-    summer, winter = 75_600_000, 79_200_000
-    bars = [_bar(BASE + summer, D1_MS), _bar(BASE + winter - D1_MS, D1_MS)]
-    strict = measure_geometry(bars, tf_ms=D1_MS, anchor_offsets_ms=[summer])
-    tolerant = measure_geometry(bars, tf_ms=D1_MS, anchor_offsets_ms=[summer, winter])
-    assert strict.align_bad == 1, "лише з primary один із барів виглядає зсунутим"
-    assert tolerant.align_bad == 0, "з DST-альтернативою обидва легальні"
+def test_off_season_grid_bar_counted():
+    """ADR-0095: D1 21:00 влітку і 22:00 взимку — сезонна сітка; 22:00 влітку — дефект, а не DST-альтернатива."""
+    summer, winter, stray = _utc(2026, 7, 6, 21), _utc(2026, 1, 5, 22), _utc(2026, 7, 7, 22)
+    g = measure_geometry([_bar(summer, D1_MS), _bar(winter, D1_MS), _bar(stray, D1_MS)], tf_s=D1_S, rule=RULE)
+    assert (g.off_season_grid, g.align_bad) == (1, 0), "HTF міряє рівність сезонній сітці, а не кратність TF"
+    assert g.off_season_grid_samples == ((stray, _utc(2026, 7, 7, 21)),), "семпл каже, куди бар мав стати"
+    grade = grade_symbol_tf(geometry=g)
+    assert grade.grade == "RED" and "off_season_grid=1" in grade.reasons
+
+
+def test_h4_on_winter_hours_in_summer_is_off_season_grid():
+    """Старий якір H4 (22:00 → 02:00 …) влітку: кожен бар поза сіткою 21/01/05/09/13/17."""
+    on_grid = [_utc(2026, 7, 6, 21), _utc(2026, 7, 7, 1), _utc(2026, 1, 5, 22), _utc(2026, 1, 6, 2)]
+    stale = [_utc(2026, 7, 7, 22), _utc(2026, 7, 8, 2)]
+    g = measure_geometry([_bar(o, H4_MS) for o in on_grid + stale], tf_s=H4_S, rule=RULE)
+    assert g.off_season_grid == 2 and g.align_bad == 0
+    assert g.off_season_grid_samples == ((stale[0], _utc(2026, 7, 7, 21)), (stale[1], _utc(2026, 7, 8, 1)))
+
+
+def test_utc_midnight_rule_puts_d1_at_midnight():
+    """Binance (``utc_midnight``): D1 00:00 — на сітці, D1 21:00 — поза нею."""
+    g = measure_geometry([_bar(_utc(2026, 7, 6), D1_MS), _bar(_utc(2026, 7, 6, 21), D1_MS)],
+                         tf_s=D1_S, rule=RULE_UTC_MIDNIGHT)
+    assert g.off_season_grid_samples == ((_utc(2026, 7, 6, 21), _utc(2026, 7, 6)),)
 
 
 def test_broken_close_ms_and_ohlc_are_caught():
@@ -71,20 +95,21 @@ def test_broken_close_ms_and_ohlc_are_caught():
                           o=1, h=2, low=0.5, c=1.5, v=1, complete=True, src="history")
     bad_ohlc = CandleBar(symbol="X", tf_s=60, open_time_ms=BASE + M1_MS, close_time_ms=BASE + 2 * M1_MS,
                          o=5, h=2, low=3, c=1, v=1, complete=True, src="history")
-    g = measure_geometry([bad_close, bad_ohlc], tf_ms=M1_MS, anchor_offsets_ms=[0])
+    g = measure_geometry([bad_close, bad_ohlc], tf_s=60, rule=RULE)
     assert g.close_bad == 1 and g.ohlc_bad == 1
 
 
-def test_normalize_returns_none_only_for_truly_shifted():
-    assert normalize_open_to_grid(BASE, tf_ms=M1_MS, anchor_offsets_ms=[0]) == BASE
-    assert normalize_open_to_grid(BASE + 7, tf_ms=M1_MS, anchor_offsets_ms=[0]) is None
+def test_intraday_off_grid_is_align_bad_not_off_season_grid():
+    """M1..H1 — кратність TF (``align_bad``); ``off_season_grid`` лишається полем H4/D1."""
+    g = measure_geometry([_bar(BASE, M1_MS), _bar(BASE + 7, M1_MS)], tf_s=60, rule=RULE)
+    assert (g.align_bad, g.align_bad_samples, g.off_season_grid) == (1, (BASE + 7,), 0)
 
 
 # ── holes ───────────────────────────────────────────────────────────────────
 def test_holes_counts_only_trading_buckets():
     opens = [BASE, BASE + 2 * M1_MS]  # середня хвилина відсутня
-    h = measure_holes(opens, start_ms=BASE, end_ms=BASE + 3 * M1_MS, tf_ms=M1_MS,
-                      anchor_offset_ms=0, is_trading_fn=ALWAYS)
+    h = measure_holes(opens, start_ms=BASE, end_ms=BASE + 3 * M1_MS, tf_s=60,
+                      rule=RULE, is_trading_fn=ALWAYS)
     assert (h.expected, h.present, h.missing) == (3, 2, 1)
     assert h.missing_samples == (BASE + M1_MS,)
 
@@ -92,26 +117,26 @@ def test_holes_counts_only_trading_buckets():
 def test_closed_market_minutes_are_not_holes():
     """Вихідні — не дірка: очікуємо лише торгові бакети."""
     open_only_first = lambda ms: ms == BASE  # noqa: E731
-    h = measure_holes([BASE], start_ms=BASE, end_ms=BASE + 5 * M1_MS, tf_ms=M1_MS,
-                      anchor_offset_ms=0, is_trading_fn=open_only_first)
+    h = measure_holes([BASE], start_ms=BASE, end_ms=BASE + 5 * M1_MS, tf_s=60,
+                      rule=RULE, is_trading_fn=open_only_first)
     assert h.expected == 1 and h.missing == 0
 
 
 # ── age ─────────────────────────────────────────────────────────────────────
 def test_age_zero_when_last_bar_is_the_last_closed_bucket():
     now = BASE + 10 * M1_MS + 30_000
-    a = measure_age([BASE + 9 * M1_MS], now_ms=now, tf_ms=M1_MS, anchor_offset_ms=0, is_trading_fn=ALWAYS)
+    a = measure_age([BASE + 9 * M1_MS], now_ms=now, tf_s=60, rule=RULE, is_trading_fn=ALWAYS)
     assert a.age_buckets == 0
 
 
 def test_age_counts_missed_closed_buckets():
     now = BASE + 10 * M1_MS
-    a = measure_age([BASE + 6 * M1_MS], now_ms=now, tf_ms=M1_MS, anchor_offset_ms=0, is_trading_fn=ALWAYS)
+    a = measure_age([BASE + 6 * M1_MS], now_ms=now, tf_s=60, rule=RULE, is_trading_fn=ALWAYS)
     assert a.age_buckets == 3
 
 
 def test_age_is_none_without_bars():
-    assert measure_age([], now_ms=BASE, tf_ms=M1_MS, anchor_offset_ms=0, is_trading_fn=ALWAYS).age_buckets is None
+    assert measure_age([], now_ms=BASE, tf_s=60, rule=RULE, is_trading_fn=ALWAYS).age_buckets is None
 
 
 # ── cascade ─────────────────────────────────────────────────────────────────
@@ -125,14 +150,14 @@ def _m1_hour(start_ms: int, *, high: float = 2.0) -> list[CandleBar]:
 def test_cascade_accepts_correct_aggregation():
     src = _m1_hour(BASE)
     h1 = _bar(BASE, H1_MS, o=src[0].o, h=max(b.h for b in src), low=min(b.low for b in src), c=src[-1].c)
-    r = measure_cascade([h1], src, target_tf_ms=H1_MS, source_tf_ms=M1_MS, anchor_offsets_ms=[0])
+    r = measure_cascade([h1], src, target_tf_s=3600, source_tf_s=60, rule=RULE)
     assert (r.checked, r.mismatched) == (1, 0)
 
 
 def test_cascade_catches_wrong_high():
     src = _m1_hour(BASE)
     h1 = _bar(BASE, H1_MS, o=src[0].o, h=999.0, low=min(b.low for b in src), c=src[-1].c)
-    r = measure_cascade([h1], src, target_tf_ms=H1_MS, source_tf_ms=M1_MS, anchor_offsets_ms=[0])
+    r = measure_cascade([h1], src, target_tf_s=3600, source_tf_s=60, rule=RULE)
     assert r.mismatched == 1 and r.mismatch_samples == (BASE,)
 
 
@@ -140,7 +165,7 @@ def test_cascade_skips_incomplete_bucket_instead_of_blaming_it():
     """Неповний набір на межі сесії — не дефект деривації."""
     src = _m1_hour(BASE)[:10]
     h1 = _bar(BASE, H1_MS)
-    r = measure_cascade([h1], src, target_tf_ms=H1_MS, source_tf_ms=M1_MS, anchor_offsets_ms=[0])
+    r = measure_cascade([h1], src, target_tf_s=3600, source_tf_s=60, rule=RULE)
     assert (r.checked, r.mismatched, r.skipped_incomplete) == (0, 0, 1)
 
 
@@ -160,7 +185,7 @@ def test_anchor_on_session_edge_detects_mid_session_anchor():
 
 
 def test_grading_red_beats_yellow_and_lists_reasons():
-    geo = measure_geometry([_bar(BASE + 7, M1_MS)], tf_ms=M1_MS, anchor_offsets_ms=[0])
+    geo = measure_geometry([_bar(BASE + 7, M1_MS)], tf_s=60, rule=RULE)
     depth = measure_depth([BASE], required_bars=100)
     g = grade_symbol_tf(geometry=geo, depth=depth)
     assert g.grade == "RED" and any("align_bad" in r for r in g.reasons)
@@ -170,18 +195,18 @@ def test_grading_red_beats_yellow_and_lists_reasons():
 def test_grading_green_for_clean_data():
     bars = [_bar(BASE + i * M1_MS, M1_MS) for i in range(5)]
     g = grade_symbol_tf(
-        geometry=measure_geometry(bars, tf_ms=M1_MS, anchor_offsets_ms=[0]),
+        geometry=measure_geometry(bars, tf_s=60, rule=RULE),
         depth=measure_depth([b.open_time_ms for b in bars], required_bars=5),
         holes=measure_holes([b.open_time_ms for b in bars], start_ms=BASE, end_ms=BASE + 5 * M1_MS,
-                            tf_ms=M1_MS, anchor_offset_ms=0, is_trading_fn=ALWAYS),
+                            tf_s=60, rule=RULE, is_trading_fn=ALWAYS),
     )
     assert g.grade == "GREEN" and g.reasons == []
 
 
 @pytest.mark.parametrize("missing_ratio,expected", [(0.0, "RED"), (1.0, "YELLOW")])
 def test_holes_tolerance_moves_verdict(missing_ratio, expected):
-    holes = measure_holes([BASE], start_ms=BASE, end_ms=BASE + 3 * M1_MS, tf_ms=M1_MS,
-                          anchor_offset_ms=0, is_trading_fn=ALWAYS)
+    holes = measure_holes([BASE], start_ms=BASE, end_ms=BASE + 3 * M1_MS, tf_s=60,
+                          rule=RULE, is_trading_fn=ALWAYS)
     assert grade_symbol_tf(holes=holes, max_missing_ratio=missing_ratio).grade == expected
 
 
@@ -201,7 +226,7 @@ def test_anchor_inside_session_is_rejected():
 def test_unsorted_is_yellow_not_red():
     """Backfill законно дописує старіші бари після новіших — читачі сортують."""
     bars = [_bar(BASE + M1_MS, M1_MS), _bar(BASE, M1_MS)]
-    g = grade_symbol_tf(geometry=measure_geometry(bars, tf_ms=M1_MS, anchor_offsets_ms=[0]))
+    g = grade_symbol_tf(geometry=measure_geometry(bars, tf_s=60, rule=RULE))
     assert g.grade == "YELLOW" and any("unsorted" in r for r in g.reasons)
 
 
@@ -209,7 +234,7 @@ def test_real_data_defects_stay_red():
     """А ось копія однієї M1 замість агрегації (реальний дефект XAG M3) — RED."""
     src = _m1_hour(BASE)[:3]
     m3_copy_of_first = _bar(BASE, 180_000, o=src[0].o, h=src[0].h, low=src[0].low, c=src[0].c)
-    casc = measure_cascade([m3_copy_of_first], src, target_tf_ms=180_000, source_tf_ms=M1_MS, anchor_offsets_ms=[0])
+    casc = measure_cascade([m3_copy_of_first], src, target_tf_s=180, source_tf_s=60, rule=RULE)
     assert casc.mismatched == 1
     assert grade_symbol_tf(cascade=casc).grade == "RED"
 
@@ -219,7 +244,7 @@ def test_age_survives_a_weekend_gap():
     friday_close = BASE
     weekend = lambda ms: ms <= friday_close  # noqa: E731
     now = friday_close + 3 * 24 * 60 * M1_MS  # три доби потому
-    a = measure_age([friday_close], now_ms=now, tf_ms=M1_MS, anchor_offset_ms=0, is_trading_fn=weekend)
+    a = measure_age([friday_close], now_ms=now, tf_s=60, rule=RULE, is_trading_fn=weekend)
     assert a.age_buckets == 0, "ринок закритий — відставання нульове, а не None"
 
 
@@ -237,8 +262,8 @@ def test_declared_partial_is_not_counted_as_silent_mismatch():
                                         "source_count": 1, "expected_count": 3,
                                         "partial_reasons": ["boundary_gap"]},
                         o=src[0].o, h=src[0].h, low=src[0].low, c=src[0].c)
-    r = measure_cascade([declared], src, target_tf_ms=180_000, source_tf_ms=M1_MS,
-                        anchor_offsets_ms=[0], declares_partial_fn=lambda b: bool(b.extensions.get("partial")))
+    r = measure_cascade([declared], src, target_tf_s=180, source_tf_s=60,
+                        rule=RULE, declares_partial_fn=lambda b: bool(b.extensions.get("partial")))
     assert (r.mismatched, r.declared_partial) == (0, 1)
     assert grade_symbol_tf(cascade=r).grade == "GREEN"
 
@@ -247,8 +272,8 @@ def test_silent_mismatch_without_markers_stays_red():
     """А бар, який відрізняється і мовчить, — саме те, що health-check має ловити."""
     src = _m1_hour(BASE)[:3]
     silent = _bar_ext(BASE, 180_000, {}, o=src[0].o, h=999.0, low=src[0].low, c=src[-1].c)
-    r = measure_cascade([silent], src, target_tf_ms=180_000, source_tf_ms=M1_MS,
-                        anchor_offsets_ms=[0], declares_partial_fn=lambda b: bool(b.extensions.get("partial")))
+    r = measure_cascade([silent], src, target_tf_s=180, source_tf_s=60,
+                        rule=RULE, declares_partial_fn=lambda b: bool(b.extensions.get("partial")))
     assert (r.mismatched, r.declared_partial) == (1, 0)
     assert grade_symbol_tf(cascade=r).grade == "RED"
 
@@ -256,7 +281,7 @@ def test_silent_mismatch_without_markers_stays_red():
 def test_identical_duplicate_is_yellow_not_red():
     """Append-only SSOT легально дописує той самий бар; читач злипає — графіку байдуже."""
     same = [_bar(BASE, M1_MS), _bar(BASE, M1_MS)]
-    g = measure_geometry(same, tf_ms=M1_MS, anchor_offsets_ms=[0])
+    g = measure_geometry(same, tf_s=60, rule=RULE)
     assert (g.exact_dup, g.dup_conflicting) == (1, 0)
     assert grade_symbol_tf(geometry=g).grade == "YELLOW"
 
@@ -264,13 +289,13 @@ def test_identical_duplicate_is_yellow_not_red():
 def test_conflicting_duplicate_is_red():
     """А різні значення на один бакет — результат вирішує порядок у файлі."""
     clash = [_bar(BASE, M1_MS, c=1.5), _bar(BASE, M1_MS, c=9.9)]
-    g = measure_geometry(clash, tf_ms=M1_MS, anchor_offsets_ms=[0])
+    g = measure_geometry(clash, tf_s=60, rule=RULE)
     assert g.dup_conflicting == 1
     assert grade_symbol_tf(geometry=g).grade == "RED"
 
 
 # ── якір HTF усередині перерви (ADR-0054 §3.8 п.1) ──────────────────────────
-D1_ANCHOR_MS = 75_600_000  # 21:00 UTC — літній `day_anchor_offset_s_d1` з config.json
+# Тиждень з пн 06.07.2026: літо США, відкриття торгового дня 17:00 NY = 21:00 UTC (ADR-0095).
 
 
 def _cfd_us_is_trading(ms: int) -> bool:
@@ -291,9 +316,8 @@ def _cfd_us_is_trading(ms: int) -> bool:
 
 
 def _d1_bucket(day_offset: int) -> int:
-    """Відкриття D1-бакета: 2026-01-05 (понеділок) 21:00 UTC + N діб."""
-    monday = int(dt.datetime(2026, 1, 5, 21, 0, tzinfo=dt.timezone.utc).timestamp()) * 1000
-    return monday + day_offset * D1_MS
+    """Відкриття D1-бакета: 2026-07-06 (понеділок, літо) 21:00 UTC + N діб."""
+    return _utc(2026, 7, 6, 21) + day_offset * D1_MS
 
 
 def test_bucket_is_expected_when_its_first_minute_is_a_break():
@@ -301,7 +325,7 @@ def test_bucket_is_expected_when_its_first_minute_is_a_break():
     monday = _d1_bucket(0)
     assert _cfd_us_is_trading(monday) is False, "якірна хвилина справді в перерві"
     assert bucket_has_trading_minute(monday, monday + D1_MS, _cfd_us_is_trading) is True
-    exp = expected_bucket_opens(monday, monday + 7 * D1_MS, D1_MS, D1_ANCHOR_MS, _cfd_us_is_trading)
+    exp = expected_bucket_opens(monday, monday + 7 * D1_MS, tf_s=D1_S, rule=RULE, is_trading_fn=_cfd_us_is_trading)
     assert exp == [_d1_bucket(i) for i in (0, 1, 2, 3, 6)], "5 торгових діб на тиждень"
 
 
@@ -315,15 +339,15 @@ def test_d1_holes_are_visible_when_series_is_truncated():
     """Той самий дефект, що ховався: ряд обірвано, а звіт показував holes=0/0."""
     present = [_d1_bucket(0), _d1_bucket(1)]  # решти тижня немає
     h = measure_holes(present, start_ms=_d1_bucket(0), end_ms=_d1_bucket(7),
-                      tf_ms=D1_MS, anchor_offset_ms=D1_ANCHOR_MS, is_trading_fn=_cfd_us_is_trading)
+                      tf_s=D1_S, rule=RULE, is_trading_fn=_cfd_us_is_trading)
     assert (h.expected, h.missing) == (5, 3)
 
 
 def test_d1_age_counts_lag_instead_of_reporting_zero():
     """Старий предикат не знаходив жодного торгового бакета і тихо віддавав age=0."""
     now = _d1_bucket(3) + 10 * 60 * 60 * 1000  # четвер, середина торгової доби
-    a = measure_age([_d1_bucket(0)], now_ms=now, tf_ms=D1_MS,
-                    anchor_offset_ms=D1_ANCHOR_MS, is_trading_fn=_cfd_us_is_trading)
+    a = measure_age([_d1_bucket(0)], now_ms=now, tf_s=D1_S,
+                    rule=RULE, is_trading_fn=_cfd_us_is_trading)
     assert a.expected_last_open_ms == _d1_bucket(2)
     assert a.age_buckets == 2
 
@@ -331,8 +355,8 @@ def test_d1_age_counts_lag_instead_of_reporting_zero():
 def test_d1_age_zero_when_last_bar_is_the_last_closed_bucket():
     """Контроль: свіжий ряд не має «відставати» через новий предикат."""
     now = _d1_bucket(3) + 10 * 60 * 60 * 1000
-    a = measure_age([_d1_bucket(2)], now_ms=now, tf_ms=D1_MS,
-                    anchor_offset_ms=D1_ANCHOR_MS, is_trading_fn=_cfd_us_is_trading)
+    a = measure_age([_d1_bucket(2)], now_ms=now, tf_s=D1_S,
+                    rule=RULE, is_trading_fn=_cfd_us_is_trading)
     assert a.age_buckets == 0
 
 
@@ -340,8 +364,52 @@ def test_forming_bucket_is_not_counted_as_a_hole():
     """Незакритий бакет — не дірка: бар для нього ще пишеться."""
     start = _d1_bucket(0)
     mid_of_second_day = _d1_bucket(1) + 10 * 60 * 60 * 1000
-    exp = expected_bucket_opens(start, mid_of_second_day, D1_MS, D1_ANCHOR_MS, _cfd_us_is_trading)
+    exp = expected_bucket_opens(start, mid_of_second_day, tf_s=D1_S, rule=RULE, is_trading_fn=_cfd_us_is_trading)
     assert exp == [_d1_bucket(0)], "другий бакет ще формується"
+
+
+def test_seasonal_d1_anchor_is_on_cfd_us_session_edge():
+    """ADR-0095: 21:00 влітку — початок перерви, 22:00 взимку — кінець перерви статичного календаря; обидва — межа."""
+    for noon in (_utc(2026, 7, 7, 12), _utc(2026, 1, 6, 12)):
+        anchor = htf_bucket_start_ms(noon, D1_S, RULE)
+        assert check_anchor_on_session_edge(anchor, tf_ms=D1_MS, is_trading_fn=_cfd_us_is_trading) is True
+    assert check_anchor_on_session_edge(_utc(2026, 7, 7, 1), tf_ms=D1_MS, is_trading_fn=_cfd_us_is_trading) is False
+
+
+# ── сезонний ітератор через вихідні переходу DST (ADR-0095) ────────────────
+def test_expected_d1_buckets_switch_anchor_across_spring_dst():
+    """08.03.2026: доба сб 07.03 має 23 год, D1 переходить з 22:00 на 21:00 без діри й без зайвого бакета."""
+    exp = expected_bucket_opens(_utc(2026, 3, 4, 22), _utc(2026, 3, 10, 21),
+                                tf_s=D1_S, rule=RULE, is_trading_fn=_cfd_us_is_trading)
+    assert exp == [_utc(2026, 3, 4, 22), _utc(2026, 3, 5, 22), _utc(2026, 3, 8, 21), _utc(2026, 3, 9, 21)]
+
+
+def test_expected_h4_buckets_include_fall_stub_and_switch_to_winter_grid():
+    """01.11.2026: остання H4 доби на 25 год — обрубок нд 21:00→22:00, далі зимова сітка 22/02/…"""
+    exp = expected_bucket_opens(_utc(2026, 10, 30, 21), _utc(2026, 11, 2, 22), tf_s=H4_S, rule=RULE,
+                                is_trading_fn=ALWAYS)
+    summer = [_utc(2026, 10, 30, 21) + i * H4_MS for i in range(12)]  # пт 21:00 … нд 17:00
+    winter = [_utc(2026, 11, 1, 22) + i * H4_MS for i in range(6)]  # нд 22:00 … пн 18:00
+    assert exp == summer + [_utc(2026, 11, 1, 21)] + winter
+
+
+def test_age_counts_grid_buckets_across_fall_stub():
+    """Вік — кроки сітки: обрубок 1 год — окремий бакет, тож (to - from) // 4 год недорахувала б один."""
+    last = _utc(2026, 10, 31, 17)
+    a = measure_age([last], now_ms=_utc(2026, 11, 2, 3), tf_s=H4_S, rule=RULE, is_trading_fn=ALWAYS)
+    assert a.expected_last_open_ms == _utc(2026, 11, 1, 22)
+    assert a.age_buckets == 8
+    assert (a.expected_last_open_ms - last) // H4_MS == 7, "контроль: арифметика дала б 7"
+
+
+def test_holes_see_missing_fall_stub_bar():
+    """Бар обрубка — такий самий очікуваний бакет, як повний H4; його відсутність — дірка."""
+    grid = expected_bucket_opens(_utc(2026, 10, 30, 21), _utc(2026, 11, 2, 22), tf_s=H4_S, rule=RULE,
+                                 is_trading_fn=ALWAYS)
+    stub = _utc(2026, 11, 1, 21)
+    h = measure_holes([o for o in grid if o != stub], start_ms=_utc(2026, 10, 30, 21), end_ms=_utc(2026, 11, 2, 22),
+                      tf_s=H4_S, rule=RULE, is_trading_fn=ALWAYS)
+    assert (h.expected, h.missing, h.missing_samples) == (19, 1, (stub,))
 
 
 def _unmeasurable_age(last_open_ms: int | None) -> AgeResult:

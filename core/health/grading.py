@@ -1,6 +1,7 @@
 """core/health/grading.py — вимір → вердикт (ADR-0054 §3.2 Grading).
 
-RED    — дефект даних, який ламає SMC-аналіз: зсунута сітка, побитий OHLC,
+RED    — дефект даних, який ламає SMC-аналіз: зсунута сітка (зокрема H4/D1 поза сезонною
+         сіткою ADR-0095), побитий OHLC,
          дублікати, розбіжність каскаду або кореня M1, відставання понад допуск.
 YELLOW — те, що не бреше, але й не готове: молода історія, дірки в межах допуску.
 GREEN  — можна рахувати SMC.
@@ -49,7 +50,7 @@ def grade_symbol_tf(
     if geometry is not None:
         if geometry.total == 0:
             red.append("no_bars")
-        for field in ("dup_conflicting", "align_bad", "close_bad", "ohlc_bad"):
+        for field in ("dup_conflicting", "align_bad", "off_season_grid", "close_bad", "ohlc_bad"):
             value = getattr(geometry, field)
             if value:
                 red.append(f"{field}={value}")

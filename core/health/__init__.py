@@ -21,7 +21,6 @@ from core.health.measures import (
     measure_geometry,
     measure_holes,
     measure_root_consistency,
-    normalize_open_to_grid,
     ssot_winners,
 )
 
@@ -47,6 +46,5 @@ __all__ = [
     "measure_geometry",
     "measure_holes",
     "measure_root_consistency",
-    "normalize_open_to_grid",
     "ssot_winners",
 ]

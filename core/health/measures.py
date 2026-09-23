@@ -8,10 +8,14 @@
 
 - ``bucket_age`` — чи не відстає останній бар від очікуваного закритого бакета.
 - ``holes`` — яких торгових бакетів немає взагалі.
-- ``geometry`` — дублікати, порядок, вирівнювання по сітці, узгодженість close_ms.
+- ``geometry`` — дублікати, порядок, сітка (``align_bad`` для M1..H1, ``off_season_grid`` для H4/D1), close_ms.
 - ``cascade`` — чи derived-бар справді дорівнює агрегації свого source.
 - ``root`` — чи derived-бар дорівнює агрегації M1 у своєму бакеті (корінь ланцюга, ADR-0002).
 - ``history_depth`` — чи вистачає глибини для SMC (lookback вищих TF).
+
+Сітка бакетів одна — сезонна (ADR-0095): виміри приймають ``tf_s`` і правило якоря символу, а кінець бакета
+беруть з ``htf_next_bucket_start_ms``, а не ``open + tf``. Тому H4-обрубок доби переходу DST (1 або 3 год) —
+окремий бакет, доба D1 має 23/24/25 год, а бар H4/D1 на «іншому» якорі — дефект, не DST-альтернатива.
 
 Клас дефекту, заради якого це існує: 06.09 засів NAS100 виглядав цілим (M1 і H4
 доходили до вересня), а D1 тихо обірвався на два місяці раніше — око цього не бачить,
@@ -21,11 +25,17 @@ from __future__ import annotations
 
 import bisect
 import dataclasses
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
-from core.buckets import bucket_start_ms
 from core.model.bar_choice import choose_better_bar
 from core.model.bars import CandleBar
+from core.session_anchor import (
+    H4_S,
+    OffSeasonGridError,
+    assert_on_season_grid,
+    htf_bucket_start_ms,
+    htf_next_bucket_start_ms,
+)
 
 IsTradingFn = Callable[[int], bool]
 
@@ -64,6 +74,10 @@ class GeometryResult:
     запис ІДЕНТИЧНОГО бару (rebuild/backfill) легальний і нешкідливий: читач злипає їх
     і бачить те саме. Небезпечний лише ``dup_conflicting`` — коли на один бакет лежать
     РІЗНІ значення, бо тоді результат вирішує порядок у файлі.
+
+    Сітку міряє одне з двох полів, ніколи обидва: ``align_bad`` — M1..H1, відкриття не кратне TF;
+    ``off_season_grid`` — H4/D1, відкриття не дорівнює сезонному бакету символу (ADR-0095 §3.3). Семпли
+    ``off_season_grid_samples`` — пари ``(open_ms, expected_open_ms)``: куди бар мав стати.
     """
 
     total: int
@@ -71,9 +85,11 @@ class GeometryResult:
     dup_conflicting: int
     unsorted: int
     align_bad: int
+    off_season_grid: int
     close_bad: int
     ohlc_bad: int
     align_bad_samples: Tuple[int, ...]
+    off_season_grid_samples: Tuple[Tuple[int, int], ...]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -152,66 +168,41 @@ def bucket_has_trading_minute(
 def expected_bucket_opens(
     start_ms: int,
     end_ms: int,
-    tf_ms: int,
-    anchor_offset_ms: int,
+    *,
+    tf_s: int,
+    rule: str,
     is_trading_fn: IsTradingFn,
 ) -> List[int]:
-    """Торгові бакети, що ПОВНІСТЮ лежать у ``[start_ms, end_ms)``.
+    """Торгові бакети сезонної сітки, що ПОВНІСТЮ лежать у ``[start_ms, end_ms)``.
 
     Дві умови, і обидві — про writer'а, а не про календар сам по собі:
 
-    - бакет містить торгову хвилину (``bucket_has_trading_minute``);
-    - бакет уже закрився до ``end_ms`` — незакритий бакет не «дірка», бар для нього
-      ще пишеться. Тому діапазон обрізаний на ``tf_ms``, а не на ``end_ms``.
+    - бакет містить торгову хвилину (``bucket_has_trading_minute``) у своєму вікні до наступного бакета;
+    - бакет уже закрився до ``end_ms``, тобто наступний бакет почався не пізніше ``end_ms``. Незакритий
+      бакет — не «дірка», бар для нього ще пишеться.
     """
-    if tf_ms <= 0 or end_ms <= start_ms:
+    if end_ms <= start_ms:
         return []
-    first = bucket_start_ms(start_ms, tf_ms, anchor_offset_ms)
-    if first < start_ms:
-        first += tf_ms
-    last_open_exclusive = end_ms - tf_ms + 1
     return [
-        b
-        for b in range(first, last_open_exclusive, tf_ms)
-        if bucket_has_trading_minute(b, b + tf_ms, is_trading_fn)
+        bucket_open
+        for bucket_open, bucket_end in _closed_grid_buckets(start_ms, end_ms, tf_s, rule)
+        if bucket_has_trading_minute(bucket_open, bucket_end, is_trading_fn)
     ]
-
-
-def normalize_open_to_grid(
-    open_ms: int,
-    *,
-    tf_ms: int,
-    anchor_offsets_ms: Sequence[int],
-) -> Optional[int]:
-    """Звести відкриття бара до основної сітки, якщо воно легальне.
-
-    HTF-якорі рухаються з DST (D1 21:00 влітку / 22:00 взимку — `day_anchor_offset_s_d1`
-    та `_d1_alt`), тому «не на сітці за primary» ще не означає дефект. Бар легальний,
-    якщо вирівняний за будь-яким дозволеним якорем; повертаємо його відкриття у primary-
-    сітці, щоб решта вимірів порівнювала яблука з яблуками. ``None`` = справді зсунутий.
-    """
-    if tf_ms <= 0 or not anchor_offsets_ms:
-        return None
-    primary = anchor_offsets_ms[0]
-    for offset in anchor_offsets_ms:
-        if bucket_start_ms(open_ms, tf_ms, offset) == open_ms:
-            return open_ms + (primary - offset) % tf_ms if offset != primary else open_ms
-    return None
 
 
 def measure_age(
     opens: Sequence[int],
     *,
     now_ms: int,
-    tf_ms: int,
-    anchor_offset_ms: int,
+    tf_s: int,
+    rule: str,
     is_trading_fn: IsTradingFn,
 ) -> AgeResult:
-    """Скільки закритих бакетів минуло після останнього наявного бара."""
+    """Скільки бакетів сезонної сітки минуло після останнього наявного бара до останнього закритого."""
     if not opens:
         return AgeResult(last_open_ms=None, expected_last_open_ms=None, age_buckets=None)
     last_open = max(opens)
-    current_open = bucket_start_ms(now_ms, tf_ms, anchor_offset_ms)
+    current_open = htf_bucket_start_ms(now_ms, tf_s, rule)
     # Останній ЗАКРИТИЙ бакет, за який writer мав дати бар (поточний ще формується) —
     # це бакет, що містить останню торгову ХВИЛИНУ перед поточним бакетом.
     # Шукаємо саму хвилину, а не питаємо «чи торгується відкриття бакета»: у D1
@@ -222,7 +213,7 @@ def measure_age(
     probe_minute = current_open - MINUTE_MS
     for _ in range(MAX_BACKWARD_MINUTE_PROBES):
         if is_trading_fn(probe_minute):
-            expected = bucket_start_ms(probe_minute, tf_ms, anchor_offset_ms)
+            expected = htf_bucket_start_ms(probe_minute, tf_s, rule)
             break
         probe_minute -= MINUTE_MS
     if expected is None:
@@ -230,7 +221,7 @@ def measure_age(
     return AgeResult(
         last_open_ms=last_open,
         expected_last_open_ms=expected,
-        age_buckets=max(0, (expected - last_open) // tf_ms),
+        age_buckets=_grid_steps_between(last_open, expected, tf_s, rule),
     )
 
 
@@ -239,14 +230,14 @@ def measure_holes(
     *,
     start_ms: int,
     end_ms: int,
-    tf_ms: int,
-    anchor_offset_ms: int,
+    tf_s: int,
+    rule: str,
     is_trading_fn: IsTradingFn,
     max_samples: int = 5,
 ) -> HolesResult:
-    """Скільки торгових бакетів у вікні не мають бара."""
+    """Скільки торгових бакетів сезонної сітки у вікні не мають бара."""
     present = {o for o in opens if start_ms <= o < end_ms}
-    expected = expected_bucket_opens(start_ms, end_ms, tf_ms, anchor_offset_ms, is_trading_fn)
+    expected = expected_bucket_opens(start_ms, end_ms, tf_s=tf_s, rule=rule, is_trading_fn=is_trading_fn)
     missing = [b for b in expected if b not in present]
     return HolesResult(
         expected=len(expected),
@@ -256,18 +247,53 @@ def measure_holes(
     )
 
 
+def _closed_grid_buckets(start_ms: int, end_ms: int, tf_s: int, rule: str) -> Iterator[Tuple[int, int]]:
+    """Бакети сітки ``(open, next_open)`` з ``start_ms <= open`` і ``next_open <= end_ms``, по зростанню."""
+    bucket_open = htf_bucket_start_ms(start_ms, tf_s, rule)
+    if bucket_open < start_ms:
+        bucket_open = htf_next_bucket_start_ms(bucket_open, tf_s, rule)
+    while True:
+        bucket_end = htf_next_bucket_start_ms(bucket_open, tf_s, rule)
+        if bucket_end > end_ms:
+            return
+        yield bucket_open, bucket_end
+        bucket_open = bucket_end
+
+
+def _grid_steps_between(from_ms: int, to_open_ms: int, tf_s: int, rule: str) -> int:
+    """Кроків сітки від бакета, що містить ``from_ms``, до бакета ``to_open_ms``; 0, якщо він не далі.
+
+    H4/D1 рахуємо ітератором, а не ``(to - from) // tf_ms``: осінній H4-обрубок (1 год) арифметика
+    недорахувала б, а доби на 23/25 год зсунули б ділення. M1..H1 мають рівний крок — там ділення точне
+    і не ганяє цикл по місяцях хвилин обірваного ряду.
+    """
+    bucket_open = htf_bucket_start_ms(from_ms, tf_s, rule)
+    if tf_s < H4_S:
+        return max(0, (to_open_ms - bucket_open) // (tf_s * 1000))
+    steps = 0
+    while bucket_open < to_open_ms:
+        bucket_open = htf_next_bucket_start_ms(bucket_open, tf_s, rule)
+        steps += 1
+    return steps
+
+
 def measure_geometry(
     bars: Sequence[CandleBar],
     *,
-    tf_ms: int,
-    anchor_offsets_ms: Sequence[int],
+    tf_s: int,
+    rule: str,
     max_samples: int = 5,
 ) -> GeometryResult:
     """Дублікати, порядок, сітка, close_ms і співвідношення OHLC.
 
+    Сітку перевіряє та сама ``assert_on_season_grid``, що й писар SSOT (ADR-0095 R3): M1..H1 — кратність TF
+    (``align_bad``), H4/D1 — рівність сезонному бакету правила (``off_season_grid``). Набору «дозволених»
+    якорів більше немає: H4 22:00 влітку — дефект з очікуваним 21:00, а не DST-альтернатива.
+
     ``close_time_ms`` перевіряємо за end-exclusive конвенцією диску/SSOT (I2):
-    ``close = open + tf_ms``. Redis-конвенція (``-1``) — інша межа, не тут.
+    ``close = open + tf``. Redis-конвенція (``-1``) — інша межа, не тут.
     """
+    tf_ms = tf_s * 1000
     opens = [b.open_time_ms for b in bars]
     exact_dup = len(opens) - len(set(opens))
     by_open: Dict[int, set] = {}
@@ -275,11 +301,9 @@ def measure_geometry(
         by_open.setdefault(bar.open_time_ms, set()).add((bar.o, bar.h, bar.low, bar.c))
     dup_conflicting = sum(1 for values in by_open.values() if len(values) > 1)
     unsorted = sum(1 for a, b in zip(opens, opens[1:]) if b < a)
-    align_bad_list = [
-        o
-        for o in opens
-        if normalize_open_to_grid(o, tf_ms=tf_ms, anchor_offsets_ms=anchor_offsets_ms) is None
-    ]
+    off_grid = _off_grid_opens(opens, tf_s, rule)
+    off_season = off_grid if tf_s >= H4_S else []
+    align_bad_list = [] if tf_s >= H4_S else [open_ms for open_ms, _expected in off_grid]
     close_bad = sum(1 for b in bars if b.close_time_ms != b.open_time_ms + tf_ms)
     ohlc_bad = sum(
         1
@@ -292,10 +316,23 @@ def measure_geometry(
         dup_conflicting=dup_conflicting,
         unsorted=unsorted,
         align_bad=len(align_bad_list),
+        off_season_grid=len(off_season),
         close_bad=close_bad,
         ohlc_bad=ohlc_bad,
         align_bad_samples=tuple(align_bad_list[:max_samples]),
+        off_season_grid_samples=tuple(off_season[:max_samples]),
     )
+
+
+def _off_grid_opens(opens: Iterable[int], tf_s: int, rule: str) -> List[Tuple[int, int]]:
+    """``(open_ms, expected_open_ms)`` кожного відкриття поза сіткою — через єдину перевірку писаря."""
+    off_grid: List[Tuple[int, int]] = []
+    for open_ms in opens:
+        try:
+            assert_on_season_grid(open_ms, tf_s, rule)
+        except OffSeasonGridError as exc:
+            off_grid.append((open_ms, exc.expected_open_ms))
+    return off_grid
 
 
 def _choice_view(bar: CandleBar) -> Dict[str, Any]:
@@ -333,24 +370,26 @@ def measure_cascade(
     derived_bars: Sequence[CandleBar],
     source_bars: Sequence[CandleBar],
     *,
-    target_tf_ms: int,
-    source_tf_ms: int,
-    anchor_offsets_ms: Sequence[int],
+    target_tf_s: int,
+    source_tf_s: int,
+    rule: str,
     declares_partial_fn: Optional[Callable[[CandleBar], bool]] = None,
     price_epsilon: float = 1e-9,
     max_samples: int = 5,
 ) -> CascadeResult:
     """Чи кожен derived-бар дорівнює агрегації своїх source-барів.
 
+    Кожен source-бар належить рівно одному бакету сезонної сітки (ADR-0095), а повний набір дітей
+    рахується з вікна бакета до наступного: H4-обрубок осінньої доби DST (1 год) повний з одним H1.
     Бакет із неповним набором source-барів пропускається (``skipped_incomplete``):
-    це нормально на межах сесії, і саме тому неповнота не рахується розбіжністю.
+    це нормально на межах сесії, і саме тому неповнота не рахується розбіжністю. Бар поза сіткою дітей
+    у своєму бакеті не має і теж іде сюди — дефектом його рахує ``geometry.off_season_grid``.
     """
     by_bucket: Dict[int, List[CandleBar]] = {}
     for bar in source_bars:
-        for offset in anchor_offsets_ms:
-            bucket = bucket_start_ms(bar.open_time_ms, target_tf_ms, offset)
-            by_bucket.setdefault(bucket, []).append(bar)
-    expected_children = max(1, target_tf_ms // source_tf_ms)
+        bucket = htf_bucket_start_ms(bar.open_time_ms, target_tf_s, rule)
+        by_bucket.setdefault(bucket, []).append(bar)
+    source_tf_ms = source_tf_s * 1000
 
     checked = 0
     skipped = 0
@@ -359,6 +398,8 @@ def measure_cascade(
     # І батьків, і дітей — так, як їх показують читачі (ADR-0094), а не кожен запис на диску.
     for bar in ssot_winners(derived_bars):
         children = ssot_winners(by_bucket.get(bar.open_time_ms, []))
+        bucket_end = htf_next_bucket_start_ms(bar.open_time_ms, target_tf_s, rule)
+        expected_children = max(1, (bucket_end - bar.open_time_ms) // source_tf_ms)
         if len(children) < expected_children:
             skipped += 1
             continue
@@ -381,13 +422,16 @@ def measure_root_consistency(
     derived_bars: Sequence[CandleBar],
     m1_bars: Sequence[CandleBar],
     *,
-    tf_ms: int,
+    tf_s: int,
+    rule: str,
     declares_partial_fn: Optional[Callable[[CandleBar], bool]] = None,
     price_epsilon: float = 1e-9,
     max_samples: int = 5,
 ) -> RootResult:
-    """Кожен derived-бар (як його бачать читачі) проти агрегації M1 у ``[open, open + tf_ms)``.
+    """Кожен derived-бар (як його бачать читачі) проти агрегації M1 у ``[open, наступний бакет сітки)``.
 
+    Кінець вікна — ``htf_next_bucket_start_ms`` (ADR-0095), а не ``open + tf``: H4-обрубок доби переходу
+    DST закінчується на відкритті нового торгового дня і не тягне в себе хвилини наступного бакета.
     Бакет не мусить мати ПОВНИЙ набір хвилин: derived-бар будується з тих хвилин, що є, тож
     на незмінному M1 агрегація збігається і з частковим набором. Розбіжність означає, що бар
     зібрано з інших даних, ніж зараз лежать у M1 (M1 перезалили, бар не перебудували).
@@ -398,7 +442,7 @@ def measure_root_consistency(
     mismatched: List[int] = []
     for bar in ssot_winners(derived_bars):
         lo = bisect.bisect_left(keys, bar.open_time_ms)
-        hi = bisect.bisect_left(keys, bar.open_time_ms + tf_ms)
+        hi = bisect.bisect_left(keys, htf_next_bucket_start_ms(bar.open_time_ms, tf_s, rule))
         if lo == hi:
             uncovered += 1
             continue
@@ -444,11 +488,13 @@ def check_anchor_on_session_edge(
 ) -> bool:
     """Чи якір HTF стоїть на межі сесії, а не всередині торгового дня.
 
-    Межа — це точка, де торговість **змінюється**, і обидві її сторони легальні:
-    H4 у нас якориться на відкритті (22:00, перша торгова хвилина після перерви),
-    а D1 — на закритті (21:00, перша хвилина перерви). Вимога «якір торгується»
-    відкидала б робочий D1-якір як дефект, тому дивимось саме на зміну стану.
-    Зсунутий якір ріже добу навпіл — саме так колись «поїхали» D1-свічки.
+    Межа — це точка, де торговість **змінюється**, і обидві її сторони легальні. D1 і H4 якоряться
+    на відкритті торгового дня ADR-0095 — 17:00 America/New_York: 21:00 UTC влітку, 22:00 UTC взимку.
+    Для ``cfd_us`` влітку це перша хвилина денної перерви (торговість вимикається), а взимку на
+    статичному літньому календарі (до ADR-0095 S6b) — перша хвилина після перерви (вмикається).
+    Вимога «якір торгується» відкидала б літній якір як дефект, тому дивимось саме на зміну стану.
+    Зсунутий якір ріже добу навпіл — саме так колись «поїхали» D1-свічки. Рівність сезонній сітці
+    міряє ``geometry.off_season_grid``; тут — лише що сітка узгоджена з календарем символу.
     """
     if tf_ms <= 0:
         return False
