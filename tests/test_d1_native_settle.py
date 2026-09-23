@@ -116,3 +116,35 @@ def test_archive_not_in_previous_close_is_refused(tree):
     json.dump({"mode": "FIRST_TICK"}, open(arc / "meta.json", "w"))
     with pytest.raises(ValueError, match="D1_NATIVE_ARCHIVE_MODE"):
         dns.main(["--data-root", str(root), "--archive", str(arc), "--symbols", "XAU/USD"])
+
+
+# Вихідні огризки брокера (реальні ключі XAU): TV їх не має — не вставляються, свій рядок прибирається
+STUB_SUN = _ms(2025, 3, 16, 21)  # недільна сесія того тижня (сучасна конвенція Нд–Чт)
+STUB_OURS = _ms(2025, 3, 22, 21)  # Сб: тік вихідних v=4 — у нашому SSOT є рядок
+STUB_SUN_2011 = _ms(2011, 10, 9, 21)
+STUB_NATIVE_ONLY = _ms(2011, 10, 14, 21)  # Пт 14.10.2011: v=1, у нас рядка нема
+OLD_FRIDAY = _ms(1995, 6, 16, 21)  # стара конвенція (Пн–Пт, неділь нема) — п'ятниця лишається
+
+
+def test_weekend_stub_is_not_inserted_and_own_stub_row_is_removed(tree, tmp_path):
+    root, arc, _era_line = tree
+    d1 = root / "XAU_USD" / "tf_86400"
+    stub_line = _row(STUB_OURS, 3023.05, 3023.11, 3023.05, 3023.11, 4.0)
+    _write(str(d1 / "part-20250322.jsonl"), [stub_line])
+    native = json.load(open(arc / "XAU_USD_d1_full.json"))
+    native += [[STUB_SUN, 3000.0, 3010.0, 2990.0, 3005.0, 900.0], [STUB_OURS, 3023.05, 3023.11, 3023.05, 3023.11, 4.0],
+               [STUB_SUN_2011, 1650.0, 1660.0, 1640.0, 1655.0, 800.0],
+               [STUB_NATIVE_ONLY, 1680.55, 1680.55, 1680.4, 1680.4, 1.0],
+               [OLD_FRIDAY, 40.0, 41.0, 39.0, 40.5, 500.0]]
+    json.dump(sorted(native), open(arc / "XAU_USD_d1_full.json", "w"))
+    rc = dns.main(["--data-root", str(root), "--archive", str(arc), "--symbols", "XAU/USD", "--apply",
+                   "--backup-dir", str(tmp_path / "bak"), "--report", str(tmp_path / "r.json")])
+    report = json.load(open(tmp_path / "r.json", encoding="utf-8"))
+    counts = report["symbols"]["XAU/USD"]["counts"]
+
+    assert rc == 0 and report["verify_replan_files"] == 0
+    assert counts["native_weekend_stub_skipped"] == 2 and counts["remove_weekend_stub"] == 1
+    assert _rows(root, "20250322") == b""  # рядок огризка прибрано, файл лишився порожнім
+    assert _rows(root, "20111014") is None  # огризок лише в нативі — не вставлено
+    assert json.loads(_rows(root, "20250316"))["c"] == 3005.0 and json.loads(_rows(root, "20111009"))["c"] == 1655.0
+    assert json.loads(_rows(root, "19950616"))["c"] == 40.5  # п'ятниця старої конвенції — справжній торговий день

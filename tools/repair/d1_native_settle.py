@@ -10,7 +10,11 @@
 - наш ключ у межах нативної історії, якого натив не має: поза сіткою — REMOVE (той самий торговий день натив має на
   ключі сітки: старий сід із фіксованим 21:00 узимку); на сітці — KEEP з гучним звітом (NOT_IN_NATIVE);
 - наш ключ раніше за першу нативну добу (брокер цієї давнини вже не віддає): на сітці — KEEP (максимальна історія),
-  поза сіткою — REKEY на ключ сітки тієї самої UTC-доби (значення без змін), якщо він вільний, інакше REMOVE.
+  поза сіткою — REKEY на ключ сітки тієї самої UTC-доби (значення без змін), якщо він вільний, інакше REMOVE;
+- вихідний огризок (`weekend_stub_keys`: бакет, що починається в Пт/Сб UTC, без жодної торгової хвилини календаря
+  символу, у тижні з недільною сесією брокера) — не вставляється, свій рядок на цьому ключі — REMOVE. TV таких барів
+  не має: XAU тік нд 08.03.2026 17:22 (v=1) брокер кладе в окремий D1, а TV показує п'ятницю і неділю з o=5171.76 =
+  close огризка (перевірено 23.09 через JS графіка). Бари старої конвенції (ключі Пн–Пт, тиждень без неділі) лишаються.
 Рядки епохи M1, чужі, нерозбірні й порожні — байт у байт. Кожен новий/замінений рядок проходить інваріант бару і
 `assert_on_season_grid`. Запис — лише з `--apply` при доведено зупинених записувачах (`writers_guard`), tgz-бекап із
 sha-маніфестом до запису, заміна part-файла зі старим inode в `_backup_adr0095_<stamp>`, повторний план = 0 дій.
@@ -23,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import bisect
 import datetime as dt
 import json
 import logging
@@ -36,6 +41,7 @@ from core.model.bars import CandleBar, assert_invariants
 from core.session_anchor import (
     assert_on_season_grid, htf_anchor_offset_s, htf_bucket_start_ms, htf_next_bucket_start_ms,
 )
+from runtime.ingest.tick_common import calendar_for_symbol
 from tools.repair.partfile_io import (
     Line, PartFile, backup_files, day_of_ms, list_part_days, load_part, part_path, replace_part, row_bytes, sha256_hex,
     utc_stamp, writers_guard,
@@ -44,10 +50,13 @@ from tools.repair.partfile_io import (
 log = logging.getLogger("d1_native_settle")
 D1_S = 86_400
 M1_S = 60
-TOOL = "d1_native_settle/1"
+TOOL = "d1_native_settle/2"
 
 ACT_SAME, ACT_REPLACE, ACT_INSERT, ACT_REMOVE, ACT_REKEY, ACT_KEEP = (
     "same", "replace", "insert", "remove_off_grid", "rekey", "keep")
+ACT_REMOVE_STUB = "remove_weekend_stub"
+_WEEKEND_WEEKDAYS = (4, 5)  # Пт, Сб — день UTC ключа D1, з якого починається бакет вихідних
+_WEEK_MS = 7 * 86_400_000
 
 
 @dataclass
@@ -101,17 +110,42 @@ def validated(bar: CandleBar, rule: str) -> CandleBar:
     return bar
 
 
+def _weekday(ms: int) -> int:
+    return dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc).weekday()
+
+
+def weekend_stub_keys(candidates, native_keys, rule: str, is_trading) -> set:
+    """Ключі вихідного огризка серед `candidates`: бакет D1 починається в Пт/Сб UTC, жодної торгової хвилини календаря
+    в ньому немає, а за 6 діб до ключа брокер має недільний ключ (сучасна конвенція Нд–Чт). Стара конвенція індексів
+    (ключі Пн–Пт на кінці сесії, 1990–2008) недільних ключів не має — її п'ятниці не огризки."""
+    sundays = sorted(k for k in native_keys if _weekday(k) == 6)
+    stubs = set()
+    for k in candidates:
+        if _weekday(k) not in _WEEKEND_WEEKDAYS:
+            continue
+        i = bisect.bisect_left(sundays, k)
+        if i == 0 or k - sundays[i - 1] >= _WEEK_MS:
+            continue
+        if not any(is_trading(t) for t in range(k, htf_next_bucket_start_ms(k, D1_S, rule), M1_S * 1000)):
+            stubs.add(k)
+    return stubs
+
+
 def plan_symbol(data_root: str, symbol: str, rule: str, native: Dict[int, List[float]], provenance: str,
-                era_ms: Optional[int]) -> SymbolPlan:
+                era_ms: Optional[int], is_trading) -> SymbolPlan:
     sym_dir = symbol.replace("/", "_")
     native_first = min(native)
     era = era_ms if era_ms is not None else max(native) + 1
     plan = SymbolPlan(symbol=symbol, sym_dir=sym_dir, era_ms=era, native_first_ms=native_first)
     days = set(list_part_days(data_root, sym_dir, D1_S))
     days |= {day_of_ms(k) for k in native if k < era}
+    stubs = weekend_stub_keys([k for k in native if k < era], native, rule, is_trading)
+    if stubs:
+        plan.counts["native_weekend_stub_skipped"] = len(stubs)
+        plan.samples["native_weekend_stub_skipped"] = [fmt(k) for k in sorted(stubs)[-5:]]
     target_by_day: Dict[str, Dict[int, bytes]] = collections.defaultdict(dict)
     for k, vals in native.items():
-        if k < era:
+        if k < era and k not in stubs:
             target_by_day[day_of_ms(k)][k] = row_bytes(validated(native_bar(symbol, k, vals, provenance), rule))
     # ключі, зайняті на диску будь-де (для REKEY: не наїхати на наявний рядок іншої доби-файла)
     occupied = set()
@@ -120,6 +154,9 @@ def plan_symbol(data_root: str, symbol: str, rule: str, native: Dict[int, List[f
         part = load_part(path, sym_dir)
         plan.sources[path] = part
         occupied |= {ln.own_key for ln in part.lines if ln.own_key is not None}
+    own_keys = {ln.own_key for part in plan.sources.values() for ln in part.lines
+                if ln.own_key is not None and native_first <= ln.own_key < era}
+    stubs |= weekend_stub_keys(own_keys - set(native), native, rule, is_trading)
     rekeys: Dict[str, Dict[int, bytes]] = collections.defaultdict(dict)
     decisions: Dict[Tuple[str, int], str] = {}
     for path, part in plan.sources.items():
@@ -128,9 +165,11 @@ def plan_symbol(data_root: str, symbol: str, rule: str, native: Dict[int, List[f
             if key is None or key >= era:
                 continue
             on_grid = htf_bucket_start_ms(key, D1_S, rule) == key
-            if key in native:
+            if key in stubs:
+                act = ACT_REMOVE_STUB
+            elif key in native:
                 continue  # SAME/REPLACE — нижче, за ціллю доби
-            if key >= native_first:
+            elif key >= native_first:
                 act = ACT_KEEP if on_grid else ACT_REMOVE
             elif on_grid:
                 act = ACT_KEEP
@@ -175,7 +214,7 @@ def _rebuild_lines(part: PartFile, want: Dict[int, bytes], decisions: Dict[Tuple
             out.append(ln)
             continue
         act = decisions.get((path, i))
-        if act in (ACT_REMOVE, ACT_REKEY):
+        if act in (ACT_REMOVE, ACT_REKEY, ACT_REMOVE_STUB):
             continue
         if act == ACT_KEEP:
             out.append(ln)
@@ -243,7 +282,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         native, meta = load_native(args.archive, sym_dir)
         provenance = "d1native/%s" % str(meta.get("fetched_at", ""))[:16].replace("-", "").replace(":", "")
         era = m1_era_start_ms(data_root, sym_dir, rule)
-        plan = plan_symbol(data_root, symbol, rule, native, provenance, era)
+        is_trading = calendar_for_symbol(dict(cfg), symbol).is_trading_minute
+        plan = plan_symbol(data_root, symbol, rule, native, provenance, era, is_trading)
         plans.append(plan)
         report["symbols"][symbol] = {"m1_era_start": fmt(plan.era_ms) if era is not None else None,
                                      "native_first": fmt(plan.native_first_ms), "counts": dict(plan.counts),
@@ -266,7 +306,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         for plan in plans:
             native, meta = load_native(args.archive, plan.sym_dir)
             provenance = "d1native/%s" % str(meta.get("fetched_at", ""))[:16].replace("-", "").replace(":", "")
-            replan = plan_symbol(data_root, plan.symbol, rule_of(plan.symbol), native, provenance, plan.era_ms)
+            replan = plan_symbol(data_root, plan.symbol, rule_of(plan.symbol), native, provenance, plan.era_ms,
+                                 calendar_for_symbol(dict(cfg), plan.symbol).is_trading_minute)
             again += len(replan.files)
             print("VERIFY_REPLAN %s files=%d" % (plan.symbol, len(replan.files)))
         report["verify_replan_files"] = again
