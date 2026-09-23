@@ -11,6 +11,7 @@ import datetime as dt
 import json
 import tempfile
 import time
+import time as real_time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ import pytest
 from aiohttp import web
 
 import runtime.ws.ws_server as ws_server
+from core.config_loader import htf_anchor_rule_resolver
 from core.session_anchor import D1_S, H4_S, RULE_NY_CLOSE_US_DST
 from preview_ring_fake import PreviewRingFakeRedis
 from runtime.store.layers.redis_layer import RedisLayer
@@ -25,6 +27,7 @@ from runtime.store.redis_keys import preview_curr_key
 from runtime.store.uds import UnifiedDataStore, _NullDiskLayer
 from runtime.ws.app_keys import (
     APP_BOOT_ID,
+    APP_HTF_ANCHOR_RULE_FOR_SYMBOL,
     APP_PREVIEW_TF_SET,
     APP_SMC_RUNNER,
     APP_UDS,
@@ -199,30 +202,38 @@ def test_select_forming_candle_h4_on_season_grid_after_final_is_returned():
 # ── Impure: реальний UDS reader над RedisLayer ─────────────────────────
 
 
-def _real_uds(tmp: str, fake: PreviewRingFakeRedis) -> UnifiedDataStore:
+def _real_uds(tmp: str, fake: PreviewRingFakeRedis, tf_s: int = TF) -> UnifiedDataStore:
     return UnifiedDataStore(
         data_root=tmp,
         boot_id="t",
-        tf_allowlist={TF},
+        tf_allowlist={tf_s},
         min_coldload_bars={},
         role="reader",
         redis_layer=RedisLayer(fake, "t"),
         disk_layer=_NullDiskLayer(),
-        preview_tf_allowlist={TF},
+        preview_tf_allowlist={tf_s},
     )
 
 
-def _put_preview_curr(fake: PreviewRingFakeRedis, open_ms: int) -> None:
+def _put_preview_curr(fake: PreviewRingFakeRedis, open_ms: int, tf_s: int = TF) -> None:
     payload = {
         "v": 1,
         "symbol": SYM,
-        "tf_s": TF,
-        "bar": {"open_ms": open_ms, "close_ms": open_ms + TF_MS - 1, "o": 10.0, "h": 12.0, "l": 9.0, "c": 11.0, "v": 3.0},
+        "tf_s": tf_s,
+        "bar": {
+            "open_ms": open_ms,
+            "close_ms": open_ms + tf_s * 1000 - 1,
+            "o": 10.0,
+            "h": 12.0,
+            "l": 9.0,
+            "c": 11.0,
+            "v": 3.0,
+        },
         "complete": False,
         "source": "preview_tick",
         "payload_ts_ms": NOW_MS,
     }
-    fake.set(preview_curr_key("t", SYM, TF), json.dumps(payload))
+    fake.set(preview_curr_key("t", SYM, tf_s), json.dumps(payload))
 
 
 def test_read_forming_candle_from_preview_curr_via_real_uds():
@@ -322,9 +333,9 @@ def _full_frame_app(uds, *, preview_tfs=frozenset({TF}), smc=None) -> web.Applic
     return app
 
 
-async def _full_frame(app: web.Application) -> dict:
+async def _full_frame(app: web.Application, tf_s: int = TF) -> dict:
     session = ws_server.WsSession(_FakeWs())  # type: ignore[arg-type]
-    session.symbol, session.tf_s = SYM, TF
+    session.symbol, session.tf_s = SYM, tf_s
     try:
         await ws_server._send_full_frame(session, app)
     finally:
@@ -376,3 +387,53 @@ async def test_send_full_frame_tf_outside_preview_plane_skips_preview_read():
     frame = await _full_frame(_full_frame_app(uds, preview_tfs=frozenset()))
     assert [c["t_ms"] for c in frame["candles"]] == [bucket - TF_MS]
     assert uds.preview_reads == 0
+
+
+# ── Інтеграція H4: _send_full_frame + резолвер build_app (ADR-0095 S9a) ─
+
+
+_HTF_ANCHOR_CFG = {
+    "market_calendar_symbol_groups": {SYM: "cfd_us_22_23"},
+    "htf_anchor": {"rule_by_calendar_group": {"cfd_us_22_23": RULE_NY_CLOSE_US_DST}},
+}
+
+
+class _FrozenClock:
+    """Замість модуля time у ws_server: time() заморожено, решта — справжня."""
+
+    def __init__(self, now_ms: int) -> None:
+        self._now_s = now_ms / 1000
+
+    def time(self) -> float:
+        return self._now_s
+
+    def __getattr__(self, name: str):
+        return getattr(real_time, name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "h4_open_ms,now_ms",
+    [
+        pytest.param(_utc_ms(2026, 7, 1, 21), _utc_ms(2026, 7, 1, 23, 30), id="summer_2100"),
+        pytest.param(_FALL_STUB_H4_MS, _FALL_STUB_H4_MS + _HOUR_MS // 2, id="fall_stub_sun_2100"),
+    ],
+)
+async def test_send_full_frame_h4_forming_on_season_grid_via_app_resolver(monkeypatch, h4_open_ms, now_ms):
+    """Full-кадр H4 бере правило символу з APP_HTF_ANCHOR_RULE_FOR_SYMBOL: формуюча preview:curr — у хвості.
+
+    Без резолвера у виклику read_forming_candle кожен full-кадр H4/D1 гучно втрачав би формуючу
+    (WS_FORMING_TAIL_ERR + forming_tail_unavailable) — ця регресія пройшла б решту suite зеленою.
+    """
+    fake = PreviewRingFakeRedis()
+    _put_preview_curr(fake, h4_open_ms, tf_s=H4_S)
+    monkeypatch.setattr(ws_server, "time", _FrozenClock(now_ms))
+    with tempfile.TemporaryDirectory() as tmp:
+        app = _full_frame_app(_real_uds(tmp, fake, tf_s=H4_S), preview_tfs=frozenset({H4_S}))
+        app[APP_HTF_ANCHOR_RULE_FOR_SYMBOL] = htf_anchor_rule_resolver(_HTF_ANCHOR_CFG)
+        frame = await _full_frame(app, tf_s=H4_S)
+
+    assert frame["candles"], "full-кадр H4 без формуючої"
+    assert frame["candles"][-1]["t_ms"] == h4_open_ms
+    assert frame["candles"][-1]["h"] == 12.0
+    assert "forming_tail_unavailable" not in frame["meta"].get("warnings", [])
