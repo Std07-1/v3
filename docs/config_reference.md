@@ -80,7 +80,7 @@
 | Ключ | Тип | За замовч. | Опис |
 | --- | --- | --- | --- |
 | `live_recover_threshold_bars` | int | 3 | Мін кількість пропущених барів для активації recovery |
-| `live_recover_max_bars_per_cycle` | int | 120 | Перша сторінка recover і стеля комітів гепа за виклик на символ |
+| `live_recover_max_bars_per_cycle` | int | 120 | Перша сторінка recover (далі — сторінки по 200 до watermark) |
 | `live_recover_cooldown_s` | int | 5 | Cooldown між recovery циклами |
 | `live_recover_max_total_bars` | int | 5000 | Бюджет добору гепа (унікальних барів за спробу, poll_once і recover); понад — `M1_GAP_BEYOND_BUDGET` |
 | `live_recover_log_interval_s` | int | 60 | Інтервал логування recovery |

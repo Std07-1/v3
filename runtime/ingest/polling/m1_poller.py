@@ -78,6 +78,7 @@ GAP_BEYOND_BUDGET = "beyond_budget"  # бюджет сирих барів вич
 GAP_BROKER_EMPTY = "broker_empty"  # брокер віддав порожньо (сесія мертва) — писати нічого не можна
 _PAGE_ATTEMPTS = 3  # спроб на глибоку сторінку добору гепа (перша — одна спроба)
 _PAGE_RETRY_PAUSE_S = 0.5
+_BULK_INGEST_WARN_BARS = 600  # добір, після якого цикл полера помітно довший (коміт ≈ 50 мс) — WARN
 
 # Flat bar: O==H==L==C з малим обсягом (calendar-pause маркер від брокера)
 # SSOT: config.json → flat_bar_max_volume. Дефолт 4 (як у конфігу).
@@ -378,21 +379,29 @@ class M1SymbolPoller:
         return []
 
     def _ingest_gap(self, bars: List[CandleBar], reason: str, cutoff_ms: int) -> Tuple[int, Optional[Tuple[int, int, int]]]:
-        """Комітить найстаріші бари добору, не більше live_recover_max_bars_per_cycle за виклик.
+        """Комітить увесь добір одним викликом за зростанням. Повертає (записано, дірка для звіту або None).
 
-        Решта гепа — наступним циклом від нового watermark (коміт ≈ 50 мс: великий геп інакше займав би цикл
-        усіх символів хвилинами). Повертає (записано, дірка для звіту або None): дірка — лише коли бюджет
-        вичерпано і найстаріша частина гепа недосяжна.
+        Без стелі комітів за виклик: стеля за вхідними барами заморожувала символ, коли геп починався з сотень
+        барів шуму паузи, які відкидає ADR-0099 (XAG після вихідних), а дописування частинами дозволяло overdue
+        DeriveEngine зафіксувати урізані H1/H4 між циклами (рев'ю 23.09.2026). Ціна — довгий цикл після великого
+        простою (коміт ≈ 50 мс): гучно, M1_GAP_BULK_INGEST. Дірка — лише коли бюджет вичерпано.
         """
         watermark_before = self._watermark_ms
-        batch = bars[: self._live_recover_max_bars_per_cycle]
-        written = sum(1 for bar in batch if self._ingest_bar(bar))
-        capped = len(batch) < len(bars)
-        if reason == GAP_REACHED and not capped:
+        started = time.time()
+        written = sum(1 for bar in bars if self._ingest_bar(bar))
+        if len(bars) > _BULK_INGEST_WARN_BARS:
+            logging.warning(
+                "M1_GAP_BULK_INGEST symbol=%s bars=%d written=%d duration_s=%.1f — цикл полера подовжено",
+                self._symbol,
+                len(bars),
+                written,
+                time.time() - started,
+            )
+        if reason == GAP_REACHED:
             self._scanned_through_ms = max(self._scanned_through_ms, cutoff_ms)
         hole = None
         if reason == GAP_BEYOND_BUDGET and watermark_before is not None:
-            hole = (batch[0].open_time_ms if batch else cutoff_ms + _M1_MS, watermark_before, cutoff_ms)
+            hole = (bars[0].open_time_ms if bars else cutoff_ms + _M1_MS, watermark_before, cutoff_ms)
         return written, hole
 
     def _report_gap_beyond_budget(self, first_written_ms: int, watermark_before_ms: int, cutoff_ms: int) -> None:
@@ -759,7 +768,7 @@ class M1SymbolPoller:
             self._live_recover_finish("beyond_budget")
             self._report_gap_beyond_budget(*hole)
             return
-        if reason == GAP_REACHED and self._scanned_through_ms >= cutoff:
+        if reason == GAP_REACHED:
             self._live_recover_finish("caught_up")
             return
 
@@ -995,29 +1004,15 @@ class M1SymbolPoller:
                 "tail_catchup_error": "broker returned no bars",
             }
 
-        # Не більше live_recover_max_bars_per_cycle за раз: решту гепа допишуть цикли poll/recover від watermark
         written, hole = self._ingest_gap(bars, reason, cutoff_ms)
         if hole is not None:
             self._report_gap_beyond_budget(*hole)
-        elif self._scanned_through_ms >= cutoff_ms:
+        else:
             self._uds.set_gap_state(
                 backlog_bars=0,
                 gap_from_ms=None,
                 gap_to_ms=None,
                 policy=None,
-            )
-        else:
-            backlog = int((cutoff_ms - (self._watermark_ms or cutoff_ms)) // _M1_MS)
-            logging.info(
-                "M1_TAIL_CATCHUP_BACKLOG symbol=%s backlog_minutes=%d — допише основний цикл",
-                self._symbol,
-                backlog,
-            )
-            self._uds.set_gap_state(
-                backlog_bars=backlog,
-                gap_from_ms=(self._watermark_ms or cutoff_ms) + _M1_MS,
-                gap_to_ms=cutoff_ms,
-                policy="m1_tail_catchup_backlog",
             )
 
         logging.info(

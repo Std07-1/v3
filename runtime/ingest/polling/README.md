@@ -168,9 +168,12 @@ M1SymbolPoller.poll_once():
        найстаріша частина — дірка (ремонт repair_m1_gaps / settle ADR-0098); джерело правди — цей WARN,
        gap_state один на процес і його перезаписують інші символи
      → повтор: перша сторінка — одна спроба (порожньо = брокер лежить), глибока — до 3 спроб (разовий таймаут IPC)
-     → коміт не більше live_recover_max_bars_per_cycle (120) найстаріших барів за виклик: коміт ≈ 50 мс
-       (перезапис Redis-хвоста M1), великий геп інакше займав би цикл усіх символів хвилинами; решту
-       допише наступний цикл від нового watermark
+     → увесь добір комітиться одним викликом за зростанням. Стелі комітів за виклик НЕМАЄ свідомо: стеля за
+       вхідними барами заморожувала символ, коли геп починався з сотень барів шуму паузи (XAG після вихідних),
+       а дописування частинами давало overdue DeriveEngine зафіксувати урізані H1/H4 (рев'ю 23.09.2026).
+       Ціна — довгий цикл після великого простою (коміт ≈ 50 мс, перезапис Redis-хвоста): понад 600 барів —
+       WARN M1_GAP_BULK_INGEST з тривалістю. Після вихідних класифікатор §6 бачить увесь шум паузи (більше
+       M1_PAUSE_NOISE_DROPPED, ніж раніше, коли вікно було 120 найновіших барів)
 
   7) Ingest кожен бар: _ingest_bar(bar)
      → Calendar-aware flat bar classification (див. §6)
@@ -350,9 +353,7 @@ if self._watermark_ms is not None:
    сторінками по 200, доки не дійде до watermark або бюджету `tail_catchup_max_bars` (сирих барів)
 3. Брокер порожньо / виняток → нічого не пишемо, `tail_catchup_error` (watermark не рухається)
 4. Ingest усі бари `(watermark, cutoff]` за зростанням (calendar-aware фільтр §6, M3 derive)
-5. Коміт ≤ `live_recover_max_bars_per_cycle` найстаріших (бутстрап не блокується); решта → INFO
-   `M1_TAIL_CATCHUP_BACKLOG` + `gap_state policy=m1_tail_catchup_backlog`, допише основний цикл від watermark.
-   Дійшли до watermark і все записали → `gap_state = 0`; бюджет вичерпано → `M1_GAP_BEYOND_BUDGET`
+5. Дійшли до watermark → `gap_state = 0`; бюджет вичерпано → `M1_GAP_BEYOND_BUDGET`
 
 ### 8.3 Конфігурація
 
@@ -388,7 +389,7 @@ if self._watermark_ms is not None:
    - Fetch з cooldown (`live_recover_cooldown_s=5`) тим самим добором від watermark; перша сторінка
      `min(gap, max_bars_per_cycle=120) + 1`
    - Budget: добір — до `live_recover_max_total_bars=5000` унікальних барів гепа за спробу; сесія recover
-     завершується `max_total_reached`, коли записано стільки барів; коміт ≤ `max_bars_per_cycle` за цикл
+     завершується `max_total_reached`, коли записано стільки барів
    - Поки recover активний, `poll_once` власної вибірки не робить (той самий добір — один раз на цикл)
    - Degraded-but-loud: `uds.set_gap_state(policy="m1_live_recover_active")`
    - Фазовий лог кожні `log_interval_s=60`
@@ -632,7 +633,7 @@ Preview-plane живе виключно в Redis (`{NS}:preview:*`). Не на �
 | `m3_derive_enabled` | Деривація M3 з M1 | `true` |
 | `tail_catchup_max_bars` | Макс барів для tail catchup на bootstrap | `5000` |
 | `live_recover_threshold_bars` | Поріг гепу для входу в live recover | `3` |
-| `live_recover_max_bars_per_cycle` | Перша сторінка recover і стеля комітів за виклик (poll_once, recover, tail_catchup) | `120` |
+| `live_recover_max_bars_per_cycle` | Перша сторінка recover (далі — сторінки по 200 до watermark) | `120` |
 | `live_recover_cooldown_s` | Cooldown між recover fetch | `5` |
 | `live_recover_max_total_bars` | Бюджет добору гепа (унікальних барів за спробу) для poll_once і recover; записаних за сесію recover | `5000` |
 | `live_recover_log_interval_s` | Інтервал фазового логу в recover | `60` |

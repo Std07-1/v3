@@ -132,25 +132,37 @@ def test_tail_catchup_after_5h_outage_writes_every_minute_despite_broker_cap(mon
     poller, uds = _poller(monkeypatch, broker, WED_1200)
 
     result = poller.tail_catchup()
-    # Бутстрап пише найстаріші 120 (не блокує старт), решту — основний цикл від watermark
-    assert result["tail_catchup_written"] == 120
-    assert uds.gap_states[-1]["policy"] == "m1_tail_catchup_backlog"
-    _run_cycles(poller, broker, WED_1200 + 300 * M1_MS, 3, uds)
 
-    assert _written(uds) == _minutes(WED_1200 + M1_MS, WED_1200 + 302 * M1_MS)
+    assert _written(uds) == _minutes(WED_1200 + M1_MS, WED_1200 + 300 * M1_MS)
+    assert result["tail_catchup_written"] == 300
     assert max(broker.requests) <= MAX_BARS_PER_FETCH
+    assert uds.gap_states[-1]["backlog_bars"] == 0
 
 
-def test_live_outage_5h_is_filled_oldest_first_without_loss(monkeypatch):
-    """Брокер ожив після 5 год: цикли дописують геп за зростанням (≤ 2×120 за цикл), нічого не перестрибуючи."""
+def test_live_outage_5h_is_filled_in_one_cycle_oldest_to_newest(monkeypatch):
+    """Брокер ожив після 5 год: один цикл пише весь геп за зростанням і живий край — без урізаних похідних
+    між циклами (overdue) і без заморожування."""
     broker = _Broker(now_ms=_at(WED_1200 + 300 * M1_MS))
     poller, uds = _poller(monkeypatch, broker, WED_1200)
 
-    max_step = _run_cycles(poller, broker, WED_1200 + 300 * M1_MS, 3, uds)
+    poller.poll_once()
 
-    assert _written(uds) == _minutes(WED_1200 + M1_MS, WED_1200 + 302 * M1_MS)
-    assert max_step <= 240
+    assert _written(uds) == _minutes(WED_1200 + M1_MS, WED_1200 + 300 * M1_MS)
     assert not poller.stats["recover_active"]
+
+
+def test_weekend_noise_longer_than_a_page_does_not_freeze_the_symbol(monkeypatch):
+    """XAG: сотні суботніх мікросвічок (їх відкидає ADR-0099) між watermark і відкриттям — бар відкриття
+    пишеться в першому ж циклі, а не після днів повторів тих самих відкинутих барів."""
+    saturday = FRI_2044 + (3 * 60 + 16) * M1_MS  # Сб 00:00
+    noise = [_bar(saturday + k * 2 * M1_MS, v=2.0, o=100.0, c=100.0) for k in range(300)]
+    broker = _Broker(now_ms=_at(SUN_2200), extra=noise)
+    poller, uds = _poller(monkeypatch, broker, FRI_2044)
+
+    poller.poll_once()
+
+    assert _written(uds) == [SUN_2200]
+    assert poller.stats["pause_noise_dropped"] == 300
 
 
 def test_history_lag_after_reopen_loses_no_minute(monkeypatch):
@@ -287,7 +299,7 @@ def test_gap_beyond_budget_is_loud_and_kept_in_gap_state(monkeypatch, caplog):
     assert state["policy"] == "m1_gap_beyond_budget" and state["gap_from_ms"] == WED_1200 + M1_MS
     first_written = _written(uds)[0]
     assert state["gap_to_ms"] == first_written - M1_MS
-    assert _written(uds) == _minutes(first_written, first_written + 119 * M1_MS)
+    assert _written(uds) == _minutes(first_written, WED_1200 + 500 * M1_MS)
 
 
 @pytest.mark.parametrize("gap_minutes", [1, 3, 150, 199, 200, 201, 450])
