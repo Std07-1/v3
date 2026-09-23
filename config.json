@@ -105,7 +105,36 @@
           "20:55",
           "21:30"
         ]
-      ]
+      ],
+      "season_rule": "us",
+      "summer": {
+        "market_weekend_open_dow": 6,
+        "market_weekend_open_hm": "21:00",
+        "market_weekend_close_dow": 4,
+        "market_weekend_close_hm": "20:55",
+        "market_daily_break_start_hm": "00:00",
+        "market_daily_break_end_hm": "00:00",
+        "market_daily_breaks": [
+          [
+            "20:55",
+            "21:30"
+          ]
+        ]
+      },
+      "winter": {
+        "market_weekend_open_dow": 6,
+        "market_weekend_open_hm": "22:00",
+        "market_weekend_close_dow": 4,
+        "market_weekend_close_hm": "21:55",
+        "market_daily_break_start_hm": "00:00",
+        "market_daily_break_end_hm": "00:00",
+        "market_daily_breaks": [
+          [
+            "21:55",
+            "22:30"
+          ]
+        ]
+      }
     },
     "cfd_us_22_23": {
       "market_weekend_open_dow": 6,
@@ -114,7 +143,24 @@
       "market_weekend_close_hm": "20:45",
       "market_daily_break_start_hm": "21:00",
       "market_daily_break_end_hm": "22:00",
-      "session_open_grace_min": 1
+      "session_open_grace_min": 1,
+      "season_rule": "us",
+      "summer": {
+        "market_weekend_open_dow": 6,
+        "market_weekend_open_hm": "22:00",
+        "market_weekend_close_dow": 4,
+        "market_weekend_close_hm": "20:45",
+        "market_daily_break_start_hm": "21:00",
+        "market_daily_break_end_hm": "22:00"
+      },
+      "winter": {
+        "market_weekend_open_dow": 6,
+        "market_weekend_open_hm": "23:00",
+        "market_weekend_close_dow": 4,
+        "market_weekend_close_hm": "21:45",
+        "market_daily_break_start_hm": "22:00",
+        "market_daily_break_end_hm": "23:00"
+      }
     },
     "cfd_hk_main": {
       "market_weekend_open_dow": 0,
@@ -132,7 +178,8 @@
           "08:30",
           "09:15"
         ]
-      ]
+      ],
+      "season_rule": "none"
     },
     "crypto_24x7": {
       "market_weekend_open_dow": 0,
@@ -140,7 +187,8 @@
       "market_weekend_close_dow": 6,
       "market_weekend_close_hm": "23:59",
       "market_daily_break_start_hm": "00:00",
-      "market_daily_break_end_hm": "00:00"
+      "market_daily_break_end_hm": "00:00",
+      "season_rule": "none"
     },
     "cfd_eu_eustx50": {
       "market_weekend_open_dow": 0,
@@ -149,7 +197,24 @@
       "market_weekend_close_hm": "20:00",
       "market_daily_break_start_hm": "20:00",
       "market_daily_break_end_hm": "06:00",
-      "session_open_grace_min": 1
+      "session_open_grace_min": 1,
+      "season_rule": "eu",
+      "summer": {
+        "market_weekend_open_dow": 0,
+        "market_weekend_open_hm": "06:00",
+        "market_weekend_close_dow": 4,
+        "market_weekend_close_hm": "20:00",
+        "market_daily_break_start_hm": "20:00",
+        "market_daily_break_end_hm": "06:00"
+      },
+      "winter": {
+        "market_weekend_open_dow": 0,
+        "market_weekend_open_hm": "07:00",
+        "market_weekend_close_dow": 4,
+        "market_weekend_close_hm": "21:00",
+        "market_daily_break_start_hm": "21:00",
+        "market_daily_break_end_hm": "07:00"
+      }
     },
     "cfd_eu_ger30": {
       "market_weekend_open_dow": 0,
@@ -158,7 +223,24 @@
       "market_weekend_close_hm": "20:00",
       "market_daily_break_start_hm": "20:00",
       "market_daily_break_end_hm": "00:30",
-      "session_open_grace_min": 1
+      "session_open_grace_min": 1,
+      "season_rule": "eu",
+      "summer": {
+        "market_weekend_open_dow": 0,
+        "market_weekend_open_hm": "00:30",
+        "market_weekend_close_dow": 4,
+        "market_weekend_close_hm": "20:00",
+        "market_daily_break_start_hm": "20:00",
+        "market_daily_break_end_hm": "00:30"
+      },
+      "winter": {
+        "market_weekend_open_dow": 0,
+        "market_weekend_open_hm": "00:30",
+        "market_weekend_close_dow": 4,
+        "market_weekend_close_hm": "21:00",
+        "market_daily_break_start_hm": "21:00",
+        "market_daily_break_end_hm": "00:30"
+      }
     }
   },
   "htf_anchor": {

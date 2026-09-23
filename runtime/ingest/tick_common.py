@@ -1,7 +1,7 @@
 """Спільні утиліти для tick_publisher та tick_preview_worker (DRY).
 
 Функції тут — чисті (без I/O крім логування), залежать лише від
-core.config_loader.env_str та runtime.ingest.market_calendar.MarketCalendar.
+core.config_loader.env_str, core.session_anchor (сезони DST) та runtime.ingest.market_calendar.
 """
 
 from __future__ import annotations
@@ -10,7 +10,8 @@ import logging
 from typing import Any, Iterable, Optional, Dict, List, Sequence, Tuple
 
 from core.config_loader import env_str
-from runtime.ingest.market_calendar import MarketCalendar
+from core.session_anchor import CALENDAR_SEASON_RULES, SEASON_RULE_NONE, SEASON_SUMMER, SEASON_WINTER
+from runtime.ingest.market_calendar import MarketCalendar, SeasonalMarketCalendar
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +117,62 @@ def calendar_from_group(group_cfg: dict) -> Optional[MarketCalendar]:
             "TICK_COMMON_CALENDAR_BUILD_FAILED group_cfg=%r", group_cfg, exc_info=True
         )
         return None
+
+
+# Ключі сезонного календаря групи в `market_calendar_by_group` (ADR-0095 §3.5)
+SEASON_RULE_KEY = "season_rule"
+SEASON_BLOCK_KEYS = (SEASON_SUMMER, SEASON_WINTER)
+
+
+def calendar_for_symbol(cfg: dict, symbol: str) -> SeasonalMarketCalendar:
+    """Календар символу, що обирає розклад за сезоном хвилини (ADR-0095 §3.5; фабрика ADR-0092 шар 0).
+
+    Група декларує ``season_rule``: ``us`` | ``eu`` — блоки ``summer`` і ``winter`` з полями розкладу (однаковий
+    набір ключів); ``none`` — плоскі поля групи, без блоків. Неповний конфіг — ValueError з причиною, а не тихий
+    календар 24/7 чи розклад не того сезону.
+
+    До S6b (дедлайн 25.10.2026) живі споживачі беруть плоскі поля через ``resolve_symbol_calendars``, тож плоскі
+    поля сезонної групи = блок ``summer`` (тест-сторож); фабрика — для інструмента міграції S7 і health.
+    """
+    group = (cfg.get("market_calendar_symbol_groups") or {}).get(symbol)
+    group_cfg = (cfg.get("market_calendar_by_group") or {}).get(group) if group else None
+    if not isinstance(group_cfg, dict):
+        raise ValueError("CALENDAR_GROUP_MISSING symbol=%s group=%s" % (symbol, group))
+    season_rule = group_cfg.get(SEASON_RULE_KEY)
+    if season_rule not in CALENDAR_SEASON_RULES:
+        raise ValueError(
+            "CALENDAR_SEASON_RULE_INVALID symbol=%s group=%s %s=%r allowed=%s"
+            % (symbol, group, SEASON_RULE_KEY, season_rule, sorted(CALENDAR_SEASON_RULES))
+        )
+    if season_rule == SEASON_RULE_NONE:
+        present_blocks = [key for key in SEASON_BLOCK_KEYS if key in group_cfg]
+        if present_blocks:
+            raise ValueError(
+                "CALENDAR_SEASON_BLOCKS_UNEXPECTED symbol=%s group=%s blocks=%s — season_rule=none має один розклад"
+                % (symbol, group, present_blocks)
+            )
+        single = _build_group_schedule(group_cfg, symbol, group, "flat")
+        return SeasonalMarketCalendar(season_rule, summer=single, winter=single)
+    summer_cfg, winter_cfg = (group_cfg.get(key) for key in SEASON_BLOCK_KEYS)
+    if not isinstance(summer_cfg, dict) or not isinstance(winter_cfg, dict) or set(summer_cfg) != set(winter_cfg):
+        raise ValueError(
+            "CALENDAR_SEASON_BLOCKS_INVALID symbol=%s group=%s — season_rule=%s вимагає блоки summer і winter "
+            "з однаковим набором полів" % (symbol, group, season_rule)
+        )
+    return SeasonalMarketCalendar(
+        season_rule,
+        summer=_build_group_schedule(summer_cfg, symbol, group, SEASON_SUMMER),
+        winter=_build_group_schedule(winter_cfg, symbol, group, SEASON_WINTER),
+    )
+
+
+def _build_group_schedule(schedule_cfg: dict, symbol: str, group: str, block: str) -> MarketCalendar:
+    calendar = calendar_from_group(schedule_cfg)
+    if calendar is None:
+        raise ValueError(
+            "CALENDAR_SCHEDULE_BUILD_FAILED symbol=%s group=%s block=%s" % (symbol, group, block)
+        )
+    return calendar
 
 
 # ---------------------------------------------------------------------------

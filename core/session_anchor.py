@@ -7,6 +7,9 @@ tz-базою 2007–2040 стереже тест-свідок зі `zoneinfo`: 
 Сезон визначає календарна дата `d` відкриття торгового дня: літо (EDT, UTC−4), якщо друга неділя березня ≤ `d` <
 перша неділя листопада, — відкриття `d` 21:00 UTC; інакше зима (EST, UTC−5) — `d` 22:00 UTC. Момент належить
 торговому дню з найпізнішим відкриттям ≤ моменту; на вихідних переходу доби мають 23 і 25 год.
+
+Тут же сезон розкладу груп календаря (§3.5, `calendar_season`): момент переходу DST США (`us`) або ЄС (`eu`).
+Уся арифметика DST платформи — в одному модулі.
 """
 
 from __future__ import annotations
@@ -18,6 +21,14 @@ RULE_NY_CLOSE_US_DST = "ny_close_us_dst"  # FXCM: метали, індекси, 
 RULE_UTC_MIDNIGHT = "utc_midnight"  # Binance
 HTF_ANCHOR_RULES = frozenset({RULE_NY_CLOSE_US_DST, RULE_UTC_MIDNIGHT})
 
+# Правило сезону розкладу групи календаря (ADR-0095 §3.5): `market_calendar_by_group.<група>.season_rule`
+SEASON_RULE_US = "us"  # друга неділя березня 07:00 UTC ≤ момент < перша неділя листопада 06:00 UTC (02:00 NY)
+SEASON_RULE_EU = "eu"  # остання неділя березня 01:00 UTC ≤ момент < остання неділя жовтня 01:00 UTC
+SEASON_RULE_NONE = "none"  # розклад групи від DST не залежить (HK, crypto)
+CALENDAR_SEASON_RULES = frozenset({SEASON_RULE_US, SEASON_RULE_EU, SEASON_RULE_NONE})
+SEASON_SUMMER = "summer"  # мітки сезону season_label / calendar_season = ключі блоків розкладу в config
+SEASON_WINTER = "winter"
+
 H4_S = 14_400
 D1_S = 86_400
 _DAY_MS = D1_S * 1000
@@ -27,6 +38,9 @@ _EPOCH = dt.date(1970, 1, 1)
 _NY_CLOSE_SUMMER_MS = 21 * 3_600_000
 _NY_CLOSE_WINTER_MS = 22 * 3_600_000
 _LONGEST_DAY_MS = 25 * 3_600_000  # доба осінніх вихідних переходу DST
+# Момент переходу DST у мс від опівночі UTC неділі переходу: (весна, осінь)
+_US_SWITCH_MS_OF_DAY = (7 * 3_600_000, 6 * 3_600_000)  # 02:00 за Нью-Йорком: 02:00 EST, 02:00 EDT
+_EU_SWITCH_MS_OF_DAY = (3_600_000, 3_600_000)  # ЄС перемикає о 01:00 UTC
 
 
 class OffSeasonGridError(ValueError):
@@ -109,12 +123,44 @@ def season_label(ts_ms: int, rule: str) -> str:
     if rule == RULE_UTC_MIDNIGHT:
         return "none"
     open_ms = trading_day_open_ms(ts_ms, rule)
-    return "summer" if open_ms % _DAY_MS == _NY_CLOSE_SUMMER_MS else "winter"
+    return SEASON_SUMMER if open_ms % _DAY_MS == _NY_CLOSE_SUMMER_MS else SEASON_WINTER
+
+
+def calendar_season(ts_ms: int, season_rule: str) -> str:
+    """Сезон розкладу групи календаря для моменту `ts_ms` (ADR-0095 §3.5): summer | winter | none.
+
+    Розклад групи — години ринку за місцевим годинником, тож сезон береться за моментом переходу DST: `us` — 02:00
+    за Нью-Йорком (чинне правило для будь-якого року, як у якоря §3.1), `eu` — 01:00 UTC. Не сезон торгового дня
+    §3.1: восени доба 31.10–01.11 має 25 год і до Нд 22:00 UTC лишається «літньою», а FX відкривається о 17:00 EST
+    = 22:00 UTC. Для `cfd_us` обидва правила дають ту саму торговість кожної хвилини: розбіжні години неділі
+    закриті в обох розкладах. `none` — розклад один.
+    """
+    if season_rule in (SEASON_RULE_US, SEASON_RULE_EU):
+        start_ms, end_ms = _summer_bounds_ms((_EPOCH + dt.timedelta(days=ts_ms // _DAY_MS)).year, season_rule)
+        return SEASON_SUMMER if start_ms <= ts_ms < end_ms else SEASON_WINTER
+    if season_rule == SEASON_RULE_NONE:
+        return "none"
+    raise ValueError(
+        "unknown calendar season_rule=%r (allowed: %s)" % (season_rule, sorted(CALENDAR_SEASON_RULES))
+    )
 
 
 def is_us_summer(day: dt.date) -> bool:
     """Літній час США за чинним правилом: друга неділя березня ≤ day < перша неділя листопада."""
     return _nth_sunday(day.year, 3, 2) <= day < _nth_sunday(day.year, 11, 1)
+
+
+@functools.lru_cache(maxsize=256)
+def _summer_bounds_ms(year: int, season_rule: str) -> tuple[int, int]:
+    """Літній час року за правилом групи `us` | `eu`: [перехід навесні, перехід восени), мс UTC."""
+    if season_rule == SEASON_RULE_US:
+        switch_days, switch_ms_of_day = (_nth_sunday(year, 3, 2), _nth_sunday(year, 11, 1)), _US_SWITCH_MS_OF_DAY
+    else:
+        switch_days, switch_ms_of_day = (_last_sunday(year, 3), _last_sunday(year, 10)), _EU_SWITCH_MS_OF_DAY
+    spring_ms, autumn_ms = (
+        (day - _EPOCH).days * _DAY_MS + ms_of_day for day, ms_of_day in zip(switch_days, switch_ms_of_day)
+    )
+    return spring_ms, autumn_ms
 
 
 @functools.lru_cache(maxsize=8192)  # гарячий шлях: якір на кожен бар/тік, доба рахується раз
@@ -129,6 +175,11 @@ def _day_open_ms(day_index: int, rule: str) -> int:
 def _nth_sunday(year: int, month: int, n: int) -> dt.date:
     first = dt.date(year, month, 1)
     return first + dt.timedelta(days=(6 - first.weekday()) % 7 + 7 * (n - 1))
+
+
+def _last_sunday(year: int, month: int) -> dt.date:
+    last = dt.date(year + month // 12, month % 12 + 1, 1) - dt.timedelta(days=1)
+    return last - dt.timedelta(days=(last.weekday() + 1) % 7)
 
 
 def _require_rule(rule: str) -> None:

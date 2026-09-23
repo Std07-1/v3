@@ -20,6 +20,8 @@ _PY37_COMPAT_FILES = [
     "core/model/candle_chain.py",
     "core/config_loader.py",
     "core/session_anchor.py",
+    "runtime/ingest/market_calendar.py",
+    "runtime/ingest/tick_common.py",
     "env_profile.py",
 ]
 

@@ -5,6 +5,7 @@ import logging
 from typing import List, Optional, Tuple
 
 from core.model.bars import ms_to_utc_dt
+from core.session_anchor import CALENDAR_SEASON_RULES, SEASON_RULE_NONE, SEASON_WINTER, calendar_season
 
 
 logger = logging.getLogger("market_calendar")
@@ -94,3 +95,41 @@ class MarketCalendar:
                 if cur_week_min >= close_min or cur_week_min < open_min:
                     return False
         return True
+
+
+@dataclass(frozen=True)
+class SeasonalMarketCalendar:
+    """Розклад групи, що перемикається за сезоном хвилини, а не ранбуком (ADR-0095 §3.5).
+
+    ``season_rule`` — ``us`` | ``eu`` | ``none`` (``core.session_anchor.calendar_season``); для ``none`` обидва
+    розклади — один об'єкт. Інтерфейс споживача той самий, що в MarketCalendar: ``enabled`` і ``is_trading_minute``.
+    """
+
+    season_rule: str
+    summer: MarketCalendar
+    winter: MarketCalendar
+
+    def __post_init__(self) -> None:
+        if self.season_rule not in CALENDAR_SEASON_RULES:
+            raise ValueError(
+                "CALENDAR_SEASON_RULE_INVALID season_rule=%r allowed=%s"
+                % (self.season_rule, sorted(CALENDAR_SEASON_RULES))
+            )
+        if self.season_rule == SEASON_RULE_NONE and self.summer is not self.winter:
+            raise ValueError("CALENDAR_SEASON_RULE_NONE_TWO_SCHEDULES: season_rule=none має один розклад")
+        if self.summer.enabled != self.winter.enabled:
+            raise ValueError("CALENDAR_SEASON_ENABLED_MISMATCH: summer і winter вмикаються разом")
+
+    @property
+    def enabled(self) -> bool:
+        return self.summer.enabled
+
+    def season_of(self, ts_ms: int) -> str:
+        return calendar_season(ts_ms, self.season_rule)
+
+    def for_minute(self, ts_ms: int) -> MarketCalendar:
+        """Розклад сезону хвилини ``ts_ms``."""
+        return self.winter if self.season_of(ts_ms) == SEASON_WINTER else self.summer
+
+    def is_trading_minute(self, now_ms: int) -> bool:
+        return self.for_minute(now_ms).is_trading_minute(now_ms)
