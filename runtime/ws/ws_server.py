@@ -2428,6 +2428,24 @@ def build_app(
 
     # ADR-0090 S1: консоль клієнта та agent-observability маршрути живуть в окремому
     # процесі runtime/agent_bridge (smc-agent-bridge :8010); тут їх немає.
+    # (WIP ADR-0086) data_dir для snapshot-маунту нижче — переїде в bridge разом із ним.
+    _console_data_dir: str = _bridge_cfg.data_dir
+
+    # ── /api/public/snapshot — санітизований знімок Арчі для ГОРН (ADR-0086) ──
+    # БЕЗ auth свідомо: whitelist-only контракт, приватні поля не потрапляють у
+    # відповідь за конструкцією (build_public_snapshot). Rollback = прибрати маунт.
+    try:
+        from runtime.api.public_snapshot import register_public_snapshot
+
+        register_public_snapshot(
+            app,
+            redis_client=_agent_redis_client,
+            namespace=_agent_ns,
+            data_dir=_console_data_dir,
+        )
+    except Exception as _psnap_exc:  # pragma: no cover — I5: гучно, не тихо
+        _log.warning("PUBLIC_SNAPSHOT_INIT_FAIL: %s", _psnap_exc)
+
     # ── /api/context — SMC context for external consumers (bot, TUI) ───
     async def _api_context(request: web.Request) -> web.Response:
         """Повертає поточний SMC контекст для symbol+tf.
