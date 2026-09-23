@@ -34,14 +34,19 @@ def open_ms_of(line: str) -> Optional[int]:
 
 
 def rewrite_atomic(path: str, lines: List[str], backup_dir: Optional[str] = None) -> str:
-    """Записати `lines` замість вмісту `path` (кожен рядок + LF); повертає шлях бекапу з допатчевим вмістом.
+    """Записати `lines` замість вмісту наявного `path` (кожен рядок + LF); повертає шлях бекапу з допатчевим вмістом.
 
     Порядок і рейки — `replace_bytes_atomic`. `backup_dir` — див. там.
     """
-    return replace_bytes_atomic(path, "".join(line + "\n" for line in lines).encode("utf-8"), backup_dir=backup_dir)
+    backup = replace_bytes_atomic(path, "".join(line + "\n" for line in lines).encode("utf-8"), backup_dir=backup_dir)
+    if backup is None:  # недосяжне: наявний файл завжди отримує бекап, а відсутній дає FileNotFoundError
+        raise AssertionError("REWRITE_BACKUP_MISSING path=%s" % path)
+    return backup
 
 
-def replace_bytes_atomic(path: str, data: bytes, backup_dir: Optional[str] = None) -> str:
+def replace_bytes_atomic(
+    path: str, data: bytes, backup_dir: Optional[str] = None, *, like: Optional[str] = None
+) -> Optional[str]:
     """Підмінити вміст `path` байтами `data` без миті, коли файла немає; повертає шлях бекапу старого вмісту.
 
     Порядок важливий. Наївне «спершу перейменувати оригінал у .bak, потім підставити
@@ -56,15 +61,23 @@ def replace_bytes_atomic(path: str, data: bytes, backup_dir: Optional[str] = Non
     `backup_dir` — каталог бекапу (на тій самій ФС, щоб лінк був можливий): старий inode лягає в
     `<backup_dir>/<ім'я файла>`, а наявне там ім'я — FileExistsError до будь-якого запису (бекап
     попереднього перепису не затирається). Без `backup_dir` — сусід `.bak.<unix_ts>[.<n>]`.
+
+    Файла `path` ще немає — він створюється з режимом і власником файла `like` (сусіднього part-файла), бекапу
+    немає (None); без `like` — FileNotFoundError, а не файл із правами процесу ремонту.
     """
+    exists = os.path.lexists(path)
+    if not exists and like is None:
+        raise FileNotFoundError("REWRITE_TARGET_MISSING path=%s — для нового файла потрібен like" % path)
     tmp = "%s.tmp" % path
     with open(tmp, "wb") as fh:
         fh.write(data)
         fh.flush()
         os.fsync(fh.fileno())
     try:
-        _copy_mode_and_owner(path, tmp)
-        backup = _backup_old_inode(path) if backup_dir is None else _backup_into_dir(path, backup_dir)
+        _copy_mode_and_owner(path if exists else like, tmp)
+        backup: Optional[str] = None
+        if exists:
+            backup = _backup_old_inode(path) if backup_dir is None else _backup_into_dir(path, backup_dir)
     except BaseException:
         os.remove(tmp)
         raise
