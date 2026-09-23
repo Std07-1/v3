@@ -42,7 +42,7 @@ DERIVE_CHAIN: Dict[int, List[Tuple[int, int]]] = {
     300:  [(900, 3)],     # M15 = 3 × M5
     900:  [(1800, 2)],    # M30 = 2 × M15
     1800: [(3600, 2)],    # H1  = 2 × M30
-    3600: [(14400, 4)],   # H4  = 4 × H1  (calendar-aware, TV anchor)
+    3600: [(14400, 4)],   # H4  = 4 × H1  (calendar-aware, сезонна сітка ADR-0095)
 }
 
 # Повний порядок виконання cascade (від найнижчого до найвищого)
@@ -102,21 +102,20 @@ def _resolve_bucket(
     target_tf_s: int,
     bucket_open_ms: int,
     anchor_rule: Optional[str],
-    h4_anchor_offset_s: int = 0,
-    d1_anchor_offset_s: int = 0,
 ) -> Tuple[int, int]:
     """(кінець вікна агрегації, якір для assert_invariants) бакета.
 
     Правило ADR-0095 (`anchor_rule`): H4/D1 — рівність сезонній сітці (інакше OffSeasonGridError), вікно до
-    наступного бакета, а не open + tf (H4 не перетинає межу торгового дня: обрубки DST-діб). Без правила —
-    легасі-якорі в секундах (лише до S5b: tools/rebuild_from_m1). Обидва одночасно — ValueError: дві сітки в
-    одному виклику.
+    наступного бакета, а не open + tf (H4 не перетинає межу торгового дня: обрубки DST-діб). M1..H1 правила не
+    потребують: вікно open + tf, якір 0. H4/D1 без правила — ValueError `anchor_rule_missing`, а не тихий якір 0.
     """
     if anchor_rule is None:
-        anchor_s = resolve_cascade_anchor_s(target_tf_s, h4_anchor_offset_s, d1_anchor_offset_s)
-        return bucket_open_ms + target_tf_s * 1000, anchor_s
-    if h4_anchor_offset_s or d1_anchor_offset_s:
-        raise ValueError("anchor_rule_with_legacy_anchor_offset target_tf_s=%d (ADR-0095 S2b)" % target_tf_s)
+        if target_tf_s >= H4_S:
+            raise ValueError(
+                "anchor_rule_missing target_tf_s=%d bucket_open_ms=%d — H4/D1 будуються лише за правилом "
+                "сезонного якоря (ADR-0095 §3.3)" % (target_tf_s, bucket_open_ms)
+            )
+        return bucket_open_ms + target_tf_s * 1000, 0
     if target_tf_s >= H4_S:
         assert_on_season_grid(bucket_open_ms, target_tf_s, anchor_rule)
     return (
@@ -290,7 +289,6 @@ def aggregate_bars(
     symbol: str,
     target_tf_s: int,
     bucket_open_ms: int,
-    anchor_offset_s: int = 0,
     filter_calendar_pause: bool = True,
     anchor_rule: Optional[str] = None,
 ) -> Optional[CandleBar]:
@@ -303,13 +301,15 @@ def aggregate_bars(
         symbol: символ.
         target_tf_s: цільовий TF у секундах.
         bucket_open_ms: open_time_ms цільового бару.
-        anchor_offset_s: легасі-якір HTF у секундах (до S5b ADR-0095: tools/rebuild_from_m1).
         filter_calendar_pause: чи фільтрувати calendar_pause_flat бари.
-        anchor_rule: правило сезонного якоря ADR-0095 (взаємовиключне з anchor_offset_s).
+        anchor_rule: правило сезонного якоря ADR-0095; для H4/D1 обов'язкове (інакше ValueError
+            `anchor_rule_missing`), M1..H1 його не потребують.
 
     Returns:
         CandleBar з complete=True, src="derived", або None якщо немає даних.
     """
+    # Геометрія бакета — до агрегації: H4/D1 без правила чи поза сіткою відмовляють гучно навіть без барів
+    _window_end_ms, anchor_offset_s = _resolve_bucket(target_tf_s, bucket_open_ms, anchor_rule)
     if not bars:
         return None
 
@@ -348,8 +348,6 @@ def aggregate_bars(
         src="derived",
         extensions=extensions,
     )
-    if anchor_rule is not None:
-        _close, anchor_offset_s = _resolve_bucket(target_tf_s, bucket_open_ms, anchor_rule, anchor_offset_s)
     assert_invariants(out, anchor_offset_s=anchor_offset_s)
     return out
 
@@ -424,8 +422,6 @@ def derive_bar(
     target_tf_s: int,
     source_buffer: "GenericBuffer",
     bucket_open_ms: int,
-    anchor_offset_s: int = 0,
-    d1_anchor_offset_s: int = 0,
     is_trading_fn: Optional[Callable[[int], bool]] = None,
     filter_calendar_pause: bool = True,
     anchor_rule: Optional[str] = None,
@@ -451,11 +447,10 @@ def derive_bar(
         target_tf_s: цільовий TF.
         source_buffer: буфер з барами джерельного TF.
         bucket_open_ms: open_time_ms цільового bucket.
-        anchor_offset_s: легасі-якір H4 у секундах (до S5b ADR-0095: tools/rebuild_from_m1).
-        d1_anchor_offset_s: легасі-якір D1 у секундах (до S5b ADR-0095: tools/rebuild_from_m1).
         is_trading_fn: calendar filter (is_trading_minute).
         filter_calendar_pause: чи ігнорувати calendar_pause_flat.
-        anchor_rule: правило сезонного якоря ADR-0095: рівність сітці, вікно до наступного бакета.
+        anchor_rule: правило сезонного якоря ADR-0095: рівність сітці, вікно до наступного бакета. Для H4/D1
+            обов'язкове (інакше ValueError `anchor_rule_missing`), M1..H1 його не потребують.
 
     Returns:
         CandleBar або None.
@@ -468,10 +463,8 @@ def derive_bar(
     if source_buffer.tf_s != expected_source_tf_s:
         return None
 
-    # Вікно агрегації і якір: правило ADR-0095 або легасі-якорі (ADR-0023) — не обидва
-    bucket_close_ms, effective_anchor = _resolve_bucket(
-        target_tf_s, bucket_open_ms, anchor_rule, anchor_offset_s, d1_anchor_offset_s
-    )
+    # Вікно агрегації: до наступного бакета сезонної сітки (ADR-0095), для M1..H1 — open + tf
+    bucket_close_ms, _anchor_offset_s = _resolve_bucket(target_tf_s, bucket_open_ms, anchor_rule)
 
     # Strict: всі trading-слоти присутні
     if source_buffer.has_range(
@@ -487,7 +480,7 @@ def derive_bar(
             symbol=symbol,
             target_tf_s=target_tf_s,
             bucket_open_ms=bucket_open_ms,
-            anchor_offset_s=effective_anchor,
+            anchor_rule=anchor_rule,
             filter_calendar_pause=filter_calendar_pause,
         )
 
@@ -527,7 +520,7 @@ def derive_bar(
         symbol=symbol,
         target_tf_s=target_tf_s,
         bucket_open_ms=bucket_open_ms,
-        anchor_offset_s=effective_anchor,
+        anchor_rule=anchor_rule,
         filter_calendar_pause=filter_calendar_pause,
     )
     if result is None:

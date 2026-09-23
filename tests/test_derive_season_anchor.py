@@ -5,7 +5,7 @@ import datetime as dt
 
 import pytest
 
-from core.derive import GenericBuffer, derive_bar, derive_triggers
+from core.derive import GenericBuffer, aggregate_bars, derive_bar, derive_triggers
 from core.model.bars import CandleBar
 from core.session_anchor import D1_S, H4_S, RULE_NY_CLOSE_US_DST, OffSeasonGridError
 from runtime.ingest.market_calendar import MarketCalendar
@@ -81,11 +81,31 @@ def test_triggers_close_d1_on_last_trading_minute_both_seasons():
     assert (D1_S, _ms(2026, 3, 5, 22)) in winter_friday
 
 
-def test_rule_and_legacy_anchor_together_are_refused():
+def test_derive_bar_and_aggregate_have_no_legacy_anchor_kwargs():
+    """З S5b легасі-секунд у derive_bar / aggregate_bars немає: TypeError, а не друга сітка поруч із правилом."""
     buf = _h1_buffer(_ms(2026, 9, 22, 22), 3)
-    with pytest.raises(ValueError, match="anchor_rule_with_legacy_anchor_offset"):
+    with pytest.raises(TypeError):
         derive_bar(symbol="XAU/USD", target_tf_s=H4_S, source_buffer=buf, bucket_open_ms=_ms(2026, 9, 22, 21),
-                   anchor_offset_s=79200, anchor_rule=FXCM)
+                   anchor_offset_s=79200, anchor_rule=FXCM)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        derive_bar(symbol="XAU/USD", target_tf_s=D1_S, source_buffer=GenericBuffer(tf_s=60),
+                   bucket_open_ms=_ms(2026, 9, 21, 21), d1_anchor_offset_s=75600)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        aggregate_bars([_bar(3600, _ms(2026, 9, 22, 22), 100.0)], symbol="XAU/USD", target_tf_s=H4_S,
+                       bucket_open_ms=_ms(2026, 9, 22, 21), anchor_offset_s=75600)  # type: ignore[call-arg]
+
+
+def test_htf_without_rule_is_refused_loudly_not_anchor_zero():
+    """H4 00:00 UTC на сітці якоря 0: раніше без правила проходив мовчки — H4 XAU на сітці Binance."""
+    h1 = _bar(3600, _ms(2026, 9, 23, 0), 100.0)
+    with pytest.raises(ValueError, match="anchor_rule_missing"):
+        aggregate_bars([h1], symbol="XAU/USD", target_tf_s=H4_S, bucket_open_ms=_ms(2026, 9, 23, 0))
+    with pytest.raises(ValueError, match="anchor_rule_missing"):
+        derive_bar(symbol="XAU/USD", target_tf_s=H4_S, source_buffer=_h1_buffer(_ms(2026, 9, 23, 0), 4),
+                   bucket_open_ms=_ms(2026, 9, 23, 0))
+    m3 = aggregate_bars([_bar(60, _ms(2026, 9, 23, 0), 100.0)], symbol="XAU/USD", target_tf_s=180,
+                        bucket_open_ms=_ms(2026, 9, 23, 0))
+    assert m3 is not None and m3.open_time_ms == _ms(2026, 9, 23, 0)  # M1..H1 правила не потребують
 
 
 def test_derive_triggers_requires_rule_and_has_no_legacy_anchor():
