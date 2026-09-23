@@ -1,6 +1,7 @@
 """Суцільний ланцюг свічок (ADR-0101): open = close попереднього існуючого бару; застарілий край — у останній бар сесії."""
 from __future__ import annotations
 
+import json
 import logging
 
 from core.model.bars import CandleBar
@@ -14,6 +15,7 @@ from runtime.ingest.m1_session_filter import (
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.polling import m1_poller as poller_mod
 from runtime.ingest.polling.m1_poller import M1SymbolPoller
+from runtime.store.uds import UnifiedDataStore
 
 M1_MS = 60_000
 TUE_2059 = 1_790_110_740_000  # 2026-09-22 20:59 UTC (XAU: остання хвилина сесії перед перервою)
@@ -122,6 +124,45 @@ def test_live_poller_takes_the_chain_from_the_disk_tail_after_restart():
 
     assert poller._ingest_bar(BAR_2201)  # noqa: SLF001
     assert uds.committed[-1].o == 4357.63  # від видимого 20:59, не від пласкої паузи
+
+
+def _write_m1_part(root, rows):
+    folder = root / "XAU_USD" / "tf_60"
+    folder.mkdir(parents=True)
+    body = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows)
+    (folder / "part-20260922.jsonl").write_text(body, encoding="utf-8")
+
+
+def _row(bar: CandleBar, extensions=None) -> dict:
+    row = {"symbol": bar.symbol, "tf_s": 60, "open_time_ms": bar.open_time_ms, "close_time_ms": bar.close_time_ms,
+           "o": bar.o, "h": bar.h, "low": bar.low, "c": bar.c, "v": bar.v, "complete": True, "src": "history"}
+    if extensions:
+        row["extensions"] = extensions
+    return row
+
+
+def test_uds_tail_read_keeps_row_markers(tmp_path):
+    """Хвіст з диска несе extensions: без них прихований бар після рестарту — «торговий» для ланцюга й агрегації."""
+    _write_m1_part(tmp_path, [_row(BAR_2059), _row(STALE_2100, {"calendar_pause_flat": True})])
+    uds = UnifiedDataStore(data_root=str(tmp_path), boot_id="test-boot", tf_allowlist={60},
+                           min_coldload_bars={60: 1}, role="reader")
+
+    candles = uds.read_tail_candles("XAU/USD", 60, 10)
+
+    assert [c.extensions for c in candles] == [{}, {"calendar_pause_flat": True}]
+
+
+def test_live_poller_warmup_from_real_disk_skips_the_hidden_bar(tmp_path):
+    hidden = CandleBar(symbol="XAU/USD", tf_s=60, open_time_ms=TUE_2059 + M1_MS, close_time_ms=TUE_2059 + 2 * M1_MS,
+                       o=4350.0, h=4350.0, low=4350.0, c=4350.0, v=1.0, complete=True, src="history")
+    _write_m1_part(tmp_path, [_row(BAR_2059), _row(hidden, {"calendar_pause_flat": True})])
+    uds = UnifiedDataStore(data_root=str(tmp_path), boot_id="test-boot", tf_allowlist={60},
+                           min_coldload_bars={60: 1}, role="reader")
+    poller = _poller(uds)
+
+    poller.warmup_watermark(tail_n=10)
+
+    assert poller._last_bar.open_time_ms == TUE_2059 and poller._last_bar.c == 4357.63  # noqa: SLF001
 
 
 def test_poller_without_prev_bar_writes_broker_open_as_is(monkeypatch):
