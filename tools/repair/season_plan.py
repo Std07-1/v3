@@ -22,15 +22,20 @@ TF) — у наборі перебудови цього TF. Набір — зе�
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
+from core.config_loader import htf_anchor_rule_resolver
 from core.derive import DERIVE_CHAIN, DERIVE_ORDER, DERIVE_SOURCE, GenericBuffer, derive_bar
 from core.model.bars import CandleBar
 from core.model.candle_chain import is_display_hidden
 from core.session_anchor import D1_S, H4_S, SEASON_WINTER, htf_bucket_start_ms, htf_next_bucket_start_ms
+from runtime.ingest.tick_common import calendar_for_symbol
 from runtime.store.layers.disk_layer import DiskLayer
+from runtime.store.ssot_jsonl import head_first_bar_time_ms, tail_last_bar_time_ms
 from tools.rebuild_from_m1 import REBUILD_CHUNK_D1_BUCKETS, _bucket_awaits_source, _grid_bucket_opens
 from tools.repair.partfile_io import Line, PartFile, day_of_ms, load_part, part_path, row_bytes, sha256_hex
 
@@ -437,3 +442,155 @@ def plan_symbol_files(
             if plan is not None:
                 files.append(plan)
     return files, row_stats
+
+
+# ── План символу і всього прогону ──────────────────────────────────────────────────────────────────────────────────
+@dataclass
+class SymbolPlan:
+    """План одного символу: набір перебудови, нові бари, зміни part-файлів і те, що лишилось поза областю."""
+
+    context: SymbolContext
+    rebuild: Buckets
+    tail_kept: Dict[int, int]
+    planned: PlannedBars
+    files: List[FilePlan]
+    rows: Dict[int, Counter]
+    d1_rekey: List[CandleBar]
+    manual_review: List[CandleBar]
+    holes: Buckets
+    holes_out_of_scope: Dict[int, List[int]]
+    rejected_rows: int
+
+    def dropped(self, tf_s: int) -> Tuple[List[int], List[int]]:
+        """(бакети без нового бару й без торгової хвилини, бакети з торговою хвилиною, але без джерела)."""
+        no_trading: List[int] = []
+        no_source: List[int] = []
+        for bucket_ms in sorted(b for b, bar in self.planned.get(tf_s, {}).items() if bar is None):
+            window = range(bucket_ms, self.context.next_bucket(bucket_ms, tf_s), M1_MS)
+            (no_source if any(self.context.is_trading(t) for t in window) else no_trading).append(bucket_ms)
+        return no_trading, no_source
+
+    def rekey_results(self) -> List[Dict[str, Any]]:
+        """На кожен D1 поза сіткою: ключ сітки, рівність OHLCV новому бару (гейт V4) і тонка доба."""
+        results = []
+        for old in self.d1_rekey:
+            bucket_ms = self.context.bucket_of(old.open_time_ms, D1_S)
+            new = self.planned.get(D1_S, {}).get(bucket_ms)
+            results.append({
+                "old_open_ms": old.open_time_ms, "new_open_ms": bucket_ms, "src": old.src,
+                "ohlcv_equal": new is not None and (new.o, new.h, new.low, new.c, new.v) == (old.o, old.h, old.low, old.c, old.v),
+                "thin_session": new is not None and "thin_session" in (new.extensions.get("partial_reasons") or []),
+            })
+        return results
+
+    def to_json(self) -> Dict[str, Any]:
+        ctx = self.context
+        per_tf = {}
+        for tf_s in sorted(set(self.rebuild) | set(self.rows)):
+            built = [bar for bar in self.planned.get(tf_s, {}).values() if bar is not None]
+            no_trading, no_source = self.dropped(tf_s)
+            per_tf[str(tf_s)] = {
+                "rebuild": len(self.rebuild.get(tf_s, ())), "new": len(built), "tail_kept": self.tail_kept.get(tf_s, 0),
+                "partial": sum(1 for bar in built if bar.extensions.get("partial")), "rows": dict(self.rows.get(tf_s, {})),
+                "dropped_no_trading": len(no_trading), "dropped_no_source": no_source,
+            }
+        return {
+            "symbol": ctx.symbol, "rule": ctx.rule, "season_rule": ctx.calendar.season_rule, "window": list(ctx.window),
+            "m1_head_ms": ctx.m1_head_ms, "m1_tail_ms": ctx.m1_tail_ms, "source_end_ms": ctx.source_end_ms,
+            "tf": per_tf, "files": [file_plan.to_json() for file_plan in self.files],
+            "d1_rekey": self.rekey_results(), "manual_review": [bar.open_time_ms for bar in self.manual_review],
+            "holes": {str(tf_s): sorted(b) for tf_s, b in self.holes.items()},
+            "holes_out_of_scope": {str(tf_s): b for tf_s, b in self.holes_out_of_scope.items()},
+            "rejected_rows": self.rejected_rows,
+        }
+
+
+@dataclass
+class SeasonPlan:
+    """План прогону: ревізія коду, корінь даних, області, вікно і плани символів; `files` — усі зміни part-файлів."""
+
+    git_rev: str
+    data_root: str
+    scopes: Tuple[str, ...]
+    window: Tuple[int, int]
+    changed_m1: bool
+    symbols: List[SymbolPlan]
+
+    @property
+    def files(self) -> List[FilePlan]:
+        return [file_plan for symbol_plan in self.symbols for file_plan in symbol_plan.files]
+
+    def to_json(self) -> Dict[str, Any]:
+        return {"git_rev": self.git_rev, "data_root": self.data_root, "scopes": list(self.scopes),
+                "window": list(self.window), "changed_m1": self.changed_m1,
+                "symbols": [symbol_plan.to_json() for symbol_plan in self.symbols]}
+
+
+def build_plan(
+    cfg: Mapping[str, Any], data_root: str, symbols: Sequence[str], scopes: Sequence[str],
+    window: Tuple[int, int] = ALL_TIME, changed_m1: Optional[Mapping[str, Sequence[int]]] = None,
+) -> SeasonPlan:
+    """План заміни для символів; `changed_m1` — {каталог символу: [open_ms M1]} від settle (ADR-0101 C5).
+
+    Правило якоря і сезонний календар кожного символу резолвляться до планування: невиміряна група чи неповний
+    календар — ValueError для всього прогону, а не план частини символів.
+    """
+    unknown = sorted(set(scopes) - set(SCOPES))
+    if unknown or not scopes:
+        raise ValueError("SEASON_PLAN_SCOPE_INVALID scopes=%s allowed=%s" % (list(scopes), list(SCOPES)))
+    if changed_m1 is not None and SCOPE_DERIVED_FROM_M1 not in scopes:
+        raise ValueError("SEASON_PLAN_CHANGED_M1_WITHOUT_SCOPE — changed_m1 звужує лише %s" % SCOPE_DERIVED_FROM_M1)
+    rule_for_symbol = htf_anchor_rule_resolver(dict(cfg))
+    resolved = [(symbol, rule_for_symbol(symbol), calendar_for_symbol(dict(cfg), symbol)) for symbol in symbols]
+    plans = []
+    for symbol, rule, calendar in resolved:
+        sym_dir = symbol.replace("/", "_")
+        ctx = SymbolContext(
+            symbol=symbol, sym_dir=sym_dir, rule=rule, calendar=calendar, window=window,
+            m1_head_ms=head_first_bar_time_ms(data_root, symbol, M1_S),
+            m1_tail_ms=tail_last_bar_time_ms(data_root, symbol, M1_S),
+            h1_tail_ms=tail_last_bar_time_ms(data_root, symbol, H1_S),
+        )
+        changed = None if changed_m1 is None else list(changed_m1.get(sym_dir, ()))
+        plans.append(_plan_symbol(ctx, data_root, scopes, changed))
+    return SeasonPlan(git_rev=_git_rev(), data_root=data_root, scopes=tuple(scopes), window=window,
+                      changed_m1=changed_m1 is not None, symbols=plans)
+
+
+def _plan_symbol(ctx: SymbolContext, data_root: str, scopes: Sequence[str], changed: Optional[List[int]]) -> SymbolPlan:
+    reader = SourceReader(data_root, ctx.symbol)
+    seeds: List[Buckets] = []
+    rekey: List[CandleBar] = []
+    manual: List[CandleBar] = []
+    holes: Buckets = {}
+    out_of_scope: Dict[int, List[int]] = {}
+    if SCOPE_DERIVED_FROM_M1 in scopes:
+        seeds.append(seed_derived_from_m1(ctx, changed))
+    if SCOPE_H4_FROM_H1 in scopes:
+        seeds.append(seed_h4_from_h1(ctx, head_first_bar_time_ms(data_root, ctx.symbol, H1_S)))
+    if SCOPE_D1_REKEY in scopes:
+        d1_seeds, rekey, manual = seed_d1_rekey(ctx, reader)
+        seeds.append(d1_seeds)
+    if SCOPE_HOLES in scopes:
+        holes, out_of_scope = seed_holes(ctx, reader)
+        seeds.append(holes)
+    rebuild, tail_kept = complete_rebuild_set(ctx, seeds)
+    planned = plan_bars(ctx, reader, rebuild)
+    files, rows = plan_symbol_files(ctx, data_root, rebuild, planned)
+    return SymbolPlan(context=ctx, rebuild=rebuild, tail_kept=tail_kept, planned=planned, files=files, rows=rows,
+                      d1_rekey=rekey, manual_review=manual, holes=holes, holes_out_of_scope=out_of_scope,
+                      rejected_rows=reader.rejected_rows)
+
+
+def _git_rev() -> str:
+    """Ревізія коду плану (гейт STALE_SOURCE порівнює план і прогін); без git — `unknown` і WARNING."""
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    try:
+        done = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("SEASON_PLAN_GIT_REV_UNKNOWN cause=%s", exc)
+        return "unknown"
+    if done.returncode != 0:
+        log.warning("SEASON_PLAN_GIT_REV_UNKNOWN rc=%d stderr=%s", done.returncode, done.stderr.strip())
+        return "unknown"
+    return done.stdout.strip()
