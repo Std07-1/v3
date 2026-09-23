@@ -269,20 +269,38 @@
 
 ### 3.9 Порядок вікна (закритий ринок)
 
-1. Бекап tgz `data_v3`: `tf_14400` усіх 6 символів, `tf_86400` XAU, зачеплені M3..H1.
-2. Зупинити записувачів: `sudo -n supervisorctl stop smc:smc-fxcm smc:smc-preview` (з префіксом `smc:`).
+Код і дані йдуть одним вікном: новий валідатор відкидає стару сітку, а старий — нову літню. Порядок переписано
+рев'ю S5c (Changelog 23.09): код і config деплояться **до** перебудови, а не після неї. Інструмент S7 має бути з
+нового дерева, а новий код зі старим config не стартує (`CONFIG_LEGACY_ANCHOR_KEY`).
+
+1. Зупинити записувачів: `sudo -n supervisorctl stop smc:smc-ws smc:smc-preview smc:smc-fxcm` (з префіксом `smc:`).
    **smc-ticks не чіпати**: start або restart запустить його попри `autostart=false`, а це друга FXCM-сесія.
-3. Перебудова в staging, verify на копії, «го» власника.
-4. Атомарна заміна part-файлів.
-5. Деплой коду й config слайсів S1–S5 — у тому самому вікні, що й дані: новий валідатор відкине стару сітку, а
-   старий — нову літню.
+   `writers_guard` (argv і write-FD) — NO_WRITERS для `data_v3`.
+2. Бекап tgz `data_v3`: `tf_14400` усіх 6 символів, `tf_86400` XAU, зачеплені M3..H1; `config.json`; sha-маніфест.
+3. Код і config. Незакомічений на проді WIP ADR-0086 закомічено як `9457272` «як є» (10 шляхів: 3 змінені, 7 нових).
+   - `git fetch`, потім кожен із 10 шляхів на проді має дорівнювати блобу `git show 9457272:<шлях>`. Інакше NO-GO:
+     різницю спершу комітять локально.
+   - 3 змінені файли — `git checkout --`, 7 нових — перенести в каталог бекапу вікна. Копію WIP **не відновлювати**:
+     після pull вона вже в дереві, а стара копія `ws_server.py` повернула б 6 лінивих викликів видаленого
+     `resolve_anchor_offset_ms` у `try`, що ковтають ImportError (relay — DEBUG, `h4_forming` — `ctx.warnings`). Це
+     S5c без S9a, порушення I5.
+   - `git status --porcelain` порожній → `git pull --ff-only` на очікуваному коміті: S1–S5c, S6a, S9a, код S7, config.
+   - G3: `load_system_config` без помилки; `grep -c resolve_anchor_offset_ms runtime/ws/ws_server.py` == 0; smoke
+     `.venv37`.
+4. S7 `plan → stage → validate`: staging поза `data_v3`, verify §3.8 на staging, «го» власника.
+5. `apply` з журналом (атомарна заміна part-файлів), потім V1–V9 на живому `data_v3`.
 6. Першим стартує `smc-fxcm`: `_bootstrap_warmup` → `uds.bootstrap_prime_from_disk` перезаповнює Redis-хвіст M1..H4
-   з диска [VERIFIED runtime/ingest/polling/m1_poller.py:918-932, runtime/store/uds.py:1244]. Лише потім — `smc-ws`
-   і `smc-preview`. Якщо ws стартує раніше, він прочитає старий хвіст.
+   з диска [VERIFIED runtime/ingest/polling/m1_poller.py:918-932, runtime/store/uds.py:1244]. Лише потім —
+   `smc-preview` і `smc-ws`. Якщо ws стартує раніше, він прочитає старий хвіст.
 7. Спостереження ≥ 120 с (D9.1): перший живий H4 на сітці 17:00 NY, ERROR/Traceback 0; audit v2 після.
 
-Кожен крок — окреме «го». Вікно — 26–27.09, якщо S1–S5, S7 і dry-run готові, інакше 03–04.10. Дедлайн — до 25.10
-(EU DST) і до активації GER30.
+**Відкат у вікні:** stop → `purge_derived_window rollback <журнал>` (запасний шлях — tgz) → код і config на `9457272`
+→ `smc-fxcm` → `smc-preview` → `smc-ws`. `9457272` = стан проду до вікна: HEAD проду з WIP ADR-0086 плюс адитивний
+S1 (`core/session_anchor.py`, код runtime його не імпортує). Голий HEAD проду без WIP прибрав би `/api/public/snapshot`
+[ASSUMED — verify: `ssh aione-vps 'git -C /opt/smc-v3 rev-parse --short HEAD'` ∈ {`dfca437`, `6eaaa0c`}].
+
+Кожен крок — окреме «го». Вікно — 26–27.09, якщо S1–S5c, S6a, S9a, S7 і dry-run готові, інакше 03–04.10. Дедлайн — до
+25.10 (EU DST) і до активації GER30.
 
 ---
 
@@ -349,7 +367,7 @@ S1–S5, S7 і міграція йдуть одним вікном. S6 — до 
 
 - **Код і конфіг:** revert слайсів; config повертає статичні ключі (копія config — у бекапі вікна).
 - **Дані в тому самому вікні (до відкриття ринку):** зупинити записувачів, повернути part-файли з `_backup_<ts>`
-  або tgz за маніфестом, revert коду, старт `smc-fxcm` → `smc-ws`, `smc-preview`.
+  або tgz за маніфестом, код і config на `9457272` (§3.9), старт `smc-fxcm` → `smc-preview` → `smc-ws`.
 - **Після відкриття ринку** живий шлях уже пише нову сітку. Відкат тоді вимагає ще й прибрати або перебудувати H4
   після дати міграції старим правилом (інструмент S7 з правилом legacy). Це дорожче, тому перевага — виправлення
   вперед.
@@ -368,6 +386,28 @@ S1–S5, S7 і міграція йдуть одним вікном. S6 — до 
 
 ## Changelog
 
+- 2026-09-23 — рев'ю S5c, шість знахідок. (1) Порядок вікна §3.9 був несумісний із S5c: деплой коду йшов кроком 5,
+  після перебудови, хоча інструмент S7 з нового дерева на старому config відмовить `CONFIG_LEGACY_ANCHOR_KEY`. Крок 2
+  зупиняв лише fxcm і preview, без ws. План міграції (поза репо) велів ще й зберегти й повернути WIP `ws_server.py`
+  після pull. WIP ADR-0086 уже закомічено як `9457272`, а в його `ws_server.py` 6 лінивих викликів видаленого
+  `resolve_anchor_offset_ms` у `try`, що ковтають ImportError. Повернута копія тихо відкотила б S9a: relay — DEBUG,
+  `h4_forming` — `ctx.warnings` (I5). §3.9 переписано: stop ws, preview, fxcm → бекап → звірка 10 шляхів WIP з
+  `9457272`, checkout і перенесення в бекап, дерево чисте → `git pull --ff-only` → G3 (`load_system_config`,
+  `resolve_anchor_offset_ms` у `ws_server.py` = 0, smoke `.venv37`) → S7 plan/stage/validate → apply → старт.
+  Відкат коду в тому самому вікні — на `9457272`, а не на голий HEAD проду: без WIP відкат прибрав би
+  `/api/public/snapshot`. Стара копія WIP, яку зберігав план для відкату, більше не потрібна; §7 узгоджено. Стан проду
+  не перевіряв (ssh заборонено): `rev-parse HEAD` і рівність WIP з `9457272` — перевірка кроку 3. (2) `dst_transition.md`
+  досі велів вписати 5 прибраних ключів, а `config_reference` стверджував протилежне. Банери скасування над обома
+  блоками Day Anchors і над кроками 3–5, крок 2 — лише календар; повний перепис лишається в S8 (`6e53da0`).
+  (3) Інвентар «Поза git» доповнено руйнівним `purge_rebuild_h4.py` (запис S5c нижче). Повний список untracked `.py` у
+  `core runtime tools app` з легасі-іменами — 5 файлів, усі тепер названо. (4) `RETIRED_ANCHOR_NAMES` охороняв лише
+  статичне API, а не валідатори «членства в alt» із §3.3. Додано `select_anchor_offset_for_open_ms`,
+  `_h4_anchor_offsets`, `_d1_anchor_offsets`, `anchor_offset_for_tf`, `_anchor_offset_alts_for_tf`,
+  `_legal_anchors_ms` (`2b7bd45`). (5) Тест гейта `d1_anchor_alignment` прибивав літеральний набір 5 символів:
+  активація GER30 почервонила б його без зв'язку з якорем. Тепер набір береться з config (`bc2e891`).
+  (6) **Відхилення від конвенції ≤ 150 рядків прод-коду на коміт.** `e848b7e` — повний перепис одного файлу гейта
+  (+167/−164, нетто +3), тести окремо (+148). Коміти не переписуються, а наступні переписи діляться: новий модуль і
+  тести окремо, перемикання маніфесту окремо. Рішення має статус Accepted, тому правку §3.9 треба показати власнику.
 - 2026-09-23 — cutover (слайс S5c). З `config.json` прибрано 7 легасі-ключів: `day_anchor_offset_s`, `_alt`, `_alt2`,
   `_d1`, `_d1_alt`, `binance.day_anchor_offset_s`, `binance.d1_anchor_offset_s`; якір H4/D1 тепер задає лише `htf_anchor`.
   `load_system_config` і `uds._load_cfg` (писар і читач) на будь-який із цих ключів, навіть зі значенням 0 чи null,
@@ -398,7 +438,11 @@ S1–S5, S7 і міграція йдуть одним вікном. S6 — до 
   `tools/tail_integrity_scanner.py` тихо бере дефолти 68400 і 0, тобто хибну сітку без помилки. `tools/backfill_cascade.py`
   передає видалені kwargs у `JsonlAppender` (запис падає з TypeError ще з S3a), а `tools/audit/fxcm_raw_compare.py` і
   `tools/audit/tv_mismatch_probe.py` (`FXCM_DAY_ANCHOR_OFFSET_S`) — у `FxcmHistoryProvider` (TypeError ще з S3c).
-  `live_cascade_monitor`, `anchor_compare_api` і `mpv_proof_pack` ключів не читають. Документи з легасі-ключами
+  Руйнівний `tools/_archive_bot/_archive_patches/purge_rebuild_h4.py` (доповнено рев'ю S5c) видаляє M5 `src=history` і
+  переписує H4 з H1 напряму `open(..., "w")`, повз валідатор `JsonlAppender`. З `--all` він бере
+  `cfg.get("day_anchor_offset_s", 79200)`, без `--all` — `--anchor 79200`, тож після S5c тихо будує статичну сітку
+  22/02/06, хибну влітку. Так само було й до S5c (у config стояло 79200). Рекомендація: видалити локально, як і
+  `tail_integrity_scanner`. `live_cascade_monitor`, `anchor_compare_api` і `mpv_proof_pack` ключів не читають. Документи з легасі-ключами
   (`.github/*`, `CLAUDE.md`, `dst_transition.md`, `system_current_overview.md`, `runtime/ingest/polling/README.md`)
   правлять у S8 після вікна. `docs/config_reference.md` виправлено в цьому слайсі.
 - 2026-09-23 — рев'ю S5b, ще один дефект, що існував і до S5b: `tools/rebuild_from_m1` фіналізував формуючий
