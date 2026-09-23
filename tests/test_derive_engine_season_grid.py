@@ -24,6 +24,7 @@ from core.session_anchor import (
     RULE_UTC_MIDNIGHT,
     assert_on_season_grid,
     htf_bucket_start_ms,
+    htf_next_bucket_start_ms,
 )
 from runtime.ingest import derive_engine as derive_engine_module
 from runtime.ingest.derive_engine import DeriveEngine, build_derive_engine
@@ -180,16 +181,25 @@ class _WeekdayCalendar:
         return not (t.weekday() == 6 and t.hour < 22)
 
 
-def test_holiday_friday_d1_built_on_sunday_reopen_across_dst_switch():
+def test_holiday_friday_d1_built_on_sunday_reopen_across_dst_switch(monkeypatch):
     """Святкова пт 30.10 (літо) стає D1 Чт 29.10 21:00, щойно відкрилась Нд 01.11 22:00 — уже зимова доба."""
+    attempts = _spy_derive_bar(monkeypatch)
     engine = DeriveEngine(symbols=[SYM], anchor_rules={SYM: FXCM}, calendars={SYM: _WeekdayCalendar()},
                           cascade_tfs_s={D1_S}, commit_tfs_s={D1_S})
-    engine.register_symbol_uds(SYM, _ok_uds())
+    uds = _ok_uds()
+    engine.register_symbol_uds(SYM, uds)
     bucket_open = _ms(2026, 10, 29, 21)
     early_close = _ms(2026, 10, 30, 17)
     day_minutes = (early_close - bucket_open - H1_MS) // 60_000  # мінус перерва 21:00–22:00
     engine.warmup_bars([_bar(60, bucket_open + H1_MS + i * 60_000) for i in range(day_minutes)])
-    assert engine.check_overdue_buckets(now_ms=early_close + 3 * H1_MS) == []
+
+    # Сб 12:00: бакет уже прострочений за часом (закрився пт 21:00), а фронтир ADR-0097 ще ні — до відкриття
+    # в неділю святкову добу final-ом не фіксуємо. Overdue мусить цей бакет розглянути, інакше перевірка порожня
+    saturday = _ms(2026, 10, 31, 12)
+    assert htf_next_bucket_start_ms(bucket_open, D1_S, FXCM) <= saturday
+    assert engine.check_overdue_buckets(now_ms=saturday) == []
+    assert (D1_S, bucket_open) in attempts
+    uds.commit_final_bar.assert_not_called()
 
     sunday_reopen = _ms(2026, 11, 1, 22)
     engine.warmup_bars([_bar(60, sunday_reopen)])

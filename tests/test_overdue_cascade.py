@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 
 from core.derive import DERIVE_CHAIN, DERIVE_ORDER, GenericBuffer
 from core.model.bars import CandleBar
-from core.session_anchor import RULE_NY_CLOSE_US_DST
+from core.session_anchor import RULE_NY_CLOSE_US_DST, htf_next_bucket_start_ms
 from runtime.ingest.derive_engine import DeriveEngine
 
 FXCM = RULE_NY_CLOSE_US_DST
@@ -273,7 +273,12 @@ class TestOverdueHolidayD1:
         day_minutes = (early_close - bucket_open - 3_600_000) // 60_000  # мінус break 21:00–22:00
         engine.warmup_bars(_make_m1_bars(sym, bucket_open + 3_600_000, day_minutes))
 
-        assert engine.check_overdue_buckets(now_ms=early_close + 3 * 3_600_000) == []
+        # Сб 12:00: бакет уже прострочений за часом (закрився пт 21:00), фронтир ще ні — final-ом не фіксуємо.
+        # Раніше перевірка йшла о пт 20:00, коли бакет ще поточний і overdue його не розглядав (порожня перевірка)
+        saturday = int(datetime.datetime(2026, 7, 4, 12, 0, tzinfo=utc).timestamp() * 1000)
+        assert htf_next_bucket_start_ms(bucket_open, 86400, FXCM) <= saturday
+        assert engine.check_overdue_buckets(now_ms=saturday) == []
+        uds.commit_final_bar.assert_not_called()
 
         engine.warmup_bars([_make_bar(sym, 60, sunday_reopen)])
         committed = engine.check_overdue_buckets(now_ms=sunday_reopen + 60_000)
