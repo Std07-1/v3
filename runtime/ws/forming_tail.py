@@ -24,19 +24,39 @@ import logging
 import math
 from typing import Any, Callable, Optional, Sequence
 
-from core.session_anchor import H4_S, htf_next_bucket_start_ms
+from core.session_anchor import H4_S, OffSeasonGridError, assert_on_season_grid, htf_next_bucket_start_ms
 from runtime.ws.candle_map import map_bar_to_candle_v4
 
 _log = logging.getLogger(__name__)
+
+
+def _required_anchor_rule(tf_s: int, anchor_rule: Optional[str]) -> str:
+    if anchor_rule is None:
+        raise ValueError("anchor_rule_missing tf_s=%d — формуюча H4/D1 потребує правила якоря (ADR-0095 S9a)" % tf_s)
+    return anchor_rule
+
+
+def _off_season_grid(open_ms: int, tf_s: int, anchor_rule: Optional[str]) -> bool:
+    """H4/D1: preview-бар поза сезонною сіткою символу (ADR-0095 §3.3) → WARNING і True; M1..H1 → False.
+
+    Джерело — ключі preview:curr/tail воркера на старій сітці, що живуть до TTL. Писар, provider і health такий
+    бар уже гучно відкидають; без цієї перевірки хвіст full-кадру малював би другу свічку поверх бакета сітки.
+    """
+    if tf_s < H4_S:
+        return False
+    try:
+        assert_on_season_grid(open_ms, tf_s, _required_anchor_rule(tf_s, anchor_rule))
+    except OffSeasonGridError as exc:
+        _log.warning("WS_FORMING_TAIL_OFF_SEASON_GRID %s — preview не йде у хвіст full-кадру", exc)
+        return True
+    return False
 
 
 def _bucket_end_ms(open_ms: int, tf_s: int, anchor_rule: Optional[str]) -> int:
     """Кінець бакета формуючої: M1..H1 — open + tf; H4/D1 — початок наступного бакета сезонної сітки (ADR-0095)."""
     if tf_s < H4_S:
         return open_ms + tf_s * 1000
-    if anchor_rule is None:
-        raise ValueError("anchor_rule_missing tf_s=%d — формуюча H4/D1 потребує правила якоря (ADR-0095 S9a)" % tf_s)
-    return htf_next_bucket_start_ms(open_ms, tf_s, anchor_rule)
+    return htf_next_bucket_start_ms(open_ms, tf_s, _required_anchor_rule(tf_s, anchor_rule))
 
 
 def _candle_shape_ok(candle: dict) -> bool:
@@ -58,8 +78,8 @@ def select_forming_candle(
 ) -> Optional[dict]:
     """Формуюча свічка (формат candle_map: t_ms/o/h/l/c/v) для хвоста full-кадру або None.
 
-    None, якщо: preview порожній; останній preview-бар complete; його бакет не містить now_ms;
-    фінал цього чи пізнішого бакета вже є серед final_candles (I3: final > preview).
+    None, якщо: preview порожній; останній preview-бар complete; H4/D1 поза сезонною сіткою (WARNING);
+    його бакет не містить now_ms; фінал цього чи пізнішого бакета вже є серед final_candles (I3: final > preview).
     `anchor_rule` (правило якоря символу) обов'язковий для H4/D1: без нього — ValueError `anchor_rule_missing`.
     """
     if not preview_bars or tf_s <= 0:
@@ -74,6 +94,8 @@ def select_forming_candle(
         _log.warning("WS_FORMING_TAIL_BAD_SHAPE tf_s=%s candle=%s", tf_s, candle)
         return None
     open_ms = candle["t_ms"]
+    if _off_season_grid(open_ms, tf_s, anchor_rule):
+        return None
     if not open_ms <= now_ms < _bucket_end_ms(open_ms, tf_s, anchor_rule):
         return None
     if final_candles:

@@ -159,6 +159,43 @@ def test_select_forming_candle_h4_without_anchor_rule_raises():
         select_forming_candle([], [_lwc(_FALL_STUB_H4_MS)], tf_s=H4_S, now_ms=now_ms)
 
 
+def _utc_ms(*args: int) -> int:
+    return int(dt.datetime(*args, tzinfo=dt.timezone.utc).timestamp() * 1000)
+
+
+# Ср 23.09.2026 (літо): сітка H4 = 21/01/05/09/13/17; ключ старого воркера — 22/02/../18, D1 — 22:00
+_OFF_GRID_CASES = [
+    pytest.param(H4_S, _utc_ms(2026, 9, 23, 13), _utc_ms(2026, 9, 23, 18), _utc_ms(2026, 9, 23, 19), id="h4_18_00"),
+    pytest.param(D1_S, _utc_ms(2026, 9, 21, 21), _utc_ms(2026, 9, 22, 22), _utc_ms(2026, 9, 22, 23), id="d1_22_00"),
+]
+
+
+@pytest.mark.parametrize("tf_s,last_final_ms,preview_open_ms,now_ms", _OFF_GRID_CASES)
+def test_select_forming_candle_htf_off_season_grid_preview_returns_none_and_warns(
+    caplog, tf_s, last_final_ms, preview_open_ms, now_ms
+):
+    """Preview старої сітки (ключ до TTL) не стає формуючою поверх бакета сітки — і не мовчки (I5)."""
+    with caplog.at_level("WARNING"):
+        candle = select_forming_candle(
+            [_final(last_final_ms)], [_lwc(preview_open_ms)], tf_s=tf_s, now_ms=now_ms, anchor_rule=RULE_NY_CLOSE_US_DST
+        )
+    assert candle is None
+    warnings = [r.getMessage() for r in caplog.records if "WS_FORMING_TAIL_OFF_SEASON_GRID" in r.getMessage()]
+    assert len(warnings) == 1 and "open_ms=%d" % preview_open_ms in warnings[0]
+
+
+def test_select_forming_candle_h4_on_season_grid_after_final_is_returned():
+    """Контроль до off-grid: той самий день, preview на бакеті сітки 17:00 після фіналу 13:00 — формуюча."""
+    candle = select_forming_candle(
+        [_final(_utc_ms(2026, 9, 23, 13))],
+        [_lwc(_utc_ms(2026, 9, 23, 17))],
+        tf_s=H4_S,
+        now_ms=_utc_ms(2026, 9, 23, 19),
+        anchor_rule=RULE_NY_CLOSE_US_DST,
+    )
+    assert candle is not None and candle["t_ms"] == _utc_ms(2026, 9, 23, 17)
+
+
 # ── Impure: реальний UDS reader над RedisLayer ─────────────────────────
 
 
