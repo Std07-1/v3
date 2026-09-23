@@ -26,6 +26,21 @@ _EPOCH = dt.date(1970, 1, 1)
 # 17:00 Нью-Йорка в UTC
 _NY_CLOSE_SUMMER_MS = 21 * 3_600_000
 _NY_CLOSE_WINTER_MS = 22 * 3_600_000
+_LONGEST_DAY_MS = 25 * 3_600_000  # доба осінніх вихідних переходу DST
+
+
+class OffSeasonGridError(ValueError):
+    """Бар H4/D1 не на сезонній сітці свого символу (ADR-0095 §3.3): гучна відмова з очікуваним відкриттям."""
+
+    def __init__(self, tf_s: int, open_ms: int, expected_open_ms: int, rule: str) -> None:
+        self.tf_s = tf_s
+        self.open_ms = open_ms
+        self.expected_open_ms = expected_open_ms
+        self.rule = rule
+        super().__init__(
+            "bar_off_season_grid tf_s=%d open_ms=%d expected_open_ms=%d rule=%s season=%s"
+            % (tf_s, open_ms, expected_open_ms, rule, season_label(open_ms, rule))
+        )
 
 
 def trading_day_open_ms(ts_ms: int, rule: str) -> int:
@@ -62,6 +77,39 @@ def htf_bucket_start_ms(ts_ms: int, tf_s: int, rule: str) -> int:
     if tf_s == D1_S:
         return open_ms
     return open_ms + ((ts_ms - open_ms) // _H4_MS) * _H4_MS
+
+
+def htf_next_bucket_start_ms(bucket_start_ms: int, tf_s: int, rule: str) -> int:
+    """Початок наступного бакета = кінець вікна агрегації бакета `bucket_start_ms` (не open + tf).
+
+    H4 не перетинає межу торгового дня: останній H4 доби на 23 год має 3 год, на 25 год — 1 год (обрубок). D1 —
+    до відкриття наступного торгового дня (23/24/25 год). M1..H1 — open + tf.
+    """
+    _require_rule(rule)
+    if tf_s < H4_S:
+        return bucket_start_ms + tf_s * 1000
+    _require_htf(tf_s)
+    day_open_ms = trading_day_open_ms(bucket_start_ms, rule)
+    next_day_open_ms = trading_day_open_ms(day_open_ms + _LONGEST_DAY_MS, rule)
+    if tf_s == D1_S:
+        return next_day_open_ms
+    return min(bucket_start_ms + _H4_MS, next_day_open_ms)
+
+
+def assert_on_season_grid(open_ms: int, tf_s: int, rule: str) -> None:
+    """Рівність сезонній сітці, а не членство в наборі якорів (ADR-0095 §3.3). Інакше — OffSeasonGridError."""
+    expected_open_ms = htf_bucket_start_ms(open_ms, tf_s, rule)
+    if expected_open_ms != open_ms:
+        raise OffSeasonGridError(tf_s, open_ms, expected_open_ms, rule)
+
+
+def season_label(ts_ms: int, rule: str) -> str:
+    """Сезон торгового дня моменту: summer | winter для ny_close_us_dst, none для utc_midnight."""
+    _require_rule(rule)
+    if rule == RULE_UTC_MIDNIGHT:
+        return "none"
+    open_ms = trading_day_open_ms(ts_ms, rule)
+    return "summer" if open_ms % _DAY_MS == _NY_CLOSE_SUMMER_MS else "winter"
 
 
 def is_us_summer(day: dt.date) -> bool:
