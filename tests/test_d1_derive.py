@@ -4,18 +4,16 @@
 
 Перевіряє:
 1. D1 (86400) є в DERIVE_CHAIN, DERIVE_ORDER, DERIVE_SOURCE.
-2. resolve_cascade_anchor_s() повертає правильний anchor для D1/H4/інших TF.
-3. derive_triggers() з d1_anchor_offset_s розрізняє D1 vs H4 anchor.
+2. resolve_cascade_anchor_s() (легасі, живе до S5c ADR-0095: gate_d1_anchor_alignment) — routing по TF.
+3. derive_triggers() на правилі якоря ADR-0095: D1 і H4 взимку на одній сітці 22:00 (79200).
 4. derive_bar() для D1 з ~1440 M1 барів (boundary-tolerant).
-5. DeriveEngine каскадує D1 через on_bar() з M1.
+5. Невідоме правило якоря — гучна відмова, а не тихий якір.
 
-Рівень: core + runtime.
+Рівень: core.
 """
 from __future__ import annotations
 
 import unittest
-from typing import Any, Dict, Optional
-from unittest.mock import MagicMock
 
 from core.derive import (
     DERIVE_CHAIN,
@@ -28,22 +26,23 @@ from core.derive import (
     resolve_cascade_anchor_s,
 )
 from core.model.bars import CandleBar
+from core.session_anchor import RULE_NY_CLOSE_US_DST, htf_anchor_offset_s
 
 
 # ---------------------------------------------------------------------------
 # Константи для тестування
 # ---------------------------------------------------------------------------
-H4_ANCHOR = 82800   # 23:00 UTC
-D1_ANCHOR = 79200   # 22:00 UTC (5PM EST)
+H4_ANCHOR = 82800   # легасі-ключ 23:00 UTC — лише для resolve_cascade_anchor_s
+D1_ANCHOR = 79200   # 22:00 UTC = 17:00 Нью-Йорка взимку (EST)
+FXCM = RULE_NY_CLOSE_US_DST
 M1_TF_S = 60
 D1_TF_S = 86400
 H4_TF_S = 14400
 D1_TF_MS = D1_TF_S * 1000
 M1_TF_MS = M1_TF_S * 1000
 
-# D1 bucket: 2026-02-26 22:00 UTC → 2026-02-27 22:00 UTC
+# D1 bucket: 2026-02-26 22:00 UTC → 2026-02-27 22:00 UTC (зима: відкриття торгового дня 22:00, доба 24 год)
 # open_ms = 1772143200000 (Thu 2026-02-26 22:00:00 UTC)
-# Aligned: (1772143200000 - 79200000) % 86400000 == 0
 D1_BUCKET_OPEN_MS = 1772143200000
 
 
@@ -127,18 +126,14 @@ class TestResolveCascadeAnchor(unittest.TestCase):
 
 
 class TestDeriveTriggerD1(unittest.TestCase):
-    """derive_triggers() для D1 — використовує d1_anchor_offset_s."""
+    """derive_triggers() для D1 — бакет з правила якоря (ADR-0095), не з секунд config."""
 
     def test_last_m1_triggers_d1(self) -> None:
         """Останній M1 у D1 bucket має тригернути D1 derive."""
         # Останній M1 у bucket = bucket_end - M1_TF_MS
         last_m1_open = D1_BUCKET_OPEN_MS + D1_TF_MS - M1_TF_MS
         bar = _make_m1(last_m1_open)
-        triggers = derive_triggers(
-            bar,
-            anchor_offset_s=H4_ANCHOR,
-            d1_anchor_offset_s=D1_ANCHOR,
-        )
+        triggers = derive_triggers(bar, anchor_rule=FXCM)
         d1_triggers = [(t, o) for t, o in triggers if t == D1_TF_S]
         self.assertEqual(len(d1_triggers), 1)
         self.assertEqual(d1_triggers[0][1], D1_BUCKET_OPEN_MS)
@@ -146,13 +141,32 @@ class TestDeriveTriggerD1(unittest.TestCase):
     def test_non_last_m1_no_d1_trigger(self) -> None:
         """M1 на початку D1 bucket НЕ тригерить D1."""
         bar = _make_m1(D1_BUCKET_OPEN_MS)
-        triggers = derive_triggers(
-            bar,
-            anchor_offset_s=H4_ANCHOR,
-            d1_anchor_offset_s=D1_ANCHOR,
-        )
+        triggers = derive_triggers(bar, anchor_rule=FXCM)
         d1_triggers = [(t, o) for t, o in triggers if t == D1_TF_S]
         self.assertEqual(len(d1_triggers), 0)
+
+    def test_winter_h4_and_d1_share_anchor_79200(self) -> None:
+        """26.02.2026 (зима): H4 == D1 == 79200 — H4 = D1/6, окремого якоря H4 більше нема (ADR-0095 §3.4)."""
+        self.assertEqual(htf_anchor_offset_s(H4_TF_S, D1_BUCKET_OPEN_MS, FXCM), D1_ANCHOR)
+        self.assertEqual(htf_anchor_offset_s(D1_TF_S, D1_BUCKET_OPEN_MS, FXCM), D1_ANCHOR)
+        h1_buf = GenericBuffer(3600, max_keep=16)
+        for k in range(4):
+            open_ms = D1_BUCKET_OPEN_MS + k * 3_600_000
+            h1_buf.upsert(CandleBar(symbol="XAU/USD", tf_s=3600, open_time_ms=open_ms,
+                                    close_time_ms=open_ms + 3_600_000, o=100.0, h=101.0, low=99.0, c=100.0,
+                                    v=1, complete=True, src="derived"))
+        h4 = derive_bar(symbol="XAU/USD", target_tf_s=H4_TF_S, source_buffer=h1_buf,
+                        bucket_open_ms=D1_BUCKET_OPEN_MS, anchor_rule=FXCM)
+        self.assertIsNotNone(h4)
+        self.assertEqual(h4.open_time_ms, D1_BUCKET_OPEN_MS)
+
+    def test_unknown_anchor_rule_is_refused_loudly(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown htf anchor rule"):
+            derive_triggers(_make_m1(D1_BUCKET_OPEN_MS), anchor_rule="tv_anchor_79200")
+        buf = GenericBuffer(M1_TF_S, max_keep=2000)
+        with self.assertRaisesRegex(ValueError, "unknown htf anchor rule"):
+            derive_bar(symbol="XAU/USD", target_tf_s=D1_TF_S, source_buffer=buf,
+                       bucket_open_ms=D1_BUCKET_OPEN_MS, anchor_rule="tv_anchor_79200")
 
 
 class TestDeriveBarD1(unittest.TestCase):
@@ -173,8 +187,7 @@ class TestDeriveBarD1(unittest.TestCase):
             target_tf_s=D1_TF_S,
             source_buffer=buf,
             bucket_open_ms=D1_BUCKET_OPEN_MS,
-            anchor_offset_s=H4_ANCHOR,
-            d1_anchor_offset_s=D1_ANCHOR,
+            anchor_rule=FXCM,
         )
         self.assertIsNotNone(result)
         self.assertEqual(result.tf_s, D1_TF_S)
@@ -190,8 +203,7 @@ class TestDeriveBarD1(unittest.TestCase):
             target_tf_s=D1_TF_S,
             source_buffer=buf,
             bucket_open_ms=D1_BUCKET_OPEN_MS,
-            anchor_offset_s=H4_ANCHOR,
-            d1_anchor_offset_s=D1_ANCHOR,
+            anchor_rule=FXCM,
         )
         self.assertIsNone(result)
 
@@ -215,8 +227,7 @@ class TestDeriveBarD1(unittest.TestCase):
             target_tf_s=D1_TF_S,
             source_buffer=buf,
             bucket_open_ms=D1_BUCKET_OPEN_MS,
-            anchor_offset_s=H4_ANCHOR,
-            d1_anchor_offset_s=D1_ANCHOR,
+            anchor_rule=FXCM,
             is_trading_fn=is_trading,
         )
         self.assertIsNotNone(result)
@@ -243,8 +254,7 @@ class TestD1BuiltFromAvailableMinutes(unittest.TestCase):
             target_tf_s=target_tf_s,
             source_buffer=buf,
             bucket_open_ms=bucket_open_ms,
-            anchor_offset_s=H4_ANCHOR,
-            d1_anchor_offset_s=D1_ANCHOR,
+            anchor_rule=FXCM,
             is_trading_fn=_session_calendar(D1_BUCKET_OPEN_MS, self.SESSION_MIN),
         )
 

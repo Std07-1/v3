@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.config_loader import pick_config_path, load_system_config
 from core.model.bars import CandleBar, ms_to_utc_dt
 from env_profile import load_env_secrets
-from runtime.ingest.derive_engine import DeriveEngine
+from runtime.ingest.derive_engine import DeriveEngine, build_derive_engine
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.m1_session_filter import (
     DEFAULT_PAUSE_POLICY,
@@ -1678,33 +1678,19 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
     derive_engine: Optional[DeriveEngine] = None
     derive_enabled = bool(m1_cfg.get("derive_engine_enabled", True))
     if derive_enabled:
-        anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
-        # ADR-0023: D1 anchor (22:00 UTC = 79200s)
-        d1_anchor_offset_s = int(cfg.get("day_anchor_offset_s_d1", 0))
         # Calendar per symbol для DeriveEngine
         calendars_for_engine: Dict[str, MarketCalendar] = {
             sym: calendars[sym] for sym in symbols
         }
 
-        derive_engine = DeriveEngine(
-            symbols=symbols,
-            anchor_offset_s=anchor_offset_s,
-            d1_anchor_offset_s=d1_anchor_offset_s,
-            calendars=calendars_for_engine,
-        )
+        # Правило якоря H4/D1 на символ — лише через фабрику (ADR-0095 S4a); вона ж логує DERIVE_ENGINE_WIRED
+        derive_engine = build_derive_engine(cfg, symbols, calendars_for_engine)
         # Shared UDS: DeriveEngine коммітить через той же UDS (без file race)
         for sym in symbols:
             derive_engine.register_symbol_uds(sym, uds)
         # Inject DeriveEngine в кожен per-symbol poller
         for p in pollers:
             p._derive_engine = derive_engine  # noqa: SLF001
-        logging.info(
-            "DERIVE_ENGINE_WIRED symbols=%d anchor_offset_s=%d d1_anchor=%d commit_tfs=%s",
-            len(symbols),
-            anchor_offset_s,
-            d1_anchor_offset_s,
-            sorted(derive_engine._commit_tfs_s),  # noqa: SLF001
-        )
 
     # Redis tail_n для priming M1→H4 (всі TF, якими керує m1_poller)
     # Без прайминґу derived TF (M5-H4) put_bar() створює порожні deque

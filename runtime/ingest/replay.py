@@ -33,7 +33,7 @@ from core.config_loader import pick_config_path, load_system_config
 from core.model.bar_choice import choose_better_bar
 from core.model.bars import CandleBar
 from env_profile import load_env_secrets
-from runtime.ingest.derive_engine import DeriveEngine
+from runtime.ingest.derive_engine import build_derive_engine
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.tick_common import calendar_from_group
 from runtime.store.uds import build_uds_from_config
@@ -223,6 +223,19 @@ def run_replay(
     cfg = load_system_config(config_path)
     data_root = str(cfg.get("data_root", "./data_v3"))
 
+    # --- DeriveEngine: config і правило якоря H4/D1 перевіряються ДО очищення namespace Redis (ADR-0095 S4a) ---
+    cal_by_group = cfg.get("market_calendar_by_group", {})
+    cal_sym_groups = cfg.get("market_calendar_symbol_groups", {})
+    calendars: Dict[str, MarketCalendar] = {}
+    for sym in symbols:
+        group = cal_sym_groups.get(sym)
+        if group and isinstance(cal_by_group.get(group), dict):
+            cal_obj = calendar_from_group(cal_by_group[group])
+            if cal_obj is not None:
+                calendars[sym] = cal_obj
+
+    engine = build_derive_engine(cfg, symbols, calendars)
+
     # --- Flush Redis namespace (clean slate для replay) ---
     _flush_redis_namespace(cfg)
 
@@ -265,34 +278,13 @@ def run_replay(
                 tail_cfg[tf_key] = min(_REPLAY_TAIL_MAX, int(old_val))
             log.info("REPLAY_TAIL_REDUCED max=%d (was up to 10080)", _REPLAY_TAIL_MAX)
 
-    # --- DeriveEngine ---
-    anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
-    d1_anchor_offset_s = int(cfg.get("day_anchor_offset_s_d1", 0))
-
-    cal_by_group = cfg.get("market_calendar_by_group", {})
-    cal_sym_groups = cfg.get("market_calendar_symbol_groups", {})
-    calendars: Dict[str, MarketCalendar] = {}
-    for sym in symbols:
-        group = cal_sym_groups.get(sym)
-        if group and isinstance(cal_by_group.get(group), dict):
-            cal_obj = calendar_from_group(cal_by_group[group])
-            if cal_obj is not None:
-                calendars[sym] = cal_obj
-
-    engine = DeriveEngine(
-        symbols=symbols,
-        anchor_offset_s=anchor_offset_s,
-        d1_anchor_offset_s=d1_anchor_offset_s,
-        calendars=calendars,
-    )
+    # --- DeriveEngine (зібраний до flush) коммітить через цей UDS ---
     for sym in symbols:
         engine.register_symbol_uds(sym, uds)
 
     log.info(
-        "REPLAY_ENGINE_READY symbols=%s anchor=%d d1_anchor=%d speed=%s",
+        "REPLAY_ENGINE_READY symbols=%s speed=%s",
         symbols,
-        anchor_offset_s,
-        d1_anchor_offset_s,
         "instant" if speed == 0 else f"{speed}x",
     )
 

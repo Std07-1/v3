@@ -18,7 +18,10 @@ commit_tfs_s контролює які TF коммітяться в UDS:
 Thread-safety: per-symbol lock для cascade integrity.
 Викликається з m1_poller per-symbol threads.
 
-ADR: ADR-0002 (DeriveChain M1→H4), Phase 2.
+Якір H4/D1 — правило символу (ADR-0095): бакет і крок назад — по сезонній сітці `core.session_anchor`,
+не `open + tf`. Будівники створюють рушій лише через `build_derive_engine(cfg, ...)`.
+
+ADR: ADR-0002 (DeriveChain M1→H4), Phase 2; ADR-0095 S4a (сезонний якір).
 """
 
 from __future__ import annotations
@@ -26,8 +29,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
+from core.config_loader import htf_anchor_rule_resolver
 from core.derive import (
     DERIVE_CHAIN,
     DERIVE_ORDER,
@@ -35,10 +39,9 @@ from core.derive import (
     GenericBuffer,
     derive_bar,
     derive_triggers,
-    resolve_cascade_anchor_s,
 )
 from core.model.bars import CandleBar
-from core.buckets import bucket_start_ms as _bucket_start_ms
+from core.session_anchor import HTF_ANCHOR_RULES, htf_bucket_start_ms, htf_next_bucket_start_ms
 from runtime.store.uds import UnifiedDataStore
 
 log = logging.getLogger("derive_engine")
@@ -79,8 +82,7 @@ class DeriveEngine:
     def __init__(
         self,
         symbols: List[str],
-        anchor_offset_s: int = 0,
-        d1_anchor_offset_s: int = 0,
+        anchor_rules: Mapping[str, str],
         calendars: Optional[Dict[str, Any]] = None,
         cascade_tfs_s: Optional[Set[int]] = None,
         commit_tfs_s: Optional[Set[int]] = None,
@@ -88,15 +90,22 @@ class DeriveEngine:
         """
         Args:
             symbols: список символів.
-            anchor_offset_s: TV anchor offset для H4 (config: day_anchor_offset_s).
-            d1_anchor_offset_s: D1 anchor offset (config: day_anchor_offset_s_d1, ADR-0023).
+            anchor_rules: {symbol: правило якоря H4/D1} (ADR-0095, `htf_anchor_rule_resolver`). Символ без
+                правила або невідоме правило — ValueError тут, а не тихий якір 0 на першому H4.
             calendars: {symbol: MarketCalendar} — calendar per symbol.
             cascade_tfs_s: TFs для деривації (default: DERIVE_ORDER).
-            commit_tfs_s: TFs для UDS commit (default: {180, 14400}).
+            commit_tfs_s: TFs для UDS commit (default: DERIVE_ORDER).
         """
+        missing = sorted(s for s in symbols if s not in anchor_rules)
+        if missing:
+            raise ValueError("DERIVE_ENGINE_ANCHOR_RULE_MISSING symbols=%s (ADR-0095 S4a)" % missing)
+        unknown = sorted(s for s in symbols if anchor_rules[s] not in HTF_ANCHOR_RULES)
+        if unknown:
+            raise ValueError(
+                "DERIVE_ENGINE_ANCHOR_RULE_UNKNOWN symbols=%s allowed=%s" % (unknown, sorted(HTF_ANCHOR_RULES))
+            )
         self._symbols = set(symbols)
-        self._anchor_offset_s = anchor_offset_s
-        self._d1_anchor_offset_s = d1_anchor_offset_s
+        self._anchor_rules: Dict[str, str] = {s: anchor_rules[s] for s in symbols}
         self._calendars: Dict[str, Any] = dict(calendars or {})
         self._cascade_tfs_s: Set[int] = set(cascade_tfs_s or DERIVE_ORDER)
         self._commit_tfs_s: Set[int] = set(
@@ -121,12 +130,10 @@ class DeriveEngine:
         self._start_ts = time.time()
 
         log.info(
-            "DeriveEngine init: symbols=%d cascade=%s commit=%s anchor=%d d1_anchor=%d",
+            "DeriveEngine init: symbols=%d cascade=%s commit=%s",
             len(symbols),
             sorted(self._cascade_tfs_s),
             sorted(self._commit_tfs_s),
-            anchor_offset_s,
-            d1_anchor_offset_s,
         )
 
     # -------------------------------------------------------------------
@@ -261,6 +268,7 @@ class DeriveEngine:
         uds = self._uds_by_symbol.get(symbol)
         if uds is None:
             return committed
+        rule = self._anchor_rules[symbol]
 
         # Перевіряємо кожен target TF, починаючи з найменших
         # (щоб M5 з'явився до того, як перевіряємо M15)
@@ -274,19 +282,14 @@ class DeriveEngine:
             if source_buf is None:
                 continue
 
-            target_tf_ms = target_tf_s * 1000
-            anchor = resolve_cascade_anchor_s(
-                target_tf_s, self._anchor_offset_s, self._d1_anchor_offset_s
-            )
-            anchor_ms = anchor * 1000
-
-            # Поточний bucket
-            cur_bucket = _bucket_start_ms(now_ms, target_tf_ms, anchor_ms)
+            # Поточний bucket і крок назад — по сезонній сітці (ADR-0095 S4a): на вихідних переходу DST доба має
+            # 23/25 год, тож `cur - tf*i` для H4/D1 виходить за сітку (пн 09.03, пн 02.11)
+            prev_bucket = htf_bucket_start_ms(now_ms, target_tf_s, rule)
 
             # Скануємо N попередніх bucket-ів (не лише 1)
             lookback = self._OVERDUE_LOOKBACK.get(target_tf_s, 2)
             for i in range(1, lookback + 1):
-                prev_bucket = cur_bucket - target_tf_ms * i
+                prev_bucket = htf_bucket_start_ms(prev_bucket - 1, target_tf_s, rule)
 
                 # Перевірка: чи вже є derived бар у target буфері
                 target_buf = self._buffers.get((symbol, target_tf_s))
@@ -299,10 +302,9 @@ class DeriveEngine:
                     target_tf_s=target_tf_s,
                     source_buffer=source_buf,
                     bucket_open_ms=prev_bucket,
-                    anchor_offset_s=anchor,
-                    d1_anchor_offset_s=self._d1_anchor_offset_s,
                     is_trading_fn=is_trading_fn,
                     filter_calendar_pause=True,
+                    anchor_rule=rule,
                 )
                 if derived is None:
                     continue
@@ -322,7 +324,20 @@ class DeriveEngine:
                             derived.open_time_ms,
                             i,
                         )
-                    # stale/duplicate — тиха ситуація, бар вже є
+                    elif result.reason not in ("stale", "duplicate"):
+                        # Писар відмовив (I5): не каскадуємо — вищий TF не будується з бару, якого нема на диску;
+                        # бакет не потрапляє в буфер, тож наступна перевірка спробує його знову
+                        self._stats_rejected += 1
+                        log.warning(
+                            "OVERDUE_DERIVE_REJECT tf=%d sym=%s open=%d reason=%s lookback=%d",
+                            target_tf_s,
+                            symbol,
+                            derived.open_time_ms,
+                            result.reason,
+                            i,
+                        )
+                        continue
+                    # stale/duplicate — бар уже є: каскад продовжуємо
 
                 # Каскад: буферизуємо + рекурсивна деривація вище
                 # (overdue M5 → може побудувати M15 → M30 → H1 → H4)
@@ -364,12 +379,8 @@ class DeriveEngine:
 
         # 3. Triggers (calendar-aware: знаходить останній TRADING source
         #    слот у bucket, а не номінальний — фіксить H4 19:00 тощо)
-        triggers = derive_triggers(
-            bar,
-            anchor_offset_s=self._anchor_offset_s,
-            is_trading_fn=is_trading_fn,
-            d1_anchor_offset_s=self._d1_anchor_offset_s,
-        )
+        rule = self._anchor_rules[symbol]
+        triggers = derive_triggers(bar, is_trading_fn=is_trading_fn, anchor_rule=rule)
         if not triggers:
             return committed
 
@@ -388,27 +399,20 @@ class DeriveEngine:
             if source_buf is None:
                 continue
 
-            # Anchor offset — централізований routing (ADR-0023)
-            anchor = resolve_cascade_anchor_s(
-                target_tf_s, self._anchor_offset_s, self._d1_anchor_offset_s
-            )
-
             derived = derive_bar(
                 symbol=symbol,
                 target_tf_s=target_tf_s,
                 source_buffer=source_buf,
                 bucket_open_ms=bucket_open_ms,
-                anchor_offset_s=anchor,
-                d1_anchor_offset_s=self._d1_anchor_offset_s,
                 is_trading_fn=is_trading_fn,
                 filter_calendar_pause=True,
+                anchor_rule=rule,
             )
             if derived is None:
                 # DIAG: лог чому derive_bar повернув None
                 if target_tf_s in (300, 900, 1800, 3600, 14400, 86400):
                     src_tf_s = source_info[0]
-                    tgt_ms = target_tf_s * 1000
-                    b_end = bucket_open_ms + tgt_ms
+                    b_end = htf_next_bucket_start_ms(bucket_open_ms, target_tf_s, rule)
                     miss = source_buf.missing_count(
                         bucket_open_ms, b_end, is_trading_fn=is_trading_fn
                     )
@@ -463,3 +467,25 @@ class DeriveEngine:
             committed.extend(further)
 
         return committed
+
+
+def build_derive_engine(
+    cfg: Mapping[str, Any],
+    symbols: List[str],
+    calendars: Optional[Dict[str, Any]] = None,
+) -> DeriveEngine:
+    """Єдиний будівник DeriveEngine для записувачів (ADR-0095 S4a, D15.2).
+
+    Правило якоря кожного символу — з `htf_anchor_rule_resolver(cfg)`: невалідна секція `htf_anchor` чи символ
+    невиміряної групи дають ValueError до старту деривації, а не тихий якір.
+    """
+    rule_for_symbol = htf_anchor_rule_resolver(dict(cfg))
+    rules = {sym: rule_for_symbol(sym) for sym in symbols}
+    engine = DeriveEngine(symbols=symbols, anchor_rules=rules, calendars=calendars)
+    log.info(
+        "DERIVE_ENGINE_WIRED symbols=%d rules=%s commit_tfs=%s",
+        len(symbols),
+        rules,
+        sorted(engine._commit_tfs_s),
+    )
+    return engine

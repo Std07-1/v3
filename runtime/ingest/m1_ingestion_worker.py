@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.config_loader import pick_config_path, load_system_config
 from core.model.bars import CandleBar
 from env_profile import load_env_secrets
-from runtime.ingest.derive_engine import DeriveEngine
+from runtime.ingest.derive_engine import DeriveEngine, build_derive_engine
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.m1_session_filter import resolve_flat_max_volume, resolve_pause_policy
 from runtime.ingest.polling.m1_poller import (
@@ -328,29 +328,17 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
     derive_engine: Optional[DeriveEngine] = None
     derive_enabled = bool(m1_cfg.get("derive_engine_enabled", True))
     if derive_enabled:
-        anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
-        d1_anchor_offset_s = int(cfg.get("day_anchor_offset_s_d1", 0))
         # Той самий резолв, що й для поллерів — один календар на символ
         calendars_for_engine: Dict[str, MarketCalendar] = {
             sym: calendars[sym] for sym in symbols
         }
 
-        derive_engine = DeriveEngine(
-            symbols=symbols,
-            anchor_offset_s=anchor_offset_s,
-            d1_anchor_offset_s=d1_anchor_offset_s,
-            calendars=calendars_for_engine,
-        )
+        # Правило якоря H4/D1 на символ — лише через фабрику (ADR-0095 S4a); вона ж логує DERIVE_ENGINE_WIRED
+        derive_engine = build_derive_engine(cfg, symbols, calendars_for_engine)
         for sym in symbols:
             derive_engine.register_symbol_uds(sym, uds)
         for p in pollers:
             p._derive_engine = derive_engine  # noqa: SLF001
-        logging.info(
-            "DERIVE_ENGINE_WIRED symbols=%d anchor_offset_s=%d d1_anchor=%d",
-            len(symbols),
-            anchor_offset_s,
-            d1_anchor_offset_s,
-        )
 
     # Redis tail_n для priming
     redis_cfg = cfg.get("redis", {})

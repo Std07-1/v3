@@ -86,5 +86,12 @@ def test_rule_and_legacy_anchor_together_are_refused():
     with pytest.raises(ValueError, match="anchor_rule_with_legacy_anchor_offset"):
         derive_bar(symbol="XAU/USD", target_tf_s=H4_S, source_buffer=buf, bucket_open_ms=_ms(2026, 9, 22, 21),
                    anchor_offset_s=79200, anchor_rule=FXCM)
-    with pytest.raises(ValueError, match="anchor_rule_with_legacy_anchor_offset"):
-        derive_triggers(_bar(3600, _ms(2026, 9, 23, 0), 100.0), anchor_offset_s=79200, anchor_rule=FXCM)
+
+
+def test_derive_triggers_requires_rule_and_has_no_legacy_anchor():
+    """З S4a тригери мають лише правило: без нього чи з легасі-секундами — TypeError, а не тихий якір 0."""
+    h1 = _bar(3600, _ms(2026, 9, 23, 0), 100.0)
+    with pytest.raises(TypeError):
+        derive_triggers(h1)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        derive_triggers(h1, anchor_offset_s=79200, anchor_rule=FXCM)  # type: ignore[call-arg]

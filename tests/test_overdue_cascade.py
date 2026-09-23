@@ -17,7 +17,10 @@ from unittest.mock import MagicMock
 
 from core.derive import DERIVE_CHAIN, DERIVE_ORDER, GenericBuffer
 from core.model.bars import CandleBar
+from core.session_anchor import RULE_NY_CLOSE_US_DST
 from runtime.ingest.derive_engine import DeriveEngine
+
+FXCM = RULE_NY_CLOSE_US_DST
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +79,7 @@ class TestOverdueLookbackDepth:
         sym = "TEST/SYM"
         engine = DeriveEngine(
             symbols=[sym],
-            anchor_offset_s=0,
+            anchor_rules={sym: FXCM},
             cascade_tfs_s={300},     # тільки M5
             commit_tfs_s={300},
         )
@@ -103,7 +106,7 @@ class TestOverdueLookbackDepth:
         sym = "TEST/SYM"
         engine = DeriveEngine(
             symbols=[sym],
-            anchor_offset_s=0,
+            anchor_rules={sym: FXCM},
             cascade_tfs_s={300},
             commit_tfs_s={300},
         )
@@ -132,7 +135,7 @@ class TestOverdueCascade:
         sym = "TEST/SYM"
         engine = DeriveEngine(
             symbols=[sym],
-            anchor_offset_s=0,
+            anchor_rules={sym: FXCM},
             cascade_tfs_s={300, 900},    # M5 + M15
             commit_tfs_s={300, 900},
         )
@@ -170,7 +173,7 @@ class TestOverdueCascade:
         sym = "TEST/SYM"
         engine = DeriveEngine(
             symbols=[sym],
-            anchor_offset_s=0,
+            anchor_rules={sym: FXCM},
             cascade_tfs_s={300, 900, 1800},
             commit_tfs_s={300, 900, 1800},
         )
@@ -194,7 +197,7 @@ class TestOverdueFullChain:
         sym = "TEST/SYM"
         engine = DeriveEngine(
             symbols=[sym],
-            anchor_offset_s=0,
+            anchor_rules={sym: FXCM},
             cascade_tfs_s={300, 900},    # M5 + M15
             commit_tfs_s={300, 900},
         )
@@ -251,13 +254,11 @@ class _WeekdayCalendar:
 class TestOverdueHolidayD1:
     """ADR-0097: святкова п'ятниця з раннім закривом стає D1-баром, щойно відкрилась неділя."""
 
-    D1_ANCHOR_S = 75_600  # 21:00 UTC
-
     def test_holiday_friday_d1_is_built_on_sunday_reopen(self) -> None:
         sym = "TEST/SYM"
         engine = DeriveEngine(
             symbols=[sym],
-            d1_anchor_offset_s=self.D1_ANCHOR_S,
+            anchor_rules={sym: FXCM},  # липень 2026: торговий день від 21:00 UTC
             calendars={sym: _WeekdayCalendar()},
             cascade_tfs_s={86400},
             commit_tfs_s={86400},

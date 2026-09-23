@@ -37,6 +37,7 @@ def _write_config(tmp_path: Path, **overrides) -> str:
         "m1_session_filter": {"pause_noise_margin_min": CONFIGURED_MARGIN_MIN},
         "market_calendar_by_group": {"cfd_us_22_23": _US_CFD_GROUP, "crypto_24x7": _CRYPTO_GROUP},
         "market_calendar_symbol_groups": {"XAU/USD": "cfd_us_22_23", "BTCUSDT": "crypto_24x7"},
+        "htf_anchor": {"rule_by_calendar_group": {"cfd_us_22_23": "ny_close_us_dst", "crypto_24x7": "utc_midnight"}},
     }
     cfg.update(overrides)
     path = tmp_path / "config.json"
@@ -134,3 +135,34 @@ def test_every_m1_writer_resolves_pause_policy_through_the_shared_resolver(build
     source = inspect.getsource(importlib.import_module(builder_module))
     assert "resolve_pause_policy(cfg, " in source  # на символ: застарілий край залежить від групи
     assert '"m1_session_filter"' not in source and "'m1_session_filter'" not in source
+
+
+@pytest.mark.parametrize("builder_module", [
+    "runtime.ingest.polling.m1_poller",
+    "runtime.ingest.m1_ingestion_worker",
+    "runtime.ingest.binance_ingest_worker",
+    "runtime.ingest.replay",
+])
+def test_every_derive_engine_builder_goes_through_the_rule_factory(builder_module):
+    """Запобіжник SSOT (ADR-0095 S4a): рушій деривації — лише з `build_derive_engine`, секунд якоря з config немає."""
+    import importlib
+    import inspect
+    source = inspect.getsource(importlib.import_module(builder_module))
+    assert "build_derive_engine(cfg, symbols, " in source
+    assert "DeriveEngine(" not in source
+    assert "day_anchor_offset_s" not in source and "d1_anchor_offset_s" not in source
+
+
+def test_fxcm_poller_builder_wires_rule_per_symbol_from_config(tmp_path, monkeypatch):
+    from runtime.ingest.broker.fxcm import provider as fxcm_provider
+    from runtime.ingest.polling import m1_poller
+
+    monkeypatch.setenv("FXCM_USERNAME", "u")
+    monkeypatch.setenv("FXCM_PASSWORD", "p")
+    monkeypatch.setenv("FXCM_HOST_URL", "http://fxcm.invalid")
+    monkeypatch.setattr(fxcm_provider, "FxcmHistoryProvider", lambda **_kwargs: object())
+    monkeypatch.setattr(m1_poller, "build_uds_from_config", _fake_uds)
+
+    runner = m1_poller.build_m1_poller(_write_config(tmp_path))
+
+    assert runner._derive_engine._anchor_rules == {"XAU/USD": "ny_close_us_dst"}  # noqa: SLF001

@@ -7,7 +7,7 @@
 - derive_bar() — спроба побудувати derived бар для конкретного bucket
 
 Dependency Rule: core/ не імпортує runtime/ui/tools.
-Використовує тільки core.model.bars та core.buckets.
+Використовує тільки core.model.bars та core.session_anchor.
 """
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ import bisect
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 
 from core.model.bars import CandleBar, assert_invariants
-from core.buckets import bucket_start_ms as _bucket_start_ms
 from core.session_anchor import (
     H4_S,
     assert_on_season_grid,
@@ -109,7 +108,8 @@ def _resolve_bucket(
 
     Правило ADR-0095 (`anchor_rule`): H4/D1 — рівність сезонній сітці (інакше OffSeasonGridError), вікно до
     наступного бакета, а не open + tf (H4 не перетинає межу торгового дня: обрубки DST-діб). Без правила —
-    легасі-якорі в секундах (лише до S4a). Обидва одночасно — ValueError: дві сітки в одному виклику.
+    легасі-якорі в секундах (лише до S5b: tools/rebuild_from_m1). Обидва одночасно — ValueError: дві сітки в
+    одному виклику.
     """
     if anchor_rule is None:
         anchor_s = resolve_cascade_anchor_s(target_tf_s, h4_anchor_offset_s, d1_anchor_offset_s)
@@ -302,7 +302,7 @@ def aggregate_bars(
         symbol: символ.
         target_tf_s: цільовий TF у секундах.
         bucket_open_ms: open_time_ms цільового бару.
-        anchor_offset_s: легасі-якір HTF у секундах (до S4a ADR-0095).
+        anchor_offset_s: легасі-якір HTF у секундах (до S5b ADR-0095: tools/rebuild_from_m1).
         filter_calendar_pause: чи фільтрувати calendar_pause_flat бари.
         anchor_rule: правило сезонного якоря ADR-0095 (взаємовиключне з anchor_offset_s).
 
@@ -450,8 +450,8 @@ def derive_bar(
         target_tf_s: цільовий TF.
         source_buffer: буфер з барами джерельного TF.
         bucket_open_ms: open_time_ms цільового bucket.
-        anchor_offset_s: легасі-якір H4 у секундах (до S4a ADR-0095).
-        d1_anchor_offset_s: легасі-якір D1 у секундах (до S4a ADR-0095).
+        anchor_offset_s: легасі-якір H4 у секундах (до S5b ADR-0095: tools/rebuild_from_m1).
+        d1_anchor_offset_s: легасі-якір D1 у секундах (до S5b ADR-0095: tools/rebuild_from_m1).
         is_trading_fn: calendar filter (is_trading_minute).
         filter_calendar_pause: чи ігнорувати calendar_pause_flat.
         anchor_rule: правило сезонного якоря ADR-0095: рівність сітці, вікно до наступного бакета.
@@ -631,10 +631,9 @@ def _source_reached_bucket_end(
 # ---------------------------------------------------------------------------
 def derive_triggers(
     source_bar: CandleBar,
-    anchor_offset_s: int = 0,
+    *,
+    anchor_rule: str,
     is_trading_fn: Optional[Callable[[int], bool]] = None,
-    d1_anchor_offset_s: int = 0,
-    anchor_rule: Optional[str] = None,
 ) -> List[Tuple[int, int]]:
     """Визначає які target bucket'и слід перевірити після commit source_bar.
 
@@ -652,9 +651,9 @@ def derive_triggers(
     де partial break перекриває останній H1/M30/M15/M5 у bucket.
 
     Args:
-        anchor_offset_s: легасі-якір H4 у секундах (до S4a ADR-0095).
-        d1_anchor_offset_s: легасі-якір D1 у секундах (до S4a ADR-0095).
-        anchor_rule: правило сезонного якоря ADR-0095; кінець бакета — наступний бакет сітки (обрубки DST-діб).
+        anchor_rule: правило сезонного якоря ADR-0095 (обов'язкове з S4a); кінець бакета — наступний бакет сітки
+            (обрубки DST-діб), а не open + tf.
+        is_trading_fn: calendar filter (is_trading_minute).
     """
     source_tf_s = source_bar.tf_s
     targets = DERIVE_CHAIN.get(source_tf_s, [])
@@ -665,16 +664,8 @@ def derive_triggers(
     source_tf_ms = source_tf_s * 1000
 
     for target_tf_s, _ in targets:
-        if anchor_rule is not None:
-            if anchor_offset_s or d1_anchor_offset_s:
-                raise ValueError("anchor_rule_with_legacy_anchor_offset (ADR-0095 S2b)")
-            bucket_open = htf_bucket_start_ms(source_bar.open_time_ms, target_tf_s, anchor_rule)
-            bucket_end = htf_next_bucket_start_ms(bucket_open, target_tf_s, anchor_rule)
-        else:
-            target_tf_ms = target_tf_s * 1000
-            anchor = resolve_cascade_anchor_s(target_tf_s, anchor_offset_s, d1_anchor_offset_s)
-            bucket_open = _bucket_start_ms(source_bar.open_time_ms, target_tf_ms, anchor * 1000)
-            bucket_end = bucket_open + target_tf_ms
+        bucket_open = htf_bucket_start_ms(source_bar.open_time_ms, target_tf_s, anchor_rule)
+        bucket_end = htf_next_bucket_start_ms(bucket_open, target_tf_s, anchor_rule)
 
         # Номінальний останній source-слот
         expected_last_source = bucket_end - source_tf_ms

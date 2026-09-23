@@ -3,7 +3,7 @@
 Прямий аналог m1_ingestion_worker.py для Binance Futures:
 - BinanceHistoryProvider замість BrokerRedisProxy (запускається у .venv, не .venv37)
 - Символи з config.json:binance.symbols (BTCUSDT, ETHUSDT)
-- anchor_offset_s=0 (crypto: H4 midnight-aligned, D1 midnight-aligned)
+- Якір H4/D1: правило utc_midnight з config.htf_anchor (група crypto_24x7, ADR-0095) — H4/D1 від опівночі UTC
 - Calendar: crypto_24x7 → is_trading_minute() = True завжди
 
 Реіспользує M1SymbolPoller / M1PollerRunner з m1_poller.py.
@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.config_loader import pick_config_path, load_system_config
 from env_profile import load_env_secrets
 from runtime.ingest.broker.binance.provider import BinanceHistoryProvider
-from runtime.ingest.derive_engine import DeriveEngine
+from runtime.ingest.derive_engine import build_derive_engine
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.m1_session_filter import resolve_pause_policy
 from runtime.ingest.polling.m1_poller import (
@@ -219,10 +219,7 @@ def build_binance_ingest_worker(
             )
         )
 
-    # DeriveEngine — anchors=0 для crypto (ADR-0037)
-    anchor_offset_s = int(bn_cfg.get("day_anchor_offset_s", 0))
-    d1_anchor_offset_s = int(bn_cfg.get("d1_anchor_offset_s", 0))
-
+    # DeriveEngine — правило utc_midnight з config.htf_anchor за групою crypto_24x7 (ADR-0037, ADR-0095 S4a)
     calendars_for_engine: Dict[str, MarketCalendar] = {}
     for sym in symbols:
         group = cal_sym_groups.get(sym)
@@ -231,23 +228,11 @@ def build_binance_ingest_worker(
             if cal_obj is not None:
                 calendars_for_engine[sym] = cal_obj
 
-    derive_engine = DeriveEngine(
-        symbols=symbols,
-        anchor_offset_s=anchor_offset_s,
-        d1_anchor_offset_s=d1_anchor_offset_s,
-        calendars=calendars_for_engine,
-    )
+    derive_engine = build_derive_engine(cfg, symbols, calendars_for_engine)
     for sym in symbols:
         derive_engine.register_symbol_uds(sym, uds)
     for p in pollers:
         p._derive_engine = derive_engine  # noqa: SLF001
-
-    logger.info(
-        "BINANCE_DERIVE_ENGINE_WIRED symbols=%d anchor=%d d1_anchor=%d",
-        len(symbols),
-        anchor_offset_s,
-        d1_anchor_offset_s,
-    )
 
     # Redis tail_n для priming
     redis_cfg = cfg.get("redis", {})

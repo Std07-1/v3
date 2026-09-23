@@ -5,6 +5,7 @@ import pytest
 
 from core.derive import GenericBuffer, derive_bar
 from core.model.bars import CandleBar
+from core.session_anchor import RULE_NY_CLOSE_US_DST
 
 def _make_bar(symbol: str, tf_s: int, open_ms: int, *, price: float, calendar_pause_flat: bool = False) -> CandleBar:
     return CandleBar(
@@ -38,7 +39,7 @@ TARGET_TFS = [
 def test_all_symbols_all_tfs_partial_calendar_pause(symbol, tf_tuple):
     target_tf_s, source_tf_s, bars_needed = tf_tuple
     
-    bucket_open_ms = 1_728_000_000_000 # Divisible by 14400000 (H4)
+    bucket_open_ms = 1_727_989_200_000  # 2024-10-03 21:00 UTC: на сезонній сітці H4 (літо, ADR-0095) і всіх TF < H4
     source_tf_ms = source_tf_s * 1000
     
     buf = GenericBuffer(tf_s=source_tf_s, max_keep=100)
@@ -62,6 +63,7 @@ def test_all_symbols_all_tfs_partial_calendar_pause(symbol, tf_tuple):
         bucket_open_ms=bucket_open_ms,
         is_trading_fn=lambda _t: True, # All minutes are nominal trading minutes
         filter_calendar_pause=True,
+        anchor_rule=RULE_NY_CLOSE_US_DST,
     )
     
     assert out is not None

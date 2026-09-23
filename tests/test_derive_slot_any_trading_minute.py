@@ -8,6 +8,10 @@
 - FX (перерва 20:55–21:30): H4 18:00 без H1 21:00, тобто без 21:30–21:59.
 Для груп із reopen на межі слота (XAU, US-індекси) результат не змінюється — перевірено rebuild XAU старим і
 новим кодом: усі 7 TF байт-у-байт.
+
+З ADR-0095 бакети H4 — на сезонній сітці (літо 21/01/05/…, вересень 2026), тож частковий слот reopen тепер
+відкриває або закриває інший бакет, ніж на старій сітці 22/02/…; предикат слота той самий. Правило тут — чиста
+функція сітки: сітку груп HK і FX ще не виміряно (резолвер для них відмовляє, ADR-0095 §8.4).
 """
 from __future__ import annotations
 
@@ -15,11 +19,11 @@ import datetime as dt
 
 from core.derive import GenericBuffer, derive_bar
 from core.model.bars import CandleBar
+from core.session_anchor import RULE_NY_CLOSE_US_DST
 from runtime.ingest.market_calendar import MarketCalendar
 
 H1_S = 3600
 H4_S = 14400
-H4_ANCHOR_S = 79200  # літо: 22:00 UTC
 
 CAL_GER30 = MarketCalendar(
     enabled=True,
@@ -59,50 +63,52 @@ def _derive_h4(bucket_open_ms: int, bars, calendar: MarketCalendar):
     buf = GenericBuffer(tf_s=H1_S, max_keep=64)
     buf.upsert_many(list(bars))
     return derive_bar(symbol="SYM", target_tf_s=H4_S, source_buffer=buf, bucket_open_ms=bucket_open_ms,
-                      anchor_offset_s=H4_ANCHOR_S, is_trading_fn=calendar.is_trading_minute)
+                      is_trading_fn=calendar.is_trading_minute, anchor_rule=RULE_NY_CLOSE_US_DST)
 
 
 def test_derive_h4_includes_partial_first_slot_ger30_0030():
-    """Вт 00:30 reopen: H1 00:00 несе 00:30–00:59 і відкриває H4 22:00 (Пн 22:00 → Вт 02:00)."""
+    """Вт 00:30 reopen: H1 00:00 несе 00:30–00:59 — єдиний торговий слот H4 Пн 21:00 (→ Вт 01:00), не перерва."""
     reopen_hour = _h1(_ms(8, 0), o=100.0, c=101.0, v=30.0)
-    next_hour = _h1(_ms(8, 1), o=101.0, c=102.0, v=60.0)
-    out = _derive_h4(_ms(7, 22), [reopen_hour, next_hour], CAL_GER30)
+    next_hour = _h1(_ms(8, 1), o=101.0, c=102.0, v=60.0)  # уже бакет 01:00
+    out = _derive_h4(_ms(7, 21), [reopen_hour, next_hour], CAL_GER30)
     assert out is not None
-    assert (out.o, out.c, out.v) == (100.0, 102.0, 90.0)
+    assert (out.o, out.c, out.v) == (100.0, 101.0, 30.0)
     assert not out.extensions.get("partial")
 
 
 def test_derive_h4_includes_partial_first_slot_hk_0115():
-    """HK: єдиний торговий H1 бакета 22:00 — 01:00 (01:15–01:59); раніше H4 не будувався зовсім."""
-    only_trading_hour = _h1(_ms(8, 1), o=200.0, c=201.0, v=45.0)
-    out = _derive_h4(_ms(7, 22), [only_trading_hour], CAL_HK)
+    """HK: H1 01:00 (01:15–01:59) відкриває H4 01:00; бакет 21:00 торгових слотів не має зовсім."""
+    hours = [_h1(_ms(8, h), o=200.0 + k, c=201.0 + k, v=45.0) for k, h in enumerate((1, 2, 3))]
+    out = _derive_h4(_ms(8, 1), hours, CAL_HK)
     assert out is not None
-    assert (out.o, out.c, out.v) == (200.0, 201.0, 45.0)
+    assert (out.o, out.c, out.v) == (200.0, 203.0, 135.0)
+    assert _derive_h4(_ms(7, 21), hours, CAL_HK) is None
 
 
 def test_derive_h4_includes_partial_first_slot_fx_2130():
-    """FX: H1 21:00 (21:30–21:59) закриває H4 18:00; раніше close і обсяг брались з H1 20:00."""
-    hours = [_h1(_ms(8, h), o=300.0 + h, c=301.0 + h, v=10.0) for h in (18, 19, 20, 21)]
-    out = _derive_h4(_ms(8, 18), hours, CAL_FX)
+    """FX: H1 21:00 (21:30–21:59) відкриває H4 21:00; раніше open брався б з H1 22:00."""
+    opens = [(8, 21), (8, 22), (8, 23), (9, 0)]
+    hours = [_h1(_ms(d, h), o=300.0 + k, c=301.0 + k, v=10.0) for k, (d, h) in enumerate(opens)]
+    out = _derive_h4(_ms(8, 21), hours, CAL_FX)
     assert out is not None
-    assert (out.o, out.c, out.v) == (318.0, 322.0, 40.0)
+    assert (out.o, out.c, out.v) == (300.0, 304.0, 40.0)
 
 
 def test_missing_reopen_slot_is_loud_boundary_partial_not_silently_short():
-    """Без H1 00:00 бар GER30 22:00 не видає себе за повний: boundary_partial, expected рахує і слот reopen."""
-    next_hour = _h1(_ms(8, 1), o=101.0, c=102.0, v=60.0)
-    out = _derive_h4(_ms(7, 22), [next_hour], CAL_GER30)
+    """Без H1 01:00 бар HK 01:00 не видає себе за повний: boundary_partial, expected рахує і слот reopen."""
+    hours = [_h1(_ms(8, h), o=201.0, c=202.0, v=60.0) for h in (2, 3)]
+    out = _derive_h4(_ms(8, 1), hours, CAL_HK)
     assert out is not None
     assert out.extensions.get("boundary_partial") is True
-    assert out.extensions.get("expected_count") == 2
+    assert out.extensions.get("expected_count") == 3
 
 
 def test_slot_fully_inside_break_stays_excluded_and_not_required():
-    """H1 22:00 і 23:00 GER30 лежать повністю в перерві: їх нема в буфері, і це не дірка."""
+    """H1 21:00, 22:00 і 23:00 GER30 лежать повністю в перерві: їх нема в буфері, і це не дірка."""
     buf = GenericBuffer(tf_s=H1_S, max_keep=64)
-    buf.upsert_many([_h1(_ms(8, 0), o=1.0, c=1.0, v=1.0), _h1(_ms(8, 1), o=1.0, c=1.0, v=1.0)])
-    assert buf.has_range(_ms(7, 22), _ms(8, 2), CAL_GER30.is_trading_minute)
-    assert buf.missing_count(_ms(7, 22), _ms(8, 2), CAL_GER30.is_trading_minute) == 0
+    buf.upsert_many([_h1(_ms(8, 0), o=1.0, c=1.0, v=1.0)])
+    assert buf.has_range(_ms(7, 21), _ms(8, 1), CAL_GER30.is_trading_minute)
+    assert buf.missing_count(_ms(7, 21), _ms(8, 1), CAL_GER30.is_trading_minute) == 0
 
 
 def test_m1_source_slot_is_judged_by_its_own_minute():
