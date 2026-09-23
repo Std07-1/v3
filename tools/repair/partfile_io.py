@@ -209,19 +209,57 @@ def replace_part(path: str, new_bytes: bytes, *, stage_sha256: str, stamp: str) 
     """Замінити part-файл байтами, зібраними в staging; старий inode — у `<tf>/_backup_adr0095_<stamp>/`.
 
     Байти мусять мати sha staging (`stage_sha256`), інакше ValueError PARTFILE_STAGE_SHA_MISMATCH до запису.
-    Нового part-файла ще немає — режим і власник беруться з найновішого part-файла того самого каталогу TF, бекапу
-    немає (None). Заміна, fsync, власник і перечитування — `jsonl_rewrite.replace_bytes_atomic`.
+    Нового part-файла ще немає — режим і власник беруться з найновішого part-файла того самого каталогу TF, а якщо
+    TF у символу ще нема (натив D1 для символу, що мав лише M1, — GER30 26.09), — з part-файла іншого TF того самого
+    символу; каталог TF тоді створюється з режимом і власником каталогу того TF (гучно PARTFILE_TF_DIR_CREATED), бо
+    живий писар мусить у нього дописувати. Символ без жодного part-файла — FileNotFoundError PARTFILE_NO_SIBLING.
+    Бекапу для нового файла немає (None). Заміна, fsync, власник і перечитування — `jsonl_rewrite.replace_bytes_atomic`.
     """
     if sha256_hex(new_bytes) != stage_sha256:
         raise ValueError("PARTFILE_STAGE_SHA_MISMATCH path=%s — байти не ті, що в staging" % path)
     folder = os.path.dirname(path)
     like = None
     if not os.path.exists(path):
-        siblings = [name for name in sorted(os.listdir(folder)) if PART_NAME_RE.match(name)]
-        if not siblings:
+        like = _newest_part(folder) or _part_of_other_tf(folder)
+        if like is None:
             raise FileNotFoundError("PARTFILE_NO_SIBLING path=%s — власника і режим нового файла нема звідки взяти" % path)
-        like = os.path.join(folder, siblings[-1])
+        if not os.path.isdir(folder):
+            _make_dir_like(folder, os.path.dirname(like))
     return replace_bytes_atomic(path, new_bytes, backup_dir=os.path.join(folder, BACKUP_DIR_PREFIX + stamp), like=like)
+
+
+def _newest_part(folder: str) -> Optional[str]:
+    if not os.path.isdir(folder):
+        return None
+    names = [name for name in sorted(os.listdir(folder)) if PART_NAME_RE.match(name)]
+    return os.path.join(folder, names[-1]) if names else None
+
+
+def _part_of_other_tf(folder: str) -> Optional[str]:
+    """Найновіший part-файл іншого каталогу TF того самого символу (`<sym>/tf_*`), M1 першим."""
+    sym_dir = os.path.dirname(folder)
+    if not os.path.isdir(sym_dir):
+        return None
+    tf_dirs = sorted((name for name in os.listdir(sym_dir) if name.startswith("tf_") and name[3:].isdigit()),
+                     key=lambda name: int(name[3:]))
+    for name in tf_dirs:
+        like = _newest_part(os.path.join(sym_dir, name))
+        if like is not None:
+            return like
+    return None
+
+
+def _make_dir_like(folder: str, model_dir: str) -> None:
+    os.mkdir(folder)
+    st = os.stat(model_dir)
+    os.chmod(folder, st.st_mode & 0o7777)
+    if hasattr(os, "chown") and (os.stat(folder).st_uid, os.stat(folder).st_gid) != (st.st_uid, st.st_gid):
+        try:
+            os.chown(folder, st.st_uid, st.st_gid)
+        except OSError as exc:
+            os.rmdir(folder)
+            raise PermissionError("PARTFILE_TF_DIR_OWNER_NOT_PRESERVED dir=%s model=%s — %s" % (folder, model_dir, exc))
+    log.warning("PARTFILE_TF_DIR_CREATED dir=%s mode=%o like=%s", folder, st.st_mode & 0o7777, model_dir)
 
 
 # ── Рейка ADR-0098 §3.6: записувачі SSOT доведено зупинені (скан /proc, не прапорець оператора) ────────────────────

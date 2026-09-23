@@ -69,6 +69,26 @@ def test_replace_part_creates_new_file_like_a_sibling(tmp_path):
     assert pio.replace_part(str(folder / "part-20260310.jsonl"), new, stage_sha256=pio.sha256_hex(new), stamp=STAMP) is None
     assert (folder / "part-20260310.jsonl").read_bytes() == new
     empty_tf = folder.parent / "tf_86400"
-    empty_tf.mkdir()
+    empty_tf.mkdir()  # каталог TF є, part-файлів у ньому ще нема — зразок з іншого TF того самого символу
+    assert pio.replace_part(str(empty_tf / "part-20260310.jsonl"), new, stage_sha256=pio.sha256_hex(new), stamp=STAMP) is None
+    assert (empty_tf / "part-20260310.jsonl").read_bytes() == new
+
+
+def test_replace_part_creates_missing_tf_dir_like_another_tf_of_the_symbol(tmp_path):
+    """GER30 26.09: символ мав лише M1, натив D1 створює tf_86400 — каталог з режимом каталогу M1, не падіння."""
+    _root, folder = _data_root(tmp_path)
+    folder.chmod(0o775)
+    missing_tf = folder.parent / "tf_86400"
+    new = b'{"open_time_ms":9}\n'
+    assert pio.replace_part(str(missing_tf / "part-19900924.jsonl"), new, stage_sha256=pio.sha256_hex(new), stamp=STAMP) is None
+    assert (missing_tf / "part-19900924.jsonl").read_bytes() == new
+    assert (missing_tf.stat().st_mode & 0o777) == (folder.stat().st_mode & 0o777)
+
+
+def test_replace_part_refuses_symbol_without_any_part_file(tmp_path):
+    _root, folder = _data_root(tmp_path)
+    lonely = folder.parent.parent / "NEWSYM" / "tf_86400"
+    new = b'{"open_time_ms":9}\n'
     with pytest.raises(FileNotFoundError, match="PARTFILE_NO_SIBLING"):
-        pio.replace_part(str(empty_tf / "part-20260310.jsonl"), new, stage_sha256=pio.sha256_hex(new), stamp=STAMP)
+        pio.replace_part(str(lonely / "part-19900924.jsonl"), new, stage_sha256=pio.sha256_hex(new), stamp=STAMP)
+    assert not lonely.exists()
