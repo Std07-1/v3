@@ -19,6 +19,7 @@ from tools.repair import season_plan as sp
 
 UTC = dt.timezone.utc
 M1_MS = 60_000
+H1_MS = 3_600_000
 _REPO_CALENDAR_GROUP = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text(encoding="utf-8"))[
     "market_calendar_by_group"]["cfd_us_22_23"]
 CFG = {
@@ -80,3 +81,26 @@ def run_rebuild_tool(root: Path, first_ms: int, end_ms: int) -> None:
         )
     finally:
         writer.close()
+
+
+def append_rows(root: Path, tf_s: int, bars) -> None:
+    """Дописати рядки TF у part-файли (LF) — довільні вади для плану."""
+    folder = root / "XAU_USD" / ("tf_%d" % tf_s)
+    folder.mkdir(parents=True, exist_ok=True)
+    for row in bars:
+        with open(folder / ("part-%s.jsonl" % sp.day_of_ms(row["open_time_ms"])), "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(json.dumps(row, separators=(",", ":")) + "\n")
+
+
+def history_row(tf_s: int, open_ms: int, o: float) -> dict:
+    return {"symbol": "XAU/USD", "tf_s": tf_s, "open_time_ms": open_ms, "close_time_ms": open_ms + tf_s * 1000, "o": o,
+            "h": o + 1.0, "low": o - 1.0, "c": o + 0.5, "v": 7.0, "complete": True, "src": "history"}
+
+
+def dataset(root: Path) -> None:
+    """Тиждень H1 історії до M1 (зима 23–27.02.2026), M1 з 03.03 23:00 з похідними = f(M1), D1 поза сіткою 04.03 23:00."""
+    append_rows(root, 3600, [history_row(3600, k, 5000.0 + (k // H1_MS) % 13) for k in range(ms(2026, 2, 22, 23), ms(2026, 2, 27, 22), H1_MS)
+                              if any(CAL.is_trading_minute(t) for t in range(k, k + H1_MS, 60_000))])
+    write_m1(root, ms(2026, 3, 3, 23), ms(2026, 3, 6, 21, 44))
+    run_rebuild_tool(root, ms(2026, 3, 3, 23), ms(2026, 3, 6, 21, 45))
+    append_rows(root, D1_S, [dict(history_row(D1_S, ms(2026, 3, 4, 23), 1.0), src="derived")])
