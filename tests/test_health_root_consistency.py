@@ -23,6 +23,8 @@ BASE = 1_767_225_600_000  # 2026-01-01 00:00 UTC
 RULE = RULE_NY_CLOSE_US_DST
 # 01.11.2026: доба сб 31.10 має 25 год, її остання H4 — обрубок нд 21:00→22:00 (ADR-0095)
 FALL_STUB = int(dt.datetime(2026, 11, 1, 21, tzinfo=dt.timezone.utc).timestamp()) * 1000
+# 06.01.2026 (зима): H4 старої сітки 19:00 — поза сезонною (22/02/../18); наступний бакет сітки — 22:00
+WINTER_OLD_GRID_H4 = int(dt.datetime(2026, 1, 6, 19, tzinfo=dt.timezone.utc).timestamp()) * 1000
 
 
 def _bar(open_ms, tf_ms, *, o, h, low, c, src="derived", ext=None, marker=""):
@@ -155,3 +157,22 @@ def test_cascade_fall_stub_is_complete_with_one_h1():
     stub = _aggregate(FALL_STUB, H4_MS, [h1])
     r = measure_cascade([stub], [h1], target_tf_s=14_400, source_tf_s=3600, rule=RULE)
     assert (r.checked, r.mismatched, r.skipped_incomplete) == (1, 0, 0)
+
+
+# ── бар поза сезонною сіткою (ADR-0095) ────────────────────────────────────
+def test_root_skips_off_grid_h4_instead_of_blaming_truncated_window():
+    """Вікно до наступного бакета сітки ріже бар 19:00 на [19:00, 22:00) — звірка дала б хибну розбіжність з M1."""
+    own_minutes = _minutes(WINTER_OLD_GRID_H4, 240)  # [19:00, 23:00): з них бар і зібрано
+    bar = _aggregate(WINTER_OLD_GRID_H4, H4_MS, own_minutes)
+    r = measure_root_consistency([bar], own_minutes, tf_s=14_400, rule=RULE)
+    assert (r.checked, r.mismatched, r.off_grid_skipped) == (0, 0, 1)
+    assert grade_symbol_tf(root=r).grade == "GREEN", "дефектом бар рахує geometry.off_season_grid, не корінь"
+
+
+def test_root_control_on_grid_h4_is_still_checked():
+    """Контроль: той самий зимовий бакет на сітці (18:00) звіряється, розбіжність ловиться."""
+    on_grid = WINTER_OLD_GRID_H4 - H1_MS
+    minutes = _minutes(on_grid, 240)
+    bar = _aggregate(on_grid, H4_MS, _minutes(on_grid, 240, bump=3.0))
+    r = measure_root_consistency([bar], minutes, tf_s=14_400, rule=RULE)
+    assert (r.checked, r.mismatched, r.off_grid_skipped) == (1, 1, 0)

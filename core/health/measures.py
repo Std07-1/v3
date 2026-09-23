@@ -121,12 +121,17 @@ class RootResult:
 
     ``uncovered`` — бари, у бакеті яких M1 немає зовсім (історія, старша за M1-покриття,
     наприклад брокерський імпорт): перевірити їх нема чим, це не дефект і не «ок».
+
+    ``off_grid_skipped`` — бари H4/D1 поза сезонною сіткою (ADR-0095). Власного бакета сітки в них немає: вікно
+    до наступного бакета ріже бар посередині (зимовий H4 19:00 → [19:00, 22:00) замість [19:00, 23:00)), і звірка
+    дала б хибну «розбіжність з M1». Їх не звіряємо: дефектом їх рахує ``geometry.off_season_grid``, як і в каскаді.
     """
 
     checked: int
     mismatched: int
     declared_partial: int
     uncovered: int
+    off_grid_skipped: int
     mismatch_samples: Tuple[int, ...]
 
 
@@ -435,12 +440,21 @@ def measure_root_consistency(
     Бакет не мусить мати ПОВНИЙ набір хвилин: derived-бар будується з тих хвилин, що є, тож
     на незмінному M1 агрегація збігається і з частковим набором. Розбіжність означає, що бар
     зібрано з інших даних, ніж зараз лежать у M1 (M1 перезалили, бар не перебудували).
+    Бар H4/D1 поза сезонною сіткою вікна сітки не має — його не звіряємо (``off_grid_skipped``).
     """
     minutes = ssot_winners(m1_bars)
     keys = [bar.open_time_ms for bar in minutes]
-    checked = declared = uncovered = 0
+    derived = ssot_winners(derived_bars)
+    off_grid = (
+        {open_ms for open_ms, _expected in _off_grid_opens((b.open_time_ms for b in derived), tf_s, rule)}
+        if tf_s >= H4_S else set()
+    )
+    checked = declared = uncovered = off_grid_skipped = 0
     mismatched: List[int] = []
-    for bar in ssot_winners(derived_bars):
+    for bar in derived:
+        if bar.open_time_ms in off_grid:
+            off_grid_skipped += 1
+            continue
         lo = bisect.bisect_left(keys, bar.open_time_ms)
         hi = bisect.bisect_left(keys, htf_next_bucket_start_ms(bar.open_time_ms, tf_s, rule))
         if lo == hi:
@@ -458,6 +472,7 @@ def measure_root_consistency(
         mismatched=len(mismatched),
         declared_partial=declared,
         uncovered=uncovered,
+        off_grid_skipped=off_grid_skipped,
         mismatch_samples=tuple(mismatched[:max_samples]),
     )
 

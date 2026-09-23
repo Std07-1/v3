@@ -210,7 +210,8 @@ def check_symbol(
             "root": (
                 None if root is None
                 else {"checked": root.checked, "mismatched": root.mismatched,
-                      "declared_partial": root.declared_partial, "uncovered": root.uncovered}
+                      "declared_partial": root.declared_partial, "uncovered": root.uncovered,
+                      "off_grid_skipped": root.off_grid_skipped}
             ),
         }
 
@@ -287,7 +288,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             root = d.get("root")
             root_txt = (
                 "-" if root is None
-                else f"{root['checked']}/{root['mismatched']}(+{root['declared_partial']}p,{root['uncovered']} без M1)"
+                else f"{root['checked']}/{root['mismatched']}(+{root['declared_partial']}p,{root['uncovered']} без M1,"
+                     f"{root['off_grid_skipped']} поза сіткою)"
             )
             print(
                 f"  [{flag}] tf_{tf:<6} bars={d['bars']:<7} {d['first']} .. {d['last']}"
