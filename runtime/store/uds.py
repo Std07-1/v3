@@ -14,6 +14,7 @@ from core.config_loader import (
     tf_allowlist_from_cfg,
     preview_tf_allowlist_from_cfg,
     min_coldload_bars_from_cfg,
+    htf_anchor_rule_resolver,
     DEFAULT_PREVIEW_TF_ALLOWLIST,
     MAX_EVENTS_PER_RESPONSE,
 )
@@ -2290,16 +2291,6 @@ def _updates_bus_from_cfg(cfg: dict[str, Any]) -> Optional[_RedisUpdatesBus]:
     return _RedisUpdatesBus(client, spec.namespace, retain)
 
 
-def _opt_int(value: Any) -> Optional[int]:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except Exception:
-        Logging.debug("UDS_OPT_INT_PARSE_FAILED raw=%r", value, exc_info=True)
-        return None
-
-
 def build_uds_from_config(
     config_path: str,
     data_root: str,
@@ -2349,13 +2340,10 @@ def build_uds_from_config(
     jsonl_appender = None
     redis_writer = None
     if writer_components:
+        # ADR-0095 §3.3: писар SSOT перевіряє H4/D1 на рівність сезонній сітці; без секції htf_anchor — ValueError
         jsonl_appender = JsonlAppender(
             root=data_root,
-            day_anchor_offset_s=int(cfg.get("day_anchor_offset_s", 0)),
-            day_anchor_offset_s_d1=_opt_int(cfg.get("day_anchor_offset_s_d1")),
-            day_anchor_offset_s_d1_alt=_opt_int(cfg.get("day_anchor_offset_s_d1_alt")),
-            day_anchor_offset_s_alt=_opt_int(cfg.get("day_anchor_offset_s_alt")),
-            day_anchor_offset_s_alt2=_opt_int(cfg.get("day_anchor_offset_s_alt2")),
+            anchor_rule_for_symbol=htf_anchor_rule_resolver(cfg),
             fsync=bool(cfg.get("ssot_jsonl_fsync", False)),
         )
         redis_writer = build_redis_snapshot_writer(config_path)

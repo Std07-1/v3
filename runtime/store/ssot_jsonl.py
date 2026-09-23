@@ -4,108 +4,53 @@ import datetime as dt
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.model.bars import CandleBar, FINAL_SOURCES, assert_invariants, ms_to_utc_dt
-
-
-def _d1_anchor_offsets(
-    day_anchor_offset_s: int,
-    day_anchor_offset_s_d1: Optional[int],
-    day_anchor_offset_s_d1_alt: Optional[int],
-) -> Tuple[int, Optional[int]]:
-    primary = (
-        day_anchor_offset_s_d1
-        if day_anchor_offset_s_d1 is not None
-        else day_anchor_offset_s
-    )
-    alt = day_anchor_offset_s_d1_alt
-    if alt is not None and alt == primary:
-        alt = None
-    return primary, alt
-
-
-def _h4_anchor_offsets(
-    day_anchor_offset_s: int,
-    day_anchor_offset_s_alt: Optional[int],
-    day_anchor_offset_s_alt2: Optional[int],
-) -> Tuple[int, Optional[int], Optional[int]]:
-    primary = day_anchor_offset_s
-    alt = day_anchor_offset_s_alt
-    if alt is not None and alt == primary:
-        alt = None
-    alt2 = day_anchor_offset_s_alt2
-    if alt2 is not None and alt2 in (primary, alt):
-        alt2 = None
-    return primary, alt, alt2
-
-
-def select_anchor_offset_for_open_ms(
-    tf_s: int,
-    open_time_ms: int,
-    day_anchor_offset_s: int,
-    day_anchor_offset_s_alt: Optional[int],
-    day_anchor_offset_s_alt2: Optional[int],
-    day_anchor_offset_s_d1: Optional[int],
-    day_anchor_offset_s_d1_alt: Optional[int],
-) -> int:
-    if tf_s != 86400:
-        tf_ms = tf_s * 1000
-        primary, alt, alt2 = _h4_anchor_offsets(
-            day_anchor_offset_s,
-            day_anchor_offset_s_alt,
-            day_anchor_offset_s_alt2,
-        )
-        for off in (primary, alt, alt2):
-            if off is None:
-                continue
-            if (open_time_ms - off * 1000) % tf_ms == 0:
-                return off
-        return primary
-    tf_ms = tf_s * 1000
-    primary, alt = _d1_anchor_offsets(
-        day_anchor_offset_s,
-        day_anchor_offset_s_d1,
-        day_anchor_offset_s_d1_alt,
-    )
-    for off in (primary, alt):
-        if off is None:
-            continue
-        if (open_time_ms - off * 1000) % tf_ms == 0:
-            return off
-    return primary
+from core.session_anchor import H4_S, assert_on_season_grid, htf_anchor_offset_s
 
 
 class JsonlAppender:
-    """Append-only JSONL writer із ротацією по даті open_time_utc (YYYYMMDD)."""
+    """Append-only JSONL writer із ротацією по даті open_time_utc (YYYYMMDD).
+
+    H4/D1 пишуться лише на сезонній сітці символу (ADR-0095 §3.3): рівність, а не членство в наборі якорів.
+    `anchor_rule_for_symbol` — резолвер `core.config_loader.htf_anchor_rule_resolver(cfg)`. Без нього HTF-бар —
+    гучна відмова `anchor_rule_missing`, а не тихий якір 0. M1..H1 резолвера не потребують.
+    """
 
     _MAX_OPEN_FILES = 64  # LRU-ліміт відкритих FD (запобігає витоку)
 
     def __init__(
         self,
         root: str,
-        day_anchor_offset_s: int = 0,
-        day_anchor_offset_s_d1: Optional[int] = None,
-        day_anchor_offset_s_d1_alt: Optional[int] = None,
-        day_anchor_offset_s_alt: Optional[int] = None,
-        day_anchor_offset_s_alt2: Optional[int] = None,
+        anchor_rule_for_symbol: Optional[Callable[[str], str]] = None,
         fsync: bool = False,
     ) -> None:
         self._root = root
         self._open_files: Dict[str, Any] = {}
         self._open_files_order: List[str] = []  # LRU order
         self._fsync = fsync
-        self._day_anchor_offset_s = day_anchor_offset_s
-        self._day_anchor_offset_s_d1 = day_anchor_offset_s_d1
-        self._day_anchor_offset_s_d1_alt = day_anchor_offset_s_d1_alt
-        self._day_anchor_offset_s_alt = day_anchor_offset_s_alt
-        self._day_anchor_offset_s_alt2 = day_anchor_offset_s_alt2
+        self._anchor_rule_for_symbol = anchor_rule_for_symbol
         self._drop_preview_total = 0
         self._drop_log_last_ts = 0.0
         self._drop_log_suppressed = 0
 
     def drop_preview_total(self) -> int:
         return int(self._drop_preview_total)
+
+    def _assert_bucket(self, bar: CandleBar) -> None:
+        """Геометрія бакета: M1..H1 — від епохи; H4/D1 — рівність сезонній сітці, потім close = open + tf (I2)."""
+        if bar.tf_s < H4_S:
+            assert_invariants(bar, anchor_offset_s=0)
+            return
+        if self._anchor_rule_for_symbol is None:
+            raise ValueError(
+                "anchor_rule_missing symbol=%s tf_s=%d open_ms=%d — JsonlAppender без резолвера правила якоря "
+                "(ADR-0095 §3.3)" % (bar.symbol, bar.tf_s, bar.open_time_ms)
+            )
+        rule = self._anchor_rule_for_symbol(bar.symbol)
+        assert_on_season_grid(bar.open_time_ms, bar.tf_s, rule)
+        assert_invariants(bar, anchor_offset_s=htf_anchor_offset_s(bar.tf_s, bar.open_time_ms, rule))
 
     def _path_for(self, symbol: str, tf_s: int, open_time_ms: int) -> str:
         day = ms_to_utc_dt(open_time_ms).strftime("%Y%m%d")
@@ -144,16 +89,7 @@ class JsonlAppender:
                 self._drop_log_last_ts = now
                 self._drop_log_suppressed = 0
             return
-        anchor_offset_s = select_anchor_offset_for_open_ms(
-            bar.tf_s,
-            bar.open_time_ms,
-            self._day_anchor_offset_s,
-            self._day_anchor_offset_s_alt,
-            self._day_anchor_offset_s_alt2,
-            self._day_anchor_offset_s_d1,
-            self._day_anchor_offset_s_d1_alt,
-        )
-        assert_invariants(bar, anchor_offset_s=anchor_offset_s)
+        self._assert_bucket(bar)
         path = self._path_for(bar.symbol, bar.tf_s, bar.open_time_ms)
         fh = self._open_files.get(path)
         if fh is None:

@@ -117,7 +117,8 @@ def _legal_anchors_ms(cfg: Dict[str, Any], tf_s: int, primary_ms: int) -> List[i
 
     HTF-якір рухається з переходом на зимовий/літній час (D1 21:00/22:00, H4 22:00/23:00).
     Бар на alt-якорі — не дефект, тому вимір має знати весь дозволений набір
-    (SSOT цих значень — ті самі ключі, що читає `select_anchor_offset_for_open_ms`).
+    (легасі-ключі config; писар SSOT з ADR-0095 S3a вже перевіряє рівність сезонній сітці, вимір переходить на
+    неї в S5a).
     """
     keys = (
         ("day_anchor_offset_s_d1", "day_anchor_offset_s_d1_alt")

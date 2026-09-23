@@ -10,7 +10,7 @@ from collections import Counter
 from typing import List, Set, Tuple
 
 from env_profile import load_env_secrets
-from core.config_loader import pick_config_path, load_system_config, env_str
+from core.config_loader import pick_config_path, load_system_config, env_str, htf_anchor_rule_resolver
 from core.derive import DERIVE_SOURCE
 from core.model.bars import CandleBar
 from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
@@ -267,14 +267,7 @@ def main() -> int:
         day_anchor_offset_s_alt2=None if day_anchor_offset_s_alt2 is None else int(day_anchor_offset_s_alt2),
     )
 
-    writer = JsonlAppender(
-        root=data_root,
-        day_anchor_offset_s=day_anchor_offset_s,
-        day_anchor_offset_s_d1=None if day_anchor_offset_s_d1 is None else int(day_anchor_offset_s_d1),
-        day_anchor_offset_s_d1_alt=None if day_anchor_offset_s_d1_alt is None else int(day_anchor_offset_s_d1_alt),
-        day_anchor_offset_s_alt=None if day_anchor_offset_s_alt is None else int(day_anchor_offset_s_alt),
-        day_anchor_offset_s_alt2=None if day_anchor_offset_s_alt2 is None else int(day_anchor_offset_s_alt2),
-    )
+    writer = JsonlAppender(root=data_root, anchor_rule_for_symbol=htf_anchor_rule_resolver(cfg))
 
     total_written = 0
     total_skipped = 0

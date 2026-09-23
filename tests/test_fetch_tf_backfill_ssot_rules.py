@@ -84,7 +84,9 @@ class _FakeProvider:
 
 def _run_main(tmp_path: Path, monkeypatch, bars, *, with_calendar=True, extra_argv=(), extra_cfg=None):
     data_root = tmp_path / "data_v3"
-    cfg = {"data_root": str(data_root), "m1_poller": {"safety_delay_s": 8}}
+    cfg = {"data_root": str(data_root), "m1_poller": {"safety_delay_s": 8},
+           # ADR-0095 S3a: писар SSOT будується з резолвером правила якоря H4/D1; без секції — відмова старту
+           "htf_anchor": {"rule_by_calendar_group": {"test_group": "ny_close_us_dst"}}}
     cfg.update(extra_cfg or {})
     if with_calendar:
         cfg["market_calendar_by_group"] = {"test_group": CALENDAR_GROUP}

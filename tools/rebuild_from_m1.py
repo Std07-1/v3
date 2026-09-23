@@ -21,7 +21,7 @@ import time
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from core.buckets import bucket_start_ms
-from core.config_loader import load_system_config as load_config, pick_config_path
+from core.config_loader import htf_anchor_rule_resolver, load_system_config as load_config, pick_config_path
 from core.derive import (
     DERIVE_ORDER,
     GenericBuffer,
@@ -604,14 +604,7 @@ def main() -> None:
         return
 
     # Writer
-    writer = JsonlAppender(
-        root=data_root,
-        day_anchor_offset_s=int(cfg.get("day_anchor_offset_s", 0)),
-        day_anchor_offset_s_d1=cfg.get("day_anchor_offset_s_d1"),
-        day_anchor_offset_s_d1_alt=cfg.get("day_anchor_offset_s_d1_alt"),
-        day_anchor_offset_s_alt=cfg.get("day_anchor_offset_s_alt"),
-        day_anchor_offset_s_alt2=cfg.get("day_anchor_offset_s_alt2"),
-    )
+    writer = JsonlAppender(root=data_root, anchor_rule_for_symbol=htf_anchor_rule_resolver(cfg))
 
     # ADR-0054 §3.1 P0.2: rebuild пише append-only у ті самі part-файли, що й live
     # writer, без lock. Для символу з config.json:symbols це тихе джерело дублікатів,
