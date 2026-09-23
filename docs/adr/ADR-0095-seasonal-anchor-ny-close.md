@@ -369,9 +369,18 @@ S1–S5, S7 і міграція йдуть одним вікном. S6 — до 
 - 2026-09-23 — near-dedup D1 на читанні UDS (поріг 2 год, «DST-джитер 21:00/22:00», `choose_better_near_duplicate`)
   **прибрано** рішенням власника (слайс S3b). Після рівності сезонній сітці в писарі він лише тихо ховав D1 поза
   сіткою; тепер читач зливає тільки записи одного ключа (ADR-0094). Згадки near-dedup у §1.2 і §3.8 описують стан
-  на 21.09. Для вікна це означає: go/no-go G5 (і перевірка після apply S7) рахує бари поза сіткою **лише** через
-  health `off_season_grid` (S5a) = 0 для кожного символу. `dedup_dropped` для tf 86400 більше не сигнал near-пар:
-  читач їх не зливає, а лічильник рахує тільки дублікати одного ключа.
+  на 21.09. Для вікна це означає: пункт «0 барів H4/D1 поза сезонною сіткою» з Verify §3.8 (staging і прод, після
+  apply S7) доводить **лише** health `off_season_grid` (S5a) = 0 для кожного з 6 символів, а не `dedup_dropped`.
+  Для tf 86400 `dedup_dropped` більше не сигнал near-пар: читач їх не зливає, а лічильник рахує тільки дублікати
+  одного ключа.
+- 2026-09-23 — контракт `commit_final_bar` (UDS-писар, I1) змінено для **всіх** TF, не лише H4/D1 (слайс S3b).
+  Будь-який `ValueError` писаря SSOT (`JsonlAppender`) дає `CommitResult(False, <код>)` **до** запису в Redis,
+  pubsub і preview ring; watermark і RAM не рухаються. Коди: `bar_off_season_grid`, `anchor_rule_missing`,
+  `bar_bucket_misaligned`, `bar_close_time_invalid`, `derived_1m_forbidden`, `ssot_path_traversal`; невідомий
+  `ValueError` — `ssot_value_error` (текст — у WARNING). Кожна відмова рахується в `writer_drops` (OBS_60S). До S3b
+  такий бар повертав `ssot_write_failed`, а Redis-снапшот і pubsub його отримували (split-brain до рестарту). Збій
+  диска (`OSError` та інші винятки, крім `ValueError`) лишається деградованим шляхом `ssot_write_failed`: Redis і
+  pubsub пишуться, watermark, RAM і preview ring — ні.
 - 2026-09-21 — створено, **Accepted** рішенням власника. Дизайн спирається на розслідування `h4_grid` і `missing` і
   на вердикт скептика. Правки скептика враховано: рівність замість членства в наборі; сучасні правила DST США
   (конвенція FXCM) і zoneinfo як свідок; порядок старту `smc-fxcm` → ws; вкладеність замість D1 = 6×H4; GER30 після
