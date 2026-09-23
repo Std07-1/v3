@@ -17,6 +17,8 @@ from __future__ import annotations
 import dataclasses
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from core.session_anchor import D1_S, H4_S
+
 _GRADE_RANK = {"GREEN": 0, "YELLOW": 1, "RED": 2}
 
 # Версія СЕМАНТИКИ виміру. Вердикт звіту залежить від того, що саме міряли: версія 2 (ADR-0094 P4)
@@ -27,6 +29,12 @@ _GRADE_RANK = {"GREEN": 0, "YELLOW": 1, "RED": 2}
 # членством у наборі якорів з DST-альтернативами; очікувані бакети, вік і дірки — ітератором сітки.
 # Літній H4 на 22:00 під v2 був легальним «alt», під v3 — RED, хоча дані ті самі.
 HEALTH_MEASURE_VERSION = 3
+
+# Числа H4/D1 (дірки, вік, каскад, корінь) до v3 рахувались на іншій сітці, тож через межу v3 вони не
+# «погіршуються», а міряють інше: v2-baseline XAU H4 «дірок» 8 → v3 131 на тих самих даних (23.09.2026).
+# Їх не порівнюємо, як і вердикти; M1..H1 сітки не міняли — їхні числа порівнюються й через межу версій.
+_SEASONAL_GRID_VERSION = 3
+_SEASONAL_GRID_TFS = frozenset({str(H4_S), str(D1_S)})  # ключі TF у звіті — рядки
 
 # (шлях у звіті TF, людська назва). Усі — «більше = гірше».
 _WORSE_IF_UP: Tuple[Tuple[Tuple[str, ...], str], ...] = (
@@ -106,6 +114,7 @@ def compare_reports(
     # Звіт без поля — знятий до появи версіонування, тобто семантикою v1.
     versions = (int(before.get("measure_version", 1)), int(after.get("measure_version", 1)))
     compare_verdicts = versions[0] == versions[1]
+    grid_changed = min(versions) < _SEASONAL_GRID_VERSION <= max(versions)
     regressions: List[Regression] = []
     improvements: List[Regression] = []
 
@@ -135,6 +144,8 @@ def compare_reports(
             if b_bars is not None and a_bars is not None and a_bars < b_bars:
                 regressions.append(Regression(symbol, tf, "барів", int(b_bars), int(a_bars)))
 
+            if grid_changed and str(tf) in _SEASONAL_GRID_TFS:
+                continue
             for path, label in _WORSE_IF_UP:
                 b_val, a_val = _num(b_tf, path), _num(a_tf, path)
                 if b_val is None or a_val is None:

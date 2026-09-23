@@ -176,6 +176,24 @@ def test_контроль_однакова_версія_погіршення_в�
 
 
 # ── ADR-0095 S5a: v3 — сезонна сітка H4/D1 ──────────────────────────────────
+def test_v2_baseline_htf_numbers_are_not_compared_with_v3():
+    """Через межу v3 числа H4/D1 міряють іншу сітку: 8 → 131 «дірок» на тих самих даних — не відкат."""
+    before = dict(_report({"XAU/USD": _sym(tfs={"14400": _tf(holes=8, age=8), "86400": _tf(mismatched=0)})}),
+                  measure_version=2)
+    after = dict(_report({"XAU/USD": _sym(tfs={"14400": _tf(holes=131, age=9), "86400": _tf(mismatched=3)})}),
+                 measure_version=3)
+    res = compare_reports(before, after)
+    assert res.ok is True and res.verdicts_comparable is False
+
+
+def test_v2_to_v3_intraday_numbers_and_bar_loss_still_caught():
+    """M1..H1 сітки не міняли — їхні дірки порівнюються; втрата барів H4 — регресія за будь-якої версії."""
+    before = dict(_report({"XAU/USD": _sym(tfs={"60": _tf(holes=2), "14400": _tf(bars=3500)})}), measure_version=2)
+    after = dict(_report({"XAU/USD": _sym(tfs={"60": _tf(holes=9), "14400": _tf(bars=3400)})}), measure_version=3)
+    measures = {(r.tf, r.measure) for r in compare_reports(before, after).regressions}
+    assert measures == {("60", "дірок"), ("14400", "барів")}
+
+
 def test_off_season_grid_growth_is_regression_within_v3():
     tf_before, tf_after = _tf(), _tf()
     tf_before["geometry"]["off_season_grid"] = 0

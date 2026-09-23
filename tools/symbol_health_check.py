@@ -312,7 +312,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("=== ПОРІВНЯННЯ з %s ===" % args.compare)
         if not cmp_res.verdicts_comparable:
             print("  !!! BASELINE ЗНЯТО ІНШОЮ ВЕРСІЄЮ ВИМІРУ (v%d, зараз v%d): вердикти не порівнювались, "
-                  "лише числові виміри. Це НЕ сигнал до відкату — перезніміть baseline поточним інструментом."
+                  "лише числові виміри (через межу v3 — без H4/D1: інша сітка). Це НЕ сигнал до відкату — "
+                  "перезніміть baseline поточним інструментом."
                   % cmp_res.measure_versions)
         print("  перевірено символів: %s" % (", ".join(cmp_res.compared_symbols) or "-"))
         if cmp_res.new_symbols:
