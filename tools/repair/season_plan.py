@@ -29,7 +29,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, 
 from core.derive import DERIVE_CHAIN, DERIVE_ORDER, DERIVE_SOURCE, GenericBuffer, derive_bar
 from core.model.bars import CandleBar
 from core.model.candle_chain import is_display_hidden
-from core.session_anchor import D1_S, htf_bucket_start_ms, htf_next_bucket_start_ms
+from core.session_anchor import D1_S, H4_S, SEASON_WINTER, htf_bucket_start_ms, htf_next_bucket_start_ms
 from runtime.store.layers.disk_layer import DiskLayer
 from tools.rebuild_from_m1 import REBUILD_CHUNK_D1_BUCKETS, _bucket_awaits_source, _grid_bucket_opens
 from tools.repair.partfile_io import Line, PartFile, day_of_ms, load_part, part_path, row_bytes, sha256_hex
@@ -181,6 +181,80 @@ def complete_rebuild_set(ctx: SymbolContext, seeds: Iterable[Buckets]) -> Tuple[
     return {tf_s: buckets for tf_s, buckets in rebuild.items() if buckets}, tail_kept
 
 
+# ── Зерна інших областей ───────────────────────────────────────────────────────────────────────────────────────────
+def seed_h4_from_h1(ctx: SymbolContext, h1_head_ms: Optional[int]) -> Buckets:
+    """H4 сезонної сітки з H1 на диску до першої M1 (MIGRATION §4.2): бакети вікна з відкриттям раніше першої M1.
+
+    Бакет, що містить першу M1, теж тут: його H1 — з диска до першої M1, далі — з плану, якщо `derived_from_m1`
+    перебудовує H1. Без M1 — уся історія H1 до кінця джерела.
+    """
+    if h1_head_ms is None:
+        return {}
+    lo = max(ctx.window[0], h1_head_ms)
+    hi = min(ctx.window[1], ctx.m1_head_ms if ctx.m1_head_ms is not None else ctx.source_end_ms)
+    if lo >= hi:
+        return {}
+    return {H4_S: set(_grid_bucket_opens(ctx.bucket_of(lo, D1_S), hi, H4_S, ctx.rule))}
+
+
+def seed_d1_rekey(ctx: SymbolContext, reader: SourceReader) -> Tuple[Buckets, List[CandleBar], List[CandleBar]]:
+    """D1 поза сезонною сіткою: (зерна, рядки на перебудову, MANUAL_REVIEW).
+
+    У епосі M1 (вікно бакета сітки перетинає джерело M1) бакет перебудовується з M1 на ключ сітки — навіть із
+    торговими годинами до першої M1 (тонка доба, фронтир ADR-0097); рівність OHLCV видаленому рядку — у звіті
+    (гейт V4). Поза епохою M1 рядок не змінюється: будувати нема з чого.
+    """
+    rekey: List[CandleBar] = []
+    manual: List[CandleBar] = []
+    for bar in reader.read(D1_S, *ctx.window):
+        bucket_ms = ctx.bucket_of(bar.open_time_ms, D1_S)
+        if bucket_ms == bar.open_time_ms:
+            continue
+        in_m1_era = ctx.m1_head_ms is not None and bucket_ms < ctx.source_end_ms and ctx.next_bucket(bucket_ms, D1_S) > ctx.m1_head_ms
+        (rekey if in_m1_era else manual).append(bar)
+    return {D1_S: {ctx.bucket_of(bar.open_time_ms, D1_S) for bar in rekey}}, rekey, manual
+
+
+def seed_holes(ctx: SymbolContext, reader: SourceReader) -> Tuple[Buckets, Dict[int, List[int]]]:
+    """Сезонні діри M3..H1 (MIGRATION §5): (зерна, поза областю за TF).
+
+    Діра — усі умови разом: у бакеті є видима M1 на торговій хвилині, рядка TF немає, серед торгових хвилин бакета є
+    неторгова в розкладі протилежного сезону, а в ту торгову добу TF уже має рядки (так відсікаються голови
+    активації). Решта відсутніх бакетів з торговою M1 — поза областю: їх власники — ADR-0092, 0097, 0098.
+    """
+    seeds: Buckets = {}
+    out_of_scope: Dict[int, List[int]] = {}
+    if ctx.m1_head_ms is None:
+        return seeds, out_of_scope
+    hole_tfs = [tf_s for tf_s in DERIVE_ORDER if tf_s < H4_S]
+    days = _grid_bucket_opens(ctx.bucket_of(max(ctx.window[0], ctx.m1_head_ms), D1_S), ctx.source_end_ms, D1_S, ctx.rule)
+    for chunk_lo, chunk_hi in d1_runs(ctx, days):
+        minutes = [bar.open_time_ms for bar in reader.read(M1_S, chunk_lo, chunk_hi)
+                   if not is_display_hidden(bar.extensions) and ctx.is_trading(bar.open_time_ms)]
+        for tf_s in hole_tfs:
+            present = {bar.open_time_ms for bar in reader.read(tf_s, chunk_lo, chunk_hi)}
+            days_with_rows = {ctx.bucket_of(open_ms, D1_S) for open_ms in present}
+            for bucket_ms in sorted({ctx.bucket_of(open_ms, tf_s) for open_ms in minutes} - present):
+                if _bucket_awaits_source(bucket_ms, ctx.next_bucket(bucket_ms, tf_s), ctx.source_end_ms, ctx.is_trading):
+                    continue
+                if _has_off_season_minute(ctx, bucket_ms, tf_s) and ctx.bucket_of(bucket_ms, D1_S) in days_with_rows:
+                    seeds.setdefault(tf_s, set()).add(bucket_ms)
+                else:
+                    out_of_scope.setdefault(tf_s, []).append(bucket_ms)
+    return seeds, out_of_scope
+
+
+def _has_off_season_minute(ctx: SymbolContext, bucket_ms: int, tf_s: int) -> bool:
+    """Серед торгових хвилин бакета є неторгова в розкладі протилежного сезону (для season_rule=none — ніколи)."""
+    calendar = ctx.calendar
+    for minute_ms in range(bucket_ms, ctx.next_bucket(bucket_ms, tf_s), M1_MS):
+        if ctx.is_trading(minute_ms):
+            opposite = calendar.summer if calendar.season_of(minute_ms) == SEASON_WINTER else calendar.winter
+            if not opposite.is_trading_minute(minute_ms):
+                return True
+    return False
+
+
 # ── Нові бари ──────────────────────────────────────────────────────────────────────────────────────────────────────
 def plan_bars(ctx: SymbolContext, reader: SourceReader, rebuild: Buckets) -> PlannedBars:
     """Новий бар кожного бакета набору: `derive_bar` з джерела таким, яким воно стане після заміни.
@@ -252,8 +326,8 @@ ROW_OLD = "old"  # свій рядок в області дії до замін�
 ROW_UNCHANGED = "unchanged"  # новий бар байт у байт той самий — рядок лишається на місці зі своїм EOL
 ROW_REPLACED = "replaced"  # той самий ключ, інший вміст — на місці старого, EOL файла
 ROW_ADDED = "added"  # ключ, якого у файлі не було (діра, ключ сезонної сітки)
-ROW_OFF_GRID = "removed_off_grid"  # ключ не на сітці TF — у бакеті його замінює ключ сітки
-ROW_DROPPED = "dropped"  # бакет без нового бару: жодного торгового слота чи джерела
+ROW_OFF_GRID = "removed_off_grid"  # ключ не на сітці TF — бакет має новий бар на ключі сітки
+ROW_DROPPED = "dropped"  # бакет без нового бару (жодного торгового слота чи джерела), ключ будь-який
 ROW_DUPLICATE = "duplicate_removed"  # другий і далі рядки одного ключа
 
 
@@ -288,8 +362,8 @@ class FilePlan:
 
 
 def plan_part_file(
-    part: PartFile, ctx: SymbolContext, tf_s: int, day: str, rebuild_tf: Set[int], new_rows: Mapping[int, bytes],
-    rows: Counter,
+    part: PartFile, ctx: SymbolContext, tf_s: int, day: str, rebuild_tf: Set[int], built_tf: Set[int],
+    new_rows: Mapping[int, bytes], rows: Counter,
 ) -> Optional[FilePlan]:
     """Новий вміст part-файла; None — файл не змінюється.
 
@@ -313,7 +387,7 @@ def plan_part_file(
         body = new_rows.get(key)
         if body is None or key in emitted:
             removed.append(key)
-            rows[ROW_DUPLICATE if key in emitted else ROW_OFF_GRID if ctx.bucket_of(key, tf_s) != key else ROW_DROPPED] += 1
+            rows[ROW_DUPLICATE if key in emitted else ROW_OFF_GRID if ctx.bucket_of(key, tf_s) in built_tf else ROW_DROPPED] += 1
             continue
         emitted.add(key)
         if line.body == body:
@@ -353,12 +427,13 @@ def plan_symbol_files(
         for bucket_ms, bar in planned.get(tf_s, {}).items():
             if bar is not None:
                 new_by_day.setdefault(day_of_ms(bucket_ms), {})[bucket_ms] = row_bytes(bar)
+        built = {bucket_ms for day_rows in new_by_day.values() for bucket_ms in day_rows}
         days = set(new_by_day)
         for bucket_ms in rebuild[tf_s]:
             days.update((day_of_ms(bucket_ms), day_of_ms(ctx.next_bucket(bucket_ms, tf_s) - 1)))
         for day in sorted(days):
             part = load_part(part_path(data_root, ctx.sym_dir, tf_s, day), ctx.sym_dir)
-            plan = plan_part_file(part, ctx, tf_s, day, rebuild[tf_s], new_by_day.get(day, {}), rows)
+            plan = plan_part_file(part, ctx, tf_s, day, rebuild[tf_s], built, new_by_day.get(day, {}), rows)
             if plan is not None:
                 files.append(plan)
     return files, row_stats
