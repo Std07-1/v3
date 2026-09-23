@@ -24,7 +24,8 @@ def plan(root, changed=None):
     ctx = context(root)
     rebuild, _tail = sp.complete_rebuild_set(ctx, [sp.seed_derived_from_m1(ctx, changed)])
     planned = sp.plan_bars(ctx, sp.SourceReader(str(root), "XAU/USD"), rebuild)
-    return sp.plan_symbol_files(ctx, str(root), rebuild, planned)
+    files, scopes = sp.plan_symbol_files(ctx, str(root), rebuild, planned)
+    return files, {tf_s: scope.rows for tf_s, scope in scopes.items()}
 
 
 def apply(files):
@@ -124,3 +125,27 @@ def test_changed_m1_plans_only_files_of_buckets_with_the_changed_key(tmp_path):
     full_files, _rows = plan(tmp_path)
     assert {(f.tf_s, f.day): f.new_bytes for f in full_files} == {(f.tf_s, f.day): f.new_bytes for f in files}
 
+
+
+def test_rows_over_an_m1_hole_are_kept_and_higher_tfs_are_built_from_them(tmp_path):
+    """Діра M1 до settle: M5 з архіву брокера над нею не видаляється — нема з чого побудувати (KEPT_NO_SOURCE)."""
+    hole = ms(2026, 3, 10, 10)
+    write_m1(tmp_path, FIRST, LAST, skip=set(range(hole, hole + 3_600_000, 60_000)))
+    run_rebuild_tool(tmp_path, FIRST, LAST + 60_000)
+    m5 = tmp_path / (TF_DIR % 300) / "part-20260310.jsonl"
+    history = [json.dumps({"symbol": "XAU/USD", "tf_s": 300, "open_time_ms": k, "close_time_ms": k + 300_000, "o": 4100.0,
+                           "h": 4101.0, "low": 4099.0, "c": 4100.5, "v": 5.0, "complete": True, "src": "history"})
+               for k in range(hole, hole + 3_600_000, 300_000)]
+    m5.write_text(m5.read_text(encoding="utf-8") + "\n".join(history) + "\n", encoding="utf-8")
+
+    ctx = context(tmp_path)
+    rebuild, _tail = sp.complete_rebuild_set(ctx, [sp.seed_derived_from_m1(ctx, None)])
+    planned = sp.plan_bars(ctx, sp.SourceReader(str(tmp_path), "XAU/USD"), rebuild)
+    files, scopes = sp.plan_symbol_files(ctx, str(tmp_path), rebuild, planned)
+    assert planned[300][hole] is None and hole not in scopes[300].replaced
+    assert scopes[300].rows[sp.ROW_KEPT_NO_SOURCE] == 12 and scopes[300].rows[sp.ROW_DROPPED] == 0
+    assert sorted(scopes[300].kept_keys) == list(range(hole, hole + 3_600_000, 300_000))
+    assert planned[900][hole].o == 4100.0 and planned[3600][hole].h == 4101.0, "M15..H1 — з рядків, що лишились"
+    assert all(f.tf_s != 300 for f in files), "M5 не змінюється"
+    apply(files)
+    assert plan(tmp_path)[0] == []

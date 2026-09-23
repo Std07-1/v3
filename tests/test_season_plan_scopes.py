@@ -2,7 +2,7 @@
 
 * H4 до першої M1 будується з H1 на диску на сезонній сітці; H1 у перерві сезонного календаря (тіки брокера в
   перерві) в бакет не йде, H4 старої сітки і вихідних прибираються.
-* D1 поза сітою в епосі M1 перебудовується з M1 на ключ сітки (OHLCV рівний видаленому рядку, тонка доба — з
+* D1 поза сіткою в епосі M1 перебудовується з M1 на ключ сітки (OHLCV рівний видаленому рядку, тонка доба — з
   фронтиром); поза епохою M1 — MANUAL_REVIEW без змін.
 * Сезонні діри M3..H1 (зимова година 21:00 XAU, якої немає в літньому розкладі) добудовуються, H4 над ними
   перераховується; несезонна діра — поза областю.
@@ -51,7 +51,8 @@ def plan(root: Path, scopes):
         extra["holes"] = hole_seeds
     rebuild, _tail = sp.complete_rebuild_set(ctx, seeds)
     planned = sp.plan_bars(ctx, reader, rebuild)
-    files, rows = sp.plan_symbol_files(ctx, str(root), rebuild, planned)
+    files, tf_scopes = sp.plan_symbol_files(ctx, str(root), rebuild, planned)
+    rows = {tf_s: scope.rows for tf_s, scope in tf_scopes.items()}
     return rebuild, planned, files, rows, extra
 
 

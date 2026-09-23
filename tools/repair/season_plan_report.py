@@ -4,9 +4,10 @@
         [--symbols XAU/USD,XAG_USD] [--from 2025-10-01] [--to 2026-09-26] [--changed-m1 changed.json]
         [--config config.json] [--data-root data_v3] [--report-json out.json]
 
-Друкує таблицю за символом і TF (набір, рядки до/після, незмінені, замінені, додані, поза сіткою, бакети без бару
-без торгових хвилин і без джерела, дублікати, partial, формуючий хвіст, файли), зрізи сезонної сітки H4, D1 re-key
-з рівністю OHLCV, MANUAL_REVIEW, діри й поза областю, межі джерела і підсумок; той самий план — у JSON
+Друкує таблицю за символом і TF (набір, рядки до/після, незмінені, замінені, додані, поза сіткою, прибрані без
+торгових хвилин, залишені без джерела, дублікати, partial, формуючий хвіст, файли), зрізи сезонної сітки H4, D1
+re-key з рівністю OHLCV, MANUAL_REVIEW, діри й поза областю, бакети без джерела, межі джерела і підсумок; той самий
+план — у JSON
 (`--report-json`, лише поза data_root). Part-файли не змінюються: staging і заміна — S7.3.
 """
 
@@ -25,13 +26,13 @@ from core.config_loader import load_system_config, pick_config_path
 from core.session_anchor import D1_S, H4_S, htf_anchor_offset_s
 from tools.rebuild_from_m1 import _tf_label
 from tools.repair.season_plan import (
-    ALL_TIME, ROW_ADDED, ROW_DUPLICATE, ROW_OFF_GRID, ROW_OLD, ROW_REPLACED, ROW_UNCHANGED, SCOPES, SeasonPlan,
-    SymbolPlan, build_plan,
+    ALL_TIME, ROW_ADDED, ROW_DROPPED, ROW_DUPLICATE, ROW_KEPT_NO_SOURCE, ROW_KEPT_OFF_GRID, ROW_OFF_GRID, ROW_OLD,
+    ROW_REPLACED, ROW_UNCHANGED, SCOPES, SeasonPlan, SymbolPlan, build_plan,
 )
 
 log = logging.getLogger("season_plan")
 
-_TABLE_HEADER = ("SYM", "TF", "REBUILD", "OLD", "NEW", "SAME", "REPL", "ADD", "OFFGRID", "DROP_NT", "DROP_NS", "DUP",
+_TABLE_HEADER = ("SYM", "TF", "REBUILD", "OLD", "NEW", "SAME", "REPL", "ADD", "OFFGRID", "DROP", "KEPT_NS", "DUP",
                  "PARTIAL", "TAIL", "FILES")
 _SAMPLES = 8  # скільки прикладів (діб, бакетів) у рядку звіту
 
@@ -59,10 +60,9 @@ def _tf_rows(symbol_plan: SymbolPlan) -> List[Tuple[Any, ...]]:
     for tf_s in sorted(set(symbol_plan.rebuild) | set(symbol_plan.rows)):
         built = [bar for bar in symbol_plan.planned.get(tf_s, {}).values() if bar is not None]
         rows = symbol_plan.rows.get(tf_s, Counter())
-        no_trading, no_source = symbol_plan.dropped(tf_s)
         out.append((ctx.sym_dir, _tf_label(tf_s), len(symbol_plan.rebuild.get(tf_s, ())), rows[ROW_OLD], len(built),
-                    rows[ROW_UNCHANGED], rows[ROW_REPLACED], rows[ROW_ADDED], rows[ROW_OFF_GRID], len(no_trading),
-                    len(no_source), rows[ROW_DUPLICATE], sum(1 for bar in built if bar.extensions.get("partial")),
+                    rows[ROW_UNCHANGED], rows[ROW_REPLACED], rows[ROW_ADDED], rows[ROW_OFF_GRID], rows[ROW_DROPPED],
+                    rows[ROW_KEPT_NO_SOURCE], rows[ROW_DUPLICATE], sum(1 for bar in built if bar.extensions.get("partial")),
                     symbol_plan.tail_kept.get(tf_s, 0), files_by_tf[tf_s]))
     return out
 
@@ -90,8 +90,11 @@ def _symbol_notes(symbol_plan: SymbolPlan) -> List[str]:
     for tf_s in sorted(symbol_plan.planned):
         no_source = symbol_plan.dropped(tf_s)[1]
         if no_source:
-            notes.append("DROP_NO_SOURCE %s %s=%d first=%s" % (ctx.sym_dir, _tf_label(tf_s), len(no_source),
-                                                               ",".join(_utc(b) for b in no_source[:_SAMPLES])))
+            scope = symbol_plan.scopes[tf_s]
+            kept = sorted(scope.kept_keys)
+            notes.append("NO_SOURCE %s %s buckets=%d kept_rows=%d kept_off_grid=%d first=%s" % (
+                ctx.sym_dir, _tf_label(tf_s), len(no_source), len(kept), scope.rows[ROW_KEPT_OFF_GRID],
+                ",".join(_utc(k) for k in (kept or no_source)[:_SAMPLES])))
     notes.append("SOURCE %s rule=%s season_rule=%s m1=%s..%s source_end=%s rejected_rows=%d" % (
         ctx.sym_dir, ctx.rule, ctx.calendar.season_rule, _utc(ctx.m1_head_ms), _utc(ctx.m1_tail_ms),
         _utc(ctx.source_end_ms), symbol_plan.rejected_rows))

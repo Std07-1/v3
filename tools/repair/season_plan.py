@@ -15,8 +15,10 @@ S7.3. Області дії:
 
 Правило рядка одне для всіх областей: свій рядок part-файла в області дії ⇔ бакет його open_time_ms (сезонна сітка
 TF) — у наборі перебудови цього TF. Набір — зерна областей, піднесені ланцюгом угору (бакет, чиє джерело
-перебудовано, перебудовується), без формуючого хвоста. Бакет без нового бару (жодного торгового слота чи джерела)
-свого рядка більше не має — DROP у звіті.
+перебудовано, перебудовується), без формуючого хвоста. Бакет без жодної торгової хвилини свого рядка більше не має
+(DROP у звіті). Бакет з торговою хвилиною, для якого джерела немає (діра M1 до settle, H1 раніше початку історії),
+не перебудовується: рядок на диску лишається як є і вищий TF бере саме його (KEPT_NO_SOURCE, гучно) — видалити
+бар, якого нема з чого побудувати, план не вправі.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ import logging
 import os
 import subprocess
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from core.config_loader import htf_anchor_rule_resolver
@@ -83,6 +85,10 @@ class SymbolContext:
 
     def is_trading(self, minute_ms: int) -> bool:
         return self.calendar.is_trading_minute(minute_ms)
+
+    def has_trading(self, bucket_ms: int, tf_s: int) -> bool:
+        """У вікні бакета є торгова хвилина сезонного календаря."""
+        return any(self.is_trading(t) for t in range(bucket_ms, self.next_bucket(bucket_ms, tf_s), M1_MS))
 
     def bucket_of(self, open_ms: int, tf_s: int) -> int:
         return htf_bucket_start_ms(open_ms, tf_s, self.rule)
@@ -264,8 +270,8 @@ def _has_off_season_minute(ctx: SymbolContext, bucket_ms: int, tf_s: int) -> boo
 def plan_bars(ctx: SymbolContext, reader: SourceReader, rebuild: Buckets) -> PlannedBars:
     """Новий бар кожного бакета набору: `derive_bar` з джерела таким, яким воно стане після заміни.
 
-    Джерело TF — бари читача, крім бакетів, що самі перебудовуються, плюс їхні нові бари. Порції — суцільні серії
-    бакетів D1 по `REBUILD_CHUNK_D1_BUCKETS`: межа D1 — межа бакета кожного похідного TF, тож бакет лежить в одній
+    Джерело TF — бари читача, крім бакетів, чиї рядки план замінює (`replaced_buckets`), плюс нові бари. Порції —
+    суцільні серії бакетів D1 по `REBUILD_CHUNK_D1_BUCKETS`: межа D1 — межа бакета кожного похідного TF, тож бакет лежить в одній
     порції. У джерело M1 додається найновіша видима M1 за порцією — фронтир ADR-0097 для D1, як у `rebuild_from_m1`.
     """
     planned: PlannedBars = {}
@@ -275,8 +281,9 @@ def plan_bars(ctx: SymbolContext, reader: SourceReader, rebuild: Buckets) -> Pla
         if not targets:
             continue
         days = sorted({ctx.bucket_of(b, D1_S) for tf_s in targets for b in rebuild[tf_s]})
+        replaced = replaced_buckets(ctx, source_tf_s, rebuild, planned)
         for chunk_lo, chunk_hi in d1_runs(ctx, days):
-            buf = _source_buffer(ctx, reader, source_tf_s, (chunk_lo, chunk_hi), rebuild, planned)
+            buf = _source_buffer(ctx, reader, source_tf_s, (chunk_lo, chunk_hi), replaced, planned)
             if source_tf_s == M1_S and visible_tail is not None and visible_tail.open_time_ms >= chunk_hi:
                 buf.upsert(visible_tail)
             for tf_s in targets:
@@ -303,11 +310,20 @@ def d1_runs(ctx: SymbolContext, days: Iterable[int]) -> List[Tuple[int, int]]:
     return runs
 
 
+def replaced_buckets(ctx: SymbolContext, tf_s: int, rebuild: Buckets, planned: PlannedBars) -> Set[int]:
+    """Бакети TF, чиї рядки план замінює: набір без бакетів з торговою хвилиною, для яких нового бару немає.
+
+    Такий бакет (діра M1 до settle, H1 раніше початку історії) не перебудовується: його рядок лишається на диску,
+    і вищий TF бере саме його, як після заміни бере читач. Бакет без торгової хвилини замінюється нічим (DROP).
+    """
+    bars = planned.get(tf_s, {})
+    return {b for b in rebuild.get(tf_s, ()) if bars.get(b) is not None or not ctx.has_trading(b, tf_s)}
+
+
 def _source_buffer(
-    ctx: SymbolContext, reader: SourceReader, source_tf_s: int, chunk: Tuple[int, int], rebuild: Buckets,
+    ctx: SymbolContext, reader: SourceReader, source_tf_s: int, chunk: Tuple[int, int], replaced: Set[int],
     planned: PlannedBars,
 ) -> GenericBuffer:
-    replaced = rebuild.get(source_tf_s, set())
     bars = {
         bar.open_time_ms: bar for bar in reader.read(source_tf_s, chunk[0], chunk[1])
         if not is_display_hidden(bar.extensions) and ctx.bucket_of(bar.open_time_ms, source_tf_s) not in replaced
@@ -332,8 +348,10 @@ ROW_UNCHANGED = "unchanged"  # новий бар байт у байт той с�
 ROW_REPLACED = "replaced"  # той самий ключ, інший вміст — на місці старого, EOL файла
 ROW_ADDED = "added"  # ключ, якого у файлі не було (діра, ключ сезонної сітки)
 ROW_OFF_GRID = "removed_off_grid"  # ключ не на сітці TF — бакет має новий бар на ключі сітки
-ROW_DROPPED = "dropped"  # бакет без нового бару (жодного торгового слота чи джерела), ключ будь-який
+ROW_DROPPED = "dropped"  # бакет без жодної торгової хвилини, ключ будь-який
 ROW_DUPLICATE = "duplicate_removed"  # другий і далі рядки одного ключа
+ROW_KEPT_NO_SOURCE = "kept_no_source"  # бакет з торговою хвилиною без джерела — рядок лишається як є
+ROW_KEPT_OFF_GRID = "kept_off_grid"  # з них — ключ поза сіткою TF (H4/D1): лишається дефектом, гейт V1
 
 
 @dataclass
@@ -367,32 +385,38 @@ class FilePlan:
 
 
 def plan_part_file(
-    part: PartFile, ctx: SymbolContext, tf_s: int, day: str, rebuild_tf: Set[int], built_tf: Set[int],
-    new_rows: Mapping[int, bytes], rows: Counter,
+    part: PartFile, ctx: SymbolContext, tf_s: int, day: str, scope: "TfScope", new_rows: Mapping[int, bytes]
 ) -> Optional[FilePlan]:
     """Новий вміст part-файла; None — файл не змінюється.
 
-    Рядок поза областю дії, чужий, нерозбірний чи порожній — байт у байт на своєму місці. Свій рядок бакета набору:
+    Рядок поза областю дії, чужий, нерозбірний чи порожній, а також рядок бакета без джерела (`replaced_buckets`,
+    лічильник `kept_no_source`) — байт у байт на своєму місці. Свій рядок бакета, що замінюється:
     той самий байт у байт — лишається; той самий ключ з іншим вмістом — новий рядок на його місці; ключ поза сіткою,
     бакет без бару, повтор ключа — прибирається. Новий ключ стає перед першим своїм рядком з більшим ключем. Нові
     рядки мають EOL файла; рядок без переводу, за яким щось іде або до якого дописуватиме писар, отримує EOL файла
     (`eol_added`, гучно в плані).
     """
     eol = part.eol_style()
+    rows = scope.rows
     out: List[Line] = []
     emitted: Set[int] = set()
     removed: List[int] = []
     added: List[int] = []
     for line in part.lines:
         key = line.own_key
-        if key is None or ctx.bucket_of(key, tf_s) not in rebuild_tf:
+        bucket_ms = None if key is None else ctx.bucket_of(key, tf_s)
+        if bucket_ms is None or bucket_ms not in scope.replaced:
+            if bucket_ms in scope.rebuild:
+                scope.kept_keys.append(key)
+                rows[ROW_KEPT_NO_SOURCE] += 1
+                rows[ROW_KEPT_OFF_GRID] += int(bucket_ms != key)
             out.append(line)
             continue
         rows[ROW_OLD] += 1
         body = new_rows.get(key)
         if body is None or key in emitted:
             removed.append(key)
-            rows[ROW_DUPLICATE if key in emitted else ROW_OFF_GRID if ctx.bucket_of(key, tf_s) in built_tf else ROW_DROPPED] += 1
+            rows[ROW_DUPLICATE if key in emitted else ROW_OFF_GRID if bucket_ms in scope.built else ROW_DROPPED] += 1
             continue
         emitted.add(key)
         if line.body == body:
@@ -420,28 +444,41 @@ def plan_part_file(
     )
 
 
+@dataclass
+class TfScope:
+    """Що план робить з TF: набір перебудови, бакети, чиї рядки замінюються, бакети з новим баром; лічильники."""
+
+    rebuild: Set[int]
+    replaced: Set[int]
+    built: Set[int]
+    rows: Counter = field(default_factory=Counter)
+    kept_keys: List[int] = field(default_factory=list)  # рядки бакетів без джерела, що лишаються
+
+
 def plan_symbol_files(
     ctx: SymbolContext, data_root: str, rebuild: Buckets, planned: PlannedBars
-) -> Tuple[List[FilePlan], Dict[int, Counter]]:
-    """Плани part-файлів усіх TF набору: доби вікон бакетів і доби нових рядків; повертає (плани, рядки за TF)."""
+) -> Tuple[List[FilePlan], Dict[int, TfScope]]:
+    """Плани part-файлів усіх TF набору: доби вікон бакетів і доби нових рядків; повертає (плани, TF → область)."""
     files: List[FilePlan] = []
-    row_stats: Dict[int, Counter] = {}
+    scopes: Dict[int, TfScope] = {}
     for tf_s in sorted(rebuild):
-        rows = row_stats.setdefault(tf_s, Counter())
         new_by_day: Dict[str, Dict[int, bytes]] = {}
         for bucket_ms, bar in planned.get(tf_s, {}).items():
             if bar is not None:
                 new_by_day.setdefault(day_of_ms(bucket_ms), {})[bucket_ms] = row_bytes(bar)
-        built = {bucket_ms for day_rows in new_by_day.values() for bucket_ms in day_rows}
+        scope = scopes[tf_s] = TfScope(
+            rebuild=rebuild[tf_s], replaced=replaced_buckets(ctx, tf_s, rebuild, planned),
+            built={bucket_ms for day_rows in new_by_day.values() for bucket_ms in day_rows},
+        )
         days = set(new_by_day)
         for bucket_ms in rebuild[tf_s]:
             days.update((day_of_ms(bucket_ms), day_of_ms(ctx.next_bucket(bucket_ms, tf_s) - 1)))
         for day in sorted(days):
             part = load_part(part_path(data_root, ctx.sym_dir, tf_s, day), ctx.sym_dir)
-            plan = plan_part_file(part, ctx, tf_s, day, rebuild[tf_s], built, new_by_day.get(day, {}), rows)
+            plan = plan_part_file(part, ctx, tf_s, day, scope, new_by_day.get(day, {}))
             if plan is not None:
                 files.append(plan)
-    return files, row_stats
+    return files, scopes
 
 
 # ── План символу і всього прогону ──────────────────────────────────────────────────────────────────────────────────
@@ -454,20 +491,24 @@ class SymbolPlan:
     tail_kept: Dict[int, int]
     planned: PlannedBars
     files: List[FilePlan]
-    rows: Dict[int, Counter]
+    scopes: Dict[int, TfScope]
     d1_rekey: List[CandleBar]
     manual_review: List[CandleBar]
     holes: Buckets
     holes_out_of_scope: Dict[int, List[int]]
     rejected_rows: int
 
+    @property
+    def rows(self) -> Dict[int, Counter]:
+        """Лічильники рядків part-файлів за TF (ROW_*)."""
+        return {tf_s: scope.rows for tf_s, scope in self.scopes.items()}
+
     def dropped(self, tf_s: int) -> Tuple[List[int], List[int]]:
         """(бакети без нового бару й без торгової хвилини, бакети з торговою хвилиною, але без джерела)."""
         no_trading: List[int] = []
         no_source: List[int] = []
         for bucket_ms in sorted(b for b, bar in self.planned.get(tf_s, {}).items() if bar is None):
-            window = range(bucket_ms, self.context.next_bucket(bucket_ms, tf_s), M1_MS)
-            (no_source if any(self.context.is_trading(t) for t in window) else no_trading).append(bucket_ms)
+            (no_source if self.context.has_trading(bucket_ms, tf_s) else no_trading).append(bucket_ms)
         return no_trading, no_source
 
     def rekey_results(self) -> List[Dict[str, Any]]:
@@ -492,7 +533,8 @@ class SymbolPlan:
             per_tf[str(tf_s)] = {
                 "rebuild": len(self.rebuild.get(tf_s, ())), "new": len(built), "tail_kept": self.tail_kept.get(tf_s, 0),
                 "partial": sum(1 for bar in built if bar.extensions.get("partial")), "rows": dict(self.rows.get(tf_s, {})),
-                "dropped_no_trading": len(no_trading), "dropped_no_source": no_source,
+                "no_bar_no_trading": len(no_trading), "no_bar_no_source": len(no_source),
+                "kept_no_source": sorted(self.scopes[tf_s].kept_keys) if tf_s in self.scopes else [],
             }
         return {
             "symbol": ctx.symbol, "rule": ctx.rule, "season_rule": ctx.calendar.season_rule, "window": list(ctx.window),
@@ -576,8 +618,8 @@ def _plan_symbol(ctx: SymbolContext, data_root: str, scopes: Sequence[str], chan
         seeds.append(holes)
     rebuild, tail_kept = complete_rebuild_set(ctx, seeds)
     planned = plan_bars(ctx, reader, rebuild)
-    files, rows = plan_symbol_files(ctx, data_root, rebuild, planned)
-    return SymbolPlan(context=ctx, rebuild=rebuild, tail_kept=tail_kept, planned=planned, files=files, rows=rows,
+    files, scopes = plan_symbol_files(ctx, data_root, rebuild, planned)
+    return SymbolPlan(context=ctx, rebuild=rebuild, tail_kept=tail_kept, planned=planned, files=files, scopes=scopes,
                       d1_rekey=rekey, manual_review=manual, holes=holes, holes_out_of_scope=out_of_scope,
                       rejected_rows=reader.rejected_rows)
 
