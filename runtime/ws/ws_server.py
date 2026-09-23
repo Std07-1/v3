@@ -1147,30 +1147,25 @@ def _seed_forming_from_uds(
     bucket_open_ms: int,
     fallback_price: float,
 ) -> Dict[str, Any]:
-    """Seed forming candle з UDS (поточний бар для bucket_open_ms).
+    """Seed forming candle з UDS (поточний бар для bucket_open_ms). Blocking I/O — лише в executor.
 
     Після рестарту forming_by_target = {}. Без seed open = перший тік
     (хибний D1 open). Якщо UDS має бар для цього bucket — береться O/H/L.
+    Формуючий бар живе лише в preview-площині (preview:curr/tail, HTF-акумулятор ADR-0044): фінальна площина
+    отримує бар бакета вже закритим. Бар поза бакетом сезонної сітки (ключ старого воркера) не збігається з
+    bucket_open_ms і не підхоплюється (ADR-0095 S9a).
     Якщо UDS ще порожній — fallback на tick_price (degraded-but-loud).
     """
-    uds = app.get("_uds")
+    uds = app[APP_UDS] if APP_UDS in app else None
+    reason = "uds_unavailable"
     if uds is not None:
         try:
-            from runtime.store.uds import WindowSpec, ReadPolicy
-
-            spec = WindowSpec(
-                symbol=symbol,
-                tf_s=tf_s,
-                limit=2,
-                to_open_ms=None,
-                cold_load=False,
-            )
-            policy = ReadPolicy(disk_policy="explicit", prefer_redis=True)
-            result = uds.read_window(spec, policy)
-            bars_lwc = getattr(result, "bars_lwc", [])
+            result = uds.read_preview_window(symbol, tf_s, 2)
+            bars_lwc = getattr(result, "bars_lwc", None) or []
+            reason = "bucket_absent preview_warnings=%s" % (getattr(result, "warnings", None) or [])
             for b in reversed(bars_lwc):
                 b_open = b.get("open_time_ms") or b.get("open_ms", 0)
-                if b_open == bucket_open_ms:
+                if b_open == bucket_open_ms and not b.get("complete", False):
                     _log.info(
                         "D1_FORMING_SEED_UDS sym=%s open_ms=%d o=%.2f h=%.2f l=%.2f",
                         symbol,
@@ -1188,14 +1183,16 @@ def _seed_forming_from_uds(
                         "open_ms": bucket_open_ms,
                     }
         except Exception as exc:
+            reason = "read_error"
             _log.warning("D1_FORMING_SEED_ERR sym=%s err=%s", symbol, exc)
     # Fallback: немає UDS даних → чистий тік (degraded-but-loud)
     _log.warning(
-        "D1_FORMING_NO_SEED sym=%s open_ms=%d price=%.2f "
+        "D1_FORMING_NO_SEED sym=%s open_ms=%d price=%.2f reason=%s "
         "— open буде першим тіком після рестарту",
         symbol,
         bucket_open_ms,
         fallback_price,
+        reason,
     )
     return {
         "symbol": symbol,
@@ -1347,7 +1344,9 @@ async def _global_delta_loop(app: web.Application) -> None:
                                             seed_open_ms = _htf_bucket_open_ms(
                                                 app, symbol, tf_s, tick_ts_ms
                                             )
-                                            forming = _seed_forming_from_uds(
+                                            forming = await asyncio.get_event_loop().run_in_executor(
+                                                app[APP_UDS_EXECUTOR],
+                                                _seed_forming_from_uds,
                                                 app,
                                                 symbol,
                                                 tf_s,

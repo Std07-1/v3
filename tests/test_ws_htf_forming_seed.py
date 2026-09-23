@@ -27,6 +27,7 @@ from core.model.bars import CandleBar
 from core.session_anchor import H4_S, RULE_NY_CLOSE_US_DST
 from preview_ring_fake import PreviewRingFakeRedis
 from runtime.store.layers.redis_layer import RedisLayer
+from runtime.store.redis_keys import preview_curr_key
 from runtime.store.uds import UnifiedDataStore, _NullDiskLayer
 from runtime.ws.app_keys import (
     APP_BOOT_ID,
@@ -212,35 +213,58 @@ class _FakeWs:
         self.frames.append(obj)
 
 
-async def _relay_frames(tmp: str, tick_ts_ms: int) -> list[dict]:
+TICK_MID = 4350.0
+# O/H/L формуючого бару preview-площини — відмінні від ціни тіку, щоб сід було видно
+_PREVIEW_OHL = (4300.0, 4400.0, 4200.0)
+
+
+def _put_preview_curr(ring: PreviewRingFakeRedis, symbol: str, tf_s: int, open_ms: int) -> None:
+    """preview:curr бакета `open_ms` — як його пише HTF-акумулятор tick_preview_worker (ADR-0044)."""
+    o, h, low = _PREVIEW_OHL
+    bar = {"open_ms": open_ms, "close_ms": open_ms + tf_s * 1000 - 1, "o": o, "h": h, "l": low, "c": 4310.0, "v": 5.0}
+    payload = {"v": 1, "symbol": symbol, "tf_s": tf_s, "bar": bar, "complete": False, "source": "htf_preview"}
+    ring.set(preview_curr_key(NS, symbol, tf_s), json.dumps(payload))
+
+
+async def _relay_frames(
+    tmp: str,
+    tick_ts_ms: int,
+    *,
+    symbol: str = XAU,
+    tf_s: int = H4_S,
+    preview_curr_open_ms: int | None = None,
+) -> list[dict]:
     ring = PreviewRingFakeRedis()
-    ring.seed_ring(NS, XAU, H4_S, 1_000, 10, retain=100)  # кільце тихе → relay-гілка
+    ring.seed_ring(NS, symbol, tf_s, 1_000, 10, retain=100)  # кільце тихе → relay-гілка
+    if preview_curr_open_ms is not None:
+        _put_preview_curr(ring, symbol, tf_s, preview_curr_open_ms)
     tick_redis = PreviewRingFakeRedis()
-    tick_redis.kv[f"{NS}:tick:last:XAU_USD"] = json.dumps({"mid": 4350.0, "tick_ts_ms": tick_ts_ms}).encode()
+    tick_key = f"{NS}:tick:last:{symbol.replace('/', '_')}"
+    tick_redis.kv[tick_key] = json.dumps({"mid": TICK_MID, "tick_ts_ms": tick_ts_ms}).encode()
     app = _app_with_resolver()
     app[APP_UDS] = UnifiedDataStore(
         data_root=tmp,
         boot_id="t",
-        tf_allowlist={H4_S},
+        tf_allowlist={tf_s},
         min_coldload_bars={},
         role="reader",
         redis_layer=RedisLayer(ring, NS),
         disk_layer=_NullDiskLayer(),
-        preview_tf_allowlist={H4_S},
+        preview_tf_allowlist={tf_s},
         preview_updates_retain=100,
     )
     app[APP_DELTA_POLL_S] = 0.001
-    app[APP_PREVIEW_TF_SET] = {H4_S}
-    app[APP_SYMBOLS_SET] = {XAU}
-    app[APP_TF_ALLOWLIST] = {H4_S}
-    app[APP_D1_TICK_RELAY_TFS] = {H4_S}
+    app[APP_PREVIEW_TF_SET] = {tf_s}
+    app[APP_SYMBOLS_SET] = {symbol}
+    app[APP_TF_ALLOWLIST] = {tf_s}
+    app[APP_D1_TICK_RELAY_TFS] = {tf_s}
     app[APP_TICK_REDIS_CLIENT] = tick_redis
     app[APP_TICK_REDIS_NS] = NS
     app[APP_UDS_EXECUTOR] = ThreadPoolExecutor(max_workers=2)
     app[APP_BOOT_ID] = "t"
     viewer = ws_server.WsSession(_FakeWs())  # type: ignore[arg-type]
-    viewer.client_id, viewer.symbol, viewer.tf_s = "V", XAU, H4_S
-    viewer.store_delta_cursor((XAU, H4_S), 1_000)
+    viewer.client_id, viewer.symbol, viewer.tf_s = "V", symbol, tf_s
+    viewer.store_delta_cursor((symbol, tf_s), 1_000)
     app[APP_WS_SESSIONS] = {"V": viewer}
 
     task = asyncio.ensure_future(ws_server._global_delta_loop(app))
@@ -268,6 +292,43 @@ async def test_tick_relay_seed_h4_on_season_grid(tick_ts_ms, h4_open_ms):
     candle = deltas[0]["candles"][0]
     assert candle["src"] == "tick_relay"
     assert candle["t_ms"] == h4_open_ms
+
+
+def _seed_log_events(caplog) -> list[str]:
+    return [
+        r.getMessage().split(" ", 1)[0]
+        for r in caplog.records
+        if r.getMessage().startswith(("D1_FORMING_SEED_UDS", "D1_FORMING_NO_SEED"))
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tick_ts_ms,h4_open_ms", _SCENARIOS)
+async def test_tick_relay_seed_inherits_ohl_of_preview_bar_on_season_grid(caplog, tick_ts_ms, h4_open_ms):
+    """Після рестарту relay-свічка успадковує O/H/L формуючого бару свого бакета з preview-площини, а не перший тік."""
+    with caplog.at_level(logging.INFO, logger=ws_server._log.name):
+        with tempfile.TemporaryDirectory() as tmp:
+            deltas = await _relay_frames(tmp, tick_ts_ms, preview_curr_open_ms=h4_open_ms)
+    assert deltas, "relay-кадр H4 не надійшов"
+    candle = deltas[0]["candles"][0]
+    assert candle["t_ms"] == h4_open_ms
+    assert (candle["o"], candle["h"], candle["l"], candle["c"]) == (*_PREVIEW_OHL, TICK_MID)
+    assert _seed_log_events(caplog) == ["D1_FORMING_SEED_UDS"]
+
+
+@pytest.mark.asyncio
+async def test_tick_relay_seed_ignores_preview_bar_on_legacy_grid(caplog):
+    """Літо, тік 23:30: бакет сітки 21:00. preview-бар старої сітки 22:00 (ключ до TTL) relay не засіває — гучний NO_SEED."""
+    with caplog.at_level(logging.INFO, logger=ws_server._log.name):
+        with tempfile.TemporaryDirectory() as tmp:
+            deltas = await _relay_frames(
+                tmp, _utc_ms(2026, 7, 1, 23, 30), preview_curr_open_ms=_utc_ms(2026, 7, 1, 22)
+            )
+    assert deltas, "relay-кадр H4 не надійшов"
+    candle = deltas[0]["candles"][0]
+    assert candle["t_ms"] == _utc_ms(2026, 7, 1, 21)
+    assert (candle["o"], candle["h"], candle["l"]) == (TICK_MID, TICK_MID, TICK_MID)
+    assert _seed_log_events(caplog) == ["D1_FORMING_NO_SEED"]
 
 
 # ── WS_TICK_RELAY_ERR: WARNING із троттлінгом ──────────────────────────
