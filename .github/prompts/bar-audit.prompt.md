@@ -39,12 +39,14 @@ close_ms == open_ms + tf_s * 1000 - 1        # end-inclusive (Redis only)
 Якщо tf > M1:
 - `derive_chain_status` → перевірити каскад M1→M3→M5→...→H4, M1→D1
 - M1 coverage має покривати весь range HTF bars
-- Anchors: НЕ хардкодити — вони DST-залежні і живуть у `config.json` (SSOT):
-  `day_anchor_offset_s` (H4) і `day_anchor_offset_s_d1` (D1), зимові — у `*_alt`.
-  Літо: H4 79200 (22:00 UTC), D1 75600 (21:00 UTC). Зима: H4 82800, D1 79200.
-  Вирівнювання перевіряти `python -m tools.symbol_health_check --symbol <S>`
-  (`geometry.align_bad`) — він знає обидва легальні якорі. Звірка з хардкодом
-  назве правильний літній бар «зсунутим».
+- Anchors H4/D1 (ADR-0095): сітка одна, сезонна. D1 відкривається о 17:00 America/New_York
+  (21:00 UTC влітку, 22:00 UTC взимку), H4 — відкриття дня + k·4 год (обрубок доби переходу
+  DST на 1 або 3 год легальний). Правило — на символ: `config.json` → `htf_anchor.rule_by_calendar_group`
+  (`ny_close_us_dst` для FXCM, `utc_midnight` для Binance). Другого «легального» якоря (alt) немає:
+  H4 22:00 влітку — дефект. Не хардкодити — межу бакета рахує `core.session_anchor.htf_bucket_start_ms`.
+  Сітку перевіряти `python -m tools.symbol_health_check --symbol <S>`: H4/D1 — `geometry.off_season_grid`
+  (RED, семпли `open → expected_open`), M1..H1 — `geometry.align_bad`. Для H4/D1 `align_bad` завжди 0,
+  тож «вирівняні» з нього не випливає.
 
 ### 4. Redis vs Disk
 - Порівняти кількість барів Redis tail vs disk JSONL (`data_v3/{symbol}/tf_{tf_s}/`)
