@@ -174,9 +174,13 @@ M1SymbolPoller.poll_once():
        Ціна — довгий цикл після великого простою (коміт ≈ 50 мс, перезапис Redis-хвоста): понад 600 барів —
        WARN M1_GAP_BULK_INGEST з тривалістю. Після вихідних класифікатор §6 бачить увесь шум паузи (більше
        M1_PAUSE_NOISE_DROPPED, ніж раніше, коли вікно було 120 найновіших барів)
+     → добір не дійшов до watermark (M1_GAP_BEYOND_BUDGET або M1_GAP_HISTORY_HORIZON) — між останнім закоміченим
+       баром і першим добраним наша діра: ланцюг ADR-0101 скидається перед записом, перший бар після діри лишається
+       з open брокера; розрив — WARN M1_CHAIN_GAP_BREAK і лічильник chain_gap_breaks (M1_POLLER_STATS)
 
   7) Ingest кожен бар: _ingest_bar(bar)
      → Calendar-aware flat bar classification (див. §6)
+     → ланцюг ADR-0101: open := close останнього закоміченого бару (WARN M1_OPEN_CHAINED, лічильник chained)
      → UDS.commit_final_bar(bar) → disk + Redis + updates bus
      → Оновлення watermark
      → DeriveEngine.on_bar(bar) → каскадна деривація M3→H4
