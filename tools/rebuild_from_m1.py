@@ -7,6 +7,11 @@ H4/D1 — на сезонній сітці символу (ADR-0095): прави
 ітератором сітки (htf_bucket_start_ms / htf_next_bucket_start_ms), тож прогін через вихідні DST
 міняє сітку сам і не будує H4 обрубка доби переходу з годин наступної доби.
 
+Формуючий хвіст не фіналізується: бакет, до останньої торгової хвилини якого джерело M1 не дійшло (хвіст M1 на
+диску або `--end` посеред бакета), пропускається з WARNING REBUILD_TAIL_BUCKETS_SKIPPED — його будує живий
+DeriveEngine, коли прийдуть хвилини. Бакет, чиє джерело дійшло до останньої торгової хвилини (п'ятниця, свято,
+ранній закрив), закритий, як і за фронтиром ADR-0097.
+
 Не змінює M1 (source). D1 тепер derived (ADR-0023).
 Не змінює SSOT формат — append-only через JsonlAppender.
 
@@ -262,6 +267,30 @@ def _grid_bucket_opens(start_ms: int, end_ms: int, tf_s: int, anchor_rule: str) 
         bucket_open = htf_next_bucket_start_ms(bucket_open, tf_s, anchor_rule)
 
 
+def _bucket_awaits_source(
+    bucket_open_ms: int,
+    bucket_close_ms: int,
+    source_end_ms: int,
+    is_trading_fn: Callable[[int], bool],
+) -> bool:
+    """Бакет ще формується: у вікні `[open, close)` є торгова хвилина не раніше `source_end_ms` (кінця джерела M1).
+
+    Критерій фронтиру ADR-0097 (`core.derive._source_reached_bucket_end`), лише від джерела M1, а не від буфера етапу:
+    бакет закритий, коли M1 дійшло до його останньої торгової хвилини, а не до кінця вікна за годинником. Тож H4
+    п'ятниці 17:00 з хвостом M1 на закритті 20:44, свято й ранній закрив — закриті, хоч вікно триває до 21:00 чи до
+    відкриття наступної доби. Один критерій для всіх TF: H1 не збирається з M30, яку етап раніше пропустив як хвіст.
+    """
+    return any(
+        is_trading_fn(minute_ms)
+        for minute_ms in range(max(bucket_open_ms, source_end_ms), bucket_close_ms, TF_M1_MS)
+    )
+
+
+def _iso_utc(ts_ms: Optional[int]) -> str:
+    """Момент у ISO UTC для логів прогону; None (M1 на диску немає) — `none`."""
+    return "none" if ts_ms is None else dt.datetime.fromtimestamp(ts_ms / 1000, dt.timezone.utc).isoformat()
+
+
 def rebuild_one_symbol(
     data_root: str,
     symbol: str,
@@ -288,6 +317,10 @@ def rebuild_one_symbol(
     Календар — сезонний (`calendar_for_symbol`, ADR-0095 §3.5): розклад сезону кожної хвилини, тож зимова H1 21:00
     XAU торгова, а 22:00 — перерва. Символ без групи чи з неповними сезонними блоками — ValueError, а не 24/7.
 
+    Джерело прогону закінчується хвилиною за хвостом M1 на диску, але не далі `end_ms`. Бакет будь-якого TF, до
+    останньої торгової хвилини якого воно не дійшло, — формуючий хвіст (`_bucket_awaits_source`): він не
+    фіналізується ні partial, ні з `--force`, лічильник `tf_X_tail_skipped` і WARNING REBUILD_TAIL_BUCKETS_SKIPPED.
+
     Returns: stats dict {tf_s: written_count, ...}
     """
     is_trading_fn = calendar_for_symbol(cfg, symbol).is_trading_minute
@@ -297,13 +330,29 @@ def rebuild_one_symbol(
     for tf_s in DERIVE_ORDER:
         stats[f"tf_{tf_s}_written"] = 0
         stats[f"tf_{tf_s}_existed"] = 0
+        stats[f"tf_{tf_s}_tail_skipped"] = 0
+
+    # Без M1 на диску джерело порожнє від початку прогону: жоден бакет з торговими хвилинами не фіналізується
+    m1_tail_ms = tail_last_bar_time_ms(data_root, symbol, tf_s=TF_M1_S)
+    source_end_ms = start_ms if m1_tail_ms is None else min(end_ms, m1_tail_ms + TF_M1_MS)
+    first_tail_open_ms: Dict[int, int] = {}
 
     chunks = _rebuild_chunks(start_ms, end_ms, anchor_rule)
-    logging.info("  REBUILD_CHUNKS chunks=%d d1_buckets_per_chunk=%d", len(chunks), REBUILD_CHUNK_D1_BUCKETS)
+    logging.info(
+        "  REBUILD_CHUNKS chunks=%d d1_buckets_per_chunk=%d source_end=%s",
+        len(chunks),
+        REBUILD_CHUNK_D1_BUCKETS,
+        _iso_utc(source_end_ms),
+    )
 
     def derive_stage(target_tf_s: int, source_buf: GenericBuffer, chunk: Tuple[int, int]) -> None:
-        """Бакети target TF у порції `chunk` з source_buf; наявні на диску ключі пропускаються (без --force)."""
+        """Бакети target TF у порції `chunk` з source_buf; хвіст не будується, наявні ключі пропускаються (без --force)."""
         for bucket_open in _grid_bucket_opens(chunk[0], chunk[1], target_tf_s, anchor_rule):
+            bucket_close = htf_next_bucket_start_ms(bucket_open, target_tf_s, anchor_rule)
+            if _bucket_awaits_source(bucket_open, bucket_close, source_end_ms, is_trading_fn):
+                stats[f"tf_{target_tf_s}_tail_skipped"] += 1
+                first_tail_open_ms.setdefault(target_tf_s, bucket_open)
+                continue
             if not force and _has_on_disk(disk_cache, data_root, symbol, target_tf_s, bucket_open):
                 stats[f"tf_{target_tf_s}_existed"] += 1
                 continue
@@ -382,6 +431,18 @@ def rebuild_one_symbol(
             stage_label,
             stats[f"tf_{target_tf_s}_written"],
             stats[f"tf_{target_tf_s}_existed"],
+        )
+
+    if first_tail_open_ms:
+        tail_tfs = sorted(first_tail_open_ms)
+        logging.warning(
+            "REBUILD_TAIL_BUCKETS_SKIPPED symbol=%s m1_tail=%s end=%s skipped=%s first=%s — джерело M1 не дійшло до "
+            "останньої торгової хвилини цих бакетів; формуючий хвіст фіналізує живий DeriveEngine",
+            symbol,
+            _iso_utc(m1_tail_ms),
+            _iso_utc(end_ms),
+            json.dumps({_tf_label(tf_s): stats[f"tf_{tf_s}_tail_skipped"] for tf_s in tail_tfs}),
+            json.dumps({_tf_label(tf_s): _iso_utc(first_tail_open_ms[tf_s]) for tf_s in tail_tfs}),
         )
 
     elapsed = time.time() - t0
