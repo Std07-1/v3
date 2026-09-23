@@ -15,7 +15,7 @@ config, повторити ПІСЛЯ і відкотитись при **буд�
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 from core.session_anchor import D1_S, H4_S
 
@@ -30,23 +30,33 @@ _GRADE_RANK = {"GREEN": 0, "YELLOW": 1, "RED": 2}
 # Літній H4 на 22:00 під v2 був легальним «alt», під v3 — RED, хоча дані ті самі.
 HEALTH_MEASURE_VERSION = 3
 
-# Числа H4/D1 (дірки, вік, каскад, корінь) до v3 рахувались на іншій сітці, тож через межу v3 вони не
-# «погіршуються», а міряють інше: v2-baseline XAU H4 «дірок» 8 → v3 131 на тих самих даних (23.09.2026).
-# Їх не порівнюємо, як і вердикти; M1..H1 сітки не міняли — їхні числа порівнюються й через межу версій.
+# Сіткові числа H4/D1 (дірки, вік, вирівнювання, каскад, корінь) до v3 рахувались на іншій сітці, тож через межу
+# v3 вони не «погіршуються», а міряють інше: v2-baseline XAU H4 «дірок» 8 → v3 131 на тих самих даних (23.09.2026).
+# Їх не порівнюємо, як і вердикти. Дублікати, close і OHLC сітки не торкаються (той самий код у v2 і v3) — вони
+# порівнюються й через межу: саме тоді ще видно регресію, внесену самою зміною (S7 переписує H4/D1), а baseline,
+# знятий після, її вже не побачить. M1..H1 сітки не міняли — їхні числа порівнюються всі.
 _SEASONAL_GRID_VERSION = 3
 _SEASONAL_GRID_TFS = frozenset({str(H4_S), str(D1_S)})  # ключі TF у звіті — рядки
 
-# (шлях у звіті TF, людська назва). Усі — «більше = гірше».
-_WORSE_IF_UP: Tuple[Tuple[Tuple[str, ...], str], ...] = (
-    (("holes", "missing"), "дірок"),
-    (("age_buckets",), "вік (бакетів)"),
-    (("geometry", "dup_conflicting"), "конфліктних дублікатів"),
-    (("geometry", "align_bad"), "невирівняних"),
-    (("geometry", "off_season_grid"), "барів поза сезонною сіткою"),
-    (("geometry", "close_bad"), "хибних close"),
-    (("geometry", "ohlc_bad"), "хибних OHLC"),
-    (("cascade", "mismatched"), "мовчазних розбіжностей каскаду"),
-    (("root", "mismatched"), "мовчазних розбіжностей з M1"),
+
+class _Measure(NamedTuple):
+    """Числовий вимір звіту TF, де «більше = гірше»."""
+
+    path: Tuple[str, ...]
+    label: str
+    grid_dependent: bool  # число H4/D1 рахується на сітці бакетів: через межу v3 міряє інше
+
+
+_WORSE_IF_UP: Tuple[_Measure, ...] = (
+    _Measure(("holes", "missing"), "дірок", grid_dependent=True),
+    _Measure(("age_buckets",), "вік (бакетів)", grid_dependent=True),
+    _Measure(("geometry", "dup_conflicting"), "конфліктних дублікатів", grid_dependent=False),
+    _Measure(("geometry", "align_bad"), "невирівняних", grid_dependent=True),
+    _Measure(("geometry", "off_season_grid"), "барів поза сезонною сіткою", grid_dependent=True),
+    _Measure(("geometry", "close_bad"), "хибних close", grid_dependent=False),
+    _Measure(("geometry", "ohlc_bad"), "хибних OHLC", grid_dependent=False),
+    _Measure(("cascade", "mismatched"), "мовчазних розбіжностей каскаду", grid_dependent=True),
+    _Measure(("root", "mismatched"), "мовчазних розбіжностей з M1", grid_dependent=True),
 )
 
 
@@ -72,6 +82,8 @@ class CompareResult:
     missing_symbols: List[str]
     compared_symbols: List[str]
     measure_versions: Tuple[int, int] = (HEALTH_MEASURE_VERSION, HEALTH_MEASURE_VERSION)
+    # Виміри H4/D1, які через межу v3 не порівнювались (інша сітка); порожньо — порівнювалось усе.
+    grid_skipped_measures: Tuple[str, ...] = ()
 
     @property
     def verdicts_comparable(self) -> bool:
@@ -144,16 +156,17 @@ def compare_reports(
             if b_bars is not None and a_bars is not None and a_bars < b_bars:
                 regressions.append(Regression(symbol, tf, "барів", int(b_bars), int(a_bars)))
 
-            if grid_changed and str(tf) in _SEASONAL_GRID_TFS:
-                continue
-            for path, label in _WORSE_IF_UP:
-                b_val, a_val = _num(b_tf, path), _num(a_tf, path)
+            skip_grid = grid_changed and str(tf) in _SEASONAL_GRID_TFS
+            for measure in _WORSE_IF_UP:
+                if skip_grid and measure.grid_dependent:
+                    continue
+                b_val, a_val = _num(b_tf, measure.path), _num(a_tf, measure.path)
                 if b_val is None or a_val is None:
                     continue
                 if a_val > b_val:
-                    regressions.append(Regression(symbol, tf, label, _as_int(b_val), _as_int(a_val)))
+                    regressions.append(Regression(symbol, tf, measure.label, _as_int(b_val), _as_int(a_val)))
                 elif a_val < b_val:
-                    improvements.append(Regression(symbol, tf, label, _as_int(b_val), _as_int(a_val)))
+                    improvements.append(Regression(symbol, tf, measure.label, _as_int(b_val), _as_int(a_val)))
 
     return CompareResult(
         regressions=regressions,
@@ -162,6 +175,9 @@ def compare_reports(
         missing_symbols=sorted((gate & set(before_syms)) - set(after_syms)),
         compared_symbols=sorted(gate & set(before_syms) & set(after_syms)),
         measure_versions=versions,
+        grid_skipped_measures=(
+            tuple(m.label for m in _WORSE_IF_UP if m.grid_dependent) if grid_changed else ()
+        ),
     )
 
 

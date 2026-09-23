@@ -194,6 +194,28 @@ def test_v2_to_v3_intraday_numbers_and_bar_loss_still_caught():
     assert measures == {("60", "дірок"), ("14400", "барів")}
 
 
+def _tf_htf(holes=0, dup=0, ohlc=0, close=0):
+    tf = _tf(holes=holes, dup=dup)
+    tf["geometry"].update(ohlc_bad=ohlc, close_bad=close)
+    return tf
+
+
+def test_v2_to_v3_htf_ohlc_close_dup_regressions_still_caught():
+    """Дублікати, close і OHLC сітки не торкаються: їхнє погіршення H4/D1 через межу v3 — регресія, дірки — ні."""
+    before = dict(_report({"XAU/USD": _sym(tfs={"14400": _tf_htf(holes=8), "86400": _tf_htf()})}), measure_version=2)
+    after = dict(_report({"XAU/USD": _sym(tfs={"14400": _tf_htf(holes=131, dup=3, ohlc=7, close=2),
+                                               "86400": _tf_htf(ohlc=1)})}), measure_version=3)
+    res = compare_reports(before, after)
+    assert {(r.tf, r.measure, r.before, r.after) for r in res.regressions} == {
+        ("14400", "конфліктних дублікатів", 0, 3),
+        ("14400", "хибних OHLC", 0, 7),
+        ("14400", "хибних close", 0, 2),
+        ("86400", "хибних OHLC", 0, 1),
+    }
+    assert "дірок" in res.grid_skipped_measures and "хибних OHLC" not in res.grid_skipped_measures
+    assert compare_reports(after, after).grid_skipped_measures == ()
+
+
 def test_off_season_grid_growth_is_regression_within_v3():
     tf_before, tf_after = _tf(), _tf()
     tf_before["geometry"]["off_season_grid"] = 0
