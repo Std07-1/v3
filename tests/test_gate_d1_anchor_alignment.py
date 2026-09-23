@@ -51,10 +51,15 @@ def _sub(result: Dict[str, Any], name: str) -> Dict[str, Any]:
 
 def test_gate_repo_config_all_subgates_green_without_data(tmp_path):
     shutil.copy(_REPO_ROOT / "config.json", tmp_path / "config.json")
+    cfg = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    # Набір символів — з того самого config, а не літерал: активація символу (GER30) не стосується якоря
+    expected_symbols = set(cfg["symbols"])
+    if cfg.get("binance", {}).get("enabled"):
+        expected_symbols |= set(cfg["binance"]["symbols"])
     result = gate.run_gate({"root": str(tmp_path)})
     assert result["ok"] is True, result["details"]
     assert list(result["metrics"]) == list(gate._CHECKS)
-    assert set(_sub(result, "htf_anchor_rule_valid")["rules"]) == {"XAU/USD", "XAG/USD", "NAS100", "SPX500", "US30"}
+    assert expected_symbols and set(_sub(result, "htf_anchor_rule_valid")["rules"]) == expected_symbols
     assert "пропуск" in _sub(result, "disk_data_anchor")["msg"]
 
 
