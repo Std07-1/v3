@@ -54,6 +54,7 @@ from runtime.store.ssot_jsonl import (
     iter_day_keys_utc,
     load_day_open_times,
     read_m1_chain_context,
+    serialize_bar,
 )
 
 logging.basicConfig(
@@ -567,10 +568,7 @@ def _append_bars_to_jsonl(data_root: str, symbol: str, bars: List[CandleBar]) ->
         path = os.path.join(tf_dir, f"part-{day_key}.jsonl")
         with open(path, "a", encoding="utf-8") as fh:
             for bar in day_bars:
-                line = json.dumps(
-                    bar.to_dict(), ensure_ascii=False, separators=(",", ":")
-                )
-                fh.write(line + "\n")
+                fh.write(serialize_bar(bar) + "\n")
                 written += 1
             fh.flush()
         log.info("REPAIR_APPEND day=%s bars=%d path=%s", day_key, len(day_bars), path)

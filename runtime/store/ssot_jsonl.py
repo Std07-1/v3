@@ -18,6 +18,12 @@ _M1_MS = _M1_S * 1000
 M1_CHAIN_NEIGHBOR_SPAN_MS = 5 * 86_400_000
 
 
+def serialize_bar(bar: CandleBar) -> str:
+    """Рядок SSOT для бару без переводу рядка — як його пише писар. Одне визначення для писаря і пакетних
+    інструментів, що складають part-файли самі (заміна ADR-0095 S7, ремонт дірок M1)."""
+    return json.dumps(bar.to_dict(), ensure_ascii=False, separators=(",", ":"))
+
+
 class AnchorRuleMissingError(ValueError):
     """Правило якоря H4/D1 символу недоступне: писар без резолвера або група календаря з невиміряною сіткою.
 
@@ -133,8 +139,7 @@ class JsonlAppender:
             if path in self._open_files_order:
                 self._open_files_order.remove(path)
                 self._open_files_order.append(path)
-        line = json.dumps(bar.to_dict(), ensure_ascii=False, separators=(",", ":"))
-        fh.write(line + "\n")
+        fh.write(serialize_bar(bar) + "\n")
         fh.flush()
         if self._fsync:
             os.fsync(fh.fileno())

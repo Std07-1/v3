@@ -29,8 +29,12 @@ def _symbol_dir_key(symbol: str) -> str:
     return symbol.replace("/", "_")
 
 
-def _is_foreign_row(row: dict[str, Any], expected_dir_key: str) -> bool:
-    """Рядок чужого символу в каталозі: поле `symbol` є і веде в інший каталог. Рядок без поля — свій (легасі)."""
+def is_foreign_row(row: dict[str, Any], expected_dir_key: str) -> bool:
+    """Рядок чужого символу в каталозі: поле `symbol` є і веде в інший каталог. Рядок без поля — свій (легасі).
+
+    Одне правило для читачів і для заміни part-файлів ADR-0095 S7 (`tools/repair/partfile_io`): чужий рядок
+    не читається і не переписується.
+    """
     row_symbol = row.get("symbol")
     return row_symbol is not None and _symbol_dir_key(str(row_symbol)) != expected_dir_key
 
@@ -118,7 +122,7 @@ def _select_newest_keys(
                         continue
                     if to_open_ms is not None and open_ms > to_open_ms:
                         continue
-                    if expected_dir_key is not None and _is_foreign_row(obj, expected_dir_key):
+                    if expected_dir_key is not None and is_foreign_row(obj, expected_dir_key):
                         foreign_rows.append((path, open_ms, obj.get("symbol")))
                         continue
                     if not _bar_passes_filters(
@@ -274,7 +278,7 @@ def _scan_open_ms(
                 open_ms = obj.get("open_time_ms")
                 if not isinstance(open_ms, int):
                     continue
-                if _is_foreign_row(obj, expected_dir_key):
+                if is_foreign_row(obj, expected_dir_key):
                     foreign_rows.append((path, open_ms, obj.get("symbol")))
                     continue
                 last_line_open_ms = open_ms
