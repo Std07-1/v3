@@ -116,6 +116,37 @@ def test_jsonl_appender_htf_without_resolver_raises(tmp_path: Path, tf_s: int, o
     assert _written_opens(tmp_path, "XAU/USD", 60) == [open_ms]
 
 
+@pytest.mark.parametrize("tf_s, short_close_s", [(H4_S, 3 * 3600), (D1_S, 23 * 3600)])
+def test_jsonl_appender_htf_on_grid_with_wrong_close_rejected(tmp_path: Path, tf_s: int, short_close_s: int):
+    """Бар на сезонній сітці, але close ≠ open + tf (обрубок) — `bar_close_time_invalid`, на диску нічого (I2)."""
+    open_ms = _utc_ms(2026, 7, 1, 21)
+    stub = CandleBar(symbol="XAU/USD", tf_s=tf_s, open_time_ms=open_ms, close_time_ms=open_ms + short_close_s * 1000,
+                     o=100.0, h=101.0, low=99.0, c=100.5, v=10.0, complete=True, src="derived")
+    app = _appender(tmp_path)
+    with pytest.raises(ValueError, match="bar_close_time_invalid"):
+        app.append(stub)
+    app.close()
+    assert _written_opens(tmp_path, "XAU/USD", tf_s) == []
+
+
+@pytest.mark.parametrize("tf_s, open_shift_ms, src, reason", [
+    (60, 30_000, "history", "bar_bucket_misaligned"),
+    (3600, 30 * 60_000, "history", "bar_bucket_misaligned"),
+    (60, 0, "derived", "derived_1m_forbidden"),
+])
+def test_jsonl_appender_intraday_geometry_rejected(tmp_path: Path, tf_s: int, open_shift_ms: int, src: str,
+                                                   reason: str):
+    """M1..H1 перевіряються від епохи без резолвера: зсув open або derived M1 — гучна відмова, на диску нічого."""
+    open_ms = _utc_ms(2026, 7, 1, 21) + open_shift_ms
+    bar = CandleBar(symbol="XAU/USD", tf_s=tf_s, open_time_ms=open_ms, close_time_ms=open_ms + tf_s * 1000,
+                    o=1.0, h=1.0, low=1.0, c=1.0, v=1.0, complete=True, src=src)
+    app = _appender(tmp_path)
+    with pytest.raises(ValueError, match=reason):
+        app.append(bar)
+    app.close()
+    assert _written_opens(tmp_path, "XAU/USD", tf_s) == []
+
+
 @patch("runtime.store.uds.build_redis_snapshot_writer", return_value=None)
 @patch("runtime.store.uds._redis_layer_from_cfg", return_value=None)
 @patch("runtime.store.uds._updates_bus_from_cfg", return_value=None)
