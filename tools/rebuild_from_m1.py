@@ -28,6 +28,7 @@ from core.derive import (
     derive_bar,
 )
 from core.model.bars import CandleBar
+from core.model.candle_chain import is_display_hidden
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.store.ssot_jsonl import (
     JsonlAppender,
@@ -267,8 +268,7 @@ def rebuild_one_symbol(
     m1_buf = GenericBuffer(60, max_keep=100000)  # 100K = ~69 days for D1 (1440/day)
     for bar in iter_m1_bars(data_root, symbol, start_ms, end_ms):
         stats["m1_loaded"] += 1
-        ext = bar.extensions or {}
-        if ext.get("calendar_pause_flat"):
+        if is_display_hidden(bar.extensions):
             stats["m1_flat_skipped"] += 1
             continue
         m1_buf.upsert(bar)

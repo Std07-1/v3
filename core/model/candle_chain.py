@@ -1,28 +1,39 @@
 """Суцільний ланцюг свічок M1 (ADR-0101 §3.1) — одне визначення розриву для записувачів і health.
 
-Інваріант SSOT: для сусідніх видимих барів a < b ``o(b) == c(a)`` у межах представлення float. Бар із маркером
-``calendar_pause_flat`` display ховає (``runtime/ws/candle_map.py``): він не сусід у ланцюзі, хоча ключ його зайнятий.
+Інваріант SSOT: для сусідніх видимих барів a < b ``o(b) == c(a)`` у межах представлення float. Бар, який display
+ховає (``is_display_hidden``: маркер ``calendar_pause_flat``), не сусід у ланцюзі, хоча ключ його зайнятий.
 
 Правило послідовності, що тримає інваріант, живе в ``runtime.ingest.m1_session_filter``, вимір у SSOT — у
-``core.health.measure_chain_breaks``. Предикат і маркер тут, в одному місці, щоб записувач і вимір не розійшлись
-допуском (D15.2), а ``core`` не імпортував ``runtime`` (I0). Тут же критерій, чи може між сусідніми барами бути наша
-діра (``hole_possible_between``): один для виміру і для пакетного записувача, що тягне ланцюг лише там, де діри бути
-не може.
+``core.health.measure_chain_breaks``. Предикати розриву і прихованого бару тут, в одному місці, щоб display,
+записувач, агрегація і вимір не розійшлись (D15.2), а ``core`` не імпортував ``runtime`` (I0). Тут же критерій, чи
+може між сусідніми барами бути наша діра (``hole_possible_between``): один для виміру і для пакетного записувача, що
+тягне ланцюг лише там, де діри бути не може.
 
 Модуль чистий і сумісний з Python 3.7: його імпортує ``m1_session_filter``, яким користується і ``.venv37``.
 """
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable, Mapping, Optional
 
 # Допуск — представлення float, не крок ціни (як рейка ADR-0100 open_chain_breaks)
 CHAIN_REL_TOL = 1e-9
 
-# Маркер інжесту, за яким display ховає бар (артефакт паузи/вихідних від брокера)
+# Маркер інжесту, за яким display ховає бар (артефакт паузи/вихідних від брокера). Читати — лише через
+# `is_display_hidden`, щоб критерій приховування жив в одному місці.
 MARKER_CALENDAR_PAUSE_FLAT = "calendar_pause_flat"
 
 # Крок календаря: предикат торгової хвилини визначений на хвилинах
 _MINUTE_MS = 60_000
+
+
+def is_display_hidden(extensions: Optional[Mapping[str, Any]]) -> bool:
+    """Бар — артефакт паузи/вихідних від брокера, і display його ховає: лише явний маркер інжесту (ADR-0096 §3.1).
+
+    Одне правило для display (``runtime/ws/candle_map.py``), ланцюга (такий бар не сусід ні для записувачів M1, ні для
+    health) і агрегації похідних (у бакет не йде). Змінити критерій приховування — тут, і він зміниться для всіх разом.
+    ``extensions`` — розширення бару; не словник (зіпсований рядок) — бар не прихований.
+    """
+    return isinstance(extensions, Mapping) and bool(extensions.get(MARKER_CALENDAR_PAUSE_FLAT))
 
 
 def open_breaks_chain(prev_close: float, bar_open: float) -> bool:

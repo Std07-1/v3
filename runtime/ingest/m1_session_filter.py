@@ -28,10 +28,9 @@ import logging
 from typing import AbstractSet, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 from core.model.bars import CandleBar
-# Предикат розриву і маркер прихованого бару — одні з health `chain_breaks` (ADR-0101 C4); open_breaks_chain
+# Предикати розриву і прихованого бару — одні з display і health `chain_breaks` (ADR-0101 C4); open_breaks_chain
 # лишається доступним звідси для наявних споживачів
-from core.model.candle_chain import MARKER_CALENDAR_PAUSE_FLAT as _MARKER_HIDDEN_PAUSE_FLAT
-from core.model.candle_chain import open_breaks_chain
+from core.model.candle_chain import is_display_hidden, open_breaks_chain
 
 # SSOT порогу: config.json → flat_bar_max_volume; це лише дефолт, коли ключа нема.
 FLAT_BAR_MAX_VOLUME_DEFAULT = 4
@@ -408,7 +407,7 @@ def plan_m1_append(
     committed = set(occupied_opens) | {bar.open_time_ms for bar in ssot_bars}
     new_by_open = {bar.open_time_ms: bar for bar in bars if bar.open_time_ms not in committed}
     visible_by_open = {bar.open_time_ms: bar for bar in ssot_bars
-                       if not bar.extensions.get(_MARKER_HIDDEN_PAUSE_FLAT)}
+                       if not is_display_hidden(bar.extensions)}
     to_write: List[CandleBar] = []
     verdicts: List[Tuple[CandleBar, str]] = []
     edits: Dict[int, SsotEdit] = {}  # open_ms → правка, у порядку називання

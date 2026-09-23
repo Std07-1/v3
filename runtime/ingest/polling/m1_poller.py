@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from core.config_loader import pick_config_path, load_system_config
 from core.model.bars import CandleBar, ms_to_utc_dt
+from core.model.candle_chain import is_display_hidden
 from core.session_anchor import D1_S, H4_S, htf_bucket_start_ms
 from env_profile import load_env_secrets
 from runtime.ingest.derive_engine import DeriveEngine, build_derive_engine
@@ -887,7 +888,7 @@ class M1SymbolPoller:
                     ):
                         self._watermark_ms = bar.open_time_ms
                     # Ланцюг ADR-0101 — від останнього видимого бару (пласку паузу display ховає)
-                    if not bar.extensions.get("calendar_pause_flat") and (
+                    if not is_display_hidden(bar.extensions) and (
                         self._last_bar is None or bar.open_time_ms > self._last_bar.open_time_ms
                     ):
                         self._last_bar = bar

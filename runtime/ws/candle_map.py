@@ -13,6 +13,8 @@ from __future__ import annotations
 import logging
 from typing import List, Optional, Tuple, cast
 
+from core.model.candle_chain import is_display_hidden
+
 _log = logging.getLogger(__name__)
 
 
@@ -48,10 +50,10 @@ def _is_display_flat_bar(bar: dict) -> bool:
     не вважає пласким). Binance зберігає пласкі бакети і в klines, і в uiKlines; у LWC плаский OHLC —
     валідний data point, «нема торгів» виражається окремим whitespace. Існування бару визначає
     upstream-класифікація (m1_session_filter: артефакт → маркер або не пишеться), display не
-    перекласифіковує за геометрією і днем тижня.
+    перекласифіковує за геометрією і днем тижня. Критерій — `core.model.candle_chain.is_display_hidden`: той самий
+    бар не сусід у ланцюзі (записувачі M1, health) і не йде в агрегацію похідних (ADR-0101 C4).
     """
-    ext = bar.get("extensions", {})
-    return isinstance(ext, dict) and bool(ext.get("calendar_pause_flat"))
+    return is_display_hidden(bar.get("extensions"))
 
 
 def map_bar_to_candle_v4(bar: dict, *, tf_s: int = 0) -> Optional[dict]:

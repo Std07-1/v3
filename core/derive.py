@@ -15,6 +15,7 @@ import bisect
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 
 from core.model.bars import CandleBar, assert_invariants
+from core.model.candle_chain import is_display_hidden
 from core.session_anchor import (
     H4_S,
     assert_on_season_grid,
@@ -312,9 +313,9 @@ def aggregate_bars(
     if not bars:
         return None
 
-    # Фільтрація calendar-pause flat барів (якщо увімкнено)
+    # Фільтрація calendar-pause flat барів (якщо увімкнено): той самий критерій, за яким їх ховає display
     if filter_calendar_pause:
-        trading = [b for b in bars if not b.extensions.get("calendar_pause_flat")]
+        trading = [b for b in bars if not is_display_hidden(b.extensions)]
     else:
         trading = list(bars)
 

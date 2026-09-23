@@ -30,7 +30,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequ
 
 from core.model.bar_choice import choose_better_bar
 from core.model.bars import CandleBar
-from core.model.candle_chain import MARKER_CALENDAR_PAUSE_FLAT, hole_possible_between, open_breaks_chain
+from core.model.candle_chain import hole_possible_between, is_display_hidden, open_breaks_chain
 from core.session_anchor import (
     H4_S,
     OffSeasonGridError,
@@ -536,7 +536,7 @@ def measure_chain_breaks(
     ``ChainResult``). Календар питаємо лише на розривах.
     """
     winners = ssot_winners(m1_bars)
-    visible = [bar for bar in winners if not bar.extensions.get(MARKER_CALENDAR_PAUSE_FLAT)]
+    visible = [bar for bar in winners if not is_display_hidden(bar.extensions)]
     inner: List[ChainBreak] = []
     at_gap: List[ChainBreak] = []
     for prev, bar in zip(visible, visible[1:]):
