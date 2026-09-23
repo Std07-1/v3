@@ -104,6 +104,14 @@ def test_htf_bucket_open_ms_unmeasured_group_raises():
         ws_server._htf_bucket_open_ms(_app_with_resolver(), "HKG33", H4_S, _utc_ms(2026, 7, 1, 23))
 
 
+@pytest.mark.parametrize("app_factory", [_app_with_resolver, web.Application], ids=["unmeasured_group", "no_resolver"])
+def test_htf_bucket_open_ms_below_h4_is_epoch_aligned_without_rule(app_factory):
+    """M1..H1 правила не потребують (як forming_tail): ні невиміряна група, ні відсутній резолвер не дають ValueError."""
+    ts_ms = _utc_ms(2026, 7, 1, 23, 37) + 12_345
+    assert ws_server._htf_bucket_open_ms(app_factory(), "HKG33", 3600, ts_ms) == _utc_ms(2026, 7, 1, 23)
+    assert ws_server._htf_bucket_open_ms(app_factory(), "HKG33", 60, ts_ms) == _utc_ms(2026, 7, 1, 23, 37)
+
+
 # ── build_app: резолвер один на процес ─────────────────────────────────
 
 
@@ -329,6 +337,17 @@ async def test_tick_relay_seed_ignores_preview_bar_on_legacy_grid(caplog):
     assert candle["t_ms"] == _utc_ms(2026, 7, 1, 21)
     assert (candle["o"], candle["h"], candle["l"]) == (TICK_MID, TICK_MID, TICK_MID)
     assert _seed_log_events(caplog) == ["D1_FORMING_NO_SEED"]
+
+
+@pytest.mark.asyncio
+async def test_tick_relay_h1_unmeasured_group_symbol_on_hour_without_relay_err(caplog):
+    """Relay H1 символу невиміряної групи (HKG33): свічка на межі години, без WS_TICK_RELAY_ERR."""
+    with caplog.at_level(logging.WARNING, logger=ws_server._log.name):
+        with tempfile.TemporaryDirectory() as tmp:
+            deltas = await _relay_frames(tmp, _utc_ms(2026, 7, 1, 23, 30), symbol="HKG33", tf_s=3600)
+    assert deltas, "relay-кадр H1 не надійшов"
+    assert deltas[0]["candles"][0]["t_ms"] == _utc_ms(2026, 7, 1, 23)
+    assert not [r for r in caplog.records if "WS_TICK_RELAY_ERR" in r.getMessage()]
 
 
 # ── WS_TICK_RELAY_ERR: WARNING із троттлінгом ──────────────────────────

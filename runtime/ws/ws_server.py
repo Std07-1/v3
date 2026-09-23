@@ -37,7 +37,7 @@ from core.config_loader import (
     tf_allowlist_from_cfg,
     preview_tf_allowlist_from_cfg,
 )
-from core.session_anchor import htf_bucket_start_ms
+from core.session_anchor import H4_S, htf_bucket_start_ms
 
 _log = logging.getLogger(__name__)
 # ADR-0085 archi_chart: one-shot WARN per symbol (I5 без спаму — delta_loop кличе кожні 2s).
@@ -1087,7 +1087,10 @@ def _htf_bucket_open_ms(app: web.Application, symbol: str, tf_s: int, ts_ms: int
 
     Правило — з резолвера `build_app`. Нема резолвера чи символ невиміряної групи → ValueError, яку гучно
     показують викликачі (WS_TICK_RELAY_ERR, `ctx.warnings` h4_forming), а не тихий якір.
+    M1..H1 правила не потребують (як `forming_tail`): бакет від епохи, символ невиміряної групи їх не ламає.
     """
+    if tf_s < H4_S:
+        return ts_ms - ts_ms % (tf_s * 1000)
     rule_for_symbol = app.get(APP_HTF_ANCHOR_RULE_FOR_SYMBOL)
     if rule_for_symbol is None:
         raise ValueError("anchor_rule_missing: APP_HTF_ANCHOR_RULE_FOR_SYMBOL не зв'язано (build_app)")
