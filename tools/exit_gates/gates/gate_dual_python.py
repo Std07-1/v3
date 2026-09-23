@@ -18,6 +18,7 @@ from typing import Any, Dict, List
 _PY37_COMPAT_FILES = [
     "core/model/bars.py",
     "core/config_loader.py",
+    "core/session_anchor.py",
     "env_profile.py",
 ]
 

@@ -11,7 +11,9 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
+
+from core.session_anchor import HTF_ANCHOR_RULES
 
 # Корінь репозиторію — батько core/
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -188,3 +190,36 @@ def min_coldload_bars_from_cfg(cfg: Dict[str, Any]) -> dict[int, int]:
     if out:
         return out
     return {}
+
+
+def htf_anchor_rule_resolver(cfg: Dict[str, Any]) -> Callable[[str], str]:
+    """Символ → правило якоря H4/D1 (ADR-0095 §3.4) через групу календаря `market_calendar_symbol_groups`.
+
+    Секція `htf_anchor.rule_by_calendar_group` валідується один раз тут. Група без правила — сітку брокера не
+    виміряно (HKG33, FX): символ з неї отримує ValueError, а не тихий default (рішення власника 23.09.2026).
+    """
+    section = cfg.get("htf_anchor")
+    by_group = section.get("rule_by_calendar_group") if isinstance(section, dict) else None
+    if not isinstance(by_group, dict) or not by_group:
+        raise ValueError("CONFIG_HTF_ANCHOR_MISSING: config.htf_anchor.rule_by_calendar_group обов'язковий (ADR-0095)")
+    for group, rule in by_group.items():
+        if rule not in HTF_ANCHOR_RULES:
+            raise ValueError(
+                "CONFIG_HTF_ANCHOR_RULE_UNKNOWN group=%s rule=%r allowed=%s" % (group, rule, sorted(HTF_ANCHOR_RULES))
+            )
+    rules = dict(by_group)
+    symbol_groups = dict(cfg.get("market_calendar_symbol_groups") or {})
+
+    def rule_for_symbol(symbol: str) -> str:
+        group = symbol_groups.get(symbol)
+        if group is None:
+            raise ValueError("HTF_ANCHOR_SYMBOL_WITHOUT_GROUP symbol=%s (market_calendar_symbol_groups)" % symbol)
+        rule = rules.get(group)
+        if rule is None:
+            raise ValueError(
+                "HTF_ANCHOR_GROUP_UNMEASURED symbol=%s group=%s — сітку H4/D1 брокера не виміряно (ADR-0095 §8.4)"
+                % (symbol, group)
+            )
+        return rule
+
+    return rule_for_symbol
