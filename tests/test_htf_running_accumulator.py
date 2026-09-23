@@ -1,13 +1,35 @@
 """Tests for _HTFRunningAccumulator (HTF live preview from M1).
 
 Covers: D1/H4 incremental aggregation, per-tick dedup (D-01/D-04),
-bucket rollover, seed path, anchor alignment (D-03 fix), symbol isolation.
+bucket rollover, seed path, seasonal grid per M1 (ADR-0095 S4b), symbol isolation.
+
+ADR-0095 S4b: бакет кожного M1 — `htf_bucket_start_ms` за правилом якоря символу. До S4b якір брався зі словника
+секунд, зібраного на старті, тож після вихідних DST preview H4/D1 стояв на сітці минулого сезону до рестарту.
 """
 
-from core.model.bars import CandleBar
-from core.buckets import bucket_start_ms
+import datetime as dt
+import inspect
+from unittest.mock import MagicMock
 
-from runtime.ingest.tick_preview_worker import _HTFRunningAccumulator, _RunningBar
+import pytest
+
+from core.model.bars import CandleBar
+from core.session_anchor import D1_S, H4_S, RULE_NY_CLOSE_US_DST, RULE_UTC_MIDNIGHT
+
+from runtime.ingest import tick_preview_worker as tick_preview_worker_module
+from runtime.ingest.tick_preview_worker import (
+    TickPreviewWorker,
+    _build_htf_anchor_rules,
+    _HTFRunningAccumulator,
+    _RunningBar,
+)
+
+UTC = dt.timezone.utc
+FXCM = RULE_NY_CLOSE_US_DST
+
+
+def _ms(year, month, day, hour, minute=0, second=0):
+    return int(dt.datetime(year, month, day, hour, minute, second, tzinfo=UTC).timestamp() * 1000)
 
 
 def _make_m1(symbol, open_ms, o, h, low, c, v=100.0, complete=True):
@@ -26,17 +48,11 @@ def _make_m1(symbol, open_ms, o, h, low, c, v=100.0, complete=True):
     )
 
 
-# D1 anchor = 79200s (22:00 UTC), H4 anchor = 82800s (23:00 UTC)
-D1_ANCHOR_MS = 79200 * 1000
-H4_ANCHOR_MS = 82800 * 1000
-
-
 class TestHTFRunningAccumulator:
 
     def _make_acc(self, tfs=None):
-        tfs = tfs or [14400, 86400]
-        anchors = {14400: H4_ANCHOR_MS, 86400: D1_ANCHOR_MS}
-        return _HTFRunningAccumulator(tfs, anchors)
+        tfs = tfs or [H4_S, D1_S]
+        return _HTFRunningAccumulator(tfs, {"XAU/USD": FXCM, "NAS100": FXCM})
 
     def test_single_m1_produces_htf_previews(self):
         """1 M1 бар → 1 H4 + 1 D1 preview."""
@@ -133,32 +149,74 @@ class TestHTFRunningAccumulator:
         assert nas_d1.o == 18000
         assert nas_d1.extensions["m1_count"] == 1
 
-    def test_h4_anchor_alignment(self):
-        """H4 бакет вирівнюється по anchor 82800 (23:00 UTC).
-
-        D-03 fix: real assertion instead of `or True`.
-        """
+    @pytest.mark.parametrize(
+        "m1_ms, expected_h4_ms",
+        [
+            (_ms(2025, 3, 17, 1), _ms(2025, 3, 17, 1)),  # літо: сітка 21/01/05/..
+            (_ms(2026, 1, 6, 1), _ms(2026, 1, 5, 22)),  # зима: сітка 22/02/06/..
+        ],
+        ids=["summer", "winter"],
+    )
+    def test_h4_on_season_grid(self, m1_ms, expected_h4_ms):
+        """H4 бакет — сезонна сітка 17:00 NY, а не статичний якір 82800 (23:00 UTC)."""
         acc = self._make_acc([14400])
-        m1_ms = 1742173200000  # 2026-03-17 01:00 UTC
-        results = acc.update("XAU/USD", _make_m1("XAU/USD", m1_ms, 100, 105, 99, 103))
-
-        h4 = results[0]
-        # Verify bucket matches SSOT bucket_start_ms
-        expected_bucket = bucket_start_ms(m1_ms, 14400 * 1000, H4_ANCHOR_MS)
-        assert h4.open_time_ms == expected_bucket
+        h4 = acc.update("XAU/USD", _make_m1("XAU/USD", m1_ms, 100, 105, 99, 103))[0]
+        assert h4.open_time_ms == expected_h4_ms
         # I2: close = open + tf_ms
         assert h4.close_time_ms == h4.open_time_ms + 14400 * 1000
 
-    def test_d1_anchor_alignment(self):
-        """D1 бакет вирівнюється по anchor 79200 (22:00 UTC)."""
+    @pytest.mark.parametrize(
+        "m1_ms, expected_d1_ms",
+        [
+            (_ms(2025, 3, 17, 0), _ms(2025, 3, 16, 21)),  # літо: 17:00 NY = 21:00 UTC
+            (_ms(2026, 1, 6, 0), _ms(2026, 1, 5, 22)),  # зима: 17:00 NY = 22:00 UTC
+        ],
+        ids=["summer", "winter"],
+    )
+    def test_d1_on_season_grid(self, m1_ms, expected_d1_ms):
+        """D1 бакет відкривається о 17:00 Нью-Йорка, а не на статичних 22:00 UTC."""
         acc = self._make_acc([86400])
-        m1_ms = 1742169600000  # 2026-03-17 00:00 UTC
-        results = acc.update("XAU/USD", _make_m1("XAU/USD", m1_ms, 100, 105, 99, 103))
-
-        d1 = results[0]
-        expected_bucket = bucket_start_ms(m1_ms, 86400 * 1000, D1_ANCHOR_MS)
-        assert d1.open_time_ms == expected_bucket
+        d1 = acc.update("XAU/USD", _make_m1("XAU/USD", m1_ms, 100, 105, 99, 103))[0]
+        assert d1.open_time_ms == expected_d1_ms
         assert d1.close_time_ms == d1.open_time_ms + 86400 * 1000
+
+    def test_utc_midnight_rule_for_binance_symbol(self):
+        """Правило символу, а не одне на процес: Binance поруч з FXCM бере опівніч UTC."""
+        acc = _HTFRunningAccumulator([H4_S, D1_S], {"XAU/USD": FXCM, "BTCUSDT": RULE_UTC_MIDNIGHT})
+        m1_ms = _ms(2026, 3, 8, 21)
+        btc = {r.tf_s: r for r in acc.update("BTCUSDT", _make_m1("BTCUSDT", m1_ms, 1, 2, 0.5, 1.5))}
+        xau = {r.tf_s: r for r in acc.update("XAU/USD", _make_m1("XAU/USD", m1_ms, 1, 2, 0.5, 1.5))}
+        assert btc[D1_S].open_time_ms == _ms(2026, 3, 8, 0)
+        assert btc[H4_S].open_time_ms == _ms(2026, 3, 8, 20)
+        assert xau[D1_S].open_time_ms == _ms(2026, 3, 8, 21)
+        assert xau[H4_S].open_time_ms == _ms(2026, 3, 8, 21)
+
+    def test_symbol_without_rule_raises(self):
+        """Символ без правила — гучна ValueError, а не бакет тихого якоря 0."""
+        acc = self._make_acc()
+        with pytest.raises(ValueError, match="HTF_PREVIEW_ANCHOR_RULE_MISSING symbol=GER30"):
+            acc.update("GER30", _make_m1("GER30", _ms(2026, 3, 9, 8), 1, 2, 0.5, 1.5))
+
+    def test_unknown_rule_rejected_at_construction(self):
+        with pytest.raises(ValueError, match="HTF_PREVIEW_ANCHOR_RULE_UNKNOWN"):
+            _HTFRunningAccumulator([H4_S], {"XAU/USD": "tv_anchor_82800"})
+
+    @pytest.mark.parametrize("tf_s", [3600, 604800])
+    def test_non_htf_tf_rejected_at_construction(self, tf_s):
+        """Сезонна сітка визначена лише для H4/D1: інший TF — відмова на старті, а не на першому тіку."""
+        with pytest.raises(ValueError, match="HTF_PREVIEW_TF_UNSUPPORTED"):
+            _HTFRunningAccumulator([H4_S, tf_s], {"XAU/USD": FXCM})
+
+    def test_fall_stub_h4_rolls_at_winter_open(self):
+        """Нд 01.11.2026: H4 21:00 — обрубок 1 год; M1 22:00 відкриває новий H4 і D1, а не зливається в 21:00."""
+        acc = self._make_acc()
+        stub = {r.tf_s: r for r in acc.update("XAU/USD", _make_m1("XAU/USD", _ms(2026, 11, 1, 21, 30), 10, 11, 9, 10))}
+        assert stub[H4_S].open_time_ms == _ms(2026, 11, 1, 21)
+        after = {r.tf_s: r for r in acc.update("XAU/USD", _make_m1("XAU/USD", _ms(2026, 11, 1, 22), 20, 21, 19, 20))}
+        assert after[H4_S].open_time_ms == _ms(2026, 11, 1, 22)
+        assert after[D1_S].open_time_ms == _ms(2026, 11, 1, 22)
+        assert after[H4_S].o == 20 and after[H4_S].extensions["m1_count"] == 1
+        assert after[D1_S].o == 20 and after[D1_S].extensions["m1_count"] == 1
 
     def test_d1_only_mode(self):
         """Можна запустити тільки з D1 (без H4)."""
@@ -244,6 +302,105 @@ class TestHTFRunningAccumulator:
         # 10 ticks for M1#1 (10.0 once) + 1 new M1#2 (10.0) = 20.0 total
         assert d1.v == 20.0
         assert d1.extensions["m1_count"] == 2
+
+
+# ---------------------------------------------------------------
+# TickPreviewWorker: правило якоря від тіку до опублікованого HTF preview (ADR-0095 S4b)
+# ---------------------------------------------------------------
+def _make_tick(symbol, tick_ts_ms, mid):
+    return {"v": 1, "symbol": symbol, "tick_ts_ms": tick_ts_ms, "mid": mid, "src": "test", "seq": 1}
+
+
+def _make_htf_worker(symbols=("XAU/USD",), rules=None):
+    uds = MagicMock()
+    worker = TickPreviewWorker(
+        uds=uds,
+        tfs=[60, H4_S, D1_S],
+        publish_min_interval_ms=0,
+        curr_ttl_s=1800,
+        symbols=list(symbols),
+        channel="test:ticks",
+        htf_preview_tfs=[H4_S, D1_S],
+        htf_anchor_rules={"XAU/USD": FXCM} if rules is None else rules,
+    )
+    return worker, uds
+
+
+def _last_published(uds, tf_s):
+    bars = [c.args[0] for c in uds.publish_preview_bar.call_args_list if c.args[0].tf_s == tf_s]
+    assert bars, "немає опублікованого preview tf_s=%d" % tf_s
+    return bars[-1]
+
+
+def test_htf_preview_rolls_grid_across_dst_weekend_without_restart():
+    """Пт 06.03.2026 20:59 (зима) → Нд 08.03 21:00 (літо) одним воркером: preview H4/D1 переходить на літню сітку.
+
+    Статичні якорі зі старту дали б у неділю H4 19:00 і D1 сб 07.03 22:00 до рестарту воркера.
+    """
+    worker, uds = _make_htf_worker()
+
+    worker.on_tick(_make_tick("XAU/USD", _ms(2026, 3, 6, 20, 59, 30), 100.0))
+    assert _last_published(uds, H4_S).open_time_ms == _ms(2026, 3, 6, 18)  # зимова сітка 22/02/../18
+    assert _last_published(uds, D1_S).open_time_ms == _ms(2026, 3, 5, 22)
+
+    worker.on_tick(_make_tick("XAU/USD", _ms(2026, 3, 8, 21, 0, 10), 200.0))
+    h4 = _last_published(uds, H4_S)
+    d1 = _last_published(uds, D1_S)
+    assert h4.open_time_ms == _ms(2026, 3, 8, 21)
+    assert d1.open_time_ms == _ms(2026, 3, 8, 21)
+    assert h4.o == 200.0 and h4.extensions["m1_count"] == 1
+    assert d1.o == 200.0 and d1.extensions["m1_count"] == 1
+
+    # 22:00 — ще той самий літній H4 21:00 і D1, а не межа зимової сітки
+    worker.on_tick(_make_tick("XAU/USD", _ms(2026, 3, 8, 22, 0, 10), 201.0))
+    h4 = _last_published(uds, H4_S)
+    d1 = _last_published(uds, D1_S)
+    assert h4.open_time_ms == _ms(2026, 3, 8, 21) and h4.extensions["m1_count"] == 2
+    assert d1.open_time_ms == _ms(2026, 3, 8, 21) and d1.extensions["m1_count"] == 2
+
+
+def test_worker_htf_preview_without_rules_raises():
+    """HTF preview без правила на кожен символ allowlist — відмова в конструкторі, до першого тіку."""
+    with pytest.raises(ValueError, match="HTF_PREVIEW_ANCHOR_RULE_MISSING symbols=\\['XAU/USD'\\]"):
+        _make_htf_worker(rules={})
+    with pytest.raises(ValueError, match="HTF_PREVIEW_ANCHOR_RULE_MISSING symbols=\\['NAS100'\\]"):
+        _make_htf_worker(symbols=("XAU/USD", "NAS100"))
+
+
+def _cfg(groups, by_group):
+    return {"market_calendar_symbol_groups": groups, "htf_anchor": {"rule_by_calendar_group": by_group}}
+
+
+def test_build_htf_anchor_rules_per_symbol_group():
+    cfg = _cfg(
+        {"XAU/USD": "cfd_us_22_23", "BTCUSDT": "crypto_24x7"},
+        {"cfd_us_22_23": FXCM, "crypto_24x7": RULE_UTC_MIDNIGHT},
+    )
+    rules = _build_htf_anchor_rules(cfg, [H4_S, D1_S], ["XAU/USD", "BTCUSDT"])
+    assert rules == {"XAU/USD": FXCM, "BTCUSDT": RULE_UTC_MIDNIGHT}
+
+
+def test_build_htf_anchor_rules_unmeasured_group_raises():
+    cfg = _cfg({"XAU/USD": "cfd_us_22_23", "HKG33": "cfd_hk_main"}, {"cfd_us_22_23": FXCM})
+    with pytest.raises(ValueError, match="HTF_ANCHOR_GROUP_UNMEASURED symbol=HKG33"):
+        _build_htf_anchor_rules(cfg, [H4_S], ["XAU/USD", "HKG33"])
+
+
+def test_build_htf_anchor_rules_without_htf_tfs_needs_no_section():
+    """Preview без H4/D1 не потребує секції htf_anchor; з HTF — без секції гучна відмова."""
+    assert _build_htf_anchor_rules({}, [], ["XAU/USD"]) == {}
+    with pytest.raises(ValueError, match="CONFIG_HTF_ANCHOR_MISSING"):
+        _build_htf_anchor_rules({}, [D1_S], ["XAU/USD"])
+
+
+def test_main_wires_rules_after_calendar_filter_without_anchor_seconds():
+    """Source-гейт main(): правила будуються після фільтра rejected-календарів; секунд якоря з config немає."""
+    main_src = inspect.getsource(tick_preview_worker_module.main)
+    assert main_src.index("resolve_symbol_calendars(") < main_src.index("_build_htf_anchor_rules(")
+    assert "htf_anchor_rules=htf_anchor_rules" in main_src
+    module_src = inspect.getsource(tick_preview_worker_module)
+    for legacy in ("day_anchor_offset_s", "resolve_anchor_offset_ms", "anchor_offset_ms"):
+        assert legacy not in module_src
 
 
 class TestRunningBar:

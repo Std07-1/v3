@@ -3,6 +3,8 @@
 Підтримує auto-promote: при rollover бакету повертає
 завершений (promoted) бар попередньої хвилини одразу,
 не чекаючи M1 poller (+8 с).
+
+Лише TF < H4: бакет від епохи. H4/D1 preview будує `_HTFRunningAccumulator` за сезонною сіткою (ADR-0095 S4b).
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 from core.buckets import bucket_start_ms, tf_to_ms
 from core.model.bars import CandleBar
+from core.session_anchor import H4_S
 
 
 @dataclass
@@ -46,12 +49,16 @@ class TickAggregator:
         tf_allowlist: Iterable[int] = (60, 180),
         *,
         source: str = "preview_tick",
-        anchor_offset_ms: int = 0,
         auto_promote: bool = False,
     ) -> None:
         self._tf_allowlist = set(int(v) for v in tf_allowlist)
+        htf_tfs = sorted(tf for tf in self._tf_allowlist if tf >= H4_S)
+        if htf_tfs:
+            # Сітка H4/D1 сезонна, а тут бакет від епохи — тихий бакет не тієї сітки (ADR-0095 S4b)
+            raise ValueError(
+                "TICK_AGG_HTF_TF_FORBIDDEN tfs=%s: H4/D1 preview — лише _HTFRunningAccumulator" % htf_tfs
+            )
         self._source = str(source)
-        self._anchor_offset_ms = int(anchor_offset_ms)
         self._auto_promote = bool(auto_promote)
         self._state: Dict[Tuple[str, int], _BucketState] = {}
         self._stats = {
@@ -86,7 +93,7 @@ class TickAggregator:
             return (None, None)
 
         tf_ms = tf_to_ms(int(tf_s))
-        open_ms = bucket_start_ms(int(tick_ts_ms), tf_ms, self._anchor_offset_ms)
+        open_ms = bucket_start_ms(int(tick_ts_ms), tf_ms, 0)
         close_ms = int(open_ms + tf_ms)
         key = (str(symbol), int(tf_s))
         state = self._state.get(key)

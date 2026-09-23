@@ -4,11 +4,12 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from env_profile import load_env_secrets
-from core.config_loader import pick_config_path, load_system_config
-from core.buckets import bucket_start_ms as _bucket_start_ms, resolve_anchor_offset_ms
+from core.config_loader import htf_anchor_rule_resolver, pick_config_path, load_system_config
+from core.buckets import bucket_start_ms as _bucket_start_ms
+from core.session_anchor import D1_S, H4_S, HTF_ANCHOR_RULES, htf_bucket_start_ms
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.tick_agg import TickAggregator
 from runtime.ingest.tick_common import (
@@ -130,15 +131,25 @@ class _HTFRunningAccumulator:
     """Інкрементальна деривація HTF (H4, D1) preview з M1 барів.
 
     O(1) per update: running OHLCV state per (symbol, tf_s).
+    Бакет кожного M1 — `htf_bucket_start_ms` за правилом якоря символу (ADR-0095 S4b), а не словник якорів,
+    зібраний на старті: сітка H4/D1 перемикається на вихідних DST без рестарту воркера.
     Dedup: відстежує last_m1_open_ms per (symbol, tf_s).
     Tick-update (same open_time_ms) → update_forming (лише c/h/low).
     Новий M1 bar → full merge (count + v).
     seed() використовує той самий update() — єдиний код path.
     """
 
-    def __init__(self, target_tfs_s: list, anchor_offsets_ms: dict):
+    def __init__(self, target_tfs_s: list, anchor_rules: Mapping[str, str]):
+        unsupported = sorted(tf for tf in target_tfs_s if tf not in (H4_S, D1_S))
+        if unsupported:
+            raise ValueError("HTF_PREVIEW_TF_UNSUPPORTED tfs=%s: лише H4/D1 (ADR-0095 S4b)" % unsupported)
+        unknown = sorted(sym for sym, rule in anchor_rules.items() if rule not in HTF_ANCHOR_RULES)
+        if unknown:
+            raise ValueError(
+                "HTF_PREVIEW_ANCHOR_RULE_UNKNOWN symbols=%s allowed=%s" % (unknown, sorted(HTF_ANCHOR_RULES))
+            )
         self._target_tfs_s = list(target_tfs_s)
-        self._anchor_offsets_ms = dict(anchor_offsets_ms)
+        self._anchor_rules: Dict[str, str] = dict(anchor_rules)
         self._running: Dict[str, Dict[int, _RunningBar]] = {}
         self._last_m1_open: Dict[tuple, int] = {}
 
@@ -150,15 +161,17 @@ class _HTFRunningAccumulator:
     def update(self, symbol: str, m1_bar) -> list:
         """Оновлення з M1 баром. Повертає list[CandleBar] HTF previews.
 
-        O(1) per call per target TF. Dedup по M1 open_time_ms.
+        O(1) per call per target TF. Dedup по M1 open_time_ms. Символ без правила якоря — ValueError, а не
+        бакет тихого якоря 0.
         """
+        rule = self._anchor_rules.get(symbol)
+        if rule is None:
+            raise ValueError("HTF_PREVIEW_ANCHOR_RULE_MISSING symbol=%s (ADR-0095 S4b)" % symbol)
         sym_state = self._running.setdefault(symbol, {})
         results = []
 
         for tf_s in self._target_tfs_s:
-            tf_ms = tf_s * 1000
-            anchor_ms = self._anchor_offsets_ms.get(tf_s, 0)
-            bucket_open = _bucket_start_ms(m1_bar.open_time_ms, tf_ms, anchor_ms)
+            bucket_open = htf_bucket_start_ms(m1_bar.open_time_ms, tf_s, rule)
 
             running = sym_state.get(tf_s)
 
@@ -281,9 +294,8 @@ class TickPreviewWorker:
         channel: str,
         calendars: Dict[str, MarketCalendar] | None = None,
         auto_promote_m1: bool = False,
-        anchor_offset_ms: int = 0,
         htf_preview_tfs: list[int] | None = None,
-        htf_anchor_offsets_ms: Dict[int, int] | None = None,
+        htf_anchor_rules: Mapping[str, str] | None = None,
     ) -> None:
         self._uds = uds
         self._tfs = [int(x) for x in tfs if int(x) > 0]
@@ -296,9 +308,14 @@ class TickPreviewWorker:
         # HTF accumulator: M1→H4/D1 preview (replaces tick-agg for these TFs)
         _htf_set = set(htf_preview_tfs or [])
         if _htf_set:
+            # Правило якоря — на кожен символ allowlist ДО першого тіку (ADR-0095 S4b)
+            anchor_rules = dict(htf_anchor_rules or {})
+            missing = sorted(s for s in symbols if s not in anchor_rules)
+            if missing:
+                raise ValueError("HTF_PREVIEW_ANCHOR_RULE_MISSING symbols=%s (ADR-0095 S4b)" % missing)
             self._htf_acc: Optional[_HTFRunningAccumulator] = _HTFRunningAccumulator(
                 sorted(_htf_set),
-                htf_anchor_offsets_ms or {},
+                anchor_rules,
             )
             # D-06 guard: exclude HTF from TickAgg to prevent dual-path publish
             self._tfs = [t for t in self._tfs if t not in _htf_set]
@@ -311,7 +328,6 @@ class TickPreviewWorker:
             tf_allowlist=agg_tfs,
             source="preview_tick",
             auto_promote=self._auto_promote_m1,
-            anchor_offset_ms=int(anchor_offset_ms),
         )
         self._m3_buffer = _M1toM3Buffer() if self._derive_m3 else None
         self._last_tick_ts_ms: Dict[str, int] = {}
@@ -673,6 +689,22 @@ class TickPreviewWorker:
                 time.sleep(1.0)
 
 
+def _build_htf_anchor_rules(
+    cfg: Mapping[str, Any], htf_preview_tfs: list[int], symbols: list[str]
+) -> Dict[str, str]:
+    """Правило якоря H4/D1 на символ для HTF preview (ADR-0095 S4b) — лише через `htf_anchor_rule_resolver`.
+
+    Без HTF у preview резолвер не потрібен — порожньо. Інакше невалідна секція `htf_anchor` чи символ
+    невиміряної групи — ValueError до старту воркера, а не тихий якір.
+    """
+    if not htf_preview_tfs:
+        return {}
+    rule_for_symbol = htf_anchor_rule_resolver(dict(cfg))
+    rules = {sym: rule_for_symbol(sym) for sym in symbols}
+    logging.info("TICK_PREVIEW_HTF_WIRED tfs=%s rules=%s", sorted(htf_preview_tfs), rules)
+    return rules
+
+
 def main() -> int:
     _setup_logging()
     report = load_env_secrets()
@@ -743,13 +775,15 @@ def main() -> int:
 
     auto_promote_m1 = bool(cfg.get("tick_auto_promote_m1", False))
 
-    anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
-
-    # HTF preview: M1→H4/D1 via accumulator (SSOT anchors from resolve_anchor_offset_ms)
-    htf_preview_tfs = [tf for tf in preview_cfg.tfs if tf >= 14400]
-    htf_anchor_offsets_ms = {
-        tf_s: resolve_anchor_offset_ms(tf_s, cfg) for tf_s in htf_preview_tfs
-    }
+    # HTF preview: M1→H4/D1 через акумулятор. Правила — ПІСЛЯ фільтра rejected-календарів: символ без
+    # календаря вже вибув і не валить резолвер (ADR-0095 S4b)
+    htf_preview_tfs = [tf for tf in preview_cfg.tfs if tf >= H4_S]
+    try:
+        htf_anchor_rules = _build_htf_anchor_rules(cfg, htf_preview_tfs, all_symbols)
+    except ValueError as exc:
+        logging.error("TICK_PREVIEW_HTF_ANCHOR_INVALID err=%s", exc)
+        time.sleep(5.0)
+        return 2
 
     worker = TickPreviewWorker(
         uds=uds,
@@ -760,9 +794,8 @@ def main() -> int:
         channel=preview_cfg.channel,
         calendars=calendars,
         auto_promote_m1=auto_promote_m1,
-        anchor_offset_ms=anchor_offset_s * 1000,
         htf_preview_tfs=htf_preview_tfs,
-        htf_anchor_offsets_ms=htf_anchor_offsets_ms,
+        htf_anchor_rules=htf_anchor_rules,
     )
     logging.info(
         "TickPreview: tfs=%s derive_m3=%s auto_promote_m1=%s symbols=%d",
