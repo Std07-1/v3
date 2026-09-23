@@ -22,6 +22,7 @@ TF) — у наборі перебудови цього TF. Набір — зе�
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
@@ -31,6 +32,7 @@ from core.model.candle_chain import is_display_hidden
 from core.session_anchor import D1_S, htf_bucket_start_ms, htf_next_bucket_start_ms
 from runtime.store.layers.disk_layer import DiskLayer
 from tools.rebuild_from_m1 import REBUILD_CHUNK_D1_BUCKETS, _bucket_awaits_source, _grid_bucket_opens
+from tools.repair.partfile_io import Line, PartFile, day_of_ms, load_part, part_path, row_bytes, sha256_hex
 
 log = logging.getLogger("season_plan")
 
@@ -243,3 +245,120 @@ def _source_buffer(
 def _visible_m1_tail(reader: SourceReader) -> Optional[CandleBar]:
     visible = [bar for bar in reader.newest(M1_S, _VISIBLE_TAIL_PROBE_KEYS) if not is_display_hidden(bar.extensions)]
     return visible[-1] if visible else None
+
+
+# ── Нові part-файли ────────────────────────────────────────────────────────────────────────────────────────────────
+ROW_OLD = "old"  # свій рядок в області дії до заміни
+ROW_UNCHANGED = "unchanged"  # новий бар байт у байт той самий — рядок лишається на місці зі своїм EOL
+ROW_REPLACED = "replaced"  # той самий ключ, інший вміст — на місці старого, EOL файла
+ROW_ADDED = "added"  # ключ, якого у файлі не було (діра, ключ сезонної сітки)
+ROW_OFF_GRID = "removed_off_grid"  # ключ не на сітці TF — у бакеті його замінює ключ сітки
+ROW_DROPPED = "dropped"  # бакет без нового бару: жодного торгового слота чи джерела
+ROW_DUPLICATE = "duplicate_removed"  # другий і далі рядки одного ключа
+
+
+@dataclass
+class FilePlan:
+    """Новий вміст одного part-файла і що в ньому змінилось; `new_bytes` у JSON плану не йде."""
+
+    sym_dir: str
+    tf_s: int
+    day: str
+    path: str
+    src_exists: bool
+    src_sha256: Optional[str]
+    src_size: int
+    new_bytes: bytes
+    removed_keys: List[int]
+    added_keys: List[int]
+    kept_lines: int
+    eol_added: bool
+
+    @property
+    def new_sha256(self) -> str:
+        return sha256_hex(self.new_bytes)
+
+    def to_json(self) -> Dict[str, Any]:
+        return {
+            "path": "%s/tf_%d/part-%s.jsonl" % (self.sym_dir, self.tf_s, self.day), "src_exists": self.src_exists,
+            "src_sha256": self.src_sha256, "src_size": self.src_size, "new_sha256": self.new_sha256,
+            "new_size": len(self.new_bytes), "removed_keys": self.removed_keys, "added_keys": self.added_keys,
+            "kept_lines": self.kept_lines, "eol_added": self.eol_added,
+        }
+
+
+def plan_part_file(
+    part: PartFile, ctx: SymbolContext, tf_s: int, day: str, rebuild_tf: Set[int], new_rows: Mapping[int, bytes],
+    rows: Counter,
+) -> Optional[FilePlan]:
+    """Новий вміст part-файла; None — файл не змінюється.
+
+    Рядок поза областю дії, чужий, нерозбірний чи порожній — байт у байт на своєму місці. Свій рядок бакета набору:
+    той самий байт у байт — лишається; той самий ключ з іншим вмістом — новий рядок на його місці; ключ поза сіткою,
+    бакет без бару, повтор ключа — прибирається. Новий ключ стає перед першим своїм рядком з більшим ключем. Нові
+    рядки мають EOL файла; рядок без переводу, за яким щось іде або до якого дописуватиме писар, отримує EOL файла
+    (`eol_added`, гучно в плані).
+    """
+    eol = part.eol_style()
+    out: List[Line] = []
+    emitted: Set[int] = set()
+    removed: List[int] = []
+    added: List[int] = []
+    for line in part.lines:
+        key = line.own_key
+        if key is None or ctx.bucket_of(key, tf_s) not in rebuild_tf:
+            out.append(line)
+            continue
+        rows[ROW_OLD] += 1
+        body = new_rows.get(key)
+        if body is None or key in emitted:
+            removed.append(key)
+            rows[ROW_DUPLICATE if key in emitted else ROW_OFF_GRID if ctx.bucket_of(key, tf_s) != key else ROW_DROPPED] += 1
+            continue
+        emitted.add(key)
+        if line.body == body:
+            out.append(line)
+            rows[ROW_UNCHANGED] += 1
+        else:
+            out.append(Line(body=body, eol=eol, obj={"open_time_ms": key}))
+            removed.append(key)
+            added.append(key)
+            rows[ROW_REPLACED] += 1
+    for key in sorted(set(new_rows) - emitted):
+        at = next((i for i, line in enumerate(out) if line.own_key is not None and line.own_key > key), len(out))
+        out.insert(at, Line(body=new_rows[key], eol=eol, obj={"open_time_ms": key}))
+        added.append(key)
+        rows[ROW_ADDED] += 1
+    if b"".join(line.body + line.eol for line in out) == part.to_bytes():
+        return None
+    eol_added = any(not line.eol for line in out)
+    out = [line if line.eol else Line(body=line.body, eol=eol, obj=line.obj, foreign=line.foreign) for line in out]
+    original = {id(line) for line in part.lines}
+    return FilePlan(
+        sym_dir=ctx.sym_dir, tf_s=tf_s, day=day, path=part.path, src_exists=part.exists, src_sha256=part.sha256,
+        src_size=part.size, new_bytes=b"".join(line.body + line.eol for line in out), removed_keys=removed,
+        added_keys=added, kept_lines=sum(1 for line in out if id(line) in original), eol_added=eol_added,
+    )
+
+
+def plan_symbol_files(
+    ctx: SymbolContext, data_root: str, rebuild: Buckets, planned: PlannedBars
+) -> Tuple[List[FilePlan], Dict[int, Counter]]:
+    """Плани part-файлів усіх TF набору: доби вікон бакетів і доби нових рядків; повертає (плани, рядки за TF)."""
+    files: List[FilePlan] = []
+    row_stats: Dict[int, Counter] = {}
+    for tf_s in sorted(rebuild):
+        rows = row_stats.setdefault(tf_s, Counter())
+        new_by_day: Dict[str, Dict[int, bytes]] = {}
+        for bucket_ms, bar in planned.get(tf_s, {}).items():
+            if bar is not None:
+                new_by_day.setdefault(day_of_ms(bucket_ms), {})[bucket_ms] = row_bytes(bar)
+        days = set(new_by_day)
+        for bucket_ms in rebuild[tf_s]:
+            days.update((day_of_ms(bucket_ms), day_of_ms(ctx.next_bucket(bucket_ms, tf_s) - 1)))
+        for day in sorted(days):
+            part = load_part(part_path(data_root, ctx.sym_dir, tf_s, day), ctx.sym_dir)
+            plan = plan_part_file(part, ctx, tf_s, day, rebuild[tf_s], new_by_day.get(day, {}), rows)
+            if plan is not None:
+                files.append(plan)
+    return files, row_stats
