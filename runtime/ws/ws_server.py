@@ -24,22 +24,26 @@ import time
 from dataclasses import dataclass
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, Optional, Protocol, cast
+from typing import Any, Callable, Dict, Optional, Protocol, cast
 
 from aiohttp import web, WSMsgType
 
 from runtime.ws.candle_map import map_bars_to_candles_v4
 from runtime.ws.forming_tail import read_forming_candle
 from core.config_loader import (
+    htf_anchor_rule_resolver,
     load_system_config,
     resolve_config_path,
     tf_allowlist_from_cfg,
     preview_tf_allowlist_from_cfg,
 )
+from core.session_anchor import htf_bucket_start_ms
 
 _log = logging.getLogger(__name__)
 # ADR-0085 archi_chart: one-shot WARN per symbol (I5 без спаму — delta_loop кличе кожні 2s).
 _ARCHI_CHART_THESIS_WARNED: set[str] = set()
+# ADR-0095 S9a: помилка tick-relay — WARNING не частіше разу на хвилину на ціль (delta_loop кличе кожні ~2 с)
+_TICK_RELAY_WARN_INTERVAL_S = 60.0
 
 # ── Constants ──────────────────────────────────────────
 SCHEMA_V = "ui_v4_v2"
@@ -111,6 +115,7 @@ from runtime.ws.app_keys import (  # noqa: E402
     APP_FULL_CONFIG,
     APP_GLOBAL_DELTA_TASK,
     APP_HEARTBEAT_S,
+    APP_HTF_ANCHOR_RULE_FOR_SYMBOL,
     APP_PREVIEW_TF_SET,
     APP_SMC_RUNNER,
     APP_SYMBOLS_SET,
@@ -1000,6 +1005,7 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                     session.tf_s,
                     candles,
                     int(time.time() * 1000),
+                    app.get(APP_HTF_ANCHOR_RULE_FOR_SYMBOL),
                 )
                 if forming is not None:
                     frame["candles"] = candles + [forming]
@@ -1076,6 +1082,64 @@ async def _safe_broadcast(
     return t_send_ms
 
 
+def _htf_bucket_open_ms(app: web.Application, symbol: str, tf_s: int, ts_ms: int) -> int:
+    """Відкриття бакета TF, що містить `ts_ms`, на сезонній сітці символу (ADR-0095 S9a).
+
+    Правило — з резолвера `build_app`. Нема резолвера чи символ невиміряної групи → ValueError, яку гучно
+    показують викликачі (WS_TICK_RELAY_ERR, `ctx.warnings` h4_forming), а не тихий якір.
+    """
+    rule_for_symbol = app.get(APP_HTF_ANCHOR_RULE_FOR_SYMBOL)
+    if rule_for_symbol is None:
+        raise ValueError("anchor_rule_missing: APP_HTF_ANCHOR_RULE_FOR_SYMBOL не зв'язано (build_app)")
+    return htf_bucket_start_ms(ts_ms, tf_s, rule_for_symbol(symbol))
+
+
+def _build_htf_anchor_rule_for_symbol(cfg: Dict[str, Any]) -> Callable[[str], str]:
+    """Резолвер правила якоря H4/D1 для ws_server, один на процес (ADR-0095 S9a).
+
+    Невалідна секція `htf_anchor` не валить UI M1..H1: ERROR на старті, а резолвер на кожен виклик піднімає ту
+    саму ValueError — кожен споживач H4/D1 деградує гучно. Символи конфігу резолвляться одразу: невиміряна
+    група видна на старті (WARNING), а не лише з першою формуючою.
+    """
+    try:
+        rule_for_symbol = htf_anchor_rule_resolver(cfg)
+    except ValueError as exc:
+        reason = str(exc)
+        _log.error("WS_HTF_ANCHOR_RULES_UNAVAILABLE err=%s — формуюча H4/D1 деградує гучно", reason)
+
+        def _rules_unavailable(symbol: str) -> str:
+            raise ValueError("%s symbol=%s" % (reason, symbol))
+
+        return _rules_unavailable
+    rules: Dict[str, str] = {}
+    for symbol in cfg.get("symbols", []):
+        try:
+            rules[str(symbol)] = rule_for_symbol(str(symbol))
+        except ValueError as exc:
+            _log.warning("WS_HTF_ANCHOR_SYMBOL_UNRESOLVED %s", exc)
+    _log.info("WS_HTF_ANCHOR_WIRED rules=%s", rules)
+    return rule_for_symbol
+
+
+def _warn_tick_relay_err(
+    last_warn_by_target: Dict[tuple[str, int], tuple[float, int]],
+    symbol: str,
+    tf_s: int,
+    exc: BaseException,
+    now_s: float,
+) -> None:
+    """WS_TICK_RELAY_ERR — WARNING (I5), не частіше `_TICK_RELAY_WARN_INTERVAL_S` на ціль; пропущені — у suppressed."""
+    target = (symbol, tf_s)
+    last_warn_s, suppressed = last_warn_by_target.get(target, (float("-inf"), 0))
+    if now_s - last_warn_s < _TICK_RELAY_WARN_INTERVAL_S:
+        last_warn_by_target[target] = (last_warn_s, suppressed + 1)
+        return
+    last_warn_by_target[target] = (now_s, 0)
+    _log.warning(
+        "WS_TICK_RELAY_ERR target=%s:%s err=%s suppressed=%d", symbol, tf_s, exc, suppressed
+    )
+
+
 def _seed_forming_from_uds(
     app: web.Application,
     symbol: str,
@@ -1150,6 +1214,8 @@ async def _global_delta_loop(app: web.Application) -> None:
     forming_by_target: Dict[tuple[str, int], Dict[str, Any]] = (
         {}
     )  # ADR-0012 P3 global forming tracking
+    # ADR-0095 S9a: троттлінг WS_TICK_RELAY_ERR на ціль — (час останнього WARNING, пропущено з того часу)
+    relay_err_last_warn: Dict[tuple[str, int], tuple[float, int]] = {}
     # ADR-0035: M1 cursor per symbol for session H/L live feed
     _m1_cursor_by_sym: Dict[str, Optional[int]] = {}
 
@@ -1277,17 +1343,9 @@ async def _global_delta_loop(app: web.Application) -> None:
                                             # ── ADR: seed forming з UDS при рестарті ──
                                             # Без seed open = перший тік після рестарту (хибний).
                                             # Читаємо поточний бар з UDS щоб успадкувати O/H/L.
-                                            from core.buckets import (
-                                                bucket_start_ms,
-                                                resolve_anchor_offset_ms,
-                                            )
-
-                                            cfg = app.get(APP_FULL_CONFIG, {})
-                                            anchor_ms = resolve_anchor_offset_ms(
-                                                tf_s, cfg
-                                            )
-                                            seed_open_ms = bucket_start_ms(
-                                                tick_ts_ms, tf_s * 1000, anchor_ms
+                                            # Бакет — на сезонній сітці символу (ADR-0095 S9a).
+                                            seed_open_ms = _htf_bucket_open_ms(
+                                                app, symbol, tf_s, tick_ts_ms
                                             )
                                             forming = _seed_forming_from_uds(
                                                 app,
@@ -1301,17 +1359,8 @@ async def _global_delta_loop(app: web.Application) -> None:
                                         forming["c"] = tick_price
                                         open_ms = forming.get("open_ms", 0)
                                         if open_ms <= 0:
-                                            from core.buckets import (
-                                                bucket_start_ms,
-                                                resolve_anchor_offset_ms,
-                                            )
-
-                                            cfg = app.get(APP_FULL_CONFIG, {})
-                                            anchor_ms = resolve_anchor_offset_ms(
-                                                tf_s, cfg
-                                            )
-                                            open_ms = bucket_start_ms(
-                                                tick_ts_ms, tf_s * 1000, anchor_ms
+                                            open_ms = _htf_bucket_open_ms(
+                                                app, symbol, tf_s, tick_ts_ms
                                             )
                                             forming["open_ms"] = open_ms
                                         forming_by_target[(symbol, tf_s)] = forming
@@ -1341,11 +1390,12 @@ async def _global_delta_loop(app: web.Application) -> None:
                                             "meta": meta,
                                         }
                             except Exception as tick_exc:
-                                _log.debug(
-                                    "WS_TICK_RELAY_ERR target=%s:%s err=%s",
+                                _warn_tick_relay_err(
+                                    relay_err_last_warn,
                                     symbol,
                                     tf_s,
                                     tick_exc,
+                                    time.monotonic(),
                                 )
 
                         # Єдине місце запису курсора гілки без подій (adopt + gap
@@ -2267,6 +2317,8 @@ def build_app(
     app[APP_D1_TICK_RELAY_TFS] = (
         set(int(x) for x in _d1_relay_tfs_raw) if _d1_relay_enabled else set()
     )
+    # ADR-0095 S9a: бакет формуючої H4/D1 (tick-relay, h4_forming, хвіст full-кадру) — за правилом символу
+    app[APP_HTF_ANCHOR_RULE_FOR_SYMBOL] = _build_htf_anchor_rule_for_symbol(full_cfg)
     _init_tick_redis_client(app, full_cfg)
 
     # Dedicated thread pool for UDS blocking I/O (limit thread explosion)
@@ -2685,11 +2737,9 @@ def build_app(
         # ── h4_forming: synthesized forming H4 candle from M1 bars ──
         try:
             if tf_s == 14400 or int(request.query.get("include_h4_forming", "0")):
-                from core.buckets import bucket_start_ms, resolve_anchor_offset_ms
-
-                _anchor = resolve_anchor_offset_ms(14400, app.get(APP_FULL_CONFIG, {}))
                 _now_ms = int(time.time() * 1000)
-                _h4_open_ms = bucket_start_ms(_now_ms, 14400 * 1000, _anchor)
+                # ADR-0095 S9a: H4 на сезонній сітці символу (літо 21/01/.., зима 22/02/..)
+                _h4_open_ms = _htf_bucket_open_ms(app, symbol, 14400, _now_ms)
                 # Get M1 bars from SmcEngine session storage (not _states)
                 _m1_deque = (
                     _smc_runner._engine._session_m1_bars.get(symbol)

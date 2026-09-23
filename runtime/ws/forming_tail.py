@@ -9,9 +9,11 @@ Full-кадр читає лише фінальну площину (UDS.read_wind
 Навмисно НЕ мержимо preview в UDS.read_window: NoMix (I3) для SMC/API-споживачів read_window.
 Фінал завжди перемагає: preview-бар бакета, для якого фінал уже є, відкидається.
 
-«Прострочений» preview = бар, чий бакет [open, open + tf) не містить поточного часу (preview
-завис на старому бакеті або годинник з майбутнього). Поза цим свіжість тримає TTL Redis
-(preview_curr_ttl_s; tail = 2x): ключі зникли → preview порожній → формуючої нема.
+«Прострочений» preview = бар, чий бакет [open, початок наступного бакета) не містить поточного часу
+(preview завис на старому бакеті або годинник з майбутнього). Для H4/D1 кінець бакета — з сезонної сітки
+символу (ADR-0095 S9a): обрубок DST-доби коротший за tf, open + tf тримав би його формуючою і після
+відкриття наступного бакета. Поза цим свіжість тримає TTL Redis (preview_curr_ttl_s; tail = 2x): ключі
+зникли → preview порожній → формуючої нема.
 
 Pure: select_forming_candle. Impure (Redis через UDS, blocking — лише в executor): read_forming_candle.
 """
@@ -20,11 +22,21 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
+from core.session_anchor import H4_S, htf_next_bucket_start_ms
 from runtime.ws.candle_map import map_bar_to_candle_v4
 
 _log = logging.getLogger(__name__)
+
+
+def _bucket_end_ms(open_ms: int, tf_s: int, anchor_rule: Optional[str]) -> int:
+    """Кінець бакета формуючої: M1..H1 — open + tf; H4/D1 — початок наступного бакета сезонної сітки (ADR-0095)."""
+    if tf_s < H4_S:
+        return open_ms + tf_s * 1000
+    if anchor_rule is None:
+        raise ValueError("anchor_rule_missing tf_s=%d — формуюча H4/D1 потребує правила якоря (ADR-0095 S9a)" % tf_s)
+    return htf_next_bucket_start_ms(open_ms, tf_s, anchor_rule)
 
 
 def _candle_shape_ok(candle: dict) -> bool:
@@ -42,11 +54,13 @@ def select_forming_candle(
     *,
     tf_s: int,
     now_ms: int,
+    anchor_rule: Optional[str] = None,
 ) -> Optional[dict]:
     """Формуюча свічка (формат candle_map: t_ms/o/h/l/c/v) для хвоста full-кадру або None.
 
     None, якщо: preview порожній; останній preview-бар complete; його бакет не містить now_ms;
     фінал цього чи пізнішого бакета вже є серед final_candles (I3: final > preview).
+    `anchor_rule` (правило якоря символу) обов'язковий для H4/D1: без нього — ValueError `anchor_rule_missing`.
     """
     if not preview_bars or tf_s <= 0:
         return None
@@ -60,7 +74,7 @@ def select_forming_candle(
         _log.warning("WS_FORMING_TAIL_BAD_SHAPE tf_s=%s candle=%s", tf_s, candle)
         return None
     open_ms = candle["t_ms"]
-    if not open_ms <= now_ms < open_ms + tf_s * 1000:
+    if not open_ms <= now_ms < _bucket_end_ms(open_ms, tf_s, anchor_rule):
         return None
     if final_candles:
         last_final_ms = final_candles[-1].get("t_ms")
@@ -75,8 +89,13 @@ def read_forming_candle(
     tf_s: int,
     final_candles: Sequence[dict],
     now_ms: int,
+    anchor_rule_for_symbol: Optional[Callable[[str], str]] = None,
 ) -> Optional[dict]:
-    """Читає поточний preview-бар (limit=1) і відбирає формуючу. Blocking I/O — викликати в executor."""
+    """Читає поточний preview-бар (limit=1) і відбирає формуючу. Blocking I/O — викликати в executor.
+
+    `anchor_rule_for_symbol` — резолвер правила якоря (`htf_anchor_rule_resolver`); кличеться лише для H4/D1.
+    """
+    anchor_rule = anchor_rule_for_symbol(symbol) if anchor_rule_for_symbol is not None and tf_s >= H4_S else None
     window = uds.read_preview_window(symbol, tf_s, 1)
     preview_warnings = getattr(window, "warnings", None)
     if preview_warnings:
@@ -86,4 +105,5 @@ def read_forming_candle(
         getattr(window, "bars_lwc", None) or [],
         tf_s=tf_s,
         now_ms=now_ms,
+        anchor_rule=anchor_rule,
     )

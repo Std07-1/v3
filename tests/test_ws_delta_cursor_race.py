@@ -28,6 +28,8 @@ from aiohttp import web
 
 import runtime.ws.ws_server as ws_server
 from preview_ring_fake import PreviewRingFakeRedis
+from core.config_loader import htf_anchor_rule_resolver
+from core.session_anchor import RULE_NY_CLOSE_US_DST, htf_bucket_start_ms
 from runtime.store.layers.redis_layer import RedisLayer
 from runtime.store.uds import UnifiedDataStore, _NullDiskLayer
 from runtime.ws.app_keys import (
@@ -35,6 +37,7 @@ from runtime.ws.app_keys import (
     APP_D1_TICK_RELAY_TFS,
     APP_DELTA_POLL_S,
     APP_FULL_CONFIG,
+    APP_HTF_ANCHOR_RULE_FOR_SYMBOL,
     APP_PREVIEW_TF_SET,
     APP_SYMBOLS_SET,
     APP_TF_ALLOWLIST,
@@ -107,7 +110,13 @@ class _Harness:
         self.app[APP_DELTA_POLL_S] = 0.001
         self.app[APP_PREVIEW_TF_SET] = {M1, M30, D1}
         self.app[APP_WS_SESSIONS] = {}
-        self.app[APP_FULL_CONFIG] = {"symbols": [XAU, XAG]}
+        self.app[APP_FULL_CONFIG] = {
+            "symbols": [XAU, XAG],
+            "market_calendar_symbol_groups": {XAU: "cfd_us_22_23", XAG: "cfd_us_22_23"},
+            "htf_anchor": {"rule_by_calendar_group": {"cfd_us_22_23": RULE_NY_CLOSE_US_DST}},
+        }
+        # ADR-0095 S9a: бакет relay-свічки D1 — за правилом символу, як у build_app
+        self.app[APP_HTF_ANCHOR_RULE_FOR_SYMBOL] = htf_anchor_rule_resolver(self.app[APP_FULL_CONFIG])
         self.app[APP_SYMBOLS_SET] = {XAU, XAG}
         self.app[APP_TF_ALLOWLIST] = {M1, M30, D1}
         self.app[APP_D1_TICK_RELAY_TFS] = set()
@@ -258,8 +267,9 @@ async def test_delta_loop_switch_to_quieter_ring_does_not_inherit_future_cursor(
 async def test_delta_loop_relay_branch_switch_does_not_poison_new_group(harness, monkeypatch, caplog):
     """Третє місце запису (relay D1 без подій): сесія, що пішла з D1, не отримує D1-курсор і кадр."""
     tick_redis = PreviewRingFakeRedis()
+    tick_ts_ms = int(time.time() * 1000)
     tick_redis.kv[f"{NS}:tick:last:XAU_USD"] = json.dumps(
-        {"mid": 4350.0, "tick_ts_ms": int(time.time() * 1000)}
+        {"mid": 4350.0, "tick_ts_ms": tick_ts_ms}
     ).encode()
     harness.app[APP_D1_TICK_RELAY_TFS] = {D1}
     harness.app[APP_TICK_REDIS_CLIENT] = tick_redis
@@ -283,6 +293,9 @@ async def test_delta_loop_relay_branch_switch_does_not_poison_new_group(harness,
     full_idx = max(i for i, f in enumerate(s.ws.frames) if f.get("frame_type") == "full")
     assert all(f.get("tf") == "M30" for f in s.ws.frames[full_idx:] if f.get("frame_type") == "delta")
     assert len(_deltas(v, "D1")) >= 3  # relay-кадри глядачу D1 йдуть і далі
+    # ADR-0095 S9a: relay-свічка D1 — на сезонній сітці (відкриття торгового дня 17:00 NY)
+    d1_open_ms = htf_bucket_start_ms(tick_ts_ms, D1, RULE_NY_CLOSE_US_DST)
+    assert {f["candles"][0]["t_ms"] for f in _deltas(v, "D1")} == {d1_open_ms}
 
 
 # ── connect / gap / майбутній курсор ───────────────────────────────────

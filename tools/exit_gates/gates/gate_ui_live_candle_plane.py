@@ -6,7 +6,8 @@
 Підгейти:
   1. overlay_read_only — /api/overlay не має write-викликів
   2. overlay_two_bar_contract — bars[0–2] + hold-prev-until-final
-  3. overlay_anchor_sentinel_present — resolve_anchor_offset_ms + sentinel warning
+  3. overlay_anchor_sentinel_present — бакет формуючої H4/D1 на сезонній сітці (htf_bucket_start_ms +
+     резолвер правила символу), статичний легасі-якір resolve_anchor_offset_ms заборонено (ADR-0095 S9a)
   4. ui_overlay_isolated_from_applyUpdates — overlay окремий від applyUpdates
   5. ui_polling_no_interval_storm — заборонено setInterval для polling
 """
@@ -181,12 +182,15 @@ def _check_overlay_two_bar_contract(root: str) -> Tuple[bool, str, Dict[str, Any
 
 # ---------------------------------------------------------------------------
 # Sub-gate 3: overlay_anchor_sentinel_present
-# resolve_anchor_offset_ms + sentinel warning overlay_anchor_mismatch
+# ADR-0095 S9a: бакет формуючої H4/D1 у ws_server — htf_bucket_start_ms за правилом символу
+# (APP_HTF_ANCHOR_RULE_FOR_SYMBOL). Статичний resolve_anchor_offset_ms — сторож: після прибирання
+# легасі-ключів (S5c) він тихо дав би якір 0. Колишній сентинел overlay_anchor_mismatch перевіряв
+# /api/overlay, якого в ws_server більше нема (див. підгейти 1–2), тож його знято.
 # ---------------------------------------------------------------------------
 
 
 def _check_overlay_anchor_sentinel(root: str) -> Tuple[bool, str, Dict[str, Any]]:
-    """Наявність anchor offset і sentinel warning для drift."""
+    """Бакет формуючої H4/D1 — на сезонній сітці символу, без статичного легасі-якоря."""
     server_path = _find_file("runtime/ws/ws_server.py", root)
     if server_path is None:
         return False, "server.py_not_found", {}
@@ -197,17 +201,22 @@ def _check_overlay_anchor_sentinel(root: str) -> Tuple[bool, str, Dict[str, Any]
 
     metrics: Dict[str, Any] = {}
 
-    has_resolve = "resolve_anchor_offset_ms" in src
-    metrics["has_resolve_anchor_offset_ms"] = has_resolve
+    has_season_grid = "htf_bucket_start_ms" in src
+    metrics["has_htf_bucket_start_ms"] = has_season_grid
 
-    has_sentinel = "overlay_anchor_mismatch" in src or "overlay_anchor_offset" in src
-    metrics["has_overlay_anchor_mismatch_warning"] = has_sentinel
+    has_rule_resolver = "APP_HTF_ANCHOR_RULE_FOR_SYMBOL" in src
+    metrics["has_htf_anchor_rule_resolver"] = has_rule_resolver
+
+    has_legacy_anchor = "resolve_anchor_offset_ms" in src
+    metrics["has_legacy_resolve_anchor_offset_ms"] = has_legacy_anchor
 
     issues: List[str] = []
-    if not has_resolve:
-        issues.append("no_resolve_anchor_offset_ms")
-    if not has_sentinel:
-        issues.append("no_overlay_anchor_mismatch_sentinel")
+    if not has_season_grid:
+        issues.append("no_htf_bucket_start_ms")
+    if not has_rule_resolver:
+        issues.append("no_htf_anchor_rule_resolver")
+    if has_legacy_anchor:
+        issues.append("legacy_resolve_anchor_offset_ms")
 
     if issues:
         return False, ";".join(issues), metrics

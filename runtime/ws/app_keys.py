@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from typing import Callable
 
 from aiohttp import web
 
@@ -38,6 +39,8 @@ APP_SYMBOLS_SET = web.AppKey("symbols_set", set)
 APP_TF_ALLOWLIST = web.AppKey("tf_allowlist", set)
 APP_PREVIEW_TF_SET = web.AppKey("preview_tf_set", set)
 APP_D1_TICK_RELAY_TFS = web.AppKey("d1_tick_relay_tfs", set)
+# ADR-0095 S9a: символ → правило якоря H4/D1 (core.config_loader.htf_anchor_rule_resolver), один на процес
+APP_HTF_ANCHOR_RULE_FOR_SYMBOL: web.AppKey[Callable[[str], str]] = web.AppKey("htf_anchor_rule_for_symbol")
 
 # ── Redis (tick stream) ───────────────────────────────────────────────────
 APP_TICK_REDIS_CLIENT = web.AppKey("tick_redis_client", object)

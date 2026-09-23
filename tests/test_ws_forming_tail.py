@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import tempfile
 import time
@@ -17,6 +18,7 @@ import pytest
 from aiohttp import web
 
 import runtime.ws.ws_server as ws_server
+from core.session_anchor import D1_S, H4_S, RULE_NY_CLOSE_US_DST
 from preview_ring_fake import PreviewRingFakeRedis
 from runtime.store.layers.redis_layer import RedisLayer
 from runtime.store.redis_keys import preview_curr_key
@@ -114,6 +116,49 @@ def test_select_forming_candle_nan_price_returns_none():
     assert select_forming_candle([], [bar], tf_s=TF, now_ms=NOW_MS) is None
 
 
+# ── H4/D1: кінець бакета з сезонної сітки (ADR-0095 S9a) ───────────────
+
+_HOUR_MS = 3_600_000
+# Нд 01.11.2026: торговий день Сб 31.10 21:00 (літо) триває 25 год до Нд 22:00 (зима);
+# його останній H4 — обрубок Нд 21:00–22:00
+_FALL_STUB_H4_MS = int(dt.datetime(2026, 11, 1, 21, tzinfo=dt.timezone.utc).timestamp() * 1000)
+_FALL_25H_DAY_OPEN_MS = _FALL_STUB_H4_MS - 24 * _HOUR_MS
+
+
+def test_select_forming_candle_h4_fall_stub_is_forming_inside_its_hour():
+    now_ms = _FALL_STUB_H4_MS + _HOUR_MS // 2
+    candle = select_forming_candle(
+        [], [_lwc(_FALL_STUB_H4_MS)], tf_s=H4_S, now_ms=now_ms, anchor_rule=RULE_NY_CLOSE_US_DST
+    )
+    assert candle is not None and candle["t_ms"] == _FALL_STUB_H4_MS
+
+
+def test_select_forming_candle_h4_fall_stub_stale_after_winter_bucket_opens():
+    """Нд 22:30: обрубок 21:00 закрився о 22:00 — open + 4 год тримав би його формуючою до 01:00."""
+    now_ms = _FALL_STUB_H4_MS + 90 * 60_000
+    assert (
+        select_forming_candle(
+            [], [_lwc(_FALL_STUB_H4_MS)], tf_s=H4_S, now_ms=now_ms, anchor_rule=RULE_NY_CLOSE_US_DST
+        )
+        is None
+    )
+
+
+def test_select_forming_candle_d1_25h_day_is_forming_in_its_last_hour():
+    """Нд 21:30: D1 Сб 31.10 21:00 триває до 22:00 — open + 24 год відкинув би його як прострочений."""
+    now_ms = _FALL_STUB_H4_MS + _HOUR_MS // 2
+    candle = select_forming_candle(
+        [], [_lwc(_FALL_25H_DAY_OPEN_MS)], tf_s=D1_S, now_ms=now_ms, anchor_rule=RULE_NY_CLOSE_US_DST
+    )
+    assert candle is not None and candle["t_ms"] == _FALL_25H_DAY_OPEN_MS
+
+
+def test_select_forming_candle_h4_without_anchor_rule_raises():
+    now_ms = _FALL_STUB_H4_MS + _HOUR_MS // 2
+    with pytest.raises(ValueError, match="anchor_rule_missing"):
+        select_forming_candle([], [_lwc(_FALL_STUB_H4_MS)], tf_s=H4_S, now_ms=now_ms)
+
+
 # ── Impure: реальний UDS reader над RedisLayer ─────────────────────────
 
 
@@ -149,6 +194,21 @@ def test_read_forming_candle_from_preview_curr_via_real_uds():
     with tempfile.TemporaryDirectory() as tmp:
         candle = read_forming_candle(_real_uds(tmp, fake), SYM, TF, [_final(BUCKET_MS - TF_MS)], NOW_MS)
     assert candle is not None and candle["t_ms"] == BUCKET_MS and candle["h"] == 12.0
+
+
+def test_read_forming_candle_m1_does_not_resolve_anchor_rule():
+    """Правило якоря потрібне лише H4/D1: символ невиміряної групи не ламає формуючу M1..H1."""
+
+    def _unmeasured(symbol: str) -> str:
+        raise ValueError("HTF_ANCHOR_GROUP_UNMEASURED symbol=%s" % symbol)
+
+    fake = PreviewRingFakeRedis()
+    _put_preview_curr(fake, BUCKET_MS)
+    with tempfile.TemporaryDirectory() as tmp:
+        candle = read_forming_candle(
+            _real_uds(tmp, fake), SYM, TF, [_final(BUCKET_MS - TF_MS)], NOW_MS, _unmeasured
+        )
+    assert candle is not None and candle["t_ms"] == BUCKET_MS
 
 
 def test_read_forming_candle_expired_preview_keys_returns_none():
