@@ -113,7 +113,8 @@
       "market_weekend_close_dow": 4,
       "market_weekend_close_hm": "20:45",
       "market_daily_break_start_hm": "21:00",
-      "market_daily_break_end_hm": "22:00"
+      "market_daily_break_end_hm": "22:00",
+      "session_open_grace_min": 1
     },
     "cfd_hk_main": {
       "market_weekend_open_dow": 0,
@@ -147,7 +148,8 @@
       "market_weekend_close_dow": 4,
       "market_weekend_close_hm": "20:00",
       "market_daily_break_start_hm": "20:00",
-      "market_daily_break_end_hm": "06:00"
+      "market_daily_break_end_hm": "06:00",
+      "session_open_grace_min": 1
     },
     "cfd_eu_ger30": {
       "market_weekend_open_dow": 0,
@@ -155,7 +157,8 @@
       "market_weekend_close_dow": 4,
       "market_weekend_close_hm": "20:00",
       "market_daily_break_start_hm": "20:00",
-      "market_daily_break_end_hm": "00:30"
+      "market_daily_break_end_hm": "00:30",
+      "session_open_grace_min": 1
     }
   },
   "htf_anchor": {

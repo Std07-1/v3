@@ -27,7 +27,8 @@ config інструмент не читає. Символ із невиміря�
 а не тихий якір.
 
 Версія виміру 4 (ADR-0101 C4): рядок M1 має `chain_breaks` — розриви open ≠ close попереднього видимого бару по всій
-історії, окремо без діри (`inner`, YELLOW) і на межі діри (`at_gap`), із семплами.
+історії, окремо без діри (`inner`, YELLOW) і на межі діри (`at_gap`), із найновішими семплами. Відкриття сесії, яке
+брокер пропускає (`session_open_grace_min` групи календаря: метали — 22:01), діри не доводить — розрив на ньому `inner`.
 """
 from __future__ import annotations
 
@@ -40,7 +41,12 @@ import os
 import sys
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from core.config_loader import htf_anchor_rule_resolver, load_system_config, resolve_config_path
+from core.config_loader import (
+    htf_anchor_rule_resolver,
+    load_system_config,
+    resolve_config_path,
+    session_open_grace_resolver,
+)
 from core.derive import DERIVE_SOURCE
 from core.health import (
     HEALTH_MEASURE_VERSION,
@@ -147,6 +153,8 @@ def check_symbol(
         return {"symbol": symbol, "grade": "RED", "reasons": ["htf_anchor_rule_missing"], "tfs": {}}
     calendar = calendars[symbol]
     is_trading = calendar.is_trading_minute
+    # Невалідний ключ групи — ValueError з назвою групи (config-помилка на весь прогін, не вердикт символу)
+    session_open_grace_min = session_open_grace_resolver(cfg)(symbol)
 
     tf_list = sorted(int(t) for t in cfg.get("tf_allowlist_s", []))
     bars_by_tf = {tf: _read_bars(data_root, symbol, tf) for tf in tf_list}
@@ -183,7 +191,9 @@ def check_symbol(
             )
 
         # Суцільний ланцюг M1 (ADR-0101 §3.1): похідні успадковують його від M1, тож міряємо лише корінь.
-        chain = measure_chain_breaks(bars, is_trading_fn=is_trading) if tf_s == 60 else None
+        chain = measure_chain_breaks(
+            bars, is_trading_fn=is_trading, session_open_grace_min=session_open_grace_min,
+        ) if tf_s == 60 else None
 
         grade = grade_symbol_tf(
             age=age, holes=holes, geometry=geometry, cascade=cascade, root=root, depth=depth, chain=chain,
@@ -226,6 +236,7 @@ def check_symbol(
             "chain_breaks": (
                 None if chain is None
                 else {"checked": chain.checked, "hidden": chain.hidden, "inner": chain.inner, "at_gap": chain.at_gap,
+                      "session_open_grace_min": session_open_grace_min,
                       "inner_samples": _chain_samples(chain.inner_samples),
                       "at_gap_samples": _chain_samples(chain.at_gap_samples)}
             ),

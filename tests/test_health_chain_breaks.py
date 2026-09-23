@@ -2,7 +2,9 @@
 
 Ряд підсовується з відомою відповіддю: ревізія брокера між сусідніми хвилинами — розрив без діри (`inner`), розрив
 після діри в торгових хвилинах — `at_gap`, суцільний ланцюг — нуль. Межу між ними дає календар символу: через
-денну перерву діри бути не може, тож розрив там — `inner`.
+денну перерву діри бути не може, тож розрив там — `inner`. Перша хвилина сесії, яку брокер пропускає (метали FXCM
+відкриваються о 22:01, `session_open_grace_min` групи), діри теж не доводить — перевіряється на справжньому
+календарі XAU.
 """
 from __future__ import annotations
 
@@ -13,7 +15,12 @@ from typing import Any, Dict, List, Sequence
 
 import pytest
 
-from core.config_loader import htf_anchor_rule_resolver, load_system_config, resolve_config_path
+from core.config_loader import (
+    htf_anchor_rule_resolver,
+    load_system_config,
+    resolve_config_path,
+    session_open_grace_resolver,
+)
 from core.health import (
     HEALTH_MEASURE_VERSION,
     ChainBreak,
@@ -22,7 +29,8 @@ from core.health import (
     measure_chain_breaks,
 )
 from core.model.bars import CandleBar
-from core.model.candle_chain import MARKER_CALENDAR_PAUSE_FLAT
+from core.model.candle_chain import MARKER_CALENDAR_PAUSE_FLAT, hole_possible_between
+from runtime.ingest.tick_common import resolve_symbol_calendars
 from tools.symbol_health_check import check_symbol
 
 M1_MS = 60_000
@@ -135,6 +143,37 @@ def test_measure_sees_duplicate_keys_as_readers_do():
     assert (res.checked, res.inner, res.at_gap) == (2, 0, 0)
 
 
+def test_samples_are_newest_breaks_in_time_order():
+    """Свіжий розрив (регресія записувача) має бути у звіті, навіть коли старих розривів більше за ліміт семплів."""
+    bars = _chain(TUESDAY_10, [100.0 + i for i in range(9)])
+    for i in range(7):  # ревізія close кожної з перших семи хвилин: розрив на кожному наступному open
+        bars[i] = _m1(bars[i].open_time_ms, bars[i].o, bars[i].c - 0.25)
+
+    res = measure_chain_breaks(bars, is_trading_fn=_trading_except_daily_break, max_samples=5)
+
+    assert res.inner == 7
+    assert [s.open_ms for s in res.inner_samples] == [TUESDAY_10 + i * M1_MS for i in range(3, 8)]
+    assert measure_chain_breaks(bars, is_trading_fn=_trading_except_daily_break, max_samples=0).inner_samples == ()
+
+
+def test_session_open_minute_proves_hole_only_without_grace():
+    """20:59 → 22:01, хвилина 22:00 відкриття сесії без бару: без запізнення — можлива діра, із запізненням 1 — ні."""
+    bars = _chain(_utc(2026, 7, 7, 20, 58), [4357.60, 4357.63]) + _chain(
+        _utc(2026, 7, 7, 22, 1), [4358.0], first_open=4357.74)
+
+    strict = measure_chain_breaks(bars, is_trading_fn=_trading_except_daily_break)
+    graced = measure_chain_breaks(bars, is_trading_fn=_trading_except_daily_break, session_open_grace_min=1)
+
+    assert (strict.inner, strict.at_gap) == (0, 1)
+    assert (graced.inner, graced.at_gap) == (1, 0)
+
+
+def test_hole_possible_between_rejects_negative_grace():
+    with pytest.raises(ValueError):
+        hole_possible_between(TUESDAY_10, TUESDAY_10 + 5 * M1_MS, is_trading_fn=_trading_except_daily_break,
+                              session_open_grace_min=-1)
+
+
 # ── вердикт ─────────────────────────────────────────────────────────────────
 def test_inner_break_grades_yellow_and_at_gap_alone_does_not():
     bars = _chain(TUESDAY_10, [100.0, 100.5, 101.0])
@@ -191,6 +230,105 @@ def test_report_row_m1_carries_chain_breaks_with_samples(cfg, tmp_path):
     assert (at_gap["prev_open"], at_gap["open"], at_gap["open_ms"]) == (
         "2026-07-07 10:03", "2026-07-07 10:08", TUESDAY_10 + 8 * M1_MS)
     assert res["tfs"]["300"]["chain_breaks"] is None, "похідні успадковують ланцюг від M1 — не міряються"
+
+
+# ── відкриття сесії металів на справжньому календарі XAU ────────────────────
+@pytest.fixture(scope="module")
+def xau_measure(cfg):
+    """Вимір з календарем XAU і запізненням відкриття його групи — як у `check_symbol`."""
+    calendars, rejected = resolve_symbol_calendars(cfg, [SYMBOL], where="test_health_chain_breaks")
+    assert not rejected
+    grace = session_open_grace_resolver(cfg)(SYMBOL)
+
+    def measure(bars: Sequence[CandleBar]):
+        return measure_chain_breaks(bars, is_trading_fn=calendars[SYMBOL].is_trading_minute,
+                                    session_open_grace_min=grace)
+
+    return measure
+
+
+def test_xau_session_open_break_from_adr_example_is_inner_and_yellow(xau_measure):
+    """ADR-0101 §1.1, 22.09.2026: 20:59 c 4357.63 → 22:01 o 4357.74. Перший бар металів — 22:01, діри немає."""
+    session_end = _chain(_utc(2026, 9, 22, 20, 57), [4357.50, 4357.60, 4357.63])
+    session_open = _chain(_utc(2026, 9, 22, 22, 1), [4358.0], first_open=4357.74)
+
+    res = xau_measure(session_end + session_open)
+
+    assert (res.inner, res.at_gap) == (1, 0)
+    assert res.inner_samples == (ChainBreak(_utc(2026, 9, 22, 20, 59), _utc(2026, 9, 22, 22, 1), 4357.63, 4357.74),)
+    grade = grade_symbol_tf(chain=res)
+    assert (grade.grade, grade.reasons) == ("YELLOW", ["chain_breaks_inner=1"])
+
+
+def test_xau_weekend_open_break_is_inner(xau_measure):
+    """Пт 18.09 20:44 (останній бар тижня) → нд 20.09 22:01 (перший бар металів): лише вихідні й хвилина відкриття."""
+    bars = _chain(_utc(2026, 9, 18, 20, 43), [4300.5, 4301.0]) + _chain(
+        _utc(2026, 9, 20, 22, 1), [4306.0], first_open=4305.0)
+    res = xau_measure(bars)
+    assert (res.inner, res.at_gap) == (1, 0)
+
+
+def test_xau_missing_minute_mid_session_stays_at_gap(xau_measure):
+    """Посеред сесії одна торгова хвилина без бару — можлива наша діра: розрив на ній `at_gap`, не `inner`."""
+    bars = _chain(TUESDAY_10, [4355.0, 4355.5]) + _chain(TUESDAY_10 + 3 * M1_MS, [4356.5], first_open=4356.0)
+    res = xau_measure(bars)
+    assert (res.inner, res.at_gap) == (0, 1)
+
+
+def test_xau_minutes_missing_after_session_open_stay_at_gap(xau_measure):
+    """20:59 → 22:03: запізнення відкриття покриває лише 22:00, а 22:01 і 22:02 без барів — можлива діра."""
+    bars = _chain(_utc(2026, 9, 22, 20, 58), [4357.60, 4357.63]) + _chain(
+        _utc(2026, 9, 22, 22, 3), [4358.0], first_open=4357.74)
+    res = xau_measure(bars)
+    assert (res.inner, res.at_gap) == (0, 1)
+
+
+def test_report_row_m1_names_session_open_grace_and_classifies_open_as_inner(cfg, tmp_path):
+    """Звіт інструмента бере запізнення з групи календаря символу і показує його поруч із лічильниками."""
+    bars = _chain(_utc(2026, 9, 22, 20, 57), [4357.50, 4357.60, 4357.63]) + _chain(
+        _utc(2026, 9, 22, 22, 1), [4358.0, 4358.5], first_open=4357.74)
+    _write_m1(tmp_path, bars)
+
+    res = check_symbol(cfg, SYMBOL, data_root=str(tmp_path), now_ms=_utc(2026, 9, 22, 23), window_days=1,
+                       anchor_rule_for_symbol=htf_anchor_rule_resolver(cfg))
+
+    chain = res["tfs"]["60"]["chain_breaks"]
+    assert (chain["inner"], chain["at_gap"], chain["session_open_grace_min"]) == (1, 0, 1)
+    assert (chain["inner_samples"][0]["prev_open"], chain["inner_samples"][0]["open"]) == (
+        "2026-09-22 20:59", "2026-09-22 22:01")
+
+
+# ── запізнення відкриття сесії з config ─────────────────────────────────────
+def _calendar_cfg(**grace_by_group: Any) -> Dict[str, Any]:
+    groups = {name: ({} if grace is None else {"session_open_grace_min": grace}) for name, grace in grace_by_group.items()}
+    return {"market_calendar_by_group": groups,
+            "market_calendar_symbol_groups": {"S_%s" % name: name for name in grace_by_group}}
+
+
+def test_session_open_grace_resolver_reads_group_and_defaults_to_zero():
+    grace_for = session_open_grace_resolver(_calendar_cfg(metals=1, eu=2, fx=None))
+    assert (grace_for("S_metals"), grace_for("S_eu"), grace_for("S_fx")) == (1, 2, 0)
+
+
+@pytest.mark.parametrize("bad", [-1, True, "1", 1.5, None])
+def test_session_open_grace_resolver_rejects_invalid_value_loudly(bad):
+    cfg = _calendar_cfg(metals=0)
+    cfg["market_calendar_by_group"]["metals"]["session_open_grace_min"] = bad
+    with pytest.raises(ValueError, match="CONFIG_SESSION_OPEN_GRACE_INVALID group=metals"):
+        session_open_grace_resolver(cfg)
+
+
+def test_session_open_grace_resolver_rejects_symbol_without_group():
+    with pytest.raises(ValueError, match="SESSION_OPEN_GRACE_SYMBOL_WITHOUT_GROUP symbol=XYZ"):
+        session_open_grace_resolver(_calendar_cfg(metals=1))("XYZ")
+
+
+def test_repo_config_session_open_grace_matches_broker_first_bar_scan(cfg):
+    """Виміряно 23.09.2026 на SSOT: метали й індекси США — група з першим баром металів 22:01, EUSTX50 06:01,
+    GER30 00:31; групу без виміру (FX, крипта) брокер відкриває на хвилині календаря."""
+    grace_for = session_open_grace_resolver(cfg)
+    assert {sym: grace_for(sym) for sym in ("XAU/USD", "XAG/USD", "NAS100", "EUSTX50", "GER30", "BTCUSDT")} == {
+        "XAU/USD": 1, "XAG/USD": 1, "NAS100": 1, "EUSTX50": 1, "GER30": 1, "BTCUSDT": 0}
 
 
 # ── порівняння звітів ───────────────────────────────────────────────────────

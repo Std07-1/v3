@@ -223,3 +223,38 @@ def htf_anchor_rule_resolver(cfg: Dict[str, Any]) -> Callable[[str], str]:
         return rule
 
     return rule_for_symbol
+
+
+# Ключ групи `market_calendar_by_group`: на скільки хвилин брокер відкриває сесію пізніше календаря (ADR-0101 §3.5)
+SESSION_OPEN_GRACE_KEY = "session_open_grace_min"
+
+
+def session_open_grace_resolver(cfg: Dict[str, Any]) -> Callable[[str], int]:
+    """Символ → запізнення першого бару сесії в брокера, хвилин (`session_open_grace_min` групи календаря).
+
+    Група без ключа — брокер відкриває сесію на хвилині календаря (0). Значення валідується один раз тут: ціле ≥ 0,
+    інакше ValueError, а не тихий 0. Символ без групи — ValueError, як у `htf_anchor_rule_resolver`.
+    """
+    grace_by_group: Dict[str, int] = {}
+    for group, group_cfg in (cfg.get("market_calendar_by_group") or {}).items():
+        if not isinstance(group_cfg, dict):
+            continue  # група без розкладу: її символ отримає ValueError нижче (і CALENDAR_GROUP_MISSING у календаря)
+        grace = group_cfg.get(SESSION_OPEN_GRACE_KEY, 0)
+        if isinstance(grace, bool) or not isinstance(grace, int) or grace < 0:
+            raise ValueError(
+                "CONFIG_SESSION_OPEN_GRACE_INVALID group=%s %s=%r — ціле число хвилин ≥ 0 (ADR-0101 §3.5)"
+                % (group, SESSION_OPEN_GRACE_KEY, grace)
+            )
+        grace_by_group[group] = grace
+    symbol_groups = dict(cfg.get("market_calendar_symbol_groups") or {})
+
+    def grace_for_symbol(symbol: str) -> int:
+        group = symbol_groups.get(symbol)
+        if group not in grace_by_group:
+            raise ValueError(
+                "SESSION_OPEN_GRACE_SYMBOL_WITHOUT_GROUP symbol=%s group=%s (market_calendar_symbol_groups)"
+                % (symbol, group)
+            )
+        return grace_by_group[group]
+
+    return grace_for_symbol

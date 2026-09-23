@@ -30,7 +30,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequ
 
 from core.model.bar_choice import choose_better_bar
 from core.model.bars import CandleBar
-from core.model.candle_chain import MARKER_CALENDAR_PAUSE_FLAT, open_breaks_chain
+from core.model.candle_chain import MARKER_CALENDAR_PAUSE_FLAT, hole_possible_between, open_breaks_chain
 from core.session_anchor import (
     H4_S,
     OffSeasonGridError,
@@ -153,17 +153,22 @@ class ChainResult:
 
     Дві причини розриву різні за змістом, тому й лічильники окремі:
 
-    - ``inner`` — між сусідніми видимими барами немає жодної торгової хвилини за календарем (сусідні хвилини, денна
-      перерва, вихідні). Діри тут бути не може, тож розрив — порушення інваріанту: ревізія close брокера без open
-      наступного або відкинутий застарілий край. Ціль — 0; прибирає settle (ADR-0098).
-    - ``at_gap`` — між ними є торгова хвилина без видимого бару: наша діра, геп брокера або свято, якого календар не
-      знає. Через нашу діру ланцюг тягнути не можна (ADR-0101 §3.1), тож розрив тут може бути законним; саму діру
-      міряє ``holes``, закриває settle.
+    - ``inner`` — між сусідніми видимими барами діри бути не може (``candle_chain.hole_possible_between``): немає
+      торгової хвилини за календарем (сусідні хвилини, денна перерва, вихідні) або є лише перші хвилини сесії, які
+      брокер пропускає (``session_open_grace_min`` групи: метали FXCM відкривають сесію о 22:01). Тож відкриття сесії
+      і вихідних — теж ``inner``. Розрив тут — порушення інваріанту: ревізія close брокера без open наступного або
+      відкинутий застарілий край. Ціль — 0; прибирає settle (ADR-0098).
+    - ``at_gap`` — між ними є торгова хвилина без видимого бару. Законний розрив тут лише на нашій дірі: ланцюг через
+      неї не тягнуть (ADR-0101 §3.1), а саму діру міряє ``holes`` і закриває settle. Через геп брокера ланцюг у
+      брокера суцільний, тож розрив там — теж порушення, але довжиною геп від нашої діри не відрізнити; третя
+      причина — свято, якого календар не знає. Тому ``at_gap`` лише звітується, без оцінки.
 
-    Межа між ними — календар символу. На статичному літньому календарі (до ADR-0095 S6b) зимова денна перерва
-    22:00–23:00 UTC має «торгові» хвилини без барів, тож зимові розриви на ній лічаться в ``at_gap``, а не в ``inner``.
+    Межа між ними — календар символу. На статичному літньому календарі (до ADR-0095 S6a) зимові денна перерва і
+    відкриття вихідних (22:00–22:59 UTC) мають «торгові» хвилини без барів, тож зимові розриви на них лічаться в
+    ``at_gap``, а не в ``inner``.
 
-    ``hidden`` — бари з маркером ``calendar_pause_flat``: display їх ховає, тож у ланцюзі вони не сусіди.
+    ``hidden`` — бари з маркером ``calendar_pause_flat``: display їх ховає, тож у ланцюзі вони не сусіди. Семпли —
+    найновіші розриви кожного класу: свіжий розрив (регресія записувача) має бути у звіті, давні видно з лічильника.
     """
 
     checked: int
@@ -520,13 +525,15 @@ def measure_chain_breaks(
     m1_bars: Sequence[CandleBar],
     *,
     is_trading_fn: IsTradingFn,
+    session_open_grace_min: int = 0,
     max_samples: int = 5,
 ) -> ChainResult:
     """Розриви ланцюга ``o(b) ≠ c(a)`` між сусідніми видимими M1 у всій історії SSOT (ADR-0101 C4).
 
     Бари — як їх показують читачі (``ssot_winners``) без прихованих ``calendar_pause_flat``; допуск — той самий
-    ``open_breaks_chain``, що й у записувачів M1. Розрив між a і b — ``at_gap``, якщо між ними є торгова хвилина,
-    інакше ``inner`` (див. ``ChainResult``). Календар питаємо лише на розривах: їх одиниці на історію.
+    ``open_breaks_chain``, що й у записувачів M1. Розрив між a і b — ``at_gap``, якщо між ними може бути наша діра
+    (``hole_possible_between`` з календарем символу і ``session_open_grace_min`` його групи), інакше ``inner`` (див.
+    ``ChainResult``). Календар питаємо лише на розривах.
     """
     winners = ssot_winners(m1_bars)
     visible = [bar for bar in winners if not bar.extensions.get(MARKER_CALENDAR_PAUSE_FLAT)]
@@ -536,8 +543,10 @@ def measure_chain_breaks(
         if not open_breaks_chain(prev.c, bar.o):
             continue
         chain_break = ChainBreak(prev.open_time_ms, bar.open_time_ms, prev.c, bar.o)
-        # Хвилини строго між a і b: [a + 1 хв, b)
-        if bucket_has_trading_minute(prev.open_time_ms + MINUTE_MS, bar.open_time_ms, is_trading_fn):
+        if hole_possible_between(
+            prev.open_time_ms, bar.open_time_ms,
+            is_trading_fn=is_trading_fn, session_open_grace_min=session_open_grace_min,
+        ):
             at_gap.append(chain_break)
         else:
             inner.append(chain_break)
@@ -546,9 +555,14 @@ def measure_chain_breaks(
         hidden=len(winners) - len(visible),
         inner=len(inner),
         at_gap=len(at_gap),
-        inner_samples=tuple(inner[:max_samples]),
-        at_gap_samples=tuple(at_gap[:max_samples]),
+        inner_samples=_newest(inner, max_samples),
+        at_gap_samples=_newest(at_gap, max_samples),
     )
+
+
+def _newest(breaks: Sequence[ChainBreak], max_samples: int) -> Tuple[ChainBreak, ...]:
+    """Останні ``max_samples`` розривів у хронологічному порядку (зріз ``[-0:]`` дав би всі, тому 0 — окремо)."""
+    return tuple(breaks[-max_samples:]) if max_samples > 0 else ()
 
 
 def measure_depth(opens: Sequence[int], *, required_bars: int) -> DepthResult:

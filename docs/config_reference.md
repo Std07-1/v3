@@ -172,6 +172,7 @@
 | --- | --- | --- |
 | `calendar_gate_enabled` | bool | Вхідний gate: відкидати дані поза торговими годинами |
 | `market_calendar_by_group` | dict | Розклади торгових сесій по групах (fx, cfd_us, cfd_eu, cfd_hk) |
+| `market_calendar_by_group.<група>.session_open_grace_min` | int ≥ 0 | На скільки хвилин брокер відкриває сесію пізніше календаря; health `chain_breaks` не вважає ці хвилини діркою (ADR-0101 §3.5). Нема ключа — 0. Виміряно 23.09.2026: `cfd_us_22_23` 1 (метали — 22:01), `cfd_eu_eustx50` 1 (06:01), `cfd_eu_ger30` 1 (00:31) |
 | `market_calendar_symbol_groups` | dict | Маппінг символу → група розкладу |
 | `market_ignore_minutes_utc` | str[] | Конкретні хвилини для ігнорування (outage workaround) |
 | `market_boundary_slip_minutes_per_day` | int | Допуск зсуву кордону сесії (хвилини) |
