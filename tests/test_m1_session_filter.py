@@ -187,8 +187,8 @@ def test_repair_filter_drops_deep_pause_bar_as_noise_and_keeps_edge_anomaly():
     saturday = _m1_at(SATURDAY_0743, 63.01, 63.02, 63.01, 63.02, 5.0)
     edge = _m1_at(_utc_ms(2026, 9, 16, 21, 0), 5.0, 5.1, 5.0, 5.1, 30.0)
     stale = _m1_at(_utc_ms(2026, 9, 17, 21, 0), 5.0, 5.1, 5.0, 5.1, 3.0)
-    kept, verdicts = rmg._filter_fetched_bars([saturday, edge, stale], _us_cfd_calendar(), 4, None,  # noqa: SLF001
-                                              8_000, pause_policy=_US_CFD_POLICY)
+    kept, verdicts, _plan = rmg._filter_fetched_bars([saturday, edge, stale], _us_cfd_calendar(), 4,  # noqa: SLF001
+                                                     None, 8_000, pause_policy=_US_CFD_POLICY)
     assert [b.open_time_ms for b in kept] == [edge.open_time_ms]
     assert verdicts == {VERDICT_PAUSE_NOISE_DROPPED: 1, VERDICT_PAUSE_NONFLAT_ANOMALY: 1,
                         VERDICT_PAUSE_EDGE_STALE_DROPPED: 1}

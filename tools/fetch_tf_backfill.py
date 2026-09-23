@@ -16,11 +16,14 @@ from core.model.bars import CandleBar
 from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
 from runtime.ingest.m1_session_filter import (
     VERDICT_PAUSE_EDGE_STALE_DROPPED,
+    VERDICT_PAUSE_EDGE_STALE_FOLDED,
     VERDICT_PAUSE_FLAT_DROPPED,
     VERDICT_PAUSE_NOISE_DROPPED,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
+    M1AppendPlan,
     PausePolicy,
-    classify_m1_by_calendar,
+    plan_m1_append,
+    report_m1_append_plan,
     resolve_close_safety_ms,
     resolve_flat_max_volume,
     resolve_pause_policy,
@@ -28,7 +31,7 @@ from runtime.ingest.m1_session_filter import (
 )
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.tick_common import resolve_symbol_calendars
-from runtime.store.ssot_jsonl import JsonlAppender
+from runtime.store.ssot_jsonl import JsonlAppender, read_m1_chain_context
 
 
 # Усе, що будує DeriveEngine з M1, заборонено тягнути з брокера напряму.
@@ -92,27 +95,25 @@ def _parse_date_utc(s: str) -> dt.datetime:
 _OFF_CALENDAR_ALLOWANCE = 3
 
 
-def _filter_m1_by_session(
-    bars: List[CandleBar], calendar: MarketCalendar, flat_max_volume: int, pause_policy: PausePolicy
-) -> Tuple[List[CandleBar], Counter, List[int]]:
-    """Те саме правило SSOT, що в живому M1-полері (`m1_session_filter.classify_m1_by_calendar`): шум глибоко в паузі
-    і пласкі бари поза сесією не пишуться, неплаский біля краю сесії — з маркером anomaly.
+def _plan_m1_batch(
+    bars: List[CandleBar], calendar: MarketCalendar, flat_max_volume: int, pause_policy: PausePolicy,
+    ssot_bars: List[CandleBar], occupied_opens: Set[int],
+) -> Tuple[M1AppendPlan, Counter, List[int]]:
+    """Те саме правило SSOT, що в живому M1-полері (ADR-0099 `classify_m1_by_calendar`), і правило послідовності
+    ADR-0101 (`plan_m1_append`): шум глибоко в паузі і пласкі бари поза сесією не пишуться, неплаский біля краю сесії —
+    з маркером anomaly; застарілий край вкладається в останню хвилину сесії; open = close попереднього бару, зокрема
+    наявного в SSOT перед партією (`ssot_bars`). Бари, чий ключ уже на диску (`occupied_opens`), не пишуться (dedup).
 
     Засів раніше писав усе, що віддав брокер: NAS100 і US30 мають пласкі хвилини Сб 22:00 саме з засіву (15.09).
     Третій елемент — open_ms хвилин поза календарем, схожих на торгівлю (див. _OFF_CALENDAR_ALLOWANCE): саме їх рахує
     допуск, і оператор бачить, ЯКІ саме, а не лише скільки.
     """
-    kept: List[CandleBar] = []
-    verdicts: Counter = Counter()
-    trading_like_off_calendar: List[int] = []
-    for bar in bars:
-        classified, verdict = classify_m1_by_calendar(bar, calendar.is_trading_minute, flat_max_volume, pause_policy)
-        verdicts[verdict] += 1
-        if _is_trading_like_off_calendar(bar, verdict, pause_policy):
-            trading_like_off_calendar.append(bar.open_time_ms)
-        if classified is not None:
-            kept.append(classified)
-    return kept, verdicts, trading_like_off_calendar
+    plan = plan_m1_append(bars, ssot_bars, is_trading_fn=calendar.is_trading_minute, flat_max_volume=flat_max_volume,
+                          pause_policy=pause_policy, occupied_opens=occupied_opens)
+    verdicts: Counter = Counter(verdict for _bar, verdict in plan.verdicts)
+    trading_like_off_calendar = [bar.open_time_ms for bar, verdict in plan.verdicts
+                                 if _is_trading_like_off_calendar(bar, verdict, pause_policy)]
+    return plan, verdicts, trading_like_off_calendar
 
 
 def _is_trading_like_off_calendar(bar: CandleBar, verdict: str, pause_policy: PausePolicy) -> bool:
@@ -264,6 +265,8 @@ def main() -> int:
     total_written = 0
     total_skipped = 0
     total_verdicts: Counter = Counter()
+    total_open_chained = 0
+    total_ssot_edits = 0
     errors: List[str] = []
 
     try:
@@ -295,9 +298,19 @@ def main() -> int:
                         "%s: BACKFILL_UNCLOSED_DROPPED n=%d first=%s — бар ще формується, його допише полер або наступний засів",
                         symbol, len(unclosed), _format_cursor(unclosed[0].open_time_ms),
                     )
+                if not bars:
+                    logging.info("%s: закритих барів у партії 0 — писати нічого", symbol)
+                    continue
+                existing = _load_existing_opens(
+                    data_root, symbol, args.tf, bars[0].open_time_ms, bars[-1].open_time_ms
+                )
                 if args.tf == 60:
-                    bars, verdicts, trading_like_off_calendar = _filter_m1_by_session(
-                        bars, calendars[symbol], flat_max_volume, pause_policies[symbol]
+                    # Сусіди з SSOT — щоб ланцюг ADR-0101 тримався на межах партії, а не лише всередині неї
+                    ssot_context = read_m1_chain_context(
+                        data_root, symbol, bars[0].open_time_ms, bars[-1].open_time_ms
+                    )
+                    plan, verdicts, trading_like_off_calendar = _plan_m1_batch(
+                        bars, calendars[symbol], flat_max_volume, pause_policies[symbol], ssot_context, existing
                     )
                     total_verdicts.update(verdicts)
                     logging.log(
@@ -318,21 +331,18 @@ def main() -> int:
                         )
                         errors.append(symbol)
                         continue
+                    report_m1_append_plan(plan, where="fetch_tf_backfill", symbol=symbol)
+                    total_open_chained += plan.open_chained
+                    total_ssot_edits += len(plan.ssot_edits)
+                    skipped, bars = plan.already_in_ssot, list(plan.to_write)
                 else:
                     logging.info(
                         "%s: фільтр сесії не застосовано (TF=%d ≠ 60; правило M1→SSOT — лише для хвилин)",
                         symbol, args.tf,
                     )
-                if not bars:
-                    logging.info(
-                        "%s: після відсіву нічого не лишилось (закритих барів у партії 0)", symbol,
-                    )
-                    continue
-                last_ms = bars[-1].open_time_ms
-                existing = _load_existing_opens(data_root, symbol, args.tf, first_ms, last_ms)
-                before = len(bars)
-                bars = [b for b in bars if b.open_time_ms not in existing]
-                skipped = before - len(bars)
+                    before = len(bars)
+                    bars = [b for b in bars if b.open_time_ms not in existing]
+                    skipped = before - len(bars)
                 total_skipped += skipped
                 if skipped:
                     logging.info("%s: dedup — пропущено %d, нових %d", symbol, skipped, len(bars))
@@ -349,7 +359,7 @@ def main() -> int:
                         _format_cursor(bars[-1].open_time_ms),
                     )
                 else:
-                    logging.info("%s: 0 нових барів (усе вже є)", symbol)
+                    logging.info("%s: 0 нових барів (уже в SSOT %d, решту відкинуло правило сесії)", symbol, skipped)
     finally:
         writer.close()
 
@@ -357,12 +367,15 @@ def main() -> int:
     noise = total_verdicts[VERDICT_PAUSE_NOISE_DROPPED]
     edge_stale = total_verdicts[VERDICT_PAUSE_EDGE_STALE_DROPPED]
     anomalies = total_verdicts[VERDICT_PAUSE_NONFLAT_ANOMALY]
+    edge_folded = total_verdicts[VERDICT_PAUSE_EDGE_STALE_FOLDED]
     logging.log(
-        logging.WARNING if dropped or noise or edge_stale or anomalies else logging.INFO,
+        logging.WARNING if dropped or noise or edge_stale or anomalies or edge_folded or total_open_chained
+        or total_ssot_edits else logging.INFO,
         "=== ПІДСУМОК: записано=%d пропущено(dedup)=%d відсіяно(пласкі поза сесією)=%d "
-        "відсіяно(шум глибоко в паузі)=%d відсіяно(застарілий край)=%d "
-        "аномалій(непласкі біля краю сесії)=%d помилок=%d ===",
-        total_written, total_skipped, dropped, noise, edge_stale, anomalies, len(errors),
+        "відсіяно(шум глибоко в паузі)=%d відсіяно(застарілий край)=%d вкладено(застарілий край)=%d "
+        "аномалій(непласкі біля краю сесії)=%d open_у_ланцюг=%d правок_наявних_до_settle=%d помилок=%d ===",
+        total_written, total_skipped, dropped, noise, edge_stale, edge_folded, anomalies, total_open_chained,
+        total_ssot_edits, len(errors),
     )
     return 1 if errors else 0
 

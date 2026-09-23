@@ -8,13 +8,16 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import sys
 import time
 import types
+from pathlib import Path
 
 import pytest
 
 from core.model.bars import CandleBar
+from runtime.ingest.m1_session_filter import PausePolicy
 from runtime.ingest.tick_common import calendar_from_group
 from tools.repair import repair_m1_gaps as rmg
 
@@ -206,3 +209,107 @@ def test_silent_broker_is_not_reported_as_lacking_minutes(monkeypatch, caplog):
                                {_ms(2026, 9, 7, 19, 13)})
     assert "REPAIR_BROKER_LACKS_MINUTES" not in caplog.text
     assert "REPAIR_FETCH_PAGE_FAILED" in caplog.text
+
+
+# ── правило послідовності ADR-0101 (C3): нові ключі — у ланцюгу з сусідами SSOT, наявні не переписуються ──────────
+EDGE_STALE_POLICY = PausePolicy(noise_margin_min=60, edge_stale_max_volume=8)
+
+
+def _m1(open_ms: int, o: float, h: float, low: float, c: float, v: float) -> CandleBar:
+    return CandleBar(symbol=SYMBOL, tf_s=60, open_time_ms=open_ms, close_time_ms=open_ms + 60_000, o=o, h=h, low=low,
+                     c=c, v=v, complete=True, src="history")
+
+
+def _seed_ssot(tmp_path, bars) -> str:
+    """Бари, що вже лежать у SSOT (повні рядки, як їх пише записувач)."""
+    tf_dir = tmp_path / SYMBOL.replace("/", "_") / "tf_60"
+    tf_dir.mkdir(parents=True, exist_ok=True)
+    for bar in bars:
+        day = dt.datetime.fromtimestamp(bar.open_time_ms / 1000, dt.timezone.utc).strftime("%Y%m%d")
+        with open(tf_dir / f"part-{day}.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(bar.to_dict()) + "\n")
+    return str(tmp_path)
+
+
+def _repair(monkeypatch, data_root: str, gap_opens, broker_bars, pause_policy=EDGE_STALE_POLICY):
+    """Ремонт із брокером-підміною: віддає зі своїх барів лише ті, що ремонт попросив (дірки й необов'язкові)."""
+    asked: dict = {}
+
+    def _fetch(_cli, _ns, _symbol, _start_ms, end_ms, gaps, optional_opens=frozenset()):
+        asked.update(end_ms=end_ms, optional=set(optional_opens))
+        wanted = set(gaps) | set(optional_opens)
+        return [bar for bar in broker_bars if bar.open_time_ms in wanted]
+
+    monkeypatch.setattr(rmg, "fetch_m1_for_range", _fetch)
+    result = rmg.repair_gaps(
+        data_root=data_root, symbol=SYMBOL, gap_groups=rmg.group_contiguous_gaps(sorted(gap_opens)),
+        all_gap_opens=set(gap_opens), redis_cli=object(), namespace="ns", dry_run=False,
+        calendar=calendar_from_group(CFD_US_22_23), flat_max_volume=4, now_ms=None, pause_policy=pause_policy,
+    )
+    rows = [json.loads(line) for part in sorted((Path(data_root) / "XAU_USD" / "tf_60").glob("part-*.jsonl"))
+            for line in part.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return result, rows, asked
+
+
+def test_repair_takes_the_stale_edge_after_a_gap_at_session_close_and_folds_it_like_tv(tmp_path, monkeypatch, caplog):
+    """Дірка на 20:59, останній хвилині сесії: ремонт бере в брокера й 21:00 і вкладає її пізні тіки в 20:59, як TV
+    (XAU 22.09: c=4357.63 + 21:00 v=4 c=4357.74 → c=4357.74 v=520); 21:00 не пише, 22:01 уже в ланцюгу."""
+    t2059 = _ms(2026, 9, 22, 20, 59)
+    data_root = _seed_ssot(tmp_path, [_m1(t2059 - 60_000, 4358.0, 4358.5, 4357.9, 4358.33, 400.0),
+                                      _m1(t2059 + 62 * 60_000, 4357.74, 4363.07, 4357.74, 4363.06, 397.0)])
+    broker = [_m1(t2059, 4358.33, 4358.73, 4355.37, 4357.63, 516.0),
+              _m1(t2059 + 60_000, 4357.63, 4357.74, 4357.63, 4357.74, 4.0)]
+    caplog.set_level(logging.INFO)
+    result, rows, asked = _repair(monkeypatch, data_root, {t2059}, broker)
+    assert asked == {"end_ms": t2059 + 60_000, "optional": {t2059 + 60_000}}
+    repaired = [row for row in rows if row["open_time_ms"] == t2059]
+    assert len(repaired) == 1
+    assert (repaired[0]["c"], repaired[0]["v"], repaired[0]["extensions"]) == (4357.74, 520.0, {"late_ticks_folded": 4.0})
+    assert not [row for row in rows if row["open_time_ms"] == t2059 + 60_000]
+    assert result["total_written"] == 1
+    assert "'pause_edge_stale_folded': 1" in caplog.text and "M1_SSOT_EDIT_PENDING" not in caplog.text
+
+
+def test_repair_chains_the_gap_to_ssot_neighbours_and_names_the_break_it_cannot_rewrite(tmp_path, monkeypatch,
+                                                                                        caplog):
+    """Дірка 19:01 між наявними 19:00 і 19:02 (полер прив'язав 19:02 до close 19:00). Новий бар — від close 19:00;
+    19:02 закомічений: другої версії ключа ремонт не дописує (ADR-0098 §3.7), а називає правку для settle."""
+    t1900 = _ms(2026, 9, 22, 19, 0)
+    data_root = _seed_ssot(tmp_path, [_m1(t1900, 99.8, 100.2, 99.7, 100.0, 300.0),
+                                      _m1(t1900 + 120_000, 100.0, 101.4, 99.9, 101.2, 280.0)])
+    caplog.set_level(logging.INFO)
+    _result, rows, asked = _repair(monkeypatch, data_root, {t1900 + 60_000},
+                                   [_m1(t1900 + 60_000, 100.5, 101.1, 100.4, 101.0, 250.0)])
+    assert asked["optional"] == set()  # 19:02 торгова — застарілого краю після цієї дірки немає
+    new_rows = [row for row in rows if row["open_time_ms"] == t1900 + 60_000]
+    assert len(new_rows) == 1
+    assert (new_rows[0]["o"], new_rows[0]["low"]) == (100.0, 100.0)
+    assert new_rows[0]["extensions"] == {"open_chained_from": 100.5}
+    assert [row["open_time_ms"] for row in rows].count(t1900 + 120_000) == 1
+    assert ("M1_SSOT_EDIT_PENDING where=repair_m1_gaps symbol=XAU/USD reason=chain open_ms=%d o=100.00000->101.00000"
+            % (t1900 + 120_000)) in caplog.text
+
+
+def test_repair_does_not_ask_for_the_first_pause_minute_where_the_stale_edge_rule_is_off(tmp_path, monkeypatch):
+    """Група без правила застарілого краю (EUSTX50/GER30, рев'ю D-03): першу хвилину паузи ремонт не бере — вкладати
+    там нічого, а сама хвилина може бути торгівлею під несезонним календарем."""
+    t2059 = _ms(2026, 9, 22, 20, 59)
+    data_root = _seed_ssot(tmp_path, [_m1(t2059 - 60_000, 4358.0, 4358.5, 4357.9, 4358.33, 400.0)])
+    _result, _rows, asked = _repair(monkeypatch, data_root, {t2059},
+                                    [_m1(t2059, 4358.33, 4358.73, 4355.37, 4357.63, 516.0)],
+                                    pause_policy=PausePolicy(noise_margin_min=60))
+    assert asked == {"end_ms": t2059, "optional": set()}
+
+
+@pytest.mark.parametrize("broker_has_stale_edge", [True, False])
+def test_optional_stale_edge_is_taken_when_present_and_its_absence_is_not_a_missing_minute(monkeypatch, caplog,
+                                                                                           broker_has_stale_edge):
+    t2059 = _ms(2026, 9, 22, 20, 59)
+    first = t2059 + 60_000 if broker_has_stale_edge else t2059
+    page = [_bar(o) for o in range(first, t2059 - 10 * 60_000, -60_000)]
+    monkeypatch.setattr(rmg, "_fetch_from_sidecar", lambda *a, **k: page)
+    with caplog.at_level("WARNING"):
+        got = rmg.fetch_m1_for_range(object(), "ns", SYMBOL, t2059, t2059 + 60_000, {t2059},
+                                     optional_opens={t2059 + 60_000})
+    assert sorted(b.open_time_ms for b in got) == ([t2059, t2059 + 60_000] if broker_has_stale_edge else [t2059])
+    assert "REPAIR_BROKER_LACKS_MINUTES" not in caplog.text

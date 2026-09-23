@@ -23,18 +23,21 @@ import logging
 import os
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import AbstractSet, Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from core.config_loader import load_system_config, pick_config_path
 from core.model.bars import CandleBar
 from runtime.ingest.m1_session_filter import (
     DEFAULT_PAUSE_POLICY,
     FLAT_BAR_MAX_VOLUME_DEFAULT,
+    M1AppendPlan,
     PausePolicy,
     VERDICT_PAUSE_EDGE_STALE_DROPPED,
+    VERDICT_PAUSE_EDGE_STALE_FOLDED,
     VERDICT_PAUSE_NOISE_DROPPED,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
-    classify_m1_by_calendar,
+    plan_m1_append,
+    report_m1_append_plan,
     resolve_close_safety_ms,
     resolve_flat_max_volume,
     resolve_pause_policy,
@@ -50,6 +53,7 @@ from runtime.store.redis_spec import (
 from runtime.store.ssot_jsonl import (
     iter_day_keys_utc,
     load_day_open_times,
+    read_m1_chain_context,
 )
 
 logging.basicConfig(
@@ -243,12 +247,17 @@ def fetch_m1_for_range(
     start_ms: int,
     end_ms: int,
     gap_opens: Set[int],
+    optional_opens: AbstractSet[int] = frozenset(),
 ) -> List[CandleBar]:
     """Fetch M1 bars від broker_sidecar для покриття gap діапазону.
 
     Пагінує назад: від end_ms до start_ms, 200 барів за запит,
     зменшуючи date_to_ms до найстарішого бару кожного batch.
+
+    ``optional_opens`` — хвилини, які беремо, якщо брокер їх віддав, але повноту за ними не міряємо: перша хвилина
+    паузи після дірки, що закінчується останньою хвилиною сесії — застарілий край для вкладення (ADR-0101 §3.2).
     """
+    wanted_opens = set(gap_opens) | set(optional_opens)
     all_bars: List[CandleBar] = []
     cursor_ms: Optional[int] = end_ms + TF_M1_MS  # exclusive end
     fetched_opens: Set[int] = set()
@@ -306,7 +315,7 @@ def fetch_m1_for_range(
         matched = [
             b
             for b in bars
-            if b.open_time_ms in gap_opens and b.open_time_ms not in fetched_opens
+            if b.open_time_ms in wanted_opens and b.open_time_ms not in fetched_opens
         ]
         all_bars.extend(matched)
         for b in matched:
@@ -391,22 +400,41 @@ def _filter_fetched_bars(
     now_ms: Optional[int],
     close_safety_ms: int,
     pause_policy: PausePolicy = DEFAULT_PAUSE_POLICY,
-) -> Tuple[List[CandleBar], Dict[str, int]]:
-    """Спільне правило M1→SSOT (`runtime/ingest/m1_session_filter`) плюс відсів хвилини, що ще формується."""
+    ssot_bars: Sequence[CandleBar] = (),
+) -> Tuple[List[CandleBar], Dict[str, int], Optional[M1AppendPlan]]:
+    """Спільне правило M1→SSOT (`runtime/ingest/m1_session_filter`) плюс відсів хвилини, що ще формується.
+
+    Правило послідовності ADR-0101 — `plan_m1_append` із сусідами з SSOT (`ssot_bars`): open нового бару = close
+    попереднього, зокрема наявного перед діркою; застарілий край вкладається в останню хвилину сесії; наявні бари не
+    переписуються — їх правку план лише називає (settle). Без календаря плану немає (None).
+    """
     verdicts: Dict[str, int] = {}
     if now_ms is not None:
         bars, unclosed = split_closed_bars(bars, now_ms, close_safety_ms)
         if unclosed:
             verdicts["unclosed"] = len(unclosed)
     if calendar is None:
-        return bars, verdicts
-    kept: List[CandleBar] = []
-    for bar in bars:
-        classified, verdict = classify_m1_by_calendar(bar, calendar.is_trading_minute, flat_max_volume, pause_policy)
+        return bars, verdicts, None
+    plan = plan_m1_append(bars, ssot_bars, is_trading_fn=calendar.is_trading_minute,
+                          flat_max_volume=flat_max_volume, pause_policy=pause_policy)
+    for _bar, verdict in plan.verdicts:
         verdicts[verdict] = verdicts.get(verdict, 0) + 1
-        if classified is not None:
-            kept.append(classified)
-    return kept, verdicts
+    return list(plan.to_write), verdicts, plan
+
+
+def _edge_stale_candidates(
+    gap_opens: AbstractSet[int], calendar: Optional[MarketCalendar], pause_policy: PausePolicy
+) -> Set[int]:
+    """Перша хвилина паузи після дірки, що закінчується останньою хвилиною сесії: її пізні тіки належать цій хвилині
+    (застарілий край ADR-0099 §3.2 вкладається в неї, ADR-0101 §3.2), тож ремонт бере її в брокера разом із діркою.
+    Лише для груп, де правило застарілого краю діє: деінде ця хвилина — не край для вкладення (рев'ю D-03)."""
+    if calendar is None or pause_policy.edge_stale_max_volume is None:
+        return set()
+    return {
+        gap_open + TF_M1_MS
+        for gap_open in gap_opens
+        if not calendar.is_trading_minute(gap_open + TF_M1_MS)
+    }
 
 
 def repair_gaps(
@@ -431,12 +459,13 @@ def repair_gaps(
     """
     total_gaps = len(all_gap_opens)
 
-    # Один fetch для всього діапазону
+    # Один fetch для всього діапазону — разом із застарілим краєм після дірок, що закінчуються з сесією
+    edge_opens = _edge_stale_candidates(all_gap_opens, calendar, pause_policy)
     global_start = min(g[0] for g in gap_groups)
-    global_end = max(g[1] for g in gap_groups)
+    global_end = max([g[1] for g in gap_groups] + sorted(edge_opens))
 
     bars = fetch_m1_for_range(
-        redis_cli, namespace, symbol, global_start, global_end, all_gap_opens
+        redis_cli, namespace, symbol, global_start, global_end, all_gap_opens, optional_opens=edge_opens
     )
 
     if not bars:
@@ -453,11 +482,16 @@ def repair_gaps(
     # хвилини, що ще формується: інструмент ремонту — третій записувач M1, і без цього він повертав би в SSOT
     # рівно те, що двоє інших уже відкидають.
     fetched = len(bars)
-    bars, verdicts = _filter_fetched_bars(
-        bars, calendar, flat_max_volume, now_ms, close_safety_ms, pause_policy
+    # Сусіди з SSOT — щоб ланцюг ADR-0101 тримався на обох межах кожної дірки
+    bars, verdicts, plan = _filter_fetched_bars(
+        bars, calendar, flat_max_volume, now_ms, close_safety_ms, pause_policy,
+        ssot_bars=read_m1_chain_context(data_root, symbol, global_start, global_end),
     )
+    if plan is not None:
+        report_m1_append_plan(plan, where="repair_m1_gaps", symbol=symbol)
     if verdicts:
-        loud = (VERDICT_PAUSE_NONFLAT_ANOMALY, VERDICT_PAUSE_NOISE_DROPPED, VERDICT_PAUSE_EDGE_STALE_DROPPED, "unclosed")
+        loud = (VERDICT_PAUSE_NONFLAT_ANOMALY, VERDICT_PAUSE_NOISE_DROPPED, VERDICT_PAUSE_EDGE_STALE_DROPPED,
+                VERDICT_PAUSE_EDGE_STALE_FOLDED, "unclosed")
         log.log(
             logging.WARNING if any(verdicts.get(v) for v in loud) else logging.INFO,
             "REPAIR_SESSION_FILTER symbol=%s fetched=%d kept=%d verdicts=%s",
@@ -696,8 +730,9 @@ def main() -> None:
         # партіальний крайній H4, а --force дає конфліктні дублікати, переможця серед яких
         # обирає вибирач ADR-0094 — не обов'язково перебудований рядок.
         log.info(
-            "  1) rebuild_from_m1 БЕЗ --force, вікно по D1-якорю з config "
-            "(літо: --start <дата>T21:00:00 --end <дата+2>T21:00:00), writer'и зупинені"
+            "  1) rebuild_from_m1 БЕЗ --force, вікно від відкриття торгової доби до відкриття доби через дві за "
+            "сезонною сіткою символу (ADR-0095: D1 = 17:00 America/New_York, година UTC залежить від DST — "
+            "core.session_anchor.htf_bucket_start_ms), writer'и зупинені"
         )
         log.info("  2) рестарт smc-fxcm — Redis перепрайміться з диску (smc-ticks не чіпати)")
     else:
