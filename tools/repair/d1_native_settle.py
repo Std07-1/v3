@@ -1,10 +1,13 @@
 """D1 до епохи M1 — нативний D1 брокера (FXCM PREVIOUS_CLOSE = TV `FX:` D1) на всю глибину історії.
 
-Рішення власника 23.09.2026: «для кожного активу має бути максимальна історія 1D, вся ідеальна, 1:1 з TV». Епоха M1
-символу (перший повний D1-бакет, покритий M1 на диску) — зона S7 (D1 = агрегат відремонтованого M1); усе раніше —
-тут: ключ і значення нативного D1 брокера з архіву `tools/fetch_d1_history` (`<SYM>_d1_full.json` + `meta.json`).
+Рішення власника 23.09.2026: «для кожного активу має бути максимальна історія 1D, вся ідеальна, 1:1 з TV». Межа
+володіння — за `config.json → d1_policy` (ADR-0103, рішення власника 24.09 «D1 = натив»): `broker_native` — натив
+володіє КОЖНОЮ добою, чий бакет закінчився щонайменше `native_settle_lag_h` годин до забору архіву (`meta.fetched_at`),
+молодші доби — живого DeriveEngine до наступного settle; `derived_m1` (відкат) — лише добами до епохи M1 символу
+(перший повний D1-бакет, покритий M1 на диску), епоха M1 — зона S7. Ключ і значення — нативний D1 брокера з архіву
+`tools/fetch_d1_history` (`<SYM>_d1_full.json` + `meta.json`).
 
-Правила рядків D1 свого символу з ключем раніше за епоху M1:
+Правила рядків D1 свого символу з ключем раніше за межу володіння:
 - ключ є в нативі: значення = натив (REPLACE, якщо відрізняється; SAME — не пишеться);
 - нативного ключа немає у файлах: INSERT (рядок писаря SSOT, `src=history`, маркер `extensions.settled`);
 - наш ключ у межах нативної історії, якого натив не має: поза сіткою — REMOVE (той самий торговий день натив має на
@@ -36,7 +39,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.config_loader import htf_anchor_rule_resolver, load_system_config, pick_config_path
+from core.config_loader import d1_policy, htf_anchor_rule_resolver, load_system_config, pick_config_path
 from core.model.bars import CandleBar, assert_invariants
 from core.session_anchor import (
     assert_on_season_grid, htf_anchor_offset_s, htf_bucket_start_ms, htf_next_bucket_start_ms,
@@ -50,7 +53,7 @@ from tools.repair.partfile_io import (
 log = logging.getLogger("d1_native_settle")
 D1_S = 86_400
 M1_S = 60
-TOOL = "d1_native_settle/2"
+TOOL = "d1_native_settle/3"
 
 ACT_SAME, ACT_REPLACE, ACT_INSERT, ACT_REMOVE, ACT_REKEY, ACT_KEEP = (
     "same", "replace", "insert", "remove_off_grid", "rekey", "keep")
@@ -82,6 +85,19 @@ def load_native(archive_dir: str, sym_dir: str) -> Tuple[Dict[int, List[float]],
         raise ValueError("D1_NATIVE_ARCHIVE_MODE mode=%r — очікується PREVIOUS_CLOSE" % meta.get("mode"))
     rows = json.load(open(os.path.join(archive_dir, "%s_d1_full.json" % sym_dir), encoding="utf-8"))
     return {int(r[0]): [float(x) for x in r[1:6]] for r in rows}, meta
+
+
+def native_owned_until_ms(meta: Dict[str, Any], lag_h: int, rule: str) -> int:
+    """ADR-0103 §3.1: межа діб, якими володіє натив, — бакет D1, що містить «забір архіву − лаг ревізії».
+
+    Кожен бакет раніше за нього закінчився щонайменше `lag_h` годин до забору: брокер його вже не ревізує. Сам бакет і
+    молодші — живого DeriveEngine (агрегат M1) до наступного settle. Без часу забору — відмова, а не «усе нативне».
+    """
+    fetched = meta.get("fetched_at")
+    if not fetched:
+        raise ValueError("D1_NATIVE_ARCHIVE_NO_FETCHED_AT — межа устояних діб невідома (ADR-0103)")
+    fetched_ms = int(dt.datetime.fromisoformat(str(fetched).replace("Z", "+00:00")).timestamp() * 1000)
+    return htf_bucket_start_ms(fetched_ms - lag_h * 3_600_000, D1_S, rule)
 
 
 def m1_era_start_ms(data_root: str, sym_dir: str, rule: str) -> Optional[int]:
@@ -273,6 +289,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
         writers_guard(data_root)
     stamp = utc_stamp()
+    policy = d1_policy(cfg)
     report: Dict[str, Any] = {"tool": TOOL, "data_root": data_root, "archive": os.path.abspath(args.archive),
                               "mode": "apply" if args.apply else "dry-run", "symbols": {}}
     plans: List[SymbolPlan] = []
@@ -281,16 +298,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         rule = rule_of(symbol)
         native, meta = load_native(args.archive, sym_dir)
         provenance = "d1native/%s" % str(meta.get("fetched_at", ""))[:16].replace("-", "").replace(":", "")
-        era = m1_era_start_ms(data_root, sym_dir, rule)
+        # ADR-0103: у broker_native натив володіє всіма устояними добами; у derived_m1 — лише добами до епохи M1
+        era = (native_owned_until_ms(meta, policy.native_settle_lag_h, rule) if policy.native
+               else m1_era_start_ms(data_root, sym_dir, rule))
         is_trading = calendar_for_symbol(dict(cfg), symbol).is_trading_minute
         plan = plan_symbol(data_root, symbol, rule, native, provenance, era, is_trading)
         plans.append(plan)
-        report["symbols"][symbol] = {"m1_era_start": fmt(plan.era_ms) if era is not None else None,
+        report["symbols"][symbol] = {"d1_policy": policy.source, "owned_until": fmt(plan.era_ms) if era is not None else None,
                                      "native_first": fmt(plan.native_first_ms), "counts": dict(plan.counts),
                                      "files_changed": len(plan.files), "samples": dict(plan.samples)}
-        print("%-8s era=%s native_from=%s files=%d %s" % (
-            symbol, fmt(plan.era_ms) if era is not None else "-", fmt(plan.native_first_ms)[4:14], len(plan.files),
-            dict(plan.counts)))
+        print("%-8s %s until=%s native_from=%s files=%d %s" % (
+            symbol, policy.source, fmt(plan.era_ms) if era is not None else "-", fmt(plan.native_first_ms)[4:14],
+            len(plan.files), dict(plan.counts)))
         for act, samples in plan.samples.items():
             print("    %s: %s" % (act, samples))
     if args.apply:

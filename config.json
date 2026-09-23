@@ -244,6 +244,11 @@
       }
     }
   },
+  "d1_policy": {
+    "_comment": "ADR-0103: власник ключа D1. broker_native — D1 діб, старших за native_settle_lag_h годин до забору архіву, = нативний D1 FXCM PREVIOUS_CLOSE (= TV FX: D1) без огризків вихідних (d1_native_settle); молодші доби веде живий DeriveEngine (агрегат M1) до наступного settle; S7 не будує D1. derived_m1 — стара політика ADR-0098 §3.7 (відкат). native_settle_lag_h — брокер ревізує останні ~5 год.",
+    "source": "broker_native",
+    "native_settle_lag_h": 6
+  },
   "htf_anchor": {
     "_comment": "ADR-0095 §3.4: правило якоря H4/D1 за групою календаря (market_calendar_symbol_groups). Група без правила — сітку брокера не виміряно (cfd_hk_main, fx_24x5_utc_summer): символ з неї падає ValueError, а не отримує тихий default (рішення власника 23.09.2026). ny_close_us_dst = D1 з 17:00 America/New_York, H4 = D1/6; utc_midnight = Binance.",
     "rule_by_calendar_group": {

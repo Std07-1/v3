@@ -31,7 +31,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
-from core.config_loader import htf_anchor_rule_resolver
+from core.config_loader import d1_policy, htf_anchor_rule_resolver
 from core.derive import DERIVE_CHAIN, DERIVE_ORDER, DERIVE_SOURCE, GenericBuffer, derive_bar
 from core.model.bars import CandleBar
 from core.model.candle_chain import is_display_hidden
@@ -75,6 +75,7 @@ class SymbolContext:
     m1_head_ms: Optional[int]
     m1_tail_ms: Optional[int]
     h1_tail_ms: Optional[int] = None
+    d1_native: bool = False  # ADR-0103: D1 веде d1_native_settle (натив брокера), S7 його не будує
 
     @property
     def source_end_ms(self) -> int:
@@ -157,6 +158,8 @@ def seed_derived_from_m1(ctx: SymbolContext, changed_m1: Optional[Sequence[int]]
     lo = max(ctx.window[0], ctx.m1_head_ms)
     seeds: Buckets = {}
     for tf_s in m1_targets():
+        if tf_s == D1_S and ctx.d1_native:
+            continue  # ADR-0103: власник D1 — d1_native_settle
         if changed_m1 is None:
             buckets: Iterable[int] = _grid_bucket_opens(ctx.bucket_of(lo, D1_S), ctx.source_end_ms, tf_s, ctx.rule)
         else:
@@ -588,6 +591,9 @@ def build_plan(
     if changed_m1 is not None and SCOPE_DERIVED_FROM_M1 not in scopes:
         raise ValueError("SEASON_PLAN_CHANGED_M1_WITHOUT_SCOPE — changed_m1 звужує лише %s" % SCOPE_DERIVED_FROM_M1)
     rule_for_symbol = htf_anchor_rule_resolver(dict(cfg))
+    d1_native = d1_policy(dict(cfg)).native
+    if d1_native and SCOPE_D1_REKEY in scopes:
+        log.warning("SEASON_PLAN_D1_NATIVE область %s пропущена — D1 веде d1_native_settle (ADR-0103)", SCOPE_D1_REKEY)
     resolved = [(symbol, rule_for_symbol(symbol), calendar_for_symbol(dict(cfg), symbol)) for symbol in symbols]
     plans = []
     for symbol, rule, calendar in resolved:
@@ -597,6 +603,7 @@ def build_plan(
             m1_head_ms=head_first_bar_time_ms(data_root, symbol, M1_S),
             m1_tail_ms=tail_last_bar_time_ms(data_root, symbol, M1_S),
             h1_tail_ms=tail_last_bar_time_ms(data_root, symbol, H1_S),
+            d1_native=d1_native,
         )
         changed = None if changed_m1 is None else list(changed_m1.get(sym_dir, ()))
         plans.append(_plan_symbol(ctx, data_root, scopes, changed))
@@ -615,13 +622,15 @@ def _plan_symbol(ctx: SymbolContext, data_root: str, scopes: Sequence[str], chan
         seeds.append(seed_derived_from_m1(ctx, changed))
     if SCOPE_H4_FROM_H1 in scopes:
         seeds.append(seed_h4_from_h1(ctx, head_first_bar_time_ms(data_root, ctx.symbol, H1_S)))
-    if SCOPE_D1_REKEY in scopes:
+    if SCOPE_D1_REKEY in scopes and not ctx.d1_native:
         d1_seeds, rekey, manual = seed_d1_rekey(ctx, reader)
         seeds.append(d1_seeds)
     if SCOPE_HOLES in scopes:
         holes, out_of_scope = seed_holes(ctx, reader)
         seeds.append(holes)
     rebuild, tail_kept = complete_rebuild_set(ctx, seeds)
+    if ctx.d1_native and D1_S in rebuild:
+        raise AssertionError("SEASON_PLAN_D1_NATIVE_VIOLATED %s — D1 у наборі перебудови при d1_policy=broker_native" % ctx.symbol)
     planned = plan_bars(ctx, reader, rebuild)
     files, scopes = plan_symbol_files(ctx, data_root, rebuild, planned)
     return SymbolPlan(context=ctx, rebuild=rebuild, tail_kept=tail_kept, planned=planned, files=files, scopes=scopes,

@@ -198,6 +198,13 @@ Config із будь-яким із них застарілий: `load_system_con
 `WS_UDS_INIT_FAILED`, UI без даних. Exit gate `d1_anchor_alignment` перевіряє те саме (`no_legacy_anchor_keys`)
 і сітку H4/D1 на диску (`disk_data_anchor`).
 
+## Джерело D1 (`d1_policy`, ADR-0103)
+
+| Ключ | Тип | Default | Опис |
+| --- | --- | --- | --- |
+| `d1_policy.source` | str | `derived_m1` (секції нема) | `broker_native`: D1 кожної доби, чий бакет закінчився щонайменше `native_settle_lag_h` годин до забору архіву, = нативний D1 FXCM PREVIOUS_CLOSE (= TV `FX:` D1) без огризків вихідних — пише `tools/repair/d1_native_settle`; молодші доби веде живий DeriveEngine (агрегат M1) до наступного settle; S7 (`season_plan`) D1 не будує; health не звіряє нативні D1 з M1 (`native_d1`). `derived_m1`: D1 = агрегат M1 (ADR-0098 §3.7, відкат). Інше значення — `ValueError CONFIG_D1_POLICY_INVALID` |
+| `d1_policy.native_settle_lag_h` | int ≥ 0 | 6 | Скільки годин після закриття доби брокер ще може її ревізувати (виміряно 22.09: останні ~5 год) |
+
 ---
 
 ## WS Server rails (SEC-06, `ws_server.*`)

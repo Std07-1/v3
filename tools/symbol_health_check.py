@@ -48,6 +48,7 @@ import sys
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from core.config_loader import (
+    d1_policy,
     htf_anchor_rule_resolver,
     load_system_config,
     resolve_config_path,
@@ -134,6 +135,14 @@ def _declares_partial(bar: CandleBar) -> bool:
     )
 
 
+NATIVE_D1_PROVENANCE_PREFIX = "d1native/"  # extensions.settled рядка, записаного d1_native_settle (ADR-0103)
+
+
+def _is_native_d1(bar: CandleBar) -> bool:
+    """Власний D1 брокера (ADR-0103 §3.1), а не агрегат M1: root/cascade його не звіряють."""
+    return str((bar.extensions or {}).get("settled", "")).startswith(NATIVE_D1_PROVENANCE_PREFIX)
+
+
 def check_symbol(
     cfg: Dict[str, Any],
     symbol: str,
@@ -165,6 +174,7 @@ def check_symbol(
     is_trading = calendar.is_trading_minute
     # Невалідний ключ групи — ValueError з назвою групи (config-помилка на весь прогін, не вердикт символу)
     session_open_grace_min = session_open_grace_resolver(cfg)(symbol)
+    d1_native = d1_policy(cfg).native
 
     tf_list = sorted(int(t) for t in cfg.get("tf_allowlist_s", []))
     bars_by_tf = {tf: _read_bars(data_root, symbol, tf) for tf in tf_list}
@@ -183,11 +193,15 @@ def check_symbol(
         geometry = measure_geometry(bars, tf_s=tf_s, rule=rule)
         depth = measure_depth(opens, required_bars=REQUIRED_BARS_BY_TF.get(tf_s, 0))
 
+        # ADR-0103: при broker_native D1 устояних діб — натив брокера; з M1 звіряються лише derived-рядки D1
+        native_d1 = [b for b in bars if _is_native_d1(b)] if (tf_s == 86400 and d1_native) else []
+        derived = [b for b in bars if not _is_native_d1(b)] if native_d1 else bars
+
         cascade = None
         source_tf = DERIVE_SOURCE.get(tf_s, (None, None))[0]
-        if source_tf and bars and bars_by_tf.get(source_tf):
+        if source_tf and derived and bars_by_tf.get(source_tf):
             cascade = measure_cascade(
-                bars, bars_by_tf[source_tf],
+                derived, bars_by_tf[source_tf],
                 target_tf_s=tf_s, source_tf_s=source_tf, rule=rule,
                 declares_partial_fn=_declares_partial,
             )
@@ -195,9 +209,9 @@ def check_symbol(
         # Корінь ланцюга: кожен derived-бар проти M1 у своєму бакеті (ADR-0094 P4). Каскад вище
         # бачить лише сусідній рівень і не помітить, якщо застарів цілий ланцюжок разом.
         root = None
-        if tf_s != 60 and bars and bars_by_tf.get(60):
+        if tf_s != 60 and derived and bars_by_tf.get(60):
             root = measure_root_consistency(
-                bars, bars_by_tf[60], tf_s=tf_s, rule=rule, declares_partial_fn=_declares_partial,
+                derived, bars_by_tf[60], tf_s=tf_s, rule=rule, declares_partial_fn=_declares_partial,
             )
 
         # Суцільний ланцюг M1 (ADR-0101 §3.1): похідні успадковують його від M1, тож міряємо лише корінь.
@@ -243,6 +257,7 @@ def check_symbol(
                       "declared_partial": root.declared_partial, "uncovered": root.uncovered,
                       "off_grid_skipped": root.off_grid_skipped}
             ),
+            "native_d1": len(native_d1) if tf_s == 86400 else None,
             "chain_breaks": (
                 None if chain is None
                 else {"checked": chain.checked, "hidden": chain.hidden, "inner": chain.inner, "at_gap": chain.at_gap,

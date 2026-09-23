@@ -7,6 +7,7 @@ import os
 
 import pytest
 
+from core.config_loader import load_system_config, pick_config_path
 from tools.repair import d1_native_settle as dns
 
 UTC = dt.timezone.utc
@@ -67,6 +68,15 @@ def tree(tmp_path):
     return root, arc, era_line
 
 
+def _config(tmp_path, source):
+    """Копія конфігу репо з явною політикою D1 (ADR-0103) — тест не залежить від значення за замовчуванням."""
+    cfg = load_system_config(pick_config_path())
+    cfg["d1_policy"] = {"source": source, "native_settle_lag_h": 6}
+    path = tmp_path / ("config_%s.json" % source)
+    path.write_text(json.dumps(cfg), encoding="utf-8")
+    return str(path)
+
+
 def _rows(root, day):
     path = root / "XAU_USD" / "tf_86400" / ("part-%s.jsonl" % day)
     if not path.exists():
@@ -77,6 +87,7 @@ def _rows(root, day):
 def test_every_row_class_before_the_m1_era_and_nothing_else(tree, tmp_path):
     root, arc, era_line = tree
     rc = dns.main(["--data-root", str(root), "--archive", str(arc), "--symbols", "XAU/USD", "--apply",
+                   "--config", _config(tmp_path, "derived_m1"),
                    "--backup-dir", str(tmp_path / "bak"), "--report", str(tmp_path / "r.json")])
     report = json.load(open(tmp_path / "r.json", encoding="utf-8"))
     counts = report["symbols"]["XAU/USD"]["counts"]
@@ -148,3 +159,35 @@ def test_weekend_stub_is_not_inserted_and_own_stub_row_is_removed(tree, tmp_path
     assert _rows(root, "20111014") is None  # огризок лише в нативі — не вставлено
     assert json.loads(_rows(root, "20250316"))["c"] == 3005.0 and json.loads(_rows(root, "20111009"))["c"] == 1655.0
     assert json.loads(_rows(root, "19950616"))["c"] == 40.5  # п'ятниця старої конвенції — справжній торговий день
+
+
+UNSETTLED = _ms(2026, 9, 22, 21)  # бакет, що містить «забір 23.09 15:52 − 6 год» — ще не устояний, натив не чіпає
+
+
+def test_broker_native_owns_every_settled_day_including_the_m1_era(tree, tmp_path):
+    """ADR-0103: D1 = натив — і в епосі M1 (derived-рядок замінено), крім доби, молодшої за лаг ревізії."""
+    root, arc, era_line = tree
+    d1 = root / "XAU_USD" / "tf_86400"
+    unsettled_line = _row(UNSETTLED, 4357.74, 4369.37, 4274.4, 4287.0, 775556.0, src="derived")
+    _write(str(d1 / "part-20260922.jsonl"), [unsettled_line])
+    native = json.load(open(arc / "XAU_USD_d1_full.json"))
+    native.append([UNSETTLED, 4357.63, 4369.37, 4277.35, 4280.05, 1.0])  # формуючий на момент забору
+    json.dump(sorted(native), open(arc / "XAU_USD_d1_full.json", "w"))
+    rc = dns.main(["--data-root", str(root), "--archive", str(arc), "--symbols", "XAU/USD", "--apply",
+                   "--config", _config(tmp_path, "broker_native"), "--backup-dir", str(tmp_path / "bak"),
+                   "--report", str(tmp_path / "r.json")])
+    report = json.load(open(tmp_path / "r.json", encoding="utf-8"))
+
+    assert rc == 0 and report["verify_replan_files"] == 0
+    assert report["symbols"]["XAU/USD"]["d1_policy"] == "broker_native"
+    era = json.loads(_rows(root, "20251016"))
+    assert (era["c"], era["src"]) == (99.0, "history") and era["extensions"]["settled"].startswith("d1native/")
+    assert _rows(root, "20260922") == unsettled_line + b"\n"  # доба молодша за лаг — живого DeriveEngine, байт у байт
+
+
+def test_broker_native_without_fetched_at_is_refused(tree, tmp_path):
+    root, arc, _era_line = tree
+    json.dump({"mode": "PREVIOUS_CLOSE"}, open(arc / "meta.json", "w"))
+    with pytest.raises(ValueError, match="D1_NATIVE_ARCHIVE_NO_FETCHED_AT"):
+        dns.main(["--data-root", str(root), "--archive", str(arc), "--symbols", "XAU/USD",
+                  "--config", _config(tmp_path, "broker_native")])

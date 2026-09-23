@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -314,3 +315,41 @@ def session_open_grace_resolver(cfg: Dict[str, Any]) -> Callable[[str], int]:
         return grace_by_group[group]
 
     return grace_for_symbol
+
+
+# ── Політика D1 (ADR-0103 §3.1) ──────────────────────────────────────────────────────────────────────────────────────
+D1_POLICY_KEY = "d1_policy"
+D1_SOURCE_NATIVE = "broker_native"  # D1 устояних діб = нативний D1 брокера (= TV FX: D1)
+D1_SOURCE_DERIVED = "derived_m1"  # D1 = агрегат M1 (ADR-0098 §3.7; відкат ADR-0103 §7)
+
+
+@dataclass(frozen=True)
+class D1Policy:
+    """Хто власник ключа D1: нативний D1 брокера для діб, старших за лаг ревізії, або агрегат M1."""
+
+    source: str
+    native_settle_lag_h: int
+
+    @property
+    def native(self) -> bool:
+        return self.source == D1_SOURCE_NATIVE
+
+
+def d1_policy(cfg: Dict[str, Any]) -> D1Policy:
+    """`config.json → d1_policy` з валідацією; секції немає — стара політика (агрегат M1), а не мовчазний натив.
+
+    Невалідне значення — ValueError CONFIG_D1_POLICY_INVALID: два записувачі D1 (S7 і d1_native_settle) мусять
+    читати одне рішення, тож «якось прочитане» поле гірше за відмову.
+    """
+    raw = cfg.get(D1_POLICY_KEY)
+    if raw is None:
+        return D1Policy(D1_SOURCE_DERIVED, 6)
+    if not isinstance(raw, dict):
+        raise ValueError("CONFIG_D1_POLICY_INVALID %s=%r — очікується об'єкт (ADR-0103)" % (D1_POLICY_KEY, raw))
+    source = raw.get("source")
+    lag = raw.get("native_settle_lag_h", 6)
+    if source not in (D1_SOURCE_NATIVE, D1_SOURCE_DERIVED):
+        raise ValueError("CONFIG_D1_POLICY_INVALID source=%r — %s | %s (ADR-0103)" % (source, D1_SOURCE_NATIVE, D1_SOURCE_DERIVED))
+    if isinstance(lag, bool) or not isinstance(lag, int) or lag < 0:
+        raise ValueError("CONFIG_D1_POLICY_INVALID native_settle_lag_h=%r — ціле число годин ≥ 0 (ADR-0103)" % (lag,))
+    return D1Policy(source, lag)
