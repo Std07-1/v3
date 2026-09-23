@@ -1,12 +1,16 @@
 """Сезонний якір торгового дня (ADR-0095): D1 відкривається о 17:00 America/New_York, H4 = D1/6.
 
-Pure: без I/O і без tz-бази — арифметика правила DST США. Правило одне для будь-якого року, зокрема 1987–2006
-(конвенція FXCM: 413 D1 XAU `src=history` на 21:00 UTC у вікнах, де старе правило США дало б 22:00). Збіг із
-tz-базою 2007–2040 стереже тест-свідок зі `zoneinfo`: зміниться закон — CI почервоніє, а не тихий дрейф.
+Pure: без I/O і без tz-бази — арифметика правил DST США і ЄС з історією законів: США з 2007 — друга неділя березня …
+перша неділя листопада, 1987–2006 — перша неділя квітня … остання неділя жовтня; ЄС з 1996 — остання неділя березня …
+остання неділя жовтня, 1981–1995 — … остання неділя вересня. Так живе і брокер: нативний D1 FXCM (= TV) має 22:00
+UTC 30.03.1995 і 28.03.2006 та 21:00 03.04.2006 (забір 23.09.2026). Раніше тут стояло «одне сучасне правило для будь-
+якого року» з доказом «413 D1 XAU `src=history` на 21:00» — це був наш давній сід із фіксованим якорем 21:00, а не
+брокер; через це 20–25 нативних D1 на рік за 1990–2006 були б «поза сіткою». Збіг із tz-базою 1987–2040 стереже
+тест-свідок зі `zoneinfo`: зміниться закон — CI почервоніє, а не тихий дрейф.
 
-Сезон визначає календарна дата `d` відкриття торгового дня: літо (EDT, UTC−4), якщо друга неділя березня ≤ `d` <
-перша неділя листопада, — відкриття `d` 21:00 UTC; інакше зима (EST, UTC−5) — `d` 22:00 UTC. Момент належить
-торговому дню з найпізнішим відкриттям ≤ моменту; на вихідних переходу доби мають 23 і 25 год.
+Сезон визначає календарна дата `d` відкриття торгового дня: літо (EDT, UTC−4), якщо `d` у літньому часі США свого
+року, — відкриття `d` 21:00 UTC; інакше зима (EST, UTC−5) — `d` 22:00 UTC. Момент належить торговому дню з
+найпізнішим відкриттям ≤ моменту; на вихідних переходу доби мають 23 і 25 год.
 
 Тут же сезон розкладу груп календаря (§3.5, `calendar_season`): момент переходу DST США (`us`) або ЄС (`eu`).
 Уся арифметика DST платформи — в одному модулі.
@@ -22,8 +26,8 @@ RULE_UTC_MIDNIGHT = "utc_midnight"  # Binance
 HTF_ANCHOR_RULES = frozenset({RULE_NY_CLOSE_US_DST, RULE_UTC_MIDNIGHT})
 
 # Правило сезону розкладу групи календаря (ADR-0095 §3.5): `market_calendar_by_group.<група>.season_rule`
-SEASON_RULE_US = "us"  # друга неділя березня 07:00 UTC ≤ момент < перша неділя листопада 06:00 UTC (02:00 NY)
-SEASON_RULE_EU = "eu"  # остання неділя березня 01:00 UTC ≤ момент < остання неділя жовтня 01:00 UTC
+SEASON_RULE_US = "us"  # неділя переходу навесні 07:00 UTC ≤ момент < неділя переходу восени 06:00 UTC (02:00 NY)
+SEASON_RULE_EU = "eu"  # неділя переходу навесні 01:00 UTC ≤ момент < неділя переходу восени 01:00 UTC
 SEASON_RULE_NONE = "none"  # розклад групи від DST не залежить (HK, crypto)
 CALENDAR_SEASON_RULES = frozenset({SEASON_RULE_US, SEASON_RULE_EU, SEASON_RULE_NONE})
 SEASON_SUMMER = "summer"  # мітки сезону season_label / calendar_season = ключі блоків розкладу в config
@@ -146,17 +150,34 @@ def calendar_season(ts_ms: int, season_rule: str) -> str:
 
 
 def is_us_summer(day: dt.date) -> bool:
-    """Літній час США за чинним правилом: друга неділя березня ≤ day < перша неділя листопада."""
-    return _nth_sunday(day.year, 3, 2) <= day < _nth_sunday(day.year, 11, 1)
+    """Літній час США за законом свого року: [неділя переходу навесні, неділя переходу восени)."""
+    spring, autumn = _us_dst_days(day.year)
+    return spring <= day < autumn
+
+
+@functools.lru_cache(maxsize=256)
+def _us_dst_days(year: int) -> tuple[dt.date, dt.date]:
+    """Неділі переходу США: з 2007 (Energy Policy Act 2005) — друга неділя березня / перша неділя листопада;
+    1987–2006 — перша неділя квітня / остання неділя жовтня; раніше — остання неділя квітня / остання неділя жовтня."""
+    if year >= 2007:
+        return _nth_sunday(year, 3, 2), _nth_sunday(year, 11, 1)
+    if year >= 1987:
+        return _nth_sunday(year, 4, 1), _last_sunday(year, 10)
+    return _last_sunday(year, 4), _last_sunday(year, 10)
+
+
+def _eu_dst_days(year: int) -> tuple[dt.date, dt.date]:
+    """Неділі переходу ЄС: з 1996 — остання неділя березня / остання неділя жовтня; раніше — … / остання вересня."""
+    return _last_sunday(year, 3), _last_sunday(year, 10 if year >= 1996 else 9)
 
 
 @functools.lru_cache(maxsize=256)
 def _summer_bounds_ms(year: int, season_rule: str) -> tuple[int, int]:
     """Літній час року за правилом групи `us` | `eu`: [перехід навесні, перехід восени), мс UTC."""
     if season_rule == SEASON_RULE_US:
-        switch_days, switch_ms_of_day = (_nth_sunday(year, 3, 2), _nth_sunday(year, 11, 1)), _US_SWITCH_MS_OF_DAY
+        switch_days, switch_ms_of_day = _us_dst_days(year), _US_SWITCH_MS_OF_DAY
     else:
-        switch_days, switch_ms_of_day = (_last_sunday(year, 3), _last_sunday(year, 10)), _EU_SWITCH_MS_OF_DAY
+        switch_days, switch_ms_of_day = _eu_dst_days(year), _EU_SWITCH_MS_OF_DAY
     spring_ms, autumn_ms = (
         (day - _EPOCH).days * _DAY_MS + ms_of_day for day, ms_of_day in zip(switch_days, switch_ms_of_day)
     )

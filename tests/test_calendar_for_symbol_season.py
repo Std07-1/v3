@@ -182,16 +182,18 @@ def _hours_of_months(years, months):
                 moment += dt.timedelta(hours=1)
 
 
-def test_us_season_is_new_york_dst_instant_zoneinfo_witness_2007_2040():
-    """Свідок tz-бази: сезон `us` = літній час Нью-Йорка щогодини березня й листопада 2007–2040 (02:00 NY)."""
-    for moment in _hours_of_months(range(2007, 2041), (3, 11)):
+def test_us_season_is_new_york_dst_instant_zoneinfo_witness_1987_2040():
+    """Свідок tz-бази: сезон `us` = літній час Нью-Йорка щогодини березня, квітня, жовтня й листопада 1987–2040
+    (02:00 NY, з історією законів: до 2007 — квітень…жовтень)."""
+    for moment in _hours_of_months(range(1987, 2041), (3, 4, 10, 11)):
         expected = "summer" if moment.astimezone(NY).utcoffset() == dt.timedelta(hours=-4) else "winter"
         assert calendar_season(int(moment.timestamp() * 1000), "us") == expected, moment
 
 
-def test_eu_season_is_berlin_dst_instant_zoneinfo_witness_2007_2040():
-    """Свідок tz-бази: сезон `eu` = літній час ЄС щогодини березня й жовтня 2007–2040 (01:00 UTC)."""
-    for moment in _hours_of_months(range(2007, 2041), (3, 10)):
+def test_eu_season_is_berlin_dst_instant_zoneinfo_witness_1981_2040():
+    """Свідок tz-бази: сезон `eu` = літній час ЄС щогодини березня, вересня й жовтня 1981–2040 (01:00 UTC; до 1996
+    осінній перехід — остання неділя вересня)."""
+    for moment in _hours_of_months(range(1981, 2041), (3, 9, 10)):
         expected = "summer" if moment.astimezone(BERLIN).utcoffset() == dt.timedelta(hours=2) else "winter"
         assert calendar_season(int(moment.timestamp() * 1000), "eu") == expected, moment
 

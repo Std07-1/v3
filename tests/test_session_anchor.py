@@ -28,9 +28,10 @@ def _ms(y, mo, d, h=0, mi=0) -> int:
     return int(dt.datetime(y, mo, d, h, mi, tzinfo=UTC).timestamp() * 1000)
 
 
-def test_session_anchor_matches_zoneinfo_2007_2040_equal():
-    """Свідок: для кожної дати 2007–2040 відкриття = 17:00 America/New_York у UTC (зміниться закон/tzdata — червоне)."""
-    day = dt.date(2007, 1, 1)
+def test_session_anchor_matches_zoneinfo_1987_2040_equal():
+    """Свідок: для кожної дати 1987–2040 відкриття = 17:00 America/New_York у UTC — з історією законів DST США
+    (1987–2006 квітень…жовтень, з 2007 березень…листопад). Зміниться закон/tzdata — червоне."""
+    day = dt.date(1987, 1, 1)
     while day <= dt.date(2040, 12, 31):
         ny_close = dt.datetime(day.year, day.month, day.day, 17, 0, tzinfo=NY).astimezone(UTC)
         expected_ms = int(ny_close.timestamp() * 1000)
@@ -40,11 +41,13 @@ def test_session_anchor_matches_zoneinfo_2007_2040_equal():
 
 
 @pytest.mark.parametrize("open_utc", [
-    (1987, 10, 26), (1988, 3, 14), (1995, 3, 30), (1995, 10, 30), (2006, 3, 28), (2006, 10, 30),
+    (1995, 3, 30, 22), (1995, 10, 30, 22), (2006, 3, 28, 22), (2006, 10, 30, 22), (2006, 4, 3, 21),
+    (2007, 3, 12, 21), (2007, 11, 1, 21),
 ])
-def test_session_anchor_pre2007_uses_modern_rule_fxcm_convention(open_utc):
-    """D1 XAU `src=history` 1987–2006 у вікнах, де старе правило США дало б 22:00, — у брокера 21:00 (сучасне правило)."""
-    open_ms = _ms(*open_utc, 21)
+def test_session_anchor_pre2007_follows_the_law_of_its_year_like_fxcm_native_d1(open_utc):
+    """Нативний D1 FXCM (= TV), забраний 23.09.2026 з 1990: 30.03.1995 і 28.03.2006 — 22:00 UTC (старе правило:
+    літо з першої неділі квітня), 03.04.2006 — 21:00, з 2007 — нове правило. XAU і NAS100 однаково."""
+    open_ms = _ms(*open_utc)
     assert trading_day_open_ms(open_ms, FXCM) == open_ms
     assert htf_bucket_start_ms(open_ms + 5 * 3_600_000, D1_S, FXCM) == open_ms
 
