@@ -10,8 +10,9 @@ H4, а нормалізація EOL змінила б рядки, яких ре�
 Part-файл — лише `part-YYYYMMDD.jsonl` верхнього рівня каталогу TF, як у читача (`DiskLayer.list_parts`); сусіди
 `.bak.<ts>` і каталоги `_backup_*` — не part-файли. Ім'я — UTC-доба open_time_ms.
 
-Запис (ADR-0095 §3.8 п.3): `backup_files` — tgz і sha256-маніфест поза data_root до запису; `replace_part` —
-атомарна заміна зі старим inode в `<tf>/_backup_adr0095_<ts>/`.
+Запис (ADR-0095 §3.8 п.3): `backup_files` — tgz і sha256-маніфест поза data_root до запису; `writers_guard` — доказ
+зі /proc, що записувачі зупинені (argv і FD part-файлів, відкриті на запис); `replace_part` — атомарна заміна зі
+старим inode в `<tf>/_backup_adr0095_<ts>/`.
 """
 
 from __future__ import annotations
@@ -20,16 +21,19 @@ import datetime as dt
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import tarfile
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from core.model.bars import CandleBar
 from runtime.store.layers.disk_layer import is_foreign_row
 from runtime.store.ssot_jsonl import serialize_bar
 from tools.repair.jsonl_rewrite import replace_bytes_atomic
+
+log = logging.getLogger("partfile_io")
 
 PART_NAME_RE = re.compile(r"^part-(\d{8})\.jsonl$")
 LF = b"\n"
@@ -218,3 +222,109 @@ def replace_part(path: str, new_bytes: bytes, *, stage_sha256: str, stamp: str) 
             raise FileNotFoundError("PARTFILE_NO_SIBLING path=%s — власника і режим нового файла нема звідки взяти" % path)
         like = os.path.join(folder, siblings[-1])
     return replace_bytes_atomic(path, new_bytes, backup_dir=os.path.join(folder, BACKUP_DIR_PREFIX + stamp), like=like)
+
+
+# ── Рейка ADR-0098 §3.6: записувачі SSOT доведено зупинені (скан /proc, не прапорець оператора) ────────────────────
+PROD_DATA_ROOTS = ("/opt/smc-v3/data_v3",)  # прод-каталог SSOT (ранбук вікна ADR-0095 §3.9)
+# Модулі, що пишуть part-файли: живий інжест і ws (supervisor smc:smc-fxcm/smc-preview/smc-ws, Binance) та ремонтні
+# інструменти. smc-ticks (`tick_publisher_fxcm`) SSOT не пише і у вікні не зупиняється.
+WRITER_ARGV_MARKERS = (
+    "app.main", "runtime.ws.ws_server", "tick_preview_worker", "binance_ingest_worker", "m1_poller",
+    "m1_ingestion_worker", "broker_sidecar", "tools.rebuild_from_m1", "fetch_tf_backfill", "repair_m1_gaps",
+    "dedup_jsonl_lastwins", "sort_jsonl_by_open_ms", "purge_derived_window", "settle_prev",
+)
+_ACCESS_MODE_MASK = 0o3  # O_ACCMODE Linux: 1 — O_WRONLY, 2 — O_RDWR
+
+
+class WritersGuardRefused(RuntimeError):
+    """Записувачі SSOT не доведено зупиненими — заміна part-файлів заборонена."""
+
+
+def writers_guard(data_root: str, *, proc_root: str = "/proc", prod_roots: Sequence[str] = PROD_DATA_ROOTS) -> None:
+    """Прод-каталог: відмова, якщо /proc показує живого записувача (argv) або FD part-файла, відкритий на запис.
+
+    Поза прод-каталогом (копія, репетиція, Windows) — гучний пропуск WARNING WRITERS_GUARD_SKIPPED: живі процеси
+    пишуть прод, а не копію. На проді без /proc чи з процесом, чиї FD не прочитати (запуск не від root), — відмова:
+    доказу немає.
+    """
+    root = _posix_abspath(data_root)
+    if not any(root == prod or root.startswith(prod + "/") for prod in prod_roots):
+        log.warning("WRITERS_GUARD_SKIPPED data_root=%s reason=not_prod_path — живі записувачі пишуть прод", data_root)
+        return
+    if not os.path.isdir(proc_root):
+        raise WritersGuardRefused("WRITERS_GUARD_REFUSED reason=no_proc data_root=%s" % data_root)
+    # /proc/<pid>/fd показує справжній шлях — каталог порівнюється без символьних лінків
+    found, uninspectable = find_live_writers(_posix_abspath(os.path.realpath(data_root)), proc_root=proc_root)
+    for pid, reason, detail in found:
+        log.error("WRITERS_GUARD_LIVE pid=%d reason=%s detail=%s", pid, reason, detail)
+    if found or uninspectable:
+        raise WritersGuardRefused(
+            "WRITERS_GUARD_REFUSED live=%d fd_uninspectable_pids=%s — зупиніть smc:smc-ws smc:smc-preview smc:smc-fxcm "
+            "і ремонтні інструменти; FD інших користувачів читає лише root" % (len(found), uninspectable[:10])
+        )
+    log.info("WRITERS_GUARD_OK data_root=%s", data_root)
+
+
+def find_live_writers(
+    data_root: str, *, proc_root: str = "/proc", readlink: Optional[Callable[[str], str]] = None
+) -> Tuple[List[Tuple[int, str, str]], List[int]]:
+    """([(pid, argv|write_fd, деталь)], [pid, чиї FD не прочитати]) — без себе і своїх предків (самозбіг argv).
+
+    `readlink` — ціль FD (типово `os.readlink`); тести підставляють таблицю замість символьних лінків /proc.
+    """
+    readlink = readlink if readlink is not None else os.readlink
+    skip = _ancestor_pids(proc_root)
+    found: List[Tuple[int, str, str]] = []
+    uninspectable: List[int] = []
+    for name in sorted(os.listdir(proc_root)):
+        if not name.isdigit() or int(name) in skip:
+            continue
+        pid, pid_dir = int(name), os.path.join(proc_root, name)
+        try:
+            with open(os.path.join(pid_dir, "cmdline"), "rb") as fh:
+                argv = fh.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+            if "python" in argv and any(marker in argv for marker in WRITER_ARGV_MARKERS):
+                found.append((pid, "argv", argv[:160]))
+            for fd in os.listdir(os.path.join(pid_dir, "fd")):
+                target = _fd_write_target(pid_dir, fd, data_root, readlink)
+                if target is not None:
+                    found.append((pid, "write_fd", target))
+        except FileNotFoundError:  # процес завершився між переліком і читанням — не записувач
+            continue
+        except PermissionError:
+            uninspectable.append(pid)
+    return found, uninspectable
+
+
+def _fd_write_target(pid_dir: str, fd: str, data_root: str, readlink: Callable[[str], str]) -> Optional[str]:
+    """Шлях part-каталогу TF під `data_root`, відкритий цим FD на запис; інакше None."""
+    try:
+        target = readlink(os.path.join(pid_dir, "fd", fd)).replace("\\", "/")
+        with open(os.path.join(pid_dir, "fdinfo", fd), encoding="utf-8") as fh:
+            flags_line = next((line for line in fh if line.startswith("flags:")), "flags:\t0")
+    except FileNotFoundError:  # FD закрито між переліком і читанням
+        return None
+    if not target.startswith(data_root + "/") or "/tf_" not in target:
+        return None
+    flags = int(flags_line.split(":", 1)[1].strip(), 8)
+    return target if flags & _ACCESS_MODE_MASK else None
+
+
+def _ancestor_pids(proc_root: str) -> Set[int]:
+    """Власний pid і предки: sudo/timeout-обгортки власного запуску несуть у argv ім'я інструмента (пастка pgrep -f)."""
+    pids: Set[int] = set()
+    pid = os.getpid()
+    while pid > 1 and pid not in pids:
+        pids.add(pid)
+        try:
+            with open(os.path.join(proc_root, str(pid), "stat"), "rb") as fh:
+                stat_line = fh.read().decode("utf-8", "replace")
+        except OSError:  # немає /proc/<pid>/stat (не Linux або процес зник) — ланцюг предків закінчено
+            break
+        pid = int(stat_line.rsplit(")", 1)[1].split()[1])  # ppid — друге поле після «(comm)»
+    return pids
+
+
+def _posix_abspath(path: str) -> str:
+    """Абсолютний шлях у POSIX-формі без літери диска — прод-шлях порівнюється однаково на Linux і в тестах."""
+    return re.sub(r"^[A-Za-z]:", "", os.path.abspath(path).replace("\\", "/"))
