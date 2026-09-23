@@ -243,11 +243,7 @@ def main() -> int:
         logging.error("Відсутні FXCM креденшіали (ENV або config)")
         return 2
 
-    day_anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
-    day_anchor_offset_s_alt = cfg.get("day_anchor_offset_s_alt", None)
-    day_anchor_offset_s_alt2 = cfg.get("day_anchor_offset_s_alt2", None)
-    day_anchor_offset_s_d1 = cfg.get("day_anchor_offset_s_d1", None)
-    day_anchor_offset_s_d1_alt = cfg.get("day_anchor_offset_s_d1_alt", None)
+    anchor_rule_for_symbol = htf_anchor_rule_resolver(cfg)
     close_safety_ms = resolve_close_safety_ms(cfg)
 
     logging.info(
@@ -260,14 +256,10 @@ def main() -> int:
         password=password,
         url=url,
         connection=connection,
-        day_anchor_offset_s=day_anchor_offset_s,
-        day_anchor_offset_s_d1=None if day_anchor_offset_s_d1 is None else int(day_anchor_offset_s_d1),
-        day_anchor_offset_s_d1_alt=None if day_anchor_offset_s_d1_alt is None else int(day_anchor_offset_s_d1_alt),
-        day_anchor_offset_s_alt=None if day_anchor_offset_s_alt is None else int(day_anchor_offset_s_alt),
-        day_anchor_offset_s_alt2=None if day_anchor_offset_s_alt2 is None else int(day_anchor_offset_s_alt2),
+        anchor_rule_for_symbol=anchor_rule_for_symbol,
     )
 
-    writer = JsonlAppender(root=data_root, anchor_rule_for_symbol=htf_anchor_rule_resolver(cfg))
+    writer = JsonlAppender(root=data_root, anchor_rule_for_symbol=anchor_rule_for_symbol)
 
     total_written = 0
     total_skipped = 0

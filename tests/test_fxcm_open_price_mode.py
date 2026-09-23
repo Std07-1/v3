@@ -21,6 +21,7 @@ import types
 
 import pytest
 
+from core.session_anchor import RULE_NY_CLOSE_US_DST
 from runtime.ingest.broker.fxcm import provider as provider_mod
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -53,14 +54,15 @@ def fake_sdk(monkeypatch):
     return _FakeForexConnect
 
 
-def _provider():
-    return provider_mod.FxcmHistoryProvider(user_id="u", password="p", url="x", connection="Demo")
+def _provider(**kwargs):
+    return provider_mod.FxcmHistoryProvider(user_id="u", password="p", url="x", connection="Demo", **kwargs)
 
 
 @pytest.mark.parametrize("fetch", ["m1", "tf"])
 def test_every_history_request_asks_the_sdk_for_previous_close(fake_sdk, fetch):
-    """Суть контракту: у SDK іде саме PREVIOUS_CLOSE — і для M1, і для старших TF (TV агрегує M1, D1 нативний)."""
-    with _provider() as provider:
+    """Суть контракту: у SDK іде саме PREVIOUS_CLOSE — і для M1, і для старших TF (TV агрегує M1, D1 нативний).
+    H4 без резолвера правила якоря провайдер відмовляє до запиту (ADR-0095 S3c), тож резолвер переданий."""
+    with _provider(anchor_rule_for_symbol=lambda _symbol: RULE_NY_CLOSE_US_DST) as provider:
         if fetch == "m1":
             provider.fetch_last_n_m1("XAU/USD", n=5)
         else:

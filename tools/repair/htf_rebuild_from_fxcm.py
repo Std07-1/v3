@@ -606,12 +606,8 @@ def main() -> int:
         LOG.error("Відсутні FXCM креденшіали (ENV або config)")
         return 2
 
-    # Anchor offsets
-    day_anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
-    day_anchor_offset_s_alt = cfg.get("day_anchor_offset_s_alt", None)
-    day_anchor_offset_s_alt2 = cfg.get("day_anchor_offset_s_alt2", None)
-    day_anchor_offset_s_d1 = cfg.get("day_anchor_offset_s_d1", None)
-    day_anchor_offset_s_d1_alt = cfg.get("day_anchor_offset_s_d1_alt", None)
+    # Правило сезонної сітки H4/D1 (ADR-0095 §3.3): провайдер і писар звіряють бари з ним
+    anchor_rule_for_symbol = htf_anchor_rule_resolver(cfg)
 
     LOG.info(
         "Параметри: symbols=%s tfs=%s limits=%s data_root=%s",
@@ -627,27 +623,13 @@ def main() -> int:
         password=password,
         url=url,
         connection=connection,
-        day_anchor_offset_s=day_anchor_offset_s,
-        day_anchor_offset_s_d1=(
-            None if day_anchor_offset_s_d1 is None else int(day_anchor_offset_s_d1)
-        ),
-        day_anchor_offset_s_d1_alt=(
-            None
-            if day_anchor_offset_s_d1_alt is None
-            else int(day_anchor_offset_s_d1_alt)
-        ),
-        day_anchor_offset_s_alt=(
-            None if day_anchor_offset_s_alt is None else int(day_anchor_offset_s_alt)
-        ),
-        day_anchor_offset_s_alt2=(
-            None if day_anchor_offset_s_alt2 is None else int(day_anchor_offset_s_alt2)
-        ),
+        anchor_rule_for_symbol=anchor_rule_for_symbol,
     )
 
     writer = None
     if is_commit and not is_rewrite:
         writer = JsonlAppender(
-            root=data_root, anchor_rule_for_symbol=htf_anchor_rule_resolver(cfg)
+            root=data_root, anchor_rule_for_symbol=anchor_rule_for_symbol
         )
 
     # ── Fetch + Validate + Write ───────────────────────

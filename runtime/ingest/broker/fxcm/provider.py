@@ -3,9 +3,16 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import math
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from core.model.bars import CandleBar, assert_invariants, ms_to_utc_dt, utc_dt_to_ms
+from core.session_anchor import (
+    H4_S,
+    HTF_ANCHOR_RULES,
+    OffSeasonGridError,
+    assert_on_season_grid,
+    htf_anchor_offset_s,
+)
 from runtime.ingest.market_calendar import MarketCalendar
 
 # ⚠️ Імпорт ForexConnect може відрізнятись залежно від вашого SDK/обгортки.
@@ -65,23 +72,13 @@ def tf_s_to_fxcm_timeframe(tf_s: int) -> str:
     return mapping[tf_s]
 
 
-def anchor_offset_for_tf(
-    tf_s: int,
-    day_anchor_offset_s: int,
-    day_anchor_offset_s_d1: Optional[int] = None,
-) -> int:
-    """Anchor-offset для старших TF (FX-сесія)."""
-    if tf_s == 86400 and day_anchor_offset_s_d1 is not None:
-        return max(0, int(day_anchor_offset_s_d1))
-    if day_anchor_offset_s <= 0:
-        return 0
-    if tf_s >= 14400:
-        return day_anchor_offset_s
-    return 0
-
-
 class FxcmHistoryProvider:
-    """History provider поверх ForexConnect.get_history()."""
+    """History provider поверх ForexConnect.get_history().
+
+    H4/D1 брокера приймаються лише на сезонній сітці символу (ADR-0095 §3.3). `anchor_rule_for_symbol` — резолвер
+    `core.config_loader.htf_anchor_rule_resolver(cfg)`; без нього запит H4/D1 — гучна відмова
+    `FXCM_HTF_ANCHOR_RULE_MISSING`, а не тихий якір 0. M1..H1 і тіки резолвера не потребують (сайдкар, полер).
+    """
 
     def __init__(
         self,
@@ -89,11 +86,7 @@ class FxcmHistoryProvider:
         password: str,
         url: str,
         connection: str,
-        day_anchor_offset_s: int = 0,
-        day_anchor_offset_s_d1: Optional[int] = None,
-        day_anchor_offset_s_d1_alt: Optional[int] = None,
-        day_anchor_offset_s_alt: Optional[int] = None,
-        day_anchor_offset_s_alt2: Optional[int] = None,
+        anchor_rule_for_symbol: Optional[Callable[[str], str]] = None,
     ) -> None:
         if ForexConnect is None:
             raise RuntimeError(
@@ -104,11 +97,7 @@ class FxcmHistoryProvider:
         self._password = password
         self._url = url
         self._connection = connection
-        self._day_anchor_offset_s = day_anchor_offset_s
-        self._day_anchor_offset_s_d1 = day_anchor_offset_s_d1
-        self._day_anchor_offset_s_d1_alt = day_anchor_offset_s_d1_alt
-        self._day_anchor_offset_s_alt = day_anchor_offset_s_alt
-        self._day_anchor_offset_s_alt2 = day_anchor_offset_s_alt2
+        self._anchor_rule_for_symbol = anchor_rule_for_symbol
         self._fx: Optional[Any] = None
         self._last_error: Optional[Tuple[str, str]] = None
 
@@ -120,22 +109,22 @@ class FxcmHistoryProvider:
         self._last_error = None
         return err
 
-    def _anchor_offset_for_tf(self, tf_s: int) -> int:
-        return anchor_offset_for_tf(
-            tf_s,
-            self._day_anchor_offset_s,
-            self._day_anchor_offset_s_d1,
-        )
-
-    def _anchor_offset_alts_for_tf(self, tf_s: int) -> List[int]:
-        out: List[int] = []
-        if tf_s >= 14400 and tf_s != 86400:
-            for v in (self._day_anchor_offset_s_alt, self._day_anchor_offset_s_alt2):
-                if v is not None:
-                    out.append(int(v))
-        if tf_s == 86400 and self._day_anchor_offset_s_d1_alt is not None:
-            out.append(int(self._day_anchor_offset_s_d1_alt))
-        return out
+    def _htf_anchor_rule(self, symbol: str, tf_s: int) -> Optional[str]:
+        """Правило сезонної сітки символу для H4/D1; для M1..H1 — None. Відмова — до запиту в SDK."""
+        if tf_s < H4_S:
+            return None
+        if self._anchor_rule_for_symbol is None:
+            raise ValueError(
+                "FXCM_HTF_ANCHOR_RULE_MISSING symbol=%s tf_s=%d — провайдер без резолвера правила якоря "
+                "(anchor_rule_for_symbol), H4/D1 брокера не перевіряються тихим якорем 0 (ADR-0095 §3.3)"
+                % (symbol, tf_s)
+            )
+        try:
+            return self._anchor_rule_for_symbol(symbol)
+        except ValueError as exc:  # символ без групи або група без виміряної сітки (htf_anchor_rule_resolver)
+            raise ValueError(
+                "FXCM_HTF_ANCHOR_RULE_MISSING symbol=%s tf_s=%d cause=%s" % (symbol, tf_s, exc)
+            ) from exc
 
     def __enter__(self) -> "FxcmHistoryProvider":
         self._fx = ForexConnect()
@@ -212,8 +201,6 @@ class FxcmHistoryProvider:
             tf_s=60,
             history_rows=arr,
             src="history",
-            anchor_offset_s=self._anchor_offset_for_tf(60),
-            anchor_offset_s_alts=self._anchor_offset_alts_for_tf(60),
         )
 
     def fetch_last_n_tf(
@@ -230,6 +217,7 @@ class FxcmHistoryProvider:
             raise ValueError("date_to_utc має бути UTC tz-aware.")
 
         tf_name = tf_s_to_fxcm_timeframe(tf_s)
+        anchor_rule = self._htf_anchor_rule(symbol, tf_s)
         try:
             arr = self._get_history(symbol, tf_name, date_to_utc, n)
         except Exception as e:  # noqa: BLE001
@@ -244,8 +232,7 @@ class FxcmHistoryProvider:
             tf_s=tf_s,
             history_rows=arr,
             src="history",
-            anchor_offset_s=self._anchor_offset_for_tf(tf_s),
-            anchor_offset_s_alts=self._anchor_offset_alts_for_tf(tf_s),
+            anchor_rule=anchor_rule,
         )
 
     def fetch_t1_bid_ticks(
@@ -305,8 +292,7 @@ def normalize_history_to_bars(
     tf_s: int,
     history_rows: Any,
     src: str,
-    anchor_offset_s: int = 0,
-    anchor_offset_s_alts: Optional[List[int]] = None,
+    anchor_rule: Optional[str] = None,
 ) -> List[CandleBar]:
     """Нормалізує rows з ForexConnect.get_history() у CandleBar.
 
@@ -315,9 +301,19 @@ def normalize_history_to_bars(
     - Дата/час може зватись по-різному. Робимо allowlist ключів.
     - OHLC беремо по пріоритету: Open/High/Low/Close → BidOpen/BidHigh/... → Ask...
 
+    Геометрія бакета: M1..H1 — від епохи; H4/D1 — рівність сезонній сітці правила `anchor_rule` (ADR-0095 §3.3),
+    а не членство в наборі якорів. Рядок поза сіткою відкидається й рахується: один агрегований WARN
+    `FXCM_HISTORY_OFF_SEASON_GRID` на виклик. H4/D1 без відомого правила — ValueError
+    `FXCM_HTF_ANCHOR_RULE_MISSING`, а не тихий якір 0.
+
     Рейка: розрив ланцюжка `o == prev.c` у батчі — WARN `FXCM_OPEN_NOT_PREV_CLOSE` (див. `open_chain_breaks`);
     значення не змінюються.
     """
+    if tf_s >= H4_S and anchor_rule not in HTF_ANCHOR_RULES:
+        raise ValueError(
+            "FXCM_HTF_ANCHOR_RULE_MISSING symbol=%s tf_s=%d anchor_rule=%r — H4/D1 брокера без правила сезонної "
+            "сітки (ADR-0095 §3.3)" % (symbol, tf_s, anchor_rule)
+        )
     out: List[CandleBar] = []
     if history_rows is None:
         return out
@@ -331,10 +327,20 @@ def normalize_history_to_bars(
         )
         rows = []
 
+    htf_rule = anchor_rule if tf_s >= H4_S else None  # M1..H1 — сітка від епохи, правило не діє
+    off_grid: List[OffSeasonGridError] = []
     for r in rows:
         try:
             open_ms = extract_open_time_ms(r)
             close_ms = open_ms + tf_s * 1000
+            anchor_offset_s = 0
+            if htf_rule is not None:
+                try:
+                    assert_on_season_grid(open_ms, tf_s, htf_rule)
+                except OffSeasonGridError as exc:
+                    off_grid.append(exc)
+                    continue
+                anchor_offset_s = htf_anchor_offset_s(tf_s, open_ms, htf_rule)
 
             o, h, low, c = extract_ohlc(r)
             # Нормалізація OHLC: у PREVIOUS_CLOSE open (= close попередньої свічки) законно лежить поза
@@ -359,33 +365,18 @@ def normalize_history_to_bars(
                 complete=True,
                 src=src,
             )
-            try:
-                assert_invariants(b, anchor_offset_s=anchor_offset_s)
-            except ValueError as e:
-                if anchor_offset_s_alts:
-                    ok = False
-                    for alt in anchor_offset_s_alts:
-                        try:
-                            assert_invariants(b, anchor_offset_s=alt)
-                            ok = True
-                            break
-                        except ValueError:
-                            logging.debug(
-                                "FXCM_HISTORY_ALT_ANCHOR_INVALID symbol=%s tf_s=%s open_ms=%s alt=%s",
-                                b.symbol,
-                                b.tf_s,
-                                b.open_time_ms,
-                                alt,
-                                exc_info=True,
-                            )
-                            continue
-                    if not ok:
-                        raise e
-                else:
-                    raise
+            assert_invariants(b, anchor_offset_s=anchor_offset_s)
             out.append(b)
         except Exception as e:
             logging.warning("Пропуск history-row: %s", str(e))
+
+    if off_grid:
+        off_grid.sort(key=lambda exc: exc.open_ms)
+        logging.warning(
+            "FXCM_HISTORY_OFF_SEASON_GRID symbol=%s tf_s=%s dropped=%d of=%d last_open_ms=%d first: %s — бари "
+            "брокера поза сезонною сіткою відкинуто, споживач їх не отримає (ADR-0095 §3.3)",
+            symbol, tf_s, len(off_grid), len(rows), off_grid[-1].open_ms, off_grid[0],
+        )
 
     out.sort(key=lambda x: x.open_time_ms)
     chain_breaks = open_chain_breaks(out)

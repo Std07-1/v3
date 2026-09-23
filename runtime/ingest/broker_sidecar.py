@@ -131,8 +131,11 @@ def _interruptible_sleep(total_s: float) -> None:
         time.sleep(max(0.0, min(1.0, deadline - time.monotonic())))
 
 
-def _build_provider(cfg):
-    """Створити FxcmHistoryProvider з config + env."""
+def _build_provider():
+    """Створити FxcmHistoryProvider з env.
+
+    Сайдкар тягне лише M1 і тіки t1, H4/D1 — ні, тож резолвер правила якоря провайдеру не потрібен (ADR-0095 §3.3).
+    """
     from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
 
     user_id = env_str("FXCM_USERNAME")
@@ -143,16 +146,11 @@ def _build_provider(cfg):
     if not user_id or not password or not url:
         raise RuntimeError("FXCM credentials missing (FXCM_USERNAME/PASSWORD/HOST_URL)")
 
-    anchor_s = int(cfg.get("day_anchor_offset_s", 0))
-    d1_anchor_s = int(cfg.get("day_anchor_offset_s_d1", 0))
-
     return FxcmHistoryProvider(
         user_id=user_id,
         password=password,
         url=url,
         connection=connection,
-        day_anchor_offset_s=anchor_s,
-        day_anchor_offset_s_d1=d1_anchor_s,
     )
 
 
@@ -644,7 +642,7 @@ def main():
         logging.info("TICK_RELAY_DISABLED tick_stream_enabled=false")
 
     # FXCM provider
-    provider = _build_provider(cfg)
+    provider = _build_provider()
     connected = False
 
     logging.info(

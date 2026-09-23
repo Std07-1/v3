@@ -426,7 +426,7 @@ def main() -> int:
     is_commit = args.commit
 
     from env_profile import load_env_secrets
-    from core.config_loader import pick_config_path, load_system_config, env_str
+    from core.config_loader import pick_config_path, load_system_config, env_str, htf_anchor_rule_resolver
     from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
 
     load_env_secrets()
@@ -466,11 +466,8 @@ def main() -> int:
         LOG.error("Відсутні FXCM креденшіали")
         return 2
 
-    day_anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
-    day_anchor_offset_s_alt = cfg.get("day_anchor_offset_s_alt")
-    day_anchor_offset_s_alt2 = cfg.get("day_anchor_offset_s_alt2")
-    day_anchor_offset_s_d1 = cfg.get("day_anchor_offset_s_d1")
-    day_anchor_offset_s_d1_alt = cfg.get("day_anchor_offset_s_d1_alt")
+    # Правило сезонної сітки H4/D1 (ADR-0095 §3.3): провайдер відкидає бари брокера поза нею
+    anchor_rule_for_symbol = htf_anchor_rule_resolver(cfg)
 
     # ── Verify before ──────────────────────────────
     verify_before: Optional[List[Dict[str, Any]]] = None
@@ -484,21 +481,7 @@ def main() -> int:
         password=password,
         url=url,
         connection=connection,
-        day_anchor_offset_s=day_anchor_offset_s,
-        day_anchor_offset_s_d1=(
-            None if day_anchor_offset_s_d1 is None else int(day_anchor_offset_s_d1)
-        ),
-        day_anchor_offset_s_d1_alt=(
-            None
-            if day_anchor_offset_s_d1_alt is None
-            else int(day_anchor_offset_s_d1_alt)
-        ),
-        day_anchor_offset_s_alt=(
-            None if day_anchor_offset_s_alt is None else int(day_anchor_offset_s_alt)
-        ),
-        day_anchor_offset_s_alt2=(
-            None if day_anchor_offset_s_alt2 is None else int(day_anchor_offset_s_alt2)
-        ),
+        anchor_rule_for_symbol=anchor_rule_for_symbol,
     )
 
     # ── Fetch + Validate + Write ───────────────────
