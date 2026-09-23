@@ -108,6 +108,15 @@ def test_scan_list_is_not_vacuous_and_allowlist_is_exactly_the_constants():
     """Без allowlist сканер бачить кожне ім'я у константах config_loader — отже allowlist нічого зайвого не ховає."""
     assert {"day_anchor_offset_s", "day_anchor_offset_s_d1", "binance.d1_anchor_offset_s"} <= set(LEGACY_ANCHOR_KEYS)
     assert {"resolve_anchor_offset_ms", "resolve_cascade_anchor_s"} <= set(RETIRED_ANCHOR_NAMES)
+    # Валідатори «членства в alt» (ADR-0095 §3.3) — корінь дефекту, а не лише статичне API
+    assert {
+        "select_anchor_offset_for_open_ms",
+        "_h4_anchor_offsets",
+        "_d1_anchor_offsets",
+        "anchor_offset_for_tf",
+        "_anchor_offset_alts_for_tf",
+        "_legal_anchors_ms",
+    } <= set(RETIRED_ANCHOR_NAMES)
     source = (_REPO_ROOT / _ALLOW_FILE).read_text(encoding="utf-8")
     unguarded = scan_source(source, _ALLOW_FILE, allow_constants=False)
     assert {v.rsplit(" ", 1)[-1] for v in unguarded} == set(_FORBIDDEN)
@@ -127,6 +136,9 @@ def test_scan_list_is_not_vacuous_and_allowlist_is_exactly_the_constants():
         "def g(day_anchor_offset_s=0):\n    return day_anchor_offset_s\n",
         "h(day_anchor_offset_s_alt2=0)\n",
         "K = f'{p}.day_anchor_offset_s_d1_alt'\n",
+        "def f(ts):\n    from runtime.store.ssot_jsonl import select_anchor_offset_for_open_ms\n    return ts\n",
+        "def _legal_anchors_ms(cfg):\n    return {0}\n",
+        "class P:\n    def anchor_offset_for_tf(self, tf_s):\n        return self._anchor_offset_alts_for_tf(tf_s)\n",
     ],
 )
 def test_scanner_catches_lazy_imports_config_reads_env_and_kwargs(snippet):

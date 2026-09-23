@@ -81,9 +81,20 @@ LEGACY_ANCHOR_KEYS = (
     "binance.day_anchor_offset_s",
     "binance.d1_anchor_offset_s",
 )
-# Імена, що не повертаються в код: видалене API статичного якоря (ADR-0095 R6) і змінна оточення архівних
-# HTF-інструментів. Бакет H4/D1 — лише htf_bucket_start_ms / htf_anchor_offset_s за правилом символу.
-RETIRED_ANCHOR_NAMES = ("resolve_anchor_offset_ms", "resolve_cascade_anchor_s", "FXCM_DAY_ANCHOR_OFFSET_S")
+# Імена, що не повертаються в код: видалене API статичного якоря (ADR-0095 R6), змінна оточення архівних
+# HTF-інструментів і валідатори «членства в alt» замість рівності — корінь дефекту (§3.3: писар, провайдер FXCM,
+# health). Бакет H4/D1 — лише htf_bucket_start_ms / htf_anchor_offset_s за правилом символу.
+RETIRED_ANCHOR_NAMES = (
+    "resolve_anchor_offset_ms",
+    "resolve_cascade_anchor_s",
+    "FXCM_DAY_ANCHOR_OFFSET_S",
+    "select_anchor_offset_for_open_ms",
+    "_h4_anchor_offsets",
+    "_d1_anchor_offsets",
+    "anchor_offset_for_tf",
+    "_anchor_offset_alts_for_tf",
+    "_legal_anchors_ms",
+)
 _ABSENT = object()
 
 
