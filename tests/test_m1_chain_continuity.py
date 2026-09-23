@@ -22,6 +22,7 @@ from runtime.ingest.m1_session_filter import (
     open_breaks_chain,
     plan_m1_append,
 )
+from core.model.candle_chain import hole_possible_between
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.polling import m1_poller as poller_mod
 from runtime.ingest.polling.m1_poller import M1SymbolPoller
@@ -187,6 +188,7 @@ def test_poller_without_prev_bar_writes_broker_open_as_is(monkeypatch):
 # --- Пакетні записувачі: дозапис нових ключів між барами SSOT (ADR-0101 C3) ------------------------------------------
 
 def _plan(bars, ssot_bars=(), **kwargs):
+    kwargs.setdefault("session_open_grace_min", 1)  # як config для cfd_us_22_23: метали відкривають сесію о 22:01
     return plan_m1_append(bars, list(ssot_bars), is_trading_fn=_calendar().is_trading_minute, flat_max_volume=4,
                           pause_policy=US_CFD_POLICY, **kwargs)
 
@@ -320,6 +322,57 @@ def test_chain_and_fold_of_one_bar_are_one_edit_with_both_rules():
     edit = next(e for e in _plan(bars, ssot_bars).ssot_edits if e.current.open_time_ms == TUE_2059)
     assert edit.reason == "%s+%s" % (SSOT_EDIT_CHAIN, SSOT_EDIT_FOLD) and edit.current is _POLLER_2059_AFTER_OUTAGE
     assert (edit.target.o, edit.target.c, edit.target.v) == (4358.20, 4357.74, 520.0)
+
+
+# Діра 20:31–20:49 (торгові хвилини): сусід SSOT 20:30 лежить поза вибіркою брокера 20:50–20:52
+SSOT_BEFORE_HOLE = _bar(TUE_2059 - 29 * M1_MS, 4350.0, 4351.0, 4349.5, 4350.5, 300.0)
+SAMPLE_AFTER_HOLE = [_bar(TUE_2059 - (9 - k) * M1_MS, 4356.0 + k, 4356.9 + k, 4355.8 + k, 4356.5 + k, 200.0)
+                     for k in range(3)]
+
+
+def test_plan_does_not_pull_the_chain_across_our_hole_outside_the_sample():
+    """ADR-0101 §3.1: open першого нового бару лишається брокерським — інакше свічка малює рух за всю діру."""
+    plan = _plan(SAMPLE_AFTER_HOLE, [SSOT_BEFORE_HOLE])
+
+    assert plan.to_write[0].o == 4356.0 and MARKER_OPEN_CHAINED not in plan.to_write[0].extensions
+    assert plan.chain_gaps_left == ((SSOT_BEFORE_HOLE.open_time_ms, SAMPLE_AFTER_HOLE[0].open_time_ms),)
+
+
+def test_plan_pulls_the_chain_across_a_broker_gap_the_sample_covers():
+    """Хвилини діри, які вибірка засвідчує (ремонт запитав їх у брокера), — геп брокера: ланцюг тягнеться."""
+    covered = [(SSOT_BEFORE_HOLE.open_time_ms + M1_MS, SAMPLE_AFTER_HOLE[-1].open_time_ms)]
+    plan = _plan(SAMPLE_AFTER_HOLE, [SSOT_BEFORE_HOLE], covered_ranges=covered)
+
+    assert plan.to_write[0].o == 4350.5 and plan.chain_gaps_left == ()
+
+
+def test_plan_pulls_the_chain_across_the_session_open_minute_the_broker_skips():
+    """Метали відкривають сесію о 22:01: хвилина 22:00 без бару діри не доводить (session_open_grace_min=1)."""
+    first_after_break = _bar(BAR_2201.open_time_ms, 4357.74, 4363.07, 4357.74, 4363.06, 397.0)
+
+    plan = _plan([first_after_break], [BAR_2059], session_open_grace_min=1)
+    blocked = _plan([first_after_break], [BAR_2059], session_open_grace_min=0)
+
+    assert plan.to_write[0].o == BAR_2059.c and plan.chain_gaps_left == ()
+    assert blocked.to_write[0].o == 4357.74 and blocked.chain_gaps_left == ((TUE_2059, BAR_2201.open_time_ms),)
+
+
+def test_plan_names_no_chain_edit_for_the_ssot_bar_beyond_an_uncovered_hole():
+    ssot_after_hole = _bar(SAMPLE_AFTER_HOLE[-1].open_time_ms + 5 * M1_MS, 4370.0, 4371.0, 4369.0, 4370.5, 100.0)
+
+    plan = _plan(SAMPLE_AFTER_HOLE, [ssot_after_hole])
+
+    assert plan.ssot_edits == ()
+    assert plan.chain_gaps_left == ((SAMPLE_AFTER_HOLE[-1].open_time_ms, ssot_after_hole.open_time_ms),)
+
+
+def test_hole_possible_between_skips_minutes_the_source_covers():
+    is_trading = _calendar().is_trading_minute
+    a, b = SSOT_BEFORE_HOLE.open_time_ms, SAMPLE_AFTER_HOLE[0].open_time_ms
+
+    assert hole_possible_between(a, b, is_trading_fn=is_trading)
+    assert not hole_possible_between(a, b, is_trading_fn=is_trading, covered=[(a + M1_MS, b - M1_MS)])
+    assert hole_possible_between(a, b, is_trading_fn=is_trading, covered=[(a + 2 * M1_MS, b - M1_MS)])
 
 
 def test_plan_does_not_write_a_key_occupied_on_disk_by_any_row():

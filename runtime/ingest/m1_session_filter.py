@@ -30,7 +30,7 @@ from typing import AbstractSet, Callable, Dict, FrozenSet, List, Optional, Seque
 from core.model.bars import CandleBar
 # Предикати розриву і прихованого бару — одні з display і health `chain_breaks` (ADR-0101 C4); open_breaks_chain
 # лишається доступним звідси для наявних споживачів
-from core.model.candle_chain import is_display_hidden, open_breaks_chain
+from core.model.candle_chain import hole_possible_between, is_display_hidden, open_breaks_chain
 
 # SSOT порогу: config.json → flat_bar_max_volume; це лише дефолт, коли ключа нема.
 FLAT_BAR_MAX_VOLUME_DEFAULT = 4
@@ -381,6 +381,8 @@ class M1AppendPlan:
     verdicts: Tuple[Tuple[CandleBar, str], ...]  # вердикт по кожному новому бару партії
     already_in_ssot: int  # бари партії, ключ яких уже в SSOT: SSOT виграє, вони не пишуться і не класифікуються
     ssot_edits: Tuple[SsotEdit, ...]  # правки наявних барів — робить settle
+    # (open попереднього, open наступного) — розриви, через які ланцюг не тягнуто: між ними може бути наша діра
+    chain_gaps_left: Tuple[Tuple[int, int], ...] = ()
 
     @property
     def open_chained(self) -> int:
@@ -395,6 +397,8 @@ def plan_m1_append(
     flat_max_volume: int,
     pause_policy: PausePolicy,
     occupied_opens: AbstractSet[int] = frozenset(),
+    session_open_grace_min: int = 0,
+    covered_ranges: Optional[Sequence[Tuple[int, int]]] = None,
 ) -> M1AppendPlan:
     """Правило послідовності (ADR-0101 §3.2) для пакетного записувача, що дописує в SSOT лише нові ключі (§3.3).
 
@@ -408,7 +412,24 @@ def plan_m1_append(
     розходиться з close останнього нового бару; застарілий край, попередня хвилина якого вже в SSOT, і перший видимий
     бар після нього (open := вкладений close). Правки рахуються від `last` — останнього видимого бару таким, яким він
     стане після дозапису і правок, тож набір замкнений: застосовані разом, цілі не лишають розриву ланцюга.
+
+    Через нашу діру ланцюг не тягнеться (§3.1): сусід SSOT з контексту може лежати за діркою, якої ця вибірка не
+    покриває, і тоді open першого нового бару намалював би рух ціни за всю діру. `covered_ranges` — хвилини, які
+    вибірка брокера засвідчує (включно; без нього — від першого до останнього бару `bars`); між баром і сусідом діра
+    можлива лише в хвилинах поза ними (`candle_chain.hole_possible_between` із запізненням відкриття сесії
+    `session_open_grace_min`). Такий розрив лишається, план його називає (`chain_gaps_left`); діру з ним закриває
+    settle.
     """
+    if covered_ranges is None:
+        opens = [bar.open_time_ms for bar in bars]
+        covered_ranges = [(min(opens), max(opens))] if opens else []
+
+    def chain_blocked(prev: Optional[CandleBar], bar_open_ms: int) -> bool:
+        return prev is not None and hole_possible_between(
+            prev.open_time_ms, bar_open_ms, is_trading_fn=is_trading_fn,
+            session_open_grace_min=session_open_grace_min, covered=covered_ranges)
+
+    gaps_left: List[Tuple[int, int]] = []
     committed = set(occupied_opens) | {bar.open_time_ms for bar in ssot_bars}
     new_by_open = {bar.open_time_ms: bar for bar in bars if bar.open_time_ms not in committed}
     visible_by_open = {bar.open_time_ms: bar for bar in ssot_bars
@@ -427,8 +448,11 @@ def plan_m1_append(
             run.append(new_by_open[open_ms])
             continue
         if run:
+            run_prev = None if chain_blocked(last, run[0].open_time_ms) else last
             run_out, run_verdicts, folded_prev, run_planned = _normalize_run(
-                run, last, is_trading_fn=is_trading_fn, flat_max_volume=flat_max_volume, pause_policy=pause_policy)
+                run, run_prev, is_trading_fn=is_trading_fn, flat_max_volume=flat_max_volume, pause_policy=pause_policy)
+            if run_prev is None and last is not None and run_out and open_breaks_chain(last.c, run_out[0].o):
+                gaps_left.append((last.open_time_ms, run_out[0].open_time_ms))
             to_write.extend(run_out)
             verdicts.extend(run_verdicts)
             if folded_prev is not None:
@@ -445,11 +469,16 @@ def plan_m1_append(
         ssot_bar = visible_by_open[open_ms]
         planned_ssot_bar = ssot_bar
         if next_edit_reason is not None:
-            planned_ssot_bar = chain_open_to_prev_close(last, ssot_bar)
-            if planned_ssot_bar is not ssot_bar:
-                _name_ssot_edit(edits, next_edit_reason, ssot_bar, planned_ssot_bar)
+            if chain_blocked(last, open_ms):
+                if open_breaks_chain(last.c, ssot_bar.o):
+                    gaps_left.append((last.open_time_ms, open_ms))
+            else:
+                planned_ssot_bar = chain_open_to_prev_close(last, ssot_bar)
+                if planned_ssot_bar is not ssot_bar:
+                    _name_ssot_edit(edits, next_edit_reason, ssot_bar, planned_ssot_bar)
         last, next_edit_reason = planned_ssot_bar, None
-    return M1AppendPlan(tuple(to_write), tuple(verdicts), len(bars) - len(new_by_open), tuple(edits.values()))
+    return M1AppendPlan(tuple(to_write), tuple(verdicts), len(bars) - len(new_by_open), tuple(edits.values()),
+                        tuple(gaps_left))
 
 
 def _normalize_run(
@@ -512,3 +541,9 @@ def report_m1_append_plan(plan: M1AppendPlan, *, where: str, symbol: str) -> Non
     if len(plan.ssot_edits) > _SSOT_EDIT_LOG_LIMIT:
         logging.warning("M1_SSOT_EDIT_PENDING where=%s symbol=%s ...+%d правок не показано", where, symbol,
                         len(plan.ssot_edits) - _SSOT_EDIT_LOG_LIMIT)
+    if plan.chain_gaps_left:
+        logging.warning(
+            "M1_BATCH_CHAIN_GAP_LEFT where=%s symbol=%s n=%d first=%s — між сусідом SSOT і вибіркою може бути наша "
+            "діра, ланцюг через неї не тягнуто (ADR-0101 §3.1); діру з розривом закриває settle",
+            where, symbol, len(plan.chain_gaps_left), list(plan.chain_gaps_left[:_SSOT_EDIT_LOG_LIMIT]),
+        )

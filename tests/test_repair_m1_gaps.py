@@ -290,6 +290,19 @@ def test_repair_chains_the_gap_to_ssot_neighbours_and_names_the_break_it_cannot_
             % (t1900 + 120_000)) in caplog.text
 
 
+def test_repair_chains_across_a_gap_minute_the_broker_lacks_too(tmp_path, monkeypatch, caplog):
+    """Дірка 19:01–19:02, у брокера лише 19:02: хвилина 19:01 запитана, тож її відсутність — геп брокера, не наша
+    діра (ADR-0101 §3.1, покриття = запитані хвилини) — ланцюг від 19:00 тягнеться, розрив не лишається."""
+    t1900 = _ms(2026, 9, 22, 19, 0)
+    data_root = _seed_ssot(tmp_path, [_m1(t1900, 99.8, 100.2, 99.7, 100.0, 300.0)])
+    caplog.set_level(logging.INFO)
+    _result, rows, _asked = _repair(monkeypatch, data_root, {t1900 + 60_000, t1900 + 120_000},
+                                    [_m1(t1900 + 120_000, 100.5, 101.1, 100.4, 101.0, 250.0)])
+    new_rows = [row for row in rows if row["open_time_ms"] == t1900 + 120_000]
+    assert new_rows[0]["o"] == 100.0 and new_rows[0]["extensions"] == {"open_chained_from": 100.5}
+    assert "M1_BATCH_CHAIN_GAP_LEFT" not in caplog.text
+
+
 def test_repair_does_not_ask_for_the_first_pause_minute_where_the_stale_edge_rule_is_off(tmp_path, monkeypatch):
     """Група без правила застарілого краю (EUSTX50/GER30, рев'ю D-03): першу хвилину паузи ремонт не бере — вкладати
     там нічого, а сама хвилина може бути торгівлею під несезонним календарем."""

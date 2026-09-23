@@ -10,7 +10,9 @@ from collections import Counter
 from typing import List, Set, Tuple
 
 from env_profile import load_env_secrets
-from core.config_loader import pick_config_path, load_system_config, env_str, htf_anchor_rule_resolver
+from core.config_loader import (
+    env_str, htf_anchor_rule_resolver, load_system_config, pick_config_path, session_open_grace_resolver,
+)
 from core.derive import DERIVE_SOURCE
 from core.model.bars import CandleBar
 from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
@@ -97,7 +99,7 @@ _OFF_CALENDAR_ALLOWANCE = 3
 
 def _plan_m1_batch(
     bars: List[CandleBar], calendar: MarketCalendar, flat_max_volume: int, pause_policy: PausePolicy,
-    ssot_bars: List[CandleBar], occupied_opens: Set[int],
+    ssot_bars: List[CandleBar], occupied_opens: Set[int], session_open_grace_min: int = 0,
 ) -> Tuple[M1AppendPlan, Counter, List[int]]:
     """Те саме правило SSOT, що в живому M1-полері (ADR-0099 `classify_m1_by_calendar`), і правило послідовності
     ADR-0101 (`plan_m1_append`): шум глибоко в паузі і пласкі бари поза сесією не пишуться, неплаский біля краю сесії —
@@ -108,8 +110,11 @@ def _plan_m1_batch(
     Третій елемент — open_ms хвилин поза календарем, схожих на торгівлю (див. _OFF_CALENDAR_ALLOWANCE): саме їх рахує
     допуск, і оператор бачить, ЯКІ саме, а не лише скільки.
     """
+    # Вибірка брокера засвідчує хвилини від першого до останнього бару партії: сусід SSOT за ними може лежати за
+    # нашою діркою, і тоді ланцюг до нього не тягнеться (ADR-0101 §3.1, покриття за замовчуванням plan_m1_append)
     plan = plan_m1_append(bars, ssot_bars, is_trading_fn=calendar.is_trading_minute, flat_max_volume=flat_max_volume,
-                          pause_policy=pause_policy, occupied_opens=occupied_opens)
+                          pause_policy=pause_policy, occupied_opens=occupied_opens,
+                          session_open_grace_min=session_open_grace_min)
     verdicts: Counter = Counter(verdict for _bar, verdict in plan.verdicts)
     trading_like_off_calendar = [bar.open_time_ms for bar, verdict in plan.verdicts
                                  if _is_trading_like_off_calendar(bar, verdict, pause_policy)]
@@ -221,6 +226,9 @@ def main() -> int:
     flat_max_volume = resolve_flat_max_volume(cfg)
     # Правила паузи — на символ: застарілий край залежить від календарної групи (ADR-0099 §3.2)
     pause_policies = {symbol: resolve_pause_policy(cfg, symbol) for symbol in sym_list}
+    # Запізнення першого бару сесії в брокера (ADR-0101 §3.5): така хвилина без бару діри не доводить
+    grace_for_symbol = session_open_grace_resolver(cfg)
+    session_open_graces = {symbol: grace_for_symbol(symbol) for symbol in sym_list}
     if args.allow_off_calendar:
         # Прапор = календар під підозрою: бар з обсягом торгівлі поза календарем може бути справжньою хвилиною — не
         # відкидається за положенням, а пишеться з маркером anomaly. Шум з малим обсягом відсіюється, як і раніше.
@@ -310,7 +318,8 @@ def main() -> int:
                         data_root, symbol, bars[0].open_time_ms, bars[-1].open_time_ms
                     )
                     plan, verdicts, trading_like_off_calendar = _plan_m1_batch(
-                        bars, calendars[symbol], flat_max_volume, pause_policies[symbol], ssot_context, existing
+                        bars, calendars[symbol], flat_max_volume, pause_policies[symbol], ssot_context, existing,
+                        session_open_graces[symbol],
                     )
                     total_verdicts.update(verdicts)
                     logging.log(

@@ -13,7 +13,7 @@
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
 
 # Допуск — представлення float, не крок ціни (як рейка ADR-0100 open_chain_breaks)
 CHAIN_REL_TOL = 1e-9
@@ -47,6 +47,7 @@ def hole_possible_between(
     *,
     is_trading_fn: Callable[[int], bool],
     session_open_grace_min: int = 0,
+    covered: Sequence[Tuple[int, int]] = (),
 ) -> bool:
     """Чи може між сусідніми M1 a < b бути наша діра — торгова хвилина, бар якої брокер мав дати (ADR-0101 §3.1).
 
@@ -58,11 +59,15 @@ def hole_possible_between(
     через перерву.
 
     ``is_trading_fn`` — предикат хвилини (``MarketCalendar.is_trading_minute``); ``session_open_grace_min`` — з групи
-    календаря символу (``core.config_loader.session_open_grace_resolver``).
+    календаря символу (``core.config_loader.session_open_grace_resolver``). ``covered`` — діапазони хвилин
+    ``(from_ms, to_ms)`` включно, які засвідчує вибірка брокера в руках записувача: бару там немає, бо його немає в
+    брокера, тож діри там бути не може. Поза ними брокер нічого не засвідчує — діру доводить торгова хвилина.
     """
     if session_open_grace_min < 0:
         raise ValueError("session_open_grace_min=%r: запізнення відкриття сесії — хвилин ≥ 0" % session_open_grace_min)
     for minute_ms in range(prev_open_ms + _MINUTE_MS, bar_open_ms, _MINUTE_MS):
+        if any(from_ms <= minute_ms <= to_ms for from_ms, to_ms in covered):
+            continue
         if is_trading_fn(minute_ms) and not _in_session_open_grace(minute_ms, is_trading_fn, session_open_grace_min):
             return True
     return False

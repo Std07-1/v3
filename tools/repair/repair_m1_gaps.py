@@ -25,7 +25,7 @@ import time
 import uuid
 from typing import AbstractSet, Any, Dict, List, Optional, Sequence, Set, Tuple
 
-from core.config_loader import load_system_config, pick_config_path
+from core.config_loader import load_system_config, pick_config_path, session_open_grace_resolver
 from core.model.bars import CandleBar
 from runtime.ingest.m1_session_filter import (
     DEFAULT_PAUSE_POLICY,
@@ -401,6 +401,8 @@ def _filter_fetched_bars(
     close_safety_ms: int,
     pause_policy: PausePolicy = DEFAULT_PAUSE_POLICY,
     ssot_bars: Sequence[CandleBar] = (),
+    session_open_grace_min: int = 0,
+    covered_ranges: Optional[Sequence[Tuple[int, int]]] = None,
 ) -> Tuple[List[CandleBar], Dict[str, int], Optional[M1AppendPlan]]:
     """Спільне правило M1→SSOT (`runtime/ingest/m1_session_filter`) плюс відсів хвилини, що ще формується.
 
@@ -416,7 +418,8 @@ def _filter_fetched_bars(
     if calendar is None:
         return bars, verdicts, None
     plan = plan_m1_append(bars, ssot_bars, is_trading_fn=calendar.is_trading_minute,
-                          flat_max_volume=flat_max_volume, pause_policy=pause_policy)
+                          flat_max_volume=flat_max_volume, pause_policy=pause_policy,
+                          session_open_grace_min=session_open_grace_min, covered_ranges=covered_ranges)
     for _bar, verdict in plan.verdicts:
         verdicts[verdict] = verdicts.get(verdict, 0) + 1
     return list(plan.to_write), verdicts, plan
@@ -450,6 +453,7 @@ def repair_gaps(
     now_ms: Optional[int] = None,
     close_safety_ms: int = 8_000,
     pause_policy: PausePolicy = DEFAULT_PAUSE_POLICY,
+    session_open_grace_min: int = 0,
 ) -> Dict[str, Any]:
     """Ремонтує M1 гапи: один fetch + append до JSONL.
 
@@ -486,6 +490,9 @@ def repair_gaps(
     bars, verdicts, plan = _filter_fetched_bars(
         bars, calendar, flat_max_volume, now_ms, close_safety_ms, pause_policy,
         ssot_bars=read_m1_chain_context(data_root, symbol, global_start, global_end),
+        session_open_grace_min=session_open_grace_min,
+        # Брокер засвідчує лише запитані хвилини — дірки і хвилини краю; хвилина дірки без бару в брокера — його геп
+        covered_ranges=[(start, end) for start, end in gap_groups] + [(open_ms, open_ms) for open_ms in edge_opens],
     )
     if plan is not None:
         report_m1_append_plan(plan, where="repair_m1_gaps", symbol=symbol)
@@ -708,6 +715,7 @@ def main() -> None:
             now_ms=int(time.time() * 1000),
             close_safety_ms=resolve_close_safety_ms(cfg),
             pause_policy=resolve_pause_policy(cfg, symbol),
+            session_open_grace_min=session_open_grace_resolver(cfg)(symbol),
         )
     finally:
         redis_cli.close()
