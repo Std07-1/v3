@@ -14,7 +14,7 @@ import types
 import pytest
 
 from core.config_loader import htf_anchor_rule_resolver
-from core.session_anchor import D1_S, H4_S, RULE_NY_CLOSE_US_DST
+from core.session_anchor import D1_S, H4_S, RULE_NY_CLOSE_US_DST, RULE_UTC_MIDNIGHT
 from runtime.ingest.broker.fxcm import provider as provider_mod
 
 _CFG = {
@@ -27,6 +27,7 @@ _PREVIOUS_CLOSE = object()
 
 class _FakeForexConnect:
     calls: list = []
+    rows: list = []  # що «брокер» віддає на get_history
 
     def login(self, *args, **kwargs):
         return None
@@ -36,12 +37,13 @@ class _FakeForexConnect:
 
     def get_history(self, *args, **kwargs):
         type(self).calls.append((args, kwargs))
-        return []
+        return list(type(self).rows)
 
 
 @pytest.fixture()
 def fake_sdk(monkeypatch):
     _FakeForexConnect.calls = []
+    _FakeForexConnect.rows = []
     fxcorepy = types.SimpleNamespace(O2GCandleOpenPriceMode=types.SimpleNamespace(PREVIOUS_CLOSE=_PREVIOUS_CLOSE))
     monkeypatch.setattr(provider_mod, "ForexConnect", _FakeForexConnect)
     monkeypatch.setattr(provider_mod, "fxcorepy", fxcorepy)
@@ -137,3 +139,38 @@ def test_fetch_last_n_tf_htf_without_resolver_raises(fake_sdk, tf_s, resolver, s
         assert provider.fetch_last_n_tf(symbol, tf_s=3600, n=5) == []
         assert provider.fetch_last_n_m1(symbol, n=5) == []
     assert len(fake_sdk.calls) == 2
+
+
+@pytest.mark.parametrize("rule, resolver, kept, dropped, expected_open", [
+    # ny_close_us_dst з config-резолвера: літня сітка 21/01/05/.. — 21:00 лишається, 00:00 належить бакету 21:00
+    (RULE_NY_CLOSE_US_DST, htf_anchor_rule_resolver(_CFG), _utc(2026, 7, 1, 21), _utc(2026, 7, 2, 0),
+     _utc(2026, 7, 1, 21)),
+    # ті самі рядки, інше правило — інший бар лишається: правило справді приходить від резолвера, а не з default
+    (RULE_UTC_MIDNIGHT, lambda symbol: RULE_UTC_MIDNIGHT, _utc(2026, 7, 2, 0), _utc(2026, 7, 1, 21),
+     _utc(2026, 7, 1, 20)),
+], ids=["ny_close_us_dst", "utc_midnight"])
+def test_fetch_last_n_tf_passes_resolved_rule_to_normalize(fake_sdk, caplog, rule, resolver, kept, dropped,
+                                                           expected_open):
+    """fetch_last_n_tf (H4, непорожня відповідь SDK) віддає в normalize_history_to_bars правило символу з резолвера:
+    рядок на сітці лишається, рядок поза нею відкинуто з агрегованим WARNING (S3c, W1fix)."""
+    asked: list = []
+
+    def spy(symbol: str) -> str:
+        asked.append(symbol)
+        return resolver(symbol)
+
+    fake_sdk.rows = [_row(_utc(2026, 7, 1, 21)), _row(_utc(2026, 7, 2, 0))]
+    with provider_mod.FxcmHistoryProvider(user_id="u", password="p", url="x", connection="Demo",
+                                          anchor_rule_for_symbol=spy) as provider:
+        with caplog.at_level(logging.WARNING):
+            bars = provider.fetch_last_n_tf("XAU/USD", tf_s=H4_S, n=2)
+
+    assert asked == ["XAU/USD"]
+    (args, _kwargs), = fake_sdk.calls
+    assert (args[0], args[1], args[4]) == ("XAU/USD", "H4", 2)
+    assert [b.open_time_ms for b in bars] == [_ms(kept)]
+    assert all(b.src == "history" and b.close_time_ms == b.open_time_ms + H4_S * 1000 for b in bars)
+    record, = _off_grid_records(caplog)
+    message = record.getMessage()
+    assert "symbol=XAU/USD tf_s=14400 dropped=1 of=2" in message
+    assert "open_ms=%d expected_open_ms=%d rule=%s" % (_ms(dropped), _ms(expected_open), rule) in message
