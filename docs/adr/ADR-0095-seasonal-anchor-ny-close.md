@@ -366,6 +366,19 @@ S1–S5, S7 і міграція йдуть одним вікном. S6 — до 
 
 ## Changelog
 
+- 2026-09-23 — формуюча H4/D1 у `ws_server` (слайс S9a). Сід tick-relay, fallback `open_ms` relay і
+  `/api/context` `h4_forming` рахують бакет через `htf_bucket_start_ms` за правилом символу, а не
+  `resolve_anchor_offset_ms(tf_s, cfg)`. Резолвер будується раз у `build_app` (typed-ключ
+  `APP_HTF_ANCHOR_RULE_FOR_SYMBOL`), старт логує `WS_HTF_ANCHOR_WIRED`. На відміну від писаря, деривації
+  й preview, `ws_server` на невалідну секцію `htf_anchor` не падає: ERROR `WS_HTF_ANCHOR_RULES_UNAVAILABLE`,
+  UI M1..H1 працює, а кожен споживач H4/D1 гучно деградує тією самою помилкою (relay — WARNING,
+  `h4_forming` — `ctx.warnings`, хвіст full-кадру — `forming_tail_unavailable`); так `ws_server` і раніше
+  переживав невалідний config. `WS_TICK_RELAY_ERR` піднято з DEBUG до WARNING, не частіше разу на 60 с на
+  ціль. Хвіст full-кадру (`forming_tail`) закінчує вікно preview H4/D1 на `htf_next_bucket_start_ms`:
+  обрубок Нд 01.11 21:00 перестає бути формуючим о 22:00, а не о 01:00. Підгейт 3 `ui_live_candle_plane`
+  вимагає `htf_bucket_start_ms` і забороняє `resolve_anchor_offset_ms`; сентинел `overlay_anchor_mismatch`
+  знято, бо `/api/overlay` у `ws_server` нема. Гейт лишається червоним через підгейти 1, 2, 4, 5. Після
+  S9a `core/buckets.resolve_anchor_offset_ms` не має жодного викликача, і S5c може його видалити.
 - 2026-09-23 — рев'ю S5b, три дефекти, що існували й до S5b. `tools/rebuild_from_m1` вирівнює `start` на
   відкриття торгової доби символу (`REBUILD_RANGE_ALIGNED`). Раніше `--start` круглою датою будував перший H4/D1
   partial з обрізаного джерела, а dedup `--force` не заходив у part-файл попереднього дня, і там лишався
