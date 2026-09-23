@@ -300,7 +300,8 @@ def test_report_row_m1_names_session_open_grace_and_classifies_open_as_inner(cfg
 
 # ── запізнення відкриття сесії з config ─────────────────────────────────────
 def _calendar_cfg(**grace_by_group: Any) -> Dict[str, Any]:
-    groups = {name: ({} if grace is None else {"session_open_grace_min": grace}) for name, grace in grace_by_group.items()}
+    groups = {name: ({} if grace is None else {"session_open_grace_min": grace})
+              for name, grace in grace_by_group.items()}
     return {"market_calendar_by_group": groups,
             "market_calendar_symbol_groups": {"S_%s" % name: name for name in grace_by_group}}
 
