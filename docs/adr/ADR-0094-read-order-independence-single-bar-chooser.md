@@ -187,7 +187,9 @@ choose_better_bar(existing, incoming) -> dict
 
 - `disk_layer._dedup_open_ms` (TAIL);
 - `uds._ensure_sorted_dedup` — точний дедуп (RANGE, RAM, preview, Redis);
-- near-dedup D1 у тому ж `_ensure_sorted_dedup` — **окремим, вужчим** правилом того самого модуля
+- **near-dedup D1 — прибрано 2026-09-23** (ADR-0095 S3b, Changelog 23.09): читач зливає лише записи одного
+  ключа, `choose_better_near_duplicate` видалено. Далі — правило P1, що діяло до 23.09: near-dedup D1 у тому ж
+  `_ensure_sorted_dedup` — **окремим, вужчим** правилом того самого модуля
   `choose_better_near_duplicate(earlier, later)`: лише complete → final src → нічия **ранньому** бару.
   Члени тут — різні `open_ms` (DST-джитер якоря 21:00/22:00), а не записи одного ключа, і лише ці два
   поля доживають до кожного шляху: `extensions` (отже `partial`) зрізаються на межі Redis, а `event_ts`
@@ -195,7 +197,6 @@ choose_better_bar(existing, incoming) -> dict
   пізнішому бару, тоді як на диску `ts` немає. Перша реалізація P1.3 кликала тут повний вибирач із
   переставленими аргументами — ревʼю перед деплоєм показало, що це давало різну D1-свічку на disk
   (ранній) і Redis/RAM (пізній). На диску таких пар зараз 0, але їх створює кожен перехід якоря;
-  **2026-09-23: near-dedup D1 і `choose_better_near_duplicate` прибрано — див. ADR-0095, Changelog 23.09;**
 - `tools/repair/dedup_jsonl_lastwins.py` — інакше ремонтний інструмент міг би лишити на диску partial-бар,
   який читач відкидає, тобто сам ремонт міняв би свічку на графіку. Імʼя CLI лишається (runbook-и), докстрінг
   описує справжню семантику;
@@ -222,10 +223,12 @@ AGENTS.md виклик навіть не парсився (`--symbol`); покр
 без цілого `open_time_ms`, **не переписується** (`DEDUP_UNPARSABLE`, CLI `rc=1`) — до 14.09 такі рядки мовчки
 зникали.
 
-Гейт-тест: у `core/`, `runtime/`, `tools/`, `app/` рівно одне визначення `choose_better_bar` і
-`choose_better_near_duplicate` — обидва в `core/model/bar_choice.py`. Однакова назва у двох модулях і
-стала причиною цього ADR. Гейт ловить лише ім'я: вибирачі з іншими назвами ловлять поведінкові тести
-(`tests/test_repair_dedup_integrity.py` — переможець ремонту == переможець читача).
+Гейт-тест (`tests/test_single_bar_chooser.py::test_only_one_bar_chooser_exists_in_the_repo`): у `core/`,
+`runtime/`, `tools/`, `app/` рівно одне визначення `choose_better_bar` — у `core/model/bar_choice.py`. До
+23.09 гейт стеріг і `choose_better_near_duplicate`; функцію прибрано разом із near-dedup D1 (ADR-0095 S3b), тож
+тепер гейт стереже лише `choose_better_bar`. Однакова назва у двох модулях і стала причиною цього ADR. Гейт
+ловить лише ім'я: вибирачі з іншими назвами ловлять поведінкові тести (`tests/test_repair_dedup_integrity.py` —
+переможець ремонту == переможець читача).
 
 ### 3.4 Повнота вікна
 
@@ -378,6 +381,8 @@ RED, дав би хибну «регресію» і відкат активац�
 
 ## Changelog
 
+- 2026-09-23 — near-dedup D1 і `choose_better_near_duplicate` прибрано (ADR-0095 S3b): §3.3 позначає пункт як
+  прибраний, гейт-тест «один вибирач» стереже лише `choose_better_bar`.
 - 2026-09-14 — P1.6: ремонт і replay на SSOT (`dedup_derived_jsonl`, `rewrite_range`, `replay`), переможець
   байт-у-байт, нерозбірний рядок блокує перепис, `dedup_rebuild_m1m3` і мертвий `merge_dedup_last_wins`
   видалено; §7 п.4–5 закрито. Перше твердження «інших вибирачів не лишилось» було хибним — ширший пошук знайшов
