@@ -3,7 +3,8 @@
 Раніше інструмент брав один якір з config на весь прогін і крокував `range(b0, end, tf_ms)`: літній H4 п'ятниці
 і зимовий H4 понеділка не могли вийти правильними обидва, а фіксований крок 4 год робив з обрубка доби переходу
 (нд 21:00, 1 год) бар на 4 год, що вбирав години наступної доби. Тепер правило — з резолвера на символ, бакети —
-ітератором сітки, вікно — до наступного бакета.
+ітератором сітки, вікно — до наступного бакета. Початок прогону вирівнюється на відкриття торгової доби, а джерело
+вантажиться порціями по бакетах D1.
 """
 from __future__ import annotations
 
@@ -142,3 +143,56 @@ def test_rebuild_force_from_round_date_aligns_start_to_trading_day_open(tmp_path
         assert not (first.get("extensions") or {}).get("partial"), "tf_%d: перший бакет прогону — з цілої доби" % tf_s
     assert ("REBUILD_RANGE_ALIGNED symbol=XAU/USD requested=2026-05-15T00:00:00+00:00 "
             "aligned=2026-05-14T21:00:00+00:00") in caplog.text
+
+
+def _write_week_with_thin_tuesday_close(root: Path) -> None:
+    """Сесії XAU/USD пн 11.05 – пт 15.05.2026 (літо: доба 21:00 UTC); у вівторка бракує останньої години 20:00–20:59."""
+    _write_m1(root, _ms(2026, 5, 10, 22), _ms(2026, 5, 11, 20, 59))
+    _write_m1(root, _ms(2026, 5, 11, 22), _ms(2026, 5, 12, 19, 59))
+    for day in (12, 13):
+        _write_m1(root, _ms(2026, 5, day, 22), _ms(2026, 5, day + 1, 20, 59))
+    _write_m1(root, _ms(2026, 5, 14, 22), _ms(2026, 5, 15, 20, 44))
+
+
+def _rebuild_week(root: Path) -> Dict[str, int]:
+    writer = JsonlAppender(root=str(root), anchor_rule_for_symbol=htf_anchor_rule_resolver(CFG))
+    try:
+        return rebuild_from_m1.rebuild_one_symbol(
+            data_root=str(root), symbol="XAU/USD", start_ms=_ms(2026, 5, 10, 21), end_ms=_ms(2026, 5, 16),
+            dry_run=False, cfg=CFG, writer=writer, anchor_rule=RULE_NY_CLOSE_US_DST,
+        )
+    finally:
+        writer.close()
+
+
+def test_rebuild_by_one_day_chunks_matches_single_chunk_including_d1_frontier(tmp_path, monkeypatch):
+    """Порції по одній добі дають ті самі бари всіх TF, що й одна порція на весь прогін.
+
+    Раніше джерело всього діапазону йшло в буфер з FIFO-стелею, і на довгому прогоні найстаріші бари витіснялись
+    мовчки. Тепер буфер тримає одну порцію, і результат від її розміру не залежить. D1 вівторка без останньої години
+    будується лише за фронтиром ADR-0097 (джерело дійшло до кінця доби). У порції з однієї доби цей фронтир доводить
+    перший бар за порцією — інакше вівторка б не було.
+    """
+    built: Dict[int, Dict[int, Dict[int, dict]]] = {}
+    for chunk_d1_buckets in (1, 1000):
+        root = tmp_path / ("chunk_%d" % chunk_d1_buckets)
+        _write_week_with_thin_tuesday_close(root)
+        monkeypatch.setattr(rebuild_from_m1, "REBUILD_CHUNK_D1_BUCKETS", chunk_d1_buckets)
+        stats = _rebuild_week(root)
+        assert stats["tf_86400_written"] == 5
+        built[chunk_d1_buckets] = {tf_s: _disk_bars(root, tf_s) for tf_s in (180, 300, 900, 1800, 3600, H4_S, D1_S)}
+
+    assert built[1] == built[1000]
+    tuesday = built[1][D1_S][_ms(2026, 5, 11, 21)]
+    assert "thin_session" in tuesday["extensions"]["partial_reasons"]
+
+
+def test_rebuild_chunks_are_consecutive_d1_buckets_covering_the_range(monkeypatch):
+    """Порції стикуються без щілин, внутрішні межі — відкриття D1 (через DST-неділю 01.11 теж), остання — до end."""
+    monkeypatch.setattr(rebuild_from_m1, "REBUILD_CHUNK_D1_BUCKETS", 2)
+    start_ms, end_ms = _ms(2026, 10, 28, 12), _ms(2026, 11, 4, 3)
+    chunks = rebuild_from_m1._rebuild_chunks(start_ms, end_ms, RULE_NY_CLOSE_US_DST)
+    assert chunks[0][0] == start_ms and chunks[-1][1] == end_ms
+    assert all(prev[1] == nxt[0] for prev, nxt in zip(chunks, chunks[1:]))
+    # Сітка D1 крокує й через вихідні (сб 31.10 21:00 — бакет без торгівлі), з 01.11 доба відкривається о 22:00
+    assert [c[0] for c in chunks[1:]] == [_ms(2026, 10, 29, 21), _ms(2026, 10, 31, 21), _ms(2026, 11, 2, 22)]

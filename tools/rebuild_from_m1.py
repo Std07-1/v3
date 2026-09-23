@@ -17,12 +17,14 @@ H4/D1 — на сезонній сітці символу (ADR-0095): прави
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
+import functools
 import json
 import logging
 import os
 import time
-from typing import Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from core.config_loader import htf_anchor_rule_resolver, load_system_config as load_config, pick_config_path
 from core.derive import (
@@ -49,6 +51,13 @@ logging.basicConfig(
 
 TF_M1_S = 60
 TF_M1_MS = 60_000
+_HOUR_MS = 3_600_000
+
+# Порція прогону — стільки бакетів D1 сезонної сітки (≈ календарних діб). Джерело кожного етапу вантажиться в буфер
+# порціями: 30 діб M1 ≈ 43 тис. барів ≈ 20 МБ, тож пам'ять обмежена порцією, а не довжиною історії. Раніше весь
+# діапазон ішов в один буфер з FIFO-стелею (M1 — 100 тис. ≈ 69 діб, джерела каскаду — 50 тис.), і на довгому прогоні
+# найстаріші бари витіснялись мовчки: ранні похідні не будувались (I5). На результат розмір порції не впливає.
+REBUILD_CHUNK_D1_BUCKETS = 30
 
 
 # ─── Допоміжні функції ────────────────────────────────────────────
@@ -220,6 +229,65 @@ def _symbols_from_config(cfg: dict) -> List[str]:
 # ─── Основна логіка rebuild ───────────────────────────────────────
 
 
+def _rebuild_chunks(start_ms: int, end_ms: int, anchor_rule: str) -> List[Tuple[int, int]]:
+    """Порції `[start, end)` прогону: внутрішні межі — відкриття бакетів D1 через кожні REBUILD_CHUNK_D1_BUCKETS.
+
+    Межа D1 — водночас межа бакета кожного похідного TF: H4 не перетинає торгову добу (ADR-0095), M3..H1 кратні
+    годині, а доба відкривається на рівній годині UTC. Тож кожен бакет лежить цілком в одній порції, а бакети всіх
+    порцій разом — рівно бакети `_grid_bucket_opens(start, end)`.
+    """
+    bounds = [start_ms]
+    boundary = htf_bucket_start_ms(start_ms, D1_S, anchor_rule)
+    while True:
+        for _ in range(REBUILD_CHUNK_D1_BUCKETS):
+            boundary = htf_next_bucket_start_ms(boundary, D1_S, anchor_rule)
+        if boundary >= end_ms:
+            break
+        if boundary % _HOUR_MS:
+            raise ValueError(
+                "межа порції %d (rule=%s) не на рівній годині UTC — бакет M3..H1 перетнув би її" % (boundary, anchor_rule)
+            )
+        bounds.append(boundary)
+    bounds.append(end_ms)
+    return list(zip(bounds, bounds[1:]))
+
+
+def _load_chunk_source(
+    read_bars: Callable[[int, int], Iterator[CandleBar]],
+    tf_s: int,
+    chunk: Tuple[int, int],
+    range_end_ms: int,
+    keep: Optional[Callable[[CandleBar], bool]] = None,
+) -> Tuple[GenericBuffer, int, int]:
+    """Буфер джерела однієї порції; повертає (буфер, прочитано барів порції, узято в буфер).
+
+    `read_bars(lo, hi)` читає бари з open у [lo, hi] включно. Остання порція читає по `range_end_ms` включно, як
+    раніше читався весь діапазон. Місткість буфера дорівнює кількості барів порції, тож FIFO-витіснення немає.
+
+    До непослідньої порції додається перший бар джерела за нею (open ≥ кінця порції). Вікна жодного бакета порції
+    він не зачіпає, зате `latest_open_ms()` буфера стає таким самим, як у буфера всього діапазону. Тому фронтир
+    ADR-0097 (`_source_reached_bucket_end`) для останньої доби порції доводиться так само, як без порцій.
+    """
+    chunk_start_ms, chunk_end_ms = chunk
+    last_chunk = chunk_end_ms >= range_end_ms
+    chunk_bars: List[CandleBar] = []
+    read_count = 0
+    for bar in read_bars(chunk_start_ms, range_end_ms if last_chunk else chunk_end_ms - 1):
+        read_count += 1
+        if keep is None or keep(bar):
+            chunk_bars.append(bar)
+    source_buf = GenericBuffer(tf_s, max_keep=len(chunk_bars) + 1)
+    for bar in chunk_bars:
+        source_buf.upsert(bar)
+    if not last_chunk:
+        # Генератор читача закриваємо явно, а не збирачем сміття: part-файл не лишається відкритим
+        with contextlib.closing(read_bars(chunk_end_ms, range_end_ms)) as beyond_chunk:
+            frontier_bar = next((bar for bar in beyond_chunk if keep is None or keep(bar)), None)
+        if frontier_bar is not None:
+            source_buf.upsert(frontier_bar)
+    return source_buf, read_count, len(chunk_bars)
+
+
 def _grid_bucket_opens(start_ms: int, end_ms: int, tf_s: int, anchor_rule: str) -> Iterator[int]:
     """Відкриття бакетів TF від бакета, що містить `start_ms`, до `end_ms` (виключно) — кроком сезонної сітки.
 
@@ -248,13 +316,14 @@ def rebuild_one_symbol(
 
     Staged cascade:
       Stage 1: M1 → M3, M5, D1 (прямо з M1 барів на диску)
-      Stage 2: M5 (all disk) → M15
-      Stage 3: M15 (all disk) → M30
-      Stage 4: M30 (all disk) → H1
-      Stage 5: H1 (all disk) → H4
+      Stage 2: M5 (disk) → M15
+      Stage 3: M15 (disk) → M30
+      Stage 4: M30 (disk) → H1
+      Stage 5: H1 (disk) → H4
 
-    Calendar-aware (boundary-tolerant). Бакети H4/D1 — на сезонній сітці `anchor_rule` (ADR-0095): якір і
-    вікно агрегації свої в кожного бакета, а не один якір на весь прогін.
+    Кожен етап іде порціями `_rebuild_chunks`: у буфері джерела одна порція, а не весь діапазон, тож довгий
+    прогін не витісняє найстаріших барів. Calendar-aware (boundary-tolerant). Бакети H4/D1 — на сезонній сітці
+    `anchor_rule` (ADR-0095): якір і вікно агрегації свої в кожного бакета, а не один якір на весь прогін.
 
     Returns: stats dict {tf_s: written_count, ...}
     """
@@ -267,9 +336,12 @@ def rebuild_one_symbol(
         stats[f"tf_{tf_s}_written"] = 0
         stats[f"tf_{tf_s}_existed"] = 0
 
-    def derive_stage(target_tf_s: int, source_buf: GenericBuffer) -> None:
-        """Бакети target TF у [start, end) з source_buf; наявні на диску ключі пропускаються (без --force)."""
-        for bucket_open in _grid_bucket_opens(start_ms, end_ms, target_tf_s, anchor_rule):
+    chunks = _rebuild_chunks(start_ms, end_ms, anchor_rule)
+    logging.info("  REBUILD_CHUNKS chunks=%d d1_buckets_per_chunk=%d", len(chunks), REBUILD_CHUNK_D1_BUCKETS)
+
+    def derive_stage(target_tf_s: int, source_buf: GenericBuffer, chunk: Tuple[int, int]) -> None:
+        """Бакети target TF у порції `chunk` з source_buf; наявні на диску ключі пропускаються (без --force)."""
+        for bucket_open in _grid_bucket_opens(chunk[0], chunk[1], target_tf_s, anchor_rule):
             if not force and _has_on_disk(disk_cache, data_root, symbol, target_tf_s, bucket_open):
                 stats[f"tf_{target_tf_s}_existed"] += 1
                 continue
@@ -292,22 +364,21 @@ def rebuild_one_symbol(
     t0 = time.time()
 
     # ── Stage 1: M1 → M3, M5, D1 ─────────────────────────
-    # Спочатку завантажуємо ВСІ M1 бари, потім деривуємо по бакетах.
+    # Спочатку завантажуємо ВСІ M1 бари порції, потім деривуємо по бакетах.
     # Bug-fix: попередня версія деривувала після кожного M1 upsert,
     # що призводило до запису partial бару (source_count=1) з подальшим
     # пропуском повних даних через _has_on_disk cache hit.
     logging.info("  Stage 1: M1 → M3, M5, D1")
-    m1_buf = GenericBuffer(60, max_keep=100000)  # 100K = ~69 days for D1 (1440/day)
-    for bar in iter_m1_bars(data_root, symbol, start_ms, end_ms):
-        stats["m1_loaded"] += 1
-        if is_display_hidden(bar.extensions):
-            stats["m1_flat_skipped"] += 1
-            continue
-        m1_buf.upsert(bar)
-
-    # M3, M5 і D1 (ADR-0023: D1 = 1440 × M1) — з повного M1 буфера, аналогічно Stages 2-5
-    for target_tf_s in (180, 300, 86400):
-        derive_stage(target_tf_s, m1_buf)
+    read_m1 = functools.partial(iter_m1_bars, data_root, symbol)
+    for chunk in chunks:
+        m1_buf, m1_read, m1_kept = _load_chunk_source(
+            read_m1, TF_M1_S, chunk, end_ms, keep=lambda bar: not is_display_hidden(bar.extensions)
+        )
+        stats["m1_loaded"] += m1_read
+        stats["m1_flat_skipped"] += m1_read - m1_kept
+        # M3, M5 і D1 (ADR-0023: D1 = 1440 × M1) — з M1 порції, аналогічно Stages 2-5
+        for target_tf_s in (180, 300, 86400):
+            derive_stage(target_tf_s, m1_buf, chunk)
 
     elapsed_s1 = time.time() - t0
     logging.info(
@@ -335,18 +406,15 @@ def rebuild_one_symbol(
         stage_label = f"tf_{source_tf_s}→tf_{target_tf_s}"
         logging.info("  Stage %s", stage_label)
 
-        # Читаємо source TF з диску
-        source_buf = GenericBuffer(source_tf_s, max_keep=50000)
+        # Читаємо source TF з диску порціями
+        read_source = functools.partial(_iter_bars_from_disk, data_root, symbol, source_tf_s)
         loaded = 0
-        for bar in _iter_bars_from_disk(
-            data_root, symbol, source_tf_s, start_ms, end_ms
-        ):
-            source_buf.upsert(bar)
-            loaded += 1
+        for chunk in chunks:
+            source_buf, chunk_read, _chunk_kept = _load_chunk_source(read_source, source_tf_s, chunk, end_ms)
+            loaded += chunk_read
+            derive_stage(target_tf_s, source_buf, chunk)
 
         logging.info("    Loaded %d %ss bars from disk", loaded, _tf_label(source_tf_s))
-
-        derive_stage(target_tf_s, source_buf)
         logging.info(
             "    %s: written=%d existed=%d",
             stage_label,
