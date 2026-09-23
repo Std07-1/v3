@@ -11,6 +11,7 @@
 - ``geometry`` — дублікати, порядок, сітка (``align_bad`` для M1..H1, ``off_season_grid`` для H4/D1), close_ms.
 - ``cascade`` — чи derived-бар справді дорівнює агрегації свого source.
 - ``root`` — чи derived-бар дорівнює агрегації M1 у своєму бакеті (корінь ланцюга, ADR-0002).
+- ``chain_breaks`` — чи open кожного видимого M1 дорівнює close попереднього (суцільний ланцюг, ADR-0101).
 - ``history_depth`` — чи вистачає глибини для SMC (lookback вищих TF).
 
 Сітка бакетів одна — сезонна (ADR-0095): виміри приймають ``tf_s`` і правило якоря символу, а кінець бакета
@@ -29,6 +30,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequ
 
 from core.model.bar_choice import choose_better_bar
 from core.model.bars import CandleBar
+from core.model.candle_chain import MARKER_CALENDAR_PAUSE_FLAT, open_breaks_chain
 from core.session_anchor import (
     H4_S,
     OffSeasonGridError,
@@ -133,6 +135,43 @@ class RootResult:
     uncovered: int
     off_grid_skipped: int
     mismatch_samples: Tuple[int, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class ChainBreak:
+    """Один розрив ланцюга: open видимого бару ≠ close попереднього видимого (ADR-0101 §3.1)."""
+
+    prev_open_ms: int
+    open_ms: int
+    prev_close: float
+    bar_open: float
+
+
+@dataclasses.dataclass(frozen=True)
+class ChainResult:
+    """Розриви суцільного ланцюга M1 у SSOT так, як їх бачить графік (ADR-0101 §3.5).
+
+    Дві причини розриву різні за змістом, тому й лічильники окремі:
+
+    - ``inner`` — між сусідніми видимими барами немає жодної торгової хвилини за календарем (сусідні хвилини, денна
+      перерва, вихідні). Діри тут бути не може, тож розрив — порушення інваріанту: ревізія close брокера без open
+      наступного або відкинутий застарілий край. Ціль — 0; прибирає settle (ADR-0098).
+    - ``at_gap`` — між ними є торгова хвилина без видимого бару: наша діра, геп брокера або свято, якого календар не
+      знає. Через нашу діру ланцюг тягнути не можна (ADR-0101 §3.1), тож розрив тут може бути законним; саму діру
+      міряє ``holes``, закриває settle.
+
+    Межа між ними — календар символу. На статичному літньому календарі (до ADR-0095 S6b) зимова денна перерва
+    22:00–23:00 UTC має «торгові» хвилини без барів, тож зимові розриви на ній лічаться в ``at_gap``, а не в ``inner``.
+
+    ``hidden`` — бари з маркером ``calendar_pause_flat``: display їх ховає, тож у ланцюзі вони не сусіди.
+    """
+
+    checked: int
+    hidden: int
+    inner: int
+    at_gap: int
+    inner_samples: Tuple[ChainBreak, ...]
+    at_gap_samples: Tuple[ChainBreak, ...]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -474,6 +513,41 @@ def measure_root_consistency(
         uncovered=uncovered,
         off_grid_skipped=off_grid_skipped,
         mismatch_samples=tuple(mismatched[:max_samples]),
+    )
+
+
+def measure_chain_breaks(
+    m1_bars: Sequence[CandleBar],
+    *,
+    is_trading_fn: IsTradingFn,
+    max_samples: int = 5,
+) -> ChainResult:
+    """Розриви ланцюга ``o(b) ≠ c(a)`` між сусідніми видимими M1 у всій історії SSOT (ADR-0101 C4).
+
+    Бари — як їх показують читачі (``ssot_winners``) без прихованих ``calendar_pause_flat``; допуск — той самий
+    ``open_breaks_chain``, що й у записувачів M1. Розрив між a і b — ``at_gap``, якщо між ними є торгова хвилина,
+    інакше ``inner`` (див. ``ChainResult``). Календар питаємо лише на розривах: їх одиниці на історію.
+    """
+    winners = ssot_winners(m1_bars)
+    visible = [bar for bar in winners if not bar.extensions.get(MARKER_CALENDAR_PAUSE_FLAT)]
+    inner: List[ChainBreak] = []
+    at_gap: List[ChainBreak] = []
+    for prev, bar in zip(visible, visible[1:]):
+        if not open_breaks_chain(prev.c, bar.o):
+            continue
+        chain_break = ChainBreak(prev.open_time_ms, bar.open_time_ms, prev.c, bar.o)
+        # Хвилини строго між a і b: [a + 1 хв, b)
+        if bucket_has_trading_minute(prev.open_time_ms + MINUTE_MS, bar.open_time_ms, is_trading_fn):
+            at_gap.append(chain_break)
+        else:
+            inner.append(chain_break)
+    return ChainResult(
+        checked=max(0, len(visible) - 1),
+        hidden=len(winners) - len(visible),
+        inner=len(inner),
+        at_gap=len(at_gap),
+        inner_samples=tuple(inner[:max_samples]),
+        at_gap_samples=tuple(at_gap[:max_samples]),
     )
 
 

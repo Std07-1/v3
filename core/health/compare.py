@@ -28,7 +28,10 @@ _GRADE_RANK = {"GREEN": 0, "YELLOW": 1, "RED": 2}
 # Версія 3 (ADR-0095 S5a): H4/D1 міряються рівністю сезонній сітці (`off_season_grid`, RED), а не
 # членством у наборі якорів з DST-альтернативами; очікувані бакети, вік і дірки — ітератором сітки.
 # Літній H4 на 22:00 під v2 був легальним «alt», під v3 — RED, хоча дані ті самі.
-HEALTH_MEASURE_VERSION = 3
+# Версія 4 (ADR-0101 C4): M1 міряє розриви суцільного ланцюга (`chain_breaks`), розрив без діри — YELLOW. Символ,
+# GREEN під v3, під v4 чесно YELLOW на тих самих даних (скан проду 23.09.2026, ADR-0101 §1.1: розриви в історії M1
+# є на XAU, XAG, NAS100, US30).
+HEALTH_MEASURE_VERSION = 4
 
 # Сіткові числа H4/D1 (дірки, вік, вирівнювання, каскад, корінь) до v3 рахувались на іншій сітці, тож через межу
 # v3 вони не «погіршуються», а міряють інше: v2-baseline XAU H4 «дірок» 8 → v3 131 на тих самих даних (23.09.2026).
@@ -57,6 +60,9 @@ _WORSE_IF_UP: Tuple[_Measure, ...] = (
     _Measure(("geometry", "ohlc_bad"), "хибних OHLC", grid_dependent=False),
     _Measure(("cascade", "mismatched"), "мовчазних розбіжностей каскаду", grid_dependent=True),
     _Measure(("root", "mismatched"), "мовчазних розбіжностей з M1", grid_dependent=True),
+    # Лише M1 і лише з v4; baseline без поля пропускає вимір, а не дає хибну регресію
+    _Measure(("chain_breaks", "inner"), "розривів ланцюга без діри", grid_dependent=False),
+    _Measure(("chain_breaks", "at_gap"), "розривів ланцюга на межі діри", grid_dependent=False),
 )
 
 

@@ -17,6 +17,7 @@ from typing import Any, Dict, List
 # Файли, які МУСЯТЬ залишатися Python 3.7-compatible
 _PY37_COMPAT_FILES = [
     "core/model/bars.py",
+    "core/model/candle_chain.py",
     "core/config_loader.py",
     "core/session_anchor.py",
     "env_profile.py",

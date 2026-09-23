@@ -25,6 +25,9 @@ derived-бар звіряється з агрегацією M1 у своєму �
 сезонна. Бар H4/D1 не на ній — `off_season_grid` (RED) з очікуваним відкриттям у звіті; легасі-якорів
 config інструмент не читає. Символ із невиміряною групою календаря — RED `htf_anchor_rule_missing`,
 а не тихий якір.
+
+Версія виміру 4 (ADR-0101 C4): рядок M1 має `chain_breaks` — розриви open ≠ close попереднього видимого бару по всій
+історії, окремо без діри (`inner`, YELLOW) і на межі діри (`at_gap`), із семплами.
 """
 from __future__ import annotations
 
@@ -35,17 +38,19 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from core.config_loader import htf_anchor_rule_resolver, load_system_config, resolve_config_path
 from core.derive import DERIVE_SOURCE
 from core.health import (
     HEALTH_MEASURE_VERSION,
+    ChainBreak,
     check_anchor_on_session_edge,
     compare_reports,
     grade_symbol_tf,
     measure_age,
     measure_cascade,
+    measure_chain_breaks,
     measure_depth,
     measure_geometry,
     measure_holes,
@@ -177,7 +182,12 @@ def check_symbol(
                 bars, bars_by_tf[60], tf_s=tf_s, rule=rule, declares_partial_fn=_declares_partial,
             )
 
-        grade = grade_symbol_tf(age=age, holes=holes, geometry=geometry, cascade=cascade, root=root, depth=depth)
+        # Суцільний ланцюг M1 (ADR-0101 §3.1): похідні успадковують його від M1, тож міряємо лише корінь.
+        chain = measure_chain_breaks(bars, is_trading_fn=is_trading) if tf_s == 60 else None
+
+        grade = grade_symbol_tf(
+            age=age, holes=holes, geometry=geometry, cascade=cascade, root=root, depth=depth, chain=chain,
+        )
         if grade.grade == "RED" or (grade.grade == "YELLOW" and worst == "GREEN"):
             worst = grade.grade
         tfs[str(tf_s)] = {
@@ -213,6 +223,12 @@ def check_symbol(
                       "declared_partial": root.declared_partial, "uncovered": root.uncovered,
                       "off_grid_skipped": root.off_grid_skipped}
             ),
+            "chain_breaks": (
+                None if chain is None
+                else {"checked": chain.checked, "hidden": chain.hidden, "inner": chain.inner, "at_gap": chain.at_gap,
+                      "inner_samples": _chain_samples(chain.inner_samples),
+                      "at_gap_samples": _chain_samples(chain.at_gap_samples)}
+            ),
         }
 
     d1_bars = bars_by_tf.get(86400)
@@ -223,6 +239,16 @@ def check_symbol(
         "symbol": symbol, "grade": worst, "htf_anchor_rule": rule,
         "d1_anchor_on_session_edge": anchor_ok, "tfs": tfs,
     }
+
+
+def _chain_samples(samples: Sequence[ChainBreak]) -> List[Dict[str, Any]]:
+    """Семпли розривів ланцюга для звіту: де (попередній бар → бар) і на скільки open розійшовся з close."""
+    return [
+        {"prev_open": _iso(s.prev_open_ms), "open": _iso(s.open_ms), "prev_close": s.prev_close,
+         "bar_open": s.bar_open, "delta": s.bar_open - s.prev_close,
+         "prev_open_ms": s.prev_open_ms, "open_ms": s.open_ms}
+        for s in samples
+    ]
 
 
 def _iso(ms: Optional[int]) -> Optional[str]:
@@ -291,10 +317,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                 else f"{root['checked']}/{root['mismatched']}(+{root['declared_partial']}p,{root['uncovered']} без M1,"
                      f"{root['off_grid_skipped']} поза сіткою)"
             )
+            chain = d.get("chain_breaks")
+            chain_txt = "" if chain is None else f" ланцюг(без діри/на межі діри)={chain['inner']}/{chain['at_gap']}"
             print(
                 f"  [{flag}] tf_{tf:<6} bars={d['bars']:<7} {d['first']} .. {d['last']}"
                 f"  age={d['age_buckets']} holes={d['holes']['missing']}/{d['holes']['expected']}"
-                f" cascade(chk/мовчазних+позначених)={casc_txt} root={root_txt}"
+                f" cascade(chk/мовчазних+позначених)={casc_txt} root={root_txt}{chain_txt}"
                 + (f"  {','.join(d['reasons'])}" if d["reasons"] else "")
             )
 

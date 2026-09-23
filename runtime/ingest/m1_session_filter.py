@@ -28,6 +28,10 @@ import logging
 from typing import AbstractSet, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 from core.model.bars import CandleBar
+# Предикат розриву і маркер прихованого бару — одні з health `chain_breaks` (ADR-0101 C4); open_breaks_chain
+# лишається доступним звідси для наявних споживачів
+from core.model.candle_chain import MARKER_CALENDAR_PAUSE_FLAT as _MARKER_HIDDEN_PAUSE_FLAT
+from core.model.candle_chain import open_breaks_chain
 
 # SSOT порогу: config.json → flat_bar_max_volume; це лише дефолт, коли ключа нема.
 FLAT_BAR_MAX_VOLUME_DEFAULT = 4
@@ -43,12 +47,8 @@ VERDICT_PAUSE_EDGE_STALE_FOLDED = "pause_edge_stale_folded"  # ADR-0101: вкл�
 # ADR-0101 C3: тіки цієї хвилини вже вкладені в бар SSOT перед нею (повторний засів того самого вікна) — правки немає
 VERDICT_PAUSE_EDGE_STALE_ALREADY_FOLDED = "pause_edge_stale_already_folded"
 
-# Суцільний ланцюг ADR-0101: допуск — представлення float, не крок ціни (як рейка ADR-0100 open_chain_breaks)
-_CHAIN_REL_TOL = 1e-9
 MARKER_OPEN_CHAINED = "open_chained_from"  # сирий open брокера на барі, чий open прив'язано до close попереднього
 MARKER_LATE_TICKS_FOLDED = "late_ticks_folded"  # обсяг застарілого краю, вкладеного в останню хвилину сесії
-# Маркер, за яким display ховає бар (runtime/ws/candle_map.py): такий бар не сусід у ланцюзі, але ключ його зайнятий
-_MARKER_HIDDEN_PAUSE_FLAT = "calendar_pause_flat"
 
 # Причини правки наявного бару SSOT, якої вимагає правило послідовності на межі дозапису (ADR-0101 C3)
 SSOT_EDIT_CHAIN = "chain"  # open бару SSOT ≠ close нового бару перед ним
@@ -278,11 +278,6 @@ def _with_marker(bar: CandleBar, marker: str) -> CandleBar:
 # ---------------------------------------------------------------------------
 # Суцільний ланцюг свічок (ADR-0101): open = close попереднього існуючого бару
 # ---------------------------------------------------------------------------
-def open_breaks_chain(prev_close: float, bar_open: float) -> bool:
-    """Розрив ланцюга: open бару ≠ close попереднього в межах представлення float."""
-    return abs(bar_open - prev_close) > _CHAIN_REL_TOL * max(1.0, abs(prev_close))
-
-
 def chain_open_to_prev_close(prev: CandleBar, bar: CandleBar) -> CandleBar:
     """ADR-0101 §3.2: open бару := close попереднього існуючого бару (конвенція PREVIOUS_CLOSE, як у TV).
 

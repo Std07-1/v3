@@ -15,6 +15,7 @@ from typing import Any, Dict, Iterable
 import pytest
 
 from core.config_loader import htf_anchor_rule_resolver, load_system_config, resolve_config_path
+from core.health import HEALTH_MEASURE_VERSION
 from tools import symbol_health_check
 from tools.symbol_health_check import check_symbol
 
@@ -107,8 +108,8 @@ def test_symbol_of_unmeasured_calendar_group_is_red_not_silent(cfg, tmp_path):
     assert (res["grade"], res["reasons"], res["tfs"]) == ("RED", ["htf_anchor_rule_missing"], {})
 
 
-def test_main_report_carries_measure_version_3_and_off_season_grid(cfg, tmp_path):
-    """Звіт CLI: `measure_version` 3 (baseline v2 непорівнюваний), `off_season_grid` у геометрії."""
+def test_main_report_carries_measure_version_and_off_season_grid(cfg, tmp_path):
+    """Звіт CLI: `measure_version` поточна і не нижча за 3 (baseline v2 непорівнюваний), `off_season_grid` у геометрії."""
     _write_bars(tmp_path / "data", H4_S, [_utc(2026, 7, 7, 22)])
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(json.dumps(dict(cfg, data_root=str(tmp_path / "data"))), encoding="utf-8")
@@ -117,5 +118,5 @@ def test_main_report_carries_measure_version_3_and_off_season_grid(cfg, tmp_path
     rc = symbol_health_check.main(["--symbol", SYMBOL, "--config", str(cfg_path), "--json", str(out)])
 
     report = json.loads(out.read_text(encoding="utf-8"))
-    assert rc == 0 and report["measure_version"] == 3
+    assert rc == 0 and report["measure_version"] == HEALTH_MEASURE_VERSION >= 3
     assert report["symbols"][SYMBOL]["tfs"][str(H4_S)]["geometry"]["off_season_grid"] == 1

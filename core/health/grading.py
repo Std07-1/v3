@@ -3,7 +3,8 @@
 RED    — дефект даних, який ламає SMC-аналіз: зсунута сітка (зокрема H4/D1 поза сезонною
          сіткою ADR-0095), побитий OHLC,
          дублікати, розбіжність каскаду або кореня M1, відставання понад допуск.
-YELLOW — те, що не бреше, але й не готове: молода історія, дірки в межах допуску.
+YELLOW — те, що не бреше, але й не готове: молода історія, дірки в межах допуску, розриви ланцюга M1 без діри
+         (ADR-0101: графік рваний, а OHLC кожного бару узгоджений — SMC рахується, зсув на центи).
 GREEN  — можна рахувати SMC.
 
 Пороги — аргументи, а не константи: молодий символ і зрілий мають різні очікування.
@@ -13,7 +14,15 @@ from __future__ import annotations
 import dataclasses
 from typing import List, Optional
 
-from core.health.measures import AgeResult, CascadeResult, DepthResult, GeometryResult, HolesResult, RootResult
+from core.health.measures import (
+    AgeResult,
+    CascadeResult,
+    ChainResult,
+    DepthResult,
+    GeometryResult,
+    HolesResult,
+    RootResult,
+)
 
 RED = "RED"
 YELLOW = "YELLOW"
@@ -40,6 +49,7 @@ def grade_symbol_tf(
     cascade: Optional[CascadeResult] = None,
     root: Optional[RootResult] = None,
     depth: Optional[DepthResult] = None,
+    chain: Optional[ChainResult] = None,
     max_age_buckets: int = 1,
     max_missing_ratio: float = 0.0,
 ) -> Grade:
@@ -89,6 +99,13 @@ def grade_symbol_tf(
 
     if depth is not None and not depth.enough:
         yellow.append(f"depth={depth.bars}<{depth.required}")
+
+    if chain is not None and chain.inner:
+        # Порушення інваріанту SSOT ADR-0101 §3.1, але не брехня даних: кожен бар сам по собі цілий, не залежить від
+        # порядку у файлі й не розходиться з агрегацією — рветься лише вигляд графіка (центи ревізії брокера).
+        # Прибирає settle у вікні закритого ринку (C5), тож це «не готове», а не стоп аналізу. Розрив на межі діри
+        # (`at_gap`) не оцінюється: ланцюг через нашу діру не тягнуть, а саму діру оцінює `holes`.
+        yellow.append(f"chain_breaks_inner={chain.inner}")
 
     if red:
         return Grade(grade=RED, reasons=red + yellow)
