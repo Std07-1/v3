@@ -11,7 +11,9 @@
   - `thin_scatter` — розсип коротких пропусків: неліквідні хвилини (метали ввечері);
   - `full_closure` — торгівлі не було майже весь бакет (повне свято);
   - `cascade_hole` — бар мав збудуватись (бюджет не перевищено), а його немає: це не
-    політика, а незаписаний бар.
+    політика, а незаписаний бар;
+  - `no_trading_minutes` — за календарем у бакеті немає жодної торгової хвилини (вихідний,
+    запитаний через `--date`): бару тут не буває, у «D1 ВІДСУТНІЙ» не входить.
 
 Без цих чисел пороги `scatter_run_max`, `scatter_ratio` і `max_run` — гіпотеза, тому
 ADR-0092 не може стати Accepted до прогону цього інструмента.
@@ -260,7 +262,9 @@ def analyze_symbol(
         row["d1_present"] = b0 in d1_opens
         row["legacy_budget"] = budget
         row["legacy_would_refuse"] = row.get("mid_session_missing", 0) > budget
-        if not row["d1_present"] and not row["legacy_would_refuse"]:
+        # Бакет без торгових хвилин (вихідний, запитаний через --date) бару не має мати: клас no_trading_minutes
+        # лишається, це не діра каскаду
+        if not row["d1_present"] and not row["legacy_would_refuse"] and row["expected"] > 0:
             row["class"] = "cascade_hole"
         if row["class"] != "clean" or not row["d1_present"]:
             rows.append(row)
@@ -315,7 +319,8 @@ def main() -> None:
         by_class[r["class"]] = by_class.get(r["class"], 0) + 1
     log.info("РАЗОМ %d бакетів (показано %d); класи: %s", len(rows), len(shown), by_class)
 
-    absent = [r for r in rows if not r["d1_present"]]
+    # Відсутній — лише бар, якому було з чого будуватись; бакет без торгових хвилин сюди не входить
+    absent = [r for r in rows if not r["d1_present"] and r["expected"] > 0]
     log.info(
         "D1 ВІДСУТНІЙ: %d | бюджет %d: поза ним %d, у межах (cascade_hole) %d",
         len(absent), rows[0]["legacy_budget"] if rows else 0,

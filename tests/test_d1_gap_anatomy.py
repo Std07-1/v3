@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -184,3 +185,29 @@ def test_d1_gap_anatomy_main_seasonal_across_2026_11_01(tmp_path, monkeypatch):
     assert (friday["session_date"], friday["d1_present"]) == ("2026-10-30 Fri", True)
     assert (monday["session_date"], monday["d1_present"], monday["class"]) == ("2026-11-02 Mon", True, "feed_gap")
     assert (monday["expected"], monday["missing"]) == (1380, 60)
+
+
+def test_d1_gap_anatomy_date_on_weekend_is_no_trading_minutes_not_cascade_hole(tmp_path, monkeypatch, caplog):
+    """--date на неділю: бакет сб 22:00 (07.03, перед переходом на літо) / сб 21:00 (31.10) без торгових хвилин.
+
+    Раніше клас такого бакета перетирався на cascade_hole, і підсумок «D1 ВІДСУТНІЙ … cascade_hole» показував хибну
+    діру каскаду. Бару там не буває — рядок лишається no_trading_minutes і у відсутні D1 не входить.
+    """
+    cfg = {
+        "data_root": str(tmp_path),
+        "market_calendar_symbol_groups": {"XAU/USD": "cfd_us_22_23"},
+        "market_calendar_by_group": {"cfd_us_22_23": CFD_US_22_23},
+        "htf_anchor": {"rule_by_calendar_group": {"cfd_us_22_23": "ny_close_us_dst"}},
+    }
+    (tmp_path / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    report = tmp_path / "anatomy.json"
+    monkeypatch.setattr(sys, "argv", [
+        "d1_gap_anatomy", "--config", str(tmp_path / "config.json"), "--symbol", "XAU/USD",
+        "--date", "2026-03-08", "--date", "2026-11-01", "--json", str(report),
+    ])
+    with caplog.at_level(logging.INFO):
+        main()
+    rows = {r["bucket_open_ms"]: r for r in json.loads(report.read_text(encoding="utf-8"))["rows"]}
+    assert sorted(rows) == [_utc_ms(2026, 3, 7, 22), _utc_ms(2026, 10, 31, 21)]
+    assert all((r["class"], r["expected"], r["d1_present"]) == ("no_trading_minutes", 0, False) for r in rows.values())
+    assert "D1 ВІДСУТНІЙ: 0 " in caplog.text
