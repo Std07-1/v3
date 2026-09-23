@@ -3,6 +3,10 @@
 Заповнює гапи у M3→M5→M15→M30→H1→H4, використовуючи core/derive.py
 (GenericBuffer + derive_bar) і calendar-aware boundary tolerance.
 
+H4/D1 — на сезонній сітці символу (ADR-0095): правило з htf_anchor_rule_resolver, бакети крокують
+ітератором сітки (htf_bucket_start_ms / htf_next_bucket_start_ms), тож прогін через вихідні DST
+міняє сітку сам і не будує H4 обрубка доби переходу з годин наступної доби.
+
 Не змінює M1 (source). D1 тепер derived (ADR-0023).
 Не змінює SSOT формат — append-only через JsonlAppender.
 
@@ -18,9 +22,8 @@ import json
 import logging
 import os
 import time
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
-from core.buckets import bucket_start_ms
 from core.config_loader import htf_anchor_rule_resolver, load_system_config as load_config, pick_config_path
 from core.derive import (
     DERIVE_ORDER,
@@ -29,6 +32,7 @@ from core.derive import (
 )
 from core.model.bars import CandleBar
 from core.model.candle_chain import is_display_hidden
+from core.session_anchor import htf_bucket_start_ms, htf_next_bucket_start_ms
 from runtime.ingest.market_calendar import MarketCalendar
 from runtime.store.ssot_jsonl import (
     JsonlAppender,
@@ -216,6 +220,19 @@ def _symbols_from_config(cfg: dict) -> List[str]:
 # ─── Основна логіка rebuild ───────────────────────────────────────
 
 
+def _grid_bucket_opens(start_ms: int, end_ms: int, tf_s: int, anchor_rule: str) -> Iterator[int]:
+    """Відкриття бакетів TF від бакета, що містить `start_ms`, до `end_ms` (виключно) — кроком сезонної сітки.
+
+    H4/D1 крокують `htf_next_bucket_start_ms`, а не `range(b0, end, tf_ms)`: на вихідних DST сітка зсувається на
+    годину, доба переходу триває 23 або 25 год, а її останній H4 — обрубок (осінь: нд 21:00, 1 год). M1..H1 —
+    рівний крок від епохи.
+    """
+    bucket_open = htf_bucket_start_ms(start_ms, tf_s, anchor_rule)
+    while bucket_open < end_ms:
+        yield bucket_open
+        bucket_open = htf_next_bucket_start_ms(bucket_open, tf_s, anchor_rule)
+
+
 def rebuild_one_symbol(
     data_root: str,
     symbol: str,
@@ -224,6 +241,7 @@ def rebuild_one_symbol(
     dry_run: bool,
     cfg: dict,
     writer: JsonlAppender,
+    anchor_rule: str,
     force: bool = False,
 ) -> Dict[str, int]:
     """Rebuild derived TFs для одного символу з M1.
@@ -235,21 +253,13 @@ def rebuild_one_symbol(
       Stage 4: M30 (all disk) → H1
       Stage 5: H1 (all disk) → H4
 
-    Calendar-aware (boundary-tolerant).
+    Calendar-aware (boundary-tolerant). Бакети H4/D1 — на сезонній сітці `anchor_rule` (ADR-0095): якір і
+    вікно агрегації свої в кожного бакета, а не один якір на весь прогін.
 
     Returns: stats dict {tf_s: written_count, ...}
     """
     calendar = _build_calendar(cfg, symbol)
     is_trading_fn = calendar.is_trading_minute if calendar else None
-
-    # Per-symbol anchor: Binance symbols use 0, FX symbols use global config
-    binance_symbols = set(cfg.get("binance", {}).get("symbols", []))
-    if symbol in binance_symbols:
-        anchor_offset_s = int(cfg.get("binance", {}).get("day_anchor_offset_s", 0))
-        d1_anchor_s = int(cfg.get("binance", {}).get("d1_anchor_offset_s", 0))
-    else:
-        anchor_offset_s = int(cfg.get("day_anchor_offset_s", 0))
-        d1_anchor_s = int(cfg.get("day_anchor_offset_s_d1", 0))
 
     disk_cache: Dict[str, set] = {}
     stats: Dict[str, int] = {"m1_loaded": 0, "m1_flat_skipped": 0}
@@ -257,9 +267,31 @@ def rebuild_one_symbol(
         stats[f"tf_{tf_s}_written"] = 0
         stats[f"tf_{tf_s}_existed"] = 0
 
+    def derive_stage(target_tf_s: int, source_buf: GenericBuffer) -> None:
+        """Бакети target TF у [start, end) з source_buf; наявні на диску ключі пропускаються (без --force)."""
+        for bucket_open in _grid_bucket_opens(start_ms, end_ms, target_tf_s, anchor_rule):
+            if not force and _has_on_disk(disk_cache, data_root, symbol, target_tf_s, bucket_open):
+                stats[f"tf_{target_tf_s}_existed"] += 1
+                continue
+            result = derive_bar(
+                symbol=symbol,
+                target_tf_s=target_tf_s,
+                source_buffer=source_buf,
+                bucket_open_ms=bucket_open,
+                is_trading_fn=is_trading_fn,
+                filter_calendar_pause=True,
+                anchor_rule=anchor_rule,
+            )
+            if result is None:
+                continue
+            if not dry_run:
+                writer.append(result)
+                _mark_on_disk(disk_cache, data_root, symbol, target_tf_s, bucket_open)
+            stats[f"tf_{target_tf_s}_written"] += 1
+
     t0 = time.time()
 
-    # ── Stage 1: M1 → M3, M5 ──────────────────────────────
+    # ── Stage 1: M1 → M3, M5, D1 ─────────────────────────
     # Спочатку завантажуємо ВСІ M1 бари, потім деривуємо по бакетах.
     # Bug-fix: попередня версія деривувала після кожного M1 upsert,
     # що призводило до запису partial бару (source_count=1) з подальшим
@@ -273,60 +305,9 @@ def rebuild_one_symbol(
             continue
         m1_buf.upsert(bar)
 
-    # Derive M3 and M5 з повного M1 буфера (аналогічно Stages 2-5)
-    for target_tf_s in [180, 300]:
-        ao_s = 0  # M3/M5 не мають anchor
-        target_tf_ms = target_tf_s * 1000
-        b0 = bucket_start_ms(start_ms, target_tf_ms, 0)
-        for bucket_open in range(b0, end_ms, target_tf_ms):
-            if not force and _has_on_disk(
-                disk_cache, data_root, symbol, target_tf_s, bucket_open
-            ):
-                stats[f"tf_{target_tf_s}_existed"] += 1
-                continue
-            result = derive_bar(
-                symbol=symbol,
-                target_tf_s=target_tf_s,
-                source_buffer=m1_buf,
-                bucket_open_ms=bucket_open,
-                anchor_offset_s=ao_s,
-                is_trading_fn=is_trading_fn,
-                filter_calendar_pause=True,
-            )
-            if result is None:
-                continue
-            if not dry_run:
-                writer.append(result)
-                _mark_on_disk(disk_cache, data_root, symbol, target_tf_s, bucket_open)
-            stats[f"tf_{target_tf_s}_written"] += 1
-
-    # Derive D1 з повного M1 буфера (ADR-0023: D1 = 1440 × M1)
-    d1_tf_s = 86400
-    d1_tf_ms = d1_tf_s * 1000
-    d1_ao_ms = d1_anchor_s * 1000
-    b0_d1 = bucket_start_ms(start_ms, d1_tf_ms, d1_ao_ms)
-    for bucket_open in range(b0_d1, end_ms, d1_tf_ms):
-        if not force and _has_on_disk(
-            disk_cache, data_root, symbol, d1_tf_s, bucket_open
-        ):
-            stats[f"tf_{d1_tf_s}_existed"] += 1
-            continue
-        result = derive_bar(
-            symbol=symbol,
-            target_tf_s=d1_tf_s,
-            source_buffer=m1_buf,
-            bucket_open_ms=bucket_open,
-            anchor_offset_s=0,  # derive_bar resolves via d1_anchor_offset_s
-            d1_anchor_offset_s=d1_anchor_s,
-            is_trading_fn=is_trading_fn,
-            filter_calendar_pause=True,
-        )
-        if result is None:
-            continue
-        if not dry_run:
-            writer.append(result)
-            _mark_on_disk(disk_cache, data_root, symbol, d1_tf_s, bucket_open)
-        stats[f"tf_{d1_tf_s}_written"] += 1
+    # M3, M5 і D1 (ADR-0023: D1 = 1440 × M1) — з повного M1 буфера, аналогічно Stages 2-5
+    for target_tf_s in (180, 300, 86400):
+        derive_stage(target_tf_s, m1_buf)
 
     elapsed_s1 = time.time() - t0
     logging.info(
@@ -345,18 +326,14 @@ def rebuild_one_symbol(
     # Кожен stage читає source TF з диску (включаючи щойно записані бари)
     # і деривує наступний TF.
     cascade_steps = [
-        (300, 900, 3),  # M5 → M15
-        (900, 1800, 2),  # M15 → M30
-        (1800, 3600, 2),  # M30 → H1
-        (3600, 14400, 4),  # H1 → H4
+        (300, 900),  # M5 → M15
+        (900, 1800),  # M15 → M30
+        (1800, 3600),  # M30 → H1
+        (3600, 14400),  # H1 → H4
     ]
-    for source_tf_s, target_tf_s, n_bars in cascade_steps:
+    for source_tf_s, target_tf_s in cascade_steps:
         stage_label = f"tf_{source_tf_s}→tf_{target_tf_s}"
         logging.info("  Stage %s", stage_label)
-
-        ao_s = anchor_offset_s if target_tf_s >= 14400 else 0
-        ao_ms = ao_s * 1000
-        target_tf_ms = target_tf_s * 1000
 
         # Читаємо source TF з диску
         source_buf = GenericBuffer(source_tf_s, max_keep=50000)
@@ -369,37 +346,13 @@ def rebuild_one_symbol(
 
         logging.info("    Loaded %d %ss bars from disk", loaded, _tf_label(source_tf_s))
 
-        # Derive target TF
-        # Ітеруємо по всіх можливих target buckets
-        b0 = bucket_start_ms(start_ms, target_tf_ms, ao_ms)
-        written = 0
-        existed = 0
-        for bucket_open in range(b0, end_ms, target_tf_ms):
-            if not force and _has_on_disk(
-                disk_cache, data_root, symbol, target_tf_s, bucket_open
-            ):
-                existed += 1
-                continue
-
-            result = derive_bar(
-                symbol=symbol,
-                target_tf_s=target_tf_s,
-                source_buffer=source_buf,
-                bucket_open_ms=bucket_open,
-                anchor_offset_s=ao_s,
-                is_trading_fn=is_trading_fn,
-                filter_calendar_pause=True,
-            )
-            if result is None:
-                continue
-            if not dry_run:
-                writer.append(result)
-                _mark_on_disk(disk_cache, data_root, symbol, target_tf_s, bucket_open)
-            written += 1
-
-        stats[f"tf_{target_tf_s}_written"] = written
-        stats[f"tf_{target_tf_s}_existed"] = existed
-        logging.info("    %s: written=%d existed=%d", stage_label, written, existed)
+        derive_stage(target_tf_s, source_buf)
+        logging.info(
+            "    %s: written=%d existed=%d",
+            stage_label,
+            stats[f"tf_{target_tf_s}_written"],
+            stats[f"tf_{target_tf_s}_existed"],
+        )
 
     elapsed = time.time() - t0
     logging.info(
@@ -603,8 +556,17 @@ def main() -> None:
         logging.error("Немає символів. Вкажіть --symbol або перевірте config.json.")
         return
 
+    # Правило якоря H4/D1 кожного символу — до першого запису (ADR-0095 §3.4): символ невиміряної групи
+    # календаря відмовляє весь прогін гучно, а не падає посеред нього після частково записаних TF.
+    try:
+        anchor_rule_for_symbol = htf_anchor_rule_resolver(cfg)
+        anchor_rules = {symbol: anchor_rule_for_symbol(symbol) for symbol in symbols}
+    except ValueError as exc:
+        logging.error("REBUILD_REFUSED правило якоря H4/D1 не визначене: %s", exc)
+        raise SystemExit(2)
+
     # Writer
-    writer = JsonlAppender(root=data_root, anchor_rule_for_symbol=htf_anchor_rule_resolver(cfg))
+    writer = JsonlAppender(root=data_root, anchor_rule_for_symbol=anchor_rule_for_symbol)
 
     # ADR-0054 §3.1 P0.2: rebuild пише append-only у ті самі part-файли, що й live
     # writer, без lock. Для символу з config.json:symbols це тихе джерело дублікатів,
@@ -659,6 +621,7 @@ def main() -> None:
                 dry_run=args.dry_run,
                 cfg=cfg,
                 writer=writer,
+                anchor_rule=anchor_rules[symbol],
                 force=args.force,
             )
             total_stats[symbol] = stats
