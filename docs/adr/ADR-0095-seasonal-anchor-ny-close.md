@@ -366,6 +366,22 @@ S1–S5, S7 і міграція йдуть одним вікном. S6 — до 
 
 ## Changelog
 
+- 2026-09-23 — інструменти (слайс S5b). `tools/rebuild_from_m1` бере правило якоря символу з
+  `htf_anchor_rule_resolver` (правило кожного символу резолвиться до першого запису; невиміряна група —
+  `REBUILD_REFUSED` rc=2), бакети всіх TF крокують ітератором сітки (`htf_bucket_start_ms` /
+  `htf_next_bucket_start_ms`) замість `range(b0, end, tf_ms)`, `derive_bar(anchor_rule=...)`; гілку Binance з
+  `binance.day_anchor_offset_s` прибрано (група `crypto_24x7` → `utc_midnight`). З причин §3.8 п.4 знято «один
+  якір на прогін»; календар лишається один на прогін до S6, тож заборона перебудови на весь діапазон для
+  міграції чинна (разом з append і дублікатами `--force`).
+  Тимчасові `anchor_offset_s` / `d1_anchor_offset_s` у `derive_bar` / `aggregate_bars` видалено: H4/D1 без
+  правила — `anchor_rule_missing`, M1..H1 правила не потребують. `tools/diag/d1_gap_anatomy` (`--date`, вікно
+  бакета на 23/25 год) і MCP `platform_config` читають правило, а не секунди. `htf_rebuild_from_fxcm` і
+  `htf_tail_sync_from_fxcm` **виведено з ужитку** рішенням власника — замість рівності в
+  `_validate_batch`/`rewrite_range`: вони писали нативні H4/D1 `src=history` (§2 варіант C, ADR-0002) напряму в
+  part-файли, повз писар SSOT. Перенесено `git mv` у `tools/_archive/` (як планував ADR-0054 §3.1), запуск дає
+  `HTF_TOOL_RETIRED`, їхні тести прибрано тим самим комітом. Після S5b старі ключі та API якоря в
+  `core/ runtime/ tools/` лишаються лише в `core/buckets.resolve_anchor_offset_ms` (його кличе `ws_server` — S9a),
+  `core/derive.resolve_cascade_anchor_s` і гейтах `d1_anchor_alignment` / `ui_live_candle_plane` — це S9a і S5c.
 - 2026-09-23 — health v3 (слайс S5a). H4/D1 міряються рівністю сезонній сітці: `off_season_grid` (RED) із
   семплами `open_ms → expected_open_ms`. Очікувані бакети, вік, дірки, каскад і корінь M1 крокують
   `htf_next_bucket_start_ms`, тож обрубок DST-доби — окремий бакет. Бар H4/D1 поза сіткою корінь M1, як і
