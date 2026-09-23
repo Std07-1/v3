@@ -368,6 +368,39 @@ S1–S5, S7 і міграція йдуть одним вікном. S6 — до 
 
 ## Changelog
 
+- 2026-09-23 — cutover (слайс S5c). З `config.json` прибрано 7 легасі-ключів: `day_anchor_offset_s`, `_alt`, `_alt2`,
+  `_d1`, `_d1_alt`, `binance.day_anchor_offset_s`, `binance.d1_anchor_offset_s`; якір H4/D1 тепер задає лише `htf_anchor`.
+  `load_system_config` і `uds._load_cfg` (писар і читач) на будь-який із цих ключів, навіть зі значенням 0 чи null,
+  відмовляють `ValueError CONFIG_LEGACY_ANCHOR_KEY key=<ключі> source=<шлях>`. Інжест, preview і bridge не
+  стартують: tick_preview і tick_publisher пишуть ERROR і виходять з rc=2, решта падає з Traceback. `ws_server` не
+  падає: `_load_full_config` ловить помилку, як і будь-який невалідний config, і пише WARNING
+  `WS_CONFIG load_error=CONFIG_LEGACY_ANCHOR_KEY…` та `WS_UDS_INIT_FAILED`.
+  Імена ключів і видаленого API задають дві константи в `core/config_loader.py`: `LEGACY_ANCHOR_KEYS` і
+  `RETIRED_ANCHOR_NAMES` (D15.2). `test_no_module_reads_legacy_anchor_keys` (§3.7) проходить AST по `git ls-files
+  core runtime tools app` і перевіряє рядки, імена, атрибути, імпорти (включно з лінивими), def і kwargs. Ці імена
+  дозволені лише в присвоєннях двох констант. `FXCM_DAY_ANCHOR_OFFSET_S` git-код уже не читав: останнім читачем був
+  `htf_tail_sync_from_fxcm` до архівації в S5b. Ім'я лишається в списку, щоб не повернулося.
+  **Відхилення від §3.2 (R6).** `core/buckets.resolve_anchor_offset_ms` і `core/derive.resolve_cascade_anchor_s`
+  видалено, а не перетворено на делегати з новою сигнатурою. Викликачів у них не лишилось, а бакет H4/D1 рахують лише
+  `htf_bucket_start_ms` і `htf_anchor_offset_s` (одне ім'я).
+  Гейт `d1_anchor_alignment` переписано, ім'я в маніфестах те саме. Підгейти: `htf_anchor_rule_valid` (невиміряна
+  група — FAIL), `no_legacy_anchor_keys` (та сама функція, що в завантажувачі), `d1_in_derive_chain`,
+  `d1_in_derived_tfs_s`, `season_anchor_samples` і `disk_data_anchor`. `season_anchor_samples` перевіряє 75600 улітку,
+  79200 узимку, 0 для `utc_midnight` і те, що відкриття D1 лежить на сітці H4. `disk_data_anchor` перевіряє рівністю
+  сітці кожен рядок останнього part-файлу tf_86400 і tf_14400 кожного символу `symbols`, а також `binance.symbols`,
+  коли Binance увімкнено. Раніше перевірявся лише останній рядок D1 XAU. Усю історію перевіряє health
+  `off_season_grid`. Прогін на копії останніх part-файлів `data_v3` від 21.09: D1 5/5 на сітці, H4 25/25 поза нею.
+  Отже, на реальних даних до apply S7 `disk_data_anchor` червоний, і це очікувано: після apply (G5) він має стати
+  зеленим. У CI даних нема, і підгейт пропускається. Підгейт 3 `ui_live_candle_plane` бере `RETIRED_ANCHOR_NAMES`.
+  **Відкат.** Код і `config.json` відкочуються однією ревізією git. Старий код з новим config узяв би тихий якір 0
+  (`cfg.get(..., 0)`), а новий код зі старим config не стартує. Тому перевірка G-rollback (CRITIQUE §4) лишається.
+  **Поза git (рішення власника).** Легасі-ключі досі читають локальні untracked-інструменти.
+  `tools/tail_integrity_scanner.py` тихо бере дефолти 68400 і 0, тобто хибну сітку без помилки. `tools/backfill_cascade.py`
+  передає видалені kwargs у `JsonlAppender` (запис падає з TypeError ще з S3a), а `tools/audit/fxcm_raw_compare.py` і
+  `tools/audit/tv_mismatch_probe.py` (`FXCM_DAY_ANCHOR_OFFSET_S`) — у `FxcmHistoryProvider` (TypeError ще з S3c).
+  `live_cascade_monitor`, `anchor_compare_api` і `mpv_proof_pack` ключів не читають. Документи з легасі-ключами
+  (`.github/*`, `CLAUDE.md`, `dst_transition.md`, `system_current_overview.md`, `runtime/ingest/polling/README.md`)
+  правлять у S8 після вікна. `docs/config_reference.md` виправлено в цьому слайсі.
 - 2026-09-23 — рев'ю S5b, ще один дефект, що існував і до S5b: `tools/rebuild_from_m1` фіналізував формуючий
   хвіст. Коли `--end` або типовий кінець (хвіст M1 + 1 хв) падав усередину бакета, останній бакет кожного TF
   писався partial final (M3 2/3, M5 3/5, M15 2/3, M30 1/2, H4 2/4), а H1 збирався з partial M30 уже без маркера.
