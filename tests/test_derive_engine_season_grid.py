@@ -119,15 +119,15 @@ def _spy_derive_bar(monkeypatch) -> List[Tuple[int, int]]:
 
 
 @pytest.mark.parametrize("now_ms, expected_h4, expected_d1", [
-    pytest.param(  # весна: Сб 07.03 22:00 → Нд 08.03 21:00 — доба 23 год, останній H4 Нд 18:00 — обрубок 3 год
+    pytest.param(  # весна: сесійна доба Сб 07.03 23:00 → Нд 08.03 22:00 — 23 год, останній H4 Нд 19:00 — обрубок 3 год
         _ms(2026, 3, 9, 6, 30),
-        [_ms(2026, 3, 9, 1), _ms(2026, 3, 8, 21), _ms(2026, 3, 8, 18)],
+        [_ms(2026, 3, 9, 2), _ms(2026, 3, 8, 22), _ms(2026, 3, 8, 19)],
         [_ms(2026, 3, 7, 22), _ms(2026, 3, 6, 22), _ms(2026, 3, 5, 22), _ms(2026, 3, 4, 22)],
         id="mon-2026-03-09",
     ),
-    pytest.param(  # осінь: Сб 31.10 21:00 → Нд 01.11 22:00 — доба 25 год, останній H4 Нд 21:00 — обрубок 1 год
+    pytest.param(  # осінь: сесійна доба Сб 31.10 22:00 → Нд 01.11 23:00 — 25 год, останній H4 Нд 22:00 — обрубок 1 год
         _ms(2026, 11, 2, 6, 30),
-        [_ms(2026, 11, 2, 2), _ms(2026, 11, 1, 22), _ms(2026, 11, 1, 21)],
+        [_ms(2026, 11, 1, 23), _ms(2026, 11, 1, 22), _ms(2026, 11, 1, 18)],
         [_ms(2026, 10, 31, 21), _ms(2026, 10, 30, 21), _ms(2026, 10, 29, 21), _ms(2026, 10, 28, 21)],
         id="mon-2026-11-02",
     ),
@@ -153,20 +153,21 @@ def test_overdue_steps_on_season_grid_across_dst_weekend(monkeypatch, now_ms, ex
         assert_on_season_grid(open_ms, tf, FXCM)
 
 
-def test_overdue_stub_bucket_sun_2100_does_not_absorb_next_day():
-    """01.11.2026: обрубок Нд 21:00 (1 год, ринок закритий) — None; H1 22:00..01:00 будують H4 22:00 нової доби."""
+def test_overdue_stub_bucket_sun_2200_does_not_absorb_next_day():
+    """01.11.2026: обрубок Нд 22:00 (1 год сесійної доби, ринок закритий) — None; H1 23:00..02:00 будують H4 23:00
+    нової сесії (18:00 EST)."""
     engine = DeriveEngine(symbols=[SYM], anchor_rules={SYM: FXCM}, calendars={SYM: _cfd_us_calendar()},
                           cascade_tfs_s={H4_S}, commit_tfs_s={H4_S})
     uds = _ok_uds()
     engine.register_symbol_uds(SYM, uds)
-    engine.warmup_bars([_bar(3600, _ms(2026, 11, 1, 22) + k * H1_MS, 100.0 + k) for k in range(4)])
+    engine.warmup_bars([_bar(3600, _ms(2026, 11, 1, 23) + k * H1_MS, 100.0 + k) for k in range(4)])
 
-    committed = engine.check_overdue_buckets(_ms(2026, 11, 2, 2, 30))
+    committed = engine.check_overdue_buckets(_ms(2026, 11, 2, 3, 30))
 
-    assert [(b.tf_s, b.open_time_ms) for b in committed] == [(H4_S, _ms(2026, 11, 1, 22))]
+    assert [(b.tf_s, b.open_time_ms) for b in committed] == [(H4_S, _ms(2026, 11, 1, 23))]
     assert (committed[0].o, committed[0].c) == (100.0, 103.5)
     written = [call.args[0].open_time_ms for call in uds.commit_final_bar.call_args_list]
-    assert _ms(2026, 11, 1, 21) not in written
+    assert _ms(2026, 11, 1, 22) not in written
 
 
 class _WeekdayCalendar:

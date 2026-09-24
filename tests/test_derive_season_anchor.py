@@ -38,39 +38,41 @@ def _h1_buffer(first_ms: int, hours: int, start_price: float = 100.0) -> Generic
     return buf
 
 
-def test_h4_summer_bucket_2100_is_built_from_h1_22_23_00():
-    """Літо: H4 вт 22.09 21:00 = H1 22:00, 23:00, 00:00 (21:00 — перерва), open = H1 22:00, close = H1 00:00."""
-    buf = _h1_buffer(_ms(2026, 9, 22, 22), 3)
-    bar = derive_bar(symbol="XAU/USD", target_tf_s=H4_S, source_buffer=buf, bucket_open_ms=_ms(2026, 9, 22, 21),
+def test_h4_summer_bucket_2200_is_built_from_h1_22_to_01():
+    """Літо: H4 вт 22.09 22:00 (відкриття сесії 18:00 NY, як TV FX:) = H1 22:00, 23:00, 00:00, 01:00; open = H1 22:00,
+    close = H1 01:00."""
+    buf = _h1_buffer(_ms(2026, 9, 22, 22), 4)
+    bar = derive_bar(symbol="XAU/USD", target_tf_s=H4_S, source_buffer=buf, bucket_open_ms=_ms(2026, 9, 22, 22),
                      is_trading_fn=_calendar().is_trading_minute, anchor_rule=FXCM)
-    assert bar is not None and bar.open_time_ms == _ms(2026, 9, 22, 21)
-    assert (bar.o, bar.c) == (100.0, 102.5)
+    assert bar is not None and bar.open_time_ms == _ms(2026, 9, 22, 22)
+    assert (bar.o, bar.c) == (100.0, 103.5)
     assert bar.close_time_ms == bar.open_time_ms + H4_S * 1000
 
 
 def test_h4_on_winter_grid_in_summer_is_refused_loudly():
     buf = _h1_buffer(_ms(2026, 9, 22, 22), 4)
     with pytest.raises(OffSeasonGridError):
-        derive_bar(symbol="XAU/USD", target_tf_s=H4_S, source_buffer=buf, bucket_open_ms=_ms(2026, 9, 22, 22),
+        derive_bar(symbol="XAU/USD", target_tf_s=H4_S, source_buffer=buf, bucket_open_ms=_ms(2026, 9, 22, 23),
                    is_trading_fn=_calendar().is_trading_minute, anchor_rule=FXCM)
 
 
-def test_fall_stub_sun_2100_does_not_absorb_next_day():
-    """01.11.2026: H4 нд 21:00 — обрубок на 1 год. H1 22:00..01:00 належать новій добі (відкриття 22:00), а не йому."""
-    buf = _h1_buffer(_ms(2026, 11, 1, 22), 4)
-    stub = derive_bar(symbol="XAU/USD", target_tf_s=H4_S, source_buffer=buf, bucket_open_ms=_ms(2026, 11, 1, 21),
+def test_fall_stub_sun_2200_does_not_absorb_next_day():
+    """01.11.2026: H4 нд 22:00 — обрубок сесійної доби на 1 год. H1 23:00..02:00 належать новій сесії (відкриття
+    23:00, 18:00 EST), а не йому."""
+    buf = _h1_buffer(_ms(2026, 11, 1, 23), 4)
+    stub = derive_bar(symbol="XAU/USD", target_tf_s=H4_S, source_buffer=buf, bucket_open_ms=_ms(2026, 11, 1, 22),
                       is_trading_fn=_calendar().is_trading_minute, anchor_rule=FXCM)
     assert stub is None
-    first = derive_bar(symbol="XAU/USD", target_tf_s=H4_S, source_buffer=buf, bucket_open_ms=_ms(2026, 11, 1, 22),
+    first = derive_bar(symbol="XAU/USD", target_tf_s=H4_S, source_buffer=buf, bucket_open_ms=_ms(2026, 11, 1, 23),
                        is_trading_fn=_calendar().is_trading_minute, anchor_rule=FXCM)
     assert first is not None and first.o == 100.0 and first.c == 103.5
 
 
 def test_triggers_close_summer_h4_on_last_trading_h1():
-    """H1 00:00 — останній торговий слот H4 21:00 (у сітці 21/01/05/…): тригер саме на цей бакет."""
-    triggers = derive_triggers(_bar(3600, _ms(2026, 9, 23, 0), 100.0), is_trading_fn=_calendar().is_trading_minute,
+    """H1 01:00 — останній торговий слот H4 22:00 (у сітці 22/02/06/…): тригер саме на цей бакет."""
+    triggers = derive_triggers(_bar(3600, _ms(2026, 9, 23, 1), 100.0), is_trading_fn=_calendar().is_trading_minute,
                                anchor_rule=FXCM)
-    assert (H4_S, _ms(2026, 9, 22, 21)) in triggers
+    assert (H4_S, _ms(2026, 9, 22, 22)) in triggers
 
 
 def test_triggers_close_d1_on_last_trading_minute_both_seasons():

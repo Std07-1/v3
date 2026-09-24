@@ -110,20 +110,21 @@ class TestDeriveTriggerD1(unittest.TestCase):
         d1_triggers = [(t, o) for t, o in triggers if t == D1_TF_S]
         self.assertEqual(len(d1_triggers), 0)
 
-    def test_winter_h4_and_d1_share_anchor_79200(self) -> None:
-        """26.02.2026 (зима): H4 == D1 == 79200 — H4 = D1/6, окремого якоря H4 більше нема (ADR-0095 §3.4)."""
-        self.assertEqual(htf_anchor_offset_s(H4_TF_S, D1_BUCKET_OPEN_MS, FXCM), D1_ANCHOR)
+    def test_winter_h4_anchor_is_session_open_one_hour_after_d1(self) -> None:
+        """26.02.2026 (зима): D1 79200 (17:00 EST), H4 82800 (18:00 EST — відкриття сесії, як TV FX:; ADR-0095 rev)."""
+        session_open_ms = D1_BUCKET_OPEN_MS + 3_600_000
+        self.assertEqual(htf_anchor_offset_s(H4_TF_S, session_open_ms, FXCM), D1_ANCHOR + 3600)
         self.assertEqual(htf_anchor_offset_s(D1_TF_S, D1_BUCKET_OPEN_MS, FXCM), D1_ANCHOR)
         h1_buf = GenericBuffer(3600, max_keep=16)
         for k in range(4):
-            open_ms = D1_BUCKET_OPEN_MS + k * 3_600_000
+            open_ms = session_open_ms + k * 3_600_000
             h1_buf.upsert(CandleBar(symbol="XAU/USD", tf_s=3600, open_time_ms=open_ms,
                                     close_time_ms=open_ms + 3_600_000, o=100.0, h=101.0, low=99.0, c=100.0,
                                     v=1, complete=True, src="derived"))
         h4 = derive_bar(symbol="XAU/USD", target_tf_s=H4_TF_S, source_buffer=h1_buf,
-                        bucket_open_ms=D1_BUCKET_OPEN_MS, anchor_rule=FXCM)
+                        bucket_open_ms=session_open_ms, anchor_rule=FXCM)
         self.assertIsNotNone(h4)
-        self.assertEqual(h4.open_time_ms, D1_BUCKET_OPEN_MS)
+        self.assertEqual(h4.open_time_ms, session_open_ms)
 
     def test_unknown_anchor_rule_is_refused_loudly(self) -> None:
         with self.assertRaisesRegex(ValueError, "unknown htf anchor rule"):
