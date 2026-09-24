@@ -36,8 +36,8 @@ def _utc_ms(*args: int) -> int:
 
 
 # Ср 01.07.2026 — літо США: H4 на 21/01/05/.. UTC, 22:00 — зимова сітка
-SUMMER_H4 = _utc_ms(2026, 7, 1, 21)
-WINTER_GRID_H4 = _utc_ms(2026, 7, 1, 22)
+SUMMER_H4 = _utc_ms(2026, 7, 1, 22)
+WINTER_GRID_H4 = _utc_ms(2026, 7, 1, 23)
 M1_S = 60
 
 

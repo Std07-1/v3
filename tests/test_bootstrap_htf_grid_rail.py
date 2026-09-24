@@ -62,10 +62,10 @@ def _bootstrap(tails: Dict[int, List[CandleBar]], caplog) -> str:
 
 
 @pytest.mark.parametrize("h4_open, d1_open, off_grid", [
-    # H4 на старій сітці 22/02/.. влітку — пре-міграційний прод
-    (_ms(2026, 9, 22, 22), _ms(2026, 9, 21, 21), "%s:%d:%d" % (SYM, H4_S, _ms(2026, 9, 22, 22))),
+    # H4 на сітці 17:00 NY (21/01/..) влітку — сітка TV OANDA і нативного H4 FXCM, не TV FX:
+    (_ms(2026, 9, 22, 21), _ms(2026, 9, 21, 21), "%s:%d:%d" % (SYM, H4_S, _ms(2026, 9, 22, 21))),
     # D1 22:00 влітку
-    (_ms(2026, 9, 22, 21), _ms(2026, 9, 21, 22), "%s:%d:%d" % (SYM, D1_S, _ms(2026, 9, 21, 22))),
+    (_ms(2026, 9, 22, 22), _ms(2026, 9, 21, 22), "%s:%d:%d" % (SYM, D1_S, _ms(2026, 9, 21, 22))),
 ])
 def test_bootstrap_htf_grid_mismatch_degraded(caplog, h4_open, d1_open, off_grid):
     text = _bootstrap({H4_S: [_bar(H4_S, h4_open)], D1_S: [_bar(D1_S, d1_open)]}, caplog)
@@ -75,7 +75,7 @@ def test_bootstrap_htf_grid_mismatch_degraded(caplog, h4_open, d1_open, off_grid
 
 
 def test_bootstrap_on_season_grid_tail_is_quiet(caplog):
-    text = _bootstrap({H4_S: [_bar(H4_S, _ms(2026, 9, 22, 21))], D1_S: [_bar(D1_S, _ms(2026, 9, 21, 21))]}, caplog)
+    text = _bootstrap({H4_S: [_bar(H4_S, _ms(2026, 9, 22, 22))], D1_S: [_bar(D1_S, _ms(2026, 9, 21, 21))]}, caplog)
     assert "htf_grid" not in text
 
 

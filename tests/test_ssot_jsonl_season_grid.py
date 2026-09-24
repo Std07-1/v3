@@ -51,24 +51,24 @@ def _assert_rejected(app: JsonlAppender, bar: CandleBar, expected_open_ms: int, 
 
 
 def test_jsonl_appender_winter_grid_in_summer_rejected(tmp_path: Path):
-    """Ср 01.07.2026 — літо США: H4 21/01/05/.. UTC. Бар 22:00 (зимова сітка) — відмова з очікуваним 21:00."""
+    """Ср 01.07.2026 — літо США: H4 22/02/06/.. UTC (18:00 NY). Бар 23:00 (зимова сітка) — відмова з очікуваним 22:00."""
     app = _appender(tmp_path)
-    _assert_rejected(app, _bar("XAU/USD", H4_S, _utc_ms(2026, 7, 1, 22)), _utc_ms(2026, 7, 1, 21), "summer")
+    _assert_rejected(app, _bar("XAU/USD", H4_S, _utc_ms(2026, 7, 1, 23)), _utc_ms(2026, 7, 1, 22), "summer")
     assert _written_opens(tmp_path, "XAU/USD", H4_S) == []
 
-    on_grid = _utc_ms(2026, 7, 1, 21)
+    on_grid = _utc_ms(2026, 7, 1, 22)
     app.append(_bar("XAU/USD", H4_S, on_grid))
     app.close()
     assert _written_opens(tmp_path, "XAU/USD", H4_S) == [on_grid]
 
 
 def test_jsonl_appender_summer_grid_in_winter_rejected(tmp_path: Path):
-    """Пн 05.01.2026 — зима США: H4 22/02/06/10/14/18 UTC. Бар 21:00 (літня сітка) лежить у бакеті 18:00 — відмова."""
+    """Пн 05.01.2026 — зима США: H4 23/03/07/11/15/19 UTC. Бар 22:00 (літня сітка) лежить у бакеті 19:00 — відмова."""
     app = _appender(tmp_path)
-    _assert_rejected(app, _bar("XAU/USD", H4_S, _utc_ms(2026, 1, 5, 21)), _utc_ms(2026, 1, 5, 18), "winter")
+    _assert_rejected(app, _bar("XAU/USD", H4_S, _utc_ms(2026, 1, 5, 22)), _utc_ms(2026, 1, 5, 19), "winter")
     assert _written_opens(tmp_path, "XAU/USD", H4_S) == []
 
-    on_grid = _utc_ms(2026, 1, 5, 22)
+    on_grid = _utc_ms(2026, 1, 5, 23)
     app.append(_bar("XAU/USD", H4_S, on_grid))
     app.close()
     assert _written_opens(tmp_path, "XAU/USD", H4_S) == [on_grid]
@@ -101,7 +101,7 @@ def test_jsonl_appender_binance_utc_midnight_accepted(tmp_path: Path):
     assert sorted(_written_opens(tmp_path, "BTCUSDT", D1_S)) == sorted(d1_opens)
 
 
-@pytest.mark.parametrize("tf_s, open_ms", [(H4_S, _utc_ms(2026, 7, 1, 21)), (D1_S, _utc_ms(2026, 7, 1, 21))])
+@pytest.mark.parametrize("tf_s, open_ms", [(H4_S, _utc_ms(2026, 7, 1, 22)), (D1_S, _utc_ms(2026, 7, 1, 21))])
 def test_jsonl_appender_htf_without_resolver_raises(tmp_path: Path, tf_s: int, open_ms: int):
     """Без резолвера HTF-бар навіть на правильній сітці — гучна відмова, а не тихий якір 0; M1 резолвера не потребує."""
     app = JsonlAppender(str(tmp_path))
@@ -119,7 +119,7 @@ def test_jsonl_appender_htf_without_resolver_raises(tmp_path: Path, tf_s: int, o
 @pytest.mark.parametrize("tf_s, short_close_s", [(H4_S, 3 * 3600), (D1_S, 23 * 3600)])
 def test_jsonl_appender_htf_on_grid_with_wrong_close_rejected(tmp_path: Path, tf_s: int, short_close_s: int):
     """Бар на сезонній сітці, але close ≠ open + tf (обрубок) — `bar_close_time_invalid`, на диску нічого (I2)."""
-    open_ms = _utc_ms(2026, 7, 1, 21)
+    open_ms = _utc_ms(2026, 7, 1, 22 if tf_s == H4_S else 21)
     stub = CandleBar(symbol="XAU/USD", tf_s=tf_s, open_time_ms=open_ms, close_time_ms=open_ms + short_close_s * 1000,
                      o=100.0, h=101.0, low=99.0, c=100.5, v=10.0, complete=True, src="derived")
     app = _appender(tmp_path)
@@ -164,6 +164,6 @@ def test_build_uds_writer_wires_season_grid_resolver(_bus, _redis, _snap, tmp_pa
     uds = build_uds_from_config(str(cfg_path), str(tmp_path / "data"), "boot-s3a", writer_components=True)
     try:
         with pytest.raises(OffSeasonGridError):
-            uds._jsonl.append(_bar("XAU/USD", H4_S, _utc_ms(2026, 7, 1, 22)))  # noqa: SLF001
+            uds._jsonl.append(_bar("XAU/USD", H4_S, _utc_ms(2026, 7, 1, 23)))  # noqa: SLF001
     finally:
         uds.close()

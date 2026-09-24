@@ -67,30 +67,31 @@ def _off_grid_records(caplog) -> list:
     return [rec for rec in caplog.records if _OFF_GRID_MARK in rec.getMessage()]
 
 
-def test_normalize_history_h4_summer_2200_rejected_loud(caplog):
-    """Ср 01.07.2026 — літо США: H4 21/01/05/09/13/17 UTC. Рядки зимової сітки (18:00, 22:00, 02:00) відкинуто;
-    сигнал — один WARNING на виклик з кількістю й першим відкиданням (очікуване відкриття, сезон), а не рядок на бар."""
+def test_normalize_history_h4_summer_ny_close_grid_rejected_loud(caplog):
+    """Ср 01.07.2026 — літо США: H4 22/02/06/10/14/18 UTC (18:00 NY, як TV FX:). Рядки сітки 17:00 NY — нативний H4
+    FXCM (17:00, 21:00) — відкинуто; сигнал — один WARNING на виклик з кількістю й першим відкиданням (очікуване
+    відкриття, сезон), а не рядок на бар."""
     rows = [_row(_utc(2026, 7, 1, 17)), _row(_utc(2026, 7, 1, 18)), _row(_utc(2026, 7, 1, 21)),
             _row(_utc(2026, 7, 1, 22)), _row(_utc(2026, 7, 2, 2))]
     with caplog.at_level(logging.WARNING):
         bars = provider_mod.normalize_history_to_bars("XAU/USD", H4_S, rows, src="history",
                                                       anchor_rule=RULE_NY_CLOSE_US_DST)
 
-    assert [b.open_time_ms for b in bars] == [_ms(_utc(2026, 7, 1, 17)), _ms(_utc(2026, 7, 1, 21))]
+    assert [b.open_time_ms for b in bars] == [_ms(_utc(2026, 7, 1, 18)), _ms(_utc(2026, 7, 1, 22)), _ms(_utc(2026, 7, 2, 2))]
     record, = _off_grid_records(caplog)
     message = record.getMessage()
     assert record.levelno == logging.WARNING
-    assert "symbol=XAU/USD tf_s=14400 dropped=3 of=5" in message
-    assert "last_open_ms=%d" % _ms(_utc(2026, 7, 2, 2)) in message
-    assert ("open_ms=%d expected_open_ms=%d" % (_ms(_utc(2026, 7, 1, 18)), _ms(_utc(2026, 7, 1, 17)))) in message
+    assert "symbol=XAU/USD tf_s=14400 dropped=2 of=5" in message
+    assert "last_open_ms=%d" % _ms(_utc(2026, 7, 1, 21)) in message
+    assert ("open_ms=%d expected_open_ms=%d" % (_ms(_utc(2026, 7, 1, 17)), _ms(_utc(2026, 7, 1, 14)))) in message
     assert "season=summer" in message
     assert "Пропуск history-row" not in caplog.text
 
 
-def test_normalize_history_h4_summer_2100_accepted(caplog):
-    """Сітка сезонна, а не одна з кількох: 21:00/01:00 улітку і 22:00/02:00 узимку — усе на сітці, без сигналу.
+def test_normalize_history_h4_session_grid_accepted(caplog):
+    """Сітка сезонна, а не одна з кількох: 22:00/02:00 улітку і 23:00/03:00 узимку — усе на сітці, без сигналу.
     close = open + tf (I2)."""
-    opens = [_utc(2026, 7, 1, 21), _utc(2026, 7, 2, 1), _utc(2026, 1, 5, 22), _utc(2026, 1, 6, 2)]
+    opens = [_utc(2026, 7, 1, 22), _utc(2026, 7, 2, 2), _utc(2026, 1, 5, 23), _utc(2026, 1, 6, 3)]
     with caplog.at_level(logging.WARNING):
         bars = provider_mod.normalize_history_to_bars("XAU/USD", H4_S, [_row(m) for m in opens], src="history",
                                                       anchor_rule=RULE_NY_CLOSE_US_DST)
@@ -142,11 +143,11 @@ def test_fetch_last_n_tf_htf_without_resolver_raises(fake_sdk, tf_s, resolver, s
 
 
 @pytest.mark.parametrize("rule, resolver, kept, dropped, expected_open", [
-    # ny_close_us_dst з config-резолвера: літня сітка 21/01/05/.. — 21:00 лишається, 00:00 належить бакету 21:00
-    (RULE_NY_CLOSE_US_DST, htf_anchor_rule_resolver(_CFG), _utc(2026, 7, 1, 21), _utc(2026, 7, 2, 0),
-     _utc(2026, 7, 1, 21)),
+    # ny_close_us_dst з config-резолвера: літня сітка 22/02/06/.. — 22:00 лишається, 00:00 належить бакету 22:00
+    (RULE_NY_CLOSE_US_DST, htf_anchor_rule_resolver(_CFG), _utc(2026, 7, 1, 22), _utc(2026, 7, 2, 0),
+     _utc(2026, 7, 1, 22)),
     # ті самі рядки, інше правило — інший бар лишається: правило справді приходить від резолвера, а не з default
-    (RULE_UTC_MIDNIGHT, lambda symbol: RULE_UTC_MIDNIGHT, _utc(2026, 7, 2, 0), _utc(2026, 7, 1, 21),
+    (RULE_UTC_MIDNIGHT, lambda symbol: RULE_UTC_MIDNIGHT, _utc(2026, 7, 2, 0), _utc(2026, 7, 1, 22),
      _utc(2026, 7, 1, 20)),
 ], ids=["ny_close_us_dst", "utc_midnight"])
 def test_fetch_last_n_tf_passes_resolved_rule_to_normalize(fake_sdk, caplog, rule, resolver, kept, dropped,
@@ -159,7 +160,7 @@ def test_fetch_last_n_tf_passes_resolved_rule_to_normalize(fake_sdk, caplog, rul
         asked.append(symbol)
         return resolver(symbol)
 
-    fake_sdk.rows = [_row(_utc(2026, 7, 1, 21)), _row(_utc(2026, 7, 2, 0))]
+    fake_sdk.rows = [_row(_utc(2026, 7, 1, 22)), _row(_utc(2026, 7, 2, 0))]
     with provider_mod.FxcmHistoryProvider(user_id="u", password="p", url="x", connection="Demo",
                                           anchor_rule_for_symbol=spy) as provider:
         with caplog.at_level(logging.WARNING):
