@@ -58,9 +58,10 @@ def _check(cfg: Dict[str, Any], data_root: Path, now_ms: int, symbol: str = SYMB
 
 
 def test_summer_bar_on_winter_hour_is_red_with_expected_open(cfg, tmp_path):
-    """Літо 2026: H4 22:00 серед сітки 21/01/…, D1 цілком на 22:00 (колишній легальний «alt») — RED."""
-    h4_grid = [_utc(2026, 7, 5, 21) + i * H4_MS for i in range(30)]  # нд 21:00 … пт 17:00
-    stray_h4 = _utc(2026, 7, 7, 22)
+    """Літо 2026: H4 21:00 (сітка 17:00 NY — TV OANDA, нативний FXCM) серед сітки TV FX: 22/02/…, D1 цілком на 22:00
+    (колишній легальний «alt») — RED."""
+    h4_grid = [_utc(2026, 7, 5, 22) + i * H4_MS for i in range(30)]  # нд 22:00 … пт 18:00
+    stray_h4 = _utc(2026, 7, 7, 21)
     d1_winter_hour = [_utc(2026, 7, 5, 22) + i * D1_MS for i in range(5)]
     _write_bars(tmp_path, H4_S, h4_grid + [stray_h4])
     _write_bars(tmp_path, D1_S, d1_winter_hour)
@@ -72,8 +73,8 @@ def test_summer_bar_on_winter_hour_is_red_with_expected_open(cfg, tmp_path):
     assert h4["grade"] == "RED" and "off_season_grid=1" in h4["reasons"]
     assert (h4["geometry"]["off_season_grid"], h4["geometry"]["align_bad"]) == (1, 0)
     sample = h4["geometry"]["off_season_grid_samples"][0]
-    assert (sample["open"], sample["expected_open"], sample["season"]) == ("2026-07-07 22:00", "2026-07-07 21:00", "summer")
-    assert (sample["open_ms"], sample["expected_open_ms"]) == (stray_h4, _utc(2026, 7, 7, 21))
+    assert (sample["open"], sample["expected_open"], sample["season"]) == ("2026-07-07 21:00", "2026-07-07 18:00", "summer")
+    assert (sample["open_ms"], sample["expected_open_ms"]) == (stray_h4, _utc(2026, 7, 7, 18))
     assert h4["holes"]["missing"] == 0 and h4["age_buckets"] == 0, "решта ряду на сітці: лише зайвий бар"
 
     d1 = res["tfs"][str(D1_S)]
@@ -83,15 +84,16 @@ def test_summer_bar_on_winter_hour_is_red_with_expected_open(cfg, tmp_path):
 
 
 def test_series_across_2026_11_01_has_no_grid_defects(cfg, tmp_path):
-    """Вихідні 01.11.2026: літня сітка до пт, зимова з нд 22:00 — нуль off_season_grid, дірок і відставання."""
-    h4 = ([_utc(2026, 10, 27, 21) + i * H4_MS for i in range(18)]  # вт 21:00 … пт 30.10 17:00
-          + [_utc(2026, 11, 1, 22) + i * H4_MS for i in range(12)])  # нд 22:00 … вт 03.11 18:00
+    """Вихідні 01.11.2026: літня сітка до пт, зимова з нд 23:00 (H4 18:00 EST; D1 22:00) — нуль off_season_grid,
+    дірок і відставання."""
+    h4 = ([_utc(2026, 10, 27, 22) + i * H4_MS for i in range(18)]  # вт 22:00 … пт 30.10 18:00
+          + [_utc(2026, 11, 1, 23) + i * H4_MS for i in range(12)])  # нд 23:00 … вт 03.11 19:00
     d1 = [_utc(2026, 10, 27, 21), _utc(2026, 10, 28, 21), _utc(2026, 10, 29, 21),
           _utc(2026, 11, 1, 22), _utc(2026, 11, 2, 22)]
     _write_bars(tmp_path, H4_S, h4)
     _write_bars(tmp_path, D1_S, d1)
 
-    res = _check(cfg, tmp_path, now_ms=_utc(2026, 11, 3, 22, 30))
+    res = _check(cfg, tmp_path, now_ms=_utc(2026, 11, 3, 23, 30))
 
     for tf_s, expected in ((H4_S, 29), (D1_S, 4)):
         tf = res["tfs"][str(tf_s)]
@@ -110,7 +112,7 @@ def test_symbol_of_unmeasured_calendar_group_is_red_not_silent(cfg, tmp_path):
 
 def test_main_report_carries_measure_version_and_off_season_grid(cfg, tmp_path):
     """Звіт CLI: `measure_version` поточна і не нижча за 3 (baseline v2 непорівнюваний), `off_season_grid` у геометрії."""
-    _write_bars(tmp_path / "data", H4_S, [_utc(2026, 7, 7, 22)])
+    _write_bars(tmp_path / "data", H4_S, [_utc(2026, 7, 7, 21)])
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(json.dumps(dict(cfg, data_root=str(tmp_path / "data"))), encoding="utf-8")
     out = tmp_path / "report.json"

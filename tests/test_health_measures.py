@@ -75,12 +75,13 @@ def test_off_season_grid_bar_counted():
 
 
 def test_h4_on_winter_hours_in_summer_is_off_season_grid():
-    """Старий якір H4 (22:00 → 02:00 …) влітку: кожен бар поза сіткою 21/01/05/09/13/17."""
-    on_grid = [_utc(2026, 7, 6, 21), _utc(2026, 7, 7, 1), _utc(2026, 1, 5, 22), _utc(2026, 1, 6, 2)]
-    stale = [_utc(2026, 7, 7, 22), _utc(2026, 7, 8, 2)]
+    """Сітка 17:00 NY (21:00 → 01:00 …; TV OANDA, нативний H4 FXCM) влітку: кожен бар поза сіткою TV FX:
+    22/02/06/10/14/18 (18:00 NY)."""
+    on_grid = [_utc(2026, 7, 6, 22), _utc(2026, 7, 7, 2), _utc(2026, 1, 5, 23), _utc(2026, 1, 6, 3)]
+    stale = [_utc(2026, 7, 7, 21), _utc(2026, 7, 8, 1)]
     g = measure_geometry([_bar(o, H4_MS) for o in on_grid + stale], tf_s=H4_S, rule=RULE)
     assert g.off_season_grid == 2 and g.align_bad == 0
-    assert g.off_season_grid_samples == ((stale[0], _utc(2026, 7, 7, 21)), (stale[1], _utc(2026, 7, 8, 1)))
+    assert g.off_season_grid_samples == ((stale[0], _utc(2026, 7, 7, 18)), (stale[1], _utc(2026, 7, 7, 22)))
 
 
 def test_utc_midnight_rule_puts_d1_at_midnight():
@@ -385,29 +386,29 @@ def test_expected_d1_buckets_switch_anchor_across_spring_dst():
 
 
 def test_expected_h4_buckets_include_fall_stub_and_switch_to_winter_grid():
-    """01.11.2026: остання H4 доби на 25 год — обрубок нд 21:00→22:00, далі зимова сітка 22/02/…"""
-    exp = expected_bucket_opens(_utc(2026, 10, 30, 21), _utc(2026, 11, 2, 22), tf_s=H4_S, rule=RULE,
+    """01.11.2026: остання H4 сесійної доби на 25 год — обрубок нд 22:00→23:00, далі зимова сітка 23/03/…"""
+    exp = expected_bucket_opens(_utc(2026, 10, 30, 22), _utc(2026, 11, 2, 23), tf_s=H4_S, rule=RULE,
                                 is_trading_fn=ALWAYS)
-    summer = [_utc(2026, 10, 30, 21) + i * H4_MS for i in range(12)]  # пт 21:00 … нд 17:00
-    winter = [_utc(2026, 11, 1, 22) + i * H4_MS for i in range(6)]  # нд 22:00 … пн 18:00
-    assert exp == summer + [_utc(2026, 11, 1, 21)] + winter
+    summer = [_utc(2026, 10, 30, 22) + i * H4_MS for i in range(12)]  # пт 22:00 … нд 18:00
+    winter = [_utc(2026, 11, 1, 23) + i * H4_MS for i in range(6)]  # нд 23:00 … пн 19:00
+    assert exp == summer + [_utc(2026, 11, 1, 22)] + winter
 
 
 def test_age_counts_grid_buckets_across_fall_stub():
     """Вік — кроки сітки: обрубок 1 год — окремий бакет, тож (to - from) // 4 год недорахувала б один."""
-    last = _utc(2026, 10, 31, 17)
-    a = measure_age([last], now_ms=_utc(2026, 11, 2, 3), tf_s=H4_S, rule=RULE, is_trading_fn=ALWAYS)
-    assert a.expected_last_open_ms == _utc(2026, 11, 1, 22)
+    last = _utc(2026, 10, 31, 18)
+    a = measure_age([last], now_ms=_utc(2026, 11, 2, 4), tf_s=H4_S, rule=RULE, is_trading_fn=ALWAYS)
+    assert a.expected_last_open_ms == _utc(2026, 11, 1, 23)
     assert a.age_buckets == 8
     assert (a.expected_last_open_ms - last) // H4_MS == 7, "контроль: арифметика дала б 7"
 
 
 def test_holes_see_missing_fall_stub_bar():
     """Бар обрубка — такий самий очікуваний бакет, як повний H4; його відсутність — дірка."""
-    grid = expected_bucket_opens(_utc(2026, 10, 30, 21), _utc(2026, 11, 2, 22), tf_s=H4_S, rule=RULE,
+    grid = expected_bucket_opens(_utc(2026, 10, 30, 22), _utc(2026, 11, 2, 23), tf_s=H4_S, rule=RULE,
                                  is_trading_fn=ALWAYS)
-    stub = _utc(2026, 11, 1, 21)
-    h = measure_holes([o for o in grid if o != stub], start_ms=_utc(2026, 10, 30, 21), end_ms=_utc(2026, 11, 2, 22),
+    stub = _utc(2026, 11, 1, 22)
+    h = measure_holes([o for o in grid if o != stub], start_ms=_utc(2026, 10, 30, 22), end_ms=_utc(2026, 11, 2, 23),
                       tf_s=H4_S, rule=RULE, is_trading_fn=ALWAYS)
     assert (h.expected, h.missing, h.missing_samples) == (19, 1, (stub,))
 

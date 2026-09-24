@@ -21,10 +21,10 @@ H1_MS = 3_600_000
 H4_MS = 14_400_000
 BASE = 1_767_225_600_000  # 2026-01-01 00:00 UTC
 RULE = RULE_NY_CLOSE_US_DST
-# 01.11.2026: доба сб 31.10 має 25 год, її остання H4 — обрубок нд 21:00→22:00 (ADR-0095)
-FALL_STUB = int(dt.datetime(2026, 11, 1, 21, tzinfo=dt.timezone.utc).timestamp()) * 1000
-# 06.01.2026 (зима): H4 старої сітки 19:00 — поза сезонною (22/02/../18); наступний бакет сітки — 22:00
-WINTER_OLD_GRID_H4 = int(dt.datetime(2026, 1, 6, 19, tzinfo=dt.timezone.utc).timestamp()) * 1000
+# 01.11.2026: сесійна доба H4 сб 31.10 22:00 має 25 год, її остання H4 — обрубок нд 22:00→23:00 (ADR-0095 rev)
+FALL_STUB = int(dt.datetime(2026, 11, 1, 22, tzinfo=dt.timezone.utc).timestamp()) * 1000
+# 06.01.2026 (зима): H4 сітки 17:00 NY 18:00 — поза сезонною (23/03/../19, 18:00 EST); наступний бакет сітки — 19:00
+WINTER_OLD_GRID_H4 = int(dt.datetime(2026, 1, 6, 18, tzinfo=dt.timezone.utc).timestamp()) * 1000
 
 
 def _bar(open_ms, tf_ms, *, o, h, low, c, src="derived", ext=None, marker=""):
@@ -143,7 +143,7 @@ def test_root_checks_the_winner_not_every_record():
 
 # ── обрубок H4 доби переходу DST (ADR-0095) ────────────────────────────────
 def test_root_window_of_fall_stub_ends_at_next_bucket():
-    """Вікно обрубка — до відкриття нової доби (22:00), а не open + 4 год: хвилини 22:00+ належать іншому бару."""
+    """Вікно обрубка — до відкриття нової сесії (23:00), а не open + 4 год: хвилини 23:00+ належать іншому бару."""
     stub_minutes = _minutes(FALL_STUB, 60)
     next_bucket_minutes = _minutes(FALL_STUB + H1_MS, 30, bump=50.0)
     stub = _aggregate(FALL_STUB, H4_MS, stub_minutes)
@@ -161,8 +161,8 @@ def test_cascade_fall_stub_is_complete_with_one_h1():
 
 # ── бар поза сезонною сіткою (ADR-0095) ────────────────────────────────────
 def test_root_skips_off_grid_h4_instead_of_blaming_truncated_window():
-    """Вікно до наступного бакета сітки ріже бар 19:00 на [19:00, 22:00) — звірка дала б хибну розбіжність з M1."""
-    own_minutes = _minutes(WINTER_OLD_GRID_H4, 240)  # [19:00, 23:00): з них бар і зібрано
+    """Вікно до наступного бакета сітки ріже бар 18:00 на [18:00, 19:00) — звірка дала б хибну розбіжність з M1."""
+    own_minutes = _minutes(WINTER_OLD_GRID_H4, 240)  # [18:00, 22:00): з них бар і зібрано
     bar = _aggregate(WINTER_OLD_GRID_H4, H4_MS, own_minutes)
     r = measure_root_consistency([bar], own_minutes, tf_s=14_400, rule=RULE)
     assert (r.checked, r.mismatched, r.off_grid_skipped) == (0, 0, 1)
@@ -170,8 +170,8 @@ def test_root_skips_off_grid_h4_instead_of_blaming_truncated_window():
 
 
 def test_root_control_on_grid_h4_is_still_checked():
-    """Контроль: той самий зимовий бакет на сітці (18:00) звіряється, розбіжність ловиться."""
-    on_grid = WINTER_OLD_GRID_H4 - H1_MS
+    """Контроль: сусідній зимовий бакет на сітці (19:00) звіряється, розбіжність ловиться."""
+    on_grid = WINTER_OLD_GRID_H4 + H1_MS
     minutes = _minutes(on_grid, 240)
     bar = _aggregate(on_grid, H4_MS, _minutes(on_grid, 240, bump=3.0))
     r = measure_root_consistency([bar], minutes, tf_s=14_400, rule=RULE)
