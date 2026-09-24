@@ -78,3 +78,21 @@ def test_guard_refuses_when_fds_of_a_process_cannot_be_read(tmp_path, monkeypatc
     monkeypatch.setattr(pio.os, "readlink", _readlink_from({proc.replace("\\", "/") + "/301/fd/7": PermissionError}))
     with pytest.raises(pio.WritersGuardRefused, match=r"fd_uninspectable_pids=\[301\]"):
         pio.writers_guard(str(root), proc_root=proc, prod_roots=[pio._posix_abspath(str(root))])
+
+
+def test_is_prod_data_root_matches_prod_dir_and_its_subdirs_only():
+    prod = ("/opt/smc-v3/data_v3",)
+    assert pio.is_prod_data_root("/opt/smc-v3/data_v3", prod_roots=prod)
+    assert pio.is_prod_data_root("/opt/smc-v3/data_v3/XAU_USD", prod_roots=prod)
+    assert not pio.is_prod_data_root("/opt/smc-v3/data_v3_copy", prod_roots=prod)
+    assert not pio.is_prod_data_root("/tmp/p5/w26/rh_final_0924/data_v3", prod_roots=prod)
+
+
+def test_guard_on_prod_refuses_while_another_repair_tool_runs(tmp_path):
+    """Вікно 24.09: паралельні потоки ремонту на проді неможливі — settle_prev іншого потоку (і його sudo-обгортка) для
+    рейки є живим записувачем. Тому window_data.sh іде строго послідовно; на копії рейка пропускається і цього не видно."""
+    root, _folder = _data_root(tmp_path)
+    _proc(tmp_path, 401, "sudo -n -u smc /opt/smc-v3/.venv/bin/python /tmp/p5/w26/tools/settle_prev.py --apply")
+    _proc(tmp_path, 402, "/opt/smc-v3/.venv/bin/python /tmp/p5/w26/tools/settle_prev.py --apply")
+    with pytest.raises(pio.WritersGuardRefused, match="live=2"):
+        pio.writers_guard(str(root), proc_root=str(tmp_path / "proc"), prod_roots=[pio._posix_abspath(str(root))])
