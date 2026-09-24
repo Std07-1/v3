@@ -1,4 +1,4 @@
-"""Сезонний якір торгового дня (ADR-0095): D1 відкривається о 17:00 America/New_York, H4 = D1/6.
+"""Сезонний якір торгового дня (ADR-0095): D1 відкривається о 17:00 America/New_York, H4 — від відкриття сесії 18:00 NY.
 
 Pure: без I/O і без tz-бази — арифметика правил DST США і ЄС з історією законів: США з 2007 — друга неділя березня …
 перша неділя листопада, 1987–2006 — перша неділя квітня … остання неділя жовтня; ЄС з 1996 — остання неділя березня …
@@ -11,6 +11,12 @@ UTC 30.03.1995 і 28.03.2006 та 21:00 03.04.2006 (забір 23.09.2026). Ра
 Сезон визначає календарна дата `d` відкриття торгового дня: літо (EDT, UTC−4), якщо `d` у літньому часі США свого
 року, — відкриття `d` 21:00 UTC; інакше зима (EST, UTC−5) — `d` 22:00 UTC. Момент належить торговому дню з
 найпізнішим відкриттям ≤ моменту; на вихідних переходу доби мають 23 і 25 год.
+
+H4 (ADR-0095 rev 24.09, рішення власника «H4 як у TV»): TV FX: ставить H4 від відкриття сесії після денної перерви —
+18:00 NY (22/02/06/10/14/18 UTC улітку, 23/03/07/… узимку), а не від 17:00 NY. Тому H4 рахується від «сесійного дня»
+— торгового дня, зсунутого на годину (`_htf_day_open_ms`); останній H4 доби, 18:00–22:00 UTC улітку, покриває денну
+перерву, як у TV. D1 лишається від 17:00 NY — ключ нативного D1 FXCM; вміст D1 TV той самий, бо 17:00–18:00 NY —
+перерва. Правило `utc_midnight` (Binance) — без зсуву.
 
 Тут же сезон розкладу груп календаря (§3.5, `calendar_season`): момент переходу DST США (`us`) або ЄС (`eu`).
 Уся арифметика DST платформи — в одному модулі.
@@ -42,6 +48,7 @@ _EPOCH = dt.date(1970, 1, 1)
 _NY_CLOSE_SUMMER_MS = 21 * 3_600_000
 _NY_CLOSE_WINTER_MS = 22 * 3_600_000
 _LONGEST_DAY_MS = 25 * 3_600_000  # доба осінніх вихідних переходу DST
+_H4_SESSION_SHIFT_MS = 3_600_000  # H4 від відкриття сесії: 18:00 NY = відкриття торгового дня 17:00 NY + 1 год (TV FX:)
 # Момент переходу DST у мс від опівночі UTC неділі переходу: (весна, осінь)
 _US_SWITCH_MS_OF_DAY = (7 * 3_600_000, 6 * 3_600_000)  # 02:00 за Нью-Йорком: 02:00 EST, 02:00 EDT
 _EU_SWITCH_MS_OF_DAY = (3_600_000, 3_600_000)  # ЄС перемикає о 01:00 UTC
@@ -74,12 +81,12 @@ def trading_day_open_ms(ts_ms: int, rule: str) -> int:
 
 
 def htf_anchor_offset_s(tf_s: int, ts_ms: int, rule: str) -> int:
-    """Якір бакета TF у секундах від опівночі UTC: 0 для TF < H4; для H4 і D1 — час відкриття торгового дня."""
+    """Якір бакета TF у секундах від опівночі UTC: 0 для TF < H4; D1 — відкриття торгового дня; H4 — відкриття сесії."""
     _require_rule(rule)
     if tf_s < H4_S:
         return 0
     _require_htf(tf_s)
-    return (trading_day_open_ms(ts_ms, rule) % _DAY_MS) // 1000
+    return (_htf_day_open_ms(ts_ms, tf_s, rule) % _DAY_MS) // 1000
 
 
 def htf_bucket_start_ms(ts_ms: int, tf_s: int, rule: str) -> int:
@@ -91,7 +98,7 @@ def htf_bucket_start_ms(ts_ms: int, tf_s: int, rule: str) -> int:
         tf_ms = tf_s * 1000
         return ts_ms - ts_ms % tf_ms
     _require_htf(tf_s)
-    open_ms = trading_day_open_ms(ts_ms, rule)
+    open_ms = _htf_day_open_ms(ts_ms, tf_s, rule)
     if tf_s == D1_S:
         return open_ms
     return open_ms + ((ts_ms - open_ms) // _H4_MS) * _H4_MS
@@ -100,15 +107,15 @@ def htf_bucket_start_ms(ts_ms: int, tf_s: int, rule: str) -> int:
 def htf_next_bucket_start_ms(bucket_start_ms: int, tf_s: int, rule: str) -> int:
     """Початок наступного бакета = кінець вікна агрегації бакета `bucket_start_ms` (не open + tf).
 
-    H4 не перетинає межу торгового дня: останній H4 доби на 23 год має 3 год, на 25 год — 1 год (обрубок). D1 —
-    до відкриття наступного торгового дня (23/24/25 год). M1..H1 — open + tf.
+    H4 не перетинає межу сесійного дня (18:00 NY): останній H4 доби на 23 год має 3 год, на 25 год — 1 год (обрубок;
+    доби переходу DST — вихідні). D1 — до відкриття наступного торгового дня (23/24/25 год). M1..H1 — open + tf.
     """
     _require_rule(rule)
     if tf_s < H4_S:
         return bucket_start_ms + tf_s * 1000
     _require_htf(tf_s)
-    day_open_ms = trading_day_open_ms(bucket_start_ms, rule)
-    next_day_open_ms = trading_day_open_ms(day_open_ms + _LONGEST_DAY_MS, rule)
+    day_open_ms = _htf_day_open_ms(bucket_start_ms, tf_s, rule)
+    next_day_open_ms = _htf_day_open_ms(day_open_ms + _LONGEST_DAY_MS, tf_s, rule)
     if tf_s == D1_S:
         return next_day_open_ms
     return min(bucket_start_ms + _H4_MS, next_day_open_ms)
@@ -182,6 +189,14 @@ def _summer_bounds_ms(year: int, season_rule: str) -> tuple[int, int]:
         (day - _EPOCH).days * _DAY_MS + ms_of_day for day, ms_of_day in zip(switch_days, switch_ms_of_day)
     )
     return spring_ms, autumn_ms
+
+
+def _htf_day_open_ms(ts_ms: int, tf_s: int, rule: str) -> int:
+    """Відкриття доби, від якої рахується бакет: D1 — торговий день (17:00 NY); H4 — сесійний день (18:00 NY =
+    торговий день, зсунутий на годину, як TV FX:); utc_midnight — без зсуву."""
+    if tf_s == D1_S or rule == RULE_UTC_MIDNIGHT:
+        return trading_day_open_ms(ts_ms, rule)
+    return trading_day_open_ms(ts_ms - _H4_SESSION_SHIFT_MS, rule) + _H4_SESSION_SHIFT_MS
 
 
 @functools.lru_cache(maxsize=8192)  # гарячий шлях: якір на кожен бар/тік, доба рахується раз
