@@ -5,7 +5,9 @@
     "XAG/USD",
     "NAS100",
     "SPX500",
-    "US30"
+    "US30",
+    "EUSTX50",
+    "GER30"
   ],
   "data_root": "./data_v3",
   "broker_python": ".venv37/Scripts/python.exe",
@@ -35,7 +37,7 @@
         "NAS100": 0.01,
         "SPX500": 0.01,
         "US30": 0.01,
-        "EUSTX50": 0.01
+        "EUSTX50": 0.01, "GER30": 0.01
       }
     }
   },
