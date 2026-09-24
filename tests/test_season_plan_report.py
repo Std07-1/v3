@@ -20,7 +20,7 @@ def test_report_lines_match_the_plan(tmp_path):
     assert set(table) == {("XAU_USD", tf) for tf in ("M3", "M5", "M15", "M30", "H1", "H4", "D1")}
     d1 = dict(zip(["REBUILD", "OLD", "NEW", "SAME", "REPL", "ADD", "OFFGRID"], map(int, table[("XAU_USD", "D1")][:7])))
     assert d1["OFFGRID"] == 1 and d1["OLD"] == d1["SAME"] + 1
-    assert any(line.startswith("SLICES XAU_USD H4 1[") and line.endswith("anchors=79200") for line in lines)
+    assert any(line.startswith("SLICES XAU_USD H4 1[") and line.endswith("anchors=82800") for line in lines)  # зимовий H4: 18:00 EST
     assert "D1_REKEY XAU_USD 1->1 ohlcv_equal=0/1 thin_session=0()" in lines
     assert any(line.startswith("NO_SOURCE XAU_USD H4 buckets=") and " kept_rows=0 " in line for line in lines), \
         "торговий понеділок без H1 — гучно"

@@ -39,7 +39,7 @@ TARGET_TFS = [
 def test_all_symbols_all_tfs_partial_calendar_pause(symbol, tf_tuple):
     target_tf_s, source_tf_s, bars_needed = tf_tuple
     
-    bucket_open_ms = 1_727_989_200_000  # 2024-10-03 21:00 UTC: на сезонній сітці H4 (літо, ADR-0095) і всіх TF < H4
+    bucket_open_ms = 1_727_992_800_000  # 2024-10-03 22:00 UTC: на сезонній сітці H4 (літо, 18:00 NY; ADR-0095 rev) і всіх TF < H4
     source_tf_ms = source_tf_s * 1000
     
     buf = GenericBuffer(tf_s=source_tf_s, max_keep=100)

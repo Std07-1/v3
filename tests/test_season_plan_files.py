@@ -155,8 +155,8 @@ def test_off_grid_row_in_a_bucket_without_source_is_removed_not_kept(tmp_path):
     """Бакет без джерела (діра M1): рядок на сітці лишається (KEPT_NO_SOURCE), а рядок поза сіткою — прибирається:
     він дефект за визначенням, писар SSOT його відкинув би, і гейт V1 зупинив би прогін (репетиція 23.09: XAU/XAG
     H4 26.12/02.01 на легасі-сітці 03:00)."""
-    hole = ms(2026, 3, 10, 10)
-    bucket = ms(2026, 3, 10, 9)  # H4 літньої сітки 09:00–13:00 — повністю без M1
+    hole = ms(2026, 3, 10, 11)  # поза сіткою 22/02/06/10/14/18
+    bucket = ms(2026, 3, 10, 10)  # H4 літньої сітки 10:00–14:00 — повністю без M1
     write_m1(tmp_path, FIRST, LAST, skip=set(range(bucket, bucket + H4_S * 1000, 60_000)))
     run_rebuild_tool(tmp_path, FIRST, LAST + 60_000)
     h4 = tmp_path / (TF_DIR % H4_S) / "part-20260310.jsonl"

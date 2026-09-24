@@ -38,19 +38,21 @@ def test_planned_bars_equal_rebuild_tool_across_dst_weekend(tmp_path, first_ms, 
     assert all(htf_bucket_start_ms(k, H4_S, RULE_NY_CLOSE_US_DST) == k for k in planned[H4_S])
 
 
-def test_fall_dst_weekend_has_no_stub_h4_and_first_winter_h4_is_2200(tmp_path):
+def test_fall_dst_weekend_has_no_stub_h4_and_first_winter_h4_is_2300(tmp_path):
+    """Сесійна доба сб 31.10 22:00 → нд 01.11 23:00 (25 год): обрубок нд 22:00 без торгів; перший зимовий H4 — 23:00."""
     write_m1(tmp_path, ms(2026, 10, 29, 22), ms(2026, 11, 3, 9, 40))
     _rebuild, _tail, planned = plan_full(tmp_path)
     h4 = {k for k, bar in planned[H4_S].items() if bar is not None}
-    assert ms(2026, 11, 1, 21) not in h4 and ms(2026, 11, 1, 22) in h4 and ms(2026, 11, 2, 2) in h4
-    assert ms(2026, 10, 30, 17) in h4  # останній літній H4 п'ятниці
+    assert ms(2026, 11, 1, 22) not in h4 and ms(2026, 11, 1, 23) in h4 and ms(2026, 11, 2, 3) in h4
+    assert ms(2026, 10, 30, 18) in h4  # останній літній H4 п'ятниці
 
 
 def test_winter_h4_1800_contains_h1_2100(tmp_path):
-    """Зимою 21:00–21:59 торгова (перерва 22:00–23:00): H4 18:00 закривається close M1 21:59 (S6a, MIGRATION §4.1)."""
+    """Зимою 21:00–21:59 торгова (перерва 22:00–23:00): H4 19:00 (18:00 EST) закривається close M1 21:59 (S6a,
+    MIGRATION §4.1)."""
     closes = write_m1(tmp_path, ms(2025, 11, 3, 23), ms(2025, 11, 5, 21, 59))
     _rebuild, _tail, planned = plan_full(tmp_path)
-    h4 = planned[H4_S][ms(2025, 11, 4, 18)]
+    h4 = planned[H4_S][ms(2025, 11, 4, 19)]
     assert h4.c == closes[ms(2025, 11, 4, 21, 59)]
     assert not h4.extensions.get("partial")
 

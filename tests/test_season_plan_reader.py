@@ -52,4 +52,4 @@ def test_source_end_is_one_step_past_the_tail_and_never_past_the_window():
     assert ctx((0, OPEN_MS - 1), m1_tail=OPEN_MS).source_end_ms == OPEN_MS - 1
     assert ctx(sp.ALL_TIME, h1_tail=OPEN_MS).source_end_ms == OPEN_MS + H1_MS
     assert ctx((OPEN_MS, OPEN_MS + H1_MS)).source_end_ms == OPEN_MS, "без джерела не фіналізується нічого"
-    assert ctx(sp.ALL_TIME).bucket_of(OPEN_MS + 5, 14400) == 1_773_136_800_000 - 3_600_000 * 1  # сітка 21/01/05/09
+    assert ctx(sp.ALL_TIME).bucket_of(OPEN_MS + 5, 14400) == 1_773_136_800_000  # сітка 22/02/06/10 (18:00 NY)

@@ -35,7 +35,7 @@ def test_all_scopes_plan_is_json_serialisable_and_second_plan_is_empty(tmp_path)
     assert symbol_plan.rekey_results() == [{"old_open_ms": ms(2026, 3, 4, 23), "new_open_ms": ms(2026, 3, 4, 22),
                                             "src": "derived", "ohlcv_equal": False, "thin_session": False}]
     h4_new = {k for k, bar in symbol_plan.planned[H4_S].items() if bar is not None}
-    assert ms(2026, 2, 23, 22) in h4_new and ms(2026, 3, 4, 22) in h4_new, "H4 до M1 з H1 і H4 епохи M1"
+    assert ms(2026, 2, 23, 23) in h4_new and ms(2026, 3, 4, 23) in h4_new, "H4 до M1 з H1 і H4 епохи M1 (зима 23/03/…)"
     assert symbol_plan.rows[D1_S][sp.ROW_DROPPED] + symbol_plan.rows[D1_S][sp.ROW_OFF_GRID] == 1
     assert {Path(f.path).parent.name for f in plan.files} == {"tf_14400", "tf_86400"}, "M3..H1 уже f(M1)"
     apply(plan)
@@ -47,7 +47,7 @@ def test_changed_m1_mapping_is_by_symbol_directory_and_absent_symbol_plans_nothi
     dataset(tmp_path)
     changed = ms(2026, 3, 5, 14, 37)
     plan = sp.build_plan(CFG, str(tmp_path), ["XAU/USD"], ["derived_from_m1"], changed_m1={"XAU_USD": [changed]})
-    assert plan.changed_m1 and set(plan.symbols[0].rebuild[H4_S]) == {ms(2026, 3, 5, 14)}
+    assert plan.changed_m1 and set(plan.symbols[0].rebuild[H4_S]) == {ms(2026, 3, 5, 11)}  # зима: 11:00–15:00
     empty = sp.build_plan(CFG, str(tmp_path), ["XAU/USD"], ["derived_from_m1"], changed_m1={"XAG_USD": [changed]})
     assert empty.symbols[0].rebuild == {} and empty.files == []
 
@@ -64,9 +64,9 @@ def test_refusals_happen_before_any_planning(tmp_path):
 
 def test_dropped_buckets_are_split_by_trading_minutes(tmp_path):
     dataset(tmp_path)
-    append_rows(tmp_path, H4_S, [history_row(H4_S, ms(2026, 2, 28, 2), 1.0)])  # субота: бакет без жодної торгової хвилини
+    append_rows(tmp_path, H4_S, [history_row(H4_S, ms(2026, 2, 28, 3), 1.0)])  # субота: бакет без жодної торгової хвилини
     plan = sp.build_plan(CFG, str(tmp_path), ["XAU/USD"], ["h4_from_h1"])
     no_trading, no_source = plan.symbols[0].dropped(H4_S)
-    assert ms(2026, 2, 28, 2) in no_trading
-    assert ms(2026, 3, 2, 10) in no_source, "торговий понеділок без H1 на диску — гучно, не мовчки"
-    assert ms(2026, 3, 3, 22) not in no_source, "бакет з першою M1 будується з H1 епохи M1"
+    assert ms(2026, 2, 28, 3) in no_trading
+    assert ms(2026, 3, 2, 11) in no_source, "торговий понеділок без H1 на диску — гучно, не мовчки"
+    assert ms(2026, 3, 3, 23) not in no_source, "бакет з першою M1 будується з H1 епохи M1"

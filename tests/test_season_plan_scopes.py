@@ -67,17 +67,18 @@ def test_h4_before_m1_from_h1_on_summer_grid_without_h1_in_the_break(tmp_path):
           if any(CAL.is_trading_minute(t) for t in range(k, k + H1_MS, 60_000))]
     h1.append(bar(3600, ms(2024, 6, 18, 21), 9999.0, v=2.0))  # тіки брокера в перерві 21:00–22:00 (MIGRATION §4.3)
     write_rows(tmp_path, 3600, h1)
-    old_grid = [bar(H4_S, k, 2300.0) for k in range(ms(2024, 6, 16, 22), ms(2024, 6, 21, 22), 4 * H1_MS)]
-    write_rows(tmp_path, H4_S, old_grid + [bar(H4_S, ms(2024, 6, 22, 2), 1.0)])  # стара сітка 22/02/.. і субота
+    old_grid = [bar(H4_S, k, 2300.0) for k in range(ms(2024, 6, 16, 23), ms(2024, 6, 21, 23), 4 * H1_MS)]
+    write_rows(tmp_path, H4_S, old_grid + [bar(H4_S, ms(2024, 6, 22, 3), 1.0)])  # стара сітка 23/03/.. (19:00 NY) і субота
     write_m1(tmp_path, ms(2024, 6, 23, 22), ms(2024, 6, 24, 2, 59))
 
     rebuild, planned, files, rows, _extra = plan(tmp_path, ["h4_from_h1"])
     new_h4 = {k for k, b in planned[H4_S].items() if b is not None}
-    assert all((k // H1_MS) % 4 == 1 for k in new_h4), "літня сітка 21/01/05/09/13/17"
-    assert min(new_h4) == ms(2024, 6, 16, 21) and max(new_h4) == ms(2024, 6, 21, 17)
-    assert ms(2024, 6, 23, 21) in rebuild[H4_S], "бакет з першою M1 — ще з H1"
-    tue = planned[H4_S][ms(2024, 6, 18, 21)]
-    assert tue.o == next(b["o"] for b in h1 if b["open_time_ms"] == ms(2024, 6, 18, 22)), "H1 21:00 у перерві — не в бакеті"
+    assert all((k // H1_MS) % 4 == 2 for k in new_h4), "літня сітка 22/02/06/10/14/18 (18:00 NY, як TV FX:)"
+    assert min(new_h4) == ms(2024, 6, 16, 22) and max(new_h4) == ms(2024, 6, 21, 18)
+    # сітка 18:00 NY: бакет нд 22:00 починається рівно з першої M1 — це епоха M1 (derived_from_m1), не H1
+    assert ms(2024, 6, 23, 22) not in rebuild[H4_S]
+    tue = planned[H4_S][ms(2024, 6, 18, 18)]
+    assert tue.c == next(b["c"] for b in h1 if b["open_time_ms"] == ms(2024, 6, 18, 20)), "H1 21:00 у перерві — не в бакеті"
     assert rows[H4_S][sp.ROW_OFF_GRID] == len(old_grid) and rows[H4_S][sp.ROW_DROPPED] == 1
     assert rows[H4_S][sp.ROW_ADDED] == len(new_h4) and {f.tf_s for f in files} == {H4_S}
     apply(files)
@@ -119,13 +120,13 @@ def test_winter_2100_hour_holes_are_built_and_h4_above_them_is_recomputed(tmp_pa
                 and not (tf_s == 180 and json.loads(line)["open_time_ms"] == non_seasonal)]
         path.write_text("\n".join(keep) + "\n", encoding="utf-8")
     h4 = tmp_path / "XAU_USD" / "tf_14400" / "part-20260305.jsonl"
-    h4.write_text("\n".join(json.dumps(dict(json.loads(line), c=1.0)) if json.loads(line)["open_time_ms"] == ms(2026, 3, 5, 18)
+    h4.write_text("\n".join(json.dumps(dict(json.loads(line), c=1.0)) if json.loads(line)["open_time_ms"] == ms(2026, 3, 5, 19)
                             else line for line in h4.read_text(encoding="utf-8").splitlines()) + "\n", encoding="utf-8")
 
     rebuild, _planned, files, rows, extra = plan(tmp_path, ["holes"])
     assert {tf_s: len(b) for tf_s, b in extra["holes"].items()} == {180: 20, 300: 12, 900: 4, 1800: 2, 3600: 1}
     assert extra["out_of_scope"] == {180: [non_seasonal]}, "10:00 торгова в обох сезонах — не сезонна діра"
-    assert rebuild[H4_S] == {ms(2026, 3, 5, 18)} and rows[H4_S][sp.ROW_REPLACED] == 1
+    assert rebuild[H4_S] == {ms(2026, 3, 5, 19)} and rows[H4_S][sp.ROW_REPLACED] == 1  # зима: H1 21:00 — у H4 19:00
     assert D1_S not in rebuild, "D1 будується з M1, дір у M3..H1 не бачить"
     assert rows[180][sp.ROW_ADDED] == 20 and rows[3600][sp.ROW_ADDED] == 1
     apply(files)
