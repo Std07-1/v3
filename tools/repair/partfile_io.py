@@ -278,6 +278,13 @@ class WritersGuardRefused(RuntimeError):
     """Записувачі SSOT не доведено зупиненими — заміна part-файлів заборонена."""
 
 
+def is_prod_data_root(data_root: str, *, prod_roots: Sequence[str] = PROD_DATA_ROOTS) -> bool:
+    """Чи `data_root` — прод-каталог SSOT або його підкаталог. Одна перевірка для рейки записувачів і заборон
+    інструментів на проді (settle: рядок без провенансу); шлях — у POSIX-формі без літери диска, як на Linux."""
+    root = _posix_abspath(data_root)
+    return any(root == prod or root.startswith(prod + "/") for prod in prod_roots)
+
+
 def writers_guard(data_root: str, *, proc_root: str = "/proc", prod_roots: Sequence[str] = PROD_DATA_ROOTS) -> None:
     """Прод-каталог: відмова, якщо /proc показує живого записувача (argv) або FD part-файла, відкритий на запис.
 
@@ -285,8 +292,7 @@ def writers_guard(data_root: str, *, proc_root: str = "/proc", prod_roots: Seque
     пишуть прод, а не копію. На проді без /proc чи з процесом, чиї FD не прочитати (запуск не від root), — відмова:
     доказу немає.
     """
-    root = _posix_abspath(data_root)
-    if not any(root == prod or root.startswith(prod + "/") for prod in prod_roots):
+    if not is_prod_data_root(data_root, prod_roots=prod_roots):
         log.warning("WRITERS_GUARD_SKIPPED data_root=%s reason=not_prod_path — живі записувачі пишуть прод", data_root)
         return
     if not os.path.isdir(proc_root):
