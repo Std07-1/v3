@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, DefaultDict, Dict, List, Optional, Tuple
 
 from core.model.bars import CandleBar
+from core.model.candle_chain import is_display_hidden
 from tools.repair.partfile_io import PartFile
 from tools.repair.settle_gate import IsTrading, is_week_close_minute, utc_label
 
@@ -55,8 +56,8 @@ class KeyTarget:
 
 
 def is_visible(ext: Any) -> bool:
-    """Бар, який показує display: без calendar_pause_flat (ADR-0101 §3.1 — ланцюг по видимих барах)."""
-    return not (isinstance(ext, dict) and ext.get("calendar_pause_flat"))
+    """Бар, який показує display (ADR-0101 §3.1 — ланцюг по видимих барах); критерій — лише `is_display_hidden`."""
+    return not is_display_hidden(ext)
 
 
 def vals_of(obj: Dict[str, Any]) -> List[float]:
