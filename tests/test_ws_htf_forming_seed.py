@@ -2,8 +2,8 @@
 
 Три місця, де ws_server сам рахує бакет формуючої свічки, — сід tick-relay, fallback relay і
 `/api/context` h4_forming — беруть `htf_bucket_start_ms` за правилом символу з резолвера `build_app`,
-а не статичний `resolve_anchor_offset_ms`: улітку H4 = 21/01/05/.., після 01.11 — 22/02/06/..,
-обрубок DST-доби (Нд 01.11 21:00) — окремий бакет. Помилка relay — WARNING із троттлінгом.
+а не статичний `resolve_anchor_offset_ms`: улітку H4 = 22/02/06/.. (18:00 NY, як TV FX:), після 01.11 — 23/03/07/..,
+обрубок DST-доби (Нд 01.11 22:00) — окремий бакет. Помилка relay — WARNING із троттлінгом.
 """
 
 from __future__ import annotations
@@ -77,21 +77,21 @@ def _h4_open_hours(app: web.Application, day_start_ms: int) -> set[int]:
 
 # (now/tick, очікуване відкриття H4): літо; обрубок осінньої DST-доби; перша зимова доба
 _SCENARIOS = [
-    pytest.param(_utc_ms(2026, 7, 1, 23, 30), _utc_ms(2026, 7, 1, 21), id="summer_2100"),
-    pytest.param(_utc_ms(2026, 11, 1, 21, 30), _utc_ms(2026, 11, 1, 21), id="fall_stub_sun_2100"),
-    pytest.param(_utc_ms(2026, 11, 2, 3, 30), _utc_ms(2026, 11, 2, 2), id="winter_0200"),
+    pytest.param(_utc_ms(2026, 7, 1, 23, 30), _utc_ms(2026, 7, 1, 22), id="summer_2200"),
+    pytest.param(_utc_ms(2026, 11, 1, 22, 30), _utc_ms(2026, 11, 1, 22), id="fall_stub_sun_2200"),
+    pytest.param(_utc_ms(2026, 11, 2, 3, 30), _utc_ms(2026, 11, 2, 3), id="winter_0300"),
 ]
 
 
 # ── Бакет на сезонній сітці ────────────────────────────────────────────
 
 
-def test_htf_bucket_open_ms_h4_summer_grid_21_01_05():
-    assert _h4_open_hours(_app_with_resolver(), _utc_ms(2026, 7, 1)) == {21, 1, 5, 9, 13, 17}
+def test_htf_bucket_open_ms_h4_summer_grid_22_02_06():
+    assert _h4_open_hours(_app_with_resolver(), _utc_ms(2026, 7, 1)) == {22, 2, 6, 10, 14, 18}
 
 
-def test_htf_bucket_open_ms_h4_after_2026_11_01_winter_grid_22_02_06():
-    assert _h4_open_hours(_app_with_resolver(), _utc_ms(2026, 11, 3)) == {22, 2, 6, 10, 14, 18}
+def test_htf_bucket_open_ms_h4_after_2026_11_01_winter_grid_23_03_07():
+    assert _h4_open_hours(_app_with_resolver(), _utc_ms(2026, 11, 3)) == {23, 3, 7, 11, 15, 19}
 
 
 def test_htf_bucket_open_ms_without_resolver_raises():
@@ -326,15 +326,15 @@ async def test_tick_relay_seed_inherits_ohl_of_preview_bar_on_season_grid(caplog
 
 @pytest.mark.asyncio
 async def test_tick_relay_seed_ignores_preview_bar_on_legacy_grid(caplog):
-    """Літо, тік 23:30: бакет сітки 21:00. preview-бар старої сітки 22:00 (ключ до TTL) relay не засіває — гучний NO_SEED."""
+    """Літо, тік 23:30: бакет сітки 22:00. preview-бар старої сітки 21:00 (ключ до TTL) relay не засіває — гучний NO_SEED."""
     with caplog.at_level(logging.INFO, logger=ws_server._log.name):
         with tempfile.TemporaryDirectory() as tmp:
             deltas = await _relay_frames(
-                tmp, _utc_ms(2026, 7, 1, 23, 30), preview_curr_open_ms=_utc_ms(2026, 7, 1, 22)
+                tmp, _utc_ms(2026, 7, 1, 23, 30), preview_curr_open_ms=_utc_ms(2026, 7, 1, 21)
             )
     assert deltas, "relay-кадр H4 не надійшов"
     candle = deltas[0]["candles"][0]
-    assert candle["t_ms"] == _utc_ms(2026, 7, 1, 21)
+    assert candle["t_ms"] == _utc_ms(2026, 7, 1, 22)
     assert (candle["o"], candle["h"], candle["l"]) == (TICK_MID, TICK_MID, TICK_MID)
     assert _seed_log_events(caplog) == ["D1_FORMING_NO_SEED"]
 

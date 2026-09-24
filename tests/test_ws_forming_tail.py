@@ -122,10 +122,10 @@ def test_select_forming_candle_nan_price_returns_none():
 # ── H4/D1: кінець бакета з сезонної сітки (ADR-0095 S9a) ───────────────
 
 _HOUR_MS = 3_600_000
-# Нд 01.11.2026: торговий день Сб 31.10 21:00 (літо) триває 25 год до Нд 22:00 (зима);
-# його останній H4 — обрубок Нд 21:00–22:00
-_FALL_STUB_H4_MS = int(dt.datetime(2026, 11, 1, 21, tzinfo=dt.timezone.utc).timestamp() * 1000)
-_FALL_25H_DAY_OPEN_MS = _FALL_STUB_H4_MS - 24 * _HOUR_MS
+# Нд 01.11.2026: торговий день (D1) Сб 31.10 21:00 (літо) триває 25 год до Нд 22:00 (зима); сесійний день H4
+# (18:00 NY) Сб 22:00 → Нд 23:00 — його останній H4 — обрубок Нд 22:00–23:00
+_FALL_STUB_H4_MS = int(dt.datetime(2026, 11, 1, 22, tzinfo=dt.timezone.utc).timestamp() * 1000)
+_FALL_25H_DAY_OPEN_MS = int(dt.datetime(2026, 10, 31, 21, tzinfo=dt.timezone.utc).timestamp() * 1000)
 
 
 def test_select_forming_candle_h4_fall_stub_is_forming_inside_its_hour():
@@ -137,7 +137,7 @@ def test_select_forming_candle_h4_fall_stub_is_forming_inside_its_hour():
 
 
 def test_select_forming_candle_h4_fall_stub_stale_after_winter_bucket_opens():
-    """Нд 22:30: обрубок 21:00 закрився о 22:00 — open + 4 год тримав би його формуючою до 01:00."""
+    """Нд 23:30: обрубок 22:00 закрився о 23:00 — open + 4 год тримав би його формуючою до 02:00."""
     now_ms = _FALL_STUB_H4_MS + 90 * 60_000
     assert (
         select_forming_candle(
@@ -149,7 +149,7 @@ def test_select_forming_candle_h4_fall_stub_stale_after_winter_bucket_opens():
 
 def test_select_forming_candle_d1_25h_day_is_forming_in_its_last_hour():
     """Нд 21:30: D1 Сб 31.10 21:00 триває до 22:00 — open + 24 год відкинув би його як прострочений."""
-    now_ms = _FALL_STUB_H4_MS + _HOUR_MS // 2
+    now_ms = _FALL_25H_DAY_OPEN_MS + 24 * _HOUR_MS + _HOUR_MS // 2
     candle = select_forming_candle(
         [], [_lwc(_FALL_25H_DAY_OPEN_MS)], tf_s=D1_S, now_ms=now_ms, anchor_rule=RULE_NY_CLOSE_US_DST
     )
@@ -166,9 +166,9 @@ def _utc_ms(*args: int) -> int:
     return int(dt.datetime(*args, tzinfo=dt.timezone.utc).timestamp() * 1000)
 
 
-# Ср 23.09.2026 (літо): сітка H4 = 21/01/05/09/13/17; ключ старого воркера — 22/02/../18, D1 — 22:00
+# Ср 23.09.2026 (літо): сітка H4 = 22/02/06/10/14/18 (18:00 NY, як TV FX:); ключ сітки 17:00 NY — 21/01/../17, D1 — 22:00
 _OFF_GRID_CASES = [
-    pytest.param(H4_S, _utc_ms(2026, 9, 23, 13), _utc_ms(2026, 9, 23, 18), _utc_ms(2026, 9, 23, 19), id="h4_18_00"),
+    pytest.param(H4_S, _utc_ms(2026, 9, 23, 14), _utc_ms(2026, 9, 23, 17), _utc_ms(2026, 9, 23, 19), id="h4_17_00"),
     pytest.param(D1_S, _utc_ms(2026, 9, 21, 21), _utc_ms(2026, 9, 22, 22), _utc_ms(2026, 9, 22, 23), id="d1_22_00"),
 ]
 
@@ -188,15 +188,15 @@ def test_select_forming_candle_htf_off_season_grid_preview_returns_none_and_warn
 
 
 def test_select_forming_candle_h4_on_season_grid_after_final_is_returned():
-    """Контроль до off-grid: той самий день, preview на бакеті сітки 17:00 після фіналу 13:00 — формуюча."""
+    """Контроль до off-grid: той самий день, preview на бакеті сітки 18:00 після фіналу 14:00 — формуюча."""
     candle = select_forming_candle(
-        [_final(_utc_ms(2026, 9, 23, 13))],
-        [_lwc(_utc_ms(2026, 9, 23, 17))],
+        [_final(_utc_ms(2026, 9, 23, 14))],
+        [_lwc(_utc_ms(2026, 9, 23, 18))],
         tf_s=H4_S,
         now_ms=_utc_ms(2026, 9, 23, 19),
         anchor_rule=RULE_NY_CLOSE_US_DST,
     )
-    assert candle is not None and candle["t_ms"] == _utc_ms(2026, 9, 23, 17)
+    assert candle is not None and candle["t_ms"] == _utc_ms(2026, 9, 23, 18)
 
 
 # ── Impure: реальний UDS reader над RedisLayer ─────────────────────────
@@ -415,8 +415,8 @@ class _FrozenClock:
 @pytest.mark.parametrize(
     "h4_open_ms,now_ms",
     [
-        pytest.param(_utc_ms(2026, 7, 1, 21), _utc_ms(2026, 7, 1, 23, 30), id="summer_2100"),
-        pytest.param(_FALL_STUB_H4_MS, _FALL_STUB_H4_MS + _HOUR_MS // 2, id="fall_stub_sun_2100"),
+        pytest.param(_utc_ms(2026, 7, 1, 22), _utc_ms(2026, 7, 1, 23, 30), id="summer_2200"),
+        pytest.param(_FALL_STUB_H4_MS, _FALL_STUB_H4_MS + _HOUR_MS // 2, id="fall_stub_sun_2200"),
     ],
 )
 async def test_send_full_frame_h4_forming_on_season_grid_via_app_resolver(monkeypatch, h4_open_ms, now_ms):

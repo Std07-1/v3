@@ -7,8 +7,9 @@
    якою `load_system_config` відмовляє старту — CONFIG_LEGACY_ANCHOR_KEY).
 3. d1_in_derive_chain — (86400, 1440) є у DERIVE_CHAIN[60].
 4. d1_in_derived_tfs_s — 86400 є у config `derived_tfs_s`.
-5. season_anchor_samples — зразки літа і зими: `ny_close_us_dst` 75600 / 79200, `utc_midnight` 0; H4 і D1 на одній
-   сітці (відкриття D1 — бакет H4).
+5. season_anchor_samples — зразки літа і зими: `ny_close_us_dst` D1 75600 / 79200 (17:00 NY), H4 79200 / 82800
+   (18:00 NY — відкриття сесії, як TV FX:, ADR-0095 rev 24.09); `utc_midnight` 0. Відкриття сесії (D1 + зсув H4) —
+   бакет H4.
 6. disk_data_anchor — кожен рядок останнього part-файлу tf_86400 і tf_14400 кожного символу стоїть на сезонній
    сітці (`assert_on_season_grid`). Каталогу даних нема (CI) — пропуск.
 """
@@ -35,14 +36,15 @@ CheckResult = Tuple[bool, str, Dict[str, Any]]
 
 _DISK_TFS_S = (D1_S, H4_S)
 _SAMPLES_IN_DETAILS = 3
-# 17:00 America/New_York (ADR-0095 §3.1) = 21:00 UTC улітку (EDT) і 22:00 UTC узимку (EST); Binance — опівніч UTC.
+# D1: 17:00 America/New_York (ADR-0095 §3.1) = 21:00 UTC улітку (EDT) і 22:00 UTC узимку (EST); H4: 18:00 NY —
+# відкриття сесії після денної перерви, як TV FX: (ADR-0095 rev 24.09); Binance — опівніч UTC.
 _SUMMER_SAMPLE_MS = 1_784_116_800_000  # 2026-07-15T12:00Z
 _WINTER_SAMPLE_MS = 1_768_478_400_000  # 2026-01-15T12:00Z
-_SEASON_SAMPLES = (
-    (RULE_NY_CLOSE_US_DST, "summer", _SUMMER_SAMPLE_MS, 75_600),
-    (RULE_NY_CLOSE_US_DST, "winter", _WINTER_SAMPLE_MS, 79_200),
-    (RULE_UTC_MIDNIGHT, "summer", _SUMMER_SAMPLE_MS, 0),
-    (RULE_UTC_MIDNIGHT, "winter", _WINTER_SAMPLE_MS, 0),
+_SEASON_SAMPLES = (  # (правило, сезон, момент, якір D1 с, якір H4 с)
+    (RULE_NY_CLOSE_US_DST, "summer", _SUMMER_SAMPLE_MS, 75_600, 79_200),
+    (RULE_NY_CLOSE_US_DST, "winter", _WINTER_SAMPLE_MS, 79_200, 82_800),
+    (RULE_UTC_MIDNIGHT, "summer", _SUMMER_SAMPLE_MS, 0, 0),
+    (RULE_UTC_MIDNIGHT, "winter", _WINTER_SAMPLE_MS, 0, 0),
 )
 
 
@@ -114,19 +116,19 @@ def _check_derived_tfs_s(root: str, cfg: Dict[str, Any]) -> CheckResult:
 
 def _check_season_samples(root: str, cfg: Dict[str, Any]) -> CheckResult:
     mismatches: List[str] = []
-    for rule, season, ts_ms, expected_s in _SEASON_SAMPLES:
+    for rule, season, ts_ms, expected_d1_s, expected_h4_s in _SEASON_SAMPLES:
         d1_s = htf_anchor_offset_s(D1_S, ts_ms, rule)
         h4_s = htf_anchor_offset_s(H4_S, ts_ms, rule)
-        d1_open_ms = htf_bucket_start_ms(ts_ms, D1_S, rule)
-        d1_on_h4_grid = htf_bucket_start_ms(d1_open_ms, H4_S, rule) == d1_open_ms
-        if (d1_s, h4_s, d1_on_h4_grid) != (expected_s, expected_s, True):
+        session_open_ms = htf_bucket_start_ms(ts_ms, D1_S, rule) + (expected_h4_s - expected_d1_s) * 1000
+        session_on_h4_grid = htf_bucket_start_ms(session_open_ms, H4_S, rule) == session_open_ms
+        if (d1_s, h4_s, session_on_h4_grid) != (expected_d1_s, expected_h4_s, True):
             mismatches.append(
-                "%s/%s D1=%d H4=%d очікувано %d, відкриття D1 на сітці H4=%s"
-                % (rule, season, d1_s, h4_s, expected_s, d1_on_h4_grid)
+                "%s/%s D1=%d H4=%d очікувано %d/%d, відкриття сесії на сітці H4=%s"
+                % (rule, season, d1_s, h4_s, expected_d1_s, expected_h4_s, session_on_h4_grid)
             )
     if mismatches:
         return False, "; ".join(mismatches), {}
-    return True, "літо 75600 / зима 79200, utc_midnight 0; H4 і D1 на одній сітці", {}
+    return True, "D1 літо 75600 / зима 79200, H4 79200 / 82800 (відкриття сесії), utc_midnight 0", {}
 
 
 def _latest_part_file(tf_dir: str) -> Optional[str]:

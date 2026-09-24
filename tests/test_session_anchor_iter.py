@@ -44,14 +44,15 @@ def test_next_bucket_is_adjacent_and_on_grid_2024_2027(rule, tf_s):
 
 
 def test_next_bucket_spring_2026_03_08_h4_stub_3h():
-    """Субота-доба 07.03 22:00 → 08.03 21:00 має 23 год: останній H4 (нд 18:00) — обрубок на 3 год."""
-    assert htf_next_bucket_start_ms(_ms(2026, 3, 8, 18), H4_S, FXCM) == _ms(2026, 3, 8, 21)
+    """Сесійна субота-доба 07.03 23:00 → 08.03 22:00 має 23 год: останній H4 (нд 19:00) — обрубок на 3 год."""
+    assert htf_next_bucket_start_ms(_ms(2026, 3, 8, 19), H4_S, FXCM) == _ms(2026, 3, 8, 22)
 
 
 def test_next_bucket_fall_2026_11_01_h4_stub_1h():
-    """Субота-доба 31.10 21:00 → 01.11 22:00 має 25 год: H4 нд 21:00 — обрубок на 1 год, не поглинає наступну добу."""
-    assert htf_next_bucket_start_ms(_ms(2026, 11, 1, 21), H4_S, FXCM) == _ms(2026, 11, 1, 22)
-    assert htf_bucket_start_ms(_ms(2026, 11, 1, 21, 30), H4_S, FXCM) == _ms(2026, 11, 1, 21)
+    """Сесійна субота-доба 31.10 22:00 → 01.11 23:00 має 25 год: H4 нд 22:00 — обрубок на 1 год, не поглинає
+    наступну добу."""
+    assert htf_next_bucket_start_ms(_ms(2026, 11, 1, 22), H4_S, FXCM) == _ms(2026, 11, 1, 23)
+    assert htf_bucket_start_ms(_ms(2026, 11, 1, 22, 30), H4_S, FXCM) == _ms(2026, 11, 1, 22)
 
 
 def test_next_bucket_d1_23h_and_25h():
@@ -65,17 +66,18 @@ def test_next_bucket_below_h4_is_open_plus_tf():
 
 
 def test_assert_on_season_grid_winter_grid_in_summer_raises():
-    """H4 22:00 улітку — це зимова сітка: відмова з очікуваним відкриттям 21:00, а не тихий прохід через alt."""
+    """H4 23:00 улітку — це зимова сітка: відмова з очікуваним відкриттям 22:00, а не тихий прохід через alt."""
     with pytest.raises(OffSeasonGridError) as err:
-        assert_on_season_grid(_ms(2026, 7, 1, 22), H4_S, FXCM)
-    assert err.value.expected_open_ms == _ms(2026, 7, 1, 21)
+        assert_on_season_grid(_ms(2026, 7, 1, 23), H4_S, FXCM)
+    assert err.value.expected_open_ms == _ms(2026, 7, 1, 22)
     assert "bar_off_season_grid" in str(err.value) and "season=summer" in str(err.value)
 
 
 def test_assert_on_season_grid_accepts_both_seasons():
-    assert_on_season_grid(_ms(2026, 7, 1, 21), H4_S, FXCM)
-    assert_on_season_grid(_ms(2026, 1, 5, 22), H4_S, FXCM)
-    assert_on_season_grid(_ms(2026, 1, 5, 2), H4_S, FXCM)
+    assert_on_season_grid(_ms(2026, 7, 1, 22), H4_S, FXCM)
+    assert_on_season_grid(_ms(2026, 1, 5, 23), H4_S, FXCM)
+    assert_on_season_grid(_ms(2026, 1, 5, 3), H4_S, FXCM)
+    assert_on_season_grid(_ms(2026, 1, 5, 22), D1_S, FXCM)
     assert_on_season_grid(_ms(2026, 1, 5), D1_S, RULE_UTC_MIDNIGHT)
 
 

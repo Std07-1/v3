@@ -152,13 +152,13 @@ class TestHTFRunningAccumulator:
     @pytest.mark.parametrize(
         "m1_ms, expected_h4_ms",
         [
-            (_ms(2025, 3, 17, 1), _ms(2025, 3, 17, 1)),  # літо: сітка 21/01/05/..
-            (_ms(2026, 1, 6, 1), _ms(2026, 1, 5, 22)),  # зима: сітка 22/02/06/..
+            (_ms(2025, 3, 17, 1), _ms(2025, 3, 16, 22)),  # літо: сітка 22/02/06/.. (18:00 EDT)
+            (_ms(2026, 1, 6, 1), _ms(2026, 1, 5, 23)),  # зима: сітка 23/03/07/.. (18:00 EST)
         ],
         ids=["summer", "winter"],
     )
     def test_h4_on_season_grid(self, m1_ms, expected_h4_ms):
-        """H4 бакет — сезонна сітка 17:00 NY, а не статичний якір 82800 (23:00 UTC)."""
+        """H4 бакет — сезонна сітка від відкриття сесії 18:00 NY (як TV FX:), а не статичний якір."""
         acc = self._make_acc([14400])
         h4 = acc.update("XAU/USD", _make_m1("XAU/USD", m1_ms, 100, 105, 99, 103))[0]
         assert h4.open_time_ms == expected_h4_ms
@@ -183,13 +183,13 @@ class TestHTFRunningAccumulator:
     def test_utc_midnight_rule_for_binance_symbol(self):
         """Правило символу, а не одне на процес: Binance поруч з FXCM бере опівніч UTC."""
         acc = _HTFRunningAccumulator([H4_S, D1_S], {"XAU/USD": FXCM, "BTCUSDT": RULE_UTC_MIDNIGHT})
-        m1_ms = _ms(2026, 3, 8, 21)
+        m1_ms = _ms(2026, 3, 8, 22)
         btc = {r.tf_s: r for r in acc.update("BTCUSDT", _make_m1("BTCUSDT", m1_ms, 1, 2, 0.5, 1.5))}
         xau = {r.tf_s: r for r in acc.update("XAU/USD", _make_m1("XAU/USD", m1_ms, 1, 2, 0.5, 1.5))}
         assert btc[D1_S].open_time_ms == _ms(2026, 3, 8, 0)
         assert btc[H4_S].open_time_ms == _ms(2026, 3, 8, 20)
         assert xau[D1_S].open_time_ms == _ms(2026, 3, 8, 21)
-        assert xau[H4_S].open_time_ms == _ms(2026, 3, 8, 21)
+        assert xau[H4_S].open_time_ms == _ms(2026, 3, 8, 22)
 
     def test_symbol_without_rule_raises(self):
         """Символ без правила — гучна ValueError, а не бакет тихого якоря 0."""
@@ -208,15 +208,19 @@ class TestHTFRunningAccumulator:
             _HTFRunningAccumulator([H4_S, tf_s], {"XAU/USD": FXCM})
 
     def test_fall_stub_h4_rolls_at_winter_open(self):
-        """Нд 01.11.2026: H4 21:00 — обрубок 1 год; M1 22:00 відкриває новий H4 і D1, а не зливається в 21:00."""
+        """Нд 01.11.2026: D1 зимової доби відкривається о 22:00, H4 — обрубок 22:00–23:00 сесійної доби (25 год), а
+        перший зимовий H4 — 23:00 (18:00 EST): кожен TF перекочується на своїй межі, а не зливається в попередній бакет."""
         acc = self._make_acc()
-        stub = {r.tf_s: r for r in acc.update("XAU/USD", _make_m1("XAU/USD", _ms(2026, 11, 1, 21, 30), 10, 11, 9, 10))}
-        assert stub[H4_S].open_time_ms == _ms(2026, 11, 1, 21)
-        after = {r.tf_s: r for r in acc.update("XAU/USD", _make_m1("XAU/USD", _ms(2026, 11, 1, 22), 20, 21, 19, 20))}
-        assert after[H4_S].open_time_ms == _ms(2026, 11, 1, 22)
-        assert after[D1_S].open_time_ms == _ms(2026, 11, 1, 22)
-        assert after[H4_S].o == 20 and after[H4_S].extensions["m1_count"] == 1
-        assert after[D1_S].o == 20 and after[D1_S].extensions["m1_count"] == 1
+        before = {r.tf_s: r for r in acc.update("XAU/USD", _make_m1("XAU/USD", _ms(2026, 11, 1, 21, 30), 10, 11, 9, 10))}
+        assert before[H4_S].open_time_ms == _ms(2026, 11, 1, 18)
+        assert before[D1_S].open_time_ms == _ms(2026, 10, 31, 21)
+        stub = {r.tf_s: r for r in acc.update("XAU/USD", _make_m1("XAU/USD", _ms(2026, 11, 1, 22), 20, 21, 19, 20))}
+        assert stub[H4_S].open_time_ms == _ms(2026, 11, 1, 22) and stub[H4_S].extensions["m1_count"] == 1
+        assert stub[D1_S].open_time_ms == _ms(2026, 11, 1, 22) and stub[D1_S].extensions["m1_count"] == 1
+        after = {r.tf_s: r for r in acc.update("XAU/USD", _make_m1("XAU/USD", _ms(2026, 11, 1, 23), 30, 31, 29, 30))}
+        assert after[H4_S].open_time_ms == _ms(2026, 11, 1, 23)
+        assert after[H4_S].o == 30 and after[H4_S].extensions["m1_count"] == 1
+        assert after[D1_S].open_time_ms == _ms(2026, 11, 1, 22) and after[D1_S].extensions["m1_count"] == 2
 
     def test_d1_only_mode(self):
         """Можна запустити тільки з D1 (без H4)."""
@@ -333,29 +337,29 @@ def _last_published(uds, tf_s):
 
 
 def test_htf_preview_rolls_grid_across_dst_weekend_without_restart():
-    """Пт 06.03.2026 20:59 (зима) → Нд 08.03 21:00 (літо) одним воркером: preview H4/D1 переходить на літню сітку.
+    """Пт 06.03.2026 20:59 (зима) → Нд 08.03 22:00 (літо) одним воркером: preview H4/D1 переходить на літню сітку.
 
-    Статичні якорі зі старту дали б у неділю H4 19:00 і D1 сб 07.03 22:00 до рестарту воркера.
+    Статичні якорі зі старту тримали б у неділю зимову сітку (H4 23:00, D1 22:00) до рестарту воркера.
     """
     worker, uds = _make_htf_worker()
 
     worker.on_tick(_make_tick("XAU/USD", _ms(2026, 3, 6, 20, 59, 30), 100.0))
-    assert _last_published(uds, H4_S).open_time_ms == _ms(2026, 3, 6, 18)  # зимова сітка 22/02/../18
+    assert _last_published(uds, H4_S).open_time_ms == _ms(2026, 3, 6, 19)  # зимова сітка 23/03/../19
     assert _last_published(uds, D1_S).open_time_ms == _ms(2026, 3, 5, 22)
 
-    worker.on_tick(_make_tick("XAU/USD", _ms(2026, 3, 8, 21, 0, 10), 200.0))
+    worker.on_tick(_make_tick("XAU/USD", _ms(2026, 3, 8, 22, 0, 10), 200.0))
     h4 = _last_published(uds, H4_S)
     d1 = _last_published(uds, D1_S)
-    assert h4.open_time_ms == _ms(2026, 3, 8, 21)
+    assert h4.open_time_ms == _ms(2026, 3, 8, 22)
     assert d1.open_time_ms == _ms(2026, 3, 8, 21)
     assert h4.o == 200.0 and h4.extensions["m1_count"] == 1
     assert d1.o == 200.0 and d1.extensions["m1_count"] == 1
 
-    # 22:00 — ще той самий літній H4 21:00 і D1, а не межа зимової сітки
-    worker.on_tick(_make_tick("XAU/USD", _ms(2026, 3, 8, 22, 0, 10), 201.0))
+    # 23:00 — ще той самий літній H4 22:00 і D1 21:00, а не межа зимової сітки
+    worker.on_tick(_make_tick("XAU/USD", _ms(2026, 3, 8, 23, 0, 10), 201.0))
     h4 = _last_published(uds, H4_S)
     d1 = _last_published(uds, D1_S)
-    assert h4.open_time_ms == _ms(2026, 3, 8, 21) and h4.extensions["m1_count"] == 2
+    assert h4.open_time_ms == _ms(2026, 3, 8, 22) and h4.extensions["m1_count"] == 2
     assert d1.open_time_ms == _ms(2026, 3, 8, 21) and d1.extensions["m1_count"] == 2
 
 

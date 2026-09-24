@@ -72,28 +72,29 @@ def _disk_bars(root: Path, tf_s: int) -> Dict[int, dict]:
 
 
 def test_rebuild_across_dst_weekend_2026_11_01_keeps_h4_d1_on_season_grid(tmp_path):
-    """Пт 30.10 — літня сітка (H4 17:00), нд 01.11 з 22:00 — зимова (22:00, 02:00); H4 нд 21:00 немає.
+    """Пт 30.10 — літня сітка (H4 18:00, від відкриття сесії 18:00 NY), нд 01.11 з 23:00 — зимова (23:00, 03:00);
+    обрубок сесійної доби H4 нд 22:00–23:00 порожній і не вбирає годин наступної доби.
 
-    Зимою ринок відкривається в неділю о 23:00, тож перший зимовий H4 22:00 починається з бару 23:00."""
-    fri_opens = _write_m1(tmp_path, _ms(2026, 10, 30, 17), _ms(2026, 10, 30, 20, 44))
-    sun_opens = _write_m1(tmp_path, _ms(2026, 11, 1, 23), _ms(2026, 11, 2, 5, 59))
+    Зимою ринок відкривається в неділю о 23:00 — рівно на відкритті першого зимового H4."""
+    fri_opens = _write_m1(tmp_path, _ms(2026, 10, 30, 18), _ms(2026, 10, 30, 20, 44))
+    sun_opens = _write_m1(tmp_path, _ms(2026, 11, 1, 23), _ms(2026, 11, 2, 6, 59))
     writer = JsonlAppender(root=str(tmp_path), anchor_rule_for_symbol=htf_anchor_rule_resolver(CFG))
     try:
         stats = rebuild_from_m1.rebuild_one_symbol(
-            data_root=str(tmp_path), symbol="XAU/USD", start_ms=_ms(2026, 10, 30, 17), end_ms=_ms(2026, 11, 2, 6),
+            data_root=str(tmp_path), symbol="XAU/USD", start_ms=_ms(2026, 10, 30, 18), end_ms=_ms(2026, 11, 2, 7),
             dry_run=False, cfg=CFG, writer=writer, anchor_rule=RULE_NY_CLOSE_US_DST,
         )
     finally:
         writer.close()
 
     h4 = _disk_bars(tmp_path, H4_S)
-    assert sorted(h4) == [_ms(2026, 10, 30, 17), _ms(2026, 11, 1, 22), _ms(2026, 11, 2, 2)]
-    assert _ms(2026, 11, 1, 21) not in h4, "обрубок доби переходу не вбирає годин наступної доби"
-    first_winter = h4[_ms(2026, 11, 1, 22)]
+    assert sorted(h4) == [_ms(2026, 10, 30, 18), _ms(2026, 11, 1, 23), _ms(2026, 11, 2, 3)]
+    assert _ms(2026, 11, 1, 22) not in h4, "обрубок доби переходу не вбирає годин наступної доби"
+    first_winter = h4[_ms(2026, 11, 1, 23)]
     assert first_winter["o"] == sun_opens[_ms(2026, 11, 1, 23)]
-    assert not (first_winter.get("extensions") or {}).get("partial"), "22:00–22:59 зимою — вихідні, не пропуск"
-    assert first_winter["c"] == pytest.approx(sun_opens[_ms(2026, 11, 2, 1, 59)] + 0.1)
-    assert h4[_ms(2026, 10, 30, 17)]["o"] == fri_opens[_ms(2026, 10, 30, 17)]
+    assert not (first_winter.get("extensions") or {}).get("partial"), "перший зимовий H4 — з відкриття ринку 23:00"
+    assert first_winter["c"] == pytest.approx(sun_opens[_ms(2026, 11, 2, 2, 59)] + 0.1)
+    assert h4[_ms(2026, 10, 30, 18)]["o"] == fri_opens[_ms(2026, 10, 30, 18)]
 
     d1 = _disk_bars(tmp_path, D1_S)
     for tf_s, bars in ((H4_S, h4), (D1_S, d1)):
@@ -140,8 +141,11 @@ def test_rebuild_force_from_round_date_aligns_start_to_trading_day_open(tmp_path
         bars = [json.loads(line) for line in part.read_text(encoding="utf-8").splitlines() if line.strip()]
         opens = [bar["open_time_ms"] for bar in bars]
         assert len(opens) == len(set(opens)), "tf_%d: дублікат ключа у part-файлі попереднього дня" % tf_s
-        first = next(bar for bar in bars if bar["open_time_ms"] == _ms(2026, 5, 14, 21))
-        assert not (first.get("extensions") or {}).get("partial"), "tf_%d: перший бакет прогону — з цілої доби" % tf_s
+        # D1 — від 17:00 NY (21:00), H4 — від відкриття сесії 18:00 NY: бакет H4 18:00–22:00 має всі торгові хвилини до
+        # 21:00 (21:00–22:00 — перерва), тож прогін від 21:00 його не чіпає, а перший H4 прогону — 22:00
+        for first_open in ((_ms(2026, 5, 14, 21),) if tf_s == D1_S else (_ms(2026, 5, 14, 18), _ms(2026, 5, 14, 22))):
+            first = next(bar for bar in bars if bar["open_time_ms"] == first_open)
+            assert not (first.get("extensions") or {}).get("partial"), "tf_%d: бакет з цілої доби" % tf_s
     assert ("REBUILD_RANGE_ALIGNED symbol=XAU/USD requested=2026-05-15T00:00:00+00:00 "
             "aligned=2026-05-14T21:00:00+00:00") in caplog.text
 
@@ -200,24 +204,24 @@ def test_rebuild_chunks_are_consecutive_d1_buckets_covering_the_range(monkeypatc
 
 
 def test_rebuild_winter_h4_1800_takes_h1_2100_by_seasonal_calendar(tmp_path):
-    """Пн 03.11.2025 (зима): H4 18:00–22:00 має чотири торгові H1, остання — 21:00 (перерва 22:00–23:00).
+    """Пн 03.11.2025 (зима): H4 19:00–23:00 (сітка 18:00 EST) має три торгові H1, остання — 21:00 (перерва 22:00–23:00).
 
-    Статичний літній календар інструмента вважав 21:00–21:59 перервою і губив H1 21:00: H4 18:00 закривався
-    close 20:59 без жодного маркера (ADR-0095 S6a, «333 H4» зони B). Тепер розклад сезону хвилини.
+    Статичний літній календар інструмента вважав 21:00–21:59 перервою і губив H1 21:00: H4 закривався close 20:59
+    без жодного маркера (ADR-0095 S6a, «333 H4» зони B). Тепер розклад сезону хвилини.
     """
-    opens = _write_m1(tmp_path, _ms(2025, 11, 3, 18), _ms(2025, 11, 3, 21, 59))
+    opens = _write_m1(tmp_path, _ms(2025, 11, 3, 19), _ms(2025, 11, 3, 21, 59))
     writer = JsonlAppender(root=str(tmp_path), anchor_rule_for_symbol=htf_anchor_rule_resolver(CFG))
     try:
         rebuild_from_m1.rebuild_one_symbol(
-            data_root=str(tmp_path), symbol="XAU/USD", start_ms=_ms(2025, 11, 3, 18), end_ms=_ms(2025, 11, 3, 22),
+            data_root=str(tmp_path), symbol="XAU/USD", start_ms=_ms(2025, 11, 3, 19), end_ms=_ms(2025, 11, 3, 23),
             dry_run=False, cfg=CFG, writer=writer, anchor_rule=RULE_NY_CLOSE_US_DST,
         )
     finally:
         writer.close()
 
     h1 = _disk_bars(tmp_path, 3600)
-    assert sorted(h1) == [_ms(2025, 11, 3, hour) for hour in (18, 19, 20, 21)]
-    h4 = _disk_bars(tmp_path, H4_S)[_ms(2025, 11, 3, 18)]
+    assert sorted(h1) == [_ms(2025, 11, 3, hour) for hour in (19, 20, 21)]
+    h4 = _disk_bars(tmp_path, H4_S)[_ms(2025, 11, 3, 19)]
     assert h4["c"] == pytest.approx(opens[_ms(2025, 11, 3, 21, 59)] + 0.1)
     assert h4["h"] == pytest.approx(opens[_ms(2025, 11, 3, 21, 59)] + 0.5)
     assert not (h4.get("extensions") or {}).get("partial")
@@ -265,7 +269,7 @@ def test_rebuild_tail_mid_bucket_leaves_forming_buckets_to_live_derive(
     """Хвіст M1 чт 14.05 10:37 (типовий `--end` = хвіст + 1 хв або `--end` пізніше): бакет кожного TF, що його
     містить, не фіналізується.
 
-    Раніше останній бакет кожного TF ставав partial final (M3 2/3, M5 3/5, M15 2/3, M30 1/2, H4 2/4), а H1 10:00
+    Раніше останній бакет кожного TF ставав partial final (M3 2/3, M5 3/5, M15 2/3, M30 1/2, H4 1/4), а H1 10:00
     збирався з partial M30 10:30 уже без жодного маркера. Append-only: наступний прогін без `--force` бачив ключ як
     наявний і урізаний бар лишався назавжди. Формуючий хвіст — справа живого DeriveEngine.
     """
@@ -278,19 +282,19 @@ def test_rebuild_tail_mid_bucket_leaves_forming_buckets_to_live_derive(
         rebuild_from_m1.main()
 
     tail_opens = {180: _ms(2026, 5, 14, 10, 36), 300: _ms(2026, 5, 14, 10, 35), 900: _ms(2026, 5, 14, 10, 30),
-                  1800: _ms(2026, 5, 14, 10, 30), 3600: _ms(2026, 5, 14, 10), H4_S: _ms(2026, 5, 14, 9),
+                  1800: _ms(2026, 5, 14, 10, 30), 3600: _ms(2026, 5, 14, 10), H4_S: _ms(2026, 5, 14, 10),
                   D1_S: _ms(2026, 5, 13, 21)}
     for tf_s, tail_open in tail_opens.items():
         assert tail_open not in _disk_bars(tmp_path, tf_s), "tf_%d: формуючий бакет записано фіналом" % tf_s
     assert _partial_opens(tmp_path) == {}
     h1_opens = [_ms(2026, 5, 13, 22), _ms(2026, 5, 13, 23)] + [_ms(2026, 5, 14, hour) for hour in range(10)]
     assert sorted(_disk_bars(tmp_path, 3600)) == h1_opens, "H1 10:00 не збирається з partial M30 10:30"
-    assert sorted(_disk_bars(tmp_path, H4_S)) == [_ms(2026, 5, 13, 21), _ms(2026, 5, 14, 1), _ms(2026, 5, 14, 5)]
+    assert sorted(_disk_bars(tmp_path, H4_S)) == [_ms(2026, 5, 13, 22), _ms(2026, 5, 14, 2), _ms(2026, 5, 14, 6)]
     assert ('REBUILD_TAIL_BUCKETS_SKIPPED symbol=XAU/USD m1_tail=2026-05-14T10:37:00+00:00 '
             'end=%s skipped=%s ' % (end_iso, expected_skipped) +
             'first={"M3": "2026-05-14T10:36:00+00:00", "M5": "2026-05-14T10:35:00+00:00", '
             '"M15": "2026-05-14T10:30:00+00:00", "M30": "2026-05-14T10:30:00+00:00", "H1": "2026-05-14T10:00:00+00:00", '
-            '"H4": "2026-05-14T09:00:00+00:00", "D1": "2026-05-13T21:00:00+00:00"}') in caplog.text
+            '"H4": "2026-05-14T10:00:00+00:00", "D1": "2026-05-13T21:00:00+00:00"}') in caplog.text
 
 
 def test_rebuild_end_on_closed_d1_boundary_skips_nothing(tmp_path, caplog):
@@ -310,21 +314,22 @@ def test_rebuild_end_on_closed_d1_boundary_skips_nothing(tmp_path, caplog):
     assert {tf_s: stats["tf_%d_tail_skipped" % tf_s] for tf_s in _DERIVED_TFS} == dict.fromkeys(_DERIVED_TFS, 0)
     assert "REBUILD_TAIL_BUCKETS_SKIPPED" not in caplog.text
     assert sorted(_disk_bars(tmp_path, D1_S)) == [_ms(2026, 5, 13, 21)]
-    assert _ms(2026, 5, 14, 17) in _disk_bars(tmp_path, H4_S)
+    assert _ms(2026, 5, 14, 18) in _disk_bars(tmp_path, H4_S)
     assert _partial_opens(tmp_path) == {}
 
 
 @pytest.mark.parametrize(
     "sunday_m1, end_ms, expected_first_tail",
     [
-        # Прогін у вихідні з типовим `--end` = хвіст пт 20:44 + 1 хв: H4 17:00 і D1 закриті хвилиною 20:44, хоч їхні
-        # вікна тривають до 21:00
+        # Прогін у вихідні з типовим `--end` = хвіст пт 20:44 + 1 хв: H4 18:00 і D1 закриті хвилиною 20:44, хоч їхні
+        # вікна тривають до 22:00 і 21:00
         (False, _ms(2026, 10, 30, 20, 45), {}),
-        # Кінець посеред обрубка H4 нд 21:00 (1 год) і 25-годинної доби сб 31.10: вихідні, торгових хвилин немає
-        (True, _ms(2026, 11, 1, 21, 30), {}),
+        # Кінець посеред обрубка H4 нд 22:00 (1 год) 25-годинної сесійної доби: торгових хвилин в обрубку немає, але
+        # кінець уже за межею зимової D1 22:00 — її торгові хвилини з 23:00 попереду, тож D1 — хвіст
+        (True, _ms(2026, 11, 1, 22, 30), {D1_S: _ms(2026, 11, 1, 22)}),
         (True, _ms(2026, 11, 1, 22), {}),  # межа D1 зимової сітки
-        # Хвіст M1 нд 23:29 після зимового відкриття 23:00: формуються H1 23:00, H4 і D1 22:00 зимової сітки
-        (True, _ms(2026, 11, 1, 23, 30), {3600: _ms(2026, 11, 1, 23), H4_S: _ms(2026, 11, 1, 22),
+        # Хвіст M1 нд 23:29 після зимового відкриття 23:00: формуються H1 і H4 23:00, D1 22:00 зимової сітки
+        (True, _ms(2026, 11, 1, 23, 30), {3600: _ms(2026, 11, 1, 23), H4_S: _ms(2026, 11, 1, 23),
                                           D1_S: _ms(2026, 11, 1, 22)}),
     ],
     ids=["weekend_default_end", "end_in_stub", "end_on_winter_d1", "tail_after_winter_open"],
@@ -332,7 +337,7 @@ def test_rebuild_end_on_closed_d1_boundary_skips_nothing(tmp_path, caplog):
 def test_rebuild_tail_across_dst_sunday_2026_11_01_stub_bucket_is_not_forming(
     tmp_path, sunday_m1, end_ms, expected_first_tail
 ):
-    """Хвіст M1 на закритті пт 30.10 20:44 або після зимового відкриття нд 01.11 23:29. Обрубок H4 нд 21:00–22:00 —
+    """Хвіст M1 на закритті пт 30.10 20:44 або після зимового відкриття нд 01.11 23:29. Обрубок H4 нд 22:00–23:00 —
     вихідні: за годинником його вікно триває після кінця джерела, та торгової хвилини там немає, тож це не хвіст.
     Хвостом стає лише бакет зимової сітки, у якому ринок уже торгує."""
     _write_m1(tmp_path, _ms(2026, 10, 29, 22), _ms(2026, 10, 30, 20, 44))
@@ -350,7 +355,7 @@ def test_rebuild_tail_across_dst_sunday_2026_11_01_stub_bucket_is_not_forming(
     skipped = {tf_s: stats["tf_%d_tail_skipped" % tf_s] for tf_s in _DERIVED_TFS if stats["tf_%d_tail_skipped" % tf_s]}
     assert skipped == dict.fromkeys(expected_first_tail, 1)
     h4 = _disk_bars(tmp_path, H4_S)
-    assert _ms(2026, 10, 30, 17) in h4 and _ms(2026, 11, 1, 21) not in h4
+    assert _ms(2026, 10, 30, 18) in h4 and _ms(2026, 11, 1, 22) not in h4
     for tf_s, tail_open in expected_first_tail.items():
         assert tail_open not in _disk_bars(tmp_path, tf_s)
     assert _partial_opens(tmp_path) == {}

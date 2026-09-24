@@ -65,7 +65,7 @@ def test_gate_repo_config_all_subgates_green_without_data(tmp_path):
 
 def test_disk_summer_h4_and_d1_on_grid_passes(tmp_path):
     root = _root(tmp_path, _cfg())
-    _write_part(root, "XAU/USD", H4_S, "20260922", [_ms(2026, 9, 22, h) for h in (1, 5, 9, 13, 17, 21)])
+    _write_part(root, "XAU/USD", H4_S, "20260922", [_ms(2026, 9, 22, h) for h in (2, 6, 10, 14, 18, 22)])
     _write_part(root, "XAU/USD", D1_S, "20260921", [_ms(2026, 9, 21, 21)])
     result = gate.run_gate({"root": str(root)})
     assert result["ok"] is True, result["details"]
@@ -73,14 +73,15 @@ def test_disk_summer_h4_and_d1_on_grid_passes(tmp_path):
 
 
 def test_disk_legacy_h4_grid_in_summer_fails_with_expected_open(tmp_path):
-    """Стара сітка H4 22/02/06.. улітку (дані до S7) — FAIL з очікуваним відкриттям, а не прохід через alt-якір."""
+    """Сітка H4 17:00 NY (21/01/05.. улітку — TV OANDA, нативний H4 FXCM) — FAIL з очікуваним відкриттям сітки TV FX:
+    (18:00 NY), а не прохід через alt-якір."""
     root = _root(tmp_path, _cfg())
-    _write_part(root, "XAU/USD", H4_S, "20260922", [_ms(2026, 9, 22, h) for h in (2, 6, 10, 14, 18, 22)])
+    _write_part(root, "XAU/USD", H4_S, "20260922", [_ms(2026, 9, 22, h) for h in (1, 5, 9, 13, 17, 21)])
     result = gate.run_gate({"root": str(root)})
     sub = _sub(result, "disk_data_anchor")
     assert result["ok"] is False and "disk_data_anchor:FAIL" in result["details"]
     assert sub["violations"] == 6
-    assert "bar_off_season_grid" in sub["msg"] and "expected_open_ms=%d" % _ms(2026, 9, 22, 1) in sub["msg"]
+    assert "bar_off_season_grid" in sub["msg"] and "expected_open_ms=%d" % _ms(2026, 9, 21, 22) in sub["msg"]
 
 
 def test_disk_winter_d1_on_22_utc_passes_summer_grid_in_winter_fails(tmp_path):
@@ -95,7 +96,7 @@ def test_disk_winter_d1_on_22_utc_passes_summer_grid_in_winter_fails(tmp_path):
 def test_disk_checks_every_row_not_only_last(tmp_path):
     """Part-файли не відсортовані за open: бар поза сіткою посередині файлу теж FAIL."""
     root = _root(tmp_path, _cfg())
-    _write_part(root, "XAU/USD", H4_S, "20260922", [_ms(2026, 9, 22, 1), _ms(2026, 9, 22, 6), _ms(2026, 9, 22, 9)])
+    _write_part(root, "XAU/USD", H4_S, "20260922", [_ms(2026, 9, 22, 2), _ms(2026, 9, 22, 5), _ms(2026, 9, 22, 10)])
     sub = _sub(gate.run_gate({"root": str(root)}), "disk_data_anchor")
     assert (sub["ok"], sub["violations"]) == (False, 1)
 
@@ -113,14 +114,14 @@ def test_disk_row_without_int_open_or_not_json_fails(tmp_path):
 def test_disk_checks_latest_part_file_only(tmp_path):
     """Гейт дивиться на свіжий стан (останній part-файл); вся історія — health `off_season_grid` (ADR-0095 S5a)."""
     root = _root(tmp_path, _cfg())
-    _write_part(root, "XAU/USD", H4_S, "20260921", [_ms(2026, 9, 21, 2)])
-    _write_part(root, "XAU/USD", H4_S, "20260922", [_ms(2026, 9, 22, 1)])
+    _write_part(root, "XAU/USD", H4_S, "20260921", [_ms(2026, 9, 21, 1)])
+    _write_part(root, "XAU/USD", H4_S, "20260922", [_ms(2026, 9, 22, 2)])
     assert gate.run_gate({"root": str(root)})["ok"] is True
 
 
 def test_rule_unmeasured_group_fails_and_other_symbols_still_checked(tmp_path):
     root = _root(tmp_path, _cfg(symbols=["XAU/USD", "HKG33"]))
-    _write_part(root, "XAU/USD", H4_S, "20260922", [_ms(2026, 9, 22, 2)])
+    _write_part(root, "XAU/USD", H4_S, "20260922", [_ms(2026, 9, 22, 1)])
     result = gate.run_gate({"root": str(root)})
     rule_sub = _sub(result, "htf_anchor_rule_valid")
     assert rule_sub["ok"] is False and "HTF_ANCHOR_GROUP_UNMEASURED symbol=HKG33" in rule_sub["msg"]
@@ -145,12 +146,12 @@ def test_binance_symbols_checked_only_when_enabled(tmp_path):
     assert "BTCUSDT" not in _sub(gate.run_gate({"root": str(off)}), "htf_anchor_rule_valid")["rules"]
 
 
-def test_season_samples_fail_when_h4_leaves_d1_grid(tmp_path, monkeypatch):
-    """Легасі-роз'їзд H4 23:00 проти D1 22:00 — FAIL підгейта зразків, а не тиха розбіжність."""
+def test_season_samples_fail_when_h4_sits_on_d1_anchor(tmp_path, monkeypatch):
+    """H4 на якорі D1 (17:00 NY замість відкриття сесії 18:00 NY) — FAIL підгейта зразків, а не тиха розбіжність з TV."""
     real = gate.htf_anchor_offset_s
-    monkeypatch.setattr(gate, "htf_anchor_offset_s", lambda tf_s, ts, rule: 82_800 if tf_s == H4_S else real(tf_s, ts, rule))
+    monkeypatch.setattr(gate, "htf_anchor_offset_s", lambda tf_s, ts, rule: real(D1_S, ts, rule))
     sub = _sub(gate.run_gate({"root": str(_root(tmp_path, _cfg()))}), "season_anchor_samples")
-    assert sub["ok"] is False and "ny_close_us_dst/winter D1=79200 H4=82800" in sub["msg"]
+    assert sub["ok"] is False and "ny_close_us_dst/winter D1=79200 H4=79200" in sub["msg"]
 
 
 def test_legacy_anchor_key_in_config_fails_subgate(tmp_path):
