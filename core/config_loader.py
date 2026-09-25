@@ -353,3 +353,60 @@ def d1_policy(cfg: Dict[str, Any]) -> D1Policy:
     if isinstance(lag, bool) or not isinstance(lag, int) or lag < 0:
         raise ValueError("CONFIG_D1_POLICY_INVALID native_settle_lag_h=%r — ціле число годин ≥ 0 (ADR-0103)" % (lag,))
     return D1Policy(source, lag)
+
+
+# ── Щоденний settle M1 + нативний D1 у денну перерву (ADR-0103 §3.2, S3) ─────────────────────────────────────────────
+M1_SETTLE_KEY = "m1_settle"
+# поле → найменше допустиме значення (ціле); 0 там, де «вимкнено» має сенс
+_M1_SETTLE_INT_MIN = {"lookback_h": 1, "fetch_call_timeout_s": 1, "fetch_attempts": 1, "backups_keep": 1,
+                      "deadline_guard_min": 0, "observe_s": 0}
+
+
+@dataclass(frozen=True)
+class M1SettlePolicy:
+    """Нічний прогін settle: вимикач, лаг ревізій брокера по символу (з групи календаря) і межі прогону."""
+
+    schedule_enabled: bool
+    lag_h_by_symbol: Dict[str, int]
+    lookback_h: int
+    fetch_call_timeout_s: int
+    fetch_attempts: int
+    backups_keep: int
+    deadline_guard_min: int
+    observe_s: int
+    work_dir: str
+
+
+def m1_settle_policy(cfg: Dict[str, Any]) -> M1SettlePolicy:
+    """`config.json → m1_settle` з валідацією; лаг — для кожного символу `cfg.symbols` через його групу календаря.
+
+    Секції немає, поле невалідне або група символу без лагу — ValueError CONFIG_M1_SETTLE_INVALID: settle переписує
+    SSOT значеннями брокера, тож хвилини, які брокер ще ревізує, не можна брати за «якимось» лагом за замовчуванням.
+    """
+    raw = cfg.get(M1_SETTLE_KEY)
+    if not isinstance(raw, dict):
+        raise ValueError("CONFIG_M1_SETTLE_INVALID %s=%r — очікується об'єкт (ADR-0103 §3.2)" % (M1_SETTLE_KEY, raw))
+    enabled = raw.get("schedule_enabled")
+    if not isinstance(enabled, bool):
+        raise ValueError("CONFIG_M1_SETTLE_INVALID schedule_enabled=%r — true | false" % (enabled,))
+    ints: Dict[str, int] = {}
+    for field_name, minimum in _M1_SETTLE_INT_MIN.items():
+        value = raw.get(field_name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise ValueError("CONFIG_M1_SETTLE_INVALID %s=%r — ціле ≥ %d" % (field_name, value, minimum))
+        ints[field_name] = value
+    work_dir = raw.get("work_dir")
+    if not isinstance(work_dir, str) or not work_dir.strip():
+        raise ValueError("CONFIG_M1_SETTLE_INVALID work_dir=%r — каталог прогонів (архів, звіти, стан)" % (work_dir,))
+    lag_by_group = raw.get("revision_lag_h_by_group") or {}
+    symbol_groups = dict(cfg.get("market_calendar_symbol_groups") or {})
+    lag_by_symbol: Dict[str, int] = {}
+    for symbol in cfg.get("symbols") or ():
+        lag = lag_by_group.get(symbol_groups.get(symbol))
+        if isinstance(lag, bool) or not isinstance(lag, int) or lag < 0:
+            raise ValueError(
+                "CONFIG_M1_SETTLE_INVALID symbol=%s group=%s revision_lag_h=%r — лаг ревізій групи не виміряно"
+                % (symbol, symbol_groups.get(symbol), lag)
+            )
+        lag_by_symbol[symbol] = lag
+    return M1SettlePolicy(schedule_enabled=enabled, lag_h_by_symbol=lag_by_symbol, work_dir=work_dir, **ints)

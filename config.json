@@ -251,6 +251,22 @@
     "source": "broker_native",
     "native_settle_lag_h": 6
   },
+  "m1_settle": {
+    "_comment": "ADR-0103 §3.2/S3: щоденний settle M1 + нативний D1 у денну перерву (ops/settle_daily.sh → tools.repair.settle_daily). schedule_enabled — вимикач нічного прогону; вмикає власник після двох ручних прогонів (S4). revision_lag_h_by_group — лаг ревізій брокера за групою календаря: settle бере хвилини, старші за забір − лаг (метали/US-індекси: 0 ревізій після 6.5 год; EU CFD правлять бари віком 6.5–10 год → 12, вимір 24.09). lookback_h — вікно settle назад від межі лагу (settle ідемпотентний; покриває вихідні й пропущену добу). fetch_call_timeout_s — дедлайн одного виклику SDK (зависання get_history 24.09 — 13 хв), fetch_attempts — повтори забору. deadline_guard_min — прогін завершується або відкочується не пізніше відкриття сесії мінус стільки хвилин. observe_s — спостереження після старту записувачів. backups_keep — скільки tgz data_v3 нічних прогонів зберігати. work_dir — архіви, звіти й стан прогонів (поза data_v3 і репо).",
+    "schedule_enabled": false,
+    "revision_lag_h_by_group": {
+      "cfd_us_22_23": 6,
+      "cfd_eu_eustx50": 12,
+      "cfd_eu_ger30": 12
+    },
+    "lookback_h": 96,
+    "fetch_call_timeout_s": 120,
+    "fetch_attempts": 3,
+    "deadline_guard_min": 10,
+    "observe_s": 120,
+    "backups_keep": 14,
+    "work_dir": "/var/lib/smc-v3/m1_settle"
+  },
   "htf_anchor": {
     "_comment": "ADR-0095 §3.4: правило якоря H4/D1 за групою календаря (market_calendar_symbol_groups). Група без правила — сітку брокера не виміряно (cfd_hk_main, fx_24x5_utc_summer): символ з неї падає ValueError, а не отримує тихий default (рішення власника 23.09.2026). ny_close_us_dst = D1 з 17:00 America/New_York, H4 = D1/6; utc_midnight = Binance.",
     "rule_by_calendar_group": {
