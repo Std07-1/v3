@@ -70,3 +70,4 @@ def test_state_round_trip_keeps_the_latest_settled_minute(tmp_path):
 def test_retention_drops_only_the_oldest_beyond_keep():
     names = ["20260925T210501Z", "20260923T210500Z", "20260924T210502Z"]
     assert sp.expired(names, 2) == ["20260923T210500Z"] and sp.expired(names, 3) == []
+    assert sp.expired(names, 0) == sorted(names)

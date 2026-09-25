@@ -126,4 +126,4 @@ def save_settled_to(work_dir: str, windows: Sequence[SymbolWindow], previous: Ma
 def expired(names: Sequence[str], keep: int) -> List[str]:
     """Найстаріші понад `keep` серед імен з UTC-штампом `STAMP_FORMAT` (лексикографічний порядок = хронологія)."""
     ordered = sorted(names)
-    return ordered[:-keep] if len(ordered) > keep else []
+    return ordered[:max(0, len(ordered) - keep)]
