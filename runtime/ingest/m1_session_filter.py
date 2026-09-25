@@ -114,12 +114,11 @@ _CLOSE_SAFETY_S_DEFAULT = 8
 
 
 def resolve_close_safety_ms(cfg: dict) -> int:
+    """Запас закриття хвилини в мс з config (SSOT `m1_poller.safety_delay_s`). Відсутній, битий або від'ємний —
+    дефолт або 0 з WARNING (I5): запас вирішує, яку хвилину засів і ремонт вважають закритою і пишуть у SSOT."""
     m1_cfg = cfg.get("m1_poller")
-    raw = m1_cfg.get("safety_delay_s", _CLOSE_SAFETY_S_DEFAULT) if isinstance(m1_cfg, dict) else _CLOSE_SAFETY_S_DEFAULT
-    try:
-        return max(0, int(raw)) * 1000
-    except (TypeError, ValueError):
-        return _CLOSE_SAFETY_S_DEFAULT * 1000
+    section = m1_cfg if isinstance(m1_cfg, dict) else {}
+    return _resolve_config_int(section, "safety_delay_s", _CLOSE_SAFETY_S_DEFAULT, 0) * 1000
 
 
 def split_closed_bars(bars: List[CandleBar], now_ms: int, safety_ms: int) -> Tuple[List[CandleBar], List[CandleBar]]:
@@ -182,8 +181,9 @@ def _resolve_edge_stale_groups(section: dict) -> FrozenSet[str]:
 
 
 def _resolve_config_int(section: dict, key: str, default: int, minimum: int) -> int:
-    """Ціле з config (секції `m1_session_filter` або верхнього рівня). Відсутнє або бите — дефолт, менше за minimum —
-    clamp; обидва випадки дають WARNING із сирим значенням (I5), бо тихий дефолт тут змінює те, що пишеться в SSOT."""
+    """Ціле з config (секції `m1_session_filter`, `m1_poller` або верхнього рівня). Відсутнє або бите — дефолт, менше
+    за minimum — clamp; обидва випадки дають WARNING із сирим значенням (I5), бо тихий дефолт тут змінює те, що
+    пишеться в SSOT."""
     raw = section.get(key)
     if raw is None:
         logging.warning("M1_SESSION_FILTER_CONFIG_DEFAULT key=%s default=%d — ключа в config немає", key, default)

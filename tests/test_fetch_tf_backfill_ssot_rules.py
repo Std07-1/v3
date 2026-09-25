@@ -59,13 +59,22 @@ def test_split_holds_back_a_minute_closed_inside_the_safety_window():
     assert split_closed_bars([bar], close_ms + SAFETY_MS, SAFETY_MS) == ([bar], [])
 
 
-@pytest.mark.parametrize("cfg, expected_ms", [
-    ({"m1_poller": {"safety_delay_s": 10}}, 10_000),
-    ({}, 8_000),
-    ({"m1_poller": {"safety_delay_s": "хибне"}}, 8_000),
+def test_safety_margin_comes_from_the_m1_poller_config(caplog):
+    with caplog.at_level(logging.WARNING):
+        assert resolve_close_safety_ms({"m1_poller": {"safety_delay_s": 10}}) == 10_000
+    assert not caplog.records
+
+
+@pytest.mark.parametrize("cfg, expected_ms, signal", [
+    ({}, 8_000, "M1_SESSION_FILTER_CONFIG_DEFAULT"),
+    ({"m1_poller": {"safety_delay_s": "хибне"}}, 8_000, "M1_SESSION_FILTER_CONFIG_INVALID"),
+    ({"m1_poller": {"safety_delay_s": -3}}, 0, "M1_SESSION_FILTER_CONFIG_CLAMPED"),
 ])
-def test_safety_margin_comes_from_the_m1_poller_config(cfg, expected_ms):
-    assert resolve_close_safety_ms(cfg) == expected_ms
+def test_broken_safety_margin_config_falls_back_loudly(cfg, expected_ms, signal, caplog):
+    """Запас вирішує, яка хвилина закрита і йде в SSOT, — тихий дефолт тут заборонений (I5)."""
+    with caplog.at_level(logging.WARNING):
+        assert resolve_close_safety_ms(cfg) == expected_ms
+    assert any(signal in r.getMessage() and "key=safety_delay_s" in r.getMessage() for r in caplog.records), caplog.text
 
 
 class _FakeProvider:
