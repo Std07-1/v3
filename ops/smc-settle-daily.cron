@@ -1,0 +1,9 @@
+# ADR-0103 S3d: нічний settle M1 + нативний D1 у денну перерву. Встановлюється лише за «го» власника після двох
+# ручних прогонів (S4):  sudo install -m 644 /opt/smc-v3/ops/smc-settle-daily.cron /etc/cron.d/smc-settle-daily
+# Годинник VPS — UTC. Слоти 21:05 і 22:05 Пн–Пт: оркестратор сам бере той, що в спільній перерві (літо — 21:05,
+# зима — 22:05), інший виходить без дій. Субота 09:05 — добір хвоста п'ятниці. Поки m1_settle.schedule_enabled =
+# false, кожен слот виходить без дій.
+SHELL=/bin/bash
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+5 21,22 * * 1-5 root /opt/smc-v3/ops/settle_daily.sh --scheduled
+5 9 * * 6 root /opt/smc-v3/ops/settle_daily.sh --scheduled

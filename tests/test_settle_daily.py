@@ -65,6 +65,7 @@ class Env:
     guard_refuses: bool = False
     outputs: dict = dataclasses.field(default_factory=lambda: {
         "git_head": "abc123", "git_origin": "abc123", "git_status": "?? .env.save",
+        "preflight_status": "smc:smc-fxcm RUNNING pid 1\nsmc:smc-preview RUNNING pid 2\nsmc:smc-ws RUNNING pid 3",
         **{"observe_status_%d" % i: "smc:smc-fxcm RUNNING pid 1\nsmc:smc-preview RUNNING pid 2\n"
                                     "smc:smc-ws RUNNING pid 3\nsmc:smc-ticks STOPPED" for i in range(1, 5)}})
 
@@ -116,7 +117,7 @@ def _report(env):
 
 def test_nightly_run_follows_the_proven_manual_order(env):
     assert _run(env) == sd.EXIT_OK
-    steps = [c for c in env.calls if not c.startswith(("git_", "observe_status_"))]
+    steps = [c for c in env.calls if not c.startswith(("git_", "observe_status_", "preflight_"))]
     expected = ["fetch_m1_a1", "fetch_d1_a1", "stop_writers", "backup"]
     for sym_dir in SYMBOL_DIRS:
         expected.append("settle_m1_" + sym_dir)
@@ -133,6 +134,30 @@ def test_nightly_run_follows_the_proven_manual_order(env):
     assert settle_ger[settle_ger.index("--to") + 1] == "2026-09-24T09:05"  # EU — лаг 12 год
     assert sp.load_settled_to(env.work_dir)["GER30"] == sp.parse_iso_minute("2026-09-24T09:05")
     assert _report(env)["stage"] == "SETTLED"
+    assert not os.path.exists(os.path.join(env.work_dir, sd.WRITERS_STOPPED_MARKER))
+
+
+def test_writers_stopped_on_purpose_are_not_started_by_the_run(env):
+    """Власник зупинив інжест навмисно — прогін відмовляє до забору і нічого не стартує."""
+    env.outputs["preflight_status"] = "smc:smc-fxcm STOPPED Sep 25\nsmc:smc-preview RUNNING\nsmc:smc-ws RUNNING"
+    assert _run(env) == sd.EXIT_REFUSED
+    assert not [c for c in env.calls if c.startswith(("fetch_", "stop_", "start_"))]
+    assert "WRITERS_NOT_RUNNING ['smc:smc-fxcm']" in _report(env)["problems"][0]
+
+
+def test_marker_marks_exactly_the_window_when_the_run_holds_writers_stopped(env):
+    seen = {}
+
+    class Spy(FakeRunner):
+        def run(self, name, cmd, **kwargs):
+            seen[name] = os.path.exists(os.path.join(env.work_dir, sd.WRITERS_STOPPED_MARKER))
+            return super().run(name, cmd, **kwargs)
+
+    settle = _settle(env)
+    settle.runner_factory = lambda logs: Spy(env, logs)
+    assert settle.run(scheduled=True, dry_run=False, ignore_break=False) == sd.EXIT_OK
+    assert not seen["fetch_m1_a1"] and seen["stop_writers"] and seen["settle_m1_XAU_USD"] and seen["start_readers"]
+    assert not os.path.exists(os.path.join(env.work_dir, sd.WRITERS_STOPPED_MARKER))
 
 
 def test_fetch_runs_as_the_fetch_user_from_its_own_cwd_with_creds_from_the_sidecar(env):
@@ -173,7 +198,7 @@ def test_transient_fetch_failure_is_retried(env):
 def test_dirty_tree_or_foreign_code_refuses_before_anything(env):
     env.outputs["git_status"] = " M runtime/ws/ws_server.py"
     assert _run(env) == sd.EXIT_REFUSED
-    assert not [c for c in env.calls if not c.startswith("git_")]
+    assert not [c for c in env.calls if not c.startswith(("git_", "preflight_"))]
     assert "DIRTY_TREE" in _report(env)["problems"][0]
 
 

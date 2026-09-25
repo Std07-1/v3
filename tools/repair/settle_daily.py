@@ -59,6 +59,9 @@ OBSERVED_LOGS = ("m1_ingestion_worker.err.log", "broker_sidecar.err.log", "previ
 LOG_ALARM = re.compile(r"ERROR|Traceback|CRITICAL")
 PREFLIGHT_UNTRACKED_OK = ("?? .env.save",)  # відомий артефакт проду (ранбук вікна 24.09)
 BACKUP_RE = re.compile(r"^data_v3\.pre-sd-(\d{8}T\d{6}Z)\.tgz(\.sha256)?$")
+# маркер у work_dir: записувачів зупинив саме прогін — trap обгортки стартує їх лише за ним (не тих, кого власник
+# зупинив навмисно)
+WRITERS_STOPPED_MARKER = "writers_stopped_by_settle"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -209,6 +212,9 @@ class DailySettle:
             dirty = [ln for ln in status.splitlines() if ln.strip() and ln not in PREFLIGHT_UNTRACKED_OK]
             if dirty:
                 problems.append("DIRTY_TREE %s" % dirty[:5])
+            down = self._not_running(self._capture("preflight_status", ["supervisorctl", "status"]))
+            if down:  # зупинені навмисно не стартуються прогоном; живий сайдкар — ще й джерело кредів забору
+                problems.append("WRITERS_NOT_RUNNING %s" % down)
         free_gb = shutil.disk_usage(self.paths.work_dir).free / 1024 ** 3
         if free_gb < self.policy.min_free_disk_gb:
             problems.append("DISK_FREE_GB %.1f < %d" % (free_gb, self.policy.min_free_disk_gb))
@@ -235,6 +241,8 @@ class DailySettle:
 
     def _stop_writers(self) -> bool:
         if self.prod:
+            with open(self._marker(), "w", encoding="utf-8") as fh:
+                fh.write(self.run_id)
             self.runner.run("stop_writers", ["supervisorctl", "stop"] + list(PROGRAMS_STOP))
             self.sleep(STOP_SETTLE_S)
         else:
@@ -329,6 +337,8 @@ class DailySettle:
             self.sleep(PRIME_POLL_S)
             waited += PRIME_POLL_S
         self.runner.run("start_readers", ["supervisorctl", "start"] + list(PROGRAMS_READERS))
+        if os.path.exists(self._marker()):
+            os.remove(self._marker())
         return offsets
 
     def _observe(self, offsets: Dict[str, int]) -> List[str]:
@@ -338,8 +348,7 @@ class DailySettle:
         problems: List[str] = []
         for check in range(1, OBSERVE_CHECKS + 1):
             self.sleep(self.policy.observe_s / OBSERVE_CHECKS)
-            status = self._capture("observe_status_%d" % check, ["supervisorctl", "status"])
-            down = [p for p in (PROGRAM_INGEST,) + PROGRAMS_READERS if not re.search(re.escape(p) + r"\s+RUNNING", status)]
+            down = self._not_running(self._capture("observe_status_%d" % check, ["supervisorctl", "status"]))
             if down and check == OBSERVE_CHECKS:
                 problems.append("NOT_RUNNING %s" % down)
         for name, offset in offsets.items():
@@ -366,6 +375,13 @@ class DailySettle:
             log.info("RETENTION_REMOVED %s", os.path.join(runs, name))
 
     # ── допоміжне ────────────────────────────────────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _not_running(status: str) -> List[str]:
+        return [p for p in (PROGRAM_INGEST,) + PROGRAMS_READERS if not re.search(re.escape(p) + r"\s+RUNNING", status)]
+
+    def _marker(self) -> str:
+        return os.path.join(self.paths.work_dir, WRITERS_STOPPED_MARKER)
+
     def _tool(self, module: str, *args: str) -> List[str]:
         return [self.paths.py, "-m", "tools.repair." + module, "--config", self.paths.config] + list(args)
 
@@ -391,7 +407,7 @@ class DailySettle:
         if not os.path.exists(path):
             return ""
         with open(path, "rb") as fh:
-            fh.seek(offset)
+            fh.seek(offset if offset <= os.path.getsize(path) else 0)  # logrotate copytruncate обрізав лог
             return fh.read().decode("utf-8", "replace")
 
     def _own_by_fetch_user(self, path: str) -> None:
