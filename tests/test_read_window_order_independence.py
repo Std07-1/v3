@@ -151,13 +151,22 @@ def test_scrollback_does_not_open_days_after_to(tmp_path, monkeypatch):
     assert sorted(opened) == sorted(layer.list_parts(SYMBOL, 60)[:2]), opened
 
 
-def test_non_canonical_part_name_is_still_read(tmp_path):
-    """Контроль: файл з імʼям, з якого доби не взяти, не пропускається за датою."""
+@pytest.mark.parametrize("name, reason", [
+    ("part-latest.jsonl", "not_yyyymmdd"),
+    ("part-20260231.jsonl", "invalid_date"),  # вісім цифр, але 31 лютого не існує
+])
+def test_non_canonical_part_name_is_still_read_and_reported_once(tmp_path, caplog, name, reason):
+    """Файл з імʼям, з якого доби не взяти, не пропускається за датою; про саме імʼя — WARN раз на шлях (I5)."""
     d = tmp_path / "XAU_USD" / "tf_60"
     d.mkdir(parents=True)
-    (d / "part-latest.jsonl").write_text(json.dumps(_bar(BASE + 5 * M1)) + "\n", encoding="utf-8")
-    bars, _geom = DiskLayer(str(tmp_path)).read_window_with_geom(SYMBOL, 60, 10, to_open_ms=BASE + 10 * M1)
-    assert _opens(bars) == [BASE + 5 * M1]
+    (d / name).write_text(json.dumps(_bar(BASE + 5 * M1)) + "\n", encoding="utf-8")
+    layer = DiskLayer(str(tmp_path))
+    with caplog.at_level(logging.WARNING, logger="disk_layer"):
+        for _ in range(2):
+            bars, _geom = layer.read_window_with_geom(SYMBOL, 60, 10, to_open_ms=BASE + 10 * M1)
+            assert _opens(bars) == [BASE + 5 * M1]
+    reports = [r.getMessage() for r in caplog.records if "DISK_PART_NAME_NONCANONICAL" in r.getMessage()]
+    assert len(reports) == 1 and ("reason=%s" % reason) in reports[0], reports
 
 
 def test_unreadable_part_file_is_loud_and_skipped(tmp_path, caplog):

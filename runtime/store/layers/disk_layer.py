@@ -11,17 +11,39 @@ from core.model.bar_choice import choose_better_bar, is_complete, is_final_sourc
 
 logger = logging.getLogger("disk_layer")
 
+# Неканонічні імена part-файлів, про які вже звітовано. Читання гаряче (кожен запит вікна), а файл той самий — WARN раз
+# на шлях за процес, не на кожне читання. Розмір обмежений кількістю таких файлів на диску.
+_reported_noncanonical_parts: set[str] = set()
+
 
 def _part_day_start_ms(path: str) -> Optional[int]:
-    """Початок UTC-доби з імені `part-YYYYMMDD.jsonl`; None для неканонічного імені (такий файл читаємо)."""
+    """Початок UTC-доби з імені `part-YYYYMMDD.jsonl`; None для неканонічного імені — такий файл читаємо цілком.
+
+    `ssot_jsonl` таких імен не пише, а на порядку part-файлів за іменем тримаються і пропуск діб, пізніших за `to`,
+    і `DiskLayer.last_open_ms`. Тому неканонічне ім'я — гучний сигнал (I5), а не тихий виняток.
+    """
     name = os.path.basename(path)
     if len(name) != len("part-YYYYMMDD.jsonl") or not name[5:13].isdigit():
+        _report_noncanonical_part(path, "not_yyyymmdd")
         return None
     try:
         day = dt.datetime.strptime(name[5:13], "%Y%m%d").replace(tzinfo=dt.timezone.utc)
     except ValueError:
+        _report_noncanonical_part(path, "invalid_date")
         return None
     return int(day.timestamp()) * 1000
+
+
+def _report_noncanonical_part(path: str, reason: str) -> None:
+    if path in _reported_noncanonical_parts:
+        return
+    _reported_noncanonical_parts.add(path)
+    logger.warning(
+        "DISK_PART_NAME_NONCANONICAL reason=%s path=%s — ssot_jsonl такого імені не пише: файл читається цілком, "
+        "але порядок part-файлів за іменем на ньому не гарантований",
+        reason,
+        path,
+    )
 
 
 def _symbol_dir_key(symbol: str) -> str:
