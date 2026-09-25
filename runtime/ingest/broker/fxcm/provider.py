@@ -5,6 +5,7 @@ import logging
 import math
 from typing import Any, Callable, List, Optional, Tuple
 
+from core.config_loader import env_str
 from core.model.bars import CandleBar, assert_invariants, ms_to_utc_dt, utc_dt_to_ms
 from core.session_anchor import (
     H4_S,
@@ -100,6 +101,16 @@ class FxcmHistoryProvider:
         self._anchor_rule_for_symbol = anchor_rule_for_symbol
         self._fx: Optional[Any] = None
         self._last_error: Optional[Tuple[str, str]] = None
+
+    @classmethod
+    def from_env(cls, anchor_rule_for_symbol: Optional[Callable[[str], str]] = None) -> "FxcmHistoryProvider":
+        """Провайдер з FXCM_USERNAME/PASSWORD/HOST_URL/CONNECTION оточення; без кредів — гучна відмова (значень не
+        логуємо)."""
+        user_id, password, url = env_str("FXCM_USERNAME"), env_str("FXCM_PASSWORD"), env_str("FXCM_HOST_URL")
+        if not user_id or not password or not url:
+            raise RuntimeError("FXCM credentials missing (FXCM_USERNAME/PASSWORD/HOST_URL)")
+        return cls(user_id=user_id, password=password, url=url, connection=env_str("FXCM_CONNECTION") or "Demo",
+                   anchor_rule_for_symbol=anchor_rule_for_symbol)
 
     def _set_last_error(self, context: str, exc: Exception) -> None:
         self._last_error = (context, str(exc))
