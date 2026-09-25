@@ -13,7 +13,8 @@
 4. [Типові інциденти](#типові-інциденти)
 5. [Recovery процедури](#recovery-процедури)
 6. [DST перехід (літній/зимовий час)](#dst-перехід-літнійзимовий-час)
-7. [Що НЕ робити](#що-не-робити)
+7. [Нічний settle M1 + нативний D1](#нічний-settle-m1--нативний-d1-adr-0103-34)
+8. [Що НЕ робити](#що-не-робити)
 
 ---
 
@@ -395,6 +396,29 @@ FX/CFD ринки прив'язані до нью-йоркського часу.
 **Повна процедура**: [`docs/runbooks/dst_transition.md`](dst_transition.md)
 
 **Ключові дати**: US EDT = 2-га неділя березня, US EST = 1-ша неділя листопада.
+
+---
+
+## Нічний settle M1 + нативний D1 (ADR-0103 §3.4)
+
+Щодня в спільній перерві всіх символів (літо 21:05 UTC, зима 22:05; Субота 09:05) `ops/settle_daily.sh` зупиняє
+`smc:smc-ws smc:smc-preview smc:smc-fxcm` (~2 хв, `smc-ticks` не чіпає), замінює M1 минулої сесії архівом брокера
+(PREVIOUS_CLOSE = TV `FX:`), перебудовує похідні лише змінених хвилин і пише нативний D1 устояних діб.
+
+| Дія | Команда (root) |
+| --- | --- |
+| Ручний прогін (кожен — за «го» власника) | `sudo /opt/smc-v3/ops/settle_daily.sh --manual` |
+| Репетиція без запису (будь-коли) | `sudo /opt/smc-v3/ops/settle_daily.sh --manual --dry-run --ignore-break` |
+| Увімкнути нічний прогін (за «го») | `m1_settle.schedule_enabled = true` у git → деплой; `sudo install -m 644 /opt/smc-v3/ops/smc-settle-daily.cron /etc/cron.d/smc-settle-daily` |
+| Вимкнути | `schedule_enabled = false` (деплой) або `sudo rm /etc/cron.d/smc-settle-daily` |
+| Стан останнього прогону | `sudo cat /var/lib/smc-v3/m1_settle/last_status.json`; лог — `/var/log/smc-v3/settle_daily.log`; syslog `smc-settle` |
+
+Коди виходу: 0 — виконано або не час; 3 — відмова до запису (дані не змінено); 4 — дані устояно, але після старту
+є проблеми (див. `problems`); 5 — збій кроку даних, `data_v3` відкочено з tgz (стан до відкату —
+`data_v3.bad-<run>`); 6 — відкат не вдався (CRITICAL: дані після settle, кожен part-файл консистентний; відкат
+вручну з `/var/lib/smc-v3/m1_settle/backups/data_v3.pre-sd-<run>.tgz`). Якщо записувачі лишились зупиненими після
+вбитого прогону, trap обгортки стартує їх за маркером `writers_stopped_by_settle`; вручну — порядок проду: fxcm →
+`M1_POLLER_REDIS_PRIME` → preview + ws.
 
 ---
 

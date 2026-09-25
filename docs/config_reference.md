@@ -205,6 +205,23 @@ Config із будь-яким із них застарілий: `load_system_con
 | `d1_policy.source` | str | `derived_m1` (секції нема) | `broker_native`: D1 кожної доби, чий бакет закінчився щонайменше `native_settle_lag_h` годин до забору архіву, = нативний D1 FXCM PREVIOUS_CLOSE (= TV `FX:` D1) без огризків вихідних — пише `tools/repair/d1_native_settle`; молодші доби веде живий DeriveEngine (агрегат M1) до наступного settle; S7 (`season_plan`) D1 не будує; health не звіряє нативні D1 з M1 (`native_d1`). `derived_m1`: D1 = агрегат M1 (ADR-0098 §3.7, відкат). Інше значення — `ValueError CONFIG_D1_POLICY_INVALID` |
 | `d1_policy.native_settle_lag_h` | int ≥ 0 | 6 | Скільки годин після закриття доби брокер ще може її ревізувати (виміряно 22.09: останні ~5 год) |
 
+## Нічний settle M1 + нативний D1 (`m1_settle`, ADR-0103 §3.2/§3.4)
+
+Читає `m1_settle_policy` (`core/config_loader.py`); секції нема чи поле невалідне — `ValueError CONFIG_M1_SETTLE_INVALID` (дефолтів немає: settle переписує SSOT значеннями брокера). Прогін — `ops/settle_daily.sh` → `tools/repair/settle_daily`.
+
+| Ключ | Тип | Значення | Опис |
+| --- | --- | --- | --- |
+| `m1_settle.schedule_enabled` | bool | `false` | Вимикач нічного прогону (`--scheduled`); ручний `--manual` від нього не залежить. Вмикає власник після двох ручних прогонів (S4) |
+| `m1_settle.revision_lag_h_by_group` | {група календаря: int ≥ 0} | `cfd_us_22_23` 6, `cfd_eu_*` 12 | Settle бере хвилини, старші за забір − лаг групи символу; символ `symbols` без лагу своєї групи — відмова |
+| `m1_settle.lookback_h` | int ≥ 1 | 96 | Вікно settle назад від межі лагу (або від межі останнього успішного прогону, якщо вона раніше) |
+| `m1_settle.fetch_call_timeout_s` | int ≥ 1 | 120 | Дедлайн одного виклику SDK у `fetch_archive` (LoopWatchdog → exit 75) |
+| `m1_settle.fetch_attempts` | int ≥ 1 | 3 | Спроби забору (і повтори помилки SDK всередині забору) |
+| `m1_settle.deadline_guard_min` | int ≥ 0 | 10 | Прогін завершується або відкочується до відкриття першого символу мінус стільки хвилин |
+| `m1_settle.observe_s` | int ≥ 0 | 120 | Спостереження після старту записувачів (RUNNING + ERROR/Traceback у логах) |
+| `m1_settle.min_free_disk_gb` | int ≥ 1 | 5 | Префлайт: вільний диск для tgz `data_v3` і архівів |
+| `m1_settle.backups_keep` | int ≥ 1 | 14 | Скільки tgz нічних прогонів і каталогів прогонів тримати |
+| `m1_settle.work_dir` | str | `/var/lib/smc-v3/m1_settle` | Архіви, звіти, бекапи, `state.json`, `last_status.json`, `fxcm_cwd` (поза `data_v3` і репо) |
+
 ---
 
 ## WS Server rails (SEC-06, `ws_server.*`)
