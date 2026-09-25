@@ -203,7 +203,9 @@ class DailySettle:
     def _preflight(self) -> List[str]:
         problems = []
         if self.prod:
-            git = ["git", "-c", "safe.directory=" + self.paths.code_dir, "-C", self.paths.code_dir]
+            # від root у репо власника ubuntu: safe.directory — дозвіл читати, --no-optional-locks — status не
+            # переписує .git/index (інакше наступний git pull від ubuntu бачив би файли root)
+            git = ["git", "--no-optional-locks", "-c", "safe.directory=" + self.paths.code_dir, "-C", self.paths.code_dir]
             head, origin, status = (self._capture("git_" + n, git + a) for n, a in (
                 ("head", ["rev-parse", "HEAD"]), ("origin", ["rev-parse", "refs/remotes/origin/main"]),
                 ("status", ["status", "--porcelain"])))

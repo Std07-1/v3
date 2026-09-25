@@ -200,6 +200,7 @@ def test_dirty_tree_or_foreign_code_refuses_before_anything(env):
     assert _run(env) == sd.EXIT_REFUSED
     assert not [c for c in env.calls if not c.startswith(("git_", "preflight_"))]
     assert "DIRTY_TREE" in _report(env)["problems"][0]
+    assert env.commands["git_status"][:2] == ["git", "--no-optional-locks"]  # root не переписує .git/index
 
 
 def test_too_close_to_the_session_open_refuses_before_stopping(env):
