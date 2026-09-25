@@ -235,6 +235,24 @@ class FxcmHistoryProvider:
             anchor_rule=anchor_rule,
         )
 
+    def fetch_range_rows(
+        self, symbol: str, tf_s: int, date_from_utc: dt.datetime, date_to_utc: dt.datetime
+    ) -> List[Tuple[int, float, float, float, float, float]]:
+        """Сирі бари брокера [date_from, date_to] — (open_ms, o, h, low, c, v) як їх віддав SDK у PREVIOUS_CLOSE.
+
+        Архів для settle M1 і нативного D1 (ADR-0103 S3): без нормалізації, без перевірки сітки й без ковтання помилки —
+        виняток SDK летить до викликача, гейт архіву рахує його за календарем (ADR-0098 §3.8).
+        """
+        if self._fx is None:
+            raise RuntimeError("FXCM сесія не відкрита.")
+        if date_from_utc.tzinfo is None or date_to_utc.tzinfo is None:
+            raise ValueError("date_from_utc/date_to_utc мають бути UTC tz-aware.")
+        arr = self._get_history(
+            symbol, tf_s_to_fxcm_timeframe(tf_s), date_to_utc, _ALL_QUOTES_IN_RANGE, date_from_utc
+        )
+        rows = arr if arr is not None else []
+        return [(extract_open_time_ms(r),) + extract_ohlc(r) + (extract_volume(r),) for r in rows]
+
     def fetch_t1_bid_ticks(
         self, symbol: str, from_ms: int, to_ms: int
     ) -> Optional[List[Tuple[int, float]]]:

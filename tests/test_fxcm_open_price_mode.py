@@ -58,15 +58,22 @@ def _provider(**kwargs):
     return provider_mod.FxcmHistoryProvider(user_id="u", password="p", url="x", connection="Demo", **kwargs)
 
 
-@pytest.mark.parametrize("fetch", ["m1", "tf"])
+@pytest.mark.parametrize("fetch", ["m1", "tf", "range"])
 def test_every_history_request_asks_the_sdk_for_previous_close(fake_sdk, fetch):
-    """Суть контракту: у SDK іде саме PREVIOUS_CLOSE — і для M1, і для старших TF (TV агрегує M1, D1 нативний).
-    H4 без резолвера правила якоря провайдер відмовляє до запиту (ADR-0095 S3c), тож резолвер переданий."""
+    """Суть контракту: у SDK іде саме PREVIOUS_CLOSE — і для M1, і для старших TF (TV агрегує M1, D1 нативний), і для
+    архіву settle (`fetch_range_rows`, ADR-0103 S3). H4 без резолвера правила якоря провайдер відмовляє до запиту
+    (ADR-0095 S3c), тож резолвер переданий."""
+    import datetime as dt
+
     with _provider(anchor_rule_for_symbol=lambda _symbol: RULE_NY_CLOSE_US_DST) as provider:
         if fetch == "m1":
             provider.fetch_last_n_m1("XAU/USD", n=5)
-        else:
+        elif fetch == "tf":
             provider.fetch_last_n_tf("XAU/USD", tf_s=14400, n=5)
+        else:
+            utc = dt.timezone.utc
+            provider.fetch_range_rows("XAU/USD", 86400, dt.datetime(2026, 9, 1, tzinfo=utc),
+                                      dt.datetime(2026, 9, 2, tzinfo=utc))
     assert len(fake_sdk.calls) == 1
     _args, kwargs = fake_sdk.calls[0]
     assert kwargs.get("candle_open_price_mode") is PREVIOUS_CLOSE
