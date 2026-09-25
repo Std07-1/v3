@@ -48,6 +48,7 @@ def test_absent_section_is_refused_not_defaulted():
     ("fetch_attempts", True),
     ("deadline_guard_min", -1),
     ("backups_keep", 0),
+    ("min_free_disk_gb", 0),
     ("work_dir", ""),
 ])
 def test_invalid_field_is_refused(field, value):

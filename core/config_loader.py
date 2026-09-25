@@ -359,7 +359,7 @@ def d1_policy(cfg: Dict[str, Any]) -> D1Policy:
 M1_SETTLE_KEY = "m1_settle"
 # поле → найменше допустиме значення (ціле); 0 там, де «вимкнено» має сенс
 _M1_SETTLE_INT_MIN = {"lookback_h": 1, "fetch_call_timeout_s": 1, "fetch_attempts": 1, "backups_keep": 1,
-                      "deadline_guard_min": 0, "observe_s": 0}
+                      "deadline_guard_min": 0, "observe_s": 0, "min_free_disk_gb": 1}
 
 
 @dataclass(frozen=True)
@@ -374,6 +374,7 @@ class M1SettlePolicy:
     backups_keep: int
     deadline_guard_min: int
     observe_s: int
+    min_free_disk_gb: int
     work_dir: str
 
 
