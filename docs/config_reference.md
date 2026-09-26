@@ -204,6 +204,7 @@ Config із будь-яким із них застарілий: `load_system_con
 | --- | --- | --- | --- |
 | `d1_policy.source` | str | `derived_m1` (секції нема) | `broker_native`: D1 кожної доби, чий бакет закінчився щонайменше `native_settle_lag_h` годин до забору архіву, = нативний D1 FXCM PREVIOUS_CLOSE (= TV `FX:` D1) без огризків вихідних — пише `tools/repair/d1_native_settle`; молодші доби веде живий DeriveEngine (агрегат M1) до наступного settle; S7 (`season_plan`) D1 не будує; health не звіряє нативні D1 з M1 (`native_d1`). `derived_m1`: D1 = агрегат M1 (ADR-0098 §3.7, відкат). Інше значення — `ValueError CONFIG_D1_POLICY_INVALID` |
 | `d1_policy.native_settle_lag_h` | int ≥ 0 | 6 | Скільки годин після закриття доби брокер ще може її ревізувати (виміряно 22.09: останні ~5 год) |
+| `d1_policy.history_from` | str `YYYY-MM-DD` | немає (уся історія брокера до межі безпеки 1970) | Глибина нативної історії D1: `tools/repair/fetch_archive d1` забирає архів лише до цієї дати. `1990-09-23` — історія як у TV `FX:` (рішення власника 26.09.2026; брокер віддає з 1970, а 1974–75 поза сіткою). Невалідна дата — `ValueError CONFIG_D1_POLICY_INVALID` |
 
 ## Нічний settle M1 + нативний D1 (`m1_settle`, ADR-0103 §3.2/§3.4)
 
