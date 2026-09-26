@@ -76,6 +76,8 @@ class SmcRunnerLike(Protocol):
 
     def get_session_levels_wire(self, symbol: str) -> Any: ...
 
+    def get_display_session_levels_wire(self, symbol: str, viewer_tf_s: int) -> Any: ...
+
     def get_bias_map(self, symbol: str) -> Any: ...
 
     def get_momentum_map(self, symbol: str) -> Any: ...
@@ -1633,11 +1635,12 @@ async def _global_delta_loop(app: web.Application) -> None:
                                         symbol,
                                         _narr_exc,
                                     )
-                            # ADR-0035: inject fresh session levels in delta
+                            # ADR-0035 §3.4: свіжі сесійні рівні в дельті — за політикою TF глядача, як у повному
+                            # кадрі (без фільтра вони протікали на D1/H4)
                             try:
                                 _sess_lvls = cast(
                                     Any, _smc_runner
-                                ).get_session_levels_wire(symbol)
+                                ).get_display_session_levels_wire(symbol, tf_s)
                                 if _sess_lvls:
                                     frame["session_levels"] = _sess_lvls
                             except Exception:

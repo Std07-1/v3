@@ -770,6 +770,21 @@ class SmcRunner:
             _log.debug("SMC_SESSION_LEVELS_WIRE_FAIL sym=%s", symbol, exc_info=True)
             return []
 
+    def get_display_session_levels_wire(self, symbol: str, viewer_tf_s: int) -> list:
+        """ADR-0035 §3.4: сесійні рівні для дельта-кадру глядача TF — за тією ж політикою, що й повний кадр.
+
+        get_session_levels_wire (усі сесії) лишається для зовнішніх споживачів /api/context; графік бере цей метод,
+        інакше на D1/H4 з'являються рівні, яких політика відображення там не показує.
+        """
+        import time as _t
+
+        try:
+            levels = self._engine.get_display_session_levels(symbol, viewer_tf_s, int(_t.time() * 1000))
+            return [lv.to_wire() for lv in levels]
+        except Exception:
+            _log.warning("SMC_DISPLAY_SESSION_LEVELS_FAIL sym=%s tf=%s", symbol, viewer_tf_s, exc_info=True)
+            return []
+
     def get_narrative(self, symbol, viewer_tf_s, current_price, atr=0.0):
         # type: (str, int, float, float) -> Optional[NarrativeBlock]
         """ADR-0033 + ADR-0035: synthesize narrative with session context.

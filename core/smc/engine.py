@@ -505,6 +505,17 @@ class SmcEngine:
         )
         return levels
 
+    def get_display_session_levels(self, symbol: str, viewer_tf_s: int, current_time_ms: int) -> List[SmcLevel]:
+        """Сесійні рівні для глядача TF — лише kinds з allow-set його базового TF (ADR-0035 §3.4).
+
+        Одне джерело для повного кадру (get_display_snapshot) і дельти ws_server: дельта раніше вкладала всі сесійні
+        рівні для будь-якого TF, і на D1/H4 вони з'являлись всупереч політиці відображення.
+        """
+        allowed = self._KEY_LEVEL_ALLOW.get(self._display_base_tf(viewer_tf_s), frozenset())
+        if not allowed or not self._config.sessions.enabled:
+            return []
+        return [lv for lv in self.get_session_levels(symbol, current_time_ms) if lv.kind in allowed]
+
     def get_session_states(self, symbol: str, current_time_ms: int):
         """Get session states for narrative. Returns list of SessionState."""
         if not self._session_windows or not self._config.sessions.enabled:
@@ -737,6 +748,17 @@ class SmcEngine:
         86400: frozenset(),  # D1 viewer: candles visible, no key levels
     }  # type: Dict[int, frozenset]
 
+    def _display_base_tf(self, viewer_tf_s: int) -> int:
+        """Глядач TF → computed TF, чия політика відображення діє; невідомий TF — найближчий computed TF ≥ глядача."""
+        base_tf = self._VIEWER_TO_BASE.get(viewer_tf_s)
+        if base_tf is not None:
+            return base_tf
+        compute_tfs = self._config.compute_tfs
+        for t in sorted(compute_tfs):
+            if t >= viewer_tf_s:
+                return t
+        return max(compute_tfs) if compute_tfs else viewer_tf_s
+
     def get_display_snapshot(
         self,
         symbol: str,
@@ -754,16 +776,7 @@ class SmcEngine:
         S0: pure — reads _states dict, no I/O.
         """
         # 1. Map viewer → base computed TF
-        compute_tfs = self._config.compute_tfs
-        base_tf = self._VIEWER_TO_BASE.get(viewer_tf_s)
-        if base_tf is None:
-            # Fallback: nearest computed TF >= viewer
-            for t in sorted(compute_tfs):
-                if t >= viewer_tf_s:
-                    base_tf = t
-                    break
-            if base_tf is None:
-                base_tf = max(compute_tfs) if compute_tfs else viewer_tf_s
+        base_tf = self._display_base_tf(viewer_tf_s)
 
         snap = self.get_snapshot(symbol, base_tf)
 
@@ -855,12 +868,8 @@ class SmcEngine:
                         seen_ids.add(lv.id)
                         merged_levels.append(lv)
 
-        # 6b. ADR-0035: inject session H/L levels (filtered by allowed set)
-        if allowed and self._config.sessions.enabled:
-            session_levels = self.get_session_levels(symbol, int(time.time() * 1000))
-            for lv in session_levels:
-                if lv.kind in allowed:
-                    merged_levels.append(lv)
+        # 6b. ADR-0035: session H/L levels — той самий фільтр, що й у дельті ws_server
+        merged_levels.extend(self.get_display_session_levels(symbol, viewer_tf_s, int(time.time() * 1000)))
 
         # 7. Confluence scoring (ADR-0029 E5: after cross-TF injection)
         #    bars/last_bar/atr already computed in step 5 (same guard).
