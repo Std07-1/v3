@@ -110,6 +110,18 @@ def test_d1_stops_at_the_safety_floor_loudly(caplog):
     assert "FETCH_D1_HIT_FLOOR symbol=XAU/USD" in caplog.text
 
 
+def test_d1_stops_quietly_at_the_policy_history_depth(caplog):
+    """Історія як у TV FX: (d1_policy.history_from, рішення власника 26.09): глибшу історію брокера не беремо, і
+    найстаріша доба архіву однакова в будь-який день забору."""
+    history_from = _t("1990-09-23T00:00")
+    for fetched in ("2026-09-26T09:01", "2026-12-30T22:05"):
+        with caplog.at_level(logging.WARNING):
+            rows, meta = fa.fetch_d1(_daily_history(_t("1970-01-29T21:00")), 1, "XAU/USD", _t(fetched), history_from)
+        assert meta["stopped_by"] == "history_from" and meta["chunks"][-1]["start"].startswith("1990-09-23")
+        assert min(rows) == fa.to_ms(_t("1990-09-23T21:00"))
+    assert "FETCH_D1_HIT_FLOOR" not in caplog.text
+
+
 def test_d1_year_back_survives_leap_day():
     assert fa._year_back(_t("2028-02-29T21:00")) == _t("2027-02-28T21:00")
 
@@ -148,6 +160,8 @@ def test_clean_fetch_is_sealed_with_meta_in_the_consumer_format(tmp_path, monkey
     out = tmp_path / "arch"
     meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
     assert meta["mode"] == "PREVIOUS_CLOSE" and meta["kind"] == kind and meta["failed_symbols"] == []
+    if kind == "d1":  # глибина D1 з config.json → d1_policy.history_from (історія як у TV FX:)
+        assert meta["history_from"] == "1990-09-23T00:00:00+00:00"
     assert set(meta["symbols"]) == {"XAU_USD", "NAS100"} and provider.events == ["login", "logout"]
     rows = json.loads((out / ("XAU_USD_%s.json" % suffix)).read_text(encoding="utf-8"))
     assert rows == sorted(rows) and len(rows[0]) == 6

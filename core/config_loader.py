@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import os
@@ -329,6 +330,9 @@ class D1Policy:
 
     source: str
     native_settle_lag_h: int
+    # глибина нативної історії D1 (UTC-північ): архів брокера забирається до неї, не глибше — історія як у TV FX:
+    # (~1990; рішення власника 26.09.2026). None — уся історія брокера до межі безпеки забору.
+    history_from_ms: Optional[int] = None
 
     @property
     def native(self) -> bool:
@@ -352,7 +356,15 @@ def d1_policy(cfg: Dict[str, Any]) -> D1Policy:
         raise ValueError("CONFIG_D1_POLICY_INVALID source=%r — %s | %s (ADR-0103)" % (source, D1_SOURCE_NATIVE, D1_SOURCE_DERIVED))
     if isinstance(lag, bool) or not isinstance(lag, int) or lag < 0:
         raise ValueError("CONFIG_D1_POLICY_INVALID native_settle_lag_h=%r — ціле число годин ≥ 0 (ADR-0103)" % (lag,))
-    return D1Policy(source, lag)
+    history_from = raw.get("history_from")
+    history_from_ms = None
+    if history_from is not None:
+        try:
+            day = datetime.datetime.strptime(str(history_from), "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+        except ValueError:
+            raise ValueError("CONFIG_D1_POLICY_INVALID history_from=%r — дата YYYY-MM-DD (ADR-0103)" % (history_from,))
+        history_from_ms = int(day.timestamp() * 1000)
+    return D1Policy(source, lag, history_from_ms)
 
 
 # ── Щоденний settle M1 + нативний D1 у денну перерву (ADR-0103 §3.2, S3) ─────────────────────────────────────────────

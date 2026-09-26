@@ -8,8 +8,9 @@ PREVIOUS_CLOSE (= бар TV `FX:`, ADR-0100; AST-гейт `tests/test_fxcm_open_
 - M1: добові чанки [D 00:00, D+1 01:00) з перекриттям 1 год і п'ятничний зонд [Пт 18:00, Пн 01:00) — хвилину закриття
   тижня (Пт 20:44) архів віддає лише, коли date_to після відкриття наступного тижня (вимір 22.09). Помилку чанка з
   торговою хвилиною календаря гейт `settle_m1` рахує як відмову; тут вона — `errors_trading` і код виходу 1.
-- D1: річні чанки назад від `--to` до двох порожніх років поспіль (межа безпеки — 1970) — уся історія брокера
-  (d1_native_settle володіє всіма устояними добами; неповна історія — відмова, а не «натив без року»).
+- D1: річні чанки назад від `--to` до `d1_policy.history_from` — історія як у TV FX: (~1990, рішення власника 26.09;
+  брокер віддає з 1970, а 1974–75 поза сіткою); без неї — до двох порожніх років поспіль (межа безпеки — 1970).
+  Помилка чанка — відмова всього архіву (d1_native_settle володіє всіма устояними добами: не «натив без року»).
 
 Кожен виклик SDK — під `LoopWatchdog`: get_history буває зависає без дедлайну (24.09 — D1 SPX500 13 хв, інцидент
 06.09), тож завислий виклик завершує процес кодом 75 (EX_TEMPFAIL), оркестратор повторює забір. Помилка SDK
@@ -34,7 +35,7 @@ import sys
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
-from core.config_loader import load_system_config, m1_settle_policy, pick_config_path
+from core.config_loader import d1_policy, load_system_config, m1_settle_policy, pick_config_path
 from runtime.ingest.loop_watchdog import LoopWatchdog
 from tools.repair.settle_gate import has_trading
 
@@ -42,9 +43,9 @@ log = logging.getLogger("fetch_archive")
 UTC = dt.timezone.utc
 TOOL = "fetch_archive/1"
 M1_S, D1_S = 60, 86400
-# Кінець історії символу — D1_EMPTY_YEARS_STOP порожніх років поспіль; D1_HISTORY_FLOOR — лише межа безпеки гортання.
-# Раніше межею був рік 1990 відносно --to: архів обрізав історію брокера (усі символи «з 1990», найстаріша доба
-# зсувалась щодня, XAU мав 824 доби 1987–1990 без звірки з нативом).
+# Глибину задає `d1_policy.history_from` (фіксована дата: найстаріша доба архіву не зсувається щодня, як за колишньої
+# межі «рік > 1990 від --to»). Без неї кінець історії — D1_EMPTY_YEARS_STOP порожніх років поспіль, а D1_HISTORY_FLOOR —
+# лише межа безпеки гортання.
 D1_EMPTY_YEARS_STOP = 2
 D1_HISTORY_FLOOR = dt.datetime(1970, 1, 1, tzinfo=UTC)
 RETRY_PAUSE_S = 1.0
@@ -122,12 +123,16 @@ def fetch_m1(fetch: FetchRange, attempts: int, symbol: str, t_from: dt.datetime,
     return rows, meta
 
 
-def fetch_d1(fetch: FetchRange, attempts: int, symbol: str, t_to: dt.datetime) -> Tuple[Dict[int, List[float]], Dict[str, Any]]:
+def fetch_d1(fetch: FetchRange, attempts: int, symbol: str, t_to: dt.datetime,
+             history_from: Optional[dt.datetime] = None) -> Tuple[Dict[int, List[float]], Dict[str, Any]]:
+    """Річні чанки назад від `t_to` до `history_from` (глибина D1 за `d1_policy`, штатна межа) або, без неї, до двох
+    порожніх років поспіль чи межі безпеки D1_HISTORY_FLOOR (гучно)."""
     rows: Dict[int, List[float]] = {}
     chunks: List[Dict[str, Any]] = []
+    floor = history_from or D1_HISTORY_FLOOR
     empty_run, end = 0, t_to
-    while end > D1_HISTORY_FLOOR and empty_run < D1_EMPTY_YEARS_STOP:
-        start = max(_year_back(end), D1_HISTORY_FLOOR)
+    while end > floor and empty_run < D1_EMPTY_YEARS_STOP:
+        start = max(_year_back(end), floor)
         got, error = call_with_retries(fetch, attempts, symbol, D1_S, start, end)
         chunks.append({"start": start.isoformat(), "end": end.isoformat(), "rows": len(got), "error": error})
         if error is not None:
@@ -137,8 +142,12 @@ def fetch_d1(fetch: FetchRange, attempts: int, symbol: str, t_to: dt.datetime) -
         empty_run = empty_run + 1 if not got and error is None else 0
         end = start
     keys = sorted(rows)
-    stopped_by = "empty_years" if empty_run >= D1_EMPTY_YEARS_STOP else "floor"
-    if stopped_by == "floor":  # історія брокера може бути глибшою за межу безпеки — архів неповний, гучно
+    if empty_run >= D1_EMPTY_YEARS_STOP:
+        stopped_by = "empty_years"
+    elif history_from is not None:
+        stopped_by = "history_from"  # глибина за політикою — штатно
+    else:  # історія брокера може бути глибшою за межу безпеки — архів неповний, гучно
+        stopped_by = "floor"
         log.warning("FETCH_D1_HIT_FLOOR symbol=%s floor=%s — історія брокера не скінчилась", symbol, D1_HISTORY_FLOOR.date())
     return rows, {"chunks": chunks, "chunk_errors": sum(1 for c in chunks if c["error"]), "bars": len(keys),
                   "first": keys[0] if keys else None, "last": keys[-1] if keys else None, "stopped_by": stopped_by}
@@ -193,12 +202,15 @@ def write_json_atomic(path: str, payload: Any) -> None:
 
 
 def run(kind: str, out: str, symbols: Sequence[str], fetch: FetchRange, attempts: int, t_to: dt.datetime,
-        t_from: Optional[dt.datetime], calendars: Dict[str, Any], mode: str, fetched_at: dt.datetime) -> int:
+        t_from: Optional[dt.datetime], calendars: Dict[str, Any], mode: str, fetched_at: dt.datetime,
+        history_from: Optional[dt.datetime] = None) -> int:
     """Забір усіх символів у `out`; 0 — чистий архів (meta.json), EXIT_FETCH_FAILED — meta.failed.json."""
     meta: Dict[str, Any] = {"tool": TOOL, "kind": kind, "mode": mode, "fetched_at": fetched_at.isoformat(),
                             "fetched_at_ms": to_ms(fetched_at), "to": t_to.isoformat(), "symbols": {}}
     if kind == "m1":
         meta["window"] = [t_from.isoformat(), t_to.isoformat()]
+    else:
+        meta["history_from"] = history_from.isoformat() if history_from else None
     failed = []
     for symbol in symbols:
         sym_dir = symbol.replace("/", "_")
@@ -206,7 +218,7 @@ def run(kind: str, out: str, symbols: Sequence[str], fetch: FetchRange, attempts
             rows, meta_sym = fetch_m1(fetch, attempts, symbol, t_from, t_to, calendars[symbol].is_trading_minute)
             bad = meta_sym["errors_trading"]
         else:
-            rows, meta_sym = fetch_d1(fetch, attempts, symbol, t_to)
+            rows, meta_sym = fetch_d1(fetch, attempts, symbol, t_to, history_from)
             bad = meta_sym["chunk_errors"]
         write_json_atomic(os.path.join(out, "%s_%s.json" % (sym_dir, "m1" if kind == "m1" else "d1_full")),
                           [[k] + rows[k] for k in sorted(rows)])
@@ -233,6 +245,8 @@ def main(argv: Optional[List[str]] = None, provider_factory: Optional[Callable[[
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     cfg = load_system_config(args.config or pick_config_path())
     policy = m1_settle_policy(cfg)
+    history_from_ms = d1_policy(cfg).history_from_ms
+    history_from = dt.datetime.fromtimestamp(history_from_ms / 1000, UTC) if history_from_ms is not None else None
     symbols = list(args.symbols or cfg["symbols"])
     unknown = sorted(set(symbols) - set(cfg["symbols"]))
     fetched_at = dt.datetime.now(UTC).replace(microsecond=0)
@@ -257,7 +271,7 @@ def main(argv: Optional[List[str]] = None, provider_factory: Optional[Callable[[
     watchdog.start_thread(log=log)
     with guarded_session(provider, watchdog) as fetch:
         return run(args.kind, args.out, symbols, fetch, policy.fetch_attempts, t_to, t_from, calendars,
-                   provider_mod.OPEN_PRICE_MODE_NAME, fetched_at)
+                   provider_mod.OPEN_PRICE_MODE_NAME, fetched_at, history_from)
 
 
 if __name__ == "__main__":
