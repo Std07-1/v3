@@ -686,9 +686,11 @@
       }
     },
     "sessions": {
+      "_comment": "ADR-0035 + ADR-0104 S0: open_utc/close_utc/killzone_* — хвилини UTC у ЛІТНІЙ сезон правила сесії; узимку місцеві години біржі на 1 год пізніше за UTC (Лондон — season_rule eu, Нью-Йорк — us, Азія/Токіо — none, без переходу). Лондон 08:00–17:00 London, Нью-Йорк 08:00–17:00 NY, Азія 09:00–16:00 Tokyo.",
       "enabled": true,
       "definitions": {
         "asia": {
+          "season_rule": "none",
           "label": "Asia",
           "open_utc": "00:00",
           "close_utc": "07:00",
@@ -696,6 +698,7 @@
           "killzone_end_utc": "03:00"
         },
         "london": {
+          "season_rule": "eu",
           "label": "London",
           "open_utc": "07:00",
           "close_utc": "16:00",
@@ -703,6 +706,7 @@
           "killzone_end_utc": "10:00"
         },
         "newyork": {
+          "season_rule": "us",
           "label": "New York",
           "open_utc": "12:00",
           "close_utc": "21:00",

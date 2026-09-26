@@ -168,3 +168,6 @@ TF, з можливістю вмикати/вимикати родини рів�
 ## Changelog
 
 - 2026-09-26 — Accepted (власник). Передумова виконана: витік сесійних рівнів на D1/H4 закрито `221f17f`.
+- 2026-09-26 — S0 виконано: `SessionWindow.season_rule` (asia none, london eu, newyork us) через
+  `core/session_anchor.calendar_season`; часи config — літній UTC, узимку момент звіряється на годину раніше; до 25.10
+  поведінка не змінюється (changelog 20260926-004).

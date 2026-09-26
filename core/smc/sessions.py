@@ -17,6 +17,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.model.bars import CandleBar
+from core.session_anchor import CALENDAR_SEASON_RULES, SEASON_RULE_NONE, SEASON_WINTER, calendar_season
 from core.smc.types import SmcLevel, make_level_id
 
 _log = logging.getLogger(__name__)
@@ -32,14 +33,20 @@ def _parse_utc_minutes(s: str) -> int:
 
 @dataclasses.dataclass(frozen=True)
 class SessionWindow:
-    """Визначення однієї торгової сесії (UTC)."""
+    """Визначення однієї торгової сесії: хвилини UTC у ЛІТНІЙ сезон її правила (ADR-0104 S0).
+
+    Біржа відкривається за місцевим годинником, тож узимку (правило `eu` — Лондон, `us` — Нью-Йорк) ті самі години
+    місцевого часу на годину пізніше за UTC: момент зсувається на `_WINTER_SHIFT_MS` назад і звіряється з літнім
+    вікном. `none` (Азія/Токіо, без переходу) — вікно одне.
+    """
 
     name: str  # "asia" | "london" | "newyork"
     label: str  # "Asia" | "London" | "New York"
-    open_utc_min: int  # minutes from midnight UTC
-    close_utc_min: int  # minutes from midnight UTC
-    kz_start_min: int  # killzone start (minutes from midnight)
+    open_utc_min: int  # minutes from midnight UTC (summer)
+    close_utc_min: int  # minutes from midnight UTC (summer)
+    kz_start_min: int  # killzone start (minutes from midnight UTC, summer)
     kz_end_min: int  # killzone end
+    season_rule: str = SEASON_RULE_NONE  # us | eu | none — правило переходу DST біржі сесії
 
 
 @dataclasses.dataclass(frozen=True)
@@ -61,6 +68,10 @@ def load_session_windows(definitions: Dict[str, Dict[str, Any]]) -> List[Session
     """Config dict → list of SessionWindow. S5: SSOT from config.json."""
     windows = []
     for name, d in definitions.items():
+        season_rule = str(d.get("season_rule", SEASON_RULE_NONE))
+        if season_rule not in CALENDAR_SEASON_RULES:  # тихий «none» зсунув би сесію взимку на годину
+            raise ValueError("SESSION_SEASON_RULE_INVALID session=%s season_rule=%r (allowed: %s)"
+                             % (name, season_rule, sorted(CALENDAR_SEASON_RULES)))
         windows.append(
             SessionWindow(
                 name=name,
@@ -71,6 +82,7 @@ def load_session_windows(definitions: Dict[str, Dict[str, Any]]) -> List[Session
                     str(d.get("killzone_start_utc", "00:00"))
                 ),
                 kz_end_min=_parse_utc_minutes(str(d.get("killzone_end_utc", "00:00"))),
+                season_rule=season_rule,
             )
         )
     return windows
@@ -101,9 +113,19 @@ def _ms_to_day_start(epoch_ms: int) -> int:
     return (total_s - total_s % 86400) * 1000
 
 
+_WINTER_SHIFT_MS = 3_600_000  # узимку місцеві години біржі на 1 год пізніше за UTC, ніж улітку
+
+
+def _session_clock_ms(epoch_ms: int, sw: SessionWindow) -> int:
+    """Момент на «літньому» годиннику сесії: узимку її правила — на годину раніше (ADR-0104 S0)."""
+    if calendar_season(epoch_ms, sw.season_rule) == SEASON_WINTER:
+        return epoch_ms - _WINTER_SHIFT_MS
+    return epoch_ms
+
+
 def _bar_in_session(bar_open_ms: int, sw: SessionWindow) -> bool:
-    """Чи бар належить до сесії (bar.open_ms в [open, close) UTC minutes)."""
-    bar_min = _ms_to_utc_minutes(bar_open_ms)
+    """Чи бар належить до сесії (bar.open_ms в [open, close) UTC minutes літнього годинника сесії)."""
+    bar_min = _ms_to_utc_minutes(_session_clock_ms(bar_open_ms, sw))
     if sw.open_utc_min < sw.close_utc_min:
         return sw.open_utc_min <= bar_min < sw.close_utc_min
     else:
@@ -112,8 +134,8 @@ def _bar_in_session(bar_open_ms: int, sw: SessionWindow) -> bool:
 
 
 def _bar_in_killzone(bar_open_ms: int, sw: SessionWindow) -> bool:
-    """Чи бар в killzone (kz_start ≤ bar_min < kz_end)."""
-    bar_min = _ms_to_utc_minutes(bar_open_ms)
+    """Чи бар в killzone (kz_start ≤ bar_min < kz_end, літній годинник сесії)."""
+    bar_min = _ms_to_utc_minutes(_session_clock_ms(bar_open_ms, sw))
     if sw.kz_start_min < sw.kz_end_min:
         return sw.kz_start_min <= bar_min < sw.kz_end_min
     else:
@@ -183,10 +205,6 @@ def compute_session_levels(
             )
             break
 
-    # Get current day boundary for current/previous session split
-    current_day_start = _ms_to_day_start(current_time_ms)
-    prev_day_start = current_day_start - 86400_000
-
     levels: List[SmcLevel] = []
     states: List[SessionState] = []
 
@@ -195,6 +213,9 @@ def compute_session_levels(
         if kinds is None:
             continue
         act_h_kind, act_l_kind, prev_h_kind, prev_l_kind = kinds
+        # Межа current/previous — доба на годиннику сесії (узимку зсунутому), як і належність бару до вікна
+        current_day_start = _ms_to_day_start(_session_clock_ms(current_time_ms, sw))
+        prev_day_start = current_day_start - 86400_000
 
         # Determine if session is currently active + killzone
         is_active = _bar_in_session(current_time_ms, sw)
@@ -216,7 +237,7 @@ def compute_session_levels(
             if not _bar_in_session(bar.open_time_ms, sw):
                 continue
 
-            bar_day = _ms_to_day_start(bar.open_time_ms)
+            bar_day = _ms_to_day_start(_session_clock_ms(bar.open_time_ms, sw))
 
             if bar_day >= current_day_start:
                 # Today's session = current (running)
