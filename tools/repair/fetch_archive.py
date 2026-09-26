@@ -8,8 +8,8 @@ PREVIOUS_CLOSE (= бар TV `FX:`, ADR-0100; AST-гейт `tests/test_fxcm_open_
 - M1: добові чанки [D 00:00, D+1 01:00) з перекриттям 1 год і п'ятничний зонд [Пт 18:00, Пн 01:00) — хвилину закриття
   тижня (Пт 20:44) архів віддає лише, коли date_to після відкриття наступного тижня (вимір 22.09). Помилку чанка з
   торговою хвилиною календаря гейт `settle_m1` рахує як відмову; тут вона — `errors_trading` і код виходу 1.
-- D1: річні чанки назад від `--to` до 1990 або двох порожніх років поспіль — уся історія брокера (d1_native_settle
-  володіє всіма устояними добами; неповна історія — відмова, а не «натив без року»).
+- D1: річні чанки назад від `--to` до двох порожніх років поспіль (межа безпеки — 1970) — уся історія брокера
+  (d1_native_settle володіє всіма устояними добами; неповна історія — відмова, а не «натив без року»).
 
 Кожен виклик SDK — під `LoopWatchdog`: get_history буває зависає без дедлайну (24.09 — D1 SPX500 13 хв, інцидент
 06.09), тож завислий виклик завершує процес кодом 75 (EX_TEMPFAIL), оркестратор повторює забір. Помилка SDK
@@ -42,8 +42,11 @@ log = logging.getLogger("fetch_archive")
 UTC = dt.timezone.utc
 TOOL = "fetch_archive/1"
 M1_S, D1_S = 60, 86400
-D1_FLOOR_YEAR = 1990  # найдавніша доба брокера (NAS100/XAU D1 з 1990, забір 23.09)
-D1_EMPTY_YEARS_STOP = 2  # два порожні роки поспіль — історія символу скінчилась
+# Кінець історії символу — D1_EMPTY_YEARS_STOP порожніх років поспіль; D1_HISTORY_FLOOR — лише межа безпеки гортання.
+# Раніше межею був рік 1990 відносно --to: архів обрізав історію брокера (усі символи «з 1990», найстаріша доба
+# зсувалась щодня, XAU мав 824 доби 1987–1990 без звірки з нативом).
+D1_EMPTY_YEARS_STOP = 2
+D1_HISTORY_FLOOR = dt.datetime(1970, 1, 1, tzinfo=UTC)
 RETRY_PAUSE_S = 1.0
 EXIT_FETCH_FAILED = 1
 SIDECAR_ARGV_MARKER = b"runtime.ingest.broker_sidecar"
@@ -123,8 +126,8 @@ def fetch_d1(fetch: FetchRange, attempts: int, symbol: str, t_to: dt.datetime) -
     rows: Dict[int, List[float]] = {}
     chunks: List[Dict[str, Any]] = []
     empty_run, end = 0, t_to
-    while end.year > D1_FLOOR_YEAR and empty_run < D1_EMPTY_YEARS_STOP:
-        start = _year_back(end)
+    while end > D1_HISTORY_FLOOR and empty_run < D1_EMPTY_YEARS_STOP:
+        start = max(_year_back(end), D1_HISTORY_FLOOR)
         got, error = call_with_retries(fetch, attempts, symbol, D1_S, start, end)
         chunks.append({"start": start.isoformat(), "end": end.isoformat(), "rows": len(got), "error": error})
         if error is not None:
@@ -134,8 +137,11 @@ def fetch_d1(fetch: FetchRange, attempts: int, symbol: str, t_to: dt.datetime) -
         empty_run = empty_run + 1 if not got and error is None else 0
         end = start
     keys = sorted(rows)
+    stopped_by = "empty_years" if empty_run >= D1_EMPTY_YEARS_STOP else "floor"
+    if stopped_by == "floor":  # історія брокера може бути глибшою за межу безпеки — архів неповний, гучно
+        log.warning("FETCH_D1_HIT_FLOOR symbol=%s floor=%s — історія брокера не скінчилась", symbol, D1_HISTORY_FLOOR.date())
     return rows, {"chunks": chunks, "chunk_errors": sum(1 for c in chunks if c["error"]), "bars": len(keys),
-                  "first": keys[0] if keys else None, "last": keys[-1] if keys else None}
+                  "first": keys[0] if keys else None, "last": keys[-1] if keys else None, "stopped_by": stopped_by}
 
 
 def load_sidecar_credentials(proc_root: str = "/proc") -> int:

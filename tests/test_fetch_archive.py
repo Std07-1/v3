@@ -85,6 +85,31 @@ def test_d1_walks_back_a_year_at_a_time_until_two_empty_years():
     assert [c["rows"] for c in meta["chunks"]][-2:] == [0, 0] and meta["chunks"][-1]["start"].startswith("2017-02-28")
 
 
+def _daily_history(first_bar):
+    def fetch(symbol, tf_s, start, end):
+        grid = _bars(start.replace(hour=21, minute=0) - dt.timedelta(days=1), 400, 86_400_000)
+        return [b for b in grid if start <= dt.datetime.fromtimestamp(b[0] / 1000, UTC) < end
+                and dt.datetime.fromtimestamp(b[0] / 1000, UTC) >= first_bar]
+    return fetch
+
+
+def test_d1_history_older_than_1990_is_fetched_to_its_real_start():
+    """Регресія 25.09: межа «рік > 1990 від --to» обрізала історію брокера — XAU мав 824 доби 1987–1990 без звірки,
+    а найстаріша доба архіву зсувалась щодня. Кінець історії — два порожні роки, не календарна межа."""
+    first_bar = _t("1987-06-11T21:00")
+    rows, meta = fa.fetch_d1(_daily_history(first_bar), 1, "XAU/USD", _t("2026-09-25T21:01"))
+    assert min(rows) == fa.to_ms(first_bar) and meta["stopped_by"] == "empty_years"
+    assert meta["chunks"][-1]["start"].startswith("1984-09-25")
+
+
+def test_d1_stops_at_the_safety_floor_loudly(caplog):
+    first_bar = _t("1900-01-01T21:00")
+    with caplog.at_level(logging.WARNING):
+        rows, meta = fa.fetch_d1(_daily_history(first_bar), 1, "XAU/USD", _t("2026-09-25T21:01"))
+    assert meta["stopped_by"] == "floor" and meta["chunks"][-1]["start"].startswith("1970-01-01")
+    assert "FETCH_D1_HIT_FLOOR symbol=XAU/USD" in caplog.text
+
+
 def test_d1_year_back_survives_leap_day():
     assert fa._year_back(_t("2028-02-29T21:00")) == _t("2027-02-28T21:00")
 
