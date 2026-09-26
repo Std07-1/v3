@@ -16,8 +16,10 @@ def _repo_cfg():
     return load_system_config(pick_config_path())
 
 
-def test_repo_config_keeps_the_nightly_run_off_until_owner_go():
-    assert m1_settle_policy(_repo_cfg()).schedule_enabled is False
+def test_repo_config_runs_nightly_after_owner_go_and_two_clean_manual_runs():
+    """Увімкнено 26.09.2026: «Ok. Go» власника 25.09 з умовою — ручні прогони S4 №1 (25.09) і №2 (26.09, оркестратор)
+    чисті. Вимкнення — schedule_enabled=false (деплой) або прибрати /etc/cron.d/smc-settle-daily (ранбук production)."""
+    assert m1_settle_policy(_repo_cfg()).schedule_enabled is True
 
 
 def test_repo_config_gives_every_symbol_its_group_revision_lag():

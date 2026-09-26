@@ -211,7 +211,7 @@ Config із будь-яким із них застарілий: `load_system_con
 
 | Ключ | Тип | Значення | Опис |
 | --- | --- | --- | --- |
-| `m1_settle.schedule_enabled` | bool | `false` | Вимикач нічного прогону (`--scheduled`); ручний `--manual` від нього не залежить. Вмикає власник після двох ручних прогонів (S4) |
+| `m1_settle.schedule_enabled` | bool | `true` (з 26.09.2026) | Вимикач нічного прогону (`--scheduled`); ручний `--manual` від нього не залежить. Увімкнено після двох чистих ручних прогонів S4 за «го» власника; вимкнути — `false` (деплой) або прибрати `/etc/cron.d/smc-settle-daily` |
 | `m1_settle.revision_lag_h_by_group` | {група календаря: int ≥ 0} | `cfd_us_22_23` 6, `cfd_eu_*` 12 | Settle бере хвилини, старші за забір − лаг групи символу; символ `symbols` без лагу своєї групи — відмова |
 | `m1_settle.lookback_h` | int ≥ 1 | 96 | Вікно settle назад від межі лагу (або від межі останнього успішного прогону, якщо вона раніше) |
 | `m1_settle.fetch_call_timeout_s` | int ≥ 1 | 120 | Дедлайн одного виклику SDK у `fetch_archive` (LoopWatchdog → exit 75) |
