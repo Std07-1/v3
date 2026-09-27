@@ -124,19 +124,15 @@ export function applyBudget(
     const budgetStructure = structureSwings.slice(-config.structureMax);
     const budgetSwings = [...plainSwings, ...budgetStructure];
 
-    // 3) ADR-0104 S2b: Focus = режим «Авто». Рівень, який сервер вивів з «Авто» (auto=false — напр. сесії попередньої
-    //    доби), лишається для Research і бюджет Focus не займає; без поля auto рішення не приймалось — рівень як раніше.
-    const autoLevels = levels.filter(l => l.auto !== false);
-
-    // 4) Total cap enforcement — trim levels if over budget
-    let budgetLevels = autoLevels;
+    // 3) Total cap enforcement — trim levels if over budget
+    let budgetLevels = levels;
     const total = budgetZones.length + budgetStructure.length + budgetLevels.length;
     if (total > config.total) {
         const maxLevels = Math.max(0, config.total - budgetZones.length - budgetStructure.length);
-        budgetLevels = autoLevels.slice(0, maxLevels);
+        budgetLevels = levels.slice(0, maxLevels);
     }
 
-    // 5) Compute opacity per zone
+    // 4) Compute opacity per zone
     for (const z of budgetZones) {
         propsMap.set(z.id, {
             zone_id: z.id,
