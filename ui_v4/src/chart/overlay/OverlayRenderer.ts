@@ -27,6 +27,7 @@
 import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import type { SmcData, SmcZone, SmcLevel, SmcSwing, UiWarning, ZoneGradeInfo } from '../../types';
 import { applyBudget, DEFAULT_BUDGET, type BudgetConfig, type DisplayMode, type ZoneDisplayProps } from './DisplayBudget';
+import { applyLevelState, type LevelStyle } from './levelLook';
 
 // ── ADR-0043 P1: Canvas Safe Zones — overlay елементи не рендеряться під HUD ──
 const CANVAS_SAFE_TOP_Y = 75;    // HUD + OHLCV tooltip clearance (px)
@@ -37,7 +38,7 @@ type HorzScaleItem = number | { year: number; month: number; day: number };
 
 // ── ADR-0024b: Per-kind рівень стилізація ──────────────────────────
 // Кольори розділені за TF-шаром: D1=orange, H4=purple, H1=blue, M30=teal, M15=cyan, EQ=red/green
-type LevelStyle = { color: string; dash: number[]; width: number; alpha: number; label: string; fontSize: number };
+// ADR-0104 S2c: рисунок лінії (суцільна / штрих) далі визначає стан рівня — levelLook.applyLevelState
 
 // SMC-стандартні назви: PDH/PDL, HOD/LOD, Prev 4H Hi, 4H Hi, EQH/EQL
 const LEVEL_STYLES: Record<string, LevelStyle> & { _default: LevelStyle } = {
@@ -918,7 +919,7 @@ export class OverlayRenderer {
       const margin = this.cssH * 0.1;
       if (y < -margin || y > this.cssH + margin) continue;
       const dist = midPrice !== 0 ? Math.abs(lvl.price - midPrice) / rangeH : 0;
-      const style = LEVEL_STYLES[lvl.kind ?? ''] ?? LEVEL_STYLES._default;
+      const style = applyLevelState(LEVEL_STYLES[lvl.kind ?? ''] ?? LEVEL_STYLES._default, lvl);
 
       // X positioning: formation visible → long line; off-screen → short notch
       let xStart: number;
