@@ -20,7 +20,17 @@ from typing import List, Optional
 from core.model.bars import CandleBar
 from core.smc.config import SmcConfig
 from core.smc.swings import compute_atr
-from core.smc.types import SmcLevel, SmcSwing, make_level_id
+from core.smc.types import (
+    LEVEL_SIDE_HIGH,
+    LEVEL_SIDE_LOW,
+    LEVEL_STATE_FIXED,
+    LEVEL_TIER_CONTEXT,
+    SmcLevel,
+    SmcSwing,
+    level_price_key,
+    make_level_id,
+    make_level_key,
+)
 
 # Kinds що є "high swings" і "low swings"
 _HIGH_SWING_KINDS = frozenset({"hh", "lh", "sh"})
@@ -70,10 +80,10 @@ def detect_liquidity_levels(
 
     levels: List[SmcLevel] = []
     levels += _cluster_to_levels(
-        high_swings, "eq_highs", tolerance, cfg.min_touches, per_side, symbol, tf_s,
+        high_swings, "eq_highs", LEVEL_SIDE_HIGH, tolerance, cfg.min_touches, per_side, symbol, tf_s,
     )
     levels += _cluster_to_levels(
-        low_swings, "eq_lows", tolerance, cfg.min_touches, per_side, symbol, tf_s,
+        low_swings, "eq_lows", LEVEL_SIDE_LOW, tolerance, cfg.min_touches, per_side, symbol, tf_s,
     )
 
     return levels
@@ -84,6 +94,7 @@ def detect_liquidity_levels(
 def _cluster_to_levels(
     swings: List[SmcSwing],
     kind: str,
+    side: str,
     tolerance: float,
     min_touches: int,
     max_count: int,
@@ -130,6 +141,11 @@ def _cluster_to_levels(
             price=price,
             time_ms=earliest_ms,
             touches=len(cluster),
+            # ADR-0104 §3.2: у кластера немає періоду — key тримається ціни, як і id
+            key=make_level_key("eq%d" % tf_s, side, symbol, str(level_price_key(price))),
+            family="liquidity",
+            state=LEVEL_STATE_FIXED,
+            tier=LEVEL_TIER_CONTEXT,
         ))
 
     # Сортуємо по touches desc (найзначніші першими), ліміт

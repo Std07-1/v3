@@ -23,12 +23,33 @@ Python 3.7 compatible.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from core.model.bars import CandleBar
-from core.smc.types import SmcLevel, make_level_id
+from core.smc.types import (
+    LEVEL_SIDE_HIGH,
+    LEVEL_SIDE_LOW,
+    LEVEL_STATE_FIXED,
+    LEVEL_STATE_FORMING,
+    LEVEL_TIER_ANCHOR,
+    LEVEL_TIER_CONTEXT,
+    SmcLevel,
+    level_period,
+    make_level_id,
+    make_level_key,
+)
 
-# ── TF → (prev_high_kind, prev_low_kind, curr_high_kind, curr_low_kind) ──
+
+class _KeyLevelSeries(NamedTuple):
+    """Ряд key levels одного TF: kinds для wire + контракт рівня ADR-0104 §3.2."""
+
+    kinds: Tuple[str, str, str, str]  # (prev_high, prev_low, curr_high, curr_low)
+    series: str  # частина key: d1 | h4 | h1
+    family: str  # day | htf
+    fixed_tier: int  # важливість завершеного H/L; рухомий — завжди LEVEL_TIER_CONTEXT
+
+
+# ── TF → ряд key levels ──
 # Тільки стратегічно значущі TF для intraday (M15+).
 # M1/M3/M5 не генерують key levels (їх prev candle не є стратегічним якорем),
 # але ВІДОБРАЖАЮТЬ HTF levels через cross-TF ін'єкцію.
@@ -36,16 +57,16 @@ from core.smc.types import SmcLevel, make_level_id
 # M30/M15 prev/curr H/L are redundant: the viewer sees those candles directly.
 # Cross-TF display map in engine.py further filters which kinds appear per viewer.
 _TF_KEY_LEVEL_MAP = {
-    86400:  ("pdh",     "pdl",     "dh",     "dl"),      # D1: Previous/Current Day
-    14400:  ("p_h4_h",  "p_h4_l",  "h4_h",   "h4_l"),    # H4
-    3600:   ("p_h1_h",  "p_h1_l",  "h1_h",   "h1_l"),    # H1
-}  # type: Dict[int, Tuple[str, str, str, str]]
+    86400: _KeyLevelSeries(("pdh", "pdl", "dh", "dl"), "d1", "day", LEVEL_TIER_ANCHOR),  # D1: Previous/Current Day
+    14400: _KeyLevelSeries(("p_h4_h", "p_h4_l", "h4_h", "h4_l"), "h4", "htf", LEVEL_TIER_CONTEXT),  # H4
+    3600: _KeyLevelSeries(("p_h1_h", "p_h1_l", "h1_h", "h1_l"), "h1", "htf", LEVEL_TIER_CONTEXT),  # H1
+}  # type: Dict[int, _KeyLevelSeries]
 
 # Усі kinds, що генеруються цим модулем (для LEVEL_KINDS union)
 KEY_LEVEL_KINDS = frozenset(
     kind
-    for kinds in _TF_KEY_LEVEL_MAP.values()
-    for kind in kinds
+    for series in _TF_KEY_LEVEL_MAP.values()
+    for kind in series.kinds
 )
 
 # HTF шари, з яких ін'єктуються рівні на нижчі ТФ (sorted desc)
@@ -68,13 +89,10 @@ def compute_key_levels(bars: List[CandleBar]) -> List[SmcLevel]:
     if not bars:
         return []
 
-    tf_s = bars[0].tf_s
-    kinds = _TF_KEY_LEVEL_MAP.get(tf_s)
-    if kinds is None:
+    series = _TF_KEY_LEVEL_MAP.get(bars[0].tf_s)
+    if series is None:
         return []
-
-    symbol = bars[0].symbol
-    prev_h_kind, prev_l_kind, curr_h_kind, curr_l_kind = kinds
+    prev_h_kind, prev_l_kind, curr_h_kind, curr_l_kind = series.kinds
 
     # Знайти останній completed бар
     completed = [b for b in bars if b.complete]
@@ -84,51 +102,44 @@ def compute_key_levels(bars: List[CandleBar]) -> List[SmcLevel]:
     prev = completed[-1]  # Останній завершений бар
     last = bars[-1]       # Останній бар (може бути incomplete/preview)
 
-    levels = []  # type: List[SmcLevel]
-
-    # ── Previous candle High/Low ──
-    levels.append(SmcLevel(
-        id=make_level_id(prev_h_kind, symbol, tf_s, prev.h),
-        symbol=symbol,
-        tf_s=tf_s,
-        kind=prev_h_kind,
-        price=prev.h,
-        time_ms=prev.open_time_ms,
-        touches=1,
-    ))
-    levels.append(SmcLevel(
-        id=make_level_id(prev_l_kind, symbol, tf_s, prev.low),
-        symbol=symbol,
-        tf_s=tf_s,
-        kind=prev_l_kind,
-        price=prev.low,
-        time_ms=prev.open_time_ms,
-        touches=1,
-    ))
+    # ── Previous candle High/Low: період завершено ──
+    levels = _candle_extremes(prev, series, prev_h_kind, prev_l_kind, LEVEL_STATE_FIXED, series.fixed_tier)
 
     # ── Current candle running High/Low ──
-    # Показуємо тільки якщо поточний бар відрізняється від prev (новий)
+    # Показуємо тільки якщо поточний бар відрізняється від prev (новий); він ще рухається
     if last.open_time_ms != prev.open_time_ms:
-        levels.append(SmcLevel(
-            id=make_level_id(curr_h_kind, symbol, tf_s, last.h),
-            symbol=symbol,
-            tf_s=tf_s,
-            kind=curr_h_kind,
-            price=last.h,
-            time_ms=last.open_time_ms,
-            touches=1,
-        ))
-        levels.append(SmcLevel(
-            id=make_level_id(curr_l_kind, symbol, tf_s, last.low),
-            symbol=symbol,
-            tf_s=tf_s,
-            kind=curr_l_kind,
-            price=last.low,
-            time_ms=last.open_time_ms,
-            touches=1,
-        ))
+        levels += _candle_extremes(last, series, curr_h_kind, curr_l_kind, LEVEL_STATE_FORMING, LEVEL_TIER_CONTEXT)
 
     return levels
+
+
+def _candle_extremes(
+    bar: CandleBar,
+    series: _KeyLevelSeries,
+    high_kind: str,
+    low_kind: str,
+    state: str,
+    tier: int,
+) -> List[SmcLevel]:
+    """H/L однієї свічки ряду → [high, low]. key — від open бакета: рухомий DH і завершений PDH того самого дня
+    мають один key (ADR-0104 §3.2)."""
+    period = level_period(bar.open_time_ms)
+    return [
+        SmcLevel(
+            id=make_level_id(kind, bar.symbol, bar.tf_s, price),
+            symbol=bar.symbol,
+            tf_s=bar.tf_s,
+            kind=kind,
+            price=price,
+            time_ms=bar.open_time_ms,
+            touches=1,
+            key=make_level_key(series.series, side, bar.symbol, period),
+            family=series.family,
+            state=state,
+            tier=tier,
+        )
+        for kind, side, price in ((high_kind, LEVEL_SIDE_HIGH, bar.h), (low_kind, LEVEL_SIDE_LOW, bar.low))
+    ]
 
 
 def collect_htf_levels(

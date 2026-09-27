@@ -5,31 +5,57 @@ tests/test_smc_level_contract.py — контракт рівня ADR-0104 §3.2 
   - SmcLevel без полів контракту видає на wire рівно старі id/kind/price/t_ms (зворотна сумісність);
   - key/family/state/tier видаються, коли задані; невідоме значення — гучна помилка;
   - make_level_key / level_period — формат "{series}:{side}:{symbol}:{period}" з ISO UTC хвилиною;
-  - S6: словник Python (родини, стани, tier, поля wire) = типи ui_v4/src/types.ts.
+  - S6: словник Python (родини, стани, tier, поля wire) = типи ui_v4/src/types.ts;
+  - конструктори (key levels, EQ) заповнюють контракт; рухомий і завершений H/L одного періоду мають
+    один key — на ньому триматиметься закріплення (S5).
 """
 
+import datetime as dt
 import pathlib
 import re
 
 import pytest
 
+from core.model.bars import CandleBar
+from core.smc.config import SmcConfig
+from core.smc.key_levels import compute_key_levels
+from core.smc.liquidity import detect_liquidity_levels
 from core.smc.types import (
     LEVEL_CONTRACT_WIRE_FIELDS,
     LEVEL_FAMILIES,
     LEVEL_STATES,
     LEVEL_TIERS,
     SmcLevel,
+    SmcSwing,
     level_period,
     level_price_key,
     make_level_key,
+    make_swing_id,
 )
 
 _REPO = pathlib.Path(__file__).resolve().parents[1]
 _TYPES_TS = _REPO / "ui_v4" / "src" / "types.ts"
 _LEGACY_WIRE_FIELDS = {"id", "kind", "price", "t_ms"}
 _SYMBOL = "XAU/USD"
-_D1_S = 86400
+_M15_S, _H4_S, _D1_S = 900, 14400, 86400
 _D1_OPEN_MS = 1_790_283_600_000  # 2026-09-24T21:00Z — відкриття торгової доби (17:00 NY, літо)
+
+
+def _ms(text: str) -> int:
+    return int(dt.datetime.strptime(text, "%Y-%m-%d %H:%M").replace(tzinfo=dt.timezone.utc).timestamp() * 1000)
+
+
+def _candle(tf_s: int, open_ms: int, high: float, low: float, complete: bool = True) -> CandleBar:
+    return CandleBar(symbol=_SYMBOL, tf_s=tf_s, open_time_ms=open_ms, close_time_ms=open_ms + tf_s * 1000,
+                     o=low, h=high, low=low, c=high, v=100.0, complete=complete, src="test")
+
+
+def _by_kind(levels) -> dict:
+    return {lv.kind: lv for lv in levels}
+
+
+def _contract(level: SmcLevel) -> tuple:
+    return level.family, level.state, level.tier
 
 
 def _level(**contract) -> SmcLevel:
@@ -106,3 +132,57 @@ def test_ts_smc_level_declares_every_wire_field():
     fields = _ts_smc_level_fields()
     assert _LEGACY_WIRE_FIELDS | set(LEVEL_CONTRACT_WIRE_FIELDS) <= set(fields)
     assert {int(t) for t in re.findall(r"\d+", fields["tier"])} == set(LEVEL_TIERS)
+
+
+# ── key levels (D1/H4/H1) ─────────────────────────────────
+
+
+def test_d1_previous_day_is_fixed_anchor_and_current_day_is_forming_context():
+    levels = _by_kind(compute_key_levels([
+        _candle(_D1_S, _D1_OPEN_MS, 2660.0, 2640.0),
+        _candle(_D1_S, _D1_OPEN_MS + _D1_S * 1000, 2670.0, 2650.0, complete=False),
+    ]))
+    assert levels["pdh"].key == "d1:high:XAU/USD:2026-09-24T21:00Z"
+    assert levels["pdl"].key == "d1:low:XAU/USD:2026-09-24T21:00Z"
+    assert _contract(levels["pdh"]) == ("day", "fixed", 1)
+    assert levels["dh"].key == "d1:high:XAU/USD:2026-09-25T21:00Z"
+    assert _contract(levels["dl"]) == ("day", "forming", 3)
+
+
+def test_forming_day_high_keeps_its_key_after_the_day_closes():
+    day0 = _candle(_D1_S, _D1_OPEN_MS, 2660.0, 2640.0)
+    day1_open_ms = _D1_OPEN_MS + _D1_S * 1000
+    forming = _by_kind(compute_key_levels([day0, _candle(_D1_S, day1_open_ms, 2670.0, 2650.0, complete=False)]))
+    closed = _by_kind(compute_key_levels([
+        day0,
+        _candle(_D1_S, day1_open_ms, 2672.0, 2648.0),
+        _candle(_D1_S, day1_open_ms + _D1_S * 1000, 2675.0, 2665.0, complete=False),
+    ]))
+    assert (closed["pdh"].key, closed["pdl"].key) == (forming["dh"].key, forming["dl"].key)
+    assert closed["pdh"].id != forming["dh"].id  # id (kind + ціна) змінюється — дельти бачать заміну
+
+
+def test_h4_levels_are_htf_family_with_context_tier():
+    h4_open_ms = _ms("2026-09-24 22:00")
+    levels = _by_kind(compute_key_levels([
+        _candle(_H4_S, h4_open_ms, 2655.0, 2645.0),
+        _candle(_H4_S, h4_open_ms + _H4_S * 1000, 2658.0, 2650.0, complete=False),
+    ]))
+    assert levels["p_h4_h"].key == "h4:high:XAU/USD:2026-09-24T22:00Z"
+    assert _contract(levels["p_h4_l"]) == ("htf", "fixed", 3)
+    assert _contract(levels["h4_h"]) == ("htf", "forming", 3)
+
+
+# ── EQ (ліквідність) ──────────────────────────────────────
+
+
+def test_equal_highs_cluster_is_fixed_liquidity_keyed_by_price():
+    bars = [_candle(_M15_S, _D1_OPEN_MS + i * _M15_S * 1000, 1901.0, 1899.0) for i in range(20)]
+    swings = [SmcSwing(id=make_swing_id("hh", _SYMBOL, _M15_S, bar.open_time_ms), symbol=_SYMBOL, tf_s=_M15_S,
+                       kind="hh", price=price, time_ms=bar.open_time_ms, confirmed=True)
+              for bar, price in ((bars[5], 1902.0), (bars[10], 1902.5))]
+    config = SmcConfig.from_dict({"levels": {"enabled": True, "tolerance_atr_mult": 0.5, "min_touches": 2}})
+    (eq_high,) = detect_liquidity_levels(swings, bars, config, atr=2.0)
+    assert eq_high.kind == "eq_highs"
+    assert eq_high.key == "eq900:high:XAU/USD:%d" % level_price_key(eq_high.price)
+    assert _contract(eq_high) == ("liquidity", "fixed", 3)
