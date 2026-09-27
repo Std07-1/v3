@@ -287,13 +287,13 @@ def compute_session_levels(
             cur_state = LEVEL_STATE_FORMING if is_active else LEVEL_STATE_FIXED
             levels += _session_extremes(
                 sw, symbol, tf_s, (act_h_kind, cur_high), (act_l_kind, cur_low), cur_start_ms,
-                current_day_start, cur_state,
+                current_day_start, cur_state, auto=True,
             )
 
         if prev_high is not None and prev_low is not None:
             levels += _session_extremes(
                 sw, symbol, tf_s, (prev_h_kind, prev_high), (prev_l_kind, prev_low), prev_start_ms,
-                prev_day_start, LEVEL_STATE_FIXED,
+                prev_day_start, LEVEL_STATE_FIXED, auto=False,
             )
 
         states.append(
@@ -322,11 +322,14 @@ def _session_extremes(
     first_bar_ms: Optional[int],
     session_day_ms: int,
     state: str,
+    auto: bool,
 ) -> List[SmcLevel]:
     """H/L одного сесійного періоду → [high, low] з контрактом ADR-0104 §3.2.
 
     key — від номінального відкриття сесії цієї доби, а не першого бару: рухомий H/L сьогодні, завершений увечері і
     «попередній» завтра — один key, навіть якщо перший бар сесії запізнився чи дозаповнений.
+    auto — ADR-0104 §3.5 «сесії за фазою дня»: у режимі «Авто» лише сесії поточної доби (під час Лондона — Азія і
+    Лондон, що йде; під час Нью-Йорка — ще й він; після нього — завершений день); попередня доба — Research чи закріплення.
     """
     period = level_period(_session_open_ms(session_day_ms, sw))
     tier = LEVEL_TIER_SESSION if state == LEVEL_STATE_FIXED else LEVEL_TIER_CONTEXT
@@ -343,6 +346,7 @@ def _session_extremes(
             family="session",
             state=state,
             tier=tier,
+            auto=auto,
         )
         for side, (kind, price) in ((LEVEL_SIDE_HIGH, high), (LEVEL_SIDE_LOW, low))
     ]

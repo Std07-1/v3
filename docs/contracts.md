@@ -266,6 +266,7 @@ F7 single-point format (не two-point segment).
 | `family` | string (опц.) | `session` \| `day` \| `week` \| `month` \| `open` \| `htf` \| `liquidity` |
 | `state` | string (опц.) | `fixed` (період завершено) \| `forming` (іде) \| `swept` \| `no_data` |
 | `tier` | integer (опц.) | Важливість для розкладки: 1 — завершені опорні H/L (PDH/PDL), 2 — завершені сесії, 3 — рухомі, EQ, попередні H4/H1 |
+| `auto` | boolean (опц.) | ADR-0104: `false` — поза режимом «Авто» (Focus ховає, Research показує); зараз задається для сесій (попередня доба — `false`); немає поля — рішення не приймалось |
 
 ### PdStatePayload (WS wire, ADR-0041)
 

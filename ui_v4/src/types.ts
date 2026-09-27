@@ -58,6 +58,7 @@ export interface SmcLevel {
   family?: LevelFamily;
   state?: LevelState;
   tier?: 1 | 2 | 3; // важливість для розкладки: 1 опорні H/L, 2 сесії й відкриття, 3 контекст
+  auto?: boolean;   // ADR-0104: false — поза режимом «Авто» (Focus ховає, Research показує); немає — рішення не приймалось
 }
 
 /** ADR-0041: Premium/Discount badge state (always-on when calc_enabled). */

@@ -73,13 +73,16 @@ def test_to_wire_without_contract_fields_keeps_legacy_shape():
 
 
 def test_to_wire_with_contract_fields_emits_them():
-    wire = _level(key="d1:high:XAU/USD:2026-09-24T21:00Z", family="day", state="fixed", tier=1).to_wire()
+    wire = _level(key="d1:high:XAU/USD:2026-09-24T21:00Z", family="day", state="fixed", tier=1, auto=False).to_wire()
     assert wire["key"] == "d1:high:XAU/USD:2026-09-24T21:00Z"
-    assert (wire["family"], wire["state"], wire["tier"]) == ("day", "fixed", 1)
+    assert (wire["family"], wire["state"], wire["tier"], wire["auto"]) == ("day", "fixed", 1, False)
     assert set(wire) == _LEGACY_WIRE_FIELDS | set(LEVEL_CONTRACT_WIRE_FIELDS)
 
 
-@pytest.mark.parametrize("contract", [{"family": "weekly"}, {"state": "live"}, {"tier": 0}, {"tier": 4}])
+@pytest.mark.parametrize("contract", [
+    {"family": "weekly"}, {"state": "live"}, {"tier": 0}, {"tier": 4},
+    {"tier": True}, {"auto": 1}, {"auto": "yes"},  # True == 1: без звірки типу пройшли б словник
+])
 def test_level_with_unknown_contract_value_raises(contract):
     with pytest.raises(ValueError, match="LEVEL_CONTRACT_INVALID"):
         _level(**contract)
@@ -134,6 +137,7 @@ def test_ts_smc_level_declares_every_wire_field():
     fields = _ts_smc_level_fields()
     assert _LEGACY_WIRE_FIELDS | set(LEVEL_CONTRACT_WIRE_FIELDS) <= set(fields)
     assert {int(t) for t in re.findall(r"\d+", fields["tier"])} == set(LEVEL_TIERS)
+    assert fields["auto"].strip() == "boolean"
 
 
 # ── key levels (D1/H4/H1) ─────────────────────────────────
@@ -215,6 +219,15 @@ def test_session_keeps_its_key_after_close_and_on_the_next_day():
     assert closed["lon_l"].key == running["lon_l"].key == next_day["p_lon_l"].key
     assert _contract(closed["lon_l"]) == ("session", "fixed", 2)
     assert _contract(next_day["p_lon_l"]) == ("session", "fixed", 2)
+
+
+def test_auto_mode_keeps_current_day_sessions_and_leaves_previous_day_to_research():
+    """ADR-0104 §3.5: не шість пар «сьогодні + вчора» — попередня доба лише в Research або закріпленням."""
+    during_london = _session_levels("2026-09-25 07:00", now="2026-09-25 09:00")
+    next_day = _session_levels("2026-09-25 07:00", now="2026-09-26 08:00")
+    assert (during_london["lon_h"].auto, during_london["lon_l"].auto) == (True, True)
+    assert (next_day["p_lon_h"].auto, next_day["p_lon_l"].auto) == (False, False)
+    assert next_day["p_lon_h"].to_wire()["auto"] is False
 
 
 def test_session_key_uses_nominal_open_not_a_late_first_bar():

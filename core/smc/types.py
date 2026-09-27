@@ -113,7 +113,7 @@ LEVEL_TIER_ANCHOR = 1  # завершені опорні H/L: день (далі
 LEVEL_TIER_SESSION = 2  # завершені сесії, відкриття
 LEVEL_TIER_CONTEXT = 3  # рухомі, ліквідність, попередні H4/H1
 LEVEL_TIERS = frozenset({LEVEL_TIER_ANCHOR, LEVEL_TIER_SESSION, LEVEL_TIER_CONTEXT})
-LEVEL_CONTRACT_WIRE_FIELDS = ("key", "family", "state", "tier")  # необов'язкові на wire: лише коли задані
+LEVEL_CONTRACT_WIRE_FIELDS = ("key", "family", "state", "tier", "auto")  # необов'язкові на wire: лише коли задані
 
 POI_GRADES = frozenset({"A+", "A", "B", "C"})
 
@@ -215,15 +215,20 @@ class SmcLevel:
     family: Optional[str] = None  # LEVEL_FAMILIES
     state: Optional[str] = None  # LEVEL_STATES
     tier: Optional[int] = None  # LEVEL_TIERS
+    auto: Optional[bool] = None  # ADR-0104 §3.2: чи видимий у режимі «Авто» (Focus); None — рішення ще не приймається
 
     def __post_init__(self) -> None:
-        """Невідоме значення контракту — гучна помилка, а не рівень поза родиною чи станом (D3)."""
-        for field_name, value, allowed in (
-            ("family", self.family, LEVEL_FAMILIES),
-            ("state", self.state, LEVEL_STATES),
-            ("tier", self.tier, LEVEL_TIERS),
+        """Невідоме значення контракту — гучна помилка, а не рівень поза родиною чи станом (D3).
+
+        Тип звіряється точно: `True == 1`, тож без нього tier=True чи auto=1 пройшли б перевірку словника.
+        """
+        for field_name, value, value_type, allowed in (
+            ("family", self.family, str, LEVEL_FAMILIES),
+            ("state", self.state, str, LEVEL_STATES),
+            ("tier", self.tier, int, LEVEL_TIERS),
+            ("auto", self.auto, bool, (True, False)),
         ):
-            if value is not None and value not in allowed:
+            if value is not None and (type(value) is not value_type or value not in allowed):
                 raise ValueError("LEVEL_CONTRACT_INVALID id=%s %s=%r (allowed: %s)"
                                  % (self.id, field_name, value, sorted(allowed)))
 
