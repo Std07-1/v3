@@ -262,6 +262,10 @@ F7 single-point format (не two-point segment).
 | `kind` | string | `"eq_highs"`, `"eq_lows"`, `"pdh"`, `"pdl"`, `"dh"`, `"dl"`, `"h4_h"`, `"h4_l"`, `"h1_h"`, `"h1_l"`, `"p_h4_h"`, `"p_h4_l"`, `"p_h1_h"`, `"p_h1_l"`, + 12 session kinds (ADR-0035): `"as_h"`, `"as_l"`, `"p_as_h"`, `"p_as_l"`, `"lon_h"`, `"lon_l"`, `"p_lon_h"`, `"p_lon_l"`, `"ny_h"`, `"ny_l"`, `"p_ny_h"`, `"p_ny_l"` |
 | `price` | number | Рівень ціни |
 | `t_ms` | integer\|null | Epoch ms формування рівня (опціонально) |
+| `key` | string (опц.) | ADR-0104 §3.2: `{series}:{side}:{symbol}:{period}` — смислова ідентичність, спільна для рухомого й завершеного H/L одного періоду (`d1:high:XAU/USD:2026-09-24T21:00Z`); EQ — `eq<tf_s>:…:<price×100>` |
+| `family` | string (опц.) | `session` \| `day` \| `week` \| `month` \| `open` \| `htf` \| `liquidity` |
+| `state` | string (опц.) | `fixed` (період завершено) \| `forming` (іде) \| `swept` \| `no_data` |
+| `tier` | integer (опц.) | Важливість для розкладки: 1 — завершені опорні H/L (PDH/PDL), 2 — завершені сесії, 3 — рухомі, EQ, попередні H4/H1 |
 
 ### PdStatePayload (WS wire, ADR-0041)
 

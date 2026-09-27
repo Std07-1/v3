@@ -6,11 +6,12 @@ tests/test_smc_level_contract.py — контракт рівня ADR-0104 §3.2 
   - key/family/state/tier видаються, коли задані; невідоме значення — гучна помилка;
   - make_level_key / level_period — формат "{series}:{side}:{symbol}:{period}" з ISO UTC хвилиною;
   - S6: словник Python (родини, стани, tier, поля wire) = типи ui_v4/src/types.ts;
-  - конструктори (key levels, EQ) заповнюють контракт; рухомий і завершений H/L одного періоду мають
+  - конструктори (key levels, EQ, сесії) заповнюють контракт; рухомий і завершений H/L одного періоду мають
     один key — на ньому триматиметься закріплення (S5).
 """
 
 import datetime as dt
+import json
 import pathlib
 import re
 
@@ -20,6 +21,7 @@ from core.model.bars import CandleBar
 from core.smc.config import SmcConfig
 from core.smc.key_levels import compute_key_levels
 from core.smc.liquidity import detect_liquidity_levels
+from core.smc.sessions import compute_session_levels, load_session_windows
 from core.smc.types import (
     LEVEL_CONTRACT_WIRE_FIELDS,
     LEVEL_FAMILIES,
@@ -37,7 +39,7 @@ _REPO = pathlib.Path(__file__).resolve().parents[1]
 _TYPES_TS = _REPO / "ui_v4" / "src" / "types.ts"
 _LEGACY_WIRE_FIELDS = {"id", "kind", "price", "t_ms"}
 _SYMBOL = "XAU/USD"
-_M15_S, _H4_S, _D1_S = 900, 14400, 86400
+_M1_S, _M15_S, _H4_S, _D1_S = 60, 900, 14400, 86400
 _D1_OPEN_MS = 1_790_283_600_000  # 2026-09-24T21:00Z — відкриття торгової доби (17:00 NY, літо)
 
 
@@ -186,3 +188,46 @@ def test_equal_highs_cluster_is_fixed_liquidity_keyed_by_price():
     assert eq_high.kind == "eq_highs"
     assert eq_high.key == "eq900:high:XAU/USD:%d" % level_price_key(eq_high.price)
     assert _contract(eq_high) == ("liquidity", "fixed", 3)
+
+
+# ── сесії (вікна — справжній config.json) ─────────────────
+
+
+def _session_levels(first_bar: str, now: str, minutes: int = 5) -> dict:
+    windows = load_session_windows(
+        json.loads((_REPO / "config.json").read_text(encoding="utf-8"))["smc"]["sessions"]["definitions"])
+    start_ms = _ms(first_bar)
+    bars = [_candle(_M1_S, start_ms + i * _M1_S * 1000, 2650.0 + i, 2640.0 - i) for i in range(minutes)]
+    levels, _states = compute_session_levels(bars, windows, _ms(now), _SYMBOL, tf_s=_D1_S)
+    return _by_kind(levels)
+
+
+def test_running_session_is_forming_context_keyed_by_its_open():
+    lon_h = _session_levels("2026-09-25 07:00", now="2026-09-25 09:00")["lon_h"]
+    assert lon_h.key == "london:high:XAU/USD:2026-09-25T07:00Z"
+    assert _contract(lon_h) == ("session", "forming", 3)
+
+
+def test_session_keeps_its_key_after_close_and_on_the_next_day():
+    running = _session_levels("2026-09-25 07:00", now="2026-09-25 09:00")
+    closed = _session_levels("2026-09-25 07:00", now="2026-09-25 17:00")
+    next_day = _session_levels("2026-09-25 07:00", now="2026-09-26 08:00")
+    assert closed["lon_l"].key == running["lon_l"].key == next_day["p_lon_l"].key
+    assert _contract(closed["lon_l"]) == ("session", "fixed", 2)
+    assert _contract(next_day["p_lon_l"]) == ("session", "fixed", 2)
+
+
+def test_session_key_uses_nominal_open_not_a_late_first_bar():
+    lon_h = _session_levels("2026-09-25 07:30", now="2026-09-25 09:00")["lon_h"]
+    assert lon_h.key == "london:high:XAU/USD:2026-09-25T07:00Z"
+    assert lon_h.time_ms == _ms("2026-09-25 07:30")  # t_ms — як і раніше, перший бар сесії
+
+
+@pytest.mark.parametrize("session_kind, first_bar, now, key", [
+    # зима: Лондон відкривається о 08:00 UTC, Нью-Йорк о 13:00 UTC; Азія без переходу — 00:00 UTC
+    ("lon_h", "2026-11-10 08:00", "2026-11-10 09:00", "london:high:XAU/USD:2026-11-10T08:00Z"),
+    ("ny_h", "2026-11-10 13:00", "2026-11-10 14:00", "newyork:high:XAU/USD:2026-11-10T13:00Z"),
+    ("as_h", "2026-11-10 00:00", "2026-11-10 01:00", "asia:high:XAU/USD:2026-11-10T00:00Z"),
+])
+def test_winter_session_key_follows_exchange_clock(session_kind, first_bar, now, key):
+    assert _session_levels(first_bar, now=now)[session_kind].key == key

@@ -18,7 +18,18 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from core.model.bars import CandleBar
 from core.session_anchor import CALENDAR_SEASON_RULES, SEASON_RULE_NONE, SEASON_WINTER, calendar_season
-from core.smc.types import SmcLevel, make_level_id
+from core.smc.types import (
+    LEVEL_SIDE_HIGH,
+    LEVEL_SIDE_LOW,
+    LEVEL_STATE_FIXED,
+    LEVEL_STATE_FORMING,
+    LEVEL_TIER_CONTEXT,
+    LEVEL_TIER_SESSION,
+    SmcLevel,
+    level_period,
+    make_level_id,
+    make_level_key,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -114,6 +125,7 @@ def _ms_to_day_start(epoch_ms: int) -> int:
 
 
 _WINTER_SHIFT_MS = 3_600_000  # узимку місцеві години біржі на 1 год пізніше за UTC, ніж улітку
+_MINUTE_MS = 60_000
 
 
 def _session_clock_ms(epoch_ms: int, sw: SessionWindow) -> int:
@@ -121,6 +133,17 @@ def _session_clock_ms(epoch_ms: int, sw: SessionWindow) -> int:
     if calendar_season(epoch_ms, sw.season_rule) == SEASON_WINTER:
         return epoch_ms - _WINTER_SHIFT_MS
     return epoch_ms
+
+
+def _session_open_ms(session_day_ms: int, sw: SessionWindow) -> int:
+    """Номінальне відкриття сесії доби `session_day_ms` (північ на годиннику сесії) у реальному UTC.
+
+    Узимку правила сесії біржа відкривається на годину пізніше за UTC — зворотне до `_session_clock_ms`.
+    """
+    clock_open_ms = session_day_ms + sw.open_utc_min * _MINUTE_MS
+    if calendar_season(clock_open_ms, sw.season_rule) == SEASON_WINTER:
+        return clock_open_ms + _WINTER_SHIFT_MS
+    return clock_open_ms
 
 
 def _bar_in_session(bar_open_ms: int, sw: SessionWindow) -> bool:
@@ -260,51 +283,17 @@ def compute_session_levels(
         # Current session levels: show as long as today's data exists
         # (not only when active — completed session H/L still relevant)
         if cur_high is not None and cur_low is not None:
-            levels.append(
-                SmcLevel(
-                    id=make_level_id(act_h_kind, symbol, tf_s, cur_high),
-                    symbol=symbol,
-                    tf_s=tf_s,
-                    kind=act_h_kind,
-                    price=cur_high,
-                    time_ms=cur_start_ms,
-                    touches=1,
-                )
-            )
-            levels.append(
-                SmcLevel(
-                    id=make_level_id(act_l_kind, symbol, tf_s, cur_low),
-                    symbol=symbol,
-                    tf_s=tf_s,
-                    kind=act_l_kind,
-                    price=cur_low,
-                    time_ms=cur_start_ms,
-                    touches=1,
-                )
+            # Сесія у своєму вікні ще рухається; після закриття — завершений діапазон дня (ADR-0104 §3.2)
+            cur_state = LEVEL_STATE_FORMING if is_active else LEVEL_STATE_FIXED
+            levels += _session_extremes(
+                sw, symbol, tf_s, (act_h_kind, cur_high), (act_l_kind, cur_low), cur_start_ms,
+                current_day_start, cur_state,
             )
 
         if prev_high is not None and prev_low is not None:
-            levels.append(
-                SmcLevel(
-                    id=make_level_id(prev_h_kind, symbol, tf_s, prev_high),
-                    symbol=symbol,
-                    tf_s=tf_s,
-                    kind=prev_h_kind,
-                    price=prev_high,
-                    time_ms=prev_start_ms,
-                    touches=1,
-                )
-            )
-            levels.append(
-                SmcLevel(
-                    id=make_level_id(prev_l_kind, symbol, tf_s, prev_low),
-                    symbol=symbol,
-                    tf_s=tf_s,
-                    kind=prev_l_kind,
-                    price=prev_low,
-                    time_ms=prev_start_ms,
-                    touches=1,
-                )
+            levels += _session_extremes(
+                sw, symbol, tf_s, (prev_h_kind, prev_high), (prev_l_kind, prev_low), prev_start_ms,
+                prev_day_start, LEVEL_STATE_FIXED,
             )
 
         states.append(
@@ -322,3 +311,38 @@ def compute_session_levels(
         )
 
     return levels, states
+
+
+def _session_extremes(
+    sw: SessionWindow,
+    symbol: str,
+    tf_s: int,
+    high: Tuple[str, float],
+    low: Tuple[str, float],
+    first_bar_ms: Optional[int],
+    session_day_ms: int,
+    state: str,
+) -> List[SmcLevel]:
+    """H/L одного сесійного періоду → [high, low] з контрактом ADR-0104 §3.2.
+
+    key — від номінального відкриття сесії цієї доби, а не першого бару: рухомий H/L сьогодні, завершений увечері і
+    «попередній» завтра — один key, навіть якщо перший бар сесії запізнився чи дозаповнений.
+    """
+    period = level_period(_session_open_ms(session_day_ms, sw))
+    tier = LEVEL_TIER_SESSION if state == LEVEL_STATE_FIXED else LEVEL_TIER_CONTEXT
+    return [
+        SmcLevel(
+            id=make_level_id(kind, symbol, tf_s, price),
+            symbol=symbol,
+            tf_s=tf_s,
+            kind=kind,
+            price=price,
+            time_ms=first_bar_ms,
+            touches=1,
+            key=make_level_key(sw.name, side, symbol, period),
+            family="session",
+            state=state,
+            tier=tier,
+        )
+        for side, (kind, price) in ((LEVEL_SIDE_HIGH, high), (LEVEL_SIDE_LOW, low))
+    ]
