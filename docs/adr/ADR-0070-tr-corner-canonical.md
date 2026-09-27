@@ -5,8 +5,8 @@
 | Field          | Value                                                                |
 | -------------- | -------------------------------------------------------------------- |
 | ID             | ADR-0070                                                              |
-| Status         | ACCEPTED (rev 2 — RV restored as backend SSOT, ATR dual format)        |
-| Date           | 2026-05-09 (rev 2: 2026-05-10)                                        |
+| Status         | ACCEPTED (rev 3 — HUD показує лише виміряні ATR/RV; rev 2 — RV restored as backend SSOT, ATR dual format) |
+| Date           | 2026-05-09 (rev 2: 2026-05-10; rev 3: 2026-09-27)                     |
 | Authors        | Станіслав                                                             |
 | Supersedes     | —                                                                     |
 | Builds on      | ADR-0065 rev 2 (CR-2.5 layout); ADR-0069 rev 2 (NP state machine); ADR-0049 (Архi presence + thesis); ADR-0066 rev 5 (tokens) |
@@ -71,8 +71,8 @@ non-overlapping contracts.
 
 | Slot       | Source                                                                                          | Formula in UI |
 | ---------- | ----------------------------------------------------------------------------------------------- | ------------- |
-| ATR        | `frame.atr` shipped by backend `ws_server._build_full_frame` + delta path. Source: `_smc_runner._engine.get_atr(symbol, tf_s)`. Same value as REST `/api/context.atr`. | none for absolute — formatter only (`fmtAtr` adaptive precision). For ATR% sub-cell: `(atr / lastPrice) * 100`. **Display normalization, NOT re-derivation** — domain ATR still comes from backend; `lastPrice` is the chart's last candle close. ATR% hidden when `atr === 1.0` (backend fallback sentinel) to avoid noise. |
-| RV         | `frame.rv` shipped by backend (rev 2). Source: `_smc_runner._engine.get_rv(symbol, tf_s)` → `core/smc/swings.compute_rv` (last bar volume / SMA(volume, 20) of prior bars; 1.0 fallback when no data, null/zero last-bar volume, or insufficient samples). | none — formatter only (`fmtRv` → `"1.42x"`). 1.0 displayed as `1.00x` (neutral / no signal per RV convention). |
+| ATR        | `frame.atr` shipped by backend `ws_server._build_full_frame` + delta path. Source: `_smc_runner._engine.get_atr(symbol, tf_s)`. Same value as REST `/api/context.atr`. *(rev 3: лише виміряний — без виміру поля нема, UI «—».)* | none for absolute — formatter only (`fmtAtr` adaptive precision). For ATR% sub-cell: `(atr / lastPrice) * 100`. **Display normalization, NOT re-derivation** — domain ATR still comes from backend; `lastPrice` is the chart's last candle close. ATR% hidden when `atr === 1.0` (backend fallback sentinel) to avoid noise. |
+| RV         | `frame.rv` shipped by backend (rev 2). Source: `_smc_runner._engine.get_rv(symbol, tf_s)` → `core/smc/swings.compute_rv` (last bar volume / SMA(volume, 20) of prior bars; 1.0 fallback when no data, null/zero last-bar volume, or insufficient samples). *(rev 3: у цих випадках None — поля нема, UI «—».)* | none — formatter only (`fmtRv` → `"1.42x"`). 1.0 displayed as `1.00x` (neutral / no signal per RV convention). |
 | Countdown  | Wallclock + bucket math: `Math.floor((nowMs - anchorMs) / tfMs) * tfMs + anchorMs + tfMs - nowMs`. Anchor map mirrors `core/utils/buckets.bucket_start_ms` (D1 = 79200000, H4 = 82800000, others = 0). | display arithmetic only — NOT domain compute |
 | UTC clock  | `clockNow` $state ticking every 1s in App.svelte                                                | format `HH:MM` |
 
@@ -291,10 +291,12 @@ For Sunday-closed XAU/USD, M15 (typical observation case during this session):
 `runtime/ws/ws_server.py` ships:
 
 - `frame.atr` from `_smc_runner._engine.get_atr(symbol, tf_s)` —
-  same value as REST `/api/context.atr`.
+  same value as REST `/api/context.atr`. *(rev 3: `SmcRunner.get_measured_atr`;
+  поля нема, коли ATR не виміряно.)*
 - `frame.rv` *(rev 2)* from `_smc_runner._engine.get_rv(symbol, tf_s)` —
   delegates to `core/smc/swings.compute_rv` (last bar volume / SMA(20)
   of prior bars; 1.0 fallback). No REST endpoint yet (UI-only consumer).
+  *(rev 3: `SmcRunner.get_rv`, None замість 1.0 — поля нема.)*
 
 Both fields are populated in the full-frame path AND the delta path so
 the UI buffer stays in sync between full frames. **Backend restart
@@ -385,6 +387,43 @@ because RV now has a backend-SSOT path.
 App.svelte props, types.ts field) and the backend commits (`compute_rv`,
 `get_rv`, `frame.rv` injection in `_build_full_frame` + delta path) —
 strict reverse order. UI gracefully falls back when `frame.rv` is absent.
+
+### Rev 3 amendment (2026-09-27) — HUD показує лише виміряні ATR/RV
+
+**Тригер (прод 27.09)**: XAU/USD M30 — HUD «ATR 1.00 · RV 1.00x», на M15 — «ATR 5.83 · RV 0.14x». Зонд
+full-кадрів 7 символів × 8 TF: 21 з 56 пар (усі символи на M1/M3/M30) несли `atr = rv = 1.0` рівно, compute TF —
+справжні значення. Корінь: M1/M3/M30 поза `smc.compute_tfs` (`[300, 900, 3600, 14400, 86400]`), SmcEngine стану для
+них не має, а `get_atr`/`get_rv` віддавали нейтральну заглушку 1.0, яку UI показував як виміряну (I5 тихий
+fallback + X28: вигадане значення під виглядом SSOT). CommandRail заглушку частково «нюхав» (`atr === 1.0` ховав %),
+але саме число лишалось.
+
+**Хибне припущення**: «1.0 — безпечний нейтральний fallback». Для дільника (`distance / atr`) — так; для показу —
+ні, а як сигнал усередині діапазону ще й неоднозначне: справжній ATR XAG/USD на M5–H4 = 0.07…0.81.
+
+**Альтернативи**:
+
+1. ATR/RV базового TF глядача (`_display_base_tf`: M30→H1, M1/M3→M5) — відхилено: під підписом M30 HUD показував
+   би ATR H1 (≈√2 більший) — та сама брехня, лише правдоподібніша; RV H1 на M30 — інша величина.
+2. Справжній ATR/RV глядацького TF (бари M1/M3/M30 у engine: warmup + фоновий feed) — правильна ціль, але змінює
+   обсяг compute_tfs і фідів — окремий ADR/слайс.
+3. **Обрано**: чесна відсутність — нема виміру, нема поля.
+
+| Файл | Зміна |
+| ---- | ----- |
+| `core/smc/engine.py` | `get_measured_atr(symbol, tf_s) -> Optional[float]` — None, коли стану/барів нема. `get_atr` = виміряний або 1.0 — **лише дільник** для SMC-споживачів (proximity, wake, narrative), контракт незмінний. `get_rv -> Optional[float]`. |
+| `core/smc/swings.py` | `compute_rv -> Optional[float]`: None замість 1.0 в усіх випадках «не виміряно» (замало барів/вибірки, обсяг останнього бару null/0, SMA ≤ 0). |
+| `runtime/smc/smc_runner.py` | Pass-through `get_measured_atr`, `get_rv` — ws_server більше не лізе в `_engine`. |
+| `runtime/ws/ws_server.py` | `_hud_volatility()` для full і delta: None → полів `atr`/`rv` у кадрі нема, `meta.warnings` += `atr_unavailable` / `rv_unavailable`; лог `WS_HUD_UNAVAILABLE` на переході (INFO — не виміряно, WARNING — виняток). |
+
+UI без змін коду: `frame?.atr ?? null` уже рендерить «—»; StatusBar рахує `meta.warnings` (позначка деградації),
+DiagnosticsView показує коди.
+
+**Залишок**: `compute_atr` для суцільно плаского вікна (усі TR = 0) досі повертає 1.0 — спільний контракт ~15
+SMC-споживачів; для нього лишається `atr === 1.0` у CommandRail. Поза HUD 1.0-як-сигнал ще читають пороги `> 1.0` /
+`<= 1.0`: `wake_engine` (ATR для proximity), `/api/context` atr_map, `SmcRunner.get_narrative` — на XAG вони
+відкидають справжній ATR < 1.0 (окремий слайс).
+
+**Rollback rev 3**: `git revert` коміту — заглушка 1.0 повертається в кадр; UI сумісний в обидва боки.
 
 ---
 

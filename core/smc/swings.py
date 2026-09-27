@@ -6,7 +6,7 @@ S2: deterministic — same bars → same swings.
 """
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from core.model.bars import CandleBar
 from core.smc.types import SmcSwing, make_swing_id
@@ -123,26 +123,25 @@ def compute_atr(bars: List[CandleBar], period: int = 14) -> float:
     return atr if atr > 0.0 else 1.0  # rail: atr > 0
 
 
-def compute_rv(bars: List[CandleBar], period: int = 20) -> float:
+def compute_rv(bars: List[CandleBar], period: int = 20) -> Optional[float]:
     """Relative Volume — last bar's volume / SMA(volume, period) of prior bars.
 
     ADR-0070 §Tier 1 + amendment: backend SSOT for RV. Shipped as
     `frame.rv` in ws_server, consumed by CommandRail (frontend MUST NOT
     re-derive — X28).
 
-    Returns 1.0 fallback when:
+    None — RV не виміряно (ADR-0070 rev 3: нейтральні 1.0 HUD показував як виміряні 1.00x):
       - bars empty / fewer than period+1 bars
       - last bar volume null/zero (preview/forming)
       - prior window has fewer than period/2 valid volume samples
       - SMA collapses to <=0
-    1.0 means "neutral / no signal" per RV convention (1.0× = average).
     """
     if not bars or len(bars) < period + 1:
-        return 1.0
+        return None
     last = bars[-1]
     last_v = getattr(last, "v", None)
     if last_v is None or last_v <= 0:
-        return 1.0
+        return None
     # Prior window = `period` bars BEFORE the last one.
     prior = bars[-(period + 1):-1]
     valid: List[float] = []
@@ -151,10 +150,10 @@ def compute_rv(bars: List[CandleBar], period: int = 20) -> float:
         if v is not None and v > 0:
             valid.append(float(v))
     if len(valid) < period // 2:
-        return 1.0
+        return None
     sma = sum(valid) / len(valid)
     if sma <= 0:
-        return 1.0
+        return None
     return float(last_v) / sma
 
 

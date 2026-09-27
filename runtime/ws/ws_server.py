@@ -84,6 +84,10 @@ class SmcRunnerLike(Protocol):
 
     def get_pd_state(self, symbol: str, viewer_tf_s: int) -> Any: ...
 
+    def get_measured_atr(self, symbol: str, tf_s: int) -> Optional[float]: ...
+
+    def get_rv(self, symbol: str, tf_s: int) -> Optional[float]: ...
+
     def get_narrative(self, symbol: str, tf_s: int, *args: Any) -> Any: ...
 
     def feed_m1_bar_dict(self, symbol: str, bar: Dict[str, Any]) -> None: ...
@@ -608,6 +612,49 @@ def _build_error_frame(
     }
 
 
+# (symbol, tf_s, поле), для яких уже залоговано «недоступне» — лог на переході, не кожен кадр.
+_HUD_UNAVAILABLE_LOGGED: set[tuple[str, int, str]] = set()
+
+
+def _hud_volatility(
+    runner: Any, symbol: str, tf_s: int
+) -> tuple[Optional[float], Optional[float], list[str]]:
+    """ATR(14) і RV(20) для HUD (CommandRail) — виміряні бекендом або None (ADR-0070 rev 3).
+
+    None — величину не виміряно: TF поза compute_tfs (M1/M3/M30), до warmup, RV без обсягу.
+    Кадр таке поле не несе, meta.warnings отримує `<поле>_unavailable`, UI показує «—» (I5/X28).
+    """
+    measured: Dict[str, Optional[float]] = {}
+    warnings: list[str] = []
+    for field, accessor in (("atr", "get_measured_atr"), ("rv", "get_rv")):
+        key = (symbol, tf_s, field)
+        level, reason = logging.INFO, "unmeasured"
+        try:
+            raw = getattr(runner, accessor)(symbol, tf_s)
+            measured[field] = None if raw is None else float(raw)
+        except Exception as exc:
+            _log.debug(
+                "WS_HUD_READ_ERR field=%s sym=%s tf=%s", field, symbol, tf_s, exc_info=True
+            )
+            measured[field] = None
+            level, reason = logging.WARNING, "error:%s" % exc
+        if measured[field] is not None:
+            _HUD_UNAVAILABLE_LOGGED.discard(key)
+            continue
+        warnings.append("%s_unavailable" % field)
+        if key not in _HUD_UNAVAILABLE_LOGGED:
+            _HUD_UNAVAILABLE_LOGGED.add(key)
+            _log.log(
+                level,
+                "WS_HUD_UNAVAILABLE field=%s sym=%s tf=%s reason=%s",
+                field,
+                symbol,
+                tf_s,
+                reason,
+            )
+    return measured["atr"], measured["rv"], warnings
+
+
 def _build_full_frame(
     session: WsSession,
     candles: list,
@@ -664,14 +711,13 @@ def _build_full_frame(
         frame["momentum_map"] = momentum_map
     if pd_state:
         frame["pd_state"] = pd_state
-    # X28-fix: surface backend ATR (engine.get_atr) so UI consumes SSOT
-    # instead of recomputing from raw candles. Same source as REST
-    # /api/context.atr endpoint (runtime/api_v3/endpoints.py:1335).
+    # X28-fix: surface backend ATR so UI consumes SSOT instead of recomputing
+    # from raw candles. ADR-0070 rev 3: None (не виміряно) — поля нема, UI «—».
     if atr is not None:
         frame["atr"] = atr
     # ADR-0070 amendment: backend SSOT for relative volume (X28).
     # Frontend MUST consume frame["rv"] as-is — no re-derivation from raw
-    # candle volumes. 1.0 = neutral / no signal (RV convention).
+    # candle volumes. None (не виміряно) — поля нема (rev 3).
     if rv is not None:
         frame["rv"] = rv
     return frame
@@ -875,37 +921,14 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                 pd_state = _smc_runner.get_pd_state(session.symbol, session.tf_s)
             except Exception as _pd_exc:
                 _log.warning("WS_PD_STATE_ERR sym=%s err=%s", session.symbol, _pd_exc)
-        # X28-fix: surface backend ATR (peripheral chrome context).
-        # Engine returns 1.0 fallback when state has no bars; we pass through
-        # so UI shows what backend canonically sees. Cross-checks REST
-        # /api/context.atr (same source: runner._engine.get_atr).
+        # X28-fix: backend ATR/RV для HUD (ADR-0070 rev 3 — лише виміряні).
         atr_val: Optional[float] = None
         rv_val: Optional[float] = None
         if _smc_runner is not None:
-            try:
-                atr_val = float(
-                    _smc_runner._engine.get_atr(session.symbol, session.tf_s)
-                )
-            except Exception as _atr_exc:
-                _log.debug(
-                    "WS_ATR_ERR sym=%s tf=%s err=%s",
-                    session.symbol,
-                    session.tf_s,
-                    _atr_exc,
-                )
-            # ADR-0070 amendment: backend SSOT for relative volume (X28).
-            # 1.0 fallback (neutral) when no data or null/zero last-bar volume.
-            try:
-                rv_val = float(
-                    _smc_runner._engine.get_rv(session.symbol, session.tf_s)
-                )
-            except Exception as _rv_exc:
-                _log.debug(
-                    "WS_RV_ERR sym=%s tf=%s err=%s",
-                    session.symbol,
-                    session.tf_s,
-                    _rv_exc,
-                )
+            atr_val, rv_val, hud_warnings = _hud_volatility(
+                _smc_runner, session.symbol, session.tf_s
+            )
+            warnings.extend(hud_warnings)
         frame = _build_full_frame(
             session,
             candles,
@@ -1481,34 +1504,18 @@ async def _global_delta_loop(app: web.Application) -> None:
                         _smc_runner = (
                             app[APP_SMC_RUNNER] if APP_SMC_RUNNER in app else None
                         )
-                        # X28-fix: surface backend ATR in delta too — UI buffer
-                        # would otherwise lose ATR between full frames.
+                        # X28-fix: backend ATR/RV і в delta — UI бере їх з останнього
+                        # кадру; без виміру — поля нема + warnings (ADR-0070 rev 3).
                         if _smc_runner is not None:
-                            try:
-                                frame["atr"] = float(
-                                    _smc_runner._engine.get_atr(symbol, tf_s)
-                                )
-                            except Exception:
-                                _log.debug(
-                                    "WS_DELTA_ATR_ERR sym=%s tf=%s",
-                                    symbol,
-                                    tf_s,
-                                    exc_info=True,
-                                )
-                            # ADR-0070 amendment: backend SSOT for relative
-                            # volume (X28). Mirrors ATR rationale — keep UI in
-                            # sync between full frames.
-                            try:
-                                frame["rv"] = float(
-                                    _smc_runner._engine.get_rv(symbol, tf_s)
-                                )
-                            except Exception:
-                                _log.debug(
-                                    "WS_DELTA_RV_ERR sym=%s tf=%s",
-                                    symbol,
-                                    tf_s,
-                                    exc_info=True,
-                                )
+                            _atr, _rv, _hud_warns = _hud_volatility(
+                                _smc_runner, symbol, tf_s
+                            )
+                            if _atr is not None:
+                                frame["atr"] = _atr
+                            if _rv is not None:
+                                frame["rv"] = _rv
+                            if _hud_warns:
+                                meta.setdefault("warnings", []).extend(_hud_warns)
                         if _smc_runner is not None:
                             for _ev in seen_events.values():
                                 if _ev.get("complete"):

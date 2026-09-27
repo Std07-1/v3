@@ -360,16 +360,16 @@ export interface RenderFrame {
   smc_delta?: SmcDeltaWire;
   /** F8: trend bias у full/replay frames */
   trend_bias?: string | null;
-  /** X28-fix: backend ATR (engine.get_atr) for current symbol+tf.
-   *  Same source as REST /api/context.atr. Engine returns 1.0 fallback
-   *  when no bars; treat 1.0 as "potentially fallback" rather than a real
-   *  ATR=1.0 value. Surfaces in full and delta frames.
+  /** X28-fix: backend ATR(14) for current symbol+tf (engine.get_measured_atr).
+   *  ADR-0070 rev 3: лише виміряний — поля нема, коли TF не обчислюється
+   *  (M1/M3/M30 поза compute_tfs, до warmup); тоді meta.warnings містить
+   *  "atr_unavailable". Surfaces in full and delta frames.
    *  Consumed by: CommandRail (peripheral chrome). */
   atr?: number;
   /** ADR-0070 amendment: backend SSOT for relative volume (X28).
    *  engine.get_rv → last bar volume / SMA(volume, 20) of prior bars.
-   *  1.0 = neutral / no signal (fallback when no data, null/zero last-bar
-   *  volume, or insufficient samples). Surfaces in full and delta frames.
+   *  Rev 3: поля нема, коли RV не виміряно (нема барів, обсяг останнього бару
+   *  null/zero, замало вибірки) — meta.warnings "rv_unavailable".
    *  Consumed by: CommandRail. Frontend MUST NOT re-derive from candles. */
   rv?: number;
   /** ADR-0029: confluence grade per zone (full + delta on complete bars, ADR-0042) */

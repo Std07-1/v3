@@ -395,28 +395,39 @@ class SmcEngine:
         return snap.trend_bias
 
     def get_atr(self, symbol: str, tf_s: int, period: int = 14) -> float:
-        """ATR14 for (symbol, tf). Returns 1.0 fallback if no data."""
-        state = self._states.get((symbol, tf_s))
-        if state is None or not state.bars_list():
-            return 1.0
+        """ATR14 як дільник (distance / atr): 1.0, коли даних нема. Для показу — get_measured_atr."""
+        atr = self.get_measured_atr(symbol, tf_s, period=period)
+        return atr if atr is not None else 1.0
+
+    def get_measured_atr(
+        self, symbol: str, tf_s: int, period: int = 14
+    ) -> Optional[float]:
+        """ATR14 для показу трейдеру; None, коли (symbol, tf) не обчислюється.
+
+        Стану немає для TF поза compute_tfs (глядацькі M1/M3/M30) і до warmup — заглушку 1.0
+        HUD подавав як виміряний ATR (ADR-0070 rev 3, I5/X28).
+        """
+        bars = self.get_bars(symbol, tf_s)
+        if not bars:
+            return None
         from core.smc.swings import compute_atr
 
-        return compute_atr(state.bars_list(), period=period)
+        return compute_atr(bars, period=period)
 
-    def get_rv(self, symbol: str, tf_s: int, period: int = 20) -> float:
+    def get_rv(self, symbol: str, tf_s: int, period: int = 20) -> Optional[float]:
         """RV(20) for (symbol, tf) — backend SSOT for relative volume.
 
-        Last bar volume / SMA(volume, period) of prior bars. Returns 1.0
-        fallback (neutral) when no data, insufficient samples, or last bar
-        has null/zero volume (preview/forming). ADR-0070 amendment §Tier 1 —
-        shipped via ws_server `frame.rv`; CommandRail consumes as-is (X28).
+        Last bar volume / SMA(volume, period) of prior bars. None — не виміряно: стану нема
+        (як у get_measured_atr), замало вибірки або обсяг останнього бару null/zero.
+        ADR-0070 amendment §Tier 1 + rev 3 — shipped via ws_server `frame.rv`; CommandRail
+        consumes as-is (X28).
         """
-        state = self._states.get((symbol, tf_s))
-        if state is None or not state.bars_list():
-            return 1.0
+        bars = self.get_bars(symbol, tf_s)
+        if not bars:
+            return None
         from core.smc.swings import compute_rv
 
-        return compute_rv(state.bars_list(), period=period)
+        return compute_rv(bars, period=period)
 
     def get_bars(self, symbol: str, tf_s: int) -> List[CandleBar]:
         """ADR-0053: public accessor for bar buffer. [] if (symbol, tf_s) not tracked."""

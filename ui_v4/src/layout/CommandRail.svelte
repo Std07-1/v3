@@ -28,10 +28,10 @@
 
   type Props = {
     /** ATR(14) for current symbol+tf, sourced from backend (frame.atr).
-     *  null when no frame yet OR frame missing the field (legacy server). */
+     *  null when no frame yet OR field missing (не виміряно — ADR-0070 rev 3). */
     atr: number | null;
     /** RV(20) — backend SSOT (frame.rv). 1.0 = neutral / no signal.
-     *  null when no frame yet OR field missing (legacy server). */
+     *  null when no frame yet OR field missing (не виміряно — ADR-0070 rev 3). */
     rv: number | null;
     /** Last price (frame's last candle close) — used ONLY to normalize ATR
      *  into a % display alongside the absolute value. Display arithmetic per
@@ -93,26 +93,24 @@
   });
 
   // ─── ATR formatter ─────────────────────────────────────────────────────
-  // Backend returns 1.0 as fallback when no bars (engine.get_atr); we cannot
-  // distinguish from real ATR=1.0, so we display as-is. Adaptive precision:
-  // large prices (XAU ~4500 → ATR ~80) → 1 decimal; small ratios → 2 dec.
+  // Backend шле лише виміряний ATR; без виміру поля нема → "—" (ADR-0070 rev 3).
+  // Adaptive precision: large prices (XAU ~4500 → ATR ~80) → 1 decimal; small → 2 dec.
   function fmtAtr(v: number | null): string {
     if (v == null) return "—";
     return v >= 10 ? v.toFixed(1) : v.toFixed(2);
   }
   // ATR as % of lastPrice — display normalization, NOT re-derivation.
-  // Hidden when lastPrice missing or ATR is the 1.0 fallback (would mislead).
+  // Hidden when lastPrice missing or ATR is 1.0 (would mislead).
   const atrPctStr = $derived.by(() => {
     if (atr == null || lastPrice == null || lastPrice <= 0) return "";
-    if (atr === 1.0) return ""; // backend fallback sentinel — skip % to avoid noise
+    if (atr === 1.0) return ""; // залишок rev 3: compute_atr дає 1.0 для суцільно плаского вікна
     const pct = (atr / lastPrice) * 100;
     return `${pct.toFixed(2)}%`;
   });
 
   // ─── RV formatter ──────────────────────────────────────────────────────
-  // Backend returns 1.0 as fallback (no data, null/zero last-bar volume,
-  // insufficient samples). 1.0 = neutral / no signal per RV convention.
-  // Display as multiplier with 'x' suffix: "1.42x", "0.87x".
+  // Backend шле лише виміряний RV (нема барів / обсягу / вибірки → поля нема → "—",
+  // ADR-0070 rev 3). Display as multiplier with 'x' suffix: "1.42x", "0.87x".
   function fmtRv(v: number | null): string {
     if (v == null) return "—";
     return `${v.toFixed(2)}x`;

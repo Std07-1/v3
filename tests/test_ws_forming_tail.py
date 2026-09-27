@@ -303,7 +303,12 @@ class _NarrativeProbe:
 
     def __init__(self) -> None:
         self.narrative_args: list[tuple] = []
-        self._engine = SimpleNamespace(get_atr=lambda s, t: 1.0, get_rv=lambda s, t: 1.0)
+
+    def get_measured_atr(self, symbol, tf_s):
+        return None  # M1 поза compute_tfs — ATR не виміряно (ADR-0070 rev 3)
+
+    def get_rv(self, symbol, tf_s):
+        return None
 
     def get_snapshot(self, symbol, tf_s):
         return None

@@ -563,6 +563,17 @@ class SmcRunner:
         """
         return self._engine.get_atr(symbol, tf_s, period=period)
 
+    def get_measured_atr(self, symbol: str, tf_s: int) -> Optional[float]:
+        """ADR-0070 rev 3: ATR(14) для HUD — None, коли (symbol, tf_s) не обчислюється (M1/M3/M30, до warmup).
+
+        Thin pass-through to engine — read-only (S1). Без заглушки 1.0: її показ = вигадане значення.
+        """
+        return self._engine.get_measured_atr(symbol, tf_s)
+
+    def get_rv(self, symbol: str, tf_s: int) -> Optional[float]:
+        """ADR-0070 rev 3: RV(20) для HUD — None, коли не виміряно. Thin pass-through (S1)."""
+        return self._engine.get_rv(symbol, tf_s)
+
     def get_session_states(self, symbol: str, current_time_ms: int) -> List[Any]:
         """ADR-0059 §3.1.3: session states accessor for /api/v3/smc/levels.
 
