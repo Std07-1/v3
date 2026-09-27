@@ -415,8 +415,8 @@ fallback + X28: вигадане значення під виглядом SSOT).
 | `runtime/smc/smc_runner.py` | Pass-through `get_measured_atr`, `get_rv` — ws_server більше не лізе в `_engine`. |
 | `runtime/ws/ws_server.py` | `_hud_volatility()` для full і delta: None → полів `atr`/`rv` у кадрі нема, `meta.warnings` += `atr_unavailable` / `rv_unavailable`; лог `WS_HUD_UNAVAILABLE` на переході (INFO — не виміряно, WARNING — виняток). |
 
-UI без змін коду: `frame?.atr ?? null` уже рендерить «—»; StatusBar рахує `meta.warnings` (позначка деградації),
-DiagnosticsView показує коди.
+UI без змін коду: `frame?.atr ?? null` уже рендерить «—»; коди з `meta.warnings` видно в InfoModal → DiagnosticsView
+(`SRV: atr_unavailable`). Постійного бейджа на графіку нема — StatusBar з лічильником ⚠ не змонтований.
 
 **Залишок**: `compute_atr` для суцільно плаского вікна (усі TR = 0) досі повертає 1.0 — спільний контракт ~15
 SMC-споживачів; для нього лишається `atr === 1.0` у CommandRail. Поза HUD 1.0-як-сигнал ще читають пороги `> 1.0` /
