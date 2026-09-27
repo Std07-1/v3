@@ -44,11 +44,20 @@ export interface SmcSwing {
   label?: string;
 }
 
+/** ADR-0104 §3.2: родина рівня (для меню «Рівні», S4). */
+export type LevelFamily = 'session' | 'day' | 'week' | 'month' | 'open' | 'htf' | 'liquidity';
+/** ADR-0104 §3.2: стан — fixed (період завершено), forming (іде), swept (ціну пройдено, S8), no_data (періоду нема, S3). */
+export type LevelState = 'fixed' | 'forming' | 'swept' | 'no_data';
+
 export interface SmcLevel {
   id: string;
   kind?: string;     // ADR-0024b: рівень kind для per-kind styling (pdh, pdl, h1_h, eq_highs, ...)
   price: number;
   t_ms?: T_MS;      // опційно (час формування рівня)
+  key?: string;     // ADR-0104: "{series}:{side}:{symbol}:{period}" — спільний для forming і fixed одного періоду
+  family?: LevelFamily;
+  state?: LevelState;
+  tier?: 1 | 2 | 3; // важливість для розкладки: 1 опорні H/L, 2 сесії й відкриття, 3 контекст
 }
 
 /** ADR-0041: Premium/Discount badge state (always-on when calc_enabled). */

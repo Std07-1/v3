@@ -12,6 +12,7 @@ Python 3.7 compatible.
 from __future__ import annotations
 
 import dataclasses
+import time
 from typing import Any, Dict, List, Optional
 
 # ── Vocabulary constants (S5: config-driven via engine, але kinds — SSOT тут) ──
@@ -101,6 +102,19 @@ LEVEL_KINDS = frozenset(
     }
 )
 
+# ── ADR-0104 §3.2: контракт рівня — родина, стан, сторона, важливість для розкладки ──
+LEVEL_FAMILIES = frozenset({"session", "day", "week", "month", "open", "htf", "liquidity"})
+LEVEL_STATE_FIXED = "fixed"  # період завершено: PDH, завершена сесія, кластер EQ
+LEVEL_STATE_FORMING = "forming"  # період ще йде: поточний H/L дня, сесія у своєму вікні
+LEVEL_STATES = frozenset({LEVEL_STATE_FIXED, LEVEL_STATE_FORMING, "swept", "no_data"})  # swept — S8, no_data — S3
+LEVEL_SIDE_HIGH = "high"
+LEVEL_SIDE_LOW = "low"
+LEVEL_TIER_ANCHOR = 1  # завершені опорні H/L: день (далі тиждень, місяць)
+LEVEL_TIER_SESSION = 2  # завершені сесії, відкриття
+LEVEL_TIER_CONTEXT = 3  # рухомі, ліквідність, попередні H4/H1
+LEVEL_TIERS = frozenset({LEVEL_TIER_ANCHOR, LEVEL_TIER_SESSION, LEVEL_TIER_CONTEXT})
+LEVEL_CONTRACT_WIRE_FIELDS = ("key", "family", "state", "tier")  # необов'язкові на wire: лише коли задані
+
 POI_GRADES = frozenset({"A+", "A", "B", "C"})
 
 
@@ -184,7 +198,10 @@ class SmcSwing:
 class SmcLevel:
     """Liquidity level (Equal Highs/Lows, PDH/PDL, PWH/PWL).
 
-    S3: id = "{kind}_{symbol}_{tf_s}_{price_int}" — детермінований.
+    S3: id = "{kind}_{symbol}_{tf_s}_{price_int}" — детермінований; на ньому тримаються дельти.
+    ADR-0104 §3.2: `key` — смислова ідентичність періоду, спільна для forming і fixed (DH і потім PDH того самого
+    дня), на ній тримається закріплення; `family` / `state` / `tier` — родина, стан, важливість для розкладки.
+    None — поле не задане і на wire не видається (зворотна сумісність).
     """
 
     id: str  # "{kind}_{symbol}_{tf_s}_{price×100_int}"
@@ -194,15 +211,35 @@ class SmcLevel:
     price: float
     time_ms: Optional[int]
     touches: int
+    key: Optional[str] = None  # make_level_key()
+    family: Optional[str] = None  # LEVEL_FAMILIES
+    state: Optional[str] = None  # LEVEL_STATES
+    tier: Optional[int] = None  # LEVEL_TIERS
+
+    def __post_init__(self) -> None:
+        """Невідоме значення контракту — гучна помилка, а не рівень поза родиною чи станом (D3)."""
+        for field_name, value, allowed in (
+            ("family", self.family, LEVEL_FAMILIES),
+            ("state", self.state, LEVEL_STATES),
+            ("tier", self.tier, LEVEL_TIERS),
+        ):
+            if value is not None and value not in allowed:
+                raise ValueError("LEVEL_CONTRACT_INVALID id=%s %s=%r (allowed: %s)"
+                                 % (self.id, field_name, value, sorted(allowed)))
 
     def to_wire(self) -> Dict[str, Any]:
-        """S6: wire format = ui_v4 SmcLevel type (ADR-0024b: +kind for UI styling)."""
-        return {
+        """S6: wire format = ui_v4 SmcLevel type (ADR-0024b: +kind for UI styling; ADR-0104: + поля контракту)."""
+        wire: Dict[str, Any] = {
             "id": self.id,
             "kind": self.kind,
             "price": self.price,
             "t_ms": self.time_ms,
         }
+        for field_name in LEVEL_CONTRACT_WIRE_FIELDS:
+            value = getattr(self, field_name)
+            if value is not None:
+                wire[field_name] = value
+        return wire
 
 
 # ── Range Exhaustion (ADR-0053) ──────────────────────────────────────────────
@@ -631,8 +668,29 @@ def make_swing_id(kind: str, symbol: str, tf_s: int, time_ms: int) -> str:
     return f"{kind}_{sym_safe}_{tf_s}_{time_ms}"
 
 
+def level_price_key(price: float) -> int:
+    """Ціновий ключ рівня: ціна × 100, округлена до цілого (спільний для id і key EQ-кластера)."""
+    return int(round(price * 100))
+
+
 def make_level_id(kind: str, symbol: str, tf_s: int, price: float) -> str:
     """S3: детермінований level ID (price rounded to int*100)."""
     sym_safe = symbol.replace("/", "_").replace(" ", "_")
-    price_key = int(round(price * 100))
-    return f"{kind}_{sym_safe}_{tf_s}_{price_key}"
+    return f"{kind}_{sym_safe}_{tf_s}_{level_price_key(price)}"
+
+
+def level_period(epoch_ms: int) -> str:
+    """ADR-0104 §3.2: період рівня з часом — ISO UTC хвилина його початку (`2026-09-24T21:00Z`)."""
+    return time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(epoch_ms // 1000))
+
+
+def make_level_key(series: str, side: str, symbol: str, period: str) -> str:
+    """ADR-0104 §3.2: key = "{series}:{side}:{symbol}:{period}".
+
+    series — ряд рівнів (d1 | h4 | h1 | asia | london | newyork | eq<tf_s>); side — high | low; period — `level_period()`
+    початку періоду або, для EQ-кластера, `level_price_key()`. Без kind і TF глядача: рухомий H/L періоду і він же
+    завершений мають один key.
+    """
+    if side not in (LEVEL_SIDE_HIGH, LEVEL_SIDE_LOW):
+        raise ValueError("LEVEL_KEY_SIDE_INVALID side=%r series=%s symbol=%s" % (side, series, symbol))
+    return f"{series}:{side}:{symbol}:{period}"
