@@ -10,6 +10,7 @@ import {
   HistogramSeries,
   CrosshairMode,
   LineStyle,
+  PriceLineSource,
   type IChartApi,
   type ISeriesApi,
   type Time,
@@ -178,11 +179,9 @@ export class ChartEngine {
           color: THEMES.dark.chart.crosshair.horzLine.color,
           width: 1,
           style: LineStyle.Dashed,
-          // ADR-0073 option D (2026-05-12) — default OFF.
-          // Owner-toggle через overflow menu "Crosshair price". LWC default true.
-          // Ховаємо chip що follow-ить курсор по price-scale (трейдеру не завжди
-          // треба, а курсор + chip = візуальний noise). State persists localStorage.
-          labelVisible: false,
+          // ADR-0073 rev 6 (2026-09-28, власник): ціна рівня курсора на price scale.
+          // Задається лише при створенні — applyOptions після init label не вмикав (rev 5).
+          labelVisible: true,
         },
       },
       // V3 parity: chart_adapter_lite.js:52-66.
@@ -267,7 +266,13 @@ export class ChartEngine {
       borderDownColor: '#ef5350',
       wickUpColor: '#26a69a',
       wickDownColor: '#ef5350',
-      priceLineVisible: false,
+      // ADR-0073 rev 6: лінія поточної ціни — close останнього (формуючого) бару, який
+      // preview-площина оновлює з тіків fxcm_local:price_tik; колір — напрям бару (LWC).
+      // Рідкі крапки (1-4), не пунктир: легша і не схожа на пунктирні SMC-рівні (ADR-0026).
+      priceLineVisible: true,
+      priceLineSource: PriceLineSource.LastBar,
+      priceLineStyle: LineStyle.SparseDotted,
+      priceLineWidth: 1,
       lastValueVisible: true,
     });
 
@@ -741,11 +746,8 @@ export class ChartEngine {
     });
   }
 
-  // ADR-0073 option D — Crosshair label toggle attempt видалено (2026-05-12).
-  // Reason: LWC `applyOptions({crosshair:{horzLine:{labelVisible:true}}})` після
-  // init з `labelVisible:false` не реактивує label (LWC quirk або internal lock).
-  // Toggle UI прибрано — `labelVisible:false` залишається locked у init.
-  // Trader читає ціни з LWC native periodic price labels (на scale strip).
+  // ADR-0073: runtime-перемикача мітки crosshair нема — LWC `applyOptions` після init
+  // label не реактивував (rev 5); `labelVisible` задається лише в createChart (rev 6: true).
 
   // ─── destroy ───
   destroy(): void {
