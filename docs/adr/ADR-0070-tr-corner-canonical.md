@@ -5,8 +5,8 @@
 | Field          | Value                                                                |
 | -------------- | -------------------------------------------------------------------- |
 | ID             | ADR-0070                                                              |
-| Status         | ACCEPTED (rev 3 — HUD показує лише виміряні ATR/RV; rev 2 — RV restored as backend SSOT, ATR dual format) |
-| Date           | 2026-05-09 (rev 2: 2026-05-10; rev 3: 2026-09-27)                     |
+| Status         | ACCEPTED (rev 3.1 — wake/`/api/context`/наратив беруть виміряний ATR, не поріг 1.0; rev 3 — HUD показує лише виміряні ATR/RV; rev 2 — RV restored as backend SSOT, ATR dual format) |
+| Date           | 2026-05-09 (rev 2: 2026-05-10; rev 3: 2026-09-27; rev 3.1: 2026-09-28) |
 | Authors        | Станіслав                                                             |
 | Supersedes     | —                                                                     |
 | Builds on      | ADR-0065 rev 2 (CR-2.5 layout); ADR-0069 rev 2 (NP state machine); ADR-0049 (Архi presence + thesis); ADR-0066 rev 5 (tokens) |
@@ -424,6 +424,32 @@ SMC-споживачів; для нього лишається `atr === 1.0` у 
 відкидають справжній ATR < 1.0 (окремий слайс).
 
 **Rollback rev 3**: `git revert` коміту — заглушка 1.0 повертається в кадр; UI сумісний в обидва боки.
+
+### Rev 3.1 amendment (2026-09-28) — споживачі ATR поза HUD: виміряне замість порогу 1.0
+
+**Тригер (прод 28.09, read-only)**: `/api/context` для XAG/USD на M5/M15/H1/H4/M1 віддавав лише `{"D1": 2.47}`;
+HUD-зонд того ж часу — виміряні XAG M5 0.145, M15 0.241, H1 0.521, H4 0.888 (XAG — єдиний із 7 символів з ATR < 1.0).
+Три споживачі `get_atr` вгадували заглушку порогом, і справжній ATR < 1.0 падав разом із нею; четвертий — акумулятор
+пробудження — нормував рух лише при `atr > 1.0`, хоча docstring обіцяв `<= 0`.
+
+| Файл | Було | Стало |
+| ---- | ---- | ----- |
+| `runtime/smc/wake_engine.py` | H4 → H1 → D1 до першого `> 1.0`: XAG брав D1 (2.47) — proximity/volatility/акумулятор ~3× грубіші | `_reference_atr`: перший **виміряний** (`SmcRunner.get_measured_atr`) — XAG H4 0.81. Жоден не виміряний → 0.0 = «без ATR» + `WAKE_ATR_UNMEASURED` на переході; бот-умови (max_silence, price_cross) працюють далі; dedup-кулдаун без ATR тримається за часом (раніше `Δ < 0·0.5` ніколи не придушував би) |
+| `core/smc/wake_check.py` | `delta / atr if atr > 1.0 else delta` — XAG на сирих пунктах | нормування при будь-якому `atr > 0`; `atr <= 0` — рух не рахується (сирі пункти різних символів непорівнянні зі score) |
+| `runtime/ws/ws_server.py` | `/api/context` atr_map: `> 1.0` — у XAG лишався D1; наратив отримував заглушку 1.0 як «оцінку» | `_context_atr_map`: лише виміряні; невиміряний TF — `warnings += "atr_unavailable: <TF>"`. Наративу — `0.0` (оцінки нема) |
+| `runtime/smc/smc_runner.py` | `get_narrative`: `atr_14 <= 1.0` → оцінка викликача (h−l одного бару) — XAG M5..H4 | `_narrative_atr`: ATR рушія для TF глядача, якщо виміряний |
+
+**Свідомо без змін**: наратив глядацьких M1/M3/M30 (рушій їх не вимірює; снапшот — з базового TF) бере, як і раніше,
+оцінку викликача, без неї — дільник 1.0; тепер джерело названо в лозі `NARRATIVE_ATR_UNMEASURED source=…` (INFO, на
+переході). Перехід на ATR базового TF (M30→H1, M1/M3→M5) змінив би панель наративу на дефолтному M30 — рішення власника,
+не цього слайсу. У `narrative.warnings` нічого не додано: ChartHud їх показує на графіку.
+
+**Залишок**: (1) бот (`trader-v3/bot/scheduling/checks/check_4_6_mechanical.py`, `_atv > 1.0`) має той самий поріг для
+`cached_atr` із `/api/context` — для XAG візьме D1 і після цього слайсу; окрема задача в межах trader-v3. (2) atr_map
+округлює до 2 знаків: XAG M5 0.0717 → 0.07 (−2.4 %). (3) Рейка плаского вікна `compute_atr` (усі TR = 0 → 1.0) на проді
+недосяжна: найдовша серія нульового TR за ~40 днів SSOT — 9 барів (EUSTX50 M5), потрібно 14.
+
+**Rollback rev 3.1**: `git revert` коміту; VPS `git pull --ff-only` + `sudo -n supervisorctl restart smc:smc-ws`.
 
 ---
 

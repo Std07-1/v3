@@ -54,6 +54,9 @@ _BOT_CACHE_TTL = 30.0  # refresh bot conditions from Redis every 30s
 _EVENT_LIST_MAX = 100  # max events in Redis list (LTRIM)
 _PRESENCE_REFRESH_S = 60.0  # rebuild presence every 60s (for UI, not critical)
 
+# Опорний ATR для proximity/volatility/акумулятора: перший виміряний у порядку H4 → H1 → D1
+_REFERENCE_ATR_TFS = (14400, 3600, 86400)
+
 
 def _imminent_phase(price: float, params: Dict[str, Any]) -> str:
     """ADR-0087: which trigger fired — 'pending' (level crossed) or 'mtf'."""
@@ -113,6 +116,9 @@ class WakeEngine:
         # Presence cache
         self._presence: Dict[str, PresenceStatus] = {}
 
+        # Символи без виміряного опорного ATR — лог на переході, не кожен tick
+        self._atr_unmeasured: set[str] = set()
+
         _log.info(
             "WakeEngine initialized (ns=%s, symbols=%s)",
             namespace,
@@ -153,14 +159,7 @@ class WakeEngine:
         prev_price = self._prev_prices.get(symbol, 0.0)
         self._prev_prices[symbol] = price
 
-        # ATR: prefer H4, fallback to any available
-        atr = 0.0
-        for tf_s in (14400, 3600, 86400):
-            atr = self._smc._engine.get_atr(symbol, tf_s)
-            if atr > 1.0:
-                break
-        if atr <= 0:
-            return
+        atr = self._reference_atr(symbol)
 
         # Snapshots for AutoWakeGenerator (multi-TF dict)
         snapshots = {}
@@ -440,7 +439,9 @@ class WakeEngine:
                 _prev_ts, _prev_price = _prev_event
                 _elapsed_ms = ts_ms - _prev_ts
                 _price_delta = abs(price - _prev_price)
-                if _elapsed_ms < _min_interval_ms and _price_delta < atr * 0.5:
+                # Без виміряного ATR «значущий рух» не оцінити — кулдаун тримається за часом
+                _no_significant_move = atr <= 0 or _price_delta < atr * 0.5
+                if _elapsed_ms < _min_interval_ms and _no_significant_move:
                     return  # suppress — same condition, no significant price change
 
             event = WakeEvent(
@@ -635,6 +636,32 @@ class WakeEngine:
             return 0
 
     # ── Helpers ─────────────────────────────────────────────────────────────
+
+    def _reference_atr(self, symbol: str) -> float:
+        """ATR(14) опорного TF — перший ВИМІРЯНИЙ з H4 → H1 → D1 (ADR-0070 rev 3).
+
+        Поріг «> 1.0» вгадував заглушку дільника і відкидав справжній ATR XAG (H4 0.81, H1 0.52):
+        брався D1 (2.47) — proximity/volatility у ~3 рази грубіші. None від рушія = не виміряно.
+
+        0.0 — жоден TF не виміряний (до warmup). Чисті перевірки читають atr <= 0 як «без ATR»:
+        платформні умови не генеруються, volatility_spike мовчить, рух ціни не рахується в
+        акумуляторі; бот-умови (max_silence, price_cross, session_open) працюють далі.
+        """
+        for tf_s in _REFERENCE_ATR_TFS:
+            atr = self._smc.get_measured_atr(symbol, tf_s)
+            if atr is not None:
+                if symbol in self._atr_unmeasured:
+                    self._atr_unmeasured.discard(symbol)
+                    _log.info("WAKE_ATR_MEASURED sym=%s tf=%d atr=%s", symbol, tf_s, atr)
+                return float(atr)
+        if symbol not in self._atr_unmeasured:
+            self._atr_unmeasured.add(symbol)
+            _log.warning(
+                "WAKE_ATR_UNMEASURED sym=%s tfs=%s — ATR-умови вимкнені до виміру",
+                symbol,
+                _REFERENCE_ATR_TFS,
+            )
+        return 0.0
 
     def _get_session_info(self, symbol: str) -> Dict[str, Any]:
         """Resolve current session + market-open state for ``symbol``.

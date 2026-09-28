@@ -165,6 +165,8 @@ class SmcRunner:
         self._prev_signals: Dict[Tuple[str, int], list] = {}
         self._journal = SignalJournal(full_cfg)
         self._warmup_done = False  # journal gated until warmup completes
+        # (symbol, viewer_tf_s) з наративом без виміряного ATR — лог на переході, не кожен виклик
+        self._narrative_atr_unmeasured: Set[Tuple[str, int]] = set()
         # Signal state persistence: survive restarts (D1 fix)
         sig_base = str(
             full_cfg.get("smc", {})
@@ -800,8 +802,8 @@ class SmcRunner:
         # type: (str, int, float, float) -> Optional[NarrativeBlock]
         """ADR-0033 + ADR-0035: synthesize narrative with session context.
 
-        atr param from ws_server is single-bar proxy — we compute ATR14
-        internally for reliable target distance filtering.
+        `atr` — оцінка викликача (ws_server: h−l одного бару; 0.0 = оцінки нема); діє лише для TF,
+        який рушій не вимірює (див. _narrative_atr).
         """
         cfg = self._full_config.get("smc", {}).get("narrative", {})
         if not cfg.get("enabled", False):
@@ -820,10 +822,7 @@ class SmcRunner:
             snap = self.get_snapshot(symbol, viewer_tf_s)
             if snap is None:
                 return _fallback_narrative_block(["no_snapshot"])
-            # Use ATR14 from engine bars instead of single-bar proxy
-            atr_14 = self._engine.get_atr(symbol, viewer_tf_s)
-            if atr_14 <= 1.0 and atr > 0:
-                atr_14 = atr  # fallback to caller estimate if engine has no data
+            atr_14 = self._narrative_atr(symbol, viewer_tf_s, atr)
             bias = self.get_bias_map(symbol)
             grades = self.get_zone_grades(symbol, viewer_tf_s)
             momentum = self.get_momentum_map(symbol)
@@ -864,6 +863,32 @@ class SmcRunner:
         except Exception:
             _log.exception("NARRATIVE_ERROR symbol=%s tf=%d", symbol, viewer_tf_s)
             return _fallback_narrative_block()
+
+    def _narrative_atr(self, symbol: str, viewer_tf_s: int, caller_estimate: float) -> float:
+        """ATR для фільтра дистанції цілей наративу — ATR14 рушія для TF глядача (ADR-0070 rev 3).
+
+        Поріг «<= 1.0» вгадував заглушку і підміняв справжній ATR XAG (M5..H4 < 1.0) на оцінку
+        викликача. TF, який рушій не вимірює (M1/M3/M30), — як і раніше: оцінка викликача, без неї
+        дільник 1.0; джерело — у лозі на переході.
+        """
+        measured = self._engine.get_measured_atr(symbol, viewer_tf_s)
+        if measured is not None:
+            self._narrative_atr_unmeasured.discard((symbol, viewer_tf_s))
+            return measured
+        if caller_estimate > 0:
+            source, atr = "caller_estimate", caller_estimate
+        else:
+            source, atr = "divisor_stub", self._engine.get_atr(symbol, viewer_tf_s)
+        if (symbol, viewer_tf_s) not in self._narrative_atr_unmeasured:
+            self._narrative_atr_unmeasured.add((symbol, viewer_tf_s))
+            _log.info(
+                "NARRATIVE_ATR_UNMEASURED sym=%s tf=%d source=%s atr=%s",
+                symbol,
+                viewer_tf_s,
+                source,
+                atr,
+            )
+        return atr
 
     def last_delta(self, symbol: str, tf_s: int) -> Optional[SmcDelta]:
         """Останній SmcDelta після on_bar_dict() — для delta frame wiring."""

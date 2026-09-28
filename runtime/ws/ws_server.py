@@ -655,6 +655,31 @@ def _hud_volatility(
     return measured["atr"], measured["rv"], warnings
 
 
+# /api/context: ATR запитаного TF + опорних H4/D1 для зовнішніх споживачів (бот, TUI)
+_CONTEXT_ATR_REFERENCE_TFS = (14400, 86400)
+
+
+def _context_atr_map(
+    runner: Any, symbol: str, tf_s: int
+) -> tuple[Dict[str, float], list[str]]:
+    """ATR(14) для /api/context — лише виміряні рушієм (ADR-0070 rev 3).
+
+    Поріг «> 1.0» вгадував заглушку дільника і відкидав справжній ATR XAG (M5..H4 < 1.0): у контексті
+    лишався тільки D1. None = не виміряно (TF поза compute_tfs, до warmup) → TF у карті нема,
+    warnings каже `atr_unavailable: <TF>`.
+    """
+    atr_map: Dict[str, float] = {}
+    warnings: list[str] = []
+    for atr_tf_s in sorted({tf_s, *_CONTEXT_ATR_REFERENCE_TFS}):
+        label = _TF_S_TO_LABEL.get(atr_tf_s, str(atr_tf_s))
+        measured = runner.get_measured_atr(symbol, atr_tf_s)
+        if measured is None:
+            warnings.append("atr_unavailable: %s" % label)
+            continue
+        atr_map[label] = round(float(measured), 2)
+    return atr_map, warnings
+
+
 def _build_full_frame(
     session: WsSession,
     candles: list,
@@ -2616,15 +2641,13 @@ def build_app(
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"momentum_map: {exc}")
 
-        # ATR(14) for requested TF + D1/H4
+        # ATR(14) for requested TF + D1/H4 — лише виміряні
         try:
-            atr_map = {}
-            for _atf in sorted({tf_s, 14400, 86400}):
-                _atr_val = _smc_runner._engine.get_atr(symbol, _atf)
-                if _atr_val > 1.0:
-                    atr_map[_TF_S_TO_LABEL.get(_atf, str(_atf))] = round(_atr_val, 2)
+            atr_map, atr_warnings = _context_atr_map(_smc_runner, symbol, tf_s)
             if atr_map:
                 ctx["atr"] = atr_map
+            if atr_warnings:
+                ctx.setdefault("warnings", []).extend(atr_warnings)
         except Exception as exc:
             ctx.setdefault("warnings", []).append(f"atr: {exc}")
 
@@ -2652,8 +2675,8 @@ def build_app(
         # narrative — market phase, scenario, mode
         narr = None
         try:
-            _atr_est = 1.0
-            narr = _smc_runner.get_narrative(symbol, tf_s, _last_price, _atr_est)
+            # 0.0 = оцінки нема (раніше заглушка 1.0 видавалась за оцінку викликача)
+            narr = _smc_runner.get_narrative(symbol, tf_s, _last_price, 0.0)
             if narr is not None:
                 from core.smc.narrative import narrative_to_wire
 

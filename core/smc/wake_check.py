@@ -180,7 +180,8 @@ def accumulator_tick(
         acc:        current accumulator state
         price:      current price
         prev_price: previous price (from last tick)
-        atr:        ATR for normalization (<=0 = skip normalization, use raw delta)
+        atr:        виміряний ATR для нормування; <=0 — не виміряно: рух ціни не рахується
+                    (сирі пункти різних символів непорівнянні з нормованим score)
         session_events: ["london_open", "asia_close"] etc
         gap_detected: True if gap > 0.5 ATR detected
         ts:         current timestamp (seconds, time.time())
@@ -198,9 +199,10 @@ def accumulator_tick(
             score *= acc.decay ** elapsed_min
 
     # ── Price movement (main signal) ─────────────────────────────
-    if prev_price > 0 and price > 0:
+    # Будь-який виміряний ATR нормує: поріг «> 1.0» лишав XAG (H4 ATR 0.81) на сирих пунктах.
+    if prev_price > 0 and price > 0 and atr > 0:
         delta = abs(price - prev_price)
-        normalized = delta / atr if atr > 1.0 else delta
+        normalized = delta / atr
         score += normalized
         if normalized > 0.1:  # filter micro-noise
             events_log.append({

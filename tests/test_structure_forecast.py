@@ -388,16 +388,15 @@ class _FakeSmc:
         self._swings = swings
         self._bias = bias
         self._structure_events = structure_events or []
-        self._engine = SimpleNamespace(
-            get_atr=lambda symbol, tf_s, period=14: 10.0,
-            _session_windows=None,
-            _config=None,
-        )
+        self._engine = SimpleNamespace(_session_windows=None, _config=None)
 
     def get_last_price(self, symbol):
         return self._price
 
     def get_atr(self, symbol, tf_s, period=14):
+        return 10.0
+
+    def get_measured_atr(self, symbol, tf_s):
         return 10.0
 
     def get_snapshot(self, symbol, tf_s):
