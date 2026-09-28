@@ -118,6 +118,7 @@ export class ChartEngine {
   private _volDownColor: string;
 
   // ─── Колір лінії й мітки поточної ціни (ADR-0073 rev 6) ───
+  // 🔒 контракт ADR-0073 rev 6 (рішення власника) — змінювати лише з його слова; сторож engine.priceScale.test.ts
   // LWC фарбує обидві `priceLineColor || колір тіла бару`; у gray (спад) і hollow (ріст) тіло
   // прозоре → лінія й мітка зникали. Бордюр непрозорий у кожному стилі — беремо його за напрямком
   // останнього бару; applyOptions лише коли напрямок змінився.
@@ -188,6 +189,7 @@ export class ChartEngine {
           width: 1,
           style: LineStyle.Dashed,
           // ADR-0073 rev 6 (2026-09-28, власник): ціна рівня курсора на price scale.
+          // 🔒 контракт ADR-0073 rev 6 (рішення власника) — змінювати лише з його слова; сторож engine.priceScale.test.ts
           // Задається лише при створенні — applyOptions після init label не вмикав (rev 5).
           labelVisible: true,
         },
@@ -221,12 +223,10 @@ export class ChartEngine {
       // chip (теал/червоний), magnet, Y-zoom drag. На mobile fontSize 10
       // (layout.fontSize) додатково shrink labels.
       //
-      // Diagnostic test (2026-05-12): borderVisible тимчасово RESTORED до true
-      // після того що user повідомив "Crosshair price chip не працює коли ON".
-      // Гіпотеза: LWC при `borderVisible:false + ticksVisible:false` (всі chrome
-      // off) не рендерить crosshair label. Якщо chip з'являється з border on —
-      // підтверджено quirk → можна потім попробувати `borderColor: 'transparent'`
-      // (chip works AND border invisible).
+      // 🔒 borderVisible: true — частина контракту ADR-0073 rev 6: 12.05 з
+      // `borderVisible:false + ticksVisible:false` мітка ціни курсора не рендерилась
+      // (гіпотеза LWC-quirk, не спростована). Мітка курсора зараз увімкнена — не вимикати
+      // бордюр без перевірки мітки на живому графіку.
       rightPriceScale: {
         borderVisible: true,
         ticksVisible: false,
@@ -274,6 +274,7 @@ export class ChartEngine {
       borderDownColor: '#ef5350',
       wickUpColor: '#26a69a',
       wickDownColor: '#ef5350',
+      // 🔒 контракт ADR-0073 rev 6 (рішення власника) — змінювати лише з його слова; сторож engine.priceScale.test.ts
       // ADR-0073 rev 6: лінія поточної ціни — close останнього (формуючого) бару, який
       // preview-площина оновлює з тіків fxcm_local:price_tik; колір — напрям бару (LWC).
       // Рідкі крапки (1-4), не пунктир: легша і не схожа на пунктирні SMC-рівні (ADR-0026).

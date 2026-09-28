@@ -64,6 +64,8 @@
 | LWC Overlay Render Rule | `OverlayRenderer.ts` header comment + ADR-0024 §18.7 | Синхронний рендер з range/zoom trigger (→ stale Y) |
 | Level Rendering Rules | `OverlayRenderer.ts:renderLevels()` + ADR-0026 (L1–L6) | Full-width lines, приховування підписів, merge без фізичного overlap |
 | Zone Rendering Rules | `OverlayRenderer.ts:renderZones()` + ADR-0024c (Z1–Z10) | Рендер без grade, мітигація по тіні, зони без lifecycle |
+| 🔒 Ціна на price scale (лінія поточної ціни, мітка ціни, ціна курсора) | `ui_v4/src/chart/engine.ts` (createChart / addSeries / `_trackLastBarDirection`) + ADR-0073 rev 6 §«Канонічний контракт»; сторож `engine.priceScale.test.ts` | Вимикати, overlay-заміна, пунктирний стиль (плутається з рівнями), колір з тіла бару (gray/hollow → невидимо), runtime-перемикач `labelVisible`, правила ADR-0026 до лінії ціни (вона навмисно на всю ширину) — усе лише зі слова власника |
+| ATR «виміряно чи ні» | `SmcRunner.get_measured_atr()` / `SmcEngine.get_measured_atr()` → `None` = не виміряно (ADR-0070 rev 3/3.1) | Поріг `> 1.0` / `<= 1.0` як ознака заглушки (справжній ATR XAG < 1.0); `get_atr()` (дільник, 1.0 без даних) для показу чи порогів |
 | CandleBar field names | `core/model/bars.py:CandleBar` → `.o .h .low .c .v` | Використання `.l` замість `.low` (wire dict `l` ≠ dataclass `.low`) |
 | Межа зовнішнього клієнта (trader-v3) | ADR-0090 §3 (platform-side) + `trader-v3/docs/adr/ADR-024-autonomy-charter.md` (правила бота = його SSOT) | Правила/логіка бота у platform docs чи коді; platform-код, що читає/пише файли бота (X40, X31) |
 
