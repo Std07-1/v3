@@ -117,6 +117,13 @@ export class ChartEngine {
   private _volUpColor: string;
   private _volDownColor: string;
 
+  // ─── Колір лінії й мітки поточної ціни (ADR-0073 rev 6) ───
+  // LWC фарбує обидві `priceLineColor || колір тіла бару`; у gray (спад) і hollow (ріст) тіло
+  // прозоре → лінія й мітка зникали. Бордюр непрозорий у кожному стилі — беремо його за напрямком
+  // останнього бару; applyOptions лише коли напрямок змінився.
+  private _priceLineInk: { up: string; down: string };
+  private _lastBarUp: boolean | null = null;
+
   // ─── Idle auto-recenter timer (Entry 078: §6) ───
   private _idleTimer: ReturnType<typeof setTimeout> | null = null;
   private static readonly IDLE_RECENTER_MS = 15_000; // 15s
@@ -141,6 +148,7 @@ export class ChartEngine {
       const _seedAlpha = VOLUME_ALPHA_BY_THEME[_seedTheme] ?? VOLUME_ALPHA;
       this._volUpColor = _withAlpha(_seedResolved.upColor, _seedAlpha);
       this._volDownColor = _withAlpha(_seedResolved.downColor, _seedAlpha);
+      this._priceLineInk = { up: _seedResolved.borderUpColor, down: _seedResolved.borderDownColor };
     }
 
     // ─── Chart options (V3 parity: DARK_CHART_OPTIONS, chart_adapter_lite.js:101-148) ───
@@ -437,6 +445,8 @@ export class ChartEngine {
 
     this.series.setData(mapped);
     this.volumeSeries.setData(volMapped);
+    const last = bars[bars.length - 1];
+    if (last) this._trackLastBarDirection(last.o, last.c);
 
     // ADR-0032 P4: caller always sets visible range after setData()
     // (setVisibleLogicalRange / scrollToRealTime / fitContent) —
@@ -494,6 +504,10 @@ export class ChartEngine {
     if (lateBars.length > 0) {
       this._replacePastBars(lateBars);
     }
+
+    // Пізні бари (t_ms < head) останній бар не змінюють
+    const newest = sorted[sorted.length - 1];
+    if (newest.t_ms >= this._headTMs) this._trackLastBarDirection(newest.o, newest.c);
 
     // Entry 078 §6: no auto-scroll on live updates.
     // User controls scroll position; realign only on price-axis dblclick
@@ -581,6 +595,12 @@ export class ChartEngine {
       return;
     }
 
+    if (currentCandle.length === 0) {
+      // Серія була порожня — останнім став останній підвантажений бар
+      const lastPrepended = mapped[mapped.length - 1];
+      this._trackLastBarDirection(lastPrepended.open, lastPrepended.close);
+    }
+
     this._totalBars += bars.length;
     this.isFetchingScrollback = false;
     this._setScrollbackState('idle');
@@ -596,6 +616,7 @@ export class ChartEngine {
     this._setScrollbackState('idle');
     this._rafQueue = [];
     this._headTMs = 0;
+    this._lastBarUp = null;
   }
 
   // ─── P3.15: Scrollback state management ───
@@ -697,6 +718,21 @@ export class ChartEngine {
     this.volumeSeries.setData(vData);
   }
 
+  /** Напрям останнього бару за правилом LWC (open <= close — ріст); колір — лише на зміні. */
+  private _trackLastBarDirection(open: number, close: number): void {
+    const up = open <= close;
+    if (up === this._lastBarUp) return;
+    this._lastBarUp = up;
+    this._applyPriceLineColor();
+  }
+
+  private _applyPriceLineColor(): void {
+    if (this._lastBarUp === null) return;
+    this.series.applyOptions({
+      priceLineColor: this._lastBarUp ? this._priceLineInk.up : this._priceLineInk.down,
+    });
+  }
+
   // ─── P3.11: Multi-theme switching (V3: setTheme, chart_adapter_lite.js:1212-1224) ───
   // ADR-0066 PATCH 02e: theme switch refreshes candle palette so styles like
   // stealth/white that have per-theme overrides re-render visibly on the new bg.
@@ -730,6 +766,8 @@ export class ChartEngine {
     this._volUpColor = _withAlpha(s.upColor, alpha);
     this._volDownColor = _withAlpha(s.downColor, alpha);
     this._refreshVolumeColors();
+    this._priceLineInk = { up: s.borderUpColor, down: s.borderDownColor };
+    this._applyPriceLineColor();
     saveCandleStyle(name);
   }
 
