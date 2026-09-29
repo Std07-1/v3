@@ -5,7 +5,8 @@ tests/test_smc_level_contract.py — контракт рівня ADR-0104 §3.2 
   - SmcLevel без полів контракту видає на wire рівно старі id/kind/price/t_ms (зворотна сумісність);
   - key/family/state/tier видаються, коли задані; невідоме значення — гучна помилка;
   - make_level_key / level_period — формат "{series}:{side}:{symbol}:{period}" з ISO UTC хвилиною;
-  - S6: словник Python (родини, стани, tier, поля wire) = типи ui_v4/src/types.ts;
+  - S6: словник Python (родини, стани, tier, поля wire) = типи ui_v4/src/types.ts; кожен kind має свій стиль на графіку,
+    кожна група — рядок меню «Рівні»;
   - конструктори (key levels, EQ, сесії) заповнюють контракт; рухомий і завершений H/L одного періоду мають
     один key — на ньому триматиметься закріплення (S5).
 """
@@ -40,6 +41,8 @@ from core.smc.types import (
 
 _REPO = pathlib.Path(__file__).resolve().parents[1]
 _TYPES_TS = _REPO / "ui_v4" / "src" / "types.ts"
+_OVERLAY_TS = _REPO / "ui_v4" / "src" / "chart" / "overlay" / "OverlayRenderer.ts"
+_LEVEL_GROUPS_TS = _REPO / "ui_v4" / "src" / "chart" / "overlay" / "levelGroups.ts"
 _LEGACY_WIRE_FIELDS = {"id", "kind", "price", "t_ms"}
 _SYMBOL = "XAU/USD"
 _M1_S, _M15_S, _H4_S, _D1_S = 60, 900, 14400, 86400
@@ -148,6 +151,22 @@ def test_ts_level_group_union_matches_python_vocabulary():
 def test_every_level_kind_has_a_menu_group():
     """Рівень без групи обійшов би меню «Рівні» — вимкнути його трейдер не зміг би."""
     assert set(LEVEL_GROUP_BY_KIND) == set(LEVEL_KINDS)
+
+
+def test_every_level_kind_has_its_own_style_on_the_chart():
+    """Kind без стилю малюється `_default` з підписом «LVL» — трейдер не знає, що це за лінія (ADR-0026 L6)."""
+    match = re.search(r"const LEVEL_STYLES\b[^=]*= \{(.*?)\n\};", _OVERLAY_TS.read_text(encoding="utf-8-sig"), re.S)
+    assert match, "OverlayRenderer.ts: немає const LEVEL_STYLES"
+    styled = set(re.findall(r"^\s*(\w+):\s*\{", match.group(1), re.M))
+    assert styled - {"_default"} == set(LEVEL_KINDS)
+
+
+def test_every_menu_group_has_exactly_one_row_in_the_levels_menu():
+    """Група без рядка — рівні, які трейдер не може ні ввімкнути, ні вимкнути; зайвий рядок — порожній перемикач."""
+    match = re.search(r"LEVEL_MENU_ROWS\b[^=]*= \[(.*?)\n\];", _LEVEL_GROUPS_TS.read_text(encoding="utf-8-sig"), re.S)
+    assert match, "levelGroups.ts: немає LEVEL_MENU_ROWS"
+    rows = re.findall(r"group: '([a-z0-9_]+)'", match.group(1))
+    assert sorted(rows) == sorted(LEVEL_GROUPS)
 
 
 def test_ts_smc_level_declares_every_wire_field():
