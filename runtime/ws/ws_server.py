@@ -133,11 +133,17 @@ from runtime.ws.app_keys import (  # noqa: E402
     APP_WAKE_ENGINE,
     APP_WS_LIMITS,
     APP_AGENT_BRIDGE_CFG,
+    APP_VISITORS_JOURNAL,
     APP_WS_SESSIONS,
 )
 from runtime.agent_bridge.config import (  # noqa: E402
     AGENT_BRIDGE_ENABLED_ENV,
     resolve_agent_bridge_config,
+)
+from runtime.visitors.journal import (  # noqa: E402
+    VISITOR_COOKIE,
+    open_journal,
+    visitor_cookie_attrs,
 )
 
 # CORS: дозволені origins для cross-origin (Vercel / Cloudflare Pages)
@@ -1877,6 +1883,15 @@ async def ws_handler(request: web.Request) -> web.StreamResponse:
     hb_interval = app.get(APP_HEARTBEAT_S, DEFAULT_HEARTBEAT_S)
     # SEC-06: aiohttp ping/pong закриває мертвих peer-ів; max_msg_size ріже фрейм ДО буферизації
     ws = web.WebSocketResponse(heartbeat=float(hb_interval), max_msg_size=_MAX_WS_MSG_BYTES)
+    # ADR-0105 S1: ключ відвідувача — видаємо або продовжуємо cookie у відповіді рукостискання
+    journal = app.get(APP_VISITORS_JOURNAL)
+    visit = (
+        journal.start(request.cookies, request.headers, int(time.time() * 1000))
+        if journal is not None
+        else None
+    )
+    if visit is not None:
+        ws.set_cookie(VISITOR_COOKIE, visit.vid, **visitor_cookie_attrs(request.headers.get("Origin", "")))
     await ws.prepare(request)
 
     session = WsSession(ws)
@@ -1940,6 +1955,8 @@ async def ws_handler(request: web.Request) -> web.StreamResponse:
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
                 await _handle_action(session, msg.data, app)
+                if visit is not None:
+                    visit.note_message(session.symbol, _TF_S_TO_LABEL.get(session.tf_s or 0))
             elif msg.type == WSMsgType.ERROR:
                 _log.warning(
                     "WS_ERROR client_id=%s err=%s",
@@ -1954,6 +1971,8 @@ async def ws_handler(request: web.Request) -> web.StreamResponse:
             session.client_id,
             ws.close_code,
         )
+        if journal is not None and visit is not None:
+            journal.finish(visit, session.client_id, int(time.time() * 1000), ws.close_code)
 
     return ws
 
@@ -2321,6 +2340,10 @@ def build_app(
     app[APP_CONFIG_PATH] = config_path
     app[APP_BOOT_ID] = uuid.uuid4().hex[:16]
     app[APP_FULL_CONFIG] = full_cfg
+    # ADR-0105 S1: журнал візитів; None = вимкнено (причина вже в лозі старту)
+    _visitors_journal = open_journal(full_cfg)
+    if _visitors_journal is not None:
+        app[APP_VISITORS_JOURNAL] = _visitors_journal
     # ADR-0090 S4: єдина секція для всього агентського; env-override логуємо гучно
     _bridge_cfg = resolve_agent_bridge_config(full_cfg)
     app[APP_AGENT_BRIDGE_CFG] = _bridge_cfg

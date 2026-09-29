@@ -12,10 +12,12 @@ from __future__ import annotations
 import json
 import pytest
 import asyncio
+import time
 from aiohttp import WSMsgType
 from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
 
-from runtime.ws.ws_server import APP_HEARTBEAT_S, APP_WS_LIMITS, WsLimits, build_app, SCHEMA_V
+from runtime.visitors.journal import VISITOR_COOKIE, VisitorsJournal
+from runtime.ws.ws_server import APP_HEARTBEAT_S, APP_VISITORS_JOURNAL, APP_WS_LIMITS, WsLimits, build_app, SCHEMA_V
 
 pytestmark = pytest.mark.asyncio
 
@@ -416,3 +418,48 @@ async def test_ws_max_clients_per_ip_rejects(aiohttp_client, ws_app_mock_uds):
         await client.ws_connect("/ws")
     assert exc_info.value.status == 503
     await ws1.close()
+
+
+# ── ADR-0105 S1: журнал візитів ─────────────────────────
+
+
+async def _wait_journal_lines(path, count, timeout=5.0):
+    """Сервер пише рядок у finally свого handler-а — вже після того, як клієнт закрив сокет."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if path.exists():
+            lines = path.read_text(encoding="utf-8").splitlines()
+            if len(lines) >= count:
+                return [json.loads(line) for line in lines]
+        await asyncio.sleep(0.02)
+    raise asyncio.TimeoutError("journal has fewer than %d lines" % count)
+
+
+async def test_ws_visitor_cookie_returns_same_key_and_journals_each_session(aiohttp_client, tmp_path):
+    """Перше підключення видає HttpOnly-cookie на /ws, друге приходить з тим самим ключем; кожна сесія = рядок."""
+    app = build_app(config_path="config.json", uds=_MockUDS())
+    app[APP_VISITORS_JOURNAL] = VisitorsJournal(str(tmp_path), 20)
+    client = await aiohttp_client(app)
+
+    ws = await client.ws_connect("/ws", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/140.0", "CF-IPCountry": "UA"})
+    await _recv_frame(ws, "full")
+    await ws.send_str(json.dumps({"action": "switch", "symbol": "XAU/USD", "tf": "M15"}))
+    await _recv_frame(ws, "full")
+    await ws.close()
+    journal_path = tmp_path / ("sessions-%s.jsonl" % time.strftime("%Y%m", time.gmtime()))
+    await _wait_journal_lines(journal_path, 1)  # порядок рядків = порядок сесій
+    (cookie,) = [m for m in client.session.cookie_jar if m.key == VISITOR_COOKIE]  # атрибути, як їх прислав сервер
+    assert (cookie["httponly"], cookie["path"], cookie["samesite"], cookie["secure"]) == (True, "/ws", "Strict", "")
+
+    ws = await client.ws_connect("/ws")
+    await _recv_frame(ws, "full")
+    await ws.close()
+
+    first, second = await _wait_journal_lines(journal_path, 2)
+    assert [p.name for p in tmp_path.iterdir()] == [journal_path.name]
+    assert first["vid"] == second["vid"] == cookie.value
+    assert (first["vid_issued"], second["vid_issued"]) == (True, False)
+    assert first["country"] == "UA" and first["device"]["os"] == "Windows" and first["bot_ua"] is False
+    assert (first["messages"], first["views"]) == (1, ["XAU/USD:M15"])
+    assert (second["messages"], second["views"]) == (0, [])
+    assert not any("ip" in key for key in first)

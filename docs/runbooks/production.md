@@ -420,6 +420,18 @@ FX/CFD ринки прив'язані до нью-йоркського часу.
 вбитого прогону, trap обгортки стартує їх за маркером `writers_stopped_by_settle`; вручну — порядок проду: fxcm →
 `M1_POLLER_REDIS_PRIME` → preview + ws.
 
+## Відвідувачі (ADR-0105)
+
+WS-сервер видає відвідувачу анонімний ключ (cookie `aione_vid` на `/ws`) і пише один рядок на сесію у
+`/var/lib/smc-v3/visitors/sessions-YYYYMM.jsonl` — без IP і сирого User-Agent.
+
+| Дія | Команда |
+| --- | --- |
+| Каталог журналу (один раз, до рестарту ws з `visitors.enabled`) | `sudo install -d -o smc -g smc -m 750 /var/lib/smc-v3/visitors` |
+| Чи журнал увімкнено | `grep VISITORS_JOURNAL /var/log/smc-v3/ws_server.stderr.log \| tail -n 3` |
+| Сесії за сьогодні | `sudo tail -n 20 /var/lib/smc-v3/visitors/sessions-$(date -u +%Y%m).jsonl` |
+| Вимкнути | `visitors.enabled = false` у git → деплой → рестарт `smc:smc-ws` |
+
 ---
 
 ## Що НЕ робити

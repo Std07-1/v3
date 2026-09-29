@@ -443,6 +443,12 @@
     "bg_smc_poll_interval_s": 10.0,
     "cors_allowed_origins": []
   },
+  "visitors": {
+    "_comment": "ADR-0105 S1: журнал візитів WS-сервера — один рядок JSONL на сесію у dir/sessions-YYYYMM.jsonl. Ключ відвідувача — випадковий рядок у HttpOnly-cookie aione_vid на шляху /ws, який видає сервер (у URL і логах nginx його нема). Пишуться лише ключ, час, країна (CF-IPCountry), клас пристрою з User-Agent, переглянуті символ:TF; IP не пишеться. dir створює ops з власником процесу ws (сервер каталог не створює: нема каталогу = журнал вимкнено з WARNING на старті). max_views_per_visit — скільки переглядів символ:TF зберігати в одному візиті, решта лише рахується.",
+    "enabled": true,
+    "dir": "/var/lib/smc-v3/visitors",
+    "max_views_per_visit": 20
+  },
   "agent_bridge": {
     "enabled": false,
     "host": "127.0.0.1",
