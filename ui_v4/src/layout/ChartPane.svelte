@@ -100,6 +100,7 @@
   // ADR-0104 §3.7 (рішення 29.09): меню «Рівні» — вибір рядків окремо для кожного TF, поверх типового сервера
   let levelOverridesByTf: OverridesByTf = $state({});
   let levelMenuOpen = $state(false);
+  let levelMenuEl: HTMLDivElement | undefined = $state();
   let levelTfKey = $state("");
   const levelRows = $derived(
     buildMenuRows(smcData.levels, levelOverridesByTf[levelTfKey] ?? {}),
@@ -132,6 +133,22 @@
     else delete all[levelTfKey];
     commitLevelOverrides(all);
   }
+
+  // Меню висить зі своєї кнопки ▾ і розкривається вліво; на вузькому екрані, де йому не вистачає місця ліворуч,
+  // зсувається рівно настільки, щоб лишитись у межах екрана (відступ 8px)
+  const LEVEL_MENU_EDGE_PX = 8;
+  $effect(() => {
+    const menu = levelMenuEl;
+    if (!levelMenuOpen || !menu) return;
+    const keepOnScreen = () => {
+      menu.style.translate = "";
+      const overflow = LEVEL_MENU_EDGE_PX - menu.getBoundingClientRect().left;
+      if (overflow > 0) menu.style.translate = `${overflow}px 0`;
+    };
+    keepOnScreen();
+    window.addEventListener("resize", keepOnScreen);
+    return () => window.removeEventListener("resize", keepOnScreen);
+  });
 
   function resetLevelGroups(): void {
     const all = { ...levelOverridesByTf };
@@ -788,21 +805,51 @@
           onclick={() => (showSW = !showSW)}
           title={$hintsOn ? "Swings" : undefined}>SW</button
         >
-        <button
-          class="smc-toggle smc-t-lvl"
-          class:active={showLVL}
-          onclick={() => (showLVL = !showLVL)}
-          title={$hintsOn ? "Levels (L)" : undefined}>LVL</button
-        >
-        <button
-          class="smc-toggle lvl-caret"
-          class:open={levelMenuOpen}
-          aria-haspopup="menu"
-          aria-expanded={levelMenuOpen}
-          aria-label="Рівні"
-          onclick={() => (levelMenuOpen = !levelMenuOpen)}
-          title={$hintsOn ? "Рівні" : undefined}>▾</button
-        >
+        <span class="lvl-anchor">
+          <button
+            class="smc-toggle smc-t-lvl"
+            class:active={showLVL}
+            onclick={() => (showLVL = !showLVL)}
+            title={$hintsOn ? "Levels (L)" : undefined}>LVL</button
+          >
+          <button
+            class="smc-toggle lvl-caret"
+            class:open={levelMenuOpen}
+            aria-haspopup="menu"
+            aria-expanded={levelMenuOpen}
+            aria-label="Рівні"
+            onclick={() => (levelMenuOpen = !levelMenuOpen)}
+            title={$hintsOn ? "Рівні" : undefined}>▾</button
+          >
+          {#if levelMenuOpen}
+            <div class="level-menu" role="menu" aria-label="Рівні" bind:this={levelMenuEl}>
+              <div class="lm-header">Рівні · {levelTfKey}</div>
+              {#each levelRows as row (row.group)}
+                <button
+                  class="lm-item"
+                  class:active={row.on}
+                  class:empty={row.count === 0}
+                  role="menuitemcheckbox"
+                  aria-checked={row.on}
+                  onclick={() => toggleLevelGroup(row.group)}
+                >
+                  <span class="lm-label">{row.label}</span>
+                  <span class="lm-count">{row.count}</span>
+                  <span class="lm-state">{row.on ? "●" : "○"}</span>
+                </button>
+              {/each}
+              <div class="lm-divider"></div>
+              <button
+                class="lm-item lm-reset"
+                role="menuitem"
+                disabled={!levelMenuHasOverrides}
+                onclick={resetLevelGroups}
+              >
+                <span class="lm-label">Скинути до типових</span>
+              </button>
+            </div>
+          {/if}
+        </span>
         <button
           class="smc-toggle smc-t-bos"
           class:active={showBOS}
@@ -822,34 +869,6 @@
           title={$hintsOn ? "Displacement" : undefined}>DIS</button
         >
       </div>
-      {#if levelMenuOpen}
-        <div class="level-menu" role="menu" aria-label="Рівні">
-          <div class="lm-header">Рівні · {levelTfKey}</div>
-          {#each levelRows as row (row.group)}
-            <button
-              class="lm-item"
-              class:active={row.on}
-              class:empty={row.count === 0}
-              role="menuitemcheckbox"
-              aria-checked={row.on}
-              onclick={() => toggleLevelGroup(row.group)}
-            >
-              <span class="lm-label">{row.label}</span>
-              <span class="lm-count">{row.count}</span>
-              <span class="lm-state">{row.on ? "●" : "○"}</span>
-            </button>
-          {/each}
-          <div class="lm-divider"></div>
-          <button
-            class="lm-item lm-reset"
-            role="menuitem"
-            disabled={!levelMenuHasOverrides}
-            onclick={resetLevelGroups}
-          >
-            <span class="lm-label">Скинути до типових</span>
-          </button>
-        </div>
-      {/if}
     {/if}
     <!-- ADR-0065 Phase 1: SMC trigger + F toggle moved to CommandRailOverflow.
          The .smc-grid layer buttons still render here when smcPanelOpen=true.
@@ -1023,12 +1042,12 @@
 
   /* N3: SMC layer toggles — refined collapsible panel */
   /* ADR-0043 P5: top: 36px → 48px (HUD clearance, D7 fix) */
-  /* 29.09 (власник): right 64px → 104px — ~48px біля шкали відкрито: засічка рівня (20px) + короткий підпис
-     (PDH/PWL/DO); панель і меню «Рівні» їх не перекривають, але й не відходять від шкали далеко */
+  /* 29.09 (власник): кнопки закінчуються там, де починається зона засічок рівнів — шкала (~56px) + засічка (20px)
+     + зазор; меню «Рівні» висить зі своєї ▾ і розкривається вліво, тож права смуга біля шкали завжди відкрита */
   .smc-panel {
     position: absolute;
     top: 48px;
-    right: 104px;
+    right: 80px;
     z-index: 36;
     display: flex;
     align-items: center;
@@ -1092,6 +1111,11 @@
     background: rgba(239, 83, 80, 0.1);
   }
   /* ADR-0104 §3.7: меню «Рівні» — стрілка біля LVL і список у стилі пунктів меню ☰ */
+  .lvl-anchor {
+    position: relative;
+    display: inline-flex;
+    gap: 2px;
+  }
   .lvl-caret {
     padding: 2px 3px;
     margin-left: -2px;
@@ -1104,6 +1128,7 @@
     top: calc(100% + 6px);
     right: 0;
     z-index: 100;
+    width: max-content; /* інакше ширину обмежує вузька група «LVL ▾» і рядки переносяться */
     min-width: 200px;
     /* низькі екрани (телефон у ландшафті): меню не виходить за низ — прокрутка, як у меню ☰ */
     max-height: calc(100vh - 90px);
@@ -1202,10 +1227,9 @@
   @media (max-width: 768px) {
     /* 29.09 (власник): панель — від лівого краю до цінової шкали (~72px + зазор); кнопки справа й переносяться на
        вузьких екранах, на шкалу не заходять; порожня частина панелі не ловить дотики графіка. Меню «Рівні»
-       відкривається під кнопками, на 24px лівіше їхнього краю — біля шкали лишається ~40–48px (засічка + короткий
-       підпис рівня); на вузьких екранах меню впирається в лівий край і стискається */
+       висить зі своєї ▾ (як на десктопі) і не виходить за лівий край екрана */
     .smc-panel {
-      top: 80px;
+      top: 54px; /* одразу під двома рядками HUD (низ ~46px) — без «висячого» проміжку */
       left: 8px;
       right: 80px;
       justify-content: flex-end;
@@ -1218,10 +1242,8 @@
       pointer-events: auto;
     }
     .level-menu {
-      right: 24px;
       min-width: 0;
-      max-width: calc(100% - 24px);
-      pointer-events: auto;
+      max-width: calc(100vw - 16px);
     }
     .smc-toggle {
       padding: 4px 6px;
