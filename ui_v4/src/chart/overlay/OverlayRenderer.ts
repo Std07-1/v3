@@ -66,7 +66,7 @@ const LEVEL_STYLES: Record<string, LevelStyle> & { _default: LevelStyle } = {
   pwl: { color: '#888888', dash: [8, 4], width: 1.0, alpha: 0.80, label: 'PWL', fontSize: 9 },
   do: { color: '#616161', dash: [4, 4], width: 0.5, alpha: 0.80, label: 'DO', fontSize: 9, labelColor: '#9e9e9e' },
   wo: { color: '#616161', dash: [10, 6], width: 0.5, alpha: 0.80, label: 'WO', fontSize: 9, labelColor: '#9e9e9e' },
-  // ADR-0104 S7: ПРОПОЗИЦІЯ вигляду місяця (у документах його немає) — чекає рішення власника, до нього не деплоїти
+  // ADR-0104 S7 — вигляд місяця затверджено власником 29.09 («го» на пропозицію): сірий тижня, довший штрих, товщий
   pmh: { color: '#888888', dash: [14, 4], width: 1.5, alpha: 0.80, label: 'PMH', fontSize: 9 },
   pml: { color: '#888888', dash: [14, 4], width: 1.5, alpha: 0.80, label: 'PML', fontSize: 9 },
   // Liquidity (EQ Highs/Lows) — red/green
