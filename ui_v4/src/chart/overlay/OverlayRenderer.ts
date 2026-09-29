@@ -20,13 +20,14 @@
 // L2: Merge тільки при фізичному overlap (|Y₁-Y₂|≤1px AND X-intersect)
 // L3: Лінії НІКОЛИ не full-width (LINE_PX=120 або NOTCH_PX=20)
 // L4: D1 kinds (pdh/pdl/dh/dl) мають пріоритет у sort
-// L5: Max 12 видимих рівнів після priority sort
+// L5: рівні — без ліміту кількості (ADR-0104 §3.7): видно те, що ввімкнено і що в межах екрана
 // L6: Per-kind кольори з LEVEL_STYLES dict (SSOT)
 // ═══════════════════════════════════════════════════
 
 import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import type { SmcData, SmcZone, SmcLevel, SmcSwing, UiWarning, ZoneGradeInfo } from '../../types';
 import { applyBudget, DEFAULT_BUDGET, type BudgetConfig, type DisplayMode, type ZoneDisplayProps } from './DisplayBudget';
+import { visibleLevels, type GroupOverrides } from './levelGroups';
 
 // ── ADR-0043 P1: Canvas Safe Zones — overlay елементи не рендеряться під HUD ──
 const CANVAS_SAFE_TOP_Y = 75;    // HUD + OHLCV tooltip clearance (px)
@@ -209,6 +210,8 @@ export class OverlayRenderer {
   // ── ADR-0028 Φ0: Display budget (client-side presentation filter) ──
   private displayMode: DisplayMode = 'focus';
   private budgetConfig: BudgetConfig = DEFAULT_BUDGET;
+  /** ADR-0104 §3.7: вибір трейдера в меню «Рівні» для поточного TF (поверх типового сервера). */
+  private levelOverrides: GroupOverrides = {};
   private _zoneProps: Map<string, ZoneDisplayProps> = new Map();
 
   // ── Theme awareness (light background → transparent pills) ──────
@@ -516,6 +519,12 @@ export class OverlayRenderer {
     return (end_ms / 1000) >= toSec;
   }
 
+  /** ADR-0104 §3.7: вибір рядків меню «Рівні» для TF, що зараз на графіку. */
+  setLevelOverrides(overrides: GroupOverrides): void {
+    this.levelOverrides = overrides;
+    this.scheduleRender();
+  }
+
   // ── ADR-0028 Φ0: Display mode toggle ─────────────────────────────
   setDisplayMode(mode: DisplayMode): void {
     if (mode !== this.displayMode) {
@@ -551,7 +560,7 @@ export class OverlayRenderer {
     // ADR-0028 Φ0: client-side budget filter (D3: budget ≤ cap)
     // ADR-0029: pass grades for grade-aware Focus/Research filter
     const budget = applyBudget(
-      this.frame.zones, this.frame.levels, this.frame.swings,
+      this.frame.zones, visibleLevels(this.frame.levels, this.levelOverrides), this.frame.swings,
       this.displayMode, this.budgetConfig, this._gradeCache,
     );
     this._zoneProps = budget.zoneProps;
@@ -904,7 +913,6 @@ export class OverlayRenderer {
       }
     } catch { /* серія ще не ready */ }
 
-    const MAX_LEVELS = 12;
     const LINE_PX = 120;         // formation-attached лінія
     const NOTCH_PX = 20;         // sticky notch при edge-stuck
 
@@ -946,7 +954,7 @@ export class OverlayRenderer {
       scored.push({ lvl, y, dist, style, sticky, xStart, xEnd });
     }
 
-    // ── 2. Priority sort: D1 levels first, then prev-session, then proximity ──
+    // ── 2. Порядок (без обрізання): денні → вчорашні сесії → близькість; перший у групі злиття дає стиль підпису ──
     const D1_KINDS = new Set(['pdh', 'pdl', 'dh', 'dl']);
     const PREV_SESSION = new Set(['p_as_h', 'p_as_l', 'p_lon_h', 'p_lon_l', 'p_ny_h', 'p_ny_l']);
     scored.sort((a, b) => {
@@ -957,7 +965,7 @@ export class OverlayRenderer {
       if (aTier !== bTier) return aTier - bTier;
       return a.dist - b.dist;
     });
-    const visible = scored.slice(0, MAX_LEVELS);
+    const visible = scored;
 
     // ── 3. Render lines (all lines always drawn) ──
     for (const item of visible) {

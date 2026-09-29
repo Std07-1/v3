@@ -18,8 +18,6 @@ import type { SmcZone, SmcSwing, SmcLevel, ZoneGradeInfo } from '../../types';
 export interface BudgetConfig {
     /** Max zones per side (supply/demand) in Focus mode */
     perSide: number;
-    /** Hard cap on ALL SMC objects in Focus mode */
-    total: number;
     /** Max structure labels (BOS/CHoCH) in Focus mode */
     structureMax: number;
 }
@@ -43,7 +41,6 @@ export interface FilteredPayload {
 
 export const DEFAULT_BUDGET: BudgetConfig = {
     perSide: 3,
-    total: 12,
     structureMax: 4,
 };
 
@@ -124,13 +121,8 @@ export function applyBudget(
     const budgetStructure = structureSwings.slice(-config.structureMax);
     const budgetSwings = [...plainSwings, ...budgetStructure];
 
-    // 3) Total cap enforcement — trim levels if over budget
-    let budgetLevels = levels;
-    const total = budgetZones.length + budgetStructure.length + budgetLevels.length;
-    if (total > config.total) {
-        const maxLevels = Math.max(0, config.total - budgetZones.length - budgetStructure.length);
-        budgetLevels = levels.slice(0, maxLevels);
-    }
+    // 3) Рівні не ділять місця із зонами й структурою (ADR-0104 §3.7, рішення 29.09): що видно, вирішують типові
+    //    сервера, вибір трейдера в меню «Рівні» і межі екрана — не ліміт кількості
 
     // 4) Compute opacity per zone
     for (const z of budgetZones) {
@@ -143,7 +135,7 @@ export function applyBudget(
 
     return {
         zones: budgetZones,
-        levels: budgetLevels,
+        levels,
         swings: budgetSwings,
         zoneProps: propsMap,
     };
