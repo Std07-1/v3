@@ -214,7 +214,7 @@ Config із будь-яким із них застарілий: `load_system_con
 | --- | --- | --- | --- |
 | `m1_settle.schedule_enabled` | bool | `true` (з 26.09.2026) | Вимикач нічного прогону (`--scheduled`); ручний `--manual` від нього не залежить. Увімкнено після двох чистих ручних прогонів S4 за «го» власника; вимкнути — `false` (деплой) або прибрати `/etc/cron.d/smc-settle-daily` |
 | `m1_settle.revision_lag_h_by_group` | {група календаря: int ≥ 0} | `cfd_us_22_23` 6, `cfd_eu_*` 12 | Settle бере хвилини, старші за забір − лаг групи символу; символ `symbols` без лагу своєї групи — відмова |
-| `m1_settle.lookback_h` | int ≥ 1 | 96 | Вікно settle назад від межі лагу (або від межі останнього успішного прогону, якщо вона раніше) |
+| `m1_settle.lookback_h` | int ≥ 1 | 96 | Вікно settle лише без стану прогонів; інакше вікно = від межі останнього успішного прогону (без перекриття — кожна хвилина устоюється один раз, rev 29.09). Межа догону: прогони пропускались довше — старший відрізок лишається живим потоком з `SETTLE_GAP_UNSETTLED` |
 | `m1_settle.fetch_call_timeout_s` | int ≥ 1 | 120 | Дедлайн одного виклику SDK у `fetch_archive` (LoopWatchdog → exit 75) |
 | `m1_settle.fetch_attempts` | int ≥ 1 | 3 | Спроби забору (і повтори помилки SDK всередині забору) |
 | `m1_settle.deadline_guard_min` | int ≥ 0 | 10 | Прогін завершується або відкочується до відкриття першого символу мінус стільки хвилин |
@@ -237,6 +237,24 @@ Config із будь-яким із них застарілий: `load_system_con
 
 Відмови = degraded-but-loud: `WS_REJECT`/`WS_ACTION_RATE_LIMITED`/`WS_SWITCH_REJECT` у логах + error frame
 `switch_throttled`/`action_rate_limited` клієнту. Heartbeat aiohttp (ping/pong) = `heartbeat_interval_s`.
+
+---
+
+## Відвідувачі (`visitors`, ADR-0105)
+
+| Ключ | Дефолт | Значення |
+|---|---|---|
+| `enabled` | false (секції нема) | журнал візитів WS-сервера і видача cookie ключа `aione_vid` (HttpOnly, `Path=/ws`, рік, продовжується на кожному підключенні) |
+| `dir` | — | каталог `sessions-YYYYMM.jsonl` (один рядок на WS-сесію). Створює ops з власником процесу ws (`smc`); сервер каталог не створює |
+| `max_views_per_visit` | 20 | скільки переглядів `символ:TF` зберігати в одному візиті; решта — лише лічильник `views_dropped` |
+| `retention_days` | 365 | зведення з `--apply-retention` видаляє місячні файли, цілком старші за стільки діб (мінімум 30) |
+| `human_min_session_s` | 30 | сесія з небот-UA — людська, якщо довша за це або має ≥2 перегляди (одне перемикання UI робить сам) |
+| `visit_gap_min` | 30 | сесії одного ключа з паузою не довшою за це — один візит (перепідключення, кілька вкладок) |
+| `display_tz` | Europe/Kyiv | часова зона часу у зведенні (`tools.visitors.report`) |
+
+Пишуться ключ, час, країна (`CF-IPCountry`), клас пристрою з User-Agent, переглянуті `символ:TF`; **IP і сирий UA не
+пишуться**. Стан на старті — один рядок у лозі ws: `VISITORS_JOURNAL_ON` або `VISITORS_JOURNAL_OFF reason=disabled|
+dir_missing|dir_not_writable|config_invalid`. Збій запису — `VISITORS_JOURNAL_WRITE_FAIL`, графік працює далі.
 
 ---
 

@@ -41,6 +41,7 @@ from core.config_loader import M1SettlePolicy, load_system_config, m1_settle_pol
 from runtime.ingest.tick_common import calendar_for_symbol
 from tools.repair import settle_daily_plan as sp
 from tools.repair.partfile_io import WritersGuardRefused, is_prod_data_root, writers_guard
+from tools.repair.settle_gate import WEEK_CLOSE_GAP_MS
 
 log = logging.getLogger("settle_daily")
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -148,8 +149,20 @@ class DailySettle:
             return self._finish(EXIT_REFUSED, "PREFLIGHT", problems)
         fetched_ms = self.clock()
         settled_to = sp.load_settled_to(self.paths.work_dir)
-        windows = sp.symbol_windows(self.policy.lag_h_by_symbol, fetched_ms, self.policy.lookback_h, settled_to)
-        self.report["windows"] = {w.sym_dir: [sp.iso_minute(w.from_ms), sp.iso_minute(w.to_ms)] for w in windows}
+        # Провізорний хвіст лише в будню перерву: у тижневу (Пт вечір, Сб) хвилина закриття тижня потрапляє в архів лише
+        # після відкриття наступного тижня — гейт відмовив би прогону; репетиція (--ignore-break) — ринок може торгувати
+        weekly_break = window.reopen_ms - fetched_ms >= WEEK_CLOSE_GAP_MS
+        provisional_to = None if (ignore_break or weekly_break) else sp.floor_minute(fetched_ms)
+        windows = sp.symbol_windows(self.policy.lag_h_by_symbol, fetched_ms, self.policy.lookback_h, settled_to,
+                                    provisional_to_ms=provisional_to)
+        self.report["windows"] = {w.sym_dir: [sp.iso_minute(w.from_ms), sp.iso_minute(w.to_ms),
+                                              sp.iso_minute(w.settled_to_ms)] for w in windows}
+        for w in windows:
+            if w.unsettled_from_ms is not None:  # прогони пропускались довше за lookback — старший відрізок не доганяємо
+                gap = "SETTLE_GAP_UNSETTLED %s %s..%s" % (w.sym_dir, sp.iso_minute(w.unsettled_from_ms),
+                                                         sp.iso_minute(w.from_ms))
+                log.warning("%s — лишається живим потоком (перерахований архів не тягнемо)", gap)
+                self.report["problems"].append(gap)
         m1_from, m1_to = sp.m1_fetch_window(windows, fetched_ms)
         m1 = self._fetch("m1", ["--from", sp.iso_minute(m1_from), "--to", sp.iso_minute(m1_to)])
         d1 = self._fetch("d1", ["--to", sp.iso_minute(m1_to)]) if m1 else None
