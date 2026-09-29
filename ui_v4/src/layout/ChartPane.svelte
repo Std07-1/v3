@@ -1105,6 +1105,10 @@
     right: 0;
     z-index: 100;
     min-width: 200px;
+    /* низькі екрани (телефон у ландшафті): меню не виходить за низ — прокрутка, як у меню ☰ */
+    max-height: calc(100vh - 90px);
+    max-height: calc(100dvh - 90px);
+    overflow-y: auto;
     padding: 4px;
     background: var(--bg, #0d1117);
     border: 1px solid var(--border-mute, rgba(255, 255, 255, 0.08));
@@ -1196,10 +1200,28 @@
      перекривав ChartHud. Зсуваємо нижче top-row + ближче до правого
      краю. Кнопки в .smc-grid залишаються тапабельні (≥28px hit area). */
   @media (max-width: 768px) {
+    /* 29.09 (власник): панель — від лівого краю до цінової шкали (~72px + зазор); кнопки справа й переносяться на
+       вузьких екранах, на шкалу не заходять; порожня частина панелі не ловить дотики графіка. Меню «Рівні»
+       відкривається під кнопками, але на 72px лівіше їхнього краю — права смуга графіка (засічки й підписи рівнів)
+       лишається відкритою; на вузьких екранах меню впирається в лівий край і стискається */
     .smc-panel {
       top: 80px;
-      right: 8px;
+      left: 8px;
+      right: 80px;
+      justify-content: flex-end;
+      pointer-events: none;
       gap: 2px;
+    }
+    .smc-grid {
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      pointer-events: auto;
+    }
+    .level-menu {
+      right: 72px;
+      min-width: 0;
+      max-width: calc(100% - 72px);
+      pointer-events: auto;
     }
     .smc-toggle {
       padding: 4px 6px;
