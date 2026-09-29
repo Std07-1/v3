@@ -137,7 +137,7 @@ LEVEL_GROUP_BY_KIND = {
     **{kind: "liquidity" for kind in ("eq_highs", "eq_lows")},
 }  # type: Dict[str, str]
 LEVEL_GROUPS = frozenset(LEVEL_GROUP_BY_KIND.values())
-LEVEL_CONTRACT_WIRE_FIELDS = ("key", "family", "state", "tier", "auto", "group")  # на wire лише коли задані
+LEVEL_CONTRACT_WIRE_FIELDS = ("key", "family", "state", "tier", "auto", "group", "proximity")  # лише коли задані
 
 POI_GRADES = frozenset({"A+", "A", "B", "C"})
 
@@ -241,6 +241,9 @@ class SmcLevel:
     tier: Optional[int] = None  # LEVEL_TIERS
     auto: Optional[bool] = None  # ADR-0104 §3.2: чи видимий у режимі «Авто» (Focus); None — рішення ще не приймається
     group: Optional[str] = None  # LEVEL_GROUPS — рядок меню «Рівні» (ADR-0104 §3.7)
+    # ADR-0104 §3.7: ранг близькості до поточної ціни — +1 найближча ціна вище, −1 нижче (однакові ціни ділять ранг);
+    # Focus показує найближчі N увімкнених на бік. None — ціни немає, рішення не приймається
+    proximity: Optional[int] = None
 
     def __post_init__(self) -> None:
         """Невідоме значення контракту — гучна помилка, а не рівень поза родиною чи станом (D3).
@@ -257,6 +260,9 @@ class SmcLevel:
             if value is not None and (type(value) is not value_type or value not in allowed):
                 raise ValueError("LEVEL_CONTRACT_INVALID id=%s %s=%r (allowed: %s)"
                                  % (self.id, field_name, value, sorted(allowed)))
+        if self.proximity is not None and (type(self.proximity) is not int or self.proximity == 0):
+            raise ValueError("LEVEL_CONTRACT_INVALID id=%s proximity=%r (allowed: ненульове ціле)"
+                             % (self.id, self.proximity))
 
     def to_wire(self) -> Dict[str, Any]:
         """S6: wire format = ui_v4 SmcLevel type (ADR-0024b: +kind for UI styling; ADR-0104: + поля контракту)."""

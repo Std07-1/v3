@@ -77,7 +77,8 @@ def test_to_wire_without_contract_fields_keeps_legacy_shape():
 
 def test_to_wire_with_contract_fields_emits_them():
     wire = _level(key="d1:high:XAU/USD:2026-09-24T21:00Z", family="day", state="fixed", tier=1, auto=False,
-                  group="day").to_wire()
+                  group="day", proximity=-2).to_wire()
+    assert wire["proximity"] == -2
     assert wire["key"] == "d1:high:XAU/USD:2026-09-24T21:00Z"
     assert (wire["family"], wire["state"], wire["tier"], wire["auto"], wire["group"]) == ("day", "fixed", 1, False,
                                                                                          "day")
@@ -88,6 +89,7 @@ def test_to_wire_with_contract_fields_emits_them():
     {"family": "weekly"}, {"state": "live"}, {"tier": 0}, {"tier": 4},
     {"tier": True}, {"auto": 1}, {"auto": "yes"},  # True == 1: без звірки типу пройшли б словник
     {"group": "sessions"}, {"group": "year"},
+    {"proximity": 0}, {"proximity": True}, {"proximity": 1.0},
 ])
 def test_level_with_unknown_contract_value_raises(contract):
     with pytest.raises(ValueError, match="LEVEL_CONTRACT_INVALID"):

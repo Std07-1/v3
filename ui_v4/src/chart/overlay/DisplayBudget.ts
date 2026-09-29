@@ -20,6 +20,8 @@ export interface BudgetConfig {
     perSide: number;
     /** Max structure labels (BOS/CHoCH) in Focus mode */
     structureMax: number;
+    /** ADR-0104 §3.7: у Focus — найближчі ціни рівнів на бік (над і під ціною), як perSide у зон */
+    levelsPerSide: number;
 }
 
 export type DisplayMode = 'focus' | 'research';
@@ -42,7 +44,23 @@ export interface FilteredPayload {
 export const DEFAULT_BUDGET: BudgetConfig = {
     perSide: 3,
     structureMax: 4,
+    levelsPerSide: 3,
 };
+
+/**
+ * ADR-0104 §3.7: Focus для рівнів — найближчі `perSide` цін над і під ціною серед уже увімкнених у меню.
+ * Ранг близькості рахує сервер (ADR-0028: proximity = eligibility), тут лише бюджет. Рівень без рангу (ціни немає) —
+ * показується, як до ADR-0104.
+ */
+export function nearestLevelsPerSide(levels: SmcLevel[], perSide: number): SmcLevel[] {
+    const nearest = (sign: 1 | -1): number[] =>
+        [...new Set(levels.map((l) => (l.proximity ?? 0) * sign).filter((r) => r > 0))]
+            .sort((a, b) => a - b)
+            .slice(0, perSide)
+            .map((r) => r * sign);
+    const keep = new Set<number>([...nearest(1), ...nearest(-1)]);
+    return levels.filter((l) => l.proximity === undefined || keep.has(l.proximity));
+}
 
 // ── Strength → Opacity ──
 
@@ -121,8 +139,9 @@ export function applyBudget(
     const budgetStructure = structureSwings.slice(-config.structureMax);
     const budgetSwings = [...plainSwings, ...budgetStructure];
 
-    // 3) Рівні не ділять місця із зонами й структурою (ADR-0104 §3.7, рішення 29.09): що видно, вирішують типові
-    //    сервера, вибір трейдера в меню «Рівні» і межі екрана — не ліміт кількості
+    // 3) Рівні не ділять місця із зонами й структурою (ADR-0104 §3.7, рішення 29.09): Focus — найближчі ціни на бік
+    //    серед увімкнених у меню; Research — усі увімкнені
+    const budgetLevels = nearestLevelsPerSide(levels, config.levelsPerSide);
 
     // 4) Compute opacity per zone
     for (const z of budgetZones) {
@@ -135,7 +154,7 @@ export function applyBudget(
 
     return {
         zones: budgetZones,
-        levels,
+        levels: budgetLevels,
         swings: budgetSwings,
         zoneProps: propsMap,
     };

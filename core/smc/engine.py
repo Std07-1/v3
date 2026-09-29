@@ -556,7 +556,29 @@ class SmcEngine:
             candidates.extend(compute_day_open(d1_bars, m1_bars))
             candidates.extend(compute_week_open(d1_bars, m1_bars))  # S7
         defaults = self._config.level_defaults.get(base_tf)
-        return [self._with_menu_group(lv, defaults) for lv in candidates]
+        levels = [self._with_menu_group(lv, defaults) for lv in candidates]
+        return self._with_proximity(levels, self._last_m1_price(symbol))
+
+    def _last_m1_price(self, symbol: str) -> Optional[float]:
+        """Ціна для рангу близькості — close останнього завершеного M1 (базовий TF глядача запізнювався б до години)."""
+        m1_bars = self._session_m1_bars.get(symbol)
+        if not m1_bars:
+            return None
+        return max(m1_bars, key=lambda b: b.open_time_ms).c
+
+    @staticmethod
+    def _with_proximity(levels: List[SmcLevel], price: Optional[float]) -> List[SmcLevel]:
+        """ADR-0104 §3.7: ранг близькості до ціни окремо над і під нею; однакові ціни ділять ранг (одна лінія на графіку).
+
+        Ранжує сервер (ADR-0028: близькість — eligibility), UI у Focus лише бере найближчі N увімкнених на бік.
+        """
+        if price is None:
+            return levels
+        above = sorted({lv.price for lv in levels if lv.price >= price})
+        below = sorted({lv.price for lv in levels if lv.price < price}, reverse=True)
+        rank = {p: i + 1 for i, p in enumerate(above)}
+        rank.update({p: -(i + 1) for i, p in enumerate(below)})
+        return [dataclasses.replace(lv, proximity=rank[lv.price]) for lv in levels]
 
     @staticmethod
     def _with_menu_group(level: SmcLevel, defaults: Optional[frozenset]) -> SmcLevel:

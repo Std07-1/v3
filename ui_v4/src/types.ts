@@ -62,6 +62,7 @@ export interface SmcLevel {
   tier?: 1 | 2 | 3; // важливість для розкладки: 1 опорні H/L, 2 сесії й відкриття, 3 контекст
   auto?: boolean;   // ADR-0104: false — поза режимом «Авто» (Focus ховає, Research показує); немає — рішення не приймалось
   group?: LevelGroup; // рядок меню «Рівні»; auto — його типовий стан на цьому TF (сервер)
+  proximity?: number; // ранг близькості до ціни (сервер): +1 найближча вище, −1 нижче; Focus бере найближчі N на бік
 }
 
 /** ADR-0041: Premium/Discount badge state (always-on when calc_enabled). */

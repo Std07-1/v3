@@ -15,6 +15,7 @@ import pathlib
 import pytest
 
 from core.smc.config import SmcConfig
+from core.model.bars import CandleBar
 from core.smc.engine import SmcEngine, _empty_snapshot
 from core.smc.types import SmcLevel, make_level_id
 
@@ -133,3 +134,34 @@ def test_ws_delta_sends_the_same_display_levels_as_the_full_frame():
     """Сторож: дельта бере get_display_levels_wire (те саме джерело, що повний кадр), сирих сесій графік не бачить."""
     assert _ws_callers("get_display_levels_wire"), "дельта ws_server не надсилає display_levels"
     assert _ws_callers("get_session_levels_wire") == ["_api_context"]  # нефільтровані — лише зовнішнім споживачам
+
+
+# ── Focus: ранг близькості до ціни (ADR-0104 §3.7) ──
+
+def _feed_price(engine, price):
+    engine.feed_m1_bars_bulk(_SYM, [CandleBar(symbol=_SYM, tf_s=60, open_time_ms=NOW_MS, close_time_ms=NOW_MS + 60_000,
+                                              o=price, h=price, low=price, c=price, v=1.0, complete=True, src="test")])
+
+
+def test_levels_are_ranked_by_distance_above_and_below_the_last_m1_price(monkeypatch):
+    engine = _engine(monkeypatch, _repo_level_defaults())
+    _feed_price(engine, 4005.5)  # сесії підставлені по черзі на 4000 (as_h) … 4005 (ny_l), 4006 (p_as_h) … 4011
+    ranked = {lv.kind: lv.proximity for lv in engine.get_display_levels(_SYM, 300, NOW_MS) if lv.kind in SESSION_KINDS}
+    assert ranked["p_as_h"] == 1 and ranked["p_as_l"] == 2   # 4006 і 4007 — найближчі вище
+    assert ranked["ny_l"] == -1 and ranked["ny_h"] == -2     # 4005 і 4004 — найближчі нижче
+
+
+def test_equal_prices_share_one_rank(monkeypatch):
+    engine = _engine(monkeypatch, _repo_level_defaults())
+    _feed_price(engine, 3000.0)
+    levels = engine.get_display_levels(_SYM, 300, NOW_MS)
+    by_price = {}
+    for lv in levels:
+        by_price.setdefault(lv.price, set()).add(lv.proximity)
+    assert all(len(ranks) == 1 for ranks in by_price.values())
+    assert sorted({lv.proximity for lv in levels if lv.proximity > 0})[:3] == [1, 2, 3]
+
+
+def test_without_m1_price_levels_carry_no_rank(monkeypatch):
+    levels = _engine(monkeypatch, _repo_level_defaults()).get_display_levels(_SYM, 300, NOW_MS)
+    assert all(lv.proximity is None for lv in levels)
