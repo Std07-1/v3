@@ -26,6 +26,9 @@ VISITOR_COOKIE_PATH = "/ws"
 # Chrome обрізає Max-Age до 400 діб; рік = горизонт ретеншну (ADR-0105 §3.2)
 VISITOR_COOKIE_MAX_AGE_S = 365 * 24 * 3600
 COUNTRY_HEADER = "CF-IPCountry"
+# nginx ставить його кожному зовнішньому /ws; без нього — підключення з самого сервера прямо на 127.0.0.1:8000
+# (службові зонди, інструменти), а не відвідувач
+PROXY_HEADER = "X-Real-IP"
 
 _VISITOR_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
@@ -137,6 +140,7 @@ class Visit:
     country: Optional[str]
     device: Dict[str, Any]
     bot_ua: bool
+    internal: bool  # з самого сервера, повз nginx — службове, не відвідувач
     start_ms: int
     max_views: int
     messages: int = 0
@@ -167,6 +171,7 @@ class Visit:
             "country": self.country,
             "device": self.device,
             "bot_ua": self.bot_ua,
+            "internal": self.internal,
             "messages": self.messages,
             "views": self.views,
             "views_dropped": self.views_dropped,
@@ -195,6 +200,7 @@ class VisitorsJournal:
             country=normalize_country(headers.get(COUNTRY_HEADER)),
             device=classify_device(user_agent),
             bot_ua=is_bot_user_agent(user_agent),
+            internal=PROXY_HEADER not in headers,
             start_ms=now_ms,
             max_views=self._max_views,
         )

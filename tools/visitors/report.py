@@ -27,7 +27,7 @@ from zoneinfo import ZoneInfo
 
 from core.config_loader import load_system_config
 from runtime.visitors.journal import visitors_policy
-from tools.visitors.aggregate import DAY_MS, Digest, Visit, Visitor, build_visitors, summarize
+from tools.visitors.aggregate import DAY_MS, Digest, Visit, Visitor, build_visitors, summarize, visitor_sessions
 
 _SESSION_FILE_RE = re.compile(r"^sessions-(\d{4})(\d{2})\.jsonl$")
 MAX_ROWS = 20  # типова межа рядків у групі (--max-rows): повідомлення Telegram ≤ 4096 символів
@@ -156,6 +156,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             os.remove(path)
             print("VISITORS_RETENTION_REMOVED %s" % path, file=sys.stderr)
     records, bad_lines = load_records(policy.dir)
+    records = visitor_sessions(records)
     labels, labels_problem = load_labels(policy.dir)
     visitors = build_visitors(records, policy.human_min_session_s, policy.visit_gap_min)
     digest = summarize(visitors, records, (now_ms - args.hours * 3_600_000, now_ms), labels)

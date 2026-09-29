@@ -118,6 +118,19 @@ def test_render_caps_rows_per_group_for_telegram_limit():
     assert text.count("  #") == 1 and "…ще 2" in text
 
 
+def test_main_ignores_internal_connections_entirely(tmp_path, capsys):
+    probe = dict(session("p" * 32, T0, 0.01, views=(), bot_ua=True, country=None), internal=True)
+    person = dict(session("a" * 32, T0, 5), internal=False)
+    (tmp_path / "sessions-202609.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in (probe, probe, person)) + "\n", encoding="utf-8"
+    )
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"visitors": {"enabled": True, "dir": str(tmp_path)}}), encoding="utf-8")
+    assert main(["--config", str(config), "--now-ms", str(T0 + HOUR)]) == 0
+    out = capsys.readouterr().out
+    assert "Люди: 1 — нових 1" in out and "Схоже на ботів: сесій 0" in out
+
+
 def test_main_rejects_non_positive_max_rows(tmp_path):
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"visitors": {"enabled": True, "dir": str(tmp_path)}}), encoding="utf-8")
