@@ -35,7 +35,7 @@ describe('рядки меню', () => {
         expect(rows.find((r) => r.group === 'h4')).toMatchObject({ count: 1, on: false });
         expect(rows.find((r) => r.group === 'sessions_prev')).toMatchObject({ count: 0, on: false });
         expect(rows.map((r) => r.group)).toEqual(
-            ['day', 'asia', 'london', 'newyork', 'sessions_prev', 'h4', 'h1', 'liquidity']);
+            ['day', 'week', 'open', 'asia', 'london', 'newyork', 'sessions_prev', 'h4', 'h1', 'liquidity']);
     });
     it('перемикання назад до типового прибирає запис — «Скинути» знову неактивне', () => {
         const off = toggleGroup(FRAME, {}, 'day');

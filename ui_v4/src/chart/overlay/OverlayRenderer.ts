@@ -38,7 +38,11 @@ type HorzScaleItem = number | { year: number; month: number; day: number };
 
 // ── ADR-0024b: Per-kind рівень стилізація ──────────────────────────
 // Кольори розділені за TF-шаром: D1=orange, H4=purple, H1=blue, M30=teal, M15=cyan, EQ=red/green
-type LevelStyle = { color: string; dash: number[]; width: number; alpha: number; label: string; fontSize: number };
+type LevelStyle = {
+  color: string; dash: number[]; width: number; alpha: number; label: string; fontSize: number;
+  /** Колір підпису, якщо відрізняється від лінії (ADR-0024b §3.5: DO); немає — колір лінії. */
+  labelColor?: string;
+};
 
 // SMC-стандартні назви: PDH/PDL, HOD/LOD, Prev 4H Hi, 4H Hi, EQH/EQL
 const LEVEL_STYLES: Record<string, LevelStyle> & { _default: LevelStyle } = {
@@ -57,6 +61,10 @@ const LEVEL_STYLES: Record<string, LevelStyle> & { _default: LevelStyle } = {
   p_h1_l: { color: '#42a5f5', dash: [6, 3], width: 1.5, alpha: 0.80, label: 'Prev 1H Lo', fontSize: 9 },
   h1_h: { color: '#90caf9', dash: [3, 2], width: 1.0, alpha: 0.65, label: '1H Hi', fontSize: 10 },
   h1_l: { color: '#90caf9', dash: [3, 2], width: 1.0, alpha: 0.65, label: '1H Lo', fontSize: 10 },
+  // ADR-0104 S3 — стиль задокументовано в ADR-0024b §3.5 (PWH/PWL, DO); alpha/шрифт — граматика «попередніх» ADR-0026
+  pwh: { color: '#888888', dash: [8, 4], width: 1.0, alpha: 0.80, label: 'PWH', fontSize: 9 },
+  pwl: { color: '#888888', dash: [8, 4], width: 1.0, alpha: 0.80, label: 'PWL', fontSize: 9 },
+  do: { color: '#616161', dash: [4, 4], width: 0.5, alpha: 0.80, label: 'DO', fontSize: 9, labelColor: '#9e9e9e' },
   // Liquidity (EQ Highs/Lows) — red/green
   eq_highs: { color: '#e91e63', dash: [2, 2], width: 1.0, alpha: 0.75, label: 'EQH', fontSize: 10 },
   eq_lows: { color: '#4caf50', dash: [2, 2], width: 1.0, alpha: 0.75, label: 'EQL', fontSize: 10 },
@@ -955,7 +963,7 @@ export class OverlayRenderer {
     }
 
     // ── 2. Порядок (без обрізання): денні → вчорашні сесії → близькість; перший у групі злиття дає стиль підпису ──
-    const D1_KINDS = new Set(['pdh', 'pdl', 'dh', 'dl']);
+    const D1_KINDS = new Set(['pdh', 'pdl', 'dh', 'dl', 'pwh', 'pwl']); // опорні H/L: день і тиждень (ADR-0026 L4)
     const PREV_SESSION = new Set(['p_as_h', 'p_as_l', 'p_lon_h', 'p_lon_l', 'p_ny_h', 'p_ny_l']);
     scored.sort((a, b) => {
       const ak = a.lvl.kind ?? '';
@@ -1066,7 +1074,7 @@ export class OverlayRenderer {
 
       // Text — use primary color
       this.ctx.globalAlpha = Math.min(1.0, alpha + 0.2);
-      this.ctx.fillStyle = primary.style.color;
+      this.ctx.fillStyle = primary.style.labelColor ?? primary.style.color;
       this.ctx.textAlign = align;
       this.ctx.textBaseline = 'bottom';
       this.ctx.fillText(txt, drawX, g.y - 1);

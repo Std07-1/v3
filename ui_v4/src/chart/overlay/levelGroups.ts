@@ -11,6 +11,8 @@ import type { LevelGroup, SmcLevel } from '../../types';
 /** Рядки меню у порядку показу; підписи — копірайт UI. */
 export const LEVEL_MENU_ROWS: ReadonlyArray<{ group: LevelGroup; label: string }> = [
     { group: 'day', label: 'День' },
+    { group: 'week', label: 'Тиждень' },
+    { group: 'open', label: 'Відкриття дня' },
     { group: 'asia', label: 'Азія' },
     { group: 'london', label: 'Лондон' },
     { group: 'newyork', label: 'Нью-Йорк' },

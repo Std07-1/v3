@@ -120,6 +120,10 @@ for кожної групи:
 "Previous" kinds: dashed 6-3, товщина 1.5, alpha 0.7–0.85.
 "Current" kinds: dashed 3-2, товщина 1.0, alpha 0.5–0.7.
 
+Тиждень і відкриття доби (ADR-0104 S3) — за стилем, задокументованим у ADR-0024b §3.5: `pwh`/`pwl` — `#888888`,
+dashed 8-4, товщина 1.0; `do` — `#616161`, dashed 4-4, товщина 0.5, підпис `#9e9e9e`; alpha 0.80 і шрифт 9 —
+як у «previous» kinds.
+
 ### Zoom sync (від ADR-0024 §18.7)
 
 Level rendering виконується всередині `renderFrame()`, який викликається:
@@ -144,8 +148,8 @@ Z-index: 36 (вищий за top-right-bar = 35).
 | **L1** | Підписи ніколи не ховаються | Немає `continue`/skip для labels — кожна група отримує мітку |
 | **L2** | Merge тільки при фізичному overlap | `|Y₁-Y₂| ≤ 1px AND X-ranges intersect` — жорстка умова |
 | **L3** | Лінії НІКОЛИ не full-width | `LINE_PX = 120` або `NOTCH_PX = 20`, не `chartW` |
-| **L4** | D1 kinds мають пріоритет | Sort: D1_KINDS first, then by distance to midPrice |
-| **L5** | Max 12 видимих рівнів | `scored.slice(0, MAX_LEVELS)` після priority sort |
+| **L4** | D1 kinds мають пріоритет (з ADR-0104 S3 — і тижневі `pwh`/`pwl`) | Sort: D1_KINDS first, then by distance to midPrice |
+| ~~**L5**~~ | ~~Max 12 видимих рівнів~~ — **заступлено ADR-0104 §3.7 (рішення 29.09)**: ліміту кількості рівнів немає; що видно, вирішують типові сервера, вибір трейдера в меню «Рівні» і межі екрана | ~~`scored.slice(0, MAX_LEVELS)`~~ — прибрано |
 | **L6** | Per-kind кольори з LEVEL_STYLES | SSOT dict на початку файлу; fallback `_default` |
 
 ## Наслідки
