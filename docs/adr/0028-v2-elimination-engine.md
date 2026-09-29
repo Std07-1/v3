@@ -167,6 +167,11 @@ assert focus_budget_per_side * 2 + structure_label_max <= focus_budget_total, \
 **Total**: 2 tuned + 1 extend + 6 new = 9 параметрів. Всі з default values. Config validation guard.
 
 > **Уточнення бюджету**: `fvg_display_cap` = server-side wire cap. На client-side FVG входять у per-side zone budget разом з OB (фільтр за `kind.includes('bear'/'bull')`). Validation formula `perSide×2 + structureMax ≤ total` коректна — FVG вже включені. Levels отримують залишок: `total − zones − structure`.
+>
+> **Заступлено для рівнів — ADR-0104 §3.7 (рішення власника 29.09):** рівні більше не ділять `total` із зонами й
+> структурою (через залишок у Focus було видно лише EQ). Focus для рівнів — найближчі `levelsPerSide = 3` ціни над і
+> під поточною серед увімкнених у меню «Рівні» (ранг близькості `proximity` рахує сервер); Research — усі увімкнені.
+> `total` для зон і структури лишається.
 
 ### 3.3 Server-side changes: `engine.py:_filter_for_display()`
 
