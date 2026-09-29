@@ -65,6 +65,7 @@ const LEVEL_STYLES: Record<string, LevelStyle> & { _default: LevelStyle } = {
   pwh: { color: '#888888', dash: [8, 4], width: 1.0, alpha: 0.80, label: 'PWH', fontSize: 9 },
   pwl: { color: '#888888', dash: [8, 4], width: 1.0, alpha: 0.80, label: 'PWL', fontSize: 9 },
   do: { color: '#616161', dash: [4, 4], width: 0.5, alpha: 0.80, label: 'DO', fontSize: 9, labelColor: '#9e9e9e' },
+  wo: { color: '#616161', dash: [10, 6], width: 0.5, alpha: 0.80, label: 'WO', fontSize: 9, labelColor: '#9e9e9e' },
   // Liquidity (EQ Highs/Lows) — red/green
   eq_highs: { color: '#e91e63', dash: [2, 2], width: 1.0, alpha: 0.75, label: 'EQH', fontSize: 10 },
   eq_lows: { color: '#4caf50', dash: [2, 2], width: 1.0, alpha: 0.75, label: 'EQL', fontSize: 10 },

@@ -13,6 +13,7 @@ export const LEVEL_MENU_ROWS: ReadonlyArray<{ group: LevelGroup; label: string }
     { group: 'day', label: 'День' },
     { group: 'week', label: 'Тиждень' },
     { group: 'open', label: 'Відкриття дня' },
+    { group: 'open_week', label: 'Відкриття тижня' },
     { group: 'asia', label: 'Азія' },
     { group: 'london', label: 'Лондон' },
     { group: 'newyork', label: 'Нью-Йорк' },

@@ -232,6 +232,43 @@ def compute_day_open(d1_bars: List[CandleBar], m1_bars: List[CandleBar]) -> List
     ]
 
 
+def compute_week_open(d1_bars: List[CandleBar], m1_bars: List[CandleBar]) -> List[SmcLevel]:
+    """WO — open першої доби поточного торгового тижня (ADR-0104 S7).
+
+    Перша доба тижня вже завершена — open її свічки D1 (буфер M1 тримає лише ~2 доби, до середи неділі в ньому вже
+    немає); ще триває (понеділок) — open першого M1 після закриття останньої D1, як DO. period у key — понеділок тижня:
+    key той самий, яким би шляхом не рахувався рівень (закріплення S5 переживе перехід понеділок → вівторок).
+    """
+    completed = [b for b in d1_bars if b.complete]
+    if not completed:
+        return []
+    current_monday = _week_monday_ms(_trading_date_ms(completed[-1].close_time_ms))
+    this_week = [b for b in completed if _week_monday_ms(_trading_date_ms(b.open_time_ms)) == current_monday]
+    if this_week:
+        price, time_ms = this_week[0].o, this_week[0].open_time_ms
+    else:
+        day_open = compute_day_open(completed, m1_bars)
+        if not day_open:
+            return []
+        price, time_ms = day_open[0].price, day_open[0].time_ms
+    symbol = completed[-1].symbol
+    return [
+        SmcLevel(
+            id=make_level_id("wo", symbol, _WEEK_ID_TF_S, price),
+            symbol=symbol,
+            tf_s=_WEEK_ID_TF_S,
+            kind="wo",
+            price=price,
+            time_ms=time_ms,
+            touches=1,
+            key=make_level_key("w1", LEVEL_SIDE_OPEN, symbol, level_period(current_monday)),
+            family="open",
+            state=LEVEL_STATE_FIXED,
+            tier=LEVEL_TIER_SESSION,
+        )
+    ]
+
+
 def collect_htf_levels(
     get_snapshot_fn,   # Callable[[str, int], Optional[SmcSnapshot]]
     symbol: str,

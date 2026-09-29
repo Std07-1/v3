@@ -101,6 +101,7 @@ LEVEL_KINDS = frozenset(
         "pwh",
         "pwl",  # ADR-0104 S3: попередній торговий тиждень
         "do",  # ADR-0104 S3: відкриття торгової доби
+        "wo",  # ADR-0104 S7: відкриття торгового тижня
         *SESSION_LEVEL_KINDS,  # ADR-0035: sessions
     }
 )
@@ -123,6 +124,7 @@ LEVEL_GROUP_BY_KIND = {
     **{kind: "day" for kind in ("pdh", "pdl", "dh", "dl")},
     **{kind: "week" for kind in ("pwh", "pwl")},
     "do": "open",
+    "wo": "open_week",
     **{kind: "h4" for kind in ("p_h4_h", "p_h4_l", "h4_h", "h4_l")},
     **{kind: "h1" for kind in ("p_h1_h", "p_h1_l", "h1_h", "h1_l")},
     **{kind: "asia" for kind in ("as_h", "as_l")},

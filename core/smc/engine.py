@@ -31,6 +31,7 @@ from core.smc.key_levels import (
     compute_day_open,
     compute_key_levels,
     compute_week_levels,
+    compute_week_open,
 )
 from core.smc.liquidity import detect_liquidity_levels
 from core.smc.order_blocks import detect_order_blocks
@@ -530,7 +531,7 @@ class SmcEngine:
         """Рівні глядача TF — одне джерело для повного кадру й дельти (ADR-0104 §3.7, рішення 29.09).
 
         Кандидати всіх груп меню «Рівні»: EQ базового TF, key levels старших TF, сесії поточної й попередньої торгової
-        доби, попередній тиждень (PWH/PWL) і відкриття доби (DO, S3). `group` — рядок меню; `auto` — чи рядок типово увімкнений на цьому TF (config smc.level_defaults,
+        доби, попередній тиждень (PWH/PWL), відкриття доби (DO, S3) і тижня (WO, S7). `group` — рядок меню; `auto` — чи рядок типово увімкнений на цьому TF (config smc.level_defaults,
         Таблиця А). Без таблиці для TF `auto` лишається як є (сесії — S2a), решта рядків — без рішення.
         """
         base_tf = self._display_base_tf(viewer_tf_s)
@@ -549,7 +550,9 @@ class SmcEngine:
         d1_bars = d1_state.bars_list() if d1_state is not None else []
         candidates.extend(compute_week_levels(d1_bars))
         if base_tf < 86400:
-            candidates.extend(compute_day_open(d1_bars, list(self._session_m1_bars.get(symbol) or ())))
+            m1_bars = list(self._session_m1_bars.get(symbol) or ())
+            candidates.extend(compute_day_open(d1_bars, m1_bars))
+            candidates.extend(compute_week_open(d1_bars, m1_bars))  # S7
         defaults = self._config.level_defaults.get(base_tf)
         return [self._with_menu_group(lv, defaults) for lv in candidates]
 

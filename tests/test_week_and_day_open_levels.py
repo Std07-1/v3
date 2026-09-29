@@ -13,7 +13,7 @@ import pathlib
 from core.model.bars import CandleBar
 from core.smc.config import SmcConfig
 from core.smc.engine import SmcEngine
-from core.smc.key_levels import compute_day_open, compute_week_levels
+from core.smc.key_levels import compute_day_open, compute_week_levels, compute_week_open
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 _SYM = "XAU/USD"
@@ -114,3 +114,35 @@ def test_engine_offers_week_everywhere_and_day_open_below_d1_with_table_defaults
     assert "do" not in d1 and d1["pwh"].auto is True
     h4 = {lv.kind: lv for lv in engine.get_display_levels(_SYM, 14400, now)}
     assert h4["do"].auto is False  # профіль §3.4: на H4 відкриття доби не типове
+
+
+# ── S7: відкриття тижня (WO) ──
+
+def test_week_open_midweek_is_the_open_of_the_first_d1_of_the_week():
+    monday = _d1("2026-09-27 21:00", 4290, 4110)  # завершена свічка понеділка, open = low у фікстурі
+    (wo,) = compute_week_open(_WEEK_21_25 + [monday], [])
+    assert (wo.kind, wo.price, wo.time_ms) == ("wo", 4110, _ms("2026-09-27 21:00"))
+    assert (wo.group, wo.family, wo.state, wo.tier) == (None, "open", "fixed", 2)
+
+
+def test_week_open_on_monday_comes_from_the_first_m1_and_keeps_the_same_key():
+    m1 = [_m1("2026-09-27 21:05", 4262.5)]
+    (monday_wo,) = compute_week_open(_WEEK_21_25, m1)  # понеділок ще формується
+    (tuesday_wo,) = compute_week_open(_WEEK_21_25 + [_d1("2026-09-27 21:00", 4290, 4262.5)], [])
+    assert monday_wo.price == tuesday_wo.price == 4262.5
+    assert monday_wo.key == tuesday_wo.key == "w1:open:XAU/USD:2026-09-28T00:00Z"
+
+
+def test_no_week_open_without_d1_or_first_bar():
+    assert compute_week_open([], [_m1("2026-09-27 21:05", 4262.5)]) == []
+    assert compute_week_open(_WEEK_21_25, []) == []
+
+
+def test_week_open_is_offered_below_d1_and_off_by_default():
+    cfg = json.loads((REPO / "config.json").read_text(encoding="utf-8"))["smc"]
+    engine = SmcEngine(SmcConfig.from_dict(cfg))
+    engine.update(_SYM, 86400, _WEEK_21_25 + [_d1("2026-09-27 21:00", 4290, 4262.5)])
+    now = _ms("2026-09-29 09:00")
+    m15 = {lv.kind: lv for lv in engine.get_display_levels(_SYM, 900, now)}
+    assert (m15["wo"].group, m15["wo"].auto, m15["wo"].price) == ("open_week", False, 4262.5)
+    assert "wo" not in {lv.kind for lv in engine.get_display_levels(_SYM, 86400, now)}

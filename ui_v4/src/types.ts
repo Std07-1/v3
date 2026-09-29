@@ -49,7 +49,7 @@ export type LevelFamily = 'session' | 'day' | 'week' | 'month' | 'open' | 'htf' 
 /** ADR-0104 §3.2: стан — fixed (період завершено), forming (іде), swept (ціну пройдено, S8), no_data (періоду нема, S3). */
 export type LevelState = 'fixed' | 'forming' | 'swept' | 'no_data';
 /** ADR-0104 §3.7 (рішення 29.09): група = рядок меню «Рівні»; словник — сервер (LEVEL_GROUP_BY_KIND). */
-export type LevelGroup = 'day' | 'week' | 'open' | 'h4' | 'h1' | 'asia' | 'london' | 'newyork' | 'sessions_prev' | 'liquidity';
+export type LevelGroup = 'day' | 'week' | 'open' | 'open_week' | 'h4' | 'h1' | 'asia' | 'london' | 'newyork' | 'sessions_prev' | 'liquidity';
 
 export interface SmcLevel {
   id: string;
