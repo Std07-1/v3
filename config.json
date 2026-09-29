@@ -555,7 +555,9 @@
       "enabled": true,
       "tolerance_atr_mult": 0.1,
       "min_touches": 2,
-      "max_levels": 4
+      "max_levels": 4,
+      "_comment": "ADR-0104, рішення 29.09: EQ, за які ціна вийшла (> tolerance) після останнього дотику кластера, не видаються — пул стопів знято; новий свінг на тій самій ціні відновлює пул. false — відкат (видавати всі кластери, як раніше).",
+      "hide_swept": true
     },
     "premium_discount": {
       "calc_enabled": true,

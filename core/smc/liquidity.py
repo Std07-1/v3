@@ -78,12 +78,13 @@ def detect_liquidity_levels(
 
     per_side = max(1, cfg.max_levels // 2)
 
+    swept_bars = bars if cfg.hide_swept else None
     levels: List[SmcLevel] = []
     levels += _cluster_to_levels(
-        high_swings, "eq_highs", LEVEL_SIDE_HIGH, tolerance, cfg.min_touches, per_side, symbol, tf_s,
+        high_swings, "eq_highs", LEVEL_SIDE_HIGH, tolerance, cfg.min_touches, per_side, symbol, tf_s, swept_bars,
     )
     levels += _cluster_to_levels(
-        low_swings, "eq_lows", LEVEL_SIDE_LOW, tolerance, cfg.min_touches, per_side, symbol, tf_s,
+        low_swings, "eq_lows", LEVEL_SIDE_LOW, tolerance, cfg.min_touches, per_side, symbol, tf_s, swept_bars,
     )
 
     return levels
@@ -100,11 +101,14 @@ def _cluster_to_levels(
     max_count: int,
     symbol: str,
     tf_s: int,
+    swept_bars: Optional[List[CandleBar]] = None,
 ) -> List[SmcLevel]:
     """Кластеризує swing точки за ціновою близькістю → SmcLevel per cluster.
 
     Алгоритм: жадібна кластеризація по ціні (сортуємо, групуємо в межах tolerance).
     S2: входи відсортовані → детермінований результат.
+    swept_bars — бари для перевірки зняття (config levels.hide_swept); None — знятих не відсіювати.
+    Знятий кластер відсіюється ДО ліміту, тож на його місце стає наступний живий.
     """
     if not swings:
         return []
@@ -131,6 +135,8 @@ def _cluster_to_levels(
         if len(cluster) < min_touches:
             continue
         price = _mean_price(cluster)
+        if swept_bars is not None and _is_swept(price, cluster, side, swept_bars, tolerance):
+            continue
         earliest_ms = min(s.time_ms for s in cluster)
         level_id = make_level_id(kind, symbol, tf_s, price)
         levels.append(SmcLevel(
@@ -151,6 +157,18 @@ def _cluster_to_levels(
     # Сортуємо по touches desc (найзначніші першими), ліміт
     levels.sort(key=lambda l: -l.touches)
     return levels[:max_count]
+
+
+def _is_swept(price: float, cluster: List[SmcSwing], side: str, bars: List[CandleBar], tolerance: float) -> bool:
+    """Пул знято: після ОСТАННЬОГО дотику кластера якийсь бар вийшов за рівень більше ніж на tolerance.
+
+    Новий свінг на тій самій ціні після зняття входить у кластер і стає останнім дотиком — пул відновлено
+    (там знову лежать стопи), рівень живий. Вихід у межах tolerance — ще дотик, не зняття.
+    """
+    last_touch_ms = max(s.time_ms for s in cluster)
+    if side == LEVEL_SIDE_HIGH:
+        return any(b.h > price + tolerance for b in bars if b.open_time_ms > last_touch_ms)
+    return any(b.low < price - tolerance for b in bars if b.open_time_ms > last_touch_ms)
 
 
 def _mean_price(swings: List[SmcSwing]) -> float:

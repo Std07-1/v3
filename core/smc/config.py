@@ -83,6 +83,8 @@ class SmcLevelsConfig:
     tolerance_atr_mult: float = 0.1  # ATR для кластеризації
     min_touches: int = 2  # Мінімальна кількість swing в кластері
     max_levels: int = 10  # Макс. рівнів (половина eq_highs, половина eq_lows)
+    # ADR-0104 (рішення 29.09): не видавати EQ, за які ціна вже вийшла після останнього дотику (пул знято)
+    hide_swept: bool = False
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "SmcLevelsConfig":
@@ -91,6 +93,7 @@ class SmcLevelsConfig:
             tolerance_atr_mult=float(d.get("tolerance_atr_mult", 0.1)),
             min_touches=int(d.get("min_touches", 2)),
             max_levels=int(d.get("max_levels", 10)),
+            hide_swept=bool(d.get("hide_swept", False)),
         )
 
 
