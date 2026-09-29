@@ -1,0 +1,12 @@
+# /etc/systemd/system/aione-watchdog.timer
+[Unit]
+Description=Run aione-vps watchdog every minute
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=60
+AccuracySec=10
+Unit=aione-watchdog.service
+
+[Install]
+WantedBy=timers.target

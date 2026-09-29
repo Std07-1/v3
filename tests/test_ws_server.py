@@ -462,4 +462,5 @@ async def test_ws_visitor_cookie_returns_same_key_and_journals_each_session(aioh
     assert first["country"] == "UA" and first["device"]["os"] == "Windows" and first["bot_ua"] is False
     assert (first["messages"], first["views"]) == (1, ["XAU/USD:M15"])
     assert (second["messages"], second["views"]) == (0, [])
+    assert first["internal"] is True  # тестовий клієнт іде повз nginx (нема X-Real-IP)
     assert not any("ip" in key for key in first)

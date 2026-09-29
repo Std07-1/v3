@@ -1,0 +1,16 @@
+# /etc/systemd/system/aione-watchdog.service
+[Unit]
+Description=aione-vps watchdog (health + attack alerts to Telegram)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/aione-watchdog.sh
+# Hard ceiling so a hung journalctl/curl can never let ticks pile up. 120s leaves
+# room for several serial alerts on a multi-failure tick; commit-after-delivery
+# means anything undelivered when a tick ends is retried on the next tick.
+TimeoutStartSec=120
+Nice=5
+# The watchdog must never be constrained by the very limits it guards.
+# Keep it in the root slice with no memory/task cap of its own.

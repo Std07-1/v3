@@ -1,8 +1,0 @@
-# ADR-0105 S3: щоденне зведення відвідувачів у Telegram (бот сповіщень платформи) + ретеншн журналу (12 міс).
-# Встановлюється за «го» власника, коли в /opt/smc-v3/.env є VISITORS_TG_BOT_TOKEN і VISITORS_TG_CHAT_ID:
-#   sudo install -m 644 /opt/smc-v3/ops/smc-visitors-digest.cron /etc/cron.d/smc-visitors-digest
-# Годинник VPS — UTC: 06:00 = 09:00 Київ улітку / 08:00 узимку. Період зведення — 24 год до запуску.
-# Код 3 у лозі — зведення не доставлено (причина поруч, без секретів).
-SHELL=/bin/bash
-PATH=/usr/sbin:/usr/bin:/sbin:/bin
-0 6 * * * smc cd /opt/smc-v3 && ./.venv/bin/python -m tools.visitors.report --telegram --apply-retention >> /var/log/smc-v3/visitors_digest.log 2>&1

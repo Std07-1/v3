@@ -46,6 +46,11 @@ class Digest:
     first_human_ms: Optional[int]
 
 
+def visitor_sessions(records: Sequence[Mapping[str, Any]]) -> List[Mapping[str, Any]]:
+    """Лише сесії відвідувачів: службові підключення з самого сервера повз nginx (internal) — не люди і не боти."""
+    return [r for r in records if not r.get("internal")]
+
+
 def is_human_session(record: Mapping[str, Any], human_min_session_s: int) -> bool:
     """UA не бот і (сесія довша за поріг або ≥2 перегляди: одне перемикання UI робить сам при відновленні пари)."""
     if record.get("bot_ua", True):

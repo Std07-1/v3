@@ -84,6 +84,12 @@ def test_start_reuses_valid_cookie_and_issues_new_otherwise(tmp_path):
         assert fresh.bot_ua is True  # без User-Agent
 
 
+def test_start_marks_connections_bypassing_nginx_as_internal(tmp_path):
+    journal = VisitorsJournal(str(tmp_path), 20)
+    assert journal.start({}, {"X-Real-IP": "203.0.113.5", "User-Agent": UA_WIN_CHROME}, START_MS).internal is False
+    assert journal.start({}, {"User-Agent": UA_WIN_CHROME}, START_MS).internal is True  # прямо на 127.0.0.1:8000
+
+
 def test_note_message_records_distinct_views_up_to_cap(tmp_path):
     visit = VisitorsJournal(str(tmp_path), 2).start({}, {}, START_MS)
     visit.note_message(None, None)
@@ -98,7 +104,8 @@ def test_note_message_records_distinct_views_up_to_cap(tmp_path):
 
 def test_finish_appends_monthly_jsonl_without_ip(tmp_path):
     journal = VisitorsJournal(str(tmp_path), 20)
-    visit = journal.start({VISITOR_COOKIE: VID}, {"User-Agent": UA_IPHONE_SAFARI, "CF-IPCountry": "PL"}, START_MS)
+    headers = {"User-Agent": UA_IPHONE_SAFARI, "CF-IPCountry": "PL", "X-Real-IP": "203.0.113.5"}
+    visit = journal.start({VISITOR_COOKIE: VID}, headers, START_MS)
     visit.note_message("XAU/USD", "M15")
     assert journal.finish(visit, "c1", START_MS + 95_400, 1000) is True
     assert journal.finish(visit, "c2", START_MS + 100_000, None) is True
@@ -115,6 +122,7 @@ def test_finish_appends_monthly_jsonl_without_ip(tmp_path):
         "country": "PL",
         "device": {"os": "iOS", "browser": "Safari", "mobile": True},
         "bot_ua": False,
+        "internal": False,
         "messages": 1,
         "views": ["XAU/USD:M15"],
         "views_dropped": 0,
@@ -143,7 +151,7 @@ def test_visitors_policy_defaults_and_validation():
     policy = visitors_policy({"visitors": {"enabled": True, "dir": "/var/lib/x", "max_views_per_visit": 5}})
     assert (policy.enabled, policy.dir, policy.max_views_per_visit) == (True, "/var/lib/x", 5)
     assert (policy.retention_days, policy.human_min_session_s, policy.visit_gap_min, policy.display_tz) == (
-        365, 30, 30, "Europe/Kyiv")
+        365, 30, 30, "Europe/Prague")
     bad_sections = (
         [],
         {"enabled": "yes"},
