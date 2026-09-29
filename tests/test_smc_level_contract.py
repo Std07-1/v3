@@ -25,6 +25,9 @@ from core.smc.sessions import compute_session_levels, load_session_windows
 from core.smc.types import (
     LEVEL_CONTRACT_WIRE_FIELDS,
     LEVEL_FAMILIES,
+    LEVEL_GROUP_BY_KIND,
+    LEVEL_GROUPS,
+    LEVEL_KINDS,
     LEVEL_STATES,
     LEVEL_TIERS,
     SmcLevel,
@@ -73,15 +76,18 @@ def test_to_wire_without_contract_fields_keeps_legacy_shape():
 
 
 def test_to_wire_with_contract_fields_emits_them():
-    wire = _level(key="d1:high:XAU/USD:2026-09-24T21:00Z", family="day", state="fixed", tier=1, auto=False).to_wire()
+    wire = _level(key="d1:high:XAU/USD:2026-09-24T21:00Z", family="day", state="fixed", tier=1, auto=False,
+                  group="day").to_wire()
     assert wire["key"] == "d1:high:XAU/USD:2026-09-24T21:00Z"
-    assert (wire["family"], wire["state"], wire["tier"], wire["auto"]) == ("day", "fixed", 1, False)
+    assert (wire["family"], wire["state"], wire["tier"], wire["auto"], wire["group"]) == ("day", "fixed", 1, False,
+                                                                                         "day")
     assert set(wire) == _LEGACY_WIRE_FIELDS | set(LEVEL_CONTRACT_WIRE_FIELDS)
 
 
 @pytest.mark.parametrize("contract", [
     {"family": "weekly"}, {"state": "live"}, {"tier": 0}, {"tier": 4},
     {"tier": True}, {"auto": 1}, {"auto": "yes"},  # True == 1: без звірки типу пройшли б словник
+    {"group": "sessions"}, {"group": "week"},
 ])
 def test_level_with_unknown_contract_value_raises(contract):
     with pytest.raises(ValueError, match="LEVEL_CONTRACT_INVALID"):
@@ -116,7 +122,7 @@ def _ts_source() -> str:
 def _ts_string_union(type_name: str) -> set:
     match = re.search(r"export type %s = ([^;]+);" % type_name, _ts_source())
     assert match, "types.ts: немає export type %s" % type_name
-    return set(re.findall(r"'([a-z_]+)'", match.group(1)))
+    return set(re.findall(r"'([a-z0-9_]+)'", match.group(1)))
 
 
 def _ts_smc_level_fields() -> dict:
@@ -131,6 +137,15 @@ def test_ts_level_family_union_matches_python_vocabulary():
 
 def test_ts_level_state_union_matches_python_vocabulary():
     assert _ts_string_union("LevelState") == set(LEVEL_STATES)
+
+
+def test_ts_level_group_union_matches_python_vocabulary():
+    assert _ts_string_union("LevelGroup") == set(LEVEL_GROUPS)
+
+
+def test_every_level_kind_has_a_menu_group():
+    """Рівень без групи обійшов би меню «Рівні» — вимкнути його трейдер не зміг би."""
+    assert set(LEVEL_GROUP_BY_KIND) == set(LEVEL_KINDS)
 
 
 def test_ts_smc_level_declares_every_wire_field():

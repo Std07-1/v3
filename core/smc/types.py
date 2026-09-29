@@ -113,7 +113,20 @@ LEVEL_TIER_ANCHOR = 1  # завершені опорні H/L: день (далі
 LEVEL_TIER_SESSION = 2  # завершені сесії, відкриття
 LEVEL_TIER_CONTEXT = 3  # рухомі, ліквідність, попередні H4/H1
 LEVEL_TIERS = frozenset({LEVEL_TIER_ANCHOR, LEVEL_TIER_SESSION, LEVEL_TIER_CONTEXT})
-LEVEL_CONTRACT_WIRE_FIELDS = ("key", "family", "state", "tier", "auto")  # необов'язкові на wire: лише коли задані
+# ADR-0104 §3.7, рішення 29.09: група = рядок меню «Рівні», який трейдер вмикає/вимикає окремо на кожному TF.
+# Кожен kind має групу — інакше рівень обійшов би меню.
+LEVEL_GROUP_BY_KIND = {
+    **{kind: "day" for kind in ("pdh", "pdl", "dh", "dl")},
+    **{kind: "h4" for kind in ("p_h4_h", "p_h4_l", "h4_h", "h4_l")},
+    **{kind: "h1" for kind in ("p_h1_h", "p_h1_l", "h1_h", "h1_l")},
+    **{kind: "asia" for kind in ("as_h", "as_l")},
+    **{kind: "london" for kind in ("lon_h", "lon_l")},
+    **{kind: "newyork" for kind in ("ny_h", "ny_l")},
+    **{kind: "sessions_prev" for kind in ("p_as_h", "p_as_l", "p_lon_h", "p_lon_l", "p_ny_h", "p_ny_l")},
+    **{kind: "liquidity" for kind in ("eq_highs", "eq_lows")},
+}  # type: Dict[str, str]
+LEVEL_GROUPS = frozenset(LEVEL_GROUP_BY_KIND.values())
+LEVEL_CONTRACT_WIRE_FIELDS = ("key", "family", "state", "tier", "auto", "group")  # на wire лише коли задані
 
 POI_GRADES = frozenset({"A+", "A", "B", "C"})
 
@@ -216,6 +229,7 @@ class SmcLevel:
     state: Optional[str] = None  # LEVEL_STATES
     tier: Optional[int] = None  # LEVEL_TIERS
     auto: Optional[bool] = None  # ADR-0104 §3.2: чи видимий у режимі «Авто» (Focus); None — рішення ще не приймається
+    group: Optional[str] = None  # LEVEL_GROUPS — рядок меню «Рівні» (ADR-0104 §3.7)
 
     def __post_init__(self) -> None:
         """Невідоме значення контракту — гучна помилка, а не рівень поза родиною чи станом (D3).
@@ -227,6 +241,7 @@ class SmcLevel:
             ("state", self.state, str, LEVEL_STATES),
             ("tier", self.tier, int, LEVEL_TIERS),
             ("auto", self.auto, bool, (True, False)),
+            ("group", self.group, str, LEVEL_GROUPS),
         ):
             if value is not None and (type(value) is not value_type or value not in allowed):
                 raise ValueError("LEVEL_CONTRACT_INVALID id=%s %s=%r (allowed: %s)"

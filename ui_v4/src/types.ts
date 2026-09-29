@@ -48,6 +48,8 @@ export interface SmcSwing {
 export type LevelFamily = 'session' | 'day' | 'week' | 'month' | 'open' | 'htf' | 'liquidity';
 /** ADR-0104 §3.2: стан — fixed (період завершено), forming (іде), swept (ціну пройдено, S8), no_data (періоду нема, S3). */
 export type LevelState = 'fixed' | 'forming' | 'swept' | 'no_data';
+/** ADR-0104 §3.7 (рішення 29.09): група = рядок меню «Рівні»; словник — сервер (LEVEL_GROUP_BY_KIND). */
+export type LevelGroup = 'day' | 'h4' | 'h1' | 'asia' | 'london' | 'newyork' | 'sessions_prev' | 'liquidity';
 
 export interface SmcLevel {
   id: string;
@@ -59,6 +61,7 @@ export interface SmcLevel {
   state?: LevelState;
   tier?: 1 | 2 | 3; // важливість для розкладки: 1 опорні H/L, 2 сесії й відкриття, 3 контекст
   auto?: boolean;   // ADR-0104: false — поза режимом «Авто» (Focus ховає, Research показує); немає — рішення не приймалось
+  group?: LevelGroup; // рядок меню «Рівні»; auto — його типовий стан на цьому TF (сервер)
 }
 
 /** ADR-0041: Premium/Discount badge state (always-on when calc_enabled). */
