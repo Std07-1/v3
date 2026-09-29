@@ -391,8 +391,9 @@ export interface RenderFrame {
   signals?: SignalSpec[];
   /** ADR-0039: signal alerts on state transitions */
   signal_alerts?: SignalAlert[];
-  /** ADR-0035: refreshed session levels in delta (full-replace session kinds) */
-  session_levels?: SmcLevel[];
+  /** ADR-0104 §3.7: усі рівні глядача TF у дельті (те саме джерело, що full) — повна заміна шару рівнів;
+   *  відсутнє → тримати попередні (обчислення на сервері впало) */
+  display_levels?: SmcLevel[];
   /** ADR-0085: read-only шар Арчі (числові будильники; full + delta).
    *  Присутнє → застосувати (порожнє = очистити); відсутнє → тримати попереднє. */
   archi_chart?: ArchiChartData;

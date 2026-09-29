@@ -517,17 +517,6 @@ class SmcEngine:
         )
         return levels
 
-    def get_display_session_levels(self, symbol: str, viewer_tf_s: int, current_time_ms: int) -> List[SmcLevel]:
-        """Сесійні рівні для глядача TF — лише kinds з allow-set його базового TF (ADR-0035 §3.4).
-
-        Одне джерело для повного кадру (get_display_snapshot) і дельти ws_server: дельта раніше вкладала всі сесійні
-        рівні для будь-якого TF, і на D1/H4 вони з'являлись всупереч політиці відображення.
-        """
-        allowed = self._KEY_LEVEL_ALLOW.get(self._display_base_tf(viewer_tf_s), frozenset())
-        if not allowed or not self._config.sessions.enabled:
-            return []
-        return [lv for lv in self.get_session_levels(symbol, current_time_ms) if lv.kind in allowed]
-
     _EQ_KINDS = frozenset({"eq_highs", "eq_lows"})
     _HTF_KEY_LEVEL_TFS = (86400, 14400, 3600)  # D1 → H4 → H1 (key levels рахуються лише тут)
 

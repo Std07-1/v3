@@ -103,20 +103,12 @@ export function applySmcDelta(current: SmcData, delta: SmcDeltaWire): SmcData {
     return { zones, swings, levels, trend_bias: delta.trend_bias ?? current.trend_bias ?? null, zone_grades: current.zone_grades, bias_map: current.bias_map, momentum_map: current.momentum_map, pd_state: current.pd_state };
 }
 
-// ADR-0035: session level kinds — used to identify session levels for replacement
-const SESSION_KINDS = new Set([
-    'as_h', 'as_l', 'p_as_h', 'p_as_l',
-    'lon_h', 'lon_l', 'p_lon_h', 'p_lon_l',
-    'ny_h', 'ny_l', 'p_ny_h', 'p_ny_l',
-]);
-
 /**
- * ADR-0035: Replace session levels in SmcData with fresh ones from delta.
- * Removes all existing session-kind levels and adds fresh ones.
+ * ADR-0104 §3.7: шар рівнів з дельти — повна заміна списком display_levels (те саме джерело, що full-кадр).
+ * Level-зміни smc_delta тоді не діють: вони з сирого знімка TF глядача, поза політикою рівнів.
  */
-export function applySessionLevels(current: SmcData, sessionLevels: SmcLevel[]): SmcData {
-    const nonSession = current.levels.filter(l => !SESSION_KINDS.has(l.kind ?? ''));
-    return { ...current, levels: [...nonSession, ...sessionLevels] };
+export function applyDisplayLevels(current: SmcData, displayLevels: SmcLevel[]): SmcData {
+    return { ...current, levels: displayLevels };
 }
 
 /**

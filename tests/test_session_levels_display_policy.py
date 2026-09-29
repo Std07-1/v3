@@ -110,29 +110,26 @@ def test_unknown_group_in_defaults_table_fails_at_startup():
         SmcConfig.from_dict({"level_defaults": {"by_base_tf": {"300": ["day", "sessions"]}}})
 
 
-# ── легасі-дельта (до слайсу 2c): session_levels за старою політикою TF ──
+# ── дельта ws_server: той самий список, що й повний кадр ──
 
-@pytest.mark.parametrize("viewer_tf_s, expected", [
-    (86400, set()), (14400, set(PREVIOUS)), (3600, SESSION_KINDS), (300, SESSION_KINDS),
-])
-def test_legacy_delta_session_levels_follow_the_old_tf_policy(monkeypatch, viewer_tf_s, expected):
-    engine = _engine(monkeypatch)
-    assert {lv.kind for lv in engine.get_display_session_levels(_SYM, viewer_tf_s, NOW_MS)} == expected
-
-
-def test_ws_delta_uses_the_display_policy_not_the_unfiltered_session_list():
-    """Сторож регресії: нефільтрований get_session_levels_wire — лише для /api/context (зовнішні споживачі, не графік)."""
+def _ws_callers(method_name):
+    """Функції ws_server.py, що викликають `.method_name(...)` (найближча обгортка; вкладені — окремо)."""
     tree = ast.parse((REPO / "runtime" / "ws" / "ws_server.py").read_text(encoding="utf-8"))
     callers = []
 
     def visit(node, enclosing):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            enclosing = node.name  # найближча функція, що обгортає виклик (вкладені — окремо)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
-                and node.func.attr == "get_session_levels_wire":
+            enclosing = node.name
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == method_name:
             callers.append(enclosing)
         for child in ast.iter_child_nodes(node):
             visit(child, enclosing)
 
     visit(tree, None)
-    assert callers == ["_api_context"], callers
+    return callers
+
+
+def test_ws_delta_sends_the_same_display_levels_as_the_full_frame():
+    """Сторож: дельта бере get_display_levels_wire (те саме джерело, що повний кадр), сирих сесій графік не бачить."""
+    assert _ws_callers("get_display_levels_wire"), "дельта ws_server не надсилає display_levels"
+    assert _ws_callers("get_session_levels_wire") == ["_api_context"]  # нефільтровані — лише зовнішнім споживачам

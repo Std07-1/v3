@@ -36,7 +36,7 @@
   import {
     applySmcFull,
     applySmcDelta,
-    applySessionLevels,
+    applyDisplayLevels,
     filterMitigatedZones,
     EMPTY_SMC_DATA,
   } from "../stores/smcStore";
@@ -477,14 +477,11 @@
             currentFrame.smc_delta,
           );
         }
-        // ADR-0035: session levels refresh from delta
-        if (
-          currentFrame.session_levels &&
-          currentFrame.session_levels.length > 0
-        ) {
-          smcData = applySessionLevels(
+        // ADR-0104 §3.7: рівні глядача — повна заміна з сервера (порожній список = рівнів немає)
+        if (currentFrame.display_levels) {
+          smcData = applyDisplayLevels(
             untrack(() => smcData),
-            currentFrame.session_levels,
+            currentFrame.display_levels,
           );
         }
         // ADR-0042 P2: merge metadata from thick delta (DF-2)

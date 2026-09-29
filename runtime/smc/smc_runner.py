@@ -783,20 +783,21 @@ class SmcRunner:
             _log.debug("SMC_SESSION_LEVELS_WIRE_FAIL sym=%s", symbol, exc_info=True)
             return []
 
-    def get_display_session_levels_wire(self, symbol: str, viewer_tf_s: int) -> list:
-        """ADR-0035 §3.4: сесійні рівні для дельта-кадру глядача TF — за тією ж політикою, що й повний кадр.
+    def get_display_levels_wire(self, symbol: str, viewer_tf_s: int) -> Optional[list]:
+        """Рівні глядача TF для дельта-кадру — те саме джерело, що й повний кадр (ADR-0104 §3.7, рішення 29.09).
 
-        get_session_levels_wire (усі сесії) лишається для зовнішніх споживачів /api/context; графік бере цей метод,
-        інакше на D1/H4 з'являються рівні, яких політика відображення там не показує.
+        UI замінює ними шар рівнів повністю: сирі level-зміни smc_delta (знімок TF глядача, без політики) протікали
+        (Prev 1H на H1) і не оновлювали рівні старших TF на молодших. None — обчислення впало: UI лишає останні рівні.
+        get_session_levels_wire (усі сесії) — лише для зовнішніх споживачів /api/context.
         """
         import time as _t
 
         try:
-            levels = self._engine.get_display_session_levels(symbol, viewer_tf_s, int(_t.time() * 1000))
+            levels = self._engine.get_display_levels(symbol, viewer_tf_s, int(_t.time() * 1000))
             return [lv.to_wire() for lv in levels]
         except Exception:
-            _log.warning("SMC_DISPLAY_SESSION_LEVELS_FAIL sym=%s tf=%s", symbol, viewer_tf_s, exc_info=True)
-            return []
+            _log.warning("SMC_DISPLAY_LEVELS_FAIL sym=%s tf=%s", symbol, viewer_tf_s, exc_info=True)
+            return None
 
     def get_narrative(self, symbol, viewer_tf_s, current_price, atr=0.0):
         # type: (str, int, float, float) -> Optional[NarrativeBlock]

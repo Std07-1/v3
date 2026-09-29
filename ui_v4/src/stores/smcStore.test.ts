@@ -8,8 +8,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { applySmcDelta, applySmcFull, EMPTY_SMC_DATA } from './smcStore';
-import type { SmcData, SmcDeltaWire, SmcZone, ZoneGradeInfo, PdState } from '../types';
+import { applySmcDelta, applySmcFull, applyDisplayLevels, EMPTY_SMC_DATA } from './smcStore';
+import type { SmcData, SmcDeltaWire, SmcLevel, SmcZone, ZoneGradeInfo, PdState } from '../types';
 
 // ── fixtures ─────────────────────────────────────────────────
 
@@ -244,5 +244,27 @@ describe('ADR-0042 P2 DF-2 / ADR-0043 P2: frame metadata merge (ChartPane patter
         expect(afterMerge.zones).toHaveLength(3);
         expect(afterMerge.zone_grades).toEqual(GRADES);
         expect(afterMerge.pd_state).toEqual(PD);
+    });
+});
+
+describe('ADR-0104 §3.7: display_levels у дельті — повна заміна шару рівнів', () => {
+    const PDH: SmcLevel = { id: 'pdh_XAU_USD_86400_431568', kind: 'pdh', price: 4315.68, group: 'day', auto: true };
+    const LEAKED: SmcLevel = { id: 'p_h1_h_XAU_USD_3600_415711', kind: 'p_h1_h', price: 4157.11 };
+    const FRESH_H1: SmcLevel = { id: 'p_h1_h_XAU_USD_3600_416000', kind: 'p_h1_h', price: 4160.0, group: 'h1', auto: false };
+
+    it('сирий рівень з smc_delta не лишається, коли прийшли display_levels', () => {
+        const base = applySmcFull([ZONE_OB], [], [PDH]);
+        const delta: SmcDeltaWire = {
+            new_zones: [], updated_zones: [], mitigated_zone_ids: [], new_swings: [],
+            new_levels: [LEAKED], removed_level_ids: [], trend_bias: null,
+        };
+        const merged = applyDisplayLevels(applySmcDelta(base, delta), [PDH, FRESH_H1]);
+        expect(merged.levels).toEqual([PDH, FRESH_H1]);
+        expect(merged.zones).toEqual([ZONE_OB]);
+    });
+
+    it('порожній display_levels очищає рівні (сервер каже: рівнів немає)', () => {
+        const base = applySmcFull([], [], [PDH]);
+        expect(applyDisplayLevels(base, []).levels).toEqual([]);
     });
 });

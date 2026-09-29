@@ -76,7 +76,7 @@ class SmcRunnerLike(Protocol):
 
     def get_session_levels_wire(self, symbol: str) -> Any: ...
 
-    def get_display_session_levels_wire(self, symbol: str, viewer_tf_s: int) -> Any: ...
+    def get_display_levels_wire(self, symbol: str, viewer_tf_s: int) -> Any: ...
 
     def get_bias_map(self, symbol: str) -> Any: ...
 
@@ -1673,20 +1673,14 @@ async def _global_delta_loop(app: web.Application) -> None:
                                         symbol,
                                         _narr_exc,
                                     )
-                            # ADR-0035 §3.4: свіжі сесійні рівні в дельті — за політикою TF глядача, як у повному
-                            # кадрі (без фільтра вони протікали на D1/H4)
-                            try:
-                                _sess_lvls = cast(
-                                    Any, _smc_runner
-                                ).get_display_session_levels_wire(symbol, tf_s)
-                                if _sess_lvls:
-                                    frame["session_levels"] = _sess_lvls
-                            except Exception:
-                                _log.debug(
-                                    "WS_SESSION_LEVELS_DELTA_FAIL sym=%s",
-                                    symbol,
-                                    exc_info=True,
-                                )
+                            # ADR-0104 §3.7: повний список рівнів глядача TF у кожній дельті — те саме джерело, що й
+                            # повний кадр; UI замінює ним шар рівнів (сирі level-зміни smc_delta — поза політикою).
+                            # None — обчислення впало (runner уже залогував warning): UI лишає останні рівні
+                            _display_levels = cast(
+                                Any, _smc_runner
+                            ).get_display_levels_wire(symbol, tf_s)
+                            if _display_levels is not None:
+                                frame["display_levels"] = _display_levels
 
                         d1_relay_tfs_2: set = app.get(APP_D1_TICK_RELAY_TFS, set())
                         if tf_s in d1_relay_tfs_2:
