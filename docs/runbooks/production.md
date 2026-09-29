@@ -435,6 +435,23 @@ WS-сервер видає відвідувачу анонімний ключ (c
 | Підписати відвідувача / свої пристрої | `/var/lib/smc-v3/visitors/labels.json`: `{"a1f3": {"name": "Юра"}, "7c20": {"name": "мій ПК", "own": true}}` — ключ за префіксом із зведення |
 | Вимкнути | `visitors.enabled = false` у git → деплой → рестарт `smc:smc-ws` |
 
+## Нагляд за VPS (ADR-0106)
+
+`aione-watchdog.sh` (root, systemd-таймер щохвилини) шле системні події і ранковий звіт (09:00 за Прагою: сервер,
+програми, нічний settle, бекап Арчі, SSH, бани, події доби, відвідувачі) ботом «Monitor» — не ботом Арчі. Секрет —
+лише `/etc/aione-alerts/env` (root 600); мітки своїх мереж і ключів — `/etc/aione-alerts/known_ips`, `known_keys`
+(свій вхід = відомий ключ І відома мережа — без повідомлення). Код — `ops/vps/`, на сервері — встановлена копія.
+
+| Дія | Команда |
+| --- | --- |
+| Встановити з git (після `git pull`) | `sudo install -m 755 /opt/smc-v3/ops/vps/aione-watchdog.sh /usr/local/sbin/aione-watchdog.sh && sudo install -m 750 /opt/smc-v3/ops/vps/aione-alert.sh /usr/local/sbin/aione-alert.sh` |
+| Встановлено саме git-версію? | `sha256sum /opt/smc-v3/ops/vps/aione-*.sh /usr/local/sbin/aione-watchdog.sh /usr/local/sbin/aione-alert.sh` |
+| Пісочниця без відправки (реальні дані) | `sudo env STATE_DIR=/tmp/wd/state LOG=/tmp/wd/log ALERT=/bin/echo AUTOHEAL=0 bash /opt/smc-v3/ops/vps/aione-watchdog.sh` — перший тік засіває, наступні працюють |
+| Журнал відправок | `sudo tail -n 50 /var/log/aione-alerts.log` (`SENT ok` / `SEND FAIL`) |
+| Пробне повідомлення | `sudo /usr/local/sbin/aione-alert.sh "тест"` |
+| Замінити токен бота | `sudo bash <скрипт наосліп>`: токен лише через stdin, не в argv (sudo пише argv в auth.log) |
+| Відкат | `sudo install -m 755 /usr/local/sbin/aione-watchdog.sh.pre-adr0106 /usr/local/sbin/aione-watchdog.sh` (або попередня версія з git) |
+
 ---
 
 ## Що НЕ робити

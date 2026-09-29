@@ -9,8 +9,9 @@
 # guarantee a hung network call can never wedge the caller (the 60s watchdog).
 set -u
 
-ENV_FILE=/etc/aione-alerts/env
-LOG=/var/log/aione-alerts.log
+ENV_FILE="${ENV_FILE:-/etc/aione-alerts/env}"      # overridable for tests
+LOG="${LOG:-/var/log/aione-alerts.log}"           # overridable for tests
+TEXT_LIMIT=4000                                   # Telegram відхиляє >4096 символів (ADR-0106 §3.6)
 
 ts()  { date '+%Y-%m-%d %H:%M:%S%z'; }
 log() { echo "$(ts) [alert] $*" >> "$LOG" 2>/dev/null; }
@@ -31,6 +32,9 @@ fi
 
 LABEL="${HOSTNAME_LABEL:-$(hostname)}"
 TEXT="[$LABEL] $MSG"
+# Відхилене за довжину повідомлення watchdog повторював би щохвилини безкінечно — обрізаємо за символами
+# (не байтами: обрізаний посеред UTF-8 текст Telegram теж відхилив би).
+TEXT="$(printf '%s' "$TEXT" | python3 -c 'import sys; t = sys.stdin.read(); n = int(sys.argv[1]); sys.stdout.write(t if len(t) <= n else t[:n - 1] + "…")' "$TEXT_LIMIT" 2>/dev/null || printf '%s' "$TEXT")"
 RESP="$(mktemp /tmp/aione-alert-resp.XXXXXX)"
 
 HTTP="$(curl -sS -m 10 --retry 1 --retry-delay 2 \
