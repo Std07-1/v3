@@ -6,9 +6,12 @@
 21:00–22:00, а брокер торгує до 21:59. Cron `5 21,22 * * 1-5` + `5 9 * * 6` так сам потрапляє в перерву і влітку, і
 взимку, а Субота добирає хвіст п'ятниці.
 
-Вікно settle символу: `to` = забір − лаг ревізій групи (хвилини, які брокер ще правитиме, не беруться); `from` =
-`to − lookback_h`, або раніше — з межі попереднього успішного прогону, якщо прогони пропускались. Settle ідемпотентний:
-перекриття з уже устояним дає SAME.
+Вікно settle символу: `to` = забір − лаг ревізій групи (хвилини, які брокер ще правитиме, не беруться); `from` = межа
+попереднього успішного прогону — кожна хвилина устоюється ОДИН раз, у віці лагу…доби, і більше не переписується. Інакше
+вікно перетинає вихідні, а на вихідних FXCM перераховує історію індексів минулого тижня (округлення до 0.1), тоді як TV
+показує свій живий потік: перекриття тягло б графік від TV (прогін 28.09 — тисячі хвилин Чт/Пт індексів). Без стану —
+`to − lookback_h`; прогони пропускались довше за lookback — старший відрізок лишається неустояним з гучною позначкою, а
+не доганяється перерахованим архівом.
 """
 from __future__ import annotations
 
@@ -73,6 +76,7 @@ class SymbolWindow:
     symbol: str
     from_ms: int
     to_ms: int
+    unsettled_from_ms: Optional[int] = None  # межа попереднього прогону старша за lookback: [цей момент, from) не устоєно
 
     @property
     def sym_dir(self) -> str:
@@ -85,13 +89,22 @@ class SymbolWindow:
 
 def symbol_windows(lag_h_by_symbol: Mapping[str, int], fetched_ms: int, lookback_h: int,
                    settled_to: Mapping[str, int]) -> List[SymbolWindow]:
-    """Вікно settle кожного символу: [min(межа попереднього прогону, to − lookback), забір − лаг групи]."""
+    """Вікно settle кожного символу: [межа попереднього прогону (не старша за to − lookback), забір − лаг групи].
+
+    Без перекриття з уже устояним: повторний settle хвилини тягне пізні перерахунки брокера (вихідне округлення
+    індексів), яких TV не показує. Межа стану пізніша за `to` (скоротили лаг) — вікно порожнє.
+    """
     out = []
     for symbol, lag_h in lag_h_by_symbol.items():
         to_ms = floor_minute(fetched_ms - lag_h * HOUR_MS)
-        from_ms = to_ms - lookback_h * HOUR_MS
+        floor_ms = to_ms - lookback_h * HOUR_MS
         previous = settled_to.get(symbol.replace("/", "_"))
-        out.append(SymbolWindow(symbol, min(from_ms, previous) if previous is not None else from_ms, to_ms))
+        if previous is None:
+            out.append(SymbolWindow(symbol, floor_ms, to_ms))
+        elif previous < floor_ms:
+            out.append(SymbolWindow(symbol, floor_ms, to_ms, unsettled_from_ms=previous))
+        else:
+            out.append(SymbolWindow(symbol, previous, to_ms))
     return out
 
 

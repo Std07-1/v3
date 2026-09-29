@@ -150,6 +150,12 @@ class DailySettle:
         settled_to = sp.load_settled_to(self.paths.work_dir)
         windows = sp.symbol_windows(self.policy.lag_h_by_symbol, fetched_ms, self.policy.lookback_h, settled_to)
         self.report["windows"] = {w.sym_dir: [sp.iso_minute(w.from_ms), sp.iso_minute(w.to_ms)] for w in windows}
+        for w in windows:
+            if w.unsettled_from_ms is not None:  # прогони пропускались довше за lookback — старший відрізок не доганяємо
+                gap = "SETTLE_GAP_UNSETTLED %s %s..%s" % (w.sym_dir, sp.iso_minute(w.unsettled_from_ms),
+                                                         sp.iso_minute(w.from_ms))
+                log.warning("%s — лишається живим потоком (перерахований архів не тягнемо)", gap)
+                self.report["problems"].append(gap)
         m1_from, m1_to = sp.m1_fetch_window(windows, fetched_ms)
         m1 = self._fetch("m1", ["--from", sp.iso_minute(m1_from), "--to", sp.iso_minute(m1_to)])
         d1 = self._fetch("d1", ["--to", sp.iso_minute(m1_to)]) if m1 else None

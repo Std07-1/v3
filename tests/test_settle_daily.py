@@ -291,3 +291,13 @@ def test_real_runner_timeout_kills_the_whole_process_group(tmp_path):
     time.sleep(0.5)
     with pytest.raises(ProcessLookupError):
         os.kill(child, 0)
+
+
+def test_runs_missed_longer_than_lookback_settle_only_the_lookback_and_flag_the_gap(env):
+    """Старший відрізок не доганяється перерахованим архівом брокера — гучна позначка, код 4 (syslog)."""
+    sp.save_settled_to(env.work_dir, sp.symbol_windows({"XAU/USD": 6}, sp.parse_iso_minute("2026-09-14T21:05"), 96, {}),
+                       {}, "old-run")
+    assert _run(env) == sd.EXIT_OBSERVE
+    settle_xau = env.commands["settle_m1_XAU_USD"]
+    assert settle_xau[settle_xau.index("--from") + 1] == "2026-09-20T15:05"  # to − 96 год, не межа 14.09
+    assert any(p.startswith("SETTLE_GAP_UNSETTLED XAU_USD 2026-09-14T15:05..2026-09-20T15:05") for p in _report(env)["problems"])
