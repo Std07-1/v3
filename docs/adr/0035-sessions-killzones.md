@@ -460,6 +460,7 @@ P0 (types/config) → P1 (sessions.py) → P2 (engine) → P3 (injection)
 | F5 | Session H/L = однакова ціна | Два levels з різними kinds, rendering нормальний (merge по L1 ADR-0026) |
 | F6 | Символ з іншим session profile (HKG33) | Config per symbol group — v1: один config для всіх FX |
 | F7 | Gap при відкритті session | Перший M1 бар після gap = session start; H/L починається з нього |
+| F11 | Одна хвилина M1 надходить кілька разів: миттєвий `tick_promoted` з тіків, за ним фінал брокера з іншим OHLC, і кожен — кількома шляхами подачі (delta loop, фоновий feed, підписка на M1) | Стрічка M1 движка: одна хвилина — один бар, за зростанням `open_time`; фінал (`FINAL_SOURCES`) заміщує `tick_promoted`, навпаки — ніколи (I3). Вікно — 2880 різних хвилин = 48 год (`_SESSION_M1_CAPACITY`, `core/smc/engine.py:_store_session_m1`). До 30.09.2026 копії лягали поруч: вікно стискалося до ~15–24 год (сесії вчора випадали вдень), DO/WO і `h4_forming.o` брали open першого тіку |
 
 ---
 

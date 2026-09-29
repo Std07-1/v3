@@ -19,7 +19,7 @@ import time
 from collections import deque
 from typing import Deque, Dict, List, Optional, Tuple
 
-from core.model.bars import CandleBar
+from core.model.bars import FINAL_SOURCES, CandleBar
 from core.smc.confluence import score_zone_confluence
 from core.smc.config import SmcConfig, SmcDisplayConfig
 from core.smc.context_stack import collect_htf_zones, tag_local_zones
@@ -52,6 +52,9 @@ from core.smc.types import (
 )
 
 _log = logging.getLogger(__name__)
+
+# Стрічка M1 для сесій, DO/WO і H4 forming: поточна й попередня торгові доби (48 год × 60 хв; ADR-0035, ADR-0104)
+_SESSION_M1_CAPACITY = 2880
 
 # ── Zone lifecycle constants & helpers (N1) ──────────────────────────
 
@@ -485,26 +488,20 @@ class SmcEngine:
             self._session_windows = load_session_windows(scfg._definitions)
 
     def feed_m1_bar(self, bar: CandleBar) -> None:
-        """Зберігає M1 бар для обчислення session H/L.
+        """Зберігає завершений M1 бар для сесій H/L, DO/WO і H4 forming — одна хвилина, один бар (див. _store_session_m1).
 
-        Зберігаються тільки complete M1 бари, últimos ~2880 (2 дні).
         S0: pure — лише зберігає у internal deque.
         """
         if bar.tf_s != 60 or not bar.complete:
             return
-        sym = bar.symbol
-        if sym not in self._session_m1_bars:
-            self._session_m1_bars[sym] = deque(maxlen=2880)  # 48h × 60 min
-        self._session_m1_bars[sym].append(bar)
+        _store_session_m1(self._session_m1_bars.setdefault(bar.symbol, deque(maxlen=_SESSION_M1_CAPACITY)), bar)
 
     def feed_m1_bars_bulk(self, symbol: str, bars: List[CandleBar]) -> None:
-        """Bulk feed M1 bars (warmup). S0: pure."""
-        if symbol not in self._session_m1_bars:
-            self._session_m1_bars[symbol] = deque(maxlen=2880)
-        q = self._session_m1_bars[symbol]
+        """Bulk feed M1 bars (warmup) — за тим самим правилом, що й feed_m1_bar. S0: pure."""
+        tape = self._session_m1_bars.setdefault(symbol, deque(maxlen=_SESSION_M1_CAPACITY))
         for b in bars:
             if b.tf_s == 60 and b.complete:
-                q.append(b)
+                _store_session_m1(tape, b)
 
     def get_session_levels(self, symbol: str, current_time_ms: int) -> List[SmcLevel]:
         """Обчислити session H/L levels. S0: pure, S2: deterministic."""
@@ -1235,6 +1232,35 @@ def _filter_for_display(
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
+
+
+def _store_session_m1(tape: Deque[CandleBar], bar: CandleBar) -> None:
+    """Кладе бар у стрічку M1: одна хвилина — один бар, стрічка за зростанням open_time (I3 Final > Preview).
+
+    Кожна хвилина приходить кілька разів: спершу миттєвий `tick_promoted` з тіків, за ним фінал брокера з іншим OHLC,
+    і кожен ще кількома шляхами подачі (delta loop, фоновий feed, підписка глядача на M1). Фінал заміщує
+    `tick_promoted`, `tick_promoted` фінал — ніколи; повтор того самого класу заміщує попередній. Бар, старший за всю
+    повну стрічку, у вікно вже не входить — відкидається.
+    """
+    open_ms = bar.open_time_ms
+    at = len(tape)  # перша позиція з open_time >= open_ms; повтори й запізнілі фінали — біля хвоста, прохід короткий
+    for held in reversed(tape):
+        if held.open_time_ms < open_ms:
+            break
+        at -= 1
+    if at == len(tape):
+        tape.append(bar)
+        return
+    if tape[at].open_time_ms == open_ms:
+        if bar.src in FINAL_SOURCES or tape[at].src not in FINAL_SOURCES:
+            tape[at] = bar
+        return
+    if len(tape) == tape.maxlen:
+        if at == 0:
+            return
+        tape.popleft()
+        at -= 1
+    tape.insert(at, bar)
 
 
 def _empty_snapshot(symbol: str, tf_s: int) -> SmcSnapshot:
