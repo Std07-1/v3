@@ -1023,10 +1023,12 @@
 
   /* N3: SMC layer toggles — refined collapsible panel */
   /* ADR-0043 P5: top: 36px → 48px (HUD clearance, D7 fix) */
+  /* 29.09 (власник): right 64px → 140px — права смуга графіка (засічки рівнів 20px + підписи) лишається відкритою,
+     панель і меню «Рівні» їх не перекривають */
   .smc-panel {
     position: absolute;
     top: 48px;
-    right: 64px;
+    right: 140px;
     z-index: 36;
     display: flex;
     align-items: center;
