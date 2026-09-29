@@ -85,3 +85,19 @@ def test_retention_drops_only_the_oldest_beyond_keep():
     names = ["20260925T210501Z", "20260923T210500Z", "20260924T210502Z"]
     assert sp.expired(names, 2) == ["20260923T210500Z"] and sp.expired(names, 3) == []
     assert sp.expired(names, 0) == sorted(names)
+
+
+def test_provisional_tail_settles_to_the_fetch_but_keeps_state_at_the_lag():
+    """XAG 28.09 20:59 брокер опублікував округленим (close 60.0), в архіві о 21:05 — уже 60.495: хвіст прибирає його
+    тієї ж ночі, а стан лишається на «забір − лаг» — наступна ніч переустоює хвіст остаточно."""
+    fetched = _ms("2026-09-29T21:05")
+    settled = {"XAG_USD": _ms("2026-09-28T15:05")}
+    (w,) = sp.symbol_windows({"XAG/USD": 6}, fetched, 96, settled, provisional_to_ms=fetched)
+    assert (w.from_ms, w.to_ms, w.settled_to_ms) == (_ms("2026-09-28T15:05"), fetched, _ms("2026-09-29T15:05"))
+
+
+def test_state_advances_only_to_the_lag_boundary_after_a_provisional_run(tmp_path):
+    fetched = _ms("2026-09-29T21:05")
+    windows = sp.symbol_windows({"XAG/USD": 6}, fetched, 96, {}, provisional_to_ms=fetched)
+    sp.save_settled_to(str(tmp_path), windows, {}, "run")
+    assert sp.load_settled_to(str(tmp_path)) == {"XAG_USD": _ms("2026-09-29T15:05")}

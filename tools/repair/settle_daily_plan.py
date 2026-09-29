@@ -77,6 +77,12 @@ class SymbolWindow:
     from_ms: int
     to_ms: int
     unsettled_from_ms: Optional[int] = None  # межа попереднього прогону старша за lookback: [цей момент, from) не устоєно
+    state_to_ms: Optional[int] = None  # провізорний хвіст: settle до `to`, а стан — лише до цієї межі (забір − лаг)
+
+    @property
+    def settled_to_ms(self) -> int:
+        """Межа, що йде в стан: наступний прогін починає звідси (провізорний хвіст переустоюється остаточно)."""
+        return self.state_to_ms if self.state_to_ms is not None else self.to_ms
 
     @property
     def sym_dir(self) -> str:
@@ -88,23 +94,30 @@ class SymbolWindow:
 
 
 def symbol_windows(lag_h_by_symbol: Mapping[str, int], fetched_ms: int, lookback_h: int,
-                   settled_to: Mapping[str, int]) -> List[SymbolWindow]:
+                   settled_to: Mapping[str, int], provisional_to_ms: Optional[int] = None) -> List[SymbolWindow]:
     """Вікно settle кожного символу: [межа попереднього прогону (не старша за to − lookback), забір − лаг групи].
 
     Без перекриття з уже устояним: повторний settle хвилини тягне пізні перерахунки брокера (вихідне округлення
     індексів), яких TV не показує. Межа стану пізніша за `to` (скоротили лаг) — вікно порожнє.
+
+    `provisional_to_ms` (будній день): settle до цієї межі, стан — лише до «забір − лаг». Остання хвилина перед
+    перервою, яку брокер публікує округленою (XAG 28.09 20:59 close 60.0), в архіві за кілька хвилин уже правильна
+    (60.495) — провізорний хвіст прибирає її тієї ж ночі, а наступний прогін переустоює хвіст остаточно.
     """
     out = []
     for symbol, lag_h in lag_h_by_symbol.items():
         to_ms = floor_minute(fetched_ms - lag_h * HOUR_MS)
         floor_ms = to_ms - lookback_h * HOUR_MS
         previous = settled_to.get(symbol.replace("/", "_"))
-        if previous is None:
-            out.append(SymbolWindow(symbol, floor_ms, to_ms))
-        elif previous < floor_ms:
-            out.append(SymbolWindow(symbol, floor_ms, to_ms, unsettled_from_ms=previous))
+        from_ms, unsettled = floor_ms, None
+        if previous is not None and previous < floor_ms:
+            unsettled = previous
+        elif previous is not None:
+            from_ms = previous
+        if provisional_to_ms is not None and provisional_to_ms > to_ms:
+            out.append(SymbolWindow(symbol, from_ms, provisional_to_ms, unsettled_from_ms=unsettled, state_to_ms=to_ms))
         else:
-            out.append(SymbolWindow(symbol, previous, to_ms))
+            out.append(SymbolWindow(symbol, from_ms, to_ms, unsettled_from_ms=unsettled))
     return out
 
 
@@ -126,10 +139,10 @@ def load_settled_to(work_dir: str) -> Dict[str, int]:
 
 
 def save_settled_to(work_dir: str, windows: Sequence[SymbolWindow], previous: Mapping[str, int], run_id: str) -> None:
-    """Атомарно: межа символу — max(попередня, `to` цього прогону); пишеться лише після успішного прогону."""
+    """Атомарно: межа символу — max(попередня, межа стану вікна); пишеться лише після успішного прогону."""
     merged = dict(previous)
     for w in windows:
-        merged[w.sym_dir] = max(merged.get(w.sym_dir, w.to_ms), w.to_ms)
+        merged[w.sym_dir] = max(merged.get(w.sym_dir, w.settled_to_ms), w.settled_to_ms)
     path = os.path.join(work_dir, STATE_FILE)
     with open(path + ".tmp", "w", encoding="utf-8") as fh:
         json.dump({"settled_to": {k: iso_minute(v) for k, v in sorted(merged.items())}, "run": run_id}, fh, indent=1)

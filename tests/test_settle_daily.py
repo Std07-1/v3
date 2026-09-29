@@ -128,11 +128,14 @@ def test_nightly_run_follows_the_proven_manual_order(env):
     assert env.commands["stop_writers"] == ["supervisorctl", "stop", "smc:smc-ws", "smc:smc-preview", "smc:smc-fxcm"]
     assert "smc-ticks" not in " ".join(" ".join(c) for c in env.commands.values())
     assert "--apply" in env.commands["settle_m1_XAU_USD"] and "--apply" in env.commands["d1_native_settle"]
+    # будня перерва: провізорний хвіст до моменту забору, стан — лише до «забір − лаг» (наступна ніч переустоює)
     settle_xau = env.commands["settle_m1_XAU_USD"]
-    assert settle_xau[settle_xau.index("--to") + 1] == "2026-09-24T15:05"  # забір − лаг 6 год
+    assert settle_xau[settle_xau.index("--to") + 1] == "2026-09-24T21:05"
     settle_ger = env.commands["settle_m1_GER30"]
-    assert settle_ger[settle_ger.index("--to") + 1] == "2026-09-24T09:05"  # EU — лаг 12 год
-    assert sp.load_settled_to(env.work_dir)["GER30"] == sp.parse_iso_minute("2026-09-24T09:05")
+    assert settle_ger[settle_ger.index("--to") + 1] == "2026-09-24T21:05"
+    state = sp.load_settled_to(env.work_dir)
+    assert state["XAU_USD"] == sp.parse_iso_minute("2026-09-24T15:05")  # лаг 6 год
+    assert state["GER30"] == sp.parse_iso_minute("2026-09-24T09:05")  # EU — лаг 12 год
     assert _report(env)["stage"] == "SETTLED"
     assert not os.path.exists(os.path.join(env.work_dir, sd.WRITERS_STOPPED_MARKER))
 
@@ -301,3 +304,17 @@ def test_runs_missed_longer_than_lookback_settle_only_the_lookback_and_flag_the_
     settle_xau = env.commands["settle_m1_XAU_USD"]
     assert settle_xau[settle_xau.index("--from") + 1] == "2026-09-20T15:05"  # to − 96 год, не межа 14.09
     assert any(p.startswith("SETTLE_GAP_UNSETTLED XAU_USD 2026-09-14T15:05..2026-09-20T15:05") for p in _report(env)["problems"])
+
+
+@pytest.mark.parametrize("now, to_core", [
+    ("2026-09-25T21:05", "2026-09-25T15:05"),  # П'ятниця: закриття тижня — без провізорного хвоста
+    ("2026-09-26T09:05", "2026-09-26T03:05"),  # Субота: хвіст п'ятниці устоюється за лагом
+])
+def test_weekly_break_settles_only_up_to_the_lag(env, now, to_core):
+    """Хвилина закриття тижня (Пт 20:44) потрапляє в архів лише після відкриття наступного тижня — провізорний хвіст
+    у тижневу перерву змусив би гейт відмовити всьому прогону."""
+    env.now = now
+    assert _run(env) == sd.EXIT_OK
+    settle_xau = env.commands["settle_m1_XAU_USD"]
+    assert settle_xau[settle_xau.index("--to") + 1] == to_core
+    assert sp.load_settled_to(env.work_dir)["XAU_USD"] == sp.parse_iso_minute(to_core)
