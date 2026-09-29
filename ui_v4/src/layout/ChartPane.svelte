@@ -41,6 +41,15 @@
     EMPTY_SMC_DATA,
   } from "../stores/smcStore";
   import { replayStore } from "../stores/replayStore.svelte";
+  import {
+    buildMenuRows,
+    hasOverrides,
+    loadOverrides,
+    saveOverrides,
+    toggleGroup,
+    type OverridesByTf,
+  } from "../chart/overlay/levelGroups";
+  import type { LevelGroup } from "../types";
   import { hintsOn } from "../stores/uiHints";
 
   interface Props {
@@ -88,6 +97,47 @@
   let showBOS = $state(true);
   let showFR = $state(true);
   let showDIS = $state(true);
+  // ADR-0104 §3.7 (рішення 29.09): меню «Рівні» — вибір рядків окремо для кожного TF, поверх типового сервера
+  let levelOverridesByTf: OverridesByTf = $state({});
+  let levelMenuOpen = $state(false);
+  let levelTfKey = $state("");
+  const levelRows = $derived(
+    buildMenuRows(smcData.levels, levelOverridesByTf[levelTfKey] ?? {}),
+  );
+  const levelMenuHasOverrides = $derived(
+    hasOverrides(levelOverridesByTf[levelTfKey]),
+  );
+
+  function safeLocalStorage(): Storage | undefined {
+    try {
+      return window.localStorage;
+    } catch {
+      return undefined; // заблоковане сховище — вибір діє до перезавантаження
+    }
+  }
+
+  function commitLevelOverrides(all: OverridesByTf): void {
+    levelOverridesByTf = all;
+    saveOverrides(safeLocalStorage(), all);
+  }
+
+  function toggleLevelGroup(group: LevelGroup): void {
+    const next = toggleGroup(
+      smcData.levels,
+      levelOverridesByTf[levelTfKey] ?? {},
+      group,
+    );
+    const all = { ...levelOverridesByTf };
+    if (hasOverrides(next)) all[levelTfKey] = next;
+    else delete all[levelTfKey];
+    commitLevelOverrides(all);
+  }
+
+  function resetLevelGroups(): void {
+    const all = { ...levelOverridesByTf };
+    delete all[levelTfKey];
+    commitLevelOverrides(all);
+  }
   // Crosshair data for tooltip (OHLCV + cursor position)
   let crosshairData: CrosshairData | null = $state(null);
 
@@ -172,6 +222,7 @@
   }
 
   onMount(() => {
+    levelOverridesByTf = loadOverrides(safeLocalStorage());
     // N3: restore SMC toggles from localStorage (R-03: safe in onMount)
     try {
       const raw = localStorage.getItem("smc_toggles");
@@ -584,6 +635,15 @@
   $effect(() => {
     overlayRenderer?.setLayerVisible("levels", showLVL);
   });
+
+  // ADR-0104 §3.7: TF графіка — ключ вибору в меню «Рівні» (кадри без tf, напр. drawing_ack, його не скидають)
+  $effect(() => {
+    const tf = currentFrame?.tf;
+    if (tf) levelTfKey = tf;
+  });
+  $effect(() => {
+    overlayRenderer?.setLevelOverrides(levelOverridesByTf[levelTfKey] ?? {});
+  });
   $effect(() => {
     overlayRenderer?.setLayerVisible("structure", showBOS);
   });
@@ -631,6 +691,13 @@
       return;
     if (e.key === "f" || e.key === "F") {
       displayMode = displayMode === "focus" ? "research" : "focus";
+    } else if (
+      (e.key === "l" || e.key === "L") &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey
+    ) {
+      showLVL = !showLVL; // ADR-0104 §3.7: L — усі рівні, як чип LVL (Ctrl+L браузера не чіпаємо)
     }
   }
   onMount(() => {
@@ -695,7 +762,10 @@
     onclick={(e) => e.stopPropagation()}
     use:dismissOnOutside={{
       enabled: smcPanelOpen,
-      onDismiss: () => (smcPanelOpen = false),
+      onDismiss: () => {
+        smcPanelOpen = false;
+        levelMenuOpen = false;
+      },
     }}
   >
     {#if smcPanelOpen}
@@ -722,7 +792,16 @@
           class="smc-toggle smc-t-lvl"
           class:active={showLVL}
           onclick={() => (showLVL = !showLVL)}
-          title={$hintsOn ? "Levels" : undefined}>LVL</button
+          title={$hintsOn ? "Levels (L)" : undefined}>LVL</button
+        >
+        <button
+          class="smc-toggle lvl-caret"
+          class:open={levelMenuOpen}
+          aria-haspopup="menu"
+          aria-expanded={levelMenuOpen}
+          aria-label="Рівні"
+          onclick={() => (levelMenuOpen = !levelMenuOpen)}
+          title={$hintsOn ? "Рівні" : undefined}>▾</button
         >
         <button
           class="smc-toggle smc-t-bos"
@@ -743,6 +822,34 @@
           title={$hintsOn ? "Displacement" : undefined}>DIS</button
         >
       </div>
+      {#if levelMenuOpen}
+        <div class="level-menu" role="menu" aria-label="Рівні">
+          <div class="lm-header">Рівні · {levelTfKey}</div>
+          {#each levelRows as row (row.group)}
+            <button
+              class="lm-item"
+              class:active={row.on}
+              class:empty={row.count === 0}
+              role="menuitemcheckbox"
+              aria-checked={row.on}
+              onclick={() => toggleLevelGroup(row.group)}
+            >
+              <span class="lm-label">{row.label}</span>
+              <span class="lm-count">{row.count}</span>
+              <span class="lm-state">{row.on ? "●" : "○"}</span>
+            </button>
+          {/each}
+          <div class="lm-divider"></div>
+          <button
+            class="lm-item lm-reset"
+            role="menuitem"
+            disabled={!levelMenuHasOverrides}
+            onclick={resetLevelGroups}
+          >
+            <span class="lm-label">Скинути до типових</span>
+          </button>
+        </div>
+      {/if}
     {/if}
     <!-- ADR-0065 Phase 1: SMC trigger + F toggle moved to CommandRailOverflow.
          The .smc-grid layer buttons still render here when smcPanelOpen=true.
@@ -981,6 +1088,86 @@
     color: #ef5350;
     border-color: rgba(239, 83, 80, 0.35);
     background: rgba(239, 83, 80, 0.1);
+  }
+  /* ADR-0104 §3.7: меню «Рівні» — стрілка біля LVL і список у стилі пунктів меню ☰ */
+  .lvl-caret {
+    padding: 2px 3px;
+    margin-left: -2px;
+  }
+  .lvl-caret.open {
+    color: var(--text-1, #d1d4dc);
+  }
+  .level-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 100;
+    min-width: 200px;
+    padding: 4px;
+    background: var(--bg, #0d1117);
+    border: 1px solid var(--border-mute, rgba(255, 255, 255, 0.08));
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+    font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+  }
+  .lm-header {
+    padding: 6px 10px 4px;
+    font-size: var(--t4-size, 11px);
+    color: var(--text-3, #5d6068);
+    letter-spacing: 0.02em;
+  }
+  .lm-item {
+    all: unset;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 10px;
+    font-size: var(--t3-size, 12px);
+    color: var(--text-2, #9b9bb0);
+    cursor: pointer;
+    border-radius: 5px;
+    transition:
+      background 0.12s ease,
+      color 0.12s ease;
+  }
+  .lm-item:hover:not(:disabled),
+  .lm-item:focus-visible {
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    color: var(--text-1);
+  }
+  .lm-item:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
+  }
+  .lm-item.empty,
+  .lm-item:disabled {
+    opacity: 0.45;
+  }
+  .lm-item:disabled {
+    cursor: default;
+  }
+  .lm-label {
+    flex: 1;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+  }
+  .lm-count {
+    font-size: var(--t4-size, 11px);
+    color: var(--text-3, #6d7080);
+    font-family: var(--font-mono);
+  }
+  .lm-state {
+    color: var(--text-3, #5d6068);
+  }
+  .lm-item.active .lm-state {
+    color: var(--accent, #d4a017);
+  }
+  .lm-divider {
+    height: 1px;
+    background: var(--border-mute, rgba(255, 255, 255, 0.07));
+    margin: 2px 6px;
   }
   .smc-toggle.active.smc-t-lvl {
     color: #ff9800;
