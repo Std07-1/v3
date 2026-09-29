@@ -57,21 +57,23 @@ def test_build_visitors_merges_reconnects_and_tabs_without_double_counting():
     assert visitor.human is True
 
 
-def test_summarize_splits_new_returning_own_and_bots():
+def test_summarize_splits_new_returning_and_bots_excluding_own_everywhere():
     returning, new, own, bot = "r" * 32, "n" * 32, "0" * 32, "b" * 32
     records = [
         session(returning, T0 - 10 * DAY, 20),
         session(returning, T0 + HOUR, 15),
         session(new, T0 + 2 * HOUR, 25),
         session(own, T0 + 3 * HOUR, 40),
+        session("0f" * 16, T0 + 3 * HOUR, 0.2, views=()),  # своя коротка перевірка — не бот
         session(bot, T0 + 4 * HOUR, 1, bot_ua=True),
         session("s" * 32, T0 + 5 * HOUR, 0.1),  # коротка без переглядів, UA звичайний
     ]
     visitors = build_visitors(records, 30, 30)
-    digest = summarize(visitors, records, (T0, T0 + DAY), {"000": {"name": "мій ПК", "own": True}})
+    labels = {"000": {"name": "мій ПК", "own": True}, "0f0f": {"name": "перевірка", "own": True}}
+    digest = summarize(visitors, records, (T0, T0 + DAY), labels)
     assert [row[0].vid for row in digest.new] == [new]
     assert [row[0].vid for row in digest.returning] == [returning]
-    assert digest.own_visits == 1
+    assert digest.own_visits == 2
     assert (digest.bot_sessions_ua, digest.bot_sessions_short) == (1, 1)
     assert (digest.humans_7d, digest.humans_30d, digest.humans_all) == (2, 2, 2)
     assert digest.first_human_ms == T0 - 10 * DAY

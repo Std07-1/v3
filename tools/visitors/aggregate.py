@@ -81,19 +81,26 @@ def summarize(
     period: Tuple[int, int],
     labels: Mapping[str, Mapping[str, Any]],
 ) -> Digest:
-    """Підсумок за [start, end): люди нові/повторні (без своїх), свої, схожі на ботів, охоплення 7/30 днів/усього."""
+    """Підсумок за [start, end): люди нові/повторні, свої (виключені звідусіль), схожі на ботів, охоплення 7/30/усього."""
     start_ms, end_ms = period
     new, returning, own_visits = [], [], 0
     for visitor in visitors.values():
         in_period = [v for v in visitor.visits if start_ms <= v.start_ms < end_ms]
-        if not visitor.human or not in_period:
+        if not in_period:
             continue
         label = resolve_label(visitor.vid, labels)
-        if label.get("own"):
+        if label.get("own"):  # свої пристрої — лише в рядку «Свої», ні в людях, ні в ботах
             own_visits += len(in_period)
             continue
-        (new if visitor.first_ms >= start_ms else returning).append((visitor, in_period, label.get("name")))
-    bots = [r for r in records if start_ms <= r["start_ms"] < end_ms and not visitors[r["vid"]].human]
+        if visitor.human:
+            (new if visitor.first_ms >= start_ms else returning).append((visitor, in_period, label.get("name")))
+    bots = [
+        r
+        for r in records
+        if start_ms <= r["start_ms"] < end_ms
+        and not visitors[r["vid"]].human
+        and not resolve_label(r["vid"], labels).get("own")
+    ]
     humans = [v for v in visitors.values() if v.human and not resolve_label(v.vid, labels).get("own")]
     return Digest(
         period_start_ms=start_ms,
