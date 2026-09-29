@@ -67,7 +67,7 @@ class VisitorsPolicy:
     retention_days: int = 365
     human_min_session_s: int = 30
     visit_gap_min: int = 30
-    display_tz: str = "Europe/Kyiv"
+    display_tz: str = "Europe/Prague"  # власник живе за Прагою (ADR-0106)
 
 
 # Мінімуми цілих полів: відсікають безглузді налаштування (ретеншн коротший за місяць зведення не порахує)

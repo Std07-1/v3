@@ -111,6 +111,21 @@ def test_render_without_humans_says_so():
     assert "Людей за період не було." in render(digest, 24, KYIV, 0, None)
 
 
+def test_render_caps_rows_per_group_for_telegram_limit():
+    records = [session(c * 32, T0 + i * HOUR, 5) for i, c in enumerate("abc")]
+    digest = summarize(build_visitors(records, 30, 30), records, (T0, T0 + DAY), {})
+    text = render(digest, 24, KYIV, 0, None, max_rows=1)
+    assert text.count("  #") == 1 and "…ще 2" in text
+
+
+def test_main_rejects_non_positive_max_rows(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"visitors": {"enabled": True, "dir": str(tmp_path)}}), encoding="utf-8")
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--config", str(config), "--max-rows", "0"])
+    assert exit_info.value.code == 2
+
+
 def test_load_records_counts_bad_lines_and_ignores_foreign_files(tmp_path):
     good = session("a" * 32, T0, 5)
     (tmp_path / "sessions-202609.jsonl").write_text(

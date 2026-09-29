@@ -431,7 +431,7 @@ WS-сервер видає відвідувачу анонімний ключ (c
 | Чи журнал увімкнено | `grep VISITORS_JOURNAL /var/log/smc-v3/ws_server.stderr.log \| tail -n 3` |
 | Сесії за сьогодні | `sudo tail -n 20 /var/lib/smc-v3/visitors/sessions-$(date -u +%Y%m).jsonl` |
 | Зведення вручну (друк, без відправки) | `cd /opt/smc-v3 && sudo -u smc ./.venv/bin/python -m tools.visitors.report [--hours 72]` |
-| Щоденне зведення в Telegram (за «го») | токен і чат бота сповіщень у `/opt/smc-v3/.env` (`VISITORS_TG_BOT_TOKEN`, `VISITORS_TG_CHAT_ID`) → `sudo install -m 644 /opt/smc-v3/ops/smc-visitors-digest.cron /etc/cron.d/smc-visitors-digest`; лог — `/var/log/smc-v3/visitors_digest.log` |
+| Щоденне зведення | приходить у ранковому звіті системного бота о 09:00 за Прагою (ADR-0106, розділ «Нагляд за VPS») |
 | Підписати відвідувача / свої пристрої | `/var/lib/smc-v3/visitors/labels.json`: `{"a1f3": {"name": "Юра"}, "7c20": {"name": "мій ПК", "own": true}}` — ключ за префіксом із зведення |
 | Вимкнути | `visitors.enabled = false` у git → деплой → рестарт `smc:smc-ws` |
 

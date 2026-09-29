@@ -1,16 +1,16 @@
-"""ADR-0105 S2: зведення відвідувачів із журналу WS-сервера — текст для власника (S3 шле його в Telegram).
+"""ADR-0105 S2: зведення відвідувачів із журналу WS-сервера — текст для власника. Доставляє ранковий звіт системного
+бота (ADR-0106 §3.5): watchdog запускає цей інструмент від власника журналу і вставляє текст у звіт.
 
     python -m tools.visitors.report [--config config.json] [--hours 24] [--now-ms <epoch ms>] [--apply-retention]
-        [--telegram [--env-file .env]]
+        [--max-rows 20]
 
 Читає всі збережені місяці `visitors.dir/sessions-YYYYMM.jsonl` («з нами з» і номер візиту — за всю історію) і
 `visitors.dir/labels.json` — мітки ключів за префіксом: {"a1f3": {"name": "Юра"}, "7c20": {"name": "мій ПК", "own": true}};
 own — свої пристрої, людьми не рахуються. Зіпсований рядок журналу зведення не валить, а рахується й згадується в тексті.
 --apply-retention видаляє місячні файли, що цілком старші за visitors.retention_days (кожен — рядком у stderr).
---telegram — ще й надіслати зведення ботом сповіщень (S3, tools.visitors.notify; токен і чат з оточення або --env-file).
+--max-rows — скільки відвідувачів показати в кожній групі, решта — «…ще N» (повідомлення Telegram ≤ 4096 символів).
 
-Коди виходу: 0 — зведення надруковано (і доставлено, якщо --telegram); 2 — журнал вимкнено/нема каталогу або конфіг
-невалідний; 3 — зведення надруковано, але в Telegram не доставлено (причина в stderr, без секретів).
+Коди виходу: 0 — зведення надруковано; 2 — журнал вимкнено/нема каталогу, конфіг або аргументи невалідні.
 """
 
 from __future__ import annotations
@@ -26,13 +26,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from core.config_loader import load_system_config
-from env_profile import load_env_secrets
 from runtime.visitors.journal import visitors_policy
 from tools.visitors.aggregate import DAY_MS, Digest, Visit, Visitor, build_visitors, summarize
-from tools.visitors.notify import NotifyError, send_telegram, telegram_credentials
 
 _SESSION_FILE_RE = re.compile(r"^sessions-(\d{4})(\d{2})\.jsonl$")
-MAX_ROWS = 20  # повідомлення Telegram ≤ 4096 символів
+MAX_ROWS = 20  # типова межа рядків у групі (--max-rows): повідомлення Telegram ≤ 4096 символів
 MAX_VISITS_PER_ROW = 3
 MAX_VIEWS_PER_ROW = 4
 
@@ -88,7 +86,14 @@ def expired_files(directory: str, now_ms: int, retention_days: int) -> List[str]
     return expired
 
 
-def render(digest: Digest, hours: int, tz: ZoneInfo, bad_lines: int, labels_problem: Optional[str]) -> str:
+def render(
+    digest: Digest,
+    hours: int,
+    tz: ZoneInfo,
+    bad_lines: int,
+    labels_problem: Optional[str],
+    max_rows: int = MAX_ROWS,
+) -> str:
     end_local = _local(digest.period_end_ms, tz)
     offset_h = int((end_local.utcoffset() or dt.timedelta()).total_seconds() // 3600)
     period = "добу" if hours == 24 else "%d год" % hours
@@ -106,9 +111,9 @@ def render(digest: Digest, hours: int, tz: ZoneInfo, bad_lines: int, labels_prob
         for title, group in (("Нові:", digest.new), ("Повернулись:", digest.returning)):
             if group:
                 lines.append(title)
-                lines.extend(_visitor_row(row, digest.period_end_ms, tz) for row in group[:MAX_ROWS])
-                if len(group) > MAX_ROWS:
-                    lines.append("…ще %d" % (len(group) - MAX_ROWS))
+                lines.extend(_visitor_row(row, digest.period_end_ms, tz) for row in group[:max_rows])
+                if len(group) > max_rows:
+                    lines.append("…ще %d" % (len(group) - max_rows))
     else:
         lines.append("Людей за період не було.")
     if digest.own_visits:
@@ -133,9 +138,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--hours", type=int, default=24)
     ap.add_argument("--now-ms", type=int, default=None)
     ap.add_argument("--apply-retention", action="store_true")
-    ap.add_argument("--telegram", action="store_true")
-    ap.add_argument("--env-file", default=".env")
+    ap.add_argument("--max-rows", type=int, default=MAX_ROWS)
     args = ap.parse_args(argv)
+    if args.max_rows < 1:
+        ap.error("--max-rows must be >= 1")
     try:
         policy = visitors_policy(load_system_config(args.config))
     except ValueError as exc:
@@ -153,20 +159,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     labels, labels_problem = load_labels(policy.dir)
     visitors = build_visitors(records, policy.human_min_session_s, policy.visit_gap_min)
     digest = summarize(visitors, records, (now_ms - args.hours * 3_600_000, now_ms), labels)
-    text = render(digest, args.hours, ZoneInfo(policy.display_tz), bad_lines, labels_problem)
-    print(text)
-    if args.telegram:
-        try:
-            load_env_secrets(env_path=args.env_file)
-        except OSError as exc:
-            print("VISITORS_TG_ENV_UNREADABLE path=%s err=%s" % (args.env_file, type(exc).__name__), file=sys.stderr)
-            return 3
-        try:
-            send_telegram(text, *telegram_credentials())
-        except NotifyError as exc:
-            print(str(exc), file=sys.stderr)
-            return 3
-        print("VISITORS_TG_SENT chars=%d" % len(text), file=sys.stderr)
+    print(render(digest, args.hours, ZoneInfo(policy.display_tz), bad_lines, labels_problem, args.max_rows))
     return 0
 
 

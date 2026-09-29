@@ -143,7 +143,7 @@ def test_visitors_policy_defaults_and_validation():
     policy = visitors_policy({"visitors": {"enabled": True, "dir": "/var/lib/x", "max_views_per_visit": 5}})
     assert (policy.enabled, policy.dir, policy.max_views_per_visit) == (True, "/var/lib/x", 5)
     assert (policy.retention_days, policy.human_min_session_s, policy.visit_gap_min, policy.display_tz) == (
-        365, 30, 30, "Europe/Kyiv")
+        365, 30, 30, "Europe/Prague")
     bad_sections = (
         [],
         {"enabled": "yes"},
