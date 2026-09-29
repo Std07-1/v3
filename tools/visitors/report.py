@@ -1,13 +1,16 @@
 """ADR-0105 S2: зведення відвідувачів із журналу WS-сервера — текст для власника (S3 шле його в Telegram).
 
     python -m tools.visitors.report [--config config.json] [--hours 24] [--now-ms <epoch ms>] [--apply-retention]
+        [--telegram [--env-file .env]]
 
 Читає всі збережені місяці `visitors.dir/sessions-YYYYMM.jsonl` («з нами з» і номер візиту — за всю історію) і
 `visitors.dir/labels.json` — мітки ключів за префіксом: {"a1f3": {"name": "Юра"}, "7c20": {"name": "мій ПК", "own": true}};
 own — свої пристрої, людьми не рахуються. Зіпсований рядок журналу зведення не валить, а рахується й згадується в тексті.
 --apply-retention видаляє місячні файли, що цілком старші за visitors.retention_days (кожен — рядком у stderr).
+--telegram — ще й надіслати зведення ботом сповіщень (S3, tools.visitors.notify; токен і чат з оточення або --env-file).
 
-Коди виходу: 0 — зведення надруковано; 2 — журнал вимкнено/нема каталогу або конфіг невалідний.
+Коди виходу: 0 — зведення надруковано (і доставлено, якщо --telegram); 2 — журнал вимкнено/нема каталогу або конфіг
+невалідний; 3 — зведення надруковано, але в Telegram не доставлено (причина в stderr, без секретів).
 """
 
 from __future__ import annotations
@@ -23,8 +26,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from core.config_loader import load_system_config
+from env_profile import load_env_secrets
 from runtime.visitors.journal import visitors_policy
 from tools.visitors.aggregate import DAY_MS, Digest, Visit, Visitor, build_visitors, summarize
+from tools.visitors.notify import NotifyError, send_telegram, telegram_credentials
 
 _SESSION_FILE_RE = re.compile(r"^sessions-(\d{4})(\d{2})\.jsonl$")
 MAX_ROWS = 20  # повідомлення Telegram ≤ 4096 символів
@@ -128,6 +133,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--hours", type=int, default=24)
     ap.add_argument("--now-ms", type=int, default=None)
     ap.add_argument("--apply-retention", action="store_true")
+    ap.add_argument("--telegram", action="store_true")
+    ap.add_argument("--env-file", default=".env")
     args = ap.parse_args(argv)
     try:
         policy = visitors_policy(load_system_config(args.config))
@@ -146,7 +153,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     labels, labels_problem = load_labels(policy.dir)
     visitors = build_visitors(records, policy.human_min_session_s, policy.visit_gap_min)
     digest = summarize(visitors, records, (now_ms - args.hours * 3_600_000, now_ms), labels)
-    print(render(digest, args.hours, ZoneInfo(policy.display_tz), bad_lines, labels_problem))
+    text = render(digest, args.hours, ZoneInfo(policy.display_tz), bad_lines, labels_problem)
+    print(text)
+    if args.telegram:
+        try:
+            load_env_secrets(env_path=args.env_file)
+        except OSError as exc:
+            print("VISITORS_TG_ENV_UNREADABLE path=%s err=%s" % (args.env_file, type(exc).__name__), file=sys.stderr)
+            return 3
+        try:
+            send_telegram(text, *telegram_credentials())
+        except NotifyError as exc:
+            print(str(exc), file=sys.stderr)
+            return 3
+        print("VISITORS_TG_SENT chars=%d" % len(text), file=sys.stderr)
     return 0
 
 
