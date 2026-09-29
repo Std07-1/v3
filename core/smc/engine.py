@@ -25,7 +25,13 @@ from core.smc.config import SmcConfig, SmcDisplayConfig
 from core.smc.context_stack import collect_htf_zones, tag_local_zones
 from core.smc.fvg import detect_fvg
 from core.smc.inducement import detect_inducement
-from core.smc.key_levels import KEY_LEVEL_KINDS, compute_key_levels, collect_htf_levels
+from core.smc.key_levels import (
+    KEY_LEVEL_KINDS,
+    collect_htf_levels,
+    compute_day_open,
+    compute_key_levels,
+    compute_week_levels,
+)
 from core.smc.liquidity import detect_liquidity_levels
 from core.smc.order_blocks import detect_order_blocks
 from core.smc.premium_discount import compute_pd_state, detect_premium_discount
@@ -524,7 +530,7 @@ class SmcEngine:
         """Рівні глядача TF — одне джерело для повного кадру й дельти (ADR-0104 §3.7, рішення 29.09).
 
         Кандидати всіх груп меню «Рівні»: EQ базового TF, key levels старших TF, сесії поточної й попередньої торгової
-        доби. `group` — рядок меню; `auto` — чи рядок типово увімкнений на цьому TF (config smc.level_defaults,
+        доби, попередній тиждень (PWH/PWL) і відкриття доби (DO, S3). `group` — рядок меню; `auto` — чи рядок типово увімкнений на цьому TF (config smc.level_defaults,
         Таблиця А). Без таблиці для TF `auto` лишається як є (сесії — S2a), решта рядків — без рішення.
         """
         base_tf = self._display_base_tf(viewer_tf_s)
@@ -538,6 +544,12 @@ class SmcEngine:
                     seen_ids.add(lv.id)
                     candidates.append(lv)
         candidates.extend(self.get_session_levels(symbol, current_time_ms))
+        # ADR-0104 S3: тиждень — на всіх TF; відкриття доби — нижче D1 (на D1 його видно як open свічки)
+        d1_state = self._states.get((symbol, 86400))
+        d1_bars = d1_state.bars_list() if d1_state is not None else []
+        candidates.extend(compute_week_levels(d1_bars))
+        if base_tf < 86400:
+            candidates.extend(compute_day_open(d1_bars, list(self._session_m1_bars.get(symbol) or ())))
         defaults = self._config.level_defaults.get(base_tf)
         return [self._with_menu_group(lv, defaults) for lv in candidates]
 

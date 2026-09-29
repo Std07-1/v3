@@ -87,7 +87,7 @@ def test_to_wire_with_contract_fields_emits_them():
 @pytest.mark.parametrize("contract", [
     {"family": "weekly"}, {"state": "live"}, {"tier": 0}, {"tier": 4},
     {"tier": True}, {"auto": 1}, {"auto": "yes"},  # True == 1: без звірки типу пройшли б словник
-    {"group": "sessions"}, {"group": "week"},
+    {"group": "sessions"}, {"group": "month"},  # month — ще не рахується (S7)
 ])
 def test_level_with_unknown_contract_value_raises(contract):
     with pytest.raises(ValueError, match="LEVEL_CONTRACT_INVALID"):

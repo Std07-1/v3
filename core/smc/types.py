@@ -98,6 +98,9 @@ LEVEL_KINDS = frozenset(
         "p_h1_l",
         "h1_h",
         "h1_l",  # H1
+        "pwh",
+        "pwl",  # ADR-0104 S3: попередній торговий тиждень
+        "do",  # ADR-0104 S3: відкриття торгової доби
         *SESSION_LEVEL_KINDS,  # ADR-0035: sessions
     }
 )
@@ -109,6 +112,7 @@ LEVEL_STATE_FORMING = "forming"  # період ще йде: поточний H/
 LEVEL_STATES = frozenset({LEVEL_STATE_FIXED, LEVEL_STATE_FORMING, "swept", "no_data"})  # swept — S8, no_data — S3
 LEVEL_SIDE_HIGH = "high"
 LEVEL_SIDE_LOW = "low"
+LEVEL_SIDE_OPEN = "open"  # ADR-0104 S3: відкриття періоду (DO) — не H і не L
 LEVEL_TIER_ANCHOR = 1  # завершені опорні H/L: день (далі тиждень, місяць)
 LEVEL_TIER_SESSION = 2  # завершені сесії, відкриття
 LEVEL_TIER_CONTEXT = 3  # рухомі, ліквідність, попередні H4/H1
@@ -117,6 +121,8 @@ LEVEL_TIERS = frozenset({LEVEL_TIER_ANCHOR, LEVEL_TIER_SESSION, LEVEL_TIER_CONTE
 # Кожен kind має групу — інакше рівень обійшов би меню.
 LEVEL_GROUP_BY_KIND = {
     **{kind: "day" for kind in ("pdh", "pdl", "dh", "dl")},
+    **{kind: "week" for kind in ("pwh", "pwl")},
+    "do": "open",
     **{kind: "h4" for kind in ("p_h4_h", "p_h4_l", "h4_h", "h4_l")},
     **{kind: "h1" for kind in ("p_h1_h", "p_h1_l", "h1_h", "h1_l")},
     **{kind: "asia" for kind in ("as_h", "as_l")},
@@ -707,10 +713,11 @@ def level_period(epoch_ms: int) -> str:
 def make_level_key(series: str, side: str, symbol: str, period: str) -> str:
     """ADR-0104 §3.2: key = "{series}:{side}:{symbol}:{period}".
 
-    series — ряд рівнів (d1 | h4 | h1 | asia | london | newyork | eq<tf_s>); side — high | low; period — `level_period()`
+    series — ряд рівнів (d1 | w1 | h4 | h1 | asia | london | newyork | eq<tf_s>); side — high | low | open (відкриття
+    періоду, S3); period — `level_period()`
     початку періоду або, для EQ-кластера, `level_price_key()`. Без kind і TF глядача: рухомий H/L періоду і він же
     завершений мають один key.
     """
-    if side not in (LEVEL_SIDE_HIGH, LEVEL_SIDE_LOW):
+    if side not in (LEVEL_SIDE_HIGH, LEVEL_SIDE_LOW, LEVEL_SIDE_OPEN):
         raise ValueError("LEVEL_KEY_SIDE_INVALID side=%r series=%s symbol=%s" % (side, series, symbol))
     return f"{series}:{side}:{symbol}:{period}"
