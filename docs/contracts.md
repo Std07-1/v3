@@ -259,14 +259,16 @@ F7 single-point format (не two-point segment).
 | Поле | Тип | Опис |
 |---|---|---|
 | `id` | string | `{kind}_{symbol}_{tf_s}_{price_int}` |
-| `kind` | string | `"eq_highs"`, `"eq_lows"`, `"pdh"`, `"pdl"`, `"dh"`, `"dl"`, `"h4_h"`, `"h4_l"`, `"h1_h"`, `"h1_l"`, `"p_h4_h"`, `"p_h4_l"`, `"p_h1_h"`, `"p_h1_l"`, + 12 session kinds (ADR-0035): `"as_h"`, `"as_l"`, `"p_as_h"`, `"p_as_l"`, `"lon_h"`, `"lon_l"`, `"p_lon_h"`, `"p_lon_l"`, `"ny_h"`, `"ny_l"`, `"p_ny_h"`, `"p_ny_l"` |
+| `kind` | string | `"eq_highs"`, `"eq_lows"`, `"pdh"`, `"pdl"`, `"dh"`, `"dl"`, `"h4_h"`, `"h4_l"`, `"h1_h"`, `"h1_l"`, `"p_h4_h"`, `"p_h4_l"`, `"p_h1_h"`, `"p_h1_l"`, + 12 session kinds (ADR-0035): `"as_h"`, `"as_l"`, `"p_as_h"`, `"p_as_l"`, `"lon_h"`, `"lon_l"`, `"p_lon_h"`, `"p_lon_l"`, `"ny_h"`, `"ny_l"`, `"p_ny_h"`, `"p_ny_l"`, + ADR-0104: `"pwh"`, `"pwl"` (попередній торговий тиждень), `"do"` (відкриття доби), `"wo"` (відкриття тижня), `"pmh"`, `"pml"` (попередній місяць). SSOT — `core/smc/types.py:LEVEL_KINDS`; кожен kind має стиль у `OverlayRenderer.ts:LEVEL_STYLES` (тест `test_smc_level_contract.py`) |
 | `price` | number | Рівень ціни |
 | `t_ms` | integer\|null | Epoch ms формування рівня (опціонально) |
 | `key` | string (опц.) | ADR-0104 §3.2: `{series}:{side}:{symbol}:{period}` — смислова ідентичність, спільна для рухомого й завершеного H/L одного періоду (`d1:high:XAU/USD:2026-09-24T21:00Z`); EQ — `eq<tf_s>:…:<price×100>` |
 | `family` | string (опц.) | `session` \| `day` \| `week` \| `month` \| `open` \| `htf` \| `liquidity` |
 | `state` | string (опц.) | `fixed` (період завершено) \| `forming` (іде) \| `swept` \| `no_data` |
 | `tier` | integer (опц.) | Важливість для розкладки: 1 — завершені опорні H/L (PDH/PDL), 2 — завершені сесії, 3 — рухомі, EQ, попередні H4/H1 |
-| `auto` | boolean (опц.) | ADR-0104: `false` — поза режимом «Авто» (Focus ховає, Research показує); зараз задається для сесій (попередня доба — `false`); немає поля — рішення не приймалось |
+| `group` | string (опц.) | ADR-0104 §3.7: рядок меню «Рівні» — `day` \| `week` \| `month` \| `open` \| `open_week` \| `asia` \| `london` \| `newyork` \| `sessions_prev` \| `h4` \| `h1` \| `liquidity` (SSOT `LEVEL_GROUP_BY_KIND`; кожен kind має групу, кожна група — один рядок меню) |
+| `auto` | boolean (опц.) | ADR-0104 §3.7: типовий стан рядка меню на TF глядача — з `config.json:smc.level_defaults.by_base_tf` (Таблиця А). Вибір трейдера в меню (per TF, localStorage) важить більше; немає поля — рішення не приймалось |
+| `proximity` | integer (опц.) | ADR-0104 §3.7: ранг близькості до ціни (close останнього M1): `+1` — найближча ціна вище, `-1` — нижче, далі `±2`…; однакові ціни ділять ранг; ніколи `0`. Focus бере найближчі 3 ціни на бік серед увімкнених, Research — усі увімкнені. Немає поля — ціни ще немає |
 
 ### PdStatePayload (WS wire, ADR-0041)
 
@@ -339,7 +341,7 @@ SMC поля — **на кореневому рівні frame**, не в `data` 
     "trend_bias": "bullish"
   },
   "narrative": NarrativeBlock,
-  "session_levels": [SmcLevel, ...],
+  "display_levels": [SmcLevel, ...],
   "zone_grades": {"ob_bull_...": {"score": 8, "grade": "A+", "factors": [...]}},
   "bias_map": {"86400": "bearish", "14400": "bearish"},
   "momentum_map": {"900": {"b": 3, "r": 1}},
@@ -348,7 +350,11 @@ SMC поля — **на кореневому рівні frame**, не в `data` 
 }
 ```
 
-> **Note**: `narrative` + `session_levels` з'являються в delta тільки на complete bars.
+> **Note**: `narrative` з'являється в delta тільки на complete bars.
+> `display_levels` (ADR-0104 §3.7) — у **кожній** delta: повний список рівнів глядача TF з того самого джерела, що й
+> `levels` full frame (`SmcEngine.get_display_levels`). UI **замінює** ним шар рівнів (`applyDisplayLevels`); сирі
+> `new_levels`/`removed_level_ids` зі `smc_delta` на показ не впливають. Поля немає — обчислення впало (runner пише
+> warning `SMC_DISPLAY_LEVELS_FAIL`), UI лишає останні рівні. Замінило `session_levels` (до 29.09.2026).
 > `zone_grades`, `bias_map`, `momentum_map`, `pd_state` — присутні у delta frame **тільки при complete bar** (`_any_complete=true`). Це "thick delta" (ADR-0042, DF-2): metadata оновлюється коли state реально змінюється.
 > Між complete bars metadata = stale від останнього full frame (прийнятно: M1 ≤1 хв, M5 ≤5 хв).
 > **Нові інваріанти (ADR-0042)**:
@@ -391,7 +397,7 @@ SMC поля — **на кореневому рівні frame**, не в `data` 
 - **S6**: Python `to_wire()` output === TypeScript interface fields
 - SMC не змінює OHLCV payload — це окремі поля в тому ж WS frame (flat structure, не під `data`)
 - `smc_delta` присутній тільки якщо `SmcDelta.has_changes == true`
-- `narrative` + `session_levels` — тільки на complete bars (delta) або у full frame
+- `narrative` — тільки на complete bars (delta) або у full frame; `display_levels` — у кожній delta (повна заміна шару рівнів)
 - `zone_grades`, `bias_map`, `momentum_map` — тільки у full frame
 - UI обробляє через `smcStore.applySmcFull()` (full frame) / `smcStore.applySmcDelta()` (delta frame)
 
