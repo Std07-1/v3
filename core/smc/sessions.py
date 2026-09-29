@@ -126,6 +126,19 @@ def _ms_to_day_start(epoch_ms: int) -> int:
 
 _WINTER_SHIFT_MS = 3_600_000  # узимку місцеві години біржі на 1 год пізніше за UTC, ніж улітку
 _MINUTE_MS = 60_000
+_DAY_MS = 86_400_000
+_EPOCH_WEEKDAY = 3  # 1970-01-01 — четвер (Пн = 0)
+# Скільки діб назад попередня торгова доба: Пн → Пт, Нд → Пт; решта (зокрема Сб) — учора
+_BACK_DAYS_TO_PREV_TRADING_DAY = {0: 3, 6: 2}
+
+
+def _previous_trading_day_start(day_start_ms: int) -> int:
+    """Північ попередньої торгової доби для доби `day_start_ms` — попередній будній день (ADR-0104, рішення 29.09).
+
+    Свято в будній день не пропускається: його сесій немає, і рівнів «вчора» тоді немає, а не позавчорашні (§3.6).
+    """
+    weekday = (day_start_ms // _DAY_MS + _EPOCH_WEEKDAY) % 7
+    return day_start_ms - _BACK_DAYS_TO_PREV_TRADING_DAY.get(weekday, 1) * _DAY_MS
 
 
 def _session_clock_ms(epoch_ms: int, sw: SessionWindow) -> int:
@@ -238,7 +251,13 @@ def compute_session_levels(
         act_h_kind, act_l_kind, prev_h_kind, prev_l_kind = kinds
         # Межа current/previous — доба на годиннику сесії (узимку зсунутому), як і належність бару до вікна
         current_day_start = _ms_to_day_start(_session_clock_ms(current_time_ms, sw))
-        prev_day_start = current_day_start - 86400_000
+        prev_day_start = _previous_trading_day_start(current_day_start)
+        # Буфер M1 обмежений кількістю барів: якщо він починається після відкриття попередньої сесії, її H/L
+        # порахувався б з обрізаного вікна — такий рівень не видаємо
+        prev_covered = bars[0].open_time_ms <= _session_open_ms(prev_day_start, sw)
+        if not prev_covered:
+            _log.debug("SESSION_PREV_UNCOVERED session=%s symbol=%s first_bar_ms=%d prev_open_ms=%d",
+                       sw.name, symbol, bars[0].open_time_ms, _session_open_ms(prev_day_start, sw))
 
         # Determine if session is currently active + killzone
         is_active = _bar_in_session(current_time_ms, sw)
@@ -270,8 +289,8 @@ def compute_session_levels(
                     cur_low = bar.low
                 if cur_start_ms is None:
                     cur_start_ms = bar.open_time_ms
-            elif bar_day >= prev_day_start:
-                # Yesterday's session = previous (locked)
+            elif prev_covered and prev_day_start <= bar_day < prev_day_start + _DAY_MS:
+                # Сесія попередньої торгової доби = previous (locked)
                 if prev_high is None or bar.h > prev_high:
                     prev_high = bar.h
                 if prev_low is None or bar.low < prev_low:
