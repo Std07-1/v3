@@ -25,7 +25,7 @@ from core.smc.config import SmcConfig, SmcDisplayConfig
 from core.smc.context_stack import collect_htf_zones, tag_local_zones
 from core.smc.fvg import detect_fvg
 from core.smc.inducement import detect_inducement
-from core.smc.key_levels import compute_key_levels, collect_htf_levels
+from core.smc.key_levels import KEY_LEVEL_KINDS, compute_key_levels, collect_htf_levels
 from core.smc.liquidity import detect_liquidity_levels
 from core.smc.order_blocks import detect_order_blocks
 from core.smc.premium_discount import compute_pd_state, detect_premium_discount
@@ -39,6 +39,7 @@ from core.smc.types import (
     SmcSnapshot,
     SmcSwing,
     SmcZone,
+    LEVEL_GROUP_BY_KIND,
     SESSION_LEVEL_KINDS,
 )
 
@@ -527,6 +528,37 @@ class SmcEngine:
             return []
         return [lv for lv in self.get_session_levels(symbol, current_time_ms) if lv.kind in allowed]
 
+    _EQ_KINDS = frozenset({"eq_highs", "eq_lows"})
+    _HTF_KEY_LEVEL_TFS = (86400, 14400, 3600)  # D1 → H4 → H1 (key levels рахуються лише тут)
+
+    def get_display_levels(self, symbol: str, viewer_tf_s: int, current_time_ms: int) -> List[SmcLevel]:
+        """Рівні глядача TF — одне джерело для повного кадру й дельти (ADR-0104 §3.7, рішення 29.09).
+
+        Кандидати всіх груп меню «Рівні»: EQ базового TF, key levels старших TF, сесії поточної й попередньої торгової
+        доби. `group` — рядок меню; `auto` — чи рядок типово увімкнений на цьому TF (config smc.level_defaults,
+        Таблиця А). Без таблиці для TF `auto` лишається як є (сесії — S2a), решта рядків — без рішення.
+        """
+        base_tf = self._display_base_tf(viewer_tf_s)
+        candidates = [lv for lv in self.get_snapshot(symbol, base_tf).levels if lv.kind in self._EQ_KINDS]
+        seen_ids = set()  # type: set
+        for htf_s in self._HTF_KEY_LEVEL_TFS:
+            if htf_s <= base_tf:
+                continue  # власна попередня свічка глядача видна на графіку
+            for lv in self.get_snapshot(symbol, htf_s).levels:
+                if lv.kind in KEY_LEVEL_KINDS and lv.id not in seen_ids:
+                    seen_ids.add(lv.id)
+                    candidates.append(lv)
+        candidates.extend(self.get_session_levels(symbol, current_time_ms))
+        defaults = self._config.level_defaults.get(base_tf)
+        return [self._with_menu_group(lv, defaults) for lv in candidates]
+
+    @staticmethod
+    def _with_menu_group(level: SmcLevel, defaults: Optional[frozenset]) -> SmcLevel:
+        """Рівень + рядок меню і його типовий стан; kind без групи — KeyError (контракт: кожен kind має рядок)."""
+        group = LEVEL_GROUP_BY_KIND[level.kind]
+        auto = (group in defaults) if defaults is not None else level.auto
+        return dataclasses.replace(level, group=group, auto=auto)
+
     def get_session_states(self, symbol: str, current_time_ms: int):
         """Get session states for narrative. Returns list of SessionState."""
         if not self._session_windows or not self._config.sessions.enabled:
@@ -858,33 +890,13 @@ class SmcEngine:
                 # else: keep base_zones as-is
             # else: keep base_zones as-is
 
-        # 6. Key levels: curated display (only HTF levels trader can't read)
-        # Base snap already has EQ levels (eq_highs/eq_lows) from base_tf.
-        # Key levels (PDH/PDL etc) come from HTF snapshots, filtered by allow-set.
-        allowed = self._KEY_LEVEL_ALLOW.get(base_tf, frozenset())
-        merged_levels = []  # type: List[SmcLevel]
-        # Keep EQ levels from base snapshot (already capped by max_levels config)
-        for lv in snap.levels:
-            if lv.kind in ("eq_highs", "eq_lows"):
-                merged_levels.append(lv)
-        # Inject allowed HTF key levels
-        if allowed:
-            seen_ids = set()  # type: set
-            for htf_s in [86400, 14400, 3600]:  # D1 → H4 → H1
-                if htf_s <= base_tf:
-                    continue
-                htf_snap = self.get_snapshot(symbol, htf_s)
-                for lv in htf_snap.levels:
-                    if lv.kind in allowed and lv.id not in seen_ids:
-                        seen_ids.add(lv.id)
-                        merged_levels.append(lv)
-
-        # 6b. ADR-0035: session H/L levels — той самий фільтр, що й у дельті ws_server
-        merged_levels.extend(self.get_display_session_levels(symbol, viewer_tf_s, int(time.time() * 1000)))
+        # 6. Рівні: кандидати всіх груп меню «Рівні» — те саме джерело, що й дельта ws_server
+        merged_levels = self.get_display_levels(symbol, viewer_tf_s, int(time.time() * 1000))
 
         # 7. Confluence scoring (ADR-0029 E5: after cross-TF injection)
         #    bars/last_bar/atr already computed in step 5 (same guard).
         zone_grades = {}  # type: Dict[str, dict]
+        scoring_allow = self._KEY_LEVEL_ALLOW.get(base_tf, frozenset())
         if state is not None and state.bars_list() and atr > 0:
             conf_cfg = self._config.confluence.to_scoring_dict()
             swing_dicts = [
@@ -917,11 +929,12 @@ class SmcEngine:
                             hw = hz.to_wire()
                             hw["anchor_bar_ms"] = hz.anchor_bar_ms
                             htf_ctx.append(hw)
-                    # ADR-0035 F9: session level wires for confluence scoring
+                    # ADR-0035 F9: сесійні рівні для оцінки — за політикою TF (_KEY_LEVEL_ALLOW), а не за типовими
+                    # меню «Рівні»: вмикач трейдера не змінює grade зони
                     session_lv_wires = [
                         lv.to_wire()
                         for lv in merged_levels
-                        if lv.kind in SESSION_LEVEL_KINDS
+                        if lv.kind in SESSION_LEVEL_KINDS and lv.kind in scoring_allow
                     ]
                     result = score_zone_confluence(
                         zone=z_wire,

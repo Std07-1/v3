@@ -8,7 +8,24 @@ S5: параметри алгоритмів тільки з config, без hardc
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Dict, Optional
+from typing import Any, Dict, FrozenSet, Optional
+
+from core.smc.types import LEVEL_GROUPS
+
+
+def _parse_level_defaults(d: Dict[str, Any]) -> Dict[int, FrozenSet[str]]:
+    """ADR-0104 §3.7 (рішення 29.09, Таблиця А): базовий TF глядача → групи меню «Рівні», типово увімкнені.
+
+    Невідома група — гучна помилка при старті, а не рядок меню, що мовчки ніколи не вмикається.
+    """
+    defaults: Dict[int, FrozenSet[str]] = {}
+    for tf_key, groups in (d.get("by_base_tf") or {}).items():
+        unknown = set(groups) - LEVEL_GROUPS
+        if unknown:
+            raise ValueError("LEVEL_DEFAULTS_GROUP_INVALID tf=%s groups=%s (allowed: %s)"
+                             % (tf_key, sorted(unknown), sorted(LEVEL_GROUPS)))
+        defaults[int(tf_key)] = frozenset(groups)
+    return defaults
 
 
 @dataclasses.dataclass
@@ -451,6 +468,8 @@ class SmcConfig:
     range_exhaustion: SmcRangeExhaustionConfig = dataclasses.field(
         default_factory=SmcRangeExhaustionConfig
     )
+    # ADR-0104 §3.7: базовий TF → типово увімкнені групи меню «Рівні»; порожньо — `auto` не задається (UI показує все)
+    level_defaults: Dict[int, FrozenSet[str]] = dataclasses.field(default_factory=dict)
 
     # tf_overrides: raw dict from config.json, keyed by str(tf_s)
     _tf_overrides: Dict[str, Dict[str, Any]] = dataclasses.field(
@@ -538,6 +557,7 @@ class SmcConfig:
             range_exhaustion=SmcRangeExhaustionConfig.from_dict(
                 d.get("range_exhaustion", {})
             ),
+            level_defaults=_parse_level_defaults(d.get("level_defaults", {})),
             _tf_overrides=d.get("tf_overrides", {}),
         )
 

@@ -695,6 +695,16 @@
         }
       }
     },
+    "level_defaults": {
+      "_comment": "ADR-0104 §3.7, рішення 29.09 (Таблиця А): групи меню «Рівні», типово увімкнені за базовим TF глядача (M1/M3/M5 → 300, M30/H1 → 3600). Решта груп приходять як кандидати з auto=false — трейдер вмикає їх окремо на кожному TF. Групи: day, h4, h1, asia, london, newyork, sessions_prev, liquidity. Без цього блоку auto не задається і UI показує все, як до ADR-0104.",
+      "by_base_tf": {
+        "86400": ["liquidity"],
+        "14400": ["day", "liquidity"],
+        "3600": ["day", "asia", "london", "newyork", "liquidity"],
+        "900": ["day", "asia", "london", "newyork", "liquidity"],
+        "300": ["day", "asia", "london", "newyork", "liquidity"]
+      }
+    },
     "sessions": {
       "_comment": "ADR-0035 + ADR-0104 S0: open_utc/close_utc/killzone_* — хвилини UTC у ЛІТНІЙ сезон правила сесії; узимку місцеві години біржі на 1 год пізніше за UTC (Лондон — season_rule eu, Нью-Йорк — us, Азія/Токіо — none, без переходу). Лондон 08:00–17:00 London, Нью-Йорк 08:00–17:00 NY, Азія 09:00–16:00 Tokyo.",
       "enabled": true,
