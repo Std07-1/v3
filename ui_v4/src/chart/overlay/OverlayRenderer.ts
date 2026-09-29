@@ -66,6 +66,9 @@ const LEVEL_STYLES: Record<string, LevelStyle> & { _default: LevelStyle } = {
   pwl: { color: '#888888', dash: [8, 4], width: 1.0, alpha: 0.80, label: 'PWL', fontSize: 9 },
   do: { color: '#616161', dash: [4, 4], width: 0.5, alpha: 0.80, label: 'DO', fontSize: 9, labelColor: '#9e9e9e' },
   wo: { color: '#616161', dash: [10, 6], width: 0.5, alpha: 0.80, label: 'WO', fontSize: 9, labelColor: '#9e9e9e' },
+  // ADR-0104 S7: ПРОПОЗИЦІЯ вигляду місяця (у документах його немає) — чекає рішення власника, до нього не деплоїти
+  pmh: { color: '#888888', dash: [14, 4], width: 1.5, alpha: 0.80, label: 'PMH', fontSize: 9 },
+  pml: { color: '#888888', dash: [14, 4], width: 1.5, alpha: 0.80, label: 'PML', fontSize: 9 },
   // Liquidity (EQ Highs/Lows) — red/green
   eq_highs: { color: '#e91e63', dash: [2, 2], width: 1.0, alpha: 0.75, label: 'EQH', fontSize: 10 },
   eq_lows: { color: '#4caf50', dash: [2, 2], width: 1.0, alpha: 0.75, label: 'EQL', fontSize: 10 },
@@ -964,7 +967,7 @@ export class OverlayRenderer {
     }
 
     // ── 2. Порядок (без обрізання): денні → вчорашні сесії → близькість; перший у групі злиття дає стиль підпису ──
-    const D1_KINDS = new Set(['pdh', 'pdl', 'dh', 'dl', 'pwh', 'pwl']); // опорні H/L: день і тиждень (ADR-0026 L4)
+    const D1_KINDS = new Set(['pdh', 'pdl', 'dh', 'dl', 'pwh', 'pwl', 'pmh', 'pml']); // опорні H/L: день, тиждень, місяць (ADR-0026 L4)
     const PREV_SESSION = new Set(['p_as_h', 'p_as_l', 'p_lon_h', 'p_lon_l', 'p_ny_h', 'p_ny_l']);
     scored.sort((a, b) => {
       const ak = a.lvl.kind ?? '';

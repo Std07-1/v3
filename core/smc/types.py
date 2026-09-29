@@ -102,6 +102,8 @@ LEVEL_KINDS = frozenset(
         "pwl",  # ADR-0104 S3: попередній торговий тиждень
         "do",  # ADR-0104 S3: відкриття торгової доби
         "wo",  # ADR-0104 S7: відкриття торгового тижня
+        "pmh",
+        "pml",  # ADR-0104 S7: попередній календарний місяць торгових діб
         *SESSION_LEVEL_KINDS,  # ADR-0035: sessions
     }
 )
@@ -123,6 +125,7 @@ LEVEL_TIERS = frozenset({LEVEL_TIER_ANCHOR, LEVEL_TIER_SESSION, LEVEL_TIER_CONTE
 LEVEL_GROUP_BY_KIND = {
     **{kind: "day" for kind in ("pdh", "pdl", "dh", "dl")},
     **{kind: "week" for kind in ("pwh", "pwl")},
+    **{kind: "month" for kind in ("pmh", "pml")},
     "do": "open",
     "wo": "open_week",
     **{kind: "h4" for kind in ("p_h4_h", "p_h4_l", "h4_h", "h4_l")},

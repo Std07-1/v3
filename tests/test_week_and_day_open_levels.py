@@ -13,7 +13,7 @@ import pathlib
 from core.model.bars import CandleBar
 from core.smc.config import SmcConfig
 from core.smc.engine import SmcEngine
-from core.smc.key_levels import compute_day_open, compute_week_levels, compute_week_open
+from core.smc.key_levels import compute_day_open, compute_month_levels, compute_week_levels, compute_week_open
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 _SYM = "XAU/USD"
@@ -146,3 +146,40 @@ def test_week_open_is_offered_below_d1_and_off_by_default():
     m15 = {lv.kind: lv for lv in engine.get_display_levels(_SYM, 900, now)}
     assert (m15["wo"].group, m15["wo"].auto, m15["wo"].price) == ("open_week", False, 4262.5)
     assert "wo" not in {lv.kind for lv in engine.get_display_levels(_SYM, 86400, now)}
+
+
+# ── S7: попередній місяць (PMH/PML) ──
+
+def _month_fixture():
+    july_last = _d1("2026-07-30 21:00", 3900, 3850)          # торгова дата пт 31.07 — липень
+    august_stub = _d1("2026-07-31 21:00", 9999, 1)            # огризок: торгова дата сб 01.08 — не входить
+    august = [_d1("2026-08-02 21:00", 4000, 3950), _d1("2026-08-17 21:00", 4100, 3980),
+              _d1("2026-08-27 21:00", 4050, 3900)]            # пн 03.08, вт 18.08, пт 28.08
+    september = [_d1("2026-08-31 21:00", 4200, 4150), _d1("2026-09-28 21:00", 4150, 4100)]  # вт 01.09, вт 29.09
+    return [july_last, august_stub] + august + september
+
+
+def test_previous_month_is_the_calendar_month_before_the_current_trading_date():
+    levels = compute_month_levels(_month_fixture())
+    assert _prices(levels) == {"pmh": 4100, "pml": 3900}
+    pmh, pml = levels
+    assert pmh.key == "mn1:high:XAU/USD:2026-08-01T00:00Z" and (pmh.family, pmh.state, pmh.tier) == ("month", "fixed", 1)
+    assert pmh.time_ms == _ms("2026-08-17 21:00") and pml.time_ms == _ms("2026-08-27 21:00")
+
+
+def test_january_takes_december_of_the_previous_year():
+    bars = [_d1("2026-12-14 22:00", 4300, 4200), _d1("2027-01-04 22:00", 4400, 4350)]
+    assert _prices(compute_month_levels(bars)) == {"pmh": 4300, "pml": 4200}
+
+
+def test_missing_previous_month_gives_no_levels():
+    assert compute_month_levels([_d1("2026-06-15 21:00", 3800, 3700), _d1("2026-09-28 21:00", 4150, 4100)]) == []
+
+
+def test_month_is_offered_on_every_tf_and_on_by_default_only_on_d1_h4():
+    cfg = json.loads((REPO / "config.json").read_text(encoding="utf-8"))["smc"]
+    engine = SmcEngine(SmcConfig.from_dict(cfg))
+    engine.update(_SYM, 86400, _month_fixture())
+    now = _ms("2026-09-30 09:00")
+    auto = {tf: {lv.kind: lv.auto for lv in engine.get_display_levels(_SYM, tf, now)} for tf in (86400, 14400, 900)}
+    assert (auto[86400]["pmh"], auto[14400]["pmh"], auto[900]["pmh"]) == (True, True, False)

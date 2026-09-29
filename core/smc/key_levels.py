@@ -23,6 +23,8 @@ Python 3.7 compatible.
 """
 from __future__ import annotations
 
+import calendar
+import time
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from core.model.bars import CandleBar
@@ -152,6 +154,7 @@ _DAY_MS = 86_400_000
 _TRADING_DATE_SHIFT_MS = 3 * 3_600_000
 _EPOCH_WEEKDAY = 3  # 1970-01-01 — четвер (Пн = 0)
 _WEEK_ID_TF_S = 7 * 86_400  # «TF» в id тижневих рівнів — щоб id не збігся з D1
+_MONTH_ID_TF_S = 30 * 86_400  # «TF» в id місячних рівнів
 
 
 def _trading_date_ms(boundary_ms: int) -> int:
@@ -266,6 +269,53 @@ def compute_week_open(d1_bars: List[CandleBar], m1_bars: List[CandleBar]) -> Lis
             state=LEVEL_STATE_FIXED,
             tier=LEVEL_TIER_SESSION,
         )
+    ]
+
+
+def _year_month(date_ms: int) -> Tuple[int, int]:
+    tm = time.gmtime(date_ms // 1000)
+    return tm.tm_year, tm.tm_mon
+
+
+def compute_month_levels(d1_bars: List[CandleBar]) -> List[SmcLevel]:
+    """PMH/PML — H/L попереднього календарного місяця торгових діб (Пн–Пт) з завершених барів D1 (ADR-0104 S7).
+
+    Поточний місяць задає торгова дата доби, що триває (закриття останньої завершеної D1). Сб/Нд-огризки не входять
+    у жоден місяць. Барів попереднього місяця немає — рівнів немає (§3.6).
+    """
+    completed = [b for b in d1_bars if b.complete]
+    if not completed:
+        return []
+    year, month = _year_month(_trading_date_ms(completed[-1].close_time_ms))
+    previous = (year, month - 1) if month > 1 else (year - 1, 12)
+
+    def in_previous_month(bar: CandleBar) -> bool:
+        date_ms = _trading_date_ms(bar.open_time_ms)
+        is_weekday = (date_ms // _DAY_MS + _EPOCH_WEEKDAY) % 7 < 5
+        return is_weekday and _year_month(date_ms) == previous
+
+    days = [b for b in completed if in_previous_month(b)]
+    if not days:
+        return []
+    high_bar = max(days, key=lambda b: b.h)
+    low_bar = min(days, key=lambda b: b.low)
+    period = level_period(calendar.timegm((previous[0], previous[1], 1, 0, 0, 0)) * 1000)
+    return [
+        SmcLevel(
+            id=make_level_id(kind, bar.symbol, _MONTH_ID_TF_S, price),
+            symbol=bar.symbol,
+            tf_s=_MONTH_ID_TF_S,
+            kind=kind,
+            price=price,
+            time_ms=bar.open_time_ms,  # лінія — від свічки D1, що дала екстремум місяця
+            touches=1,
+            key=make_level_key("mn1", side, bar.symbol, period),
+            family="month",
+            state=LEVEL_STATE_FIXED,
+            tier=LEVEL_TIER_ANCHOR,
+        )
+        for kind, side, bar, price in (("pmh", LEVEL_SIDE_HIGH, high_bar, high_bar.h),
+                                       ("pml", LEVEL_SIDE_LOW, low_bar, low_bar.low))
     ]
 
 
