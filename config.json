@@ -444,10 +444,14 @@
     "cors_allowed_origins": []
   },
   "visitors": {
-    "_comment": "ADR-0105 S1: журнал візитів WS-сервера — один рядок JSONL на сесію у dir/sessions-YYYYMM.jsonl. Ключ відвідувача — випадковий рядок у HttpOnly-cookie aione_vid на шляху /ws, який видає сервер (у URL і логах nginx його нема). Пишуться лише ключ, час, країна (CF-IPCountry), клас пристрою з User-Agent, переглянуті символ:TF; IP не пишеться. dir створює ops з власником процесу ws (сервер каталог не створює: нема каталогу = журнал вимкнено з WARNING на старті). max_views_per_visit — скільки переглядів символ:TF зберігати в одному візиті, решта лише рахується.",
+    "_comment": "ADR-0105 S1: журнал візитів WS-сервера — один рядок JSONL на сесію у dir/sessions-YYYYMM.jsonl. Ключ відвідувача — випадковий рядок у HttpOnly-cookie aione_vid на шляху /ws, який видає сервер (у URL і логах nginx його нема). Пишуться лише ключ, час, країна (CF-IPCountry), клас пристрою з User-Agent, переглянуті символ:TF; IP не пишеться. dir створює ops з власником процесу ws (сервер каталог не створює: нема каталогу = журнал вимкнено з WARNING на старті). max_views_per_visit — скільки переглядів символ:TF зберігати в одному візиті, решта лише рахується. Зведення (tools.visitors.report, S2): retention_days — скільки діб зберігати місячні файли (--apply-retention видаляє цілком старші місяці); human_min_session_s — сесія з небот-UA людська, якщо довша за це або має ≥2 перегляди (одне перемикання UI робить сам); visit_gap_min — сесії одного ключа з паузою не довшою за це = один візит (перепідключення, вкладки); display_tz — часова зона часу у зведенні.",
     "enabled": true,
     "dir": "/var/lib/smc-v3/visitors",
-    "max_views_per_visit": 20
+    "max_views_per_visit": 20,
+    "retention_days": 365,
+    "human_min_session_s": 30,
+    "visit_gap_min": 30,
+    "display_tz": "Europe/Kyiv"
   },
   "agent_bridge": {
     "enabled": false,

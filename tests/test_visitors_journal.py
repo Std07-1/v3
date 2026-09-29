@@ -142,7 +142,18 @@ def test_visitors_policy_defaults_and_validation():
     assert visitors_policy({}).enabled is False
     policy = visitors_policy({"visitors": {"enabled": True, "dir": "/var/lib/x", "max_views_per_visit": 5}})
     assert (policy.enabled, policy.dir, policy.max_views_per_visit) == (True, "/var/lib/x", 5)
-    for bad in ([], {"enabled": "yes"}, {"enabled": True, "dir": ""}, {"enabled": True, "dir": "/x", "max_views_per_visit": 0}):
+    assert (policy.retention_days, policy.human_min_session_s, policy.visit_gap_min, policy.display_tz) == (
+        365, 30, 30, "Europe/Kyiv")
+    bad_sections = (
+        [],
+        {"enabled": "yes"},
+        {"enabled": True, "dir": ""},
+        {"enabled": True, "dir": "/x", "max_views_per_visit": 0},
+        {"enabled": True, "dir": "/x", "retention_days": 7},
+        {"enabled": True, "dir": "/x", "visit_gap_min": True},
+        {"enabled": True, "dir": "/x", "display_tz": ""},
+    )
+    for bad in bad_sections:
         with pytest.raises(ValueError, match="CONFIG_VISITORS_INVALID"):
             visitors_policy({"visitors": bad})
 

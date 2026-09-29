@@ -16,7 +16,7 @@ import logging
 import os
 import re
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field, fields
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 _log = logging.getLogger(__name__)
@@ -59,30 +59,50 @@ _MOBILE_OS = frozenset({"iOS", "iPadOS", "Android"})
 
 @dataclass(frozen=True)
 class VisitorsPolicy:
-    """config.json → visitors (ADR-0105)."""
+    """config.json → visitors (ADR-0105). Дефолти тут = значення в config.json."""
 
     enabled: bool
     dir: str
-    max_views_per_visit: int
+    max_views_per_visit: int = 20
+    retention_days: int = 365
+    human_min_session_s: int = 30
+    visit_gap_min: int = 30
+    display_tz: str = "Europe/Kyiv"
+
+
+# Мінімуми цілих полів: відсікають безглузді налаштування (ретеншн коротший за місяць зведення не порахує)
+_POLICY_INT_MINIMUMS: Dict[str, int] = {
+    "max_views_per_visit": 1,
+    "retention_days": 30,
+    "human_min_session_s": 1,
+    "visit_gap_min": 1,
+}
 
 
 def visitors_policy(cfg: Mapping[str, Any]) -> VisitorsPolicy:
     """Розбирає секцію `visitors`; немає секції = вимкнено. Невалідна секція → ValueError."""
     section = cfg.get("visitors")
     if section is None:
-        return VisitorsPolicy(enabled=False, dir="", max_views_per_visit=0)
+        return VisitorsPolicy(enabled=False, dir="")
     if not isinstance(section, Mapping):
         raise ValueError("CONFIG_VISITORS_INVALID: visitors must be an object")
+    defaults = {f.name: f.default for f in fields(VisitorsPolicy) if f.default is not MISSING}
     enabled = section.get("enabled", False)
     directory = section.get("dir", "")
-    max_views = section.get("max_views_per_visit", 20)
+    display_tz = section.get("display_tz", defaults["display_tz"])
     if not isinstance(enabled, bool):
         raise ValueError("CONFIG_VISITORS_INVALID: enabled must be bool")
     if not isinstance(directory, str) or (enabled and not directory):
         raise ValueError("CONFIG_VISITORS_INVALID: dir must be a non-empty string")
-    if isinstance(max_views, bool) or not isinstance(max_views, int) or max_views < 1:
-        raise ValueError("CONFIG_VISITORS_INVALID: max_views_per_visit must be int >= 1")
-    return VisitorsPolicy(enabled=enabled, dir=directory, max_views_per_visit=max_views)
+    if not isinstance(display_tz, str) or not display_tz:
+        raise ValueError("CONFIG_VISITORS_INVALID: display_tz must be a non-empty string")
+    ints: Dict[str, int] = {}
+    for name, minimum in _POLICY_INT_MINIMUMS.items():
+        value = section.get(name, defaults[name])
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise ValueError("CONFIG_VISITORS_INVALID: %s must be int >= %d" % (name, minimum))
+        ints[name] = value
+    return VisitorsPolicy(enabled=enabled, dir=directory, display_tz=display_tz, **ints)
 
 
 def classify_device(user_agent: str) -> Dict[str, Any]:
