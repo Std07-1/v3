@@ -598,6 +598,7 @@
       "focus_budget_per_side": 3,
       "focus_budget_total": 12,
       "structure_label_max": 4,
+      "focus_levels_per_side": 3,
       "fvg_display_cap": 6,
       "fvg_ob_overlap_hide": false,
       "max_display_fractals": 30

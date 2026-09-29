@@ -118,6 +118,7 @@ from runtime.ws.app_keys import (  # noqa: E402
     APP_CORS_ORIGINS,
     APP_D1_TICK_RELAY_TFS,
     APP_DELTA_POLL_S,
+    APP_DISPLAY_BUDGET,
     APP_FULL_CONFIG,
     APP_GLOBAL_DELTA_TASK,
     APP_HEARTBEAT_S,
@@ -716,6 +717,8 @@ def _build_full_frame(
             "symbols": cfg.get("symbols", []),
             "tfs": tf_labels,
         }
+        if APP_DISPLAY_BUDGET in app:
+            meta["config"]["display_budget"] = app[APP_DISPLAY_BUDGET]
     frame = {
         "type": "render_frame",
         "frame_type": "full",
@@ -817,16 +820,28 @@ def _build_config_frame(
     symbols = cfg.get("symbols", [])
     default_symbol = session.symbol or (symbols[0] if symbols else "XAU/USD")
     default_tf = _TF_S_TO_LABEL.get(session.tf_s or 1800, "M30")
+    config: Dict[str, Any] = {
+        "symbols": symbols,
+        "tfs": tf_labels,
+        "default_symbol": default_symbol,
+        "default_tf": default_tf,
+    }
+    if APP_DISPLAY_BUDGET in app:
+        config["display_budget"] = app[APP_DISPLAY_BUDGET]
     return {
         "type": "render_frame",
         "frame_type": "config",
-        "config": {
-            "symbols": symbols,
-            "tfs": tf_labels,
-            "default_symbol": default_symbol,
-            "default_tf": default_tf,
-        },
+        "config": config,
         "meta": _build_meta(session, app=app),
+    }
+
+
+def _display_budget_wire(display: Any) -> Dict[str, int]:
+    """Бюджет Focus для UI (ADR-0028 v2 §3.4) — з розібраного SmcDisplayConfig, яким працює рушій."""
+    return {
+        "zones_per_side": int(display.focus_budget_per_side),
+        "structure_max": int(display.structure_label_max),
+        "levels_per_side": int(display.focus_levels_per_side),
     }
 
 
@@ -2404,6 +2419,7 @@ def build_app(
             _smc_cfg = SmcConfig.from_dict(_smc_section)
             _smc_engine = SmcEngine(_smc_cfg)
             app[APP_SMC_RUNNER] = cast(Any, SmcRunner(full_cfg, _smc_engine))
+            app[APP_DISPLAY_BUDGET] = _display_budget_wire(_smc_cfg.display)
             _log.info(
                 "WS_SMC_RUNNER_INIT lookback=%d swing_period=%d",
                 _smc_cfg.lookback_bars,

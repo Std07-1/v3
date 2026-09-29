@@ -221,6 +221,8 @@ class SmcDisplayConfig:
     focus_budget_per_side: int = 3  # max zones per side (supply/demand) in Focus mode
     focus_budget_total: int = 12  # hard cap on ALL SMC objects in Focus mode
     structure_label_max: int = 4  # max structure labels (BOS/CHoCH) in Focus mode
+    # ADR-0104 §3.7: рівні у Focus — найближчі N цін на бік серед увімкнених у меню; поза focus_budget_total
+    focus_levels_per_side: int = 3
     fvg_display_cap: int = 4  # server-side cap on FVG zones
     fvg_ob_overlap_hide: bool = True  # ADR-0033 SC-2: hide FVG overlapping active OB
 
@@ -237,6 +239,7 @@ class SmcDisplayConfig:
             focus_budget_per_side=int(d.get("focus_budget_per_side", 3)),
             focus_budget_total=int(d.get("focus_budget_total", 12)),
             structure_label_max=int(d.get("structure_label_max", 4)),
+            focus_levels_per_side=int(d.get("focus_levels_per_side", 3)),
             fvg_display_cap=int(d.get("fvg_display_cap", 4)),
             fvg_ob_overlap_hide=bool(d.get("fvg_ob_overlap_hide", True)),
         )
