@@ -24,7 +24,8 @@
   import { setupLongPressCrosshairLock } from "../chart/longPressLock";
   import { dismissOnOutside } from "../lib/actions/dismissOnOutside";
   import { OverlayRenderer } from "../chart/overlay/OverlayRenderer";
-  import type { DisplayMode } from "../chart/overlay/DisplayBudget";
+  import { DEFAULT_BUDGET, type DisplayMode } from "../chart/overlay/DisplayBudget";
+  import { serverConfig } from "../app/frameRouter";
   import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
   import { ArchiLayerRenderer } from "../chart/archi/ArchiLayerRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
@@ -673,6 +674,10 @@
   // ADR-0028 Φ0: display mode effect
   $effect(() => {
     overlayRenderer?.setDisplayMode(displayMode);
+  });
+  // ADR-0028 v2 §3.4: бюджет Focus — з сервера (config.json:smc.display); до першого кадру конфігу — типовий
+  $effect(() => {
+    overlayRenderer?.setBudgetConfig($serverConfig.displayBudget ?? DEFAULT_BUDGET);
   });
 
   // N3: persist toggles to localStorage

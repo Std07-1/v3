@@ -5,6 +5,7 @@
 
 import { writable, get } from 'svelte/store';
 import type { RenderFrame, UiWarning } from '../types';
+import { parseDisplayBudget, type BudgetConfig } from '../chart/overlay/DisplayBudget';
 import { diagStore } from './diagState';
 
 const SUPPORTED_SCHEMA = 'ui_v4_v2';
@@ -22,6 +23,8 @@ export const currentPair = writable<{ symbol: string; tf: string } | null>(null)
 export interface ServerConfig {
   symbols: string[];
   tfs: string[];
+  /** Бюджет Focus з config.json:smc.display (ADR-0028 v2 §3.4); немає — сервер без SMC, рендер тримає DEFAULT_BUDGET */
+  displayBudget?: BudgetConfig;
 }
 export const serverConfig = writable<ServerConfig>({ symbols: [], tfs: [] });
 
@@ -102,10 +105,7 @@ export function handleWSFrame(raw: unknown): void {
     }
 
     // P2: populate serverConfig SSOT
-    const cfg = (frame.meta as any).config;
-    if (cfg && Array.isArray(cfg.symbols) && Array.isArray(cfg.tfs)) {
-      serverConfig.set({ symbols: cfg.symbols, tfs: cfg.tfs });
-    }
+    applyServerConfig((frame.meta as any).config);
   }
 
   // 5b. boot_id guard — server restart detection (I4/P1)
@@ -126,10 +126,7 @@ export function handleWSFrame(raw: unknown): void {
 
   // 5c. Config frame — policy bridge (T8/S24)
   if (frame.frame_type === 'config') {
-    const ccfg = (frame as any).config;
-    if (ccfg && Array.isArray(ccfg.symbols) && Array.isArray(ccfg.tfs)) {
-      serverConfig.set({ symbols: ccfg.symbols, tfs: ccfg.tfs });
-    }
+    applyServerConfig((frame as any).config);
     return; // config frame не потрапляє в currentFrame
   }
 
@@ -166,6 +163,22 @@ export function handleWSFrame(raw: unknown): void {
 }
 
 /** Reset при reconnect / symbol switch */
+/** Конфіг сервера (кадр конфігу або meta.config повного кадру) → serverConfig; кривий бюджет — гучно, не мовчки. */
+function applyServerConfig(cfg: any): void {
+  if (!cfg || !Array.isArray(cfg.symbols) || !Array.isArray(cfg.tfs)) return;
+  const next: ServerConfig = { symbols: cfg.symbols, tfs: cfg.tfs };
+  if (cfg.display_budget !== undefined) {
+    const budget = parseDisplayBudget(cfg.display_budget);
+    if (budget) {
+      next.displayBudget = budget;
+    } else {
+      addUiWarning('schema_mismatch', 'router',
+        `display_budget не того вигляду: ${JSON.stringify(cfg.display_budget)} — Focus лишає типовий бюджет`);
+    }
+  }
+  serverConfig.set(next);
+}
+
 export function resetFrameRouter(): void {
   lastSeq = -1;
   knownBootId = null;

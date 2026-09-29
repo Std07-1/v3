@@ -537,6 +537,14 @@ export class OverlayRenderer {
     this.scheduleRender();
   }
 
+  /** ADR-0028 v2 §3.4: бюджет Focus — з config.json:smc.display через кадр конфігу сервера */
+  setBudgetConfig(config: BudgetConfig): void {
+    if (config !== this.budgetConfig) {
+      this.budgetConfig = config;
+      this.scheduleRender();
+    }
+  }
+
   // ── ADR-0028 Φ0: Display mode toggle ─────────────────────────────
   setDisplayMode(mode: DisplayMode): void {
     if (mode !== this.displayMode) {

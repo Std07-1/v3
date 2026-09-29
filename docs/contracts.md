@@ -268,7 +268,18 @@ F7 single-point format (не two-point segment).
 | `tier` | integer (опц.) | Важливість для розкладки: 1 — завершені опорні H/L (PDH/PDL), 2 — завершені сесії, 3 — рухомі, EQ, попередні H4/H1 |
 | `group` | string (опц.) | ADR-0104 §3.7: рядок меню «Рівні» — `day` \| `week` \| `month` \| `open` \| `open_week` \| `asia` \| `london` \| `newyork` \| `sessions_prev` \| `h4` \| `h1` \| `liquidity` (SSOT `LEVEL_GROUP_BY_KIND`; кожен kind має групу, кожна група — один рядок меню) |
 | `auto` | boolean (опц.) | ADR-0104 §3.7: типовий стан рядка меню на TF глядача — з `config.json:smc.level_defaults.by_base_tf` (Таблиця А). Вибір трейдера в меню (per TF, localStorage) важить більше; немає поля — рішення не приймалось |
-| `proximity` | integer (опц.) | ADR-0104 §3.7: ранг близькості до ціни (close останнього M1): `+1` — найближча ціна вище, `-1` — нижче, далі `±2`…; однакові ціни ділять ранг; ніколи `0`. Focus бере найближчі 3 ціни на бік серед увімкнених, Research — усі увімкнені. Немає поля — ціни ще немає |
+| `proximity` | integer (опц.) | ADR-0104 §3.7: ранг близькості до ціни (close останнього M1): `+1` — найближча ціна вище, `-1` — нижче, далі `±2`…; однакові ціни ділять ранг; ніколи `0`. Focus бере найближчі `display_budget.levels_per_side` цін на бік серед увімкнених, Research — усі увімкнені. Немає поля — ціни ще немає |
+
+### display_budget (кадр конфігу `config.display_budget` і `meta.config.display_budget` повного кадру)
+
+ADR-0028 v2 §3.4: бюджет Focus, який застосовує UI (`DisplayBudget.ts`); числа — з `config.json:smc.display`, їх бере
+сервер з розібраного `SmcConfig`. SMC вимкнено — поля немає, UI лишає `DEFAULT_BUDGET`. Кривий об'єкт — `uiWarning`.
+
+| Поле | Тип | Джерело в config.json | Зміст у Focus |
+|---|---|---|---|
+| `zones_per_side` | integer ≥ 0 | `smc.display.focus_budget_per_side` | зон на бік (supply/demand) |
+| `structure_max` | integer ≥ 0 | `smc.display.structure_label_max` | міток структури (BOS/CHoCH) |
+| `levels_per_side` | integer ≥ 0 | `smc.display.focus_levels_per_side` | цін рівнів над і під ціною серед увімкнених у меню |
 
 ### PdStatePayload (WS wire, ADR-0041)
 

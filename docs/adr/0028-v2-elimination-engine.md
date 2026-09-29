@@ -172,6 +172,12 @@ assert focus_budget_per_side * 2 + structure_label_max <= focus_budget_total, \
 > структурою (через залишок у Focus було видно лише EQ). Focus для рівнів — найближчі `levelsPerSide = 3` ціни над і
 > під поточною серед увімкнених у меню «Рівні» (ранг близькості `proximity` рахує сервер); Research — усі увімкнені.
 > `total` для зон і структури лишається.
+>
+> **30.09.2026 — числа бюджету з config, як задумано в §3.4:** до цього UI тримав власні копії (3/4/3), і зміна
+> `smc.display` на UI не впливала. Тепер сервер один раз бере їх з розібраного `SmcConfig` (`focus_budget_per_side`,
+> `structure_label_max`, нове `focus_levels_per_side`) і шле `display_budget` у кадрі конфігу та `meta.config` повного
+> кадру; UI (`parseDisplayBudget` → `OverlayRenderer.setBudgetConfig`) лише застосовує, `DEFAULT_BUDGET` — до першого
+> кадру конфігу. Кривий `display_budget` — `uiWarning`, не мовчки.
 
 ### 3.3 Server-side changes: `engine.py:_filter_for_display()`
 

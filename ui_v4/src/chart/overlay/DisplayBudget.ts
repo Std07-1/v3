@@ -41,11 +41,24 @@ export interface FilteredPayload {
 
 // ── Defaults ──
 
+/** Бюджет до першого кадру конфігу сервера; далі — config.json:smc.display (ADR-0028 v2 §3.4, parseDisplayBudget). */
 export const DEFAULT_BUDGET: BudgetConfig = {
     perSide: 3,
     structureMax: 4,
     levelsPerSide: 3,
 };
+
+/** `display_budget` кадру конфігу → BudgetConfig; не той вигляд (не цілі ≥ 0, бракує поля) — null. */
+export function parseDisplayBudget(raw: unknown): BudgetConfig | null {
+    if (raw === null || typeof raw !== 'object') return null;
+    const wire = raw as Record<string, unknown>;
+    const count = (v: unknown): number | null => (Number.isInteger(v) && (v as number) >= 0 ? (v as number) : null);
+    const perSide = count(wire.zones_per_side);
+    const structureMax = count(wire.structure_max);
+    const levelsPerSide = count(wire.levels_per_side);
+    if (perSide === null || structureMax === null || levelsPerSide === null) return null;
+    return { perSide, structureMax, levelsPerSide };
+}
 
 /**
  * ADR-0104 §3.7: Focus для рівнів — найближчі `perSide` цін над і під ціною серед уже увімкнених у меню.
