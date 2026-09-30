@@ -289,3 +289,7 @@ TF, з можливістю вмикати/вимикати родини рів�
 - 2026-09-30 — «3 ціни на бік» у Focus тепер з `config.json:smc.display.focus_levels_per_side` (сервер шле
   `display_budget` у кадрі конфігу, ADR-0028 v2 §3.4). Живий прогін на стенді з `focus_levels_per_side: 1`: у Focus лишився
   один рівень (PWL), у Research — усі увімкнені в полі зору.
+- 2026-09-30 03:47 UTC — **На проді** (слово «го»; main `1fabf63b`, бандл `index-DUj4eVP_.js`, changelog 20260930-001):
+  стрічка M1 (ADR-0035 F11) і бюджет Focus з config. Живий зонд: PWH/PWL/PMH/PML/DO/WO = сирі бари на 7 символах
+  (XAU DO 4182.24); `h4_forming.m1_count` = хвилини від відкриття H4 = хвилини SSOT, 8 хв живої подачі.
+  Відкат: тег `pre-m1tape-20260930` (b434366) + `/tmp/p10/dist_backup_before_20260930T034708Z.tgz`.
