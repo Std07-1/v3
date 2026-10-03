@@ -64,6 +64,7 @@ ALERT="${ALERT:-/usr/local/sbin/aione-alert.sh}"  # overridable: пісочни�
 FAIL2BAN_LOG="${FAIL2BAN_LOG:-/var/log/fail2ban.log}"
 PROC_LOADAVG="${PROC_LOADAVG:-/proc/loadavg}"      # overridable for tests
 PROC_MEMINFO="${PROC_MEMINFO:-/proc/meminfo}"      # overridable for tests
+PROC_UPTIME="${PROC_UPTIME:-/proc/uptime}"         # overridable for tests
 PLATFORM_DIR="${PLATFORM_DIR:-/opt/smc-v3}"        # checkout платформи: venv для зведення відвідувачів
 VISITORS_USER="${VISITORS_USER:-smc}"              # власник журналу відвідувачів (ADR-0105)
 SETTLE_STATUS="${SETTLE_STATUS:-/var/lib/smc-v3/m1_settle/last_status.json}"  # стан нічного settle (ADR-0103)
@@ -550,8 +551,8 @@ check_ssh_logins() {
 
 # ---------- ранковий звіт (ADR-0106 §3.5) ----------
 report_server_line() {
-  printf 'Сервер: %s; load %s; памʼять вільно %s; диск %s' \
-    "$(uptime -p 2>/dev/null | sed 's/^up //')" \
+  printf '🖥 Сервер працює %s · load %s · памʼять вільно %s · диск %s' \
+    "$(human_dur "$(awk '{print int($1)}' "$PROC_UPTIME" 2>/dev/null || echo 0)")" \
     "$(awk '{print $1", "$2", "$3}' "$PROC_LOADAVG" 2>/dev/null)" \
     "$(awk '/^MemAvailable:/{a=$2} /^MemTotal:/{t=$2} END{printf "%.1f з %.1f ГБ", a/1048576, t/1048576}' "$PROC_MEMINFO" 2>/dev/null)" \
     "$(df -P / 2>/dev/null | awk 'NR==2{print $5}')"
@@ -567,15 +568,15 @@ report_programs_lines() {
     $2=="STOPPED" || $2=="EXITED" { off = off (off ? ", " : "") name; next }
                                   { bad = bad (bad ? ", " : "") name " " $2 }
     END {
-      printf "Працюють: %s", (run ? run : "жодна")
-      if (off) printf "\nВимкнені: %s", off
+      printf "⚙️ Працюють: %s", (run ? run : "жодна")
+      if (off) printf "\n   вимкнені: %s", off
       if (bad) printf "\n❗ Не в нормі: %s", bad
     }'
 }
 
 report_settle_line() {
-  [ -r "$SETTLE_STATUS" ] || { printf 'Нічний settle: стану немає'; return 0; }
-  python3 - "$SETTLE_STATUS" "$REPORT_TZ" 2>/dev/null <<'PY' || printf 'Нічний settle: стан не прочитано'
+  [ -r "$SETTLE_STATUS" ] || { printf '🌙 Нічний settle: стану немає'; return 0; }
+  python3 - "$SETTLE_STATUS" "$REPORT_TZ" 2>/dev/null <<'PY' || printf '❗ Нічний settle: стан не прочитано'
 import datetime as dt, json, sys
 from zoneinfo import ZoneInfo
 status = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -586,8 +587,9 @@ except ValueError:
     when = finished or "?"
 problems = len(status.get("problems") or [])
 code = status.get("exit_code")
-verdict = "ок" if code == 0 and not problems else "❗ код %s, проблем %d" % (code, problems)
-sys.stdout.write("Нічний settle: %s — %s" % (when, verdict))
+ok = code == 0 and not problems
+verdict = "ок" if ok else "код %s, проблем %d" % (code, problems)
+sys.stdout.write("%s Нічний settle: %s — %s" % ("🌙" if ok else "❗", when, verdict))
 PY
 }
 
@@ -595,7 +597,7 @@ report_archi_line() {
   local bkp
   bkp="$(ls -t "$BACKUP_DIR"/trader-v3-*.tar.gz 2>/dev/null | head -1)"
   if [ -n "$bkp" ]; then
-    printf 'Арчі: бекап %s год тому' "$(( ( $(now) - $(stat -c %Y "$bkp" 2>/dev/null || echo 0) ) / 3600 ))"
+    printf '🧠 Арчі: бекап %s год тому' "$(( ( $(now) - $(stat -c %Y "$bkp" 2>/dev/null || echo 0) ) / 3600 ))"
   else
     printf '❗ Арчі: бекапу немає'
   fi
@@ -605,16 +607,16 @@ report_ssh_line() {
   local own other
   own="$(cat "$STATE_DIR/ssh_own.tally" 2>/dev/null || echo 0)"; own="${own:-0}"
   other="$(cat "$STATE_DIR/ssh_other.tally" 2>/dev/null || echo 0)"; other="${other:-0}"
-  if [ "$own" -eq 0 ] && [ "$other" -eq 0 ]; then printf 'SSH за добу: входів не було'
-  elif [ "$other" -eq 0 ]; then printf 'SSH за добу: %s — усі твої' "$own"
+  if [ "$own" -eq 0 ] && [ "$other" -eq 0 ]; then printf '🔐 SSH за добу: входів не було'
+  elif [ "$other" -eq 0 ]; then printf '🔐 SSH за добу: %s — усі твої' "$own"
   else printf '❗ SSH за добу: твоїх %s, інших %s (про кожен повідомляв)' "$own" "$other"; fi
 }
 
 report_events_lines() {
   local f="$STATE_DIR/events.day" n ts title
   n="$(grep -c . "$f" 2>/dev/null)"; n="${n:-0}"
-  if [ "$n" -eq 0 ]; then printf 'Події за добу: не було'; return 0; fi
-  printf 'Події за добу: %s' "$n"
+  if [ "$n" -eq 0 ]; then printf '📋 Події за добу: не було'; return 0; fi
+  printf '📋 Події за добу: %s' "$n"
   [ "$n" -gt 6 ] && printf '\n  …%s раніших пропущено' "$(( n - 6 ))"
   tail -n 6 "$f" | while IFS=$'\t' read -r ts title; do
     printf '\n  %s %s' "$(TZ="$REPORT_TZ" date -d "@$ts" +%H:%M 2>/dev/null)" "$title"
@@ -637,7 +639,7 @@ check_morning_report() {
   if [ ! -f "$hf" ]; then echo "$today" > "$hf"; return 0; fi   # перший запуск: перший звіт — наступного ранку
   [ "$(cat "$hf" 2>/dev/null)" = "$today" ] && return 0
   [ "$(TZ="$REPORT_TZ" date +%-H)" -lt "$REPORT_HOUR" ] && return 0
-  text="$(printf '☀️ Ранковий звіт — %s\n%s\n%s\n%s\n%s\n%s\nБанів fail2ban: %s\n%s\n—\n%s' \
+  text="$(printf '☀️ Ранковий звіт — %s\n\n%s\n%s\n%s\n%s\n%s\n🚫 Банів fail2ban: %s\n%s\n\n%s' \
     "$(TZ="$REPORT_TZ" date +%d.%m)" "$(report_server_line)" "$(report_programs_lines)" "$(report_settle_line)" \
     "$(report_archi_line)" "$(report_ssh_line)" "$(cat "$STATE_DIR/ban.tally" 2>/dev/null || echo 0)" \
     "$(report_events_lines)" "$(report_visitors)")"
@@ -663,7 +665,7 @@ command_reply() {                          # $1=команда $2=аргумен
       [ "$days" -gt 365 ] && days=365
       report_visitors "$(( days * 24 ))" ;;
     /status)
-      printf '📟 Стан зараз — %s\n%s\n%s\n%s\n%s\n%s\nБанів fail2ban з ранку: %s\n%s' \
+      printf '📟 Стан зараз — %s\n\n%s\n%s\n%s\n%s\n%s\n🚫 Банів fail2ban з ранку: %s\n%s' \
         "$(TZ="$REPORT_TZ" date '+%d.%m %H:%M')" "$(report_server_line)" "$(report_programs_lines)" \
         "$(report_settle_line)" "$(report_archi_line)" "$(report_ssh_line | sed 's/за добу/з ранку/')" \
         "$(cat "$STATE_DIR/ban.tally" 2>/dev/null || echo 0)" "$(report_events_lines | sed 's/за добу/з ранку/')" ;;

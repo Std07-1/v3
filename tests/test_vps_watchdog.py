@@ -41,7 +41,6 @@ STUBS = {
         'esac\n'
     ),
     "df": 'echo "Filesystem 1024-blocks Used Available Capacity Mounted"; echo "/dev/sda1 100 38 62 38% /"\n',
-    "uptime": 'echo "up 3 weeks"\n',
     "runuser": 'echo "$*" >> "$BOX/runuser_args"; echo "Відвідувачі за добу: тест"\n',
     # команди власника: на засів — NEXT 5, далі — вміст commands_out; аргумент виклику — у commands_args
     "commands": (
@@ -66,6 +65,7 @@ class Box:
         (root / "procs_count").write_text("100", encoding="utf-8")
         (root / "ps_names").write_text("python3\npython3\npython3\nbash\n", encoding="utf-8")
         (root / "loadavg").write_text("0.10 0.20 0.30 1/200 123\n", encoding="utf-8")
+        (root / "uptime").write_text("1987260.42 7000000.00\n", encoding="utf-8")  # 23 д 0 год 1 хв
         (root / "meminfo").write_text(
             "MemTotal: 8000000 kB\nMemAvailable: 5000000 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n", encoding="utf-8"
         )
@@ -90,6 +90,7 @@ class Box:
             BACKUP_DIR=str(root / "backups"),
             PROC_LOADAVG=str(root / "loadavg"),
             PROC_MEMINFO=str(root / "meminfo"),
+            PROC_UPTIME=str(root / "uptime"),
             FAIL2BAN_LOG=str(root / "fail2ban.log"),
             SETTLE_STATUS=str(root / "settle.json"),
             PLATFORM_DIR=str(root),
@@ -189,7 +190,9 @@ def test_morning_report_has_sections_and_resets_daily_counters(box):
     (report,) = box.sent()
     assert report.startswith("☀️ Ранковий звіт — ")
     for fragment in (
-        "Сервер: 3 weeks; load 0.10, 0.20, 0.30; памʼять вільно 4.8 з 7.6 ГБ; диск 38%",
+        "🖥 Сервер працює 23 д 0 год · load 0.10, 0.20, 0.30 · памʼять вільно 4.8 з 7.6 ГБ · диск 38%",
+        "⚙️ Працюють: smc-ws",
+        "🌙 Нічний settle: 28.09 23:10 — ок",
         "Працюють: smc-ws",
         "Нічний settle: 28.09 23:10 — ок",
         "Арчі: бекап 0 год тому",

@@ -105,15 +105,15 @@ def test_overlapping_visits_of_different_people_are_marked_together():
     together = {row.visitor.vid[:4]: row.together for row in digest.new}
     assert together == {"9811": ["fe98"], "fe98": ["9811"], "cccc": []}
     text = render(digest, 24, KYIV, 0, None)
-    assert "· одночасно з #fe98" in text and "· одночасно з #9811" in text
+    assert "   👥 одночасно з #fe98" in text and "   👥 одночасно з #9811" in text
 
 
 def test_own_line_names_devices():
     records = [dict(session("d8ec" + "0" * 28, T0, 2), home_net=False), dict(session("9868" + "0" * 28, T0, 30), home_net=True)]
     labels = {"d8ec": {"name": "телефон", "own": True}}
     digest = summarize(build_visitors(records, 30, 30), records, (T0, T0 + DAY), labels)
-    (line,) = [l for l in render(digest, 24, KYIV, 0, None).splitlines() if l.startswith("Свої")]
-    assert line.startswith("Свої: візитів 2 (") and "#d8ec телефон" in line and "#9868 дім" in line
+    (line,) = [l for l in render(digest, 24, KYIV, 0, None).splitlines() if l.startswith("🏠 Свої")]
+    assert line.startswith("🏠 Свої: візитів 2 — ") and "#d8ec телефон" in line and "#9868 дім" in line
 
 
 def test_resolve_label_prefers_longest_prefix():
@@ -134,25 +134,48 @@ def test_render_shows_local_times_statuses_and_bot_line():
     visitors = build_visitors(records, 30, 30)
     digest = summarize(visitors, records, (T0, T0 + 6 * HOUR), {"a1f3": {"name": "Юра"}})
     text = render(digest, 6, KYIV, bad_lines=2, labels_problem=None)
-    assert text.splitlines()[0] == "Відвідувачі за 6 год: 29.09 17:00 → 29.09 23:00 (UTC+3)"
-    assert "Люди: 2 — нових 1, повторних 1 · візитів 2 · разом 37 хв" in text
-    assert "#a1f3 Юра · UA · Windows/Chrome — новий · 17:10–17:35 25 хв · XAU/USD:M30, XAU/USD:M15" in text
-    assert "#7c20 · CZ · Windows/Chrome — з нами з 16.09 (13 дн.), візит 2 · 19:00–19:12 12 хв" in text
-    assert "Схоже на ботів: сесій 1 (бот-UA 1, короткі без переглядів 0)" in text
-    assert "7 днів: людей 2 · 30 днів: 2 · усього: 2 (перша людина — 16.09.2026)" in text
-    assert "пропущено зіпсованих рядків журналу — 2" in text
+    assert text.splitlines()[:2] == [
+        "👥 Відвідувачі за 6 год · до 29.09 23:00",
+        "Людей: 2 (нових 1, повернулись 1) · візитів 2 · разом 37 хв",
+    ]
+    new_block = "\n".join([
+        "🆕 Нові",
+        "1. #a1f3 Юра · 🇺🇦 UA · Windows, Chrome",
+        "   • 29.09 17:10–17:35 · 25 хв",
+        "   Дивився: XAU/USD M30, M15",
+    ])
+    returning_block = "\n".join([
+        "🔁 Повернулись",
+        "1. #7c20 · 🇨🇿 CZ · Windows, Chrome",
+        "   з нами з 16.09 (13 дн.), візит №2",
+        "   • 29.09 19:00–19:12 · 12 хв",
+    ])
+    assert new_block in text and returning_block in text
+    assert "🤖 Схоже на ботів: 1 (назвались ботом 1, короткі без дій 0)" in text
+    assert "📈 Людей за 7 днів: 2 · за 30: 2 · усього: 2, перша — 16.09.2026" in text
+    assert "⚠️ Пропущено зіпсованих рядків журналу: 2" in text
+
+
+def test_period_names_and_views_grouped_by_symbol():
+    from tools.visitors.report import _period_name, _views_by_symbol
+    from tools.visitors.aggregate import Visit
+    assert [_period_name(h) for h in (24, 6, 48, 120, 168, 264, 744)] == [
+        "добу", "6 год", "2 дні", "5 днів", "7 днів", "11 днів", "31 день"]
+    visits = [Visit(1, T0, T0 + MIN, 60.0, ("XAU/USD:M30", "GER30:H1", "XAU/USD:M15")),
+              Visit(2, T0 + HOUR, T0 + HOUR + MIN, 60.0, ("XAU/USD:M30", "NAS100:D1"))]
+    assert _views_by_symbol(visits) == "XAU/USD M30, M15; GER30 H1; NAS100 D1"
 
 
 def test_render_without_humans_says_so():
     digest = summarize({}, [], (T0, T0 + DAY), {})
-    assert "Людей за період не було." in render(digest, 24, KYIV, 0, None)
+    assert render(digest, 24, KYIV, 0, None).splitlines()[1] == "Людей не було."
 
 
 def test_render_caps_rows_per_group_for_telegram_limit():
     records = [session(c * 32, T0 + i * HOUR, 5) for i, c in enumerate("abc")]
     digest = summarize(build_visitors(records, 30, 30), records, (T0, T0 + DAY), {})
     text = render(digest, 24, KYIV, 0, None, max_rows=1)
-    assert text.count("  #") == 1 and "…ще 2" in text
+    assert text.count("1. #") == 1 and "2. #" not in text and "…і ще 2" in text
 
 
 def test_main_ignores_internal_connections_entirely(tmp_path, capsys):
@@ -165,7 +188,7 @@ def test_main_ignores_internal_connections_entirely(tmp_path, capsys):
     config.write_text(json.dumps({"visitors": {"enabled": True, "dir": str(tmp_path)}}), encoding="utf-8")
     assert main(["--config", str(config), "--now-ms", str(T0 + HOUR)]) == 0
     out = capsys.readouterr().out
-    assert "Люди: 1 — нових 1" in out and "Схоже на ботів: сесій 0" in out
+    assert "Людей: 1 (нових 1, повернулись 0)" in out and "🤖 Схоже на ботів: 0 " in out
 
 
 def test_main_rejects_non_positive_max_rows(tmp_path):
@@ -213,7 +236,7 @@ def test_main_prints_digest_and_applies_retention(tmp_path, capsys):
     config.write_text(json.dumps({"visitors": {"enabled": True, "dir": str(journal)}}), encoding="utf-8")
     assert main(["--config", str(config), "--now-ms", str(T0 + HOUR), "--apply-retention"]) == 0
     out, err = capsys.readouterr()
-    assert "Люди: 1 — нових 1" in out
+    assert "Людей: 1 (нових 1, повернулись 0)" in out
     assert "VISITORS_RETENTION_REMOVED" in err and not (journal / "sessions-202508.jsonl").exists()
 
 
