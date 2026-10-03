@@ -1,6 +1,14 @@
-// ADR-0107 S1: у скупченні текст лише в найновішої події структури, старші — штрих.
+// ADR-0107: S1 — у скупченні текст лише в найновішої події структури, старші — штрих;
+// S2 — у стиснутому вигляді підпис FVG лишається лише в найважливішої зони.
 import { describe, it, expect } from 'vitest';
-import { boxesOverlap, structureLabelsWithText, type StructureLabelCandidate } from './labelLayout';
+import {
+    boxesOverlap,
+    isCompactView,
+    structureLabelsWithText,
+    zoneLabelsWithText,
+    type StructureLabelCandidate,
+    type ZoneLabelCandidate,
+} from './labelLayout';
 
 const box = (x: number, y: number, w = 30, h = 12) => ({ x, y, w, h });
 const cand = (id: string, timeMs: number, x: number, y: number, isChoch = true): StructureLabelCandidate =>
@@ -49,5 +57,54 @@ describe('structureLabelsWithText', () => {
         const backward = [...structureLabelsWithText([...items].reverse())];
         expect(forward).toEqual(backward);
         expect(forward).toEqual(['x']);
+    });
+});
+
+describe('isCompactView (LB7)', () => {
+    it('типова ширина свічки — не стиснутий, навіть із похибкою ділення', () => {
+        expect(isCompactView(8, 8)).toBe(false);
+        expect(isCompactView(7.9999999, 8)).toBe(false);
+    });
+
+    it('свічка вужча за типову — стиснутий', () => {
+        expect(isCompactView(6.4, 8)).toBe(true);
+    });
+
+    it('розтягнутий графік — не стиснутий', () => {
+        expect(isCompactView(14, 8)).toBe(false);
+    });
+
+    it('діапазону ще нема (0) — не стиснутий', () => {
+        expect(isCompactView(0, 8)).toBe(false);
+    });
+});
+
+const zone = (id: string, tfS: number, distance: number, x: number, y: number): ZoneLabelCandidate =>
+    ({ id, tfS, distance, box: box(x, y, 50, 11) });
+
+describe('zoneLabelsWithText (LB8–LB10)', () => {
+    it('підписи FVG не налазять — текст у всіх', () => {
+        const kept = zoneLabelsWithText([zone('a', 900, 5, 0, 0), zone('b', 900, 9, 0, 40)], []);
+        expect([...kept].sort()).toEqual(['a', 'b']);
+    });
+
+    it('у скупченні текст отримує старший TF, навіть якщо молодший ближчий до ціни', () => {
+        const kept = zoneLabelsWithText([zone('m15', 900, 1, 0, 0), zone('h1', 3600, 30, 10, 4)], []);
+        expect([...kept]).toEqual(['h1']);
+    });
+
+    it('на рівний TF — ближча до ціни', () => {
+        const kept = zoneLabelsWithText([zone('far', 900, 40, 0, 0), zone('near', 900, 2, 10, 4)], []);
+        expect([...kept]).toEqual(['near']);
+    });
+
+    it('FVG поступається вже поставленому тексту структури чи OB', () => {
+        const kept = zoneLabelsWithText([zone('fvg', 3600, 0, 0, 0)], [box(20, 3, 30, 12)]);
+        expect(kept.size).toBe(0);
+    });
+
+    it('той самий вхід у будь-якому порядку — та сама розкладка', () => {
+        const items = [zone('x', 900, 5, 0, 0), zone('y', 900, 5, 10, 2), zone('z', 900, 5, 20, 4)];
+        expect([...zoneLabelsWithText(items, [])]).toEqual([...zoneLabelsWithText([...items].reverse(), [])]);
     });
 });

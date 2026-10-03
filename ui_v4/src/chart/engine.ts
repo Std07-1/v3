@@ -43,6 +43,8 @@ function _withAlpha(color: string, alpha: number): string {
 // Default volume alpha (kept for backward-compat fallback only).
 // PATCH 02e: live alpha now comes from VOLUME_ALPHA_BY_THEME[currentTheme].
 const VOLUME_ALPHA = 0.32;
+/** Типова ширина свічки (CSS px): еталон масштабу міток overlay і межа «стиснутого вигляду» (ADR-0107 LB7). */
+export const DEFAULT_BAR_SPACING_PX = 8;
 const D1_OFFSET_MS = 10_800_000; // +3h: FXCM D1 open 22:00/21:00 UTC → nominal date
 
 // ─── UTC formatters (V3 parity: chart_adapter_lite.js:13-28) ───
@@ -244,7 +246,7 @@ export class ChartEngine {
         // Mobile (audit v2): малювання приховане (@media) — 10 барів = ~23%
         // портретного чарта змарновано; лишаємо компактні 3.
         rightOffset: isMobile ? 3 : 10,
-        barSpacing: 8,
+        barSpacing: DEFAULT_BAR_SPACING_PX,
         maxBarSpacing: 50,
         timeVisible: true,
         secondsVisible: false,

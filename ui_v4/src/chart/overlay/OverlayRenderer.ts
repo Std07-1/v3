@@ -28,7 +28,8 @@ import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import type { SmcData, SmcZone, SmcLevel, SmcSwing, UiWarning, ZoneGradeInfo } from '../../types';
 import { applyBudget, DEFAULT_BUDGET, type BudgetConfig, type DisplayMode, type ZoneDisplayProps } from './DisplayBudget';
 import { visibleLevels, type GroupOverrides } from './levelGroups';
-import { structureLabelsWithText, type LabelBox } from './labelLayout';
+import { isCompactView, structureLabelsWithText, zoneLabelsWithText, type LabelBox } from './labelLayout';
+import { DEFAULT_BAR_SPACING_PX } from '../engine';
 
 // ── ADR-0043 P1: Canvas Safe Zones — overlay елементи не рендеряться під HUD ──
 const CANVAS_SAFE_TOP_Y = 75;    // HUD + OHLCV tooltip clearance (px)
@@ -205,7 +206,30 @@ interface StructureMark {
   isChoch: boolean;
   /** Плашка тексту; null — підпис поза безпечною зоною (ADR-0043 P1): не малюється й місця не займає */
   box: LabelBox | null;
+  /** Розкладка (LB2–LB3): true — текст, false — штрих */
+  withText: boolean;
 }
+
+/** ADR-0107 S2: підпис зони, підготовлений до малювання після всіх тіл зон (LB11). */
+interface ZoneLabelDraw {
+  zone: SmcZone;
+  label: string;
+  gradeSuffix: string;
+  gradeColor: string;
+  x: number;
+  y: number;
+  fs: number;
+  /** Плашка підпису — для розкладки у стиснутому вигляді */
+  box: LabelBox;
+  pillAlpha: number;
+  textAlpha: number;
+  textColor: string;
+  /** Відстань від ціни до найближчого краю зони (LB8) */
+  distance: number;
+}
+
+/** Межа масштабу міток і підписів — щоб на великому зумі вони не роздувались. */
+const MARKER_SCALE_CAP = 1.4;
 
 function _zoneLabel(z: SmcZone): string {
   const tfName = z.tf_s ? (_TF_NAMES[z.tf_s] ?? `${z.tf_s}s`) : '';
@@ -581,13 +605,33 @@ export class OverlayRenderer {
     return this._zoneProps.get(zoneId)?.opacity ?? 1.0;
   }
 
-  /** Adaptive marker scale: 8px barSpacing = 1.0 (desktop default). */
-  private getBarScale(): number {
+  /** Ширина свічки в CSS px (ширина графіка / видимий логічний діапазон); 0 — діапазону ще нема. */
+  private getBarSpacingPx(): number {
     const lr = this.chartApi.timeScale().getVisibleLogicalRange();
-    if (!lr) return 1;
-    const bars = Math.max(1, lr.to - lr.from);
-    const px = this.getChartAreaWidth() / bars;
-    return Math.max(0.5, Math.min(2.0, px / 8));
+    if (!lr) return 0;
+    return this.getChartAreaWidth() / Math.max(1, lr.to - lr.from);
+  }
+
+  /** Adaptive marker scale: типова ширина свічки (DEFAULT_BAR_SPACING_PX) = 1.0. */
+  private getBarScale(): number {
+    const px = this.getBarSpacingPx();
+    if (px <= 0) return 1;
+    return Math.max(0.5, Math.min(2.0, px / DEFAULT_BAR_SPACING_PX));
+  }
+
+  /** Бар за часом (сек) — прив'язка міток до свічки; null — шари з мітками вимкнені або серія ще не готова. */
+  private buildBarMap(): Map<number, any> | null {
+    if (!(this.layerVisible.structure || this.layerVisible.displacement || this.layerVisible.swings)) return null;
+    try {
+      const allData = this.seriesApi.data() as any[];
+      const barMap = new Map<number, any>();
+      for (const d of allData) {
+        barMap.set(timeToSec(d.time as unknown as HorzScaleItem), d);
+      }
+      return barMap;
+    } catch { /* series not ready */
+      return null;
+    }
   }
 
   private render(): void {
@@ -606,11 +650,16 @@ export class OverlayRenderer {
 
     // ADR-0024c: кожен шар незалежний — toggle одного не чіпає інші
     const scale = this.getBarScale();
+    const barMap = this.buildBarMap();
+    // ADR-0107: структура розкладається до зон — у стиснутому вигляді підписи FVG поступаються її тексту (LB9)
+    const structureMarks = this.layerVisible.structure
+      ? this.layoutStructureMarks(budget.swings, Math.min(MARKER_SCALE_CAP, scale), barMap)
+      : [];
 
-    this.renderZones(budget.zones);
+    this.renderZones(budget.zones, structureMarks);
     if (this.layerVisible.levels) this.renderLevels(budget.levels);
     this.renderPdEqLine(budget.levels);
-    if (this.layerVisible.swings || this.layerVisible.structure || this.layerVisible.fractals || this.layerVisible.displacement) this.renderSwings(budget.swings, scale);
+    if (this.layerVisible.swings || this.layerVisible.structure || this.layerVisible.fractals || this.layerVisible.displacement) this.renderSwings(budget.swings, scale, barMap, structureMarks);
 
 
   }
@@ -629,8 +678,9 @@ export class OverlayRenderer {
     return '#888888';
   }
 
-  private renderZones(zones: SmcZone[]): void {
+  private renderZones(zones: SmcZone[], structureMarks: StructureMark[]): void {
     const chartW = this.getChartAreaWidth();
+    const labels: ZoneLabelDraw[] = [];
 
     // ── Остання ціна серії (close останньої свічки) для proximity ──
     // НЕ центр екрану! Proximity = відстань реальної ціни від зони.
@@ -827,55 +877,39 @@ export class OverlayRenderer {
 
       this.ctx.restore();
 
-      // ── Zone label: видимість модулюється proximity ──
+      // ── Zone label: видимість модулюється proximity; малюється після всіх тіл зон (ADR-0107 LB11) ──
       if (h > 3 && w > 25) {
         let label = _zoneLabel(z);
         // Dimmed zones: add status marker
         if (isDimmed) label = `${label} ✗`;
         if (label) {
           const fs = 9;
-          this.ctx.save();
-          this.ctx.font = `${fs}px monospace`;
-
           // ADR-0029: Grade integrated into label pill (A+/A/B, C hidden)
           // ADR-0030-alt: no grade badge on projections (context zones, not action zones)
           const gradeInfo = this.isProjection(z) ? undefined : this._gradeCache[z.id];
           const gradeSuffix = (gradeInfo && gradeInfo.grade !== 'C') ? ` ${gradeInfo.grade}` : '';
-          const fullText = label + gradeSuffix;
-
-          const labelTm = this.ctx.measureText(label);
-          const fullTm = this.ctx.measureText(fullText);
+          this.ctx.save();
+          this.ctx.font = `${fs}px monospace`;
+          const fullWidth = this.ctx.measureText(label + gradeSuffix).width;
+          this.ctx.restore();
           const pad = 2;
 
-          const lblX = Math.min(x1 + 3, xRight - fullTm.width - pad * 2);
+          const lblX = Math.min(x1 + 3, xRight - fullWidth - pad * 2);
           const lblY = top + 1;
 
           // ADR-0043 P1: Y-guard — не рендеримо label під HUD або над time axis
           if (!(lblY < CANVAS_SAFE_TOP_Y || lblY > (this.cssH - CANVAS_SAFE_BOTTOM_Y))) {
-            // Single pill background — skip on light theme (dark pills distract)
-            if (!this._isLightTheme) {
-              const pillAlpha = Math.max(0.15, (0.20 + 0.55 * proximity) * dimMult);  // ADR-0042 P3: floor
-              this.ctx.globalAlpha = pillAlpha;
-              this.ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-              this.ctx.fillRect(lblX - pad, lblY, fullTm.width + pad * 2, fs + 2);
-            }
-
-            // Label text
-            const textAlpha = (0.30 + 0.60 * proximity) * dimMult;
-            this.ctx.globalAlpha = Math.min(1.0, textAlpha);
-            this.ctx.fillStyle = isDimmed ? '#888' : color;
-            this.ctx.textAlign = 'left';
-            this.ctx.textBaseline = 'top';
-            this.ctx.fillText(label, lblX, lblY + 1);
-
-            // Grade suffix in its own color within same pill
-            if (gradeSuffix) {
-              const gc: Record<string, string> = { 'A+': '#ffd700', 'A': '#fff', 'B': '#999' };
-              this.ctx.fillStyle = gc[gradeInfo!.grade] ?? '#999';
-              this.ctx.fillText(gradeSuffix, lblX + labelTm.width, lblY + 1);
-            }
+            const gc: Record<string, string> = { 'A+': '#ffd700', 'A': '#fff', 'B': '#999' };
+            labels.push({
+              zone: z, label, gradeSuffix, gradeColor: gradeInfo ? (gc[gradeInfo.grade] ?? '#999') : '#999',
+              x: lblX, y: lblY, fs,
+              box: { x: lblX - pad, y: lblY, w: fullWidth + pad * 2, h: fs + 2 },
+              pillAlpha: Math.max(0.15, (0.20 + 0.55 * proximity) * dimMult),  // ADR-0042 P3: floor
+              textAlpha: Math.min(1.0, (0.30 + 0.60 * proximity) * dimMult),
+              textColor: isDimmed ? '#888' : color,
+              distance: distFromEdge,
+            });
           }
-          this.ctx.restore();
         }
       }
 
@@ -891,6 +925,50 @@ export class OverlayRenderer {
         rect: { x: x1, y: top, w: Math.min(w, renderPx), h: Math.max(h, 8) },
         tooltip: `${tfLabel} ${_KIND_SHORT[z.kind] ?? z.kind}${gradeBlock}${statusDesc}\nStrength: ${Math.round(s * 100)}%\n\n${kindDesc}`,
       });
+    }
+
+    this.renderZoneLabels(labels, structureMarks);
+  }
+
+  /**
+   * ADR-0107 S2: підписи зон після всіх тіл (LB11). У стиснутому вигляді (LB7) FVG поступаються тексту структури,
+   * підписам OB і важливішим FVG (LB8–LB9); FVG без місця — без тексту, зона й підказка лишаються (LB10).
+   */
+  private renderZoneLabels(labels: ZoneLabelDraw[], structureMarks: StructureMark[]): void {
+    const isFvg = (l: ZoneLabelDraw) => l.zone.kind.startsWith('fvg');
+    let fvgWithText: Set<string> | null = null;  // null — типовий вигляд: FVG не поступаються
+    if (isCompactView(this.getBarSpacingPx(), DEFAULT_BAR_SPACING_PX)) {
+      const taken = [
+        ...structureMarks.flatMap((m) => (m.withText && m.box ? [m.box] : [])),
+        ...labels.filter((l) => !isFvg(l)).map((l) => l.box),
+      ];
+      fvgWithText = zoneLabelsWithText(
+        labels.filter(isFvg).map((l) => ({ id: l.zone.id, tfS: l.zone.tf_s ?? 0, distance: l.distance, box: l.box })),
+        taken,
+      );
+    }
+
+    for (const l of labels) {
+      if (fvgWithText && isFvg(l) && !fvgWithText.has(l.zone.id)) continue;
+      this.ctx.save();
+      this.ctx.font = `${l.fs}px monospace`;
+      // Single pill background — skip on light theme (dark pills distract)
+      if (!this._isLightTheme) {
+        this.ctx.globalAlpha = l.pillAlpha;
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        this.ctx.fillRect(l.box.x, l.box.y, l.box.w, l.box.h);
+      }
+      this.ctx.globalAlpha = l.textAlpha;
+      this.ctx.fillStyle = l.textColor;
+      this.ctx.textAlign = 'left';
+      this.ctx.textBaseline = 'top';
+      this.ctx.fillText(l.label, l.x, l.y + 1);
+      // Grade suffix in its own color within same pill
+      if (l.gradeSuffix) {
+        this.ctx.fillStyle = l.gradeColor;
+        this.ctx.fillText(l.gradeSuffix, l.x + this.ctx.measureText(l.label).width, l.y + 1);
+      }
+      this.ctx.restore();
     }
   }
 
@@ -1114,23 +1192,14 @@ export class OverlayRenderer {
     }
   }
 
-  private renderSwings(swings: SmcSwing[], scale: number = 1): void {
-    // Build bar lookup for candle-anchored rendering
-    let barMap: Map<number, any> | null = null;
-    if (this.layerVisible.structure || this.layerVisible.displacement || this.layerVisible.swings) {
-      try {
-        const allData = this.seriesApi.data() as any[];
-        barMap = new Map();
-        for (const d of allData) {
-          barMap.set(timeToSec(d.time as unknown as HorzScaleItem), d);
-        }
-      } catch { /* series not ready */ }
-    }
-
+  private renderSwings(
+    swings: SmcSwing[],
+    scale: number,
+    barMap: Map<number, any> | null,
+    structureMarks: StructureMark[],
+  ): void {
     // Capped scale for markers/labels — prevents visual bloat at max zoom
-    const mScale = Math.min(1.4, scale);
-    // ADR-0107 S1: підписи структури збираються в циклі, малюються після нього — текст чи штрих вирішує розкладка
-    const structureMarks: StructureMark[] = [];
+    const mScale = Math.min(MARKER_SCALE_CAP, scale);
 
     for (const s of swings) {
       const isBos = s.kind?.startsWith('bos_') ?? false;
@@ -1146,6 +1215,7 @@ export class OverlayRenderer {
       if (isDisplacement && !this.layerVisible.displacement) continue;
       if (!isStructure && !isInducement && !isFractal && !isDisplacement && !this.layerVisible.swings) continue;
       if (isInducement && !this.layerVisible.swings) continue;
+      if (isStructure) continue;  // ADR-0107: структура розкладена заздалегідь (layoutStructureMarks → renderStructureMarks)
 
       const x = this.toX(s.time_ms);
       const yLevel = this.toY(s.price);
@@ -1163,44 +1233,7 @@ export class OverlayRenderer {
       const isBull = s.kind ? (s.kind.includes('bull') || s.kind === 'hh' || s.kind === 'hl') : false;
       const color = isBull ? '#26a69a' : '#ef5350';
 
-      if (isStructure) {
-        // ── BOS/CHoCH: candle-anchored label (font capped at 12px) — малюється після циклу (ADR-0107) ──
-        const label = isChoch ? 'CHoCH' : 'BOS';
-        const fs = Math.min(12, Math.round((isChoch ? 10 : 9) * Math.max(0.7, mScale)));
-
-        let yAnchor = yLevel;
-        if (barMap) {
-          const bar = barMap.get(s.time_ms / 1000);
-          if (bar) {
-            const candleY = isBull
-              ? this.toY(bar.high ?? bar.close ?? s.price)
-              : this.toY(bar.low ?? bar.close ?? s.price);
-            if (candleY !== null) yAnchor = candleY;
-          }
-        }
-
-        // ADR-0043 P1: Y-guard для BOS/CHoCH labels
-        const yOffBase = Math.max(3, Math.round(8 * mScale));
-        const lblRenderY = yAnchor + (isBull ? -yOffBase : yOffBase);
-        let box: LabelBox | null = null;
-        if (lblRenderY >= CANVAS_SAFE_TOP_Y && lblRenderY <= this.cssH - CANVAS_SAFE_BOTTOM_Y) {
-          this.ctx.save();
-          this.ctx.font = `bold ${fs}px monospace`;
-          const textW = this.ctx.measureText(label).width;
-          this.ctx.restore();
-          const px = 3, py = 1;
-          box = {
-            x: x - textW / 2 - px,
-            y: isBull ? lblRenderY - fs - py : lblRenderY - py,
-            w: textW + px * 2,
-            h: fs + py * 2,
-          };
-        }
-        structureMarks.push({
-          swing: s, x, yLevel, yAnchor, lblRenderY, label, fs, isBull, isChoch,
-          color: isChoch ? '#ffa726' : color, box,
-        });
-      } else if (isInducement) {
+      if (isInducement) {
         // ── Inducement: × marker, anchored to candle extreme ──
         const sz = Math.max(2, Math.min(5, Math.round(3 * mScale)));
         let yInd = yLevel;
@@ -1345,18 +1378,93 @@ export class OverlayRenderer {
   }
 
   /**
-   * ADR-0107 S1: у скупченні текст лише в найновішої події структури (LB2), старші — штрих свого кольору на рівні
-   * пробою з тією ж підказкою (LB3). Штрихи — під текстами (LB4); підпис поза безпечною зоною не малюється (LB5).
+   * ADR-0107: підписи CHoCH/BOS з прив'язкою до свічки пробою і розкладкою — текст лише в найновішої події скупчення
+   * (LB2), старші — штрих (LB3). Рахується до зон: у стиснутому вигляді підписи FVG поступаються цьому тексту (LB9).
    */
-  private renderStructureMarks(marks: StructureMark[], mScale: number): void {
+  private layoutStructureMarks(swings: SmcSwing[], mScale: number, barMap: Map<number, any> | null): StructureMark[] {
+    const marks: StructureMark[] = [];
+    for (const s of swings) {
+      const isChoch = s.kind?.startsWith('choch_') ?? false;
+      if (!isChoch && !(s.kind?.startsWith('bos_') ?? false)) continue;
+
+      const x = this.toX(s.time_ms);
+      const yLevel = this.toY(s.price);
+      if (x === null || yLevel === null) {
+        this.warnOnce(`swing_xy_null:${s.id}`, {
+          code: 'overlay_coord_null',
+          kind: 'overlay',
+          id: s.id,
+          details: 'swing координати поза видимою областю; пропущено',
+        });
+        continue;
+      }
+
+      const isBull = s.kind.includes('bull');
+      // ── BOS/CHoCH: candle-anchored label (font capped at 12px) ──
+      const label = isChoch ? 'CHoCH' : 'BOS';
+      const fs = Math.min(12, Math.round((isChoch ? 10 : 9) * Math.max(0.7, mScale)));
+
+      let yAnchor = yLevel;
+      if (barMap) {
+        const bar = barMap.get(s.time_ms / 1000);
+        if (bar) {
+          const candleY = isBull
+            ? this.toY(bar.high ?? bar.close ?? s.price)
+            : this.toY(bar.low ?? bar.close ?? s.price);
+          if (candleY !== null) yAnchor = candleY;
+        }
+      }
+
+      // ADR-0043 P1: Y-guard для BOS/CHoCH labels
+      const yOffBase = Math.max(3, Math.round(8 * mScale));
+      const lblRenderY = yAnchor + (isBull ? -yOffBase : yOffBase);
+      let box: LabelBox | null = null;
+      if (lblRenderY >= CANVAS_SAFE_TOP_Y && lblRenderY <= this.cssH - CANVAS_SAFE_BOTTOM_Y) {
+        this.ctx.save();
+        this.ctx.font = `bold ${fs}px monospace`;
+        const textW = this.ctx.measureText(label).width;
+        this.ctx.restore();
+        const px = 3, py = 1;
+        box = {
+          x: x - textW / 2 - px,
+          y: isBull ? lblRenderY - fs - py : lblRenderY - py,
+          w: textW + px * 2,
+          h: fs + py * 2,
+        };
+      }
+      marks.push({
+        swing: s, x, yLevel, yAnchor, lblRenderY, label, fs, isBull, isChoch,
+        color: isChoch ? '#ffa726' : (isBull ? '#26a69a' : '#ef5350'), box, withText: false,
+      });
+    }
+
     const withText = structureLabelsWithText(
       marks.flatMap((m) => (m.box ? [{ id: m.swing.id, timeMs: m.swing.time_ms, isChoch: m.isChoch, box: m.box }] : [])),
     );
+    for (const m of marks) m.withText = withText.has(m.swing.id);
+    return marks;
+  }
+
+  /**
+   * ADR-0107 S1: текст — найновішим подіям скупчення (LB2), решті — штрих свого кольору на рівні пробою на темній
+   * підкладці (ореол) з тією ж підказкою (LB3). Штрихи — під текстами (LB4); підпис поза безпечною зоною не малюється (LB5).
+   */
+  private renderStructureMarks(marks: StructureMark[], mScale: number): void {
     const tickHalf = Math.max(3, Math.round(4 * mScale));
 
     for (const m of marks) {
-      if (!m.box || withText.has(m.swing.id)) continue;
+      if (!m.box || m.withText) continue;
       this.ctx.save();
+      if (!this._isLightTheme) {
+        // ореол: темна підкладка під штрихом — відділяє його від тіла свічки того ж кольору (як плашка під текстом)
+        this.ctx.globalAlpha = 0.75;
+        this.ctx.strokeStyle = '#000000';
+        this.ctx.lineWidth = 4.5;
+        this.ctx.beginPath();
+        this.ctx.moveTo(m.x - tickHalf - 1, m.yLevel);
+        this.ctx.lineTo(m.x + tickHalf + 1, m.yLevel);
+        this.ctx.stroke();
+      }
       this.ctx.globalAlpha = m.isChoch ? 0.85 : 0.70;
       this.ctx.strokeStyle = m.color;
       this.ctx.lineWidth = 1.5;
@@ -1373,7 +1481,7 @@ export class OverlayRenderer {
     }
 
     for (const m of marks) {
-      if (m.box && !withText.has(m.swing.id)) continue;
+      if (m.box && !m.withText) continue;
       if (m.box) {
         this.ctx.save();
         this.ctx.font = `bold ${m.fs}px monospace`;
