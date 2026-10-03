@@ -28,6 +28,7 @@ import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import type { SmcData, SmcZone, SmcLevel, SmcSwing, UiWarning, ZoneGradeInfo } from '../../types';
 import { applyBudget, DEFAULT_BUDGET, type BudgetConfig, type DisplayMode, type ZoneDisplayProps } from './DisplayBudget';
 import { visibleLevels, type GroupOverrides } from './levelGroups';
+import { structureLabelsWithText, type LabelBox } from './labelLayout';
 
 // ── ADR-0043 P1: Canvas Safe Zones — overlay елементи не рендеряться під HUD ──
 const CANVAS_SAFE_TOP_Y = 75;    // HUD + OHLCV tooltip clearance (px)
@@ -188,6 +189,24 @@ function _zoneBorderWidth(layer: string | undefined, isPD: boolean): number {
 }
 
 /** Zone label: "H4 OB▲" / "M15 FVG▼" */
+/** ADR-0107: підпис події структури, підготовлений до розкладки — текстом чи штрихом вирішує structureLabelsWithText. */
+interface StructureMark {
+  swing: SmcSwing;
+  x: number;
+  /** y рівня пробою (`price`) — тут малюється штрих */
+  yLevel: number;
+  /** y краю свічки пробою — від нього відміряно підпис і hit area */
+  yAnchor: number;
+  lblRenderY: number;
+  label: string;
+  color: string;
+  fs: number;
+  isBull: boolean;
+  isChoch: boolean;
+  /** Плашка тексту; null — підпис поза безпечною зоною (ADR-0043 P1): не малюється й місця не займає */
+  box: LabelBox | null;
+}
+
 function _zoneLabel(z: SmcZone): string {
   const tfName = z.tf_s ? (_TF_NAMES[z.tf_s] ?? `${z.tf_s}s`) : '';
   const kindShort = _KIND_SHORT[z.kind] ?? z.kind;
@@ -1110,6 +1129,8 @@ export class OverlayRenderer {
 
     // Capped scale for markers/labels — prevents visual bloat at max zoom
     const mScale = Math.min(1.4, scale);
+    // ADR-0107 S1: підписи структури збираються в циклі, малюються після нього — текст чи штрих вирішує розкладка
+    const structureMarks: StructureMark[] = [];
 
     for (const s of swings) {
       const isBos = s.kind?.startsWith('bos_') ?? false;
@@ -1143,10 +1164,9 @@ export class OverlayRenderer {
       const color = isBull ? '#26a69a' : '#ef5350';
 
       if (isStructure) {
-        // ── BOS/CHoCH: candle-anchored label (font capped at 12px) ──
+        // ── BOS/CHoCH: candle-anchored label (font capped at 12px) — малюється після циклу (ADR-0107) ──
         const label = isChoch ? 'CHoCH' : 'BOS';
         const fs = Math.min(12, Math.round((isChoch ? 10 : 9) * Math.max(0.7, mScale)));
-        const chochColor = isChoch ? '#ffa726' : color;
 
         let yAnchor = yLevel;
         if (barMap) {
@@ -1161,36 +1181,24 @@ export class OverlayRenderer {
 
         // ADR-0043 P1: Y-guard для BOS/CHoCH labels
         const yOffBase = Math.max(3, Math.round(8 * mScale));
-        const yOff = isBull ? -yOffBase : yOffBase;
-        const lblRenderY = yAnchor + yOff;
-        if (lblRenderY < CANVAS_SAFE_TOP_Y || lblRenderY > (this.cssH - CANVAS_SAFE_BOTTOM_Y)) {
-          // Поза safe zone — пропускаємо label, але hit area додається нижче
-        } else {
+        const lblRenderY = yAnchor + (isBull ? -yOffBase : yOffBase);
+        let box: LabelBox | null = null;
+        if (lblRenderY >= CANVAS_SAFE_TOP_Y && lblRenderY <= this.cssH - CANVAS_SAFE_BOTTOM_Y) {
           this.ctx.save();
           this.ctx.font = `bold ${fs}px monospace`;
-          this.ctx.textAlign = 'center';
-          this.ctx.textBaseline = isBull ? 'bottom' : 'top';
-
-          const tm = this.ctx.measureText(label);
-          const px = 3, py = 1;
-          const pillX = x - tm.width / 2 - px;
-          const pillY = isBull ? lblRenderY - fs - py : lblRenderY - py;
-          if (!this._isLightTheme) {
-            this.ctx.globalAlpha = 0.40;
-            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-            this.ctx.fillRect(pillX, pillY, tm.width + px * 2, fs + py * 2);
-          }
-
-          this.ctx.globalAlpha = isChoch ? 0.85 : 0.70;
-          this.ctx.fillStyle = chochColor;
-          this.ctx.fillText(label, x, lblRenderY);
-
+          const textW = this.ctx.measureText(label).width;
           this.ctx.restore();
+          const px = 3, py = 1;
+          box = {
+            x: x - textW / 2 - px,
+            y: isBull ? lblRenderY - fs - py : lblRenderY - py,
+            w: textW + px * 2,
+            h: fs + py * 2,
+          };
         }
-
-        this._hitAreas.push({
-          rect: { x: x - 20, y: Math.min(lblRenderY - fs - 2, yAnchor - fs - 2), w: 40, h: fs + 12 },
-          tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? `${s.kind}`,
+        structureMarks.push({
+          swing: s, x, yLevel, yAnchor, lblRenderY, label, fs, isBull, isChoch,
+          color: isChoch ? '#ffa726' : color, box,
         });
       } else if (isInducement) {
         // ── Inducement: × marker, anchored to candle extreme ──
@@ -1331,6 +1339,61 @@ export class OverlayRenderer {
           tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? (s.kind?.toUpperCase() ?? 'Swing'),
         });
       }
+    }
+
+    this.renderStructureMarks(structureMarks, mScale);
+  }
+
+  /**
+   * ADR-0107 S1: у скупченні текст лише в найновішої події структури (LB2), старші — штрих свого кольору на рівні
+   * пробою з тією ж підказкою (LB3). Штрихи — під текстами (LB4); підпис поза безпечною зоною не малюється (LB5).
+   */
+  private renderStructureMarks(marks: StructureMark[], mScale: number): void {
+    const withText = structureLabelsWithText(
+      marks.flatMap((m) => (m.box ? [{ id: m.swing.id, timeMs: m.swing.time_ms, isChoch: m.isChoch, box: m.box }] : [])),
+    );
+    const tickHalf = Math.max(3, Math.round(4 * mScale));
+
+    for (const m of marks) {
+      if (!m.box || withText.has(m.swing.id)) continue;
+      this.ctx.save();
+      this.ctx.globalAlpha = m.isChoch ? 0.85 : 0.70;
+      this.ctx.strokeStyle = m.color;
+      this.ctx.lineWidth = 1.5;
+      this.ctx.beginPath();
+      this.ctx.moveTo(m.x - tickHalf, m.yLevel);
+      this.ctx.lineTo(m.x + tickHalf, m.yLevel);
+      this.ctx.stroke();
+      this.ctx.restore();
+
+      this._hitAreas.push({
+        rect: { x: m.x - tickHalf - 4, y: m.yLevel - 6, w: tickHalf * 2 + 8, h: 12 },
+        tooltip: _SWING_TOOLTIP[m.swing.kind ?? ''] ?? `${m.swing.kind}`,
+      });
+    }
+
+    for (const m of marks) {
+      if (m.box && !withText.has(m.swing.id)) continue;
+      if (m.box) {
+        this.ctx.save();
+        this.ctx.font = `bold ${m.fs}px monospace`;
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = m.isBull ? 'bottom' : 'top';
+        if (!this._isLightTheme) {
+          this.ctx.globalAlpha = 0.40;
+          this.ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+          this.ctx.fillRect(m.box.x, m.box.y, m.box.w, m.box.h);
+        }
+        this.ctx.globalAlpha = m.isChoch ? 0.85 : 0.70;
+        this.ctx.fillStyle = m.color;
+        this.ctx.fillText(m.label, m.x, m.lblRenderY);
+        this.ctx.restore();
+      }
+
+      this._hitAreas.push({
+        rect: { x: m.x - 20, y: Math.min(m.lblRenderY - m.fs - 2, m.yAnchor - m.fs - 2), w: 40, h: m.fs + 12 },
+        tooltip: _SWING_TOOLTIP[m.swing.kind ?? ''] ?? `${m.swing.kind}`,
+      });
     }
   }
 }
