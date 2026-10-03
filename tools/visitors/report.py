@@ -22,7 +22,7 @@ import os
 import re
 import sys
 import time
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from core.config_loader import load_system_config
@@ -32,7 +32,7 @@ from tools.visitors.aggregate import DAY_MS, Digest, Row, Visit, build_visitors,
 _SESSION_FILE_RE = re.compile(r"^sessions-(\d{4})(\d{2})\.jsonl$")
 MAX_ROWS = 20  # типова межа рядків у групі (--max-rows): повідомлення Telegram ≤ 4096 символів
 MAX_VISITS_PER_ROW = 3
-MAX_VIEWS_PER_ROW = 4
+MAX_VIEWS_PER_ROW = 8  # TF у рядку «Дивився»
 MAX_OWN_SHOWN = 6  # своїх ключів у рядку «Свої»
 
 
@@ -95,43 +95,45 @@ def render(
     labels_problem: Optional[str],
     max_rows: int = MAX_ROWS,
 ) -> str:
+    """Простий текст для Telegram: розділи з позначками, кожен відвідувач — окремим блоком, час — у tz власника."""
     end_local = _local(digest.period_end_ms, tz)
-    offset_h = int((end_local.utcoffset() or dt.timedelta()).total_seconds() // 3600)
-    period = "добу" if hours == 24 else "%d год" % hours
-    lines = [
-        "Відвідувачі за %s: %s → %s (UTC%+d)"
-        % (period, _local(digest.period_start_ms, tz).strftime("%d.%m %H:%M"), end_local.strftime("%d.%m %H:%M"), offset_h)
-    ]
+    lines = ["👥 Відвідувачі за %s · до %s" % (_period_name(hours), end_local.strftime("%d.%m %H:%M"))]
     rows = digest.new + digest.returning
     if rows:
         visits = [v for row in rows for v in row.visits]
         lines.append(
-            "Люди: %d — нових %d, повторних %d · візитів %d · разом %s"
+            "Людей: %d (нових %d, повернулись %d) · візитів %d · разом %s"
             % (len(rows), len(digest.new), len(digest.returning), len(visits), _duration(sum(v.active_s for v in visits)))
         )
-        for title, group in (("Нові:", digest.new), ("Повернулись:", digest.returning)):
-            if group:
-                lines.append(title)
-                lines.extend(_visitor_row(row, digest.period_end_ms, tz) for row in group[:max_rows])
-                if len(group) > max_rows:
-                    lines.append("…ще %d" % (len(group) - max_rows))
+        for title, group in (("🆕 Нові", digest.new), ("🔁 Повернулись", digest.returning)):
+            if not group:
+                continue
+            lines.extend(["", title])
+            for number, row in enumerate(group[:max_rows], start=1):
+                if number > 1:
+                    lines.append("")
+                lines.extend(_visitor_block(number, row, digest.period_end_ms, tz))
+            if len(group) > max_rows:
+                lines.append("…і ще %d" % (len(group) - max_rows))
     else:
-        lines.append("Людей за період не було.")
+        lines.append("Людей не було.")
+    lines.append("")
     if digest.own_visits:
         devices = ", ".join("#%s %s" % own for own in digest.own[:MAX_OWN_SHOWN])
         more = " +%d" % (len(digest.own) - MAX_OWN_SHOWN) if len(digest.own) > MAX_OWN_SHOWN else ""
-        lines.append("Свої: візитів %d (%s%s)" % (digest.own_visits, devices, more))
-    bot_total = digest.bot_sessions_ua + digest.bot_sessions_short
+        lines.append("🏠 Свої: візитів %d — %s%s" % (digest.own_visits, devices, more))
     lines.append(
-        "Схоже на ботів: сесій %d (бот-UA %d, короткі без переглядів %d)"
-        % (bot_total, digest.bot_sessions_ua, digest.bot_sessions_short)
+        "🤖 Схоже на ботів: %d (назвались ботом %d, короткі без дій %d)"
+        % (digest.bot_sessions_ua + digest.bot_sessions_short, digest.bot_sessions_ua, digest.bot_sessions_short)
     )
-    since = " (журнал з %s)" % _local(digest.first_human_ms, tz).strftime("%d.%m.%Y") if digest.first_human_ms else ""
-    lines.append("7 днів: людей %d · 30 днів: %d · усього: %d%s" % (digest.humans_7d, digest.humans_30d, digest.humans_all, since))
+    first = ", перша — %s" % _local(digest.first_human_ms, tz).strftime("%d.%m.%Y") if digest.first_human_ms else ""
+    lines.append(
+        "📈 Людей за 7 днів: %d · за 30: %d · усього: %d%s" % (digest.humans_7d, digest.humans_30d, digest.humans_all, first)
+    )
     if bad_lines:
-        lines.append("Увага: пропущено зіпсованих рядків журналу — %d." % bad_lines)
+        lines.append("⚠️ Пропущено зіпсованих рядків журналу: %d" % bad_lines)
     if labels_problem:
-        lines.append("Увага: %s — мітки не застосовано." % labels_problem)
+        lines.append("⚠️ %s — мітки не застосовано" % labels_problem)
     return "\n".join(lines)
 
 
@@ -176,32 +178,81 @@ def _is_session_record(record: Any) -> bool:
     )
 
 
-def _visitor_row(row: Row, period_end_ms: int, tz: ZoneInfo) -> str:
-    visitor, visits, name = row.visitor, row.visits, row.name
-    device = "%s/%s" % (visitor.device.get("os", "?"), visitor.device.get("browser", "?"))
-    head = "#%s%s · %s · %s" % (visitor.vid[:4], " " + name if name else "", visitor.country or "?", device)
-    numbers = "візит %d" % visits[0].number if len(visits) == 1 else "візити %d–%d" % (visits[0].number, visits[-1].number)
-    if visits[0].number == 1:
-        status = "новий" if len(visits) == 1 else "новий, " + numbers
-    else:
+def _visitor_block(number: int, row: Row, period_end_ms: int, tz: ZoneInfo) -> List[str]:
+    """Відвідувач: хто й звідки, з якого дня з нами, кожен візит рядком, що дивився, з ким одночасно."""
+    visitor, visits = row.visitor, row.visits
+    block = [
+        "%d. #%s%s · %s · %s"
+        % (number, visitor.vid[:4], " " + row.name if row.name else "", _country(visitor.country), _device(visitor.device))
+    ]
+    if visits[0].number > 1:
+        numbers = "№%d" % visits[0].number if len(visits) == 1 else "№%d–%d" % (visits[0].number, visits[-1].number)
         days = (period_end_ms - visitor.first_ms) // DAY_MS
-        status = "з нами з %s (%d дн.), %s" % (_local(visitor.first_ms, tz).strftime("%d.%m"), days, numbers)
-    end_date = _local(period_end_ms, tz).date()
-    spans = "; ".join(_visit_span(v, end_date, tz) for v in visits[:MAX_VISITS_PER_ROW])
+        block.append("   з нами з %s (%d дн.), візит %s" % (_local(visitor.first_ms, tz).strftime("%d.%m"), days, numbers))
+    block.extend("   • " + _visit_span(visit, tz) for visit in visits[:MAX_VISITS_PER_ROW])
     if len(visits) > MAX_VISITS_PER_ROW:
-        spans += "; +%d" % (len(visits) - MAX_VISITS_PER_ROW)
-    views: List[str] = []
-    for visit in visits:
-        views.extend(view for view in visit.views if view not in views)
-    shown = ", ".join(views[:MAX_VIEWS_PER_ROW]) + (" +%d" % (len(views) - MAX_VIEWS_PER_ROW) if len(views) > MAX_VIEWS_PER_ROW else "")
-    together = " · одночасно з " + ", ".join("#" + vid for vid in row.together) if row.together else ""
-    return "  %s — %s · %s%s%s" % (head, status, spans, " · " + shown if shown else "", together)
+        block.append("   • …і ще %d" % (len(visits) - MAX_VISITS_PER_ROW))
+    views = _views_by_symbol(visits)
+    if views:
+        block.append("   Дивився: " + views)
+    if row.together:
+        block.append("   👥 одночасно з " + ", ".join("#" + vid for vid in row.together))
+    return block
 
 
-def _visit_span(visit: Visit, end_date: dt.date, tz: ZoneInfo) -> str:
+def _visit_span(visit: Visit, tz: ZoneInfo) -> str:
     start, end = _local(visit.start_ms, tz), _local(visit.end_ms, tz)
-    prefix = "" if start.date() == end_date else start.strftime("%d.%m ")
-    return "%s%s–%s %s" % (prefix, start.strftime("%H:%M"), end.strftime("%H:%M"), _duration(visit.active_s))
+    finish = end.strftime("%H:%M") if end.date() == start.date() else end.strftime("%d.%m %H:%M")
+    return "%s–%s · %s" % (start.strftime("%d.%m %H:%M"), finish, _duration(visit.active_s))
+
+
+def _views_by_symbol(visits: Sequence[Visit]) -> str:
+    """«XAU/USD M30, M15; GER30 H1» — TF згруповано за символом у порядку перегляду, понад межу — «+N»."""
+    by_symbol: Dict[str, List[str]] = {}
+    shown = 0
+    hidden = 0
+    for visit in visits:
+        for view in visit.views:
+            symbol, _, tf = view.rpartition(":")
+            tfs = by_symbol.setdefault(symbol or view, [])
+            if tf in tfs:
+                continue
+            if shown >= MAX_VIEWS_PER_ROW:
+                hidden += 1
+                continue
+            tfs.append(tf)
+            shown += 1
+    text = "; ".join("%s %s" % (symbol, ", ".join(tfs)) for symbol, tfs in by_symbol.items() if tfs)
+    return text + (" +%d" % hidden if hidden else "")
+
+
+def _country(code: Optional[str]) -> str:
+    """Прапорець із коду ISO (регіональні літери Unicode) — без таблиці назв."""
+    if not code or len(code) != 2 or not code.isalpha():
+        return "🌐 ?"
+    return "".join(chr(0x1F1E6 + ord(letter) - ord("A")) for letter in code.upper()) + " " + code.upper()
+
+
+def _device(device: Mapping[str, Any]) -> str:
+    os_name, browser = device.get("os", "?"), device.get("browser", "?")
+    if os_name == "?" and browser == "?":
+        return "пристрій невідомий"
+    return "%s, %s" % (os_name, browser)
+
+
+def _period_name(hours: int) -> str:
+    if hours == 24:
+        return "добу"
+    if hours % 24:
+        return "%d год" % hours
+    days = hours // 24
+    if days % 10 == 1 and days % 100 != 11:
+        word = "день"
+    elif 2 <= days % 10 <= 4 and not 12 <= days % 100 <= 14:
+        word = "дні"
+    else:
+        word = "днів"
+    return "%d %s" % (days, word)
 
 
 def _duration(seconds: float) -> str:
