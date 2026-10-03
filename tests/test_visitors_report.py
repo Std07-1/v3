@@ -139,7 +139,7 @@ def test_render_shows_local_times_statuses_and_bot_line():
     assert "#a1f3 Юра · UA · Windows/Chrome — новий · 17:10–17:35 25 хв · XAU/USD:M30, XAU/USD:M15" in text
     assert "#7c20 · CZ · Windows/Chrome — з нами з 16.09 (13 дн.), візит 2 · 19:00–19:12 12 хв" in text
     assert "Схоже на ботів: сесій 1 (бот-UA 1, короткі без переглядів 0)" in text
-    assert "7 днів: людей 2 · 30 днів: 2 · усього: 2 (журнал з 16.09.2026)" in text
+    assert "7 днів: людей 2 · 30 днів: 2 · усього: 2 (перша людина — 16.09.2026)" in text
     assert "пропущено зіпсованих рядків журналу — 2" in text
 
 

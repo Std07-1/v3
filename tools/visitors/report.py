@@ -126,7 +126,7 @@ def render(
         "Схоже на ботів: сесій %d (бот-UA %d, короткі без переглядів %d)"
         % (bot_total, digest.bot_sessions_ua, digest.bot_sessions_short)
     )
-    since = " (журнал з %s)" % _local(digest.first_human_ms, tz).strftime("%d.%m.%Y") if digest.first_human_ms else ""
+    since = " (перша людина — %s)" % _local(digest.first_human_ms, tz).strftime("%d.%m.%Y") if digest.first_human_ms else ""
     lines.append("7 днів: людей %d · 30 днів: %d · усього: %d%s" % (digest.humans_7d, digest.humans_30d, digest.humans_all, since))
     if bad_lines:
         lines.append("Увага: пропущено зіпсованих рядків журналу — %d." % bad_lines)
