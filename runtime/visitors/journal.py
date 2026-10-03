@@ -29,6 +29,7 @@ COUNTRY_HEADER = "CF-IPCountry"
 # nginx ставить його кожному зовнішньому /ws; без нього — підключення з самого сервера прямо на 127.0.0.1:8000
 # (службові зонди, інструменти), а не відвідувач
 PROXY_HEADER = "X-Real-IP"
+HOME_NETWORKS_FILE = "home_networks.txt"
 
 _VISITOR_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
@@ -141,6 +142,7 @@ class Visit:
     device: Dict[str, Any]
     bot_ua: bool
     internal: bool  # з самого сервера, повз nginx — службове, не відвідувач
+    home_net: bool  # з домашньої мережі власника (home_networks.txt) — свій пристрій
     start_ms: int
     max_views: int
     messages: int = 0
@@ -172,11 +174,47 @@ class Visit:
             "device": self.device,
             "bot_ua": self.bot_ua,
             "internal": self.internal,
+            "home_net": self.home_net,
             "messages": self.messages,
             "views": self.views,
             "views_dropped": self.views_dropped,
             "close_code": close_code,
         }
+
+
+class HomeNetworks:
+    """Домашні мережі власника (ADR-0105 §3.3): `<dir>/home_networks.txt`, поза git — рядки «<IP або префікс> [мітка]»,
+    префікс закінчується крапкою (IPv4, «203.0.113.») або двокрапкою (IPv6, «2001:db8:»). Файл перечитується, коли
+    змінився; немає файлу — домашніх мереж нема. Адреса відвідувача ніде не зберігається — лише «з домашньої так/ні»."""
+
+    def __init__(self, path: str) -> None:
+        self._path = path
+        self._mtime: Optional[float] = None
+        self._entries: Tuple[str, ...] = ()
+        self._last_error = ""
+
+    def contains(self, ip: str) -> bool:
+        self._refresh()
+        return bool(ip) and any(ip.startswith(e) if e.endswith((".", ":")) else ip == e for e in self._entries)
+
+    def _refresh(self) -> None:
+        try:
+            mtime = os.stat(self._path).st_mtime
+            if mtime == self._mtime:
+                return
+            with open(self._path, encoding="utf-8") as fh:
+                lines = fh.read().splitlines()
+        except FileNotFoundError:
+            self._mtime, self._entries = None, ()
+            return
+        except OSError as exc:
+            if str(exc) != self._last_error:  # раз на нову причину, не на кожну сесію
+                self._last_error = str(exc)
+                _log.warning("VISITORS_HOME_NETWORKS_UNREADABLE path=%s err=%s (лишаю попередній список)", self._path, exc)
+            return
+        self._entries = tuple(line.split()[0] for line in lines if line.strip() and not line.lstrip().startswith("#"))
+        self._mtime, self._last_error = mtime, ""
+        _log.info("VISITORS_HOME_NETWORKS loaded=%d path=%s", len(self._entries), self._path)
 
 
 class VisitorsJournal:
@@ -185,6 +223,7 @@ class VisitorsJournal:
     def __init__(self, directory: str, max_views_per_visit: int) -> None:
         self._dir = directory
         self._max_views = max_views_per_visit
+        self._home = HomeNetworks(os.path.join(directory, HOME_NETWORKS_FILE))
         self.write_failures = 0
 
     def start(self, cookies: Mapping[str, str], headers: Mapping[str, str], now_ms: int) -> Visit:
@@ -201,6 +240,7 @@ class VisitorsJournal:
             device=classify_device(user_agent),
             bot_ua=is_bot_user_agent(user_agent),
             internal=PROXY_HEADER not in headers,
+            home_net=self._home.contains(headers.get(PROXY_HEADER, "").strip()),
             start_ms=now_ms,
             max_views=self._max_views,
         )

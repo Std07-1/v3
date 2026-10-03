@@ -71,12 +71,49 @@ def test_summarize_splits_new_returning_and_bots_excluding_own_everywhere():
     visitors = build_visitors(records, 30, 30)
     labels = {"000": {"name": "мій ПК", "own": True}, "0f0f": {"name": "перевірка", "own": True}}
     digest = summarize(visitors, records, (T0, T0 + DAY), labels)
-    assert [row[0].vid for row in digest.new] == [new]
-    assert [row[0].vid for row in digest.returning] == [returning]
+    assert [row.visitor.vid for row in digest.new] == [new]
+    assert [row.visitor.vid for row in digest.returning] == [returning]
     assert digest.own_visits == 2
+    assert sorted(digest.own) == [("0000", "мій ПК"), ("0f0f", "перевірка")]
     assert (digest.bot_sessions_ua, digest.bot_sessions_short) == (1, 1)
     assert (digest.humans_7d, digest.humans_30d, digest.humans_all) == (2, 2, 2)
     assert digest.first_human_ms == T0 - 10 * DAY
+
+
+def test_home_network_devices_are_own_without_labels():
+    home_pc, phone, stranger = "h" * 32, "p" * 32, "x" * 32
+    records = [
+        dict(session(home_pc, T0, 60), home_net=True),
+        dict(session(phone, T0 + HOUR, 10), home_net=False),  # той самий телефон удома й на мобільному
+        dict(session(phone, T0 + 3 * HOUR, 10), home_net=True),
+        dict(session(stranger, T0 + 5 * HOUR, 10), home_net=False),
+    ]
+    digest = summarize(build_visitors(records, 30, 30), records, (T0, T0 + DAY), {})
+    assert [row.visitor.vid for row in digest.new] == [stranger]
+    assert sorted(digest.own) == [("hhhh", "дім"), ("pppp", "дім")] and digest.own_visits == 3
+    assert digest.humans_all == 1
+
+
+def test_overlapping_visits_of_different_people_are_marked_together():
+    pc, phone, later = "9811" + "0" * 28, "fe98" + "0" * 28, "c" * 32
+    records = [
+        session(pc, T0, 6, country="DK"),
+        session(phone, T0 + 2 * MIN, 3, country="TR"),
+        session(later, T0 + 2 * HOUR, 5),
+    ]
+    digest = summarize(build_visitors(records, 30, 30), records, (T0, T0 + DAY), {})
+    together = {row.visitor.vid[:4]: row.together for row in digest.new}
+    assert together == {"9811": ["fe98"], "fe98": ["9811"], "cccc": []}
+    text = render(digest, 24, KYIV, 0, None)
+    assert "· одночасно з #fe98" in text and "· одночасно з #9811" in text
+
+
+def test_own_line_names_devices():
+    records = [dict(session("d8ec" + "0" * 28, T0, 2), home_net=False), dict(session("9868" + "0" * 28, T0, 30), home_net=True)]
+    labels = {"d8ec": {"name": "телефон", "own": True}}
+    digest = summarize(build_visitors(records, 30, 30), records, (T0, T0 + DAY), labels)
+    (line,) = [l for l in render(digest, 24, KYIV, 0, None).splitlines() if l.startswith("Свої")]
+    assert line.startswith("Свої: візитів 2 (") and "#d8ec телефон" in line and "#9868 дім" in line
 
 
 def test_resolve_label_prefers_longest_prefix():

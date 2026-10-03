@@ -1,7 +1,8 @@
 """ADR-0105 S2: із сесій журналу — відвідувачі, візити, людина чи бот, підсумок за період. Чиста логіка, без I/O.
 
 Сесія = рядок журналу (одне WS-підключення). Візит = сесії одного ключа, між якими пауза не довша за `visit_gap_min`
-(перепідключення, кілька вкладок). Людина — ключ, у якого є хоч одна людська сесія (ADR-0105 §3.3).
+(перепідключення, кілька вкладок). Людина — ключ, у якого є хоч одна людська сесія (ADR-0105 §3.3). Свій — ключ з міткою
+own або хоч одною сесією з домашньої мережі власника (home_net): свої не рахуються ні людьми, ні ботами.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ class Visit:
 class Visitor:
     vid: str
     human: bool
+    home: bool  # хоч одна сесія з домашньої мережі власника
     first_ms: int
     country: Optional[str]
     device: Mapping[str, Any]
@@ -32,11 +34,22 @@ class Visitor:
 
 
 @dataclass
+class Row:
+    """Відвідувач у зведенні: його візити за період, мітка, з ким дивився одночасно."""
+
+    visitor: Visitor
+    visits: List[Visit]
+    name: Optional[str]
+    together: List[str] = field(default_factory=list)  # короткі ключі інших людей з перетином у часі
+
+
+@dataclass
 class Digest:
     period_start_ms: int
     period_end_ms: int
-    new: List[Tuple[Visitor, List[Visit], Optional[str]]]  # (відвідувач, його візити за період, мітка)
-    returning: List[Tuple[Visitor, List[Visit], Optional[str]]]
+    new: List[Row]
+    returning: List[Row]
+    own: List[Tuple[str, str]]  # (короткий ключ, мітка або «дім») своїх, що заходили за період
     own_visits: int
     bot_sessions_ua: int
     bot_sessions_short: int
@@ -72,6 +85,7 @@ def build_visitors(
         visitors[vid] = Visitor(
             vid=vid,
             human=any(is_human_session(r, human_min_session_s) for r in sessions),
+            home=any(r.get("home_net") for r in sessions),
             first_ms=sessions[0]["start_ms"],
             country=latest.get("country"),
             device=latest.get("device") or {},
@@ -88,30 +102,34 @@ def summarize(
 ) -> Digest:
     """Підсумок за [start, end): люди нові/повторні, свої (виключені звідусіль), схожі на ботів, охоплення 7/30/усього."""
     start_ms, end_ms = period
-    new, returning, own_visits = [], [], 0
+    rows: List[Row] = []
+    own: List[Tuple[str, str]] = []
+    own_visits = 0
     for visitor in visitors.values():
         in_period = [v for v in visitor.visits if start_ms <= v.start_ms < end_ms]
         if not in_period:
             continue
         label = resolve_label(visitor.vid, labels)
-        if label.get("own"):  # свої пристрої — лише в рядку «Свої», ні в людях, ні в ботах
+        if is_own(visitor, labels):  # свої пристрої — лише в рядку «Свої», ні в людях, ні в ботах
             own_visits += len(in_period)
+            own.append((visitor.vid[:4], str(label.get("name") or "дім")))
             continue
         if visitor.human:
-            (new if visitor.first_ms >= start_ms else returning).append((visitor, in_period, label.get("name")))
+            rows.append(Row(visitor, in_period, label.get("name")))
+    _mark_together(rows)
+    rows.sort(key=lambda row: row.visits[0].start_ms)
     bots = [
         r
         for r in records
-        if start_ms <= r["start_ms"] < end_ms
-        and not visitors[r["vid"]].human
-        and not resolve_label(r["vid"], labels).get("own")
+        if start_ms <= r["start_ms"] < end_ms and not visitors[r["vid"]].human and not is_own(visitors[r["vid"]], labels)
     ]
-    humans = [v for v in visitors.values() if v.human and not resolve_label(v.vid, labels).get("own")]
+    humans = [v for v in visitors.values() if v.human and not is_own(v, labels)]
     return Digest(
         period_start_ms=start_ms,
         period_end_ms=end_ms,
-        new=sorted(new, key=lambda row: row[1][0].start_ms),
-        returning=sorted(returning, key=lambda row: row[1][0].start_ms),
+        new=[row for row in rows if row.visitor.first_ms >= start_ms],
+        returning=[row for row in rows if row.visitor.first_ms < start_ms],
+        own=own,
         own_visits=own_visits,
         bot_sessions_ua=sum(1 for r in bots if r.get("bot_ua", True)),
         bot_sessions_short=sum(1 for r in bots if not r.get("bot_ua", True)),
@@ -122,10 +140,24 @@ def summarize(
     )
 
 
+def is_own(visitor: Visitor, labels: Mapping[str, Mapping[str, Any]]) -> bool:
+    """Свій пристрій: мітка own або сесії з домашньої мережі власника (рішення власника 03.10 — автоматично)."""
+    return bool(resolve_label(visitor.vid, labels).get("own")) or visitor.home
+
+
 def resolve_label(vid: str, labels: Mapping[str, Mapping[str, Any]]) -> Mapping[str, Any]:
     """Мітка за найдовшим префіксом ключа (власник бачить у зведенні «#a1f3» і підписує саме так)."""
     matches = [key for key in labels if vid.startswith(key)]
     return labels[max(matches, key=len)] if matches else {}
+
+
+def _mark_together(rows: Sequence[Row]) -> None:
+    """Двоє різних людей з перетином візитів у часі — «одночасно з» (один на двох пристроях або дивились разом)."""
+    for i, first in enumerate(rows):
+        for second in rows[i + 1:]:
+            if any(a.start_ms < b.end_ms and b.start_ms < a.end_ms for a in first.visits for b in second.visits):
+                first.together.append(second.visitor.vid[:4])
+                second.together.append(first.visitor.vid[:4])
 
 
 def _active_since(humans: Sequence[Visitor], since_ms: int, end_ms: int) -> int:

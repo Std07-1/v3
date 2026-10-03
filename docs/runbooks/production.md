@@ -433,6 +433,8 @@ WS-сервер видає відвідувачу анонімний ключ (c
 | Зведення вручну (друк, без відправки) | `cd /opt/smc-v3 && sudo -u smc ./.venv/bin/python -m tools.visitors.report [--hours 72]` |
 | Щоденне зведення | приходить у ранковому звіті системного бота о 09:00 за Прагою (ADR-0106, розділ «Нагляд за VPS») |
 | Підписати відвідувача / свої пристрої | `/var/lib/smc-v3/visitors/labels.json`: `{"a1f3": {"name": "Юра"}, "7c20": {"name": "мій ПК", "own": true}}` — ключ за префіксом із зведення |
+| Домашні мережі (усе звідти — «свої») | `/var/lib/smc-v3/visitors/home_networks.txt` (smc, поза git): рядки `<IP або префікс з крапкою/двокрапкою> [мітка]`; перечитується без рестарту |
+| Відвідувачі за запитом | боту «Monitor»: `/visitors` (7 днів), `/visitors 30`, `/status` — відповідь до хвилини |
 | Вимкнути | `visitors.enabled = false` у git → деплой → рестарт `smc:smc-ws` |
 
 ## Нагляд за VPS (ADR-0106)
@@ -444,9 +446,9 @@ WS-сервер видає відвідувачу анонімний ключ (c
 
 | Дія | Команда |
 | --- | --- |
-| Встановити з git (після `git pull`) | `sudo install -m 755 /opt/smc-v3/ops/vps/aione-watchdog.sh /usr/local/sbin/aione-watchdog.sh && sudo install -m 750 /opt/smc-v3/ops/vps/aione-alert.sh /usr/local/sbin/aione-alert.sh` |
-| Встановлено саме git-версію? | `sha256sum /opt/smc-v3/ops/vps/aione-*.sh /usr/local/sbin/aione-watchdog.sh /usr/local/sbin/aione-alert.sh` |
-| Пісочниця без відправки (реальні дані) | `sudo env STATE_DIR=/tmp/wd/state LOG=/tmp/wd/log ALERT=/bin/echo AUTOHEAL=0 bash /opt/smc-v3/ops/vps/aione-watchdog.sh` — перший тік засіває, наступні працюють |
+| Встановити з git (після `git pull`) | для кожного з `aione-watchdog.sh` (755), `aione-alert.sh`, `aione-commands.sh` (750): `sudo install -m <права> /opt/smc-v3/ops/vps/<файл> /usr/local/sbin/.<файл>.new && sudo mv -f /usr/local/sbin/.<файл>.new /usr/local/sbin/<файл>` — атомарно, таймер не підхопить напівзаписаний файл |
+| Встановлено саме git-версію? | `sha256sum /opt/smc-v3/ops/vps/aione-*.sh /usr/local/sbin/aione-*.sh` |
+| Пісочниця без відправки (реальні дані) | `sudo env STATE_DIR=/tmp/wd/state LOG=/tmp/wd/log ALERT=/bin/echo COMMANDS=/nonexistent AUTOHEAL=0 bash /opt/smc-v3/ops/vps/aione-watchdog.sh` — перший тік засіває, наступні працюють; `COMMANDS=/nonexistent` обов'язково: інакше пісочниця підтвердить у Telegram і «з'їсть» команди власника |
 | Журнал відправок | `sudo tail -n 50 /var/log/aione-alerts.log` (`SENT ok` / `SEND FAIL`) |
 | Пробне повідомлення | `sudo /usr/local/sbin/aione-alert.sh "тест"` |
 | Замінити токен бота | `sudo bash <скрипт наосліп>`: токен лише через stdin, не в argv (sudo пише argv в auth.log) |

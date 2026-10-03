@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 
 import pytest
 
 from runtime.visitors.journal import (
     VISITOR_COOKIE,
+    HomeNetworks,
     VisitorsJournal,
     classify_device,
     is_bot_user_agent,
@@ -84,6 +86,26 @@ def test_start_reuses_valid_cookie_and_issues_new_otherwise(tmp_path):
         assert fresh.bot_ua is True  # без User-Agent
 
 
+def test_home_networks_match_prefixes_and_exact_addresses_and_reload(tmp_path):
+    path = tmp_path / "home_networks.txt"
+    homes = HomeNetworks(str(path))
+    assert homes.contains("203.0.113.7") is False  # файлу ще нема
+    path.write_text("# дім\n203.0.113. домашній провайдер\n2001:db8:1:\n198.51.100.9 офіс\n", encoding="utf-8")
+    assert homes.contains("203.0.113.7") and homes.contains("2001:db8:1:ff::2") and homes.contains("198.51.100.9")
+    assert not homes.contains("203.0.1130.7") and not homes.contains("198.51.100.90") and not homes.contains("")
+    path.write_text("198.51.100.9\n", encoding="utf-8")
+    os.utime(path, (1, 2))  # інший mtime навіть на грубій файловій системі
+    assert not homes.contains("203.0.113.7") and homes.contains("198.51.100.9")
+
+
+def test_start_marks_home_network_by_real_ip_only(tmp_path):
+    (tmp_path / "home_networks.txt").write_text("203.0.113.\n", encoding="utf-8")
+    journal = VisitorsJournal(str(tmp_path), 20)
+    assert journal.start({}, {"X-Real-IP": "203.0.113.5"}, START_MS).home_net is True
+    assert journal.start({}, {"X-Real-IP": "198.51.100.5"}, START_MS).home_net is False
+    assert journal.start({}, {}, START_MS).home_net is False  # службове: адреси від nginx нема
+
+
 def test_start_marks_connections_bypassing_nginx_as_internal(tmp_path):
     journal = VisitorsJournal(str(tmp_path), 20)
     assert journal.start({}, {"X-Real-IP": "203.0.113.5", "User-Agent": UA_WIN_CHROME}, START_MS).internal is False
@@ -123,6 +145,7 @@ def test_finish_appends_monthly_jsonl_without_ip(tmp_path):
         "device": {"os": "iOS", "browser": "Safari", "mobile": True},
         "bot_ua": False,
         "internal": False,
+        "home_net": False,
         "messages": 1,
         "views": ["XAU/USD:M15"],
         "views_dropped": 0,

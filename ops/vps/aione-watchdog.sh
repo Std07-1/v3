@@ -54,7 +54,8 @@
 #     і на КІНЕЦЬ (RES_CLEAR_TICKS поспіль) з винуватцями й тривалістю; поки триває — нагадування раз на RES_REMIND_S;
 #   * падіння — з хвостом stderr (схоже на секрет — масковано), відновлення — з тривалістю простою;
 #   * ранковий звіт о REPORT_HOUR за REPORT_TZ замість heartbeat-а: сервер, платформа, нічний settle, Арчі,
-#     SSH, бани, події доби, відвідувачі (ADR-0105). Доставлений звіт обнуляє денні лічильники.
+#     SSH, бани, події доби, відвідувачі (ADR-0105). Доставлений звіт обнуляє денні лічильники;
+#   * команди власника боту (§3.7): /visitors [днів], /status — відповідь за тік; лише з чату ALERT_CHAT_ID.
 set -u
 
 STATE_DIR="${STATE_DIR:-/var/lib/aione-alerts}"   # overridable so tests isolate state
@@ -66,6 +67,7 @@ PROC_MEMINFO="${PROC_MEMINFO:-/proc/meminfo}"      # overridable for tests
 PLATFORM_DIR="${PLATFORM_DIR:-/opt/smc-v3}"        # checkout платформи: venv для зведення відвідувачів
 VISITORS_USER="${VISITORS_USER:-smc}"              # власник журналу відвідувачів (ADR-0105)
 SETTLE_STATUS="${SETTLE_STATUS:-/var/lib/smc-v3/m1_settle/last_status.json}"  # стан нічного settle (ADR-0103)
+COMMANDS="${COMMANDS:-/usr/local/sbin/aione-commands.sh}"  # команди власника боту (ADR-0106 §3.7)
 BACKUP_DIR="${BACKUP_DIR:-/opt/backups}"           # overridable for tests
 KNOWN_IPS_FILE="${KNOWN_IPS_FILE:-/etc/aione-alerts/known_ips}"  # IP/prefix -> human label for SSH alerts
 KNOWN_KEYS_FILE="${KNOWN_KEYS_FILE:-/etc/aione-alerts/known_keys}"  # SSH key fingerprint -> human label
@@ -619,11 +621,11 @@ report_events_lines() {
   done
 }
 
-report_visitors() {                        # зведення ADR-0105 від власника журналу; збій — рядком, не тишею
-  local text rc
+report_visitors() {                        # $1=годин (24); зведення ADR-0105 від власника журналу; збій — рядком
+  local hours="${1:-24}" text rc
   text="$(cd "$PLATFORM_DIR" 2>/dev/null && timeout "$VISITORS_TIMEOUT_S" runuser -u "$VISITORS_USER" -- \
           env PYTHONIOENCODING=utf-8 ./.venv/bin/python -m tools.visitors.report --apply-retention \
-          --max-rows "$VISITORS_REPORT_ROWS" 2>>"$LOG")"
+          --hours "$hours" --max-rows "$VISITORS_REPORT_ROWS" 2>>"$LOG")"
   rc=$?
   if [ "$rc" -eq 0 ] && [ -n "$text" ]; then printf '%s' "$text"
   else printf '❗ Відвідувачі: зведення не пораховано (код %s)' "$rc"; fi
@@ -650,6 +652,44 @@ check_morning_report() {
   return 0
 }
 
+# ---------- команди власника (ADR-0106 §3.7) ----------
+command_reply() {                          # $1=команда $2=аргумент -> текст відповіді
+  local days
+  case "$1" in
+    /visitors)
+      days="${2:-7}"
+      case "$days" in ''|*[!0-9]*) days=7 ;; esac
+      [ "$days" -lt 1 ] && days=1
+      [ "$days" -gt 365 ] && days=365
+      report_visitors "$(( days * 24 ))" ;;
+    /status)
+      printf '📟 Стан зараз — %s\n%s\n%s\n%s\n%s\n%s\nБанів fail2ban з ранку: %s\n%s' \
+        "$(TZ="$REPORT_TZ" date '+%d.%m %H:%M')" "$(report_server_line)" "$(report_programs_lines)" \
+        "$(report_settle_line)" "$(report_archi_line)" "$(report_ssh_line | sed 's/за добу/з ранку/')" \
+        "$(cat "$STATE_DIR/ban.tally" 2>/dev/null || echo 0)" "$(report_events_lines | sed 's/за добу/з ранку/')" ;;
+    *)
+      printf 'Команди:\n/visitors — відвідувачі за 7 днів (/visitors 30 — за 30)\n/status — стан сервера зараз' ;;
+  esac
+}
+
+# Нові повідомлення боту -> відповіді. offset рухається лише після відповідей на ВСІ команди пачки (повтор тіку
+# може продублювати відповідь, але не загубити команду); перший запуск лише засіває offset — старі команди не виконуються.
+check_commands() {
+  [ -x "$COMMANDS" ] || return 0
+  local of="$STATE_DIR/tg.offset" out next line cmd arg rest
+  out="$("$COMMANDS" "$(cat "$of" 2>/dev/null || echo seed)" 2>>"$LOG")" || { log "commands: poll failed (retry next tick)"; return 0; }
+  next="$(printf '%s\n' "$out" | sed -n 's/^NEXT \([0-9][0-9]*\)$/\1/p')"
+  [ -n "$next" ] || { log "commands: no NEXT in poll output"; return 0; }
+  while IFS= read -r line; do
+    case "$line" in "CMD "*) ;; *) continue ;; esac
+    read -r cmd arg rest <<< "${line#CMD }"
+    log "command $cmd ${arg:-}"
+    "$ALERT" "$(command_reply "$cmd" "${arg:-}")" || { log "commands: reply FAILED (retry next tick)"; return 0; }
+  done <<< "$out"
+  echo "$next" > "$of"
+  return 0
+}
+
 # ---------- main ----------
 # Single-run lock: a slow tick + the next timer fire (or a manual test run racing
 # the timer) must not interleave state writes. Best-effort (proceed if flock absent).
@@ -666,5 +706,6 @@ check_oom        || log "check_oom errored"
 check_bans       || log "check_bans errored"
 check_ssh_logins || log "check_ssh_logins errored"
 check_morning_report || log "check_morning_report errored"
+check_commands   || log "check_commands errored"
 log "tick done"
 exit 0

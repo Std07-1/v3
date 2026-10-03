@@ -27,12 +27,13 @@ from zoneinfo import ZoneInfo
 
 from core.config_loader import load_system_config
 from runtime.visitors.journal import visitors_policy
-from tools.visitors.aggregate import DAY_MS, Digest, Visit, Visitor, build_visitors, summarize, visitor_sessions
+from tools.visitors.aggregate import DAY_MS, Digest, Row, Visit, build_visitors, summarize, visitor_sessions
 
 _SESSION_FILE_RE = re.compile(r"^sessions-(\d{4})(\d{2})\.jsonl$")
 MAX_ROWS = 20  # типова межа рядків у групі (--max-rows): повідомлення Telegram ≤ 4096 символів
 MAX_VISITS_PER_ROW = 3
 MAX_VIEWS_PER_ROW = 4
+MAX_OWN_SHOWN = 6  # своїх ключів у рядку «Свої»
 
 
 def load_records(directory: str) -> Tuple[List[Dict[str, Any]], int]:
@@ -103,7 +104,7 @@ def render(
     ]
     rows = digest.new + digest.returning
     if rows:
-        visits = [v for _, period_visits, _ in rows for v in period_visits]
+        visits = [v for row in rows for v in row.visits]
         lines.append(
             "Люди: %d — нових %d, повторних %d · візитів %d · разом %s"
             % (len(rows), len(digest.new), len(digest.returning), len(visits), _duration(sum(v.active_s for v in visits)))
@@ -117,7 +118,9 @@ def render(
     else:
         lines.append("Людей за період не було.")
     if digest.own_visits:
-        lines.append("Свої: візитів %d" % digest.own_visits)
+        devices = ", ".join("#%s %s" % own for own in digest.own[:MAX_OWN_SHOWN])
+        more = " +%d" % (len(digest.own) - MAX_OWN_SHOWN) if len(digest.own) > MAX_OWN_SHOWN else ""
+        lines.append("Свої: візитів %d (%s%s)" % (digest.own_visits, devices, more))
     bot_total = digest.bot_sessions_ua + digest.bot_sessions_short
     lines.append(
         "Схоже на ботів: сесій %d (бот-UA %d, короткі без переглядів %d)"
@@ -173,8 +176,8 @@ def _is_session_record(record: Any) -> bool:
     )
 
 
-def _visitor_row(row: Tuple[Visitor, List[Visit], Optional[str]], period_end_ms: int, tz: ZoneInfo) -> str:
-    visitor, visits, name = row
+def _visitor_row(row: Row, period_end_ms: int, tz: ZoneInfo) -> str:
+    visitor, visits, name = row.visitor, row.visits, row.name
     device = "%s/%s" % (visitor.device.get("os", "?"), visitor.device.get("browser", "?"))
     head = "#%s%s · %s · %s" % (visitor.vid[:4], " " + name if name else "", visitor.country or "?", device)
     numbers = "візит %d" % visits[0].number if len(visits) == 1 else "візити %d–%d" % (visits[0].number, visits[-1].number)
@@ -191,7 +194,8 @@ def _visitor_row(row: Tuple[Visitor, List[Visit], Optional[str]], period_end_ms:
     for visit in visits:
         views.extend(view for view in visit.views if view not in views)
     shown = ", ".join(views[:MAX_VIEWS_PER_ROW]) + (" +%d" % (len(views) - MAX_VIEWS_PER_ROW) if len(views) > MAX_VIEWS_PER_ROW else "")
-    return "  %s — %s · %s%s" % (head, status, spans, " · " + shown if shown else "")
+    together = " · одночасно з " + ", ".join("#" + vid for vid in row.together) if row.together else ""
+    return "  %s — %s · %s%s%s" % (head, status, spans, " · " + shown if shown else "", together)
 
 
 def _visit_span(visit: Visit, end_date: dt.date, tz: ZoneInfo) -> str:

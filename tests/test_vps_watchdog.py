@@ -42,7 +42,12 @@ STUBS = {
     ),
     "df": 'echo "Filesystem 1024-blocks Used Available Capacity Mounted"; echo "/dev/sda1 100 38 62 38% /"\n',
     "uptime": 'echo "up 3 weeks"\n',
-    "runuser": 'echo "Відвідувачі за добу: тест"\n',
+    "runuser": 'echo "$*" >> "$BOX/runuser_args"; echo "Відвідувачі за добу: тест"\n',
+    # команди власника: на засів — NEXT 5, далі — вміст commands_out; аргумент виклику — у commands_args
+    "commands": (
+        'echo "$1" >> "$BOX/commands_args"\n'
+        'if [ "$1" = seed ]; then echo "NEXT 5"; else cat "$BOX/commands_out" 2>/dev/null || echo "NEXT $1"; fi\n'
+    ),
 }
 
 
@@ -79,6 +84,7 @@ class Box:
             STATE_DIR=str(root / "state"),
             LOG=str(root / "watchdog.log"),
             ALERT=str(bin_dir / "alert"),
+            COMMANDS=str(bin_dir / "commands"),
             KNOWN_IPS_FILE=str(root / "known_ips"),
             KNOWN_KEYS_FILE=str(root / "known_keys"),
             BACKUP_DIR=str(root / "backups"),
@@ -213,26 +219,82 @@ def test_morning_report_retried_until_delivered(box):
     assert box.state("report.date") != "2000-01-01" and box.state("ssh_own.tally") == "0"
 
 
-def test_alert_sender_truncates_long_text_by_characters(tmp_path):
+def test_owner_commands_answered_and_offset_advanced_only_after_replies(box):
+    assert box.state("tg.offset") == "5"  # перший тік лише засіяв offset
+    box.write("commands_out", "NEXT 9\nCMD /visitors 30\nCMD /help\n")
+    box.tick()
+    visitors_reply, help_reply = box.sent()
+    assert visitors_reply == "Відвідувачі за добу: тест" and "--hours 720" in (box.root / "runuser_args").read_text()
+    assert help_reply.startswith("Команди:") and "/status" in help_reply
+    assert box.state("tg.offset") == "9"
+    assert (box.root / "commands_args").read_text().split() == ["seed", "5"]
+
+
+def test_owner_command_retried_when_reply_fails(box):
+    box.write("commands_out", "NEXT 9\nCMD /status\n")
+    box.write("alert.rc", "3")
+    box.tick()
+    assert box.state("tg.offset") == "5"  # відповідь не доставлено — команду буде виконано знову
+    box.write("alert.rc", "0")
+    box.tick()
+    assert box.state("tg.offset") == "9"
+    assert box.sent()[-1].startswith("📟 Стан зараз — ") and "Працюють: smc-ws" in box.sent()[-1]
+
+
+def _sender_env(tmp_path, curl_body):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     curl = bin_dir / "curl"
-    curl.write_text(
-        "#!/bin/bash\n"
+    curl.write_text("#!/bin/bash\n" + curl_body, encoding="utf-8")
+    curl.chmod(curl.stat().st_mode | stat.S_IEXEC)
+    env_file = tmp_path / "env"
+    env_file.write_text("TELEGRAM_BOT_TOKEN=1:x\nALERT_CHAT_ID=42\nHOSTNAME_LABEL=vps\n", encoding="utf-8")
+    return dict(os.environ, BOX=str(tmp_path), PATH="%s:%s" % (bin_dir, os.environ.get("PATH", "")),
+                ENV_FILE=str(env_file), LOG=str(tmp_path / "alert.log"))
+
+
+COMMANDS_SCRIPT = os.path.join(REPO, "ops", "vps", "aione-commands.sh")
+UPDATES = {"ok": True, "result": [
+    {"update_id": 10, "message": {"chat": {"id": 42}, "text": "/visitors 30 please"}},
+    {"update_id": 11, "message": {"chat": {"id": 99}, "text": "/visitors"}},
+    {"update_id": 12, "message": {"chat": {"id": 42}, "text": "/Status@monitor_smsbot"}},
+    {"update_id": 13, "message": {"chat": {"id": 42}, "text": "просто текст"}},
+]}
+CURL_UPDATES = (  # як справжній curl: код відповіді в stdout лише з -w
+    'out=""; prev=""; code=0\n'
+    'for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; [ "$a" = "-w" ] && code=1; prev="$a"; echo "$a" >> "$BOX/curl_args"; done\n'
+    '[ -n "$out" ] && cat "$BOX/updates.json" > "$out"; [ "$code" = 1 ] && printf 200; exit 0\n'
+)
+
+
+def test_commands_script_returns_owner_commands_only(tmp_path):
+    env = _sender_env(tmp_path, CURL_UPDATES)
+    (tmp_path / "updates.json").write_text(json.dumps(UPDATES), encoding="utf-8")
+    out = subprocess.run(["bash", COMMANDS_SCRIPT, "10"], env=env, check=True, timeout=30,
+                         capture_output=True, text=True).stdout
+    assert out.splitlines() == ["NEXT 14", "CMD /visitors 30", "CMD /status"]
+
+
+def test_commands_script_seed_skips_backlog_and_registers_menu(tmp_path):
+    env = _sender_env(tmp_path, CURL_UPDATES)
+    (tmp_path / "updates.json").write_text(json.dumps(UPDATES), encoding="utf-8")
+    out = subprocess.run(["bash", COMMANDS_SCRIPT, "seed"], env=env, check=True, timeout=30,
+                         capture_output=True, text=True).stdout
+    assert out.splitlines() == ["NEXT 14"]  # старі команди не виконуються
+    curl_args = (tmp_path / "curl_args").read_text(encoding="utf-8")
+    assert "offset=-1" in curl_args and "/setMyCommands" in curl_args and "1:x" not in out
+
+
+def test_alert_sender_truncates_long_text_by_characters(tmp_path):
+    env = _sender_env(tmp_path, (
         'out=""; prev=""\n'
         'for a in "$@"; do\n'
         '  [ "$prev" = "-o" ] && out="$a"\n'
         '  case "$a" in text=*) printf "%s" "${a#text=}" > "$BOX/text.txt";; esac\n'
         '  prev="$a"\n'
         "done\n"
-        'echo \'{"ok":true}\' > "$out"; printf 200\n',
-        encoding="utf-8",
-    )
-    curl.chmod(curl.stat().st_mode | stat.S_IEXEC)
-    env_file = tmp_path / "env"
-    env_file.write_text("TELEGRAM_BOT_TOKEN=1:x\nALERT_CHAT_ID=42\nHOSTNAME_LABEL=vps\n", encoding="utf-8")
-    env = dict(os.environ, BOX=str(tmp_path), PATH="%s:%s" % (bin_dir, os.environ.get("PATH", "")),
-               ENV_FILE=str(env_file), LOG=str(tmp_path / "alert.log"))
+        'echo \'{"ok":true}\' > "$out"; printf 200\n'
+    ))
     subprocess.run(["bash", ALERT_SENDER, "ї" * 5000], env=env, check=True, timeout=30)
     text = (tmp_path / "text.txt").read_text(encoding="utf-8")
     assert len(text) == 4000 and text.startswith("[vps] ї") and text.endswith("…")
