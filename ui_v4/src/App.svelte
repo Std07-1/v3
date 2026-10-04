@@ -945,16 +945,18 @@
      Iter 2026-05-11:
        64 (original) → 70 (після shrink ☰ 44→28) → 67 (owner -3 fine-tune).
      Desktop і landscape phone успадковують це значення (landscape media
-     query не override-ить right). */
+     query не override-ить right).
+     top:1 + padding 6 — та сама геометрія, що в ChartHud (.hud-stack top:1 + .hud padding 6): рядок стоїть на одній
+     лінії з першим рядком HUD. Заміри 04.10: центр 17.5 = 17.5 (було top:8 + padding 5 → 23.5, на 6px нижче). */
   .top-right-bar {
     position: fixed;
-    top: 8px;
+    top: 1px;
     right: 67px;
     z-index: 35;
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 5px 12px;
+    padding: 6px 12px;
     background: transparent;
     pointer-events: auto;
   }
@@ -1047,6 +1049,16 @@
   .tr-overflow-btn:focus-visible {
     outline: 1px solid var(--accent, #d4a017);
     outline-offset: 2px;
+  }
+
+  /* ≤768px ChartHud переходить на мобільну геометрію (.hud-stack top:0 + .hud padding 3px) — рядок іде за нею
+     (центр 13.5 = 13). Landscape-телефон і <640px нижче мають власне положення, підібране власником, і перекривають це. */
+  @media (max-width: 768px) {
+    .top-right-bar {
+      top: 0;
+      padding-top: 3px;
+      padding-bottom: 3px;
+    }
   }
 
   /* Landscape phone reflow (orthogonal to portrait <640px below).
