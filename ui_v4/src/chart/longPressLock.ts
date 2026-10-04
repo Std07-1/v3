@@ -7,6 +7,9 @@
 //  v2 +pressedMouseMove, v3 Approach C). DO NOT replace with applyOptions
 //  toggling — LWC v5.1.0 runtime НЕ honor-ить handleScroll прапори для
 //  vertical pan (емпірично перевірено).
+//  2026-10-04 (ADR-0108, власник): перехрестя лишається після відпускання,
+//  рух 1:1 як тачпад, вихід коротким тапом або щипком. Логіка жесту — чиста
+//  машина станів crosshairPin.ts (з тестами); тут — лише DOM-оболонка.
 //
 //  Дозволені правки:
 //    - LONG_PRESS_MS / MOVE_THRESHOLD_PX tuning (з повторним mobile testing)
@@ -19,90 +22,65 @@
 //    - заміна setCrosshairPosition на subscribeCrosshairMove (буде throttled)
 // ════════════════════════════════════════════════════════════════════════════
 //
-// Mobile UX: long-press на канвас чарту фіксує положення графіку, дозволяючи
-// перетягувати crosshair (vertLine + horzLine) пальцем без supplementary
-// chart pan. Цей патерн = TradingView mobile / Binance app — eSpec для
-// інструменту трейдера, де precise hover-чтение OHLCV/levels критичне.
-//
 // ── Архітектурне рішення (Approach C, 2026-05-11) ────────────────────────
-// Попередні спроби через `chart.applyOptions({handleScroll: {vertTouchDrag:
-// false, horzTouchDrag:false, pressedMouseMove:false}})` НЕ дали результату
-// для вертикального pan на mobile. Емпірично (LWC v5.1.0): horizontal лок
-// працював, vertical продовжував pан-ити. Гіпотеза: applyOptions runtime
-// не реактивує всі handleScroll прапори у LWC gesture handlers (handleScroll
-// читається тільки при init або частково).
+// Спроби через `chart.applyOptions({handleScroll: {...}})` НЕ зупиняли
+// вертикальний pan на mobile (LWC v5.1.0). Approach C: у capture phase
+// перехоплюємо touch-події ДО LWC (preventDefault + stopImmediatePropagation),
+// перехрестя ставимо вручну `chart.setCrosshairPosition(price, time, series)`,
+// priceScale.autoScale тимчасово вимикаємо, щоб нові ticks не зсували Y.
 //
-// Approach C: bypass LWC options entirely. У capture phase перехоплюємо
-// touchmove events ДО того як LWC їх обробить, викликаємо preventDefault +
-// stopImmediatePropagation → LWC pан-handler не fire-ить. Crosshair drive-имо
-// вручну через `chart.setCrosshairPosition(price, time, series)` (LWC public
-// API, typings.d.ts:1733). priceScale.autoScale тимчасово вимикаємо щоб
-// нові ticks не recompute-ували Y range під час lock.
+// ── UX (ADR-0108 S1, crosshairPin.ts) ───────────────────────────────────
+//   1) дотик одним пальцем → таймер 300 мс; рух ≥ 8 px до нього = звичайна
+//      прокрутка (події йдуть до LWC)
+//   2) таймер спрацював → режим перехрестя: перехрестя під пальцем, autoScale
+//      вимкнено, рух пальця блокується для LWC і веде перехрестя
+//   3) відпустив палець → перехрестя ЛИШАЄТЬСЯ
+//   4) новий дотик будь-де → тягнення рухає перехрестя 1:1 від точки, де воно
+//      стояло (палець не закриває точку); дотики цього режиму до LWC не доходять
+//   5) короткий тап (без руху, < 300 мс) або щипок → вихід: перехрестя знято,
+//      autoScale повернуто, графік рухається як звичайно
 //
-// ── UX flow ──────────────────────────────────────────────────────────────
-//   1) touchstart  → arm 300ms timer (single-finger only)
-//   2) touchmove < 8px у вікні 300ms → нічого, чекаємо
-//   3) timer fires (300ms hold без значного руху) → ENTER lock:
-//        - autoScale: false  (Y range freeze)
-//        - capture-phase block активний на touchmove
-//   4) touchmove під час lock → preventDefault + stopImmediatePropagation →
-//      LWC не отримує event → НЕ pан-ить. Рахуємо price/time з touch coords,
-//      викликаємо setCrosshairPosition вручну → crosshair lines рухаються
-//      за пальцем, чарт стоїть на місці.
-//   5) touchend / touchcancel → EXIT lock:
-//        - autoScale: true (resume normal Y behavior)
-//        - clearCrosshairPosition (LWC показує crosshair тільки під час hover)
-//        - capture-phase блокування знімається через locked=false flag
-//   6) touchmove >8px ДО 300ms → НЕ enter lock (це normal swipe-pan,
-//      скасовуємо arm timer; LWC обробляє event звичайним шляхом)
+// Desktop (mouse) — touch* events не fire-ять на mouse → no-op.
 //
-// Pinch (e.touches.length === 2+) повністю ігноруємо — це zoom gesture,
-// LWC сам обробляє через handleScale.pinch.
-//
-// Desktop (mouse) — handler attached але touch* events не fire-ять на mouse,
-// тому no-op. Mouse pan через pressedMouseMove працює як завжди.
-//
-// API: setupLongPressCrosshairLock(container, chart, series) → cleanup.
-// Викликається з ChartPane.svelte onMount, ремувається у onDestroy.
+// API: setupLongPressCrosshairLock(container, chart, series, onPinnedChange?)
+// → cleanup. Викликається з ChartPane.svelte onMount, знімається в onDestroy.
 
 import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
-
-/** Hold duration перед активацією lock. 300ms = LWC's own internal long-press
- *  threshold (LWC показує crosshair при ~300ms hold). Менше → false positive
- *  від швидких тапів. Більше → user сприймає UX як "lagging". */
-const LONG_PRESS_MS = 300;
-
-/** Touch-jitter tolerance до activate. 8px = standard mobile UI threshold
- *  (Material Design touch-slop = 8dp). Нижче → false-positives від тремтіння
- *  пальця. Вище → пропускаємо швидкі-але-короткі hold gestures. */
-const MOVE_THRESHOLD_PX = 8;
+import {
+    IDLE,
+    LONG_PRESS_MS,
+    pinArmFired,
+    pinTouchEnd,
+    pinTouchMove,
+    pinTouchStart,
+    type Bounds,
+    type PinState,
+    type PinStep,
+    type Point,
+} from './crosshairPin';
 
 /**
- * Attach long-press crosshair-lock handlers to chart container.
+ * Attach long-press crosshair handlers to chart container.
  *
  * Single source of truth for mobile crosshair UX. Idempotent — multiple
  * setup calls would attach duplicate listeners (caller must invoke cleanup
  * before re-init). ChartPane.svelte wires/unwires у onMount/onDestroy.
  *
- * @param container - LWC host element (the div що містить canvas).
- *                    Listeners attach до нього, не до canvas (capture phase
- *                    fires before canvas-level LWC handlers).
- * @param chart     - LWC chart API. Used for priceScale freeze +
- *                    setCrosshairPosition + clearCrosshairPosition.
- * @param series    - Candlestick series API. Used для coordinateToPrice +
- *                    як series argument для setCrosshairPosition.
- * @returns cleanup function що знімає всі listeners та повертає chart до
- *          default стану (autoScale:true, crosshair cleared).
+ * @param container      - LWC host element (the div що містить canvas). Listeners attach до нього, не до canvas
+ *                         (capture phase fires before canvas-level LWC handlers).
+ * @param chart          - LWC chart API: priceScale freeze, setCrosshairPosition, clearCrosshairPosition.
+ * @param series         - Candlestick series API: coordinateToPrice + series argument для setCrosshairPosition.
+ * @param onPinnedChange - режим перехрестя увімкнено / вимкнено (ChartPane ховає на телефоні кнопки SMC, ADR-0108 S2).
+ * @returns cleanup function що знімає всі listeners та повертає chart до default стану (autoScale:true, crosshair cleared).
  */
 export function setupLongPressCrosshairLock(
     container: HTMLElement,
     chart: IChartApi,
     series: ISeriesApi<'Candlestick'>,
+    onPinnedChange?: (pinned: boolean) => void,
 ): () => void {
+    let state: PinState = IDLE;
     let armTimer: number | null = null;
-    let locked = false;
-    let startX = 0;
-    let startY = 0;
 
     function clearArmTimer(): void {
         if (armTimer != null) {
@@ -111,124 +89,119 @@ export function setupLongPressCrosshairLock(
         }
     }
 
-    function enterLock(): void {
-        if (locked) return;
-        locked = true;
-        // Freeze Y axis — autoScale recompute на нових ticks (delta_loop 2s)
-        // інакше зсував би chart вертикально під час hold.
+    function setAutoScale(on: boolean): void {
         try {
-            chart.priceScale('right').applyOptions({ autoScale: false });
+            chart.priceScale('right').applyOptions({ autoScale: on });
         } catch {
             /* no-op: rightPriceScale always present in our setup */
         }
     }
 
-    function exitLock(): void {
-        if (!locked) return;
-        locked = false;
-        try {
-            chart.priceScale('right').applyOptions({ autoScale: true });
-        } catch {
-            /* no-op */
-        }
-        // Hide crosshair after release — LWC default behavior coли finger up.
-        // Без цього last crosshair position лишається намальованою.
-        try {
-            chart.clearCrosshairPosition();
-        } catch {
-            /* clearCrosshairPosition доступний у LWC v5 — fallback no-op */
-        }
-    }
-
-    function setCrosshairFromTouch(t: Touch): void {
-        const rect = container.getBoundingClientRect();
-        const x = t.clientX - rect.left;
-        const y = t.clientY - rect.top;
-        const time = chart.timeScale().coordinateToTime(x);
-        const price = series.coordinateToPrice(y);
+    function setCrosshairAt(p: Point): void {
+        const time = chart.timeScale().coordinateToTime(p.x);
+        const price = series.coordinateToPrice(p.y);
         if (time == null || price == null) return;
         try {
             chart.setCrosshairPosition(price as number, time as Time, series);
         } catch {
-            /* setCrosshairPosition kідає якщо series detached — ignore */
+            /* setCrosshairPosition кидає, якщо series detached — ignore */
+        }
+    }
+
+    /** Область графіка без шкал — межі руху перехрестя. */
+    function paneBounds(): Bounds {
+        try {
+            return {
+                width: chart.timeScale().width(),
+                height: container.clientHeight - chart.timeScale().height(),
+            };
+        } catch {
+            return { width: container.clientWidth, height: container.clientHeight };
+        }
+    }
+
+    function fingerPoint(t: Touch): Point {
+        const rect = container.getBoundingClientRect();
+        return { x: t.clientX - rect.left, y: t.clientY - rect.top };
+    }
+
+    function apply(step: PinStep, e?: TouchEvent): void {
+        state = step.state;
+        const fx = step.effects;
+        if (fx.disarm || fx.arm) clearArmTimer();
+        if (fx.arm) {
+            armTimer = window.setTimeout(() => {
+                armTimer = null;
+                apply(pinArmFired(state));
+            }, LONG_PRESS_MS);
+        }
+        if (fx.enter) {
+            // Freeze Y axis — autoScale recompute на нових ticks (delta_loop 2s) зсував би chart вертикально
+            setAutoScale(false);
+            onPinnedChange?.(true);
+        }
+        if (fx.crosshair) setCrosshairAt(fx.crosshair);
+        if (fx.reassert) {
+            // Кінець дотику довгого тапу обробляє і LWC — ставимо перехрестя ще раз після нього
+            const at = fx.reassert;
+            window.requestAnimationFrame(() => {
+                if (state.mode === 'pinned') setCrosshairAt(at);
+            });
+        }
+        if (fx.exit) {
+            setAutoScale(true);
+            try {
+                chart.clearCrosshairPosition();
+            } catch {
+                /* clearCrosshairPosition доступний у LWC v5 — fallback no-op */
+            }
+            onPinnedChange?.(false);
+        }
+        if (fx.block && e) {
+            // Capture phase: LWC (слухає touch* на canvas) подію не отримає → не прокручує, не тапає.
+            // preventDefault і на touchstart: поглинутий дотик браузер віддає сторінці з кожним рухом — інакше Chrome
+            // мовчки ковтає touchmove у межах свого touch slop (~15 px), і точна наводка не доходить (стенд 04.10)
+            if (e.cancelable) e.preventDefault();
+            e.stopImmediatePropagation();
         }
     }
 
     function onTouchStart(e: TouchEvent): void {
-        // Pinch або multi-touch — let LWC handle pinch-zoom natively.
-        if (e.touches.length !== 1) {
-            clearArmTimer();
-            // Якщо вже у lock-режимі і другий палець торкнувся — виходимо з
-            // lock, щоб user міг pinch-zoom як завжди.
-            if (locked) exitLock();
-            return;
-        }
         const t = e.touches[0];
-        startX = t.clientX;
-        startY = t.clientY;
-        clearArmTimer();
-        armTimer = window.setTimeout(() => {
-            armTimer = null;
-            enterLock();
-            // Одразу malюємо crosshair у позиції пальця — щоб користувач
-            // побачив візуальний feedback що lock активовано.
-            setCrosshairFromTouch(t);
-        }, LONG_PRESS_MS);
+        apply(pinTouchStart(state, e.touches.length, t ? fingerPoint(t) : { x: 0, y: 0 }, e.timeStamp), e);
     }
 
     function onTouchMove(e: TouchEvent): void {
-        if (e.touches.length !== 1) {
-            // Multi-touch (pinch почався) — exit lock + cancel arm.
-            clearArmTimer();
-            if (locked) exitLock();
-            return;
-        }
         const t = e.touches[0];
-
-        // Locked → BLOCK LWC pan-handler + drive crosshair manually.
-        if (locked) {
-            // Capture phase + preventDefault + stopImmediatePropagation:
-            // LWC's touchmove listener (added у target/bubble phase) НЕ fire-ить.
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            setCrosshairFromTouch(t);
-            return;
-        }
-
-        // Ще чекаємо на long-press — перевіряємо чи палець не "поплив".
-        if (armTimer == null) return;
-        const dx = Math.abs(t.clientX - startX);
-        const dy = Math.abs(t.clientY - startY);
-        if (dx > MOVE_THRESHOLD_PX || dy > MOVE_THRESHOLD_PX) {
-            // Звичайний swipe-pan, не long-press. Скасовуємо arm,
-            // LWC отримає це touchmove та pан-ить як завжди.
-            clearArmTimer();
-        }
+        if (!t) return;
+        apply(pinTouchMove(state, e.touches.length, fingerPoint(t), paneBounds()), e);
     }
 
-    function onTouchEnd(): void {
-        clearArmTimer();
-        exitLock();
+    function onTouchEnd(e: TouchEvent): void {
+        apply(pinTouchEnd(state, e.timeStamp), e);
     }
 
-    // capture:true → наш handler fire-ить ПЕРЕД LWC's listener (LWC слухає
-    // touch* на canvas, ми на container — capture phase обходить deep target).
-    // passive:false → preventDefault працює (passive:true ігнорував би його).
+    function onTouchCancel(e: TouchEvent): void {
+        apply(pinTouchEnd(state, e.timeStamp, true), e);
+    }
+
+    // capture:true → наш handler fire-ить ПЕРЕД LWC's listener (LWC слухає touch* на canvas, ми на container).
+    // passive:false → preventDefault працює; поза режимом перехрестя ми його не викликаємо (прокрутка й зум як завжди).
     const captureOpts: AddEventListenerOptions = { capture: true, passive: false };
-    const passiveOpts: AddEventListenerOptions = { capture: true, passive: true };
 
-    container.addEventListener('touchstart', onTouchStart, passiveOpts);
+    container.addEventListener('touchstart', onTouchStart, captureOpts);
     container.addEventListener('touchmove', onTouchMove, captureOpts);
-    container.addEventListener('touchend', onTouchEnd, passiveOpts);
-    container.addEventListener('touchcancel', onTouchEnd, passiveOpts);
+    container.addEventListener('touchend', onTouchEnd, captureOpts);
+    container.addEventListener('touchcancel', onTouchCancel, captureOpts);
 
     return () => {
         clearArmTimer();
-        // Якщо disposed mid-lock — повертаємо chart до default стану.
-        exitLock();
-        container.removeEventListener('touchstart', onTouchStart, passiveOpts);
+        // Якщо disposed у режимі перехрестя — повертаємо chart до default стану.
+        if (state.mode === 'pinned') apply({ state: IDLE, effects: { exit: true } });
+        state = IDLE;
+        container.removeEventListener('touchstart', onTouchStart, captureOpts);
         container.removeEventListener('touchmove', onTouchMove, captureOpts);
-        container.removeEventListener('touchend', onTouchEnd, passiveOpts);
-        container.removeEventListener('touchcancel', onTouchEnd, passiveOpts);
+        container.removeEventListener('touchend', onTouchEnd, captureOpts);
+        container.removeEventListener('touchcancel', onTouchCancel, captureOpts);
     };
 }

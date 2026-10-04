@@ -158,6 +158,12 @@
   }
   // Crosshair data for tooltip (OHLCV + cursor position)
   let crosshairData: CrosshairData | null = $state(null);
+  // ADR-0108: режим закріпленого перехрестя (довгий тап на телефоні) — поки він є, на телефоні ряд кнопок SMC
+  // поступається рядку O/H/L/C (S2); так само, коли рядок O/H/L/C видно з іншої причини
+  let crosshairPinned = $state(false);
+  let crosshairOnScreen = $derived.by(
+    () => crosshairPinned || (crosshairData?.inRange === true && crosshairData?.time != null),
+  );
 
   let wrapperRef: HTMLDivElement;
   let lwcHostRef: HTMLDivElement;
@@ -337,6 +343,7 @@
       lwcHostRef,
       chartEngine.chart,
       chartEngine.series,
+      (pinned) => (crosshairPinned = pinned),
     );
 
     ro = new ResizeObserver(() => {
@@ -781,6 +788,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="smc-panel"
+    class:crosshair-on={crosshairOnScreen}
     onclick={(e) => e.stopPropagation()}
     use:dismissOnOutside={{
       enabled: smcPanelOpen,
@@ -1247,6 +1255,14 @@
       flex-wrap: wrap;
       justify-content: flex-end;
       pointer-events: auto;
+    }
+    /* ADR-0108 S2: поки перехрестя на екрані, на місці кнопок — рядок O/H/L/C (OhlcvTooltip, top 52px) */
+    .smc-panel.crosshair-on {
+      opacity: 0;
+      transition: opacity 120ms ease-out;
+    }
+    .smc-panel.crosshair-on .smc-grid {
+      pointer-events: none;
     }
     .level-menu {
       min-width: 0;

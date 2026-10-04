@@ -11,6 +11,7 @@ import {
   CrosshairMode,
   LineStyle,
   PriceLineSource,
+  TrackingModeExitMode,
   type IChartApi,
   type ISeriesApi,
   type Time,
@@ -179,6 +180,10 @@ export class ChartEngine {
         vertLines: { color: THEMES.dark.chart.grid.vertLines.color },
         horzLines: { color: THEMES.dark.chart.grid.horzLines.color },
       },
+      // ADR-0108 CP9: закріпленим перехрестям на телефоні керує longPressLock.ts; власний tracking mode LWC
+      // закінчується разом із пальцем довгого тапу — інакше (типово OnNextTap) наступний свайп тягне перехрестя LWC
+      // і лишає його на екрані до тапу (так було й до ADR-0108)
+      trackingMode: { exitMode: TrackingModeExitMode.OnTouchEnd },
       crosshair: {
         mode: CrosshairMode.Normal,
         vertLine: {
