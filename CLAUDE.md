@@ -354,6 +354,22 @@ ssh aione-vps 'for i in 1 2 3 4 5 6; do echo "=== T+$((i*10))s ==="; supervisorc
 4. ✅ Background processes (async terminals) killed якщо вже не потрібні
 5. ✅ Файли збережені, нема uncommitted critical changes без user awareness
 
+### D11.1. Один каталог v3 — без сусідніх копій і завислих гілок
+
+> Власник 04.10.2026: «v3 має бути одним єдиним каталогом у `C:\Users\vikto\aione-context`, а не купа гілок».
+> Того дня знято 12 worktree (`v3\.claude\worktrees\*`, сусідні `v3-adr0095`, `v3-h4`, `v3-s2`, `v3-s3`) і 55 гілок.
+
+- **Робочий каталог — лише `C:\Users\vikto\aione-context\v3`, гілка `main`.** Ніяких сусідніх копій `v3-*`.
+- **Гілка чи worktree — лише на час задачі.** Після merge в `main`: `git worktree remove <path>`, гілку видалити
+  локально (`git branch -d`) і на GitHub (`git push origin --delete <branch>`). Незмержена робота не висить — або
+  доводиться до `main`, або явно відкладається з рішенням власника.
+- **Перед видаленням** worktree чи гілки — доведи, що нічого не губиться: HEAD досяжний з `origin/main`
+  (`git merge-base --is-ancestor`) або вміст уже в `main` (`git cherry`); інакше — бандл/патч у
+  `C:\Users\vikto\aione-context\backup\`. Junction усередині (`ui_v4\node_modules`, `data_v3`) — спершу `rmdir`
+  (лише посилання), інакше знесеш ціль.
+- **Перевірка стану:** `git -C C:\Users\vikto\aione-context\v3 worktree list` і `git -C ... branch` — у нормі
+  `main` плюс гілки задач, що зараз у роботі.
+
 ### D12. Sub-Agent Trust Discipline
 
 > Sub-agents = force multipliers для breadth, НЕ replacements for parent verification на depth-critical claims.
