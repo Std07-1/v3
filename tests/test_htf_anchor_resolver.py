@@ -7,9 +7,10 @@ import os
 import pytest
 
 from core.config_loader import htf_anchor_rule_resolver
-from core.session_anchor import RULE_NY_CLOSE_US_DST, RULE_UTC_MIDNIGHT
+from core.session_anchor import RULE_NY_CLOSE_FX, RULE_NY_CLOSE_US_DST, RULE_UTC_MIDNIGHT
 
 _REPO_CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
+_FX_GROUP = "fx_24x5_utc_summer"
 
 
 def _cfg(**rules):
@@ -64,6 +65,19 @@ def test_repo_config_htf_anchor_covers_every_live_symbol():
     rule_for = htf_anchor_rule_resolver(cfg)
     live = list(cfg["symbols"]) + list(cfg.get("binance", {}).get("symbols", [])) + ["EUSTX50", "GER30"]
     assert {s: rule_for(s) for s in live}["BTCUSDT"] == RULE_UTC_MIDNIGHT
-    assert all(rule_for(s) == RULE_NY_CLOSE_US_DST for s in cfg["symbols"])
+    groups = cfg["market_calendar_symbol_groups"]
+    for symbol in cfg["symbols"]:
+        expected = RULE_NY_CLOSE_FX if groups[symbol] == _FX_GROUP else RULE_NY_CLOSE_US_DST
+        assert rule_for(symbol) == expected, symbol
     with pytest.raises(ValueError, match="HTF_ANCHOR_GROUP_UNMEASURED"):
         rule_for("HKG33")
+
+
+def test_repo_config_fx_pairs_get_fx_rule():
+    """Валютні пари (група `fx_24x5_utc_summer`) — правило `ny_close_fx`: H4 від 17:00 NY (ADR-0095 rev 04.10)."""
+    with open(_REPO_CONFIG, encoding="utf-8") as fh:
+        cfg = json.load(fh)
+    rule_for = htf_anchor_rule_resolver(cfg)
+    fx_pairs = [s for s, g in cfg["market_calendar_symbol_groups"].items() if g == _FX_GROUP]
+    assert "USD/JPY" in fx_pairs
+    assert {rule_for(s) for s in fx_pairs} == {RULE_NY_CLOSE_FX}

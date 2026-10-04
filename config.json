@@ -253,11 +253,12 @@
     }
   },
   "htf_anchor": {
-    "_comment": "ADR-0095 §3.4: правило якоря H4/D1 за групою календаря (market_calendar_symbol_groups). Група без правила — сітку брокера не виміряно (cfd_hk_main, fx_24x5_utc_summer): символ з неї падає ValueError, а не отримує тихий default (рішення власника 23.09.2026). ny_close_us_dst = D1 з 17:00 America/New_York, H4 = D1/6; utc_midnight = Binance.",
+    "_comment": "ADR-0095 §3.4: правило якоря H4/D1 за групою календаря (market_calendar_symbol_groups). Група без правила — сітку брокера не виміряно (cfd_hk_main): символ з неї падає ValueError, а не отримує тихий default (рішення власника 23.09.2026). ny_close_us_dst = D1 з 17:00 America/New_York, H4 від відкриття сесії 18:00 NY (метали, індекси, EU CFD; rev 24.09); ny_close_fx = D1 і H4 з 17:00 NY (валютні пари, TV FX:USDJPY = нативний H4 FXCM; rev 04.10); utc_midnight = Binance.",
     "rule_by_calendar_group": {
       "cfd_us_22_23": "ny_close_us_dst",
       "cfd_eu_eustx50": "ny_close_us_dst",
       "cfd_eu_ger30": "ny_close_us_dst",
+      "fx_24x5_utc_summer": "ny_close_fx",
       "crypto_24x7": "utc_midnight"
     }
   },

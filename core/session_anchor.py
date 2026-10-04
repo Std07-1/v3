@@ -1,4 +1,5 @@
-"""Сезонний якір торгового дня (ADR-0095): D1 відкривається о 17:00 America/New_York, H4 — від відкриття сесії 18:00 NY.
+"""Сезонний якір торгового дня (ADR-0095): D1 відкривається о 17:00 America/New_York, H4 — від відкриття сесії
+(18:00 NY для металів, індексів і EU CFD; 17:00 NY для валютних пар).
 
 Pure: без I/O і без tz-бази — арифметика правил DST США і ЄС з історією законів: США з 2007 — друга неділя березня …
 перша неділя листопада, 1987–2006 — перша неділя квітня … остання неділя жовтня; ЄС з 1996 — остання неділя березня …
@@ -18,6 +19,11 @@ H4 (ADR-0095 rev 24.09, рішення власника «H4 як у TV»): TV F
 перерву, як у TV. D1 лишається від 17:00 NY — ключ нативного D1 FXCM; вміст D1 TV той самий, бо 17:00–18:00 NY —
 перерва. Правило `utc_midnight` (Binance) — без зсуву.
 
+Валютні пари (ADR-0095 rev 04.10, правило `ny_close_fx`): денної перерви немає, сесія відкривається о 17:00 NY, і TV
+`FX:USDJPY` ставить H4 від неї (21/01/05/… UTC улітку, 22/02/06/… узимку) — так само, як нативний H4 FXCM. Тому H4
+без зсуву (H4 = D1/6), D1 — той самий, що в `ny_close_us_dst`. Зсув H4 кожного правила — одна таблиця
+`_H4_SESSION_SHIFT_MS_BY_RULE`, а набір правил — її ключі: правило без зсуву оголосити неможливо.
+
 Тут же сезон розкладу груп календаря (§3.5, `calendar_season`): момент переходу DST США (`us`) або ЄС (`eu`).
 Уся арифметика DST платформи — в одному модулі.
 """
@@ -27,9 +33,13 @@ from __future__ import annotations
 import datetime as dt
 import functools
 
-RULE_NY_CLOSE_US_DST = "ny_close_us_dst"  # FXCM: метали, індекси, EU CFD, FX
+RULE_NY_CLOSE_US_DST = "ny_close_us_dst"  # FXCM: метали, індекси, EU CFD — H4 від 18:00 NY
+RULE_NY_CLOSE_FX = "ny_close_fx"  # FXCM: валютні пари — H4 від 17:00 NY (ADR-0095 rev 04.10)
 RULE_UTC_MIDNIGHT = "utc_midnight"  # Binance
-HTF_ANCHOR_RULES = frozenset({RULE_NY_CLOSE_US_DST, RULE_UTC_MIDNIGHT})
+# Зсув відкриття сесії H4 від відкриття торгового дня: у металів, індексів і EU CFD денна перерва 17:00–18:00 NY, і TV
+# FX: ставить H4 від 18:00 NY; валютні пари торгують без перерви — H4 від 17:00 NY, як і нативний H4 FXCM
+_H4_SESSION_SHIFT_MS_BY_RULE = {RULE_NY_CLOSE_US_DST: 3_600_000, RULE_NY_CLOSE_FX: 0, RULE_UTC_MIDNIGHT: 0}
+HTF_ANCHOR_RULES = frozenset(_H4_SESSION_SHIFT_MS_BY_RULE)
 
 # Правило сезону розкладу групи календаря (ADR-0095 §3.5): `market_calendar_by_group.<група>.season_rule`
 SEASON_RULE_US = "us"  # неділя переходу навесні 07:00 UTC ≤ момент < неділя переходу восени 06:00 UTC (02:00 NY)
@@ -48,7 +58,6 @@ _EPOCH = dt.date(1970, 1, 1)
 _NY_CLOSE_SUMMER_MS = 21 * 3_600_000
 _NY_CLOSE_WINTER_MS = 22 * 3_600_000
 _LONGEST_DAY_MS = 25 * 3_600_000  # доба осінніх вихідних переходу DST
-_H4_SESSION_SHIFT_MS = 3_600_000  # H4 від відкриття сесії: 18:00 NY = відкриття торгового дня 17:00 NY + 1 год (TV FX:)
 # Момент переходу DST у мс від опівночі UTC неділі переходу: (весна, осінь)
 _US_SWITCH_MS_OF_DAY = (7 * 3_600_000, 6 * 3_600_000)  # 02:00 за Нью-Йорком: 02:00 EST, 02:00 EDT
 _EU_SWITCH_MS_OF_DAY = (3_600_000, 3_600_000)  # ЄС перемикає о 01:00 UTC
@@ -107,8 +116,8 @@ def htf_bucket_start_ms(ts_ms: int, tf_s: int, rule: str) -> int:
 def htf_next_bucket_start_ms(bucket_start_ms: int, tf_s: int, rule: str) -> int:
     """Початок наступного бакета = кінець вікна агрегації бакета `bucket_start_ms` (не open + tf).
 
-    H4 не перетинає межу сесійного дня (18:00 NY): останній H4 доби на 23 год має 3 год, на 25 год — 1 год (обрубок;
-    доби переходу DST — вихідні). D1 — до відкриття наступного торгового дня (23/24/25 год). M1..H1 — open + tf.
+    H4 не перетинає межу сесійного дня (18:00 NY; для `ny_close_fx` — 17:00 NY): останній H4 доби на 23 год має 3 год,
+    на 25 год — 1 год (обрубок; доби переходу DST — вихідні). D1 — до відкриття наступного торгового дня (23/24/25 год). M1..H1 — open + tf.
     """
     _require_rule(rule)
     if tf_s < H4_S:
@@ -129,7 +138,7 @@ def assert_on_season_grid(open_ms: int, tf_s: int, rule: str) -> None:
 
 
 def season_label(ts_ms: int, rule: str) -> str:
-    """Сезон торгового дня моменту: summer | winter для ny_close_us_dst, none для utc_midnight."""
+    """Сезон торгового дня моменту: summer | winter для правил NY (ny_close_us_dst, ny_close_fx), none для utc_midnight."""
     _require_rule(rule)
     if rule == RULE_UTC_MIDNIGHT:
         return "none"
@@ -192,11 +201,10 @@ def _summer_bounds_ms(year: int, season_rule: str) -> tuple[int, int]:
 
 
 def _htf_day_open_ms(ts_ms: int, tf_s: int, rule: str) -> int:
-    """Відкриття доби, від якої рахується бакет: D1 — торговий день (17:00 NY); H4 — сесійний день (18:00 NY =
-    торговий день, зсунутий на годину, як TV FX:); utc_midnight — без зсуву."""
-    if tf_s == D1_S or rule == RULE_UTC_MIDNIGHT:
-        return trading_day_open_ms(ts_ms, rule)
-    return trading_day_open_ms(ts_ms - _H4_SESSION_SHIFT_MS, rule) + _H4_SESSION_SHIFT_MS
+    """Відкриття доби, від якої рахується бакет: D1 — торговий день (17:00 NY); H4 — сесійний день = торговий день,
+    зсунутий на зсув правила (`ny_close_us_dst` — 18:00 NY, як TV FX:; `ny_close_fx` і `utc_midnight` — без зсуву)."""
+    shift_ms = 0 if tf_s == D1_S else _H4_SESSION_SHIFT_MS_BY_RULE[rule]
+    return trading_day_open_ms(ts_ms - shift_ms, rule) + shift_ms
 
 
 @functools.lru_cache(maxsize=8192)  # гарячий шлях: якір на кожен бар/тік, доба рахується раз

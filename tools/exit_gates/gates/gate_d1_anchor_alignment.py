@@ -8,8 +8,8 @@
 3. d1_in_derive_chain — (86400, 1440) є у DERIVE_CHAIN[60].
 4. d1_in_derived_tfs_s — 86400 є у config `derived_tfs_s`.
 5. season_anchor_samples — зразки літа і зими: `ny_close_us_dst` D1 75600 / 79200 (17:00 NY), H4 79200 / 82800
-   (18:00 NY — відкриття сесії, як TV FX:, ADR-0095 rev 24.09); `utc_midnight` 0. Відкриття сесії (D1 + зсув H4) —
-   бакет H4.
+   (18:00 NY — відкриття сесії, як TV FX:, ADR-0095 rev 24.09); `ny_close_fx` D1 і H4 75600 / 79200 (17:00 NY,
+   валютні пари, ADR-0095 rev 04.10); `utc_midnight` 0. Відкриття сесії (D1 + зсув H4) — бакет H4.
 6. disk_data_anchor — кожен рядок останнього part-файлу tf_86400 і tf_14400 кожного символу стоїть на сезонній
    сітці (`assert_on_season_grid`). Каталогу даних нема (CI) — пропуск.
 """
@@ -24,6 +24,7 @@ from core.derive import DERIVE_CHAIN
 from core.session_anchor import (
     D1_S,
     H4_S,
+    RULE_NY_CLOSE_FX,
     RULE_NY_CLOSE_US_DST,
     RULE_UTC_MIDNIGHT,
     OffSeasonGridError,
@@ -37,12 +38,15 @@ CheckResult = Tuple[bool, str, Dict[str, Any]]
 _DISK_TFS_S = (D1_S, H4_S)
 _SAMPLES_IN_DETAILS = 3
 # D1: 17:00 America/New_York (ADR-0095 §3.1) = 21:00 UTC улітку (EDT) і 22:00 UTC узимку (EST); H4: 18:00 NY —
-# відкриття сесії після денної перерви, як TV FX: (ADR-0095 rev 24.09); Binance — опівніч UTC.
+# відкриття сесії після денної перерви, як TV FX: (ADR-0095 rev 24.09); валютні пари — H4 від 17:00 NY, без перерви
+# (ADR-0095 rev 04.10); Binance — опівніч UTC.
 _SUMMER_SAMPLE_MS = 1_784_116_800_000  # 2026-07-15T12:00Z
 _WINTER_SAMPLE_MS = 1_768_478_400_000  # 2026-01-15T12:00Z
 _SEASON_SAMPLES = (  # (правило, сезон, момент, якір D1 с, якір H4 с)
     (RULE_NY_CLOSE_US_DST, "summer", _SUMMER_SAMPLE_MS, 75_600, 79_200),
     (RULE_NY_CLOSE_US_DST, "winter", _WINTER_SAMPLE_MS, 79_200, 82_800),
+    (RULE_NY_CLOSE_FX, "summer", _SUMMER_SAMPLE_MS, 75_600, 75_600),
+    (RULE_NY_CLOSE_FX, "winter", _WINTER_SAMPLE_MS, 79_200, 79_200),
     (RULE_UTC_MIDNIGHT, "summer", _SUMMER_SAMPLE_MS, 0, 0),
     (RULE_UTC_MIDNIGHT, "winter", _WINTER_SAMPLE_MS, 0, 0),
 )
@@ -128,7 +132,7 @@ def _check_season_samples(root: str, cfg: Dict[str, Any]) -> CheckResult:
             )
     if mismatches:
         return False, "; ".join(mismatches), {}
-    return True, "D1 літо 75600 / зима 79200, H4 79200 / 82800 (відкриття сесії), utc_midnight 0", {}
+    return True, "D1 літо 75600 / зима 79200, H4 79200 / 82800 (відкриття сесії), FX H4 = D1, utc_midnight 0", {}
 
 
 def _latest_part_file(tf_dir: str) -> Optional[str]:

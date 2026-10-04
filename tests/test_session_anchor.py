@@ -10,16 +10,20 @@ import pytest
 from core.session_anchor import (
     D1_S,
     H4_S,
+    RULE_NY_CLOSE_FX,
     RULE_NY_CLOSE_US_DST,
     RULE_UTC_MIDNIGHT,
     htf_anchor_offset_s,
     htf_bucket_start_ms,
+    htf_next_bucket_start_ms,
+    season_label,
     trading_day_open_ms,
 )
 
 UTC = dt.timezone.utc
 NY = ZoneInfo("America/New_York")
 FXCM = RULE_NY_CLOSE_US_DST
+FX = RULE_NY_CLOSE_FX
 H4_MS = H4_S * 1000
 D1_MS = D1_S * 1000
 
@@ -98,6 +102,40 @@ def test_h4_summer_2026_grid_is_tv_fx_grid():
     assert starts == {22, 2, 6, 10, 14, 18}
     d1_starts = {htf_bucket_start_ms(_ms(2026, 9, 22, h, 30), D1_S, FXCM) % D1_MS // 3_600_000 for h in range(24)}
     assert d1_starts == {21}
+
+
+def test_fx_h4_2026_grid_is_tv_fx_usdjpy_grid():
+    """Валютні пари (`ny_close_fx`, ADR-0095 rev 04.10): H4 від 17:00 NY — літо 21/01/05/09/13/17 UTC, зима
+    22/02/06/10/14/18 UTC. Так TV FX:USDJPY (2300 H4 з 10.04.2025) і нативний H4 FXCM (зонд 04.10); сезон — за NY."""
+    summer = {htf_bucket_start_ms(_ms(2026, 9, 22, h, 30), H4_S, FX) % D1_MS // 3_600_000 for h in range(24)}
+    winter = {htf_bucket_start_ms(_ms(2026, 1, 13, h, 30), H4_S, FX) % D1_MS // 3_600_000 for h in range(24)}
+    assert summer == {21, 1, 5, 9, 13, 17}
+    assert winter == {22, 2, 6, 10, 14, 18}
+    assert (season_label(_ms(2026, 7, 15, 12), FX), season_label(_ms(2026, 1, 15, 12), FX)) == ("summer", "winter")
+
+
+def test_fx_h4_is_d1_sixth_and_d1_matches_metals_all_seasons_true():
+    """`ny_close_fx`: H4 рахується від відкриття торгового дня (H4 = D1/6), D1 — той самий, що в `ny_close_us_dst`."""
+    rng = random.Random(1004)
+    lo, hi = _ms(2024, 1, 1), _ms(2028, 1, 1)
+    for _ in range(20_000):
+        ts = rng.randrange(lo, hi)
+        d1_open = htf_bucket_start_ms(ts, D1_S, FX)
+        h4_open = htf_bucket_start_ms(ts, H4_S, FX)
+        assert d1_open == htf_bucket_start_ms(ts, D1_S, FXCM)
+        assert d1_open <= h4_open <= ts < h4_open + H4_MS
+        assert (h4_open - d1_open) % H4_MS == 0
+        assert htf_anchor_offset_s(H4_S, ts, FX) == htf_anchor_offset_s(D1_S, ts, FX)
+
+
+def test_fx_dst_weekends_2026_first_h4_is_trading_day_open():
+    """Перший тиждень після переходу DST: H4 FX починається з відкриття торгового дня (Нд 08.03 21:00, Нд 01.11 22:00
+    UTC), останній H4 доби закінчується на відкритті наступного дня."""
+    assert htf_bucket_start_ms(_ms(2026, 3, 8, 21, 1), H4_S, FX) == _ms(2026, 3, 8, 21)
+    assert htf_bucket_start_ms(_ms(2026, 3, 9, 1, 1), H4_S, FX) == _ms(2026, 3, 9, 1)
+    assert htf_bucket_start_ms(_ms(2026, 11, 1, 22, 1), H4_S, FX) == _ms(2026, 11, 1, 22)
+    assert htf_bucket_start_ms(_ms(2026, 11, 2, 2, 1), H4_S, FX) == _ms(2026, 11, 2, 2)
+    assert htf_next_bucket_start_ms(_ms(2026, 9, 22, 17), H4_S, FX) == _ms(2026, 9, 22, 21)
 
 
 def test_below_h4_buckets_are_epoch_aligned_and_anchor_zero():
