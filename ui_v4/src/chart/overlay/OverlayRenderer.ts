@@ -1200,6 +1200,8 @@ export class OverlayRenderer {
   ): void {
     // Capped scale for markers/labels — prevents visual bloat at max zoom
     const mScale = Math.min(MARKER_SCALE_CAP, scale);
+    // ADR-0107 LB12: фрактали — для розгляду свічок; у стиснутому вигляді не малюються
+    const hideFractals = isCompactView(this.getBarSpacingPx(), DEFAULT_BAR_SPACING_PX);
 
     for (const s of swings) {
       const isBos = s.kind?.startsWith('bos_') ?? false;
@@ -1211,7 +1213,7 @@ export class OverlayRenderer {
 
       // Toggle check: structure events vs swing points vs fractals vs displacement
       if (isStructure && !this.layerVisible.structure) continue;
-      if (isFractal && !this.layerVisible.fractals) continue;
+      if (isFractal && (!this.layerVisible.fractals || hideFractals)) continue;
       if (isDisplacement && !this.layerVisible.displacement) continue;
       if (!isStructure && !isInducement && !isFractal && !isDisplacement && !this.layerVisible.swings) continue;
       if (isInducement && !this.layerVisible.swings) continue;
