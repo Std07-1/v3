@@ -97,34 +97,25 @@
   "calendar_gate_enabled": true,
   "market_calendar_by_group": {
     "fx_24x5_utc_summer": {
+      "_comment": "ADR-0054 rev 7 §3.4.1 (виміри 04.10.2026, FXCM і TV FX:USDJPY): денної перерви немає — о 21:00–21:10 лише хвилини без угод; тиждень Нд 17:00 → Пт 17:00 America/New_York; котирування брокера в неділю до 17:00 NY і в суботу — шум паузи (ADR-0099), TV їх не показує.",
       "season_rule": "us",
       "summer": {
         "market_weekend_open_dow": 6,
         "market_weekend_open_hm": "21:00",
         "market_weekend_close_dow": 4,
-        "market_weekend_close_hm": "20:55",
+        "market_weekend_close_hm": "21:00",
         "market_daily_break_start_hm": "00:00",
         "market_daily_break_end_hm": "00:00",
-        "market_daily_breaks": [
-          [
-            "20:55",
-            "21:30"
-          ]
-        ]
+        "market_daily_breaks": []
       },
       "winter": {
         "market_weekend_open_dow": 6,
         "market_weekend_open_hm": "22:00",
         "market_weekend_close_dow": 4,
-        "market_weekend_close_hm": "21:55",
+        "market_weekend_close_hm": "22:00",
         "market_daily_break_start_hm": "00:00",
         "market_daily_break_end_hm": "00:00",
-        "market_daily_breaks": [
-          [
-            "21:55",
-            "22:30"
-          ]
-        ]
+        "market_daily_breaks": []
       }
     },
     "cfd_us_22_23": {

@@ -208,20 +208,29 @@ def test_cfd_us_dst_instant_equals_trading_day_season_every_minute_of_dst_weeken
 
 def test_fx_autumn_sunday_opens_at_1700_est_not_by_25h_summer_trading_day():
     """Нд 01.11.2026 21:30 UTC = 16:30 EST: FX закритий. Доба 31.10 (25 год) до 22:00 UTC ще «літня», і розклад за
-    сезоном торгового дня відкрив би фантомні пів години (літнє відкриття 21:00 + перерва до 21:30)."""
+    сезоном торгового дня відкрив би фантомну годину (літнє відкриття 21:00); зимове відкриття — 22:00 (17:00 EST)."""
     usd_jpy = calendar_for_symbol(REPO_CFG, "USD/JPY")
     sun_2130 = _ms(2026, 11, 1, 21, 30)
     assert season_label(sun_2130, RULE_NY_CLOSE_US_DST) == "summer" and usd_jpy.season_of(sun_2130) == "winter"
     assert usd_jpy.summer.is_trading_minute(sun_2130) is True
-    assert _trading("USD/JPY", (2026, 11, 1, 21, 30), (2026, 11, 1, 21, 59), (2026, 11, 1, 22, 29),
-                    (2026, 11, 1, 22, 30)) == [False, False, False, True]
+    assert _trading("USD/JPY", (2026, 11, 1, 21, 30), (2026, 11, 1, 21, 59), (2026, 11, 1, 22, 0),
+                    (2026, 11, 1, 22, 29)) == [False, False, True, True]
 
 
-def test_fx_friday_close_follows_season_runbook():
-    """Ранбук :121: FX закривається в Пт 20:55 улітку і 21:55 узимку; весною Нд 08.03 відкривається о 21:30."""
-    assert _trading("USD/JPY", (2026, 10, 30, 20, 54), (2026, 10, 30, 20, 55)) == [True, False]
-    assert _trading("USD/JPY", (2026, 11, 6, 21, 54), (2026, 11, 6, 21, 55)) == [True, False]
-    assert _trading("USD/JPY", (2026, 3, 8, 21, 29), (2026, 3, 8, 21, 30)) == [False, True]
+def test_fx_friday_close_follows_season_measured_hours():
+    """Виміри 04.10 (ADR-0054 rev 7 §3.4.1, FXCM і TV FX:USDJPY): FX закривається в Пт 17:00 NY — 21:00 UTC улітку і
+    22:00 узимку; весною Нд 08.03 відкривається о 21:00 (17:00 EDT)."""
+    assert _trading("USD/JPY", (2026, 10, 30, 20, 59), (2026, 10, 30, 21, 0)) == [True, False]
+    assert _trading("USD/JPY", (2026, 11, 6, 21, 59), (2026, 11, 6, 22, 0)) == [True, False]
+    assert _trading("USD/JPY", (2026, 3, 8, 20, 59), (2026, 3, 8, 21, 0)) == [False, True]
+
+
+def test_fx_has_no_daily_break_both_seasons():
+    """У FX денної перерви немає: о 21:00–21:10 (зима 22:00–22:30) у FXCM і TV бари є, бувають лише хвилини без угод."""
+    assert _trading("USD/JPY", (2026, 9, 29, 20, 55), (2026, 9, 29, 21, 0), (2026, 9, 29, 21, 15),
+                    (2026, 9, 29, 21, 29)) == [True, True, True, True]
+    assert _trading("USD/JPY", (2026, 1, 13, 21, 55), (2026, 1, 13, 22, 0), (2026, 1, 13, 22, 15),
+                    (2026, 1, 13, 22, 29)) == [True, True, True, True]
 
 
 # --- EU: правило ЄС, незалежне від США -------------------------------------------------------------------------------
