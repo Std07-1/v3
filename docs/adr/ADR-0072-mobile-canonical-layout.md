@@ -215,6 +215,8 @@ Landscape override (locked):
 | Телефон лежачи | `top:0` + padding 2 | `top:0` + padding 2px 8px (як у коді з 11.05) | 11–13 / 12.5 | лишаються на `top:48` |
 
 D7 (ADR-0043, наїзд кнопок на правий рядок) не повертається: правий рядок закінчується на 34px, кнопки починаються з 36px.
+На проді з 04.10.2026 19:02 UTC (власник обрав деплой; main `cc073dbf`, бандл `index-Cg0Cug2d.js`, changelog 20261004-003).
+Відкат: тег `pre-align-20261004` (03a7f95) + `/tmp/p13/dist_backup_before_20261004T190222Z.tgz`.
 
 ### Empirical measurements (DO NOT trust theory)
 
