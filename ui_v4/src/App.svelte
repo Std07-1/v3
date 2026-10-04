@@ -1080,6 +1080,22 @@
     }
   }
 
+  /* ═══ ADR-0108 S3: планшет — HUD і права панель не налазять ═══
+     Заміри 04.10 (кінець «STAY OUT» | початок панелі): 820px — 329|297, 768 — 263|245, 700 — 263|177; 900 і
+     1024 — без накладання. До 899px ховаємо чип Архі «Idle» (на телефоні він і так прихований, ADR-0071), до
+     767px — ще й рядок ATR/RV/таймер/годинник (як на телефоні, ADR-0065 Tier 3). */
+  @media (max-width: 899px) {
+    .narrative-wrap {
+      display: none;
+    }
+  }
+  @media (max-width: 767px) {
+    .tr-status-row,
+    .tr-sep-status {
+      display: none;
+    }
+  }
+
   /* ═══ ADR-0065 rev 2 Tier 3: Mobile reflow (640px breakpoint) ═══
      <640px: hide ATR/RV row + ▶ replay; KEEP ☰ overflow visible.
      The ☰ is the only chrome trigger on mobile — without it user has

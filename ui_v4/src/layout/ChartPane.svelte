@@ -270,6 +270,9 @@
     chartEngine = new ChartEngine(
       lwcHostRef,
       (data: CrosshairData) => {
+        // ADR-0108 CP10: LWC, виходячи зі свого tracking mode на відпусканні довгого тапу, шле «перехрестя нема», хоча
+        // закріплене перехрестя на екрані лишається (його ставить longPressLock) — рядок O/H/L/C тримаємо до виходу
+        if (crosshairPinned && data.time == null) return;
         crosshairData = data;
       },
       (ms) => scrollback?.(ms),
@@ -343,7 +346,10 @@
       lwcHostRef,
       chartEngine.chart,
       chartEngine.series,
-      (pinned) => (crosshairPinned = pinned),
+      (pinned) => {
+        crosshairPinned = pinned;
+        if (!pinned) crosshairData = null;
+      },
     );
 
     ro = new ResizeObserver(() => {

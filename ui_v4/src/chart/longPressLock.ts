@@ -149,13 +149,14 @@ export function setupLongPressCrosshairLock(
             });
         }
         if (fx.exit) {
+            // Спершу повідомляємо про вихід: подія LWC «перехрестя нема» від clearCrosshairPosition — уже справжня
+            onPinnedChange?.(false);
             setAutoScale(true);
             try {
                 chart.clearCrosshairPosition();
             } catch {
                 /* clearCrosshairPosition доступний у LWC v5 — fallback no-op */
             }
-            onPinnedChange?.(false);
         }
         if (fx.block && e) {
             // Capture phase: LWC (слухає touch* на canvas) подію не отримає → не прокручує, не тапає.
