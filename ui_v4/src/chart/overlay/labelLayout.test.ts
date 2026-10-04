@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest';
 import {
     boxesOverlap,
     isCompactView,
+    newestStructureLabel,
     structureLabelsWithText,
     zoneLabelsWithText,
     type StructureLabelCandidate,
@@ -106,5 +107,20 @@ describe('zoneLabelsWithText (LB8–LB10)', () => {
     it('той самий вхід у будь-якому порядку — та сама розкладка', () => {
         const items = [zone('x', 900, 5, 0, 0), zone('y', 900, 5, 10, 2), zone('z', 900, 5, 20, 4)];
         expect([...zoneLabelsWithText(items, [])]).toEqual([...zoneLabelsWithText([...items].reverse(), [])]);
+    });
+});
+
+describe('newestStructureLabel (LB13)', () => {
+    it('текст лише в найновішої події, навіть коли решта стоять окремо', () => {
+        const kept = newestStructureLabel([cand('old', 1, 0, 0), cand('mid', 2, 200, 0), cand('new', 3, 400, 0)]);
+        expect([...kept]).toEqual(['new']);
+    });
+
+    it('на рівний час — CHoCH', () => {
+        expect([...newestStructureLabel([cand('bos', 5, 0, 0, false), cand('choch', 5, 300, 0, true)])]).toEqual(['choch']);
+    });
+
+    it('нема подій — нема тексту', () => {
+        expect(newestStructureLabel([]).size).toBe(0);
     });
 });

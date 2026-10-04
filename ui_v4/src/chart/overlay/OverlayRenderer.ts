@@ -28,7 +28,7 @@ import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import type { SmcData, SmcZone, SmcLevel, SmcSwing, UiWarning, ZoneGradeInfo } from '../../types';
 import { applyBudget, DEFAULT_BUDGET, type BudgetConfig, type DisplayMode, type ZoneDisplayProps } from './DisplayBudget';
 import { visibleLevels, type GroupOverrides } from './levelGroups';
-import { isCompactView, structureLabelsWithText, zoneLabelsWithText, type LabelBox } from './labelLayout';
+import { isCompactView, newestStructureLabel, structureLabelsWithText, zoneLabelsWithText, type LabelBox } from './labelLayout';
 import { DEFAULT_BAR_SPACING_PX } from '../engine';
 
 // ── ADR-0043 P1: Canvas Safe Zones — overlay елементи не рендеряться під HUD ──
@@ -1385,6 +1385,8 @@ export class OverlayRenderer {
    */
   private layoutStructureMarks(swings: SmcSwing[], mScale: number, barMap: Map<number, any> | null): StructureMark[] {
     const marks: StructureMark[] = [];
+    // ADR-0107 S4: у стиснутому вигляді — текст лише в останнього зламу (LB13), CHoCH коротко «Ch» (LB14)
+    const compact = isCompactView(this.getBarSpacingPx(), DEFAULT_BAR_SPACING_PX);
     for (const s of swings) {
       const isChoch = s.kind?.startsWith('choch_') ?? false;
       if (!isChoch && !(s.kind?.startsWith('bos_') ?? false)) continue;
@@ -1403,7 +1405,7 @@ export class OverlayRenderer {
 
       const isBull = s.kind.includes('bull');
       // ── BOS/CHoCH: candle-anchored label (font capped at 12px) ──
-      const label = isChoch ? 'CHoCH' : 'BOS';
+      const label = isChoch ? (compact ? 'Ch' : 'CHoCH') : 'BOS';
       const fs = Math.min(12, Math.round((isChoch ? 10 : 9) * Math.max(0.7, mScale)));
 
       let yAnchor = yLevel;
@@ -1440,9 +1442,10 @@ export class OverlayRenderer {
       });
     }
 
-    const withText = structureLabelsWithText(
-      marks.flatMap((m) => (m.box ? [{ id: m.swing.id, timeMs: m.swing.time_ms, isChoch: m.isChoch, box: m.box }] : [])),
+    const candidates = marks.flatMap((m) =>
+      m.box ? [{ id: m.swing.id, timeMs: m.swing.time_ms, isChoch: m.isChoch, box: m.box }] : [],
     );
+    const withText = compact ? newestStructureLabel(candidates) : structureLabelsWithText(candidates);
     for (const m of marks) m.withText = withText.has(m.swing.id);
     return marks;
   }
@@ -1458,10 +1461,10 @@ export class OverlayRenderer {
       if (!m.box || m.withText) continue;
       this.ctx.save();
       if (!this._isLightTheme) {
-        // ореол: темна підкладка під штрихом — відділяє його від тіла свічки того ж кольору (як плашка під текстом)
-        this.ctx.globalAlpha = 0.75;
+        // ореол (LB15): легка темна підкладка під штрихом — відділяє його від тіла свічки того ж кольору
+        this.ctx.globalAlpha = 0.5;
         this.ctx.strokeStyle = '#000000';
-        this.ctx.lineWidth = 4.5;
+        this.ctx.lineWidth = 3.5;
         this.ctx.beginPath();
         this.ctx.moveTo(m.x - tickHalf - 1, m.yLevel);
         this.ctx.lineTo(m.x + tickHalf + 1, m.yLevel);

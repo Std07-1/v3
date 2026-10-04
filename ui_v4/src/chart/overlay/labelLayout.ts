@@ -40,19 +40,22 @@ export interface StructureLabelCandidate {
     box: LabelBox;
 }
 
+/** LB2: від найновішої події до найстаршої; на рівний час — CHoCH перед BOS, далі id (той самий вхід — той самий порядок). */
+function newestStructureFirst(a: StructureLabelCandidate, b: StructureLabelCandidate): number {
+    return b.timeMs - a.timeMs || Number(b.isChoch) - Number(a.isChoch) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
+
 /**
  * ADR-0107 S1 (LB2–LB3): хто з подій структури малюється текстом.
  *
- * Від найновішої до найстаршої (на рівний час — CHoCH перед BOS, далі id): текст отримує подія, чия плашка не налазить
- * на вже поставлений текст; решта — штрих. Розтягнутий графік (плашки не перетинаються) — текст у всіх.
+ * Від найновішої до найстаршої: текст отримує подія, чия плашка не налазить на вже поставлений текст; решта — штрих.
+ * Розтягнутий графік (плашки не перетинаються) — текст у всіх.
  */
 export function structureLabelsWithText(
     candidates: ReadonlyArray<StructureLabelCandidate>,
     gapPx: number = LABEL_GAP_PX,
 ): Set<string> {
-    const newestFirst = [...candidates].sort(
-        (a, b) => b.timeMs - a.timeMs || Number(b.isChoch) - Number(a.isChoch) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-    );
+    const newestFirst = [...candidates].sort(newestStructureFirst);
     const placed: LabelBox[] = [];
     const withText = new Set<string>();
     for (const candidate of newestFirst) {
@@ -61,6 +64,15 @@ export function structureLabelsWithText(
         withText.add(candidate.id);
     }
     return withText;
+}
+
+/**
+ * ADR-0107 S4 (LB13): у стиснутому вигляді текстом підписана лише одна, найновіша подія структури — останній злам, що
+ * визначає поточний стан; решта — штрих, навіть коли місце є.
+ */
+export function newestStructureLabel(candidates: ReadonlyArray<StructureLabelCandidate>): Set<string> {
+    const newest = [...candidates].sort(newestStructureFirst)[0];
+    return new Set(newest ? [newest.id] : []);
 }
 
 /** Підпис FVG, що претендує на текст у стиснутому вигляді. */
