@@ -193,8 +193,8 @@ binance_ingest_worker ───► BTCUSDT/ETHUSDT M1 ──► UDS     applyUpd
 | Redis tail (M1) | 10080 барів |
 | Bootstrap timeout | 120s |
 | WS delta poll | 1.0s |
-| H4 anchor | 79200s (22:00 UTC) літо / 82800s (23:00 UTC) зима — DST-залежний; SSOT: `config.json:day_anchor_offset_s` |
-| D1 anchor | 75600s (21:00 UTC) літо / 79200s (22:00 UTC) зима — DST-залежний; SSOT: `config.json:day_anchor_offset_s_d1` |
+| H4 anchor | від відкриття сесії 18:00 NY: 22:00 UTC літо / 23:00 UTC зима, перемикається сам; SSOT: `core/session_anchor` + `config.json:htf_anchor` (ADR-0095) |
+| D1 anchor | 17:00 America/New_York: 21:00 UTC літо / 22:00 UTC зима, перемикається сам; SSOT: `core/session_anchor` + `config.json:htf_anchor`. Календарі груп — сезонні блоки (`tick_common.calendar_for_symbol`, S6b): DST без ручних дій |
 
 ### Інваріанти (Hard Invariants)
 

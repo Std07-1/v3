@@ -172,7 +172,8 @@
 | Ключ | Тип | Опис |
 | --- | --- | --- |
 | `calendar_gate_enabled` | bool | Вхідний gate: відкидати дані поза торговими годинами |
-| `market_calendar_by_group` | dict | Розклади торгових сесій по групах (fx, cfd_us, cfd_eu, cfd_hk) |
+| `market_calendar_by_group` | dict | Розклади торгових сесій по групах (fx, cfd_us, cfd_eu, cfd_hk, crypto) |
+| `market_calendar_by_group.<група>.season_rule` | `us` \| `eu` \| `none` | Правило сезону розкладу (ADR-0095 §3.5). `us` — момент переходу DST США (02:00 за Нью-Йорком), `eu` — ЄС (01:00 UTC); розклад групи лише в блоках `summer` і `winter` з однаковим набором полів, плоскі поля розкладу поруч із блоками — відмова `CALENDAR_FLAT_FIELDS_IN_SEASONAL_GROUP`. `none` — один розклад плоскими полями (HK, crypto). Живі воркери, SMC, replay, health і інструменти беруть календар лише через `tick_common.calendar_for_symbol` (S6b, 05.10.2026): перехід DST проходить сам, без правки config і рестарту |
 | `market_calendar_by_group.<група>.session_open_grace_min` | int ≥ 0 | На скільки хвилин брокер відкриває сесію пізніше календаря; health `chain_breaks` не вважає ці хвилини діркою (ADR-0101 §3.5). Нема ключа — 0. Виміряно 23.09.2026: `cfd_us_22_23` 1 (метали — 22:01), `cfd_eu_eustx50` 1 (06:01), `cfd_eu_ger30` 1 (00:31) |
 | `market_calendar_symbol_groups` | dict | Маппінг символу → група розкладу |
 | `market_ignore_minutes_utc` | str[] | Конкретні хвилини для ігнорування (outage workaround) |
@@ -182,13 +183,12 @@
 
 ## Якір H4/D1 (`htf_anchor`, ADR-0095)
 
-> Якір — функція дати, а не число в config: сітка H4/D1 сама переходить через вихідні DST. Кроки якорів у ранбуку
-> [`dst_transition.md`](../runbooks/dst_transition.md) скасовано банером і не виконуються: до S6b ранбук перемикає
-> лише плоскі поля календарних груп. Сам ранбук переписується в ADR-0095 S8.
+> Якір — функція дати, а не число в config: сітка H4/D1 сама переходить через вихідні DST, календарні групи — теж
+> (S6b). Ранбук [`dst_transition.md`](../runbooks/dst_transition.md) — лише перевірка після кожної дати переходу.
 
 | Ключ | Тип | Опис |
 | --- | --- | --- |
-| `htf_anchor.rule_by_calendar_group` | dict | Група календаря (`market_calendar_symbol_groups`) → правило якоря H4/D1. `ny_close_us_dst`: D1 відкривається о 17:00 America/New_York (21:00 UTC улітку, 22:00 UTC узимку), H4 = D1/6 від того самого відкриття. `utc_midnight`: Binance, 00:00 UTC. Група без правила — сітку брокера не виміряно: символ із неї отримує `ValueError HTF_ANCHOR_GROUP_UNMEASURED`, а не тихий default |
+| `htf_anchor.rule_by_calendar_group` | dict | Група календаря (`market_calendar_symbol_groups`) → правило якоря H4/D1. `ny_close_us_dst`: D1 відкривається о 17:00 America/New_York (21:00 UTC улітку, 22:00 UTC узимку), H4 — від відкриття сесії 18:00 NY (22/02/06/… UTC улітку, 23/03/07/… узимку; ADR-0095 rev 24.09, як TV `FX:`). `utc_midnight`: Binance, 00:00 UTC. Група без правила — сітку брокера не виміряно: символ із неї отримує `ValueError HTF_ANCHOR_GROUP_UNMEASURED`, а не тихий default |
 
 **Прибрані ключі (ADR-0095 S5c).** `day_anchor_offset_s`, `day_anchor_offset_s_alt`, `day_anchor_offset_s_alt2`,
 `day_anchor_offset_s_d1`, `day_anchor_offset_s_d1_alt`, `binance.day_anchor_offset_s`, `binance.d1_anchor_offset_s`.

@@ -493,8 +493,8 @@ ssh aione-vps 'for i in 1 2 3 4 5 6; do echo "=== T+$((i*10))s ==="; supervisorc
   - Platform: `/opt/smc-v3/`
   - Trader-v3 (Архі): `/opt/smc-trader-v3/`
 - **Timeframes**: `[60, 180, 300, 900, 1800, 3600, 14400, 86400]` (M1–D1)
-- **D1 anchor**: 75600s (21:00 UTC) літо / 79200s (22:00 UTC) зима — DST-залежний; SSOT: `config.json:day_anchor_offset_s_d1`
-- **H4 anchor**: 79200s (22:00 UTC) літо / 82800s (23:00 UTC) зима — DST-залежний; SSOT: `config.json:day_anchor_offset_s`
+- **D1 anchor**: 17:00 America/New_York — 21:00 UTC літо / 22:00 UTC зима, перемикається сам; SSOT: `core/session_anchor` + `config.json:htf_anchor` (ADR-0095)
+- **H4 anchor**: від відкриття сесії 18:00 NY — 22:00 UTC літо / 23:00 UTC зима (TV `FX:`); календарі груп теж сезонні (`tick_common.calendar_for_symbol`, S6b) — DST без ручних дій
 
 ---
 
