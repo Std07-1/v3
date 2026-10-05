@@ -42,8 +42,8 @@ from core.smc.narrative import (
     _fallback_narrative_block,
 )
 from core.smc.shell_composer import compose_shell_payload
-from runtime.ingest.market_calendar import MarketCalendar
-from runtime.ingest.tick_common import calendar_from_group
+from runtime.ingest.market_calendar import TradingCalendar
+from runtime.ingest.tick_common import resolve_symbol_calendars
 from runtime.smc.signal_journal import SignalJournal
 from runtime.relay.signal_relay import fire_signal, fire_bias
 
@@ -175,16 +175,11 @@ class SmcRunner:
         )
         self._signal_state_path = os.path.join(sig_base, "signal_state.json")
         self._load_prev_signals()
-        # Market calendar per symbol — for narrative market-hours guard
-        self._calendars: Dict[str, MarketCalendar] = {}
-        cal_groups = full_cfg.get("market_calendar_by_group", {})
-        sym_groups = full_cfg.get("market_calendar_symbol_groups", {})
-        for sym in self._symbols:
-            grp_name = sym_groups.get(sym)
-            if grp_name and grp_name in cal_groups:
-                cal = calendar_from_group(cal_groups[grp_name])
-                if cal is not None:
-                    self._calendars[sym] = cal
+        # Market calendar per symbol — for narrative market-hours guard. Сезонний, як у воркерів (ADR-0095 S6b):
+        # після переходу DST «ринок закритий» не зсувається на годину; символ без календаря — ERROR резолвера
+        self._calendars: Dict[str, TradingCalendar] = resolve_symbol_calendars(
+            full_cfg, self._symbols, where="smc_runner"
+        )[0]
         _log.info(
             "SMC_RUNNER_INIT symbols=%s tfs=%s compute_tfs=%s lookback=%d",
             self._symbols,

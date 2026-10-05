@@ -14,7 +14,7 @@ from core.session_anchor import (
     assert_on_season_grid,
     htf_anchor_offset_s,
 )
-from runtime.ingest.market_calendar import MarketCalendar
+from runtime.ingest.market_calendar import TradingCalendar
 
 # ⚠️ Імпорт ForexConnect може відрізнятись залежно від вашого SDK/обгортки.
 # Цей варіант відповідає офіційному прикладу forexconnect (fxcorepy + ForexConnect) для python 3.7
@@ -170,7 +170,7 @@ class FxcmHistoryProvider:
             self._fx = None
 
     def is_market_open(
-        self, symbol: str, now_ms: int, calendar: MarketCalendar
+        self, symbol: str, now_ms: int, calendar: TradingCalendar
     ) -> bool:
         _ = symbol
         return calendar.is_trading_minute(now_ms)

@@ -18,11 +18,13 @@ CONFIGURED_MARGIN_MIN = 90
 assert CONFIGURED_MARGIN_MIN != PAUSE_NOISE_MARGIN_MIN_DEFAULT  # інакше тест не відрізнить config від дефолту
 
 _US_CFD_GROUP = {
+    "season_rule": "none",  # S6b: кожна група декларує правило сезону; тут один розклад без сезонів
     "market_weekend_open_dow": 6, "market_weekend_open_hm": "22:00",
     "market_weekend_close_dow": 4, "market_weekend_close_hm": "20:45",
     "market_daily_break_start_hm": "21:00", "market_daily_break_end_hm": "22:00",
 }
 _CRYPTO_GROUP = {
+    "season_rule": "none",  # S6b: кожна група декларує правило сезону; тут один розклад без сезонів
     "market_weekend_open_dow": 0, "market_weekend_open_hm": "00:00",
     "market_weekend_close_dow": 6, "market_weekend_close_hm": "23:59",
     "market_daily_break_start_hm": "00:00", "market_daily_break_end_hm": "00:00",

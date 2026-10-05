@@ -10,7 +10,7 @@ from env_profile import load_env_secrets
 from core.config_loader import htf_anchor_rule_resolver, pick_config_path, load_system_config
 from core.buckets import bucket_start_ms as _bucket_start_ms
 from core.session_anchor import D1_S, H4_S, HTF_ANCHOR_RULES, htf_bucket_start_ms
-from runtime.ingest.market_calendar import MarketCalendar
+from runtime.ingest.market_calendar import TradingCalendar
 from runtime.ingest.tick_agg import TickAggregator
 from runtime.ingest.tick_common import (
     resolve_symbol_calendars,
@@ -292,7 +292,7 @@ class TickPreviewWorker:
         curr_ttl_s: Optional[int],
         symbols: list[str],
         channel: str,
-        calendars: Dict[str, MarketCalendar] | None = None,
+        calendars: Dict[str, TradingCalendar] | None = None,
         auto_promote_m1: bool = False,
         htf_preview_tfs: list[int] | None = None,
         htf_anchor_rules: Mapping[str, str] | None = None,
@@ -344,7 +344,7 @@ class TickPreviewWorker:
         base_symbols = symbols
         self._symbol_aliases = build_symbol_aliases(base_symbols)
         self._symbol_allowlist = set(base_symbols)
-        self._calendars: Dict[str, MarketCalendar] = calendars or {}
+        self._calendars: Dict[str, TradingCalendar] = calendars or {}
         self._cal_drop_total: int = 0
         self._cal_drop_last_warn_ts: float = 0.0
         self._stats: Dict[str, int] = {}
@@ -764,7 +764,7 @@ def main() -> int:
     )
 
     # --- Build per-symbol calendars (ADR-0054 P0.4: fail-fast замість тихих 24/7) ---
-    calendars: Dict[str, MarketCalendar] = {}
+    calendars: Dict[str, TradingCalendar] = {}
     rejected: List[str] = []
     all_symbols = preview_cfg.symbols or symbols_from_cfg(cfg)
     if bool(cfg.get("calendar_gate_enabled", False)):

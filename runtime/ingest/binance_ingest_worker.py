@@ -22,13 +22,12 @@ from core.config_loader import pick_config_path, load_system_config
 from env_profile import load_env_secrets
 from runtime.ingest.broker.binance.provider import BinanceHistoryProvider
 from runtime.ingest.derive_engine import build_derive_engine
-from runtime.ingest.market_calendar import MarketCalendar
 from runtime.ingest.m1_session_filter import resolve_pause_policy
 from runtime.ingest.polling.m1_poller import (
     M1SymbolPoller,
     M1PollerRunner,
 )
-from runtime.ingest.tick_common import calendar_from_group
+from runtime.ingest.tick_common import resolve_symbol_calendars
 from runtime.store.ssot_jsonl import head_first_bar_time_ms
 from runtime.store.uds import build_uds_from_config, UnifiedDataStore
 
@@ -194,23 +193,20 @@ def build_binance_ingest_worker(
         writer_components=True,
     )
 
-    # Calendars (crypto_24x7 → cal=None → always trading)
-    cal_by_group = cfg.get("market_calendar_by_group", {})
-    cal_sym_groups = cfg.get("market_calendar_symbol_groups", {})
+    # Календарі — той самий резолвер, що в m1_poller (ADR-0095 S6b): crypto_24x7 — розклад 24/7 без сезонів;
+    # символ без валідного календаря не стартує (ERROR резолвера), а не полить 24/7 мовчки
+    calendars, rejected = resolve_symbol_calendars(cfg, symbols, where="binance_ingest_worker")
+    if rejected:
+        symbols = [s for s in symbols if s not in set(rejected)]
 
     pollers: list[M1SymbolPoller] = []
     for sym in symbols:
-        group = cal_sym_groups.get(sym)
-        cal: Optional[MarketCalendar] = None
-        if group and isinstance(cal_by_group.get(group), dict):
-            cal = calendar_from_group(cal_by_group[group])
-
         pollers.append(
             M1SymbolPoller(
                 symbol=sym,
                 provider=provider,
                 uds=uds,
-                calendar=cal,
+                calendar=calendars[sym],
                 tail_fetch_n=tail_fetch_n,
                 m3_derive=True,
                 tail_catchup_max_bars=backfill_max_bars,
@@ -220,15 +216,7 @@ def build_binance_ingest_worker(
         )
 
     # DeriveEngine — правило utc_midnight з config.htf_anchor за групою crypto_24x7 (ADR-0037, ADR-0095 S4a)
-    calendars_for_engine: Dict[str, MarketCalendar] = {}
-    for sym in symbols:
-        group = cal_sym_groups.get(sym)
-        if group and isinstance(cal_by_group.get(group), dict):
-            cal_obj = calendar_from_group(cal_by_group[group])
-            if cal_obj is not None:
-                calendars_for_engine[sym] = cal_obj
-
-    derive_engine = build_derive_engine(cfg, symbols, calendars_for_engine)
+    derive_engine = build_derive_engine(cfg, symbols, calendars)
     for sym in symbols:
         derive_engine.register_symbol_uds(sym, uds)
     for p in pollers:

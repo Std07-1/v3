@@ -21,7 +21,7 @@ from core.config_loader import pick_config_path, load_system_config
 from core.model.bars import CandleBar
 from env_profile import load_env_secrets
 from runtime.ingest.derive_engine import DeriveEngine, build_derive_engine
-from runtime.ingest.market_calendar import MarketCalendar
+from runtime.ingest.market_calendar import TradingCalendar
 from runtime.ingest.m1_session_filter import resolve_flat_max_volume, resolve_pause_policy
 from runtime.ingest.polling.m1_poller import (
     M1SymbolPoller,
@@ -329,7 +329,7 @@ def build_ingestion_worker(config_path: str) -> Optional[M1PollerRunner]:
     derive_enabled = bool(m1_cfg.get("derive_engine_enabled", True))
     if derive_enabled:
         # Той самий резолв, що й для поллерів — один календар на символ
-        calendars_for_engine: Dict[str, MarketCalendar] = {
+        calendars_for_engine: Dict[str, TradingCalendar] = {
             sym: calendars[sym] for sym in symbols
         }
 

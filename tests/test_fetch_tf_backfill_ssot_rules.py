@@ -27,6 +27,7 @@ SATURDAY_22 = int(dt.datetime(2026, 9, 5, 22, 0, tzinfo=dt.timezone.utc).timesta
 # Нд 21:30 — пауза, але за 30 хв до відкриття 22:00: «біля краю сесії», де лишається маркер anomaly.
 SUNDAY_2130 = int(dt.datetime(2026, 9, 6, 21, 30, tzinfo=dt.timezone.utc).timestamp() * 1000)
 CALENDAR_GROUP = {
+    "season_rule": "none",  # S6b: кожна група декларує правило сезону; тут один розклад без сезонів
     "market_weekend_open_dow": 6, "market_weekend_open_hm": "22:00",
     "market_weekend_close_dow": 4, "market_weekend_close_hm": "20:45",
     "market_daily_break_start_hm": "21:00", "market_daily_break_end_hm": "22:00",

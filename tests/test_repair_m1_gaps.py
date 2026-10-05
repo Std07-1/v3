@@ -23,6 +23,7 @@ from tools.repair import repair_m1_gaps as rmg
 
 # Той самий календар, що в config.json для XAU/XAG/NAS100/SPX500.
 CFD_US_22_23 = {
+    "season_rule": "none",  # S6b: кожна група декларує правило сезону; тут один розклад без сезонів
     "market_weekend_open_dow": 6,
     "market_weekend_open_hm": "22:00",
     "market_weekend_close_dow": 4,

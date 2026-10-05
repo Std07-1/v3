@@ -34,8 +34,7 @@ from core.model.bar_choice import choose_better_bar
 from core.model.bars import CandleBar
 from env_profile import load_env_secrets
 from runtime.ingest.derive_engine import build_derive_engine
-from runtime.ingest.market_calendar import MarketCalendar
-from runtime.ingest.tick_common import calendar_from_group
+from runtime.ingest.tick_common import resolve_symbol_calendars
 from runtime.store.uds import build_uds_from_config
 
 try:
@@ -224,15 +223,8 @@ def run_replay(
     data_root = str(cfg.get("data_root", "./data_v3"))
 
     # --- DeriveEngine: config і правило якоря H4/D1 перевіряються ДО очищення namespace Redis (ADR-0095 S4a) ---
-    cal_by_group = cfg.get("market_calendar_by_group", {})
-    cal_sym_groups = cfg.get("market_calendar_symbol_groups", {})
-    calendars: Dict[str, MarketCalendar] = {}
-    for sym in symbols:
-        group = cal_sym_groups.get(sym)
-        if group and isinstance(cal_by_group.get(group), dict):
-            cal_obj = calendar_from_group(cal_by_group[group])
-            if cal_obj is not None:
-                calendars[sym] = cal_obj
+    # Календарі сезонні, як у живих воркерів (ADR-0095 S6b): replay через межу DST бере розклад сезону хвилини
+    calendars, _rejected = resolve_symbol_calendars(cfg, symbols, where="replay")
 
     engine = build_derive_engine(cfg, symbols, calendars)
 

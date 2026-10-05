@@ -27,7 +27,7 @@ from core.model.candle_chain import is_display_hidden
 from core.session_anchor import D1_S, H4_S, htf_bucket_start_ms
 from env_profile import load_env_secrets
 from runtime.ingest.derive_engine import DeriveEngine, build_derive_engine
-from runtime.ingest.market_calendar import MarketCalendar
+from runtime.ingest.market_calendar import TradingCalendar
 from runtime.ingest.m1_session_filter import (
     DEFAULT_PAUSE_POLICY,
     FLAT_BAR_MAX_VOLUME_DEFAULT,
@@ -119,7 +119,7 @@ _ltm_cache: Dict[int, int] = {}  # {id(calendar): last_result_ms}
 _ltm_cache_input: Dict[int, int] = {}  # {id(calendar): now_ms що дало cache hit}
 
 
-def _last_trading_minute_ms(calendar: MarketCalendar, now_ms: int) -> int:
+def _last_trading_minute_ms(calendar: TradingCalendar, now_ms: int) -> int:
     """Пошук останньої торгової хвилини (до 7 днів назад).
 
     Кешує результат per-calendar: якщо now_ms не змінився — повертає
@@ -144,7 +144,7 @@ def _last_trading_minute_ms(calendar: MarketCalendar, now_ms: int) -> int:
 
 
 def _expected_closed_m1_calendar(
-    calendar: Optional[MarketCalendar], now_ms: int
+    calendar: Optional[TradingCalendar], now_ms: int
 ) -> int:
     """Expected last closed M1 з урахуванням календаря.
 
@@ -188,7 +188,7 @@ class M1SymbolPoller:
         symbol: str,
         provider: Any,
         uds: UnifiedDataStore,
-        calendar: Optional[MarketCalendar],
+        calendar: Optional[TradingCalendar],
         tail_fetch_n: int = 5,
         m3_derive: bool = True,
         tail_catchup_max_bars: int = 5000,
@@ -1764,7 +1764,7 @@ def build_m1_poller(config_path: str) -> Optional[M1PollerRunner]:
     derive_enabled = bool(m1_cfg.get("derive_engine_enabled", True))
     if derive_enabled:
         # Calendar per symbol для DeriveEngine
-        calendars_for_engine: Dict[str, MarketCalendar] = {
+        calendars_for_engine: Dict[str, TradingCalendar] = {
             sym: calendars[sym] for sym in symbols
         }
 
