@@ -15,7 +15,6 @@ from core.session_anchor import (
     SEASON_RULE_NONE,
     SEASON_SUMMER,
     SEASON_WINTER,
-    calendar_season,
 )
 from runtime.ingest.market_calendar import MarketCalendar, SeasonalMarketCalendar, TradingCalendar
 
@@ -128,6 +127,16 @@ def calendar_from_group(group_cfg: dict) -> Optional[MarketCalendar]:
 # Ключі сезонного календаря групи в `market_calendar_by_group` (ADR-0095 §3.5)
 SEASON_RULE_KEY = "season_rule"
 SEASON_BLOCK_KEYS = (SEASON_SUMMER, SEASON_WINTER)
+# Поля розкладу (те, що читає calendar_from_group): у групі `none` — плоскі, у групі `us`/`eu` — лише в блоках сезонів
+SCHEDULE_KEYS = (
+    "market_weekend_open_dow",
+    "market_weekend_open_hm",
+    "market_weekend_close_dow",
+    "market_weekend_close_hm",
+    "market_daily_break_start_hm",
+    "market_daily_break_end_hm",
+    "market_daily_breaks",
+)
 
 
 def calendar_for_symbol(cfg: dict, symbol: str) -> SeasonalMarketCalendar:
@@ -137,9 +146,9 @@ def calendar_for_symbol(cfg: dict, symbol: str) -> SeasonalMarketCalendar:
     набір ключів); ``none`` — плоскі поля групи, без блоків. Неповний конфіг — ValueError з причиною, а не тихий
     календар 24/7 чи розклад не того сезону.
 
-    До S6b (дедлайн 25.10.2026) живі споживачі беруть плоскі поля через ``resolve_symbol_calendars``, тож плоскі
-    поля сезонної групи = блок поточного сезону (``flat_calendar_off_season``: тест-сторож і ERROR на старті живого
-    процесу); фабрика — для health, ``rebuild_from_m1`` та інструмента міграції S7.
+    Єдине джерело розкладу для живих воркерів (``resolve_symbol_calendars``), SMC, replay, health, ``rebuild_from_m1``
+    і S7 (S6b). Плоскі поля розкладу в сезонній групі — відмова ``CALENDAR_FLAT_FIELDS_IN_SEASONAL_GROUP``: другий
+    розклад поруч із блоками розійшовся б із ними після переходу DST (до S6b його перемикав ранбук).
     """
     group = (cfg.get("market_calendar_symbol_groups") or {}).get(symbol)
     group_cfg = (cfg.get("market_calendar_by_group") or {}).get(group) if group else None
@@ -160,6 +169,12 @@ def calendar_for_symbol(cfg: dict, symbol: str) -> SeasonalMarketCalendar:
             )
         single = _build_group_schedule(group_cfg, symbol, group, "flat")
         return SeasonalMarketCalendar(season_rule, summer=single, winter=single)
+    flat_schedule = [key for key in SCHEDULE_KEYS if key in group_cfg]
+    if flat_schedule:
+        raise ValueError(
+            "CALENDAR_FLAT_FIELDS_IN_SEASONAL_GROUP symbol=%s group=%s fields=%s — розклад сезонної групи лише в "
+            "блоках summer/winter (ADR-0095 §3.5 S6b)" % (symbol, group, flat_schedule)
+        )
     summer_cfg, winter_cfg = (group_cfg.get(key) for key in SEASON_BLOCK_KEYS)
     if not isinstance(summer_cfg, dict) or not isinstance(winter_cfg, dict) or set(summer_cfg) != set(winter_cfg):
         raise ValueError(
@@ -180,29 +195,6 @@ def _build_group_schedule(schedule_cfg: dict, symbol: str, group: str, block: st
             "CALENDAR_SCHEDULE_BUILD_FAILED symbol=%s group=%s block=%s" % (symbol, group, block)
         )
     return calendar
-
-
-def flat_calendar_off_season(group_cfg: dict, now_ms: int) -> Optional[str]:
-    """Сезон моменту ``now_ms``, блок якого плоскі поля сезонної групи не повторюють; None — повторюють.
-
-    До S6b живий календар — плоскі поля (``resolve_symbol_calendars``), а розклад сезону — блок ``summer`` чи
-    ``winter`` (``calendar_for_symbol``). Плоскі поля мусять дорівнювати блоку сезону за годинником: влітку — як є,
-    після переходу DST — після перемикання ранбуком `dst_transition` (ADR-0095 §3.5). Розбіжність — живий календар
-    не того сезону. Порівнюються і поля блоку, і ефективний календар: зайве плоске поле розкладу — теж розсинхрон.
-    Група ``none``, з невідомим правилом чи без блоку сезону — None: це відмови ``calendar_for_symbol``, а живий
-    календар від них не залежить.
-    """
-    season_rule = group_cfg.get(SEASON_RULE_KEY)
-    if season_rule not in CALENDAR_SEASON_RULES or season_rule == SEASON_RULE_NONE:
-        return None
-    season = calendar_season(now_ms, season_rule)
-    block = group_cfg.get(season)
-    if not isinstance(block, dict):
-        return None
-    flat_fields = {key: group_cfg.get(key) for key in block}
-    if flat_fields == block and calendar_from_group(group_cfg) == calendar_from_group(block):
-        return None
-    return season
 
 
 # ---------------------------------------------------------------------------

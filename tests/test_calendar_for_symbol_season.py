@@ -20,10 +20,10 @@ import pytest
 from core.session_anchor import RULE_NY_CLOSE_US_DST, calendar_season, season_label
 from runtime.ingest.market_calendar import SeasonalMarketCalendar
 from runtime.ingest.tick_common import (
+    SCHEDULE_KEYS,
     SEASON_RULE_KEY,
     calendar_for_symbol,
     calendar_from_group,
-    flat_calendar_off_season,
     resolve_symbol_calendars,
 )
 
@@ -49,65 +49,49 @@ def _trading(symbol: str, *moments) -> list:
     return [calendar.is_trading_minute(_ms(*moment)) for moment in moments]
 
 
-# --- Сторож дубліката: плоскі поля = блок сезону за годинником до S6b ------------------------------------------------
+# --- S6b: один розклад сезонної групи — у блоках summer/winter, плоских полів нема ------------------------------------
 
 _EU_GROUPS = ("cfd_eu_eustx50", "cfd_eu_ger30")
 _US_GROUPS = ("fx_24x5_utc_summer", "cfd_us_22_23")
 
 
-def test_repo_config_seasonal_group_flat_fields_follow_current_season_until_s6b():
-    """Плоскі поля сезонної групи — живий календар до S6b; вони мусять дорівнювати блоку сезону за годинником.
-
-    Дедлайн вшито в годинник: 25.10.2026 (ЄС) і 01.11.2026 (США) тест червоніє, доки ранбук `dst_transition` не
-    перемкне плоскі поля на зиму або S6b не прибере їх разом із цим тестом. Червоний після переходу означає, що
-    S6b прострочено або ранбук не виконано; тест при цьому не застарів. Блоки `summer`/`winter` під плоскі поля не
-    правити: це розклад сезону для calendar_for_symbol (health, rebuild_from_m1, S7). Живий процес на старті кидає
-    ERROR `CALENDAR_FLAT_OFF_SEASON` з тієї самої перевірки.
-    """
+def test_repo_config_seasonal_groups_keep_schedule_only_in_season_blocks():
+    """S6b прибрав плоскі поля розкладу сезонних груп: їх перемикав ранбук, а живий календар тепер сам бере блок
+    сезону. Другий розклад поруч із блоками розійшовся б із ними після переходу DST."""
     groups = REPO_CFG["market_calendar_by_group"]
     seasonal = [name for name, group in groups.items() if group[SEASON_RULE_KEY] != "none"]
     assert sorted(seasonal) == sorted(_EU_GROUPS + _US_GROUPS)
-    now_ms = int(time.time() * 1000)
-    off_season = {name: flat_calendar_off_season(groups[name], now_ms) for name in seasonal}
-    assert {name: season for name, season in off_season.items() if season} == {}
+    flat = {name: [key for key in SCHEDULE_KEYS if key in groups[name]] for name in seasonal}
+    assert {name: keys for name, keys in flat.items() if keys} == {}
 
 
-def _flat_flipped_by_runbook(group_names, season: str) -> dict:
-    """Копія config репо, де ранбук переписав плоскі поля груп `group_names` блоком `season`."""
-    flipped = copy.deepcopy(REPO_CFG)
-    for name in group_names:
-        group = flipped["market_calendar_by_group"][name]
-        group.update(copy.deepcopy(group[season]))
-    return flipped
+def test_factory_refuses_flat_schedule_next_to_season_blocks():
+    """Плоске поле розкладу в сезонній групі (стара звичка ранбука) — гучна відмова, а не тихий другий розклад."""
+    cfg = copy.deepcopy(REPO_CFG)
+    cfg["market_calendar_by_group"]["cfd_eu_eustx50"]["market_weekend_open_hm"] = "06:00"
+    with pytest.raises(ValueError, match="CALENDAR_FLAT_FIELDS_IN_SEASONAL_GROUP.*market_weekend_open_hm"):
+        calendar_for_symbol(cfg, "EUSTX50")
+    calendars, rejected = resolve_symbol_calendars(cfg, ["EUSTX50", "XAU/USD"], where="t")
+    assert rejected == ["EUSTX50"] and set(calendars) == {"XAU/USD"}
 
 
-@pytest.mark.parametrize(
-    "moment, flipped_to_winter, expected_off_season",
-    [
-        ((2026, 10, 24, 12), (), {}),
-        ((2026, 10, 26, 6, 30), (), {name: "winter" for name in _EU_GROUPS}),
-        ((2026, 10, 26, 6, 30), _EU_GROUPS, {}),
-        ((2026, 11, 2, 12), _EU_GROUPS, {name: "winter" for name in _US_GROUPS}),
-        ((2026, 11, 2, 12), _EU_GROUPS + _US_GROUPS, {}),
-        ((2026, 10, 24, 12), _EU_GROUPS, {name: "summer" for name in _EU_GROUPS}),
-    ],
-    ids=["before_switch", "eu_switched_no_runbook", "eu_runbook", "us_switched_no_runbook", "all_runbook",
-         "runbook_too_early"],
-)
-def test_flat_calendar_off_season_red_after_switch_green_after_runbook(moment, flipped_to_winter, expected_off_season):
-    """Сторож рахує сезон моменту: після переходу без ранбука червоний, після санкціонованого перемикання
-    (ADR-0095 §3.5) зелений, а перемикання зарано теж ловить. «Плоскі == summer» тут мовчав би 26.10."""
-    cfg = _flat_flipped_by_runbook(flipped_to_winter, "winter")
-    groups = cfg["market_calendar_by_group"]
-    off_season = {name: flat_calendar_off_season(group, _ms(*moment)) for name, group in groups.items()}
-    assert {name: season for name, season in off_season.items() if season} == expected_off_season
+_BUILDER_HOME = {"runtime/ingest/tick_common.py", "runtime/ingest/market_calendar.py"}
 
 
-def test_flat_calendar_off_season_sees_extra_flat_schedule_field():
-    """Зайве плоске поле розкладу (перерва, якої блок не має) — розсинхрон ефективного календаря, не лише полів."""
-    group = copy.deepcopy(REPO_CFG["market_calendar_by_group"]["cfd_eu_eustx50"])
-    group["market_daily_breaks"] = [["12:00", "12:30"]]
-    assert flat_calendar_off_season(group, _ms(2026, 9, 23, 12)) == "summer"
+def test_no_module_builds_calendar_from_group_bypassing_factory():
+    """Структурний сторож S6b: розклад з групи будує лише фабрика tick_common; власні копії будівника (були в
+    smc_runner, replay, binance, tools/diag) тихо лишились би на плоских полях."""
+    offenders = []
+    for top in ("core", "runtime", "tools", "app"):
+        for path in sorted((REPO / top).rglob("*.py")):
+            rel = path.relative_to(REPO).as_posix()
+            if rel in _BUILDER_HOME:
+                continue
+            src = path.read_text(encoding="utf-8", errors="replace")
+            if "calendar_from_group(" in src or "MarketCalendar(" in src:
+                offenders.append(rel)
+    tracked = set(subprocess.run(["git", "ls-files"], cwd=str(REPO), capture_output=True, text=True).stdout.split())
+    assert [rel for rel in offenders if rel in tracked] == []
 
 
 def test_live_resolver_switches_season_by_itself_at_dst():
@@ -155,13 +139,13 @@ def test_repo_config_every_group_declares_season_rule_and_every_symbol_builds():
 
 
 def test_cfd_us_winter_sunday_opens_2300_not_2200_from_2026_11_01():
-    """Ранбук :113: зимою відкриття вихідних 23:00 UTC; плоский (літній) календар відкрив би о 22:00."""
+    """Зимою відкриття вихідних 23:00 UTC; літній розклад (до S6b — плоскі поля живих воркерів) відкрив би о 22:00."""
     xau = calendar_for_symbol(REPO_CFG, "XAU/USD")
     sun_2200, sun_2300 = _ms(2026, 11, 1, 22), _ms(2026, 11, 1, 23)
     assert xau.season_of(sun_2200) == "winter"
     assert (xau.is_trading_minute(sun_2200), xau.is_trading_minute(sun_2300)) == (False, True)
-    flat = calendar_from_group(REPO_CFG["market_calendar_by_group"]["cfd_us_22_23"])
-    assert flat.is_trading_minute(sun_2200) is True
+    summer = calendar_from_group(REPO_CFG["market_calendar_by_group"]["cfd_us_22_23"]["summer"])
+    assert summer.is_trading_minute(sun_2200) is True
 
 
 def test_cfd_us_autumn_weekend_friday_on_summer_monday_on_winter_break():
@@ -312,12 +296,13 @@ def _cfg(group: dict) -> dict:
     [
         (dict(_SUMMER, summer=_SUMMER, winter=_WINTER), "CALENDAR_SEASON_RULE_INVALID"),
         (dict(_SUMMER, season_rule="asia", summer=_SUMMER, winter=_WINTER), "CALENDAR_SEASON_RULE_INVALID"),
-        (dict(_SUMMER, season_rule="us", summer=_SUMMER), "CALENDAR_SEASON_BLOCKS_INVALID"),
-        (dict(_SUMMER, season_rule="us", summer=_SUMMER, winter=dict(_WINTER, market_daily_break_start="22:00")),
+        (dict(season_rule="us", summer=_SUMMER), "CALENDAR_SEASON_BLOCKS_INVALID"),
+        (dict(season_rule="us", summer=_SUMMER, winter=dict(_WINTER, market_daily_break_start="22:00")),
          "CALENDAR_SEASON_BLOCKS_INVALID"),
         (dict(_SUMMER, season_rule="none", summer=_SUMMER), "CALENDAR_SEASON_BLOCKS_UNEXPECTED"),
-        (dict(_SUMMER, season_rule="eu", summer={"market_weekend_open_hm": "06:00"},
+        (dict(season_rule="eu", summer={"market_weekend_open_hm": "06:00"},
               winter={"market_weekend_open_hm": "07:00"}), "CALENDAR_SCHEDULE_BUILD_FAILED"),
+        (dict(_SUMMER, season_rule="us", summer=_SUMMER, winter=_WINTER), "CALENDAR_FLAT_FIELDS_IN_SEASONAL_GROUP"),
     ],
 )
 def test_incomplete_season_config_fails_loud_not_24x7(group, code):
