@@ -21,7 +21,8 @@ import os
 import sys
 
 from core.config_loader import load_system_config
-from runtime.ingest.market_calendar import MarketCalendar
+from runtime.ingest.market_calendar import TradingCalendar
+from runtime.ingest.tick_common import calendar_for_symbol
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,41 +35,14 @@ TF_M5_MS = 300_000
 M5_PER_H1 = 12
 
 
-def _calendar_from_group(group_cfg):
-    # type: (dict) -> Optional[MarketCalendar]
-    try:
-        daily_breaks_raw = group_cfg.get("market_daily_breaks", [])
-        daily_breaks = tuple(
-            (str(pair[0]), str(pair[1]))
-            for pair in daily_breaks_raw
-            if isinstance(pair, (list, tuple)) and len(pair) >= 2
-        )
-        return MarketCalendar(
-            enabled=True,
-            weekend_close_dow=int(group_cfg["market_weekend_close_dow"]),
-            weekend_close_hm=str(group_cfg["market_weekend_close_hm"]),
-            weekend_open_dow=int(group_cfg["market_weekend_open_dow"]),
-            weekend_open_hm=str(group_cfg["market_weekend_open_hm"]),
-            daily_break_start_hm=str(group_cfg["market_daily_break_start_hm"]),
-            daily_break_end_hm=str(group_cfg["market_daily_break_end_hm"]),
-            daily_break_enabled=True,
-            daily_breaks=daily_breaks,
-        )
-    except Exception:
-        return None
-
-
 def _build_calendar(cfg, symbol):
-    # type: (dict, str) -> Optional[MarketCalendar]
-    groups = cfg.get("market_calendar_by_group", {})
-    sym_groups = cfg.get("market_calendar_symbol_groups", {})
-    group_name = sym_groups.get(symbol)
-    if not group_name:
+    # type: (dict, str) -> Optional[TradingCalendar]
+    """Сезонний календар символу — той самий, що в живих воркерів (ADR-0095 §3.5 S6b); кривий config → None."""
+    try:
+        return calendar_for_symbol(cfg, symbol)
+    except ValueError as exc:
+        logging.error("CALENDAR_BUILD_FAILED symbol=%s err=%s", symbol, exc)
         return None
-    group_cfg = groups.get(group_name)
-    if not isinstance(group_cfg, dict):
-        return None
-    return _calendar_from_group(group_cfg)
 
 
 def _symbols_from_config(cfg):
@@ -127,7 +101,7 @@ def _load_h1_opens(data_root, symbol, start_ms, end_ms):
 
 
 def _classify_hour(ot_ms, cal, outages):
-    # type: (int, MarketCalendar, List[Tuple[int, int]]) -> str
+    # type: (int, TradingCalendar, List[Tuple[int, int]]) -> str
     """Класифікувати H1 слот у якому відсутній бар.
 
     Повертає категорію missing:
@@ -161,7 +135,7 @@ def _classify_hour(ot_ms, cal, outages):
 
 
 def classify_h1_gaps(data_root, symbol, calendar, days, known_outages=None):
-    # type: (str, str, MarketCalendar, int, Optional[List[Tuple[int, int]]]) -> Dict[str, Any]
+    # type: (str, str, TradingCalendar, int, Optional[List[Tuple[int, int]]]) -> Dict[str, Any]
     if known_outages is None:
         known_outages = []
     now_ms = int(dt.datetime.utcnow().timestamp() * 1000)
