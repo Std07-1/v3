@@ -8,6 +8,7 @@ import pytest
 from runtime.ingest.tick_common import resolve_symbol_calendars
 
 GROUP = {
+    "season_rule": "none",  # S6b: кожна група декларує правило сезону, інакше фабрика відмовляє (build_failed)
     "market_weekend_close_dow": 4,
     "market_weekend_close_hm": "21:00",
     "market_weekend_open_dow": 6,

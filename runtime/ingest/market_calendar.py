@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 from core.model.bars import ms_to_utc_dt
 from core.session_anchor import CALENDAR_SEASON_RULES, SEASON_RULE_NONE, SEASON_WINTER, calendar_season
@@ -133,3 +133,9 @@ class SeasonalMarketCalendar:
 
     def is_trading_minute(self, now_ms: int) -> bool:
         return self.for_minute(now_ms).is_trading_minute(now_ms)
+
+
+# Календар, який отримує споживач (ADR-0095 §3.5, S6b): живі процеси й інструменти — сезонний із
+# ``tick_common.calendar_for_symbol``. Інтерфейс споживача в обох один: ``enabled`` і ``is_trading_minute``.
+# Union, а не Protocol: модуль живе й під Python 3.7 (гейт dual_python).
+TradingCalendar = Union[MarketCalendar, SeasonalMarketCalendar]

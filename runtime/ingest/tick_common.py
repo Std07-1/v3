@@ -7,7 +7,6 @@ core.config_loader.env_str, core.session_anchor (сезони DST) та runtime.
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any, Iterable, Optional, Dict, List, Sequence, Tuple
 
 from core.config_loader import env_str
@@ -18,7 +17,7 @@ from core.session_anchor import (
     SEASON_WINTER,
     calendar_season,
 )
-from runtime.ingest.market_calendar import MarketCalendar, SeasonalMarketCalendar
+from runtime.ingest.market_calendar import MarketCalendar, SeasonalMarketCalendar, TradingCalendar
 
 
 # ---------------------------------------------------------------------------
@@ -214,33 +213,29 @@ def resolve_symbol_calendars(
     symbols: Sequence[str],
     *,
     where: str,
-    now_ms: Optional[int] = None,
-) -> "Tuple[Dict[str, MarketCalendar], List[str]]":
-    """Побудувати календар на кожен символ; символи без валідного — відсіяти гучно.
+) -> "Tuple[Dict[str, TradingCalendar], List[str]]":
+    """Сезонний календар на кожен символ (``calendar_for_symbol``); символи без валідного — відсіяти гучно.
+
+    ADR-0095 §3.5 S6b: розклад обирається за сезоном хвилини (момент переходу DST США або ЄС), тож перехід часу
+    25.10 і 01.11 живий процес проходить сам — без ранбука, правки config і рестарту.
 
     Символ без запису в ``market_calendar_symbol_groups``, з групою, якої немає в
-    ``market_calendar_by_group``, або з групою, що не будується — це помилка конфігурації.
-    Мовчазний ``calendar=None`` означав би полінг 24/7 (усі споживачі трактують None як
+    ``market_calendar_by_group``, або з групою, що не будується (нема ``season_rule``, неповні блоки сезонів) —
+    це помилка конфігурації. Мовчазний ``calendar=None`` означав би полінг 24/7 (усі споживачі трактують None як
     «ринок завжди відкритий»), тому такий символ не отримує календаря і не стартує.
-
-    Плоскі поля сезонної групи не того сезону (``flat_calendar_off_season``: перехід DST настав, а ранбук не
-    перемкнув їх і S6b не зроблено) — ERROR ``CALENDAR_FLAT_OFF_SEASON``. Символ стартує: календар неточний у
-    годинах перерв і вихідних, а не відсутній.
 
     Args:
         cfg: повний config.json.
         symbols: символи, які збирається обслуговувати воркер.
         where: ім'я воркера для лог-префікса.
-        now_ms: момент перевірки сезону (типово — годинник процесу).
 
     Returns:
         ``(calendars, rejected)`` — мапа символ→календар і список відсіяних символів.
     """
     by_group = cfg.get("market_calendar_by_group") or {}
     sym_groups = cfg.get("market_calendar_symbol_groups") or {}
-    calendars: Dict[str, MarketCalendar] = {}
+    calendars: Dict[str, TradingCalendar] = {}
     rejected: List[str] = []
-    season_check_ms = int(time.time() * 1000) if now_ms is None else now_ms
     for sym in symbols:
         group = sym_groups.get(sym)
         if not group:
@@ -251,8 +246,7 @@ def resolve_symbol_calendars(
             )
             rejected.append(sym)
             continue
-        group_cfg = by_group.get(group)
-        if not isinstance(group_cfg, dict):
+        if not isinstance(by_group.get(group), dict):
             logging.error(
                 "CALENDAR_GROUP_MISSING where=%s symbol=%s group=%s reason=group_not_in_config "
                 "— символ не стартує",
@@ -260,24 +254,15 @@ def resolve_symbol_calendars(
             )
             rejected.append(sym)
             continue
-        cal = calendar_from_group(group_cfg)
-        if cal is None:
+        try:
+            calendars[sym] = calendar_for_symbol(cfg, sym)
+        except ValueError as exc:
             logging.error(
-                "CALENDAR_GROUP_MISSING where=%s symbol=%s group=%s reason=build_failed "
+                "CALENDAR_GROUP_MISSING where=%s symbol=%s group=%s reason=build_failed err=%s "
                 "— символ не стартує",
-                where, sym, group,
+                where, sym, group, exc,
             )
             rejected.append(sym)
-            continue
-        off_season = flat_calendar_off_season(group_cfg, season_check_ms)
-        if off_season is not None:
-            logging.error(
-                "CALENDAR_FLAT_OFF_SEASON where=%s symbol=%s group=%s season=%s — плоскі поля групи (живий "
-                "календар до S6b) не повторюють блок сезону: перемкніть їх ранбуком dst_transition або завершіть "
-                "S6b (ADR-0095 §3.5)",
-                where, sym, group, off_season,
-            )
-        calendars[sym] = cal
     if rejected:
         logging.error(
             "CALENDAR_SYMBOLS_REJECTED where=%s rejected=%s active=%s",

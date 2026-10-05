@@ -110,22 +110,30 @@ def test_flat_calendar_off_season_sees_extra_flat_schedule_field():
     assert flat_calendar_off_season(group, _ms(2026, 9, 23, 12)) == "summer"
 
 
-def test_live_calendar_logs_flat_off_season_but_symbol_still_starts(caplog):
-    """Стан «25.10 без S6b і без ранбука»: живий плоский календар EUSTX50 торгує Пн 26.10 06:30, хоча ринок
-    відкривається о 07:00. Символ стартує (календар неточний, а не відсутній), але ERROR називає групу і сезон."""
-    monday_0630 = _ms(2026, 10, 26, 6, 30)
-    with caplog.at_level(logging.ERROR):
-        calendars, rejected = resolve_symbol_calendars(REPO_CFG, ["EUSTX50", "XAU/USD"], where="t", now_ms=monday_0630)
-    assert rejected == [] and calendars["EUSTX50"].is_trading_minute(monday_0630) is True
-    assert calendar_for_symbol(REPO_CFG, "EUSTX50").is_trading_minute(monday_0630) is False
-    errors = [record.getMessage() for record in caplog.records if "CALENDAR_FLAT_OFF_SEASON" in record.getMessage()]
-    assert len(errors) == 1 and "symbol=EUSTX50 group=cfd_eu_eustx50 season=winter" in errors[0]
+def test_live_resolver_switches_season_by_itself_at_dst():
+    """S6b: живий календар (резолвер воркерів) переходить на зиму сам, без ранбука. Пн 26.10 EUSTX50 відкривається о
+    07:00, а не 06:00; XAU після 01.11 має перерву 22:00–23:00 (до того — 21:00–22:00)."""
+    calendars, rejected = resolve_symbol_calendars(REPO_CFG, ["EUSTX50", "XAU/USD"], where="t")
+    assert rejected == []
+    eu, xau = calendars["EUSTX50"], calendars["XAU/USD"]
+    assert [eu.is_trading_minute(_ms(2026, 10, 23, 6, 30)), eu.is_trading_minute(_ms(2026, 10, 26, 6, 30)),
+            eu.is_trading_minute(_ms(2026, 10, 26, 7, 0))] == [True, False, True]
+    assert [xau.is_trading_minute(_ms(2026, 10, 29, 21, 30)), xau.is_trading_minute(_ms(2026, 11, 3, 21, 30)),
+            xau.is_trading_minute(_ms(2026, 11, 3, 22, 30))] == [False, True, False]
 
-    caplog.clear()
-    with caplog.at_level(logging.ERROR):
-        resolve_symbol_calendars(_flat_flipped_by_runbook(_EU_GROUPS, "winter"), ["EUSTX50"], where="t",
-                                 now_ms=monday_0630)
-    assert not [record for record in caplog.records if "CALENDAR_FLAT_OFF_SEASON" in record.getMessage()]
+
+@pytest.mark.parametrize("sunday", [(2026, 10, 25), (2026, 11, 1), (2027, 3, 14), (2027, 3, 28)])
+def test_live_resolver_equals_factory_every_minute_around_dst(sunday):
+    """Резолвер воркерів і фабрика `calendar_for_symbol` (health, rebuild, S7) — один розклад: кожна хвилина
+    Пт–Вт навколо переходу DST, для кожного символу config репо."""
+    calendars, rejected = resolve_symbol_calendars(REPO_CFG, REPO_CFG["symbols"], where="t")
+    assert rejected == []
+    start_ms = _ms(*sunday) - 2 * 86_400_000
+    for symbol, live in calendars.items():
+        factory = calendar_for_symbol(REPO_CFG, symbol)
+        for minute in range(5 * 1440):
+            ts_ms = start_ms + minute * 60_000
+            assert live.is_trading_minute(ts_ms) == factory.is_trading_minute(ts_ms), (symbol, sunday, minute)
 
 
 def test_repo_config_every_group_declares_season_rule_and_every_symbol_builds():
