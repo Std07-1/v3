@@ -20,7 +20,8 @@ def gate_worker_has_calendar_gate():
     """tick_preview_worker.py містить calendar gate перед agg.update."""
     path = os.path.join(REPO, "runtime", "ingest", "tick_preview_worker.py")
     src = open(path, encoding="utf-8").read()
-    has_cal_import = "MarketCalendar" in src
+    # тип календаря з market_calendar (TradingCalendar після ADR-0095 S6b), а не конкретне слово в сигнатурі
+    has_cal_import = "from runtime.ingest.market_calendar import" in src
     has_gate = "ticks_dropped_calendar_closed" in src
     has_cal_param = "calendars" in src
     _check(

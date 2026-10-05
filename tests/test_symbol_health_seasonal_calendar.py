@@ -86,11 +86,11 @@ def test_winter_session_open_is_inner_and_winter_break_is_not_a_hole(cfg, tmp_pa
 
 
 def test_flat_summer_calendar_hides_the_same_winter_open_as_at_gap(cfg, tmp_path):
-    """Контроль (v4): плоскі поля групи = літній розклад. Той самий ряд дає `at_gap` замість `inner` і 61 «дірку»
-    (22:00–22:59 і 23:00): узимку плоский календар чекає бари в перерві і ховає розрив відкриття від YELLOW."""
+    """Контроль (v4): літній розклад (до S6b — плоскі поля групи). Той самий ряд дає `at_gap` замість `inner` і 61
+    «дірку» (22:00–22:59 і 23:00): узимку літній календар чекає бари в перерві і ховає розрив відкриття від YELLOW."""
     _write_winter_day(tmp_path, cfg)
     bars = symbol_health_check._read_bars(str(tmp_path), SYMBOL, 60)
-    flat = calendar_from_group(cfg["market_calendar_by_group"]["cfd_us_22_23"])
+    flat = calendar_from_group(cfg["market_calendar_by_group"]["cfd_us_22_23"]["summer"])
 
     chain = measure_chain_breaks(bars, is_trading_fn=flat.is_trading_minute, session_open_grace_min=1)
     holes = measure_holes([bar.open_time_ms for bar in bars], start_ms=WINTER_NOW - 86_400_000, end_ms=WINTER_NOW,

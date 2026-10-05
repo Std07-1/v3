@@ -21,7 +21,7 @@ from core.config_loader import htf_anchor_rule_resolver, load_system_config
 from core.model.bars import CandleBar
 from core.session_anchor import D1_S, H4_S, assert_on_season_grid
 from runtime.ingest.derive_engine import build_derive_engine
-from runtime.ingest.tick_common import calendar_from_group
+from runtime.ingest.tick_common import calendar_for_symbol
 from runtime.store.ssot_jsonl import JsonlAppender
 from runtime.store.uds import UnifiedDataStore
 
@@ -50,8 +50,7 @@ def _m1(open_ms: int, price: float) -> CandleBar:
 def _run_weekend(tmp_path: Path, start_ms: int, end_ms: int) -> Tuple[Dict[int, List[int]], object]:
     """Подати торгові M1 [start, end) у рушій зі справжнім писарем; повернути {tf: [open_ms]} з part-файлів."""
     cfg = load_system_config(str(REPO_CONFIG))
-    group = cfg["market_calendar_symbol_groups"][SYM]
-    calendar = calendar_from_group(cfg["market_calendar_by_group"][group])
+    calendar = calendar_for_symbol(cfg, SYM)  # сезонний, як у живих воркерів (ADR-0095 S6b): вихідні DST — розклад сезону
     appender = JsonlAppender(str(tmp_path), anchor_rule_for_symbol=htf_anchor_rule_resolver(cfg))
     uds = UnifiedDataStore(
         data_root=str(tmp_path), boot_id="test-dst", tf_allowlist=set(ALL_TFS),
