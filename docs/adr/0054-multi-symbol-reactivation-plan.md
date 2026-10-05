@@ -579,3 +579,4 @@ done   # переглянути список → потім xargs -r redis-cli -
   інваріант якоря = «хвилина перед якорем неторгова» (break напіввідкритий); seed лише у вікно закритого ринку; глибина 30 торгових днів
   = ~180 H4/~30 D1; DST-freeze на W4-W5; gitignored `dedup_jsonl.py`/`scan_broken_bars.py` замінено tracked-інструментами;
   changelog provenance і `rebuild_from_m1.py:611-622` виправлено; `.github/copilot-instructions.md` row 0054 → Accepted (rev 2).
+- 2026-10-05: **W6 S3 на проді** раніше за решту W6 (лагодить XAG уже зараз): точність ціни з `config.json:price_display` (digits OFFERS FXCM) у кадрі `config` → UI; changelog 20261005-001. Секція §3.4.1 (rev 7) — у гілці `feat/w6-usdjpy`.
