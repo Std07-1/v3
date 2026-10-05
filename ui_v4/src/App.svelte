@@ -42,6 +42,7 @@
   import { diagStore } from "./app/diagState";
   import { mainStatus } from "./app/diagSelectors";
   import { dismissOnOutside } from "./lib/actions/dismissOnOutside";
+  import { configuredPriceDigits, displayPriceDigits, type PriceDigits } from "./lib/priceDigits";
   import { setupKeyboard } from "./stores/keyboard.svelte";
   import type { StatusInfo } from "./app/diagSelectors";
   import { stopEdgeProbe, probeNow } from "./app/edgeProbe";
@@ -544,9 +545,11 @@
   // P2: SSOT symbols/tfs з сервера → picker props
   let cfgSymbols: string[] = $state([]);
   let cfgTfs: string[] = $state([]);
+  let cfgPriceDigits: PriceDigits | undefined = $state(undefined);
   const unsubConfig = serverConfig.subscribe((c) => {
     cfgSymbols = c.symbols;
     cfgTfs = c.tfs;
+    cfgPriceDigits = c.priceDigits;
   });
 
   // Dynamic tab title — `{SYMBOL} {PRICE}` (минімально для max info-density).
@@ -558,9 +561,9 @@
     const sym = hudSymbol.replace(/\//g, "");
     const price = lastPrice;
     if (sym && price != null && Number.isFinite(price)) {
-      // Adaptive precision — XAU 2 decimals, BTC 2, smaller alts may need more.
-      // For V1 keep 2 (matches priceFormatter default for major instruments).
-      document.title = `${sym} ${price.toFixed(2)}`;
+      // ADR-0054 rev 7 §3.4.1 S3: знаки ціни символу з конфігу сервера (XAG/USD і USD/JPY — 3), як на шкалі й у HUD
+      const digits = displayPriceDigits(configuredPriceDigits(cfgPriceDigits, hudSymbol), price);
+      document.title = `${sym} ${price.toFixed(digits)}`;
     } else if (sym) {
       document.title = sym;
     } else {

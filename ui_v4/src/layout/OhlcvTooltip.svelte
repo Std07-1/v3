@@ -5,16 +5,19 @@
      Fixed position — no cursor following. -->
 <script lang="ts">
     import type { CrosshairData } from "../chart/engine";
+    import { displayPriceDigits } from "../lib/priceDigits";
 
     const {
         data,
+        priceDigits = null,
     }: {
         data: CrosshairData | null;
+        /** Знаки символу з конфігу сервера (ADR-0054 rev 7 S3); null — стара евристика за величиною */
+        priceDigits?: number | null;
     } = $props();
 
-    function fmt(value: number, digits = 5): string {
-        if (value >= 100) digits = 2;
-        else if (value >= 10) digits = 3;
+    function fmt(value: number): string {
+        const digits = displayPriceDigits(priceDigits, value);
         return value.toLocaleString("en-US", {
             minimumFractionDigits: digits,
             maximumFractionDigits: digits,

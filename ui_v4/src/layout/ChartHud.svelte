@@ -10,6 +10,8 @@
     import { BIAS_TF_LABELS, BIAS_TF_ORDER } from "../constants/tfLabels";
     import { dismissOnOutside } from "../lib/actions/dismissOnOutside";
     import { hintsOn } from "../stores/uiHints";
+    import { serverConfig } from "../app/frameRouter";
+    import { configuredPriceDigits, displayPriceDigits } from "../lib/priceDigits";
 
     const {
         symbols,
@@ -169,13 +171,13 @@
         return { diff, pct, up: diff >= 0 };
     });
 
+    // ADR-0054 rev 7 §3.4.1 S3: знаки ціни символу з конфігу сервера; null — стара евристика за величиною
+    let symbolPriceDigits = $derived(configuredPriceDigits($serverConfig.priceDigits, currentSymbol));
+
     function fmtChange(diff: number): string {
-        // Precision matches price: use lastPrice magnitude, not delta magnitude
+        // Точність зміни = точність ціни символу (без конфігу — за величиною lastPrice, а не дельти)
         const ref = lastPrice ?? Math.abs(diff);
-        const abs = Math.abs(diff);
-        if (ref >= 100) return abs.toFixed(2);
-        if (ref >= 10) return abs.toFixed(3);
-        return abs.toFixed(5);
+        return Math.abs(diff).toFixed(displayPriceDigits(symbolPriceDigits, ref));
     }
 
     // ─── Pulse animation on change ───
@@ -205,10 +207,7 @@
     // ─── Price formatting ───
     function fmtPrice(price: number | null): string {
         if (price == null || !Number.isFinite(price)) return "—";
-        // Автоматично визначаємо кількість знаків
-        if (price >= 100) return price.toFixed(2);
-        if (price >= 10) return price.toFixed(3);
-        return price.toFixed(5);
+        return price.toFixed(displayPriceDigits(symbolPriceDigits, price));
     }
 
     // ─── Handlers ───
@@ -580,8 +579,7 @@
                                         >
                                             <div class="mc-label">Entry</div>
                                             <div class="mc-val entry">
-                                                {sig.entry_price?.toFixed(2) ??
-                                                    "—"}
+                                                {fmtPrice(sig.entry_price ?? null)}
                                             </div>
                                         </div>
                                         <div
@@ -604,8 +602,7 @@
                                         >
                                             <div class="mc-label">SL</div>
                                             <div class="mc-val sl">
-                                                {sig.stop_loss?.toFixed(2) ??
-                                                    "—"}
+                                                {fmtPrice(sig.stop_loss ?? null)}
                                             </div>
                                         </div>
                                         <div
@@ -614,8 +611,7 @@
                                         >
                                             <div class="mc-label">TP</div>
                                             <div class="mc-val tp">
-                                                {sig.take_profit?.toFixed(2) ??
-                                                    "—"}
+                                                {fmtPrice(sig.take_profit ?? null)}
                                             </div>
                                         </div>
                                     </div>

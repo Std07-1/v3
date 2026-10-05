@@ -25,7 +25,8 @@
   import { dismissOnOutside } from "../lib/actions/dismissOnOutside";
   import { OverlayRenderer } from "../chart/overlay/OverlayRenderer";
   import { DEFAULT_BUDGET, type DisplayMode } from "../chart/overlay/DisplayBudget";
-  import { serverConfig } from "../app/frameRouter";
+  import { currentPair, serverConfig } from "../app/frameRouter";
+  import { configuredPriceDigits } from "../lib/priceDigits";
   import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
   import { ArchiLayerRenderer } from "../chart/archi/ArchiLayerRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
@@ -277,6 +278,7 @@
       },
       (ms) => scrollback?.(ms),
     );
+    chartEngine.setPriceDigits(untrack(() => symbolPriceDigits));
 
     // P3.15: Scrollback state feedback
     chartEngine.onScrollbackState((state) => {
@@ -692,6 +694,11 @@
   $effect(() => {
     overlayRenderer?.setBudgetConfig($serverConfig.displayBudget ?? DEFAULT_BUDGET);
   });
+  // ADR-0054 rev 7 §3.4.1 S3: точність шкали, міток ціни й рядка O/H/L/C — знаки символу з конфігу сервера
+  let symbolPriceDigits = $derived(configuredPriceDigits($serverConfig.priceDigits, $currentPair?.symbol));
+  $effect(() => {
+    chartEngine?.setPriceDigits(symbolPriceDigits);
+  });
 
   // N3: persist toggles to localStorage
   $effect(() => {
@@ -762,7 +769,7 @@
     bind:this={lwcHostRef}
     style:filter={brightness !== 1 ? `brightness(${brightness})` : undefined}
   ></div>
-  <OhlcvTooltip data={crosshairData} />
+  <OhlcvTooltip data={crosshairData} priceDigits={symbolPriceDigits} />
   <canvas class="layer overlay-layer" bind:this={overlayCanvasRef}></canvas>
   <!-- ADR-0085: шар Арчі МІЖ SMC-контекстом і рукою трейдера -->
   <canvas class="layer archi-layer" bind:this={archiCanvasRef}></canvas>

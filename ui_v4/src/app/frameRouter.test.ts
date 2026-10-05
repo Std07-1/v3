@@ -56,3 +56,33 @@ describe('serverConfig.displayBudget — бюджет Focus з сервера (A
     expect(get(uiWarnings)).toEqual([]);
   });
 });
+
+describe('serverConfig.priceDigits — точність ціни з сервера (ADR-0054 rev 7 §3.4.1 S3)', () => {
+  const configFrame = (seq: number, priceDigits: unknown) => ({
+    type: 'render_frame',
+    frame_type: 'config',
+    config: { symbols: ['XAU/USD', 'XAG/USD'], tfs: ['M15'], price_digits: priceDigits },
+    meta: { schema_v: 'ui_v4_v2', seq, server_ts_ms: 0 },
+  });
+
+  it('кадр конфігу з price_digits задає точність кожного символу', () => {
+    resetFrameRouter();
+    handleWSFrame(configFrame(1, { 'XAU/USD': 2, 'XAG/USD': 3 }));
+    expect(get(serverConfig).priceDigits).toEqual({ 'XAU/USD': 2, 'XAG/USD': 3 });
+    expect(get(uiWarnings)).toEqual([]);
+  });
+
+  it('символ графіка без точності — попередження з назвою символу', () => {
+    resetFrameRouter();
+    handleWSFrame(configFrame(1, { 'XAU/USD': 2 }));
+    expect(get(serverConfig).priceDigits).toEqual({ 'XAU/USD': 2 });
+    expect(get(uiWarnings).some((w) => w.details.includes('XAG/USD'))).toBe(true);
+  });
+
+  it('кривий price_digits — попередження і без точності (UI лишає евристику)', () => {
+    resetFrameRouter();
+    handleWSFrame(configFrame(1, { 'XAU/USD': 2.5 }));
+    expect(get(serverConfig).priceDigits).toBeUndefined();
+    expect(get(uiWarnings).some((w) => w.details.includes('price_digits'))).toBe(true);
+  });
+});

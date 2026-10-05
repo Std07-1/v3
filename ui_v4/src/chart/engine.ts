@@ -46,6 +46,8 @@ function _withAlpha(color: string, alpha: number): string {
 const VOLUME_ALPHA = 0.32;
 /** Типова ширина свічки (CSS px): еталон масштабу міток overlay і межа «стиснутого вигляду» (ADR-0107 LB7). */
 export const DEFAULT_BAR_SPACING_PX = 8;
+/** Типова точність ціни LWC (priceFormat.precision) — для символу без знаків у конфігу сервера (ADR-0054 rev 7 S3). */
+const DEFAULT_PRICE_PRECISION = 2;
 const D1_OFFSET_MS = 10_800_000; // +3h: FXCM D1 open 22:00/21:00 UTC → nominal date
 
 // ─── UTC formatters (V3 parity: chart_adapter_lite.js:13-28) ───
@@ -401,6 +403,13 @@ export class ChartEngine {
   // ─── TF setter (called by ChartPane on switch/full frame) ───
   setTfS(tfS: number): void {
     this._tfS = tfS;
+  }
+
+  /** Точність шкали, мітки останньої ціни й перехрестя (ADR-0054 rev 7 S3): знаки символу з конфігу сервера;
+   *  null — символу нема в конфігу, лишається типова точність LWC (2 знаки). */
+  setPriceDigits(digits: number | null): void {
+    const precision = digits ?? DEFAULT_PRICE_PRECISION;
+    this.series.applyOptions({ priceFormat: { type: 'price', precision, minMove: 10 ** -precision } });
   }
 
   // ─── RAIL: Time Domain mapping (V3: chart_adapter_lite.js:260-308) ───

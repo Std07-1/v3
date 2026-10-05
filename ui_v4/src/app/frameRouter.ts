@@ -6,6 +6,7 @@
 import { writable, get } from 'svelte/store';
 import type { RenderFrame, UiWarning } from '../types';
 import { parseDisplayBudget, type BudgetConfig } from '../chart/overlay/DisplayBudget';
+import { parsePriceDigits, type PriceDigits } from '../lib/priceDigits';
 import { diagStore } from './diagState';
 
 const SUPPORTED_SCHEMA = 'ui_v4_v2';
@@ -25,6 +26,8 @@ export interface ServerConfig {
   tfs: string[];
   /** Бюджет Focus з config.json:smc.display (ADR-0028 v2 §3.4); немає — сервер без SMC, рендер тримає DEFAULT_BUDGET */
   displayBudget?: BudgetConfig;
+  /** Знаків після коми ціни символу з config.json:price_display (ADR-0054 rev 7 S3); немає — сервер до S3a */
+  priceDigits?: PriceDigits;
 }
 export const serverConfig = writable<ServerConfig>({ symbols: [], tfs: [] });
 
@@ -174,6 +177,20 @@ function applyServerConfig(cfg: any): void {
     } else {
       addUiWarning('schema_mismatch', 'router',
         `display_budget не того вигляду: ${JSON.stringify(cfg.display_budget)} — Focus лишає типовий бюджет`);
+    }
+  }
+  if (cfg.price_digits !== undefined) {
+    const digits = parsePriceDigits(cfg.price_digits);
+    if (digits) {
+      next.priceDigits = digits;
+      const missing = cfg.symbols.filter((symbol: string) => !(symbol in digits));
+      if (missing.length > 0) {
+        addUiWarning('schema_mismatch', 'router',
+          `price_digits без символів ${missing.join(', ')} — точність ціни за величиною`);
+      }
+    } else {
+      addUiWarning('schema_mismatch', 'router',
+        `price_digits не того вигляду: ${JSON.stringify(cfg.price_digits)} — точність ціни за величиною`);
     }
   }
   serverConfig.set(next);
