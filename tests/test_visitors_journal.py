@@ -98,6 +98,20 @@ def test_home_networks_match_prefixes_and_exact_addresses_and_reload(tmp_path):
     assert not homes.contains("203.0.113.7") and homes.contains("198.51.100.9")
 
 
+def test_home_networks_absent_file_is_said_once_per_transition(tmp_path, caplog):
+    """Немає файлу — законний стан («домашніх мереж нема»), але не мовчазний (I5): INFO раз на перехід, не на сесію."""
+    path = tmp_path / "home_networks.txt"
+    homes = HomeNetworks(str(path))
+    with caplog.at_level(logging.INFO):
+        assert [homes.contains("203.0.113.7") for _ in range(3)] == [False, False, False]
+        path.write_text("203.0.113.\n", encoding="utf-8")
+        assert homes.contains("203.0.113.7") is True
+        path.unlink()
+        assert homes.contains("203.0.113.7") is False and homes.contains("203.0.113.8") is False
+    absent = [r for r in caplog.records if "VISITORS_HOME_NETWORKS_ABSENT" in r.getMessage()]
+    assert len(absent) == 2
+
+
 def test_start_marks_home_network_by_real_ip_only(tmp_path):
     (tmp_path / "home_networks.txt").write_text("203.0.113.\n", encoding="utf-8")
     journal = VisitorsJournal(str(tmp_path), 20)

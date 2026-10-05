@@ -30,6 +30,7 @@ COUNTRY_HEADER = "CF-IPCountry"
 # (службові зонди, інструменти), а не відвідувач
 PROXY_HEADER = "X-Real-IP"
 HOME_NETWORKS_FILE = "home_networks.txt"
+_HOME_NETWORKS_ABSENT = "absent"  # стан «файлу нема» у HomeNetworks._last_error: INFO раз на перехід, а не мовчки
 
 _VISITOR_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
@@ -205,6 +206,10 @@ class HomeNetworks:
             with open(self._path, encoding="utf-8") as fh:
                 lines = fh.read().splitlines()
         except FileNotFoundError:
+            if self._last_error != _HOME_NETWORKS_ABSENT:  # раз на перехід у «файлу нема», не на кожну сесію
+                self._last_error = _HOME_NETWORKS_ABSENT
+                _log.info("VISITORS_HOME_NETWORKS_ABSENT path=%s — домашніх мереж нема, візити не позначаються своїми",
+                          self._path)
             self._mtime, self._entries = None, ()
             return
         except OSError as exc:
