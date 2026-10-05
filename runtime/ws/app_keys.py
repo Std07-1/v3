@@ -54,6 +54,8 @@ APP_UDS = web.AppKey("uds", object)
 APP_SMC_RUNNER = web.AppKey("smc_runner", object)
 # ADR-0028 v2 §3.4: бюджет Focus для UI з config.json:smc.display (UI застосовує, чисел не тримає)
 APP_DISPLAY_BUDGET = web.AppKey("display_budget", dict)
+# ADR-0054 rev 7 §3.4.1 S3: символ → знаків після коми ціни для UI з config.json:price_display (UI не вгадує)
+APP_PRICE_DIGITS = web.AppKey("price_digits", dict)
 
 # ── HTTP plumbing ─────────────────────────────────────────────────────────
 APP_CORS_ORIGINS = web.AppKey("cors_origins", set)

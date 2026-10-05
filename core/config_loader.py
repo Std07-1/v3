@@ -13,7 +13,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.session_anchor import HTF_ANCHOR_RULES
 
@@ -316,6 +316,34 @@ def session_open_grace_resolver(cfg: Dict[str, Any]) -> Callable[[str], int]:
         return grace_by_group[group]
 
     return grace_for_symbol
+
+
+# ── Точність ціни для UI (ADR-0054 rev 7 §3.4.1 S3) ──────────────────────────────────────────────────────────────────
+PRICE_DISPLAY_KEY = "price_display"
+PRICE_DIGITS_KEY = "digits_by_symbol"
+PRICE_DIGITS_MAX = 8  # межа розумного: ловить друк у config (напр. point_size замість digits), а не обмежує брокера
+
+
+def price_digits_wire(cfg: Dict[str, Any], symbols: List[str]) -> Tuple[Dict[str, int], List[str]]:
+    """Символ → знаків після коми для UI з `price_display.digits_by_symbol` (digits OFFERS FXCM) і символи без значення.
+
+    Значення валідується тут: ціле 0..PRICE_DIGITS_MAX, інакше ValueError CONFIG_PRICE_DIGITS_INVALID — кривий config
+    не доходить до UI. Символ без значення відмови не дає: ws пише ERROR, UI попереджає й лишає свою евристику, тож
+    графік не падає через нову секцію.
+    """
+    section = cfg.get(PRICE_DISPLAY_KEY)
+    by_symbol = section.get(PRICE_DIGITS_KEY, {}) if isinstance(section, dict) else {}
+    if not isinstance(by_symbol, dict):
+        raise ValueError("CONFIG_PRICE_DIGITS_INVALID: %s.%s — об'єкт символ → ціле" % (PRICE_DISPLAY_KEY, PRICE_DIGITS_KEY))
+    for symbol, digits in by_symbol.items():
+        if isinstance(digits, bool) or not isinstance(digits, int) or not 0 <= digits <= PRICE_DIGITS_MAX:
+            raise ValueError(
+                "CONFIG_PRICE_DIGITS_INVALID symbol=%s digits=%r — ціле 0..%d (digits OFFERS брокера)"
+                % (symbol, digits, PRICE_DIGITS_MAX)
+            )
+    wire = {symbol: by_symbol[symbol] for symbol in symbols if symbol in by_symbol}
+    missing = [symbol for symbol in symbols if symbol not in by_symbol]
+    return wire, missing
 
 
 # ── Політика D1 (ADR-0103 §3.1) ──────────────────────────────────────────────────────────────────────────────────────

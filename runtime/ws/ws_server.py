@@ -33,6 +33,7 @@ from runtime.ws.forming_tail import read_forming_candle
 from core.config_loader import (
     htf_anchor_rule_resolver,
     load_system_config,
+    price_digits_wire,
     resolve_config_path,
     tf_allowlist_from_cfg,
     preview_tf_allowlist_from_cfg,
@@ -124,6 +125,7 @@ from runtime.ws.app_keys import (  # noqa: E402
     APP_HEARTBEAT_S,
     APP_HTF_ANCHOR_RULE_FOR_SYMBOL,
     APP_PREVIEW_TF_SET,
+    APP_PRICE_DIGITS,
     APP_SMC_RUNNER,
     APP_SYMBOLS_SET,
     APP_TF_ALLOWLIST,
@@ -719,6 +721,8 @@ def _build_full_frame(
         }
         if APP_DISPLAY_BUDGET in app:
             meta["config"]["display_budget"] = app[APP_DISPLAY_BUDGET]
+        if APP_PRICE_DIGITS in app:
+            meta["config"]["price_digits"] = app[APP_PRICE_DIGITS]
     frame = {
         "type": "render_frame",
         "frame_type": "full",
@@ -828,6 +832,8 @@ def _build_config_frame(
     }
     if APP_DISPLAY_BUDGET in app:
         config["display_budget"] = app[APP_DISPLAY_BUDGET]
+    if APP_PRICE_DIGITS in app:
+        config["price_digits"] = app[APP_PRICE_DIGITS]
     return {
         "type": "render_frame",
         "frame_type": "config",
@@ -2349,6 +2355,14 @@ def build_app(
     app[APP_CONFIG_PATH] = config_path
     app[APP_BOOT_ID] = uuid.uuid4().hex[:16]
     app[APP_FULL_CONFIG] = full_cfg
+    # ADR-0054 rev 7 §3.4.1 S3: точність ціни символів для UI; кривий config — відмова старту, символ без значення — ERROR
+    _price_digits, _price_digits_missing = price_digits_wire(full_cfg, list(full_cfg.get("symbols", [])))
+    app[APP_PRICE_DIGITS] = _price_digits
+    if _price_digits_missing:
+        _log.error(
+            "WS_PRICE_DIGITS_MISSING symbols=%s — UI вгадує точність за величиною ціни (config.price_display)",
+            _price_digits_missing,
+        )
     # ADR-0105 S1: журнал візитів; None = вимкнено (причина вже в лозі старту)
     _visitors_journal = open_journal(full_cfg)
     if _visitors_journal is not None:

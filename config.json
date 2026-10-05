@@ -269,6 +269,19 @@
     "backups_keep": 14,
     "work_dir": "/var/lib/smc-v3/m1_settle"
   },
+  "price_display": {
+    "_comment": "ADR-0054 rev 7 §3.4.1 S3: знаків після коми в ціні символу для UI (шкала, мітки ціни, HUD, O/H/L/C, заголовок вкладки) — digits таблиці OFFERS FXCM, виміряно 05.10.2026; TV FX: показує так само. UI не вгадує точність за величиною ціни. Символ без значення: ws пише ERROR, UI попереджає й лишає стару евристику.",
+    "digits_by_symbol": {
+      "XAU/USD": 2,
+      "XAG/USD": 3,
+      "NAS100": 2,
+      "SPX500": 2,
+      "US30": 2,
+      "EUSTX50": 2,
+      "GER30": 2,
+      "USD/JPY": 3
+    }
+  },
   "htf_anchor": {
     "_comment": "ADR-0095 §3.4: правило якоря H4/D1 за групою календаря (market_calendar_symbol_groups). Група без правила — сітку брокера не виміряно (cfd_hk_main, fx_24x5_utc_summer): символ з неї падає ValueError, а не отримує тихий default (рішення власника 23.09.2026). ny_close_us_dst = D1 з 17:00 America/New_York, H4 = D1/6; utc_midnight = Binance.",
     "rule_by_calendar_group": {
