@@ -352,8 +352,9 @@ def test_htf_preview_rolls_grid_across_dst_weekend_without_restart():
     d1 = _last_published(uds, D1_S)
     assert h4.open_time_ms == _ms(2026, 3, 8, 22)
     assert d1.open_time_ms == _ms(2026, 3, 8, 21)
-    assert h4.o == 200.0 and h4.extensions["m1_count"] == 1
-    assert d1.o == 200.0 and d1.extensions["m1_count"] == 1
+    # open = close п'ятниці через вихідні (PREVIOUS_CLOSE, ADR-0100), h охоплює перший тік
+    assert h4.o == 100.0 and h4.h == 200.0 and h4.extensions["m1_count"] == 1
+    assert d1.o == 100.0 and d1.h == 200.0 and d1.extensions["m1_count"] == 1
 
     # 23:00 — ще той самий літній H4 22:00 і D1 21:00, а не межа зимової сітки
     worker.on_tick(_make_tick("XAU/USD", _ms(2026, 3, 8, 23, 0, 10), 201.0))
@@ -452,7 +453,7 @@ class TestRunningBar:
     def test_merge_updates_hlcv(self):
         """merge() оновлює h, low, c, v, count."""
         m1 = _make_m1("X", 0, 100, 110, 90, 105, 10)
-        rb = _RunningBar(0, 86400, m1)
+        rb = _RunningBar(0, 86400, m1, m1.o)
         assert rb.count == 1
 
         m2 = _make_m1("X", 60000, 105, 115, 88, 112, 20)
@@ -467,7 +468,7 @@ class TestRunningBar:
     def test_merge_no_change_when_inside(self):
         """merge() з баром всередині діапазону — h/low не змінюються."""
         m1 = _make_m1("X", 0, 100, 110, 90, 105, 10)
-        rb = _RunningBar(0, 86400, m1)
+        rb = _RunningBar(0, 86400, m1, m1.o)
 
         m2 = _make_m1("X", 60000, 102, 108, 92, 104, 5)
         rb.merge(m2)
@@ -477,7 +478,7 @@ class TestRunningBar:
     def test_update_forming_no_count_change(self):
         """update_forming() does not increment count or add volume."""
         m1 = _make_m1("X", 0, 100, 110, 90, 105, 10)
-        rb = _RunningBar(0, 86400, m1)
+        rb = _RunningBar(0, 86400, m1, m1.o)
 
         m2 = _make_m1("X", 0, 100, 115, 88, 112, 20)
         rb.update_forming(m2)
@@ -490,9 +491,76 @@ class TestRunningBar:
     def test_to_candle_geometry(self):
         """to_candle() produces correct CandleBar with I2 compliant close_time_ms."""
         m1 = _make_m1("XAU/USD", 0, 100, 110, 90, 105, 10)
-        rb = _RunningBar(1742169600000, 86400, m1)
+        rb = _RunningBar(1742169600000, 86400, m1, m1.o)
         candle = rb.to_candle("XAU/USD")
         assert candle.tf_s == 86400
         assert candle.close_time_ms == candle.open_time_ms + 86400 * 1000
         assert candle.complete is False
         assert candle.src == "htf_preview"
+
+
+# ---------------------------------------------------------------
+# Open нового HTF бакета — PREVIOUS_CLOSE (ADR-0100, ланцюг ADR-0101)
+# Прод 28.09.2026: EUSTX50 відкрив тиждень гепом — перший тік 6323.94, а TV FX:EUSTX50 і брокер мають D1/H4
+# open = close п'ятниці 6351.65; формуюча D1 малювала 6323.94 цілий день (і HUD +23.51 замість −0.03%).
+# ---------------------------------------------------------------
+EU_RULES = {"EUSTX50": FXCM}
+FRI_1959 = _ms(2026, 9, 25, 19, 59)
+MON_0601 = _ms(2026, 9, 28, 6, 1)
+
+
+def _eu_seeded_acc():
+    """Воркер після рестарту (нічний settle, вихідні): засів фіналами до close п'ятниці 6351.65."""
+    acc = _HTFRunningAccumulator([H4_S, D1_S], EU_RULES)
+    acc.seed("EUSTX50", [
+        _make_m1("EUSTX50", FRI_1959 - 60_000, 6350.1, 6352.1, 6349.6, 6351.1),
+        _make_m1("EUSTX50", FRI_1959, 6351.1, 6353.1, 6351.1, 6351.65),
+    ])
+    return acc
+
+
+def test_tick_bar_opens_new_bucket_at_previous_close_through_weekend_gap():
+    acc = _eu_seeded_acc()
+    first_tick = _make_m1("EUSTX50", MON_0601, 6323.94, 6326.0, 6320.0, 6324.0, v=0.0, complete=False)
+    by_tf = {bar.tf_s: bar for bar in acc.update("EUSTX50", first_tick)}
+    assert by_tf[D1_S].open_time_ms == _ms(2026, 9, 27, 21)
+    assert by_tf[H4_S].open_time_ms == _ms(2026, 9, 28, 6)
+    for bar in by_tf.values():
+        assert (bar.o, bar.h, bar.low, bar.c) == (6351.65, 6351.65, 6320.0, 6324.0)
+
+
+def test_carried_open_survives_later_ticks_and_minutes():
+    acc = _eu_seeded_acc()
+    acc.update("EUSTX50", _make_m1("EUSTX50", MON_0601, 6323.94, 6326.0, 6320.0, 6324.0, v=0.0, complete=False))
+    acc.update("EUSTX50", _make_m1("EUSTX50", MON_0601, 6323.94, 6330.0, 6310.0, 6311.0, v=0.0, complete=False))
+    by_tf = {
+        bar.tf_s: bar
+        for bar in acc.update(
+            "EUSTX50", _make_m1("EUSTX50", MON_0601 + 60_000, 6311.0, 6360.0, 6309.0, 6355.0, v=0.0, complete=False)
+        )
+    }
+    assert (by_tf[D1_S].o, by_tf[D1_S].h, by_tf[D1_S].low, by_tf[D1_S].c) == (6351.65, 6360.0, 6309.0, 6355.0)
+    assert by_tf[D1_S].extensions["m1_count"] == 2
+
+
+def test_final_bar_keeps_broker_open_not_chained_through_our_hole():
+    """Фінал M1 уже в PREVIOUS_CLOSE від брокера: open не підміняємо close попереднього бакета (ADR-0101 —
+    через нашу діру ланцюг не тягнуть)."""
+    acc = _eu_seeded_acc()
+    final_after_hole = _make_m1("EUSTX50", MON_0601, 6340.0, 6341.0, 6320.0, 6324.0)
+    by_tf = {bar.tf_s: bar for bar in acc.update("EUSTX50", final_after_hole)}
+    assert by_tf[D1_S].o == 6340.0 and by_tf[D1_S].h == 6341.0
+
+
+def test_tick_bar_without_previous_bucket_opens_at_first_tick_loudly(caplog):
+    acc = _HTFRunningAccumulator([D1_S], EU_RULES)
+    with caplog.at_level("WARNING"):
+        (d1,) = acc.update("EUSTX50", _make_m1("EUSTX50", MON_0601, 6323.94, 6326.0, 6320.0, 6324.0, complete=False))
+    assert d1.o == 6323.94
+    assert "HTF_PREVIEW_OPEN_FIRST_TICK symbol=EUSTX50 tf_s=86400" in caplog.text
+
+
+def test_running_bar_range_covers_carried_open():
+    m1 = _make_m1("X", 0, 90, 95, 85, 92)
+    rb = _RunningBar(0, 86400, m1, 100.0)
+    assert (rb.o, rb.h, rb.low, rb.c) == (100.0, 100.0, 85, 92)

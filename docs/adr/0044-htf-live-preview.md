@@ -2,7 +2,9 @@
 
 - **Статус**: Implemented (`_HTFRunningAccumulator` у tick_preview_worker на проді); 2026-09-21: D1 tick-relay
   ADR-0012 P3 виведено (`d1_live_tick_relay_enabled=false`) — друге джерело формуючої D1 засівалось першим тіком
-  (`D1_FORMING_NO_SEED`) і малювало доджі поверх preview-D1; Redis-клієнт тіків тепер не залежить від прапорця relay
+  (`D1_FORMING_NO_SEED`) і малювало доджі поверх preview-D1; Redis-клієнт тіків тепер не залежить від прапорця relay;
+  **amended 2026-09-28**: open нового бакета H4/D1 = close попереднього бакета (PREVIOUS_CLOSE, ADR-0100/0101) —
+  див. «Поправка 2026-09-28» наприкінці
 - **Дата**: 2026-03-24
 - **Автор**: R_ARCHITECT
 - **Initiative**: `htf_live_preview_v1`
@@ -634,3 +636,32 @@ class TestRunningBar:
 
 **Invariant check**: I0–I6 PASS, S0–S6 N/A (не торкаємо SMC).
 **FINAL_SOURCES**: `"htf_preview"` NOT in `{"history", "derived", "history_agg"}` ✅
+
+---
+
+## Поправка 2026-09-28 — open нового бакета = PREVIOUS_CLOSE (ADR-0100, ADR-0101)
+
+**Контекст.** Прод 28.09 (Пн): формуюча D1 усіх 7 символів відкривалась першим тіком тижня, а не close п'ятниці —
+EUSTX50 6323.94 проти 6351.65 (TV `FX:EUSTX50` і фінал брокера), XAU 4269.0 проти TV 4284.76, NAS100 −34, US30 −32,
+GER30 −63, SPX500 −6.5. Свічка тримала хибний open цілий день, HUD (c − o поточної свічки) показував EUSTX50 +23.51
+замість −0.03%. Корінь: `_RunningBar` нового бакета брав `o` першого M1, а живий M1 — тіковий preview-бар
+(`TickAggregator`, open = перший тік). Засів з UDS давав правильний open лише тому, що фінали M1 уже в PREVIOUS_CLOSE.
+
+**Альтернативи.** (A) open = close попереднього бакета акумулятора — O(1), без I/O, один шлях для H4 і D1.
+(B) open = close останнього фіналу M1 з UDS на момент перекидання — для D1/H4 на відкритті сесії той самий результат,
+але на внутрішньосесійній межі H4 фіналу хвилини XX:59 ще нема (полер T+8 с) → взяв би XX:58; плюс Redis-I/O на гарячому
+шляху тіку. (C) лагодити у ws (хвіст full-кадру й delta) — симптом, а не джерело: preview-площину читають і SMC-споживачі.
+Обрано A.
+
+**Рішення.** `_HTFRunningAccumulator._bucket_open_px`: перший бар бакета — фінал M1 (`complete`) → його open як є (брокер
+уже в PREVIOUS_CLOSE; через нашу діру ланцюг не тягнемо, ADR-0101); тіковий preview-бар → close попереднього бакета,
+у т.ч. через перерву й вихідні, лог INFO `HTF_PREVIEW_OPEN_PREV_CLOSE`; попереднього бакета нема (старт без історії в
+UDS) → перший тік + WARNING `HTF_PREVIEW_OPEN_FIRST_TICK` (I5). `_RunningBar` розтягує h/low до open — як бар брокера й
+TV (TV D1 EUSTX50 28.09: o = h = 6351.65).
+
+**Наслідки.** Формуюча H4/D1 = TV `FX:` за open/h; HUD на D1/H4 рахує від правильного open. close попереднього бакета —
+з тіків preview (може відрізнятись від фіналу брокера на тік, центи); фінал бакета перемагає (I3). Формуючі M1…H1
+(`TickAggregator`) досі відкриваються першим тіком — окреме рішення, не в цій поправці. Тести:
+`tests/test_htf_running_accumulator.py` (5 нових падають на старому коді).
+
+**Rollback.** `git revert` коміту поправки + рестарт `smc:smc-preview`; дані не зачеплені (preview-площина ефемерна, TTL).

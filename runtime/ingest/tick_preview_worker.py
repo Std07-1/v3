@@ -82,12 +82,13 @@ class _RunningBar:
 
     __slots__ = ("bucket_open_ms", "tf_s", "o", "h", "low", "c", "v", "count")
 
-    def __init__(self, bucket_open_ms: int, tf_s: int, first_bar):
+    def __init__(self, bucket_open_ms: int, tf_s: int, first_bar, open_px: float):
+        """`open_px` — open бакета (PREVIOUS_CLOSE, ADR-0100); h/low охоплюють його, як у бара брокера й TV."""
         self.bucket_open_ms = bucket_open_ms
         self.tf_s = tf_s
-        self.o = first_bar.o
-        self.h = first_bar.h
-        self.low = first_bar.low
+        self.o = open_px
+        self.h = max(open_px, first_bar.h)
+        self.low = min(open_px, first_bar.low)
         self.c = first_bar.c
         self.v = first_bar.v
         self.count = 1
@@ -137,6 +138,7 @@ class _HTFRunningAccumulator:
     Tick-update (same open_time_ms) → update_forming (лише c/h/low).
     Новий M1 bar → full merge (count + v).
     seed() використовує той самий update() — єдиний код path.
+    Open нового бакета — PREVIOUS_CLOSE (ADR-0100, ланцюг ADR-0101), див. `_bucket_open_px`.
     """
 
     def __init__(self, target_tfs_s: list, anchor_rules: Mapping[str, str]):
@@ -176,8 +178,9 @@ class _HTFRunningAccumulator:
             running = sym_state.get(tf_s)
 
             if running is None or running.bucket_open_ms != bucket_open:
-                # Новий бакет — reset
-                sym_state[tf_s] = _RunningBar(bucket_open, tf_s, m1_bar)
+                # Новий бакет — reset; open успадковує close попереднього бакета
+                open_px = self._bucket_open_px(symbol, tf_s, bucket_open, running, m1_bar)
+                sym_state[tf_s] = _RunningBar(bucket_open, tf_s, m1_bar, open_px)
                 self._last_m1_open[(symbol, tf_s)] = m1_bar.open_time_ms
             else:
                 # Той самий бакет — dedup по M1 open_time_ms
@@ -193,6 +196,37 @@ class _HTFRunningAccumulator:
             results.append(sym_state[tf_s].to_candle(symbol))
 
         return results
+
+    @staticmethod
+    def _bucket_open_px(symbol: str, tf_s: int, bucket_open_ms: int, prev_bucket, first_bar) -> float:
+        """Open нового HTF бакета за контрактом PREVIOUS_CLOSE (ADR-0100) — так його малює TV `FX:` і фінал брокера.
+
+        Фінал M1 (seed з UDS) уже несе open у PREVIOUS_CLOSE від брокера — беремо його як є: через нашу діру
+        ланцюг не тягнемо (ADR-0101). Тіковий preview-бар відкривається першим тіком (TickAggregator), тож open
+        бакета = close попереднього бакета, у т.ч. через перерву й вихідні (EUSTX50 Пн 28.09: перший тік 6323.94,
+        TV і брокер — 6351.65). Попереднього бакета нема (старт без історії в UDS) — перший тік, гучно.
+        """
+        if first_bar.complete:
+            return first_bar.o
+        if prev_bucket is not None:
+            logging.info(
+                "HTF_PREVIEW_OPEN_PREV_CLOSE symbol=%s tf_s=%d bucket_open_ms=%d o=%s first_tick=%s",
+                symbol,
+                tf_s,
+                bucket_open_ms,
+                prev_bucket.c,
+                first_bar.o,
+            )
+            return prev_bucket.c
+        logging.warning(
+            "HTF_PREVIEW_OPEN_FIRST_TICK symbol=%s tf_s=%d bucket_open_ms=%d o=%s reason=no_prev_bucket"
+            " — open формуючої = перший тік, не close попереднього бару (ADR-0100)",
+            symbol,
+            tf_s,
+            bucket_open_ms,
+            first_bar.o,
+        )
+        return first_bar.o
 
 
 try:
