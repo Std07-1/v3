@@ -93,8 +93,11 @@ class _FakeProvider:
     def fetch_last_n_m1(self, symbol, n, date_to_utc=None):
         return list(type(self).bars)
 
+    def fetch_last_n_tf(self, symbol, tf_s, n, date_to_utc=None):
+        return list(type(self).bars)
 
-def _run_main(tmp_path: Path, monkeypatch, bars, *, with_calendar=True, extra_argv=(), extra_cfg=None):
+
+def _run_main(tmp_path: Path, monkeypatch, bars, *, with_calendar=True, extra_argv=(), extra_cfg=None, tf_s=60):
     data_root = tmp_path / "data_v3"
     cfg = {"data_root": str(data_root), "m1_poller": {"safety_delay_s": 8},
            # ADR-0095 S3a: писар SSOT будується з резолвером правила якоря H4/D1; без секції — відмова старту
@@ -112,12 +115,34 @@ def _run_main(tmp_path: Path, monkeypatch, bars, *, with_calendar=True, extra_ar
     monkeypatch.setattr(_FakeProvider, "bars", bars)
     monkeypatch.setattr(backfill, "FxcmHistoryProvider", _FakeProvider)
     monkeypatch.setattr(backfill.time, "time", lambda: NOW_MS / 1000)
-    monkeypatch.setattr("sys.argv", ["fetch_tf_backfill", "--tf", "60", "--symbol", "GER30", "--n", str(len(bars))]
+    monkeypatch.setattr("sys.argv", ["fetch_tf_backfill", "--tf", str(tf_s), "--symbol", "GER30", "--n", str(len(bars))]
                         + list(extra_argv))
     rc = backfill.main()
-    written = [json.loads(line) for part in sorted((data_root / "GER30" / "tf_60").glob("part-*.jsonl"))
+    written = [json.loads(line) for part in sorted((data_root / "GER30" / ("tf_%d" % tf_s)).glob("part-*.jsonl"))
                for line in part.read_text(encoding="utf-8").splitlines() if line.strip()]
     return rc, written
+
+
+H1_MS = 3_600_000
+
+
+def _h1(open_ms: int) -> CandleBar:
+    return CandleBar(symbol="GER30", tf_s=3600, open_time_ms=open_ms, close_time_ms=open_ms + H1_MS,
+                     o=1.5, h=2.0, low=0.5, c=1.5, v=900.0, complete=True, src="history")
+
+
+def test_main_native_h1_drops_buckets_without_any_trading_minute_loudly(tmp_path: Path, monkeypatch, caplog):
+    """Нативний H1 засіву (--force-derived-tf): бакет без торгової хвилини календаря не пишеться — як і не будує його
+    писар похідних. Брокер віддає години котирувань до відкриття тижня (USD/JPY Нд 18:00–20:59 UTC), TV їх не має."""
+    sunday_open = SUNDAY_2130 + 30 * M1_MS  # Нд 22:00 — відкриття тижня календаря
+    bars = [_h1(sunday_open - 2 * H1_MS), _h1(sunday_open - H1_MS),  # Нд 20:00 і 21:00 — бакети цілком до відкриття
+            _h1(sunday_open), _h1(sunday_open + H1_MS)]
+    with caplog.at_level(logging.INFO, logger=""):
+        rc, written = _run_main(tmp_path, monkeypatch, bars, tf_s=3600, extra_argv=("--force-derived-tf",))
+    assert rc == 0
+    assert [row["open_time_ms"] for row in written] == [sunday_open, sunday_open + H1_MS]
+    dropped = [r.getMessage() for r in caplog.records if "BACKFILL_OFF_CALENDAR_DROPPED" in r.getMessage()]
+    assert len(dropped) == 1 and "n=2" in dropped[0] and "2026-09-06T20:00" in dropped[0]
 
 
 def test_main_does_not_write_the_forming_minute_to_ssot(tmp_path: Path, monkeypatch):

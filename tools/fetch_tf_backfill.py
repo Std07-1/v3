@@ -7,14 +7,16 @@ import logging
 import os
 import time
 from collections import Counter
-from typing import List, Set, Tuple
+from typing import Callable, List, Set, Tuple
 
 from env_profile import load_env_secrets
 from core.config_loader import (
     env_str, htf_anchor_rule_resolver, load_system_config, pick_config_path, session_open_grace_resolver,
 )
 from core.derive import DERIVE_SOURCE
+from core.health.measures import bucket_has_trading_minute
 from core.model.bars import CandleBar
+from core.session_anchor import htf_next_bucket_start_ms
 from runtime.ingest.broker.fxcm.provider import FxcmHistoryProvider
 from runtime.ingest.m1_session_filter import (
     VERDICT_PAUSE_EDGE_STALE_DROPPED,
@@ -119,6 +121,24 @@ def _plan_m1_batch(
     trading_like_off_calendar = [bar.open_time_ms for bar, verdict in plan.verdicts
                                  if _is_trading_like_off_calendar(bar, verdict, pause_policy)]
     return plan, verdicts, trading_like_off_calendar
+
+
+def _drop_off_calendar_buckets(
+    bars: List[CandleBar], is_trading_fn: Callable[[int], bool], tf_s: int, anchor_rule: str,
+) -> Tuple[List[CandleBar], List[CandleBar]]:
+    """(лишити, відкинути): нативні бари старшого TF, чий бакет не має жодної торгової хвилини календаря символу.
+
+    Брокер віддає такі бари з котирувань до відкриття сесії й огризків вихідних — USD/JPY 2001–2024: 1 869 H1 із
+    143 692, майже всі Нд 18:00–20:59 UTC (W6 S4, 06.10.2026). TV їх не показує, а писар похідних такого бакета не
+    будує: предикат той самий, що в `derive_bar` і DROP `season_plan` (`bucket_has_trading_minute`); межа бакета —
+    сітка якоря символу (`htf_next_bucket_start_ms`: H4/D1 — сесійний день, M3…H1 — open + TF).
+    """
+    kept: List[CandleBar] = []
+    dropped: List[CandleBar] = []
+    for bar in bars:
+        bucket_close_ms = htf_next_bucket_start_ms(bar.open_time_ms, tf_s, anchor_rule)
+        (kept if bucket_has_trading_minute(bar.open_time_ms, bucket_close_ms, is_trading_fn) else dropped).append(bar)
+    return kept, dropped
 
 
 def _is_trading_like_off_calendar(bar: CandleBar, verdict: str, pause_policy: PausePolicy) -> bool:
@@ -345,9 +365,17 @@ def main() -> int:
                     total_ssot_edits += len(plan.ssot_edits)
                     skipped, bars = plan.already_in_ssot, list(plan.to_write)
                 else:
-                    logging.info(
-                        "%s: фільтр сесії не застосовано (TF=%d ≠ 60; правило M1→SSOT — лише для хвилин)",
-                        symbol, args.tf,
+                    # Правило M1→SSOT — лише для хвилин; старшому TF — правило бакета календаря
+                    bars, off_calendar = _drop_off_calendar_buckets(
+                        bars, calendars[symbol].is_trading_minute, args.tf, anchor_rule_for_symbol(symbol)
+                    )
+                    logging.log(
+                        logging.WARNING if off_calendar else logging.INFO,
+                        "%s: BACKFILL_OFF_CALENDAR_DROPPED tf=%d n=%d%s — бакет без жодної торгової хвилини календаря "
+                        "(котирування до відкриття, огризки вихідних): TV таких барів не має, писар похідних їх не будує",
+                        symbol, args.tf, len(off_calendar),
+                        " приклади=" + ",".join(_format_cursor(bar.open_time_ms) for bar in off_calendar[:5])
+                        if off_calendar else "",
                     )
                     before = len(bars)
                     bars = [b for b in bars if b.open_time_ms not in existing]
