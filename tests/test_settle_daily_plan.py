@@ -101,3 +101,51 @@ def test_state_advances_only_to_the_lag_boundary_after_a_provisional_run(tmp_pat
     windows = sp.symbol_windows({"XAG/USD": 6}, fetched, 96, {}, provisional_to_ms=fetched)
     sp.save_settled_to(str(tmp_path), windows, {}, "run")
     assert sp.load_settled_to(str(tmp_path)) == {"XAG_USD": _ms("2026-09-29T15:05")}
+
+
+@pytest.fixture(scope="module")
+def calendars_with_fx():
+    """Символи config + USD/JPY (група FX 24x5 є в config і до активації W6)."""
+    cfg = load_system_config(pick_config_path())
+    symbols = list(dict.fromkeys(list(cfg["symbols"]) + ["USD/JPY"]))
+    return {s: calendar_for_symbol(cfg, s) for s in symbols}
+
+
+@pytest.mark.parametrize("ts", ["2026-09-24T21:05", "2026-11-10T22:05"])
+def test_daily_break_is_read_from_the_calendar_and_fx_has_none(calendars_with_fx, ts):
+    assert not calendars_with_fx["USD/JPY"].has_daily_break_at(_ms(ts))
+    assert calendars_with_fx["XAU/USD"].has_daily_break_at(_ms(ts)) and calendars_with_fx["GER30"].has_daily_break_at(_ms(ts))
+
+
+def test_fx_without_a_daily_break_never_blocks_the_weekday_run(calendars_with_fx):
+    """ADR-0103 rev 07.10.2026: USD/JPY торгує й о 21:05 — «усі в перерві» з ним не настало б ніколи, і будній settle
+    зник би для всіх символів. FX прогону не блокує; дедлайн — відкриття металів та індексів о 22:00."""
+    now = _ms("2026-09-24T21:05")
+    trading = {s: c.is_trading_minute for s, c in calendars_with_fx.items()}
+    continuous = sp.continuous_symbols(calendars_with_fx, now)
+    assert continuous == frozenset({"USD/JPY"}) and trading["USD/JPY"](now)
+    assert sp.break_window(trading, now, guard_min=10) is None  # старе правило: будній прогін не стартує ніколи
+    window = sp.break_window(trading, now, guard_min=10, continuous=continuous)
+    assert window is not None and window.reopen_ms == _ms("2026-09-24T22:00")
+
+
+def test_closed_fx_reopens_first_on_sunday_and_sets_the_weekend_deadline(calendars_with_fx):
+    """Субота: закрите все; FX відкривається Нд 21:00 UTC, на годину раніше металів — дедлайн рахується від нього."""
+    now = _ms("2026-09-26T09:05")
+    trading = {s: c.is_trading_minute for s, c in calendars_with_fx.items()}
+    window = sp.break_window(trading, now, guard_min=10, continuous=sp.continuous_symbols(calendars_with_fx, now))
+    assert window is not None and window.reopen_ms == _ms("2026-09-27T21:00")
+
+
+def test_only_symbols_without_a_daily_break_trading_is_not_a_break():
+    always = lambda _ms: True  # noqa: E731
+    assert sp.break_window({"USD/JPY": always}, _ms("2026-09-24T21:05"), 10, continuous=frozenset({"USD/JPY"})) is None
+
+
+def test_symbol_trading_during_the_run_gets_no_provisional_tail():
+    """Хвилини FX після «забір − лаг» брокер ще доправить — провізорний хвіст лише символам, що стоять у перерві."""
+    fetched = _ms("2026-09-29T21:05")
+    windows = {w.symbol: w for w in sp.symbol_windows({"XAG/USD": 6, "USD/JPY": 6}, fetched, 96, {},
+                                                       provisional_to_ms=fetched, no_provisional=frozenset({"USD/JPY"}))}
+    assert windows["XAG/USD"].to_ms == fetched
+    assert windows["USD/JPY"].to_ms == windows["USD/JPY"].settled_to_ms == _ms("2026-09-29T15:05")

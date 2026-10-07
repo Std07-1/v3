@@ -127,6 +127,7 @@ class DailySettle:
         self.run_dir = os.path.join(paths.work_dir, "runs", self.run_id)
         self.runner: Any = None
         self.deadline_ms = 0
+        self.trading_now: frozenset = frozenset()  # символи без денної перерви, що торгують під час прогону
         self.report: Dict[str, Any] = {"run_id": self.run_id, "prod": self.prod, "data_root": paths.data_root,
                                        "problems": []}
 
@@ -137,7 +138,7 @@ class DailySettle:
             return EXIT_OK
         window = self._break_window(ignore_break)
         if window is None:
-            log.info("SETTLE_DAILY_NOT_IN_BREAK — торгує хоч один символ (сезонний календар)")
+            log.info("SETTLE_DAILY_NOT_IN_BREAK — торгує хоч один символ з денною перервою (сезонний календар)")
             return EXIT_OK
         self.deadline_ms = window.deadline_ms
         os.makedirs(self.run_dir, exist_ok=True)
@@ -154,7 +155,7 @@ class DailySettle:
         weekly_break = window.reopen_ms - fetched_ms >= WEEK_CLOSE_GAP_MS
         provisional_to = None if (ignore_break or weekly_break) else sp.floor_minute(fetched_ms)
         windows = sp.symbol_windows(self.policy.lag_h_by_symbol, fetched_ms, self.policy.lookback_h, settled_to,
-                                    provisional_to_ms=provisional_to)
+                                    provisional_to_ms=provisional_to, no_provisional=self.trading_now)
         self.report["windows"] = {w.sym_dir: [sp.iso_minute(w.from_ms), sp.iso_minute(w.to_ms),
                                               sp.iso_minute(w.settled_to_ms)] for w in windows}
         for w in windows:
@@ -207,11 +208,19 @@ class DailySettle:
     # ── фази ─────────────────────────────────────────────────────────────────────────────────────────────────────────
     def _break_window(self, ignore_break: bool) -> Optional[sp.BreakWindow]:
         now = self.clock()
+        calendars = {s: calendar_for_symbol(self.cfg, s) for s in self.cfg["symbols"]}
+        continuous = sp.continuous_symbols(calendars, now)
+        self.trading_now = frozenset(s for s in continuous if calendars[s].is_trading_minute(now))
+        if continuous:
+            log.info("SETTLE_DAILY_CONTINUOUS_SYMBOLS %s торгують зараз=%s — без денної перерви: прогону не блокують і "
+                     "устоюються в ньому ж; живий потік стоїть на час прогону, полер дотягує хвилини після старту "
+                     "(ADR-0103 rev 07.10.2026)", ",".join(sorted(continuous)), ",".join(sorted(self.trading_now)) or "—")
+            self.report["continuous_symbols"] = sorted(continuous)
         if ignore_break:
             reopen = now + REHEARSAL_WINDOW_S * 1000
             return sp.BreakWindow(reopen_ms=reopen, deadline_ms=reopen - self.policy.deadline_guard_min * sp.M1_MS)
-        trading = {s: calendar_for_symbol(self.cfg, s).is_trading_minute for s in self.cfg["symbols"]}
-        return sp.break_window(trading, now, self.policy.deadline_guard_min)
+        trading = {s: calendar.is_trading_minute for s, calendar in calendars.items()}
+        return sp.break_window(trading, now, self.policy.deadline_guard_min, continuous=continuous)
 
     def _preflight(self) -> List[str]:
         problems = []

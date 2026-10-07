@@ -318,3 +318,17 @@ def test_weekly_break_settles_only_up_to_the_lag(env, now, to_core):
     settle_xau = env.commands["settle_m1_XAU_USD"]
     assert settle_xau[settle_xau.index("--to") + 1] == to_core
     assert sp.load_settled_to(env.work_dir)["XAU_USD"] == sp.parse_iso_minute(to_core)
+
+
+def test_weekday_run_with_fx_settles_it_too_without_a_provisional_tail(env):
+    """ADR-0103 rev 07.10.2026: з USD/JPY у symbols будній прогін стартує (FX без денної перерви його не блокує) і
+    устоює FX лише до «забір − лаг» — FX торгує під час прогону; метали — з провізорним хвостом, як і раніше."""
+    settle = _settle(env)
+    settle.cfg = {**settle.cfg, "symbols": list(settle.cfg["symbols"]) + ["USD/JPY"]}
+    settle.policy = dataclasses.replace(settle.policy, lag_h_by_symbol={**settle.policy.lag_h_by_symbol, "USD/JPY": 6})
+    assert settle.run(scheduled=True, dry_run=False, ignore_break=False) == sd.EXIT_OK
+    settle_fx = env.commands["settle_m1_USD_JPY"]
+    assert settle_fx[settle_fx.index("--to") + 1] == "2026-09-24T15:05"
+    settle_xau = env.commands["settle_m1_XAU_USD"]
+    assert settle_xau[settle_xau.index("--to") + 1] == "2026-09-24T21:05"
+    assert _report(env)["continuous_symbols"] == ["USD/JPY"]

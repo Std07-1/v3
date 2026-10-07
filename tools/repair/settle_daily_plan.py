@@ -19,7 +19,7 @@ import datetime as dt
 import json
 import os
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 M1_MS = 60_000
 HOUR_MS = 3_600_000
@@ -53,12 +53,26 @@ class BreakWindow:
     deadline_ms: int  # прогін завершується або відкочується до цієї миті
 
 
-def break_window(is_trading_by_symbol: Mapping[str, IsTrading], now_ms: int, guard_min: int) -> Optional[BreakWindow]:
-    """Спільна перерва всіх символів зараз; None — хоч один символ торгує (прогін не стартує)."""
+def continuous_symbols(calendars: Mapping[str, Any], now_ms: int) -> FrozenSet[str]:
+    """Символи, чий розклад сезону моменту `now_ms` не має денної перерви (FX 24x5): спільної перерви з ними не буває."""
+    return frozenset(symbol for symbol, calendar in calendars.items() if not calendar.has_daily_break_at(now_ms))
+
+
+def break_window(is_trading_by_symbol: Mapping[str, IsTrading], now_ms: int, guard_min: int,
+                 continuous: FrozenSet[str] = frozenset()) -> Optional[BreakWindow]:
+    """Спільна перерва символів з денною перервою зараз; None — хоч один із них торгує (прогін не стартує).
+
+    Символ без денної перерви (`continuous`, FX 24x5) прогону не блокує, інакше будній settle не стартував би ніколи
+    й для решти символів (ADR-0103 rev 07.10.2026): його живий потік стоїть на час прогону (записувачі спільні), полер
+    дотягує хвилини після старту. Закритий (вихідні) — його відкриття входить у дедлайн: FX відкривається раніше металів.
+    """
     now = floor_minute(now_ms)
-    if any(is_trading(now) for is_trading in is_trading_by_symbol.values()):
+    if any(is_trading(now) for symbol, is_trading in is_trading_by_symbol.items() if symbol not in continuous):
         return None
-    reopen = min(_next_trading_minute(is_trading, now) for is_trading in is_trading_by_symbol.values())
+    closed = [is_trading for is_trading in is_trading_by_symbol.values() if not is_trading(now)]
+    if not closed:
+        return None  # торгують лише символи без денної перерви — перерви, з якої рахувати дедлайн, нема
+    reopen = min(_next_trading_minute(is_trading, now) for is_trading in closed)
     return BreakWindow(reopen_ms=reopen, deadline_ms=reopen - guard_min * M1_MS)
 
 
@@ -94,7 +108,8 @@ class SymbolWindow:
 
 
 def symbol_windows(lag_h_by_symbol: Mapping[str, int], fetched_ms: int, lookback_h: int,
-                   settled_to: Mapping[str, int], provisional_to_ms: Optional[int] = None) -> List[SymbolWindow]:
+                   settled_to: Mapping[str, int], provisional_to_ms: Optional[int] = None,
+                   no_provisional: FrozenSet[str] = frozenset()) -> List[SymbolWindow]:
     """Вікно settle кожного символу: [межа попереднього прогону (не старша за to − lookback), забір − лаг групи].
 
     Без перекриття з уже устояним: повторний settle хвилини тягне пізні перерахунки брокера (вихідне округлення
@@ -103,6 +118,8 @@ def symbol_windows(lag_h_by_symbol: Mapping[str, int], fetched_ms: int, lookback
     `provisional_to_ms` (будній день): settle до цієї межі, стан — лише до «забір − лаг». Остання хвилина перед
     перервою, яку брокер публікує округленою (XAG 28.09 20:59 close 60.0), в архіві за кілька хвилин уже правильна
     (60.495) — провізорний хвіст прибирає її тієї ж ночі, а наступний прогін переустоює хвіст остаточно.
+    `no_provisional` — символи, що торгують під час прогону (без денної перерви): їхні хвилини після «забір − лаг» брокер
+    ще доправить, провізорний хвіст їм не дається.
     """
     out = []
     for symbol, lag_h in lag_h_by_symbol.items():
@@ -114,7 +131,7 @@ def symbol_windows(lag_h_by_symbol: Mapping[str, int], fetched_ms: int, lookback
             unsettled = previous
         elif previous is not None:
             from_ms = previous
-        if provisional_to_ms is not None and provisional_to_ms > to_ms:
+        if provisional_to_ms is not None and provisional_to_ms > to_ms and symbol not in no_provisional:
             out.append(SymbolWindow(symbol, from_ms, provisional_to_ms, unsettled_from_ms=unsettled, state_to_ms=to_ms))
         else:
             out.append(SymbolWindow(symbol, from_ms, to_ms, unsettled_from_ms=unsettled))

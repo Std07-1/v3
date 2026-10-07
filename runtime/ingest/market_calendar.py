@@ -69,6 +69,18 @@ class MarketCalendar:
                 intervals.append((s[0] * 60 + s[1], e[0] * 60 + e[1]))
         return intervals
 
+    @property
+    def has_daily_break(self):
+        # type: () -> bool
+        """Є денна перерва ненульової довжини. FX 24x5 її не має (00:00–00:00 і порожній список, W6 S2), тож нічний
+        settle не може чекати «спільної перерви» з ним (ADR-0103 rev 07.10.2026)."""
+        return any(start != end for start, end in self._all_break_intervals())
+
+    def has_daily_break_at(self, ts_ms):
+        # type: (int) -> bool
+        """Інтерфейс спільний із SeasonalMarketCalendar; плоский розклад від моменту не залежить."""
+        return self.has_daily_break
+
     def is_trading_minute(self, now_ms: int) -> bool:
         if not self.enabled:
             return True
@@ -133,6 +145,10 @@ class SeasonalMarketCalendar:
 
     def is_trading_minute(self, now_ms: int) -> bool:
         return self.for_minute(now_ms).is_trading_minute(now_ms)
+
+    def has_daily_break_at(self, ts_ms: int) -> bool:
+        """Денна перерва розкладу сезону моменту ``ts_ms``."""
+        return self.for_minute(ts_ms).has_daily_break
 
 
 # Календар, який отримує споживач (ADR-0095 §3.5, S6b): живі процеси й інструменти — сезонний із
