@@ -199,5 +199,8 @@ def test_repo_config_has_htf_anchor_no_legacy_keys():
     assert find_legacy_anchor_keys(cfg) == []
     assert find_legacy_anchor_keys(_repo_cfg()) == []
     rule_for_symbol = htf_anchor_rule_resolver(cfg)
-    assert {s: rule_for_symbol(s) for s in cfg["symbols"]} == {s: "ny_close_us_dst" for s in cfg["symbols"]}
+    # Валютні пари — `ny_close_fx` (H4 від 17:00 NY, ADR-0095 rev 04.10), решта графіка — `ny_close_us_dst`
+    groups = cfg["market_calendar_symbol_groups"]
+    expected = {s: "ny_close_fx" if groups[s] == "fx_24x5_utc_summer" else "ny_close_us_dst" for s in cfg["symbols"]}
+    assert {s: rule_for_symbol(s) for s in cfg["symbols"]} == expected
     assert {rule_for_symbol(s) for s in cfg["binance"]["symbols"]} == {"utc_midnight"}

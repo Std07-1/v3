@@ -16,7 +16,7 @@ from tools.repair import settle_daily as sd
 from tools.repair import settle_daily_plan as sp
 from tools.repair.partfile_io import WritersGuardRefused
 
-SYMBOL_DIRS = ["XAU_USD", "XAG_USD", "NAS100", "SPX500", "US30", "EUSTX50", "GER30"]
+SYMBOL_DIRS = ["XAU_USD", "XAG_USD", "NAS100", "SPX500", "US30", "EUSTX50", "GER30", "USD_JPY"]
 
 
 class FakeRunner:
@@ -136,6 +136,10 @@ def test_nightly_run_follows_the_proven_manual_order(env):
     state = sp.load_settled_to(env.work_dir)
     assert state["XAU_USD"] == sp.parse_iso_minute("2026-09-24T15:05")  # лаг 6 год
     assert state["GER30"] == sp.parse_iso_minute("2026-09-24T09:05")  # EU — лаг 12 год
+    # FX торгує під час прогону (ADR-0103 rev §3.5): без провізорного хвоста, settle і стан — до «забір − 12 год»
+    settle_fx = env.commands["settle_m1_USD_JPY"]
+    assert settle_fx[settle_fx.index("--to") + 1] == "2026-09-24T09:05"
+    assert state["USD_JPY"] == sp.parse_iso_minute("2026-09-24T09:05")
     assert _report(env)["stage"] == "SETTLED"
     assert not os.path.exists(os.path.join(env.work_dir, sd.WRITERS_STOPPED_MARKER))
 

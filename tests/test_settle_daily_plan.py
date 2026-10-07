@@ -15,26 +15,32 @@ def _ms(text):
 
 
 @pytest.fixture(scope="module")
-def trading():
+def calendars():
     cfg = load_system_config(pick_config_path())
-    return {s: calendar_for_symbol(cfg, s).is_trading_minute for s in cfg["symbols"]}
+    return {s: calendar_for_symbol(cfg, s) for s in cfg["symbols"]}
+
+
+def _repo_break(calendars, now):
+    """Перерва за правилом прогону: символи без денної перерви (FX) не блокують (ADR-0103 rev §3.5)."""
+    trading = {s: c.is_trading_minute for s, c in calendars.items()}
+    return sp.break_window(trading, _ms(now), guard_min=10, continuous=sp.continuous_symbols(calendars, _ms(now)))
 
 
 @pytest.mark.parametrize("now, reopen", [
-    ("2026-09-24T21:05", "2026-09-24T22:00"),  # літо, Чт: перерва US-групи, EU закриті
+    ("2026-09-24T21:05", "2026-09-24T22:00"),  # літо, Чт: перерва US-групи, EU закриті, FX торгує
     ("2026-11-10T22:05", "2026-11-10T23:00"),  # зима після DST: перерва на годину пізніше
-    ("2026-09-26T09:05", "2026-09-27T22:00"),  # Субота: добір хвоста п'ятниці, відкриття — Нд 22:00
+    ("2026-09-26T09:05", "2026-09-27T21:00"),  # Субота: добір хвоста п'ятниці; першим відкривається FX — Нд 21:00
 ])
-def test_break_is_common_to_all_symbols_and_the_deadline_keeps_a_guard(trading, now, reopen):
-    window = sp.break_window(trading, _ms(now), guard_min=10)
+def test_break_of_symbols_with_a_daily_break_and_the_deadline_keeps_a_guard(calendars, now, reopen):
+    window = _repo_break(calendars, now)
     assert window is not None and window.reopen_ms == _ms(reopen)
     assert window.deadline_ms == _ms(reopen) - 10 * sp.M1_MS
 
 
 @pytest.mark.parametrize("now", ["2026-11-10T21:05", "2026-09-25T14:00", "2026-09-24T22:05"])
-def test_no_run_while_any_symbol_trades(trading, now):
+def test_no_run_while_any_symbol_with_a_daily_break_trades(calendars, now):
     """Узимку 21:05 брокер ще торгує (перерва 22–23) — cron-слот 21:05 мусить мовчки пропустити день."""
-    assert sp.break_window(trading, _ms(now), guard_min=10) is None
+    assert _repo_break(calendars, now) is None
 
 
 def test_window_ends_a_revision_lag_before_the_fetch_per_group():
