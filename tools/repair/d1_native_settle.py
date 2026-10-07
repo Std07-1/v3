@@ -60,6 +60,9 @@ ACT_SAME, ACT_REPLACE, ACT_INSERT, ACT_REMOVE, ACT_REKEY, ACT_KEEP = (
 ACT_REMOVE_STUB = "remove_weekend_stub"
 _WEEKEND_WEEKDAYS = (4, 5)  # Пт, Сб — день UTC ключа D1, з якого починається бакет вихідних
 _WEEK_MS = 7 * 86_400_000
+# Святкові тижні: Різдво й Новий рік у неділю лишають без недільної сесії до двох неділь поспіль (USD/JPY Сб 07.01.2006,
+# 06.01.2007, 07.01.2017) — сучасна конвенція впізнається й за неділею після огризка, якщо до нього неділя не давніша.
+_HOLIDAY_SUNDAYS_LOOKBACK_MS = 3 * _WEEK_MS
 
 
 @dataclass
@@ -132,15 +135,22 @@ def _weekday(ms: int) -> int:
 
 def weekend_stub_keys(candidates, native_keys, rule: str, is_trading) -> set:
     """Ключі вихідного огризка серед `candidates`: бакет D1 починається в Пт/Сб UTC, жодної торгової хвилини календаря
-    в ньому немає, а за 6 діб до ключа брокер має недільний ключ (сучасна конвенція Нд–Чт). Стара конвенція індексів
-    (ключі Пн–Пт на кінці сесії, 1990–2008) недільних ключів не має — її п'ятниці не огризки."""
+    в ньому немає, а брокер у цьому тижні веде сучасну конвенцію Нд–Чт: недільний ключ за 6 діб до ключа — або, у
+    святковий тиждень без попередніх недільних сесій, неділя за добу після нього при неділі не давнішій за 3 тижні
+    до нього. Стара конвенція індексів (ключі Пн–Пт на кінці сесії, 1990–2008) недільних ключів до себе не має — її
+    п'ятниці не огризки, зокрема остання перед першою неділею нової конвенції."""
     sundays = sorted(k for k in native_keys if _weekday(k) == 6)
     stubs = set()
     for k in candidates:
         if _weekday(k) not in _WEEKEND_WEEKDAYS:
             continue
         i = bisect.bisect_left(sundays, k)
-        if i == 0 or k - sundays[i - 1] >= _WEEK_MS:
+        before = k - sundays[i - 1] if i > 0 else None
+        after = sundays[i] - k if i < len(sundays) else None
+        modern_week = before is not None and (
+            before < _WEEK_MS or (after is not None and after < _WEEK_MS and before < _HOLIDAY_SUNDAYS_LOOKBACK_MS)
+        )
+        if not modern_week:
             continue
         if not any(is_trading(t) for t in range(k, htf_next_bucket_start_ms(k, D1_S, rule), M1_S * 1000)):
             stubs.add(k)

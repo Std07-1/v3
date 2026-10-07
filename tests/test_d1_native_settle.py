@@ -191,3 +191,29 @@ def test_broker_native_without_fetched_at_is_refused(tree, tmp_path):
     with pytest.raises(ValueError, match="D1_NATIVE_ARCHIVE_NO_FETCHED_AT"):
         dns.main(["--data-root", str(root), "--archive", str(arc), "--symbols", "XAU/USD",
                   "--config", _config(tmp_path, "broker_native")])
+
+
+
+def _fx_is_trading():
+    from runtime.ingest.tick_common import calendar_for_symbol
+    return calendar_for_symbol(load_system_config(pick_config_path()), "USD/JPY").is_trading_minute
+
+
+def test_weekend_stub_in_a_holiday_week_without_previous_sunday_sessions_is_found():
+    """USD/JPY Сб 07.01.2006 22:00: Різдво й Новий рік у неділю — недільних сесій 25.12 і 01.01 у брокера нема, тож
+    правило «неділя за 6 діб до ключа» пропускало огризок (TV його не має). Неділя після нього і не давніша за 3 тижні
+    до нього — сучасна конвенція."""
+    sundays = [_ms(2005, 12, 18, 22), _ms(2006, 1, 8, 22)]
+    stub = _ms(2006, 1, 7, 22)
+    assert dns.weekend_stub_keys([stub], sundays + [stub], "ny_close_fx", _fx_is_trading()) == {stub}
+
+
+def test_friday_of_the_old_convention_before_the_first_sunday_key_is_not_a_stub():
+    """Перехід конвенцій: п'ятниця старих ключів Пн–Пт перед першим недільним ключем — справжній торговий день; неділя
+    після неї без неділі до неї огризком її не робить. Неділя до ключа давніша за 3 тижні — теж ні."""
+    is_trading = _fx_is_trading()
+    first_sunday = _ms(2008, 6, 15, 21)
+    old_friday = _ms(2008, 6, 13, 21)
+    assert dns.weekend_stub_keys([old_friday], [old_friday, first_sunday], "ny_close_fx", is_trading) == set()
+    far_sunday, sat = _ms(2008, 5, 18, 21), _ms(2008, 6, 14, 21)
+    assert dns.weekend_stub_keys([sat], [far_sunday, sat, first_sunday], "ny_close_fx", is_trading) == set()
