@@ -64,10 +64,13 @@ MAX_MID_SESSION_GAPS_BY_TF: Dict[int, int] = {
 }
 
 # ADR-0097 (рішення власника 15.09 «не викидаємо, як у TradingView»): TF, чий бар будується з НАЯВНИХ
-# source-барів понад бюджет пропусків — але лише коли джерело дійшло до останнього торгового слота bucket
-# (доба закрита даними, а не годинником). Свято/ранній закрив/тонкий день = бар з того, що було, а не
-# відсутній день. Без фронтиру — None, як і раніше: незакриту добу final-ом не фіксуємо.
-FRONTIER_BUILT_TFS: FrozenSet[int] = frozenset({86400})
+# source-барів понад бюджет пропусків — але лише коли фронтир доведено (`_source_reached_bucket_end`: бакет
+# закритий даними, а не годинником). Свято/ранній закрив/тонкий день/ролловер FX = бар з того, що було, а не
+# відсутній бар. Без фронтиру — None, як і раніше: незакритий бакет final-ом не фіксуємо.
+# Усі похідні TF (зріз M5 08.10: USD/JPY 21:00–21:30 без угод по 4–5 хв — M5 зникали, M15/M30/H1 губили open/low).
+# Бюджет фактично перевищується лише в M5 (5 слотів) і D1 (1440): у M3/M15/M30/H1 слотів ≤ 3, у H4 — 4 (усі
+# відсутні = бару нема й так). Rollback: frozenset({86400}).
+FRONTIER_BUILT_TFS: FrozenSet[int] = frozenset(DERIVE_ORDER)
 
 
 def _resolve_bucket(
@@ -397,6 +400,7 @@ def derive_bar(
     is_trading_fn: Optional[Callable[[int], bool]] = None,
     filter_calendar_pause: bool = True,
     anchor_rule: Optional[str] = None,
+    data_frontier_ms: Optional[int] = None,
 ) -> Optional[CandleBar]:
     """Будує derived бар для target_tf_s з source_buffer.
 
@@ -423,6 +427,9 @@ def derive_bar(
         filter_calendar_pause: чи ігнорувати calendar_pause_flat.
         anchor_rule: правило сезонного якоря ADR-0095: рівність сітці, вікно до наступного бакета. Для H4/D1
             обов'язкове (інакше ValueError `anchor_rule_missing`), M1..H1 його не потребують.
+        data_frontier_ms: межа даних записувача (хвилини раніше за неї закомічені або підтверджено відсутні) —
+            друге джерело фронтиру ADR-0097, коли остання хвилина бакета без угод і наступної ще нема (перед
+            перервою, закриттям тижня). Годинник сюди не передається.
 
     Returns:
         CandleBar або None.
@@ -469,7 +476,7 @@ def derive_bar(
     )
     built_past_budget = False
     if not result_tol and target_tf_s in FRONTIER_BUILT_TFS and _source_reached_bucket_end(
-        source_buffer, bucket_open_ms, bucket_close_ms, is_trading_fn
+        source_buffer, bucket_open_ms, bucket_close_ms, is_trading_fn, data_frontier_ms
     ):
         result_tol = _collect_boundary_tolerant(
             source_buffer, bucket_open_ms, bucket_close_ms, is_trading_fn,
@@ -577,18 +584,23 @@ def _source_reached_bucket_end(
     bucket_open_ms: int,
     bucket_close_ms: int,
     is_trading_fn: Callable[[int], bool],
+    data_frontier_ms: Optional[int] = None,
 ) -> bool:
-    """Фронтир доведено даними: джерело має бар не раніше останнього торгового слота bucket-а.
+    """Фронтир доведено даними: джерело має бар не раніше останнього торгового слота bucket-а, або межа даних
+    записувача (`data_frontier_ms`) пройшла кінець цього слота.
 
-    Брокер віддає хвилини по порядку, тож коли прийшов останній слот доби (або перша хвилина
-    наступної сесії) — все, що брокер мав для цієї доби, вже в буфері; пропуски = тонкий ринок/свято,
-    а не недовантаження.
+    Брокер віддає хвилини по порядку, тож коли прийшов останній слот бакета (або перша хвилина
+    наступної сесії) — все, що брокер мав для цього бакета, вже в буфері; пропуски = тонкий ринок/свято,
+    а не недовантаження. Межа даних доводить те саме, коли наступної хвилини ще нема: остання хвилина перед
+    перервою чи закриттям тижня без угод.
     """
-    latest_ms = source_buffer.latest_open_ms()
-    if latest_ms is None:
-        return False
     last_slot_ms = _last_trading_slot_ms(bucket_open_ms, bucket_close_ms, source_buffer.tf_ms, is_trading_fn)
-    return last_slot_ms is not None and latest_ms >= last_slot_ms
+    if last_slot_ms is None:
+        return False
+    if data_frontier_ms is not None and data_frontier_ms >= last_slot_ms + source_buffer.tf_ms:
+        return True
+    latest_ms = source_buffer.latest_open_ms()
+    return latest_ms is not None and latest_ms >= last_slot_ms
 
 
 # ---------------------------------------------------------------------------

@@ -147,8 +147,9 @@ def test_overdue_steps_on_season_grid_across_dst_weekend(monkeypatch, now_ms, ex
 
     engine.check_overdue_buckets(now_ms)
 
-    assert [o for tf, o in attempts if tf == H4_S] == expected_h4
-    assert [o for tf, o in attempts if tf == D1_S] == expected_d1
+    # Кроки назад по сітці — ті самі; спроби — від старшого до новішого (ADR-0097 зріз 08.10)
+    assert [o for tf, o in attempts if tf == H4_S] == expected_h4[::-1]
+    assert [o for tf, o in attempts if tf == D1_S] == expected_d1[::-1]
     for tf, open_ms in attempts:
         assert_on_season_grid(open_ms, tf, FXCM)
 
@@ -284,12 +285,15 @@ def test_live_reject_is_not_cascaded_and_retried_by_overdue(caplog):
     with caplog.at_level(logging.WARNING, logger="derive_engine"):
         committed = _feed_live_quarter(engine)
 
-    # M15 не зібрано з трьох M5, яких нема на диску
+    # M15 не зібрано з трьох M5, яких нема на диску; кожен тригер спершу повторює старші відкинуті M5 — від
+    # старшого до новішого (ADR-0097 зріз 08.10), щоб новіший не закомітився раніше
     assert committed == []
     written = [(c.args[0].tf_s, c.args[0].open_time_ms) for c in uds.commit_final_bar.call_args_list]
-    assert written == [(300, 0), (300, 300_000), (300, 600_000)]
-    assert engine.stats()["rejected"] == 3
-    assert caplog.text.count("DERIVE_REJECT tf=300") == 3
+    assert written == [(300, 0), (300, 0), (300, 300_000), (300, 0), (300, 300_000), (300, 600_000)]
+    assert engine.stats()["rejected"] == 6
+    messages = [r.getMessage() for r in caplog.records]
+    assert sum(m.startswith("DERIVE_REJECT tf=300") for m in messages) == 3
+    assert sum(m.startswith("OVERDUE_DERIVE_REJECT tf=300") and m.endswith("via=trigger") for m in messages) == 3
 
     # Писар одужав: overdue повторює відкинуті M5 (їх не позначено побудованими) і лише тоді будує M15
     uds.commit_final_bar.reset_mock()

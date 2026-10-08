@@ -272,12 +272,31 @@ class TestD1BuiltFromAvailableMinutes(unittest.TestCase):
         self.assertIsNotNone(bar)
         self.assertNotIn("thin_session", bar.extensions["partial_reasons"])
 
-    def test_other_tfs_keep_the_gap_budget(self) -> None:
+    def test_m5_past_budget_is_built_from_available_minutes_once_source_passes_it(self) -> None:
+        """Зріз M5 08.10: одна хвилина з п'яти (ролловер FX) — M5 = ця хвилина, а не відсутній бар."""
         buf = GenericBuffer(M1_TF_S, max_keep=4000)
         buf.upsert(_make_m1(D1_BUCKET_OPEN_MS))
         buf.upsert(_make_m1(D1_BUCKET_OPEN_MS + 10 * M1_TF_MS))  # фронтир далеко за M5
 
-        self.assertIsNone(self._derive(buf, target_tf_s=300, bucket_open_ms=D1_BUCKET_OPEN_MS))
+        bar = self._derive(buf, target_tf_s=300, bucket_open_ms=D1_BUCKET_OPEN_MS)
+
+        self.assertIsNotNone(bar)
+        self.assertEqual((bar.extensions["source_count"], bar.extensions["expected_count"]), (1, 5))
+        self.assertIn("thin_session", bar.extensions["partial_reasons"])
+
+    def test_m5_past_budget_waits_until_frontier_passes_its_last_minute(self) -> None:
+        """Остання хвилина M5 без угод, наступної ще нема: None, доки межа даних записувача не пройде бакет."""
+        buf = GenericBuffer(M1_TF_S, max_keep=4000)
+        buf.upsert(_make_m1(D1_BUCKET_OPEN_MS))
+        is_trading = _session_calendar(D1_BUCKET_OPEN_MS, self.SESSION_MIN)
+
+        def derive(frontier_ms):
+            return derive_bar(symbol="XAU/USD", target_tf_s=300, source_buffer=buf, bucket_open_ms=D1_BUCKET_OPEN_MS,
+                              anchor_rule=FXCM, is_trading_fn=is_trading, data_frontier_ms=frontier_ms)
+
+        self.assertIsNone(derive(None))
+        self.assertIsNone(derive(D1_BUCKET_OPEN_MS + 4 * M1_TF_MS))  # остання хвилина ще йде
+        self.assertIsNotNone(derive(D1_BUCKET_OPEN_MS + 5 * M1_TF_MS))
 
 
 if __name__ == "__main__":

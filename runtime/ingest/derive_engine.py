@@ -260,10 +260,12 @@ class DeriveEngine:
             if lock is None:
                 continue
             effective_ms = now_ms
+            data_frontier_ms: Optional[int] = None
             if frontier_ms_by_symbol is not None and symbol in frontier_ms_by_symbol:
                 effective_ms = min(now_ms, int(frontier_ms_by_symbol[symbol]))
+                data_frontier_ms = effective_ms
             with lock:
-                committed.extend(self._check_overdue_for_symbol(symbol, effective_ms))
+                committed.extend(self._check_overdue_for_symbol(symbol, effective_ms, data_frontier_ms))
         return committed
 
     # Кількість попередніх bucket-ів для overdue-сканування per TF.
@@ -280,93 +282,98 @@ class DeriveEngine:
         86400: 4,
     }
 
-    def _check_overdue_for_symbol(self, symbol: str, now_ms: int) -> List[CandleBar]:
+    def _check_overdue_for_symbol(
+        self, symbol: str, now_ms: int, data_frontier_ms: Optional[int] = None
+    ) -> List[CandleBar]:
         """Per-symbol overdue check (має бути під lock).
 
         Сканує N попередніх bucket-ів (не лише 1) і каскадує
         successfully derived бари для можливості побудови H1/H4.
+        TF — від найменшого (M5 з'являється до того, як перевіряємо M15).
         """
         committed: List[CandleBar] = []
+        rule = self._anchor_rules[symbol]
+        for target_tf_s in sorted(self._cascade_tfs_s):
+            current_bucket = htf_bucket_start_ms(now_ms, target_tf_s, rule)
+            committed.extend(
+                self._close_pending_buckets(symbol, target_tf_s, current_bucket, "overdue", data_frontier_ms)
+            )
+        return committed
+
+    def _close_pending_buckets(
+        self,
+        symbol: str,
+        target_tf_s: int,
+        before_bucket_ms: int,
+        via: str,
+        data_frontier_ms: Optional[int] = None,
+    ) -> List[CandleBar]:
+        """Будує й комітить невбудовані бакети TF перед `before_bucket_ms` — від старшого до новішого (під lock).
+
+        Глибина — `_OVERDUE_LOOKBACK`. Порядок — час: watermark UDS кожного TF росте з комітом, тож новіший бакет,
+        закомічений раніше за старший, робив старший `stale` назавжди, а батько (M15…H4) збирався без нього
+        (USD/JPY 07.10 M5 21:00: остання хвилина без угод, M5 21:10 закомічено першим; ADR-0097 LO1).
+        `via`: `overdue` — перевірка за межею даних; `trigger` — перед тригерним бакетом у тому самому пакеті.
+        """
+        committed: List[CandleBar] = []
+        source_info = DERIVE_SOURCE.get(target_tf_s)
+        uds = self._uds_by_symbol.get(symbol)
+        if source_info is None or uds is None:
+            return committed
+        source_buf = self._buffers.get((symbol, source_info[0]))
+        if source_buf is None:
+            return committed
         cal = self._calendars.get(symbol)
         is_trading_fn = cal.is_trading_minute if cal is not None else None
-        uds = self._uds_by_symbol.get(symbol)
-        if uds is None:
-            return committed
         rule = self._anchor_rules[symbol]
 
-        # Перевіряємо кожен target TF, починаючи з найменших
-        # (щоб M5 з'явився до того, як перевіряємо M15)
-        sorted_tfs = sorted(self._cascade_tfs_s)
-        for target_tf_s in sorted_tfs:
-            source_info = DERIVE_SOURCE.get(target_tf_s)
-            if source_info is None:
+        # Крок назад — по сезонній сітці (ADR-0095 S4a): на вихідних переходу DST доба має 23/25 год, тож
+        # `cur - tf*i` для H4/D1 виходить за сітку (пн 09.03, пн 02.11)
+        pending: List[Tuple[int, int]] = []
+        bucket_ms = before_bucket_ms
+        for behind in range(1, self._OVERDUE_LOOKBACK.get(target_tf_s, 2) + 1):
+            bucket_ms = htf_bucket_start_ms(bucket_ms - 1, target_tf_s, rule)
+            pending.append((behind, bucket_ms))
+
+        for behind, bucket_ms in reversed(pending):
+            target_buf = self._buffers.get((symbol, target_tf_s))
+            if target_buf is not None and bucket_ms in target_buf:
                 continue
-            source_tf_s, _ = source_info
-            source_buf = self._buffers.get((symbol, source_tf_s))
-            if source_buf is None:
+            derived = derive_bar(
+                symbol=symbol,
+                target_tf_s=target_tf_s,
+                source_buffer=source_buf,
+                bucket_open_ms=bucket_ms,
+                is_trading_fn=is_trading_fn,
+                filter_calendar_pause=True,
+                anchor_rule=rule,
+                data_frontier_ms=data_frontier_ms,
+            )
+            if derived is None:
                 continue
 
-            # Поточний bucket і крок назад — по сезонній сітці (ADR-0095 S4a): на вихідних переходу DST доба має
-            # 23/25 год, тож `cur - tf*i` для H4/D1 виходить за сітку (пн 09.03, пн 02.11)
-            prev_bucket = htf_bucket_start_ms(now_ms, target_tf_s, rule)
-
-            # Скануємо N попередніх bucket-ів (не лише 1)
-            lookback = self._OVERDUE_LOOKBACK.get(target_tf_s, 2)
-            for i in range(1, lookback + 1):
-                prev_bucket = htf_bucket_start_ms(prev_bucket - 1, target_tf_s, rule)
-
-                # Перевірка: чи вже є derived бар у target буфері
-                target_buf = self._buffers.get((symbol, target_tf_s))
-                if target_buf is not None and prev_bucket in target_buf:
+            if target_tf_s in self._commit_tfs_s:
+                result = uds.commit_final_bar(derived)
+                if result.ok:
+                    committed.append(derived)
+                    self._stats_committed[target_tf_s] = self._stats_committed.get(target_tf_s, 0) + 1
+                    log.info(
+                        "OVERDUE_DERIVE_OK tf=%d sym=%s open=%d lookback=%d via=%s",
+                        target_tf_s, symbol, derived.open_time_ms, behind, via,
+                    )
+                elif result.reason not in ("stale", "duplicate"):
+                    # Писар відмовив (I5): не каскадуємо — вищий TF не будується з бару, якого нема на диску;
+                    # бакет не потрапляє в буфер, тож наступна перевірка спробує його знову
+                    self._stats_rejected += 1
+                    log.warning(
+                        "OVERDUE_DERIVE_REJECT tf=%d sym=%s open=%d reason=%s lookback=%d via=%s",
+                        target_tf_s, symbol, derived.open_time_ms, result.reason, behind, via,
+                    )
                     continue
+                # stale/duplicate — бар уже є: каскад продовжуємо
 
-                # Спроба деривації
-                derived = derive_bar(
-                    symbol=symbol,
-                    target_tf_s=target_tf_s,
-                    source_buffer=source_buf,
-                    bucket_open_ms=prev_bucket,
-                    is_trading_fn=is_trading_fn,
-                    filter_calendar_pause=True,
-                    anchor_rule=rule,
-                )
-                if derived is None:
-                    continue
-
-                # Commit
-                if target_tf_s in self._commit_tfs_s:
-                    result = uds.commit_final_bar(derived)
-                    if result.ok:
-                        committed.append(derived)
-                        self._stats_committed[target_tf_s] = (
-                            self._stats_committed.get(target_tf_s, 0) + 1
-                        )
-                        log.info(
-                            "OVERDUE_DERIVE_OK tf=%d sym=%s open=%d lookback=%d",
-                            target_tf_s,
-                            symbol,
-                            derived.open_time_ms,
-                            i,
-                        )
-                    elif result.reason not in ("stale", "duplicate"):
-                        # Писар відмовив (I5): не каскадуємо — вищий TF не будується з бару, якого нема на диску;
-                        # бакет не потрапляє в буфер, тож наступна перевірка спробує його знову
-                        self._stats_rejected += 1
-                        log.warning(
-                            "OVERDUE_DERIVE_REJECT tf=%d sym=%s open=%d reason=%s lookback=%d",
-                            target_tf_s,
-                            symbol,
-                            derived.open_time_ms,
-                            result.reason,
-                            i,
-                        )
-                        continue
-                    # stale/duplicate — бар уже є: каскад продовжуємо
-
-                # Каскад: буферизуємо + рекурсивна деривація вище
-                # (overdue M5 → може побудувати M15 → M30 → H1 → H4)
-                further = self._cascade(derived)
-                committed.extend(further)
+            # Каскад: буферизуємо + рекурсивна деривація вище (M5 → M15 → M30 → H1 → H4)
+            committed.extend(self._cascade(derived))
 
         return committed
 
@@ -438,6 +445,10 @@ class DeriveEngine:
             source_buf = self._buffers.get((symbol, source_info[0]))
             if source_buf is None:
                 continue
+
+            # Старші невбудовані бакети цього TF — раніше за тригерний: у пакеті (добір після рестарту/settle)
+            # бакет без угод в останню хвилину тригера не має, і overdue після пакета застав би його `stale`
+            committed.extend(self._close_pending_buckets(symbol, target_tf_s, bucket_open_ms, "trigger"))
 
             derived = derive_bar(
                 symbol=symbol,
