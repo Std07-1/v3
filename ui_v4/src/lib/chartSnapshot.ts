@@ -41,7 +41,8 @@ export const SNAPSHOT_LAYOUT = {
 
 /** Віртуальна рамка знімка (рішення власника 10.10 «робимо обидва»): вузький графік (телефон, планшет у портреті)
  *  знімається так, ніби він 1280×720 CSS — горизонтальна картинка з більшою кількістю свічок, у щільності пристрою.
- *  Широкий графік (ПК) — у своєму розмірі, як на екрані. */
+ *  Лише на дотиковому пристрої і лише як «Широкий» у передогляді (рішення власника 10.10: «Широкий та лише на
+ *  телефоні»); ПК, навіть у вузькому вікні, знімає як на екрані. */
 export const SNAPSHOT_FRAME = {
   widthPx: 1280,
   heightPx: 720,
@@ -52,6 +53,47 @@ export const SNAPSHOT_FRAME = {
 export function snapshotFrame(cssW: number, cssH: number): { width: number; height: number } | null {
   if (cssW <= 0 || cssH <= 0 || cssW >= SNAPSHOT_FRAME.minChartWidthPx) return null;
   return { width: SNAPSHOT_FRAME.widthPx, height: SNAPSHOT_FRAME.heightPx };
+}
+
+/** Знімок через передогляд: дотиковий пристрій з вузьким графіком (телефон, планшет у портреті). Інакше (ПК) —
+ *  одразу, як на екрані, без вікна. */
+export function snapshotUsesPreview(viewW: number, viewH: number, coarsePointer: boolean): boolean {
+  return coarsePointer && snapshotFrame(viewW, viewH) !== null;
+}
+
+/** Основний вказівник — палець (телефон, планшет). */
+export function isCoarsePointer(): boolean {
+  return typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
+}
+
+/** Щільність знімка «як на екрані» на ПК (рішення власника 10.10: «якість, але те, що на екрані»): екран з DPR < 2
+ *  знімається з суперсемплінгом до 2× — той самий вигляд, удвічі більше пікселів; DPR ≥ 2 — як є. Повертає множник
+ *  розміру графіка на мить знімка (1 — без суперсемплінгу). */
+export const SNAPSHOT_MIN_DENSITY = 2;
+
+export function snapshotSupersample(devicePixelRatio: number): number {
+  const dpr = devicePixelRatio > 0 ? devicePixelRatio : 1;
+  return dpr >= SNAPSHOT_MIN_DENSITY ? 1 : SNAPSHOT_MIN_DENSITY / dpr;
+}
+
+/** Вибір у передогляді телефона: «Широкий» (рамка) чи «Як на екрані»; за замовчуванням — широкий (рішення
+ *  власника 10.10). Пам'ятається в цьому браузері; сховище недоступне — завжди широкий. */
+const SNAPSHOT_WIDE_KEY = 'v4_snapshot_wide';
+
+export function loadSnapshotWide(): boolean {
+  try {
+    return localStorage.getItem(SNAPSHOT_WIDE_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+export function saveSnapshotWide(wide: boolean): void {
+  try {
+    localStorage.setItem(SNAPSHOT_WIDE_KEY, wide ? '1' : '0');
+  } catch {
+    // приватний режим / заборонене сховище — вибір просто не запам'ятається
+  }
 }
 
 /** Копія полотна (знімок шару в ту мить, поки полотно ще в розмірі знімка). */
@@ -107,7 +149,7 @@ export function browserSnapshotCaps(probe: File): SnapshotCaps {
   return {
     canShareFiles,
     canWriteClipboard: !!nav?.clipboard?.write && typeof ClipboardItem !== 'undefined',
-    coarsePointer: typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches,
+    coarsePointer: isCoarsePointer(),
   };
 }
 

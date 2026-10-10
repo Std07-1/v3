@@ -50,10 +50,17 @@
     composeSnapshot,
     cssVar,
     deliverSnapshot,
+    isCoarsePointer,
+    loadSnapshotWide,
+    saveSnapshotWide,
     snapshotFileName,
     snapshotHeaderText,
     snapshotResultLabel,
+    snapshotUsesPreview,
+    type DeliveryResult,
+    type SnapshotDelivery,
   } from "./lib/chartSnapshot";
+  import SnapshotPreview from "./layout/SnapshotPreview.svelte";
   import { setupKeyboard } from "./stores/keyboard.svelte";
   import type { StatusInfo } from "./app/diagSelectors";
   import { stopEdgeProbe, probeNow } from "./app/edgeProbe";
@@ -446,9 +453,10 @@
     return brandMark;
   }
 
-  async function takeChartSnapshot(): Promise<string> {
-    const parts = chartPaneRef?.snapshotParts();
-    if (!parts) return "Графік ще не готовий";
+  /** Знімок у PNG: `wide` — віртуальна рамка (лише вузький графік), інакше як на екрані з суперсемплінгом. */
+  async function buildSnapshot(wide: boolean): Promise<{ png: Blob; fileName: string } | null> {
+    const parts = chartPaneRef?.snapshotParts({ wide });
+    if (!parts) return null;
     const meta = {
       symbol: hudSymbol,
       tf: hudTf,
@@ -456,33 +464,119 @@
       price: lastPrice,
       priceDigits: parts.priceDigits,
     };
-    try {
-      const canvas = composeSnapshot({
-        chart: parts.chart,
-        layers: parts.layers,
-        cssWidth: parts.cssWidth,
-        header: snapshotHeaderText(meta),
-        mark: await loadBrandMark(),
-        mobile: !parts.framed && window.innerWidth < 640, // рамка — розміру ПК, тож і слот знака як на ПК
-        background: cssVar("--bg", "#0D1117"),
-        textColor: cssVar("--text-1", "#E6EDF3"),
-        fontFamily: cssVar("--font-sans", "sans-serif"),
-      });
-      const png = await canvasToPng(canvas);
-      const fileName = snapshotFileName(meta);
-      const ways = chooseDelivery(browserSnapshotCaps(new File([png], fileName, { type: "image/png" })));
-      let result = await deliverSnapshot(png, fileName, ways);
+    const canvas = composeSnapshot({
+      chart: parts.chart,
+      layers: parts.layers,
+      cssWidth: parts.cssWidth,
+      header: snapshotHeaderText(meta),
+      mark: await loadBrandMark(),
+      mobile: !parts.framed && window.innerWidth < 640, // рамка — розміру ПК, тож і слот знака як на ПК
+      background: cssVar("--bg", "#0D1117"),
+      textColor: cssVar("--text-1", "#E6EDF3"),
+      fontFamily: cssVar("--font-sans", "sans-serif"),
+    });
+    return { png: await canvasToPng(canvas), fileName: snapshotFileName(meta) };
+  }
+
+  /** Віддає знімок способами `ways`; меню «Поділитися» відмовило (не скасування) — знімок не губиться, а йде файлом. */
+  async function deliverWithFallback(
+    snap: { png: Blob; fileName: string },
+    ways: SnapshotDelivery[],
+  ): Promise<DeliveryResult> {
+    let result = await deliverSnapshot(snap.png, snap.fileName, ways);
+    for (const f of result.failed) console.warn(`[snapshot] DELIVERY_FAILED via=${f.via} ${f.error}`);
+    if (result.done.length === 0 && !result.cancelled && !ways.includes("download")) {
+      result = await deliverSnapshot(snap.png, snap.fileName, ["download"]);
       for (const f of result.failed) console.warn(`[snapshot] DELIVERY_FAILED via=${f.via} ${f.error}`);
-      if (result.done.length === 0 && !result.cancelled && !ways.includes("download")) {
-        // Меню «Поділитися» відмовило (iOS: жест застарів, поки збирався PNG) — знімок не губиться, а йде файлом
-        result = await deliverSnapshot(png, fileName, ["download"]);
-        for (const f of result.failed) console.warn(`[snapshot] DELIVERY_FAILED via=${f.via} ${f.error}`);
-      }
-      return snapshotResultLabel(result);
+    }
+    return result;
+  }
+
+  /** Кнопка-камера і пункт ☰. Телефон (дотик, вузький графік) — передогляд (null: підсумку біля кнопки нема); ПК —
+   *  одразу у буфер і файлом, як на екрані (рішення власника 10.10: передогляд лише на телефоні). */
+  async function takeChartSnapshot(): Promise<string | null> {
+    if (snapshotUsesPreview(window.innerWidth, window.innerHeight, isCoarsePointer())) {
+      void openSnapshotPreview();
+      return null;
+    }
+    try {
+      const snap = await buildSnapshot(false);
+      if (!snap) return "Графік ще не готовий";
+      const ways = chooseDelivery(browserSnapshotCaps(new File([snap.png], snap.fileName, { type: "image/png" })));
+      return snapshotResultLabel(await deliverWithFallback(snap, ways));
     } catch (err) {
       console.error("[snapshot] SNAPSHOT_FAILED", err);
       return "Не вдалося зробити знімок";
     }
+  }
+
+  // ADR-0109 rev: передогляд на телефоні — «Широкий» (за замовчуванням, вибір пам'ятається) або «Як на екрані»
+  let snapPreviewOpen = $state(false);
+  let snapPreviewWide = $state(true);
+  let snapPreviewBusy = $state(false);
+  let snapPreviewUrl: string | null = $state(null);
+  let snapPreviewStatus: string | null = $state(null);
+  let snapPreviewShot: { png: Blob; fileName: string } | null = null;
+  // Номер поточного збирання: вікно закрили чи перемкнули, поки PNG збирався, — застарілий результат не пишеться
+  let snapPreviewRender = 0;
+
+  async function renderSnapshotPreview(wide: boolean): Promise<void> {
+    const render = ++snapPreviewRender;
+    snapPreviewWide = wide;
+    snapPreviewBusy = true;
+    snapPreviewStatus = null;
+    try {
+      const snap = await buildSnapshot(wide);
+      if (render !== snapPreviewRender) return;
+      if (!snap) {
+        snapPreviewStatus = "Графік ще не готовий";
+        return;
+      }
+      if (snapPreviewUrl) URL.revokeObjectURL(snapPreviewUrl);
+      snapPreviewShot = snap;
+      snapPreviewUrl = URL.createObjectURL(snap.png);
+    } catch (err) {
+      console.error("[snapshot] SNAPSHOT_FAILED", err);
+      if (render === snapPreviewRender) snapPreviewStatus = "Не вдалося зробити знімок";
+    } finally {
+      if (render === snapPreviewRender) snapPreviewBusy = false;
+    }
+  }
+
+  async function openSnapshotPreview(): Promise<void> {
+    snapPreviewOpen = true;
+    await renderSnapshotPreview(loadSnapshotWide());
+  }
+
+  function toggleSnapshotPreviewWide(wide: boolean): void {
+    saveSnapshotWide(wide);
+    void renderSnapshotPreview(wide);
+  }
+
+  async function shareSnapshotPreview(): Promise<void> {
+    const snap = snapPreviewShot;
+    if (!snap) return;
+    // Свіжий дотик — системне меню доступне одразу; без нього (ПК-браузер у вузькому вікні) — файлом
+    const canShare = browserSnapshotCaps(new File([snap.png], snap.fileName, { type: "image/png" })).canShareFiles;
+    const result = await deliverWithFallback(snap, canShare ? ["share"] : ["download"]);
+    if (result.done.includes("share")) closeSnapshotPreview();
+    else if (snapPreviewOpen) snapPreviewStatus = snapshotResultLabel(result);
+  }
+
+  async function saveSnapshotPreview(): Promise<void> {
+    if (!snapPreviewShot) return;
+    const result = await deliverWithFallback(snapPreviewShot, ["download"]);
+    if (snapPreviewOpen) snapPreviewStatus = snapshotResultLabel(result);
+  }
+
+  function closeSnapshotPreview(): void {
+    snapPreviewRender++;
+    snapPreviewBusy = false;
+    if (snapPreviewUrl) URL.revokeObjectURL(snapPreviewUrl);
+    snapPreviewUrl = null;
+    snapPreviewShot = null;
+    snapPreviewStatus = null;
+    snapPreviewOpen = false;
   }
 
   // P3.1: HUD tracking — symbol/tf/price/timestamp from last frame
@@ -949,6 +1043,19 @@
     open={infoOpen}
     onClose={() => (infoOpen = false)}
     defaultTab={infoTab}
+  />
+
+  <!-- ADR-0109 rev: передогляд знімка — лише телефон (вузький графік) -->
+  <SnapshotPreview
+    open={snapPreviewOpen}
+    imageUrl={snapPreviewUrl}
+    wide={snapPreviewWide}
+    busy={snapPreviewBusy}
+    status={snapPreviewStatus}
+    onToggleWide={toggleSnapshotPreviewWide}
+    onShare={shareSnapshotPreview}
+    onSave={saveSnapshotPreview}
+    onClose={closeSnapshotPreview}
   />
 
   <!-- ADR-0080 (surface-2): style flyout у TOOL-режимі — right-click на іконці

@@ -27,7 +27,7 @@
   import { DEFAULT_BUDGET, type DisplayMode } from "../chart/overlay/DisplayBudget";
   import { currentPair, serverConfig } from "../app/frameRouter";
   import { configuredPriceDigits } from "../lib/priceDigits";
-  import { snapshotFrame } from "../lib/chartSnapshot";
+  import { snapshotFrame, snapshotSupersample } from "../lib/chartSnapshot";
   import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
   import { ArchiLayerRenderer } from "../chart/archi/ArchiLayerRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
@@ -233,11 +233,12 @@
   }
 
   /** ADR-0109: полотна для знімка — свічки й шкали LWC, шар SMC і малювання поверх (лише фігури, без станів
-   *  редагування). Шар Арчі не йде (рішення власника 10.10). Вузький графік (телефон) — у віртуальній рамці
-   *  `snapshotFrame`; шари — у повній щільності пристрою (без стелі 2× екрана). Усе синхронно в одному виклику:
-   *  графік у рамку → копії → графік назад → шари назад, тож між кадрами браузера на екрані нічого не змінюється.
-   *  null — графік ще не змонтований. */
-  export function snapshotParts(): {
+   *  редагування). Шар Арчі не йде (рішення власника 10.10). `wide` (лише «Широкий» у передогляді телефона) і вузький
+   *  графік — віртуальна рамка `snapshotFrame` у щільності пристрою; інакше — як на екрані, з суперсемплінгом до 2× на
+   *  екранах з DPR < 2 (`snapshotSupersample`). Усе синхронно в одному виклику: графік у рамку чи суперсемплінг →
+   *  копії → графік назад → шари назад, тож між кадрами браузера на екрані нічого не змінюється. null — графік ще не
+   *  змонтований. */
+  export function snapshotParts(opts: { wide: boolean }): {
     chart: HTMLCanvasElement;
     layers: HTMLCanvasElement[];
     cssWidth: number;
@@ -245,21 +246,31 @@
     priceDigits: number | null;
   } | null {
     if (!chartEngine || !lwcHostRef || !overlayRenderer || !drawingsRenderer) return null;
-    const frame = snapshotFrame(lwcHostRef.clientWidth, lwcHostRef.clientHeight);
-    const cssW = frame?.width ?? lwcHostRef.clientWidth;
-    const cssH = frame?.height ?? lwcHostRef.clientHeight;
+    const screenW = lwcHostRef.clientWidth;
+    const screenH = lwcHostRef.clientHeight;
     const dpr = window.devicePixelRatio || 1;
-    if (frame) chartEngine.beginSnapshotFrame(cssW, cssH);
+    const frame = opts.wide ? snapshotFrame(screenW, screenH) : null;
     try {
-      return {
-        chart: chartEngine.takeScreenshot(),
-        layers: [overlayRenderer.snapshotAt(cssW, cssH, dpr), drawingsRenderer.snapshotAt(cssW, cssH, dpr)],
-        cssWidth: cssW,
-        framed: frame !== null,
-        priceDigits: symbolPriceDigits,
-      };
+      if (frame) {
+        // Широкий (телефон): графік у рамці, шари — у тій самій розкладці
+        chartEngine.beginSnapshotFrame(frame.width, frame.height);
+        const layers = [
+          overlayRenderer.snapshotAt(frame.width, frame.height, dpr),
+          drawingsRenderer.snapshotAt(frame.width, frame.height, dpr),
+        ];
+        return { chart: chartEngine.takeScreenshot(), layers, cssWidth: frame.width, framed: true, priceDigits: symbolPriceDigits };
+      }
+      // Як на екрані: шари — у розкладці екрана з щільністю знімка, графік — з суперсемплінгом до тієї самої щільності
+      const k = snapshotSupersample(dpr);
+      const layers = [
+        overlayRenderer.snapshotAt(screenW, screenH, dpr * k),
+        drawingsRenderer.snapshotAt(screenW, screenH, dpr * k),
+      ];
+      if (k > 1) chartEngine.beginSupersample(k);
+      return { chart: chartEngine.takeScreenshot(), layers, cssWidth: screenW, framed: false, priceDigits: symbolPriceDigits };
     } finally {
       if (frame) chartEngine.endSnapshotFrame();
+      else chartEngine.endSupersample();
       overlayRenderer.restoreSnapshot();
       drawingsRenderer.restoreSnapshot();
     }

@@ -14,6 +14,7 @@ import {
   TrackingModeExitMode,
   type IChartApi,
   type ISeriesApi,
+  type LineWidth,
   type Time,
 } from 'lightweight-charts';
 import {
@@ -824,6 +825,61 @@ export class ChartEngine {
   endSnapshotFrame(): void {
     this.chart.resize(this._container.clientWidth, this._container.clientHeight, true);
     this.chart.applyOptions({ autoSize: true });
+  }
+
+  // ADR-0109 rev: опції до суперсемплінгу — повертаються в endSupersample точно такими, як були
+  private _beforeSupersample: {
+    fontSize: number;
+    barSpacing: number;
+    minBarSpacing: number;
+    maxBarSpacing: number;
+    minimumWidth: number;
+    priceLineWidth: LineWidth;
+  } | null = null;
+
+  /** ADR-0109 rev (ПК: «якість, але те, що на екрані»): графік на мить у `k` разів більший з пропорційно більшими
+   *  шрифтом, кроком свічок і шириною цінової шкали — та сама картинка, що на екрані, у `k` разів більше пікселів.
+   *  Шкала фіксується рівно в `k` × поточна ширина: інакше пана зсунулась би на піксель-два, і шари SMC, намальовані
+   *  в розкладці екрана, лягли б повз свічки. Повернути — `endSupersample` у тому самому виклику, до кадру браузера. */
+  beginSupersample(k: number): void {
+    const timeScale = this.chart.timeScale();
+    const priceScale = this.chart.priceScale('right');
+    const ts = timeScale.options();
+    const before = {
+      fontSize: this.chart.options().layout.fontSize,
+      barSpacing: ts.barSpacing,
+      minBarSpacing: ts.minBarSpacing,
+      maxBarSpacing: ts.maxBarSpacing,
+      minimumWidth: priceScale.options().minimumWidth,
+      priceLineWidth: this.series.options().priceLineWidth,
+    };
+    this._beforeSupersample = before;
+    const axisWidth = priceScale.width();
+    this.chart.applyOptions({ autoSize: false, layout: { fontSize: before.fontSize * k } });
+    timeScale.applyOptions({
+      barSpacing: before.barSpacing * k,
+      minBarSpacing: before.minBarSpacing * k,
+      maxBarSpacing: before.maxBarSpacing * k,
+    });
+    priceScale.applyOptions({ minimumWidth: Math.round(axisWidth * k) });
+    this.series.applyOptions({ priceLineWidth: Math.min(4, Math.round(before.priceLineWidth * k)) as LineWidth });
+    this.chart.resize(Math.round(this._container.clientWidth * k), Math.round(this._container.clientHeight * k), true);
+  }
+
+  /** ADR-0109 rev: опції й розмір — назад до тих, що були до `beginSupersample`. */
+  endSupersample(): void {
+    const before = this._beforeSupersample;
+    if (!before) return;
+    this._beforeSupersample = null;
+    this.chart.applyOptions({ layout: { fontSize: before.fontSize } });
+    this.chart.timeScale().applyOptions({
+      barSpacing: before.barSpacing,
+      minBarSpacing: before.minBarSpacing,
+      maxBarSpacing: before.maxBarSpacing,
+    });
+    this.chart.priceScale('right').applyOptions({ minimumWidth: before.minimumWidth });
+    this.series.applyOptions({ priceLineWidth: before.priceLineWidth });
+    this.endSnapshotFrame();
   }
 
   // ─── destroy ───

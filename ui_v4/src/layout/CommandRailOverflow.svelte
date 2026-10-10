@@ -49,7 +49,8 @@
         onToggleArchiChart?: () => void;
         /** ADR-0109: знімок графіка там, де камери в панелі малювання нема (телефон — панель прихована @media;
          *  «Малювання» вимкнено). Повертає короткий підсумок для пункту меню. */
-        onSnapshot?: () => Promise<string>;
+        /** Підсумок для пункту; null — підсумок покаже сам виклик (передогляд на телефоні, ADR-0109 rev). */
+        onSnapshot?: () => Promise<string | null>;
     }
 
     const {
@@ -76,6 +77,7 @@
     }: Props = $props();
 
     // ADR-0109: підсумок знімка — у самому пункті на 1.2 с, потім меню закривається.
+    // Підсумку нема (відкрився передогляд) — меню закривається одразу, щоб не лягало поверх вікна.
     const SNAP_RESULT_MS = 1200;
     let snapBusy = $state(false);
     let snapLabel = $state<string | null>(null);
@@ -87,10 +89,14 @@
             snapLabel = await onSnapshot();
         } finally {
             snapBusy = false;
-            setTimeout(() => {
-                snapLabel = null;
+            if (snapLabel === null) {
                 onClose();
-            }, SNAP_RESULT_MS);
+            } else {
+                setTimeout(() => {
+                    snapLabel = null;
+                    onClose();
+                }, SNAP_RESULT_MS);
+            }
         }
     }
 

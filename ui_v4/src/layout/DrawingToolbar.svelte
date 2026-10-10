@@ -41,7 +41,8 @@
      *  екранний rect іконки. Cursor/eraser/magnet стилю не мають. */
     onOpenStyle?: (tool: DrawingType, anchor: DOMRect) => void;
     /** ADR-0109: знімок графіка; повертає короткий підсумок для пігулки біля кнопки («Скопійовано» тощо). */
-    onSnapshot?: () => Promise<string>;
+    /** Підсумок для пігулки; null — підсумок покаже сам виклик (передогляд на телефоні, ADR-0109 rev). */
+    onSnapshot?: () => Promise<string | null>;
   } = $props();
 
   // Лише справжні drawing-типи мають налаштування стилю (не cursor/eraser;

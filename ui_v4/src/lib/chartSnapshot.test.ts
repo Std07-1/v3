@@ -3,10 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   chooseDelivery,
   deliverSnapshot,
+  loadSnapshotWide,
+  saveSnapshotWide,
   snapshotFileName,
   snapshotFrame,
   snapshotHeaderText,
+  snapshotSupersample,
   snapshotResultLabel,
+  snapshotUsesPreview,
   type SnapshotMeta,
 } from './chartSnapshot';
 
@@ -46,6 +50,60 @@ describe('snapshotFrame', () => {
     [0, 0, null], // графік ще не змонтований
   ] as const)('%d×%d → %j', (w, h, frame) => {
     expect(snapshotFrame(w, h)).toEqual(frame);
+  });
+});
+
+describe('snapshotUsesPreview', () => {
+  it.each([
+    [375, 786, true, true], // телефон — передогляд з «Широкий»
+    [768, 900, true, true], // планшет у портреті
+    [1024, 768, true, false], // планшет у ландшафті — графік уже широкий
+    [800, 700, false, false], // ПК у вузькому вікні — як на екрані, без вікна
+    [1920, 900, false, false],
+  ] as const)('%d×%d дотик=%s → %s', (w, h, coarse, preview) => {
+    expect(snapshotUsesPreview(w, h, coarse)).toBe(preview);
+  });
+});
+
+describe('snapshotSupersample', () => {
+  it.each([
+    [1, 2], // звичайний монітор — удвічі більше пікселів
+    [1.25, 1.6], // ноутбук з масштабом 125%
+    [2, 1], // ретіна / телефон — уже 2×
+    [3, 1],
+    [0, 2], // кривий DPR — як 1
+  ])('DPR %d → ×%d', (dpr, k) => {
+    expect(snapshotSupersample(dpr)).toBeCloseTo(k, 6);
+  });
+});
+
+describe('loadSnapshotWide / saveSnapshotWide', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('за замовчуванням широкий; вибір запам\'ятовується', () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    });
+    expect(loadSnapshotWide()).toBe(true);
+    saveSnapshotWide(false);
+    expect(loadSnapshotWide()).toBe(false);
+    saveSnapshotWide(true);
+    expect(loadSnapshotWide()).toBe(true);
+  });
+
+  it('сховище недоступне — широкий і без винятку', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => {
+        throw new Error('denied');
+      },
+      setItem: () => {
+        throw new Error('denied');
+      },
+    });
+    expect(loadSnapshotWide()).toBe(true);
+    expect(() => saveSnapshotWide(false)).not.toThrow();
   });
 });
 
