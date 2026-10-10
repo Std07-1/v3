@@ -47,6 +47,9 @@
         /** ADR-0085 P6: шар Арчі на чарті on/off (лінії-будильники + теза). */
         archiChartEnabled?: boolean;
         onToggleArchiChart?: () => void;
+        /** ADR-0109: знімок графіка там, де камери в панелі малювання нема (телефон — панель прихована @media;
+         *  «Малювання» вимкнено). Повертає короткий підсумок для пункту меню. */
+        onSnapshot?: () => Promise<string>;
     }
 
     const {
@@ -69,7 +72,27 @@
         onToggleTools,
         archiChartEnabled = true,
         onToggleArchiChart,
+        onSnapshot,
     }: Props = $props();
+
+    // ADR-0109: підсумок знімка — у самому пункті на 1.2 с, потім меню закривається.
+    const SNAP_RESULT_MS = 1200;
+    let snapBusy = $state(false);
+    let snapLabel = $state<string | null>(null);
+
+    async function handleSnapshot(): Promise<void> {
+        if (!onSnapshot || snapBusy) return;
+        snapBusy = true;
+        try {
+            snapLabel = await onSnapshot();
+        } finally {
+            snapBusy = false;
+            setTimeout(() => {
+                snapLabel = null;
+                onClose();
+            }, SNAP_RESULT_MS);
+        }
+    }
 
     type SubmenuKey = "theme" | "style" | null;
     let openSubmenu = $state<SubmenuKey>(null);
@@ -162,6 +185,20 @@
             >
                 <span class="mi-label">Малювання</span>
                 <span class="mi-state">{toolsEnabled ? "●" : "○"}</span>
+            </button>
+        {/if}
+
+        <!-- ADR-0109: знімок графіка — лише коли камери в панелі малювання нема (телефон або «Малювання» вимкнено) -->
+        {#if onSnapshot}
+            <button
+                class="menu-item snapshot-item"
+                class:always={!toolsEnabled}
+                role="menuitem"
+                aria-busy={snapBusy}
+                disabled={snapBusy}
+                onclick={handleSnapshot}
+            >
+                <span class="mi-label">{snapLabel ?? "Знімок графіка"}</span>
             </button>
         {/if}
 
@@ -472,5 +509,24 @@
     .led.lit {
         background: var(--accent, #d4a017);
         opacity: 1;
+    }
+
+    /* ADR-0109: пункт знімка — лише там, де камери в панелі малювання нема. Умови @media — ті самі, що ховають
+       DrawingToolbar (телефон портрет ≤ 640 px, ландшафт ≤ 500 px заввишки); `.always` — «Малювання» вимкнено. */
+    .snapshot-item {
+        display: none;
+    }
+    .snapshot-item.always {
+        display: flex;
+    }
+    @media (orientation: landscape) and (max-height: 500px) {
+        .snapshot-item {
+            display: flex;
+        }
+    }
+    @media (max-width: 640px) and (orientation: portrait) {
+        .snapshot-item {
+            display: flex;
+        }
     }
 </style>

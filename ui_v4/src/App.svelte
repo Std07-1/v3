@@ -471,8 +471,13 @@
       const png = await canvasToPng(canvas);
       const fileName = snapshotFileName(meta);
       const ways = chooseDelivery(browserSnapshotCaps(new File([png], fileName, { type: "image/png" })));
-      const result = await deliverSnapshot(png, fileName, ways);
+      let result = await deliverSnapshot(png, fileName, ways);
       for (const f of result.failed) console.warn(`[snapshot] DELIVERY_FAILED via=${f.via} ${f.error}`);
+      if (result.done.length === 0 && !result.cancelled && !ways.includes("download")) {
+        // Меню «Поділитися» відмовило (iOS: жест застарів, поки збирався PNG) — знімок не губиться, а йде файлом
+        result = await deliverSnapshot(png, fileName, ["download"]);
+        for (const f of result.failed) console.warn(`[snapshot] DELIVERY_FAILED via=${f.via} ${f.error}`);
+      }
       return snapshotResultLabel(result);
     } catch (err) {
       console.error("[snapshot] SNAPSHOT_FAILED", err);
@@ -678,6 +683,9 @@
   let keyboardCleanup: (() => void) | null = null;
 
   onMount(() => {
+    // ADR-0109: знак V3 для знімка — наперед, щоб між дотиком і меню «Поділитися» було якнайменше очікування
+    void loadBrandMark();
+
     // 1. Global error handler → DiagState
     window.addEventListener("error", onGlobalError);
     window.addEventListener("unhandledrejection", onUnhandledRejection);
@@ -923,6 +931,7 @@
         onToggleTools={toggleDrawingTools}
         {archiChartEnabled}
         onToggleArchiChart={toggleArchiChart}
+        onSnapshot={takeChartSnapshot}
       />
     </div>
   </div>
