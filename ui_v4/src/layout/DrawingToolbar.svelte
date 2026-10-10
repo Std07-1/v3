@@ -28,6 +28,7 @@
     magnetEnabled = false,
     onToggleMagnet,
     onOpenStyle,
+    onSnapshot,
   }: {
     activeTool: ActiveTool;
     onSelectTool: (tool: ActiveTool) => void;
@@ -39,6 +40,8 @@
      *  App відкриває frosted style-flyout (колір/товщина/стиль). anchor =
      *  екранний rect іконки. Cursor/eraser/magnet стилю не мають. */
     onOpenStyle?: (tool: DrawingType, anchor: DOMRect) => void;
+    /** ADR-0109: знімок графіка; повертає короткий підсумок для пігулки біля кнопки («Скопійовано» тощо). */
+    onSnapshot?: () => Promise<string>;
   } = $props();
 
   // Лише справжні drawing-типи мають налаштування стилю (не cursor/eraser;
@@ -79,6 +82,9 @@
   // Lucide "magnet" — U-shaped horseshoe magnet, intuitive snap metaphor.
   const ICON_MAGNET =
     '<path d="m6 15-4-4 6.75-6.77a7.79 7.79 0 0 1 11 11L13 22l-4-4 6.39-6.36a2.14 2.14 0 0 0-3-3L6 15"/><path d="m5 8 4 4"/><path d="m12 15 4 4"/>';
+  // Lucide "camera" — знімок графіка (ADR-0109).
+  const ICON_CAMERA =
+    '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>';
 
   // Order matters — cursor first ("default"), eraser last (destructive).
   // Hotkeys come from ToolModule.hotkey for registry tools; hardcoded for
@@ -226,6 +232,25 @@
   $effect(() => {
     if (!$hintsOn) shownKey = null;
   });
+
+  // ADR-0109: знімок — один клік, підсумок у пігулці біля кнопки. Пігулка — відповідь на дію, а не підказка
+  // новачка, тож показується і з вимкненими «Підказками».
+  const SNAP_RESULT_MS = 1800;
+  let snapBusy = $state(false);
+  let snapResult = $state<string | null>(null);
+  let snapTimer: ReturnType<typeof setTimeout> | 0 = 0;
+
+  async function handleSnapshot(): Promise<void> {
+    if (!onSnapshot || snapBusy) return;
+    snapBusy = true;
+    if (snapTimer) clearTimeout(snapTimer);
+    try {
+      snapResult = await onSnapshot();
+    } finally {
+      snapBusy = false;
+      snapTimer = setTimeout(() => (snapResult = null), SNAP_RESULT_MS);
+    }
+  }
 </script>
 
 <div class="drawing-toolbar" bind:this={hostEl}>
@@ -287,6 +312,37 @@
         </svg>
         <span class="tool-tip" class:show={shownKey === "_magnet"}>
           Магніт<kbd>G</kbd>
+        </span>
+      </button>
+    {/if}
+
+    <!-- ADR-0109: знімок графіка — дія, не інструмент; у кінці панелі (рішення власника 10.10). -->
+    {#if onSnapshot}
+      <button
+        class="tool-btn snapshot-btn"
+        onclick={handleSnapshot}
+        oncontextmenu={(e) => e.preventDefault()}
+        onpointerenter={() => tipEnter("_snapshot")}
+        onpointerleave={() => tipLeave("_snapshot")}
+        type="button"
+        aria-label="Знімок графіка"
+        aria-busy={snapBusy}
+        disabled={snapBusy}
+      >
+        <svg
+          class="tool-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.75"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          {@html ICON_CAMERA}
+        </svg>
+        <span class="tool-tip" class:show={snapResult !== null || shownKey === "_snapshot"} role="status">
+          {snapResult ?? "Знімок графіка"}
         </span>
       </button>
     {/if}

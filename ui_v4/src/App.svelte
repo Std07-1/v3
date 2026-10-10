@@ -43,6 +43,17 @@
   import { mainStatus } from "./app/diagSelectors";
   import { dismissOnOutside } from "./lib/actions/dismissOnOutside";
   import { configuredPriceDigits, displayPriceDigits, type PriceDigits } from "./lib/priceDigits";
+  import {
+    browserSnapshotCaps,
+    canvasToPng,
+    chooseDelivery,
+    composeSnapshot,
+    cssVar,
+    deliverSnapshot,
+    snapshotFileName,
+    snapshotHeaderText,
+    snapshotResultLabel,
+  } from "./lib/chartSnapshot";
   import { setupKeyboard } from "./stores/keyboard.svelte";
   import type { StatusInfo } from "./app/diagSelectors";
   import { stopEdgeProbe, probeNow } from "./app/edgeProbe";
@@ -419,6 +430,56 @@
     }
   }
 
+  // ADR-0109: знімок графіка — полотна з ChartPane, рядок «символ · TF · час UTC · ціна» і знак V3, доставка за
+  // можливостями браузера. Підсумок — короткий текст для пігулки біля кнопки; збій — у консоль з причиною (I5).
+  let brandMark: Promise<HTMLImageElement | null> | null = null;
+  function loadBrandMark(): Promise<HTMLImageElement | null> {
+    brandMark ??= new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => {
+        console.warn("[snapshot] BRAND_MARK_LOAD_FAILED /brand/mark-v4.svg — знімок без знака");
+        resolve(null);
+      };
+      img.src = "/brand/mark-v4.svg";
+    });
+    return brandMark;
+  }
+
+  async function takeChartSnapshot(): Promise<string> {
+    const parts = chartPaneRef?.snapshotParts();
+    if (!parts) return "Графік ще не готовий";
+    const meta = {
+      symbol: hudSymbol,
+      tf: hudTf,
+      utcMs: Date.now(),
+      price: lastPrice,
+      priceDigits: parts.priceDigits,
+    };
+    try {
+      const canvas = composeSnapshot({
+        chart: parts.chart,
+        layers: parts.layers,
+        cssWidth: parts.cssWidth,
+        header: snapshotHeaderText(meta),
+        mark: await loadBrandMark(),
+        mobile: window.innerWidth < 640,
+        background: cssVar("--bg", "#0D1117"),
+        textColor: cssVar("--text-1", "#E6EDF3"),
+        fontFamily: cssVar("--font-sans", "sans-serif"),
+      });
+      const png = await canvasToPng(canvas);
+      const fileName = snapshotFileName(meta);
+      const ways = chooseDelivery(browserSnapshotCaps(new File([png], fileName, { type: "image/png" })));
+      const result = await deliverSnapshot(png, fileName, ways);
+      for (const f of result.failed) console.warn(`[snapshot] DELIVERY_FAILED via=${f.via} ${f.error}`);
+      return snapshotResultLabel(result);
+    } catch (err) {
+      console.error("[snapshot] SNAPSHOT_FAILED", err);
+      return "Не вдалося зробити знімок";
+    }
+  }
+
   // P3.1: HUD tracking — symbol/tf/price/timestamp from last frame
   let hudSymbol = $state("");
   let hudTf = $state("");
@@ -730,6 +791,7 @@
           {magnetEnabled}
           onToggleMagnet={toggleMagnet}
           onOpenStyle={openStyleFlyout}
+          onSnapshot={takeChartSnapshot}
         />
       {/if}
       <ChartPane

@@ -231,6 +231,23 @@
     chartEngine?.applyCandleStyle(name);
   }
 
+  /** ADR-0109: полотна для знімка — свічки й шкали LWC, шар SMC і малювання поверх (лише фігури, без станів
+   *  редагування). Шар Арчі не йде (рішення власника 10.10). null — графік ще не змонтований. */
+  export function snapshotParts(): {
+    chart: HTMLCanvasElement;
+    layers: HTMLCanvasElement[];
+    cssWidth: number;
+    priceDigits: number | null;
+  } | null {
+    if (!chartEngine || !lwcHostRef) return null;
+    return {
+      chart: chartEngine.takeScreenshot(),
+      layers: [overlayCanvasRef, drawingsRenderer?.snapshotCanvas()].filter((c): c is HTMLCanvasElement => !!c),
+      cssWidth: lwcHostRef.clientWidth,
+      priceDigits: symbolPriceDigits,
+    };
+  }
+
   // ADR-0027: Enter/exit replay mode
   export function enterReplay(): void {
     if (_currentCandles.length === 0) return;

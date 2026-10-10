@@ -1182,6 +1182,38 @@ export class DrawingsRenderer {
     this.interactionEl.style.cursor = '';
   }
 
+  /** ADR-0109: копія полотна лише з фігурами — без наведення, виділення, ручок, × видалення, чернетки і крапки
+   *  магніту (стани редагування на знімок не йдуть). Стан і кадр на екрані відновлюються одразу після копії. */
+  snapshotCanvas(): HTMLCanvasElement {
+    const saved = {
+      hovered: this.hovered,
+      selectedId: this.selectedId,
+      draft: this.draft,
+      lastSnap: this.lastSnap,
+      hoverDirty: this.hoverDirty,
+    };
+    this.hovered = null;
+    this.selectedId = null;
+    this.draft = null;
+    this.lastSnap = null;
+    this.hoverDirty = false;
+    try {
+      this.renderSync();
+      const copy = document.createElement('canvas');
+      copy.width = this.canvas.width;
+      copy.height = this.canvas.height;
+      copy.getContext('2d')?.drawImage(this.canvas, 0, 0);
+      return copy;
+    } finally {
+      this.hovered = saved.hovered;
+      this.selectedId = saved.selectedId;
+      this.draft = saved.draft;
+      this.lastSnap = saved.lastSnap;
+      this.hoverDirty = saved.hoverDirty;
+      this.renderSync();
+    }
+  }
+
   private forceRender(): void {
     // ADR-0082 D6: свіжий кеш часів барів (guard + throttle всередині).
     this.refreshBarTimes();

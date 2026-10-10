@@ -804,6 +804,11 @@ export class ChartEngine {
   // ADR-0073: runtime-перемикача мітки crosshair нема — LWC `applyOptions` після init
   // label не реактивував (rev 5); `labelVisible` задається лише в createChart (rev 6: true).
 
+  /** ADR-0109: свічки, шкали й примітиви графіка без перехрестя — основа знімка (розмір у пікселях пристрою). */
+  takeScreenshot(): HTMLCanvasElement {
+    return this.chart.takeScreenshot(true, false);
+  }
+
   // ─── destroy ───
   destroy(): void {
     if (this._rafId) {
