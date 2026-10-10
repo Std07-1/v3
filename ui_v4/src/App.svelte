@@ -57,6 +57,7 @@
     snapshotHeaderText,
     snapshotResultLabel,
     snapshotUsesPreview,
+    withSnapshotDeadline,
     type DeliveryResult,
     type SnapshotDelivery,
   } from "./lib/chartSnapshot";
@@ -453,7 +454,8 @@
     return brandMark;
   }
 
-  /** Знімок у PNG: `wide` — віртуальна рамка (лише вузький графік), інакше як на екрані з суперсемплінгом. */
+  /** Знімок у PNG: `wide` — віртуальна рамка (лише вузький графік), інакше як на екрані з суперсемплінгом. Полотна
+   *  знімаються синхронно; знак і кодування — під `withSnapshotDeadline`, щоб кнопка не зависла назавжди. */
   async function buildSnapshot(wide: boolean): Promise<{ png: Blob; fileName: string } | null> {
     const parts = chartPaneRef?.snapshotParts({ wide });
     if (!parts) return null;
@@ -464,18 +466,21 @@
       price: lastPrice,
       priceDigits: parts.priceDigits,
     };
-    const canvas = composeSnapshot({
-      chart: parts.chart,
-      layers: parts.layers,
-      cssWidth: parts.cssWidth,
-      header: snapshotHeaderText(meta),
-      mark: await loadBrandMark(),
-      mobile: !parts.framed && window.innerWidth < 640, // рамка — розміру ПК, тож і слот знака як на ПК
-      background: cssVar("--bg", "#0D1117"),
-      textColor: cssVar("--text-1", "#E6EDF3"),
-      fontFamily: cssVar("--font-sans", "sans-serif"),
-    });
-    return { png: await canvasToPng(canvas), fileName: snapshotFileName(meta) };
+    const encode = async (): Promise<{ png: Blob; fileName: string }> => {
+      const canvas = composeSnapshot({
+        chart: parts.chart,
+        layers: parts.layers,
+        cssWidth: parts.cssWidth,
+        header: snapshotHeaderText(meta),
+        mark: await loadBrandMark(),
+        mobile: !parts.framed && window.innerWidth < 640, // рамка — розміру ПК, тож і слот знака як на ПК
+        background: cssVar("--bg", "#0D1117"),
+        textColor: cssVar("--text-1", "#E6EDF3"),
+        fontFamily: cssVar("--font-sans", "sans-serif"),
+      });
+      return { png: await canvasToPng(canvas), fileName: snapshotFileName(meta) };
+    };
+    return withSnapshotDeadline(encode());
   }
 
   /** Віддає знімок способами `ways`; меню «Поділитися» відмовило (не скасування) — знімок не губиться, а йде файлом. */
@@ -537,7 +542,13 @@
       snapPreviewUrl = URL.createObjectURL(snap.png);
     } catch (err) {
       console.error("[snapshot] SNAPSHOT_FAILED", err);
-      if (render === snapPreviewRender) snapPreviewStatus = "Не вдалося зробити знімок";
+      if (render === snapPreviewRender) {
+        // Попередня картинка — іншого режиму: не лишати її під «Поділитися»
+        if (snapPreviewUrl) URL.revokeObjectURL(snapPreviewUrl);
+        snapPreviewUrl = null;
+        snapPreviewShot = null;
+        snapPreviewStatus = "Не вдалося зробити знімок";
+      }
     } finally {
       if (render === snapPreviewRender) snapPreviewBusy = false;
     }

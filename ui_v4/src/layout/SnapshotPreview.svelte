@@ -3,6 +3,7 @@
   Видно, що саме піде, перш ніж поділитися: «Широкий» (віртуальна рамка, за замовчуванням) або «Як на екрані».
   «Поділитися» — свіжий дотик, тож системне меню не відмовляє через затримку збирання картинки (iOS).
   Мова оформлення — InfoModal (backdrop, картка --elev, перемикач як вкладки). Esc і тап по тлу закривають.
+  Знімок не вдався (картинки нема) — тап по активній вкладці пробує ще раз.
 -->
 <script lang="ts">
     interface Props {
@@ -52,7 +53,7 @@
                     role="tab"
                     aria-selected={wide}
                     disabled={busy}
-                    onclick={() => !wide && onToggleWide(true)}>Широкий</button
+                    onclick={() => (!wide || !imageUrl) && onToggleWide(true)}>Широкий</button
                 >
                 <button
                     class="tab"
@@ -60,14 +61,14 @@
                     role="tab"
                     aria-selected={!wide}
                     disabled={busy}
-                    onclick={() => wide && onToggleWide(false)}>Як на екрані</button
+                    onclick={() => (wide || !imageUrl) && onToggleWide(false)}>Як на екрані</button
                 >
             </div>
 
             <div class="preview" aria-busy={busy}>
                 {#if imageUrl}
                     <img src={imageUrl} alt="Знімок графіка" class:dim={busy} />
-                {:else}
+                {:else if busy}
                     <span class="placeholder">Готую знімок…</span>
                 {/if}
             </div>

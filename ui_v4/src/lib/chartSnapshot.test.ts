@@ -11,6 +11,8 @@ import {
   snapshotSupersample,
   snapshotResultLabel,
   snapshotUsesPreview,
+  SNAPSHOT_BUILD_TIMEOUT_MS,
+  withSnapshotDeadline,
   type SnapshotMeta,
 } from './chartSnapshot';
 
@@ -104,6 +106,34 @@ describe('loadSnapshotWide / saveSnapshotWide', () => {
     });
     expect(loadSnapshotWide()).toBe(true);
     expect(() => saveSnapshotWide(false)).not.toThrow();
+  });
+});
+
+describe('withSnapshotDeadline', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('встигло — той самий результат', async () => {
+    await expect(withSnapshotDeadline(Promise.resolve('png'), 50)).resolves.toBe('png');
+  });
+
+  it('браузер не повернув результат (згорнута вкладка) — помилка після тайм-ауту, а не вічне очікування', async () => {
+    vi.useFakeTimers();
+    const pending = withSnapshotDeadline(new Promise<string>(() => {}));
+    const verdict = expect(pending).rejects.toThrow(`snapshot_build_timeout after ${SNAPSHOT_BUILD_TIMEOUT_MS} ms`);
+    await vi.advanceTimersByTimeAsync(SNAPSHOT_BUILD_TIMEOUT_MS);
+    await verdict;
+  });
+
+  it('власна помилка збирання проходить як є', async () => {
+    await expect(withSnapshotDeadline(Promise.reject(new Error('snapshot_png_encode_failed')), 50)).rejects.toThrow(
+      'snapshot_png_encode_failed',
+    );
+  });
+
+  it('встигло — таймер знято, пізнього відхилення нема', async () => {
+    vi.useFakeTimers();
+    await expect(withSnapshotDeadline(Promise.resolve(1), 1000)).resolves.toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

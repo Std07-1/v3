@@ -219,6 +219,31 @@ export function canvasToPng(canvas: HTMLCanvasElement): Promise<Blob> {
   });
 }
 
+/** Найдовше очікування на збирання знімка — знак V3 і PNG-кодування (рішення власника 10.10). Браузер може так і не
+ *  повернути `toBlob` чи подію картинки, якщо сторінку згорнули посеред збирання (спостерігалось 10.10 у прихованій
+ *  вкладці: кнопка лишалась зайнятою до перезавантаження). Запас: PNG 2560×1580 на проді кодувався 1.15 с, найбільший
+ *  знімок (телефон DPR 3, рамка) — 3840×2250, удвічі більше пікселів. Доставка під обмеження не йде: системне меню
+ *  «Поділитися» законно чекає, поки людина обирає адресата. */
+export const SNAPSHOT_BUILD_TIMEOUT_MS = 10_000;
+
+/** `work`, але не довше `ms`: не встигло — помилка `snapshot_build_timeout` (I5: гучно, а не вічне очікування). Пізній
+ *  результат після тайм-ауту ігнорується. */
+export function withSnapshotDeadline<T>(work: Promise<T>, ms: number = SNAPSHOT_BUILD_TIMEOUT_MS): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`snapshot_build_timeout after ${ms} ms`)), ms);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 /** Результат доставки: що спрацювало і що ні (UI показує підказку, збій — у консоль з причиною). */
 export interface DeliveryResult {
   done: SnapshotDelivery[];
