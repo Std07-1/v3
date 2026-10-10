@@ -463,7 +463,7 @@
         cssWidth: parts.cssWidth,
         header: snapshotHeaderText(meta),
         mark: await loadBrandMark(),
-        mobile: window.innerWidth < 640,
+        mobile: !parts.framed && window.innerWidth < 640, // рамка — розміру ПК, тож і слот знака як на ПК
         background: cssVar("--bg", "#0D1117"),
         textColor: cssVar("--text-1", "#E6EDF3"),
         fontFamily: cssVar("--font-sans", "sans-serif"),

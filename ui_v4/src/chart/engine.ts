@@ -136,6 +136,8 @@ export class ChartEngine {
 
   // ─── Crosshair callback ───
   private _onCrosshair: (data: CrosshairData) => void;
+  /** Контейнер графіка — розмір, до якого знімок повертає графік із віртуальної рамки (ADR-0109). */
+  private readonly _container: HTMLElement;
 
   constructor(
     container: HTMLElement,
@@ -143,6 +145,7 @@ export class ChartEngine {
     onScrollback: (oldest_ms: T_MS) => void,
   ) {
     this._onCrosshair = onCrosshairMove;
+    this._container = container;
 
     // ADR-0066 PATCH 02e: Init volume colors via resolveCandleStyle for the
     // saved (style, theme) pair so the seed already matches what
@@ -807,6 +810,20 @@ export class ChartEngine {
   /** ADR-0109: свічки, шкали й примітиви графіка без перехрестя — основа знімка (розмір у пікселях пристрою). */
   takeScreenshot(): HTMLCanvasElement {
     return this.chart.takeScreenshot(true, false);
+  }
+
+  /** ADR-0109: графік на мить у розмірі віртуальної рамки знімка (синхронне перемальовування; autoSize вимкнено,
+   *  бо з ним `resize` не діє). Повернути — `endSnapshotFrame` у тому самому виклику, до кадру браузера. */
+  beginSnapshotFrame(cssW: number, cssH: number): void {
+    this.chart.applyOptions({ autoSize: false });
+    this.chart.resize(cssW, cssH, true);
+  }
+
+  /** ADR-0109: назад до розміру контейнера і autoSize; контейнер не змінювався, тож ResizeObserver LWC сам би не
+   *  спрацював — розмір повертається явно. */
+  endSnapshotFrame(): void {
+    this.chart.resize(this._container.clientWidth, this._container.clientHeight, true);
+    this.chart.applyOptions({ autoSize: true });
   }
 
   // ─── destroy ───

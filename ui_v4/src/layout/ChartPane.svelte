@@ -27,6 +27,7 @@
   import { DEFAULT_BUDGET, type DisplayMode } from "../chart/overlay/DisplayBudget";
   import { currentPair, serverConfig } from "../app/frameRouter";
   import { configuredPriceDigits } from "../lib/priceDigits";
+  import { snapshotFrame } from "../lib/chartSnapshot";
   import { DrawingsRenderer } from "../chart/drawings/DrawingsRenderer";
   import { ArchiLayerRenderer } from "../chart/archi/ArchiLayerRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
@@ -232,20 +233,36 @@
   }
 
   /** ADR-0109: полотна для знімка — свічки й шкали LWC, шар SMC і малювання поверх (лише фігури, без станів
-   *  редагування). Шар Арчі не йде (рішення власника 10.10). null — графік ще не змонтований. */
+   *  редагування). Шар Арчі не йде (рішення власника 10.10). Вузький графік (телефон) — у віртуальній рамці
+   *  `snapshotFrame`; шари — у повній щільності пристрою (без стелі 2× екрана). Усе синхронно в одному виклику:
+   *  графік у рамку → копії → графік назад → шари назад, тож між кадрами браузера на екрані нічого не змінюється.
+   *  null — графік ще не змонтований. */
   export function snapshotParts(): {
     chart: HTMLCanvasElement;
     layers: HTMLCanvasElement[];
     cssWidth: number;
+    framed: boolean;
     priceDigits: number | null;
   } | null {
-    if (!chartEngine || !lwcHostRef) return null;
-    return {
-      chart: chartEngine.takeScreenshot(),
-      layers: [overlayCanvasRef, drawingsRenderer?.snapshotCanvas()].filter((c): c is HTMLCanvasElement => !!c),
-      cssWidth: lwcHostRef.clientWidth,
-      priceDigits: symbolPriceDigits,
-    };
+    if (!chartEngine || !lwcHostRef || !overlayRenderer || !drawingsRenderer) return null;
+    const frame = snapshotFrame(lwcHostRef.clientWidth, lwcHostRef.clientHeight);
+    const cssW = frame?.width ?? lwcHostRef.clientWidth;
+    const cssH = frame?.height ?? lwcHostRef.clientHeight;
+    const dpr = window.devicePixelRatio || 1;
+    if (frame) chartEngine.beginSnapshotFrame(cssW, cssH);
+    try {
+      return {
+        chart: chartEngine.takeScreenshot(),
+        layers: [overlayRenderer.snapshotAt(cssW, cssH, dpr), drawingsRenderer.snapshotAt(cssW, cssH, dpr)],
+        cssWidth: cssW,
+        framed: frame !== null,
+        priceDigits: symbolPriceDigits,
+      };
+    } finally {
+      if (frame) chartEngine.endSnapshotFrame();
+      overlayRenderer.restoreSnapshot();
+      drawingsRenderer.restoreSnapshot();
+    }
   }
 
   // ADR-0027: Enter/exit replay mode

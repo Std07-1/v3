@@ -13,6 +13,7 @@ import {
   distToPoint,
 } from '../interaction/geometry';
 import { getToolModule } from './tools';
+import { copyCanvas } from '../../lib/chartSnapshot';
 import type { RenderContext } from './tools';
 
 type HorzScaleItem = Time;
@@ -211,15 +212,7 @@ export class DrawingsRenderer {
     // DPR rail
     this.ro = new ResizeObserver((entries) => {
       const { width, height } = entries[0].contentRect;
-      this.dpr = Math.min(window.devicePixelRatio || 1, 2);
-
-      this.canvas.width = Math.floor(width * this.dpr);
-      this.canvas.height = Math.floor(height * this.dpr);
-      this.canvas.style.width = `${Math.floor(width)}px`;
-      this.canvas.style.height = `${Math.floor(height)}px`;
-
-      this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-
+      this.resizeTo(width, height, Math.min(window.devicePixelRatio || 1, 2));
       this.scheduleRender();
     });
 
@@ -1182,10 +1175,36 @@ export class DrawingsRenderer {
     this.interactionEl.style.cursor = '';
   }
 
-  /** ADR-0109: копія полотна лише з фігурами — без наведення, виділення, ручок, × видалення, чернетки і крапки
-   *  магніту (стани редагування на знімок не йдуть). Стан і кадр на екрані відновлюються одразу після копії. */
-  snapshotCanvas(): HTMLCanvasElement {
-    const saved = {
+  /** Полотно до розміру `cssW`×`cssH` у щільності `dpr` (ResizeObserver і знімок ADR-0109). */
+  private resizeTo(cssW: number, cssH: number, dpr: number): void {
+    this.dpr = dpr;
+    this.canvas.width = Math.floor(cssW * dpr);
+    this.canvas.height = Math.floor(cssH * dpr);
+    this.canvas.style.width = `${Math.floor(cssW)}px`;
+    this.canvas.style.height = `${Math.floor(cssH)}px`;
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  // ADR-0109: розмір і стани редагування до знімка — повертаються в restoreSnapshot
+  private beforeSnapshot: {
+    cssW: number;
+    cssH: number;
+    dpr: number;
+    hovered: HitState | null;
+    selectedId: string | null;
+    draft: Drawing | null;
+    lastSnap: { x: number; y: number } | null;
+    hoverDirty: boolean;
+  } | null = null;
+
+  /** ADR-0109: фігури для знімка в розмірі `cssW`×`cssH` і щільності `dpr` — без наведення, виділення, ручок,
+   *  × видалення, чернетки і крапки магніту; повертає копію. Графік LWC мусить уже мати той самий розмір. Полотно і
+   *  стани повертає `restoreSnapshot` — після повернення розміру графіка, у тому самому виклику. */
+  snapshotAt(cssW: number, cssH: number, dpr: number): HTMLCanvasElement {
+    this.beforeSnapshot ??= {
+      cssW: this.canvas.width / this.dpr,
+      cssH: this.canvas.height / this.dpr,
+      dpr: this.dpr,
       hovered: this.hovered,
       selectedId: this.selectedId,
       draft: this.draft,
@@ -1197,21 +1216,23 @@ export class DrawingsRenderer {
     this.draft = null;
     this.lastSnap = null;
     this.hoverDirty = false;
-    try {
-      this.renderSync();
-      const copy = document.createElement('canvas');
-      copy.width = this.canvas.width;
-      copy.height = this.canvas.height;
-      copy.getContext('2d')?.drawImage(this.canvas, 0, 0);
-      return copy;
-    } finally {
-      this.hovered = saved.hovered;
-      this.selectedId = saved.selectedId;
-      this.draft = saved.draft;
-      this.lastSnap = saved.lastSnap;
-      this.hoverDirty = saved.hoverDirty;
-      this.renderSync();
-    }
+    this.resizeTo(cssW, cssH, dpr);
+    this.renderSync();
+    return copyCanvas(this.canvas);
+  }
+
+  /** ADR-0109: розмір і стани редагування до знімка — назад, і кадр одразу, без проміжного з координатами рамки. */
+  restoreSnapshot(): void {
+    const prev = this.beforeSnapshot;
+    if (!prev) return;
+    this.beforeSnapshot = null;
+    this.hovered = prev.hovered;
+    this.selectedId = prev.selectedId;
+    this.draft = prev.draft;
+    this.lastSnap = prev.lastSnap;
+    this.hoverDirty = prev.hoverDirty;
+    this.resizeTo(prev.cssW, prev.cssH, prev.dpr);
+    this.renderSync();
   }
 
   private forceRender(): void {

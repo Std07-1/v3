@@ -39,6 +39,30 @@ export const SNAPSHOT_LAYOUT = {
   markOpacity: 0.62,
 } as const;
 
+/** Віртуальна рамка знімка (рішення власника 10.10 «робимо обидва»): вузький графік (телефон, планшет у портреті)
+ *  знімається так, ніби він 1280×720 CSS — горизонтальна картинка з більшою кількістю свічок, у щільності пристрою.
+ *  Широкий графік (ПК) — у своєму розмірі, як на екрані. */
+export const SNAPSHOT_FRAME = {
+  widthPx: 1280,
+  heightPx: 720,
+  minChartWidthPx: 1000,
+} as const;
+
+/** Рамка для знімка графіка `cssW`×`cssH`; null — знімати у власному розмірі. */
+export function snapshotFrame(cssW: number, cssH: number): { width: number; height: number } | null {
+  if (cssW <= 0 || cssH <= 0 || cssW >= SNAPSHOT_FRAME.minChartWidthPx) return null;
+  return { width: SNAPSHOT_FRAME.widthPx, height: SNAPSHOT_FRAME.heightPx };
+}
+
+/** Копія полотна (знімок шару в ту мить, поки полотно ще в розмірі знімка). */
+export function copyCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
+  const copy = document.createElement('canvas');
+  copy.width = source.width;
+  copy.height = source.height;
+  copy.getContext('2d')?.drawImage(source, 0, 0);
+  return copy;
+}
+
 const _pad2 = (n: number): string => String(n).padStart(2, '0');
 
 function _utcParts(utcMs: number): { date: string; time: string; compact: string } {

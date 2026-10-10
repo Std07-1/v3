@@ -4,6 +4,7 @@ import {
   chooseDelivery,
   deliverSnapshot,
   snapshotFileName,
+  snapshotFrame,
   snapshotHeaderText,
   snapshotResultLabel,
   type SnapshotMeta,
@@ -32,6 +33,19 @@ describe('snapshotHeaderText', () => {
 describe('snapshotFileName', () => {
   it('лише латиниця, цифри, _ і - (без «/» символу)', () => {
     expect(snapshotFileName(META)).toBe('v3_XAUUSD_H1_20261010-1430UTC.png');
+  });
+});
+
+describe('snapshotFrame', () => {
+  it.each([
+    [375, 786, { width: 1280, height: 720 }], // телефон портрет — горизонтальна рамка, більше свічок
+    [844, 340, { width: 1280, height: 720 }], // телефон ландшафт
+    [768, 900, { width: 1280, height: 720 }], // планшет портрет
+    [1024, 768, null], // ПК / широкий — як на екрані
+    [1920, 900, null],
+    [0, 0, null], // графік ще не змонтований
+  ] as const)('%d×%d → %j', (w, h, frame) => {
+    expect(snapshotFrame(w, h)).toEqual(frame);
   });
 });
 

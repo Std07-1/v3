@@ -30,6 +30,7 @@ import { applyBudget, DEFAULT_BUDGET, type BudgetConfig, type DisplayMode, type 
 import { visibleLevels, type GroupOverrides } from './levelGroups';
 import { isCompactView, newestStructureLabel, structureLabelsWithText, zoneLabelsWithText, type LabelBox } from './labelLayout';
 import { DEFAULT_BAR_SPACING_PX } from '../engine';
+import { copyCanvas } from '../../lib/chartSnapshot';
 
 // ── ADR-0043 P1: Canvas Safe Zones — overlay елементи не рендеряться під HUD ──
 const CANVAS_SAFE_TOP_Y = 75;    // HUD + OHLCV tooltip clearance (px)
@@ -437,6 +438,32 @@ export class OverlayRenderer {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     this.scheduleRender();
+  }
+
+  // ADR-0109: розмір полотна до знімка — повертається в restoreSnapshot
+  private _beforeSnapshot: { cssW: number; cssH: number; dpr: number } | null = null;
+
+  /** ADR-0109: шар SMC для знімка в розмірі `cssW`×`cssH` і щільності `dpr` (віртуальна рамка, повний DPR пристрою);
+   *  повертає копію. Графік LWC мусить уже мати той самий розмір — координати беруться з нього. Полотно лишається в
+   *  розмірі знімка до `restoreSnapshot`, який викликається після повернення розміру графіка, у тому самому виклику. */
+  snapshotAt(cssW: number, cssH: number, dpr: number): HTMLCanvasElement {
+    this._beforeSnapshot ??= {
+      cssW: this.cssW,
+      cssH: this.cssH,
+      dpr: this.cssW > 0 ? this.canvas.width / this.cssW : 1,
+    };
+    this.resize(cssW, cssH, dpr);
+    this.renderNow();
+    return copyCanvas(this.canvas);
+  }
+
+  /** ADR-0109: назад до розміру до знімка і перемалювати одразу — без кадру з координатами рамки. */
+  restoreSnapshot(): void {
+    const prev = this._beforeSnapshot;
+    if (!prev) return;
+    this._beforeSnapshot = null;
+    this.resize(prev.cssW, prev.cssH, prev.dpr);
+    this.renderNow();
   }
 
   private bindTriggers(): void {
