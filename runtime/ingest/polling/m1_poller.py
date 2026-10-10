@@ -36,6 +36,7 @@ from runtime.ingest.m1_session_filter import (
     VERDICT_PAUSE_FLAT_DROPPED,
     VERDICT_PAUSE_NOISE_DROPPED,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
+    VERDICT_PAUSE_PREOPEN_DROPPED,
     VERDICT_REOPEN_FLAT_DROPPED,
     chain_open_to_prev_close,
     classify_m1_by_calendar,
@@ -267,6 +268,7 @@ class M1SymbolPoller:
         self._pause_noise_dropped = 0
         self._pause_noise_alarms = 0
         self._pause_edge_stale_dropped = 0
+        self._pause_preopen_dropped = 0
         self._gaps_detected = 0
         self._already_caught_up = 0
 
@@ -518,6 +520,16 @@ class M1SymbolPoller:
                 "dropped_total=%d — перша хвилина паузи після закриття з малим обсягом: застарілі тіки, у SSOT не йде",
                 self._symbol, bar.open_time_ms, bar.o, bar.h, bar.low, bar.c, bar.v,
                 self._pause_policy.edge_stale_max_volume, self._pause_edge_stale_dropped,
+            )
+        elif verdict == VERDICT_PAUSE_PREOPEN_DROPPED:
+            # Очікуваний потік брокера (до ~60 хв за неділю): INFO і лічильник, без тривоги хибного календаря — обсягом
+            # і щільністю він схожий на торгівлю, тож тривога кричала б щонеділі (ADR-0099 rev 10.10)
+            self._pause_preopen_dropped += 1
+            logging.info(
+                "M1_PAUSE_PREOPEN_DROPPED symbol=%s open_ms=%s o=%.5f h=%.5f l=%.5f c=%.5f v=%.0f window_min=%s "
+                "dropped_total=%d — котирування брокера до відкриття сесії (TV їх не показує), у SSOT не йде",
+                self._symbol, bar.open_time_ms, bar.o, bar.h, bar.low, bar.c, bar.v,
+                self._pause_policy.preopen_window_min, self._pause_preopen_dropped,
             )
         else:
             logging.warning(
@@ -1123,6 +1135,7 @@ class M1SymbolPoller:
             "pause_noise_dropped": self._pause_noise_dropped,
             "pause_noise_alarms": self._pause_noise_alarms,
             "pause_edge_stale_dropped": self._pause_edge_stale_dropped,
+            "pause_preopen_dropped": self._pause_preopen_dropped,
             "open_chained": self._chained_total,
             "chain_gap_breaks": self._chain_gap_breaks,
             "gaps_detected": self._gaps_detected,
@@ -1580,9 +1593,10 @@ class M1PollerRunner:
         total_stale = sum(p.stats.get("stale_count", 0) for p in self._pollers)
         total_chained = sum(p.stats.get("open_chained", 0) for p in self._pollers)
         total_chain_gap_breaks = sum(p.stats.get("chain_gap_breaks", 0) for p in self._pollers)
+        total_preopen = sum(p.stats.get("pause_preopen_dropped", 0) for p in self._pollers)
         logging.info(
             "M1_POLLER_STATS symbols=%d m1=%d m3=%d err=%d cal_skip=%d pause_noise=%d edge_stale=%d noise_alarm=%d "
-            "gaps=%d caught_up=%d recovering=%d stale=%d chained=%d chain_gap_breaks=%d",
+            "gaps=%d caught_up=%d recovering=%d stale=%d chained=%d chain_gap_breaks=%d preopen=%d",
             len(self._pollers),
             total_m1,
             total_m3,
@@ -1597,6 +1611,7 @@ class M1PollerRunner:
             total_stale,
             total_chained,
             total_chain_gap_breaks,
+            total_preopen,
         )
 
 

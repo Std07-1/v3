@@ -6,6 +6,8 @@ TradingView таких барів не показує, а в SSOT вони ла�
 - хвилина паузи ГЛИБОКО в паузі (далі за `pause_noise_margin_min` від найближчої торгової хвилини) → не
   записується незалежно від пласкості й обсягу: це шум брокера (Сб 19.09 XAG 13 і US30 11 мікросвічок з v 2–5, діапазон
   1–2 кроки), а поріг обсягу його не відсікає — у XAG є суботні бари з v=5;
+- хвилина паузи перед відкриттям сесії (до `pause_preopen_window_min`) у групах `pause_preopen_groups` → не
+  записується: котирування брокера до відкриття тижня FX, яких TV не показує (ADR-0099 rev 10.10, ADR-0054 W6 S6);
 - хвилина паузи біля краю сесії, плаский бар → не записується (шум брокера);
 - ПЕРША хвилина паузи після закриття, неплаский бар з малим обсягом (v ≤ flat_bar_max_volume × K) → не записується:
   це застарілі тіки брокера після закриття (клас «хвилина 21:00», ADR-0099 §3.2); у тижневому архіві брокера її немає;
@@ -42,6 +44,7 @@ VERDICT_PAUSE_NONFLAT_ANOMALY = "pause_nonflat_anomaly"
 VERDICT_REOPEN_FLAT_DROPPED = "reopen_flat_dropped"
 VERDICT_PAUSE_NOISE_DROPPED = "pause_noise_dropped"
 VERDICT_PAUSE_EDGE_STALE_DROPPED = "pause_edge_stale_dropped"
+VERDICT_PAUSE_PREOPEN_DROPPED = "pause_preopen_dropped"  # ADR-0099 rev 10.10: котирування до відкриття (групи з config)
 VERDICT_PAUSE_EDGE_STALE_FOLDED = "pause_edge_stale_folded"  # ADR-0101: вкладено в останню хвилину сесії (пакетні записувачі)
 # ADR-0101 C3: тіки цієї хвилини вже вкладені в бар SSOT перед нею (повторний засів того самого вікна) — правки немає
 VERDICT_PAUSE_EDGE_STALE_ALREADY_FOLDED = "pause_edge_stale_already_folded"
@@ -77,6 +80,14 @@ PAUSE_NOISE_ALARM_WINDOW_MIN_DEFAULT = 60
 PAUSE_NOISE_ALARM_MAX_DROPPED_DEFAULT = 50
 PAUSE_NOISE_ALARM_MIN_VOLUME_DEFAULT = 20
 
+# Котирування до відкриття сесії (ADR-0099 rev 10.10, ADR-0054 W6 S6); SSOT — config.json →
+# m1_session_filter.pause_preopen_window_min і pause_preopen_groups. FXCM для FX шле передвідкриттєві хвилини з ~19:45
+# неділі (узимку з 18:37), а тиждень відкривається о 21:00 (узимку 22:00): у 95 неділях архіву USD/JPY 5 595 таких
+# хвилин, 324 з v ≥ 20, до 61 за 60 хв — обсягом і щільністю від торгівлі не відрізнити, TV їх не показує. Тому правило
+# позиційне: хвилина паузи, до найближчого відкриття від якої ≤ вікна, — шум. 240 хв накриває найраніші 18:37 узимку.
+# Діє лише для груп зі списку; ключа немає — правило вимкнене (WARN), бо відкидати дані за замовчуванням не можна.
+PAUSE_PREOPEN_WINDOW_MIN_DEFAULT = 240
+
 
 @dataclasses.dataclass(frozen=True)
 class PausePolicy:
@@ -85,10 +96,12 @@ class PausePolicy:
     `edge_stale_max_volume` None — правило застарілого краю вимкнене (K=0). Поля `alarm_*` — пороги тривоги хибного
     календаря; `alarm_min_volume` — ще й єдиний критерій «бар схожий на торгівлю» (`is_trading_like_volume`) для
     тривоги полера, допуску засіву і прапора `--allow-off-calendar` (ADR-0099 §3.3, §3.5).
+    `preopen_window_min` None — правило котирувань до відкриття вимкнене (група символу не в списку config).
     """
 
     noise_margin_min: int
     edge_stale_max_volume: Optional[int] = None
+    preopen_window_min: Optional[int] = None
     alarm_window_min: int = PAUSE_NOISE_ALARM_WINDOW_MIN_DEFAULT
     alarm_max_dropped: int = PAUSE_NOISE_ALARM_MAX_DROPPED_DEFAULT
     alarm_min_volume: int = PAUSE_NOISE_ALARM_MIN_VOLUME_DEFAULT
@@ -150,10 +163,14 @@ def resolve_pause_policy(cfg: dict, symbol: str) -> PausePolicy:
         section = {}
     edge_stale_mult = _resolve_config_int(
         section, "pause_edge_stale_volume_mult", PAUSE_EDGE_STALE_VOLUME_MULT_DEFAULT, 0)
-    edge_stale_on = edge_stale_mult > 0 and _calendar_group(cfg, symbol) in _resolve_edge_stale_groups(section)
+    group = _calendar_group(cfg, symbol)
+    edge_stale_on = edge_stale_mult > 0 and group in _resolve_groups(section, "pause_edge_stale_groups", "застарілого краю")
+    preopen_on = group in _resolve_groups(section, "pause_preopen_groups", "котирувань до відкриття")
     return PausePolicy(
         noise_margin_min=_resolve_config_int(section, "pause_noise_margin_min", PAUSE_NOISE_MARGIN_MIN_DEFAULT, 1),
         edge_stale_max_volume=resolve_flat_max_volume(cfg) * edge_stale_mult if edge_stale_on else None,
+        preopen_window_min=(_resolve_config_int(section, "pause_preopen_window_min", PAUSE_PREOPEN_WINDOW_MIN_DEFAULT, 1)
+                            if preopen_on else None),
         alarm_window_min=_resolve_config_int(
             section, "pause_noise_alarm_window_min", PAUSE_NOISE_ALARM_WINDOW_MIN_DEFAULT, 1),
         alarm_max_dropped=_resolve_config_int(
@@ -168,14 +185,15 @@ def _calendar_group(cfg: dict, symbol: str) -> Optional[str]:
     return groups.get(symbol) if isinstance(groups, dict) else None
 
 
-def _resolve_edge_stale_groups(section: dict) -> FrozenSet[str]:
-    """Групи, де діє застарілий край. Відсутній або битий ключ — правило вимкнене (порожня множина) з WARNING."""
-    raw = section.get("pause_edge_stale_groups")
+def _resolve_groups(section: dict, key: str, rule: str) -> FrozenSet[str]:
+    """Групи календаря, де діє правило `rule` (ключ `key`). Відсутній або битий ключ — правило вимкнене (порожня
+    множина) з WARNING: відкидати дані за замовчуванням не можна."""
+    raw = section.get(key)
     if isinstance(raw, list) and all(isinstance(group, str) for group in raw):
         return frozenset(raw)
     logging.warning(
-        "M1_SESSION_FILTER_CONFIG_INVALID key=pause_edge_stale_groups raw=%r — очікується список груп календаря, "
-        "правило застарілого краю вимкнене", raw,
+        "M1_SESSION_FILTER_CONFIG_INVALID key=%s raw=%r — очікується список груп календаря, правило %s вимкнене",
+        key, raw, rule,
     )
     return frozenset()
 
@@ -224,6 +242,17 @@ def minutes_to_session_edge(open_ms: int, is_trading_fn: Callable[[int], bool], 
     return None
 
 
+def minutes_to_next_open(open_ms: int, is_trading_fn: Callable[[int], bool], max_minutes: int) -> Optional[int]:
+    """Відстань у хвилинах від хвилини паузи `open_ms` до першої торгової хвилини ПІСЛЯ неї (лише вперед): 1 — остання
+    хвилина перед відкриттям. Торгова хвилина або відкриття далі за `max_minutes` — None."""
+    if is_trading_fn(open_ms):
+        return None
+    for distance in range(1, max_minutes + 1):
+        if is_trading_fn(open_ms + distance * _M1_MS):
+            return distance
+    return None
+
+
 def classify_m1_by_calendar(bar: CandleBar, is_trading_fn: Callable[[int], bool], flat_max_volume: int,
                             pause_policy: PausePolicy) -> Tuple[Optional[CandleBar], str]:
     """Правило M1→SSOT для записувача (ADR-0099 §3.1): факти про хвилину — з календаря, рішення — `_decide_verdict`.
@@ -246,12 +275,14 @@ def classify_m1_by_calendar(bar: CandleBar, is_trading_fn: Callable[[int], bool]
                        and minutes_to_session_edge(open_ms, is_trading_fn, pause_policy.noise_margin_min) is None),
         first_pause_minute=not trading and is_trading_fn(open_ms - _M1_MS),
         edge_stale_max_volume=pause_policy.edge_stale_max_volume if position_drops else None,
+        preopen_quote=(not trading and position_drops and pause_policy.preopen_window_min is not None
+                       and minutes_to_next_open(open_ms, is_trading_fn, pause_policy.preopen_window_min) is not None),
     )
 
 
 def _decide_verdict(bar: CandleBar, *, flat_max_volume: int, trading: bool, session_open_minute: bool,
                     deep_in_pause: bool, first_pause_minute: bool,
-                    edge_stale_max_volume: Optional[int]) -> Tuple[Optional[CandleBar], str]:
+                    edge_stale_max_volume: Optional[int], preopen_quote: bool) -> Tuple[Optional[CandleBar], str]:
     """Таблиця ADR-0099 §3.1. Функція приватна, а факти про хвилину — обов'язкові keyword-only без дефолтів: записувач
     не може тихо лишитися без правила, забувши передати один із фактів (D15.2)."""
     flat = is_flat_m1(bar, flat_max_volume)
@@ -261,6 +292,8 @@ def _decide_verdict(bar: CandleBar, *, flat_max_volume: int, trading: bool, sess
         if session_open_minute:
             return None, VERDICT_REOPEN_FLAT_DROPPED
         return _with_marker(bar, "trading_flat"), VERDICT_TRADING_FLAT
+    if preopen_quote:
+        return None, VERDICT_PAUSE_PREOPEN_DROPPED
     if deep_in_pause:
         return None, VERDICT_PAUSE_NOISE_DROPPED
     if flat:

@@ -52,7 +52,11 @@
     ],
     "pause_noise_alarm_window_min": 60,
     "pause_noise_alarm_max_dropped": 50,
-    "pause_noise_alarm_min_volume": 20
+    "pause_noise_alarm_min_volume": 20,
+    "pause_preopen_window_min": 240,
+    "pause_preopen_groups": [
+      "fx_24x5_utc_summer"
+    ]
   },
   "broker_base_tfs_s": [],
   "derived_tfs_s": [

@@ -24,6 +24,7 @@ from runtime.ingest.m1_session_filter import (
     VERDICT_PAUSE_FLAT_DROPPED,
     VERDICT_PAUSE_NOISE_DROPPED,
     VERDICT_PAUSE_NONFLAT_ANOMALY,
+    VERDICT_PAUSE_PREOPEN_DROPPED,
     M1AppendPlan,
     PausePolicy,
     plan_m1_append,
@@ -405,13 +406,15 @@ def main() -> int:
     edge_stale = total_verdicts[VERDICT_PAUSE_EDGE_STALE_DROPPED]
     anomalies = total_verdicts[VERDICT_PAUSE_NONFLAT_ANOMALY]
     edge_folded = total_verdicts[VERDICT_PAUSE_EDGE_STALE_FOLDED]
+    preopen = total_verdicts[VERDICT_PAUSE_PREOPEN_DROPPED]
     logging.log(
         logging.WARNING if dropped or noise or edge_stale or anomalies or edge_folded or total_open_chained
         or total_ssot_edits else logging.INFO,
         "=== ПІДСУМОК: записано=%d пропущено(dedup)=%d відсіяно(пласкі поза сесією)=%d "
         "відсіяно(шум глибоко в паузі)=%d відсіяно(застарілий край)=%d вкладено(застарілий край)=%d "
+        "відсіяно(котирування до відкриття)=%d "
         "аномалій(непласкі біля краю сесії)=%d open_у_ланцюг=%d правок_наявних_до_settle=%d помилок=%d ===",
-        total_written, total_skipped, dropped, noise, edge_stale, edge_folded, anomalies, total_open_chained,
+        total_written, total_skipped, dropped, noise, edge_stale, edge_folded, preopen, anomalies, total_open_chained,
         total_ssot_edits, len(errors),
     )
     return 1 if errors else 0
