@@ -1,7 +1,7 @@
 /*
  * tokens.css — Visual Identity SSOT (ADR-0066 Tier 4–5)
  *
- * CSS custom properties for AI·ONE v3 design system.
+ * CSS custom properties for the v3 design system.
  * Consumed by: chart/themes.ts (PATCH 02b), .svelte components (PATCH 06).
  *
  * PATCH 02a status: file authored, imported once via main.ts.

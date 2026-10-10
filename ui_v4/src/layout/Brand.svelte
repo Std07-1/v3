@@ -1,6 +1,7 @@
 <!--
   src/layout/Brand.svelte — ADR-0066 Tier 1-3 + Tier 9
   Brand identity component: wordmark / mark / full lockup.
+  Бренд — «v3» (ADR-0066 rev 6, рішення власника 10.10: «AI · ONE» прибрано зі згадок і назв).
   Theme-aware via CSS variables (Tier 9.1: dot color shifts dark/black/light).
 -->
 
@@ -18,12 +19,11 @@
         size = 32,
         clickable = false,
         onclick,
-        title = "AI · ONE v3",
+        title = "v3",
     }: Props = $props();
 
     // Wordmark font-size scales with `size` prop. Default 32px = canonical.
     const wmSize = $derived(size);
-    const v3Size = $derived(Math.round(size * 0.4));   // ~13px @ canon 32
     const tagSize = $derived(Math.round(size * 0.34)); // ~11px @ canon 32
 
     function handleClick(e: MouseEvent) {
@@ -52,7 +52,7 @@
         <img src="/brand/mark-v4.svg" alt={title} width={size} height={size} />
     </span>
 {:else if variant === "wordmark"}
-    <!-- Wordmark only — AI · ONE per Tier 2 -->
+    <!-- Wordmark only — «v3» (ADR-0066 rev 6) -->
     <span
         class="brand-wordmark"
         class:clickable
@@ -63,12 +63,10 @@
         style:font-size="{wmSize}px"
         {title}
     >
-        <span class="wm-ai">AI</span>
-        <span class="wm-dot">·</span>
-        <span class="wm-one">ONE</span>
+        <span class="wm-name">v3</span>
     </span>
 {:else}
-    <!-- Full lockup — wordmark + v3 + tagline -->
+    <!-- Full lockup — wordmark «v3» + tagline -->
     <span
         class="brand-lockup"
         class:clickable
@@ -80,11 +78,8 @@
     >
         <span class="lk-row">
             <span class="brand-wordmark" style:font-size="{wmSize}px">
-                <span class="wm-ai">AI</span>
-                <span class="wm-dot">·</span>
-                <span class="wm-one">ONE</span>
+                <span class="wm-name">v3</span>
             </span>
-            <span class="lk-v3" style:font-size="{v3Size}px">v3</span>
         </span>
         <span class="lk-tagline" style:font-size="{tagSize}px">
             Smart Money Concepts · agent-led trading platform
@@ -132,18 +127,8 @@
         white-space: nowrap;
         user-select: none;
     }
-    .wm-ai {
+    .wm-name {
         color: var(--text-1);
-    }
-    .wm-dot {
-        /* Tier 9.1: gold on dark/black, accent-deep on light handled via theme overrides */
-        color: var(--accent);
-        padding: 0 0.22em;
-        line-height: 1;
-    }
-    .wm-one {
-        color: var(--text-2);
-        opacity: 0.75;
     }
     .brand-wordmark.clickable {
         cursor: pointer;
@@ -158,11 +143,6 @@
     .brand-wordmark.clickable:focus-visible {
         outline: 2px solid var(--accent);
         outline-offset: 1px;
-    }
-
-    /* ─── Light theme: dot uses --accent-deep for AA contrast on white ─── */
-    :global([data-theme="light"]) .wm-dot {
-        color: var(--accent-deep);
     }
 
     /* ─── Lockup variant ─── */
@@ -181,12 +161,6 @@
         display: inline-flex;
         align-items: baseline;
         gap: 8px;
-    }
-    .lk-v3 {
-        font-family: var(--font-mono);
-        font-weight: 500;
-        color: var(--text-3);
-        letter-spacing: 0.05em;
     }
     .lk-tagline {
         font-family: var(--font-mono);

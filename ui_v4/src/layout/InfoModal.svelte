@@ -160,7 +160,7 @@
                             · Commit <code>{COMMIT_HASH}</code>
                         </p>
                         <p class="about-blurb">
-                            <strong>AI · ONE</strong> is an SMC-driven analytics
+                            <strong>v3</strong> is an SMC-driven analytics
                             platform for institutional order-flow trading. Smart
                             Money Concepts overlay (zones, structure, liquidity,
                             P/D) with an autonomous AI agent (Archi) producing real-time

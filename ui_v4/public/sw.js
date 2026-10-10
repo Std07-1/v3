@@ -13,7 +13,9 @@
 // шанував евристичний HTTP-кеш браузера, тож «network-first» міг повернути
 // ЗАСТАРІЛИЙ index.html зі старим hashed-bundle (мікс builds між вкладками).
 // Bump версії виселяє shell-кеші, що тримали старі копії HTML.
-const SW_VERSION = 'v2-2026-07-07';
+// v3 (ADR-0066 rev 6): бренд «v3» замість «AI · ONE» — offline.html і manifest.json лежать у shell-кеші, без bump
+// встановлений PWA показував би стару назву.
+const SW_VERSION = 'v3-2026-10-10';
 const SHELL_CACHE = `shell-${SW_VERSION}`;
 const SHELL_PRECACHE = [
   '/',

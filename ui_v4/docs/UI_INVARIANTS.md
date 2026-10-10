@@ -73,8 +73,8 @@ panel onclick + ontouchend) — drift, mobile-buggy. Один централіз
 **File**: [`src/layout/BrandWatermark.svelte`](../src/layout/BrandWatermark.svelte)
 **Status**: LOCKED ✓ (owner-direction 2026-05-11)
 
-**What**: Bottom-left chart watermark показує **V3 mark only** (NOT wordmark
-"AI · ONE", NOT lockup). `<Brand variant="mark" size={20} />`.
+**What**: Bottom-left chart watermark показує **V3 mark only** (NOT wordmark,
+NOT lockup). `<Brand variant="mark" size={20} />`.
 
 **Critical invariants**:
 
@@ -84,7 +84,7 @@ panel onclick + ontouchend) — drift, mobile-buggy. Один централіз
   виглядає як generic chart attribution (discreet)
 - z-index: 36 (above HUD 35, below dropdowns 100, below modals 200)
 
-**Why locked**: brand "AI · ONE" — internal scope (owner + sponsors), не для
+**Why locked**: бренд (з 10.10.2026 — «v3», ADR-0066 rev 6) — internal scope (owner + sponsors), не для
 public mass exposure. Wordmark/lockup на чарті = реклама. Mark = neutral
 attribution badge.
 

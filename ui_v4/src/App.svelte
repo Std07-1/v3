@@ -56,10 +56,12 @@
     snapshotFileName,
     snapshotHeaderText,
     snapshotResultLabel,
+    snapshotShareText,
     snapshotUsesPreview,
     withSnapshotDeadline,
     type DeliveryResult,
     type SnapshotDelivery,
+    type SnapshotFile,
   } from "./lib/chartSnapshot";
   import SnapshotPreview from "./layout/SnapshotPreview.svelte";
   import { setupKeyboard } from "./stores/keyboard.svelte";
@@ -456,7 +458,7 @@
 
   /** Знімок у PNG: `wide` — віртуальна рамка (лише вузький графік), інакше як на екрані з суперсемплінгом. Полотна
    *  знімаються синхронно; знак і кодування — під `withSnapshotDeadline`, щоб кнопка не зависла назавжди. */
-  async function buildSnapshot(wide: boolean): Promise<{ png: Blob; fileName: string } | null> {
+  async function buildSnapshot(wide: boolean): Promise<SnapshotFile | null> {
     const parts = chartPaneRef?.snapshotParts({ wide });
     if (!parts) return null;
     const meta = {
@@ -466,7 +468,7 @@
       price: lastPrice,
       priceDigits: parts.priceDigits,
     };
-    const encode = async (): Promise<{ png: Blob; fileName: string }> => {
+    const encode = async (): Promise<SnapshotFile> => {
       const canvas = composeSnapshot({
         chart: parts.chart,
         layers: parts.layers,
@@ -478,17 +480,18 @@
         textColor: cssVar("--text-1", "#E6EDF3"),
         fontFamily: cssVar("--font-sans", "sans-serif"),
       });
-      return { png: await canvasToPng(canvas), fileName: snapshotFileName(meta) };
+      return {
+        png: await canvasToPng(canvas),
+        fileName: snapshotFileName(meta),
+        shareText: snapshotShareText(meta, window.location.origin),
+      };
     };
     return withSnapshotDeadline(encode());
   }
 
   /** Віддає знімок способами `ways`; меню «Поділитися» відмовило (не скасування) — знімок не губиться, а йде файлом. */
-  async function deliverWithFallback(
-    snap: { png: Blob; fileName: string },
-    ways: SnapshotDelivery[],
-  ): Promise<DeliveryResult> {
-    let result = await deliverSnapshot(snap.png, snap.fileName, ways);
+  async function deliverWithFallback(snap: SnapshotFile, ways: SnapshotDelivery[]): Promise<DeliveryResult> {
+    let result = await deliverSnapshot(snap.png, snap.fileName, ways, snap.shareText);
     for (const f of result.failed) console.warn(`[snapshot] DELIVERY_FAILED via=${f.via} ${f.error}`);
     if (result.done.length === 0 && !result.cancelled && !ways.includes("download")) {
       result = await deliverSnapshot(snap.png, snap.fileName, ["download"]);
@@ -521,7 +524,7 @@
   let snapPreviewBusy = $state(false);
   let snapPreviewUrl: string | null = $state(null);
   let snapPreviewStatus: string | null = $state(null);
-  let snapPreviewShot: { png: Blob; fileName: string } | null = null;
+  let snapPreviewShot: SnapshotFile | null = null;
   // Номер поточного збирання: вікно закрили чи перемкнули, поки PNG збирався, — застарілий результат не пишеться
   let snapPreviewRender = 0;
 
@@ -727,7 +730,7 @@
   // Strips `/` from forex symbols (XAU/USD -> XAUUSD per ADR §1100).
   // Фавікон лишається mark-v3.svg (ADR-0066), wordmark + TF з title видалено
   // для PWA standalone та узагалі економії місця у tab strip.
-  // Fallback chain: sym+price → sym → "AI · ONE" (boot state).
+  // Fallback chain: sym+price → sym → "v3" (boot state; бренд «v3» — ADR-0066 rev 6).
   $effect(() => {
     const sym = hudSymbol.replace(/\//g, "");
     const price = lastPrice;
@@ -738,7 +741,7 @@
     } else if (sym) {
       document.title = sym;
     } else {
-      document.title = "AI · ONE";
+      document.title = "v3";
     }
   });
 

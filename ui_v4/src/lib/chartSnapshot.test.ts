@@ -5,11 +5,13 @@ import {
   deliverSnapshot,
   loadSnapshotWide,
   saveSnapshotWide,
+  snapshotChartLink,
   snapshotFileName,
   snapshotFrame,
   snapshotHeaderText,
   snapshotSupersample,
   snapshotResultLabel,
+  snapshotShareText,
   snapshotUsesPreview,
   SNAPSHOT_BUILD_TIMEOUT_MS,
   withSnapshotDeadline,
@@ -39,6 +41,24 @@ describe('snapshotHeaderText', () => {
 describe('snapshotFileName', () => {
   it('лише латиниця, цифри, _ і - (без «/» символу)', () => {
     expect(snapshotFileName(META)).toBe('v3_XAUUSD_H1_20261010-1430UTC.png');
+  });
+});
+
+describe('snapshotChartLink / snapshotShareText', () => {
+  it('посилання на живий графік того самого символу й TF, «/» у символі читабельний', () => {
+    expect(snapshotChartLink('https://aione-smc.com', 'XAU/USD', 'H1')).toBe(
+      'https://aione-smc.com/?symbol=XAU/USD&tf=H1',
+    );
+  });
+
+  it('інші спецсимволи кодуються — посилання не ламається', () => {
+    expect(snapshotChartLink('https://x.test', 'S&P 500', 'M15')).toBe('https://x.test/?symbol=S%26P%20500&tf=M15');
+  });
+
+  it('підпис: «символ · TF на v3 → посилання»', () => {
+    expect(snapshotShareText(META, 'https://aione-smc.com')).toBe(
+      'XAU/USD · H1 на v3 → https://aione-smc.com/?symbol=XAU/USD&tf=H1',
+    );
   });
 });
 
@@ -178,6 +198,16 @@ describe('deliverSnapshot', () => {
     vi.stubGlobal('navigator', { share: vi.fn().mockRejectedValue(abort) });
     const result = await deliverSnapshot(new Blob(['png']), 'v3.png', ['share']);
     expect(result).toEqual({ done: [], failed: [], cancelled: true });
+  });
+
+  it('«Поділитися» несе підпис з посиланням; без підпису — лише файл', async () => {
+    const share = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { share });
+    await deliverSnapshot(new Blob(['png']), 'v3.png', ['share'], 'XAU/USD · H1 на v3 → https://x.test/?symbol=XAU/USD&tf=H1');
+    expect(share.mock.calls[0][0].text).toBe('XAU/USD · H1 на v3 → https://x.test/?symbol=XAU/USD&tf=H1');
+    expect(share.mock.calls[0][0].files[0].name).toBe('v3.png');
+    await deliverSnapshot(new Blob(['png']), 'v3.png', ['share']);
+    expect('text' in share.mock.calls[1][0]).toBe(false);
   });
 
   it('збій буфера не скасовує файл, і причина лишається в результаті', async () => {

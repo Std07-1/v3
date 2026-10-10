@@ -15,6 +15,13 @@ export interface SnapshotMeta {
   priceDigits: number | null;
 }
 
+/** Готовий знімок: PNG, ім'я файла і підпис для «Поділитися» (з посиланням на живий графік). */
+export interface SnapshotFile {
+  png: Blob;
+  fileName: string;
+  shareText: string;
+}
+
 /** Спосіб віддати знімок: системне меню «Поділитися» (телефон), буфер обміну, файл. */
 export type SnapshotDelivery = 'share' | 'clipboard' | 'download';
 
@@ -129,6 +136,19 @@ export function snapshotFileName(meta: SnapshotMeta): string {
   const symbol = meta.symbol.replace(/[^A-Za-z0-9]/g, '');
   const tf = meta.tf.replace(/[^A-Za-z0-9]/g, '');
   return `v3_${symbol}_${tf}_${_utcParts(meta.utcMs).compact}UTC.png`;
+}
+
+/** Посилання на живий графік того самого символу й TF (рішення власника 10.10, крок «А» ADR-0109): відкриває графік
+ *  зараз, а не мить знімка. `/` у символі лишається читабельним — він дозволений у query, і графік приймає
+ *  `?symbol=XAU/USD&tf=H1` (App.loadLastPair). */
+export function snapshotChartLink(origin: string, symbol: string, tf: string): string {
+  const q = (value: string): string => encodeURIComponent(value).replace(/%2F/gi, '/');
+  return `${origin}/?symbol=${q(symbol)}&tf=${q(tf)}`;
+}
+
+/** Підпис до знімка в «Поділитися»: «XAU/USD · H1 на v3 → https://…/?symbol=XAU/USD&tf=H1». */
+export function snapshotShareText(meta: Pick<SnapshotMeta, 'symbol' | 'tf'>, origin: string): string {
+  return `${meta.symbol} · ${meta.tf} на v3 → ${snapshotChartLink(origin, meta.symbol, meta.tf)}`;
 }
 
 /** Спосіб(и) доставки: телефон із системним «Поділитися» — меню; ПК — у буфер і файлом; інакше — файл. */
@@ -262,13 +282,20 @@ export function snapshotResultLabel(result: DeliveryResult): string {
   return 'Не вдалося віддати знімок';
 }
 
-/** Віддає знімок обраними способами по черзі; збій одного способу не скасовує наступний. */
-export async function deliverSnapshot(png: Blob, fileName: string, ways: SnapshotDelivery[]): Promise<DeliveryResult> {
+/** Віддає знімок обраними способами по черзі; збій одного способу не скасовує наступний. `shareText` — підпис до
+ *  файла в меню «Поділитися» (месенджер ставить його під картинку). */
+export async function deliverSnapshot(
+  png: Blob,
+  fileName: string,
+  ways: SnapshotDelivery[],
+  shareText?: string,
+): Promise<DeliveryResult> {
   const result: DeliveryResult = { done: [], failed: [], cancelled: false };
   for (const via of ways) {
     try {
       if (via === 'share') {
-        await navigator.share({ files: [new File([png], fileName, { type: 'image/png' })] });
+        const files = [new File([png], fileName, { type: 'image/png' })];
+        await navigator.share(shareText ? { files, text: shareText } : { files });
       } else if (via === 'clipboard') {
         await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
       } else {

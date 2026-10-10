@@ -57,7 +57,7 @@
         variant="mark"
         size={20}
         clickable
-        title="AI · ONE v3 — about, credits, diagnostics"
+        title="v3 — about, credits, diagnostics"
         {onclick}
     />
 </div>
