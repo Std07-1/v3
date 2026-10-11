@@ -54,10 +54,8 @@
 {#if renderSplash}
     <div class="splash" role="status" aria-live="polite" aria-busy="true">
         <div class="splash-content">
-            <!-- ADR-0066 PATCH 03 slot 2: V3 mark-v4 (gold→teal gradient).
-                 Stacked above lockup для full brand identity на cold-load. -->
-            <Brand variant="mark" size={72} />
-            <Brand variant="lockup" size={32} />
+            <!-- ADR-0066 rev 6: lockup = знак V3 (mark-v4) + tagline — той самий блок, що в шапці «Про». -->
+            <Brand variant="lockup" size={72} />
             <div class="spinner" aria-hidden="true">
                 <span class="spinner-dot"></span>
                 <span class="spinner-dot"></span>
