@@ -114,7 +114,7 @@
         >
             <header class="modal-header">
                 <div id="info-modal-title">
-                    <Brand variant="lockup" size={40} />
+                    <Brand variant="lockup" size={40} align="start" />
                 </div>
                 <button
                     class="close-btn"

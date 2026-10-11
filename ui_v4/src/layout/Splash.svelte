@@ -160,7 +160,8 @@
     }
 
     .status-text {
-        margin: 0;
+        /* Та сама оптична компенсація верхнього міжрядкового поля, що й у tagline (Brand.svelte): рівний ритм рядків. */
+        margin: -0.2em 0 0;
         font-family: var(--font-mono);
         font-size: var(--t3-size);
         color: var(--text-3);
