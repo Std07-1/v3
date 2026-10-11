@@ -144,6 +144,7 @@ from runtime.agent_bridge.config import (  # noqa: E402
     resolve_agent_bridge_config,
 )
 from runtime.visitors.journal import (  # noqa: E402
+    SOURCE_QUERY_PARAM,
     VISITOR_COOKIE,
     open_journal,
     visitor_cookie_attrs,
@@ -1901,7 +1902,9 @@ async def ws_handler(request: web.Request) -> web.StreamResponse:
     # ADR-0105 S1: ключ відвідувача — видаємо або продовжуємо cookie у відповіді рукостискання
     journal = app.get(APP_VISITORS_JOURNAL)
     visit = (
-        journal.start(request.cookies, request.headers, int(time.time() * 1000))
+        journal.start(
+            request.cookies, request.headers, int(time.time() * 1000), source=request.query.get(SOURCE_QUERY_PARAM)
+        )
         if journal is not None
         else None
     )

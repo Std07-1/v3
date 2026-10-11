@@ -15,6 +15,7 @@ from runtime.visitors.journal import (
     classify_device,
     is_bot_user_agent,
     normalize_country,
+    normalize_source,
     open_journal,
     visitor_cookie_attrs,
     visitors_policy,
@@ -84,6 +85,23 @@ def test_start_reuses_valid_cookie_and_issues_new_otherwise(tmp_path):
         assert fresh.vid_issued is True
         assert fresh.vid != VID and len(fresh.vid) == 32
         assert fresh.bot_ua is True  # без User-Agent
+
+
+@pytest.mark.parametrize("raw, expected", [("snap", "snap"), ("SNAP", None), ("<script>", None), ("", None), (None, None)])
+def test_normalize_source_keeps_only_whitelisted_labels(raw, expected):
+    assert normalize_source(raw) == expected
+
+
+def test_start_records_snapshot_link_source_and_drops_foreign_text(tmp_path):
+    """ADR-0105 rev 11.10: перехід за посиланням зі знімка — мітка в записі; довільний `src` у журнал не йде."""
+    journal = VisitorsJournal(str(tmp_path), 20)
+    via_link = journal.start({}, {"X-Real-IP": "203.0.113.5"}, START_MS, source="snap")
+    assert via_link.source == "snap"
+    assert journal.start({}, {}, START_MS, source="https://evil.example/?q=1").source is None
+    assert journal.start({}, {}, START_MS).source is None
+    journal.finish(via_link, "c1", START_MS + 60_000, 1000)
+    record = json.loads((tmp_path / "sessions-202609.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert record["source"] == "snap"
 
 
 def test_home_networks_match_prefixes_and_exact_addresses_and_reload(tmp_path):
@@ -160,6 +178,7 @@ def test_finish_appends_monthly_jsonl_without_ip(tmp_path):
         "bot_ua": False,
         "internal": False,
         "home_net": False,
+        "source": None,
         "messages": 1,
         "views": ["XAU/USD:M15"],
         "views_dropped": 0,

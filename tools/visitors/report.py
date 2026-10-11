@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from core.config_loader import load_system_config
-from runtime.visitors.journal import visitors_policy
+from runtime.visitors.journal import SOURCE_SNAPSHOT, visitors_policy
 from tools.visitors.aggregate import DAY_MS, Digest, Row, Visit, build_visitors, summarize, visitor_sessions
 
 _SESSION_FILE_RE = re.compile(r"^sessions-(\d{4})(\d{2})\.jsonl$")
@@ -126,6 +126,8 @@ def render(
         "🤖 Схоже на ботів: %d (назвались ботом %d, короткі без дій %d)"
         % (digest.bot_sessions_ua + digest.bot_sessions_short, digest.bot_sessions_ua, digest.bot_sessions_short)
     )
+    # ADR-0105 rev 11.10: чи переходять за посиланнями зі знімків — підстава для серверного прев'ю (ADR-0110)
+    lines.append("🔗 За посиланнями зі знімків: людей %d (нових %d)" % (digest.via_snapshot, digest.via_snapshot_new))
     first = ", перша — %s" % _local(digest.first_human_ms, tz).strftime("%d.%m.%Y") if digest.first_human_ms else ""
     lines.append(
         "📈 Людей за 7 днів: %d · за 30: %d · усього: %d%s" % (digest.humans_7d, digest.humans_30d, digest.humans_all, first)
@@ -203,7 +205,8 @@ def _visitor_block(number: int, row: Row, period_end_ms: int, tz: ZoneInfo) -> L
 def _visit_span(visit: Visit, tz: ZoneInfo) -> str:
     start, end = _local(visit.start_ms, tz), _local(visit.end_ms, tz)
     finish = end.strftime("%H:%M") if end.date() == start.date() else end.strftime("%d.%m %H:%M")
-    return "%s–%s · %s" % (start.strftime("%d.%m %H:%M"), finish, _duration(visit.active_s))
+    via = " · 🔗 зі знімка" if visit.source == SOURCE_SNAPSHOT else ""
+    return "%s–%s · %s%s" % (start.strftime("%d.%m %H:%M"), finish, _duration(visit.active_s), via)
 
 
 def _views_by_symbol(visits: Sequence[Visit]) -> str:

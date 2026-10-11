@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from runtime.visitors.journal import SOURCE_SNAPSHOT
+
 DAY_MS = 86_400_000
 
 
@@ -20,6 +22,7 @@ class Visit:
     end_ms: int
     active_s: float  # об'єднання інтервалів сесій: паралельні вкладки час не подвоюють
     views: Tuple[str, ...]
+    source: Optional[str] = None  # мітка джерела першої сесії з міткою (ADR-0105 rev 11.10), None — напряму
 
 
 @dataclass
@@ -57,6 +60,8 @@ class Digest:
     humans_30d: int
     humans_all: int
     first_human_ms: Optional[int]
+    via_snapshot: int = 0  # людей за період, що прийшли хоч раз за посиланням зі знімка (ADR-0109)
+    via_snapshot_new: int = 0  # з них нових
 
 
 def visitor_sessions(records: Sequence[Mapping[str, Any]]) -> List[Mapping[str, Any]]:
@@ -124,6 +129,7 @@ def summarize(
         if start_ms <= r["start_ms"] < end_ms and not visitors[r["vid"]].human and not is_own(visitors[r["vid"]], labels)
     ]
     humans = [v for v in visitors.values() if v.human and not is_own(v, labels)]
+    via_snapshot = [row for row in rows if any(v.source == SOURCE_SNAPSHOT for v in row.visits)]
     return Digest(
         period_start_ms=start_ms,
         period_end_ms=end_ms,
@@ -137,6 +143,8 @@ def summarize(
         humans_30d=_active_since(humans, end_ms - 30 * DAY_MS, end_ms),
         humans_all=len(humans),
         first_human_ms=min((v.first_ms for v in humans), default=None),
+        via_snapshot=len(via_snapshot),
+        via_snapshot_new=sum(1 for row in via_snapshot if row.visitor.first_ms >= start_ms),
     )
 
 
@@ -192,4 +200,5 @@ def _visit_of(number: int, cluster: Sequence[Mapping[str, Any]]) -> Visit:
         end_ms=max(s["end_ms"] for s in cluster),
         active_s=active_ms / 1000.0,
         views=tuple(views),
+        source=next((s["source"] for s in cluster if s.get("source")), None),
     )

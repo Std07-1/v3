@@ -5,6 +5,7 @@ import {
   deliverSnapshot,
   loadSnapshotWide,
   saveSnapshotWide,
+  landingSource,
   snapshotChartLink,
   snapshotFileName,
   snapshotFrame,
@@ -15,6 +16,8 @@ import {
   snapshotUsesPreview,
   SNAPSHOT_BUILD_TIMEOUT_MS,
   withSnapshotDeadline,
+  withVisitSource,
+  withoutSourceParam,
   type SnapshotMeta,
 } from './chartSnapshot';
 
@@ -45,20 +48,52 @@ describe('snapshotFileName', () => {
 });
 
 describe('snapshotChartLink / snapshotShareText', () => {
-  it('посилання на живий графік того самого символу й TF, «/» у символі читабельний', () => {
+  it('посилання на живий графік того самого символу й TF, «/» у символі читабельний, з міткою джерела', () => {
     expect(snapshotChartLink('https://aione-smc.com', 'XAU/USD', 'H1')).toBe(
-      'https://aione-smc.com/?symbol=XAU/USD&tf=H1',
+      'https://aione-smc.com/?symbol=XAU/USD&tf=H1&src=snap',
     );
   });
 
   it('інші спецсимволи кодуються — посилання не ламається', () => {
-    expect(snapshotChartLink('https://x.test', 'S&P 500', 'M15')).toBe('https://x.test/?symbol=S%26P%20500&tf=M15');
+    expect(snapshotChartLink('https://x.test', 'S&P 500', 'M15')).toBe(
+      'https://x.test/?symbol=S%26P%20500&tf=M15&src=snap',
+    );
   });
 
   it('підпис: «символ · TF на v3 → посилання»', () => {
     expect(snapshotShareText(META, 'https://aione-smc.com')).toBe(
-      'XAU/USD · H1 на v3 → https://aione-smc.com/?symbol=XAU/USD&tf=H1',
+      'XAU/USD · H1 на v3 → https://aione-smc.com/?symbol=XAU/USD&tf=H1&src=snap',
     );
+  });
+});
+
+describe('мітка джерела візиту (ADR-0105 rev)', () => {
+  it('з адреси — лише відома мітка', () => {
+    expect(landingSource('?symbol=XAU/USD&tf=H1&src=snap')).toBe('snap');
+    expect(landingSource('?symbol=XAU/USD&tf=H1')).toBeNull();
+    expect(landingSource('?src=evil')).toBeNull();
+    expect(landingSource('')).toBeNull();
+  });
+
+  it('адреса без мітки зберігає решту параметрів і читабельний «/»', () => {
+    expect(withoutSourceParam('https://aione-smc.com/?symbol=XAU/USD&tf=H1&src=snap')).toBe(
+      'https://aione-smc.com/?symbol=XAU/USD&tf=H1',
+    );
+    expect(withoutSourceParam('https://aione-smc.com/?symbol=XAU%2FUSD&tf=H1&src=snap')).toBe(
+      'https://aione-smc.com/?symbol=XAU/USD&tf=H1',
+    );
+    expect(withoutSourceParam('https://aione-smc.com/?src=snap')).toBe('https://aione-smc.com/');
+  });
+
+  it('WS-адреса з міткою, без мітки — без змін', () => {
+    expect(withVisitSource('wss://aione-smc.com/ws', 'snap')).toBe('wss://aione-smc.com/ws?src=snap');
+    expect(withVisitSource('ws://x.test/ws?a=1', 'snap')).toBe('ws://x.test/ws?a=1&src=snap');
+    expect(withVisitSource('wss://aione-smc.com/ws', null)).toBe('wss://aione-smc.com/ws');
+  });
+
+  it('посилання зі знімка дає саме ту мітку, яку читає сайт', () => {
+    const link = new URL(snapshotChartLink('https://aione-smc.com', 'XAU/USD', 'H1'));
+    expect(landingSource(link.search)).toBe('snap');
   });
 });
 

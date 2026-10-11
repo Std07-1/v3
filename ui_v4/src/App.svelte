@@ -51,6 +51,7 @@
     cssVar,
     deliverSnapshot,
     isCoarsePointer,
+    landingSource,
     loadSnapshotWide,
     saveSnapshotWide,
     snapshotFileName,
@@ -59,6 +60,8 @@
     snapshotShareText,
     snapshotUsesPreview,
     withSnapshotDeadline,
+    withVisitSource,
+    withoutSourceParam,
     type DeliveryResult,
     type SnapshotDelivery,
     type SnapshotFile,
@@ -94,6 +97,17 @@
     (import.meta.env.DEV
       ? "ws://localhost:8000/ws"
       : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`);
+  // ADR-0105 rev 11.10: прийшли за посиланням зі знімка (`&src=snap`) — мітка йде в журнал відвідувачів з кожним
+  // підключенням цієї сторінки, а з адресного рядка зникає (закладка / повторне відкриття — не перехід зі знімка).
+  const VISIT_SOURCE = landingSource(window.location.search);
+  if (VISIT_SOURCE) {
+    try {
+      history.replaceState(history.state, "", withoutSourceParam(window.location.href));
+    } catch (err) {
+      console.warn("[visit] SOURCE_PARAM_STRIP_FAILED", err);
+    }
+  }
+  const WS_CONNECT_URL = withVisitSource(WS_URL, VISIT_SOURCE);
 
   let ws: WSConnection | null = null;
   let actions: ReturnType<typeof createActions> | null = null;
@@ -762,7 +776,7 @@
     // Note: resetFrameRouter + _pairRestored reset happen in _onWsOpen callback
     // Re-probe HTTP шар при ручному reconnect
     probeNow();
-    ws = new WSConnection(WS_URL, handleWSFrame, _onWsOpen);
+    ws = new WSConnection(WS_CONNECT_URL, handleWSFrame, _onWsOpen);
     ws.connect();
     actions = createActions(ws);
   }
@@ -804,7 +818,7 @@
     diagStore.setNetOffline(!navigator.onLine);
 
     // 3. WS connect (onOpen resets frameRouter + pair restore on every reconnect)
-    ws = new WSConnection(WS_URL, handleWSFrame, _onWsOpen);
+    ws = new WSConnection(WS_CONNECT_URL, handleWSFrame, _onWsOpen);
     ws.connect();
     actions = createActions(ws);
 

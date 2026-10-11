@@ -138,12 +138,40 @@ export function snapshotFileName(meta: SnapshotMeta): string {
   return `v3_${symbol}_${tf}_${_utcParts(meta.utcMs).compact}UTC.png`;
 }
 
+/** Мітка джерела в посиланні зі знімка (ADR-0105 rev 11.10): сайт передає її в журнал відвідувачів через `/ws?src=`,
+ *  ранковий звіт рахує людей, що прийшли за такими посиланнями. Те саме значення — у білому списку сервера
+ *  (`runtime/visitors/journal.py:SOURCE_SNAPSHOT`). */
+export const SNAPSHOT_LINK_SOURCE = 'snap';
+const SOURCE_PARAM = 'src';
+
 /** Посилання на живий графік того самого символу й TF (рішення власника 10.10, крок «А» ADR-0109): відкриває графік
  *  зараз, а не мить знімка. `/` у символі лишається читабельним — він дозволений у query, і графік приймає
  *  `?symbol=XAU/USD&tf=H1` (App.loadLastPair). */
 export function snapshotChartLink(origin: string, symbol: string, tf: string): string {
   const q = (value: string): string => encodeURIComponent(value).replace(/%2F/gi, '/');
-  return `${origin}/?symbol=${q(symbol)}&tf=${q(tf)}`;
+  return `${origin}/?symbol=${q(symbol)}&tf=${q(tf)}&${SOURCE_PARAM}=${SNAPSHOT_LINK_SOURCE}`;
+}
+
+/** Мітка джерела з адреси сторінки (`location.search`): лише відома (`snap`), інакше null. */
+export function landingSource(search: string): string | null {
+  return new URLSearchParams(search).get(SOURCE_PARAM) === SNAPSHOT_LINK_SOURCE ? SNAPSHOT_LINK_SOURCE : null;
+}
+
+/** Адреса сторінки без мітки джерела — щоб закладка чи повторне відкриття не рахувались переходом зі знімка. `/` у
+ *  символі лишається читабельним, як у самому посиланні (URLSearchParams перекодував би його в %2F). */
+export function withoutSourceParam(href: string): string {
+  const url = new URL(href);
+  const params = new URLSearchParams(url.search);
+  params.delete(SOURCE_PARAM);
+  const query = params.toString().replace(/%2F/gi, '/');
+  url.search = query ? `?${query}` : '';
+  return url.toString();
+}
+
+/** Адреса WS з міткою джерела візиту (null — без змін). */
+export function withVisitSource(wsUrl: string, source: string | null): string {
+  if (!source) return wsUrl;
+  return `${wsUrl}${wsUrl.includes('?') ? '&' : '?'}${SOURCE_PARAM}=${encodeURIComponent(source)}`;
 }
 
 /** Підпис до знімка в «Поділитися»: «XAU/USD · H1 на v3 → https://…/?symbol=XAU/USD&tf=H1». */

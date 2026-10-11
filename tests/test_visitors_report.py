@@ -156,6 +156,31 @@ def test_render_shows_local_times_statuses_and_bot_line():
     assert "⚠️ Пропущено зіпсованих рядків журналу: 2" in text
 
 
+def test_snapshot_link_visits_are_counted_and_marked():
+    """ADR-0105 rev 11.10: люди, що прийшли за посиланням зі знімка, — рядок «🔗» і позначка біля візиту."""
+    via_new, via_old, direct = "5a" * 16, "6b" * 16, "7c" * 16
+    records = [
+        dict(session(via_new, T0 + HOUR, 5), source="snap"),
+        dict(session(via_new, T0 + HOUR + 6 * MIN, 4)),  # перепідключення того самого візиту — мітка візиту лишається
+        session(via_old, T0 - 5 * DAY, 10),
+        dict(session(via_old, T0 + 2 * HOUR, 8), source="snap"),
+        session(direct, T0 + 3 * HOUR, 7),
+    ]
+    visitors = build_visitors(records, 30, 30)
+    assert [v.source for v in visitors[via_new].visits] == ["snap"]
+    digest = summarize(visitors, records, (T0, T0 + DAY), {})
+    assert (digest.via_snapshot, digest.via_snapshot_new) == (2, 1)
+    text = render(digest, 24, KYIV, 0, None)
+    assert "🔗 За посиланнями зі знімків: людей 2 (нових 1)" in text
+    assert text.count("· 🔗 зі знімка") == 2
+
+
+def test_render_reports_zero_snapshot_link_visitors_explicitly():
+    records = [session("d" * 32, T0 + HOUR, 5)]
+    text = render(summarize(build_visitors(records, 30, 30), records, (T0, T0 + DAY), {}), 24, KYIV, 0, None)
+    assert "🔗 За посиланнями зі знімків: людей 0 (нових 0)" in text and "· 🔗 зі знімка" not in text
+
+
 def test_period_names_and_views_grouped_by_symbol():
     from tools.visitors.report import _period_name, _views_by_symbol
     from tools.visitors.aggregate import Visit

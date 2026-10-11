@@ -30,6 +30,12 @@ COUNTRY_HEADER = "CF-IPCountry"
 # (службові зонди, інструменти), а не відвідувач
 PROXY_HEADER = "X-Real-IP"
 HOME_NETWORKS_FILE = "home_networks.txt"
+# Джерело візиту (ADR-0105 rev 11.10): сайт передає мітку зі своєї адреси в `/ws?src=`. `snap` — перехід за посиланням
+# зі знімка графіка (ADR-0109: підпис «… на v3 → …&src=snap»). Інше значення відкидається — у журнал не потрапляє
+# довільний текст з URL.
+SOURCE_QUERY_PARAM = "src"
+SOURCE_SNAPSHOT = "snap"
+VISIT_SOURCES = frozenset({SOURCE_SNAPSHOT})
 _HOME_NETWORKS_ABSENT = "absent"  # стан «файлу нема» у HomeNetworks._last_error: INFO раз на перехід, а не мовчки
 
 _VISITOR_ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -123,6 +129,11 @@ def is_bot_user_agent(user_agent: str) -> bool:
     return not user_agent or bool(_BOT_UA_RE.search(user_agent))
 
 
+def normalize_source(raw: Optional[str]) -> Optional[str]:
+    """Мітка джерела з білого списку `VISIT_SOURCES` або None."""
+    return raw if raw in VISIT_SOURCES else None
+
+
 def normalize_country(raw: Optional[str]) -> Optional[str]:
     """ISO-код країни від Cloudflare; «XX»/«T1» (невідомо/Tor) та сміття → None."""
     if raw is None:
@@ -146,6 +157,7 @@ class Visit:
     home_net: bool  # з домашньої мережі власника (home_networks.txt) — свій пристрій
     start_ms: int
     max_views: int
+    source: Optional[str] = None  # звідки прийшов (VISIT_SOURCES), None — напряму / невідомо
     messages: int = 0
     views: List[str] = field(default_factory=list)
     views_dropped: int = 0
@@ -176,6 +188,7 @@ class Visit:
             "bot_ua": self.bot_ua,
             "internal": self.internal,
             "home_net": self.home_net,
+            "source": self.source,
             "messages": self.messages,
             "views": self.views,
             "views_dropped": self.views_dropped,
@@ -231,8 +244,11 @@ class VisitorsJournal:
         self._home = HomeNetworks(os.path.join(directory, HOME_NETWORKS_FILE))
         self.write_failures = 0
 
-    def start(self, cookies: Mapping[str, str], headers: Mapping[str, str], now_ms: int) -> Visit:
-        """Відкриває візит за cookie й заголовками WS-запиту; немає валідного ключа → новий."""
+    def start(
+        self, cookies: Mapping[str, str], headers: Mapping[str, str], now_ms: int, source: Optional[str] = None
+    ) -> Visit:
+        """Відкриває візит за cookie й заголовками WS-запиту; немає валідного ключа → новий. `source` — мітка `src`
+        з адреси WS-підключення (лише з білого списку)."""
         vid = cookies.get(VISITOR_COOKIE, "")
         issued = not _VISITOR_ID_RE.match(vid)
         if issued:
@@ -248,6 +264,7 @@ class VisitorsJournal:
             home_net=self._home.contains(headers.get(PROXY_HEADER, "").strip()),
             start_ms=now_ms,
             max_views=self._max_views,
+            source=normalize_source(source),
         )
 
     def finish(self, visit: Visit, client_id: str, end_ms: int, close_code: Optional[int]) -> bool:

@@ -464,3 +464,17 @@ async def test_ws_visitor_cookie_returns_same_key_and_journals_each_session(aioh
     assert (second["messages"], second["views"]) == (0, [])
     assert first["internal"] is True  # тестовий клієнт іде повз nginx (нема X-Real-IP)
     assert not any("ip" in key for key in first)
+
+
+async def test_ws_visit_source_from_query_is_whitelisted(aiohttp_client, tmp_path):
+    """ADR-0105 rev 11.10: `/ws?src=snap` (перехід за посиланням зі знімка) — мітка в журналі; чужий `src` — None."""
+    app = build_app(config_path="config.json", uds=_MockUDS())
+    app[APP_VISITORS_JOURNAL] = VisitorsJournal(str(tmp_path), 20)
+    client = await aiohttp_client(app)
+    for query in ("/ws?src=snap", "/ws?src=%3Cscript%3E", "/ws"):
+        ws = await client.ws_connect(query)
+        await _recv_frame(ws, "full")
+        await ws.close()
+    journal_path = tmp_path / ("sessions-%s.jsonl" % time.strftime("%Y%m", time.gmtime()))
+    records = await _wait_journal_lines(journal_path, 3)
+    assert [r["source"] for r in records] == ["snap", None, None]
