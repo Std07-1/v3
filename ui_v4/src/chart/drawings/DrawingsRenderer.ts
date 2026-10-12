@@ -14,8 +14,9 @@ import {
 } from '../interaction/geometry';
 import { getToolModule } from './tools';
 import { isCorruptBackupKey, loadDrawings, saveDrawings } from './drawingsStorage';
+import { cloneDrawing, completeDraft, firstClick, newDraft, previewsOnHover, tipIndex } from './drawingDraft';
 import { copyCanvas } from '../../lib/chartSnapshot';
-import type { RenderContext } from './tools';
+import type { RenderContext, ToolModule } from './tools';
 
 type HorzScaleItem = Time;
 
@@ -35,15 +36,6 @@ function parsePxToken(s: CSSStyleDeclaration, name: string, fallback: number): n
   if (!raw) return fallback;
   const n = parseFloat(raw);
   return Number.isFinite(n) && n > 0 ? n : fallback;
-}
-
-function cloneDrawing(d: Drawing): Drawing {
-  return {
-    id: d.id,
-    type: d.type,
-    points: d.points.map((p) => ({ t_ms: p.t_ms, price: p.price })),
-    meta: d.meta ? { ...d.meta } : undefined,
-  };
 }
 
 type ScreenAabb = { minX: number; minY: number; maxX: number; maxY: number };
@@ -94,9 +86,9 @@ export class DrawingsRenderer {
   private drawings: Drawing[] = [];
   private activeTool: ActiveTool = null;
   private draft: Drawing | null = null;
-  // ADR-0084 D2: measure ephemeral — 2-й клік «заморожує» вимір (draft лишається
-  // на екрані), наступний клік чистить і починає новий. Ніколи не комітиться.
-  private measureFrozen = false;
+  // ADR-0084 D2: ефемерна чернетка (measure) — 2-й клік «заморожує» результат (draft лишається на екрані),
+  // наступний клік чистить і починає новий. Ніколи не комітиться. Нова чернетка завжди скидає прапорець.
+  private draftFrozen = false;
 
   // v3 selection state
   private selectedId: string | null = null;
@@ -290,7 +282,7 @@ export class DrawingsRenderer {
   setTool(tool: ActiveTool): void {
     this.activeTool = tool;
     this.draft = null;
-    this.measureFrozen = false;
+    this.draftFrozen = false;
 
     // UX: курсор тільки коли tool активний або є hovered/drag
     this.updateCursor();
@@ -299,7 +291,7 @@ export class DrawingsRenderer {
 
   cancelDraft(): void {
     this.draft = null;
-    this.measureFrozen = false;
+    this.draftFrozen = false;
     this.scheduleRender();
   }
 
@@ -623,7 +615,7 @@ export class DrawingsRenderer {
     this.storageKey = nextKey;
     // Чернетка не переїжджає на інший символ (аудит 12.10: точка тренда на XAU 2650 → NAS100 → клік писав її в NAS100)
     this.draft = null;
-    this.measureFrozen = false;
+    this.draftFrozen = false;
     // Audit v2: undo-стек НЕ переживає символ — інакше Ctrl+Z матеріалізував
     // би фігури чужого символу в новий стор. Preview-снапшот теж чистимо.
     this.commandStack.clear();
@@ -801,18 +793,20 @@ export class DrawingsRenderer {
       }
 
       // Tool drawing (draft) -> блокуємо LWC
-      if (this.activeTool && this.activeTool !== 'eraser') {
+      const tool = this.activeDrawingTool();
+      if (tool) {
         if (!this.draft) {
-          // hline: create preview draft on hover so user sees where line will land.
-          // trend/rect: draft is created only on 1st click — but ми все ж compute
+          // Однокрокова (hline): чернетка під курсором ще до кліку — видно, де ляже фігура.
+          // Двоточкові: чернетка лише з 1-го кліку — але ми все ж compute
           // snap preview якщо magnet ON, щоб green dot indicator біг за курсором
           // показуючи де snap приземлиться при click. TradingView-mobile pattern.
-          if (this.activeTool === 'hline') {
+          if (previewsOnHover(tool)) {
             const rawP = this.fromY(y);
             const t = this.fromX(x);
             if (rawP !== null && t !== null) {
               const price = this.getSnappedPrice(x, y, rawP);
-              this.draft = { id: uuidv4(), type: 'hline', points: [{ t_ms: t, price }], meta: this.defaultMeta('hline') };
+              this.draft = newDraft(tool, uuidv4(), { t_ms: t, price }, this.defaultMeta(tool.id));
+              this.draftFrozen = false;
               e.preventDefault();
               e.stopPropagation();
               this.scheduleRender();
@@ -831,7 +825,7 @@ export class DrawingsRenderer {
         }
         // ADR-0084 D2: заморожений вимір не слідує за курсором; чарт дихає
         // (без preventDefault — pan/crosshair працюють до наступного кліку).
-        if (this.draft.type === 'measure' && this.measureFrozen) return;
+        if (this.draftFrozen) return;
         e.preventDefault();
         e.stopPropagation();
         this.updateDraft(x, y);
@@ -864,19 +858,19 @@ export class DrawingsRenderer {
       const y = e.clientY - rect.top;
 
       // Tool: click-click state machine (TradingView-style)
-      if (this.activeTool && this.activeTool !== 'eraser') {
+      if (this.activeDrawingTool()) {
         e.preventDefault();
         e.stopPropagation();
         // ADR-0084 D2: заморожений вимір → клік чистить його і починає новий.
-        if (this.draft?.type === 'measure' && this.measureFrozen) {
+        if (this.draft && this.draftFrozen) {
           this.draft = null;
-          this.measureFrozen = false;
+          this.draftFrozen = false;
           this.handleToolPointerDown(e.pointerId, x, y);
         } else if (this.draft) {
           // 2nd click: commit draft (measure → freeze, див. finishDraft)
           this.finishDraft();
         } else {
-          // 1st click: create draft (hline is instant, trend/rect start preview)
+          // 1st click: однокрокова фігура готова одразу, двоточкова починає чернетку (drawingDraft.firstClick)
           this.handleToolPointerDown(e.pointerId, x, y);
         }
         return;
@@ -1026,8 +1020,16 @@ export class DrawingsRenderer {
     this.interactionEl.addEventListener('contextmenu', this.onContextMenuCapture);
   }
 
-  // ---- tool create (v2) ----
+  // ---- tool create (ADR-0111 §3.3: за pointsRequired/ephemeral з реєстру — drawingDraft.ts) ----
+  /** Інструмент-фігура з реєстру, якщо вибрано його (не курсор і не гумка). */
+  private activeDrawingTool(): ToolModule | undefined {
+    const active = this.activeTool;
+    return active && active !== 'eraser' ? getToolModule(active) : undefined;
+  }
+
   private handleToolPointerDown(_pointerId: number, x: number, y: number): void {
+    const tool = this.activeDrawingTool();
+    if (!tool) return;
     const t_ms = this.fromX(x);
     const rawPrice = this.fromY(y);
 
@@ -1037,26 +1039,16 @@ export class DrawingsRenderer {
     }
 
     const price = this.getSnappedPrice(x, y, rawPrice);
-
-    if (this.activeTool === 'hline') {
-      // hline draft was created during hover (pointermove) and finishDraft() commits it.
-      // This path is reached only if user clicked without hovering (edge case).
-      const d: Drawing = { id: uuidv4(), type: 'hline', points: [{ t_ms, price }], meta: this.defaultMeta('hline') };
-      this.commandStack.push({ type: 'ADD', drawing: d });
+    // Однокрокова без прев'ю під курсором (клік без руху миші) — готова одразу; двоточкова — чернетка.
+    const step = firstClick(tool, uuidv4(), { t_ms, price }, this.defaultMeta(tool.id));
+    this.draftFrozen = false;
+    if (step.kind === 'commit') {
+      this.commandStack.push({ type: 'ADD', drawing: step.drawing });
       this.draft = null;
       return;
     }
-
-    if (this.activeTool === 'trend' || this.activeTool === 'rect' || this.activeTool === 'ray' || this.activeTool === 'measure') {
-      this.draft = {
-        id: uuidv4(),
-        type: this.activeTool,
-        points: [{ t_ms, price }, { t_ms, price }],
-        // measure — ephemeral, стилі не застосовуються (ADR-0084 D2)
-        meta: this.activeTool === 'measure' ? undefined : this.defaultMeta(this.activeTool),
-      };
-      this.scheduleRender();
-    }
+    this.draft = step.draft;
+    this.scheduleRender();
   }
 
   private updateDraft(x: number, y: number): void {
@@ -1065,8 +1057,8 @@ export class DrawingsRenderer {
     let t_ms = this.fromX(x);
     let rawPrice = this.fromY(y);
 
-    // For hline (1-point draft), fallback to points[0]; for trend/rect to points[1].
-    const lastIdx = this.draft.type === 'hline' ? 0 : 1;
+    // За курсором іде остання точка (однокрокова — єдина, двоточкова — друга).
+    const lastIdx = tipIndex(this.draft);
 
     // ADR-0008: при null — fallback до останніх відомих координат (уникає "freeze" на краях)
     if (t_ms === null) t_ms = this.draft.points[lastIdx].t_ms;
@@ -1085,23 +1077,16 @@ export class DrawingsRenderer {
   private finishDraft(): void {
     if (!this.draft) return;
 
-    // ADR-0084 D2: measure НЕ комітиться — 2-й клік заморожує результат на
+    const tool = getToolModule(this.draft.type);
+    const step = tool ? completeDraft(tool, this.draft) : { kind: 'discard' as const };
+    // ADR-0084 D2: ефемерна (measure) НЕ комітиться — 2-й клік заморожує результат на
     // екрані (draft лишається), наступний клік почне новий вимір.
-    if (this.draft.type === 'measure') {
-      this.measureFrozen = true;
+    if (step.kind === 'freeze') {
+      this.draftFrozen = true;
       this.scheduleRender();
       return;
     }
-
-    if (this.draft.points.length < 2) {
-      // 1-point drawing (hline): always valid — commit as-is.
-      this.commandStack.push({ type: 'ADD', drawing: cloneDrawing(this.draft) });
-    } else {
-      const a = this.draft.points[0];
-      const b = this.draft.points[1];
-      const isZero = a.t_ms === b.t_ms && a.price === b.price;
-      if (!isZero) this.commandStack.push({ type: 'ADD', drawing: cloneDrawing(this.draft) });
-    }
+    if (step.kind === 'commit') this.commandStack.push({ type: 'ADD', drawing: step.drawing });
 
     this.draft = null;
     // Tool stays active for continuous drawing (TradingView-style); Escape to exit
