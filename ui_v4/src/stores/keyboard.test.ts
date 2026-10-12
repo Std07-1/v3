@@ -11,12 +11,14 @@ import { mapKeyToAction, type KeyInput } from './keyboard.svelte';
 // Test helpers — build minimal KeyInput shape.
 function key(
     k: string,
-    opts: { ctrl?: boolean; shift?: boolean } = {},
+    opts: { ctrl?: boolean; shift?: boolean; meta?: boolean; alt?: boolean } = {},
 ): KeyInput {
     return {
         key: k,
         ctrlKey: opts.ctrl ?? false,
         shiftKey: opts.shift ?? false,
+        metaKey: opts.meta ?? false,
+        altKey: opts.alt ?? false,
     };
 }
 
@@ -120,6 +122,45 @@ describe('mapKeyToAction — focus-guard suppress', () => {
         expect(
             mapKeyToAction(key('D', { ctrl: true, shift: true }), focused),
         ).not.toBeNull();
+    });
+});
+
+describe('mapKeyToAction — пакет 12.10.2026 (Delete, Cmd, redo, модифікатори)', () => {
+    it('Delete і Backspace → delete_selected; у полі вводу — ні', () => {
+        expect(mapKeyToAction(key('Delete'), notFocused)).toEqual({ kind: 'delete_selected' });
+        expect(mapKeyToAction(key('Backspace'), notFocused)).toEqual({ kind: 'delete_selected' });
+        expect(mapKeyToAction(key('Backspace'), focused)).toBeNull();
+    });
+
+    it('Cmd на Mac = Ctrl: Cmd+Z undo, Cmd+Shift+Z і Cmd+Y redo', () => {
+        expect(mapKeyToAction(key('z', { meta: true }), notFocused)).toEqual({ kind: 'undo' });
+        expect(mapKeyToAction(key('Z', { meta: true, shift: true }), notFocused)).toEqual({ kind: 'redo' });
+        expect(mapKeyToAction(key('y', { meta: true }), notFocused)).toEqual({ kind: 'redo' });
+    });
+
+    it('Ctrl+Shift+Z → redo (раніше було undo)', () => {
+        expect(mapKeyToAction(key('Z', { ctrl: true, shift: true }), notFocused)).toEqual({ kind: 'redo' });
+    });
+
+    it('однолітерні з Ctrl/Cmd/Alt лишаються браузеру: Ctrl+R перезавантажує, а не вмикає прямокутник', () => {
+        for (const k of ['r', 'h', 'e', 'm', 'g', 't', '\\']) {
+            expect(mapKeyToAction(key(k, { ctrl: true }), notFocused)).toBeNull();
+            expect(mapKeyToAction(key(k, { meta: true }), notFocused)).toBeNull();
+            expect(mapKeyToAction(key(k, { alt: true }), notFocused)).toBeNull();
+        }
+        expect(mapKeyToAction(key('Delete', { ctrl: true }), notFocused)).toBeNull();
+    });
+
+    it('AltGr (Windows: Ctrl+Alt) — набір символу: `\\` на чеській розкладці вмикає тренд', () => {
+        const altGr: KeyInput = {
+            ...key('\\', { ctrl: true, alt: true }),
+            getModifierState: (k: string) => k === 'AltGraph',
+        };
+        expect(mapKeyToAction(altGr, notFocused)).toEqual({ kind: 'set_tool', tool: 'trend' });
+    });
+
+    it('Delete у полі вводу — не видаляє фігуру', () => {
+        expect(mapKeyToAction(key('Delete'), focused)).toBeNull();
     });
 });
 

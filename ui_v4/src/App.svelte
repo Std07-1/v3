@@ -439,6 +439,9 @@
         activeTool = null;
         chartPaneRef?.cancelDraft();
         break;
+      case "delete_selected":
+        chartPaneRef?.deleteSelectedDrawing();
+        break;
       case "toggle_magnet":
         toggleMagnet();
         break;

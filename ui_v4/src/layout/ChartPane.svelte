@@ -215,6 +215,17 @@
   }
   export function cancelDraft() {
     drawingsRenderer?.cancelDraft();
+    drawingsRenderer?.clearSelection(); // Esc знімає й виділення фігури (12.10.2026)
+  }
+  /** Delete/Backspace: видалити виділену фігуру (undoable). Відкрите меню стилю фігури — видаляє ЇЇ, як пункт
+   *  «Видалити» в меню (правий клік не виділяє фігуру — інакше зникла б виділена деінде, рецензія 12.10). */
+  export function deleteSelectedDrawing(): void {
+    if (ctxMenu) {
+      drawingsRenderer?.deleteById(ctxMenu.id);
+      ctxMenu = null;
+      return;
+    }
+    drawingsRenderer?.deleteSelected();
   }
 
   // P3.11/P3.12: Delegators for theme & candle style (expose to parent)

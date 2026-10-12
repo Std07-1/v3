@@ -17,7 +17,7 @@
 
 import type { IChartApi, ISeriesApi, Time, Logical } from 'lightweight-charts';
 import type { ArchiChartCondition, ArchiChartData } from '../../types';
-import { timeToFractionalIndex, medianStep } from '../drawings/timeMap';
+import { timeToFractionalIndex, medianStep, fractionalLogicalToX } from '../drawings/timeMap';
 
 /** LWC bar.time → сек (number | 'YYYY-MM-DD' | BusinessDay). */
 function timeToSec(t: Time): number {
@@ -327,21 +327,15 @@ export class ArchiLayerRenderer {
    *  null → якір поза даними/невідомий → caller падає на повну ширину.
    *
    *  ⚠ LWC-квірк (verified 2026-07-11): `logicalToCoordinate(fractional)`
-   *  повертає 0 — координата існує ЛИШЕ для цілого logical. Тому інтерполюємо
-   *  вручну між двома цілими викликами (sub-bar точність без дробового аргу). */
+   *  повертає 0 — координата існує ЛИШЕ для цілого logical. Інтерполяція між двома
+   *  цілими — спільна з малюваннями (`fractionalLogicalToX`, SSOT). */
   private anchorX(tMs: number | undefined): number | null {
     if (!tMs || this.barTimesSec.length === 0) return null;
     const step = medianStep(this.barTimesSec);
     const idx = timeToFractionalIndex(this.barTimesSec, tMs / 1000, step);
     if (idx === null) return null;
-    const ts = this.chartApi.timeScale();
-    const i0 = Math.floor(idx);
-    const c0 = ts.logicalToCoordinate(i0 as Logical);
-    if (c0 === null) return null;
-    const frac = idx - i0;
-    if (frac === 0) return c0;
-    const c1 = ts.logicalToCoordinate((i0 + 1) as Logical);
-    return c1 === null ? c0 : c0 + frac * (c1 - c0);
+    const timeScale = this.chartApi.timeScale();
+    return fractionalLogicalToX(idx, (index) => timeScale.logicalToCoordinate(index as Logical));
   }
 
   /** Старт лінії від свічки-якоря (клампнутий у пану). Якір невідомий → 0

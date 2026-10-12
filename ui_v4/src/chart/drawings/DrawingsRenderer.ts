@@ -1,12 +1,12 @@
 // src/chart/drawings/DrawingsRenderer.ts
 import { v4 as uuidv4 } from 'uuid';
-import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
+import type { IChartApi, ISeriesApi, Logical, Time } from 'lightweight-charts';
 import { MismatchDirection } from 'lightweight-charts';
 
 import type { Drawing, ActiveTool, WsAction, T_MS, UiWarning, DrawingContextRequest, DrawingType, DrawingColorRole } from '../../types';
 import { CommandStack, type CommandAction } from './CommandStack';
 import { buildRoleColorMap } from './colorRoles';
-import { timeToFractionalIndex, fractionalIndexToTime, medianStep } from './timeMap';
+import { timeToFractionalIndex, fractionalIndexToTime, medianStep, fractionalLogicalToX, shiftTimeByBars } from './timeMap';
 import {
   HIT_TOLERANCE_PX,
   HANDLE_RADIUS_PX,
@@ -297,6 +297,28 @@ export class DrawingsRenderer {
     this.commandStack.push({ type: 'DELETE', drawing: cloneDrawing(d) });
   }
 
+  /** Delete/Backspace (12.10.2026): видалити виділену фігуру — та сама undoable DELETE і той самий скид афордансів,
+   *  що й у ×. Живий прев'ю стилю спершу знімається, щоб undo повернув фігуру з її справжнім meta.
+   *  false — нічого не виділено. */
+  deleteSelected(): boolean {
+    const target = this.selectedId === null ? undefined : this.drawings.find((q) => q.id === this.selectedId);
+    if (!target) return false;
+    this.revertPreview();
+    this.commandStack.push({ type: 'DELETE', drawing: cloneDrawing(target) });
+    this.clearSelection();
+    return true;
+  }
+
+  /** Esc / після видалення: зняти виділення — ручки, × і підсвітка гаснуть. */
+  clearSelection(): void {
+    if (this.selectedId === null && this.hovered === null && this.deleteBtn === null) return;
+    this.selectedId = null;
+    this.hovered = null;
+    this.deleteBtn = null;
+    this.updateCursor();
+    this.scheduleRender();
+  }
+
   /** ADR-0080 (2b/3/4): live-preview meta-патчу на фігурі БЕЗ commit (hover у
    *  flyout — колір/товщина/стиль). patch=null → відкотити до оригіналу. Не чіпає
    *  commandStack/localStorage. Оригінал meta зберігається при першому дотику. */
@@ -455,20 +477,25 @@ export class DrawingsRenderer {
   // сусідніми барами + екстраполяція за краями). Раніше timeToCoordinate
   // повертав null для t, якого нема серед барів TF — якір з M15 (10:15)
   // ЗНИКАВ на H1 (бар лише 10:00); trend/rect «блимали/стрибали» між TF.
+  // Індекс → x лише через fractionalLogicalToX: LWC рахує координату тільки для
+  // цілого індексу, дробовий напряму давав x=0 (12.10.2026 — фігура з M15 на H1
+  // стискалась у вертикаль на лівому краї).
   // Кеш оновлюється у forceRender (раз/кадр); тут — лише читання (hot path:
   // рендер + hit-test на pointer events; стейлість ≤1 кадру прийнятна).
   private toX = (t_ms: number): number | null => {
     const idx = timeToFractionalIndex(this.barTimesSec, t_ms / 1000, this.barStepSec);
     if (idx === null) return null;
-    return this.chartApi.timeScale().logicalToCoordinate(idx as import('lightweight-charts').Logical);
+    const timeScale = this.chartApi.timeScale();
+    return fractionalLogicalToX(idx, (index) => timeScale.logicalToCoordinate(index as Logical));
   };
 
   private toY = (price: number): number | null => {
     return this.seriesApi.priceToCoordinate(price);
   };
 
-  // Інверсія — теж дробова: sub-bar точність якоря при малюванні/перетягуванні
-  // (замість квантування до часу бару, симетрично до toX).
+  // Інверсія: coordinateToLogical у LWC — ЦІЛИЙ індекс (Math.ceil), тож новий якір
+  // стає на бар поточного TF; частку бару зберігають лише якорі з іншого TF
+  // (перетягування тіла — shiftTimeByBars, не через x).
   private fromX(x: number): T_MS | null {
     const logical = this.chartApi.timeScale().coordinateToLogical(x);
     if (logical === null) return null;
@@ -1071,8 +1098,11 @@ export class DrawingsRenderer {
     const start = this.dragState.startObj;
 
     if (this.dragState.handleIdx !== null) {
-      // Handle drag: snap ON
-      const t_ms = this.fromX(x);
+      // Handle drag: snap ON. Поки курсор у тому самому барі, що на початку, час якоря не чіпаємо: якір з
+      // іншого TF (M15 13:45 на H1) від кліку з тремтінням на 1px тихо ставав би на бар цього TF (рецензія 12.10).
+      const timeScale = this.chartApi.timeScale();
+      const sameBar = timeScale.coordinateToLogical(x) === timeScale.coordinateToLogical(this.dragState.startX);
+      const t_ms = sameBar ? start.points[this.dragState.handleIdx].t_ms : this.fromX(x);
       const rawPrice = this.fromY(y);
       if (t_ms === null || rawPrice === null) {
         this.warnOnce('drag_handle_null', 'drawing_coord_null', `drag handle: cannot map x=${x},y=${y}`);
@@ -1088,29 +1118,37 @@ export class DrawingsRenderer {
       return;
     }
 
-    // Body drag: snap OFF (щоб не тремтіло)
-    const dx = x - this.dragState.startX;
+    // Body drag: snap OFF (щоб не тремтіло). Час — зсув на ціле число барів поточного TF
+    // (різниця logical під курсором), не через x якоря: якір з іншого TF зберігає частку бару,
+    // а хибний x не переписує час (S0 12.10.2026 — x=0 зсував обидва якорі до лівого краю).
+    const timeScale = this.chartApi.timeScale();
+    const fromLogical = timeScale.coordinateToLogical(this.dragState.startX);
+    const toLogical = timeScale.coordinateToLogical(x);
+    if (fromLogical === null || toLogical === null) {
+      this.warnOnce('drag_body_logical_null', 'drawing_coord_null', `drag body: cannot map x=${x}`);
+      return;
+    }
+    const bars = (toLogical as number) - (fromLogical as number);
     const dy = y - this.dragState.startY;
 
     const next = cloneDrawing(current);
     let anyNull = false;
 
     for (let i = 0; i < start.points.length; i++) {
-      const oldX = this.toX(start.points[i].t_ms);
       const oldY = this.toY(start.points[i].price);
 
-      if (oldX === null || oldY === null) {
+      if (oldY === null) {
         this.warnOnce('drag_body_old_null', 'drawing_coord_null', 'drag body: old point out of view');
         anyNull = true;
         break;
       }
 
-      const new_t_ms = this.fromX(oldX + dx);
+      const newTimeSec = shiftTimeByBars(this.barTimesSec, start.points[i].t_ms / 1000, bars, this.barStepSec);
       const new_price = this.fromY(oldY + dy);
 
       // ADR-0008: при null — зберегти поточну позицію точки (не рухати)
       next.points[i] = {
-        t_ms: new_t_ms ?? current.points[i].t_ms,
+        t_ms: newTimeSec === null ? current.points[i].t_ms : (Math.round(newTimeSec * 1000) as T_MS),
         price: new_price ?? current.points[i].price,
       };
     }

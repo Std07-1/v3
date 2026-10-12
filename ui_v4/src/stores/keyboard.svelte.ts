@@ -23,7 +23,8 @@ import type { ActiveTool } from '../types';
  *  Легко extensible (новий feature = новий case + handler branch). */
 export type KeyboardAction =
     | { kind: 'set_tool'; tool: ActiveTool }
-    | { kind: 'cancel_draft' } // Esc — також скидає activeTool
+    | { kind: 'cancel_draft' } // Esc — також скидає activeTool і виділення фігури
+    | { kind: 'delete_selected' } // Delete/Backspace — видалити виділену фігуру (undoable)
     | { kind: 'toggle_magnet' }
     | { kind: 'undo' }
     | { kind: 'redo' }
@@ -56,6 +57,11 @@ export interface KeyInput {
     readonly key: string;
     readonly ctrlKey: boolean;
     readonly shiftKey: boolean;
+    /** Cmd на Mac — те саме, що Ctrl на Windows/Linux (undo/redo). */
+    readonly metaKey?: boolean;
+    readonly altKey?: boolean;
+    /** Справжній KeyboardEvent: `getModifierState('AltGraph')` — AltGr, який Windows подає як Ctrl+Alt. */
+    getModifierState?(key: string): boolean;
 }
 
 /** Pure key→action mapping. Renderer-агностичний.
@@ -68,13 +74,17 @@ export function mapKeyToAction(
     isInputFocused: () => boolean = isTextInputFocused,
 ): KeyboardAction | null {
     // ── Combos з модифікаторами — НЕ guard-ed (Ctrl+Z working навіть у text input) ──
+    // Cmd (Mac) = Ctrl; Ctrl/Cmd+Shift+Z — redo, як у TradingView і більшості редакторів. AltGr (чеська й
+    // німецька розкладки: `\` = AltGr+Q) Windows подає як Ctrl+Alt — це набір символу, не комбінація.
+    const altGraph = e.getModifierState?.('AltGraph') === true;
+    const command = !altGraph && (e.ctrlKey || e.metaKey === true);
     if (e.ctrlKey && e.shiftKey && e.key === 'D') {
         return { kind: 'open_diagnostics' };
     }
-    if (e.ctrlKey && (e.key === 'z' || e.key === 'Z')) {
-        return { kind: 'undo' };
+    if (command && (e.key === 'z' || e.key === 'Z')) {
+        return e.shiftKey ? { kind: 'redo' } : { kind: 'undo' };
     }
-    if (e.ctrlKey && (e.key === 'y' || e.key === 'Y')) {
+    if (command && (e.key === 'y' || e.key === 'Y')) {
         return { kind: 'redo' };
     }
 
@@ -86,6 +96,12 @@ export function mapKeyToAction(
 
     // ── Single-letter hotkeys — focus-guarded ──
     if (isInputFocused()) return null;
+
+    // Однолітерні й Delete — лише без Ctrl/Cmd/Alt: Ctrl+R (перезавантаження), Ctrl+H (історія), Ctrl+E/M/G
+    // лишаються браузеру (раніше Ctrl+R вмикав прямокутник і глушив перезавантаження).
+    if (command || (e.altKey === true && !altGraph)) return null;
+
+    if (e.key === 'Delete' || e.key === 'Backspace') return { kind: 'delete_selected' };
 
     const k = e.key.toLowerCase();
     if (k === 'h') return { kind: 'set_tool', tool: 'hline' };
@@ -112,9 +128,9 @@ export function setupKeyboard(handler: KeyboardHandler): () => void {
         const action = mapKeyToAction(e);
         if (!action) return;
 
-        // preventDefault для Ctrl-combos (browser shortcuts hijack risk)
-        // і Escape (deselect/blur у деяких host environments).
-        if (e.ctrlKey || e.key === 'Escape') e.preventDefault();
+        // preventDefault для Ctrl/Cmd-combos (browser shortcuts hijack risk), Escape (deselect/blur у деяких
+        // host environments) і Delete/Backspace (без фокусу в полі — інакше старі браузери йдуть «назад»).
+        if (e.ctrlKey || e.metaKey || e.key === 'Escape' || action.kind === 'delete_selected') e.preventDefault();
 
         handler(action);
     }
