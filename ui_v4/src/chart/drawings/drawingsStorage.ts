@@ -6,6 +6,18 @@
 
 import type { Drawing } from '../../types';
 
+const CORRUPT_BACKUP_MARKER = '__corrupt_';
+
+/** Ключ копії битого рядка. Одне джерело з `isCorruptBackupKey`: копія підпадає під префікс legacy per-TF сторів
+ *  (`v4_drawings_{symbol}_`), і міграція ADR-0082 D4 без цієї перевірки злила б її й видалила (рецензія 12.10, D-1). */
+export function corruptBackupKey(key: string, nowMs: number): string {
+  return `${key}${CORRUPT_BACKUP_MARKER}${nowMs}`;
+}
+
+export function isCorruptBackupKey(key: string): boolean {
+  return key.includes(CORRUPT_BACKUP_MARKER);
+}
+
 export interface LoadedDrawings {
   drawings: Drawing[];
   /** null — прочитано чисто (або ключа нема); інакше причина для гучного попередження. */
@@ -25,7 +37,8 @@ export function saveDrawings(key: string, drawings: readonly Drawing[]): string 
 /** Читає фігури символу. Битий JSON або не масив — копія сирого рядка в `<key>__corrupt_<nowMs>` ДО того, як
  *  наступне збереження перетре основний ключ, і причина в `problem`; фігур тоді нема (як і раніше). Після вдалої
  *  копії основний ключ стає `[]` — інакше кожне перезавантаження плодило б нову копію того самого рядка; копію
- *  зберегти не вдалося — основний ключ не чіпаємо (нічого не губимо). */
+ *  зберегти не вдалося — основний ключ лишається як був, але перша ж нова фігура його перезапише (як і до 12.10;
+ *  тепер — з попередженням). */
 export function loadDrawings(key: string, nowMs: number): LoadedDrawings {
   let raw: string | null;
   try {
@@ -45,7 +58,7 @@ export function loadDrawings(key: string, nowMs: number): LoadedDrawings {
   }
   if (reason === null) return { drawings: parsed as Drawing[], problem: null };
 
-  const backupKey = `${key}__corrupt_${nowMs}`;
+  const backupKey = corruptBackupKey(key, nowMs);
   try {
     localStorage.setItem(backupKey, raw);
   } catch {

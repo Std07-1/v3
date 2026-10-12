@@ -13,7 +13,7 @@ import {
   distToPoint,
 } from '../interaction/geometry';
 import { getToolModule } from './tools';
-import { loadDrawings, saveDrawings } from './drawingsStorage';
+import { isCorruptBackupKey, loadDrawings, saveDrawings } from './drawingsStorage';
 import { copyCanvas } from '../../lib/chartSnapshot';
 import type { RenderContext } from './tools';
 
@@ -643,7 +643,7 @@ export class DrawingsRenderer {
     const legacyKeys: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && k.startsWith(legacyPrefix)) legacyKeys.push(k);
+      if (k && k.startsWith(legacyPrefix) && !isCorruptBackupKey(k)) legacyKeys.push(k); // копія битого — не legacy
     }
     if (legacyKeys.length === 0) return;
     try {

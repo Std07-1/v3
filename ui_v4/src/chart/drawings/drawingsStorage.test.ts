@@ -1,6 +1,6 @@
 // src/chart/drawings/drawingsStorage.test.ts — ADR-0111 §3.2 (I5): збереження малювань без тихих втрат.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loadDrawings, saveDrawings } from './drawingsStorage';
+import { corruptBackupKey, isCorruptBackupKey, loadDrawings, saveDrawings } from './drawingsStorage';
 import type { Drawing } from '../../types';
 
 const KEY = 'v4_drawings_XAU/USD';
@@ -70,6 +70,19 @@ describe('saveDrawings / loadDrawings', () => {
     store.set(KEY, '{"id":"x"}');
     expect(loadDrawings(KEY, 5).problem).toMatch(/not an array/);
     expect(store.get(`${KEY}__corrupt_5`)).toBe('{"id":"x"}');
+  });
+
+  it('копію битого впізнає міграція legacy per-TF — і не плутає з legacy-ключем (D-1)', () => {
+    const store = memoryStorage();
+    store.set(KEY, '{"id":"x"}');
+    loadDrawings(KEY, 9);
+    const backup = [...store.keys()].find((k) => k !== KEY);
+    expect(backup).toBe(corruptBackupKey(KEY, 9));
+    // копія підпадає під префікс legacy `v4_drawings_{symbol}_` — тому окремий предикат
+    expect(backup!.startsWith(`${KEY}_`)).toBe(true);
+    expect(isCorruptBackupKey(backup!)).toBe(true);
+    expect(isCorruptBackupKey(`${KEY}_900`)).toBe(false);
+    expect(isCorruptBackupKey(KEY)).toBe(false);
   });
 
   it('сховище недоступне (приватний режим) — без винятку, з причиною', () => {
