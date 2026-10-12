@@ -86,6 +86,7 @@
     type DrawingColorRole,
   } from "./chart/drawings/colorRoles";
   import type { DrawingPreset } from "./chart/drawings/drawingPresets";
+  import { STYLEABLE_TOOL_TYPES, TOOL_REGISTRY } from "./chart/drawings/tools";
   import type { DisplayMode } from "./chart/overlay/DisplayBudget";
 
   // --- WS URL: same-origin у prod, explicit у dev (Правило §11) ---
@@ -192,8 +193,7 @@
     lineWidth: number;
     lineStyle: DrawingLineStyle;
   }
-  // measure — ephemeral (ADR-0084 D2), стилів не має → не тут.
-  const STYLEABLE_TOOLS: DrawingType[] = ["hline", "trend", "rect", "ray"];
+  // Які інструменти мають стиль — з реєстру (ToolModule.styleable; measure — ephemeral, ADR-0084 D2).
   const LINE_STYLES: DrawingLineStyle[] = ["solid", "dashed", "dotted"];
 
   function loadToolDefaults(): Record<DrawingType, ToolStyle> {
@@ -202,12 +202,14 @@
       lineWidth: 1,
       lineStyle: "solid",
     });
-    const base = { hline: mk(), trend: mk(), rect: mk(), ray: mk(), measure: mk() };
+    const base = Object.fromEntries(
+      [...TOOL_REGISTRY.keys()].map((type) => [type, mk()]),
+    ) as Record<DrawingType, ToolStyle>;
     try {
       const parsed = JSON.parse(
         localStorage.getItem("v4_drawing_defaults") ?? "{}",
       );
-      for (const k of STYLEABLE_TOOLS) {
+      for (const k of STYLEABLE_TOOL_TYPES) {
         const role = parsed?.[k]?.colorRole;
         if (DRAWING_COLOR_ROLES.some((r) => r.role === role))
           base[k].colorRole = role;

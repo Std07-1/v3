@@ -43,8 +43,9 @@ export const RayTool: ToolModule = {
     id: 'ray',
     pointsRequired: 2,
     label: 'Промінь',
-    icon: 'move-up-right',
+    icon: '<path d="M13 5H19V11"/><path d="M19 5L5 19"/>', // Lucide move-up-right
     hotkey: 'y',
+    styleable: true,
     // p2 лише задає напрямок — рендериться делікатніше за стартовий якір
     // (owner: «дві крапки на кінці» читались як шум; ієрархія лікує).
     secondaryHandles: [1],

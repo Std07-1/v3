@@ -14,9 +14,10 @@ import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './typ
 export const HLineTool: ToolModule = {
     id: 'hline',
     pointsRequired: 1,
-    label: 'Горизонтальна лінія',
-    icon: 'minus', // Lucide icon name (T3 wires it)
+    label: 'Горизонталь',
+    icon: '<path d="M3 12h18"/>',
     hotkey: 'h',
+    styleable: true,
 
     render(d: Drawing, rc: RenderContext): ScreenAabb | null {
         const y = rc.toY(d.points[0].price);

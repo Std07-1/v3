@@ -14,7 +14,7 @@
 // scratch buffers). FP10: НЕ викликати `getComputedStyle` тут — renderer
 // caches CSS-vars і передає numeric values через RenderContext.
 
-import type { Drawing } from '../../../types';
+import type { Drawing, DrawingType } from '../../../types';
 
 /** Контекст рендеру переданий tool-у з DrawingsRenderer.
  *  toX/toY повертають null коли точка поза visible range — tool MUST
@@ -66,18 +66,27 @@ export type HitTestResult =
 /** Контракт одного drawing tool. Stateless: всі state живуть у Drawing
  *  або у DrawingsRenderer; tool-instances singleton-и у TOOL_REGISTRY. */
 export interface ToolModule {
-    /** Discriminator у Drawing.type. Має збігатись з ключем у TOOL_REGISTRY. */
-    readonly id: 'hline' | 'trend' | 'rect' | 'ray' | 'measure';
+    /** Discriminator у Drawing.type і ключ у TOOL_REGISTRY (повноту реєстру тримає тип у tools/index.ts). */
+    readonly id: DrawingType;
 
-    /** Скільки точок очікує draft state machine.
-     *  1 = instant commit на 1-st click (e.g. hline)
-     *  2 = click-click pattern (e.g. trend, rect) */
+    /** Скільки точок ставить користувач (створення — drawingDraft.ts):
+     *  1 = фігура готова з першого кліку, до кліку видно під курсором (hline)
+     *  2 = клік-клік: перший ставить початок, другий завершує (trend, rect, ray, measure) */
     readonly pointsRequired: 1 | 2;
 
-    /** UI metadata для DrawingToolbar (Slice T3 використає). */
+    /** ADR-0111 §3.3: кнопка панелі «Малювання» — з цих полів (одне джерело підпису, клавіші й іконки). */
     readonly label: string;
-    readonly icon: string; // Lucide name або inline SVG ref (T3 resolved)
-    readonly hotkey: string; // single char або '\\' для trend
+    /** Внутрішня розмітка SVG 24×24 (stroke=currentColor; Lucide v0.460, MIT) — панель вставляє її в <svg>. */
+    readonly icon: string;
+    /** Гаряча клавіша: одна літера або '\\' (trend); у підказці панелі — великою. */
+    readonly hotkey: string;
+    /** Додаткові клавіші того самого інструмента (trend: 't' поруч із '\\'). */
+    readonly hotkeyAliases?: readonly string[];
+    /** Має стиль (колір/товщина/лінія): правий клік на іконці → flyout, дефолт нових фігур у App. */
+    readonly styleable: boolean;
+    /** ADR-0084 D2: фігура живе лише як чернетка — 2-й клік заморожує результат на екрані; не комітиться, не
+     *  зберігається, стилів не має (measure). */
+    readonly ephemeral?: boolean;
 
     /**
      * Render drawing у переданому контексті. MUST early-return null коли

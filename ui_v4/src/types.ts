@@ -282,7 +282,9 @@ export interface Drawing {
   };
 }
 
-export type ActiveTool = 'hline' | 'trend' | 'rect' | 'ray' | 'measure' | 'eraser' | null;
+/** Активний інструмент панелі: фігура з реєстру, гумка (не фігура) або курсор (null). Список фігур — лише в
+ *  `DrawingType` (ADR-0111 §3.3). */
+export type ActiveTool = DrawingType | 'eraser' | null;
 
 /** ADR-0078/0080: right-click на закомічену фігуру → запит на показ style-flyout
  *  (Видалити + палітра ролей з live-preview). Renderer віддає id, екранну позицію

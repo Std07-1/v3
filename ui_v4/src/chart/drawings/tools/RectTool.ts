@@ -19,8 +19,9 @@ export const RectTool: ToolModule = {
     id: 'rect',
     pointsRequired: 2,
     label: 'Прямокутник',
-    icon: 'square', // Lucide icon name (T3 wires it)
+    icon: '<rect x="3" y="3" width="18" height="18" rx="2"/>',
     hotkey: 'r',
+    styleable: true,
     // Audit v2 (confirmed): інтер'єр = тіло — hover/keep-alive/drag зсередини
     // (інакше делікатне × у центрі було недосяжне hover-ом).
     interiorIsBody: true,

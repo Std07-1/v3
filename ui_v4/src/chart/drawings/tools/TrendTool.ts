@@ -13,9 +13,11 @@ import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './typ
 export const TrendTool: ToolModule = {
     id: 'trend',
     pointsRequired: 2,
-    label: 'Трендова лінія',
-    icon: 'trending-up', // Lucide icon name (T3 wires it)
+    label: 'Трендова',
+    icon: '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
     hotkey: '\\',
+    hotkeyAliases: ['t'], // legacy-клавіша (до ADR-0074 §6) лишається
+    styleable: true,
 
     render(d: Drawing, rc: RenderContext): ScreenAabb | null {
         if (d.points.length < 2) return null;

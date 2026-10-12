@@ -18,6 +18,7 @@
 // Це підготовка до ADR-C text-annotations де contenteditable з'явиться.
 
 import type { ActiveTool } from '../types';
+import { toolForHotkey } from '../chart/drawings/tools';
 
 /** Discriminated union — кожна можлива keyboard-driven дія у app.
  *  Легко extensible (новий feature = новий case + handler branch). */
@@ -103,16 +104,10 @@ export function mapKeyToAction(
 
     if (e.key === 'Delete' || e.key === 'Backspace') return { kind: 'delete_selected' };
 
+    // Клавіші фігур — з реєстру (ToolModule.hotkey + hotkeyAliases, ADR-0111 §3.3): h, \ і t, y, r, m.
+    const tool = toolForHotkey(e.key);
+    if (tool) return { kind: 'set_tool', tool };
     const k = e.key.toLowerCase();
-    if (k === 'h') return { kind: 'set_tool', tool: 'hline' };
-    if (k === 't' || e.key === '\\') return { kind: 'set_tool', tool: 'trend' };
-    // ↑ Display у toolbar показує `\` (ADR-0074 §6 + TrendTool.hotkey),
-    //   binding підтримує BOTH `t` (legacy) + `\` (new) — soft transition
-    //   без user-confusion. Future: deprecate `t` після 1-2 sprint.
-    if (k === 'r') return { kind: 'set_tool', tool: 'rect' };
-    // ADR-0084: y = raY (промінь), m = measure (лінійка)
-    if (k === 'y') return { kind: 'set_tool', tool: 'ray' };
-    if (k === 'm') return { kind: 'set_tool', tool: 'measure' };
     if (k === 'e') return { kind: 'set_tool', tool: 'eraser' };
     if (k === 'g') return { kind: 'toggle_magnet' };
     return null;
