@@ -976,7 +976,8 @@ export class DrawingsRenderer {
         if (this.drawings.some((d) => d.id === startObj.id)) this.drawings = this.replaceById(cloneDrawing(startObj));
         this.dragState = null;
       }
-      if (this.draft) this.draft = null;
+      this.draft = null;
+      this.draftFrozen = false; // прапорець живе лише разом із чернеткою (рецензія кроку 3)
       this.updateCursor();
       this.scheduleRender();
     };
@@ -1078,7 +1079,13 @@ export class DrawingsRenderer {
     if (!this.draft) return;
 
     const tool = getToolModule(this.draft.type);
-    const step = tool ? completeDraft(tool, this.draft) : { kind: 'discard' as const };
+    if (!tool) {
+      // Недосяжне, поки реєстр повний за типом (satisfies Record<DrawingType, ToolModule>) — але не тихо (I5).
+      this.warnOnce('draft_unknown_type', 'drawing_state_inconsistent', `finishDraft: тип ${this.draft.type} не в реєстрі`);
+      this.draft = null;
+      return;
+    }
+    const step = completeDraft(tool, this.draft);
     // ADR-0084 D2: ефемерна (measure) НЕ комітиться — 2-й клік заморожує результат на
     // екрані (draft лишається), наступний клік почне новий вимір.
     if (step.kind === 'freeze') {
