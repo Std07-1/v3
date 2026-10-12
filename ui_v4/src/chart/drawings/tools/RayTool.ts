@@ -1,29 +1,42 @@
 // src/chart/drawings/tools/RayTool.ts
 // ADR-0084 D1: Ray (промінь) — сегмент від p1 крізь p2, продовжений у
-// нескінченність (RAY_EXTEND_PX) у напрямку p1→p2.
+// нескінченність у напрямку p1→p2.
 //
-// Domain: 2-point drawing (click-click як trend). Продовження на фіксовану
-// довжину в px-просторі — самодостатньо в render І hitTest (контракт
-// ToolModule без cssW у hitTest; canvas кліпає невидиме сам). AABB кліпнутий
-// до canvas — інакше центр AABB (delete-× ADR-0079) опинявся б за екраном.
+// Domain: 2-point drawing (click-click як trend). Продовження за p2 — рівно
+// настільки, щоб покрити потрібну область: видимий canvas у render і
+// deleteAnchor, околицю курсора в hitTest (контракт ToolModule без cssW у
+// hitTest; для курсора на canvas відповідь та сама, що для нескінченного
+// променя). Canvas кліпає невидиме сам. AABB кліпнутий до canvas — інакше
+// центр AABB (delete-× ADR-0079) опинявся б за екраном.
 
 import type { Drawing } from '../../../types';
 import { distToSegment } from '../../interaction/geometry';
 import { dashPattern } from '../lineStyles';
 import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './types';
 
-/** Довжина продовження за p2 (px). Більша за будь-який реальний viewport —
- *  промінь завжди «до краю»; однакова в render+hitTest = консистентна геометрія. */
-const RAY_EXTEND_PX = 10000;
+/** Запас за найдальшим кутом області (px): товщина, тінь підсвітки (blur 6) і
+ *  закруглений кінець dotted не мають обриватись біля краю. */
+const RAY_REACH_MARGIN_PX = 64;
 
-/** Далека точка променя: p2 + normalize(p1→p2) * RAY_EXTEND_PX.
+/** Довжина продовження за p2, з якою промінь гарантовано перетинає область
+ *  [minX..maxX]×[minY..maxY]: відстань від p2 до її найдальшого кута + запас.
+ *  Раніше — фіксовані 10 000 px: коли p2 далі за них від екрана (промінь з H4
+ *  на M5, сильний zoom-in), промінь не малювався і по ньому не влучали
+ *  (12.10.2026, ADR-0111 §3.2). */
+function reachToCover(x2: number, y2: number, minX: number, minY: number, maxX: number, maxY: number): number {
+    const farDx = Math.max(Math.abs(x2 - minX), Math.abs(x2 - maxX));
+    const farDy = Math.max(Math.abs(y2 - minY), Math.abs(y2 - maxY));
+    return Math.hypot(farDx, farDy) + RAY_REACH_MARGIN_PX;
+}
+
+/** Далека точка променя: p2 + normalize(p1→p2) * reach.
  *  Нульовий вектор (draft 1-го кліку) → сам p2. */
-function farPoint(x1: number, y1: number, x2: number, y2: number): { x: number; y: number } {
+function farPoint(x1: number, y1: number, x2: number, y2: number, reach: number): { x: number; y: number } {
     const dx = x2 - x1;
     const dy = y2 - y1;
     const len = Math.hypot(dx, dy);
     if (len === 0) return { x: x2, y: y2 };
-    return { x: x2 + (dx / len) * RAY_EXTEND_PX, y: y2 + (dy / len) * RAY_EXTEND_PX };
+    return { x: x2 + (dx / len) * reach, y: y2 + (dy / len) * reach };
 }
 
 export const RayTool: ToolModule = {
@@ -46,7 +59,7 @@ export const RayTool: ToolModule = {
         const x2 = toX(d.points[1].t_ms);
         const y2 = toY(d.points[1].price);
         if (x1 === null || y1 === null || x2 === null || y2 === null) return null;
-        const far = farPoint(x1, y1, x2, y2);
+        const far = farPoint(x1, y1, x2, y2, reachToCover(x2, y2, 0, 0, cssW, cssH));
         const dx = far.x - x1;
         const dy = far.y - y1;
         let tMin = 0;
@@ -72,8 +85,8 @@ export const RayTool: ToolModule = {
         const y2 = rc.toY(d.points[1].price);
         if (x1 === null || y1 === null || x2 === null || y2 === null) return null;
 
-        const far = farPoint(x1, y1, x2, y2);
         const { ctx, baseColor, accentColor, isDraft, isHovered, isSelected, cssW, cssH } = rc;
+        const far = farPoint(x1, y1, x2, y2, reachToCover(x2, y2, 0, 0, cssW, cssH));
         // ADR-0078 color-preserving highlight (як TrendTool): стан = glow+товщина.
         const highlight = !isDraft && (isHovered || isSelected);
         ctx.strokeStyle = isDraft ? accentColor : baseColor;
@@ -114,7 +127,12 @@ export const RayTool: ToolModule = {
         const y2 = toY(d.points[1].price);
         if (x1 === null || y1 === null || x2 === null || y2 === null) return { hit: false };
 
-        const far = farPoint(x1, y1, x2, y2);
+        // Покрити околицю курсора: його проєкція на промінь не далі за far, тож
+        // відстань до сегмента = відстань до нескінченного променя.
+        const reach = reachToCover(
+            x2, y2, cursorX - tolerance, cursorY - tolerance, cursorX + tolerance, cursorY + tolerance,
+        );
+        const far = farPoint(x1, y1, x2, y2, reach);
         // Сегмент p1→far: перед p1 промінь НЕ існує (напрямленість).
         const distance = distToSegment(cursorX, cursorY, x1, y1, far.x, far.y);
         if (distance > tolerance) return { hit: false };

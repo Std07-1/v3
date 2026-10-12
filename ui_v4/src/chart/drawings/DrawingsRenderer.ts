@@ -171,6 +171,9 @@ export class DrawingsRenderer {
   // лише на створення — існуючі фігури не чіпає.
   private toolDefaults: Partial<Record<DrawingType, DrawingMetaPatch>> = {};
 
+  // ADR-0111 §3.2: знаки ціни символу з конфігу сервера (ChartPane → setPriceDigits) для лінійки; null — конфігу нема.
+  private priceDigits: number | null = null;
+
   // ADR-0074 T2: hit-test geometry cached from CSS vars (--drawing-*).
   // Defaults match geometry.ts HIT_TOLERANCE_PX/HANDLE_RADIUS_PX constants
   // (fallback якщо tokens.css не loaded або CSS var missing).
@@ -384,6 +387,12 @@ export class DrawingsRenderer {
    *  SSOT localStorage). Впливає лише на створення — існуючі не перефарбовує. */
   setToolDefaults(defaults: Partial<Record<DrawingType, DrawingMetaPatch>>): void {
     this.toolDefaults = defaults;
+  }
+
+  /** ADR-0111 §3.2: знаки ціни символу (`price_display` з конфігу) → підпис лінійки (RenderContext.priceDigits). */
+  setPriceDigits(digits: number | null): void {
+    this.priceDigits = digits;
+    this.scheduleRender();
   }
 
   /** Резолв кольору фігури: роль (theme-aware token) → legacy hex → база теми. */
@@ -1333,6 +1342,7 @@ export class DrawingsRenderer {
         rectFill: this.themeRectFill,
         bullColor: this.roleColors.bull,
         bearColor: this.roleColors.bear,
+        priceDigits: this.priceDigits,
         isDraft,
         isHovered: this.hovered?.id === d.id,
         isSelected: this.selectedId === d.id,

@@ -88,4 +88,26 @@ describe('MeasureTool (ephemeral)', () => {
         MeasureTool.render(DOWN, makeRc(down));
         expect(down.fillStyle).toBe('#ED4554');
     });
+
+    // 12.10.2026 (ADR-0111 §3.2): toFixed(2) губив третій знак XAG/USD і USD/JPY.
+    describe('знаки Δціни — з конфігу сервера (RenderContext.priceDigits)', () => {
+        const labelOf = (d: Drawing, priceDigits: number | null): string => {
+            const ctx = makeMockCtx();
+            MeasureTool.render(d, { ...makeRc(ctx), priceDigits });
+            return (ctx.fillText as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+        };
+        const JPY: Drawing = { ...UP, points: [{ t_ms: 0, price: 158.267 }, { t_ms: H1_MS, price: 158.302 }] };
+        const XAG: Drawing = { ...UP, points: [{ t_ms: 0, price: 61.151 }, { t_ms: H1_MS, price: 61.186 }] };
+
+        it('3 знаки з конфігу → «+0.035» навіть для ціни ≥100; відсоток — 2 знаки', () => {
+            const label = labelOf(JPY, 3);
+            expect(label).toContain('+0.035 (');
+            expect(label).toContain('(+0.02%)');
+        });
+
+        it('без знаків — за величиною ціни, як раніше: ≥100 → 2, ≥10 → 3', () => {
+            expect(labelOf(UP, null)).toContain('+40.00 (');
+            expect(labelOf(XAG, null)).toContain('+0.035 (');
+        });
+    });
 });

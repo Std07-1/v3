@@ -8,6 +8,7 @@
 // selectable, не erasable, не в сторі.
 
 import type { Drawing } from '../../../types';
+import { displayPriceDigits } from '../../../lib/priceDigits';
 import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './types';
 
 /** Людський формат тривалості: 45м · 3г 20м · 2д 5г. */
@@ -72,8 +73,12 @@ export const MeasureTool: ToolModule = {
         // для читабельности на будь-якому тлі (техніка delete-× ADR-0079).
         const pct = p1.price !== 0 ? (dPrice / p1.price) * 100 : 0;
         const sign = up ? '+' : '−';
+        // Δціни — знаками символу з конфігу (toFixed(2) губив третій знак XAG/USD
+        // і USD/JPY, 12.10.2026); без конфігу — за величиною ціни, як рядок O/H/L/C.
+        // Відсоток — завжди 2 знаки.
+        const priceDigits = displayPriceDigits(rc.priceDigits ?? null, p1.price);
         const label =
-            `${sign}${Math.abs(dPrice).toFixed(2)} (${sign}${Math.abs(pct).toFixed(2)}%)` +
+            `${sign}${Math.abs(dPrice).toFixed(priceDigits)} (${sign}${Math.abs(pct).toFixed(2)}%)` +
             ` · ${fmtDuration(p2.t_ms - p1.t_ms)}`;
         ctx.font = '11px ui-monospace, SFMono-Regular, Consolas, monospace';
         const w = ctx.measureText(label).width;

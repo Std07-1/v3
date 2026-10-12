@@ -36,6 +36,10 @@ export interface RenderContext {
      *  (bull/bear токени theme-aware з roleColors renderer-а). */
     readonly bullColor?: string;
     readonly bearColor?: string;
+    /** ADR-0111 §3.2 (optional, additive): знаки ціни символу з конфігу сервера
+     *  (`price_display`, ChartPane.symbolPriceDigits) для підпису MeasureTool.
+     *  null/відсутнє → евристика за величиною ціни (displayPriceDigits). */
+    readonly priceDigits?: number | null;
     /** Render-state hints. Tool varies stroke/fill based on these. */
     readonly isDraft: boolean;
     readonly isHovered: boolean;

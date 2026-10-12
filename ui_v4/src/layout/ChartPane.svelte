@@ -754,6 +754,7 @@
   let symbolPriceDigits = $derived(configuredPriceDigits($serverConfig.priceDigits, $currentPair?.symbol));
   $effect(() => {
     chartEngine?.setPriceDigits(symbolPriceDigits);
+    drawingsRenderer?.setPriceDigits(symbolPriceDigits); // ADR-0111 §3.2: Δціни лінійки тими самими знаками
   });
 
   // N3: persist toggles to localStorage
