@@ -1,6 +1,6 @@
 // src/chart/drawings/DrawingsRenderer.ts
 import { v4 as uuidv4 } from 'uuid';
-import type { IChartApi, ISeriesApi, Logical, Time } from 'lightweight-charts';
+import type { DataChangedScope, IChartApi, ISeriesApi, Logical, Time } from 'lightweight-charts';
 import { MismatchDirection } from 'lightweight-charts';
 
 import type { Drawing, ActiveTool, WsAction, T_MS, UiWarning, DrawingContextRequest, DrawingType, DrawingColorRole } from '../../types';
@@ -185,6 +185,7 @@ export class DrawingsRenderer {
   private ro: ResizeObserver;
   private onStorageEvent!: (e: StorageEvent) => void;
   private onVisibleRangeChange!: () => void;
+  private onSeriesDataChanged!: (scope: DataChangedScope) => void;
 
   private onPointerMoveCapture!: (e: PointerEvent) => void;
   private onPointerDownCapture!: (e: PointerEvent) => void;
@@ -222,9 +223,17 @@ export class DrawingsRenderer {
 
     if (this.canvas.parentElement) this.ro.observe(this.canvas.parentElement);
 
-    // Range trigger — renderSync (not rAF) to eliminate 1-frame lag during scroll/zoom
-    this.onVisibleRangeChange = () => this.renderSync();
+    // Range trigger — renderSync (not rAF) to eliminate 1-frame lag during scroll/zoom; + rAF: у самій події
+    // LWC ще не перерахував autoScale (ціна→y стара), кадром пізніше — нова (ADR-0111 §3.2, D-05b, стенд 12.10)
+    this.onVisibleRangeChange = () => { this.renderSync(); this.scheduleRender(); };
     this.chartApi.timeScale().subscribeVisibleTimeRangeChange(this.onVisibleRangeChange);
+    // Дані серії змінились без зміни видимого діапазону: тік розширив high/low → autoScale зсунув ціна→y (D-05);
+    // 'full' (setData: старіша історія, заміна барів) зсуває індекси барів — кеш часів негайно (D-09)
+    this.onSeriesDataChanged = (scope) => {
+      if (scope === 'full') this.refreshBarTimes(true);
+      this.scheduleRender();
+    };
+    this.seriesApi.subscribeDataChanged(this.onSeriesDataChanged);
 
     // ADR-0008: Y-axis sync — відбувається через callback notifyPriceRangeChanged(),
     // а не через wheel/dblclick listeners (ті блокуються interaction.ts:stopImmediatePropagation).
@@ -1472,6 +1481,7 @@ export class DrawingsRenderer {
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
     window.removeEventListener('storage', this.onStorageEvent);
     this.chartApi.timeScale().unsubscribeVisibleTimeRangeChange(this.onVisibleRangeChange);
+    this.seriesApi.unsubscribeDataChanged(this.onSeriesDataChanged);
 
     this.interactionEl.removeEventListener('pointermove', this.onPointerMoveCapture, { capture: true } as any);
     this.interactionEl.removeEventListener('pointerdown', this.onPointerDownCapture, { capture: true } as any);
