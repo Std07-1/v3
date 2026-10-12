@@ -326,6 +326,7 @@ export type UiWarningCode =
   | 'overlay_coord_null'
   | 'drawing_coord_null'
   | 'drawing_state_inconsistent'
+  | 'drawing_storage_failed'
   | 'stale_frame'
   | 'schema_mismatch'
   | 'server_error';

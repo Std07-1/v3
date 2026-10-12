@@ -13,6 +13,7 @@ import {
   distToPoint,
 } from '../interaction/geometry';
 import { getToolModule } from './tools';
+import { loadDrawings, saveDrawings } from './drawingsStorage';
 import { copyCanvas } from '../../lib/chartSnapshot';
 import type { RenderContext } from './tools';
 
@@ -602,6 +603,9 @@ export class DrawingsRenderer {
     }
     if (this.drawings.length > 0) this.saveToStorage(); // flush попереднього символу
     this.storageKey = nextKey;
+    // Чернетка не переїжджає на інший символ (аудит 12.10: точка тренда на XAU 2650 → NAS100 → клік писав її в NAS100)
+    this.draft = null;
+    this.measureFrozen = false;
     // Audit v2: undo-стек НЕ переживає символ — інакше Ctrl+Z матеріалізував
     // би фігури чужого символу в новий стор. Preview-снапшот теж чистимо.
     this.commandStack.clear();
@@ -663,27 +667,22 @@ export class DrawingsRenderer {
     console.info('[DrawingsRenderer] purgeAllDrawings: видалено %d ключів', keysToRemove.length);
   }
 
+  // I5 (ADR-0111 §3.2): збій збереження/битий JSON — гучно (консоль + діагностика), не мовчки (drawingsStorage.ts)
   private saveToStorage(): void {
-    try {
-      localStorage.setItem(this.storageKey, JSON.stringify(this.drawings));
-    } catch { /* quota exceeded or private mode — silent */ }
+    const problem = saveDrawings(this.storageKey, this.drawings);
+    if (problem === null) return;
+    console.warn('[DrawingsRenderer] DRAWINGS_SAVE_FAILED key=%s n=%d %s', this.storageKey, this.drawings.length, problem);
+    this.warnOnce('storage_save', 'drawing_storage_failed', `save ${this.storageKey}: ${problem} — після перезавантаження не буде`);
   }
 
   private loadFromStorage(): void {
-    try {
-      const raw = localStorage.getItem(this.storageKey);
-      if (!raw) {
-        this.drawings = [];
-        this.scheduleRender();
-        return;
-      }
-      const parsed = JSON.parse(raw);
-      this.drawings = Array.isArray(parsed) ? parsed : [];
-      this.scheduleRender();
-    } catch {
-      this.drawings = [];
-      this.scheduleRender();
+    const { drawings, problem } = loadDrawings(this.storageKey, Date.now());
+    this.drawings = drawings;
+    if (problem !== null) {
+      console.warn('[DrawingsRenderer] DRAWINGS_LOAD_FAILED key=%s %s', this.storageKey, problem);
+      this.warnOnce('storage_load', 'drawing_storage_failed', `load ${this.storageKey}: ${problem}`);
     }
+    this.scheduleRender();
   }
 
   // ---- v3 hit-testing ----
@@ -960,6 +959,9 @@ export class DrawingsRenderer {
       if (this.dragState) {
         e.preventDefault();
         e.stopPropagation();
+        // Перерване перетягування — фігура вертається як на початку (інакше зсунута жила в пам'яті поза undo, D-13)
+        const { startObj } = this.dragState;
+        if (this.drawings.some((d) => d.id === startObj.id)) this.drawings = this.replaceById(cloneDrawing(startObj));
         this.dragState = null;
       }
       if (this.draft) this.draft = null;

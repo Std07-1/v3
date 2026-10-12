@@ -297,6 +297,11 @@
   function toggleDrawingTools(): void {
     drawingToolsEnabled = !drawingToolsEnabled;
     saveDrawingTools(drawingToolsEnabled);
+    // Сховали панель — вимикаємо й інструмент: інакше він лишався активним невидимо (аудит 12.10)
+    if (!drawingToolsEnabled) {
+      activeTool = null;
+      chartPaneRef?.cancelDraft();
+    }
   }
 
   // ADR-0085 P6: шар Арчі на чарті on/off (☰-меню). Persist; default ON.
@@ -432,6 +437,8 @@
   function handleKeyboardAction(action: import("./stores/keyboard.svelte").KeyboardAction): void {
     switch (action.kind) {
       case "set_tool":
+        // Панель «Малювання» вимкнена — гарячі клавіші інструментів теж (аудит 12.10: `e` невидимо вмикала гумку)
+        if (!drawingToolsEnabled) break;
         // Toggle: re-press same hotkey → deactivate. Else switch tool.
         activeTool = activeTool === action.tool ? null : action.tool;
         break;
