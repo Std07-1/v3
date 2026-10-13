@@ -869,13 +869,22 @@ class SmcRunner:
         """ATR для фільтра дистанції цілей наративу — ATR14 рушія для TF глядача (ADR-0070 rev 3).
 
         Поріг «<= 1.0» вгадував заглушку і підміняв справжній ATR XAG (M5..H4 < 1.0) на оцінку
-        викликача. TF, який рушій не вимірює (M1/M3/M30), — як і раніше: оцінка викликача, без неї
-        дільник 1.0; джерело — у лозі на переході.
+        викликача. TF, який рушій не вимірює (M1/M3/M30), — виміряний ATR базового TF зон глядача
+        (M1/M3 → M5, M30 → H1; ADR-0113 Ф0, K10): зони цих глядачів і так з базового TF, а h−l одного бару
+        давав «зона далеко» майже завжди і різний ATR у WS і API. Без нього — як і раніше: оцінка
+        викликача, без неї дільник 1.0; джерело — у лозі на переході.
         """
         measured = self._engine.get_measured_atr(symbol, viewer_tf_s)
         if measured is not None:
             self._narrative_atr_unmeasured.discard((symbol, viewer_tf_s))
             return measured
+        base_tf = self._engine.display_base_tf(viewer_tf_s)
+        base_measured = (
+            self._engine.get_measured_atr(symbol, base_tf) if base_tf != viewer_tf_s else None
+        )
+        if base_measured is not None:
+            self._narrative_atr_unmeasured.discard((symbol, viewer_tf_s))
+            return base_measured
         if caller_estimate > 0:
             source, atr = "caller_estimate", caller_estimate
         else:

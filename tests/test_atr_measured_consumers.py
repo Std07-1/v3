@@ -258,3 +258,30 @@ def test_narrative_on_unmeasured_viewer_tf_keeps_fallback_and_names_source_once(
     assert seen_atr == [0.37, 0.37, 1.0]  # M30/M3 рушій не вимірює: як і раніше — оцінка, без неї дільник
     logged = [r.getMessage() for r in caplog.records if "NARRATIVE_ATR_UNMEASURED" in r.getMessage()]
     assert len(logged) == 1 and "source=caller_estimate" in logged[0]
+
+
+def test_narrative_on_unmeasured_viewer_tf_uses_measured_base_tf_atr(tmp_path, monkeypatch):
+    """ADR-0113 Ф0 (K10): M30 бачить зони H1 — ATR наративу з виміряного H1, а не h−l одного бару від ws_server."""
+    h1_s = 3600
+    engine = SmcEngine(SmcConfig())
+    engine.update(XAG, h1_s, _xag_bars(h1_s))
+    cfg = {
+        "symbols": [XAG],
+        "smc": {"compute_tfs": [h1_s], "narrative": {"enabled": True}, "signal_journal": {"path": str(tmp_path)}},
+    }
+    runner = SmcRunner(cfg, engine)
+    runner._warmup_done = True
+    runner._journal = SimpleNamespace(record=lambda *args, **kwargs: None)
+    seen_atr: list[float] = []
+
+    def fake_synthesize(snap, bias, grades, momentum, viewer_tf_s, price, atr, cfg, **kwargs):
+        seen_atr.append(atr)
+        return _fallback_narrative_block(["captured"])
+
+    monkeypatch.setattr(smc_runner_mod, "synthesize_narrative", fake_synthesize)
+
+    runner.get_narrative(XAG, M30_S, 62.05, 0.37)  # WS: h−l одного бару
+    runner.get_narrative(XAG, M30_S, 62.05, 0.0)  # API: оцінки нема
+
+    expected = pytest.approx(engine.get_measured_atr(XAG, h1_s))
+    assert seen_atr == [expected, expected]  # однаково в обох каналах

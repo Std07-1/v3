@@ -816,6 +816,10 @@ class SmcEngine:
         86400: frozenset(),  # D1 viewer: candles visible, no key levels
     }  # type: Dict[int, frozenset]
 
+    def display_base_tf(self, viewer_tf_s: int) -> int:
+        """Публічно: computed TF, з якого глядач бачить зони (M1/M3 → M5, M30 → H1) — для ATR наративу (ADR-0113 Ф0)."""
+        return self._display_base_tf(viewer_tf_s)
+
     def _display_base_tf(self, viewer_tf_s: int) -> int:
         """Глядач TF → computed TF, чия політика відображення діє; невідомий TF — найближчий computed TF ≥ глядача."""
         base_tf = self._VIEWER_TO_BASE.get(viewer_tf_s)
