@@ -784,6 +784,7 @@ export class DrawingsRenderer {
   // ---- interactions (capture on container) ----
   private setupInteractionsCapture(): void {
     this.onPointerMoveCapture = (e) => {
+      if (this.ignoresPointer(e)) return;
       const rect = this.interactionEl.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
@@ -799,40 +800,10 @@ export class DrawingsRenderer {
       // Tool drawing (draft) -> блокуємо LWC
       const tool = this.activeDrawingTool();
       if (tool) {
-        if (!this.draft) {
-          // Однокрокова (hline): чернетка під курсором ще до кліку — видно, де ляже фігура.
-          // Двоточкові: чернетка лише з 1-го кліку — але ми все ж compute
-          // snap preview якщо magnet ON, щоб green dot indicator біг за курсором
-          // показуючи де snap приземлиться при click. TradingView-mobile pattern.
-          if (previewsOnHover(tool)) {
-            const rawP = this.fromY(y);
-            const t = this.fromX(x);
-            if (rawP !== null && t !== null) {
-              const price = this.getSnappedPrice(x, y, rawP);
-              this.draft = newDraft(tool, uuidv4(), { t_ms: t, price }, this.defaultMeta(tool.id));
-              this.draftFrozen = false;
-              e.preventDefault();
-              e.stopPropagation();
-              this.scheduleRender();
-            }
-          } else if (this.snapConfig.enabled) {
-            // trend/rect hover preview: compute snap target → updates lastSnap
-            // as side-effect → render shows green dot. Без створення draft —
-            // draft starts on 1st click як before.
-            const rawP = this.fromY(y);
-            if (rawP !== null) {
-              this.getSnappedPrice(x, y, rawP);
-              this.scheduleRender();
-            }
-          }
-          return;
+        if (this.toolMove(tool, x, y)) {
+          e.preventDefault();
+          e.stopPropagation();
         }
-        // ADR-0084 D2: заморожений вимір не слідує за курсором; чарт дихає
-        // (без preventDefault — pan/crosshair працюють до наступного кліку).
-        if (this.draftFrozen) return;
-        e.preventDefault();
-        e.stopPropagation();
-        this.updateDraft(x, y);
         return;
       }
 
@@ -851,6 +822,7 @@ export class DrawingsRenderer {
     };
 
     this.onPointerDownCapture = (e) => {
+      if (this.ignoresPointer(e)) return;
       // ADR-0078: лише ліва кнопка малює/вибирає/тягне. Без цього guard
       // right-click (button 2) під час draft потрапляв у finishDraft() і
       // КОМІТив фігуру мимоволі; middle-click (button 1) так само стартував
@@ -865,18 +837,7 @@ export class DrawingsRenderer {
       if (this.activeDrawingTool()) {
         e.preventDefault();
         e.stopPropagation();
-        // ADR-0084 D2: заморожений вимір → клік чистить його і починає новий.
-        if (this.draft && this.draftFrozen) {
-          this.draft = null;
-          this.draftFrozen = false;
-          this.handleToolPointerDown(e.pointerId, x, y);
-        } else if (this.draft) {
-          // 2nd click: commit draft (measure → freeze, див. finishDraft)
-          this.finishDraft();
-        } else {
-          // 1st click: однокрокова фігура готова одразу, двоточкова починає чернетку (drawingDraft.firstClick)
-          this.handleToolPointerDown(e.pointerId, x, y);
-        }
+        this.toolClick(x, y);
         return;
       }
 
@@ -946,6 +907,7 @@ export class DrawingsRenderer {
     };
 
     this.onPointerUpCapture = (e) => {
+      if (this.ignoresPointer(e)) return;
       if (!this.dragState) {
         // click-click: draft lives until 2nd pointerdown; no commit on pointerup
         return;
@@ -974,6 +936,7 @@ export class DrawingsRenderer {
     };
 
     this.onPointerCancelCapture = (e) => {
+      if (this.ignoresPointer(e)) return;
       if (this.dragState) {
         e.preventDefault();
         e.stopPropagation();
@@ -1034,7 +997,76 @@ export class DrawingsRenderer {
     return active && active !== 'eraser' ? getToolModule(active) : undefined;
   }
 
-  private handleToolPointerDown(_pointerId: number, x: number, y: number): void {
+  /** Рух вказівника з обраним інструментом — однаково для миші й курсора на телефоні (ADR-0112): прев'ю
+   *  однокрокової під курсором, кінчик чернетки двоточкової, магніт. true — подія наша (блокуємо LWC). */
+  private toolMove(tool: ToolModule, x: number, y: number): boolean {
+    if (!this.draft) {
+      if (previewsOnHover(tool)) {
+        const rawP = this.fromY(y);
+        const t = this.fromX(x);
+        if (rawP === null || t === null) return false;
+        const price = this.getSnappedPrice(x, y, rawP);
+        this.draft = newDraft(tool, uuidv4(), { t_ms: t, price }, this.defaultMeta(tool.id));
+        this.draftFrozen = false;
+        this.scheduleRender();
+        return true;
+      }
+      // Двоточкові: чернетка лише з 1-го кліку, але з магнітом зелена точка біжить за курсором (lastSnap).
+      if (this.snapConfig.enabled) {
+        const rawP = this.fromY(y);
+        if (rawP !== null) {
+          this.getSnappedPrice(x, y, rawP);
+          this.scheduleRender();
+        }
+      }
+      return false;
+    }
+    // ADR-0084 D2: заморожений вимір не слідує за курсором; чарт дихає (без preventDefault).
+    if (this.draftFrozen) return false;
+    this.updateDraft(x, y);
+    return true;
+  }
+
+  /** Клік інструментом: заморожений вимір → новий; є чернетка → завершити (measure → freeze); нема → перший клік. */
+  private toolClick(x: number, y: number): void {
+    if (this.draft && this.draftFrozen) {
+      this.draft = null;
+      this.draftFrozen = false;
+      this.handleToolPointerDown(x, y);
+    } else if (this.draft) {
+      this.finishDraft();
+    } else {
+      this.handleToolPointerDown(x, y);
+    }
+  }
+
+  // ---- ADR-0112: курсор-перехрестя на телефоні веде той самий шлях створення, що миша ----
+  private touchCursorMode = false;
+
+  /** Режим курсора: дотики пальцем до фігур не доходять — точку веде touchDrawCursor. */
+  setTouchCursorMode(on: boolean): void {
+    this.touchCursorMode = on;
+  }
+
+  private ignoresPointer(e: PointerEvent): boolean {
+    return this.touchCursorMode && e.pointerType === 'touch';
+  }
+
+  /** Курсор у (x, y), CSS px панелі — як рух миші з обраним інструментом. */
+  cursorMove(x: number, y: number): void {
+    const tool = this.activeDrawingTool();
+    if (tool) this.toolMove(tool, x, y);
+  }
+
+  /** «Поставити» в (x, y) — як клік мишею. 'draft' — фігура ще в роботі; 'done' — готова, відкинута або вимір
+   *  заморожено. */
+  cursorPlace(x: number, y: number): 'draft' | 'done' {
+    if (!this.activeDrawingTool()) return 'done';
+    this.toolClick(x, y);
+    return this.draft && !this.draftFrozen ? 'draft' : 'done';
+  }
+
+  private handleToolPointerDown(x: number, y: number): void {
     const tool = this.activeDrawingTool();
     if (!tool) return;
     const t_ms = this.fromX(x);

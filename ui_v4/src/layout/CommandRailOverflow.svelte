@@ -51,6 +51,8 @@
          *  «Малювання» вимкнено). Повертає короткий підсумок для пункту меню. */
         /** Підсумок для пункту; null — підсумок покаже сам виклик (передогляд на телефоні, ADR-0109 rev). */
         onSnapshot?: () => Promise<string | null>;
+        /** ADR-0112: пробне малювання на телефоні (лише з ?draw=1) — відкрити смугу внизу. */
+        onOpenTouchDrawing?: () => void;
     }
 
     const {
@@ -74,6 +76,7 @@
         archiChartEnabled = true,
         onToggleArchiChart,
         onSnapshot,
+        onOpenTouchDrawing,
     }: Props = $props();
 
     // ADR-0109: підсумок знімка — у самому пункті на 1.2 с, потім меню закривається.
@@ -191,6 +194,13 @@
             >
                 <span class="mi-label">Малювання</span>
                 <span class="mi-state">{toolsEnabled ? "●" : "○"}</span>
+            </button>
+        {/if}
+
+        <!-- ADR-0112: пробне малювання на телефоні — лише з ?draw=1 і лише в телефонному розкладі (як пункт знімка) -->
+        {#if onOpenTouchDrawing}
+            <button class="menu-item touch-draw-item" role="menuitem" onclick={() => onOpenTouchDrawing?.()}>
+                <span class="mi-label">Малювати</span>
             </button>
         {/if}
 
@@ -519,19 +529,22 @@
 
     /* ADR-0109: пункт знімка — лише там, де камери в панелі малювання нема. Умови @media — ті самі, що ховають
        DrawingToolbar (телефон портрет ≤ 640 px, ландшафт ≤ 500 px заввишки); `.always` — «Малювання» вимкнено. */
-    .snapshot-item {
+    .snapshot-item,
+    .touch-draw-item {
         display: none;
     }
     .snapshot-item.always {
         display: flex;
     }
     @media (orientation: landscape) and (max-height: 500px) {
-        .snapshot-item {
+        .snapshot-item,
+        .touch-draw-item {
             display: flex;
         }
     }
     @media (max-width: 640px) and (orientation: portrait) {
-        .snapshot-item {
+        .snapshot-item,
+        .touch-draw-item {
             display: flex;
         }
     }

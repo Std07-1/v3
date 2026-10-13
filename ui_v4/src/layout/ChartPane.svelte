@@ -54,6 +54,7 @@
   } from "../chart/overlay/levelGroups";
   import type { LevelGroup } from "../types";
   import { hintsOn } from "../stores/uiHints";
+  import { TouchDrawCursor } from "../chart/drawings/touchDrawCursor";
 
   interface Props {
     currentFrame?: RenderFrame | null;
@@ -72,6 +73,8 @@
     // overflow menu reflects current state.
     smcPanelOpen?: boolean;
     displayMode?: DisplayMode;
+    /** ADR-0112: смуга малювання на телефоні відкрита — обраний інструмент веде курсор-перехрестя (не палець). */
+    touchDrawing?: boolean;
   }
 
   let {
@@ -85,6 +88,7 @@
     archiChartEnabled = true,
     smcPanelOpen = $bindable(false),
     displayMode = $bindable<DisplayMode>("focus"),
+    touchDrawing = false,
   }: Props = $props();
 
   // ADR-0024: локальний стан SMC overlay (оновлюється інкрементально)
@@ -212,6 +216,10 @@
   export function redo() {
     drawingsRenderer?.revertPreview();
     drawingsRenderer?.commandStack.redo();
+  }
+  /** ADR-0112: «Поставити» в точці курсора; null — режиму курсора нема. */
+  export function placeTouchPoint(): "draft" | "done" | null {
+    return touchCursor?.place() ?? null;
   }
   export function cancelDraft() {
     drawingsRenderer?.cancelDraft();
@@ -421,6 +429,22 @@
 
   $effect(() => {
     drawingsRenderer?.setTool(activeTool);
+  });
+  // ADR-0112: смуга на телефоні + обраний інструмент → курсор-перехрестя (палець веде його 1:1, точку ставить
+  // «Поставити»); інакше дотики як завжди (прокрутка, довгий дотик ADR-0108). Після setTool — курсор одразу показує прев'ю.
+  let touchCursor: TouchDrawCursor | null = null;
+  $effect(() => {
+    const drawing = touchDrawing && activeTool !== null && activeTool !== "eraser";
+    if (!drawing || !drawingsRenderer || !chartEngine) return;
+    const renderer = drawingsRenderer;
+    renderer.setTouchCursorMode(true);
+    const cursor = new TouchDrawCursor(wrapperRef, chartEngine.chart, chartEngine.series, renderer);
+    touchCursor = cursor;
+    return () => {
+      cursor.destroy();
+      renderer.setTouchCursorMode(false);
+      if (touchCursor === cursor) touchCursor = null;
+    };
   });
   $effect(() => {
     drawingsRenderer?.setMagnetEnabled(magnetEnabled ?? false);

@@ -8,6 +8,8 @@
 
   import ChartPane from "./layout/ChartPane.svelte";
   import DrawingToolbar from "./layout/DrawingToolbar.svelte";
+  import MobileDrawBar from "./layout/MobileDrawBar.svelte";
+  import { deviceStorage, resolveTouchDrawing } from "./lib/touchDrawingFlag";
   import { hintsOn, toggleHints } from "./stores/uiHints";
   import ChartHud from "./layout/ChartHud.svelte";
   import StatusOverlay from "./layout/StatusOverlay.svelte";
@@ -114,6 +116,9 @@
   let actions: ReturnType<typeof createActions> | null = null;
 
   let activeTool: ActiveTool = $state(null);
+  // ADR-0112: пробне малювання на телефоні — лише на пристрої, де ввімкнули ?draw=1 (☰ → «Малювати» → смуга внизу).
+  const touchDrawingAvailable = resolveTouchDrawing(location.search, deviceStorage());
+  let touchDrawOpen = $state(false);
 
   // ADR-0065 Phase 1: SMC panel open + display mode lifted here from ChartPane.
   // CommandRailOverflow is the single trigger surface; ChartPane is a $bindable consumer.
@@ -403,6 +408,14 @@
   }
   function closeOverflow() {
     overflowOpen = false;
+  }
+  function openTouchDrawing(): void {
+    touchDrawOpen = true;
+    closeOverflow();
+  }
+  function closeTouchDrawing(): void {
+    activeTool = null;
+    touchDrawOpen = false;
   }
 
   // Outside-click/touch/Escape dismiss: централізована action
@@ -946,9 +959,23 @@
         {magnetEnabled}
         drawingDefaults={toolDefaults}
         {archiChartEnabled}
+        touchDrawing={touchDrawOpen}
         bind:smcPanelOpen
         bind:displayMode
       />
+      {#if touchDrawOpen}
+        <MobileDrawBar
+          {activeTool}
+          onSelectTool={(t) => (activeTool = t)}
+          onPlace={() => chartPaneRef?.placeTouchPoint() ?? null}
+          {magnetEnabled}
+          onToggleMagnet={toggleMagnet}
+          onUndo={() => chartPaneRef?.undo()}
+          onRedo={() => chartPaneRef?.redo()}
+          onDeleteSelected={() => chartPaneRef?.deleteSelectedDrawing()}
+          onClose={closeTouchDrawing}
+        />
+      {/if}
 
       <!-- P3.1-P3.2: Frosted-glass HUD overlay -->
       <ChartHud
@@ -1066,6 +1093,7 @@
         {archiChartEnabled}
         onToggleArchiChart={toggleArchiChart}
         onSnapshot={takeChartSnapshot}
+        onOpenTouchDrawing={touchDrawingAvailable ? openTouchDrawing : undefined}
       />
     </div>
   </div>

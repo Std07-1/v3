@@ -21,6 +21,7 @@
   import type { ActiveTool, DrawingType } from "../types";
   import { TOOL_REGISTRY } from "../chart/drawings/tools";
   import { hintsOn } from "../stores/uiHints";
+  import { ICON_MAGNET } from "./toolIcons";
 
   const {
     activeTool,
@@ -69,9 +70,6 @@
     '<path d="M4 4l16.4 6.8a.5.5 0 0 1 .05.9L13.2 15.5 9.5 22.45a.5.5 0 0 1-.9-.05L4 4z"/>';
   const ICON_ERASER =
     '<path d="M21 21H8a2 2 0 0 1-1.42-.587l-3.994-3.999a2 2 0 0 1 0-2.828l10-10a2 2 0 0 1 2.829 0l5.999 6a2 2 0 0 1 0 2.828L12.834 21"/><path d="m5.082 11.09 8.828 8.828"/>';
-  // Lucide "magnet" — U-shaped horseshoe magnet, intuitive snap metaphor.
-  const ICON_MAGNET =
-    '<path d="m6 15-4-4 6.75-6.77a7.79 7.79 0 0 1 11 11L13 22l-4-4 6.39-6.36a2.14 2.14 0 0 0-3-3L6 15"/><path d="m5 8 4 4"/><path d="m12 15 4 4"/>';
   // Lucide "camera" — знімок графіка (ADR-0109).
   const ICON_CAMERA =
     '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>';
