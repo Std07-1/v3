@@ -27,6 +27,8 @@
 
   Дозволені правки:
     - Theme tokens (var(--text-N), opacity)
+    - ADR-0112 (власник 13.10: «чи не можемо накласти на значок v3?»): поки відкрите малювання на телефоні — знак
+      гасне (hidden: opacity 0, не натискається), капсула стоїть по центру; закрили — знак на місці як був
     - InfoModal target tab
     - size tweaks 18-22px range (поза цим = re-evaluate з owner)
   Заборонені правки без owner sign-off:
@@ -44,12 +46,14 @@
 
     interface Props {
         onclick: (e: MouseEvent) => void;
+        /** Малювання на телефоні відкрите — знак гасне, місце бере капсула (ADR-0112). */
+        hidden?: boolean;
     }
 
-    const { onclick }: Props = $props();
+    const { onclick, hidden = false }: Props = $props();
 </script>
 
-<div class="brand-watermark">
+<div class="brand-watermark" class:hidden aria-hidden={hidden}>
     <!-- Owner-direction 2026-05-11: replace wordmark "AI · ONE" with V3 mark.
          Brand is brand-internal — mark-only is more discreet, looks like
          a generic chart attribution (which is exactly the slot it occupies). -->
@@ -74,6 +78,10 @@
     }
     .brand-watermark:hover {
         opacity: 1;
+    }
+    .brand-watermark.hidden {
+        opacity: 0;
+        pointer-events: none;
     }
     @media (max-width: 640px) {
         .brand-watermark {

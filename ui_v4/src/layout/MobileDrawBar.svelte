@@ -199,17 +199,17 @@
 
 <style>
   /* Мова меню HUD (ChartHud .hud-menu): матове скло, рамка, радіус 8, тінь. Низ графіка — на обсягах, одразу над
-     віссю часу (на телефоні 26 px) і правіше знака v3 (BrandWatermark: закріплене місце, на телефоні 6–26 px зліва,
-     30–54 px від низу), з безпечною зоною. */
+     віссю часу (на телефоні 26 px), по центру екрана; знак v3 у кутку на цей час гасне (BrandWatermark hidden,
+     власник 13.10), з безпечною зоною. */
   .mdraw {
     position: absolute;
-    left: 32px;
-    right: 4px;
+    left: 8px;
+    right: 8px;
     bottom: calc(30px + env(safe-area-inset-bottom, 0px));
     z-index: 30;
     /* По центру через margin, не left:50% — інакше ширину стискає половина контейнера, і кнопки мліють до мінімуму */
     width: max-content;
-    max-width: calc(100% - 36px);
+    max-width: calc(100% - 16px);
     margin: 0 auto;
     box-sizing: border-box;
     padding: 4px;

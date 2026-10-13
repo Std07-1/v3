@@ -955,7 +955,7 @@
            above LWC time axis. Click opens InfoModal[About]. DO NOT MOVE.
            See: ui_v4/src/layout/BrandWatermark.svelte header + memory file
            /memories/repo/brand-watermark-locked-slot.md -->
-      <BrandWatermark onclick={openAbout} />
+      <BrandWatermark onclick={openAbout} hidden={touchDrawOpen} />
       {#if drawingToolsEnabled}
         <DrawingToolbar
           {activeTool}
