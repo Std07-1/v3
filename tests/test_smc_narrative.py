@@ -987,3 +987,51 @@ class TestHonestyF0:
         assert nb.current_session == "london"
         assert nb.session_context == "London сесія активна"
         assert (nb.mode, nb.sub_mode) == ("trade", "reduced")
+
+    def test_headline_no_zones_at_all(self):
+        """K4: зон нема (лише розмітка premium/discount) — «Зон немає», без вигаданого «ринок без структури»."""
+        pd = _zone(kind="premium", high=5300.0, low=5250.0, zone_id="pd1")
+        nb = synthesize_narrative(_snap(zones=[pd]), {}, {}, {}, 900, 5200.0, 20.0, _default_config(), price_digits=2)
+        assert nb.headline == "⬜ Зон немає — чекаємо структуру"
+
+    def test_headline_zones_below_quality(self):
+        """K4: зони є, але нижче A — так і сказати (раніше «Немає зон» поруч із next_area)."""
+        z = _zone(kind="fvg_bull", high=5100.0, low=5090.0, zone_id="f1")
+        nb = synthesize_narrative(_snap(zones=[z]), {"86400": "bullish", "14400": "bullish"}, {}, {}, 900, 5200.0, 20.0,
+                                  _default_config(), price_digits=2)
+        assert nb.headline == "⬜ Немає зони рівня A — чекаємо сетап"
+        assert nb.next_area  # зона є — і в next_area, і в заголовку це видно
+
+    def test_headline_zone_broken(self):
+        """K4: єдиного кандидата пробито — «Зону пробито», не «зон немає»."""
+        z = _zone(kind="ob_bear", high=5225.0, low=5144.0, zone_id="z1")
+        nb = synthesize_narrative(_snap(zones=[z]), {"86400": "bearish", "14400": "bearish"}, _grade_a6("z1"), {}, 900,
+                                  5240.0, 20.0, _default_config(), price_digits=2)
+        assert "scenario_invalidated" in nb.warnings
+        assert nb.headline == "⬜ Зону пробито — чекаємо нову структуру"
+
+    def test_headline_htf_pending_with_quality_zone(self):
+        """Зона A є, але D1 і H4 ще без структури — не «немає зони»."""
+        z = _zone(kind="ob_bear", high=5225.0, low=5144.0, zone_id="z1")
+        nb = synthesize_narrative(_snap(zones=[z]), {}, _grade_a6("z1"), {}, 900, 5130.0, 20.0, _default_config(),
+                                  price_digits=2)
+        assert nb.headline == "⬜ HTF ще без структури — зона є, чекаємо"
+
+    def test_bias_texts_without_sizing_advice(self):
+        """R8: у публічному тексті нема поради щодо розміру позиції й англійських bullish/bearish."""
+        z_counter = _zone(kind="ob_bull", high=5100.0, low=5090.0, zone_id="z1")
+        nb = synthesize_narrative(_snap(zones=[z_counter]), {"86400": "bearish", "14400": "bearish"}, _grade_a6("z1"),
+                                  {}, 900, 5095.0, 20.0, _default_config(), price_digits=2)
+        assert nb.sub_mode == "counter"
+        assert nb.bias_summary == "HTF↓ (D1 і H4) — найкраща зона проти тренду"
+        assert "розмір" not in nb.bias_summary
+        aligned = synthesize_narrative(_snap(), {"86400": "bullish", "14400": "bullish"}, {}, {}, 900, 5095.0, 20.0,
+                                       _default_config(), price_digits=2)
+        assert aligned.bias_summary.startswith("HTF↑ (D1 і H4)")
+        assert "bullish" not in aligned.bias_summary
+
+    def test_killzone_context_without_probability_claim(self):
+        """R8: killzone — факт про час, без «висока ймовірність»."""
+        nb = synthesize_narrative(_snap(), {}, {}, {}, 900, 5095.0, 20.0, _default_config(),
+                                  session_info=("london", True), price_digits=2)
+        assert nb.session_context == "London: killzone активна"

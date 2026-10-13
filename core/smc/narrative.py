@@ -103,8 +103,17 @@ _WAIT_HEADLINES = {
     "counter": "\U0001f7e0 Контртренд \u2014 зона є, але проти HTF",
     "reduced": "\U0001f7e1 HTF змішаний \u2014 чекаємо",
     "no_session": "\U0001f550 Поза сесією \u2014 зона є, чекаємо активності",
-    "": "\u2b1c Немає зон \u2014 ринок без структури",
+    # Зон справді нема. Раніше цей самий рядок («ринок без структури») показувався і коли зони є, але нижче рівня
+    # A, і коли зону пробито, — поруч із next_area та трендом (ADR-0113 Ф0, K4)
+    "": "\u2b1c Зон немає \u2014 чекаємо структуру",
 }
+# sub_mode "" із зонами на графіку: жодна не дотягує до trade_min_grade, або кандидата щойно пробито
+_NO_QUALITY_ZONE_HEADLINE = "\u2b1c Немає зони рівня {grade} \u2014 чекаємо сетап"
+_ZONE_BROKEN_HEADLINE = "\u2b1c Зону пробито \u2014 чекаємо нову структуру"
+# Зона рівня A є, але D1 і H4 ще без структури (alignment no_data) — не «немає зони»
+_HTF_PENDING_HEADLINE = "\u2b1c HTF ще без структури \u2014 зона є, чекаємо"
+# Зони premium/discount — розмітка діапазону, не POI (не «зона для входу» ні в заголовку, ні в next_area)
+_RANGE_ZONE_KINDS = frozenset({"premium", "discount"})
 _DEGRADED_HEADLINE = "\u26a0 Наратив недоступний"
 
 # ── TF labels ───────────────────────────────────────────────
@@ -537,26 +546,23 @@ def _build_bias_summary(
         h4 = bias_map.get("14400")
         if d1:
             arrow = "\u2191" if d1 == "bullish" else "\u2193"
-            return "D1{a} (H4 n/a)".format(a=arrow)
+            return "D1{a} (H4 ще без структури)".format(a=arrow)
         if h4:
             arrow = "\u2191" if h4 == "bullish" else "\u2193"
-            return "H4{a} (D1 n/a)".format(a=arrow)
+            return "H4{a} (D1 ще без структури)".format(a=arrow)
     d1 = bias_map.get("86400", "?")
     h4 = bias_map.get("14400", "?")
     if alignment == "mixed":
         d1_arrow = "\u2191" if d1 == "bullish" else "\u2193"
         h4_arrow = "\u2191" if h4 == "bullish" else "\u2193"
         return "D1{d1} H4{h4}".format(d1=d1_arrow, h4=h4_arrow)
-    # aligned
+    # aligned. Без порад щодо розміру позиції в публічному тексті (ADR-0113 R8) і без англійських bullish/bearish
+    htf_arrow = "\u2191" if htf_direction == "bullish" else "\u2193"
     if is_counter:
-        return "HTF {dir} \u2014 контртрендова зона, зменшити розмір".format(
-            dir=htf_direction or ""
-        )
+        return "HTF{a} (D1 і H4) \u2014 найкраща зона проти тренду".format(a=htf_arrow)
     if zone and "premium" in getattr(zone, "kind", ""):
         return "H4 відкат до premium OB \u2014 чекаємо відбій"
-    base = "HTF {dir} \u2014 шукаємо структуру для входу".format(
-        dir=htf_direction or ""
-    )
+    base = "HTF{a} (D1 і H4) \u2014 шукаємо структуру для входу".format(a=htf_arrow)
     # P2: momentum context — displacement bars confirm directional intent (ADR-0033 Rev 2)
     if momentum_map:
         bull_total = sum(m.get("b", 0) for m in momentum_map.values())
@@ -584,7 +590,7 @@ def _build_session_context(session_name, in_killzone):
         return "Поза торговими сесіями"
     label = _SESSION_LABELS.get(session_name, session_name.title())
     if in_killzone:
-        return "{} KZ активна \u2014 висока ймовірність".format(label)
+        return "{}: killzone активна".format(label)
     return "{} сесія активна".format(label)
 
 
@@ -789,6 +795,14 @@ def _synthesize_impl(
             (mode, sub_mode, direction, primary_trigger),
             _WAIT_HEADLINES.get(sub_mode, _WAIT_HEADLINES[""]),
         )
+    elif sub_mode == "" and primary_zone is not None:
+        headline = _HTF_PENDING_HEADLINE
+    elif sub_mode == "" and candidates and not valid:
+        headline = _ZONE_BROKEN_HEADLINE
+    elif sub_mode == "" and any(
+        z.status != "mitigated" and z.kind not in _RANGE_ZONE_KINDS for z in snapshot.zones
+    ):
+        headline = _NO_QUALITY_ZONE_HEADLINE.format(grade=min_grade)
     else:
         headline = _WAIT_HEADLINES.get(sub_mode, _WAIT_HEADLINES[""])
 
