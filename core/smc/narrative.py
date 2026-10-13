@@ -597,29 +597,48 @@ def _build_session_context(session_name, in_killzone):
 # ── Next Area ───────────────────────────────────────────────
 
 
-def _build_next_area(snapshot, zone_grades, digits=_DEFAULT_PRICE_DIGITS):
-    # type: (SmcSnapshot, Dict[str, dict], int) -> str
+def _zone_kind_label(zone):
+    # type: (SmcZone) -> str
+    """OB / FVG / IFVG — без змішування IFVG і P/D під ярликом «FVG» (ADR-0113 Ф0, K4)."""
+    if zone.kind.startswith("ifvg"):
+        return "IFVG"
+    if zone.kind.startswith("ob"):
+        return "OB"
+    return "FVG"
+
+
+def _build_next_area(snapshot, zone_grades, digits=_DEFAULT_PRICE_DIGITS, current_price=0.0):
+    # type: (SmcSnapshot, Dict[str, dict], int, float) -> str
+    """Найближча зона уваги: оцінені — першими (score↓), далі ближчі до ціни.
+
+    ADR-0113 Ф0 (K3, K4): без mitigated, без перебитих ціною, без premium/discount (розмітка діапазону, не POI);
+    зона без оцінки — «без оцінки», а не дефолтне «C/0» (рушій оцінює лише OB, engine.py — FVG не оцінюються).
+    """
     best = None  # type: Optional[SmcZone]
-    best_score = -1
+    best_key = None  # type: Optional[Tuple[int, float, float]]
     for z in snapshot.zones:
-        if z.status == "mitigated":
+        if z.status == "mitigated" or z.kind in _RANGE_ZONE_KINDS:
             continue
-        gi = zone_grades.get(z.id, {})
-        sc = gi.get("score", 0)
-        if sc > best_score:
-            best_score = sc
+        if current_price > 0 and _is_invalidated(z, current_price):
+            continue
+        gi = zone_grades.get(z.id)
+        graded = 0 if gi else 1
+        score = gi.get("score", 0) if gi else 0
+        dist = abs(current_price - (z.low + z.high) / 2.0) if current_price > 0 else 0.0
+        key = (graded, -score, dist)
+        if best_key is None or key < best_key:
+            best_key = key
             best = z
     if best is None:
         return ""
-    gi = zone_grades.get(best.id, {})
-    direction = "sell" if "bear" in best.kind else "buy"
-    kind_short = "OB" if "ob" in best.kind else "FVG"
-    return "{low} {dir} {kind} ({grade}/{score})".format(
+    gi = zone_grades.get(best.id)
+    grade_part = "{}({})".format(gi.get("grade", "C"), gi.get("score", 0)) if gi else "без оцінки"
+    return "{kind}{arrow} {grade} {low}\u2013{high}".format(
+        kind=_zone_kind_label(best),
+        arrow="\u25bc" if "bear" in best.kind else "\u25b2",
+        grade=grade_part,
         low=_fmt_price(best.low, digits),
-        dir=direction,
-        kind=kind_short,
-        grade=gi.get("grade", "C"),
-        score=gi.get("score", 0),
+        high=_fmt_price(best.high, digits),
     )
 
 
@@ -853,7 +872,7 @@ def _synthesize_impl(
     market_phase = _detect_market_phase(snapshot.swings, config)
 
     # Next area
-    next_area = _build_next_area(snapshot, zone_grades, digits)
+    next_area = _build_next_area(snapshot, zone_grades, digits, current_price)
 
     # ADR-0053: range exhaustion phrase (silent for early/mid/None)
     range_exhaustion_summary = _build_range_exhaustion_summary(range_exhaustion)

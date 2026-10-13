@@ -949,7 +949,7 @@ class TestHonestyF0:
         )
         assert nb.scenarios[0].entry_desc.endswith("158.301\u2013158.452")
         assert nb.scenarios[0].invalidation == "Вище 158.452 \u2014 зона пробита"
-        assert nb.next_area.startswith("158.301 ")
+        assert nb.next_area == "OB▼ A(6) 158.301–158.452"
         assert "price_digits_missing" not in nb.warnings
 
     def test_missing_digits_two_places_and_loud(self):
@@ -1035,3 +1035,30 @@ class TestHonestyF0:
         nb = synthesize_narrative(_snap(), {}, {}, {}, 900, 5095.0, 20.0, _default_config(),
                                   session_info=("london", True), price_digits=2)
         assert nb.session_context == "London: killzone активна"
+
+    def test_next_area_skips_broken_and_range_zones(self):
+        """K4: next_area — не перебита зона і не premium/discount; FVG без оцінки — «без оцінки», не «C/0»."""
+        broken = _zone(kind="ob_bull", high=5180.0, low=5170.0, zone_id="b1")  # ціна 5160 нижче — пробита
+        pd = _zone(kind="discount", high=5150.0, low=5100.0, zone_id="pd1")
+        fvg = _zone(kind="fvg_bull", high=5140.0, low=5130.0, zone_id="f1")
+        nb = synthesize_narrative(
+            _snap(zones=[broken, pd, fvg]), {}, {"b1": {"grade": "A", "score": 7}}, {}, 900, 5160.0, 20.0,
+            _default_config(), price_digits=2,
+        )
+        assert nb.next_area == "FVG▲ без оцінки 5130.00–5140.00"
+        assert "C/0" not in nb.next_area and "(C" not in nb.next_area
+
+    def test_next_area_prefers_graded_then_nearest(self):
+        """Оцінена зона — першою, навіть якщо далі; серед неоцінених — найближча."""
+        near_fvg = _zone(kind="fvg_bear", high=5175.0, low=5170.0, zone_id="f1")
+        graded_ob = _zone(kind="ob_bear", high=5260.0, low=5250.0, zone_id="o1")
+        nb = synthesize_narrative(
+            _snap(zones=[near_fvg, graded_ob]), {}, {"o1": {"grade": "B", "score": 4}}, {}, 900, 5160.0, 20.0,
+            _default_config(), price_digits=2,
+        )
+        assert nb.next_area == "OB▼ B(4) 5250.00–5260.00"
+        far_fvg = _zone(kind="fvg_bear", high=5300.0, low=5290.0, zone_id="f2")
+        nb2 = synthesize_narrative(
+            _snap(zones=[far_fvg, near_fvg]), {}, {}, {}, 900, 5160.0, 20.0, _default_config(), price_digits=2,
+        )
+        assert nb2.next_area == "FVG▼ без оцінки 5170.00–5175.00"
