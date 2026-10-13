@@ -1,6 +1,6 @@
 // src/chart/drawings/touchDrawCursor.test.ts — ADR-0112 D3: курсор рухається 1:1 і не виходить за панель; тап ставить точку.
 import { describe, expect, it } from 'vitest';
-import { isNewSnapLevel, isTap, moveCursor } from './touchDrawCursor';
+import { isNewSnapLevel, isTap, levelOf, moveCursor } from './touchDrawCursor';
 
 const PANE = { width: 300, height: 500 };
 
@@ -46,5 +46,25 @@ describe('isNewSnapLevel', () => {
     expect(isNewSnapLevel(4180.5, 4180.5)).toBe(false);
     expect(isNewSnapLevel(4180.5, null)).toBe(false);
     expect(isNewSnapLevel(null, null)).toBe(false);
+  });
+});
+
+describe('levelOf', () => {
+  const bar = { open: 4170.1, high: 4176.46, low: 4168.2, close: 4175.79 };
+
+  it('ціна магніту — підпис рівня свічки в лупі', () => {
+    expect(levelOf(4176.46, bar)).toBe('H');
+    expect(levelOf(4168.2, bar)).toBe('L');
+    expect(levelOf(4170.1, bar)).toBe('O');
+    expect(levelOf(4175.79, bar)).toBe('C');
+  });
+
+  it('збіг рівнів — за порядком магніту (хай раніше за закриття)', () => {
+    expect(levelOf(4176.46, { ...bar, close: 4176.46 })).toBe('H');
+  });
+
+  it('не рівень цієї свічки або свічки нема — без літери', () => {
+    expect(levelOf(4171, bar)).toBe('');
+    expect(levelOf(4171, null)).toBe('');
   });
 });

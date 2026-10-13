@@ -55,6 +55,8 @@ export function sourceRect(
   return { sx: (left - rect.left) * kx, sy: (top - rect.top) * ky, sw: side * kx, sh: side * ky };
 }
 
+/** Рамка лупи: вільний рух — ледь помітна; прилипло до рівня — золото теми (show). */
+const LOUPE_BORDER = 'rgba(255,255,255,0.14)';
 const LOUPE_STYLE = [
   'position:absolute',
   'left:0',
@@ -62,7 +64,7 @@ const LOUPE_STYLE = [
   `width:${LOUPE_SIZE_PX}px`,
   `height:${LOUPE_SIZE_PX}px`,
   'border-radius:50%',
-  'border:1px solid rgba(255,255,255,0.14)',
+  `border:1px solid ${LOUPE_BORDER}`,
   'box-shadow:0 4px 20px rgba(0,0,0,0.45), 0 0 0 1px rgba(0,0,0,0.35)',
   'pointer-events:none',
   'display:none',
@@ -114,8 +116,9 @@ export class TouchLoupe {
     container.appendChild(this.el);
   }
 
-  /** Показати / пересунути лупу для точки p (CSS px панелі b); малює на наступному кадрі. */
-  show(p: CursorPoint, b: CursorBounds): void {
+  /** Показати / пересунути лупу для точки p (CSS px панелі b); малює на наступному кадрі. level — підпис рівня, до
+   *  якого прилип магніт («H 4175.79», D7): тоді рамка лупи золота, а підпис — внизу лупи. */
+  show(p: CursorPoint, b: CursorBounds, level: string | null = null): void {
     if (!this.visible) {
       this.sources = this.collectSources();
       this.accent = getComputedStyle(this.container).getPropertyValue('--accent').trim() || '#d4a017';
@@ -125,8 +128,9 @@ export class TouchLoupe {
     }
     const box = loupePlacement(p, b, this.minTop);
     this.el.style.transform = `translate(${box.left}px, ${box.top}px)`;
+    this.el.style.borderColor = level === null ? LOUPE_BORDER : this.accent;
     cancelAnimationFrame(this.frame);
-    this.frame = requestAnimationFrame(() => this.paint(p));
+    this.frame = requestAnimationFrame(() => this.paint(p, level));
   }
 
   hide(): void {
@@ -157,7 +161,7 @@ export class TouchLoupe {
       .map(({ canvas, filter }) => ({ canvas, filter }));
   }
 
-  private paint(p: CursorPoint): void {
+  private paint(p: CursorPoint, level: string | null): void {
     const dpr = window.devicePixelRatio || 1;
     const px = Math.round(LOUPE_SIZE_PX * dpr);
     if (this.el.width !== px || this.el.height !== px) {
@@ -210,5 +214,25 @@ export class TouchLoupe {
     ctx.beginPath();
     ctx.arc(c, c, 1.6 * dpr, 0, Math.PI * 2);
     ctx.fill();
+    if (level !== null) this.paintLevel(ctx, level, px, dpr);
+  }
+
+  /** Підпис рівня внизу лупи — темна капсула з золотим текстом (рівень, до якого прилип магніт). */
+  private paintLevel(ctx: CanvasRenderingContext2D, level: string, px: number, dpr: number): void {
+    ctx.save();
+    ctx.font = `600 ${10 * dpr}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const w = ctx.measureText(level).width + 12 * dpr;
+    const h = 16 * dpr;
+    const x = (px - w) / 2;
+    const y = px - h - 9 * dpr;
+    ctx.fillStyle = 'rgba(10, 12, 18, 0.82)';
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, h / 2);
+    ctx.fill();
+    ctx.fillStyle = this.accent;
+    ctx.fillText(level, px / 2, y + h / 2 + 0.5 * dpr);
+    ctx.restore();
   }
 }

@@ -31,6 +31,7 @@
         shell = null as import("../types").ShellPayload | null,
         pdState = null as import("../types").PdState | null,
         utcTime = "" as string,
+        onMenuOpenChange,
     }: {
         symbols: string[];
         tfs: string[];
@@ -49,6 +50,8 @@
         shell?: import("../types").ShellPayload | null;
         pdState?: import("../types").PdState | null;
         utcTime?: string;
+        /** Меню символу або TF відкрилось / закрилось (ADR-0112 D2: відкрите меню зупиняє малювання на телефоні). */
+        onMenuOpenChange?: (open: boolean) => void;
     } = $props();
 
     // ─── Bias pills (ADR-0031, ADR-0043 D-15): SSOT у constants/tfLabels.ts ───
@@ -120,6 +123,9 @@
     // ─── Dropdown state ───
     let symbolOpen = $state(false);
     let tfOpen = $state(false);
+    $effect(() => {
+        onMenuOpenChange?.(symbolOpen || tfOpen);
+    });
 
     // ─── Streaming dot (V3: updateStreamingIndicator, 12s recency) ───
     const STALE_MS = 12_000;

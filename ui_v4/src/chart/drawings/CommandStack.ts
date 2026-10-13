@@ -34,6 +34,11 @@ export class CommandStack {
     this.sendForward(cmd);
   }
 
+  /** Є що скасувати (ADR-0112 D2: ↶ на телефоні активна лише тоді). */
+  canUndo(): boolean {
+    return this.pointer >= 0;
+  }
+
   undo(): void {
     if (this.pointer < 0) return;
 

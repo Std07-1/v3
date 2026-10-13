@@ -77,6 +77,8 @@
     touchDrawing?: boolean;
     /** ADR-0112: тап по графіку поставив (або не поставив) точку — смуга оновлює крок. */
     onTouchPlace?: (result: "draft" | "done" | "none") => void;
+    /** ADR-0112 D2: чи є що скасувати й чи виділено фігуру — ↶ і «видалити» на телефоні активні лише тоді. */
+    onDrawingEditState?: (state: { canUndo: boolean; hasSelection: boolean }) => void;
   }
 
   let {
@@ -92,6 +94,7 @@
     displayMode = $bindable<DisplayMode>("focus"),
     touchDrawing = false,
     onTouchPlace,
+    onDrawingEditState,
   }: Props = $props();
 
   // ADR-0024: локальний стан SMC overlay (оновлюється інкрементально)
@@ -223,8 +226,15 @@
   /** ADR-0112: «Поставити» в точці курсора; null — режиму курсора нема. */
   export function placeTouchPoint(): "draft" | "done" | "none" | null {
     const result = touchCursor?.place() ?? null;
-    if (result !== null && result !== "none") navigator.vibrate?.(10);
+    if (result !== null) touchPlaceFeedback(result);
     return result;
+  }
+  /** Точка стала (тап або ✓): легка вібрація — тактильне «поставлено» (Android; де нема — тиша) і золотий імпульс
+   *  від кільця — видиме «поставлено». */
+  function touchPlaceFeedback(result: "draft" | "done" | "none"): void {
+    if (result === "none") return;
+    navigator.vibrate?.(10);
+    touchCursor?.pulse();
   }
   export function cancelDraft() {
     drawingsRenderer?.cancelDraft();
@@ -391,6 +401,16 @@
       ctxMenu = req;
     };
 
+    // ADR-0112 D2: ↶ і «видалити» на телефоні — активні лише коли є що (стан після кожного кадру, далі — лише зміни)
+    const editRenderer = drawingsRenderer;
+    let editState = { canUndo: false, hasSelection: false };
+    editRenderer.onRendered = () => {
+      const next = editRenderer.editState();
+      if (next.canUndo === editState.canUndo && next.hasSelection === editState.hasSelection) return;
+      editState = next;
+      onDrawingEditState?.(next);
+    };
+
     // Expose purge method for console debugging: window.__purgeDrawings()
     (window as any).__purgeDrawings = () =>
       drawingsRenderer?.purgeAllDrawings();
@@ -454,10 +474,10 @@
       chartEngine.series,
       renderer,
       {
-        // Тап по графіку = точка в кільці; легка вібрація — тактильне «поставлено» (Android; де нема — тиша)
+        // Тап по графіку = точка в кільці (відгук — той самий, що в ✓)
         onTap: () => {
           const result = cursor.place();
-          if (result !== "none") navigator.vibrate?.(10);
+          touchPlaceFeedback(result);
           onTouchPlace?.(result);
         },
         // Магніт (D7): кільце прилипло до нового рівня свічки — ледь чутний «клац»

@@ -84,6 +84,8 @@ export class DrawingsRenderer {
    *  null → меню вимкнено, renderer лишається повністю робочим. Встановлюється
    *  з ChartPane після конструювання (public seam, без constructor-churn). */
   public onContextMenu: ((req: DrawingContextRequest | null) => void) | null = null;
+  /** ADR-0112 D2: після кожного кадру — телефон оновлює ↶ і «видалити» (активні лише коли є що, editState()). */
+  public onRendered: (() => void) | null = null;
 
   private drawings: Drawing[] = [];
   private activeTool: ActiveTool = null;
@@ -1294,9 +1296,15 @@ export class DrawingsRenderer {
     this.renderSync();
   }
 
+  /** Чи є що скасувати і чи виділено фігуру — для кнопок телефона (ADR-0112 D2). */
+  editState(): { canUndo: boolean; hasSelection: boolean } {
+    return { canUndo: this.commandStack.canUndo(), hasSelection: this.selectedId !== null };
+  }
+
   private forceRender(): void {
     // ADR-0082 D6: свіжий кеш часів барів (guard + throttle всередині).
     this.refreshBarTimes();
+    this.onRendered?.();
 
     const canvasW = this.canvas.width / this.dpr;
     const canvasH = this.canvas.height / this.dpr;

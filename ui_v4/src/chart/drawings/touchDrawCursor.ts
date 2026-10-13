@@ -8,7 +8,7 @@
 // D6: поки палець веде кільце — лупа поряд (touchLoupe.ts). D7: з магнітом кільце стає на ціну свічки, до якої
 // прилипло, і на кожен новий рівень — onSnap (ChartPane: коротка вібрація).
 
-import type { IChartApi, ISeriesApi, SeriesType } from 'lightweight-charts';
+import { MismatchDirection, type IChartApi, type ISeriesApi, type SeriesType } from 'lightweight-charts';
 import { TouchLoupe } from './touchLoupe';
 
 /** Що зробило «Поставити»: 'draft' — перша точка, фігура в роботі; 'done' — фігура готова (або вимір заморожено);
@@ -42,6 +42,24 @@ export function isTap(travelPx: number, durationMs: number): boolean {
   return travelPx < TAP_SLOP_PX && durationMs < TAP_MAX_MS;
 }
 
+/** Свічка під кільцем — для підпису рівня в лупі. */
+export interface BarLevels {
+  readonly open?: number;
+  readonly high?: number;
+  readonly low?: number;
+  readonly close?: number;
+}
+
+/** Котрий рівень свічки — ця ціна (порядок магніту: H · L · O · C); '' — не рівень цієї свічки. */
+export function levelOf(price: number, bar: BarLevels | null): 'H' | 'L' | 'O' | 'C' | '' {
+  if (bar === null) return '';
+  if (price === bar.high) return 'H';
+  if (price === bar.low) return 'L';
+  if (price === bar.open) return 'O';
+  if (price === bar.close) return 'C';
+  return '';
+}
+
 /** Кільце прилипло до НОВОГО рівня (з вільного руху або з іншого рівня) — привід «клацнути». */
 export function isNewSnapLevel(prev: number | null, next: number | null): boolean {
   return next !== null && next !== prev;
@@ -72,6 +90,21 @@ export interface TouchCursorHooks {
 const RETICLE_GLOW = '0 0 0 1px rgba(0,0,0,0.55), 0 0 12px rgba(212,160,23,0.28)';
 const RETICLE_GLOW_SNAPPED = '0 0 0 1px rgba(0,0,0,0.55), 0 0 14px 2px rgba(212,160,23,0.6)';
 const RETICLE_PX = 22;
+/** Імпульс «поставлено»: золоте кільце розходиться від точки й гасне. */
+const PULSE_MS = 460;
+const PULSE_STYLE = [
+  'position:absolute',
+  'left:0',
+  'top:0',
+  `width:${RETICLE_PX}px`,
+  `height:${RETICLE_PX}px`,
+  'margin:-11px 0 0 -11px',
+  'border-radius:50%',
+  'border:2px solid var(--accent, #d4a017)',
+  'box-shadow:0 0 12px rgba(212,160,23,0.55)',
+  'pointer-events:none',
+  'z-index:22',
+].join(';');
 const RETICLE_STYLE = [
   'position:absolute',
   'left:0',
@@ -96,6 +129,8 @@ export class TouchDrawCursor {
   private readonly loupe: TouchLoupe;
   /** Рівень, до якого кільце прилипло на попередньому кроці, — щоб «клацати» лише на новому. */
   private lastSnapPrice: number | null = null;
+  /** Де кільце видно зараз (з магнітом — на рівні), — звідти йде імпульс точки. */
+  private shown: CursorPoint;
   private readonly prevAutoScale: boolean;
   /** Поворот телефона / зміна розміру: відповідність ціна↔піксель міняється, а курсор стоїть на місці екрана —
    *  перерахувати прев'ю й перехрестя (LWC застосовує новий розмір лише на своєму кадрі, тому через два кадри). */
@@ -113,6 +148,7 @@ export class TouchDrawCursor {
   ) {
     const b = this.bounds();
     this.point = { x: b.width / 2, y: b.height / 2 };
+    this.shown = this.point;
     this.reticle = document.createElement('div');
     this.reticle.className = 'touch-draw-reticle';
     this.reticle.setAttribute('style', RETICLE_STYLE);
@@ -137,6 +173,29 @@ export class TouchDrawCursor {
   place(): CursorPlaceResult {
     const p = this.snapped();
     return this.target.cursorPlace(p.x, p.y);
+  }
+
+  /** Точка стала — золоте кільце розходиться від неї й гасне. Живе в контейнері, не в курсорі: на готовій фігурі
+   *  курсор знищується одразу (one-shot), а імпульс догоряє. */
+  pulse(): void {
+    const ring = document.createElement('div');
+    ring.setAttribute('style', PULSE_STYLE);
+    const at = `translate(${this.shown.x}px, ${this.shown.y}px)`;
+    ring.style.transform = at;
+    this.container.appendChild(ring);
+    if (typeof ring.animate !== 'function') {
+      ring.remove(); // без Web Animations — без імпульсу (вібрація й крок у капсулі лишаються)
+      return;
+    }
+    const anim = ring.animate(
+      [
+        { transform: `${at} scale(0.6)`, opacity: 0.95 },
+        { transform: `${at} scale(2.6)`, opacity: 0 },
+      ],
+      { duration: PULSE_MS, easing: 'cubic-bezier(0.2, 0.7, 0.3, 1)' },
+    );
+    anim.onfinish = () => ring.remove();
+    anim.oncancel = () => ring.remove();
   }
 
   destroy(): void {
@@ -234,6 +293,15 @@ export class TouchDrawCursor {
     return { width: Math.max(0, width), height: Math.max(0, height) };
   }
 
+  /** «H 4175.79»: який рівень свічки під кільцем (за порядком магніту H · L · O · C) і ціна у форматі шкали. */
+  private levelLabel(x: number, price: number): string {
+    const logical = this.chart.timeScale().coordinateToLogical(x);
+    const bar = logical === null ? null : this.series.dataByIndex(Math.floor(logical), MismatchDirection.NearestLeft);
+    const field = levelOf(price, bar as BarLevels | null);
+    const text = this.series.priceFormatter().format(price);
+    return field ? `${field} ${text}` : text;
+  }
+
   /** x курсора — на центр бару (як перехрестя LWC), y — як є. */
   private snapped(): CursorPoint {
     const timeScale = this.chart.timeScale();
@@ -248,12 +316,15 @@ export class TouchDrawCursor {
     const snapPrice = this.target.cursorMove(p.x, p.y);
     const snapY = snapPrice === null ? null : this.series.priceToCoordinate(snapPrice);
     const shown: CursorPoint = { x: p.x, y: snapY ?? p.y };
+    this.shown = shown;
     this.reticle.style.transform = `translate(${shown.x}px, ${shown.y}px)`;
     this.reticle.style.boxShadow = snapY === null ? RETICLE_GLOW : RETICLE_GLOW_SNAPPED;
     if (fromFinger && isNewSnapLevel(this.lastSnapPrice, snapPrice)) this.hooks.onSnap?.();
     this.lastSnapPrice = snapPrice;
     // Лупа — лише коли палець справді веде кільце (тремтіння тапу її не блимає)
-    if (fromFinger && this.touchStart && this.touchStart.travel >= TAP_SLOP_PX) this.loupe.show(shown, this.bounds());
+    if (fromFinger && this.touchStart && this.touchStart.travel >= TAP_SLOP_PX) {
+      this.loupe.show(shown, this.bounds(), snapPrice === null ? null : this.levelLabel(p.x, snapPrice));
+    }
     const price = snapPrice ?? this.series.coordinateToPrice(p.y);
     const time = this.chart.timeScale().coordinateToTime(p.x);
     // Майбутнє (праворуч від останнього бару) — у LWC часу нема: перехрестя знімаємо, курсор-кільце лишається.

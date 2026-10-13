@@ -2,7 +2,7 @@
   // src/App.svelte — Root wiring: WS + DiagState + frameRouter + UI shell.
   // Без бізнес-логіки у UI. Thin controller.
 
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { WSConnection } from "./ws/connection";
   import { createActions } from "./ws/actions";
 
@@ -121,6 +121,8 @@
   const touchDrawingAvailable = resolveTouchDrawing(location.search, deviceStorage());
   let touchDrawOpen = $state(false);
   let drawBarRef: MobileDrawBar | undefined = $state();
+  /** ↶ і «видалити» в капсулі — активні лише коли є що (стан з ChartPane, ADR-0112 D2). */
+  let drawEditState = $state({ canUndo: false, hasSelection: false });
 
   // ADR-0065 Phase 1: SMC panel open + display mode lifted here from ChartPane.
   // CommandRailOverflow is the single trigger surface; ChartPane is a $bindable consumer.
@@ -402,16 +404,29 @@
 
   // ADR-0065 rev 2 Tier 2: Overflow menu (☰) state.
   let overflowOpen = $state(false);
+  // ADR-0112 D2: відкрите меню (☰, символ/TF) чи панель SMC — малювання на телефоні зупиняється (інакше палець далі
+  // вів би кільце під меню, а тап по пункту ставив би точку). Лише якщо малювання відкрите — ПК не зачіпає.
+  function stopTouchDrawing(): void {
+    if (touchDrawOpen) closeTouchDrawing();
+  }
+  $effect(() => {
+    if (smcPanelOpen) untrack(stopTouchDrawing);
+  });
+
   function toggleOverflow(e: MouseEvent) {
     e.stopPropagation();
     overflowOpen = !overflowOpen;
     // Mutual exclusion: overflow and SMC panel must not overlap (ADR-0065 UX fix)
-    if (overflowOpen) smcPanelOpen = false;
+    if (overflowOpen) {
+      smcPanelOpen = false;
+      stopTouchDrawing();
+    }
   }
   function closeOverflow() {
     overflowOpen = false;
   }
   function openTouchDrawing(): void {
+    smcPanelOpen = false; // взаємовиключно, як ☰ і SMC (ADR-0065)
     touchDrawOpen = true;
     closeOverflow();
   }
@@ -963,6 +978,7 @@
         {archiChartEnabled}
         touchDrawing={touchDrawOpen}
         onTouchPlace={(r) => drawBarRef?.applyPlace(r)}
+        onDrawingEditState={(s) => (drawEditState = s)}
         bind:smcPanelOpen
         bind:displayMode
       />
@@ -977,6 +993,8 @@
           onUndo={() => chartPaneRef?.undo()}
           onDeleteSelected={() => chartPaneRef?.deleteSelectedDrawing()}
           onClose={closeTouchDrawing}
+          canUndo={drawEditState.canUndo}
+          hasSelection={drawEditState.hasSelection}
           {menuBg}
           {menuBorder}
         />
@@ -984,6 +1002,7 @@
 
       <!-- P3.1-P3.2: Frosted-glass HUD overlay -->
       <ChartHud
+        onMenuOpenChange={(open) => open && stopTouchDrawing()}
         symbols={cfgSymbols}
         tfs={cfgTfs}
         currentSymbol={hudSymbol}

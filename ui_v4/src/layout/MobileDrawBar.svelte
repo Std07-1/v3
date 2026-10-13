@@ -1,14 +1,16 @@
 <!--
-  src/layout/MobileDrawBar.svelte — ADR-0112: малювання на телефоні (пробна версія під ?draw=1), v2.
+  src/layout/MobileDrawBar.svelte — ADR-0112: малювання на телефоні (пробна версія під ?draw=1).
 
-  Одна капсула мовою меню HUD (вибір символу/TF: матове скло, рамка 8 px, пункти з радіусом 4, активний — синюватий тон
-  із золотом; кольори теми — ті самі menuBg/menuBorder, що в ChartHud), лише іконки.
-  Без інструмента: 6 інструментів реєстру · ↶ · видалити виділене · ✕.
-  З інструментом капсула стає: ✕ · іконка + «точка 1 з 2» · магніт · ✓. Точку ставить тап будь-де по графіку
-  (touchDrawCursor веде кільце 1:1, тап без руху = точка в кільці) або ✓. Готова фігура — інструмент знімається сам
-  (one-shot); ефемерна лінійка лишає результат, наступний тап починає новий вимір.
+  Одна капсула мовою меню HUD (вибір символу/TF: матове скло, рамка, пункти з радіусом 4, активний — синюватий тон
+  із золотом; кольори теми — ті самі menuBg/menuBorder, що в ChartHud), лише іконки, золота лінія по верхньому краю.
+  Без інструмента: 6 інструментів реєстру · ↶ · видалити виділене · ✕; ↶ і «видалити» активні лише коли є що
+  (canUndo / hasSelection), інакше — притушені й не натискаються.
+  З інструментом капсула стає: ✕ · іконка · крок (крапки + «точка 1 з 2») · магніт · ✓. Точку ставить тап будь-де по
+  графіку (touchDrawCursor веде кільце 1:1, тап без руху = точка в кільці) або ✓. Готова фігура — інструмент
+  знімається сам (one-shot); ефемерна лінійка лишає результат, наступний тап починає новий вимір.
 -->
 <script lang="ts">
+  import { fly } from "svelte/transition";
   import type { ActiveTool } from "../types";
   import { TOOL_REGISTRY } from "../chart/drawings/tools";
   import { ICON_CLOSE, ICON_MAGNET, ICON_TRASH, ICON_UNDO } from "./toolIcons";
@@ -24,6 +26,8 @@
     onUndo,
     onDeleteSelected,
     onClose,
+    canUndo = false,
+    hasSelection = false,
     menuBg = "rgba(30, 34, 45, 0.92)",
     menuBorder = "rgba(255, 255, 255, 0.08)",
   }: {
@@ -36,12 +40,17 @@
     onUndo: () => void;
     onDeleteSelected: () => void;
     onClose: () => void;
+    /** Є що скасувати / виділено фігуру — ↶ і «видалити» активні лише тоді (ChartPane → App). */
+    canUndo?: boolean;
+    hasSelection?: boolean;
     /** Кольори меню теми — ті самі, що в меню символу/TF (ChartHud). */
     menuBg?: string;
     menuBorder?: string;
   } = $props();
 
   const ICON_CHECK = '<path d="M20 6 9 17l-5-5"/>';
+  /** Короткий «клац» на вибір інструмента (Android; де нема — тиша). */
+  const SELECT_VIBRATE_MS = 6;
   const tools = [...TOOL_REGISTRY.values()];
   const current = $derived(
     activeTool && activeTool !== "eraser" ? (TOOL_REGISTRY.get(activeTool) ?? null) : null,
@@ -63,6 +72,12 @@
     if (current.pointsRequired === 1) return "тап — поставити";
     return `точка ${placed + 1} з ${current.pointsRequired}`;
   });
+  /** Крапки кроку: скільки точок у фігури і скільки вже стоїть (одноточкова — без крапок). */
+  const dots = $derived(
+    current && current.pointsRequired > 1
+      ? Array.from({ length: current.pointsRequired }, (_, i) => measured || i < placed)
+      : [],
+  );
 
   /** Результат точки — з тапу по графіку (ChartPane → App) або з ✓. */
   export function applyPlace(result: PlaceResult): void {
@@ -95,6 +110,7 @@
 
   function choose(tool: ActiveTool): void {
     reset();
+    if (tool !== null) navigator.vibrate?.(SELECT_VIBRATE_MS);
     onSelectTool(tool);
   }
 </script>
@@ -119,87 +135,124 @@
   style:background={menuBg}
   style:border-color={menuBorder}
 >
-  {#if current}
-    <button class="btn dim" type="button" aria-label="Скасувати фігуру" onclick={() => choose(null)}>
-      {@render icon(ICON_CLOSE)}
-    </button>
-    <span class="tool-now">
-      <span class="btn active as-label" aria-hidden="true">{@render icon(current.icon)}</span>
-      <span class="step">{stepLabel}</span>
-    </span>
-    {#if onToggleMagnet}
-      <button
-        class="btn"
-        class:active={magnetEnabled}
-        type="button"
-        aria-label="Магніт"
-        aria-pressed={magnetEnabled}
-        onclick={onToggleMagnet}
-      >
-        {@render icon(ICON_MAGNET)}
-      </button>
-    {/if}
-    <button class="btn accent" type="button" aria-label="Поставити точку" onclick={place}>
-      {@render icon(ICON_CHECK)}
-    </button>
-  {:else}
-    {#each tools as tool (tool.id)}
-      <button class="btn" type="button" aria-label={tool.label} onclick={() => choose(tool.id)}>
-        {@render icon(tool.icon)}
-      </button>
-    {/each}
-    <span class="sep" style:background={menuBorder}></span>
-    <button class="btn" type="button" aria-label="Скасувати дію" onclick={onUndo}>
-      {@render icon(ICON_UNDO)}
-    </button>
-    <button class="btn" type="button" aria-label="Видалити виділене" onclick={onDeleteSelected}>
-      {@render icon(ICON_TRASH)}
-    </button>
-    <button class="btn dim" type="button" aria-label="Закрити малювання" onclick={onClose}>
-      {@render icon(ICON_CLOSE)}
-    </button>
-  {/if}
+  <!-- Зміна режиму (інструменти ↔ інструмент) — вміст підпливає, капсула не блимає -->
+  {#key current?.id ?? "browse"}
+    <div class="row" in:fly={{ y: 6, duration: 180 }}>
+      {#if current}
+        <button class="btn dim" type="button" aria-label="Скасувати фігуру" onclick={() => choose(null)}>
+          {@render icon(ICON_CLOSE)}
+        </button>
+        <span class="tool-now">
+          <span class="btn active as-label" aria-hidden="true">{@render icon(current.icon)}</span>
+          <span class="step">
+            {#if dots.length}
+              <span class="dots" aria-hidden="true">
+                {#each dots as filled, i (i)}
+                  <span class="dot" class:filled></span>
+                {/each}
+              </span>
+            {/if}
+            <span class="step-text">{stepLabel}</span>
+          </span>
+        </span>
+        {#if onToggleMagnet}
+          <button
+            class="btn"
+            class:active={magnetEnabled}
+            type="button"
+            aria-label="Магніт"
+            aria-pressed={magnetEnabled}
+            onclick={onToggleMagnet}
+          >
+            {@render icon(ICON_MAGNET)}
+          </button>
+        {/if}
+        <button class="btn accent" type="button" aria-label="Поставити точку" onclick={place}>
+          {@render icon(ICON_CHECK)}
+        </button>
+      {:else}
+        {#each tools as tool (tool.id)}
+          <button class="btn" type="button" aria-label={tool.label} onclick={() => choose(tool.id)}>
+            {@render icon(tool.icon)}
+          </button>
+        {/each}
+        <span class="sep" style:background={menuBorder}></span>
+        <button class="btn" type="button" aria-label="Скасувати дію" disabled={!canUndo} onclick={onUndo}>
+          {@render icon(ICON_UNDO)}
+        </button>
+        <button
+          class="btn danger"
+          type="button"
+          aria-label="Видалити виділене"
+          disabled={!hasSelection}
+          onclick={onDeleteSelected}
+        >
+          {@render icon(ICON_TRASH)}
+        </button>
+        <button class="btn dim" type="button" aria-label="Закрити малювання" onclick={onClose}>
+          {@render icon(ICON_CLOSE)}
+        </button>
+      {/if}
+    </div>
+  {/key}
 </div>
 
 <style>
-  /* Мова меню HUD (ChartHud .hud-menu): матове скло, рамка, радіус 8, тінь. Знизу — над знаком v3 (BrandWatermark:
-     закріплене місце, на телефоні 30 px від низу + 24 px заввишки) і віссю часу, з безпечною зоною. */
+  /* Мова меню HUD (ChartHud .hud-menu): матове скло, рамка, радіус 8, тінь. Низ графіка — на обсягах, одразу над
+     віссю часу (на телефоні 26 px) і правіше знака v3 (BrandWatermark: закріплене місце, на телефоні 6–26 px зліва,
+     30–54 px від низу), з безпечною зоною. */
   .mdraw {
     position: absolute;
-    left: 0;
-    right: 0;
-    bottom: calc(62px + env(safe-area-inset-bottom, 0px));
+    left: 32px;
+    right: 4px;
+    bottom: calc(30px + env(safe-area-inset-bottom, 0px));
     z-index: 30;
-    display: flex;
-    align-items: center;
-    gap: 0;
     /* По центру через margin, не left:50% — інакше ширину стискає половина контейнера, і кнопки мліють до мінімуму */
     width: max-content;
-    max-width: calc(100% - 16px);
+    max-width: calc(100% - 36px);
     margin: 0 auto;
     box-sizing: border-box;
     padding: 4px;
     border: 1px solid;
-    border-radius: 8px;
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    border-radius: 10px;
+    backdrop-filter: blur(14px) saturate(1.2);
+    -webkit-backdrop-filter: blur(14px) saturate(1.2);
+    box-shadow:
+      0 8px 28px rgba(0, 0, 0, 0.5),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
     color: var(--text-1);
     font-family: var(--font-sans);
-    animation: mdraw-in 160ms ease-out;
+    animation: mdraw-in 280ms cubic-bezier(0.2, 0.9, 0.25, 1.15);
+  }
+  /* Золота лінія по верхньому краю — підпис v3 (як золото активного TF), гасне до країв */
+  .mdraw::before {
+    content: "";
+    position: absolute;
+    left: 14px;
+    right: 14px;
+    top: -1px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent, #d4a017) 50%, transparent);
+    opacity: 0.6;
+    pointer-events: none;
   }
   @keyframes mdraw-in {
     from {
       opacity: 0;
-      transform: translateY(6px);
+      transform: translateY(14px) scale(0.96);
     }
     to {
       opacity: 1;
-      transform: translateY(0);
+      transform: translateY(0) scale(1);
     }
   }
+  .row {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
   /* Пункт меню HUD: радіус 4, активний — синюватий тон + золото (як вибраний TF / символ). 9 кнопок по 36 вміщаються
-     в телефон 360 px; на вужчому стискаються до 32. */
+     в телефон 375 px; на вужчому стискаються до 32. */
   .btn {
     all: unset;
     flex: 0 1 auto;
@@ -209,14 +262,19 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 4px;
+    border-radius: 6px;
     color: inherit;
     opacity: 0.88;
-    transition: background 0.12s;
+    transition:
+      background 0.12s,
+      opacity 0.2s,
+      color 0.2s,
+      transform 0.12s;
     touch-action: manipulation;
   }
-  .btn:active {
+  .btn:active:not(:disabled) {
     background: rgba(128, 128, 128, 0.15);
+    transform: scale(0.92);
   }
   .btn.active {
     background: rgba(74, 144, 217, 0.2);
@@ -229,6 +287,16 @@
   .btn.accent {
     color: var(--accent);
     opacity: 1;
+  }
+  /* «Видалити» — руйнівна дія: коли є що, червонуватий тон (як × на фігурі) */
+  .btn.danger:not(:disabled) {
+    color: #ef6b6b;
+    opacity: 1;
+  }
+  /* Нема що скасувати / нічого не виділено — кнопка є (місце не стрибає), але притушена й не натискається */
+  .btn:disabled {
+    opacity: 0.22;
+    cursor: default;
   }
   .as-label {
     pointer-events: none;
@@ -243,11 +311,38 @@
   }
   .step {
     min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
     font-size: 13px;
     color: var(--text-1);
     white-space: nowrap;
+  }
+  .step-text {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .dots {
+    display: inline-flex;
+    gap: 4px;
+  }
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    border: 1px solid var(--accent, #d4a017);
+    opacity: 0.55;
+    transition:
+      background 0.2s,
+      opacity 0.2s,
+      transform 0.2s;
+  }
+  .dot.filled {
+    background: var(--accent, #d4a017);
+    opacity: 1;
+    transform: scale(1.15);
+    box-shadow: 0 0 6px rgba(212, 160, 23, 0.6);
   }
   .sep {
     flex: 0 0 auto;
