@@ -38,6 +38,8 @@ interface VerticalPanState {
     startRange: PriceRange | null;
     baseRange: PriceRange | null;
     pointerId: number | null;
+    /** Ручний діапазон до цього жесту — щоб скасувати прокрутку без сліду, якщо дотик забрало перехрестя. */
+    prevManualRange: PriceRange | null;
 }
 
 // ─── Utility functions (V3: chart_adapter_lite.js:310-330, 477-530) ───
@@ -119,6 +121,11 @@ export function setupPriceScaleInteractions(
     chart: IChartApi,
     series: ISeriesApi<'Candlestick'>,
     onPriceRangeChanged?: () => void,
+    /** ADR-0108 (13.10): дотиком зараз володіє закріплене перехрестя (або курсор малювання ADR-0112) — палець
+     *  веде його, а не шкалу ціни. Без цього pointer-події пальця (окремий від touch потік, longPressLock глушить
+     *  лише touch) вмикали тут вертикальну прокрутку / масштаб осі: ручний діапазон ціни накопичувався непомітно,
+     *  поки autoScale заморожено, і на виході з режиму графік стрибав на весь шлях пальця (прод, 13.10). */
+    isTouchOwned?: () => boolean,
 ): () => void {
     const cleanups: Array<() => void> = [];
 
@@ -166,6 +173,7 @@ export function setupPriceScaleInteractions(
         startRange: null,
         baseRange: null,
         pointerId: null,
+        prevManualRange: null,
     };
 
     // Axis-drag vertical zoom state (replaces LWC native axisPressedMouseMove.price)
@@ -392,6 +400,7 @@ export function setupPriceScaleInteractions(
         panState.baseRange = currentRange;
         panState.startRange = null;
         panState.pointerId = pointerId;
+        panState.prevManualRange = state.manualRange ? { ...state.manualRange } : null;
     };
 
     const movePan = (event: PointerEvent | MouseEvent, clientX: number, clientY: number) => {
@@ -428,8 +437,25 @@ export function setupPriceScaleInteractions(
         });
     };
 
+    /** Дотик, яким володіє перехрестя (isTouchOwned): прокрутку, що встигла стартувати до закріплення (той самий
+     *  палець довгого дотику), скасовуємо разом із її слідом у ручному діапазоні. */
+    const touchOwned = (event: PointerEvent): boolean => {
+        if (event.pointerType !== 'touch' || !isTouchOwned?.()) return false;
+        if (panState.pending) {
+            if (panState.active) state.manualRange = panState.prevManualRange;
+            stopVerticalPan('touch-owned');
+        }
+        if (axisZoomState.active) {
+            axisZoomState.active = false;
+            axisZoomState.startRange = null;
+            axisZoomState.pointerId = null;
+        }
+        return true;
+    };
+
     // Pointer events (V3: chart_adapter_lite.js:730-790)
     const handlePointerDown = (event: PointerEvent) => {
+        if (touchOwned(event)) return;
         const inAxis = isPointerInPriceAxis(event, container, chart);
         const inPane = isPointerInsidePane(event, container, chart);
         dbg('pointerdown', { inAxis, inPane, button: event.button, target: (event.target as HTMLElement)?.tagName });
@@ -453,6 +479,7 @@ export function setupPriceScaleInteractions(
     cleanups.push(() => container.removeEventListener('pointerdown', handlePointerDown, true));
 
     const handlePointerMove = (event: PointerEvent) => {
+        if (touchOwned(event)) return;
         if (axisZoomState.active && axisZoomState.startRange) {
             if (axisZoomState.pointerId !== null && event.pointerId !== axisZoomState.pointerId) return;
             const { paneHeight } = getPaneMetrics(chart, container);

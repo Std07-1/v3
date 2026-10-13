@@ -401,6 +401,8 @@
         overlayRenderer?.notifyPriceRangeChanged();
         archiRenderer?.notifyPriceRangeChanged();
       },
+      // ADR-0108: поки перехрестя закріплене (або курсор малювання ADR-0112) — палець веде його, не шкалу ціни
+      () => crosshairPinned || touchCursor !== null,
     );
 
     // Long-press crosshair-lock (mobile): hold 300ms → chart freeze →
