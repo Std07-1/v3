@@ -18,6 +18,7 @@
 import type { IChartApi, ISeriesApi, Time, Logical } from 'lightweight-charts';
 import type { ArchiChartCondition, ArchiChartData } from '../../types';
 import { timeToFractionalIndex, medianStep, fractionalLogicalToX } from '../drawings/timeMap';
+import { withAlpha as tokenWithAlpha } from '../canvasColor';
 
 /** LWC bar.time → сек (number | 'YYYY-MM-DD' | BusinessDay). */
 function timeToSec(t: Time): number {
@@ -62,13 +63,8 @@ const TF_LABELS: Record<number, string> = {
   1800: 'M30', 3600: 'H1', 14400: 'H4', 86400: 'D1',
 };
 
-/** rgba з hex-токена (canvas не читає CSS var/color-mix). */
-function withAlpha(hex: string, alpha: number): string {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return `rgba(84,135,255,${alpha})`;
-  const n = parseInt(m[1], 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
-}
+/** rgba з hex-токена (canvas не читає CSS var/color-mix); запасний — синій шару Арчі. */
+const withAlpha = (hex: string, alpha: number): string => tokenWithAlpha(hex, alpha, '84,135,255');
 
 function fmtPrice(level: number): string {
   return level.toFixed(2).replace(/\.00$/, '');

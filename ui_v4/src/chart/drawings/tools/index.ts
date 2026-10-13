@@ -14,16 +14,18 @@ import { TrendTool } from './TrendTool';
 import { RectTool } from './RectTool';
 import { RayTool } from './RayTool';
 import { MeasureTool } from './MeasureTool';
+import { FibTool } from './FibTool';
 import type { ToolModule } from './types';
 
 /** ADR-0111 §3.3: повнота реєстру — на рівні типів (D15.2): пропущений або зайвий DrawingType — помилка
  *  компіляції, а не тихо відсутня кнопка. Порядок ключів = порядок кнопок панелі (hline → trend → ray → rect →
- *  measure). */
+ *  fib → measure). */
 const TOOLS_BY_TYPE = {
     hline: HLineTool,
     trend: TrendTool,
     ray: RayTool,
     rect: RectTool,
+    fib: FibTool,
     measure: MeasureTool,
 } satisfies Record<DrawingType, ToolModule>;
 

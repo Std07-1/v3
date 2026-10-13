@@ -251,7 +251,8 @@ export interface SignalAlert {
 // -------------------- Drawings --------------------
 // ADR-0084: 'ray' — персистентний промінь; 'measure' — EPHEMERAL лінійка
 // (живе лише як draft: не комітиться, не зберігається, не hit-test'иться).
-export type DrawingType = 'hline' | 'trend' | 'rect' | 'ray' | 'measure';
+// ADR-0111 §3.4: 'fib' — Fibonacci retracement (2 якорі, рівні відкату).
+export type DrawingType = 'hline' | 'trend' | 'rect' | 'ray' | 'measure' | 'fib';
 
 /** ADR-0080 (surface-2): семантична роль-колір. Резолвиться у token-хекс при
  *  рендері (theme-aware). SSOT списку ролей + label/cssVar — chart/drawings/

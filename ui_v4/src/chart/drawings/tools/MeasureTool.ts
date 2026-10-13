@@ -9,6 +9,7 @@
 
 import type { Drawing } from '../../../types';
 import { displayPriceDigits } from '../../../lib/priceDigits';
+import { withAlpha as tokenWithAlpha } from '../../canvasColor';
 import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './types';
 
 /** Людський формат тривалості: 45м · 3г 20м · 2д 5г. */
@@ -23,13 +24,8 @@ function fmtDuration(ms: number): string {
     return h ? `${d}д ${h}г` : `${d}д`;
 }
 
-/** rgba з hex-токена з заданою альфою (canvas не вміє color-mix). */
-function withAlpha(hex: string, alpha: number): string {
-    const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-    if (!m) return `rgba(128,128,128,${alpha})`;
-    const n = parseInt(m[1], 16);
-    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
-}
+/** rgba з hex-токена з заданою альфою (canvas не вміє color-mix); запасний — нейтральний сірий. */
+const withAlpha = (hex: string, alpha: number): string => tokenWithAlpha(hex, alpha, '128,128,128');
 
 export const MeasureTool: ToolModule = {
     id: 'measure',
