@@ -11,6 +11,7 @@ import {
   HIT_TOLERANCE_PX,
   HANDLE_RADIUS_PX,
   distToPoint,
+  dragStarted,
 } from '../interaction/geometry';
 import { getToolModule } from './tools';
 import { isCorruptBackupKey, loadDrawings, saveDrawings } from './drawingsStorage';
@@ -110,6 +111,8 @@ export class DrawingsRenderer {
       startX: number;
       startY: number;
       startObj: Drawing; // snapshot для UPDATE/undo
+      pointerType: string; // поріг початку перетягування залежить від вказівника (geometry.dragStarted)
+      started: boolean; // поріг перейдено — до того це клік (вибір), фігура не змінюється
     } = null;
 
   // hit-test/cache
@@ -936,6 +939,8 @@ export class DrawingsRenderer {
         startX: x,
         startY: y,
         startObj: cloneDrawing(d),
+        pointerType: e.pointerType,
+        started: false,
       };
     };
 
@@ -1102,6 +1107,12 @@ export class DrawingsRenderer {
   // ---- drag math (v3) ----
   private handleDragMove(x: number, y: number): void {
     if (!this.dragState) return;
+    // Поріг (ADR-0111, 13.10): поки зсув від натискання менший — це клік, ні ручку, ні тіло не чіпаємо.
+    if (!this.dragState.started) {
+      const { startX, startY, pointerType } = this.dragState;
+      if (!dragStarted(x - startX, y - startY, pointerType)) return;
+      this.dragState.started = true;
+    }
 
     const dIdx = this.drawings.findIndex((d) => d.id === this.dragState!.id);
     if (dIdx < 0) return;

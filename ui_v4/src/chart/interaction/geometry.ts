@@ -11,6 +11,19 @@ export const HIT_TOLERANCE_PX = 10;
 export const HANDLE_RADIUS_PX = 5;
 export const HANDLE_RADIUS_HOVER_PX = 8;
 
+/** ADR-0111 (поріг перетягування, 13.10): на скільки CSS px вказівник має відійти від точки натискання, щоб почалось
+ *  перетягування фігури чи її ручки. Менше — це клік (вибір), фігура не змінюється: без порогу тремтіння руки на 1px
+ *  переписувало ціну якоря на ціну під курсором, а тіло зсувалось на піксель. Палець і перо тремтять сильніше — як
+ *  MOVE_THRESHOLD_PX (8) довгого дотику в chart/longPressLock.ts. */
+export const DRAG_START_PX_MOUSE = 3;
+export const DRAG_START_PX_TOUCH = 8;
+
+/** Чи почалось перетягування: зсув від точки натискання досяг порогу для цього типу вказівника. */
+export function dragStarted(dx: number, dy: number, pointerType: string): boolean {
+  const threshold = pointerType === 'touch' || pointerType === 'pen' ? DRAG_START_PX_TOUCH : DRAG_START_PX_MOUSE;
+  return Math.hypot(dx, dy) >= threshold;
+}
+
 export function distToHLine(cursorY: number, lineY: number): number {
   return Math.abs(cursorY - lineY);
 }
