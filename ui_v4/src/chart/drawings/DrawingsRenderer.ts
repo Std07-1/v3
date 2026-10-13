@@ -561,7 +561,9 @@ export class DrawingsRenderer {
     // 120px covers normal hover-near-candle distances (debug: 6–104px) while
     // rejecting far mismatches (200–400px = cursor below candles snapping to top).
     // Old radius was 30px (too tight); "always snap" = no threshold (too loose).
-    const SNAP_RADIUS_PX = 120;
+    // Курсор пальцем (ADR-0112 D7) — «слабкий» магніт: кільце прилипає лише поруч із рівнем, тож прилипання щось
+    // означає («ти на хаї») і його можна відчути вібрацією; 120 px тримали б кільце на рівнях майже завжди.
+    const SNAP_RADIUS_PX = this.touchCursorMode ? 16 : 120;
     if (bestDist > SNAP_RADIUS_PX) {
       this.lastSnap = null;
       return rawPrice;
@@ -1052,10 +1054,16 @@ export class DrawingsRenderer {
     return this.touchCursorMode && e.pointerType === 'touch';
   }
 
-  /** Курсор у (x, y), CSS px панелі — як рух миші з обраним інструментом. */
-  cursorMove(x: number, y: number): void {
+  /** Курсор у (x, y), CSS px панелі — як рух миші з обраним інструментом. Повертає ціну, до якої прилип магніт
+   *  (кільце стає на неї, D7), або null — магніт вимкнено, рівень далеко чи вимір заморожено. */
+  cursorMove(x: number, y: number): number | null {
     const tool = this.activeDrawingTool();
-    if (tool) this.toolMove(tool, x, y);
+    if (!tool) return null;
+    this.toolMove(tool, x, y);
+    const raw = this.fromY(y);
+    if (!this.snapConfig.enabled || raw === null || this.draftFrozen) return null;
+    const price = this.getSnappedPrice(x, y, raw);
+    return price === raw ? null : price;
   }
 
   /** «Поставити» в (x, y) — як клік мишею. 'draft' — фігура в роботі; 'done' — готова або вимір заморожено;
@@ -1363,7 +1371,7 @@ export class DrawingsRenderer {
     // почав малювати. Тепер показуємо щойно lastSnap встановлено (під час
     // hover preview для trend/rect, draft preview для hline, drag handles).
     // Очищення lastSnap при tool deactivate робиться в pointermove handler.
-    if (this.lastSnap) {
+    if (this.lastSnap && !this.touchCursorMode) { // на телефоні прилипання показує саме кільце (D7)
       this.ctx.save();
       this.ctx.strokeStyle = '#00e676';
       this.ctx.fillStyle = 'rgba(0, 230, 118, 0.25)';

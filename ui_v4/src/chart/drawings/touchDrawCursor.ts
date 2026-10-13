@@ -5,8 +5,11 @@
 // пальці — далі до LWC (масштаб). autoScale на час режиму заморожено (як у longPressLock): тіки не зсувають ціну під
 // курсором. Курсор стає на бар (той самий, що показує перехрестя LWC з ціною й часом на осях).
 // longPressLock.ts (🔒) не змінюється: режим живе лише поки інструмент обрано (ChartPane створює/знищує).
+// D6: поки палець веде кільце — лупа поряд (touchLoupe.ts). D7: з магнітом кільце стає на ціну свічки, до якої
+// прилипло, і на кожен новий рівень — onSnap (ChartPane: коротка вібрація).
 
 import type { IChartApi, ISeriesApi, SeriesType } from 'lightweight-charts';
+import { TouchLoupe } from './touchLoupe';
 
 /** Що зробило «Поставити»: 'draft' — перша точка, фігура в роботі; 'done' — фігура готова (або вимір заморожено);
  *  'none' — нічого (дві точки в одному місці або точку не перевести) — інструмент лишається. */
@@ -39,6 +42,11 @@ export function isTap(travelPx: number, durationMs: number): boolean {
   return travelPx < TAP_SLOP_PX && durationMs < TAP_MAX_MS;
 }
 
+/** Кільце прилипло до НОВОГО рівня (з вільного руху або з іншого рівня) — привід «клацнути». */
+export function isNewSnapLevel(prev: number | null, next: number | null): boolean {
+  return next !== null && next !== prev;
+}
+
 const POINTER_TYPES = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'] as const;
 
 /** Дотик по самому графіку (полотна LWC і шарів), а не по кнопках поверх нього. */
@@ -46,13 +54,23 @@ function onChartSurface(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest('canvas') !== null;
 }
 
-/** Що курсор робить з фігурою (DrawingsRenderer): той самий шлях, що рух і клік мишею. */
+/** Що курсор робить з фігурою (DrawingsRenderer): той самий шлях, що рух і клік мишею. cursorMove повертає ціну,
+ *  до якої прилип магніт, або null. */
 export interface TouchCursorTarget {
-  cursorMove(x: number, y: number): void;
+  cursorMove(x: number, y: number): number | null;
   cursorPlace(x: number, y: number): CursorPlaceResult;
 }
 
-/** Кільце курсора поверх графіка (DOM — без змін у canvas-шарах; підписи на осях дає перехрестя LWC). */
+/** Відгук курсора для ChartPane: тап по графіку — поставити точку; кільце прилипло до нового рівня. */
+export interface TouchCursorHooks {
+  readonly onTap?: () => void;
+  readonly onSnap?: () => void;
+}
+
+/** Кільце курсора поверх графіка (DOM — без змін у canvas-шарах; підписи на осях дає перехрестя LWC). Прилипле до
+ *  рівня — світиться яскравіше. */
+const RETICLE_GLOW = '0 0 0 1px rgba(0,0,0,0.55), 0 0 12px rgba(212,160,23,0.28)';
+const RETICLE_GLOW_SNAPPED = '0 0 0 1px rgba(0,0,0,0.55), 0 0 14px 2px rgba(212,160,23,0.6)';
 const RETICLE_PX = 22;
 const RETICLE_STYLE = [
   'position:absolute',
@@ -64,7 +82,7 @@ const RETICLE_STYLE = [
   'border-radius:50%',
   'border:1.5px solid var(--accent, #d4a017)',
   'background:radial-gradient(circle, var(--accent, #d4a017) 0 1.6px, transparent 2.2px)',
-  'box-shadow:0 0 0 1px rgba(0,0,0,0.55), 0 0 12px rgba(212,160,23,0.28)',
+  `box-shadow:${RETICLE_GLOW}`,
   'pointer-events:none',
   'z-index:21', // над шаром малювань (20) — чернетка не закриває кільце
 ].join(';');
@@ -75,6 +93,9 @@ export class TouchDrawCursor {
   /** Початок поточного дотику і пройдений шлях — щоб відрізнити тап (точка) від ведення кільця. */
   private touchStart: { at: number; travel: number } | null = null;
   private readonly reticle: HTMLDivElement;
+  private readonly loupe: TouchLoupe;
+  /** Рівень, до якого кільце прилипло на попередньому кроці, — щоб «клацати» лише на новому. */
+  private lastSnapPrice: number | null = null;
   private readonly prevAutoScale: boolean;
   /** Поворот телефона / зміна розміру: відповідність ціна↔піксель міняється, а курсор стоїть на місці екрана —
    *  перерахувати прев'ю й перехрестя (LWC застосовує новий розмір лише на своєму кадрі, тому через два кадри). */
@@ -86,8 +107,9 @@ export class TouchDrawCursor {
     private readonly chart: IChartApi,
     private readonly series: ISeriesApi<SeriesType>,
     private readonly target: TouchCursorTarget,
-    /** Тап по графіку — поставити точку в кільці (ChartPane: place() + вібрація + смуга). */
-    private readonly onTap?: () => void,
+    private readonly hooks: TouchCursorHooks = {},
+    /** Верхня межа лупи (під рядками HUD), CSS px панелі. */
+    loupeMinTop = 0,
   ) {
     const b = this.bounds();
     this.point = { x: b.width / 2, y: b.height / 2 };
@@ -95,6 +117,7 @@ export class TouchDrawCursor {
     this.reticle.className = 'touch-draw-reticle';
     this.reticle.setAttribute('style', RETICLE_STYLE);
     container.appendChild(this.reticle);
+    this.loupe = new TouchLoupe(container, chart.options().crosshair.horzLine.color, loupeMinTop);
     this.prevAutoScale = series.priceScale().options().autoScale;
     series.priceScale().applyOptions({ autoScale: false });
     container.addEventListener('touchstart', this.onTouchStart, { capture: true, passive: false });
@@ -126,6 +149,7 @@ export class TouchDrawCursor {
     this.resizeObserver.disconnect();
     cancelAnimationFrame(this.resizeFrame);
     this.chart.clearCrosshairPosition();
+    this.loupe.destroy();
     // Повертаємо autoScale, лише якщо його ніхто не змінив за час режиму (longPressLock на виході зі свого режиму
     // вмикає його сам — тоді не перетирати, рецензія D-4).
     if (this.series.priceScale().options().autoScale === false) {
@@ -138,6 +162,7 @@ export class TouchDrawCursor {
     if (e.touches.length !== 1) {
       this.lastTouch = null; // два пальці — масштаб LWC
       this.touchStart = null;
+      this.loupe.hide();
       return;
     }
     if (!onChartSurface(e.target)) return; // панель SMC тощо всередині контейнера — їхні кнопки працюють (D-5)
@@ -156,7 +181,7 @@ export class TouchDrawCursor {
     if (this.touchStart) this.touchStart.travel += Math.hypot(t.clientX - this.lastTouch.x, t.clientY - this.lastTouch.y);
     this.point = moveCursor(this.point, t.clientX - this.lastTouch.x, t.clientY - this.lastTouch.y, this.bounds());
     this.lastTouch = { x: t.clientX, y: t.clientY };
-    this.sync();
+    this.sync(true);
   };
 
   private readonly onTouchEnd = (e: TouchEvent): void => {
@@ -165,9 +190,10 @@ export class TouchDrawCursor {
     if (e.touches.length === 0) {
       this.lastTouch = null;
       this.touchStart = null;
+      this.loupe.hide();
     }
     if (e.type === 'touchend' && start && isTap(start.travel, e.timeStamp - start.at)) {
-      this.onTap?.();
+      this.hooks.onTap?.();
     }
   };
 
@@ -216,11 +242,19 @@ export class TouchDrawCursor {
     return { x: x ?? this.point.x, y: this.point.y };
   }
 
-  private sync(): void {
+  /** Кільце, прев'ю фігури, перехрестя; fromFinger — крок пальця (лупа й «клац»; масштаб і поворот — без них). */
+  private sync(fromFinger = false): void {
     const p = this.snapped();
-    this.reticle.style.transform = `translate(${p.x}px, ${p.y}px)`;
-    this.target.cursorMove(p.x, p.y);
-    const price = this.series.coordinateToPrice(p.y);
+    const snapPrice = this.target.cursorMove(p.x, p.y);
+    const snapY = snapPrice === null ? null : this.series.priceToCoordinate(snapPrice);
+    const shown: CursorPoint = { x: p.x, y: snapY ?? p.y };
+    this.reticle.style.transform = `translate(${shown.x}px, ${shown.y}px)`;
+    this.reticle.style.boxShadow = snapY === null ? RETICLE_GLOW : RETICLE_GLOW_SNAPPED;
+    if (fromFinger && isNewSnapLevel(this.lastSnapPrice, snapPrice)) this.hooks.onSnap?.();
+    this.lastSnapPrice = snapPrice;
+    // Лупа — лише коли палець справді веде кільце (тремтіння тапу її не блимає)
+    if (fromFinger && this.touchStart && this.touchStart.travel >= TAP_SLOP_PX) this.loupe.show(shown, this.bounds());
+    const price = snapPrice ?? this.series.coordinateToPrice(p.y);
     const time = this.chart.timeScale().coordinateToTime(p.x);
     // Майбутнє (праворуч від останнього бару) — у LWC часу нема: перехрестя знімаємо, курсор-кільце лишається.
     if (price !== null && time !== null) this.chart.setCrosshairPosition(price, time, this.series);

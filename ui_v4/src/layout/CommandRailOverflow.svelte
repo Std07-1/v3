@@ -183,10 +183,12 @@
             </button>
         {/if}
 
-        <!-- Drawing tools on/off (show/hide the drawing toolbar) -->
+        <!-- Drawing tools on/off (show/hide the drawing toolbar). ADR-0112: на телефоні з «Малювати» панелі ПК
+             не видно — пункт ховається, лишається один вхід (.pc-tools-item) -->
         {#if onToggleTools}
             <button
                 class="menu-item menu-toggle"
+                class:pc-tools-item={!!onOpenTouchDrawing}
                 class:active={toolsEnabled}
                 role="menuitemcheckbox"
                 aria-checked={toolsEnabled}
@@ -541,11 +543,17 @@
         .touch-draw-item {
             display: flex;
         }
+        .pc-tools-item {
+            display: none;
+        }
     }
     @media (max-width: 640px) and (orientation: portrait) {
         .snapshot-item,
         .touch-draw-item {
             display: flex;
+        }
+        .pc-tools-item {
+            display: none;
         }
     }
 </style>

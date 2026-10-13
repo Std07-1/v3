@@ -9,6 +9,7 @@
   import ChartPane from "./layout/ChartPane.svelte";
   import DrawingToolbar from "./layout/DrawingToolbar.svelte";
   import MobileDrawBar from "./layout/MobileDrawBar.svelte";
+  import { ICON_PENCIL } from "./layout/toolIcons";
   import { deviceStorage, resolveTouchDrawing } from "./lib/touchDrawingFlag";
   import { hintsOn, toggleHints } from "./stores/uiHints";
   import ChartHud from "./layout/ChartHud.svelte";
@@ -1057,6 +1058,21 @@
       <span class="tr-replay-badge">REPLAY</span>
     {/if}
 
+    <!-- ADR-0112 D2: олівець під ☰ — малювання на телефоні одним тапом (лише з ?draw=1 і лише в телефонному
+         розкладі, як пункт «Малювати»); відкрите малювання — золотий, тап закриває -->
+    {#if touchDrawingAvailable}
+      <button
+        class="tr-draw-btn"
+        class:open={touchDrawOpen}
+        onclick={() => (touchDrawOpen ? closeTouchDrawing() : openTouchDrawing())}
+        aria-pressed={touchDrawOpen}
+        aria-label="Малювати"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"
+          stroke-linejoin="round" aria-hidden="true">{@html ICON_PENCIL}</svg>
+      </button>
+    {/if}
+
     <!-- Tier 2: ☰ Overflow menu trigger -->
     <div
       class="tr-overflow-wrap"
@@ -1265,6 +1281,55 @@
     background: color-mix(in srgb, var(--accent, #d4a017) 8%, transparent);
     border: 1px solid
       color-mix(in srgb, var(--accent, #d4a017) 30%, transparent);
+  }
+
+  /* ADR-0112 D2: олівець — та сама мова, що ☰ (лише значок, без підкладки, тінь для читабельності поверх графіка);
+     видно лише в телефонному розкладі — умови ті самі, що в пункту «Малювати» (CommandRailOverflow). Стоїть під ☰,
+     у його колонці (на рівні рядка TF), а не в рядку поруч: на 360 px рядок HUD (символ · ціна · зміна · стадія)
+     доходить до 237 px, а олівець у рядку починався б з 240 — «TRADE» налазила б на нього. */
+  .tr-draw-btn {
+    display: none;
+  }
+  @media (orientation: landscape) and (max-height: 500px), (max-width: 640px) and (orientation: portrait) {
+    .tr-draw-btn {
+      all: unset;
+      position: absolute;
+      top: 100%;
+      right: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 32px; /* ширина ☰ (28 + 2×2) — значки в одну колонку */
+      min-height: 22px;
+      cursor: pointer;
+      color: var(--text-3, #8b8f9a);
+      opacity: 0.7;
+      filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+      transition:
+        opacity 0.15s ease,
+        color 0.15s ease;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .tr-draw-btn svg {
+      width: 17px;
+      height: 17px;
+    }
+    .tr-draw-btn.open {
+      opacity: 1;
+      color: var(--accent, #d4a017);
+    }
+  }
+  /* Ландшафт: рядок має бічний відступ 8 px, а ☰ дрібніший (t3, 18 px завширшки) — олівець (32 px, щоб влучати
+     пальцем) стає на 1 px від краю, і центри значків в одній лінії; значок — під розмір ☰ */
+  @media (orientation: landscape) and (max-height: 500px) {
+    .tr-draw-btn {
+      right: 1px;
+    }
+    .tr-draw-btn svg {
+      width: 14px;
+      height: 14px;
+    }
   }
 
   /* Tier 2: ☰ overflow button — anchor for CommandRailOverflow dropdown */

@@ -437,20 +437,34 @@
   $effect(() => {
     drawingsRenderer?.setTool(activeTool);
   });
-  // ADR-0112: смуга на телефоні + обраний інструмент → курсор-перехрестя (палець веде його 1:1, точку ставить
-  // «Поставити»); інакше дотики як завжди (прокрутка, довгий дотик ADR-0108). Після setTool — курсор одразу показує прев'ю.
+  // ADR-0112: смуга на телефоні + обраний інструмент → курсор-перехрестя (палець веде його 1:1, точку ставить тап
+  // або ✓); інакше дотики як завжди (прокрутка, довгий дотик ADR-0108). Після setTool — курсор одразу показує прев'ю.
   let touchCursor: TouchDrawCursor | null = null;
   $effect(() => {
     const drawing = touchDrawing && activeTool !== null && activeTool !== "eraser";
     if (!drawing || !drawingsRenderer || !chartEngine) return;
     const renderer = drawingsRenderer;
     renderer.setTouchCursorMode(true);
-    const cursor = new TouchDrawCursor(wrapperRef, chartEngine.chart, chartEngine.series, renderer, () => {
-      // Тап по графіку = точка в кільці; легка вібрація — тактильне «поставлено» (Android; де нема — тиша)
-      const result = cursor.place();
-      if (result !== "none") navigator.vibrate?.(10);
-      onTouchPlace?.(result);
-    });
+    // Лупа (D6) не заходить під рядки HUD (символ і ціна, TF) — межа з їхнього фактичного низу
+    const hudRect = document.querySelector(".hud-stack")?.getBoundingClientRect();
+    const loupeMinTop = hudRect ? Math.max(0, hudRect.bottom - wrapperRef.getBoundingClientRect().top) : 0;
+    const cursor = new TouchDrawCursor(
+      wrapperRef,
+      chartEngine.chart,
+      chartEngine.series,
+      renderer,
+      {
+        // Тап по графіку = точка в кільці; легка вібрація — тактильне «поставлено» (Android; де нема — тиша)
+        onTap: () => {
+          const result = cursor.place();
+          if (result !== "none") navigator.vibrate?.(10);
+          onTouchPlace?.(result);
+        },
+        // Магніт (D7): кільце прилипло до нового рівня свічки — ледь чутний «клац»
+        onSnap: () => navigator.vibrate?.(5),
+      },
+      loupeMinTop,
+    );
     touchCursor = cursor;
     return () => {
       cursor.destroy();

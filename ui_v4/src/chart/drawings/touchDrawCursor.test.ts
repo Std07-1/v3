@@ -1,6 +1,6 @@
 // src/chart/drawings/touchDrawCursor.test.ts — ADR-0112 D3: курсор рухається 1:1 і не виходить за панель; тап ставить точку.
 import { describe, expect, it } from 'vitest';
-import { isTap, moveCursor } from './touchDrawCursor';
+import { isNewSnapLevel, isTap, moveCursor } from './touchDrawCursor';
 
 const PANE = { width: 300, height: 500 };
 
@@ -33,5 +33,18 @@ describe('isTap', () => {
   it('довге утримання без руху — не тап', () => {
     expect(isTap(0, 300)).toBe(false);
     expect(isTap(2, 900)).toBe(false);
+  });
+});
+
+describe('isNewSnapLevel', () => {
+  it('прилипло з вільного руху або до іншого рівня — «клац»', () => {
+    expect(isNewSnapLevel(null, 4180.5)).toBe(true);
+    expect(isNewSnapLevel(4180.5, 4182.1)).toBe(true);
+  });
+
+  it('той самий рівень або вільний рух — тиша', () => {
+    expect(isNewSnapLevel(4180.5, 4180.5)).toBe(false);
+    expect(isNewSnapLevel(4180.5, null)).toBe(false);
+    expect(isNewSnapLevel(null, null)).toBe(false);
   });
 });
