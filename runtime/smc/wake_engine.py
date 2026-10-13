@@ -687,11 +687,11 @@ class WakeEngine:
             sess_windows = getattr(engine, "_session_windows", None) if engine else None
             sess_cfg = getattr(getattr(engine, "_config", None), "sessions", None)
             if sess_windows and getattr(sess_cfg, "enabled", False):
-                from core.smc.sessions import get_current_session
+                from core.smc.sessions import OFF_SESSION, get_current_session
 
                 now_ms = int(time.time() * 1000)
                 name, in_kz = get_current_session(now_ms, sess_windows)
-                if name and name != "off_session":
+                if name and name != OFF_SESSION:
                     info["current_session"] = name
                     info["in_killzone"] = bool(in_kz)
         except Exception as e:  # I5: degraded-but-loud (rate-limited at logger level)

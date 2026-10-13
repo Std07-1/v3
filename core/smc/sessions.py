@@ -183,12 +183,17 @@ def classify_bar_sessions(bar_open_ms: int, sessions: List[SessionWindow]) -> Li
     return [sw.name for sw in sessions if _bar_in_session(bar_open_ms, sw)]
 
 
+# Ім'я «поза торговими сесіями» (між закриттям NY і відкриттям Азії) — непорожній рядок; споживачі порівнюють з ним,
+# а не з порожнечею (ADR-0113 Ф0, K9: перевірка `not session` мовчки пропускала цей стан).
+OFF_SESSION = "off_session"
+
+
 def get_current_session(
     current_time_ms: int, sessions: List[SessionWindow]
 ) -> Tuple[str, bool]:
     """Визначити поточну сесію + чи в killzone. Returns (session_name, in_killzone).
 
-    Якщо жодна — returns ('off_session', False).
+    Якщо жодна — returns (OFF_SESSION, False).
     При overlap — пріоритет: london > newyork > asia (найімовірніший trade).
     """
     active = []
@@ -197,7 +202,7 @@ def get_current_session(
             kz = _bar_in_killzone(current_time_ms, sw)
             active.append((sw.name, kz))
     if not active:
-        return ("off_session", False)
+        return (OFF_SESSION, False)
     # Priority при overlap: london > newyork > asia
     _PRIORITY = {"london": 0, "newyork": 1, "asia": 2}
     active.sort(key=lambda x: _PRIORITY.get(x[0], 99))

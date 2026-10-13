@@ -14,6 +14,7 @@ import logging
 
 from typing import Dict, List, Optional, Tuple
 
+from core.smc.sessions import OFF_SESSION
 from core.smc.types import (
     ActiveScenario,
     NarrativeBlock,
@@ -164,6 +165,17 @@ def _tf_to_label(tf_s):
     return _TF_LABELS.get(tf_s, "TF{}".format(tf_s))
 
 
+# ── Ціни з точністю символу (ADR-0113 Ф0, K8) ───────────────
+# SSOT — config.json price_display.digits_by_symbol (digits брокера, той самий, що в UI); runner передає значення.
+# Без нього — 2 знаки і warning price_digits_missing (I5): раніше `{:.0f}` різав USD/JPY 158.3 до «158» / «161».
+_DEFAULT_PRICE_DIGITS = 2
+
+
+def _fmt_price(value, digits):
+    # type: (float, int) -> str
+    return "{:.{d}f}".format(value, d=digits)
+
+
 # ── Fallback (N3 / BH-8) ───────────────────────────────────
 
 
@@ -218,11 +230,11 @@ def _zone_direction(zone):
 # ── Invalidation (SC-7 / BH-1) ─────────────────────────────
 
 
-def _find_invalidation(zone):
-    # type: (SmcZone) -> str
+def _find_invalidation(zone, digits=_DEFAULT_PRICE_DIGITS):
+    # type: (SmcZone, int) -> str
     if "bear" in zone.kind:
-        return "Вище {:.0f} \u2014 зона пробита".format(zone.high)
-    return "Нижче {:.0f} \u2014 зона пробита".format(zone.low)
+        return "Вище {} \u2014 зона пробита".format(_fmt_price(zone.high, digits))
+    return "Нижче {} \u2014 зона пробита".format(_fmt_price(zone.low, digits))
 
 
 def _is_invalidated(zone, current_price):
@@ -235,19 +247,19 @@ def _is_invalidated(zone, current_price):
 # ── Entry description ───────────────────────────────────────
 
 
-def _format_entry(zone, grade_info):
-    # type: (SmcZone, dict) -> str
+def _format_entry(zone, grade_info, digits=_DEFAULT_PRICE_DIGITS):
+    # type: (SmcZone, dict, int) -> str
     arrow = "\u25bc" if "bear" in zone.kind else "\u25b2"
     grade = grade_info.get("grade", "C")
     score = grade_info.get("score", 0)
     kind_short = "OB" if "ob" in zone.kind else "FVG"
-    return "{kind}{arrow} {grade}({score}) {low:.0f}\u2013{high:.0f}".format(
+    return "{kind}{arrow} {grade}({score}) {low}\u2013{high}".format(
         kind=kind_short,
         arrow=arrow,
         grade=grade,
         score=score,
-        low=zone.low,
-        high=zone.high,
+        low=_fmt_price(zone.low, digits),
+        high=_fmt_price(zone.high, digits),
     )
 
 
@@ -332,8 +344,10 @@ def _resolve_trigger_state(snapshot, zone, viewer_tf_s, current_price, atr, conf
     return "approaching"
 
 
-def _resolve_trigger_desc(snapshot, zone, viewer_tf_s, current_price, atr, config):
-    # type: (SmcSnapshot, SmcZone, int, float, float, dict) -> str
+def _resolve_trigger_desc(
+    snapshot, zone, viewer_tf_s, current_price, atr, config, digits=_DEFAULT_PRICE_DIGITS
+):
+    # type: (SmcSnapshot, SmcZone, int, float, float, dict, int) -> str
     state = _resolve_trigger_state(
         snapshot, zone, viewer_tf_s, current_price, atr, config
     )
@@ -358,14 +372,19 @@ def _resolve_trigger_desc(snapshot, zone, viewer_tf_s, current_price, atr, confi
         dist = current_price - zone.high
     else:
         dist = 0.0
-    return "{:.0f} пт до зони".format(dist)
+    # «пт» не мав сенсу поза XAU (USD/JPY, XAG): відстань — в ATR, а без ATR — у ціні символу
+    if atr > 0:
+        return "{:.1f} ATR до зони".format(dist / atr)
+    return "{} до зони".format(_fmt_price(dist, digits))
 
 
 # ── Target Resolution ───────────────────────────────────────
 
 
-def _find_target(snapshot, zone, direction, config, current_price=0.0, atr=0.0):
-    # type: (SmcSnapshot, SmcZone, str, dict, float, float) -> Optional[str]
+def _find_target(
+    snapshot, zone, direction, config, current_price=0.0, atr=0.0, digits=_DEFAULT_PRICE_DIGITS
+):
+    # type: (SmcSnapshot, SmcZone, str, dict, float, float, int) -> Optional[str]
     """Find target price. Returns None if unknown (BH-4).
 
     ATR-distance filter: targets farther than target_max_atr_distance * ATR
@@ -379,9 +398,9 @@ def _find_target(snapshot, zone, direction, config, current_price=0.0, atr=0.0):
         snapshot.levels, direction, current_price, max_dist
     )
     if target_level:
-        return "{kind} {price:.0f}".format(
+        return "{kind} {price}".format(
             kind=target_level.kind.upper().replace("_", " "),
-            price=target_level.price,
+            price=_fmt_price(target_level.price, digits),
         )
 
     # Priority 2: opposite-side institutional zone
@@ -398,8 +417,10 @@ def _find_target(snapshot, zone, direction, config, current_price=0.0, atr=0.0):
                 continue
             if max_dist > 0 and abs(center - current_price) > max_dist:
                 continue
-            return "HTF {kind} {low:.0f}\u2013{high:.0f}".format(
-                kind=z.kind.split("_")[0].upper(), low=z.low, high=z.high
+            return "HTF {kind} {low}\u2013{high}".format(
+                kind=z.kind.split("_")[0].upper(),
+                low=_fmt_price(z.low, digits),
+                high=_fmt_price(z.high, digits),
             )
 
     # Priority 3: Recent swing extreme
@@ -407,8 +428,8 @@ def _find_target(snapshot, zone, direction, config, current_price=0.0, atr=0.0):
         snapshot.swings, direction, current_price, max_dist
     )
     if target_swing:
-        return "Останній {kind} {price:.0f}".format(
-            kind=target_swing.kind.upper(), price=target_swing.price
+        return "Останній {kind} {price}".format(
+            kind=target_swing.kind.upper(), price=_fmt_price(target_swing.price, digits)
         )
 
     return None
@@ -453,8 +474,8 @@ def _find_target_swing(swings, direction, current_price=0.0, max_dist=0.0):
 # ── FVG Context (T-5) ───────────────────────────────────────
 
 
-def _build_fvg_context(snapshot, zone, atr, config):
-    # type: (SmcSnapshot, Optional[SmcZone], float, dict) -> str
+def _build_fvg_context(snapshot, zone, atr, config, digits=_DEFAULT_PRICE_DIGITS):
+    # type: (SmcSnapshot, Optional[SmcZone], float, dict, int) -> str
     if not config.get("fvg_context_enabled", True) or zone is None:
         return ""
     for z in snapshot.zones:
@@ -462,7 +483,9 @@ def _build_fvg_context(snapshot, zone, atr, config):
             continue
         # Overlap з zone
         if z.low <= zone.high and z.high >= zone.low:
-            return "OB вхід уточнений FVG: {:.0f}\u2013{:.0f}".format(z.low, z.high)
+            return "OB вхід уточнений FVG: {}\u2013{}".format(
+                _fmt_price(z.low, digits), _fmt_price(z.high, digits)
+            )
     # Closest FVG within 2*ATR
     if atr > 0:
         for z in snapshot.zones:
@@ -471,7 +494,7 @@ def _build_fvg_context(snapshot, zone, atr, config):
             mid = (z.low + z.high) / 2.0
             zone_mid = (zone.low + zone.high) / 2.0
             if abs(mid - zone_mid) <= 2.0 * atr:
-                return "FVG гап на {:.0f} \u2014 ребаланс перед зоною".format(mid)
+                return "FVG гап на {} \u2014 ребаланс перед зоною".format(_fmt_price(mid, digits))
     return ""
 
 
@@ -556,11 +579,10 @@ _SESSION_LABELS = {
 
 def _build_session_context(session_name, in_killzone):
     # type: (str, bool) -> str
-    label = _SESSION_LABELS.get(
-        session_name, session_name.title() if session_name else ""
-    )
-    if not label:
-        return ""
+    if not session_name:
+        # Календар сесій є, але жодна не йде (між закриттям NY і Азією) — сказати прямо, а не «Off_Session … активна»
+        return "Поза торговими сесіями"
+    label = _SESSION_LABELS.get(session_name, session_name.title())
     if in_killzone:
         return "{} KZ активна \u2014 висока ймовірність".format(label)
     return "{} сесія активна".format(label)
@@ -569,8 +591,8 @@ def _build_session_context(session_name, in_killzone):
 # ── Next Area ───────────────────────────────────────────────
 
 
-def _build_next_area(snapshot, zone_grades):
-    # type: (SmcSnapshot, Dict[str, dict]) -> str
+def _build_next_area(snapshot, zone_grades, digits=_DEFAULT_PRICE_DIGITS):
+    # type: (SmcSnapshot, Dict[str, dict], int) -> str
     best = None  # type: Optional[SmcZone]
     best_score = -1
     for z in snapshot.zones:
@@ -586,8 +608,8 @@ def _build_next_area(snapshot, zone_grades):
     gi = zone_grades.get(best.id, {})
     direction = "sell" if "bear" in best.kind else "buy"
     kind_short = "OB" if "ob" in best.kind else "FVG"
-    return "{low:.0f} {dir} {kind} ({grade}/{score})".format(
-        low=best.low,
+    return "{low} {dir} {kind} ({grade}/{score})".format(
+        low=_fmt_price(best.low, digits),
         dir=direction,
         kind=kind_short,
         grade=gi.get("grade", "C"),
@@ -611,6 +633,7 @@ def synthesize_narrative(
     config,  # type: dict
     session_info=None,  # type: Optional[Tuple[str, bool]]
     range_exhaustion=None,  # type: Optional[object]
+    price_digits=None,  # type: Optional[int]
 ):
     # type: (...) -> NarrativeBlock
     """Synthesize narrative for display (ADR-0033, ADR-0035, ADR-0053).
@@ -620,6 +643,8 @@ def synthesize_narrative(
     session_info: (current_session_name, in_killzone) or None.
     range_exhaustion: ADR-0053 RangeExhaustionState (primary anchor) or None;
         used to populate NarrativeBlock.range_exhaustion_summary.
+    price_digits: знаків після коми для цін символу (config price_display.digits_by_symbol, ADR-0113 Ф0);
+        None — 2 знаки і warning price_digits_missing.
     """
     try:
         return _synthesize_impl(
@@ -633,6 +658,7 @@ def synthesize_narrative(
             config,
             session_info,
             range_exhaustion,
+            price_digits,
         )
     except Exception:
         sym = getattr(snapshot, "symbol", "?")
@@ -652,9 +678,15 @@ def _synthesize_impl(
     config,
     session_info=None,
     range_exhaustion=None,
+    price_digits=None,
 ):
-    # type: (SmcSnapshot, Dict[str, str], Dict[str, dict], Dict[str, dict], int, float, float, dict, Optional[Tuple[str, bool]], Optional[object]) -> NarrativeBlock
+    # type: (SmcSnapshot, Dict[str, str], Dict[str, dict], Dict[str, dict], int, float, float, dict, Optional[Tuple[str, bool]], Optional[object], Optional[int]) -> NarrativeBlock
     warnings = []  # type: List[str]
+    if price_digits is None:
+        digits = _DEFAULT_PRICE_DIGITS
+        warnings.append("price_digits_missing")
+    else:
+        digits = price_digits
     min_grade = config.get("trade_min_grade", "A")
     min_score = config.get("trade_min_score", 6)
     max_scenarios = config.get("max_scenarios", 2)
@@ -730,7 +762,8 @@ def _synthesize_impl(
     in_killzone = False
     session_context = ""
     if session_info is not None:
-        current_session = session_info[0] or ""
+        # «Поза сесіями» — порожня сесія для всіх перевірок нижче і для wire (UI не друкує «OFF_SESSION»)
+        current_session = "" if session_info[0] == OFF_SESSION else (session_info[0] or "")
         in_killzone = bool(session_info[1])
         session_context = _build_session_context(current_session, in_killzone)
         # Guard: no active session (dead zone between sessions) → cannot call trade
@@ -768,22 +801,22 @@ def _synthesize_impl(
             z = _zc
             d = _zone_direction(z)
             gi = zone_grades.get(z.id, {})
-            tgt = _find_target(snapshot, z, d, config, current_price, atr)
+            tgt = _find_target(snapshot, z, d, config, current_price, atr, digits)
             if tgt is None:
                 warnings.append("no_target_found")
             scenarios.append(
                 ActiveScenario(
                     zone_id=z.id,
                     direction=d,
-                    entry_desc=_format_entry(z, gi),
+                    entry_desc=_format_entry(z, gi, digits),
                     trigger=_resolve_trigger_state(
                         snapshot, z, viewer_tf_s, current_price, atr, config
                     ),
                     trigger_desc=_resolve_trigger_desc(
-                        snapshot, z, viewer_tf_s, current_price, atr, config
+                        snapshot, z, viewer_tf_s, current_price, atr, config, digits
                     ),
                     target_desc=tgt,
-                    invalidation=_find_invalidation(z),
+                    invalidation=_find_invalidation(z, digits),
                 )
             )
             if len(scenarios) >= max_scenarios:
@@ -800,13 +833,13 @@ def _synthesize_impl(
     )
 
     # FVG context (T-5)
-    fvg_context = _build_fvg_context(snapshot, primary_zone, atr, config)
+    fvg_context = _build_fvg_context(snapshot, primary_zone, atr, config, digits)
 
     # Market phase (SC-1, BH-6, N5: display-only)
     market_phase = _detect_market_phase(snapshot.swings, config)
 
     # Next area
-    next_area = _build_next_area(snapshot, zone_grades)
+    next_area = _build_next_area(snapshot, zone_grades, digits)
 
     # ADR-0053: range exhaustion phrase (silent for early/mid/None)
     range_exhaustion_summary = _build_range_exhaustion_summary(range_exhaustion)

@@ -256,7 +256,8 @@ def test_trigger_approaching():
     )
 
     assert nb.scenarios[0].trigger == "approaching"
-    assert "пт до зони" in nb.scenarios[0].trigger_desc
+    # ADR-0113 Ф0 (K8): відстань у ATR, не в «пунктах» (80 / 20 = 4.0)
+    assert nb.scenarios[0].trigger_desc == "4.0 ATR до зони"
 
 
 # ── 8. test_trigger_in_zone ──────────────────────────────
@@ -930,3 +931,59 @@ class TestNarrativeBlockToWire:
         wire = nb.to_wire()
         assert wire["warnings"] == ["no_target_found", "computation_error"]
         assert isinstance(wire["warnings"], list)
+
+
+# ── ADR-0113 Ф0 — чесність поточного наративу ─────────────
+
+
+class TestHonestyF0:
+    """ADR-0113 Ф0: наратив не бреше трейдеру (корені K3–K13 з розвідки 13.10)."""
+
+    def test_prices_use_symbol_digits(self):
+        """K8: USD/JPY (3 знаки) — ціни не зрізаються до цілого («161» при 158.3)."""
+        z = _zone(kind="ob_bear", high=158.452, low=158.301, zone_id="z1")
+        snap = _snap(zones=[z], levels=[_level("pdl", 157.905)])
+        bias = {"86400": "bearish", "14400": "bearish"}
+        nb = synthesize_narrative(
+            snap, bias, _grade_a6("z1"), {}, 900, 158.25, 0.05, _default_config(), price_digits=3
+        )
+        assert nb.scenarios[0].entry_desc.endswith("158.301\u2013158.452")
+        assert nb.scenarios[0].invalidation == "Вище 158.452 \u2014 зона пробита"
+        assert nb.next_area.startswith("158.301 ")
+        assert "price_digits_missing" not in nb.warnings
+
+    def test_missing_digits_two_places_and_loud(self):
+        """K8 / I5: без точності символу — 2 знаки і warning, а не тихе округлення до цілого."""
+        z = _zone(kind="ob_bear", high=5225.0, low=5144.0, zone_id="z1")
+        snap = _snap(zones=[z])
+        bias = {"86400": "bearish", "14400": "bearish"}
+        nb = synthesize_narrative(snap, bias, _grade_a6("z1"), {}, 900, 5130.0, 20.0, _default_config())
+        assert "price_digits_missing" in nb.warnings
+        assert nb.scenarios[0].invalidation == "Вище 5225.00 \u2014 зона пробита"
+
+    def test_off_session_is_named_and_blocks_trade(self):
+        """K9: між сесіями — «Поза торговими сесіями», порожня сесія на wire; trade → wait/no_session (ADR-0035)."""
+        z = _zone(kind="ob_bear", zone_id="z1")
+        snap = _snap(zones=[z], levels=[_level("pdl", 5062.0)], swings=[_swing("choch_bear", 5200.0, 1500)])
+        bias = {"86400": "bearish", "14400": "bearish"}
+        nb = synthesize_narrative(
+            snap, bias, _grade_a6("z1"), {}, 900, 5180.0, 20.0, _default_config(),
+            session_info=("off_session", False), price_digits=2,
+        )
+        assert nb.current_session == ""
+        assert nb.session_context == "Поза торговими сесіями"
+        assert (nb.mode, nb.sub_mode) == ("wait", "no_session")
+        assert "outside_session" in nb.warnings
+
+    def test_active_session_context(self):
+        """Сесія без killzone — «London сесія активна», trade знижується до reduced (як і було)."""
+        z = _zone(kind="ob_bear", zone_id="z1")
+        snap = _snap(zones=[z], levels=[_level("pdl", 5062.0)], swings=[_swing("choch_bear", 5200.0, 1500)])
+        bias = {"86400": "bearish", "14400": "bearish"}
+        nb = synthesize_narrative(
+            snap, bias, _grade_a6("z1"), {}, 900, 5180.0, 20.0, _default_config(),
+            session_info=("london", False), price_digits=2,
+        )
+        assert nb.current_session == "london"
+        assert nb.session_context == "London сесія активна"
+        assert (nb.mode, nb.sub_mode) == ("trade", "reduced")

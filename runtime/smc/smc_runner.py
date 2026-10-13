@@ -26,6 +26,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from core.config_loader import price_digits_wire
 from core.model.bars import CandleBar
 from core.smc.engine import SmcEngine
 from core.smc.range_exhaustion import compute_range_exhaustion
@@ -58,7 +59,7 @@ def _market_closed_block() -> NarrativeBlock:
     return NarrativeBlock(
         mode="wait",
         sub_mode="market_closed",
-        headline="⏸ Market Closed",
+        headline="⏸ Ринок закрито",
         bias_summary="",
         scenarios=[],
         next_area="",
@@ -141,6 +142,9 @@ class SmcRunner:
         self._engine = engine
         self._full_config = full_cfg  # ADR-0033: narrative needs smc.narrative config
         self._symbols: List[str] = list(full_cfg.get("symbols", []))
+        # ADR-0113 Ф0 (K8): ціни наративу з точністю символу — той самий SSOT, що в UI (price_display.digits_by_symbol);
+        # символ без значення — наратив пише 2 знаки з warning price_digits_missing (ws_server і так кричить ERROR)
+        self._price_digits: Dict[str, int] = price_digits_wire(full_cfg, self._symbols)[0]
         tf_raw = full_cfg.get(
             "tf_allowlist_s", [60, 300, 900, 1800, 3600, 14400, 86400]
         )
@@ -850,6 +854,7 @@ class SmcRunner:
                 cfg,
                 session_info=session_info,
                 range_exhaustion=re_state,
+                price_digits=self._price_digits.get(symbol),
             )
             if self._warmup_done:
                 self._journal.record(
