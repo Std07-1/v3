@@ -8,6 +8,10 @@
 
 import type { IChartApi, ISeriesApi, SeriesType } from 'lightweight-charts';
 
+/** Що зробило «Поставити»: 'draft' — перша точка, фігура в роботі; 'done' — фігура готова (або вимір заморожено);
+ *  'none' — нічого (дві точки в одному місці або точку не перевести) — інструмент лишається. */
+export type CursorPlaceResult = 'draft' | 'done' | 'none';
+
 export interface CursorPoint {
   readonly x: number;
   readonly y: number;
@@ -26,10 +30,17 @@ export function moveCursor(p: CursorPoint, dx: number, dy: number, b: CursorBoun
   };
 }
 
+const POINTER_TYPES = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'] as const;
+
+/** Дотик по самому графіку (полотна LWC і шарів), а не по кнопках поверх нього. */
+function onChartSurface(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('canvas') !== null;
+}
+
 /** Що курсор робить з фігурою (DrawingsRenderer): той самий шлях, що рух і клік мишею. */
 export interface TouchCursorTarget {
   cursorMove(x: number, y: number): void;
-  cursorPlace(x: number, y: number): 'draft' | 'done';
+  cursorPlace(x: number, y: number): CursorPlaceResult;
 }
 
 /** Кільце курсора поверх графіка (DOM — без змін у canvas-шарах; підписи на осях дає перехрестя LWC). */
@@ -45,7 +56,7 @@ const RETICLE_STYLE = [
   'border:1.5px solid var(--accent, #d4a017)',
   'box-shadow:0 0 0 1px rgba(0,0,0,0.55)',
   'pointer-events:none',
-  'z-index:6',
+  'z-index:21', // над шаром малювань (20) — чернетка не закриває кільце
 ].join(';');
 
 export class TouchDrawCursor {
@@ -76,6 +87,9 @@ export class TouchDrawCursor {
     container.addEventListener('touchmove', this.onTouchMove, { capture: true, passive: false });
     container.addEventListener('touchend', this.onTouchEnd, { capture: true, passive: false });
     container.addEventListener('touchcancel', this.onTouchEnd, { capture: true, passive: false });
+    // Pointer-події того самого пальця — окремий потік: без цього interaction.ts (вертикальна прокрутка / масштаб осі
+    // на хості LWC) рахував би рух пальця в ручний діапазон ціни, і на виході з режиму графік стрибав би (рецензія D-1).
+    for (const type of POINTER_TYPES) container.addEventListener(type, this.onPointer, { capture: true, passive: false });
     chart.timeScale().subscribeVisibleLogicalRangeChange(this.onRangeChange);
     this.resizeObserver = new ResizeObserver(this.onResize);
     this.resizeObserver.observe(container);
@@ -83,7 +97,7 @@ export class TouchDrawCursor {
   }
 
   /** «Поставити» в точці курсора. */
-  place(): 'draft' | 'done' {
+  place(): CursorPlaceResult {
     const p = this.snapped();
     return this.target.cursorPlace(p.x, p.y);
   }
@@ -93,11 +107,16 @@ export class TouchDrawCursor {
     this.container.removeEventListener('touchmove', this.onTouchMove, true);
     this.container.removeEventListener('touchend', this.onTouchEnd, true);
     this.container.removeEventListener('touchcancel', this.onTouchEnd, true);
+    for (const type of POINTER_TYPES) this.container.removeEventListener(type, this.onPointer, true);
     this.chart.timeScale().unsubscribeVisibleLogicalRangeChange(this.onRangeChange);
     this.resizeObserver.disconnect();
     cancelAnimationFrame(this.resizeFrame);
     this.chart.clearCrosshairPosition();
-    this.series.priceScale().applyOptions({ autoScale: this.prevAutoScale });
+    // Повертаємо autoScale, лише якщо його ніхто не змінив за час режиму (longPressLock на виході зі свого режиму
+    // вмикає його сам — тоді не перетирати, рецензія D-4).
+    if (this.series.priceScale().options().autoScale === false) {
+      this.series.priceScale().applyOptions({ autoScale: this.prevAutoScale });
+    }
     this.reticle.remove();
   }
 
@@ -106,6 +125,7 @@ export class TouchDrawCursor {
       this.lastTouch = null; // два пальці — масштаб LWC
       return;
     }
+    if (!onChartSurface(e.target)) return; // панель SMC тощо всередині контейнера — їхні кнопки працюють (D-5)
     this.swallow(e);
     this.lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
   };
@@ -125,6 +145,11 @@ export class TouchDrawCursor {
   private readonly onTouchEnd = (e: TouchEvent): void => {
     if (this.lastTouch) this.swallow(e);
     if (e.touches.length === 0) this.lastTouch = null;
+  };
+
+  /** Дотикові pointer-події по графіку — не далі (рух веде touch-обробник); миша й перо — як завжди. */
+  private readonly onPointer = (e: PointerEvent): void => {
+    if (e.pointerType === 'touch' && onChartSurface(e.target)) e.stopImmediatePropagation();
   };
 
   /** Після масштабу/прокрутки курсор лишається на тому самому місці екрана — перерахувати прев'ю й перехрестя. */

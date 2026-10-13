@@ -104,7 +104,7 @@ export function mapKeyToAction(
 
     if (e.key === 'Delete' || e.key === 'Backspace') return { kind: 'delete_selected' };
 
-    // Клавіші фігур — з реєстру (ToolModule.hotkey + hotkeyAliases, ADR-0111 §3.3): h, \ і t, y, r, m.
+    // Клавіші фігур — з реєстру (ToolModule.hotkey + hotkeyAliases, ADR-0111 §3.3): h, \ і t, y, r, b, m.
     const tool = toolForHotkey(e.key);
     if (tool) return { kind: 'set_tool', tool };
     const k = e.key.toLowerCase();

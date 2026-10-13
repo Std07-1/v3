@@ -24,8 +24,9 @@
   }: {
     activeTool: ActiveTool;
     onSelectTool: (tool: ActiveTool) => void;
-    /** «Поставити» в точці курсора: 'draft' — фігура ще в роботі, 'done' — готова; null — курсора нема. */
-    onPlace: () => "draft" | "done" | null;
+    /** «Поставити» в точці курсора: 'draft' — перша точка; 'done' — фігура готова; 'none' — нічого (дві точки
+     *  в одному місці або точку не перевести); null — курсора нема. */
+    onPlace: () => "draft" | "done" | "none" | null;
     magnetEnabled?: boolean;
     onToggleMagnet?: () => void;
     onUndo: () => void;
@@ -39,7 +40,8 @@
     activeTool && activeTool !== "eraser" ? (TOOL_REGISTRY.get(activeTool) ?? null) : null,
   );
 
-  // Хід побудови поточної фігури; належить інструменту, з яким його почали (зміна інструмента = з нуля).
+  // Хід побудови поточної фігури; належить інструменту, з яким його почали (зміна інструмента = з нуля). Точок
+  // щонайбільше 2: «draft» завжди означає «поставлено першу» (не лічильник — не розходиться з renderer, рецензія D-2).
   let progress = $state<{ tool: ActiveTool; placed: number; measured: boolean }>({
     tool: null,
     placed: 0,
@@ -60,16 +62,34 @@
     if (!tool) return;
     const result = onPlace();
     if (result === null) return;
+    if (result === "none") {
+      progress = { tool: activeTool, placed: 0, measured: false }; // нічого не стало — інструмент лишається
+      return;
+    }
     if (result === "draft") {
-      progress = { tool: activeTool, placed: placed + 1, measured: false };
+      progress = { tool: activeTool, placed: 1, measured: false };
       return;
     }
     if (tool.ephemeral) {
       progress = { tool: activeTool, placed: 0, measured: true };
       return;
     }
-    progress = { tool: null, placed: 0, measured: false };
+    reset();
     onSelectTool(null); // one-shot: фігура готова — назад до звичайного графіка
+  }
+
+  function reset(): void {
+    progress = { tool: null, placed: 0, measured: false };
+  }
+
+  function cancel(): void {
+    reset();
+    onSelectTool(null);
+  }
+
+  function choose(tool: ActiveTool): void {
+    reset();
+    onSelectTool(tool);
   }
 </script>
 
@@ -89,7 +109,7 @@
 <div class="mdraw" role="toolbar" aria-label="Малювання">
   {#if current}
     <div class="row">
-      <button class="btn" type="button" aria-label="Скасувати фігуру" onclick={() => onSelectTool(null)}>
+      <button class="btn" type="button" aria-label="Скасувати фігуру" onclick={cancel}>
         {@render icon(ICON_CLOSE)}
       </button>
       <span class="step">{stepLabel}</span>
@@ -98,7 +118,7 @@
   {:else}
     <div class="row">
       {#each tools as tool (tool.id)}
-        <button class="btn" type="button" aria-label={tool.label} onclick={() => onSelectTool(tool.id)}>
+        <button class="btn" type="button" aria-label={tool.label} onclick={() => choose(tool.id)}>
           {@render icon(tool.icon)}
         </button>
       {/each}
@@ -151,9 +171,11 @@
     justify-content: space-between;
     gap: 2px;
   }
+  /* Гнучка ширина: 8 кнопок ряду влазять і в 360 px (рецензія D-6), не більше 44 px. */
   .btn {
-    flex: 0 0 auto;
-    width: 40px;
+    flex: 1 1 0;
+    min-width: 34px;
+    max-width: 44px;
     height: 40px;
     display: inline-flex;
     align-items: center;
@@ -171,7 +193,8 @@
     color: var(--text-3);
   }
   .btn.primary {
-    width: auto;
+    flex: 0 0 auto;
+    max-width: none;
     padding: 0 18px;
     background: var(--accent);
     color: #111;

@@ -1058,12 +1058,14 @@ export class DrawingsRenderer {
     if (tool) this.toolMove(tool, x, y);
   }
 
-  /** «Поставити» в (x, y) — як клік мишею. 'draft' — фігура ще в роботі; 'done' — готова, відкинута або вимір
-   *  заморожено. */
-  cursorPlace(x: number, y: number): 'draft' | 'done' {
-    if (!this.activeDrawingTool()) return 'done';
+  /** «Поставити» в (x, y) — як клік мишею. 'draft' — фігура в роботі; 'done' — готова або вимір заморожено;
+   *  'none' — нічого (нульова фігура відкинута або точку не перевести — інструмент лишається, рецензія D-3). */
+  cursorPlace(x: number, y: number): 'draft' | 'done' | 'none' {
+    if (!this.activeDrawingTool()) return 'none';
+    const committedBefore = this.drawings.length;
     this.toolClick(x, y);
-    return this.draft && !this.draftFrozen ? 'draft' : 'done';
+    if (this.draft) return this.draftFrozen ? 'done' : 'draft';
+    return this.drawings.length > committedBefore ? 'done' : 'none';
   }
 
   private handleToolPointerDown(x: number, y: number): void {

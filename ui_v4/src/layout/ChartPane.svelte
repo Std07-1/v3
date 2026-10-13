@@ -218,7 +218,7 @@
     drawingsRenderer?.commandStack.redo();
   }
   /** ADR-0112: «Поставити» в точці курсора; null — режиму курсора нема. */
-  export function placeTouchPoint(): "draft" | "done" | null {
+  export function placeTouchPoint(): "draft" | "done" | "none" | null {
     return touchCursor?.place() ?? null;
   }
   export function cancelDraft() {
