@@ -1,15 +1,19 @@
 <!--
-  src/layout/MobileDrawBar.svelte — ADR-0112: малювання на телефоні (пробна версія під ?draw=1).
+  src/layout/MobileDrawBar.svelte — ADR-0112: малювання на телефоні (пробна версія під ?draw=1), v2.
 
-  Без інструмента: ряд інструментів реєстру (ADR-0111 §3.3) + магніт + ✕; під ним ↶ ↷ «Видалити» (виділену фігуру).
-  З інструментом: ✕ (скасувати) · «Трендова · точка 1 з 2» · «Поставити». Курсор-перехрестя веде touchDrawCursor
-  (ChartPane): палець будь-де рухає його 1:1, «Поставити» = клік мишею в точці курсора. Готова фігура — інструмент
-  знімається сам (one-shot); ефемерна лінійка лишає результат, наступне натискання починає новий вимір.
+  Одна капсула мовою меню HUD (вибір символу/TF: матове скло, рамка 8 px, пункти з радіусом 4, активний — синюватий тон
+  із золотом; кольори теми — ті самі menuBg/menuBorder, що в ChartHud), лише іконки.
+  Без інструмента: 6 інструментів реєстру · ↶ · видалити виділене · ✕.
+  З інструментом капсула стає: ✕ · іконка + «точка 1 з 2» · магніт · ✓. Точку ставить тап будь-де по графіку
+  (touchDrawCursor веде кільце 1:1, тап без руху = точка в кільці) або ✓. Готова фігура — інструмент знімається сам
+  (one-shot); ефемерна лінійка лишає результат, наступний тап починає новий вимір.
 -->
 <script lang="ts">
   import type { ActiveTool } from "../types";
   import { TOOL_REGISTRY } from "../chart/drawings/tools";
-  import { ICON_CLOSE, ICON_MAGNET, ICON_REDO, ICON_TRASH, ICON_UNDO } from "./toolIcons";
+  import { ICON_CLOSE, ICON_MAGNET, ICON_TRASH, ICON_UNDO } from "./toolIcons";
+
+  type PlaceResult = "draft" | "done" | "none";
 
   const {
     activeTool,
@@ -18,23 +22,26 @@
     magnetEnabled = false,
     onToggleMagnet,
     onUndo,
-    onRedo,
     onDeleteSelected,
     onClose,
+    menuBg = "rgba(30, 34, 45, 0.92)",
+    menuBorder = "rgba(255, 255, 255, 0.08)",
   }: {
     activeTool: ActiveTool;
     onSelectTool: (tool: ActiveTool) => void;
-    /** «Поставити» в точці курсора: 'draft' — перша точка; 'done' — фігура готова; 'none' — нічого (дві точки
-     *  в одному місці або точку не перевести); null — курсора нема. */
-    onPlace: () => "draft" | "done" | "none" | null;
+    /** ✓ — поставити точку в кільці (те саме, що тап по графіку); null — курсора нема. */
+    onPlace: () => PlaceResult | null;
     magnetEnabled?: boolean;
     onToggleMagnet?: () => void;
     onUndo: () => void;
-    onRedo: () => void;
     onDeleteSelected: () => void;
     onClose: () => void;
+    /** Кольори меню теми — ті самі, що в меню символу/TF (ChartHud). */
+    menuBg?: string;
+    menuBorder?: string;
   } = $props();
 
+  const ICON_CHECK = '<path d="M20 6 9 17l-5-5"/>';
   const tools = [...TOOL_REGISTRY.values()];
   const current = $derived(
     activeTool && activeTool !== "eraser" ? (TOOL_REGISTRY.get(activeTool) ?? null) : null,
@@ -52,16 +59,15 @@
 
   const stepLabel = $derived.by(() => {
     if (!current) return "";
-    if (measured) return `${current.label} · готово`;
-    if (current.pointsRequired === 1) return current.label;
-    return `${current.label} · точка ${placed + 1} з ${current.pointsRequired}`;
+    if (measured) return "готово · тап — новий";
+    if (current.pointsRequired === 1) return "тап — поставити";
+    return `точка ${placed + 1} з ${current.pointsRequired}`;
   });
 
-  function place(): void {
+  /** Результат точки — з тапу по графіку (ChartPane → App) або з ✓. */
+  export function applyPlace(result: PlaceResult): void {
     const tool = current;
     if (!tool) return;
-    const result = onPlace();
-    if (result === null) return;
     if (result === "none") {
       progress = { tool: activeTool, placed: 0, measured: false }; // нічого не стало — інструмент лишається
       return;
@@ -78,13 +84,13 @@
     onSelectTool(null); // one-shot: фігура готова — назад до звичайного графіка
   }
 
-  function reset(): void {
-    progress = { tool: null, placed: 0, measured: false };
+  function place(): void {
+    const result = onPlace();
+    if (result !== null) applyPlace(result);
   }
 
-  function cancel(): void {
-    reset();
-    onSelectTool(null);
+  function reset(): void {
+    progress = { tool: null, placed: 0, measured: false };
   }
 
   function choose(tool: ActiveTool): void {
@@ -106,139 +112,151 @@
   >
 {/snippet}
 
-<div class="mdraw" role="toolbar" aria-label="Малювання">
+<div
+  class="mdraw"
+  role="toolbar"
+  aria-label="Малювання"
+  style:background={menuBg}
+  style:border-color={menuBorder}
+>
   {#if current}
-    <div class="row">
-      <button class="btn" type="button" aria-label="Скасувати фігуру" onclick={cancel}>
-        {@render icon(ICON_CLOSE)}
-      </button>
+    <button class="btn dim" type="button" aria-label="Скасувати фігуру" onclick={() => choose(null)}>
+      {@render icon(ICON_CLOSE)}
+    </button>
+    <span class="tool-now">
+      <span class="btn active as-label" aria-hidden="true">{@render icon(current.icon)}</span>
       <span class="step">{stepLabel}</span>
-      <button class="btn primary" type="button" onclick={place}>{measured ? "Новий вимір" : "Поставити"}</button>
-    </div>
-  {:else}
-    <div class="row">
-      {#each tools as tool (tool.id)}
-        <button class="btn" type="button" aria-label={tool.label} onclick={() => choose(tool.id)}>
-          {@render icon(tool.icon)}
-        </button>
-      {/each}
-      {#if onToggleMagnet}
-        <button
-          class="btn"
-          class:active={magnetEnabled}
-          type="button"
-          aria-label="Магніт"
-          aria-pressed={magnetEnabled}
-          onclick={onToggleMagnet}
-        >
-          {@render icon(ICON_MAGNET)}
-        </button>
-      {/if}
-      <button class="btn close" type="button" aria-label="Закрити малювання" onclick={onClose}>
-        {@render icon(ICON_CLOSE)}
+    </span>
+    {#if onToggleMagnet}
+      <button
+        class="btn"
+        class:active={magnetEnabled}
+        type="button"
+        aria-label="Магніт"
+        aria-pressed={magnetEnabled}
+        onclick={onToggleMagnet}
+      >
+        {@render icon(ICON_MAGNET)}
       </button>
-    </div>
-    <div class="row actions">
-      <button class="act" type="button" onclick={onUndo}>{@render icon(ICON_UNDO)}<span>Скасувати</span></button>
-      <button class="act" type="button" onclick={onRedo}>{@render icon(ICON_REDO)}<span>Повторити</span></button>
-      <button class="act" type="button" onclick={onDeleteSelected}>{@render icon(ICON_TRASH)}<span>Видалити</span></button>
-    </div>
+    {/if}
+    <button class="btn accent" type="button" aria-label="Поставити точку" onclick={place}>
+      {@render icon(ICON_CHECK)}
+    </button>
+  {:else}
+    {#each tools as tool (tool.id)}
+      <button class="btn" type="button" aria-label={tool.label} onclick={() => choose(tool.id)}>
+        {@render icon(tool.icon)}
+      </button>
+    {/each}
+    <span class="sep" style:background={menuBorder}></span>
+    <button class="btn" type="button" aria-label="Скасувати дію" onclick={onUndo}>
+      {@render icon(ICON_UNDO)}
+    </button>
+    <button class="btn" type="button" aria-label="Видалити виділене" onclick={onDeleteSelected}>
+      {@render icon(ICON_TRASH)}
+    </button>
+    <button class="btn dim" type="button" aria-label="Закрити малювання" onclick={onClose}>
+      {@render icon(ICON_CLOSE)}
+    </button>
   {/if}
 </div>
 
 <style>
-  /* Над віссю часу (≈28 px) і безпечною зоною телефона; поверх шарів графіка, нижче модалок. */
+  /* Мова меню HUD (ChartHud .hud-menu): матове скло, рамка, радіус 8, тінь. Знизу — над знаком v3 (BrandWatermark:
+     закріплене місце, на телефоні 30 px від низу + 24 px заввишки) і віссю часу, з безпечною зоною. */
   .mdraw {
     position: absolute;
-    left: 8px;
-    right: 8px;
-    bottom: calc(36px + env(safe-area-inset-bottom, 0px));
+    left: 0;
+    right: 0;
+    bottom: calc(62px + env(safe-area-inset-bottom, 0px));
     z-index: 30;
     display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 6px;
-    background: var(--elev);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
-    font-family: var(--font-sans);
-    color: var(--text-1);
-  }
-  .row {
-    display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 2px;
+    gap: 0;
+    /* По центру через margin, не left:50% — інакше ширину стискає половина контейнера, і кнопки мліють до мінімуму */
+    width: max-content;
+    max-width: calc(100% - 16px);
+    margin: 0 auto;
+    box-sizing: border-box;
+    padding: 4px;
+    border: 1px solid;
+    border-radius: 8px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    color: var(--text-1);
+    font-family: var(--font-sans);
+    animation: mdraw-in 160ms ease-out;
   }
-  /* Гнучка ширина: 8 кнопок ряду влазять і в 360 px (рецензія D-6), не більше 44 px. */
+  @keyframes mdraw-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  /* Пункт меню HUD: радіус 4, активний — синюватий тон + золото (як вибраний TF / символ). 9 кнопок по 36 вміщаються
+     в телефон 360 px; на вужчому стискаються до 32. */
   .btn {
-    flex: 1 1 0;
-    min-width: 34px;
-    max-width: 44px;
-    height: 40px;
+    all: unset;
+    flex: 0 1 auto;
+    width: 36px;
+    min-width: 32px;
+    height: 38px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border: none;
-    border-radius: 8px;
-    background: transparent;
-    color: var(--text-1);
+    border-radius: 4px;
+    color: inherit;
+    opacity: 0.88;
+    transition: background 0.12s;
     touch-action: manipulation;
   }
+  .btn:active {
+    background: rgba(128, 128, 128, 0.15);
+  }
   .btn.active {
+    background: rgba(74, 144, 217, 0.2);
     color: var(--accent);
+    opacity: 1;
   }
-  .btn.close {
-    color: var(--text-3);
+  .btn.dim {
+    opacity: 0.6;
   }
-  .btn.primary {
-    flex: 0 0 auto;
-    max-width: none;
-    padding: 0 18px;
-    background: var(--accent);
-    color: #111;
-    font-size: 15px;
-    font-weight: 600;
+  .btn.accent {
+    color: var(--accent);
+    opacity: 1;
   }
-  .step {
+  .as-label {
+    pointer-events: none;
+  }
+  .tool-now {
     flex: 1 1 auto;
     min-width: 0;
-    padding: 0 8px;
-    font-size: 14px;
-    text-align: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 6px 0 2px;
+  }
+  .step {
+    min-width: 0;
+    font-size: 13px;
+    color: var(--text-1);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .actions {
-    justify-content: space-around;
-    border-top: 1px solid var(--border);
-    padding-top: 4px;
-  }
-  .act {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 32px;
-    padding: 0 10px;
-    border: none;
-    border-radius: 8px;
-    background: transparent;
-    color: var(--text-1);
-    font-size: 13px;
-    touch-action: manipulation;
+  .sep {
+    flex: 0 0 auto;
+    width: 1px;
+    height: 22px;
+    margin: 0 3px;
   }
   .icon {
-    width: 22px;
-    height: 22px;
-  }
-  .act .icon {
-    width: 18px;
-    height: 18px;
-  }
-  .btn:active,
-  .act:active {
-    background: color-mix(in srgb, var(--text-1) 12%, transparent);
+    width: 20px;
+    height: 20px;
   }
 </style>

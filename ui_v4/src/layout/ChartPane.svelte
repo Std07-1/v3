@@ -75,6 +75,8 @@
     displayMode?: DisplayMode;
     /** ADR-0112: смуга малювання на телефоні відкрита — обраний інструмент веде курсор-перехрестя (не палець). */
     touchDrawing?: boolean;
+    /** ADR-0112: тап по графіку поставив (або не поставив) точку — смуга оновлює крок. */
+    onTouchPlace?: (result: "draft" | "done" | "none") => void;
   }
 
   let {
@@ -89,6 +91,7 @@
     smcPanelOpen = $bindable(false),
     displayMode = $bindable<DisplayMode>("focus"),
     touchDrawing = false,
+    onTouchPlace,
   }: Props = $props();
 
   // ADR-0024: локальний стан SMC overlay (оновлюється інкрементально)
@@ -219,7 +222,9 @@
   }
   /** ADR-0112: «Поставити» в точці курсора; null — режиму курсора нема. */
   export function placeTouchPoint(): "draft" | "done" | "none" | null {
-    return touchCursor?.place() ?? null;
+    const result = touchCursor?.place() ?? null;
+    if (result !== null && result !== "none") navigator.vibrate?.(10);
+    return result;
   }
   export function cancelDraft() {
     drawingsRenderer?.cancelDraft();
@@ -440,7 +445,12 @@
     if (!drawing || !drawingsRenderer || !chartEngine) return;
     const renderer = drawingsRenderer;
     renderer.setTouchCursorMode(true);
-    const cursor = new TouchDrawCursor(wrapperRef, chartEngine.chart, chartEngine.series, renderer);
+    const cursor = new TouchDrawCursor(wrapperRef, chartEngine.chart, chartEngine.series, renderer, () => {
+      // Тап по графіку = точка в кільці; легка вібрація — тактильне «поставлено» (Android; де нема — тиша)
+      const result = cursor.place();
+      if (result !== "none") navigator.vibrate?.(10);
+      onTouchPlace?.(result);
+    });
     touchCursor = cursor;
     return () => {
       cursor.destroy();

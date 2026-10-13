@@ -30,6 +30,15 @@ export function moveCursor(p: CursorPoint, dx: number, dy: number, b: CursorBoun
   };
 }
 
+/** Тап = поставити точку в кільці: палець майже не рушив і відпущений швидко (як короткий тап виходу ADR-0108). */
+const TAP_SLOP_PX = 8;
+const TAP_MAX_MS = 300;
+
+/** Дотик був тапом (точка), а не веденням кільця: пройдений шлях < 8 px і тривалість < 300 мс. */
+export function isTap(travelPx: number, durationMs: number): boolean {
+  return travelPx < TAP_SLOP_PX && durationMs < TAP_MAX_MS;
+}
+
 const POINTER_TYPES = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'] as const;
 
 /** Дотик по самому графіку (полотна LWC і шарів), а не по кнопках поверх нього. */
@@ -54,7 +63,8 @@ const RETICLE_STYLE = [
   'margin:-11px 0 0 -11px',
   'border-radius:50%',
   'border:1.5px solid var(--accent, #d4a017)',
-  'box-shadow:0 0 0 1px rgba(0,0,0,0.55)',
+  'background:radial-gradient(circle, var(--accent, #d4a017) 0 1.6px, transparent 2.2px)',
+  'box-shadow:0 0 0 1px rgba(0,0,0,0.55), 0 0 12px rgba(212,160,23,0.28)',
   'pointer-events:none',
   'z-index:21', // над шаром малювань (20) — чернетка не закриває кільце
 ].join(';');
@@ -62,6 +72,8 @@ const RETICLE_STYLE = [
 export class TouchDrawCursor {
   private point: CursorPoint;
   private lastTouch: { x: number; y: number } | null = null;
+  /** Початок поточного дотику і пройдений шлях — щоб відрізнити тап (точка) від ведення кільця. */
+  private touchStart: { at: number; travel: number } | null = null;
   private readonly reticle: HTMLDivElement;
   private readonly prevAutoScale: boolean;
   /** Поворот телефона / зміна розміру: відповідність ціна↔піксель міняється, а курсор стоїть на місці екрана —
@@ -74,6 +86,8 @@ export class TouchDrawCursor {
     private readonly chart: IChartApi,
     private readonly series: ISeriesApi<SeriesType>,
     private readonly target: TouchCursorTarget,
+    /** Тап по графіку — поставити точку в кільці (ChartPane: place() + вібрація + смуга). */
+    private readonly onTap?: () => void,
   ) {
     const b = this.bounds();
     this.point = { x: b.width / 2, y: b.height / 2 };
@@ -123,11 +137,13 @@ export class TouchDrawCursor {
   private readonly onTouchStart = (e: TouchEvent): void => {
     if (e.touches.length !== 1) {
       this.lastTouch = null; // два пальці — масштаб LWC
+      this.touchStart = null;
       return;
     }
     if (!onChartSurface(e.target)) return; // панель SMC тощо всередині контейнера — їхні кнопки працюють (D-5)
     this.swallow(e);
     this.lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    this.touchStart = { at: e.timeStamp, travel: 0 };
   };
 
   private readonly onTouchMove = (e: TouchEvent): void => {
@@ -137,6 +153,7 @@ export class TouchDrawCursor {
     }
     this.swallow(e);
     const t = e.touches[0];
+    if (this.touchStart) this.touchStart.travel += Math.hypot(t.clientX - this.lastTouch.x, t.clientY - this.lastTouch.y);
     this.point = moveCursor(this.point, t.clientX - this.lastTouch.x, t.clientY - this.lastTouch.y, this.bounds());
     this.lastTouch = { x: t.clientX, y: t.clientY };
     this.sync();
@@ -144,7 +161,14 @@ export class TouchDrawCursor {
 
   private readonly onTouchEnd = (e: TouchEvent): void => {
     if (this.lastTouch) this.swallow(e);
-    if (e.touches.length === 0) this.lastTouch = null;
+    const start = this.touchStart;
+    if (e.touches.length === 0) {
+      this.lastTouch = null;
+      this.touchStart = null;
+    }
+    if (e.type === 'touchend' && start && isTap(start.travel, e.timeStamp - start.at)) {
+      this.onTap?.();
+    }
   };
 
   /** Дотикові pointer-події по графіку — не далі (рух веде touch-обробник); миша й перо — як завжди. */

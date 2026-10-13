@@ -119,6 +119,7 @@
   // ADR-0112: пробне малювання на телефоні — лише на пристрої, де ввімкнули ?draw=1 (☰ → «Малювати» → смуга внизу).
   const touchDrawingAvailable = resolveTouchDrawing(location.search, deviceStorage());
   let touchDrawOpen = $state(false);
+  let drawBarRef: MobileDrawBar | undefined = $state();
 
   // ADR-0065 Phase 1: SMC panel open + display mode lifted here from ChartPane.
   // CommandRailOverflow is the single trigger surface; ChartPane is a $bindable consumer.
@@ -960,20 +961,23 @@
         drawingDefaults={toolDefaults}
         {archiChartEnabled}
         touchDrawing={touchDrawOpen}
+        onTouchPlace={(r) => drawBarRef?.applyPlace(r)}
         bind:smcPanelOpen
         bind:displayMode
       />
       {#if touchDrawOpen}
         <MobileDrawBar
+          bind:this={drawBarRef}
           {activeTool}
           onSelectTool={(t) => (activeTool = t)}
           onPlace={() => chartPaneRef?.placeTouchPoint() ?? null}
           {magnetEnabled}
           onToggleMagnet={toggleMagnet}
           onUndo={() => chartPaneRef?.undo()}
-          onRedo={() => chartPaneRef?.redo()}
           onDeleteSelected={() => chartPaneRef?.deleteSelectedDrawing()}
           onClose={closeTouchDrawing}
+          {menuBg}
+          {menuBorder}
         />
       {/if}
 
