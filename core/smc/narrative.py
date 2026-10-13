@@ -246,6 +246,16 @@ def _find_invalidation(zone, digits=_DEFAULT_PRICE_DIGITS):
     return "Нижче {} \u2014 зона пробита".format(_fmt_price(zone.low, digits))
 
 
+def _distance_to_zone(zone, price):
+    # type: (SmcZone, float) -> float
+    """Відстань від ціни до найближчого краю зони; 0 — ціна в зоні."""
+    if price < zone.low:
+        return zone.low - price
+    if price > zone.high:
+        return price - zone.high
+    return 0.0
+
+
 def _is_invalidated(zone, current_price):
     # type: (SmcZone, float) -> bool
     if "bear" in zone.kind:
@@ -774,7 +784,6 @@ def _synthesize_impl(
             valid.append(z)
 
     primary_zone = valid[0] if valid else None
-    alt_zone = valid[1] if len(valid) > 1 else None
 
     # Step 3: Mode decision (SC-3)
     #   "aligned" = HTF agrees AND zone direction matches HTF.
@@ -790,13 +799,18 @@ def _synthesize_impl(
     max_dist_atr = config.get("trade_max_distance_atr", 5.0)
     _too_far = False
     if primary_zone and atr > 0:
-        if current_price < primary_zone.low:
-            _dist = primary_zone.low - current_price
-        elif current_price > primary_zone.high:
-            _dist = current_price - primary_zone.high
-        else:
-            _dist = 0.0  # inside zone
-        _too_far = _dist > max_dist_atr * atr
+        _too_far = _distance_to_zone(primary_zone, current_price) > max_dist_atr * atr
+    # Альтернатива — друга зона того самого напрямку в тих самих межах відстані (ADR-0113 Ф0, K7): раніше бралася
+    # будь-яка друга, і під «BUY» міг стояти short за 37 ATR. Сценарій на протилежний бік — окреме рішення (Ф2).
+    alt_zone = next(
+        (
+            z
+            for z in valid[1:]
+            if _zone_direction(z) == direction
+            and (atr <= 0 or _distance_to_zone(z, current_price) <= max_dist_atr * atr)
+        ),
+        None,
+    )
 
     if _too_far:
         mode, sub_mode = "wait", "too_far"

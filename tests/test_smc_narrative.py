@@ -225,8 +225,9 @@ def test_wait_no_data():
 
 
 def test_two_scenarios():
+    """Друга зона того самого напрямку в межах trade_max_distance_atr — альтернативний вхід (ADR-0113 Ф0, K7)."""
     z1 = _zone(kind="ob_bear", zone_id="z1", high=5225.0, low=5144.0)
-    z2 = _zone(kind="ob_bull", zone_id="z2", high=5050.0, low=4980.0)
+    z2 = _zone(kind="ob_bear", zone_id="z2", high=5300.0, low=5260.0)  # 80 пт = 4 ATR над ціною
     snap = _snap(zones=[z1, z2])
     bias = {"86400": "bearish", "14400": "bearish"}
     grades = {
@@ -238,7 +239,26 @@ def test_two_scenarios():
         snap, bias, grades, {}, 900, 5180.0, 20.0, _default_config()
     )
 
-    assert len(nb.scenarios) == 2
+    assert [sc.zone_id for sc in nb.scenarios] == ["z1", "z2"]
+
+
+def test_alternative_scenario_not_opposite_or_far():
+    """K7: під SELL не стоїть BUY-зона проти HTF за 6.5 ATR (так було до ADR-0113 Ф0)."""
+    z1 = _zone(kind="ob_bear", zone_id="z1", high=5225.0, low=5144.0)
+    z_opposite = _zone(kind="ob_bull", zone_id="z2", high=5050.0, low=4980.0)
+    z_far = _zone(kind="ob_bear", zone_id="z3", high=5400.0, low=5380.0)  # 155 пт = 7.75 ATR
+    grades = {
+        "z1": {"score": 7, "grade": "A", "factors": []},
+        "z2": {"score": 6, "grade": "A", "factors": []},
+        "z3": {"score": 6, "grade": "A", "factors": []},
+    }
+
+    nb = synthesize_narrative(
+        _snap(zones=[z1, z_opposite, z_far]), {"86400": "bearish", "14400": "bearish"}, grades, {}, 900, 5180.0,
+        20.0, _default_config(),
+    )
+
+    assert [sc.zone_id for sc in nb.scenarios] == ["z1"]
 
 
 # ── 7. test_trigger_approaching ──────────────────────────
