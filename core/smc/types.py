@@ -164,6 +164,9 @@ class SmcZone:
         None  # ADR-0024c Phase 2: 'institutional'|'intraday'|'local'|None
     )
     origin_zone_id: Optional[str] = None  # ADR-0034 P0: IFVG → id of source FVG
+    # ADR-0113 Ф0 (K6): бар зламу структури (BOS/CHoCH), що створив OB; None — FVG/IFVG/P-D і зони без цього знання.
+    # Наратив шукає підтвердження ПІСЛЯ нього (власний злам — не тригер). Не на wire (S6 не змінено).
+    origin_event_ms: Optional[int] = None
 
     def to_wire(self) -> Dict[str, Any]:
         """S6: wire format = ui_v4 SmcZone type.

@@ -145,6 +145,7 @@ def detect_order_blocks(
             status="active",
             strength=round(strength, 3),
             anchor_bar_ms=ob_bar.open_time_ms,
+            origin_event_ms=swing.time_ms,  # ADR-0113 Ф0 (K6): власний злам зони — не її підтвердження
         )
         zones.append(zone)
         # Запам'ятовуємо кінець імпульсу (BOS/CHoCH бар) — бари імпульсу

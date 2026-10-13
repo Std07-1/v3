@@ -280,14 +280,24 @@ def _find_qualifying_structure_break(snapshot, zone):
     """Find the most recent CHoCH/BOS aligned with zone direction.
 
     Returns the swing if found (after zone creation), None otherwise.
+
+    ADR-0113 Ф0 (K6): OB-свічка передує власному зламу, тож «злам після якоря» завжди знаходив той злам, що
+    зону створив, — «ГОТОВИЙ ДО ВХОДУ» без нового підтвердження. Тепер для OB — лише злам ПІСЛЯ origin_event_ms;
+    зони без цього знання (FVG, старі) — як було, від свічки-якоря.
     """
     target_kinds = (
         ("choch_bear", "bos_bear")
         if "bear" in zone.kind
         else ("choch_bull", "bos_bull")
     )
+    origin_ms = zone.origin_event_ms
     for sw in reversed(snapshot.swings):
-        if sw.kind in target_kinds and sw.time_ms >= zone.anchor_bar_ms:
+        if sw.kind not in target_kinds:
+            continue
+        if origin_ms is not None:
+            if sw.time_ms > origin_ms:
+                return sw
+        elif sw.time_ms >= zone.anchor_bar_ms:
             return sw
     return None
 

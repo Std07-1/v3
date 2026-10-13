@@ -1089,3 +1089,20 @@ class TestHonestyF0:
         assert _parse_price_from_desc("P H4 L 2892") == 2892.0  # старий формат: раніше 4.0
         assert _parse_price_from_desc("PDH 2892") == 2892.0
         assert _parse_price_from_desc("Вище 158.452 — зона пробита") == 158.452
+
+    def test_own_creating_break_is_not_confirmation(self):
+        """K6: OB-свічка передує власному зламу — він не підтверджує зону; підтверджує лише НОВИЙ злам."""
+        import dataclasses
+
+        z = dataclasses.replace(_zone(kind="ob_bear", high=5225.0, low=5144.0, zone_id="z1", anchor_bar_ms=1000),
+                                origin_event_ms=1500)
+        creator = [_swing("choch_bear", 5150.0, 1500), _swing("displacement_bear", 5140.0, 1500)]
+        bias = {"86400": "bearish", "14400": "bearish"}
+        nb = synthesize_narrative(_snap(zones=[z], levels=[_level("pdl", 5062.0)], swings=creator), bias,
+                                  _grade_a6("z1"), {}, 900, 5180.0, 20.0, _default_config(), price_digits=2)
+        assert nb.scenarios[0].trigger == "in_zone"  # ціна в зоні, але CHoCH ще нема
+        assert nb.scenarios[0].trigger_desc.startswith("У зоні: чекаємо")
+        confirmed = creator + [_swing("choch_bear", 5170.0, 2500), _swing("displacement_bear", 5165.0, 2500)]
+        nb2 = synthesize_narrative(_snap(zones=[z], levels=[_level("pdl", 5062.0)], swings=confirmed), bias,
+                                   _grade_a6("z1"), {}, 900, 5180.0, 20.0, _default_config(), price_digits=2)
+        assert nb2.scenarios[0].trigger == "ready"
