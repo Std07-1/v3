@@ -99,11 +99,15 @@ class _ActiveSignal:
             self.peak_trigger = trigger
 
 
+# Перше число, що не є частиною позначки TF («H4», «M15»): «лой попер. H4 4150.20» → 4150.2; раніше «P H4 L 2892» → 4.0
+_DESC_PRICE_RE = re.compile(r"(?<![A-Za-z])\d+(?:\.\d+)?")
+
+
 def _parse_price_from_desc(desc: str) -> float:
     """Витягує ціну з target_desc/invalidation (напр. 'PDH 2892' → 2892.0)."""
     if not desc:
         return 0.0
-    m = re.search(r"[\d]+(?:\.[\d]+)?", desc.replace(",", ""))
+    m = _DESC_PRICE_RE.search(desc.replace(",", ""))
     return float(m.group()) if m else 0.0
 
 

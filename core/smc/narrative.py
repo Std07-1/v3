@@ -407,8 +407,8 @@ def _find_target(
         snapshot.levels, direction, current_price, max_dist
     )
     if target_level:
-        return "{kind} {price}".format(
-            kind=target_level.kind.upper().replace("_", " "),
+        return "{label} {price}".format(
+            label=_TARGET_LEVEL_LABELS.get(target_level.kind, target_level.kind.upper()),
             price=_fmt_price(target_level.price, digits),
         )
 
@@ -444,24 +444,47 @@ def _find_target(
     return None
 
 
+# Ліквідність-ціль (draw on liquidity) за напрямком: ключові рівні дня/H4/H1, EQH/EQL, сесійні H/L, тиждень/місяць.
+# Раніше лише 6 kinds і перший за порядком списку (PDL перемагав ближчий H4 low) — ADR-0113 Ф0, K5.
+_TARGET_KINDS_BELOW = frozenset(
+    {"pdl", "dl", "p_h4_l", "h4_l", "p_h1_l", "h1_l", "eq_lows", "as_l", "p_as_l", "lon_l", "p_lon_l",
+     "ny_l", "p_ny_l", "pwl", "pml"}
+)
+_TARGET_KINDS_ABOVE = frozenset(
+    {"pdh", "dh", "p_h4_h", "h4_h", "p_h1_h", "h1_h", "eq_highs", "as_h", "p_as_h", "lon_h", "p_lon_h",
+     "ny_h", "p_ny_h", "pwh", "pmh"}
+)
+# Підписи цілей — без цифри перед ціною там, де її можна сплутати з ціною («P H4 L 2892» журнал читав як 4.0)
+_TARGET_LEVEL_LABELS = {
+    "pdh": "PDH", "pdl": "PDL", "dh": "хай дня", "dl": "лой дня",
+    "p_h4_h": "хай попер. H4", "p_h4_l": "лой попер. H4", "h4_h": "хай H4", "h4_l": "лой H4",
+    "p_h1_h": "хай попер. H1", "p_h1_l": "лой попер. H1", "h1_h": "хай H1", "h1_l": "лой H1",
+    "eq_highs": "EQH", "eq_lows": "EQL",
+    "as_h": "хай Азії", "as_l": "лой Азії", "p_as_h": "хай попер. Азії", "p_as_l": "лой попер. Азії",
+    "lon_h": "хай Лондона", "lon_l": "лой Лондона", "p_lon_h": "хай попер. Лондона", "p_lon_l": "лой попер. Лондона",
+    "ny_h": "хай NY", "ny_l": "лой NY", "p_ny_h": "хай попер. NY", "p_ny_l": "лой попер. NY",
+    "pwh": "PWH", "pwl": "PWL", "pmh": "PMH", "pml": "PML",
+}  # type: Dict[str, str]
+
+
 def _find_target_key_level(levels, direction, current_price=0.0, max_dist=0.0):
     # type: (List[SmcLevel], str, float, float) -> Optional[SmcLevel]
-    target_kinds_short = (
-        {"pdl", "dl", "p_h4_l", "h4_l", "p_h1_l", "h1_l"}
-        if direction == "short"
-        else {"pdh", "dh", "p_h4_h", "h4_h", "p_h1_h", "h1_h"}
-    )
+    """Найближчий рівень ліквідності попереду ціни в напрямку сценарію (у межах max_dist, якщо задано)."""
+    target_kinds = _TARGET_KINDS_BELOW if direction == "short" else _TARGET_KINDS_ABOVE
+    best = None  # type: Optional[SmcLevel]
     for lv in levels:
-        if lv.kind in target_kinds_short:
-            # P2: directional gate — target must be ahead of price
-            if direction == "short" and lv.price >= current_price:
-                continue
-            if direction == "long" and lv.price <= current_price:
-                continue
-            if max_dist > 0 and abs(lv.price - current_price) > max_dist:
-                continue
-            return lv
-    return None
+        if lv.kind not in target_kinds:
+            continue
+        # P2: directional gate — target must be ahead of price
+        if direction == "short" and lv.price >= current_price:
+            continue
+        if direction == "long" and lv.price <= current_price:
+            continue
+        if max_dist > 0 and abs(lv.price - current_price) > max_dist:
+            continue
+        if best is None or abs(lv.price - current_price) < abs(best.price - current_price):
+            best = lv
+    return best
 
 
 def _find_target_swing(swings, direction, current_price=0.0, max_dist=0.0):

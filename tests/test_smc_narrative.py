@@ -1062,3 +1062,30 @@ class TestHonestyF0:
             _snap(zones=[far_fvg, near_fvg]), {}, {}, {}, 900, 5160.0, 20.0, _default_config(), price_digits=2,
         )
         assert nb2.next_area == "FVG▼ без оцінки 5170.00–5175.00"
+
+    def test_target_is_nearest_liquidity_ahead(self):
+        """K5: ціль — найближча ліквідність попереду, а не перша за списком (PDL перемагав ближчий лой H4)."""
+        z = _zone(kind="ob_bear", high=5225.0, low=5190.0, zone_id="z1")
+        levels = [_level("pdl", 5062.0), _level("p_h4_l", 5150.0, tf_s=14400), _level("eq_lows", 5165.0, tf_s=900)]
+        nb = synthesize_narrative(
+            _snap(zones=[z], levels=levels, swings=[_swing("choch_bear", 5200.0, 1500)]),
+            {"86400": "bearish", "14400": "bearish"}, _grade_a6("z1"), {}, 900, 5180.0, 20.0, _default_config(),
+            price_digits=2,
+        )
+        assert nb.scenarios[0].target_desc == "EQL 5165.00"
+
+    def test_target_label_has_no_tf_digit_before_price(self):
+        """K5: підпис цілі читається людиною, а журнал бере саме ціну («лой попер. H4 5150.00» → 5150.0)."""
+        from runtime.smc.signal_journal import _parse_price_from_desc
+
+        z = _zone(kind="ob_bear", high=5225.0, low=5190.0, zone_id="z1")
+        nb = synthesize_narrative(
+            _snap(zones=[z], levels=[_level("p_h4_l", 5150.0, tf_s=14400)], swings=[_swing("choch_bear", 5200.0, 1500)]),
+            {"86400": "bearish", "14400": "bearish"}, _grade_a6("z1"), {}, 900, 5180.0, 20.0, _default_config(),
+            price_digits=2,
+        )
+        assert nb.scenarios[0].target_desc == "лой попер. H4 5150.00"
+        assert _parse_price_from_desc(nb.scenarios[0].target_desc) == 5150.0
+        assert _parse_price_from_desc("P H4 L 2892") == 2892.0  # старий формат: раніше 4.0
+        assert _parse_price_from_desc("PDH 2892") == 2892.0
+        assert _parse_price_from_desc("Вище 158.452 — зона пробита") == 158.452
