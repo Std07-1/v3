@@ -164,8 +164,8 @@ Full documentation: **[docs/index.md](docs/index.md)** — single entry point.
 │  LAYER 1: INGEST (simple, focused, single-responsibility)   │
 │                                                             │
 │  ┌──────────────┐    ┌──────────────────┐                   │
-│  │ m1_poller    │    │ binance_ingest   │                   │
-│  │ M1 from FXCM │    │ M1 from Binance  │                   │
+│  │ m1_ingestion │    │ binance_ingest   │                   │
+│  │ M1 from FXCM │    │ Binance (off)    │                   │
 │  └──────┬───────┘    └──────┬───────────┘                   │
 │         │ commit M1         │ commit M1                     │
 │         ▼                   ▼                               │
@@ -194,10 +194,10 @@ Full documentation: **[docs/index.md](docs/index.md)** — single entry point.
 │  │      M5 → M15 (3×M5)                            │        │
 │  │        M15 → M30 (2×M15)                        │        │
 │  │          M30 → H1 (2×M30)                       │        │
-│  │            H1 → H4 (4×H1, calendar+TV anchor)   │        │
-│  │    M1 → D1 (1440×M1, anchor 22:00 UTC)          │        │
+│  │            H1 → H4 (4×H1, session anchor)       │        │
+│  │    M1 → D1 (live; 17:00 New York; settle)       │        │
 │  │                                                 │        │
-│  │  4 symbols (XAU/USD, XAG/USD, BTCUSDT, ETHUSDT) │        │
+│  │  8 symbols (metals, indices, USD/JPY)           │        │
 │  │  Priority: watched symbol → front of queue      │        │
 │  │  Buffers: GenericBuffer per (symbol, tf_s)      │        │
 │  └─────────────────────────────────────────────────┘        │
@@ -212,7 +212,8 @@ Full documentation: **[docs/index.md](docs/index.md)** — single entry point.
 ┌──────────────────────────────────────────────────────────────┐
 │  LAYER 3: UI v4 (WS real-time, read-only, ZERO domain logic) │
 │  WS full/delta/scrollback → UDS via ws_server.py             │
-│  Svelte 5 + LWC 5 + TypeScript, ~40 files ~10000 LOC          │
+│  Svelte 5 + LWC 5 + TypeScript, ~80 files ~22000 LOC         │
+│  Drawing: 6 tools, PC panel + phone (ADR-0111, 0112)         │
 │  Port 8000, same-origin, config-gated                        │
 │  Chart parity DONE, audit T1-T10 COMPLETE                    │
 └──────────────────────────────────────────────────────────────┘

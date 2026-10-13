@@ -35,6 +35,13 @@ LWC pan blocked у capture phase) → drag = pure crosshair drag через manu
 only, v2 +pressedMouseMove, v3 capture-phase). Заміна на applyOptions toggle
 поверне баг "vertical chart moves with finger".
 
+**2026-10-13 (ADR-0108, власник: «тапнув для виходу — і весь графік стрибає»)**: longPressLock глушить лише
+touch-події, а pointer-події того самого пальця — окремий потік — ішли в `interaction.ts` і писали ручний діапазон
+ціни, поки autoScale заморожено. Виправлено поза longPressLock: `setupPriceScaleInteractions(..., isTouchOwned)` —
+поки перехрестя закріплене (або курсор малювання ADR-0112), дотик не прокручує шкалу, а прокрутку, що встигла
+стартувати з довгого дотику, скасовано разом зі слідом. Будь-який новий режим «палець веде щось своє» — так само:
+глушити І touch, І pointer-події (або повідомити interaction.ts), інакше стрибок шкали на виході.
+
 ---
 
 ## I-UI-2: Outside-dismiss central pattern
@@ -110,6 +117,30 @@ narrative, не self-introduction).
 **Why locked**: brand "Арчі" — brand-internal scope (owner + sponsors).
 Public users (free + paying tiers) бачать neutral status що виглядає як
 data feed/analytics indicator, не AI-bot personality. Це comm strategy.
+
+---
+
+## I-UI-5: Touch drawing cursor — capture-перехоплення на контейнері (ADR-0112)
+
+**File**: [`src/chart/drawings/touchDrawCursor.ts`](../src/chart/drawings/touchDrawCursor.ts)
+**Wired in**: [`src/layout/ChartPane.svelte`](../src/layout/ChartPane.svelte) — `$effect` (лише коли відкрита капсула
+і обрано інструмент)
+**Status**: пробна версія під `?draw=1` (власник 13.10: «го, спробуємо», далі «чудово, мені подобається»)
+
+**Critical invariants**:
+
+- Однопальцеві `touch*` І `pointer*` (pointerType touch) по полотнах графіка глушаться в capture-фазі на
+  `.chart-container` — предку longPressLock і LWC; самі вони не змінюються. Кнопки поверх графіка (панель SMC тощо)
+  працюють (`onChartSurface`). Два пальці — далі до LWC (масштаб).
+- autoScale заморожується на час режиму й повертається, лише якщо його ніхто не змінив (longPressLock вмикає сам).
+- Точка ставиться лише через `DrawingsRenderer.cursorPlace` — той самий шлях, що клік мишею; renderer у цьому
+  режимі ігнорує дотикові pointer-події (`setTouchCursorMode`).
+- Лупа (`touchLoupe.ts`) лише копіює наявні полотна: тло LWC прозоре — щокадру `clearRect`; верхнє полотно LWC
+  (inline z-index 2, перехрестя) не береться — LWC малює його кадром пізніше, перехрестя в лупі власне.
+
+**Why**: палець закриває точку; LWC 5.1.0 не вимикає вертикальну прокрутку прапорами — лише capture-перехоплення.
+Перевіряти лише справжнім дотиком (Playwright `Input.dispatchTouchEvent` через CDP — потоки touch і pointer),
+синтетичні TouchEvent не дають pointer-потоку.
 
 ---
 

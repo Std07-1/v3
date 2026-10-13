@@ -63,7 +63,8 @@ src/
 │
 ├── layout/
 │   ├── ChartPane.svelte  # 3-layer composite (LWC + overlay + drawings)
-│   ├── DrawingToolbar.svelte
+│   ├── DrawingToolbar.svelte  # панель малювання ПК
+│   ├── MobileDrawBar.svelte   # капсула малювання телефона (ADR-0112, ?draw=1)
 │   ├── SymbolTfPicker.svelte
 │   ├── StatusBar.svelte
 │   └── StatusOverlay.svelte
@@ -72,7 +73,8 @@ src/
     ├── lwc.ts            # Re-export ChartEngine
     ├── engine.ts         # LWC wrapper
     ├── overlay/          # SMC overlay renderer
-    └── drawings/         # Drawings renderer + command stack
+    └── drawings/         # DrawingsRenderer + CommandStack; tools/ — реєстр інструментів (ADR-0111 §3.3);
+                          # touchDrawCursor + touchLoupe — малювання пальцем (ADR-0112)
 ```
 
 ## DiagState → StatusBar → StatusOverlay
@@ -94,13 +96,21 @@ src/
 
 | Key | Дія |
 |-----|-----|
-| T   | Toggle trend line tool |
-| H   | Toggle horizontal line tool |
-| R   | Toggle rectangle tool |
-| E   | Toggle eraser |
-| Esc | Cancel current tool / draft |
-| Ctrl+Z | Undo |
+| H   | Горизонталь |
+| \ (і T) | Трендова |
+| Y   | Промінь |
+| R   | Прямокутник |
+| B   | Фібоначчі |
+| M   | Лінійка |
+| E   | Гумка |
+| G   | Магніт |
+| Delete / Backspace | Видалити виділену фігуру (undoable) |
+| Esc | Скасувати інструмент / чернетку, зняти виділення |
+| Ctrl/Cmd+Z | Undo |
 | Ctrl+Shift+Z / Ctrl+Y | Redo |
+
+Клавіші фігур — з реєстру (`ToolModule.hotkey`, ADR-0111 §3.3); однолітерні — лише без Ctrl/Cmd/Alt (Ctrl+R лишається
+браузеру).
 
 ## Контракти
 
@@ -116,7 +126,9 @@ src/
 | **Mobile** (portrait `<640px` + landscape phone `max-height:500px`) | [ADR-0072](../docs/adr/ADR-0072-mobile-canonical-layout.md) | ☰ position empirical (right:44, top:2, transparent — **NO backdrop "пятно"**), portrait hide-list, landscape hide-list (different — keeps status row), vertical row 1 alignment, `(orientation: landscape) and (max-height: 500px)` detection |
 | CommandRail layout (CR-2.5) | [ADR-0065 rev 2](../docs/adr/ADR-0065-rev2-command-rail-final.md) | Slot composition, ☰ overflow contract, mobile breakpoint baseline |
 | NarrativePanel state machine | [ADR-0069](../docs/adr/ADR-0069-narrative-panel-state-aware.md) | 3-mode (compact/banner/expanded), agent_state derivation, sessionStorage override, escalation reset |
-| BrandWatermark slot | [ADR-0068](../docs/adr/ADR-0068-brand-surface-info-hub.md) | Bottom-left LOCKED (do NOT move): desktop 36/12, mobile 30/6 |
+| BrandWatermark slot | [ADR-0068](../docs/adr/ADR-0068-brand-surface-info-hub.md) | Bottom-left LOCKED (do NOT move): desktop 36/12, mobile 30/6; поки відкрите малювання на телефоні — гасне (ADR-0112, власник 13.10) |
+| **Mobile drawing** (лише `?draw=1`, телефонний розклад) | [ADR-0112](../docs/adr/ADR-0112-touch-drawing.md) | Олівець під ☰ + «Малювати» в ☰; капсула по центру над віссю часу; курсор-перехрестя через capture-перехоплення на `.chart-container` (longPressLock 🔒 не чіпати); ☰, меню символу/TF і SMC закривають малювання |
+| Mobile crosshair pin | [ADR-0108](../docs/adr/ADR-0108-mobile-crosshair-pin.md) | Довгий дотик — перехрестя лишається; поки воно володіє пальцем, interaction.ts не прокручує шкалу (`isTouchOwned`, 13.10) |
 | Visual identity (tokens, themes) | [ADR-0066 rev 5](../docs/adr/ADR-0066-visual-identity-system.md) | Color tokens, T1-T8 typography, candle style matrix |
 | PWA Full Standalone (manifest + SW) | [ADR-0071](../docs/adr/ADR-0071-pwa-full-standalone.md) | **PROPOSED** — manual SW shell-only V1, never cache `/api/*` or WS data |
 | Price Scale Overlay (custom canvas labels) | [ADR-0073](../docs/adr/ADR-0073-price-scale-overlay.md) | **ACCEPTED rev 2** — hide LWC `rightPriceScale`, render periodic labels + lastValue chip + crosshair chip + dashed connector у OverlayRenderer. B1/B2 LWC API blockers закриті (`series.priceToCoordinate` тільки, `subscribeCrosshairMove(param)` capture). H3: hardcode hex для canvas (no CSS vars). Edge-to-edge свічки, reclaim ~44px chart width |

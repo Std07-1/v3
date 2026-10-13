@@ -47,8 +47,8 @@
 | [ADR-0042](adr/0042-delta-frame-state-sync.md) | Delta Frame State Synchronization — Full/Delta Parity (DF-1/DF-2/DF-3, ADR-0042) |
 | [ADR-0043](adr/0043-ui-v4-canvas-safe-zones-state-sync.md) | UI v4 — Canvas Safe Zones + State Sync Hardening (ADR-0043) |
 | [ADR-0044](adr/0044-htf-live-preview.md) | HTF Live Preview — Incremental HTF accumulator for D1/H4 forming candle (ADR-0044) |
-| [ADR-0045](adr/0045-vps-trader-bot.md) | VPS SMC Trader Bot — Reactive+Proactive Telegram bot (ADR-0045) |
-| [ADR-0046](adr/0046-agent-personality-restoration.md) | Agent Personality Restoration — External Prompt SSOT + DNA Injection (ADR-0046) |
+| ADR-0045 | VPS SMC Trader Bot — перенесено в `trader-v3/docs/adr/` (межа X31, коміт c76f664d) |
+| ADR-0046 | Agent Personality Restoration — перенесено в `trader-v3/docs/adr/` (межа X31, коміт c76f664d) |
 | [ADR-0047](adr/0047-structure-detection-v2.md) | Structure Detection V2 — Canonical BOS/CHoCH + FVG Accuracy (ADR-0047) |
 
 ### 2. Потоки даних
@@ -87,12 +87,13 @@
 
 | Документ | Зміст |
 |---|---|
-
-| [ui_v4/README_DEV.md](../ui_v4/README_DEV.md) | Developer quick start, стек, env-змінні |
-| [ui_v4/UI_v4_COPILOT_README.md](../ui_v4/UI_v4_COPILOT_README.md) | SSOT інструкція для побудови (slices 0–5) |
+| [ui_v4/README_DEV.md](../ui_v4/README_DEV.md) | Developer quick start, стек, клавіші, surface contracts |
+| [ui_v4/docs/UI_INVARIANTS.md](../ui_v4/docs/UI_INVARIANTS.md) | Заблоковані UI-патерни (перехрестя, outside-dismiss, знак v3, курсор малювання) |
+| [ADR-0082](adr/ADR-0082-cross-tf-drawing-sync.md) · [ADR-0111](adr/ADR-0111-drawing-tools-phase-2.md) · [ADR-0112](adr/ADR-0112-touch-drawing.md) | Малювання: одні фігури на всіх TF · реєстр інструментів, поріг, Фібоначчі · малювання на телефоні |
+| [ADR-0108](adr/ADR-0108-mobile-crosshair-pin.md) | Мобільне перехрестя (довгий дотик, без стрибка шкали на виході) |
 | [ui spec.md](ui%20spec.md) | Premium trader-first UI spec: thesis bar, art direction, signature interactions, before/after |
 | [ui_v4/src/types.ts](../ui_v4/src/types.ts) | SSOT типи: RenderFrame, WsAction, Candle, SmcData, Drawing |
-| [system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md](system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md) | UI v4 аудит: T1-T10 ALL COMPLETE, chart parity DONE |
+| `system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md` | UI v4 аудит: T1-T10 ALL COMPLETE, chart parity DONE (локально, поза git — `.gitignore`) |
 
 ### 5.2. SMC Engine (Smart Money Concepts — ADR-0024)
 
@@ -109,7 +110,7 @@
 | `ui_v4/src/stores/smcStore.ts` | applySmcFull / applySmcDelta — incremental SMC state |
 | `ui_v4/src/chart/overlay/OverlayRenderer.ts` | Canvas rendering: OB/FVG/swings/levels з opacity за strength |
 | `ui_v4/src/chart/overlay/DisplayBudget.ts` | Display budget filter (ADR-0028) |
-| **[trader_coverage.md](trader_coverage.md)** | **Трейдерські концепти → ADR → Модуль** — карта захисту (що читати перед зміною будь-якого SMC-компонента) |
+| `trader_coverage.md` | Трейдерські концепти → ADR → Модуль — **видалено 2026-04-11** у коміті 92a75e0a (разом зі скриптом розмітки — схоже на випадкове); відновити: `git show 92a75e0a^:docs/trader_coverage.md` — рішення власника |
 
 ### 6. Зовнішні клієнти — опційний адаптер (agent_bridge, ADR-0090)
 
@@ -133,10 +134,12 @@
 
 | Документ | Зміст |
 |---|---|
-| [audit/progress.md](audit/progress.md) | Чекліст P0–P6 з доказами та статусами (DONE/PARTIAL/TODO/UNKNOWN) |
-| [audit/coldstart_regressions.md](audit/coldstart_regressions.md) | Матриця регресій: cold start 4 символи |
-| [audit/htf_availability_regressions.md](audit/htf_availability_regressions.md) | Матриця регресій: H4/D1 availability |
-| [audit/ui_live_candle_regressions.md](audit/ui_live_candle_regressions.md) | Матриця регресій: UI live candle |
+| `audit/progress.md` | Чекліст P0–P6 з доказами та статусами (DONE/PARTIAL/TODO/UNKNOWN) |
+| `audit/coldstart_regressions.md` | Матриця регресій: cold start 4 символи |
+| `audit/htf_availability_regressions.md` | Матриця регресій: H4/D1 availability |
+| `audit/ui_live_candle_regressions.md` | Матриця регресій: UI live candle |
+
+> `docs/audit/` і `docs/system_spec/` — локальні робочі нотатки, у git не входять (`.gitignore`); на GitHub їх нема.
 
 ### 9. Дослідження (research/)
 

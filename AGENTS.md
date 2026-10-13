@@ -173,8 +173,8 @@ v3/
 │   │   ├── app/           # diagState, frameRouter, edgeProbe
 │   │   ├── ws/            # WSConnection, WsAction creators
 │   │   ├── stores/        # smcStore, replayStore, favorites, meta, viewCache
-│   │   ├── layout/        # ChartPane, ChartHud, StatusBar, DrawingToolbar, ReplayBar, BiasBanner, ...
-│   │   └── chart/         # engine.ts, lwc.ts, themes.ts, interaction.ts, OverlayRenderer.ts, DrawingsRenderer.ts, overlay/DisplayBudget.ts
+│   │   ├── layout/        # ChartPane, ChartHud, StatusBar, DrawingToolbar (ПК), MobileDrawBar (телефон, ADR-0112), ReplayBar, BiasBanner, ...
+│   │   └── chart/         # engine.ts, lwc.ts, themes.ts, interaction.ts, longPressLock.ts 🔒, overlay/ (OverlayRenderer, DisplayBudget), drawings/ (DrawingsRenderer, tools/ — реєстр інструментів, touchDrawCursor, touchLoupe)
 │   ├── package.json       # npm deps
 │   └── README_DEV.md      # UI v4 dev guide
 │

@@ -135,20 +135,20 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 | [docs/ui_api.md](docs/ui_api.md) | HTTP API reference (endpoints, guards, TTL) |
 | [docs/config_reference.md](docs/config_reference.md) | Довідник полів config.json |
 | [docs/runbooks/production.md](docs/runbooks/production.md) | Production runbook (запуск, інциденти, recovery) |
-| [docs/audit/progress.md](docs/audit/progress.md) | Аудит прогресу P0-P6 з evidence |
+| `docs/audit/progress.md` | Аудит прогресу P0-P6 з evidence (локально, поза git — `.gitignore`) |
 | [docs/adr/index.md](docs/adr/index.md) | Реєстр усіх ADR (canonical archive) |
 | [docs/adr/0001-unified-data-store.md](docs/adr/0001-unified-data-store.md) | ADR: UDS як єдина талія |
 | [docs/adr/0002-derive-chain-from-m1.md](docs/adr/0002-derive-chain-from-m1.md) | ADR: DeriveChain M1→M3→M5→H4 (Phase 0 завершено) |
 | [docs/adr/0003-cold-start-hardening.md](docs/adr/0003-cold-start-hardening.md) | ADR: Cold start hardening (S1 ✅, S2 ✅, S3-S4 pending) |
-| [docs/system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md](docs/system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md) | UI v4 audit: T1-T10 ALL COMPLETE, chart parity DONE |
+| `docs/system_spec/UI_v4_DISCOVERY_AUDIT_rev2.md` | UI v4 audit: T1-T10 ALL COMPLETE, chart parity DONE (локально, поза git) |
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
 │  LAYER 1: INGEST (simple, focused, single-responsibility)   │
 │                                                             │
 │  ┌──────────────┐    ┌──────────────────┐                   │
-│  │ m1_poller    │    │ binance_ingest   │                   │
-│  │ M1 від FXCM  │    │ M1 від Binance   │                   │
+│  │ m1_ingestion │    │ binance_ingest   │                   │
+│  │ M1 від FXCM  │    │ Binance (вимк.)  │                   │
 │  └──────┬───────┘    └──────┬───────────┘                   │
 │         │ commit M1         │ commit M1                     │
 │         ▼                   ▼                               │
@@ -177,10 +177,10 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 │  │      M5 → M15 (3×M5)                            │        │
 │  │        M15 → M30 (2×M15)                        │        │
 │  │          M30 → H1 (2×M30)                       │        │
-│  │            H1 → H4 (4×H1, calendar+TV anchor)   │        │
-│  │    M1 → D1 (1440×M1, anchor 22:00 UTC)          │        │
+│  │            H1 → H4 (4×H1, якір сесії)           │        │
+│  │    M1 → D1 (живий; 17:00 Нью-Йорк; settle)      │        │
 │  │                                                 │        │
-│  │  4 символи (XAU/USD, XAG/USD, BTCUSDT, ETHUSDT) │        │
+│  │  8 символів (метали, індекси, USD/JPY)          │        │
 │  │  Priority: watched symbol → front of queue      │        │
 │  │  Buffers: GenericBuffer per (symbol, tf_s)      │        │
 │  └─────────────────────────────────────────────────┘        │
@@ -195,7 +195,8 @@ python -m tools.run_exit_gates --manifest tools/exit_gates/manifest.json
 ┌──────────────────────────────────────────────────────────────┐
 │  LAYER 3: UI v4 (WS real-time, read-only, ZERO domain logic) │
 │  WS full/delta/scrollback → UDS via ws_server.py             │
-│  Svelte 5 + LWC 5 + TypeScript, ~40 файлів ~10000 LOC          │
+│  Svelte 5 + LWC 5 + TypeScript, ~80 файлів ~22000 LOC        │
+│  Малювання: 6 інструментів, ПК і телефон (ADR-0111, 0112)    │
 │  Порт 8000, same-origin, config-gated                        │
 │  Chart parity DONE, audit T1-T10 COMPLETE                    │
 └──────────────────────────────────────────────────────────────┘

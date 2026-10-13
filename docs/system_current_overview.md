@@ -1,6 +1,7 @@
 # Поточна система — Архітектурний огляд (SSOT)
 
-> **Останнє оновлення**: 2026-04-16
+> **Останнє оновлення**: 2026-10-13 — UI: малювання (ПК і телефон) і мобільне перехрестя; решта розділів — стан на
+> 2026-04-16 (символи й процеси — див. `config.json` і [docs/adr/index.md](adr/index.md))
 > **Навігація**: [docs/index.md](index.md)
 
 Цей файл — SSOT-опис поточної архітектури системи. Див. [docs/index.md](index.md) для навігації по всій документації.
@@ -59,7 +60,7 @@ app.main (supervisor)
   ├── binance_tick_publisher(Binance tick stream → Redis PubSub, ADR-0037)
   └── ws_server             (WS server, port 8000 — ui_v4 real-time + HTTP API)
                               ├── SmcRunner (in-process, ADR-0024): SmcEngine per (symbol, tf) → zones/swings/levels in WS frames
-                              └── Drawing tools: 4 tools (H/T/R/E), glass toolbar, theme-aware (ADR-0007, ADR-0008)
+                              └── роздає ui_v4/dist (малювання — лише клієнт: ADR-0007, 0082, 0111, 0112)
 ```
 
 > **Dual-venv (ADR-0016)**: Supervisor автоматично використовує `.venv37/` (Python 3.7) для
@@ -203,8 +204,10 @@ app.main (supervisor)
 |---|---|---|---|
 | ChartEngine | ✅ v3 parity (volume, D1, tooltip, follow, rAF) | engine.ts | — |
 | SMC Overlay | ✅ OB/FVG/Swings/Levels, strength opacity, 4 toggles, double-RAF sync | OverlayRenderer.ts, smcStore.ts | ADR-0024 §18.7 |
-| DrawingsRenderer | ✅ 4 tools (hline/trend/rect/eraser), theme-aware | DrawingsRenderer.ts | ADR-0007, ADR-0008 |
-| DrawingToolbar | ✅ Glass-like, CSS custom properties, micro-interactions | DrawingToolbar.svelte | ADR-0008 |
+| DrawingsRenderer | ✅ 6 інструментів з реєстру (горизонталь, трендова, промінь, прямокутник, Фібоначчі, лінійка) + гумка; магніт OHLC; поріг перетягування 3 px миша / 8 px палець; одні фігури на всіх TF символу; гучне збереження (битий рядок — копія `__corrupt_`) | DrawingsRenderer.ts, drawings/tools/, drawingDraft.ts, drawingDrag.ts, drawingsStorage.ts | ADR-0007, ADR-0080, ADR-0082, ADR-0111 |
+| DrawingToolbar | ✅ Glass-like панель ПК (ховається на телефоні), стилі фігур — DrawingStyleFlyout | DrawingToolbar.svelte, DrawingStyleFlyout.svelte | ADR-0008, ADR-0080 |
+| Малювання на телефоні | ✅ пробно під `?draw=1`: олівець під ☰ → капсула по центру внизу; курсор-перехрестя 1:1, тап — точка, лупа 2×, магніт з вібрацією; меню зупиняють малювання | MobileDrawBar.svelte, touchDrawCursor.ts, touchLoupe.ts | ADR-0112 |
+| Мобільне перехрестя | ✅ довгий дотик — перехрестя лишається, тягнення 1:1, тап — вихід; поки воно (чи курсор малювання) володіє пальцем — шкала ціни не прокручується (без стрибка на виході, 13.10) | longPressLock.ts 🔒, interaction.ts (`isTouchOwned`) | ADR-0108 |
 | Theming | ✅ 3 themes (dark/black/light) + `applyThemeCssVars()` на `:root` | themes.ts, App.svelte | ADR-0008 |
 | ChartHud | ✅ Variant H shell: thesis bar (symbol+price+P/D chip+headline) + tactical strip (stage-driven visibility, bias pills, session, inv, target) + accent bar (READY/TRIGGERED) | ChartHud.svelte, PdBadge.svelte | ADR-0036, ADR-0041 |
 | Interaction | ✅ Y-zoom (wheel-on-axis + axis-drag), Y-pan (pane drag, shift+wheel), X-pan (LWC time-axis drag), dblclick reset, keyboard shortcuts. **Single-owner Y-scale** через `state.manualRange` (LWC native price-axis drag вимкнено) | interaction.ts, engine.ts | ADR-0064 |
@@ -813,14 +816,26 @@ v3/
 - CPU opt: delta_poll 1s + ThreadPoolExecutor(min(4, cpu_count)). Idle 2-3% CPU.
 - Prod: `npm run build` → `python -m app.main --mode ws_server`. Dev: `npm run dev` (:5173) + ws_server (:8000).
 - 3-layer rendering: LWC candles + SMC overlay canvas + drawings canvas (RAF + renderSync, DPR-aware). SMC overlay **ACTIVE** (ADR-0024: OB/FVG/Swings/Levels + strength opacity + 4 toggles; ADR-0026: level rendering rules — merge-on-physical-overlap, L1–L6); drawings **ACTIVE** (ADR-0007).
-- Drawing tools (ADR-0007): hline/trend/rect/eraser, click-click
-    TradingView-style, selection/hit-testing, drag-edit, undo/redo
-    (CommandStack), hotkeys (T/H/R/E/Esc/Ctrl+Z/Y). Client-only
-    (noop sendAction). Sync render X+Y axis
-    (renderSync on visibleTimeRangeChange + wheel + dblclick).
-    Brightness sync via style:filter.
-- Drawing persistence: localStorage per symbol+TF (`v4_drawings_{sym}_{tf}`). Symbol/TF persistence (`v4_last_pair`, one-shot restore on first full frame). Toolbar collapse persistence (`v4_toolbar_collapsed`).
-- Floating DrawingToolbar: position:absolute over chart, 28px/16px collapsed, no background, Ukrainian labels. Magnet (snap-to-OHLC) deferred.
+- Drawing tools (ADR-0007 → ADR-0111): реєстр інструментів `drawings/tools/` — єдине джерело підпису, іконки, клавіш
+    і стилю (`TOOLS_BY_TYPE satisfies Record<DrawingType, ToolModule>` — пропуск = помилка компіляції); створення —
+    drawingDraft.ts, перетягування — drawingDrag.ts. Click-click як у TradingView, виділення й hit-testing,
+    перетягування з порогом (3 px миша / 8 px палець), undo/redo (CommandStack), клавіші з реєстру: H горизонталь, \ (і T) трендова, Y промінь, R прямокутник, B Фібоначчі, M лінійка; E гумка, G магніт, Delete/Backspace — видалити виділене, Esc, Ctrl/Cmd+Z, Ctrl+Shift+Z / Ctrl+Y.
+    Client-only (noop sendAction). Sync render X+Y axis (renderSync on visibleTimeRangeChange + wheel + dblclick).
+    Якорі поза сіткою TF — `fractionalLogicalToX` (LWC рахує лише цілий logical).
+- Drawing persistence: localStorage per symbol (`v4_drawings_{symbol}`, ADR-0082 — одні фігури на всіх TF; legacy
+    per-TF ключі зливаються по UUID); битий рядок не стирається мовчки — копія `{key}__corrupt_{ms}` і попередження
+    (ADR-0111 §3.2). Магніт — `v4_magnet_enabled`, панель ПК — `v4_drawing_tools`, пробне малювання на телефоні —
+    `v4_touch_drawing` (`?draw=1` / `?draw=0`). Symbol/TF persistence (`v4_last_pair`).
+- Floating DrawingToolbar (ПК): position:absolute over chart, Ukrainian labels, магніт OHLC (радіус 120 px), стилі —
+    DrawingStyleFlyout (ADR-0080). На телефоні панелі нема — малювання через ADR-0112 (нижче).
+- Малювання на телефоні (ADR-0112, під `?draw=1`, лише телефонний розклад): олівець під ☰ або ☰ → «Малювати» →
+    капсула по центру внизу (знак v3 на цей час гасне). Обраний інструмент — `touchDrawCursor.ts`: однопальцеві
+    touch- і pointer-події по полотнах графіка глушаться в capture-фазі на `.chart-container` (longPressLock 🔒 не
+    змінено), палець веде кільце 1:1, autoScale заморожено, два пальці — масштаб LWC. Тап (< 8 px, < 300 мс) або ✓
+    ставить точку тим самим шляхом, що клік мишею (`DrawingsRenderer.cursorPlace`); вібрація й золотий імпульс;
+    one-shot. Лупа `touchLoupe.ts` (копія полотен, власне перехрестя). Магніт на телефоні — 16 px, кільце стає на
+    рівень, у лупі — «L 4175.92». ↶ / «видалити» — лише коли є що (`DrawingsRenderer.editState()`). ☰, меню
+    символу/TF і панель SMC закривають малювання.
 - DiagState SSOT: 7-рівневий пріоритетний статус, StatusOverlay з hysteresis, quiet degraded mode.
 - WS backend: P0-P5 slices done. WS output guards (T6): `_guard_candle_shape` + `_guard_candles_output` on all outgoing frames.
 - Config frame (T8/S24): `_build_config_frame()` sent on connect before full frame. Policy bridge: symbols, TFs, delta_poll_interval_s, version.
