@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Tuple
 
 from core.smc.sessions import OFF_SESSION
 from core.smc.types import (
+    LEVEL_STATE_FORMING,
     ActiveScenario,
     NarrativeBlock,
     SmcLevel,
@@ -300,12 +301,16 @@ def _find_qualifying_structure_break(snapshot, zone):
         if "bear" in zone.kind
         else ("choch_bull", "bos_bull")
     )
-    origin_ms = zone.origin_event_ms
+    # Кінець бару власного зламу на TF зони (end-excl): злам молодшого TF усередині того самого бару HTF-зони — той
+    # самий імпульс, не нове підтвердження (рецензія Ф0, D-02; для зон TF глядача — те саме, що «строго після»)
+    origin_end_ms = (
+        zone.origin_event_ms + zone.tf_s * 1000 if zone.origin_event_ms is not None else None
+    )
     for sw in reversed(snapshot.swings):
         if sw.kind not in target_kinds:
             continue
-        if origin_ms is not None:
-            if sw.time_ms > origin_ms:
+        if origin_end_ms is not None:
+            if sw.time_ms >= origin_end_ms:
                 return sw
         elif sw.time_ms >= zone.anchor_bar_ms:
             return sw
@@ -489,11 +494,15 @@ _TARGET_LEVEL_LABELS = {
 
 def _find_target_key_level(levels, direction, current_price=0.0, max_dist=0.0):
     # type: (List[SmcLevel], str, float, float) -> Optional[SmcLevel]
-    """Найближчий рівень ліквідності попереду ціни в напрямку сценарію (у межах max_dist, якщо задано)."""
+    """Найближчий ЗАВЕРШЕНИЙ рівень ліквідності попереду ціни в напрямку сценарію (у межах max_dist, якщо задано).
+
+    Рівень, що ще формується (H/L поточної сесії, дня, H4/H1 — state forming), — не ціль: поточний діапазон охоплює
+    ціну, і на відкритті сесії «ціль» стояла б за копійки від неї (рецензія Ф0, D-01).
+    """
     target_kinds = _TARGET_KINDS_BELOW if direction == "short" else _TARGET_KINDS_ABOVE
     best = None  # type: Optional[SmcLevel]
     for lv in levels:
-        if lv.kind not in target_kinds:
+        if lv.kind not in target_kinds or lv.state == LEVEL_STATE_FORMING:
             continue
         # P2: directional gate — target must be ahead of price
         if direction == "short" and lv.price >= current_price:

@@ -1122,7 +1122,50 @@ class TestHonestyF0:
                                   _grade_a6("z1"), {}, 900, 5180.0, 20.0, _default_config(), price_digits=2)
         assert nb.scenarios[0].trigger == "in_zone"  # ціна в зоні, але CHoCH ще нема
         assert nb.scenarios[0].trigger_desc.startswith("У зоні: чекаємо")
-        confirmed = creator + [_swing("choch_bear", 5170.0, 2500), _swing("displacement_bear", 5165.0, 2500)]
+        next_bar_ms = 1500 + 900 * 1000  # злам — open_time_ms бару; новий злам M15 — не раніше наступного бару
+        confirmed = creator + [_swing("choch_bear", 5170.0, next_bar_ms),
+                               _swing("displacement_bear", 5165.0, next_bar_ms)]
         nb2 = synthesize_narrative(_snap(zones=[z], levels=[_level("pdl", 5062.0)], swings=confirmed), bias,
                                    _grade_a6("z1"), {}, 900, 5180.0, 20.0, _default_config(), price_digits=2)
         assert nb2.scenarios[0].trigger == "ready"
+
+    def test_target_skips_forming_levels(self):
+        """Рецензія D-01: лой поточного Лондона (forming) за 0.2 від ціни — не ціль; ціль — завершений PDL."""
+        import dataclasses
+
+        z = _zone(kind="ob_bear", high=5225.0, low=5175.0, zone_id="z1")
+        forming = dataclasses.replace(_level("lon_l", 5179.8, tf_s=900), state="forming")
+        fixed = dataclasses.replace(_level("pdl", 5062.0), state="fixed")
+        nb = synthesize_narrative(
+            _snap(zones=[z], levels=[forming, fixed], swings=[_swing("choch_bear", 5200.0, 1500)]),
+            {"86400": "bearish", "14400": "bearish"}, _grade_a6("z1"), {}, 900, 5180.0, 20.0, _default_config(),
+            price_digits=2,
+        )
+        assert nb.scenarios[0].target_desc == "PDL 5062.00"
+
+    def test_htf_zone_own_impulse_on_lower_tf_is_not_confirmation(self):
+        """Рецензія D-02: H4 OB; CHoCH M15 усередині того самого H4-бару зламу — той самий імпульс, не підтвердження."""
+        import dataclasses
+
+        t0 = 1_700_000_000_000
+        h4_ms = 14400 * 1000
+        z = dataclasses.replace(
+            _zone(kind="ob_bear", high=5225.0, low=5144.0, zone_id="z1", tf_s=14400, anchor_bar_ms=t0 - h4_ms),
+            origin_event_ms=t0,
+        )
+        bias = {"86400": "bearish", "14400": "bearish"}
+        inside = [_swing("choch_bear", 5150.0, t0 + 1_800_000), _swing("displacement_bear", 5140.0, t0 + 1_800_000)]
+        nb = synthesize_narrative(_snap(zones=[z], levels=[_level("pdl", 5062.0)], swings=inside), bias,
+                                  _grade_a6("z1"), {}, 900, 5180.0, 20.0, _default_config(), price_digits=2)
+        assert nb.scenarios[0].trigger == "in_zone"
+        after = inside + [_swing("choch_bear", 5170.0, t0 + h4_ms), _swing("displacement_bear", 5165.0, t0 + h4_ms)]
+        nb2 = synthesize_narrative(_snap(zones=[z], levels=[_level("pdl", 5062.0)], swings=after), bias,
+                                   _grade_a6("z1"), {}, 900, 5180.0, 20.0, _default_config(), price_digits=2)
+        assert nb2.scenarios[0].trigger == "ready"
+
+    def test_journal_price_parser_skips_two_digit_tf_labels(self):
+        """Рецензія D-05: «M15 4150.2» → 4150.2 (раніше 5.0 — lookbehind відсікав лише першу цифру)."""
+        from runtime.smc.signal_journal import _parse_price_from_desc
+
+        assert _parse_price_from_desc("M15 4150.2") == 4150.2
+        assert _parse_price_from_desc("Останній LL M30 72.548") == 72.548
