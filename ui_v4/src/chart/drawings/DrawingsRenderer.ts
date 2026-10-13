@@ -16,6 +16,7 @@ import {
 import { getToolModule } from './tools';
 import { isCorruptBackupKey, loadDrawings, saveDrawings } from './drawingsStorage';
 import { cloneDrawing, completeDraft, firstClick, newDraft, previewsOnHover, tipIndex } from './drawingDraft';
+import { dragBody, dragHandle, type DragSpace } from './drawingDrag';
 import { copyCanvas } from '../../lib/chartSnapshot';
 import type { RenderContext, ToolModule } from './tools';
 
@@ -1104,81 +1105,36 @@ export class DrawingsRenderer {
     // Tool stays active for continuous drawing (TradingView-style); Escape to exit
   }
 
-  // ---- drag math (v3) ----
+  // ---- drag (математика — drawingDrag.ts) ----
+  /** Простір координат для drawingDrag: LWC timeScale/series, магніт і кеш часів барів цього renderer-а. */
+  private readonly dragSpace: DragSpace = {
+    logicalAt: (x) => this.chartApi.timeScale().coordinateToLogical(x) as number | null,
+    fromX: (x) => this.fromX(x),
+    fromY: (y) => this.fromY(y),
+    toY: (price) => this.toY(price),
+    snapPrice: (x, y, rawPrice) => this.getSnappedPrice(x, y, rawPrice),
+    shiftTimeByBars: (tSec, bars) => shiftTimeByBars(this.barTimesSec, tSec, bars, this.barStepSec),
+  };
+
   private handleDragMove(x: number, y: number): void {
-    if (!this.dragState) return;
+    const drag = this.dragState;
+    if (!drag) return;
     // Поріг (ADR-0111, 13.10): поки зсув від натискання менший — це клік, ні ручку, ні тіло не чіпаємо.
-    if (!this.dragState.started) {
-      const { startX, startY, pointerType } = this.dragState;
-      if (!dragStarted(x - startX, y - startY, pointerType)) return;
-      this.dragState.started = true;
+    if (!drag.started) {
+      if (!dragStarted(x - drag.startX, y - drag.startY, drag.pointerType)) return;
+      drag.started = true;
     }
-
-    const dIdx = this.drawings.findIndex((d) => d.id === this.dragState!.id);
-    if (dIdx < 0) return;
-
-    const current = this.drawings[dIdx];
-    const start = this.dragState.startObj;
-
-    if (this.dragState.handleIdx !== null) {
-      // Handle drag: snap ON. Поки курсор у тому самому барі, що на початку, час якоря не чіпаємо: якір з
-      // іншого TF (M15 13:45 на H1) від кліку з тремтінням на 1px тихо ставав би на бар цього TF (рецензія 12.10).
-      const timeScale = this.chartApi.timeScale();
-      const sameBar = timeScale.coordinateToLogical(x) === timeScale.coordinateToLogical(this.dragState.startX);
-      const t_ms = sameBar ? start.points[this.dragState.handleIdx].t_ms : this.fromX(x);
-      const rawPrice = this.fromY(y);
-      if (t_ms === null || rawPrice === null) {
-        this.warnOnce('drag_handle_null', 'drawing_coord_null', `drag handle: cannot map x=${x},y=${y}`);
-        return;
-      }
-      const price = this.getSnappedPrice(x, y, rawPrice);
-
-      const next = cloneDrawing(current);
-      next.points[this.dragState.handleIdx] = { t_ms, price };
-
-      this.drawings = this.replaceById(next);
-      this.scheduleRender();
+    const current = this.drawings.find((d) => d.id === drag.id);
+    if (!current) return;
+    // Ручка — під курсор (з магнітом); тіло — на ціле число барів і пікселі ціни (drawingDrag.ts).
+    const step = drag.handleIdx !== null
+      ? dragHandle(current, drag, drag.handleIdx, x, y, this.dragSpace)
+      : dragBody(current, drag, x, y, this.dragSpace);
+    if (step.kind === 'skip') {
+      this.warnOnce(step.warnKey, 'drawing_coord_null', step.detail);
       return;
     }
-
-    // Body drag: snap OFF (щоб не тремтіло). Час — зсув на ціле число барів поточного TF
-    // (різниця logical під курсором), не через x якоря: якір з іншого TF зберігає частку бару,
-    // а хибний x не переписує час (S0 12.10.2026 — x=0 зсував обидва якорі до лівого краю).
-    const timeScale = this.chartApi.timeScale();
-    const fromLogical = timeScale.coordinateToLogical(this.dragState.startX);
-    const toLogical = timeScale.coordinateToLogical(x);
-    if (fromLogical === null || toLogical === null) {
-      this.warnOnce('drag_body_logical_null', 'drawing_coord_null', `drag body: cannot map x=${x}`);
-      return;
-    }
-    const bars = (toLogical as number) - (fromLogical as number);
-    const dy = y - this.dragState.startY;
-
-    const next = cloneDrawing(current);
-    let anyNull = false;
-
-    for (let i = 0; i < start.points.length; i++) {
-      const oldY = this.toY(start.points[i].price);
-
-      if (oldY === null) {
-        this.warnOnce('drag_body_old_null', 'drawing_coord_null', 'drag body: old point out of view');
-        anyNull = true;
-        break;
-      }
-
-      const newTimeSec = shiftTimeByBars(this.barTimesSec, start.points[i].t_ms / 1000, bars, this.barStepSec);
-      const new_price = this.fromY(oldY + dy);
-
-      // ADR-0008: при null — зберегти поточну позицію точки (не рухати)
-      next.points[i] = {
-        t_ms: newTimeSec === null ? current.points[i].t_ms : (Math.round(newTimeSec * 1000) as T_MS),
-        price: new_price ?? current.points[i].price,
-      };
-    }
-
-    if (anyNull) return;
-
-    this.drawings = this.replaceById(next);
+    this.drawings = this.replaceById(step.next);
     this.scheduleRender();
   }
 
