@@ -230,8 +230,8 @@ def narrative_runner(tmp_path, monkeypatch):
     runner._journal = SimpleNamespace(record=lambda *args, **kwargs: None)
     seen_atr: list[float] = []
 
-    def fake_synthesize(snap, bias, grades, momentum, viewer_tf_s, price, atr, cfg, **kwargs):
-        seen_atr.append(atr)
+    def fake_synthesize(**inputs):  # runner передає вхід іменами параметрів (NarrativeInputs.as_kwargs)
+        seen_atr.append(inputs["atr"])
         return _fallback_narrative_block(["captured"])
 
     monkeypatch.setattr(smc_runner_mod, "synthesize_narrative", fake_synthesize)
@@ -274,8 +274,8 @@ def test_narrative_on_unmeasured_viewer_tf_uses_measured_base_tf_atr(tmp_path, m
     runner._journal = SimpleNamespace(record=lambda *args, **kwargs: None)
     seen_atr: list[float] = []
 
-    def fake_synthesize(snap, bias, grades, momentum, viewer_tf_s, price, atr, cfg, **kwargs):
-        seen_atr.append(atr)
+    def fake_synthesize(**inputs):  # runner передає вхід іменами параметрів (NarrativeInputs.as_kwargs)
+        seen_atr.append(inputs["atr"])
         return _fallback_narrative_block(["captured"])
 
     monkeypatch.setattr(smc_runner_mod, "synthesize_narrative", fake_synthesize)

@@ -42,6 +42,7 @@ from core.smc.narrative import (
     narrative_to_wire,
     _fallback_narrative_block,
 )
+from core.smc.narrative_inputs import NarrativeInputs
 from core.smc.shell_composer import compose_shell_payload
 from runtime.ingest.market_calendar import TradingCalendar
 from runtime.ingest.tick_common import resolve_symbol_calendars
@@ -810,8 +811,40 @@ class SmcRunner:
         `now_ms` — момент розбору, один для календаря ринку, сесії й рівнів (R10); None — настінний годинник.
         Прогін по історії передає час закриття бару (ADR-0113 Ф1).
         """
-        cfg = self._full_config.get("smc", {}).get("narrative", {})
-        if not cfg.get("enabled", False):
+        gate = self._narrative_gate(symbol, now_ms)
+        if gate is None:
+            return None
+        now_ms, market_open = gate
+        if not market_open:
+            return _market_closed_block()
+        try:
+            inputs = self._collect_narrative_inputs(symbol, viewer_tf_s, current_price, atr, now_ms)
+            if inputs is None:
+                return _fallback_narrative_block(["no_snapshot"])
+            result = synthesize_narrative(**inputs.as_kwargs())
+            self._journal.record(
+                symbol, viewer_tf_s, result, current_price, inputs.atr, bias_map=inputs.bias_map
+            )
+            return result
+        except Exception:
+            _log.exception("NARRATIVE_ERROR symbol=%s tf=%d", symbol, viewer_tf_s)
+            return _fallback_narrative_block()
+
+    def get_narrative_inputs(self, symbol, viewer_tf_s, current_price, atr=0.0, now_ms=None):
+        # type: (str, int, float, float, Optional[int]) -> Optional[NarrativeInputs]
+        """Вхід розбору на момент — рівно те, з чого get_narrative синтезує (golden-знімки прогону, ADR-0113 Ф1).
+
+        None — наратив вимкнений, до прогріву, ринок закрито або знімка немає (get_narrative тоді не синтезує).
+        """
+        gate = self._narrative_gate(symbol, now_ms)
+        if gate is None or not gate[1]:
+            return None
+        return self._collect_narrative_inputs(symbol, viewer_tf_s, current_price, atr, gate[0])
+
+    def _narrative_gate(self, symbol, now_ms):
+        # type: (str, Optional[int]) -> Optional[Tuple[int, bool]]
+        """(момент розбору, чи ринок відкритий); None — наратив вимкнений або прогрів не завершено."""
+        if not self._full_config.get("smc", {}).get("narrative", {}).get("enabled", False):
             return None
         # Warmup guard: don't generate "no data" narrative before warmup
         if not self._warmup_done:
@@ -820,52 +853,40 @@ class SmcRunner:
             now_ms = int(time.time() * 1000)
         # Market-hours guard: don't generate signals on closed market
         cal = self._calendars.get(symbol)
-        if cal is not None and not cal.is_trading_minute(now_ms):
-            return _market_closed_block()
-        try:
-            snap = self.get_snapshot(symbol, viewer_tf_s, now_ms=now_ms)
-            if snap is None:
-                return _fallback_narrative_block(["no_snapshot"])
-            atr_14 = self._narrative_atr(symbol, viewer_tf_s, atr)
-            bias = self.get_bias_map(symbol)
-            grades = self.get_zone_grades(symbol, viewer_tf_s, now_ms=now_ms)
-            momentum = self.get_momentum_map(symbol)
-            # ADR-0035: session info for killzone downgrade + context
-            session_info = None
-            if self._engine._config.sessions.enabled and self._engine._session_windows:
-                from core.smc.sessions import get_current_session
+        return now_ms, cal is None or cal.is_trading_minute(now_ms)
 
-                sess_name, sess_kz = get_current_session(
-                    now_ms, self._engine._session_windows
-                )
-                if sess_name:
-                    session_info = (sess_name, sess_kz)
-            # ADR-0053: pass primary range_exhaustion state for narrative phrase
-            re_state = None
-            re_snap = self.get_range_exhaustion(symbol, now_ms)
-            if re_snap is not None:
-                re_state = re_snap.primary
-            result = synthesize_narrative(
-                snap,
-                bias,
-                grades,
-                momentum,
-                viewer_tf_s,
-                current_price,
-                atr_14,
-                cfg,
-                session_info=session_info,
-                range_exhaustion=re_state,
-                price_digits=self._price_digits.get(symbol),
-            )
-            if self._warmup_done:
-                self._journal.record(
-                    symbol, viewer_tf_s, result, current_price, atr_14, bias_map=bias
-                )
-            return result
-        except Exception:
-            _log.exception("NARRATIVE_ERROR symbol=%s tf=%d", symbol, viewer_tf_s)
-            return _fallback_narrative_block()
+    def _collect_narrative_inputs(self, symbol, viewer_tf_s, current_price, atr, now_ms):
+        # type: (str, int, float, float, int) -> Optional[NarrativeInputs]
+        snap = self.get_snapshot(symbol, viewer_tf_s, now_ms=now_ms)
+        if snap is None:
+            return None
+        atr_14 = self._narrative_atr(symbol, viewer_tf_s, atr)
+        bias = self.get_bias_map(symbol)
+        grades = self.get_zone_grades(symbol, viewer_tf_s, now_ms=now_ms)
+        momentum = self.get_momentum_map(symbol)
+        # ADR-0035: session info for killzone downgrade + context
+        session_info = None
+        if self._engine._config.sessions.enabled and self._engine._session_windows:
+            from core.smc.sessions import get_current_session
+
+            sess_name, sess_kz = get_current_session(now_ms, self._engine._session_windows)
+            if sess_name:
+                session_info = (sess_name, sess_kz)
+        # ADR-0053: pass primary range_exhaustion state for narrative phrase
+        re_snap = self.get_range_exhaustion(symbol, now_ms)
+        return NarrativeInputs(
+            snapshot=snap,
+            bias_map=bias,
+            zone_grades=grades,
+            momentum_map=momentum,
+            viewer_tf_s=viewer_tf_s,
+            current_price=current_price,
+            atr=atr_14,
+            config=self._full_config.get("smc", {}).get("narrative", {}),
+            session_info=session_info,
+            range_exhaustion=re_snap.primary if re_snap is not None else None,
+            price_digits=self._price_digits.get(symbol),
+        )
 
     def _narrative_atr(self, symbol: str, viewer_tf_s: int, caller_estimate: float) -> float:
         """ATR для фільтра дистанції цілей наративу — ATR14 рушія для TF глядача (ADR-0070 rev 3).
