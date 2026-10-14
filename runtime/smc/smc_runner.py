@@ -633,7 +633,9 @@ class SmcRunner:
             return None
         return snap
 
-    def get_snapshot(self, symbol: str, tf_s: int) -> Optional[SmcSnapshot]:
+    def get_snapshot(
+        self, symbol: str, tf_s: int, now_ms: Optional[int] = None
+    ) -> Optional[SmcSnapshot]:
         """Для full frame build — composite snapshot з cross-TF display mapping.
 
         Використовує get_display_snapshot() для:
@@ -644,15 +646,16 @@ class SmcRunner:
         - HTF key levels
 
         ADR-0053: якщо range_exhaustion.enabled — додає range_exhaustion snapshot.
+        now_ms — момент розбору (None — настінний годинник; прогін по історії — час закриття бару, ADR-0113 Ф1).
         """
         try:
-            snap = self._engine.get_display_snapshot(symbol, tf_s)
+            snap = self._engine.get_display_snapshot(symbol, tf_s, now_ms=now_ms)
         except Exception as exc:
             _log.warning("SMC_GET_SNAP_ERR sym=%s tf=%s err=%s", symbol, tf_s, exc)
             return None
         if snap is None:
             return None
-        re_snap = self.get_range_exhaustion(symbol)
+        re_snap = self.get_range_exhaustion(symbol, now_ms)
         if re_snap is not None:
             snap = dataclasses.replace(snap, range_exhaustion=re_snap)
         return snap
@@ -713,12 +716,12 @@ class SmcRunner:
             )
             return None
 
-    def get_zone_grades(self, symbol: str, tf_s: int) -> dict:
+    def get_zone_grades(self, symbol: str, tf_s: int, now_ms: Optional[int] = None) -> dict:
         """ADR-0029: zone_grades after get_snapshot() call.
 
         ADR-0053: when range_exhaustion enabled — apply post-hoc confidence penalty
         для same-direction setups у exhausted move. Pure adjustment via
-        `apply_range_exhaustion_penalty`; engine state untouched.
+        `apply_range_exhaustion_penalty`; engine state untouched. now_ms — як у get_snapshot.
         """
         raw = self._engine.get_zone_grades(symbol, tf_s)
         if not raw:
@@ -726,7 +729,7 @@ class SmcRunner:
         re_cfg = self._engine._config.range_exhaustion
         if not re_cfg.enabled:
             return raw
-        re_snap = self.get_range_exhaustion(symbol)
+        re_snap = self.get_range_exhaustion(symbol, now_ms)
         if re_snap is None:
             return raw
         snap = self._engine.get_snapshot(symbol, tf_s)
@@ -798,12 +801,14 @@ class SmcRunner:
             _log.warning("SMC_DISPLAY_LEVELS_FAIL sym=%s tf=%s", symbol, viewer_tf_s, exc_info=True)
             return None
 
-    def get_narrative(self, symbol, viewer_tf_s, current_price, atr=0.0):
-        # type: (str, int, float, float) -> Optional[NarrativeBlock]
+    def get_narrative(self, symbol, viewer_tf_s, current_price, atr=0.0, now_ms=None):
+        # type: (str, int, float, float, Optional[int]) -> Optional[NarrativeBlock]
         """ADR-0033 + ADR-0035: synthesize narrative with session context.
 
         `atr` — оцінка викликача (ws_server: h−l одного бару; 0.0 = оцінки нема); діє лише для TF,
         який рушій не вимірює (див. _narrative_atr).
+        `now_ms` — момент розбору, один для календаря ринку, сесії й рівнів (R10); None — настінний годинник.
+        Прогін по історії передає час закриття бару (ADR-0113 Ф1).
         """
         cfg = self._full_config.get("smc", {}).get("narrative", {})
         if not cfg.get("enabled", False):
@@ -811,28 +816,25 @@ class SmcRunner:
         # Warmup guard: don't generate "no data" narrative before warmup
         if not self._warmup_done:
             return None
+        if now_ms is None:
+            now_ms = int(time.time() * 1000)
         # Market-hours guard: don't generate signals on closed market
         cal = self._calendars.get(symbol)
-        if cal is not None:
-            import time as _t
-
-            if not cal.is_trading_minute(int(_t.time() * 1000)):
-                return _market_closed_block()
+        if cal is not None and not cal.is_trading_minute(now_ms):
+            return _market_closed_block()
         try:
-            snap = self.get_snapshot(symbol, viewer_tf_s)
+            snap = self.get_snapshot(symbol, viewer_tf_s, now_ms=now_ms)
             if snap is None:
                 return _fallback_narrative_block(["no_snapshot"])
             atr_14 = self._narrative_atr(symbol, viewer_tf_s, atr)
             bias = self.get_bias_map(symbol)
-            grades = self.get_zone_grades(symbol, viewer_tf_s)
+            grades = self.get_zone_grades(symbol, viewer_tf_s, now_ms=now_ms)
             momentum = self.get_momentum_map(symbol)
             # ADR-0035: session info for killzone downgrade + context
             session_info = None
             if self._engine._config.sessions.enabled and self._engine._session_windows:
-                import time as _t
                 from core.smc.sessions import get_current_session
 
-                now_ms = int(_t.time() * 1000)
                 sess_name, sess_kz = get_current_session(
                     now_ms, self._engine._session_windows
                 )
@@ -840,7 +842,7 @@ class SmcRunner:
                     session_info = (sess_name, sess_kz)
             # ADR-0053: pass primary range_exhaustion state for narrative phrase
             re_state = None
-            re_snap = self.get_range_exhaustion(symbol)
+            re_snap = self.get_range_exhaustion(symbol, now_ms)
             if re_snap is not None:
                 re_state = re_snap.primary
             result = synthesize_narrative(

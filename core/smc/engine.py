@@ -835,6 +835,7 @@ class SmcEngine:
         self,
         symbol: str,
         viewer_tf_s: int,
+        now_ms: Optional[int] = None,
     ) -> SmcSnapshot:
         """Composite snapshot for viewer with cross-TF injection.
 
@@ -844,6 +845,9 @@ class SmcEngine:
           - HTF FVG zones per display mapping
           - OB zones via Context Stack (existing L1/L2 mechanism)
           - HTF key levels (existing)
+
+        now_ms — момент розбору для рівнів сесій і доби (поточна сесія, «формується»); None — настінний годинник.
+        Прогін по історії передає час закриття бару (ADR-0113 Ф1, R10).
 
         S0: pure — reads _states dict, no I/O.
         """
@@ -920,7 +924,8 @@ class SmcEngine:
             # else: keep base_zones as-is
 
         # 6. Рівні: кандидати всіх груп меню «Рівні» — те саме джерело, що й дельта ws_server
-        merged_levels = self.get_display_levels(symbol, viewer_tf_s, int(time.time() * 1000))
+        levels_now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+        merged_levels = self.get_display_levels(symbol, viewer_tf_s, levels_now_ms)
 
         # 7. Confluence scoring (ADR-0029 E5: after cross-TF injection)
         #    bars/last_bar/atr already computed in step 5 (same guard).
