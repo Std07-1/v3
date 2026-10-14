@@ -143,3 +143,16 @@ def test_no_open_steps_gives_zero_changes_and_trading_day_key_is_pluggable():
 
     assert (one_day["trading_days"], one_day["changes_per_day"]) == (1, 1.0)
     assert (two_days["trading_days"], two_days["changes_per_day"]) == (2, 0.5)
+
+
+def test_compare_table_shows_base_to_candidate_per_tf():
+    from tools.narrative_replay_metrics import compare_table
+
+    base = {"by_tf": {"900": {"setups": 6, "outcomes": {"missed": 5, "ambiguous": 1}}}}
+    candidate = {"by_tf": {"900": {"setups": 4, "outcomes": {"target": 2, "missed": 2}}}}
+
+    table = compare_table(base, candidate).splitlines()
+
+    assert len(table) == 3 and table[2].startswith("| 900 |")
+    assert "6 → 4" in table[2]
+    assert "0/0/1/0/5/0/0 → 2/0/0/0/2/0/0" in table[2]

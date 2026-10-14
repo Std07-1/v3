@@ -19,9 +19,10 @@
 
 Ціна цілі-зони («HTF OB a–b») — ближній край за напрямком: short — верхній, long — нижній.
 
-Приклад:
+Приклад (база й порівняння зміни з нею — `--compare`, рядок на TF: база → зміна):
 
     python -m tools.narrative_replay_metrics --replay replay.jsonl --json metrics.json
+    python -m tools.narrative_replay_metrics --replay candidate.jsonl --compare metrics.json
 """
 from __future__ import annotations
 
@@ -232,11 +233,31 @@ def compute_metrics(replay_rows: Sequence[Row], m1: Sequence[Row], horizon_h: in
     return {str(tf_s): tf_metrics(rows, m1, horizon_h * 3600 * 1000, day_key) for tf_s, rows in sorted(by_tf.items())}
 
 
+COMPARED_FIELDS = ("scenario_share", "changes_per_day", "flip_backs", "setups", "confirmed", "rr_at_entry_median")
+COMPARED_OUTCOMES = ("target", "invalidated", "ambiguous", "open", "missed", "no_fill", "censored")
+
+
+def _outcome_cell(tf_metrics_row: Row) -> str:
+    return "/".join(str(tf_metrics_row.get("outcomes", {}).get(key, 0)) for key in COMPARED_OUTCOMES)
+
+
+def compare_table(base: Row, candidate: Row) -> str:
+    """Markdown: на кожен TF — поле «база → зміна» і результати сетапів (ADR-0113 §6: кожна зміна проти бази)."""
+    lines = ["| TF | " + " | ".join(COMPARED_FIELDS) + " | outcomes (" + "/".join(COMPARED_OUTCOMES) + ") |",
+             "|---" * (len(COMPARED_FIELDS) + 2) + "|"]
+    for tf_s in sorted(set(base["by_tf"]) | set(candidate["by_tf"]), key=int):
+        old, new = base["by_tf"].get(tf_s, {}), candidate["by_tf"].get(tf_s, {})
+        cells = ["%s → %s" % (old.get(field), new.get(field)) for field in COMPARED_FIELDS]
+        lines.append("| %s | %s | %s → %s |" % (tf_s, " | ".join(cells), _outcome_cell(old), _outcome_cell(new)))
+    return "\n".join(lines)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Метрики прогону системного наративу (ADR-0113 Ф1)")
     parser.add_argument("--replay", required=True, help="JSONL tools.narrative_replay")
     parser.add_argument("--horizon-h", type=int, default=DEFAULT_HORIZON_H, help="горизонт результату сценарію, год")
     parser.add_argument("--json", default=None, help="куди записати метрики")
+    parser.add_argument("--compare", default=None, help="метрики бази (JSON): надрукувати таблицю база → зміна")
     parser.add_argument("--config", default=None)
     parser.add_argument("--data-root", default=None)
     args = parser.parse_args(argv)
@@ -258,6 +279,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         with open(args.json, "w", encoding="utf-8") as out:
             json.dump(metrics, out, ensure_ascii=False, indent=1)
     sys.stdout.reconfigure(encoding="utf-8")  # заголовки з емодзі; консоль Windows за замовчуванням cp1251
+    if args.compare:
+        print(compare_table(json.load(open(args.compare, encoding="utf-8")), metrics))
+        return 0
     print(json.dumps(metrics, ensure_ascii=False, indent=1))
     return 0
 
