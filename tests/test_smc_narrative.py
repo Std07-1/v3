@@ -1096,7 +1096,7 @@ class TestHonestyF0:
 
     def test_target_label_has_no_tf_digit_before_price(self):
         """K5: підпис цілі читається людиною, а журнал бере саме ціну («лой попер. H4 5150.00» → 5150.0)."""
-        from runtime.smc.signal_journal import _parse_price_from_desc
+        from runtime.smc.signal_journal import parse_price_from_desc
 
         z = _zone(kind="ob_bear", high=5225.0, low=5190.0, zone_id="z1")
         nb = synthesize_narrative(
@@ -1105,10 +1105,10 @@ class TestHonestyF0:
             price_digits=2,
         )
         assert nb.scenarios[0].target_desc == "лой попер. H4 5150.00"
-        assert _parse_price_from_desc(nb.scenarios[0].target_desc) == 5150.0
-        assert _parse_price_from_desc("P H4 L 2892") == 2892.0  # старий формат: раніше 4.0
-        assert _parse_price_from_desc("PDH 2892") == 2892.0
-        assert _parse_price_from_desc("Вище 158.452 — зона пробита") == 158.452
+        assert parse_price_from_desc(nb.scenarios[0].target_desc) == 5150.0
+        assert parse_price_from_desc("P H4 L 2892") == 2892.0  # старий формат: раніше 4.0
+        assert parse_price_from_desc("PDH 2892") == 2892.0
+        assert parse_price_from_desc("Вище 158.452 — зона пробита") == 158.452
 
     def test_own_creating_break_is_not_confirmation(self):
         """K6: OB-свічка передує власному зламу — він не підтверджує зону; підтверджує лише НОВИЙ злам."""
@@ -1165,7 +1165,7 @@ class TestHonestyF0:
 
     def test_journal_price_parser_skips_two_digit_tf_labels(self):
         """Рецензія D-05: «M15 4150.2» → 4150.2 (раніше 5.0 — lookbehind відсікав лише першу цифру)."""
-        from runtime.smc.signal_journal import _parse_price_from_desc
+        from runtime.smc.signal_journal import parse_price_from_desc
 
-        assert _parse_price_from_desc("M15 4150.2") == 4150.2
-        assert _parse_price_from_desc("Останній LL M30 72.548") == 72.548
+        assert parse_price_from_desc("M15 4150.2") == 4150.2
+        assert parse_price_from_desc("Останній LL M30 72.548") == 72.548

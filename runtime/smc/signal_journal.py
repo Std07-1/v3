@@ -104,7 +104,7 @@ class _ActiveSignal:
 _DESC_PRICE_RE = re.compile(r"(?<![A-Za-z\d.])\d+(?:\.\d+)?")
 
 
-def _parse_price_from_desc(desc: str) -> float:
+def parse_price_from_desc(desc: str) -> float:
     """Витягує ціну з target_desc/invalidation (напр. 'PDH 2892' → 2892.0)."""
     if not desc:
         return 0.0
@@ -173,10 +173,10 @@ class SignalJournal:
                             entry_price=rec.get("price", 0.0),
                             direction=rec.get("direction", ""),
                             zone_id=zone_id,
-                            target_price=_parse_price_from_desc(
+                            target_price=parse_price_from_desc(
                                 rec.get("target_desc", "")
                             ),
-                            invalidation_price=_parse_price_from_desc(
+                            invalidation_price=parse_price_from_desc(
                                 rec.get("invalidation", "")
                             ),
                             bias_snapshot=rec.get("bias", {}),
@@ -252,10 +252,10 @@ class SignalJournal:
                 entry_price=price,
                 direction=block.scenarios[0].direction if block.scenarios else "",
                 zone_id=primary_zone_id,
-                target_price=_parse_price_from_desc(
+                target_price=parse_price_from_desc(
                     block.scenarios[0].target_desc or "" if block.scenarios else ""
                 ),
-                invalidation_price=_parse_price_from_desc(
+                invalidation_price=parse_price_from_desc(
                     block.scenarios[0].invalidation if block.scenarios else ""
                 ),
                 bias_snapshot=dict(bias_map) if bias_map else {},
@@ -283,10 +283,10 @@ class SignalJournal:
                 active = self._active.get(key)
                 if active is not None:
                     active.zone_id = primary_zone_id
-                    active.target_price = _parse_price_from_desc(
+                    active.target_price = parse_price_from_desc(
                         block.scenarios[0].target_desc or ""
                     )
-                    active.invalidation_price = _parse_price_from_desc(
+                    active.invalidation_price = parse_price_from_desc(
                         block.scenarios[0].invalidation or ""
                     )
 
