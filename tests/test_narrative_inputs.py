@@ -54,7 +54,8 @@ def test_range_exhaustion_state_refuses_serialization(runner):  # noqa: F811
 
 
 def test_zone_paths_only_when_enabled_and_survive_round_trip(runner):  # noqa: F811
-    assert runner.get_narrative_inputs(XAU, 900, 4110.0, 0.0, now_ms=WED_LONDON_KZ).zone_paths is None  # config: off
+    runner._full_config["smc"]["narrative"]["zone_path"] = {"enabled": False, "stop_buffer_atr": 0.0}  # не з config.json
+    assert runner.get_narrative_inputs(XAU, 900, 4110.0, 0.0, now_ms=WED_LONDON_KZ).zone_paths is None
 
     runner._full_config["smc"]["narrative"]["zone_path"] = {"enabled": True, "stop_buffer_atr": 0.0}
     inputs = runner.get_narrative_inputs(XAU, 900, 4110.0, 0.0, now_ms=WED_LONDON_KZ)
