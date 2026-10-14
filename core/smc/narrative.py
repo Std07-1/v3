@@ -525,7 +525,10 @@ def _select_target(
     formed_before = path.entered_ms if path is not None and path.entered else None
 
     # Priority 1: Key level
-    target_level = _find_target_key_level(snapshot.levels, direction, ref, max_dist, dist_from, formed_before)
+    inclusive = path is not None
+    target_level = _find_target_key_level(
+        snapshot.levels, direction, ref, max_dist, dist_from, formed_before, inclusive
+    )
     if target_level:
         return (
             "{label} {price}".format(
@@ -547,9 +550,7 @@ def _select_target(
             near_edge = z.high if direction == "short" else z.low  # ціль-зона взята з ближнього краю
             # P2: directional gate — target zone must be ahead of price (зі шляхом — її ближній край, D-14)
             gate = near_edge if path is not None else center
-            if direction == "short" and gate >= ref:
-                continue
-            if direction == "long" and gate <= ref:
+            if not _ahead_of(gate, ref, direction, inclusive):
                 continue
             if max_dist > 0 and abs(center - dist_from) > max_dist:
                 continue
@@ -563,7 +564,9 @@ def _select_target(
             )
 
     # Priority 3: Recent swing extreme
-    target_swing = _find_target_swing(snapshot.swings, direction, ref, max_dist, dist_from, formed_before)
+    target_swing = _find_target_swing(
+        snapshot.swings, direction, ref, max_dist, dist_from, formed_before, inclusive
+    )
     if target_swing:
         return (
             "Останній {kind} {price}".format(
@@ -598,8 +601,10 @@ _TARGET_LEVEL_LABELS = {
 }  # type: Dict[str, str]
 
 
-def _find_target_key_level(levels, direction, current_price=0.0, max_dist=0.0, dist_from=None, formed_before_ms=None):
-    # type: (List[SmcLevel], str, float, float, Optional[float], Optional[int]) -> Optional[SmcLevel]
+def _find_target_key_level(
+    levels, direction, current_price=0.0, max_dist=0.0, dist_from=None, formed_before_ms=None, inclusive=False
+):
+    # type: (List[SmcLevel], str, float, float, Optional[float], Optional[int], bool) -> Optional[SmcLevel]
     """Найближчий ЗАВЕРШЕНИЙ рівень ліквідності попереду ціни в напрямку сценарію (у межах max_dist, якщо задано).
 
     Рівень, що ще формується (H/L поточної сесії, дня, H4/H1 — state forming), — не ціль: поточний діапазон охоплює
@@ -614,9 +619,7 @@ def _find_target_key_level(levels, direction, current_price=0.0, max_dist=0.0, d
         if formed_before_ms is not None and (lv.time_ms is None or lv.time_ms > formed_before_ms):
             continue
         # P2: directional gate — target must be ahead of price (Ф2a: ahead of the move already made)
-        if direction == "short" and lv.price >= current_price:
-            continue
-        if direction == "long" and lv.price <= current_price:
+        if not _ahead_of(lv.price, current_price, direction, inclusive):
             continue
         if max_dist > 0 and abs(lv.price - origin) > max_dist:
             continue
@@ -625,8 +628,19 @@ def _find_target_key_level(levels, direction, current_price=0.0, max_dist=0.0, d
     return best
 
 
-def _find_target_swing(swings, direction, current_price=0.0, max_dist=0.0, dist_from=None, formed_before_ms=None):
-    # type: (List[SmcSwing], str, float, float, Optional[float], Optional[int]) -> Optional[SmcSwing]
+def _ahead_of(price, ref, direction, inclusive=False):
+    # type: (float, float, str, bool) -> bool
+    """Ціна попереду опори в напрямку сценарію. inclusive — і сама опора: зі шляхом (Ф2a) опора — екстремум руху до
+    входу, а лой/хай імпульсу — перша ціль (ліквідність за ним ще не знята); без шляху опора — поточна ціна, строго."""
+    if direction == "short":
+        return price <= ref if inclusive else price < ref
+    return price >= ref if inclusive else price > ref
+
+
+def _find_target_swing(
+    swings, direction, current_price=0.0, max_dist=0.0, dist_from=None, formed_before_ms=None, inclusive=False
+):
+    # type: (List[SmcSwing], str, float, float, Optional[float], Optional[int], bool) -> Optional[SmcSwing]
     target_kinds = {"ll", "lh"} if direction == "short" else {"hh", "hl"}
     origin = current_price if dist_from is None else dist_from
     for sw in reversed(swings):
@@ -634,9 +648,7 @@ def _find_target_swing(swings, direction, current_price=0.0, max_dist=0.0, dist_
             continue
         if sw.kind in target_kinds:
             # P2: directional gate — target must be ahead of price
-            if direction == "short" and sw.price >= current_price:
-                continue
-            if direction == "long" and sw.price <= current_price:
+            if not _ahead_of(sw.price, current_price, direction, inclusive):
                 continue
             if max_dist > 0 and abs(sw.price - origin) > max_dist:
                 continue

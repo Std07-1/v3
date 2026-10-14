@@ -122,3 +122,13 @@ def test_closed_scenario_says_what_happened_and_leaves_next_area():
     assert hit.headline == "⬜ Ціль сценарію взято — чекаємо нову структуру"
     assert hit.next_area == ""  # закрита зона не подається як «наступна»
     assert running.scenarios and running.scenarios[0].zone_id == "z1"
+
+
+def test_impulse_extreme_itself_is_the_first_target():
+    """Лой імпульсу (екстремум руху до входу) — ліквідність, яку ще не знято: перша ціль; рівень вище нього — знятий."""
+    swept = _level("lon_l", 5121.0, tf_s=900)
+    at_extreme = _level("as_l", 5120.0, tf_s=900)
+
+    block = _narrate(5150.0, [swept, at_extreme], path=_path(pre_extreme=5120.0), config=_config())
+
+    assert block.scenarios[0].target_desc == "лой Азії 5120.00"
