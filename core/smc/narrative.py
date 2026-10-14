@@ -15,7 +15,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 
 from core.smc.sessions import OFF_SESSION
-from core.smc.zone_path import ZonePath
+from core.smc.zone_path import LONG, ZonePath, zone_direction
 from core.smc.types import (
     LEVEL_STATE_FORMING,
     ActiveScenario,
@@ -235,17 +235,57 @@ def _resolve_htf_alignment(bias_map):
 
 def _zone_direction(zone):
     # type: (SmcZone) -> str
-    return "short" if "bear" in zone.kind else "long"
+    return zone_direction(zone)
 
 
 # ── Invalidation (SC-7 / BH-1) ─────────────────────────────
 
 
-def _find_invalidation(zone, digits=_DEFAULT_PRICE_DIGITS):
-    # type: (SmcZone, int) -> str
+def _find_invalidation(zone, digits=_DEFAULT_PRICE_DIGITS, stop_price=None):
+    # type: (SmcZone, int, Optional[float]) -> str
+    """Число — стоп: дальній край зони ± запас (ADR-0113 Ф2a); без запасу — сам край."""
     if "bear" in zone.kind:
-        return "Вище {} \u2014 зона пробита".format(_fmt_price(zone.high, digits))
-    return "Нижче {} \u2014 зона пробита".format(_fmt_price(zone.low, digits))
+        edge = zone.high if stop_price is None else stop_price
+        return "Вище {} \u2014 зона пробита".format(_fmt_price(edge, digits))
+    edge = zone.low if stop_price is None else stop_price
+    return "Нижче {} \u2014 зона пробита".format(_fmt_price(edge, digits))
+
+
+def _zone_stop_price(zone, atr, stop_buffer_atr):
+    # type: (SmcZone, float, float) -> float
+    """Стоп за дальнім краєм зони із запасом stop_buffer_atr × ATR (config smc.narrative.zone_path, ADR-0113 Ф2a)."""
+    buffer = stop_buffer_atr * atr if atr > 0 else 0.0
+    return zone.low - buffer if _zone_direction(zone) == LONG else zone.high + buffer
+
+
+def _target_ref(path, current_price):
+    # type: (Optional[ZonePath], float) -> Tuple[float, float]
+    """(опора напрямку цілі, точка відліку відстані до неї).
+
+    Без шляху — поточна ціна для обох (Ф1). Зі шляхом (ADR-0113 Ф2a): опора — далі з краю входу й екстремуму руху до
+    входу (ліквідність, яку рух уже пройшов, знята), відстань — від краю входу.
+    """
+    if path is None:
+        return current_price, current_price
+    if path.direction == LONG:
+        return max(path.entry_edge, path.pre_entry_extreme), path.entry_edge
+    return min(path.entry_edge, path.pre_entry_extreme), path.entry_edge
+
+
+def _path_closed_reason(path, target_price, stop_price):
+    # type: (Optional[ZonePath], Optional[float], float) -> Optional[str]
+    """Сценарій відпрацював після входу: тінь за стопом — «scenario_stopped», ціль узята — «scenario_target_hit»."""
+    if path is None or not path.entered:
+        return None
+    if path.direction == LONG:
+        stopped = path.post_entry_low <= stop_price
+        hit = target_price is not None and path.post_entry_high >= target_price
+    else:
+        stopped = path.post_entry_high >= stop_price
+        hit = target_price is not None and path.post_entry_low <= target_price
+    if stopped:
+        return "scenario_stopped"
+    return "scenario_target_hit" if hit else None
 
 
 def _distance_to_zone(zone, price):
@@ -287,8 +327,8 @@ def _format_entry(zone, grade_info, digits=_DEFAULT_PRICE_DIGITS):
 # ── Trigger Resolution (T-2: 4 IOFED states, proximity + displacement) ──
 
 
-def _find_qualifying_structure_break(snapshot, zone):
-    # type: (SmcSnapshot, SmcZone) -> Optional[SmcSwing]
+def _find_qualifying_structure_break(snapshot, zone, not_before_ms=None):
+    # type: (SmcSnapshot, SmcZone, Optional[int]) -> Optional[SmcSwing]
     """Find the most recent CHoCH/BOS aligned with zone direction.
 
     Returns the swing if found (after zone creation), None otherwise.
@@ -310,6 +350,8 @@ def _find_qualifying_structure_break(snapshot, zone):
     for sw in reversed(snapshot.swings):
         if sw.kind not in target_kinds:
             continue
+        if not_before_ms is not None and sw.time_ms < not_before_ms:
+            return None  # далі лише давніші — злам до входу підтвердженням входу не є (ADR-0113 Ф2a)
         if origin_end_ms is not None:
             if sw.time_ms >= origin_end_ms:
                 return sw
@@ -349,8 +391,8 @@ def _is_price_proximate(zone, current_price, atr, config):
     return distance <= max_atr * atr
 
 
-def _resolve_trigger_state(snapshot, zone, viewer_tf_s, current_price, atr, config):
-    # type: (SmcSnapshot, SmcZone, int, float, float, dict) -> str
+def _resolve_trigger_state(snapshot, zone, viewer_tf_s, current_price, atr, config, path=None):
+    # type: (SmcSnapshot, SmcZone, int, float, float, dict, Optional[ZonePath]) -> str
     """T-2: 4 IOFED trigger states with proximity + displacement guards.
 
     Matrix (doctrine: proximity to POI + displacement confirmation):
@@ -363,6 +405,12 @@ def _resolve_trigger_state(snapshot, zone, viewer_tf_s, current_price, atr, conf
       no CHoCH                                \u2192 \"approaching\"
     """
     in_zone = zone.low <= current_price <= zone.high
+    if path is not None and path.entered:
+        # ADR-0113 Ф2a: злам з імпульсом ПІСЛЯ входу — сценарій підтверджено; далі лише «ready» (ціна в зоні) чи
+        # «triggered» (пішла до цілі), а не «approaching», як коли стан рахувався лише з поточної ціни
+        confirm = _find_qualifying_structure_break(snapshot, zone, not_before_ms=path.entered_ms)
+        if confirm is not None and _has_displacement_near(snapshot, confirm, zone, viewer_tf_s, config):
+            return "ready" if in_zone else "triggered"
     choch = _find_qualifying_structure_break(snapshot, zone)
     has_disp = False
     if choch is not None:
@@ -380,11 +428,11 @@ def _resolve_trigger_state(snapshot, zone, viewer_tf_s, current_price, atr, conf
 
 
 def _resolve_trigger_desc(
-    snapshot, zone, viewer_tf_s, current_price, atr, config, digits=_DEFAULT_PRICE_DIGITS
+    snapshot, zone, viewer_tf_s, current_price, atr, config, digits=_DEFAULT_PRICE_DIGITS, path=None
 ):
-    # type: (SmcSnapshot, SmcZone, int, float, float, dict, int) -> str
+    # type: (SmcSnapshot, SmcZone, int, float, float, dict, int, Optional[ZonePath]) -> str
     state = _resolve_trigger_state(
-        snapshot, zone, viewer_tf_s, current_price, atr, config
+        snapshot, zone, viewer_tf_s, current_price, atr, config, path
     )
     direction_arrow = "\u2193" if "bear" in zone.kind else "\u2191"
     tf_label = _tf_to_label(viewer_tf_s)
@@ -417,25 +465,36 @@ def _resolve_trigger_desc(
 
 
 def _find_target(
-    snapshot, zone, direction, config, current_price=0.0, atr=0.0, digits=_DEFAULT_PRICE_DIGITS
+    snapshot, zone, direction, config, current_price=0.0, atr=0.0, digits=_DEFAULT_PRICE_DIGITS, path=None
 ):
-    # type: (SmcSnapshot, SmcZone, str, dict, float, float, int) -> Optional[str]
-    """Find target price. Returns None if unknown (BH-4).
+    # type: (SmcSnapshot, SmcZone, str, dict, float, float, int, Optional[ZonePath]) -> Optional[str]
+    """Find target price. Returns None if unknown (BH-4)."""
+    target = _select_target(snapshot, zone, direction, config, current_price, atr, digits, path)
+    return target[0] if target is not None else None
 
-    ATR-distance filter: targets farther than target_max_atr_distance * ATR
-    from current_price are skipped (prevents D1-level PDL on M5 chart).
+
+def _select_target(
+    snapshot, zone, direction, config, current_price=0.0, atr=0.0, digits=_DEFAULT_PRICE_DIGITS, path=None
+):
+    # type: (SmcSnapshot, SmcZone, str, dict, float, float, int, Optional[ZonePath]) -> Optional[Tuple[str, float]]
+    """(опис цілі, її ціна для перевірки «взято»). None — ціль не знайдено (BH-4).
+
+    ATR-distance filter: targets farther than target_max_atr_distance * ATR from the distance origin are skipped
+    (prevents D1-level PDL on M5 chart). Опора й відлік відстані — `_target_ref`: без шляху — поточна ціна.
     """
     max_atr_mult = config.get("target_max_atr_distance", 12)
     max_dist = max_atr_mult * atr if atr > 0 else 0.0
+    ref, dist_from = _target_ref(path, current_price)
 
     # Priority 1: Key level
-    target_level = _find_target_key_level(
-        snapshot.levels, direction, current_price, max_dist
-    )
+    target_level = _find_target_key_level(snapshot.levels, direction, ref, max_dist, dist_from)
     if target_level:
-        return "{label} {price}".format(
-            label=_TARGET_LEVEL_LABELS.get(target_level.kind, target_level.kind.upper()),
-            price=_fmt_price(target_level.price, digits),
+        return (
+            "{label} {price}".format(
+                label=_TARGET_LEVEL_LABELS.get(target_level.kind, target_level.kind.upper()),
+                price=_fmt_price(target_level.price, digits),
+            ),
+            target_level.price,
         )
 
     # Priority 2: opposite-side institutional zone
@@ -446,25 +505,30 @@ def _find_target(
         if z_dir != direction and z.context_layer == "institutional":
             center = (z.high + z.low) / 2
             # P2: directional gate — target zone must be ahead of price
-            if direction == "short" and center >= current_price:
+            if direction == "short" and center >= ref:
                 continue
-            if direction == "long" and center <= current_price:
+            if direction == "long" and center <= ref:
                 continue
-            if max_dist > 0 and abs(center - current_price) > max_dist:
+            if max_dist > 0 and abs(center - dist_from) > max_dist:
                 continue
-            return "HTF {kind} {low}\u2013{high}".format(
-                kind=z.kind.split("_")[0].upper(),
-                low=_fmt_price(z.low, digits),
-                high=_fmt_price(z.high, digits),
+            near_edge = z.high if direction == "short" else z.low  # ціль-зона взята з ближнього краю
+            return (
+                "HTF {kind} {low}\u2013{high}".format(
+                    kind=z.kind.split("_")[0].upper(),
+                    low=_fmt_price(z.low, digits),
+                    high=_fmt_price(z.high, digits),
+                ),
+                near_edge,
             )
 
     # Priority 3: Recent swing extreme
-    target_swing = _find_target_swing(
-        snapshot.swings, direction, current_price, max_dist
-    )
+    target_swing = _find_target_swing(snapshot.swings, direction, ref, max_dist, dist_from)
     if target_swing:
-        return "Останній {kind} {price}".format(
-            kind=target_swing.kind.upper(), price=_fmt_price(target_swing.price, digits)
+        return (
+            "Останній {kind} {price}".format(
+                kind=target_swing.kind.upper(), price=_fmt_price(target_swing.price, digits)
+            ),
+            target_swing.price,
         )
 
     return None
@@ -493,33 +557,35 @@ _TARGET_LEVEL_LABELS = {
 }  # type: Dict[str, str]
 
 
-def _find_target_key_level(levels, direction, current_price=0.0, max_dist=0.0):
-    # type: (List[SmcLevel], str, float, float) -> Optional[SmcLevel]
+def _find_target_key_level(levels, direction, current_price=0.0, max_dist=0.0, dist_from=None):
+    # type: (List[SmcLevel], str, float, float, Optional[float]) -> Optional[SmcLevel]
     """Найближчий ЗАВЕРШЕНИЙ рівень ліквідності попереду ціни в напрямку сценарію (у межах max_dist, якщо задано).
 
     Рівень, що ще формується (H/L поточної сесії, дня, H4/H1 — state forming), — не ціль: поточний діапазон охоплює
     ціну, і на відкритті сесії «ціль» стояла б за копійки від неї (рецензія Ф0, D-01).
     """
     target_kinds = _TARGET_KINDS_BELOW if direction == "short" else _TARGET_KINDS_ABOVE
+    origin = current_price if dist_from is None else dist_from  # відлік відстані (Ф2a — край входу)
     best = None  # type: Optional[SmcLevel]
     for lv in levels:
         if lv.kind not in target_kinds or lv.state == LEVEL_STATE_FORMING:
             continue
-        # P2: directional gate — target must be ahead of price
+        # P2: directional gate — target must be ahead of price (Ф2a: ahead of the move already made)
         if direction == "short" and lv.price >= current_price:
             continue
         if direction == "long" and lv.price <= current_price:
             continue
-        if max_dist > 0 and abs(lv.price - current_price) > max_dist:
+        if max_dist > 0 and abs(lv.price - origin) > max_dist:
             continue
         if best is None or abs(lv.price - current_price) < abs(best.price - current_price):
             best = lv
     return best
 
 
-def _find_target_swing(swings, direction, current_price=0.0, max_dist=0.0):
-    # type: (List[SmcSwing], str, float, float) -> Optional[SmcSwing]
+def _find_target_swing(swings, direction, current_price=0.0, max_dist=0.0, dist_from=None):
+    # type: (List[SmcSwing], str, float, float, Optional[float]) -> Optional[SmcSwing]
     target_kinds = {"ll", "lh"} if direction == "short" else {"hh", "hl"}
+    origin = current_price if dist_from is None else dist_from
     for sw in reversed(swings):
         if sw.kind in target_kinds:
             # P2: directional gate — target must be ahead of price
@@ -527,7 +593,7 @@ def _find_target_swing(swings, direction, current_price=0.0, max_dist=0.0):
                 continue
             if direction == "long" and sw.price <= current_price:
                 continue
-            if max_dist > 0 and abs(sw.price - current_price) > max_dist:
+            if max_dist > 0 and abs(sw.price - origin) > max_dist:
                 continue
             return sw
     return None
@@ -789,13 +855,22 @@ def _synthesize_impl(
         config=config,
     )
 
-    # Step 2b: Invalidation check (SC-7)
+    # Step 2b: Invalidation check (SC-7); Ф2a — сценарій, що відпрацював після входу (стоп / ціль), не повертається
+    paths = zone_paths or {}
+    stop_buffer_atr = float(config.get("zone_path", {}).get("stop_buffer_atr", 0.0)) if zone_paths is not None else 0.0
+    stops = {z.id: _zone_stop_price(z, atr, stop_buffer_atr) for z in candidates}
     valid = []  # type: List[SmcZone]
     for z in candidates:
         if _is_invalidated(z, current_price):
             warnings.append("scenario_invalidated")
-        else:
-            valid.append(z)
+            continue
+        path = paths.get(z.id)
+        target = _select_target(snapshot, z, _zone_direction(z), config, current_price, atr, digits, path)
+        closed = _path_closed_reason(path, target[1] if target is not None else None, stops[z.id])
+        if closed is not None:
+            warnings.append(closed)
+            continue
+        valid.append(z)
 
     primary_zone = valid[0] if valid else None
 
@@ -866,7 +941,7 @@ def _synthesize_impl(
     primary_trigger = None  # type: Optional[str]
     if primary_zone and mode == "trade":
         primary_trigger = _resolve_trigger_state(
-            snapshot, primary_zone, viewer_tf_s, current_price, atr, config
+            snapshot, primary_zone, viewer_tf_s, current_price, atr, config, paths.get(primary_zone.id)
         )
 
     # Step 4: Headline — all mode / session / trigger state is now known
@@ -895,7 +970,8 @@ def _synthesize_impl(
             z = _zc
             d = _zone_direction(z)
             gi = zone_grades.get(z.id, {})
-            tgt = _find_target(snapshot, z, d, config, current_price, atr, digits)
+            path = paths.get(z.id)
+            tgt = _find_target(snapshot, z, d, config, current_price, atr, digits, path)
             if tgt is None:
                 warnings.append("no_target_found")
             scenarios.append(
@@ -904,13 +980,15 @@ def _synthesize_impl(
                     direction=d,
                     entry_desc=_format_entry(z, gi, digits),
                     trigger=_resolve_trigger_state(
-                        snapshot, z, viewer_tf_s, current_price, atr, config
+                        snapshot, z, viewer_tf_s, current_price, atr, config, path
                     ),
                     trigger_desc=_resolve_trigger_desc(
-                        snapshot, z, viewer_tf_s, current_price, atr, config, digits
+                        snapshot, z, viewer_tf_s, current_price, atr, config, digits, path
                     ),
                     target_desc=tgt,
-                    invalidation=_find_invalidation(z, digits),
+                    invalidation=_find_invalidation(
+                        z, digits, stops[z.id] if zone_paths is not None else None
+                    ),
                 )
             )
             if len(scenarios) >= max_scenarios:
