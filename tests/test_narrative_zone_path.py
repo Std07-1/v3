@@ -79,27 +79,28 @@ def test_impulse_extreme_is_the_target_when_no_unswept_liquidity_object_beyond()
     assert inside_zone.scenarios[0].target_desc is None
 
 
-def test_after_entry_target_only_from_liquidity_formed_before_entry():
-    """Рівень, період якого не закінчився до входу (той самий H1, що й вхід), ціллю після входу не стає (E-01)."""
-    same_hour = dataclasses.replace(_level("p_h1_l", 5110.0, tf_s=3600), time_ms=ENTERED)
+def test_after_entry_target_is_nearest_unswept_liquidity_even_one_the_move_made():
+    """Після входу ціль — найближча незнята ліквідність попереду, і та, що зробив рух після входу (хай/лой відкату):
+    закриття лише стопом, тож ціль — «куди далі», а не подія (S3f; стара зона XAG H1 25.05 — «хай попер. H4 78.676»)."""
+    made_after = dataclasses.replace(_level("p_h1_l", 5110.0, tf_s=3600), time_ms=ENTERED)
     path = _path(5160.0, ENTERED, favorable=5112.0, adverse=5190.0)
 
-    block = _narrate(5115.0, [same_hour, _level("pdl", 5062.0)], path=path, config=_config())
+    block = _narrate(5115.0, [made_after, _level("pdl", 5062.0)], path=path, config=_config())
 
-    assert block.scenarios[0].target_desc == "PDL 5062.00"
+    assert block.scenarios[0].target_desc == "лой попер. H1 5110.00"
 
 
-def test_after_entry_reached_target_moves_on_not_disappears():
-    """Ціль, взята після входу, — не причина відкинути її як «зняту до входу»: ціна за нею — наступна незнята."""
+def test_taken_target_gives_way_to_the_next_unswept():
+    """Ціль, яку ціна вже взяла, — позаду: наступна незнята (сценарій від цього не закривається)."""
     first = dataclasses.replace(_level("p_h4_l", 5100.0, tf_s=14400), time_ms=T0 - 10 * H1_MS)
     path = _path(5160.0, ENTERED, favorable=5095.0, adverse=5190.0)
-    reached = _swept_below(first, ENTERED + 2 * M15_MS)
+    taken = _swept_below(first, ENTERED + 2 * M15_MS)
 
-    running = _narrate(5120.0, [first, _level("pdl", 5062.0)], path=path, config=_config(), reached=reached)
-    passed = _narrate(5095.0, [first, _level("pdl", 5062.0)], path=path, config=_config(), reached=reached)
+    before = _narrate(5120.0, [first, _level("pdl", 5062.0)], path=path, config=_config())
+    after = _narrate(5120.0, [first, _level("pdl", 5062.0)], path=path, config=_config(), reached=taken)
 
-    assert running.scenarios[0].target_desc == "лой попер. H4 5100.00"  # знято після входу — ще ціль
-    assert passed.scenarios[0].target_desc == "PDL 5062.00"  # ціна за ціллю — наступна
+    assert before.scenarios[0].target_desc == "лой попер. H4 5100.00"
+    assert after.scenarios and after.scenarios[0].target_desc == "PDL 5062.00"
 
 
 def test_stop_buffer_scales_with_zone_birth_atr_and_invalidates_by_the_same_number():

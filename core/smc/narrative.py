@@ -119,12 +119,6 @@ _CONFIRMED_AFTER_ENTRY_HEADLINES = {
     ("reduced", "long"): "\U0001f7e1 BUY \u2014 підтверджено після входу (поза KZ)",
     ("reduced", "short"): "\U0001f7e1 SELL \u2014 підтверджено після входу (поза KZ)",
 }
-# Рівні без часу кінця періоду: сесійні (time_ms — перший бар сесії) і EQ (найраніший свінг кластера) — після входу
-# «утворився до входу» для них не довести, тож ціллю після входу не беруться (рецензія Ф2a, E-01)
-_UNTIMED_END_LEVEL_KINDS = frozenset(
-    {"eq_highs", "eq_lows", "as_h", "as_l", "lon_h", "lon_l", "ny_h", "ny_l", "p_as_h", "p_as_l", "p_lon_h", "p_lon_l",
-     "p_ny_h", "p_ny_l"}
-)
 _EQ_LEVEL_KINDS = frozenset({"eq_highs", "eq_lows"})  # рушій уже відсіяв зняті кластери (liquidity._is_swept)
 # Зона рівня A є, але D1 і H4 ще без структури (alignment no_data) — не «немає зони»
 _HTF_PENDING_HEADLINE = "\u2b1c HTF ще без структури \u2014 зона є, чекаємо"
@@ -562,38 +556,31 @@ def _select_target(
 
 def _select_target_on_path(snapshot, zone, direction, config, current_price, digits, path, reached):
     # type: (SmcSnapshot, SmcZone, str, dict, float, int, ZonePath, dict) -> Optional[Tuple[str, float]]
-    """Ф2a: ціль від входу — найближча НЕЗНЯТА ліквідність попереду і краю входу, і ціни.
+    """Ф2a: ціль від входу — найближча НЕЗНЯТА ліквідність попереду і краю входу, і ціни; до і після входу однаково.
 
     Знята — ціна торгувала строго за рівнем після початку його періоду (`liquidity_reached`, детектор
-    `core.smc.liquidity_sweep`); EQ-кластери вже відсіяв рушій. Після входу — лише рівні/свінги/зони, чий період
-    закінчився до входу, і не зняті ДО входу: дотик після входу — ціль іде, а не причина її відкинути (наступна ціль —
-    уже за ціною). Відстань — від краю входу в ATR зони на барі зламу. Пріоритети як у Ф1 + 4-й — лой/хай імпульсу
-    (варіант (а) власника 14.10), строго попереду краю входу (рецензія E-02).
+    `core.smc.liquidity_sweep`); EQ-кластери вже відсіяв рушій. Після входу підходить і ліквідність, яку зробив рух
+    після входу (хай відкату, «попередній H4»): закриття — лише стопом, тож ціль — це текст «куди далі», а не подія.
+    Відстань — від краю входу в ATR зони на барі зламу. Пріоритети як у Ф1 + 4-й — лой/хай імпульсу (варіант (а)
+    власника 14.10), строго попереду краю входу (рецензія E-02).
     """
     long = direction == LONG
     gate = max(path.entry_edge, current_price) if long else min(path.entry_edge, current_price)
     max_dist = config.get("target_max_atr_distance", 12) * path.birth_atr
-    as_of = path.entered_ms  # None — до входу: «знято» будь-коли
 
-    def _open(key, price, start_ms, end_ms, timed_end=True, trust_engine=False):
-        # type: (str, float, Optional[int], Optional[int], bool, bool) -> bool
+    def _open(key, price, start_ms, trust_engine=False):
+        # type: (str, float, Optional[int], bool) -> bool
         if not _ahead_of(price, gate, direction) or abs(price - path.entry_edge) > max_dist:
-            return False
-        if as_of is not None and (not timed_end or end_ms is None or end_ms > as_of):
             return False
         if trust_engine or start_ms is None:
             return True
-        first = reached.get(key, (None, None))[0 if long else 1]
-        return first is None or (as_of is not None and first >= as_of)
+        return reached.get(key, (None, None))[0 if long else 1] is None
 
     target_kinds = _TARGET_KINDS_ABOVE if long else _TARGET_KINDS_BELOW
     levels = [
         lv for lv in snapshot.levels
-        if lv.kind in target_kinds and lv.state != LEVEL_STATE_FORMING and _open(
-            "level:" + lv.id, lv.price, lv.time_ms,
-            lv.time_ms + lv.tf_s * 1000 if lv.time_ms is not None else None,
-            timed_end=lv.kind not in _UNTIMED_END_LEVEL_KINDS, trust_engine=lv.kind in _EQ_LEVEL_KINDS,
-        )
+        if lv.kind in target_kinds and lv.state != LEVEL_STATE_FORMING
+        and _open("level:" + lv.id, lv.price, lv.time_ms, trust_engine=lv.kind in _EQ_LEVEL_KINDS)
     ]
     if levels:
         best = min(levels, key=lambda lv: abs(lv.price - gate))
@@ -605,13 +592,13 @@ def _select_target_on_path(snapshot, zone, direction, config, current_price, dig
         if _zone_direction(z) == direction:
             continue
         near_edge = z.high if not long else z.low
-        if _open("zone:" + z.id, near_edge, None, z.start_ms + z.tf_s * 1000):
+        if _open("zone:" + z.id, near_edge, None):
             text = "HTF {kind} {low}\u2013{high}".format(
                 kind=z.kind.split("_")[0].upper(), low=_fmt_price(z.low, digits), high=_fmt_price(z.high, digits))
             return text, near_edge
     swing_kinds = {"hh", "hl"} if long else {"ll", "lh"}
     for sw in reversed(snapshot.swings):
-        if sw.kind in swing_kinds and _open("swing:" + sw.id, sw.price, sw.time_ms, sw.time_ms + sw.tf_s * 1000):
+        if sw.kind in swing_kinds and _open("swing:" + sw.id, sw.price, sw.time_ms):
             return "Останній {kind} {price}".format(kind=sw.kind.upper(), price=_fmt_price(sw.price, digits)), sw.price
     extreme = path.pre_entry_extreme
     if _ahead_of(extreme, path.entry_edge, direction) and _ahead_of(extreme, gate, direction) \
