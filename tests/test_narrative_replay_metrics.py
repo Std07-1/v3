@@ -118,7 +118,7 @@ def test_setup_outcome_counted_once_with_confirmation_and_rr_at_entry():
     assert metrics["episodes"] == 2 and metrics["setups"] == 1  # мигання не подвоює результат
     assert metrics["confirmed"] == 1 and metrics["confirm_min_median"] == 30.0
     assert metrics["outcomes"] == {"invalidated": 1}  # від першої появи: вхід 4095 → стоп 4085
-    assert metrics["outcomes_after_confirm"] == {"target": 1}  # від підтвердження: вхід → ціль
+    assert metrics["outcomes_after_confirm"] == {"invalidated": 1}  # той самий сетап — підтверджений, той самий результат
     assert metrics["rr_at_entry_median"] == 2.5  # (4120 − 4095) / (4095 − 4085)
 
 

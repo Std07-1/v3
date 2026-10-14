@@ -14,7 +14,9 @@
 - `outcomes` — результат угоди від краю зони (`trade_outcome`): до входу ціна дійшла до цілі (`missed`) чи горизонт
   минув без входу (`no_fill`); після входу — `target`, `invalidated`, обидва в одному барі M1 (`ambiguous`), нічого
   (`open`); M1 на диску закінчились раніше горизонту — `censored`; `no_target` — ціль не названа.
-  `outcomes_after_confirm` — те саме від першого triggered/ready сетапу;
+  `outcomes_after_confirm` — той самий результат (від першої появи) лише для сетапів, що мали triggered/ready:
+  від рядка підтвердження рахувати не можна — у Ф2a підтвердження буває лише після входу, і новий дотик краю дав
+  би «без входу» замість результату угоди (рецензія Ф2a, D-08);
 - `rr_at_entry_median` — плановий R:R від краю зони: |ціль − край| / |інвалідація − край|.
 
 Ціна цілі-зони («HTF OB a–b») — ближній край за напрямком: short — верхній, long — нижній.
@@ -208,7 +210,7 @@ def tf_metrics(rows: Sequence[Row], m1: Sequence[Row], horizon_ms: int, trading_
         confirmed = next((r for r in setup if r["narrative"]["scenarios"][0]["trigger"] in CONFIRMED_TRIGGERS), None)
         if confirmed is not None:
             confirm_min.append((confirmed["t"] - setup[0]["t"]) / 60000)
-            after_confirm[_outcome(m1, m1_opens, confirmed, horizon_ms)] += 1
+            after_confirm[_outcome(m1, m1_opens, setup[0], horizon_ms)] += 1
     return {
         "steps": len(rows), "open_steps": len(open_rows), "closed_steps": len(rows) - len(market_open),
         "degraded_share": _share(market_open, _is_degraded),
