@@ -32,15 +32,13 @@ from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from core.config_loader import load_system_config, resolve_config_path
-from core.model.bars import CandleBar
 from core.smc.config import SmcConfig
-from core.smc.engine import SmcEngine
-from runtime.smc.smc_runner import SmcRunner
+from core.smc.engine import _SESSION_M1_CAPACITY, SmcEngine
+from runtime.smc.smc_runner import SmcRunner, _bar_dict_to_candle_bar
 from runtime.store.layers.disk_layer import DiskLayer
 
 TF_BY_NAME = {"M1": 60, "M3": 180, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400}
 M1_S = 60
-SESSION_M1_WARMUP_BARS = 2880  # як SmcRunner.warmup: ~48 год M1 для сесійних H/L
 
 Row = Dict[str, Any]
 
@@ -68,13 +66,6 @@ def replay_config(cfg: Dict[str, Any], symbol: str) -> Dict[str, Any]:
     return replay_cfg
 
 
-def row_to_bar(row: Row, symbol: str, tf_s: int) -> CandleBar:
-    open_ms = int(row["open_time_ms"])
-    return CandleBar(symbol, tf_s, open_ms, open_ms + tf_s * 1000, float(row["o"]), float(row["h"]),
-                     float(row["low"]), float(row["c"]), float(row.get("v") or 0.0), bool(row.get("complete", True)),
-                     str(row.get("src") or "history"))
-
-
 def replay_narrative(cfg: Dict[str, Any], rows_by_tf: Dict[int, List[Row]], symbol: str, viewer_tfs: Sequence[int],
                      step_tf_s: int, start_ms: int, end_ms: int, with_inputs: bool = False) -> Iterable[Row]:
     """Рядки розбору для кожного TF глядача на кожному закритті бару кроку в (start_ms, end_ms].
@@ -87,7 +78,7 @@ def replay_narrative(cfg: Dict[str, Any], rows_by_tf: Dict[int, List[Row]], symb
     engine = SmcEngine(SmcConfig.from_dict(replay_cfg.get("smc", {})))
     runner = SmcRunner(replay_cfg, engine)
     runner.warmup(HistoryReader(rows_by_tf, start_ms))
-    compute_tfs = set(int(tf) for tf in replay_cfg["smc"].get("compute_tfs", []))
+    compute_tfs = set(int(tf) for tf in replay_cfg["smc"]["compute_tfs"])  # без власного default: SSOT — config
     closes: Dict[int, List[tuple]] = {}
     for tf_s, rows in rows_by_tf.items():
         for row in rows:
@@ -97,11 +88,14 @@ def replay_narrative(cfg: Dict[str, Any], rows_by_tf: Dict[int, List[Row]], symb
     for close_ms in sorted(closes):
         group = sorted(closes[close_ms], key=lambda item: item[0])
         for tf_s, row in group:
-            bar = row_to_bar(row, symbol, tf_s)
+            # Як живий шлях: M1 — feed_m1_bar_dict (стрічка сесій + остання ціна для range_exhaustion), compute TF —
+            # on_bar рушія з тим самим конвертером, що в on_bar_dict (без relay/журналу/TDA)
             if tf_s == M1_S:
-                engine.feed_m1_bar(bar)
+                runner.feed_m1_bar_dict(symbol, row)
             if tf_s in compute_tfs:
-                engine.on_bar(bar)
+                bar = _bar_dict_to_candle_bar(row, symbol, tf_s)
+                if bar is not None:
+                    engine.on_bar(bar)
         if step_tf_s not in {tf_s for tf_s, _ in group}:
             continue
         price = float(group[0][1]["c"])
@@ -121,11 +115,11 @@ def replay_narrative(cfg: Dict[str, Any], rows_by_tf: Dict[int, List[Row]], symb
 def load_rows(disk: DiskLayer, cfg: Dict[str, Any], symbol: str, step_tf_s: int, start_ms: int,
               end_ms: int) -> Dict[int, List[Row]]:
     """Рядки диска: прогрів (lookback compute TF, 48 год M1) + вікно прогону, без preview, відсортовані й без дублів."""
-    smc_cfg = cfg.get("smc", {})
-    lookback = int(smc_cfg.get("lookback_bars", 500))
-    compute_tfs = [int(tf) for tf in smc_cfg.get("compute_tfs", [])]
+    smc_cfg = cfg["smc"]
+    lookback = int(smc_cfg["lookback_bars"])  # без власних default: SSOT — config, як у SmcRunner
+    compute_tfs = [int(tf) for tf in smc_cfg["compute_tfs"]]
     warmup_bars = {tf_s: lookback for tf_s in compute_tfs}
-    warmup_bars[M1_S] = max(lookback, SESSION_M1_WARMUP_BARS)
+    warmup_bars[M1_S] = max(lookback, _SESSION_M1_CAPACITY)  # стрічка сесій рушія більше не вміщує
     rows_by_tf: Dict[int, List[Row]] = {}
     for tf_s in sorted(set(warmup_bars) | {step_tf_s}):
         span = (end_ms - start_ms) // (tf_s * 1000) + 1

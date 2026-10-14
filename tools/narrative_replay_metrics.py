@@ -1,17 +1,23 @@
 """tools/narrative_replay_metrics.py — метрики прогону системного наративу (ADR-0113 Ф1): baseline для порівняння змін.
 
 Вхід — JSONL `tools.narrative_replay` і M1 того самого символу з диску (шлях ціни після появи сценарію). Рахується
-окремо на кожен TF глядача, лише на відкритому ринку (рядки «Ринок закрито» — окремою часткою):
+окремо на кожен TF глядача, лише на відкритому ринку й без деградованих блоків:
 
+- `closed_steps` — кроків «Ринок закрито»: момент розбору — закриття бару, тож крок на початку паузи чи вихідних завжди
+  такий (лічильник меж пауз, не частка закритого часу); `degraded_share` — запасні блоки (`computation_error`,
+  `no_snapshot`) серед відкритих кроків — у решту метрик не йдуть;
 - `empty_wait_share` — «чекаємо без змісту»: wait, без сценаріїв і без next_area; `headlines` — розподіл заголовків;
-- `changes_per_day` — змін стану (mode, заголовок, зона основного сценарію, тригер) на торгову добу; `flip_backs` —
-  повернень до попереднього стану, коли проміжний протримався ≤ 2 кроки (A→B→A);
+- `changes_per_day` — змін стану (mode, заголовок, зона основного сценарію, тригер) на торгову добу (від відкриття
+  сесії, правило якоря символу), `flip_backs` — повернень до попереднього стану, коли проміжний протримався ≤ 2 кроки;
 - `scenario_share` — частка кроків зі сценарієм; епізод — поспіль та сама зона основного сценарію; сетап — зона:
   мигання рве сетап на кілька епізодів, тож результат рахується раз на сетап, від його першої появи;
 - `outcomes` — результат угоди від краю зони (`trade_outcome`): до входу ціна дійшла до цілі (`missed`) чи горизонт
   минув без входу (`no_fill`); після входу — `target`, `invalidated`, обидва в одному барі M1 (`ambiguous`), нічого
-  (`open`); `no_target` — ціль не названа. `outcomes_after_confirm` — те саме від першого triggered/ready сетапу;
+  (`open`); M1 на диску закінчились раніше горизонту — `censored`; `no_target` — ціль не названа.
+  `outcomes_after_confirm` — те саме від першого triggered/ready сетапу;
 - `rr_at_entry_median` — плановий R:R від краю зони: |ціль − край| / |інвалідація − край|.
+
+Ціна цілі-зони («HTF OB a–b») — ближній край за напрямком: short — верхній, long — нижній.
 
 Приклад:
 
@@ -22,21 +28,24 @@ from __future__ import annotations
 import argparse
 import bisect
 import collections
-import datetime as dt
 import json
 import re
 import statistics
 import sys
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from core.config_loader import load_system_config, resolve_config_path
+from core.config_loader import htf_anchor_rule_resolver, load_system_config, resolve_config_path
+from core.session_anchor import trading_day_open_ms
 from runtime.smc.signal_journal import parse_price_from_desc
 from runtime.store.layers.disk_layer import DiskLayer
 
 Row = Dict[str, Any]
 CONFIRMED_TRIGGERS = frozenset({"triggered", "ready"})
+DEGRADED_WARNINGS = frozenset({"computation_error", "no_snapshot"})  # _fallback_narrative_block
 FLIP_BACK_MAX_STEPS = 2
 DEFAULT_HORIZON_H = 72
+M1_MS = 60_000
+_DAY_MS = 86_400_000
 _ZONE_RANGE_RE = re.compile(r"(\d+(?:\.\d+)?)–(\d+(?:\.\d+)?)")  # «OB▲ A(6) 4090.00–4095.00» (_format_entry)
 
 
@@ -83,12 +92,20 @@ def setups(found_episodes: Sequence[List[Row]]) -> List[List[Row]]:
     return list(by_zone.values())
 
 
-def parse_zone_range(entry_desc: str) -> Optional[Tuple[float, float]]:
-    match = _ZONE_RANGE_RE.search(entry_desc or "")
+def parse_zone_range(desc: str) -> Optional[Tuple[float, float]]:
+    match = _ZONE_RANGE_RE.search(desc or "")
     if not match:
         return None
     low, high = float(match.group(1)), float(match.group(2))
     return (min(low, high), max(low, high))
+
+
+def target_price(target_desc: str, direction: str) -> float:
+    """Ціна цілі; для цілі-зони — ближній край за напрямком (short іде вниз — спершу верхній край)."""
+    zone = parse_zone_range(target_desc)
+    if zone is not None:
+        return zone[1] if direction == "short" else zone[0]
+    return parse_price_from_desc(target_desc or "")
 
 
 def trade_outcome(m1: Sequence[Row], m1_opens: Sequence[int], start_ms: int, horizon_ms: int, direction: str,
@@ -96,7 +113,8 @@ def trade_outcome(m1: Sequence[Row], m1_opens: Sequence[int], start_ms: int, hor
     """Угода від краю зони в барах M1, що відкрились у [start_ms, start_ms + horizon_ms).
 
     Вхід — дотик краю зони з боку ціни (long — верхнього, short — нижнього); до входу ціль = `missed` (угоди не було).
-    Після входу — що раніше: ціль чи інвалідація; бар, у якому вхід і інвалідація разом, — `ambiguous`.
+    Після входу — що раніше: ціль чи інвалідація; бар, у якому вхід і інвалідація разом, — `ambiguous`. Нерозв'язаний
+    результат, коли M1 закінчились раніше горизонту, — `censored`, а не «нічого не сталося».
     """
     if target <= 0:
         return "no_target"
@@ -124,13 +142,17 @@ def trade_outcome(m1: Sequence[Row], m1_opens: Sequence[int], start_ms: int, hor
             return "target"
         if hit_invalidation:
             return "invalidated"
+    if not m1_opens or m1_opens[-1] + M1_MS < start_ms + horizon_ms:
+        return "censored"
     return "open" if filled else "no_fill"
 
 
 def _scenario_levels(row: Row) -> Tuple[str, Optional[Tuple[float, float]], float, float]:
     scenario = row["narrative"]["scenarios"][0]
-    return (scenario["direction"], parse_zone_range(scenario.get("entry_desc", "")),
-            parse_price_from_desc(scenario.get("target_desc") or ""), parse_price_from_desc(scenario.get("invalidation") or ""))
+    direction = scenario["direction"]
+    return (direction, parse_zone_range(scenario.get("entry_desc", "")),
+            target_price(scenario.get("target_desc") or "", direction),
+            parse_price_from_desc(scenario.get("invalidation") or ""))
 
 
 def _outcome(m1: Sequence[Row], m1_opens: Sequence[int], row: Row, horizon_ms: int) -> str:
@@ -153,17 +175,26 @@ def _share(rows: Sequence[Row], predicate: Callable[[Row], bool]) -> float:
     return round(sum(1 for r in rows if predicate(r["narrative"])) / max(len(rows), 1), 4)
 
 
+def _is_closed(narrative: Row) -> bool:
+    return narrative["market_phase"] == "closed"
+
+
+def _is_degraded(narrative: Row) -> bool:
+    return bool(DEGRADED_WARNINGS.intersection(narrative.get("warnings") or ()))
+
+
 def _is_empty_wait(narrative: Row) -> bool:
     return narrative["mode"] == "wait" and not narrative["scenarios"] and not narrative["next_area"]
 
 
-def tf_metrics(rows: Sequence[Row], m1: Sequence[Row], horizon_ms: int) -> Row:
+def tf_metrics(rows: Sequence[Row], m1: Sequence[Row], horizon_ms: int, trading_day: Callable[[int], int]) -> Row:
     """Метрики одного TF глядача; rows — усі кроки за часом, m1 — бари M1 за зростанням open_time_ms."""
-    open_rows = [r for r in rows if r["narrative"]["market_phase"] != "closed"]
+    market_open = [r for r in rows if not _is_closed(r["narrative"])]
+    open_rows = [r for r in market_open if not _is_degraded(r["narrative"])]
     runs = _runs([narrative_state(r["narrative"]) for r in open_rows])
     flip_backs = sum(1 for k in range(1, len(runs) - 1)
                      if runs[k][1] <= FLIP_BACK_MAX_STEPS and runs[k - 1][0] == runs[k + 1][0])
-    days = len({dt.datetime.fromtimestamp(r["t"] / 1000, dt.timezone.utc).date() for r in open_rows}) or 1
+    days = len({trading_day(r["t"]) for r in open_rows}) or 1
     m1_opens = [bar["open_time_ms"] for bar in m1]
     found_episodes = episodes(rows)
     found_setups = setups(found_episodes)
@@ -178,11 +209,12 @@ def tf_metrics(rows: Sequence[Row], m1: Sequence[Row], horizon_ms: int) -> Row:
             confirm_min.append((confirmed["t"] - setup[0]["t"]) / 60000)
             after_confirm[_outcome(m1, m1_opens, confirmed, horizon_ms)] += 1
     return {
-        "steps": len(rows), "open_steps": len(open_rows), "closed_share": round(1 - len(open_rows) / max(len(rows), 1), 4),
+        "steps": len(rows), "open_steps": len(open_rows), "closed_steps": len(rows) - len(market_open),
+        "degraded_share": _share(market_open, _is_degraded),
         "empty_wait_share": _share(open_rows, _is_empty_wait),
         "scenario_share": _share(open_rows, lambda narrative: bool(narrative["scenarios"])),
         "headlines": collections.Counter(r["narrative"]["headline"] for r in open_rows).most_common(8),
-        "changes_per_day": round((len(runs) - 1) / days, 2), "flip_backs": flip_backs, "trading_days": days,
+        "changes_per_day": round(max(len(runs) - 1, 0) / days, 2), "flip_backs": flip_backs, "trading_days": days,
         "episodes": len(found_episodes), "setups": len(found_setups), "confirmed": len(confirm_min),
         "confirm_min_median": statistics.median(confirm_min) if confirm_min else None,
         "rr_at_entry_median": statistics.median(rr) if rr else None,
@@ -190,11 +222,14 @@ def tf_metrics(rows: Sequence[Row], m1: Sequence[Row], horizon_ms: int) -> Row:
     }
 
 
-def compute_metrics(replay_rows: Sequence[Row], m1: Sequence[Row], horizon_h: int = DEFAULT_HORIZON_H) -> Row:
+def compute_metrics(replay_rows: Sequence[Row], m1: Sequence[Row], horizon_h: int = DEFAULT_HORIZON_H,
+                    trading_day: Optional[Callable[[int], int]] = None) -> Row:
+    """trading_day — ключ торгової доби для моменту (main: відкриття сесії за правилом якоря символу); None — UTC-дата."""
+    day_key = trading_day or (lambda t_ms: t_ms // _DAY_MS)
     by_tf: Dict[int, List[Row]] = collections.defaultdict(list)
     for row in sorted(replay_rows, key=lambda r: (r["tf_s"], r["t"])):
         by_tf[row["tf_s"]].append(row)
-    return {str(tf_s): tf_metrics(rows, m1, horizon_h * 3600 * 1000) for tf_s, rows in sorted(by_tf.items())}
+    return {str(tf_s): tf_metrics(rows, m1, horizon_h * 3600 * 1000, day_key) for tf_s, rows in sorted(by_tf.items())}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -210,12 +245,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("NARRATIVE_METRICS empty replay=%s" % args.replay)
         return 2
     cfg = load_system_config(resolve_config_path(args.config))
+    symbol = rows[0]["symbol"]
+    rule = htf_anchor_rule_resolver(cfg)(symbol)
     first_ms, last_ms = min(r["t"] for r in rows), max(r["t"] for r in rows)
     horizon_ms = args.horizon_h * 3600 * 1000
     m1, _geom = DiskLayer(args.data_root or cfg.get("data_root", "./data_v3")).read_window_with_geom(
-        rows[0]["symbol"], 60, (last_ms + horizon_ms - first_ms) // 60000 + 1, since_open_ms=first_ms - 1,
+        symbol, 60, (last_ms + horizon_ms - first_ms) // M1_MS + 1, since_open_ms=first_ms - 1,
         to_open_ms=last_ms + horizon_ms, use_tail=True, skip_preview=True)
-    metrics = {"symbol": rows[0]["symbol"], "horizon_h": args.horizon_h, "by_tf": compute_metrics(rows, m1, args.horizon_h)}
+    by_tf = compute_metrics(rows, m1, args.horizon_h, trading_day=lambda t_ms: trading_day_open_ms(t_ms, rule))
+    metrics = {"symbol": symbol, "horizon_h": args.horizon_h, "by_tf": by_tf}
     if args.json:
         with open(args.json, "w", encoding="utf-8") as out:
             json.dump(metrics, out, ensure_ascii=False, indent=1)

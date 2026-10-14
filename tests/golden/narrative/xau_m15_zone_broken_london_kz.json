@@ -68,7 +68,7 @@
   ],
   "snapshot": {
    "bar_count": 500,
-   "computed_at_ms": 1791951023590,
+   "computed_at_ms": 1778138100000,
    "last_bos_ms": 1778135400000,
    "last_choch_ms": 1778130000000,
    "levels": [

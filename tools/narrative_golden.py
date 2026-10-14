@@ -1,11 +1,14 @@
 """tools/narrative_golden.py — golden-випадок системного наративу з реальних даних (ADR-0113 Ф1).
 
 Знімає на момент закриття бару кроку повний вхід розбору (`NarrativeInputs`) з прогону історії і `NarrativeBlock`,
-який з нього вийшов. `tests/test_narrative_golden.py` відтворює з входу той самий блок, тож зміна методики, що міняє
-наратив, який читають UI й Арчі, стає видимою, а не тихою. Оновлювати golden — лише свідомо, з причиною в коміті.
+який з нього вийшов. `tests/test_narrative_golden.py` відтворює з входу той самий блок: зміна синтезу наративу
+(заголовки, режим, сценарій, ціль, інвалідація, тексти) з того самого знімка стає видимою, а не тихою. Зони, оцінки,
+рівні й config у випадку заморожені — зміни рушія golden не ловить, їх міряє прогін (`tools.narrative_replay_metrics`).
+Оновлювати golden — лише свідомо, з причиною в коміті.
 
-Момент `--at` — закриття бару кроку (UTC, напр. 09:15 для M15); прогрів — барами, що закрились до попереднього кроку,
-далі один крок прогону (`tools.narrative_replay`).
+Момент `--at` — закриття бару кроку (UTC; H4/D1 закриваються не на сітці епохи — за якорем сесії), прогрів — барами, що
+закрились до попереднього кроку, далі один крок прогону (`tools.narrative_replay`). `snapshot.computed_at_ms` — годинник
+у момент обчислення, наратив його не читає: у випадку він = `--at`, інакше повторне знімання давало б шумний diff.
 
 Приклад:
 
@@ -34,15 +37,15 @@ CASE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 def capture_case(cfg: Dict[str, Any], disk: DiskLayer, symbol: str, at_ms: int, tf_s: int, step_tf_s: int,
                  note: str) -> Dict[str, Any]:
     """Golden-випадок на закриття бару кроку at_ms; на закритому ринку входу розбору немає — відмова."""
-    step_ms = step_tf_s * 1000
-    if at_ms % step_ms:
-        raise ValueError("--at має бути закриттям бару кроку (кратним %d с)" % step_tf_s)
-    start_ms = at_ms - step_ms
+    start_ms = at_ms - step_tf_s * 1000
     rows_by_tf = load_rows(disk, cfg, symbol, step_tf_s, start_ms, at_ms)
     lines = list(replay_narrative(cfg, rows_by_tf, symbol, [tf_s], step_tf_s, start_ms, at_ms, with_inputs=True))
-    if not lines or lines[0]["inputs"] is None:
-        raise ValueError("на %s немає входу розбору (ринок закрито чи бару кроку немає на диску)" % at_ms)
+    if not lines or lines[0]["t"] != at_ms:
+        raise ValueError("на %s немає закриття бару кроку (час не на сітці TF або бару немає на диску)" % at_ms)
     line = lines[0]
+    if line["inputs"] is None:
+        raise ValueError("на %s ринок закрито — входу розбору немає" % at_ms)
+    line["inputs"]["snapshot"]["computed_at_ms"] = at_ms
     return {"symbol": symbol, "tf_s": tf_s, "t": at_ms, "price": line["price"], "note": note,
             "inputs": line["inputs"], "expected": line["narrative"]}
 
