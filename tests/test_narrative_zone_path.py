@@ -1,6 +1,7 @@
-"""Наратив зі шляхом ціни (ADR-0113 Ф2a §3.8): ціль від входу (лише не знята й лише та, що існувала на вході), стоп
-із запасом від ATR зони, підтвердження лише після бару входу і без відкату, відпрацьований сценарій не повертається.
-Без шляху — поведінка Ф1 (golden + диференційний фазинг рецензії)."""
+"""Наратив зі шляхом ціни (ADR-0113 Ф2a §3.8): ціль від входу — найближча незнята ліквідність (детектор «знята / не
+знята»), після входу — лише та, що утворилась до входу; стоп із запасом від ATR зони; підтвердження лише після бару
+входу; закриття — лише стопом (монотонно й однаково на всіх TF). Без шляху — поведінка Ф1 (golden + диференційний
+фазинг рецензій)."""
 from __future__ import annotations
 
 import dataclasses
@@ -11,6 +12,7 @@ from test_smc_narrative import _default_config, _grade_a6, _level, _snap, _swing
 
 T0 = 1_791_964_800_000  # open бару зламу, що народив OB (TF зони M15)
 M15_MS = 900_000
+H1_MS = 3_600_000
 ENTERED = T0 + 4 * M15_MS
 AFTER_ENTRY_BAR = ENTERED + M15_MS  # перший момент, коли злам підтверджує вхід
 BEARISH = {"86400": "bearish", "14400": "bearish"}
@@ -30,56 +32,91 @@ def _config(stop_buffer_atr=0.0):
     return dict(_default_config(), zone_path={"enabled": True, "stop_buffer_atr": stop_buffer_atr})
 
 
-def _narrate(price, levels, swings=(), path=None, config=None, atr=ATR):
+def _narrate(price, levels, swings=(), path=None, config=None, atr=ATR, reached=None):
     zone_paths = {"z1": path} if path is not None else None
-    return synthesize_narrative(_snap(zones=[_ob()], levels=list(levels), swings=list(swings)), BEARISH, _grade_a6("z1"),
-                                {}, 900, price, atr, config or _default_config(), price_digits=2, zone_paths=zone_paths)
+    return synthesize_narrative(_snap(zones=[_ob()], levels=list(levels), swings=list(swings)), BEARISH,
+                                _grade_a6("z1"), {}, 900, price, atr, config or _default_config(), price_digits=2,
+                                zone_paths=zone_paths, liquidity_reached=reached)
+
+
+def _swept_below(level, at_ms):
+    """Ціна торгувала нижче рівня в момент at_ms — для short-цілі рівень знято."""
+    return {"level:" + level.id: (None, at_ms)}
 
 
 def _confirm(at_ms):
     return [_swing("choch_bear", 5170.0, at_ms), _swing("displacement_bear", 5160.0, at_ms)]
 
 
-def test_target_is_beyond_the_move_already_made_not_between_price_and_zone():
-    levels = [_level("lon_l", 5130.0, tf_s=900), _level("pdl", 5062.0)]  # 5130 рух до 5120 уже зняв
+def test_target_is_nearest_unswept_liquidity_not_one_the_move_already_took():
+    taken = _level("lon_l", 5130.0, tf_s=900)  # рух до 5120 пройшов нижче 5130 після того, як рівень утворився
+    levels = [taken, _level("pdl", 5062.0)]
 
     without_path = _narrate(5150.0, levels)
-    with_path = _narrate(5150.0, levels, path=_path(pre_extreme=5120.0), config=_config())
+    with_path = _narrate(5150.0, levels, path=_path(), config=_config(), reached=_swept_below(taken, T0 + M15_MS))
 
     assert without_path.scenarios[0].target_desc == "лой Лондона 5130.00"
     assert with_path.scenarios[0].target_desc == "PDL 5062.00"
 
 
-def test_after_entry_target_is_only_liquidity_that_existed_at_entry():
-    """Новий «попередній H1», створений рухом після входу, не закриває сценарій «ціллю» (рецензія Ф2a, D-01)."""
-    made_after = dataclasses.replace(_level("p_h1_l", 5110.0, tf_s=3600), time_ms=ENTERED + 2 * M15_MS)
-    path = _path(5160.0, ENTERED, favorable=5108.0, adverse=5190.0)
+def test_old_zone_targets_unswept_level_formed_on_the_retrace_not_the_far_old_extreme():
+    """Стара зона: давній екстремум 4980, а на відкаті утворився «лой попер. H4» 5100, якого ціна не брала — він і ціль."""
+    retrace_low = dataclasses.replace(_level("p_h4_l", 5100.0, tf_s=14400), time_ms=T0 + 40 * M15_MS)
 
-    block = _narrate(5115.0, [made_after, _level("pdl", 5062.0)], path=path, config=_config())
+    block = _narrate(5150.0, [retrace_low], path=_path(pre_extreme=4980.0), config=_config())
 
-    assert block.scenarios and block.scenarios[0].target_desc == "PDL 5062.00"
-    assert "scenario_target_hit" not in block.warnings
+    assert block.scenarios[0].target_desc == "лой попер. H4 5100.00"
 
 
-def test_stop_buffer_scales_with_zone_birth_atr_not_viewer_atr():
+def test_impulse_extreme_is_the_target_when_no_unswept_liquidity_object_beyond():
+    """Варіант (а) власника 14.10: незнятої ліквідності немає — ціль сам лой імпульсу (строго попереду входу, E-02)."""
+    alone = _narrate(5150.0, [], path=_path(pre_extreme=5120.0), config=_config())
+    too_far = _narrate(5150.0, [], path=_path(pre_extreme=4900.0), config=_config())  # 275 > 12 × ATR 20 від 5175
+    inside_zone = _narrate(5150.0, [], path=_path(pre_extreme=5180.0), config=_config())  # «екстремум» за краєм входу
+
+    assert alone.scenarios[0].target_desc == "лой імпульсу 5120.00"
+    assert too_far.scenarios[0].target_desc is None and "no_target_found" in too_far.warnings
+    assert inside_zone.scenarios[0].target_desc is None
+
+
+def test_after_entry_target_only_from_liquidity_formed_before_entry():
+    """Рівень, період якого не закінчився до входу (той самий H1, що й вхід), ціллю після входу не стає (E-01)."""
+    same_hour = dataclasses.replace(_level("p_h1_l", 5110.0, tf_s=3600), time_ms=ENTERED)
+    path = _path(5160.0, ENTERED, favorable=5112.0, adverse=5190.0)
+
+    block = _narrate(5115.0, [same_hour, _level("pdl", 5062.0)], path=path, config=_config())
+
+    assert block.scenarios[0].target_desc == "PDL 5062.00"
+
+
+def test_after_entry_reached_target_moves_on_not_disappears():
+    """Ціль, взята після входу, — не причина відкинути її як «зняту до входу»: ціна за нею — наступна незнята."""
+    first = dataclasses.replace(_level("p_h4_l", 5100.0, tf_s=14400), time_ms=T0 - 10 * H1_MS)
+    path = _path(5160.0, ENTERED, favorable=5095.0, adverse=5190.0)
+    reached = _swept_below(first, ENTERED + 2 * M15_MS)
+
+    running = _narrate(5120.0, [first, _level("pdl", 5062.0)], path=path, config=_config(), reached=reached)
+    passed = _narrate(5095.0, [first, _level("pdl", 5062.0)], path=path, config=_config(), reached=reached)
+
+    assert running.scenarios[0].target_desc == "лой попер. H4 5100.00"  # знято після входу — ще ціль
+    assert passed.scenarios[0].target_desc == "PDL 5062.00"  # ціна за ціллю — наступна
+
+
+def test_stop_buffer_scales_with_zone_birth_atr_and_invalidates_by_the_same_number():
     path = _path(birth_atr=20.0)
+    cfg = _config(stop_buffer_atr=0.5)
 
-    on_m15 = _narrate(5150.0, [_level("pdl", 5062.0)], path=path, config=_config(stop_buffer_atr=0.5), atr=20.0)
-    on_h1 = _narrate(5150.0, [_level("pdl", 5062.0)], path=path, config=_config(stop_buffer_atr=0.5), atr=40.0)
+    on_m15 = _narrate(5150.0, [_level("pdl", 5062.0)], path=path, config=cfg, atr=20.0)
+    on_h1 = _narrate(5150.0, [_level("pdl", 5062.0)], path=path, config=cfg, atr=40.0)
+    alive = _narrate(5228.0, [_level("pdl", 5062.0)], path=path, config=cfg)  # за краєм 5225, до стопу 5235
+    broken = _narrate(5236.0, [_level("pdl", 5062.0)], path=path, config=cfg)
 
     assert on_m15.scenarios[0].invalidation == on_h1.scenarios[0].invalidation == "Вище 5235.00 — зона пробита"
-
-
-def test_price_beyond_stop_invalidates_like_the_stop_text_says():
-    """Стоп 5235: ціна 5228 — ще живий сценарій, а не «зону пробито» за краєм 5225 (D-04)."""
-    alive = _narrate(5228.0, [_level("pdl", 5062.0)], path=_path(5160.0), config=_config(stop_buffer_atr=0.5))
-    broken = _narrate(5236.0, [_level("pdl", 5062.0)], path=_path(5160.0), config=_config(stop_buffer_atr=0.5))
-
-    assert alive.scenarios and "scenario_invalidated" not in alive.warnings
+    assert alive.scenarios and "OB▼" in alive.next_area  # D-04/E-12: ще жива — і в next_area
     assert broken.scenarios == [] and "scenario_invalidated" in broken.warnings
 
 
-def test_confirmed_after_entry_stays_confirmed_and_says_so():
+def test_confirmed_after_entry_stays_confirmed_and_headline_says_so():
     path = _path(5160.0, ENTERED, favorable=5098.0, adverse=5190.0)
     swings = _confirm(AFTER_ENTRY_BAR) + [_swing("bos_bear", 5120.0, AFTER_ENTRY_BAR + 4 * M15_MS)]  # пізній BOS без імпульсу
 
@@ -89,6 +126,7 @@ def test_confirmed_after_entry_stays_confirmed_and_says_so():
     assert stateless.scenarios[0].trigger == "approaching"
     assert with_path.scenarios[0].trigger == "triggered"  # пізніший злам без імпульсу не затуляє підтвердження (D-02)
     assert with_path.scenarios[0].trigger_desc == "Підтверджено після входу: M15 CHoCH↓ + імпульс"  # D-12
+    assert with_path.headline == "\U0001f534 SELL — підтверджено після входу"  # E-05: без «шукаємо вхід»
 
 
 def test_break_before_or_inside_entry_bar_is_not_a_confirmation():
@@ -110,36 +148,21 @@ def test_entered_scenario_is_not_zone_too_far_while_running_to_target():
     assert block.mode == "trade" and "zone_too_far" not in block.warnings  # 125 від зони > 5 ATR, але вхід уже був
 
 
-def test_closed_scenario_says_what_happened_and_leaves_next_area():
-    entered = ENTERED
-    stopped = _narrate(5150.0, [_level("pdl", 5062.0)], path=_path(5160.0, entered, 5150.0, 5226.0), config=_config())
-    hit = _narrate(5150.0, [_level("pdl", 5062.0)], path=_path(5160.0, entered, 5061.0, 5190.0), config=_config())
-    running = _narrate(5150.0, [_level("pdl", 5062.0)], path=_path(5160.0, entered, 5100.0, 5190.0), config=_config())
+def test_only_the_stop_closes_a_scenario_monotonic_and_silently():
+    """Закриття — лише стопом після входу: без заголовка про подію, якої без пам'яті не довести (E-06/E-07)."""
+    stopped = _narrate(5150.0, [_level("pdl", 5062.0)], path=_path(5160.0, ENTERED, 5150.0, 5226.0), config=_config())
+    reached_target = _narrate(5070.0, [_level("pdl", 5062.0), _level("pwl", 5000.0)],
+                              path=_path(5160.0, ENTERED, 5061.0, 5190.0), config=_config())
 
     assert stopped.scenarios == [] and "scenario_stopped" in stopped.warnings
-    assert stopped.headline == "⬜ Сценарій зупинено стопом — чекаємо нову структуру"
-    assert hit.scenarios == [] and "scenario_target_hit" in hit.warnings
-    assert hit.headline == "⬜ Ціль сценарію взято — чекаємо нову структуру"
-    assert hit.next_area == ""  # закрита зона не подається як «наступна»
-    assert running.scenarios and running.scenarios[0].zone_id == "z1"
+    assert "Сценарій" not in stopped.headline and "Зону пробито" not in stopped.headline
+    assert stopped.next_area == ""  # закрита зона не подається як «наступна»
+    assert reached_target.scenarios and reached_target.scenarios[0].zone_id == "z1"  # ціль — не закриття
 
 
-def test_impulse_extreme_itself_is_the_first_target():
-    """Лой імпульсу (екстремум руху до входу) — ліквідність, яку ще не знято: перша ціль; рівень вище нього — знятий."""
-    swept = _level("lon_l", 5121.0, tf_s=900)
-    at_extreme = _level("as_l", 5120.0, tf_s=900)
+def test_zone_with_birth_anchor_but_no_path_is_not_a_trade_candidate():
+    """Бар зламу поза вікном барів рушія — шлях невідомий; без нього зона «воскресала» б за правилами Ф1 (E-11)."""
+    block = synthesize_narrative(_snap(zones=[_ob()], levels=[_level("pdl", 5062.0)]), BEARISH, _grade_a6("z1"), {},
+                                 900, 5150.0, ATR, _config(), price_digits=2, zone_paths={}, liquidity_reached={})
 
-    block = _narrate(5150.0, [swept, at_extreme], path=_path(pre_extreme=5120.0), config=_config())
-
-    assert block.scenarios[0].target_desc == "лой Азії 5120.00"
-
-
-def test_impulse_extreme_is_the_target_when_no_liquidity_object_beyond_it():
-    """Варіант (а) власника 14.10: за лоєм імпульсу немає рівня/свінга/зони — ціль сам лой імпульсу."""
-    alone = _narrate(5150.0, [], path=_path(pre_extreme=5120.0), config=_config())
-    with_level = _narrate(5150.0, [_level("pdl", 5062.0)], path=_path(pre_extreme=5120.0), config=_config())
-    too_far = _narrate(5150.0, [], path=_path(pre_extreme=4900.0), config=_config())  # 275 > 12 × ATR 20 від 5175
-
-    assert alone.scenarios[0].target_desc == "лой імпульсу 5120.00"
-    assert with_level.scenarios[0].target_desc == "PDL 5062.00"  # об'єкт ліквідності за імпульсом — першим
-    assert too_far.scenarios[0].target_desc is None and "no_target_found" in too_far.warnings
+    assert block.scenarios == [] and "scenario_path_unknown" in block.warnings

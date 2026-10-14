@@ -43,6 +43,7 @@ from core.smc.narrative import (
     _fallback_narrative_block,
 )
 from core.smc.narrative_inputs import NarrativeInputs
+from core.smc.liquidity_sweep import FirstReached, TouchIndex, first_reached
 from core.smc.zone_path import ZonePath, zone_path
 from core.smc.shell_composer import compose_shell_payload
 from runtime.ingest.market_calendar import TradingCalendar
@@ -890,7 +891,27 @@ class SmcRunner:
             range_exhaustion=re_snap.primary if re_snap is not None else None,
             price_digits=self._price_digits.get(symbol),
             zone_paths=self._zone_paths(symbol, snap) if zone_path_on else None,
+            liquidity_reached=self._liquidity_reached(symbol, snap) if zone_path_on else None,
         )
+
+    # Ряди барів детектора «знята / не знята» — від дрібного до старшого: M5 (~41 год) для свіжого, H1 (~3 тижні),
+    # D1 (~2 роки) для давнього; береться найдрібніший, що покриває момент (core.smc.liquidity_sweep.first_reached)
+    _LIQUIDITY_SERIES_TFS = (300, 3600, 86400)
+
+    def _liquidity_reached(self, symbol: str, snap: SmcSnapshot) -> Dict[str, FirstReached]:
+        """ADR-0113 Ф2a: момент першого виходу ціни за кожен рівень і свінг знімка від початку його періоду."""
+        indexes = [
+            TouchIndex(self._engine.get_bars(symbol, tf_s))
+            for tf_s in self._LIQUIDITY_SERIES_TFS
+            if tf_s in self._compute_tfs
+        ]
+        reached: Dict[str, FirstReached] = {}
+        for level in snap.levels:
+            if level.time_ms is not None:
+                reached["level:" + level.id] = first_reached(indexes, level.time_ms, level.price)
+        for swing in snap.swings:
+            reached["swing:" + swing.id] = first_reached(indexes, swing.time_ms, swing.price)
+        return reached
 
     def _zone_paths(self, symbol: str, snap: SmcSnapshot) -> Dict[str, ZonePath]:
         """ADR-0113 Ф2a: шлях ціни від бару зламу кожного OB знімка — по барах рушія TF зони (OB з якорем народження)."""

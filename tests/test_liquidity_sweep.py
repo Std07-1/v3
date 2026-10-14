@@ -24,6 +24,7 @@ def test_first_touch_after_moment_above_and_below():
     assert index.first_reached(T0 + 2 * H1_MS, 111.0)[0] == T0 + 3 * H1_MS
     assert index.first_reached(T0 + 2 * H1_MS, 120.0)[0] is None
     assert index.first_reached(T0 + 4 * H1_MS, 100.0) == (None, None)  # після останнього бару — дотику ще нема
+    assert index.first_reached(T0 + H1_MS, 110.0)[0] == T0 + 3 * H1_MS  # рівно 110 на барі 1 — не за рівнем; 112 — так
 
 
 def test_matches_brute_force_on_random_series():
@@ -39,8 +40,8 @@ def test_matches_brute_force_on_random_series():
         moment = T0 + rng.randint(-2, n + 1) * H1_MS
         price = rng.uniform(88, 117)
         after = [b for b in bars if b.open_time_ms >= moment]
-        expect = (next((b.open_time_ms for b in after if b.h >= price), None),
-                  next((b.open_time_ms for b in after if b.low <= price), None))
+        expect = (next((b.open_time_ms for b in after if b.h > price), None),
+                  next((b.open_time_ms for b in after if b.low < price), None))
         assert index.first_reached(moment, price) == expect
 
 

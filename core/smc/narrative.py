@@ -112,11 +112,20 @@ _WAIT_HEADLINES = {
 # sub_mode "" із зонами на графіку: жодна не дотягує до trade_min_grade, або кандидата щойно пробито
 _NO_QUALITY_ZONE_HEADLINE = "\u2b1c Немає зони рівня {grade} \u2014 чекаємо сетап"
 _ZONE_BROKEN_HEADLINE = "\u2b1c Зону пробито \u2014 чекаємо нову структуру"
-# ADR-0113 Ф2a: сценарій відпрацював після входу — не «зону пробито»
-_SCENARIO_CLOSED_HEADLINES = {
-    "scenario_target_hit": "\u2b1c Ціль сценарію взято \u2014 чекаємо нову структуру",
-    "scenario_stopped": "\u2b1c Сценарій зупинено стопом \u2014 чекаємо нову структуру",
+# ADR-0113 Ф2a: вхід уже був і підтверджено, ціна пішла від зони до цілі — без «шукаємо вхід» (рецензія E-05)
+_CONFIRMED_AFTER_ENTRY_HEADLINES = {
+    ("aligned", "long"): "\U0001f7e2 BUY \u2014 підтверджено після входу",
+    ("aligned", "short"): "\U0001f534 SELL \u2014 підтверджено після входу",
+    ("reduced", "long"): "\U0001f7e1 BUY \u2014 підтверджено після входу (поза KZ)",
+    ("reduced", "short"): "\U0001f7e1 SELL \u2014 підтверджено після входу (поза KZ)",
 }
+# Рівні без часу кінця періоду: сесійні (time_ms — перший бар сесії) і EQ (найраніший свінг кластера) — після входу
+# «утворився до входу» для них не довести, тож ціллю після входу не беруться (рецензія Ф2a, E-01)
+_UNTIMED_END_LEVEL_KINDS = frozenset(
+    {"eq_highs", "eq_lows", "as_h", "as_l", "lon_h", "lon_l", "ny_h", "ny_l", "p_as_h", "p_as_l", "p_lon_h", "p_lon_l",
+     "p_ny_h", "p_ny_l"}
+)
+_EQ_LEVEL_KINDS = frozenset({"eq_highs", "eq_lows"})  # рушій уже відсіяв зняті кластери (liquidity._is_swept)
 # Зона рівня A є, але D1 і H4 ще без структури (alignment no_data) — не «немає зони»
 _HTF_PENDING_HEADLINE = "\u2b1c HTF ще без структури \u2014 зона є, чекаємо"
 # Зони premium/discount — розмітка діапазону, не POI (не «зона для входу» ні в заголовку, ні в next_area)
@@ -263,36 +272,16 @@ def _zone_stop_price(zone, atr, stop_buffer_atr):
     return zone.low - buffer if _zone_direction(zone) == LONG else zone.high + buffer
 
 
-def _target_ref(path, current_price):
-    # type: (Optional[ZonePath], float) -> Tuple[float, float]
-    """(опора напрямку цілі, точка відліку відстані до неї).
-
-    Без шляху — поточна ціна для обох (Ф1). Зі шляхом (ADR-0113 Ф2a): опора — далі з краю входу й екстремуму руху до
-    входу (ліквідність, яку рух уже пройшов, знята), відстань — від краю входу.
-    """
-    if path is None:
-        return current_price, current_price
-    if path.direction == LONG:
-        return max(path.entry_edge, path.pre_entry_extreme), path.entry_edge
-    return min(path.entry_edge, path.pre_entry_extreme), path.entry_edge
-
-
-def _path_closed_reason(path, target_price, stop_price):
-    # type: (Optional[ZonePath], Optional[float], float) -> Optional[str]
-    """Сценарій відпрацював після входу: тінь за стопом — «scenario_stopped», ціль узята — «scenario_target_hit»."""
+def _path_stopped(path, stop_price):
+    # type: (Optional[ZonePath], float) -> bool
+    """Після входу тінь за стопом — сценарій закрито. Лише стоп: це монотонно (несприятливий екстремум лише росте) й
+    однаково на всіх TF глядача; «ціль узята» без пам'яті моменту закриття мигала б і різнилась би по TF, бо ціль
+    перевибирається зі знімка свого TF (рецензія Ф2a, E-06/E-07; пам'ять — Ф2b)."""
     if path is None or not path.entered:
-        return None
-    reached = path.favorable_after_entry
+        return False
     if path.direction == LONG:
-        stopped = path.adverse_since_entry <= stop_price
-        hit = target_price is not None and reached is not None and reached >= target_price
-    else:
-        stopped = path.adverse_since_entry >= stop_price
-        hit = target_price is not None and reached is not None and reached <= target_price
-    # Порядку стопу й цілі в агрегатах шляху не видно — стоп важить більше (рецензія Ф2a, D-10; час — Ф4)
-    if stopped:
-        return "scenario_stopped"
-    return "scenario_target_hit" if hit else None
+        return path.adverse_since_entry <= stop_price
+    return path.adverse_since_entry >= stop_price
 
 
 def _confirm_not_before_ms(path, zone):
@@ -499,36 +488,34 @@ def _resolve_trigger_desc(
 
 
 def _find_target(
-    snapshot, zone, direction, config, current_price=0.0, atr=0.0, digits=_DEFAULT_PRICE_DIGITS, path=None
+    snapshot, zone, direction, config, current_price=0.0, atr=0.0, digits=_DEFAULT_PRICE_DIGITS, path=None,
+    liquidity_reached=None,
 ):
-    # type: (SmcSnapshot, SmcZone, str, dict, float, float, int, Optional[ZonePath]) -> Optional[str]
+    # type: (SmcSnapshot, SmcZone, str, dict, float, float, int, Optional[ZonePath], Optional[dict]) -> Optional[str]
     """Find target price. Returns None if unknown (BH-4)."""
-    target = _select_target(snapshot, zone, direction, config, current_price, atr, digits, path)
+    target = _select_target(snapshot, zone, direction, config, current_price, atr, digits, path, liquidity_reached)
     return target[0] if target is not None else None
 
 
 def _select_target(
-    snapshot, zone, direction, config, current_price=0.0, atr=0.0, digits=_DEFAULT_PRICE_DIGITS, path=None
+    snapshot, zone, direction, config, current_price=0.0, atr=0.0, digits=_DEFAULT_PRICE_DIGITS, path=None,
+    liquidity_reached=None,
 ):
-    # type: (SmcSnapshot, SmcZone, str, dict, float, float, int, Optional[ZonePath]) -> Optional[Tuple[str, float]]
-    """(опис цілі, її ціна для перевірки «взято»). None — ціль не знайдено (BH-4).
+    # type: (SmcSnapshot, SmcZone, str, dict, float, float, int, Optional[ZonePath], Optional[dict]) -> Optional[Tuple[str, float]]
+    """(опис цілі, її ціна). None — ціль не знайдено (BH-4). Зі шляхом — `_select_target_on_path` (ADR-0113 Ф2a).
 
-    ATR-distance filter: targets farther than target_max_atr_distance * ATR from the distance origin are skipped
-    (prevents D1-level PDL on M5 chart). Опора й відлік відстані — `_target_ref`: без шляху — поточна ціна.
+    ATR-distance filter: targets farther than target_max_atr_distance * ATR from current_price are skipped
+    (prevents D1-level PDL on M5 chart).
     """
+    if path is not None:
+        return _select_target_on_path(snapshot, zone, direction, config, current_price, digits, path,
+                                      liquidity_reached or {})
     max_atr_mult = config.get("target_max_atr_distance", 12)
-    scale_atr = path.birth_atr if path is not None else atr  # ATR зони: стабільний для зони на будь-якому TF (D-05)
-    max_dist = max_atr_mult * scale_atr if scale_atr > 0 else 0.0
-    ref, dist_from = _target_ref(path, current_price)
-    # Після входу ціль — лише з ліквідності, що існувала на вході: рівні й свінги, що створив рух після входу
-    # (новий «попередній H1», PDL наступної доби), закривали б сценарій «ціллю» (рецензія Ф2a, D-01)
-    formed_before = path.entered_ms if path is not None and path.entered else None
+    max_dist = max_atr_mult * atr if atr > 0 else 0.0
+    ref = current_price
 
     # Priority 1: Key level
-    inclusive = path is not None
-    target_level = _find_target_key_level(
-        snapshot.levels, direction, ref, max_dist, dist_from, formed_before, inclusive
-    )
+    target_level = _find_target_key_level(snapshot.levels, direction, ref, max_dist)
     if target_level:
         return (
             "{label} {price}".format(
@@ -542,17 +529,14 @@ def _select_target(
     for z in snapshot.zones:
         if z.id == zone.id or z.status == "mitigated":
             continue
-        if formed_before is not None and z.start_ms > formed_before:
-            continue
         z_dir = _zone_direction(z)
         if z_dir != direction and z.context_layer == "institutional":
             center = (z.high + z.low) / 2
             near_edge = z.high if direction == "short" else z.low  # ціль-зона взята з ближнього краю
-            # P2: directional gate — target zone must be ahead of price (зі шляхом — її ближній край, D-14)
-            gate = near_edge if path is not None else center
-            if not _ahead_of(gate, ref, direction, inclusive):
+            # P2: directional gate — target zone must be ahead of price
+            if not _ahead_of(center, ref, direction):
                 continue
-            if max_dist > 0 and abs(center - dist_from) > max_dist:
+            if max_dist > 0 and abs(center - current_price) > max_dist:
                 continue
             return (
                 "HTF {kind} {low}\u2013{high}".format(
@@ -564,9 +548,7 @@ def _select_target(
             )
 
     # Priority 3: Recent swing extreme
-    target_swing = _find_target_swing(
-        snapshot.swings, direction, ref, max_dist, dist_from, formed_before, inclusive
-    )
+    target_swing = _find_target_swing(snapshot.swings, direction, ref, max_dist)
     if target_swing:
         return (
             "Останній {kind} {price}".format(
@@ -575,16 +557,67 @@ def _select_target(
             target_swing.price,
         )
 
-    # Priority 4 (лише зі шляхом, ADR-0113 Ф2a, рішення власника 14.10 «варіант (а)»): за імпульсом немає ні рівня, ні
-    # свінга, ні зони — ціль сам лой/хай руху до входу: ліквідність за ним ще не знята, об'єкт — бари TF зони
-    if path is not None and (max_dist <= 0 or abs(path.pre_entry_extreme - dist_from) <= max_dist):
-        return (
-            "{kind} імпульсу {price}".format(
-                kind="лой" if direction == "short" else "хай", price=_fmt_price(path.pre_entry_extreme, digits)
-            ),
-            path.pre_entry_extreme,
-        )
+    return None
 
+
+def _select_target_on_path(snapshot, zone, direction, config, current_price, digits, path, reached):
+    # type: (SmcSnapshot, SmcZone, str, dict, float, int, ZonePath, dict) -> Optional[Tuple[str, float]]
+    """Ф2a: ціль від входу — найближча НЕЗНЯТА ліквідність попереду і краю входу, і ціни.
+
+    Знята — ціна торгувала строго за рівнем після початку його періоду (`liquidity_reached`, детектор
+    `core.smc.liquidity_sweep`); EQ-кластери вже відсіяв рушій. Після входу — лише рівні/свінги/зони, чий період
+    закінчився до входу, і не зняті ДО входу: дотик після входу — ціль іде, а не причина її відкинути (наступна ціль —
+    уже за ціною). Відстань — від краю входу в ATR зони на барі зламу. Пріоритети як у Ф1 + 4-й — лой/хай імпульсу
+    (варіант (а) власника 14.10), строго попереду краю входу (рецензія E-02).
+    """
+    long = direction == LONG
+    gate = max(path.entry_edge, current_price) if long else min(path.entry_edge, current_price)
+    max_dist = config.get("target_max_atr_distance", 12) * path.birth_atr
+    as_of = path.entered_ms  # None — до входу: «знято» будь-коли
+
+    def _open(key, price, start_ms, end_ms, timed_end=True, trust_engine=False):
+        # type: (str, float, Optional[int], Optional[int], bool, bool) -> bool
+        if not _ahead_of(price, gate, direction) or abs(price - path.entry_edge) > max_dist:
+            return False
+        if as_of is not None and (not timed_end or end_ms is None or end_ms > as_of):
+            return False
+        if trust_engine or start_ms is None:
+            return True
+        first = reached.get(key, (None, None))[0 if long else 1]
+        return first is None or (as_of is not None and first >= as_of)
+
+    target_kinds = _TARGET_KINDS_ABOVE if long else _TARGET_KINDS_BELOW
+    levels = [
+        lv for lv in snapshot.levels
+        if lv.kind in target_kinds and lv.state != LEVEL_STATE_FORMING and _open(
+            "level:" + lv.id, lv.price, lv.time_ms,
+            lv.time_ms + lv.tf_s * 1000 if lv.time_ms is not None else None,
+            timed_end=lv.kind not in _UNTIMED_END_LEVEL_KINDS, trust_engine=lv.kind in _EQ_LEVEL_KINDS,
+        )
+    ]
+    if levels:
+        best = min(levels, key=lambda lv: abs(lv.price - gate))
+        label = _TARGET_LEVEL_LABELS.get(best.kind, best.kind.upper())
+        return "{label} {price}".format(label=label, price=_fmt_price(best.price, digits)), best.price
+    for z in snapshot.zones:
+        if z.id == zone.id or z.status != "active" or z.context_layer != "institutional":
+            continue  # зона-ціль, у яку ціна вже заходила, — не ліквідність, що чекає
+        if _zone_direction(z) == direction:
+            continue
+        near_edge = z.high if not long else z.low
+        if _open("zone:" + z.id, near_edge, None, z.start_ms + z.tf_s * 1000):
+            text = "HTF {kind} {low}\u2013{high}".format(
+                kind=z.kind.split("_")[0].upper(), low=_fmt_price(z.low, digits), high=_fmt_price(z.high, digits))
+            return text, near_edge
+    swing_kinds = {"hh", "hl"} if long else {"ll", "lh"}
+    for sw in reversed(snapshot.swings):
+        if sw.kind in swing_kinds and _open("swing:" + sw.id, sw.price, sw.time_ms, sw.time_ms + sw.tf_s * 1000):
+            return "Останній {kind} {price}".format(kind=sw.kind.upper(), price=_fmt_price(sw.price, digits)), sw.price
+    extreme = path.pre_entry_extreme
+    if _ahead_of(extreme, path.entry_edge, direction) and _ahead_of(extreme, gate, direction) \
+            and abs(extreme - path.entry_edge) <= max_dist:
+        kind = "хай" if long else "лой"
+        return "{kind} імпульсу {price}".format(kind=kind, price=_fmt_price(extreme, digits)), extreme
     return None
 
 
@@ -611,56 +644,43 @@ _TARGET_LEVEL_LABELS = {
 }  # type: Dict[str, str]
 
 
-def _find_target_key_level(
-    levels, direction, current_price=0.0, max_dist=0.0, dist_from=None, formed_before_ms=None, inclusive=False
-):
-    # type: (List[SmcLevel], str, float, float, Optional[float], Optional[int], bool) -> Optional[SmcLevel]
+def _find_target_key_level(levels, direction, current_price=0.0, max_dist=0.0):
+    # type: (List[SmcLevel], str, float, float) -> Optional[SmcLevel]
     """Найближчий ЗАВЕРШЕНИЙ рівень ліквідності попереду ціни в напрямку сценарію (у межах max_dist, якщо задано).
 
     Рівень, що ще формується (H/L поточної сесії, дня, H4/H1 — state forming), — не ціль: поточний діапазон охоплює
     ціну, і на відкритті сесії «ціль» стояла б за копійки від неї (рецензія Ф0, D-01).
     """
     target_kinds = _TARGET_KINDS_BELOW if direction == "short" else _TARGET_KINDS_ABOVE
-    origin = current_price if dist_from is None else dist_from  # відлік відстані (Ф2a — край входу)
     best = None  # type: Optional[SmcLevel]
     for lv in levels:
         if lv.kind not in target_kinds or lv.state == LEVEL_STATE_FORMING:
             continue
-        if formed_before_ms is not None and (lv.time_ms is None or lv.time_ms > formed_before_ms):
+        # P2: directional gate — target must be ahead of price
+        if not _ahead_of(lv.price, current_price, direction):
             continue
-        # P2: directional gate — target must be ahead of price (Ф2a: ahead of the move already made)
-        if not _ahead_of(lv.price, current_price, direction, inclusive):
-            continue
-        if max_dist > 0 and abs(lv.price - origin) > max_dist:
+        if max_dist > 0 and abs(lv.price - current_price) > max_dist:
             continue
         if best is None or abs(lv.price - current_price) < abs(best.price - current_price):
             best = lv
     return best
 
 
-def _ahead_of(price, ref, direction, inclusive=False):
-    # type: (float, float, str, bool) -> bool
-    """Ціна попереду опори в напрямку сценарію. inclusive — і сама опора: зі шляхом (Ф2a) опора — екстремум руху до
-    входу, а лой/хай імпульсу — перша ціль (ліквідність за ним ще не знята); без шляху опора — поточна ціна, строго."""
-    if direction == "short":
-        return price <= ref if inclusive else price < ref
-    return price >= ref if inclusive else price > ref
+def _ahead_of(price, ref, direction):
+    # type: (float, float, str) -> bool
+    """Ціна строго попереду опори в напрямку сценарію (short — нижче, long — вище)."""
+    return price < ref if direction == "short" else price > ref
 
 
-def _find_target_swing(
-    swings, direction, current_price=0.0, max_dist=0.0, dist_from=None, formed_before_ms=None, inclusive=False
-):
-    # type: (List[SmcSwing], str, float, float, Optional[float], Optional[int], bool) -> Optional[SmcSwing]
+def _find_target_swing(swings, direction, current_price=0.0, max_dist=0.0):
+    # type: (List[SmcSwing], str, float, float) -> Optional[SmcSwing]
     target_kinds = {"ll", "lh"} if direction == "short" else {"hh", "hl"}
-    origin = current_price if dist_from is None else dist_from
     for sw in reversed(swings):
-        if formed_before_ms is not None and sw.time_ms > formed_before_ms:
-            continue
         if sw.kind in target_kinds:
             # P2: directional gate — target must be ahead of price
-            if not _ahead_of(sw.price, current_price, direction, inclusive):
+            if not _ahead_of(sw.price, current_price, direction):
                 continue
-            if max_dist > 0 and abs(sw.price - origin) > max_dist:
+            if max_dist > 0 and abs(sw.price - current_price) > max_dist:
                 continue
             return sw
     return None
@@ -793,8 +813,10 @@ def _zone_kind_label(zone):
     return "FVG"
 
 
-def _build_next_area(snapshot, zone_grades, digits=_DEFAULT_PRICE_DIGITS, current_price=0.0, exclude_ids=frozenset()):
-    # type: (SmcSnapshot, Dict[str, dict], int, float, frozenset) -> str
+def _build_next_area(
+    snapshot, zone_grades, digits=_DEFAULT_PRICE_DIGITS, current_price=0.0, exclude_ids=frozenset(), stops=None
+):
+    # type: (SmcSnapshot, Dict[str, dict], int, float, frozenset, Optional[Dict[str, Optional[float]]]) -> str
     """Найближча зона уваги: оцінені — першими (score↓), далі ближчі до ціни.
 
     ADR-0113 Ф0 (K3, K4): без mitigated, без перебитих ціною, без premium/discount (розмітка діапазону, не POI);
@@ -805,7 +827,7 @@ def _build_next_area(snapshot, zone_grades, digits=_DEFAULT_PRICE_DIGITS, curren
     for z in snapshot.zones:
         if z.status == "mitigated" or z.kind in _RANGE_ZONE_KINDS or z.id in exclude_ids:
             continue
-        if current_price > 0 and _is_invalidated(z, current_price):
+        if current_price > 0 and _is_invalidated(z, current_price, (stops or {}).get(z.id)):
             continue
         gi = zone_grades.get(z.id)
         graded = 0 if gi else 1
@@ -846,6 +868,7 @@ def synthesize_narrative(
     range_exhaustion=None,  # type: Optional[object]
     price_digits=None,  # type: Optional[int]
     zone_paths=None,  # type: Optional[Dict[str, ZonePath]]
+    liquidity_reached=None,  # type: Optional[Dict[str, Tuple[Optional[int], Optional[int]]]]
 ):
     # type: (...) -> NarrativeBlock
     """Synthesize narrative for display (ADR-0033, ADR-0035, ADR-0053).
@@ -858,6 +881,8 @@ def synthesize_narrative(
     price_digits: знаків після коми для цін символу (config price_display.digits_by_symbol, ADR-0113 Ф0);
         None — 2 знаки і warning price_digits_missing.
     zone_paths: zone_id → ZonePath (шлях ціни від бару зламу зони, ADR-0113 Ф2a); None — без шляху (поведінка Ф1).
+    liquidity_reached: «level:/swing:<id>» → момент першого виходу ціни за рівень зверху/знизу від початку його періоду
+        (core.smc.liquidity_sweep) — ціль зі шляхом лише з незнятої ліквідності; без шляху не читається.
     """
     try:
         return _synthesize_impl(
@@ -873,6 +898,7 @@ def synthesize_narrative(
             range_exhaustion,
             price_digits,
             zone_paths,
+            liquidity_reached,
         )
     except Exception:
         sym = getattr(snapshot, "symbol", "?")
@@ -894,8 +920,9 @@ def _synthesize_impl(
     range_exhaustion=None,
     price_digits=None,
     zone_paths=None,
+    liquidity_reached=None,
 ):
-    # type: (SmcSnapshot, Dict[str, str], Dict[str, dict], Dict[str, dict], int, float, float, dict, Optional[Tuple[str, bool]], Optional[object], Optional[int], Optional[Dict[str, ZonePath]]) -> NarrativeBlock
+    # type: (SmcSnapshot, Dict[str, str], Dict[str, dict], Dict[str, dict], int, float, float, dict, Optional[Tuple[str, bool]], Optional[object], Optional[int], Optional[Dict[str, ZonePath]], Optional[dict]) -> NarrativeBlock
     warnings = []  # type: List[str]
     if price_digits is None:
         digits = _DEFAULT_PRICE_DIGITS
@@ -922,7 +949,7 @@ def _synthesize_impl(
         config=config,
     )
 
-    # Step 2b: Invalidation check (SC-7); Ф2a — сценарій, що відпрацював після входу (стоп / ціль), не повертається
+    # Step 2b: Invalidation check (SC-7); Ф2a — сценарій, закритий стопом після входу, не повертається
     paths = zone_paths or {}
     stop_buffer_atr = float(config.get("zone_path", {}).get("stop_buffer_atr", 0.0))
     stops = {}  # type: Dict[str, Optional[float]]
@@ -932,16 +959,19 @@ def _synthesize_impl(
         path = paths.get(z.id)
         # Стоп — лише зі шляхом і від ATR зони на барі зламу (D-05); без шляху — край зони, як у Ф1
         stops[z.id] = _zone_stop_price(z, path.birth_atr, stop_buffer_atr) if path is not None else None
+        if zone_paths is not None and path is None and z.origin_event_ms is not None:
+            # Зона з якорем народження, але без шляху — бар зламу поза вікном барів рушія: стан невідомий, і без
+            # нього вона поводилась би як у Ф1 — «воскресала» б після стопу (рецензія Ф2a, E-11)
+            warnings.append("scenario_path_unknown")
+            closed[z.id] = "scenario_path_unknown"
+            continue
         if _is_invalidated(z, current_price, stops[z.id]):
             warnings.append("scenario_invalidated")
             continue
-        if path is not None:
-            target = _select_target(snapshot, z, _zone_direction(z), config, current_price, atr, digits, path)
-            reason = _path_closed_reason(path, target[1] if target is not None else None, stops[z.id])
-            if reason is not None:
-                warnings.append(reason)
-                closed[z.id] = reason
-                continue
+        if _path_stopped(path, stops[z.id]):
+            warnings.append("scenario_stopped")
+            closed[z.id] = "scenario_stopped"
+            continue
         valid.append(z)
 
     primary_zone = valid[0] if valid else None
@@ -1018,16 +1048,21 @@ def _synthesize_impl(
         )
 
     # Step 4: Headline — all mode / session / trigger state is now known
-    if mode == "trade" and direction and primary_trigger:
+    primary_path = paths.get(primary_zone.id) if primary_zone else None
+    confirmed_after_entry = (
+        primary_trigger == "triggered" and primary_zone is not None and _confirmed_after_entry(
+            snapshot, primary_zone, viewer_tf_s, config, _confirm_not_before_ms(primary_path, primary_zone))
+    )
+    if mode == "trade" and direction and confirmed_after_entry and (sub_mode, direction) in _CONFIRMED_AFTER_ENTRY_HEADLINES:
+        headline = _CONFIRMED_AFTER_ENTRY_HEADLINES[(sub_mode, direction)]
+    elif mode == "trade" and direction and primary_trigger:
         headline = _TRADE_HEADLINES.get(
             (mode, sub_mode, direction, primary_trigger),
             _WAIT_HEADLINES.get(sub_mode, _WAIT_HEADLINES[""]),
         )
     elif sub_mode == "" and primary_zone is not None:
         headline = _HTF_PENDING_HEADLINE
-    elif sub_mode == "" and not valid and closed:
-        headline = _SCENARIO_CLOSED_HEADLINES[next(iter(closed.values()))]
-    elif sub_mode == "" and candidates and not valid:
+    elif sub_mode == "" and any(z.id not in closed for z in candidates) and not valid:
         headline = _ZONE_BROKEN_HEADLINE
     elif sub_mode == "" and any(
         z.status != "mitigated" and z.kind not in _RANGE_ZONE_KINDS for z in snapshot.zones
@@ -1046,7 +1081,7 @@ def _synthesize_impl(
             d = _zone_direction(z)
             gi = zone_grades.get(z.id, {})
             path = paths.get(z.id)
-            tgt = _find_target(snapshot, z, d, config, current_price, atr, digits, path)
+            tgt = _find_target(snapshot, z, d, config, current_price, atr, digits, path, liquidity_reached)
             if tgt is None:
                 warnings.append("no_target_found")
             scenarios.append(
@@ -1084,7 +1119,7 @@ def _synthesize_impl(
     market_phase = _detect_market_phase(snapshot.swings, config)
 
     # Next area
-    next_area = _build_next_area(snapshot, zone_grades, digits, current_price, frozenset(closed))
+    next_area = _build_next_area(snapshot, zone_grades, digits, current_price, frozenset(closed), stops)
 
     # ADR-0053: range exhaustion phrase (silent for early/mid/None)
     range_exhaustion_summary = _build_range_exhaustion_summary(range_exhaustion)

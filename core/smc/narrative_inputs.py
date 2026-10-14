@@ -31,6 +31,8 @@ class NarrativeInputs:
     range_exhaustion: Optional[Any] = None  # стан ADR-0053 — лише коли smc.range_exhaustion.enabled
     price_digits: Optional[int] = None
     zone_paths: Optional[Dict[str, ZonePath]] = None  # Ф2a: шлях ціни від бару зламу зони; None — поведінка Ф1
+    # Ф2a: «level:/swing:<id>» → (перший вихід ціни вгору, вниз) від початку періоду (core.smc.liquidity_sweep)
+    liquidity_reached: Optional[Dict[str, Tuple[Optional[int], Optional[int]]]] = None
 
     def as_kwargs(self) -> Dict[str, Any]:
         return {field.name: getattr(self, field.name) for field in dataclasses.fields(self)}
@@ -63,4 +65,8 @@ class NarrativeInputs:
         zone_paths = data.get("zone_paths")
         if zone_paths is not None:
             zone_paths = {zone_id: ZonePath(**path) for zone_id, path in zone_paths.items()}
-        return cls(**{**data, "snapshot": snapshot, "session_info": session_info, "zone_paths": zone_paths})
+        reached = data.get("liquidity_reached")
+        if reached is not None:
+            reached = {key: tuple(value) for key, value in reached.items()}
+        return cls(**{**data, "snapshot": snapshot, "session_info": session_info, "zone_paths": zone_paths,
+                      "liquidity_reached": reached})

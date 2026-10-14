@@ -5,7 +5,8 @@
 народження зони цього не розрізняв: рівень, що утворився вже на відкаті й ціною не брався, вважався знятим (стара зона
 XAG H1 25.05: ціль «хай імпульсу 89.243» замість незнятого «хай попер. H4 78.676»).
 
-Відповідь — момент першого дотику, а не «так/ні»: «знято до входу» і «знято зараз» — різні питання (після входу дотик
+Знято — ціна торгувала СТРОГО за рівнем: дотик рівно в рівень (рівні лої, власні дотики EQ-кластера) ліквідність за
+ним не бере. Відповідь — момент першого виходу за рівень, а не «так/ні»: «знято до входу» і «знято зараз» — різні питання (після входу дотик
 цілі — це ціль узята, а не причина її відкинути). Ряд барів рушія → розріджені таблиці max high / min low, перший
 дотик — бінарний пошук: O(n log n) побудова, O(log² n) запит. Кілька рядів — дрібний для свіжого, старші — для давнього
 (береться найдрібніший, що покриває момент). S0: pure, без I/O.
@@ -17,7 +18,7 @@ from typing import List, Optional, Sequence, Tuple
 
 from core.model.bars import CandleBar
 
-FirstReached = Tuple[Optional[int], Optional[int]]  # (open бару першого high ≥ ціни, open бару першого low ≤ ціни)
+FirstReached = Tuple[Optional[int], Optional[int]]  # (open бару першого high > ціни, open бару першого low < ціни)
 
 
 class TouchIndex:
@@ -57,8 +58,8 @@ class TouchIndex:
         return self._opens[lo]
 
     def first_reached(self, moment_ms: int, price: float) -> FirstReached:
-        above = self._first(moment_ms, lambda lo, hi: self._range(self._max, lo, hi, max) >= price)
-        below = self._first(moment_ms, lambda lo, hi: self._range(self._min, lo, hi, min) <= price)
+        above = self._first(moment_ms, lambda lo, hi: self._range(self._max, lo, hi, max) > price)
+        below = self._first(moment_ms, lambda lo, hi: self._range(self._min, lo, hi, min) < price)
         return above, below
 
 
