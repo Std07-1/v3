@@ -55,6 +55,7 @@
   import type { LevelGroup } from "../types";
   import { hintsOn } from "../stores/uiHints";
   import { TouchDrawCursor } from "../chart/drawings/touchDrawCursor";
+  import { guardFigureTouches } from "../chart/drawings/figureTouchGuard";
 
   interface Props {
     currentFrame?: RenderFrame | null;
@@ -191,6 +192,7 @@
   let ctxMenu: DrawingContextRequest | null = $state(null);
   let interactionCleanup: (() => void) | null = null;
   let longPressLockCleanup: (() => void) | null = null;
+  let figureTouchCleanup: (() => void) | null = null;
 
   let ro: ResizeObserver | null = null;
 
@@ -444,6 +446,8 @@
         if (!pinned) crosshairData = null;
       },
     );
+    // ADR-0112 D8: палець тягне фігуру — його дотики не до замка перехрестя і LWC (контейнер — предок обох)
+    figureTouchCleanup = guardFigureTouches(wrapperRef, () => drawingsRenderer?.ownsTouch() ?? false);
 
     ro = new ResizeObserver(() => {
       const r = wrapperRef.getBoundingClientRect();
@@ -881,6 +885,8 @@
     interactionCleanup = null;
     longPressLockCleanup?.();
     longPressLockCleanup = null;
+    figureTouchCleanup?.();
+    figureTouchCleanup = null;
     ro?.disconnect();
     ro = null;
     overlayRenderer?.destroy();

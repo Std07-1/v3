@@ -24,14 +24,30 @@ export interface DragOrigin {
   readonly startX: number;
   readonly startY: number;
   readonly startObj: Drawing;
+  /** Ручка мінус палець у момент захоплення (лише дотик, grabOffsetFor); нема — ручка рівно під вказівником. */
+  readonly grabOffset?: { readonly x: number; readonly y: number };
+}
+
+/** Відстань від пальця до ручки, коли її взяли (ADR-0112 D8): дотик тягне ручку, зберігаючи цю відстань, — палець
+ *  закриває точку, а стрибок ручки під палець (до 20 px допуску) читався як «перескакує». Миша й перо — рівно під
+ *  вказівником, як було (курсор — інструмент точності): undefined. */
+export function grabOffsetFor(
+  pointerType: string,
+  handle: { readonly x: number | null; readonly y: number | null },
+  x: number,
+  y: number,
+): { x: number; y: number } | undefined {
+  if (pointerType !== 'touch' || handle.x === null || handle.y === null) return undefined;
+  return { x: handle.x - x, y: handle.y - y };
 }
 
 export type DragStep =
   | { readonly kind: 'moved'; readonly next: Drawing }
   | { readonly kind: 'skip'; readonly warnKey: string; readonly detail: string };
 
-/** Ручка: ціна — під курсором (з магнітом), час — бар під курсором; поки курсор у тому самому барі, що на початку,
- *  час якоря не чіпаємо (якір з іншого TF — M15 13:45 на H1 — не стає на бар цього TF, рецензія 12.10). */
+/** Ручка: ціна — під вказівником (з магнітом), час — бар під вказівником; поки він у тому самому барі, що на
+ *  початку, час якоря не чіпаємо (якір з іншого TF — M15 13:45 на H1 — не стає на бар цього TF, рецензія 12.10).
+ *  Дотик — зі зсувом захоплення (origin.grabOffset). */
 export function dragHandle(
   current: Drawing,
   origin: DragOrigin,
@@ -40,14 +56,18 @@ export function dragHandle(
   y: number,
   space: DragSpace,
 ): DragStep {
-  const sameBar = space.logicalAt(x) === space.logicalAt(origin.startX);
-  const t_ms = sameBar ? origin.startObj.points[handleIdx].t_ms : space.fromX(x);
-  const rawPrice = space.fromY(y);
+  const offX = origin.grabOffset?.x ?? 0;
+  const offY = origin.grabOffset?.y ?? 0;
+  const hx = x + offX;
+  const hy = y + offY;
+  const sameBar = space.logicalAt(hx) === space.logicalAt(origin.startX + offX);
+  const t_ms = sameBar ? origin.startObj.points[handleIdx].t_ms : space.fromX(hx);
+  const rawPrice = space.fromY(hy);
   if (t_ms === null || rawPrice === null) {
-    return { kind: 'skip', warnKey: 'drag_handle_null', detail: `drag handle: cannot map x=${x},y=${y}` };
+    return { kind: 'skip', warnKey: 'drag_handle_null', detail: `drag handle: cannot map x=${hx},y=${hy}` };
   }
   const next = cloneDrawing(current);
-  next.points[handleIdx] = { t_ms, price: space.snapPrice(x, y, rawPrice) };
+  next.points[handleIdx] = { t_ms, price: space.snapPrice(hx, hy, rawPrice) };
   return { kind: 'moved', next };
 }
 

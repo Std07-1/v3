@@ -10,13 +10,13 @@ import { timeToFractionalIndex, fractionalIndexToTime, medianStep, fractionalLog
 import {
   HIT_TOLERANCE_PX,
   HANDLE_RADIUS_PX,
-  distToPoint,
   dragStarted,
 } from '../interaction/geometry';
 import { getToolModule } from './tools';
 import { isCorruptBackupKey, loadDrawings, saveDrawings } from './drawingsStorage';
 import { cloneDrawing, completeDraft, firstClick, newDraft, previewsOnHover, tipIndex } from './drawingDraft';
-import { dragBody, dragHandle, type DragSpace } from './drawingDrag';
+import { dragBody, dragHandle, grabOffsetFor, type DragSpace } from './drawingDrag';
+import { hitTestDrawings, type DrawingHit } from './drawingHitTest';
 import { copyCanvas } from '../../lib/chartSnapshot';
 import type { RenderContext, ToolModule } from './tools';
 
@@ -42,8 +42,6 @@ function parsePxToken(s: CSSStyleDeclaration, name: string, fallback: number): n
 
 type ScreenAabb = { minX: number; minY: number; maxX: number; maxY: number };
 
-type HitState = { id: string; handleIdx: number | null };
-
 // ADR-0080 (surface-2): частковий meta-патч для preview/commit (колір/товщина/стиль).
 type DrawingMetaPatch = Partial<NonNullable<Drawing['meta']>>;
 
@@ -51,12 +49,6 @@ type SnapConfig = {
   enabled: boolean;
   mode: 'ohlc' | 'hl' | 'close';
 };
-
-// Концепт «делікатний об'єкт»: наведення проявляє редагування + видалення на
-// самому об'єкті. × прив'язане до ЦЕНТРУ лінії; радіус = клікабельна+реакційна зона.
-// Радіуси трохи більші за візуал → реагує ~1мм РАНІШЕ (не «майже поклав курсор»).
-const DELETE_BTN_RADIUS_PX = 13;
-const HANDLE_REACT_MARGIN_PX = 4;
 
 // Приціл на кінцях: тонкий crosshair з ВІДКРИТИМ центром (видно точку на свічці),
 // напівпрозорий, з темним halo для читабельності на світлих свічках. Hotspot = центр.
@@ -96,7 +88,7 @@ export class DrawingsRenderer {
 
   // v3 selection state
   private selectedId: string | null = null;
-  private hovered: HitState | null = null;
+  private hovered: DrawingHit | null = null;
 
   // hover-афорданс: делікатне × по центру активної фігури (позиція + id для hit-test)
   private deleteBtn: { id: string; x: number; y: number } | null = null;
@@ -116,6 +108,7 @@ export class DrawingsRenderer {
       startObj: Drawing; // snapshot для UPDATE/undo
       pointerType: string; // поріг початку перетягування залежить від вказівника (geometry.dragStarted)
       started: boolean; // поріг перейдено — до того це клік (вибір), фігура не змінюється
+      grabOffset?: { x: number; y: number }; // дотик: ручка мінус палець при захопленні (ADR-0112 D8)
     } = null;
 
   // hit-test/cache
@@ -563,9 +556,9 @@ export class DrawingsRenderer {
     // 120px covers normal hover-near-candle distances (debug: 6–104px) while
     // rejecting far mismatches (200–400px = cursor below candles snapping to top).
     // Old radius was 30px (too tight); "always snap" = no threshold (too loose).
-    // Курсор пальцем (ADR-0112 D7) — «слабкий» магніт: кільце прилипає лише поруч із рівнем, тож прилипання щось
-    // означає («ти на хаї») і його можна відчути вібрацією; 120 px тримали б кільце на рівнях майже завжди.
-    const SNAP_RADIUS_PX = this.touchCursorMode ? 16 : 120;
+    // Палець (курсор ADR-0112 D7 і ручка D8) — «слабкий» магніт: прилипає лише поруч із рівнем, тож прилипання щось
+    // означає («ти на хаї»); 120 px тримали б точку на рівнях майже завжди, а ручка стрибала б під пальцем на ~100 px.
+    const SNAP_RADIUS_PX = this.touchCursorMode || this.dragState?.pointerType === 'touch' ? 16 : 120;
     if (bestDist > SNAP_RADIUS_PX) {
       this.lastSnap = null;
       return rawPrice;
@@ -703,86 +696,21 @@ export class DrawingsRenderer {
     this.scheduleRender();
   }
 
-  // ---- v3 hit-testing ----
-  private performHitTest(cursorX: number, cursorY: number): HitState | null {
-    // 0) delete-× keep-alive: над кнопкою × рахуємо як hit тіла активної фігури,
-    //    щоб афорданси не зникали, поки курсор тягнеться до × (× стоїть НАД лінією).
-    if (this.deleteBtn && distToPoint(cursorX, cursorY, this.deleteBtn.x, this.deleteBtn.y) <= DELETE_BTN_RADIUS_PX) {
-      return { id: this.deleteBtn.id, handleIdx: null };
-    }
-    // 0b) audit v2 (confirmed): для interiorIsBody-фігур (rect) курсор УСЕРЕДИНІ
-    //     AABB = hit тіла — інтер'єр rect не є hit (лише грань), тож дорогою від
-    //     грані до центрального × той зникав і був недосяжний hover-ом. Бонус:
-    //     тіло rect тягнеться зсередини (як у TV). Для ray/trend/hline НЕ діє
-    //     (їх AABB ≠ фігура).
-    if (this.deleteBtn) {
-      const target = this.drawings.find((q) => q.id === this.deleteBtn!.id);
-      if (target && getToolModule(target.type)?.interiorIsBody) {
-        const aabb = this.aabbById.get(this.deleteBtn.id);
-        if (
-          aabb &&
-          cursorX >= aabb.minX && cursorX <= aabb.maxX &&
-          cursorY >= aabb.minY && cursorY <= aabb.maxY
-        ) {
-          return { id: this.deleteBtn.id, handleIdx: null };
-        }
-      }
-    }
-
-    // 1) handles активної фігури (під курсором АБО вибраної) — хапати кінці
-    const activeId = this.hovered?.id ?? this.selectedId;
-    if (activeId) {
-      const d = this.drawings.find((x) => x.id === activeId);
-      if (d) {
-        for (let j = 0; j < d.points.length; j++) {
-          const hx = this.toX(d.points[j].t_ms);
-          const hy = this.toY(d.points[j].price);
-          if (hx === null || hy === null) continue;
-
-          if (distToPoint(cursorX, cursorY, hx, hy) <= this.hitTolerancePx + HANDLE_REACT_MARGIN_PX) {
-            return { id: d.id, handleIdx: j };
-          }
-        }
-      }
-    }
-
-    // 2) body scan (z-index: останній зверху)
-    const tol = this.hitTolerancePx;
-    let best: HitState | null = null;
-    let minDist = tol;
-
-    for (let i = this.drawings.length - 1; i >= 0; i--) {
-      const d = this.drawings[i];
-
-      // AABB reject
-      const aabb = this.aabbById.get(d.id);
-      if (aabb) {
-        if (
-          cursorX < aabb.minX - tol ||
-          cursorX > aabb.maxX + tol ||
-          cursorY < aabb.minY - tol ||
-          cursorY > aabb.maxY + tol
-        ) {
-          continue;
-        }
-      }
-
-      // ADR-0074 T1: delegate hit-test до TOOL_REGISTRY. Tool-specific
-      // geometry math живе у tools/*Tool.ts модулях. this.toX/this.toY —
-      // arrow class fields, auto-binded → safe передавати як ref без wrap.
-      const tool = getToolModule(d.type);
-      if (!tool) continue;
-      const result = tool.hitTest(d, cursorX, cursorY, tol, this.toX, this.toY);
-      if (!result.hit) continue;
-
-      if (result.distance <= minDist) {
-        minDist = result.distance;
-        best = { id: d.id, handleIdx: null };
-        if (result.distance === 0) break;
-      }
-    }
-
-    return best;
+  // ---- hit-testing (пріоритети — drawingHitTest.ts, ADR-0112 D8) ----
+  private performHitTest(cursorX: number, cursorY: number): DrawingHit | null {
+    return hitTestDrawings(
+      {
+        drawings: this.drawings,
+        activeId: this.hovered?.id ?? this.selectedId,
+        deleteBtn: this.deleteBtn,
+        aabbById: this.aabbById,
+        tolerancePx: this.hitTolerancePx,
+        toX: this.toX,
+        toY: this.toY,
+      },
+      cursorX,
+      cursorY,
+    );
   }
 
   // ---- interactions (capture on container) ----
@@ -857,11 +785,13 @@ export class DrawingsRenderer {
         return;
       }
 
-      // Delete × (hover-афорданс по центру) — пріоритет над вибором/drag.
-      if (this.deleteBtn && distToPoint(x, y, this.deleteBtn.x, this.deleteBtn.y) <= DELETE_BTN_RADIUS_PX) {
+      const hit = this.performHitTest(x, y);
+
+      // × (hover-афорданс по центру, ADR-0079) — коли вказівник ближче до нього, ніж до ручки (ADR-0112 D8).
+      if (hit?.onDelete) {
         e.preventDefault();
         e.stopPropagation();
-        const target = this.drawings.find((q) => q.id === this.deleteBtn!.id);
+        const target = this.drawings.find((q) => q.id === hit.id);
         if (target) this.commandStack.push({ type: 'DELETE', drawing: cloneDrawing(target) });
         this.deleteBtn = null;
         this.selectedId = null;
@@ -872,8 +802,6 @@ export class DrawingsRenderer {
       }
 
       // Selection/Drag: тільки якщо реально hit
-      const hit = this.performHitTest(x, y);
-
       if (!hit) {
         // Клік в пустоту: зняти selection, але НЕ ламати LWC
         if (this.selectedId !== null) {
@@ -896,6 +824,7 @@ export class DrawingsRenderer {
 
       const d = this.drawings.find((q) => q.id === hit.id);
       if (!d) return;
+      const anchor = hit.handleIdx === null ? undefined : d.points[hit.handleIdx];
 
       this.interactionEl.setPointerCapture(e.pointerId);
       this.dragState = {
@@ -907,6 +836,7 @@ export class DrawingsRenderer {
         startObj: cloneDrawing(d),
         pointerType: e.pointerType,
         started: false,
+        grabOffset: anchor ? grabOffsetFor(e.pointerType, { x: this.toX(anchor.t_ms), y: this.toY(anchor.price) }, x, y) : undefined,
       };
     };
 
@@ -1219,12 +1149,10 @@ export class DrawingsRenderer {
       return;
     }
     if (this.hovered) {
-      const overX = !!this.deleteBtn && !!this.lastCursor &&
-        distToPoint(this.lastCursor.x, this.lastCursor.y, this.deleteBtn.x, this.deleteBtn.y) <= DELETE_BTN_RADIUS_PX;
       if (this.hovered.handleIdx !== null) {
         // кінець → приціл (open-center reticle): бачиш точку на свічці, не затуляє
         this.interactionEl.style.cursor = CURSOR_RETICLE;
-      } else if (overX) {
+      } else if (this.hovered.onDelete) {
         // × → звичайний курсор (не рука) — тонка стрілка не ховає червоний ×
         this.interactionEl.style.cursor = 'default';
       } else {
@@ -1251,7 +1179,7 @@ export class DrawingsRenderer {
     cssW: number;
     cssH: number;
     dpr: number;
-    hovered: HitState | null;
+    hovered: DrawingHit | null;
     selectedId: string | null;
     draft: Drawing | null;
     lastSnap: { x: number; y: number } | null;
@@ -1297,6 +1225,11 @@ export class DrawingsRenderer {
   }
 
   /** Чи є що скасувати і чи виділено фігуру — для кнопок телефона (ADR-0112 D2). */
+  /** Палець тягне фігуру (ADR-0112 D8): дотики цього жесту не йдуть до замка перехрестя і LWC (figureTouchGuard). */
+  ownsTouch(): boolean {
+    return this.dragState?.pointerType === 'touch';
+  }
+
   editState(): { canUndo: boolean; hasSelection: boolean } {
     return { canUndo: this.commandStack.canUndo(), hasSelection: this.selectedId !== null };
   }
@@ -1418,8 +1351,8 @@ export class DrawingsRenderer {
             }
           }
           if (cx !== null && cy !== null) {
-            const overX = !!this.lastCursor && distToPoint(this.lastCursor.x, this.lastCursor.y, cx, cy) <= DELETE_BTN_RADIUS_PX;
-            this.renderDeleteButton(cx, cy, overX);
+            // Червоне — лише коли клік справді видалить (ручка поруч бере гору, drawingHitTest)
+            this.renderDeleteButton(cx, cy, this.hovered?.id === d.id && this.hovered.onDelete);
             this.deleteBtn = { id: d.id, x: cx, y: cy };
           }
         }

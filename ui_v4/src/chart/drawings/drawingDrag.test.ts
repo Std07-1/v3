@@ -1,6 +1,6 @@
 // src/chart/drawings/drawingDrag.test.ts — перетягування ручки й тіла (винесено з DrawingsRenderer, 13.10).
 import { describe, expect, it } from 'vitest';
-import { dragBody, dragHandle, type DragSpace } from './drawingDrag';
+import { dragBody, dragHandle, grabOffsetFor, type DragSpace } from './drawingDrag';
 import type { Drawing } from '../../types';
 
 const H1 = 3_600_000;
@@ -48,6 +48,33 @@ describe('dragHandle', () => {
       warnKey: 'drag_handle_null',
       detail: 'drag handle: cannot map x=107,y=840',
     });
+  });
+});
+
+describe('ручка пальцем — зі зсувом захоплення (ADR-0112 D8, 14.10)', () => {
+  it('grabOffsetFor: дотик — ручка мінус палець; миша, перо чи ручка поза видом — без зсуву', () => {
+    expect(grabOffsetFor('touch', { x: 102.5, y: 850 }, 114.5, 846)).toEqual({ x: -12, y: 4 });
+    expect(grabOffsetFor('mouse', { x: 102.5, y: 850 }, 114.5, 846)).toBeUndefined();
+    expect(grabOffsetFor('pen', { x: 102.5, y: 850 }, 114.5, 846)).toBeUndefined();
+    expect(grabOffsetFor('touch', { x: null, y: 850 }, 114.5, 846)).toBeUndefined();
+  });
+
+  it('палець узяв ручку на 12 px вище — ручка не стрибає під палець, а йде з тим самим зсувом', () => {
+    // Якір P1 — x 102.5, y 850 (ціна 4150). Палець — на 12 px вище (y 838), далі на 3 px вниз.
+    const grab = { startX: 102.5, startY: 838, startObj: TREND, grabOffset: { x: 0, y: 12 } };
+    const step = dragHandle(TREND, grab, 0, 102.5, 841, space());
+    expect(step.kind === 'moved' && step.next.points[0]).toEqual({ t_ms: 10.25 * H1, price: 4147 });
+    // Без зсуву той самий рух ставив якір під палець: +9 за ціною замість −3 (стрибок)
+    const jump = dragHandle(TREND, origin(102.5, 838), 0, 102.5, 841, space());
+    expect(jump.kind === 'moved' && jump.next.points[0]).toEqual({ t_ms: 10.25 * H1, price: 4159 });
+  });
+
+  it('палець пройшов два бари — ручка теж, магніт бере точку ручки, не пальця', () => {
+    const grab = { startX: 114.5, startY: 850, startObj: TREND, grabOffset: { x: -12, y: 6 } };
+    const seen: number[][] = [];
+    const step = dragHandle(TREND, grab, 0, 134.5, 850, space({ snapPrice: (x, y, raw) => (seen.push([x, y]), raw) }));
+    expect(step.kind === 'moved' && step.next.points[0]).toEqual({ t_ms: 12.25 * H1, price: 4144 });
+    expect(seen).toEqual([[122.5, 856]]);
   });
 });
 
