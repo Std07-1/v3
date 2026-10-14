@@ -76,10 +76,12 @@ def row_to_bar(row: Row, symbol: str, tf_s: int) -> CandleBar:
 
 
 def replay_narrative(cfg: Dict[str, Any], rows_by_tf: Dict[int, List[Row]], symbol: str, viewer_tfs: Sequence[int],
-                     step_tf_s: int, start_ms: int, end_ms: int) -> Iterable[Row]:
+                     step_tf_s: int, start_ms: int, end_ms: int, with_inputs: bool = False) -> Iterable[Row]:
     """Рядки розбору для кожного TF глядача на кожному закритті бару кроку в (start_ms, end_ms].
 
     rows_by_tf — відсортовані рядки диска без дублів (load_rows); рядки кроку мають бути серед них.
+    with_inputs — додати в рядок повний вхід розбору (NarrativeInputs.to_dict) для golden-випадків; на закритому
+    ринку входу немає (None).
     """
     replay_cfg = replay_config(cfg, symbol)
     engine = SmcEngine(SmcConfig.from_dict(replay_cfg.get("smc", {})))
@@ -107,9 +109,13 @@ def replay_narrative(cfg: Dict[str, Any], rows_by_tf: Dict[int, List[Row]], symb
             block = runner.get_narrative(symbol, viewer_tf_s, price, 0.0, now_ms=close_ms)
             if block is None:
                 continue
-            yield {"t": close_ms, "symbol": symbol, "tf_s": viewer_tf_s, "price": price,
-                   "atr": runner.get_measured_atr(symbol, engine.display_base_tf(viewer_tf_s)),
-                   "narrative": block.to_wire()}
+            line = {"t": close_ms, "symbol": symbol, "tf_s": viewer_tf_s, "price": price,
+                    "atr": runner.get_measured_atr(symbol, engine.display_base_tf(viewer_tf_s)),
+                    "narrative": block.to_wire()}
+            if with_inputs:
+                inputs = runner.get_narrative_inputs(symbol, viewer_tf_s, price, 0.0, now_ms=close_ms)
+                line["inputs"] = inputs.to_dict() if inputs is not None else None
+            yield line
 
 
 def load_rows(disk: DiskLayer, cfg: Dict[str, Any], symbol: str, step_tf_s: int, start_ms: int,
@@ -129,6 +135,12 @@ def load_rows(disk: DiskLayer, cfg: Dict[str, Any], symbol: str, step_tf_s: int,
     return rows_by_tf
 
 
+def configure_replay_logging() -> None:
+    """WARNING і вище; SMC_SLOW — бюджет живого бару (10 мс), не деградація прогону, а помилки рушія (ERROR) видно."""
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    logging.getLogger("core.smc.engine").setLevel(logging.ERROR)
+
+
 def _day_ms(day: str) -> int:
     return int(dt.datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=dt.timezone.utc).timestamp() * 1000)
 
@@ -144,9 +156,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--config", default=None)
     parser.add_argument("--data-root", default=None, help="за замовчуванням — data_root з config")
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
-    # SMC_SLOW — бюджет живого бару (10 мс), не деградація прогону; помилки рушія (ERROR) лишаються видимими
-    logging.getLogger("core.smc.engine").setLevel(logging.ERROR)
+    configure_replay_logging()
     cfg = load_system_config(resolve_config_path(args.config))
     viewer_tfs = [TF_BY_NAME[name.strip().upper()] for name in args.tfs.split(",") if name.strip()]
     step_tf_s = TF_BY_NAME[args.step.strip().upper()]
