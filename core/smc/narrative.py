@@ -575,6 +575,16 @@ def _select_target(
             target_swing.price,
         )
 
+    # Priority 4 (лише зі шляхом, ADR-0113 Ф2a, рішення власника 14.10 «варіант (а)»): за імпульсом немає ні рівня, ні
+    # свінга, ні зони — ціль сам лой/хай руху до входу: ліквідність за ним ще не знята, об'єкт — бари TF зони
+    if path is not None and (max_dist <= 0 or abs(path.pre_entry_extreme - dist_from) <= max_dist):
+        return (
+            "{kind} імпульсу {price}".format(
+                kind="лой" if direction == "short" else "хай", price=_fmt_price(path.pre_entry_extreme, digits)
+            ),
+            path.pre_entry_extreme,
+        )
+
     return None
 
 

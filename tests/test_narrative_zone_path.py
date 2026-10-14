@@ -132,3 +132,14 @@ def test_impulse_extreme_itself_is_the_first_target():
     block = _narrate(5150.0, [swept, at_extreme], path=_path(pre_extreme=5120.0), config=_config())
 
     assert block.scenarios[0].target_desc == "лой Азії 5120.00"
+
+
+def test_impulse_extreme_is_the_target_when_no_liquidity_object_beyond_it():
+    """Варіант (а) власника 14.10: за лоєм імпульсу немає рівня/свінга/зони — ціль сам лой імпульсу."""
+    alone = _narrate(5150.0, [], path=_path(pre_extreme=5120.0), config=_config())
+    with_level = _narrate(5150.0, [_level("pdl", 5062.0)], path=_path(pre_extreme=5120.0), config=_config())
+    too_far = _narrate(5150.0, [], path=_path(pre_extreme=4900.0), config=_config())  # 275 > 12 × ATR 20 від 5175
+
+    assert alone.scenarios[0].target_desc == "лой імпульсу 5120.00"
+    assert with_level.scenarios[0].target_desc == "PDL 5062.00"  # об'єкт ліквідності за імпульсом — першим
+    assert too_far.scenarios[0].target_desc is None and "no_target_found" in too_far.warnings
