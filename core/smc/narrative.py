@@ -15,6 +15,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 
 from core.smc.sessions import OFF_SESSION
+from core.smc.zone_path import ZonePath
 from core.smc.types import (
     LEVEL_STATE_FORMING,
     ActiveScenario,
@@ -711,6 +712,7 @@ def synthesize_narrative(
     session_info=None,  # type: Optional[Tuple[str, bool]]
     range_exhaustion=None,  # type: Optional[object]
     price_digits=None,  # type: Optional[int]
+    zone_paths=None,  # type: Optional[Dict[str, ZonePath]]
 ):
     # type: (...) -> NarrativeBlock
     """Synthesize narrative for display (ADR-0033, ADR-0035, ADR-0053).
@@ -722,6 +724,7 @@ def synthesize_narrative(
         used to populate NarrativeBlock.range_exhaustion_summary.
     price_digits: знаків після коми для цін символу (config price_display.digits_by_symbol, ADR-0113 Ф0);
         None — 2 знаки і warning price_digits_missing.
+    zone_paths: zone_id → ZonePath (шлях ціни від бару зламу зони, ADR-0113 Ф2a); None — без шляху (поведінка Ф1).
     """
     try:
         return _synthesize_impl(
@@ -736,6 +739,7 @@ def synthesize_narrative(
             session_info,
             range_exhaustion,
             price_digits,
+            zone_paths,
         )
     except Exception:
         sym = getattr(snapshot, "symbol", "?")
@@ -756,8 +760,9 @@ def _synthesize_impl(
     session_info=None,
     range_exhaustion=None,
     price_digits=None,
+    zone_paths=None,
 ):
-    # type: (SmcSnapshot, Dict[str, str], Dict[str, dict], Dict[str, dict], int, float, float, dict, Optional[Tuple[str, bool]], Optional[object], Optional[int]) -> NarrativeBlock
+    # type: (SmcSnapshot, Dict[str, str], Dict[str, dict], Dict[str, dict], int, float, float, dict, Optional[Tuple[str, bool]], Optional[object], Optional[int], Optional[Dict[str, ZonePath]]) -> NarrativeBlock
     warnings = []  # type: List[str]
     if price_digits is None:
         digits = _DEFAULT_PRICE_DIGITS

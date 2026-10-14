@@ -43,6 +43,7 @@ from core.smc.narrative import (
     _fallback_narrative_block,
 )
 from core.smc.narrative_inputs import NarrativeInputs
+from core.smc.zone_path import ZonePath, zone_path
 from core.smc.shell_composer import compose_shell_payload
 from runtime.ingest.market_calendar import TradingCalendar
 from runtime.ingest.tick_common import resolve_symbol_calendars
@@ -874,6 +875,8 @@ class SmcRunner:
                 session_info = (sess_name, sess_kz)
         # ADR-0053: pass primary range_exhaustion state for narrative phrase
         re_snap = self.get_range_exhaustion(symbol, now_ms)
+        narrative_cfg = self._full_config.get("smc", {}).get("narrative", {})
+        zone_path_on = bool(narrative_cfg.get("zone_path", {}).get("enabled", False))
         return NarrativeInputs(
             snapshot=snap,
             bias_map=bias,
@@ -882,11 +885,26 @@ class SmcRunner:
             viewer_tf_s=viewer_tf_s,
             current_price=current_price,
             atr=atr_14,
-            config=self._full_config.get("smc", {}).get("narrative", {}),
+            config=narrative_cfg,
             session_info=session_info,
             range_exhaustion=re_snap.primary if re_snap is not None else None,
             price_digits=self._price_digits.get(symbol),
+            zone_paths=self._zone_paths(symbol, snap) if zone_path_on else None,
         )
+
+    def _zone_paths(self, symbol: str, snap: SmcSnapshot) -> Dict[str, ZonePath]:
+        """ADR-0113 Ф2a: шлях ціни від бару зламу кожного OB знімка — по барах рушія TF зони (OB з якорем народження)."""
+        bars_by_tf: Dict[int, List[CandleBar]] = {}
+        paths: Dict[str, ZonePath] = {}
+        for zone in snap.zones:
+            if zone.origin_event_ms is None:
+                continue
+            if zone.tf_s not in bars_by_tf:
+                bars_by_tf[zone.tf_s] = self._engine.get_bars(symbol, zone.tf_s)
+            path = zone_path(zone, bars_by_tf[zone.tf_s])
+            if path is not None:
+                paths[zone.id] = path
+        return paths
 
     def _narrative_atr(self, symbol: str, viewer_tf_s: int, caller_estimate: float) -> float:
         """ATR для фільтра дистанції цілей наративу — ATR14 рушія для TF глядача (ADR-0070 rev 3).

@@ -600,7 +600,12 @@
       "trigger_structure_lookback_bars": 5,
       "trigger_proximity_atr": 3.0,
       "trigger_displacement_window": 3,
-      "max_wire_bytes": 600
+      "max_wire_bytes": 600,
+      "zone_path": {
+        "_comment": "ADR-0113 Ф2a §3.8: стан сценарію зі шляху ціни від бару зламу зони — ціль від входу (лише не знята ліквідність), стоп = дальній край ± stop_buffer_atr × ATR, підтвердження після входу не відкочується, сценарій закривається на стопі/цілі. enabled=false — поведінка Ф1; stop_buffer_atr — лише виміром прогону (tools.narrative_replay_metrics --compare).",
+        "enabled": false,
+        "stop_buffer_atr": 0.0
+      }
     },
     "shell": {
       "enabled": true,

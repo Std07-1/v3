@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from core.smc.narrative import synthesize_narrative
 from core.smc.types import NarrativeBlock, SmcLevel, SmcSnapshot, SmcSwing, SmcZone
+from core.smc.zone_path import ZonePath
 
 
 @dataclasses.dataclass(frozen=True)
@@ -29,6 +30,7 @@ class NarrativeInputs:
     session_info: Optional[Tuple[str, bool]] = None
     range_exhaustion: Optional[Any] = None  # стан ADR-0053 — лише коли smc.range_exhaustion.enabled
     price_digits: Optional[int] = None
+    zone_paths: Optional[Dict[str, ZonePath]] = None  # Ф2a: шлях ціни від бару зламу зони; None — поведінка Ф1
 
     def as_kwargs(self) -> Dict[str, Any]:
         return {field.name: getattr(self, field.name) for field in dataclasses.fields(self)}
@@ -44,6 +46,8 @@ class NarrativeInputs:
         data = self.as_kwargs()
         data["snapshot"] = dataclasses.asdict(self.snapshot)
         data["session_info"] = list(self.session_info) if self.session_info is not None else None
+        if self.zone_paths is not None:
+            data["zone_paths"] = {zone_id: dataclasses.asdict(path) for zone_id, path in self.zone_paths.items()}
         return data
 
     @classmethod
@@ -56,4 +60,7 @@ class NarrativeInputs:
             "levels": [SmcLevel(**level) for level in snap["levels"]],
         })
         session_info = tuple(data["session_info"]) if data.get("session_info") is not None else None
-        return cls(**{**data, "snapshot": snapshot, "session_info": session_info})
+        zone_paths = data.get("zone_paths")
+        if zone_paths is not None:
+            zone_paths = {zone_id: ZonePath(**path) for zone_id, path in zone_paths.items()}
+        return cls(**{**data, "snapshot": snapshot, "session_info": session_info, "zone_paths": zone_paths})
