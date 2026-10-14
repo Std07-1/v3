@@ -3,14 +3,15 @@
 Вхід — JSONL `tools.narrative_replay` і M1 того самого символу з диску (шлях ціни після появи сценарію). Рахується
 окремо на кожен TF глядача, лише на відкритому ринку (рядки «Ринок закрито» — окремою часткою):
 
-- `empty_wait_share` — «чекаємо без змісту»: wait, без сценаріїв і без next_area;
-- `headlines` — розподіл заголовків;
+- `empty_wait_share` — «чекаємо без змісту»: wait, без сценаріїв і без next_area; `headlines` — розподіл заголовків;
 - `changes_per_day` — змін стану (mode, заголовок, зона основного сценарію, тригер) на торгову добу; `flip_backs` —
   повернень до попереднього стану, коли проміжний протримався ≤ 2 кроки (A→B→A);
-- `scenario_share` — частка кроків зі сценарієм; епізод — поспіль та сама зона основного сценарію;
-- `confirm_min_median` — хвилин від появи епізоду до першого triggered/ready (і кількість підтверджених);
-- `outcomes` / `outcomes_after_confirm` — що ціна M1 зачепила раніше в межах горизонту від появи (від підтвердження):
-  `target`, `invalidated`, обидва в одному барі (`ambiguous`), нічого (`open`), ціль не названа (`no_target`).
+- `scenario_share` — частка кроків зі сценарієм; епізод — поспіль та сама зона основного сценарію; сетап — зона:
+  мигання рве сетап на кілька епізодів, тож результат рахується раз на сетап, від його першої появи;
+- `outcomes` — результат угоди від краю зони (`trade_outcome`): до входу ціна дійшла до цілі (`missed`) чи горизонт
+  минув без входу (`no_fill`); після входу — `target`, `invalidated`, обидва в одному барі M1 (`ambiguous`), нічого
+  (`open`); `no_target` — ціль не названа. `outcomes_after_confirm` — те саме від першого triggered/ready сетапу;
+- `rr_at_entry_median` — плановий R:R від краю зони: |ціль − край| / |інвалідація − край|.
 
 Приклад:
 
@@ -23,6 +24,7 @@ import bisect
 import collections
 import datetime as dt
 import json
+import re
 import statistics
 import sys
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -35,6 +37,7 @@ Row = Dict[str, Any]
 CONFIRMED_TRIGGERS = frozenset({"triggered", "ready"})
 FLIP_BACK_MAX_STEPS = 2
 DEFAULT_HORIZON_H = 72
+_ZONE_RANGE_RE = re.compile(r"(\d+(?:\.\d+)?)–(\d+(?:\.\d+)?)")  # «OB▲ A(6) 4090.00–4095.00» (_format_entry)
 
 
 def narrative_state(narrative: Row) -> Tuple[str, str, str, str]:
@@ -72,32 +75,78 @@ def episodes(rows: Sequence[Row]) -> List[List[Row]]:
     return found
 
 
-def first_touch(m1: Sequence[Row], m1_opens: Sequence[int], start_ms: int, horizon_ms: int, direction: str,
-                target: float, invalidation: float) -> str:
-    """Що ціна зачепила раніше в барах M1, що відкрились у [start_ms, start_ms + horizon_ms)."""
+def setups(found_episodes: Sequence[List[Row]]) -> List[List[Row]]:
+    """Сетап — усі кроки однієї зони основного сценарію за порядком першої появи (епізоди однієї зони — разом)."""
+    by_zone: Dict[str, List[Row]] = {}
+    for episode in found_episodes:
+        by_zone.setdefault(_primary_zone_id(episode[0]), []).extend(episode)
+    return list(by_zone.values())
+
+
+def parse_zone_range(entry_desc: str) -> Optional[Tuple[float, float]]:
+    match = _ZONE_RANGE_RE.search(entry_desc or "")
+    if not match:
+        return None
+    low, high = float(match.group(1)), float(match.group(2))
+    return (min(low, high), max(low, high))
+
+
+def trade_outcome(m1: Sequence[Row], m1_opens: Sequence[int], start_ms: int, horizon_ms: int, direction: str,
+                  zone: Tuple[float, float], target: float, invalidation: float) -> str:
+    """Угода від краю зони в барах M1, що відкрились у [start_ms, start_ms + horizon_ms).
+
+    Вхід — дотик краю зони з боку ціни (long — верхнього, short — нижнього); до входу ціль = `missed` (угоди не було).
+    Після входу — що раніше: ціль чи інвалідація; бар, у якому вхід і інвалідація разом, — `ambiguous`.
+    """
     if target <= 0:
         return "no_target"
+    long = direction == "long"
+    entry = zone[1] if long else zone[0]
+    filled = False
     for bar in m1[bisect.bisect_left(m1_opens, start_ms):]:
         if bar["open_time_ms"] >= start_ms + horizon_ms:
             break
-        if direction == "long":
-            hit_target, hit_invalidation = bar["h"] >= target, bar["low"] <= invalidation
-        else:
-            hit_target, hit_invalidation = bar["low"] <= target, bar["h"] >= invalidation
+        hit_target = bar["h"] >= target if long else bar["low"] <= target
+        hit_invalidation = bar["low"] <= invalidation if long else bar["h"] >= invalidation
+        if not filled:
+            touches_entry = bar["low"] <= entry if long else bar["h"] >= entry
+            if not touches_entry:
+                if hit_target:
+                    return "missed"
+                continue
+            filled = True
+            if hit_invalidation:
+                return "ambiguous"  # вхід і стоп в одному барі — порядок усередині хвилини невідомий
+            continue
         if hit_target and hit_invalidation:
             return "ambiguous"
         if hit_target:
             return "target"
         if hit_invalidation:
             return "invalidated"
-    return "open"
+    return "open" if filled else "no_fill"
+
+
+def _scenario_levels(row: Row) -> Tuple[str, Optional[Tuple[float, float]], float, float]:
+    scenario = row["narrative"]["scenarios"][0]
+    return (scenario["direction"], parse_zone_range(scenario.get("entry_desc", "")),
+            parse_price_from_desc(scenario.get("target_desc") or ""), parse_price_from_desc(scenario.get("invalidation") or ""))
 
 
 def _outcome(m1: Sequence[Row], m1_opens: Sequence[int], row: Row, horizon_ms: int) -> str:
-    scenario = row["narrative"]["scenarios"][0]
-    return first_touch(m1, m1_opens, row["t"], horizon_ms, scenario["direction"],
-                       parse_price_from_desc(scenario.get("target_desc") or ""),
-                       parse_price_from_desc(scenario.get("invalidation") or ""))
+    direction, zone, target, invalidation = _scenario_levels(row)
+    if zone is None:
+        return "no_zone"
+    return trade_outcome(m1, m1_opens, row["t"], horizon_ms, direction, zone, target, invalidation)
+
+
+def _rr_at_entry(row: Row) -> Optional[float]:
+    direction, zone, target, invalidation = _scenario_levels(row)
+    if zone is None or target <= 0 or invalidation <= 0:
+        return None
+    entry = zone[1] if direction == "long" else zone[0]
+    risk = abs(entry - invalidation)
+    return round(abs(target - entry) / risk, 2) if risk > 0 else None
 
 
 def _share(rows: Sequence[Row], predicate: Callable[[Row], bool]) -> float:
@@ -116,15 +165,17 @@ def tf_metrics(rows: Sequence[Row], m1: Sequence[Row], horizon_ms: int) -> Row:
                      if runs[k][1] <= FLIP_BACK_MAX_STEPS and runs[k - 1][0] == runs[k + 1][0])
     days = len({dt.datetime.fromtimestamp(r["t"] / 1000, dt.timezone.utc).date() for r in open_rows}) or 1
     m1_opens = [bar["open_time_ms"] for bar in m1]
-    found = episodes(rows)
+    found_episodes = episodes(rows)
+    found_setups = setups(found_episodes)
     confirm_min: List[float] = []
     outcomes: collections.Counter = collections.Counter()
     after_confirm: collections.Counter = collections.Counter()
-    for episode in found:
-        outcomes[_outcome(m1, m1_opens, episode[0], horizon_ms)] += 1
-        confirmed = next((r for r in episode if r["narrative"]["scenarios"][0]["trigger"] in CONFIRMED_TRIGGERS), None)
+    rr = [value for value in (_rr_at_entry(setup[0]) for setup in found_setups) if value is not None]
+    for setup in found_setups:
+        outcomes[_outcome(m1, m1_opens, setup[0], horizon_ms)] += 1
+        confirmed = next((r for r in setup if r["narrative"]["scenarios"][0]["trigger"] in CONFIRMED_TRIGGERS), None)
         if confirmed is not None:
-            confirm_min.append((confirmed["t"] - episode[0]["t"]) / 60000)
+            confirm_min.append((confirmed["t"] - setup[0]["t"]) / 60000)
             after_confirm[_outcome(m1, m1_opens, confirmed, horizon_ms)] += 1
     return {
         "steps": len(rows), "open_steps": len(open_rows), "closed_share": round(1 - len(open_rows) / max(len(rows), 1), 4),
@@ -132,8 +183,9 @@ def tf_metrics(rows: Sequence[Row], m1: Sequence[Row], horizon_ms: int) -> Row:
         "scenario_share": _share(open_rows, lambda narrative: bool(narrative["scenarios"])),
         "headlines": collections.Counter(r["narrative"]["headline"] for r in open_rows).most_common(8),
         "changes_per_day": round((len(runs) - 1) / days, 2), "flip_backs": flip_backs, "trading_days": days,
-        "episodes": len(found), "confirmed": len(confirm_min),
+        "episodes": len(found_episodes), "setups": len(found_setups), "confirmed": len(confirm_min),
         "confirm_min_median": statistics.median(confirm_min) if confirm_min else None,
+        "rr_at_entry_median": statistics.median(rr) if rr else None,
         "outcomes": dict(outcomes), "outcomes_after_confirm": dict(after_confirm),
     }
 
