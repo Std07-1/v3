@@ -44,6 +44,7 @@ from core.smc.narrative import (
     _fallback_narrative_block,
 )
 from core.smc.narrative_inputs import NarrativeInputs
+from core.smc.briefing import Briefing, closed_briefing, compose_briefing
 from core.smc.liquidity_sweep import FirstReached, TouchIndex, first_reached
 from core.session_anchor import htf_bucket_start_ms, htf_next_bucket_start_ms
 from core.smc.zone_path import FormingSpan, ZonePath, first_touch_end_ms, forming_spans, zone_path
@@ -210,6 +211,8 @@ class SmcRunner:
         self._range_exhaustion_cache: Dict[str, Tuple[int, RangeExhaustionSnapshot]] = (
             {}
         )
+        # ADR-0113 Ф3: розбір символу — symbol → (останні бари compute TF, розбір); None — не склався (лог уже був)
+        self._briefing_cache: Dict[str, Tuple[Tuple[int, ...], Optional[Briefing]]] = {}
 
         # Relay: відстеження останнього bias для dedup
         self._last_bias: Dict[Tuple[str, int], Optional[str]] = {}
@@ -1060,6 +1063,60 @@ class SmcRunner:
             _log.warning(
                 "SHELL_COMPOSE_ERR sym=%s tf=%d", symbol, viewer_tf_s, exc_info=True
             )
+            return None
+
+    # ── Розбір символу (ADR-0113 Ф3) ────────────────────
+
+    def get_briefing(self, symbol: str) -> Optional[Briefing]:
+        """Розбір символу — раз на закритий бар рушія (кеш за останнім баром кожного compute TF), а не на кожен кадр.
+
+        Момент — кінець останнього бару найдрібнішого compute TF, ціна — його close: той самий стан рушія дає той самий
+        розбір, хоч би хто й коли його попросив (R10). None — `smc.briefing.enabled=false`, до прогріву, наратив
+        вимкнений, барів ще немає чи розбір не склався (BRIEFING_ERR у лозі).
+        """
+        if not self._full_config.get("smc", {}).get("briefing", {}).get("enabled", False) or not self._warmup_done:
+            return None
+        key = tuple(self._last_bar_open_ms(symbol, tf_s) for tf_s in sorted(self._compute_tfs))
+        cached = self._briefing_cache.get(symbol)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        briefing = self._compose_briefing(symbol)
+        self._briefing_cache[symbol] = (key, briefing)
+        return briefing
+
+    def _last_bar_open_ms(self, symbol: str, tf_s: int) -> int:
+        bars = self._engine.get_bars(symbol, tf_s)
+        return bars[-1].open_time_ms if bars else 0
+
+    def _compose_briefing(self, symbol: str) -> Optional[Briefing]:
+        """Наративи TF контексту й сетапів на один момент і ціну → розбір (core.smc.briefing)."""
+        base_tf = min(self._compute_tfs)
+        bars = self._engine.get_bars(symbol, base_tf)
+        if not bars:
+            return None
+        as_of_ms, price = bars[-1].open_time_ms + base_tf * 1000, bars[-1].c
+        try:
+            gate = self._narrative_gate(symbol, as_of_ms)
+            if gate is None:
+                return None
+            if not gate[1]:
+                return closed_briefing(symbol, as_of_ms)
+            smc_cfg = self._full_config.get("smc", {})
+            htf_cfg = smc_cfg.get("narrative", {}).get("htf_context", {})
+            context_tfs = [int(tf_s) for tf_s in htf_cfg.get("viewer_tfs", ())]
+            setup_tfs = [int(tf_s) for tf_s in htf_cfg.get("setup_tfs", ())]
+            narratives = {}
+            for tf_s in set(context_tfs) | set(setup_tfs):
+                # Не get_narrative: журнал сигналів пише лише те, що бачить глядач, а розбір — не глядач цих TF
+                inputs = self._collect_narrative_inputs(symbol, tf_s, price, 0.0, as_of_ms)
+                narratives[tf_s] = inputs.synthesize() if inputs is not None else None
+            return compose_briefing(
+                symbol, as_of_ms, self.get_bias_map(symbol), narratives,
+                [int(tf_s) for tf_s in smc_cfg.get("shell", {}).get("strip_tfs", ())],
+                context_tfs, setup_tfs, self._price_digits.get(symbol),
+            )
+        except Exception:
+            _log.warning("BRIEFING_ERR sym=%s as_of_ms=%d", symbol, as_of_ms, exc_info=True)
             return None
 
     def get_signals(
