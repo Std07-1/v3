@@ -979,6 +979,7 @@
         touchDrawing={touchDrawOpen}
         onTouchPlace={(r) => drawBarRef?.applyPlace(r)}
         onDrawingEditState={(s) => (drawEditState = s)}
+        onToolDone={() => (activeTool = null)}
         bind:smcPanelOpen
         bind:displayMode
       />

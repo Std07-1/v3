@@ -6,6 +6,10 @@ import { STYLEABLE_TOOL_TYPES, TOOL_REGISTRY, toolForHotkey } from './index';
 const RESERVED_KEYS = ['e', 'g', 'f', 'l'];
 
 describe('TOOL_REGISTRY', () => {
+    it('одноразові (ставляться раз і вимикаються, власник 15.10) — лише позиції', () => {
+        expect([...TOOL_REGISTRY.values()].filter((tool) => tool.oneShot).map((tool) => tool.id)).toEqual(['long', 'short']);
+    });
+
     it('ключ = id модуля; порядок = порядок кнопок панелі', () => {
         for (const [type, tool] of TOOL_REGISTRY) expect(tool.id).toBe(type);
         expect([...TOOL_REGISTRY.keys()]).toEqual(['hline', 'trend', 'ray', 'rect', 'fib', 'long', 'short', 'measure']);

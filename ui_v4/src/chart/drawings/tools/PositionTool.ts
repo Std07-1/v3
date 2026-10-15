@@ -116,6 +116,8 @@ function positionTool(side: PositionSide): ToolModule {
         // Кольори — сенс (прибуток / ризик), не стиль: flyout стилю не має
         styleable: false,
         group: POSITION_GROUP,
+        // Власник 15.10: «позиція ставиться один раз і вимикається, далі трейдер її собі підправляє»
+        oneShot: true,
 
         place: (at, env) => positionPlacement(side, at, env),
 

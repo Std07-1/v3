@@ -80,6 +80,8 @@
     onTouchPlace?: (result: "draft" | "done" | "none") => void;
     /** ADR-0112 D2: чи є що скасувати й чи виділено фігуру — ↶ і «видалити» на телефоні активні лише тоді. */
     onDrawingEditState?: (state: { canUndo: boolean; hasSelection: boolean }) => void;
+    /** Інструмент своє відпрацював (позиція стала, правий клік) — App вимикає його (ADR-0111 §3.6). */
+    onToolDone?: () => void;
   }
 
   let {
@@ -96,6 +98,7 @@
     touchDrawing = false,
     onTouchPlace,
     onDrawingEditState,
+    onToolDone,
   }: Props = $props();
 
   // ADR-0024: локальний стан SMC overlay (оновлюється інкрементально)
@@ -412,6 +415,8 @@
       editState = next;
       onDrawingEditState?.(next);
     };
+
+    drawingsRenderer.onToolDone = () => onToolDone?.();
 
     // Expose purge method for console debugging: window.__purgeDrawings()
     (window as any).__purgeDrawings = () =>
