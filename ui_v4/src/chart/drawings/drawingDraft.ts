@@ -6,7 +6,7 @@
 // ні цей файл; 3 точки (Long/Short, §3.4) — розширення тут.
 
 import type { Drawing, DrawingPoint } from '../../types';
-import type { ToolModule } from './tools';
+import type { PlacementEnv, ToolModule } from './tools';
 
 /** Глибока копія фігури (точки й meta): undo-стек, чернетка і стор не ділять посилань. */
 export function cloneDrawing(d: Drawing): Drawing {
@@ -23,14 +23,13 @@ export function previewsOnHover(tool: ToolModule): boolean {
   return tool.pointsRequired === 1;
 }
 
-/** Нова чернетка: усі точки — у місці курсора; ефемерна (measure) — без стилю (ADR-0084 D2). */
-export function newDraft(tool: ToolModule, id: string, at: DrawingPoint, meta: Drawing['meta']): Drawing {
-  return {
-    id,
-    type: tool.id,
-    points: Array.from({ length: tool.pointsRequired }, () => ({ t_ms: at.t_ms, price: at.price })),
-    meta: tool.ephemeral ? undefined : meta,
-  };
+/** Нова чернетка: усі точки — у місці курсора (позиція — якорі від нього, `tool.place`); ефемерна (measure) — без
+ *  стилю (ADR-0084 D2). */
+export function newDraft(tool: ToolModule, id: string, at: DrawingPoint, meta: Drawing['meta'], env?: PlacementEnv): Drawing {
+  const points = tool.place && env
+    ? tool.place(at, env)
+    : Array.from({ length: tool.pointsRequired }, () => ({ t_ms: at.t_ms, price: at.price }));
+  return { id, type: tool.id, points, meta: tool.ephemeral ? undefined : meta };
 }
 
 /** Що робить перший клік інструментом. */
@@ -38,14 +37,34 @@ export type FirstClick =
   | { readonly kind: 'commit'; readonly drawing: Drawing } // однокрокова фігура готова
   | { readonly kind: 'draft'; readonly draft: Drawing }; // двоточкова: друга точка далі йде за курсором
 
-export function firstClick(tool: ToolModule, id: string, at: DrawingPoint, meta: Drawing['meta']): FirstClick {
-  const drawing = newDraft(tool, id, at, meta);
+export function firstClick(
+  tool: ToolModule,
+  id: string,
+  at: DrawingPoint,
+  meta: Drawing['meta'],
+  env?: PlacementEnv,
+): FirstClick {
+  const drawing = newDraft(tool, id, at, meta, env);
   return tool.pointsRequired === 1 ? { kind: 'commit', drawing } : { kind: 'draft', draft: drawing };
 }
 
 /** Точка чернетки, що йде за курсором, — остання. */
 export function tipIndex(draft: Drawing): number {
   return draft.points.length - 1;
+}
+
+/** Якір, яким чернетку веде курсор: позиція (`tool.place`) — вхід (уся фігура від нього), інші — кінчик. */
+export function cursorIndex(tool: ToolModule, draft: Drawing): number {
+  return tool.place ? 0 : tipIndex(draft);
+}
+
+/** Чернетка після руху курсора в `at`: позиція — переставлена вся від точки курсора (стоп і ціль за масштабом),
+ *  інші — лише кінчик. Нова фігура, вихідна не змінюється. */
+export function followCursor(tool: ToolModule, draft: Drawing, at: DrawingPoint, env?: PlacementEnv): Drawing {
+  if (tool.place && env) return { ...draft, points: tool.place(at, env) };
+  const points = draft.points.map((p) => ({ t_ms: p.t_ms, price: p.price }));
+  points[tipIndex(draft)] = { t_ms: at.t_ms, price: at.price };
+  return { ...draft, points };
 }
 
 /** Що робить клік, коли чернетка вже є. */

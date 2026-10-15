@@ -15,17 +15,20 @@ import { RectTool } from './RectTool';
 import { RayTool } from './RayTool';
 import { MeasureTool } from './MeasureTool';
 import { FibTool } from './FibTool';
+import { LongPositionTool, ShortPositionTool } from './PositionTool';
 import type { ToolModule } from './types';
 
 /** ADR-0111 §3.3: повнота реєстру — на рівні типів (D15.2): пропущений або зайвий DrawingType — помилка
  *  компіляції, а не тихо відсутня кнопка. Порядок ключів = порядок кнопок панелі (hline → trend → ray → rect →
- *  fib → measure). */
+ *  fib → long → short → measure). */
 const TOOLS_BY_TYPE = {
     hline: HLineTool,
     trend: TrendTool,
     ray: RayTool,
     rect: RectTool,
     fib: FibTool,
+    long: LongPositionTool,
+    short: ShortPositionTool,
     measure: MeasureTool,
 } satisfies Record<DrawingType, ToolModule>;
 
@@ -57,4 +60,4 @@ export function getToolModule(type: DrawingType): ToolModule | undefined {
     return TOOL_REGISTRY.get(type);
 }
 
-export type { ToolModule, RenderContext, ScreenAabb, HitTestResult } from './types';
+export type { ToolModule, RenderContext, ScreenAabb, HitTestResult, PlacementEnv } from './types';

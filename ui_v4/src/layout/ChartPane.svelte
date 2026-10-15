@@ -830,6 +830,12 @@
     chartEngine?.setPriceDigits(symbolPriceDigits);
     drawingsRenderer?.setPriceDigits(symbolPriceDigits); // ADR-0111 §3.2: Δціни лінійки тими самими знаками
   });
+  // ADR-0111 §3.6: ATR поточного TF із кадру (сервер, X28) — стоп позиції за замовчуванням; delta без поля — тримати
+  $effect(() => {
+    if (!currentFrame || !drawingsRenderer) return;
+    if ("atr" in currentFrame) drawingsRenderer.setAtr(currentFrame.atr ?? null);
+    else if (currentFrame.frame_type === "full") drawingsRenderer.setAtr(null);
+  });
 
   // N3: persist toggles to localStorage
   $effect(() => {

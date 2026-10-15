@@ -14,7 +14,15 @@
 // scratch buffers). FP10: НЕ викликати `getComputedStyle` тут — renderer
 // caches CSS-vars і передає numeric values через RenderContext.
 
-import type { Drawing, DrawingType } from '../../../types';
+import type { Drawing, DrawingPoint, DrawingType } from '../../../types';
+
+/** Масштаб для фігур, що з одного кліку ставлять кілька якорів (позиція, ADR-0111 §3.6). Дає renderer. */
+export interface PlacementEnv {
+    /** Одиниця відстані за ціною: ATR поточного TF із сервера (X28), без нього — частка видимого діапазону. */
+    readonly priceUnit: number;
+    /** Тривалість одного бару поточного TF, мс. */
+    readonly barMs: number;
+}
 
 /** Контекст рендеру переданий tool-у з DrawingsRenderer.
  *  toX/toY повертають null коли точка поза visible range — tool MUST
@@ -97,6 +105,14 @@ export interface ToolModule {
      * @returns ScreenAabb для hit-test cache, або null якщо drawing skipped.
      */
     render(d: Drawing, rc: RenderContext): ScreenAabb | null;
+
+    /** ADR-0111 §3.6: однокрокова фігура з кількома якорями (позиція) — усі якорі з точки кліку. Відсутнє — один
+     *  якір у точці кліку. */
+    place?(at: DrawingPoint, env: PlacementEnv): DrawingPoint[];
+
+    /** ADR-0111 §3.6: після перетягування ручки `handleIdx` — узгодити інші якорі (позиція: стоп і ціль мають
+     *  спільний правий край). Відсутнє — якорі незалежні. */
+    constrainHandle?(d: Drawing, handleIdx: number): Drawing;
 
     /** ADR-0084 polish: індекси «вторинних» якорів (рендеряться делікатніше —
      *  менші/тьмяніші кільця). Ray: [1] — p2 лише задає напрямок, візуально

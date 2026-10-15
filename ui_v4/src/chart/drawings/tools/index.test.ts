@@ -8,7 +8,7 @@ const RESERVED_KEYS = ['e', 'g', 'f', 'l'];
 describe('TOOL_REGISTRY', () => {
     it('ключ = id модуля; порядок = порядок кнопок панелі', () => {
         for (const [type, tool] of TOOL_REGISTRY) expect(tool.id).toBe(type);
-        expect([...TOOL_REGISTRY.keys()]).toEqual(['hline', 'trend', 'ray', 'rect', 'fib', 'measure']);
+        expect([...TOOL_REGISTRY.keys()]).toEqual(['hline', 'trend', 'ray', 'rect', 'fib', 'long', 'short', 'measure']);
     });
 
     it('кожен модуль несе підпис, SVG-розмітку іконки і клавішу з одного символу', () => {

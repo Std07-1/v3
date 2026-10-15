@@ -47,7 +47,8 @@ export type DragStep =
 
 /** Ручка: ціна — під вказівником (з магнітом), час — бар під вказівником; поки він у тому самому барі, що на
  *  початку, час якоря не чіпаємо (якір з іншого TF — M15 13:45 на H1 — не стає на бар цього TF, рецензія 12.10).
- *  Дотик — зі зсувом захоплення (origin.grabOffset). */
+ *  Дотик — зі зсувом захоплення (origin.grabOffset). `constrain` — узгодження інших якорів (позиція: спільний правий
+ *  край стопу й цілі, ToolModule.constrainHandle). */
 export function dragHandle(
   current: Drawing,
   origin: DragOrigin,
@@ -55,6 +56,7 @@ export function dragHandle(
   x: number,
   y: number,
   space: DragSpace,
+  constrain?: (d: Drawing, handleIdx: number) => Drawing,
 ): DragStep {
   const offX = origin.grabOffset?.x ?? 0;
   const offY = origin.grabOffset?.y ?? 0;
@@ -68,7 +70,7 @@ export function dragHandle(
   }
   const next = cloneDrawing(current);
   next.points[handleIdx] = { t_ms, price: space.snapPrice(hx, hy, rawPrice) };
-  return { kind: 'moved', next };
+  return { kind: 'moved', next: constrain ? constrain(next, handleIdx) : next };
 }
 
 /** Тіло: без магніту (щоб не тремтіло). Час — зсув на ціле число барів (різниця logical під курсором), не через x

@@ -14,11 +14,11 @@ import {
 } from '../interaction/geometry';
 import { getToolModule } from './tools';
 import { isCorruptBackupKey, loadDrawings, saveDrawings } from './drawingsStorage';
-import { cloneDrawing, completeDraft, firstClick, newDraft, previewsOnHover, tipIndex } from './drawingDraft';
+import { cloneDrawing, completeDraft, cursorIndex, firstClick, followCursor, newDraft, previewsOnHover } from './drawingDraft';
 import { dragBody, dragHandle, grabOffsetFor, type DragSpace } from './drawingDrag';
 import { hitTestDrawings, type DrawingHit } from './drawingHitTest';
 import { copyCanvas } from '../../lib/chartSnapshot';
-import type { RenderContext, ToolModule } from './tools';
+import type { PlacementEnv, RenderContext, ToolModule } from './tools';
 
 type HorzScaleItem = Time;
 
@@ -165,6 +165,9 @@ export class DrawingsRenderer {
 
   // ADR-0111 §3.2: знаки ціни символу з конфігу сервера (ChartPane → setPriceDigits) для лінійки; null — конфігу нема.
   private priceDigits: number | null = null;
+  // ADR-0111 §3.6: ATR поточного TF із кадру сервера (ChartPane → setAtr) — масштаб позиції; null — не виміряно,
+  // undefined — кадру ще не було.
+  private atr: number | null | undefined = undefined;
 
   // ADR-0074 T2: hit-test geometry cached from CSS vars (--drawing-*).
   // Defaults match geometry.ts HIT_TOLERANCE_PX/HANDLE_RADIUS_PX constants
@@ -394,6 +397,22 @@ export class DrawingsRenderer {
   setPriceDigits(digits: number | null): void {
     this.priceDigits = digits;
     this.scheduleRender();
+  }
+
+  /** ADR-0111 §3.6: ATR поточного TF (кадр сервера, X28). Нема — позиція бере 1/10 видимого діапазону (гучно, I5). */
+  setAtr(atr: number | null): void {
+    const usable = atr !== null && atr > 0 ? atr : null;
+    if (usable === null && this.atr !== null) console.warn('[DrawingsRenderer] DRAWINGS_ATR_UNAVAILABLE — позиція: стоп = 1/10 видимого діапазону');
+    this.atr = usable;
+  }
+
+  /** Масштаб фігур, що з кліку ставлять кілька якорів (позиція): ATR і бар поточного TF. */
+  private placementEnv(tool: ToolModule): PlacementEnv | undefined {
+    if (!tool.place) return undefined;
+    const top = this.fromY(0);
+    const bottom = this.fromY(this.canvas.height / this.dpr);
+    const visibleUnit = top !== null && bottom !== null ? Math.abs(top - bottom) / 10 : 0;
+    return { priceUnit: this.atr ?? visibleUnit, barMs: this.barStepSec > 0 ? this.barStepSec * 1000 : 60_000 };
   }
 
   /** Резолв кольору фігури: роль (theme-aware token) → legacy hex → база теми. */
@@ -935,7 +954,7 @@ export class DrawingsRenderer {
         const t = this.fromX(x);
         if (rawP === null || t === null) return false;
         const price = this.getSnappedPrice(x, y, rawP);
-        this.draft = newDraft(tool, uuidv4(), { t_ms: t, price }, this.defaultMeta(tool.id));
+        this.draft = newDraft(tool, uuidv4(), { t_ms: t, price }, this.defaultMeta(tool.id), this.placementEnv(tool));
         this.draftFrozen = false;
         this.scheduleRender();
         return true;
@@ -1016,7 +1035,7 @@ export class DrawingsRenderer {
 
     const price = this.getSnappedPrice(x, y, rawPrice);
     // Однокрокова без прев'ю під курсором (клік без руху миші) — готова одразу; двоточкова — чернетка.
-    const step = firstClick(tool, uuidv4(), { t_ms, price }, this.defaultMeta(tool.id));
+    const step = firstClick(tool, uuidv4(), { t_ms, price }, this.defaultMeta(tool.id), this.placementEnv(tool));
     this.draftFrozen = false;
     if (step.kind === 'commit') {
       this.commandStack.push({ type: 'ADD', drawing: step.drawing });
@@ -1030,11 +1049,13 @@ export class DrawingsRenderer {
   private updateDraft(x: number, y: number): void {
     if (!this.draft) return;
 
+    const tool = getToolModule(this.draft.type);
+    if (!tool) return;
     let t_ms = this.fromX(x);
     let rawPrice = this.fromY(y);
 
-    // За курсором іде остання точка (однокрокова — єдина, двоточкова — друга).
-    const lastIdx = tipIndex(this.draft);
+    // За курсором іде кінчик (однокрокова — єдина точка, двоточкова — друга); позиція — уся від входу.
+    const lastIdx = cursorIndex(tool, this.draft);
 
     // ADR-0008: при null — fallback до останніх відомих координат (уникає "freeze" на краях)
     if (t_ms === null) t_ms = this.draft.points[lastIdx].t_ms;
@@ -1046,7 +1067,7 @@ export class DrawingsRenderer {
 
     const price = this.getSnappedPrice(x, y, rawPrice);
 
-    this.draft.points[lastIdx] = { t_ms, price };
+    this.draft = followCursor(tool, this.draft, { t_ms, price }, this.placementEnv(tool));
     this.scheduleRender();
   }
 
@@ -1097,7 +1118,7 @@ export class DrawingsRenderer {
     if (!current) return;
     // Ручка — під курсор (з магнітом); тіло — на ціле число барів і пікселі ціни (drawingDrag.ts).
     const step = drag.handleIdx !== null
-      ? dragHandle(current, drag, drag.handleIdx, x, y, this.dragSpace)
+      ? dragHandle(current, drag, drag.handleIdx, x, y, this.dragSpace, getToolModule(current.type)?.constrainHandle)
       : dragBody(current, drag, x, y, this.dragSpace);
     if (step.kind === 'skip') {
       this.warnOnce(step.warnKey, 'drawing_coord_null', step.detail);
