@@ -2,7 +2,7 @@
 // Регресія 06.09.2026 (NAS100 D1): HUD брав ціну з scrollback-кадру.
 import { describe, it, expect } from 'vitest';
 import { get } from 'svelte/store';
-import { frameCarriesCurrentPrice, handleWSFrame, resetFrameRouter, serverConfig, uiWarnings } from './frameRouter';
+import { currentFrame, expectPair, frameCarriesCurrentPrice, handleWSFrame, resetFrameRouter, serverConfig, uiWarnings } from './frameRouter';
 
 describe('frameCarriesCurrentPrice', () => {
   it('scrollback_не_несе_поточну_ціну', () => {
@@ -84,5 +84,32 @@ describe('serverConfig.priceDigits — точність ціни з сервер
     handleWSFrame(configFrame(1, { 'XAU/USD': 2.5 }));
     expect(get(serverConfig).priceDigits).toBeUndefined();
     expect(get(uiWarnings).some((w) => w.details.includes('price_digits'))).toBe(true);
+  });
+});
+
+describe('expectPair — UI чекає відновлену пару (гонка scrollback 16.10.2026)', () => {
+  const frame = (seq: number, frame_type: string, tf: string, t_ms: number) => ({
+    type: 'render_frame',
+    frame_type,
+    symbol: 'XAU/USD',
+    tf,
+    candles: [{ t_ms, o: 1, h: 1, l: 1, c: 1 }],
+    meta: { schema_v: 'ui_v4_v2', seq, server_ts_ms: 0 },
+  });
+
+  it('дельта дефолтної пари, яку UI не показує, до графіка не доходить', () => {
+    resetFrameRouter();
+    const defaultFull = frame(2, 'full', 'M30', 1);
+    handleWSFrame(defaultFull);
+    expectPair('XAU/USD', 'M15'); // App: дефолтний кадр не показуємо, switch на пару з адреси
+    handleWSFrame(frame(3, 'delta', 'M30', 2));
+    expect(get(currentFrame)).toBe(defaultFull);
+
+    const full = frame(4, 'full', 'M15', 3);
+    handleWSFrame(full);
+    expect(get(currentFrame)).toBe(full);
+    const delta = frame(5, 'delta', 'M15', 4);
+    handleWSFrame(delta);
+    expect(get(currentFrame)).toBe(delta);
   });
 });

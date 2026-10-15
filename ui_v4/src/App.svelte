@@ -37,6 +37,7 @@
     handleWSFrame,
     currentFrame,
     currentPair,
+    expectPair,
     frameCarriesCurrentPrice,
     resetFrameRouter,
     serverConfig,
@@ -719,16 +720,14 @@
         saveLastPair(defSymbol, tf);
         if (tf !== defTf) {
           actions?.switchSymbolTf(defSymbol, tf);
-          hudSymbol = defSymbol;
-          hudTf = tf;
+          expectPair(defSymbol, tf);
           return; // Don't render this default frame
         }
       } else if (saved && (saved.symbol !== f.symbol || saved.tf !== f.tf)) {
         // Send switch immediately — server will send correct full frame
         actions?.switchSymbolTf(saved.symbol, saved.tf);
-        // Speculatively patch HUD to avoid flicker until correct full frame arrives
-        hudSymbol = saved.symbol;
-        hudTf = saved.tf;
+        // Чекаємо цю пару: HUD показує її одразу, дельти дефолтної до графіка не доходять
+        expectPair(saved.symbol, saved.tf);
         return; // Don't render this default frame
       }
     }
