@@ -129,22 +129,32 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
 - **Telegram:** окремий бот (власник створює через BotFather; токен — `/etc/smc-v3/alerts.env`, root:smc 640, лише
   через stdin-скрипт; у git — нічого). Текст: символ, рівень і напрям, ціна й час спрацювання (`alerts.display_tz`,
   Прага), посилання на графік `/?symbol=…&tf=…`; ціни — знаками символу з `price_display.digits_by_symbol`.
-- **Гарантія «щонайменше раз»:** спрацювання і запис у вихідну чергу комітяться разом; відправка — з повтором до
-  відповіді 200; доставлене знімається з черги. Збій між відправкою і записом дасть дубль, не втрату. Довго не
-  доставлено → `degraded:["telegram_unreachable"]`, а дзвіночок на сторінці показує «не доставлено».
+- **Гарантія «щонайменше раз»** (`runtime/alerts/telegram.py: Delivery`): спрацювання і запис у вихідну чергу
+  комітяться разом; запис знімається з черги лише після `ok` від Telegram. Порядок — за часом постановки: невдача
+  ставить паузу (`retry_first_s`, подвоєння до `retry_max_s`; 429 — `retry_after` від Telegram), молодші записи не
+  обганяють старший. Збій між відправкою і записом дасть дубль, не втрату. Невдача → `telegram_unreachable` (з
+  описом від Telegram), а дзвіночок на сторінці показує «не доставлено»; спроби лічаться в записі черги.
+- **Токен** живе лише в URL запитів; у тексті помилок і логах — `<token>` (перевірено і фейковим сервером, що повертає
+  URL в описі, і справжнім api.telegram.org з недійсним токеном).
 - **Відкрита сторінка:** SSE `GET /api/alerts/events` (heartbeat кожні 25 с — тайм-аут Cloudflare 100 с) → короткий
   звук (WebAudio, без файлу; браузер дозволяє після першого дотику до сторінки — інакше лише повідомлення і
   `console.warn`) і спливне повідомлення. Кадр WS і `/api/updates` не змінюються (I4).
 - **Нагляд:** програма додається в ролі watchdog-а ADR-0106 — падіння `smc-alerts` приходить ботом «Monitor».
 
 ### 4.5 Хто отримує і прив'язка пристрою
-- ☰ → «Сповіщення» → «Під'єднати Telegram»: сторінка просить одноразовий код (`POST /api/alerts/pair`, 10 хв, одне
-  використання) і відкриває `t.me/<бот>?start=<код>`. Бот приймає `/start <код>` **лише з чату власника**
-  (`ALERTS_OWNER_CHAT_ID` в env) і прив'язує пристрій. Пристрій отримує cookie `aione_alerts` (256 біт, HttpOnly,
-  Secure, SameSite=Strict, Path=`/api/alerts`); на сервері — лише sha256.
+- ☰ → «Сповіщення» → «Під'єднати Telegram»: сторінка просить прив'язку (`POST /api/alerts/pair`) і отримує
+  одноразовий код (16 символів URL-safe, `pair_code_ttl_s`, одне використання) та cookie `aione_alerts` (сирий токен
+  256 біт, HttpOnly, Secure, SameSite=Strict, Path=`/api/alerts`), що запрацює після прив'язки; відкриває
+  `t.me/<бот>?start=<код>`. Бот приймає `/start <код>` **лише з чату власника** (`ALERTS_OWNER_CHAT_ID` в env):
+  пристрій прив'язується до підписника `tg:<chat_id>` — з нього ж доставка бере чат. Код із чужого чату не
+  витрачається. Реєстр — `runtime/alerts/devices.py`: прив'язані пристрої в `devices.json` (атомарно, лише sha256
+  токена; битий файл — процес не стартує, а не «тихо відкликати всі пристрої»), незавершені прив'язки — лише в пам'яті.
 - Запити, що змінюють стан, вимагають заголовок `X-Alerts: 1` і свій Origin (CSRF). Без прив'язки — 401, і перемикача
   «Сповіщати» в інтерфейсі нема.
-- Команди бота: `/alerts` — список активних і спрацьованих, `/devices` — пристрої з відкликанням.
+- Команди бота (`/start@<бот>` теж): `/alerts` — свої взведені й спрацьовані, `/devices` — пристрої, `/revoke <id>` —
+  відключити свій; решта — довідка. Відповіді — «не більше разу»: offset `getUpdates` рухається до відповіді, тож
+  збій відповіді не повторює команду (прив'язка не виконується двічі); після рестарту може повторитись лише остання
+  непідтверджена пачка. Тексти — `runtime/alerts/messages.py` (формулювання підлаштовуються за реакцією власника).
 - **Відкрити всім пізніше** = прибрати перевірку чату власника + ліміти на підписника + захист від зловживань; модель,
   прив'язка і доставка ті самі. Це окреме рішення власника.
 
@@ -168,9 +178,14 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
   "enabled": false, "port": 8020, "state_dir": "/var/lib/smc-v3/alerts",
   "display_tz": "Europe/Prague", "max_active_per_subscriber": 50,
   "pair_code_ttl_s": 600, "requests_per_min": 60, "sse_heartbeat_s": 25,
-  "gap_after_s": 900, "tick_reconnect_s": 5, "m1_poll_s": 15, "m1_final_lag_s": 600, "m1_chunk_bars": 120
+  "gap_after_s": 900, "tick_reconnect_s": 5, "m1_poll_s": 15, "m1_final_lag_s": 600, "m1_chunk_bars": 120,
+  "site_url": "https://aione-smc.com", "delivery_poll_s": 1, "retry_first_s": 2, "retry_max_s": 300,
+  "telegram_poll_timeout_s": 25, "telegram_error_pause_s": 10
 }
 ```
+Секрети — не в config: `ALERTS_TELEGRAM_TOKEN` і `ALERTS_OWNER_CHAT_ID` у `/etc/smc-v3/alerts.env`. На старті
+`require_digits`: кожен символ `config.json:symbols` має знаки в `price_display.digits_by_symbol`, інакше процес не
+стартує.
 `gate_adr_config_sync`: рядок `"alerts": "0114"` у `_FEATURE_ADR_MAP`.
 
 ## 5. Слайси (кожен ≤150 рядків нового коду з тестами; verify після кожного)
@@ -228,3 +243,10 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
   справжній PubSub локального Redis (тестовий канал) доставив тік → спрацювання. Знахідки: канал тіків —
   `channels.price_tick`, а не `{ns}:price_tick`; межа діапазону диска — `(since, to]`. `gate_no_bare_except` спершу
   +1 (`parse_tick`) — переписано на `ValueError` з причиною, знову 38 старих. Не на проді.
+- 2026-10-15 — **S4** `runtime/alerts/devices.py` (`DeviceRegistry`: прив'язка кодом, `tg:<chat_id>`, sha256 токена,
+  відкликання лише свого), `messages.py` (тексти, `require_digits`, `chart_link`), `telegram.py` (`TelegramClient`,
+  `Delivery`, `CommandHandler`, `run_commands`); двигун — `ack_delivered`, `note_attempt` +
+  `tests/test_alerts_telegram.py` (18; Bot API — справжній HTTP до фейкового сервера). Мутації 25/25 ловляться (одна
+  спершу вижила: без підтвердження доставки черга лишалась, а тест дивився лише на ще не створений файл — посилено).
+  Живий запит до справжнього api.telegram.org з недійсним токеном: 401 розібрано, токена в тексті нема. Справжня
+  доставка — після того як власник створить бота. Не на проді.

@@ -296,6 +296,7 @@ def test_uds_reader_requests_disk_range_and_raises_on_degraded_window():
     read = uds_final_m1_reader(SimpleNamespace(read_window=read_window))
     assert read("XAU/USD", 10, 20, 5) == [{"x": 1}]
     spec, policy = seen[0]
-    assert (spec.tf_s, spec.since_open_ms, spec.to_open_ms, spec.limit, policy.disk_policy) == (60, 10, 20, 5, "explicit")
+    requested = (spec.tf_s, spec.since_open_ms, spec.to_open_ms, spec.limit, policy.disk_policy)
+    assert requested == (60, 10, 20, 5, "explicit")
     with pytest.raises(M1ReadError, match="BAD"):
         read("BAD", 10, 20, 5)

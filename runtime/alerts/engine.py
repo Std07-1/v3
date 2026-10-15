@@ -100,6 +100,19 @@ class AlertEngine:
         mark = self.store.checked_until_ms.get(symbol)
         return first_minute - 1 if mark is None else max(first_minute - 1, mark)
 
+    def ack_delivered(self, key: Tuple[str, int]) -> None:
+        """Доставлено — зняти з черги й записати. Якщо запис не вдався, після рестарту буде дубль, не втрата."""
+        self.store.ack(key)
+        self._unsaved = True
+        self._commit()
+
+    def note_attempt(self, key: Tuple[str, int]) -> None:
+        """Невдала спроба доставки: лічильник у записі черги (на диск — з наступним записом)."""
+        entry = self.store.outbox.get(key)
+        if entry is not None:
+            self.store.outbox[key] = dataclasses.replace(entry, attempts=entry.attempts + 1)
+            self._unsaved = True
+
     def retry_unsaved(self) -> None:
         """Повтор запису, що не вдався (кличе цикл опитування): без нових подій стан інакше лишився б лише в пам'яті."""
         if self._unsaved:
