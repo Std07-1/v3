@@ -132,3 +132,22 @@ def test_reward_to_risk_above_ten_says_narrow_zone_instead_of_a_misleading_numbe
     row = _section(_brief({M15: _narrate(M15, zone=thin, price=5145.0), H1: None}), "setups").rows[1]
 
     assert row.notes[1] == "Стоп 5146.00 · ціль PDL 5062.00 · R:R > 10 (вузька зона)"
+
+
+def _m15_plan(atr_by_tf, rr_min_risk_atr):
+    briefing = compose_briefing("XAU/USD", 1_000, BEARISH, {M15: _narrate(M15)}, STRIP, [], [M15], 2,
+                                atr_by_tf=atr_by_tf, rr_min_risk_atr=rr_min_risk_atr)
+    return _section(briefing, "setups").rows[0].notes[1]
+
+
+def test_reward_to_risk_is_hidden_when_the_stop_sits_inside_one_bar_of_noise():
+    """Ризик від краю входу 5144 до стопу 5225 — 81: проти ATR M15 100 і порогу 1.0 це шум бару — R:R не показується."""
+    assert _m15_plan({M15: 100.0}, 1.0) == "Стоп 5225.00 · ціль PDL 5062.00 · R:R не показано — стоп ближче 1 ATR M15"
+    assert _m15_plan({M15: 100.0}, 0.5) == "Стоп 5225.00 · ціль PDL 5062.00 · R:R 1.0 від краю зони"
+
+
+def test_reward_to_risk_stays_when_atr_is_not_measured_or_threshold_is_off():
+    shown = "Стоп 5225.00 · ціль PDL 5062.00 · R:R 1.0 від краю зони"
+
+    assert _m15_plan({}, 1.0) == shown
+    assert _m15_plan({M15: 100.0}, 0.0) == shown

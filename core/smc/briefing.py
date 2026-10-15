@@ -66,9 +66,13 @@ class Briefing:
 
 
 def compose_briefing(symbol, as_of_ms, bias_map, narratives, strip_tfs, context_tfs, setup_tfs, price_digits,
-                     tail_sections=()):
-    # type: (str, int, Mapping[str, str], Mapping[int, Optional[NarrativeBlock]], Sequence[int], Sequence[int], Sequence[int], Optional[int], Sequence[BriefingSection]) -> Briefing
-    """Розбір із наративів TF глядача (`narratives`: tf_s → блок; None — блоку немає). Старші TF — першими."""
+                     tail_sections=(), atr_by_tf=None, rr_min_risk_atr=0.0):
+    # type: (str, int, Mapping[str, str], Mapping[int, Optional[NarrativeBlock]], Sequence[int], Sequence[int], Sequence[int], Optional[int], Sequence[BriefingSection], Optional[Mapping[int, float]], float) -> Briefing
+    """Розбір із наративів TF глядача (`narratives`: tf_s → блок; None — блоку немає). Старші TF — першими.
+
+    `atr_by_tf` — виміряний ATR TF глядача (той самий, що в його наративі); `rr_min_risk_atr` — поріг «стоп у шумі
+    бару»: ризик від краю входу до стопу менший за нього × ATR — R:R не показується (`smc.briefing`).
+    """
     warnings = [] if price_digits is not None else ["price_digits_missing"]
     digits = _DEFAULT_PRICE_DIGITS if price_digits is None else price_digits
     for tf_s in list(context_tfs) + list(setup_tfs):
@@ -79,7 +83,8 @@ def compose_briefing(symbol, as_of_ms, bias_map, narratives, strip_tfs, context_
     if context_rows:
         sections.append(BriefingSection("context", "Контекст старшого TF", context_rows))
     setup_rows = tuple(row for tf_s in sorted(setup_tfs, reverse=True)
-                       for row in _setup_rows(tf_s, narratives.get(tf_s), digits))
+                       for row in _setup_rows(tf_s, narratives.get(tf_s), digits, (atr_by_tf or {}).get(tf_s, 0.0),
+                                              rr_min_risk_atr))
     if setup_rows:
         sections.append(BriefingSection("setups", "Сетапи", setup_rows))
     return Briefing(symbol, as_of_ms, tuple(sections) + tuple(tail_sections), tuple(warnings))
@@ -127,17 +132,23 @@ def _context_row(tf_s, block):
     return BriefingRow(label, text, notes, _DIRECTION_TONE[context.direction])
 
 
-def _setup_rows(tf_s, block, digits):
-    # type: (int, Optional[NarrativeBlock], int) -> Tuple[BriefingRow, ...]
+def _setup_rows(tf_s, block, digits, atr, rr_min_risk_atr):
+    # type: (int, Optional[NarrativeBlock], int, float, float) -> Tuple[BriefingRow, ...]
     label = tf_to_label(tf_s)
     if block is None or not block.scenarios:
         return (_state_row(label, block),)
-    return tuple(_scenario_row(label, tf_s, scenario, index, digits) for index, scenario in enumerate(block.scenarios))
+    return tuple(_scenario_row(label, tf_s, scenario, index, digits, atr, rr_min_risk_atr)
+                 for index, scenario in enumerate(block.scenarios))
 
 
-def _scenario_row(label, tf_s, scenario, index, digits):
-    # type: (str, int, ActiveScenario, int, int) -> BriefingRow
-    """Сетап: бік і зона входу; стан; стоп · ціль · R:R від краю зони — ті самі числа, що в тексті сценарію."""
+def _scenario_row(label, tf_s, scenario, index, digits, atr, rr_min_risk_atr):
+    # type: (str, int, ActiveScenario, int, int, float, float) -> BriefingRow
+    """Сетап: бік і зона входу; стан; стоп · ціль · R:R від краю зони — ті самі числа, що в тексті сценарію.
+
+    Стоп ближче за `rr_min_risk_atr` × ATR TF глядача — у шумі одного бару: R:R від такого стопу — не оцінка угоди, а
+    наслідок тонкої зони (XAU H1 15.10: зона 0.31, R:R 33.0), тож замість числа — чому його немає (R3). ATR не виміряно —
+    поріг не діє.
+    """
     zone_tf = scenario.zone_tf_s
     text = "{} · {}".format(_SIDE[scenario.direction], scenario.entry_desc)
     if zone_tf is not None and zone_tf != tf_s:
@@ -150,7 +161,9 @@ def _scenario_row(label, tf_s, scenario, index, digits):
         plan.append("Стоп " + fmt_price(scenario.stop_price, digits))
     plan.append("ціль " + scenario.target_desc if scenario.target_desc else "ціль не знайдено")
     rr = reward_to_risk(scenario.direction, scenario.entry_edge, scenario.stop_price, scenario.target_price)
-    if rr is not None:
+    if rr is not None and atr > 0 and abs(scenario.entry_edge - scenario.stop_price) < rr_min_risk_atr * atr:
+        plan.append("R:R не показано — стоп ближче {:g} ATR {}".format(rr_min_risk_atr, label))
+    elif rr is not None:
         plan.append("R:R {:.1f} від краю зони".format(rr) if rr <= RR_DISPLAY_MAX
                     else "R:R > {:.0f} (вузька зона)".format(RR_DISPLAY_MAX))
     return BriefingRow(label, text, (state, " · ".join(plan)), _DIRECTION_TONE[scenario.direction])
