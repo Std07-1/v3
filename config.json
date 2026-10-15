@@ -621,6 +621,12 @@
         900
       ]
     },
+    "briefing": {
+      "_comment": "ADR-0113 Ф3 «Розбір» (власник 15.10: «Так, беремо»): розбір символу з наративів TF глядача — напрям TF стрічки shell.strip_tfs, контекст narrative.htf_context.viewer_tfs, сетапи htf_context.setup_tfs, ліквідність поруч (liquidity_tf_s, liquidity_per_side на бік) і сесія; рахується раз на закритий бар рушія. enabled=false — поля briefing у кадрі немає (вмикання — з «го» власника).",
+      "enabled": false,
+      "liquidity_tf_s": 3600,
+      "liquidity_per_side": 2
+    },
     "signals": {
       "_deprecated_by": "smc.tda_cascade (ADR-0040). Active fallback when tda_cascade.enabled=false.",
       "enabled": false,

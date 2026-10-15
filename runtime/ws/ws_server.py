@@ -107,6 +107,8 @@ class SmcRunnerLike(Protocol):
         self, symbol: str, tf_s: int, narrative: Any, price: float, atr: float
     ) -> Any: ...
 
+    def get_briefing(self, symbol: str) -> Any: ...
+
     def warmup(self, uds: UdsLike) -> None: ...
 
 
@@ -665,6 +667,20 @@ def _hud_volatility(
     return measured["atr"], measured["rv"], warnings
 
 
+def _put_briefing(frame: Dict[str, Any], runner: Any, symbol: str) -> None:
+    """Розбір символу в кадр (ADR-0113 Ф3): повний кадр і дельта на закритому барі; runner кешує його на закритий бар.
+
+    Поля нема — розбір вимкнений (`smc.briefing.enabled=false`) чи не склався: UI тоді кнопки «Розбір» не показує.
+    """
+    try:
+        briefing = runner.get_briefing(symbol)
+    except Exception:
+        _log.warning("WS_BRIEFING_ERR sym=%s", symbol, exc_info=True)
+        return
+    if briefing is not None:
+        frame["briefing"] = briefing.to_wire()
+
+
 # /api/context: ATR запитаного TF + опорних H4/D1 для зовнішніх споживачів (бот, TUI)
 _CONTEXT_ATR_REFERENCE_TFS = (14400, 86400)
 
@@ -1074,6 +1090,8 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                 _log.warning(
                     "WS_NARRATIVE_ERR sym=%s err=%s", session.symbol, _narr_exc
                 )
+        if _smc_runner is not None:
+            _put_briefing(frame, _smc_runner, session.symbol)
         # D4: формуюча свічка з preview у хвіст — ПІСЛЯ SMC/narrative/signals вище:
         # вони беруть candles[-1] як закритий бар (_last_c/_atr_est), формуюча зіпсувала б їх
         if session.tf_s in app.get(APP_PREVIEW_TF_SET, set()):
@@ -1695,6 +1713,7 @@ async def _global_delta_loop(app: web.Application) -> None:
                                         symbol,
                                         _narr_exc,
                                     )
+                                _put_briefing(frame, _smc_runner, symbol)
                             # ADR-0104 §3.7: повний список рівнів глядача TF у кожній дельті — те саме джерело, що й
                             # повний кадр; UI замінює ним шар рівнів (сирі level-зміни smc_delta — поза політикою).
                             # None — обчислення впало (runner уже залогував warning): UI лишає останні рівні
