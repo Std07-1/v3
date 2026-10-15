@@ -109,6 +109,7 @@ export class DrawingsRenderer {
       pointerType: string; // поріг початку перетягування залежить від вказівника (geometry.dragStarted)
       started: boolean; // поріг перейдено — до того це клік (вибір), фігура не змінюється
       grabOffset?: { x: number; y: number }; // дотик: ручка мінус палець при захопленні (ADR-0112 D8)
+      deleteOnTap: boolean; // натиснуто × (ADR-0079): відпустив до порогу — видалити; повів — тягнеться (ADR-0112 D8)
     } = null;
 
   // hit-test/cache
@@ -787,20 +788,6 @@ export class DrawingsRenderer {
 
       const hit = this.performHitTest(x, y);
 
-      // × (hover-афорданс по центру, ADR-0079) — коли вказівник ближче до нього, ніж до ручки (ADR-0112 D8).
-      if (hit?.onDelete) {
-        e.preventDefault();
-        e.stopPropagation();
-        const target = this.drawings.find((q) => q.id === hit.id);
-        if (target) this.commandStack.push({ type: 'DELETE', drawing: cloneDrawing(target) });
-        this.deleteBtn = null;
-        this.selectedId = null;
-        this.hovered = null;
-        this.updateCursor();
-        this.scheduleRender();
-        return;
-      }
-
       // Selection/Drag: тільки якщо реально hit
       if (!hit) {
         // Клік в пустоту: зняти selection, але НЕ ламати LWC
@@ -837,6 +824,7 @@ export class DrawingsRenderer {
         pointerType: e.pointerType,
         started: false,
         grabOffset: anchor ? grabOffsetFor(e.pointerType, { x: this.toX(anchor.t_ms), y: this.toY(anchor.price) }, x, y) : undefined,
+        deleteOnTap: hit.onDelete,
       };
     };
 
@@ -850,8 +838,15 @@ export class DrawingsRenderer {
       e.preventDefault();
       e.stopPropagation();
 
-      const { id, startObj } = this.dragState;
+      const { id, startObj, deleteOnTap, started } = this.dragState;
       this.dragState = null;
+      // × (ADR-0079) — лише тапом: на дотику × і ручка горизонталі можуть збігатися (ADR-0112 D8)
+      if (deleteOnTap && !started) {
+        this.commandStack.push({ type: 'DELETE', drawing: cloneDrawing(startObj) });
+        this.deleteBtn = null;
+        this.selectedId = null;
+        this.hovered = null;
+      }
       this.updateCursor();
 
       // commit UPDATE (якщо реально змінилося)
@@ -1149,12 +1144,12 @@ export class DrawingsRenderer {
       return;
     }
     if (this.hovered) {
-      if (this.hovered.handleIdx !== null) {
-        // кінець → приціл (open-center reticle): бачиш точку на свічці, не затуляє
-        this.interactionEl.style.cursor = CURSOR_RETICLE;
-      } else if (this.hovered.onDelete) {
+      if (this.hovered.onDelete) {
         // × → звичайний курсор (не рука) — тонка стрілка не ховає червоний ×
         this.interactionEl.style.cursor = 'default';
+      } else if (this.hovered.handleIdx !== null) {
+        // кінець → приціл (open-center reticle): бачиш точку на свічці, не затуляє
+        this.interactionEl.style.cursor = CURSOR_RETICLE;
       } else {
         // тіло → рука-хват (взяв-повів)
         this.interactionEl.style.cursor = 'grab';
@@ -1371,7 +1366,7 @@ export class DrawingsRenderer {
 
     for (let i = 0; i < d.points.length; i++) {
       // Наведену крапку НЕ малюємо — там уже приціл (crosshair), кільце зайве.
-      if (this.hovered?.id === d.id && this.hovered.handleIdx === i) continue;
+      if (this.hovered?.id === d.id && this.hovered.handleIdx === i && !this.hovered.onDelete) continue;
 
       const x = this.toX(d.points[i].t_ms);
       const y = this.toY(d.points[i].price);

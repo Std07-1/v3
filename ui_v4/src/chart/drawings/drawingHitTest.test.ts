@@ -59,8 +59,8 @@ describe('hitTestDrawings — × поруч із ручкою', () => {
     expect(hitTestDrawings(hlineSelected, 153, 381)).toEqual({ id: 'h', handleIdx: 0, onDelete: false });
   });
 
-  it('вказівник рівно на × — видалення (до × ближче, ніж до ручки)', () => {
-    expect(hitTestDrawings(hlineSelected, 158, 380)).toEqual({ id: 'h', handleIdx: null, onDelete: true });
+  it('вказівник рівно на × — тап видалить, а повів — тягне ту саму ручку (× і ручка майже збігаються)', () => {
+    expect(hitTestDrawings(hlineSelected, 158, 380)).toEqual({ id: 'h', handleIdx: 0, onDelete: true });
   });
 
   it('рівно посередині — ручка (вона нічого не руйнує)', () => {

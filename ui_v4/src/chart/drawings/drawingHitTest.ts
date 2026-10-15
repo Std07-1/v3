@@ -1,8 +1,9 @@
 // src/chart/drawings/drawingHitTest.ts
 // Що під вказівником: ручка, × видалення чи тіло фігури — чиста функція поза DrawingsRenderer.ts (X33: файл на межі
 // 1500 рядків; раніше це був performHitTest без тестів). ADR-0112 D8 (14.10): ручка — найточніший намір, тож вона
-// бере гору над тілом і над інтер'єром прямокутника; × — лише коли вказівник ближче до нього, ніж до ручки; ручки
-// фігури під вказівником доступні й без наведення (на дотику наведення нема).
+// бере гору над тілом і над інтер'єром прямокутника; × — лише коли вказівник ближче до нього, ніж до ручки, і видаляє
+// лише тапом (повів від × — тягнеться ручка під ним або тіло); ручки фігури під вказівником доступні й без наведення
+// (на дотику наведення нема).
 
 import type { Drawing, T_MS } from '../../types';
 import { distToPoint } from '../interaction/geometry';
@@ -17,7 +18,8 @@ export interface DrawingHit {
   readonly id: string;
   /** Якір, який тягнути; null — тіло. */
   readonly handleIdx: number | null;
-  /** Вказівник на × активної фігури: клік видаляє, наведення тримає афорданси (× стоїть над лінією). */
+  /** Вказівник на × активної фігури: тап видаляє (повів — тягнеться handleIdx або тіло), наведення тримає афорданси
+   *  (× стоїть над лінією). */
   readonly onDelete: boolean;
 }
 
@@ -42,7 +44,8 @@ export function hitTestDrawings(scene: HitScene, x: number, y: number): DrawingH
   const del = scene.deleteBtn;
   const delDist = del ? distToPoint(x, y, del.x, del.y) : Infinity;
   if (del && delDist <= DELETE_BTN_RADIUS_PX && (handle === null || delDist < handle.dist)) {
-    return { id: del.id, handleIdx: null, onDelete: true };
+    // Горизонталь, поставлена кільцем у центрі: × і ручка збігаються — повів від × тягне ручку (ADR-0112 D8)
+    return { id: del.id, handleIdx: handle !== null && active?.id === del.id ? handle.idx : null, onDelete: true };
   }
   if (active && handle) return { id: active.id, handleIdx: handle.idx, onDelete: false };
 
