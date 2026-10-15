@@ -3,7 +3,8 @@
 - **Доставка** — «щонайменше раз»: запис знімається з черги лише після `ok` від Telegram. Порядок — за часом
   постановки; невдача — пауза з подвоєнням (`retry_first_s` … `retry_max_s`, 429 — `retry_after` від Telegram), решта
   черги чекає (порядок зберігається), прапорець `telegram_unreachable`.
-- **Команди** — довге опитування `getUpdates`: `/start <код>` прив'язує пристрій, `/alerts`, `/devices`,
+- **Команди** — довге опитування `getUpdates`: `/start <код>` видає 6 цифр, які вводять на сторінці, що почала
+  прив'язку (саме посилання нічого не прив'язує — захист від фішингу чужим посиланням), `/alerts`, `/devices`,
   `/revoke <id>`. Поки сповіщення лише для власника (рішення 2а) — будь-який інший чат отримує «лише для власника».
   Відповіді — «не більше разу»: offset рухається до відповіді, тож збій відповіді не повторює команду.
 
@@ -28,6 +29,7 @@ from runtime.alerts.messages import (
     HELP_TEXT,
     OWNER_ONLY_TEXT,
     alerts_list,
+    confirm_code_text,
     devices_list,
     fire_message,
 )
@@ -156,9 +158,10 @@ class CommandHandler:
         digits: Mapping[str, int],
         tz: ZoneInfo,
         clock_ms: Callable[[], int],
+        pair_ttl_ms: int,
     ) -> None:
         self._registry, self._engine, self._owner_chat_id = registry, engine, owner_chat_id
-        self._digits, self._tz, self._clock_ms = digits, tz, clock_ms
+        self._digits, self._tz, self._clock_ms, self._pair_ttl_ms = digits, tz, clock_ms, pair_ttl_ms
 
     def handle(self, chat_id: int, text: str) -> str:
         if chat_id != self._owner_chat_id:
@@ -166,9 +169,9 @@ class CommandHandler:
         command, _, arg = text.strip().partition(" ")
         command, arg = command.split("@", 1)[0].lower(), arg.strip()
         subscriber = subscriber_for_chat(chat_id)
-        if command == "/start" and arg:
-            device = self._registry.bind(arg, subscriber, now_ms=self._clock_ms())
-            return BAD_CODE_TEXT if device is None else f"Пристрій під'єднано: {device.label} ({device.device_id})."
+        if command == "/start" and arg:  # посилання не прив'язує — лише видає цифри для сторінки («код назад»)
+            code = self._registry.issue_confirm_code(arg, subscriber, now_ms=self._clock_ms(), ttl_ms=self._pair_ttl_ms)
+            return BAD_CODE_TEXT if code is None else confirm_code_text(code, ttl_ms=self._pair_ttl_ms)
         if command == "/alerts":
             mine = [a for a in self._engine.store.alerts.values() if a.subscriber_id == subscriber]
             return alerts_list(mine, digits=self._digits, tz=self._tz)

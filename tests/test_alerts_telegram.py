@@ -17,7 +17,14 @@ from aiohttp.test_utils import TestServer
 
 from core.alerts.crossing import on_m1_bar, on_tick
 from core.alerts.types import AlertSide, PriceAlert
-from runtime.alerts.devices import DEVICES_FILE, DeviceRegistry, chat_of_subscriber, subscriber_for_chat
+from runtime.alerts.devices import (
+    DEVICES_FILE,
+    ConfirmOutcome,
+    ConfirmResult,
+    DeviceRegistry,
+    chat_of_subscriber,
+    subscriber_for_chat,
+)
 from runtime.alerts.engine import AlertEngine
 from runtime.alerts.messages import (
     BAD_CODE_TEXT,
@@ -43,6 +50,7 @@ from runtime.alerts.telegram import (
 
 T0 = 1_792_086_371_000  # 15.10.2026 19:46:11 за Прагою (CEST)
 OWNER = 1001
+PAIR_TTL = 600_000
 TOKEN = "123456:SECRET-token"
 TZ = ZoneInfo("Europe/Prague")
 DIGITS = {"XAU/USD": 2, "XAG/USD": 3}
@@ -77,42 +85,97 @@ def _fired(alert_id="a1", price=4380.25, **kw) -> PriceAlert:
 
 @pytest.fixture
 def registry(tmp_path):
-    return DeviceRegistry(tmp_path / DEVICES_FILE, new_secret=_secrets())
+    return _registry(tmp_path / DEVICES_FILE)
 
 
-def test_pairing_code_binds_once_and_cookie_token_then_authenticates(registry):
-    code, raw_token = registry.start_pairing("Android · Chrome", now_ms=T0, ttl_ms=600_000)
-    assert registry.authenticate(raw_token) is None  # до прив'язки cookie нічого не відкриває
-    device = registry.bind(code, subscriber_for_chat(OWNER), now_ms=T0 + 1_000)
-    assert device is not None and registry.authenticate(raw_token) == device
-    assert registry.authenticate(raw_token + "x") is None and registry.authenticate(code) is None
-    assert registry.bind(code, subscriber_for_chat(OWNER), now_ms=T0 + 2_000) is None  # одноразово
-    assert raw_token not in registry.path.read_text(encoding="utf-8")  # на диску лише sha256
-    assert DeviceRegistry.load(registry.path).devices == registry.devices
+def _registry(path, *, secrets=None, codes=None, max_pending=4) -> DeviceRegistry:
+    codes = codes or (f"{n:06d}" for n in itertools.count(111111, 111111))
+    return DeviceRegistry(
+        path,
+        confirm_attempts=3,
+        max_pending=max_pending,
+        new_secret=secrets or _secrets(),
+        new_confirm_code=lambda: next(codes),
+    )
 
 
-def test_expired_or_unknown_code_does_not_bind(registry):
-    code, _ = registry.start_pairing("ПК", now_ms=T0, ttl_ms=600_000)
-    assert registry.bind(code, subscriber_for_chat(OWNER), now_ms=T0 + 600_000) is None
-    assert registry.bind("nope", subscriber_for_chat(OWNER), now_ms=T0) is None
+def _pair(registry, *, label="ПК", chat=OWNER, now_ms=T0):
+    """Повний «код назад»: сторінка → бот → сторінка. → (пристрій, сирий токен)."""
+    link, raw = registry.start_pairing(label, now_ms=now_ms, ttl_ms=PAIR_TTL)
+    digits = registry.issue_confirm_code(link, subscriber_for_chat(chat), now_ms=now_ms, ttl_ms=PAIR_TTL)
+    return registry.confirm(raw, digits, now_ms=now_ms).device, raw
+
+
+def test_link_alone_does_not_bind_only_bot_digits_entered_in_same_browser_do(registry):
+    link, raw = registry.start_pairing("Android · Chrome", now_ms=T0, ttl_ms=PAIR_TTL)
+    assert registry.confirm(raw, "111111", now_ms=T0).outcome is ConfirmOutcome.AWAITING_BOT  # бот ще не видав цифр
+    digits = registry.issue_confirm_code(link, subscriber_for_chat(OWNER), now_ms=T0, ttl_ms=PAIR_TTL)
+    assert registry.devices == {} and registry.authenticate(raw) is None  # посилання саме нічого не прив'язало
+    _, other_browser = registry.start_pairing("чужий", now_ms=T0, ttl_ms=PAIR_TTL)
+    assert registry.confirm(other_browser, digits, now_ms=T0).outcome is ConfirmOutcome.AWAITING_BOT
+    assert registry.confirm(raw, "000000", now_ms=T0) == ConfirmResult(ConfirmOutcome.WRONG_CODE, attempts_left=2)
+    result = registry.confirm(raw, digits, now_ms=T0 + 1_000)
+    assert result.outcome is ConfirmOutcome.BOUND and registry.authenticate(raw) == result.device
+    assert result.device.subscriber_id == subscriber_for_chat(OWNER)
+    assert registry.authenticate(raw + "x") is None and registry.authenticate(link) is None
+    assert registry.confirm(raw, digits, now_ms=T0).outcome is ConfirmOutcome.NO_PAIRING  # одноразово
+    assert raw not in registry.path.read_text(encoding="utf-8")  # на диску лише sha256
+    assert DeviceRegistry.load(registry.path, confirm_attempts=3, max_pending=4).devices == registry.devices
+
+
+def test_wrong_or_malformed_digits_spend_attempts_and_lock(registry):
+    link, raw = registry.start_pairing("ПК", now_ms=T0, ttl_ms=PAIR_TTL)
+    digits = registry.issue_confirm_code(link, subscriber_for_chat(OWNER), now_ms=T0, ttl_ms=PAIR_TTL)
+    assert registry.confirm(raw, "١١١١١١", now_ms=T0).attempts_left == 2  # не-ASCII цифри — не виняток, а спроба
+    assert registry.confirm(raw, "12345", now_ms=T0).attempts_left == 1
+    assert registry.confirm(raw, "abcdef", now_ms=T0).outcome is ConfirmOutcome.LOCKED
+    assert registry.confirm(raw, digits, now_ms=T0).outcome is ConfirmOutcome.NO_PAIRING
+    assert registry.issue_confirm_code(link, subscriber_for_chat(OWNER), now_ms=T0, ttl_ms=PAIR_TTL) is None
+
+
+def test_reopened_link_gives_new_digits_and_full_attempts(registry):
+    link, raw = registry.start_pairing("ПК", now_ms=T0, ttl_ms=PAIR_TTL)
+    old = registry.issue_confirm_code(link, subscriber_for_chat(OWNER), now_ms=T0, ttl_ms=PAIR_TTL)
+    registry.confirm(raw, "000000", now_ms=T0)
+    new = registry.issue_confirm_code(link, subscriber_for_chat(OWNER), now_ms=T0 + 1_000, ttl_ms=PAIR_TTL)
+    assert new != old
+    assert registry.confirm(raw, old, now_ms=T0).attempts_left == 2  # старі цифри недійсні, запас спроб повний
+    assert registry.confirm(raw, new, now_ms=T0).outcome is ConfirmOutcome.BOUND
+
+
+def test_digits_live_full_ttl_from_issue_as_the_bot_promises(registry):
+    link, raw = registry.start_pairing("ПК", now_ms=T0, ttl_ms=PAIR_TTL)
+    late = T0 + PAIR_TTL - 1_000  # посилання відкрили наприкінці вікна
+    digits = registry.issue_confirm_code(link, subscriber_for_chat(OWNER), now_ms=late, ttl_ms=PAIR_TTL)
+    assert registry.confirm(raw, digits, now_ms=late + PAIR_TTL - 1).outcome is ConfirmOutcome.BOUND
+
+
+def test_expired_unknown_or_evicted_pairing_does_not_issue_or_bind(tmp_path):
+    registry = _registry(tmp_path / DEVICES_FILE, max_pending=2)
+    link, raw = registry.start_pairing("ПК", now_ms=T0, ttl_ms=PAIR_TTL)
+    assert registry.issue_confirm_code(link, subscriber_for_chat(OWNER), now_ms=T0 + PAIR_TTL, ttl_ms=PAIR_TTL) is None
+    assert registry.issue_confirm_code("nope", subscriber_for_chat(OWNER), now_ms=T0, ttl_ms=PAIR_TTL) is None
+    assert registry.confirm(raw, "111111", now_ms=T0 + PAIR_TTL).outcome is ConfirmOutcome.NO_PAIRING
+    first, _ = registry.start_pairing("1", now_ms=T0, ttl_ms=PAIR_TTL)
+    registry.start_pairing("2", now_ms=T0 + 1, ttl_ms=PAIR_TTL)
+    registry.start_pairing("3", now_ms=T0 + 2, ttl_ms=PAIR_TTL)  # понад max_pending — найстаріша відкинута
+    assert registry.issue_confirm_code(first, subscriber_for_chat(OWNER), now_ms=T0 + 3, ttl_ms=PAIR_TTL) is None
     assert registry.devices == {}
 
 
 def test_revoke_only_own_device(registry):
-    code, raw = registry.start_pairing("ПК", now_ms=T0, ttl_ms=600_000)
-    device = registry.bind(code, subscriber_for_chat(OWNER), now_ms=T0)
+    device, raw = _pair(registry)
     assert registry.revoke(device.device_id, subscriber_for_chat(999)) is False
     assert registry.revoke(device.device_id, subscriber_for_chat(OWNER)) is True
-    assert registry.authenticate(raw) is None and DeviceRegistry.load(registry.path).devices == {}
+    assert registry.authenticate(raw) is None
+    assert DeviceRegistry.load(registry.path, confirm_attempts=3, max_pending=4).devices == {}
 
 
 def test_short_device_id_collision_does_not_overwrite(tmp_path):
-    ids = iter(["c1", "t1", "c2", "t2", "dup", "dup", "fresh"])
-    registry = DeviceRegistry(tmp_path / DEVICES_FILE, new_secret=lambda n: next(ids))
-    code1, _ = registry.start_pairing("A", now_ms=T0, ttl_ms=1_000)
-    code2, _ = registry.start_pairing("B", now_ms=T0, ttl_ms=1_000)
-    first = registry.bind(code1, subscriber_for_chat(OWNER), now_ms=T0)
-    second = registry.bind(code2, subscriber_for_chat(OWNER), now_ms=T0)
+    ids = iter(["c1", "t1", "dup", "c2", "t2", "dup", "fresh"])
+    registry = _registry(tmp_path / DEVICES_FILE, secrets=lambda n: next(ids))
+    first, _ = _pair(registry, label="A")
+    second, _ = _pair(registry, label="B")
     assert (first.device_id, second.device_id) == ("dup", "fresh") and len(registry.devices) == 2
 
 
@@ -121,7 +184,7 @@ def test_devices_file_with_unknown_field_refuses_to_load(tmp_path):
     device = {"device_id": "d", "token_sha256": "h", "subscriber_id": "tg:1", "label": "ПК", "created_ms": T0}
     path.write_text(json.dumps({"schema": 1, "devices": [{**device, "admin": True}]}), encoding="utf-8")
     with pytest.raises(ValueError, match="рівно"):
-        DeviceRegistry.load(path)
+        DeviceRegistry.load(path, confirm_attempts=3, max_pending=4)
 
 
 @pytest.mark.parametrize(
@@ -297,18 +360,22 @@ async def test_delivery_honors_retry_after_and_caps_backoff(engine):
 
 
 def _handler(registry, engine):
-    return CommandHandler(registry, engine, owner_chat_id=OWNER, digits=DIGITS, tz=TZ, clock_ms=lambda: T0)
+    return CommandHandler(
+        registry, engine, owner_chat_id=OWNER, digits=DIGITS, tz=TZ, clock_ms=lambda: T0, pair_ttl_ms=PAIR_TTL
+    )
 
 
 def test_commands_owner_only_start_alerts_devices_revoke(registry, engine):
     handler = _handler(registry, engine)
-    code, raw = registry.start_pairing("Android · Chrome", now_ms=T0, ttl_ms=600_000)
-    assert handler.handle(999, f"/start {code}") == OWNER_ONLY_TEXT
-    assert registry.authenticate(raw) is None  # чужий чат не «з'їв» код власника
-    reply = handler.handle(OWNER, f"/start@v3_signals_bot {code}")
-    device = registry.authenticate(raw)
-    assert reply == f"Пристрій під'єднано: Android · Chrome ({device.device_id})."
-    assert handler.handle(OWNER, f"/start {code}") == BAD_CODE_TEXT
+    link, raw = registry.start_pairing("Android · Chrome", now_ms=T0, ttl_ms=PAIR_TTL)
+    assert handler.handle(999, f"/start {link}") == OWNER_ONLY_TEXT
+    assert registry.confirm(raw, "111111", now_ms=T0).outcome is ConfirmOutcome.AWAITING_BOT  # чужий чат цифр не дав
+    reply = handler.handle(OWNER, f"/start@v3_signals_bot {link}")
+    assert reply.splitlines()[0] == "Код для сайту: 111111" and "Діє 10 хв" in reply
+    assert registry.authenticate(raw) is None  # саме посилання не прив'язує
+    device = registry.confirm(raw, "111111", now_ms=T0).device
+    assert registry.authenticate(raw) == device
+    assert handler.handle(OWNER, f"/start {link}") == BAD_CODE_TEXT  # прив'язку завершено — посилання мертве
 
     engine.store.put(_alert("mine"))
     engine.store.put(_alert("theirs", subscriber=subscriber_for_chat(999)))

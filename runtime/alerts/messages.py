@@ -27,6 +27,15 @@ OWNER_ONLY_TEXT = "Цей бот поки працює лише для влас�
 BAD_CODE_TEXT = "Код недійсний або минув. Відкрийте на сайті «Під'єднати Telegram» ще раз."
 
 
+def confirm_code_text(code: str, *, ttl_ms: int) -> str:
+    """6 цифр для сторінки (ADR-0114 §4.5, «код назад»): прив'язка — лише там, де їх введуть."""
+    return (
+        f"Код для сайту: {code}\n"
+        f"Введіть його на сторінці, де щойно натиснули «Під'єднати Telegram». Діє {ttl_ms // 60_000} хв.\n"
+        "Якщо ви нічого не натискали — нікому не пересилайте цей код: він під'єднує браузер до ваших сповіщень."
+    )
+
+
 def require_digits(symbols: Iterable[str], digits: Mapping[str, int]) -> None:
     missing = sorted(s for s in symbols if not isinstance(digits.get(s), int))
     if missing:
