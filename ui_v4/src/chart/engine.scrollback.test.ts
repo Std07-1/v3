@@ -157,4 +157,18 @@ describe('ChartEngine — scrollback застосовується лише до 
         expect(consoleError).not.toHaveBeenCalled();
         expect(consoleWarn).not.toHaveBeenCalled();
     });
+
+    it('D1 (час — дата рядком): звичайна догрузка не відкидається', () => {
+        const D1_MS = 86_400_000;
+        const firstMs = Date.UTC(2026, 5, 1, 21); // 01.06 21:00 UTC — відкриття D1 влітку
+        engine.setTfS(86400);
+        engine.setData(bars(firstMs, firstMs + 99 * D1_MS, D1_MS));
+        edgeReached();
+        expect(requested).toEqual([firstMs]);
+        engine.prependData(bars(firstMs - 49 * D1_MS, firstMs, D1_MS));
+
+        expect(engine.series.data()).toHaveLength(149);
+        expect(engine.series.data()[0].time).toBe('2026-04-14');
+        expect(consoleWarn).not.toHaveBeenCalled();
+    });
 });
