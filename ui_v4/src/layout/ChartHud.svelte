@@ -1526,6 +1526,8 @@
         width: min(440px, calc(100vw - 24px));
         max-height: calc(100vh - 96px);
         overflow-y: auto;
+        /* довгий текст розбору поверх свічок — щільніший фон, ніж у картки з 4 полями */
+        background: rgba(13, 15, 21, 0.78);
     }
     .mc-brief-toggle {
         all: unset;
@@ -1551,6 +1553,9 @@
     }
     .mc-brief {
         padding: 2px 10px 8px 11px;
+        /* HUD — один рядок (nowrap успадковується); рядки розбору переносяться */
+        white-space: normal;
+        overflow-wrap: anywhere;
     }
     .mb-sec {
         padding: 6px 0 2px;
