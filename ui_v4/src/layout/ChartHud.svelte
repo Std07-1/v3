@@ -537,6 +537,19 @@
                                         </div>
                                     </div>
                                 {/if}
+                                {#if shell.micro_card.target}
+                                    <div
+                                        class="mc-field"
+                                        title={$hintsOn
+                                            ? "Куди тягне ліквідність — ціль сценарію"
+                                            : undefined}
+                                    >
+                                        <div class="mc-label">Ціль</div>
+                                        <div class="mc-val tp">
+                                            {shell.micro_card.target}
+                                        </div>
+                                    </div>
+                                {/if}
                                 {#if shell.micro_card.warning}
                                     <div class="mc-warn">
                                         ⚠ {shell.micro_card.warning}

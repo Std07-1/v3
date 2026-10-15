@@ -442,7 +442,7 @@ class HtfContext:
 
     direction: str  # "long" | "short"
     zone_desc: str  # "зона продажу OB▼ A(6) 158.911–160.370"
-    target_desc: str  # "ціль ліквідності лой Лондона 157.542"; "" — ціль не знайдено
+    target_desc: str  # "лой Лондона 157.542" — ціль ліквідності; "" — не знайдено
     setup_desc: str  # "сетап шукаємо на M15–H1"; "" — TF сетапу не задано
     invalidation: str  # "Вище 160.714 — зона пробита" — та сама межа, що в сценарії
 
@@ -586,6 +586,7 @@ class MicroCard:
     what_needed: str  # trigger_desc or fallback
     what_cancels: str  # invalidation or fallback
     warning: Optional[str] = None  # killzone/off-session warning
+    target: str = ""  # ціль сценарію (target_desc) чи ліквідності контексту H4/D1; "" — нема (ADR-0113 Ф3)
 
     def to_wire(self) -> Dict[str, Any]:
         return {
@@ -594,6 +595,7 @@ class MicroCard:
             "what_needed": self.what_needed,
             "what_cancels": self.what_cancels,
             "warning": self.warning,
+            "target": self.target,
         }
 
 

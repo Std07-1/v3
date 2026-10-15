@@ -452,7 +452,7 @@ class TestWireSerialization:
 def test_htf_context_fills_the_micro_card_instead_of_waiting_for_a_setup():
     import dataclasses
 
-    context = HtfContext("short", "зона продажу OB▼ A(6) 158.911–160.370", "ціль ліквідності лой Лондона 157.542",
+    context = HtfContext("short", "зона продажу OB▼ A(6) 158.911–160.370", "лой Лондона 157.542",
                          "сетап шукаємо на M15–H1", "Вище 160.714 — зона пробита")
     narrative = dataclasses.replace(_make_narrative(sub_mode="htf_context", bias_summary="HTF↓ (D1 і H4)"),
                                     htf_context=context)
@@ -464,5 +464,20 @@ def test_htf_context_fills_the_micro_card_instead_of_waiting_for_a_setup():
     card = shell.micro_card
     assert card.mode_text == "Контекст"
     assert card.why_text == "Зона продажу OB▼ A(6) 158.911–160.370 · HTF↓ (D1 і H4)"
-    assert card.what_needed == "Сетап шукаємо на M15–H1 · ціль ліквідності лой Лондона 157.542"
+    assert card.what_needed == "Сетап шукаємо на M15–H1"
+    assert card.target == "лой Лондона 157.542"
     assert card.what_cancels == "Вище 160.714 — зона пробита"
+
+
+def test_micro_card_target_is_the_primary_scenario_target_and_is_on_the_wire():
+    import dataclasses
+
+    scenario = dataclasses.replace(_scenario(), target_desc="PDL 5062.00")
+    narrative = _make_narrative(mode="trade", sub_mode="aligned", scenarios=[scenario], current_session="london",
+                                in_killzone=True)
+
+    card = compose_shell_payload(narrative, {"86400": "bearish", "14400": "bearish"}, 900, {}).micro_card
+    empty = compose_shell_payload(_make_narrative(), {}, 900, {}).micro_card
+
+    assert card.target == "PDL 5062.00" and card.to_wire()["target"] == "PDL 5062.00"
+    assert empty.target == "" and empty.to_wire()["target"] == ""

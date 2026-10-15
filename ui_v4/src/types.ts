@@ -203,6 +203,7 @@ export interface MicroCard {
   what_needed: string;   // trigger_desc or fallback
   what_cancels: string;  // invalidation or fallback
   warning: string | null;
+  target?: string;      // ціль сценарію чи ліквідності контексту H4/D1 (ADR-0113 Ф3); "" — нема
 }
 
 export interface ShellPayload {

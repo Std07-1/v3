@@ -504,7 +504,7 @@ def _htf_context(
     return HtfContext(
         direction=direction,
         zone_desc="зона {} {}".format(_HTF_CONTEXT_SIDE[direction], _format_entry(zone, grade_info, digits)),
-        target_desc="ціль ліквідності {}".format(target) if target else "",
+        target_desc=target or "",
         setup_desc="сетап шукаємо на {}".format(span) if span else "",
         invalidation=_find_invalidation(zone, digits, stop_price),
     )
@@ -516,7 +516,7 @@ def _htf_context_headline(context, viewer_tf_s):
         tf=_tf_to_label(viewer_tf_s),
         bias=_HTF_CONTEXT_BIAS[context.direction],
         zone=context.zone_desc,
-        target=", " + context.target_desc if context.target_desc else "",
+        target=", ціль ліквідності " + context.target_desc if context.target_desc else "",
         setup=" \u2014 " + context.setup_desc if context.setup_desc else "",
     )
 

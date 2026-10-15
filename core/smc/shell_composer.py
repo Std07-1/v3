@@ -253,6 +253,8 @@ def _build_micro_card(
         what_needed = "Чекаємо сетап" if stage in ("wait", "stayout") else "Аналіз…"
     if not what_cancels:
         what_cancels = "—"
+    # ADR-0113 Ф3: куди тягне ліквідність — ціль основного сценарію
+    target = (narrative.scenarios[0].target_desc or "") if narrative.scenarios else ""
 
     # ── Warning ──
     warning: Optional[str] = None
@@ -264,11 +266,12 @@ def _build_micro_card(
 
     context = narrative.htf_context
     if context is not None:
-        # ADR-0113: на H4/D1 — контекст: зона й напрям, де шукати сетап і куди тягне ліквідність, межа контексту
+        # ADR-0113: на H4/D1 — контекст: зона й напрям, де шукати сетап, куди тягне ліквідність, межа контексту
         mode_text = mode_texts.get("context", _DEFAULT_MODE_TEXT["context"])
         why_text = " · ".join(p for p in (_sentence(context.zone_desc), narrative.bias_summary) if p)
-        what_needed = _sentence(" · ".join(p for p in (context.setup_desc, context.target_desc) if p)) or "—"
+        what_needed = _sentence(context.setup_desc) or "—"
         what_cancels = context.invalidation or "—"
+        target = context.target_desc
 
     return MicroCard(
         mode_text=mode_text,
@@ -276,6 +279,7 @@ def _build_micro_card(
         what_needed=what_needed,
         what_cancels=what_cancels,
         warning=warning,
+        target=target,
     )
 
 

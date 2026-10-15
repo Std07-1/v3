@@ -505,3 +505,19 @@ If a future change suggests:
 - "Let's use `archi_presence.status === 'watching'` to detect bot alive" → STOP. Read §Liveness detection. Use `archi_thesis.freshness`.
 
 The contract is locked. Modifications require ADR amendment, not silent edits.
+
+### Rev 4 amendment (2026-10-15) — без Арчі пігулка показує заголовок системного наративу
+
+Власник 15.10 («Го»; ADR-0113 Ф3): Арчі на VPS вимкнений, і пігулка — найпомітніше місце правого верхнього
+кута — роками писала «Idle». Тепер у ланцюжку `compactPillText` між п. 1 і п. 2 — новий крок:
+
+- **1b. Немає свіжої тези Арчі** → `narrative.headline` дослівно (бекенд склав, фронт не перераховує — X28).
+  Коли Арчі повертається зі свіжою тезою — п. 1 знову виграє. Пункти «Арчі вимкнений · Nh» і «Арчі {status}»
+  лишаються лише для кадрів без заголовка.
+- Пігулка обрізає текст (`max-width`), тож повний — у `title` підказки.
+- **Розгорнута частина (Tier 3) — без змін, лише Арчі**: системний наратив (bias_summary, scenarios,
+  warnings, fvg_context, next_area) у тілі NP і далі заборонений; розбір живе в shell-мікрокартці (ADR-0036,
+  рядок «Ціль» — ADR-0113 Ф3).
+
+Заборона «`narrative.headline` у пігулці» з Tier 2 знята лише для п. 1b; синтез із полів сценаріїв (`entry_desc`,
+`target_desc` тощо) у пігулці й далі заборонений.
