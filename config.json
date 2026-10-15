@@ -625,7 +625,9 @@
       "_comment": "ADR-0113 Ф3 «Розбір» (власник 15.10: «Так, беремо»): розбір символу з наративів TF глядача — напрям TF стрічки shell.strip_tfs, контекст narrative.htf_context.viewer_tfs, сетапи htf_context.setup_tfs, ліквідність поруч (liquidity_tf_s, liquidity_per_side на бік) і сесія; рахується раз на закритий бар рушія. enabled=false — поля briefing у кадрі немає (вмикання — з «го» власника).",
       "enabled": true,
       "liquidity_tf_s": 3600,
-      "liquidity_per_side": 2
+      "liquidity_per_side": 2,
+      "_comment_rr_min_risk_atr": "R:R сетапу не показується, коли ризик від краю входу до стопу менший за rr_min_risk_atr × ATR TF глядача (власник 16.10). 1.0 — замір ADR-0113 §3.10: XAU+XAG 01.04–28.09, M15/H1 — 8 сетапів з ризиком 0.15–0.73 ATR (R:R 6.6–20.4, жодної цілі) і 15 з 1.91–10.9 ATR (R:R 0.3–2.9), між ними порожньо; один звичайний бар зачіпає стоп на 1 ATR у 13 % випадків, на 0.5 — у 38 %. 0 — поріг вимкнено.",
+      "rr_min_risk_atr": 1.0
     },
     "signals": {
       "_deprecated_by": "smc.tda_cascade (ADR-0040). Active fallback when tda_cascade.enabled=false.",

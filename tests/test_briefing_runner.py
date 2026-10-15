@@ -102,3 +102,24 @@ def test_briefing_goes_into_the_frame_only_when_the_runner_has_one():
     _put_briefing(broken, _Runner(RuntimeError("boom")), XAU)
 
     assert with_briefing == {"briefing": {"symbol": XAU}} and without == {} and broken == {}
+
+
+def test_runner_passes_viewer_tf_atr_and_the_config_threshold_into_the_briefing(tmp_path, monkeypatch):
+    import runtime.smc.smc_runner as smc_runner_mod
+
+    seen = {}
+    real = smc_runner_mod.compose_briefing
+
+    def _spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(smc_runner_mod, "compose_briefing", _spy)
+    runner = _runner(tmp_path)
+    runner._full_config["smc"]["briefing"]["rr_min_risk_atr"] = 0.7
+
+    runner.get_briefing(XAU)
+
+    assert seen["rr_min_risk_atr"] == 0.7
+    assert sorted(seen["atr_by_tf"]) == [900, 3600, 14400, 86400]
+    assert all(atr == runner._narrative_atr(XAU, tf_s, 0.0) and atr > 0 for tf_s, atr in seen["atr_by_tf"].items())
