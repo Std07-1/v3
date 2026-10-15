@@ -101,9 +101,14 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
 ### 4.3 Процес і стан (`runtime/alerts/`, програма `smc-alerts`)
 - Окрема supervisor-програма у власному conf (як `smc-agent-bridge`), поза групою `smc`: `restart smc:smc-ws` її не
   чіпає. Слухає `127.0.0.1:<alerts.port>`; nginx `location /api/alerts/` на vhost сайту → цей порт.
-- **Стан** — `alerts.state_dir` (`/var/lib/smc-v3/alerts`, власник `smc`, 750): JSON, атомарний запис (tmp → fsync →
-  rename), один записувач — цей процес. Битий файл → копія `*.corrupt-<ms>` + `ALERTS_STATE_CORRUPT` у лог і в
-  health, новий стан порожній (I5, як `drawingsStorage`).
+- **Стан** — `alerts.state_dir` (`/var/lib/smc-v3/alerts`, власник `smc`, 750): JSON `alerts.json`
+  (`runtime/alerts/store.py`), атомарний запис (tmp → fsync → rename → fsync теки; збій запису лишає попередню цілу
+  версію і не лишає tmp), один записувач — цей процес. Битий файл або хибні записи → копія сирого файлу
+  `*.corrupt-<ms>` + `ALERTS_STATE_CORRUPT` у лог і в health, валідне лишається (I5). Схема новіша за код (відкат
+  версії) → процес не стартує (`StoreSchemaError`, supervisor FATAL → «Monitor»), файл не чіпається.
+- **Вихідна черга** зберігає знімок спрацьованого сповіщення (ключ — `alert_id` + `version`): видалена після
+  спрацювання лінія не скасовує повідомлення; повторне взведення — новий запис. Позначка «M1 перевірено до» —
+  монотонна (E3), назад не рухається.
 - **Ціна:** підписка на `{ns}:price_tick`; символи — з `config.json:symbols`. Втрата підписки → перепідключення з
   backoff, `degraded:["ticks_unavailable"]` у health і лог переходу (не кожної спроби).
 - **Ліміти** (config): активних сповіщень на підписника, запитів на хвилину, розмір тіла запиту.
@@ -198,3 +203,7 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
   (типи з перевіркою узгодженості; `side_of`, `arm`, `on_tick`, `on_m1_bar` — чисті переходи стану) +
   `tests/test_alerts_crossing.py` (24). Мутації логіки — 9/9 ловляться (дві спершу вижили: дотик згори рівно до
   рівня і повторний перетин після спрацювання — тести доповнено). `gate_dependency_rule` зелений. Не на проді.
+- 2026-10-15 — **S2** `core/alerts/codec.py` (суворий dict ↔ `PriceAlert`: бракує, зайве, невідомий enum —
+  `ValueError` з назвою поля) + `runtime/alerts/store.py` (`AlertStore`: стан, вихідна черга, монотонні позначки M1,
+  `write_json_atomic`) + `tests/test_alerts_store.py` (21). Мутації 14/14 ловляться; `gate_dependency_rule` зелений,
+  нових `no_bare_except` нема. Не на проді.
