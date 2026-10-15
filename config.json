@@ -646,7 +646,7 @@
     },
     "narrative_journal": {
       "_comment": "ADR-0113 Ф4: журнал точності — живий прогін. На кожному закритті бару step_tf_s — рядок розбору для viewer_tfs (формат tools.narrative_replay, метрики — tools.narrative_replay_metrics); пишеться, коли рушій отримав перший бар після моменту. Файл — доба UTC моменту. Вмикання — з «го» власника.",
-      "enabled": false,
+      "enabled": true,
       "path": "data_v3/_narrative_journal",
       "step_tf_s": 900,
       "viewer_tfs": [300, 900, 3600, 14400]

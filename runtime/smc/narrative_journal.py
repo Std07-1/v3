@@ -38,8 +38,7 @@ class NarrativeJournal:
         self._lock = threading.Lock()
         self._pending: Dict[str, Tuple[int, float]] = {}  # symbol → (момент закриття, close бару кроку)
         self._written: Dict[str, int] = {}  # symbol → останній записаний момент
-        if self._enabled:
-            os.makedirs(self._dir, exist_ok=True)
+        if self._enabled:  # тека — лише перед першим записом: без рядків журнал нічого не створює на диску
             _log.info("NARRATIVE_JOURNAL_INIT path=%s step_tf_s=%d viewer_tfs=%s", self._dir, self._step_tf_s,
                       self._viewer_tfs)
 
@@ -84,6 +83,7 @@ class NarrativeJournal:
         day = time.strftime("%Y-%m-%d", time.gmtime(close_ms / 1000))
         path = os.path.join(self._dir, day + ".jsonl")
         try:
+            os.makedirs(self._dir, exist_ok=True)
             with open(path, "a", encoding="utf-8") as out:
                 for row in rows:
                     out.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
