@@ -27,7 +27,8 @@ _CONTEXT_BIAS = {"long": "Бичачий", "short": "Ведмежий"}
 _DIRECTION_TONE = {"long": TONE_BULL, "short": TONE_BEAR, "bullish": TONE_BULL, "bearish": TONE_BEAR}
 _SIDE = {"long": "BUY", "short": "SELL"}
 _HTF_WORDS = {"bullish": "вгору", "bearish": "вниз"}
-_PULLBACK_INSIDE = {"bullish": "зростання", "bearish": "падіння"}
+# R:R понад це — вузька зона (стоп за кілька пунктів): число правдиве, але вводить в оману (власник 16.10)
+RR_DISPLAY_MAX = 10.0
 _CLOSED_TEXT = "Ринок закрито — розбір оновиться з відкриттям"
 
 
@@ -101,7 +102,8 @@ def _bias_row(bias_map, strip_tfs):
     if alignment == "aligned":
         note, tone = "D1 і H4 {} — старший напрям узгоджений".format(_HTF_WORDS[direction]), _DIRECTION_TONE[direction]
     elif alignment == "mixed":
-        note = "D1 {}, H4 {} — це відкат усередині {} D1".format(_HTF_WORDS[d1], _HTF_WORDS[h4], _PULLBACK_INSIDE[d1])
+        # Стан, не висновок: H4 проти D1 буває і відкатом, і початком розвороту (власник 16.10)
+        note = "D1 {}, H4 {} — старший напрям змішаний".format(_HTF_WORDS[d1], _HTF_WORDS[h4])
         tone = TONE_WARN
     elif alignment == "partial":
         known, missing = ("D1", "H4") if d1 else ("H4", "D1")
@@ -149,7 +151,8 @@ def _scenario_row(label, tf_s, scenario, index, digits):
     plan.append("ціль " + scenario.target_desc if scenario.target_desc else "ціль не знайдено")
     rr = reward_to_risk(scenario.direction, scenario.entry_edge, scenario.stop_price, scenario.target_price)
     if rr is not None:
-        plan.append("R:R {:.1f} від краю зони".format(rr))
+        plan.append("R:R {:.1f} від краю зони".format(rr) if rr <= RR_DISPLAY_MAX
+                    else "R:R > {:.0f} (вузька зона)".format(RR_DISPLAY_MAX))
     return BriefingRow(label, text, (state, " · ".join(plan)), _DIRECTION_TONE[scenario.direction])
 
 

@@ -47,7 +47,7 @@ def test_bias_row_lists_every_strip_tf_and_says_htf_alignment():
     assert (aligned.text, aligned.notes, aligned.tone) == (
         "D1 ↓ · H4 ↓ · H1 ↓ · M15 ↓", ("D1 і H4 вниз — старший напрям узгоджений",), "bear")
     assert mixed.text == "D1 ↓ · H4 ↑ · H1 — · M15 ↑"
-    assert mixed.notes == ("D1 вниз, H4 вгору — це відкат усередині падіння D1 · «—» — TF ще без структури",)
+    assert mixed.notes == ("D1 вниз, H4 вгору — старший напрям змішаний · «—» — TF ще без структури",)
     assert mixed.tone == "warn"
 
 
@@ -123,3 +123,12 @@ def test_closed_market_briefing_says_so():
 def test_plain_drops_only_a_leading_state_marker():
     assert _plain("⬜ Немає зони рівня A — чекаємо сетап") == "Немає зони рівня A — чекаємо сетап"
     assert _plain("BUY — у зоні") == "BUY — у зоні"
+
+
+def test_reward_to_risk_above_ten_says_narrow_zone_instead_of_a_misleading_number():
+    """Власник 16.10: R:R 33 на зоні в кілька пунктів — арифметично правда, але вводить в оману."""
+    thin = _zone(low=5144.0, high=5146.0)  # ризик 2 пункти до цілі PDL 5062 — R:R 41
+
+    row = _section(_brief({M15: _narrate(M15, zone=thin, price=5145.0), H1: None}), "setups").rows[1]
+
+    assert row.notes[1] == "Стоп 5146.00 · ціль PDL 5062.00 · R:R > 10 (вузька зона)"
