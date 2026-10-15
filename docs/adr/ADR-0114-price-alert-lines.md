@@ -33,7 +33,8 @@
   `agent_bridge.enabled=false` у `config.json`; на проді `smc_trader_v3` STOPPED. Ціна в ньому — close M1
   (`SmcRunner.feed_m1_bar_dict` → `_last_prices`), тобто до хвилини запізнення; cooldown, dedup і «одна подія на тік»
   налаштовані під Арчі (`runtime/smc/wake_engine.py:130-340`).
-- **Тіки:** `broker_sidecar._TickRelay` публікує PubSub `{ns}:price_tick` і `{ns}:tick:last:{SYM}` (TTL 30 с). У полі
+- **Тіки:** `broker_sidecar._TickRelay` публікує PubSub у канал `config.json:channels.price_tick` (`pick_tick_channel`;
+  докстрінг релея `broker_sidecar.py:26` пише `{ns}:price_tick` — застаріло) і `{ns}:tick:last:{SYM}` (TTL 30 с). У полі
   `mid` — ціна за `tick_stream_price_mode` (`"bid"`: `mid = bid`, як свічки графіка, паритет TV FX). Релей **проріджує**
   тіки (`tick_stream_min_interval_ms` 200: тік у межах вікна відкидається, `broker_sidecar.py:439-443`, `:628`) — короткий
   сплеск може не потрапити в жоден опублікований тік, хоча свічка M1 від брокера його покаже.
@@ -109,8 +110,19 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
 - **Вихідна черга** зберігає знімок спрацьованого сповіщення (ключ — `alert_id` + `version`): видалена після
   спрацювання лінія не скасовує повідомлення; повторне взведення — новий запис. Позначка «M1 перевірено до» —
   монотонна (E3), назад не рухається.
-- **Ціна:** підписка на `{ns}:price_tick`; символи — з `config.json:symbols`. Втрата підписки → перепідключення з
-  backoff, `degraded:["ticks_unavailable"]` у health і лог переходу (не кожної спроби).
+- **Ціна** (`runtime/alerts/engine.py`, `feeds.py`; увесь стан — в одному потоці asyncio, без блокувань):
+  - тіки — `redis.asyncio` PubSub на `channels.price_tick` (той самий канал, що слухає `tick_preview_worker`), символи —
+    `config.json:symbols`; битий тік — лічильник і лог з причиною раз на тисячу, тік чужого символу — пропуск; обрив →
+    `ticks_unavailable` і перепідключення через `tick_reconnect_s`; лог лише на переході;
+  - фінальні M1 — UDS reader `read_window` з диска (`disk_policy="explicit"`; диск читає `(after, to]` і віддає
+    найновіші `limit` ключів, тому шматки по `m1_chunk_bars` хвилин не довші за `limit` — нічого не пропускається);
+    читаються лише символи зі взведеними сповіщеннями, від хвилини активації; позначка «перевірено до» стає на
+    `now − m1_final_lag_s` — пізні фінальні в цьому вікні читаються знову (переходи ідемпотентні); деградоване вікно
+    UDS → `m1_unavailable:<символ>`, не тихий порожній список;
+  - стан і черга комітяться одним записом; збій запису → `state_write_failed`, черга лишається в пам'яті для
+    доставки, повтор запису — щоциклу опитування.
+- **Межа:** свіжість цін двигун не перевіряє (не знає календаря): зупинений інжест = нема ні тіків, ні свічок — це
+  ловить нагляд платформи (падіння `smc-fxcm` — «Monitor», ADR-0106).
 - **Ліміти** (config): активних сповіщень на підписника, запитів на хвилину, розмір тіла запиту.
 
 ### 4.4 Доставка
@@ -155,7 +167,8 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
 "alerts": {
   "enabled": false, "port": 8020, "state_dir": "/var/lib/smc-v3/alerts",
   "display_tz": "Europe/Prague", "max_active_per_subscriber": 50,
-  "pair_code_ttl_s": 600, "requests_per_min": 60, "sse_heartbeat_s": 25
+  "pair_code_ttl_s": 600, "requests_per_min": 60, "sse_heartbeat_s": 25,
+  "gap_after_s": 900, "tick_reconnect_s": 5, "m1_poll_s": 15, "m1_final_lag_s": 600, "m1_chunk_bars": 120
 }
 ```
 `gate_adr_config_sync`: рядок `"alerts": "0114"` у `_FEATURE_ADR_MAP`.
@@ -207,3 +220,11 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
   `ValueError` з назвою поля) + `runtime/alerts/store.py` (`AlertStore`: стан, вихідна черга, монотонні позначки M1,
   `write_json_atomic`) + `tests/test_alerts_store.py` (21). Мутації 14/14 ловляться; `gate_dependency_rule` зелений,
   нових `no_bare_except` нема. Не на проді.
+- 2026-10-15 — **S3** `runtime/alerts/engine.py` (`AlertEngine`: `apply_tick`, `apply_m1_bars`, `m1_after_ms`,
+  `retry_unsaved`, прапорці деградацій) + `runtime/alerts/feeds.py` (`run_tick_feed`, `poll_m1_once`/`run_m1_poller`,
+  `uds_final_m1_reader`, `parse_tick`) + `tests/test_alerts_engine.py` (22). Мутації 19/19 ловляться (одна спершу
+  вижила — тік чужого символу; тест доповнено). Живий прогін: UDS на справжньому `data_v3` віддав рівно 300 ключів
+  `(after, to]`, що й сирий part-файл; двигун спрацював на тій самій свічці, що незалежний розрахунок із файла;
+  справжній PubSub локального Redis (тестовий канал) доставив тік → спрацювання. Знахідки: канал тіків —
+  `channels.price_tick`, а не `{ns}:price_tick`; межа діапазону диска — `(since, to]`. `gate_no_bare_except` спершу
+  +1 (`parse_tick`) — переписано на `ValueError` з причиною, знову 38 старих. Не на проді.
