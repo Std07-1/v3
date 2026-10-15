@@ -16,6 +16,13 @@
 
 import type { Drawing, DrawingPoint, DrawingType } from '../../../types';
 
+/** Група варіантів одного інструмента (позиція: довга / коротка) — у капсулі телефона одна кнопка з перемикачем
+ *  (ADR-0112 D9). */
+export interface ToolGroup {
+    readonly id: string;
+    readonly label: string;
+}
+
 /** Масштаб для фігур, що з одного кліку ставлять кілька якорів (позиція, ADR-0111 §3.6). Дає renderer. */
 export interface PlacementEnv {
     /** Одиниця відстані за ціною: ATR поточного TF із сервера (X28), без нього — частка видимого діапазону. */
@@ -105,6 +112,9 @@ export interface ToolModule {
      * @returns ScreenAabb для hit-test cache, або null якщо drawing skipped.
      */
     render(d: Drawing, rc: RenderContext): ScreenAabb | null;
+
+    /** ADR-0112 D9: варіант групи — у капсулі телефона одна кнопка групи, варіант перемикається в режимі інструмента. */
+    readonly group?: ToolGroup;
 
     /** ADR-0111 §3.6: однокрокова фігура з кількома якорями (позиція) — усі якорі з точки кліку. Відсутнє — один
      *  якір у точці кліку. */

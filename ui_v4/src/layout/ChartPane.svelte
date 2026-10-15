@@ -464,9 +464,11 @@
   // ADR-0112: смуга на телефоні + обраний інструмент → курсор-перехрестя (палець веде його 1:1, точку ставить тап
   // або ✓); інакше дотики як завжди (прокрутка, довгий дотик ADR-0108). Після setTool — курсор одразу показує прев'ю.
   let touchCursor: TouchDrawCursor | null = null;
+  // Курсор живе, поки обрано БУДЬ-ЯКИЙ інструмент: інший варіант групи (довга ↔ коротка, D9) не перестворює його —
+  // кільце лишається, де стояло
+  const touchToolSelected = $derived(touchDrawing && activeTool !== null && activeTool !== "eraser");
   $effect(() => {
-    const drawing = touchDrawing && activeTool !== null && activeTool !== "eraser";
-    if (!drawing || !drawingsRenderer || !chartEngine) return;
+    if (!touchToolSelected || !drawingsRenderer || !chartEngine) return;
     const renderer = drawingsRenderer;
     renderer.setTouchCursorMode(true);
     // Лупа (D6) не заходить під рядки HUD (символ і ціна, TF) — межа з їхнього фактичного низу
@@ -495,6 +497,11 @@
       renderer.setTouchCursorMode(false);
       if (touchCursor === cursor) touchCursor = null;
     };
+  });
+  // Інший інструмент при живому курсорі (варіант групи, D9) — прев'ю під кільцем одразу новим інструментом
+  $effect(() => {
+    void activeTool;
+    touchCursor?.refresh();
   });
   $effect(() => {
     drawingsRenderer?.setMagnetEnabled(magnetEnabled ?? false);

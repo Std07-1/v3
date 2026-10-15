@@ -60,4 +60,4 @@ export function getToolModule(type: DrawingType): ToolModule | undefined {
     return TOOL_REGISTRY.get(type);
 }
 
-export type { ToolModule, RenderContext, ScreenAabb, HitTestResult, PlacementEnv } from './types';
+export type { ToolModule, RenderContext, ScreenAabb, HitTestResult, PlacementEnv, ToolGroup } from './types';

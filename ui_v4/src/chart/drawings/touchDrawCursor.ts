@@ -198,6 +198,11 @@ export class TouchDrawCursor {
     anim.oncancel = () => ring.remove();
   }
 
+  /** Інструмент змінився, курсор той самий (варіант групи, ADR-0112 D9): прев'ю й перехрестя — у тій самій точці. */
+  refresh(): void {
+    this.sync();
+  }
+
   destroy(): void {
     this.container.removeEventListener('touchstart', this.onTouchStart, true);
     this.container.removeEventListener('touchmove', this.onTouchMove, true);

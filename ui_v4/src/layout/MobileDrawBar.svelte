@@ -3,16 +3,18 @@
 
   Одна капсула мовою меню HUD (вибір символу/TF: матове скло, рамка, пункти з радіусом 4, активний — синюватий тон
   із золотом; кольори теми — ті самі menuBg/menuBorder, що в ChartHud), лише іконки, золота лінія по верхньому краю.
-  Без інструмента: 6 інструментів реєстру · ↶ · видалити виділене · ✕; ↶ і «видалити» активні лише коли є що
+  Без інструмента: інструменти реєстру (група — одна кнопка: «Позиція», D9) · ↶ · видалити виділене · ✕; ↶ і «видалити» активні лише коли є що
   (canUndo / hasSelection), інакше — притушені й не натискаються.
-  З інструментом капсула стає: ✕ · іконка · крок (крапки + «точка 1 з 2») · магніт · ✓. Точку ставить тап будь-де по
+  З інструментом капсула стає: ✕ · іконка · крок (крапки + «точка 1 з 2») · [варіант групи: довга | коротка] · магніт ·
+  ✓. Точку ставить тап будь-де по
   графіку (touchDrawCursor веде кільце 1:1, тап без руху = точка в кільці) або ✓. Готова фігура — інструмент
   знімається сам (one-shot); ефемерна лінійка лишає результат, наступний тап починає новий вимір.
 -->
 <script lang="ts">
   import { fly } from "svelte/transition";
-  import type { ActiveTool } from "../types";
+  import type { ActiveTool, DrawingType } from "../types";
   import { TOOL_REGISTRY } from "../chart/drawings/tools";
+  import { capsuleEntries, groupVariants } from "../chart/drawings/toolGroups";
   import { ICON_CLOSE, ICON_MAGNET, ICON_TRASH, ICON_UNDO } from "./toolIcons";
 
   type PlaceResult = "draft" | "done" | "none";
@@ -55,6 +57,10 @@
   const current = $derived(
     activeTool && activeTool !== "eraser" ? (TOOL_REGISTRY.get(activeTool) ?? null) : null,
   );
+  /** Останній обраний варіант кожної групи — кнопка групи бере його (D9). */
+  let lastInGroup = $state<Record<string, DrawingType>>({});
+  const entries = $derived(capsuleEntries(tools, lastInGroup));
+  const variants = $derived(current ? groupVariants(tools, current) : []);
 
   // Хід побудови поточної фігури; належить інструменту, з яким його почали (зміна інструмента = з нуля). Точок
   // щонайбільше 2: «draft» завжди означає «поставлено першу» (не лічильник — не розходиться з renderer, рецензія D-2).
@@ -110,6 +116,8 @@
 
   function choose(tool: ActiveTool): void {
     reset();
+    const group = tool && tool !== "eraser" ? TOOL_REGISTRY.get(tool)?.group : undefined;
+    if (group && tool && tool !== "eraser") lastInGroup = { ...lastInGroup, [group.id]: tool };
     if (tool !== null) navigator.vibrate?.(SELECT_VIBRATE_MS);
     onSelectTool(tool);
   }
@@ -155,6 +163,22 @@
             <span class="step-text">{stepLabel}</span>
           </span>
         </span>
+        {#if variants.length > 1}
+          <span class="variants" role="group" aria-label={current.group?.label}>
+            {#each variants as variant (variant.id)}
+              <button
+                class="btn"
+                class:active={variant.id === current.id}
+                type="button"
+                aria-label={variant.label}
+                aria-pressed={variant.id === current.id}
+                onclick={() => variant.id !== current.id && choose(variant.id)}
+              >
+                {@render icon(variant.icon)}
+              </button>
+            {/each}
+          </span>
+        {/if}
         {#if onToggleMagnet}
           <button
             class="btn"
@@ -171,9 +195,9 @@
           {@render icon(ICON_CHECK)}
         </button>
       {:else}
-        {#each tools as tool (tool.id)}
-          <button class="btn" type="button" aria-label={tool.label} onclick={() => choose(tool.id)}>
-            {@render icon(tool.icon)}
+        {#each entries as entry (entry.key)}
+          <button class="btn" type="button" aria-label={entry.label} onclick={() => choose(entry.tool.id)}>
+            {@render icon(entry.tool.icon)}
           </button>
         {/each}
         <span class="sep" style:background={menuBorder}></span>
@@ -297,6 +321,11 @@
   .btn:disabled {
     opacity: 0.22;
     cursor: default;
+  }
+  /* Перемикач варіантів групи (D9): дві кнопки впритул, як пункти меню HUD */
+  .variants {
+    display: inline-flex;
+    flex: 0 0 auto;
   }
   .as-label {
     pointer-events: none;
