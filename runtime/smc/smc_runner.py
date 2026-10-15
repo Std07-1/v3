@@ -50,6 +50,7 @@ from core.smc.zone_path import FormingSpan, ZonePath, first_touch_end_ms, formin
 from core.smc.shell_composer import compose_shell_payload
 from runtime.ingest.market_calendar import TradingCalendar
 from runtime.ingest.tick_common import resolve_symbol_calendars
+from runtime.smc.narrative_journal import NarrativeJournal
 from runtime.smc.signal_journal import SignalJournal
 from runtime.relay.signal_relay import fire_signal, fire_bias
 
@@ -173,6 +174,8 @@ class SmcRunner:
         # ADR-0039: previous signal state per (symbol, tf_s) for lifecycle continuity
         self._prev_signals: Dict[Tuple[str, int], list] = {}
         self._journal = SignalJournal(full_cfg)
+        # ADR-0113 Ф4: журнал точності — живий прогін, рядок розбору на кожному закритті бару кроку
+        self._narrative_journal = NarrativeJournal(full_cfg)
         self._warmup_done = False  # journal gated until warmup completes
         # (symbol, viewer_tf_s) з наративом без виміряного ATR — лог на переході, не кожен виклик
         self._narrative_atr_unmeasured: Set[Tuple[str, int]] = set()
@@ -440,6 +443,8 @@ class SmcRunner:
         """
         cb = _bar_dict_to_candle_bar(bar_dict, symbol, 60)
         if cb is not None:
+            if cb.complete and self._warmup_done:
+                self._narrative_journal.before_bar(symbol, cb.open_time_ms, self.narrative_row)
             self._engine.feed_m1_bar(cb)
             self._last_prices[symbol] = cb.c
 
@@ -460,6 +465,10 @@ class SmcRunner:
         if cb is None:
             _log.debug("SMC_BAR_SKIP sym=%s tf=%s reason=bad_dict", symbol, tf_s)
             return None
+        if cb.complete and self._warmup_done:
+            # ADR-0113 Ф4: перший бар після моменту розбору — рушій уже має всі TF того моменту
+            self._narrative_journal.before_bar(symbol, cb.open_time_ms, self.narrative_row)
+            self._narrative_journal.after_bar(symbol, tf_s, cb.close_time_ms, cb.c, cb.complete)
 
         # ADR-0075: buffer closed-bar events for WakeEngine candle_close.
         # Broker "finale" (cb.complete) IS the closed bar (I3 Final>Preview) —
@@ -808,8 +817,8 @@ class SmcRunner:
             _log.warning("SMC_DISPLAY_LEVELS_FAIL sym=%s tf=%s", symbol, viewer_tf_s, exc_info=True)
             return None
 
-    def get_narrative(self, symbol, viewer_tf_s, current_price, atr=0.0, now_ms=None):
-        # type: (str, int, float, float, Optional[int]) -> Optional[NarrativeBlock]
+    def get_narrative(self, symbol, viewer_tf_s, current_price, atr=0.0, now_ms=None, record=True):
+        # type: (str, int, float, float, Optional[int], bool) -> Optional[NarrativeBlock]
         """ADR-0033 + ADR-0035: synthesize narrative with session context.
 
         `atr` — оцінка викликача (ws_server: h−l одного бару; 0.0 = оцінки нема); діє лише для TF,
@@ -828,13 +837,27 @@ class SmcRunner:
             if inputs is None:
                 return _fallback_narrative_block(["no_snapshot"])
             result = synthesize_narrative(**inputs.as_kwargs())
-            self._journal.record(
-                symbol, viewer_tf_s, result, current_price, inputs.atr, bias_map=inputs.bias_map
-            )
+            if record:
+                self._journal.record(
+                    symbol, viewer_tf_s, result, current_price, inputs.atr, bias_map=inputs.bias_map
+                )
             return result
         except Exception:
             _log.exception("NARRATIVE_ERROR symbol=%s tf=%d", symbol, viewer_tf_s)
             return _fallback_narrative_block()
+
+    def narrative_row(self, symbol, viewer_tf_s, price, now_ms):
+        # type: (str, int, float, int) -> Optional[Dict[str, Any]]
+        """Рядок розбору на момент — один формат для прогону по історії й живого журналу (ADR-0113 Ф4).
+
+        Журнал сигналів не пише (`record=False`): рядок — вимір, а не подія глядача. None — розбору немає (наратив
+        вимкнений чи до прогріву)."""
+        block = self.get_narrative(symbol, viewer_tf_s, price, 0.0, now_ms=now_ms, record=False)
+        if block is None:
+            return None
+        return {"t": now_ms, "symbol": symbol, "tf_s": viewer_tf_s, "price": price,
+                "atr": self.get_measured_atr(symbol, self._engine.display_base_tf(viewer_tf_s)),
+                "narrative": block.to_wire()}
 
     def get_narrative_inputs(self, symbol, viewer_tf_s, current_price, atr=0.0, now_ms=None):
         # type: (str, int, float, float, Optional[int]) -> Optional[NarrativeInputs]
