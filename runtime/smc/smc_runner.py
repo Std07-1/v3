@@ -44,7 +44,15 @@ from core.smc.narrative import (
     _fallback_narrative_block,
 )
 from core.smc.narrative_inputs import NarrativeInputs
-from core.smc.briefing import Briefing, closed_briefing, compose_briefing
+from core.smc.briefing import (
+    Briefing,
+    BriefingSection,
+    closed_briefing,
+    compose_briefing,
+    liquidity_section,
+    session_section,
+)
+from core.smc.sessions import get_current_session, next_session_open
 from core.smc.liquidity_sweep import FirstReached, TouchIndex, first_reached
 from core.session_anchor import htf_bucket_start_ms, htf_next_bucket_start_ms
 from core.smc.zone_path import FormingSpan, ZonePath, first_touch_end_ms, forming_spans, zone_path
@@ -1102,22 +1110,50 @@ class SmcRunner:
             if not gate[1]:
                 return closed_briefing(symbol, as_of_ms)
             smc_cfg = self._full_config.get("smc", {})
+            briefing_cfg = smc_cfg.get("briefing", {})
             htf_cfg = smc_cfg.get("narrative", {}).get("htf_context", {})
             context_tfs = [int(tf_s) for tf_s in htf_cfg.get("viewer_tfs", ())]
             setup_tfs = [int(tf_s) for tf_s in htf_cfg.get("setup_tfs", ())]
-            narratives = {}
-            for tf_s in set(context_tfs) | set(setup_tfs):
-                # Не get_narrative: журнал сигналів пише лише те, що бачить глядач, а розбір — не глядач цих TF
-                inputs = self._collect_narrative_inputs(symbol, tf_s, price, 0.0, as_of_ms)
-                narratives[tf_s] = inputs.synthesize() if inputs is not None else None
+            liquidity_tf = int(briefing_cfg.get("liquidity_tf_s", 3600))
+            # Не get_narrative: журнал сигналів пише лише те, що бачить глядач, а розбір — не глядач цих TF
+            inputs = {
+                tf_s: self._collect_narrative_inputs(symbol, tf_s, price, 0.0, as_of_ms)
+                for tf_s in set(context_tfs) | set(setup_tfs) | {liquidity_tf}
+            }
+            narratives = {tf_s: inputs[tf_s].synthesize() if inputs[tf_s] is not None else None
+                          for tf_s in set(context_tfs) | set(setup_tfs)}
+            tail = [self._briefing_liquidity(symbol, liquidity_tf, inputs[liquidity_tf], price,
+                                             int(briefing_cfg.get("liquidity_per_side", 2))),
+                    self._briefing_session(symbol, as_of_ms)]
             return compose_briefing(
                 symbol, as_of_ms, self.get_bias_map(symbol), narratives,
                 [int(tf_s) for tf_s in smc_cfg.get("shell", {}).get("strip_tfs", ())],
-                context_tfs, setup_tfs, self._price_digits.get(symbol),
+                context_tfs, setup_tfs, self._price_digits.get(symbol), [s for s in tail if s is not None],
             )
         except Exception:
             _log.warning("BRIEFING_ERR sym=%s as_of_ms=%d", symbol, as_of_ms, exc_info=True)
             return None
+
+    def _briefing_liquidity(self, symbol, tf_s, inputs, price, per_side):
+        # type: (str, int, Optional[NarrativeInputs], float, int) -> Optional[BriefingSection]
+        """Ліквідність поруч — рівні знімка TF і детектор зняття (той самий, що в цілях Ф2a, і коли зона-шлях вимкнений)."""
+        if inputs is None:
+            return None
+        reached = inputs.liquidity_reached
+        if reached is None:
+            reached = self._liquidity_reached(symbol, inputs.snapshot)
+        return liquidity_section(tf_s, inputs.snapshot.levels, reached, price, inputs.atr, inputs.price_digits,
+                                 per_side)
+
+    def _briefing_session(self, symbol: str, as_of_ms: int) -> Optional[BriefingSection]:
+        """Сесія на момент розбору й наступне відкриття — календар сесій платформи і торговий календар символу."""
+        windows = self._engine._session_windows
+        if not (self._engine._config.sessions.enabled and windows):
+            return None
+        current, in_killzone = get_current_session(as_of_ms, windows)
+        calendar = self._calendars.get(symbol)
+        upcoming = next_session_open(as_of_ms, windows, calendar.is_trading_minute if calendar is not None else None)
+        return session_section(as_of_ms, current, in_killzone, upcoming)
 
     def get_signals(
         self,
