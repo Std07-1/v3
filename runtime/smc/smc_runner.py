@@ -1129,6 +1129,8 @@ class SmcRunner:
                 symbol, as_of_ms, self.get_bias_map(symbol), narratives,
                 [int(tf_s) for tf_s in smc_cfg.get("shell", {}).get("strip_tfs", ())],
                 context_tfs, setup_tfs, self._price_digits.get(symbol), [s for s in tail if s is not None],
+                atr_by_tf={tf_s: tf_inputs.atr for tf_s, tf_inputs in inputs.items() if tf_inputs is not None},
+                rr_min_risk_atr=float(briefing_cfg.get("rr_min_risk_atr", 0.0)),
             )
         except Exception:
             _log.warning("BRIEFING_ERR sym=%s as_of_ms=%d", symbol, as_of_ms, exc_info=True)
