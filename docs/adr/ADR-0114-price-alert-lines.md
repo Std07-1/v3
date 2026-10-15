@@ -285,3 +285,12 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
   `python -m runtime.alerts` (тимчасовий config, справжній Redis і `data_v3`, фейковий Bot API): pair → `/start` →
   6 цифр → confirm (bound) → PUT (бік від close M1) → тік у PubSub → повідомлення «🔔 XAU/USD 4150.00 — перетнуто
   знизу вгору» → `delivered` → на диску черга порожня → `/alerts`; у лозі процесу 0 ERROR. Не на проді.
+- 2026-10-15 — **S6** (ops, без деплою; власник: «продовжуй S6 … без деплою»): секція `alerts` у `config.json`
+  (`enabled: false`, усі ключі §4.7), `"alerts": "0114"` у `gate_adr_config_sync`; `tools/alerts.supervisor.conf`
+  (окремий program, `umask=027`); `tools/nginx/snippets/smc_alerts_location.conf` (методи GET/POST/PUT/DELETE,
+  `proxy_buffering off`, `read_timeout 3600s` для SSE, тіло ≤ 4 КБ) + `include` у `tools/smc-nginx-v4-hardened.conf`;
+  роль `smc-alerts` у `ops/vps/aione-watchdog.sh` (падіння → «Monitor»); `ops/vps/alerts-secrets.sh` (токен наосліп,
+  chat id за замовчуванням з «Monitor», бекап, атомарна заміна, root:smc 640); розділ «Лінія-сповіщення (ADR-0114)» у
+  `docs/runbooks/production.md` (8 кроків першого встановлення, кожен — за «го»). На VPS перевірено лише читанням:
+  порт 8020 вільний, `/etc/smc-v3` і теки стану ще нема. Скрипт секретів: логіку перевірено локально (за замовчуванням,
+  перевизначення, бекап, відмова на кривий ввід); POSIX-права — крок 3 ранбука при першому встановленні.

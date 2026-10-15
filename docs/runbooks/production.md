@@ -14,7 +14,8 @@
 5. [Recovery процедури](#recovery-процедури)
 6. [DST перехід (літній/зимовий час)](#dst-перехід-літнійзимовий-час)
 7. [Нічний settle M1 + нативний D1](#нічний-settle-m1--нативний-d1-adr-0103-34)
-8. [Що НЕ робити](#що-не-робити)
+8. [Лінія-сповіщення](#лінія-сповіщення-adr-0114)
+9. [Що НЕ робити](#що-не-робити)
 
 ---
 
@@ -453,6 +454,44 @@ WS-сервер видає відвідувачу анонімний ключ (c
 | Пробне повідомлення | `sudo /usr/local/sbin/aione-alert.sh "тест"` |
 | Замінити токен бота | `sudo bash <скрипт наосліп>`: токен лише через stdin, не в argv (sudo пише argv в auth.log) |
 | Відкат | `sudo install -m 755 /usr/local/sbin/aione-watchdog.sh.pre-adr0106 /usr/local/sbin/aione-watchdog.sh` (або попередня версія з git) |
+
+---
+
+## Лінія-сповіщення (ADR-0114)
+
+Окремий процес `smc-alerts` (`python -m runtime.alerts`, 127.0.0.1:8020, поза групою `smc`): ціна перетнула лінію з
+позначкою «Сповіщати» → повідомлення ботом сигналів (не «Monitor», не бот Арчі). Стан — `/var/lib/smc-v3/alerts`
+(`alerts.json`, `devices.json`, лише `smc`); секрети — `/etc/smc-v3/alerts.env` (root:smc 640); вмикач —
+`config.json:alerts.enabled`. Рестарт `smc:smc-ws` процес не чіпає.
+
+**Перше встановлення** (кожен крок — за «го» власника; до кроку 6 сайт нічого не помічає):
+
+| # | Що | Команда |
+| --- | --- | --- |
+| 1 | Власник: бот у @BotFather (`/newbot`), у новому боті натиснути Start | — |
+| 2 | Секрети (токен наосліп, chat id за замовчуванням — з «Monitor») | `sudo bash /opt/smc-v3/ops/vps/alerts-secrets.sh` |
+| 3 | Перевірити права секретів | `sudo stat -c '%a %U:%G' /etc/smc-v3 /etc/smc-v3/alerts.env` → `750 root:smc`, `640 root:smc` |
+| 4 | Тека стану | `sudo install -d -o smc -g smc -m 750 /var/lib/smc-v3/alerts` |
+| 5 | Програма supervisor (з `enabled:false` у config — лише health) | `sudo cp /opt/smc-v3/tools/alerts.supervisor.conf /etc/supervisor/conf.d/alerts.conf && sudo supervisorctl reread && sudo supervisorctl update` → `curl -s 127.0.0.1:8020/api/alerts/health` = `{"enabled": false}` |
+| 6 | nginx (backup спершу) | `sudo cp /opt/smc-v3/tools/nginx/snippets/smc_alerts_location.conf /etc/nginx/snippets/` + рядок `include /etc/nginx/snippets/smc_alerts_location.conf;` у server-блоці aione-smc.com поруч з `location /api/v3/` → `sudo nginx -t && sudo systemctl reload nginx` |
+| 7 | Увімкнути: `alerts.enabled = true` у git → деплой → `sudo supervisorctl restart smc-alerts` | спостереження 120 с (D9.1): `sudo supervisorctl status smc-alerts`, `tail -n 50 /var/log/smc-v3/alerts.stderr.log` — `ALERTS_READY`, без ERROR |
+| 8 | Smoke зовні | `curl -s https://aione-smc.com/api/alerts/health` = `{"enabled": true, "degraded": []}`; бот на `/alerts` відповідає |
+
+**Робота:**
+
+| Дія | Команда |
+| --- | --- |
+| Стан і деградації | `curl -s 127.0.0.1:8020/api/alerts/health` — `degraded`: `ticks_unavailable`, `m1_unavailable:<символ>`, `telegram_unreachable`, `telegram_commands_unavailable`, `state_write_failed`, `state_quarantined` |
+| Лог | `tail -n 100 /var/log/smc-v3/alerts.stderr.log` (`ALERTS_FIRED`, `ALERTS_DEVICE_BOUND`, `ALERTS_DEGRADED…`, `ALERTS_PAIRING_LOCKED`) |
+| Сповіщення й черга доставки | `sudo -u smc python3 -m json.tool /var/lib/smc-v3/alerts/alerts.json` |
+| Пристрої | боту: `/devices`; відключити — `/revoke <id>` |
+| Замінити токен | `sudo bash /opt/smc-v3/ops/vps/alerts-secrets.sh` → `sudo supervisorctl restart smc-alerts` (попередній — `alerts.env.bak.<epoch>`) |
+| Битий `alerts.json` | процес стартує з валідною частиною, сирий файл — `alerts.json.corrupt-<ms>` поруч, `state_quarantined` у health |
+| Вимкнути | `alerts.enabled = false` у git → деплой → `sudo supervisorctl restart smc-alerts` (стан на диску лишається); аварійно — `sudo supervisorctl stop smc-alerts` |
+| Відкат nginx | прибрати рядок `include …smc_alerts_location.conf;` → `sudo nginx -t && sudo systemctl reload nginx` |
+
+Падіння `smc-alerts` (FATAL) приходить ботом «Monitor» із хвостом stderr (ADR-0106): `ALERTS_SECRETS_MISSING`,
+`ALERTS_STATE_DIR_MISSING`, `ALERTS_NO_TICKS`, `StoreSchemaError` — причина в першому рядку.
 
 ---
 

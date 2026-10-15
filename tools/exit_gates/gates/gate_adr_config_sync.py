@@ -32,6 +32,8 @@ _FEATURE_ADR_MAP: Dict[str, str] = {
     # Перебудова першої M1 після перерви: механізм — ADR-0096 слайс E, чинне рішення (вимкнено,
     # секція = задокументований rollback) — ADR-0100
     "m1_poller.session_open_rebuild": "0100",
+    # Лінія-сповіщення: процес smc-alerts (ADR-0114 §4.7)
+    "alerts": "0114",
     # Додати нові feature→ADR mappings за потребою:
     # "smc.some_feature": "NNNN",
 }

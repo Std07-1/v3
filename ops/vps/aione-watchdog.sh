@@ -239,6 +239,7 @@ prog_role() {
     smc-binance)       echo "Binance-фід — крипта";;
     smc-binance-ticks) echo "Binance-тіки";;
     smc-agent-bridge)  echo "міст Арчі ↔ платформа";;
+    smc-alerts)        echo "лінії-сповіщення — повідомлення про перетин ціни (ADR-0114)";;
     family_agent)      echo "сімейний агент";;
     tg_guard)          echo "Telegram-guard";;
     *)                 echo "$1";;
