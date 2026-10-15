@@ -93,6 +93,9 @@ export class ChartEngine {
   // ─── Scrollback rails (V4 original, preserved) ───
   private isFetchingScrollback = false;
   private lastScrollbackToMs: T_MS | null = null;
+  // Перший бар графіка, від якого пішов останній запит історії. setData його НЕ скидає:
+  // саме так відповідь, що прийшла після заміни вмісту, видно як застарілу (_isStaleScrollback).
+  private _scrollbackAnchorMs: T_MS | null = null;
 
   // P3.15: Scrollback policy — state + wall detection + bar cap
   private _scrollbackState: 'idle' | 'loading' | 'wall' = 'idle';
@@ -382,13 +385,12 @@ export class ChartEngine {
           }
           const barsInfo = this.series.barsInLogicalRange(range);
           if (barsInfo && barsInfo.barsBefore < 5) {
-            const data = this.series.data();
-            if (data.length > 0) {
-              const targetMs = this._timeToMs(data[0].time);
-              if (!Number.isFinite(targetMs) || targetMs <= 0) return;
+            const targetMs = this._firstBarMs();
+            if (targetMs !== null) {
               // Dedupe rail (LWC_Engine_dedupe spec)
               if (targetMs === this.lastScrollbackToMs) return;
               this.lastScrollbackToMs = targetMs;
+              this._scrollbackAnchorMs = targetMs;
               this.isFetchingScrollback = true;
               this._setScrollbackState('loading');
               // Safety timeout: reset flag after 3s if no response (aggressive drag recovery)
@@ -585,6 +587,8 @@ export class ChartEngine {
   // filter WhitespaceData, move state reset AFTER setData to prevent
   // infinite crash loop (Entry 076).
   prependData(bars: Candle[]): void {
+    // Відповідь для іншого вмісту — не відповідь цьому графіку: ні даних, ні «стіни», ні зміни стану
+    if (this._isStaleScrollback(bars)) return;
     if (bars.length === 0) {
       this.isFetchingScrollback = false;
       this._setScrollbackState('wall');
@@ -625,6 +629,41 @@ export class ChartEngine {
     this._totalBars += bars.length;
     this.isFetchingScrollback = false;
     this._setScrollbackState('idle');
+  }
+
+  /**
+   * Чи відповідь scrollback порахована для іншого вмісту графіка.
+   *
+   * Запит іде від першого бару графіка. Поки відповідь у дорозі, повний кадр (перемикання пари,
+   * відновлення пари з адреси) замінює дані; сервер відповідає вже в новому TF і ставить мітку
+   * нового TF, тож маршрутизатор кадрів її пропускає. Така відповідь або лягає на середину нових
+   * даних (LWC: «data must be asc ordered by time» → помилка і хибна «стіна»), або ліворуч з дірою.
+   * Ловимо обидва: перший бар уже не той, від якого просили, або шматок має бари новіші за перший
+   * бар (межа to_open_ms inclusive — спільним може бути лише сам перший бар).
+   */
+  private _isStaleScrollback(bars: Candle[]): boolean {
+    const headMs = this._firstBarMs();
+    const anchorMs = this._scrollbackAnchorMs;
+    const anchorMoved = anchorMs !== null && anchorMs !== headMs;
+    const last = bars[bars.length - 1];
+    const lastMs = last ? this._timeToMs(this._mapCandle(last).time) : null;
+    const overlapsHead = headMs !== null && lastMs !== null && lastMs > headMs;
+    if (!anchorMoved && !overlapsHead) return false;
+    console.warn('[ChartEngine] scrollback відкинуто: відповідь для іншого вмісту графіка', {
+      anchor_ms: anchorMs,
+      head_ms: headMs,
+      bars: bars.length,
+      last_ms: lastMs,
+    });
+    return true;
+  }
+
+  /** Перший бар графіка в epoch ms — точка, від якої просять історію; null — графік порожній. */
+  private _firstBarMs(): T_MS | null {
+    const data = this.series.data();
+    if (data.length === 0) return null;
+    const ms = this._timeToMs(data[0].time);
+    return Number.isFinite(ms) && ms > 0 ? ms : null;
   }
 
   // ─── clearAll: for no-data + switch (V3: app.js:1594-1606) ───
