@@ -24,6 +24,7 @@ def _runner(tmp_path, end_ms=WED_ASIA, enabled=True):
     cfg = copy.deepcopy(json.load(open(_REPO_CONFIG, encoding="utf-8")))
     cfg["symbols"] = [XAU]
     cfg["smc"]["signal_journal"] = {"enabled": False, "path": str(tmp_path / "signals")}
+    cfg["smc"]["narrative_journal"] = {"enabled": False, "path": str(tmp_path / "narrative_journal")}
     cfg["smc"]["tda_cascade"] = {"enabled": False}
     cfg["smc"]["briefing"]["enabled"] = enabled
     engine = SmcEngine(SmcConfig.from_dict(cfg["smc"]))
