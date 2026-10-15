@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.model.bars import CandleBar
 from core.session_anchor import CALENDAR_SEASON_RULES, SEASON_RULE_NONE, SEASON_WINTER, calendar_season
@@ -207,6 +207,34 @@ def get_current_session(
     _PRIORITY = {"london": 0, "newyork": 1, "asia": 2}
     active.sort(key=lambda x: _PRIORITY.get(x[0], 99))
     return active[0]
+
+
+# Горизонт пошуку наступного відкриття: вечір п'ятниці → понеділок, довгі свята
+_NEXT_SESSION_HORIZON_DAYS = 8
+
+
+def next_session_open(
+    now_ms: int,
+    sessions: List[SessionWindow],
+    is_trading_minute: Optional[Callable[[int], bool]] = None,
+) -> Optional[Tuple[str, int]]:
+    """Найближче відкриття сесії строго після `now_ms` — (ім'я, момент UTC) із сезоном правила кожної сесії.
+
+    `is_trading_minute` — календар символу: відкриття в неторгову хвилину пропускається (вечір п'ятниці → Азія
+    понеділка, свята, індекс без азійської сесії). None — у межах горизонту жодного торгового відкриття.
+    """
+    first_day_ms = _ms_to_day_start(now_ms) - _DAY_MS  # зимовий зсув може винести «вчорашнє» відкриття за північ
+    upcoming = sorted(
+        (open_ms, sw.name)
+        for day in range(_NEXT_SESSION_HORIZON_DAYS + 2)
+        for sw in sessions
+        for open_ms in (_session_open_ms(first_day_ms + day * _DAY_MS, sw),)
+        if open_ms > now_ms
+    )
+    for open_ms, name in upcoming:
+        if is_trading_minute is None or is_trading_minute(open_ms):
+            return name, open_ms
+    return None
 
 
 # ── Main computation ───────────────────────────────────────

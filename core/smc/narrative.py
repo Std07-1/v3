@@ -1288,3 +1288,4 @@ fmt_price = _fmt_price
 LIQUIDITY_KINDS_ABOVE = _TARGET_KINDS_ABOVE  # хаї: ліквідність над ціною
 LIQUIDITY_KINDS_BELOW = _TARGET_KINDS_BELOW  # лої: ліквідність під ціною
 LIQUIDITY_LABELS = _TARGET_LEVEL_LABELS
+EQ_LEVEL_KINDS = _EQ_LEVEL_KINDS  # зняті EQ-кластери рушій уже відсіяв — детектор зняття їм не потрібен

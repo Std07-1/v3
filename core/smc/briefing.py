@@ -10,10 +10,14 @@ UI лише показує рядки; tone — лише колір. S0: pure, �
 from __future__ import annotations
 
 import dataclasses
+import time
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
-from core.smc.narrative import fmt_price, resolve_htf_alignment, tf_to_label
-from core.smc.types import ActiveScenario, NarrativeBlock
+from core.smc.liquidity_sweep import FirstReached
+from core.smc.narrative import (EQ_LEVEL_KINDS, LIQUIDITY_KINDS_ABOVE, LIQUIDITY_KINDS_BELOW, LIQUIDITY_LABELS,
+                                fmt_price, resolve_htf_alignment, tf_to_label)
+from core.smc.sessions import OFF_SESSION
+from core.smc.types import LEVEL_STATE_FORMING, ActiveScenario, NarrativeBlock, SmcLevel
 from core.smc.zone_path import LONG
 
 TONE_BULL, TONE_BEAR, TONE_WARN = "bull", "bear", "warn"
@@ -173,3 +177,71 @@ def _plain(headline):
     """Заголовок без маркера стану на початку (емодзі ще в даних наративу — K13): у розборі тон несе колір рядка."""
     head, sep, rest = headline.partition(" ")
     return rest if sep and head and not any(ch.isalnum() for ch in head) else headline
+
+
+# ── Ліквідність поруч і сесія (п. 4–5) ──────────────────────
+
+_SESSION_NAMES = {"asia": "Азія", "london": "Лондон", "newyork": "Нью-Йорк"}
+_WEEKDAYS = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд")
+_MINUTE_MS = 60_000
+
+
+def liquidity_section(tf_s, levels, reached, price, atr, price_digits, per_side):
+    # type: (int, Sequence[SmcLevel], Mapping[str, FirstReached], float, float, Optional[int], int) -> BriefingSection
+    """Найближча НЕзнята ліквідність: хаї над ціною, лої під нею, з відстанню в ATR того самого TF.
+
+    Ті самі рівні, що цілі наративу, і так само без тих, що формуються (H/L поточної доби чи сесії — рецензія Ф0, D-01).
+    Знята — ціна торгувала строго за рівнем після початку його періоду (`reached`, core.smc.liquidity_sweep); зняті
+    EQ-кластери рушій уже відсіяв. Рівні з однією ціною — один пул («PDH/хай Лондона»).
+    """
+    label, digits = tf_to_label(tf_s), _DEFAULT_PRICE_DIGITS if price_digits is None else price_digits
+    rows = []
+    for word, kinds, index, ahead in (("Вище", LIQUIDITY_KINDS_ABOVE, 0, lambda level_price: level_price > price),
+                                      ("Нижче", LIQUIDITY_KINDS_BELOW, 1, lambda level_price: level_price < price)):
+        pools = {}  # type: Dict[float, Dict[str, None]]
+        for level in levels:
+            if level.kind not in kinds or level.state == LEVEL_STATE_FORMING or not ahead(level.price):
+                continue
+            if level.kind not in EQ_LEVEL_KINDS and reached.get("level:" + level.id, (None, None))[index] is not None:
+                continue
+            pools.setdefault(level.price, {})[LIQUIDITY_LABELS.get(level.kind, level.kind.upper())] = None
+        nearest = sorted(pools, key=lambda pool_price: abs(pool_price - price))[:per_side]
+        parts = ["{} {}{}".format("/".join(pools[pool_price]), fmt_price(pool_price, digits),
+                                  " · {:.1f} ATR".format(abs(pool_price - price) / atr) if atr > 0 else "")
+                 for pool_price in nearest]
+        rows.append(BriefingRow(label, "{}: {}".format(word, ", ".join(parts) or "незнятої ліквідності не видно")))
+    return BriefingSection("liquidity", "Ліквідність поруч", tuple(rows))
+
+
+def session_section(as_of_ms, current, in_killzone, upcoming):
+    # type: (int, str, bool, Optional[Tuple[str, int]]) -> BriefingSection
+    """Поточна сесія й кілзона за календарем платформи (сезонним, §3.7 п.3) і скільки до наступного відкриття."""
+    if current and current != OFF_SESSION:
+        text = "{} — {}".format(_SESSION_NAMES.get(current, current), "кілзона" if in_killzone else "поза кілзоною")
+    else:
+        text = "Поза торговими сесіями"
+    notes = ()  # type: Tuple[str, ...]
+    if upcoming is not None:
+        name, open_ms = upcoming
+        notes = ("Далі: {} {} UTC — через {}".format(
+            _SESSION_NAMES.get(name, name), _clock(open_ms, as_of_ms), _duration(open_ms - as_of_ms)),)
+    return BriefingSection("session", "Сесія", (BriefingRow("", text, notes),))
+
+
+def _clock(moment_ms, as_of_ms):
+    # type: (int, int) -> str
+    """«о 12:00» того самого дня UTC; інший день — з днем тижня («Пн 00:00»)."""
+    moment, as_of = time.gmtime(moment_ms // 1000), time.gmtime(as_of_ms // 1000)
+    hhmm = time.strftime("%H:%M", moment)
+    return "о " + hhmm if moment[:3] == as_of[:3] else "{} {}".format(_WEEKDAYS[moment.tm_wday], hhmm)
+
+
+def _duration(delta_ms):
+    # type: (int) -> str
+    minutes = max(0, delta_ms) // _MINUTE_MS
+    days, hours, mins = minutes // 1440, minutes % 1440 // 60, minutes % 60
+    if days:
+        return "{} д {} год".format(days, hours)
+    if hours:
+        return "{} год {} хв".format(hours, mins) if mins else "{} год".format(hours)
+    return "{} хв".format(mins)

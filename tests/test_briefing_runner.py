@@ -50,8 +50,11 @@ def test_briefing_is_composed_at_the_end_of_the_last_closed_bar(tmp_path, journa
     briefing = runner.get_briefing(XAU)
 
     assert briefing.symbol == XAU and briefing.as_of_ms == last_m5.open_time_ms + M5 * 1000
-    assert [section.key for section in briefing.sections] == ["bias", "context", "setups"]
+    assert [section.key for section in briefing.sections] == ["bias", "context", "setups", "liquidity", "session"]
     assert [row.tf for row in briefing.sections[2].rows][:1] == ["H1"]
+    assert [row.tf for row in briefing.sections[3].rows] == ["H1", "H1"]
+    session = briefing.sections[4].rows[0]
+    assert (session.text, session.notes) == ("Азія — поза кілзоною", ("Далі: Лондон о 07:00 UTC — через 2 год",))
 
 
 def test_briefing_is_cached_until_a_new_bar_closes(tmp_path):
