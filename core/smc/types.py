@@ -421,6 +421,11 @@ class ActiveScenario:
     trigger_desc: str  # "Approaching: 15 pts from zone"
     target_desc: Optional[str]  # "PDL 5062" | None (BH-4)
     invalidation: str  # "Above 5230"
+    # ADR-0113 Ф3 «Розбір»: числа тих самих рівнів для R:R від краю зони; на wire не йдуть (там — тексти вище)
+    entry_edge: Optional[float] = None  # край входу: long — верх зони, short — низ
+    stop_price: Optional[float] = None  # число інвалідації — дальній край зони ± запас Ф2a
+    target_price: Optional[float] = None  # ціна цілі; None — ціль не знайдено
+    zone_tf_s: Optional[int] = None  # TF зони входу (на M15 буває OB H1/H4 зі стеку контексту)
 
     def to_wire(self) -> Dict[str, Any]:
         """S6: wire format → ui_v4 ActiveScenario type."""

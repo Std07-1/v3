@@ -1122,8 +1122,8 @@ def _synthesize_impl(
             d = _zone_direction(z)
             gi = zone_grades.get(z.id, {})
             path = paths.get(z.id)
-            tgt = _find_target(snapshot, z, d, config, current_price, atr, digits, path, liquidity_reached)
-            if tgt is None:
+            target = _select_target(snapshot, z, d, config, current_price, atr, digits, path, liquidity_reached)
+            if target is None:
                 warnings.append("no_target_found")
             scenarios.append(
                 ActiveScenario(
@@ -1136,8 +1136,12 @@ def _synthesize_impl(
                     trigger_desc=_resolve_trigger_desc(
                         snapshot, z, viewer_tf_s, current_price, atr, config, digits, path
                     ),
-                    target_desc=tgt,
+                    target_desc=target[0] if target is not None else None,
                     invalidation=_find_invalidation(z, digits, stops[z.id]),
+                    entry_edge=path.entry_edge if path is not None else (z.high if d == LONG else z.low),
+                    stop_price=stops[z.id] if stops[z.id] is not None else (z.low if d == LONG else z.high),
+                    target_price=target[1] if target is not None else None,
+                    zone_tf_s=z.tf_s,
                 )
             )
             if len(scenarios) >= max_scenarios:
@@ -1274,3 +1278,13 @@ def narrative_to_wire(block):
     if block.range_exhaustion_summary:
         d["range_exhaustion_summary"] = block.range_exhaustion_summary
     return d
+
+
+# ── Для розбору символу (core.smc.briefing, ADR-0113 Ф3) ────
+# Та сама узгодженість D1↔H4, рівні-ліквідність, підписи й формат ціни, що в наративі, — одне джерело, без копій.
+resolve_htf_alignment = _resolve_htf_alignment
+tf_to_label = _tf_to_label
+fmt_price = _fmt_price
+LIQUIDITY_KINDS_ABOVE = _TARGET_KINDS_ABOVE  # хаї: ліквідність над ціною
+LIQUIDITY_KINDS_BELOW = _TARGET_KINDS_BELOW  # лої: ліквідність під ціною
+LIQUIDITY_LABELS = _TARGET_LEVEL_LABELS
