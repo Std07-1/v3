@@ -19,6 +19,7 @@ Python 3.7 compatible.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import json
 import logging
 import os
@@ -26,7 +27,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from core.config_loader import price_digits_wire
+from core.config_loader import htf_anchor_rule_resolver, price_digits_wire
 from core.model.bars import CandleBar
 from core.smc.engine import SmcEngine
 from core.smc.range_exhaustion import compute_range_exhaustion
@@ -44,7 +45,8 @@ from core.smc.narrative import (
 )
 from core.smc.narrative_inputs import NarrativeInputs
 from core.smc.liquidity_sweep import FirstReached, TouchIndex, first_reached
-from core.smc.zone_path import ZonePath, zone_path
+from core.session_anchor import htf_bucket_start_ms, htf_next_bucket_start_ms
+from core.smc.zone_path import FormingSpan, ZonePath, first_touch_end_ms, forming_spans, zone_path
 from core.smc.shell_composer import compose_shell_payload
 from runtime.ingest.market_calendar import TradingCalendar
 from runtime.ingest.tick_common import resolve_symbol_calendars
@@ -174,6 +176,8 @@ class SmcRunner:
         self._warmup_done = False  # journal gated until warmup completes
         # (symbol, viewer_tf_s) з наративом без виміряного ATR — лог на переході, не кожен виклик
         self._narrative_atr_unmeasured: Set[Tuple[str, int]] = set()
+        # Сітка H4/D1 символу (ADR-0095) для бакетів TF зони, що формуються (ADR-0113 Ф2a, E-03); None — не виміряна
+        self._htf_rules: Dict[str, Optional[str]] = {}
         # Signal state persistence: survive restarts (D1 fix)
         sig_base = str(
             full_cfg.get("smc", {})
@@ -914,18 +918,50 @@ class SmcRunner:
         return reached
 
     def _zone_paths(self, symbol: str, snap: SmcSnapshot) -> Dict[str, ZonePath]:
-        """ADR-0113 Ф2a: шлях ціни від бару зламу кожного OB знімка — по барах рушія TF зони (OB з якорем народження)."""
+        """ADR-0113 Ф2a: шлях ціни від бару зламу кожного OB знімка — по барах рушія TF зони (OB з якорем народження)
+        і бакетах TF зони, що формуються, із закритих барів найдрібнішого TF рушія; момент першого дотику — з дрібніших
+        рядів (E-03). Без сітки символу — лише закриті бари TF зони."""
+        rule = self._htf_rule(symbol)
         bars_by_tf: Dict[int, List[CandleBar]] = {}
+        forming_by_tf: Dict[int, List[FormingSpan]] = {}
+
+        def bars_of(tf_s: int) -> List[CandleBar]:
+            if tf_s not in bars_by_tf:
+                bars_by_tf[tf_s] = self._engine.get_bars(symbol, tf_s)
+            return bars_by_tf[tf_s]
+
         paths: Dict[str, ZonePath] = {}
         for zone in snap.zones:
             if zone.origin_event_ms is None:
                 continue
-            if zone.tf_s not in bars_by_tf:
-                bars_by_tf[zone.tf_s] = self._engine.get_bars(symbol, zone.tf_s)
-            path = zone_path(zone, bars_by_tf[zone.tf_s])
-            if path is not None:
-                paths[zone.id] = path
+            bars = bars_of(zone.tf_s)
+            finer_tfs = sorted(tf for tf in self._compute_tfs if tf < zone.tf_s) if rule is not None else []
+            bucket_start = functools.partial(htf_bucket_start_ms, tf_s=zone.tf_s, rule=rule)
+            if zone.tf_s not in forming_by_tf:
+                forming_by_tf[zone.tf_s] = (
+                    forming_spans(bars[-1].open_time_ms, bars_of(finer_tfs[0]), bucket_start)
+                    if finer_tfs and bars else []
+                )
+            path = zone_path(zone, bars, forming_by_tf[zone.tf_s])
+            if path is None:
+                continue
+            if finer_tfs and path.entered:
+                entry_bucket_end_ms = htf_next_bucket_start_ms(path.entered_ms, zone.tf_s, rule)
+                touch_end_ms = first_touch_end_ms(path, (bars_of(tf) for tf in finer_tfs), entry_bucket_end_ms)
+                path = dataclasses.replace(path, touch_end_ms=touch_end_ms)
+            paths[zone.id] = path
         return paths
+
+    def _htf_rule(self, symbol: str) -> Optional[str]:
+        """Правило сітки H4/D1 символу (ADR-0095 §3.4) — один раз на символ; без нього — WARNING і шлях лише із
+        закритих барів TF зони (вхід у зону H1/H4/D1 видно після закриття її бару, як до E-03)."""
+        if symbol not in self._htf_rules:
+            try:
+                self._htf_rules[symbol] = htf_anchor_rule_resolver(self._full_config)(symbol)
+            except ValueError as exc:
+                _log.warning("NARRATIVE_FORMING_GRID_UNAVAILABLE sym=%s reason=%s", symbol, exc)
+                self._htf_rules[symbol] = None
+        return self._htf_rules[symbol]
 
     def _narrative_atr(self, symbol: str, viewer_tf_s: int, caller_estimate: float) -> float:
         """ATR для фільтра дистанції цілей наративу — ATR14 рушія для TF глядача (ADR-0070 rev 3).

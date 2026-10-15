@@ -280,10 +280,13 @@ def _path_stopped(path, stop_price):
 
 def _confirm_not_before_ms(path, zone):
     # type: (Optional[ZonePath], SmcZone) -> Optional[int]
-    """Після входу підтверджує лише злам після КІНЦЯ бару входу на TF зони: усередині бару HTF дотик і злам не
+    """Після входу підтверджує лише злам після кінця бару, де видно перший дотик: найдрібнішого, що покриває бакет
+    входу (`ZonePath.touch_end_ms`, E-03), інакше — бару входу на TF зони, бо всередині бару HTF дотик і злам не
     впорядковані (рецензія Ф2a, D-11). None — шляху чи входу немає (Ф1)."""
     if path is None or not path.entered:
         return None
+    if path.touch_end_ms is not None:
+        return path.touch_end_ms
     return path.entered_ms + zone.tf_s * 1000
 
 

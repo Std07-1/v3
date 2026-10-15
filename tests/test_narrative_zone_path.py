@@ -167,3 +167,21 @@ def test_zone_with_birth_anchor_but_no_path_is_not_a_trade_candidate():
                                  900, 5150.0, ATR, _config(), price_digits=2, zone_paths={}, liquidity_reached={})
 
     assert block.scenarios == [] and "scenario_path_unknown" in block.warnings
+
+
+def test_break_after_the_finer_touch_inside_the_entry_bar_confirms():
+    """E-03: момент дотику з дрібнішого ряду (`touch_end_ms`) — злам після нього підтверджує, навіть усередині бару
+    входу на TF зони; без нього — як D-11, лише після кінця бару входу."""
+    touch_end = ENTERED + 300_000  # кінець M5, що торкнувся
+    swings = _confirm(touch_end)
+    coarse = _path(5160.0, ENTERED, favorable=5098.0, adverse=5190.0)
+    fine = dataclasses.replace(coarse, touch_end_ms=touch_end)
+
+
+    def trigger(confirm_swings, path):
+        block = _narrate(5100.0, [_level("pdl", 5062.0)], confirm_swings, path=path, config=_config())
+        return block.scenarios[0].trigger
+
+    assert trigger(swings, coarse) == "approaching"
+    assert trigger(swings, fine) == "triggered"
+    assert trigger(_confirm(touch_end - 60_000), fine) == "approaching"  # злам до дотику — не підтвердження

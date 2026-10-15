@@ -7,6 +7,7 @@ import json
 
 import pytest
 
+from core.model.bars import CandleBar
 from core.smc.narrative import synthesize_narrative
 from core.smc.narrative_inputs import NarrativeInputs
 from core.smc.types import SmcZone
@@ -68,6 +69,31 @@ def test_zone_paths_only_when_enabled_and_survive_round_trip(runner):  # noqa: F
     paths = runner._zone_paths(XAU, with_ob.snapshot)
 
     assert inputs.zone_paths == {}  # у синтетичному знімку OB немає — FVG і P/D якоря народження не мають
-    assert paths == {"ob_test": zone_path(ob, bars)} and paths["ob_test"] is not None
+    path = paths["ob_test"]
+    assert paths == {"ob_test": dataclasses.replace(zone_path(ob, bars), touch_end_ms=path.touch_end_ms)}
+    assert path.entered_ms < path.touch_end_ms <= path.entered_ms + 900_000  # момент дотику — з M5 у бакеті M15
     with_paths = dataclasses.replace(with_ob, zone_paths=paths)
     assert NarrativeInputs.from_dict(json.loads(json.dumps(with_paths.to_dict()))) == with_paths
+
+
+def test_zone_paths_see_entry_in_forming_zone_bar_from_closed_m5(runner, monkeypatch):  # noqa: F811
+    """E-03: H1-зону торкнулись M5 після останнього закритого H1 — вхід видно зараз, з моментом дотику на M5."""
+    h1, m5 = 3_600_000, 300_000
+    origin = WED_LONDON_KZ - 3 * h1 - WED_LONDON_KZ % h1
+
+    def bar(tf_ms, open_ms, high, low):
+        return CandleBar(XAU, tf_ms // 1000, open_ms, open_ms + tf_ms, low, high, low, high, 1.0, True, "history")
+
+    h1_bars = [bar(h1, origin + i * h1, 4120.0 + i, 4108.0 + i) for i in range(-15, 3)]  # закриті H1 до бакета 3
+    m5_bars = [bar(m5, origin + 3 * h1 + i * m5, 4115.0, 4106.0 if i == 4 else 4111.0) for i in range(6)]
+    bars = {3600: h1_bars, 300: m5_bars}
+    monkeypatch.setattr(runner._engine, "get_bars", lambda symbol, tf_s: bars.get(tf_s, []))
+    ob = SmcZone(id="ob_h1", symbol=XAU, tf_s=3600, kind="ob_bull", start_ms=origin - h1, end_ms=None, high=4107.0,
+                 low=4100.0, status="active", strength=0.8, anchor_bar_ms=origin - h1, origin_event_ms=origin)
+    inputs = runner.get_narrative_inputs(XAU, 900, 4110.0, 0.0, now_ms=WED_LONDON_KZ)
+
+    path = runner._zone_paths(XAU, dataclasses.replace(inputs.snapshot, zones=[ob]))["ob_h1"]
+
+    assert zone_path(ob, h1_bars).entered_ms is None  # лише закриті H1 — входу ще не видно
+    assert path.entered_ms == origin + 3 * h1 and path.adverse_since_entry == 4106.0
+    assert path.touch_end_ms == origin + 3 * h1 + 5 * m5  # кінець M5 №4, а не кінець бакета H1

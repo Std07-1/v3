@@ -12,14 +12,20 @@
 - після входу — сприятливий екстремум (ціль) і несприятливий (стоп). Порядку всередині бару входу не видно, тож його
   сприятливий екстремум зараховано руху до входу, а несприятливий — шляху після входу (стоп важить більше).
 
+Рушій тримає лише закриті бари, тож бар TF зони, що ще формується, складається із закритих барів дрібнішого TF
+(`forming_spans`), а момент першого дотику всередині бакета входу — з найдрібнішого ряду, що покриває бакет цілком
+(`first_touch_end_ms`): інакше вхід у зону H1/H4/D1 видно лише після закриття її бару, а підтвердження на молодшому TF —
+лише після кінця бару входу (рецензія Ф2a, E-03).
+
 Однаково для WS-кадру, дельти, API, журналу й прогону по історії — нічого не пам'ятає, від рестарту не залежить.
 S0: pure, без I/O.
 """
 from __future__ import annotations
 
 import dataclasses
+import itertools
 from operator import attrgetter
-from typing import Optional, Sequence
+from typing import Callable, Iterable, List, Optional, Sequence
 
 from core.model.bars import CandleBar
 from core.smc.swings import compute_atr
@@ -45,14 +51,86 @@ class ZonePath:
     entered_ms: Optional[int] = None  # open бару входу; None — ціна ще не поверталась до зони
     favorable_after_entry: Optional[float] = None  # long — max high ПІСЛЯ бару входу, short — min low; None — барів ще нема
     adverse_since_entry: Optional[float] = None  # long — min low з бару входу включно, short — max high
+    # Кінець найдрібнішого бару, де видно перший дотик (`first_touch_end_ms`); підтвердження — лише злам не раніше.
+    # None — дрібніших барів на весь бакет входу немає: до кінця бару входу на TF зони (рецензія Ф2a, D-11)
+    touch_end_ms: Optional[int] = None
 
     @property
     def entered(self) -> bool:
         return self.entered_ms is not None
 
 
-def zone_path(zone: SmcZone, bars: Sequence[CandleBar]) -> Optional[ZonePath]:
-    """Шлях від бару зламу зони по барах її TF (за зростанням open_time_ms).
+@dataclasses.dataclass(frozen=True)
+class FormingSpan:
+    """Бакет TF зони, що ще формується, — high/low його закритих барів дрібнішого TF.
+
+    `open_time_ms` — відкриття бакета на сітці символу, тож вхід у ньому має той самий `entered_ms`, що й після
+    закриття бару TF зони, а high/low закритого бару лише ширші: шлях від цього тільки продовжується.
+    """
+
+    open_time_ms: int
+    h: float
+    low: float
+
+
+def forming_spans(
+    last_closed_open_ms: int, finer_bars: Sequence[CandleBar], bucket_start: Callable[[int], int]
+) -> List[FormingSpan]:
+    """Закриті бари дрібнішого TF після останнього закритого бару TF зони, згруповані в бакети TF зони.
+
+    `bucket_start(ts_ms)` — відкриття бакета TF зони, що містить момент (сітка символу, `core.session_anchor`). Бари
+    бакета останнього закритого бару вже в ньому. Бакетів може бути кілька, якщо рушій ще не отримав закритий бар TF
+    зони, а дрібніший уже прийшов.
+    """
+    tail = []
+    start: Optional[int] = None
+    for bar in reversed(finer_bars):  # за зростанням open_time_ms — з кінця до бакета закритого бару
+        if start is None or bar.open_time_ms < start:  # бакети суцільні: новий початок — лише коли вийшли з поточного
+            start = bucket_start(bar.open_time_ms)
+        if start <= last_closed_open_ms:
+            break
+        tail.append((start, bar))
+    spans: List[FormingSpan] = []
+    for start, bar in reversed(tail):
+        if spans and spans[-1].open_time_ms == start:
+            spans[-1] = FormingSpan(start, max(spans[-1].h, bar.h), min(spans[-1].low, bar.low))
+        else:
+            spans.append(FormingSpan(start, bar.h, bar.low))
+    return spans
+
+
+def first_touch_end_ms(
+    path: ZonePath, finer_series: Iterable[Sequence[CandleBar]], entry_bucket_end_ms: int
+) -> Optional[int]:
+    """Кінець першого бару дрібнішого TF у бакеті входу [`entered_ms`, `entry_bucket_end_ms`), тінь якого торкнулась
+    краю входу.
+
+    `finer_series` — ряди від найдрібнішого (лінивий ітератор — ряд береться, лише коли потрібен); вирішує перший, що
+    покриває бакет від відкриття (інакше перший дотик міг бути в непокритій частині). None — входу немає, жоден ряд
+    бакет не покриває або дотику в ньому не видно (high/low бару TF зони ширші за дрібні бари). Коли найдрібніший ряд
+    перестає покривати бакет (вхід старший за його вікно), вирішує грубший — момент може зсунутись пізніше в межах бару
+    нового ряду.
+    """
+    if path.entered_ms is None:
+        return None
+    long = path.direction == LONG
+    covering = next((s for s in finer_series if s and s[0].open_time_ms <= path.entered_ms), None)
+    if covering is None:
+        return None
+    for bar in covering:
+        if bar.open_time_ms < path.entered_ms:
+            continue
+        if bar.open_time_ms >= entry_bucket_end_ms:
+            return None  # бакет входу скінчився без дотику на дрібному ряді
+        if (bar.low <= path.entry_edge) if long else (bar.h >= path.entry_edge):
+            return bar.open_time_ms + bar.tf_s * 1000
+    return None
+
+
+def zone_path(
+    zone: SmcZone, bars: Sequence[CandleBar], forming: Sequence[FormingSpan] = ()
+) -> Optional[ZonePath]:
+    """Шлях від бару зламу зони по барах її TF (за зростанням open_time_ms) і бакетах, що формуються (`forming_spans`).
 
     None — у зони немає якоря народження (FVG, старий OB) або бару зламу немає серед барів (зона старша за вікно барів
     рушія, діра в даних): шлях з середини руху дав би хибний вхід і екстремум, тож стан не відомий і наратив
@@ -73,7 +151,7 @@ def zone_path(zone: SmcZone, bars: Sequence[CandleBar]) -> Optional[ZonePath]:
     entered_ms: Optional[int] = None
     after: Optional[float] = None
     against: Optional[float] = None
-    for bar in bars[first + 1:]:
+    for bar in itertools.chain(bars[first + 1:], forming):
         if entered_ms is not None:
             after = favorable(bar) if after is None else better(after, favorable(bar))
             against = worse(against, adverse(bar))
