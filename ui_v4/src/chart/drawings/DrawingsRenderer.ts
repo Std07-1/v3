@@ -13,7 +13,7 @@ import {
   dragStarted,
 } from '../interaction/geometry';
 import { getToolModule } from './tools';
-import { isCorruptBackupKey, loadDrawings, saveDrawings } from './drawingsStorage';
+import { drawingsKey, isCorruptBackupKey, loadDrawings, saveDrawings } from './drawingsStorage';
 import { cloneDrawing, completeDraft, cursorIndex, firstClick, followCursor, newDraft, previewsOnHover } from './drawingDraft';
 import { dragBody, dragHandle, grabOffsetFor, type DragSpace } from './drawingDrag';
 import { hitTestDrawings, type DrawingHit } from './drawingHitTest';
@@ -78,6 +78,8 @@ export class DrawingsRenderer {
   public onContextMenu: ((req: DrawingContextRequest | null) => void) | null = null;
   /** ADR-0112 D2: після кожного кадру — телефон оновлює ↶ і «видалити» (активні лише коли є що, editState()). */
   public onRendered: (() => void) | null = null;
+  /** ADR-0114 S7: після кожного вдалого збереження — узгодження ліній-сповіщень (alertSync); ключ — чий це стор. */
+  public onPersisted: ((storageKey: string, drawings: readonly Drawing[]) => void) | null = null;
 
   private drawings: Drawing[] = [];
   private activeTool: ActiveTool = null;
@@ -626,7 +628,7 @@ export class DrawingsRenderer {
    *  новий TF (rAF). Новий символ → flush попереднього + завантаження нового
    *  (з one-time міграцією legacy per-TF сторів). `tf` більше не в ключі. */
   setStorageKey(symbol: string): void {
-    const nextKey = `v4_drawings_${symbol}`;
+    const nextKey = drawingsKey(symbol);
     if (nextKey === this.storageKey) {
       // Той самий символ (TF-switch) — стан тримаємо, лише перемальовуємо під новий TF.
       this.scheduleRender();
@@ -701,7 +703,7 @@ export class DrawingsRenderer {
   // I5 (ADR-0111 §3.2): збій збереження/битий JSON — гучно (консоль + діагностика), не мовчки (drawingsStorage.ts)
   private saveToStorage(): void {
     const problem = saveDrawings(this.storageKey, this.drawings);
-    if (problem === null) return;
+    if (problem === null) return void this.onPersisted?.(this.storageKey, this.drawings);
     console.warn('[DrawingsRenderer] DRAWINGS_SAVE_FAILED key=%s n=%d %s', this.storageKey, this.drawings.length, problem);
     this.warnOnce('storage_save', 'drawing_storage_failed', `save ${this.storageKey}: ${problem} — після перезавантаження не буде`);
   }

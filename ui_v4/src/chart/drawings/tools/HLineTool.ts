@@ -19,6 +19,9 @@ export const HLineTool: ToolModule = {
     hotkey: 'h',
     styleable: true,
 
+    // ADR-0114: горизонталь — лінія-сповіщення на своїй ціні, без початку в часі
+    alertLevel: (d: Drawing) => ({ level: d.points[0].price, anchorMs: null }),
+
     render(d: Drawing, rc: RenderContext): ScreenAabb | null {
         const y = rc.toY(d.points[0].price);
         if (y === null) return null;

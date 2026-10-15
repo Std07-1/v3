@@ -1,6 +1,6 @@
 // src/chart/drawings/tools/index.test.ts — ADR-0111 §3.3: реєстр інструментів як єдине джерело (панель, App, клавіатура).
 import { describe, expect, it } from 'vitest';
-import { STYLEABLE_TOOL_TYPES, TOOL_REGISTRY, toolForHotkey } from './index';
+import { ALERTABLE_TOOL_TYPES, STYLEABLE_TOOL_TYPES, TOOL_REGISTRY, alertLevelOf, toolForHotkey } from './index';
 
 /** Клавіші, зайняті не фігурами: гумка й магніт (stores/keyboard.svelte.ts), Focus і рівні (ChartPane.svelte). */
 const RESERVED_KEYS = ['e', 'g', 'f', 'l'];
@@ -46,5 +46,14 @@ describe('toolForHotkey', () => {
         expect(toolForHotkey('b')).toBe('fib');
         expect(toolForHotkey('e')).toBeNull();
         expect(toolForHotkey('Escape')).toBeNull();
+    });
+});
+
+describe('лінія-сповіщення (ADR-0114)', () => {
+    it('сповіщати може лише горизонталь (промінь рівня — коли з’явиться); рівень — її ціна, без якоря', () => {
+        expect(ALERTABLE_TOOL_TYPES).toEqual(['hline']);
+        const line = { id: 'd1', type: 'hline' as const, points: [{ t_ms: 1 as never, price: 4380.25 }] };
+        expect(alertLevelOf(line)).toEqual({ level: 4380.25, anchorMs: null });
+        expect(alertLevelOf({ ...line, type: 'trend' })).toBeNull();
     });
 });

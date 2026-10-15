@@ -7,6 +7,20 @@
 import type { Drawing } from '../../types';
 
 const CORRUPT_BACKUP_MARKER = '__corrupt_';
+const DRAWINGS_KEY_PREFIX = 'v4_drawings_';
+
+/** ADR-0082 D1: ключ сховища фігур символу (спільний усіма TF). Одне джерело формату — і для DrawingsRenderer, і
+ *  для читачів ключа (лінія-сповіщення ADR-0114 дістає з нього символ). */
+export function drawingsKey(symbol: string): string {
+  return `${DRAWINGS_KEY_PREFIX}${symbol}`;
+}
+
+/** Символ з ключа `drawingsKey`; null — ключ не цього формату. */
+export function symbolOfDrawingsKey(key: string): string | null {
+  return key.startsWith(DRAWINGS_KEY_PREFIX) && key.length > DRAWINGS_KEY_PREFIX.length
+    ? key.slice(DRAWINGS_KEY_PREFIX.length)
+    : null;
+}
 
 /** Ключ копії битого рядка. Одне джерело з `isCorruptBackupKey`: копія підпадає під префікс legacy per-TF сторів
  *  (`v4_drawings_{symbol}_`), і міграція ADR-0082 D4 без цієї перевірки злила б її й видалила (рецензія 12.10, D-1). */

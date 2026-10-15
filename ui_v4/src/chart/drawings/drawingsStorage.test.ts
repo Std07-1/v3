@@ -1,6 +1,13 @@
 // src/chart/drawings/drawingsStorage.test.ts — ADR-0111 §3.2 (I5): збереження малювань без тихих втрат.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { corruptBackupKey, isCorruptBackupKey, loadDrawings, saveDrawings } from './drawingsStorage';
+import {
+  corruptBackupKey,
+  drawingsKey,
+  isCorruptBackupKey,
+  loadDrawings,
+  saveDrawings,
+  symbolOfDrawingsKey,
+} from './drawingsStorage';
 import type { Drawing } from '../../types';
 
 const KEY = 'v4_drawings_XAU/USD';
@@ -96,5 +103,14 @@ describe('saveDrawings / loadDrawings', () => {
     });
     expect(loadDrawings(KEY, 1)).toEqual({ drawings: [], problem: 'read: Error: SecurityError' });
     expect(saveDrawings(KEY, [])).toMatch(/SecurityError/);
+  });
+});
+
+describe('drawingsKey / symbolOfDrawingsKey', () => {
+  it('один формат ключа в обидва боки; чужий ключ — null', () => {
+    expect(drawingsKey('XAU/USD')).toBe(KEY);
+    expect(symbolOfDrawingsKey(drawingsKey('USD/JPY'))).toBe('USD/JPY');
+    expect(symbolOfDrawingsKey('v4_drawings_')).toBeNull();
+    expect(symbolOfDrawingsKey('v4_show_hints')).toBeNull();
   });
 });
