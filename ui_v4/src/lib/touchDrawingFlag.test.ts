@@ -1,4 +1,4 @@
-// src/lib/touchDrawingFlag.test.ts — ADR-0112 D1: прапорець пробного режиму малювання на телефоні.
+// src/lib/touchDrawingFlag.test.ts — ADR-0112 D1/D10: малювання на телефоні — для всіх, ?draw=0 вимикає на пристрої.
 import { describe, expect, it, vi } from 'vitest';
 import { resolveTouchDrawing, touchDrawingFromQuery } from './touchDrawingFlag';
 
@@ -24,27 +24,34 @@ describe('touchDrawingFromQuery', () => {
 });
 
 describe('resolveTouchDrawing', () => {
-  it('?draw=1 запам’ятовує на пристрої; далі діє без параметра; ?draw=0 знімає', () => {
+  it('за замовчуванням увімкнено; ?draw=0 вимикає й запам’ятовується; ?draw=1 вмикає знову', () => {
     const { store, storage } = memory();
-    expect(resolveTouchDrawing('', storage)).toBe(false);
-    expect(resolveTouchDrawing('?draw=1', storage)).toBe(true);
-    expect(store.get('v4_touch_drawing')).toBe('1');
-    expect(resolveTouchDrawing('?symbol=NAS100', storage)).toBe(true);
+    expect(resolveTouchDrawing('', storage)).toBe(true);
     expect(resolveTouchDrawing('?draw=0', storage)).toBe(false);
-    expect(resolveTouchDrawing('', storage)).toBe(false);
+    expect(store.get('v4_touch_drawing')).toBe('0');
+    expect(resolveTouchDrawing('?symbol=NAS100', storage)).toBe(false);
+    expect(resolveTouchDrawing('?draw=1', storage)).toBe(true);
+    expect(store.has('v4_touch_drawing')).toBe(false);
+    expect(resolveTouchDrawing('', storage)).toBe(true);
+  });
+
+  it('пристрій із пробного періоду (збережене «1») лишається з малюванням', () => {
+    const { store, storage } = memory();
+    store.set('v4_touch_drawing', '1');
+    expect(resolveTouchDrawing('', storage)).toBe(true);
   });
 
   it('без сховища або коли воно кидає — лише параметр цієї сторінки, з попередженням', () => {
-    expect(resolveTouchDrawing('?draw=1', null)).toBe(true);
-    expect(resolveTouchDrawing('', null)).toBe(false);
+    expect(resolveTouchDrawing('?draw=0', null)).toBe(false);
+    expect(resolveTouchDrawing('', null)).toBe(true);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const throwing = {
       getItem: () => { throw new Error('SecurityError'); },
       setItem: () => { throw new Error('SecurityError'); },
       removeItem: () => { throw new Error('SecurityError'); },
     };
-    expect(resolveTouchDrawing('?draw=1', throwing)).toBe(true);
-    expect(resolveTouchDrawing('', throwing)).toBe(false);
+    expect(resolveTouchDrawing('?draw=0', throwing)).toBe(false);
+    expect(resolveTouchDrawing('', throwing)).toBe(true);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
