@@ -671,6 +671,7 @@
   let cachedMomentumMap: Record<string, { b: number; r: number }> = $state({});
   let cachedNarrative: import("./types").NarrativeBlock | null = $state(null);
   let cachedShell: import("./types").ShellPayload | null = $state(null);
+  let cachedBriefing: import("./types").Briefing | null = $state(null);
   let cachedPdState: import("./types").PdState | null = $state(null);
   let statusInfo: StatusInfo = $state({
     status: "CONNECTING" as const,
@@ -742,6 +743,9 @@
       cachedNarrative = (f as any).narrative ?? null;
     // ADR-0036: shell payload caching (delta frames without shell don't reset it)
     if ((f as any)?.shell !== undefined) cachedShell = (f as any).shell ?? null;
+    // ADR-0113 Ф3: розбір символу — повний кадр без поля = розбору нема; дельта без поля тримає попередній
+    if (f?.frame_type === "full") cachedBriefing = f.briefing ?? null;
+    else if (f?.briefing !== undefined) cachedBriefing = f.briefing ?? null;
     // ADR-0041 §5a: P/D state for thesis bar chip
     if (f?.pd_state !== undefined) cachedPdState = f.pd_state ?? null;
     // Track price/time from frames for HUD
@@ -869,6 +873,7 @@
     setBootIdChangeCallback(() => {
       cachedNarrative = null;
       cachedShell = null;
+      cachedBriefing = null;
       cachedBiasMap = {};
       cachedMomentumMap = {};
       cachedPdState = null;
@@ -1022,6 +1027,7 @@
         momentumMap={cachedMomentumMap}
         narrative={cachedNarrative}
         shell={cachedShell}
+        briefing={cachedBriefing}
         pdState={cachedPdState}
         utcTime={utcStr + " UTC"}
       />

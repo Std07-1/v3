@@ -206,6 +206,29 @@ export interface MicroCard {
   target?: string;      // ціль сценарію чи ліквідності контексту H4/D1 (ADR-0113 Ф3); "" — нема
 }
 
+// -------------------- ADR-0113 Ф3: розбір символу --------------------
+// Складає бекенд (core/smc/briefing.py) з наративів TF глядача; UI лише показує рядки (X28). tone — лише колір.
+
+export interface BriefingRow {
+  tf: string;            // з якого TF рядок ("H4"); "" — не з одного TF (стрічка напряму, сесія)
+  text: string;
+  notes: string[];       // другорядні рядки: стан, стоп · ціль · R:R, межа контексту
+  tone: 'bull' | 'bear' | 'warn' | '';
+}
+
+export interface BriefingSection {
+  key: string;           // bias | context | setups | liquidity | session | state
+  title: string;
+  rows: BriefingRow[];
+}
+
+export interface Briefing {
+  symbol: string;
+  as_of_ms: number;      // кінець закритого бару, на якому розбір складено
+  sections: BriefingSection[];
+  warnings: string[];
+}
+
 export interface ShellPayload {
   stage: ShellStage;
   stage_label: string;    // "WAIT" | "SHORT · READY" etc.
@@ -394,6 +417,9 @@ export interface RenderFrame {
   narrative?: NarrativeBlock;
   /** ADR-0036: shell payload (full frame + delta on complete bars) */
   shell?: ShellPayload;
+  /** ADR-0113 Ф3: розбір символу (full + delta на закритому барі) за прапорцем smc.briefing.enabled.
+   *  У full відсутнє → розбору нема; у дельті відсутнє → тримати попередній. */
+  briefing?: Briefing;
   /** ADR-0039: signal engine output (full frame) */
   signals?: SignalSpec[];
   /** ADR-0039: signal alerts on state transitions */
