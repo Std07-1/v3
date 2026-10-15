@@ -436,6 +436,18 @@ class ActiveScenario:
 
 
 @dataclasses.dataclass(frozen=True)
+class HtfContext:
+    """Контекст старшого TF глядача (ADR-0113, власник 15.10: «H4/D1 так»): ключова зона, ціль ліквідності,
+    межа контексту й TF сетапу — готові фрази для shell-мікрокартки; на wire не йде (там — headline)."""
+
+    direction: str  # "long" | "short"
+    zone_desc: str  # "зона продажу OB▼ A(6) 158.911–160.370"
+    target_desc: str  # "ціль ліквідності лой Лондона 157.542"; "" — ціль не знайдено
+    setup_desc: str  # "сетап шукаємо на M15–H1"; "" — TF сетапу не задано
+    invalidation: str  # "Вище 160.714 — зона пробита" — та сама межа, що в сценарії
+
+
+@dataclasses.dataclass(frozen=True)
 class NarrativeBlock:
     """Повний narrative для одного symbol+viewer_tf (ADR-0033 Rev 2, ADR-0035).
 
@@ -459,6 +471,8 @@ class NarrativeBlock:
     session_context: str = ""  # "London KZ active — high probability"
     # ADR-0053: range exhaustion display phrase ("" якщо early/mid/None)
     range_exhaustion_summary: str = ""
+    # ADR-0113: контекст старшого TF глядача — для shell; на wire не йде (там — headline)
+    htf_context: Optional["HtfContext"] = None
 
     def to_wire(self) -> Dict[str, Any]:
         """S6: wire format → ui_v4 NarrativeBlock type.

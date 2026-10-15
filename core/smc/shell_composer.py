@@ -45,6 +45,7 @@ _DEFAULT_MODE_TEXT: Dict[str, str] = {
     "ready": "Готовий до входу",
     "triggered": "Активний сетап",
     "stayout": "Поза ринком",
+    "context": "Контекст",  # ADR-0113: старший TF глядача — контекст без торгового сценарію
 }
 
 _STRIP_TFS = [86400, 14400, 3600, 900]  # D1, H4, H1, M15
@@ -207,6 +208,8 @@ def _build_stage_context(
     parts: List[str] = []
     if narrative.bias_summary:
         parts.append(narrative.bias_summary)
+    if narrative.htf_context is not None:
+        parts.append(narrative.htf_context.zone_desc)
     if narrative.scenarios:
         sc = narrative.scenarios[0]
         if sc.entry_desc:
@@ -259,6 +262,14 @@ def _build_micro_card(
         elif not narrative.in_killzone and stage in ("prepare", "ready", "triggered"):
             warning = "Поза кілзоною — нижча якість сетапу"
 
+    context = narrative.htf_context
+    if context is not None:
+        # ADR-0113: на H4/D1 — контекст: зона й напрям, де шукати сетап і куди тягне ліквідність, межа контексту
+        mode_text = mode_texts.get("context", _DEFAULT_MODE_TEXT["context"])
+        why_text = " · ".join(p for p in (_sentence(context.zone_desc), narrative.bias_summary) if p)
+        what_needed = _sentence(" · ".join(p for p in (context.setup_desc, context.target_desc) if p)) or "—"
+        what_cancels = context.invalidation or "—"
+
     return MicroCard(
         mode_text=mode_text,
         why_text=why_text,
@@ -266,6 +277,11 @@ def _build_micro_card(
         what_cancels=what_cancels,
         warning=warning,
     )
+
+
+def _sentence(text: str) -> str:
+    """Фраза з великої літери (фрази наративу — з малої, щоб стояти й посеред заголовка)."""
+    return text[:1].upper() + text[1:]
 
 
 # ── Tactical strip (§5.2.2) ────────────────────────────────

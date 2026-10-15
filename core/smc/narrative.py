@@ -19,6 +19,7 @@ from core.smc.zone_path import LONG, ZonePath, zone_direction
 from core.smc.types import (
     LEVEL_STATE_FORMING,
     ActiveScenario,
+    HtfContext,
     NarrativeBlock,
     SmcLevel,
     SmcSnapshot,
@@ -120,7 +121,7 @@ _CONFIRMED_AFTER_ENTRY_HEADLINES = {
     ("reduced", "short"): "\U0001f7e1 SELL \u2014 підтверджено після входу (поза KZ)",
 }
 # ADR-0113 (власник 15.10, «H4/D1 так»): старший TF глядача — контекст без торгового сценарію (smc.narrative.htf_context)
-_HTF_CONTEXT_HEADLINE = "\U0001f9ed {tf}: {bias} контекст \u2014 зона {side} {zone}{target}{setup}"
+_HTF_CONTEXT_HEADLINE = "\U0001f9ed {tf}: {bias} контекст \u2014 {zone}{target}{setup}"
 _HTF_CONTEXT_BIAS = {"long": "бичачий", "short": "ведмежий"}
 _HTF_CONTEXT_SIDE = {"long": "купівлі", "short": "продажу"}
 _EQ_LEVEL_KINDS = frozenset({"eq_highs", "eq_lows"})  # рушій уже відсіяв зняті кластери (liquidity._is_swept)
@@ -488,25 +489,35 @@ def _resolve_trigger_desc(
 # ── HTF context (ADR-0113, власник 15.10) ───────────────────
 
 
-def _htf_context_headline(
-    snapshot, zone, direction, grade_info, config, viewer_tf_s, current_price, atr, digits, path, liquidity_reached
+def _htf_context(
+    snapshot, zone, direction, grade_info, config, current_price, atr, digits, path, liquidity_reached, stop_price
 ):
-    # type: (SmcSnapshot, SmcZone, str, dict, dict, int, float, float, int, Optional[ZonePath], Optional[dict]) -> str
-    """Старший TF глядача: напрям, ключова зона й ціль ліквідності — без входу, стопу й тригера.
+    # type: (SmcSnapshot, SmcZone, str, dict, dict, float, float, int, Optional[ZonePath], Optional[dict], Optional[float]) -> HtfContext
+    """Старший TF глядача: напрям, ключова зона, ціль ліквідності й межа контексту — без входу й тригера.
 
-    Сценарій на H4/D1 — вхід за підтвердженням на тому ж TF (злам H4 з імпульсом), рідкий і пізній; з них трейдер бере
-    напрям і зону, а сетап шукає на TF виконання (`htf_context.setup_tfs` — лише для тексту).
+    Сценарій на H4/D1 — вхід за підтвердженням на тому ж TF (злам H4 з імпульсом), рідкий і пізній; з цих TF трейдер
+    бере напрям і зону, а сетап шукає на TF виконання (`htf_context.setup_tfs` — лише для тексту).
     """
     target = _find_target(snapshot, zone, direction, config, current_price, atr, digits, path, liquidity_reached)
     labels = [_tf_to_label(tf) for tf in config.get("htf_context", {}).get("setup_tfs", ())]
     span = labels[0] if len(labels) == 1 else "{}\u2013{}".format(labels[0], labels[-1]) if labels else ""
+    return HtfContext(
+        direction=direction,
+        zone_desc="зона {} {}".format(_HTF_CONTEXT_SIDE[direction], _format_entry(zone, grade_info, digits)),
+        target_desc="ціль ліквідності {}".format(target) if target else "",
+        setup_desc="сетап шукаємо на {}".format(span) if span else "",
+        invalidation=_find_invalidation(zone, digits, stop_price),
+    )
+
+
+def _htf_context_headline(context, viewer_tf_s):
+    # type: (HtfContext, int) -> str
     return _HTF_CONTEXT_HEADLINE.format(
         tf=_tf_to_label(viewer_tf_s),
-        bias=_HTF_CONTEXT_BIAS[direction],
-        side=_HTF_CONTEXT_SIDE[direction],
-        zone=_format_entry(zone, grade_info, digits),
-        target=", ціль ліквідності {}".format(target) if target else "",
-        setup=" \u2014 сетап шукаємо на {}".format(span) if span else "",
+        bias=_HTF_CONTEXT_BIAS[context.direction],
+        zone=context.zone_desc,
+        target=", " + context.target_desc if context.target_desc else "",
+        setup=" \u2014 " + context.setup_desc if context.setup_desc else "",
     )
 
 
@@ -1071,6 +1082,7 @@ def _synthesize_impl(
         )
 
     # Step 4: Headline — all mode / session / trigger state is now known
+    htf_context = None  # type: Optional[HtfContext]
     primary_path = paths.get(primary_zone.id) if primary_zone else None
     confirmed_after_entry = (
         primary_trigger == "triggered" and primary_zone is not None and _confirmed_after_entry(
@@ -1084,10 +1096,11 @@ def _synthesize_impl(
             _WAIT_HEADLINES.get(sub_mode, _WAIT_HEADLINES[""]),
         )
     elif sub_mode == "htf_context":
-        headline = _htf_context_headline(
-            snapshot, primary_zone, direction, zone_grades.get(primary_zone.id, {}), config, viewer_tf_s,
-            current_price, atr, digits, primary_path, liquidity_reached,
+        htf_context = _htf_context(
+            snapshot, primary_zone, direction, zone_grades.get(primary_zone.id, {}), config, current_price, atr,
+            digits, primary_path, liquidity_reached, stops[primary_zone.id],
         )
+        headline = _htf_context_headline(htf_context, viewer_tf_s)
     elif sub_mode == "" and primary_zone is not None:
         headline = _HTF_PENDING_HEADLINE
     elif sub_mode == "" and any(z.id not in closed for z in candidates) and not valid:
@@ -1166,6 +1179,7 @@ def _synthesize_impl(
         in_killzone=in_killzone,
         session_context=session_context,
         range_exhaustion_summary=range_exhaustion_summary,
+        htf_context=htf_context,
     )
 
 

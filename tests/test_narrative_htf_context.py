@@ -59,3 +59,14 @@ def test_wait_states_on_h4_keep_their_headlines():
     counter = _narrate(H4, bias={"86400": "bullish", "14400": "bullish"})
 
     assert counter.sub_mode == "counter" and counter.headline.startswith("\U0001f7e0 Контртренд")
+
+
+def test_context_is_structured_for_the_shell_but_stays_off_the_wire():
+    block = _narrate(H4, [_level("pdl", 5062.0)])
+
+    assert block.htf_context is not None
+    assert (block.htf_context.zone_desc, block.htf_context.target_desc, block.htf_context.setup_desc) == (
+        "зона продажу OB\u25bc A(6) 5144.00\u20135225.00", "ціль ліквідності PDL 5062.00", "сетап шукаємо на M15\u2013H1")
+    assert block.htf_context.invalidation == "Вище 5225.00 \u2014 зона пробита"
+    assert "htf_context" not in block.to_wire()
+    assert _narrate(M15, [_level("pdl", 5062.0)]).htf_context is None
