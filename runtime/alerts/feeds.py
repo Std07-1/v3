@@ -157,6 +157,23 @@ def uds_final_m1_reader(uds: Any) -> ReadFinalM1:
     return read
 
 
+def uds_last_close_reader(uds: Any) -> Callable[[str, int], Optional[float]]:
+    """Close останньої фінальної M1 до `now_ms` — запасна ціна для взведення, коли тіків ще не було (закритий ринок,
+    щойно стартував процес). Діапазон `(None, now]`, а не хвіст: хвіст без меж UDS кешує в RAM, і наступне читання
+    віддало б застарілий бар."""
+    policy = ReadPolicy(disk_policy=DISK_POLICY_EXPLICIT)
+
+    def read(symbol: str, now_ms: int) -> Optional[float]:
+        result = uds.read_window(WindowSpec(symbol=symbol, tf_s=60, limit=1, to_open_ms=now_ms), policy)
+        if result.meta.get("source") == "degraded":
+            raise M1ReadError(f"{symbol} last close: {result.warnings}")
+        closes = [row.get("close") for row in result.bars_lwc if row.get("complete") is True]
+        value = closes[-1] if closes else None
+        return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+    return read
+
+
 async def _close_pubsub(pubsub: Any) -> None:
     try:
         await pubsub.aclose()

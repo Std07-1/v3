@@ -59,8 +59,31 @@ class AlertEngine:
         self._gap_after_ms = gap_after_ms
         self._clock_ms = clock_ms
         self._prev_tick_ms: Dict[str, int] = {}
+        self._last_price: Dict[str, float] = {}
         self._degraded: Dict[str, str] = {}
         self._unsaved = False  # зміни в пам'яті, яких ще нема на диску (запис не вдався)
+        # Слухачі подій (SSE сторінки): (подія, сповіщення) — "fired" після постановки в чергу, "delivered" після ok
+        self.listeners: List[Callable[[str, PriceAlert], None]] = []
+
+    # ── сповіщення з HTTP ────────────────────────────────────────────────
+
+    def put_alert(self, alert: PriceAlert) -> None:
+        """Створити чи замінити (взведення з HTTP) — і на диск."""
+        self.store.put(alert)
+        self._unsaved = True
+        self._commit()
+
+    def remove_alert(self, alert_id: str) -> bool:
+        """Прибрати (лінію видалено). Вже спрацьоване в черзі все одно доставиться."""
+        if self.store.remove(alert_id) is None:
+            return False
+        self._unsaved = True
+        self._commit()
+        return True
+
+    def last_price(self, symbol: str) -> Optional[float]:
+        """Остання ціна графіка з тіків цього процесу; None — тіків символу ще не було (старт, закритий ринок)."""
+        return self._last_price.get(symbol)
 
     # ── ціни ─────────────────────────────────────────────────────────────
 
@@ -68,6 +91,7 @@ class AlertEngine:
         """Тік ціни графіка; повертає щойно спрацьовані."""
         prev = self._prev_tick_ms.get(symbol)
         self._prev_tick_ms[symbol] = tick_ts_ms if prev is None else max(prev, tick_ts_ms)
+        self._last_price[symbol] = price
 
         def transition(alert: PriceAlert) -> PriceAlert:
             return on_tick(alert, price, tick_ts_ms, prev_tick_ts_ms=prev, gap_after_ms=self._gap_after_ms)
@@ -102,9 +126,12 @@ class AlertEngine:
 
     def ack_delivered(self, key: Tuple[str, int]) -> None:
         """Доставлено — зняти з черги й записати. Якщо запис не вдався, після рестарту буде дубль, не втрата."""
+        entry = self.store.outbox.get(key)
         self.store.ack(key)
         self._unsaved = True
         self._commit()
+        if entry is not None:
+            self._notify("delivered", entry.alert)
 
     def note_attempt(self, key: Tuple[str, int]) -> None:
         """Невдала спроба доставки: лічильник у записі черги (на диск — з наступним записом)."""
@@ -153,6 +180,7 @@ class AlertEngine:
             if updated.fired is not None:
                 self.store.enqueue(updated, now_ms=self._clock_ms())
                 fired.append(updated)
+                self._notify("fired", updated)
                 _log.info(
                     "ALERTS_FIRED id=%s sym=%s level=%s via=%s",
                     updated.alert_id,
@@ -161,6 +189,10 @@ class AlertEngine:
                     updated.fired.via.value,
                 )
         return fired, changed
+
+    def _notify(self, event: str, alert: PriceAlert) -> None:
+        for listener in list(self.listeners):
+            listener(event, alert)
 
     def _commit(self) -> None:
         """Стан і черга — одним записом. Збій — прапорець і повтор пізніше; пам'ять не відкочується: доставка (S4)

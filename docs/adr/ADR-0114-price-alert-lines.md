@@ -101,7 +101,15 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
 
 ### 4.3 Процес і стан (`runtime/alerts/`, програма `smc-alerts`)
 - Окрема supervisor-програма у власному conf (як `smc-agent-bridge`), поза групою `smc`: `restart smc:smc-ws` її не
-  чіпає. Слухає `127.0.0.1:<alerts.port>`; nginx `location /api/alerts/` на vhost сайту → цей порт.
+  чіпає. `python -m runtime.alerts --config config.json` (`service.py`) слухає `127.0.0.1:<alerts.port>`; nginx
+  `location /api/alerts/` на vhost сайту → цей порт. `alerts.enabled=false` — живий процес лише з health
+  `{"enabled": false}` (supervisor бачить RUNNING). Неготовність на старті — вихід із причиною, не напівживий процес:
+  нема секретів (`ALERTS_SECRETS_MISSING`), теки стану (`ALERTS_STATE_DIR_MISSING`), каналу тіків чи Redis
+  (`ALERTS_NO_TICKS`), знаків символу, хибна секція config (`config.py`: усі ключі обов'язкові, невідомий — помилка),
+  битий `devices.json`, новіша схема `alerts.json`. Фоновий цикл, що завершився не за cancel, — `ALERTS_BACKGROUND_TASK_DIED`
+  (CRITICAL).
+- Модулі: `store.py` (стан), `engine.py` (двигун), `feeds.py` (ціни), `devices.py` (пристрої), `messages.py` +
+  `telegram.py` (бот), `app.py` (HTTP), `sse.py` (потоки сторінок), `config.py`, `service.py` (збирання).
 - **Стан** — `alerts.state_dir` (`/var/lib/smc-v3/alerts`, власник `smc`, 750): JSON `alerts.json`
   (`runtime/alerts/store.py`), атомарний запис (tmp → fsync → rename → fsync теки; збій запису лишає попередню цілу
   версію і не лишає tmp), один записувач — цей процес. Битий файл або хибні записи → копія сирого файлу
@@ -183,7 +191,8 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
 ### 4.7 Config (`config.json`, SSOT)
 ```jsonc
 "alerts": {
-  "enabled": false, "port": 8020, "state_dir": "/var/lib/smc-v3/alerts",
+  "enabled": false, "port": 8020, "state_dir": "/var/lib/smc-v3/alerts", "env_file": "/etc/smc-v3/alerts.env",
+  "telegram_api": "https://api.telegram.org",
   "display_tz": "Europe/Prague", "max_active_per_subscriber": 50,
   "pair_code_ttl_s": 600, "requests_per_min": 60, "sse_heartbeat_s": 25,
   "gap_after_s": 900, "tick_reconnect_s": 5, "m1_poll_s": 15, "m1_final_lag_s": 600, "m1_chunk_bars": 120,
@@ -265,3 +274,14 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
   `DeviceRegistry.bind` → `issue_confirm_code` + `confirm` (`ConfirmOutcome`: bound / wrong_code / locked /
   awaiting_bot / no_pairing), ліміти спроб і незавершених прив'язок. Тести 21 (разом 88), мутації нової логіки 12/12
   (одна спершу вижила: видача цифр не продовжувала строк, хоча бот обіцяє «діє 10 хв» — тест додано). Не на проді.
+- 2026-10-15 — **S5** `runtime/alerts/app.py` (HTTP: health, pair, pair/confirm, список, PUT/DELETE за `drawing_id`,
+  SSE; cookie, `X-Alerts` + Origin, ліміт на IP, тіло ≤ 4 КБ; той самий рівень без `rearm` не «оживляє» спрацьоване;
+  `already_paired` замість затирання cookie робочого пристрою), `sse.py`, `config.py` (суворо), `service.py` +
+  `__main__.py` (збирання, ціна для боку: тік процесу → `tick:last` → close M1), двигун — `put_alert`,
+  `remove_alert`, `last_price`, слухачі; `feeds.uds_last_close_reader` (діапазон `(None, now]` — без кешу RAM);
+  `TelegramClient.get_username` (`getMe` — ім'я бота не дублюється в config). Тести: `test_alerts_app.py` (25),
+  `test_alerts_service.py` (16) — разом 129. Мутації HTTP 22/22 (одна спершу вижила: закриття потоку при переповненні
+  черги — без нього SSE падав би з `TypeError`; тест додано). **Живий наскрізний прогін** справжнього
+  `python -m runtime.alerts` (тимчасовий config, справжній Redis і `data_v3`, фейковий Bot API): pair → `/start` →
+  6 цифр → confirm (bound) → PUT (бік від close M1) → тік у PubSub → повідомлення «🔔 XAU/USD 4150.00 — перетнуто
+  знизу вгору» → `delivered` → на диску черга порожня → `/alerts`; у лозі процесу 0 ERROR. Не на проді.

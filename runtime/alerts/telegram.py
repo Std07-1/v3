@@ -56,6 +56,14 @@ class TelegramClient:
         self._token = token
         self._url = f"{api_base.rstrip('/')}/bot{token}/"
 
+    async def get_username(self) -> str:
+        """`getMe` → ім'я бота для посилань t.me (SSOT — сам Telegram, не дубль у config)."""
+        result = await self._call("getMe", {}, timeout_s=SEND_TIMEOUT_S)
+        username = result.get("username") if isinstance(result, dict) else None
+        if not isinstance(username, str) or not username:
+            raise TelegramError(f"getMe: нема username у {type(result).__name__}")
+        return username
+
     async def send_message(self, chat_id: int, text: str) -> None:
         payload = {"chat_id": chat_id, "text": text, "link_preview_options": {"is_disabled": True}}
         await self._call("sendMessage", payload, timeout_s=SEND_TIMEOUT_S)
