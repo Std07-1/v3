@@ -80,6 +80,8 @@ export class DrawingsRenderer {
   public onRendered: (() => void) | null = null;
   /** ADR-0114 S7: після кожного вдалого збереження — узгодження ліній-сповіщень (alertSync); ключ — чий це стор. */
   public onPersisted: ((storageKey: string, drawings: readonly Drawing[]) => void) | null = null;
+  /** Інструмент своє відпрацював — UI вимикає його (одноразова фігура стала, правий клік; ADR-0111 §3.6). */
+  public onToolDone: (() => void) | null = null;
 
   private drawings: Drawing[] = [];
   private activeTool: ActiveTool = null;
@@ -906,9 +908,10 @@ export class DrawingsRenderer {
     // Пріоритет: draft-cancel → фігура→міні-меню → порожньо (просто душимо).
     this.onContextMenuCapture = (e) => {
       e.preventDefault();
-      // draft активний → скасувати незакомічену фігуру (симетрія до Escape).
-      if (this.draft) {
+      // Обрано інструмент — правий клік вимикає його, як Escape: чернетку геть, назад до курсора (власник 15.10)
+      if (this.activeDrawingTool()) {
         this.cancelDraft();
+        this.onToolDone?.();
         return;
       }
       // Меню лише якщо right-click влучив у фігуру і UI-шар підписаний.
@@ -1042,10 +1045,17 @@ export class DrawingsRenderer {
     if (step.kind === 'commit') {
       this.commandStack.push({ type: 'ADD', drawing: step.drawing });
       this.draft = null;
+      if (tool.oneShot) this.endOneShot(step.drawing.id);
       return;
     }
     this.draft = step.draft;
     this.scheduleRender();
+  }
+
+  /** Одноразова фігура стала (позиція): виділити її для правок і вимкнути інструмент (ADR-0111 §3.6). */
+  private endOneShot(id: string): void {
+    this.selectedId = id;
+    this.onToolDone?.();
   }
 
   private updateDraft(x: number, y: number): void {
@@ -1094,7 +1104,8 @@ export class DrawingsRenderer {
     if (step.kind === 'commit') this.commandStack.push({ type: 'ADD', drawing: step.drawing });
 
     this.draft = null;
-    // Tool stays active for continuous drawing (TradingView-style); Escape to exit
+    if (step.kind === 'commit' && tool.oneShot) this.endOneShot(step.drawing.id);
+    // Інструмент лишається обраним (кілька фігур поспіль, як у TV), крім одноразових; Escape чи правий клік — вимкнути
   }
 
   // ---- drag (математика — drawingDrag.ts) ----

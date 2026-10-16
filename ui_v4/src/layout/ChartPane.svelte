@@ -88,6 +88,8 @@
     onDrawingEditState?: (state: { canUndo: boolean; hasSelection: boolean }) => void;
     /** ADR-0114: дія лінії-сповіщення для виділеної фігури — кнопка-дзвіночок у капсулі телефона. */
     onDrawingAlertAction?: (action: AlertAction | null) => void;
+    /** Інструмент своє відпрацював (позиція стала, правий клік) — App вимикає його (ADR-0111 §3.6). */
+    onToolDone?: () => void;
   }
 
   let {
@@ -105,6 +107,7 @@
     onTouchPlace,
     onDrawingEditState,
     onDrawingAlertAction,
+    onToolDone,
   }: Props = $props();
 
   // ADR-0024: локальний стан SMC overlay (оновлюється інкрементально)
@@ -447,6 +450,7 @@
     });
     drawingsRenderer.onPersisted = (key, drawings) => void alerts.onPersisted(key, drawings);
     startAlerts();
+    drawingsRenderer.onToolDone = () => onToolDone?.();
 
     // Expose purge method for console debugging: window.__purgeDrawings()
     (window as any).__purgeDrawings = () =>
@@ -705,7 +709,10 @@
         for (const b of bars) chartEngine.update(b);
         if (bars.length > 0) showNoData = false;
       } else if (currentFrame.frame_type === "scrollback") {
-        chartEngine.prependData(currentFrame.candles ?? []);
+        chartEngine.prependData(
+          currentFrame.candles ?? [],
+          currentFrame.meta?.warnings ?? [],
+        );
       }
 
       // ADR-0024 §6.2: оновлюємо smcData залежно від типу кадру

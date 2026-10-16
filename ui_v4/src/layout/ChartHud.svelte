@@ -29,6 +29,7 @@
         momentumMap = {} as Record<string, { b: number; r: number }>,
         narrative = null as import("../types").NarrativeBlock | null,
         shell = null as import("../types").ShellPayload | null,
+        briefing = null as import("../types").Briefing | null,
         pdState = null as import("../types").PdState | null,
         utcTime = "" as string,
         onMenuOpenChange,
@@ -48,6 +49,8 @@
         momentumMap?: Record<string, { b: number; r: number }>;
         narrative?: import("../types").NarrativeBlock | null;
         shell?: import("../types").ShellPayload | null;
+        /** ADR-0113 Ф3: розбір символу — лише показ рядків бекенду (X28). */
+        briefing?: import("../types").Briefing | null;
         pdState?: import("../types").PdState | null;
         utcTime?: string;
         /** Меню символу або TF відкрилось / закрилось (ADR-0112 D2: відкрите меню зупиняє малювання на телефоні). */
@@ -94,6 +97,17 @@
     function toggleMicroCard() {
         microCardOpen = !microCardOpen;
     }
+
+    // ─── ADR-0113 Ф3: «Розбір» у мікрокартці — розбір того самого символу, що на графіку ───
+    let briefingOpen = $state(false);
+    let shownBriefing = $derived(
+        briefing && briefing.symbol === currentSymbol ? briefing : null,
+    );
+    let briefingAsOf = $derived(
+        shownBriefing
+            ? new Date(shownBriefing.as_of_ms).toISOString().slice(11, 16)
+            : "",
+    );
 
     // Shell stage CSS class
     let shellStageClass = $derived(shell ? `st-${shell.stage}` : "");
@@ -488,7 +502,10 @@
                             class="mc-backdrop"
                             onclick={() => (microCardOpen = false)}
                         ></div>
-                        <div class="shell-mc open">
+                        <div
+                            class="shell-mc open"
+                            class:briefing-open={briefingOpen && shownBriefing}
+                        >
                             <div class="mc-grip"><span></span></div>
                             <div class="mc-grid">
                                 <div
@@ -534,6 +551,19 @@
                                         <div class="mc-label">Що скасує</div>
                                         <div class="mc-val red">
                                             {shell.micro_card.what_cancels}
+                                        </div>
+                                    </div>
+                                {/if}
+                                {#if shell.micro_card.target}
+                                    <div
+                                        class="mc-field"
+                                        title={$hintsOn
+                                            ? "Куди тягне ліквідність — ціль сценарію"
+                                            : undefined}
+                                    >
+                                        <div class="mc-label">Ціль</div>
+                                        <div class="mc-val tp">
+                                            {shell.micro_card.target}
                                         </div>
                                     </div>
                                 {/if}
@@ -627,6 +657,58 @@
                                         </div>
                                     {/if}
                                 </div>
+                            {/if}
+                            <!-- ADR-0113 Ф3: розбір символу — розгортається під карткою (телефон — у тій самій шторці) -->
+                            {#if shownBriefing}
+                                <button
+                                    class="mc-brief-toggle"
+                                    type="button"
+                                    aria-expanded={briefingOpen}
+                                    onclick={() => (briefingOpen = !briefingOpen)}
+                                >
+                                    <span>Розбір</span>
+                                    <span class="mc-brief-chev"
+                                        >{briefingOpen ? "▴" : "▾"}</span
+                                    >
+                                </button>
+                                {#if briefingOpen}
+                                    <div class="mc-brief">
+                                        {#each shownBriefing.sections as section (section.key)}
+                                            <div class="mb-sec">
+                                                <div class="mc-label">
+                                                    {section.title}
+                                                </div>
+                                                {#each section.rows as row, i (i)}
+                                                    <div
+                                                        class="mb-row"
+                                                        class:bull={row.tone === "bull"}
+                                                        class:bear={row.tone === "bear"}
+                                                        class:warn={row.tone === "warn"}
+                                                    >
+                                                        {#if row.tf}
+                                                            <span class="mb-tf"
+                                                                >{row.tf}</span
+                                                            >
+                                                        {/if}
+                                                        <div class="mb-body">
+                                                            <div class="mb-text">
+                                                                {row.text}
+                                                            </div>
+                                                            {#each row.notes as note, j (j)}
+                                                                <div class="mb-note">
+                                                                    {note}
+                                                                </div>
+                                                            {/each}
+                                                        </div>
+                                                    </div>
+                                                {/each}
+                                            </div>
+                                        {/each}
+                                        <div class="mb-asof">
+                                            Станом на {briefingAsOf} UTC
+                                        </div>
+                                    </div>
+                                {/if}
                             {/if}
                         </div>
                     {/if}
@@ -1439,6 +1521,90 @@
         color: rgba(96, 165, 250, 0.85);
     }
 
+    /* ─── ADR-0113 Ф3: «Розбір» — розгортання мікрокартки ─── */
+    .shell-mc.briefing-open {
+        width: min(440px, calc(100vw - 24px));
+        max-height: calc(100vh - 96px);
+        overflow-y: auto;
+        /* довгий текст розбору поверх свічок — щільніший фон, ніж у картки з 4 полями */
+        background: rgba(13, 15, 21, 0.78);
+    }
+    .mc-brief-toggle {
+        all: unset;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        padding: 5px 10px 6px 11px;
+        border-top: 0.5px solid rgba(255, 255, 255, 0.08);
+        font-size: var(--t6-size);
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--st, rgba(255, 255, 255, 0.5));
+        cursor: pointer;
+    }
+    .mc-brief-toggle:hover {
+        background: rgba(255, 255, 255, 0.04);
+    }
+    .mc-brief-chev {
+        opacity: 0.7;
+    }
+    .mc-brief {
+        padding: 2px 10px 8px 11px;
+        /* HUD — один рядок (nowrap успадковується); рядки розбору переносяться */
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+    .mb-sec {
+        padding: 6px 0 2px;
+    }
+    .mb-sec + .mb-sec {
+        border-top: 0.5px solid rgba(255, 255, 255, 0.05);
+    }
+    .mb-row {
+        display: flex;
+        align-items: baseline;
+        gap: 7px;
+        padding: 2px 0;
+    }
+    .mb-tf {
+        flex: none;
+        min-width: 26px;
+        font-size: var(--t7-size);
+        font-weight: 600;
+        font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
+        color: rgba(255, 255, 255, 0.4);
+    }
+    .mb-row.bull .mb-tf {
+        color: rgba(52, 211, 153, 0.9);
+    }
+    .mb-row.bear .mb-tf {
+        color: rgba(252, 129, 129, 0.9);
+    }
+    .mb-row.warn .mb-tf {
+        color: rgba(251, 191, 36, 0.75);
+    }
+    .mb-body {
+        min-width: 0;
+    }
+    .mb-text {
+        font-size: var(--t4-size);
+        line-height: 1.4;
+        color: rgba(255, 255, 255, 0.78);
+    }
+    .mb-note {
+        font-size: var(--t6-size);
+        line-height: 1.4;
+        color: rgba(255, 255, 255, 0.45);
+    }
+    .mb-asof {
+        padding-top: 6px;
+        font-size: var(--t7-size);
+        color: rgba(255, 255, 255, 0.28);
+    }
+
     /* Sub-row: P/D + bias pills (compact, under price row) */
     .hud-sub {
         display: flex;
@@ -1655,6 +1821,22 @@
         }
         .mc-val {
             font-size: var(--t3a-size);
+        }
+        .shell-mc.briefing-open {
+            width: 100%;
+            max-height: 85vh;
+        }
+        .mc-brief-toggle {
+            padding: 10px 16px;
+        }
+        .mc-brief {
+            padding: 2px 16px 14px;
+        }
+        .mb-text {
+            font-size: var(--t3a-size);
+        }
+        .mb-note {
+            font-size: var(--t4-size);
         }
     }
 </style>

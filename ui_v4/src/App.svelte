@@ -38,6 +38,7 @@
     handleWSFrame,
     currentFrame,
     currentPair,
+    expectPair,
     frameCarriesCurrentPrice,
     resetFrameRouter,
     serverConfig,
@@ -674,6 +675,7 @@
   let cachedMomentumMap: Record<string, { b: number; r: number }> = $state({});
   let cachedNarrative: import("./types").NarrativeBlock | null = $state(null);
   let cachedShell: import("./types").ShellPayload | null = $state(null);
+  let cachedBriefing: import("./types").Briefing | null = $state(null);
   let cachedPdState: import("./types").PdState | null = $state(null);
   let statusInfo: StatusInfo = $state({
     status: "CONNECTING" as const,
@@ -721,16 +723,14 @@
         saveLastPair(defSymbol, tf);
         if (tf !== defTf) {
           actions?.switchSymbolTf(defSymbol, tf);
-          hudSymbol = defSymbol;
-          hudTf = tf;
+          expectPair(defSymbol, tf);
           return; // Don't render this default frame
         }
       } else if (saved && (saved.symbol !== f.symbol || saved.tf !== f.tf)) {
         // Send switch immediately — server will send correct full frame
         actions?.switchSymbolTf(saved.symbol, saved.tf);
-        // Speculatively patch HUD to avoid flicker until correct full frame arrives
-        hudSymbol = saved.symbol;
-        hudTf = saved.tf;
+        // Чекаємо цю пару: HUD показує її одразу, дельти дефолтної до графіка не доходять
+        expectPair(saved.symbol, saved.tf);
         return; // Don't render this default frame
       }
     }
@@ -745,6 +745,9 @@
       cachedNarrative = (f as any).narrative ?? null;
     // ADR-0036: shell payload caching (delta frames without shell don't reset it)
     if ((f as any)?.shell !== undefined) cachedShell = (f as any).shell ?? null;
+    // ADR-0113 Ф3: розбір символу — повний кадр без поля = розбору нема; дельта без поля тримає попередній
+    if (f?.frame_type === "full") cachedBriefing = f.briefing ?? null;
+    else if (f?.briefing !== undefined) cachedBriefing = f.briefing ?? null;
     // ADR-0041 §5a: P/D state for thesis bar chip
     if (f?.pd_state !== undefined) cachedPdState = f.pd_state ?? null;
     // Track price/time from frames for HUD
@@ -872,6 +875,7 @@
     setBootIdChangeCallback(() => {
       cachedNarrative = null;
       cachedShell = null;
+      cachedBriefing = null;
       cachedBiasMap = {};
       cachedMomentumMap = {};
       cachedPdState = null;
@@ -983,6 +987,7 @@
         onTouchPlace={(r) => drawBarRef?.applyPlace(r)}
         onDrawingEditState={(s) => (drawEditState = s)}
         onDrawingAlertAction={(a) => (drawAlertAction = a)}
+        onToolDone={() => (activeTool = null)}
         bind:smcPanelOpen
         bind:displayMode
       />
@@ -1027,6 +1032,7 @@
         momentumMap={cachedMomentumMap}
         narrative={cachedNarrative}
         shell={cachedShell}
+        briefing={cachedBriefing}
         pdState={cachedPdState}
         utcTime={utcStr + " UTC"}
       />
@@ -1083,8 +1089,8 @@
       <span class="tr-replay-badge">REPLAY</span>
     {/if}
 
-    <!-- ADR-0112 D2: олівець під ☰ — малювання на телефоні одним тапом (лише з ?draw=1 і лише в телефонному
-         розкладі, як пункт «Малювати»); відкрите малювання — золотий, тап закриває -->
+    <!-- ADR-0112 D2: олівець під ☰ — малювання на телефоні одним тапом (для всіх, крім пристроїв з ?draw=0, D10;
+         лише в телефонному розкладі, як пункт «Малювати»); відкрите малювання — золотий, тап закриває -->
     {#if touchDrawingAvailable}
       <button
         class="tr-draw-btn"

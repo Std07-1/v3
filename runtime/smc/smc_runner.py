@@ -19,6 +19,7 @@ Python 3.7 compatible.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import json
 import logging
 import os
@@ -26,7 +27,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from core.config_loader import price_digits_wire
+from core.config_loader import htf_anchor_rule_resolver, price_digits_wire
 from core.model.bars import CandleBar
 from core.smc.engine import SmcEngine
 from core.smc.range_exhaustion import compute_range_exhaustion
@@ -43,11 +44,22 @@ from core.smc.narrative import (
     _fallback_narrative_block,
 )
 from core.smc.narrative_inputs import NarrativeInputs
+from core.smc.briefing import (
+    Briefing,
+    BriefingSection,
+    closed_briefing,
+    compose_briefing,
+    liquidity_section,
+    session_section,
+)
+from core.smc.sessions import get_current_session, next_session_open
 from core.smc.liquidity_sweep import FirstReached, TouchIndex, first_reached
-from core.smc.zone_path import ZonePath, zone_path
+from core.session_anchor import htf_bucket_start_ms, htf_next_bucket_start_ms
+from core.smc.zone_path import FormingSpan, ZonePath, first_touch_end_ms, forming_spans, zone_path
 from core.smc.shell_composer import compose_shell_payload
 from runtime.ingest.market_calendar import TradingCalendar
 from runtime.ingest.tick_common import resolve_symbol_calendars
+from runtime.smc.narrative_journal import NarrativeJournal
 from runtime.smc.signal_journal import SignalJournal
 from runtime.relay.signal_relay import fire_signal, fire_bias
 
@@ -171,9 +183,13 @@ class SmcRunner:
         # ADR-0039: previous signal state per (symbol, tf_s) for lifecycle continuity
         self._prev_signals: Dict[Tuple[str, int], list] = {}
         self._journal = SignalJournal(full_cfg)
+        # ADR-0113 Ф4: журнал точності — живий прогін, рядок розбору на кожному закритті бару кроку
+        self._narrative_journal = NarrativeJournal(full_cfg)
         self._warmup_done = False  # journal gated until warmup completes
         # (symbol, viewer_tf_s) з наративом без виміряного ATR — лог на переході, не кожен виклик
         self._narrative_atr_unmeasured: Set[Tuple[str, int]] = set()
+        # Сітка H4/D1 символу (ADR-0095) для бакетів TF зони, що формуються (ADR-0113 Ф2a, E-03); None — не виміряна
+        self._htf_rules: Dict[str, Optional[str]] = {}
         # Signal state persistence: survive restarts (D1 fix)
         sig_base = str(
             full_cfg.get("smc", {})
@@ -203,6 +219,8 @@ class SmcRunner:
         self._range_exhaustion_cache: Dict[str, Tuple[int, RangeExhaustionSnapshot]] = (
             {}
         )
+        # ADR-0113 Ф3: розбір символу — symbol → (останні бари compute TF, розбір); None — не склався (лог уже був)
+        self._briefing_cache: Dict[str, Tuple[Tuple[int, ...], Optional[Briefing]]] = {}
 
         # Relay: відстеження останнього bias для dedup
         self._last_bias: Dict[Tuple[str, int], Optional[str]] = {}
@@ -436,6 +454,8 @@ class SmcRunner:
         """
         cb = _bar_dict_to_candle_bar(bar_dict, symbol, 60)
         if cb is not None:
+            if cb.complete and self._warmup_done:
+                self._narrative_journal.before_bar(symbol, cb.open_time_ms, self.narrative_row)
             self._engine.feed_m1_bar(cb)
             self._last_prices[symbol] = cb.c
 
@@ -456,6 +476,10 @@ class SmcRunner:
         if cb is None:
             _log.debug("SMC_BAR_SKIP sym=%s tf=%s reason=bad_dict", symbol, tf_s)
             return None
+        if cb.complete and self._warmup_done:
+            # ADR-0113 Ф4: перший бар після моменту розбору — рушій уже має всі TF того моменту
+            self._narrative_journal.before_bar(symbol, cb.open_time_ms, self.narrative_row)
+            self._narrative_journal.after_bar(symbol, tf_s, cb.close_time_ms, cb.c, cb.complete)
 
         # ADR-0075: buffer closed-bar events for WakeEngine candle_close.
         # Broker "finale" (cb.complete) IS the closed bar (I3 Final>Preview) —
@@ -804,8 +828,8 @@ class SmcRunner:
             _log.warning("SMC_DISPLAY_LEVELS_FAIL sym=%s tf=%s", symbol, viewer_tf_s, exc_info=True)
             return None
 
-    def get_narrative(self, symbol, viewer_tf_s, current_price, atr=0.0, now_ms=None):
-        # type: (str, int, float, float, Optional[int]) -> Optional[NarrativeBlock]
+    def get_narrative(self, symbol, viewer_tf_s, current_price, atr=0.0, now_ms=None, record=True):
+        # type: (str, int, float, float, Optional[int], bool) -> Optional[NarrativeBlock]
         """ADR-0033 + ADR-0035: synthesize narrative with session context.
 
         `atr` — оцінка викликача (ws_server: h−l одного бару; 0.0 = оцінки нема); діє лише для TF,
@@ -824,13 +848,27 @@ class SmcRunner:
             if inputs is None:
                 return _fallback_narrative_block(["no_snapshot"])
             result = synthesize_narrative(**inputs.as_kwargs())
-            self._journal.record(
-                symbol, viewer_tf_s, result, current_price, inputs.atr, bias_map=inputs.bias_map
-            )
+            if record:
+                self._journal.record(
+                    symbol, viewer_tf_s, result, current_price, inputs.atr, bias_map=inputs.bias_map
+                )
             return result
         except Exception:
             _log.exception("NARRATIVE_ERROR symbol=%s tf=%d", symbol, viewer_tf_s)
             return _fallback_narrative_block()
+
+    def narrative_row(self, symbol, viewer_tf_s, price, now_ms):
+        # type: (str, int, float, int) -> Optional[Dict[str, Any]]
+        """Рядок розбору на момент — один формат для прогону по історії й живого журналу (ADR-0113 Ф4).
+
+        Журнал сигналів не пише (`record=False`): рядок — вимір, а не подія глядача. None — розбору немає (наратив
+        вимкнений чи до прогріву)."""
+        block = self.get_narrative(symbol, viewer_tf_s, price, 0.0, now_ms=now_ms, record=False)
+        if block is None:
+            return None
+        return {"t": now_ms, "symbol": symbol, "tf_s": viewer_tf_s, "price": price,
+                "atr": self.get_measured_atr(symbol, self._engine.display_base_tf(viewer_tf_s)),
+                "narrative": block.to_wire()}
 
     def get_narrative_inputs(self, symbol, viewer_tf_s, current_price, atr=0.0, now_ms=None):
         # type: (str, int, float, float, Optional[int]) -> Optional[NarrativeInputs]
@@ -914,18 +952,50 @@ class SmcRunner:
         return reached
 
     def _zone_paths(self, symbol: str, snap: SmcSnapshot) -> Dict[str, ZonePath]:
-        """ADR-0113 Ф2a: шлях ціни від бару зламу кожного OB знімка — по барах рушія TF зони (OB з якорем народження)."""
+        """ADR-0113 Ф2a: шлях ціни від бару зламу кожного OB знімка — по барах рушія TF зони (OB з якорем народження)
+        і бакетах TF зони, що формуються, із закритих барів найдрібнішого TF рушія; момент першого дотику — з дрібніших
+        рядів (E-03). Без сітки символу — лише закриті бари TF зони."""
+        rule = self._htf_rule(symbol)
         bars_by_tf: Dict[int, List[CandleBar]] = {}
+        forming_by_tf: Dict[int, List[FormingSpan]] = {}
+
+        def bars_of(tf_s: int) -> List[CandleBar]:
+            if tf_s not in bars_by_tf:
+                bars_by_tf[tf_s] = self._engine.get_bars(symbol, tf_s)
+            return bars_by_tf[tf_s]
+
         paths: Dict[str, ZonePath] = {}
         for zone in snap.zones:
             if zone.origin_event_ms is None:
                 continue
-            if zone.tf_s not in bars_by_tf:
-                bars_by_tf[zone.tf_s] = self._engine.get_bars(symbol, zone.tf_s)
-            path = zone_path(zone, bars_by_tf[zone.tf_s])
-            if path is not None:
-                paths[zone.id] = path
+            bars = bars_of(zone.tf_s)
+            finer_tfs = sorted(tf for tf in self._compute_tfs if tf < zone.tf_s) if rule is not None else []
+            bucket_start = functools.partial(htf_bucket_start_ms, tf_s=zone.tf_s, rule=rule)
+            if zone.tf_s not in forming_by_tf:
+                forming_by_tf[zone.tf_s] = (
+                    forming_spans(bars[-1].open_time_ms, bars_of(finer_tfs[0]), bucket_start)
+                    if finer_tfs and bars else []
+                )
+            path = zone_path(zone, bars, forming_by_tf[zone.tf_s])
+            if path is None:
+                continue
+            if finer_tfs and path.entered:
+                entry_bucket_end_ms = htf_next_bucket_start_ms(path.entered_ms, zone.tf_s, rule)
+                touch_end_ms = first_touch_end_ms(path, (bars_of(tf) for tf in finer_tfs), entry_bucket_end_ms)
+                path = dataclasses.replace(path, touch_end_ms=touch_end_ms)
+            paths[zone.id] = path
         return paths
+
+    def _htf_rule(self, symbol: str) -> Optional[str]:
+        """Правило сітки H4/D1 символу (ADR-0095 §3.4) — один раз на символ; без нього — WARNING і шлях лише із
+        закритих барів TF зони (вхід у зону H1/H4/D1 видно після закриття її бару, як до E-03)."""
+        if symbol not in self._htf_rules:
+            try:
+                self._htf_rules[symbol] = htf_anchor_rule_resolver(self._full_config)(symbol)
+            except ValueError as exc:
+                _log.warning("NARRATIVE_FORMING_GRID_UNAVAILABLE sym=%s reason=%s", symbol, exc)
+                self._htf_rules[symbol] = None
+        return self._htf_rules[symbol]
 
     def _narrative_atr(self, symbol: str, viewer_tf_s: int, caller_estimate: float) -> float:
         """ATR для фільтра дистанції цілей наративу — ATR14 рушія для TF глядача (ADR-0070 rev 3).
@@ -1002,6 +1072,90 @@ class SmcRunner:
                 "SHELL_COMPOSE_ERR sym=%s tf=%d", symbol, viewer_tf_s, exc_info=True
             )
             return None
+
+    # ── Розбір символу (ADR-0113 Ф3) ────────────────────
+
+    def get_briefing(self, symbol: str) -> Optional[Briefing]:
+        """Розбір символу — раз на закритий бар рушія (кеш за останнім баром кожного compute TF), а не на кожен кадр.
+
+        Момент — кінець останнього бару найдрібнішого compute TF, ціна — його close: той самий стан рушія дає той самий
+        розбір, хоч би хто й коли його попросив (R10). None — `smc.briefing.enabled=false`, до прогріву, наратив
+        вимкнений, барів ще немає чи розбір не склався (BRIEFING_ERR у лозі).
+        """
+        if not self._full_config.get("smc", {}).get("briefing", {}).get("enabled", False) or not self._warmup_done:
+            return None
+        key = tuple(self._last_bar_open_ms(symbol, tf_s) for tf_s in sorted(self._compute_tfs))
+        cached = self._briefing_cache.get(symbol)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        briefing = self._compose_briefing(symbol)
+        self._briefing_cache[symbol] = (key, briefing)
+        return briefing
+
+    def _last_bar_open_ms(self, symbol: str, tf_s: int) -> int:
+        bars = self._engine.get_bars(symbol, tf_s)
+        return bars[-1].open_time_ms if bars else 0
+
+    def _compose_briefing(self, symbol: str) -> Optional[Briefing]:
+        """Наративи TF контексту й сетапів на один момент і ціну → розбір (core.smc.briefing)."""
+        base_tf = min(self._compute_tfs)
+        bars = self._engine.get_bars(symbol, base_tf)
+        if not bars:
+            return None
+        as_of_ms, price = bars[-1].open_time_ms + base_tf * 1000, bars[-1].c
+        try:
+            gate = self._narrative_gate(symbol, as_of_ms)
+            if gate is None:
+                return None
+            if not gate[1]:
+                return closed_briefing(symbol, as_of_ms)
+            smc_cfg = self._full_config.get("smc", {})
+            briefing_cfg = smc_cfg.get("briefing", {})
+            htf_cfg = smc_cfg.get("narrative", {}).get("htf_context", {})
+            context_tfs = [int(tf_s) for tf_s in htf_cfg.get("viewer_tfs", ())]
+            setup_tfs = [int(tf_s) for tf_s in htf_cfg.get("setup_tfs", ())]
+            liquidity_tf = int(briefing_cfg.get("liquidity_tf_s", 3600))
+            # Не get_narrative: журнал сигналів пише лише те, що бачить глядач, а розбір — не глядач цих TF
+            inputs = {
+                tf_s: self._collect_narrative_inputs(symbol, tf_s, price, 0.0, as_of_ms)
+                for tf_s in set(context_tfs) | set(setup_tfs) | {liquidity_tf}
+            }
+            narratives = {tf_s: inputs[tf_s].synthesize() if inputs[tf_s] is not None else None
+                          for tf_s in set(context_tfs) | set(setup_tfs)}
+            tail = [self._briefing_liquidity(symbol, liquidity_tf, inputs[liquidity_tf], price,
+                                             int(briefing_cfg.get("liquidity_per_side", 2))),
+                    self._briefing_session(symbol, as_of_ms)]
+            return compose_briefing(
+                symbol, as_of_ms, self.get_bias_map(symbol), narratives,
+                [int(tf_s) for tf_s in smc_cfg.get("shell", {}).get("strip_tfs", ())],
+                context_tfs, setup_tfs, self._price_digits.get(symbol), [s for s in tail if s is not None],
+                atr_by_tf={tf_s: tf_inputs.atr for tf_s, tf_inputs in inputs.items() if tf_inputs is not None},
+                rr_min_risk_atr=float(briefing_cfg.get("rr_min_risk_atr", 0.0)),
+            )
+        except Exception:
+            _log.warning("BRIEFING_ERR sym=%s as_of_ms=%d", symbol, as_of_ms, exc_info=True)
+            return None
+
+    def _briefing_liquidity(self, symbol, tf_s, inputs, price, per_side):
+        # type: (str, int, Optional[NarrativeInputs], float, int) -> Optional[BriefingSection]
+        """Ліквідність поруч — рівні знімка TF і детектор зняття (той самий, що в цілях Ф2a, і коли зона-шлях вимкнений)."""
+        if inputs is None:
+            return None
+        reached = inputs.liquidity_reached
+        if reached is None:
+            reached = self._liquidity_reached(symbol, inputs.snapshot)
+        return liquidity_section(tf_s, inputs.snapshot.levels, reached, price, inputs.atr, inputs.price_digits,
+                                 per_side)
+
+    def _briefing_session(self, symbol: str, as_of_ms: int) -> Optional[BriefingSection]:
+        """Сесія на момент розбору й наступне відкриття — календар сесій платформи і торговий календар символу."""
+        windows = self._engine._session_windows
+        if not (self._engine._config.sessions.enabled and windows):
+            return None
+        current, in_killzone = get_current_session(as_of_ms, windows)
+        calendar = self._calendars.get(symbol)
+        upcoming = next_session_open(as_of_ms, windows, calendar.is_trading_minute if calendar is not None else None)
+        return session_section(as_of_ms, current, in_killzone, upcoming)
 
     def get_signals(
         self,

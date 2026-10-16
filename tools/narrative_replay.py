@@ -62,6 +62,7 @@ def replay_config(cfg: Dict[str, Any], symbol: str) -> Dict[str, Any]:
     replay_cfg["symbols"] = [symbol]
     smc_cfg = replay_cfg.setdefault("smc", {})
     smc_cfg["signal_journal"] = {"enabled": False, "path": os.path.join(os.devnull, "narrative_replay")}
+    smc_cfg["narrative_journal"] = {"enabled": False}  # прогін сам пише рядки — живий журнал тут не потрібен
     smc_cfg["tda_cascade"] = dict(smc_cfg.get("tda_cascade", {}), enabled=False)
     return replay_cfg
 
@@ -100,12 +101,9 @@ def replay_narrative(cfg: Dict[str, Any], rows_by_tf: Dict[int, List[Row]], symb
             continue
         price = float(group[0][1]["c"])
         for viewer_tf_s in viewer_tfs:
-            block = runner.get_narrative(symbol, viewer_tf_s, price, 0.0, now_ms=close_ms)
-            if block is None:
+            line = runner.narrative_row(symbol, viewer_tf_s, price, close_ms)  # той самий рядок, що в живому журналі
+            if line is None:
                 continue
-            line = {"t": close_ms, "symbol": symbol, "tf_s": viewer_tf_s, "price": price,
-                    "atr": runner.get_measured_atr(symbol, engine.display_base_tf(viewer_tf_s)),
-                    "narrative": block.to_wire()}
             if with_inputs:
                 inputs = runner.get_narrative_inputs(symbol, viewer_tf_s, price, 0.0, now_ms=close_ms)
                 line["inputs"] = inputs.to_dict() if inputs is not None else None

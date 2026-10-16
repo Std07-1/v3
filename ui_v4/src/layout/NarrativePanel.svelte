@@ -165,10 +165,9 @@
                     >{badgeLabel(agentState)}</span
                 >
             {/if}
-            <!-- Compact pill text — action-first system narrative synthesis,
-                 archi_presence fallback. NOT narrative.headline directly:
-                 headline is system-narrative scope, pill is новий кут. -->
-            <span class="headline-text"
+            <!-- Compact pill text — свіжа теза Арчі; без неї — заголовок системного наративу (ADR-0113 Ф3),
+                 далі archi_presence. Пігулка обрізає текст — повний у підказці. -->
+            <span class="headline-text" title={compactPillText(narrative, agentState)}
                 >{compactPillText(narrative, agentState)}</span
             >
             <!-- §5 removal: ↑trend phase-badge dropped — bias pills (left HUD)

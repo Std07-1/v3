@@ -7,6 +7,7 @@ Five GET endpoints exposed under `/api/v3/*` from inside the existing
     GET /api/v3/signals/journal     ?date=YYYY-MM-DD&symbol=...&source=...
     GET /api/v3/bias/latest         ?symbol=XAU/USD
     GET /api/v3/narrative/snapshot  ?symbol=XAU/USD&tf=900
+    GET /api/v3/briefing/snapshot   ?symbol=XAU/USD  (ADR-0113 Ф3 — розбір символу)
     GET /api/v3/macro/context       (no params — symbol map)
 
 Architectural choices:
@@ -447,6 +448,25 @@ async def _handle_narrative_snapshot(request: web.Request) -> web.Response:
             },
         )
     )
+
+
+async def _handle_briefing_snapshot(request: web.Request) -> web.Response:
+    """ADR-0113 Ф3: розбір символу — той самий об'єкт, що в кадрі WS (кеш runner на закритий бар)."""
+    err = _validate_token(request)
+    if err is not None:
+        return err
+    runner = _resolve_smc_runner(request)
+    if isinstance(runner, web.Response):
+        return runner
+    symbol = _resolve_symbol(request, _default_symbol(request))
+    briefing = runner.get_briefing(symbol)
+    if briefing is None:
+        return _error_response(
+            "briefing_unavailable",
+            "Briefing disabled (smc.briefing.enabled), warmup not finished or no bars yet",
+            status=503,
+        )
+    return web.json_response(_envelope_data("briefing", briefing.to_wire()))
 
 
 async def _handle_macro_context(request: web.Request) -> web.Response:
@@ -1869,6 +1889,7 @@ def register_routes(
     app.router.add_get("/api/v3/signals/journal", _handle_signals_journal)
     app.router.add_get("/api/v3/bias/latest", _handle_bias_latest)
     app.router.add_get("/api/v3/narrative/snapshot", _handle_narrative_snapshot)
+    app.router.add_get("/api/v3/briefing/snapshot", _handle_briefing_snapshot)
     app.router.add_get("/api/v3/macro/context", _handle_macro_context)
     # ADR-0059 §3.1.1 — analysis endpoint (slice 059.1).
     app.router.add_get("/api/v3/bars/window", _handle_bars_window)

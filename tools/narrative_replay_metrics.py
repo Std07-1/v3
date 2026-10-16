@@ -256,19 +256,27 @@ def compare_table(base: Row, candidate: Row) -> str:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Метрики прогону системного наративу (ADR-0113 Ф1)")
-    parser.add_argument("--replay", required=True, help="JSONL tools.narrative_replay")
+    parser.add_argument("--replay", required=True, nargs="+",
+                        help="JSONL tools.narrative_replay або файли живого журналу (ADR-0113 Ф4, файл на добу)")
+    parser.add_argument("--symbol", default=None, help="символ, коли у файлах кілька (живий журнал)")
     parser.add_argument("--horizon-h", type=int, default=DEFAULT_HORIZON_H, help="горизонт результату сценарію, год")
     parser.add_argument("--json", default=None, help="куди записати метрики")
     parser.add_argument("--compare", default=None, help="метрики бази (JSON): надрукувати таблицю база → зміна")
     parser.add_argument("--config", default=None)
     parser.add_argument("--data-root", default=None)
     args = parser.parse_args(argv)
-    rows = [json.loads(line) for line in open(args.replay, encoding="utf-8") if line.strip()]
+    rows = [json.loads(line) for path in sorted(args.replay) for line in open(path, encoding="utf-8") if line.strip()]
+    symbols = sorted({row["symbol"] for row in rows})
+    symbol = args.symbol or (symbols[0] if len(symbols) == 1 else None)
+    if symbol is None:
+        print("NARRATIVE_METRICS several symbols=%s — choose --symbol" % symbols)
+        return 2
+    # за часом, стабільно: у межах моменту — порядок TF з файлу; файли журналу — по добі
+    rows = sorted((row for row in rows if row["symbol"] == symbol), key=lambda row: row["t"])
     if not rows:
-        print("NARRATIVE_METRICS empty replay=%s" % args.replay)
+        print("NARRATIVE_METRICS empty replay=%s symbol=%s" % (args.replay, symbol))
         return 2
     cfg = load_system_config(resolve_config_path(args.config))
-    symbol = rows[0]["symbol"]
     rule = htf_anchor_rule_resolver(cfg)(symbol)
     first_ms, last_ms = min(r["t"] for r in rows), max(r["t"] for r in rows)
     horizon_ms = args.horizon_h * 3600 * 1000

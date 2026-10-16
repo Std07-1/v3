@@ -11,12 +11,14 @@ from __future__ import annotations
 from typing import List, Tuple
 
 from core.model.bars import CandleBar
+from core.smc.swings import rolling_atr
 from core.smc.types import SmcSwing, make_swing_id
+
+DISPLACEMENT_ATR_PERIOD = 14  # як ATR рушія (engine: compute_atr(bars, period=14))
 
 
 def detect_displacement(
     bars,            # type: List[CandleBar]
-    atr,             # type: float
     min_body_atr,    # type: float
     max_wick_ratio,  # type: float
 ):
@@ -24,15 +26,19 @@ def detect_displacement(
     """Detect displacement candles — strong body, small wicks.
 
     A displacement candle satisfies:
-      1) body >= min_body_atr * ATR   (institutional size)
+      1) body >= min_body_atr * ATR на цьому барі (institutional size) — ATR14 з барів до нього включно
       2) body / range >= 1 - max_wick_ratio  (clean, small wicks)
+
+    Поріг — від волатильності на момент бару, а не від поточного ATR вікна (ADR-0113 E-08a): так статус закритого бару
+    не змінюється з новими барами. З поточним ATR на кожен новий бар у середньому ~2 закриті бари ставали «імпульсом»
+    чи переставали ним бути, і мітка на свічці залежала від того, коли дивишся.
 
     Returns SmcSwing markers with kind='displacement_bull'/'displacement_bear'.
     """
-    if atr <= 0 or not bars:
+    if not bars:
         return []
     result = []  # type: List[SmcSwing]
-    for b in bars:
+    for b, atr in zip(bars, rolling_atr(bars, DISPLACEMENT_ATR_PERIOD)):
         body = abs(b.c - b.o)
         rng = b.h - b.low
         if rng <= 0:

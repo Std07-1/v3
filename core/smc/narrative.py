@@ -19,6 +19,7 @@ from core.smc.zone_path import LONG, ZonePath, zone_direction
 from core.smc.types import (
     LEVEL_STATE_FORMING,
     ActiveScenario,
+    HtfContext,
     NarrativeBlock,
     SmcLevel,
     SmcSnapshot,
@@ -119,6 +120,10 @@ _CONFIRMED_AFTER_ENTRY_HEADLINES = {
     ("reduced", "long"): "\U0001f7e1 BUY \u2014 підтверджено після входу (поза KZ)",
     ("reduced", "short"): "\U0001f7e1 SELL \u2014 підтверджено після входу (поза KZ)",
 }
+# ADR-0113 (власник 15.10, «H4/D1 так»): старший TF глядача — контекст без торгового сценарію (smc.narrative.htf_context)
+_HTF_CONTEXT_HEADLINE = "\U0001f9ed {tf}: {bias} контекст \u2014 {zone}{target}{setup}"
+_HTF_CONTEXT_BIAS = {"long": "бичачий", "short": "ведмежий"}
+_HTF_CONTEXT_SIDE = {"long": "купівлі", "short": "продажу"}
 _EQ_LEVEL_KINDS = frozenset({"eq_highs", "eq_lows"})  # рушій уже відсіяв зняті кластери (liquidity._is_swept)
 # Зона рівня A є, але D1 і H4 ще без структури (alignment no_data) — не «немає зони»
 _HTF_PENDING_HEADLINE = "\u2b1c HTF ще без структури \u2014 зона є, чекаємо"
@@ -280,10 +285,13 @@ def _path_stopped(path, stop_price):
 
 def _confirm_not_before_ms(path, zone):
     # type: (Optional[ZonePath], SmcZone) -> Optional[int]
-    """Після входу підтверджує лише злам після КІНЦЯ бару входу на TF зони: усередині бару HTF дотик і злам не
+    """Після входу підтверджує лише злам після кінця бару, де видно перший дотик: найдрібнішого, що покриває бакет
+    входу (`ZonePath.touch_end_ms`, E-03), інакше — бару входу на TF зони, бо всередині бару HTF дотик і злам не
     впорядковані (рецензія Ф2a, D-11). None — шляху чи входу немає (Ф1)."""
     if path is None or not path.entered:
         return None
+    if path.touch_end_ms is not None:
+        return path.touch_end_ms
     return path.entered_ms + zone.tf_s * 1000
 
 
@@ -476,6 +484,41 @@ def _resolve_trigger_desc(
     if atr > 0:
         return "{:.1f} ATR до зони".format(dist / atr)
     return "{} до зони".format(_fmt_price(dist, digits))
+
+
+# ── HTF context (ADR-0113, власник 15.10) ───────────────────
+
+
+def _htf_context(
+    snapshot, zone, direction, grade_info, config, current_price, atr, digits, path, liquidity_reached, stop_price
+):
+    # type: (SmcSnapshot, SmcZone, str, dict, dict, float, float, int, Optional[ZonePath], Optional[dict], Optional[float]) -> HtfContext
+    """Старший TF глядача: напрям, ключова зона, ціль ліквідності й межа контексту — без входу й тригера.
+
+    Сценарій на H4/D1 — вхід за підтвердженням на тому ж TF (злам H4 з імпульсом), рідкий і пізній; з цих TF трейдер
+    бере напрям і зону, а сетап шукає на TF виконання (`htf_context.setup_tfs` — лише для тексту).
+    """
+    target = _find_target(snapshot, zone, direction, config, current_price, atr, digits, path, liquidity_reached)
+    labels = [_tf_to_label(tf) for tf in config.get("htf_context", {}).get("setup_tfs", ())]
+    span = labels[0] if len(labels) == 1 else "{}\u2013{}".format(labels[0], labels[-1]) if labels else ""
+    return HtfContext(
+        direction=direction,
+        zone_desc="зона {} {}".format(_HTF_CONTEXT_SIDE[direction], _format_entry(zone, grade_info, digits)),
+        target_desc=target or "",
+        setup_desc="сетап шукаємо на {}".format(span) if span else "",
+        invalidation=_find_invalidation(zone, digits, stop_price),
+    )
+
+
+def _htf_context_headline(context, viewer_tf_s):
+    # type: (HtfContext, int) -> str
+    return _HTF_CONTEXT_HEADLINE.format(
+        tf=_tf_to_label(viewer_tf_s),
+        bias=_HTF_CONTEXT_BIAS[context.direction],
+        zone=context.zone_desc,
+        target=", ціль ліквідності " + context.target_desc if context.target_desc else "",
+        setup=" \u2014 " + context.setup_desc if context.setup_desc else "",
+    )
 
 
 # ── Target Resolution ───────────────────────────────────────
@@ -1005,6 +1048,10 @@ def _synthesize_impl(
     else:
         mode, sub_mode = "wait", ""
 
+    # Step 3.4: старший TF глядача — лише контекст, без торгового сценарію (ADR-0113, smc.narrative.htf_context)
+    if mode == "trade" and viewer_tf_s in config.get("htf_context", {}).get("viewer_tfs", ()):
+        mode, sub_mode = "wait", "htf_context"
+
     # Build direction from primary (already computed above)
 
     # Step 3.5: Session-aware mode adjustments (ADR-0035).
@@ -1035,6 +1082,7 @@ def _synthesize_impl(
         )
 
     # Step 4: Headline — all mode / session / trigger state is now known
+    htf_context = None  # type: Optional[HtfContext]
     primary_path = paths.get(primary_zone.id) if primary_zone else None
     confirmed_after_entry = (
         primary_trigger == "triggered" and primary_zone is not None and _confirmed_after_entry(
@@ -1047,6 +1095,12 @@ def _synthesize_impl(
             (mode, sub_mode, direction, primary_trigger),
             _WAIT_HEADLINES.get(sub_mode, _WAIT_HEADLINES[""]),
         )
+    elif sub_mode == "htf_context":
+        htf_context = _htf_context(
+            snapshot, primary_zone, direction, zone_grades.get(primary_zone.id, {}), config, current_price, atr,
+            digits, primary_path, liquidity_reached, stops[primary_zone.id],
+        )
+        headline = _htf_context_headline(htf_context, viewer_tf_s)
     elif sub_mode == "" and primary_zone is not None:
         headline = _HTF_PENDING_HEADLINE
     elif sub_mode == "" and any(z.id not in closed for z in candidates) and not valid:
@@ -1068,8 +1122,8 @@ def _synthesize_impl(
             d = _zone_direction(z)
             gi = zone_grades.get(z.id, {})
             path = paths.get(z.id)
-            tgt = _find_target(snapshot, z, d, config, current_price, atr, digits, path, liquidity_reached)
-            if tgt is None:
+            target = _select_target(snapshot, z, d, config, current_price, atr, digits, path, liquidity_reached)
+            if target is None:
                 warnings.append("no_target_found")
             scenarios.append(
                 ActiveScenario(
@@ -1082,8 +1136,12 @@ def _synthesize_impl(
                     trigger_desc=_resolve_trigger_desc(
                         snapshot, z, viewer_tf_s, current_price, atr, config, digits, path
                     ),
-                    target_desc=tgt,
+                    target_desc=target[0] if target is not None else None,
                     invalidation=_find_invalidation(z, digits, stops[z.id]),
+                    entry_edge=path.entry_edge if path is not None else (z.high if d == LONG else z.low),
+                    stop_price=stops[z.id] if stops[z.id] is not None else (z.low if d == LONG else z.high),
+                    target_price=target[1] if target is not None else None,
+                    zone_tf_s=z.tf_s,
                 )
             )
             if len(scenarios) >= max_scenarios:
@@ -1125,6 +1183,7 @@ def _synthesize_impl(
         in_killzone=in_killzone,
         session_context=session_context,
         range_exhaustion_summary=range_exhaustion_summary,
+        htf_context=htf_context,
     )
 
 
@@ -1219,3 +1278,14 @@ def narrative_to_wire(block):
     if block.range_exhaustion_summary:
         d["range_exhaustion_summary"] = block.range_exhaustion_summary
     return d
+
+
+# ── Для розбору символу (core.smc.briefing, ADR-0113 Ф3) ────
+# Та сама узгодженість D1↔H4, рівні-ліквідність, підписи й формат ціни, що в наративі, — одне джерело, без копій.
+resolve_htf_alignment = _resolve_htf_alignment
+tf_to_label = _tf_to_label
+fmt_price = _fmt_price
+LIQUIDITY_KINDS_ABOVE = _TARGET_KINDS_ABOVE  # хаї: ліквідність над ціною
+LIQUIDITY_KINDS_BELOW = _TARGET_KINDS_BELOW  # лої: ліквідність під ціною
+LIQUIDITY_LABELS = _TARGET_LEVEL_LABELS
+EQ_LEVEL_KINDS = _EQ_LEVEL_KINDS  # зняті EQ-кластери рушій уже відсіяв — детектор зняття їм не потрібен

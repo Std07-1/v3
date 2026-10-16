@@ -203,6 +203,12 @@ export function compactPillText(
         return thesis.thesis;
     }
 
+    // 1b. Арчі мовчить або вимкнений → заголовок системного наративу (ADR-0113 Ф3, власник 15.10): той самий
+    //     текст, що склав бекенд, без перерахунку (X28). Коли Арчі повернеться зі свіжою тезою — знову він.
+    if (narrative.headline) {
+        return narrative.headline;
+    }
+
     // 2. Bot offline (no thesis OR stale) → single-word "Off" + silence.
     if (presence && !botAlive) {
         const silence =

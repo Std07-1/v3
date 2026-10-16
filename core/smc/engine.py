@@ -1104,7 +1104,6 @@ class SmcEngine:
         if mom_cfg.enabled:
             disp_swings = detect_displacement(
                 bars,
-                atr,
                 min_body_atr=mom_cfg.min_body_atr_mult,
                 max_wick_ratio=mom_cfg.max_wick_ratio,
             )

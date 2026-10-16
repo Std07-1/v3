@@ -421,6 +421,11 @@ class ActiveScenario:
     trigger_desc: str  # "Approaching: 15 pts from zone"
     target_desc: Optional[str]  # "PDL 5062" | None (BH-4)
     invalidation: str  # "Above 5230"
+    # ADR-0113 Ф3 «Розбір»: числа тих самих рівнів для R:R від краю зони; на wire не йдуть (там — тексти вище)
+    entry_edge: Optional[float] = None  # край входу: long — верх зони, short — низ
+    stop_price: Optional[float] = None  # число інвалідації — дальній край зони ± запас Ф2a
+    target_price: Optional[float] = None  # ціна цілі; None — ціль не знайдено
+    zone_tf_s: Optional[int] = None  # TF зони входу (на M15 буває OB H1/H4 зі стеку контексту)
 
     def to_wire(self) -> Dict[str, Any]:
         """S6: wire format → ui_v4 ActiveScenario type."""
@@ -433,6 +438,18 @@ class ActiveScenario:
             "target_desc": self.target_desc,
             "invalidation": self.invalidation,
         }
+
+
+@dataclasses.dataclass(frozen=True)
+class HtfContext:
+    """Контекст старшого TF глядача (ADR-0113, власник 15.10: «H4/D1 так»): ключова зона, ціль ліквідності,
+    межа контексту й TF сетапу — готові фрази для shell-мікрокартки; на wire не йде (там — headline)."""
+
+    direction: str  # "long" | "short"
+    zone_desc: str  # "зона продажу OB▼ A(6) 158.911–160.370"
+    target_desc: str  # "лой Лондона 157.542" — ціль ліквідності; "" — не знайдено
+    setup_desc: str  # "сетап шукаємо на M15–H1"; "" — TF сетапу не задано
+    invalidation: str  # "Вище 160.714 — зона пробита" — та сама межа, що в сценарії
 
 
 @dataclasses.dataclass(frozen=True)
@@ -459,6 +476,8 @@ class NarrativeBlock:
     session_context: str = ""  # "London KZ active — high probability"
     # ADR-0053: range exhaustion display phrase ("" якщо early/mid/None)
     range_exhaustion_summary: str = ""
+    # ADR-0113: контекст старшого TF глядача — для shell; на wire не йде (там — headline)
+    htf_context: Optional["HtfContext"] = None
 
     def to_wire(self) -> Dict[str, Any]:
         """S6: wire format → ui_v4 NarrativeBlock type.
@@ -572,6 +591,7 @@ class MicroCard:
     what_needed: str  # trigger_desc or fallback
     what_cancels: str  # invalidation or fallback
     warning: Optional[str] = None  # killzone/off-session warning
+    target: str = ""  # ціль сценарію (target_desc) чи ліквідності контексту H4/D1; "" — нема (ADR-0113 Ф3)
 
     def to_wire(self) -> Dict[str, Any]:
         return {
@@ -580,6 +600,7 @@ class MicroCard:
             "what_needed": self.what_needed,
             "what_cancels": self.what_cancels,
             "warning": self.warning,
+            "target": self.target,
         }
 
 

@@ -123,6 +123,27 @@ def compute_atr(bars: List[CandleBar], period: int = 14) -> float:
     return atr if atr > 0.0 else 1.0  # rail: atr > 0
 
 
+def rolling_atr(bars: List[CandleBar], period: int = 14) -> List[float]:
+    """ATR на кожному барі ряду — `compute_atr(bars[:i + 1], period)` для кожного i, за один прохід (той самий порядок
+    додавання, тож значення ті самі до біта).
+
+    Значення бару залежить лише від нього й `period` попередніх, тож після закриття бару не змінюється, хоч би скільки
+    барів прийшло потім (ADR-0113 E-08a); на перших `period` барах ряду — з того, що є, як у compute_atr.
+    """
+    true_ranges: List[float] = []
+    atrs: List[float] = []
+    for i, b in enumerate(bars):
+        if i > 0:
+            prev_close = bars[i - 1].c
+            true_ranges.append(max(b.h, prev_close) - min(b.low, prev_close))
+        else:
+            true_ranges.append(b.h - b.low)  # найстаріший бар ряду — попереднього close немає
+        recent = true_ranges[-period:]
+        atr = sum(reversed(recent)) / len(recent)  # від новішого до старішого — як compute_atr
+        atrs.append(atr if atr > 0.0 else 1.0)  # rail: atr > 0
+    return atrs
+
+
 def compute_rv(bars: List[CandleBar], period: int = 20) -> Optional[float]:
     """Relative Volume — last bar's volume / SMA(volume, period) of prior bars.
 

@@ -58,6 +58,7 @@ class _StubSmcRunner:
         self.last_price = 4500.0
         self.bias = {"900": "bullish", "3600": "bearish"}
         self._block: Optional[Any] = None
+        self._briefing: Optional[Any] = None
 
     def get_last_price(self, symbol: str) -> float:
         return self.last_price
@@ -67,6 +68,9 @@ class _StubSmcRunner:
 
     def get_narrative(self, symbol: str, tf_s: int, price: float, atr: float):
         return self._block
+
+    def get_briefing(self, symbol: str):
+        return self._briefing
 
 
 class _StubNarrativeBlock:
@@ -447,6 +451,33 @@ async def test_narrative_snapshot_no_block_503(aiohttp_client, app, smc_runner):
     resp = await client.get("/api/v3/narrative/snapshot", headers=_auth())
     assert resp.status == 503
     assert (await resp.json())["data"]["code"] == "narrative_unavailable"
+
+
+# ────────────────────────────────────────────────────────────
+# /api/v3/briefing/snapshot (ADR-0113 Ф3)
+# ────────────────────────────────────────────────────────────
+
+
+class _StubBriefing:
+    def to_wire(self) -> Dict[str, Any]:
+        return {"symbol": "XAU/USD", "as_of_ms": 1, "sections": [], "warnings": []}
+
+
+async def test_briefing_snapshot_success(aiohttp_client, app, smc_runner):
+    client = await aiohttp_client(app)
+    smc_runner._briefing = _StubBriefing()
+    resp = await client.get("/api/v3/briefing/snapshot?symbol=XAU/USD", headers=_auth())
+    assert resp.status == 200
+    body = await resp.json()
+    _assert_envelope(body, "briefing")
+    assert body["data"]["symbol"] == "XAU/USD"
+
+
+async def test_briefing_snapshot_disabled_503(aiohttp_client, app, smc_runner):
+    client = await aiohttp_client(app)
+    resp = await client.get("/api/v3/briefing/snapshot", headers=_auth())
+    assert resp.status == 503
+    assert (await resp.json())["data"]["code"] == "briefing_unavailable"
 
 
 # ────────────────────────────────────────────────────────────

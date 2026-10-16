@@ -6,7 +6,7 @@ import pytest
 
 from core.model.bars import CandleBar
 from core.smc.types import SmcZone
-from core.smc.zone_path import LONG, SHORT, zone_direction, zone_path
+from core.smc.zone_path import LONG, SHORT, FormingSpan, first_touch_end_ms, forming_spans, zone_direction, zone_path
 
 H1 = 3600
 H1_MS = H1 * 1000
@@ -71,3 +71,64 @@ def test_no_birth_anchor_or_break_bar_outside_window_means_unknown():
     assert zone_path(_zone(), [_bar(-3, 108, 101), _bar(-1, 107, 100)]) is None
     # вікно барів рушія почалось після бару зламу (зона старша за lookback) — шлях з середини руху хибний (D-06)
     assert zone_path(_zone(), [_bar(2, 110, 101.5), _bar(3, 120, 101)]) is None
+
+
+M15 = 900
+M15_MS = M15 * 1000
+
+
+def _fine(i, h, low, tf_s=M15):
+    """Бар дрібнішого TF: i-й M15 від відкриття бару зламу."""
+    open_ms = T0 + i * tf_s * 1000
+    return CandleBar("XAU/USD", tf_s, open_ms, open_ms + tf_s * 1000, low, h, low, h, 1.0, True, "history")
+
+
+def _h1_bucket(ts_ms):
+    return ts_ms - ts_ms % H1_MS
+
+
+def test_forming_spans_group_finer_bars_after_last_closed_bar_into_zone_buckets():
+    finer = [_fine(4, 111, 108), _fine(7, 112, 107), _fine(8, 113, 104), _fine(9, 115, 103), _fine(12, 109, 102.5)]
+
+    spans = forming_spans(T0 + H1_MS, finer, _h1_bucket)  # закритий H1 №1 уже містить M15 4..7
+
+    assert spans == [FormingSpan(T0 + 2 * H1_MS, 115, 103), FormingSpan(T0 + 3 * H1_MS, 109, 102.5)]
+    assert forming_spans(T0 + 3 * H1_MS, finer, _h1_bucket) == []
+
+
+def test_entry_in_forming_bucket_is_the_same_moment_as_after_its_bar_closes():
+    """E-03: вхід видно до закриття бару TF зони, і після закриття він той самий — шлях лише продовжується."""
+    closed = [_bar(0, 108, 103), _bar(1, 112, 107)]
+    forming = forming_spans(T0 + H1_MS, [_fine(8, 110, 104), _fine(9, 109, 101.8)], _h1_bucket)
+
+    while_forming = zone_path(_zone(), closed, forming)
+    after_close = zone_path(_zone(), closed + [_bar(2, 110, 101.5)])
+
+    assert zone_path(_zone(), closed).entered_ms is None
+    assert while_forming.entered_ms == after_close.entered_ms == T0 + 2 * H1_MS
+    assert (while_forming.adverse_since_entry, after_close.adverse_since_entry) == (101.8, 101.5)
+
+
+def test_stop_in_forming_bucket_is_seen_before_the_zone_bar_closes():
+    closed = [_bar(0, 108, 103), _bar(1, 112, 101.5)]
+    forming = forming_spans(T0 + H1_MS, [_fine(8, 104, 99.0)], _h1_bucket)
+
+    path = zone_path(_zone(), closed, forming)
+
+    assert path.entered_ms == T0 + H1_MS and path.adverse_since_entry == 99.0
+
+
+def test_first_touch_end_is_the_finest_series_bar_that_covers_the_entry_bucket():
+    path = zone_path(_zone(), [_bar(0, 108, 103), _bar(1, 112, 107), _bar(2, 110, 101.5)])
+    m15 = [_fine(i, 110, 105) for i in range(4, 9)] + [_fine(9, 109, 101.9), _fine(10, 108, 101.5)]
+    m30 = [_fine(i, 110, 101.5, tf_s=1800) for i in range(2, 6)]
+
+    bucket_end = T0 + 3 * H1_MS
+
+    assert first_touch_end_ms(path, [m15, m30], bucket_end) == T0 + 10 * M15_MS  # кінець M15 №9
+    # M15 почався всередині бакета входу (перший дотик міг бути раніше) — вирішує M30
+    assert first_touch_end_ms(path, [m15[6:], m30], bucket_end) == T0 + 5 * 1800 * 1000
+    assert first_touch_end_ms(path, [m15[6:]], bucket_end) is None
+    no_touch = [_fine(i, 110, 105) for i in range(4, 14)]  # бакет входу пройшов, дрібні бари краю не торкнулись
+    assert first_touch_end_ms(path, [no_touch], bucket_end) is None
+    assert first_touch_end_ms(zone_path(_zone(), [_bar(0, 108, 103)]), [m15], bucket_end) is None  # входу немає
