@@ -125,13 +125,21 @@ def test_plain_drops_only_a_leading_state_marker():
     assert _plain("BUY — у зоні") == "BUY — у зоні"
 
 
-def test_reward_to_risk_above_ten_says_narrow_zone_instead_of_a_misleading_number():
-    """Власник 16.10: R:R 33 на зоні в кілька пунктів — арифметично правда, але вводить в оману."""
+def _thin_zone_plan(atr):
     thin = _zone(low=5144.0, high=5146.0)  # ризик 2 пункти до цілі PDL 5062 — R:R 41
+    briefing = compose_briefing("XAU/USD", 1_000, BEARISH, {M15: _narrate(M15, zone=thin, price=5145.0)}, STRIP, [],
+                                [M15], 2, atr_by_tf={M15: atr}, rr_min_risk_atr=1.0)
+    return _section(briefing, "setups").rows[0].notes[1]
 
-    row = _section(_brief({M15: _narrate(M15, zone=thin, price=5145.0), H1: None}), "setups").rows[1]
 
-    assert row.notes[1] == "Стоп 5146.00 · ціль PDL 5062.00 · R:R > 10 (вузька зона)"
+def test_thin_zone_reward_to_risk_is_hidden_by_the_noise_threshold_not_capped():
+    """Власник 16.10: лише поріг 1 ATR — R:R 41 на зоні в 2 пункти при ATR 20 не показується зовсім."""
+    assert _thin_zone_plan(20.0) == "Стоп 5146.00 · ціль PDL 5062.00 · R:R не показано — стоп ближче 1 ATR M15"
+
+
+def test_far_target_behind_a_wide_enough_stop_keeps_its_number_even_above_ten():
+    """Стоп не ближче 1 ATR — R:R понад 10 означає далеку ціль, а не вузьку зону: показується числом."""
+    assert _thin_zone_plan(2.0) == "Стоп 5146.00 · ціль PDL 5062.00 · R:R 41.0 від краю зони"
 
 
 def _m15_plan(atr_by_tf, rr_min_risk_atr):

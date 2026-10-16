@@ -27,8 +27,6 @@ _CONTEXT_BIAS = {"long": "Бичачий", "short": "Ведмежий"}
 _DIRECTION_TONE = {"long": TONE_BULL, "short": TONE_BEAR, "bullish": TONE_BULL, "bearish": TONE_BEAR}
 _SIDE = {"long": "BUY", "short": "SELL"}
 _HTF_WORDS = {"bullish": "вгору", "bearish": "вниз"}
-# R:R понад це — вузька зона (стоп за кілька пунктів): число правдиве, але вводить в оману (власник 16.10)
-RR_DISPLAY_MAX = 10.0
 _CLOSED_TEXT = "Ринок закрито — розбір оновиться з відкриттям"
 
 
@@ -164,8 +162,7 @@ def _scenario_row(label, tf_s, scenario, index, digits, atr, rr_min_risk_atr):
     if rr is not None and atr > 0 and abs(scenario.entry_edge - scenario.stop_price) < rr_min_risk_atr * atr:
         plan.append("R:R не показано — стоп ближче {:g} ATR {}".format(rr_min_risk_atr, label))
     elif rr is not None:
-        plan.append("R:R {:.1f} від краю зони".format(rr) if rr <= RR_DISPLAY_MAX
-                    else "R:R > {:.0f} (вузька зона)".format(RR_DISPLAY_MAX))
+        plan.append("R:R {:.1f} від краю зони".format(rr))
     return BriefingRow(label, text, (state, " · ".join(plan)), _DIRECTION_TONE[scenario.direction])
 
 
