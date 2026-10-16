@@ -675,7 +675,10 @@
         for (const b of bars) chartEngine.update(b);
         if (bars.length > 0) showNoData = false;
       } else if (currentFrame.frame_type === "scrollback") {
-        chartEngine.prependData(currentFrame.candles ?? []);
+        chartEngine.prependData(
+          currentFrame.candles ?? [],
+          currentFrame.meta?.warnings ?? [],
+        );
       }
 
       // ADR-0024 §6.2: оновлюємо smcData залежно від типу кадру

@@ -15,6 +15,7 @@ import {
   type IChartApi,
   type ISeriesApi,
   type LineWidth,
+  type LogicalRange,
   type Time,
 } from 'lightweight-charts';
 import {
@@ -50,6 +51,15 @@ export const DEFAULT_BAR_SPACING_PX = 8;
 /** Типова точність ціни LWC (priceFormat.precision) — для символу без знаків у конфігу сервера (ADR-0054 rev 7 S3). */
 const DEFAULT_PRICE_PRECISION = 2;
 const D1_OFFSET_MS = 10_800_000; // +3h: FXCM D1 open 22:00/21:00 UTC → nominal date
+/**
+ * Порожній кадр scrollback із цими meta.warnings — тимчасова відмова сервера, не кінець історії
+ * (runtime/ws/ws_server.py, _handle_scrollback): ліміт частоти, сховище недоступне, збій читання.
+ * Не тут і лишаються «стіною»: `scrollback_max_steps_reached` — сервер не дасть більше до перемикання пари
+ * (так само, як власна стеля MAX_BARS); `bad_to_ms` — хибний запит, повтор лише повторить відмову.
+ */
+const SCROLLBACK_TRANSIENT_REFUSALS: ReadonlySet<string> = new Set([
+  'scrollback_throttled', 'uds_unavailable', 'scrollback_error',
+]);
 
 // ─── UTC formatters (V3 parity: chart_adapter_lite.js:13-28) ───
 function _fmtUtcTime(epochSec: number): string {
@@ -91,6 +101,7 @@ export class ChartEngine {
   volumeSeries: ISeriesApi<'Histogram'>;
 
   // ─── Scrollback rails (V4 original, preserved) ───
+  private readonly _onScrollback: (oldest_ms: T_MS) => void;
   private isFetchingScrollback = false;
   private lastScrollbackToMs: T_MS | null = null;
   // Перший бар графіка, від якого пішов останній запит історії. setData його НЕ скидає:
@@ -106,6 +117,13 @@ export class ChartEngine {
     M1: 10000, M3: 8000, M5: 6000, M15: 4000,
     M30: 3000, H1: 2500, H4: 1500, D1: 1000,
   };
+  /** Пауза перед повтором після тимчасової відмови. Довша за cooldown сервера (SCROLLBACK_COOLDOWN_S = 0.5 с,
+   *  ws_server.py): відмова приходить менш ніж за 0.5 с після останнього обслуженого запиту — повтор обслужать. */
+  static readonly SCROLLBACK_RETRY_DELAY_MS = 600;
+  /** Автоповторів поспіль, поки сервер відмовляє; далі історію просить лише рух графіка. */
+  static readonly SCROLLBACK_RETRY_MAX = 3;
+  private _scrollbackRetries = 0;
+  private _scrollbackRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ─── TF state (needed for D1 offset: chart_adapter_lite.js:258-280) ───
   private _tfS: number = 300; // default M5 (matches ws_server default)
@@ -149,6 +167,7 @@ export class ChartEngine {
     onScrollback: (oldest_ms: T_MS) => void,
   ) {
     this._onCrosshair = onCrosshairMove;
+    this._onScrollback = onScrollback;
     this._container = container;
 
     // ADR-0066 PATCH 02e: Init volume colors via resolveCandleStyle for the
@@ -373,37 +392,39 @@ export class ChartEngine {
       this._resetIdleTimer();
       if (range && range.from < 10) {
         clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-          if (this.isFetchingScrollback) return;
-          if (this._scrollbackState === 'wall') return; // wall reached, stop
-          // P3.15: Bar cap check
-          const tfLabel = Object.entries(TF_TO_S).find(([, v]) => v === this._tfS)?.[0] ?? 'M5';
-          const maxBars = ChartEngine.MAX_BARS[tfLabel] ?? 3000;
-          if (this._totalBars >= maxBars) {
-            this._setScrollbackState('wall');
-            return;
-          }
-          const barsInfo = this.series.barsInLogicalRange(range);
-          if (barsInfo && barsInfo.barsBefore < 5) {
-            const targetMs = this._firstBarMs();
-            if (targetMs !== null) {
-              // Dedupe rail (LWC_Engine_dedupe spec)
-              if (targetMs === this.lastScrollbackToMs) return;
-              this.lastScrollbackToMs = targetMs;
-              this._scrollbackAnchorMs = targetMs;
-              this.isFetchingScrollback = true;
-              this._setScrollbackState('loading');
-              // Safety timeout: reset flag after 3s if no response (aggressive drag recovery)
-              setTimeout(() => {
-                this.isFetchingScrollback = false;
-                if (this._scrollbackState === 'loading') this._setScrollbackState('idle');
-              }, 3_000);
-              onScrollback(targetMs);
-            }
-          }
-        }, 150);
+        debounceTimer = setTimeout(() => this._requestScrollbackAtEdge(range), 150);
       }
     });
+  }
+
+  /** Рейка scrollback: біля лівого краю просить історію від першого бару (дедуп, стеля барів, «стіна»). */
+  private _requestScrollbackAtEdge(range: LogicalRange | null): void {
+    if (range === null) return;
+    if (this.isFetchingScrollback) return;
+    if (this._scrollbackState === 'wall') return; // wall reached, stop
+    // P3.15: Bar cap check
+    const tfLabel = Object.entries(TF_TO_S).find(([, v]) => v === this._tfS)?.[0] ?? 'M5';
+    const maxBars = ChartEngine.MAX_BARS[tfLabel] ?? 3000;
+    if (this._totalBars >= maxBars) {
+      this._setScrollbackState('wall');
+      return;
+    }
+    const barsInfo = this.series.barsInLogicalRange(range);
+    if (!barsInfo || barsInfo.barsBefore >= 5) return;
+    const targetMs = this._firstBarMs();
+    if (targetMs === null) return;
+    // Dedupe rail (LWC_Engine_dedupe spec)
+    if (targetMs === this.lastScrollbackToMs) return;
+    this.lastScrollbackToMs = targetMs;
+    this._scrollbackAnchorMs = targetMs;
+    this.isFetchingScrollback = true;
+    this._setScrollbackState('loading');
+    // Safety timeout: reset flag after 3s if no response (aggressive drag recovery)
+    setTimeout(() => {
+      this.isFetchingScrollback = false;
+      if (this._scrollbackState === 'loading') this._setScrollbackState('idle');
+    }, 3_000);
+    this._onScrollback(targetMs);
   }
 
   // ─── TF setter (called by ChartPane on switch/full frame) ───
@@ -456,6 +477,7 @@ export class ChartEngine {
   setData(bars: Candle[]): void {
     this.isFetchingScrollback = false;
     this.lastScrollbackToMs = null;
+    this._cancelScrollbackRetry();
     this._totalBars = bars.length;
     this._setScrollbackState('idle');
 
@@ -586,12 +608,15 @@ export class ChartEngine {
   // Guard: dedup overlapping bars (server to_open_ms is inclusive),
   // filter WhitespaceData, move state reset AFTER setData to prevent
   // infinite crash loop (Entry 076).
-  prependData(bars: Candle[]): void {
+  // warnings — meta.warnings кадру: лише за ними порожня відповідь відрізняється від кінця історії.
+  prependData(bars: Candle[], warnings: readonly string[] = []): void {
     // Відповідь для іншого вмісту — не відповідь цьому графіку: ні даних, ні «стіни», ні зміни стану
     if (this._isStaleScrollback(bars)) return;
     if (bars.length === 0) {
       this.isFetchingScrollback = false;
-      this._setScrollbackState('wall');
+      const refusal = warnings.find((w) => SCROLLBACK_TRANSIENT_REFUSALS.has(w));
+      if (refusal === undefined) this._setScrollbackState('wall');
+      else this._retryRefusedScrollback(refusal);
       return;
     }
 
@@ -627,8 +652,38 @@ export class ChartEngine {
     }
 
     this._totalBars += bars.length;
+    this._scrollbackRetries = 0;
     this.isFetchingScrollback = false;
     this._setScrollbackState('idle');
+  }
+
+  /**
+   * Тимчасова відмова — не кінець історії: той самий перший бар можна просити знову (дедуп не блокує),
+   * а повтор іде сам після паузи — біля лівого краю, де графік стоїть без руху, діапазон більше не зміниться
+   * і рейка інакше не спрацює. Повтори поспіль обмежені; далі історію просить лише рух графіка.
+   */
+  private _retryRefusedScrollback(reason: string): void {
+    this.lastScrollbackToMs = null;
+    this._setScrollbackState('idle');
+    const willRetry = this._scrollbackRetries < ChartEngine.SCROLLBACK_RETRY_MAX;
+    console.warn('[ChartEngine] scrollback: сервер тимчасово відмовив — не кінець історії', {
+      reason,
+      retry: willRetry ? this._scrollbackRetries + 1 : null,
+    });
+    if (!willRetry) return;
+    this._scrollbackRetries += 1;
+    if (this._scrollbackRetryTimer !== null) clearTimeout(this._scrollbackRetryTimer);
+    this._scrollbackRetryTimer = setTimeout(() => {
+      this._scrollbackRetryTimer = null;
+      this._requestScrollbackAtEdge(this.chart.timeScale().getVisibleLogicalRange());
+    }, ChartEngine.SCROLLBACK_RETRY_DELAY_MS);
+  }
+
+  /** Новий вміст графіка — відкладений повтор стосувався старого: скасувати, лічильник з нуля. */
+  private _cancelScrollbackRetry(): void {
+    if (this._scrollbackRetryTimer !== null) clearTimeout(this._scrollbackRetryTimer);
+    this._scrollbackRetryTimer = null;
+    this._scrollbackRetries = 0;
   }
 
   /**
@@ -672,6 +727,7 @@ export class ChartEngine {
     this.volumeSeries.setData([]);
     this.isFetchingScrollback = false;
     this.lastScrollbackToMs = null;
+    this._cancelScrollbackRetry();
     this._totalBars = 0;
     this._setScrollbackState('idle');
     this._rafQueue = [];
@@ -931,6 +987,7 @@ export class ChartEngine {
       clearTimeout(this._idleTimer);
       this._idleTimer = null;
     }
+    this._cancelScrollbackRetry();
     this._rafQueue = [];
     this.chart.remove();
   }

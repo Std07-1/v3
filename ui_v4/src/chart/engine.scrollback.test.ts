@@ -7,7 +7,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Candle } from '../types';
 
-const lwc = vi.hoisted(() => ({ rangeListeners: [] as Array<(range: unknown) => void> }));
+const lwc = vi.hoisted(() => ({
+    rangeListeners: [] as Array<(range: unknown) => void>,
+    visibleRange: null as unknown,
+}));
 
 vi.mock('lightweight-charts', async (importOriginal) => {
     const real = await importOriginal<typeof import('lightweight-charts')>();
@@ -42,7 +45,9 @@ vi.mock('lightweight-charts', async (importOriginal) => {
         get: (_target, key) =>
             key === 'subscribeVisibleLogicalRangeChange'
                 ? (cb: (range: unknown) => void) => { lwc.rangeListeners.push(cb); }
-                : inert,
+                : key === 'getVisibleLogicalRange'
+                  ? () => lwc.visibleRange
+                  : inert,
     });
     const chart = new Proxy({}, {
         get: (_target, key) =>
@@ -70,32 +75,34 @@ const secs = (candles: Candle[]) => candles.map((c) => c.t_ms / 1000);
 
 /** Рейка scrollback бачить лівий край графіка (дебаунс 150 мс). */
 function edgeReached(): void {
-    for (const cb of lwc.rangeListeners) cb({ from: -3, to: 40 });
+    lwc.visibleRange = { from: -3, to: 40 };
+    for (const cb of lwc.rangeListeners) cb(lwc.visibleRange);
     vi.advanceTimersByTime(150);
 }
 
+let requested: number[];
+let engine: ChartEngine;
+let consoleError: ReturnType<typeof vi.spyOn>;
+let consoleWarn: ReturnType<typeof vi.spyOn>;
+
+beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0));
+    consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    lwc.rangeListeners.length = 0;
+    lwc.visibleRange = null;
+    requested = [];
+    engine = new ChartEngine({} as HTMLElement, () => {}, (ms) => requested.push(ms));
+});
+
+afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+});
+
 describe('ChartEngine — scrollback застосовується лише до вмісту, від якого його просили', () => {
-    let requested: number[];
-    let engine: ChartEngine;
-    let consoleError: ReturnType<typeof vi.spyOn>;
-    let consoleWarn: ReturnType<typeof vi.spyOn>;
-
-    beforeEach(() => {
-        vi.useFakeTimers();
-        vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0));
-        consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-        consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        lwc.rangeListeners.length = 0;
-        requested = [];
-        engine = new ChartEngine({} as HTMLElement, () => {}, (ms) => requested.push(ms));
-    });
-
-    afterEach(() => {
-        vi.useRealTimers();
-        vi.unstubAllGlobals();
-        vi.restoreAllMocks();
-    });
-
     it('відповідь, що накладається на новий повний кадр, відкинуто: графік цілий, «стіни» нема', () => {
         // Дефолтний кадр M30 не показано (чекаємо пару з адреси), а його дельта домалювала бар на порожній графік
         engine.setTfS(1800);
@@ -170,5 +177,73 @@ describe('ChartEngine — scrollback застосовується лише до 
         expect(engine.series.data()).toHaveLength(149);
         expect(engine.series.data()[0].time).toBe('2026-04-14');
         expect(consoleWarn).not.toHaveBeenCalled();
+    });
+});
+
+// Наживо 16.10.2026 (стенд, прод-дані, XAU/USD M15): швидке гортання назад — другий запит через 218–500 мс після
+// першого, сервер відмовляє scrollback_throttled (cooldown 0.5 с) порожнім кадром → «No more history available»,
+// хоча історія є, і за десятки наступних жестів рейка не попросила жодного разу (4 прогони з 4).
+// Порожній кадр сервер шле і на кінець історії, і на тимчасову відмову; причину несе meta.warnings.
+describe('ChartEngine — порожня відповідь scrollback: «стіна» лише там, де історії справді нема', () => {
+    const full = bars(M15_FIRST_MS, M15_LAST_MS, M15_MS);
+    /** Повний кадр M15 на графіку, рейка дійшла до лівого краю й попросила історію від першого бару. */
+    function requestedFromLeftEdge(): void {
+        engine.setTfS(900);
+        engine.setData(full);
+        edgeReached();
+        expect(requested).toEqual([M15_FIRST_MS]);
+    }
+
+    it.each(['scrollback_throttled', 'uds_unavailable', 'scrollback_error'])(
+        'тимчасова відмова %s — не «стіна»: повтор від того самого бару, історія лягає ліворуч',
+        (reason) => {
+            requestedFromLeftEdge();
+            engine.prependData([], [reason]);
+
+            expect(engine.scrollbackState).toBe('idle');
+            vi.advanceTimersByTime(ChartEngine.SCROLLBACK_RETRY_DELAY_MS);
+            expect(requested).toEqual([M15_FIRST_MS, M15_FIRST_MS]);
+            engine.prependData(bars(M15_FIRST_MS - 499 * M15_MS, M15_FIRST_MS, M15_MS));
+            expect(engine.series.data()).toHaveLength(full.length + 499);
+            expect(engine.scrollbackState).toBe('idle');
+        },
+    );
+
+    it.each([[[]], [['scrollback_max_steps_reached']]])(
+        'кінець історії (warnings %j) — «стіна», рейка більше не просить',
+        (warnings) => {
+            requestedFromLeftEdge();
+            engine.prependData([], warnings);
+
+            expect(engine.scrollbackState).toBe('wall');
+            vi.advanceTimersByTime(ChartEngine.SCROLLBACK_RETRY_DELAY_MS);
+            edgeReached();
+            expect(requested).toEqual([M15_FIRST_MS]);
+        },
+    );
+
+    it('відмови поспіль: автоповторів не більше за ліміт, далі просить лише рух графіка', () => {
+        requestedFromLeftEdge();
+        for (let i = 0; i < ChartEngine.SCROLLBACK_RETRY_MAX; i++) {
+            engine.prependData([], ['scrollback_throttled']);
+            vi.advanceTimersByTime(ChartEngine.SCROLLBACK_RETRY_DELAY_MS);
+        }
+        expect(requested).toHaveLength(1 + ChartEngine.SCROLLBACK_RETRY_MAX);
+        engine.prependData([], ['scrollback_throttled']);
+        vi.advanceTimersByTime(5 * ChartEngine.SCROLLBACK_RETRY_DELAY_MS);
+
+        expect(requested).toHaveLength(1 + ChartEngine.SCROLLBACK_RETRY_MAX);
+        expect(engine.scrollbackState).toBe('idle');
+        edgeReached();
+        expect(requested).toHaveLength(2 + ChartEngine.SCROLLBACK_RETRY_MAX);
+    });
+
+    it('повний кадр під час паузи скасовує відкладений повтор старого вмісту', () => {
+        requestedFromLeftEdge();
+        engine.prependData([], ['scrollback_throttled']);
+        engine.setData(full);
+        vi.advanceTimersByTime(ChartEngine.SCROLLBACK_RETRY_DELAY_MS);
+
+        expect(requested).toEqual([M15_FIRST_MS]);
     });
 });
