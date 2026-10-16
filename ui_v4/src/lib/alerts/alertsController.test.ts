@@ -194,7 +194,7 @@ describe('alertsController', () => {
     const { controller, server } = await ready();
     await controller.enable(hline('d1', 4380), SYMBOL, 'M15');
     await controller.rearm(hline('d1', 4380), SYMBOL, 'M15');
-    await controller.disable(hline('d1', 4380), SYMBOL);
+    await controller.disable('d1', SYMBOL);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const trend: Drawing = { ...hline('t1', 4380), type: 'trend' };
     await expect(controller.enable(trend, SYMBOL, 'M15')).rejects.toMatchObject({ code: 'not_alertable' });
@@ -210,6 +210,30 @@ describe('alertsController', () => {
     const moved = await controller.enable(hline('d1', 4390), SYMBOL, 'M15'); // version 2
     server.handlers!.onEvent('delivered', { ...fired, delivery: 'delivered' }); // про version 1
     expect(get(controller.view).alerts[0]).toEqual(moved);
+  });
+
+  it('fired events reach listeners (toast/sound); delivered do not; unsubscribe works', async () => {
+    const { controller, server } = await ready();
+    const armed = await controller.enable(hline('d1', 4380), SYMBOL, 'M15');
+    const heard: string[] = [];
+    const stop = controller.onFired((alert) => heard.push(`${alert.drawing_id} ${alert.state}`));
+    server.handlers!.onEvent('fired', { ...armed, state: 'fired', delivery: 'pending' });
+    server.handlers!.onEvent('delivered', { ...armed, state: 'fired', delivery: 'delivered' });
+    stop();
+    server.handlers!.onEvent('fired', { ...armed, state: 'fired', delivery: 'pending' });
+    expect(heard).toEqual(['d1 fired']);
+  });
+
+  it('rearmAlert re-arms from the list by the alert itself (line may live on another device)', async () => {
+    const prepared = new FakeServer();
+    await prepared.put('phone', body(4400));
+    prepared.calls = [];
+    const { controller, server } = await ready(prepared);
+    const [phone] = get(controller.view).alerts;
+    const rearmed = await controller.rearmAlert({ ...phone, state: 'fired' });
+    expect(server.calls).toEqual(['PUT phone 4400 rearm']);
+    expect(rearmed.version).toBe(2);
+    expect(get(controller.view).alerts[0].version).toBe(2);
   });
 
   it('confirm with the right digits makes the page ready', async () => {

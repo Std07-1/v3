@@ -27,6 +27,8 @@
     matchPreset,
     type DrawingPreset,
   } from "../chart/drawings/drawingPresets";
+  import type { AlertAction } from "../lib/alerts/alertUi";
+  import { ICON_BELL } from "./toolIcons";
 
   interface Props {
     /** null → закрито. anchor = екранна позиція, від якої flyout відкривається
@@ -52,6 +54,9 @@
     onPreviewPreset?: (preset: DrawingPreset | null) => void;
     /** object-режим: видалити фігуру (undoable). Undefined у tool-режимі. */
     onDelete?: () => void;
+    /** ADR-0114: лінія-сповіщення — підпис і стан готує ChartPane; null/undefined — рядка нема. */
+    alertAction?: AlertAction | null;
+    onAlertAction?: () => void;
     onClose: () => void;
   }
   let {
@@ -68,6 +73,8 @@
     onPreviewStyle,
     onPreviewPreset,
     onDelete,
+    alertAction = null,
+    onAlertAction,
     onClose,
   }: Props = $props();
 
@@ -299,8 +306,21 @@
       {/each}
     </div>
 
-    {#if request.showDelete && onDelete}
+    {#if request.showDelete && alertAction}
       <div class="sep"></div>
+      <button
+        class="alert-row"
+        class:on={alertAction.on}
+        disabled={alertAction.hintOnly}
+        onclick={() => onAlertAction?.()}
+      >
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@html ICON_BELL}</svg>
+        <span>{alertAction.label}</span>
+      </button>
+    {/if}
+    {#if request.showDelete && onDelete}
+      {#if !alertAction}<div class="sep"></div>{/if}
       <button class="delete" onclick={() => onDelete?.()}>
         <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M3 6h18" />
@@ -570,6 +590,47 @@
   .lstyle.active {
     background: color-mix(in srgb, var(--text-1, #fff) 7%, transparent);
     border-color: color-mix(in srgb, var(--text-1, #fff) 20%, transparent);
+  }
+
+  /* ADR-0114: рядок «Сповіщати» — та сама мова, що «Видалити»; увімкнене сповіщення — акцентом. */
+  .alert-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 5px;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: var(--text-2, #9b9bb0);
+    font-family: inherit;
+    font-size: 11.5px;
+    font-weight: 450;
+    letter-spacing: 0.2px;
+    line-height: 1.35;
+    text-align: left;
+    cursor: pointer;
+    transition:
+      background 0.12s ease,
+      color 0.12s ease;
+  }
+  .alert-row svg {
+    flex: none;
+    opacity: 0.75;
+  }
+  .alert-row:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent, #d4a017) 12%, transparent);
+    color: var(--text-1, #e6edf3);
+  }
+  .alert-row.on {
+    color: var(--accent, #d4a017);
+  }
+  .alert-row.on svg {
+    opacity: 1;
+  }
+  .alert-row:disabled {
+    cursor: default;
+    color: var(--text-3, #5d6068);
   }
 
   /* object-режим: рядок «Видалити» під палітрою (мова DrawingContextMenu). */

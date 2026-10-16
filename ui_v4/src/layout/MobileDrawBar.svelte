@@ -15,7 +15,8 @@
   import type { ActiveTool, DrawingType } from "../types";
   import { TOOL_REGISTRY } from "../chart/drawings/tools";
   import { capsuleEntries, groupVariants } from "../chart/drawings/toolGroups";
-  import { ICON_CLOSE, ICON_MAGNET, ICON_TRASH, ICON_UNDO } from "./toolIcons";
+  import { ICON_BELL, ICON_CLOSE, ICON_MAGNET, ICON_TRASH, ICON_UNDO } from "./toolIcons";
+  import type { AlertAction } from "../lib/alerts/alertUi";
 
   type PlaceResult = "draft" | "done" | "none";
 
@@ -30,6 +31,8 @@
     onClose,
     canUndo = false,
     hasSelection = false,
+    alertAction = null,
+    onAlertAction,
     menuBg = "rgba(30, 34, 45, 0.92)",
     menuBorder = "rgba(255, 255, 255, 0.08)",
   }: {
@@ -45,6 +48,9 @@
     /** Є що скасувати / виділено фігуру — ↶ і «видалити» активні лише тоді (ChartPane → App). */
     canUndo?: boolean;
     hasSelection?: boolean;
+    /** ADR-0114: дзвіночок для виділеної горизонталі (лише коли пристрій прив'язано; прив'язка — ☰ → Сповіщення). */
+    alertAction?: AlertAction | null;
+    onAlertAction?: () => void;
     /** Кольори меню теми — ті самі, що в меню символу/TF (ChartHud). */
     menuBg?: string;
     menuBorder?: string;
@@ -204,6 +210,17 @@
         <button class="btn" type="button" aria-label="Скасувати дію" disabled={!canUndo} onclick={onUndo}>
           {@render icon(ICON_UNDO)}
         </button>
+        {#if alertAction && !alertAction.hintOnly}
+          <button
+            class="btn bell"
+            class:active={alertAction.on}
+            type="button"
+            aria-label={alertAction.label}
+            onclick={() => onAlertAction?.()}
+          >
+            {@render icon(ICON_BELL)}
+          </button>
+        {/if}
         <button
           class="btn danger"
           type="button"

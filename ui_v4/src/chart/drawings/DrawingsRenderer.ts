@@ -1252,6 +1252,11 @@ export class DrawingsRenderer {
     return { canUndo: this.commandStack.canUndo(), hasSelection: this.selectedId !== null };
   }
 
+  /** ADR-0114 S8: фігури символу й виділена — для дзвіночків ліній-сповіщень і кнопки капсули (лише читання). */
+  drawingsView(): { drawings: readonly Drawing[]; selectedId: string | null } {
+    return { drawings: this.drawings, selectedId: this.selectedId };
+  }
+
   private forceRender(): void {
     // ADR-0082 D6: свіжий кеш часів барів (guard + throttle всередині).
     this.refreshBarTimes();

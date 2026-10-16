@@ -42,7 +42,11 @@ export interface AlertsController {
   onPersisted(storageKey: string, drawings: readonly Drawing[]): Promise<void>;
   enable(drawing: Drawing, symbol: string, tfLabel: string): Promise<AlertWire>;
   rearm(drawing: Drawing, symbol: string, tfLabel: string): Promise<AlertWire>;
-  disable(drawing: Drawing, symbol: string): Promise<void>;
+  /** Знову взвести на рівні самого сповіщення (☰-список: лінії може не бути на цьому пристрої). */
+  rearmAlert(alert: AlertWire): Promise<AlertWire>;
+  disable(drawingId: string, symbol: string): Promise<void>;
+  /** Спрацювання з потоку подій (спливне повідомлення, звук); повертає відписку. */
+  onFired(listener: (alert: AlertWire) => void): () => void;
   pair(): Promise<{ link: string; label: string; expires_in_s: number }>;
   confirm(code: string): Promise<ConfirmResult>;
   dispose(): void;
@@ -53,6 +57,7 @@ export function createAlertsController(deps: AlertsControllerDeps): AlertsContro
   const view = writable<AlertsView>({ status: 'unknown', alerts: [], degraded: [], lastError: null });
   let queue: Promise<unknown> = Promise.resolve();
   let closeEvents: (() => void) | null = null;
+  const firedListeners = new Set<(alert: AlertWire) => void>();
 
   function enqueue<T>(job: () => Promise<T>): Promise<T> {
     const run = queue.then(job, job);
@@ -91,7 +96,10 @@ export function createAlertsController(deps: AlertsControllerDeps): AlertsContro
     await refresh();
     closeEvents?.();
     closeEvents = deps.client.events({
-      onEvent: (_name, alert) => upsert(alert),
+      onEvent: (name, alert) => {
+        upsert(alert);
+        if (name === 'fired') firedListeners.forEach((listener) => listener(alert));
+      },
       onOpen: () => void enqueue(refresh).catch((err) => fail('refresh', err)), // пропущене за обрив
     });
   }
@@ -177,19 +185,45 @@ export function createAlertsController(deps: AlertsControllerDeps): AlertsContro
     enable: (drawing, symbol, tfLabel) => enqueue(() => arm(drawing, symbol, tfLabel, false)),
     rearm: (drawing, symbol, tfLabel) => enqueue(() => arm(drawing, symbol, tfLabel, true)),
 
-    disable(drawing, symbol) {
+    rearmAlert(alert) {
+      return enqueue(async () => {
+        const body = {
+          symbol: alert.symbol,
+          level: alert.level,
+          tf_label: alert.tf_label,
+          active_from_ms: null,
+          rearm: true,
+        };
+        try {
+          const rearmed = await deps.client.put(alert.drawing_id, body);
+          upsert(rearmed);
+          view.update((v) => ({ ...v, lastError: null }));
+          return rearmed;
+        } catch (err) {
+          fail('rearm', err);
+          throw err;
+        }
+      });
+    },
+
+    disable(drawingId, symbol) {
       return enqueue(async () => {
         try {
-          await deps.client.remove(drawing.id);
+          await deps.client.remove(drawingId);
         } catch (err) {
           fail('disable', err);
           throw err;
         }
-        dropDrawing(drawing.id, symbol);
+        dropDrawing(drawingId, symbol);
         const ids = owned.load(symbol);
-        ids.delete(drawing.id);
+        ids.delete(drawingId);
         owned.save(symbol, ids);
       });
+    },
+
+    onFired(listener) {
+      firedListeners.add(listener);
+      return () => firedListeners.delete(listener);
     },
 
     pair: () => deps.client.pair(),

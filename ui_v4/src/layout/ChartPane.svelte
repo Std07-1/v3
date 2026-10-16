@@ -32,6 +32,12 @@
   import { ArchiLayerRenderer } from "../chart/archi/ArchiLayerRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
   import DrawingStyleFlyout from "./DrawingStyleFlyout.svelte";
+  import AlertBells from "./AlertBells.svelte";
+  import AlertToast from "./AlertToast.svelte";
+  import { ChartAlertsBinding } from "../chart/alerts/chartAlerts";
+  import type { Bell } from "../chart/alerts/alertBells";
+  import { alerts, startAlerts } from "../lib/alerts/alertsStore";
+  import type { AlertAction } from "../lib/alerts/alertUi";
   // PdBadge moved to ChartHud inline (ADR-0041 §5a Variant H)
   // NarrativePanel moved to ChartHud inline (ADR-0033)
   // BiasBanner moved to ChartHud (ADR-0031: inline after star)
@@ -80,6 +86,8 @@
     onTouchPlace?: (result: "draft" | "done" | "none") => void;
     /** ADR-0112 D2: чи є що скасувати й чи виділено фігуру — ↶ і «видалити» на телефоні активні лише тоді. */
     onDrawingEditState?: (state: { canUndo: boolean; hasSelection: boolean }) => void;
+    /** ADR-0114: дія лінії-сповіщення для виділеної фігури — кнопка-дзвіночок у капсулі телефона. */
+    onDrawingAlertAction?: (action: AlertAction | null) => void;
   }
 
   let {
@@ -96,6 +104,7 @@
     touchDrawing = false,
     onTouchPlace,
     onDrawingEditState,
+    onDrawingAlertAction,
   }: Props = $props();
 
   // ADR-0024: локальний стан SMC overlay (оновлюється інкрементально)
@@ -190,6 +199,15 @@
   let drawingsRenderer: DrawingsRenderer;
   // ADR-0078: активний запит на контекстне міні-меню фігури (null = закрито).
   let ctxMenu: DrawingContextRequest | null = $state(null);
+  // ADR-0114 S8: лінії-сповіщення — дзвіночки на лініях і рядок «Сповіщати» в меню фігури
+  let alertsBinding: ChartAlertsBinding | null = null;
+  let alertBells = $state<Bell[]>([]);
+  let alertPriceScaleW = $state(0);
+  const alertsView = alerts.view;
+  const ctxAlertAction = $derived.by(() => {
+    void $alertsView; // перерахунок при зміні стану сповіщень
+    return ctxMenu && alertsBinding ? alertsBinding.actionFor(ctxMenu.id) : null;
+  });
   let interactionCleanup: (() => void) | null = null;
   let longPressLockCleanup: (() => void) | null = null;
   let figureTouchCleanup: (() => void) | null = null;
@@ -244,6 +262,11 @@
   }
   /** Delete/Backspace: видалити виділену фігуру (undoable). Відкрите меню стилю фігури — видаляє ЇЇ, як пункт
    *  «Видалити» в меню (правий клік не виділяє фігуру — інакше зникла б виділена деінде, рецензія 12.10). */
+  /** ADR-0114: кнопка-дзвіночок капсули — дія для виділеної лінії (відмова гучна: lastError → AlertToast). */
+  export function actOnSelectedAlert(): void {
+    alertsBinding?.act().catch(() => undefined);
+  }
+
   export function deleteSelectedDrawing(): void {
     if (ctxMenu) {
       drawingsRenderer?.deleteById(ctxMenu.id);
@@ -407,11 +430,23 @@
     const editRenderer = drawingsRenderer;
     let editState = { canUndo: false, hasSelection: false };
     editRenderer.onRendered = () => {
+      alertsBinding?.refresh();
       const next = editRenderer.editState();
       if (next.canUndo === editState.canUndo && next.hasSelection === editState.hasSelection) return;
       editState = next;
       onDrawingEditState?.(next);
     };
+
+    // ADR-0114 S8: дзвіночки, дія для виділеної, узгодження ліній після кожного збереження фігур
+    alertsBinding = new ChartAlertsBinding(drawingsRenderer, chartEngine.chart, chartEngine.series, wrapperRef, {
+      bells: (bells, priceScaleWidth) => {
+        alertBells = bells;
+        alertPriceScaleW = priceScaleWidth;
+      },
+      selection: (action) => onDrawingAlertAction?.(action),
+    });
+    drawingsRenderer.onPersisted = (key, drawings) => void alerts.onPersisted(key, drawings);
+    startAlerts();
 
     // Expose purge method for console debugging: window.__purgeDrawings()
     (window as any).__purgeDrawings = () =>
@@ -894,6 +929,7 @@
   });
 
   onDestroy(() => {
+    alertsBinding?.dispose();
     interactionCleanup?.();
     interactionCleanup = null;
     longPressLockCleanup?.();
@@ -924,6 +960,8 @@
     bind:this={drawingsCanvasRef}
     style:filter={brightness !== 1 ? `brightness(${brightness})` : undefined}
   ></canvas>
+  <AlertBells bells={alertBells} priceScaleWidth={alertPriceScaleW} />
+  <AlertToast />
   {#if showNoData}
     <div class="no-data-overlay">
       <div class="no-data-content">
@@ -1109,6 +1147,10 @@
   onPreviewStyle={(style) => {
     if (ctxMenu)
       drawingsRenderer?.previewMeta(ctxMenu.id, style === null ? null : { lineStyle: style });
+  }}
+  alertAction={ctxAlertAction}
+  onAlertAction={() => {
+    if (ctxMenu) alertsBinding?.act(ctxMenu.id).catch(() => undefined); // відмова — lastError → AlertToast
   }}
   onDelete={() => {
     if (ctxMenu) drawingsRenderer?.deleteById(ctxMenu.id);

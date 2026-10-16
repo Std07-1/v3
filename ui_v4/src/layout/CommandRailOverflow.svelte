@@ -21,6 +21,7 @@
     } from "../chart/lwc";
 
     import type { DisplayMode } from "../chart/overlay/DisplayBudget";
+    import AlertsMenuSection from "./AlertsMenuSection.svelte";
 
     interface Props {
         open: boolean;
@@ -219,6 +220,9 @@
                 <span class="mi-label">{snapLabel ?? "Знімок графіка"}</span>
             </button>
         {/if}
+
+        <!-- ADR-0114: лінії-сповіщення — прив'язка Telegram і список (сервіс вимкнений — пункту нема) -->
+        <AlertsMenuSection />
 
         <!-- Drawing-tool hover labels: always-show vs polite (default) -->
         {#if onToggleHints}

@@ -34,6 +34,10 @@ function buildDate(): string {
 
 export default defineConfig(() => {
     const apiTarget = process.env.VITE_API_PROXY_TARGET ?? 'http://localhost:8000';
+    // ADR-0114: лінії-сповіщення — окремий процес smc-alerts (у проді nginx /api/alerts/ → :8020). Процес звіряє Origin
+    // зі своїм site_url (CSRF), тож dev-проксі підставляє адресу сайту замість localhost-у dev-сервера.
+    const alertsTarget = process.env.VITE_ALERTS_PROXY_TARGET ?? 'http://localhost:8020';
+    const alertsOrigin = process.env.VITE_ALERTS_SITE_ORIGIN ?? 'https://aione-smc.com';
     return {
         plugins: [svelte()],
         define: {
@@ -45,6 +49,11 @@ export default defineConfig(() => {
             port: 5173,
             open: false,
             proxy: {
+                // специфічніший префікс — першим (vite бере перший збіг)
+                '/api/alerts': {
+                    target: alertsTarget,
+                    headers: { origin: alertsOrigin },
+                },
                 '/api': {
                     target: apiTarget,
                     changeOrigin: true,

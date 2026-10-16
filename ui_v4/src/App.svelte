@@ -9,6 +9,7 @@
   import ChartPane from "./layout/ChartPane.svelte";
   import DrawingToolbar from "./layout/DrawingToolbar.svelte";
   import MobileDrawBar from "./layout/MobileDrawBar.svelte";
+  import type { AlertAction } from "./lib/alerts/alertUi";
   import { ICON_PENCIL } from "./layout/toolIcons";
   import { deviceStorage, resolveTouchDrawing } from "./lib/touchDrawingFlag";
   import { hintsOn, toggleHints } from "./stores/uiHints";
@@ -123,6 +124,8 @@
   let drawBarRef: MobileDrawBar | undefined = $state();
   /** ↶ і «видалити» в капсулі — активні лише коли є що (стан з ChartPane, ADR-0112 D2). */
   let drawEditState = $state({ canUndo: false, hasSelection: false });
+  // ADR-0114: дія лінії-сповіщення для виділеної фігури (кнопка-дзвіночок капсули)
+  let drawAlertAction = $state<AlertAction | null>(null);
 
   // ADR-0065 Phase 1: SMC panel open + display mode lifted here from ChartPane.
   // CommandRailOverflow is the single trigger surface; ChartPane is a $bindable consumer.
@@ -979,6 +982,7 @@
         touchDrawing={touchDrawOpen}
         onTouchPlace={(r) => drawBarRef?.applyPlace(r)}
         onDrawingEditState={(s) => (drawEditState = s)}
+        onDrawingAlertAction={(a) => (drawAlertAction = a)}
         bind:smcPanelOpen
         bind:displayMode
       />
@@ -995,6 +999,8 @@
           onClose={closeTouchDrawing}
           canUndo={drawEditState.canUndo}
           hasSelection={drawEditState.hasSelection}
+          alertAction={drawAlertAction}
+          onAlertAction={() => chartPaneRef?.actOnSelectedAlert()}
           {menuBg}
           {menuBorder}
         />
