@@ -124,12 +124,22 @@ class _Harness:
         self.app[APP_UDS_EXECUTOR] = ThreadPoolExecutor(max_workers=2)
         self.app[APP_BOOT_ID] = "race"
         self.reads: dict[tuple[str, int], int] = {}
+        self.pushed: dict[tuple[str, int], int] = {}
         self.publish_on_read: set[tuple[str, int]] = set()
         self.after_read_hook: Optional[Callable[[tuple[str, int]], Any]] = None
 
     def add(self, *sessions: ws_server.WsSession) -> None:
         for s in sessions:
             self.app[APP_WS_SESSIONS][s.client_id] = s
+
+    def ring_head(self, key: tuple[str, int], seeded_max: int) -> int:
+        """Лічильник кільця зараз: засіяний max + події, які harness встиг опублікувати.
+
+        Кожне читання key ∈ publish_on_read публікує рівно одну подію, а скільки читань
+        встигне цикл до cancel — залежить від планувальника, не від `reads` у run_until.
+        Тому межа «курсор не з майбутнього» рахується від фактично опублікованого.
+        """
+        return seeded_max + self.pushed.get(key, 0)
 
     async def run_until(self, target: tuple[str, int], reads: int, monkeypatch) -> None:
         real_read = ws_server._uds_read_updates
@@ -138,6 +148,7 @@ class _Harness:
             key = (symbol, tf_s)
             if key in self.publish_on_read:
                 self.redis.push_ring_event(NS, symbol, tf_s, FORMING_OPEN_MS, retain=RETAIN)
+                self.pushed[key] = self.pushed.get(key, 0) + 1
             result = await real_read(app, symbol, tf_s, since_seq, include_preview)
             self.reads[key] = self.reads.get(key, 0) + 1
             if self.after_read_hook is not None:
@@ -228,7 +239,8 @@ async def test_delta_loop_switch_during_read_keeps_d1_group_alive(harness, monke
 
     assert race["done"], "switch мав статися посеред читання M30"
     s_cursor = s.delta_cursor((XAU, D1))
-    assert s_cursor is not None and D1_MAX - RETAIN <= s_cursor <= D1_MAX + 8
+    assert s_cursor is not None
+    assert D1_MAX - RETAIN <= s_cursor <= harness.ring_head((XAU, D1), D1_MAX)
     # V отримує delta на кожному poll з подіями (на HEAD: 1-2 кадри, далі тиша — gap навіки)
     assert len(_deltas(v, "D1")) >= 6
     # S після full D1 отримує лише D1-дельти (жодного M30-кадру після switch)
@@ -259,7 +271,7 @@ async def test_delta_loop_switch_to_quieter_ring_does_not_inherit_future_cursor(
 
     assert state["done"]
     s_cursor = s.delta_cursor((XAG, M1))
-    assert s_cursor is not None and s_cursor <= XAG_M1_MAX + 6
+    assert s_cursor is not None and s_cursor <= harness.ring_head((XAG, M1), XAG_M1_MAX)
     assert len(_deltas(s, "M1")) >= 3
 
 
@@ -288,7 +300,8 @@ async def test_delta_loop_relay_branch_switch_does_not_poison_new_group(harness,
 
     assert race["done"]
     s_cursor = s.delta_cursor((XAU, M30))
-    assert s_cursor is not None and M30_MAX - RETAIN <= s_cursor <= M30_MAX + 6
+    assert s_cursor is not None
+    assert M30_MAX - RETAIN <= s_cursor <= harness.ring_head((XAU, M30), M30_MAX)
     assert len(_deltas(s, "M30")) >= 3
     full_idx = max(i for i, f in enumerate(s.ws.frames) if f.get("frame_type") == "full")
     assert all(f.get("tf") == "M30" for f in s.ws.frames[full_idx:] if f.get("frame_type") == "delta")
@@ -331,7 +344,7 @@ async def test_delta_loop_future_cursor_fast_forwards_group_and_warns(harness, m
     warns = [r.getMessage() for r in caplog.records if "WS_CURSOR_GAP_FASTFORWARD" in r.getMessage()]
     assert len(warns) == 1 and "reason=cursor_ahead" in warns[0]
     for s in (a, b):
-        assert s.delta_cursor((XAG, M1)) <= XAG_M1_MAX + 6
+        assert s.delta_cursor((XAG, M1)) <= harness.ring_head((XAG, M1), XAG_M1_MAX)
         assert len(_deltas(s, "M1")) >= 4
 
 
