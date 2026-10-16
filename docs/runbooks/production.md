@@ -15,7 +15,8 @@
 6. [DST перехід (літній/зимовий час)](#dst-перехід-літнійзимовий-час)
 7. [Нічний settle M1 + нативний D1](#нічний-settle-m1--нативний-d1-adr-0103-34)
 8. [Лінія-сповіщення](#лінія-сповіщення-adr-0114)
-9. [Що НЕ робити](#що-не-робити)
+9. [Supervisor на VPS: застосування конфігу](#supervisor-на-vps-застосування-конфігу)
+10. [Що НЕ робити](#що-не-робити)
 
 ---
 
@@ -262,7 +263,8 @@ server {
 2. Переконатись, що Archi nginx proxy covers both `/api/archi/` і `/api/agent/`
 3. Перезавантажити nginx: `sudo nginx -t ; sudo systemctl reload nginx`
 4. Bridge: у `/etc/supervisor/conf.d/agent-bridge.conf` виставити `AI_ONE_AGENT_BRIDGE_ENABLED="1"` + `ARCHI_AUTH_TOKEN`,
-   `sudo supervisorctl reread && sudo supervisorctl update && sudo supervisorctl restart smc-agent-bridge` — не `app.main`
+   `sudo supervisorctl reread && sudo supervisorctl update smc-agent-bridge` — не `app.main`, і `update` лише з іменем
+   програми (див. [Supervisor на VPS](#supervisor-на-vps-застосування-конфігу))
 
 ---
 
@@ -472,7 +474,7 @@ WS-сервер видає відвідувачу анонімний ключ (c
 | 2 | Секрети (токен наосліп, chat id за замовчуванням — з «Monitor») | `sudo bash /opt/smc-v3/ops/vps/alerts-secrets.sh` |
 | 3 | Перевірити права секретів | `sudo stat -c '%a %U:%G' /etc/smc-v3 /etc/smc-v3/alerts.env` → `750 root:smc`, `640 root:smc` |
 | 4 | Тека стану | `sudo install -d -o smc -g smc -m 750 /var/lib/smc-v3/alerts` |
-| 5 | Програма supervisor (з `enabled:false` у config — лише health) | `sudo cp /opt/smc-v3/tools/alerts.supervisor.conf /etc/supervisor/conf.d/alerts.conf && sudo supervisorctl reread && sudo supervisorctl update` → `curl -s 127.0.0.1:8020/api/alerts/health` = `{"enabled": false}` |
+| 5 | Програма supervisor (з `enabled:false` у config — лише health) | `sudo cp /opt/smc-v3/tools/alerts.supervisor.conf /etc/supervisor/conf.d/alerts.conf && sudo supervisorctl reread && sudo supervisorctl update smc-alerts` (лише з іменем — див. [Supervisor на VPS](#supervisor-на-vps-застосування-конфігу)) → `curl -s 127.0.0.1:8020/api/alerts/health` = `{"enabled": false}` |
 | 6 | nginx (backup спершу) | `sudo cp /opt/smc-v3/tools/nginx/snippets/smc_alerts_location.conf /etc/nginx/snippets/` + рядок `include /etc/nginx/snippets/smc_alerts_location.conf;` у server-блоці aione-smc.com поруч з `location /api/v3/` → `sudo nginx -t && sudo systemctl reload nginx` |
 | 7 | Увімкнути: `alerts.enabled = true` у git → деплой → `sudo supervisorctl restart smc-alerts` | спостереження 120 с (D9.1): `sudo supervisorctl status smc-alerts`, `tail -n 50 /var/log/smc-v3/alerts.stderr.log` — `ALERTS_READY`, без ERROR |
 | 8 | Smoke зовні | `curl -s https://aione-smc.com/api/alerts/health` = `{"enabled": true, "degraded": []}`; бот на `/alerts` відповідає |
@@ -495,6 +497,58 @@ WS-сервер видає відвідувачу анонімний ключ (c
 
 ---
 
+## Supervisor на VPS: застосування конфігу
+
+**Правило.** Після зміни будь-якого файла в `/etc/supervisor/conf.d/`: `sudo supervisorctl reread`, потім
+`sudo supervisorctl update <програма або група, яку ти міняв>`. `update` без імені (і `update all`) застосовує **всі**
+незастосовані зміни на хості: кожна змінена група зупиняється цілком, видаляється і додається знову
+(`stopProcessGroup` → `removeProcessGroup` → `addProcessGroup`, supervisor 4.2.1 `supervisorctl.py:1223-1231`).
+Для групи `smc` це одночасна зупинка й старт `smc-ws`, `smc-fxcm` і `smc-preview`: графік і ціни зникають, FXCM
+перелогінюється, m1_poller добирає хвилини. Якщо `reread` показує `changed` для того, чого ти не чіпав, — не
+застосовуй, з'ясуй, що це (нижче — як).
+
+**Стан на 16.10.2026: `reread` показує `smc: changed` — свідомо незастосована зміна від 07.09.2026.** Єдина різниця
+між `/etc/supervisor/conf.d/smc-v3.conf` і тим, з чим працює supervisord: у `[program:smc-ticks]`
+`autostart=true` → `autostart=false` (розслідування sidecar/FXCM 07.09, коміт `0ff63081`; `tick_publisher_fxcm`
+DEPRECATED, тіки йдуть через `broker_sidecar._TickRelay`). Тоді навмисно зроблено `reread` без `update`, щоб не
+перезапускати графік. Сама по собі ця різниця нічого не робить: supervisord автозапускає лише процес, який ще не
+стартував у поточному житті supervisord (`process.py:650`, `STOPPED and not self.laststart`), а `smc-ticks`
+стартував і зупинений 07.09 18:25. Після перезавантаження VPS файл читається заново, і `smc-ticks` не стартує —
+так і задумано.
+
+Як довести, що завантажене = бекап до зміни (повторити перед застосуванням):
+
+| Перевірка | Команда | Очікуване |
+| --- | --- | --- |
+| Що змінено у файлі | `sudo diff /root/smc-v3.conf.bak.20260907-183105 /etc/supervisor/conf.d/smc-v3.conf` | лише рядок `autostart` у `[program:smc-ticks]` |
+| Коли групу востаннє перевстановлено | `sudo grep -E "(stopped\|spawned).*smc-(ws\|fxcm\|preview\|ticks)" /var/log/supervisor/supervisord.log` | 06.09 09:55:06–07: усі члени групи зупинені й запущені в ту саму секунду, через 1 с після запису файла; пізніше — лише поодинокі рестарти (вони конфіг не перечитують) |
+| Оточення живих процесів = файл | `sudo cat /proc/$(sudo supervisorctl pid smc:smc-ws)/environ \| tr '\0' '\n'` (так само `smc-fxcm`, `smc-preview`; паролі не друкувати — порівнювати `sha256sum`) | `HOME`, `PATH`, `AI_ONE_REDIS_*` — як у файлі |
+
+`supervisorctl avail` тут не допомагає: після `reread` він показує значення **з файла** (`smc:smc-ticks … manual`),
+а не завантажені.
+
+**Застосувати** (лише за «го» власника; ринок закритий і settle не біжить — напр. субота після 09:10 UTC):
+
+1. `sudo supervisorctl reread` → лише `smc: changed`; diff з таблиці вище → лише рядок `autostart`.
+2. `pgrep -af settle_daily` → порожньо (settle сам зупиняє і стартує записувачів; `update` посеред нього підніме їх
+   до кінця заміни M1).
+3. `sudo supervisorctl update smc` → `smc: stopped`, `smc: updated process group`.
+4. Спостереження 120 с (D9.1): `sudo supervisorctl status` — `smc-ws`, `smc-fxcm`, `smc-preview` RUNNING; `smc-ticks`,
+   `smc-binance*` STOPPED `Not started`; `tail -n 50 /var/log/smc-v3/{ws_server,fxcm,preview}.stderr.log` без ERROR;
+   сайт 200; повторний `reread` → `No config updates to processes`.
+
+Якщо програма не піднялась — `sudo supervisorctl start smc:<програма>` у порядку проду: fxcm → `M1_POLLER_REDIS_PRIME`
+→ preview + ws. Повертати файл не треба: зміна стосується лише вже зупиненого процесу.
+
+**Не «лікувати» `changed` поверненням файла.** `autostart=true` прибере `changed`, але після перезавантаження VPS
+знову запустить другого FXCM-видавця тіків (дублі в `price_tik`, busy спільного `History/`, розслідування 07.09).
+
+**Не копіювати `tools/smc-v3.supervisor.conf` поверх `/etc`.** Файл у репо без `AI_ONE_REDIS_*`: креденшели Redis живуть
+лише в `/etc` (ADR-0091 P2). Після копії і `update smc` усі три процеси отримають `NOAUTH`. Зміни в `/etc` — точково, з
+бекапом `/root/smc-v3.conf.bak.<дата>`, і ту саму зміну — комітом у репо.
+
+---
+
 ## Що НЕ робити
 
 | Заборонено | Чому | Що замість |
@@ -505,3 +559,4 @@ WS-сервер видає відвідувачу анонімний ключ (c
 | Додавати `prefer_redis`/`force_disk` в UI код | Порушення I1 (UDS = вузька талія, Тема D, D6) | Сервер обирає джерело |
 | Міняти `config.json` під час роботи | Частково підтримується (mtime cache), але m1_poller потребує рестарту | Зупинити → змінити → запустити |
 | Ігнорувати DST перехід | H4/D1 бари з garbage alignment | [DST runbook](dst_transition.md) |
+| `sudo supervisorctl update` без імені | Застосовує всі незастосовані зміни хоста; з 07.09 висить `smc: changed` → перезапуск усього графіка | `update <програма>`; група `smc` — за [розділом](#supervisor-на-vps-застосування-конфігу) |
