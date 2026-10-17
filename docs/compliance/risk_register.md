@@ -39,9 +39,19 @@ written agreement with FXCM потрібен окремо.
 | pandas | 1.1.5 | BSD-3-Clause | Ні | ✅ Сумісна | [ASSUMED — verify: `pip audit`] | Так (released 2020, series 1.x deprecated) |
 | python-dotenv | ≥0.21 | BSD-3-Clause | Ні | ✅ Сумісна | [ASSUMED — verify: `pip audit`] | Ні |
 | aiohttp | ≥3.8 | Apache-2.0 | Ні | ✅ Сумісна (потрібен attribution) | [ASSUMED — verify: `pip audit`] | Ні |
+| pywebpush | 2.5.0 | MPL-2.0 | Файловий (слабкий) | ✅ Сумісна як незмінена залежність (не вендоримо, не правимо) — ADR-0114 Rev 2 | див. §1.1 примітку | Ні |
+| py-vapid | 1.9.4 | MPL-2.0 | Файловий (слабкий) | ✅ Сумісна як незмінена залежність — ADR-0114 Rev 2 | див. §1.1 примітку | Ні |
+| http-ece | 1.2.1 | MIT | Ні | ✅ Сумісна | див. §1.1 примітку | Ні |
+| cryptography | 50.0.2 | Apache-2.0 OR BSD-3-Clause | Ні | ✅ Сумісна | див. §1.1 примітку | Ні |
 | forexconnect | 1.6.43 | **Proprietary/EULA** | N/A | ⚠️ Optional, не вендориться | N/A (proprietary) | [ASSUMED — verify: FXCM site] |
 
 **Copyleft contamination**: ❌ Не виявлено. Жодна Python залежність не має GPL/LGPL/AGPL ліцензії.
+
+**MPL-2.0 (pywebpush, py-vapid; 2026-10-17, ADR-0114 Rev 2 — пуш у браузері):** copyleft на рівні файлу — обов'язок
+відкрити код виникає лише для змінених файлів самої бібліотеки; ми ставимо її з PyPI без змін і не вендоримо, тож
+власний код (Proprietary) не зачіпається. Правити ці пакети на місці чи копіювати їхні файли в репо — заборонено без
+перегляду ліцензії. Версії закріплено в `requirements.txt` (py-vapid 1.9.5/1.9.6 вийшли 14.10.2026 — узято витриману
+1.9.4); CVE — `pip-audit` на момент додавання (результат — у changelog ADR-0114 S9).
 
 #### npm Dependencies (ui_v4)
 
