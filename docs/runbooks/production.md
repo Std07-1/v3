@@ -507,41 +507,47 @@ WS-сервер видає відвідувачу анонімний ключ (c
 перелогінюється, m1_poller добирає хвилини. Якщо `reread` показує `changed` для того, чого ти не чіпав, — не
 застосовуй, з'ясуй, що це (нижче — як).
 
-**Стан на 16.10.2026: `reread` показує `smc: changed` — свідомо незастосована зміна від 07.09.2026.** Єдина різниця
-між `/etc/supervisor/conf.d/smc-v3.conf` і тим, з чим працює supervisord: у `[program:smc-ticks]`
-`autostart=true` → `autostart=false` (розслідування sidecar/FXCM 07.09, коміт `0ff63081`; `tick_publisher_fxcm`
-DEPRECATED, тіки йдуть через `broker_sidecar._TickRelay`). Тоді навмисно зроблено `reread` без `update`, щоб не
-перезапускати графік. Сама по собі ця різниця нічого не робить: supervisord автозапускає лише процес, який ще не
-стартував у поточному житті supervisord (`process.py:650`, `STOPPED and not self.laststart`), а `smc-ticks`
-стартував і зупинений 07.09 18:25. Після перезавантаження VPS файл читається заново, і `smc-ticks` не стартує —
-так і задумано.
+**Застосовано 17.10.2026 17:27 UTC (changelog 20261017-001): `reread` → `No config updates to processes`.** До того з
+07.09 висіло `smc: changed` — свідомо незастосована зміна. Єдина різниця між `/etc/supervisor/conf.d/smc-v3.conf` і тим,
+з чим працював supervisord: у `[program:smc-ticks]` `autostart=true` → `autostart=false` (розслідування sidecar/FXCM
+07.09, коміт `0ff63081`; `tick_publisher_fxcm` DEPRECATED, тіки йдуть через `broker_sidecar._TickRelay`). Тоді
+навмисно зроблено `reread` без `update`, щоб не перезапускати графік. Така різниця сама нічого не робить: supervisord
+автозапускає лише процес, який ще не стартував у поточному житті supervisord (`process.py:650`,
+`STOPPED and not self.laststart`). Застосовано за «го» власника в суботу після settle: `update smc` зупинив і запустив
+`smc-ws`, `smc-fxcm`, `smc-preview` за 3 с, `smc-ticks` і `smc-binance*` лишились `Not started`, решта програм хоста —
+ті самі PID.
 
-Як довести, що завантажене = бекап до зміни (повторити перед застосуванням):
+Якщо `changed` з'явиться знову — той самий метод: довести, що саме відрізняється від завантаженого (так це зроблено
+16.10):
 
 | Перевірка | Команда | Очікуване |
 | --- | --- | --- |
-| Що змінено у файлі | `sudo diff /root/smc-v3.conf.bak.20260907-183105 /etc/supervisor/conf.d/smc-v3.conf` | лише рядок `autostart` у `[program:smc-ticks]` |
-| Коли групу востаннє перевстановлено | `sudo grep -E "(stopped\|spawned).*smc-(ws\|fxcm\|preview\|ticks)" /var/log/supervisor/supervisord.log` | 06.09 09:55:06–07: усі члени групи зупинені й запущені в ту саму секунду, через 1 с після запису файла; пізніше — лише поодинокі рестарти (вони конфіг не перечитують) |
+| Що змінено у файлі | `sudo diff /root/smc-v3.conf.bak.<останній перед зміною> /etc/supervisor/conf.d/smc-v3.conf` | лише зміна, яку збираєшся застосувати (16.10: рядок `autostart` у `[program:smc-ticks]` проти бекапу `20260907-183105`) |
+| Коли групу востаннє перевстановлено | `sudo grep -E "(stopped\|spawned).*smc-(ws\|fxcm\|preview\|ticks)" /var/log/supervisor/supervisord.log` | `update` = зупинка всіх членів групи за кілька секунд і їх одночасні старти; поодинокі рестарти конфіг не перечитують (16.10: останнє — 06.09 09:55:06, через 1 с після запису файла) |
 | Оточення живих процесів = файл | `sudo cat /proc/$(sudo supervisorctl pid smc:smc-ws)/environ \| tr '\0' '\n'` (так само `smc-fxcm`, `smc-preview`; паролі не друкувати — порівнювати `sha256sum`) | `HOME`, `PATH`, `AI_ONE_REDIS_*` — як у файлі |
 
 `supervisorctl avail` тут не допомагає: після `reread` він показує значення **з файла** (`smc:smc-ticks … manual`),
-а не завантажені.
+а не завантажені. Фільтр журналу за часом (`awk '$0 >= "<дата час>"'`) пропускає рядки traceback без дати з будь-якого
+часу — дату такого traceback дивись за номером рядка (`grep -n`).
 
-**Застосувати** (лише за «го» власника; ринок закритий і settle не біжить — напр. субота після 09:10 UTC):
+**Застосувати зміну групи `smc`** (лише за «го» власника; ринок закритий і settle не біжить — напр. субота після 09:10 UTC):
 
-1. `sudo supervisorctl reread` → лише `smc: changed`; diff з таблиці вище → лише рядок `autostart`.
+1. `sudo supervisorctl reread` → лише `smc: changed`; diff з таблиці вище → лише очікувана зміна.
 2. `pgrep -af settle_daily` → порожньо (settle сам зупиняє і стартує записувачів; `update` посеред нього підніме їх
    до кінця заміни M1).
 3. `sudo supervisorctl update smc` → `smc: stopped`, `smc: updated process group`.
 4. Спостереження 120 с (D9.1): `sudo supervisorctl status` — `smc-ws`, `smc-fxcm`, `smc-preview` RUNNING; `smc-ticks`,
-   `smc-binance*` STOPPED `Not started`; `tail -n 50 /var/log/smc-v3/{ws_server,fxcm,preview}.stderr.log` без ERROR;
+   `smc-binance*` STOPPED `Not started`; без ERROR у `/var/log/smc-v3/{ws_server,fxcm,preview}.stderr.log` **і** в
+   `broker_sidecar.err.log`, `m1_ingestion_worker.err.log` (`fxcm.stderr.log` має лише шапку app.main — дочірні процеси
+   пишуть у свої файли): `BROKER_SIDECAR_FXCM_CONNECTED`, `M1_POLLER_FXCM_SESSION connected=True`, `PRIME_READY_SET`;
    сайт 200; повторний `reread` → `No config updates to processes`.
 
 Якщо програма не піднялась — `sudo supervisorctl start smc:<програма>` у порядку проду: fxcm → `M1_POLLER_REDIS_PRIME`
-→ preview + ws. Повертати файл не треба: зміна стосується лише вже зупиненого процесу.
+→ preview + ws. 17.10: стоп 3 с (fxcm виходить через ланцюг SIGTERM), `PRIME_READY_SET` через 30 с після старту.
 
-**Не «лікувати» `changed` поверненням файла.** `autostart=true` прибере `changed`, але після перезавантаження VPS
-знову запустить другого FXCM-видавця тіків (дублі в `price_tik`, busy спільного `History/`, розслідування 07.09).
+**Не «лікувати» `changed` поверненням файла до завантаженого стану**, не розібравшись: при перезавантаженні VPS файл
+однаково прочитається заново. 07.09: повернення `autostart=true` знову запустило б другого FXCM-видавця тіків (дублі в
+`price_tik`, busy спільного `History/`).
 
 **Не копіювати `tools/smc-v3.supervisor.conf` поверх `/etc`.** Файл у репо без `AI_ONE_REDIS_*`: креденшели Redis живуть
 лише в `/etc` (ADR-0091 P2). Після копії і `update smc` усі три процеси отримають `NOAUTH`. Зміни в `/etc` — точково, з
@@ -559,4 +565,4 @@ DEPRECATED, тіки йдуть через `broker_sidecar._TickRelay`). Тод�
 | Додавати `prefer_redis`/`force_disk` в UI код | Порушення I1 (UDS = вузька талія, Тема D, D6) | Сервер обирає джерело |
 | Міняти `config.json` під час роботи | Частково підтримується (mtime cache), але m1_poller потребує рестарту | Зупинити → змінити → запустити |
 | Ігнорувати DST перехід | H4/D1 бари з garbage alignment | [DST runbook](dst_transition.md) |
-| `sudo supervisorctl update` без імені | Застосовує всі незастосовані зміни хоста; з 07.09 висить `smc: changed` → перезапуск усього графіка | `update <програма>`; група `smc` — за [розділом](#supervisor-на-vps-застосування-конфігу) |
+| `sudo supervisorctl update` без імені | Застосовує всі незастосовані зміни хоста, і чужі теж; для групи `smc` — перезапуск усього графіка (07.09–17.10 так висіло `smc: changed`) | `update <програма>`; група `smc` — за [розділом](#supervisor-на-vps-застосування-конфігу) |
