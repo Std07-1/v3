@@ -527,3 +527,7 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
   `pre-alerts-push-20261018` (= `4e4d2a5`), ff `4e4d2a5..91eb70c`, дерево чисте; `enabled` false; новий код alerts
   імпортується; процеси не перезапускались (smc-ws, smc-alerts — ті самі PID), ERROR нема, сайт 200. UI-збірка
   (`ui_v4/dist`) не мінялась — крок 6.
+- 2026-10-18 — **S13 прод, крок 3** (власник: «Го на крок 3»): `sudo .venv/bin/python -B -m runtime.alerts.vapid_keys`
+  (`-B` — root не лишає `.pyc` у репо) → `/etc/smc-v3` 750 root:smc, `alerts.env` 640 root:smc, один рядок
+  `ALERTS_VAPID_PRIVATE_KEY`; приватний ключ не друкувався. Під `smc` ключ читається, публічний із нього = надрукований
+  (`BAb7AQvo…`); файлів root у репо 0, дерево чисте; `smc-alerts` не перезапускався (`enabled:false`).
