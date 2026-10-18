@@ -27,7 +27,7 @@ from core.config_loader import env_str, load_system_config, resolve_config_path
 from env_profile import load_env_secrets
 from runtime.alerts.app import ApiSettings, build_app
 from runtime.alerts.config import AlertsConfig
-from runtime.alerts.devices import DEVICES_FILE, DeviceRegistry
+from runtime.alerts.devices import DEVICES_FILE, DeviceRegistry, WebLimits
 from runtime.alerts.engine import AlertEngine
 from runtime.alerts.feeds import (
     parse_tick,
@@ -81,6 +81,7 @@ def build_service(cfg: Mapping[str, Any], config_path: str, settings: AlertsConf
         state_dir / DEVICES_FILE,
         confirm_attempts=settings.pair_confirm_attempts,
         max_pending=settings.pair_max_pending,
+        web_limits=WebLimits(settings.max_devices, settings.devices_per_ip_per_hour),
     )
     engine = AlertEngine(store, gap_after_ms=settings.gap_after_s * 1000, clock_ms=_now_ms)
     for problem in store.problems:

@@ -20,6 +20,8 @@ class AlertsConfig:
     display_tz: str
     telegram_api: str
     max_active_per_subscriber: int
+    max_devices: int
+    devices_per_ip_per_hour: int
     pair_code_ttl_s: int
     pair_confirm_attempts: int
     pair_max_pending: int

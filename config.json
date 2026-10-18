@@ -445,6 +445,8 @@
     "display_tz": "Europe/Prague",
     "telegram_api": "https://api.telegram.org",
     "max_active_per_subscriber": 50,
+    "max_devices": 5000,
+    "devices_per_ip_per_hour": 10,
     "pair_code_ttl_s": 600,
     "pair_confirm_attempts": 5,
     "pair_max_pending": 100,
