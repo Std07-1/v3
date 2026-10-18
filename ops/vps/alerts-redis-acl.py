@@ -7,9 +7,10 @@
 
 Redis проду з 06.09.2026 під ACL (`default off`), сервіси беруть креденшели з `environment` своєї supervisor-програми
 (`AI_ONE_REDIS_USERNAME`/`AI_ONE_REDIS_PASSWORD`). smc-alerts відкритий в інтернет (POST /api/alerts/*), тому не
-отримує `smc_platform`: лише GET/TTL/LRANGE ключів `v3_local:*` (tick:last, UDS-читач M1) і SUBSCRIBE на канал тіків.
-Без PUBLISH (підробка тіків для графіка), без запису, без KEYS/SCAN, без адмін-команд. Redis 6.0: `&<channel>` не
-підтримується — канали ACL не звузити (ADR-0091 P2).
+отримує `smc_platform`: лише перелічені команди — GET/TTL/LRANGE ключів `v3_local:*` (tick:last, UDS-читач M1 і
+шина оновлень; запис шини — лише в ролі writer), SELECT, PING і підписка на канал тіків. Не категорія `+@read`: вона
+відкрила б RANDOMKEY/DBSIZE/DUMP. Без PUBLISH (підробка тіків для графіка), без запису, без адмін-команд. Redis 6.0:
+`&<channel>` не підтримується — канали ACL не звузити (ADR-0091 P2).
 
 Пароль генерується тут, не йде в argv і не друкується: `/root/redis-acl-alerts-<ts>.txt` (600) і `environment` у
 `/etc/supervisor/conf.d/alerts.conf` (600 root, як інші конфіги з паролями). Перед змінами — бекапи `redis.conf` і
@@ -34,9 +35,9 @@ USER = "smc_alerts"
 SUPERVISOR_CONF = "/etc/supervisor/conf.d/alerts.conf"
 REDIS_CONF = "/etc/redis/redis.conf"
 ADMIN_SECRETS_GLOB = "/root/redis-acl-*.txt"
-# Новий користувач стартує без прав — правила лише додають дозволене.
+# Новий користувач стартує без прав — правила лише додають дозволене (команди, які шле процес; нова — NOPERM у check).
 ACL_RULES: List[str] = [
-    "on", "~v3_local:*", "+@read", "-@dangerous", "-keys", "-scan", "+select", "+ping",
+    "on", "~v3_local:*", "+get", "+ttl", "+lrange", "+select", "+ping",
     "+subscribe", "+unsubscribe", "+psubscribe", "+punsubscribe",
 ]
 # redis-py на кожному з'єднанні шле CLIENT SETINFO і сам ігнорує відмову; CLIENT (@admin) не даємо нікому з сервісів.
@@ -70,10 +71,15 @@ def _probe_rules(password: str) -> None:
     probe = redis.Redis(host="127.0.0.1", port=6379, db=1, username=USER, password=password)
     try:
         tick = probe.get("v3_local:tick:last:XAU_USD")
-        print(f"  PING={probe.ping()}, GET tick:last — {'є' if tick else 'нема ключа'}")
+        probe.ttl("v3_local:tick:last:XAU_USD")
+        probe.lrange("v3_local:acl_probe_smc_alerts", 0, 0)
+        print(f"  PING={probe.ping()}, GET/TTL/LRANGE — ок, tick:last {'є' if tick else 'нема ключа'}")
+        _expect_denied("GET поза v3_local:*", lambda: probe.get("acl_probe_outside_namespace"))
         _expect_denied("SET v3_local:*", lambda: probe.set("v3_local:acl_probe_smc_alerts", "1"))
         _expect_denied("PUBLISH", lambda: probe.publish("acl_probe_channel", "x"))
         _expect_denied("KEYS", lambda: probe.keys("v3_local:*"))
+        _expect_denied("RANDOMKEY", lambda: probe.randomkey())
+        _expect_denied("DBSIZE", lambda: probe.dbsize())
         _expect_denied("FLUSHDB", lambda: probe.flushdb())
     finally:
         probe.close()
