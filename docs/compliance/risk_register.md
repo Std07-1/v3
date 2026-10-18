@@ -38,7 +38,8 @@ written agreement with FXCM потрібен окремо.
 | numpy | 1.21.6 | BSD-3-Clause | Ні | ✅ Сумісна | [ASSUMED — verify: `pip audit`] | Так (released 2022, series 1.21 no longer maintained) |
 | pandas | 1.1.5 | BSD-3-Clause | Ні | ✅ Сумісна | [ASSUMED — verify: `pip audit`] | Так (released 2020, series 1.x deprecated) |
 | python-dotenv | ≥0.21 | BSD-3-Clause | Ні | ✅ Сумісна | [ASSUMED — verify: `pip audit`] | Ні |
-| aiohttp | ≥3.8 | Apache-2.0 | Ні | ✅ Сумісна (потрібен attribution) | [ASSUMED — verify: `pip audit`] | Ні |
+| aiohttp | ==3.14.3 (до 18.10.2026 — `>=3.9,<4.0`; прод і локальний `.venv` — 3.13.3) | Apache-2.0 | Ні | ✅ Сумісна (потрібен attribution) | [VERIFIED terminal 18.10.2026: `pip-audit` — 3.13.3: 24 бюлетені, 3.14.3: 0; розбір нижче] | Ні |
+| requests (транзитивна, python-binance) | ≥2.33.0,<3.0 (прод 2.33.0, локальний `.venv` 2.32.5) | Apache-2.0 | Ні | ✅ Сумісна | [VERIFIED terminal 18.10.2026: PYSEC-2026-2275 закрито в 2.33.0; наш шлях не зачеплений] | Ні |
 | forexconnect | 1.6.43 | **Proprietary/EULA** | N/A | ⚠️ Optional, не вендориться | N/A (proprietary) | [ASSUMED — verify: FXCM site] |
 
 **Copyleft contamination**: ❌ Не виявлено. Жодна Python залежність не має GPL/LGPL/AGPL ліцензії.
@@ -60,6 +61,53 @@ written agreement with FXCM потрібен окремо.
 **Copyleft contamination**: ❌ Не виявлено.
 
 **Lock file**: ✅ `ui_v4/package-lock.json` існує.
+
+#### Бюлетені aiohttp і requests — розбір 18.10.2026
+
+Набір пакетів — точна копія `pip freeze` прод-venv `/opt/smc-v3/.venv` (Python 3.11.15, aiohttp 3.13.3 з C-парсером,
+requests 2.33.0); аудит — `pip-audit -r <freeze> --no-deps`. Усі aiohttp-сервери слухають лише 127.0.0.1
+(`:8000` ws_server, `:8010` agent_bridge, `:8020` smc-alerts), ззовні їх видно тільки через nginx (`client_max_body_size 1m`,
+статику віддає сам nginx). `Upgrade` до upstream передає лише `location /ws` (ws_server). Зонди [VERIFIED зонд] — сирий
+сокет проти справжнього `build_app()` ws_server (3546) або мінімального aiohttp-застосунку з тими самими налаштуваннями
+(2108, 2111); 3.13.3 — з локального `.venv` (Python 3.14), 3.14.3 — з окремого venv на Python 3.11, як на проді.
+
+| Бюлетень (виправлено в) | Суть | Чи зачіпає нас |
+|---|---|---|
+| PYSEC-2026-2108 (3.14.1) | Недокінчені великі WS-фрейми обходять ліміт розміру | **Так, DoS** [VERIFIED зонд]: `/ws` публічний, після 101 nginx лише тунелює байти. При `max_msg_size=65536` (як у ws_server) недокінчений фрейм на 64 МБ: 3.13.3 тримає в пам'яті всі надіслані 24 МБ і не рве з'єднання; 3.14.3 рве на ~0,2 МБ (пік 0,5 МБ) |
+| PYSEC-2026-2111 (3.14.1) | Стиснене тіло запиту при прибиранні розпаковується одним шматком | **Так, помірний DoS** [VERIFIED зонд]: nginx пропускає тіло ≤1 МБ і `Content-Encoding` як є, а маршрути `:8000` тіло не читають. GET із deflate-тілом 255 КБ: пік алокацій 3.13.3 — 64 МБ на запит, 3.14.3 — 2,4 МБ |
+| PYSEC-2026-3546 (3.14.2) | Request smuggling через відхилений WS upgrade (тіло не дочитується) | **Низький** [VERIFIED зонд]: ws_handler відхиляє upgrade до рукостискання (503 `ws_capacity*`, 400 на кривому рукостисканні). На 3.13.3 тіло з вкладеним GET не виконалося — решта з'єднання просто «ковтається» (і C-, і Python-парсер); nginx не тримає keepalive до upstream, тож чужі запити на це з'єднання не потрапляють. На 3.14.3 тіло читається як тіло, наступний запит обслуговується |
+| PYSEC-2026-2107 (3.14.1) | Необмежена черга конвеєрних запитів | Низький: nginx не конвеєризує до upstream |
+| PYSEC-2026-2094, -2103 (3.13.4), -2110 (3.14.1) | Заголовки/трейлери без ліміту, кілька `Host`, обхід `max_line_size` у C-парсері | Пом'якшено nginx (ліміти буферів, `Host $host`, буферизація тіла); напряму — лише локальні процеси |
+| PYSEC-2026-2113 (3.14.1) | Payload не закривається при обриві клієнта | Ні: файли віддає nginx, `add_static` ws_server ззовні не досяжний |
+| PYSEC-2026-2097, -2098, -2099 (3.13.4) | Static на Windows (NTLM), multipart | Ні: прод — Linux, multipart не парсимо |
+| PYSEC-2026-2096, -2101 (3.13.4), -2106 (3.14.0) | Ін'єкція заголовків через `content_type` / `reason` / multipart | Ні: значення з констант коду |
+| PYSEC-2026-3545 (3.14.3) | OOB-read у C-парсері відповіді на кривому chunked | Низький: клієнт ходить лише на api.telegram.org (smc-alerts) і Cloudflare Worker (`runtime/relay`) по TLS; DoS лише від зловмисного сервера |
+| PYSEC-2026-3547 (3.14.2) | WS-клієнт розпаковує фрейми без узгодженого deflate | Ні: WS-клієнт лише в `tools/diag/*` до власного `127.0.0.1:8000` |
+| PYSEC-2026-2095, -2100, -2102 (3.13.4), -2104, -2105 (3.14.0), -2109, -2112, -237 (3.14.1) | DNS-кеш, редиректи/cookies/digest/SNI, `CookieJar.save/load`, керівні символи в заголовках відповіді | Ні: ці можливості клієнта не використовуємо, хости фіксовані |
+| requests PYSEC-2026-2275 (2.33.0) | `extract_zipped_paths()` бере передбачуване ім'я в tmp | Ні: розпаковує лише шлях усередині zip, а certifi у venv — звичайний файл (рання гілка `os.path.exists` у `requests/utils.py`); Binance вимкнено (`config.json:binance.enabled=false`, `smc-binance*` STOPPED). Прод уже 2.33.0 |
+
+**Чому точний пін aiohttp.** Діапазон `>=3.9,<4.0` пропускав вразливі версії: прод і локальний `.venv` стояли на 3.13.3,
+а CI щоразу ставить найновішу (18.10.2026 — 3.14.5). Тобто CI перевіряв не ту бібліотеку, що працює на проді. 3.14.3 —
+найновіша версія, якій на 18.10.2026 вже ≥2 тижні (на PyPI 3.14.4 — з 05.10, 3.14.5 — з 11.10). Наступне підняття — через
+dependabot або вручну, з прогоном pytest і exit gates.
+
+**Ризики переходу 3.13.3 → 3.14.3 для ws_server** (за CHANGES.rst aiohttp): серверний парсер відкладає upgrade до
+кінця тіла запиту; суворіші перевірки WS-парсера; heartbeat-таймер скидається на будь-які вхідні дані; інакше обробляються
+керівні фрейми посеред фрагментованого повідомлення; стиснення payload за замовчуванням — у виконавці (`zlib_executor_size`); вихідні
+заголовки з керівними символами тепер `ValueError`; `request.host` без `Host` більше не робить `getfqdn`; ліміт черги
+конвеєрних запитів. Транзитивні залежності прод-venv (multidict 6.7.1, yarl 1.23.0, propcache 0.4.1, aiosignal 1.4.0,
+aiohappyeyeballs 2.6.1, frozenlist 1.8.0) вимогам 3.14.3 відповідають — оновлюється один пакет. Нове в логах:
+`NotAppKeyWarning` на рядкові ключі `request["api_consumer"]` (`runtime/api_v3/endpoints.py:181-182`) — один раз на процес.
+
+**Перевірка 18.10.2026** (окремий venv, Python 3.11, решта пакетів — як на проді): pytest — 2685 passed / 20 skipped
+і на 3.13.3, і на 3.14.3 (+ requests 2.34.2); вердикти exit gates однакові (червоні ті самі: ingest_no_direct_writers,
+preview_plane, ui_live_candle_plane, coldstart_multisymbol, no_bare_except=38, а також config_singleton через
+відсутній `ui_v4/dist` у worktree). Рейка — `tests/test_ws_server.py::test_ws_incomplete_frame_over_max_msg_size_drops_connection`:
+червона на 3.13.3, зелена на 3.14.3.
+
+**Поза цим патчем** (той самий аудит прод-набору): multidict 6.7.1 — PYSEC-2026-4244 (→6.9.1); starlette 1.0.0 — 5 бюлетенів
+(→1.3.1; FastAPI-сайдкар ADR-0058 на проді не запущений); urllib3 2.6.3 — 5 (→2.8.0; лише через requests); anyio 4.13.0 —
+2 (→4.14.2); idna 3.11 — 1 (→3.15). На проді python-dotenv 0.21.1 при вимозі `>=1.0,<2.0` — дрейф venv від requirements.
 
 ### 1.2 Власна ліцензія
 

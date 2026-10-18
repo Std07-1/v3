@@ -3,8 +3,13 @@ redis==5.0.1
 numpy>=1.26
 pandas>=2.1
 python-dotenv>=1.0,<2.0
-aiohttp>=3.9,<4.0
+# aiohttp — точний пін, бо це сервер ws_server, smc-alerts і agent_bridge. 3.14.3 закриває PYSEC-2026-3545/3546/3547;
+# 3.14.4+ станом на 18.10.2026 вийшли менш як 2 тижні тому. Нова версія — лише після pytest + exit gates
+# (docs/compliance/risk_register.md §1.1).
+aiohttp==3.14.3
 python-binance>=1.0.36
+# requests — транзитивна (python-binance); нижня межа закриває PYSEC-2026-2275.
+requests>=2.33.0,<3.0
 
 # Public read-only API sidecar (ADR-0058, slice 058.1)
 fastapi>=0.110,<1.0

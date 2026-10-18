@@ -9,9 +9,12 @@ pytest tests/test_ws_server.py -v
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import pytest
 import asyncio
+import struct
 import time
 from aiohttp import WSMsgType
 from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
@@ -418,6 +421,38 @@ async def test_ws_max_clients_per_ip_rejects(aiohttp_client, ws_app_mock_uds):
         await client.ws_connect("/ws")
     assert exc_info.value.status == 503
     await ws1.close()
+
+
+_DECLARED_FRAME_BYTES = 64 * 1024 * 1024  # у 1024 рази більше за _MAX_WS_MSG_BYTES (64 КБ)
+_PAYLOAD_SENT_CAP_BYTES = 8 * 1024 * 1024
+_PAYLOAD_CHUNK_BYTES = 256 * 1024
+
+
+async def test_ws_incomplete_frame_over_max_msg_size_drops_connection(aiohttp_client, ws_app_mock_uds):
+    """SEC-06: недокінчений фрейм понад max_msg_size — сервер рве з'єднання, а не буферизує payload.
+
+    PYSEC-2026-2108: aiohttp 3.13.3 тримав у пам'яті весь надісланий payload і не закривав з'єднання;
+    рейку тримає пін aiohttp==3.14.3 (docs/compliance/risk_register.md §1.1). Сирий сокет — бо клієнт
+    aiohttp не вміє слати фрейм, довший за те, що реально передано.
+    """
+    client = await aiohttp_client(ws_app_mock_uds)
+    reader, writer = await asyncio.open_connection(client.server.host, client.server.port)
+    key = base64.b64encode(os.urandom(16))
+    writer.write(
+        b"GET /ws HTTP/1.1\r\nHost: test\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"
+        b"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: " + key + b"\r\n\r\n"
+    )
+    await writer.drain()
+    assert (await reader.readuntil(b"\r\n\r\n")).startswith(b"HTTP/1.1 101")
+    # FIN + BINARY, MASK + 64-бітна довжина, нульова маска.
+    writer.write(bytes([0x82, 0x80 | 127]) + struct.pack("!Q", _DECLARED_FRAME_BYTES) + b"\x00" * 4)
+    sent_bytes = 0
+    with pytest.raises(ConnectionError):
+        while sent_bytes < _PAYLOAD_SENT_CAP_BYTES:
+            writer.write(b"\x00" * _PAYLOAD_CHUNK_BYTES)
+            await asyncio.wait_for(writer.drain(), 5)
+            sent_bytes += _PAYLOAD_CHUNK_BYTES
+    writer.close()
 
 
 # ── ADR-0105 S1: журнал візитів ─────────────────────────
