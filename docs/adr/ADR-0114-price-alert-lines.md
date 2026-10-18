@@ -531,3 +531,12 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
   (`-B` — root не лишає `.pyc` у репо) → `/etc/smc-v3` 750 root:smc, `alerts.env` 640 root:smc, один рядок
   `ALERTS_VAPID_PRIVATE_KEY`; приватний ключ не друкувався. Під `smc` ключ читається, публічний із нього = надрукований
   (`BAb7AQvo…`); файлів root у репо 0, дерево чисте; `smc-alerts` не перезапускався (`enabled:false`).
+- 2026-10-18 — **S13 прод, крок 4** (власник: «Го на крок 4»): `alerts.enabled=true` — main `0344a558` (CI зелений),
+  VPS ff, `supervisorctl restart smc-alerts`, 120 с: RUNNING, `ALERTS_READY channel=push symbols=8`, `push/key` = ключ
+  кроку 3, приватного ключа в лозі 0, RSS 58 МБ, графік не чіпали. **Знахідка (корінь, VERIFIED):**
+  `ALERTS_DEGRADED flag=ticks_unavailable detail=AuthenticationError` — Redis проду з 06.09 під ACL (ADR-0091 P2),
+  креденшели — з `environment` supervisor-програми (`AI_ONE_REDIS_USERNAME`/`AI_ONE_REDIS_PASSWORD`), а в
+  `/etc/supervisor/conf.d/alerts.conf` (і в `tools/alerts.supervisor.conf`) їх нема. Rev 1 жив лише з
+  `enabled:false` (без Redis) — прогалина ранбука з S6. Без тіків лінії не взводяться і не спрацьовують; health чесно
+  `degraded: ["ticks_unavailable"]`; інтерфейсу ще нема — відвідувачі не зачеплені. Рішення про ACL-користувача — за
+  власником.
