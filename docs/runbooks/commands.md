@@ -277,8 +277,14 @@ sudo certbot renew --dry-run
 
 ### Supervisor конфіг (якщо потрібно оновити)
 
-```powershell
-# З локальної машини:
-scp tools/smc-v3.supervisor.conf aione-vps:/etc/supervisor/conf.d/smc-v3.conf
-ssh aione-vps "sudo supervisorctl reread; sudo supervisorctl update"
+Не копіювати `tools/smc-v3.supervisor.conf` поверх `/etc`: у репо немає креденшелів Redis (`AI_ONE_REDIS_*` живуть
+лише в `/etc`, ADR-0091 P2) — після застосування процеси отримають `NOAUTH`. Правити `/etc` точково з бекапом,
+застосовувати лише з іменем програми або групи; `update smc` перезапускає весь графік — за
+[production.md «Supervisor на VPS»](production.md#supervisor-на-vps-застосування-конфігу).
+
+```bash
+ssh aione-vps "sudo cp /etc/supervisor/conf.d/smc-v3.conf /root/smc-v3.conf.bak.\$(date -u +%Y%m%d-%H%M%S)"
+# ... точкова правка /etc/supervisor/conf.d/smc-v3.conf (та сама зміна — комітом у tools/smc-v3.supervisor.conf)
+ssh aione-vps "sudo supervisorctl reread"   # має показати лише ту групу, яку ти міняв
+ssh aione-vps "sudo supervisorctl update smc"   # лише за «го», у вікні; без імені — НІКОЛИ
 ```
