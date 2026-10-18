@@ -1821,6 +1821,9 @@
         }
         .mc-val {
             font-size: var(--t3a-size);
+            /* шторка сталої ширини: текст переноситься, а не зрізається краєм (nowrap рядка HUD успадковується) */
+            white-space: normal;
+            overflow-wrap: anywhere;
         }
         .shell-mc.briefing-open {
             width: 100%;
