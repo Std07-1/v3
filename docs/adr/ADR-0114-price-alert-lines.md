@@ -552,3 +552,10 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
   (CLIENT SETINFO redis-py, як у всіх сервісів). Шлях читання M1/`tick:last` ще не викликався (0 ліній, ринок закрито)
   — перевірити `check` після першого взведення. Знахідка самого `check`: рахував відмови власної перевірки `create` —
   тепер лише після старту процесу (`/proc/<pid>/stat`).
+- 2026-10-18 — **S13 прод, крок 5** (власник: «Го на крок 5»): main `ef654e13` (лише docs/ops; CI python-tests — двічі
+  поспіль флейк `test_ws_delta_cursor_race`, локально 11/11 за 1 с — не від цієї зміни), VPS ff без рестартів. Зовні
+  через сайт (Cloudflare → nginx → smc-alerts): health `{"enabled": true, "channel": "push", "degraded": []}`,
+  `push/key` = ключ кроку 3; тимчасовий пристрій (фіктивна підписка FCM) → лінія XAU/USD 1000 → `armed`, `side: above`
+  (ціна для боку прочитана під ACL `smc_alerts`) → «Вимкнути на цьому пристрої»: `removed_alerts: 1`, далі 401. ACL
+  LOG після старту — лише `client` (CLIENT SETINFO нових з'єднань, у т. ч. UDS-читача); ERROR 0; стан після — 0
+  пристроїв, 0 ліній, черга порожня.
