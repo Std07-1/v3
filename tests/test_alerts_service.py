@@ -27,6 +27,13 @@ SECTION = {
     "site_url": "https://aione-smc.com",
     "display_tz": "Europe/Prague",
     "telegram_api": "https://api.telegram.org",
+    "telegram_enabled": False,
+    "vapid_subject": "https://aione-smc.com",
+    "push_ttl_s": 21600,
+    "push_timeout_s": 10,
+    "push_host_suffixes": ["fcm.googleapis.com", "push.services.mozilla.com", "push.apple.com", "notify.windows.com"],
+    "device_idle_days": 90,
+    "device_prune_s": 3600,
     "max_active_per_subscriber": 50,
     "max_devices": 5000,
     "devices_per_ip_per_hour": 10,
@@ -68,6 +75,13 @@ def test_config_section_parses_and_ignores_comment():
         ({"site_url": "https://aione-smc.com/"}, "site_url"),
         ({"site_url": "http://aione-smc.com"}, "site_url"),
         ({"enabled": "true"}, "enabled"),
+        ({"telegram_enabled": 0}, "telegram_enabled"),
+        ({"vapid_subject": "aione-smc.com"}, "vapid_subject"),
+        ({"push_host_suffixes": []}, "push_host_suffixes"),
+        ({"push_host_suffixes": ["https://fcm.googleapis.com"]}, "push_host_suffixes"),
+        ({"push_host_suffixes": ["FCM.googleapis.com"]}, "push_host_suffixes"),
+        ({"push_host_suffixes": "fcm.googleapis.com"}, "push_host_suffixes"),
+        ({"device_idle_days": 0}, "device_idle_days"),
     ],
 )
 def test_config_rejects_missing_unknown_or_mistyped_keys(patch, reason):
@@ -89,15 +103,30 @@ def test_secrets_required_and_owner_chat_numeric(monkeypatch, tmp_path):
     monkeypatch.delenv("ALERTS_TELEGRAM_TOKEN", raising=False)
     monkeypatch.delenv("ALERTS_OWNER_CHAT_ID", raising=False)
     with pytest.raises(SystemExit, match="ALERTS_SECRETS_MISSING"):
-        service._read_secrets(str(tmp_path / "nope.env"))
+        service._read_telegram_secrets(str(tmp_path / "nope.env"))
     monkeypatch.setenv("ALERTS_TELEGRAM_TOKEN", "1:x")
     monkeypatch.setenv("ALERTS_OWNER_CHAT_ID", "@owner")
     with pytest.raises(SystemExit, match="ALERTS_SECRETS_MISSING"):
-        service._read_secrets(str(tmp_path / "nope.env"))
+        service._read_telegram_secrets(str(tmp_path / "nope.env"))
     env = tmp_path / "alerts.env"
     env.write_text("ALERTS_OWNER_CHAT_ID=-1001\n", encoding="utf-8")
     monkeypatch.delenv("ALERTS_OWNER_CHAT_ID")
-    assert service._read_secrets(str(env)) == ("1:x", -1001)
+    assert service._read_telegram_secrets(str(env)) == ("1:x", -1001)
+
+
+def test_vapid_key_required_valid_and_gives_public_key(monkeypatch, tmp_path):
+    from runtime.alerts.vapid_keys import generate_private_key
+    from runtime.alerts.webpush import application_server_key, load_vapid
+
+    monkeypatch.delenv("ALERTS_VAPID_PRIVATE_KEY", raising=False)
+    with pytest.raises(SystemExit, match="ALERTS_SECRETS_MISSING.*vapid_keys"):
+        service._read_vapid_key(str(tmp_path / "nope.env"))
+    monkeypatch.setenv("ALERTS_VAPID_PRIVATE_KEY", "not-a-key")
+    with pytest.raises(SystemExit, match="ALERTS_SECRETS_INVALID"):
+        service._read_vapid_key(str(tmp_path / "nope.env"))
+    key = generate_private_key()
+    monkeypatch.setenv("ALERTS_VAPID_PRIVATE_KEY", key)
+    assert service._read_vapid_key(str(tmp_path / "nope.env")) == (key, application_server_key(load_vapid(key)))
 
 
 def _cfg(state_dir) -> dict:

@@ -436,7 +436,7 @@
     "display_tz": "Europe/Prague"
   },
   "alerts": {
-    "_comment": "ADR-0114: лінія-сповіщення — окремий процес smc-alerts (python -m runtime.alerts, 127.0.0.1:port, nginx /api/alerts/). Стан — state_dir (alerts.json, devices.json; smc 750); секрети ALERTS_TELEGRAM_TOKEN і ALERTS_OWNER_CHAT_ID — лише env_file (root:smc 640, ops/vps/alerts-secrets.sh). Усі ключі обов'язкові (runtime/alerts/config.py): невідомий чи відсутній — процес не стартує. enabled=false — процес живий лише з health {enabled:false}. Значення — ADR-0114 §4.7.",
+    "_comment": "ADR-0114: лінія-сповіщення — окремий процес smc-alerts (python -m runtime.alerts, 127.0.0.1:port, nginx /api/alerts/). Стан — state_dir (alerts.json, devices.json; smc 750). Канал — рівно один: telegram_enabled=false — пуш у браузер (Rev 2), секрет ALERTS_VAPID_PRIVATE_KEY (sudo .venv/bin/python -m runtime.alerts.vapid_keys); true — бот Telegram (Rev 1), ALERTS_TELEGRAM_TOKEN і ALERTS_OWNER_CHAT_ID. Секрети — лише env_file (root:smc 640). Усі ключі обов'язкові (runtime/alerts/config.py): невідомий чи відсутній — процес не стартує. enabled=false — процес живий лише з health {enabled:false}. Значення — ADR-0114 §4.7.",
     "enabled": false,
     "port": 8020,
     "state_dir": "/var/lib/smc-v3/alerts",
@@ -444,6 +444,13 @@
     "site_url": "https://aione-smc.com",
     "display_tz": "Europe/Prague",
     "telegram_api": "https://api.telegram.org",
+    "telegram_enabled": false,
+    "vapid_subject": "https://aione-smc.com",
+    "push_ttl_s": 21600,
+    "push_timeout_s": 10,
+    "push_host_suffixes": ["fcm.googleapis.com", "push.services.mozilla.com", "push.apple.com", "notify.windows.com"],
+    "device_idle_days": 90,
+    "device_prune_s": 3600,
     "max_active_per_subscriber": 50,
     "max_devices": 5000,
     "devices_per_ip_per_hour": 10,

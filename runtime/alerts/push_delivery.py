@@ -20,6 +20,7 @@ import logging
 from typing import Callable, Dict, List, Mapping, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+from core.alerts.types import AlertState
 from runtime.alerts.devices import WEB_PREFIX, Device, DeviceRegistry
 from runtime.alerts.engine import AlertEngine
 from runtime.alerts.messages import push_payload
@@ -129,3 +130,33 @@ class PushDelivery:
         while True:
             await self.deliver_once()
             await asyncio.sleep(poll_s)
+
+
+def forget_device(engine: AlertEngine, registry: DeviceRegistry, device: Device) -> int:
+    """«Вимкнути на цьому пристрої» і прибирання неактивних: сповіщення пристрою, сам пристрій (і його підписка) —
+    геть. Вже спрацьоване в черзі доставка позначить «не доставлено» (пристрою нема). → скільки сповіщень прибрано."""
+    mine = [a.alert_id for a in engine.store.alerts.values() if a.subscriber_id == device.subscriber_id]
+    for alert_id in mine:
+        engine.remove_alert(alert_id)
+    registry.revoke(device.device_id, device.subscriber_id)
+    return len(mine)
+
+
+def prune_idle_devices(engine: AlertEngine, registry: DeviceRegistry, *, now_ms: int, idle_ms: int) -> int:
+    """Web-пристрій без запитів `idle_ms` і без взведених сповіщень — забути (сторінки, що його показувала, давно
+    нема; сайт відкритий, тож реєстр не має рости вічно). Заодно last_seen — на диск. → скільки прибрано."""
+    busy = {a.subscriber_id for a in engine.store.alerts.values() if a.state is AlertState.ARMED}
+    idle = registry.idle_web_devices(now_ms=now_ms, idle_ms=idle_ms, busy=busy)
+    for device in idle:
+        dropped = forget_device(engine, registry, device)
+        _log.info("ALERTS_DEVICE_PRUNED device=%s alerts=%d label=%s", device.device_id, dropped, device.label)
+    registry.commit_if_dirty()
+    return len(idle)
+
+
+async def run_device_pruning(
+    engine: AlertEngine, registry: DeviceRegistry, *, idle_ms: int, every_s: float, clock_ms: Callable[[], int]
+) -> None:
+    while True:
+        prune_idle_devices(engine, registry, now_ms=clock_ms(), idle_ms=idle_ms)
+        await asyncio.sleep(every_s)

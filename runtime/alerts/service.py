@@ -1,7 +1,9 @@
 """Процес `smc-alerts` (ADR-0114 §4.3): `python -m runtime.alerts [--config config.json]`.
 
-Збирає стан (`alerts.json`, `devices.json`), двигун, джерела цін (PubSub тіків, фінальні M1 з UDS), доставку й
-команди бота та HTTP на 127.0.0.1:`alerts.port` (nginx `/api/alerts/` сайту). `alerts.enabled=false` — живий процес
+Збирає стан (`alerts.json`, `devices.json`), двигун, джерела цін (PubSub тіків, фінальні M1 з UDS), доставку і
+HTTP на 127.0.0.1:`alerts.port` (nginx `/api/alerts/` сайту). Канал — рівно один: `alerts.telegram_enabled=false` —
+пуш у браузер (Rev 2: ключ VAPID, доставка з чергою на пристрій, прибирання неактивних), `true` — бот Telegram (Rev 1:
+доставка і команди). `alerts.enabled=false` — живий процес
 лише з health `{"enabled": false}`, як smc-agent-bridge (ADR-0090): supervisor бачить RUNNING, а не BACKOFF.
 Неготовність на старті (нема секретів, теки стану, каналу тіків, знаків символу) — вихід з причиною, а не
 напівживий процес, що мовчки не сповіщає.
@@ -37,8 +39,10 @@ from runtime.alerts.feeds import (
     uds_last_close_reader,
 )
 from runtime.alerts.messages import require_digits
+from runtime.alerts.push_delivery import PushDelivery, run_device_pruning
 from runtime.alerts.store import STATE_FILE, AlertStore
 from runtime.alerts.telegram import CommandHandler, Delivery, TelegramClient, run_commands
+from runtime.alerts.webpush import WebPushSender, application_server_key, load_vapid
 from runtime.ingest.tick_common import pick_tick_channel, symbols_from_cfg
 from runtime.store.redis_keys import symbol_key
 from runtime.store.redis_spec import resolve_redis_spec
@@ -74,14 +78,18 @@ def build_service(cfg: Mapping[str, Any], config_path: str, settings: AlertsConf
         raise SystemExit("ALERTS_NO_TICKS: нема channels.price_tick або redis у config.json")
     if not state_dir.is_dir():
         raise SystemExit(f"ALERTS_STATE_DIR_MISSING: {state_dir} (створює ops: install -d -o smc -g smc -m 750)")
-    token, owner_chat_id = _read_secrets(settings.env_file)
+    push = not settings.telegram_enabled
+    if push:
+        vapid_key, public_key = _read_vapid_key(settings.env_file)
+    else:
+        token, owner_chat_id = _read_telegram_secrets(settings.env_file)
 
     store = AlertStore.load(state_dir / STATE_FILE, now_ms=_now_ms())
     registry = DeviceRegistry.load(
         state_dir / DEVICES_FILE,
         confirm_attempts=settings.pair_confirm_attempts,
         max_pending=settings.pair_max_pending,
-        web_limits=WebLimits(settings.max_devices, settings.devices_per_ip_per_hour),
+        web_limits=WebLimits(settings.max_devices, settings.devices_per_ip_per_hour) if push else None,
     )
     engine = AlertEngine(store, gap_after_ms=settings.gap_after_s * 1000, clock_ms=_now_ms)
     for problem in store.problems:
@@ -127,16 +135,44 @@ def build_service(cfg: Mapping[str, Any], config_path: str, settings: AlertsConf
         max_active_per_subscriber=settings.max_active_per_subscriber,
         requests_per_min=settings.requests_per_min,
         sse_heartbeat_s=settings.sse_heartbeat_s,
+        channel="push" if push else "telegram",
+        push_host_suffixes=settings.push_host_suffixes,
+        push_public_key=public_key if push else None,
     )
     app = build_app(
         engine, registry, api_settings, clock_ms=_now_ms, bot_username=bot_username, reference_price=reference_price
     )
 
-    async def start_background(_app: web.Application) -> None:
-        tz = ZoneInfo(settings.display_tz)
-        session = aiohttp.ClientSession()
+    def push_tasks(session: aiohttp.ClientSession, tz: ZoneInfo) -> List[Any]:
+        sender = WebPushSender(
+            session,
+            vapid_key,
+            settings.vapid_subject,
+            ttl_s=settings.push_ttl_s,
+            timeout_s=settings.push_timeout_s,
+            host_suffixes=settings.push_host_suffixes,
+        )
+        delivery = PushDelivery(
+            engine,
+            registry,
+            sender,
+            digits=digits,
+            tz=tz,
+            site_url=settings.site_url,
+            clock_ms=_now_ms,
+            ttl_s=settings.push_ttl_s,
+            retry_first_s=settings.retry_first_s,
+            retry_max_s=settings.retry_max_s,
+        )
+        idle_ms = settings.device_idle_days * 86_400_000
+        return [
+            delivery.run(poll_s=settings.delivery_poll_s),
+            run_device_pruning(engine, registry, idle_ms=idle_ms, every_s=settings.device_prune_s, clock_ms=_now_ms),
+        ]
+
+    def telegram_tasks(session: aiohttp.ClientSession, tz: ZoneInfo) -> List[Any]:
         telegram = TelegramClient(session, token, api_base=settings.telegram_api)
-        runtime.update(session=session, telegram=telegram)
+        runtime["telegram"] = telegram
         delivery = Delivery(
             engine,
             telegram,
@@ -156,6 +192,22 @@ def build_service(cfg: Mapping[str, Any], config_path: str, settings: AlertsConf
             clock_ms=_now_ms,
             pair_ttl_ms=settings.pair_code_ttl_s * 1000,
         )
+        return [
+            delivery.run(poll_s=settings.delivery_poll_s),
+            run_commands(
+                telegram,
+                handler,
+                engine,
+                poll_timeout_s=settings.telegram_poll_timeout_s,
+                error_pause_s=settings.telegram_error_pause_s,
+            ),
+        ]
+
+    async def start_background(_app: web.Application) -> None:
+        tz = ZoneInfo(settings.display_tz)
+        session = aiohttp.ClientSession()
+        runtime["session"] = session
+        channel_tasks = push_tasks(session, tz) if push else telegram_tasks(session, tz)
         runtime["tasks"] = [
             asyncio.create_task(
                 run_tick_feed(open_pubsub, engine, frozenset(symbols), reconnect_s=settings.tick_reconnect_s)
@@ -171,21 +223,16 @@ def build_service(cfg: Mapping[str, Any], config_path: str, settings: AlertsConf
                     clock_ms=_now_ms,
                 )
             ),
-            asyncio.create_task(delivery.run(poll_s=settings.delivery_poll_s)),
-            asyncio.create_task(
-                run_commands(
-                    telegram,
-                    handler,
-                    engine,
-                    poll_timeout_s=settings.telegram_poll_timeout_s,
-                    error_pause_s=settings.telegram_error_pause_s,
-                )
-            ),
+            *(asyncio.create_task(coro) for coro in channel_tasks),
         ]
         for task in runtime["tasks"]:
             task.add_done_callback(_loud_task_end)
         _log.info(
-            "ALERTS_READY symbols=%d alerts=%d devices=%d", len(symbols), len(store.alerts), len(registry.devices)
+            "ALERTS_READY channel=%s symbols=%d alerts=%d devices=%d",
+            "push" if push else "telegram",
+            len(symbols),
+            len(store.alerts),
+            len(registry.devices),
         )
 
     async def stop_background(_app: web.Application) -> None:
@@ -209,10 +256,29 @@ def _loud_task_end(task: "asyncio.Task[Any]") -> None:
     _log.critical("ALERTS_BACKGROUND_TASK_DIED task=%s err=%r", task.get_coro(), task.exception())
 
 
-def _read_secrets(env_file: str) -> Tuple[str, int]:
+def _load_env(env_file: str) -> None:
     report = load_env_secrets(env_path=env_file)
     if not report.loaded:
         _log.warning("ALERTS_ENV_FILE_NOT_LOADED path=%s — секрети лише з оточення процесу", env_file)
+
+
+def _read_vapid_key(env_file: str) -> Tuple[str, str]:
+    """Пуш (Rev 2): приватний ключ VAPID і публічний для сторінки. Нема чи кривий — процес не стартує."""
+    _load_env(env_file)
+    key = env_str("ALERTS_VAPID_PRIVATE_KEY")
+    if not key:
+        raise SystemExit(
+            "ALERTS_SECRETS_MISSING: потрібен ALERTS_VAPID_PRIVATE_KEY — sudo .venv/bin/python -m runtime.alerts.vapid_keys"
+        )
+    try:
+        return key, application_server_key(load_vapid(key))
+    except ValueError as exc:
+        raise SystemExit(f"ALERTS_SECRETS_INVALID: ALERTS_VAPID_PRIVATE_KEY — {exc}") from None
+
+
+def _read_telegram_secrets(env_file: str) -> Tuple[str, int]:
+    """Telegram (Rev 1, `telegram_enabled=true`): токен бота і числовий чат власника."""
+    _load_env(env_file)
     token, owner = env_str("ALERTS_TELEGRAM_TOKEN"), env_str("ALERTS_OWNER_CHAT_ID")
     if not token or not owner or not owner.lstrip("-").isdigit():
         raise SystemExit("ALERTS_SECRETS_MISSING: потрібні ALERTS_TELEGRAM_TOKEN і числовий ALERTS_OWNER_CHAT_ID")

@@ -1,13 +1,17 @@
 """HTTP процесу `smc-alerts` (ADR-0114 §4.5–4.6): `/api/alerts/*` за nginx сайту.
 
-    GET    /api/alerts/health            без cookie: увімкнено, прапорці деградацій (без деталей)
-    POST   /api/alerts/pair              почати прив'язку: посилання t.me + cookie пристрою (поки нічого не відкриває)
-    POST   /api/alerts/pair/confirm      6 цифр з бота → прив'язка САМЕ цього браузера («код назад»)
+    GET    /api/alerts/health            без cookie: увімкнено, канал (push / telegram), прапорці деградацій
+    GET    /api/alerts/push/key          [пуш] публічний ключ VAPID для pushManager.subscribe
+    POST   /api/alerts/push/subscribe    [пуш] підписка браузера → пристрій web:<id> і cookie; своя сторінка — оновлення
+    DELETE /api/alerts/device            «вимкнути на цьому пристрої»: його сповіщення, пристрій, cookie — геть
+    POST   /api/alerts/pair              [Telegram] почати прив'язку: посилання t.me + cookie (поки нічого не відкриває)
+    POST   /api/alerts/pair/confirm      [Telegram] 6 цифр з бота → прив'язка САМЕ цього браузера («код назад»)
     GET    /api/alerts                   мої сповіщення зі станом доставки
     PUT    /api/alerts/{drawing_id}      створити / пересунути / знову взвести сповіщення лінії
     DELETE /api/alerts/{drawing_id}      лінію видалено
     GET    /api/alerts/events            SSE: fired / delivered моїх сповіщень + heartbeat
 
+Канал — рівно один (`alerts.telegram_enabled`): маршрути іншого каналу відповідають 404 `<канал>_disabled`.
 Захист: cookie `aione_alerts` (HttpOnly, Secure, SameSite=Strict, Path=/api/alerts); зміни стану — лише із заголовком
 `X-Alerts: 1` і Origin сайту (CSRF); ліміт запитів на IP за хвилину; тіло ≤ 4 КБ. Сервер — джерело стану (X28):
 сторінка показує те, що повернуто, і сама перетинів не рахує.
@@ -27,11 +31,13 @@ from aiohttp import web
 from core.alerts.codec import alert_to_dict
 from core.alerts.crossing import arm, side_of
 from core.alerts.types import AlertState, PriceAlert, validate_price
-from runtime.alerts.devices import ConfirmOutcome, Device, DeviceRegistry
+from runtime.alerts.devices import ConfirmOutcome, Device, DeviceLimitError, DeviceRegistry
 from runtime.alerts.engine import AlertEngine
 from runtime.alerts.feeds import M1ReadError
+from runtime.alerts.push_delivery import forget_device
 from runtime.alerts.sse import EventStreams
 from runtime.alerts.telegram import TelegramError
+from runtime.alerts.webpush import PushSubscription
 from runtime.visitors.journal import classify_device
 
 _log = logging.getLogger(__name__)
@@ -60,6 +66,9 @@ class ApiSettings:
     max_active_per_subscriber: int
     requests_per_min: int
     sse_heartbeat_s: float
+    channel: str = "telegram"  # "push" (Rev 2) або "telegram" (Rev 1): сервіс задає з alerts.telegram_enabled
+    push_host_suffixes: Tuple[str, ...] = ()
+    push_public_key: Optional[str] = None
 
 
 def build_app(
@@ -75,6 +84,9 @@ def build_app(
     api = _AlertsApi(engine, registry, settings, clock_ms, bot_username, reference_price, new_alert_id)
     app = web.Application(client_max_size=MAX_BODY_BYTES, middlewares=[api.rate_limit])
     app.router.add_get("/api/alerts/health", api.health)
+    app.router.add_get("/api/alerts/push/key", api.push_key)
+    app.router.add_post("/api/alerts/push/subscribe", api.push_subscribe)
+    app.router.add_delete("/api/alerts/device", api.delete_device)  # до {drawing_id}: інакше «device» стало б id лінії
     app.router.add_post("/api/alerts/pair", api.pair)
     app.router.add_post("/api/alerts/pair/confirm", api.pair_confirm)
     app.router.add_get("/api/alerts/events", api.events)
@@ -125,7 +137,7 @@ class _AlertsApi:
     async def rate_limit(self, request: web.Request, handler: Callable) -> web.StreamResponse:
         if request.path == "/api/alerts/events":  # довгий потік — не запити
             return await handler(request)
-        ip = request.headers.get("X-Real-IP") or request.remote or "?"
+        ip = self._client_ip(request)
         minute = self._clock_ms() // 60_000
         window, count = self._hits.get(ip, (minute, 0))
         if window != minute:
@@ -149,7 +161,32 @@ class _AlertsApi:
         device = self._registry.authenticate(token) if token else None
         if device is None:
             raise _fail(401, "not_paired")
-        return device
+        return self._registry.touch(device, now_ms=self._clock_ms())
+
+    def _require_channel(self, channel: str) -> None:
+        if self._settings.channel != channel:
+            raise _fail(404, f"{channel}_disabled")
+
+    @staticmethod
+    def _client_ip(request: web.Request) -> str:
+        return request.headers.get("X-Real-IP") or request.remote or "?"
+
+    @staticmethod
+    def _label(request: web.Request) -> str:
+        device_class = classify_device(request.headers.get("User-Agent", ""))
+        return f"{device_class['os']} · {device_class['browser']}"
+
+    @staticmethod
+    def _set_device_cookie(response: web.Response, raw_token: str) -> None:
+        response.set_cookie(
+            COOKIE_NAME,
+            raw_token,
+            path=COOKIE_PATH,
+            max_age=COOKIE_MAX_AGE_S,
+            httponly=True,
+            secure=True,
+            samesite="Strict",
+        )
 
     async def _json_object(self, request: web.Request) -> Dict[str, Any]:
         try:
@@ -163,9 +200,49 @@ class _AlertsApi:
     # ── стан і прив'язка ─────────────────────────────────────────────────
 
     async def health(self, request: web.Request) -> web.Response:
-        return web.json_response({"enabled": True, "degraded": sorted(self._engine.degraded)})
+        return web.json_response(
+            {"enabled": True, "channel": self._settings.channel, "degraded": sorted(self._engine.degraded)}
+        )
+
+    async def push_key(self, request: web.Request) -> web.Response:
+        self._require_channel("push")
+        return web.json_response({"public_key": self._settings.push_public_key})
+
+    async def push_subscribe(self, request: web.Request) -> web.Response:
+        """Підписка з `PushSubscription.toJSON()` браузера. Своя сторінка (cookie web-пристрою) — оновлення підписки;
+        інакше — новий пристрій і cookie. Ліміти нових пристроїв: з IP — 429, усього — 503."""
+        self._require_channel("push")
+        self._require_csrf(request)
+        try:
+            push = PushSubscription.parse(await self._json_object(request), self._settings.push_host_suffixes)
+        except ValueError as exc:
+            _log.info("ALERTS_PUSH_BAD_SUBSCRIPTION reason=%s", exc)
+            raise _fail(400, "bad_subscription") from None
+        try:
+            device, raw_token = self._registry.subscribe_web(
+                request.cookies.get(COOKIE_NAME),
+                push,
+                self._label(request),
+                ip=self._client_ip(request),
+                now_ms=self._clock_ms(),
+            )
+        except DeviceLimitError as exc:
+            raise _fail(429 if exc.code == "devices_per_ip" else 503, exc.code) from None
+        response = web.json_response({"device": {"device_id": device.device_id, "label": device.label}})
+        if raw_token is not None:
+            self._set_device_cookie(response, raw_token)
+        return response
+
+    async def delete_device(self, request: web.Request) -> web.Response:
+        self._require_csrf(request)
+        device = self._device(request)
+        removed = forget_device(self._engine, self._registry, device)
+        response = web.json_response({"removed_alerts": removed})
+        response.del_cookie(COOKIE_NAME, path=COOKIE_PATH, secure=True, httponly=True, samesite="Strict")
+        return response
 
     async def pair(self, request: web.Request) -> web.Response:
+        self._require_channel("telegram")
         self._require_csrf(request)
         token = request.cookies.get(COOKIE_NAME)
         if token and self._registry.authenticate(token) is not None:
@@ -175,8 +252,7 @@ class _AlertsApi:
         except TelegramError as exc:
             _log.warning("ALERTS_PAIR_BOT_UNAVAILABLE err=%s", exc)
             raise _fail(503, "bot_unavailable") from None
-        device_class = classify_device(request.headers.get("User-Agent", ""))
-        label = f"{device_class['os']} · {device_class['browser']}"
+        label = self._label(request)
         link_code, raw_token = self._registry.start_pairing(
             label, now_ms=self._clock_ms(), ttl_ms=self._settings.pair_ttl_ms
         )
@@ -187,18 +263,11 @@ class _AlertsApi:
                 "expires_in_s": self._settings.pair_ttl_ms // 1000,
             }
         )
-        response.set_cookie(
-            COOKIE_NAME,
-            raw_token,
-            path=COOKIE_PATH,
-            max_age=COOKIE_MAX_AGE_S,
-            httponly=True,
-            secure=True,
-            samesite="Strict",
-        )
+        self._set_device_cookie(response, raw_token)
         return response
 
     async def pair_confirm(self, request: web.Request) -> web.Response:
+        self._require_channel("telegram")
         self._require_csrf(request)
         token = request.cookies.get(COOKIE_NAME)
         if not token:
@@ -220,7 +289,11 @@ class _AlertsApi:
         device = self._device(request)
         mine = [a for a in self._engine.store.alerts.values() if a.subscriber_id == device.subscriber_id]
         mine.sort(key=lambda a: a.created_at_ms)
-        return web.json_response({"alerts": [self._wire(a) for a in mine], "degraded": sorted(self._engine.degraded)})
+        # push_gone — підписка цього браузера зникла (404/410): сторінка просить увімкнути сповіщення знову
+        about = {"device_id": device.device_id, "label": device.label, "push_gone": device.push_gone}
+        return web.json_response(
+            {"alerts": [self._wire(a) for a in mine], "device": about, "degraded": sorted(self._engine.degraded)}
+        )
 
     async def put_alert(self, request: web.Request) -> web.Response:
         """Створити, пересунути (новий рівень — нове взведення) чи знову взвести (`rearm`). Той самий рівень без

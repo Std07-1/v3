@@ -141,6 +141,7 @@ class AlertEngine:
         entry = self.store.mark_failed(key, reason)
         if entry is None:
             return
+        self.store.drop_stale_failed()  # лінії вже нема (пристрій вимкнули) — «не доставлено» нікому показувати
         self._unsaved = True
         self._commit()
         _log.warning("ALERTS_UNDELIVERED id=%s version=%s reason=%s", key[0], key[1], reason)

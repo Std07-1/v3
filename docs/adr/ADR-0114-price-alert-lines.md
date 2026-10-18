@@ -466,3 +466,21 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
   `alert_id`); кривий ключ браузера (не точка P-256) — відмова без запиту. Telegram-доставка «не доставлено» не шле.
   Тести 13 + 3 (app, telegram, webpush), мутації 29/29 (три спершу вижили: скидання паузи після успіху, межа
   паралельності, пропуск «не доставлено» ботом; одна — прибирання при видаленні лінії; тести додано). Не на проді.
+- 2026-10-18 — **S11** (власник: «Так, продовжуй S11»): канал — рівно один за `alerts.telegram_enabled` (false — пуш,
+  true — Telegram Rev 1); маршрути іншого каналу — 404 `<канал>_disabled`. HTTP: `GET /api/alerts/push/key`,
+  `POST /api/alerts/push/subscribe` (CSRF; криве — 400 `bad_subscription`; нових з IP забагато — 429
+  `devices_per_ip`, реєстр повний — 503 `devices_full`; cookie лише новому пристрою), `DELETE /api/alerts/device`
+  (зареєстровано раніше за `{drawing_id}` — інакше «device» стало б id лінії; сповіщення, пристрій і cookie — геть),
+  `health.channel`, у `GET /api/alerts` — `device.push_gone` (сторінка знатиме, що треба ввімкнути знову; прогалину
+  знайшов живий прогін), кожен запит пристрою оновлює `last_seen`. `push_delivery.forget_device` (вимкнення і
+  прибирання — одним шляхом), `prune_idle_devices` / `run_device_pruning` (щогодини: без запитів
+  `device_idle_days` і без взведених — геть); `fail_delivery` одразу прибирає «не доставлено» лінії, якої вже нема.
+  Сервіс: пуш — `ALERTS_VAPID_PRIVATE_KEY` обов'язковий і перевіряється на старті (`ALERTS_SECRETS_MISSING` /
+  `ALERTS_SECRETS_INVALID`), доставка пушем і прибирання; Telegram — як Rev 1. Config: `telegram_enabled` false,
+  `vapid_subject`, `push_ttl_s` 21600, `push_timeout_s` 10, `push_host_suffixes` (4 сервіси), `device_idle_days` 90,
+  `device_prune_s` 3600. Тести: `test_alerts_app_push.py` (15), сервіс +1, доставка +2, config +7; мутації 19/19.
+  **Живий прогін справжнього процесу** (тимчасовий config, ключ від `vapid_keys`, локальний Redis, справжній
+  `data_v3`): health `channel: push`, ключ сторінки = надрукований, `/pair` — 404, підписка → пристрій і cookie, лінія
+  взвелась від тіку, тік спрацював, **справжній FCM** на фіктивну підписку — «підписки нема» → `push_gone`, запис
+  «чекає»; «Вимкнути на цьому пристрої» — усе прибрано, cookie більше не відкриває; 0 ERROR, приватного ключа нема ні
+  в лозі, ні у виводі. Що FCM приймає наш підпис VAPID — доведе лише справжня підписка браузера (S12). Не на проді.

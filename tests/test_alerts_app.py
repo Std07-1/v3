@@ -115,7 +115,7 @@ async def world(tmp_path):
 async def test_health_reports_degraded_flags_only(world):
     world.engine.set_degraded("telegram_unreachable", "HTTP 502 token-free detail")
     body = await (await world.client.get("/api/alerts/health")).json()
-    assert body == {"enabled": True, "degraded": ["telegram_unreachable"]}
+    assert body == {"enabled": True, "channel": "telegram", "degraded": ["telegram_unreachable"]}
 
 
 @pytest.mark.parametrize(

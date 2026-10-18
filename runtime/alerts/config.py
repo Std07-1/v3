@@ -1,13 +1,15 @@
 """Секція `config.json:alerts` (ADR-0114 §4.7) — суворо: усі ключі обов'язкові, невідомий ключ — помилка старту.
 
 У коді нема значень за замовчуванням: config.json — SSOT, а одруківка в назві ключа не має тихо вмикати дефолт.
-Секрети (токен бота, чат власника) — не тут, а в `env_file` (`ALERTS_TELEGRAM_TOKEN`, `ALERTS_OWNER_CHAT_ID`).
+Секрети — не в config, а в `env_file`: пуш (Rev 2) — `ALERTS_VAPID_PRIVATE_KEY`; Telegram (`telegram_enabled`) —
+`ALERTS_TELEGRAM_TOKEN`, `ALERTS_OWNER_CHAT_ID`.
 """
 
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Mapping
+import re
+from typing import Any, Mapping, Tuple
 
 
 @dataclasses.dataclass(frozen=True)
@@ -19,6 +21,13 @@ class AlertsConfig:
     site_url: str
     display_tz: str
     telegram_api: str
+    telegram_enabled: bool  # false — пуш у браузер (Rev 2), true — бот Telegram (Rev 1); канал рівно один
+    vapid_subject: str  # «sub» підпису VAPID: https://сайт або mailto:
+    push_ttl_s: int
+    push_timeout_s: float
+    push_host_suffixes: Tuple[str, ...]  # куди серверу дозволено слати пуш (SSRF, webpush.validate_endpoint)
+    device_idle_days: int
+    device_prune_s: float
     max_active_per_subscriber: int
     max_devices: int
     devices_per_ip_per_hour: int
@@ -50,16 +59,23 @@ class AlertsConfig:
             raise ValueError(f"config.json:alerts — бракує {missing}, невідомі {extra}")
         for name, annotation in fields.items():
             _check_type(name, raw[name], annotation)
-        config = cls(**raw)
+        config = cls(**{**raw, "push_host_suffixes": tuple(raw["push_host_suffixes"])})
+        if not config.vapid_subject.startswith(("https://", "mailto:")):
+            raise ValueError(f"alerts.vapid_subject: очікується https://… або mailto:…, отримано {config.vapid_subject!r}")
         if not config.site_url.startswith("https://") or config.site_url.endswith("/"):
             raise ValueError(f"alerts.site_url: очікується https://… без «/» в кінці, отримано {config.site_url!r}")
         return config
 
 
 _KINDS = {"bool": (bool,), "int": (int,), "float": (int, float), "str": (str,)}
+_HOST_SUFFIX_RE = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)+$")
 
 
 def _check_type(name: str, value: Any, annotation: str) -> None:
+    if annotation == "Tuple[str, ...]":  # список суфіксів хостів: непорожній, без схеми й шляху, малими літерами
+        if not isinstance(value, list) or not value or not all(isinstance(v, str) and _HOST_SUFFIX_RE.match(v) for v in value):
+            raise ValueError(f"alerts.{name}: очікується непорожній список хостів (a.b.c), отримано {value!r}")
+        return
     kinds = _KINDS[annotation]
     if (isinstance(value, bool) and annotation != "bool") or not isinstance(value, kinds):
         raise ValueError(f"alerts.{name}: очікується {annotation}, отримано {value!r}")

@@ -271,6 +271,42 @@ def test_failed_mark_survives_reload_and_is_dropped_when_line_removed_or_rearmed
     assert _key(a1) not in world.engine.store.outbox  # нова версія — старе «не доставлено» прибрано
 
 
+def test_prune_forgets_idle_devices_without_armed_alerts_only(world):
+    from runtime.alerts.push_delivery import prune_idle_devices
+
+    day = 24 * 3_600_000
+    world.fire("a1", "A")  # у A лише спрацьоване — після 90 днів тиші пристрій забувається
+    armed = PriceAlert(
+        alert_id="b1",
+        drawing_id="d-b1",
+        subscriber_id=world.devices["B"].subscriber_id,
+        symbol="XAU/USD",
+        level=4500.0,
+        tf_label="M15",
+        active_from_ms=T0,
+        created_at_ms=T0,
+        side=AlertSide.BELOW,
+    )
+    world.engine.put_alert(armed)  # у B — взведене: чекає перетину, хоч би скільки тиші
+    now = T0 + 90 * day
+    assert prune_idle_devices(world.engine, world.registry, now_ms=now, idle_ms=90 * day) == 1
+    assert world.devices["A"].device_id not in world.registry.devices and "a1" not in world.engine.store.alerts
+    assert world.devices["B"].device_id in world.registry.devices and "b1" in world.engine.store.alerts
+    assert prune_idle_devices(world.engine, world.registry, now_ms=now - 1, idle_ms=90 * day) == 0
+
+
+@pytest.mark.asyncio
+async def test_forgotten_device_leaves_no_orphan_in_queue(world):
+    """«Вимкнути на цьому пристрої» зі спрацюванням у черзі: доставка позначає «не доставлено» і одразу прибирає —
+    лінії вже нема, показувати нікому."""
+    from runtime.alerts.push_delivery import forget_device
+
+    world.fire("a1", "A")
+    assert forget_device(world.engine, world.registry, world.devices["A"]) == 1
+    assert await world.delivery.deliver_once() == 0 and world.sender.sent == []
+    assert world.engine.store.outbox == {} and ("undelivered", "a1") in world.events
+
+
 def test_removing_line_drops_its_undelivered_mark(world):
     a1 = world.fire("a1", "A")
     world.engine.fail_delivery(_key(a1), "відмова")
