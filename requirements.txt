@@ -2,18 +2,32 @@
 redis==5.0.1
 numpy>=1.26
 pandas>=2.1
-python-dotenv>=1.0,<2.0
+# python-dotenv — нижня межа закриває PYSEC-2026-2270; <1.0 лишається лише в requirements-broker.txt (Python 3.7).
+python-dotenv>=1.2.2,<2.0
 # aiohttp — точний пін, бо це сервер ws_server, smc-alerts і agent_bridge. 3.14.3 закриває PYSEC-2026-3545/3546/3547;
 # 3.14.4+ станом на 18.10.2026 вийшли менш як 2 тижні тому. Нова версія — лише після pytest + exit gates
 # (docs/compliance/risk_register.md §1.1).
 aiohttp==3.14.3
 python-binance>=1.0.36
-# requests — транзитивна (python-binance); нижня межа закриває PYSEC-2026-2275.
+# Транзитивні залежності: нижні межі закривають бюлетені, яких не закривають вимоги батьківських пакетів,
+# верхні — як у батьків (aiohttp 3.14.3: multidict<7.0; requests: urllib3<3, idna<4; starlette: anyio<5).
+# Розбір — docs/compliance/risk_register.md §1.1.
+# requests — від python-binance; PYSEC-2026-2275.
 requests>=2.33.0,<3.0
+# urllib3 — від requests; PYSEC-2026-141/142/4175/4176/4177.
+urllib3>=2.8.0,<3.0
+# multidict — від aiohttp і yarl; PYSEC-2026-4244.
+multidict>=6.9.1,<7.0
+# idna — від yarl, requests, anyio, httpx; PYSEC-2026-215.
+idna>=3.15,<4.0
 
 # Public read-only API sidecar (ADR-0058, slice 058.1)
 fastapi>=0.110,<1.0
 uvicorn[standard]>=0.27,<1.0
+# starlette — від fastapi; PYSEC-2026-161/248/249/2280/2281.
+starlette>=1.3.1,<2.0
+# anyio — від starlette, httpx, watchfiles (на проді ще anthropic); PYSEC-2026-4024/4025.
+anyio>=4.14.2,<5.0
 
 # FXCM ForexConnect SDK — НЕ інсталюється у цей venv.
 # Встановлюйте у .venv37/ через requirements-broker.txt

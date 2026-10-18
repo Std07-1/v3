@@ -37,9 +37,14 @@ written agreement with FXCM потрібен окремо.
 | redis | 5.0.1 | MIT | Ні | ✅ Сумісна | [ASSUMED — verify: `pip audit`] | Ні |
 | numpy | 1.21.6 | BSD-3-Clause | Ні | ✅ Сумісна | [ASSUMED — verify: `pip audit`] | Так (released 2022, series 1.21 no longer maintained) |
 | pandas | 1.1.5 | BSD-3-Clause | Ні | ✅ Сумісна | [ASSUMED — verify: `pip audit`] | Так (released 2020, series 1.x deprecated) |
-| python-dotenv | ≥0.21 | BSD-3-Clause | Ні | ✅ Сумісна | [ASSUMED — verify: `pip audit`] | Ні |
+| python-dotenv | ≥1.2.2,<2.0 (до 18.10.2026: requirements `>=1.0,<2.0`, pyproject `>=0.21,<1.0`; прод — 0.21.1) | BSD-3-Clause | Ні | ✅ Сумісна | [VERIFIED terminal 18.10.2026: 0.21.1 — PYSEC-2026-2270, 1.2.2: 0; наш шлях не зачеплений] | Ні |
 | aiohttp | ==3.14.3 (до 18.10.2026 — `>=3.9,<4.0`; прод і локальний `.venv` — 3.13.3) | Apache-2.0 | Ні | ✅ Сумісна (потрібен attribution) | [VERIFIED terminal 18.10.2026: `pip-audit` — 3.13.3: 24 бюлетені, 3.14.3: 0; розбір нижче] | Ні |
 | requests (транзитивна, python-binance) | ≥2.33.0,<3.0 (прод 2.33.0, локальний `.venv` 2.32.5) | Apache-2.0 | Ні | ✅ Сумісна | [VERIFIED terminal 18.10.2026: PYSEC-2026-2275 закрито в 2.33.0; наш шлях не зачеплений] | Ні |
+| urllib3 (транзитивна, requests) | ≥2.8.0,<3.0 (прод 2.6.3) | MIT | Ні | ✅ Сумісна | [VERIFIED terminal 18.10.2026: 2.6.3 — 5 бюлетенів, 2.8.0: 0; наш шлях не зачеплений] | Ні |
+| multidict (транзитивна, aiohttp, yarl) | ≥6.9.1,<7.0 (прод 6.7.1) | Apache-2.0 | Ні | ✅ Сумісна | [VERIFIED зонд 18.10.2026: вада в 6.7.1 є, наш код її не викликає; 6.9.1: 0] | Ні |
+| idna (транзитивна, yarl, requests, anyio) | ≥3.15,<4.0 (прод 3.11) | BSD-3-Clause | Ні | ✅ Сумісна | [VERIFIED зонд 18.10.2026: 3.11 — PYSEC-2026-215, не досяжний; 3.15: 0] | Ні |
+| starlette (транзитивна, fastapi) | ≥1.3.1,<2.0 (прод 1.0.0) | BSD-3-Clause | Ні | ✅ Сумісна | [VERIFIED terminal 18.10.2026: 1.0.0 — 5 бюлетенів, сайдкар не запущений; 1.3.1: 0] | Ні |
+| anyio (транзитивна, starlette, httpx) | ≥4.14.2,<5.0 (прод 4.13.0) | MIT | Ні | ✅ Сумісна | [VERIFIED terminal 18.10.2026: 4.13.0 — 2 бюлетені, не зачеплені; 4.14.2: 0] | Ні |
 | forexconnect | 1.6.43 | **Proprietary/EULA** | N/A | ⚠️ Optional, не вендориться | N/A (proprietary) | [ASSUMED — verify: FXCM site] |
 
 **Copyleft contamination**: ❌ Не виявлено. Жодна Python залежність не має GPL/LGPL/AGPL ліцензії.
@@ -105,9 +110,66 @@ preview_plane, ui_live_candle_plane, coldstart_multisymbol, no_bare_except=38, �
 відсутній `ui_v4/dist` у worktree). Рейка — `tests/test_ws_server.py::test_ws_incomplete_frame_over_max_msg_size_drops_connection`:
 червона на 3.13.3, зелена на 3.14.3.
 
-**Поза цим патчем** (той самий аудит прод-набору): multidict 6.7.1 — PYSEC-2026-4244 (→6.9.1); starlette 1.0.0 — 5 бюлетенів
-(→1.3.1; FastAPI-сайдкар ADR-0058 на проді не запущений); urllib3 2.6.3 — 5 (→2.8.0; лише через requests); anyio 4.13.0 —
-2 (→4.14.2); idna 3.11 — 1 (→3.15). На проді python-dotenv 0.21.1 при вимозі `>=1.0,<2.0` — дрейф venv від requirements.
+Решту бюлетенів того самого аудиту прод-набору (multidict, starlette, urllib3, anyio, idna, python-dotenv) розібрано нижче.
+
+#### Бюлетені транзитивних залежностей і python-dotenv — розбір 18.10.2026
+
+Набір і метод ті самі: свіжий `pip freeze` прод-venv (18.10.2026, Python 3.11.15), `pip-audit -r <freeze> --no-deps`.
+Запущені процеси з цього venv — `smc:smc-ws`, `smc:smc-fxcm`, `smc:smc-preview`, `smc-agent-bridge`, `smc-alerts`;
+`smc-binance*` і `smc-ticks` — STOPPED. Жоден модуль платформи не імпортує напряму starlette, anyio, idna, urllib3,
+multidict, httpx чи anthropic [VERIFIED grep `app/ runtime/ core/ tools/ tests/`].
+
+| Бюлетень (виправлено в) | Суть | Чи зачіпає нас |
+|---|---|---|
+| multidict PYSEC-2026-4244 (6.9.1) | C-розширення: `X \| d.items()` і `d.items() - X` не звільняють ключ і значення кожного елемента операнда — пам'ять росте без меж | **Ні** [VERIFIED зонд]: вада справжня — одна така операція з 10 000 елементів на 6.7.1 лишає 10 000 зайвих посилань на значення, на 6.9.1 — 0. Але викликати її нікому: AST-пошук бінарних операцій над `.items()`/`.keys()`/`.values()` в aiohttp 3.14.3, yarl 1.23.0, python-binance і `app/ runtime/ core/` знайшов лише `&` над `.keys()` (aiohttp multipart, yarl `without_query_params`) і над звичайними `dict` (`runtime/alerts/config.py:46`, `core/alerts/codec.py:56`) — вразливих `\|` і `-` над `.items()` нема |
+| idna PYSEC-2026-215 (3.15) | `idna.encode()` перевіряє контекстні правила довгого не-ASCII рядка до відсічення за довжиною — квадратичний час | **Ні, але один `request.url` відкрив би DoS** [VERIFIED зонд]: nginx пропускає в `Host` байти ≥0x80, а сервер за замовчуванням для `:80` — блок `archi` (`/api/archi/`, `/api/agent/` → `agent_bridge :8010` з `Host $host`). Сирий запит із `Host` = 4000 × U+0660 (8 КБ) на справжні `build_app()` ws_server (`/api/status`, `/api/context`, `/api/v3/*`, `/ws`, `/`) і `build_bridge_app()` agent_bridge — 0 викликів idna: aiohttp кодує хост лише у властивості `request.url`, а її не читає ні aiohttp, ні наш код (`request.url`/`request.host` у `runtime/` — 0). Контрольний обробник, що читає `request.url`, на тому ж запиті: `idna.encode` — 1,4 с на 3.11 проти 6 мс на 3.15, і весь цей час цикл подій стоїть. Клієнти (smc-alerts → api.telegram.org, relay → Cloudflare Worker) ходять на ASCII-хости — idna не викликається |
+| starlette PYSEC-2026-161 (1.0.1), -2280, -2281 (1.1.0), -248 (1.3.0), -249 (1.3.1) | Шлях або `Host` підміняють хост у відновленому `request.url`; `HTTPEndpoint` викликає метод за довільним HTTP-методом; `StaticFiles` на Windows відкриває UNC-шлях (витік NTLM); ліміти urlencoded-форм не діють | **Ні** [VERIFIED terminal]: starlette працює лише у FastAPI-сайдкарі `runtime/api_v3/auth_validator.py` (ADR-0058, 058.1), а його на проді нема — програми в supervisor немає, `127.0.0.1:8001` не слухає, `auth_request` в nginx немає (`/api/v3/` іде на aiohttp `:8000`). І запущений він би не був зачеплений: перевіряє лише заголовок `X-API-Key`, не читає `request.url`, без `HTTPEndpoint`, `StaticFiles` і форм |
+| urllib3 PYSEC-2026-141, -142 (2.7.0), -4175, -4176, -4177 (2.8.0) | Чутливі заголовки при крос-доменному редиректі через `ProxyManager.connection_from_url()`; повна розпаковка при потоковому читанні (Brotli, `drain_conn`); буферизація поля розміру chunked; нескінченний цикл на хвості deflate (2.6.2–2.7.0); TLS-налаштування HTTPS-проксі | **Ні** [VERIFIED terminal]: urllib3 тягне лише requests, requests — лише python-binance; Binance на проді вимкнено (`config.json:binance.enabled=false`, `smc-binance*` STOPPED). Проксі не налаштовані (ні в supervisor, ні в `/etc/environment`), Brotli у venv нема; 4176 і 4177 вимагають зловмисного сервера, а адресат один — api.binance.com по TLS |
+| anyio PYSEC-2026-4024, -4025 (4.14.2) | Воркери `to_process` не дренують stderr — виклик зависає; `TLSStream.wrap()` звіряє не-ASCII ім'я з сертифікатом за IDNA 2003 | **Ні** [VERIFIED grep]: anyio у прод-venv тягнуть starlette і watchfiles (сайдкар не запущений) і httpx/anthropic 0.94.0, яких не імпортує ніхто; `to_process` не використовуємо, хости — ASCII |
+| python-dotenv PYSEC-2026-2270 (1.2.2) | `set_key()`/`unset_key()` при перенесенні між пристроями пишуть крізь симлінк | **Ні** [VERIFIED grep]: лише `load_dotenv()` (`env_profile.py:63`, `runtime/relay/signal_relay.py:14`), `.env` ми не переписуємо |
+
+**python-dotenv: яке джерело правильне.** `requirements.txt` — свідоме рішення: 05.05.2026 (ADR-0062, коміт `1f95530f`,
+«cap <1.0 lifted») межу підняли до `>=1.0,<2.0`. `<1.0` у `pyproject.toml` — залишок: 08.03.2026 (`14559298`) файл
+перевели з Python 3.7 (`fxcm-connector-v3`, `python-dotenv==0.21.1`) на `>=3.11` з діапазоном `>=0.21,<1.0`, як у
+створеному тим самим комітом `requirements-broker.txt`, де `<1.0` потрібне досі (python-dotenv 1.0 вимагає Python ≥3.8);
+05.05 межу підняли лише в `requirements.txt`. Тепер обидва файли — `>=1.2.2,<2.0`; `requirements-broker.txt` (`.venv37`,
+broker_sidecar) лишається `<1.0` — ту саму ваду має й 0.21.x, але `set_key` там теж не викликається. Прод на 0.21.1, бо
+venv після 05.05 з `requirements.txt` не перевстановлювали [INFERRED].
+
+**Чому межі в `requirements.txt`, а не точні піни.** Батьківські пакети пропускають вразливі версії (aiohttp 3.14.3 —
+`multidict>=4.5,<7.0`, requests — `urllib3>=1.26,<3`, fastapi 0.136.1 — `starlette>=0.46.0`), а прод-venv сам не
+оновлюється. До того ж CI аудитує не прод: `pip-audit -r requirements.txt` розв'язує вимоги наново й бачить найновіші
+версії (18.10.2026: multidict 6.9.1, starlette 1.8.0, idna 3.20, anyio 4.15.1, urllib3 2.8.0 — 0 бюлетенів), а прод
+жив на старих. Нижня межа — версія з виправленням, усі вийшли ≥2 тижні тому: python-dotenv 1.2.2 — 01.03, idna 3.15 —
+12.05, starlette 1.3.1 — 12.06, anyio 4.14.2 — 12.07, urllib3 2.8.0 — 15.09, multidict 6.9.1 — 21.09. Верхня — як у
+батька. Точний пін, як в aiohttp, не ставимо: вразливих функцій жодного з цих пакетів наш код не викликає, а пін
+транзитивної залежності довелося б рухати разом із батьком.
+
+**Ризики переходу** (за журналами змін). multidict 6.8–6.9 — виправлення C-розширення (здебільшого free-threaded збірка),
+з несумісного — лише відмова від Python 3.9. urllib3 2.7–2.8 — відмова від Python 3.9, `FutureWarning` замість
+`DeprecationWarning`; шлях лише Binance. idna 3.12–3.15 — Unicode 17, раннє відсічення довгих міток. starlette 1.1–1.3.1
+і anyio 4.14.x — лише сайдкар і тести `TestClient`. python-dotenv 0.21.1 → 1.2.2 — єдиний пакет, що змінює запущені
+процеси поза aiohttp: його читають `smc:smc-fxcm`, `smc:smc-preview`, `smc-alerts` (`env_profile.load_env_secrets`).
+Парсер `.env` той самий (AST `parser.py` і `variables.py` різняться лише префіксами `u""`); у `load_dotenv()` нове —
+змінна `PYTHON_DOTENV_DISABLED` (вимикає читання; на проді не задана) і читання FIFO.
+
+**Перевірка 18.10.2026** (окремі venv на Python 3.11 — локально 3.11.0rc2; базовий набір — прод freeze з aiohttp 3.14.3,
+тобто прод після оновлення aiohttp того ж дня): pytest — 2686 passed / 20 skipped і на прод-версіях, і на цільових;
+вердикти exit gates однакові (ті самі червоні, no_bare_except=38); `pip check` чистий; `pip-audit` цільового набору — 0
+(без pip/setuptools); цільовий набір задовольняє `requirements-test.txt` без жодної доінсталяції, а прод-набір із новими
+межами дає `ResolutionImpossible` — межі справді відсікають вразливі версії. Нове в тестах — одне
+`StarletteDeprecationWarning` (`fastapi.testclient` радить `httpx2` замість `httpx`).
+
+**Поза цим патчем** (той самий аудит): pip 26.0.1 — 4 бюлетені (→26.2, 29.07) і setuptools 79.0.1 — 1 (→83.0.0, 04.07) у
+прод-venv: інструменти встановлення, у `requirements.txt` їх нема, працюючі процеси їх не імпортують. anthropic 0.94.0 і
+httpx у прод-venv — сироти: їх не вимагає жоден файл вимог і не імпортує жоден модуль платформи.
+
+**Наперед — пуш у браузер (ADR-0114 Rev 2, гілка ще не злита).** `WebPushSender` шле POST через aiohttp на endpoint, який
+дає браузер; `validate_endpoint()` перевіряє суфікс хоста, але пропускає не-ASCII мітку перед дозволеним суфіксом. Зонд
+[VERIFIED зонд] на копії перевірки: endpoint `https://<1900 × U+30FB + U+6F22>.fcm.googleapis.com/…` (1939 символів, під
+лімітом 2048) перевірку проходить, а `yarl.URL()` на ньому — 234 мс на idna 3.11 проти 12 мс на 3.15, і кожна спроба
+доставки платить знову (`UnicodeError` кеш yarl не запам'ятовує: 3 виклики — 3 промахи, по ~220 мс). Межа `idna>=3.15`
+закриває це до злиття; вимога ASCII-хоста в `validate_endpoint()` — справа тієї гілки.
 
 ### 1.2 Власна ліцензія
 

@@ -11,9 +11,9 @@
 | redis | 5.0.1 | MIT | ✅ Сумісна |
 | numpy | ≥1.26 | BSD-3-Clause | ✅ Сумісна |
 | pandas | ≥2.1 | BSD-3-Clause | ✅ Сумісна |
-| python-dotenv | ≥0.21 | BSD-3-Clause | ✅ Сумісна |
-| aiohttp | ≥3.9, <4.0 | Apache-2.0 | ✅ Сумісна |
-| python-binance | ≥1.0.19 | MIT | ✅ Сумісна |
+| python-dotenv | ≥1.2.2, <2.0 | BSD-3-Clause | ✅ Сумісна |
+| aiohttp | ==3.14.3 | Apache-2.0 | ✅ Сумісна |
+| python-binance | ≥1.0.36 | MIT | ✅ Сумісна |
 | fastapi | ≥0.110, <1.0 | MIT | ✅ Сумісна (ADR-0058 public API) |
 | uvicorn[standard] | ≥0.27, <1.0 | BSD-3-Clause | ✅ Сумісна (ADR-0058 ASGI server) |
 
