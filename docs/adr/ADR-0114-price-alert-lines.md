@@ -522,3 +522,8 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
   (http-ece зібрано з sdist, cryptography — wheel manylinux_2_34); freeze до/після: +6, −0, решта без змін (до — 53
   пакети, `/tmp/alerts_push_freeze_before.1792304382`); `pip check` чистий; імпорт ок. Процеси не перезапускались,
   `smc-alerts` — `{"enabled": false}`, сайт 200. Відкат — `pip uninstall -y` цих шести.
+- 2026-10-18 — **S13 прод, крок 2** (власник: «Го на крок 2»): гілку злито в main ff `ffec079b..91eb70cf`; CI main
+  зелений (python-tests, ui-v4, exit-gates-static, security-python з `pip-audit`). VPS: тег
+  `pre-alerts-push-20261018` (= `4e4d2a5`), ff `4e4d2a5..91eb70c`, дерево чисте; `enabled` false; новий код alerts
+  імпортується; процеси не перезапускались (smc-ws, smc-alerts — ті самі PID), ERROR нема, сайт 200. UI-збірка
+  (`ui_v4/dist`) не мінялась — крок 6.
