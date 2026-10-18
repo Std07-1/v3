@@ -472,8 +472,8 @@ nginx `/api/alerts`. **До ввімкнення** (кожен крок — за
 
 | # | Що | Команда / перевірка |
 | --- | --- | --- |
-| 1 | Код: гілку злито в main, на VPS — `git pull --ff-only` (тег відкату перед ним) | `cd /opt/smc-v3 && git tag pre-alerts-push-<дата> && git pull --ff-only` |
-| 2 | Залежності пушу у venv (pywebpush, py-vapid, http-ece, cryptography — версії з `requirements.txt`) | `cd /opt/smc-v3 && .venv/bin/python -m pip install -r requirements.txt` → `.venv/bin/python -c "import pywebpush, py_vapid"` |
+| 1 | Залежності пушу у venv — **до коду**: `runtime.alerts.service` імпортує `pywebpush` на старті, і рестарт `smc-alerts` з новим кодом без пакетів — FATAL. Лише нові пакети, `--no-deps` (версії з `requirements.txt`; cffi і pycparser — їхні транзитивні, на проді їх нема): наявні не змінюються | `cd /opt/smc-v3 && .venv/bin/python -m pip install --no-deps pywebpush==2.5.0 py-vapid==1.9.4 http-ece==1.2.1 cryptography==50.0.2 cffi==2.0.0 pycparser==3.0` → `.venv/bin/python -m pip check` чистий → `.venv/bin/python -c "import pywebpush, py_vapid, http_ece, cryptography"` |
+| 2 | Код: гілку злито в main, на VPS — `git pull --ff-only` (тег відкату перед ним). Нічого не рестартує; з `enabled:false` новий код стартує і без ключа | `cd /opt/smc-v3 && git tag pre-alerts-push-<дата> && git pull --ff-only` |
 | 3 | Ключ VAPID (сервер генерує сам; приватний не друкується) | `cd /opt/smc-v3 && sudo .venv/bin/python -m runtime.alerts.vapid_keys` → `sudo stat -c '%a %U:%G' /etc/smc-v3 /etc/smc-v3/alerts.env` = `750 root:smc`, `640 root:smc` |
 | 4 | Увімкнути: `alerts.enabled = true` у git → `git pull` → рестарт | `sudo supervisorctl restart smc-alerts` → 120 с (D9.1): `ALERTS_READY channel=push`, без ERROR у `/var/log/smc-v3/alerts.stderr.log` |
 | 5 | Перевірка зовні | `curl -s https://aione-smc.com/api/alerts/health` = `{"enabled": true, "channel": "push", "degraded": []}`; `curl -s …/api/alerts/push/key` — ключ |
@@ -493,7 +493,7 @@ nginx `/api/alerts`. **До ввімкнення** (кожен крок — за
 | Telegram замість пушу | `telegram_enabled = true` у git + `sudo bash /opt/smc-v3/ops/vps/alerts-secrets.sh` (змінює лише свої два рядки, ключ VAPID лишається) → рестарт |
 | Битий `alerts.json` | процес стартує з валідною частиною, сирий файл — `alerts.json.corrupt-<ms>` поруч, `state_quarantined` у health |
 | Вимкнути | `alerts.enabled = false` у git → `git pull` → `sudo supervisorctl restart smc-alerts` (стан і ключ лишаються; інтерфейс ховає сповіщення); аварійно — `sudo supervisorctl stop smc-alerts` |
-| Відкат коду | `git checkout pre-alerts-push-<дата>` (тег кроку 1) → рестарт `smc-alerts`; UI — бекап `dist` кроку 6 |
+| Відкат коду | `git checkout pre-alerts-push-<дата>` (тег кроку 2) → рестарт `smc-alerts`; UI — бекап `dist` кроку 6 |
 | Відкат nginx | прибрати рядок `include …smc_alerts_location.conf;` → `sudo nginx -t && sudo systemctl reload nginx` |
 
 Падіння `smc-alerts` (FATAL) приходить ботом «Monitor» із хвостом stderr (ADR-0106): `ALERTS_SECRETS_MISSING` (нема

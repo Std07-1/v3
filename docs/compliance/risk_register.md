@@ -49,6 +49,8 @@ written agreement with FXCM потрібен окремо.
 | py-vapid | 1.9.4 | MPL-2.0 | Файловий (слабкий) | ✅ Сумісна як незмінена залежність — ADR-0114 Rev 2 | див. §1.1 примітку | Ні |
 | http-ece | 1.2.1 | MIT | Ні | ✅ Сумісна | див. §1.1 примітку | Ні |
 | cryptography | 50.0.2 | Apache-2.0 OR BSD-3-Clause | Ні | ✅ Сумісна | див. §1.1 примітку | Ні |
+| cffi (транзитивна, cryptography) | 2.0.0 (на прод ставиться з пакетами пушу) | MIT | Ні | ✅ Сумісна | [VERIFIED terminal 18.10.2026: `pip-audit` шести пакетів пушу — 0] | Ні |
+| pycparser (транзитивна, cffi) | 3.0 (на прод ставиться з пакетами пушу) | BSD-3-Clause | Ні | ✅ Сумісна | [VERIFIED terminal 18.10.2026: `pip-audit` шести пакетів пушу — 0] | Ні |
 | forexconnect | 1.6.43 | **Proprietary/EULA** | N/A | ⚠️ Optional, не вендориться | N/A (proprietary) | [ASSUMED — verify: FXCM site] |
 
 **Copyleft contamination**: ❌ Не виявлено. Жодна Python залежність не має GPL/LGPL/AGPL ліцензії.
