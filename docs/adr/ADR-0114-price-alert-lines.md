@@ -559,3 +559,12 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
   (ціна для боку прочитана під ACL `smc_alerts`) → «Вимкнути на цьому пристрої»: `removed_alerts: 1`, далі 401. ACL
   LOG після старту — лише `client` (CLIENT SETINFO нових з'єднань, у т. ч. UDS-читача); ERROR 0; стан після — 0
   пристроїв, 0 ліній, черга порожня.
+- 2026-10-18 — **S13 прод, крок 6** (власник: «Го на крок 6 … разом із 07921e37»): UI зібрано з чистої копії main
+  `ef654e13` (`git clone --shared`, detached — хеш у бандлі; `node_modules` = lock main, 85/85), бандл
+  `index-Bq4OBn1K.js` (507 КБ, +32 КБ; Vite попереджає про чанк >500 КБ) з `"ef654e1"`, `push/subscribe` і фіксом
+  scrollback `07921e37`; `sw.js` — `notificationclick`, `v3-2026-10-18`. VPS: бекап
+  `/tmp/p16/dist_backup_before_alerts_push_20261018T132517Z.tgz`, заміна без рестартів; сайт 200, Cloudflare віддає
+  новий `index.html` і `sw.js` (`no-store`, DYNAMIC/BYPASS). Браузер: графік є, service worker активний, ☰
+  «Сповіщення» з причиною «Браузер заборонив сповіщення…» (вбудований браузер) і «Увімкнути на цьому пристрої»; у
+  консолі лише `GET /api/alerts → 401` (відвідувач без пристрою — так задумано, як на стенді). Лишився крок 7 — живий
+  прогін на телефоні власника (ринок відкриється в неділю ввечері).
