@@ -215,3 +215,9 @@ redis-cli --user smc_admin --pass "$A" CLIENT LIST | grep -oP 'user=\K\S+' | sor
   `OBJECT IDLETIME` не скидався, `MONITOR` 15 с не показав жодної команди в db0 (при 33 у db1),
   після `DEL` ключі не відродились за 60 с. Бекап усього інстансу:
   `/root/redis-dump-before-db0-purge-20260906-095505.rdb`. db0 = 0, db1 = 201 без змін.
+- 2026-10-18: п'ятий ACL-користувач `smc_alerts` (ADR-0114, процес smc-alerts відкритий в інтернет): `~v3_local:*`,
+  лише `+get +ttl +lrange +select +ping` і підписка — без PUBLISH, запису, KEYS/SCAN/RANDOMKEY, адмін-команд.
+  Скрипт `ops/vps/alerts-redis-acl.py` (create/check): пароль генерується на хості, не в argv і не друкується —
+  `/root/redis-acl-alerts-<ts>.txt` (600) і `environment` у `conf.d/alerts.conf` (600 root); бекап `redis.conf`
+  перед `CONFIG REWRITE`. Знайдено, бо програма smc-alerts з 16.10 жила без креденшелів (`enabled:false` — без Redis),
+  а після ввімкнення дала `ticks_unavailable` (`AuthenticationError`).

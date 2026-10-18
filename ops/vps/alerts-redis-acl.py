@@ -25,6 +25,7 @@ import os
 import re
 import secrets
 import shutil
+import subprocess
 import sys
 import time
 from typing import Callable, List
@@ -141,20 +142,36 @@ def create() -> None:
     print("далі: sudo supervisorctl reread && sudo supervisorctl update smc-alerts; потім — check")
 
 
+def _process_age_s(program: str) -> float:
+    """Скільки секунд живе процес supervisor-програми (/proc/<pid>/stat, поле starttime)."""
+    pid = subprocess.run(["supervisorctl", "pid", program], capture_output=True, text=True, check=True).stdout.strip()
+    if not pid.isdigit() or pid == "0":
+        raise StopError(f"{program} не запущено (pid={pid!r})")
+    with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
+        start_ticks = int(f.read().rsplit(")", 1)[1].split()[19])
+    with open("/proc/uptime", encoding="utf-8") as f:
+        boot_age_s = float(f.read().split()[0])
+    return boot_age_s - start_ticks / os.sysconf("SC_CLK_TCK")
+
+
 def check() -> None:
+    """Відмови `smc_alerts` після старту процесу smc-alerts; старші — перевірка заборон у `create`."""
     admin = _admin_client()
     info = admin.acl_getuser(USER)
     if info is None:
         raise StopError(f"користувача {USER} нема")
     print(f"ACL {USER}: flags={info['flags']} keys={info['keys']} commands={info['commands']}")
+    process_age_s = _process_age_s("smc-alerts")
     denied = [entry for entry in admin.acl_log(count=128) if entry.get("username") == USER]
-    unexpected = [entry for entry in denied if str(entry.get("object")) not in EXPECTED_DENIED]
+    since_start = [entry for entry in denied if float(entry.get("age-seconds", 0)) < process_age_s]
+    unexpected = [entry for entry in since_start if str(entry.get("object")) not in EXPECTED_DENIED]
     for entry in denied:
+        when = "після старту" if entry in since_start else "до старту (create)"
         print(f"  відмова: {entry.get('reason')} {entry.get('object')} ×{entry.get('count')} "
-              f"(вік {entry.get('age-seconds')} с)")
-    print(f"відмов {USER}: {len(denied)}, неочікуваних: {len(unexpected)}")
+              f"(вік {entry.get('age-seconds')} с, {when})")
+    print(f"процес живе {process_age_s:.0f} с; відмов після старту: {len(since_start)}, неочікуваних: {len(unexpected)}")
     if unexpected:
-        raise StopError("є відмови поза очікуваними — процесу бракує прав (або щось пробує писати)")
+        raise StopError("процес отримує відмови поза очікуваними — бракує прав або щось пробує писати")
 
 
 def main(argv: List[str]) -> int:

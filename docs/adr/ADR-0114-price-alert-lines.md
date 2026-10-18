@@ -540,3 +540,15 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
   `enabled:false` (без Redis) — прогалина ранбука з S6. Без тіків лінії не взводяться і не спрацьовують; health чесно
   `degraded: ["ticks_unavailable"]`; інтерфейсу ще нема — відвідувачі не зачеплені. Рішення про ACL-користувача — за
   власником.
+- 2026-10-18 — **S13 прод, крок 3a** (власник: «Роби окремого ACL-користувача smc_alerts лише на читання», потім «Го на
+  крок 3a»; локальний доказ пропущено його рішенням — Docker Desktop на ПК не стартує): `ops/vps/alerts-redis-acl.py`
+  — користувач `smc_alerts` (`~v3_local:*`, лише `+get +ttl +lrange +select +ping` і підписка; спершу був `+@read` —
+  автоматичне security-рев'ю: RANDOMKEY/DBSIZE/DUMP, звужено до переліку), креденшели в `environment`
+  `/etc/supervisor/conf.d/alerts.conf` (тепер 600 root, як інші конфіги з паролями). main `e3851d7c` (CI: двічі
+  відомий флейк `test_ws_delta_cursor_race`, перезапуск job — зелений). VPS: бекапи `redis.conf` і `alerts.conf`;
+  перевірка до `CONFIG REWRITE` — PING/GET/TTL/LRANGE є, NOPERM на SET, PUBLISH, KEYS, RANDOMKEY, DBSIZE, FLUSHDB і GET
+  поза `v3_local:*`; `reread` — лише `smc-alerts: changed`; `update smc-alerts`; 120 с: RUNNING, ERROR 0, **health
+  `degraded: []`**; пароль (64 hex) у логах alerts і supervisord — 0 збігів; ACL LOG після старту — лише `client`
+  (CLIENT SETINFO redis-py, як у всіх сервісів). Шлях читання M1/`tick:last` ще не викликався (0 ліній, ринок закрито)
+  — перевірити `check` після першого взведення. Знахідка самого `check`: рахував відмови власної перевірки `create` —
+  тепер лише після старту процесу (`/proc/<pid>/stat`).
