@@ -474,7 +474,7 @@ nginx `/api/alerts`. **До ввімкнення** (кожен крок — за
 | --- | --- | --- |
 | 1 | Залежності пушу у venv — **до коду**: `runtime.alerts.service` імпортує `pywebpush` на старті, і рестарт `smc-alerts` з новим кодом без пакетів — FATAL. Лише нові пакети, `--no-deps` (версії з `requirements.txt`; cffi і pycparser — їхні транзитивні, на проді їх нема): наявні не змінюються | `cd /opt/smc-v3 && .venv/bin/python -m pip install --no-deps pywebpush==2.5.0 py-vapid==1.9.4 http-ece==1.2.1 cryptography==50.0.2 cffi==2.0.0 pycparser==3.0` → `.venv/bin/python -m pip check` чистий → `.venv/bin/python -c "import pywebpush, py_vapid, http_ece, cryptography"` |
 | 2 | Код: гілку злито в main, на VPS — `git pull --ff-only` (тег відкату перед ним). Нічого не рестартує; з `enabled:false` новий код стартує і без ключа | `cd /opt/smc-v3 && git tag pre-alerts-push-<дата> && git pull --ff-only` |
-| 3 | Ключ VAPID (сервер генерує сам; приватний не друкується) | `cd /opt/smc-v3 && sudo .venv/bin/python -m runtime.alerts.vapid_keys` → `sudo stat -c '%a %U:%G' /etc/smc-v3 /etc/smc-v3/alerts.env` = `750 root:smc`, `640 root:smc` |
+| 3 | Ключ VAPID (сервер генерує сам; приватний не друкується; `-B` — root не лишає `.pyc` у репо) | `cd /opt/smc-v3 && sudo .venv/bin/python -B -m runtime.alerts.vapid_keys` → `sudo stat -c '%a %U:%G' /etc/smc-v3 /etc/smc-v3/alerts.env` = `750 root:smc`, `640 root:smc` |
 | 4 | Увімкнути: `alerts.enabled = true` у git → `git pull` → рестарт | `sudo supervisorctl restart smc-alerts` → 120 с (D9.1): `ALERTS_READY channel=push`, без ERROR у `/var/log/smc-v3/alerts.stderr.log` |
 | 5 | Перевірка зовні | `curl -s https://aione-smc.com/api/alerts/health` = `{"enabled": true, "channel": "push", "degraded": []}`; `curl -s …/api/alerts/push/key` — ключ |
 | 6 | Інтерфейс: збірка UI з main і заміна `ui_v4/dist` (як інші UI-деплої: бекап `dist`, перевірка хешу коміту в бандлі) | бандл містить `push/subscribe`; `sw.js` — `notificationclick` |
@@ -489,7 +489,7 @@ nginx `/api/alerts`. **До ввімкнення** (кожен крок — за
 | Сповіщення й черга доставки | `sudo -u smc python3 -m json.tool /var/lib/smc-v3/alerts/alerts.json` (`failed` у записі черги — «не доставлено») |
 | Пристрої | `sudo -u smc python3 -m json.tool /var/lib/smc-v3/alerts/devices.json` (`push_gone` — браузер скасував підписку) |
 | Ліміти | `config.json:alerts.max_devices`, `devices_per_ip_per_hour`, `max_active_per_subscriber`; неактивні (без запитів `device_idle_days`, без взведених) прибираються щогодини |
-| Замінити ключ VAPID | `sudo .venv/bin/python -m runtime.alerts.vapid_keys --rotate` → рестарт. **Усі пристрої мусять увімкнути сповіщення знову** (підписки прив'язані до ключа); попередній файл — `alerts.env.bak.<epoch>` |
+| Замінити ключ VAPID | `sudo .venv/bin/python -B -m runtime.alerts.vapid_keys --rotate` → рестарт. **Усі пристрої мусять увімкнути сповіщення знову** (підписки прив'язані до ключа); попередній файл — `alerts.env.bak.<epoch>` |
 | Telegram замість пушу | `telegram_enabled = true` у git + `sudo bash /opt/smc-v3/ops/vps/alerts-secrets.sh` (змінює лише свої два рядки, ключ VAPID лишається) → рестарт |
 | Битий `alerts.json` | процес стартує з валідною частиною, сирий файл — `alerts.json.corrupt-<ms>` поруч, `state_quarantined` у health |
 | Вимкнути | `alerts.enabled = false` у git → `git pull` → `sudo supervisorctl restart smc-alerts` (стан і ключ лишаються; інтерфейс ховає сповіщення); аварійно — `sudo supervisorctl stop smc-alerts` |
