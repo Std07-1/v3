@@ -2,6 +2,10 @@
 # ADR-0114: секрети бота сигналів (процес smc-alerts) у /etc/smc-v3/alerts.env, root:smc 640.
 # Запуск (одна команда): sudo bash /opt/smc-v3/ops/vps/alerts-secrets.sh
 #
+# Rev 2: основний канал — пуш у браузер (ключ VAPID: sudo .venv/bin/python -m runtime.alerts.vapid_keys). Цей скрипт
+# потрібен лише для Telegram (alerts.telegram_enabled=true) і змінює ЛИШЕ свої два рядки — решта файлу (ключ VAPID)
+# лишається: стерти ключ = вимкнути пуш на всіх пристроях.
+#
 # Токен вводиться наосліп (stdin, read -s): не потрапляє ні в argv (sudo пише argv в auth.log), ні на екран, ні в
 # історію shell. printf — вбудована команда bash, окремого процесу з токеном в аргументах нема.
 # Chat id власника за замовчуванням — той самий, що в системного бота «Monitor» (/etc/aione-alerts/env, ADR-0106):
@@ -49,7 +53,11 @@ fi
 
 tmp="$(mktemp "$dir/.alerts.env.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
-printf 'ALERTS_TELEGRAM_TOKEN=%s\nALERTS_OWNER_CHAT_ID=%s\n' "$token" "$chat" > "$tmp"
+if [ -f "$ENV_FILE" ]; then
+  # Інші рядки (ALERTS_VAPID_PRIVATE_KEY) переносимо як є; grep без збігів дає код 1 — це не помилка
+  grep -v -E '^(ALERTS_TELEGRAM_TOKEN|ALERTS_OWNER_CHAT_ID)=' "$ENV_FILE" > "$tmp" || true
+fi
+printf 'ALERTS_TELEGRAM_TOKEN=%s\nALERTS_OWNER_CHAT_ID=%s\n' "$token" "$chat" >> "$tmp"
 chmod 640 "$tmp"
 if [ "$(id -u)" -eq 0 ]; then
   chown "root:$OWNER_GROUP" "$tmp"

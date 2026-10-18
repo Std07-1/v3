@@ -460,38 +460,43 @@ WS-сервер видає відвідувачу анонімний ключ (c
 ## Лінія-сповіщення (ADR-0114)
 
 Окремий процес `smc-alerts` (`python -m runtime.alerts`, 127.0.0.1:8020, поза групою `smc`): ціна перетнула лінію з
-позначкою «Сповіщати» → повідомлення ботом сигналів (не «Monitor», не бот Арчі). Стан — `/var/lib/smc-v3/alerts`
-(`alerts.json`, `devices.json`, лише `smc`); секрети — `/etc/smc-v3/alerts.env` (root:smc 640); вмикач —
-`config.json:alerts.enabled`. Рестарт `smc:smc-ws` процес не чіпає.
+позначкою «Сповіщати» → **пуш у браузер** (Rev 2, кожен відвідувач; Telegram — лише за `alerts.telegram_enabled=true`).
+Стан — `/var/lib/smc-v3/alerts` (`alerts.json`, `devices.json`, лише `smc`); секрет — `/etc/smc-v3/alerts.env`
+(root:smc 640: `ALERTS_VAPID_PRIVATE_KEY`; для Telegram — ще `ALERTS_TELEGRAM_TOKEN`, `ALERTS_OWNER_CHAT_ID`); вмикач —
+`config.json:alerts.enabled`. Рестарт `smc:smc-ws` процес не чіпає, і навпаки.
 
-**Перше встановлення** (кожен крок — за «го» власника; до кроку 6 сайт нічого не помічає):
+**Уже на проді (16.10, changelog 20261016-003):** тека стану, програма supervisor (`enabled:false` — лише health),
+nginx `/api/alerts`. **До ввімкнення** (кожен крок — за «го» власника):
 
-| # | Що | Команда |
+| # | Що | Команда / перевірка |
 | --- | --- | --- |
-| 1 | Власник: бот у @BotFather (`/newbot`), у новому боті натиснути Start | — |
-| 2 | Секрети (токен наосліп, chat id за замовчуванням — з «Monitor») | `sudo bash /opt/smc-v3/ops/vps/alerts-secrets.sh` |
-| 3 | Перевірити права секретів | `sudo stat -c '%a %U:%G' /etc/smc-v3 /etc/smc-v3/alerts.env` → `750 root:smc`, `640 root:smc` |
-| 4 | Тека стану | `sudo install -d -o smc -g smc -m 750 /var/lib/smc-v3/alerts` |
-| 5 | Програма supervisor (з `enabled:false` у config — лише health) | `sudo cp /opt/smc-v3/tools/alerts.supervisor.conf /etc/supervisor/conf.d/alerts.conf && sudo supervisorctl reread && sudo supervisorctl update` → `curl -s 127.0.0.1:8020/api/alerts/health` = `{"enabled": false}` |
-| 6 | nginx (backup спершу) | `sudo cp /opt/smc-v3/tools/nginx/snippets/smc_alerts_location.conf /etc/nginx/snippets/` + рядок `include /etc/nginx/snippets/smc_alerts_location.conf;` у server-блоці aione-smc.com поруч з `location /api/v3/` → `sudo nginx -t && sudo systemctl reload nginx` |
-| 7 | Увімкнути: `alerts.enabled = true` у git → деплой → `sudo supervisorctl restart smc-alerts` | спостереження 120 с (D9.1): `sudo supervisorctl status smc-alerts`, `tail -n 50 /var/log/smc-v3/alerts.stderr.log` — `ALERTS_READY`, без ERROR |
-| 8 | Smoke зовні | `curl -s https://aione-smc.com/api/alerts/health` = `{"enabled": true, "degraded": []}`; бот на `/alerts` відповідає |
+| 1 | Код: гілку злито в main, на VPS — `git pull --ff-only` (тег відкату перед ним) | `cd /opt/smc-v3 && git tag pre-alerts-push-<дата> && git pull --ff-only` |
+| 2 | Залежності пушу у venv (pywebpush, py-vapid, http-ece, cryptography — версії з `requirements.txt`) | `cd /opt/smc-v3 && .venv/bin/python -m pip install -r requirements.txt` → `.venv/bin/python -c "import pywebpush, py_vapid"` |
+| 3 | Ключ VAPID (сервер генерує сам; приватний не друкується) | `cd /opt/smc-v3 && sudo .venv/bin/python -m runtime.alerts.vapid_keys` → `sudo stat -c '%a %U:%G' /etc/smc-v3 /etc/smc-v3/alerts.env` = `750 root:smc`, `640 root:smc` |
+| 4 | Увімкнути: `alerts.enabled = true` у git → `git pull` → рестарт | `sudo supervisorctl restart smc-alerts` → 120 с (D9.1): `ALERTS_READY channel=push`, без ERROR у `/var/log/smc-v3/alerts.stderr.log` |
+| 5 | Перевірка зовні | `curl -s https://aione-smc.com/api/alerts/health` = `{"enabled": true, "channel": "push", "degraded": []}`; `curl -s …/api/alerts/push/key` — ключ |
+| 6 | Інтерфейс: збірка UI з main і заміна `ui_v4/dist` (як інші UI-деплої: бекап `dist`, перевірка хешу коміту в бандлі) | бандл містить `push/subscribe`; `sw.js` — `notificationclick` |
+| 7 | Живий прогін (D15.1): телефон власника (Android, Chrome) — лінія біля ціни → «Сповіщати» → дозвіл → закрити вкладку → перетин | приходить сповіщення ОС; у лозі `ALERTS_FIRED`, у списку `delivery: delivered` |
 
 **Робота:**
 
 | Дія | Команда |
 | --- | --- |
-| Стан і деградації | `curl -s 127.0.0.1:8020/api/alerts/health` — `degraded`: `ticks_unavailable`, `m1_unavailable:<символ>`, `telegram_unreachable`, `telegram_commands_unavailable`, `state_write_failed`, `state_quarantined` |
-| Лог | `tail -n 100 /var/log/smc-v3/alerts.stderr.log` (`ALERTS_FIRED`, `ALERTS_DEVICE_BOUND`, `ALERTS_DEGRADED…`, `ALERTS_PAIRING_LOCKED`) |
-| Сповіщення й черга доставки | `sudo -u smc python3 -m json.tool /var/lib/smc-v3/alerts/alerts.json` |
-| Пристрої | боту: `/devices`; відключити — `/revoke <id>` |
-| Замінити токен | `sudo bash /opt/smc-v3/ops/vps/alerts-secrets.sh` → `sudo supervisorctl restart smc-alerts` (попередній — `alerts.env.bak.<epoch>`) |
+| Стан і деградації | `curl -s 127.0.0.1:8020/api/alerts/health` — `channel`, `degraded`: `ticks_unavailable`, `m1_unavailable:<символ>`, `push_unreachable`, `state_write_failed`, `state_quarantined` (Telegram: `telegram_unreachable`, `telegram_commands_unavailable`) |
+| Лог | `tail -n 100 /var/log/smc-v3/alerts.stderr.log` (`ALERTS_FIRED`, `ALERTS_DEVICE_SUBSCRIBED`, `ALERTS_PUSH_GONE`, `ALERTS_PUSH_REJECTED`, `ALERTS_UNDELIVERED`, `ALERTS_DEVICE_PRUNED`, `ALERTS_DEVICES_FULL`) |
+| Сповіщення й черга доставки | `sudo -u smc python3 -m json.tool /var/lib/smc-v3/alerts/alerts.json` (`failed` у записі черги — «не доставлено») |
+| Пристрої | `sudo -u smc python3 -m json.tool /var/lib/smc-v3/alerts/devices.json` (`push_gone` — браузер скасував підписку) |
+| Ліміти | `config.json:alerts.max_devices`, `devices_per_ip_per_hour`, `max_active_per_subscriber`; неактивні (без запитів `device_idle_days`, без взведених) прибираються щогодини |
+| Замінити ключ VAPID | `sudo .venv/bin/python -m runtime.alerts.vapid_keys --rotate` → рестарт. **Усі пристрої мусять увімкнути сповіщення знову** (підписки прив'язані до ключа); попередній файл — `alerts.env.bak.<epoch>` |
+| Telegram замість пушу | `telegram_enabled = true` у git + `sudo bash /opt/smc-v3/ops/vps/alerts-secrets.sh` (змінює лише свої два рядки, ключ VAPID лишається) → рестарт |
 | Битий `alerts.json` | процес стартує з валідною частиною, сирий файл — `alerts.json.corrupt-<ms>` поруч, `state_quarantined` у health |
-| Вимкнути | `alerts.enabled = false` у git → деплой → `sudo supervisorctl restart smc-alerts` (стан на диску лишається); аварійно — `sudo supervisorctl stop smc-alerts` |
+| Вимкнути | `alerts.enabled = false` у git → `git pull` → `sudo supervisorctl restart smc-alerts` (стан і ключ лишаються; інтерфейс ховає сповіщення); аварійно — `sudo supervisorctl stop smc-alerts` |
+| Відкат коду | `git checkout pre-alerts-push-<дата>` (тег кроку 1) → рестарт `smc-alerts`; UI — бекап `dist` кроку 6 |
 | Відкат nginx | прибрати рядок `include …smc_alerts_location.conf;` → `sudo nginx -t && sudo systemctl reload nginx` |
 
-Падіння `smc-alerts` (FATAL) приходить ботом «Monitor» із хвостом stderr (ADR-0106): `ALERTS_SECRETS_MISSING`,
-`ALERTS_STATE_DIR_MISSING`, `ALERTS_NO_TICKS`, `StoreSchemaError` — причина в першому рядку.
+Падіння `smc-alerts` (FATAL) приходить ботом «Monitor» із хвостом stderr (ADR-0106): `ALERTS_SECRETS_MISSING` (нема
+ключа — крок 3), `ALERTS_SECRETS_INVALID`, `ALERTS_STATE_DIR_MISSING`, `ALERTS_NO_TICKS`, `StoreSchemaError` — причина
+в першому рядку.
 
 ---
 
