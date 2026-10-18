@@ -28,7 +28,7 @@ describe('createAlertsClient', () => {
       jsonResponse(200, { alerts: [WIRE], degraded: [] }),
     ]);
     const client = createAlertsClient(impl);
-    expect(await client.health()).toEqual({ enabled: true, degraded: ['ticks_unavailable'] });
+    expect(await client.health()).toEqual({ enabled: true, channel: 'telegram', degraded: ['ticks_unavailable'] });
     expect((await client.list()).alerts).toEqual([WIRE]);
     expect(calls.map((c) => [c.url, c.init.method, c.init.credentials])).toEqual([
       ['/api/alerts/health', 'GET', 'same-origin'],
@@ -79,6 +79,33 @@ describe('createAlertsClient', () => {
     expect([err.status, err.code]).toEqual([401, 'not_pairing']);
   });
 
+  it('push channel: health, device state, key, subscribe and forget device', async () => {
+    const subscription = { endpoint: 'https://fcm.googleapis.com/fcm/send/x', keys: { p256dh: 'p', auth: 'a' } };
+    const { impl, calls } = fakeFetch([
+      jsonResponse(200, { enabled: true, channel: 'push', degraded: [] }),
+      jsonResponse(200, { alerts: [], degraded: [], device: { device_id: 'w1', label: 'ПК', push_gone: true } }),
+      jsonResponse(200, { public_key: 'BKey' }),
+      jsonResponse(200, { device: { device_id: 'w1', label: 'ПК' } }),
+      jsonResponse(200, { removed_alerts: 3 }),
+      jsonResponse(200, { public_key: '' }),
+    ]);
+    const client = createAlertsClient(impl);
+    expect((await client.health()).channel).toBe('push');
+    expect((await client.list()).device).toEqual({ device_id: 'w1', label: 'ПК', push_gone: true });
+    expect(await client.pushKey()).toBe('BKey');
+    expect(await client.pushSubscribe(subscription)).toEqual({ device_id: 'w1', label: 'ПК' });
+    expect(await client.forgetDevice()).toBe(3);
+    expect((await client.pushKey().catch((e) => e)).code).toBe('bad_push_key');
+    expect(calls.slice(2, 5).map((c) => [c.url, c.init.method])).toEqual([
+      ['/api/alerts/push/key', 'GET'],
+      ['/api/alerts/push/subscribe', 'POST'],
+      ['/api/alerts/device', 'DELETE'],
+    ]);
+    expect(JSON.parse(String(calls[3].init.body))).toEqual(subscription);
+    expect(calls[3].init.headers).toEqual({ 'X-Alerts': '1', 'Content-Type': 'application/json' });
+    expect(calls[4].init.headers).toEqual({ 'X-Alerts': '1' });
+  });
+
   it('events relay fired/delivered payloads, report open, survive a bad payload and close the source', () => {
     const listeners = new Map<string, (event: MessageEvent) => void>();
     const source = {
@@ -100,9 +127,10 @@ describe('createAlertsClient', () => {
     listeners.get('open')!(new MessageEvent('open'));
     listeners.get('fired')!(new MessageEvent('fired', { data: JSON.stringify(WIRE) }));
     listeners.get('delivered')!(new MessageEvent('delivered', { data: '{oops' }));
+    listeners.get('undelivered')!(new MessageEvent('undelivered', { data: JSON.stringify(WIRE) }));
     close();
     expect(source.url).toBe('/api/alerts/events');
-    expect(seen).toEqual([['fired', WIRE]]);
+    expect(seen).toEqual([['fired', WIRE], ['undelivered', WIRE]]);
     expect(onOpen).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledOnce();
     expect(source.close).toHaveBeenCalledOnce();

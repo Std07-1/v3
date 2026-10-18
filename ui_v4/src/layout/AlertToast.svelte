@@ -1,6 +1,7 @@
 <!-- src/layout/AlertToast.svelte
      ADR-0114 S8: коротке повідомлення на відкритій сторінці — спрацювання лінії (з тихим сигналом) або відмова дії
-     (причина людською мовою). Зверху по центру під рядками HUD, скло мовою меню; сам зникає. Нічого не перехоплює. -->
+     (причина людською мовою). Зверху по центру під рядками HUD, скло мовою меню; сам зникає. Нічого не перехоплює.
+     Rev 2: поки браузер підписується на пуш (перша реєстрація у FCM — до хвилини) — «Вмикаю сповіщення…». -->
 <script lang="ts">
   import { onMount } from "svelte";
   import { fly } from "svelte/transition";
@@ -12,17 +13,17 @@
   import { armAlertSound, playAlertChime } from "../lib/alerts/alertSound";
   import { ICON_BELL } from "./toolIcons";
 
-  const FIRED_MS = 8000;
-  const ERROR_MS = 5000;
+  type ToastKind = "fired" | "error" | "info";
+  const SHOW_MS: Record<ToastKind, number> = { fired: 8000, error: 5000, info: 60_000 }; // info — поки триває дія
 
-  let toast = $state<{ id: number; text: string; kind: "fired" | "error" } | null>(null);
+  let toast = $state<{ id: number; text: string; kind: ToastKind } | null>(null);
   let seq = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  function show(text: string, kind: "fired" | "error"): void {
+  function show(text: string, kind: ToastKind): void {
     toast = { id: ++seq, text, kind };
     clearTimeout(timer);
-    timer = setTimeout(() => (toast = null), kind === "fired" ? FIRED_MS : ERROR_MS);
+    timer = setTimeout(() => (toast = null), SHOW_MS[kind]);
   }
 
   onMount(() => {
@@ -33,7 +34,11 @@
       playAlertChime();
     });
     let lastError: string | null = null;
+    let enabling = false;
     const stopView = alerts.view.subscribe((view) => {
+      if (view.pushEnabling && !enabling) show("Вмикаю сповіщення…", "info");
+      if (!view.pushEnabling && enabling && toast?.kind === "info") toast = null;
+      enabling = view.pushEnabling;
       if (view.lastError !== null && view.lastError !== lastError) show(alertErrorText(view.lastError), "error");
       lastError = view.lastError;
     });

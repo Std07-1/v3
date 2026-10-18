@@ -46,7 +46,17 @@ function fired(direction: 'up' | 'down', delivery: AlertWire['delivery'] = 'deli
 }
 
 function view(overrides: Partial<AlertsView> = {}): AlertsView {
-  return { status: 'ready', alerts: [], degraded: [], lastError: null, ...overrides };
+  return {
+    status: 'ready',
+    channel: 'telegram',
+    pushSupport: null,
+    pushGone: false,
+    pushEnabling: false,
+    alerts: [],
+    degraded: [],
+    lastError: null,
+    ...overrides,
+  };
 }
 
 describe('alertActionFor', () => {
@@ -137,5 +147,35 @@ describe('texts', () => {
   it('test_toast_text_has_title_and_direction', () => {
     expect(firedToastText(fired('down'), 2)).toBe('XAU/USD 4380.00 — перетнуто згори вниз');
     expect(firedToastText(wire(), 2)).toBe('XAU/USD 4380.00');
+  });
+});
+
+describe('push channel (ADR-0114 Rev 2)', () => {
+  it('test_unpaired_push_device_gets_one_click_enable_or_a_reason', () => {
+    const action = (support: AlertsView['pushSupport']) =>
+      alertActionFor(drawing('d-1'), view({ status: 'unpaired', channel: 'push', pushSupport: support }), SYMBOL);
+    expect(action('ok')).toEqual({ kind: 'enable', label: 'Сповіщати', on: false, hintOnly: false });
+    expect(action('denied')).toMatchObject({ hintOnly: true, label: expect.stringContaining('дозвольте') });
+    expect(action('ios_home_screen')).toMatchObject({ hintOnly: true, label: expect.stringContaining('початковий екран') });
+    expect(action('unsupported')).toMatchObject({ hintOnly: true, label: expect.stringContaining('не вміє') });
+    expect(action(null)).toMatchObject({ hintOnly: true });
+  });
+
+  it('test_gone_subscription_turns_every_action_into_resubscribe', () => {
+    const action = alertActionFor(drawing('d-1'), view({ channel: 'push', pushGone: true, alerts: [wire()] }), SYMBOL);
+    expect(action).toMatchObject({ kind: 'resubscribe', on: false, hintOnly: false });
+  });
+
+  it('test_state_text_names_undelivered_and_waiting_for_resubscribe', () => {
+    expect(alertStateText({ ...fired('up'), delivery: 'failed' }, [])).toBe('перетнуто знизу вгору · не доставлено');
+    expect(alertStateText(fired('up', 'pending'), [], true)).toBe('перетнуто знизу вгору · чекає, доки ввімкнуть сповіщення');
+    expect(alertStateText(fired('up', 'pending'), ['push_unreachable'])).toBe('перетнуто знизу вгору · ще не доставлено');
+    expect(alertStateText(fired('up', 'delivered'), [], true)).toBe('перетнуто знизу вгору');
+  });
+
+  it('test_push_error_codes_have_human_text', () => {
+    for (const code of ['push_denied', 'push_failed', 'no_service_worker', 'devices_per_ip', 'devices_full']) {
+      expect(alertErrorText(code)).not.toBe(`Сповіщення: ${code}`);
+    }
   });
 });

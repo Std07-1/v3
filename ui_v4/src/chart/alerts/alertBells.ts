@@ -30,6 +30,8 @@ export interface BellsInput {
   alerts: readonly AlertWire[];
   symbol: string;
   degraded: readonly string[];
+  /** Пуш: браузер скасував підписку — те, що чекає доставки, поки не дійде. */
+  pushGone: boolean;
   priceToY: (price: number) => number | null;
   paneHeight: number;
   /** CSS-px згори, зайняті рядком кнопок (☰, ▶, годинник) у тій самій колонці: там дзвіночок не малюємо — лінію
@@ -39,7 +41,8 @@ export interface BellsInput {
 
 export function layoutBells(input: BellsInput): Bell[] {
   const bySymbol = new Map(input.alerts.filter((a) => a.symbol === input.symbol).map((a) => [a.drawing_id, a]));
-  const telegramDown = input.degraded.includes('telegram_unreachable');
+  const stuck =
+    input.pushGone || input.degraded.includes('telegram_unreachable') || input.degraded.includes('push_unreachable');
   const bells: Bell[] = [];
   for (const drawing of input.drawings) {
     const alert = bySymbol.get(drawing.id);
@@ -48,8 +51,8 @@ export function layoutBells(input: BellsInput): Bell[] {
     const y = input.priceToY(spec.level);
     if (y === null || !Number.isFinite(y) || y > input.paneHeight) continue; // лінія поза екраном
     if (y - BELL_HALF_PX < Math.max(0, input.topReserved)) continue; // під рядком кнопок (або вище екрана)
-    const state: BellState =
-      alert.state === 'armed' ? 'armed' : alert.delivery === 'pending' && telegramDown ? 'undelivered' : 'fired';
+    const undelivered = alert.delivery === 'failed' || (alert.delivery === 'pending' && stuck);
+    const state: BellState = alert.state === 'armed' ? 'armed' : undelivered ? 'undelivered' : 'fired';
     bells.push({ drawingId: drawing.id, y: Math.round(y), state, color: lineColor(drawing) });
   }
   return bells;

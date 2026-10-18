@@ -1,13 +1,16 @@
 <!-- src/layout/AlertsMenuSection.svelte
-     ADR-0114 S8: ☰ → «Сповіщення». Не під'єднано — «Під'єднати Telegram» (відкриває бота) і поле для 6 цифр, які
-     бот надішле («код назад», §4.5: прив'язується лише цей браузер). Під'єднано — список сповіщень з діями. Сервіс
-     вимкнений чи недоступний — пункту нема. Стан — із сервера (X28); тут лише показ. -->
+     ADR-0114 S8: ☰ → «Сповіщення». Канал «пуш» (Rev 2): не ввімкнено — «Увімкнути на цьому пристрої» (дозвіл
+     браузера → підписка) або причина, чому не можна; браузер скасував підписку — «Увімкнути знову»; увімкнено — список
+     і «Вимкнути на цьому пристрої» (другим натиском — прибирає сповіщення пристрою). Канал Telegram (Rev 1) —
+     «Під'єднати Telegram» і 6 цифр від бота («код назад», §4.5). Сервіс вимкнений чи недоступний — пункту нема.
+     Стан — із сервера (X28); тут лише показ. -->
 <script lang="ts">
   import { serverConfig } from "../app/frameRouter";
   import { configuredPriceDigits } from "../lib/priceDigits";
   import { alerts } from "../lib/alerts/alertsStore";
   import type { AlertWire, ConfirmResult } from "../lib/alerts/alertClient";
   import { AlertsApiError } from "../lib/alerts/alertClient";
+  import { PushError } from "../lib/alerts/browserPush";
   import { alertErrorText, alertStateText, alertTitle } from "../lib/alerts/alertUi";
 
   const view = alerts.view;
@@ -18,6 +21,19 @@
   let code = $state("");
   let message = $state<string | null>(null);
   let busy = $state(false);
+  let confirmForget = $state(false); // «Вимкнути на цьому пристрої» — другим натиском
+  let forgetTimer: ReturnType<typeof setTimeout> | undefined;
+  const FORGET_CONFIRM_MS = 4000;
+
+  const isPush = $derived($view.channel === "push");
+  const PUSH_SUPPORT_HINT: Record<string, string> = {
+    denied: "Браузер заборонив сповіщення цьому сайту — дозвольте їх у налаштуваннях сайту.",
+    ios_home_screen: "На iPhone: «Поділитися» → «На початковий екран», відкрийте сайт звідти й увімкніть тут.",
+    unsupported: "Цей браузер не вміє сповіщень.",
+  };
+  const supportHint = $derived(
+    $view.pushSupport && $view.pushSupport !== "ok" ? PUSH_SUPPORT_HINT[$view.pushSupport] : null,
+  );
 
   const digits = $derived(code.replace(/\D/g, ""));
   const sorted = $derived(
@@ -42,7 +58,8 @@
     try {
       await job();
     } catch (err) {
-      message = alertErrorText(err instanceof AlertsApiError ? err.code : String(err));
+      const coded = err instanceof AlertsApiError || err instanceof PushError;
+      message = alertErrorText(coded ? err.code : String(err));
     } finally {
       busy = false;
     }
@@ -65,18 +82,43 @@
       }
     });
 
+  const enablePush = () => run(() => alerts.enablePush()); // дозвіл просить першим — прямо з цього кліку
+
+  function forget(): void {
+    if (!confirmForget) {
+      confirmForget = true;
+      clearTimeout(forgetTimer);
+      forgetTimer = setTimeout(() => (confirmForget = false), FORGET_CONFIRM_MS);
+      return;
+    }
+    confirmForget = false;
+    clearTimeout(forgetTimer);
+    void run(() => alerts.forgetDevice());
+  }
+
   const digitsOf = (alert: AlertWire) => configuredPriceDigits($serverConfig.priceDigits, alert.symbol);
 </script>
 
 {#if $view.status === "unpaired" || $view.status === "ready"}
   <button class="row" role="menuitem" aria-expanded={expanded} onclick={() => (expanded = !expanded)}>
     <span class="label">Сповіщення</span>
-    <span class="state">{$view.status === "unpaired" ? "не під'єднано" : armedCount} {expanded ? "▾" : "▸"}</span>
+    <span class="state"
+      >{$view.status === "unpaired" ? (isPush ? "вимкнено" : "не під'єднано") : armedCount}
+      {expanded ? "▾" : "▸"}</span
+    >
   </button>
 
   {#if expanded}
     <div class="section">
-      {#if $view.status === "unpaired"}
+      {#if $view.status === "unpaired" && isPush}
+        <p class="hint">Сповіщення приходять від браузера — навіть коли вкладку закрито.</p>
+        {#if supportHint}
+          <p class="hint warn">{supportHint}</p>
+        {/if}
+        <button class="action" disabled={busy || $view.pushSupport !== "ok"} onclick={enablePush}>
+          Увімкнути на цьому пристрої
+        </button>
+      {:else if $view.status === "unpaired"}
         {#if pairingLink === null}
           <p class="hint">Повідомлення про перетин ліній приходять у Telegram.</p>
           <button class="action" disabled={busy} onclick={startPairing}>Під'єднати Telegram</button>
@@ -101,6 +143,10 @@
           </div>
         {/if}
       {:else}
+        {#if $view.pushGone}
+          <p class="hint warn">Браузер вимкнув сповіщення на цьому пристрої — те, що спрацювало, чекає.</p>
+          <button class="action" disabled={busy} onclick={enablePush}>Увімкнути знову</button>
+        {/if}
         {#if sorted.length === 0}
           <p class="hint">Правий клік на горизонталі → «Сповіщати».</p>
         {/if}
@@ -108,7 +154,7 @@
           <div class="item" class:fired={alert.state !== "armed"}>
             <div class="text">
               <span class="title">{alertTitle(alert, digitsOf(alert))}</span>
-              <span class="sub">{alertStateText(alert, $view.degraded)}</span>
+              <span class="sub">{alertStateText(alert, $view.degraded, $view.pushGone)}</span>
             </div>
             <div class="actions">
               {#if alert.state !== "armed"}
@@ -126,6 +172,11 @@
             </div>
           </div>
         {/each}
+        {#if isPush}
+          <button class="forget" class:armed={confirmForget} disabled={busy} onclick={forget}>
+            {confirmForget ? "Точно? Сповіщення цього пристрою зникнуть" : "Вимкнути на цьому пристрої"}
+          </button>
+        {/if}
       {/if}
       {#if message}
         <p class="hint message">{message}</p>
@@ -187,6 +238,27 @@
   }
   .message {
     color: var(--text-2, #9b9bb0);
+  }
+  .warn {
+    color: var(--warn, #ffb347);
+  }
+  .forget {
+    all: unset;
+    box-sizing: border-box;
+    cursor: pointer;
+    margin-top: 2px;
+    font-size: var(--t4-size, 11px);
+    color: var(--text-3, #6d7080);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .forget:hover:not(:disabled),
+  .forget.armed {
+    color: var(--warn, #ffb347);
+  }
+  .forget:disabled {
+    cursor: default;
+    opacity: 0.45;
   }
   .action,
   .mini {

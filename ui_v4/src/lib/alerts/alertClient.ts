@@ -5,9 +5,12 @@
 // шле її сам (`credentials: 'same-origin'`), JS її не бачить. Зміни стану — із заголовком `X-Alerts: 1` (CSRF,
 // ADR-0114 §4.5). Відмови сервера — `AlertsApiError` з кодом причини (`not_paired`, `no_price`, `limit`, …), а не
 // «щось пішло не так». Відповідь не-JSON (сайт без nginx-маршруту віддає index.html) — `unavailable`.
+// Rev 2: канал (`health.channel`) — пуш у браузер (ключ, підписка, «вимкнути на цьому пристрої») або Telegram (S7).
 
 export type AlertState = 'armed' | 'fired';
-export type AlertDelivery = 'pending' | 'delivered' | null;
+/** `failed` — не доставлено й не буде (відмова push-сервісу, застаріло, пристрій вимкнено). */
+export type AlertDelivery = 'pending' | 'delivered' | 'failed' | null;
+export type AlertsChannel = 'push' | 'telegram';
 
 /** Сповіщення так, як його віддає сервер (`runtime/alerts/app.py::_wire`). */
 export interface AlertWire {
@@ -33,7 +36,22 @@ export interface AlertWire {
 
 export interface AlertsHealth {
   enabled: boolean;
+  channel: AlertsChannel;
   degraded: string[];
+}
+
+/** Пристрій цієї сторінки (пуш): `push_gone` — браузер скасував підписку, треба ввімкнути знову. */
+export interface AlertsDevice {
+  device_id: string;
+  label: string;
+  push_gone: boolean;
+}
+
+/** Підписка браузера як її віддає `PushSubscription.toJSON()`. */
+export interface PushSubscriptionWire {
+  endpoint: string;
+  expirationTime?: number | null;
+  keys: { p256dh: string; auth: string };
 }
 
 export interface PutAlertBody {
@@ -52,7 +70,7 @@ export interface ConfirmResult {
   device?: { device_id: string; label: string };
 }
 
-export type AlertEventName = 'fired' | 'delivered';
+export type AlertEventName = 'fired' | 'delivered' | 'undelivered';
 
 export class AlertsApiError extends Error {
   constructor(
@@ -67,11 +85,17 @@ export class AlertsApiError extends Error {
 
 export interface AlertsClient {
   health(): Promise<AlertsHealth>;
-  list(): Promise<{ alerts: AlertWire[]; degraded: string[] }>;
+  list(): Promise<{ alerts: AlertWire[]; degraded: string[]; device: AlertsDevice | null }>;
   put(drawingId: string, body: PutAlertBody): Promise<AlertWire>;
   remove(drawingId: string): Promise<boolean>;
   pair(): Promise<{ link: string; label: string; expires_in_s: number }>;
   confirm(code: string): Promise<ConfirmResult>;
+  /** Публічний ключ VAPID для `pushManager.subscribe` (канал «пуш»). */
+  pushKey(): Promise<string>;
+  /** Підписка браузера → пристрій цієї сторінки (cookie ставить сервер; своя сторінка — оновлення). */
+  pushSubscribe(subscription: PushSubscriptionWire): Promise<{ device_id: string; label: string }>;
+  /** «Вимкнути на цьому пристрої»: сповіщення пристрою, пристрій і cookie — геть; → скільки сповіщень прибрано. */
+  forgetDevice(): Promise<number>;
   /** Потік подій моїх сповіщень; повертає функцію закриття. `onOpen` — після (пере)підключення: перечитати список. */
   events(handlers: {
     onEvent: (name: AlertEventName, alert: AlertWire) => void;
@@ -124,11 +148,13 @@ export function createAlertsClient(
   return {
     async health() {
       const payload = await ok(await call('GET', '/health'));
-      return { enabled: payload.enabled === true, degraded: asStrings(payload.degraded) };
+      const channel: AlertsChannel = payload.channel === 'push' ? 'push' : 'telegram'; // старий сервер — Telegram
+      return { enabled: payload.enabled === true, channel, degraded: asStrings(payload.degraded) };
     },
     async list() {
       const payload = await ok(await call('GET', ''));
-      return { alerts: (payload.alerts as AlertWire[]) ?? [], degraded: asStrings(payload.degraded) };
+      const device = (payload.device as AlertsDevice | undefined) ?? null;
+      return { alerts: (payload.alerts as AlertWire[]) ?? [], degraded: asStrings(payload.degraded), device };
     },
     async put(drawingId, body) {
       return (await ok(await call('PUT', `/${encodeURIComponent(drawingId)}`, body))).alert as AlertWire;
@@ -151,6 +177,18 @@ export function createAlertsClient(
       }
       return payload as unknown as ConfirmResult;
     },
+    async pushKey() {
+      const key = (await ok(await call('GET', '/push/key'))).public_key;
+      if (typeof key !== 'string' || !key) throw new AlertsApiError(200, 'bad_push_key');
+      return key;
+    },
+    async pushSubscribe(subscription) {
+      return (await ok(await call('POST', '/push/subscribe', subscription))).device as { device_id: string; label: string };
+    },
+    async forgetDevice() {
+      const removed = (await ok(await call('DELETE', '/device'))).removed_alerts;
+      return typeof removed === 'number' ? removed : 0;
+    },
     events({ onEvent, onOpen, onError }) {
       const source = eventSourceFactory(`${BASE}/events`);
       const relay = (name: AlertEventName) => (event: MessageEvent) => {
@@ -162,6 +200,7 @@ export function createAlertsClient(
       };
       source.addEventListener('fired', relay('fired') as EventListener);
       source.addEventListener('delivered', relay('delivered') as EventListener);
+      source.addEventListener('undelivered', relay('undelivered') as EventListener);
       if (onOpen) source.addEventListener('open', () => onOpen());
       if (onError) source.addEventListener('error', () => onError());
       return () => source.close();

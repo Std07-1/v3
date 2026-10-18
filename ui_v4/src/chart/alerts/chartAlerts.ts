@@ -63,6 +63,7 @@ export class ChartAlertsBinding {
             alerts: view.alerts,
             symbol,
             degraded: view.degraded,
+            pushGone: view.pushGone,
             priceToY: (price) => this.series.priceToCoordinate(price),
             paneHeight,
             topReserved: this.measureTopReserved(),
@@ -82,13 +83,23 @@ export class ChartAlertsBinding {
     }
   }
 
-  /** Дія для фігури за id (меню стилю) або для виділеної (капсула). Відмова вже гучна в контролері (`lastError`). */
+  /** Дія для фігури за id (меню стилю) або для виділеної (капсула). Відмова вже гучна в контролері (`lastError`).
+   *  Пуш без підписки: спершу дозвіл і підписка (у цьому ж кліку — до будь-якого мережевого await), далі — лінія. */
   async act(drawingId?: string): Promise<void> {
     const pair = get(currentPair);
     const { drawings, selectedId } = this.renderer.drawingsView();
     const drawing = drawings.find((d) => d.id === (drawingId ?? selectedId)) ?? null;
-    const action = alertActionFor(drawing, get(alerts.view), pair?.symbol ?? null);
+    const view = get(alerts.view);
+    const action = alertActionFor(drawing, view, pair?.symbol ?? null);
     if (pair === null || drawing === null || action === null || action.hintOnly) return;
+    if (action.kind === 'resubscribe' || (view.channel === 'push' && view.status === 'unpaired')) {
+      try {
+        await alerts.enablePush();
+      } catch {
+        return; // причина вже в lastError (спливне повідомлення)
+      }
+      if (action.kind === 'resubscribe') return;
+    }
     if (action.kind === 'enable') await alerts.enable(drawing, pair.symbol, pair.tf);
     else if (action.kind === 'disable') await alerts.disable(drawing.id, pair.symbol);
     else await alerts.rearm(drawing, pair.symbol, pair.tf);

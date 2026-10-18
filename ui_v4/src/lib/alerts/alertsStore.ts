@@ -5,11 +5,13 @@
 import { alertLevelOf } from '../../chart/drawings/tools';
 import { createAlertsClient } from './alertClient';
 import { createAlertsController } from './alertsController';
+import { browserPushEnv } from './browserPush';
 
 export const alerts = createAlertsController({
   client: createAlertsClient(),
   levelOf: alertLevelOf,
   now: () => Date.now(),
+  push: browserPushEnv(),
 });
 
 let started = false;

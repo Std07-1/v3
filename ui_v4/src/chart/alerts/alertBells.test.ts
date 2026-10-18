@@ -38,6 +38,7 @@ function input(overrides: Partial<BellsInput>): BellsInput {
     alerts: [],
     symbol: SYMBOL,
     degraded: [],
+    pushGone: false,
     priceToY: (price) => 1000 - price,
     paneHeight: 500,
     topReserved: 0,
@@ -140,5 +141,20 @@ describe('sameBells', () => {
     expect(sameBells([bell], [{ ...bell, y: 101 }])).toBe(false);
     expect(sameBells([bell], [{ ...bell, state: 'fired' }])).toBe(false);
     expect(sameBells([bell], [{ ...bell, color: '#000' }])).toBe(false);
+  });
+});
+
+describe('layoutBells — push (ADR-0114 Rev 2)', () => {
+  it('test_bell_undelivered_for_failed_or_pending_while_push_is_stuck', () => {
+    const drawings = [hline('f', 900), hline('p', 850), hline('d', 800)];
+    const alerts = [
+      alert('f', { state: 'fired', fired: FIRED, delivery: 'failed' }),
+      alert('p', { state: 'fired', fired: FIRED, delivery: 'pending' }),
+      alert('d', { state: 'fired', fired: FIRED, delivery: 'delivered' }),
+    ];
+    const states = (over: Partial<BellsInput>) => layoutBells(input({ drawings, alerts, ...over })).map((b) => b.state);
+    expect(states({})).toEqual(['undelivered', 'fired', 'fired']);
+    expect(states({ pushGone: true })).toEqual(['undelivered', 'undelivered', 'fired']);
+    expect(states({ degraded: ['push_unreachable'] })).toEqual(['undelivered', 'undelivered', 'fired']);
   });
 });

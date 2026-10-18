@@ -7,11 +7,14 @@ import { drawingsKey } from '../../chart/drawings/drawingsStorage';
 import {
   AlertsApiError,
   type AlertEventName,
+  type AlertsChannel,
   type AlertsClient,
   type AlertWire,
+  type PushSubscriptionWire,
   type PutAlertBody,
 } from './alertClient';
 import { createAlertsController, localStorageOwned, type OwnedStore } from './alertsController';
+import type { PushEnv } from './browserPush';
 
 const NOW = 1_792_086_371_000;
 const SYMBOL = 'XAU/USD';
@@ -29,14 +32,40 @@ class FakeServer implements AlertsClient {
   failRemove = false;
   handlers: { onEvent: (n: AlertEventName, a: AlertWire) => void; onOpen?: () => void } | null = null;
   gate: Promise<void> | null = null;
+  channel: AlertsChannel = 'telegram';
+  pushGone = false;
+  subscribeError: AlertsApiError | null = null;
+  subscriptions: PushSubscriptionWire[] = [];
+  forgotten = 0;
 
   async health() {
-    if (!this.enabled) return { enabled: false, degraded: [] };
-    return { enabled: true, degraded: [] };
+    if (!this.enabled) return { enabled: false, channel: this.channel, degraded: [] };
+    return { enabled: true, channel: this.channel, degraded: [] };
   }
   async list() {
     if (!this.paired) throw new AlertsApiError(401, 'not_paired');
-    return { alerts: [...this.alerts.values()], degraded: [] };
+    const device = this.channel === 'push' ? { device_id: 'w1', label: 'Android · Chrome', push_gone: this.pushGone } : null;
+    return { alerts: [...this.alerts.values()], degraded: [], device };
+  }
+  async pushKey() {
+    this.calls.push('GET key');
+    return 'BKey';
+  }
+  async pushSubscribe(subscription: PushSubscriptionWire) {
+    this.calls.push('POST subscribe');
+    if (this.subscribeError) throw this.subscribeError;
+    this.subscriptions.push(subscription);
+    this.paired = true;
+    this.pushGone = false;
+    return { device_id: 'w1', label: 'Android · Chrome' };
+  }
+  async forgetDevice() {
+    this.calls.push('DELETE device');
+    this.forgotten += 1;
+    this.paired = false;
+    const removed = this.alerts.size;
+    this.alerts.clear();
+    return removed;
   }
   async put(drawingId: string, body: PutAlertBody) {
     this.calls.push(`PUT ${drawingId} ${body.level}${body.rearm ? ' rearm' : ''}`);
@@ -244,6 +273,134 @@ describe('alertsController', () => {
     expect(get(controller.view).status).toBe('unpaired');
     expect((await controller.confirm('123456')).status).toBe('bound');
     expect(get(controller.view).status).toBe('ready');
+  });
+});
+
+describe('alertsController — push channel (ADR-0114 Rev 2)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function pushEnv(order: string[], permission: NotificationPermission = 'granted') {
+    let current: NotificationPermission = 'default';
+    const subscription = {
+      options: { applicationServerKey: null },
+      unsubscribe: vi.fn(async () => true),
+      toJSON: () => ({ endpoint: 'https://fcm.googleapis.com/fcm/send/x', keys: { p256dh: 'p', auth: 'a' } }),
+    };
+    const pushManager = {
+      getSubscription: vi.fn(async () => (order.includes('subscribe') ? subscription : null)),
+      subscribe: vi.fn(async () => {
+        order.push('subscribe');
+        return subscription;
+      }),
+    };
+    const env: PushEnv = {
+      hasPush: true,
+      permission: () => current,
+      requestPermission: async () => {
+        order.push('permission');
+        current = permission;
+        return permission;
+      },
+      registration: async () => ({ pushManager }) as unknown as ServiceWorkerRegistration,
+      isIos: false,
+      isStandalone: false,
+    };
+    return { env, subscription, pushManager };
+  }
+
+  async function pushReady(server: FakeServer, env: PushEnv) {
+    const controller = createAlertsController({
+      client: server,
+      levelOf: alertLevelOf,
+      now: () => NOW,
+      owned: memoryOwned(),
+      push: env,
+    });
+    await controller.init();
+    return controller;
+  }
+
+  function pushServer(paired = false): FakeServer {
+    const server = new FakeServer();
+    server.channel = 'push';
+    server.paired = paired;
+    return server;
+  }
+
+  it('start: key fetched in advance, channel and support known, unpaired device', async () => {
+    const server = pushServer();
+    const controller = await pushReady(server, pushEnv([]).env);
+    expect(get(controller.view)).toMatchObject({ status: 'unpaired', channel: 'push', pushSupport: 'ok' });
+    expect(server.calls).toEqual(['GET key']);
+  });
+
+  it('enablePush: permission first, then subscription sent; page becomes ready', async () => {
+    const server = pushServer();
+    const order: string[] = [];
+    const controller = await pushReady(server, pushEnv(order).env);
+    server.calls = [];
+    const pushSubscribe = server.pushSubscribe.bind(server);
+    server.pushSubscribe = async (sub) => {
+      order.push('POST');
+      return pushSubscribe(sub);
+    };
+    const seen: boolean[] = [];
+    const stop = controller.view.subscribe((v) => seen.push(v.pushEnabling));
+    await controller.enablePush();
+    stop();
+    expect(order).toEqual(['permission', 'subscribe', 'POST']);
+    expect(seen.includes(true) && seen[seen.length - 1] === false).toBe(true); // «Вмикаю…» було й зникло
+    expect(server.subscriptions[0].endpoint).toBe('https://fcm.googleapis.com/fcm/send/x');
+    expect(get(controller.view)).toMatchObject({ status: 'ready', lastError: null });
+  });
+
+  it('refusals are loud with a reason: denied, server limit, unknown browser error', async () => {
+    const denied = await pushReady(pushServer(), pushEnv([], 'denied').env);
+    await expect(denied.enablePush()).rejects.toBeTruthy();
+    expect(get(denied.view)).toMatchObject({ status: 'unpaired', lastError: 'push_denied', pushSupport: 'denied', pushEnabling: false });
+
+    const limited = pushServer();
+    limited.subscribeError = new AlertsApiError(429, 'devices_per_ip');
+    const busy = await pushReady(limited, pushEnv([]).env);
+    await expect(busy.enablePush()).rejects.toBeTruthy();
+    expect(get(busy.view).lastError).toBe('devices_per_ip');
+
+    const { env, pushManager } = pushEnv([]);
+    pushManager.subscribe.mockRejectedValueOnce(new DOMException('Registration failed', 'AbortError'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const broken = await pushReady(pushServer(), env);
+    await expect(broken.enablePush()).rejects.toBeTruthy();
+    expect(get(broken.view).lastError).toBe('push_failed');
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('ALERTS_PUSH_SUBSCRIBE_FAILED'))).toBe(true);
+  });
+
+  it('gone subscription is visible to the page and cleared by enabling again', async () => {
+    const server = pushServer(true);
+    server.pushGone = true;
+    const controller = await pushReady(server, pushEnv([]).env);
+    expect(get(controller.view).pushGone).toBe(true);
+    await controller.enablePush();
+    expect(get(controller.view).pushGone).toBe(false);
+  });
+
+  it('forget device: server forgets, browser unsubscribes, page is back to «not enabled»', async () => {
+    const server = pushServer(true);
+    const { env, subscription } = pushEnv(['subscribe']);
+    const controller = await pushReady(server, env);
+    await controller.enable(hline('d1', 4380), SYMBOL, 'M15');
+    await controller.forgetDevice();
+    expect(server.forgotten).toBe(1);
+    expect(subscription.unsubscribe).toHaveBeenCalledOnce();
+    expect(get(controller.view)).toMatchObject({ status: 'unpaired', alerts: [], pushGone: false });
+    expect(server.handlers).toBeNull();
+  });
+
+  it('undelivered event updates the alert like other events', async () => {
+    const server = pushServer(true);
+    const controller = await pushReady(server, pushEnv([]).env);
+    const alert = await controller.enable(hline('d1', 4380), SYMBOL, 'M15');
+    server.handlers!.onEvent('undelivered', { ...alert, version: 2, state: 'fired', delivery: 'failed' });
+    expect(get(controller.view).alerts[0].delivery).toBe('failed');
   });
 });
 
