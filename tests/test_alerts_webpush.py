@@ -345,6 +345,16 @@ async def test_send_timeout_is_retry_without_status(push_env):
 
 
 @pytest.mark.asyncio
+async def test_send_with_browser_key_off_the_curve_is_rejected_without_request(push_env):
+    """Підписка на диску пройшла формат (65 байт, 0x04), але точка не на кривій P-256 — повтор не допоможе."""
+    off_curve = _b64(b"\x04" + b"\x01" * 64)
+    sub = PushSubscription(ENDPOINT, off_curve, push_env["auth"])
+    result = await push_env["sender"].send(sub, PAYLOAD)
+    assert (result.outcome, result.status) == (PushOutcome.REJECTED, None) and "ключі" in result.detail
+    assert push_env["service"].requests == []
+
+
+@pytest.mark.asyncio
 async def test_send_rechecks_endpoint_and_payload_size_before_any_request(push_env):
     narrowed = WebPushSender(
         push_env["sender"]._session, _vapid_key(), SUBJECT, ttl_s=60, timeout_s=1.0, host_suffixes=("push.apple.com",)

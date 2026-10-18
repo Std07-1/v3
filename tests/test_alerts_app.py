@@ -187,6 +187,16 @@ async def test_put_same_level_after_fire_does_not_rearm_but_moved_line_or_rearm_
     assert (await rearmed.json())["alert"]["version"] == 3
 
 
+async def test_undelivered_fire_is_reported_as_failed_not_delivered(world):
+    """Rev 2: запис черги «не доставлено» (відмова push-сервісу, застаріло) — сторінка не бачить «доставлено»."""
+    token = await world.pair(world.client)
+    await world.client.put("/api/alerts/d-1", json=_line(), headers=_auth(token))
+    world.engine.apply_tick("XAU/USD", 4381.0, T0 + 1_000)
+    world.engine.fail_delivery(("alert1", 1), "push-сервіс відмовив (400)")
+    listed = await (await world.client.get("/api/alerts", headers=_auth(token, csrf=False))).json()
+    assert [a["delivery"] for a in listed["alerts"]] == ["failed"]
+
+
 async def test_put_ray_anchor_in_future_activates_from_anchor(world):
     token = await world.pair(world.client)
     body = _line(active_from_ms=T0 + 3_600_000)

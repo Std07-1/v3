@@ -30,7 +30,7 @@ from urllib.parse import urlsplit
 import aiohttp
 from cryptography.hazmat.primitives import serialization
 from py_vapid import Vapid
-from pywebpush import WebPusher
+from pywebpush import WebPusher, WebPushException
 
 _log = logging.getLogger(__name__)
 
@@ -177,7 +177,11 @@ class WebPushSender:
         if len(body) > MAX_PLAINTEXT_BYTES:
             return PushResult(PushOutcome.REJECTED, None, detail=f"тіло {len(body)} байт > {MAX_PLAINTEXT_BYTES}")
         info = {"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}}
-        encrypted = WebPusher(info).encode(body, "aes128gcm")["body"]
+        try:
+            encrypted = WebPusher(info).encode(body, "aes128gcm")["body"]
+        except (WebPushException, ValueError) as exc:  # ключ браузера не точка P-256 — повтор не допоможе
+            _log.warning("WEBPUSH_BAD_KEYS %s %s", endpoint_label(sub.endpoint), exc)
+            return PushResult(PushOutcome.REJECTED, None, detail=f"ключі підписки: {exc}"[:200])
         parts = urlsplit(sub.endpoint)
         now = time.time()
         claims = {"sub": self._subject, "aud": f"{parts.scheme}://{parts.netloc}", "exp": int(now) + VAPID_EXP_S}

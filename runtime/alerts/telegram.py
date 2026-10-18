@@ -126,6 +126,8 @@ class Delivery:
         now = self._clock_ms()
         entries = sorted(self._engine.store.outbox.items(), key=lambda item: item[1].enqueued_at_ms)
         for key, entry in entries:
+            if entry.failed is not None:
+                continue  # «не доставлено» — остаточно
             backoff = self._backoff.get(key)
             if backoff is not None and backoff.next_try_ms > now:
                 break  # старший запис ще чекає паузи — молодші не обганяють

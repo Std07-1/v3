@@ -356,6 +356,18 @@ async def test_delivery_honors_retry_after_and_caps_backoff(engine):
     assert delivery._backoff[("a1", 1)].delay_s == 8.0
 
 
+@pytest.mark.asyncio
+async def test_delivery_skips_undelivered_entries(engine):
+    """Rev 2: запис «не доставлено» остаточний — і бот його не шле (і не блокує черги)."""
+    engine.store.enqueue(_fired("a1"), now_ms=T0)
+    engine.store.enqueue(_fired("a2", price=4381.0), now_ms=T0 + 1)
+    engine.store.put(_fired("a1"))
+    engine.fail_delivery(("a1", 1), "застаріло")
+    client = FakeClient()
+    assert await _delivery(engine, client, lambda: T0).deliver_once() == 1
+    assert len(client.sent) == 1 and "4381.00" in client.sent[0][1]
+
+
 # ── команди ──────────────────────────────────────────────────────────────
 
 

@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Iterable, Mapping, Sequence
+from typing import Dict, Iterable, Mapping, Sequence
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -64,6 +64,25 @@ def fire_message(alert: PriceAlert, *, digits: Mapping[str, int], tz: ZoneInfo, 
         lines.append("Перша ціна після паузи ринку — уже по той бік рівня")
     lines.append(chart_link(site_url, alert.symbol, alert.tf_label))
     return _fit("\n".join(lines))
+
+
+def push_payload(alert: PriceAlert, *, digits: Mapping[str, int], tz: ZoneInfo, site_url: str) -> Dict[str, str]:
+    """Пуш у браузер (ADR-0114 Rev 2): заголовок і рядок для сповіщення ОС, посилання для натискання, `tag` — один
+    показ на спрацювання (повторна доставка не дублює)."""
+    fire = alert.fired
+    if fire is None:
+        raise ValueError(f"push_payload: сповіщення {alert.alert_id} не спрацювало")
+    when = dt.datetime.fromtimestamp(fire.at_ms / 1000, tz)
+    price = _price(alert, fire.price, digits)
+    body = f"ціна {price} · {when:%H:%M} {when:%Z}" if fire.via is FireVia.TICK else f"свічка M1 {when:%H:%M} {when:%Z} дійшла до {price}"
+    if fire.after_gap:
+        body += " · після паузи ринку"
+    return {
+        "title": f"{alert.symbol} {_price(alert, alert.level, digits)} — перетнуто {_DIRECTION[fire.direction]}",
+        "body": body,
+        "url": chart_link(site_url, alert.symbol, alert.tf_label),
+        "tag": alert.alert_id,
+    }
 
 
 def alerts_list(alerts: Sequence[PriceAlert], *, digits: Mapping[str, int], tz: ZoneInfo) -> str:

@@ -62,7 +62,8 @@ class AlertEngine:
         self._last_price: Dict[str, float] = {}
         self._degraded: Dict[str, str] = {}
         self._unsaved = False  # зміни в пам'яті, яких ще нема на диску (запис не вдався)
-        # Слухачі подій (SSE сторінки): (подія, сповіщення) — "fired" після постановки в чергу, "delivered" після ok
+        # Слухачі подій (SSE сторінки): (подія, сповіщення) — "fired" після постановки в чергу, "delivered" після ok,
+        # "undelivered" — доставки не буде (fail_delivery)
         self.listeners: List[Callable[[str, PriceAlert], None]] = []
 
     # ── сповіщення з HTTP ────────────────────────────────────────────────
@@ -70,6 +71,7 @@ class AlertEngine:
     def put_alert(self, alert: PriceAlert) -> None:
         """Створити чи замінити (взведення з HTTP) — і на диск."""
         self.store.put(alert)
+        self.store.drop_stale_failed()
         self._unsaved = True
         self._commit()
 
@@ -77,6 +79,7 @@ class AlertEngine:
         """Прибрати (лінію видалено). Вже спрацьоване в черзі все одно доставиться."""
         if self.store.remove(alert_id) is None:
             return False
+        self.store.drop_stale_failed()
         self._unsaved = True
         self._commit()
         return True
@@ -132,6 +135,16 @@ class AlertEngine:
         self._commit()
         if entry is not None:
             self._notify("delivered", entry.alert)
+
+    def fail_delivery(self, key: Tuple[str, int], reason: str) -> None:
+        """Не доставлено й не буде: запис лишається в черзі з причиною (сторінка покаже «не доставлено»), повторів нема."""
+        entry = self.store.mark_failed(key, reason)
+        if entry is None:
+            return
+        self._unsaved = True
+        self._commit()
+        _log.warning("ALERTS_UNDELIVERED id=%s version=%s reason=%s", key[0], key[1], reason)
+        self._notify("undelivered", entry.alert)
 
     def note_attempt(self, key: Tuple[str, int]) -> None:
         """Невдала спроба доставки: лічильник у записі черги (на диск — з наступним записом)."""

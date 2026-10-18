@@ -326,8 +326,8 @@ class _AlertsApi:
         wire = alert_to_dict(alert)
         del wire["subscriber_id"]
         if alert.fired is not None:
-            pending = (alert.alert_id, alert.version) in self._engine.store.outbox
-            wire["delivery"] = "pending" if pending else "delivered"
+            entry = self._engine.store.outbox.get((alert.alert_id, alert.version))
+            wire["delivery"] = "delivered" if entry is None else ("failed" if entry.failed else "pending")
         else:
             wire["delivery"] = None
         return wire

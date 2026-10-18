@@ -25,7 +25,7 @@ from core.alerts.types import PriceAlert, validate_epoch_ms
 
 _log = logging.getLogger(__name__)
 
-STATE_SCHEMA = 1
+STATE_SCHEMA = 2  # 2 — запис черги має `failed` (Rev 2); схема 1 читається, пишеться вже 2
 STATE_FILE = "alerts.json"
 _TOP_KEYS = frozenset({"schema", "alerts", "outbox", "checked_until_ms"})
 
@@ -41,6 +41,9 @@ class OutboxEntry:
     alert: PriceAlert
     enqueued_at_ms: int
     attempts: int = 0
+    # Не доставлено й не буде (відмова push-сервісу, застаріло, пристрою нема): лишається в черзі з причиною, щоб
+    # сторінка показала «не доставлено», а не «доставлено»; повторів нема. Прибирає `drop_stale_failed`.
+    failed: Optional[str] = None
 
     @property
     def key(self) -> Tuple[str, int]:
@@ -70,8 +73,8 @@ class AlertStore:
         if not isinstance(raw, dict) or raw.keys() != _TOP_KEYS:
             store._quarantine(now_ms, f"верхній рівень не {sorted(_TOP_KEYS)}")
             return store
-        if raw["schema"] != STATE_SCHEMA:
-            raise StoreSchemaError(f"{path}: schema={raw['schema']!r}, код знає {STATE_SCHEMA}")
+        if raw["schema"] not in (1, STATE_SCHEMA):
+            raise StoreSchemaError(f"{path}: schema={raw['schema']!r}, код знає 1…{STATE_SCHEMA}")
         bad = store._fill(raw)
         if bad:
             store._quarantine(now_ms, "; ".join(bad))
@@ -92,7 +95,7 @@ class AlertStore:
                 bad.append(f"alerts[{i}]: {exc}")
         for i, item in enumerate(raw["outbox"] if isinstance(raw["outbox"], list) else ()):
             try:
-                entry = _outbox_from_dict(item)
+                entry = _outbox_from_dict(item, raw["schema"])
                 self.outbox[entry.key] = entry
             except ValueError as exc:
                 bad.append(f"outbox[{i}]: {exc}")
@@ -128,6 +131,26 @@ class AlertStore:
         """Доставлено — зняти з черги (повторне підтвердження нешкідливе)."""
         self.outbox.pop(key, None)
 
+    def mark_failed(self, key: Tuple[str, int], reason: str) -> Optional[OutboxEntry]:
+        """Позначити запис «не доставлено» (причина — людською); вже позначений чи відсутній — None."""
+        entry = self.outbox.get(key)
+        if entry is None or entry.failed is not None or not reason:
+            return None
+        self.outbox[key] = dataclasses.replace(entry, failed=reason)
+        return self.outbox[key]
+
+    def drop_stale_failed(self) -> None:
+        """«Не доставлено» потрібне, поки сторінка показує саме цю версію сповіщення: лінію видалили чи взвели знову —
+        запис прибирається. Записи, що ще чекають доставки, не чіпаються (видалена лінія не скасовує повідомлення)."""
+        stale = [
+            key
+            for key, entry in self.outbox.items()
+            if entry.failed is not None
+            and (key[0] not in self.alerts or self.alerts[key[0]].version != key[1])
+        ]
+        for key in stale:
+            del self.outbox[key]
+
     def mark_checked(self, symbol: str, until_ms: int) -> bool:
         """Позначка наздоганяння — монотонна (E3): назад не рухається; True, якщо зрушила."""
         validate_epoch_ms("until_ms", until_ms)
@@ -142,7 +165,12 @@ class AlertStore:
             "schema": STATE_SCHEMA,
             "alerts": [alert_to_dict(a) for a in self.alerts.values()],
             "outbox": [
-                {"alert": alert_to_dict(e.alert), "enqueued_at_ms": e.enqueued_at_ms, "attempts": e.attempts}
+                {
+                    "alert": alert_to_dict(e.alert),
+                    "enqueued_at_ms": e.enqueued_at_ms,
+                    "attempts": e.attempts,
+                    "failed": e.failed,
+                }
                 for e in self.outbox.values()
             ],
             "checked_until_ms": dict(self.checked_until_ms),
@@ -150,17 +178,20 @@ class AlertStore:
         write_json_atomic(self.path, doc)
 
 
-def _outbox_from_dict(raw: Any) -> OutboxEntry:
-    keys = {"alert", "enqueued_at_ms", "attempts"}
+def _outbox_from_dict(raw: Any, schema: int) -> OutboxEntry:
+    keys = {"alert", "enqueued_at_ms", "attempts"} | ({"failed"} if schema >= 2 else set())
     if not isinstance(raw, dict) or raw.keys() != keys:
         raise ValueError(f"очікується об'єкт з ключами {sorted(keys)}")
+    failed = raw.get("failed")
+    if failed is not None and (not isinstance(failed, str) or not failed):
+        raise ValueError(f"failed: очікується непорожній рядок або null, отримано {failed!r}")
     attempts = raw["attempts"]
     if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
         raise ValueError(f"attempts: очікується int ≥ 0, отримано {attempts!r}")
     alert = alert_from_dict(raw["alert"])
     if alert.fired is None:
         raise ValueError(f"сповіщення {alert.alert_id} у черзі без факту спрацювання")
-    return OutboxEntry(alert, validate_epoch_ms("enqueued_at_ms", raw["enqueued_at_ms"]), attempts)
+    return OutboxEntry(alert, validate_epoch_ms("enqueued_at_ms", raw["enqueued_at_ms"]), attempts, failed)
 
 
 def write_json_atomic(path: Path, doc: Any) -> None:

@@ -185,8 +185,8 @@ def test_wrong_top_level_shape_quarantined(path):
 
 
 def test_newer_schema_refuses_to_load_and_leaves_file_untouched(path):
-    raw = json.dumps({"schema": 2, "alerts": [], "outbox": [], "checked_until_ms": {}}).encode()
+    raw = json.dumps({"schema": 3, "alerts": [], "outbox": [], "checked_until_ms": {}}).encode()
     path.write_bytes(raw)
-    with pytest.raises(StoreSchemaError, match="schema=2"):
+    with pytest.raises(StoreSchemaError, match="schema=3"):
         AlertStore.load(path, now_ms=T0)
     assert path.read_bytes() == raw and os.listdir(path.parent) == [STATE_FILE]
