@@ -518,3 +518,7 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
   `git pull` і встановленням був би FATAL. pytest після злиття — 2813 passed / 21 skipped з aiohttp 3.14.3, як на
   проді (локальний `.venv` має 3.13.3, на ньому червоний лише тест main `…over_max_msg_size…`, що вимагає 3.14.3);
   exit gates — ті самі п'ять давніх червоних, `no_bare_except` = 38, жодного в `runtime/alerts`.
+- 2026-10-18 — **S13 прод, крок 1** (власник: «Го на крок 1»): у `/opt/smc-v3/.venv` шість пакетів `--no-deps`
+  (http-ece зібрано з sdist, cryptography — wheel manylinux_2_34); freeze до/після: +6, −0, решта без змін (до — 53
+  пакети, `/tmp/alerts_push_freeze_before.1792304382`); `pip check` чистий; імпорт ок. Процеси не перезапускались,
+  `smc-alerts` — `{"enabled": false}`, сайт 200. Відкат — `pip uninstall -y` цих шести.
