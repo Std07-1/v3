@@ -38,7 +38,7 @@ written agreement with FXCM потрібен окремо.
 | numpy | 1.21.6 | BSD-3-Clause | Ні | ✅ Сумісна | [ASSUMED — verify: `pip audit`] | Так (released 2022, series 1.21 no longer maintained) |
 | pandas | 1.1.5 | BSD-3-Clause | Ні | ✅ Сумісна | [ASSUMED — verify: `pip audit`] | Так (released 2020, series 1.x deprecated) |
 | python-dotenv | ≥1.2.2,<2.0 (до 18.10.2026: requirements `>=1.0,<2.0`, pyproject `>=0.21,<1.0`; прод — 0.21.1) | BSD-3-Clause | Ні | ✅ Сумісна | [VERIFIED terminal 18.10.2026: 0.21.1 — PYSEC-2026-2270, 1.2.2: 0; наш шлях не зачеплений] | Ні |
-| aiohttp | ==3.14.3 (до 18.10.2026 — `>=3.9,<4.0`; прод і локальний `.venv` — 3.13.3) | Apache-2.0 | Ні | ✅ Сумісна (потрібен attribution) | [VERIFIED terminal 18.10.2026: `pip-audit` — 3.13.3: 24 бюлетені, 3.14.3: 0; розбір нижче] | Ні |
+| aiohttp | ==3.14.3 (до 18.10.2026 — `>=3.9,<4.0`; прод — 3.14.3 з 18.10.2026, changelog 20261018-001; локальний `.venv` — 3.13.3) | Apache-2.0 | Ні | ✅ Сумісна (потрібен attribution) | [VERIFIED terminal 18.10.2026: `pip-audit` — 3.13.3: 24 бюлетені, 3.14.3: 0; розбір нижче] | Ні |
 | requests (транзитивна, python-binance) | ≥2.33.0,<3.0 (прод 2.33.0, локальний `.venv` 2.32.5) | Apache-2.0 | Ні | ✅ Сумісна | [VERIFIED terminal 18.10.2026: PYSEC-2026-2275 закрито в 2.33.0; наш шлях не зачеплений] | Ні |
 | urllib3 (транзитивна, requests) | ≥2.8.0,<3.0 (прод 2.6.3) | MIT | Ні | ✅ Сумісна | [VERIFIED terminal 18.10.2026: 2.6.3 — 5 бюлетенів, 2.8.0: 0; наш шлях не зачеплений] | Ні |
 | multidict (транзитивна, aiohttp, yarl) | ≥6.9.1,<7.0 (прод 6.7.1) | Apache-2.0 | Ні | ✅ Сумісна | [VERIFIED зонд 18.10.2026: вада в 6.7.1 є, наш код її не викликає; 6.9.1: 0] | Ні |
