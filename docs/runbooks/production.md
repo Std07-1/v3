@@ -15,7 +15,8 @@
 6. [DST перехід (літній/зимовий час)](#dst-перехід-літнійзимовий-час)
 7. [Нічний settle M1 + нативний D1](#нічний-settle-m1--нативний-d1-adr-0103-34)
 8. [Лінія-сповіщення](#лінія-сповіщення-adr-0114)
-9. [Що НЕ робити](#що-не-робити)
+9. [Supervisor на VPS: застосування конфігу](#supervisor-на-vps-застосування-конфігу)
+10. [Що НЕ робити](#що-не-робити)
 
 ---
 
@@ -262,7 +263,8 @@ server {
 2. Переконатись, що Archi nginx proxy covers both `/api/archi/` і `/api/agent/`
 3. Перезавантажити nginx: `sudo nginx -t ; sudo systemctl reload nginx`
 4. Bridge: у `/etc/supervisor/conf.d/agent-bridge.conf` виставити `AI_ONE_AGENT_BRIDGE_ENABLED="1"` + `ARCHI_AUTH_TOKEN`,
-   `sudo supervisorctl reread && sudo supervisorctl update && sudo supervisorctl restart smc-agent-bridge` — не `app.main`
+   `sudo supervisorctl reread && sudo supervisorctl update smc-agent-bridge` — не `app.main`, і `update` лише з іменем
+   програми (див. [Supervisor на VPS](#supervisor-на-vps-застосування-конфігу))
 
 ---
 
@@ -500,6 +502,64 @@ nginx `/api/alerts`. **До ввімкнення** (кожен крок — за
 
 ---
 
+## Supervisor на VPS: застосування конфігу
+
+**Правило.** Після зміни будь-якого файла в `/etc/supervisor/conf.d/`: `sudo supervisorctl reread`, потім
+`sudo supervisorctl update <програма або група, яку ти міняв>`. `update` без імені (і `update all`) застосовує **всі**
+незастосовані зміни на хості: кожна змінена група зупиняється цілком, видаляється і додається знову
+(`stopProcessGroup` → `removeProcessGroup` → `addProcessGroup`, supervisor 4.2.1 `supervisorctl.py:1223-1231`).
+Для групи `smc` це одночасна зупинка й старт `smc-ws`, `smc-fxcm` і `smc-preview`: графік і ціни зникають, FXCM
+перелогінюється, m1_poller добирає хвилини. Якщо `reread` показує `changed` для того, чого ти не чіпав, — не
+застосовуй, з'ясуй, що це (нижче — як).
+
+**Застосовано 17.10.2026 17:27 UTC (changelog 20261017-001): `reread` → `No config updates to processes`.** До того з
+07.09 висіло `smc: changed` — свідомо незастосована зміна. Єдина різниця між `/etc/supervisor/conf.d/smc-v3.conf` і тим,
+з чим працював supervisord: у `[program:smc-ticks]` `autostart=true` → `autostart=false` (розслідування sidecar/FXCM
+07.09, коміт `0ff63081`; `tick_publisher_fxcm` DEPRECATED, тіки йдуть через `broker_sidecar._TickRelay`). Тоді
+навмисно зроблено `reread` без `update`, щоб не перезапускати графік. Така різниця сама нічого не робить: supervisord
+автозапускає лише процес, який ще не стартував у поточному житті supervisord (`process.py:650`,
+`STOPPED and not self.laststart`). Застосовано за «го» власника в суботу після settle: `update smc` зупинив і запустив
+`smc-ws`, `smc-fxcm`, `smc-preview` за 3 с, `smc-ticks` і `smc-binance*` лишились `Not started`, решта програм хоста —
+ті самі PID.
+
+Якщо `changed` з'явиться знову — той самий метод: довести, що саме відрізняється від завантаженого (так це зроблено
+16.10):
+
+| Перевірка | Команда | Очікуване |
+| --- | --- | --- |
+| Що змінено у файлі | `sudo diff /root/smc-v3.conf.bak.<останній перед зміною> /etc/supervisor/conf.d/smc-v3.conf` | лише зміна, яку збираєшся застосувати (16.10: рядок `autostart` у `[program:smc-ticks]` проти бекапу `20260907-183105`) |
+| Коли групу востаннє перевстановлено | `sudo grep -E "(stopped\|spawned).*smc-(ws\|fxcm\|preview\|ticks)" /var/log/supervisor/supervisord.log` | `update` = зупинка всіх членів групи за кілька секунд і їх одночасні старти; поодинокі рестарти конфіг не перечитують (16.10: останнє — 06.09 09:55:06, через 1 с після запису файла) |
+| Оточення живих процесів = файл | `sudo cat /proc/$(sudo supervisorctl pid smc:smc-ws)/environ \| tr '\0' '\n'` (так само `smc-fxcm`, `smc-preview`; паролі не друкувати — порівнювати `sha256sum`) | `HOME`, `PATH`, `AI_ONE_REDIS_*` — як у файлі |
+
+`supervisorctl avail` тут не допомагає: після `reread` він показує значення **з файла** (`smc:smc-ticks … manual`),
+а не завантажені. Фільтр журналу за часом (`awk '$0 >= "<дата час>"'`) пропускає рядки traceback без дати з будь-якого
+часу — дату такого traceback дивись за номером рядка (`grep -n`).
+
+**Застосувати зміну групи `smc`** (лише за «го» власника; ринок закритий і settle не біжить — напр. субота після 09:10 UTC):
+
+1. `sudo supervisorctl reread` → лише `smc: changed`; diff з таблиці вище → лише очікувана зміна.
+2. `pgrep -af settle_daily` → порожньо (settle сам зупиняє і стартує записувачів; `update` посеред нього підніме їх
+   до кінця заміни M1).
+3. `sudo supervisorctl update smc` → `smc: stopped`, `smc: updated process group`.
+4. Спостереження 120 с (D9.1): `sudo supervisorctl status` — `smc-ws`, `smc-fxcm`, `smc-preview` RUNNING; `smc-ticks`,
+   `smc-binance*` STOPPED `Not started`; без ERROR у `/var/log/smc-v3/{ws_server,fxcm,preview}.stderr.log` **і** в
+   `broker_sidecar.err.log`, `m1_ingestion_worker.err.log` (`fxcm.stderr.log` має лише шапку app.main — дочірні процеси
+   пишуть у свої файли): `BROKER_SIDECAR_FXCM_CONNECTED`, `M1_POLLER_FXCM_SESSION connected=True`, `PRIME_READY_SET`;
+   сайт 200; повторний `reread` → `No config updates to processes`.
+
+Якщо програма не піднялась — `sudo supervisorctl start smc:<програма>` у порядку проду: fxcm → `M1_POLLER_REDIS_PRIME`
+→ preview + ws. 17.10: стоп 3 с (fxcm виходить через ланцюг SIGTERM), `PRIME_READY_SET` через 30 с після старту.
+
+**Не «лікувати» `changed` поверненням файла до завантаженого стану**, не розібравшись: при перезавантаженні VPS файл
+однаково прочитається заново. 07.09: повернення `autostart=true` знову запустило б другого FXCM-видавця тіків (дублі в
+`price_tik`, busy спільного `History/`).
+
+**Не копіювати `tools/smc-v3.supervisor.conf` поверх `/etc`.** Файл у репо без `AI_ONE_REDIS_*`: креденшели Redis живуть
+лише в `/etc` (ADR-0091 P2). Після копії і `update smc` усі три процеси отримають `NOAUTH`. Зміни в `/etc` — точково, з
+бекапом `/root/smc-v3.conf.bak.<дата>`, і ту саму зміну — комітом у репо.
+
+---
+
 ## Що НЕ робити
 
 | Заборонено | Чому | Що замість |
@@ -510,3 +570,4 @@ nginx `/api/alerts`. **До ввімкнення** (кожен крок — за
 | Додавати `prefer_redis`/`force_disk` в UI код | Порушення I1 (UDS = вузька талія, Тема D, D6) | Сервер обирає джерело |
 | Міняти `config.json` під час роботи | Частково підтримується (mtime cache), але m1_poller потребує рестарту | Зупинити → змінити → запустити |
 | Ігнорувати DST перехід | H4/D1 бари з garbage alignment | [DST runbook](dst_transition.md) |
+| `sudo supervisorctl update` без імені | Застосовує всі незастосовані зміни хоста, і чужі теж; для групи `smc` — перезапуск усього графіка (07.09–17.10 так висіло `smc: changed`) | `update <програма>`; група `smc` — за [розділом](#supervisor-на-vps-застосування-конфігу) |
