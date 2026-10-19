@@ -54,8 +54,12 @@ describe('toolForHotkey', () => {
 });
 
 describe('лінія-сповіщення (ADR-0114)', () => {
-    it('сповіщати може лише горизонталь (промінь рівня — коли з’явиться); рівень — її ціна, без якоря', () => {
-        expect(ALERTABLE_TOOL_TYPES).toEqual(['hline']);
+    it('сповіщають горизонталь (рівень без якоря) і промінь рівня (якір — його початок); решта — ні', () => {
+        expect(ALERTABLE_TOOL_TYPES).toEqual(['hline', 'hray']);
+        expect(alertLevelOf({ id: 'k', type: 'hray', points: [{ t_ms: 1_700_000_000_000, price: 157.25 }] })).toEqual({
+            level: 157.25,
+            anchorMs: 1_700_000_000_000,
+        });
         const line = { id: 'd1', type: 'hline' as const, points: [{ t_ms: 1 as never, price: 4380.25 }] };
         expect(alertLevelOf(line)).toEqual({ level: 4380.25, anchorMs: null });
         expect(alertLevelOf({ ...line, type: 'trend' })).toBeNull();
