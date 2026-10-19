@@ -1,12 +1,14 @@
 """Паритет словників мовного шару (ADR-0116 L2): у кожній мові рівно ключі джерела — без пропущених і без зайвих.
 
-Ключ перекладу — сам український текст (L1), тож ключі бере не окремий список, а код: виклики `t("…")`,
-`tn(n, "…")` і `msg("…")` у файлах `ui_v4/src`, що імпортують мовний шар. Правка української в коді міняє ключ, і тест
-падає, доки en/ru не оновлено тим самим комітом. Старий переклад не лишається тихо. Серверні виклики `tr(...)` додасть
-Ф2.1 — словник на мову один (§4.2), тож і перелік ключів буде спільний.
+Ключ перекладу — сам український текст (L1), тож ключі бере не окремий список, а код: у `ui_v4/src` — виклики
+`t("…")`, `tn(n, "…")` і `msg("…")` у файлах, що імпортують мовний шар; у `core/` і `runtime/` — `tr("…")`,
+`tr.plural(n, "…")` і `msg("…")` у модулях, що імпортують `core.i18n`. Словник на мову один для UI й сервера (§4.2),
+тож і перелік ключів спільний. Правка української в коді міняє ключ, і тест падає, доки en/ru не оновлено тим самим
+комітом. Старий переклад не лишається тихо.
 """
 from __future__ import annotations
 
+import ast
 import json
 import pathlib
 import re
@@ -14,9 +16,12 @@ from typing import Dict, List
 
 import pytest
 
+from core.i18n import PLURAL_RULES, SOURCE_LANG, SOURCE_PLURAL_ORDER
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 I18N_DIR = ROOT / "i18n"
 UI_SRC = ROOT / "ui_v4" / "src"
+PY_ROOTS = (ROOT / "core", ROOT / "runtime")
 REGISTRY = json.loads((I18N_DIR / "languages.json").read_text(encoding="utf-8"))
 LANGUAGES = {language["code"]: language for language in REGISTRY["languages"]}
 SOURCE = LANGUAGES[REGISTRY["source"]]
@@ -25,6 +30,7 @@ CLDR_CATEGORIES = {"zero", "one", "two", "few", "many", "other"}
 PLURAL_SEPARATOR = "|"
 
 _I18N_IMPORT = re.compile(r"""from\s+['"][^'"]*lib/i18n/i18n\.svelte['"]""")
+_PY_I18N_IMPORT = re.compile(r"^\s*(?:from\s+core\.i18n\s+import|import\s+core\.i18n)", re.M)
 _STRING = r"""(['"])((?:\\.|(?!\1).)*)\1"""
 _TEXT_CALL = re.compile(r"\b(?:t|msg)\(\s*" + _STRING)
 _PLURAL_CALL = re.compile(r"\btn\([^,()]*,\s*" + _STRING)
@@ -55,13 +61,50 @@ def _ui_files() -> List[pathlib.Path]:
     return files
 
 
+def _py_files() -> List[pathlib.Path]:
+    """Модулі сервера, що імпортують перекладач; сам `core/i18n.py` — ні (у docstring зразки викликів)."""
+    files = []
+    for root in PY_ROOTS:
+        for path in sorted(root.rglob("*.py")):
+            if path.name != "i18n.py" and _PY_I18N_IMPORT.search(path.read_text(encoding="utf-8")):
+                files.append(path)
+    return files
+
+
+def _ui_keys(path: pathlib.Path) -> List[tuple]:
+    code = path.read_text(encoding="utf-8")
+    found = [(_unescape(m.group(2)), "text") for m in _TEXT_CALL.finditer(code)]
+    return found + [(_unescape(m.group(2)), "plural") for m in _PLURAL_CALL.finditer(code)]
+
+
+def _py_keys(path: pathlib.Path) -> List[tuple]:
+    """`tr("…")` / `msg("…")` — текст, `tr.plural(n, "…")` — множина; ключ не літералом — помилка тесту."""
+    found = []
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in ("tr", "msg"):
+            kind, key_arg = "text", node.args[0] if node.args else None
+        elif (isinstance(func, ast.Attribute) and func.attr == "plural"
+              and isinstance(func.value, ast.Name) and func.value.id == "tr"):
+            kind, key_arg = "plural", node.args[1] if len(node.args) > 1 else None
+        else:
+            continue
+        if isinstance(key_arg, ast.Constant) and isinstance(key_arg.value, str):
+            found.append((key_arg.value, kind))
+            continue
+        # Не літерал дозволено лише в tr(МАПА[код]): ключі мапи вже позначено msg("…") і їх тут видно
+        mapped_lookup = isinstance(func, ast.Name) and func.id == "tr"
+        assert mapped_lookup, "%s:%d — ключ msg()/tr.plural() має бути літералом" % (path.name, node.lineno)
+    return found
+
+
 def _source_keys() -> Dict[str, str]:
-    """Ключ → вид: «text» або «plural». Один ключ двох видів — помилка коду, не словника."""
+    """Ключ → вид: «text» або «plural» — з UI і сервера разом. Один ключ двох видів — помилка коду, не словника."""
     keys: Dict[str, str] = {}
-    for path in _ui_files():
-        code = path.read_text(encoding="utf-8")
-        found = [(_unescape(m.group(2)), "text") for m in _TEXT_CALL.finditer(code)]
-        found += [(_unescape(m.group(2)), "plural") for m in _PLURAL_CALL.finditer(code)]
+    sources = [(path, _ui_keys(path)) for path in _ui_files()] + [(path, _py_keys(path)) for path in _py_files()]
+    for path, found in sources:
         for key, kind in found:
             assert keys.setdefault(key, kind) == kind, "%s: ключ %r і як текст, і як множина" % (path.name, key)
     return keys
@@ -82,6 +125,16 @@ def test_registry_is_consistent():
     for language in REGISTRY["languages"]:
         assert language["name"].strip(), "мова %s без назви для перемикача" % language["code"]
         assert language["plural"] and set(language["plural"]) <= CLDR_CATEGORIES, language["code"]
+
+
+def test_core_translator_matches_registry():
+    """Сервер знає те саме джерело й порядок форм, що реєстр; кожна мова має правило множини з її категоріями."""
+    assert SOURCE["code"] == SOURCE_LANG and tuple(SOURCE["plural"]) == SOURCE_PLURAL_ORDER
+    for code, language in LANGUAGES.items():
+        assert code in PLURAL_RULES, "мова %s без правила множини в core.i18n.PLURAL_RULES" % code
+        produced = {PLURAL_RULES[code](n) for n in range(0, 1000)}
+        assert produced == set(language["plural"]), "%s: правило дає %s, реєстр каже %s" % (
+            code, sorted(produced), language["plural"])
 
 
 def test_every_translated_language_has_exactly_one_dictionary():
@@ -122,6 +175,18 @@ def test_translation_shape_and_placeholders_match_source(code):
         assert isinstance(message, dict) and set(message) == categories, "%s: форми множини %r" % (code, key)
         for form in message.values():
             assert _placeholders(form) <= _placeholders(key) | {"n"}, "%s: плейсхолдери множини %r" % (code, key)
+
+
+def test_python_extractor_reads_literal_keys(tmp_path):
+    module = tmp_path / "sample.py"
+    module.write_text("\n".join((
+        "from core.i18n import msg",
+        "NAMES = {'asia': msg('Азія')}",
+        "def row(tr, n, name):",
+        "    return tr('Стоп {price}', price=1) + tr.plural(n, '{n} тиждень|{n} тижні|{n} тижнів') + tr(NAMES[name])",
+    )), encoding="utf-8")
+    assert sorted(_py_keys(module)) == [("{n} тиждень|{n} тижні|{n} тижнів", "plural"), ("Азія", "text"),
+                                        ("Стоп {price}", "text")]
 
 
 def test_extractor_reads_keys_like_the_ui_writes_them():
