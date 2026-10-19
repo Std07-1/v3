@@ -21,6 +21,7 @@ from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
 
 from runtime.visitors.journal import VISITOR_COOKIE, VisitorsJournal
 from runtime.ws.ws_server import APP_HEARTBEAT_S, APP_VISITORS_JOURNAL, APP_WS_LIMITS, WsLimits, build_app, SCHEMA_V
+from runtime.ws.ws_server import _TF_CANONICAL_LABELS
 
 pytestmark = pytest.mark.asyncio
 
@@ -332,8 +333,8 @@ async def test_ws_full_frame_boot_id_and_config(aiohttp_client, ws_app_mock_uds)
         assert len(cfg["symbols"]) > 0  # config.json має >=1 символ
         assert isinstance(cfg["tfs"], list)
         assert len(cfg["tfs"]) > 0  # config.json має >=1 TF
-        # P2: tfs мають бути canonical label strings (M1, M5, H1, ...)
-        valid_labels = {"M1", "M3", "M5", "M15", "M30", "H1", "H4", "D1"}
+        # P2: tfs мають бути canonical label strings (M1, M5, H1, ..., W1/MN — ADR-0115); SSOT — мапа ws_server
+        valid_labels = set(_TF_CANONICAL_LABELS)
         for tf in cfg["tfs"]:
             assert isinstance(tf, str), f"tf {tf} is not str"
             assert tf in valid_labels, f"tf {tf} not in valid labels"
