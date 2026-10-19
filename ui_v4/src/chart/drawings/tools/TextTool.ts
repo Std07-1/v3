@@ -18,6 +18,8 @@ const FALLBACK_RGB = '200,205,214';
 const PLACEHOLDER = 'Нотатка';
 /** Ширина символу для хіт-тесту без полотна (оцінка для 12px). */
 const CHAR_W_ESTIMATE = 6.6;
+/** × видалення — праворуч від чіпа, а не в центрі (там він закривав би текст); відступ центру × від краю чіпа. */
+const DELETE_GAP_PX = 12;
 
 /** Рамка чіпа: якір — лівий нижній кут. */
 export function chipBox(x: number, y: number, textWidth: number): ScreenAabb {
@@ -58,6 +60,14 @@ export const TextTool: ToolModule = {
         ctx.fillStyle = d.meta?.text ? color : withAlpha(color, 0.55, FALLBACK_RGB);
         ctx.fillText(text, x + PAD_X, y - BASELINE_LIFT);
         return box;
+    },
+
+    deleteAnchor(d, toX, toY) {
+        const x = toX(d.points[0].t_ms);
+        const y = toY(d.points[0].price);
+        if (x === null || y === null) return null;
+        const box = chipBox(x, y, textOf(d).length * CHAR_W_ESTIMATE);
+        return { x: box.maxX + DELETE_GAP_PX, y: (box.minY + box.maxY) / 2 };
     },
 
     hitTest(d, cursorX, cursorY, tolerance, toX, toY): HitTestResult {

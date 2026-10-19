@@ -18,9 +18,10 @@ export function cloneDrawing(d: Drawing): Drawing {
   };
 }
 
-/** Однокрокову фігуру (pointsRequired = 1, hline) видно під курсором ще до кліку — клік лише фіксує її. */
+/** Однокрокову фігуру (pointsRequired = 1, hline) видно під курсором ще до кліку — клік лише фіксує її. Нотатка —
+ *  без прев'ю: клік відкриває поле вводу на цьому місці (фіксація прев'ю пішла б повз запит тексту, ADR-0111 §3.7). */
 export function previewsOnHover(tool: ToolModule): boolean {
-  return tool.pointsRequired === 1;
+  return tool.pointsRequired === 1 && !tool.askText;
 }
 
 /** Нова чернетка: усі точки — у місці курсора (позиція — якорі від нього, `tool.place`); ефемерна (measure) — без

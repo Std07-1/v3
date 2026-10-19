@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { zoneMidPrice, ZoneTool } from './ZoneTool';
 import { HRayTool } from './HRayTool';
-import { chipBox } from './TextTool';
+import { chipBox, TextTool } from './TextTool';
 import type { Drawing } from '../../../types';
 import type { RenderContext } from './types';
 
@@ -74,5 +74,12 @@ describe('промінь рівня', () => {
 describe('нотатка', () => {
     it('якір — лівий нижній кут чіпа; ширина — текст плюс поля', () => {
         expect(chipBox(100, 300, 40)).toEqual({ minX: 100, maxX: 152, minY: 280, maxY: 300 });
+    });
+
+    it('× видалення — праворуч від чіпа посередині висоти, не поверх тексту', () => {
+        const note: Drawing = { id: 'n', type: 'text', points: [{ t_ms: 100, price: 300 }], meta: { text: 'H4 OB' } };
+        const id = (v: number) => v;
+        const box = chipBox(100, 300, 5 * 6.6);
+        expect(TextTool.deleteAnchor?.(note, id, id, 800, 400)).toEqual({ x: box.maxX + 12, y: 290 });
     });
 });
