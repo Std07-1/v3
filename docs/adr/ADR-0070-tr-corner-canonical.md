@@ -521,3 +521,10 @@ The contract is locked. Modifications require ADR amendment, not silent edits.
 
 Заборона «`narrative.headline` у пігулці» з Tier 2 знята лише для п. 1b; синтез із полів сценаріїв (`entry_desc`,
 `target_desc` тощо) у пігулці й далі заборонений.
+
+### Rev 5 amendment (2026-10-19) — п. 1b прибрано: без Арчі пігулка знову «Idle»
+
+Власник 19.10: «Наратив арчі, хто там пише? Там має бути "idle", бо він вимкнений». Заголовок системного наративу в
+куті Арчі читається як слова вимкненого агента. П. 1b прибрано, заборона Tier 2 «`narrative.headline` у пігулці» —
+знову повна. Ланцюжок `compactPillText`: свіжа теза Арчі → `Off · Nh` (є presence) → статус presence → «Idle». Системний
+наратив видно в мікрокартці стадії й «Розборі» (ADR-0036, ADR-0113 Ф3). Тест — `ui_v4/src/lib/agentState.test.ts`.
