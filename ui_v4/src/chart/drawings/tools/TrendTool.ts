@@ -8,6 +8,7 @@
 import type { Drawing } from '../../../types';
 import { distToSegment } from '../../interaction/geometry';
 import { dashPattern } from '../lineStyles';
+import { LINE_GROUP } from './groups';
 import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './types';
 
 export const TrendTool: ToolModule = {
@@ -18,6 +19,7 @@ export const TrendTool: ToolModule = {
     hotkey: '\\',
     hotkeyAliases: ['t'], // legacy-клавіша (до ADR-0074 §6) лишається
     styleable: true,
+    group: LINE_GROUP,
 
     render(d: Drawing, rc: RenderContext): ScreenAabb | null {
         if (d.points.length < 2) return null;

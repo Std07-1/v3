@@ -1,4 +1,4 @@
-// src/chart/drawings/toolGroups.test.ts — ADR-0112 D9: позиція в капсулі телефона — одна кнопка з перемикачем.
+// src/chart/drawings/toolGroups.test.ts — ADR-0112 D9/D11: групи варіантів — одна кнопка з перемикачем (ПК і телефон).
 import { describe, expect, it } from 'vitest';
 import { capsuleEntries, groupVariants } from './toolGroups';
 import { TOOL_REGISTRY, getToolModule } from './tools';
@@ -6,12 +6,11 @@ import { TOOL_REGISTRY, getToolModule } from './tools';
 const tools = [...TOOL_REGISTRY.values()];
 
 describe('capsuleEntries', () => {
-  it('довга й коротка — одна кнопка «Позиція» на місці довгої; решта — як у реєстрі', () => {
+  it('сім кнопок: групи — на місці першого варіанта (Рівень · Лінія · Прямокутник · Позиція), решта — як у реєстрі', () => {
     const entries = capsuleEntries(tools, {});
-    expect(entries.map((e) => e.key)).toEqual(['hline', 'hray', 'trend', 'ray', 'rect', 'zone', 'fib', 'position', 'text', 'measure']);
-    const position = entries.find((e) => e.key === 'position');
-    expect(position?.label).toBe('Позиція');
-    expect(position?.tool.id).toBe('long');
+    expect(entries.map((e) => e.key)).toEqual(['level', 'line', 'box', 'fib', 'position', 'text', 'measure']);
+    expect(entries.map((e) => e.label)).toEqual(['Рівень', 'Лінія', 'Прямокутник', 'Фібоначчі', 'Позиція', 'Нотатка', 'Лінійка']);
+    expect(entries.map((e) => e.tool.id)).toEqual(['hline', 'trend', 'rect', 'fib', 'long', 'text', 'measure']);
   });
 
   it('кнопка групи бере останній обраний варіант (іконка й дія — короткої)', () => {
@@ -24,8 +23,11 @@ describe('capsuleEntries', () => {
 });
 
 describe('groupVariants', () => {
-  it('варіанти позиції — довга й коротка; без групи — порожньо', () => {
+  it('варіанти групи — у порядку реєстру; без групи — порожньо', () => {
     expect(groupVariants(tools, getToolModule('short')!).map((t) => t.id)).toEqual(['long', 'short']);
-    expect(groupVariants(tools, getToolModule('trend')!)).toEqual([]);
+    expect(groupVariants(tools, getToolModule('hray')!).map((t) => t.id)).toEqual(['hline', 'hray']);
+    expect(groupVariants(tools, getToolModule('ray')!).map((t) => t.id)).toEqual(['trend', 'ray']);
+    expect(groupVariants(tools, getToolModule('zone')!).map((t) => t.id)).toEqual(['rect', 'zone']);
+    expect(groupVariants(tools, getToolModule('fib')!)).toEqual([]);
   });
 });

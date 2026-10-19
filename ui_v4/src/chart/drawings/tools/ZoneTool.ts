@@ -9,6 +9,7 @@ import type { Drawing } from '../../../types';
 import { withAlpha } from '../../canvasColor';
 import { distToRectEdge } from '../../interaction/geometry';
 import { dashPattern } from '../lineStyles';
+import { BOX_GROUP } from './groups';
 import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './types';
 
 const DRAFT_FILL = 'rgba(61, 154, 255, 0.10)';
@@ -54,6 +55,7 @@ export const ZoneTool: ToolModule = {
     icon: '<rect x="3" y="6" width="11" height="12" rx="1"/><path d="M3 12h11" stroke-dasharray="2 2"/><path d="M14 9h4"/><path d="M14 15h4"/><path d="m18 9 3 3-3 3"/>',
     hotkey: 'z',
     styleable: true,
+    group: BOX_GROUP,
     interiorIsBody: true,
 
     render(d: Drawing, rc: RenderContext): ScreenAabb | null {

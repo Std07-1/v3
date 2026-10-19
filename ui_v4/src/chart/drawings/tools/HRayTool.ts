@@ -5,6 +5,7 @@
 
 import type { Drawing } from '../../../types';
 import { dashPattern } from '../lineStyles';
+import { LEVEL_GROUP } from './groups';
 import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './types';
 
 /** Крапка на початку променя — видно, звідки рівень. */
@@ -27,6 +28,7 @@ export const HRayTool: ToolModule = {
     icon: '<circle cx="5" cy="12" r="1.6"/><path d="M7.5 12H21"/>',
     hotkey: 'k',
     styleable: true,
+    group: LEVEL_GROUP,
 
     // ADR-0114 §4.1: лінія-сповіщення від свого початку — сервер рахує перетин з якоря (у майбутньому) або з моменту
     // взведення (якір у минулому: перетин у минулому не рахується)

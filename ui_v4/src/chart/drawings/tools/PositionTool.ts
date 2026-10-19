@@ -11,12 +11,10 @@
 import type { Drawing, DrawingPoint } from '../../../types';
 import { displayPriceDigits } from '../../../lib/priceDigits';
 import { withAlpha } from '../../canvasColor';
-import type { HitTestResult, PlacementEnv, RenderContext, ScreenAabb, ToolGroup, ToolModule } from './types';
+import { POSITION_GROUP } from './groups';
+import type { HitTestResult, PlacementEnv, RenderContext, ScreenAabb, ToolModule } from './types';
 
 export type PositionSide = 'long' | 'short';
-
-/** У капсулі телефона довга й коротка — одна кнопка «Позиція» з перемикачем (ADR-0112 D9; власник 15.10). */
-export const POSITION_GROUP: ToolGroup = { id: 'position', label: 'Позиція' };
 
 /** Стоп за замовчуванням — стільки ATR від входу. */
 export const DEFAULT_STOP_ATR = 1;
