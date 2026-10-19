@@ -8,7 +8,7 @@ const tools = [...TOOL_REGISTRY.values()];
 describe('capsuleEntries', () => {
   it('довга й коротка — одна кнопка «Позиція» на місці довгої; решта — як у реєстрі', () => {
     const entries = capsuleEntries(tools, {});
-    expect(entries.map((e) => e.key)).toEqual(['hline', 'trend', 'ray', 'rect', 'fib', 'position', 'measure']);
+    expect(entries.map((e) => e.key)).toEqual(['hline', 'hray', 'trend', 'ray', 'rect', 'zone', 'fib', 'position', 'text', 'measure']);
     const position = entries.find((e) => e.key === 'position');
     expect(position?.label).toBe('Позиція');
     expect(position?.tool.id).toBe('long');

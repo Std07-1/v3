@@ -13,6 +13,7 @@ import {
   dragStarted,
 } from '../interaction/geometry';
 import { getToolModule } from './tools';
+import { firstTouchIndex } from './tools/ZoneTool';
 import { drawingsKey, isCorruptBackupKey, loadDrawings, saveDrawings } from './drawingsStorage';
 import { cloneDrawing, completeDraft, cursorIndex, firstClick, followCursor, newDraft, previewsOnHover } from './drawingDraft';
 import { dragBody, dragHandle, grabOffsetFor, type DragSpace } from './drawingDrag';
@@ -527,6 +528,16 @@ export class DrawingsRenderer {
     return this.seriesApi.priceToCoordinate(price);
   };
 
+  /** ADR-0111 §3.7: перша свічка після `fromMs`, що торкнулась [lo, hi] (зона до дотику); high/low — з LWC по індексу,
+   *  тож і поточна свічка рахується (кеш часів — лише час). */
+  private firstTouchMs = (fromMs: number, lo: number, hi: number): number | null => {
+    const from = timeToFractionalIndex(this.barTimesSec, fromMs / 1000, this.barStepSec);
+    if (from === null) return null;
+    const barAt = (i: number) => this.seriesApi.dataByIndex(i) as { low: number; high: number } | null;
+    const idx = firstTouchIndex(Math.floor(from) + 1, this.barTimesSec.length, barAt, lo, hi);
+    return idx === null ? null : this.barTimesSec[idx] * 1000;
+  };
+
   // Інверсія: coordinateToLogical у LWC — ЦІЛИЙ індекс (Math.ceil), тож новий якір
   // стає на бар поточного TF; частку бару зберігають лише якорі з іншого TF
   // (перетягування тіла — shiftTimeByBars, не через x).
@@ -1039,8 +1050,12 @@ export class DrawingsRenderer {
     }
 
     const price = this.getSnappedPrice(x, y, rawPrice);
+    // ADR-0111 §3.7 (прототип): нотатка питає текст системним полем; порожній — нічого не ставимо
+    const text = tool.askText ? window.prompt('Нотатка на графіку')?.trim() : undefined;
+    if (tool.askText && !text) return;
     // Однокрокова без прев'ю під курсором (клік без руху миші) — готова одразу; двоточкова — чернетка.
-    const step = firstClick(tool, uuidv4(), { t_ms, price }, this.defaultMeta(tool.id), this.placementEnv(tool));
+    const meta = text ? { ...this.defaultMeta(tool.id), text } : this.defaultMeta(tool.id);
+    const step = firstClick(tool, uuidv4(), { t_ms, price }, meta, this.placementEnv(tool));
     this.draftFrozen = false;
     if (step.kind === 'commit') {
       this.commandStack.push({ type: 'ADD', drawing: step.drawing });
@@ -1333,6 +1348,7 @@ export class DrawingsRenderer {
         isSelected: this.selectedId === d.id,
         cssW,
         cssH,
+        firstTouchMs: this.firstTouchMs,
       };
       const aabb = tool.render(d, rc);
       if (aabb) this.aabbById.set(d.id, aabb);
