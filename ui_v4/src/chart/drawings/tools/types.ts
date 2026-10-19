@@ -69,6 +69,9 @@ export interface RenderContext {
     /** Canvas CSS-px dimensions (для tools що тягнуться full-width like hline). */
     readonly cssW: number;
     readonly cssH: number;
+    /** ADR-0111 §3.7 (optional): час (мс) першої свічки поточного TF після `fromMs`, що торкнулась [lo, hi]; null —
+     *  не торкалась. Для зони, що тягнеться вправо до дотику. */
+    readonly firstTouchMs?: (fromMs: number, lo: number, hi: number) => number | null;
 }
 
 /** Axis-aligned bounding box у CSS-px screen-coords. Returned from render
@@ -126,6 +129,13 @@ export interface ToolModule {
 
     /** ADR-0112 D9: варіант групи — у капсулі телефона одна кнопка групи, варіант перемикається в режимі інструмента. */
     readonly group?: ToolGroup;
+
+    /** ADR-0111 §3.7: під час розміщення спитати текст (нотатка, meta.text; поле вводу — noteText.ts); порожній —
+     *  фігури нема. */
+    readonly askText?: boolean;
+
+    /** ADR-0111 §3.7: зі стилю — лише колір (товщина й тип лінії не мають сенсу: нотатка). */
+    readonly colorOnly?: boolean;
 
     /** ADR-0111 §3.6: однокрокова фігура з кількома якорями (позиція) — усі якорі з точки кліку. Відсутнє — один
      *  якір у точці кліку. */

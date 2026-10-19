@@ -12,6 +12,7 @@
 import type { Drawing } from '../../../types';
 import { distToSegment } from '../../interaction/geometry';
 import { dashPattern } from '../lineStyles';
+import { LINE_GROUP } from './groups';
 import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './types';
 
 /** Запас за найдальшим кутом області (px): товщина, тінь підсвітки (blur 6) і
@@ -46,6 +47,7 @@ export const RayTool: ToolModule = {
     icon: '<path d="M13 5H19V11"/><path d="M19 5L5 19"/>', // Lucide move-up-right
     hotkey: 'y',
     styleable: true,
+    group: LINE_GROUP,
     // p2 лише задає напрямок — рендериться делікатніше за стартовий якір
     // (owner: «дві крапки на кінці» читались як шум; ієрархія лікує).
     secondaryHandles: [1],
