@@ -179,6 +179,7 @@ def test_finish_appends_monthly_jsonl_without_ip(tmp_path):
         "internal": False,
         "home_net": False,
         "source": None,
+        "lang": None,
         "messages": 1,
         "views": ["XAU/USD:M15"],
         "views_dropped": 0,

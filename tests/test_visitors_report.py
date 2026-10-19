@@ -175,6 +175,26 @@ def test_snapshot_link_visits_are_counted_and_marked():
     assert text.count("· 🔗 зі знімка") == 2
 
 
+def test_languages_line_counts_people_by_last_visit_language_and_marks_non_source_visits():
+    """ADR-0116 §9 п.6: чи переклад приводить людей — люди за мовою останнього візиту; біля візиту — мова, крім uk."""
+    en_switched, ru, uk, old_ui = "e1" * 16, "r1" * 16, "u1" * 16, "o1" * 16
+    records = [
+        dict(session(en_switched, T0 + HOUR, 5), lang="uk"),
+        dict(session(en_switched, T0 + HOUR + 6 * MIN, 4), lang="en"),  # перемкнув у тому самому візиті
+        dict(session(ru, T0 + 2 * HOUR, 8), lang="ru"),
+        dict(session(uk, T0 + 3 * HOUR, 7), lang="uk"),
+        session(old_ui, T0 + 4 * HOUR, 6),  # старий UI в кеші — мови не передавав
+    ]
+    visitors = build_visitors(records, 30, 30)
+    assert [v.lang for v in visitors[en_switched].visits] == ["en"]
+    digest = summarize(visitors, records, (T0, T0 + DAY), {})
+    assert digest.languages == (("en", 1), ("ru", 1), ("uk", 1), (None, 1))
+    text = render(digest, 24, KYIV, 0, None)
+    assert "🌐 Мова людей: en 1 · ru 1 · uk 1 · не вказано 1" in text
+    visit_tags = [line.rsplit(" · ", 1)[-1] for line in text.splitlines() if line.startswith("   • ")]
+    assert sorted(visit_tags) == ["6 хв", "7 хв", "en", "ru"]  # uk і «не передавалась» — без позначки
+
+
 def test_render_reports_zero_snapshot_link_visitors_explicitly():
     records = [session("d" * 32, T0 + HOUR, 5)]
     text = render(summarize(build_visitors(records, 30, 30), records, (T0, T0 + DAY), {}), 24, KYIV, 0, None)

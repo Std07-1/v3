@@ -158,6 +158,9 @@ class Visit:
     start_ms: int
     max_views: int
     source: Optional[str] = None  # звідки прийшов (VISIT_SOURCES), None — напряму / невідомо
+    # ADR-0116 §9 п.6: мова, якою сесія закінчилась (код зареєстрованої мови), None — мови не передавала (старий UI).
+    # Лише код мови — щоб бачити, чи переклад приводить людей; мову браузера не пишемо
+    lang: Optional[str] = None
     messages: int = 0
     views: List[str] = field(default_factory=list)
     views_dropped: int = 0
@@ -189,6 +192,7 @@ class Visit:
             "internal": self.internal,
             "home_net": self.home_net,
             "source": self.source,
+            "lang": self.lang,
             "messages": self.messages,
             "views": self.views,
             "views_dropped": self.views_dropped,

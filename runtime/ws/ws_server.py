@@ -2071,6 +2071,7 @@ async def ws_handler(request: web.Request) -> web.StreamResponse:
             ws.close_code,
         )
         if journal is not None and visit is not None:
+            visit.lang = session.lang  # ADR-0116: мова, якою сесія закінчилась (лише код каталогу)
             journal.finish(visit, session.client_id, int(time.time() * 1000), ws.close_code)
 
     return ws
