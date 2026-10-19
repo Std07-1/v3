@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, searchForWorkspaceRoot } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -48,6 +48,8 @@ export default defineConfig(() => {
         server: {
             port: 5173,
             open: false,
+            // ADR-0116: словники мов лежать у корені репо (`i18n/`, їх читає і сервер) — dev-серверу треба дозволити
+            fs: { allow: [searchForWorkspaceRoot(process.cwd()), resolve('..', 'i18n')] },
             proxy: {
                 // специфічніший префікс — першим (vite бере перший збіг)
                 '/api/alerts': {

@@ -27,6 +27,7 @@ import {
 import type { Candle, T_MS } from '../types';
 import { isMobile } from '../app/viewport';
 import { TF_LABEL_TO_S } from '../constants/tfLabels';
+import { currentLocaleTag } from '../lib/i18n/i18n.svelte';
 
 // ─── Helpers ───
 
@@ -294,6 +295,8 @@ export class ChartEngine {
         },
       },
       localization: {
+        // ADR-0116 §5.6: дати D1/W1/MN на шкалі — мовою глядача, а не браузера (інакше «ru» в UI і місяці uk)
+        locale: currentLocaleTag(),
         timeFormatter: (time: Time) => {
           if (typeof time === 'string') return time as string; // D1
           if (typeof time === 'number') return _fmtUtcFull(time);
