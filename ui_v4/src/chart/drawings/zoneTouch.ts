@@ -9,8 +9,11 @@
 // історії (дотик «не пізніше за»), прокрутка назад довантажує історію й перераховує.
 //
 // Кожен бар звіряється з кешем часів: на мить перемикання TF чи довантаження історії бар LWC за індексом (логічний
-// індекс шкали часу) і кеш часів renderer-а розходяться — тоді нічого не запам'ятовується, наступний кадр рахує знову
-// (стенд 19.10: без звірки хибний «дотик» з такої миті лишався в пам'яті й обривав живу зону на H1).
+// індекс шкали часу) і кеш часів renderer-а розходяться або LWC бару ще не віддає — тоді нічого не запам'ятовується,
+// наступний кадр рахує знову. Серія свічок без whitespace (engine.ts їх відфільтровує), тож бару нема = дані не готові.
+// Пам'ять скидається й на кожну повну заміну даних серії (`reset`): ті самі часи — ще не ті самі ціни.
+// Стенд 19.10: без звірки хибний «дотик» з миті перемикання обривав живу зону на H1, а «не торкалась до кінця» з
+// барами, яких LWC ще не віддав, назавжди ховав справжній дотик на M30.
 
 import { timeToFractionalIndex } from './timeMap';
 
@@ -25,7 +28,7 @@ export interface TouchBar {
 export interface TouchSeries {
   readonly barTimesSec: () => readonly number[];
   readonly barStepSec: () => number;
-  /** null — бару нема або він без ціни (whitespace). */
+  /** null — LWC бару (ще) не віддає. */
   readonly barAt: (idx: number) => TouchBar | null;
   /** Бар і кеш часів розійшлися (дотик цього кадру не відомий) — гучно, не тихо (I5). */
   readonly onMisaligned?: () => void;
@@ -34,7 +37,10 @@ export interface TouchSeries {
 /** Час (мс) першої свічки після `fromMs`, що торкнулась [lo, hi]; null — ще не торкалась (або не відомо цього кадру). */
 export type FirstTouchMs = (fromMs: number, lo: number, hi: number) => number | null;
 
-/** Бар серії LWC → бар для пошуку; без high/low (whitespace) — null. */
+/** Пошук з пам'яттю; `reset` — дані серії замінено повністю (пам'ять недійсна). */
+export type FirstTouchLookup = FirstTouchMs & { readonly reset: () => void };
+
+/** Бар серії LWC → бар для пошуку; нема або без high/low — null. */
 export function toTouchBar<T>(
   item: { readonly time: T; readonly high?: number; readonly low?: number } | null | undefined,
   timeToSec: (time: T) => number,
@@ -56,8 +62,7 @@ export function scanForTouch(
 ): Scan {
   for (let i = Math.max(0, fromIdx); i < barTimes.length; i++) {
     const bar = barAt(i);
-    if (bar === null) continue;
-    if (bar.timeSec !== barTimes[i]) return 'misaligned';
+    if (bar === null || bar.timeSec !== barTimes[i]) return 'misaligned';
     if (bar.low <= hi && bar.high >= lo) return { idx: i, scannedTo: barTimes.length };
   }
   return { idx: null, scannedTo: barTimes.length };
@@ -67,11 +72,11 @@ export function scanForTouch(
 const MEMO_LIMIT = 256;
 
 /** Пошук дотику з пам'яттю на поточну історію: нова історія (інший масив часів) — пам'ять з нуля. */
-export function createFirstTouchLookup(series: TouchSeries): FirstTouchMs {
+export function createFirstTouchLookup(series: TouchSeries): FirstTouchLookup {
   let times: readonly number[] | null = null;
   const memo = new Map<string, { readonly idx: number | null; readonly scannedTo: number }>();
 
-  return (fromMs, lo, hi) => {
+  const lookup: FirstTouchMs = (fromMs, lo, hi) => {
     const barTimes = series.barTimesSec();
     if (barTimes !== times) {
       times = barTimes;
@@ -94,4 +99,5 @@ export function createFirstTouchLookup(series: TouchSeries): FirstTouchMs {
     memo.set(key, scan);
     return scan.idx === null ? null : barTimes[scan.idx] * 1000;
   };
+  return Object.assign(lookup, { reset: () => memo.clear() });
 }

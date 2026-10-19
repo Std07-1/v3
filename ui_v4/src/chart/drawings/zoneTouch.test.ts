@@ -36,10 +36,13 @@ describe('scanForTouch', () => {
   const times = [0, 60, 120, 180];
   const bars = barsAt(RANGES, times);
 
-  it('перший бар, чий діапазон перетинає зону; не торкалась — null; whitespace пропускається', () => {
+  it('перший бар, чий діапазон перетинає зону; не торкалась — null', () => {
     expect(scanForTouch(times, (i) => bars[i], 1, 98, 100)).toEqual({ idx: 2, scannedTo: 4 });
     expect(scanForTouch(times, (i) => bars[i], 1, 80, 85)).toEqual({ idx: null, scannedTo: 4 });
-    expect(scanForTouch(times, (i) => (i === 2 ? null : bars[i]), 1, 98, 100)).toEqual({ idx: null, scannedTo: 4 });
+  });
+
+  it('LWC бару ще не віддає (мить перемикання) — «розійшлися», а не «не торкалась до кінця»', () => {
+    expect(scanForTouch(times, (i) => (i === 2 ? null : bars[i]), 1, 98, 100)).toBe('misaligned');
   });
 
   it('бар не з того часу, що кеш (мить перемикання TF) — «розійшлися», а не хибний дотик', () => {
@@ -94,6 +97,17 @@ describe('createFirstTouchLookup', () => {
     expect(s.misaligned()).toBe(1);
     s.bars.splice(0, 4, ...good);
     expect(s.lookup(0, 98, 100)).toBe(120_000);
+  });
+
+  it('повна заміна даних (reset) — ті самі часи, нові ціни: дотик шукається заново', () => {
+    const times = [0, 60, 120, 180];
+    let bars = barsAt(RANGES, times);
+    const lookup = createFirstTouchLookup({ barTimesSec: () => times, barStepSec: () => 60, barAt: (i) => bars[i] ?? null });
+    expect(lookup(0, 80, 85)).toBeNull();
+    bars = barsAt([...RANGES.slice(0, 2), { low: 84, high: 90 }, RANGES[3]], times);
+    expect(lookup(0, 80, 85)).toBeNull(); // без reset: бар 2 уже перевірено — пам'ять «не торкалась»
+    lookup.reset();
+    expect(lookup(0, 80, 85)).toBe(120_000);
   });
 
   it('нова історія (інший масив часів) — пам’ять з нуля', () => {

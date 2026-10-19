@@ -235,7 +235,7 @@ export class DrawingsRenderer {
     // Дані серії змінились без зміни видимого діапазону: тік розширив high/low → autoScale зсунув ціна→y (D-05);
     // 'full' (setData: старіша історія, заміна барів) зсуває індекси барів — кеш часів негайно (D-09)
     this.onSeriesDataChanged = (scope) => {
-      if (scope === 'full') this.refreshBarTimes(true);
+      if (scope === 'full') { this.refreshBarTimes(true); this.firstTouchMs.reset(); } // зона: пам'ять дотиків недійсна
       this.scheduleRender();
     };
     this.seriesApi.subscribeDataChanged(this.onSeriesDataChanged);
