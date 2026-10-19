@@ -1,6 +1,6 @@
 // src/chart/canvasColor.test.ts
 import { describe, expect, it } from 'vitest';
-import { withAlpha } from './canvasColor';
+import { isLightColor, withAlpha } from './canvasColor';
 
 describe('withAlpha', () => {
   it('hex-токен → rgba з альфою (з # і без, регістр не важить)', () => {
@@ -12,5 +12,13 @@ describe('withAlpha', () => {
   it('не hex — запасний колір шару з тією ж альфою', () => {
     expect(withAlpha('', 0.3, '128,128,128')).toBe('rgba(128,128,128,0.3)');
     expect(withAlpha('rgba(1,2,3,1)', 0.2, '84,135,255')).toBe('rgba(84,135,255,0.2)');
+  });
+});
+
+describe('isLightColor', () => {
+  it('нейтраль темних тем — світла, світлої теми — темна; не hex — null', () => {
+    expect(isLightColor('#E6EDF3')).toBe(true);
+    expect(isLightColor('#1C2128')).toBe(false);
+    expect(isLightColor('var(--x)')).toBeNull();
   });
 });

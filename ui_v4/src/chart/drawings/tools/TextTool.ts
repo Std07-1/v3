@@ -4,14 +4,17 @@
 // ADR-0109. Ставиться один раз (як у TV): після тексту інструмент вимкнено, нотатка виділена. Стиль — лише колір.
 
 import type { Drawing } from '../../../types';
-import { withAlpha } from '../../canvasColor';
+import { isLightColor, withAlpha } from '../../canvasColor';
 import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './types';
 
 const TEXT_FONT = '12px Inter, system-ui, sans-serif';
 const PAD_X = 6;
 const CHIP_H = 20;
 const BASELINE_LIFT = 6;
-const CHIP_BG = 'rgba(14, 17, 23, 0.72)';
+/** Тло чіпа — контрастне до кольору тексту: світлий текст (темні теми) — темне тло, темний (світла тема: нейтраль
+ *  #1C2128) — світле; інакше у світлій темі текст зливався з темним тлом. */
+const CHIP_BG_DARK = 'rgba(14, 17, 23, 0.72)';
+const CHIP_BG_LIGHT = 'rgba(255, 255, 255, 0.85)';
 /** Запасний колір, якщо колір фігури — не hex (той самий нейтральний, що --drawing-base-color). */
 const FALLBACK_RGB = '200,205,214';
 /** Нотатка без тексту (прев'ю під курсором до кліку). */
@@ -68,7 +71,7 @@ export const TextTool: ToolModule = {
         const box = chipBox(x, y, width);
         ctx.setLineDash([]);
         ctx.shadowBlur = 0;
-        ctx.fillStyle = CHIP_BG;
+        ctx.fillStyle = isLightColor(color) === false ? CHIP_BG_LIGHT : CHIP_BG_DARK;
         ctx.fillRect(box.minX, box.minY, box.maxX - box.minX, CHIP_H);
         ctx.strokeStyle = withAlpha(color, !isDraft && (isHovered || isSelected) ? 0.9 : 0.45, FALLBACK_RGB);
         ctx.lineWidth = 1;

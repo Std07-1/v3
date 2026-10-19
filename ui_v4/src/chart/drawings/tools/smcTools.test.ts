@@ -76,6 +76,18 @@ describe('нотатка', () => {
         expect(chipBox(100, 300, 40)).toEqual({ minX: 100, maxX: 152, minY: 280, maxY: 300 });
     });
 
+    it('тло чіпа контрастне до тексту: світла тема (нейтраль #1C2128) — світле, темна (#E6EDF3) — темне', () => {
+        const note: Drawing = { id: 'n', type: 'text', points: [{ t_ms: 100, price: 300 }], meta: { text: 'BSL' } };
+        const fillsFor = (baseColor: string) => {
+            const { rc, fills } = recordingRc(undefined);
+            Object.assign(rc.ctx, { measureText: () => ({ width: 20 }), strokeRect: vi.fn(), fillText: vi.fn(), font: '' });
+            TextTool.render(note, { ...rc, baseColor });
+            return fills[0];
+        };
+        expect(fillsFor('#1C2128')).toBe('rgba(255, 255, 255, 0.85)');
+        expect(fillsFor('#E6EDF3')).toBe('rgba(14, 17, 23, 0.72)');
+    });
+
     it('× видалення — праворуч від чіпа посередині висоти, не поверх тексту', () => {
         const note: Drawing = { id: 'n', type: 'text', points: [{ t_ms: 100, price: 300 }], meta: { text: 'H4 OB' } };
         const id = (v: number) => v;
