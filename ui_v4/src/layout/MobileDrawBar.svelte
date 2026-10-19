@@ -256,7 +256,7 @@
     position: absolute;
     left: 8px;
     right: 8px;
-    bottom: calc(30px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(30px + env(safe-area-inset-bottom, 0px)); /* той самий низ — у поля нотатки (NoteEditor) */
     z-index: 30;
     /* По центру через margin, не left:50% — інакше ширину стискає половина контейнера, і кнопки мліють до мінімуму */
     width: max-content;

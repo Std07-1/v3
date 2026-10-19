@@ -20,8 +20,10 @@
   const ICON_CHECK = '<path d="M20 6 9 17l-5-5"/>';
   /** Висота поля на ПК — як чіп нотатки (TextTool CHIP_H 20) з рамкою: поле накриває чіп. */
   const DESKTOP_FIELD_H = 24;
-  /** Відступ поля телефона над клавіатурою (або над краєм екрана, якщо клавіатури нема). */
+  /** Відступ поля телефона над клавіатурою. */
   const DOCK_GAP_PX = 8;
+  /** Без клавіатури поле — рівно на місці капсули, накриває її (той самий низ, що `.mdraw` у MobileDrawBar). */
+  const CAPSULE_BOTTOM = "calc(30px + env(safe-area-inset-bottom, 0px))";
 
   // Поле живе один запит (host монтує нове на кожен) — початковий текст береться раз
   let value = $state(untrack(() => request.initial));
@@ -76,7 +78,7 @@
 {/snippet}
 
 {#if request.touch}
-  <div class="note-editor docked" style:bottom="{keyboardInset + DOCK_GAP_PX}px">
+  <div class="note-editor docked" style:bottom="max({keyboardInset + DOCK_GAP_PX}px, {CAPSULE_BOTTOM})">
     <input
       type="text"
       bind:value
