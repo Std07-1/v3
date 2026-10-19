@@ -14,6 +14,7 @@ import {
 } from '../interaction/geometry';
 import { getToolModule } from './tools';
 import { createFirstTouchLookup, type BarRange } from './zoneTouch';
+import { nearestSnapLevel, type SnapMode } from './magnetSnap';
 import { drawingsKey, isCorruptBackupKey, loadDrawings, saveDrawings } from './drawingsStorage';
 import { cloneDrawing, completeDraft, cursorIndex, firstClick, followCursor, newDraft, previewsOnHover } from './drawingDraft';
 import { dragBody, dragHandle, grabOffsetFor, type DragSpace } from './drawingDrag';
@@ -48,7 +49,7 @@ type DrawingMetaPatch = Partial<NonNullable<Drawing['meta']>>;
 
 type SnapConfig = {
   enabled: boolean;
-  mode: 'ohlc' | 'hl' | 'close';
+  mode: SnapMode;
 };
 
 // Приціл на кінцях: тонкий crosshair з ВІДКРИТИМ центром (видно точку на свічці),
@@ -563,25 +564,8 @@ export class DrawingsRenderer {
     const bar: any = this.seriesApi.dataByIndex(idx, MismatchDirection.NearestLeft);
     if (!bar || typeof bar.open !== 'number') return rawPrice;
 
-    const candidates: number[] =
-      this.snapConfig.mode === 'close'
-        ? [bar.close]
-        : this.snapConfig.mode === 'hl'
-          ? [bar.high, bar.low]
-          : [bar.high, bar.low, bar.open, bar.close];
-
-    // Find nearest OHLC by Y-pixel distance.
-    let bestPrice = rawPrice;
-    let bestDist = Infinity;
-    for (const p of candidates) {
-      const py = this.seriesApi.priceToCoordinate(p);
-      if (py === null) continue;
-      const dist = Math.abs(y - py);
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestPrice = p;
-      }
-    }
+    // Найближчий рівень свічки за пікселями (magnetSnap.ts).
+    const nearest = nearestSnapLevel(bar, this.snapConfig.mode, y, (p) => this.seriesApi.priceToCoordinate(p));
 
     // Snap only within threshold — prevents "flying" when cursor is outside the
     // bar's price range (e.g. cursor at bottom Y≈450 but all OHLC at Y≈150-200).
@@ -591,15 +575,15 @@ export class DrawingsRenderer {
     // Палець (курсор ADR-0112 D7 і ручка D8) — «слабкий» магніт: прилипає лише поруч із рівнем, тож прилипання щось
     // означає («ти на хаї»); 120 px тримали б точку на рівнях майже завжди, а ручка стрибала б під пальцем на ~100 px.
     const SNAP_RADIUS_PX = this.touchCursorMode || this.dragState?.pointerType === 'touch' ? 16 : 120;
-    if (bestDist > SNAP_RADIUS_PX) {
+    if (nearest === null || nearest.distPx > SNAP_RADIUS_PX) {
       this.lastSnap = null;
       return rawPrice;
     }
 
     // Visual snap indicator
-    const snapY = this.seriesApi.priceToCoordinate(bestPrice);
+    const snapY = this.seriesApi.priceToCoordinate(nearest.price);
     this.lastSnap = snapY !== null ? { x, y: snapY } : null;
-    return bestPrice;
+    return nearest.price;
   }
 
   // ---- CommandStack локальне застосування ----
