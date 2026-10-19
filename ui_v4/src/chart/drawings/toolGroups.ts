@@ -1,9 +1,9 @@
 // src/chart/drawings/toolGroups.ts
-// ADR-0112 D9: капсула телефона — інструменти однієї групи (позиція: довга / коротка) займають одну кнопку; тап по ній
-// бере останній обраний варіант, а в режимі інструмента варіант перемикається поруч із магнітом. Чисті функції над
-// реєстром (група — у ToolModule.group, одне джерело); панель ПК групи не згортає.
+// ADR-0112 D9/D11: інструменти однієї групи (рівень, лінія, прямокутник, позиція — tools/groups.ts) займають одну
+// кнопку — у капсулі телефона і в панелі ПК однаково; кнопка бере останній обраний варіант, варіант перемикається
+// поруч. Чисті функції над реєстром (група — у ToolModule.group, одне джерело).
 
-import type { DrawingType } from '../../types';
+import type { ActiveTool, DrawingType } from '../../types';
 import type { ToolModule } from './tools';
 
 /** Кнопка капсули: окремий інструмент або група (підпис групи, іконка й дія — обраного варіанта). */
@@ -33,6 +33,26 @@ export function capsuleEntries(
     entries.push({ key: group.id, label: group.label, tool: chosen });
   }
   return entries;
+}
+
+/** Кнопка «тримає» обраний інструмент: будь-який варіант її групи або сам інструмент без групи. */
+export function entryHolds(entry: CapsuleEntry, active: ActiveTool, tools: readonly ToolModule[]): boolean {
+  if (active === null || active === 'eraser') return false;
+  if (entry.tool.id === active) return true;
+  const group = entry.tool.group;
+  return group !== undefined && tools.find((t) => t.id === active)?.group?.id === group.id;
+}
+
+/** Обраний інструмент (кнопкою, перемикачем чи клавішею) — останній варіант своєї групи; без змін — той самий об'єкт. */
+export function rememberVariant(
+  lastInGroup: Readonly<Record<string, DrawingType>>,
+  active: ActiveTool,
+  tools: readonly ToolModule[],
+): Readonly<Record<string, DrawingType>> {
+  if (active === null || active === 'eraser') return lastInGroup;
+  const group = tools.find((t) => t.id === active)?.group;
+  if (!group || lastInGroup[group.id] === active) return lastInGroup;
+  return { ...lastInGroup, [group.id]: active };
 }
 
 /** Варіанти групи інструмента (для перемикача); інструмент без групи — порожньо. */

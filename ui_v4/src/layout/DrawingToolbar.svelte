@@ -11,15 +11,25 @@
     - Per-icon hover label: a tidy pill (name + hotkey) reveals to the right of
       each icon on hover. Gated by the shared "Підказки" toggle (☰ menu,
       stores/uiHints) — off = fully silent (supersedes ADR-0077 polite timing).
-    - 6 icons: cursor (no-tool) · hline · trend · rect · eraser · magnet.
-      Magnet is a modal toggle (magnetEnabled), not an ActiveTool.
+    - cursor · інструменти реєстру · eraser · magnet · snapshot. Magnet is a
+      modal toggle (magnetEnabled), not an ActiveTool.
+    - Групи (ADR-0112 D11, однаково з капсулою телефона): рівень · лінія ·
+      прямокутник · позиція — одна кнопка з останнім обраним варіантом
+      (клавіша варіанта перемикає його).
 
   Mobile: still hidden (@media) pending the touch hit-test / draft-commit fixes
   the 2026-05-12 hide was created for — do NOT silently re-enable here.
 -->
 <script lang="ts">
   import type { ActiveTool, DrawingType } from "../types";
+  import { untrack } from "svelte";
   import { TOOL_REGISTRY } from "../chart/drawings/tools";
+  import {
+    capsuleEntries,
+    entryHolds,
+    rememberVariant,
+    type CapsuleEntry,
+  } from "../chart/drawings/toolGroups";
   import { hintsOn } from "../stores/uiHints";
   import { ICON_MAGNET } from "./toolIcons";
 
@@ -60,10 +70,13 @@
   // Source: Lucide v0.460 (MIT) — mouse-pointer-2 / eraser / magnet / camera. Inlined (no dependency).
   // Іконки фігур — у їхніх модулях (ToolModule.icon, ADR-0111 §3.3).
   type ToolBtn = {
+    key: string;
     id: ActiveTool;
     label: string;
     hotkey: string;
     iconPath: string; // inner SVG markup (paths/lines/etc)
+    /** Кнопка групи (ADR-0112 D11): показує останній обраний варіант; null — окремий інструмент. */
+    group: CapsuleEntry | null;
   };
 
   const ICON_CURSOR =
@@ -74,33 +87,40 @@
   const ICON_CAMERA =
     '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>';
 
-  // Order matters — cursor first ("default"), eraser last (destructive).
-  // Фігури — з реєстру в його порядку (підпис, клавіша, іконка — у модулі, ADR-0111 §3.3); cursor/eraser —
-  // тут, бо це не фігури.
-  const buttons: ToolBtn[] = [
-    { id: null, label: "Курсор", hotkey: "Esc", iconPath: ICON_CURSOR },
-    ...[...TOOL_REGISTRY.values()].map((tool) => ({
-      id: tool.id,
-      label: tool.label,
-      hotkey: tool.hotkey.toUpperCase(),
-      iconPath: tool.icon,
-    })),
-    { id: "eraser", label: "Гумка", hotkey: "E", iconPath: ICON_ERASER },
-  ];
+  const tools = [...TOOL_REGISTRY.values()];
+  /** Останній обраний варіант кожної групи — кнопка групи бере його (кнопкою, рядком варіантів чи клавішею). */
+  let lastInGroup = $state<Readonly<Record<string, DrawingType>>>({});
+  $effect(() => {
+    const next = rememberVariant(untrack(() => lastInGroup), activeTool, tools);
+    if (next !== untrack(() => lastInGroup)) lastInGroup = next;
+  });
 
-  function handleClick(id: ActiveTool) {
-    // Toggle: re-click активного інструменту → деактивує (null).
-    if (id === null) {
-      onSelectTool(null);
-    } else {
-      onSelectTool(activeTool === id ? null : id);
-    }
+  // Order matters — cursor first ("default"), eraser last (destructive).
+  // Фігури — з реєстру в його порядку, група — одна кнопка (підпис, клавіша, іконка — у модулі, ADR-0111 §3.3);
+  // cursor/eraser — тут, бо це не фігури.
+  const buttons: ToolBtn[] = $derived([
+    { key: "_cursor", id: null, label: "Курсор", hotkey: "Esc", iconPath: ICON_CURSOR, group: null },
+    ...capsuleEntries(tools, lastInGroup).map((entry) => ({
+      key: entry.key,
+      id: entry.tool.id,
+      label: entry.tool.label,
+      hotkey: entry.tool.hotkey.toUpperCase(),
+      iconPath: entry.tool.icon,
+      group: entry.tool.group ? entry : null,
+    })),
+    { key: "eraser", id: "eraser", label: "Гумка", hotkey: "E", iconPath: ICON_ERASER, group: null },
+  ]);
+
+  function handleClick(btn: ToolBtn) {
+    // Toggle: re-click активного інструменту (будь-якого варіанта групи) → деактивує (null).
+    if (btn.id === null) onSelectTool(null);
+    else onSelectTool(isActive(btn) ? null : btn.id);
   }
 
   // Cursor button "active" коли немає інструменту вибрано — explicit indicator.
-  function isActive(id: ActiveTool): boolean {
-    if (id === null) return activeTool === null;
-    return activeTool === id;
+  function isActive(btn: ToolBtn): boolean {
+    if (btn.id === null) return activeTool === null;
+    return btn.group ? entryHolds(btn.group, activeTool, tools) : activeTool === btn.id;
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -217,36 +237,42 @@
   }
 </script>
 
+{#snippet toolIcon(markup: string)}
+  <svg
+    class="tool-icon"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.75"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    {@html markup}
+  </svg>
+{/snippet}
+
 <div class="drawing-toolbar" bind:this={hostEl}>
   <div class="tools-group" role="toolbar" aria-label="Drawing tools">
-    {#each buttons as btn (btn.id ?? "_cursor")}
-      <button
-        class="tool-btn"
-        class:active={isActive(btn.id)}
-        onclick={() => handleClick(btn.id)}
-        oncontextmenu={(e) => handleContext(e, btn.id)}
-        onpointerenter={() => tipEnter(btn.id ?? "_cursor")}
-        onpointerleave={() => tipLeave(btn.id ?? "_cursor")}
-        type="button"
-        aria-label={btn.label}
-        aria-pressed={isActive(btn.id)}
-      >
-        <svg
-          class="tool-icon"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.75"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
+    {#each buttons as btn (btn.key)}
+      <div class="tool-cell">
+        <button
+          class="tool-btn"
+          class:active={isActive(btn)}
+          onclick={() => handleClick(btn)}
+          oncontextmenu={(e) => handleContext(e, btn.id)}
+          onpointerenter={() => tipEnter(btn.key)}
+          onpointerleave={() => tipLeave(btn.key)}
+          type="button"
+          aria-label={btn.label}
+          aria-pressed={isActive(btn)}
         >
-          {@html btn.iconPath}
-        </svg>
-        <span class="tool-tip" class:show={shownKey === (btn.id ?? "_cursor")}>
-          {btn.label}<kbd>{btn.hotkey}</kbd>
-        </span>
-      </button>
+          {@render toolIcon(btn.iconPath)}
+          <span class="tool-tip" class:show={shownKey === btn.key}>
+            {btn.label}<kbd>{btn.hotkey}</kbd>
+          </span>
+        </button>
+      </div>
     {/each}
 
     <!-- Magnet — modal toggle (magnetEnabled), not an ActiveTool. -->
@@ -435,6 +461,13 @@
     opacity: 1;
     transform: translateY(-50%) translateX(0);
   }
+  /* ADR-0112 D11: клітинка інструмента — якір кутика групи і рядка варіантів. */
+  .tool-cell {
+    position: relative;
+    width: var(--drawing-cell-size, 36px);
+    height: var(--drawing-cell-size, 36px);
+  }
+
   .tool-tip kbd {
     font-family: var(--font-mono, "SF Mono", "Consolas", monospace);
     font-size: 10px;
