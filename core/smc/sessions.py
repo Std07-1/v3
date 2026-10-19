@@ -178,6 +178,23 @@ def _bar_in_killzone(bar_open_ms: int, sw: SessionWindow) -> bool:
         return bar_min >= sw.kz_start_min or bar_min < sw.kz_end_min
 
 
+def _session_moment(current_time_ms: int, sw: SessionWindow) -> Tuple[int, bool, bool]:
+    """Що момент означає для сесії: (доба на годиннику сесії, сесія активна, killzone — лише в активній сесії)."""
+    is_active = _bar_in_session(current_time_ms, sw)
+    is_kz = _bar_in_killzone(current_time_ms, sw) if is_active else False
+    return _ms_to_day_start(_session_clock_ms(current_time_ms, sw)), is_active, is_kz
+
+
+def session_moment_key(current_time_ms: int, sessions: List[SessionWindow]) -> Tuple[Tuple[int, bool, bool], ...]:
+    """Усе, що `compute_session_levels` бере з моменту, — `_session_moment` кожної сесії.
+
+    На тій самій стрічці M1 моменти з однаковим ключем дають однаковий вихід: на цьому тримається кеш рушія
+    (`SmcEngine.get_session_levels`). Функція читає момент лише через `_session_moment`, тож ключ не розійдеться з тим,
+    що вона справді використовує.
+    """
+    return tuple(_session_moment(current_time_ms, sw) for sw in sessions)
+
+
 def classify_bar_sessions(bar_open_ms: int, sessions: List[SessionWindow]) -> List[str]:
     """Визначити, до яких сесій належить бар (може бути >1 при overlap)."""
     return [sw.name for sw in sessions if _bar_in_session(bar_open_ms, sw)]
@@ -283,7 +300,7 @@ def compute_session_levels(
             continue
         act_h_kind, act_l_kind, prev_h_kind, prev_l_kind = kinds
         # Межа current/previous — доба на годиннику сесії (узимку зсунутому), як і належність бару до вікна
-        current_day_start = _ms_to_day_start(_session_clock_ms(current_time_ms, sw))
+        current_day_start, is_active, is_kz = _session_moment(current_time_ms, sw)
         prev_day_start = _previous_trading_day_start(current_day_start)
         # Буфер M1 обмежений кількістю барів: якщо він починається після відкриття попередньої сесії, її H/L
         # порахувався б з обрізаного вікна — такий рівень не видаємо
@@ -291,10 +308,6 @@ def compute_session_levels(
         if not prev_covered:
             _log.debug("SESSION_PREV_UNCOVERED session=%s symbol=%s first_bar_ms=%d prev_open_ms=%d",
                        sw.name, symbol, bars[0].open_time_ms, _session_open_ms(prev_day_start, sw))
-
-        # Determine if session is currently active + killzone
-        is_active = _bar_in_session(current_time_ms, sw)
-        is_kz = _bar_in_killzone(current_time_ms, sw) if is_active else False
 
         # Collect bars for CURRENT session period (today)
         cur_high: Optional[float] = None
