@@ -1,0 +1,368 @@
+{
+ "atr": {
+  "D1": 10.14,
+  "H1": 10.14,
+  "H4": 10.14
+ },
+ "data_quality": {
+  "server_ts_ms": 1791954000000,
+  "tf_freshness": {
+   "D1": {
+    "age_s": 104400,
+    "bars_count": 60,
+    "last_bar_ms": 1791849600000,
+    "stale": false
+   },
+   "H1": {
+    "age_s": 3600,
+    "bars_count": 60,
+    "last_bar_ms": 1791950400000,
+    "stale": false
+   },
+   "H4": {
+    "age_s": 18000,
+    "bars_count": 60,
+    "last_bar_ms": 1791936000000,
+    "stale": false
+   },
+   "M1": {
+    "age_s": 60,
+    "bars_count": 600,
+    "last_bar_ms": 1791953940000,
+    "stale": false
+   },
+   "M15": {
+    "age_s": 900,
+    "bars_count": 60,
+    "last_bar_ms": 1791953100000,
+    "stale": false
+   },
+   "M5": {
+    "age_s": 300,
+    "bars_count": 60,
+    "last_bar_ms": 1791953700000,
+    "stale": false
+   }
+  },
+  "ws_clients": "<ws_clients>"
+ },
+ "levels": [
+  {
+   "auto": true,
+   "family": "liquidity",
+   "group": "liquidity",
+   "id": "eq_highs_XAU_USD_3600_412200",
+   "key": "eq3600:high:XAU/USD:412200",
+   "kind": "eq_highs",
+   "price": 4122.0,
+   "proximity": 3,
+   "state": "fixed",
+   "t_ms": 1791759600000,
+   "tier": 3
+  },
+  {
+   "auto": true,
+   "family": "liquidity",
+   "group": "liquidity",
+   "id": "eq_lows_XAU_USD_3600_409600",
+   "key": "eq3600:low:XAU/USD:409600",
+   "kind": "eq_lows",
+   "price": 4096.0,
+   "proximity": -4,
+   "state": "fixed",
+   "t_ms": 1791763200000,
+   "tier": 3
+  },
+  {
+   "auto": true,
+   "family": "day",
+   "group": "day",
+   "id": "pdh_XAU_USD_86400_411300",
+   "key": "d1:high:XAU/USD:2026-10-13T00:00Z",
+   "kind": "pdh",
+   "price": 4113.0,
+   "proximity": 1,
+   "state": "fixed",
+   "t_ms": 1791849600000,
+   "tier": 1
+  },
+  {
+   "auto": true,
+   "family": "day",
+   "group": "day",
+   "id": "pdl_XAU_USD_86400_410500",
+   "key": "d1:low:XAU/USD:2026-10-13T00:00Z",
+   "kind": "pdl",
+   "price": 4105.0,
+   "proximity": -1,
+   "state": "fixed",
+   "t_ms": 1791849600000,
+   "tier": 1
+  },
+  {
+   "auto": false,
+   "family": "htf",
+   "group": "h4",
+   "id": "p_h4_h_XAU_USD_14400_411300",
+   "key": "h4:high:XAU/USD:2026-10-14T00:00Z",
+   "kind": "p_h4_h",
+   "price": 4113.0,
+   "proximity": 1,
+   "state": "fixed",
+   "t_ms": 1791936000000,
+   "tier": 3
+  },
+  {
+   "auto": false,
+   "family": "htf",
+   "group": "h4",
+   "id": "p_h4_l_XAU_USD_14400_410500",
+   "key": "h4:low:XAU/USD:2026-10-14T00:00Z",
+   "kind": "p_h4_l",
+   "price": 4105.0,
+   "proximity": -1,
+   "state": "fixed",
+   "t_ms": 1791936000000,
+   "tier": 3
+  },
+  {
+   "auto": true,
+   "family": "session",
+   "group": "asia",
+   "id": "as_h_XAU_USD_86400_412200",
+   "key": "asia:high:XAU/USD:2026-10-14T00:00Z",
+   "kind": "as_h",
+   "price": 4122.0,
+   "proximity": 3,
+   "state": "forming",
+   "t_ms": 1791936000000,
+   "tier": 3
+  },
+  {
+   "auto": true,
+   "family": "session",
+   "group": "asia",
+   "id": "as_l_XAU_USD_86400_409600",
+   "key": "asia:low:XAU/USD:2026-10-14T00:00Z",
+   "kind": "as_l",
+   "price": 4096.0,
+   "proximity": -4,
+   "state": "forming",
+   "t_ms": 1791936000000,
+   "tier": 3
+  },
+  {
+   "auto": true,
+   "family": "week",
+   "group": "week",
+   "id": "pwh_XAU_USD_604800_412200",
+   "key": "w1:high:XAU/USD:2026-10-03T00:00Z",
+   "kind": "pwh",
+   "price": 4122.0,
+   "proximity": 3,
+   "state": "fixed",
+   "t_ms": 1791504000000,
+   "tier": 1
+  },
+  {
+   "auto": true,
+   "family": "week",
+   "group": "week",
+   "id": "pwl_XAU_USD_604800_409600",
+   "key": "w1:low:XAU/USD:2026-10-03T00:00Z",
+   "kind": "pwl",
+   "price": 4096.0,
+   "proximity": -4,
+   "state": "fixed",
+   "t_ms": 1790985600000,
+   "tier": 1
+  },
+  {
+   "auto": false,
+   "family": "month",
+   "group": "month",
+   "id": "pmh_XAU_USD_2592000_412200",
+   "key": "mn1:high:XAU/USD:2026-09-01T00:00Z",
+   "kind": "pmh",
+   "price": 4122.0,
+   "proximity": 3,
+   "state": "fixed",
+   "t_ms": 1788480000000,
+   "tier": 1
+  },
+  {
+   "auto": false,
+   "family": "month",
+   "group": "month",
+   "id": "pml_XAU_USD_2592000_410200",
+   "key": "mn1:low:XAU/USD:2026-09-01T00:00Z",
+   "kind": "pml",
+   "price": 4102.0,
+   "proximity": -2,
+   "state": "fixed",
+   "t_ms": 1788739200000,
+   "tier": 1
+  },
+  {
+   "auto": true,
+   "family": "open",
+   "group": "open",
+   "id": "do_XAU_USD_86400_411800",
+   "key": "d1:open:XAU/USD:2026-10-14T00:00Z",
+   "kind": "do",
+   "price": 4118.0,
+   "proximity": 2,
+   "state": "fixed",
+   "t_ms": 1791936000000,
+   "tier": 2
+  },
+  {
+   "auto": false,
+   "family": "open",
+   "group": "open_week",
+   "id": "wo_XAU_USD_604800_410000",
+   "key": "w1:open:XAU/USD:2026-10-12T00:00Z",
+   "kind": "wo",
+   "price": 4100.0,
+   "proximity": -3,
+   "state": "fixed",
+   "t_ms": 1791590400000,
+   "tier": 2
+  }
+ ],
+ "narrative": {
+  "bias_summary": "HTF: очікуємо структуру",
+  "current_session": "asia",
+  "fvg_context": "",
+  "headline": "⬜ Немає зони рівня A — чекаємо сетап",
+  "in_killzone": false,
+  "market_phase": "ranging",
+  "mode": "wait",
+  "next_area": "FVG▼ без оцінки 4107.00–4114.00",
+  "scenarios": [],
+  "session_context": "Asia сесія активна",
+  "sub_mode": "",
+  "warnings": []
+ },
+ "pd_state": {
+  "equilibrium": 4109.0,
+  "label": "EQ",
+  "pd_percent": 53.8,
+  "range_high": 4122.0,
+  "range_low": 4096.0
+ },
+ "server_ts_ms": 1791954000000,
+ "session_levels": [
+  {
+   "auto": true,
+   "family": "session",
+   "id": "as_h_XAU_USD_86400_412200",
+   "key": "asia:high:XAU/USD:2026-10-14T00:00Z",
+   "kind": "as_h",
+   "price": 4122.0,
+   "state": "forming",
+   "t_ms": 1791936000000,
+   "tier": 3
+  },
+  {
+   "auto": true,
+   "family": "session",
+   "id": "as_l_XAU_USD_86400_409600",
+   "key": "asia:low:XAU/USD:2026-10-14T00:00Z",
+   "kind": "as_l",
+   "price": 4096.0,
+   "state": "forming",
+   "t_ms": 1791936000000,
+   "tier": 3
+  }
+ ],
+ "swings": [],
+ "symbol": "XAU/USD",
+ "tf": "H1",
+ "tf_s": 3600,
+ "trend_bias": null,
+ "zones": [
+  {
+   "context_layer": "institutional",
+   "end_ms": null,
+   "high": 4114.0,
+   "id": "fvg_bear_XAU_USD_86400_1791590400000",
+   "kind": "fvg_bear",
+   "low": 4107.0,
+   "start_ms": 1791504000000,
+   "status": "partially_filled",
+   "strength": 0.345,
+   "tf_s": 86400
+  },
+  {
+   "end_ms": null,
+   "high": 4109.0,
+   "id": "discount_XAU_USD_3600_1791914400000",
+   "kind": "discount",
+   "low": 4096.0,
+   "start_ms": 1791910800000,
+   "status": "active",
+   "strength": 1.0,
+   "tf_s": 3600
+  },
+  {
+   "end_ms": null,
+   "high": 4122.0,
+   "id": "premium_XAU_USD_3600_1791914400000",
+   "kind": "premium",
+   "low": 4109.0,
+   "start_ms": 1791910800000,
+   "status": "active",
+   "strength": 1.0,
+   "tf_s": 3600
+  },
+  {
+   "context_layer": "local",
+   "end_ms": null,
+   "high": 4114.0,
+   "id": "fvg_bear_XAU_USD_3600_1791939600000",
+   "kind": "fvg_bear",
+   "low": 4107.0,
+   "start_ms": 1791936000000,
+   "status": "partially_filled",
+   "strength": 0.345,
+   "tf_s": 3600
+  },
+  {
+   "context_layer": "local",
+   "end_ms": null,
+   "high": 4111.0,
+   "id": "fvg_bear_XAU_USD_3600_1791936000000",
+   "kind": "fvg_bear",
+   "low": 4104.0,
+   "start_ms": 1791932400000,
+   "status": "partially_filled",
+   "strength": 0.345,
+   "tf_s": 3600
+  },
+  {
+   "context_layer": "local",
+   "end_ms": null,
+   "high": 4114.0,
+   "id": "fvg_bear_XAU_USD_14400_1791892800000",
+   "kind": "fvg_bear",
+   "low": 4107.0,
+   "start_ms": 1791878400000,
+   "status": "partially_filled",
+   "strength": 0.345,
+   "tf_s": 14400
+  },
+  {
+   "context_layer": "local",
+   "end_ms": null,
+   "high": 4111.0,
+   "id": "fvg_bear_XAU_USD_14400_1791878400000",
+   "kind": "fvg_bear",
+   "low": 4104.0,
+   "start_ms": 1791864000000,
+   "status": "partially_filled",
+   "strength": 0.345,
+   "tf_s": 14400
+  }
+ ]
+}
