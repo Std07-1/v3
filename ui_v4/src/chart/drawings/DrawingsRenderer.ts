@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { DataChangedScope, IChartApi, ISeriesApi, Logical, Time } from 'lightweight-charts';
 import { MismatchDirection } from 'lightweight-charts';
 
-import type { Drawing, DrawingPoint, ActiveTool, WsAction, T_MS, UiWarning, DrawingContextRequest, DrawingType, DrawingColorRole } from '../../types';
+import type { Drawing, DrawingPoint, ActiveTool, WsAction, T_MS, UiWarning, DrawingContextRequest, DrawingEditState, DrawingType, DrawingColorRole } from '../../types';
 import { CommandStack, type CommandAction } from './CommandStack';
 import { buildRoleColorMap } from './colorRoles';
 import { timeToFractionalIndex, fractionalIndexToTime, medianStep, fractionalLogicalToX, shiftTimeByBars } from './timeMap';
@@ -932,7 +932,7 @@ export class DrawingsRenderer {
       // примусово (без lingering selection після закриття меню). Справжній
       // колір фігури зберігається завдяки color-preserving hover/select у
       // tool-render (ADR-0078) — палітра flyout й полотно завжди збігаються.
-      this.onContextMenu({ id: d.id, screenX: e.clientX, screenY: e.clientY, colorRole: d.meta?.colorRole ?? null, lineWidth: d.meta?.lineWidth ?? 1, lineStyle: d.meta?.lineStyle ?? 'solid' });
+      this.onContextMenu({ id: d.id, screenX: e.clientX, screenY: e.clientY, colorRole: d.meta?.colorRole ?? null, lineWidth: d.meta?.lineWidth ?? 1, lineStyle: d.meta?.lineStyle ?? 'solid', isNote: getToolModule(d.type)?.askText === true });
     };
 
     this.interactionEl.addEventListener('pointermove', this.onPointerMoveCapture, { capture: true });
@@ -1068,6 +1068,11 @@ export class DrawingsRenderer {
       if (step.kind === 'commit') this.commitNew(step.drawing, tool);
     };
     this.onNoteText({ clientX: rect.left + x, clientY: rect.top + y, initial: '', touch: this.touchCursorMode, commit });
+  }
+
+  /** ✎ у капсулі телефона — текст виділеної нотатки (ADR-0111 §3.7). */
+  editSelectedNote(): void {
+    if (this.selectedId !== null) this.editNoteText(this.selectedId, true);
   }
 
   /** ADR-0111 §3.7: змінити текст нотатки — те саме поле вводу на її місці (`touch` — над клавіатурою); undoable. */
@@ -1280,7 +1285,7 @@ export class DrawingsRenderer {
     return this.dragState?.pointerType === 'touch';
   }
 
-  editState(): { canUndo: boolean; hasSelection: boolean; noteSelected: boolean } {
+  editState(): DrawingEditState {
     const selected = this.selectedId === null ? undefined : this.drawings.find((d) => d.id === this.selectedId);
     const noteSelected = selected !== undefined && getToolModule(selected.type)?.askText === true;
     return { canUndo: this.commandStack.canUndo(), hasSelection: this.selectedId !== null, noteSelected };

@@ -15,7 +15,7 @@
   import type { ActiveTool, DrawingType } from "../types";
   import { TOOL_REGISTRY } from "../chart/drawings/tools";
   import { capsuleEntries, groupVariants } from "../chart/drawings/toolGroups";
-  import { ICON_BELL, ICON_CLOSE, ICON_MAGNET, ICON_TRASH, ICON_UNDO } from "./toolIcons";
+  import { ICON_BELL, ICON_CLOSE, ICON_MAGNET, ICON_PENCIL, ICON_TRASH, ICON_UNDO } from "./toolIcons";
   import type { AlertAction } from "../lib/alerts/alertUi";
 
   type PlaceResult = "draft" | "done" | "none";
@@ -31,6 +31,8 @@
     onClose,
     canUndo = false,
     hasSelection = false,
+    noteSelected = false,
+    onEditNote,
     alertAction = null,
     onAlertAction,
     menuBg = "rgba(30, 34, 45, 0.92)",
@@ -48,6 +50,9 @@
     /** Є що скасувати / виділено фігуру — ↶ і «видалити» активні лише тоді (ChartPane → App). */
     canUndo?: boolean;
     hasSelection?: boolean;
+    /** ADR-0111 §3.7: виділено нотатку — ✎ на місці дзвіночка змінює її текст (поле над клавіатурою). */
+    noteSelected?: boolean;
+    onEditNote?: () => void;
     /** ADR-0114: дзвіночок для виділеної лінії-сповіщення — горизонталі чи променя рівня (лише коли пристрій прив'язано; прив'язка — ☰ → Сповіщення). */
     alertAction?: AlertAction | null;
     onAlertAction?: () => void;
@@ -57,6 +62,7 @@
   } = $props();
 
   const ICON_CHECK = '<path d="M20 6 9 17l-5-5"/>';
+  const EDIT_NOTE_LABEL = "Змінити текст нотатки";
   /** Короткий «клац» на вибір інструмента (Android; де нема — тиша). */
   const SELECT_VIBRATE_MS = 6;
   const tools = [...TOOL_REGISTRY.values()];
@@ -210,7 +216,11 @@
         <button class="btn" type="button" aria-label="Скасувати дію" disabled={!canUndo} onclick={onUndo}>
           {@render icon(ICON_UNDO)}
         </button>
-        {#if alertAction && !alertAction.hintOnly}
+        {#if noteSelected && onEditNote}
+          <button class="btn" type="button" aria-label={EDIT_NOTE_LABEL} onclick={onEditNote}>
+            {@render icon(ICON_PENCIL)}
+          </button>
+        {:else if alertAction && !alertAction.hintOnly}
           <button
             class="btn bell"
             class:active={alertAction.on}

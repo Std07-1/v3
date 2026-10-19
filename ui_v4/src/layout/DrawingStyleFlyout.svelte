@@ -28,7 +28,7 @@
     type DrawingPreset,
   } from "../chart/drawings/drawingPresets";
   import type { AlertAction } from "../lib/alerts/alertUi";
-  import { ICON_BELL } from "./toolIcons";
+  import { ICON_BELL, ICON_PENCIL } from "./toolIcons";
 
   interface Props {
     /** null → закрито. anchor = екранна позиція, від якої flyout відкривається
@@ -57,6 +57,10 @@
     /** ADR-0114: лінія-сповіщення — підпис і стан готує ChartPane; null/undefined — рядка нема. */
     alertAction?: AlertAction | null;
     onAlertAction?: () => void;
+    /** ADR-0111 §3.7: зі стилю лише колір (нотатка) — пресетів, товщини й типу лінії нема. */
+    colorOnly?: boolean;
+    /** ADR-0111 §3.7: object-режим нотатки — рядок «Змінити текст». */
+    onEditText?: () => void;
     onClose: () => void;
   }
   let {
@@ -75,8 +79,12 @@
     onDelete,
     alertAction = null,
     onAlertAction,
+    colorOnly = false,
+    onEditText,
     onClose,
   }: Props = $props();
+
+  const EDIT_TEXT_LABEL = "Змінити текст";
 
   // Активний намір: пресет, чия трійця точно = поточний стан (інакше null=кастом).
   let activePreset = $derived(matchPreset(colorRole, lineWidth, lineStyle));
@@ -148,7 +156,7 @@
   // Позиція: праворуч від іконки, clamp у viewport (щоб не вилазив за край).
   const FLYOUT_W = 212;
   const GAP = 8;
-  let flyoutH = $derived(request?.showDelete ? 240 : 204);
+  let flyoutH = $derived((colorOnly ? 104 : 204) + (request?.showDelete ? 36 : 0) + (onEditText ? 32 : 0));
   let left = $derived(
     request
       ? Math.min(request.anchorX + GAP, window.innerWidth - FLYOUT_W - GAP)
@@ -188,6 +196,7 @@
 
     <div class="sep"></div>
 
+    {#if !colorOnly}
     <!-- Наміри-пресети — готова трійця колір+товщина+стиль на 1 клік (над
          гранульованими рядами). object-режим: наведення → live-preview, вихід → відкат. -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -220,6 +229,7 @@
     </div>
 
     <div class="sep"></div>
+    {/if}
 
     <!-- Палітра ролей — лінії-бари (правдиво до об'єкта, не кружки).
          object-режим: наведення → live-preview на фігурі, вихід з палітри → відкат. -->
@@ -241,6 +251,7 @@
       {/each}
     </div>
 
+    {#if !colorOnly}
     <div class="sep"></div>
 
     <!-- Товщина — chips з прев'ю лінії у ПОТОЧНОМУ кольорі (правдиве комбо).
@@ -305,7 +316,16 @@
         </button>
       {/each}
     </div>
+    {/if}
 
+    {#if onEditText}
+      <div class="sep"></div>
+      <button class="alert-row" onclick={() => onEditText?.()}>
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@html ICON_PENCIL}</svg>
+        <span>{EDIT_TEXT_LABEL}</span>
+      </button>
+    {/if}
     {#if request.showDelete && alertAction}
       <div class="sep"></div>
       <button
@@ -320,7 +340,7 @@
       </button>
     {/if}
     {#if request.showDelete && onDelete}
-      {#if !alertAction}<div class="sep"></div>{/if}
+      {#if !alertAction && !onEditText}<div class="sep"></div>{/if}
       <button class="delete" onclick={() => onDelete?.()}>
         <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M3 6h18" />

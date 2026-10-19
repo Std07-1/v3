@@ -84,6 +84,7 @@
     RenderFrame,
     ActiveTool,
     DrawingType,
+    DrawingEditState,
     DrawingLineStyle,
   } from "./types";
   import DrawingStyleFlyout from "./layout/DrawingStyleFlyout.svelte";
@@ -124,8 +125,8 @@
   const touchDrawingAvailable = resolveTouchDrawing(location.search, deviceStorage());
   let touchDrawOpen = $state(false);
   let drawBarRef: MobileDrawBar | undefined = $state();
-  /** ↶ і «видалити» в капсулі — активні лише коли є що (стан з ChartPane, ADR-0112 D2). */
-  let drawEditState = $state({ canUndo: false, hasSelection: false });
+  /** ↶, «видалити» і ✎ нотатки в капсулі — лише коли є що (стан з ChartPane, ADR-0112 D2, ADR-0111 §3.7). */
+  let drawEditState = $state<DrawingEditState>({ canUndo: false, hasSelection: false, noteSelected: false });
   // ADR-0114: дія лінії-сповіщення для виділеної фігури (кнопка-дзвіночок капсули)
   let drawAlertAction = $state<AlertAction | null>(null);
 
@@ -1000,6 +1001,8 @@
           onClose={closeTouchDrawing}
           canUndo={drawEditState.canUndo}
           hasSelection={drawEditState.hasSelection}
+          noteSelected={drawEditState.noteSelected}
+          onEditNote={() => chartPaneRef?.editSelectedNote()}
           alertAction={drawAlertAction}
           onAlertAction={() => chartPaneRef?.actOnSelectedAlert()}
           {menuBg}
@@ -1187,6 +1190,7 @@
       : "neutral"}
     lineWidth={styleFlyout ? toolDefaults[styleFlyout.tool].lineWidth : 1}
     lineStyle={styleFlyout ? toolDefaults[styleFlyout.tool].lineStyle : "solid"}
+    colorOnly={styleFlyout ? TOOL_REGISTRY.get(styleFlyout.tool)?.colorOnly === true : false}
     onPickColor={pickColorRole}
     onPickWidth={pickWidth}
     onPickStyle={pickStyle}

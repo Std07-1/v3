@@ -326,6 +326,15 @@ export interface DrawingContextRequest {
   colorRole: DrawingColorRole | null;
   lineWidth: number;
   lineStyle: DrawingLineStyle;
+  /** ADR-0111 §3.7: нотатка — зі стилю лише колір і рядок «Змінити текст». */
+  isNote: boolean;
+}
+
+/** ADR-0112 D2: кнопки телефона — активні лише коли є що (↶, «видалити», ✎ для виділеної нотатки, ADR-0111 §3.7). */
+export interface DrawingEditState {
+  canUndo: boolean;
+  hasSelection: boolean;
+  noteSelected: boolean;
 }
 
 // -------------------- Archi on chart (ADR-0085) --------------------
