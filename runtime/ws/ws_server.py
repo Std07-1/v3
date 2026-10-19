@@ -2173,11 +2173,23 @@ async def _handle_action(session: WsSession, raw: str, app: web.Application) -> 
 async def _handle_set_lang(
     session: WsSession, data: Dict[str, Any], app: web.Application
 ) -> None:
-    """ADR-0116 §5.2: перемикач мови — тексти аналізу новою мовою свіжим повним кадром."""
+    """ADR-0116 §5.2: перемикач мови — тексти аналізу новою мовою свіжим повним кадром.
+
+    Повний кадр коштує як switch (cold-start read + тексти), тож і бюджет у них спільний — той самий cooldown
+    (SEC-06); та сама мова ще раз — без перебудови.
+    """
     raw = data.get("lang")
-    session.lang, session.lang_warning = lang_frames.requested_lang(
-        raw if isinstance(raw, str) else None, app.get(APP_I18N_CATALOG)
-    )
+    lang, warning = lang_frames.requested_lang(raw if isinstance(raw, str) else None, app.get(APP_I18N_CATALOG))
+    if lang == session.lang and warning is None:
+        return
+    limits: WsLimits = app.get(APP_WS_LIMITS) or WsLimits()
+    now_s = time.time()
+    if limits.switch_cooldown_s > 0 and now_s - session._switch_last_ts < limits.switch_cooldown_s:
+        _log.warning("WS_SET_LANG_REJECT client=%s reason=cooldown ip=%s", session.client_id, session.client_ip)
+        await session.ws.send_json(_build_error_frame(session, "lang_throttled", "language cooldown active", app=app))
+        return
+    session._switch_last_ts = now_s
+    session.lang, session.lang_warning = lang, warning
     _log.info("WS_SET_LANG client=%s lang=%s warning=%s", session.client_id, session.lang, session.lang_warning)
     await _send_full_frame(session, app)
 

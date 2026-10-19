@@ -314,6 +314,19 @@ async def test_set_lang_action_sends_fresh_full_frame_in_new_language():
     assert session.lang == "ru" and frame["frame_type"] == "full" and frame["meta"]["lang"] == "ru"
 
 
+async def test_set_lang_same_language_does_not_rebuild_and_flood_hits_cooldown():
+    """SEC-06: повний кадр коштує як switch — той самий cooldown; та сама мова — без перебудови."""
+    app = _app()
+    session = _session(app, "switcher")
+    await ws_server._handle_set_lang(session, {"lang": "ru"}, app)
+    await ws_server._handle_set_lang(session, {"lang": "ru"}, app)
+    assert len(session.ws.frames) == 1
+    await ws_server._handle_set_lang(session, {"lang": "en"}, app)  # у межах cooldown (config: 1 с)
+    rejected = json.loads(session.ws.frames[-1])
+    assert len(session.ws.frames) == 2 and session.lang == "ru"
+    assert "lang_throttled" in json.dumps(rejected)
+
+
 async def test_delta_gives_each_language_group_its_frame_and_no_lang_stays_golden():
     app = _app()
     runner = app[APP_SMC_RUNNER]
