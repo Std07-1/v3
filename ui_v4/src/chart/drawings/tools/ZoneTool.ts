@@ -1,8 +1,9 @@
 // src/chart/drawings/tools/ZoneTool.ts
-// ADR-0111 §3.7 (прототип для показу власнику, 15.10): зона OB/FVG — прямокутник, що тягнеться вправо до першої
-// свічки, яка торкнулась зони (або до шкали, якщо не торкалась), з лінією 50% (CE для FVG, mean threshold для OB).
-// Domain: 2 якорі, як у прямокутника (діагональні кути). Дотик — high/low свічок поточного TF після правого якоря
-// (RenderContext.firstTouchMs від renderer-а); це геометрія над фігурою користувача, не серверна зона (X28).
+// ADR-0111 §3.7 (власник 19.10: «Так усе»): зона OB/FVG — прямокутник, що тягнеться вправо до першої свічки, яка
+// тінню зайшла в зону (або до шкали, якщо не заходила), з лінією 50% (CE для FVG, mean threshold для OB) — на ціні,
+// посередині між межами, які поставив трейдер. Domain: 2 якорі, як у прямокутника (діагональні кути). Дотик —
+// свічки поточного TF після правого якоря (RenderContext.firstTouchMs, zoneTouch.ts); це геометрія над фігурою
+// користувача, не серверна зона (X28). Колір — роль, яку обрав трейдер (бик / ведмідь), автоматично не вгадується.
 
 import type { Drawing } from '../../../types';
 import { withAlpha } from '../../canvasColor';
@@ -11,6 +12,8 @@ import { dashPattern } from '../lineStyles';
 import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './types';
 
 const DRAFT_FILL = 'rgba(61, 154, 255, 0.10)';
+/** Заливка самої зони — колір фігури (прямокутник лишається нейтральним, `rectFill`). */
+const ZONE_FILL_ALPHA = 0.12;
 /** Продовження після правого якоря — тихіше за саму зону: «зона ще жива». */
 const EXTENSION_FILL_ALPHA = 0.06;
 const MIDLINE_ALPHA = 0.7;
@@ -56,7 +59,7 @@ export const ZoneTool: ToolModule = {
     render(d: Drawing, rc: RenderContext): ScreenAabb | null {
         const b = boxOf(d, rc.toX, rc.toY);
         if (!b) return null;
-        const { ctx, baseColor, accentColor, rectFill, isDraft, isHovered, isSelected } = rc;
+        const { ctx, baseColor, accentColor, isDraft, isHovered, isSelected } = rc;
         const highlight = !isDraft && (isHovered || isSelected);
         const color = isDraft ? accentColor : baseColor;
         const end = isDraft ? b.x2 : extensionEnd(d, rc, b);
@@ -64,7 +67,7 @@ export const ZoneTool: ToolModule = {
 
         ctx.setLineDash([]);
         ctx.shadowBlur = 0;
-        ctx.fillStyle = isDraft ? DRAFT_FILL : rectFill;
+        ctx.fillStyle = isDraft ? DRAFT_FILL : withAlpha(color, ZONE_FILL_ALPHA, FALLBACK_RGB);
         ctx.fillRect(b.x1, b.yTop, b.x2 - b.x1, h);
         if (end > b.x2) {
             ctx.fillStyle = withAlpha(color, EXTENSION_FILL_ALPHA, FALLBACK_RGB);
@@ -108,10 +111,15 @@ export const ZoneTool: ToolModule = {
         return b ? { x: (b.x1 + b.x2) / 2, y: (b.yTop + b.yBottom) / 2 } : null;
     },
 
+    /** Грань зони або межа продовження. Довжину продовження (до дотику чи шкали) хіт-тест не знає — її обмежує рамка
+     *  кадру з `render` (drawingHitTest відсікає вказівник поза нею). */
     hitTest(d, cursorX, cursorY, tolerance, toX, toY): HitTestResult {
         const b = boxOf(d, toX, toY);
         if (!b) return { hit: false };
-        const distance = distToRectEdge(cursorX, cursorY, b.x1, b.yTop, b.x2, b.yBottom, tolerance);
-        return distance === Infinity ? { hit: false } : { hit: true, distance };
+        const edge = distToRectEdge(cursorX, cursorY, b.x1, b.yTop, b.x2, b.yBottom, tolerance);
+        if (edge !== Infinity) return { hit: true, distance: edge };
+        if (cursorX <= b.x2) return { hit: false };
+        const distance = Math.min(Math.abs(cursorY - b.yTop), Math.abs(cursorY - b.yBottom));
+        return distance <= tolerance ? { hit: true, distance } : { hit: false };
     },
 };
