@@ -22,6 +22,7 @@
 
     import type { DisplayMode } from "../chart/overlay/DisplayBudget";
     import AlertsMenuSection from "./AlertsMenuSection.svelte";
+    import { LANG_REGISTRY, currentLang, setLang, t } from "../lib/i18n/i18n.svelte";
 
     interface Props {
         open: boolean;
@@ -104,7 +105,7 @@
         }
     }
 
-    type SubmenuKey = "theme" | "style" | null;
+    type SubmenuKey = "lang" | "theme" | "style" | null;
     let openSubmenu = $state<SubmenuKey>(null);
 
     // Reset submenu state whenever menu closes.
@@ -112,8 +113,16 @@
         if (!open) openSubmenu = null;
     });
 
-    function handleThemePick(t: ThemeName) {
-        onSelectTheme(t);
+    // ADR-0116 §5.2: мова глядача; назва поточної — нею самою (з реєстру, не перекладається)
+    const activeLang = $derived(currentLang());
+    const activeLangName = $derived(LANG_REGISTRY.languages.find((l) => l.code === activeLang)?.name ?? activeLang);
+
+    function handleLangPick(code: string) {
+        void setLang(code);
+        openSubmenu = null; // як «Тема»: закривається підменю, меню лишається
+    }
+    function handleThemePick(theme: ThemeName) {
+        onSelectTheme(theme);
         openSubmenu = null; // close submenu only; main menu stays open (ADR-0065 UX fix)
     }
     function handleStylePick(s: CandleStyleName) {
@@ -256,6 +265,38 @@
             <div class="menu-divider" role="separator"></div>
         {/if}
 
+        <!-- ADR-0116 §5.2: мова — тією самою формою, що «Тема»; кожна мова в підменю — своєю мовою -->
+        <div class="menu-item-row">
+            <button
+                class="menu-item"
+                role="menuitem"
+                aria-haspopup="menu"
+                aria-expanded={openSubmenu === "lang"}
+                onclick={() =>
+                    (openSubmenu = openSubmenu === "lang" ? null : "lang")}
+            >
+                <span class="mi-label">{t("Мова")}</span>
+                <span class="mi-current" lang={activeLang}>{activeLangName}</span>
+                <span class="mi-chevron">▸</span>
+            </button>
+            {#if openSubmenu === "lang"}
+                <div class="submenu" role="menu">
+                    {#each LANG_REGISTRY.languages as language (language.code)}
+                        <button
+                            class="submenu-item"
+                            class:active={language.code === activeLang}
+                            role="menuitemradio"
+                            aria-checked={language.code === activeLang}
+                            lang={language.code}
+                            onclick={() => handleLangPick(language.code)}
+                        >
+                            {language.name}
+                        </button>
+                    {/each}
+                </div>
+            {/if}
+        </div>
+
         <!-- Theme submenu -->
         <div class="menu-item-row">
             <button
@@ -272,15 +313,15 @@
             </button>
             {#if openSubmenu === "theme"}
                 <div class="submenu" role="menu">
-                    {#each THEME_NAMES as t}
+                    {#each THEME_NAMES as theme}
                         <button
                             class="submenu-item"
-                            class:active={t === activeTheme}
+                            class:active={theme === activeTheme}
                             role="menuitemradio"
-                            aria-checked={t === activeTheme}
-                            onclick={() => handleThemePick(t)}
+                            aria-checked={theme === activeTheme}
+                            onclick={() => handleThemePick(theme)}
                         >
-                            {THEMES[t].label}
+                            {THEMES[theme].label}
                         </button>
                     {/each}
                 </div>

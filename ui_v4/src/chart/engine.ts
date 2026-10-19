@@ -27,7 +27,7 @@ import {
 import type { Candle, T_MS } from '../types';
 import { isMobile } from '../app/viewport';
 import { TF_LABEL_TO_S } from '../constants/tfLabels';
-import { currentLocaleTag } from '../lib/i18n/i18n.svelte';
+import { currentLocaleTag, onLangChange } from '../lib/i18n/i18n.svelte';
 
 // ─── Helpers ───
 
@@ -161,6 +161,8 @@ export class ChartEngine {
   private _onCrosshair: (data: CrosshairData) => void;
   /** Контейнер графіка — розмір, до якого знімок повертає графік із віртуальної рамки (ADR-0109). */
   private readonly _container: HTMLElement;
+  /** ADR-0116 §5.6: відписка шкали дат від зміни мови глядача. */
+  private readonly _unsubscribeLang: () => void;
 
   constructor(
     container: HTMLElement,
@@ -304,6 +306,10 @@ export class ChartEngine {
         },
       },
     });
+
+    this._unsubscribeLang = onLangChange(() =>
+      this.chart.applyOptions({ localization: { locale: currentLocaleTag() } }),
+    );
 
     // ─── Candlestick series (V3 classic style: chart_adapter_lite.js:158-166) ───
     this.series = this.chart.addSeries(CandlestickSeries, {
@@ -993,6 +999,7 @@ export class ChartEngine {
     }
     this._cancelScrollbackRetry();
     this._rafQueue = [];
+    this._unsubscribeLang();
     this.chart.remove();
   }
 }

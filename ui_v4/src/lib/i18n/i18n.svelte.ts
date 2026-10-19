@@ -10,6 +10,7 @@ import {
   type LanguageInfo,
   type LanguageRegistry,
   type Params,
+  isRegistered,
   localeTagFor,
   resolveInitialLang,
   translate,
@@ -33,6 +34,7 @@ class I18nState {
 
 const i18n = new I18nState();
 const reportedMissing = new Set<string>();
+const langListeners = new Set<(lang: string) => void>();
 
 export function currentLang(): string {
   return i18n.lang;
@@ -69,6 +71,24 @@ export async function initI18n(): Promise<void> {
   await applyLang(initial.lang);
 }
 
+/** Вибір перемикача (§5.2): мова одразу, без перезавантаження, і запам'ятовується для наступних візитів. */
+export async function setLang(code: string): Promise<void> {
+  if (!isRegistered(LANG_REGISTRY, code)) {
+    console.warn(`[i18n] LANG_UNSUPPORTED switch:${code}`);
+    return;
+  }
+  writeStoredLang(code);
+  dropQueryLang(); // інакше перезавантаження поверне мову з адреси, а не вибрану
+  await applyLang(code);
+  for (const listener of langListeners) listener(i18n.lang);
+}
+
+/** Підписка рендерів поза розміткою (шкала LWC, полотно) на зміну мови; повертає відписку. */
+export function onLangChange(listener: (lang: string) => void): () => void {
+  langListeners.add(listener);
+  return () => langListeners.delete(listener);
+}
+
 async function applyLang(lang: string): Promise<void> {
   const dictionary = lang === LANG_REGISTRY.source ? null : await loadDictionary(lang);
   const applied = dictionary === null ? LANG_REGISTRY.source : lang;
@@ -103,6 +123,25 @@ function readStoredLang(): string | null {
     return localStorage.getItem(STORAGE_KEY);
   } catch {
     return null; // сховище недоступне (приватне вікно) — вибір просто не пам'ятається
+  }
+}
+
+function writeStoredLang(code: string): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, code);
+  } catch (err) {
+    console.warn('[i18n] LANG_NOT_STORED — вибір діє до перезавантаження', err);
+  }
+}
+
+function dropQueryLang(): void {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has(QUERY_PARAM)) return;
+  url.searchParams.delete(QUERY_PARAM);
+  try {
+    history.replaceState(history.state, '', url.toString());
+  } catch (err) {
+    console.warn('[i18n] LANG_PARAM_STRIP_FAILED — перезавантаження поверне мову з адреси', err);
   }
 }
 
