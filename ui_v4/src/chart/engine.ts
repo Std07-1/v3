@@ -287,9 +287,10 @@ export class ChartEngine {
         fixRightEdge: false,
         lockVisibleTimeRangeOnResize: false,
         tickMarkFormatter: (time: Time) => {
-          if (typeof time === 'string') return ''; // D1: LWC renders date natively
+          // D1/W1/MN (час рядком 'YYYY-MM-DD'): null — LWC малює дати сам (день / місяць / рік за вагою позначки);
+          // порожній рядок, як було до 19.10, лишав шкалу часу без жодної дати
           if (typeof time === 'number') return _fmtUtcTime(time);
-          return '';
+          return null;
         },
       },
       localization: {
