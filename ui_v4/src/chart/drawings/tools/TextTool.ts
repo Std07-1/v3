@@ -1,7 +1,7 @@
 // src/chart/drawings/tools/TextTool.ts
-// ADR-0111 §3.7 (прототип для показу власнику, 15.10): нотатка на графіку — текст у якорі («BSL», «H4 OB»,
-// «чекаю зняття Азії»). Текст — meta.text; малюється на полотні (тож потрапляє в знімок ADR-0109). Прототип питає
-// текст системним полем введення під час розміщення; редагування — наступний крок, якщо вигляд ляже.
+// ADR-0111 §3.7 (власник 19.10: «Так усе»): нотатка на графіку — текст у якорі («BSL», «H4 OB», «чекаю зняття
+// Азії»). Текст — meta.text (поле вводу й правила — noteText.ts); малюється на полотні, тож потрапляє в знімок
+// ADR-0109. Ставиться один раз (як у TV): після тексту інструмент вимкнено, нотатка виділена. Стиль — лише колір.
 
 import type { Drawing } from '../../../types';
 import { withAlpha } from '../../canvasColor';
@@ -35,7 +35,9 @@ export const TextTool: ToolModule = {
     icon: '<polyline points="4 7 4 4 20 4 20 7"/><line x1="9" x2="15" y1="20" y2="20"/><line x1="12" x2="12" y1="4" y2="20"/>',
     hotkey: 'n',
     styleable: true,
+    colorOnly: true,
     askText: true,
+    oneShot: true,
 
     render(d: Drawing, rc: RenderContext): ScreenAabb | null {
         const x = rc.toX(d.points[0].t_ms);

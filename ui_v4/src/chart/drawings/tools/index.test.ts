@@ -6,8 +6,13 @@ import { ALERTABLE_TOOL_TYPES, STYLEABLE_TOOL_TYPES, TOOL_REGISTRY, alertLevelOf
 const RESERVED_KEYS = ['e', 'g', 'f', 'l'];
 
 describe('TOOL_REGISTRY', () => {
-    it('одноразові (ставляться раз і вимикаються, власник 15.10) — лише позиції', () => {
-        expect([...TOOL_REGISTRY.values()].filter((tool) => tool.oneShot).map((tool) => tool.id)).toEqual(['long', 'short']);
+    it('одноразові (ставляться раз і вимикаються) — позиції (власник 15.10) і нотатка (як у TV, ADR-0111 §3.7)', () => {
+        expect([...TOOL_REGISTRY.values()].filter((tool) => tool.oneShot).map((tool) => tool.id)).toEqual(['long', 'short', 'text']);
+    });
+
+    it('зі стилю лише колір — нотатка; текст питають — лише в нотатки', () => {
+        expect([...TOOL_REGISTRY.values()].filter((tool) => tool.colorOnly).map((tool) => tool.id)).toEqual(['text']);
+        expect([...TOOL_REGISTRY.values()].filter((tool) => tool.askText).map((tool) => tool.id)).toEqual(['text']);
     });
 
     it('ключ = id модуля; порядок = порядок кнопок панелі', () => {
