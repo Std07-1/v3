@@ -56,6 +56,8 @@ APP_SMC_RUNNER = web.AppKey("smc_runner", object)
 APP_DISPLAY_BUDGET = web.AppKey("display_budget", dict)
 # ADR-0054 rev 7 §3.4.1 S3: символ → знаків після коми ціни для UI з config.json:price_display (UI не вгадує)
 APP_PRICE_DIGITS = web.AppKey("price_digits", dict)
+# ADR-0115: проєкція W1/MN з D1 (runtime.ws.calendar_view.CalendarTfView); нема ключа — W1/MN вимкнено
+APP_CALENDAR_VIEW = web.AppKey("calendar_view", object)
 
 # ── HTTP plumbing ─────────────────────────────────────────────────────────
 APP_CORS_ORIGINS = web.AppKey("cors_origins", set)

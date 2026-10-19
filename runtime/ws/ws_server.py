@@ -28,7 +28,8 @@ from typing import Any, Callable, Dict, Optional, Protocol, cast
 
 from aiohttp import web, WSMsgType
 
-from runtime.ws.candle_map import map_bars_to_candles_v4
+from runtime.ws.calendar_view import CalendarTfView, calendar_view_config_from_cfg
+from runtime.ws.candle_map import map_bar_to_candle_v4, map_bars_to_candles_v4
 from runtime.ws.forming_tail import read_forming_candle
 from core.config_loader import (
     htf_anchor_rule_resolver,
@@ -117,6 +118,7 @@ class SmcRunnerLike(Protocol):
 from runtime.ws.app_keys import (  # noqa: E402
     APP_BG_SMC_TASK,
     APP_BOOT_ID,
+    APP_CALENDAR_VIEW,
     APP_CONFIG_PATH,
     APP_CORS_ORIGINS,
     APP_D1_TICK_RELAY_TFS,
@@ -229,6 +231,9 @@ _TF_CANONICAL_LABELS: Dict[str, int] = {
     "H1": 3600,
     "H4": 14400,
     "D1": 86400,
+    # ADR-0115: календарні TF — проєкція D1 (не в tf_allowlist_s; у меню — лише коли calendar_tfs.enabled)
+    "W1": 604800,
+    "MN": 2592000,
 }
 # Case-insensitive lookup: accept both "M15" and "15m" and "m15"
 _TF_LABEL_TO_S: Dict[str, int] = {}
@@ -878,12 +883,17 @@ async def _uds_read_window(
     limit: int,
     to_open_ms: Optional[int] = None,
 ) -> Any:
-    """Async wrapper для UDS read_window (blocking Redis/Disk I/O)."""
+    """Async wrapper для UDS read_window (blocking Redis/Disk I/O). W1/MN — проєкція D1 (ADR-0115)."""
     from runtime.store.uds import WindowSpec, ReadPolicy
 
     uds = app[APP_UDS] if APP_UDS in app else None
     if uds is None:
         return None
+    view = _calendar_view_for(app, tf_s)
+    if view is not None:
+        return await asyncio.get_event_loop().run_in_executor(
+            app[APP_UDS_EXECUTOR], view.read_window, symbol, tf_s, limit, to_open_ms
+        )
     spec = WindowSpec(
         symbol=symbol,
         tf_s=tf_s,
@@ -908,12 +918,17 @@ async def _uds_read_updates(
     since_seq: Optional[int],
     include_preview: bool,
 ) -> Any:
-    """Async wrapper для UDS read_updates (blocking)."""
+    """Async wrapper для UDS read_updates (blocking). W1/MN — події D1, перераховані в бакети (ADR-0115)."""
     from runtime.store.uds import UpdatesSpec
 
     uds = app[APP_UDS] if APP_UDS in app else None
     if uds is None:
         return None
+    view = _calendar_view_for(app, tf_s)
+    if view is not None:
+        return await asyncio.get_event_loop().run_in_executor(
+            app[APP_UDS_EXECUTOR], view.read_updates, symbol, tf_s, since_seq
+        )
     spec = UpdatesSpec(
         symbol=symbol,
         tf_s=tf_s,
@@ -931,7 +946,8 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
     if session.symbol is None or session.tf_s is None:
         return
     cfg = app.get(APP_FULL_CONFIG, {})
-    limit = _cold_start_limit(session.tf_s, cfg)
+    view = _calendar_view_for(app, session.tf_s)
+    limit = view.cold_start_bars(session.tf_s) if view is not None else _cold_start_limit(session.tf_s, cfg)
     tf_label = _TF_S_TO_LABEL.get(session.tf_s, f"{session.tf_s}s")
     warnings: list = []
     try:
@@ -951,9 +967,9 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                 "WS_CANDLE_MAP_DROPPED client=%s dropped=%d", session.client_id, dropped
             )
         warnings.extend(getattr(result, "warnings", []))
-        # SMC: inject snapshot into full frame (ADR-0024 §6.1)
+        # SMC: inject snapshot into full frame (ADR-0024 §6.1); на W1/MN SMC не рахується (ADR-0115 §4.4, S1)
         smc_wire: Optional[Dict[str, Any]] = None
-        _smc_runner = app[APP_SMC_RUNNER] if APP_SMC_RUNNER in app else None
+        _smc_runner = app[APP_SMC_RUNNER] if APP_SMC_RUNNER in app and view is None else None
         if _smc_runner is not None:
             try:
                 _snap = _smc_runner.get_snapshot(session.symbol, session.tf_s)
@@ -1090,8 +1106,10 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                 _log.warning(
                     "WS_NARRATIVE_ERR sym=%s err=%s", session.symbol, _narr_exc
                 )
-        if _smc_runner is not None:
-            _put_briefing(frame, _smc_runner, session.symbol)
+        if APP_SMC_RUNNER in app:  # системний розбір — символьний, не від TF (ADR-0113): і на W1/MN
+            _put_briefing(frame, app[APP_SMC_RUNNER], session.symbol)
+        if view is not None:
+            await _put_calendar_tail(app, view, session.symbol, session.tf_s, frame, candles)
         # D4: формуюча свічка з preview у хвіст — ПІСЛЯ SMC/narrative/signals вище:
         # вони беруть candles[-1] як закритий бар (_last_c/_atr_est), формуюча зіпсувала б їх
         if session.tf_s in app.get(APP_PREVIEW_TF_SET, set()):
@@ -1571,10 +1589,16 @@ async def _global_delta_loop(app: web.Application) -> None:
                             "meta": meta,
                         }
 
-                        # SMC: notify runner on complete bars → inject delta if has_changes
+                        # SMC: notify runner on complete bars → inject delta if has_changes.
+                        # W1/MN — проєкція D1: рушій їх не бачить (ADR-0115 §4.4, S1), лише таймер
+                        _view = _calendar_view_for(app, tf_s)
                         _smc_runner = (
-                            app[APP_SMC_RUNNER] if APP_SMC_RUNNER in app else None
+                            app[APP_SMC_RUNNER]
+                            if APP_SMC_RUNNER in app and _view is None
+                            else None
                         )
+                        if _view is not None:
+                            _put_calendar_close(_view, symbol, tf_s, frame)
                         # X28-fix: backend ATR/RV і в delta — UI бере їх з останнього
                         # кадру; без виміру — поля нема + warnings (ADR-0070 rev 3).
                         if _smc_runner is not None:
@@ -2241,8 +2265,13 @@ async def _handle_scrollback(
     session._scrollback_count += 1
     session._scrollback_last_ts = now
     cfg = app.get(APP_FULL_CONFIG, {})
-    # Scrollback chunk: менше ніж cold start
-    limit = min(_cold_start_limit(session.tf_s, cfg), 500)
+    # Scrollback chunk: менше ніж cold start; W1/MN — власний розмір (ADR-0115 §4.5)
+    view = _calendar_view_for(app, session.tf_s)
+    limit = (
+        view.scrollback_chunk_bars(session.tf_s)
+        if view is not None
+        else min(_cold_start_limit(session.tf_s, cfg), 500)
+    )
     warnings: list = []
     try:
         result = await _uds_read_window(
@@ -2290,6 +2319,69 @@ async def _handle_scrollback(
 
 
 # ── UDS init ───────────────────────────────────────────
+
+
+def _init_calendar_view(app: web.Application, cfg: Dict[str, Any]) -> None:
+    """ADR-0115: W1/MN — проєкція D1 через UDS; додаються до TF меню й switch лише з `calendar_tfs.enabled`.
+
+    Сміття в секції чи нема UDS — ERROR і W1/MN нема (switch на них — `tf_not_allowed`), решта TF не зачеплена (I5).
+    """
+    try:
+        view_cfg = calendar_view_config_from_cfg(cfg)
+    except (TypeError, ValueError) as exc:
+        _log.error("WS_CALENDAR_TFS_CONFIG_INVALID err=%s — W1/MN вимкнено", exc)
+        return
+    if not view_cfg.enabled:
+        _log.info("WS_CALENDAR_TFS_DISABLED calendar_tfs.enabled=false")
+        return
+    if APP_UDS not in app:
+        _log.error("WS_CALENDAR_TFS_NO_UDS — W1/MN вимкнено")
+        return
+    view = CalendarTfView(app[APP_UDS], app[APP_HTF_ANCHOR_RULE_FOR_SYMBOL], view_cfg)
+    app[APP_CALENDAR_VIEW] = view
+    app[APP_TF_ALLOWLIST] = set(app.get(APP_TF_ALLOWLIST, set())) | set(view.tfs)
+    _log.info("WS_CALENDAR_TFS_WIRED tfs=%s", sorted(view.tfs))
+
+
+def _calendar_view_for(app: Any, tf_s: Optional[int]) -> Optional[CalendarTfView]:
+    """Проєкція W1/MN для `tf_s` або None — TF зберігається в UDS як є (ADR-0115)."""
+    view = app.get(APP_CALENDAR_VIEW) if app is not None else None
+    return view if view is not None and view.is_view_tf(tf_s) else None
+
+
+async def _put_calendar_tail(
+    app: web.Application,
+    view: CalendarTfView,
+    symbol: str,
+    tf_s: int,
+    frame: Dict[str, Any],
+    candles: list,
+) -> None:
+    """ADR-0115 §4.3–4.4: формуюча W1/MN у хвіст full-кадру + `bar_close_ms` для таймера. Збій — warning кадру."""
+    now_ms = int(time.time() * 1000)
+    try:
+        forming = await asyncio.get_event_loop().run_in_executor(
+            app[APP_UDS_EXECUTOR], view.read_forming, symbol, tf_s, now_ms
+        )
+    except Exception as exc:  # ValueError правила якоря, збій читання D1
+        _log.warning("WS_CALENDAR_FORMING_ERR sym=%s tf_s=%s err=%s", symbol, tf_s, exc)
+        frame["meta"].setdefault("warnings", []).append("calendar_forming_unavailable")
+        return
+    candle = map_bar_to_candle_v4(forming, tf_s=tf_s) if forming is not None else None
+    if candle is not None and (not candles or candle["t_ms"] > candles[-1]["t_ms"]):
+        frame["candles"] = candles + [candle]
+    _put_calendar_close(view, symbol, tf_s, frame)
+
+
+def _put_calendar_close(view: CalendarTfView, symbol: str, tf_s: int, frame: Dict[str, Any]) -> None:
+    """`bar_close_ms` — закриття останнього торгового дня бакета (таймер «3д 04г»); минуло — поля нема."""
+    try:
+        close_ms = view.bar_close_ms(symbol, tf_s, int(time.time() * 1000))
+    except ValueError as exc:
+        _log.warning("WS_CALENDAR_CLOSE_ERR sym=%s tf_s=%s err=%s", symbol, tf_s, exc)
+        return
+    if close_ms is not None:
+        frame["bar_close_ms"] = close_ms
 
 
 def _init_uds(app: web.Application, config_path: str, cfg: Dict[str, Any]) -> None:
@@ -2443,6 +2535,7 @@ def build_app(
         app[APP_UDS] = uds
     else:
         _init_uds(app, config_path, full_cfg)
+    _init_calendar_view(app, full_cfg)
 
     # SMC Runner init (ADR-0024 §6.1) — in-process, same event loop as ws_server
     _smc_section = full_cfg.get("smc", {}) if isinstance(full_cfg, dict) else {}

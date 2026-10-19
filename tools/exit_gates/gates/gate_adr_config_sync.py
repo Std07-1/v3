@@ -34,6 +34,8 @@ _FEATURE_ADR_MAP: Dict[str, str] = {
     "m1_poller.session_open_rebuild": "0100",
     # Лінія-сповіщення: процес smc-alerts (ADR-0114 §4.7)
     "alerts": "0114",
+    # Тижневий і місячний TF — проєкція D1 (ADR-0115 §4.5)
+    "calendar_tfs": "0115",
     # Додати нові feature→ADR mappings за потребою:
     # "smc.some_feature": "NNNN",
 }
