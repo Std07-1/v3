@@ -19,6 +19,9 @@ export const TF_LABEL_TO_S: Readonly<Record<string, number>> = {
     W1: 604800, MN: 2592000,
 };
 
+/** Календарні TF (ADR-0115): межі бару — лише з бекенда, UI їх не рахує сіткою tf. */
+export const CALENDAR_TF_LABELS: ReadonlySet<string> = new Set(['W1', 'MN']);
+
 /** Секунди (рядком, як у `?tf=3600`) → мітка TF. */
 export const TF_S_TO_LABEL: Readonly<Record<string, string>> = Object.fromEntries(
     Object.entries(TF_LABEL_TO_S).map(([label, s]) => [String(s), label]),

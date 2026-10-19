@@ -25,8 +25,8 @@
 -->
 <script lang="ts">
   import { hintsOn } from "../stores/uiHints";
-  import { TF_LABEL_TO_S } from "../constants/tfLabels";
-  import { formatBarCountdown } from "../lib/barCountdown";
+  import { CALENDAR_TF_LABELS, TF_LABEL_TO_S } from "../constants/tfLabels";
+  import { barCountdownMs, formatBarCountdown } from "../lib/barCountdown";
 
   type Props = {
     /** ATR(14) for current symbol+tf, sourced from backend (frame.atr).
@@ -68,18 +68,16 @@
   });
 
   // ─── Countdown (wallclock + bucket math) ───────────────────────────────
-  // Display arithmetic per X28: not domain computation, just `next_close - now`.
-  const countdownMs = $derived.by(() => {
-    // W1/MN: межа — календарна, і її знає лише бекенд (X28)
-    if (barCloseMs != null) return barCloseMs > nowMs ? barCloseMs - nowMs : null;
-    if (tfMs === 0 || anchorMs == null) return null;
-    const bucketOpen =
-      Math.floor((nowMs - anchorMs) / tfMs) * tfMs + anchorMs;
-    const closeMs = bucketOpen + tfMs;
-    const remain = closeMs - nowMs;
-    // Bounded: 0..tfMs always (wallclock anchor guarantees this); guard anyway.
-    return remain >= 0 && remain <= tfMs ? remain : null;
-  });
+  // Display arithmetic per X28: not domain computation, just `next_close - now` (lib/barCountdown.ts).
+  const countdownMs = $derived(
+    barCountdownMs({
+      tfS,
+      anchorMs,
+      barCloseMs,
+      calendar: CALENDAR_TF_LABELS.has(currentTf),
+      nowMs,
+    }),
+  );
   const countdownStr = $derived(formatBarCountdown(countdownMs));
 
   // ─── ATR formatter ─────────────────────────────────────────────────────

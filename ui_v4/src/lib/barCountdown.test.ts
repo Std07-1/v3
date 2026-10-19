@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatBarCountdown } from './barCountdown';
+import { barCountdownMs, formatBarCountdown } from './barCountdown';
 import { TF_LABEL_TO_S, TF_S_TO_LABEL } from '../constants/tfLabels';
 
 const H = 3_600_000;
@@ -19,6 +19,25 @@ describe('formatBarCountdown — таймер до закриття бару (AD
   it('нема значення чи минуло — «—:—»', () => {
     expect(formatBarCountdown(null)).toBe('—:—');
     expect(formatBarCountdown(-1)).toBe('—:—');
+  });
+});
+
+describe('barCountdownMs — до закриття бару', () => {
+  const now = 1_792_400_000_000;
+
+  it('W1/MN — лише кінець від бекенда; нема чи минув — null, без сітки tf', () => {
+    const base = { tfS: 604800, anchorMs: 0, calendar: true, nowMs: now };
+    expect(barCountdownMs({ ...base, barCloseMs: now + 2 * D })).toBe(2 * D);
+    expect(barCountdownMs({ ...base, barCloseMs: null })).toBeNull(); // вихідні: торги тижня закрились
+    expect(barCountdownMs({ ...base, barCloseMs: now - 1 })).toBeNull();
+  });
+
+  it('M1…D1 — сітка tf від якоря, як і раніше', () => {
+    const anchorMs = 21 * H; // D1 відкривається о 21:00 UTC улітку
+    const dayStart = Math.floor((now - anchorMs) / D) * D + anchorMs;
+    expect(barCountdownMs({ tfS: 86400, anchorMs, barCloseMs: null, calendar: false, nowMs: now }))
+      .toBe(dayStart + D - now);
+    expect(barCountdownMs({ tfS: 86400, anchorMs: null, barCloseMs: null, calendar: false, nowMs: now })).toBeNull();
   });
 });
 
