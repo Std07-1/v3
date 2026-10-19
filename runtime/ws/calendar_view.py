@@ -14,12 +14,15 @@ W1/MN не зберігаються: кожне читання складає ї
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
 import logging
 import time
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
+from core.calendar_profile import CalendarProfile, build_profile, compose_profile_section, live_sides
 from core.calendar_tf import (
     CALENDAR_TFS,
+    D1_PER_BUCKET,
     CalendarBar,
     CalendarProjection,
     DayBar,
@@ -28,6 +31,7 @@ from core.calendar_tf import (
     calendar_d1_window_limit,
     calendar_next_bucket_start_ms,
     project_calendar_bars,
+    trading_date,
 )
 from core.session_anchor import D1_S
 from runtime.store.uds import ReadPolicy, UpdatesResult, UpdatesSpec, WindowResult, WindowSpec
@@ -37,6 +41,8 @@ _log = logging.getLogger(__name__)
 
 PROJECTED_SRC = "derived"  # проєкція — похідні дані з фінальних D1, як агрегати DeriveEngine
 _UPDATES_LIMIT = 500
+_PROFILE_D1_LIMIT = 40_000  # уся історія D1 символу (XAU з 1987 ≈ 10 200) із запасом — для профілю (§10)
+_DEFAULT_PRICE_DIGITS = 2  # символ без price_display — як у розборі ADR-0113 (ws_server і так пише ERROR)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -47,6 +53,7 @@ class CalendarViewConfig:
     tfs: FrozenSet[int]
     cold_start_bars: Mapping[int, int]
     scrollback_chunk_bars: Mapping[int, int]
+    profile_since_ms: int = 0  # `d1_policy.history_from` — початок вибірки профілю тижня/місяця (§10)
 
 
 def calendar_view_config_from_cfg(cfg: Mapping[str, Any]) -> CalendarViewConfig:
@@ -65,7 +72,7 @@ def calendar_view_config_from_cfg(cfg: Mapping[str, Any]) -> CalendarViewConfig:
     cold = _bars_by_tf(raw, "cold_start_bars_by_tf", tfs)
     chunk = _bars_by_tf(raw, "scrollback_chunk_bars_by_tf", tfs)
     return CalendarViewConfig(enabled=bool(raw.get("enabled", False)), tfs=tfs, cold_start_bars=cold,
-                              scrollback_chunk_bars=chunk)
+                              scrollback_chunk_bars=chunk, profile_since_ms=_history_from_ms(cfg))
 
 
 class CalendarTfView:
@@ -82,6 +89,8 @@ class CalendarTfView:
         self._rule_for_symbol = rule_for_symbol
         self._config = config
         self._clock_ms = clock_ms
+        # (символ, TF) → ((останній фінальний D1, ключ поточного бакета), профіль): перерахунок раз на новий D1 (§10)
+        self._profiles: Dict[Tuple[str, int], Tuple[Tuple[int, int], CalendarProfile]] = {}
 
     @property
     def tfs(self) -> FrozenSet[int]:
@@ -100,7 +109,9 @@ class CalendarTfView:
         """Фінальні бари W1/MN (I3): `limit` найновіших із ключем ≤ `to_open_ms` (inclusive, як RANGE UDS)."""
         started = time.perf_counter()
         rule = self._rule_for_symbol(symbol)
-        d1_to = None
+        now_ms = self._clock_ms()
+        # Межа завжди задана (RANGE): читання UDS без меж підміняє RAM-вікно D1 вибіркою проєкції
+        d1_to = now_ms
         if to_open_ms is not None:
             d1_to = calendar_next_bucket_start_ms(calendar_bucket_start_ms(to_open_ms, tf_s, rule), tf_s, rule) - 1
         d1_limit = calendar_d1_window_limit(limit, tf_s)
@@ -109,7 +120,7 @@ class CalendarTfView:
         # Хвіст: бакет із незавершеною D1 не фінальний, навіть коли його час минув (межа місяця, ≤ 3 хв, ADR-0102)
         forming_day = self._forming_day(symbol) if to_open_ms is None else None
         projection = project_calendar_bars(
-            days, forming_day, tf_s=tf_s, rule=rule, now_ms=self._clock_ms(),
+            days, forming_day, tf_s=tf_s, rule=rule, now_ms=now_ms,
             drop_first_bucket=len(d1.bars_lwc) >= d1_limit,
         )
         finals = [b for b in projection.finals if to_open_ms is None or b.open_ms <= to_open_ms][-limit:]
@@ -159,6 +170,46 @@ class CalendarTfView:
         close_ms = calendar_bar_close_ms(calendar_bucket_start_ms(now_ms, tf_s, rule), tf_s, rule)
         return close_ms if close_ms > now_ms else None
 
+    def profile_section(
+        self, symbol: str, tf_s: int, now_ms: int, price_digits: Optional[int]
+    ) -> Dict[str, Any]:
+        """Розділ «Профіль тижня / місяця» для «Розбору» (ADR-0115 §10, wire BriefingSection)."""
+        rule = self._rule_for_symbol(symbol)
+        forming_day = self._forming_day(symbol)
+        profile = self._profile(symbol, tf_s, rule, now_ms)
+        live = live_sides(self._current_bucket_days(symbol, tf_s, rule, now_ms, forming_day), tf_s=tf_s, rule=rule)
+        since_year = trading_date(profile.first_bucket_ms, rule).year if profile.first_bucket_ms is not None else None
+        digits = _DEFAULT_PRICE_DIGITS if price_digits is None else price_digits
+        return compose_profile_section(profile, live, price_digits=digits, since_year=since_year).to_wire()
+
+    def _profile(self, symbol: str, tf_s: int, rule: str, now_ms: int) -> CalendarProfile:
+        """Історичні таблиці профілю: з кешу, доки не з'явився новий фінальний D1 і не почався новий бакет."""
+        last_final = self._read_d1(symbol, 1, to_open_ms=now_ms).bars_lwc
+        key = (int(last_final[-1]["open_time_ms"]) if last_final else 0, calendar_bucket_start_ms(now_ms, tf_s, rule))
+        cached = self._profiles.get((symbol, tf_s))
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        started = time.perf_counter()
+        since_ms = self._config.profile_since_ms
+        history = self._read_d1(symbol, _PROFILE_D1_LIMIT, since_open_ms=since_ms - 1 if since_ms > 0 else None)
+        profile = build_profile(_day_bars(history.bars_lwc, final_only=True), tf_s=tf_s, rule=rule, now_ms=now_ms,
+                                since_ms=since_ms)
+        self._profiles[(symbol, tf_s)] = (key, profile)
+        _log.info("WS_CALENDAR_PROFILE_BUILT sym=%s tf_s=%d buckets=%d d1=%d ms=%.0f", symbol, tf_s, profile.buckets,
+                  len(history.bars_lwc), (time.perf_counter() - started) * 1000.0)
+        return profile
+
+    def _current_bucket_days(
+        self, symbol: str, tf_s: int, rule: str, now_ms: int, forming_day: Optional[DayBar]
+    ) -> List[DayBar]:
+        """D1 поточного бакета (фінальні + формуюча): бакет формуючої D1, а без неї — бакет «зараз»."""
+        key = calendar_bucket_start_ms(forming_day.open_ms if forming_day is not None else now_ms, tf_s, rule)
+        d1 = self._read_d1(symbol, D1_PER_BUCKET[tf_s] + 8, since_open_ms=key - 1)
+        days = [d for d in _day_bars(d1.bars_lwc, final_only=True) if d.open_ms >= key]
+        if forming_day is not None and (not days or forming_day.open_ms > days[-1].open_ms):
+            days.append(forming_day)
+        return days
+
     def _project_tail(
         self,
         symbol: str,
@@ -202,6 +253,15 @@ class CalendarTfView:
     ) -> WindowResult:
         spec = WindowSpec(symbol=symbol, tf_s=D1_S, limit=limit, since_open_ms=since_open_ms, to_open_ms=to_open_ms)
         return self._uds.read_window(spec, ReadPolicy(force_disk=True, disk_policy="explicit"))
+
+
+def _history_from_ms(cfg: Mapping[str, Any]) -> int:
+    """`d1_policy.history_from` (YYYY-MM-DD) → мс UTC; нема — 0 (уся історія D1)."""
+    raw = (cfg.get("d1_policy") or {}).get("history_from")
+    if not raw:
+        return 0
+    day = dt.date.fromisoformat(str(raw))
+    return int(dt.datetime(day.year, day.month, day.day, tzinfo=dt.timezone.utc).timestamp() * 1000)
 
 
 def _bars_by_tf(raw: Mapping[str, Any], key: str, tfs: FrozenSet[int]) -> Dict[int, int]:

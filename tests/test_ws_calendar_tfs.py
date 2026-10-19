@@ -158,3 +158,55 @@ def test_repo_config_section_parses_and_gate_knows_adr():
 
     assert _FEATURE_ADR_MAP["calendar_tfs"] == "0115"
     assert run_gate({"root": str(REPO)})["ok"] is True
+
+
+class _Briefing:
+    def __init__(self, as_of_ms):
+        self.as_of_ms = as_of_ms
+
+    def to_wire(self):
+        return {"symbol": SYM, "as_of_ms": self.as_of_ms, "sections": [{"key": "bias", "title": "Напрям", "rows": []}],
+                "warnings": []}
+
+
+class _BriefingRunner(_RunnerProbe):
+    def __init__(self, as_of_ms=1):
+        super().__init__()
+        self.as_of_ms = as_of_ms
+
+    def get_briefing(self, symbol):
+        self.calls.append("get_briefing")
+        return _Briefing(self.as_of_ms)
+
+
+def test_full_frame_w1_briefing_gets_profile_section(monkeypatch):
+    now_ms = _ms(2026, 10, 14, 15)
+    monkeypatch.setattr(ws_server.time, "time", lambda: now_ms / 1000)
+    app = _app(uds=_D1Uds(rows=UNTIL_TUESDAY), runner=_BriefingRunner())
+    app[APP_CALENDAR_VIEW]._clock_ms = lambda: now_ms
+    session = WsSession(_FakeWs())
+    session.symbol, session.tf_s = SYM, W1_S
+    asyncio.run(ws_server._send_full_frame(session, app))
+    (frame,) = session.ws.frames
+    keys = [section["key"] for section in frame["briefing"]["sections"]]
+    assert keys == ["bias", "calendar_profile"]
+    assert frame["briefing"]["sections"][-1]["title"] == "Профіль тижня"
+
+
+def test_delta_w1_resends_briefing_with_profile_only_when_it_changes(monkeypatch):
+    now_ms = _ms(2026, 10, 14, 15)
+    monkeypatch.setattr(ws_server.time, "time", lambda: now_ms / 1000)
+    runner = _BriefingRunner(as_of_ms=100)
+    app = _app(uds=_D1Uds(rows=UNTIL_TUESDAY), runner=runner)
+    view = app[APP_CALENDAR_VIEW]
+    view._clock_ms = lambda: now_ms
+    sent: dict = {}
+    first, second = {"meta": {}}, {"meta": {}}
+    asyncio.run(ws_server._put_calendar_briefing_delta(app, view, SYM, W1_S, first, sent))
+    asyncio.run(ws_server._put_calendar_briefing_delta(app, view, SYM, W1_S, second, sent))
+    assert [s["key"] for s in first["briefing"]["sections"]] == ["bias", "calendar_profile"]
+    assert "briefing" not in second, "той самий розбір удруге не шлеться"
+    runner.as_of_ms = 200
+    third = {"meta": {}}
+    asyncio.run(ws_server._put_calendar_briefing_delta(app, view, SYM, W1_S, third, sent))
+    assert third["briefing"]["as_of_ms"] == 200 and third["briefing"]["sections"][-1]["key"] == "calendar_profile"

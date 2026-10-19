@@ -1331,6 +1331,8 @@ async def _global_delta_loop(app: web.Application) -> None:
     forming_by_target: Dict[tuple[str, int], Dict[str, Any]] = (
         {}
     )  # ADR-0012 P3 global forming tracking
+    # ADR-0115 §10: ціль W1/MN → as_of_ms розбору, що вже пішов дельтою (розділ профілю оновлюється разом із ним)
+    calendar_briefing_sent: Dict[tuple[str, int], int] = {}
     # ADR-0095 S9a: троттлінг WS_TICK_RELAY_ERR на ціль — (час останнього WARNING, пропущено з того часу)
     relay_err_last_warn: Dict[tuple[str, int], tuple[float, int]] = {}
     # ADR-0035: M1 cursor per symbol for session H/L live feed
@@ -1599,6 +1601,9 @@ async def _global_delta_loop(app: web.Application) -> None:
                         )
                         if _view is not None:
                             _put_calendar_close(_view, symbol, tf_s, frame)
+                            await _put_calendar_briefing_delta(
+                                app, _view, symbol, tf_s, frame, calendar_briefing_sent
+                            )
                         # X28-fix: backend ATR/RV і в delta — UI бере їх з останнього
                         # кадру; без виміру — поля нема + warnings (ADR-0070 rev 3).
                         if _smc_runner is not None:
@@ -2371,6 +2376,56 @@ async def _put_calendar_tail(
     if candle is not None and (not candles or candle["t_ms"] > candles[-1]["t_ms"]):
         frame["candles"] = candles + [candle]
     _put_calendar_close(view, symbol, tf_s, frame)
+    await _put_calendar_profile(app, view, symbol, tf_s, frame)
+
+
+async def _put_calendar_profile(
+    app: web.Application, view: CalendarTfView, symbol: str, tf_s: int, frame: Dict[str, Any]
+) -> None:
+    """ADR-0115 §10: розділ «Профіль тижня / місяця» в кінець «Розбору» кадру; розбору нема — розділу теж нема.
+
+    Повне читання D1 для таблиць — раз на новий фінальний D1 (кеш проєкції), у виконавці UDS. Збій — warning кадру.
+    """
+    briefing = frame.get("briefing")
+    if not isinstance(briefing, dict):
+        return
+    digits = (app.get(APP_PRICE_DIGITS) or {}).get(symbol)
+    try:
+        section = await asyncio.get_event_loop().run_in_executor(
+            app[APP_UDS_EXECUTOR], view.profile_section, symbol, tf_s, int(time.time() * 1000), digits
+        )
+    except Exception as exc:  # ValueError правила якоря, збій читання D1
+        _log.warning("WS_CALENDAR_PROFILE_ERR sym=%s tf_s=%s err=%s", symbol, tf_s, exc)
+        frame["meta"].setdefault("warnings", []).append("calendar_profile_unavailable")
+        return
+    briefing["sections"] = list(briefing.get("sections", [])) + [section]
+
+
+async def _put_calendar_briefing_delta(
+    app: web.Application,
+    view: CalendarTfView,
+    symbol: str,
+    tf_s: int,
+    frame: Dict[str, Any],
+    sent: Dict[tuple[str, int], int],
+) -> None:
+    """ADR-0115 §10: дельта W1/MN несе розбір символу (з розділом профілю), коли він змінився з останнього надісланого.
+
+    Розбір — раз на закритий бар найдрібнішого compute TF (кеш runner); SMC-рушій W1/MN не бачить (S1).
+    """
+    runner = app[APP_SMC_RUNNER] if APP_SMC_RUNNER in app else None
+    if runner is None:
+        return
+    _put_briefing(frame, runner, symbol)
+    briefing = frame.get("briefing")
+    if not isinstance(briefing, dict):
+        return
+    as_of_ms = int(briefing.get("as_of_ms", 0))
+    if sent.get((symbol, tf_s)) == as_of_ms:
+        frame.pop("briefing", None)
+        return
+    await _put_calendar_profile(app, view, symbol, tf_s, frame)
+    sent[(symbol, tf_s)] = as_of_ms
 
 
 def _put_calendar_close(view: CalendarTfView, symbol: str, tf_s: int, frame: Dict[str, Any]) -> None:

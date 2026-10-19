@@ -171,6 +171,27 @@ def test_updates_late_final_of_old_week_keeps_all_its_days():
     assert _ohlcv(event["bar"]) == pytest.approx(_expected(ROWS, week_sep14))
 
 
+def test_cold_window_is_a_bounded_range_read():
+    """Читання UDS без меж підміняє RAM-вікно D1 (set_window) — проєкція завжди читає з межею."""
+    uds = _FakeUds(ROWS)
+    _view(uds, now_ms=_ms(2026, 10, 19, 12)).read_window(SYM, W1_S, 2)
+    assert all(spec.to_open_ms is not None or spec.since_open_ms is not None for spec in uds.window_specs)
+
+
+def test_profile_section_live_and_distribution_with_cache():
+    uds = _FakeUds([r for r in ROWS if r["trading_date"] <= dt.date(2026, 10, 14)])
+    view = _view(uds, now_ms=_ms(2026, 10, 14, 20))
+    section = view.profile_section(SYM, W1_S, _ms(2026, 10, 14, 20), 2)
+    assert section["key"] == "calendar_profile" and section["title"] == "Профіль тижня"
+    texts = [row["text"] for row in section["rows"]]
+    assert texts[0].startswith("Хай тижня поки ") and texts[1].startswith("Лой тижня поки ")
+    assert texts[2] == "Хай тижня — у який день" and texts[3] == "Лой тижня — у який день"  # 10 тижнів < MIN_SAMPLE
+    assert section["rows"][2]["notes"][0].startswith("Вибірка замала (")
+    history_reads = len([s for s in uds.window_specs if s.limit >= 40_000])
+    view.profile_section(SYM, W1_S, _ms(2026, 10, 14, 20), 2)
+    assert len([s for s in uds.window_specs if s.limit >= 40_000]) == history_reads == 1, "таблиці — з кешу"
+
+
 def test_updates_without_events_pass_through():
     view = _view(_FakeUds(ROWS, events=[], cursor=9), now_ms=_ms(2026, 10, 19, 12))
     result = view.read_updates(SYM, W1_S, since_seq=None)
