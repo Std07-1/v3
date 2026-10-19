@@ -160,6 +160,17 @@ def test_updates_recompute_touched_bucket_and_keep_d1_cursor():
     assert (event["bar"]["high"], event["bar"]["close"]) == (500.0, 130.0)
 
 
+def test_updates_late_final_of_old_week_keeps_all_its_days():
+    """Пізній фінал D1 старого тижня: вікно D1 рахується до «зараз», а не до моменту події."""
+    sep16 = next(r for r in ROWS if r["trading_date"] == dt.date(2026, 9, 16))
+    final_event = {"bar": dict(sep16), "complete": True}
+    view = _view(_FakeUds(ROWS, events=[final_event]), now_ms=_ms(2026, 10, 19, 12))
+    (event,) = view.read_updates(SYM, W1_S, since_seq=1).events
+    week_sep14 = [dt.date(2026, 9, d) for d in range(14, 19)]
+    assert event["complete"] is True and event["bar"]["open_time_ms"] == _ms(2026, 9, 13, 21)
+    assert _ohlcv(event["bar"]) == pytest.approx(_expected(ROWS, week_sep14))
+
+
 def test_updates_without_events_pass_through():
     view = _view(_FakeUds(ROWS, events=[], cursor=9), now_ms=_ms(2026, 10, 19, 12))
     result = view.read_updates(SYM, W1_S, since_seq=None)

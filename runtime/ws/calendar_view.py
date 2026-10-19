@@ -168,10 +168,14 @@ class CalendarTfView:
         forming_day: Optional[DayBar],
         moments_ms: Sequence[int],
     ) -> CalendarProjection:
-        """Проєкція бакетів від найстаршого з моментів `moments_ms` (і формуючої D1) до кінця даних."""
+        """Проєкція бакетів від найстаршого з моментів `moments_ms` (і формуючої D1) до кінця даних.
+
+        Вікно D1 — від ключа найстаршого бакета до «зараз»: читач бере НАЙНОВІШІ `limit` D1 після `since`, тож запас
+        рахується до now_ms, а не до найновішого моменту (пізній фінал старого бакета не має загубити його D1).
+        """
         anchors = list(moments_ms) + ([forming_day.open_ms] if forming_day is not None else [])
         oldest_key = min(calendar_bucket_start_ms(ts, tf_s, rule) for ts in anchors)
-        span_buckets = max(1, (max(anchors) - oldest_key) // (tf_s * 1000) + 2)
+        span_buckets = max(1, (max(anchors + [now_ms]) - oldest_key) // (tf_s * 1000) + 2)
         d1 = self._read_d1(symbol, calendar_d1_window_limit(span_buckets, tf_s), since_open_ms=oldest_key - 1)
         days = _day_bars(d1.bars_lwc, final_only=True)
         return project_calendar_bars(days, forming_day, tf_s=tf_s, rule=rule, now_ms=now_ms)
