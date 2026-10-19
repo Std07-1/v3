@@ -471,6 +471,7 @@ export interface RenderFrame {
 // -------------------- WS actions --------------------
 export type WsAction =
   | { action: 'switch'; symbol: string; tf: string }
+  | { action: 'set_lang'; lang: string }
   | { action: 'scrollback'; to_ms: number }
   | { action: 'drawing_add'; drawing: Drawing }
   | { action: 'drawing_update'; drawing: Drawing }

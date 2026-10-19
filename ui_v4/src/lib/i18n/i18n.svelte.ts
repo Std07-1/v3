@@ -16,6 +16,7 @@ import {
   translate,
   translatePlural,
 } from './translate';
+import { withoutQueryParam } from '../urlParams';
 
 export const LANG_REGISTRY: LanguageRegistry = registryJson;
 const QUERY_PARAM = 'lang';
@@ -53,6 +54,13 @@ export function tn(n: number, forms: string, params?: Params): string {
 /** Позначка ключа для тексту з мапи за кодом: тест паритету його бачить, перекладає `t()` у мить показу. */
 export function msg(key: string): string {
   return key;
+}
+
+/** Адреса WS з мовою глядача (ADR-0116 §5.3): сервер складає нею тексти аналізу. Береться в мить підключення. */
+export function withLangParam(url: string): string {
+  const withLang = new URL(url);
+  withLang.searchParams.set(QUERY_PARAM, i18n.lang);
+  return withLang.toString();
 }
 
 /** Локаль дат на шкалі LWC — мова глядача, а не мова браузера (ADR-0116 §5.6). */
@@ -135,11 +143,9 @@ function writeStoredLang(code: string): void {
 }
 
 function dropQueryLang(): void {
-  const url = new URL(window.location.href);
-  if (!url.searchParams.has(QUERY_PARAM)) return;
-  url.searchParams.delete(QUERY_PARAM);
+  if (!new URLSearchParams(window.location.search).has(QUERY_PARAM)) return;
   try {
-    history.replaceState(history.state, '', url.toString());
+    history.replaceState(history.state, '', withoutQueryParam(window.location.href, QUERY_PARAM));
   } catch (err) {
     console.warn('[i18n] LANG_PARAM_STRIP_FAILED — перезавантаження поверне мову з адреси', err);
   }

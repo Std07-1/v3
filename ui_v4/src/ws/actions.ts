@@ -38,6 +38,11 @@ export function createActions(ws: WSConnection) {
       send({ action: 'switch', symbol, tf });
     },
 
+    /** ADR-0116 §5.2: перемикач мови — сервер шле свіжий повний кадр з текстами аналізу цією мовою. */
+    setLang(lang: string) {
+      send({ action: 'set_lang', lang });
+    },
+
     scrollback(to_ms: T_MS) {
       send({ action: 'scrollback', to_ms });
     },

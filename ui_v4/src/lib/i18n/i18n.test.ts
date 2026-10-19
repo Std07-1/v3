@@ -74,6 +74,23 @@ describe('мова глядача (ADR-0116 §5.2)', () => {
     expect(i18n.currentLang()).toBe('en');
   });
 
+  it('перемикач прибирає ?lang= з адреси, а символ лишається читабельним (XAU/USD, не %2F)', async () => {
+    const browser = stubBrowser('?symbol=XAU/USD&tf=M15&lang=ru', null, ['uk-UA']);
+    const i18n = await freshI18n();
+    await i18n.initI18n();
+    await i18n.setLang('en');
+    expect(browser.location.href).toBe('http://localhost/?symbol=XAU/USD&tf=M15');
+  });
+
+  it('адреса WS несе мову глядача на мить підключення (ADR-0116 §5.3)', async () => {
+    stubBrowser('?lang=ru', null, ['uk-UA']);
+    const i18n = await freshI18n();
+    await i18n.initI18n();
+    expect(i18n.withLangParam('wss://aione-smc.com/ws?src=snap')).toBe('wss://aione-smc.com/ws?src=snap&lang=ru');
+    await i18n.setLang('en');
+    expect(i18n.withLangParam('ws://localhost:8000/ws')).toBe('ws://localhost:8000/ws?lang=en');
+  });
+
   it('незареєстрована мова в перемикачі — гучно і без зміни', async () => {
     const browser = stubBrowser('', null, ['uk-UA']);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

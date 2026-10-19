@@ -5,6 +5,7 @@
 // власника 10.10). Ціну й точність UI не рахує (X28): ціна — остання з кадру, знаки — з config сервера.
 
 import { displayPriceDigits } from './priceDigits';
+import { withoutQueryParam } from './urlParams';
 
 /** Що бачить трейдер у мить знімка: символ і TF графіка, час (UTC мс) і остання ціна кадру. */
 export interface SnapshotMeta {
@@ -160,12 +161,7 @@ export function landingSource(search: string): string | null {
 /** Адреса сторінки без мітки джерела — щоб закладка чи повторне відкриття не рахувались переходом зі знімка. `/` у
  *  символі лишається читабельним, як у самому посиланні (URLSearchParams перекодував би його в %2F). */
 export function withoutSourceParam(href: string): string {
-  const url = new URL(href);
-  const params = new URLSearchParams(url.search);
-  params.delete(SOURCE_PARAM);
-  const query = params.toString().replace(/%2F/gi, '/');
-  url.search = query ? `?${query}` : '';
-  return url.toString();
+  return withoutQueryParam(href, SOURCE_PARAM);
 }
 
 /** Адреса WS з міткою джерела візиту (null — без змін). */
