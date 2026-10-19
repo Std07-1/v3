@@ -190,6 +190,27 @@ def test_eu_season_is_berlin_dst_instant_zoneinfo_witness_1981_2040():
         assert calendar_season(int(moment.timestamp() * 1000), "eu") == expected, moment
 
 
+def test_season_switch_is_exact_to_the_millisecond_zoneinfo_witness():
+    """Межі літнього часу з кешу доби (`_summer_bounds_of_day`) не зсувають мить переходу: остання мілісекунда перед
+    переходом — старий сезон, сама мить — новий. Оракул — tz-база: кожен перехід us 1987–2040 і eu 1981–2040."""
+    cases = (
+        ("us", NY, dt.timedelta(hours=-4), range(1987, 2041), (3, 4, 10, 11)),
+        ("eu", BERLIN, dt.timedelta(hours=2), range(1981, 2041), (3, 9, 10)),
+    )
+    switches = 0
+    for rule, zone, summer_offset, years, months in cases:
+        previous = None
+        for moment in _hours_of_months(years, months):
+            season = "summer" if moment.astimezone(zone).utcoffset() == summer_offset else "winter"
+            if previous is not None and season != previous:
+                switch_ms = int(moment.timestamp() * 1000)
+                assert calendar_season(switch_ms - 1, rule) == previous, (rule, moment)
+                assert calendar_season(switch_ms, rule) == season, (rule, moment)
+                switches += 1
+            previous = season
+    assert switches == 2 * len(range(1987, 2041)) + 2 * len(range(1981, 2041))
+
+
 def test_cfd_us_dst_instant_equals_trading_day_season_every_minute_of_dst_weekends():
     """Для cfd_us сезон за моментом переходу і сезон торгового дня §3.1 дають ту саму торговість кожної хвилини:
     розбіжні години неділі (після 02:00 NY до відкриття доби) закриті в обох розкладах. Отже для металів та індексів

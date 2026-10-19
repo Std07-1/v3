@@ -156,7 +156,7 @@ def calendar_season(ts_ms: int, season_rule: str) -> str:
     закриті в обох розкладах. `none` — розклад один.
     """
     if season_rule in (SEASON_RULE_US, SEASON_RULE_EU):
-        start_ms, end_ms = _summer_bounds_ms((_EPOCH + dt.timedelta(days=ts_ms // _DAY_MS)).year, season_rule)
+        start_ms, end_ms = _summer_bounds_of_day(ts_ms // _DAY_MS, season_rule)
         return SEASON_SUMMER if start_ms <= ts_ms < end_ms else SEASON_WINTER
     if season_rule == SEASON_RULE_NONE:
         return "none"
@@ -185,6 +185,12 @@ def _us_dst_days(year: int) -> tuple[dt.date, dt.date]:
 def _eu_dst_days(year: int) -> tuple[dt.date, dt.date]:
     """Неділі переходу ЄС: з 1996 — остання неділя березня / остання неділя жовтня; раніше — … / остання вересня."""
     return _last_sunday(year, 3), _last_sunday(year, 10 if year >= 1996 else 9)
+
+
+@functools.lru_cache(maxsize=8192)  # гарячий шлях: сезон на кожну хвилину сесій і календаря, рік доби — раз
+def _summer_bounds_of_day(day_index: int, season_rule: str) -> tuple[int, int]:
+    """Межі літнього часу року доби `day_index` (діб від епохи): дата будується раз на добу, далі — порівняння цілих."""
+    return _summer_bounds_ms((_EPOCH + dt.timedelta(days=day_index)).year, season_rule)
 
 
 @functools.lru_cache(maxsize=256)
