@@ -13,7 +13,7 @@ import {
   dragStarted,
 } from '../interaction/geometry';
 import { getToolModule } from './tools';
-import { createFirstTouchLookup, type BarRange } from './zoneTouch';
+import { createFirstTouchLookup, toTouchBar } from './zoneTouch';
 import { nearestSnapLevel, type SnapMode } from './magnetSnap';
 import { createDoubleClickTracker, type NoteTextRequest } from './noteText';
 import { drawingsKey, isCorruptBackupKey, loadDrawings, saveDrawings } from './drawingsStorage';
@@ -537,7 +537,8 @@ export class DrawingsRenderer {
   private firstTouchMs = createFirstTouchLookup({
     barTimesSec: () => this.barTimesSec,
     barStepSec: () => this.barStepSec,
-    barAt: (i) => this.seriesApi.dataByIndex(i) as BarRange | null,
+    barAt: (i) => toTouchBar(this.seriesApi.dataByIndex(i), timeToSec),
+    onMisaligned: () => this.warnOnce('zone_touch_misaligned', 'drawing_state_inconsistent', 'зона: бар LWC ≠ кеш часів'),
   });
 
   // Інверсія: coordinateToLogical у LWC — ЦІЛИЙ індекс (Math.ceil), тож новий якір
