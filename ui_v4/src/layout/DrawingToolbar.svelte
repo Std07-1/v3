@@ -14,8 +14,8 @@
     - cursor · інструменти реєстру · eraser · magnet · snapshot. Magnet is a
       modal toggle (magnetEnabled), not an ActiveTool.
     - Групи (ADR-0112 D11, однаково з капсулою телефона): рівень · лінія ·
-      прямокутник · позиція — одна кнопка з останнім обраним варіантом
-      (клавіша варіанта перемикає його).
+      прямокутник · позиція — одна кнопка з останнім обраним варіантом і
+      кутиком; клік по кутику або затискання 300 мс — варіанти рядком праворуч.
 
   Mobile: still hidden (@media) pending the touch hit-test / draft-commit fixes
   the 2026-05-12 hide was created for — do NOT silently re-enable here.
@@ -27,9 +27,11 @@
   import {
     capsuleEntries,
     entryHolds,
+    groupVariants,
     rememberVariant,
     type CapsuleEntry,
   } from "../chart/drawings/toolGroups";
+  import { dismissOnOutside } from "../lib/actions/dismissOnOutside";
   import { hintsOn } from "../stores/uiHints";
   import { ICON_MAGNET } from "./toolIcons";
 
@@ -112,6 +114,10 @@
   ]);
 
   function handleClick(btn: ToolBtn) {
+    if (holdOpened) {
+      holdOpened = false; // затискання вже відкрило варіанти — клік після нього не перемикає інструмент
+      return;
+    }
     // Toggle: re-click активного інструменту (будь-якого варіанта групи) → деактивує (null).
     if (btn.id === null) onSelectTool(null);
     else onSelectTool(isActive(btn) ? null : btn.id);
@@ -121,6 +127,32 @@
   function isActive(btn: ToolBtn): boolean {
     if (btn.id === null) return activeTool === null;
     return btn.group ? entryHolds(btn.group, activeTool, tools) : activeTool === btn.id;
+  }
+
+  // ── Варіанти групи (ADR-0112 D11): кутик або затискання — рядок праворуч; вибір, Esc чи клік поза — закрито ──
+  const HOLD_OPEN_MS = 300;
+  let openGroup = $state<string | null>(null);
+  let holdTimer: ReturnType<typeof setTimeout> | 0 = 0;
+  let holdOpened = false;
+
+  function holdStart(e: PointerEvent, btn: ToolBtn): void {
+    if (!btn.group || e.button !== 0) return;
+    holdCancel();
+    holdTimer = setTimeout(() => {
+      holdTimer = 0;
+      holdOpened = true;
+      openGroup = btn.key;
+    }, HOLD_OPEN_MS);
+  }
+
+  function holdCancel(): void {
+    if (holdTimer) clearTimeout(holdTimer);
+    holdTimer = 0;
+  }
+
+  function pickVariant(tool: DrawingType): void {
+    openGroup = null;
+    onSelectTool(tool);
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -149,7 +181,8 @@
     const over = lastX - REACT_X;
     const t = over <= 0 ? 1 : over >= FADE_SPAN ? 0 : 1 - over / FADE_SPAN;
     const prox = PROX_GHOST + (1 - PROX_GHOST) * t;
-    const lit = activeTool !== null || magnetEnabled ? 1 : prox;
+    // Відкриті варіанти групи тягнуться праворуч за смугу — панель лишається світлою, інакше рядок не клікається
+    const lit = activeTool !== null || magnetEnabled || openGroup !== null ? 1 : prox;
     el.style.setProperty("--dim", lit.toFixed(3));
     el.style.pointerEvents = lit < 0.45 ? "none" : "auto";
   }
@@ -261,17 +294,61 @@
           class:active={isActive(btn)}
           onclick={() => handleClick(btn)}
           oncontextmenu={(e) => handleContext(e, btn.id)}
+          onpointerdown={(e) => holdStart(e, btn)}
+          onpointerup={holdCancel}
           onpointerenter={() => tipEnter(btn.key)}
-          onpointerleave={() => tipLeave(btn.key)}
+          onpointerleave={() => {
+            holdCancel();
+            tipLeave(btn.key);
+          }}
           type="button"
           aria-label={btn.label}
           aria-pressed={isActive(btn)}
         >
           {@render toolIcon(btn.iconPath)}
-          <span class="tool-tip" class:show={shownKey === btn.key}>
+          <span class="tool-tip" class:show={shownKey === btn.key && openGroup !== btn.key}>
             {btn.label}<kbd>{btn.hotkey}</kbd>
           </span>
         </button>
+        {#if btn.group}
+          {@const group = btn.group}
+          <button
+            class="variants-toggle"
+            class:open={openGroup === btn.key}
+            onclick={() => (openGroup = openGroup === btn.key ? null : btn.key)}
+            oncontextmenu={(e) => e.preventDefault()}
+            type="button"
+            aria-label={group.label}
+            aria-haspopup="menu"
+            aria-expanded={openGroup === btn.key}
+          ></button>
+          {#if openGroup === btn.key}
+            <div
+              class="variants"
+              role="menu"
+              aria-label={group.label}
+              use:dismissOnOutside={{
+                enabled: true,
+                onDismiss: () => (openGroup = null),
+                ignoreSelector: ".variants-toggle",
+              }}
+            >
+              {#each groupVariants(tools, group.tool) as variant (variant.id)}
+                <button
+                  class="variant"
+                  class:active={activeTool === variant.id}
+                  onclick={() => pickVariant(variant.id)}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={activeTool === variant.id}
+                >
+                  {@render toolIcon(variant.icon)}
+                  <span>{variant.label}</span><kbd>{variant.hotkey.toUpperCase()}</kbd>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        {/if}
       </div>
     {/each}
 
@@ -468,7 +545,78 @@
     height: var(--drawing-cell-size, 36px);
   }
 
-  .tool-tip kbd {
+  /* Кутик групи — маленький трикутник у правому нижньому куті іконки (як у TV); клік — варіанти. */
+  .variants-toggle {
+    position: absolute;
+    right: 1px;
+    bottom: 1px;
+    width: 12px;
+    height: 12px;
+    padding: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--toolbar-btn-color, #c8cdd6);
+  }
+  .variants-toggle::after {
+    content: "";
+    position: absolute;
+    right: 3px;
+    bottom: 3px;
+    border-style: solid;
+    border-width: 0 0 4px 4px;
+    border-color: transparent transparent currentColor transparent;
+    opacity: 0.5;
+    transition: opacity 0.12s ease;
+  }
+  .variants-toggle:hover::after,
+  .variants-toggle.open::after {
+    opacity: 1;
+    color: var(--toolbar-btn-hover-color, #f2f5fa);
+  }
+
+  /* Варіанти групи — рядком праворуч від кнопки, мовою підказки панелі (те саме тло, рамка, kbd). */
+  .variants {
+    position: absolute;
+    left: calc(100% + 6px);
+    top: 0;
+    z-index: 61;
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 8px;
+    background: var(--toolbar-tip-bg, rgba(22, 27, 36, 0.97));
+    border: 0.5px solid rgba(255, 255, 255, 0.09);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  }
+  .variant {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 30px;
+    padding: 0 9px 0 7px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--text-1, #e6edf3);
+    font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .variant:hover,
+  .variant:focus-visible {
+    background: rgba(255, 255, 255, 0.06);
+    outline: none;
+  }
+  .variant.active {
+    color: var(--toolbar-active-color, #d4a017);
+  }
+
+  .tool-tip kbd,
+  .variant kbd {
     font-family: var(--font-mono, "SF Mono", "Consolas", monospace);
     font-size: 10px;
     font-weight: 500;
