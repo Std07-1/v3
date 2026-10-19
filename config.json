@@ -65,7 +65,7 @@
   ],
   "calendar_tfs": {
     "_comment": "ADR-0115: W1/MN — проєкція D1 SSOT на читанні (runtime/ws/calendar_view.py), не зберігаються і не входять у tf_allowlist_s; SMC на них не рахується. Межі — торгова дата D1 (open + 12 год): W1 = ISO-тиждень Пн–Нд, MN = календарний місяць (= TV FX:, виміряно 19.10.2026 на 8 символах). tfs_s — ідентифікатори (MN = 30 діб — не тривалість). cold_start_bars_by_tf — бакетів у full-кадрі (W1 520 ≈ 10 років, 0.3 с читання D1 на VPS; MN 240 ≈ 20 років, 0.5 с), scrollback_chunk_bars_by_tf — бакетів на крок підвантаження. enabled=false — W1/MN нема в меню TF, switch на них — tf_not_allowed (rollback).",
-    "enabled": true,
+    "enabled": false,
     "source_tf_s": 86400,
     "tfs_s": [
       604800,
