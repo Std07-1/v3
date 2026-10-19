@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { zoneMidPrice, ZoneTool } from './ZoneTool';
 import { HRayTool } from './HRayTool';
-import { chipBox, TextTool } from './TextTool';
+import { chipBox, TextTool, textWidthOf } from './TextTool';
 import type { Drawing } from '../../../types';
 import type { RenderContext } from './types';
 
@@ -81,5 +81,17 @@ describe('нотатка', () => {
         const id = (v: number) => v;
         const box = chipBox(100, 300, 5 * 6.6);
         expect(TextTool.deleteAnchor?.(note, id, id, 800, 400)).toEqual({ x: box.maxX + 12, y: 290 });
+    });
+
+    it('після рендеру — виміряна ширина тексту (не оцінка): × і хіт-тест по справжньому чіпу', () => {
+        const note: Drawing = { id: 'n', type: 'text', points: [{ t_ms: 100, price: 300 }], meta: { text: 'Азія · ліквідність' } };
+        const id = (v: number) => v;
+        const { rc } = recordingRc(undefined);
+        (rc.ctx as unknown as { measureText: (t: string) => { width: number }; strokeRect: () => void; fillText: () => void }).measureText = () => ({ width: 99 });
+        Object.assign(rc.ctx, { strokeRect: vi.fn(), fillText: vi.fn(), font: '' });
+        expect(TextTool.render(note, rc)).toEqual(chipBox(100, 300, 99));
+        expect(textWidthOf('Азія · ліквідність')).toBe(99);
+        expect(TextTool.deleteAnchor?.(note, id, id, 800, 400)).toEqual({ x: 100 + 99 + 12 + 12, y: 290 });
+        expect(TextTool.hitTest(note, 100 + 99 + 12 + 5, 290, 10, id, id)).toEqual({ hit: false });
     });
 });

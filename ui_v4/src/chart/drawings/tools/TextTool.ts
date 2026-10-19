@@ -16,8 +16,22 @@ const CHIP_BG = 'rgba(14, 17, 23, 0.72)';
 const FALLBACK_RGB = '200,205,214';
 /** Нотатка без тексту (прев'ю під курсором до кліку). */
 const PLACEHOLDER = 'Нотатка';
-/** Ширина символу для хіт-тесту без полотна (оцінка для 12px). */
+/** Ширина символу для хіт-тесту без полотна (оцінка для 12px) — лише доки текст ще не малювався. */
 const CHAR_W_ESTIMATE = 6.6;
+/** Виміряна ширина тексту (той самий шрифт, що на полотні) — для хіт-тесту й × без полотна: оцінка за кількістю
+ *  символів для кирилиці давала чіп на третину ширший (× висів у порожнечі, клік повз чіп виділяв нотатку). */
+const measuredWidth = new Map<string, number>();
+const MEASURED_LIMIT = 512;
+
+/** Ширина тексту чіпа: виміряна при рендері, а до першого рендеру — оцінка. */
+export function textWidthOf(text: string): number {
+    return measuredWidth.get(text) ?? text.length * CHAR_W_ESTIMATE;
+}
+
+function rememberWidth(text: string, width: number): void {
+    if (measuredWidth.size >= MEASURED_LIMIT) measuredWidth.clear();
+    measuredWidth.set(text, width);
+}
 /** × видалення — праворуч від чіпа, а не в центрі (там він закривав би текст); відступ центру × від краю чіпа. */
 const DELETE_GAP_PX = 12;
 
@@ -49,7 +63,9 @@ export const TextTool: ToolModule = {
         const color = isDraft ? accentColor : baseColor;
         const text = textOf(d);
         ctx.font = TEXT_FONT;
-        const box = chipBox(x, y, ctx.measureText(text).width);
+        const width = ctx.measureText(text).width;
+        rememberWidth(text, width);
+        const box = chipBox(x, y, width);
         ctx.setLineDash([]);
         ctx.shadowBlur = 0;
         ctx.fillStyle = CHIP_BG;
@@ -66,7 +82,7 @@ export const TextTool: ToolModule = {
         const x = toX(d.points[0].t_ms);
         const y = toY(d.points[0].price);
         if (x === null || y === null) return null;
-        const box = chipBox(x, y, textOf(d).length * CHAR_W_ESTIMATE);
+        const box = chipBox(x, y, textWidthOf(textOf(d)));
         return { x: box.maxX + DELETE_GAP_PX, y: (box.minY + box.maxY) / 2 };
     },
 
@@ -74,7 +90,7 @@ export const TextTool: ToolModule = {
         const x = toX(d.points[0].t_ms);
         const y = toY(d.points[0].price);
         if (x === null || y === null) return { hit: false };
-        const box = chipBox(x, y, textOf(d).length * CHAR_W_ESTIMATE);
+        const box = chipBox(x, y, textWidthOf(textOf(d)));
         const inside = cursorX >= box.minX && cursorX <= box.maxX && cursorY >= box.minY && cursorY <= box.maxY;
         return inside ? { hit: true, distance: Math.min(tolerance, Math.abs(cursorY - y)) } : { hit: false };
     },
