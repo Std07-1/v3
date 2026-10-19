@@ -405,6 +405,9 @@ export interface RenderFrame {
    *  null/zero, замало вибірки) — meta.warnings "rv_unavailable".
    *  Consumed by: CommandRail. Frontend MUST NOT re-derive from candles. */
   rv?: number;
+  /** ADR-0115 §4.4: W1/MN — закриття останнього торгового дня тижня/місяця (epoch ms) для таймера CommandRail;
+   *  full і delta кадри календарних TF. Поля нема — інший TF або торги бакета вже закрились (вихідні). */
+  bar_close_ms?: number;
   /** ADR-0029: confluence grade per zone (full + delta on complete bars, ADR-0042) */
   zone_grades?: Record<string, ZoneGradeInfo>;
   /** ADR-0031: per-TF trend bias map (full + delta on complete bars, ADR-0042) */

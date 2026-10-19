@@ -48,6 +48,7 @@
   import { mainStatus } from "./app/diagSelectors";
   import { dismissOnOutside } from "./lib/actions/dismissOnOutside";
   import { configuredPriceDigits, displayPriceDigits, type PriceDigits } from "./lib/priceDigits";
+  import { TF_S_TO_LABEL } from "./constants/tfLabels";
   import {
     browserSnapshotCaps,
     canvasToPng,
@@ -135,17 +136,8 @@
 
   // Symbol/TF persistence (drawing_tools_v1)
   // Priority: URL query params > localStorage
-  // Seconds→label map for URL params (screenshot bot sends ?tf=3600)
-  const _S_TO_LABEL: Record<string, string> = {
-    "60": "M1",
-    "180": "M3",
-    "300": "M5",
-    "900": "M15",
-    "1800": "M30",
-    "3600": "H1",
-    "14400": "H4",
-    "86400": "D1",
-  };
+  // Seconds→label map for URL params (screenshot bot sends ?tf=3600) — SSOT constants/tfLabels.ts
+  const _S_TO_LABEL = TF_S_TO_LABEL;
   function loadLastPair(): { symbol: string; tf: string } | null {
     // URL params have highest priority (used by screenshot bot, deep links)
     try {
@@ -661,6 +653,8 @@
   let lastBarOpen: number | null = $state(null);
   // Час відкриття останньої свічки кадру + її TF — таймер CommandRail бере сітку H4/D1 з даних бекенда (X28)
   let lastCandle: { tf: string; t_ms: number } | null = $state(null);
+  // ADR-0115 §4.4: кінець бару W1/MN від бекенда (frame.bar_close_ms) для таймера; full без поля — скидає
+  let barCloseMs: number | null = $state(null);
 
   // --- Reactive subscriptions ---
   const unsubPair = currentPair.subscribe((p) => {
@@ -765,6 +759,8 @@
         lastBarTs = Date.now(); // time of last WS frame, not candle open
         if (f.tf) lastCandle = { tf: f.tf, t_ms: last.t_ms };
       }
+      if (f.frame_type === "full") barCloseMs = f.bar_close_ms ?? null;
+      else if (f.frame_type === "delta" && f.bar_close_ms !== undefined) barCloseMs = f.bar_close_ms;
       // ADR-0066 PATCH 04b: dismiss splash on first frame with data
       if (
         !firstFrameArrived &&
@@ -1070,6 +1066,7 @@
         lastPrice={lastPrice}
         currentTf={hudTf}
         {lastCandle}
+        {barCloseMs}
         nowMs={clockNow}
       />
       <span class="tr-clock" style:color={hudText}>{utcStr} UTC</span>
