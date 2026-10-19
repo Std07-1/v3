@@ -58,6 +58,8 @@ APP_DISPLAY_BUDGET = web.AppKey("display_budget", dict)
 APP_PRICE_DIGITS = web.AppKey("price_digits", dict)
 # ADR-0115: проєкція W1/MN з D1 (runtime.ws.calendar_view.CalendarTfView); нема ключа — W1/MN вимкнено
 APP_CALENDAR_VIEW = web.AppKey("calendar_view", object)
+# ADR-0116 Ф2.2: перекладачі мов, що прочиталися на старті (runtime.i18n_catalog.LanguageCatalog)
+APP_I18N_CATALOG = web.AppKey("i18n_catalog", object)
 
 # ── HTTP plumbing ─────────────────────────────────────────────────────────
 APP_CORS_ORIGINS = web.AppKey("cors_origins", set)

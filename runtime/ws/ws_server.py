@@ -31,6 +31,7 @@ from aiohttp import web, WSMsgType
 from runtime.ws.calendar_view import CalendarTfView, calendar_view_config_from_cfg
 from runtime.ws.candle_map import map_bar_to_candle_v4, map_bars_to_candles_v4
 from runtime.ws.forming_tail import read_forming_candle
+from core.i18n import SOURCE_TRANSLATOR, Translator
 from core.config_loader import (
     htf_anchor_rule_resolver,
     load_system_config,
@@ -101,17 +102,20 @@ class SmcRunnerLike(Protocol):
     def clear_delta(self, symbol: str, tf_s: int) -> None: ...
 
     def get_shell_payload(
-        self, symbol: str, tf_s: int, narrative: Any, signal: Any = None
+        self, symbol: str, tf_s: int, narrative: Any, signal: Any = None, tr: Any = None
     ) -> Any: ...
 
     def get_signals(
         self, symbol: str, tf_s: int, narrative: Any, price: float, atr: float
     ) -> Any: ...
 
-    def get_briefing(self, symbol: str) -> Any: ...
+    def get_briefing(self, symbol: str, tr: Any = None) -> Any: ...
 
     def warmup(self, uds: UdsLike) -> None: ...
 
+
+from runtime.i18n_catalog import load_catalog  # noqa: E402
+from runtime.ws import lang_frames  # noqa: E402
 
 # AppKey-визначення винесені в runtime.ws.app_keys (SSOT, fix для __main__/module
 # double-import bug — див. docstring у app_keys.py та changelog 2026-05-06).
@@ -127,6 +131,7 @@ from runtime.ws.app_keys import (  # noqa: E402
     APP_FULL_CONFIG,
     APP_GLOBAL_DELTA_TASK,
     APP_HEARTBEAT_S,
+    APP_I18N_CATALOG,
     APP_HTF_ANCHOR_RULE_FOR_SYMBOL,
     APP_PREVIEW_TF_SET,
     APP_PRICE_DIGITS,
@@ -430,6 +435,8 @@ class WsSession:
         "_action_tokens",
         "_action_refill_ts",
         "_switch_last_ts",
+        "lang",
+        "lang_warning",
     )
 
     def __init__(self, ws: web.WebSocketResponse) -> None:
@@ -442,6 +449,9 @@ class WsSession:
         # gap для всієї групи через min_seq (D2, розслідування 21.09).
         self._delta_cursor: Optional[tuple[str, int, int]] = None
         self.ws: web.WebSocketResponse = ws
+        # ADR-0116 Ф2.2: мова, яку з'єднання попросило (None — не просило: кадри як до мовного шару, L4)
+        self.lang: Optional[str] = None
+        self.lang_warning: Optional[str] = None  # lang_unsupported для найближчого повного кадру
         self._scrollback_count: int = (
             0  # P11: кількість scrollback для поточного symbol+tf
         )
@@ -1028,6 +1038,7 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
             atr=atr_val,
             rv=rv_val,
         )
+        text_ctx = lang_frames.TextContext(session.symbol, session.tf_s, view=view)
         # ADR-0033 N4: narrative in full frame + delta on complete bars. current_price from last candle.
         if _smc_runner is not None and candles:
             try:
@@ -1042,6 +1053,7 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                 _narr = _smc_runner.get_narrative(
                     session.symbol, session.tf_s, float(_last_c), float(_atr_est)
                 )
+                text_ctx.price, text_ctx.atr = float(_last_c), float(_atr_est)
                 if _narr is not None:
                     from core.smc.narrative import narrative_to_wire
 
@@ -1082,6 +1094,7 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                         if _sigs:
                             frame["signals"] = [s.to_wire() for s in _sigs]
                             _primary_sig = _sigs[0]
+                            text_ctx.signal = _primary_sig
                         if _sig_alerts:
                             frame["signal_alerts"] = [a.to_wire() for a in _sig_alerts]
                     except Exception as _sig_exc:
@@ -1134,6 +1147,9 @@ async def _send_full_frame(session: WsSession, app: web.Application) -> None:
                     _ft_exc,
                 )
                 frame["meta"].setdefault("warnings", []).append("forming_tail_unavailable")
+        frame = await lang_frames.localize_full_frame(
+            frame, session, app, app.get(APP_SMC_RUNNER), text_ctx, app.get(APP_I18N_CATALOG), _put_calendar_profile
+        )
         await session.ws.send_json(frame)
         _log.debug(
             "WS_FULL_PUSH client=%s symbol=%s tf=%s candles=%d seq=%d",
@@ -1408,6 +1424,7 @@ async def _global_delta_loop(app: web.Application) -> None:
 
                 t0 = time.perf_counter()
                 frame = None
+                text_ctx = None
                 try:
                     result = await _uds_read_updates(
                         app, symbol, tf_s, min_seq, include_preview
@@ -1594,6 +1611,7 @@ async def _global_delta_loop(app: web.Application) -> None:
                         # SMC: notify runner on complete bars → inject delta if has_changes.
                         # W1/MN — проєкція D1: рушій їх не бачить (ADR-0115 §4.4, S1), лише таймер
                         _view = _calendar_view_for(app, tf_s)
+                        text_ctx = lang_frames.TextContext(symbol, tf_s, view=_view)
                         _smc_runner = (
                             app[APP_SMC_RUNNER]
                             if APP_SMC_RUNNER in app and _view is None
@@ -1694,6 +1712,7 @@ async def _global_delta_loop(app: web.Application) -> None:
                                         float(_last_c),
                                         float(_atr_est),
                                     )
+                                    text_ctx.price, text_ctx.atr = float(_last_c), float(_atr_est)
                                     if _narr is not None:
                                         from core.smc.narrative import (
                                             narrative_to_wire,
@@ -1777,11 +1796,22 @@ async def _global_delta_loop(app: web.Application) -> None:
                     )
 
                     if active_recipients and frame is not None:
-                        t_send_ms = await _safe_broadcast(
+                        # ADR-0116 Ф2.2: тексти аналізу мовою кожної групи отримувачів (без текстів — один кадр)
+                        t_send_ms = 0.0
+                        for lang_frame, lang_recipients in await lang_frames.frames_by_lang(
                             frame,
-                            tuple(active_recipients),
-                            sessions,
-                        )
+                            active_recipients,
+                            app,
+                            app.get(APP_SMC_RUNNER),
+                            text_ctx,
+                            app.get(APP_I18N_CATALOG),
+                            _put_calendar_profile,
+                        ):
+                            t_send_ms += await _safe_broadcast(
+                                lang_frame,
+                                tuple(lang_recipients),
+                                sessions,
+                            )
                         _log.debug(
                             "WS_BROADCAST_METRICS sym=%s tf=%s subs=%d t_ser_ms=%.2f t_send_ms=%.2f",
                             symbol,
@@ -1963,6 +1993,9 @@ async def ws_handler(request: web.Request) -> web.StreamResponse:
     session = WsSession(ws)
     session.client_ip = client_ip
     session._action_tokens = float(limits.actions_burst)
+    session.lang, session.lang_warning = lang_frames.requested_lang(
+        request.query.get(lang_frames.LANG_QUERY_PARAM), app.get(APP_I18N_CATALOG)
+    )
     sessions[session.client_id] = session
 
     _log.info("WS_CONNECT client_id=%s remote=%s", session.client_id, request.remote)
@@ -2126,6 +2159,8 @@ async def _handle_action(session: WsSession, raw: str, app: web.Application) -> 
         await _handle_switch(session, data, app)
     elif action == "scrollback":
         await _handle_scrollback(session, data, app)
+    elif action == "set_lang":
+        await _handle_set_lang(session, data, app)
     else:
         # S25: unknown action → error frame (degraded-but-loud, не silent ignore)
         _log.warning("WS_ACTION_UNKNOWN client=%s action=%s", session.client_id, action)
@@ -2133,6 +2168,18 @@ async def _handle_action(session: WsSession, raw: str, app: web.Application) -> 
             session, "unknown_action", "Unknown action: %s" % action, app=app
         )
         await session.ws.send_json(err)
+
+
+async def _handle_set_lang(
+    session: WsSession, data: Dict[str, Any], app: web.Application
+) -> None:
+    """ADR-0116 §5.2: перемикач мови — тексти аналізу новою мовою свіжим повним кадром."""
+    raw = data.get("lang")
+    session.lang, session.lang_warning = lang_frames.requested_lang(
+        raw if isinstance(raw, str) else None, app.get(APP_I18N_CATALOG)
+    )
+    _log.info("WS_SET_LANG client=%s lang=%s warning=%s", session.client_id, session.lang, session.lang_warning)
+    await _send_full_frame(session, app)
 
 
 async def _handle_switch(
@@ -2380,7 +2427,12 @@ async def _put_calendar_tail(
 
 
 async def _put_calendar_profile(
-    app: web.Application, view: CalendarTfView, symbol: str, tf_s: int, frame: Dict[str, Any]
+    app: web.Application,
+    view: CalendarTfView,
+    symbol: str,
+    tf_s: int,
+    frame: Dict[str, Any],
+    tr: Translator = SOURCE_TRANSLATOR,
 ) -> None:
     """ADR-0115 §10: розділ «Профіль тижня / місяця» в кінець «Розбору» кадру; розбору нема — розділу теж нема.
 
@@ -2524,6 +2576,7 @@ def build_app(
     app[APP_CONFIG_PATH] = config_path
     app[APP_BOOT_ID] = uuid.uuid4().hex[:16]
     app[APP_FULL_CONFIG] = full_cfg
+    app[APP_I18N_CATALOG] = load_catalog()  # ADR-0116 Ф2.2
     # ADR-0054 rev 7 §3.4.1 S3: точність ціни символів для UI; кривий config — відмова старту, символ без значення — ERROR
     _price_digits, _price_digits_missing = price_digits_wire(full_cfg, list(full_cfg.get("symbols", [])))
     app[APP_PRICE_DIGITS] = _price_digits

@@ -28,6 +28,7 @@ import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.config_loader import htf_anchor_rule_resolver, price_digits_wire
+from core.i18n import SOURCE_TRANSLATOR, Translator
 from core.model.bars import CandleBar
 from core.smc.engine import SmcEngine
 from core.smc.range_exhaustion import compute_range_exhaustion
@@ -219,8 +220,9 @@ class SmcRunner:
         self._range_exhaustion_cache: Dict[str, Tuple[int, RangeExhaustionSnapshot]] = (
             {}
         )
-        # ADR-0113 Ф3: розбір символу — symbol → (останні бари compute TF, розбір); None — не склався (лог уже був)
-        self._briefing_cache: Dict[str, Tuple[Tuple[int, ...], Optional[Briefing]]] = {}
+        # ADR-0113 Ф3: розбір символу — (symbol, мова) → (останні бари compute TF, розбір); None — не склався (лог
+        # уже був). Мова в ключі — ADR-0116 Ф2.2: розбір кожної мови кешується окремо, на той самий закритий бар
+        self._briefing_cache: Dict[Tuple[str, str], Tuple[Tuple[int, ...], Optional[Briefing]]] = {}
 
         # Relay: відстеження останнього bias для dedup
         self._last_bias: Dict[Tuple[str, int], Optional[str]] = {}
@@ -828,14 +830,17 @@ class SmcRunner:
             _log.warning("SMC_DISPLAY_LEVELS_FAIL sym=%s tf=%s", symbol, viewer_tf_s, exc_info=True)
             return None
 
-    def get_narrative(self, symbol, viewer_tf_s, current_price, atr=0.0, now_ms=None, record=True):
-        # type: (str, int, float, float, Optional[int], bool) -> Optional[NarrativeBlock]
+    def get_narrative(self, symbol, viewer_tf_s, current_price, atr=0.0, now_ms=None, record=True,
+                      tr=SOURCE_TRANSLATOR):
+        # type: (str, int, float, float, Optional[int], bool, Translator) -> Optional[NarrativeBlock]
         """ADR-0033 + ADR-0035: synthesize narrative with session context.
 
         `atr` — оцінка викликача (ws_server: h−l одного бару; 0.0 = оцінки нема); діє лише для TF,
         який рушій не вимірює (див. _narrative_atr).
         `now_ms` — момент розбору, один для календаря ринку, сесії й рівнів (R10); None — настінний годинник.
         Прогін по історії передає час закриття бару (ADR-0113 Ф1).
+        `tr` — мова тексту (ADR-0116 Ф2.2). Мовна копія кадру кличе з record=False: журнал пише лише прохід джерела.
+        Синтез наративу отримає перекладач у Ф2.6 — доти текст мовою джерела.
         """
         gate = self._narrative_gate(symbol, now_ms)
         if gate is None:
@@ -1048,8 +1053,11 @@ class SmcRunner:
         viewer_tf_s: int,
         narrative: NarrativeBlock,
         signal: Any = None,
+        tr: Translator = SOURCE_TRANSLATOR,
     ) -> Optional[ShellPayload]:
         """ADR-0036: compose shell payload from already-computed narrative.
+
+        `tr` — мова тексту картки (ADR-0116 Ф2.2); compose_shell_payload отримає його в Ф2.5.
 
         Returns None if shell is disabled. Catches exceptions (I5: degraded-but-loud).
         """
@@ -1075,21 +1083,22 @@ class SmcRunner:
 
     # ── Розбір символу (ADR-0113 Ф3) ────────────────────
 
-    def get_briefing(self, symbol: str) -> Optional[Briefing]:
+    def get_briefing(self, symbol: str, tr: Translator = SOURCE_TRANSLATOR) -> Optional[Briefing]:
         """Розбір символу — раз на закритий бар рушія (кеш за останнім баром кожного compute TF), а не на кожен кадр.
 
         Момент — кінець останнього бару найдрібнішого compute TF, ціна — його close: той самий стан рушія дає той самий
         розбір, хоч би хто й коли його попросив (R10). None — `smc.briefing.enabled=false`, до прогріву, наратив
         вимкнений, барів ще немає чи розбір не склався (BRIEFING_ERR у лозі).
+        `tr` — мова тексту (ADR-0116 Ф2.2), кеш окремий на мову; compose_briefing отримає його в Ф2.3.
         """
         if not self._full_config.get("smc", {}).get("briefing", {}).get("enabled", False) or not self._warmup_done:
             return None
         key = tuple(self._last_bar_open_ms(symbol, tf_s) for tf_s in sorted(self._compute_tfs))
-        cached = self._briefing_cache.get(symbol)
+        cached = self._briefing_cache.get((symbol, tr.lang))
         if cached is not None and cached[0] == key:
             return cached[1]
         briefing = self._compose_briefing(symbol)
-        self._briefing_cache[symbol] = (key, briefing)
+        self._briefing_cache[(symbol, tr.lang)] = (key, briefing)
         return briefing
 
     def _last_bar_open_ms(self, symbol: str, tf_s: int) -> int:

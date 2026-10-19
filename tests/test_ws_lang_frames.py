@@ -19,6 +19,8 @@ from typing import Any, Dict, Optional
 import pytest
 
 import runtime.ws.ws_server as ws_server
+from runtime.ws import lang_frames
+from core.i18n import SOURCE_TRANSLATOR
 from core.smc.briefing import compose_briefing, liquidity_section, session_section
 from core.smc.narrative_inputs import NarrativeInputs
 from core.smc.shell_composer import compose_shell_payload
@@ -26,6 +28,7 @@ from runtime.ws.app_keys import (
     APP_D1_TICK_RELAY_TFS,
     APP_DELTA_POLL_S,
     APP_FULL_CONFIG,
+    APP_I18N_CATALOG,
     APP_PREVIEW_TF_SET,
     APP_SMC_RUNNER,
     APP_WS_SESSIONS,
@@ -81,6 +84,7 @@ class _TextRunner:
     def __init__(self, config: Dict[str, Any]) -> None:
         self._config = config
         self._inputs = {M15: _inputs("xau_m15_trade_sell_approaching"), H4: _inputs("xau_h4_same_moment")}
+        self.text_calls: list = []  # (метод, мова перекладача, record) — що просила мовна копія кадру
 
     def get_snapshot(self, symbol, tf_s):
         return None
@@ -103,18 +107,21 @@ class _TextRunner:
     def get_rv(self, symbol, tf_s):
         return None
 
-    def get_narrative(self, symbol, tf_s, *args, **kwargs):
+    def get_narrative(self, symbol, tf_s, *args, record=True, tr=SOURCE_TRANSLATOR, **kwargs):
+        self.text_calls.append(("narrative", tr.lang, record))
         inputs = self._inputs.get(tf_s)
         return None if inputs is None else inputs.synthesize()
 
     def get_signals(self, symbol, tf_s, narrative, price, atr):
         return [], []
 
-    def get_shell_payload(self, symbol, tf_s, narrative, signal=None):
+    def get_shell_payload(self, symbol, tf_s, narrative, signal=None, tr=SOURCE_TRANSLATOR):
+        self.text_calls.append(("shell", tr.lang, None))
         return compose_shell_payload(narrative, self.get_bias_map(symbol), tf_s,
                                      self._config.get("smc", {}).get("shell", {}), sessions_active=True, signal=signal)
 
-    def get_briefing(self, symbol):
+    def get_briefing(self, symbol, tr=SOURCE_TRANSLATOR):
+        self.text_calls.append(("briefing", tr.lang, None))
         setup = self._inputs[M15]
         narratives = {tf_s: inputs.synthesize() for tf_s, inputs in self._inputs.items()}
         tail = (liquidity_section(M15, setup.snapshot.levels, {}, setup.current_price, setup.atr, setup.price_digits, 2),
@@ -169,6 +176,7 @@ def _session(app, name: str, lang: Optional[str] = None) -> ws_server.WsSession:
     session = ws_server.WsSession(_FakeWs())  # type: ignore[arg-type]
     session.client_id = name
     session.symbol, session.tf_s = SYMBOL, M15
+    session.lang = lang
     app[APP_WS_SESSIONS][name] = session
     return session
 
@@ -236,3 +244,108 @@ async def test_delta_without_lang_is_byte_identical_to_main():
     (delta,) = await _delta_after_closed_bar(app, session)
     assert {"narrative", "shell", "briefing"} <= set(json.loads(delta))
     _assert_golden("delta_m15_no_lang", delta)
+
+
+# ── Мова з'єднання (Ф2.2) ─────────────────────────────
+
+
+def _comparable(payload: str) -> str:
+    """Кадр без `meta.lang` — те, що мусить збігатися з кадром без мови, поки модулі тексту не перекладено."""
+    frame = json.loads(_normalized(payload))
+    frame["meta"].pop("lang", None)
+    return json.dumps(frame, ensure_ascii=False, sort_keys=True)
+
+
+async def test_requested_lang_normalizes_code_and_rejects_loudly():
+    catalog = ws_server.load_catalog()
+    assert lang_frames.requested_lang(None, catalog) == (None, None)
+    assert lang_frames.requested_lang("", catalog) == (None, None)
+    assert lang_frames.requested_lang("en-US", catalog) == ("en", None)
+    assert lang_frames.requested_lang(" RU ", catalog) == ("ru", None)
+    assert lang_frames.requested_lang("de", catalog) == (None, "lang_unsupported:de")
+    # Сире значення від клієнта не йде ні в meta, ні в лог
+    assert lang_frames.requested_lang("<script>", catalog) == (None, "lang_unsupported")
+
+
+async def test_full_frame_lang_uk_is_no_lang_frame_plus_meta_lang():
+    app = _app()
+    plain, uk = _session(app, "plain"), _session(app, "uk", lang="uk")
+    await ws_server._send_full_frame(plain, app)
+    await ws_server._send_full_frame(uk, app)
+    assert json.loads(uk.ws.frames[0])["meta"]["lang"] == "uk"
+    assert _comparable(uk.ws.frames[0]) == _comparable(plain.ws.frames[0])
+
+
+async def test_full_frame_lang_en_recomposes_texts_once_and_keeps_data():
+    app = _app()
+    runner = app[APP_SMC_RUNNER]
+    plain, en = _session(app, "plain"), _session(app, "en", lang="en")
+    await ws_server._send_full_frame(plain, app)
+    runner.text_calls.clear()
+    await ws_server._send_full_frame(en, app)
+    en_frame, plain_frame = json.loads(en.ws.frames[0]), json.loads(plain.ws.frames[0])
+    assert en_frame["meta"]["lang"] == "en"
+    assert en_frame["meta"]["config"] == plain_frame["meta"]["config"]
+    # Прохід джерела (журнал, сигнали) — один, з record; мовна копія — перекладачем en і без запису в журнал
+    assert runner.text_calls.count(("narrative", "uk", True)) == 1
+    assert {("narrative", "en", False), ("shell", "en", None), ("briefing", "en", None)} <= set(runner.text_calls)
+    # Ф2.2 — проводка: модулі тексту ще не перекладено, тож копія en дає ті самі тексти й ті самі дані
+    assert _comparable(en.ws.frames[0]) == _comparable(plain.ws.frames[0])
+
+
+async def test_unsupported_lang_warns_in_first_full_frame_only_and_serves_source():
+    app = _app()
+    session = _session(app, "de")
+    session.lang, session.lang_warning = lang_frames.requested_lang("de", app[APP_I18N_CATALOG])
+    await ws_server._send_full_frame(session, app)
+    await ws_server._send_full_frame(session, app)
+    first, second = (json.loads(f) for f in session.ws.frames)
+    assert "lang_unsupported:de" in first["meta"]["warnings"] and "lang" not in first["meta"]
+    assert "lang_unsupported:de" not in second["meta"].get("warnings", [])
+    # Далі — кадр як без мови (seq другого кадру сесії — 2, golden записано першим кадром)
+    _assert_golden("full_m15_no_lang", json.dumps(dict(second, meta=dict(second["meta"], seq=1))))
+
+
+async def test_set_lang_action_sends_fresh_full_frame_in_new_language():
+    app = _app()
+    session = _session(app, "switcher")
+    await ws_server._handle_set_lang(session, {"lang": "ru"}, app)
+    frame = json.loads(session.ws.frames[-1])
+    assert session.lang == "ru" and frame["frame_type"] == "full" and frame["meta"]["lang"] == "ru"
+
+
+async def test_delta_gives_each_language_group_its_frame_and_no_lang_stays_golden():
+    app = _app()
+    runner = app[APP_SMC_RUNNER]
+    plain, uk, en = _session(app, "plain"), _session(app, "uk", lang="uk"), _session(app, "en", lang="en")
+    plain_delta, uk_delta, en_delta = await _delta_after_closed_bar(app, plain, uk, en)
+    _assert_golden("delta_m15_no_lang", plain_delta)
+    assert json.loads(uk_delta)["meta"]["lang"] == "uk" and json.loads(en_delta)["meta"]["lang"] == "en"
+    assert _comparable(uk_delta) == _comparable(plain_delta) == _comparable(en_delta)
+    # SMC, сигнали й журнал — один прохід джерела на ціль; мовою en — лише текст
+    assert runner.text_calls.count(("narrative", "uk", True)) == 1
+    assert ("narrative", "en", False) in runner.text_calls
+
+
+async def test_delta_without_text_fields_is_one_shared_frame():
+    frame = {"type": "render_frame", "frame_type": "delta", "candles": [], "meta": {"seq": 0}}
+    sessions = [ws_server.WsSession(_FakeWs()), ws_server.WsSession(_FakeWs())]  # type: ignore[arg-type]
+    sessions[1].lang = "en"
+    ctx = lang_frames.TextContext(SYMBOL, M15)
+    variants = await lang_frames.frames_by_lang(frame, sessions, None, None, ctx, None, ws_server._put_calendar_profile)
+    assert len(variants) == 1 and variants[0][0] is frame and variants[0][1] == sessions
+
+
+async def test_ws_query_lang_reaches_full_frame(aiohttp_client):
+    """Справжнє підключення `/ws?lang=en`: мова з адреси доходить до meta повного кадру."""
+    client = await aiohttp_client(ws_server.build_app(config_path="config.json", uds=_Uds()))
+    ws = await client.ws_connect("/ws?lang=en")
+    try:
+        for _ in range(10):
+            frame = json.loads((await asyncio.wait_for(ws.receive(), timeout=5)).data)
+            if frame.get("frame_type") == "full":
+                assert frame["meta"]["lang"] == "en"
+                return
+        raise AssertionError("повного кадру не дочекались")
+    finally:
+        await ws.close()
