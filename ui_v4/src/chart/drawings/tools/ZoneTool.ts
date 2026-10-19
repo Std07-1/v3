@@ -22,21 +22,6 @@ export function zoneMidPrice(a: number, b: number): number {
     return (a + b) / 2;
 }
 
-/** Індекс першого бару від `fromIdx`, чий діапазон [low, high] перетинає зону [lo, hi]; null — ще не торкалась. */
-export function firstTouchIndex(
-    fromIdx: number,
-    count: number,
-    barAt: (i: number) => { readonly low: number; readonly high: number } | null,
-    lo: number,
-    hi: number,
-): number | null {
-    for (let i = Math.max(0, fromIdx); i < count; i++) {
-        const bar = barAt(i);
-        if (bar && bar.low <= hi && bar.high >= lo) return i;
-    }
-    return null;
-}
-
 type Box = { x1: number; x2: number; yTop: number; yBottom: number };
 
 function boxOf(d: Drawing, toX: (t_ms: number) => number | null, toY: (price: number) => number | null): Box | null {

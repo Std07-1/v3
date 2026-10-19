@@ -13,7 +13,7 @@ import {
   dragStarted,
 } from '../interaction/geometry';
 import { getToolModule } from './tools';
-import { firstTouchIndex } from './tools/ZoneTool';
+import { createFirstTouchLookup, type BarRange } from './zoneTouch';
 import { drawingsKey, isCorruptBackupKey, loadDrawings, saveDrawings } from './drawingsStorage';
 import { cloneDrawing, completeDraft, cursorIndex, firstClick, followCursor, newDraft, previewsOnHover } from './drawingDraft';
 import { dragBody, dragHandle, grabOffsetFor, type DragSpace } from './drawingDrag';
@@ -528,15 +528,12 @@ export class DrawingsRenderer {
     return this.seriesApi.priceToCoordinate(price);
   };
 
-  /** ADR-0111 §3.7: перша свічка після `fromMs`, що торкнулась [lo, hi] (зона до дотику); high/low — з LWC по індексу,
-   *  тож і поточна свічка рахується (кеш часів — лише час). */
-  private firstTouchMs = (fromMs: number, lo: number, hi: number): number | null => {
-    const from = timeToFractionalIndex(this.barTimesSec, fromMs / 1000, this.barStepSec);
-    if (from === null) return null;
-    const barAt = (i: number) => this.seriesApi.dataByIndex(i) as { low: number; high: number } | null;
-    const idx = firstTouchIndex(Math.floor(from) + 1, this.barTimesSec.length, barAt, lo, hi);
-    return idx === null ? null : this.barTimesSec[idx] * 1000;
-  };
+  /** ADR-0111 §3.7: зона до першого дотику — пошук з пам'яттю (zoneTouch.ts); high/low — з LWC за індексом. */
+  private firstTouchMs = createFirstTouchLookup({
+    barTimesSec: () => this.barTimesSec,
+    barStepSec: () => this.barStepSec,
+    barAt: (i) => this.seriesApi.dataByIndex(i) as BarRange | null,
+  });
 
   // Інверсія: coordinateToLogical у LWC — ЦІЛИЙ індекс (Math.ceil), тож новий якір
   // стає на бар поточного TF; частку бару зберігають лише якорі з іншого TF
