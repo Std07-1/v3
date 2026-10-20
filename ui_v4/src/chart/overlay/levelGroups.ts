@@ -7,21 +7,22 @@
  */
 
 import type { LevelGroup, SmcLevel } from '../../types';
+import { msg } from '../../lib/i18n/i18n.svelte';
 
-/** Рядки меню у порядку показу; підписи — копірайт UI. */
+/** Рядки меню у порядку показу; підписи — копірайт UI, ключі мовного шару (ADR-0116; показ — t()). */
 export const LEVEL_MENU_ROWS: ReadonlyArray<{ group: LevelGroup; label: string }> = [
-    { group: 'day', label: 'День' },
-    { group: 'week', label: 'Тиждень' },
-    { group: 'month', label: 'Місяць' },
-    { group: 'open', label: 'Відкриття дня' },
-    { group: 'open_week', label: 'Відкриття тижня' },
-    { group: 'asia', label: 'Азія' },
-    { group: 'london', label: 'Лондон' },
-    { group: 'newyork', label: 'Нью-Йорк' },
-    { group: 'sessions_prev', label: 'Сесії вчора' },
-    { group: 'h4', label: 'Попередня H4' },
-    { group: 'h1', label: 'Попередня H1' },
-    { group: 'liquidity', label: 'Ліквідність EQ' },
+    { group: 'day', label: msg('День') },
+    { group: 'week', label: msg('Тиждень') },
+    { group: 'month', label: msg('Місяць') },
+    { group: 'open', label: msg('Відкриття дня') },
+    { group: 'open_week', label: msg('Відкриття тижня') },
+    { group: 'asia', label: msg('Азія') },
+    { group: 'london', label: msg('Лондон') },
+    { group: 'newyork', label: msg('Нью-Йорк') },
+    { group: 'sessions_prev', label: msg('Сесії вчора') },
+    { group: 'h4', label: msg('Попередня H4') },
+    { group: 'h1', label: msg('Попередня H1') },
+    { group: 'liquidity', label: msg('Ліквідність EQ') },
 ];
 
 /** Вибір трейдера на одному TF: група → показувати (true) / ховати (false); немає ключа — типове сервера. */

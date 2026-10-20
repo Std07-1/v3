@@ -31,6 +31,7 @@ import { visibleLevels, type GroupOverrides } from './levelGroups';
 import { isCompactView, newestStructureLabel, structureLabelsWithText, zoneLabelsWithText, type LabelBox } from './labelLayout';
 import { DEFAULT_BAR_SPACING_PX } from '../engine';
 import { copyCanvas } from '../../lib/chartSnapshot';
+import { msg, onLangChange, t } from '../../lib/i18n/i18n.svelte';
 
 // ── ADR-0043 P1: Canvas Safe Zones — overlay елементи не рендеряться під HUD ──
 const CANVAS_SAFE_TOP_Y = 75;    // HUD + OHLCV tooltip clearance (px)
@@ -138,35 +139,41 @@ const _KIND_SHORT: Record<string, string> = {
 };
 
 // ── Tooltip descriptions (trader-friendly language) ─────────────────
+// ADR-0116: тексти — ключі мовного шару; підказка складається в мить рендеру мовою глядача (_tooltipText)
 const _ZONE_TOOLTIP: Record<string, string> = {
-  ob_bull: 'Bullish Order Block — зона попиту інституціоналів.\nОстання ведмежа свічка перед імпульсом вгору.\nЦіна часто повертається сюди для ретесту перед продовженням.',
-  ob_bear: 'Bearish Order Block — зона пропозиції інституціоналів.\nОстання бича свічка перед імпульсом вниз.\nЦіна часто повертається сюди для ретесту перед падінням.',
-  fvg_bull: 'Bullish Fair Value Gap — цінова неефективність.\nРозрив між свічкою 1 і 3 створює magnetic zone.\nЦіна тяжіє до заповнення цього gap перед рухом далі.',
-  fvg_bear: 'Bearish Fair Value Gap — цінова неефективність.\nРозрив між свічкою 1 і 3 створює magnetic zone.\nЦіна тяжіє до заповнення цього gap перед рухом далі.',
+  ob_bull: msg('Bullish Order Block — зона попиту інституціоналів.\nОстання ведмежа свічка перед імпульсом вгору.\nЦіна часто повертається сюди для ретесту перед продовженням.'),
+  ob_bear: msg('Bearish Order Block — зона пропозиції інституціоналів.\nОстання бича свічка перед імпульсом вниз.\nЦіна часто повертається сюди для ретесту перед падінням.'),
+  fvg_bull: msg('Bullish Fair Value Gap — цінова неефективність.\nРозрив між свічкою 1 і 3 створює magnetic zone.\nЦіна тяжіє до заповнення цього gap перед рухом далі.'),
+  fvg_bear: msg('Bearish Fair Value Gap — цінова неефективність.\nРозрив між свічкою 1 і 3 створює magnetic zone.\nЦіна тяжіє до заповнення цього gap перед рухом далі.'),
 };
 const _STATUS_TOOLTIP: Record<string, string> = {
-  active: 'Активна — ціна ще не торкалась',
-  tested: 'Тестована — ціна торкнулась, bounce',
-  partially_filled: 'Частково заповнена',
-  mitigated: '✗ Мітигована — ціна пробила зону',
-  filled: '✗ Заповнена — gap повністю закритий',
+  active: msg('Активна — ціна ще не торкалась'),
+  tested: msg('Тестована — ціна торкнулась, bounce'),
+  partially_filled: msg('Частково заповнена'),
+  mitigated: msg('✗ Мітигована — ціна пробила зону'),
+  filled: msg('✗ Заповнена — gap повністю закритий'),
 };
 const _SWING_TOOLTIP: Record<string, string> = {
-  hh: 'Higher High — вищий максимум (бичий сигнал)',
-  hl: 'Higher Low — вищий мінімум (підтвердження висхідного тренду)',
-  lh: 'Lower High — нижчий максимум (ведмежий сигнал)',
-  ll: 'Lower Low — нижчий мінімум (підтвердження низхідного тренду)',
-  bos_bull: 'BOS ▲ — Break of Structure вгору.\nЦіна закрилась вище попереднього HH.\nПідтвердження бичого тренду.',
-  bos_bear: 'BOS ▼ — Break of Structure вниз.\nЦіна закрилась нижче попереднього LL.\nПідтвердження ведмежого тренду.',
-  choch_bull: 'CHoCH ▲ — Change of Character вгору.\nЦіна закрилась вище HH при ведмежому тренді.\nМожливий розворот на бичий!',
-  choch_bear: 'CHoCH ▼ — Change of Character вниз.\nЦіна закрилась нижче LL при бичому тренді.\nМожливий розворот на ведмежий!',
-  inducement_bull: 'Inducement ▲ — хибний пробій ліквідності.\nStop-hunt нижче мінімуму з різким відновленням.',
-  inducement_bear: 'Inducement ▼ — хибний пробій ліквідності.\nStop-hunt вище максимуму з різким відновленням.',
-  fractal_high: 'Fractal High ▲ — Williams fractal (максимум п’яти свічок)',
-  fractal_low: 'Fractal Low ▼ — Williams fractal (мінімум п’яти свічок)',
-  displacement_bull: 'Displacement ▲ — сильна бича свічка (інституційний ордер-флоу)',
-  displacement_bear: 'Displacement ▼ — сильна ведмежа свічка (інституційний ордер-флоу)',
+  hh: msg('Higher High — вищий максимум (бичий сигнал)'),
+  hl: msg('Higher Low — вищий мінімум (підтвердження висхідного тренду)'),
+  lh: msg('Lower High — нижчий максимум (ведмежий сигнал)'),
+  ll: msg('Lower Low — нижчий мінімум (підтвердження низхідного тренду)'),
+  bos_bull: msg('BOS ▲ — Break of Structure вгору.\nЦіна закрилась вище попереднього HH.\nПідтвердження бичого тренду.'),
+  bos_bear: msg('BOS ▼ — Break of Structure вниз.\nЦіна закрилась нижче попереднього LL.\nПідтвердження ведмежого тренду.'),
+  choch_bull: msg('CHoCH ▲ — Change of Character вгору.\nЦіна закрилась вище HH при ведмежому тренді.\nМожливий розворот на бичий!'),
+  choch_bear: msg('CHoCH ▼ — Change of Character вниз.\nЦіна закрилась нижче LL при бичому тренді.\nМожливий розворот на ведмежий!'),
+  inducement_bull: msg('Inducement ▲ — хибний пробій ліквідності.\nStop-hunt нижче мінімуму з різким відновленням.'),
+  inducement_bear: msg('Inducement ▼ — хибний пробій ліквідності.\nStop-hunt вище максимуму з різким відновленням.'),
+  fractal_high: msg('Fractal High ▲ — Williams fractal (максимум п’яти свічок)'),
+  fractal_low: msg('Fractal Low ▼ — Williams fractal (мінімум п’яти свічок)'),
+  displacement_bull: msg('Displacement ▲ — сильна бича свічка (інституційний ордер-флоу)'),
+  displacement_bear: msg('Displacement ▼ — сильна ведмежа свічка (інституційний ордер-флоу)'),
 };
+
+/** Опис за кодом мовою глядача; коду нема в мапі — запасний текст як є (терміни SMC, коди). */
+function _tooltipText(descriptions: Record<string, string>, code: string | undefined, fallback: string): string {
+  return code !== undefined && Object.hasOwn(descriptions, code) ? t(descriptions[code]) : fallback;
+}
 
 /** Hit area for tooltip system */
 type HitArea = {
@@ -525,6 +532,9 @@ export class OverlayRenderer {
     });
   }
 
+  /** ADR-0116: мова змінилась — підказки наступного кадру вже новою мовою. */
+  private readonly _unsubscribeLang = onLangChange(() => this.scheduleRender());
+
   /** Зовнішній виклик (patch/resize) — single RAF достатній. */
   private scheduleRender(): void {
     this.scheduleRaf();
@@ -538,6 +548,7 @@ export class OverlayRenderer {
     }
     this._tooltipEl?.remove();
     this._tooltipEl = null;
+    this._unsubscribeLang();
   }
 
   /** ADR-0008 parity: Y-axis manual zoom/pan — координати змінились.
@@ -941,8 +952,8 @@ export class OverlayRenderer {
       }
 
       // ── Tooltip hit area ──
-      const statusDesc = _STATUS_TOOLTIP[st] ?? st;
-      const kindDesc = _ZONE_TOOLTIP[z.kind] ?? z.kind;
+      const statusDesc = _tooltipText(_STATUS_TOOLTIP, st, st);
+      const kindDesc = _tooltipText(_ZONE_TOOLTIP, z.kind, z.kind);
       const tfLabel = z.tf_s ? (_TF_NAMES[z.tf_s] ?? `${z.tf_s}s`) : '';
       const gi = this._gradeCache[z.id];
       const gradeBlock = gi
@@ -950,7 +961,7 @@ export class OverlayRenderer {
         : '\n';
       this._hitAreas.push({
         rect: { x: x1, y: top, w: Math.min(w, renderPx), h: Math.max(h, 8) },
-        tooltip: `${tfLabel} ${_KIND_SHORT[z.kind] ?? z.kind}${gradeBlock}${statusDesc}\nStrength: ${Math.round(s * 100)}%\n\n${kindDesc}`,
+        tooltip: `${tfLabel} ${_KIND_SHORT[z.kind] ?? z.kind}${gradeBlock}${statusDesc}\n${t('Сила: {percent}%', { percent: Math.round(s * 100) })}\n\n${kindDesc}`,
       });
     }
 
@@ -1290,7 +1301,7 @@ export class OverlayRenderer {
 
         this._hitAreas.push({
           rect: { x: x - sz - 2, y: yInd - sz - 2, w: sz * 2 + 4, h: sz * 2 + 4 },
-          tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? 'Inducement',
+          tooltip: _tooltipText(_SWING_TOOLTIP, s.kind, 'Inducement'),
         });
       } else if (isFractal) {
         // ── Williams Fractal: ▲/▼ (clean margin offset) ──
@@ -1316,7 +1327,7 @@ export class OverlayRenderer {
 
         this._hitAreas.push({
           rect: { x: x - sz - 2, y: isHigh ? yLevel - sz - fOff - 2 : yLevel + fOff - 2, w: sz * 2 + 4, h: sz + fOff + 4 },
-          tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? 'Fractal',
+          tooltip: _tooltipText(_SWING_TOOLTIP, s.kind, 'Fractal'),
         });
       } else if (isDisplacement) {
         // ── Displacement: candle body wash + directional chevron ──
@@ -1373,7 +1384,7 @@ export class OverlayRenderer {
 
             this._hitAreas.push({
               rect: { x: washX - 1, y: yHigh - chevronOff - chevronSz - 2, w: washW + 2, h: Math.max(8, yLow - yHigh + chevronOff * 2 + chevronSz * 2 + 4) },
-              tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? 'Displacement',
+              tooltip: _tooltipText(_SWING_TOOLTIP, s.kind, 'Displacement'),
             });
           }
         }
@@ -1398,7 +1409,7 @@ export class OverlayRenderer {
 
         this._hitAreas.push({
           rect: { x: x - r - 2, y: yDiamond - r - 2, w: r * 2 + 4, h: r * 2 + 4 },
-          tooltip: _SWING_TOOLTIP[s.kind ?? ''] ?? (s.kind?.toUpperCase() ?? 'Swing'),
+          tooltip: _tooltipText(_SWING_TOOLTIP, s.kind, s.kind?.toUpperCase() ?? 'Swing'),
         });
       }
     }
@@ -1508,7 +1519,7 @@ export class OverlayRenderer {
 
       this._hitAreas.push({
         rect: { x: m.x - tickHalf - 4, y: m.yLevel - 6, w: tickHalf * 2 + 8, h: 12 },
-        tooltip: _SWING_TOOLTIP[m.swing.kind ?? ''] ?? `${m.swing.kind}`,
+        tooltip: _tooltipText(_SWING_TOOLTIP, m.swing.kind, `${m.swing.kind}`),
       });
     }
 
@@ -1532,7 +1543,7 @@ export class OverlayRenderer {
 
       this._hitAreas.push({
         rect: { x: m.x - 20, y: Math.min(m.lblRenderY - m.fs - 2, m.yAnchor - m.fs - 2), w: 40, h: m.fs + 12 },
-        tooltip: _SWING_TOOLTIP[m.swing.kind ?? ''] ?? `${m.swing.kind}`,
+        tooltip: _tooltipText(_SWING_TOOLTIP, m.swing.kind, `${m.swing.kind}`),
       });
     }
   }

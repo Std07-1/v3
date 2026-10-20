@@ -1057,7 +1057,7 @@
                   aria-checked={row.on}
                   onclick={() => toggleLevelGroup(row.group)}
                 >
-                  <span class="lm-label">{row.label}</span>
+                  <span class="lm-label">{t(row.label)}</span>
                   <span class="lm-count">{row.count}</span>
                   <span class="lm-state">{row.on ? "●" : "○"}</span>
                 </button>
