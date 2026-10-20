@@ -565,12 +565,12 @@
     }
     try {
       const snap = await buildSnapshot(false);
-      if (!snap) return "Графік ще не готовий";
+      if (!snap) return t("Графік ще не готовий");
       const ways = chooseDelivery(browserSnapshotCaps(new File([snap.png], snap.fileName, { type: "image/png" })));
       return snapshotResultLabel(await deliverWithFallback(snap, ways));
     } catch (err) {
       console.error("[snapshot] SNAPSHOT_FAILED", err);
-      return "Не вдалося зробити знімок";
+      return t("Не вдалося зробити знімок");
     }
   }
 
@@ -593,7 +593,7 @@
       const snap = await buildSnapshot(wide);
       if (render !== snapPreviewRender) return;
       if (!snap) {
-        snapPreviewStatus = "Графік ще не готовий";
+        snapPreviewStatus = t("Графік ще не готовий");
         return;
       }
       if (snapPreviewUrl) URL.revokeObjectURL(snapPreviewUrl);
@@ -606,7 +606,7 @@
         if (snapPreviewUrl) URL.revokeObjectURL(snapPreviewUrl);
         snapPreviewUrl = null;
         snapPreviewShot = null;
-        snapPreviewStatus = "Не вдалося зробити знімок";
+        snapPreviewStatus = t("Не вдалося зробити знімок");
       }
     } finally {
       if (render === snapPreviewRender) snapPreviewBusy = false;

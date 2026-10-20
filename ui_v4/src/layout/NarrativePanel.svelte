@@ -14,6 +14,7 @@
         type Mode,
     } from "../lib/agentState";
     import { dismissOnOutside } from "../lib/actions/dismissOnOutside";
+    import { t } from "../lib/i18n/i18n.svelte";
 
     interface Props {
         narrative: NarrativeBlock | null;
@@ -221,7 +222,7 @@
                     <div class="archi-section">
                         <div class="archi-header">
                             <span class="archi-icon">🧠</span>
-                            <span class="archi-label">Арчі</span>
+                            <span class="archi-label">{t("Арчі")}</span>
                             <span
                                 class="conviction conviction-{narrative
                                     .archi_thesis.conviction}"

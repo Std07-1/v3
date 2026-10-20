@@ -4,6 +4,7 @@
 // слоті ADR-0068 (зліва внизу над шкалою часу). Наратив, шар Арчі, HUD і перехрестя на знімок не йдуть (рішення
 // власника 10.10). Ціну й точність UI не рахує (X28): ціна — остання з кадру, знаки — з config сервера.
 
+import { t } from './i18n/i18n.svelte';
 import { displayPriceDigits } from './priceDigits';
 import { withoutQueryParam } from './urlParams';
 
@@ -172,7 +173,11 @@ export function withVisitSource(wsUrl: string, source: string | null): string {
 
 /** Підпис до знімка в «Поділитися»: «XAU/USD · H1 на v3 → https://…/?symbol=XAU/USD&tf=H1». */
 export function snapshotShareText(meta: Pick<SnapshotMeta, 'symbol' | 'tf'>, origin: string): string {
-  return `${meta.symbol} · ${meta.tf} на v3 → ${snapshotChartLink(origin, meta.symbol, meta.tf)}`;
+  return t('{symbol} · {tf} на v3 → {link}', {
+    symbol: meta.symbol,
+    tf: meta.tf,
+    link: snapshotChartLink(origin, meta.symbol, meta.tf),
+  });
 }
 
 /** Спосіб(и) доставки: телефон із системним «Поділитися» — меню; ПК — у буфер і файлом; інакше — файл. */
@@ -298,12 +303,12 @@ export interface DeliveryResult {
 /** Короткий підсумок для пігулки біля кнопки. */
 export function snapshotResultLabel(result: DeliveryResult): string {
   const done = new Set(result.done);
-  if (done.has('share')) return 'Надіслано';
-  if (done.has('clipboard') && done.has('download')) return 'Скопійовано й збережено';
-  if (done.has('clipboard')) return 'Скопійовано';
-  if (done.has('download')) return 'Збережено у файл';
-  if (result.cancelled) return 'Скасовано';
-  return 'Не вдалося віддати знімок';
+  if (done.has('share')) return t('Надіслано');
+  if (done.has('clipboard') && done.has('download')) return t('Скопійовано й збережено');
+  if (done.has('clipboard')) return t('Скопійовано');
+  if (done.has('download')) return t('Збережено у файл');
+  if (result.cancelled) return t('Скасовано');
+  return t('Не вдалося віддати знімок');
 }
 
 /** Віддає знімок обраними способами по черзі; збій одного способу не скасовує наступний. `shareText` — підпис до

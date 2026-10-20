@@ -8,6 +8,8 @@
   Lives у InfoModal "About" tab (low-frequency surface).
 -->
 <script lang="ts">
+    import { t } from "../lib/i18n/i18n.svelte";
+
     let deferredPrompt: BeforeInstallPromptEvent | null = $state(null);
     let installed = $state(false);
     let dismissed = $state(false);
@@ -83,36 +85,35 @@
         <div class="install-header">
             <span class="install-icon">📲</span>
             <div class="install-text">
-                <div class="install-title">Встановити на пристрій</div>
+                <div class="install-title">{t("Встановити на пристрій")}</div>
                 <div class="install-sub">
-                    Запускати як native app, без browser bar
+                    {t("Запускати як native app, без browser bar")}
                 </div>
             </div>
         </div>
         {#if deferredPrompt}
             <div class="install-actions">
                 <button class="install-btn" onclick={handleInstall}>
-                    Встановити
+                    {t("Встановити")}
                 </button>
                 <button class="install-dismiss" onclick={handleDismiss}>
-                    Не треба
+                    {t("Не треба")}
                 </button>
             </div>
         {:else if isIosSafari}
             <div class="ios-hint">
-                iPhone / iPad: натисни <b>⎋ Поділитися</b> у Safari →
-                <b>Додати на головний екран</b>.
+                {t("iPhone / iPad: натисни")} <b>{t("⎋ Поділитися")}</b> {t("у Safari →")}
+                <b>{t("Додати на головний екран")}</b>.
             </div>
             <button class="install-dismiss" onclick={handleDismiss}>
-                Зрозуміло
+                {t("Зрозуміло")}
             </button>
         {:else}
             <div class="ios-hint">
-                Install prompt недоступний у цьому browser. Підтримується:
-                Chrome, Edge (desktop + Android), Safari (iOS via Share menu).
+                {t("Install prompt недоступний у цьому browser. Підтримується: Chrome, Edge (desktop + Android), Safari (iOS via Share menu).")}
             </div>
             <button class="install-dismiss" onclick={handleDismiss}>
-                Закрити
+                {t("Закрити")}
             </button>
         {/if}
     </div>

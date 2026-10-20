@@ -6,6 +6,8 @@
   Знімок не вдався (картинки нема) — тап по активній вкладці пробує ще раз.
 -->
 <script lang="ts">
+    import { t } from "../lib/i18n/i18n.svelte";
+
     interface Props {
         open: boolean;
         imageUrl: string | null;
@@ -42,18 +44,18 @@
             onclick={(e) => e.stopPropagation()}
         >
             <div class="modal-header">
-                <span id="snapshot-preview-title" class="title">Знімок графіка</span>
-                <button class="close-btn" type="button" aria-label="Закрити" onclick={onClose}>×</button>
+                <span id="snapshot-preview-title" class="title">{t("Знімок графіка")}</span>
+                <button class="close-btn" type="button" aria-label={t("Закрити")} onclick={onClose}>×</button>
             </div>
 
-            <div class="tabs" role="tablist" aria-label="Розмір знімка">
+            <div class="tabs" role="tablist" aria-label={t("Розмір знімка")}>
                 <button
                     class="tab"
                     class:active={wide}
                     role="tab"
                     aria-selected={wide}
                     disabled={busy}
-                    onclick={() => (!wide || !imageUrl) && onToggleWide(true)}>Широкий</button
+                    onclick={() => (!wide || !imageUrl) && onToggleWide(true)}>{t("Широкий")}</button
                 >
                 <button
                     class="tab"
@@ -61,23 +63,23 @@
                     role="tab"
                     aria-selected={!wide}
                     disabled={busy}
-                    onclick={() => (wide || !imageUrl) && onToggleWide(false)}>Як на екрані</button
+                    onclick={() => (wide || !imageUrl) && onToggleWide(false)}>{t("Як на екрані")}</button
                 >
             </div>
 
             <div class="preview" aria-busy={busy}>
                 {#if imageUrl}
-                    <img src={imageUrl} alt="Знімок графіка" class:dim={busy} />
+                    <img src={imageUrl} alt={t("Знімок графіка")} class:dim={busy} />
                 {:else if busy}
-                    <span class="placeholder">Готую знімок…</span>
+                    <span class="placeholder">{t("Готую знімок…")}</span>
                 {/if}
             </div>
 
             <div class="actions">
                 <span class="status" role="status">{status ?? ""}</span>
-                <button class="btn" type="button" disabled={busy || !imageUrl} onclick={onSave}>Зберегти</button>
+                <button class="btn" type="button" disabled={busy || !imageUrl} onclick={onSave}>{t("Зберегти")}</button>
                 <button class="btn primary" type="button" disabled={busy || !imageUrl} onclick={onShare}
-                    >Поділитися</button
+                    >{t("Поділитися")}</button
                 >
             </div>
         </div>
