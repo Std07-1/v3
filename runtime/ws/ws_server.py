@@ -2457,7 +2457,7 @@ async def _put_calendar_profile(
     digits = (app.get(APP_PRICE_DIGITS) or {}).get(symbol)
     try:
         section = await asyncio.get_event_loop().run_in_executor(
-            app[APP_UDS_EXECUTOR], view.profile_section, symbol, tf_s, int(time.time() * 1000), digits
+            app[APP_UDS_EXECUTOR], view.profile_section, symbol, tf_s, int(time.time() * 1000), digits, tr
         )
     except Exception as exc:  # ValueError правила якоря, збій читання D1
         _log.warning("WS_CALENDAR_PROFILE_ERR sym=%s tf_s=%s err=%s", symbol, tf_s, exc)
