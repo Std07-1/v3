@@ -493,7 +493,7 @@ def test_card_in_english_and_russian_from_real_dictionaries():
     english, russian = (compose_shell_payload(narrative, _MIXED_BIAS, 900, _CFG, sessions_active=True,
                                               tr=catalog.get(lang)) for lang in ("en", "ru"))
     assert source.micro_card.mode_text == "Готуємось до лонгу"
-    assert english.micro_card.mode_text == "Getting ready for a long"
+    assert english.micro_card.mode_text == "Preparing for a long"
     assert russian.micro_card.mode_text == "Готовимся к лонгу"
     assert english.micro_card.warning == "Outside killzone — lower setup quality"
     assert english.tactical_strip.tag_text == "H1 against the trend"

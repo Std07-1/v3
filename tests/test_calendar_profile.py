@@ -163,7 +163,7 @@ def test_section_in_english_and_russian_from_real_dictionaries():
                       tf_s=W1_S, rule=NY)
     english, russian = (compose_profile_section(_big_profile(), live, price_digits=2, since_year=2025,
                                                 tr=catalog.get(lang)) for lang in ("en", "ru"))
-    assert english.title == "Week profile" and russian.title == "Профиль недели"
+    assert english.title == "Weekly profile" and russian.title == "Профиль недели"
     assert english.rows[0].text == "Week high so far set on Monday — 4217.31"
     assert english.rows[0].notes == ("Historically, when as of Wednesday the week high was set on Monday, it stayed "
                                      "the week high in 67% of weeks (49–81%, sample 30)",)

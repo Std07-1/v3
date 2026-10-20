@@ -208,7 +208,7 @@ def test_full_frame_w1_in_english_has_english_profile(monkeypatch):
     (frame,) = session.ws.frames
     profile = frame["briefing"]["sections"][-1]
     assert frame["meta"]["lang"] == "en" and profile["key"] == "calendar_profile"
-    assert profile["title"] == "Week profile" and profile["rows"][0]["text"].startswith("Week high so far set on ")
+    assert profile["title"] == "Weekly profile" and profile["rows"][0]["text"].startswith("Week high so far set on ")
 
 
 def test_delta_w1_resends_briefing_with_profile_only_when_it_changes(monkeypatch):
