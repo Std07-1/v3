@@ -651,6 +651,72 @@ class TestTradeReplayAcrossRestart:
         assert _trade_first_bar_open_ms(sig) == DAY_MS + 15 * _MS_PER_HOUR + 30 * 60_000
 
 
+class TestOpenTradeBlocksNextDayCascade:
+    """ADR-0040 §3.2 rev 20.10.2026 (4), до рішення власника (варіант «а»): одна угода на символ.
+
+    Угода живе 96 справжніх барів, а торгова доба US CFD — 92, тож на тригері наступного дня вона ще відкрита. Новий
+    сигнал перезаписав би її без закриття в журналі (NAS100 21.10 13:00: 77 із 96 барів).
+    """
+
+    NEXT_DAY_MS = DAY_MS + 86_400_000
+
+    @staticmethod
+    def _next_day(bar: CandleBar) -> CandleBar:
+        return dataclasses.replace(bar, open_time_ms=bar.open_time_ms + 86_400_000,
+                                   close_time_ms=bar.close_time_ms + 86_400_000)
+
+    def _runner(self, tmp_path, mock_cascade):
+        today = dataclasses.replace(
+            _make_signal(direction="LONG", entry_price=2000.0, stop_loss=1990.0, take_profit=2030.0),
+            created_ms=DAY_MS + 13 * _MS_PER_HOUR + M15_MS + 10_000,
+        )
+        tomorrow = dataclasses.replace(
+            _make_signal(date_str="2024-10-05", direction="LONG", entry_price=2000.0, stop_loss=1980.0,
+                         take_profit=2060.0),
+            created_ms=today.created_ms + 86_400_000,
+        )
+        mock_cascade.side_effect = [today, tomorrow]
+        runner = _make_runner(tmp_path=tmp_path)
+        runner._journal = MagicMock()
+        runner.on_bar(SYM, M15_S, _m15_bar(hour=13), _UdsM15Range([]))
+        return runner
+
+    @staticmethod
+    def _journal_events(runner) -> List[str]:
+        return [c.args[0] for c in runner._journal.record_tda.call_args_list]
+
+    @patch("runtime.smc.tda_live.run_tda_cascade")
+    def test_trade_still_open_on_next_day_trigger_skips_the_cascade_loudly(self, mock_cascade, tmp_path, caplog):
+        runner = self._runner(tmp_path, mock_cascade)
+        with caplog.at_level(logging.WARNING, logger="runtime.smc.tda_live"):
+            runner.on_bar(SYM, M15_S, self._next_day(_m15_bar(hour=13)), _UdsM15Range([]))
+        sig = runner.get_signal(SYM)
+        assert mock_cascade.call_count == 1
+        assert (sig.date_str, sig.trade.status, sig.trade.bars_elapsed) == (DATE_STR, "open", 2)  # угода живе далі
+        assert "TDA_CASCADE_SKIPPED_OPEN_TRADE" in caplog.text
+        marks = json.loads((tmp_path / "tda_cascade_days.json").read_text(encoding="utf-8"))
+        assert (marks[SYM]["day_ms"], marks[SYM]["reason"]) == (self.NEXT_DAY_MS, "open_trade")
+        assert self._journal_events(runner) == ["tda_signal_generated"]
+
+    @patch("runtime.smc.tda_live.run_tda_cascade")
+    def test_trade_closed_before_the_next_day_trigger_lets_its_cascade_run(self, mock_cascade, tmp_path):
+        runner = self._runner(tmp_path, mock_cascade)
+        runner.on_bar(SYM, M15_S, _m15_bar(hour=13, minute=15, low=1985.0), _UdsM15Range([]))  # SL
+        runner.on_bar(SYM, M15_S, self._next_day(_m15_bar(hour=13)), _UdsM15Range([]))
+        sig = runner.get_signal(SYM)
+        assert mock_cascade.call_count == 2
+        assert (sig.date_str, sig.trade.status, sig.trade.bars_elapsed) == ("2024-10-05", "open", 1)
+
+    @patch("runtime.smc.tda_live.run_tda_cascade")
+    def test_trade_closing_on_the_next_day_trigger_does_not_block_its_cascade(self, mock_cascade, tmp_path):
+        runner = self._runner(tmp_path, mock_cascade)
+        runner.on_bar(SYM, M15_S, self._next_day(_m15_bar(hour=13, low=1985.0)), _UdsM15Range([]))  # SL на тригері
+        sig = runner.get_signal(SYM)
+        assert mock_cascade.call_count == 2
+        assert (sig.date_str, sig.trade.status, sig.trade.bars_elapsed) == ("2024-10-05", "open", 1)
+        assert self._journal_events(runner) == ["tda_signal_generated", "tda_trade_closed", "tda_signal_generated"]
+
+
 # ──────────────────────────────────────────────────────────────
 #  Tests: Persistence (save/load)
 # ──────────────────────────────────────────────────────────────

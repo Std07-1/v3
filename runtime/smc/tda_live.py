@@ -155,6 +155,11 @@ class TdaLiveRunner:
         now = _now_ms()
         day_ms = _day_ms_from_epoch(bar.open_time_ms)
 
+        # ── Trade management (Config F) угоди, відкритої до цього бару ──
+        # Раніше за каскад (rev 20.10.2026 (4)): каскад бачить угоду вже після цього бару, тож угода, що закрилась
+        # на самому тригері, день не блокує.
+        self._advance_trade(symbol, bar, uds_reader, last_open_ms, now)
+
         # ── Daily cascade trigger ──
         last_day = self._last_cascade_day_ms.get(symbol, 0)
         if last_day != day_ms:
@@ -164,23 +169,32 @@ class TdaLiveRunner:
             # the first London-window bar (08:15 UTC) when 0 H1 bars were
             # complete → Stage 3 always returned NO_NARRATIVE → 0 signals/14d.
             if bar_hour >= self._cfg.london_end_hour_utc:
+                before = self._signals.get(symbol)
                 self._run_cascade(symbol, day_ms, bar.open_time_ms, uds_reader, now)
-
-        # ── Trade management (Config F) ──
-        sig = self._signals.get(symbol)
-        if sig is not None and sig.trade.status != "closed" and last_open_ms >= 0:
-            self._fill_feed_gap(symbol, uds_reader, last_open_ms, bar.open_time_ms)
-            sig = self._signals[symbol]
-        if sig is not None and sig.trade.status != "closed":
-            new_trade = update_trade(sig.trade, bar, sig.entry, self._cfg)
-            if new_trade is not sig.trade:
-                self._set_trade(symbol, new_trade, now)
+                if self._signals.get(symbol) is not before:  # нова угода — перший update_trade на тригері
+                    self._advance_trade(symbol, bar, uds_reader, last_open_ms, now)
 
     def get_signal(self, symbol: str) -> Optional[TdaSignal]:
         """Get current TDA signal for frame injection. Returns None if no active signal."""
         return self._signals.get(symbol)
 
     # ── Private: trade state ──────────────────────────────
+
+    def _advance_trade(
+        self, symbol: str, bar: CandleBar, uds_reader: Any, last_open_ms: int, now_ms: int
+    ) -> None:
+        """Config F на фіналі бару для відкритої угоди символу; спершу — фінали, яких живий потік не подав."""
+        sig = self._signals.get(symbol)
+        if sig is None or sig.trade.status == "closed":
+            return
+        if last_open_ms >= 0:
+            self._fill_feed_gap(symbol, uds_reader, last_open_ms, bar.open_time_ms)
+            sig = self._signals[symbol]
+            if sig.trade.status == "closed":
+                return
+        new_trade = update_trade(sig.trade, bar, sig.entry, self._cfg)
+        if new_trade is not sig.trade:
+            self._set_trade(symbol, new_trade, now_ms)
 
     def _set_trade(self, symbol: str, trade: TradeState, now_ms: int) -> None:
         """Новий стан угоди; закриття — у лог, у файл стану і в журнал (audit trail)."""
@@ -261,6 +275,17 @@ class TdaLiveRunner:
         existing = self._signals.get(symbol)
         if existing is not None and existing.date_str == date_str:
             self._mark_cascade_day(symbol, day_ms, "already_signaled")
+            return
+        if existing is not None and existing.trade.status != "closed":
+            # Rev 20.10.2026 (4), ДО РІШЕННЯ ВЛАСНИКА (варіант «а»): угода живе max_open_bars_m15=96 справжніх барів, а
+            # торгова доба US CFD — 92 (GER30 78, EUSTX50 56), тож угода від 13:00 ще відкрита на тригері наступного
+            # дня. Новий сигнал мовчки перезаписав би її, без закриття в журналі. Один символ — одна угода: день
+            # пропускаємо вголос.
+            _log.warning(
+                "TDA_CASCADE_SKIPPED_OPEN_TRADE sym=%s date=%s open_id=%s bars=%d — каскад дня пропущено",
+                symbol, date_str, existing.signal_id, existing.trade.bars_elapsed,
+            )
+            self._mark_cascade_day(symbol, day_ms, "open_trade")
             return
 
         try:
@@ -411,7 +436,8 @@ class TdaLiveRunner:
         return os.path.join(os.path.dirname(self._state_path), "tda_cascade_days.json")
 
     def _mark_cascade_day(self, symbol: str, day_ms: int, reason: str) -> None:
-        """Каскад дня символу вирішено — reason: signal | no_signal | already_signaled | error | missed_window.
+        """Каскад дня символу вирішено — reason: signal | no_signal | already_signaled | open_trade | error |
+        missed_window.
 
         Позначка пишеться на кожній спробі й переживає рестарт: стан сигналів (_save_state) знає день лише символів
         із сигналом, тож рестарт після london_end повторював каскад дня (20.10: другий tda_NAS100_2026-10-20).
