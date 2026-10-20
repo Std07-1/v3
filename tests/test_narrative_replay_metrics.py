@@ -86,7 +86,8 @@ def test_trade_outcome_short_mirrors_long():
 def test_target_zone_takes_near_edge_by_direction():
     assert target_price("HTF OB 4467.02–4472.02", "short") == 4472.02  # униз — спершу верхній край
     assert target_price("HTF OB 4467.02–4472.02", "long") == 4467.02
-    assert target_price("лой попер. H4 4150.20", "short") == 4150.2
+    assert target_price("лой поп. H4 4150.20", "short") == 4150.2
+    assert target_price("лой попер. H4 4150.20", "short") == 4150.2  # рядки журналу до 20.10 (старе скорочення)
 
 
 def test_zone_range_parse_takes_prices_not_grade_score():

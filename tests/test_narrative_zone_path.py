@@ -65,7 +65,7 @@ def test_old_zone_targets_unswept_level_formed_on_the_retrace_not_the_far_old_ex
 
     block = _narrate(5150.0, [retrace_low], path=_path(pre_extreme=4980.0), config=_config())
 
-    assert block.scenarios[0].target_desc == "лой попер. H4 5100.00"
+    assert block.scenarios[0].target_desc == "лой поп. H4 5100.00"
 
 
 def test_impulse_extreme_is_the_target_when_no_unswept_liquidity_object_beyond():
@@ -87,7 +87,7 @@ def test_after_entry_target_is_nearest_unswept_liquidity_even_one_the_move_made(
 
     block = _narrate(5115.0, [made_after, _level("pdl", 5062.0)], path=path, config=_config())
 
-    assert block.scenarios[0].target_desc == "лой попер. H1 5110.00"
+    assert block.scenarios[0].target_desc == "лой поп. H1 5110.00"
 
 
 def test_taken_target_gives_way_to_the_next_unswept():
@@ -99,7 +99,7 @@ def test_taken_target_gives_way_to_the_next_unswept():
     before = _narrate(5120.0, [first, _level("pdl", 5062.0)], path=path, config=_config())
     after = _narrate(5120.0, [first, _level("pdl", 5062.0)], path=path, config=_config(), reached=taken)
 
-    assert before.scenarios[0].target_desc == "лой попер. H4 5100.00"
+    assert before.scenarios[0].target_desc == "лой поп. H4 5100.00"
     assert after.scenarios and after.scenarios[0].target_desc == "PDL 5062.00"
 
 

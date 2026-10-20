@@ -664,12 +664,12 @@ _TARGET_KINDS_ABOVE = frozenset(
 # Підписи цілей — без цифри перед ціною там, де її можна сплутати з ціною («P H4 L 2892» журнал читав як 4.0)
 _TARGET_LEVEL_LABELS = {
     "pdh": msg("PDH"), "pdl": msg("PDL"), "dh": msg("хай дня"), "dl": msg("лой дня"),
-    "p_h4_h": msg("хай попер. H4"), "p_h4_l": msg("лой попер. H4"), "h4_h": msg("хай H4"), "h4_l": msg("лой H4"),
-    "p_h1_h": msg("хай попер. H1"), "p_h1_l": msg("лой попер. H1"), "h1_h": msg("хай H1"), "h1_l": msg("лой H1"),
+    "p_h4_h": msg("хай поп. H4"), "p_h4_l": msg("лой поп. H4"), "h4_h": msg("хай H4"), "h4_l": msg("лой H4"),
+    "p_h1_h": msg("хай поп. H1"), "p_h1_l": msg("лой поп. H1"), "h1_h": msg("хай H1"), "h1_l": msg("лой H1"),
     "eq_highs": msg("EQH"), "eq_lows": msg("EQL"),
-    "as_h": msg("хай Азії"), "as_l": msg("лой Азії"), "p_as_h": msg("хай попер. Азії"), "p_as_l": msg("лой попер. Азії"),
-    "lon_h": msg("хай Лондона"), "lon_l": msg("лой Лондона"), "p_lon_h": msg("хай попер. Лондона"), "p_lon_l": msg("лой попер. Лондона"),
-    "ny_h": msg("хай NY"), "ny_l": msg("лой NY"), "p_ny_h": msg("хай попер. NY"), "p_ny_l": msg("лой попер. NY"),
+    "as_h": msg("хай Азії"), "as_l": msg("лой Азії"), "p_as_h": msg("хай поп. Азії"), "p_as_l": msg("лой поп. Азії"),
+    "lon_h": msg("хай Лондона"), "lon_l": msg("лой Лондона"), "p_lon_h": msg("хай поп. Лондона"), "p_lon_l": msg("лой поп. Лондона"),
+    "ny_h": msg("хай NY"), "ny_l": msg("лой NY"), "p_ny_h": msg("хай поп. NY"), "p_ny_l": msg("лой поп. NY"),
     "pwh": msg("PWH"), "pwl": msg("PWL"), "pmh": msg("PMH"), "pml": msg("PML"),
 }  # type: Dict[str, str]
 
