@@ -4,13 +4,14 @@ numpy>=1.26
 pandas>=2.1
 # python-dotenv — нижня межа закриває PYSEC-2026-2270; <1.0 лишається лише в requirements-broker.txt (Python 3.7).
 python-dotenv>=1.2.2,<2.0
-# aiohttp — точний пін, бо це сервер ws_server, smc-alerts і agent_bridge. 3.14.3 закриває PYSEC-2026-3545/3546/3547;
-# 3.14.4+ станом на 18.10.2026 вийшли менш як 2 тижні тому. Нова версія — лише після pytest + exit gates
+# aiohttp — точний пін, бо це сервер ws_server, smc-alerts і agent_bridge. 3.14.4 (з 05.10.2026) закриває
+# GHSA-2g87-pp6c-29x5, CVE-2026-111064, CVE-2026-111063 (опубліковано 19.10.2026) і вимагає yarl>=1.25.1; 3.14.5+
+# станом на 20.10.2026 вийшли менш як 2 тижні тому. Нова версія — лише після pytest + exit gates
 # (docs/compliance/risk_register.md §1.1).
-aiohttp==3.14.3
+aiohttp==3.14.4
 python-binance>=1.0.36
 # Транзитивні залежності: нижні межі закривають бюлетені, яких не закривають вимоги батьківських пакетів,
-# верхні — як у батьків (aiohttp 3.14.3: multidict<7.0; requests: urllib3<3, idna<4; starlette: anyio<5).
+# верхні — як у батьків (aiohttp 3.14.4: multidict<7.0; requests: urllib3<3, idna<4; starlette: anyio<5).
 # Розбір — docs/compliance/risk_register.md §1.1.
 # requests — від python-binance; PYSEC-2026-2275.
 requests>=2.33.0,<3.0

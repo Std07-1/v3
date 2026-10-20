@@ -277,16 +277,20 @@ class _TfState:
         self._lookback = lookback
         self._active_zones: Dict[str, SmcZone] = {}
 
-    def append(self, bar: CandleBar) -> None:
-        """Додає бар, зберігаючи вікно lookback_bars.
+    def append(self, bar: CandleBar) -> bool:
+        """Додає бар, зберігаючи вікно lookback_bars; повертає, чи стан змінився.
 
-        Dedup: якщо останній бар має той самий open_time_ms — замінює
-        (final bar update від паралельних feed-шляхів).
+        Dedup: якщо останній бар має той самий open_time_ms — замінює (final bar update від паралельних feed-шляхів),
+        але фінал брокера `tick_promoted` не заміщує (I3, `_replaces_same_open`): тиковий бар приходить і після фіналу —
+        на першому тіку після перерви ринку агрегатор закриває бакет, фінал якого брокер дав годину тому.
         """
         if self._bars and self._bars[-1].open_time_ms == bar.open_time_ms:
+            if not _replaces_same_open(self._bars[-1], bar):
+                return False
             self._bars[-1] = bar
         else:
             self._bars.append(bar)
+        return True
 
     def bars_list(self) -> List[CandleBar]:
         return list(self._bars)
@@ -329,6 +333,10 @@ class SmcEngine:
         # ADR-0035: session support
         self._session_windows = []  # type: list
         self._session_m1_bars: Dict[str, Deque[CandleBar]] = {}
+        # Версія стрічки M1 символу росте на кожній зміні її вмісту; з ключем моменту сесій — повний ключ кешу
+        # сесійних рівнів (_session_levels_and_states): символ → (ключ, (levels, states))
+        self._session_m1_versions: Dict[str, int] = {}
+        self._session_levels_cache: Dict[str, Tuple[tuple, Tuple[List[SmcLevel], list]]] = {}
         self._init_sessions()
 
     # ── Public API ──────────────────────────────────────────────────
@@ -373,7 +381,9 @@ class SmcEngine:
             return _empty_delta(bar)
 
         prev_snap = state.last_snapshot
-        state.append(bar)
+        if not state.append(bar):
+            _log.debug("SMC_KEEP_FINAL sym=%s tf=%d open_ms=%d src=%s", bar.symbol, bar.tf_s, bar.open_time_ms, bar.src)
+            return _empty_delta(bar)
         bars = state.bars_list()
 
         new_snap = self._compute_snapshot(bar.symbol, bar.tf_s, bars, state)
@@ -446,6 +456,15 @@ class SmcEngine:
         state = self._states.get((symbol, tf_s))
         return state.bars_list() if state is not None else []
 
+    def holds_bar(self, bar: CandleBar) -> bool:
+        """Чи подача `bar` нічого не змінить: останній бар стану (symbol, tf) — той самий бар (повтор іншим шляхом
+        подачі) або фінал того самого open_ms, якого `bar` не заміщує (`tick_promoted` після фіналу, I3)."""
+        state = self._states.get((bar.symbol, bar.tf_s))
+        if state is None or not state._bars:
+            return False
+        last = state._bars[-1]
+        return last.open_time_ms == bar.open_time_ms and (last == bar or not _replaces_same_open(last, bar))
+
     def get_momentum_score(self, symbol: str, tf_s: int) -> Tuple[int, int]:
         """Momentum score (bull_count, bear_count) for given (symbol, tf)."""
         state = self._states.get((symbol, tf_s))
@@ -494,33 +513,57 @@ class SmcEngine:
         """
         if bar.tf_s != 60 or not bar.complete:
             return
-        _store_session_m1(self._session_m1_bars.setdefault(bar.symbol, deque(maxlen=_SESSION_M1_CAPACITY)), bar)
+        tape = self._session_m1_bars.setdefault(bar.symbol, deque(maxlen=_SESSION_M1_CAPACITY))
+        if _store_session_m1(tape, bar):
+            self._mark_session_m1_changed(bar.symbol)
 
     def feed_m1_bars_bulk(self, symbol: str, bars: List[CandleBar]) -> None:
         """Bulk feed M1 bars (warmup) — за тим самим правилом, що й feed_m1_bar. S0: pure."""
         tape = self._session_m1_bars.setdefault(symbol, deque(maxlen=_SESSION_M1_CAPACITY))
+        changed = False
         for b in bars:
             if b.tf_s == 60 and b.complete:
-                _store_session_m1(tape, b)
+                changed = _store_session_m1(tape, b) or changed
+        if changed:
+            self._mark_session_m1_changed(symbol)
+
+    def _mark_session_m1_changed(self, symbol: str) -> None:
+        """Нова версія стрічки M1: кеш сесійних рівнів символу більше не влучає."""
+        self._session_m1_versions[symbol] = self._session_m1_versions.get(symbol, 0) + 1
 
     def get_session_levels(self, symbol: str, current_time_ms: int) -> List[SmcLevel]:
         """Обчислити session H/L levels. S0: pure, S2: deterministic."""
+        levels, _states = self._session_levels_and_states(symbol, current_time_ms)
+        return list(levels)
+
+    def _session_levels_and_states(self, symbol: str, current_time_ms: int) -> Tuple[List[SmcLevel], list]:
+        """`compute_session_levels` зі стрічки M1 з кешем на символ; ключ — версія стрічки й `session_moment_key`.
+
+        Ключ — усі входи функції (стрічка, момент як його бачать сесії; вікна сесій сталі з config), тож застарілого
+        виходу немає за побудовою. Один момент питають багато разів: наратив і розбір кожного TF, рівні кожного кадру
+        глядача; без нового M1 і переходу доби, сесії чи killzone рахувати знову нема чого.
+        """
         if not self._session_windows or not self._config.sessions.enabled:
-            return []
+            return [], []
         m1_bars = self._session_m1_bars.get(symbol)
         if not m1_bars:
-            return []
-        from core.smc.sessions import compute_session_levels
+            return [], []
+        from core.smc.sessions import compute_session_levels, session_moment_key
 
+        key = (self._session_m1_versions.get(symbol, 0), session_moment_key(current_time_ms, self._session_windows))
+        cached = self._session_levels_cache.get(symbol)
+        if cached is not None and cached[0] == key:
+            return cached[1]
         sorted_bars = sorted(list(m1_bars), key=lambda b: b.open_time_ms)
-        levels, _states = compute_session_levels(
+        levels_and_states = compute_session_levels(
             sorted_bars,
             self._session_windows,
             current_time_ms,
             symbol,
             tf_s=86400,
         )
-        return levels
+        self._session_levels_cache[symbol] = (key, levels_and_states)
+        return levels_and_states
 
     _EQ_KINDS = frozenset({"eq_highs", "eq_lows"})
     _HTF_KEY_LEVEL_TFS = (86400, 14400, 3600)  # D1 → H4 → H1 (key levels рахуються лише тут)
@@ -586,22 +629,8 @@ class SmcEngine:
 
     def get_session_states(self, symbol: str, current_time_ms: int):
         """Get session states for narrative. Returns list of SessionState."""
-        if not self._session_windows or not self._config.sessions.enabled:
-            return []
-        m1_bars = self._session_m1_bars.get(symbol)
-        if not m1_bars:
-            return []
-        from core.smc.sessions import compute_session_levels
-
-        sorted_bars = sorted(list(m1_bars), key=lambda b: b.open_time_ms)
-        _levels, states = compute_session_levels(
-            sorted_bars,
-            self._session_windows,
-            current_time_ms,
-            symbol,
-            tf_s=86400,
-        )
-        return states
+        _levels, states = self._session_levels_and_states(symbol, current_time_ms)
+        return list(states)
 
     def get_snapshot_with_htf_levels(
         self,
@@ -1242,13 +1271,20 @@ def _filter_for_display(
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
-def _store_session_m1(tape: Deque[CandleBar], bar: CandleBar) -> None:
+def _replaces_same_open(held: CandleBar, incoming: CandleBar) -> bool:
+    """I3 для двох барів того самого open_ms: фінал (FINAL_SOURCES) заміщує будь-що, не-фінал — лише не-фінал."""
+    return incoming.src in FINAL_SOURCES or held.src not in FINAL_SOURCES
+
+
+def _store_session_m1(tape: Deque[CandleBar], bar: CandleBar) -> bool:
     """Кладе бар у стрічку M1: одна хвилина — один бар, стрічка за зростанням open_time (I3 Final > Preview).
 
     Кожна хвилина приходить кілька разів: спершу миттєвий `tick_promoted` з тіків, за ним фінал брокера з іншим OHLC,
     і кожен ще кількома шляхами подачі (delta loop, фоновий feed, підписка глядача на M1). Фінал заміщує
     `tick_promoted`, `tick_promoted` фінал — ніколи; повтор того самого класу заміщує попередній. Бар, старший за всю
     повну стрічку, у вікно вже не входить — відкидається.
+
+    Повертає, чи змінився вміст стрічки: рівний повтор тієї самої хвилини — ні (версія для кешу сесійних рівнів).
     """
     open_ms = bar.open_time_ms
     at = len(tape)  # перша позиція з open_time >= open_ms; повтори й запізнілі фінали — біля хвоста, прохід короткий
@@ -1258,17 +1294,19 @@ def _store_session_m1(tape: Deque[CandleBar], bar: CandleBar) -> None:
         at -= 1
     if at == len(tape):
         tape.append(bar)
-        return
+        return True
     if tape[at].open_time_ms == open_ms:
-        if bar.src in FINAL_SOURCES or tape[at].src not in FINAL_SOURCES:
+        if _replaces_same_open(tape[at], bar) and tape[at] != bar:
             tape[at] = bar
-        return
+            return True
+        return False
     if len(tape) == tape.maxlen:
         if at == 0:
-            return
+            return False
         tape.popleft()
         at -= 1
     tape.insert(at, bar)
+    return True
 
 
 def _empty_snapshot(symbol: str, tf_s: int) -> SmcSnapshot:

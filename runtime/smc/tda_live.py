@@ -24,7 +24,7 @@ import time as _time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from core.model.bars import CandleBar
+from core.model.bars import FINAL_SOURCES, CandleBar
 from core.smc.tda.types import TdaCascadeConfig, TdaSignal
 from core.smc.tda.orchestrator import run_tda_cascade
 from core.smc.tda.stage5_trade_mgmt import update_trade
@@ -75,6 +75,9 @@ class TdaLiveRunner:
         # Track which day's cascade already ran per symbol
         self._last_cascade_day_ms: Dict[str, int] = {}
 
+        # open_ms останнього обробленого фінального бару M15 на символ: Config F рахує кожен бар один раз
+        self._last_bar_open_ms: Dict[str, int] = {}
+
         # Persistence path
         self._state_path = os.path.join("data_v3", "_signals", "tda_state.json")
 
@@ -114,6 +117,16 @@ class TdaLiveRunner:
             return
         if not bar.complete:
             return
+        # ADR-0040 §3.2 rev 20.10.2026: каскад і Config F бачать кожен бар M15 один раз і лише фінал брокера.
+        # Кільце preview дає на бар дві complete-події (tick_promoted, потім фінал), і обидва шляхи подачі
+        # (delta loop глядача, фоновий feed) — кожну; bars_elapsed рахувався ×2–×4, TP/SL — і по OHLC тіків.
+        if bar.src not in FINAL_SOURCES:
+            _log.debug("TDA_BAR_SKIP sym=%s open_ms=%d reason=not_final src=%s", symbol, bar.open_time_ms, bar.src)
+            return
+        if bar.open_time_ms <= self._last_bar_open_ms.get(symbol, -1):
+            _log.debug("TDA_BAR_SKIP sym=%s open_ms=%d reason=already_counted", symbol, bar.open_time_ms)
+            return
+        self._last_bar_open_ms[symbol] = bar.open_time_ms
 
         now = _now_ms()
         day_ms = _day_ms_from_epoch(bar.open_time_ms)

@@ -412,6 +412,44 @@ class TestTradeManagement:
         assert same_sig.trade.bars_elapsed == closed_sig.trade.bars_elapsed
 
 
+class TestOneCountPerFinalBar:
+    """ADR-0040 §3.2 rev 20.10.2026: бар M15 рахується один раз і лише фіналом брокера.
+
+    Кільце preview дає на бар tick_promoted і фінал, і обидва шляхи подачі (delta loop, фоновий feed) — кожну подію:
+    до правки bars_elapsed ріс ×2–×4 (прод: TIMEOUT tda_NAS100_2026-10-14 на 96 за 80 барів), SL/TP — по OHLC тіків.
+    """
+
+    @staticmethod
+    def _promoted(bar: CandleBar) -> CandleBar:
+        return dataclasses.replace(bar, src="tick_promoted", v=0.0)
+
+    @patch("runtime.smc.tda_live.run_tda_cascade")
+    def test_promoted_and_final_of_a_bar_count_once_with_the_final_ohlc(self, mock_cascade, tmp_path):
+        mock_cascade.return_value = _make_signal(direction="LONG", entry_price=2000.0, stop_loss=1990.0,
+                                                 take_profit=2030.0)
+        runner = _make_runner(tmp_path=tmp_path)
+        trigger = _m15_bar(hour=13)
+        runner.on_bar(SYM, M15_S, self._promoted(trigger), None)
+        assert mock_cascade.call_count == 0  # тригер каскаду — лише фінал
+        runner.on_bar(SYM, M15_S, trigger, None)
+        assert mock_cascade.call_count == 1 and runner.get_signal(SYM).trade.bars_elapsed == 1
+        final = _m15_bar(hour=13, minute=15, o=2001.0, h=2004.0, low=1996.0, c=2003.0)
+        tick_spike = dataclasses.replace(self._promoted(final), low=1985.0)  # SL за тіками, у фіналі — ні
+        for bar in (tick_spike, final, final):  # promoted, фінал delta loop, той самий фінал фонового feed
+            runner.on_bar(SYM, M15_S, bar, None)
+        trade = runner.get_signal(SYM).trade
+        assert (trade.status, trade.bars_elapsed) == ("open", 2)
+
+    @patch("runtime.smc.tda_live.run_tda_cascade")
+    def test_bar_older_than_the_last_counted_is_skipped(self, mock_cascade, tmp_path):
+        mock_cascade.return_value = _make_signal(stop_loss=1990.0, take_profit=2030.0)
+        runner = _make_runner(tmp_path=tmp_path)
+        runner.on_bar(SYM, M15_S, _m15_bar(hour=13), None)
+        runner.on_bar(SYM, M15_S, _m15_bar(hour=13, minute=15), None)
+        runner.on_bar(SYM, M15_S, _m15_bar(hour=13, minute=0), None)  # запізніла подача старішого бару
+        assert runner.get_signal(SYM).trade.bars_elapsed == 2
+
+
 # ──────────────────────────────────────────────────────────────
 #  Tests: Persistence (save/load)
 # ──────────────────────────────────────────────────────────────

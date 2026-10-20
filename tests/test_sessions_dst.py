@@ -12,8 +12,9 @@ import pathlib
 import pytest
 
 from core.model.bars import CandleBar
-from core.smc.sessions import _bar_in_killzone, _bar_in_session, compute_session_levels, get_current_session, \
-    load_session_windows
+from core.session_anchor import SEASON_RULE_EU, SEASON_RULE_US, SEASON_WINTER, _summer_bounds_ms, calendar_season
+from core.smc.sessions import _WINTER_SHIFT_MS, _bar_in_killzone, _bar_in_session, _session_clock_ms, \
+    _session_open_ms, compute_session_levels, get_current_session, load_session_windows
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
@@ -86,3 +87,35 @@ def test_winter_new_york_high_includes_its_last_hour_and_excludes_the_hour_befor
 def test_unknown_season_rule_is_refused_loudly():
     with pytest.raises(ValueError, match="SESSION_SEASON_RULE_INVALID session=london"):
         load_session_windows({"london": {"open_utc": "07:00", "close_utc": "16:00", "season_rule": "uk"}})
+
+
+_HOUR_MS = 3_600_000
+
+
+@pytest.mark.parametrize("rule", [SEASON_RULE_US, SEASON_RULE_EU])
+def test_dst_switch_moments_sit_on_utc_hour_edges(rule):
+    """Опора сезону сесій «раз на годину» (sessions._is_winter_hour): перехід усередині години зламав би її."""
+    for year in range(1970, 2101):
+        assert all(edge_ms % _HOUR_MS == 0 for edge_ms in _summer_bounds_ms(year, rule)), year
+
+
+def _winter(moment_ms, sw):
+    return calendar_season(moment_ms, sw.season_rule) == SEASON_WINTER
+
+
+@pytest.mark.parametrize("session", ["asia", "london", "newyork"])
+def test_session_season_by_hour_equals_per_moment_season_around_every_switch(session):
+    """Годинник і відкриття сесії із сезоном на годину == сезон самого моменту (calendar_season), 2000–2040."""
+    sw = _repo_windows()[session]
+    probe_rule = sw.season_rule if sw.season_rule != "none" else SEASON_RULE_US  # Азія без переходу: проби — межі США
+    offsets_ms = (-_HOUR_MS, -60_000, -1, 0, 1, 60_000, _HOUR_MS - 1, _HOUR_MS)
+    for year in range(2000, 2041):
+        for edge_ms in _summer_bounds_ms(year, probe_rule):
+            for moment_ms in (edge_ms + d for d in offsets_ms):
+                expected_clock_ms = moment_ms - (_WINTER_SHIFT_MS if _winter(moment_ms, sw) else 0)
+                assert _session_clock_ms(moment_ms, sw) == expected_clock_ms, moment_ms
+            midnight_ms = edge_ms - edge_ms % 86_400_000
+            for day_ms in (midnight_ms - 86_400_000, midnight_ms, midnight_ms + 86_400_000):
+                clock_open_ms = day_ms + sw.open_utc_min * 60_000
+                expected_open_ms = clock_open_ms + (_WINTER_SHIFT_MS if _winter(clock_open_ms, sw) else 0)
+                assert _session_open_ms(day_ms, sw) == expected_open_ms, day_ms
