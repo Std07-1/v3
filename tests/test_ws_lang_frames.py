@@ -124,13 +124,13 @@ class _TextRunner:
         self.text_calls.append(("briefing", tr.lang, None))
         setup = self._inputs[M15]
         narratives = {tf_s: inputs.synthesize() for tf_s, inputs in self._inputs.items()}
-        tail = (liquidity_section(M15, setup.snapshot.levels, {}, setup.current_price, setup.atr, setup.price_digits, 2),
-                session_section(AS_OF_MS, "london", True, ("newyork", AS_OF_MS + 3 * 3_600_000)))
+        tail = (liquidity_section(M15, setup.snapshot.levels, {}, setup.current_price, setup.atr, setup.price_digits, 2, tr),
+                session_section(AS_OF_MS, "london", True, ("newyork", AS_OF_MS + 3 * 3_600_000), tr))
         smc_cfg = self._config.get("smc", {})
         return compose_briefing(symbol, AS_OF_MS, self.get_bias_map(symbol), narratives,
                                 [int(tf_s) for tf_s in smc_cfg.get("shell", {}).get("strip_tfs", ())], [H4], [M15],
                                 setup.price_digits, tail, atr_by_tf={M15: setup.atr},
-                                rr_min_risk_atr=float(smc_cfg.get("briefing", {}).get("rr_min_risk_atr", 0.0)))
+                                rr_min_risk_atr=float(smc_cfg.get("briefing", {}).get("rr_min_risk_atr", 0.0)), tr=tr)
 
     def on_bar_dict(self, symbol, tf_s, bar):
         pass
@@ -249,10 +249,13 @@ async def test_delta_without_lang_is_byte_identical_to_main():
 # ── Мова з'єднання (Ф2.2) ─────────────────────────────
 
 
-def _comparable(payload: str) -> str:
-    """Кадр без `meta.lang` — те, що мусить збігатися з кадром без мови, поки модулі тексту не перекладено."""
+def _comparable(payload: str, texts: bool = True) -> str:
+    """Кадр без `meta.lang`; `texts=False` — ще й без текстових полів: дані кадру мовою не змінюються."""
     frame = json.loads(_normalized(payload))
     frame["meta"].pop("lang", None)
+    if not texts:
+        for field in lang_frames.TEXT_FIELDS:
+            frame.pop(field, None)
     return json.dumps(frame, ensure_ascii=False, sort_keys=True)
 
 
@@ -289,8 +292,10 @@ async def test_full_frame_lang_en_recomposes_texts_once_and_keeps_data():
     # Прохід джерела (журнал, сигнали) — один, з record; мовна копія — перекладачем en і без запису в журнал
     assert runner.text_calls.count(("narrative", "uk", True)) == 1
     assert {("narrative", "en", False), ("shell", "en", None), ("briefing", "en", None)} <= set(runner.text_calls)
-    # Ф2.2 — проводка: модулі тексту ще не перекладено, тож копія en дає ті самі тексти й ті самі дані
-    assert _comparable(en.ws.frames[0]) == _comparable(plain.ws.frames[0])
+    # Дані ті самі, тексти — англійською (розбір переведено в Ф2.3)
+    assert _comparable(en.ws.frames[0], texts=False) == _comparable(plain.ws.frames[0], texts=False)
+    assert [s["title"] for s in en_frame["briefing"]["sections"]][:2] == ["Bias", "Higher-TF context"]
+    assert [s["title"] for s in plain_frame["briefing"]["sections"]][:2] == ["Напрям", "Контекст старшого TF"]
 
 
 async def test_unsupported_lang_warns_in_first_full_frame_only_and_serves_source():
@@ -334,7 +339,9 @@ async def test_delta_gives_each_language_group_its_frame_and_no_lang_stays_golde
     plain_delta, uk_delta, en_delta = await _delta_after_closed_bar(app, plain, uk, en)
     _assert_golden("delta_m15_no_lang", plain_delta)
     assert json.loads(uk_delta)["meta"]["lang"] == "uk" and json.loads(en_delta)["meta"]["lang"] == "en"
-    assert _comparable(uk_delta) == _comparable(plain_delta) == _comparable(en_delta)
+    assert _comparable(uk_delta) == _comparable(plain_delta)
+    assert _comparable(en_delta, texts=False) == _comparable(plain_delta, texts=False)
+    assert json.loads(en_delta)["briefing"]["sections"][0]["title"] == "Bias"
     # SMC, сигнали й журнал — один прохід джерела на ціль; мовою en — лише текст
     assert runner.text_calls.count(("narrative", "uk", True)) == 1
     assert ("narrative", "en", False) in runner.text_calls

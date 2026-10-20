@@ -1118,7 +1118,7 @@ class SmcRunner:
         Момент — кінець останнього бару найдрібнішого compute TF, ціна — його close: той самий стан рушія дає той самий
         розбір, хоч би хто й коли його попросив (R10). None — `smc.briefing.enabled=false`, до прогріву, наратив
         вимкнений, барів ще немає чи розбір не склався (BRIEFING_ERR у лозі).
-        `tr` — мова тексту (ADR-0116 Ф2.2), кеш окремий на мову; compose_briefing отримає його в Ф2.3.
+        `tr` — мова тексту (ADR-0116): кеш окремий на мову, чернетка (входи) — спільна.
         """
         if not self._full_config.get("smc", {}).get("briefing", {}).get("enabled", False) or not self._warmup_done:
             return None
@@ -1160,7 +1160,7 @@ class SmcRunner:
             if gate is None:
                 return None
             if not gate[1]:
-                return lambda tr: closed_briefing(symbol, as_of_ms)
+                return lambda tr: closed_briefing(symbol, as_of_ms, tr)
             smc_cfg = self._full_config.get("smc", {})
             briefing_cfg = smc_cfg.get("briefing", {})
             htf_cfg = smc_cfg.get("narrative", {}).get("htf_context", {})
@@ -1187,7 +1187,7 @@ class SmcRunner:
                 tail = [section(tr) for section in (liquidity, session) if section is not None]
                 return compose_briefing(symbol, as_of_ms, bias_map, narratives, strip_tfs, context_tfs, setup_tfs,
                                         self._price_digits.get(symbol), tail, atr_by_tf=atr_by_tf,
-                                        rr_min_risk_atr=rr_min_risk_atr)
+                                        rr_min_risk_atr=rr_min_risk_atr, tr=tr)
 
             return draft
         except Exception:
@@ -1203,7 +1203,7 @@ class SmcRunner:
         if reached is None:
             reached = self._liquidity_reached(symbol, inputs.snapshot)
         return lambda tr: liquidity_section(tf_s, inputs.snapshot.levels, reached, price, inputs.atr,
-                                            inputs.price_digits, per_side)
+                                            inputs.price_digits, per_side, tr)
 
     def _briefing_session(self, symbol: str, as_of_ms: int) -> Optional[Callable[[Translator], BriefingSection]]:
         """Сесія на момент розбору й наступне відкриття — календар сесій платформи і торговий календар символу."""
@@ -1213,7 +1213,7 @@ class SmcRunner:
         current, in_killzone = get_current_session(as_of_ms, windows)
         calendar = self._calendars.get(symbol)
         upcoming = next_session_open(as_of_ms, windows, calendar.is_trading_minute if calendar is not None else None)
-        return lambda tr: session_section(as_of_ms, current, in_killzone, upcoming)
+        return lambda tr: session_section(as_of_ms, current, in_killzone, upcoming, tr)
 
     def get_signals(
         self,

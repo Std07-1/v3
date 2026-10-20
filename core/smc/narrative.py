@@ -14,6 +14,7 @@ import logging
 
 from typing import Dict, List, Optional, Tuple
 
+from core.i18n import SOURCE_TRANSLATOR, Translator, msg
 from core.smc.sessions import OFF_SESSION
 from core.smc.zone_path import LONG, ZonePath, zone_direction
 from core.smc.types import (
@@ -663,14 +664,14 @@ _TARGET_KINDS_ABOVE = frozenset(
 )
 # Підписи цілей — без цифри перед ціною там, де її можна сплутати з ціною («P H4 L 2892» журнал читав як 4.0)
 _TARGET_LEVEL_LABELS = {
-    "pdh": "PDH", "pdl": "PDL", "dh": "хай дня", "dl": "лой дня",
-    "p_h4_h": "хай попер. H4", "p_h4_l": "лой попер. H4", "h4_h": "хай H4", "h4_l": "лой H4",
-    "p_h1_h": "хай попер. H1", "p_h1_l": "лой попер. H1", "h1_h": "хай H1", "h1_l": "лой H1",
-    "eq_highs": "EQH", "eq_lows": "EQL",
-    "as_h": "хай Азії", "as_l": "лой Азії", "p_as_h": "хай попер. Азії", "p_as_l": "лой попер. Азії",
-    "lon_h": "хай Лондона", "lon_l": "лой Лондона", "p_lon_h": "хай попер. Лондона", "p_lon_l": "лой попер. Лондона",
-    "ny_h": "хай NY", "ny_l": "лой NY", "p_ny_h": "хай попер. NY", "p_ny_l": "лой попер. NY",
-    "pwh": "PWH", "pwl": "PWL", "pmh": "PMH", "pml": "PML",
+    "pdh": msg("PDH"), "pdl": msg("PDL"), "dh": msg("хай дня"), "dl": msg("лой дня"),
+    "p_h4_h": msg("хай попер. H4"), "p_h4_l": msg("лой попер. H4"), "h4_h": msg("хай H4"), "h4_l": msg("лой H4"),
+    "p_h1_h": msg("хай попер. H1"), "p_h1_l": msg("лой попер. H1"), "h1_h": msg("хай H1"), "h1_l": msg("лой H1"),
+    "eq_highs": msg("EQH"), "eq_lows": msg("EQL"),
+    "as_h": msg("хай Азії"), "as_l": msg("лой Азії"), "p_as_h": msg("хай попер. Азії"), "p_as_l": msg("лой попер. Азії"),
+    "lon_h": msg("хай Лондона"), "lon_l": msg("лой Лондона"), "p_lon_h": msg("хай попер. Лондона"), "p_lon_l": msg("лой попер. Лондона"),
+    "ny_h": msg("хай NY"), "ny_l": msg("лой NY"), "p_ny_h": msg("хай попер. NY"), "p_ny_l": msg("лой попер. NY"),
+    "pwh": msg("PWH"), "pwl": msg("PWL"), "pmh": msg("PMH"), "pml": msg("PML"),
 }  # type: Dict[str, str]
 
 
@@ -1288,4 +1289,10 @@ fmt_price = _fmt_price
 LIQUIDITY_KINDS_ABOVE = _TARGET_KINDS_ABOVE  # хаї: ліквідність над ціною
 LIQUIDITY_KINDS_BELOW = _TARGET_KINDS_BELOW  # лої: ліквідність під ціною
 LIQUIDITY_LABELS = _TARGET_LEVEL_LABELS
+
+
+def level_label(kind, tr=SOURCE_TRANSLATOR):
+    # type: (str, Translator) -> str
+    """Підпис рівня ліквідності мовою `tr` (ADR-0116); невідомий вид — код великими, як і було."""
+    return tr(_TARGET_LEVEL_LABELS[kind]) if kind in _TARGET_LEVEL_LABELS else kind.upper()
 EQ_LEVEL_KINDS = _EQ_LEVEL_KINDS  # зняті EQ-кластери рушій уже відсіяв — детектор зняття їм не потрібен

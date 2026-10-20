@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from core.i18n import SOURCE_TRANSLATOR, Translator
+from runtime.i18n_catalog import load_catalog
 from test_briefing_runner import _runner
 from test_narrative_now_ms import WED_ASIA, XAU
 
@@ -54,3 +55,21 @@ def test_briefing_of_each_language_is_rendered_from_one_draft(tmp_path, monkeypa
     assert copy is not source and copy.to_wire() == source.to_wire()
     assert runner.get_briefing(XAU, tr=EN) is copy  # кеш мови — до нового бару
     assert runner.get_briefing(XAU, tr=SOURCE_TRANSLATOR) is source
+
+
+def test_briefing_in_english_and_russian_from_real_dictionaries(tmp_path):
+    """Ф2.3: розбір мовою з'єднання — заголовки й рядки сесії/ліквідності з словників i18n/, числа ті самі."""
+    catalog = load_catalog()
+    runner = _runner(tmp_path)
+    source, english, russian = (runner.get_briefing(XAU, tr=catalog.get(lang)) for lang in ("uk", "en", "ru"))
+    titles = {lang: [section.title for section in briefing.sections]
+              for lang, briefing in (("uk", source), ("en", english), ("ru", russian))}
+    assert titles == {
+        "uk": ["Напрям", "Контекст старшого TF", "Сетапи", "Ліквідність поруч", "Сесія"],
+        "en": ["Bias", "Higher-TF context", "Setups", "Nearby liquidity", "Session"],
+        "ru": ["Направление", "Контекст старшего TF", "Сетапы", "Ликвидность рядом", "Сессия"],
+    }
+    assert english.sections[4].rows[0].text == "Asia — outside killzone"
+    assert english.sections[4].rows[0].notes == ("Next: London at 07:00 UTC — in 2 h",)
+    assert [s.key for s in english.sections] == [s.key for s in source.sections]
+    assert english.as_of_ms == source.as_of_ms
