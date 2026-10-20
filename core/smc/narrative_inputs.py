@@ -12,6 +12,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Any, Dict, Optional, Tuple
 
+from core.i18n import SOURCE_TRANSLATOR, Translator
 from core.smc.narrative import synthesize_narrative
 from core.smc.types import NarrativeBlock, SmcLevel, SmcSnapshot, SmcSwing, SmcZone
 from core.smc.zone_path import ZonePath
@@ -37,8 +38,9 @@ class NarrativeInputs:
     def as_kwargs(self) -> Dict[str, Any]:
         return {field.name: getattr(self, field.name) for field in dataclasses.fields(self)}
 
-    def synthesize(self) -> NarrativeBlock:
-        return synthesize_narrative(**self.as_kwargs())
+    def synthesize(self, tr: Translator = SOURCE_TRANSLATOR) -> NarrativeBlock:
+        """Наратив з цього входу; `tr` — мова тексту (ADR-0116), не вхід: ті самі режим, сценарії й числа."""
+        return synthesize_narrative(**self.as_kwargs(), tr=tr)
 
     def to_dict(self) -> Dict[str, Any]:
         """JSON-сумісний вигляд для golden-випадку. Стан range_exhaustion не серіалізується — golden знімається з ним

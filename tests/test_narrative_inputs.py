@@ -16,7 +16,8 @@ from test_narrative_now_ms import WED_LONDON_KZ, WED_OFF_SESSION, SAT_CLOSED, XA
 
 
 def test_fields_are_exactly_synthesize_narrative_parameters():
-    params = list(inspect.signature(synthesize_narrative).parameters)
+    # Мова (`tr`, ADR-0116) — не вхід розбору: режим, сценарії й числа від неї не залежать
+    params = [name for name in inspect.signature(synthesize_narrative).parameters if name != "tr"]
 
     assert [field.name for field in dataclasses.fields(NarrativeInputs)] == params  # as_kwargs — єдине відображення
 

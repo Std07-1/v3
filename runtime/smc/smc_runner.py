@@ -73,12 +73,12 @@ _log = logging.getLogger(__name__)
 _WARMUP_SLOW_MS = 200.0
 
 
-def _market_closed_block() -> NarrativeBlock:
-    """NarrativeBlock for closed market — no signal, no journal."""
+def _market_closed_block(tr: Translator = SOURCE_TRANSLATOR) -> NarrativeBlock:
+    """NarrativeBlock for closed market — no signal, no journal; заголовок мовою `tr` (ADR-0116)."""
     return NarrativeBlock(
         mode="wait",
         sub_mode="market_closed",
-        headline="⏸ Ринок закрито",
+        headline=tr("⏸ Ринок закрито"),
         bias_summary="",
         scenarios=[],
         next_area="",
@@ -854,8 +854,8 @@ class SmcRunner:
         `now_ms` — момент розбору, один для календаря ринку, сесії й рівнів (R10); None — настінний годинник.
         Прогін по історії передає час закриття бару (ADR-0113 Ф1).
         `tr` — мова тексту (ADR-0116 Ф2.2). Мовна копія кадру кличе з record=False: журнал пише лише прохід джерела,
-        а входи бере з нього ж, якщо аргументи ті самі (Ф2.2b) — ті самі числа, без другого збору. Синтез наративу
-        отримає перекладач у Ф2.6 — доти текст мовою джерела.
+        а входи бере з нього ж, якщо аргументи ті самі (Ф2.2b) — ті самі числа, без другого збору; мовою `tr`
+        складаються лише фрази (Ф2.6).
         """
         requested_now_ms = now_ms
         gate = self._narrative_gate(symbol, now_ms)
@@ -863,12 +863,12 @@ class SmcRunner:
             return None
         now_ms, market_open = gate
         if not market_open:
-            return _market_closed_block()
+            return _market_closed_block(tr)
         try:
             inputs = self._narrative_inputs(symbol, viewer_tf_s, current_price, atr, now_ms, requested_now_ms, tr)
             if inputs is None:
-                return _fallback_narrative_block(["no_snapshot"])
-            result = synthesize_narrative(**inputs.as_kwargs())
+                return _fallback_narrative_block(["no_snapshot"], tr)
+            result = synthesize_narrative(**inputs.as_kwargs(), tr=tr)
             if record:
                 self._journal.record(
                     symbol, viewer_tf_s, result, current_price, inputs.atr, bias_map=inputs.bias_map
@@ -876,7 +876,7 @@ class SmcRunner:
             return result
         except Exception:
             _log.exception("NARRATIVE_ERROR symbol=%s tf=%d", symbol, viewer_tf_s)
-            return _fallback_narrative_block()
+            return _fallback_narrative_block(tr=tr)
 
     def _narrative_inputs(self, symbol, viewer_tf_s, current_price, atr, now_ms, requested_now_ms, tr):
         # type: (str, int, float, float, int, Optional[int], Translator) -> Optional[NarrativeInputs]
