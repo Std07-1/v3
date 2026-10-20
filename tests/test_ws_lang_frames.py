@@ -14,6 +14,7 @@ import asyncio
 import json
 import os
 import pathlib
+import re
 from typing import Any, Dict, Optional
 
 import pytest
@@ -44,6 +45,7 @@ AS_OF_MS = 1_790_000_100_000  # момент розбору заглушки —
 # Мінливе між запусками (час, boot_id) і `meta.config` — список символів і TF з config.json: до мови не стосується, а
 # golden інакше ламався б від кожного нового символу; однаковість config між мовами перевіряє окремий тест
 VOLATILE_META = ("server_ts_ms", "boot_id", "config")
+CYRILLIC = re.compile("[%s-%s]" % (chr(0x400), chr(0x4FF)))
 
 _BARS = [
     {"open": 4725.0 + i, "high": 4733.0 + i, "low": 4721.0 + i, "close": 4729.0 + i, "volume": 100.0 + i,
@@ -110,7 +112,7 @@ class _TextRunner:
     def get_narrative(self, symbol, tf_s, *args, record=True, tr=SOURCE_TRANSLATOR, **kwargs):
         self.text_calls.append(("narrative", tr.lang, record))
         inputs = self._inputs.get(tf_s)
-        return None if inputs is None else inputs.synthesize()
+        return None if inputs is None else inputs.synthesize(tr)
 
     def get_signals(self, symbol, tf_s, narrative, price, atr):
         return [], []
@@ -118,12 +120,13 @@ class _TextRunner:
     def get_shell_payload(self, symbol, tf_s, narrative, signal=None, tr=SOURCE_TRANSLATOR):
         self.text_calls.append(("shell", tr.lang, None))
         return compose_shell_payload(narrative, self.get_bias_map(symbol), tf_s,
-                                     self._config.get("smc", {}).get("shell", {}), sessions_active=True, signal=signal)
+                                     self._config.get("smc", {}).get("shell", {}), sessions_active=True, signal=signal,
+                                     tr=tr)
 
     def get_briefing(self, symbol, tr=SOURCE_TRANSLATOR):
         self.text_calls.append(("briefing", tr.lang, None))
         setup = self._inputs[M15]
-        narratives = {tf_s: inputs.synthesize() for tf_s, inputs in self._inputs.items()}
+        narratives = {tf_s: inputs.synthesize(tr) for tf_s, inputs in self._inputs.items()}
         tail = (liquidity_section(M15, setup.snapshot.levels, {}, setup.current_price, setup.atr, setup.price_digits, 2, tr),
                 session_section(AS_OF_MS, "london", True, ("newyork", AS_OF_MS + 3 * 3_600_000), tr))
         smc_cfg = self._config.get("smc", {})
@@ -296,6 +299,10 @@ async def test_full_frame_lang_en_recomposes_texts_once_and_keeps_data():
     assert _comparable(en.ws.frames[0], texts=False) == _comparable(plain.ws.frames[0], texts=False)
     assert [s["title"] for s in en_frame["briefing"]["sections"]][:2] == ["Bias", "Higher-TF context"]
     assert [s["title"] for s in plain_frame["briefing"]["sections"]][:2] == ["Напрям", "Контекст старшого TF"]
+    # Ф2.6: наратив, картка й розбір — англійською повністю, і розбір бере наратив мовою кадру, а не джерела
+    leftovers = [field for field in lang_frames.TEXT_FIELDS
+                 if field in en_frame and CYRILLIC.search(json.dumps(en_frame[field], ensure_ascii=False))]
+    assert leftovers == []
 
 
 async def test_unsupported_lang_warns_in_first_full_frame_only_and_serves_source():

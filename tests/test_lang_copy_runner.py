@@ -5,12 +5,15 @@
 """
 from __future__ import annotations
 
+import re
+
 from core.i18n import SOURCE_TRANSLATOR, Translator
 from runtime.i18n_catalog import load_catalog
 from test_briefing_runner import _runner
 from test_narrative_now_ms import SAT_CLOSED, WED_ASIA, XAU
 
 EN = Translator("en", {})
+CYRILLIC = re.compile("[%s-%s]" % (chr(0x400), chr(0x4FF)))
 H1 = 3600
 
 
@@ -69,6 +72,9 @@ def test_briefing_in_english_and_russian_from_real_dictionaries(tmp_path):
         "en": ["Bias", "Higher-TF context", "Setups", "Nearby liquidity", "Session"],
         "ru": ["Направление", "Контекст старшего TF", "Сетапы", "Ликвидность рядом", "Сессия"],
     }
+    # Ф2.6: розбір бере наратив мовою розбору — жодного рядка мовою джерела в англійському розборі
+    english_texts = [text for section in english.sections for row in section.rows for text in (row.text,) + row.notes]
+    assert [text for text in english_texts if CYRILLIC.search(text)] == []
     assert english.sections[4].rows[0].text == "Asia — outside killzone"
     assert english.sections[4].rows[0].notes == ("Next: London at 07:00 UTC — in 2 h",)
     assert [s.key for s in english.sections] == [s.key for s in source.sections]

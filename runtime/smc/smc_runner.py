@@ -1183,7 +1183,8 @@ class SmcRunner:
 
             def draft(tr):
                 # type: (Translator) -> Briefing
-                narratives = {tf_s: inputs[tf_s].synthesize() if inputs[tf_s] is not None else None
+                # Наратив — мовою розбору (ADR-0116 Ф2.6): синтез із тих самих входів дешевий, збір — один на бар
+                narratives = {tf_s: inputs[tf_s].synthesize(tr) if inputs[tf_s] is not None else None
                               for tf_s in set(context_tfs) | set(setup_tfs)}
                 tail = [section(tr) for section in (liquidity, session) if section is not None]
                 return compose_briefing(symbol, as_of_ms, bias_map, narratives, strip_tfs, context_tfs, setup_tfs,
