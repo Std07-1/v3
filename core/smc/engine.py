@@ -450,6 +450,11 @@ class SmcEngine:
         state = self._states.get((symbol, tf_s))
         return state.bars_list() if state is not None else []
 
+    def is_last_bar(self, bar: CandleBar) -> bool:
+        """Чи `bar` рівний останньому бару стану (symbol, tf): його повтор іншим шляхом подачі стан не змінить."""
+        state = self._states.get((bar.symbol, bar.tf_s))
+        return state is not None and bool(state._bars) and state._bars[-1] == bar
+
     def get_momentum_score(self, symbol: str, tf_s: int) -> Tuple[int, int]:
         """Momentum score (bull_count, bear_count) for given (symbol, tf)."""
         state = self._states.get((symbol, tf_s))

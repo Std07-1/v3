@@ -291,6 +291,35 @@ class TestSmcRunnerOnBarDict:
         delta = runner.on_bar_dict(SYM, TF, d)
         assert delta is not None
 
+    def _runner_counting_engine_bars(self, monkeypatch):
+        runner = self._runner_with_warmup()
+        fed = []
+        real_on_bar = runner._engine.on_bar
+        monkeypatch.setattr(runner._engine, "on_bar", lambda bar: fed.append(bar) or real_on_bar(bar))
+        return runner, fed
+
+    def test_repeat_of_last_bar_from_another_feed_path_is_skipped_and_keeps_pending_delta(self, monkeypatch):
+        """Delta loop глядача і фоновий feed подають той самий бар: другий раз — без перерахунку й без побічних дій,
+        а дельта першої подачі, яку кадр глядача ще не забрав, не затирається порожньою (ADR-0024 §18.10)."""
+        runner, fed = self._runner_counting_engine_bars(monkeypatch)
+        d = _bar_dict(i=104, c=1903.0, complete=True)
+        first = runner.on_bar_dict(SYM, TF, d)
+        assert runner.on_bar_dict(SYM, TF, dict(d)) is None
+        assert len(fed) == 1
+        assert runner.last_delta(SYM, TF) is first
+        assert [ev["open_time_ms"] for ev in runner.get_recent_bar_closes(SYM)] == [d["open_time_ms"]]
+
+    def test_changed_bar_of_the_same_open_is_not_a_repeat(self, monkeypatch):
+        """tick_promoted, за ним фінал тієї самої хвилини з іншим OHLC — дві різні подачі, обидві доходять до рушія."""
+        runner, fed = self._runner_counting_engine_bars(monkeypatch)
+        promoted = dict(_bar_dict(i=105, h=1904.0, c=1903.0, complete=True), src="tick_promoted")
+        final = _bar_dict(i=105, h=1905.0, c=1903.5, complete=True)
+        runner.on_bar_dict(SYM, TF, promoted)
+        runner.on_bar_dict(SYM, TF, final)
+        assert [(bar.src, bar.h) for bar in fed] == [("tick_promoted", 1904.0), ("derived", 1905.0)]
+        assert runner._engine.is_last_bar(_bar_dict_to_candle_bar(final, SYM, TF))
+        assert not runner._engine.is_last_bar(_bar_dict_to_candle_bar(promoted, SYM, TF))
+
 
 # ──────────────────────────────────────────────────────────────
 #  SmcRunner.get_snapshot
