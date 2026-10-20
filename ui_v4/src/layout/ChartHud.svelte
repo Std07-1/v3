@@ -12,6 +12,7 @@
     import { hintsOn } from "../stores/uiHints";
     import { serverConfig } from "../app/frameRouter";
     import { configuredPriceDigits, displayPriceDigits } from "../lib/priceDigits";
+    import { t } from "../lib/i18n/i18n.svelte";
 
     const {
         symbols,
@@ -294,7 +295,7 @@
                 aria-expanded={briefingOpen}
                 onclick={() => (briefingOpen = !briefingOpen)}
             >
-                <span>Розбір</span>
+                <span>{t("Розбір")}</span>
                 <span class="mc-brief-chev">{briefingOpen ? "▴" : "▾"}</span>
             </button>
         {/if}
@@ -332,7 +333,7 @@
                     </div>
                 {/each}
                 <div class="mb-asof">
-                    Станом на {briefingAsOf} UTC
+                    {t("Станом на {time} UTC", { time: briefingAsOf })}
                 </div>
             </div>
         {/if}
@@ -462,48 +463,46 @@
                                     {sc.entry_desc}
                                     <span class="ntt-expand"
                                         >{sc.direction === "long"
-                                            ? "BUY — вхід у лонг від зони попиту"
-                                            : "SELL — вхід у шорт від зони пропозиції"}</span
+                                            ? t("BUY — вхід у лонг від зони попиту")
+                                            : t("SELL — вхід у шорт від зони пропозиції")}</span
                                     >
                                 </span>
                                 <span class="ntt-trig ntt-trig-{sc.trigger}">
                                     {sc.trigger_desc}
                                     <span class="ntt-expand"
                                         >{sc.trigger === "approaching"
-                                            ? "Ціна наближається до зони — чекаємо реакцію"
+                                            ? t("Ціна наближається до зони — чекаємо реакцію")
                                             : sc.trigger === "in_zone"
-                                              ? "Ціна в зоні — потрібне підтвердження для входу"
+                                              ? t("Ціна в зоні — потрібне підтвердження для входу")
                                               : sc.trigger === "triggered"
-                                                ? "Сигнал входу підтверджено структурою"
-                                                : "Сетап готовий до виконання"}</span
+                                                ? t("Сигнал входу підтверджено структурою")
+                                                : t("Сетап готовий до виконання")}</span
                                     >
                                 </span>
                                 {#if sc.target_desc}<span class="ntt-target">
                                         → {sc.target_desc}
                                         <span class="ntt-expand"
-                                            >Найближча ціль — рівень take-profit</span
+                                            >{t("Найближча ціль — рівень take-profit")}</span
                                         >
                                     </span>{/if}
                                 <span class="ntt-inv">
                                     ✕ {sc.invalidation}
                                     <span class="ntt-expand"
-                                        >Якщо ціна досягне цього рівня — сетап
-                                        скасовано</span
+                                        >{t("Якщо ціна досягне цього рівня — сетап скасовано")}</span
                                     >
                                 </span>
                             </div>
                         {/each}
                         {#if narrative.scenarios.length === 0}
                             <div class="ntt-wait">
-                                {narrative.next_area || "Awaiting setup..."}
+                                {narrative.next_area || t("Чекаємо сетап…")}
                             </div>
                         {/if}
                         {#if narrative.fvg_context}
                             <div class="ntt-fvg">
                                 {narrative.fvg_context}
                                 <span class="ntt-expand"
-                                    >FVG (Fair Value Gap) — незаповнений гап у
-                                    ціні, зона магніту</span
+                                    >{t("FVG (Fair Value Gap) — незаповнений гап у ціні, зона магніту")}</span
                                 >
                             </div>
                         {/if}
@@ -539,7 +538,7 @@
                         class="shell-stage"
                         onclick={toggleMicroCard}
                         type="button"
-                        title={$hintsOn ? "Натисніть для деталей" : undefined}
+                        title={$hintsOn ? t("Натисніть для деталей") : undefined}
                     >
                         <span class="shell-stlbl">{shell.stage_label}</span>
                         {#if shell.stage_context}
@@ -565,10 +564,10 @@
                                 <div
                                     class="mc-field"
                                     title={$hintsOn
-                                        ? "Поточний торговий режим"
+                                        ? t("Поточний торговий режим")
                                         : undefined}
                                 >
-                                    <div class="mc-label">Режим</div>
+                                    <div class="mc-label">{t("Режим")}</div>
                                     <div class="mc-val acc">
                                         {shell.micro_card.mode_text}
                                     </div>
@@ -576,10 +575,10 @@
                                 <div
                                     class="mc-field"
                                     title={$hintsOn
-                                        ? "Причина поточного режиму"
+                                        ? t("Причина поточного режиму")
                                         : undefined}
                                 >
-                                    <div class="mc-label">Чому</div>
+                                    <div class="mc-label">{t("Чому")}</div>
                                     <div class="mc-val">
                                         {shell.micro_card.why_text}
                                     </div>
@@ -587,10 +586,10 @@
                                 <div
                                     class="mc-field"
                                     title={$hintsOn
-                                        ? "Яка умова потрібна для переходу"
+                                        ? t("Яка умова потрібна для переходу")
                                         : undefined}
                                 >
-                                    <div class="mc-label">Що потрібно</div>
+                                    <div class="mc-label">{t("Що потрібно")}</div>
                                     <div class="mc-val">
                                         {shell.micro_card.what_needed}
                                     </div>
@@ -599,10 +598,10 @@
                                     <div
                                         class="mc-field"
                                         title={$hintsOn
-                                            ? "Умова, яка скасує поточний сценарій"
+                                            ? t("Умова, яка скасує поточний сценарій")
                                             : undefined}
                                     >
-                                        <div class="mc-label">Що скасує</div>
+                                        <div class="mc-label">{t("Що скасує")}</div>
                                         <div class="mc-val red">
                                             {shell.micro_card.what_cancels}
                                         </div>
@@ -612,10 +611,10 @@
                                     <div
                                         class="mc-field"
                                         title={$hintsOn
-                                            ? "Куди тягне ліквідність — ціль сценарію"
+                                            ? t("Куди тягне ліквідність — ціль сценарію")
                                             : undefined}
                                     >
-                                        <div class="mc-label">Ціль</div>
+                                        <div class="mc-label">{t("Ціль")}</div>
                                         <div class="mc-val tp">
                                             {shell.micro_card.target}
                                         </div>
@@ -653,7 +652,7 @@
                                         <span
                                             class="mc-sig-conf"
                                             title={$hintsOn
-                                                ? "Confidence score"
+                                                ? t("Впевненість сигналу")
                                                 : undefined}
                                         >
                                             {sig.confidence ?? 0}%
@@ -663,11 +662,10 @@
                                         <div
                                             class="mc-field"
                                             title={$hintsOn
-                                                ? `Ціна входу (${sig.entry_method ??
-                                                      "unknown"})`
+                                                ? t("Ціна входу ({method})", { method: sig.entry_method ?? "unknown" })
                                                 : undefined}
                                         >
-                                            <div class="mc-label">Entry</div>
+                                            <div class="mc-label">{t("Вхід")}</div>
                                             <div class="mc-val entry">
                                                 {fmtPrice(sig.entry_price ?? null)}
                                             </div>
@@ -675,7 +673,7 @@
                                         <div
                                             class="mc-field"
                                             title={$hintsOn
-                                                ? "R:R відношення ризик/прибуток"
+                                                ? t("R:R відношення ризик/прибуток")
                                                 : undefined}
                                         >
                                             <div class="mc-label">R:R</div>
@@ -687,7 +685,7 @@
                                         <div
                                             class="mc-field"
                                             title={$hintsOn
-                                                ? "Стоп-лосс"
+                                                ? t("Стоп-лос")
                                                 : undefined}
                                         >
                                             <div class="mc-label">SL</div>
@@ -697,7 +695,7 @@
                                         </div>
                                         <div
                                             class="mc-field"
-                                            title={$hintsOn ? "Тейк-профіт" : undefined}
+                                            title={$hintsOn ? t("Тейк-профіт") : undefined}
                                         >
                                             <div class="mc-label">TP</div>
                                             <div class="mc-val tp">
@@ -731,7 +729,7 @@
                         type="button"
                         aria-expanded={microCardOpen}
                     >
-                        <span class="shell-stlbl">Розбір</span>
+                        <span class="shell-stlbl">{t("Розбір")}</span>
                     </button>
                     {#if microCardOpen}
                         <!-- svelte-ignore a11y_no_static_element_interactions -->

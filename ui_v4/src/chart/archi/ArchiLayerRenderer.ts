@@ -19,6 +19,7 @@ import type { IChartApi, ISeriesApi, Time, Logical } from 'lightweight-charts';
 import type { ArchiChartCondition, ArchiChartData } from '../../types';
 import { timeToFractionalIndex, medianStep, fractionalLogicalToX } from '../drawings/timeMap';
 import { withAlpha as tokenWithAlpha } from '../canvasColor';
+import { t } from '../../lib/i18n/i18n.svelte';
 
 /** LWC bar.time → сек (number | 'YYYY-MM-DD' | BusinessDay). */
 function timeToSec(t: Time): number {
@@ -294,10 +295,10 @@ export class ArchiLayerRenderer {
       const tAlpha = freshnessAlpha(d!.thesis_updated_at_ms ?? 0);
       const tAnchor = d!.thesis_updated_at_ms;
       if (d!.key_level_price != null) {
-        this.renderThesisLine(d!.key_level_price, this.infoColor, false, 'Ключовий рівень тези', paneW, tAlpha, tAnchor);
+        this.renderThesisLine(d!.key_level_price, this.infoColor, false, t('Ключовий рівень тези'), paneW, tAlpha, tAnchor);
       }
       if (d!.invalidation_price != null) {
-        this.renderThesisLine(d!.invalidation_price, this.bearColor, true, 'Рівень інвалідації тези', paneW, tAlpha, tAnchor);
+        this.renderThesisLine(d!.invalidation_price, this.bearColor, true, t('Рівень інвалідації тези'), paneW, tAlpha, tAnchor);
       }
     }
 
@@ -363,7 +364,7 @@ export class ArchiLayerRenderer {
 
     const tf = c.kind === 'candle_close' && c.tf_s ? ` ${TF_LABELS[c.tf_s] ?? ''}` : '';
     this.renderPill(`${fmtPrice(c.level!)}${tf}`, y, this.infoColor, alpha, paneW);
-    this.hoverTargets.push({ y, text: c.reason || `Будильник ${fmtPrice(c.level!)}` });
+    this.hoverTargets.push({ y, text: c.reason || t('Будильник {price}', { price: fmtPrice(c.level!) }) });
   }
 
   private renderZone(c: ArchiChartCondition, paneW: number, alpha: number): void {
@@ -388,7 +389,7 @@ export class ArchiLayerRenderer {
     ctx.setLineDash([]);
 
     this.renderPill(`${fmtPrice(c.zone_low!)}–${fmtPrice(c.zone_high!)}`, top, this.infoColor, alpha, paneW);
-    const zText = c.reason || `Зона ${fmtPrice(c.zone_low!)}–${fmtPrice(c.zone_high!)}`;
+    const zText = c.reason || t('Зона {low}–{high}', { low: fmtPrice(c.zone_low!), high: fmtPrice(c.zone_high!) });
     this.hoverTargets.push({ y: top, text: zText });
     this.hoverTargets.push({ y: top + h, text: zText });
   }
