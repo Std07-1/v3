@@ -17,7 +17,7 @@ import pytest
 from aiohttp.test_utils import make_mocked_request
 
 import runtime.ws.ws_server as ws_server
-from runtime.ws.app_keys import APP_SMC_RUNNER
+from runtime.ws.app_keys import APP_SMC_RUNNER, APP_TICK_REDIS_CLIENT
 from test_briefing_runner import _runner
 from test_narrative_now_ms import WED_ASIA
 
@@ -52,6 +52,10 @@ def _normalized(body: str) -> str:
 async def test_api_context_without_lang_is_byte_identical_to_main(tmp_path, monkeypatch):
     monkeypatch.setattr(time, "time", lambda: WED_ASIA / 1000.0)
     app = ws_server.build_app(config_path="config.json", uds=_Uds())
+    # Тик із Redis не належить до тексту відповіді, а залежить від машини: без Redis (CI) у відповідь іде попередження
+    # «tick_price: … Connection refused», з порожнім Redis — нічого. Golden записано без тику.
+    if APP_TICK_REDIS_CLIENT in app:
+        del app[APP_TICK_REDIS_CLIENT]
     app[APP_SMC_RUNNER] = _runner(tmp_path)
     handler = next(route.handler for route in app.router.routes()
                    if route.resource is not None and route.resource.canonical == "/api/context")
