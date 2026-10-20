@@ -78,6 +78,9 @@ class TdaLiveRunner:
         # open_ms останнього обробленого фінального бару M15 на символ: Config F рахує кожен бар один раз
         self._last_bar_open_ms: Dict[str, int] = {}
 
+        # Позначки «каскад дня вирішено» на символ (_mark_cascade_day): {symbol: {day_ms, reason, at_ms}}
+        self._cascade_marks: Dict[str, Dict[str, Any]] = {}
+
         # Persistence path
         self._state_path = os.path.join("data_v3", "_signals", "tda_state.json")
 
@@ -90,8 +93,9 @@ class TdaLiveRunner:
         )
 
     def warmup(self) -> None:
-        """Load persisted TDA signals from previous session."""
+        """Load persisted TDA signals and cascade-day marks from previous session."""
         self._load_state()
+        self._load_cascade_days()
         _log.info(
             "TDA_LIVE_WARMUP active_signals=%d",
             len(self._signals),
@@ -140,7 +144,7 @@ class TdaLiveRunner:
             # the first London-window bar (08:15 UTC) when 0 H1 bars were
             # complete → Stage 3 always returned NO_NARRATIVE → 0 signals/14d.
             if bar_hour >= self._cfg.london_end_hour_utc:
-                self._run_cascade(symbol, day_ms, uds_reader, now)
+                self._run_cascade(symbol, day_ms, bar.open_time_ms, uds_reader, now)
 
         # ── Trade management (Config F) ──
         sig = self._signals.get(symbol)
@@ -182,16 +186,17 @@ class TdaLiveRunner:
         self,
         symbol: str,
         day_ms: int,
+        bar_open_ms: int,
         uds_reader: Any,
         now_ms: int,
     ) -> None:
-        """Execute full TDA cascade for one symbol, one day."""
+        """Execute full TDA cascade for one symbol, one day — лише на тригері (першому фіналі M15 після london_end)."""
         date_str = _date_str_from_day_ms(day_ms)
 
         # Skip if closed signal already exists for today
         existing = self._signals.get(symbol)
         if existing is not None and existing.date_str == date_str:
-            self._last_cascade_day_ms[symbol] = day_ms
+            self._mark_cascade_day(symbol, day_ms, "already_signaled")
             return
 
         try:
@@ -201,7 +206,18 @@ class TdaLiveRunner:
             m15_bars = self._read_bars(uds_reader, symbol, 900, 96)
         except Exception as exc:
             _log.warning("TDA_CASCADE_READ_ERR sym=%s err=%s", symbol, exc)
-            self._last_cascade_day_ms[symbol] = day_ms
+            self._mark_cascade_day(symbol, day_ms, "error")
+            return
+
+        trigger_open_ms = _trigger_bar_open_ms(m15_bars, bar_open_ms, day_ms, self._cfg)
+        if trigger_open_ms != bar_open_ms:
+            # Процес не бачив тригера (лежав чи стартував пізніше): день пропущено — пізній прогін на більших даних
+            # дав би сигнал, якого в канонічний момент не було (ADR-0040 §3.2 rev 20.10)
+            _log.warning(
+                "TDA_CASCADE_MISSED_WINDOW sym=%s date=%s trigger_open_ms=%d bar_open_ms=%d — каскад дня пропущено",
+                symbol, date_str, trigger_open_ms, bar_open_ms,
+            )
+            self._mark_cascade_day(symbol, day_ms, "missed_window")
             return
 
         try:
@@ -220,10 +236,10 @@ class TdaLiveRunner:
             )
         except Exception as exc:
             _log.warning("TDA_CASCADE_RUN_ERR sym=%s err=%s", symbol, exc)
-            self._last_cascade_day_ms[symbol] = day_ms
+            self._mark_cascade_day(symbol, day_ms, "error")
             return
 
-        self._last_cascade_day_ms[symbol] = day_ms
+        self._mark_cascade_day(symbol, day_ms, "no_signal" if sig is None else "signal")
 
         if sig is None:
             _log.info(
@@ -295,13 +311,44 @@ class TdaLiveRunner:
             for sym, sig in self._signals.items():
                 data[sym] = sig.to_wire()
                 data[sym]["_day_ms"] = self._last_cascade_day_ms.get(sym, 0)
-            os.makedirs(os.path.dirname(self._state_path), exist_ok=True)
-            tmp = self._state_path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, self._state_path)
+            _write_json_atomic(self._state_path, data)
         except Exception as exc:
             _log.warning("TDA_STATE_SAVE_ERR err=%s", exc)
+
+    @property
+    def _cascade_days_path(self) -> str:
+        return os.path.join(os.path.dirname(self._state_path), "tda_cascade_days.json")
+
+    def _mark_cascade_day(self, symbol: str, day_ms: int, reason: str) -> None:
+        """Каскад дня символу вирішено — reason: signal | no_signal | already_signaled | error | missed_window.
+
+        Позначка пишеться на кожній спробі й переживає рестарт: стан сигналів (_save_state) знає день лише символів
+        із сигналом, тож рестарт після london_end повторював каскад дня (20.10: другий tda_NAS100_2026-10-20).
+        """
+        self._last_cascade_day_ms[symbol] = day_ms
+        self._cascade_marks[symbol] = {"day_ms": day_ms, "reason": reason, "at_ms": _now_ms()}
+        try:
+            _write_json_atomic(self._cascade_days_path, self._cascade_marks)
+        except Exception as exc:
+            _log.warning("TDA_CASCADE_DAYS_SAVE_ERR sym=%s err=%s", symbol, exc)
+
+    def _load_cascade_days(self) -> None:
+        """Позначки днів каскаду з попередньої сесії; найпізніший день перемагає позначку зі стану сигналів."""
+        if not os.path.isfile(self._cascade_days_path):
+            return
+        try:
+            with open(self._cascade_days_path, "r", encoding="utf-8") as f:
+                marks = json.load(f)
+        except Exception as exc:
+            _log.warning("TDA_CASCADE_DAYS_LOAD_ERR err=%s", exc)
+            return
+        for sym, mark in marks.items():
+            day_ms = mark.get("day_ms") if isinstance(mark, dict) else None
+            if not isinstance(day_ms, int):
+                _log.warning("TDA_CASCADE_DAYS_BAD_MARK sym=%s mark=%r", sym, mark)
+                continue
+            self._cascade_marks[sym] = mark
+            self._last_cascade_day_ms[sym] = max(day_ms, self._last_cascade_day_ms.get(sym, 0))
 
     def _load_state(self) -> None:
         """Restore signals from previous session.
@@ -316,6 +363,9 @@ class TdaLiveRunner:
             for sym, wire in data.items():
                 if not isinstance(wire, dict):
                     continue
+                day_ms = wire.get("_day_ms", 0)
+                if day_ms:  # і для закритої угоди: інакше рестарт повторював каскад дня (rev 20.10)
+                    self._last_cascade_day_ms[sym] = day_ms
                 trade_w = wire.get("trade", {})
                 if trade_w.get("status") == "closed":
                     continue  # Don't restore closed trades
@@ -324,9 +374,6 @@ class TdaLiveRunner:
                     sig = _signal_from_wire(wire, sym)
                     if sig is not None:
                         self._signals[sym] = sig
-                        day_ms = wire.get("_day_ms", 0)
-                        if day_ms:
-                            self._last_cascade_day_ms[sym] = day_ms
                 except Exception as exc:
                     _log.debug("TDA_STATE_RESTORE_ERR sym=%s err=%s", sym, exc)
 
@@ -337,6 +384,21 @@ class TdaLiveRunner:
                 )
         except Exception as exc:
             _log.warning("TDA_STATE_LOAD_ERR err=%s", exc)
+
+
+def _write_json_atomic(path: str, payload: Any) -> None:
+    """JSON у файл через tmp + os.replace: читач бачить старий або новий файл, ніколи не обрізаний."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def _trigger_bar_open_ms(m15_bars: List[CandleBar], bar_open_ms: int, day_ms: int, cfg: TdaCascadeConfig) -> int:
+    """Тригер каскаду дня — перший фінал M15 з відкриттям не раніше london_end; поточний бар — теж кандидат."""
+    london_end_ms = day_ms + cfg.london_end_hour_utc * _MS_PER_HOUR
+    return min([b.open_time_ms for b in m15_bars if b.complete and b.open_time_ms >= london_end_ms] + [bar_open_ms])
 
 
 def _signal_from_wire(w: Dict[str, Any], symbol: str) -> Optional[TdaSignal]:

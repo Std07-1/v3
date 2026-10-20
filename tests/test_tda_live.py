@@ -19,6 +19,8 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import tempfile
+from pathlib import Path
 from typing import List, Optional
 from unittest.mock import patch
 
@@ -166,9 +168,8 @@ def _make_runner(
     runner = TdaLiveRunner(cfg, symbols or [SYM])
     # Override _read_bars to avoid real UDS dependency
     object.__setattr__(runner, "_read_bars", lambda uds_reader, symbol, tf_s, limit: [])
-    # Override state path if tmp_path provided
-    if tmp_path is not None:
-        runner._state_path = str(tmp_path / "tda_state.json")
+    # Стан і позначки дня — завжди в тимчасовій теці: інакше тест писав би в data_v3/_signals теки запуску
+    runner._state_path = str(Path(tmp_path or tempfile.mkdtemp()) / "tda_state.json")
     return runner
 
 
@@ -448,6 +449,59 @@ class TestOneCountPerFinalBar:
         runner.on_bar(SYM, M15_S, _m15_bar(hour=13, minute=15), None)
         runner.on_bar(SYM, M15_S, _m15_bar(hour=13, minute=0), None)  # запізніла подача старішого бару
         assert runner.get_signal(SYM).trade.bars_elapsed == 2
+
+
+class TestCascadeDayAcrossRestart:
+    """ADR-0040 §3.2 rev 20.10.2026: каскад дня — один раз і лише на тригері, рестарт його не повторює.
+
+    20.10 рестарт о 15:40 повторив каскад: NAS100 отримав другий tda_NAS100_2026-10-20 поверх закритого ранкового.
+    """
+
+    @staticmethod
+    def _restarted(tmp_path, m15_in_uds=()):
+        runner = _make_runner(tmp_path=tmp_path)
+        object.__setattr__(runner, "_read_bars", lambda uds, sym, tf_s, limit: list(m15_in_uds) if tf_s == M15_S else [])
+        runner.warmup()
+        return runner
+
+    @patch("runtime.smc.tda_live.run_tda_cascade")
+    def test_restart_after_a_closed_trade_does_not_repeat_the_cascade(self, mock_cascade, tmp_path):
+        mock_cascade.return_value = _make_signal(stop_loss=1990.0, take_profit=2030.0)
+        runner = self._restarted(tmp_path)
+        runner.on_bar(SYM, M15_S, _m15_bar(hour=13), None)
+        runner.on_bar(SYM, M15_S, _m15_bar(hour=13, minute=15, low=1985.0), None)  # SL — угода закрита
+        assert runner.get_signal(SYM).trade.status == "closed"
+        after = self._restarted(tmp_path)
+        after.on_bar(SYM, M15_S, _m15_bar(hour=15, minute=30), None)
+        assert mock_cascade.call_count == 1
+
+    @patch("runtime.smc.tda_live.run_tda_cascade", return_value=None)
+    def test_restart_after_no_signal_does_not_repeat_the_cascade(self, mock_cascade, tmp_path):
+        self._restarted(tmp_path).on_bar(SYM, M15_S, _m15_bar(hour=13), None)
+        self._restarted(tmp_path).on_bar(SYM, M15_S, _m15_bar(hour=15, minute=30), None)
+        assert mock_cascade.call_count == 1
+
+    @patch("runtime.smc.tda_live.run_tda_cascade", return_value=None)
+    def test_process_that_missed_the_trigger_skips_the_day_loudly(self, mock_cascade, tmp_path, caplog):
+        trigger = _m15_bar(hour=13)
+        late = self._restarted(tmp_path, m15_in_uds=[_m15_bar(hour=12, minute=45), trigger])
+        late.on_bar(SYM, M15_S, _m15_bar(hour=15, minute=30), None)
+        assert mock_cascade.call_count == 0
+        assert "TDA_CASCADE_MISSED_WINDOW" in caplog.text
+        marks = json.loads((tmp_path / "tda_cascade_days.json").read_text(encoding="utf-8"))
+        assert (marks[SYM]["day_ms"], marks[SYM]["reason"]) == (DAY_MS, "missed_window")
+        on_time = self._restarted(tmp_path / "other", m15_in_uds=[_m15_bar(hour=12, minute=45), trigger])
+        on_time.on_bar(SYM, M15_S, trigger, None)  # той самий тригер у UDS і на подачі — каскад іде
+        assert mock_cascade.call_count == 1
+
+    @patch("runtime.smc.tda_live.run_tda_cascade")
+    def test_state_file_from_before_the_marks_still_guards_a_closed_trade_day(self, mock_cascade, tmp_path):
+        closed = _make_signal()
+        closed = dataclasses.replace(closed, trade=dataclasses.replace(closed.trade, status="closed", outcome="LOSS"))
+        wire = dict(closed.to_wire(), _day_ms=DAY_MS)
+        (tmp_path / "tda_state.json").write_text(json.dumps({SYM: wire}), encoding="utf-8")
+        self._restarted(tmp_path).on_bar(SYM, M15_S, _m15_bar(hour=15, minute=30), None)
+        assert mock_cascade.call_count == 0
 
 
 # ──────────────────────────────────────────────────────────────
