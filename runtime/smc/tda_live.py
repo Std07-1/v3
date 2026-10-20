@@ -277,7 +277,7 @@ class TdaLiveRunner:
             self._mark_cascade_day(symbol, day_ms, "already_signaled")
             return
         if existing is not None and existing.trade.status != "closed":
-            # Rev 20.10.2026 (4), ДО РІШЕННЯ ВЛАСНИКА (варіант «а»): угода живе max_open_bars_m15=96 справжніх барів, а
+            # Rev 20.10.2026 (4), власник 20.10 — варіант «а»: угода живе max_open_bars_m15=96 справжніх барів, а
             # торгова доба US CFD — 92 (GER30 78, EUSTX50 56), тож угода від 13:00 ще відкрита на тригері наступного
             # дня. Новий сигнал мовчки перезаписав би її, без закриття в журналі. Один символ — одна угода: день
             # пропускаємо вголос.
