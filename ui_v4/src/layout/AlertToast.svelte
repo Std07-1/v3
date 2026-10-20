@@ -10,6 +10,7 @@
   import { configuredPriceDigits } from "../lib/priceDigits";
   import { alerts } from "../lib/alerts/alertsStore";
   import { alertErrorText, firedToastText } from "../lib/alerts/alertUi";
+  import { t } from "../lib/i18n/i18n.svelte";
   import { armAlertSound, playAlertChime } from "../lib/alerts/alertSound";
   import { ICON_BELL } from "./toolIcons";
 
@@ -36,7 +37,7 @@
     let lastError: string | null = null;
     let enabling = false;
     const stopView = alerts.view.subscribe((view) => {
-      if (view.pushEnabling && !enabling) show("Вмикаю сповіщення…", "info");
+      if (view.pushEnabling && !enabling) show(t("Вмикаю сповіщення…"), "info");
       if (!view.pushEnabling && enabling && toast?.kind === "info") toast = null;
       enabling = view.pushEnabling;
       if (view.lastError !== null && view.lastError !== lastError) show(alertErrorText(view.lastError), "error");

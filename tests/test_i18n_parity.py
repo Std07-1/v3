@@ -29,7 +29,8 @@ TRANSLATED = sorted(code for code in LANGUAGES if code != SOURCE["code"])
 CLDR_CATEGORIES = {"zero", "one", "two", "few", "many", "other"}
 PLURAL_SEPARATOR = "|"
 
-_I18N_IMPORT = re.compile(r"""from\s+['"][^'"]*lib/i18n/i18n\.svelte['"]""")
+# Будь-який шлях до мовного шару: "../lib/i18n/i18n.svelte", "../i18n/i18n.svelte" (з lib/), "./lib/i18n/…"
+_I18N_IMPORT = re.compile(r"""from\s+['"][^'"]*\bi18n/i18n\.svelte['"]""")
 _PY_I18N_IMPORT = re.compile(r"^\s*(?:from\s+core\.i18n\s+import|import\s+core\.i18n)", re.M)
 _STRING = r"""(['"])((?:\\.|(?!\1).)*)\1"""
 _TEXT_CALL = re.compile(r"\b(?:t|msg)\(\s*" + _STRING)
@@ -187,6 +188,12 @@ def test_python_extractor_reads_literal_keys(tmp_path):
     )), encoding="utf-8")
     assert sorted(_py_keys(module)) == [("{n} тиждень|{n} тижні|{n} тижнів", "plural"), ("Азія", "text"),
                                         ("Стоп {price}", "text")]
+
+
+def test_ui_files_are_found_by_any_relative_import_path():
+    """Файл з lib/ імпортує відносно ("../i18n/i18n.svelte") — його ключі теж мусять бути в переліку."""
+    names = {path.name for path in _ui_files()}
+    assert {"alertUi.ts", "CommandRailOverflow.svelte"} <= names
 
 
 def test_extractor_reads_keys_like_the_ui_writes_them():
