@@ -6,6 +6,7 @@
 // користувача, не серверна зона (X28). Колір — роль, яку обрав трейдер (бик / ведмідь), автоматично не вгадується.
 
 import type { Drawing } from '../../../types';
+import { msg } from '../../../lib/i18n/i18n.svelte';
 import { withAlpha } from '../../canvasColor';
 import { distToRectEdge } from '../../interaction/geometry';
 import { dashPattern } from '../lineStyles';
@@ -51,7 +52,7 @@ function extensionEnd(d: Drawing, rc: RenderContext, box: Box): number {
 export const ZoneTool: ToolModule = {
     id: 'zone',
     pointsRequired: 2,
-    label: 'Зона OB/FVG',
+    label: msg('Зона OB/FVG'),
     icon: '<rect x="3" y="6" width="11" height="12" rx="1"/><path d="M3 12h11" stroke-dasharray="2 2"/><path d="M14 9h4"/><path d="M14 15h4"/><path d="m18 9 3 3-3 3"/>',
     hotkey: 'z',
     styleable: true,

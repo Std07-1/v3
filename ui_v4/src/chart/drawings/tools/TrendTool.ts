@@ -6,6 +6,7 @@
 // Hotkey: `\` (graphic-icon, replaces conflict-prone `T` per ADR-0074 §6).
 
 import type { Drawing } from '../../../types';
+import { msg } from '../../../lib/i18n/i18n.svelte';
 import { distToSegment } from '../../interaction/geometry';
 import { dashPattern } from '../lineStyles';
 import { LINE_GROUP } from './groups';
@@ -14,7 +15,7 @@ import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './typ
 export const TrendTool: ToolModule = {
     id: 'trend',
     pointsRequired: 2,
-    label: 'Трендова',
+    label: msg('Трендова'),
     icon: '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
     hotkey: '\\',
     hotkeyAliases: ['t'], // legacy-клавіша (до ADR-0074 §6) лишається

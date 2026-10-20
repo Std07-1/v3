@@ -9,6 +9,7 @@
 // Long і Short відрізняються лише початковим розміщенням; R:R — арифметика над якорями користувача, без оцінки.
 
 import type { Drawing, DrawingPoint } from '../../../types';
+import { msg } from '../../../lib/i18n/i18n.svelte';
 import { displayPriceDigits } from '../../../lib/priceDigits';
 import { withAlpha } from '../../canvasColor';
 import { POSITION_GROUP } from './groups';
@@ -106,7 +107,7 @@ function positionTool(side: PositionSide): ToolModule {
     return {
         id: side,
         pointsRequired: 1,
-        label: long ? 'Довга позиція' : 'Коротка позиція',
+        label: long ? msg('Довга позиція') : msg('Коротка позиція'),
         icon: long
             ? '<path d="M5 19h14"/><path d="M5 13h14" stroke-opacity=".5"/><path d="M12 16V5"/><path d="m8 9 4-4 4 4"/>'
             : '<path d="M5 5h14"/><path d="M5 11h14" stroke-opacity=".5"/><path d="M12 8v11"/><path d="m8 15 4 4 4-4"/>',

@@ -21,6 +21,7 @@
   the 2026-05-12 hide was created for — do NOT silently re-enable here.
 -->
 <script lang="ts">
+  import { msg, t } from "../lib/i18n/i18n.svelte";
   import type { ActiveTool, DrawingType } from "../types";
   import { untrack } from "svelte";
   import { TOOL_REGISTRY } from "../chart/drawings/tools";
@@ -101,7 +102,7 @@
   // Фігури — з реєстру в його порядку, група — одна кнопка (підпис, клавіша, іконка — у модулі, ADR-0111 §3.3);
   // cursor/eraser — тут, бо це не фігури.
   const buttons: ToolBtn[] = $derived([
-    { key: "_cursor", id: null, label: "Курсор", hotkey: "Esc", iconPath: ICON_CURSOR, group: null },
+    { key: "_cursor", id: null, label: msg("Курсор"), hotkey: "Esc", iconPath: ICON_CURSOR, group: null },
     ...capsuleEntries(tools, lastInGroup).map((entry) => ({
       key: entry.key,
       id: entry.tool.id,
@@ -110,7 +111,7 @@
       iconPath: entry.tool.icon,
       group: entry.tool.group ? entry : null,
     })),
-    { key: "eraser", id: "eraser", label: "Гумка", hotkey: "E", iconPath: ICON_ERASER, group: null },
+    { key: "eraser", id: "eraser", label: msg("Гумка"), hotkey: "E", iconPath: ICON_ERASER, group: null },
   ]);
 
   function handleClick(btn: ToolBtn) {
@@ -286,7 +287,7 @@
 {/snippet}
 
 <div class="drawing-toolbar" bind:this={hostEl}>
-  <div class="tools-group" role="toolbar" aria-label="Drawing tools">
+  <div class="tools-group" role="toolbar" aria-label={t("Інструменти малювання")}>
     {#each buttons as btn (btn.key)}
       <div class="tool-cell">
         <button
@@ -302,12 +303,12 @@
             tipLeave(btn.key);
           }}
           type="button"
-          aria-label={btn.label}
+          aria-label={t(btn.label)}
           aria-pressed={isActive(btn)}
         >
           {@render toolIcon(btn.iconPath)}
           <span class="tool-tip" class:show={shownKey === btn.key && openGroup !== btn.key}>
-            {btn.label}<kbd>{btn.hotkey}</kbd>
+            {t(btn.label)}<kbd>{btn.hotkey}</kbd>
           </span>
         </button>
         {#if btn.group}
@@ -318,7 +319,7 @@
             onclick={() => (openGroup = openGroup === btn.key ? null : btn.key)}
             oncontextmenu={(e) => e.preventDefault()}
             type="button"
-            aria-label={group.label}
+            aria-label={t(group.label)}
             aria-haspopup="menu"
             aria-expanded={openGroup === btn.key}
           ></button>
@@ -326,7 +327,7 @@
             <div
               class="variants"
               role="menu"
-              aria-label={group.label}
+              aria-label={t(group.label)}
               use:dismissOnOutside={{
                 enabled: true,
                 onDismiss: () => (openGroup = null),
@@ -343,7 +344,7 @@
                   aria-checked={activeTool === variant.id}
                 >
                   {@render toolIcon(variant.icon)}
-                  <span>{variant.label}</span><kbd>{variant.hotkey.toUpperCase()}</kbd>
+                  <span>{t(variant.label)}</span><kbd>{variant.hotkey.toUpperCase()}</kbd>
                 </button>
               {/each}
             </div>
@@ -362,7 +363,7 @@
         onpointerenter={() => tipEnter("_magnet")}
         onpointerleave={() => tipLeave("_magnet")}
         type="button"
-        aria-label="Магніт (snap-to-OHLC)"
+        aria-label={t("Магніт (snap-to-OHLC)")}
         aria-pressed={magnetEnabled}
       >
         <svg
@@ -378,7 +379,7 @@
           {@html ICON_MAGNET}
         </svg>
         <span class="tool-tip" class:show={shownKey === "_magnet"}>
-          Магніт<kbd>G</kbd>
+          {t("Магніт")}<kbd>G</kbd>
         </span>
       </button>
     {/if}
@@ -392,7 +393,7 @@
         onpointerenter={() => tipEnter("_snapshot")}
         onpointerleave={() => tipLeave("_snapshot")}
         type="button"
-        aria-label="Знімок графіка"
+        aria-label={t("Знімок графіка")}
         aria-busy={snapBusy}
         disabled={snapBusy}
       >
@@ -409,7 +410,7 @@
           {@html ICON_CAMERA}
         </svg>
         <span class="tool-tip" class:show={snapResult !== null || shownKey === "_snapshot"} role="status">
-          {snapResult ?? "Знімок графіка"}
+          {snapResult ?? t("Знімок графіка")}
         </span>
       </button>
     {/if}

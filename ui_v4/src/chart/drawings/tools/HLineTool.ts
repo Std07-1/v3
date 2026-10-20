@@ -7,6 +7,7 @@
 // >=1 DrawingPoint). Hit-test = distance до Y=lineY у screen-space.
 
 import type { Drawing } from '../../../types';
+import { msg } from '../../../lib/i18n/i18n.svelte';
 import { distToHLine } from '../../interaction/geometry';
 import { dashPattern } from '../lineStyles';
 import { LEVEL_GROUP } from './groups';
@@ -15,7 +16,7 @@ import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './typ
 export const HLineTool: ToolModule = {
     id: 'hline',
     pointsRequired: 1,
-    label: 'Горизонталь',
+    label: msg('Горизонталь'),
     icon: '<path d="M3 12h18"/>',
     hotkey: 'h',
     styleable: true,

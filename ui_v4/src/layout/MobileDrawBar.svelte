@@ -11,6 +11,7 @@
   знімається сам (one-shot); ефемерна лінійка лишає результат, наступний тап починає новий вимір.
 -->
 <script lang="ts">
+  import { msg, t } from "../lib/i18n/i18n.svelte";
   import { fly } from "svelte/transition";
   import type { ActiveTool, DrawingType } from "../types";
   import { TOOL_REGISTRY } from "../chart/drawings/tools";
@@ -62,7 +63,7 @@
   } = $props();
 
   const ICON_CHECK = '<path d="M20 6 9 17l-5-5"/>';
-  const EDIT_NOTE_LABEL = "Змінити текст нотатки";
+  const EDIT_NOTE_LABEL = msg("Змінити текст нотатки");
   /** Короткий «клац» на вибір інструмента (Android; де нема — тиша). */
   const SELECT_VIBRATE_MS = 6;
   const tools = [...TOOL_REGISTRY.values()];
@@ -86,9 +87,9 @@
 
   const stepLabel = $derived.by(() => {
     if (!current) return "";
-    if (measured) return "готово · тап — новий";
-    if (current.pointsRequired === 1) return "тап — поставити";
-    return `точка ${placed + 1} з ${current.pointsRequired}`;
+    if (measured) return t("готово · тап — новий");
+    if (current.pointsRequired === 1) return t("тап — поставити");
+    return t("точка {point} з {total}", { point: placed + 1, total: current.pointsRequired });
   });
   /** Крапки кроку: скільки точок у фігури і скільки вже стоїть (одноточкова — без крапок). */
   const dots = $derived(
@@ -151,7 +152,7 @@
 <div
   class="mdraw"
   role="toolbar"
-  aria-label="Малювання"
+  aria-label={t("Малювання")}
   style:background={menuBg}
   style:border-color={menuBorder}
 >
@@ -159,7 +160,7 @@
   {#key current?.id ?? "browse"}
     <div class="row" in:fly={{ y: 6, duration: 180 }}>
       {#if current}
-        <button class="btn dim" type="button" aria-label="Скасувати фігуру" onclick={() => choose(null)}>
+        <button class="btn dim" type="button" aria-label={t("Скасувати фігуру")} onclick={() => choose(null)}>
           {@render icon(ICON_CLOSE)}
         </button>
         <span class="tool-now">
@@ -176,13 +177,13 @@
           </span>
         </span>
         {#if variants.length > 1}
-          <span class="variants" role="group" aria-label={current.group?.label}>
+          <span class="variants" role="group" aria-label={current.group ? t(current.group.label) : undefined}>
             {#each variants as variant (variant.id)}
               <button
                 class="btn"
                 class:active={variant.id === current.id}
                 type="button"
-                aria-label={variant.label}
+                aria-label={t(variant.label)}
                 aria-pressed={variant.id === current.id}
                 onclick={() => variant.id !== current.id && choose(variant.id)}
               >
@@ -196,28 +197,28 @@
             class="btn"
             class:active={magnetEnabled}
             type="button"
-            aria-label="Магніт"
+            aria-label={t("Магніт")}
             aria-pressed={magnetEnabled}
             onclick={onToggleMagnet}
           >
             {@render icon(ICON_MAGNET)}
           </button>
         {/if}
-        <button class="btn accent" type="button" aria-label="Поставити точку" onclick={place}>
+        <button class="btn accent" type="button" aria-label={t("Поставити точку")} onclick={place}>
           {@render icon(ICON_CHECK)}
         </button>
       {:else}
         {#each entries as entry (entry.key)}
-          <button class="btn" type="button" aria-label={entry.label} onclick={() => choose(entry.tool.id)}>
+          <button class="btn" type="button" aria-label={t(entry.label)} onclick={() => choose(entry.tool.id)}>
             {@render icon(entry.tool.icon)}
           </button>
         {/each}
         <span class="sep" style:background={menuBorder}></span>
-        <button class="btn" type="button" aria-label="Скасувати дію" disabled={!canUndo} onclick={onUndo}>
+        <button class="btn" type="button" aria-label={t("Скасувати дію")} disabled={!canUndo} onclick={onUndo}>
           {@render icon(ICON_UNDO)}
         </button>
         {#if noteSelected && onEditNote}
-          <button class="btn" type="button" aria-label={EDIT_NOTE_LABEL} onclick={onEditNote}>
+          <button class="btn" type="button" aria-label={t(EDIT_NOTE_LABEL)} onclick={onEditNote}>
             {@render icon(ICON_PENCIL)}
           </button>
         {:else if alertAction && !alertAction.hintOnly}
@@ -234,13 +235,13 @@
         <button
           class="btn danger"
           type="button"
-          aria-label="Видалити виділене"
+          aria-label={t("Видалити виділене")}
           disabled={!hasSelection}
           onclick={onDeleteSelected}
         >
           {@render icon(ICON_TRASH)}
         </button>
-        <button class="btn dim" type="button" aria-label="Закрити малювання" onclick={onClose}>
+        <button class="btn dim" type="button" aria-label={t("Закрити малювання")} onclick={onClose}>
           {@render icon(ICON_CLOSE)}
         </button>
       {/if}

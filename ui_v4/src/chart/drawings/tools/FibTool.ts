@@ -10,6 +10,7 @@
 // кінцем кожної лінії. Колір/товщина/стиль — з meta фігури (той самий flyout, що в інших інструментів).
 
 import type { Drawing } from '../../../types';
+import { msg } from '../../../lib/i18n/i18n.svelte';
 import { displayPriceDigits } from '../../../lib/priceDigits';
 import { withAlpha } from '../../canvasColor';
 import { distToSegment } from '../../interaction/geometry';
@@ -61,7 +62,7 @@ function anchorsOf(
 export const FibTool: ToolModule = {
     id: 'fib',
     pointsRequired: 2,
-    label: 'Фібоначчі',
+    label: msg('Фібоначчі'),
     icon: '<path d="M4 5h16"/><path d="M4 10h16"/><path d="M4 13.5h16"/><path d="M4 19h16"/><path d="M5 18 19 6" stroke-opacity=".45"/>',
     hotkey: 'b',
     styleable: true,

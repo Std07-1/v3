@@ -7,6 +7,7 @@
 // in body OR outside expanded rect).
 
 import type { Drawing } from '../../../types';
+import { msg } from '../../../lib/i18n/i18n.svelte';
 import { distToRectEdge } from '../../interaction/geometry';
 import { dashPattern } from '../lineStyles';
 import { BOX_GROUP } from './groups';
@@ -19,7 +20,7 @@ const DRAFT_FILL = 'rgba(61, 154, 255, 0.10)';
 export const RectTool: ToolModule = {
     id: 'rect',
     pointsRequired: 2,
-    label: 'Прямокутник',
+    label: msg('Прямокутник'),
     icon: '<rect x="3" y="3" width="18" height="18" rx="2"/>',
     hotkey: 'r',
     styleable: true,
