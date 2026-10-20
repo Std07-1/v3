@@ -9,7 +9,7 @@ python-dotenv>=1.2.2,<2.0
 # станом на 20.10.2026 вийшли менш як 2 тижні тому. Нова версія — лише після pytest + exit gates
 # (docs/compliance/risk_register.md §1.1).
 aiohttp==3.14.4
-python-binance>=1.0.36
+python-binance>=1.0.37
 # Транзитивні залежності: нижні межі закривають бюлетені, яких не закривають вимоги батьківських пакетів,
 # верхні — як у батьків (aiohttp 3.14.4: multidict<7.0; requests: urllib3<3, idna<4; starlette: anyio<5).
 # Розбір — docs/compliance/risk_register.md §1.1.
