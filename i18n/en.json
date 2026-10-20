@@ -425,5 +425,18 @@
   "хай імпульсу {price}": "impulse high {price}",
   "лой імпульсу {price}": "impulse low {price}",
   "OB вхід уточнений FVG: {low}–{high}": "OB entry refined by FVG: {low}–{high}",
-  "FVG гап на {price} — ребаланс перед зоною": "FVG gap at {price} — rebalance before the zone"
+  "FVG гап на {price} — ребаланс перед зоною": "FVG gap at {price} — rebalance before the zone",
+  "HTF: очікуємо структуру": "HTF: waiting for structure",
+  "D1{arrow} (H4 ще без структури)": "D1{arrow} (H4 has no structure yet)",
+  "H4{arrow} (D1 ще без структури)": "H4{arrow} (D1 has no structure yet)",
+  "HTF{arrow} (D1 і H4) — найкраща зона проти тренду": "HTF{arrow} (D1 and H4) — best zone is against the trend",
+  "H4 відкат до premium OB — чекаємо відбій": "H4 pullback to premium OB — waiting for a rejection",
+  "HTF{arrow} (D1 і H4) — шукаємо структуру для входу": "HTF{arrow} (D1 and H4) — looking for entry structure",
+  "бичачий імпульс ↑": "bullish impulse ↑",
+  "ведмежий імпульс ↓": "bearish impulse ↓",
+  "{session}: killzone активна": "{session}: killzone active",
+  "{session} сесія активна": "{session} session active",
+  "без оцінки": "ungraded",
+  "ймовірний pullback або consolidation": "likely pullback or consolidation",
+  "висока ймовірність розвороту, не chase'ити": "high reversal odds, don't chase"
 }

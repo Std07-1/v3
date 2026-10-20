@@ -140,8 +140,8 @@ _DEGRADED_HEADLINE = msg("\u26a0 Наратив недоступний")
 # ── ADR-0053: Range Exhaustion display strings ──────────────
 # Phrase emitted ONLY for late/exhausted phases — early/mid = silent (clean chart doctrine).
 _RANGE_PHASE_HINTS = {
-    "late": "ймовірний pullback або consolidation",
-    "exhausted": "висока ймовірність розвороту, не chase'ити",
+    "late": msg("ймовірний pullback або consolidation"),
+    "exhausted": msg("висока ймовірність розвороту, не chase'ити"),
 }
 _RANGE_ANCHOR_LABELS = {
     "d1_open": "D1",
@@ -151,8 +151,8 @@ _RANGE_ANCHOR_LABELS = {
 }
 
 
-def _build_range_exhaustion_summary(range_state):
-    # type: (object) -> str
+def _build_range_exhaustion_summary(range_state, tr=SOURCE_TRANSLATOR):
+    # type: (object, Translator) -> str
     """ADR-0053: human-readable phrase for late/exhausted phases.
 
     Returns "" коли:
@@ -172,7 +172,7 @@ def _build_range_exhaustion_summary(range_state):
     anchor_kind = getattr(range_state, "anchor_kind", "")
     anchor_label = _RANGE_ANCHOR_LABELS.get(anchor_kind, anchor_kind)
     arrow = "up" if traveled_dir > 0 else "down"
-    hint = _RANGE_PHASE_HINTS[phase]
+    hint = tr(_RANGE_PHASE_HINTS[phase])
     return "{} {} {:.2f} ATR ({}) - {}".format(anchor_label, arrow, mult, phase, hint)
 
 
@@ -771,20 +771,20 @@ def _detect_market_phase(swings, config):
 
 
 def _build_bias_summary(
-    alignment, htf_direction, bias_map, zone, momentum_map=None, is_counter=False
+    alignment, htf_direction, bias_map, zone, momentum_map=None, is_counter=False, tr=SOURCE_TRANSLATOR
 ):
-    # type: (str, Optional[str], Dict[str, str], Optional[SmcZone], Optional[Dict[str, dict]], bool) -> str
+    # type: (str, Optional[str], Dict[str, str], Optional[SmcZone], Optional[Dict[str, dict]], bool, Translator) -> str
     if alignment == "no_data":
-        return "HTF: \u043e\u0447\u0456\u043a\u0443\u0454\u043c\u043e \u0441\u0442\u0440\u0443\u043a\u0442\u0443\u0440\u0443"
+        return tr("HTF: очікуємо структуру")
     if alignment == "partial":
         d1 = bias_map.get("86400")
         h4 = bias_map.get("14400")
         if d1:
             arrow = "\u2191" if d1 == "bullish" else "\u2193"
-            return "D1{a} (H4 ще без структури)".format(a=arrow)
+            return tr("D1{arrow} (H4 ще без структури)", arrow=arrow)
         if h4:
             arrow = "\u2191" if h4 == "bullish" else "\u2193"
-            return "H4{a} (D1 ще без структури)".format(a=arrow)
+            return tr("H4{arrow} (D1 ще без структури)", arrow=arrow)
     d1 = bias_map.get("86400", "?")
     h4 = bias_map.get("14400", "?")
     if alignment == "mixed":
@@ -794,18 +794,18 @@ def _build_bias_summary(
     # aligned. Без порад щодо розміру позиції в публічному тексті (ADR-0113 R8) і без англійських bullish/bearish
     htf_arrow = "\u2191" if htf_direction == "bullish" else "\u2193"
     if is_counter:
-        return "HTF{a} (D1 і H4) \u2014 найкраща зона проти тренду".format(a=htf_arrow)
+        return tr("HTF{arrow} (D1 і H4) \u2014 найкраща зона проти тренду", arrow=htf_arrow)
     if zone and "premium" in getattr(zone, "kind", ""):
-        return "H4 відкат до premium OB \u2014 чекаємо відбій"
-    base = "HTF{a} (D1 і H4) \u2014 шукаємо структуру для входу".format(a=htf_arrow)
+        return tr("H4 відкат до premium OB \u2014 чекаємо відбій")
+    base = tr("HTF{arrow} (D1 і H4) \u2014 шукаємо структуру для входу", arrow=htf_arrow)
     # P2: momentum context — displacement bars confirm directional intent (ADR-0033 Rev 2)
     if momentum_map:
         bull_total = sum(m.get("b", 0) for m in momentum_map.values())
         bear_total = sum(m.get("r", 0) for m in momentum_map.values())
         if htf_direction == "bullish" and bull_total >= 2:
-            base += " \u00b7 бичачий імпульс \u2191"
+            base += " \u00b7 " + tr("бичачий імпульс \u2191")
         elif htf_direction == "bearish" and bear_total >= 2:
-            base += " \u00b7 ведмежий імпульс \u2193"
+            base += " \u00b7 " + tr("ведмежий імпульс \u2193")
     return base
 
 
@@ -818,15 +818,15 @@ _SESSION_LABELS = {
 }
 
 
-def _build_session_context(session_name, in_killzone):
-    # type: (str, bool) -> str
+def _build_session_context(session_name, in_killzone, tr=SOURCE_TRANSLATOR):
+    # type: (str, bool, Translator) -> str
     if not session_name:
         # Календар сесій є, але жодна не йде (між закриттям NY і Азією) — сказати прямо, а не «Off_Session … активна»
-        return "Поза торговими сесіями"
+        return tr("Поза торговими сесіями")
     label = _SESSION_LABELS.get(session_name, session_name.title())
     if in_killzone:
-        return "{}: killzone активна".format(label)
-    return "{} сесія активна".format(label)
+        return tr("{session}: killzone активна", session=label)
+    return tr("{session} сесія активна", session=label)
 
 
 # ── Next Area ───────────────────────────────────────────────
@@ -843,9 +843,10 @@ def _zone_kind_label(zone):
 
 
 def _build_next_area(
-    snapshot, zone_grades, digits=_DEFAULT_PRICE_DIGITS, current_price=0.0, exclude_ids=frozenset(), stops=None
+    snapshot, zone_grades, digits=_DEFAULT_PRICE_DIGITS, current_price=0.0, exclude_ids=frozenset(), stops=None,
+    tr=SOURCE_TRANSLATOR,
 ):
-    # type: (SmcSnapshot, Dict[str, dict], int, float, frozenset, Optional[Dict[str, Optional[float]]]) -> str
+    # type: (SmcSnapshot, Dict[str, dict], int, float, frozenset, Optional[Dict[str, Optional[float]]], Translator) -> str
     """Найближча зона уваги: оцінені — першими (score↓), далі ближчі до ціни.
 
     ADR-0113 Ф0 (K3, K4): без mitigated, без перебитих ціною, без premium/discount (розмітка діапазону, не POI);
@@ -869,7 +870,7 @@ def _build_next_area(
     if best is None:
         return ""
     gi = zone_grades.get(best.id)
-    grade_part = "{}({})".format(gi.get("grade", "C"), gi.get("score", 0)) if gi else "без оцінки"
+    grade_part = "{}({})".format(gi.get("grade", "C"), gi.get("score", 0)) if gi else tr("без оцінки")
     return "{kind}{arrow} {grade} {low}\u2013{high}".format(
         kind=_zone_kind_label(best),
         arrow="\u25bc" if "bear" in best.kind else "\u25b2",
@@ -1067,7 +1068,7 @@ def _synthesize_impl(
         # «Поза сесіями» — порожня сесія для всіх перевірок нижче і для wire (UI не друкує «OFF_SESSION»)
         current_session = "" if session_info[0] == OFF_SESSION else (session_info[0] or "")
         in_killzone = bool(session_info[1])
-        session_context = _build_session_context(current_session, in_killzone)
+        session_context = _build_session_context(current_session, in_killzone, tr)
         # Guard: no active session (dead zone between sessions) → cannot call trade
         if mode == "trade" and not current_session:
             mode, sub_mode = "wait", "no_session"
@@ -1159,6 +1160,7 @@ def _synthesize_impl(
         primary_zone,
         momentum_map=momentum_map,
         is_counter=(sub_mode == "counter"),
+        tr=tr,
     )
 
     # FVG context (T-5)
@@ -1168,10 +1170,10 @@ def _synthesize_impl(
     market_phase = _detect_market_phase(snapshot.swings, config)
 
     # Next area
-    next_area = _build_next_area(snapshot, zone_grades, digits, current_price, frozenset(closed), stops)
+    next_area = _build_next_area(snapshot, zone_grades, digits, current_price, frozenset(closed), stops, tr)
 
     # ADR-0053: range exhaustion phrase (silent for early/mid/None)
-    range_exhaustion_summary = _build_range_exhaustion_summary(range_exhaustion)
+    range_exhaustion_summary = _build_range_exhaustion_summary(range_exhaustion, tr)
 
     return NarrativeBlock(
         mode=mode,
