@@ -286,4 +286,4 @@ def _distribution_row(
 
 
 def _count(n: int) -> str:
-    return format(n, ",").replace(",", " ")  # нерозривний пробіл між тисячами: «1 880» не рветься
+    return format(n, ",").replace(",", "\u00a0")  # нерозривний пробіл між тисячами: «1 880» не рветься
