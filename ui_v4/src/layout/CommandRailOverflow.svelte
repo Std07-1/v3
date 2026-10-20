@@ -154,7 +154,7 @@
     <div
         class="overflow-menu"
         role="menu"
-        aria-label="More options"
+        aria-label={t("Меню")}
         onclick={(e) => e.stopPropagation()}
     >
         <!-- ADR-0065 Phase 1: SMC panel toggle -->
@@ -169,7 +169,7 @@
                     onClose();
                 }}
             >
-                <span class="mi-label">SMC layers</span>
+                <span class="mi-label">{t("Шари SMC")}</span>
                 <span class="mi-state">{smcPanelOpen ? "●" : "○"}</span>
             </button>
         {/if}
@@ -186,9 +186,9 @@
                     // ADR-0065 UX fix: keep menu open so user can compare F/R result
                 }}
             >
-                <span class="mi-label">Display</span>
+                <span class="mi-label">{t("Відображення")}</span>
                 <span class="mi-state"
-                    >{displayMode === "focus" ? "Focus" : "Research"}</span
+                    >{displayMode === "focus" ? t("Фокус") : t("Дослідження")}</span
                 >
             </button>
         {/if}
@@ -204,7 +204,7 @@
                 aria-checked={toolsEnabled}
                 onclick={() => onToggleTools?.()}
             >
-                <span class="mi-label">Малювання</span>
+                <span class="mi-label">{t("Малювання")}</span>
                 <span class="mi-state">{toolsEnabled ? "●" : "○"}</span>
             </button>
         {/if}
@@ -212,7 +212,7 @@
         <!-- ADR-0112: пробне малювання на телефоні — лише з ?draw=1 і лише в телефонному розкладі (як пункт знімка) -->
         {#if onOpenTouchDrawing}
             <button class="menu-item touch-draw-item" role="menuitem" onclick={() => onOpenTouchDrawing?.()}>
-                <span class="mi-label">Малювати</span>
+                <span class="mi-label">{t("Малювати")}</span>
             </button>
         {/if}
 
@@ -226,7 +226,7 @@
                 disabled={snapBusy}
                 onclick={handleSnapshot}
             >
-                <span class="mi-label">{snapLabel ?? "Знімок графіка"}</span>
+                <span class="mi-label">{snapLabel ?? t("Знімок графіка")}</span>
             </button>
         {/if}
 
@@ -242,7 +242,7 @@
                 aria-checked={hintsEnabled}
                 onclick={() => onToggleHints?.()}
             >
-                <span class="mi-label">Підказки</span>
+                <span class="mi-label">{t("Підказки")}</span>
                 <span class="mi-state">{hintsEnabled ? "●" : "○"}</span>
             </button>
         {/if}
@@ -256,7 +256,7 @@
                 aria-checked={archiChartEnabled}
                 onclick={() => onToggleArchiChart?.()}
             >
-                <span class="mi-label">Арчі на чарті</span>
+                <span class="mi-label">{t("Арчі на чарті")}</span>
                 <span class="mi-state">{archiChartEnabled ? "●" : "○"}</span>
             </button>
         {/if}
@@ -307,8 +307,8 @@
                 onclick={() =>
                     (openSubmenu = openSubmenu === "theme" ? null : "theme")}
             >
-                <span class="mi-label">Theme</span>
-                <span class="mi-current">{THEMES[activeTheme].label}</span>
+                <span class="mi-label">{t("Тема")}</span>
+                <span class="mi-current">{t(THEMES[activeTheme].label)}</span>
                 <span class="mi-chevron">▸</span>
             </button>
             {#if openSubmenu === "theme"}
@@ -321,7 +321,7 @@
                             aria-checked={theme === activeTheme}
                             onclick={() => handleThemePick(theme)}
                         >
-                            {THEMES[theme].label}
+                            {t(THEMES[theme].label)}
                         </button>
                     {/each}
                 </div>
@@ -338,9 +338,9 @@
                 onclick={() =>
                     (openSubmenu = openSubmenu === "style" ? null : "style")}
             >
-                <span class="mi-label">Style</span>
+                <span class="mi-label">{t("Стиль")}</span>
                 <span class="mi-current"
-                    >{CANDLE_STYLES[activeStyle].label}</span
+                    >{t(CANDLE_STYLES[activeStyle].label)}</span
                 >
                 <span class="mi-chevron">▸</span>
             </button>
@@ -361,7 +361,7 @@
                                     activeTheme,
                                 ).upColor}
                             ></span>
-                            {CANDLE_STYLES[cs].label}
+                            {t(CANDLE_STYLES[cs].label)}
                         </button>
                     {/each}
                 </div>
@@ -374,14 +374,14 @@
             role="menuitem"
             tabindex="-1"
             onwheel={onBrightnessWheel}
-            title={hintsEnabled ? `Brightness ${brightnessPct}%` : undefined}
+            title={hintsEnabled ? t("Яскравість {percent}%", { percent: brightnessPct }) : undefined}
         >
-            <span class="mi-label">Brightness</span>
+            <span class="mi-label">{t("Яскравість")}</span>
             <div class="bri-controls">
                 <button
                     class="bri-step"
                     tabindex="-1"
-                    aria-label="Dimmer"
+                    aria-label={t("Тьмяніше")}
                     onclick={(e) => {
                         e.stopPropagation();
                         onBrightnessStep?.(-1);
@@ -389,7 +389,7 @@
                 >
                 <span
                     class="brightness-leds"
-                    aria-label="Brightness {brightnessPct}%"
+                    aria-label={t("Яскравість {percent}%", { percent: brightnessPct })}
                 >
                     {#each [1, 2, 3, 4, 5] as i}
                         <span class="led" class:lit={i <= litCount}></span>
@@ -398,7 +398,7 @@
                 <button
                     class="bri-step"
                     tabindex="-1"
-                    aria-label="Brighter"
+                    aria-label={t("Яскравіше")}
                     onclick={(e) => {
                         e.stopPropagation();
                         onBrightnessStep?.(1);

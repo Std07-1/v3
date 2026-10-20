@@ -5,7 +5,7 @@
   import { onMount, onDestroy, untrack } from "svelte";
   import { WSConnection } from "./ws/connection";
   import { createActions } from "./ws/actions";
-  import { onLangChange, withLangParam } from "./lib/i18n/i18n.svelte";
+  import { onLangChange, t, withLangParam } from "./lib/i18n/i18n.svelte";
 
   import ChartPane from "./layout/ChartPane.svelte";
   import DrawingToolbar from "./layout/DrawingToolbar.svelte";
@@ -1089,7 +1089,7 @@
         class="tr-replay-btn"
         onclick={handleEnterReplay}
         title={$hintsOn ? "Enter Replay Mode" : undefined}
-        aria-label="Enter replay mode">▶</button
+        aria-label={t("Увімкнути реплей")}>▶</button
       >
     {:else}
       <span class="tr-replay-badge">REPLAY</span>
@@ -1103,7 +1103,7 @@
         class:open={touchDrawOpen}
         onclick={() => (touchDrawOpen ? closeTouchDrawing() : openTouchDrawing())}
         aria-pressed={touchDrawOpen}
-        aria-label="Малювати"
+        aria-label={t("Малювати")}
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"
           stroke-linejoin="round" aria-hidden="true">{@html ICON_PENCIL}</svg>
@@ -1126,7 +1126,7 @@
         title={$hintsOn ? "More options (theme, style, brightness, diagnostics)" : undefined}
         aria-haspopup="menu"
         aria-expanded={overflowOpen}
-        aria-label="More options">☰</button
+        aria-label={t("Меню")}>☰</button
       >
       <CommandRailOverflow
         open={overflowOpen}
