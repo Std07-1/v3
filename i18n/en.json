@@ -358,5 +358,22 @@
   "{count} місяць|{count} місяці|{count} місяців": {
     "one": "{count} month",
     "other": "{count} months"
-  }
+  },
+  "Чекаємо": "Waiting",
+  "Готуємось": "Getting ready",
+  "Готовий до входу": "Ready to enter",
+  "Активний сетап": "Active setup",
+  "Поза ринком": "Out of the market",
+  "Контекст": "Context",
+  "{mode} до лонгу": "{mode} for a long",
+  "{mode} до шорту": "{mode} for a short",
+  "Контекст чистий": "Context clean",
+  "Змішаний контекст": "Mixed context",
+  "D1 проти тренду": "D1 against the trend",
+  "{tfs} проти тренду": "{tfs} against the trend",
+  "Чекаємо сетап": "Waiting for a setup",
+  "Аналіз…": "Analyzing…",
+  "Поза торговою сесією — низька ліквідність": "Outside trading sessions — low liquidity",
+  "Поза кілзоною — нижча якість сетапу": "Outside killzone — lower setup quality",
+  "Чекаємо дані": "Waiting for data"
 }

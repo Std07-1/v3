@@ -1086,7 +1086,7 @@ class SmcRunner:
     ) -> Optional[ShellPayload]:
         """ADR-0036: compose shell payload from already-computed narrative.
 
-        `tr` — мова тексту картки (ADR-0116 Ф2.2); compose_shell_payload отримає його в Ф2.5.
+        `tr` — мова тексту картки (ADR-0116): `narrative` — уже цією мовою, сама картка складається нею ж.
 
         Returns None if shell is disabled. Catches exceptions (I5: degraded-but-loud).
         """
@@ -1103,6 +1103,7 @@ class SmcRunner:
                 shell_cfg,
                 sessions_active=sessions_active,
                 signal=signal,
+                tr=tr,
             )
         except Exception:
             _log.warning(

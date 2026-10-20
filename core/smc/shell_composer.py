@@ -6,6 +6,9 @@ C-DUMB: all derive logic on backend; frontend = dumb renderer.
 
 compose_shell_payload() is a pure function that converts
 NarrativeBlock + bias_map + config -> ShellPayload.
+
+Текст картки — мовою перекладача `tr` (ADR-0116): без нього — джерело (uk) байт у байт. Мітки стадії
+(LONG · READY…) лишаються англійськими в усіх мовах (ADR-0116 §9, рішення власника).
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from core.i18n import SOURCE_TRANSLATOR, Translator, msg
 from core.smc.types import (
     MicroCard,
     NarrativeBlock,
@@ -40,13 +44,15 @@ _DEFAULT_STAGE_LABELS: Dict[str, str] = {
 }
 
 _DEFAULT_MODE_TEXT: Dict[str, str] = {
-    "wait": "Чекаємо",
-    "prepare": "Готуємось",
-    "ready": "Готовий до входу",
-    "triggered": "Активний сетап",
-    "stayout": "Поза ринком",
-    "context": "Контекст",  # ADR-0113: старший TF глядача — контекст без торгового сценарію
+    "wait": msg("Чекаємо"),
+    "prepare": msg("Готуємось"),
+    "ready": msg("Готовий до входу"),
+    "triggered": msg("Активний сетап"),
+    "stayout": msg("Поза ринком"),
+    "context": msg("Контекст"),  # ADR-0113: старший TF глядача — контекст без торгового сценарію
 }
+# Підказка напряму для prepare («готуватись до чого?»): `{mode}` — текст стадії вже мовою картки
+_PREPARE_DIRECTION_TEXT: Dict[str, str] = {"long": msg("{mode} до лонгу"), "short": msg("{mode} до шорту")}
 
 _STRIP_TFS = [86400, 14400, 3600, 900]  # D1, H4, H1, M15
 
@@ -59,10 +65,10 @@ _TF_LABELS: Dict[int, str] = {
 
 # ── strip tag text ──────────────────────────────────────────
 
-_TAG_ALL_ALIGNED_BULL = "Контекст чистий"
-_TAG_ALL_ALIGNED_BEAR = "Контекст чистий"
-_TAG_MIXED = "Змішаний контекст"
-_TAG_D1_CFL = "D1 проти тренду"
+_TAG_ALL_ALIGNED_BULL = msg("Контекст чистий")
+_TAG_ALL_ALIGNED_BEAR = msg("Контекст чистий")
+_TAG_MIXED = msg("Змішаний контекст")
+_TAG_D1_CFL = msg("D1 проти тренду")
 
 
 # ── Public API ──────────────────────────────────────────────
@@ -75,8 +81,9 @@ def compose_shell_payload(
     config: Dict[str, Any],
     sessions_active: bool = False,
     signal: Any = None,
+    tr: Translator = SOURCE_TRANSLATOR,
 ) -> ShellPayload:
-    """Compose shell payload from already-computed narrative + bias_map.
+    """Compose shell payload from already-computed narrative + bias_map; текст картки — мовою `tr`.
 
     Pure function. No I/O. Deterministic for same input.
     """
@@ -86,10 +93,10 @@ def compose_shell_payload(
 
     # ── Error guard (B3) ──
     if narrative.warnings and (set(narrative.warnings) & _ERROR_MARKERS):
-        return _build_error_shell(stage_labels, mode_texts)
+        return _build_error_shell(stage_labels, mode_texts, tr)
 
     # ── Tactical strip (computed first, needed for D1 cfl downgrade) ──
-    tactical_strip = _build_tactical_strip(bias_map, strip_tfs)
+    tactical_strip = _build_tactical_strip(bias_map, strip_tfs, tr)
 
     # ── Stage mapping (§5.2.1) ──
     stage, direction = _resolve_stage(narrative, sessions_active, tactical_strip)
@@ -101,7 +108,7 @@ def compose_shell_payload(
     stage_context = _build_stage_context(narrative, stage, direction, signal)
 
     # ── Micro card ──
-    micro_card = _build_micro_card(narrative, stage, mode_texts, sessions_active)
+    micro_card = _build_micro_card(narrative, stage, mode_texts, sessions_active, tr)
 
     # ── Signal injection (ADR-0039): pass through if computed ──
     return ShellPayload(
@@ -225,15 +232,15 @@ def _build_micro_card(
     stage: str,
     mode_texts: Dict[str, str],
     sessions_active: bool,
+    tr: Translator,
 ) -> MicroCard:
-    mode_text = mode_texts.get(stage, stage.upper())
-    # Direction hint for prepare / ready ("готуватись до чого?")
+    stage_text = mode_texts.get(stage)
+    mode_text = tr(stage_text) if stage_text is not None else stage.upper()
+    # Direction hint for prepare ("готуватись до чого?")
     if stage == "prepare" and narrative.scenarios:
-        d = narrative.scenarios[0].direction
-        if d == "long":
-            mode_text += " до лонгу"
-        elif d == "short":
-            mode_text += " до шорту"
+        hint = _PREPARE_DIRECTION_TEXT.get(narrative.scenarios[0].direction)
+        if hint is not None:
+            mode_text = tr(hint, mode=mode_text)
     # why_text: zone context (entry_desc) + HTF bias for full picture
     why_parts: List[str] = []
     if narrative.scenarios:
@@ -250,7 +257,7 @@ def _build_micro_card(
         what_needed = sc.trigger_desc or ""
         what_cancels = sc.invalidation or ""
     if not what_needed:
-        what_needed = "Чекаємо сетап" if stage in ("wait", "stayout") else "Аналіз…"
+        what_needed = tr("Чекаємо сетап") if stage in ("wait", "stayout") else tr("Аналіз…")
     if not what_cancels:
         what_cancels = "—"
     # ADR-0113 Ф3: куди тягне ліквідність — ціль основного сценарію
@@ -260,14 +267,14 @@ def _build_micro_card(
     warning: Optional[str] = None
     if sessions_active:
         if not narrative.current_session:
-            warning = "Поза торговою сесією — низька ліквідність"
+            warning = tr("Поза торговою сесією — низька ліквідність")
         elif not narrative.in_killzone and stage in ("prepare", "ready", "triggered"):
-            warning = "Поза кілзоною — нижча якість сетапу"
+            warning = tr("Поза кілзоною — нижча якість сетапу")
 
     context = narrative.htf_context
     if context is not None:
         # ADR-0113: на H4/D1 — контекст: зона й напрям, де шукати сетап, куди тягне ліквідність, межа контексту
-        mode_text = mode_texts.get("context", _DEFAULT_MODE_TEXT["context"])
+        mode_text = tr(mode_texts.get("context", _DEFAULT_MODE_TEXT["context"]))
         why_text = " · ".join(p for p in (_sentence(context.zone_desc), narrative.bias_summary) if p)
         what_needed = _sentence(context.setup_desc) or "—"
         what_cancels = context.invalidation or "—"
@@ -294,6 +301,7 @@ def _sentence(text: str) -> str:
 def _build_tactical_strip(
     bias_map: Dict[str, str],
     strip_tfs: List[int],
+    tr: Translator,
 ) -> TacticalStrip:
     chips: List[TfChip] = []
     directions: List[str] = []
@@ -318,7 +326,7 @@ def _build_tactical_strip(
             alignment_type="mixed",
             alignment_direction=None,
             chips=[],
-            tag_text=_TAG_MIXED,
+            tag_text=tr(_TAG_MIXED),
             tag_variant="warn",
         )
 
@@ -331,7 +339,7 @@ def _build_tactical_strip(
             alignment_type="htf_aligned",
             alignment_direction=d,
             chips=chips,
-            tag_text=_TAG_ALL_ALIGNED_BULL,
+            tag_text=tr(_TAG_ALL_ALIGNED_BULL),
             tag_variant=variant,
         )
 
@@ -364,12 +372,12 @@ def _build_tactical_strip(
                 )
 
     if d1_is_conflict:
-        tag_text = _TAG_D1_CFL
+        tag_text = tr(_TAG_D1_CFL)
         tag_variant = "danger"
     else:
         # Non-D1 break
         brk_labels = [c.tf_label for c in refined_chips if c.chip_state == "brk"]
-        tag_text = f"{', '.join(brk_labels)} проти тренду" if brk_labels else _TAG_MIXED
+        tag_text = tr("{tfs} проти тренду", tfs=", ".join(brk_labels)) if brk_labels else tr(_TAG_MIXED)
         tag_variant = "warn"
 
     return TacticalStrip(
@@ -395,6 +403,7 @@ def _majority_direction(directions: List[str]) -> str:
 def _build_error_shell(
     stage_labels: Dict[str, str],
     mode_texts: Dict[str, str],
+    tr: Translator,
 ) -> ShellPayload:
     """Return safe wait shell when narrative has error markers."""
     return ShellPayload(
@@ -402,9 +411,9 @@ def _build_error_shell(
         stage_label=stage_labels.get("wait", "WAIT"),
         stage_context="",
         micro_card=MicroCard(
-            mode_text=mode_texts.get("wait", "Чекаємо"),
+            mode_text=tr(mode_texts.get("wait", _DEFAULT_MODE_TEXT["wait"])),
             why_text="",
-            what_needed="Чекаємо дані",
+            what_needed=tr("Чекаємо дані"),
             what_cancels="—",
             warning=None,
         ),
@@ -412,7 +421,7 @@ def _build_error_shell(
             alignment_type="mixed",
             alignment_direction=None,
             chips=[],
-            tag_text=_TAG_MIXED,
+            tag_text=tr(_TAG_MIXED),
             tag_variant="warn",
         ),
     )
