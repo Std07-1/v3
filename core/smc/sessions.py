@@ -13,6 +13,7 @@ Python 3.7 compatible.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -126,6 +127,7 @@ def _ms_to_day_start(epoch_ms: int) -> int:
 
 _WINTER_SHIFT_MS = 3_600_000  # узимку місцеві години біржі на 1 год пізніше за UTC, ніж улітку
 _MINUTE_MS = 60_000
+_HOUR_MS = 3_600_000
 _DAY_MS = 86_400_000
 _EPOCH_WEEKDAY = 3  # 1970-01-01 — четвер (Пн = 0)
 # Скільки діб назад попередня торгова доба: Пн → Пт, Нд → Пт; решта (зокрема Сб) — учора
@@ -141,9 +143,20 @@ def _previous_trading_day_start(day_start_ms: int) -> int:
     return day_start_ms - _BACK_DAYS_TO_PREV_TRADING_DAY.get(weekday, 1) * _DAY_MS
 
 
+@functools.lru_cache(maxsize=4096)
+def _is_winter_hour(hour_index: int, season_rule: str) -> bool:
+    """Чи година UTC `hour_index` (від епохи) — зима правила сесії.
+
+    Переходи DST США і ЄС стоять на межі години UTC (core.session_anchor; стереже tests/test_sessions_dst.py), тож
+    сезон усієї години — сезон її початку. Прохід стрічки M1 (2880 барів × 3 сесії) питає сезон раз на годину, а не
+    кличе calendar_season на кожен бар: прохід 8.4 → 7.1 мс поверх кешу доби в calendar_season (замір 20.10.2026).
+    """
+    return calendar_season(hour_index * _HOUR_MS, season_rule) == SEASON_WINTER
+
+
 def _session_clock_ms(epoch_ms: int, sw: SessionWindow) -> int:
     """Момент на «літньому» годиннику сесії: узимку її правила — на годину раніше (ADR-0104 S0)."""
-    if calendar_season(epoch_ms, sw.season_rule) == SEASON_WINTER:
+    if _is_winter_hour(epoch_ms // _HOUR_MS, sw.season_rule):
         return epoch_ms - _WINTER_SHIFT_MS
     return epoch_ms
 
@@ -154,7 +167,7 @@ def _session_open_ms(session_day_ms: int, sw: SessionWindow) -> int:
     Узимку правила сесії біржа відкривається на годину пізніше за UTC — зворотне до `_session_clock_ms`.
     """
     clock_open_ms = session_day_ms + sw.open_utc_min * _MINUTE_MS
-    if calendar_season(clock_open_ms, sw.season_rule) == SEASON_WINTER:
+    if _is_winter_hour(clock_open_ms // _HOUR_MS, sw.season_rule):
         return clock_open_ms + _WINTER_SHIFT_MS
     return clock_open_ms
 

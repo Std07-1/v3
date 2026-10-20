@@ -24,6 +24,8 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 CFG = json.loads((REPO / "config.json").read_text(encoding="utf-8"))
 _SYM = "XAU/USD"
 _MIN_MS = 60_000
+_HOUR_MS = 3_600_000
+_DAY_MS = 86_400_000
 _D1_S = 86_400
 
 
@@ -73,6 +75,50 @@ def test_cached_levels_match_batch_every_minute_across_sessions_killzones_days_w
             key_changes += previous_key is not None and key != previous_key
             previous_key = key
     assert key_changes >= 12  # прохід справді перетнув межі, а не стояв в одному стані
+
+
+def _session_edges_ms(engine, day_from_ms, day_to_ms):
+    """Межі кожної сесії (північ її годинника, відкриття, закриття, killzone) в обох сезонах — мить до і сама межа."""
+    edges = []
+    for day_ms in range(day_from_ms, day_to_ms, _DAY_MS):
+        for sw in engine._session_windows:
+            for minute in {0, sw.open_utc_min, sw.close_utc_min, sw.kz_start_min, sw.kz_end_min}:
+                for winter_shift_ms in (0, _HOUR_MS):  # узимку правила сесії межа на годину пізніше за UTC
+                    edge_ms = day_ms + minute * _MIN_MS + winter_shift_ms
+                    edges += [edge_ms - 1, edge_ms]
+    return edges
+
+
+@pytest.mark.parametrize("day_from, day_to, switch", [
+    ("2026-03-06", "2026-03-10", "2026-03-08 07:00"),  # США навесні (02:00 за Нью-Йорком)
+    ("2026-03-27", "2026-03-31", "2026-03-29 01:00"),  # ЄС навесні
+    ("2026-10-23", "2026-10-27", "2026-10-25 01:00"),  # ЄС восени
+    ("2026-10-30", "2026-11-03", "2026-11-01 06:00"),  # США восени
+])
+def test_cached_levels_match_batch_while_feeding_through_every_2026_dst_switch(monkeypatch, day_from, day_to, switch):
+    """Пт–Вт навколо кожного переходу 2026 року: стрічка живе (нові хвилини, фінал поверх tick_promoted, витіснення),
+    момент проходить межі всіх сесій в обох сезонах і сам перехід (±1 мс). Мала стрічка — 150 барів по 20 хв ≈ 50 год,
+    як 2880 M1, — щоб витіснення і обидва стани покриття попередньої сесії траплялися в межах проходу."""
+    monkeypatch.setattr("core.smc.engine._SESSION_M1_CAPACITY", 150)
+    engine = _engine()
+    start_ms, end_ms = _ms(day_from + " 00:07"), _ms(day_to + " 23:59")
+    events = []  # (момент, порядок, бар або None — лише перевірка)
+    for i, open_ms in enumerate(range(start_ms, end_ms, 20 * _MIN_MS)):
+        events.append((open_ms + _MIN_MS, len(events), _m1(open_ms, _price(i), "tick_promoted")))
+        if i % 3 == 0:  # фінал брокера тієї самої хвилини з іншим OHLC заміщує tick_promoted
+            events.append((open_ms + _MIN_MS + 5_000, len(events), _m1(open_ms, _price(i) + 0.5, spread=1.7)))
+    checkpoints = _session_edges_ms(engine, _ms(day_from + " 00:00"), _ms(day_to + " 00:00") + _DAY_MS)
+    checkpoints += [_ms(switch) - 1, _ms(switch), _ms(switch) + 1]
+    events += [(t, len(events) + i, None) for i, t in enumerate(checkpoints) if start_ms < t < end_ms]
+
+    prev_asia_covered = set()
+    for now_ms, _order, bar in sorted(events, key=lambda e: e[:2]):
+        if bar is not None:
+            engine.feed_m1_bar(bar)
+        _assert_matches_batch(engine, now_ms)
+        prev_asia_covered.add(any(lv.kind == "p_as_h" for lv in engine.get_session_levels(_SYM, now_ms)))
+    assert len(engine._session_m1_bars[_SYM]) == 150  # стрічка повна, витіснення відбувалися
+    assert prev_asia_covered == {True, False}  # у понеділок п'ятниця вже витіснена, у вівторок понеділок покритий
 
 
 def test_every_kind_of_tape_change_invalidates_and_a_change_free_feed_does_not():
