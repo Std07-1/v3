@@ -596,3 +596,7 @@ version, state, side, fired: {at_ms, price, via, direction, after_gap} | null}`;
   станом («щонайменше раз») — тоді й рядок другий, чесно. Redis не торкається (ACL `smc_alerts` без змін). Telegram-
   доставка (`telegram.py`, вимкнена) такого рядка не має — поза цим слайсом. Тест:
   `test_delivered_logs_one_line_on_ack_without_subscription_secrets` (без виклику — червоний).
+- 2026-10-21 — **`ALERTS_DELIVERED` на проді** (власник: «Го на деплой ALERTS_DELIVERED»): main `813cd350` (CI
+  зелений), VPS ff `3a4db44e..813cd350`, тег відкату `pre-alerts-delivered-20261021`; рестарт лише `smc-alerts`
+  (20.10 23:34 UTC), 60 с: RUNNING, `ALERTS_READY … devices=1`, health `degraded: []`, ERROR 0, ACL — неочікуваних
+  відмов 0; графік не чіпали, сайт 200. Перший рядок `ALERTS_DELIVERED` — на наступному спрацюванні.
