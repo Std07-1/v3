@@ -8,6 +8,7 @@
 // selectable, не erasable, не в сторі.
 
 import type { Drawing } from '../../../types';
+import { msg, t } from '../../../lib/i18n/i18n.svelte';
 import { displayPriceDigits } from '../../../lib/priceDigits';
 import { withAlpha as tokenWithAlpha } from '../../canvasColor';
 import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './types';
@@ -15,13 +16,13 @@ import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './typ
 /** Людський формат тривалості: 45м · 3г 20м · 2д 5г. */
 function fmtDuration(ms: number): string {
     const totalMin = Math.round(Math.abs(ms) / 60_000);
-    if (totalMin < 60) return `${totalMin}м`;
+    if (totalMin < 60) return t('{minutes}м', { minutes: totalMin });
     const totalH = Math.floor(totalMin / 60);
     const m = totalMin % 60;
-    if (totalH < 24) return m ? `${totalH}г ${m}м` : `${totalH}г`;
+    if (totalH < 24) return m ? t('{hours}г {minutes}м', { hours: totalH, minutes: m }) : t('{hours}г', { hours: totalH });
     const d = Math.floor(totalH / 24);
     const h = totalH % 24;
-    return h ? `${d}д ${h}г` : `${d}д`;
+    return h ? t('{days}д {hours}г', { days: d, hours: h }) : t('{days}д', { days: d });
 }
 
 /** rgba з hex-токена з заданою альфою (canvas не вміє color-mix); запасний — нейтральний сірий. */
@@ -30,7 +31,7 @@ const withAlpha = (hex: string, alpha: number): string => tokenWithAlpha(hex, al
 export const MeasureTool: ToolModule = {
     id: 'measure',
     pointsRequired: 2,
-    label: 'Лінійка',
+    label: msg('Лінійка'),
     icon: '<path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z"/><path d="m14.5 12.5 2-2"/><path d="m11.5 9.5 2-2"/><path d="m8.5 6.5 2-2"/><path d="m17.5 15.5 2-2"/>', // Lucide ruler
     hotkey: 'm',
     styleable: false,

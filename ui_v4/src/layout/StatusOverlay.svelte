@@ -5,6 +5,7 @@
     import { onDestroy } from "svelte";
     import type { StatusInfo } from "../app/diagSelectors";
     import { diagStore } from "../app/diagState";
+    import { msg, t } from "../lib/i18n/i18n.svelte";
     import type { DiagStateData } from "../app/diagState";
 
     const {
@@ -66,27 +67,27 @@
         }
     });
 
-    // Тексти для кожного статусу
+    // Тексти для кожного статусу — ключі мовного шару (ADR-0116), показ — t()
     const STATUS_MESSAGES: Record<string, { title: string; desc: string }> = {
         OFFLINE: {
-            title: "Мережа недоступна",
-            desc: "Перевірте інтернет-з'єднання.",
+            title: msg("Мережа недоступна"),
+            desc: msg("Перевірте інтернет-з'єднання."),
         },
         EDGE_BLOCKED: {
-            title: "Доступ заблоковано",
-            desc: "CDN або firewall блокує підключення.",
+            title: msg("Доступ заблоковано"),
+            desc: msg("CDN або firewall блокує підключення."),
         },
         WS_UNAVAILABLE: {
-            title: "WS сервіс недоступний",
-            desc: "WebSocket endpoint не відповідає. Автоматичне перепідключення...",
+            title: msg("Сервер графіка недоступний"),
+            desc: msg("Сервер не відповідає. Перепідключаюсь автоматично…"),
         },
         STALLED: {
-            title: "Немає даних",
-            desc: "WS підключено, але фрейми не надходять.",
+            title: msg("Немає даних"),
+            desc: msg("З'єднання є, але дані не надходять."),
         },
         FRONTEND_ERROR: {
-            title: "Помилка UI",
-            desc: "Виникла непередбачена помилка.",
+            title: msg("Помилка інтерфейсу"),
+            desc: msg("Виникла непередбачена помилка."),
         },
     };
 
@@ -105,16 +106,16 @@
 {#if visible}
     <div class="overlay" role="alert">
         <div class="overlay-card">
-            <h2 class="overlay-title">{lastMsg.title}</h2>
-            <p class="overlay-desc">{lastMsg.desc}</p>
+            <h2 class="overlay-title">{t(lastMsg.title)}</h2>
+            <p class="overlay-desc">{t(lastMsg.desc)}</p>
             <p class="overlay-detail-short">{statusInfo.detail}</p>
 
             <div class="overlay-actions">
                 <button class="btn btn-primary" onclick={onReconnect}
-                    >Перепідключити</button
+                    >{t("Перепідключити")}</button
                 >
                 <button class="btn btn-secondary" onclick={onReload}
-                    >Перезавантажити</button
+                    >{t("Перезавантажити")}</button
                 >
             </div>
 
@@ -123,7 +124,7 @@
                 class="toggle-details"
                 onclick={() => (showDetails = !showDetails)}
             >
-                {showDetails ? "▲ Сховати деталі" : "▼ Показати деталі"}
+                {showDetails ? "▲ " + t("Сховати деталі") : "▼ " + t("Показати деталі")}
             </button>
 
             {#if showDetails && diagSnap}

@@ -7,6 +7,7 @@
 
 <script lang="ts">
     import Brand from "./Brand.svelte";
+    import { t } from "../lib/i18n/i18n.svelte";
 
     interface Props {
         /** Whether to show splash. App.svelte computes this from
@@ -61,7 +62,7 @@
                 <span class="spinner-dot"></span>
                 <span class="spinner-dot"></span>
             </div>
-            <p class="status-text">Connecting…</p>
+            <p class="status-text">{t("Підключення…")}</p>
         </div>
     </div>
 {/if}

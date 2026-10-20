@@ -12,12 +12,14 @@ from aiohttp import web
 
 import runtime.ws.ws_server as ws_server
 from core.calendar_tf import MN_S, W1_S
+from runtime.i18n_catalog import load_catalog
 from runtime.store.uds import UpdatesResult, WindowResult
 from runtime.ws.app_keys import (
     APP_BOOT_ID,
     APP_CALENDAR_VIEW,
     APP_FULL_CONFIG,
     APP_HTF_ANCHOR_RULE_FOR_SYMBOL,
+    APP_I18N_CATALOG,
     APP_PREVIEW_TF_SET,
     APP_SMC_RUNNER,
     APP_TF_ALLOWLIST,
@@ -174,7 +176,7 @@ class _BriefingRunner(_RunnerProbe):
         super().__init__()
         self.as_of_ms = as_of_ms
 
-    def get_briefing(self, symbol):
+    def get_briefing(self, symbol, tr=None):
         self.calls.append("get_briefing")
         return _Briefing(self.as_of_ms)
 
@@ -191,6 +193,22 @@ def test_full_frame_w1_briefing_gets_profile_section(monkeypatch):
     keys = [section["key"] for section in frame["briefing"]["sections"]]
     assert keys == ["bias", "calendar_profile"]
     assert frame["briefing"]["sections"][-1]["title"] == "Профіль тижня"
+
+
+def test_full_frame_w1_in_english_has_english_profile(monkeypatch):
+    """ADR-0116 Ф2.4: мова з'єднання доходить до calendar_view — розділ профілю англійською."""
+    now_ms = _ms(2026, 10, 14, 15)
+    monkeypatch.setattr(ws_server.time, "time", lambda: now_ms / 1000)
+    app = _app(uds=_D1Uds(rows=UNTIL_TUESDAY), runner=_BriefingRunner())
+    app[APP_I18N_CATALOG] = load_catalog()
+    app[APP_CALENDAR_VIEW]._clock_ms = lambda: now_ms
+    session = WsSession(_FakeWs())
+    session.symbol, session.tf_s, session.lang = SYM, W1_S, "en"
+    asyncio.run(ws_server._send_full_frame(session, app))
+    (frame,) = session.ws.frames
+    profile = frame["briefing"]["sections"][-1]
+    assert frame["meta"]["lang"] == "en" and profile["key"] == "calendar_profile"
+    assert profile["title"] == "Weekly profile" and profile["rows"][0]["text"].startswith("Week high so far set on ")
 
 
 def test_delta_w1_resends_briefing_with_profile_only_when_it_changes(monkeypatch):

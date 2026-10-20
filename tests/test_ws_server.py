@@ -514,3 +514,22 @@ async def test_ws_visit_source_from_query_is_whitelisted(aiohttp_client, tmp_pat
     journal_path = tmp_path / ("sessions-%s.jsonl" % time.strftime("%Y%m", time.gmtime()))
     records = await _wait_journal_lines(journal_path, 3)
     assert [r["source"] for r in records] == ["snap", None, None]
+
+
+async def test_ws_visit_journals_the_language_the_session_ended_with(aiohttp_client, tmp_path):
+    """ADR-0116 §9 п.6: у журналі — лише код мови, якою сесія закінчилась; без мови й чужий код — None."""
+    app = build_app(config_path="config.json", uds=_MockUDS())
+    app[APP_VISITORS_JOURNAL] = VisitorsJournal(str(tmp_path), 20)
+    client = await aiohttp_client(app)
+    ws = await client.ws_connect("/ws?lang=ru")
+    await _recv_frame(ws, "full")
+    await ws.send_str(json.dumps({"action": "set_lang", "lang": "en"}))
+    await _recv_frame(ws, "full")
+    await ws.close()
+    for query in ("/ws?lang=xx", "/ws"):
+        ws = await client.ws_connect(query)
+        await _recv_frame(ws, "full")
+        await ws.close()
+    journal_path = tmp_path / ("sessions-%s.jsonl" % time.strftime("%Y%m", time.gmtime()))
+    records = await _wait_journal_lines(journal_path, 3)
+    assert [r["lang"] for r in records] == ["en", None, None]

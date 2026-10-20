@@ -23,6 +23,7 @@ class Visit:
     active_s: float  # об'єднання інтервалів сесій: паралельні вкладки час не подвоюють
     views: Tuple[str, ...]
     source: Optional[str] = None  # мітка джерела першої сесії з міткою (ADR-0105 rev 11.10), None — напряму
+    lang: Optional[str] = None  # мова, якою закінчилась остання сесія з мовою (ADR-0116), None — не передавалась
 
 
 @dataclass
@@ -62,6 +63,8 @@ class Digest:
     first_human_ms: Optional[int]
     via_snapshot: int = 0  # людей за період, що прийшли хоч раз за посиланням зі знімка (ADR-0109)
     via_snapshot_new: int = 0  # з них нових
+    # ADR-0116 §9 п.6: людей за період за мовою останнього їхнього візиту; None — UI мови не передавав
+    languages: Tuple[Tuple[Optional[str], int], ...] = ()
 
 
 def visitor_sessions(records: Sequence[Mapping[str, Any]]) -> List[Mapping[str, Any]]:
@@ -145,6 +148,7 @@ def summarize(
         first_human_ms=min((v.first_ms for v in humans), default=None),
         via_snapshot=len(via_snapshot),
         via_snapshot_new=sum(1 for row in via_snapshot if row.visitor.first_ms >= start_ms),
+        languages=_languages(rows),
     )
 
 
@@ -170,6 +174,15 @@ def _mark_together(rows: Sequence[Row]) -> None:
 
 def _active_since(humans: Sequence[Visitor], since_ms: int, end_ms: int) -> int:
     return sum(1 for v in humans if any(since_ms <= visit.start_ms < end_ms for visit in v.visits))
+
+
+def _languages(rows: Sequence[Row]) -> Tuple[Tuple[Optional[str], int], ...]:
+    """Людей за мовою останнього візиту за період: найчастіша — першою, «не передавалась» — останньою."""
+    counts: Dict[Optional[str], int] = {}
+    for row in rows:
+        lang = row.visits[-1].lang
+        counts[lang] = counts.get(lang, 0) + 1
+    return tuple(sorted(counts.items(), key=lambda item: (item[0] is None, -item[1], item[0] or "")))
 
 
 def _merge_visits(sessions: Sequence[Mapping[str, Any]], gap_ms: int) -> List[Visit]:
@@ -201,4 +214,5 @@ def _visit_of(number: int, cluster: Sequence[Mapping[str, Any]]) -> Visit:
         active_s=active_ms / 1000.0,
         views=tuple(views),
         source=next((s["source"] for s in cluster if s.get("source")), None),
+        lang=next((s["lang"] for s in reversed(cluster) if s.get("lang")), None),
     )

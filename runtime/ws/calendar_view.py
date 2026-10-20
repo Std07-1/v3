@@ -33,6 +33,7 @@ from core.calendar_tf import (
     project_calendar_bars,
     trading_date,
 )
+from core.i18n import SOURCE_TRANSLATOR, Translator
 from core.session_anchor import D1_S
 from runtime.store.uds import ReadPolicy, UpdatesResult, UpdatesSpec, WindowResult, WindowSpec
 from runtime.ws.candle_map import map_bar_to_candle_v4
@@ -171,16 +172,16 @@ class CalendarTfView:
         return close_ms if close_ms > now_ms else None
 
     def profile_section(
-        self, symbol: str, tf_s: int, now_ms: int, price_digits: Optional[int]
+        self, symbol: str, tf_s: int, now_ms: int, price_digits: Optional[int], tr: Translator = SOURCE_TRANSLATOR
     ) -> Dict[str, Any]:
-        """Розділ «Профіль тижня / місяця» для «Розбору» (ADR-0115 §10, wire BriefingSection)."""
+        """Розділ «Профіль тижня / місяця» для «Розбору» мовою `tr` (ADR-0115 §10, ADR-0116; wire BriefingSection)."""
         rule = self._rule_for_symbol(symbol)
         forming_day = self._forming_day(symbol)
         profile = self._profile(symbol, tf_s, rule, now_ms)
         live = live_sides(self._current_bucket_days(symbol, tf_s, rule, now_ms, forming_day), tf_s=tf_s, rule=rule)
         since_year = trading_date(profile.first_bucket_ms, rule).year if profile.first_bucket_ms is not None else None
         digits = _DEFAULT_PRICE_DIGITS if price_digits is None else price_digits
-        return compose_profile_section(profile, live, price_digits=digits, since_year=since_year).to_wire()
+        return compose_profile_section(profile, live, price_digits=digits, since_year=since_year, tr=tr).to_wire()
 
     def _profile(self, symbol: str, tf_s: int, rule: str, now_ms: int) -> CalendarProfile:
         """Історичні таблиці профілю: з кешу, доки не з'явився новий фінальний D1 і не почався новий бакет."""

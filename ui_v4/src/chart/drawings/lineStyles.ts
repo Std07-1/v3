@@ -7,6 +7,7 @@
 // D15.2: єдине джерело → UI-палітра й canvas-рендер не розсинхронюються.
 
 import type { DrawingLineStyle } from '../../types';
+import { msg } from '../../lib/i18n/i18n.svelte';
 
 // Тип живе у types.ts (SSOT типів); re-export для co-located споживачів.
 export type { DrawingLineStyle } from '../../types';
@@ -18,9 +19,9 @@ export interface LineStyleSpec {
 
 /** Порядок = порядок chips у flyout (суцільна → пунктир → крапки). */
 export const DRAWING_LINE_STYLES: readonly LineStyleSpec[] = [
-  { style: 'solid', label: 'Суцільна' },
-  { style: 'dashed', label: 'Пунктир' },
-  { style: 'dotted', label: 'Крапки' },
+  { style: 'solid', label: msg('Суцільна') },
+  { style: 'dashed', label: msg('Пунктир') },
+  { style: 'dotted', label: msg('Крапки') },
 ];
 
 /** Canvas dash-візерунок для стилю, масштабований товщиною (px). solid/undefined

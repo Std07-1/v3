@@ -22,6 +22,7 @@ from core.calendar_profile import (
 )
 from core.calendar_tf import MN_S, W1_S, DayBar
 from core.session_anchor import trading_day_open_ms
+from runtime.i18n_catalog import load_catalog
 
 NY = "ny_close_us_dst"
 
@@ -153,3 +154,21 @@ def test_section_month_labels_and_plural(buckets, noun):
 def test_section_small_month_sample():
     sec = compose_profile_section(_flat_profile(MN_S, 12), {}, price_digits=2, since_year=2008)
     assert sec.rows[0].notes == ("Вибірка замала (12 місяців)",)
+
+
+def test_section_in_english_and_russian_from_real_dictionaries():
+    """ADR-0116 Ф2.4: розділ мовою з'єднання — ті самі числа, фрази зі словників i18n/."""
+    catalog = load_catalog()
+    live = live_sides(_week(dt.date(2026, 10, 12), (4217.31, 4200.0, 4170.0), (4154.28, 4146.9, 4073.42)),
+                      tf_s=W1_S, rule=NY)
+    english, russian = (compose_profile_section(_big_profile(), live, price_digits=2, since_year=2025,
+                                                tr=catalog.get(lang)) for lang in ("en", "ru"))
+    assert english.title == "Weekly profile" and russian.title == "Профиль недели"
+    assert english.rows[0].text == "Week high so far set on Monday — 4217.31"
+    assert english.rows[0].notes == ("Historically, when as of Wednesday the week high was set on Monday, it stayed "
+                                     "the week high in 67% of weeks (49–81%, sample 30)",)
+    assert russian.rows[1].text == "Лой недели пока со среды — 4073.42"
+    assert english.rows[2].text == "Week high — which day (%): Mon 67 · Tue 0 · Wed 0 · Thu 33 · Fri 0"
+    assert russian.rows[2].notes[0].startswith("30 недель с 2025, 95 % интервал до ±")
+    small = compose_profile_section(_flat_profile(MN_S, 12), {}, price_digits=2, since_year=2008, tr=catalog.get("en"))
+    assert small.rows[0].notes == ("Sample too small (12 months)",)

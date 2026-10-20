@@ -64,6 +64,7 @@
   import { hintsOn } from "../stores/uiHints";
   import { TouchDrawCursor } from "../chart/drawings/touchDrawCursor";
   import { guardFigureTouches } from "../chart/drawings/figureTouchGuard";
+  import { t } from "../lib/i18n/i18n.svelte";
 
   interface Props {
     currentFrame?: RenderFrame | null;
@@ -979,7 +980,7 @@
     <div class="no-data-overlay">
       <div class="no-data-content">
         <span class="no-data-icon">📊</span>
-        <span class="no-data-text">No data</span>
+        <span class="no-data-text">{t("Немає даних")}</span>
         <span class="no-data-detail">{noDataSymbol} · {noDataTf}</span>
       </div>
     </div>
@@ -987,10 +988,10 @@
   <!-- P3.15: Scrollback state indicator -->
   {#if scrollbackState === "loading"}
     <div class="scrollback-indicator loading">
-      <span class="scrollback-spinner"></span> Loading history…
+      <span class="scrollback-spinner"></span> {t("Завантажую історію…")}
     </div>
   {:else if scrollbackState === "wall" && leftEdgeVisible}
-    <div class="scrollback-indicator wall">No more history available</div>
+    <div class="scrollback-indicator wall">{t("Більше історії немає")}</div>
   {/if}
   <!-- N3: SMC layer toggles — per-kind colour coding.
        use:dismissOnOutside замикає panel при click/touch поза .smc-panel
@@ -1033,20 +1034,20 @@
             class="smc-toggle smc-t-lvl"
             class:active={showLVL}
             onclick={() => (showLVL = !showLVL)}
-            title={$hintsOn ? "Levels (L)" : undefined}>LVL</button
+            title={$hintsOn ? t("Рівні (L)") : undefined}>LVL</button
           >
           <button
             class="smc-toggle lvl-caret"
             class:open={levelMenuOpen}
             aria-haspopup="menu"
             aria-expanded={levelMenuOpen}
-            aria-label="Рівні"
+            aria-label={t("Рівні")}
             onclick={() => (levelMenuOpen = !levelMenuOpen)}
-            title={$hintsOn ? "Рівні" : undefined}>▾</button
+            title={$hintsOn ? t("Рівні") : undefined}>▾</button
           >
           {#if levelMenuOpen}
-            <div class="level-menu" role="menu" aria-label="Рівні" bind:this={levelMenuEl}>
-              <div class="lm-header">Рівні · {levelTfKey}</div>
+            <div class="level-menu" role="menu" aria-label={t("Рівні")} bind:this={levelMenuEl}>
+              <div class="lm-header">{t("Рівні")} · {levelTfKey}</div>
               {#each levelRows as row (row.group)}
                 <button
                   class="lm-item"
@@ -1056,7 +1057,7 @@
                   aria-checked={row.on}
                   onclick={() => toggleLevelGroup(row.group)}
                 >
-                  <span class="lm-label">{row.label}</span>
+                  <span class="lm-label">{t(row.label)}</span>
                   <span class="lm-count">{row.count}</span>
                   <span class="lm-state">{row.on ? "●" : "○"}</span>
                 </button>
@@ -1068,7 +1069,7 @@
                 disabled={!levelMenuHasOverrides}
                 onclick={resetLevelGroups}
               >
-                <span class="lm-label">Скинути до типових</span>
+                <span class="lm-label">{t("Скинути до типових")}</span>
               </button>
             </div>
           {/if}

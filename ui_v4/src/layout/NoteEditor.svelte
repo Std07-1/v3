@@ -8,15 +8,16 @@
   Монтування — noteEditorHost.ts (поза ChartPane/App — обидва біля межі X33).
 -->
 <script lang="ts">
+  import { msg, t } from "../lib/i18n/i18n.svelte";
   import { untrack } from "svelte";
   import { NOTE_MAX_CHARS, normalizeNoteText, type NoteTextRequest } from "../chart/drawings/noteText";
   import { ICON_CLOSE } from "./toolIcons";
 
   const { request, onClose }: { request: NoteTextRequest; onClose: () => void } = $props();
 
-  const PLACEHOLDER = "Текст нотатки";
-  const SAVE_LABEL = "Зберегти нотатку";
-  const CANCEL_LABEL = "Скасувати";
+  const PLACEHOLDER = msg("Текст нотатки");
+  const SAVE_LABEL = msg("Зберегти нотатку");
+  const CANCEL_LABEL = msg("Скасувати");
   const ICON_CHECK = '<path d="M20 6 9 17l-5-5"/>';
   /** Висота поля на ПК — як чіп нотатки (TextTool CHIP_H 20) з рамкою: поле накриває чіп. */
   const DESKTOP_FIELD_H = 24;
@@ -83,8 +84,8 @@
       type="text"
       bind:value
       maxlength={NOTE_MAX_CHARS}
-      placeholder={PLACEHOLDER}
-      aria-label={PLACEHOLDER}
+      placeholder={t(PLACEHOLDER)}
+      aria-label={t(PLACEHOLDER)}
       enterkeyhint="done"
       onkeydown={onKeydown}
     />
@@ -92,14 +93,14 @@
     <button
       class="btn accent"
       type="button"
-      aria-label={SAVE_LABEL}
+      aria-label={t(SAVE_LABEL)}
       onpointerdown={(e) => e.preventDefault()}
       onclick={() => finish(true)}>{@render icon(ICON_CHECK)}</button
     >
     <button
       class="btn"
       type="button"
-      aria-label={CANCEL_LABEL}
+      aria-label={t(CANCEL_LABEL)}
       onpointerdown={(e) => e.preventDefault()}
       onclick={() => finish(false)}>{@render icon(ICON_CLOSE)}</button
     >
@@ -110,8 +111,8 @@
       type="text"
       bind:value
       maxlength={NOTE_MAX_CHARS}
-      placeholder={PLACEHOLDER}
-      aria-label={PLACEHOLDER}
+      placeholder={t(PLACEHOLDER)}
+      aria-label={t(PLACEHOLDER)}
       onkeydown={onKeydown}
       onblur={() => finish(true)}
     />

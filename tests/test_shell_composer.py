@@ -19,6 +19,7 @@ from core.smc.types import (
     TfChip,
 )
 from core.smc.shell_composer import compose_shell_payload
+from runtime.i18n_catalog import load_catalog
 
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -481,3 +482,23 @@ def test_micro_card_target_is_the_primary_scenario_target_and_is_on_the_wire():
 
     assert card.target == "PDL 5062.00" and card.to_wire()["target"] == "PDL 5062.00"
     assert empty.target == "" and empty.to_wire()["target"] == ""
+
+
+def test_card_in_english_and_russian_from_real_dictionaries():
+    """ADR-0116 Ф2.5: текст картки мовою з'єднання; мітка стадії й стан чипів — ті самі (мітки англійські скрізь)."""
+    catalog = load_catalog()
+    narrative = _make_narrative(mode="trade", sub_mode="aligned", scenarios=[_scenario(direction="long")],
+                                current_session="london")
+    source = compose_shell_payload(narrative, _MIXED_BIAS, 900, _CFG, sessions_active=True)
+    english, russian = (compose_shell_payload(narrative, _MIXED_BIAS, 900, _CFG, sessions_active=True,
+                                              tr=catalog.get(lang)) for lang in ("en", "ru"))
+    assert source.micro_card.mode_text == "Готуємось до лонгу"
+    assert english.micro_card.mode_text == "Preparing for a long"
+    assert russian.micro_card.mode_text == "Готовимся к лонгу"
+    assert english.micro_card.warning == "Outside killzone — lower setup quality"
+    assert english.tactical_strip.tag_text == "H1 against the trend"
+    assert russian.tactical_strip.tag_text == "H1 против тренда"
+    assert english.stage_label == source.stage_label and english.stage == source.stage
+    assert [c.chip_state for c in english.tactical_strip.chips] == [c.chip_state for c in source.tactical_strip.chips]
+    error = compose_shell_payload(_make_narrative(warnings=["no_snapshot"]), {}, 900, _CFG, tr=catalog.get("en"))
+    assert (error.micro_card.mode_text, error.micro_card.what_needed) == ("Waiting", "Waiting for data")

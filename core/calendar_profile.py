@@ -17,6 +17,7 @@ import math
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from core.calendar_tf import MN_S, W1_S, DayBar, calendar_bucket_start_ms, calendar_next_bucket_start_ms, trading_date
+from core.i18n import SOURCE_TRANSLATOR, Translator, msg
 from core.smc.briefing import BriefingRow, BriefingSection
 from core.smc.narrative import fmt_price
 
@@ -171,23 +172,59 @@ def _beyond(day: DayBar, price: float, side: str) -> bool:
 
 
 # ── Тексти розділу «Розбору» (X28: UI лише показує; ADR-0113 R8 — «історично…», без «шансу») ──────────────────────
+# Мова — перекладач `tr` (ADR-0116): без нього — джерело (uk) байт у байт. Фрази цілі, окремо на TF і бік: відмінки й
+# порядок слів у мовах різні, тож складати речення зі слів, як до мовного шару, не можна.
 
 _WORDS = {
     W1_S: {
-        "tf": "W1", "title": "Профіль тижня", "bucket": "тижня", "plural": ("тиждень", "тижні", "тижнів"), "where": "у який день",
-        "slots": ("Пн", "Вт", "Ср", "Чт", "Пт"),
-        "from": ("з понеділка", "з вівторка", "із середи", "з четверга", "з п'ятниці"),
-        "as_of": ("понеділок", "вівторок", "середу", "четвер", "п'ятницю"),
+        "tf": "W1", "title": msg("Профіль тижня"),
+        "buckets": lambda tr, n: tr.plural(n, "{count} тиждень|{count} тижні|{count} тижнів", count=_count(n)),
+        "slots": (msg("Пн"), msg("Вт"), msg("Ср"), msg("Чт"), msg("Пт")),
+        "since": (msg("з понеділка"), msg("з вівторка"), msg("із середи"), msg("з четверга"), msg("з п'ятниці")),
+        "as_of": (msg("понеділок"), msg("вівторок"), msg("середу"), msg("четвер"), msg("п'ятницю")),
+        "sides": {
+            HIGH: {
+                "live": msg("Хай тижня поки {since} — {price}"),
+                "condition": msg("станом на {as_of} хай тижня стояв {since}"),
+                "held": msg("Історично, коли {condition}, він лишився хаєм тижня в {pct} % тижнів ({lo}–{hi} %, "
+                            "вибірка {sample})"),
+                "head": msg("Хай тижня — у який день"),
+            },
+            LOW: {
+                "live": msg("Лой тижня поки {since} — {price}"),
+                "condition": msg("станом на {as_of} лой тижня стояв {since}"),
+                "held": msg("Історично, коли {condition}, він лишився лоєм тижня в {pct} % тижнів ({lo}–{hi} %, "
+                            "вибірка {sample})"),
+                "head": msg("Лой тижня — у який день"),
+            },
+        },
     },
     MN_S: {
-        "tf": "MN", "title": "Профіль місяця", "bucket": "місяця", "plural": ("місяць", "місяці", "місяців"), "where": "у які числа",
-        "slots": ("1–7", "8–14", "15–21", "22–28", "29–31"),
-        "from": ("з першого тижня (1–7)", "з другого тижня (8–14)", "з третього тижня (15–21)",
-                 "з четвертого тижня (22–28)", "з останніх днів (29–31)"),
-        "as_of": ("перший тиждень", "другий тиждень", "третій тиждень", "четвертий тиждень", "останні дні"),
+        "tf": "MN", "title": msg("Профіль місяця"),
+        "buckets": lambda tr, n: tr.plural(n, "{count} місяць|{count} місяці|{count} місяців", count=_count(n)),
+        "slots": (msg("1–7"), msg("8–14"), msg("15–21"), msg("22–28"), msg("29–31")),
+        "since": (msg("з першого тижня (1–7)"), msg("з другого тижня (8–14)"), msg("з третього тижня (15–21)"),
+                  msg("з четвертого тижня (22–28)"), msg("з останніх днів (29–31)")),
+        "as_of": (msg("перший тиждень"), msg("другий тиждень"), msg("третій тиждень"), msg("четвертий тиждень"),
+                  msg("останні дні")),
+        "sides": {
+            HIGH: {
+                "live": msg("Хай місяця поки {since} — {price}"),
+                "condition": msg("станом на {as_of} хай місяця стояв {since}"),
+                "held": msg("Історично, коли {condition}, він лишився хаєм місяця в {pct} % місяців ({lo}–{hi} %, "
+                            "вибірка {sample})"),
+                "head": msg("Хай місяця — у які числа"),
+            },
+            LOW: {
+                "live": msg("Лой місяця поки {since} — {price}"),
+                "condition": msg("станом на {as_of} лой місяця стояв {since}"),
+                "held": msg("Історично, коли {condition}, він лишився лоєм місяця в {pct} % місяців ({lo}–{hi} %, "
+                            "вибірка {sample})"),
+                "head": msg("Лой місяця — у які числа"),
+            },
+        },
     },
 }
-_SIDE_WORDS = {HIGH: ("Хай", "хай", "хаєм"), LOW: ("Лой", "лой", "лоєм")}
 
 
 def compose_profile_section(
@@ -196,60 +233,56 @@ def compose_profile_section(
     *,
     price_digits: int,
     since_year: Optional[int],
+    tr: Translator = SOURCE_TRANSLATOR,
 ) -> BriefingSection:
-    """Розділ «Профіль тижня / місяця»: живі рядки хаю й лою (якщо є поточний бакет) і два розподіли."""
+    """Розділ «Профіль тижня / місяця» мовою `tr`: живі рядки хаю й лою (якщо є поточний бакет) і два розподіли."""
     words = _WORDS[profile.tf_s]
     rows: List[BriefingRow] = []
     for side in _SIDES:
         if side in live:
-            rows.append(_live_row(profile, live[side], words, price_digits))
+            rows.append(_live_row(profile, live[side], words, price_digits, tr))
     for side in _SIDES:
-        rows.append(_distribution_row(profile, side, words, since_year))
-    return BriefingSection(SECTION_KEY, words["title"], tuple(rows))
+        rows.append(_distribution_row(profile, side, words, since_year, tr))
+    return BriefingSection(SECTION_KEY, tr(words["title"]), tuple(rows))
 
 
-def _live_row(profile: CalendarProfile, state: LiveSide, words, digits: int) -> BriefingRow:
-    title, name, instr = _SIDE_WORDS[state.side]
-    text = "%s %s поки %s — %s" % (title, words["bucket"], words["from"][state.slot], fmt_price(state.price, digits))
+def _live_row(profile: CalendarProfile, state: LiveSide, words, digits: int, tr: Translator) -> BriefingRow:
+    phrases = words["sides"][state.side]
+    since = tr(words["since"][state.slot])
+    text = tr(phrases["live"], since=since, price=fmt_price(state.price, digits))
     if state.current_slot >= SLOT_COUNT - 1:
         return BriefingRow(words["tf"], text)
     side = profile.sides[state.side]
     n = side.hold_n[state.current_slot][state.slot]
     ok = side.hold_ok[state.current_slot][state.slot]
-    condition = "станом на %s %s %s стояв %s" % (words["as_of"][state.current_slot], name, words["bucket"],
-                                                 words["from"][state.slot])
+    condition = tr(phrases["condition"], as_of=tr(words["as_of"][state.current_slot]), since=since)
     if n < MIN_SAMPLE:
-        note = "Історично бакетів, де %s, замало для частки (вибірка %d)" % (condition, n)
+        note = tr("Історично бакетів, де {condition}, замало для частки (вибірка {sample})", condition=condition,
+                  sample=n)
     else:
         lo, hi = wilson_interval(ok, n)
-        note = "Історично, коли %s, він лишився %s %s в %d %% %s (%d–%d %%, вибірка %s)" % (
-            condition, instr, words["bucket"], round(100 * ok / n), words["plural"][2], round(100 * lo), round(100 * hi),
-            _count(n))
+        note = tr(phrases["held"], condition=condition, pct=round(100 * ok / n), lo=round(100 * lo),
+                  hi=round(100 * hi), sample=_count(n))
     return BriefingRow(words["tf"], text, (note,))
 
 
-def _distribution_row(profile: CalendarProfile, side: str, words, since_year: Optional[int]) -> BriefingRow:
-    title = _SIDE_WORDS[side][0]
+def _distribution_row(
+    profile: CalendarProfile, side: str, words, since_year: Optional[int], tr: Translator
+) -> BriefingRow:
     n = profile.buckets
-    head = "%s %s — %s" % (title, words["bucket"], words["where"])
+    head = tr(words["sides"][side]["head"])
+    buckets = words["buckets"](tr, n)
     if n < MIN_SAMPLE:
-        return BriefingRow(words["tf"], head, ("Вибірка замала (%d %s)" % (n, _plural(n, words["plural"])),))
+        return BriefingRow(words["tf"], head, (tr("Вибірка замала ({buckets})", buckets=buckets),))
     counts = profile.sides[side].slot_counts
-    parts = " · ".join("%s %d" % (label, round(100 * c / n)) for label, c in zip(words["slots"], counts))
+    parts = " · ".join("%s %d" % (tr(label), round(100 * c / n)) for label, c in zip(words["slots"], counts))
     half = max((hi - lo) / 2 for lo, hi in (wilson_interval(c, n) for c in counts))
-    since = " з %d" % since_year if since_year is not None else ""
-    note = "%s %s%s, 95 %% інтервал до ±%d п.п." % (_count(n), _plural(n, words["plural"]), since,
-                                                   max(1, round(100 * half)))
-    return BriefingRow(words["tf"], "%s: %s %%" % (head, parts), (note,))
-
-
-def _plural(n: int, forms: Tuple[str, str, str]) -> str:
-    """Форма іменника після числа: 1 тиждень, 2–4 тижні, 5–20 тижнів (11–14 — «тижнів»)."""
-    if n % 10 == 1 and n % 100 != 11:
-        return forms[0]
-    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
-        return forms[1]
-    return forms[2]
+    interval = max(1, round(100 * half))
+    if since_year is None:
+        note = tr("{buckets}, 95 % інтервал до ±{pp} п.п.", buckets=buckets, pp=interval)
+    else:
+        note = tr("{buckets} з {year}, 95 % інтервал до ±{pp} п.п.", buckets=buckets, year=since_year, pp=interval)
+    return BriefingRow(words["tf"], tr("{head}: {parts} %", head=head, parts=parts), (note,))
 
 
 def _count(n: int) -> str:

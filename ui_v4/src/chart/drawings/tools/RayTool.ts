@@ -10,6 +10,7 @@
 // центр AABB (delete-× ADR-0079) опинявся б за екраном.
 
 import type { Drawing } from '../../../types';
+import { msg } from '../../../lib/i18n/i18n.svelte';
 import { distToSegment } from '../../interaction/geometry';
 import { dashPattern } from '../lineStyles';
 import { LINE_GROUP } from './groups';
@@ -43,7 +44,7 @@ function farPoint(x1: number, y1: number, x2: number, y2: number, reach: number)
 export const RayTool: ToolModule = {
     id: 'ray',
     pointsRequired: 2,
-    label: 'Промінь',
+    label: msg('Промінь'),
     icon: '<path d="M13 5H19V11"/><path d="M19 5L5 19"/>', // Lucide move-up-right
     hotkey: 'y',
     styleable: true,

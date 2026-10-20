@@ -9,6 +9,7 @@
 // D15.2: єдине джерело → CSS-палітра й canvas-рендер не можуть розсинхронитись.
 
 import type { DrawingColorRole } from '../../types';
+import { msg } from '../../lib/i18n/i18n.svelte';
 
 // Тип живе у types.ts (SSOT типів); re-export тут для co-located споживачів.
 export type { DrawingColorRole } from '../../types';
@@ -24,12 +25,12 @@ export interface RoleSpec {
 
 /** Порядок = порядок палітри у flyout (нейтраль → акцент → бик/ведмідь → інфо/увага). */
 export const DRAWING_COLOR_ROLES: readonly RoleSpec[] = [
-  { role: 'neutral', label: 'Нейтраль', cssVar: '--drawing-base-color', fallback: '#c8cdd6' },
-  { role: 'accent',  label: 'Акцент',   cssVar: '--accent',             fallback: '#d4a017' },
-  { role: 'bull',    label: 'Бик',      cssVar: '--bull',               fallback: '#22cc8f' },
-  { role: 'bear',    label: 'Ведмідь',  cssVar: '--bear',               fallback: '#ed4554' },
-  { role: 'info',    label: 'Інфо',     cssVar: '--info',               fallback: '#5487ff' },
-  { role: 'warn',    label: 'Увага',    cssVar: '--warn',               fallback: '#ffb347' },
+  { role: 'neutral', label: msg('Нейтраль'), cssVar: '--drawing-base-color', fallback: '#c8cdd6' },
+  { role: 'accent',  label: msg('Акцент'),   cssVar: '--accent',             fallback: '#d4a017' },
+  { role: 'bull',    label: msg('Бик'),      cssVar: '--bull',               fallback: '#22cc8f' },
+  { role: 'bear',    label: msg('Ведмідь'),  cssVar: '--bear',               fallback: '#ed4554' },
+  { role: 'info',    label: msg('Інфо'),     cssVar: '--info',               fallback: '#5487ff' },
+  { role: 'warn',    label: msg('Увага'),    cssVar: '--warn',               fallback: '#ffb347' },
 ];
 
 /** Fast lookup за роллю (заголовок, cssVar). undefined для невідомої ролі. */

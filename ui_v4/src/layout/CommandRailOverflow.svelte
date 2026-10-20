@@ -22,6 +22,7 @@
 
     import type { DisplayMode } from "../chart/overlay/DisplayBudget";
     import AlertsMenuSection from "./AlertsMenuSection.svelte";
+    import { LANG_REGISTRY, currentLang, setLang, t } from "../lib/i18n/i18n.svelte";
 
     interface Props {
         open: boolean;
@@ -104,7 +105,7 @@
         }
     }
 
-    type SubmenuKey = "theme" | "style" | null;
+    type SubmenuKey = "lang" | "theme" | "style" | null;
     let openSubmenu = $state<SubmenuKey>(null);
 
     // Reset submenu state whenever menu closes.
@@ -112,8 +113,16 @@
         if (!open) openSubmenu = null;
     });
 
-    function handleThemePick(t: ThemeName) {
-        onSelectTheme(t);
+    // ADR-0116 §5.2: мова глядача; назва поточної — нею самою (з реєстру, не перекладається)
+    const activeLang = $derived(currentLang());
+    const activeLangName = $derived(LANG_REGISTRY.languages.find((l) => l.code === activeLang)?.name ?? activeLang);
+
+    function handleLangPick(code: string) {
+        void setLang(code);
+        openSubmenu = null; // як «Тема»: закривається підменю, меню лишається
+    }
+    function handleThemePick(theme: ThemeName) {
+        onSelectTheme(theme);
         openSubmenu = null; // close submenu only; main menu stays open (ADR-0065 UX fix)
     }
     function handleStylePick(s: CandleStyleName) {
@@ -145,7 +154,7 @@
     <div
         class="overflow-menu"
         role="menu"
-        aria-label="More options"
+        aria-label={t("Меню")}
         onclick={(e) => e.stopPropagation()}
     >
         <!-- ADR-0065 Phase 1: SMC panel toggle -->
@@ -160,7 +169,7 @@
                     onClose();
                 }}
             >
-                <span class="mi-label">SMC layers</span>
+                <span class="mi-label">{t("Шари SMC")}</span>
                 <span class="mi-state">{smcPanelOpen ? "●" : "○"}</span>
             </button>
         {/if}
@@ -177,9 +186,9 @@
                     // ADR-0065 UX fix: keep menu open so user can compare F/R result
                 }}
             >
-                <span class="mi-label">Display</span>
+                <span class="mi-label">{t("Відображення")}</span>
                 <span class="mi-state"
-                    >{displayMode === "focus" ? "Focus" : "Research"}</span
+                    >{displayMode === "focus" ? t("Фокус") : t("Дослідження")}</span
                 >
             </button>
         {/if}
@@ -195,7 +204,7 @@
                 aria-checked={toolsEnabled}
                 onclick={() => onToggleTools?.()}
             >
-                <span class="mi-label">Малювання</span>
+                <span class="mi-label">{t("Малювання")}</span>
                 <span class="mi-state">{toolsEnabled ? "●" : "○"}</span>
             </button>
         {/if}
@@ -203,7 +212,7 @@
         <!-- ADR-0112: пробне малювання на телефоні — лише з ?draw=1 і лише в телефонному розкладі (як пункт знімка) -->
         {#if onOpenTouchDrawing}
             <button class="menu-item touch-draw-item" role="menuitem" onclick={() => onOpenTouchDrawing?.()}>
-                <span class="mi-label">Малювати</span>
+                <span class="mi-label">{t("Малювати")}</span>
             </button>
         {/if}
 
@@ -217,7 +226,7 @@
                 disabled={snapBusy}
                 onclick={handleSnapshot}
             >
-                <span class="mi-label">{snapLabel ?? "Знімок графіка"}</span>
+                <span class="mi-label">{snapLabel ?? t("Знімок графіка")}</span>
             </button>
         {/if}
 
@@ -233,7 +242,7 @@
                 aria-checked={hintsEnabled}
                 onclick={() => onToggleHints?.()}
             >
-                <span class="mi-label">Підказки</span>
+                <span class="mi-label">{t("Підказки")}</span>
                 <span class="mi-state">{hintsEnabled ? "●" : "○"}</span>
             </button>
         {/if}
@@ -247,7 +256,7 @@
                 aria-checked={archiChartEnabled}
                 onclick={() => onToggleArchiChart?.()}
             >
-                <span class="mi-label">Арчі на чарті</span>
+                <span class="mi-label">{t("Арчі на чарті")}</span>
                 <span class="mi-state">{archiChartEnabled ? "●" : "○"}</span>
             </button>
         {/if}
@@ -255,6 +264,38 @@
         {#if onToggleSmc || onToggleDisplayMode || onToggleHints || onToggleTools || onToggleArchiChart}
             <div class="menu-divider" role="separator"></div>
         {/if}
+
+        <!-- ADR-0116 §5.2: мова — тією самою формою, що «Тема»; кожна мова в підменю — своєю мовою -->
+        <div class="menu-item-row">
+            <button
+                class="menu-item"
+                role="menuitem"
+                aria-haspopup="menu"
+                aria-expanded={openSubmenu === "lang"}
+                onclick={() =>
+                    (openSubmenu = openSubmenu === "lang" ? null : "lang")}
+            >
+                <span class="mi-label">{t("Мова")}</span>
+                <span class="mi-current" lang={activeLang}>{activeLangName}</span>
+                <span class="mi-chevron">▸</span>
+            </button>
+            {#if openSubmenu === "lang"}
+                <div class="submenu" role="menu">
+                    {#each LANG_REGISTRY.languages as language (language.code)}
+                        <button
+                            class="submenu-item"
+                            class:active={language.code === activeLang}
+                            role="menuitemradio"
+                            aria-checked={language.code === activeLang}
+                            lang={language.code}
+                            onclick={() => handleLangPick(language.code)}
+                        >
+                            {language.name}
+                        </button>
+                    {/each}
+                </div>
+            {/if}
+        </div>
 
         <!-- Theme submenu -->
         <div class="menu-item-row">
@@ -266,21 +307,21 @@
                 onclick={() =>
                     (openSubmenu = openSubmenu === "theme" ? null : "theme")}
             >
-                <span class="mi-label">Theme</span>
-                <span class="mi-current">{THEMES[activeTheme].label}</span>
+                <span class="mi-label">{t("Тема")}</span>
+                <span class="mi-current">{t(THEMES[activeTheme].label)}</span>
                 <span class="mi-chevron">▸</span>
             </button>
             {#if openSubmenu === "theme"}
                 <div class="submenu" role="menu">
-                    {#each THEME_NAMES as t}
+                    {#each THEME_NAMES as theme}
                         <button
                             class="submenu-item"
-                            class:active={t === activeTheme}
+                            class:active={theme === activeTheme}
                             role="menuitemradio"
-                            aria-checked={t === activeTheme}
-                            onclick={() => handleThemePick(t)}
+                            aria-checked={theme === activeTheme}
+                            onclick={() => handleThemePick(theme)}
                         >
-                            {THEMES[t].label}
+                            {t(THEMES[theme].label)}
                         </button>
                     {/each}
                 </div>
@@ -297,9 +338,9 @@
                 onclick={() =>
                     (openSubmenu = openSubmenu === "style" ? null : "style")}
             >
-                <span class="mi-label">Style</span>
+                <span class="mi-label">{t("Стиль")}</span>
                 <span class="mi-current"
-                    >{CANDLE_STYLES[activeStyle].label}</span
+                    >{t(CANDLE_STYLES[activeStyle].label)}</span
                 >
                 <span class="mi-chevron">▸</span>
             </button>
@@ -320,7 +361,7 @@
                                     activeTheme,
                                 ).upColor}
                             ></span>
-                            {CANDLE_STYLES[cs].label}
+                            {t(CANDLE_STYLES[cs].label)}
                         </button>
                     {/each}
                 </div>
@@ -333,14 +374,14 @@
             role="menuitem"
             tabindex="-1"
             onwheel={onBrightnessWheel}
-            title={hintsEnabled ? `Brightness ${brightnessPct}%` : undefined}
+            title={hintsEnabled ? t("Яскравість {percent}%", { percent: brightnessPct }) : undefined}
         >
-            <span class="mi-label">Brightness</span>
+            <span class="mi-label">{t("Яскравість")}</span>
             <div class="bri-controls">
                 <button
                     class="bri-step"
                     tabindex="-1"
-                    aria-label="Dimmer"
+                    aria-label={t("Тьмяніше")}
                     onclick={(e) => {
                         e.stopPropagation();
                         onBrightnessStep?.(-1);
@@ -348,7 +389,7 @@
                 >
                 <span
                     class="brightness-leds"
-                    aria-label="Brightness {brightnessPct}%"
+                    aria-label={t("Яскравість {percent}%", { percent: brightnessPct })}
                 >
                     {#each [1, 2, 3, 4, 5] as i}
                         <span class="led" class:lit={i <= litCount}></span>
@@ -357,7 +398,7 @@
                 <button
                     class="bri-step"
                     tabindex="-1"
-                    aria-label="Brighter"
+                    aria-label={t("Яскравіше")}
                     onclick={(e) => {
                         e.stopPropagation();
                         onBrightnessStep?.(1);

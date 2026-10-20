@@ -5,6 +5,7 @@
   import { onMount, onDestroy, untrack } from "svelte";
   import { WSConnection } from "./ws/connection";
   import { createActions } from "./ws/actions";
+  import { onLangChange, t, withLangParam } from "./lib/i18n/i18n.svelte";
 
   import ChartPane from "./layout/ChartPane.svelte";
   import DrawingToolbar from "./layout/DrawingToolbar.svelte";
@@ -116,6 +117,8 @@
     }
   }
   const WS_CONNECT_URL = withVisitSource(WS_URL, VISIT_SOURCE);
+  // ADR-0116 §5.3: мова — на кожне (пере)підключення, щоб після перемикання сервер не повернув стару
+  const wsConnectUrl = () => withLangParam(WS_CONNECT_URL);
 
   let ws: WSConnection | null = null;
   let actions: ReturnType<typeof createActions> | null = null;
@@ -562,12 +565,12 @@
     }
     try {
       const snap = await buildSnapshot(false);
-      if (!snap) return "Графік ще не готовий";
+      if (!snap) return t("Графік ще не готовий");
       const ways = chooseDelivery(browserSnapshotCaps(new File([snap.png], snap.fileName, { type: "image/png" })));
       return snapshotResultLabel(await deliverWithFallback(snap, ways));
     } catch (err) {
       console.error("[snapshot] SNAPSHOT_FAILED", err);
-      return "Не вдалося зробити знімок";
+      return t("Не вдалося зробити знімок");
     }
   }
 
@@ -590,7 +593,7 @@
       const snap = await buildSnapshot(wide);
       if (render !== snapPreviewRender) return;
       if (!snap) {
-        snapPreviewStatus = "Графік ще не готовий";
+        snapPreviewStatus = t("Графік ще не готовий");
         return;
       }
       if (snapPreviewUrl) URL.revokeObjectURL(snapPreviewUrl);
@@ -603,7 +606,7 @@
         if (snapPreviewUrl) URL.revokeObjectURL(snapPreviewUrl);
         snapPreviewUrl = null;
         snapPreviewShot = null;
-        snapPreviewStatus = "Не вдалося зробити знімок";
+        snapPreviewStatus = t("Не вдалося зробити знімок");
       }
     } finally {
       if (render === snapPreviewRender) snapPreviewBusy = false;
@@ -821,7 +824,7 @@
     // Note: resetFrameRouter + _pairRestored reset happen in _onWsOpen callback
     // Re-probe HTTP шар при ручному reconnect
     probeNow();
-    ws = new WSConnection(WS_CONNECT_URL, handleWSFrame, _onWsOpen);
+    ws = new WSConnection(wsConnectUrl, handleWSFrame, _onWsOpen);
     ws.connect();
     actions = createActions(ws);
   }
@@ -848,6 +851,8 @@
 
   // ADR-0074 T5: keyboard cleanup ref — встановлюється у onMount, викликається у onDestroy.
   let keyboardCleanup: (() => void) | null = null;
+  // ADR-0116 §5.2: перемикач мови → сервер (тексти аналізу новою мовою); відписка в onDestroy
+  const langCleanup = onLangChange((lang) => actions?.setLang(lang));
 
   onMount(() => {
     // ADR-0109: знак V3 для знімка — наперед, щоб між дотиком і меню «Поділитися» було якнайменше очікування
@@ -863,7 +868,7 @@
     diagStore.setNetOffline(!navigator.onLine);
 
     // 3. WS connect (onOpen resets frameRouter + pair restore on every reconnect)
-    ws = new WSConnection(WS_CONNECT_URL, handleWSFrame, _onWsOpen);
+    ws = new WSConnection(wsConnectUrl, handleWSFrame, _onWsOpen);
     ws.connect();
     actions = createActions(ws);
 
@@ -901,6 +906,7 @@
     if (clockInterval) clearInterval(clockInterval);
     keyboardCleanup?.();
     keyboardCleanup = null;
+    langCleanup();
     window.removeEventListener("error", onGlobalError);
     window.removeEventListener("unhandledrejection", onUnhandledRejection);
     window.removeEventListener("online", onOnline);
@@ -1083,7 +1089,7 @@
         class="tr-replay-btn"
         onclick={handleEnterReplay}
         title={$hintsOn ? "Enter Replay Mode" : undefined}
-        aria-label="Enter replay mode">▶</button
+        aria-label={t("Увімкнути реплей")}>▶</button
       >
     {:else}
       <span class="tr-replay-badge">REPLAY</span>
@@ -1097,7 +1103,7 @@
         class:open={touchDrawOpen}
         onclick={() => (touchDrawOpen ? closeTouchDrawing() : openTouchDrawing())}
         aria-pressed={touchDrawOpen}
-        aria-label="Малювати"
+        aria-label={t("Малювати")}
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"
           stroke-linejoin="round" aria-hidden="true">{@html ICON_PENCIL}</svg>
@@ -1120,7 +1126,7 @@
         title={$hintsOn ? "More options (theme, style, brightness, diagnostics)" : undefined}
         aria-haspopup="menu"
         aria-expanded={overflowOpen}
-        aria-label="More options">☰</button
+        aria-label={t("Меню")}>☰</button
       >
       <CommandRailOverflow
         open={overflowOpen}

@@ -4,15 +4,16 @@
 // напряму. Підписи груп — тут, одним місцем (переклад — окремий зріз).
 
 import type { ToolGroup } from './types';
+import { msg } from '../../../lib/i18n/i18n.svelte';
 
 /** Горизонталь · промінь рівня. */
-export const LEVEL_GROUP: ToolGroup = { id: 'level', label: 'Рівень' };
+export const LEVEL_GROUP: ToolGroup = { id: 'level', label: msg('Рівень') };
 
 /** Тренд · промінь (ADR-0084). */
-export const LINE_GROUP: ToolGroup = { id: 'line', label: 'Лінія' };
+export const LINE_GROUP: ToolGroup = { id: 'line', label: msg('Лінія') };
 
 /** Прямокутник · зона OB/FVG. */
-export const BOX_GROUP: ToolGroup = { id: 'box', label: 'Прямокутник' };
+export const BOX_GROUP: ToolGroup = { id: 'box', label: msg('Прямокутник') };
 
 /** Довга · коротка позиція (ADR-0112 D9, власник 15.10: «одна кнопка «Позиція» з перемикачем»). */
-export const POSITION_GROUP: ToolGroup = { id: 'position', label: 'Позиція' };
+export const POSITION_GROUP: ToolGroup = { id: 'position', label: msg('Позиція') };

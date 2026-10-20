@@ -1095,7 +1095,7 @@ class TestHonestyF0:
         assert nb.scenarios[0].target_desc == "EQL 5165.00"
 
     def test_target_label_has_no_tf_digit_before_price(self):
-        """K5: підпис цілі читається людиною, а журнал бере саме ціну («лой попер. H4 5150.00» → 5150.0)."""
+        """K5: підпис цілі читається людиною, а журнал бере саме ціну («лой поп. H4 5150.00» → 5150.0)."""
         from runtime.smc.signal_journal import parse_price_from_desc
 
         z = _zone(kind="ob_bear", high=5225.0, low=5190.0, zone_id="z1")
@@ -1104,8 +1104,9 @@ class TestHonestyF0:
             {"86400": "bearish", "14400": "bearish"}, _grade_a6("z1"), {}, 900, 5180.0, 20.0, _default_config(),
             price_digits=2,
         )
-        assert nb.scenarios[0].target_desc == "лой попер. H4 5150.00"
+        assert nb.scenarios[0].target_desc == "лой поп. H4 5150.00"
         assert parse_price_from_desc(nb.scenarios[0].target_desc) == 5150.0
+        assert parse_price_from_desc("лой попер. H4 5150.00") == 5150.0  # рядки журналу до 20.10 («попер.» → «поп.»)
         assert parse_price_from_desc("P H4 L 2892") == 2892.0  # старий формат: раніше 4.0
         assert parse_price_from_desc("PDH 2892") == 2892.0
         assert parse_price_from_desc("Вище 158.452 — зона пробита") == 158.452

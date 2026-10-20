@@ -25,9 +25,10 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from core.config_loader import htf_anchor_rule_resolver, price_digits_wire
+from core.i18n import SOURCE_TRANSLATOR, Translator
 from core.model.bars import CandleBar
 from core.smc.engine import SmcEngine
 from core.smc.range_exhaustion import compute_range_exhaustion
@@ -53,6 +54,9 @@ from core.smc.briefing import (
     session_section,
 )
 from core.smc.sessions import get_current_session, next_session_open
+
+# ADR-0116 Ф2.2b: розбір без тексту — викликається з перекладачем мови й повертає розбір нею
+BriefingDraft = Callable[[Translator], Briefing]
 from core.smc.liquidity_sweep import FirstReached, TouchIndex, first_reached
 from core.session_anchor import htf_bucket_start_ms, htf_next_bucket_start_ms
 from core.smc.zone_path import FormingSpan, ZonePath, first_touch_end_ms, forming_spans, zone_path
@@ -69,12 +73,12 @@ _log = logging.getLogger(__name__)
 _WARMUP_SLOW_MS = 200.0
 
 
-def _market_closed_block() -> NarrativeBlock:
-    """NarrativeBlock for closed market — no signal, no journal."""
+def _market_closed_block(tr: Translator = SOURCE_TRANSLATOR) -> NarrativeBlock:
+    """NarrativeBlock for closed market — no signal, no journal; заголовок мовою `tr` (ADR-0116)."""
     return NarrativeBlock(
         mode="wait",
         sub_mode="market_closed",
-        headline="⏸ Ринок закрито",
+        headline=tr("⏸ Ринок закрито"),
         bias_summary="",
         scenarios=[],
         next_area="",
@@ -219,8 +223,14 @@ class SmcRunner:
         self._range_exhaustion_cache: Dict[str, Tuple[int, RangeExhaustionSnapshot]] = (
             {}
         )
-        # ADR-0113 Ф3: розбір символу — symbol → (останні бари compute TF, розбір); None — не склався (лог уже був)
-        self._briefing_cache: Dict[str, Tuple[Tuple[int, ...], Optional[Briefing]]] = {}
+        # ADR-0113 Ф3: розбір символу — (symbol, мова) → (останні бари compute TF, розбір); None — не склався (лог
+        # уже був). Мова в ключі — ADR-0116 Ф2.2: розбір кожної мови кешується окремо, на той самий закритий бар
+        self._briefing_cache: Dict[Tuple[str, str], Tuple[Tuple[int, ...], Optional[Briefing]]] = {}
+        # ADR-0116 Ф2.2b: те, що від мови не залежить, збирається раз — мовна копія лише складає текст. Збір входів —
+        # 99% вартості тексту, синтез фраз ~0.2 мс (замір 19.10: data_v3 XAU 22–26.09, 280 закриттів M15)
+        self._briefing_drafts: Dict[str, Tuple[Tuple[int, ...], Optional[BriefingDraft]]] = {}
+        # (symbol, viewer_tf_s) → ((ціна, atr, now_ms запиту), входи) останнього наративу мовою джерела
+        self._narrative_inputs_memo: Dict[Tuple[str, int], Tuple[Tuple[float, float, Optional[int]], NarrativeInputs]] = {}
 
         # Relay: відстеження останнього bias для dedup
         self._last_bias: Dict[Tuple[str, int], Optional[str]] = {}
@@ -834,26 +844,31 @@ class SmcRunner:
             _log.warning("SMC_DISPLAY_LEVELS_FAIL sym=%s tf=%s", symbol, viewer_tf_s, exc_info=True)
             return None
 
-    def get_narrative(self, symbol, viewer_tf_s, current_price, atr=0.0, now_ms=None, record=True):
-        # type: (str, int, float, float, Optional[int], bool) -> Optional[NarrativeBlock]
+    def get_narrative(self, symbol, viewer_tf_s, current_price, atr=0.0, now_ms=None, record=True,
+                      tr=SOURCE_TRANSLATOR):
+        # type: (str, int, float, float, Optional[int], bool, Translator) -> Optional[NarrativeBlock]
         """ADR-0033 + ADR-0035: synthesize narrative with session context.
 
         `atr` — оцінка викликача (ws_server: h−l одного бару; 0.0 = оцінки нема); діє лише для TF,
         який рушій не вимірює (див. _narrative_atr).
         `now_ms` — момент розбору, один для календаря ринку, сесії й рівнів (R10); None — настінний годинник.
         Прогін по історії передає час закриття бару (ADR-0113 Ф1).
+        `tr` — мова тексту (ADR-0116 Ф2.2). Мовна копія кадру кличе з record=False: журнал пише лише прохід джерела,
+        а входи бере з нього ж, якщо аргументи ті самі (Ф2.2b) — ті самі числа, без другого збору; мовою `tr`
+        складаються лише фрази (Ф2.6).
         """
+        requested_now_ms = now_ms
         gate = self._narrative_gate(symbol, now_ms)
         if gate is None:
             return None
         now_ms, market_open = gate
         if not market_open:
-            return _market_closed_block()
+            return _market_closed_block(tr)
         try:
-            inputs = self._collect_narrative_inputs(symbol, viewer_tf_s, current_price, atr, now_ms)
+            inputs = self._narrative_inputs(symbol, viewer_tf_s, current_price, atr, now_ms, requested_now_ms, tr)
             if inputs is None:
-                return _fallback_narrative_block(["no_snapshot"])
-            result = synthesize_narrative(**inputs.as_kwargs())
+                return _fallback_narrative_block(["no_snapshot"], tr)
+            result = synthesize_narrative(**inputs.as_kwargs(), tr=tr)
             if record:
                 self._journal.record(
                     symbol, viewer_tf_s, result, current_price, inputs.atr, bias_map=inputs.bias_map
@@ -861,7 +876,20 @@ class SmcRunner:
             return result
         except Exception:
             _log.exception("NARRATIVE_ERROR symbol=%s tf=%d", symbol, viewer_tf_s)
-            return _fallback_narrative_block()
+            return _fallback_narrative_block(tr=tr)
+
+    def _narrative_inputs(self, symbol, viewer_tf_s, current_price, atr, now_ms, requested_now_ms, tr):
+        # type: (str, int, float, float, int, Optional[int], Translator) -> Optional[NarrativeInputs]
+        """Входи наративу: мовна копія з тими самими аргументами — входи проходу джерела (Ф2.2b), інакше — збір."""
+        target, args = (symbol, viewer_tf_s), (current_price, atr, requested_now_ms)
+        if tr is not SOURCE_TRANSLATOR:
+            remembered = self._narrative_inputs_memo.get(target)
+            if remembered is not None and remembered[0] == args:
+                return remembered[1]
+        inputs = self._collect_narrative_inputs(symbol, viewer_tf_s, current_price, atr, now_ms)
+        if inputs is not None and tr is SOURCE_TRANSLATOR:
+            self._narrative_inputs_memo[target] = (args, inputs)
+        return inputs
 
     def narrative_row(self, symbol, viewer_tf_s, price, now_ms):
         # type: (str, int, float, int) -> Optional[Dict[str, Any]]
@@ -1054,8 +1082,11 @@ class SmcRunner:
         viewer_tf_s: int,
         narrative: NarrativeBlock,
         signal: Any = None,
+        tr: Translator = SOURCE_TRANSLATOR,
     ) -> Optional[ShellPayload]:
         """ADR-0036: compose shell payload from already-computed narrative.
+
+        `tr` — мова тексту картки (ADR-0116): `narrative` — уже цією мовою, сама картка складається нею ж.
 
         Returns None if shell is disabled. Catches exceptions (I5: degraded-but-loud).
         """
@@ -1072,6 +1103,7 @@ class SmcRunner:
                 shell_cfg,
                 sessions_active=sessions_active,
                 signal=signal,
+                tr=tr,
             )
         except Exception:
             _log.warning(
@@ -1081,29 +1113,44 @@ class SmcRunner:
 
     # ── Розбір символу (ADR-0113 Ф3) ────────────────────
 
-    def get_briefing(self, symbol: str) -> Optional[Briefing]:
+    def get_briefing(self, symbol: str, tr: Translator = SOURCE_TRANSLATOR) -> Optional[Briefing]:
         """Розбір символу — раз на закритий бар рушія (кеш за останнім баром кожного compute TF), а не на кожен кадр.
 
         Момент — кінець останнього бару найдрібнішого compute TF, ціна — його close: той самий стан рушія дає той самий
         розбір, хоч би хто й коли його попросив (R10). None — `smc.briefing.enabled=false`, до прогріву, наратив
         вимкнений, барів ще немає чи розбір не склався (BRIEFING_ERR у лозі).
+        `tr` — мова тексту (ADR-0116): кеш окремий на мову, чернетка (входи) — спільна.
         """
         if not self._full_config.get("smc", {}).get("briefing", {}).get("enabled", False) or not self._warmup_done:
             return None
         key = tuple(self._last_bar_open_ms(symbol, tf_s) for tf_s in sorted(self._compute_tfs))
-        cached = self._briefing_cache.get(symbol)
+        cached = self._briefing_cache.get((symbol, tr.lang))
         if cached is not None and cached[0] == key:
             return cached[1]
-        briefing = self._compose_briefing(symbol)
-        self._briefing_cache[symbol] = (key, briefing)
+        drafted = self._briefing_drafts.get(symbol)
+        if drafted is None or drafted[0] != key:
+            drafted = (key, self._draft_briefing(symbol))
+            self._briefing_drafts[symbol] = drafted
+        briefing = self._render_briefing(symbol, drafted[1], tr)
+        self._briefing_cache[(symbol, tr.lang)] = (key, briefing)
         return briefing
 
     def _last_bar_open_ms(self, symbol: str, tf_s: int) -> int:
         bars = self._engine.get_bars(symbol, tf_s)
         return bars[-1].open_time_ms if bars else 0
 
-    def _compose_briefing(self, symbol: str) -> Optional[Briefing]:
-        """Наративи TF контексту й сетапів на один момент і ціну → розбір (core.smc.briefing)."""
+    def _render_briefing(self, symbol: str, draft: Optional[BriefingDraft], tr: Translator) -> Optional[Briefing]:
+        """Текст розбору мовою `tr` з чернетки; збій — None і BRIEFING_ERR з мовою (I5)."""
+        if draft is None:
+            return None
+        try:
+            return draft(tr)
+        except Exception:
+            _log.warning("BRIEFING_ERR sym=%s lang=%s render", symbol, tr.lang, exc_info=True)
+            return None
+
+    def _draft_briefing(self, symbol: str) -> Optional[BriefingDraft]:
+        """Наративи TF контексту й сетапів на один момент і ціну → чернетка: усе, крім тексту; текст — `draft(tr)`."""
         base_tf = min(self._compute_tfs)
         bars = self._engine.get_bars(symbol, base_tf)
         if not bars:
@@ -1114,7 +1161,7 @@ class SmcRunner:
             if gate is None:
                 return None
             if not gate[1]:
-                return closed_briefing(symbol, as_of_ms)
+                return lambda tr: closed_briefing(symbol, as_of_ms, tr)
             smc_cfg = self._full_config.get("smc", {})
             briefing_cfg = smc_cfg.get("briefing", {})
             htf_cfg = smc_cfg.get("narrative", {}).get("htf_context", {})
@@ -1126,34 +1173,41 @@ class SmcRunner:
                 tf_s: self._collect_narrative_inputs(symbol, tf_s, price, 0.0, as_of_ms)
                 for tf_s in set(context_tfs) | set(setup_tfs) | {liquidity_tf}
             }
-            narratives = {tf_s: inputs[tf_s].synthesize() if inputs[tf_s] is not None else None
-                          for tf_s in set(context_tfs) | set(setup_tfs)}
-            tail = [self._briefing_liquidity(symbol, liquidity_tf, inputs[liquidity_tf], price,
-                                             int(briefing_cfg.get("liquidity_per_side", 2))),
-                    self._briefing_session(symbol, as_of_ms)]
-            return compose_briefing(
-                symbol, as_of_ms, self.get_bias_map(symbol), narratives,
-                [int(tf_s) for tf_s in smc_cfg.get("shell", {}).get("strip_tfs", ())],
-                context_tfs, setup_tfs, self._price_digits.get(symbol), [s for s in tail if s is not None],
-                atr_by_tf={tf_s: tf_inputs.atr for tf_s, tf_inputs in inputs.items() if tf_inputs is not None},
-                rr_min_risk_atr=float(briefing_cfg.get("rr_min_risk_atr", 0.0)),
-            )
+            liquidity = self._briefing_liquidity(symbol, liquidity_tf, inputs[liquidity_tf], price,
+                                                 int(briefing_cfg.get("liquidity_per_side", 2)))
+            session = self._briefing_session(symbol, as_of_ms)
+            bias_map = self.get_bias_map(symbol)
+            strip_tfs = [int(tf_s) for tf_s in smc_cfg.get("shell", {}).get("strip_tfs", ())]
+            atr_by_tf = {tf_s: tf_inputs.atr for tf_s, tf_inputs in inputs.items() if tf_inputs is not None}
+            rr_min_risk_atr = float(briefing_cfg.get("rr_min_risk_atr", 0.0))
+
+            def draft(tr):
+                # type: (Translator) -> Briefing
+                # Наратив — мовою розбору (ADR-0116 Ф2.6): синтез із тих самих входів дешевий, збір — один на бар
+                narratives = {tf_s: inputs[tf_s].synthesize(tr) if inputs[tf_s] is not None else None
+                              for tf_s in set(context_tfs) | set(setup_tfs)}
+                tail = [section(tr) for section in (liquidity, session) if section is not None]
+                return compose_briefing(symbol, as_of_ms, bias_map, narratives, strip_tfs, context_tfs, setup_tfs,
+                                        self._price_digits.get(symbol), tail, atr_by_tf=atr_by_tf,
+                                        rr_min_risk_atr=rr_min_risk_atr, tr=tr)
+
+            return draft
         except Exception:
             _log.warning("BRIEFING_ERR sym=%s as_of_ms=%d", symbol, as_of_ms, exc_info=True)
             return None
 
     def _briefing_liquidity(self, symbol, tf_s, inputs, price, per_side):
-        # type: (str, int, Optional[NarrativeInputs], float, int) -> Optional[BriefingSection]
+        # type: (str, int, Optional[NarrativeInputs], float, int) -> Optional[Callable[[Translator], BriefingSection]]
         """Ліквідність поруч — рівні знімка TF і детектор зняття (той самий, що в цілях Ф2a, і коли зона-шлях вимкнений)."""
         if inputs is None:
             return None
         reached = inputs.liquidity_reached
         if reached is None:
             reached = self._liquidity_reached(symbol, inputs.snapshot)
-        return liquidity_section(tf_s, inputs.snapshot.levels, reached, price, inputs.atr, inputs.price_digits,
-                                 per_side)
+        return lambda tr: liquidity_section(tf_s, inputs.snapshot.levels, reached, price, inputs.atr,
+                                            inputs.price_digits, per_side, tr)
 
-    def _briefing_session(self, symbol: str, as_of_ms: int) -> Optional[BriefingSection]:
+    def _briefing_session(self, symbol: str, as_of_ms: int) -> Optional[Callable[[Translator], BriefingSection]]:
         """Сесія на момент розбору й наступне відкриття — календар сесій платформи і торговий календар символу."""
         windows = self._engine._session_windows
         if not (self._engine._config.sessions.enabled and windows):
@@ -1161,7 +1215,7 @@ class SmcRunner:
         current, in_killzone = get_current_session(as_of_ms, windows)
         calendar = self._calendars.get(symbol)
         upcoming = next_session_open(as_of_ms, windows, calendar.is_trading_minute if calendar is not None else None)
-        return session_section(as_of_ms, current, in_killzone, upcoming)
+        return lambda tr: session_section(as_of_ms, current, in_killzone, upcoming, tr)
 
     def get_signals(
         self,

@@ -1,0 +1,205 @@
+{
+ "bias_map": {
+  "14400": "bearish",
+  "300": "bullish",
+  "3600": "bullish",
+  "86400": "bearish",
+  "900": "bullish"
+ },
+ "briefing": {
+  "as_of_ms": 1790000100000,
+  "sections": [
+   {
+    "key": "bias",
+    "rows": [
+     {
+      "notes": [
+       "D1 і H4 вниз — старший напрям узгоджений"
+      ],
+      "text": "D1 ↓ · H4 ↓ · H1 ↑ · M15 ↑",
+      "tf": "",
+      "tone": "bear"
+     }
+    ],
+    "title": "Напрям"
+   },
+   {
+    "key": "context",
+    "rows": [
+     {
+      "notes": [
+       "Найближча зона: FVG▼ без оцінки 4809.28–4833.64"
+      ],
+      "text": "Немає зони рівня A — чекаємо сетап",
+      "tf": "H4",
+      "tone": ""
+     }
+    ],
+    "title": "Контекст старшого TF"
+   },
+   {
+    "key": "setups",
+    "rows": [
+     {
+      "notes": [
+       "Наближення — 4.3 ATR до зони",
+       "Стоп 4794.62 · ціль лой поп. Азії 4691.80 · R:R не показано — стоп ближче 1 ATR M15"
+      ],
+      "text": "SELL · OB▼ A(7) 4793.01–4794.62",
+      "tf": "M15",
+      "tone": "bear"
+     }
+    ],
+    "title": "Сетапи"
+   },
+   {
+    "key": "liquidity",
+    "rows": [
+     {
+      "notes": [],
+      "text": "Вище: хай поп. Лондона/хай поп. NY 4743.17 · 0.8 ATR, PDH/хай поп. Азії 4753.38 · 1.5 ATR",
+      "tf": "M15",
+      "tone": ""
+     },
+     {
+      "notes": [],
+      "text": "Нижче: лой поп. Азії 4691.80 · 2.7 ATR, лой поп. H1 4689.60 · 2.9 ATR",
+      "tf": "M15",
+      "tone": ""
+     }
+    ],
+    "title": "Ліквідність поруч"
+   },
+   {
+    "key": "session",
+    "rows": [
+     {
+      "notes": [
+       "Далі: Нью-Йорк о 17:15 UTC — через 3 год"
+      ],
+      "text": "Лондон — кілзона",
+      "tf": "",
+      "tone": ""
+     }
+    ],
+    "title": "Сесія"
+   }
+  ],
+  "symbol": "XAU/USD",
+  "warnings": []
+ },
+ "candles": [
+  {
+   "c": 4729.0,
+   "h": 4733.0,
+   "l": 4721.0,
+   "o": 4725.0,
+   "t_ms": 1790000000000,
+   "v": 100.0
+  },
+  {
+   "c": 4730.0,
+   "h": 4734.0,
+   "l": 4722.0,
+   "o": 4726.0,
+   "t_ms": 1790000900000,
+   "v": 101.0
+  },
+  {
+   "c": 4731.0,
+   "h": 4735.0,
+   "l": 4723.0,
+   "o": 4727.0,
+   "t_ms": 1790001800000,
+   "v": 102.0
+  }
+ ],
+ "drawings": [],
+ "frame_type": "full",
+ "levels": [],
+ "meta": {
+  "boot_id": "<boot_id>",
+  "config": "<config>",
+  "schema_v": "ui_v4_v2",
+  "seq": 1,
+  "server_ts_ms": "<server_ts_ms>",
+  "warnings": [
+   "atr_unavailable",
+   "rv_unavailable"
+  ]
+ },
+ "narrative": {
+  "bias_summary": "HTF↓ (D1 і H4) — шукаємо структуру для входу",
+  "current_session": "london",
+  "fvg_context": "OB вхід уточнений FVG: 4779.20–4833.64",
+  "headline": "🟡 SELL — підхід (поза KZ)",
+  "in_killzone": false,
+  "market_phase": "ranging",
+  "mode": "trade",
+  "next_area": "OB▼ A(7) 4793.01–4794.62",
+  "scenarios": [
+   {
+    "direction": "short",
+    "entry_desc": "OB▼ A(7) 4793.01–4794.62",
+    "invalidation": "Вище 4794.62 — зона пробита",
+    "target_desc": "лой поп. Азії 4691.80",
+    "trigger": "approaching",
+    "trigger_desc": "4.3 ATR до зони",
+    "zone_id": "ob_bear_XAU_USD_900_1776771900000"
+   }
+  ],
+  "session_context": "London сесія активна",
+  "sub_mode": "reduced",
+  "warnings": [
+   "outside_killzone"
+  ]
+ },
+ "shell": {
+  "micro_card": {
+   "mode_text": "Готуємось до шорту",
+   "target": "лой поп. Азії 4691.80",
+   "warning": "Поза кілзоною — нижча якість сетапу",
+   "what_cancels": "Вище 4794.62 — зона пробита",
+   "what_needed": "4.3 ATR до зони",
+   "why_text": "OB▼ A(7) 4793.01–4794.62 · HTF↓ (D1 і H4) — шукаємо структуру для входу"
+  },
+  "signal": null,
+  "stage": "prepare",
+  "stage_context": "HTF↓ (D1 і H4) — шукаємо структуру для входу · OB▼ A(7) 4793.01–4794.62",
+  "stage_label": "PREPARE",
+  "tactical_strip": {
+   "alignment_direction": null,
+   "alignment_type": "mixed",
+   "chips": [
+    {
+     "chip_state": "normal",
+     "direction": "bearish",
+     "tf_label": "D1"
+    },
+    {
+     "chip_state": "normal",
+     "direction": "bearish",
+     "tf_label": "H4"
+    },
+    {
+     "chip_state": "brk",
+     "direction": "bullish",
+     "tf_label": "H1"
+    },
+    {
+     "chip_state": "brk",
+     "direction": "bullish",
+     "tf_label": "M15"
+    }
+   ],
+   "tag_text": "H1, M15 проти тренду",
+   "tag_variant": "warn"
+  }
+ },
+ "swings": [],
+ "symbol": "XAU/USD",
+ "tf": "M15",
+ "trend_bias": null,
+ "type": "render_frame",
+ "zones": []
+}

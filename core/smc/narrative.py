@@ -14,6 +14,7 @@ import logging
 
 from typing import Dict, List, Optional, Tuple
 
+from core.i18n import SOURCE_TRANSLATOR, Translator, msg
 from core.smc.sessions import OFF_SESSION
 from core.smc.zone_path import LONG, ZonePath, zone_direction
 from core.smc.types import (
@@ -37,107 +38,110 @@ logger = logging.getLogger(__name__)
 # Trigger states: "ready" > "triggered" > "in_zone" > "approaching" (IOFED, ADR-0033 T-2).
 _TRADE_HEADLINES = {
     # ALIGNED — full HTF agreement, optimal timing window
-    ("trade", "aligned", "long", "ready"): "\U0001f7e2 BUY \u2014 ГОТОВИЙ ДО ВХОДУ",
+    ("trade", "aligned", "long", "ready"): msg("\U0001f7e2 BUY \u2014 ГОТОВИЙ ДО ВХОДУ"),
     (
         "trade",
         "aligned",
         "long",
         "triggered",
-    ): "\U0001f7e2 BUY \u2014 тригер, шукаємо вхід",
+    ): msg("\U0001f7e2 BUY \u2014 тригер, шукаємо вхід"),
     (
         "trade",
         "aligned",
         "long",
         "in_zone",
-    ): "\U0001f7e1 BUY \u2014 у зоні, чекаємо CHoCH",
+    ): msg("\U0001f7e1 BUY \u2014 у зоні, чекаємо CHoCH"),
     (
         "trade",
         "aligned",
         "long",
         "approaching",
-    ): "\U0001f7e1 BUY \u2014 наближення до зони",
-    ("trade", "aligned", "short", "ready"): "\U0001f534 SELL \u2014 ГОТОВИЙ ДО ВХОДУ",
+    ): msg("\U0001f7e1 BUY \u2014 наближення до зони"),
+    ("trade", "aligned", "short", "ready"): msg("\U0001f534 SELL \u2014 ГОТОВИЙ ДО ВХОДУ"),
     (
         "trade",
         "aligned",
         "short",
         "triggered",
-    ): "\U0001f534 SELL \u2014 тригер, шукаємо вхід",
+    ): msg("\U0001f534 SELL \u2014 тригер, шукаємо вхід"),
     (
         "trade",
         "aligned",
         "short",
         "in_zone",
-    ): "\U0001f7e1 SELL \u2014 у зоні, чекаємо CHoCH",
+    ): msg("\U0001f7e1 SELL \u2014 у зоні, чекаємо CHoCH"),
     (
         "trade",
         "aligned",
         "short",
         "approaching",
-    ): "\U0001f7e1 SELL \u2014 наближення до зони",
+    ): msg("\U0001f7e1 SELL \u2014 наближення до зони"),
     # REDUCED — outside killzone (valid structure, timing window not ideal)
-    ("trade", "reduced", "long", "ready"): "\U0001f7e2 BUY \u2014 готовий (поза KZ)",
-    ("trade", "reduced", "long", "triggered"): "\U0001f7e1 BUY \u2014 тригер (поза KZ)",
-    ("trade", "reduced", "long", "in_zone"): "\U0001f7e1 BUY \u2014 у зоні (поза KZ)",
+    ("trade", "reduced", "long", "ready"): msg("\U0001f7e2 BUY \u2014 готовий (поза KZ)"),
+    ("trade", "reduced", "long", "triggered"): msg("\U0001f7e1 BUY \u2014 тригер (поза KZ)"),
+    ("trade", "reduced", "long", "in_zone"): msg("\U0001f7e1 BUY \u2014 у зоні (поза KZ)"),
     (
         "trade",
         "reduced",
         "long",
         "approaching",
-    ): "\U0001f7e1 BUY \u2014 підхід (поза KZ)",
-    ("trade", "reduced", "short", "ready"): "\U0001f534 SELL \u2014 готовий (поза KZ)",
+    ): msg("\U0001f7e1 BUY \u2014 підхід (поза KZ)"),
+    ("trade", "reduced", "short", "ready"): msg("\U0001f534 SELL \u2014 готовий (поза KZ)"),
     (
         "trade",
         "reduced",
         "short",
         "triggered",
-    ): "\U0001f7e1 SELL \u2014 тригер (поза KZ)",
-    ("trade", "reduced", "short", "in_zone"): "\U0001f7e1 SELL \u2014 у зоні (поза KZ)",
+    ): msg("\U0001f7e1 SELL \u2014 тригер (поза KZ)"),
+    ("trade", "reduced", "short", "in_zone"): msg("\U0001f7e1 SELL \u2014 у зоні (поза KZ)"),
     (
         "trade",
         "reduced",
         "short",
         "approaching",
-    ): "\U0001f7e1 SELL \u2014 підхід (поза KZ)",
+    ): msg("\U0001f7e1 SELL \u2014 підхід (поза KZ)"),
 }
 # Wait-mode headlines per sub_mode
 _WAIT_HEADLINES = {
-    "too_far": "\U0001f7e1 Зона далеко \u2014 чекаємо підходу",
-    "counter": "\U0001f7e0 Контртренд \u2014 зона є, але проти HTF",
-    "reduced": "\U0001f7e1 HTF змішаний \u2014 чекаємо",
-    "no_session": "\U0001f550 Поза сесією \u2014 зона є, чекаємо активності",
+    "too_far": msg("\U0001f7e1 Зона далеко \u2014 чекаємо підходу"),
+    "counter": msg("\U0001f7e0 Контртренд \u2014 зона є, але проти HTF"),
+    "reduced": msg("\U0001f7e1 HTF змішаний \u2014 чекаємо"),
+    "no_session": msg("\U0001f550 Поза сесією \u2014 зона є, чекаємо активності"),
     # Зон справді нема. Раніше цей самий рядок («ринок без структури») показувався і коли зони є, але нижче рівня
     # A, і коли зону пробито, — поруч із next_area та трендом (ADR-0113 Ф0, K4)
-    "": "\u2b1c Зон немає \u2014 чекаємо структуру",
+    "": msg("\u2b1c Зон немає \u2014 чекаємо структуру"),
 }
 # sub_mode "" із зонами на графіку: жодна не дотягує до trade_min_grade, або кандидата щойно пробито
-_NO_QUALITY_ZONE_HEADLINE = "\u2b1c Немає зони рівня {grade} \u2014 чекаємо сетап"
-_ZONE_BROKEN_HEADLINE = "\u2b1c Зону пробито \u2014 чекаємо нову структуру"
+_NO_QUALITY_ZONE_HEADLINE = msg("\u2b1c Немає зони рівня {grade} \u2014 чекаємо сетап")
+_ZONE_BROKEN_HEADLINE = msg("\u2b1c Зону пробито \u2014 чекаємо нову структуру")
 # ADR-0113 Ф2a: вхід уже був і підтверджено, ціна пішла від зони до цілі — без «шукаємо вхід» (рецензія E-05)
 _CONFIRMED_AFTER_ENTRY_HEADLINES = {
-    ("aligned", "long"): "\U0001f7e2 BUY \u2014 підтверджено після входу",
-    ("aligned", "short"): "\U0001f534 SELL \u2014 підтверджено після входу",
-    ("reduced", "long"): "\U0001f7e1 BUY \u2014 підтверджено після входу (поза KZ)",
-    ("reduced", "short"): "\U0001f7e1 SELL \u2014 підтверджено після входу (поза KZ)",
+    ("aligned", "long"): msg("\U0001f7e2 BUY \u2014 підтверджено після входу"),
+    ("aligned", "short"): msg("\U0001f534 SELL \u2014 підтверджено після входу"),
+    ("reduced", "long"): msg("\U0001f7e1 BUY \u2014 підтверджено після входу (поза KZ)"),
+    ("reduced", "short"): msg("\U0001f7e1 SELL \u2014 підтверджено після входу (поза KZ)"),
 }
 # ADR-0113 (власник 15.10, «H4/D1 так»): старший TF глядача — контекст без торгового сценарію (smc.narrative.htf_context)
-_HTF_CONTEXT_HEADLINE = "\U0001f9ed {tf}: {bias} контекст \u2014 {zone}{target}{setup}"
-_HTF_CONTEXT_BIAS = {"long": "бичачий", "short": "ведмежий"}
-_HTF_CONTEXT_SIDE = {"long": "купівлі", "short": "продажу"}
+_HTF_CONTEXT_HEADLINES = {
+    "long": msg("\U0001f9ed {tf}: бичачий контекст \u2014 {zone}{target}{setup}"),
+    "short": msg("\U0001f9ed {tf}: ведмежий контекст \u2014 {zone}{target}{setup}"),
+}
+_HTF_CONTEXT_TARGET = msg(", ціль ліквідності {target}")
+_HTF_CONTEXT_ZONE = {"long": msg("зона купівлі {entry}"), "short": msg("зона продажу {entry}")}
 _EQ_LEVEL_KINDS = frozenset({"eq_highs", "eq_lows"})  # рушій уже відсіяв зняті кластери (liquidity._is_swept)
 # Зона рівня A є, але D1 і H4 ще без структури (alignment no_data) — не «немає зони»
-_HTF_PENDING_HEADLINE = "\u2b1c HTF ще без структури \u2014 зона є, чекаємо"
+_HTF_PENDING_HEADLINE = msg("\u2b1c HTF ще без структури \u2014 зона є, чекаємо")
 # Зони premium/discount — розмітка діапазону, не POI (не «зона для входу» ні в заголовку, ні в next_area)
 _RANGE_ZONE_KINDS = frozenset({"premium", "discount"})
-_DEGRADED_HEADLINE = "\u26a0 Наратив недоступний"
+_DEGRADED_HEADLINE = msg("\u26a0 Наратив недоступний")
 
 # ── TF labels ───────────────────────────────────────────────
 
 # ── ADR-0053: Range Exhaustion display strings ──────────────
 # Phrase emitted ONLY for late/exhausted phases — early/mid = silent (clean chart doctrine).
 _RANGE_PHASE_HINTS = {
-    "late": "ймовірний pullback або consolidation",
-    "exhausted": "висока ймовірність розвороту, не chase'ити",
+    "late": msg("ймовірний pullback або consolidation"),
+    "exhausted": msg("висока ймовірність розвороту, не chase'ити"),
 }
 _RANGE_ANCHOR_LABELS = {
     "d1_open": "D1",
@@ -147,8 +151,8 @@ _RANGE_ANCHOR_LABELS = {
 }
 
 
-def _build_range_exhaustion_summary(range_state):
-    # type: (object) -> str
+def _build_range_exhaustion_summary(range_state, tr=SOURCE_TRANSLATOR):
+    # type: (object, Translator) -> str
     """ADR-0053: human-readable phrase for late/exhausted phases.
 
     Returns "" коли:
@@ -168,7 +172,7 @@ def _build_range_exhaustion_summary(range_state):
     anchor_kind = getattr(range_state, "anchor_kind", "")
     anchor_label = _RANGE_ANCHOR_LABELS.get(anchor_kind, anchor_kind)
     arrow = "up" if traveled_dir > 0 else "down"
-    hint = _RANGE_PHASE_HINTS[phase]
+    hint = tr(_RANGE_PHASE_HINTS[phase])
     return "{} {} {:.2f} ATR ({}) - {}".format(anchor_label, arrow, mult, phase, hint)
 
 
@@ -203,12 +207,12 @@ def _fmt_price(value, digits):
 # ── Fallback (N3 / BH-8) ───────────────────────────────────
 
 
-def _fallback_narrative_block(warnings=None):
-    # type: (Optional[List[str]]) -> NarrativeBlock
+def _fallback_narrative_block(warnings=None, tr=SOURCE_TRANSLATOR):
+    # type: (Optional[List[str]], Translator) -> NarrativeBlock
     return NarrativeBlock(
         mode="wait",
         sub_mode="",
-        headline=_DEGRADED_HEADLINE,
+        headline=tr(_DEGRADED_HEADLINE),
         bias_summary="",
         scenarios=[],
         next_area="",
@@ -254,14 +258,14 @@ def _zone_direction(zone):
 # ── Invalidation (SC-7 / BH-1) ─────────────────────────────
 
 
-def _find_invalidation(zone, digits=_DEFAULT_PRICE_DIGITS, stop_price=None):
-    # type: (SmcZone, int, Optional[float]) -> str
+def _find_invalidation(zone, digits=_DEFAULT_PRICE_DIGITS, stop_price=None, tr=SOURCE_TRANSLATOR):
+    # type: (SmcZone, int, Optional[float], Translator) -> str
     """Число — стоп: дальній край зони ± запас (ADR-0113 Ф2a); без запасу — сам край."""
     if "bear" in zone.kind:
         edge = zone.high if stop_price is None else stop_price
-        return "Вище {} \u2014 зона пробита".format(_fmt_price(edge, digits))
+        return tr("Вище {price} \u2014 зона пробита", price=_fmt_price(edge, digits))
     edge = zone.low if stop_price is None else stop_price
-    return "Нижче {} \u2014 зона пробита".format(_fmt_price(edge, digits))
+    return tr("Нижче {price} \u2014 зона пробита", price=_fmt_price(edge, digits))
 
 
 def _zone_stop_price(zone, atr, stop_buffer_atr):
@@ -449,9 +453,10 @@ def _resolve_trigger_state(snapshot, zone, viewer_tf_s, current_price, atr, conf
 
 
 def _resolve_trigger_desc(
-    snapshot, zone, viewer_tf_s, current_price, atr, config, digits=_DEFAULT_PRICE_DIGITS, path=None
+    snapshot, zone, viewer_tf_s, current_price, atr, config, digits=_DEFAULT_PRICE_DIGITS, path=None,
+    tr=SOURCE_TRANSLATOR,
 ):
-    # type: (SmcSnapshot, SmcZone, int, float, float, dict, int, Optional[ZonePath]) -> str
+    # type: (SmcSnapshot, SmcZone, int, float, float, dict, int, Optional[ZonePath], Translator) -> str
     state = _resolve_trigger_state(
         snapshot, zone, viewer_tf_s, current_price, atr, config, path
     )
@@ -459,20 +464,18 @@ def _resolve_trigger_desc(
     tf_label = _tf_to_label(viewer_tf_s)
 
     if state == "ready":
-        return "Готовий: структура + імпульс підтверджені в зоні"
+        return tr("Готовий: структура + імпульс підтверджені в зоні")
     not_before = _confirm_not_before_ms(path, zone)
     if state == "triggered" and not_before is not None:
         # Вхід уже був — без «шукаємо вхід», що штовхало б наздоганяти ціну (рецензія Ф2a, D-12)
-        return "Підтверджено після входу: {tf} CHoCH{a} + імпульс".format(tf=tf_label, a=direction_arrow)
+        return tr("Підтверджено після входу: {tf} CHoCH{arrow} + імпульс", tf=tf_label, arrow=direction_arrow)
     if state == "triggered":
-        return "Тригер: {tf} CHoCH{a} + імпульс \u2014 шукаємо вхід".format(
-            tf=tf_label, a=direction_arrow
-        )
+        return tr("Тригер: {tf} CHoCH{arrow} + імпульс \u2014 шукаємо вхід", tf=tf_label, arrow=direction_arrow)
     if state == "in_zone":
         choch = _find_qualifying_structure_break(snapshot, zone, not_before_ms=not_before)
         if choch is not None:
-            return "У зоні: CHoCH{a} є, чекаємо імпульс".format(a=direction_arrow)
-        return "У зоні: чекаємо {tf} CHoCH{a}".format(tf=tf_label, a=direction_arrow)
+            return tr("У зоні: CHoCH{arrow} є, чекаємо імпульс", arrow=direction_arrow)
+        return tr("У зоні: чекаємо {tf} CHoCH{arrow}", tf=tf_label, arrow=direction_arrow)
     # approaching
     if current_price < zone.low:
         dist = zone.low - current_price
@@ -482,41 +485,41 @@ def _resolve_trigger_desc(
         dist = 0.0
     # «пт» не мав сенсу поза XAU (USD/JPY, XAG): відстань — в ATR, а без ATR — у ціні символу
     if atr > 0:
-        return "{:.1f} ATR до зони".format(dist / atr)
-    return "{} до зони".format(_fmt_price(dist, digits))
+        return tr("{atr} ATR до зони", atr="{:.1f}".format(dist / atr))
+    return tr("{distance} до зони", distance=_fmt_price(dist, digits))
 
 
 # ── HTF context (ADR-0113, власник 15.10) ───────────────────
 
 
 def _htf_context(
-    snapshot, zone, direction, grade_info, config, current_price, atr, digits, path, liquidity_reached, stop_price
+    snapshot, zone, direction, grade_info, config, current_price, atr, digits, path, liquidity_reached, stop_price, tr
 ):
-    # type: (SmcSnapshot, SmcZone, str, dict, dict, float, float, int, Optional[ZonePath], Optional[dict], Optional[float]) -> HtfContext
+    # type: (SmcSnapshot, SmcZone, str, dict, dict, float, float, int, Optional[ZonePath], Optional[dict], Optional[float], Translator) -> HtfContext
     """Старший TF глядача: напрям, ключова зона, ціль ліквідності й межа контексту — без входу й тригера.
 
     Сценарій на H4/D1 — вхід за підтвердженням на тому ж TF (злам H4 з імпульсом), рідкий і пізній; з цих TF трейдер
     бере напрям і зону, а сетап шукає на TF виконання (`htf_context.setup_tfs` — лише для тексту).
     """
-    target = _find_target(snapshot, zone, direction, config, current_price, atr, digits, path, liquidity_reached)
+    target = _find_target(snapshot, zone, direction, config, current_price, atr, digits, path, liquidity_reached, tr)
     labels = [_tf_to_label(tf) for tf in config.get("htf_context", {}).get("setup_tfs", ())]
     span = labels[0] if len(labels) == 1 else "{}\u2013{}".format(labels[0], labels[-1]) if labels else ""
     return HtfContext(
         direction=direction,
-        zone_desc="зона {} {}".format(_HTF_CONTEXT_SIDE[direction], _format_entry(zone, grade_info, digits)),
+        zone_desc=tr(_HTF_CONTEXT_ZONE[direction], entry=_format_entry(zone, grade_info, digits)),
         target_desc=target or "",
-        setup_desc="сетап шукаємо на {}".format(span) if span else "",
-        invalidation=_find_invalidation(zone, digits, stop_price),
+        setup_desc=tr("сетап шукаємо на {tfs}", tfs=span) if span else "",
+        invalidation=_find_invalidation(zone, digits, stop_price, tr),
     )
 
 
-def _htf_context_headline(context, viewer_tf_s):
-    # type: (HtfContext, int) -> str
-    return _HTF_CONTEXT_HEADLINE.format(
+def _htf_context_headline(context, viewer_tf_s, tr):
+    # type: (HtfContext, int, Translator) -> str
+    return tr(
+        _HTF_CONTEXT_HEADLINES[context.direction],
         tf=_tf_to_label(viewer_tf_s),
-        bias=_HTF_CONTEXT_BIAS[context.direction],
         zone=context.zone_desc,
-        target=", ціль ліквідності " + context.target_desc if context.target_desc else "",
+        target=tr(_HTF_CONTEXT_TARGET, target=context.target_desc) if context.target_desc else "",
         setup=" \u2014 " + context.setup_desc if context.setup_desc else "",
     )
 
@@ -526,19 +529,19 @@ def _htf_context_headline(context, viewer_tf_s):
 
 def _find_target(
     snapshot, zone, direction, config, current_price=0.0, atr=0.0, digits=_DEFAULT_PRICE_DIGITS, path=None,
-    liquidity_reached=None,
+    liquidity_reached=None, tr=SOURCE_TRANSLATOR,
 ):
-    # type: (SmcSnapshot, SmcZone, str, dict, float, float, int, Optional[ZonePath], Optional[dict]) -> Optional[str]
+    # type: (SmcSnapshot, SmcZone, str, dict, float, float, int, Optional[ZonePath], Optional[dict], Translator) -> Optional[str]
     """Find target price. Returns None if unknown (BH-4)."""
-    target = _select_target(snapshot, zone, direction, config, current_price, atr, digits, path, liquidity_reached)
+    target = _select_target(snapshot, zone, direction, config, current_price, atr, digits, path, liquidity_reached, tr)
     return target[0] if target is not None else None
 
 
 def _select_target(
     snapshot, zone, direction, config, current_price=0.0, atr=0.0, digits=_DEFAULT_PRICE_DIGITS, path=None,
-    liquidity_reached=None,
+    liquidity_reached=None, tr=SOURCE_TRANSLATOR,
 ):
-    # type: (SmcSnapshot, SmcZone, str, dict, float, float, int, Optional[ZonePath], Optional[dict]) -> Optional[Tuple[str, float]]
+    # type: (SmcSnapshot, SmcZone, str, dict, float, float, int, Optional[ZonePath], Optional[dict], Translator) -> Optional[Tuple[str, float]]
     """(опис цілі, її ціна). None — ціль не знайдено (BH-4). Зі шляхом — `_select_target_on_path` (ADR-0113 Ф2a).
 
     ATR-distance filter: targets farther than target_max_atr_distance * ATR from current_price are skipped
@@ -546,7 +549,7 @@ def _select_target(
     """
     if path is not None:
         return _select_target_on_path(snapshot, zone, direction, config, current_price, digits, path,
-                                      liquidity_reached or {})
+                                      liquidity_reached or {}, tr)
     max_atr_mult = config.get("target_max_atr_distance", 12)
     max_dist = max_atr_mult * atr if atr > 0 else 0.0
     ref = current_price
@@ -556,7 +559,7 @@ def _select_target(
     if target_level:
         return (
             "{label} {price}".format(
-                label=_TARGET_LEVEL_LABELS.get(target_level.kind, target_level.kind.upper()),
+                label=level_label(target_level.kind, tr),
                 price=_fmt_price(target_level.price, digits),
             ),
             target_level.price,
@@ -588,17 +591,15 @@ def _select_target(
     target_swing = _find_target_swing(snapshot.swings, direction, ref, max_dist)
     if target_swing:
         return (
-            "Останній {kind} {price}".format(
-                kind=target_swing.kind.upper(), price=_fmt_price(target_swing.price, digits)
-            ),
+            tr("Останній {kind} {price}", kind=target_swing.kind.upper(), price=_fmt_price(target_swing.price, digits)),
             target_swing.price,
         )
 
     return None
 
 
-def _select_target_on_path(snapshot, zone, direction, config, current_price, digits, path, reached):
-    # type: (SmcSnapshot, SmcZone, str, dict, float, int, ZonePath, dict) -> Optional[Tuple[str, float]]
+def _select_target_on_path(snapshot, zone, direction, config, current_price, digits, path, reached, tr):
+    # type: (SmcSnapshot, SmcZone, str, dict, float, int, ZonePath, dict, Translator) -> Optional[Tuple[str, float]]
     """Ф2a: ціль від входу — найближча НЕЗНЯТА ліквідність попереду і краю входу, і ціни; до і після входу однаково.
 
     Знята — ціна торгувала строго за рівнем після початку його періоду (`liquidity_reached`, детектор
@@ -627,8 +628,7 @@ def _select_target_on_path(snapshot, zone, direction, config, current_price, dig
     ]
     if levels:
         best = min(levels, key=lambda lv: abs(lv.price - gate))
-        label = _TARGET_LEVEL_LABELS.get(best.kind, best.kind.upper())
-        return "{label} {price}".format(label=label, price=_fmt_price(best.price, digits)), best.price
+        return "{label} {price}".format(label=level_label(best.kind, tr), price=_fmt_price(best.price, digits)), best.price
     for z in snapshot.zones:
         if z.id == zone.id or z.status != "active" or z.context_layer != "institutional":
             continue  # зона-ціль, у яку ціна вже заходила, — не ліквідність, що чекає
@@ -642,12 +642,12 @@ def _select_target_on_path(snapshot, zone, direction, config, current_price, dig
     swing_kinds = {"hh", "hl"} if long else {"ll", "lh"}
     for sw in reversed(snapshot.swings):
         if sw.kind in swing_kinds and _open("swing:" + sw.id, sw.price, sw.time_ms):
-            return "Останній {kind} {price}".format(kind=sw.kind.upper(), price=_fmt_price(sw.price, digits)), sw.price
+            return tr("Останній {kind} {price}", kind=sw.kind.upper(), price=_fmt_price(sw.price, digits)), sw.price
     extreme = path.pre_entry_extreme
     if _ahead_of(extreme, path.entry_edge, direction) and _ahead_of(extreme, gate, direction) \
             and abs(extreme - path.entry_edge) <= max_dist:
-        kind = "хай" if long else "лой"
-        return "{kind} імпульсу {price}".format(kind=kind, price=_fmt_price(extreme, digits)), extreme
+        text = tr(msg("хай імпульсу {price}") if long else msg("лой імпульсу {price}"), price=_fmt_price(extreme, digits))
+        return text, extreme
     return None
 
 
@@ -663,14 +663,14 @@ _TARGET_KINDS_ABOVE = frozenset(
 )
 # Підписи цілей — без цифри перед ціною там, де її можна сплутати з ціною («P H4 L 2892» журнал читав як 4.0)
 _TARGET_LEVEL_LABELS = {
-    "pdh": "PDH", "pdl": "PDL", "dh": "хай дня", "dl": "лой дня",
-    "p_h4_h": "хай попер. H4", "p_h4_l": "лой попер. H4", "h4_h": "хай H4", "h4_l": "лой H4",
-    "p_h1_h": "хай попер. H1", "p_h1_l": "лой попер. H1", "h1_h": "хай H1", "h1_l": "лой H1",
-    "eq_highs": "EQH", "eq_lows": "EQL",
-    "as_h": "хай Азії", "as_l": "лой Азії", "p_as_h": "хай попер. Азії", "p_as_l": "лой попер. Азії",
-    "lon_h": "хай Лондона", "lon_l": "лой Лондона", "p_lon_h": "хай попер. Лондона", "p_lon_l": "лой попер. Лондона",
-    "ny_h": "хай NY", "ny_l": "лой NY", "p_ny_h": "хай попер. NY", "p_ny_l": "лой попер. NY",
-    "pwh": "PWH", "pwl": "PWL", "pmh": "PMH", "pml": "PML",
+    "pdh": msg("PDH"), "pdl": msg("PDL"), "dh": msg("хай дня"), "dl": msg("лой дня"),
+    "p_h4_h": msg("хай поп. H4"), "p_h4_l": msg("лой поп. H4"), "h4_h": msg("хай H4"), "h4_l": msg("лой H4"),
+    "p_h1_h": msg("хай поп. H1"), "p_h1_l": msg("лой поп. H1"), "h1_h": msg("хай H1"), "h1_l": msg("лой H1"),
+    "eq_highs": msg("EQH"), "eq_lows": msg("EQL"),
+    "as_h": msg("хай Азії"), "as_l": msg("лой Азії"), "p_as_h": msg("хай поп. Азії"), "p_as_l": msg("лой поп. Азії"),
+    "lon_h": msg("хай Лондона"), "lon_l": msg("лой Лондона"), "p_lon_h": msg("хай поп. Лондона"), "p_lon_l": msg("лой поп. Лондона"),
+    "ny_h": msg("хай NY"), "ny_l": msg("лой NY"), "p_ny_h": msg("хай поп. NY"), "p_ny_l": msg("лой поп. NY"),
+    "pwh": msg("PWH"), "pwl": msg("PWL"), "pmh": msg("PMH"), "pml": msg("PML"),
 }  # type: Dict[str, str]
 
 
@@ -719,8 +719,8 @@ def _find_target_swing(swings, direction, current_price=0.0, max_dist=0.0):
 # ── FVG Context (T-5) ───────────────────────────────────────
 
 
-def _build_fvg_context(snapshot, zone, atr, config, digits=_DEFAULT_PRICE_DIGITS):
-    # type: (SmcSnapshot, Optional[SmcZone], float, dict, int) -> str
+def _build_fvg_context(snapshot, zone, atr, config, digits=_DEFAULT_PRICE_DIGITS, tr=SOURCE_TRANSLATOR):
+    # type: (SmcSnapshot, Optional[SmcZone], float, dict, int, Translator) -> str
     if not config.get("fvg_context_enabled", True) or zone is None:
         return ""
     for z in snapshot.zones:
@@ -728,9 +728,8 @@ def _build_fvg_context(snapshot, zone, atr, config, digits=_DEFAULT_PRICE_DIGITS
             continue
         # Overlap з zone
         if z.low <= zone.high and z.high >= zone.low:
-            return "OB вхід уточнений FVG: {}\u2013{}".format(
-                _fmt_price(z.low, digits), _fmt_price(z.high, digits)
-            )
+            return tr("OB вхід уточнений FVG: {low}\u2013{high}", low=_fmt_price(z.low, digits),
+                      high=_fmt_price(z.high, digits))
     # Closest FVG within 2*ATR
     if atr > 0:
         for z in snapshot.zones:
@@ -739,7 +738,7 @@ def _build_fvg_context(snapshot, zone, atr, config, digits=_DEFAULT_PRICE_DIGITS
             mid = (z.low + z.high) / 2.0
             zone_mid = (zone.low + zone.high) / 2.0
             if abs(mid - zone_mid) <= 2.0 * atr:
-                return "FVG гап на {} \u2014 ребаланс перед зоною".format(_fmt_price(mid, digits))
+                return tr("FVG гап на {price} \u2014 ребаланс перед зоною", price=_fmt_price(mid, digits))
     return ""
 
 
@@ -772,20 +771,20 @@ def _detect_market_phase(swings, config):
 
 
 def _build_bias_summary(
-    alignment, htf_direction, bias_map, zone, momentum_map=None, is_counter=False
+    alignment, htf_direction, bias_map, zone, momentum_map=None, is_counter=False, tr=SOURCE_TRANSLATOR
 ):
-    # type: (str, Optional[str], Dict[str, str], Optional[SmcZone], Optional[Dict[str, dict]], bool) -> str
+    # type: (str, Optional[str], Dict[str, str], Optional[SmcZone], Optional[Dict[str, dict]], bool, Translator) -> str
     if alignment == "no_data":
-        return "HTF: \u043e\u0447\u0456\u043a\u0443\u0454\u043c\u043e \u0441\u0442\u0440\u0443\u043a\u0442\u0443\u0440\u0443"
+        return tr("HTF: очікуємо структуру")
     if alignment == "partial":
         d1 = bias_map.get("86400")
         h4 = bias_map.get("14400")
         if d1:
             arrow = "\u2191" if d1 == "bullish" else "\u2193"
-            return "D1{a} (H4 ще без структури)".format(a=arrow)
+            return tr("D1{arrow} (H4 ще без структури)", arrow=arrow)
         if h4:
             arrow = "\u2191" if h4 == "bullish" else "\u2193"
-            return "H4{a} (D1 ще без структури)".format(a=arrow)
+            return tr("H4{arrow} (D1 ще без структури)", arrow=arrow)
     d1 = bias_map.get("86400", "?")
     h4 = bias_map.get("14400", "?")
     if alignment == "mixed":
@@ -795,18 +794,18 @@ def _build_bias_summary(
     # aligned. Без порад щодо розміру позиції в публічному тексті (ADR-0113 R8) і без англійських bullish/bearish
     htf_arrow = "\u2191" if htf_direction == "bullish" else "\u2193"
     if is_counter:
-        return "HTF{a} (D1 і H4) \u2014 найкраща зона проти тренду".format(a=htf_arrow)
+        return tr("HTF{arrow} (D1 і H4) \u2014 найкраща зона проти тренду", arrow=htf_arrow)
     if zone and "premium" in getattr(zone, "kind", ""):
-        return "H4 відкат до premium OB \u2014 чекаємо відбій"
-    base = "HTF{a} (D1 і H4) \u2014 шукаємо структуру для входу".format(a=htf_arrow)
+        return tr("H4 відкат до premium OB \u2014 чекаємо відбій")
+    base = tr("HTF{arrow} (D1 і H4) \u2014 шукаємо структуру для входу", arrow=htf_arrow)
     # P2: momentum context — displacement bars confirm directional intent (ADR-0033 Rev 2)
     if momentum_map:
         bull_total = sum(m.get("b", 0) for m in momentum_map.values())
         bear_total = sum(m.get("r", 0) for m in momentum_map.values())
         if htf_direction == "bullish" and bull_total >= 2:
-            base += " \u00b7 бичачий імпульс \u2191"
+            base += " \u00b7 " + tr("бичачий імпульс \u2191")
         elif htf_direction == "bearish" and bear_total >= 2:
-            base += " \u00b7 ведмежий імпульс \u2193"
+            base += " \u00b7 " + tr("ведмежий імпульс \u2193")
     return base
 
 
@@ -819,15 +818,15 @@ _SESSION_LABELS = {
 }
 
 
-def _build_session_context(session_name, in_killzone):
-    # type: (str, bool) -> str
+def _build_session_context(session_name, in_killzone, tr=SOURCE_TRANSLATOR):
+    # type: (str, bool, Translator) -> str
     if not session_name:
         # Календар сесій є, але жодна не йде (між закриттям NY і Азією) — сказати прямо, а не «Off_Session … активна»
-        return "Поза торговими сесіями"
+        return tr("Поза торговими сесіями")
     label = _SESSION_LABELS.get(session_name, session_name.title())
     if in_killzone:
-        return "{}: killzone активна".format(label)
-    return "{} сесія активна".format(label)
+        return tr("{session}: killzone активна", session=label)
+    return tr("{session} сесія активна", session=label)
 
 
 # ── Next Area ───────────────────────────────────────────────
@@ -844,9 +843,10 @@ def _zone_kind_label(zone):
 
 
 def _build_next_area(
-    snapshot, zone_grades, digits=_DEFAULT_PRICE_DIGITS, current_price=0.0, exclude_ids=frozenset(), stops=None
+    snapshot, zone_grades, digits=_DEFAULT_PRICE_DIGITS, current_price=0.0, exclude_ids=frozenset(), stops=None,
+    tr=SOURCE_TRANSLATOR,
 ):
-    # type: (SmcSnapshot, Dict[str, dict], int, float, frozenset, Optional[Dict[str, Optional[float]]]) -> str
+    # type: (SmcSnapshot, Dict[str, dict], int, float, frozenset, Optional[Dict[str, Optional[float]]], Translator) -> str
     """Найближча зона уваги: оцінені — першими (score↓), далі ближчі до ціни.
 
     ADR-0113 Ф0 (K3, K4): без mitigated, без перебитих ціною, без premium/discount (розмітка діапазону, не POI);
@@ -870,7 +870,7 @@ def _build_next_area(
     if best is None:
         return ""
     gi = zone_grades.get(best.id)
-    grade_part = "{}({})".format(gi.get("grade", "C"), gi.get("score", 0)) if gi else "без оцінки"
+    grade_part = "{}({})".format(gi.get("grade", "C"), gi.get("score", 0)) if gi else tr("без оцінки")
     return "{kind}{arrow} {grade} {low}\u2013{high}".format(
         kind=_zone_kind_label(best),
         arrow="\u25bc" if "bear" in best.kind else "\u25b2",
@@ -899,6 +899,7 @@ def synthesize_narrative(
     price_digits=None,  # type: Optional[int]
     zone_paths=None,  # type: Optional[Dict[str, ZonePath]]
     liquidity_reached=None,  # type: Optional[Dict[str, Tuple[Optional[int], Optional[int]]]]
+    tr=SOURCE_TRANSLATOR,  # type: Translator
 ):
     # type: (...) -> NarrativeBlock
     """Synthesize narrative for display (ADR-0033, ADR-0035, ADR-0053).
@@ -913,6 +914,8 @@ def synthesize_narrative(
     zone_paths: zone_id → ZonePath (шлях ціни від бару зламу зони, ADR-0113 Ф2a); None — без шляху (поведінка Ф1).
     liquidity_reached: «level:/swing:<id>» → момент першого виходу ціни за рівень зверху/знизу від початку його періоду
         (core.smc.liquidity_sweep) — ціль зі шляхом лише з незнятої ліквідності; без шляху не читається.
+    tr: мова тексту (ADR-0116) — не вхід розбору: режим, сценарії, числа й warnings від неї не залежать; без неї —
+        мова джерела (uk) байт у байт (Арчі, /api/*, golden).
     """
     try:
         return _synthesize_impl(
@@ -929,12 +932,13 @@ def synthesize_narrative(
             price_digits,
             zone_paths,
             liquidity_reached,
+            tr,
         )
     except Exception:
         sym = getattr(snapshot, "symbol", "?")
         tf = getattr(snapshot, "tf_s", 0)
         logger.exception("NARRATIVE_ERROR symbol=%s tf=%s", sym, tf)
-        return _fallback_narrative_block()
+        return _fallback_narrative_block(tr=tr)
 
 
 def _synthesize_impl(
@@ -951,8 +955,9 @@ def _synthesize_impl(
     price_digits=None,
     zone_paths=None,
     liquidity_reached=None,
+    tr=SOURCE_TRANSLATOR,
 ):
-    # type: (SmcSnapshot, Dict[str, str], Dict[str, dict], Dict[str, dict], int, float, float, dict, Optional[Tuple[str, bool]], Optional[object], Optional[int], Optional[Dict[str, ZonePath]], Optional[dict]) -> NarrativeBlock
+    # type: (SmcSnapshot, Dict[str, str], Dict[str, dict], Dict[str, dict], int, float, float, dict, Optional[Tuple[str, bool]], Optional[object], Optional[int], Optional[Dict[str, ZonePath]], Optional[dict], Translator) -> NarrativeBlock
     warnings = []  # type: List[str]
     if price_digits is None:
         digits = _DEFAULT_PRICE_DIGITS
@@ -1063,7 +1068,7 @@ def _synthesize_impl(
         # «Поза сесіями» — порожня сесія для всіх перевірок нижче і для wire (UI не друкує «OFF_SESSION»)
         current_session = "" if session_info[0] == OFF_SESSION else (session_info[0] or "")
         in_killzone = bool(session_info[1])
-        session_context = _build_session_context(current_session, in_killzone)
+        session_context = _build_session_context(current_session, in_killzone, tr)
         # Guard: no active session (dead zone between sessions) → cannot call trade
         if mode == "trade" and not current_session:
             mode, sub_mode = "wait", "no_session"
@@ -1089,28 +1094,28 @@ def _synthesize_impl(
             snapshot, primary_zone, viewer_tf_s, config, _confirm_not_before_ms(primary_path, primary_zone))
     )
     if mode == "trade" and direction and confirmed_after_entry and (sub_mode, direction) in _CONFIRMED_AFTER_ENTRY_HEADLINES:
-        headline = _CONFIRMED_AFTER_ENTRY_HEADLINES[(sub_mode, direction)]
+        headline = tr(_CONFIRMED_AFTER_ENTRY_HEADLINES[(sub_mode, direction)])
     elif mode == "trade" and direction and primary_trigger:
-        headline = _TRADE_HEADLINES.get(
+        headline = tr(_TRADE_HEADLINES.get(
             (mode, sub_mode, direction, primary_trigger),
             _WAIT_HEADLINES.get(sub_mode, _WAIT_HEADLINES[""]),
-        )
+        ))
     elif sub_mode == "htf_context":
         htf_context = _htf_context(
             snapshot, primary_zone, direction, zone_grades.get(primary_zone.id, {}), config, current_price, atr,
-            digits, primary_path, liquidity_reached, stops[primary_zone.id],
+            digits, primary_path, liquidity_reached, stops[primary_zone.id], tr,
         )
-        headline = _htf_context_headline(htf_context, viewer_tf_s)
+        headline = _htf_context_headline(htf_context, viewer_tf_s, tr)
     elif sub_mode == "" and primary_zone is not None:
-        headline = _HTF_PENDING_HEADLINE
+        headline = tr(_HTF_PENDING_HEADLINE)
     elif sub_mode == "" and any(z.id not in closed for z in candidates) and not valid:
-        headline = _ZONE_BROKEN_HEADLINE
+        headline = tr(_ZONE_BROKEN_HEADLINE)
     elif sub_mode == "" and any(
         z.status != "mitigated" and z.kind not in _RANGE_ZONE_KINDS for z in snapshot.zones
     ):
-        headline = _NO_QUALITY_ZONE_HEADLINE.format(grade=min_grade)
+        headline = tr(_NO_QUALITY_ZONE_HEADLINE, grade=min_grade)
     else:
-        headline = _WAIT_HEADLINES.get(sub_mode, _WAIT_HEADLINES[""])
+        headline = tr(_WAIT_HEADLINES.get(sub_mode, _WAIT_HEADLINES[""]))
 
     # Scenarios (T-1: max 2)
     scenarios = []  # type: List[ActiveScenario]
@@ -1122,7 +1127,7 @@ def _synthesize_impl(
             d = _zone_direction(z)
             gi = zone_grades.get(z.id, {})
             path = paths.get(z.id)
-            target = _select_target(snapshot, z, d, config, current_price, atr, digits, path, liquidity_reached)
+            target = _select_target(snapshot, z, d, config, current_price, atr, digits, path, liquidity_reached, tr)
             if target is None:
                 warnings.append("no_target_found")
             scenarios.append(
@@ -1134,10 +1139,10 @@ def _synthesize_impl(
                         snapshot, z, viewer_tf_s, current_price, atr, config, path
                     ),
                     trigger_desc=_resolve_trigger_desc(
-                        snapshot, z, viewer_tf_s, current_price, atr, config, digits, path
+                        snapshot, z, viewer_tf_s, current_price, atr, config, digits, path, tr
                     ),
                     target_desc=target[0] if target is not None else None,
-                    invalidation=_find_invalidation(z, digits, stops[z.id]),
+                    invalidation=_find_invalidation(z, digits, stops[z.id], tr),
                     entry_edge=path.entry_edge if path is not None else (z.high if d == LONG else z.low),
                     stop_price=stops[z.id] if stops[z.id] is not None else (z.low if d == LONG else z.high),
                     target_price=target[1] if target is not None else None,
@@ -1155,19 +1160,20 @@ def _synthesize_impl(
         primary_zone,
         momentum_map=momentum_map,
         is_counter=(sub_mode == "counter"),
+        tr=tr,
     )
 
     # FVG context (T-5)
-    fvg_context = _build_fvg_context(snapshot, primary_zone, atr, config, digits)
+    fvg_context = _build_fvg_context(snapshot, primary_zone, atr, config, digits, tr)
 
     # Market phase (SC-1, BH-6, N5: display-only)
     market_phase = _detect_market_phase(snapshot.swings, config)
 
     # Next area
-    next_area = _build_next_area(snapshot, zone_grades, digits, current_price, frozenset(closed), stops)
+    next_area = _build_next_area(snapshot, zone_grades, digits, current_price, frozenset(closed), stops, tr)
 
     # ADR-0053: range exhaustion phrase (silent for early/mid/None)
-    range_exhaustion_summary = _build_range_exhaustion_summary(range_exhaustion)
+    range_exhaustion_summary = _build_range_exhaustion_summary(range_exhaustion, tr)
 
     return NarrativeBlock(
         mode=mode,
@@ -1289,3 +1295,9 @@ LIQUIDITY_KINDS_ABOVE = _TARGET_KINDS_ABOVE  # хаї: ліквідність н
 LIQUIDITY_KINDS_BELOW = _TARGET_KINDS_BELOW  # лої: ліквідність під ціною
 LIQUIDITY_LABELS = _TARGET_LEVEL_LABELS
 EQ_LEVEL_KINDS = _EQ_LEVEL_KINDS  # зняті EQ-кластери рушій уже відсіяв — детектор зняття їм не потрібен
+
+
+def level_label(kind, tr=SOURCE_TRANSLATOR):
+    # type: (str, Translator) -> str
+    """Підпис рівня ліквідності мовою `tr` (ADR-0116); невідомий вид — код великими, як і було."""
+    return tr(_TARGET_LEVEL_LABELS[kind]) if kind in _TARGET_LEVEL_LABELS else kind.upper()

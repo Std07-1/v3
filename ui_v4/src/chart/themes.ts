@@ -9,6 +9,8 @@
 // Black/light theme alignment → PATCH 02c (will use [data-theme="..."] overrides in tokens.css).
 
 import { CrosshairMode, LineStyle } from 'lightweight-charts';
+// ADR-0116: назви тем і стилів — ключі мовного шару (показ — t() у меню)
+import { msg } from '../lib/i18n/i18n.svelte';
 
 // ─── Theme definitions (Entry 078: dark / black / light) ───
 
@@ -66,7 +68,7 @@ export interface ThemeDef {
 
 export const THEMES: Record<ThemeName, ThemeDef> = {
     dark: {
-        label: 'Dark',
+        label: msg('Темна'),
         chart: {
             // ADR-0066: textColor = --text-2 (#9B9BB0); grid = --border @ 0.4 (#30363D)
             layout: { background: { color: 'transparent' }, textColor: '#9B9BB0' },
@@ -103,7 +105,7 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
         pdBadgeEqText: 'rgba(255, 255, 255, 0.60)',
     },
     black: {
-        label: 'Black',
+        label: msg('Чорна'),
         chart: {
             // ADR-0066 PATCH 02c: text/grid use --text-2 / --border tokens for cross-theme harmony
             layout: { background: { color: '#000000' }, textColor: '#9B9BB0' },
@@ -140,7 +142,7 @@ export const THEMES: Record<ThemeName, ThemeDef> = {
         pdBadgeEqText: 'rgba(255, 255, 255, 0.65)',
     },
     light: {
-        label: 'Light',
+        label: msg('Світла'),
         chart: {
             // ADR-0066 PATCH 02c: dark text on white, neutral grid — keeps mirror discipline
             layout: { background: { color: '#FFFFFF' }, textColor: '#45455A' },     // --text-4 inverted role
@@ -216,7 +218,7 @@ export interface CandleStyleDef extends CandleVariant {
 
 export const CANDLE_STYLES: Record<CandleStyleName, CandleStyleByTheme> = {
     classic: {
-        label: 'Classic',
+        label: msg('Класика'),
         default: {
             upColor: '#26a69a', downColor: '#ef5350',
             borderUpColor: '#26a69a', borderDownColor: '#ef5350',
@@ -224,7 +226,7 @@ export const CANDLE_STYLES: Record<CandleStyleName, CandleStyleByTheme> = {
         },
     },
     gray: {
-        label: 'Gray',
+        label: msg('Сірий'),
         default: {
             upColor: '#9aa0a6', downColor: 'rgba(255,255,255,0)',
             borderUpColor: '#9aa0a6', borderDownColor: '#5f6368',
@@ -234,7 +236,7 @@ export const CANDLE_STYLES: Record<CandleStyleName, CandleStyleByTheme> = {
         black: { borderDownColor: '#9aa0a6', wickDownColor: '#9aa0a6' },
     },
     stealth: {
-        label: 'Stealth',
+        label: msg('Стелс'),
         default: {
             upColor: '#3a3f44', downColor: '#1f2327',
             borderUpColor: '#3a3f44', borderDownColor: '#1f2327',
@@ -253,7 +255,7 @@ export const CANDLE_STYLES: Record<CandleStyleName, CandleStyleByTheme> = {
         },
     },
     white: {
-        label: 'White',
+        label: msg('Білий'),
         default: {
             upColor: '#e2e5e9', downColor: '#2f3338',
             borderUpColor: '#e2e5e9', borderDownColor: '#2f3338',
@@ -267,7 +269,7 @@ export const CANDLE_STYLES: Record<CandleStyleName, CandleStyleByTheme> = {
         },
     },
     hollow: {
-        label: 'Hollow',
+        label: msg('Порожнисті'),
         default: {
             upColor: 'rgba(255,255,255,0)', downColor: '#ef5350',
             borderUpColor: '#26a69a', borderDownColor: '#ef5350',

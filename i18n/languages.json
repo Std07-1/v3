@@ -1,0 +1,9 @@
+{
+  "source": "uk",
+  "fallback": "en",
+  "languages": [
+    { "code": "uk", "name": "Українська", "plural": ["one", "few", "many"] },
+    { "code": "en", "name": "English", "plural": ["one", "other"] },
+    { "code": "ru", "name": "Русский", "plural": ["one", "few", "many"] }
+  ]
+}

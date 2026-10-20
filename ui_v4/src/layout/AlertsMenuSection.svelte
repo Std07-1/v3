@@ -12,6 +12,7 @@
   import { AlertsApiError } from "../lib/alerts/alertClient";
   import { PushError } from "../lib/alerts/browserPush";
   import { alertErrorText, alertStateText, alertTitle } from "../lib/alerts/alertUi";
+  import { msg, t } from "../lib/i18n/i18n.svelte";
 
   const view = alerts.view;
   const CODE_DIGITS = 6;
@@ -27,12 +28,12 @@
 
   const isPush = $derived($view.channel === "push");
   const PUSH_SUPPORT_HINT: Record<string, string> = {
-    denied: "Браузер заборонив сповіщення цьому сайту — дозвольте їх у налаштуваннях сайту.",
-    ios_home_screen: "На iPhone: «Поділитися» → «На початковий екран», відкрийте сайт звідти й увімкніть тут.",
-    unsupported: "Цей браузер не вміє сповіщень.",
+    denied: msg("Браузер заборонив сповіщення цьому сайту — дозвольте їх у налаштуваннях сайту."),
+    ios_home_screen: msg("На iPhone: «Поділитися» → «На початковий екран», відкрийте сайт звідти й увімкніть тут."),
+    unsupported: msg("Цей браузер не вміє сповіщень."),
   };
   const supportHint = $derived(
-    $view.pushSupport && $view.pushSupport !== "ok" ? PUSH_SUPPORT_HINT[$view.pushSupport] : null,
+    $view.pushSupport && $view.pushSupport !== "ok" ? t(PUSH_SUPPORT_HINT[$view.pushSupport]) : null,
   );
 
   const digits = $derived(code.replace(/\D/g, ""));
@@ -45,11 +46,13 @@
   const armedCount = $derived($view.alerts.filter((a) => a.state === "armed").length);
 
   function confirmMessage(result: ConfirmResult): string | null {
-    if (result.status === "wrong_code") return `Невірні цифри — лишилось спроб: ${result.attempts_left ?? 0}`;
-    if (result.status === "awaiting_bot") return "Спершу відкрийте бота за посиланням і натисніть Start";
-    if (result.status === "locked") return "Спроби вичерпано — почніть під'єднання знову";
-    if (result.status === "no_pairing") return "Час минув — почніть під'єднання знову";
-    return "Telegram під'єднано";
+    if (result.status === "wrong_code") {
+      return t("Невірні цифри — лишилось спроб: {attempts}", { attempts: result.attempts_left ?? 0 });
+    }
+    if (result.status === "awaiting_bot") return t("Спершу відкрийте бота за посиланням і натисніть Start");
+    if (result.status === "locked") return t("Спроби вичерпано — почніть під'єднання знову");
+    if (result.status === "no_pairing") return t("Час минув — почніть під'єднання знову");
+    return t("Telegram під'єднано");
   }
 
   async function run(job: () => Promise<void>): Promise<void> {
@@ -101,9 +104,9 @@
 
 {#if $view.status === "unpaired" || $view.status === "ready"}
   <button class="row" role="menuitem" aria-expanded={expanded} onclick={() => (expanded = !expanded)}>
-    <span class="label">Сповіщення</span>
+    <span class="label">{t("Сповіщення")}</span>
     <span class="state"
-      >{$view.status === "unpaired" ? (isPush ? "вимкнено" : "не під'єднано") : armedCount}
+      >{$view.status === "unpaired" ? (isPush ? t("вимкнено") : t("не під'єднано")) : armedCount}
       {expanded ? "▾" : "▸"}</span
     >
   </button>
@@ -111,21 +114,21 @@
   {#if expanded}
     <div class="section">
       {#if $view.status === "unpaired" && isPush}
-        <p class="hint">Сповіщення приходять від браузера — навіть коли вкладку закрито.</p>
+        <p class="hint">{t("Сповіщення приходять від браузера — навіть коли вкладку закрито.")}</p>
         {#if supportHint}
           <p class="hint warn">{supportHint}</p>
         {/if}
         <button class="action" disabled={busy || $view.pushSupport !== "ok"} onclick={enablePush}>
-          Увімкнути на цьому пристрої
+          {t("Увімкнути на цьому пристрої")}
         </button>
       {:else if $view.status === "unpaired"}
         {#if pairingLink === null}
-          <p class="hint">Повідомлення про перетин ліній приходять у Telegram.</p>
-          <button class="action" disabled={busy} onclick={startPairing}>Під'єднати Telegram</button>
+          <p class="hint">{t("Повідомлення про перетин ліній приходять у Telegram.")}</p>
+          <button class="action" disabled={busy} onclick={startPairing}>{t("Під'єднати Telegram")}</button>
         {:else}
           <p class="hint">
-            Бот надішле {CODE_DIGITS} цифр — введіть їх тут.
-            <a href={pairingLink} target="_blank" rel="noopener">Відкрити бота</a>
+            {t("Бот надішле {count} цифр — введіть їх тут.", { count: CODE_DIGITS })}
+            <a href={pairingLink} target="_blank" rel="noopener">{t("Відкрити бота")}</a>
           </p>
           <div class="code-row">
             <input
@@ -134,21 +137,21 @@
               autocomplete="one-time-code"
               maxlength="8"
               placeholder="000000"
-              aria-label="Цифри з Telegram"
+              aria-label={t("Цифри з Telegram")}
               bind:value={code}
             />
             <button class="action" disabled={busy || digits.length !== CODE_DIGITS} onclick={confirm}>
-              Підтвердити
+              {t("Підтвердити")}
             </button>
           </div>
         {/if}
       {:else}
         {#if $view.pushGone}
-          <p class="hint warn">Браузер вимкнув сповіщення на цьому пристрої — те, що спрацювало, чекає.</p>
-          <button class="action" disabled={busy} onclick={enablePush}>Увімкнути знову</button>
+          <p class="hint warn">{t("Браузер вимкнув сповіщення на цьому пристрої — те, що спрацювало, чекає.")}</p>
+          <button class="action" disabled={busy} onclick={enablePush}>{t("Увімкнути знову")}</button>
         {/if}
         {#if sorted.length === 0}
-          <p class="hint">Правий клік на горизонталі чи промені рівня → «Сповіщати».</p>
+          <p class="hint">{t("Правий клік на горизонталі чи промені рівня → «Сповіщати».")}</p>
         {/if}
         {#each sorted as alert (alert.alert_id)}
           <div class="item" class:fired={alert.state !== "armed"}>
@@ -159,7 +162,7 @@
             <div class="actions">
               {#if alert.state !== "armed"}
                 <button class="mini" disabled={busy} onclick={() => run(async () => void (await alerts.rearmAlert(alert)))}>
-                  знову
+                  {t("знову")}
                 </button>
               {/if}
               <button
@@ -167,14 +170,14 @@
                 disabled={busy}
                 onclick={() => run(() => alerts.disable(alert.drawing_id, alert.symbol))}
               >
-                {alert.state === "armed" ? "вимкнути" : "прибрати"}
+                {alert.state === "armed" ? t("вимкнути") : t("прибрати")}
               </button>
             </div>
           </div>
         {/each}
         {#if isPush}
           <button class="forget" class:armed={confirmForget} disabled={busy} onclick={forget}>
-            {confirmForget ? "Точно? Сповіщення цього пристрою зникнуть" : "Вимкнути на цьому пристрої"}
+            {confirmForget ? t("Точно? Сповіщення цього пристрою зникнуть") : t("Вимкнути на цьому пристрої")}
           </button>
         {/if}
       {/if}

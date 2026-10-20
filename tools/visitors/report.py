@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from core.config_loader import load_system_config
+from core.i18n import SOURCE_LANG
 from runtime.visitors.journal import SOURCE_SNAPSHOT, visitors_policy
 from tools.visitors.aggregate import DAY_MS, Digest, Row, Visit, build_visitors, summarize, visitor_sessions
 
@@ -128,6 +129,9 @@ def render(
     )
     # ADR-0105 rev 11.10: чи переходять за посиланнями зі знімків — підстава для серверного прев'ю (ADR-0110)
     lines.append("🔗 За посиланнями зі знімків: людей %d (нових %d)" % (digest.via_snapshot, digest.via_snapshot_new))
+    if digest.languages:  # ADR-0116 §9 п.6: чи переклад приводить людей
+        lines.append("🌐 Мова людей: " + " · ".join("%s %d" % (lang or "не вказано", count)
+                                                     for lang, count in digest.languages))
     first = ", перша — %s" % _local(digest.first_human_ms, tz).strftime("%d.%m.%Y") if digest.first_human_ms else ""
     lines.append(
         "📈 Людей за 7 днів: %d · за 30: %d · усього: %d%s" % (digest.humans_7d, digest.humans_30d, digest.humans_all, first)
@@ -206,7 +210,8 @@ def _visit_span(visit: Visit, tz: ZoneInfo) -> str:
     start, end = _local(visit.start_ms, tz), _local(visit.end_ms, tz)
     finish = end.strftime("%H:%M") if end.date() == start.date() else end.strftime("%d.%m %H:%M")
     via = " · 🔗 зі знімка" if visit.source == SOURCE_SNAPSHOT else ""
-    return "%s–%s · %s%s" % (start.strftime("%d.%m %H:%M"), finish, _duration(visit.active_s), via)
+    lang = " · " + visit.lang if visit.lang and visit.lang != SOURCE_LANG else ""  # джерело — без позначки
+    return "%s–%s · %s%s%s" % (start.strftime("%d.%m %H:%M"), finish, _duration(visit.active_s), via, lang)
 
 
 def _views_by_symbol(visits: Sequence[Visit]) -> str:

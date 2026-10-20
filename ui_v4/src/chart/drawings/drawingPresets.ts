@@ -9,6 +9,7 @@
 // ⚠ МАПІНГ (яка трійця за наміром) — first-pass, узгоджується live з owner.
 
 import type { DrawingColorRole, DrawingLineStyle } from '../../types';
+import { msg } from '../../lib/i18n/i18n.svelte';
 
 export interface DrawingPreset {
   readonly id: string;
@@ -20,10 +21,10 @@ export interface DrawingPreset {
 
 /** Порядок = порядок chips у flyout. Мапінг first-pass (owner-tunable). */
 export const DRAWING_PRESETS: readonly DrawingPreset[] = [
-  { id: 'thesis', label: 'Теза',    colorRole: 'accent',  lineWidth: 2, lineStyle: 'solid' },
-  { id: 'level',  label: 'Рівень',  colorRole: 'neutral', lineWidth: 1, lineStyle: 'dashed' },
-  { id: 'note',   label: 'Нотатка', colorRole: 'info',    lineWidth: 1, lineStyle: 'dotted' },
-  { id: 'alert',  label: 'Увага',   colorRole: 'bear',    lineWidth: 2, lineStyle: 'solid' },
+  { id: 'thesis', label: msg('Теза'),    colorRole: 'accent',  lineWidth: 2, lineStyle: 'solid' },
+  { id: 'level',  label: msg('Рівень'),  colorRole: 'neutral', lineWidth: 1, lineStyle: 'dashed' },
+  { id: 'note',   label: msg('Нотатка'), colorRole: 'info',    lineWidth: 1, lineStyle: 'dotted' },
+  { id: 'alert',  label: msg('Увага'),   colorRole: 'bear',    lineWidth: 2, lineStyle: 'solid' },
 ];
 
 /** id пресета, чия трійця точно збігається з поточним станом (colorRole+width+

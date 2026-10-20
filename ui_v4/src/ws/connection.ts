@@ -12,7 +12,8 @@ const QUIET_AFTER = 3;
 const QUIET_INTERVAL_MS = 60_000;
 
 export class WSConnection {
-  url: string;
+  /** Адреса — рядок або функція: функція береться на кожне (пере)підключення (ADR-0116: мова глядача на цю мить). */
+  private readonly urlSource: string | (() => string);
   onMessage: (frame: RenderFrame) => void;
   onOpen: (() => void) | null;
 
@@ -25,10 +26,14 @@ export class WSConnection {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private boundOnVisibility: (() => void) | null = null;
 
-  constructor(url: string, onMessage: (frame: RenderFrame) => void, onOpen?: () => void) {
-    this.url = url;
+  constructor(url: string | (() => string), onMessage: (frame: RenderFrame) => void, onOpen?: () => void) {
+    this.urlSource = url;
     this.onMessage = onMessage;
     this.onOpen = onOpen ?? null;
+  }
+
+  get url(): string {
+    return typeof this.urlSource === 'function' ? this.urlSource() : this.urlSource;
   }
 
   connect() {

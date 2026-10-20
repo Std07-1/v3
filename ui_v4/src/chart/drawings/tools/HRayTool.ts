@@ -4,6 +4,7 @@
 // промінь ADR-0084 (дві точки, будь-який кут). Domain: 1 якір (час — початок, ціна — рівень).
 
 import type { Drawing } from '../../../types';
+import { msg } from '../../../lib/i18n/i18n.svelte';
 import { dashPattern } from '../lineStyles';
 import { LEVEL_GROUP } from './groups';
 import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './types';
@@ -24,7 +25,7 @@ function anchorOf(
 export const HRayTool: ToolModule = {
     id: 'hray',
     pointsRequired: 1,
-    label: 'Промінь рівня',
+    label: msg('Промінь рівня'),
     icon: '<circle cx="5" cy="12" r="1.6"/><path d="M7.5 12H21"/>',
     hotkey: 'k',
     styleable: true,

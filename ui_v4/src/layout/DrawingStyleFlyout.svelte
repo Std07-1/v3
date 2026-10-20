@@ -13,6 +13,7 @@
      на вибраній фігурі + Видалити). Dismiss: перший pointerdown поза (клік по
      чарту поглинається — не малює) / Escape. Див. «Dismiss-граматика» нижче. -->
 <script lang="ts">
+  import { msg, t } from "../lib/i18n/i18n.svelte";
   import {
     DRAWING_COLOR_ROLES,
     roleSpec,
@@ -84,7 +85,7 @@
     onClose,
   }: Props = $props();
 
-  const EDIT_TEXT_LABEL = "Змінити текст";
+  const EDIT_TEXT_LABEL = msg("Змінити текст");
 
   // Активний намір: пресет, чия трійця точно = поточний стан (інакше null=кастом).
   let activePreset = $derived(matchPreset(colorRole, lineWidth, lineStyle));
@@ -179,7 +180,7 @@
   >
     <!-- Заголовок = смисл кольору (тонований) + жива лінія-зразок праворуч. -->
     <div class="head">
-      <span class="meaning" style:color={sampleColor}>{current.label}</span>
+      <span class="meaning" style:color={sampleColor}>{t(current.label)}</span>
       <svg class="sample" viewBox="0 0 48 12" aria-hidden="true">
         <line
           x1="2"
@@ -205,8 +206,8 @@
         <button
           class="preset"
           class:active={p.id === activePreset}
-          title={p.label}
-          aria-label={p.label}
+          title={t(p.label)}
+          aria-label={t(p.label)}
           aria-pressed={p.id === activePreset}
           onmouseenter={() => onPreviewPreset?.(p)}
           onclick={() => onPickPreset(p)}
@@ -223,7 +224,7 @@
               stroke-dasharray={presetDash(p)}
             />
           </svg>
-          <span class="plabel">{p.label}</span>
+          <span class="plabel">{t(p.label)}</span>
         </button>
       {/each}
     </div>
@@ -240,8 +241,8 @@
           class="role"
           class:active={r.role === colorRole}
           style:--rc="var({r.cssVar}, {r.fallback})"
-          title={r.label}
-          aria-label={r.label}
+          title={t(r.label)}
+          aria-label={t(r.label)}
           aria-pressed={r.role === colorRole}
           onmouseenter={() => onPreviewColor?.(r.role)}
           onclick={() => onPickColor(r.role)}
@@ -263,7 +264,7 @@
           class="width"
           class:active={w === lineWidth}
           title={`${w}px`}
-          aria-label={`Товщина ${w}px`}
+          aria-label={t("Товщина {width}px", { width: w })}
           aria-pressed={w === lineWidth}
           onmouseenter={() => onPreviewWidth?.(w)}
           onclick={() => onPickWidth(w)}
@@ -294,8 +295,8 @@
         <button
           class="lstyle"
           class:active={s.style === lineStyle}
-          title={s.label}
-          aria-label={s.label}
+          title={t(s.label)}
+          aria-label={t(s.label)}
           aria-pressed={s.style === lineStyle}
           onmouseenter={() => onPreviewStyle?.(s.style)}
           onclick={() => onPickStyle(s.style)}
@@ -323,7 +324,7 @@
       <button class="alert-row" onclick={() => onEditText?.()}>
         <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"
           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@html ICON_PENCIL}</svg>
-        <span>{EDIT_TEXT_LABEL}</span>
+        <span>{t(EDIT_TEXT_LABEL)}</span>
       </button>
     {/if}
     {#if request.showDelete && alertAction}
@@ -347,7 +348,7 @@
           <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
           <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
         </svg>
-        <span>Видалити</span>
+        <span>{t("Видалити")}</span>
       </button>
     {/if}
   </div>

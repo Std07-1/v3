@@ -4,6 +4,7 @@
 // ADR-0109. Ставиться один раз (як у TV): після тексту інструмент вимкнено, нотатка виділена. Стиль — лише колір.
 
 import type { Drawing } from '../../../types';
+import { msg, t } from '../../../lib/i18n/i18n.svelte';
 import { isLightColor, withAlpha } from '../../canvasColor';
 import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './types';
 
@@ -18,7 +19,7 @@ const CHIP_BG_LIGHT = 'rgba(255, 255, 255, 0.85)';
 /** Запасний колір, якщо колір фігури — не hex (той самий нейтральний, що --drawing-base-color). */
 const FALLBACK_RGB = '200,205,214';
 /** Нотатка без тексту (прев'ю під курсором до кліку). */
-const PLACEHOLDER = 'Нотатка';
+const PLACEHOLDER = msg('Нотатка');
 /** Ширина символу для хіт-тесту без полотна (оцінка для 12px) — лише доки текст ще не малювався. */
 const CHAR_W_ESTIMATE = 6.6;
 /** Виміряна ширина тексту (той самий шрифт, що на полотні) — для хіт-тесту й × без полотна: оцінка за кількістю
@@ -44,13 +45,13 @@ export function chipBox(x: number, y: number, textWidth: number): ScreenAabb {
 }
 
 function textOf(d: Drawing): string {
-    return d.meta?.text?.trim() || PLACEHOLDER;
+    return d.meta?.text?.trim() || t(PLACEHOLDER);
 }
 
 export const TextTool: ToolModule = {
     id: 'text',
     pointsRequired: 1,
-    label: 'Нотатка',
+    label: msg('Нотатка'),
     icon: '<polyline points="4 7 4 4 20 4 20 7"/><line x1="9" x2="15" y1="20" y2="20"/><line x1="12" x2="12" y1="4" y2="20"/>',
     hotkey: 'n',
     styleable: true,
