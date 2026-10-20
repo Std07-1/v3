@@ -14,6 +14,7 @@ Python 3.7 compatible.
 
 from __future__ import annotations
 
+import dataclasses
 import types
 from typing import Any, Dict, List, Optional
 
@@ -290,6 +291,56 @@ class TestSmcRunnerOnBarDict:
         d = _bar_dict(i=103, fmt="long", complete=True)
         delta = runner.on_bar_dict(SYM, TF, d)
         assert delta is not None
+
+    def _runner_counting_engine_bars(self, monkeypatch):
+        runner = self._runner_with_warmup()
+        fed = []
+        real_on_bar = runner._engine.on_bar
+        monkeypatch.setattr(runner._engine, "on_bar", lambda bar: fed.append(bar) or real_on_bar(bar))
+        return runner, fed
+
+    def test_repeat_of_last_bar_from_another_feed_path_is_skipped_and_keeps_pending_delta(self, monkeypatch):
+        """Delta loop глядача і фоновий feed подають той самий бар: другий раз — без перерахунку й без побічних дій,
+        а дельта першої подачі, яку кадр глядача ще не забрав, не затирається порожньою (ADR-0024 §18.10)."""
+        runner, fed = self._runner_counting_engine_bars(monkeypatch)
+        d = _bar_dict(i=104, c=1903.0, complete=True)
+        first = runner.on_bar_dict(SYM, TF, d)
+        assert runner.on_bar_dict(SYM, TF, dict(d)) is None
+        assert len(fed) == 1
+        assert runner.last_delta(SYM, TF) is first
+        assert [ev["open_time_ms"] for ev in runner.get_recent_bar_closes(SYM)] == [d["open_time_ms"]]
+
+    def test_changed_bar_of_the_same_open_is_not_a_repeat(self, monkeypatch):
+        """tick_promoted, за ним фінал тієї самої хвилини з іншим OHLC — дві різні подачі, обидві доходять до рушія."""
+        runner, fed = self._runner_counting_engine_bars(monkeypatch)
+        promoted = dict(_bar_dict(i=105, h=1904.0, c=1903.0, complete=True), src="tick_promoted")
+        final = _bar_dict(i=105, h=1905.0, c=1903.5, complete=True)
+        runner.on_bar_dict(SYM, TF, promoted)
+        runner.on_bar_dict(SYM, TF, final)
+        assert [(bar.src, bar.h) for bar in fed] == [("tick_promoted", 1904.0), ("derived", 1905.0)]
+        assert runner._engine.holds_bar(_bar_dict_to_candle_bar(final, SYM, TF))
+
+    def test_tick_promoted_after_final_keeps_final_and_skips_side_effects(self, monkeypatch):
+        """Перший тік після перерви ринку закриває бакет, фінал якого брокер дав годину тому: tick_promoted того
+        самого open_ms фінал не заміщує ні в рушії, ні в події закриття (I3, ADR-0024 §18.10)."""
+        runner, fed = self._runner_counting_engine_bars(monkeypatch)
+        final = _bar_dict(i=106, h=1905.0, c=1903.5, complete=True)
+        first = runner.on_bar_dict(SYM, TF, final)
+        late_tick = dict(_bar_dict(i=106, h=1909.0, c=1908.0, complete=True), src="tick_promoted")
+        assert runner.on_bar_dict(SYM, TF, late_tick) is None
+        assert len(fed) == 1 and runner.last_delta(SYM, TF) is first
+        assert runner._engine.get_bars(SYM, TF)[-1].h == 1905.0
+        assert [ev["close"] for ev in runner.get_recent_bar_closes(SYM)] == [1903.5]
+
+    def test_engine_keeps_final_against_tick_promoted_of_the_same_open(self):
+        """Рейка в самому рушії, для інших викликачів on_bar: фінал лишається, знімок не перераховується."""
+        engine = _make_engine()
+        final = _bar_dict_to_candle_bar(_bar_dict(i=107, h=1905.0), SYM, TF)
+        engine.on_bar(final)
+        snap = engine.get_snapshot(SYM, TF)
+        delta = engine.on_bar(dataclasses.replace(final, h=1909.0, src="tick_promoted"))
+        assert not delta.has_changes
+        assert engine.get_bars(SYM, TF)[-1] == final and engine.get_snapshot(SYM, TF) is snap
 
 
 # ──────────────────────────────────────────────────────────────

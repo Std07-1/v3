@@ -26,6 +26,7 @@ import {
 } from './themes';
 import type { Candle, T_MS } from '../types';
 import { isMobile } from '../app/viewport';
+import { TF_LABEL_TO_S } from '../constants/tfLabels';
 
 // ─── Helpers ───
 
@@ -81,11 +82,8 @@ function _fmtUtcFull(epochSec: number): string {
   return `${_fmtUtcDate(epochSec)} ${_fmtUtcTime(epochSec)} UTC`;
 }
 
-// ─── TF label → seconds mapping ───
-const TF_TO_S: Record<string, number> = {
-  M1: 60, M3: 180, M5: 300, M15: 900,
-  M30: 1800, H1: 3600, H4: 14400, D1: 86400,
-};
+// ─── TF label → seconds mapping (SSOT — constants/tfLabels.ts; W1/MN — ADR-0115) ───
+const TF_TO_S: Readonly<Record<string, number>> = TF_LABEL_TO_S;
 
 export type CrosshairData = {
   time: Time | null;
@@ -116,6 +114,8 @@ export class ChartEngine {
   static readonly MAX_BARS: Record<string, number> = {
     M1: 10000, M3: 8000, M5: 6000, M15: 4000,
     M30: 3000, H1: 2500, H4: 1500, D1: 1000,
+    // ADR-0115: уся історія D1 (XAU з 1987 ≈ 2 030 тижнів, ≈ 470 місяців) — підвантаження не впирається в стелю
+    W1: 2100, MN: 500,
   };
   /** Пауза перед повтором після тимчасової відмови. Довша за cooldown сервера (SCROLLBACK_COOLDOWN_S = 0.5 с,
    *  ws_server.py): відмова приходить менш ніж за 0.5 с після останнього обслуженого запиту — повтор обслужать. */
@@ -287,9 +287,10 @@ export class ChartEngine {
         fixRightEdge: false,
         lockVisibleTimeRangeOnResize: false,
         tickMarkFormatter: (time: Time) => {
-          if (typeof time === 'string') return ''; // D1: LWC renders date natively
+          // D1/W1/MN (час рядком 'YYYY-MM-DD'): null — LWC малює дати сам (день / місяць / рік за вагою позначки);
+          // порожній рядок, як було до 19.10, лишав шкалу часу без жодної дати
           if (typeof time === 'number') return _fmtUtcTime(time);
-          return '';
+          return null;
         },
       },
       localization: {

@@ -285,6 +285,60 @@
     }
 </script>
 
+{#snippet briefingBlock(standalone: boolean)}
+    {#if shownBriefing}
+        {#if !standalone}
+            <button
+                class="mc-brief-toggle"
+                type="button"
+                aria-expanded={briefingOpen}
+                onclick={() => (briefingOpen = !briefingOpen)}
+            >
+                <span>Розбір</span>
+                <span class="mc-brief-chev">{briefingOpen ? "▴" : "▾"}</span>
+            </button>
+        {/if}
+        {#if standalone || briefingOpen}
+            <div class="mc-brief">
+                {#each shownBriefing.sections as section (section.key)}
+                    <div class="mb-sec">
+                        <div class="mc-label">
+                            {section.title}
+                        </div>
+                        {#each section.rows as row, i (i)}
+                            <div
+                                class="mb-row"
+                                class:bull={row.tone === "bull"}
+                                class:bear={row.tone === "bear"}
+                                class:warn={row.tone === "warn"}
+                            >
+                                {#if row.tf}
+                                    <span class="mb-tf"
+                                        >{row.tf}</span
+                                    >
+                                {/if}
+                                <div class="mb-body">
+                                    <div class="mb-text">
+                                        {row.text}
+                                    </div>
+                                    {#each row.notes as note, j (j)}
+                                        <div class="mb-note">
+                                            {note}
+                                        </div>
+                                    {/each}
+                                </div>
+                            </div>
+                        {/each}
+                    </div>
+                {/each}
+                <div class="mb-asof">
+                    Станом на {briefingAsOf} UTC
+                </div>
+            </div>
+        {/if}
+    {/if}
+{/snippet}
+
 <div
     class="hud-stack {shellStageClass}"
     class:menu-open={symbolOpen || tfOpen}
@@ -659,57 +713,36 @@
                                 </div>
                             {/if}
                             <!-- ADR-0113 Ф3: розбір символу — розгортається під карткою (телефон — у тій самій шторці) -->
-                            {#if shownBriefing}
-                                <button
-                                    class="mc-brief-toggle"
-                                    type="button"
-                                    aria-expanded={briefingOpen}
-                                    onclick={() => (briefingOpen = !briefingOpen)}
-                                >
-                                    <span>Розбір</span>
-                                    <span class="mc-brief-chev"
-                                        >{briefingOpen ? "▴" : "▾"}</span
-                                    >
-                                </button>
-                                {#if briefingOpen}
-                                    <div class="mc-brief">
-                                        {#each shownBriefing.sections as section (section.key)}
-                                            <div class="mb-sec">
-                                                <div class="mc-label">
-                                                    {section.title}
-                                                </div>
-                                                {#each section.rows as row, i (i)}
-                                                    <div
-                                                        class="mb-row"
-                                                        class:bull={row.tone === "bull"}
-                                                        class:bear={row.tone === "bear"}
-                                                        class:warn={row.tone === "warn"}
-                                                    >
-                                                        {#if row.tf}
-                                                            <span class="mb-tf"
-                                                                >{row.tf}</span
-                                                            >
-                                                        {/if}
-                                                        <div class="mb-body">
-                                                            <div class="mb-text">
-                                                                {row.text}
-                                                            </div>
-                                                            {#each row.notes as note, j (j)}
-                                                                <div class="mb-note">
-                                                                    {note}
-                                                                </div>
-                                                            {/each}
-                                                        </div>
-                                                    </div>
-                                                {/each}
-                                            </div>
-                                        {/each}
-                                        <div class="mb-asof">
-                                            Станом на {briefingAsOf} UTC
-                                        </div>
-                                    </div>
-                                {/if}
-                            {/if}
+                            {@render briefingBlock(false)}
+                        </div>
+                    {/if}
+                </div>
+            {:else if shownBriefing}
+                <!-- ADR-0115 §10.4: на W1/MN shell нема (він від наративу TF) — «Розбір» відкривається власною кнопкою -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div
+                    class="shell-stage-wrap"
+                    role="presentation"
+                    onclick={(e) => e.stopPropagation()}
+                >
+                    <button
+                        class="shell-stage"
+                        onclick={toggleMicroCard}
+                        type="button"
+                        aria-expanded={microCardOpen}
+                    >
+                        <span class="shell-stlbl">Розбір</span>
+                    </button>
+                    {#if microCardOpen}
+                        <!-- svelte-ignore a11y_no_static_element_interactions -->
+                        <!-- svelte-ignore a11y_click_events_have_key_events -->
+                        <div
+                            class="mc-backdrop"
+                            onclick={() => (microCardOpen = false)}
+                        ></div>
+                        <div class="shell-mc open briefing-open">
+                            <div class="mc-grip"><span></span></div>
+                            {@render briefingBlock(true)}
                         </div>
                     {/if}
                 </div>
@@ -1821,6 +1854,9 @@
         }
         .mc-val {
             font-size: var(--t3a-size);
+            /* шторка сталої ширини: текст переноситься, а не зрізається краєм (nowrap рядка HUD успадковується) */
+            white-space: normal;
+            overflow-wrap: anywhere;
         }
         .shell-mc.briefing-open {
             width: 100%;

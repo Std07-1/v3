@@ -165,8 +165,8 @@
                     >{badgeLabel(agentState)}</span
                 >
             {/if}
-            <!-- Compact pill text — свіжа теза Арчі; без неї — заголовок системного наративу (ADR-0113 Ф3),
-                 далі archi_presence. Пігулка обрізає текст — повний у підказці. -->
+            <!-- Compact pill text — лише Арчі: свіжа теза, далі archi_presence, інакше «Idle» (ADR-0070 Rev 5).
+                 Пігулка обрізає текст — повний у підказці. -->
             <span class="headline-text" title={compactPillText(narrative, agentState)}
                 >{compactPillText(narrative, agentState)}</span
             >

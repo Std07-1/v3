@@ -277,7 +277,9 @@ export interface SignalAlert {
 // (живе лише як draft: не комітиться, не зберігається, не hit-test'иться).
 // ADR-0111 §3.4: 'fib' — Fibonacci retracement (2 якорі, рівні відкату); 'long' / 'short' — позиція з R:R
 // (3 якорі: вхід, стоп, ціль; §3.6).
-export type DrawingType = 'hline' | 'trend' | 'rect' | 'ray' | 'measure' | 'fib' | 'long' | 'short';
+// Прототипи для показу (§3.7): 'zone' — зона з 50% і продовженням до дотику, 'hray' — промінь рівня, 'text' — нотатка.
+export type DrawingType =
+  | 'hline' | 'trend' | 'rect' | 'ray' | 'measure' | 'fib' | 'long' | 'short' | 'zone' | 'hray' | 'text';
 
 /** ADR-0080 (surface-2): семантична роль-колір. Резолвиться у token-хекс при
  *  рендері (theme-aware). SSOT списку ролей + label/cssVar — chart/drawings/
@@ -305,6 +307,8 @@ export interface Drawing {
     /** ADR-0080 (крок 4): solid | dashed | dotted. Undefined = solid. */
     lineStyle?: DrawingLineStyle;
     locked?: boolean;
+    /** ADR-0111 §3.7: текст нотатки (TextTool). */
+    text?: string;
   };
 }
 
@@ -322,6 +326,15 @@ export interface DrawingContextRequest {
   colorRole: DrawingColorRole | null;
   lineWidth: number;
   lineStyle: DrawingLineStyle;
+  /** ADR-0111 §3.7: нотатка — зі стилю лише колір і рядок «Змінити текст». */
+  isNote: boolean;
+}
+
+/** ADR-0112 D2: кнопки телефона — активні лише коли є що (↶, «видалити», ✎ для виділеної нотатки, ADR-0111 §3.7). */
+export interface DrawingEditState {
+  canUndo: boolean;
+  hasSelection: boolean;
+  noteSelected: boolean;
 }
 
 // -------------------- Archi on chart (ADR-0085) --------------------
@@ -405,6 +418,9 @@ export interface RenderFrame {
    *  null/zero, замало вибірки) — meta.warnings "rv_unavailable".
    *  Consumed by: CommandRail. Frontend MUST NOT re-derive from candles. */
   rv?: number;
+  /** ADR-0115 §4.4: W1/MN — закриття останнього торгового дня тижня/місяця (epoch ms) для таймера CommandRail;
+   *  full і delta кадри календарних TF. Поля нема — інший TF або торги бакета вже закрились (вихідні). */
+  bar_close_ms?: number;
   /** ADR-0029: confluence grade per zone (full + delta on complete bars, ADR-0042) */
   zone_grades?: Record<string, ZoneGradeInfo>;
   /** ADR-0031: per-TF trend bias map (full + delta on complete bars, ADR-0042) */

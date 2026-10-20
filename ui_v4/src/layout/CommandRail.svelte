@@ -25,6 +25,8 @@
 -->
 <script lang="ts">
   import { hintsOn } from "../stores/uiHints";
+  import { CALENDAR_TF_LABELS, TF_LABEL_TO_S } from "../constants/tfLabels";
+  import { barCountdownMs, formatBarCountdown } from "../lib/barCountdown";
 
   type Props = {
     /** ATR(14) for current symbol+tf, sourced from backend (frame.atr).
@@ -43,22 +45,14 @@
     lastCandle: { tf: string; t_ms: number } | null;
     /** Live wallclock from parent $state (ticks every 1s). */
     nowMs: number;
+    /** Кінець бару від бекенда (frame.bar_close_ms): W1/MN — закриття останнього торгового дня тижня/місяця
+     *  (ADR-0115 §4.4); null — бекенд не дав, таймер рахує сітку TF сам (M1…D1). */
+    barCloseMs?: number | null;
   };
 
-  const { atr, rv, lastPrice, currentTf, lastCandle, nowMs }: Props = $props();
+  const { atr, rv, lastPrice, currentTf, lastCandle, nowMs, barCloseMs = null }: Props = $props();
 
-  // ─── TF label → seconds (inverse of App.svelte _S_TO_LABEL) ────────────
-  const _LABEL_TO_S: Record<string, number> = {
-    M1: 60,
-    M3: 180,
-    M5: 300,
-    M15: 900,
-    M30: 1800,
-    H1: 3600,
-    H4: 14400,
-    D1: 86400,
-  };
-  const tfS = $derived(_LABEL_TO_S[currentTf] ?? 0);
+  const tfS = $derived(TF_LABEL_TO_S[currentTf] ?? 0);
   const tfMs = $derived(tfS * 1000);
   const tfLabel = $derived(currentTf || "—");
 
@@ -74,23 +68,17 @@
   });
 
   // ─── Countdown (wallclock + bucket math) ───────────────────────────────
-  // Display arithmetic per X28: not domain computation, just `next_close - now`.
-  const countdownMs = $derived.by(() => {
-    if (tfMs === 0 || anchorMs == null) return null;
-    const bucketOpen =
-      Math.floor((nowMs - anchorMs) / tfMs) * tfMs + anchorMs;
-    const closeMs = bucketOpen + tfMs;
-    const remain = closeMs - nowMs;
-    // Bounded: 0..tfMs always (wallclock anchor guarantees this); guard anyway.
-    return remain >= 0 && remain <= tfMs ? remain : null;
-  });
-  const countdownStr = $derived.by(() => {
-    if (countdownMs == null) return "—:—";
-    const totalSec = Math.floor(countdownMs / 1000);
-    const mm = Math.floor(totalSec / 60);
-    const ss = totalSec % 60;
-    return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
-  });
+  // Display arithmetic per X28: not domain computation, just `next_close - now` (lib/barCountdown.ts).
+  const countdownMs = $derived(
+    barCountdownMs({
+      tfS,
+      anchorMs,
+      barCloseMs,
+      calendar: CALENDAR_TF_LABELS.has(currentTf),
+      nowMs,
+    }),
+  );
+  const countdownStr = $derived(formatBarCountdown(countdownMs));
 
   // ─── ATR formatter ─────────────────────────────────────────────────────
   // Backend шле лише виміряний ATR; без виміру поля нема → "—" (ADR-0070 rev 3).

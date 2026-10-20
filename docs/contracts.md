@@ -412,6 +412,19 @@ SMC поля — **на кореневому рівні frame**, не в `data` 
 - `zone_grades`, `bias_map`, `momentum_map` — тільки у full frame
 - UI обробляє через `smcStore.applySmcFull()` (full frame) / `smcStore.applySmcDelta()` (delta frame)
 
+### Календарні TF W1/MN (ADR-0115)
+
+- `tf` = `"W1"` / `"MN"` (`tf_s` 604800 / 2592000 — ідентифікатори, MN ≠ 30 діб); у `config.tfs` — лише з
+  `config.json:calendar_tfs.enabled`. Свічки — проєкція D1 SSOT (`runtime/ws/calendar_view.py`), тим самим форматом
+  `candles` (`t_ms` = ключ бакета: відкриття торгового дня понеділка / 1-го числа); формуюча — останньою в full і в delta.
+- SMC-поля на W1/MN порожні (`zones`/`swings`/`levels` = `[]`, без `narrative`, `smc_delta`, `atr`, `rv`); `briefing`
+  (ADR-0113, символьний) — як на інших TF.
+- `bar_close_ms` (epoch ms, optional; full і delta W1/MN) — закриття останнього торгового дня бакета для таймера
+  CommandRail «3д 04г»; поля нема — інший TF або торги бакета вже закрились.
+- `briefing.sections[]` на W1/MN закінчується розділом `key: "calendar_profile"` («Профіль тижня» / «Профіль місяця»,
+  ADR-0115 §10): рядки BriefingRow (`tf` "W1"/"MN", текст і примітки з бекенда). У delta W1/MN `briefing` (з розділом)
+  є лише тоді, коли розбір символу змінився з останнього надісланого; немає `briefing` — розділу теж нема.
+
 ---
 
 ## Redis snapshot та preview (внутрішній формат)

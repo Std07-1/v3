@@ -9,8 +9,8 @@ const AT = { t_ms: 1791800100000, price: 4150 };
 const META: Drawing['meta'] = { colorRole: 'bull', lineWidth: 2 };
 
 describe('створення фігури за реєстром', () => {
-  it('під курсором до кліку видно лише однокрокові (hline, позиції — ADR-0111 §3.6)', () => {
-    expect([...TOOL_REGISTRY.values()].filter(previewsOnHover).map((t) => t.id)).toEqual(['hline', 'long', 'short']);
+  it('під курсором до кліку видно однокрокові (hline, промінь рівня, позиції), крім нотатки — вона питає текст', () => {
+    expect([...TOOL_REGISTRY.values()].filter(previewsOnHover).map((t) => t.id)).toEqual(['hline', 'hray', 'long', 'short']);
   });
 
   it('перший клік: hline — одразу готова з однією точкою і стилем', () => {

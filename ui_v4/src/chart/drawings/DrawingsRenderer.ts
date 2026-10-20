@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { DataChangedScope, IChartApi, ISeriesApi, Logical, Time } from 'lightweight-charts';
 import { MismatchDirection } from 'lightweight-charts';
 
-import type { Drawing, ActiveTool, WsAction, T_MS, UiWarning, DrawingContextRequest, DrawingType, DrawingColorRole } from '../../types';
+import type { Drawing, DrawingPoint, ActiveTool, WsAction, T_MS, UiWarning, DrawingContextRequest, DrawingEditState, DrawingType, DrawingColorRole } from '../../types';
 import { CommandStack, type CommandAction } from './CommandStack';
 import { buildRoleColorMap } from './colorRoles';
 import { timeToFractionalIndex, fractionalIndexToTime, medianStep, fractionalLogicalToX, shiftTimeByBars } from './timeMap';
@@ -13,6 +13,9 @@ import {
   dragStarted,
 } from '../interaction/geometry';
 import { getToolModule } from './tools';
+import { createFirstTouchLookup, toTouchBar } from './zoneTouch';
+import { nearestSnapLevel, type SnapMode } from './magnetSnap';
+import { createDoubleClickTracker, type NoteTextRequest } from './noteText';
 import { drawingsKey, isCorruptBackupKey, loadDrawings, saveDrawings } from './drawingsStorage';
 import { cloneDrawing, completeDraft, cursorIndex, firstClick, followCursor, newDraft, previewsOnHover } from './drawingDraft';
 import { dragBody, dragHandle, grabOffsetFor, type DragSpace } from './drawingDrag';
@@ -47,7 +50,7 @@ type DrawingMetaPatch = Partial<NonNullable<Drawing['meta']>>;
 
 type SnapConfig = {
   enabled: boolean;
-  mode: 'ohlc' | 'hl' | 'close';
+  mode: SnapMode;
 };
 
 // Приціл на кінцях: тонкий crosshair з ВІДКРИТИМ центром (видно точку на свічці),
@@ -82,6 +85,8 @@ export class DrawingsRenderer {
   public onPersisted: ((storageKey: string, drawings: readonly Drawing[]) => void) | null = null;
   /** Інструмент своє відпрацював — UI вимикає його (одноразова фігура стала, правий клік; ADR-0111 §3.6). */
   public onToolDone: (() => void) | null = null;
+  /** ADR-0111 §3.7: нотатка просить текст — UI відкриває поле вводу (NoteEditor); без поля нотатки не ставляться. */
+  public onNoteText: ((req: NoteTextRequest) => void) | null = null;
 
   private drawings: Drawing[] = [];
   private activeTool: ActiveTool = null;
@@ -145,6 +150,7 @@ export class DrawingsRenderer {
   // snap (default OFF — controlled by toolbar magnet toggle, persisted in localStorage)
   private snapConfig: SnapConfig = { enabled: false, mode: 'ohlc' };
   private lastSnap: { x: number; y: number } | null = null; // visual snap indicator
+  private readonly noteDoubleClick = createDoubleClickTracker();
 
   // warning throttle
   private warnLastTs = new Map<string, number>();
@@ -229,7 +235,7 @@ export class DrawingsRenderer {
     // Дані серії змінились без зміни видимого діапазону: тік розширив high/low → autoScale зсунув ціна→y (D-05);
     // 'full' (setData: старіша історія, заміна барів) зсуває індекси барів — кеш часів негайно (D-09)
     this.onSeriesDataChanged = (scope) => {
-      if (scope === 'full') this.refreshBarTimes(true);
+      if (scope === 'full') { this.refreshBarTimes(true); this.firstTouchMs.reset(); } // зона: пам'ять дотиків недійсна
       this.scheduleRender();
     };
     this.seriesApi.subscribeDataChanged(this.onSeriesDataChanged);
@@ -527,6 +533,14 @@ export class DrawingsRenderer {
     return this.seriesApi.priceToCoordinate(price);
   };
 
+  /** ADR-0111 §3.7: зона до першого дотику — пошук з пам'яттю (zoneTouch.ts); high/low — з LWC за індексом. */
+  private firstTouchMs = createFirstTouchLookup({
+    barTimesSec: () => this.barTimesSec,
+    barStepSec: () => this.barStepSec,
+    barAt: (i) => toTouchBar(this.seriesApi.dataByIndex(i), timeToSec),
+    onMisaligned: () => this.warnOnce('zone_touch_misaligned', 'drawing_state_inconsistent', 'зона: бар LWC ≠ кеш часів'),
+  });
+
   // Інверсія: coordinateToLogical у LWC — ЦІЛИЙ індекс (Math.ceil), тож новий якір
   // стає на бар поточного TF; частку бару зберігають лише якорі з іншого TF
   // (перетягування тіла — shiftTimeByBars, не через x).
@@ -555,25 +569,8 @@ export class DrawingsRenderer {
     const bar: any = this.seriesApi.dataByIndex(idx, MismatchDirection.NearestLeft);
     if (!bar || typeof bar.open !== 'number') return rawPrice;
 
-    const candidates: number[] =
-      this.snapConfig.mode === 'close'
-        ? [bar.close]
-        : this.snapConfig.mode === 'hl'
-          ? [bar.high, bar.low]
-          : [bar.high, bar.low, bar.open, bar.close];
-
-    // Find nearest OHLC by Y-pixel distance.
-    let bestPrice = rawPrice;
-    let bestDist = Infinity;
-    for (const p of candidates) {
-      const py = this.seriesApi.priceToCoordinate(p);
-      if (py === null) continue;
-      const dist = Math.abs(y - py);
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestPrice = p;
-      }
-    }
+    // Найближчий рівень свічки за пікселями (magnetSnap.ts).
+    const nearest = nearestSnapLevel(bar, this.snapConfig.mode, y, (p) => this.seriesApi.priceToCoordinate(p));
 
     // Snap only within threshold — prevents "flying" when cursor is outside the
     // bar's price range (e.g. cursor at bottom Y≈450 but all OHLC at Y≈150-200).
@@ -583,15 +580,15 @@ export class DrawingsRenderer {
     // Палець (курсор ADR-0112 D7 і ручка D8) — «слабкий» магніт: прилипає лише поруч із рівнем, тож прилипання щось
     // означає («ти на хаї»); 120 px тримали б точку на рівнях майже завжди, а ручка стрибала б під пальцем на ~100 px.
     const SNAP_RADIUS_PX = this.touchCursorMode || this.dragState?.pointerType === 'touch' ? 16 : 120;
-    if (bestDist > SNAP_RADIUS_PX) {
+    if (nearest === null || nearest.distPx > SNAP_RADIUS_PX) {
       this.lastSnap = null;
       return rawPrice;
     }
 
     // Visual snap indicator
-    const snapY = this.seriesApi.priceToCoordinate(bestPrice);
+    const snapY = this.seriesApi.priceToCoordinate(nearest.price);
     this.lastSnap = snapY !== null ? { x, y: snapY } : null;
-    return bestPrice;
+    return nearest.price;
   }
 
   // ---- CommandStack локальне застосування ----
@@ -834,6 +831,9 @@ export class DrawingsRenderer {
 
       const d = this.drawings.find((q) => q.id === hit.id);
       if (!d) return;
+      // ADR-0111 §3.7: подвійний клік мишею по нотатці — змінити текст (на телефоні — ✎ у капсулі)
+      const noteId = e.pointerType === 'mouse' && getToolModule(d.type)?.askText ? d.id : null;
+      if (this.noteDoubleClick(noteId, e.timeStamp)) return this.editNoteText(d.id);
       const anchor = hit.handleIdx === null ? undefined : d.points[hit.handleIdx];
 
       this.interactionEl.setPointerCapture(e.pointerId);
@@ -933,7 +933,7 @@ export class DrawingsRenderer {
       // примусово (без lingering selection після закриття меню). Справжній
       // колір фігури зберігається завдяки color-preserving hover/select у
       // tool-render (ADR-0078) — палітра flyout й полотно завжди збігаються.
-      this.onContextMenu({ id: d.id, screenX: e.clientX, screenY: e.clientY, colorRole: d.meta?.colorRole ?? null, lineWidth: d.meta?.lineWidth ?? 1, lineStyle: d.meta?.lineStyle ?? 'solid' });
+      this.onContextMenu({ id: d.id, screenX: e.clientX, screenY: e.clientY, colorRole: d.meta?.colorRole ?? null, lineWidth: d.meta?.lineWidth ?? 1, lineStyle: d.meta?.lineStyle ?? 'solid', isNote: getToolModule(d.type)?.askText === true });
     };
 
     this.interactionEl.addEventListener('pointermove', this.onPointerMoveCapture, { capture: true });
@@ -1039,23 +1039,52 @@ export class DrawingsRenderer {
     }
 
     const price = this.getSnappedPrice(x, y, rawPrice);
+    // ADR-0111 §3.7: нотатка — спершу текст у полі вводу UI; фігура стає лише з непорожнім текстом
+    if (tool.askText) return this.askNoteText(tool, { t_ms, price }, x, y);
     // Однокрокова без прев'ю під курсором (клік без руху миші) — готова одразу; двоточкова — чернетка.
     const step = firstClick(tool, uuidv4(), { t_ms, price }, this.defaultMeta(tool.id), this.placementEnv(tool));
     this.draftFrozen = false;
-    if (step.kind === 'commit') {
-      this.commandStack.push({ type: 'ADD', drawing: step.drawing });
-      this.draft = null;
-      if (tool.oneShot) this.endOneShot(step.drawing.id);
-      return;
-    }
+    if (step.kind === 'commit') return this.commitNew(step.drawing, tool);
     this.draft = step.draft;
     this.scheduleRender();
   }
 
-  /** Одноразова фігура стала (позиція): виділити її для правок і вимкнути інструмент (ADR-0111 §3.6). */
-  private endOneShot(id: string): void {
-    this.selectedId = id;
+  /** Нова фігура стала (undoable ADD); одноразова — виділена, інструмент вимкнено (ADR-0111 §3.6). */
+  private commitNew(drawing: Drawing, tool: ToolModule): void {
+    this.commandStack.push({ type: 'ADD', drawing });
+    this.draft = null;
+    if (!tool.oneShot) return;
+    this.selectedId = drawing.id;
     this.onToolDone?.();
+  }
+
+  /** ADR-0111 §3.7: текст нової нотатки — полем вводу UI (onNoteText); прев'ю під курсором на час вводу знято. */
+  private askNoteText(tool: ToolModule, at: DrawingPoint, x: number, y: number): void {
+    if (!this.onNoteText) return this.warnOnce('note_unwired', 'drawing_state_inconsistent', 'нотатка: поля вводу нема');
+    this.draft = null;
+    this.scheduleRender();
+    const rect = this.interactionEl.getBoundingClientRect();
+    const commit = (text: string) => {
+      const step = firstClick(tool, uuidv4(), at, { ...this.defaultMeta(tool.id), text }, this.placementEnv(tool));
+      if (step.kind === 'commit') this.commitNew(step.drawing, tool);
+    };
+    this.onNoteText({ clientX: rect.left + x, clientY: rect.top + y, initial: '', touch: this.touchCursorMode, commit });
+  }
+
+  /** ✎ у капсулі телефона — текст виділеної нотатки (ADR-0111 §3.7). */
+  editSelectedNote(): void {
+    if (this.selectedId !== null) this.editNoteText(this.selectedId, true);
+  }
+
+  /** ADR-0111 §3.7: змінити текст нотатки — те саме поле вводу на її місці (`touch` — над клавіатурою); undoable. */
+  editNoteText(id: string, touch = false): void {
+    const d = this.drawings.find((q) => q.id === id);
+    const x = d ? this.toX(d.points[0].t_ms) : null;
+    const y = d ? this.toY(d.points[0].price) : null;
+    if (!d || !getToolModule(d.type)?.askText || x === null || y === null || !this.onNoteText) return;
+    const rect = this.interactionEl.getBoundingClientRect();
+    const commit = (text: string) => this.updateMetaById(id, { text });
+    this.onNoteText({ clientX: rect.left + x, clientY: rect.top + y, initial: d.meta?.text ?? '', touch, commit });
   }
 
   private updateDraft(x: number, y: number): void {
@@ -1101,10 +1130,8 @@ export class DrawingsRenderer {
       this.scheduleRender();
       return;
     }
-    if (step.kind === 'commit') this.commandStack.push({ type: 'ADD', drawing: step.drawing });
-
-    this.draft = null;
-    if (step.kind === 'commit' && tool.oneShot) this.endOneShot(step.drawing.id);
+    if (step.kind === 'commit') this.commitNew(step.drawing, tool);
+    else this.draft = null;
     // Інструмент лишається обраним (кілька фігур поспіль, як у TV), крім одноразових; Escape чи правий клік — вимкнути
   }
 
@@ -1259,8 +1286,10 @@ export class DrawingsRenderer {
     return this.dragState?.pointerType === 'touch';
   }
 
-  editState(): { canUndo: boolean; hasSelection: boolean } {
-    return { canUndo: this.commandStack.canUndo(), hasSelection: this.selectedId !== null };
+  editState(): DrawingEditState {
+    const selected = this.selectedId === null ? undefined : this.drawings.find((d) => d.id === this.selectedId);
+    const noteSelected = selected !== undefined && getToolModule(selected.type)?.askText === true;
+    return { canUndo: this.commandStack.canUndo(), hasSelection: this.selectedId !== null, noteSelected };
   }
 
   /** ADR-0114 S8: фігури символу й виділена — для дзвіночків ліній-сповіщень і кнопки капсули (лише читання). */
@@ -1333,6 +1362,7 @@ export class DrawingsRenderer {
         isSelected: this.selectedId === d.id,
         cssW,
         cssH,
+        firstTouchMs: this.firstTouchMs,
       };
       const aabb = tool.render(d, rc);
       if (aabb) this.aabbById.set(d.id, aabb);

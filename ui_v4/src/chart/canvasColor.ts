@@ -10,3 +10,12 @@ export function withAlpha(hex: string, alpha: number, fallbackRgb: string): stri
   const n = parseInt(m[1], 16);
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
 }
+
+/** Світлий колір (перцептивна яскравість понад половину) — для контрастного тла під текстом; не hex — null. */
+export function isLightColor(hex: string): boolean | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  const luma = (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+  return luma > 0.5;
+}

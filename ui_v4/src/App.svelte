@@ -48,6 +48,7 @@
   import { mainStatus } from "./app/diagSelectors";
   import { dismissOnOutside } from "./lib/actions/dismissOnOutside";
   import { configuredPriceDigits, displayPriceDigits, type PriceDigits } from "./lib/priceDigits";
+  import { TF_S_TO_LABEL } from "./constants/tfLabels";
   import {
     browserSnapshotCaps,
     canvasToPng,
@@ -83,6 +84,7 @@
     RenderFrame,
     ActiveTool,
     DrawingType,
+    DrawingEditState,
     DrawingLineStyle,
   } from "./types";
   import DrawingStyleFlyout from "./layout/DrawingStyleFlyout.svelte";
@@ -123,8 +125,8 @@
   const touchDrawingAvailable = resolveTouchDrawing(location.search, deviceStorage());
   let touchDrawOpen = $state(false);
   let drawBarRef: MobileDrawBar | undefined = $state();
-  /** ↶ і «видалити» в капсулі — активні лише коли є що (стан з ChartPane, ADR-0112 D2). */
-  let drawEditState = $state({ canUndo: false, hasSelection: false });
+  /** ↶, «видалити» і ✎ нотатки в капсулі — лише коли є що (стан з ChartPane, ADR-0112 D2, ADR-0111 §3.7). */
+  let drawEditState = $state<DrawingEditState>({ canUndo: false, hasSelection: false, noteSelected: false });
   // ADR-0114: дія лінії-сповіщення для виділеної фігури (кнопка-дзвіночок капсули)
   let drawAlertAction = $state<AlertAction | null>(null);
 
@@ -135,17 +137,8 @@
 
   // Symbol/TF persistence (drawing_tools_v1)
   // Priority: URL query params > localStorage
-  // Seconds→label map for URL params (screenshot bot sends ?tf=3600)
-  const _S_TO_LABEL: Record<string, string> = {
-    "60": "M1",
-    "180": "M3",
-    "300": "M5",
-    "900": "M15",
-    "1800": "M30",
-    "3600": "H1",
-    "14400": "H4",
-    "86400": "D1",
-  };
+  // Seconds→label map for URL params (screenshot bot sends ?tf=3600) — SSOT constants/tfLabels.ts
+  const _S_TO_LABEL = TF_S_TO_LABEL;
   function loadLastPair(): { symbol: string; tf: string } | null {
     // URL params have highest priority (used by screenshot bot, deep links)
     try {
@@ -661,6 +654,8 @@
   let lastBarOpen: number | null = $state(null);
   // Час відкриття останньої свічки кадру + її TF — таймер CommandRail бере сітку H4/D1 з даних бекенда (X28)
   let lastCandle: { tf: string; t_ms: number } | null = $state(null);
+  // ADR-0115 §4.4: кінець бару W1/MN від бекенда (frame.bar_close_ms) для таймера; full без поля — скидає
+  let barCloseMs: number | null = $state(null);
 
   // --- Reactive subscriptions ---
   const unsubPair = currentPair.subscribe((p) => {
@@ -765,6 +760,8 @@
         lastBarTs = Date.now(); // time of last WS frame, not candle open
         if (f.tf) lastCandle = { tf: f.tf, t_ms: last.t_ms };
       }
+      if (f.frame_type === "full") barCloseMs = f.bar_close_ms ?? null;
+      else if (f.frame_type === "delta" && f.bar_close_ms !== undefined) barCloseMs = f.bar_close_ms;
       // ADR-0066 PATCH 04b: dismiss splash on first frame with data
       if (
         !firstFrameArrived &&
@@ -1004,6 +1001,8 @@
           onClose={closeTouchDrawing}
           canUndo={drawEditState.canUndo}
           hasSelection={drawEditState.hasSelection}
+          noteSelected={drawEditState.noteSelected}
+          onEditNote={() => chartPaneRef?.editSelectedNote()}
           alertAction={drawAlertAction}
           onAlertAction={() => chartPaneRef?.actOnSelectedAlert()}
           {menuBg}
@@ -1070,6 +1069,7 @@
         lastPrice={lastPrice}
         currentTf={hudTf}
         {lastCandle}
+        {barCloseMs}
         nowMs={clockNow}
       />
       <span class="tr-clock" style:color={hudText}>{utcStr} UTC</span>
@@ -1190,6 +1190,7 @@
       : "neutral"}
     lineWidth={styleFlyout ? toolDefaults[styleFlyout.tool].lineWidth : 1}
     lineStyle={styleFlyout ? toolDefaults[styleFlyout.tool].lineStyle : "solid"}
+    colorOnly={styleFlyout ? TOOL_REGISTRY.get(styleFlyout.tool)?.colorOnly === true : false}
     onPickColor={pickColorRole}
     onPickWidth={pickWidth}
     onPickStyle={pickStyle}

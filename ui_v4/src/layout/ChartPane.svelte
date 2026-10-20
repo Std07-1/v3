@@ -8,6 +8,7 @@
     SmcData,
     ActiveTool,
     DrawingContextRequest,
+    DrawingEditState,
     DrawingType,
     DrawingColorRole,
   } from "../types";
@@ -32,6 +33,7 @@
   import { ArchiLayerRenderer } from "../chart/archi/ArchiLayerRenderer";
   import OhlcvTooltip from "./OhlcvTooltip.svelte";
   import DrawingStyleFlyout from "./DrawingStyleFlyout.svelte";
+  import { openNoteEditor } from "./noteEditorHost";
   import AlertBells from "./AlertBells.svelte";
   import AlertToast from "./AlertToast.svelte";
   import { ChartAlertsBinding } from "../chart/alerts/chartAlerts";
@@ -85,7 +87,7 @@
     /** ADR-0112: тап по графіку поставив (або не поставив) точку — смуга оновлює крок. */
     onTouchPlace?: (result: "draft" | "done" | "none") => void;
     /** ADR-0112 D2: чи є що скасувати й чи виділено фігуру — ↶ і «видалити» на телефоні активні лише тоді. */
-    onDrawingEditState?: (state: { canUndo: boolean; hasSelection: boolean }) => void;
+    onDrawingEditState?: (state: DrawingEditState) => void;
     /** ADR-0114: дія лінії-сповіщення для виділеної фігури — кнопка-дзвіночок у капсулі телефона. */
     onDrawingAlertAction?: (action: AlertAction | null) => void;
     /** Інструмент своє відпрацював (позиція стала, правий клік) — App вимикає його (ADR-0111 §3.6). */
@@ -270,6 +272,9 @@
     alertsBinding?.act().catch(() => undefined);
   }
 
+  /** ✎ у капсулі телефона — змінити текст виділеної нотатки (ADR-0111 §3.7). */
+  export const editSelectedNote = (): void => drawingsRenderer?.editSelectedNote();
+
   export function deleteSelectedDrawing(): void {
     if (ctxMenu) {
       drawingsRenderer?.deleteById(ctxMenu.id);
@@ -431,11 +436,11 @@
 
     // ADR-0112 D2: ↶ і «видалити» на телефоні — активні лише коли є що (стан після кожного кадру, далі — лише зміни)
     const editRenderer = drawingsRenderer;
-    let editState = { canUndo: false, hasSelection: false };
+    let editState: DrawingEditState = { canUndo: false, hasSelection: false, noteSelected: false };
     editRenderer.onRendered = () => {
       alertsBinding?.refresh();
       const next = editRenderer.editState();
-      if (next.canUndo === editState.canUndo && next.hasSelection === editState.hasSelection) return;
+      if ((Object.keys(next) as (keyof DrawingEditState)[]).every((k) => next[k] === editState[k])) return;
       editState = next;
       onDrawingEditState?.(next);
     };
@@ -451,6 +456,7 @@
     drawingsRenderer.onPersisted = (key, drawings) => void alerts.onPersisted(key, drawings);
     startAlerts();
     drawingsRenderer.onToolDone = () => onToolDone?.();
+    drawingsRenderer.onNoteText = openNoteEditor; // ADR-0111 §3.7: поле вводу нотатки
 
     // Expose purge method for console debugging: window.__purgeDrawings()
     (window as any).__purgeDrawings = () =>
@@ -1159,6 +1165,13 @@
   onAlertAction={() => {
     if (ctxMenu) alertsBinding?.act(ctxMenu.id).catch(() => undefined); // відмова — lastError → AlertToast
   }}
+  colorOnly={ctxMenu?.isNote ?? false}
+  onEditText={ctxMenu?.isNote
+    ? () => {
+        if (ctxMenu) drawingsRenderer?.editNoteText(ctxMenu.id);
+        ctxMenu = null;
+      }
+    : undefined}
   onDelete={() => {
     if (ctxMenu) drawingsRenderer?.deleteById(ctxMenu.id);
     ctxMenu = null;

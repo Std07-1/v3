@@ -442,7 +442,7 @@ P0 (types/config) → P1 (sessions.py) → P2 (engine) → P3 (injection)
 | S0 | `sessions.py` = pure | ✅ In `core/smc/`, no I/O |
 | S2 | Deterministic | ✅ Same M1 bars + config → same levels |
 | S3 | Level IDs deterministic | ✅ `{kind}_{symbol}_{tf_s}_{price×100}` |
-| S4 | Performance < 10ms | ⚠️ M1 scan ~540 bars per session — потрібен benchmark |
+| S4 | Performance < 10ms | ✅ виміряно 19.10.2026: один розрахунок ~15 мс на 2880 M1; результат кешується в рушії, рахується раз на зміну стрічки M1 чи стану сесій (§10) |
 | S5 | Config SSOT | ✅ Session defs in config.json |
 | S6 | Wire match TS types | ✅ SmcLevel already has kind field |
 
@@ -580,3 +580,41 @@ P0 (types/config) → P1 (sessions.py) → P2 (engine) → P3 (injection)
 | **V2-3** | **ADR Range Exhaustion** | F10, DT Conference | DT: "якщо Азія зробила половину цього руху, то нема сенсу чекати сильного руху". Narrative condition: `if session_range > avg_daily_range * threshold → "range exhaustion, reduced probability"`. Потребує: ATR/ADR reference з `config.json` або rolling compute. | P5 narrative, ADR-0024a momentum.py |
 | **V2-4** | **Per-Symbol Session Profiles** | Q7, R_ARCHITECT | HKG33/NGAS мають інший session profile (Asian session = primary). Config: `smc.sessions.profiles.{symbol_group}` з override definitions. | P0 config |
 | **V2-5** | **Lunch Period Indicator** | DT Conference | 10:00–12:00 UTC = lower volatility. DT: "не означає що не можу відкрити позицію". Опціональний dim indicator на time axis. Low priority. | P6 UI |
+
+---
+
+## §10. Ревізія 2026-10-19 — кеш сесійних рівнів у рушії
+
+**Контекст.** Замір 19.10.2026 (data_v3 XAU 22–25.09, 276 закриттів M15): `compute_session_levels` — 73% кожного
+збору входів наративу (~15 мс з ~20), бо проходить 2880 M1 × 3 сесії і ~11.8 тис. разів питає сезон DST. Результат
+на один момент однаковий для всіх TF, але рахувався знову: 7 разів за ітерацію цілі глядача на закритті M15 (наратив
+журналу сигналів, наратив глядача, розбір по 4 TF, рівні кадру) і в кожному preview-кадрі (`get_display_levels_wire`).
+Ітерація — p50 151 мс одним блоком event loop. Діагноз: нотатки сесії `narrative_cost_diagnosis_20261019.md`.
+
+**Рішення.**
+- `SmcEngine` тримає на символ один запис `(ключ, (levels, states))`; ключ — версія стрічки M1 і
+  `session_moment_key(now)`. Версія росте, коли `_store_session_m1` справді змінив вміст стрічки (нова хвилина,
+  фінал замість `tick_promoted`, вставка, витіснення); рівний повтор хвилини з іншого шляху подачі — ні.
+- `session_moment_key` — усе, що `compute_session_levels` бере з моменту: для кожної сесії доба на її годиннику,
+  активна, killzone. Функція читає момент лише через той самий `_session_moment`, тож ключ = усі входи за побудовою;
+  вікна сесій сталі з config. Застарілого виходу немає; вихід не змінюється.
+- `calendar_season`: межі літнього часу року — з кешу за індексом доби (ADR-0095 §3.5), без `date` на кожен виклик.
+- (20.10) Годинник і відкриття сесії питають сезон раз на годину UTC (`sessions._is_winter_hour`, lru): переходи США й
+  ЄС стоять на межі години, тож сезон години = сезон її початку. Прохід 2880 M1: 8.4 → 7.1 мс. Опору стереже
+  `tests/test_sessions_dst.py` (межі 1970–2100 кратні годині; паритет із `calendar_season` біля переходів 2000–2040).
+
+**Альтернативи.**
+- Відбиток хвоста стрічки (довжина, перший і останній бар) замість версії — відкинуто: фінал, що заміщує
+  `tick_promoted` глибше за останній бар, змінює H/L сесії, а відбиток — ні.
+- Кеш на час (TTL) — відкинуто: застарілі рівні між подіями, і правильність залежала б від числа.
+- Інкрементальні H/L на кожен M1 — відкинуто зараз: більше стану й коду, а кеш уже прибирає повтори; повний розрахунок
+  лишається раз на хвилину на символ.
+
+**Наслідки.** Замір і тести — у коміті зрізу; тест паритету `tests/test_session_levels_cache.py` (щохвилинний прохід
+моменту через межі сесій, killzone, доби й DST ЄС; кожен вид зміни стрічки; живу стрічку з витісненням навколо всіх
+чотирьох переходів DST 2026 — США й ЄС, весна й осінь; справжні M1 XAU з data_v3, коли сховище поруч). Відлагоджувальні логи `SESSION_PREV_UNCOVERED` / `SESSION_BARS_UNSORTED` пишуться лише на промаху кешу.
+
+**Rollback.** `git revert` комітів зрізу; config і контракти не змінювались.
+
+**Quality Axes.** Ambition target: R2 (точний кеш без зміни виходу, доведений паритетом). Maturity impact: M3
+(consolidates).

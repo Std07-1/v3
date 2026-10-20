@@ -148,7 +148,7 @@
           <button class="action" disabled={busy} onclick={enablePush}>Увімкнути знову</button>
         {/if}
         {#if sorted.length === 0}
-          <p class="hint">Правий клік на горизонталі → «Сповіщати».</p>
+          <p class="hint">Правий клік на горизонталі чи промені рівня → «Сповіщати».</p>
         {/if}
         {#each sorted as alert (alert.alert_id)}
           <div class="item" class:fired={alert.state !== "armed"}>

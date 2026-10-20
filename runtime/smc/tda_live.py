@@ -24,8 +24,8 @@ import time as _time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from core.model.bars import CandleBar
-from core.smc.tda.types import TdaCascadeConfig, TdaSignal
+from core.model.bars import FINAL_SOURCES, CandleBar
+from core.smc.tda.types import TdaCascadeConfig, TdaSignal, TradeState, initial_trade_state
 from core.smc.tda.orchestrator import run_tda_cascade
 from core.smc.tda.stage5_trade_mgmt import update_trade
 
@@ -33,6 +33,12 @@ _log = logging.getLogger(__name__)
 
 _MS_PER_DAY = 86_400_000
 _MS_PER_HOUR = 3_600_000
+_M15_MS = 900_000
+
+# ADR-0040 §3.2 rev 20.10.2026 (3): угоду після рестарту відтворюємо з фіналів M15 цього вікна від її першого бару.
+# 7 діб календаря покривають max_open_bars_m15=96 торгових барів будь-якого символу (EUSTX50 — 56 барів на добу,
+# плюс вихідні); межа вікна ще й тримає читання UDS у RANGE (без меж дисковий шлях переписує RAM-вікно TF).
+_REPLAY_SPAN_MS = 7 * _MS_PER_DAY
 
 
 def _now_ms() -> int:
@@ -75,6 +81,12 @@ class TdaLiveRunner:
         # Track which day's cascade already ran per symbol
         self._last_cascade_day_ms: Dict[str, int] = {}
 
+        # open_ms останнього обробленого фінального бару M15 на символ: Config F рахує кожен бар один раз
+        self._last_bar_open_ms: Dict[str, int] = {}
+
+        # Позначки «каскад дня вирішено» на символ (_mark_cascade_day): {symbol: {day_ms, reason, at_ms}}
+        self._cascade_marks: Dict[str, Dict[str, Any]] = {}
+
         # Persistence path
         self._state_path = os.path.join("data_v3", "_signals", "tda_state.json")
 
@@ -86,9 +98,17 @@ class TdaLiveRunner:
             cfg.min_grade_for_entry,
         )
 
-    def warmup(self) -> None:
-        """Load persisted TDA signals from previous session."""
+    def warmup(self, uds_reader: Any = None) -> None:
+        """Load persisted TDA signals and cascade-day marks; відкриті угоди відтворює з фіналів M15 в UDS."""
         self._load_state()
+        self._load_cascade_days()
+        for symbol, sig in list(self._signals.items()):
+            if sig.trade.status == "closed":
+                continue
+            if uds_reader is None:
+                _log.warning("TDA_REPLAY_SKIPPED sym=%s id=%s reason=no_uds_reader", symbol, sig.signal_id)
+                continue
+            self._replay_trade(symbol, uds_reader)
         _log.info(
             "TDA_LIVE_WARMUP active_signals=%d",
             len(self._signals),
@@ -114,9 +134,31 @@ class TdaLiveRunner:
             return
         if not bar.complete:
             return
+        # ADR-0040 §3.2 rev 20.10.2026: каскад і Config F бачать кожен бар M15 один раз і лише фінал брокера.
+        # Кільце preview дає на бар дві complete-події (tick_promoted, потім фінал), і обидва шляхи подачі
+        # (delta loop глядача, фоновий feed) — кожну; bars_elapsed рахувався ×2–×4, TP/SL — і по OHLC тіків.
+        if bar.src not in FINAL_SOURCES:
+            _log.debug("TDA_BAR_SKIP sym=%s open_ms=%d reason=not_final src=%s", symbol, bar.open_time_ms, bar.src)
+            return
+        last_open_ms = self._last_bar_open_ms.get(symbol, -1)
+        if bar.open_time_ms <= last_open_ms:
+            if bar.open_time_ms < last_open_ms:
+                # Курсори петель стартують з хвоста кільця, тож старший бар — лише пізній фінал; update_trade залежить
+                # від порядку барів, тому не обробляємо, а кажемо вголос
+                _log.warning("TDA_BAR_OUT_OF_ORDER sym=%s open_ms=%d last_open_ms=%d", symbol, bar.open_time_ms,
+                             last_open_ms)
+            else:
+                _log.debug("TDA_BAR_SKIP sym=%s open_ms=%d reason=already_counted", symbol, bar.open_time_ms)
+            return
+        self._last_bar_open_ms[symbol] = bar.open_time_ms
 
         now = _now_ms()
         day_ms = _day_ms_from_epoch(bar.open_time_ms)
+
+        # ── Trade management (Config F) угоди, відкритої до цього бару ──
+        # Раніше за каскад (rev 20.10.2026 (4)): каскад бачить угоду вже після цього бару, тож угода, що закрилась
+        # на самому тригері, день не блокує.
+        self._advance_trade(symbol, bar, uds_reader, last_open_ms, now)
 
         # ── Daily cascade trigger ──
         last_day = self._last_cascade_day_ms.get(symbol, 0)
@@ -127,41 +169,94 @@ class TdaLiveRunner:
             # the first London-window bar (08:15 UTC) when 0 H1 bars were
             # complete → Stage 3 always returned NO_NARRATIVE → 0 signals/14d.
             if bar_hour >= self._cfg.london_end_hour_utc:
-                self._run_cascade(symbol, day_ms, uds_reader, now)
-
-        # ── Trade management (Config F) ──
-        sig = self._signals.get(symbol)
-        if sig is not None and sig.trade.status != "closed":
-            new_trade = update_trade(sig.trade, bar, sig.entry, self._cfg)
-            if new_trade is not sig.trade:
-                self._signals[symbol] = dataclasses.replace(
-                    sig,
-                    trade=new_trade,
-                    updated_ms=now,
-                )
-                # Persist on state change
-                if new_trade.status == "closed":
-                    _log.info(
-                        "TDA_TRADE_CLOSED sym=%s id=%s outcome=%s net_r=%.2f bars=%d",
-                        symbol,
-                        sig.signal_id,
-                        new_trade.outcome,
-                        new_trade.net_r,
-                        new_trade.bars_elapsed,
-                    )
-                    self._save_state()
-                    # Journal: record trade close for audit trail
-                    if self._journal is not None:
-                        try:
-                            self._journal.record_tda(
-                                "tda_trade_closed", self._signals[symbol]
-                            )
-                        except Exception as jexc:
-                            _log.warning("TDA_JOURNAL_ERR event=closed err=%s", jexc)
+                before = self._signals.get(symbol)
+                self._run_cascade(symbol, day_ms, bar.open_time_ms, uds_reader, now)
+                if self._signals.get(symbol) is not before:  # нова угода — перший update_trade на тригері
+                    self._advance_trade(symbol, bar, uds_reader, last_open_ms, now)
 
     def get_signal(self, symbol: str) -> Optional[TdaSignal]:
         """Get current TDA signal for frame injection. Returns None if no active signal."""
         return self._signals.get(symbol)
+
+    # ── Private: trade state ──────────────────────────────
+
+    def _advance_trade(
+        self, symbol: str, bar: CandleBar, uds_reader: Any, last_open_ms: int, now_ms: int
+    ) -> None:
+        """Config F на фіналі бару для відкритої угоди символу; спершу — фінали, яких живий потік не подав."""
+        sig = self._signals.get(symbol)
+        if sig is None or sig.trade.status == "closed":
+            return
+        if last_open_ms >= 0:
+            self._fill_feed_gap(symbol, uds_reader, last_open_ms, bar.open_time_ms)
+            sig = self._signals[symbol]
+            if sig.trade.status == "closed":
+                return
+        new_trade = update_trade(sig.trade, bar, sig.entry, self._cfg)
+        if new_trade is not sig.trade:
+            self._set_trade(symbol, new_trade, now_ms)
+
+    def _set_trade(self, symbol: str, trade: TradeState, now_ms: int) -> None:
+        """Новий стан угоди; закриття — у лог, у файл стану і в журнал (audit trail)."""
+        sig = dataclasses.replace(self._signals[symbol], trade=trade, updated_ms=now_ms)
+        self._signals[symbol] = sig
+        if trade.status != "closed":
+            return
+        _log.info(
+            "TDA_TRADE_CLOSED sym=%s id=%s outcome=%s net_r=%.2f bars=%d",
+            symbol, sig.signal_id, trade.outcome, trade.net_r, trade.bars_elapsed,
+        )
+        self._save_state()
+        if self._journal is not None:
+            try:
+                self._journal.record_tda("tda_trade_closed", sig)
+            except Exception as jexc:
+                _log.warning("TDA_JOURNAL_ERR event=closed err=%s", jexc)
+
+    def _replay_trade(self, symbol: str, uds_reader: Any) -> None:
+        """ADR-0040 §3.2 rev 20.10.2026 (3): відкрита угода після рестарту — згортка update_trade по фіналах M15 в UDS.
+
+        Файл стану пишеться лише при створенні й закритті, тож без відтворення рестарт обнуляв лічильник, MFE,
+        partial і BE (20.10 16:38: NAS100 з bars=0 замість 4). Бари простою теж ураховуються: SL/TP, що спрацювали без
+        процесу, закривають угоду тут. Невдале читання — угода лишається зі стану файлу, вголос.
+        """
+        sig = self._signals[symbol]
+        first_open_ms = _trade_first_bar_open_ms(sig)
+        bars = self._read_m15_finals(uds_reader, symbol, first_open_ms - 1, first_open_ms + _REPLAY_SPAN_MS)
+        if not bars:
+            _log.warning("TDA_REPLAY_EMPTY sym=%s id=%s first_open_ms=%d read=%s — угода зі стану файлу",
+                         symbol, sig.signal_id, first_open_ms, "failed" if bars is None else "no_finals")
+            return
+        trade = initial_trade_state(sig.entry)
+        for m15 in bars:
+            trade = update_trade(trade, m15, sig.entry, self._cfg)  # закрита угода повертається без змін
+        self._last_bar_open_ms[symbol] = bars[-1].open_time_ms
+        _log.info(
+            "TDA_REPLAY_DONE sym=%s id=%s first_open_ms=%d last_open_ms=%d status=%s bars=%d mfe=%.5g trail_sl=%.5g",
+            symbol, sig.signal_id, first_open_ms, bars[-1].open_time_ms, trade.status, trade.bars_elapsed,
+            trade.max_favorable, trade.trail_sl,
+        )
+        self._set_trade(symbol, trade, _now_ms())
+
+    def _fill_feed_gap(self, symbol: str, uds_reader: Any, last_open_ms: int, bar_open_ms: int) -> None:
+        """Фінали відкритої угоди між останнім урахованим і поточним баром, яких живий потік не подав.
+
+        Наприклад, фінал, що ліг в UDS між warmup і стартом курсорів подачі (adopt-tail). З UDS, по порядку, до
+        поточного бару. На перерві ринку барів у розриві нема — нічого не змінюється.
+        """
+        sig = self._signals[symbol]
+        after_open_ms = max(last_open_ms, _trade_first_bar_open_ms(sig) - 1)
+        if after_open_ms >= bar_open_ms - _M15_MS:
+            return  # розриву нема (або угоду створено на цьому ж барі)
+        bars = self._read_m15_finals(uds_reader, symbol, after_open_ms, bar_open_ms - 1)
+        if not bars:
+            return
+        _log.warning("TDA_FEED_GAP_FILLED sym=%s id=%s bars=%d first_open_ms=%d", symbol, sig.signal_id, len(bars),
+                     bars[0].open_time_ms)
+        trade = sig.trade
+        for m15 in bars:
+            trade = update_trade(trade, m15, sig.entry, self._cfg)
+        self._set_trade(symbol, trade, _now_ms())
 
     # ── Private: cascade execution ────────────────────────
 
@@ -169,16 +264,28 @@ class TdaLiveRunner:
         self,
         symbol: str,
         day_ms: int,
+        bar_open_ms: int,
         uds_reader: Any,
         now_ms: int,
     ) -> None:
-        """Execute full TDA cascade for one symbol, one day."""
+        """Execute full TDA cascade for one symbol, one day — лише на тригері (першому фіналі M15 після london_end)."""
         date_str = _date_str_from_day_ms(day_ms)
 
         # Skip if closed signal already exists for today
         existing = self._signals.get(symbol)
         if existing is not None and existing.date_str == date_str:
-            self._last_cascade_day_ms[symbol] = day_ms
+            self._mark_cascade_day(symbol, day_ms, "already_signaled")
+            return
+        if existing is not None and existing.trade.status != "closed":
+            # Rev 20.10.2026 (4), власник 20.10 — варіант «а»: угода живе max_open_bars_m15=96 справжніх барів, а
+            # торгова доба US CFD — 92 (GER30 78, EUSTX50 56), тож угода від 13:00 ще відкрита на тригері наступного
+            # дня. Новий сигнал мовчки перезаписав би її, без закриття в журналі. Один символ — одна угода: день
+            # пропускаємо вголос.
+            _log.warning(
+                "TDA_CASCADE_SKIPPED_OPEN_TRADE sym=%s date=%s open_id=%s bars=%d — каскад дня пропущено",
+                symbol, date_str, existing.signal_id, existing.trade.bars_elapsed,
+            )
+            self._mark_cascade_day(symbol, day_ms, "open_trade")
             return
 
         try:
@@ -188,7 +295,18 @@ class TdaLiveRunner:
             m15_bars = self._read_bars(uds_reader, symbol, 900, 96)
         except Exception as exc:
             _log.warning("TDA_CASCADE_READ_ERR sym=%s err=%s", symbol, exc)
-            self._last_cascade_day_ms[symbol] = day_ms
+            self._mark_cascade_day(symbol, day_ms, "error")
+            return
+
+        trigger_open_ms = _trigger_bar_open_ms(m15_bars, bar_open_ms, day_ms, self._cfg)
+        if trigger_open_ms != bar_open_ms:
+            # Процес не бачив тригера (лежав чи стартував пізніше): день пропущено — пізній прогін на більших даних
+            # дав би сигнал, якого в канонічний момент не було (ADR-0040 §3.2 rev 20.10)
+            _log.warning(
+                "TDA_CASCADE_MISSED_WINDOW sym=%s date=%s trigger_open_ms=%d bar_open_ms=%d — каскад дня пропущено",
+                symbol, date_str, trigger_open_ms, bar_open_ms,
+            )
+            self._mark_cascade_day(symbol, day_ms, "missed_window")
             return
 
         try:
@@ -207,10 +325,10 @@ class TdaLiveRunner:
             )
         except Exception as exc:
             _log.warning("TDA_CASCADE_RUN_ERR sym=%s err=%s", symbol, exc)
-            self._last_cascade_day_ms[symbol] = day_ms
+            self._mark_cascade_day(symbol, day_ms, "error")
             return
 
-        self._last_cascade_day_ms[symbol] = day_ms
+        self._mark_cascade_day(symbol, day_ms, "no_signal" if sig is None else "signal")
 
         if sig is None:
             _log.info(
@@ -273,6 +391,33 @@ class TdaLiveRunner:
         bars.sort(key=lambda b: b.open_time_ms)
         return bars
 
+    def _read_m15_finals(
+        self, uds_reader: Any, symbol: str, after_open_ms: int, to_open_ms: int
+    ) -> Optional[List[CandleBar]]:
+        """Фінали M15 з open_ms у (after_open_ms, to_open_ms] за зростанням, по одному на бар; None — помилка (WARNING).
+
+        Лише RANGE (since/to): читання без меж на дисковому шляху UDS переписує RAM-вікно TF. Фільтр той самий, що в
+        живого входу on_bar: complete і src ∈ FINAL_SOURCES.
+        """
+        from runtime.store.uds import WindowSpec, ReadPolicy
+
+        spec = WindowSpec(
+            symbol=symbol, tf_s=900, limit=_REPLAY_SPAN_MS // _M15_MS, since_open_ms=after_open_ms,
+            to_open_ms=to_open_ms,
+        )
+        try:
+            result = uds_reader.read_window(spec, ReadPolicy(disk_policy="explicit"))
+        except Exception as exc:
+            _log.warning("TDA_REPLAY_READ_ERR sym=%s after_open_ms=%d err=%s", symbol, after_open_ms, exc)
+            return None
+        finals: Dict[int, CandleBar] = {}
+        for d in getattr(result, "bars_lwc", None) or []:
+            m15 = _bar_dict_to_cb(d, symbol, 900)
+            if m15 is not None and m15.complete and m15.src in FINAL_SOURCES:
+                if after_open_ms < m15.open_time_ms <= to_open_ms:
+                    finals[m15.open_time_ms] = m15
+        return [finals[open_ms] for open_ms in sorted(finals)]
+
     # ── Private: persistence ──────────────────────────────
 
     def _save_state(self) -> None:
@@ -282,13 +427,45 @@ class TdaLiveRunner:
             for sym, sig in self._signals.items():
                 data[sym] = sig.to_wire()
                 data[sym]["_day_ms"] = self._last_cascade_day_ms.get(sym, 0)
-            os.makedirs(os.path.dirname(self._state_path), exist_ok=True)
-            tmp = self._state_path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, self._state_path)
+            _write_json_atomic(self._state_path, data)
         except Exception as exc:
             _log.warning("TDA_STATE_SAVE_ERR err=%s", exc)
+
+    @property
+    def _cascade_days_path(self) -> str:
+        return os.path.join(os.path.dirname(self._state_path), "tda_cascade_days.json")
+
+    def _mark_cascade_day(self, symbol: str, day_ms: int, reason: str) -> None:
+        """Каскад дня символу вирішено — reason: signal | no_signal | already_signaled | open_trade | error |
+        missed_window.
+
+        Позначка пишеться на кожній спробі й переживає рестарт: стан сигналів (_save_state) знає день лише символів
+        із сигналом, тож рестарт після london_end повторював каскад дня (20.10: другий tda_NAS100_2026-10-20).
+        """
+        self._last_cascade_day_ms[symbol] = day_ms
+        self._cascade_marks[symbol] = {"day_ms": day_ms, "reason": reason, "at_ms": _now_ms()}
+        try:
+            _write_json_atomic(self._cascade_days_path, self._cascade_marks)
+        except Exception as exc:
+            _log.warning("TDA_CASCADE_DAYS_SAVE_ERR sym=%s err=%s", symbol, exc)
+
+    def _load_cascade_days(self) -> None:
+        """Позначки днів каскаду з попередньої сесії; найпізніший день перемагає позначку зі стану сигналів."""
+        if not os.path.isfile(self._cascade_days_path):
+            return
+        try:
+            with open(self._cascade_days_path, "r", encoding="utf-8") as f:
+                marks = json.load(f)
+        except Exception as exc:
+            _log.warning("TDA_CASCADE_DAYS_LOAD_ERR err=%s", exc)
+            return
+        for sym, mark in marks.items():
+            day_ms = mark.get("day_ms") if isinstance(mark, dict) else None
+            if not isinstance(day_ms, int):
+                _log.warning("TDA_CASCADE_DAYS_BAD_MARK sym=%s mark=%r", sym, mark)
+                continue
+            self._cascade_marks[sym] = mark
+            self._last_cascade_day_ms[sym] = max(day_ms, self._last_cascade_day_ms.get(sym, 0))
 
     def _load_state(self) -> None:
         """Restore signals from previous session.
@@ -303,6 +480,9 @@ class TdaLiveRunner:
             for sym, wire in data.items():
                 if not isinstance(wire, dict):
                     continue
+                day_ms = wire.get("_day_ms", 0)
+                if day_ms:  # і для закритої угоди: інакше рестарт повторював каскад дня (rev 20.10)
+                    self._last_cascade_day_ms[sym] = day_ms
                 trade_w = wire.get("trade", {})
                 if trade_w.get("status") == "closed":
                     continue  # Don't restore closed trades
@@ -311,9 +491,6 @@ class TdaLiveRunner:
                     sig = _signal_from_wire(wire, sym)
                     if sig is not None:
                         self._signals[sym] = sig
-                        day_ms = wire.get("_day_ms", 0)
-                        if day_ms:
-                            self._last_cascade_day_ms[sym] = day_ms
                 except Exception as exc:
                     _log.debug("TDA_STATE_RESTORE_ERR sym=%s err=%s", sym, exc)
 
@@ -324,6 +501,30 @@ class TdaLiveRunner:
                 )
         except Exception as exc:
             _log.warning("TDA_STATE_LOAD_ERR err=%s", exc)
+
+
+def _write_json_atomic(path: str, payload: Any) -> None:
+    """JSON у файл через tmp + os.replace: читач бачить старий або новий файл, ніколи не обрізаний."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def _trade_first_bar_open_ms(sig: TdaSignal) -> int:
+    """Перший бар угоди — бар, на фіналі якого каскад створив сигнал (і зробив перший update_trade).
+
+    created_ms = закриття цього бару + затримка фіналу (секунди; < 15 хв), тож бар — останній, що закрився до
+    created_ms. Виводиться зі збереженого сигналу, тому працює і для сигналів, записаних до цієї правки.
+    """
+    return (sig.created_ms // _M15_MS - 1) * _M15_MS
+
+
+def _trigger_bar_open_ms(m15_bars: List[CandleBar], bar_open_ms: int, day_ms: int, cfg: TdaCascadeConfig) -> int:
+    """Тригер каскаду дня — перший фінал M15 з відкриттям не раніше london_end; поточний бар — теж кандидат."""
+    london_end_ms = day_ms + cfg.london_end_hour_utc * _MS_PER_HOUR
+    return min([b.open_time_ms for b in m15_bars if b.complete and b.open_time_ms >= london_end_ms] + [bar_open_ms])
 
 
 def _signal_from_wire(w: Dict[str, Any], symbol: str) -> Optional[TdaSignal]:

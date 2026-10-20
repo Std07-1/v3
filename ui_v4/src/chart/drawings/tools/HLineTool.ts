@@ -9,6 +9,7 @@
 import type { Drawing } from '../../../types';
 import { distToHLine } from '../../interaction/geometry';
 import { dashPattern } from '../lineStyles';
+import { LEVEL_GROUP } from './groups';
 import type { HitTestResult, RenderContext, ScreenAabb, ToolModule } from './types';
 
 export const HLineTool: ToolModule = {
@@ -18,6 +19,7 @@ export const HLineTool: ToolModule = {
     icon: '<path d="M3 12h18"/>',
     hotkey: 'h',
     styleable: true,
+    group: LEVEL_GROUP,
 
     // ADR-0114: горизонталь — лінія-сповіщення на своїй ціні, без початку в часі
     alertLevel: (d: Drawing) => ({ level: d.points[0].price, anchorMs: null }),
