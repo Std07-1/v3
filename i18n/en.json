@@ -408,5 +408,22 @@
   ", ціль ліквідності {target}": ", liquidity target {target}",
   "⬜ HTF ще без структури — зона є, чекаємо": "⬜ HTF has no structure yet — zone exists, waiting",
   "⚠ Наратив недоступний": "⚠ Narrative unavailable",
-  "⏸ Ринок закрито": "⏸ Market closed"
+  "⏸ Ринок закрито": "⏸ Market closed",
+  "Вище {price} — зона пробита": "Above {price} — zone broken",
+  "Нижче {price} — зона пробита": "Below {price} — zone broken",
+  "Готовий: структура + імпульс підтверджені в зоні": "Ready: structure + impulse confirmed in zone",
+  "Підтверджено після входу: {tf} CHoCH{arrow} + імпульс": "Confirmed after entry: {tf} CHoCH{arrow} + impulse",
+  "Тригер: {tf} CHoCH{arrow} + імпульс — шукаємо вхід": "Trigger: {tf} CHoCH{arrow} + impulse — looking for entry",
+  "У зоні: CHoCH{arrow} є, чекаємо імпульс": "In zone: CHoCH{arrow} in place, waiting for impulse",
+  "У зоні: чекаємо {tf} CHoCH{arrow}": "In zone: waiting for {tf} CHoCH{arrow}",
+  "{atr} ATR до зони": "{atr} ATR to the zone",
+  "{distance} до зони": "{distance} to the zone",
+  "зона купівлі {entry}": "buy zone {entry}",
+  "зона продажу {entry}": "sell zone {entry}",
+  "сетап шукаємо на {tfs}": "look for a setup on {tfs}",
+  "Останній {kind} {price}": "Last {kind} {price}",
+  "хай імпульсу {price}": "impulse high {price}",
+  "лой імпульсу {price}": "impulse low {price}",
+  "OB вхід уточнений FVG: {low}–{high}": "OB entry refined by FVG: {low}–{high}",
+  "FVG гап на {price} — ребаланс перед зоною": "FVG gap at {price} — rebalance before the zone"
 }
