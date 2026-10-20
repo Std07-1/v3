@@ -22,8 +22,9 @@ import logging
 import os
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List, Optional
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from core.model.bars import CandleBar
 from core.smc.tda.types import (
@@ -35,7 +36,7 @@ from core.smc.tda.types import (
     FvgEntry,
     TradeState,
 )
-from runtime.smc.tda_live import TdaLiveRunner, _signal_from_wire, _bar_dict_to_cb
+from runtime.smc.tda_live import TdaLiveRunner, _signal_from_wire, _bar_dict_to_cb, _trade_first_bar_open_ms
 
 # ──────────────────────────────────────────────────────────────
 #  Constants
@@ -534,6 +535,120 @@ class TestCascadeDayAcrossRestart:
         (tmp_path / "tda_state.json").write_text(json.dumps({SYM: wire}), encoding="utf-8")
         self._restarted(tmp_path).on_bar(SYM, M15_S, _m15_bar(hour=15, minute=30), None)
         assert mock_cascade.call_count == 0
+
+
+class _UdsM15Range:
+    """read_window як дисковий RANGE UDS: since_open_ms — виключна, to_open_ms — включна. Запит без меж падає."""
+
+    def __init__(self, bars):
+        self.bars = list(bars)
+        self.specs = []
+
+    def read_window(self, spec, policy):
+        self.specs.append(spec)
+        rows = [b for b in self.bars if spec.since_open_ms < b.open_time_ms <= spec.to_open_ms]
+        return SimpleNamespace(bars_lwc=[
+            {"open_time_ms": b.open_time_ms, "open": b.o, "high": b.h, "low": b.low, "close": b.c, "volume": b.v,
+             "src": b.src, "complete": b.complete}
+            for b in rows
+        ])
+
+
+class TestTradeReplayAcrossRestart:
+    """ADR-0040 §3.2 rev 20.10.2026 (3): відкрита угода після рестарту — згортка update_trade по фіналах M15 в UDS.
+
+    Стан пишеться лише при створенні й закритті: 20.10 рестарт о 16:38 повернув NAS100 B(6) у bars=0 замість 4.
+    """
+
+    TRIGGER = _m15_bar(hour=13)
+    BREAKEVEN = _m15_bar(hour=13, minute=15, o=2004.0, h=2012.0, low=2003.0, c=2010.0)  # MFE 12 ≥ 1R → partial, BE
+    BELOW_BE = _m15_bar(hour=13, minute=30, o=2003.0, h=2003.0, low=1995.0, c=1996.0)  # нижче BE, вище SL 1990
+
+    @staticmethod
+    def _signal() -> TdaSignal:
+        sig = _make_signal(direction="LONG", entry_price=2000.0, stop_loss=1990.0, take_profit=2030.0)
+        return dataclasses.replace(sig, created_ms=DAY_MS + 13 * _MS_PER_HOUR + M15_MS + 10_000)  # фінал 13:00 + 10 с
+
+    def _live_then_restart(self, tmp_path, mock_cascade, live_bars, uds_bars, journal=None):
+        mock_cascade.return_value = self._signal()
+        before = _make_runner(tmp_path=tmp_path)
+        for bar in live_bars:
+            before.on_bar(SYM, M15_S, bar, None)
+        after = _make_runner(tmp_path=tmp_path)
+        after._journal = journal
+        uds = _UdsM15Range(uds_bars)
+        after.warmup(uds)
+        return before, after, uds
+
+    @patch("runtime.smc.tda_live.run_tda_cascade")
+    def test_restart_mid_trade_restores_bars_mfe_and_breakeven(self, mock_cascade, tmp_path):
+        live = [self.TRIGGER, self.BREAKEVEN]
+        before, after, uds = self._live_then_restart(tmp_path, mock_cascade, live, live)
+        expected = TradeState("partial", True, 0.5, 12.0, 2000.0, 2, "", 0.0)
+        assert after.get_signal(SYM).trade == before.get_signal(SYM).trade == expected
+        after.on_bar(SYM, M15_S, self.BREAKEVEN, uds)  # той самий фінал після рестарту — не вдруге
+        after.on_bar(SYM, M15_S, self.BELOW_BE, uds)
+        trade = after.get_signal(SYM).trade
+        assert (trade.outcome, trade.net_r, trade.bars_elapsed) == ("PARTIAL_WIN", 0.5, 3)  # BE тримає, не SL
+
+    @patch("runtime.smc.tda_live.run_tda_cascade")
+    def test_stop_hit_while_down_closes_the_trade_on_warmup_once(self, mock_cascade, tmp_path):
+        journal = MagicMock()
+        while_down = [_m15_bar(hour=13, minute=15), _m15_bar(hour=13, minute=30, low=1985.0)]
+        _, after, uds = self._live_then_restart(tmp_path, mock_cascade, [self.TRIGGER], [self.TRIGGER, *while_down],
+                                                journal)
+        trade = after.get_signal(SYM).trade
+        assert (trade.status, trade.outcome, trade.bars_elapsed) == ("closed", "LOSS", 3)
+        after.on_bar(SYM, M15_S, _m15_bar(hour=13, minute=45), uds)
+        assert after.get_signal(SYM).trade.bars_elapsed == 3
+        assert [c.args[0] for c in journal.record_tda.call_args_list] == ["tda_trade_closed"]
+
+    @patch("runtime.smc.tda_live.run_tda_cascade")
+    def test_replay_reads_a_bounded_range_and_counts_only_complete_finals(self, mock_cascade, tmp_path):
+        spike = dataclasses.replace(_m15_bar(hour=13, minute=15, low=1985.0), src="tick_promoted")
+        forming = dataclasses.replace(_m15_bar(hour=13, minute=30, low=1985.0), complete=False)
+        _, after, uds = self._live_then_restart(tmp_path, mock_cascade, [self.TRIGGER], [self.TRIGGER, spike, forming])
+        trade = after.get_signal(SYM).trade
+        assert (trade.status, trade.bars_elapsed) == ("open", 1)
+        # Без меж дисковий шлях UDS переписує RAM-вікно TF
+        assert all(s.since_open_ms is not None and s.to_open_ms is not None for s in uds.specs)
+
+    @patch("runtime.smc.tda_live.run_tda_cascade")
+    def test_final_missed_by_the_live_feed_is_taken_from_uds_in_order(self, mock_cascade, tmp_path):
+        mock_cascade.return_value = self._signal()
+        runner = _make_runner(tmp_path=tmp_path)
+        uds = _UdsM15Range([self.TRIGGER, self.BREAKEVEN])
+        runner.on_bar(SYM, M15_S, self.TRIGGER, uds)
+        runner.on_bar(SYM, M15_S, self.BELOW_BE, uds)  # фінал 13:15 потік не подав
+        trade = runner.get_signal(SYM).trade
+        assert (trade.outcome, trade.bars_elapsed) == ("PARTIAL_WIN", 3)
+
+    @patch("runtime.smc.tda_live.run_tda_cascade")
+    def test_market_break_leaves_the_trade_to_the_live_bar(self, mock_cascade, tmp_path, caplog):
+        mock_cascade.return_value = self._signal()
+        runner = _make_runner(tmp_path=tmp_path)
+        uds = _UdsM15Range([self.TRIGGER])  # у розриві фіналів нема — перерва ринку
+        runner.on_bar(SYM, M15_S, self.TRIGGER, uds)
+        runner.on_bar(SYM, M15_S, _m15_bar(hour=15), uds)
+        assert runner.get_signal(SYM).trade.bars_elapsed == 2
+        assert "TDA_FEED_GAP_FILLED" not in caplog.text
+
+    @patch("runtime.smc.tda_live.run_tda_cascade")
+    def test_unreadable_uds_keeps_the_file_state_loudly(self, mock_cascade, tmp_path, caplog):
+        mock_cascade.return_value = self._signal()
+        _make_runner(tmp_path=tmp_path).on_bar(SYM, M15_S, self.TRIGGER, None)
+        after = _make_runner(tmp_path=tmp_path)
+        broken = MagicMock()
+        broken.read_window.side_effect = OSError("disk gone")
+        with caplog.at_level(logging.WARNING, logger="runtime.smc.tda_live"):
+            after.warmup(broken)
+        assert "TDA_REPLAY_READ_ERR" in caplog.text and "TDA_REPLAY_EMPTY" in caplog.text
+        assert after.get_signal(SYM).trade.bars_elapsed == 0
+
+    def test_first_bar_is_the_one_whose_final_created_the_signal(self):
+        # NAS100 20.10: сигнал о 15:45:13 на фіналі бару 15:30
+        sig = dataclasses.replace(_make_signal(), created_ms=DAY_MS + 15 * _MS_PER_HOUR + 45 * 60_000 + 13_000)
+        assert _trade_first_bar_open_ms(sig) == DAY_MS + 15 * _MS_PER_HOUR + 30 * 60_000
 
 
 # ──────────────────────────────────────────────────────────────

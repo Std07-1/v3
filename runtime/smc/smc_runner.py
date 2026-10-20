@@ -379,7 +379,7 @@ class SmcRunner:
         self._uds_reader = uds_reader
         if self._tda_runner is not None:
             try:
-                self._tda_runner.warmup()
+                self._tda_runner.warmup(uds_reader)
             except Exception as exc:
                 _log.warning("TDA_WARMUP_ERR err=%s", exc)
 
