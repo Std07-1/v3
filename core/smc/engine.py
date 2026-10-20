@@ -277,16 +277,20 @@ class _TfState:
         self._lookback = lookback
         self._active_zones: Dict[str, SmcZone] = {}
 
-    def append(self, bar: CandleBar) -> None:
-        """Додає бар, зберігаючи вікно lookback_bars.
+    def append(self, bar: CandleBar) -> bool:
+        """Додає бар, зберігаючи вікно lookback_bars; повертає, чи стан змінився.
 
-        Dedup: якщо останній бар має той самий open_time_ms — замінює
-        (final bar update від паралельних feed-шляхів).
+        Dedup: якщо останній бар має той самий open_time_ms — замінює (final bar update від паралельних feed-шляхів),
+        але фінал брокера `tick_promoted` не заміщує (I3, `_replaces_same_open`): тиковий бар приходить і після фіналу —
+        на першому тіку після перерви ринку агрегатор закриває бакет, фінал якого брокер дав годину тому.
         """
         if self._bars and self._bars[-1].open_time_ms == bar.open_time_ms:
+            if not _replaces_same_open(self._bars[-1], bar):
+                return False
             self._bars[-1] = bar
         else:
             self._bars.append(bar)
+        return True
 
     def bars_list(self) -> List[CandleBar]:
         return list(self._bars)
@@ -377,7 +381,9 @@ class SmcEngine:
             return _empty_delta(bar)
 
         prev_snap = state.last_snapshot
-        state.append(bar)
+        if not state.append(bar):
+            _log.debug("SMC_KEEP_FINAL sym=%s tf=%d open_ms=%d src=%s", bar.symbol, bar.tf_s, bar.open_time_ms, bar.src)
+            return _empty_delta(bar)
         bars = state.bars_list()
 
         new_snap = self._compute_snapshot(bar.symbol, bar.tf_s, bars, state)
@@ -450,10 +456,14 @@ class SmcEngine:
         state = self._states.get((symbol, tf_s))
         return state.bars_list() if state is not None else []
 
-    def is_last_bar(self, bar: CandleBar) -> bool:
-        """Чи `bar` рівний останньому бару стану (symbol, tf): його повтор іншим шляхом подачі стан не змінить."""
+    def holds_bar(self, bar: CandleBar) -> bool:
+        """Чи подача `bar` нічого не змінить: останній бар стану (symbol, tf) — той самий бар (повтор іншим шляхом
+        подачі) або фінал того самого open_ms, якого `bar` не заміщує (`tick_promoted` після фіналу, I3)."""
         state = self._states.get((bar.symbol, bar.tf_s))
-        return state is not None and bool(state._bars) and state._bars[-1] == bar
+        if state is None or not state._bars:
+            return False
+        last = state._bars[-1]
+        return last.open_time_ms == bar.open_time_ms and (last == bar or not _replaces_same_open(last, bar))
 
     def get_momentum_score(self, symbol: str, tf_s: int) -> Tuple[int, int]:
         """Momentum score (bull_count, bear_count) for given (symbol, tf)."""
@@ -1261,6 +1271,11 @@ def _filter_for_display(
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
+def _replaces_same_open(held: CandleBar, incoming: CandleBar) -> bool:
+    """I3 для двох барів того самого open_ms: фінал (FINAL_SOURCES) заміщує будь-що, не-фінал — лише не-фінал."""
+    return incoming.src in FINAL_SOURCES or held.src not in FINAL_SOURCES
+
+
 def _store_session_m1(tape: Deque[CandleBar], bar: CandleBar) -> bool:
     """Кладе бар у стрічку M1: одна хвилина — один бар, стрічка за зростанням open_time (I3 Final > Preview).
 
@@ -1281,7 +1296,7 @@ def _store_session_m1(tape: Deque[CandleBar], bar: CandleBar) -> bool:
         tape.append(bar)
         return True
     if tape[at].open_time_ms == open_ms:
-        if (bar.src in FINAL_SOURCES or tape[at].src not in FINAL_SOURCES) and tape[at] != bar:
+        if _replaces_same_open(tape[at], bar) and tape[at] != bar:
             tape[at] = bar
             return True
         return False

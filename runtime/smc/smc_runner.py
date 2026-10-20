@@ -469,17 +469,18 @@ class SmcRunner:
 
         Конвертує bar dict → CandleBar → SmcEngine.on_bar().
         Кешує SmcDelta для наступного delta frame.
-        Повертає delta або None (ADR: on_bar скіпає preview bars сам; None і для повтору останнього бару).
+        Повертає delta або None (ADR: on_bar скіпає preview bars сам; None і для бару, що нічого не змінить).
         Скіпає TFs не в compute_tfs (cross-TF injection — лише display-time).
         """
         cb = _bar_dict_to_candle_bar(bar_dict, symbol, tf_s)
         if cb is None:
             _log.debug("SMC_BAR_SKIP sym=%s tf=%s reason=bad_dict", symbol, tf_s)
             return None
-        if tf_s in self._compute_tfs and self._engine.is_last_bar(cb):
-            # Той самий бар другим шляхом подачі (delta loop глядача і фоновий feed, ADR-0024 §18.10): стан рушія,
-            # журнали, подія закриття й TDA вже відпрацювали; відкладену дельту кадру глядача не затираємо порожньою
-            _log.debug("SMC_BAR_REPEAT sym=%s tf=%s open_ms=%d", symbol, tf_s, cb.open_time_ms)
+        if tf_s in self._compute_tfs and self._engine.holds_bar(cb):
+            # Той самий бар другим шляхом подачі (delta loop глядача і фоновий feed) або tick_promoted після фіналу
+            # (ADR-0024 §18.10): стан рушія, журнали, подія закриття й TDA вже відпрацювали на цьому барі; відкладену
+            # дельту кадру глядача не затираємо порожньою, ціну тіків у журнал і подію закриття не пускаємо
+            _log.debug("SMC_BAR_HELD sym=%s tf=%s open_ms=%d src=%s", symbol, tf_s, cb.open_time_ms, cb.src)
             return None
         if cb.complete and self._warmup_done:
             # ADR-0113 Ф4: перший бар після моменту розбору — рушій уже має всі TF того моменту
