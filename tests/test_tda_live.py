@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -142,6 +143,7 @@ def _m15_bar(
     c: float = 2002.0,
     complete: bool = True,
     symbol: str = SYM,
+    src: str = "derived",
 ) -> CandleBar:
     """M15 bar at given UTC hour/minute on DAY_MS."""
     open_ms = DAY_MS + hour * _MS_PER_HOUR + minute * 60_000
@@ -156,7 +158,7 @@ def _m15_bar(
         c=c,
         v=100.0,
         complete=complete,
-        src="derived",
+        src=src,
     )
 
 
@@ -417,7 +419,8 @@ class TestOneCountPerFinalBar:
     """ADR-0040 §3.2 rev 20.10.2026: бар M15 рахується один раз і лише фіналом брокера.
 
     Кільце preview дає на бар tick_promoted і фінал, і обидва шляхи подачі (delta loop, фоновий feed) — кожну подію:
-    до правки bars_elapsed ріс ×2–×4 (прод: TIMEOUT tda_NAS100_2026-10-14 на 96 за 80 барів), SL/TP — по OHLC тіків.
+    до правки bars_elapsed ріс ×2–×4 (прод: tda_NAS100_2026-10-14 — TIMEOUT на bars_elapsed=96 за 48 справжніх барів
+    M15 від рестарту 14.10 21:08), SL/TP — по OHLC тіків.
     """
 
     @staticmethod
@@ -425,7 +428,7 @@ class TestOneCountPerFinalBar:
         return dataclasses.replace(bar, src="tick_promoted", v=0.0)
 
     @patch("runtime.smc.tda_live.run_tda_cascade")
-    def test_promoted_and_final_of_a_bar_count_once_with_the_final_ohlc(self, mock_cascade, tmp_path):
+    def test_promoted_and_final_of_a_bar_count_once_with_the_final_ohlc(self, mock_cascade, tmp_path, caplog):
         mock_cascade.return_value = _make_signal(direction="LONG", entry_price=2000.0, stop_loss=1990.0,
                                                  take_profit=2030.0)
         runner = _make_runner(tmp_path=tmp_path)
@@ -436,19 +439,48 @@ class TestOneCountPerFinalBar:
         assert mock_cascade.call_count == 1 and runner.get_signal(SYM).trade.bars_elapsed == 1
         final = _m15_bar(hour=13, minute=15, o=2001.0, h=2004.0, low=1996.0, c=2003.0)
         tick_spike = dataclasses.replace(self._promoted(final), low=1985.0)  # SL за тіками, у фіналі — ні
-        for bar in (tick_spike, final, final):  # promoted, фінал delta loop, той самий фінал фонового feed
-            runner.on_bar(SYM, M15_S, bar, None)
+        with caplog.at_level(logging.WARNING, logger="runtime.smc.tda_live"):
+            for bar in (tick_spike, final, final):  # promoted, фінал delta loop, той самий фінал фонового feed
+                runner.on_bar(SYM, M15_S, bar, None)
         trade = runner.get_signal(SYM).trade
         assert (trade.status, trade.bars_elapsed) == ("open", 2)
+        assert "TDA_BAR_OUT_OF_ORDER" not in caplog.text  # повтор подачі — штатний, мовчки
 
     @patch("runtime.smc.tda_live.run_tda_cascade")
-    def test_bar_older_than_the_last_counted_is_skipped(self, mock_cascade, tmp_path):
+    def test_bar_older_than_the_last_counted_is_skipped_loudly(self, mock_cascade, tmp_path, caplog):
+        """update_trade залежить від порядку барів: пізній старший фінал не рахується, а логується."""
         mock_cascade.return_value = _make_signal(stop_loss=1990.0, take_profit=2030.0)
         runner = _make_runner(tmp_path=tmp_path)
         runner.on_bar(SYM, M15_S, _m15_bar(hour=13), None)
         runner.on_bar(SYM, M15_S, _m15_bar(hour=13, minute=15), None)
-        runner.on_bar(SYM, M15_S, _m15_bar(hour=13, minute=0), None)  # запізніла подача старішого бару
+        with caplog.at_level(logging.WARNING, logger="runtime.smc.tda_live"):
+            runner.on_bar(SYM, M15_S, _m15_bar(hour=13, minute=0), None)  # запізніла подача старішого бару
         assert runner.get_signal(SYM).trade.bars_elapsed == 2
+        assert "TDA_BAR_OUT_OF_ORDER" in caplog.text
+
+    @patch("runtime.smc.tda_live.run_tda_cascade")
+    def test_timeout_on_the_max_real_bar_under_triple_feed(self, mock_cascade, tmp_path):
+        """Кожен бар — tick_promoted і двічі фінал: time-stop настає рівно на max_open_bars_m15-му справжньому барі."""
+        mock_cascade.return_value = _make_signal()  # entry 1998, SL 1990, TP 2022
+        runner = _make_runner(tmp_path=tmp_path)
+        max_bars = runner._cfg.max_open_bars_m15
+        for i in range(max_bars):
+            for src in ("tick_promoted", "derived", "derived"):
+                bar = _m15_bar(hour=13, minute=15 * i, o=1999.0, h=2001.0, low=1995.0, c=2000.0, src=src)
+                runner.on_bar(SYM, M15_S, bar, None)
+            if i < max_bars - 1:
+                assert runner.get_signal(SYM).trade.status == "open", i
+        trade = runner.get_signal(SYM).trade
+        assert (trade.outcome, trade.bars_elapsed) == ("TIMEOUT", max_bars)
+
+    @patch("runtime.smc.tda_live.run_tda_cascade")
+    def test_last_counted_bar_is_tracked_per_symbol(self, mock_cascade, tmp_path):
+        mock_cascade.side_effect = lambda symbol, *a, **kw: _make_signal(symbol=symbol)
+        runner = _make_runner(symbols=[SYM, "NAS100"], tmp_path=tmp_path)
+        runner.on_bar(SYM, M15_S, _m15_bar(hour=13), None)
+        runner.on_bar("NAS100", M15_S, _m15_bar(hour=13, symbol="NAS100"), None)
+        assert runner.get_signal(SYM).trade.bars_elapsed == 1
+        assert runner.get_signal("NAS100").trade.bars_elapsed == 1
 
 
 class TestCascadeDayAcrossRestart:

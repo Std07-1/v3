@@ -127,8 +127,15 @@ class TdaLiveRunner:
         if bar.src not in FINAL_SOURCES:
             _log.debug("TDA_BAR_SKIP sym=%s open_ms=%d reason=not_final src=%s", symbol, bar.open_time_ms, bar.src)
             return
-        if bar.open_time_ms <= self._last_bar_open_ms.get(symbol, -1):
-            _log.debug("TDA_BAR_SKIP sym=%s open_ms=%d reason=already_counted", symbol, bar.open_time_ms)
+        last_open_ms = self._last_bar_open_ms.get(symbol, -1)
+        if bar.open_time_ms <= last_open_ms:
+            if bar.open_time_ms < last_open_ms:
+                # Курсори петель стартують з хвоста кільця, тож старший бар — лише пізній фінал; update_trade залежить
+                # від порядку барів, тому не обробляємо, а кажемо вголос
+                _log.warning("TDA_BAR_OUT_OF_ORDER sym=%s open_ms=%d last_open_ms=%d", symbol, bar.open_time_ms,
+                             last_open_ms)
+            else:
+                _log.debug("TDA_BAR_SKIP sym=%s open_ms=%d reason=already_counted", symbol, bar.open_time_ms)
             return
         self._last_bar_open_ms[symbol] = bar.open_time_ms
 
