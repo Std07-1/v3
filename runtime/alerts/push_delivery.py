@@ -1,6 +1,7 @@
 """Доставка черги пушем у браузер (ADR-0114 Rev 2 §2a): «щонайменше раз», порядок — у межах пристрою.
 
-Запис черги належить підписнику `web:<device_id>`; знімається лише після DELIVERED (прийнято push-сервісом).
+Запис черги належить підписнику `web:<device_id>`; знімається лише після DELIVERED (прийнято push-сервісом) — і
+  лишає в лозі `ALERTS_DELIVERED` (один рядок на зняття; endpoint — лише `endpoint_label`).
 - RETRY (429, 5xx, мережа): пауза лише цьому пристрою (`Retry-After`, інакше `retry_first_s` → ×2 до `retry_max_s`);
   його молодші записи чекають, інші пристрої йдуть далі. Прапорець `push_unreachable`, поки хоч один пристрій на паузі.
 - GONE (404/410): пристрій позначається `push_gone`; записи лишаються «чекає» — після нової підписки підуть.
@@ -25,7 +26,7 @@ from runtime.alerts.devices import WEB_PREFIX, Device, DeviceRegistry
 from runtime.alerts.engine import AlertEngine
 from runtime.alerts.messages import push_payload
 from runtime.alerts.store import OutboxEntry
-from runtime.alerts.webpush import PushOutcome, WebPushSender
+from runtime.alerts.webpush import PushOutcome, PushSubscription, WebPushSender, endpoint_label
 
 _log = logging.getLogger(__name__)
 
@@ -100,6 +101,7 @@ class PushDelivery:
             if result.outcome is PushOutcome.DELIVERED:
                 self._backoff.pop(device.device_id, None)
                 self._engine.ack_delivered(key)
+                self._log_delivered(entry, device.device_id, device.push)
                 delivered += 1
                 continue
             if result.outcome is PushOutcome.REJECTED:
@@ -120,6 +122,21 @@ class PushDelivery:
             self._backoff[device.device_id] = _Backoff(now + int(delay * 1000), delay, reason)
             break
         return delivered
+
+    def _log_delivered(self, entry: OutboxEntry, device_id: str, push: PushSubscription) -> None:
+        """Слід успішної доставки (відмови свої рядки мають). `attempts` — разом із цією; `latency_ms` — від
+        спрацювання (`fired.at_ms`, та сама точка, від якої лічиться `ttl_s`; для M1 — відкриття свічки)."""
+        alert = entry.alert
+        _log.info(
+            "ALERTS_DELIVERED id=%s version=%s sym=%s device=%s push=%s attempts=%d latency_ms=%d",
+            alert.alert_id,
+            alert.version,
+            alert.symbol,
+            device_id,
+            endpoint_label(push.endpoint),
+            entry.attempts + 1,
+            self._clock_ms() - alert.fired.at_ms,  # type: ignore[union-attr]  # у черзі — лише спрацьовані
+        )
 
     def _device_of(self, subscriber_id: str) -> Optional[Device]:
         if not subscriber_id.startswith(WEB_PREFIX):

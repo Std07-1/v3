@@ -479,14 +479,14 @@ nginx `/api/alerts`. **До ввімкнення** (кожен крок — за
 | 4 | Увімкнути: `alerts.enabled = true` у git → `git pull` → рестарт | `sudo supervisorctl restart smc-alerts` → 120 с (D9.1): `ALERTS_READY channel=push`, без ERROR у `/var/log/smc-v3/alerts.stderr.log` |
 | 5 | Перевірка зовні | `curl -s https://aione-smc.com/api/alerts/health` = `{"enabled": true, "channel": "push", "degraded": []}`; `curl -s …/api/alerts/push/key` — ключ |
 | 6 | Інтерфейс: збірка UI з main і заміна `ui_v4/dist` (як інші UI-деплої: бекап `dist`, перевірка хешу коміту в бандлі) | бандл містить `push/subscribe`; `sw.js` — `notificationclick` |
-| 7 | Живий прогін (D15.1): телефон власника (Android, Chrome) — лінія біля ціни → «Сповіщати» → дозвіл → закрити вкладку → перетин | приходить сповіщення ОС; у лозі `ALERTS_FIRED`, у списку `delivery: delivered` |
+| 7 | Живий прогін (D15.1): телефон власника (Android, Chrome) — лінія біля ціни → «Сповіщати» → дозвіл → закрити вкладку → перетин | приходить сповіщення ОС; у лозі `ALERTS_FIRED`, потім `ALERTS_DELIVERED` (з 20.10), у списку `delivery: delivered` |
 
 **Робота:**
 
 | Дія | Команда |
 | --- | --- |
 | Стан і деградації | `curl -s 127.0.0.1:8020/api/alerts/health` — `channel`, `degraded`: `ticks_unavailable`, `m1_unavailable:<символ>`, `push_unreachable`, `state_write_failed`, `state_quarantined` (Telegram: `telegram_unreachable`, `telegram_commands_unavailable`) |
-| Лог | `tail -n 100 /var/log/smc-v3/alerts.stderr.log` (`ALERTS_FIRED`, `ALERTS_DEVICE_SUBSCRIBED`, `ALERTS_PUSH_GONE`, `ALERTS_PUSH_REJECTED`, `ALERTS_UNDELIVERED`, `ALERTS_DEVICE_PRUNED`, `ALERTS_DEVICES_FULL`) |
+| Лог | `tail -n 100 /var/log/smc-v3/alerts.stderr.log` (`ALERTS_FIRED`, `ALERTS_DELIVERED`, `ALERTS_DEVICE_SUBSCRIBED`, `ALERTS_PUSH_GONE`, `ALERTS_PUSH_REJECTED`, `ALERTS_UNDELIVERED`, `ALERTS_DEVICE_PRUNED`, `ALERTS_DEVICES_FULL`) |
 | Сповіщення й черга доставки | `sudo -u smc python3 -m json.tool /var/lib/smc-v3/alerts/alerts.json` (`failed` у записі черги — «не доставлено») |
 | Пристрої | `sudo -u smc python3 -m json.tool /var/lib/smc-v3/alerts/devices.json` (`push_gone` — браузер скасував підписку) |
 | Ліміти | `config.json:alerts.max_devices`, `devices_per_ip_per_hour`, `max_active_per_subscriber`; неактивні (без запитів `device_idle_days`, без взведених) прибираються щогодини |

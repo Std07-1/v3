@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import itertools
+import logging
 import os
 from typing import Dict, List, Tuple
 from zoneinfo import ZoneInfo
@@ -23,7 +24,7 @@ from runtime.alerts.engine import AlertEngine
 from runtime.alerts.messages import push_payload
 from runtime.alerts.push_delivery import DEGRADED_PUSH, PushDelivery
 from runtime.alerts.store import STATE_FILE, AlertStore
-from runtime.alerts.webpush import PushOutcome, PushResult, PushSubscription
+from runtime.alerts.webpush import PushOutcome, PushResult, PushSubscription, endpoint_label
 
 T0 = 1_792_086_371_000
 TZ = ZoneInfo("Europe/Prague")
@@ -123,6 +124,25 @@ async def test_delivered_push_acks_entry_with_payload_for_os_notification(world)
     assert payload["url"] == "https://aione-smc.com/?symbol=XAU/USD&tf=M15"
     assert world.engine.store.outbox == {} and ("delivered", "a1") in world.events
     assert AlertStore.load(world.engine.store.path, now_ms=T0).outbox == {}
+
+
+@pytest.mark.asyncio
+async def test_delivered_logs_one_line_on_ack_without_subscription_secrets(world, caplog):
+    caplog.set_level(logging.INFO, logger="runtime.alerts")
+    fired = world.fire("a1", "A", at_ms=T0 - 1_500)
+    world.sender.plan["A"] = [PushResult(PushOutcome.RETRY, 503, detail="down")]
+    await world.delivery.deliver_once()
+    assert "ALERTS_DELIVERED" not in caplog.text  # невдала спроба — сліду доставки нема
+    world.now[0] = T0 + 2_000
+    assert await world.delivery.deliver_once() == 1
+    assert await world.delivery.deliver_once() == 0  # знятий запис не шлеться і не пишеться вдруге
+    device = world.devices["A"]
+    assert [r.getMessage() for r in caplog.records if r.getMessage().startswith("ALERTS_DELIVERED")] == [
+        f"ALERTS_DELIVERED id=a1 version={fired.version} sym=XAU/USD device={device.device_id} "
+        f"push={endpoint_label(device.push.endpoint)} attempts=2 latency_ms=3500"
+    ]
+    for secret in (device.push.endpoint, "/fcm/send/", device.push.p256dh, device.push.auth, world.cookies["A"]):
+        assert secret not in caplog.text
 
 
 @pytest.mark.asyncio
