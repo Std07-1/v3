@@ -1,7 +1,7 @@
 {
   "name": "v3",
   "short_name": "v3",
-  "description": "Smart Money Concepts trading platform — agent-led real-time chart",
+  "description": "Free SMC chart: order blocks, FVG, liquidity, sessions and a breakdown on every timeframe",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

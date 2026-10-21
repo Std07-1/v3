@@ -9,6 +9,7 @@
         "emitDeclarationOnly": true
     },
     "include": [
-        "vite.config.ts"
+        "vite.config.ts",
+        "og/ogVariants.ts"
     ]
 }

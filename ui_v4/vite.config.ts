@@ -2,6 +2,7 @@ import { defineConfig, searchForWorkspaceRoot } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { ogVariants } from './og/ogVariants';
 
 // ADR-0066 PATCH 04: build-time metadata for AboutModal version line.
 // All readers are pure-fs (no shell exec) so safe from injection.
@@ -39,7 +40,8 @@ export default defineConfig(() => {
     const alertsTarget = process.env.VITE_ALERTS_PROXY_TARGET ?? 'http://localhost:8020';
     const alertsOrigin = process.env.VITE_ALERTS_SITE_ORIGIN ?? 'https://aione-smc.com';
     return {
-        plugins: [svelte()],
+        // ADR-0116 Ф3: прев'ю посилання мовою ?lang= — dist/index.<код>.html після збірки
+        plugins: [svelte(), ogVariants(resolve('og', 'og_meta.json'))],
         define: {
             __APP_VERSION__: JSON.stringify(readVersion()),
             __BUILD_DATE__: JSON.stringify(buildDate()),

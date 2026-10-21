@@ -1,0 +1,28 @@
+{
+  "_comment": "ADR-0116 Ф3: прев'ю посилання (Open Graph / Twitter) мовою посилання ?lang=. Збірка пише dist/index.<код>.html на кожну мову, nginx віддає варіант за ?lang= (tools/nginx/conf.d/smc_og_lang.conf); без мови — default. Тексти затвердив власник 21.10.2026. Нова мова в i18n/languages.json — запис тут обов'язковий (ui_v4/og/ogVariants.test.ts).",
+  "site_url": "https://aione-smc.com/",
+  "default": "en",
+  "langs": {
+    "uk": {
+      "locale": "uk_UA",
+      "image": "og-uk.png",
+      "title": "v3 — SMC-графік",
+      "description": "Безкоштовний SMC-графік у браузері: ордер-блоки, FVG, ліквідність, сесії Азії, Лондона й Нью-Йорка, розбір ситуації на кожному таймфреймі, профіль тижня й місяця. Золото, срібло, індекси, USD/JPY. Телефон і ПК, без реєстрації.",
+      "image_alt": "v3 — графік XAU/USD з SMC-розміткою і розбором ситуації"
+    },
+    "en": {
+      "locale": "en_US",
+      "image": "og.png",
+      "title": "v3 — SMC chart",
+      "description": "A free SMC chart in your browser: order blocks, FVG, liquidity, Asia / London / New York sessions, a plain-language breakdown on every timeframe, weekly and monthly profiles. Gold, silver, indices, USD/JPY. Phone and desktop, no sign-up.",
+      "image_alt": "v3 — XAU/USD chart with SMC markup and a breakdown of the current setup"
+    },
+    "ru": {
+      "locale": "ru_RU",
+      "image": "og-ru.png",
+      "title": "v3 — SMC-график",
+      "description": "Бесплатный SMC-график в браузере: ордер-блоки, FVG, ликвидность, сессии Азии, Лондона и Нью-Йорка, разбор ситуации на каждом таймфрейме, профиль недели и месяца. Золото, серебро, индексы, USD/JPY. Телефон и ПК, без регистрации.",
+      "image_alt": "v3 — график XAU/USD с SMC-разметкой и разбором ситуации"
+    }
+  }
+}
