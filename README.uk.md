@@ -8,8 +8,8 @@
 
 ![AI·ONE v3 — live XAU/USD M15 chart with SMC markup (FVG, BOS, CHoCH, EQH, premium/discount); the annotation card is an external client's thesis delivered through the read-only API](docs/assets/hero.png)
 
-**Real-time Smart Money Concepts (SMC) аналітика для золота, індексів і крипти** —
-broker-grade конвеєр даних (FXCM / Binance), живий WebSocket-графік і read-only
+**Real-time Smart Money Concepts (SMC) аналітика для золота, срібла, індексів США і Європи
+та USD/JPY** — конвеєр даних на CFD-котируваннях FXCM, живий WebSocket-графік і read-only
 HTTP/WS API, до якого може підключитись і читати будь-який зовнішній клієнт —
 дашборд, дослідницький ноутбук або AI-агент.
 
@@ -23,13 +23,12 @@ HTTP/WS API, до якого може підключитись і читати �
   (ADR-0058, ADR-0090); їхні міркування не є частиною платформи.
 - **Жорсткі інваріанти даних** — єдиний write-center `UnifiedDataStore`, `Final > Preview`,
   degraded-but-loud (жодних silent fallback). Кожне нетривіальне рішення зафіксоване
-  у **90+ ADR**.
+  в ADR ([реєстр](docs/adr/index.md)).
 - **Аналітика за $0** — SMC-структура (BOS / CHoCH), order blocks, FVG, ліквідність,
   premium/discount і confluence scoring рахуються **in-process** — без платних
   сигнальних фідів.
 - **Побудовано як production** — dual-venv ізоляція брокера, exit-gates, security scan,
-  зелений CI, реальний real-time потік FXCM. Зрілість рахується чесно (**M3 → M7**),
-  не імітується.
+  зелений CI, реальний real-time потік FXCM.
 
 > **⚠️ Not financial advice.** Analytical / research tool only — SMC labels are technical
 > markers, not signals. Trading carries substantial risk of loss. Full terms:
@@ -43,7 +42,7 @@ HTTP/WS API, до якого може підключитись і читати �
 
 | Шар | Що | Де |
 |---|---|---|
-| **A** Broker + ingest | FXCM/Binance History + tick stream → writer-процеси | `runtime/ingest/`, `app/` |
+| **A** Broker + ingest | FXCM History + tick stream → writer-процеси (Binance — вимкнено) | `runtime/ingest/`, `app/` |
 | **C** UDS | SSOT disk + Redis cache + updates bus | `runtime/store/uds.py` |
 | **B** UI (ws) | read-only WS real-time renderer, same-origin, порт 8000 | `ui_v4/` + `runtime/ws/ws_server.py` |
 | **TUI** | aione-top: інтерактивний TUI-монітор процесів/pipeline | `aione_top/` |
@@ -90,8 +89,8 @@ cp .env.example .env   # відредагуй FXCM_USER / FXCM_PASS / FXCM_URL
 | M1 poller | `m1_poller` | broker_sidecar + m1_ingestion + derive cascade |
 | Broker sidecar | `broker_sidecar` | FXCM M1 fetch + tick relay V2 (.venv37/) |
 | Tick preview | `tick_preview` | ticks → preview bars |
-| Binance ingest | `binance_ingest_worker` | BTCUSDT/ETHUSDT M1 + backfill |
-| Binance ticks | `binance_tick_publisher` | Binance live ticks → Redis |
+| Binance ingest | `binance_ingest_worker` | BTCUSDT/ETHUSDT M1 + backfill — **вимкнено** (`binance.enabled = false`) |
+| Binance ticks | `binance_tick_publisher` | Binance live ticks → Redis — **вимкнено** |
 | WS server | `ws_server` | UI backend, порт 8000 |
 
 ```bash

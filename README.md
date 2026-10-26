@@ -6,8 +6,8 @@
 
 ![AI·ONE v3 — live XAU/USD M15 chart with SMC markup (FVG, BOS, CHoCH, EQH, premium/discount); the annotation card is an external client's thesis delivered through the read-only API](docs/assets/hero.png)
 
-**Real-time Smart Money Concepts (SMC) analytics for gold, indices and crypto** — a
-broker-grade data pipeline (FXCM / Binance) feeding a live WebSocket chart, with a
+**Real-time Smart Money Concepts (SMC) analytics for gold, silver, US and European indices
+and USD/JPY** — a data pipeline on FXCM CFD quotes feeding a live WebSocket chart, with a
 read-only HTTP/WS API that any external client — a dashboard, a research notebook, or
 an AI agent — can connect to and read.
 
@@ -20,14 +20,13 @@ an AI agent — can connect to and read.
   fabricates signals. External clients — including AI agents — connect to it and *read*
   (ADR-0058, ADR-0090); their reasoning is not part of the platform.
 - **Hard data invariants** — a single `UnifiedDataStore` write-center, `Final > Preview`,
-  degraded-but-loud (no silent fallbacks). Every non-trivial decision is captured in
-  **90+ ADRs**.
+  degraded-but-loud (no silent fallbacks). Every non-trivial decision is captured in an
+  ADR ([registry](docs/adr/index.md)).
 - **$0 analytics** — SMC structure (BOS / CHoCH), order blocks, FVG, liquidity,
   premium/discount and confluence scoring are computed **in-process** — no paid
   signal feeds.
 - **Built like production** — dual-venv broker isolation, exit-gates, security scan,
-  green CI, and a real FXCM real-time stream. Maturity is tracked honestly (**M3 → M7**),
-  not faked.
+  green CI, and a real-time FXCM stream.
 
 > **⚠️ Not financial advice.** Analytical / research tool only — SMC labels are technical
 > markers, not signals. Trading carries substantial risk of loss. Full terms:
@@ -62,7 +61,7 @@ never fabricates signals, and no client can steer what the chart shows.
 
 | Layer | What | Where |
 |---|---|---|
-| **A** Broker + ingest | FXCM/Binance history + tick stream → writer processes | `runtime/ingest/`, `app/` |
+| **A** Broker + ingest | FXCM history + tick stream → writer processes (Binance — off) | `runtime/ingest/`, `app/` |
 | **C** UDS | SSOT disk + Redis cache + updates bus | `runtime/store/uds.py` |
 | **B** UI (ws) | read-only WS real-time renderer, same-origin, port 8000 | `ui_v4/` + `runtime/ws/ws_server.py` |
 | **TUI** | aione-top: interactive TUI monitor for processes/pipeline | `aione_top/` |
@@ -109,8 +108,8 @@ UI (ws_server) in 3 seconds without stopping the data pipeline.
 | M1 poller | `m1_poller` | broker_sidecar + m1_ingestion + derive cascade |
 | Broker sidecar | `broker_sidecar` | FXCM M1 fetch + tick relay V2 (.venv37/) |
 | Tick preview | `tick_preview` | ticks → preview bars |
-| Binance ingest | `binance_ingest_worker` | BTCUSDT/ETHUSDT M1 + backfill |
-| Binance ticks | `binance_tick_publisher` | Binance live ticks → Redis |
+| Binance ingest | `binance_ingest_worker` | BTCUSDT/ETHUSDT M1 + backfill — **off** (`binance.enabled = false`) |
+| Binance ticks | `binance_tick_publisher` | Binance live ticks → Redis — **off** |
 | WS server | `ws_server` | UI backend, port 8000 |
 
 ```bash

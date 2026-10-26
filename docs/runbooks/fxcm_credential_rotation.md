@@ -3,7 +3,7 @@
 > **Runbook**: повернення FXCM data-pipeline в робочий стан після **закінчення терміну дії demo-акаунту**.
 > **Audience**: оператор VPS + AI-агент.
 > **Trigger**: бачимо що `data_v3/{symbol}/tf_60/part-YYYYMMDD.jsonl` зупинився писатися; `fxcm.stderr.log` показує auth failure; нові M1 не приходять.
-> **Last updated**: 2026-05-18 (incident #1 — D251105708 expired; recovery executed successfully)
+> **Last updated**: 2026-05-18 (incident #1 — old demo login expired; recovery executed successfully)
 
 ---
 
@@ -11,7 +11,7 @@
 
 | Метрика | Значення |
 |---|---|
-| Старий USERNAME | `D251105708` |
+| Старий USERNAME | старий демо-логін (прибрано з публічного репо 26.10.2026) |
 | Last valid M1 (XAU/USD) | `2026-05-15 20:45 UTC` (Friday close) |
 | Reactivated M1 | `2026-05-18 16:00 UTC` (Monday after creds rotation) |
 | Real gap (after weekend exclude) | ≈ 17 годин (Sun 22:00 → Mon 15:47 UTC) |
