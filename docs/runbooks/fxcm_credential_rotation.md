@@ -338,7 +338,9 @@ ssh aione-vps 'cp /opt/smc-v3/.env.bak.TIMESTAMP /opt/smc-v3/.env && \
 
 ## 13. Майбутні покращення (TODO, не блокери)
 
-- [ ] Метрика `fxcm_last_bar_age_seconds` → alert якщо > 600s протягом 15 хв
+- [x] ~~Метрика `fxcm_last_bar_age_seconds` → alert якщо > 600s протягом 15 хв~~ — зроблено 26.10.2026 як перевірка
+  сторожа VPS (ADR-0106 §3.8, `tools/feed_lag_check.py`): ≥ 4 символи без M1 ≥ 12 торгових хвилин два тіки поспіль →
+  повідомлення в Telegram «немає нових свічок»; один символ мовчить торгову добу — окреме повідомлення
 - [ ] Pre-expiry warning — раз на тиждень cron-перевірка віку акаунту через FXCM API (якщо доступне)
 - [ ] Auto-backfill при detect гепу > 30 хв (з safety cap на N днів і rate-limit)
 - [ ] Other broker as failover (Oanda? IB?) — потребує ADR і нового provider у `core/buckets/anchors.py`

@@ -274,6 +274,29 @@ def measure_age(
     )
 
 
+def missing_trading_minutes(
+    last_open_ms: int,
+    *,
+    now_ms: int,
+    is_trading_fn: IsTradingFn,
+    cap: int,
+) -> int:
+    """Скільки торгових хвилин минуло після останнього M1 до останньої закритої хвилини; не більше ``cap``.
+
+    На відміну від ``measure_age`` (для M1 — різниця в хвилинах стіни), рахуються лише торгові хвилини: денна
+    перерва й вихідні відставання не накопичують, тож відкриття сесії не виглядає як обрив потоку (ADR-0106 §3.8).
+    ``cap`` обмежує цикл: ряд, обірваний місяць тому, дає ``cap``, а не перебір місяця хвилин.
+    """
+    last_closed = (now_ms // MINUTE_MS) * MINUTE_MS - MINUTE_MS
+    missing = 0
+    for minute_ms in range(last_open_ms + MINUTE_MS, last_closed + MINUTE_MS, MINUTE_MS):
+        if is_trading_fn(minute_ms):
+            missing += 1
+            if missing >= cap:
+                break
+    return missing
+
+
 def measure_holes(
     opens: Iterable[int],
     *,

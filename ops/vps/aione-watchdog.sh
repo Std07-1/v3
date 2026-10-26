@@ -87,6 +87,7 @@ REPORT_TZ="${REPORT_TZ:-Europe/Prague}"            # ранковий звіт: 
 REPORT_HOUR="${REPORT_HOUR:-9}"                    # локальна година ранкового звіту
 VISITORS_REPORT_ROWS="${VISITORS_REPORT_ROWS:-12}" # рядків відвідувачів у звіті (ліміт повідомлення Telegram)
 VISITORS_TIMEOUT_S="${VISITORS_TIMEOUT_S:-60}"     # зведення відвідувачів не може підвісити тік
+FEED_LAG_TIMEOUT_S="${FEED_LAG_TIMEOUT_S:-30}"     # перевірка свічок M1 (ADR-0106 §3.8) не може підвісити тік
 RES_ENTER_TICKS="${RES_ENTER_TICKS:-2}"            # ресурс: стільки поганих тіків поспіль = проблема почалась
 RES_CLEAR_TICKS="${RES_CLEAR_TICKS:-5}"            # ... стільки нормальних поспіль = минула
 RES_REMIND_S="${RES_REMIND_S:-21600}"              # поки триває — нагадування не частіше 6 год
@@ -693,6 +694,36 @@ check_commands() {
   return 0
 }
 
+# ---------- свічки M1 (ADR-0106 §3.8) ----------
+# Процеси бувають RUNNING, а свічок нема: 24.07–04.09 протух демо-доступ FXCM і M1 по XAU/XAG не йшли шість тижнів.
+# Вимір — tools.feed_lag_check у venv платформи (лише читання диска, відставання в торгових хвилинах календаря
+# символу). Стан — як у ресурсів (res_track): повідомлення на початок і кінець, нагадування раз на RES_REMIND_S.
+# Зонд, що не відпрацював, — окрема проблема, а не тиша: інакше зупинку потоку ніхто б не побачив.
+FEED_LAG_OUT=""
+feed_lag_who() { printf '%s\n' "$FEED_LAG_OUT" | awk '$1=="LAG"{printf "%s%s %s торг. хв", (n++?", ":""), $2, $3}'; }
+feed_probe_who() { grep 'FEED_LAG_CHECK_FAILED' "$LOG" 2>/dev/null | tail -n 1 | cut -c1-200; }
+
+check_feed_lag() {
+  local rc bad silent single
+  FEED_LAG_OUT="$(cd "$PLATFORM_DIR" 2>/dev/null && timeout "$FEED_LAG_TIMEOUT_S" runuser -u "$VISITORS_USER" -- \
+                  env PYTHONIOENCODING=utf-8 ./.venv/bin/python -m tools.feed_lag_check 2>>"$LOG")"
+  rc=$?
+  bad=0; [ "$rc" -ne 0 ] && bad=1
+  res_track feed_probe "$bad" "$(printf 'перевірка свічок M1 не відпрацювала (код %s%s)' "$rc" "$([ "$rc" -eq 124 ] && printf ', таймаут')")" \
+    feed_probe_who "дивись $LOG — поки вона не працює, про зупинку свічок я не дізнаюсь" "перевірка свічок M1 знову працює"
+  [ "$rc" -ne 0 ] && return 0
+  silent="$(printf '%s\n' "$FEED_LAG_OUT" | awk '$1=="FEED_SILENT"{print $2 " із " $3}')"
+  bad=0; [ -n "$silent" ] && bad=1
+  res_track feed "$bad" "$(printf 'немає нових свічок: стоять %s символів' "${silent:-0}")" feed_lag_who \
+    "найімовірніше протух демо-доступ FXCM — ранбук docs/runbooks/fxcm_credential_rotation.md (25.12 і 01.01 закрито все — тоді це норма)" \
+    "нові свічки знову йдуть"
+  single="$(printf '%s\n' "$FEED_LAG_OUT" | awk '$1=="SYMBOL_SILENT"{printf "%s%s", (n++?", ":""), $2}')"
+  bad=0; [ -n "$single" ] && bad=1
+  res_track feed_symbol "$bad" "$(printf 'символ без свічок понад торгову добу: %s' "${single:-—}")" feed_lag_who \
+    "перевір символ у FXCM і лог m1_poller" "свічки по символу знову йдуть"
+  return 0
+}
+
 # ---------- main ----------
 # Single-run lock: a slow tick + the next timer fire (or a manual test run racing
 # the timer) must not interleave state writes. Best-effort (proceed if flock absent).
@@ -705,7 +736,8 @@ check_services   || log "check_services errored"
 check_supervisor || log "check_supervisor errored"
 check_backup     || log "check_backup errored"
 check_resources  || log "check_resources errored"
-check_oom        || log "check_oom errored"
+check_feed_lag   || log "check_feed_lag errored"
+check_oom       || log "check_oom errored"
 check_bans       || log "check_bans errored"
 check_ssh_logins || log "check_ssh_logins errored"
 check_morning_report || log "check_morning_report errored"

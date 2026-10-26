@@ -41,7 +41,14 @@ STUBS = {
         'esac\n'
     ),
     "df": 'echo "Filesystem 1024-blocks Used Available Capacity Mounted"; echo "/dev/sda1 100 38 62 38% /"\n',
-    "runuser": 'echo "$*" >> "$BOX/runuser_args"; echo "Відвідувачі за добу: тест"\n',
+    # runuser: перевірка свічок (ADR-0106 §3.8) — вміст feed_lag_out і код feed_lag.rc; решта — зведення відвідувачів
+    "runuser": (
+        'echo "$*" >> "$BOX/runuser_args"\n'
+        'case " $* " in *" tools.feed_lag_check "*)\n'
+        '  cat "$BOX/feed_lag_out" 2>/dev/null || echo "OK 8"; exit "$(cat "$BOX/feed_lag.rc" 2>/dev/null || echo 0)";;\n'
+        'esac\n'
+        'echo "Відвідувачі за добу: тест"\n'
+    ),
     # команди власника: на засів — NEXT 5, далі — вміст commands_out; аргумент виклику — у commands_args
     "commands": (
         'echo "$1" >> "$BOX/commands_args"\n'
@@ -155,6 +162,48 @@ def test_resource_problem_alerts_once_on_start_and_once_on_end(box):
     box.tick()
     ended = box.sent()[1]
     assert ended.startswith("✅ минуло: процесів знову норма (100) — тривало")
+
+
+FEED_SILENT_OUT = "LAG XAU/USD 14\nLAG XAG/USD 14\nLAG NAS100 13\nLAG US30 13\nFEED_SILENT 4 8\nOK 8\n"
+
+
+def test_feed_silence_alerts_once_with_symbols_and_reports_recovery(box):
+    box.write("feed_lag_out", FEED_SILENT_OUT)
+    box.tick()
+    assert box.sent() == []  # один тік — ще не проблема
+    box.tick()
+    box.tick()
+    started = box.sent()
+    assert len(started) == 1
+    assert "немає нових свічок: стоять 4 із 8 символів" in started[0]
+    assert "XAU/USD 14 торг. хв" in started[0] and "протух демо-доступ FXCM" in started[0]
+    box.write("feed_lag_out", "OK 8\n")
+    for _ in range(5):
+        box.tick()
+    assert box.sent()[1].startswith("✅ минуло: нові свічки знову йдуть — тривало")
+
+
+def test_feed_lag_of_few_symbols_without_feed_silence_is_quiet(box):
+    box.write("feed_lag_out", "LAG USD/JPY 30\nLAG GER30 18\nOK 8\n")
+    for _ in range(3):
+        box.tick()
+    assert box.sent() == []
+
+
+def test_feed_symbol_silent_for_trading_day_alerts(box):
+    box.write("feed_lag_out", "LAG GER30 1440\nSYMBOL_SILENT GER30 1440\nOK 8\n")
+    box.tick()
+    box.tick()
+    sent = box.sent()
+    assert len(sent) == 1 and "символ без свічок понад торгову добу: GER30" in sent[0]
+
+
+def test_feed_probe_failure_is_loud_not_silent(box):
+    box.write("feed_lag.rc", "2")
+    box.tick()
+    box.tick()
+    sent = box.sent()
+    assert len(sent) == 1 and "перевірка свічок M1 не відпрацювала (код 2)" in sent[0]
 
 
 def test_short_resource_blip_never_alerts(box):
